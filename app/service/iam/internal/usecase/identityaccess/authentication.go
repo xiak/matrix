@@ -38,6 +38,9 @@ func (service *Authority) Login(
 	var attempt PasswordAttempt
 	var admitted bool
 	err = service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
+		if err := service.checkTOTPCustody(ctx, tx); err != nil {
+			return err
+		}
 		var err error
 		attempt, admitted, err = tx.ReservePasswordAttempt(ctx, PasswordAttemptRequest{ID: attemptID, LoginName: request.LoginName})
 		return err
@@ -57,6 +60,9 @@ func (service *Authority) Login(
 	}
 	var response iamv1.LoginResponse
 	err = service.withinTransaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
+		if err := service.checkTOTPCustody(transactionContext, transaction); err != nil {
+			return err
+		}
 		sessionID, err := service.config.NewID("session")
 		if err != nil {
 			return ErrUnavailable
@@ -238,6 +244,9 @@ func (service *Authority) authenticateSession(
 	credential iamv1.Secret,
 	now time.Time,
 ) (SessionCredential, error) {
+	if err := service.checkTOTPCustody(ctx, transaction); err != nil {
+		return SessionCredential{}, err
+	}
 	lookupDigest, err := authority.LookupCredentialDigest(authority.CredentialSession, credential)
 	if err != nil {
 		return SessionCredential{}, ErrUnauthenticated

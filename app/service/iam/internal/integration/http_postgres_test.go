@@ -584,12 +584,12 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 		}
 	})
 	document := iamHTTPBootstrap(t)
-	status, err := workflow.Bootstrap(ctx, document)
+	status, err := bootstrapIAMWithTOTP(t, ctx, workflow, document)
 	if err != nil || status.State != iamv1.BootstrapReady {
 		t.Fatalf("bootstrap policy authority: status=%#v err=%v", status, err)
 	}
 	applyIAMSchema(t, ctx, admin)
-	replayed, err := workflow.Bootstrap(ctx, document)
+	replayed, err := bootstrapIAMWithTOTP(t, ctx, workflow, document)
 	if err != nil || replayed.ContentDigest != status.ContentDigest || replayed.AppliedAt == nil ||
 		status.AppliedAt == nil || *replayed.AppliedAt != *status.AppliedAt {
 		t.Fatalf("replay policy authority bootstrap: status=%#v err=%v", replayed, err)
@@ -1287,7 +1287,7 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 	}
 	assertRejected("revoked-attachment-cannot-resurrect", `UPDATE iam.policy_attachments SET revoked_at=NULL,updated_at=transaction_timestamp(),resource_version=resource_version+1 WHERE id=$1`, "42501", accountAttachment.ID)
 	applyIAMSchema(t, ctx, admin)
-	if _, err := workflow.Bootstrap(ctx, document); err != nil {
+	if _, err := bootstrapIAMWithTOTP(t, ctx, workflow, document); err != nil {
 		t.Fatal(err)
 	}
 	assertDecision(iamv1.ActionPaaSApplicationRead, iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "policy-storage-application"}, false)
@@ -2361,6 +2361,246 @@ func proveUserPermissionBoundaries(t *testing.T, ctx context.Context, handler ht
 	call(http.MethodPost, "/v1/audit-producer:resolve", iamProducerCredential, iamv1.ResolveAuditProducerRequest{Event: event}, http.StatusOK, nil)
 }
 
+func TestIAMTOTPCustodyPostgres(t *testing.T) {
+	dsn := os.Getenv("MATRIX_IAM_TOTP_CUSTODY_POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set MATRIX_IAM_TOTP_CUSTODY_POSTGRES_TEST_DSN to an isolated PostgreSQL 18 database")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+	defer cancel()
+	config, err := pgx.ParseConfig(dsn)
+	if err != nil || !strings.HasPrefix(config.Database, "matrix_iam_totp_custody_") {
+		t.Fatal("TOTP gate needs its own database")
+	}
+	config.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+	database, err := pgx.ConnectConfig(ctx, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close(context.Background())
+	assertIAMPostgres18(t, ctx, database)
+	assertCleanIAMSchema(t, ctx, database)
+	applyIAMSchema(t, ctx, database)
+	createIAMHTTPRole(t, ctx, database)
+	document := iamHTTPBootstrap(t)
+	wrapping := iamHTTPAccessKeyWrapping(t, document)
+	keyring := iamHTTPTOTPKeyring(t, document)
+	workflow := localRecoveryWorkflow(t, ctx, dsn, iamHTTPTestRole, nil, wrapping)
+	if _, err := bootstrapIAMWithTOTP(t, ctx, workflow, document); err != nil {
+		t.Fatal(err)
+	}
+	newReplica := func(material iamv1.TOTPKeyring) *identityaccess.Authority {
+		t.Helper()
+		poolConfig, err := pgxpool.ParseConfig(dsn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		poolConfig.ConnConfig.User, poolConfig.ConnConfig.Password = iamHTTPTestRole, iamHTTPTestPassword
+		poolConfig.MaxConns = 1
+		pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(pool.Close)
+		repository, err := iampostgres.NewRepository(pool)
+		if err != nil {
+			t.Fatal(err)
+		}
+		replica, err := identityaccess.NewAuthority(repository, identityaccess.Config{CursorKey: bytes.Repeat([]byte{0x39}, 32), TOTPKeyring: &material, AccessKeyWrapping: &wrapping})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return replica
+	}
+	loginRequest := iamv1.LoginRequest{LoginName: "admin", Password: document.Administrator.Password, RequestID: "totp-custody-login"}
+	login, err := workflow.Login(ctx, loginRequest)
+	if err != nil {
+		t.Fatal("actual password path", err)
+	}
+	readHistory := func() string {
+		t.Helper()
+		var encoded string
+		if err := database.QueryRow(ctx, `SELECT jsonb_build_object(
+            'keys',(SELECT jsonb_agg(to_jsonb(r) ORDER BY key_id) FROM iam.totp_wrapping_registry r),
+            'sets',(SELECT jsonb_agg(to_jsonb(s) ORDER BY revision) FROM iam.totp_keysets s))::text`).Scan(&encoded); err != nil {
+			t.Fatal(err)
+		}
+		return encoded
+	}
+	original := readHistory()
+	replica := newReplica(keyring)
+	if err := replica.RegisterTOTPKeyset(ctx); err != nil || readHistory() != original {
+		t.Fatal("equal registration changed history", err)
+	}
+	if _, err := replica.CurrentIdentity(ctx, login.Credential); err != nil {
+		t.Fatal("second replica could not use actual session", err)
+	}
+	for _, variant := range []string{"scope", "bootstrap", "same-id-material", "same-revision-set"} {
+		t.Run(variant, func(t *testing.T) {
+			changed := keyring
+			changed.Keys = append([]iamv1.TOTPWrappingKey(nil), keyring.Keys...)
+			switch variant {
+			case "scope":
+				changed.Scope.InstallationID = "foreign-installation"
+			case "bootstrap":
+				changed.Scope.BootstrapDigest = "sha256:" + strings.Repeat("e", 64)
+			case "same-id-material":
+				changed.Keys[0].KeyMaterial = iamHTTPSecret(t, base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x75}, 32)))
+				changed.KeysetRevision++
+			case "same-revision-set":
+				changed.Keys = append(changed.Keys, iamv1.TOTPWrappingKey{KeyID: "totp-new", FormatVersion: 1, KeyMaterial: changed.Keys[0].KeyMaterial})
+				changed.ActiveKeyID = "totp-new"
+			}
+			if err := newReplica(changed).RegisterTOTPKeyset(ctx); err == nil {
+				t.Fatal("conflicting registration accepted")
+			}
+			if readHistory() != original {
+				t.Fatal("rejected registration partially changed history")
+			}
+		})
+	}
+	keyring.KeysetRevision++
+	keyring.Keys = append(keyring.Keys, iamv1.TOTPWrappingKey{KeyID: "totp-new", FormatVersion: 1,
+		KeyMaterial: iamHTTPSecret(t, base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x78}, 32)))})
+	keyring.ActiveKeyID = "totp-new"
+	current := newReplica(keyring)
+	if err := current.RegisterTOTPKeyset(ctx); err != nil {
+		t.Fatal("append-only keyset advance", err)
+	}
+	advanced := readHistory()
+	if err := workflow.RegisterTOTPKeyset(ctx); err == nil || readHistory() != advanced {
+		t.Fatal("old revision replay restored old material", err)
+	}
+	if _, err := workflow.Login(ctx, loginRequest); !errors.Is(err, identityaccess.ErrUnavailable) {
+		t.Fatal("old process accepted password", err)
+	}
+	if _, err := replica.CurrentIdentity(ctx, login.Credential); !errors.Is(err, identityaccess.ErrUnavailable) {
+		t.Fatal("old replica accepted existing session", err)
+	}
+	if _, err := current.CurrentIdentity(ctx, login.Credential); err != nil {
+		t.Fatal("material advance revoked an actual session", err)
+	}
+	removed := keyring
+	removed.KeysetRevision++
+	removed.Keys = append([]iamv1.TOTPWrappingKey(nil), keyring.Keys[1:]...)
+	if err := newReplica(removed).RegisterTOTPKeyset(ctx); err == nil || readHistory() != advanced {
+		t.Fatal("unproved key retirement accepted", err)
+	}
+	// True runtime login, not an administrator connection with changed labels.
+	runtimeConfig := config.Copy()
+	runtimeConfig.User, runtimeConfig.Password = iamHTTPTestRole, iamHTTPTestPassword
+	runtimeConnection, err := pgx.ConnectConfig(ctx, runtimeConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtimeConnection.Close(context.Background())
+	for _, statement := range []string{"SELECT * FROM iam.totp_wrapping_registry", "SELECT * FROM iam.totp_keysets", "SELECT * FROM iam.totp_authenticators",
+		"TRUNCATE iam.totp_authenticators"} {
+		_, err := runtimeConnection.Exec(ctx, statement)
+		var rejected *pgconn.PgError
+		if !errors.As(err, &rejected) || rejected.Code != "42501" {
+			t.Fatal("runtime TOTP table privilege", err)
+		}
+	}
+	for _, statement := range []string{"UPDATE iam.totp_keysets SET registration=registration", "DELETE FROM iam.totp_wrapping_registry", "TRUNCATE iam.totp_keysets"} {
+		if _, err := database.Exec(ctx, statement); err == nil {
+			t.Fatal("immutable custody changed")
+		}
+	}
+	// A material update must wait behind the exact custody checked by an
+	// in-flight authentication transaction; no process-local revision cache.
+	held, err := runtimeConnection.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Rollback(context.Background())
+	var observed []byte
+	if err := held.QueryRow(ctx, "SELECT iam.read_totp_custody()").Scan(&observed); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- current.RegisterTOTPKeyset(ctx) }()
+	blocked := false
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if err := database.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND $1=ANY(pg_blocking_pids(pid)))", runtimeConnection.PgConn().PID()).Scan(&blocked); err != nil {
+			t.Fatal(err)
+		}
+		if blocked {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !blocked {
+		t.Fatal("registration did not serialize behind custody reader")
+	}
+	if err := held.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal("registration after reader", err)
+	}
+	if readHistory() != advanced {
+		t.Fatal("equal registration after lock changed history")
+	}
+	// Competing, individually valid documents cannot both freeze revision 3.
+	firstSet, secondSet := keyring, keyring
+	firstSet.KeysetRevision++
+	secondSet.KeysetRevision++
+	firstSet.ActiveKeyID = keyring.Keys[0].KeyID
+	firstReplica, secondReplica := newReplica(firstSet), newReplica(secondSet)
+	type registrationResult struct {
+		index int
+		err   error
+	}
+	results := make(chan registrationResult, 2)
+	go func() { results <- registrationResult{0, firstReplica.RegisterTOTPKeyset(ctx)} }()
+	go func() { results <- registrationResult{1, secondReplica.RegisterTOTPKeyset(ctx)} }()
+	succeeded := 0
+	for range 2 {
+		result := <-results
+		if result.err == nil {
+			succeeded++
+			if result.index == 0 {
+				current, keyring = firstReplica, firstSet
+			} else {
+				current, keyring = secondReplica, secondSet
+			}
+		}
+	}
+	if succeeded != 1 {
+		t.Fatal("conflicting concurrent keysets both won or neither completed", succeeded)
+	}
+	advanced = readHistory()
+	// This is only a structurally valid retained-row fixture. The preparation
+	// release must reject every row without importing the future factor codec.
+	if _, err := database.Exec(ctx, `INSERT INTO iam.totp_authenticators(id,tenant_id,user_id,installation_id,key_id,format_version,nonce,ciphertext,state,last_consumed_step,created_at)
+        VALUES('factor-retained',$1,$2,$3,'totp-new',1,$4,$5,'REVOKED',10,clock_timestamp())`, document.Organization.ID, document.Administrator.ID, document.InstallationID, bytes.Repeat([]byte{0x79}, 12), bytes.Repeat([]byte{0x7a}, 36)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := current.Login(ctx, loginRequest); !errors.Is(err, identityaccess.ErrUnavailable) {
+		t.Fatal("uninterpreted factor fell back to password", err)
+	}
+	if _, err := current.CurrentIdentity(ctx, login.Credential); !errors.Is(err, identityaccess.ErrUnavailable) {
+		t.Fatal("uninterpreted factor accepted old session", err)
+	}
+	if _, err := current.Readiness(ctx); !errors.Is(err, identityaccess.ErrUnavailable) {
+		t.Fatal("unsupported state was ready", err)
+	}
+	applyIAMSchema(t, ctx, database)
+	if readHistory() != advanced {
+		t.Fatal("migration rewrote material history")
+	}
+	restarted := newReplica(keyring)
+	if err := restarted.RegisterTOTPKeyset(ctx); !errors.Is(err, identityaccess.ErrUnavailable) {
+		t.Fatal("restart reclassified retained factor", err)
+	}
+	var shape bool
+	if err := database.QueryRow(ctx, "SELECT iam.totp_custody_contract_ready() AND (SELECT schema_version=34 FROM iam.readiness())").Scan(&shape); err != nil || !shape {
+		t.Fatal("TOTP contract shape", err)
+	}
+}
+
 type passwordGateLoginResult struct {
 	Session    iamv1.Session `json:"session"`
 	Credential string        `json:"credential"`
@@ -2390,7 +2630,7 @@ func TestIAMPasswordAttemptsPostgres(t *testing.T) {
 	trace := &iamTransactionFailureTrace{}
 	workflow := localRecoveryWorkflow(t, ctx, dsn, iamHTTPTestRole, trace)
 	document := iamHTTPBootstrap(t)
-	if _, err := workflow.Bootstrap(ctx, document); err != nil {
+	if _, err := bootstrapIAMWithTOTP(t, ctx, workflow, document); err != nil {
 		t.Fatal(err)
 	}
 	var handlers []http.Handler
@@ -2503,7 +2743,7 @@ func TestIAMPasswordAttemptsPostgres(t *testing.T) {
 	arrived, resume := make(chan struct{}), make(chan struct{})
 	var ids atomic.Int64
 	var paused atomic.Bool
-	stalled, err := identityaccess.NewAuthority(repository, identityaccess.Config{NewID: func(prefix string) (string, error) {
+	stalled, err := newIAMAuthorityWithTOTP(t, repository, identityaccess.Config{NewID: func(prefix string) (string, error) {
 		if prefix == "session" && paused.CompareAndSwap(false, true) {
 			close(arrived)
 			select {
@@ -2544,7 +2784,7 @@ func TestIAMPasswordAttemptsPostgres(t *testing.T) {
 	}
 	login(1, raceUser.LoginName+"@"+string(raceUser.AccountID), "Reset-In-Flight-Password-43!", http.StatusOK)
 	applyIAMSchema(t, ctx, database)
-	if _, err := workflow.Bootstrap(ctx, document); err != nil {
+	if _, err := bootstrapIAMWithTOTP(t, ctx, workflow, document); err != nil {
 		t.Fatal(err)
 	}
 	// New pool/Authority and migration/bootstrap replay do not reset a counter.
@@ -2558,7 +2798,7 @@ func TestIAMPasswordAttemptsPostgres(t *testing.T) {
 		t.Fatal("suppressed calls changed the attempt", err)
 	}
 	var shape bool
-	if err := database.QueryRow(ctx, "SELECT iam.password_attempt_contract_ready() AND (SELECT schema_version=33 FROM iam.readiness())").Scan(&shape); err != nil || !shape {
+	if err := database.QueryRow(ctx, "SELECT iam.password_attempt_contract_ready() AND (SELECT schema_version=34 FROM iam.readiness())").Scan(&shape); err != nil || !shape {
 		t.Fatal("password function/ACL shape not ready", err)
 	}
 	apiConfig := config.Copy()
@@ -2768,7 +3008,7 @@ func TestIAMPolicyAttachmentSessionPostgres(t *testing.T) {
 	})
 	workflow := localRecoveryWorkflow(t, ctx, dsn, iamHTTPTestRole, attachmentFailures)
 	document := iamHTTPBootstrap(t)
-	initial, err := workflow.Bootstrap(ctx, document)
+	initial, err := bootstrapIAMWithTOTP(t, ctx, workflow, document)
 	if err != nil || initial.State != iamv1.BootstrapReady {
 		t.Fatal("bootstrap attachment session fixture")
 	}
@@ -2788,7 +3028,7 @@ func TestIAMPolicyAttachmentSessionPostgres(t *testing.T) {
 	verify := provePolicyAttachmentSessions(t, ctx, handler, database, root)
 	applyIAMSchema(t, ctx, database)
 	applyIAMSchema(t, ctx, database)
-	replayed, err := workflow.Bootstrap(ctx, document)
+	replayed, err := bootstrapIAMWithTOTP(t, ctx, workflow, document)
 	if err != nil || initial.AppliedAt == nil || replayed.AppliedAt == nil || *initial.AppliedAt != *replayed.AppliedAt {
 		t.Fatal("attachment fixture bootstrap replay changed its original receipt")
 	}
@@ -3217,7 +3457,7 @@ func proveManagementSessionReferences(t *testing.T, ctx context.Context, handler
 		}
 		for _, candidate := range candidates {
 			t.Run(operation+"_"+candidate.name, func(t *testing.T) {
-				workflow, err := identityaccess.NewAuthority(managementSessionProbe{repository, candidate.id}, identityaccess.Config{})
+				workflow, err := newIAMAuthorityWithTOTP(t, managementSessionProbe{repository, candidate.id}, identityaccess.Config{})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -3294,7 +3534,7 @@ func proveManagementSessionReferences(t *testing.T, ctx context.Context, handler
 		}
 		for _, candidate := range candidates {
 			t.Run("role_"+operation+"_"+candidate.name, func(t *testing.T) {
-				workflow, err := identityaccess.NewAuthority(managementSessionProbe{repository, candidate.id}, identityaccess.Config{})
+				workflow, err := newIAMAuthorityWithTOTP(t, managementSessionProbe{repository, candidate.id}, identityaccess.Config{})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -6261,7 +6501,7 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 	failures := &iamTransactionFailureTrace{}
 	completionTrace := &iamAccessKeyCompletionTrace{iamTransactionFailureTrace: failures}
 	workflow := localRecoveryWorkflow(t, ctx, dsn, iamHTTPTestRole, completionTrace, keyring)
-	if _, err := workflow.Bootstrap(ctx, document); err != nil {
+	if _, err := bootstrapIAMWithTOTP(t, ctx, workflow, document); err != nil {
 		t.Fatal("bootstrap AccessKey gate", err)
 	}
 	if err := workflow.VerifyAccessKeyCustody(ctx); err != nil {
@@ -7499,7 +7739,7 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 		}
 		var ids, keyIDs atomic.Int64
 		var exhaust atomic.Bool
-		candidate, err := identityaccess.NewAuthority(repository, identityaccess.Config{AccessKeyWrapping: &keyring,
+		candidate, err := newIAMAuthorityWithTOTP(t, repository, identityaccess.Config{AccessKeyWrapping: &keyring,
 			CursorKey: bytes.Repeat([]byte{0x39}, 32), NewID: func(kind string) (string, error) {
 				if kind == "access-key" {
 					if keyIDs.Add(1) == 1 || exhaust.Load() {
@@ -7649,7 +7889,7 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 	}
 	applyIAMSchema(t, ctx, database)
 	applyIAMSchema(t, ctx, database)
-	if _, err := replica.Bootstrap(ctx, document); err != nil {
+	if _, err := bootstrapIAMWithTOTP(t, ctx, replica, document); err != nil {
 		t.Fatal("equal bootstrap key replay")
 	}
 	if err := database.QueryRow(ctx, retained).Scan(&after); err != nil || before != after {
@@ -7852,7 +8092,7 @@ func TestIAMRoleAndManagementReferencesPostgres(t *testing.T) {
 				}
 			})
 			document := iamHTTPBootstrap(t)
-			initial, err := workflow.Bootstrap(ctx, document)
+			initial, err := bootstrapIAMWithTOTP(t, ctx, workflow, document)
 			if err != nil || initial.State != iamv1.BootstrapReady {
 				t.Fatal("bootstrap management gate")
 			}
@@ -7912,7 +8152,7 @@ func TestIAMRoleAndManagementReferencesPostgres(t *testing.T) {
 			}
 			applyIAMSchema(t, ctx, database)
 			applyIAMSchema(t, ctx, database)
-			replayed, err := workflow.Bootstrap(ctx, document)
+			replayed, err := bootstrapIAMWithTOTP(t, ctx, workflow, document)
 			if err != nil || replayed.ContentDigest != initial.ContentDigest || initial.AppliedAt == nil || replayed.AppliedAt == nil || *initial.AppliedAt != *replayed.AppliedAt {
 				t.Fatal("management gate replay changed bootstrap receipt")
 			}
@@ -11133,7 +11373,7 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 	var sequence atomic.Int64
 	document := iamHTTPBootstrap(t)
 	keyring := iamHTTPAccessKeyWrapping(t, document)
-	workflow, err := identityaccess.NewAuthority(repository, identityaccess.Config{
+	workflow, err := newIAMAuthorityWithTOTP(t, repository, identityaccess.Config{
 		SessionLifetime:   time.Hour,
 		CursorKey:         bytes.Repeat([]byte{0x39}, 32),
 		AccessKeyWrapping: &keyring,
@@ -11144,11 +11384,11 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create IAM HTTP workflow: %v", err)
 	}
-	status, err := workflow.Bootstrap(ctx, document)
+	status, err := bootstrapIAMWithTOTP(t, ctx, workflow, document)
 	if err != nil || status.State != iamv1.BootstrapReady {
 		t.Fatalf("bootstrap IAM HTTP authority: status=%#v err=%v", status, err)
 	}
-	replayed, err := workflow.Bootstrap(ctx, document)
+	replayed, err := bootstrapIAMWithTOTP(t, ctx, workflow, document)
 	if err != nil || replayed.ContentDigest != status.ContentDigest || replayed.AppliedAt == nil ||
 		status.AppliedAt == nil || *replayed.AppliedAt != *status.AppliedAt {
 		t.Fatalf("replay IAM HTTP bootstrap: status=%#v err=%v", replayed, err)
@@ -11403,7 +11643,7 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 		provePasswordSessionRaces(t, ctx, handler, admin, loginWire.Credential)
 	})
 	assertPlatformAuthorityHTTP(t, ctx, handler, admin, loginWire.Credential, developerWire.Credential, developer.ID)
-	if _, err := workflow.Bootstrap(ctx, document); err != nil {
+	if _, err := bootstrapIAMWithTOTP(t, ctx, workflow, document); err != nil {
 		t.Fatalf("replay bootstrap after platform role revocation: %v", err)
 	}
 	applyIAMSchema(t, ctx, admin)

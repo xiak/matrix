@@ -6,7 +6,22 @@ import (
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 )
 
-const SchemaVersion uint64 = 33
+const SchemaVersion uint64 = 34
+
+// CheckSchema is startup admission before bootstrap/material registration,
+// not network readiness or permission to serve authentication requests.
+func (service *Authority) CheckSchema(ctx context.Context) error {
+	return service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
+		snapshot, err := tx.Readiness(ctx)
+		if err != nil {
+			return err
+		}
+		if snapshot.SchemaVersion != SchemaVersion {
+			return ErrUnavailable
+		}
+		return nil
+	})
+}
 
 func (service *Authority) Readiness(ctx context.Context) (iamv1.Readiness, error) {
 	var snapshot ReadinessSnapshot
@@ -18,7 +33,10 @@ func (service *Authority) Readiness(ctx context.Context) (iamv1.Readiness, error
 		}
 		// Network readiness requires custody even when no AccessKey exists.
 		// This check reads the complete immutable history in the same snapshot.
-		return service.checkAccessKeyCustody(transactionContext, transaction)
+		if err := service.checkAccessKeyCustody(transactionContext, transaction); err != nil {
+			return err
+		}
+		return service.checkTOTPCustody(transactionContext, transaction)
 	})
 	if err != nil {
 		return iamv1.Readiness{}, err

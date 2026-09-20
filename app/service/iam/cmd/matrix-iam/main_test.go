@@ -44,7 +44,7 @@ func TestCursorKeyRequiresExactProtectedInstallationFile(t *testing.T) {
 }
 
 func TestIAMNetworkConfigurationRequiresPrivateFiles(t *testing.T) {
-	fields := []string{databaseDSNFileEnvironment, bootstrapFileEnvironment, listenAddressEnvironment, cursorKeyFileEnvironment, accessKeyWrappingFileEnvironment}
+	fields := []string{databaseDSNFileEnvironment, bootstrapFileEnvironment, listenAddressEnvironment, cursorKeyFileEnvironment, accessKeyWrappingFileEnvironment, totpKeyringFileEnvironment}
 	for _, field := range fields {
 		t.Setenv(field, "fixture")
 	}
@@ -143,6 +143,93 @@ func TestAccessKeyWrappingFileBindsActualBootstrap(t *testing.T) {
 			}
 			if _, err := readAccessKeyWrapping(path, bootstrap); err == nil {
 				t.Fatal("wrapping file accepted non-0600 permissions")
+			}
+		}
+	}
+}
+
+func TestTOTPKeyringFileRequiresIndependentCanonicalInstallationMaterial(t *testing.T) {
+	encodedBootstrap, err := os.ReadFile(filepath.Join("..", "..", "..", "..", "..", "api", "iam", "v1", "examples", "bootstrap-document.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootstrap, err := iamv1.DecodeBootstrapDocument(bytes.NewReader(encodedBootstrap))
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, err := iamv1.BootstrapDigest(bootstrap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	material, _ := iamv1.NewSecret(base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x74}, 32)))
+	keyring := iamv1.TOTPKeyring{APIVersion: iamv1.APIVersion, Kind: "TOTPKeyring", Purpose: iamv1.TOTPWrappingPurpose,
+		Scope:          iamv1.TOTPWrappingScope{InstallationID: bootstrap.InstallationID, BootstrapDigest: digest},
+		KeysetRevision: 1, ActiveKeyID: "totp-test", Keys: []iamv1.TOTPWrappingKey{{KeyID: "totp-test", FormatVersion: 1, KeyMaterial: material}}}
+	encoded, err := iamv1.EncodeTOTPKeyring(keyring)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(encoded)
+	path := filepath.Join(t.TempDir(), "totp-private.json")
+	write := func(value []byte) {
+		t.Helper()
+		if err := os.WriteFile(path, value, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(encoded)
+	actual, err := readTOTPKeyring(path, bootstrap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedDigest, _ := iamv1.TOTPKeysetDigest(keyring)
+	actualDigest, err := iamv1.TOTPKeysetDigest(actual)
+	if err != nil || actualDigest != expectedDigest {
+		t.Fatal("reader changed TOTP material")
+	}
+	for _, variant := range []string{"installation", "bootstrap", "invalid-bootstrap"} {
+		changed := bootstrap
+		switch variant {
+		case "installation":
+			changed.InstallationID = "different-installation"
+		case "bootstrap":
+			changed.Administrator.DisplayName = "Different bootstrap"
+		case "invalid-bootstrap":
+			changed.Kind = "OtherKind"
+		}
+		if _, err := readTOTPKeyring(path, changed); err == nil {
+			t.Fatal("TOTP accepted another sealed scope", variant)
+		}
+	}
+	for _, value := range [][]byte{nil, []byte("{}"), append(append([]byte(nil), encoded...), '\n'),
+		bytes.ReplaceAll(encoded, []byte(iamv1.TOTPWrappingPurpose), []byte(iamv1.AccessKeyWrappingPurpose)),
+		bytes.Repeat([]byte{'x'}, int(iamv1.MaxTOTPKeyringBytes)+1)} {
+		write(value)
+		if _, err := readTOTPKeyring(path, bootstrap); err == nil || err.Error() != "IAM TOTP keyring file is unavailable" {
+			t.Fatal("bad material accepted or error exposed input")
+		}
+	}
+	write(encoded)
+	for _, invalidPath := range []string{"relative-keyring", filepath.Dir(path), filepath.Join(filepath.Dir(path), "missing.json")} {
+		if _, err := readTOTPKeyring(invalidPath, bootstrap); err == nil {
+			t.Fatal("invalid material reference accepted")
+		}
+	}
+	link := filepath.Join(filepath.Dir(path), "linked.json")
+	if err := os.Symlink(path, link); err == nil {
+		if _, err := readTOTPKeyring(link, bootstrap); err == nil {
+			t.Fatal("linked material accepted")
+		}
+	} else if runtime.GOOS != "windows" {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" {
+		for _, mode := range []os.FileMode{0o400, 0o640, 0o644, 0o700, 0o600 | os.ModeSetuid} {
+			if err := os.Chmod(path, mode); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := readTOTPKeyring(path, bootstrap); err == nil {
+				t.Fatal("nonprivate material accepted")
 			}
 		}
 	}

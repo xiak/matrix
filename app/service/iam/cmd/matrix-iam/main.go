@@ -28,6 +28,7 @@ const (
 	listenAddressEnvironment         = "MATRIX_IAM_LISTEN_ADDRESS"
 	cursorKeyFileEnvironment         = "MATRIX_IAM_CURSOR_KEY_FILE"
 	accessKeyWrappingFileEnvironment = "MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE"
+	totpKeyringFileEnvironment       = "MATRIX_IAM_TOTP_KEYRING_FILE"
 )
 
 type configuration struct {
@@ -36,6 +37,7 @@ type configuration struct {
 	listenAddress         string
 	cursorKeyFile         string
 	accessKeyWrappingFile string
+	totpKeyringFile       string
 }
 
 func main() {
@@ -72,6 +74,11 @@ func run(ctx context.Context) error {
 		return err
 	}
 	defer func() { keyring = iamv1.AccessKeyWrappingKeyring{} }()
+	totpKeyring, err := readTOTPKeyring(config.totpKeyringFile, document)
+	if err != nil {
+		return err
+	}
+	defer func() { totpKeyring = iamv1.TOTPKeyring{} }()
 	dsn, err := processconfig.ReadText(config.databaseDSNFile, 16*1024, true)
 	if err != nil {
 		return err
@@ -92,14 +99,14 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	workflow, err := identityaccess.NewAuthority(repository, identityaccess.Config{CursorKey: cursorKey, AccessKeyWrapping: &keyring})
+	workflow, err := identityaccess.NewAuthority(repository, identityaccess.Config{CursorKey: cursorKey, AccessKeyWrapping: &keyring, TOTPKeyring: &totpKeyring})
 	clear(cursorKey)
 	keyring = iamv1.AccessKeyWrappingKeyring{}
+	totpKeyring = iamv1.TOTPKeyring{}
 	if err != nil {
 		return err
 	}
-	schema, err := workflow.Readiness(ctx)
-	if err != nil || schema.SchemaVersion != identityaccess.SchemaVersion {
+	if err := workflow.CheckSchema(ctx); err != nil {
 		return errors.New("IAM schema is incompatible")
 	}
 	if _, err := workflow.Bootstrap(ctx, document); err != nil {
@@ -107,8 +114,15 @@ func run(ctx context.Context) error {
 		return errors.New("IAM bootstrap cannot converge")
 	}
 	document = iamv1.BootstrapDocument{}
+	if err := workflow.RegisterTOTPKeyset(ctx); err != nil {
+		return errors.New("IAM TOTP custody is unavailable")
+	}
 	if err := workflow.VerifyAccessKeyCustody(ctx); err != nil {
 		return errors.New("IAM access key custody is unavailable")
+	}
+	ready, err := workflow.Readiness(ctx)
+	if err != nil || ready.State != iamv1.ReadinessReady {
+		return errors.New("IAM authority is not ready")
 	}
 	handler, err := iamhttp.NewHandler(workflow, iamhttp.Config{})
 	if err != nil {
@@ -124,9 +138,10 @@ func loadConfiguration() (configuration, error) {
 		listenAddress:         os.Getenv(listenAddressEnvironment),
 		cursorKeyFile:         os.Getenv(cursorKeyFileEnvironment),
 		accessKeyWrappingFile: os.Getenv(accessKeyWrappingFileEnvironment),
+		totpKeyringFile:       os.Getenv(totpKeyringFileEnvironment),
 	}
 	if config.databaseDSNFile == "" || config.bootstrapFile == "" ||
-		config.listenAddress == "" || config.cursorKeyFile == "" || config.accessKeyWrappingFile == "" {
+		config.listenAddress == "" || config.cursorKeyFile == "" || config.accessKeyWrappingFile == "" || config.totpKeyringFile == "" {
 		return configuration{}, errors.New("IAM process configuration is incomplete")
 	}
 	return config, nil
@@ -137,18 +152,9 @@ func loadConfiguration() (configuration, error) {
 // exact bytes once; it does not hot-reload or generate replacement material.
 func readAccessKeyWrapping(path string, bootstrap iamv1.BootstrapDocument) (iamv1.AccessKeyWrappingKeyring, error) {
 	invalid := errors.New("IAM access key wrapping file is unavailable")
-	before, err := os.Lstat(path)
-	if err != nil || !before.Mode().IsRegular() || (runtime.GOOS != "windows" && before.Mode() != 0o600) {
-		return iamv1.AccessKeyWrappingKeyring{}, invalid
-	}
-	encoded, err := processconfig.ReadFile(path, iamv1.MaxAccessKeyWrappingKeyringBytes, true)
+	encoded, err := readPrivateMaterial(path, iamv1.MaxAccessKeyWrappingKeyringBytes)
 	defer clear(encoded)
 	if err != nil {
-		return iamv1.AccessKeyWrappingKeyring{}, invalid
-	}
-	after, err := os.Lstat(path)
-	if err != nil || !os.SameFile(before, after) || before.Mode() != after.Mode() ||
-		before.Size() != after.Size() || before.ModTime() != after.ModTime() {
 		return iamv1.AccessKeyWrappingKeyring{}, invalid
 	}
 	document, err := iamv1.DecodeAccessKeyWrappingKeyring(bytes.NewReader(encoded))
@@ -161,6 +167,46 @@ func readAccessKeyWrapping(path string, bootstrap iamv1.BootstrapDocument) (iamv
 		return iamv1.AccessKeyWrappingKeyring{}, invalid
 	}
 	return document, nil
+}
+
+func readTOTPKeyring(path string, bootstrap iamv1.BootstrapDocument) (iamv1.TOTPKeyring, error) {
+	invalid := errors.New("IAM TOTP keyring file is unavailable")
+	encoded, err := readPrivateMaterial(path, iamv1.MaxTOTPKeyringBytes)
+	defer clear(encoded)
+	if err != nil {
+		return iamv1.TOTPKeyring{}, invalid
+	}
+	document, err := iamv1.DecodeTOTPKeyring(bytes.NewReader(encoded))
+	if err != nil {
+		return iamv1.TOTPKeyring{}, invalid
+	}
+	digest, err := iamv1.BootstrapDigest(bootstrap)
+	if err != nil || document.Scope.InstallationID != bootstrap.InstallationID ||
+		subtle.ConstantTimeCompare([]byte(document.Scope.BootstrapDigest), []byte(digest)) != 1 {
+		return iamv1.TOTPKeyring{}, invalid
+	}
+	return document, nil
+}
+
+// Shared filesystem checks do not share either credential purpose or codec.
+func readPrivateMaterial(path string, limit int64) ([]byte, error) {
+	invalid := errors.New("IAM private material is unavailable")
+	before, err := os.Lstat(path)
+	if err != nil || !before.Mode().IsRegular() || (runtime.GOOS != "windows" && before.Mode() != 0o600) {
+		return nil, invalid
+	}
+	encoded, err := processconfig.ReadFile(path, limit, true)
+	if err != nil {
+		clear(encoded)
+		return nil, invalid
+	}
+	after, err := os.Lstat(path)
+	if err != nil || !os.SameFile(before, after) || before.Mode() != after.Mode() ||
+		before.Size() != after.Size() || before.ModTime() != after.ModTime() {
+		clear(encoded)
+		return nil, invalid
+	}
+	return encoded, nil
 }
 
 func readCursorKey(path string) ([]byte, error) {

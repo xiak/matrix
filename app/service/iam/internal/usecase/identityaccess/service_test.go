@@ -22,6 +22,85 @@ type passwordEntropyProbe struct {
 	repository *coreRepository
 }
 
+func coreTOTPKeyring() iamv1.TOTPKeyring {
+	material, _ := iamv1.NewSecret(base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x76}, 32)))
+	return iamv1.TOTPKeyring{APIVersion: iamv1.APIVersion, Kind: "TOTPKeyring", Purpose: iamv1.TOTPWrappingPurpose,
+		Scope:          iamv1.TOTPWrappingScope{InstallationID: "installation-example", BootstrapDigest: "sha256:" + strings.Repeat("a", 64)},
+		KeysetRevision: 1, ActiveKeyID: "totp-test", Keys: []iamv1.TOTPWrappingKey{{KeyID: "totp-test", FormatVersion: 1, KeyMaterial: material}}}
+}
+
+func newCoreAuthority(repository Repository, config Config) (*Authority, error) {
+	keyring := coreTOTPKeyring()
+	config.TOTPKeyring = &keyring
+	return NewAuthority(repository, config)
+}
+
+func TestTOTPCustodyFencesActualLoginAndSessionNotOnlyReadiness(t *testing.T) {
+	tx := newCoreTransaction()
+	repository := &coreRepository{transaction: tx}
+	service, err := newCoreAuthority(repository, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootstrap := coreBootstrap(t)
+	if _, err := service.Bootstrap(t.Context(), bootstrap); err != nil {
+		t.Fatal(err)
+	}
+	request := iamv1.LoginRequest{LoginName: "admin", Password: bootstrap.Administrator.Password, RequestID: "request-custody"}
+	login, err := service.Login(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline, err := tx.ReadTOTPCustody(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, variant := range []string{"missing-material", "scope", "revision", "digest", "key", "commitment", "unsupported-factor", "database"} {
+		t.Run(variant, func(t *testing.T) {
+			candidate := *service
+			stored := baseline
+			stored.Keyset.Keys = append([]TOTPKeyCommitment(nil), baseline.Keyset.Keys...)
+			tx.totpCustodyErr = nil
+			switch variant {
+			case "missing-material":
+				candidate.totp = nil
+			case "scope":
+				stored.Keyset.Scope.InstallationID = "another-installation"
+			case "revision":
+				stored.Keyset.KeysetRevision++
+			case "digest":
+				stored.Keyset.ContentDigest = "sha256:" + strings.Repeat("d", 64)
+			case "key":
+				stored.Keyset.Keys[0].KeyID = "another-key"
+			case "commitment":
+				stored.Keyset.Keys[0].MaterialCommitment = "sha256:" + strings.Repeat("e", 64)
+			case "unsupported-factor":
+				stored.HasAuthenticators = true
+			case "database":
+				tx.totpCustodyErr = ErrUnavailable
+			}
+			tx.totpCustody = &stored
+			before := tx.attemptSequence
+			if _, err := candidate.Login(t.Context(), request); !errors.Is(err, ErrUnavailable) {
+				t.Fatal("login was not closed", err)
+			}
+			if tx.attemptSequence != before || len(tx.sessions) != 1 {
+				t.Fatal("failed custody spent a guess or issued another session")
+			}
+			if _, err := candidate.authenticateSession(t.Context(), tx, login.Credential, tx.now); !errors.Is(err, ErrUnavailable) {
+				t.Fatal("existing bearer bypassed custody", err)
+			}
+			if _, err := candidate.authenticateRoleSession(t.Context(), tx, login.Credential, tx.now); !errors.Is(err, ErrUnavailable) {
+				t.Fatal("role authentication bypassed custody", err)
+			}
+		})
+	}
+	tx.totpCustody, tx.totpCustodyErr = &baseline, nil
+	if _, err := service.authenticateSession(t.Context(), tx, login.Credential, tx.now); err != nil {
+		t.Fatal("valid custody rejected existing bearer", err)
+	}
+}
+
 func (probe passwordEntropyProbe) Read(value []byte) (int, error) {
 	if probe.repository.inTransaction {
 		probe.testing.Fatal("expensive new-password hashing held a transaction")
@@ -35,7 +114,7 @@ func (probe passwordEntropyProbe) Read(value []byte) (int, error) {
 func TestPasswordAttemptsCommitBeforeVerificationAndNeverReuseAStaleResult(t *testing.T) {
 	tx := newCoreTransaction()
 	repository := &coreRepository{transaction: tx}
-	service, err := NewAuthority(repository, Config{})
+	service, err := newCoreAuthority(repository, Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,7 +172,7 @@ func TestPasswordAttemptsCommitBeforeVerificationAndNeverReuseAStaleResult(t *te
 }
 
 func TestPasswordWorkHasNoQueueAndPrivateAttemptsCannotSerialize(t *testing.T) {
-	service, err := NewAuthority(&coreRepository{transaction: newCoreTransaction()}, Config{})
+	service, err := newCoreAuthority(&coreRepository{transaction: newCoreTransaction()}, Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,7 +198,7 @@ func TestPasswordWorkHasNoQueueAndPrivateAttemptsCannotSerialize(t *testing.T) {
 
 func TestRoleSelfExitUsesOnlyExactCredentialPossession(t *testing.T) {
 	tx := newCoreTransaction()
-	service, err := NewAuthority(&coreRepository{transaction: tx}, Config{})
+	service, err := newCoreAuthority(&coreRepository{transaction: tx}, Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +238,7 @@ func TestRoleSelfExitUsesOnlyExactCredentialPossession(t *testing.T) {
 
 func TestAuthorizationProfileDiscoveryRequiresCurrentAuthorityAndNoPermitCache(t *testing.T) {
 	tx := newCoreTransaction()
-	service, err := NewAuthority(&coreRepository{transaction: tx}, Config{})
+	service, err := newCoreAuthority(&coreRepository{transaction: tx}, Config{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,7 +288,7 @@ func TestAuthorizationProfileDiscoveryRequiresCurrentAuthorityAndNoPermitCache(t
 
 func TestTransactionRetryYieldsToContendingCommit(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		service, err := NewAuthority(&coreRepository{transaction: newCoreTransaction()}, Config{})
+		service, err := newCoreAuthority(&coreRepository{transaction: newCoreTransaction()}, Config{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -237,7 +316,7 @@ func TestTransactionRetryCancellationAndTerminalResults(t *testing.T) {
 	for _, terminal := range []error{nil, ErrConflict, ErrForbidden, ErrUnavailable} {
 		t.Run(fmt.Sprint(terminal), func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				service, err := NewAuthority(&coreRepository{transaction: newCoreTransaction()}, Config{})
+				service, err := newCoreAuthority(&coreRepository{transaction: newCoreTransaction()}, Config{})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -251,7 +330,7 @@ func TestTransactionRetryCancellationAndTerminalResults(t *testing.T) {
 	}
 	t.Run("cancel during backoff", func(t *testing.T) {
 		synctest.Test(t, func(t *testing.T) {
-			service, err := NewAuthority(&coreRepository{transaction: newCoreTransaction()}, Config{})
+			service, err := newCoreAuthority(&coreRepository{transaction: newCoreTransaction()}, Config{})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -267,7 +346,7 @@ func TestTransactionRetryCancellationAndTerminalResults(t *testing.T) {
 	for _, limit := range []int{1, defaultMaxTransactionAttempts, 10} {
 		t.Run(fmt.Sprintf("exhaustion-%d", limit), func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
-				service, err := NewAuthority(&coreRepository{transaction: newCoreTransaction()}, Config{MaxTransactionAttempts: limit})
+				service, err := newCoreAuthority(&coreRepository{transaction: newCoreTransaction()}, Config{MaxTransactionAttempts: limit})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -312,7 +391,7 @@ func TestLocalRecoveryWorkflowBindsOnePrivateIntentToOneSanitizedFact(t *testing
 		CommandID: request.CommandID, InputCommitment: commitment, PreviousCredentialGeneration: 3, CredentialGeneration: 4, PrincipalResourceVersion: 3,
 		RevokedSessions: 2, AuditEventID: "event-local", CompletedAt: transaction.now}
 	transaction.localRecoveryResult = completed
-	service, err := NewAuthority(repository, Config{NewID: func(string) (string, error) { return "event-local", nil }})
+	service, err := newCoreAuthority(repository, Config{NewID: func(string) (string, error) { return "event-local", nil }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -701,7 +780,7 @@ func TestPasswordChangeRetainsCurrentAndHonorsEffectiveSessionPolicy(t *testing.
 		t.Run(scenario.name, func(t *testing.T) {
 			repository := &coreRepository{transaction: newCoreTransaction()}
 			sequence := 0
-			service, err := NewAuthority(repository, Config{NewID: func(prefix string) (string, error) {
+			service, err := newCoreAuthority(repository, Config{NewID: func(prefix string) (string, error) {
 				sequence++
 				return fmt.Sprintf("%s-policy-%d", prefix, sequence), nil
 			}})
@@ -755,7 +834,7 @@ func TestPasswordChangeRetainsCurrentAndHonorsEffectiveSessionPolicy(t *testing.
 func TestIAMCoreUsecasesBindCredentialsAndRecordClosedAuthorization(t *testing.T) {
 	repository := &coreRepository{transaction: newCoreTransaction()}
 	sequence := 0
-	service, err := NewAuthority(repository, Config{
+	service, err := newCoreAuthority(repository, Config{
 		SessionLifetime: time.Hour,
 		NewID: func(prefix string) (string, error) {
 			sequence++
@@ -1075,6 +1154,28 @@ type coreTransaction struct {
 	profileErr              error
 	accessKeyCustody        *AccessKeyCustody
 	accessKeyCustodyErr     error
+	totpCustody             *TOTPCustody
+	totpCustodyErr          error
+}
+
+func (transaction *coreTransaction) RegisterTOTPKeyset(_ context.Context, value TOTPKeysetRegistration) error {
+	transaction.totpCustody = &TOTPCustody{Keyset: value}
+	return transaction.totpCustodyErr
+}
+
+func (transaction *coreTransaction) ReadTOTPCustody(context.Context) (TOTPCustody, error) {
+	if transaction.totpCustodyErr != nil {
+		return TOTPCustody{}, transaction.totpCustodyErr
+	}
+	if transaction.totpCustody != nil {
+		return *transaction.totpCustody, nil
+	}
+	keyring := coreTOTPKeyring()
+	wrapping, err := newTOTPRegistration(&keyring)
+	if err != nil {
+		return TOTPCustody{}, err
+	}
+	return TOTPCustody{Keyset: *wrapping}, nil
 }
 
 func (transaction *coreTransaction) ReadAccessKeyCustody(context.Context) (AccessKeyCustody, error) {
@@ -1098,7 +1199,7 @@ func TestIAMReadinessRequiresCompleteMatchingAccessKeyCustody(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service, err := NewAuthority(&coreRepository{transaction: tx}, Config{AccessKeyWrapping: &document})
+	service, err := newCoreAuthority(&coreRepository{transaction: tx}, Config{AccessKeyWrapping: &document})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1121,7 +1222,7 @@ func TestIAMReadinessRequiresCompleteMatchingAccessKeyCustody(t *testing.T) {
 				custody.Keys = custody.Keys[:0]
 			case "missing-file":
 				var err error
-				current, err = NewAuthority(&coreRepository{transaction: tx}, Config{})
+				current, err = newCoreAuthority(&coreRepository{transaction: tx}, Config{})
 				if err != nil {
 					t.Fatal(err)
 				}
