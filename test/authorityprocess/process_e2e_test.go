@@ -1581,11 +1581,13 @@ func TestIAMRetainedPolicyProcessUpgrade(t *testing.T) {
 	// Only original content rows are compared: the migration may insert new
 	// compiled SYSTEM versions, but never advance existing defaults or rewrite
 	// old canonical bytes, evidence, credentials, attachments or receipts.
+	// New Account settings and Session authentication facts are checked below
+	// against their explicit cutover rules, not included as predecessor data.
 	snapshot := func() []byte {
 		t.Helper()
 		var state []byte
 		if err := admin.QueryRow(ctx, `SELECT jsonb_build_object(
-			'accounts',(SELECT jsonb_agg(to_jsonb(a) ORDER BY id) FROM iam.accounts a),
+			'accounts',(SELECT jsonb_agg(to_jsonb(a)-ARRAY['security_settings_version','mfa_required_for_users','security_settings_updated_at'] ORDER BY id) FROM iam.accounts a),
 			'roots',(SELECT jsonb_agg(to_jsonb(r) ORDER BY account_id) FROM iam.account_roots r),
 			'groups',(SELECT jsonb_agg(to_jsonb(g) ORDER BY tenant_id,id) FROM iam.groups g),
 			'memberships',(SELECT jsonb_agg(to_jsonb(m) ORDER BY tenant_id,id) FROM iam.group_memberships m),
@@ -1595,7 +1597,7 @@ func TestIAMRetainedPolicyProcessUpgrade(t *testing.T) {
 			'receipt',(SELECT jsonb_agg(to_jsonb(r)) FROM iam.bootstrap_receipts r),
 			'principals',(SELECT jsonb_agg(to_jsonb(p) ORDER BY tenant_id,id) FROM iam.principals p),
 			'credentials',(SELECT jsonb_agg(to_jsonb(c) ORDER BY tenant_id,principal_id) FROM iam.user_credentials c),
-			'sessions',(SELECT jsonb_agg(to_jsonb(s) ORDER BY tenant_id,id) FROM iam.sessions s),
+			'sessions',(SELECT jsonb_agg(to_jsonb(s)-ARRAY['authentication_method','authenticated_at','mfa_revision'] ORDER BY tenant_id,id) FROM iam.sessions s),
 			'decisions',(SELECT jsonb_agg(to_jsonb(d)-ARRAY['subject_type','role_id','source_principal_id','role_evidence','access_key_id'] ORDER BY tenant_id,id) FROM iam.authorization_decisions d),
 			'outbox',(SELECT jsonb_agg(to_jsonb(e) ORDER BY tenant_id,event_id) FROM iam.audit_outbox e))`, originalVersions).Scan(&state); err != nil {
 			t.Fatal("read retained policy authority")
@@ -1692,6 +1694,14 @@ func TestIAMRetainedPolicyProcessUpgrade(t *testing.T) {
 		}
 		if err := iammigration.Verify(ctx, admin); err != nil {
 			t.Fatalf("retained authority verification failed: %v", err)
+		}
+		var initialSettings, unknownAuthentication bool
+		if err := admin.QueryRow(ctx, `SELECT
+			(SELECT count(*)>0 AND bool_and(security_settings_version=1 AND NOT mfa_required_for_users
+			 AND security_settings_updated_at=created_at) FROM iam.accounts),
+			(SELECT count(*)>0 AND bool_and(authentication_method IS NULL AND authenticated_at IS NULL
+			 AND mfa_revision IS NULL) FROM iam.sessions)`).Scan(&initialSettings, &unknownAuthentication); err != nil || !initialSettings || !unknownAuthentication {
+			t.Fatal("cutover fabricated Account requirements or Session authentication facts")
 		}
 		after := snapshot()
 		if !bytes.Equal(before, after) {

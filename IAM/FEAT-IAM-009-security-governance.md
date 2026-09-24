@@ -518,7 +518,9 @@ S2c首次设置的公共契约复用`AuthenticationChallenge`，purpose为独立
 
 用途运行时的最终源码已通过全仓默认race/architecture、vet、模块校验、Linux/amd64全包构建、122个API文件重生成字节一致及格式/diff检查；默认外部门禁SKIP不替代上述实际运行。7组错误用途用有效challenge凭据分别证明在尝试预算和因子材料读取之前拒绝，缺失用途属于权威不可用而非可推断默认。独立PG在确认无其他客户端后正常停止，保留数据未删除；没有共享Docker/系统服务或远端重启。固定源独立CI仍须另外核实，不能因本地通过完成整片S2c。
 
-该用途运行时已固定推送`339d37474f2cfbee11479a497514d8dcb4d38b0f`；[Verification35967101589](https://github.com/xiak/matrix/actions/runs/35967101589)已按精确SHA核实实际启动runner，node-process成功，其余门禁仍在运行或串行排队。此前付款限制导致的零执行失败不能替代本次状态；本次尚无完整独立CI通过结论，不宣称S2c或发布已验收。
+该用途运行时已固定推送`339d37474f2cfbee11479a497514d8dcb4d38b0f`；[Verification35967101589](https://github.com/xiak/matrix/actions/runs/35967101589)已按精确SHA核实实际启动runner，go、node-process和step-up成功，storage/runtime失败，不能记为独立CI通过。两处Audit门禁仍期待旧IAM41，另一个IAM21保留数据门禁把新增配置/认证事实列误当成原行变化；这与此前付款限制导致的零执行失败不同。
+
+2026-09-24在上述限额的独立PG18.6上复现后，仅修正测试拥有者：Audit schema断言同步42；保留数据快照仍比较全部原字段，新字段单独证明初始配置为1/false/原创建时间，旧Session认证事实保持NULL、不得伪造MFA。Audit数据5.61s、HTTP1.32s及实际IAM21 executable保留数据/当前产品声明推进32.40s通过；后者先以原断言复现失败。受影响Audit/进程/架构默认race及vet通过。没有生产API/SQL/profile或安全语义变更；该旧版实验只提供此次修正证据，不扩大[011的未发布兼容窗口](./FEAT-IAM-011-acceptance.md#未发布阶段与首版基线)，也不代替完整S2c或发布验收。
 
 固定`0a237aae`的纯契约基础片已在Go1.26.7、GOMAXPROCS=2/GOMEMLIMIT=512MiB下完成全仓默认race、vet、模块校验、Linux/amd64构建与122个API生成文件字节一致检查；最终受影响API/生成器、identityaccess/nethttp及architecture再次race通过。原测试owner覆盖25组challenge用途/阶段组合、四种请求的缺失/null/重复/身份与第二载体注入、PASSWORD_CHANGE不得暴露后继状态、非首因子/晚于绑定的地址验证时间/挑战期限不匹配拒绝；现有LOGIN发行器拒绝ENROLLMENT/RECOVERY和未经TOTP的PASSWORD_CHANGE返回。单worker、15秒请求fuzz完成72241次执行无失败。该固定片没有启动数据库/SMTP/浏览器，默认外部门禁SKIP不计真实运行；其源码为IAM41/Audit24/PaaS2，不分配发布profile，独立CI与完整S2c仍未验收。
 
