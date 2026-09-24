@@ -92,3 +92,7 @@ func IAMAuthenticationRecoveryIntent(commandID string) string {
 func IAMAuthenticationRecoveryClosure(commandID string) string {
 	return "state/iam-authentication-recovery/" + commandID + ".closure.json"
 }
+
+func IAMAuthenticationRecoverySecuritySnapshot(commandID string) string {
+	return "state/iam-authentication-recovery/" + commandID + ".security-snapshot.json"
+}

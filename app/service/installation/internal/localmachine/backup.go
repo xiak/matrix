@@ -212,13 +212,14 @@ func (effects *Effects) InspectBackup(
 		custodyDigest = manifest.TOTPBackupCustody.CustodyDigest
 	}
 	return platformcommand.RecoverySource{
-		InstallationID:    installed.InstallationID,
-		BackupID:          backupID,
-		BackupDigest:      manifestDigest,
-		TOTPCustodyDigest: custodyDigest,
-		ReleaseID:         manifest.ReleaseID,
-		ReleaseDigest:     manifest.ReleaseDigest,
-		Database:          profile,
+		InstallationID:            installed.InstallationID,
+		BackupID:                  backupID,
+		BackupDigest:              manifestDigest,
+		TOTPCustodyDigest:         custodyDigest,
+		AuthenticationStateDigest: manifest.AuthenticationStateDigest,
+		ReleaseID:                 manifest.ReleaseID,
+		ReleaseDigest:             manifest.ReleaseDigest,
+		Database:                  profile,
 	}, nil
 }
 

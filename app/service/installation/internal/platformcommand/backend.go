@@ -212,13 +212,14 @@ type RollbackPlan struct {
 // by a selected protected backup. BackupDigest binds the sealed manifest and
 // its exact artifact commitments into the durable recovery command.
 type RecoverySource struct {
-	InstallationID    string
-	BackupID          string
-	BackupDigest      string
-	TOTPCustodyDigest string
-	ReleaseID         string
-	ReleaseDigest     string
-	Database          release.DatabaseProfile
+	InstallationID            string
+	BackupID                  string
+	BackupDigest              string
+	TOTPCustodyDigest         string
+	AuthenticationStateDigest string
+	ReleaseID                 string
+	ReleaseDigest             string
+	Database                  release.DatabaseProfile
 }
 
 // RecoveryPlan binds the current committed release, the authenticated release
@@ -1128,6 +1129,7 @@ func (backend *Backend) recover(
 	if source.InstallationID != state.InstallationID || source.BackupID != request.BackupID ||
 		source.ReleaseID == "" || source.ReleaseDigest == "" || source.BackupDigest == "" ||
 		iamv1.ValidateDigest("TOTP custody digest", source.TOTPCustodyDigest) != nil ||
+		(source.AuthenticationStateDigest != "" && iamv1.ValidateDigest("authentication state digest", source.AuthenticationStateDigest) != nil) ||
 		release.ValidateDatabaseProfile(source.Database) != nil {
 		return cli.Result{}, fault(cli.FaultVerification, "RECOVERY_SOURCE_INVALID")
 	}
@@ -1172,19 +1174,20 @@ func (backend *Backend) recover(
 		recoveryEpoch = state.Active.Command.AuthenticationRecoveryEpoch
 	}
 	intent := installationv1.AuthenticationRecoveryIntent{
-		APIVersion:          installationv1.AuthenticationRecoveryAPIVersion,
-		Kind:                installationv1.AuthenticationRecoveryIntentKind,
-		Purpose:             installationv1.AuthenticationRecoveryPurpose,
-		InstallationID:      state.InstallationID,
-		Epoch:               recoveryEpoch,
-		CommandID:           commandID,
-		BackupID:            source.BackupID,
-		BackupDigest:        source.BackupDigest,
-		SourceReleaseID:     currentBundle.Manifest.Release.ID,
-		SourceReleaseDigest: currentBundle.ManifestSHA256,
-		TargetReleaseID:     targetBundle.Manifest.Release.ID,
-		TargetReleaseDigest: targetBundle.ManifestSHA256,
-		TOTPCustodyDigest:   source.TOTPCustodyDigest,
+		APIVersion:                installationv1.AuthenticationRecoveryAPIVersion,
+		Kind:                      installationv1.AuthenticationRecoveryIntentKind,
+		Purpose:                   installationv1.AuthenticationRecoveryPurpose,
+		InstallationID:            state.InstallationID,
+		Epoch:                     recoveryEpoch,
+		CommandID:                 commandID,
+		BackupID:                  source.BackupID,
+		BackupDigest:              source.BackupDigest,
+		SourceReleaseID:           currentBundle.Manifest.Release.ID,
+		SourceReleaseDigest:       currentBundle.ManifestSHA256,
+		TargetReleaseID:           targetBundle.Manifest.Release.ID,
+		TargetReleaseDigest:       targetBundle.ManifestSHA256,
+		TOTPCustodyDigest:         source.TOTPCustodyDigest,
+		AuthenticationStateDigest: source.AuthenticationStateDigest,
 	}
 	intentDigest, err := installationv1.AuthenticationRecoveryIntentDigest(intent)
 	if err != nil {

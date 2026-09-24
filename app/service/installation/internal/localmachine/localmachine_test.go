@@ -2840,6 +2840,115 @@ func TestAuthenticationRecoveryFailureBoundariesRemainFailClosed(t *testing.T) {
 	})
 }
 
+func TestAuthenticationRecoverySealsAndRequiresExactSecuritySnapshot(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine authentication recovery effects target Linux")
+	}
+	effects, runtimeBoundary, recovery := authenticationRecoveryEffectFixture(t)
+	recovery.AuthenticationIntent.AuthenticationStateDigest = "sha256:" + strings.Repeat("a", 64)
+	if err := effects.closeAuthenticationRecovery(t.Context(), recovery); err != nil {
+		t.Fatalf("close with bounded security snapshot: %v", err)
+	}
+	closure, exists, err := readAuthenticationRecoveryClosure(recovery.Current.Root, recovery.AuthenticationIntent.CommandID)
+	if err != nil || !exists || closure.SecuritySnapshotDigest == "" {
+		t.Fatalf("snapshot-bound closure = %#v / %t / %v", closure, exists, err)
+	}
+	snapshot, exists, err := readAuthenticationRecoverySecuritySnapshot(recovery.Current.Root, recovery.AuthenticationIntent, closure)
+	if err != nil || !exists || snapshot.AuthenticationStateDigest != recovery.AuthenticationIntent.AuthenticationStateDigest {
+		t.Fatalf("sealed security snapshot = %#v / %t / %v", snapshot, exists, err)
+	}
+	starts := runtimeBoundary.authenticationStarts
+	if err := effects.closeAuthenticationRecovery(t.Context(), recovery); err != nil || runtimeBoundary.authenticationStarts != starts {
+		t.Fatalf("exact close replay = %v / starts=%d", err, runtimeBoundary.authenticationStarts)
+	}
+	relative := filepath.FromSlash(layout.IAMAuthenticationRecoverySecuritySnapshot(recovery.AuthenticationIntent.CommandID))
+	path, err := managedPath(recovery.Current.Root, relative)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := effects.reconcileAuthenticationRecovery(t.Context(), recovery); !errors.Is(err, platformcommand.ErrEffectConflict) || runtimeBoundary.authenticationStarts != starts {
+		t.Fatalf("missing snapshot reached reconcile: %v / starts=%d", err, runtimeBoundary.authenticationStarts)
+	}
+	if err := effects.closeAuthenticationRecovery(t.Context(), recovery); !errors.Is(err, platformcommand.ErrEffectConflict) || runtimeBoundary.authenticationStarts != starts {
+		t.Fatalf("missing snapshot replayed close: %v / starts=%d", err, runtimeBoundary.authenticationStarts)
+	}
+	if err := writeManagedOnce(recovery.Current.Root, relative, encoded); err != nil {
+		t.Fatal(err)
+	}
+	mutated := bytes.Replace(encoded, []byte(`"authenticationStateDigest":"sha256:a`), []byte(`"authenticationStateDigest":"sha256:b`), 1)
+	if bytes.Equal(mutated, encoded) || os.WriteFile(path, mutated, 0o600) != nil {
+		t.Fatal("mutate task-owned security snapshot")
+	}
+	if err := effects.reconcileAuthenticationRecovery(t.Context(), recovery); !errors.Is(err, platformcommand.ErrEffectConflict) || runtimeBoundary.authenticationStarts != starts {
+		t.Fatalf("changed snapshot reached reconcile: %v / starts=%d", err, runtimeBoundary.authenticationStarts)
+	}
+	if err := os.WriteFile(path, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	oversized := make([]byte, installationv1.MaximumAuthenticationRecoverySecuritySnapshotBytes+1)
+	if err := os.WriteFile(path, oversized, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := effects.reconcileAuthenticationRecovery(t.Context(), recovery); !errors.Is(err, platformcommand.ErrEffectConflict) || runtimeBoundary.authenticationStarts != starts {
+		t.Fatalf("oversized snapshot reached reconcile: %v / starts=%d", err, runtimeBoundary.authenticationStarts)
+	}
+	if err := os.WriteFile(path, encoded, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	bootstrapPath, err := managedPath(recovery.Current.Root, filepath.FromSlash(layout.IAMBootstrap))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootstrapBytes, err := os.ReadFile(bootstrapPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(bootstrapBytes)
+	bootstrap, err := iamv1.DecodeBootstrapDocument(bytes.NewReader(bootstrapBytes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootstrap.Organization.DisplayName += " changed"
+	changedBootstrap, err := iamv1.EncodeBootstrapDocument(bootstrap)
+	defer clear(changedBootstrap)
+	if err != nil || os.WriteFile(bootstrapPath, changedBootstrap, 0o600) != nil {
+		t.Fatal("change task-owned bootstrap scope")
+	}
+	if err := effects.reconcileAuthenticationRecovery(t.Context(), recovery); !errors.Is(err, platformcommand.ErrEffectConflict) || runtimeBoundary.authenticationStarts != starts {
+		t.Fatalf("changed bootstrap scope reached reconcile: %v / starts=%d", err, runtimeBoundary.authenticationStarts)
+	}
+	if err := os.WriteFile(bootstrapPath, bootstrapBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := effects.reconcileAuthenticationRecovery(t.Context(), recovery); err != nil {
+		t.Fatalf("reconcile exact snapshot: %v", err)
+	}
+	starts = runtimeBoundary.authenticationStarts
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := effects.reopenAuthenticationRecovery(t.Context(), recovery); !errors.Is(err, platformcommand.ErrEffectConflict) || runtimeBoundary.authenticationStarts != starts {
+		t.Fatalf("missing snapshot reached reopen: %v / starts=%d", err, runtimeBoundary.authenticationStarts)
+	}
+	if err := writeManagedOnce(recovery.Current.Root, relative, encoded); err != nil {
+		t.Fatal(err)
+	}
+	if err := effects.reopenAuthenticationRecovery(t.Context(), recovery); err != nil {
+		t.Fatalf("reopen exact snapshot: %v", err)
+	}
+	completion, _, exists, err := readAuthenticationRecoveryCompletion(recovery.Current.Root)
+	if err != nil || !exists || completion.SecuritySnapshotDigest != closure.SecuritySnapshotDigest {
+		t.Fatalf("snapshot-bound completion = %#v / %t / %v", completion, exists, err)
+	}
+}
+
 func TestRecoveryRestartsOnlyPostgresBeforeClosingAuthenticationWhenProjectIsAbsent(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("local-machine recovery effects target Linux")
@@ -4502,14 +4611,20 @@ func authenticationRecoveryTestContainer(project string, arguments []string) (pl
 }
 
 func authenticationRecoveryTestOutput(container platformContainerInspection) ([]byte, error) {
-	if len(container.Config.Cmd) != 1 || len(container.Mounts) != 2 {
+	if len(container.Config.Cmd) != 1 || len(container.Mounts) < 2 || len(container.Mounts) > 3 {
 		return nil, errors.New("authentication recovery test input is incomplete")
 	}
-	inputPath := ""
+	inputPath, snapshotPath := "", ""
 	for _, mount := range container.Mounts {
-		if mount.Destination == "/run/matrix/authentication-recovery-input.json" {
+		switch mount.Destination {
+		case "/run/matrix/authentication-recovery-input.json":
 			inputPath = mount.Source
+		case "/run/matrix/authentication-recovery-security-snapshot.json":
+			snapshotPath = mount.Source
 		}
+	}
+	if inputPath == "" || (len(container.Mounts) == 3) != (snapshotPath != "") {
+		return nil, errors.New("authentication recovery test mounts are incomplete")
 	}
 	content, err := os.ReadFile(inputPath)
 	if err != nil {
@@ -4518,6 +4633,9 @@ func authenticationRecoveryTestOutput(container platformContainerInspection) ([]
 	defer clear(content)
 	switch container.Config.Cmd[0] {
 	case installationv1.AuthenticationRecoveryCloseCommand:
+		if snapshotPath != "" {
+			return nil, errors.New("authentication close mounted a replay snapshot before commit")
+		}
 		intent, err := installationv1.DecodeAuthenticationRecoveryIntent(bytes.NewReader(content))
 		if err != nil {
 			return nil, err
@@ -4526,22 +4644,69 @@ func authenticationRecoveryTestOutput(container platformContainerInspection) ([]
 		if err != nil {
 			return nil, err
 		}
-		return installationv1.EncodeAuthenticationRecoveryClosure(installationv1.AuthenticationRecoveryClosure{
+		closure := installationv1.AuthenticationRecoveryClosure{
 			APIVersion: installationv1.AuthenticationRecoveryAPIVersion, Kind: installationv1.AuthenticationRecoveryClosureKind,
 			Purpose: installationv1.AuthenticationRecoveryPurpose, InstallationID: intent.InstallationID,
 			Epoch: intent.Epoch, State: installationv1.AuthenticationRecoveryStateClosed, CommandID: intent.CommandID,
 			BackupID: intent.BackupID, BackupDigest: intent.BackupDigest, RecoveryIntentDigest: digest,
 			TOTPCustodyDigest: intent.TOTPCustodyDigest, ClosedAt: time.Date(2026, 9, 21, 2, 3, 4, 5_000, time.UTC),
+		}
+		if intent.AuthenticationStateDigest == "" {
+			return installationv1.EncodeAuthenticationRecoveryClosure(closure)
+		}
+		root := filepath.Dir(filepath.Dir(filepath.Dir(inputPath)))
+		sealedInstallationID, bootstrapDigest, err := sealedIAMBootstrapScope(root, intent.InstallationID)
+		if err != nil || sealedInstallationID != intent.InstallationID {
+			return nil, errors.New("authentication recovery test bootstrap scope is invalid")
+		}
+		bootstrapBytes, err := readManagedFile(root, filepath.FromSlash(layout.IAMBootstrap), installationv1.MaximumAuthenticationRecoveryBytes)
+		if err != nil {
+			return nil, err
+		}
+		bootstrap, err := iamv1.DecodeBootstrapDocument(bytes.NewReader(bootstrapBytes))
+		clear(bootstrapBytes)
+		if err != nil {
+			return nil, err
+		}
+		snapshot := installationv1.AuthenticationRecoverySecuritySnapshot{
+			APIVersion:     installationv1.AuthenticationRecoveryAPIVersion,
+			Kind:           installationv1.AuthenticationRecoverySecuritySnapshotKind,
+			Purpose:        installationv1.AuthenticationRecoveryPurpose,
+			InstallationID: intent.InstallationID, BootstrapDigest: bootstrapDigest,
+			Epoch: intent.Epoch, CommandID: intent.CommandID, RecoveryIntentDigest: digest,
+			ClosedAt: closure.ClosedAt, AuthenticationStateDigest: intent.AuthenticationStateDigest,
+			Accounts: []installationv1.AuthenticationRecoveryAccountReplay{{
+				AccountID: string(bootstrap.Organization.ID),
+				Users: []installationv1.AuthenticationRecoveryUserReplay{{
+					UserID: string(bootstrap.Administrator.ID), LastConsumedStep: -1,
+				}},
+			}},
+		}
+		closure.SecuritySnapshotDigest, err = installationv1.AuthenticationRecoverySecuritySnapshotDigest(snapshot)
+		if err != nil {
+			return nil, err
+		}
+		return installationv1.EncodeAuthenticationRecoveryClosureEnvelope(installationv1.AuthenticationRecoveryClosureEnvelope{
+			APIVersion: installationv1.AuthenticationRecoveryAPIVersion,
+			Kind:       installationv1.AuthenticationRecoveryClosureEnvelopeKind,
+			Purpose:    installationv1.AuthenticationRecoveryPurpose,
+			Closure:    closure, SecuritySnapshot: snapshot,
 		})
 	case installationv1.AuthenticationRecoveryReconcileCommand:
 		closure, err := installationv1.DecodeAuthenticationRecoveryClosure(bytes.NewReader(content))
 		if err != nil {
 			return nil, err
 		}
+		if err := authenticationRecoveryTestSnapshot(closure, snapshotPath); err != nil {
+			return nil, err
+		}
 		return installationv1.EncodeAuthenticationRecoveryClosure(closure)
 	case installationv1.AuthenticationRecoveryReopenCommand:
 		closure, err := installationv1.DecodeAuthenticationRecoveryClosure(bytes.NewReader(content))
 		if err != nil {
+			return nil, err
+		}
+		if err := authenticationRecoveryTestSnapshot(closure, snapshotPath); err != nil {
 			return nil, err
 		}
 		digest, err := installationv1.AuthenticationRecoveryClosureDigest(closure)
@@ -4553,10 +4718,30 @@ func authenticationRecoveryTestOutput(container platformContainerInspection) ([]
 			Purpose: installationv1.AuthenticationRecoveryPurpose, InstallationID: closure.InstallationID,
 			Epoch: closure.Epoch, State: installationv1.AuthenticationRecoveryStateReopened, CommandID: closure.CommandID,
 			ClosureDigest: digest, CompletedAt: closure.ClosedAt.Add(time.Microsecond),
+			SecuritySnapshotDigest: closure.SecuritySnapshotDigest,
 		})
 	default:
 		return nil, errors.New("authentication recovery test mode is invalid")
 	}
+}
+
+func authenticationRecoveryTestSnapshot(closure installationv1.AuthenticationRecoveryClosure, path string) error {
+	if (closure.SecuritySnapshotDigest == "") != (path == "") {
+		return errors.New("authentication recovery test replay snapshot mount differs")
+	}
+	if path == "" {
+		return nil
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	defer clear(content)
+	snapshot, err := installationv1.DecodeAuthenticationRecoverySecuritySnapshot(bytes.NewReader(content))
+	if err != nil {
+		return err
+	}
+	return installationv1.ValidateAuthenticationRecoverySecuritySnapshotForClosure(snapshot, closure)
 }
 
 func (runtimeBoundary *platformStartRuntime) RunTo(

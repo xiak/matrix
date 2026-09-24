@@ -21,6 +21,7 @@ const authenticationRecoveryEntrypoint = "/matrix/bin/matrix-iam-authentication-
 func (effects *Effects) closeAuthenticationRecovery(ctx context.Context, plan platformcommand.RecoveryPlan) error {
 	intent := plan.AuthenticationIntent
 	if installationv1.ValidateAuthenticationRecoveryIntent(intent) != nil ||
+		(intent.AuthenticationStateDigest != "" && installationv1.ValidateCurrentAuthenticationRecoveryIntent(intent) != nil) ||
 		validateAuthenticationRecoveryAnchor(plan.Current.Root, intent, false) != nil {
 		return errors.Join(platformcommand.ErrEffectConflict, errors.New("authentication recovery anchor is invalid"))
 	}
@@ -33,11 +34,18 @@ func (effects *Effects) closeAuthenticationRecovery(ctx context.Context, plan pl
 	if err := writeManagedOnce(plan.Current.Root, intentRelative, encodedIntent); err != nil {
 		return errors.Join(platformcommand.ErrEffectConflict, err)
 	}
-	if closure, exists, err := readAuthenticationRecoveryClosure(plan.Current.Root, intent.CommandID); err != nil {
+	closure, exists, err := readAuthenticationRecoveryClosure(plan.Current.Root, intent.CommandID)
+	if err != nil {
 		return errors.Join(platformcommand.ErrEffectConflict, err)
 	} else if exists {
-		if installationv1.ValidateAuthenticationRecoveryClosureForIntent(closure, intent) != nil {
+		if installationv1.ValidateAuthenticationRecoveryClosureForIntent(closure, intent) != nil ||
+			(closure.SecuritySnapshotDigest != "") != (intent.AuthenticationStateDigest != "") {
 			return errors.Join(platformcommand.ErrEffectConflict, errors.New("authentication recovery closure conflicts"))
+		}
+		if intent.AuthenticationStateDigest != "" {
+			if _, snapshotExists, snapshotErr := readAuthenticationRecoverySecuritySnapshot(plan.Current.Root, intent, closure); snapshotErr != nil || !snapshotExists {
+				return errors.Join(platformcommand.ErrEffectConflict, errors.New("authentication recovery security snapshot is unavailable"))
+			}
 		}
 		return nil
 	}
@@ -47,15 +55,40 @@ func (effects *Effects) closeAuthenticationRecovery(ctx context.Context, plan pl
 	}
 	output, err := effects.runAuthenticationRecoveryEntry(
 		ctx, plan.Current, intent.CommandID, intentDigest, intentRelative,
-		installationv1.AuthenticationRecoveryCloseCommand,
+		installationv1.AuthenticationRecoveryCloseCommand, "",
 	)
 	if err != nil {
 		return err
 	}
-	closure, err := installationv1.DecodeAuthenticationRecoveryClosure(bytes.NewReader(output))
-	clear(output)
-	if err != nil || installationv1.ValidateAuthenticationRecoveryClosureForIntent(closure, intent) != nil {
-		return errors.Join(platformcommand.ErrEffectOutcomeUnknown, errors.New("authentication close result is unverifiable"))
+	if intent.AuthenticationStateDigest != "" {
+		envelope, decodeErr := installationv1.DecodeAuthenticationRecoveryClosureEnvelope(bytes.NewReader(output))
+		clear(output)
+		sealedInstallationID, bootstrapDigest, scopeErr := sealedIAMBootstrapScope(plan.Current.Root, intent.InstallationID)
+		if decodeErr != nil || scopeErr != nil || sealedInstallationID != intent.InstallationID ||
+			installationv1.ValidateAuthenticationRecoveryClosureEnvelopeForIntent(envelope, intent, bootstrapDigest) != nil {
+			return errors.Join(platformcommand.ErrEffectOutcomeUnknown, errors.New("authentication close envelope is unverifiable"))
+		}
+		encodedSnapshot, encodeErr := installationv1.EncodeAuthenticationRecoverySecuritySnapshot(envelope.SecuritySnapshot)
+		if encodeErr != nil {
+			return errors.Join(platformcommand.ErrEffectOutcomeUnknown, encodeErr)
+		}
+		defer clear(encodedSnapshot)
+		// A committed close cannot authorize restore until these exact bytes are
+		// durable outside the database backup's rollback range.
+		if writeErr := writeManagedOnce(plan.Current.Root,
+			filepath.FromSlash(layout.IAMAuthenticationRecoverySecuritySnapshot(intent.CommandID)), encodedSnapshot); writeErr != nil {
+			return errors.Join(platformcommand.ErrEffectOutcomeUnknown, writeErr)
+		}
+		if _, exists, readErr := readAuthenticationRecoverySecuritySnapshot(plan.Current.Root, intent, envelope.Closure); readErr != nil || !exists {
+			return errors.Join(platformcommand.ErrEffectOutcomeUnknown, errors.New("authentication security snapshot readback failed"))
+		}
+		closure = envelope.Closure
+	} else {
+		closure, err = installationv1.DecodeAuthenticationRecoveryClosure(bytes.NewReader(output))
+		clear(output)
+		if err != nil || installationv1.ValidateAuthenticationRecoveryClosureForIntent(closure, intent) != nil || closure.SecuritySnapshotDigest != "" {
+			return errors.Join(platformcommand.ErrEffectOutcomeUnknown, errors.New("authentication close result is unverifiable"))
+		}
 	}
 	encodedClosure, err := installationv1.EncodeAuthenticationRecoveryClosure(closure)
 	if err != nil {
@@ -73,8 +106,16 @@ func (effects *Effects) reconcileAuthenticationRecovery(ctx context.Context, pla
 	intent := plan.AuthenticationIntent
 	closure, exists, err := readAuthenticationRecoveryClosure(plan.Current.Root, intent.CommandID)
 	if err != nil || !exists || installationv1.ValidateAuthenticationRecoveryClosureForIntent(closure, intent) != nil ||
+		(closure.SecuritySnapshotDigest != "") != (intent.AuthenticationStateDigest != "") ||
 		validateAuthenticationRecoveryAnchor(plan.Current.Root, intent, false) != nil {
 		return errors.Join(platformcommand.ErrEffectConflict, errors.New("authentication recovery closure is unavailable"))
+	}
+	snapshotRelative := ""
+	if intent.AuthenticationStateDigest != "" {
+		if _, snapshotExists, snapshotErr := readAuthenticationRecoverySecuritySnapshot(plan.Current.Root, intent, closure); snapshotErr != nil || !snapshotExists {
+			return errors.Join(platformcommand.ErrEffectConflict, errors.New("authentication recovery security snapshot is unavailable"))
+		}
+		snapshotRelative = filepath.FromSlash(layout.IAMAuthenticationRecoverySecuritySnapshot(intent.CommandID))
 	}
 	digest, err := installationv1.AuthenticationRecoveryClosureDigest(closure)
 	if err != nil {
@@ -83,7 +124,7 @@ func (effects *Effects) reconcileAuthenticationRecovery(ctx context.Context, pla
 	closureRelative := filepath.FromSlash(layout.IAMAuthenticationRecoveryClosure(intent.CommandID))
 	output, err := effects.runAuthenticationRecoveryEntry(
 		ctx, plan.Target, intent.CommandID, digest, closureRelative,
-		installationv1.AuthenticationRecoveryReconcileCommand,
+		installationv1.AuthenticationRecoveryReconcileCommand, snapshotRelative,
 	)
 	if err != nil {
 		return err
@@ -100,8 +141,16 @@ func (effects *Effects) reopenAuthenticationRecovery(ctx context.Context, plan p
 	intent := plan.AuthenticationIntent
 	closure, exists, err := readAuthenticationRecoveryClosure(plan.Current.Root, intent.CommandID)
 	if err != nil || !exists || installationv1.ValidateAuthenticationRecoveryClosureForIntent(closure, intent) != nil ||
+		(closure.SecuritySnapshotDigest != "") != (intent.AuthenticationStateDigest != "") ||
 		validateAuthenticationRecoveryAnchor(plan.Current.Root, intent, true) != nil {
 		return errors.Join(platformcommand.ErrEffectConflict, errors.New("authentication recovery completion anchor is invalid"))
+	}
+	snapshotRelative := ""
+	if intent.AuthenticationStateDigest != "" {
+		if _, snapshotExists, snapshotErr := readAuthenticationRecoverySecuritySnapshot(plan.Current.Root, intent, closure); snapshotErr != nil || !snapshotExists {
+			return errors.Join(platformcommand.ErrEffectConflict, errors.New("authentication recovery security snapshot is unavailable"))
+		}
+		snapshotRelative = filepath.FromSlash(layout.IAMAuthenticationRecoverySecuritySnapshot(intent.CommandID))
 	}
 	digest, err := installationv1.AuthenticationRecoveryClosureDigest(closure)
 	if err != nil {
@@ -110,7 +159,7 @@ func (effects *Effects) reopenAuthenticationRecovery(ctx context.Context, plan p
 	closureRelative := filepath.FromSlash(layout.IAMAuthenticationRecoveryClosure(intent.CommandID))
 	output, err := effects.runAuthenticationRecoveryEntry(
 		ctx, plan.Target, intent.CommandID, digest, closureRelative,
-		installationv1.AuthenticationRecoveryReopenCommand,
+		installationv1.AuthenticationRecoveryReopenCommand, snapshotRelative,
 	)
 	if err != nil {
 		return err
@@ -136,6 +185,56 @@ func readAuthenticationRecoveryClosure(root, commandID string) (installationv1.A
 	defer clear(encoded)
 	closure, err := installationv1.DecodeAuthenticationRecoveryClosure(bytes.NewReader(encoded))
 	return closure, true, err
+}
+
+func readAuthenticationRecoverySecuritySnapshot(
+	root string,
+	intent installationv1.AuthenticationRecoveryIntent,
+	closure installationv1.AuthenticationRecoveryClosure,
+) (installationv1.AuthenticationRecoverySecuritySnapshot, bool, error) {
+	if installationv1.ValidateCurrentAuthenticationRecoveryIntent(intent) != nil ||
+		installationv1.ValidateCurrentAuthenticationRecoveryClosure(closure) != nil {
+		return installationv1.AuthenticationRecoverySecuritySnapshot{}, false, errors.New("authentication recovery snapshot anchor is invalid")
+	}
+	relative := filepath.FromSlash(layout.IAMAuthenticationRecoverySecuritySnapshot(intent.CommandID))
+	exists, err := managedFileExists(root, relative)
+	if err != nil || !exists {
+		return installationv1.AuthenticationRecoverySecuritySnapshot{}, false, err
+	}
+	encoded, err := readManagedFile(root, relative, installationv1.MaximumAuthenticationRecoverySecuritySnapshotBytes)
+	if err != nil {
+		return installationv1.AuthenticationRecoverySecuritySnapshot{}, true, err
+	}
+	defer clear(encoded)
+	snapshot, err := installationv1.DecodeAuthenticationRecoverySecuritySnapshot(bytes.NewReader(encoded))
+	if err != nil {
+		return installationv1.AuthenticationRecoverySecuritySnapshot{}, true, err
+	}
+	sealedInstallationID, bootstrapDigest, err := sealedIAMBootstrapScope(root, intent.InstallationID)
+	if err != nil || sealedInstallationID != intent.InstallationID {
+		return installationv1.AuthenticationRecoverySecuritySnapshot{}, true, errors.New("authentication recovery installation scope differs")
+	}
+	envelope := installationv1.AuthenticationRecoveryClosureEnvelope{
+		APIVersion:       installationv1.AuthenticationRecoveryAPIVersion,
+		Kind:             installationv1.AuthenticationRecoveryClosureEnvelopeKind,
+		Purpose:          installationv1.AuthenticationRecoveryPurpose,
+		Closure:          closure,
+		SecuritySnapshot: snapshot,
+	}
+	if installationv1.ValidateAuthenticationRecoveryClosureEnvelopeForIntent(envelope, intent, bootstrapDigest) != nil {
+		return installationv1.AuthenticationRecoverySecuritySnapshot{}, true, errors.New("authentication recovery snapshot differs from its sealed intent")
+	}
+	return snapshot, true, nil
+}
+
+func readAuthenticationRecoveryIntent(root, commandID string) (installationv1.AuthenticationRecoveryIntent, error) {
+	encoded, err := readManagedFile(root, filepath.FromSlash(layout.IAMAuthenticationRecoveryIntent(commandID)),
+		installationv1.MaximumAuthenticationRecoveryBytes)
+	if err != nil {
+		return installationv1.AuthenticationRecoveryIntent{}, err
+	}
+	defer clear(encoded)
+	return installationv1.DecodeAuthenticationRecoveryIntent(bytes.NewReader(encoded))
 }
 
 func readAuthenticationRecoveryCompletion(root string) (installationv1.AuthenticationRecoveryCompletion, []byte, bool, error) {
@@ -173,6 +272,15 @@ func validateAuthenticationRecoveryAnchor(root string, intent installationv1.Aut
 		completion.InstallationID != intent.InstallationID {
 		return errors.New("authentication recovery completion anchor differs")
 	}
+	if closure.SecuritySnapshotDigest != "" {
+		previousIntent, intentErr := readAuthenticationRecoveryIntent(root, completion.CommandID)
+		if intentErr != nil {
+			return errors.New("authentication recovery previous intent is unavailable")
+		}
+		if _, snapshotExists, snapshotErr := readAuthenticationRecoverySecuritySnapshot(root, previousIntent, closure); snapshotErr != nil || !snapshotExists {
+			return errors.New("authentication recovery previous security snapshot is unavailable")
+		}
+	}
 	if allowCurrent && completion.CommandID == intent.CommandID {
 		if completion.Epoch != intent.Epoch {
 			return errors.New("authentication recovery current completion differs")
@@ -192,7 +300,8 @@ func persistAuthenticationRecoveryCompletion(
 	completion installationv1.AuthenticationRecoveryCompletion,
 ) error {
 	if installationv1.ValidateAuthenticationRecoveryCompletionForClosure(completion, closure) != nil ||
-		completion.CommandID != intent.CommandID || completion.Epoch != intent.Epoch {
+		completion.CommandID != intent.CommandID || completion.Epoch != intent.Epoch ||
+		(closure.SecuritySnapshotDigest != "") != (intent.AuthenticationStateDigest != "") {
 		return errors.Join(platformcommand.ErrEffectOutcomeUnknown, errors.New("authentication recovery completion conflicts"))
 	}
 	after, err := installationv1.EncodeAuthenticationRecoveryCompletion(completion)
@@ -233,11 +342,12 @@ func (effects *Effects) runAuthenticationRecoveryEntry(
 	inputDigest string,
 	inputRelative string,
 	mode string,
+	snapshotRelative string,
 ) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	arguments, expected, err := effects.authenticationRecoveryContainer(
-		ctx, plan, commandID, inputDigest, inputRelative, mode,
+		ctx, plan, commandID, inputDigest, inputRelative, mode, snapshotRelative,
 	)
 	if err != nil {
 		return nil, err
@@ -248,8 +358,11 @@ func (effects *Effects) runAuthenticationRecoveryEntry(
 			return nil, platformcommand.ErrEffectVerification
 		}
 		maximum := int64(maximumCredentialFile)
-		if mount.Target != "/run/matrix/authentication-recovery-dsn" {
+		switch mount.Target {
+		case "/run/matrix/authentication-recovery-input.json":
 			maximum = installationv1.MaximumAuthenticationRecoveryBytes
+		case "/run/matrix/authentication-recovery-security-snapshot.json":
+			maximum = installationv1.MaximumAuthenticationRecoverySecuritySnapshotBytes
 		}
 		content, err := readManagedFile(plan.Root, relative, maximum)
 		clear(content)
@@ -257,7 +370,15 @@ func (effects *Effects) runAuthenticationRecoveryEntry(
 			return nil, platformcommand.ErrEffectVerification
 		}
 	}
-	return invokeAuthenticationRecoveryEntry(ctx, effects.runtime, arguments, expected)
+	output, err := invokeAuthenticationRecoveryEntry(ctx, effects.runtime, arguments, expected)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(output)) > installationv1.MaximumAuthenticationRecoveryEnvelopeBytes {
+		clear(output)
+		return nil, platformcommand.ErrEffectOutcomeUnknown
+	}
+	return output, nil
 }
 
 func invokeAuthenticationRecoveryEntry(
@@ -342,6 +463,7 @@ func (effects *Effects) authenticationRecoveryContainer(
 	inputDigest string,
 	inputRelative string,
 	mode string,
+	snapshotRelative string,
 ) ([]string, purposeOnlyIAMContainerExpectation, error) {
 	var expected purposeOnlyIAMContainerExpectation
 	if mode != installationv1.AuthenticationRecoveryCloseCommand &&
@@ -350,7 +472,8 @@ func (effects *Effects) authenticationRecoveryContainer(
 		return nil, expected, platformcommand.ErrEffectVerification
 	}
 	if lifecycle.ValidateCommandID(commandID) != nil || plan.CorrelationID != commandID ||
-		!validSHA256(inputDigest) || inputRelative == "" {
+		!validSHA256(inputDigest) || inputRelative == "" ||
+		(mode == installationv1.AuthenticationRecoveryCloseCommand && snapshotRelative != "") {
 		return nil, expected, platformcommand.ErrEffectVerification
 	}
 	configuration, err := verifiedInstallationConfiguration(plan)
@@ -418,6 +541,13 @@ func (effects *Effects) authenticationRecoveryContainer(
 	mounts := []migrationMount{
 		{layout.IAMAuthenticationRecovery, "/run/matrix/authentication-recovery-dsn", installationv1.AuthenticationRecoveryDatabaseDSNFileEnvironment},
 		{filepath.ToSlash(inputRelative), "/run/matrix/authentication-recovery-input.json", authenticationRecoveryInputEnvironment(mode)},
+	}
+	if snapshotRelative != "" {
+		mounts = append(mounts, migrationMount{
+			filepath.ToSlash(snapshotRelative),
+			"/run/matrix/authentication-recovery-security-snapshot.json",
+			installationv1.AuthenticationRecoverySecuritySnapshotFileEnvironment,
+		})
 	}
 	for _, mount := range mounts {
 		source, err := managedPath(plan.Root, filepath.FromSlash(mount.relative))

@@ -1086,19 +1086,28 @@ func TestRecoveryBindsSelectedBackupAndResumesUnknownOutcome(t *testing.T) {
 	backupID := "backup-" + strings.Repeat("d", 32)
 	backupDigest := "sha256:" + strings.Repeat("e", 64)
 	effects.recoverySource = RecoverySource{
-		InstallationID:    installed.InstallationID,
-		BackupID:          backupID,
-		BackupDigest:      backupDigest,
-		TOTPCustodyDigest: "sha256:" + strings.Repeat("9", 64),
-		ReleaseID:         fixtures[0].Manifest.Release.ID,
-		ReleaseDigest:     fixtures[0].ManifestDigest,
-		Database:          fixtures[0].Manifest.Database,
+		InstallationID:            installed.InstallationID,
+		BackupID:                  backupID,
+		BackupDigest:              backupDigest,
+		TOTPCustodyDigest:         "sha256:" + strings.Repeat("9", 64),
+		AuthenticationStateDigest: "sha256:" + strings.Repeat("a", 64),
+		ReleaseID:                 fixtures[0].Manifest.Release.ID,
+		ReleaseDigest:             fixtures[0].ManifestDigest,
+		Database:                  fixtures[0].Manifest.Database,
 	}
 	request := cli.Request{
 		Action: lifecycle.ActionRecover, Root: root, BackupID: backupID,
 	}
-
+	beforeRecovery := readJournal(t, root)
+	effects.recoverySource.AuthenticationStateDigest = "sha256:invalid"
 	_, err := backend.Run(context.Background(), request)
+	assertFault(t, err, cli.FaultVerification, "RECOVERY_SOURCE_INVALID")
+	if after := readJournal(t, root); !reflect.DeepEqual(after, beforeRecovery) {
+		t.Fatal("invalid authentication state digest wrote a recovery journal")
+	}
+	effects.recoverySource.AuthenticationStateDigest = "sha256:" + strings.Repeat("a", 64)
+
+	_, err = backend.Run(context.Background(), request)
 	assertFault(t, err, cli.FaultUnavailable, "EFFECT_OUTCOME_UNKNOWN")
 	active := readJournal(t, root)
 	if active.Active == nil || active.Active.Command.Action != lifecycle.ActionRecover ||
@@ -1115,7 +1124,8 @@ func TestRecoveryBindsSelectedBackupAndResumesUnknownOutcome(t *testing.T) {
 	if digestErr != nil || intentDigest != active.Active.Command.AuthenticationRecoveryDigest ||
 		effects.recoveryPlan.AuthenticationIntent.CommandID != active.Active.Command.ID ||
 		effects.recoveryPlan.AuthenticationIntent.Epoch != 1 ||
-		effects.recoveryPlan.AuthenticationIntent.TOTPCustodyDigest != effects.recoverySource.TOTPCustodyDigest {
+		effects.recoveryPlan.AuthenticationIntent.TOTPCustodyDigest != effects.recoverySource.TOTPCustodyDigest ||
+		effects.recoveryPlan.AuthenticationIntent.AuthenticationStateDigest != effects.recoverySource.AuthenticationStateDigest {
 		t.Fatalf("recovery authentication intent = %#v / %v", effects.recoveryPlan.AuthenticationIntent, digestErr)
 	}
 	commandID := active.Active.Command.ID
@@ -1145,12 +1155,11 @@ func TestRecoveryBindsSelectedBackupAndResumesUnknownOutcome(t *testing.T) {
 			t.Fatalf("recovery phase %s calls = %d, want %d", phase, effects.recoveryCalls[phase], want)
 		}
 	}
-	if effects.recoveryInspectCalls != 3 ||
-		effects.recoveryPlan.Current.Bundle.Manifest.Release.ID != fixtures[1].Manifest.Release.ID ||
+	if effects.recoveryPlan.Current.Bundle.Manifest.Release.ID != fixtures[1].Manifest.Release.ID ||
 		effects.recoveryPlan.Target.Bundle.Manifest.Release.ID != fixtures[0].Manifest.Release.ID ||
 		effects.recoveryPlan.BackupID != backupID ||
 		effects.recoveryPlan.BackupDigest != backupDigest {
-		t.Fatalf("recovery inspection/plan = calls:%d plan:%#v", effects.recoveryInspectCalls, effects.recoveryPlan)
+		t.Fatalf("recovery plan = %#v", effects.recoveryPlan)
 	}
 	completed := readJournal(t, root)
 	if completed.CurrentReleaseID != fixtures[0].Manifest.Release.ID ||

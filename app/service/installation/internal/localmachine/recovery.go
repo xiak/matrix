@@ -789,18 +789,19 @@ func authenticateRecoveryPlan(
 	}
 	profile, profileErr := manifest.databaseProfile()
 	expectedIntent := installationv1.AuthenticationRecoveryIntent{
-		APIVersion:          installationv1.AuthenticationRecoveryAPIVersion,
-		Kind:                installationv1.AuthenticationRecoveryIntentKind,
-		Purpose:             installationv1.AuthenticationRecoveryPurpose,
-		InstallationID:      current.InstallationID,
-		Epoch:               plan.AuthenticationIntent.Epoch,
-		CommandID:           current.CorrelationID,
-		BackupID:            plan.BackupID,
-		BackupDigest:        plan.BackupDigest,
-		SourceReleaseID:     current.Bundle.Manifest.Release.ID,
-		SourceReleaseDigest: current.Bundle.ManifestSHA256,
-		TargetReleaseID:     target.Bundle.Manifest.Release.ID,
-		TargetReleaseDigest: target.Bundle.ManifestSHA256,
+		APIVersion:                installationv1.AuthenticationRecoveryAPIVersion,
+		Kind:                      installationv1.AuthenticationRecoveryIntentKind,
+		Purpose:                   installationv1.AuthenticationRecoveryPurpose,
+		InstallationID:            current.InstallationID,
+		Epoch:                     plan.AuthenticationIntent.Epoch,
+		CommandID:                 current.CorrelationID,
+		BackupID:                  plan.BackupID,
+		BackupDigest:              plan.BackupDigest,
+		SourceReleaseID:           current.Bundle.Manifest.Release.ID,
+		SourceReleaseDigest:       current.Bundle.ManifestSHA256,
+		TargetReleaseID:           target.Bundle.Manifest.Release.ID,
+		TargetReleaseDigest:       target.Bundle.ManifestSHA256,
+		AuthenticationStateDigest: manifest.AuthenticationStateDigest,
 	}
 	if manifest.TOTPBackupCustody != nil {
 		expectedIntent.TOTPCustodyDigest = manifest.TOTPBackupCustody.CustodyDigest
