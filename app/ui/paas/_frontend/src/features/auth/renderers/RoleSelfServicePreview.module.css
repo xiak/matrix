@@ -26,6 +26,7 @@
 .roleIdentity svg { width: 21px; height: 21px; }
 .roleIdentity > div { display: grid; min-width: 0; gap: var(--xiak-spacing-micro); }
 .roleIdentity small { color: var(--xiak-color-text-subtle); overflow-wrap: anywhere; }
+.expiredSession { display: grid; justify-items: start; gap: var(--xiak-spacing-default); }
 .confirmation { display: flex; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-default); }
 .confirmation > div:first-child { display: grid; gap: var(--xiak-spacing-micro); }
 .confirmation span { color: var(--xiak-color-text-muted); }

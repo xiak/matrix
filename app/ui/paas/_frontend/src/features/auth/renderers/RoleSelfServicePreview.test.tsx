@@ -1,10 +1,10 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "@/i18n/LocaleProvider";
 import { RoleSelfServicePreview } from "./RoleSelfServicePreview";
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); vi.useRealTimers(); });
 
 describe("RoleSelfServicePreview", () => {
   it("keeps member discovery separate from role administration and reviews assumption inline", async () => {
@@ -39,6 +39,38 @@ describe("RoleSelfServicePreview", () => {
     await user.click(screen.getByRole("button", { name: "确认结束" }));
     expect(screen.getByRole("heading", { name: "可承担角色" })).toBeTruthy();
     expect(screen.queryByText("MOCK-RS-role-log-reviewer")).toBeNull();
+  });
+
+  it("issues a preview session at action time and stops presenting it as active at expiry", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-25T02:00:00.000Z"));
+    render(<LocaleProvider><RoleSelfServicePreview /></LocaleProvider>);
+
+    fireEvent.click(screen.getByRole("button", { name: "审阅并承担 AssumeLogReviewRole" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建体验角色会话" }));
+    expect(screen.getByText("创建时间").parentElement?.querySelector("time")?.getAttribute("datetime")).toBe("2026-09-25T02:00:00.000Z");
+    expect(screen.getByText("到期时间").parentElement?.querySelector("time")?.getAttribute("datetime")).toBe("2026-09-25T02:30:00.000Z");
+    expect(screen.getByText("MOCK 角色身份")).toBeTruthy();
+
+    act(() => { vi.advanceTimersByTime(30 * 60 * 1000); });
+    expect(screen.getByText("已到期")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "结束体验角色" })).toBeNull();
+    expect(screen.getByText("真实业务请求必须重新验证会话与权限", { exact: false })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "返回可承担角色" }));
+    expect(screen.getByRole("heading", { name: "可承担角色" })).toBeTruthy();
+  });
+
+  it("rechecks an elapsed preview deadline when a backgrounded window returns", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-09-25T02:00:00.000Z"));
+    render(<LocaleProvider><RoleSelfServicePreview /></LocaleProvider>);
+    fireEvent.click(screen.getByRole("button", { name: "审阅并承担 AssumeLogReviewRole" }));
+    fireEvent.click(screen.getByRole("button", { name: "创建体验角色会话" }));
+
+    vi.setSystemTime(new Date("2026-09-25T02:31:00.000Z"));
+    fireEvent.focus(window);
+    expect(screen.getByText("已到期")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "结束体验角色" })).toBeNull();
   });
 
   it("does not guess why eligibility was denied and returns to current discovery", async () => {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { useFormatter, useTranslations } from "next-intl";
 import { Clock3, LogOut, Repeat2, ShieldCheck, UserRound } from "lucide-react";
 import { Alert, Badge, Button, Card, ContentPage, FormField, Select, Typography } from "@ui/xiak";
@@ -48,10 +48,29 @@ export function RoleSelfServicePreview() {
   const [intentNumber, setIntentNumber] = useState(1);
   const [catalogRevision, setCatalogRevision] = useState(0);
   const [activeSession, setActiveSession] = useState<PreviewRoleSession | null>(null);
+  const [sessionExpired, setSessionExpired] = useState(false);
   const [confirmingExit, setConfirmingExit] = useState(false);
 
   const requestId = selected ? `ux-assume-${selected.id}-${String(intentNumber).padStart(3, "0")}` : "";
   const attemptLocked = attemptState !== "idle";
+
+  useEffect(() => {
+    if (!activeSession) return;
+    const deadline = Date.parse(activeSession.expiresAt);
+    const checkExpiry = () => {
+      if (Date.now() < deadline) return;
+      setSessionExpired(true);
+      setConfirmingExit(false);
+    };
+    const timer = window.setTimeout(checkExpiry, Math.max(0, deadline - Date.now()));
+    window.addEventListener("focus", checkExpiry);
+    document.addEventListener("visibilitychange", checkExpiry);
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("focus", checkExpiry);
+      document.removeEventListener("visibilitychange", checkExpiry);
+    };
+  }, [activeSession]);
 
   const selectRole = (role: PreviewRole) => {
     setSelected(role);
@@ -67,8 +86,9 @@ export function RoleSelfServicePreview() {
       setAttemptState(scenario);
       return;
     }
-    const issuedAt = "2026-09-20T10:00:00+08:00";
+    const issuedAt = new Date().toISOString();
     const expiresAt = new Date(Date.parse(issuedAt) + Number(duration) * 60_000).toISOString();
+    setSessionExpired(false);
     setActiveSession({ id: `MOCK-RS-${selected.id}`, role: selected, issuedAt, expiresAt, requestId });
     setConfirmingExit(false);
     window.setTimeout(() => activeHeading.current?.focus(), 0);
@@ -76,6 +96,7 @@ export function RoleSelfServicePreview() {
 
   const exit = () => {
     setActiveSession(null);
+    setSessionExpired(false);
     setSelected(null);
     setAttemptState("idle");
     setIntentNumber((current) => current + 1);
@@ -105,7 +126,7 @@ export function RoleSelfServicePreview() {
     year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", timeZoneName: "short"
   });
 
-  const headingActions = activeSession ? <ContentPage.Commands label={collection("pageActions")} secondary={[{
+  const headingActions = activeSession && !sessionExpired ? <ContentPage.Commands label={collection("pageActions")} secondary={[{
     id: "exit-role", label: t("exitRole"), icon: <LogOut aria-hidden="true" />, danger: true,
     onSelect: () => setConfirmingExit(true)
   }]} /> : undefined;
@@ -140,8 +161,8 @@ export function RoleSelfServicePreview() {
 
     {activeSession ? <Card>
       <Card.Header className={styles.sessionHeader}>
-        <div><h2 className={styles.focusHeading} ref={activeHeading} tabIndex={-1}>{t("activeTitle")}</h2><Typography.Text tone="muted">{t("activeHint")}</Typography.Text></div>
-        <Badge status="success">{t("previewRoleIdentity")}</Badge>
+        <div><h2 className={styles.focusHeading} ref={activeHeading} tabIndex={-1}>{t("activeTitle")}</h2><Typography.Text tone="muted">{t(sessionExpired ? "expiredHint" : "activeHint")}</Typography.Text></div>
+        <Badge status={sessionExpired ? "neutral" : "success"}>{t(sessionExpired ? "expiredRoleIdentity" : "previewRoleIdentity")}</Badge>
       </Card.Header>
       <Card.Body className={styles.sessionBody}>
         <div className={styles.roleIdentity}><span aria-hidden="true"><ShieldCheck /></span><div><strong>{activeSession.role.name}</strong><small>{activeSession.role.id}</small></div></div>
@@ -152,6 +173,7 @@ export function RoleSelfServicePreview() {
           <div><dt>{t("sourceUser")}</dt><dd>{sourceUser.loginName}</dd></div>
         </dl>
         <Alert status="warning">{t("noCredential")}</Alert>
+        {sessionExpired ? <div className={styles.expiredSession}><Alert status="warning">{t("expiredSession")}</Alert><Button onClick={exit} variant="secondary">{t("returnToDiscovery")}</Button></div> : null}
         {confirmingExit ? <Alert className={styles.confirmation} status="warning">
           <div><strong>{t("confirmExitTitle")}</strong><span>{t("confirmExitHint")}</span></div>
           <div><Button onClick={exit} size="small" variant="danger">{t("confirmExit")}</Button><Button onClick={() => setConfirmingExit(false)} size="small" variant="ghost">{t("cancel")}</Button></div>
