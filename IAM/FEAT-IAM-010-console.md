@@ -240,6 +240,14 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 - 定向适配器和组件用例覆盖成功响应及错误绑定、发布不自动切默认、无效 JSON、422 拒绝、UNKNOWN 等价重试及草稿离开保护；原显式 MOCK 策略作者流程完全保留。未用真实 IAM 进程做发布写入浏览器验收，也未用 MOCK 浏览器替代该门禁。共享构建和回归门禁归 [FEAT-007](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence) 所有。
 - 2026-09-24，LIVE 策略新版本的目录驱动可视化作者、无损 JSON 回退及同步嵌入资源固定在已推送的 [`4426f9a5`](https://github.com/xiak/matrix/commit/4426f9a5)。只在选择可视化页签时请求当前完整目录；筛选 `TENANT` 精确 Action 并按产品/资源类型分组，每次只挂载当前声明和当前 Action 页。集合型 Action 的 `EXACT collection` 为字面目标，不能由资源 ID 反推请求模式；`PREFIX_IN_AUTHORITY` 只对声明支持的实例 Action 可选，`ANY_IN_AUTHORITY` 明示限定在当前权威域内。目录不可用时 JSON 编辑仍可用；不能无损映射的版本原文不被表单覆盖。定向用例覆盖懒目录读取、403 局部失败、审阅后精确提交、不自动切默认、1200 个以上 Action 的 10 项挂载页，以及未知 JSON 字段不丢失。DEV 390px 仅检查保留的 MOCK 创建策略页无溢出或覆盖；尚未对这片 LIVE 可视化作者做真实 IAM 浏览器验收。
 
+### LIVE 自定义策略新建的开发验收证据
+
+2026-09-24，策略创建客户端、内容区作者和同步嵌入资源固定在已推送的 [`ec3fc845`](https://github.com/xiak/matrix/commit/ec3fc845)，消费 IAM-005 固定来源 `aefe4f786242d7d6816f253b6389d5c94c314a75` 的 `POST /v1/policies`。IAM 工程师确认创建 ID 绑定原 Account、actor、requestId，创建不附加策略或授予资源权限；当前未提供可供前端复用的独立真实 IAM 浏览器运行环境。
+
+- LIVE 页面固定显示名称、范围与 JSON 编辑区；可视化只在用户打开时懒读目录，新声明须显式选取 Action，实例资源默认精确 ID 而非自动扩大到全部资源。Action 列表分页挂载，目录不可用仍允许 JSON 编辑；现有四方法 MOCK 创建页独立保留。
+- 提交审阅显示完整声明和“创建不等于授权”；成功只接受当前 Account 的 CUSTOMER/TENANT Policy、与提交一致的名称和默认版本声明，再提供进入详情的显式动作。403 与语义拒绝留在本页，不回退 MOCK。网络、5xx 或无效成功体保留同一认证代次的原始意图，跨 IAM 内容页仍锁定；只能以原名称、完整文档和 requestId 等价重试，重试 409 保持 UNKNOWN。目录同名项不作为原请求完成证据，结束未知意图须操作者明确确认。
+- 定向 HTTP/渲染用例覆盖准确请求体与归属核对、显式 Action/精确资源、不可审阅的未完成视觉草稿、创建后不自动关联、跨页 UNKNOWN、等价重试和版本作者目录 403 的局部失败。共享回归及嵌入门禁由 [FEAT-007](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence) 汇总；这里不宣称真实 IAM 浏览器联调、跨重新登录的 by-request 恢复或最终发布验收。
+
 ### 服务授权 MOCK 的开发验收证据
 
 2026-09-24，前端实现固定在已推送的
