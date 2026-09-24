@@ -444,6 +444,21 @@ its original fixture. Focused and package-wide race tests prove selection and
 wrong-pair rejection. This is test entry coverage, not a two-host runtime pass.
 
 Mutable Account security settings and factor replacement add a recovery fence.
+Each new protected backup must seal a separate, non-secret authentication and
+authorization state digest from the same PostgreSQL snapshot as `pg_dump`;
+the TOTP key-custody commitment cannot stand in for that digest. It covers
+durable Account/USER qualification, policy and role authority, factor lineage
+and credential revocation, but not Session, one-time-code consumption or
+notification delivery state that recovery fences separately. The source close
+transaction compares its current projection with the selected backup's sealed
+digest. A known mismatch rejects before authentication is closed or any
+destructive provider/database effect; it cannot strand an otherwise running
+installation behind a predictably incompatible older backup.
+An earlier backup format without this commitment is not an empty matching
+state: the integrated successor refuses its automatic identity restore before
+effects. Historical decoding remains available for verification, but a
+separate explicit migration/recovery path would need its own proof.
+
 The close transaction must capture one immutable, bounded snapshot of current
 Account status, root ownership, security-settings version and MFA requirement;
 for each USER it must also bind status, resource and credential generations,
