@@ -395,7 +395,8 @@ Fixed `384d6d76b65498ed6b428ba9a2905ef67831b919` remains `REFERENCE` for
 the earlier decision-contract cutover, but is `REJECT` as a positive source
 for the compiled-policy cutover: it does not satisfy this slice's explicitly
 proved Root management/interpretation baseline. The existing retained-policy
-gate now uses fixed1dc rather than expanding unpublished schema1..N support.
+experiment used fixed1dc; it is not a permanent unpublished schema1..N gate.
+IAM/011 owns the single current development predecessor window.
 
 For IAM/005 compiled-version cutover, fixed
 `1dc1079c4e7bec80f5345d06929875b492ba9a86` is `REUSE` for the sole
@@ -408,7 +409,8 @@ requires fixed-source and actual predecessor/PEP non-expansion evidence.
 Automatic recompilation/default movement, current-head historical fallback,
 and treating an old row or an existing r1 archive as provenance are `REJECT`.
 No host implementation, published release profile or other worktree state is
-adopted by this slice.
+adopted by this slice. The old executable's completed interpretation experiment
+is historical evidence, not a permanent pre-v1 regression requirement.
 
 Fixed `f272d06f84d8a753f0a7ec2cf3dc4276f637d660` is `REUSE` for the pure
 frozen/current compatibility check before any selector, condition or Effect.
@@ -530,11 +532,12 @@ R2 source revisions and SQL/actor cutover remain owned by006.
 For R2 retained subject-capability acceptance, fixed
 `d45402d91c89a5bb23f52fcfde65491435cd0f55` is `REFERENCE` as the actual R1
 executable that issues USER-only compiled policy content and real Role
-attachments. Its source is built only inside the existing authority-process
-fixture, never imported as a runtime dependency. The existing fixed IAM21
-`1dc1079c4e7bec80f5345d06929875b492ba9a86` gate remains `REFERENCE` for the
-distinct document-to-compilation interpretation boundary. Both use their
-actual registered declaration and preserve original bytes/defaults; inventing
+attachments. Its source was built only inside the authority-process experiment,
+never imported as a runtime dependency. Fixed IAM21
+`1dc1079c4e7bec80f5345d06929875b492ba9a86` remains `REFERENCE` for the completed
+document-to-compilation interpretation experiment, not a standing upgrade
+matrix. Both experiments used their actual registered declaration and preserved
+original bytes/defaults; inventing
 legacy state by deleting current fields, granting ROLE by replacing an old
 Profile, and replaying every unpublished schema revision are `REJECT`.
 Implementation status and runtime evidence belong only to IAM/006.
@@ -700,10 +703,25 @@ private lookup. `REUSE` its shared attempt budgets, closed predecessor proof,
 transaction locks and deferred completion checks; `REJECT` inferring authority
 from a shared next-step string, a missing purpose default, a client selector or
 a factor-bound flag. Its actual executable supplies the retained recovery
-fixture; the earlier fixed `f5cec0e132ad18900d9a5a5629eae04fda4817f1` remains
-the independent original LOGIN source. Classifying those exact original
+fixture and is the sole current development upgrade predecessor. The earlier
+fixed `f5cec0e132ad18900d9a5a5629eae04fda4817f1` is `REFERENCE` for the completed
+original LOGIN experiment, not an additional standing upgrade path. Classifying those exact original
 ceremonies does not issue a first-enrollment capability or authorize a release
 upgrade, and no installation/UX worktree or external acceptance is imported.
+
+For IAM/011's pre-v1 test-window replacement, fixed
+`09fac9135af99da3273d31c2f9b3e26d6aacfdc5` is the locally verified, pushed
+rollback point. `ADAPT` the original
+authority-process owner to one actual IAM41 predecessor, preserving current
+Account/credential/Session/recovery/mail/outbox facts, rollback and restart.
+`REUSE` its real source-built product declaration advance as a current policy
+non-expansion/closed-Deny check, independent of the discarded IAM21 wrapper.
+`REUSE` the current purpose-limited local recovery runtime, actual restricted
+database identities, multi-tenant PaaS/Operation/Audit and failure gates.
+`REJECT` retaining nine obsolete IAM upgrade entry points, their old wire
+helpers, optional predecessor switches or routine-SKIP compatibility matrix.
+This rejects redundant test paths, not the existing published Audit encoding
+or installation consumer contracts; their owners retain those real boundaries.
 
 The same fixed process owner is `ADAPT`ed for secret-absence inspection:
 scan decoded JSON values literally, and `REUSE` the public Audit event
