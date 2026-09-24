@@ -62,7 +62,7 @@ function AccountRefresh() {
 function ReauthenticationGuardProbe() {
   const access = useAccountAccess();
   return <>
-    <button data-testid="guard-workspace" onClick={() => void access.executeWorkspace({ kind: "save-sso-settings", userSsoEnabled: false, userSsoProviderId: "" })}>Protected workspace mutation</button>
+    <button data-testid="guard-workspace" onClick={() => void access.executeWorkspace({ kind: "save-sso-settings", userSsoEnabled: false, userSsoConfiguration: null })}>Protected workspace mutation</button>
     <button data-testid="guard-group" onClick={() => void access.groups?.create({ name: "BlockedGroup", description: "must not reach adapter", requestId: "blocked-group" }).catch(() => undefined)}>Protected group mutation</button>
   </>;
 }
@@ -2495,18 +2495,24 @@ describe("CAM-style access workspace", () => {
     expect(repository.execute).not.toHaveBeenCalled();
   });
   it("retains user SSO inputs on failure and saves only its owned settings on retry", async () => {
-    const { user, repository, extension } = await open("user-sso");
+    const { user, repository, extension } = await open("user-sso", { seed: async (preview) => {
+      preview.transact((source) => ({ workspace: { ...source, providers: [], federations: [], roles: source.roles.filter((role) => role.principalType !== "provider") } }));
+    } });
     const before = await extension.read("preview");
-    await select(user, "选择身份提供商", "EnterpriseSSO · SAML");
+    expect(screen.getByText("尚未配置。无需先创建角色 SSO 身份提供商。")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "去配置" }));
+    await user.type(screen.getByLabelText("企业 IdP 的 SAML 元数据 XML"), '<EntityDescriptor entityID="user-sso"></EntityDescriptor>');
     await user.click(screen.getByRole("checkbox", { name: "启用用户 SSO（模拟）" }));
+    await user.click(screen.getByRole("button", { name: "审阅配置" }));
+    expect(screen.getByText(/原密码登录可能被关闭/)).toBeTruthy();
     vi.mocked(repository.workspace!.execute).mockRejectedValueOnce(new Error("offline"));
     await user.click(screen.getByRole("button", { name: "保存" }));
     await screen.findByText("暂时无法完成操作，请重试。");
     expect(await extension.read("preview")).toEqual(before);
     await user.click(screen.getByRole("button", { name: "保存" }));
-    await waitFor(() => expect((screen.getByRole("button", { name: "保存" }) as HTMLButtonElement).disabled).toBe(true));
+    await screen.findByText("由 SAML 元数据声明");
     const state = await extension.read("preview");
-    expect(state.settings).toEqual({ ...before.settings, userSsoEnabled: true, userSsoProviderId: "idp-example" });
+    expect(state.settings).toEqual({ ...before.settings, userSsoEnabled: true, userSsoConfiguration: { protocol: "SAML", metadata: '<EntityDescriptor entityID="user-sso"></EntityDescriptor>', mappingClaim: "NameID" } });
     expect(state.providers).toEqual(before.providers);
     expect(state.userPolicies).toEqual(before.userPolicies);
     expect(repository.execute).not.toHaveBeenCalled();
@@ -2676,12 +2682,41 @@ describe("CAM-style access workspace", () => {
   });
   it("saves SSO settings only to the preview adapter", async () => {
     const { user, repository, extension } = await open("user-sso");
-    await screen.findByText(/把企业身份/);
-    await select(user, "选择身份提供商", "EnterpriseSSO · SAML");
+    await screen.findByText(/用户 SSO 将企业身份映射到已有 IAM 用户/);
+    await user.click(screen.getByRole("button", { name: "去配置" }));
+    await user.type(screen.getByLabelText("企业 IdP 的 SAML 元数据 XML"), '<EntityDescriptor entityID="user-sso"></EntityDescriptor>');
     await user.click(screen.getByRole("checkbox", { name: "启用用户 SSO（模拟）" }));
+    await user.click(screen.getByRole("button", { name: "审阅配置" }));
     await user.click(screen.getByRole("button", { name: "保存" }));
     expect((await extension.read("preview")).settings.userSsoEnabled).toBe(true);
     expect(repository.execute).not.toHaveBeenCalled();
+  });
+  it("configures OIDC user SSO without selecting or modifying a role SSO provider", async () => {
+    const { user, extension } = await open("user-sso");
+    const before = await extension.read("preview");
+    await user.click(screen.getByRole("button", { name: "去配置" }));
+    await select(user, "协议", "OIDC");
+    await user.type(screen.getByLabelText("身份提供商 URL"), "https://login.example.invalid/oidc");
+    await user.type(screen.getByLabelText("客户端 ID"), "matrix-user-sso");
+    await user.type(screen.getByLabelText("授权请求地址"), "https://login.example.invalid/authorize");
+    await user.type(screen.getByLabelText("映射到 IAM 用户的字段"), "preferred_username");
+    fireEvent.change(screen.getByLabelText("签名公钥 JWKS JSON"), { target: { value: '{"keys":[{"kty":"RSA"}]}' } });
+    await user.click(screen.getByRole("checkbox", { name: "启用用户 SSO（模拟）" }));
+    await user.click(screen.getByRole("button", { name: "审阅配置" }));
+    expect(screen.getByRole("heading", { name: "审阅用户 SSO 变更" })).toBe(document.activeElement);
+    expect(screen.getByText("org-xiak")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "保存" }));
+    const state = await extension.read("preview");
+    expect(state.settings.userSsoConfiguration).toEqual({ protocol: "OIDC", issuer: "https://login.example.invalid/oidc", clientId: "matrix-user-sso", authorizationEndpoint: "https://login.example.invalid/authorize", mappingClaim: "preferred_username", jwks: '{"keys":[{"kty":"RSA"}]}' });
+    expect(state.providers).toEqual(before.providers);
+    expect(state.roles).toEqual(before.roles);
+    expect(state.federations).toEqual(before.federations);
+    await user.click(screen.getByRole("button", { name: "编辑" }));
+    await user.click(screen.getByRole("checkbox", { name: "启用用户 SSO（模拟）" }));
+    await user.click(screen.getByRole("button", { name: "审阅配置" }));
+    expect(screen.getByText(/普通 IAM 用户的非 SSO 登录路径可恢复/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "保存" }));
+    expect((await extension.read("preview")).settings).toMatchObject({ userSsoEnabled: false, userSsoConfiguration: state.settings.userSsoConfiguration });
   });
   it.each(["groups", "simulator"] as const)("never loads the %s preview graph after the directory denies management", async (view) => {
     const { repository } = await open(view, { reader: true });

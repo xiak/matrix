@@ -47,8 +47,11 @@ export type PendingAccountRuleChange = {
 export type EnterpriseMember = { id: string; name: string; department: string };
 export type EnterpriseAccount = { id: string; name: string; corporationId: string; visibleMemberIds: string[]; importedMemberIds: string[]; createdAt: string };
 export function enterprisePrincipalId(accountId: string, memberId: string): string { return "principal-wecom-" + accountId + "-" + memberId; }
+export type UserSsoConfiguration =
+  | { protocol: "SAML"; metadata: string; mappingClaim: "NameID" }
+  | { protocol: "OIDC"; issuer: string; clientId: string; authorizationEndpoint: string; mappingClaim: string; jwks: string };
 export type AccessSettings = {
-  loginProtection: boolean; accountRuleVersion: number; userSsoEnabled: boolean; userSsoProviderId: string;
+  loginProtection: boolean; accountRuleVersion: number; userSsoEnabled: boolean; userSsoConfiguration: UserSsoConfiguration | null;
 };
 export type PersonalMfaPreviewState = {
   factorState: "never-bound" | "bound" | "removed";
@@ -131,7 +134,7 @@ export type AccessWorkspaceCommand =
   /** Preview client journal only; this is not a future IAM mutation contract. */
   | { kind: "remember-account-rule-change-unknown"; requestId: string; expectedRuleVersion: number; expectedLoginProtection: boolean; loginProtection: boolean }
   | { kind: "inspect-account-rule-change"; requestId: string; resultMode: "found-applied" | "found-rejected" | "not-found" | "unavailable" }
-  | { kind: "save-sso-settings"; userSsoEnabled: boolean; userSsoProviderId: string };
+  | { kind: "save-sso-settings"; userSsoEnabled: boolean; userSsoConfiguration: UserSsoConfiguration | null };
 
 export const policyVersionLimit = 5;
 
@@ -405,9 +408,8 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
     }
     case "delete-provider":
       exists(state.providers, id);
-      if (state.roles.some((entry) => entry.principalType === "provider" && entry.principal === id) || state.federations.some((entry) => entry.providerId === id) || (state.settings.userSsoEnabled && state.settings.userSsoProviderId === id)) throw new AccessWorkspaceError("referenced");
+      if (state.roles.some((entry) => entry.principalType === "provider" && entry.principal === id) || state.federations.some((entry) => entry.providerId === id)) throw new AccessWorkspaceError("referenced");
       state.providers = state.providers.filter((entry) => entry.id !== id);
-      if (state.settings.userSsoProviderId === id) state.settings.userSsoProviderId = "";
       break;
     case "save-federation": {
       validateName(state.federations, command.name, command.id);
@@ -553,9 +555,19 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
       target = source.accountId; break;
     }
     case "save-sso-settings": {
-      if (typeof command.userSsoEnabled !== "boolean" || typeof command.userSsoProviderId !== "string") invalid();
-      if (command.userSsoEnabled && !exists(state.providers, command.userSsoProviderId).enabled) invalid();
-      state.settings = { ...state.settings, userSsoEnabled: command.userSsoEnabled, userSsoProviderId: command.userSsoProviderId }; target = source.accountId; break;
+      const config = command.userSsoConfiguration;
+      if (typeof command.userSsoEnabled !== "boolean" || (command.userSsoEnabled && !config)) invalid();
+      if (config?.protocol === "SAML") {
+        if (config.mappingClaim !== "NameID" || !config.metadata.trim() || config.metadata.length > 65536 || !/<(?:[\w-]+:)?EntityDescriptor[\s>]/.test(config.metadata)) invalid();
+      } else if (config?.protocol === "OIDC") {
+        if (!config.clientId.trim() || !config.mappingClaim.trim() || !config.jwks.trim() || config.jwks.length > 65536) invalid();
+        try {
+          if (new URL(config.issuer).protocol !== "https:" || new URL(config.authorizationEndpoint).protocol !== "https:") invalid();
+          const jwks = JSON.parse(config.jwks);
+          if (!Array.isArray(jwks.keys) || !jwks.keys.length) invalid();
+        } catch { invalid(); }
+      } else if (config !== null) invalid();
+      state.settings = { ...state.settings, userSsoEnabled: command.userSsoEnabled, userSsoConfiguration: config ? structuredClone(config) : null }; target = source.accountId; break;
     }
   }
   if (recordEvent && command.kind !== "remember-account-rule-change-unknown") state.events = [{ id: context.id, action: command.kind, target, at: context.at }, ...state.events].slice(0, 100);

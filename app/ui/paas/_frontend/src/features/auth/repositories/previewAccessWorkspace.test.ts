@@ -720,12 +720,21 @@ describe("access workspace preview invariants", () => {
     expect(state.userPolicies["principal-lin"]).toBeUndefined();
     expect(state.keys).toHaveLength(0);
   });
-  it("rejects malformed owned settings and requires an available SSO provider", () => {
+  it("keeps user SSO configuration separate from role providers and validates its local shape", () => {
     const state = initialAccessWorkspace("org-xiak");
     expect(() => applyAccessWorkspaceCommand(state, { kind: "save-account-rule", requestId: "", expectedRuleVersion: 1, expectedLoginProtection: false, loginProtection: true, responseMode: "success" }, context)).toThrow("invalid");
-    expect(() => applyAccessWorkspaceCommand(state, { kind: "save-sso-settings", userSsoEnabled: true, userSsoProviderId: "missing" }, context)).toThrow("notFound");
-    const updated = applyAccessWorkspaceCommand(state, { kind: "save-sso-settings", userSsoEnabled: true, userSsoProviderId: "idp-example" }, context);
+    expect(() => applyAccessWorkspaceCommand(state, { kind: "save-sso-settings", userSsoEnabled: true, userSsoConfiguration: null }, context)).toThrow("invalid");
+    expect(() => applyAccessWorkspaceCommand(state, { kind: "save-sso-settings", userSsoEnabled: true, userSsoConfiguration: { protocol: "SAML", metadata: "not XML", mappingClaim: "NameID" } }, context)).toThrow("invalid");
+    const updated = applyAccessWorkspaceCommand(state, { kind: "save-sso-settings", userSsoEnabled: true, userSsoConfiguration: { protocol: "SAML", metadata: '<EntityDescriptor entityID="example"></EntityDescriptor>', mappingClaim: "NameID" } }, context);
     expect(updated.settings.userSsoEnabled).toBe(true);
+    expect(updated.settings.userSsoConfiguration?.protocol).toBe("SAML");
+    expect(updated.providers).toEqual(state.providers);
+    const withoutRoleProvider = applyAccessWorkspaceCommand({ ...updated, roles: [], federations: [] }, { kind: "delete-provider", id: "idp-example" }, context);
+    expect(withoutRoleProvider.providers).toHaveLength(0);
+    expect(withoutRoleProvider.settings.userSsoEnabled).toBe(true);
+    expect(() => applyAccessWorkspaceCommand(state, { kind: "save-sso-settings", userSsoEnabled: true, userSsoConfiguration: { protocol: "OIDC", issuer: "http://example.invalid", clientId: "client", authorizationEndpoint: "https://example.invalid/authorize", mappingClaim: "name", jwks: '{"keys":[{}]}' } }, context)).toThrow("invalid");
+    const oidc = applyAccessWorkspaceCommand(state, { kind: "save-sso-settings", userSsoEnabled: true, userSsoConfiguration: { protocol: "OIDC", issuer: "https://example.invalid", clientId: "client", authorizationEndpoint: "https://example.invalid/authorize", mappingClaim: "name", jwks: '{"keys":[{}]}' } }, context);
+    expect(oidc.settings.userSsoConfiguration?.protocol).toBe("OIDC");
   });
   it("locks an unknown account-rule intent until its original result is definitive", () => {
     const unbound = initialAccessWorkspace("org-xiak");

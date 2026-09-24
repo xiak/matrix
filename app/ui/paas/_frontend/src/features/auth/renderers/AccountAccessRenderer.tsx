@@ -147,6 +147,6 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
       view === "providers" ? <Tabs.Root defaultValue="providers"><Tabs.List aria-label={w("providers")}><Tabs.Trigger value="providers">{w("provider")}</Tabs.Trigger><Tabs.Trigger value="identities">{w("federatedIdentities")}</Tabs.Trigger></Tabs.List><Tabs.Content value="providers"><AccessProviders workspace={workspace} /></Tabs.Content><Tabs.Content value="identities"><AccessFederations workspace={workspace} /></Tabs.Content></Tabs.Root> :
       view === "federations" ? <AccessEnterpriseAccounts workspace={workspace} onUsers={() => onNavigate("users")} /> :
       view === "keys" ? <AccessCredentials workspace={workspace} scene={scene} /> :
-      <AccessUserSso workspace={workspace} onProviders={() => onNavigate("providers")} /> : null}
+      <AccessUserSso workspace={workspace} /> : null}
   </section>;
 }
