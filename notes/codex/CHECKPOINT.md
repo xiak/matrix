@@ -6,7 +6,7 @@
 - Updated: 2026-09-24
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `1df9ce06`
+- Pushed UI source: `84d0188c`
 
 ## Authoritative route
 
@@ -35,9 +35,10 @@ The current milestone preserves the purpose-limited recovery-code client,
 strict LIVE read-only Account MFA settings and independent MOCK security surface.
 It includes isolated MOCK active authenticator replacement with a fixed proof
 deadline, old-factor preservation until confirmation and real preview-code
-rotation. The latest slice separates User SSO configuration from Role SSO
-providers and provides content-area protocol editing and review; no LIVE SSO
-contract is inferred. The Account-rule response-lost path still requires normal
+rotation. The latest slices separate User SSO configuration from Role SSO
+providers, validate preview input before content-area review, and improve the
+compact account menu's two-line action spacing; no LIVE SSO contract is inferred.
+The Account-rule response-lost path still requires normal
 TOTP re-login before original-request inspection. LIVE authenticator
 replacement, settings update and S4 report APIs remain unavailable. The
 complete shared gates passed. Detailed contract behavior, evidence and
