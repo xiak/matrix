@@ -201,11 +201,15 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 
 2026-09-24，LIVE 前端只读适配与同步嵌入资源固定在已推送的
 [`2c3dc421`](https://github.com/xiak/matrix/commit/2c3dc421)，契约来源为 IAM-005 当前固定的 `api/iam/v1/policy.go` 与 `GET /v1/policies/{policyId}`。隔离 MOCK 的策略编写、版本和“策略用法”页签继续保留，真实失败不回退 MOCK。
+2026-09-24，版本目录与非默认精确版本只读增量固定在已推送的
+[`a4f2a0b7`](https://github.com/xiak/matrix/commit/a4f2a0b7)，分别消费 IAM-005 的 `GET /v1/policies/{policyId}/versions` 与 `GET /v1/policies/{policyId}/versions/{versionId}`。
 
 - 租户策略目录仍只载入元数据；用户打开准确的 TENANT Policy 后才请求其当前默认版本。请求不发送 Account selector，服务端独立执行 `iam.policy.read`，不能从 `iam.policy.list`、Root/管理员标签或目录可见性推断详情权限。平台安装策略只有目录时仅显示元数据及接口边界，不借用租户读取路由。
 - 严格适配核对 Policy/Version ID、Account 归属、TENANT/ACTIVE 状态、默认版本一致性、文档形状、大小和摘要字段。v1 只接受精确 Action；v2 将作者 Action 族与发布时冻结的精确展开分开显示，校验 SID、冻结动作覆盖和产品引用。页面不重新编译当前 Profile、不根据摘要或 Action 名称计算有效权限。
 - 固定标题和元数据立即出现，只有文档区域局部骨架；403、404、网络及协议失败只在详情显示准确状态或重试，返回后目录仍可用。401 只过期发起请求的认证代次。详情在内容区而非 Dialog，不提供无授权依据的编辑、关联或保存入口。
-- 定向 126 个客户端/组件用例覆盖懒读取、无权、平台无详情及 v2 冻结展开。当前证据不包含真实 IAM 进程浏览器验收、非默认版本读取/发布、策略写入或完整反向关联查询；后者尚无统一 LIVE 反查接口，MOCK“策略用法”仅表示当前模拟快照，不可解释为完整权威清单。共享构建和测试门禁由 [FEAT-007 current development evidence](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence) 记录。
+- 只有活跃租户 CUSTOMER 策略显示版本页签；首次选择才加载最多五个当前可管理的不可变版本。严格客户端校验 Account/Policy 归属、排序、唯一性、默认版本存在、完整版本形状及无额外字段。目录只显示真实版本 ID、契约、摘要与当前默认标记，不从 ID 猜测创建时间，也不把五项容量说成终生发布次数。
+- 点击非默认版本后另走精确版本读取，独立处理 `iam.policy-version.read` 的 403；内容在原页面显示并恢复列表焦点，不打开 Dialog。版本目录无权时默认详情仍可独立查看；精确读取无权也不将列表中已经返回的文档伪装成一次成功的精确读取。页签可见性不表示有发布、切默认或退休权。
+- 定向客户端/组件用例覆盖懒读取、无权、平台无详情、v2 冻结展开、版本目录及精确版本。证据仍不包含真实 IAM 进程浏览器验收、版本发布/切换/退休、策略写入或完整反向关联查询；后者尚无统一 LIVE 反查接口，MOCK“策略用法”仅表示当前模拟快照，不可解释为完整权威清单。共享构建和测试门禁由 [FEAT-007 current development evidence](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence) 记录。
 
 ### 服务授权 MOCK 的开发验收证据
 
