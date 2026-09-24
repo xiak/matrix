@@ -864,6 +864,18 @@ early revocation, direct factor DML, a transferable permit or administrator
 reset of another USER's factor is `REJECT`. No foreign worktree, inherited
 CI result, new seed codec or parallel enrollment framework is adopted.
 
+The current-security recovery target in IAM/009 `REUSE`s fixed
+`e24dbdae6b4ea420365a4527a0bd89b16e0d720f`'s purpose-limited
+close/reconcile/reopen entrypoint, dedicated database role, exclusive recovery
+barrier, immutable completion/outbox and original material custody. Its
+Closure and restoration admission are `ADAPT` candidates for a complete
+pre-restore current-authority commitment sealed outside database rollback;
+the exact cross-owner ABI is not yet frozen. `REJECT` treating the existing
+two independently bootstrapped database fixture as a real older backup,
+treating a wrapping-key requirement set or advanced OTP step as evidence that
+an old factor is still authorized, and recreating current qualification from
+the restored database. No installation/profile or consumer state is imported.
+
 The same-snapshot backup target remains in IAM/009. It `REUSE`s fixed
 `d479e1c57b6458852dd029227d32f3d56df6c5ad`'s sole
 `api/adapter/installation/v1` custody/lease contract and its same-source

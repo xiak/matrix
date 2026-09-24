@@ -704,7 +704,41 @@ LOGIN竞争局部证据：2026-09-25原integration owner的`TestIAMTOTPReplaceme
 | 无法确认时 | 不采信旧恢复码、因子、Session和challenge。作废/重新绑定方案必须有独立验证过的当前恢复资格，且不复活被撤销的权限。只有旧备份/旧凭据而无可信资格时保持关闭，不新建临时全权管理员 |
 | 再开放 | 原子安全状态及完成证据持久化、必要通知意图建立、所有副本确认后，installation才封存开放结果；丢失回包只续跑原意图，不重新清空状态或签发恢复能力 |
 
-再开放不能退化成批量更新Session撤销列。拟由installation的备份外CLOSED意图绑定单调authentication recovery epoch，IAM在精确恢复事务中一次消费原意图、推进epoch并封存完成/outbox；Session及challenge/enrollment持有凭据的发行和每次核对都必须使用当前epoch，旧快照的临时能力不能只因原行仍ACTIVE而恢复。旧PENDING绑定仪式终止，只能由新资格重新注册；合法保留的ACTIVE因子还须将replay下限推进到锁后数据库当前TOTP步加允许窗口，不能接受恢复前短窗内用过的码。该下限不证明因子未被撤销，缺少当前资格仍按上表关闭或受控作废。密码尝试同样不得随旧备份返额；不能取得可信新状态时先保守抑制，不能把恢复流程当作重置猜测额度的接口。普通USER、密码/Key/Role/附件和可信通知地址的回退仍要一起处理，epoch不是重新授予它们的许可。具体表、intent/receipt和只读交接ABI须由双方在实际片中冻结，本段没有分配schema/revision或宣称已有reopen实现。
+当前固定`e24dbdae6b4ea420365a4527a0bd89b16e0d720f`沿用`api/adapter/installation/v1/authentication_recovery.go`及原`000014_authentication_recovery`的目的限定close/reconcile/reopen。close取得认证状态独占锁，普通事务的共享锁提供在途请求屏障；原安装/意图/backup/custody及epoch被封入精确Closure。reopen在同一事务推进凭据代际、撤销旧Session/RoleSession、结束在途尝试/挑战，为恢复码批次和AccessKey建立永久fence，并推进ACTIVE因子的消费步。这些是已有源码行为，不是“待新增epoch”的设计，也不是全部认证状态防回退的证明。
+
+该固定Closure只有安装和恢复意图相关字段，**不含恢复前最新Account安全设置、主体/授权资格或因子撤销谱系的完整证明**；备份custody只证明该快照所需包装材料。现有`TestIAMAuthenticationRecoveryPostgres`以两个独立初始化的数据库验证关闭/重放/再开放事务及受限角色，未制造真实T0备份之后的设置收紧、换因子或撤权；不能将它当作这些状态回退攻击已经通过。`TestIAMTOTPBackupSnapshotPostgres`证明同快照所需密钥集合，也不证明该快照在T1仍代表当前认证资格。新组合的签名恢复准入必须继续按上表关闭，不能因两个schema数字或材料摘要匹配而继承早期组合的验收。
+
+下一恢复增量复用上述目的限定入口、专用数据库角色、封存意图和完成记录，不新建在线恢复/导出权限、通用receipt、第二套秘密托管或全局身份。设计要求如下，具体公开私有类型、输出上限和函数形状待IAM/installation共同冻结：
+
+- 在第一次破坏性恢复之前，close已取得的同一权威屏障内建立完整当前安全状态承诺。结果与真实封存installation/bootstrap、原command/epoch、source/target release及准确backup绑定，由安装owner持久保存在本次数据库回退范围之外。只读预查或从目标旧库重新取expected均不能代替这个时间点的证明。
+- 完整性至少覆盖当前Account集合及真实root归属、启停状态、安全设置版本/requiredForUsers；USER的当前状态、凭据代际/强制改密、MFA状态/修订、当前因子/批次和可信通知联系修订。已撤销的Policy/附件/Role及受保护平台恢复资格也不能因只补MFA字段而默认继承。无需导出明文密码、种子、码或可离线猜测秘密；具体凭据验证材料如确需携带，必须走经批准的受保护格式，不能塞入普通Closure/Audit/support。
+- 集合必须由IAM从同一已冻结快照完整导出，不能由caller选择Account/User、页数或子集。省略行、重复/乱序项、错归属、超预算、未知旧状态及截断均失败关闭；一个摘要本身不证明集合完整。规模上限不得未经验证变成业务配额，也不得通过分页期间继续写入拼接不同时刻的状态。
+- reconcile/reopen分别验证已封存当前证据与恢复后数据。明确可保持的当前资格才能保留；会话、挑战、已恢复旧码/Key等仍按原不可逆fence处理。因子时间步下限只处理短窗重放，不能证明这个因子在T1未被撤销；曾替换的旧因子不能在后续新时间步重新认证。密码/主体/策略及联系状态同样不得凭旧库“看起来有效”重获资格。
+- 缺失、冲突或无法确认时保持CLOSED；若在破坏性效果前已能发现不支持，则在效果前拒绝。此负向保护只是前置切片，不等于完整旧备份恢复已交付。正向恢复仍须实现可信当前状态恢复，或作废不确定能力后通过当前有效的受控资格重建；不能以“全部拒绝”替代完整目标，也不能只救回primary便开放其他主体。
+- 回包丢失、中断、重复启动和跨副本只能续跑原已封存意图、原证据与原完成；不得生成另一epoch、从旧库重签当前资格或重复推进状态。已封存摘要不授予单独reopen能力，安装先验证全部相关副本/直连入口隔离，最后才封存开放结果。
+
+跨进程交接方向已与installation确认，尚未实现：原Closure末尾增加`securitySnapshotDigest,omitempty`；省略形式只用于已完成历史receipt的原字节读取，不是新执行的兼容分支。新close只返回封闭`{apiVersion,kind,purpose,closure,securitySnapshot}`，快照绑定封存installation/bootstrapDigest、原commandId/epoch/recoveryIntentDigest及准确closedAt；快照不再包含closureDigest，避免循环摘要。唯一canonical编码及快照摘要归现有`api/adapter/installation/v1`，completion也必须绑定相同快照摘要。新reconcile/reopen同时要求原CLOSURE_FILE和`MATRIX_IAM_AUTHENTICATION_RECOVERY_SECURITY_SNAPSHOT_FILE`，缺字段/缺文件不调用旧执行路径。具体快照投影、codec和SQL形状仍需冻结，本文没有宣称它们已可调用。
+
+installation先以现有受保护write-once流程写入快照，回读核对完整canonical字节、摘要和归属，再写closure；两者都持久化之前不做破坏性恢复。close回包丢失只能从源库原command receipt取回原快照，不能从恢复库重采样。已有closure而快照缺失时保持关闭，不把它解释为“尚未close”再签新意图。原只读容器根、单文件只读挂载及无日志边界不变，不给IAM新增可写宿主挂载。安装现有文件/执行输出各4MiB、CLI45秒/外层60秒/SQL15秒预算不扩大；快照独立2MiB作为待实测的上界候选，项数必须与真实字段编码、峰值内存及PG事务时间共同冻结。超界在source close提交前拒绝，不截断、不输出部分集合，不将候选10k USER或字节除法声称为已验收容量。
+
+安全投影须覆盖下表中的当前权威；选择摘要时仍须在唯一SQL投影中列出组成字段、稳定排序和完整集合检查。不得只用某个局部generation替代其他来源，也不以“整库hash”夹带秘密和无关投递状态。此表是字段冻结的检查依据，不是已经发布的JSON类型：
+
+| 当前权威及源码owner | 恢复比较或不可逆处理 |
+| --- | --- |
+| `accounts/account_roots`与Account安全设置 | 完整Account集合、原root归属、启停/版本、settings版本及requiredForUsers；新Account和已停用Account都不能漏出集合 |
+| `principals/user_credentials/user_mfa_states` | 包括DISABLED及已删除USER墓碑、凭据存在性/代际、强制改密及真实MFA来源。已删除USER无密码行与非删除USER意外缺行分开；未知MFA不能默认NEVER_BOUND，尚未实现的REMOVED不能预先成为许可 |
+| `totp_authenticators/mfa_recovery_batches/authenticator_recoveries`及更换/重发来源 | 当前因子/批次与修订及其不可变关联相符；同ID并不足以证明当前ACTIVE。正常OTP消费步是重放下限，不应因为合法登录使整份资格比较失配，但reopen下限必须覆盖源最新已消费步和允许窗口 |
+| `notification_contacts/notification_contact_verifications` | 绑定当前已验证联系来源及修订；不能从旧地址重新取得通知/恢复资格。待验证秘密不导出，也不升级成已验证联系人 |
+| `policies/policy_versions/policy_attachments/user_permission_boundaries` | 包括当前版本选择、canonical内容摘要、删除/退役、所有目标种类和TENANT/INSTALLATION/INSTALLATION_PROBE范围及撤销状态；不能只保存当前有效平台附件布尔值而丢掉撤权历史 |
+| `groups/group_memberships/roles/role_trust_versions/role_permission_boundaries`及来源代际 | 当前组关系、Role状态/信任/边界及各自版本共同参与；`role_source_authority_generations`只覆盖自己的写入来源，不能代替Role信任、策略默认版本或产品声明 |
+| `authorization_profiles/authorization_profile_heads`、SERVICE_ACCOUNT及`service_credentials` | 当前封闭动作/资源语义、服务身份启停/用途及凭据撤销必须相符；不因USER都被检查便默认历史服务凭据有效。只允许非秘密承诺，不导出服务认证材料，也不借此改ServiceIdentity/lookup_service契约 |
+| `password_attempts/totp_attempts`及原恢复fence | 源端已消耗预算不能随旧库返还；具体保留/保守抑制须沿当前预算机制证明。Session/RoleSession、旧挑战/StepUp、旧恢复码批次和AccessKey继续按原恢复屏障失效，不把恢复后的ACTIVE行当作当前资格 |
+
+close仍使用原SERIALIZABLE事务和认证状态独占屏障，不降成READ COMMITTED，也不在事务外预读账户集合。由于MVCC快照可能早于实际取得屏障，必须将全部安全读取、精确快照、关闭receipt和outbox置于同一事务，并在成功commit之后才编码输出；序列化失败的候选快照不得交给安装器。限次重试保持原intent而开启全新事务，不能重用失败事务的采样结果。后继真实IAM门禁须控制“业务变更先提交”和“close先提交”两个实际锁顺序，覆盖账户/用户新增及撤销，不仅比较goroutine调用顺序。
+
+该隔离选择已有局部机制证据：2026-09-25本任务独立限额PG18.6中，实际观察writer共享屏障阻塞closer独占锁；closer预先建立SERIALIZABLE快照，writer提交revision2后，旧视图close以`40001`失败，barrier仍OPEN且writer效果保留；全新重试读到revision2再提交CLOSED。临时探针库已删除。该结果只验证PG锁/MVCC机制，不是生产IAM完整投影、15秒预算或真实备份恢复已通过；后继生产测试必须用真实API变更和原恢复入口重新证明。
+
+再开放不能退化成批量更新Session撤销列。旧PENDING绑定仪式须失去执行资格，只能由新资格重新注册；合法保留的ACTIVE因子还须满足当前撤销/归属证明及准确重放下限。密码尝试不得随旧备份返额，无法取得可信预算时先保守抑制。普通USER、密码/Key/Role/附件和可信通知地址的回退必须一起处理，epoch不是重新授予它们的许可。本设计未分配后继schema/release revision，也未修改现有Closure或安装准入。
 
 本版选定的保守准入是：没有上述证明的MFA备份恢复组合不开放。用户已授权原受保护主账号的目的限定MFA恢复及隔离增量，但当前恢复资格来源仍须证明，不能凭本地root权限、旧备份或旧receipt恢复历史权限。备份外的一把长期恢复密钥证明能力来源，不自动证明T1的Account/User仍启用、平台附件未撤销或因子/设置仍是T0版本；恢复T0后从旧库取expected再签新请求不能填补该缺口。仅救回primary而不能安全处理普通USER及密码/AccessKey/Role/授权附件/接收地址的回退，也不能将平台改回OPEN。
 
@@ -753,6 +787,20 @@ LOGIN竞争局部证据：2026-09-25原integration owner的`TestIAMTOTPReplaceme
 | 通知owner | 真实已验证接收人和实际渠道；跨租户/新地址替换拒绝，受理未知/重复/失败重试与告警；Audit、入队、受理、送达不混淆，不因投递失败复活凭据 |
 | UX/UI owner | 独立真实认证器完成主动绑定、首次强制设置、登录挑战、过期/等待新码、秘密回包丢失、合法重绑及设置权限拒绝；浏览器不能读取持久缓存中的秘密 |
 | 原011容量owner | 明确副本/CPU/内存/连接/数据及尝试预算，错误登录与复杂PDP并行时没有无界队列；不提前宣称生产QPS、公平性SLO或数据库HA |
+
+恢复反例沿现有`authentication_recovery_postgres_test.go`和安装真实dump owner补齐，不建立平行测试框架。两套独立bootstrap只是事务夹具，不是T0快照；正向身份及T1变化必须走实际API，旧数据来自受支持的真实备份/恢复。以下为新增验收设计，尚未执行：
+
+| T0之后的真实T1变化 | 恢复旧库后必须证明 |
+| --- | --- |
+| 普通Account由不强制改为强制MFA | 不能恢复旧false后直接密码登录；当前设置承诺缺失/不匹配时不OPEN，不给旧Session补新版本 |
+| 本人正常更换或合法丢失恢复到新因子 | 原因子在真实新时间步也不能登录/step-up，旧批次继续不可消费；不能仅检查恢复瞬间同一步OTP拒绝 |
+| 修改/reset密码、停用USER/Account、撤销平台附件 | 旧凭据、旧启用状态或旧绑定不能重新取得业务或本地恢复资格；不得从恢复库重新签expected掩盖撤销 |
+| 撤销策略附件、组成员/Role信任或权限边界收紧 | 原资源保留但旧权限不能复活，普通Session、Role、Key各按其当前载体约束拒绝 |
+| 消费恢复码/结束Session与待完成挑战 | 同码、同秘密和原StepUp不可再次完成，失败预算不因重启/旧库回退获得新额度 |
+| 导出后删项/变体、遗漏新Account、超界集合或错误安装 | 完整性和归属核对失败，任何新密码/绑定/完成及成功Audit事实均不得部分提交 |
+| close/封存/数据库恢复/reconcile/reopen各阶段中断 | 原意图与准确完成可续跑，不额外开放、清空状态或重复消费，两个真实IAM均受相同关闭结果约束 |
+
+验收须同时包含安全状态确可恢复的正向路径及不支持状态的明确拒绝；只有负向通过不标记完整恢复完成。纯契约字节测试、IAM真库事务、实际签名安装与浏览器分别记录，不继承其他分支的组合状态。
 
 设置竞争的有界门禁沿原integration owner复用真实初始化：六个独立Account，各自正常改密、确认通知地址、绑定TOTP、登录并取得准确设置意图的PROVED证明。设置false→true分别与本人logout、保留当前Session的日常改密、保存恢复码开始重绑竞争，每项控制两种提交次序。在第一事务的原成功outbox写入处暂停，实际观察第二副本的数据库锁依赖后才释放，不以goroutine启动顺序代替串行化证据。先提交设置则旧Session/LOGIN挑战不能再操作；先提交logout/恢复则旧Session不能更新设置；先提交保留当前Session的改密也必须使旧凭据代际的StepUp失效。逐项核对版本、generation、因子/恢复码消费、证明消费及完成/Audit/通知原子结果，schema等值重放及新Authority不得复活败方资格。独立三分钟期限及原尝试预算不变，不改时钟或直写正向身份；通知地址代码的存储解封只证明事务，不冒充SMTP。局部真实证据归上文，六项不替代上表其余因子/设置放宽/reset/Role竞争。
 
