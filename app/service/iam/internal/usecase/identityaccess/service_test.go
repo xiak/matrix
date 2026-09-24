@@ -36,31 +36,150 @@ func newCoreAuthority(repository Repository, config Config) (*Authority, error) 
 	return NewAuthority(repository, config)
 }
 
-func TestLoginChallengeIssuerCannotSubstituteEnrollmentOrRecoveryPurpose(t *testing.T) {
+func TestLoginChallengeIssuerRequiresExactLockedCeremony(t *testing.T) {
 	tx := newCoreTransaction()
 	service, err := newCoreAuthority(&coreRepository{transaction: tx}, Config{NewID: func(string) (string, error) { return "challenge-issued", nil }})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, sample := range []struct {
+	for _, original := range []struct {
+		state         LoginAuthenticationState
+		forced        bool
 		purpose, step string
-		allowed       bool
 	}{
-		{"LOGIN", "TOTP", true}, {"LOGIN", "RECOVER", true},
-		{"LOGIN", "PASSWORD_CHANGE", false},
-		{"ENROLLMENT", "ENROLLMENT", false}, {"ENROLLMENT", "PASSWORD_CHANGE", false},
-		{"RECOVERY", "ENROLLMENT", false},
+		{LoginAuthenticationState{State: "BOUND", Revision: 2, FactorID: "factor-one"}, false, "LOGIN", "TOTP"},
+		{LoginAuthenticationState{State: "RECOVERY_REQUIRED", Revision: 3}, false, "LOGIN", "RECOVER"},
+		{LoginAuthenticationState{State: "NEVER_BOUND", Revision: 1, EnrollmentRequired: true}, false, "ENROLLMENT", "ENROLLMENT"},
+		{LoginAuthenticationState{State: "NEVER_BOUND", Revision: 1, EnrollmentRequired: true}, true, "ENROLLMENT", "PASSWORD_CHANGE"},
+		{LoginAuthenticationState{State: "NEVER_BOUND", Revision: 1}, false, "", ""},
+		{LoginAuthenticationState{State: "BOUND", Revision: 2, FactorID: "factor-one", EnrollmentRequired: true}, false, "", ""},
 	} {
-		tx.loginChallenge = iamv1.AuthenticationChallenge{APIVersion: iamv1.APIVersion, Kind: "AuthenticationChallenge", ID: "challenge-issued",
-			Purpose: sample.purpose, NextStep: sample.step, ExpiresAt: tx.now.Add(5 * time.Minute)}
-		result, err := service.createLoginChallenge(t.Context(), tx, PasswordAttempt{}, "request-one", "sha256:"+strings.Repeat("a", 64))
-		if sample.allowed {
-			if err != nil || iamv1.ValidateLoginResponse(result) != nil {
-				t.Fatal("declared LOGIN purpose rejected", err)
+		for _, sample := range []struct{ purpose, step string }{
+			{"LOGIN", "TOTP"}, {"LOGIN", "RECOVER"}, {"LOGIN", "PASSWORD_CHANGE"},
+			{"ENROLLMENT", "ENROLLMENT"}, {"ENROLLMENT", "PASSWORD_CHANGE"}, {"RECOVERY", "ENROLLMENT"},
+		} {
+			tx.loginChallenge = iamv1.AuthenticationChallenge{APIVersion: iamv1.APIVersion, Kind: "AuthenticationChallenge", ID: "challenge-issued",
+				Purpose: sample.purpose, NextStep: sample.step, ExpiresAt: tx.now.Add(5 * time.Minute)}
+			result, err := service.createLoginChallenge(t.Context(), tx, PasswordAttempt{MustChangePassword: original.forced}, original.state,
+				"request-one", "sha256:"+strings.Repeat("a", 64))
+			if sample.purpose == original.purpose && sample.step == original.step {
+				if err != nil || iamv1.ValidateLoginResponse(result) != nil || result.Credential.Present() || result.Session != (iamv1.Session{}) {
+					t.Fatal("exact ceremony was not issued as a restricted challenge", err)
+				}
+			} else if !errors.Is(err, ErrUnavailable) || result.ChallengeCredential.Present() || result.Credential.Present() || result.Challenge != nil {
+				t.Fatal("issuer leaked another ceremony or secret", err)
 			}
-		} else if !errors.Is(err, ErrUnavailable) || result.ChallengeCredential.Present() || result.Credential.Present() || result.Challenge != nil {
-			t.Fatal("existing issuer leaked an unsupported purpose or secret", err)
 		}
+	}
+}
+
+func TestEnrollmentInspectionRequiresExactCeremonyAndPrivateSubject(t *testing.T) {
+	tx := newCoreTransaction()
+	service, err := newCoreAuthority(&coreRepository{transaction: tx}, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Bootstrap(t.Context(), coreBootstrap(t)); err != nil {
+		t.Fatal(err)
+	}
+	issued, err := service.credentials.Issue(authority.CredentialAuthenticationChallenge, "first-enrollment")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx.challengeLookupDigest = issued.LookupDigest
+	for _, step := range []string{"PASSWORD_CHANGE", "ENROLLMENT"} {
+		t.Run(step, func(t *testing.T) {
+			tx.challengeCredential = AuthenticationChallengeCredential{AccountID: tx.organization.ID, UserID: tx.principal.ID,
+				ID: "first-enrollment", Purpose: "ENROLLMENT", NextStep: step, VerificationDigest: issued.VerificationDigest}
+			original := EnrollmentChallengeInspection{CredentialGeneration: 1, State: iamv1.EnrollmentChallengeState{
+				Challenge: iamv1.AuthenticationChallenge{APIVersion: iamv1.APIVersion, Kind: "AuthenticationChallenge", ID: "first-enrollment",
+					Purpose: "ENROLLMENT", NextStep: step, ExpiresAt: tx.now.Add(5 * time.Minute)}}}
+			contact := iamv1.NotificationContact{APIVersion: iamv1.APIVersion, Kind: "NotificationContact", AccountID: tx.organization.ID,
+				UserID: tx.principal.ID, State: "NONE", ResourceVersion: 0}
+			if step == "ENROLLMENT" {
+				original.State.NotificationContact = &contact
+			}
+			tx.enrollmentInspection = original
+			request := iamv1.InspectEnrollmentChallengeRequest{ChallengeCredential: issued.Credential}
+			response, err := service.InspectEnrollmentChallenge(t.Context(), "first-enrollment", request)
+			if err != nil || iamv1.ValidateEnrollmentChallengeState(response) != nil || response.Challenge.NextStep != step {
+				t.Fatal("exact original enrollment ceremony could not be observed", err)
+			}
+			for name, mutate := range map[string]func(*EnrollmentChallengeInspection){
+				"missing_generation": func(v *EnrollmentChallengeInspection) { v.CredentialGeneration = 0 },
+				"wrong_challenge":    func(v *EnrollmentChallengeInspection) { v.State.Challenge.ID = "another-challenge" },
+				"wrong_purpose":      func(v *EnrollmentChallengeInspection) { v.State.Challenge.Purpose = "RECOVERY" },
+				"wrong_step":         func(v *EnrollmentChallengeInspection) { v.State.Challenge.NextStep = "TOTP" },
+				"foreign_contact": func(v *EnrollmentChallengeInspection) {
+					foreign := contact
+					foreign.AccountID = "foreign-account"
+					v.State.NotificationContact = &foreign
+				},
+				"foreign_user": func(v *EnrollmentChallengeInspection) {
+					foreign := contact
+					foreign.UserID = "another-user"
+					v.State.NotificationContact = &foreign
+				},
+				"wrong_stage_projection": func(v *EnrollmentChallengeInspection) {
+					if step == "PASSWORD_CHANGE" {
+						v.State.NotificationContact = &contact
+					} else {
+						v.State.NotificationContact = nil
+					}
+				},
+			} {
+				t.Run(name, func(t *testing.T) {
+					tx.enrollmentInspection = original
+					mutate(&tx.enrollmentInspection)
+					result, err := service.InspectEnrollmentChallenge(t.Context(), "first-enrollment", request)
+					if !errors.Is(err, ErrUnavailable) || result.Challenge.ID != "" || result.NotificationContact != nil || result.Enrollment != nil {
+						t.Fatal("invalid authority projection escaped to the caller", err)
+					}
+				})
+			}
+		})
+	}
+	for _, purpose := range []string{"LOGIN", "RECOVERY"} {
+		tx.challengeCredential.Purpose = purpose
+		tx.enrollmentReads = 0
+		_, err := service.InspectEnrollmentChallenge(t.Context(), "first-enrollment", iamv1.InspectEnrollmentChallengeRequest{ChallengeCredential: issued.Credential})
+		if !errors.Is(err, ErrUnauthenticated) || tx.enrollmentReads != 0 {
+			t.Fatal("another ceremony acquired initial enrollment observation", err)
+		}
+	}
+	if len(tx.sessions) != 0 || len(tx.totpReservations) != 0 {
+		t.Fatal("read-only enrollment inspection created authentication authority")
+	}
+}
+
+func TestRequiredInitialEnrollmentNeverFallsBackToPasswordSession(t *testing.T) {
+	for _, forced := range []bool{false, true} {
+		t.Run(fmt.Sprintf("forced_%t", forced), func(t *testing.T) {
+			tx := newCoreTransaction()
+			service, err := newCoreAuthority(&coreRepository{transaction: tx}, Config{NewID: func(prefix string) (string, error) { return prefix + "-test", nil }})
+			if err != nil {
+				t.Fatal(err)
+			}
+			document := coreBootstrap(t)
+			if _, err := service.Bootstrap(t.Context(), document); err != nil {
+				t.Fatal(err)
+			}
+			user := tx.users[document.Administrator.ID]
+			user.MustChangePassword = forced
+			tx.users[user.ID] = user
+			tx.loginAuthenticationState = &LoginAuthenticationState{State: "NEVER_BOUND", Revision: 1, EnrollmentRequired: true}
+			step := "ENROLLMENT"
+			if forced {
+				step = "PASSWORD_CHANGE"
+			}
+			tx.loginChallenge = iamv1.AuthenticationChallenge{APIVersion: iamv1.APIVersion, Kind: "AuthenticationChallenge", ID: "authentication-challenge-test",
+				Purpose: "ENROLLMENT", NextStep: step, ExpiresAt: tx.now.Add(5 * time.Minute)}
+			response, err := service.Login(t.Context(), iamv1.LoginRequest{LoginName: document.Administrator.LoginName, Password: document.Administrator.Password, RequestID: "initial-login"})
+			if err != nil || iamv1.ValidateLoginResponse(response) != nil || response.Outcome != "CHALLENGE_REQUIRED" ||
+				response.Challenge.NextStep != step || response.Credential.Present() || response.Session != (iamv1.Session{}) || len(tx.sessions) != 0 {
+				t.Fatal("required first enrollment created or leaked a password Session", err)
+			}
+		})
 	}
 }
 
@@ -270,6 +389,56 @@ func TestPasswordWorkHasNoQueueAndPrivateAttemptsCannotSerialize(t *testing.T) {
 	attempt := PasswordAttempt{PasswordHash: authority.PasswordHash("private-verifier")}
 	if encoded, err := json.Marshal(attempt); err == nil || strings.Contains(string(encoded), "private-verifier") || strings.Contains(fmt.Sprintf("%+v %#v", attempt, attempt), "private-verifier") {
 		t.Fatal("private attempt exposed the verifier")
+	}
+}
+
+func TestStartStepUpRejectsChangedSettingsIntent(t *testing.T) {
+	// The storage port must return the exact non-secret intent, not merely a
+	// syntactically valid proof. Real MFA eligibility remains a PostgreSQL gate.
+	for _, changed := range []string{"none", "missing", "version", "value", "operation"} {
+		t.Run(changed, func(t *testing.T) {
+			tx := newCoreTransaction()
+			service, err := newCoreAuthority(&coreRepository{transaction: tx}, Config{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			bootstrap := coreBootstrap(t)
+			if _, err := service.Bootstrap(t.Context(), bootstrap); err != nil {
+				t.Fatal(err)
+			}
+			login, err := service.Login(t.Context(), iamv1.LoginRequest{LoginName: "admin", Password: bootstrap.Administrator.Password, RequestID: "settings-proof-login"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := service.ChangePassword(t.Context(), login.Credential, iamv1.ChangePasswordRequest{CurrentPassword: bootstrap.Administrator.Password,
+				NewPassword: coreSecret(t, "Settings-Proof-Current-Password-92!"), RequestID: "settings-proof-initial-password"}); err != nil {
+				t.Fatal(err)
+			}
+			intent := iamv1.SecuritySettingsUpdateIntent{ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}}
+			request := iamv1.StartStepUpRequest{RequestID: "settings-original", Operation: iamv1.StepUpUpdateSecuritySettings, ExpectedFactorRevision: 2, SecuritySettings: &intent}
+			returnedIntent := intent
+			tx.stepUpStartResult = iamv1.StepUp{APIVersion: iamv1.APIVersion, Kind: "StepUp", ID: "settings-proof", RequestID: request.RequestID,
+				Operation: request.Operation, ExpectedFactorRevision: request.ExpectedFactorRevision, SecuritySettings: &returnedIntent,
+				State: "PENDING", CreatedAt: tx.now, ExpiresAt: tx.now.Add(120 * time.Second)}
+			switch changed {
+			case "missing":
+				tx.stepUpStartResult.SecuritySettings = nil
+			case "version":
+				returnedIntent.ExpectedResourceVersion++
+			case "value":
+				returnedIntent.MFA.RequiredForUsers = false
+			case "operation":
+				tx.stepUpStartResult.Operation, tx.stepUpStartResult.SecuritySettings = iamv1.StepUpRegenerateRecoveryCodes, nil
+			}
+			result, err := service.StartStepUp(t.Context(), login.Credential, request)
+			if changed == "none" {
+				if err != nil || result.SecuritySettings == nil || *result.SecuritySettings != intent {
+					t.Fatal("exact settings proof rejected", err)
+				}
+			} else if !errors.Is(err, ErrUnavailable) || result != (iamv1.StepUp{}) {
+				t.Fatal("changed proof intent escaped authority boundary", err)
+			}
+		})
 	}
 }
 
@@ -609,6 +778,22 @@ func TestAccountSecuritySettingsCannotBypassCurrentSessionAndExplicitAuthority(t
 		last.Decision.Resource != (iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: string(bootstrap.Organization.ID)}) || last.AuditEvent.Action != auditv1.ActionIAMAuthorizationDecided {
 		t.Fatal("settings denial did not bind the current real Account and audit decision")
 	}
+	update := iamv1.UpdateAccountSecuritySettingsRequest{RequestID: "settings-denied-write", StepUpID: "not-a-permit",
+		ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}}
+	if _, err := service.UpdateAccountSecuritySettings(t.Context(), login.Credential, update); !errors.Is(err, ErrForbidden) {
+		t.Fatal("settings proof ID substituted for current write permission", err)
+	}
+	last = tx.authorizations[len(tx.authorizations)-1]
+	if last.Decision.Allowed || last.Decision.Action != iamv1.ActionIAMSecuritySettingsUpdate ||
+		last.Decision.Resource.ID != string(bootstrap.Organization.ID) || tx.settingsMutationCalled {
+		t.Fatal("denied settings command reached mutation")
+	}
+	beforeLockFailure := len(tx.authorizations)
+	tx.settingsLockError = ErrUnauthenticated
+	if _, err := service.UpdateAccountSecuritySettings(t.Context(), login.Credential, update); !errors.Is(err, ErrUnauthenticated) || len(tx.authorizations) != beforeLockFailure || tx.settingsMutationCalled {
+		t.Fatal("locked authentication failure was used to make a new permission decision")
+	}
+	tx.settingsLockError = nil
 	before := len(tx.authorizations)
 	tx.profileErr = ErrUnavailable
 	if _, err := service.AccountSecuritySettings(t.Context(), login.Credential, "settings-drift"); !errors.Is(err, ErrUnavailable) || len(tx.authorizations) != before {
@@ -623,6 +808,9 @@ func TestAccountSecuritySettingsCannotBypassCurrentSessionAndExplicitAuthority(t
 	}
 	if _, err := service.AccountSecuritySettings(t.Context(), login.Credential, "settings-old-session"); !errors.Is(err, ErrUnauthenticated) {
 		t.Fatal("revoked session reached settings authority")
+	}
+	if _, err := service.UpdateAccountSecuritySettings(t.Context(), login.Credential, update); !errors.Is(err, ErrUnauthenticated) || tx.settingsMutationCalled {
+		t.Fatal("revoked session reached settings mutation")
 	}
 }
 
@@ -1590,45 +1778,63 @@ func TestRecoveryCodeMatchUsesCompleteOriginalBatchAndScope(t *testing.T) {
 
 type coreTransaction struct {
 	Transaction
-	loginChallenge          iamv1.AuthenticationChallenge
-	challengeCredential     AuthenticationChallengeCredential
-	challengeLookupDigest   string
-	now                     time.Time
-	status                  iamv1.BootstrapStatus
-	contentDigest           string
-	organization            iamv1.Organization
-	principal               iamv1.Principal
-	services                map[string]ServiceCredential
-	sessions                map[string]SessionCredential
-	roleSessions            map[string]RoleSessionCredential
-	roleExitCredentials     map[string]RoleSessionExitCredential
-	roleExitEvents          []auditv1.Event
-	authorizations          []AuthorizationMutation
-	passwords               map[iamv1.PrincipalID]authority.PasswordHash
-	passwordAttempts        map[iamv1.PrincipalID]PasswordAttempt
-	attemptSequence         uint64
-	rejectedAttempts        []string
-	users                   map[iamv1.PrincipalID]iamv1.Principal
-	attachments             map[iamv1.PolicyAttachmentID]iamv1.PolicyAttachment
-	attachmentSession       iamv1.SessionID
-	revocationSession       iamv1.SessionID
-	sessionRevocation       *SessionRevocationMutation
-	otherSessionRevocation  *OtherSessionRevocationMutation
-	otherSessionResult      iamv1.RevokeOtherSessionsResponse
-	otherSessionError       error
-	ownSessionItems         *[]iamv1.Session
-	localRecoveryInspection iamv1.LocalCredentialRecoveryInspection
-	localRecoveryResult     iamv1.LocalCredentialRecoveryResult
-	localRecoveryMutation   *LocalCredentialRecoveryMutation
-	profileErr              error
-	accessKeyCustody        *AccessKeyCustody
-	accessKeyCustodyErr     error
-	totpCustody             *TOTPCustody
-	totpCustodyErr          error
-	stepUpForVerification   iamv1.StepUp
-	totpReservations        []TOTPAttempt
-	denyTOTPReservation     bool
-	totpAttemptReads        int
+	loginChallenge           iamv1.AuthenticationChallenge
+	enrollmentInspection     EnrollmentChallengeInspection
+	loginAuthenticationState *LoginAuthenticationState
+	enrollmentReads          int
+	challengeCredential      AuthenticationChallengeCredential
+	challengeLookupDigest    string
+	now                      time.Time
+	status                   iamv1.BootstrapStatus
+	contentDigest            string
+	organization             iamv1.Organization
+	principal                iamv1.Principal
+	services                 map[string]ServiceCredential
+	sessions                 map[string]SessionCredential
+	roleSessions             map[string]RoleSessionCredential
+	roleExitCredentials      map[string]RoleSessionExitCredential
+	roleExitEvents           []auditv1.Event
+	authorizations           []AuthorizationMutation
+	passwords                map[iamv1.PrincipalID]authority.PasswordHash
+	passwordAttempts         map[iamv1.PrincipalID]PasswordAttempt
+	attemptSequence          uint64
+	rejectedAttempts         []string
+	users                    map[iamv1.PrincipalID]iamv1.Principal
+	attachments              map[iamv1.PolicyAttachmentID]iamv1.PolicyAttachment
+	attachmentSession        iamv1.SessionID
+	revocationSession        iamv1.SessionID
+	sessionRevocation        *SessionRevocationMutation
+	otherSessionRevocation   *OtherSessionRevocationMutation
+	otherSessionResult       iamv1.RevokeOtherSessionsResponse
+	otherSessionError        error
+	ownSessionItems          *[]iamv1.Session
+	localRecoveryInspection  iamv1.LocalCredentialRecoveryInspection
+	localRecoveryResult      iamv1.LocalCredentialRecoveryResult
+	localRecoveryMutation    *LocalCredentialRecoveryMutation
+	profileErr               error
+	accessKeyCustody         *AccessKeyCustody
+	accessKeyCustodyErr      error
+	totpCustody              *TOTPCustody
+	totpCustodyErr           error
+	stepUpForVerification    iamv1.StepUp
+	stepUpStartResult        iamv1.StepUp
+	totpReservations         []TOTPAttempt
+	denyTOTPReservation      bool
+	totpAttemptReads         int
+	settingsLockError        error
+	settingsMutationCalled   bool
+}
+
+func (transaction *coreTransaction) LockAccountSecuritySettings(_ context.Context, caller iamv1.Session) error {
+	if caller.AccountID != transaction.organization.ID || caller.PrincipalID != transaction.principal.ID {
+		return ErrUnauthenticated
+	}
+	return transaction.settingsLockError
+}
+
+func (transaction *coreTransaction) UpdateAccountSecuritySettings(context.Context, SecuritySettingsMutation) (iamv1.UpdateAccountSecuritySettingsResponse, error) {
+	transaction.settingsMutationCalled = true
+	return iamv1.UpdateAccountSecuritySettingsResponse{}, ErrUnavailable
 }
 
 func (tx *coreTransaction) CreateLoginChallenge(context.Context, LoginChallengeCreation) (iamv1.AuthenticationChallenge, error) {
@@ -1646,6 +1852,13 @@ func (transaction *coreTransaction) ReadStepUpForVerification(_ context.Context,
 	return transaction.stepUpForVerification, nil
 }
 
+func (transaction *coreTransaction) StartStepUp(_ context.Context, mutation StepUpStart) (iamv1.StepUp, error) {
+	if mutation.Session.PrincipalID != transaction.principal.ID || mutation.Request.RequestID != transaction.stepUpStartResult.RequestID {
+		return iamv1.StepUp{}, ErrUnavailable
+	}
+	return transaction.stepUpStartResult, nil
+}
+
 func (transaction *coreTransaction) ReserveTOTPAttempt(_ context.Context, attempt TOTPAttempt) (TOTPAttempt, bool, error) {
 	transaction.totpReservations = append(transaction.totpReservations, attempt)
 	attempt.Sequence = uint64(len(transaction.totpReservations))
@@ -1658,11 +1871,18 @@ func (transaction *coreTransaction) ReadTOTPAttempt(context.Context, TOTPAttempt
 }
 
 func (transaction *coreTransaction) ReadLoginAuthenticationState(context.Context, iamv1.AccountID, iamv1.PrincipalID) (LoginAuthenticationState, error) {
+	if transaction.loginAuthenticationState != nil {
+		return *transaction.loginAuthenticationState, nil
+	}
 	return LoginAuthenticationState{State: "NEVER_BOUND", Revision: 1}, nil
 }
 
 func (*coreTransaction) ReadAuthenticatorState(context.Context, iamv1.Session) (iamv1.AuthenticatorState, error) {
 	return iamv1.AuthenticatorState{}, ErrUnavailable
+}
+func (tx *coreTransaction) ReadEnrollmentChallenge(context.Context, AuthenticationChallengeCredential) (EnrollmentChallengeInspection, error) {
+	tx.enrollmentReads++
+	return tx.enrollmentInspection, nil
 }
 func (*coreTransaction) StartTOTPEnrollment(context.Context, TOTPEnrollmentStart) (TOTPEnrollmentStartResult, error) {
 	return TOTPEnrollmentStartResult{}, ErrUnavailable

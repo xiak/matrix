@@ -651,40 +651,14 @@
       },
       "AccountSecuritySettingsChange": {
         "additionalProperties": false,
-        "allOf": [
-          {
-            "if": {
-              "properties": {
-                "callerSessionEnded": {
-                  "const": true
-                }
-              }
-            },
-            "then": {
-              "properties": {
-                "settings": {
-                  "properties": {
-                    "mfa": {
-                      "properties": {
-                        "requiredForUsers": {
-                          "const": true
-                        }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        ],
         "description": "Immutable historical completion. Runtime validation additionally requires settings.resourceVersion == expectedResourceVersion + 1. settings.updatedAt is the original completion time, not observation time; requestId is not lookup authority.",
         "properties": {
           "apiVersion": {
             "const": "iam.matrix.xiak.com/v1"
           },
           "callerSessionEnded": {
-            "description": "Whether this change ended its original calling Session. Never an instruction to end a later reader's current Session.",
-            "type": "boolean"
+            "const": true,
+            "description": "Every settings change invalidates its original calling Session, including weakening the requirement. Never an instruction to end a later reader's current Session."
           },
           "expectedResourceVersion": {
             "maximum": 9007199254740990,
@@ -781,6 +755,7 @@
           "iam.access-key.set-status",
           "iam.access-key.delete",
           "iam.security-settings.read",
+          "iam.security-settings.update",
           "paas.execution-pool.create",
           "paas.execution-pool.read",
           "paas.execution-target.register",
@@ -1497,9 +1472,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -1571,9 +1546,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -1624,9 +1599,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -1677,9 +1652,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -1730,9 +1705,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -1783,9 +1758,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -1836,9 +1811,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -1889,9 +1864,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -1942,9 +1917,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -1995,9 +1970,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -2048,9 +2023,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -2101,9 +2076,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -2154,9 +2129,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -2207,9 +2182,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -2260,9 +2235,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -2313,9 +2288,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -2366,9 +2341,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -2419,9 +2394,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -2472,9 +2447,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -2525,9 +2500,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -2578,9 +2553,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -2631,9 +2606,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -2684,9 +2659,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -2737,9 +2712,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -2790,9 +2765,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -2843,9 +2818,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -2896,9 +2871,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -2949,9 +2924,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -3002,9 +2977,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -3055,9 +3030,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -3108,9 +3083,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -3161,9 +3136,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -3214,9 +3189,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -3267,9 +3242,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -3320,9 +3295,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -3373,9 +3348,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -3426,9 +3401,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -3479,9 +3454,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -3532,9 +3507,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -3585,9 +3560,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -3638,9 +3613,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -3691,9 +3666,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -3744,9 +3719,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -3797,9 +3772,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -3850,9 +3825,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -3903,9 +3878,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -3956,9 +3931,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -4009,9 +3984,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -4062,9 +4037,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -4115,9 +4090,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -4168,9 +4143,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -4221,9 +4196,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -4274,9 +4249,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -4327,9 +4302,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -4380,9 +4355,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -4433,9 +4408,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -4486,9 +4461,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -4539,9 +4514,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -4592,9 +4567,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -4645,9 +4620,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -4698,9 +4673,62 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ACCOUNT"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "accessKeyId": false,
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.security-settings.update"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "product": "iam",
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -7415,9 +7443,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -7479,9 +7507,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -7522,9 +7550,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -7565,9 +7593,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -7608,9 +7636,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -7651,9 +7679,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -7694,9 +7722,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -7737,9 +7765,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -7780,9 +7808,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -7823,9 +7851,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -7866,9 +7894,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -7909,9 +7937,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -7952,9 +7980,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -7995,9 +8023,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8038,9 +8066,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8081,9 +8109,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8124,9 +8152,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8167,9 +8195,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8210,9 +8238,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8253,9 +8281,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8296,9 +8324,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8339,9 +8367,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8382,9 +8410,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8425,9 +8453,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8468,9 +8496,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8511,9 +8539,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8554,9 +8582,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8597,9 +8625,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8640,9 +8668,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8683,9 +8711,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8726,9 +8754,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8769,9 +8797,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8812,9 +8840,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8855,9 +8883,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8898,9 +8926,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8941,9 +8969,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8984,9 +9012,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9027,9 +9055,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9070,9 +9098,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9113,9 +9141,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9156,9 +9184,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9199,9 +9227,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9242,9 +9270,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9285,9 +9313,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9328,9 +9356,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9371,9 +9399,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9414,9 +9442,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9457,9 +9485,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9500,9 +9528,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9543,9 +9571,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9586,9 +9614,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9629,9 +9657,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9672,9 +9700,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9715,9 +9743,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9758,9 +9786,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9801,9 +9829,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9844,9 +9872,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9887,9 +9915,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9930,9 +9958,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9973,9 +10001,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -10016,9 +10044,52 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 6
+                    "revision": 7
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ACCOUNT"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.security-settings.update"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "product": "iam",
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -12950,7 +13021,7 @@
       },
       "EnrollmentChallengeState": {
         "additionalProperties": false,
-        "description": "Purpose-limited first-enrollment observation, not an identity or permission. Runtime validation additionally requires a pending first factor to retain its challenge's exact absolute expiry. Contract only; no runtime route in this slice.",
+        "description": "Purpose-limited first-enrollment observation, not an identity or permission. Runtime validation additionally requires a pending first factor to retain its challenge's exact absolute expiry. PASSWORD_CHANGE cannot expose later contact or factor state.",
         "oneOf": [
           {
             "properties": {
@@ -14607,6 +14678,7 @@
                             "iam.role.update",
                             "iam.security-settings.*",
                             "iam.security-settings.read",
+                            "iam.security-settings.update",
                             "iam.session.*",
                             "iam.session.revoke",
                             "iam.user.*",
@@ -15148,6 +15220,7 @@
                         "iam.role.list",
                         "iam.security-settings.*",
                         "iam.security-settings.read",
+                        "iam.security-settings.update",
                         "iam.user.*",
                         "iam.user.create",
                         "iam.user.list"
@@ -15193,6 +15266,7 @@
                       "iam.role.list",
                       "iam.security-settings.*",
                       "iam.security-settings.read",
+                      "iam.security-settings.update",
                       "iam.user.*",
                       "iam.user.create",
                       "iam.user.list"
@@ -17609,6 +17683,33 @@
                 "actions": {
                   "contains": {
                     "enum": [
+                      "iam.security-settings.update",
+                      "iam.security-settings.*"
+                    ]
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "ACCOUNT"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "enum": [
                       "paas.execution-pool.create"
                     ]
                   }
@@ -19843,6 +19944,7 @@
                 "iam.access-key.set-status",
                 "iam.access-key.delete",
                 "iam.security-settings.read",
+                "iam.security-settings.update",
                 "paas.execution-pool.create",
                 "paas.execution-pool.read",
                 "paas.execution-target.register",
@@ -21843,7 +21945,7 @@
       },
       "SecuritySettingsUpdateIntent": {
         "additionalProperties": false,
-        "description": "Exact non-secret target for a future Session-held operation proof. Not a selector or permit; current StepUp operations do not yet accept it.",
+        "description": "Exact non-secret settings value and expected version for a Session-held SECURITY_SETTINGS_UPDATE proof. Not a selector or permit; cannot be attached to other operations.",
         "properties": {
           "expectedResourceVersion": {
             "maximum": 9007199254740990,
@@ -22421,6 +22523,33 @@
       },
       "StartStepUpRequest": {
         "additionalProperties": false,
+        "allOf": [
+          {
+            "oneOf": [
+              {
+                "properties": {
+                  "operation": {
+                    "const": "RECOVERY_CODES_REGENERATE"
+                  },
+                  "securitySettings": false
+                }
+              },
+              {
+                "properties": {
+                  "operation": {
+                    "const": "SECURITY_SETTINGS_UPDATE"
+                  },
+                  "securitySettings": {
+                    "$ref": "#/components/schemas/SecuritySettingsUpdateIntent"
+                  }
+                },
+                "required": [
+                  "securitySettings"
+                ]
+              }
+            ]
+          }
+        ],
         "properties": {
           "expectedFactorRevision": {
             "maximum": 9007199254740991,
@@ -22428,10 +22557,16 @@
             "type": "integer"
           },
           "operation": {
-            "const": "RECOVERY_CODES_REGENERATE"
+            "enum": [
+              "RECOVERY_CODES_REGENERATE",
+              "SECURITY_SETTINGS_UPDATE"
+            ]
           },
           "requestId": {
             "$ref": "#/components/schemas/ID"
+          },
+          "securitySettings": {
+            "$ref": "#/components/schemas/SecuritySettingsUpdateIntent"
           }
         },
         "required": [
@@ -22518,6 +22653,33 @@
       },
       "StepUp": {
         "additionalProperties": false,
+        "allOf": [
+          {
+            "oneOf": [
+              {
+                "properties": {
+                  "operation": {
+                    "const": "RECOVERY_CODES_REGENERATE"
+                  },
+                  "securitySettings": false
+                }
+              },
+              {
+                "properties": {
+                  "operation": {
+                    "const": "SECURITY_SETTINGS_UPDATE"
+                  },
+                  "securitySettings": {
+                    "$ref": "#/components/schemas/SecuritySettingsUpdateIntent"
+                  }
+                },
+                "required": [
+                  "securitySettings"
+                ]
+              }
+            ]
+          }
+        ],
         "description": "Non-secret metadata bound to one operation and its original effective login Session. It is not a bearer, unlogged challenge or authorization permit. Runtime validation enforces the original 120-second lifetime and proof/consumption ordering; proving never extends expiry.",
         "oneOf": [
           {
@@ -22597,13 +22759,19 @@
             "type": "string"
           },
           "operation": {
-            "const": "RECOVERY_CODES_REGENERATE"
+            "enum": [
+              "RECOVERY_CODES_REGENERATE",
+              "SECURITY_SETTINGS_UPDATE"
+            ]
           },
           "provedAt": {
             "$ref": "#/components/schemas/Timestamp"
           },
           "requestId": {
             "$ref": "#/components/schemas/ID"
+          },
+          "securitySettings": {
+            "$ref": "#/components/schemas/SecuritySettingsUpdateIntent"
           },
           "state": {
             "enum": [
@@ -22853,7 +23021,7 @@
       },
       "UpdateAccountSecuritySettingsRequest": {
         "additionalProperties": false,
-        "description": "Replace the supported MFA configuration at one expected version using a proof held by the actual current Session. No identity selector, arbitrary patch or caller-controlled Session retention. Contract only; no runtime route in this slice.",
+        "description": "Replace the supported MFA configuration at one expected version using a proof held by the actual current Session and current instance permission. No identity selector, arbitrary patch or caller-controlled Session retention.",
         "properties": {
           "expectedResourceVersion": {
             "maximum": 9007199254740990,
@@ -23371,6 +23539,102 @@
           }
         },
         "summary": "Read authenticated Account security settings using the current instance permission"
+      },
+      "put": {
+        "operationId": "updateAccountSecuritySettings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAccountSecuritySettingsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateAccountSecuritySettingsResponse"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Consume the exact settings StepUp and current permission; atomically update configuration, completion and Audit; all existing Sessions must reauthenticate"
+      }
+    },
+    "/v1/account/security-settings/changes/{requestId}": {
+      "get": {
+        "operationId": "getSecuritySettingsChange",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "requestId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountSecuritySettingsChange"
+                }
+              }
+            },
+            "description": "Current authority state."
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Read an original same-USER completion under current Account read permission after normal login; never reexecute an unknown command"
       }
     },
     "/v1/account:alias": {
@@ -23848,6 +24112,242 @@
         "summary": "Read this actual login USER's persisted factor state; no inferred settings or permissions"
       }
     },
+    "/v1/auth/challenges/{challengeId}/notification-contact/verifications": {
+      "post": {
+        "operationId": "startChallengeNotificationVerification",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "challengeId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartChallengeNotificationContactVerificationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationContactVerification"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [],
+        "summary": "Verify only the first contact during initial ENROLLMENT; cannot replace a verified address or extend the challenge"
+      }
+    },
+    "/v1/auth/challenges/{challengeId}/notification-contact/verifications/{verificationId}:confirm": {
+      "post": {
+        "operationId": "confirmChallengeNotificationContact",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "challengeId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "verificationId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmChallengeNotificationContactVerificationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationContactVerification"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The authenticated contact verification cannot reserve another attempt within its bounded shared budget.",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "const": "1",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [],
+        "summary": "Consume the original contact-possession code within its initial-enrollment challenge; no session or MFA bypass"
+      }
+    },
+    "/v1/auth/challenges/{challengeId}:confirm-enrollment": {
+      "post": {
+        "operationId": "confirmChallengeTOTPEnrollment",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "challengeId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyAuthenticationChallengeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfirmTOTPEnrollmentResponse"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [],
+        "summary": "Consume the original first-enrollment challenge and fresh OTP atomically; return recovery codes once, never a session"
+      }
+    },
     "/v1/auth/challenges/{challengeId}:confirm-recovery": {
       "post": {
         "operationId": "confirmAuthenticatorRecovery",
@@ -23915,6 +24415,144 @@
         },
         "security": [],
         "summary": "Consume only a RECOVERY/ENROLLMENT challenge and new-factor TOTP; replace the entire recovery-code batch and require a fresh login"
+      }
+    },
+    "/v1/auth/challenges/{challengeId}:enroll": {
+      "post": {
+        "operationId": "startChallengeTOTPEnrollment",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "challengeId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartChallengeTOTPEnrollmentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartTOTPEnrollmentResponse"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [],
+        "summary": "Begin the first TOTP factor with a current ENROLLMENT challenge and original verified contact; only APPLIED discloses provisioning"
+      }
+    },
+    "/v1/auth/challenges/{challengeId}:enrollment-state": {
+      "post": {
+        "operationId": "inspectEnrollmentChallenge",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "challengeId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InspectEnrollmentChallengeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnrollmentChallengeState"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [],
+        "summary": "Read only the current initial-enrollment stage; PASSWORD_CHANGE exposes neither contact nor factor"
       }
     },
     "/v1/auth/challenges/{challengeId}:password": {
@@ -24001,7 +24639,7 @@
           }
         },
         "security": [],
-        "summary": "Consume only a password-and-TOTP authenticated forced-change challenge; revoke all old sessions and challenges, then require a fresh login"
+        "summary": "Consume the exact forced-change stage: TOTP-proved LOGIN or password-proved initial ENROLLMENT; revoke all old sessions and challenges, then require a fresh login"
       }
     },
     "/v1/auth/challenges/{challengeId}:recover": {
@@ -24555,6 +25193,24 @@
           },
           "422": {
             "$ref": "#/components/responses/ProblemResponse"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The authenticated contact verification cannot reserve another attempt within its bounded shared budget.",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "const": "1",
+                  "type": "string"
+                }
+              }
+            }
           },
           "500": {
             "$ref": "#/components/responses/ProblemResponse"

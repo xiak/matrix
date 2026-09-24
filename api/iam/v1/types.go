@@ -165,8 +165,9 @@ type VerifyAuthenticationChallengeRequest struct {
 	Code                Secret `json:"code"`
 }
 
-// ChallengePasswordChangeRequest consumes only a password-change challenge
-// reached through the actual password and TOTP ceremony, never a Session.
+// ChallengePasswordChangeRequest consumes only a PASSWORD_CHANGE challenge:
+// LOGIN has already proved TOTP; ENROLLMENT has proved the initial password
+// under a required first-factor setup. Neither ceremony is a Session.
 type ChallengePasswordChangeRequest struct {
 	RequestID           string `json:"requestId"`
 	ChallengeCredential Secret `json:"challengeCredential"`
@@ -234,9 +235,8 @@ type AccountSecuritySettings struct {
 	UpdatedAt       time.Time          `json:"updatedAt"`
 }
 
-// SecuritySettingsUpdateIntent is the exact nonsecret target of a future
+// SecuritySettingsUpdateIntent is the exact nonsecret target of a settings
 // operation-bound proof. It is not a policy, identity selector or permit.
-// The current StepUp routes do not yet accept this operation.
 type SecuritySettingsUpdateIntent struct {
 	ExpectedResourceVersion uint64             `json:"expectedResourceVersion"`
 	MFA                     AccountMFASettings `json:"mfa"`
@@ -360,29 +360,34 @@ type ConfirmAuthenticatorRecoveryResponse struct {
 
 type StepUpOperation string
 
-const StepUpRegenerateRecoveryCodes StepUpOperation = "RECOVERY_CODES_REGENERATE"
+const (
+	StepUpRegenerateRecoveryCodes StepUpOperation = "RECOVERY_CODES_REGENERATE"
+	StepUpUpdateSecuritySettings  StepUpOperation = "SECURITY_SETTINGS_UPDATE"
+)
 
 // StepUp is non-secret metadata for one operation bound to its original login
 // Session. Neither its ID nor PROVED state is a bearer or a permission decision.
 type StepUp struct {
-	APIVersion             string          `json:"apiVersion"`
-	Kind                   string          `json:"kind"`
-	ID                     string          `json:"id"`
-	RequestID              string          `json:"requestId"`
-	Operation              StepUpOperation `json:"operation"`
-	ExpectedFactorRevision uint64          `json:"expectedFactorRevision"`
-	State                  string          `json:"state"`
-	CreatedAt              time.Time       `json:"createdAt"`
-	ExpiresAt              time.Time       `json:"expiresAt"`
-	ProvedAt               *time.Time      `json:"provedAt,omitempty"`
-	ConsumedAt             *time.Time      `json:"consumedAt,omitempty"`
+	APIVersion             string                        `json:"apiVersion"`
+	Kind                   string                        `json:"kind"`
+	ID                     string                        `json:"id"`
+	RequestID              string                        `json:"requestId"`
+	Operation              StepUpOperation               `json:"operation"`
+	ExpectedFactorRevision uint64                        `json:"expectedFactorRevision"`
+	SecuritySettings       *SecuritySettingsUpdateIntent `json:"securitySettings,omitempty"`
+	State                  string                        `json:"state"`
+	CreatedAt              time.Time                     `json:"createdAt"`
+	ExpiresAt              time.Time                     `json:"expiresAt"`
+	ProvedAt               *time.Time                    `json:"provedAt,omitempty"`
+	ConsumedAt             *time.Time                    `json:"consumedAt,omitempty"`
 }
 
 // RequestID is the intended sensitive command's identity, not a target selector.
 type StartStepUpRequest struct {
-	RequestID              string          `json:"requestId"`
-	Operation              StepUpOperation `json:"operation"`
-	ExpectedFactorRevision uint64          `json:"expectedFactorRevision"`
+	RequestID              string                        `json:"requestId"`
+	Operation              StepUpOperation               `json:"operation"`
+	ExpectedFactorRevision uint64                        `json:"expectedFactorRevision"`
+	SecuritySettings       *SecuritySettingsUpdateIntent `json:"securitySettings,omitempty"`
 }
 
 // The original login bearer is still required; this request cannot authenticate

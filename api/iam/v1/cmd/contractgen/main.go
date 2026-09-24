@@ -71,7 +71,9 @@ func buildPaths() object {
 	return object{
 		"/v1/account/security-settings": object{
 			"get": readOperation("readAccountSecuritySettings", "Read authenticated Account security settings using the current instance permission", "AccountSecuritySettings", nil, nil),
+			"put": mutationOperation("updateAccountSecuritySettings", "Consume the exact settings StepUp and current permission; atomically update configuration, completion and Audit; all existing Sessions must reauthenticate", "UpdateAccountSecuritySettingsRequest", "UpdateAccountSecuritySettingsResponse", "200", nil, nil),
 		},
+		"/v1/account/security-settings/changes/{requestId}": object{"get": readOperation("getSecuritySettingsChange", "Read an original same-USER completion under current Account read permission after normal login; never reexecute an unknown command", "AccountSecuritySettingsChange", nil, []any{openapi31.PathIDParameter("requestId")})},
 		"/v1/roles": object{
 			"get":  readOperation("listRoles", "List current-account roles and exact resource capabilities", "RoleList", nil, accountPageParameters()),
 			"post": mutationOperation("createRole", "Create a customer role without credentials or permission attachments", "CreateRoleRequest", "Role", "201", nil, nil),
@@ -146,7 +148,7 @@ func buildPaths() object {
 			"verifyAuthenticationChallenge", "Consume the current login challenge and a fresh TOTP; its secret is not a bearer or permission", "VerifyAuthenticationChallengeRequest", "LoginResponse", "200", []any{}, []any{openapi31.PathIDParameter("challengeId")},
 		)},
 		"/v1/auth/challenges/{challengeId}:password": object{"post": mutationOperation(
-			"changeChallengePassword", "Consume only a password-and-TOTP authenticated forced-change challenge; revoke all old sessions and challenges, then require a fresh login", "ChallengePasswordChangeRequest", "ChallengePasswordChangeResponse", "200", []any{}, []any{openapi31.PathIDParameter("challengeId")},
+			"changeChallengePassword", "Consume the exact forced-change stage: TOTP-proved LOGIN or password-proved initial ENROLLMENT; revoke all old sessions and challenges, then require a fresh login", "ChallengePasswordChangeRequest", "ChallengePasswordChangeResponse", "200", []any{}, []any{openapi31.PathIDParameter("challengeId")},
 		)},
 		"/v1/auth/challenges/{challengeId}:recover": object{"post": mutationOperation(
 			"startAuthenticatorRecovery", "Consume one original recovery code under a current password-authenticated LOGIN challenge; revoke the lost factor and old sessions, issue only one-time rebinding material", "StartAuthenticatorRecoveryRequest", "StartAuthenticatorRecoveryResponse", "200", []any{}, []any{openapi31.PathIDParameter("challengeId")},
@@ -156,6 +158,21 @@ func buildPaths() object {
 		)},
 		"/v1/auth/challenges/{challengeId}:recovery-result": object{"post": mutationOperation(
 			"inspectAuthenticatorRecovery", "Read only same-user recovery metadata using a fresh current LOGIN challenge; no secret replay or automatic new intent", "InspectAuthenticatorRecoveryRequest", "AuthenticatorRecovery", "200", []any{}, []any{openapi31.PathIDParameter("challengeId")},
+		)},
+		"/v1/auth/challenges/{challengeId}:enrollment-state": object{"post": mutationOperation(
+			"inspectEnrollmentChallenge", "Read only the current initial-enrollment stage; PASSWORD_CHANGE exposes neither contact nor factor", "InspectEnrollmentChallengeRequest", "EnrollmentChallengeState", "200", []any{}, []any{openapi31.PathIDParameter("challengeId")},
+		)},
+		"/v1/auth/challenges/{challengeId}:enroll": object{"post": mutationOperation(
+			"startChallengeTOTPEnrollment", "Begin the first TOTP factor with a current ENROLLMENT challenge and original verified contact; only APPLIED discloses provisioning", "StartChallengeTOTPEnrollmentRequest", "StartTOTPEnrollmentResponse", "200", []any{}, []any{openapi31.PathIDParameter("challengeId")},
+		)},
+		"/v1/auth/challenges/{challengeId}:confirm-enrollment": object{"post": mutationOperation(
+			"confirmChallengeTOTPEnrollment", "Consume the original first-enrollment challenge and fresh OTP atomically; return recovery codes once, never a session", "VerifyAuthenticationChallengeRequest", "ConfirmTOTPEnrollmentResponse", "200", []any{}, []any{openapi31.PathIDParameter("challengeId")},
+		)},
+		"/v1/auth/challenges/{challengeId}/notification-contact/verifications": object{"post": mutationOperation(
+			"startChallengeNotificationVerification", "Verify only the first contact during initial ENROLLMENT; cannot replace a verified address or extend the challenge", "StartChallengeNotificationContactVerificationRequest", "NotificationContactVerification", "200", []any{}, []any{openapi31.PathIDParameter("challengeId")},
+		)},
+		"/v1/auth/challenges/{challengeId}/notification-contact/verifications/{verificationId}:confirm": object{"post": mutationOperation(
+			"confirmChallengeNotificationContact", "Consume the original contact-possession code within its initial-enrollment challenge; no session or MFA bypass", "ConfirmChallengeNotificationContactVerificationRequest", "NotificationContactVerification", "200", []any{}, []any{openapi31.PathIDParameter("challengeId"), openapi31.PathIDParameter("verificationId")},
 		)},
 		"/v1/auth/authenticators":   object{"get": readOperation("getAuthenticatorState", "Read this actual login USER's persisted factor state; no inferred settings or permissions", "AuthenticatorState", nil, nil)},
 		"/v1/auth/totp/enrollments": object{"post": mutationOperation("startTOTPEnrollment", "Reauthenticate the current password and start first TOTP enrollment; only APPLIED discloses provisioning", "StartTOTPEnrollmentRequest", "StartTOTPEnrollmentResponse", "200", nil, nil)},
@@ -308,6 +325,13 @@ func mutationOperation(
 	}
 	if operationID == "createAccessKey" {
 		responses["200"] = openapi31.JSONResponse("Original nonsecret completion; no secret is reissued.", responseSchema)
+	}
+	if operationID == "confirmNotificationContact" || operationID == "confirmChallengeNotificationContact" {
+		responses["429"] = object{
+			"description": "The authenticated contact verification cannot reserve another attempt within its bounded shared budget.",
+			"headers":     object{"Retry-After": object{"schema": object{"type": "string", "const": "1"}}},
+			"content":     object{"application/problem+json": object{"schema": openapi31.Ref("Problem")}},
+		}
 	}
 	if operationID == "verifyStepUp" || operationID == "regenerateRecoveryCodes" {
 		responses["404"] = openapi31.ProblemResponses("404")["404"]
@@ -644,7 +668,7 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 		return object{"enum": []string{"STARTED", "COMPLETED", "SUPERSEDED", "EXPIRED"}}
 	}
 	if (owner == "StepUp" || owner == "StartStepUpRequest") && jsonName == "operation" {
-		return object{"const": string(iamv1.StepUpRegenerateRecoveryCodes)}
+		return object{"enum": []string{string(iamv1.StepUpRegenerateRecoveryCodes), string(iamv1.StepUpUpdateSecuritySettings)}}
 	}
 	if owner == "StepUp" && jsonName == "state" {
 		return object{"enum": []string{"PENDING", "PROVED", "CONSUMED", "EXPIRED"}}
@@ -993,16 +1017,18 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 func applySemanticOverlays(schemas object) {
 	schemas["AccountMFASettings"].(object)["description"] = "Explicit ordinary USER MFA requirement, not factor state, Session authentication facts or an exception for protected identities. Missing or null is invalid, never an inferred false."
 	schemas["AccountSecuritySettings"].(object)["description"] = "Non-secret current-account configuration returned only under a current instance-scoped read decision. Neither factor state nor Session authentication facts."
-	schemas["SecuritySettingsUpdateIntent"].(object)["description"] = "Exact non-secret target for a future Session-held operation proof. Not a selector or permit; current StepUp operations do not yet accept it."
-	schemas["UpdateAccountSecuritySettingsRequest"].(object)["description"] = "Replace the supported MFA configuration at one expected version using a proof held by the actual current Session. No identity selector, arbitrary patch or caller-controlled Session retention. Contract only; no runtime route in this slice."
+	schemas["SecuritySettingsUpdateIntent"].(object)["description"] = "Exact non-secret settings value and expected version for a Session-held SECURITY_SETTINGS_UPDATE proof. Not a selector or permit; cannot be attached to other operations."
+	schemas["UpdateAccountSecuritySettingsRequest"].(object)["description"] = "Replace the supported MFA configuration at one expected version using a proof held by the actual current Session and current instance permission. No identity selector, arbitrary patch or caller-controlled Session retention."
 	schemas["AccountSecuritySettingsChange"].(object)["description"] = "Immutable historical completion. Runtime validation additionally requires settings.resourceVersion == expectedResourceVersion + 1. settings.updatedAt is the original completion time, not observation time; requestId is not lookup authority."
-	schemas["AccountSecuritySettingsChange"].(object)["properties"].(object)["callerSessionEnded"] = object{"type": "boolean", "description": "Whether this change ended its original calling Session. Never an instruction to end a later reader's current Session."}
-	schemas["AccountSecuritySettingsChange"].(object)["allOf"] = []any{object{
-		"if":   object{"properties": object{"callerSessionEnded": object{"const": true}}},
-		"then": object{"properties": object{"settings": object{"properties": object{"mfa": object{"properties": object{"requiredForUsers": object{"const": true}}}}}}},
-	}}
+	schemas["AccountSecuritySettingsChange"].(object)["properties"].(object)["callerSessionEnded"] = object{"const": true, "description": "Every settings change invalidates its original calling Session, including weakening the requirement. Never an instruction to end a later reader's current Session."}
 	schemas["UpdateAccountSecuritySettingsResponse"].(object)["description"] = "APPLIED and EQUAL_REPLAY carry the same original non-secret completion, not fresh authorization, current Session state or a credential."
 	schemas["StepUp"].(object)["description"] = "Non-secret metadata bound to one operation and its original effective login Session. It is not a bearer, unlogged challenge or authorization permit. Runtime validation enforces the original 120-second lifetime and proof/consumption ordering; proving never extends expiry."
+	for _, name := range []string{"StepUp", "StartStepUpRequest"} {
+		schemas[name].(object)["allOf"] = []any{object{"oneOf": []any{
+			object{"properties": object{"operation": object{"const": string(iamv1.StepUpRegenerateRecoveryCodes)}, "securitySettings": false}},
+			object{"required": []string{"securitySettings"}, "properties": object{"operation": object{"const": string(iamv1.StepUpUpdateSecuritySettings)}, "securitySettings": openapi31.Ref("SecuritySettingsUpdateIntent")}},
+		}}}
+	}
 	schemas["StepUp"].(object)["oneOf"] = []any{
 		object{"properties": object{"state": object{"const": "PENDING"}, "provedAt": false, "consumedAt": false}},
 		object{"required": []string{"provedAt"}, "properties": object{"state": object{"const": "PROVED"}, "provedAt": object{"type": "string"}, "consumedAt": false}},
@@ -1019,7 +1045,7 @@ func applySemanticOverlays(schemas object) {
 		object{"properties": object{"purpose": object{"const": "RECOVERY"}, "nextStep": object{"const": "ENROLLMENT"}}},
 		object{"properties": object{"purpose": object{"const": "ENROLLMENT"}, "nextStep": object{"enum": []string{"PASSWORD_CHANGE", "ENROLLMENT"}}}},
 	}
-	schemas["EnrollmentChallengeState"].(object)["description"] = "Purpose-limited first-enrollment observation, not an identity or permission. Runtime validation additionally requires a pending first factor to retain its challenge's exact absolute expiry. Contract only; no runtime route in this slice."
+	schemas["EnrollmentChallengeState"].(object)["description"] = "Purpose-limited first-enrollment observation, not an identity or permission. Runtime validation additionally requires a pending first factor to retain its challenge's exact absolute expiry. PASSWORD_CHANGE cannot expose later contact or factor state."
 	schemas["EnrollmentChallengeState"].(object)["properties"].(object)["challenge"] = object{"allOf": []any{openapi31.Ref("AuthenticationChallenge"), object{"properties": object{"purpose": object{"const": "ENROLLMENT"}}}}}
 	schemas["EnrollmentChallengeState"].(object)["oneOf"] = []any{
 		object{"properties": object{"challenge": object{"properties": object{"nextStep": object{"const": "PASSWORD_CHANGE"}}}, "notificationContact": false, "enrollment": false}},

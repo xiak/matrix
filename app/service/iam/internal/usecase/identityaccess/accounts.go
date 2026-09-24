@@ -3,6 +3,7 @@ package identityaccess
 import (
 	"cmp"
 	"context"
+	"errors"
 	"slices"
 	"strconv"
 	"time"
@@ -11,6 +12,15 @@ import (
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/app/service/iam/internal/authority"
 )
+
+var ErrSecuritySettingsChangeNotFound = errors.New("security settings change was not found")
+
+type SecuritySettingsMutation struct {
+	Session    iamv1.Session
+	DecisionID iamv1.DecisionID
+	Request    iamv1.UpdateAccountSecuritySettingsRequest
+	AuditEvent auditv1.Event
+}
 
 func (service *Authority) CurrentIdentity(ctx context.Context, credential iamv1.Secret) (iamv1.CurrentIdentity, error) {
 	var result iamv1.CurrentIdentity
@@ -347,6 +357,88 @@ func (service *Authority) AccountSecuritySettings(ctx context.Context, credentia
 			}
 			if iamv1.ValidateAccountSecuritySettings(result) != nil || result.AccountID != subject.Subject.Organization.ID || result.UpdatedAt.After(now) {
 				return iamv1.AccountSecuritySettings{}, ErrUnavailable
+			}
+			return result, nil
+		})
+}
+
+func (service *Authority) UpdateAccountSecuritySettings(ctx context.Context, credential iamv1.Secret, request iamv1.UpdateAccountSecuritySettingsRequest) (iamv1.UpdateAccountSecuritySettingsResponse, error) {
+	if iamv1.ValidateUpdateAccountSecuritySettingsRequest(request) != nil {
+		return iamv1.UpdateAccountSecuritySettingsResponse{}, ErrInvalidArgument
+	}
+	digest, err := digestSanitized("security-settings-update", request)
+	if err != nil {
+		return iamv1.UpdateAccountSecuritySettingsResponse{}, err
+	}
+	var result iamv1.UpdateAccountSecuritySettingsResponse
+	denied := false
+	err = service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
+		denied, result = false, iamv1.UpdateAccountSecuritySettingsResponse{}
+		now, err := transactionTime(ctx, tx)
+		if err != nil {
+			return err
+		}
+		subject, err := service.authenticateSession(ctx, tx, credential, now)
+		if err != nil {
+			return err
+		}
+		// Lookup derives the Account, but does not grant authority. Take its
+		// exclusive mutation lock before the USER/policy locks in the decision;
+		// the database rechecks this same Session under that lock.
+		if err := tx.LockAccountSecuritySettings(ctx, subject.Subject.Session); err != nil {
+			return err
+		}
+		decision, err := service.managementDecision(ctx, tx, subject, iamv1.ActionIAMSecuritySettingsUpdate,
+			iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: string(subject.Subject.Organization.ID)},
+			iamv1.AuthorizationResourceInstance, "", request.RequestID, now)
+		if err != nil {
+			return err
+		}
+		if !decision.Allowed {
+			denied = true
+			return nil
+		}
+		event, err := service.newManagementEvent(subject, auditv1.ActionIAMSecuritySettingsUpdated, auditv1.TargetAccount,
+			string(subject.Subject.Organization.ID), decision.ID, digest, request.RequestID, now)
+		if err != nil {
+			return err
+		}
+		result, err = tx.UpdateAccountSecuritySettings(ctx, SecuritySettingsMutation{Session: subject.Subject.Session, DecisionID: decision.ID, Request: request, AuditEvent: event})
+		if err != nil {
+			return err
+		}
+		if iamv1.ValidateUpdateAccountSecuritySettingsResponse(result) != nil || result.Change.RequestID != request.RequestID ||
+			result.Change.ExpectedResourceVersion != request.ExpectedResourceVersion || result.Change.Settings.AccountID != subject.Subject.Organization.ID ||
+			result.Change.Settings.MFA != request.MFA || result.Change.Settings.UpdatedAt.After(now) ||
+			(result.Outcome == "APPLIED" && !result.Change.Settings.UpdatedAt.Equal(now)) {
+			return ErrUnavailable
+		}
+		return nil
+	})
+	if err != nil {
+		return iamv1.UpdateAccountSecuritySettingsResponse{}, err
+	}
+	if denied {
+		return iamv1.UpdateAccountSecuritySettingsResponse{}, ErrForbidden
+	}
+	return result, nil
+}
+
+func (service *Authority) SecuritySettingsChange(ctx context.Context, credential iamv1.Secret, commandID, requestID string) (iamv1.AccountSecuritySettingsChange, error) {
+	if iamv1.ValidateID("commandId", commandID) != nil || iamv1.ValidateID("requestId", requestID) != nil {
+		return iamv1.AccountSecuritySettingsChange{}, ErrInvalidArgument
+	}
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMSecuritySettingsRead, iamv1.AuthorizationResourceInstance, "",
+		iamv1.ResourceReference{Kind: iamv1.ResourceAccount}, requestID,
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.AccountSecuritySettingsChange, error) {
+			result, err := tx.ReadSecuritySettingsChange(ctx, AccountRead{AccountID: subject.Subject.Organization.ID,
+				ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID}, commandID)
+			if err != nil {
+				return iamv1.AccountSecuritySettingsChange{}, err
+			}
+			if iamv1.ValidateAccountSecuritySettingsChange(result) != nil || result.RequestID != commandID ||
+				result.Settings.AccountID != subject.Subject.Organization.ID || result.Settings.UpdatedAt.After(now) {
+				return iamv1.AccountSecuritySettingsChange{}, ErrUnavailable
 			}
 			return result, nil
 		})

@@ -357,6 +357,198 @@ func TestIAMHTTPChallengePasswordRejectsAmbiguousCarriers(t *testing.T) {
 	}
 }
 
+func TestIAMHTTPInitialEnrollmentKeepsOneCredentialAndOriginalIntent(t *testing.T) {
+	const base = "/v1/auth/challenges/initial-one"
+	const credential = `"challengeCredential":"synthetic-initial-secret"`
+	for _, command := range []struct{ name, path, body, requestID, verificationID string }{
+		{"inspect", base + ":enrollment-state", `{` + credential + `}`, "", ""},
+		{"start-factor", base + ":enroll", `{` + credential + `,"requestId":"first-factor"}`, "first-factor", ""},
+		{"confirm-factor", base + ":confirm-enrollment", `{` + credential + `,"requestId":"confirm-factor","code":"not-an-otp"}`, "confirm-factor", ""},
+		{"start-contact", base + "/notification-contact/verifications", `{` + credential + `,"requestId":"first-contact","email":"first@example.invalid"}`, "first-contact", ""},
+		{"confirm-contact", base + "/notification-contact/verifications/contact-one:confirm", `{` + credential + `,"requestId":"confirm-contact","code":"00123456"}`, "confirm-contact", "contact-one"},
+	} {
+		t.Run(command.name, func(t *testing.T) {
+			for _, sample := range []struct {
+				name, method, path, body, header, media string
+				status                                  int
+			}{
+				{"valid", http.MethodPost, command.path, command.body, "", "application/json", 503},
+				{"wrong-method", http.MethodGet, command.path, command.body, "", "application/json", 405},
+				{"query-selector", http.MethodPost, command.path + "?accountId=other", command.body, "", "application/json", 400},
+				{"bearer", http.MethodPost, command.path, command.body, "Authorization", "application/json", 400},
+				{"internal-subject", http.MethodPost, command.path, command.body, "Matrix-Subject-Credential", "application/json", 400},
+				{"null-secret", http.MethodPost, command.path, strings.Replace(command.body, `"synthetic-initial-secret"`, "null", 1), "", "application/json", 400},
+				{"duplicate-secret", http.MethodPost, command.path, strings.TrimSuffix(command.body, "}") + `,` + credential + `}`, "", "application/json", 400},
+				{"account-selector", http.MethodPost, command.path, strings.TrimSuffix(command.body, "}") + `,"accountId":"other"}`, "", "application/json", 400},
+				{"fake-session", http.MethodPost, command.path, strings.TrimSuffix(command.body, "}") + `,"sessionId":"other"}`, "", "application/json", 400},
+				{"fake-phase", http.MethodPost, command.path, strings.TrimSuffix(command.body, "}") + `,"nextStep":"ENROLLMENT"}`, "", "application/json", 400},
+				{"malformed-id", http.MethodPost, strings.Replace(command.path, "initial-one", "invalid%20challenge", 1), command.body, "", "application/json", 404},
+				{"wrong-media", http.MethodPost, command.path, command.body, "", "text/plain", 415},
+				{"empty-json", http.MethodPost, command.path, `{}`, "", "application/json", 400},
+			} {
+				t.Run(sample.name, func(t *testing.T) {
+					workflow := newHTTPWorkflow(t)
+					workflow.enrollmentErr = identityaccess.ErrUnavailable
+					endpoint := newTestHandler(t, workflow)
+					request := httptest.NewRequest(sample.method, sample.path, strings.NewReader(sample.body))
+					request.Header.Set("Content-Type", sample.media)
+					if sample.header != "" {
+						request.Header.Set(sample.header, "synthetic-second-identity")
+					}
+					response := httptest.NewRecorder()
+					endpoint.ServeHTTP(response, request)
+					if response.Code != sample.status || response.Header().Get("Cache-Control") != "no-store" {
+						t.Fatal("restricted enrollment transport differs", response.Code, sample.status)
+					}
+					if (workflow.enrollmentCalls == 1) != (sample.status == 503) || workflow.loginCalls != 0 || workflow.totpCalls != 0 {
+						t.Fatal("invalid carrier reached workflow or selected ordinary login/enrollment")
+					}
+					if sample.status == 503 && (workflow.verifiedChallengeID != "initial-one" || !workflow.enrollmentCredential.Present() ||
+						workflow.enrollmentRequestID != command.requestID || workflow.enrollmentVerificationID != command.verificationID) {
+						t.Fatal("challenge or original nested intent changed during dispatch")
+					}
+					for _, secret := range []string{"synthetic-initial-secret", "synthetic-second-identity", "not-an-otp", "00123456"} {
+						if strings.Contains(response.Body.String(), secret) {
+							t.Fatal("problem disclosed authentication input")
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
+func TestIAMHTTPInitialEnrollmentProjectionDoesNotPromotePasswordStage(t *testing.T) {
+	now := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+	challenge := iamv1.AuthenticationChallenge{APIVersion: iamv1.APIVersion, Kind: "AuthenticationChallenge", ID: "initial-one", Purpose: "ENROLLMENT", NextStep: "PASSWORD_CHANGE", ExpiresAt: now.Add(5 * time.Minute)}
+	for _, sample := range []struct {
+		name   string
+		change func(*iamv1.EnrollmentChallengeState)
+		status int
+	}{
+		{"password-only", func(*iamv1.EnrollmentChallengeState) {}, 200},
+		{"enrollment-contact", func(v *iamv1.EnrollmentChallengeState) {
+			v.Challenge.NextStep = "ENROLLMENT"
+			v.NotificationContact = &iamv1.NotificationContact{APIVersion: iamv1.APIVersion, Kind: "NotificationContact", AccountID: "account-a", UserID: "user-a", State: "NONE"}
+		}, 200},
+		{"wrong-challenge", func(v *iamv1.EnrollmentChallengeState) { v.Challenge.ID = "other" }, 503},
+		{"wrong-purpose", func(v *iamv1.EnrollmentChallengeState) { v.Challenge.Purpose = "LOGIN" }, 503},
+		{"contact-before-password", func(v *iamv1.EnrollmentChallengeState) {
+			v.NotificationContact = &iamv1.NotificationContact{APIVersion: iamv1.APIVersion, Kind: "NotificationContact", AccountID: "account-a", UserID: "user-a", State: "NONE"}
+		}, 503},
+		{"missing-enrollment-state", func(v *iamv1.EnrollmentChallengeState) { v.Challenge.NextStep = "ENROLLMENT" }, 503},
+	} {
+		t.Run(sample.name, func(t *testing.T) {
+			workflow := newHTTPWorkflow(t)
+			workflow.enrollmentState = iamv1.EnrollmentChallengeState{Challenge: challenge}
+			sample.change(&workflow.enrollmentState)
+			request := httptest.NewRequest(http.MethodPost, "/v1/auth/challenges/initial-one:enrollment-state", strings.NewReader(`{"challengeCredential":"synthetic-initial-secret"}`))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+			newTestHandler(t, workflow).ServeHTTP(response, request)
+			if response.Code != sample.status {
+				t.Fatal("challenge projection escaped closed response", response.Code)
+			}
+			var body map[string]json.RawMessage
+			if json.Unmarshal(response.Body.Bytes(), &body) != nil {
+				t.Fatal("invalid response")
+			}
+			for _, field := range []string{"credential", "challengeCredential", "session", "mustChangePassword", "provisioning", "recoveryCodes"} {
+				if _, present := body[field]; present {
+					t.Fatal("observation disclosed authentication material or a partial session")
+				}
+			}
+			if sample.name == "password-only" && (body["notificationContact"] != nil || body["enrollment"] != nil) {
+				t.Fatal("password phase exposed its successor state")
+			}
+		})
+	}
+}
+
+func TestIAMHTTPInitialEnrollmentResponsesKeepSecretsPurposeBound(t *testing.T) {
+	now := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+	completed := now.Add(time.Second)
+	factor := iamv1.TOTPEnrollment{APIVersion: iamv1.APIVersion, Kind: "TOTPEnrollment", ID: "factor-one", RequestID: "first-factor",
+		FactorRevision: 1, State: "PENDING", CreatedAt: now, ExpiresAt: now.Add(3 * time.Minute)}
+	seed, _ := iamv1.NewSecret("synthetic-initial-provisioning")
+	uri, _ := iamv1.NewSecret("synthetic-initial-uri")
+	const base = "/v1/auth/challenges/initial-one"
+	const credential = `"challengeCredential":"synthetic-initial-secret"`
+	for _, sample := range []struct {
+		name, path, body    string
+		change              func(*httpWorkflow)
+		status              int
+		provisioning, codes bool
+	}{
+		{"new-factor", base + ":enroll", `{` + credential + `,"requestId":"first-factor"}`, func(*httpWorkflow) {}, 200, true, false},
+		{"original-factor", base + ":enroll", `{` + credential + `,"requestId":"first-factor"}`, func(w *httpWorkflow) {
+			w.enrollmentStart.Outcome = "EQUAL_REPLAY"
+			w.enrollmentStart.Provisioning = nil
+		}, 200, false, false},
+		{"wrong-factor-intent", base + ":enroll", `{` + credential + `,"requestId":"another-intent"}`, func(*httpWorkflow) {}, 503, false, false},
+		{"replayed-seed", base + ":enroll", `{` + credential + `,"requestId":"first-factor"}`, func(w *httpWorkflow) { w.enrollmentStart.Outcome = "EQUAL_REPLAY" }, 503, false, false},
+		{"factor-confirmed", base + ":confirm-enrollment", `{` + credential + `,"requestId":"confirm-factor","code":"123456"}`, func(*httpWorkflow) {}, 200, false, true},
+		{"factor-without-codes", base + ":confirm-enrollment", `{` + credential + `,"requestId":"confirm-factor","code":"123456"}`, func(w *httpWorkflow) { w.enrollmentConfirmation.RecoveryCodes = nil }, 503, false, false},
+		{"factor-instead-of-login", base + ":confirm-enrollment", `{` + credential + `,"requestId":"confirm-factor","code":"123456"}`, func(w *httpWorkflow) { w.enrollmentConfirmation.NextStep = "AUTHENTICATED" }, 503, false, false},
+		{"contact-started", base + "/notification-contact/verifications", `{` + credential + `,"requestId":"first-contact","email":"first@example.invalid"}`, func(*httpWorkflow) {}, 200, false, false},
+		{"wrong-contact-intent", base + "/notification-contact/verifications", `{` + credential + `,"requestId":"another-contact","email":"first@example.invalid"}`, func(*httpWorkflow) {}, 503, false, false},
+		{"wrong-contact-recipient", base + "/notification-contact/verifications", `{` + credential + `,"requestId":"first-contact","email":"other@example.invalid"}`, func(*httpWorkflow) {}, 503, false, false},
+		{"contact-confirmed", base + "/notification-contact/verifications/contact-one:confirm", `{` + credential + `,"requestId":"confirm-contact","code":"00123456"}`, func(w *httpWorkflow) { w.enrollmentMail.State = "VERIFIED"; w.enrollmentMail.CompletedAt = &completed }, 200, false, false},
+		{"wrong-contact-id", base + "/notification-contact/verifications/contact-other:confirm", `{` + credential + `,"requestId":"confirm-contact","code":"00123456"}`, func(w *httpWorkflow) { w.enrollmentMail.State = "VERIFIED"; w.enrollmentMail.CompletedAt = &completed }, 503, false, false},
+		{"pending-contact-not-completion", base + "/notification-contact/verifications/contact-one:confirm", `{` + credential + `,"requestId":"confirm-contact","code":"00123456"}`, func(*httpWorkflow) {}, 503, false, false},
+	} {
+		t.Run(sample.name, func(t *testing.T) {
+			workflow := newHTTPWorkflow(t)
+			workflow.enrollmentStart = iamv1.StartTOTPEnrollmentResponse{Outcome: "APPLIED", Enrollment: factor, Provisioning: &iamv1.TOTPProvisioning{Seed: seed, URI: uri}}
+			confirmed := factor
+			confirmed.State, confirmed.CompletedAt = "CONFIRMED", &completed
+			workflow.enrollmentConfirmation = iamv1.ConfirmTOTPEnrollmentResponse{Enrollment: confirmed, NextStep: "REAUTHENTICATE"}
+			for index := range 10 {
+				code, _ := iamv1.NewSecret(fmt.Sprintf("synthetic-initial-recovery-%02d", index))
+				workflow.enrollmentConfirmation.RecoveryCodes = append(workflow.enrollmentConfirmation.RecoveryCodes, code)
+			}
+			workflow.enrollmentMail = iamv1.NotificationContactVerification{APIVersion: iamv1.APIVersion, Kind: "NotificationContactVerification", ID: "contact-one", AccountID: "account-one", UserID: "user-one",
+				RequestID: "first-contact", Email: "first@example.invalid", State: "PENDING", IssuedAt: now, ExpiresAt: now.Add(3 * time.Minute), Delivery: iamv1.NotificationDeliveryObservation{State: "PENDING", UpdatedAt: now}}
+			sample.change(workflow)
+			request := httptest.NewRequest(http.MethodPost, sample.path, strings.NewReader(sample.body))
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+			newTestHandler(t, workflow).ServeHTTP(response, request)
+			if response.Code != sample.status || response.Header().Get("Cache-Control") != "no-store" {
+				t.Fatal("initial enrollment result differs", response.Code, sample.status)
+			}
+			var body map[string]json.RawMessage
+			if json.Unmarshal(response.Body.Bytes(), &body) != nil {
+				t.Fatal("invalid result document")
+			}
+			if (body["provisioning"] != nil) != sample.provisioning || (body["recoveryCodes"] != nil) != sample.codes {
+				t.Fatal("secret escaped its original successful operation")
+			}
+			for _, field := range []string{"session", "credential", "challengeCredential", "mustChangePassword"} {
+				if body[field] != nil {
+					t.Fatal("first enrollment issued a partial login")
+				}
+			}
+			if sample.provisioning && !strings.Contains(response.Body.String(), "synthetic-initial-provisioning") {
+				t.Fatal("explicit first provisioning encoder redacted its required one-time delivery")
+			}
+			if sample.codes {
+				var codes []string
+				if json.Unmarshal(body["recoveryCodes"], &codes) != nil || len(codes) != 10 || codes[0] != "synthetic-initial-recovery-00" {
+					t.Fatal("explicit binding encoder did not deliver the original codes")
+				}
+			}
+			if sample.status != 200 {
+				for _, secret := range []string{"synthetic-initial", "first@example.invalid", "123456"} {
+					if strings.Contains(response.Body.String(), secret) {
+						t.Fatal("invalid response leaked a partial result or input")
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestIAMHTTPAuthenticatorRecoveryRejectsAmbiguousCarriers(t *testing.T) {
 	for _, command := range []struct{ suffix, body string }{
 		{"recover", `{"requestId":"recover-one","challengeCredential":"synthetic-challenge-secret","recoveryCode":"synthetic-recovery-code"}`},
@@ -826,7 +1018,7 @@ func TestIAMHTTPManagementCommandsRequireCurrentSession(t *testing.T) {
 	}
 }
 
-func TestIAMSecuritySettingsReadHasNoSelectorOrMutationSurface(t *testing.T) {
+func TestIAMSecuritySettingsReadRejectsSelectorsAndAmbiguousWrites(t *testing.T) {
 	workflow := newHTTPWorkflow(t)
 	handler := newTestHandler(t, workflow)
 	const path = "/v1/account/security-settings"
@@ -837,12 +1029,15 @@ func TestIAMSecuritySettingsReadHasNoSelectorOrMutationSurface(t *testing.T) {
 		{"anonymous", http.MethodGet, path, "", "", http.StatusUnauthorized},
 		{"query", http.MethodGet, path + "?accountId=other", "", "current", http.StatusBadRequest},
 		{"body", http.MethodGet, path, `{"tenantId":"other"}`, "current", http.StatusBadRequest},
-		{"write", http.MethodPut, path, `{"mfa":{"requiredForUsers":true}}`, "current", http.StatusMethodNotAllowed},
-		{"history", http.MethodGet, path + "/changes/request-a", "", "current", http.StatusNotFound},
+		{"incomplete write", http.MethodPut, path, `{"mfa":{"requiredForUsers":true}}`, "current", http.StatusBadRequest},
+		{"history selector", http.MethodGet, path + "/changes/request-a?tenantId=other", "", "current", http.StatusBadRequest},
 		{"account path", http.MethodGet, "/v1/accounts/other/security-settings", "", "current", http.StatusNotFound},
 	} {
 		t.Run(attack.name, func(t *testing.T) {
 			request := httptest.NewRequest(attack.method, attack.path, strings.NewReader(attack.body))
+			if attack.body != "" {
+				request.Header.Set("Content-Type", "application/json")
+			}
 			if attack.bearer != "" {
 				request.Header.Set("Authorization", "Bearer "+attack.bearer)
 			}
@@ -872,6 +1067,78 @@ func TestIAMSecuritySettingsReadHasNoSelectorOrMutationSurface(t *testing.T) {
 				t.Fatal("settings response accepted the caller's tenant header")
 			}
 		}
+	}
+}
+
+func TestIAMSecuritySettingsWriteAndCompletion(t *testing.T) {
+	const path = "/v1/account/security-settings"
+	const body = `{"requestId":"settings-command","stepUpId":"settings-proof","expectedResourceVersion":1,"mfa":{"requiredForUsers":false}}`
+	for _, endpoint := range []struct{ method, path, body string }{
+		{http.MethodPut, path, body}, {http.MethodGet, path + "/changes/settings-command", ""},
+	} {
+		for _, result := range []struct {
+			err    error
+			status int
+		}{
+			{nil, http.StatusOK}, {identityaccess.ErrForbidden, http.StatusForbidden},
+			{identityaccess.ErrConflict, http.StatusConflict}, {identityaccess.ErrSecuritySettingsChangeNotFound, http.StatusNotFound},
+			{identityaccess.ErrUnavailable, http.StatusServiceUnavailable}, {identityaccess.ErrUnauthenticated, http.StatusUnauthorized},
+		} {
+			workflow := newHTTPWorkflow(t)
+			workflow.settingsErr = result.err
+			workflow.settingsChange = iamv1.AccountSecuritySettingsChange{APIVersion: iamv1.APIVersion, Kind: "AccountSecuritySettingsChange",
+				RequestID: "settings-command", ExpectedResourceVersion: 1, CallerSessionEnded: true,
+				Settings: iamv1.AccountSecuritySettings{APIVersion: iamv1.APIVersion, Kind: "AccountSecuritySettings", AccountID: "account-catalog",
+					ResourceVersion: 2, MFA: iamv1.AccountMFASettings{RequiredForUsers: false}, UpdatedAt: time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC)}}
+			request := httptest.NewRequest(endpoint.method, endpoint.path, strings.NewReader(endpoint.body))
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("Authorization", "Bearer current")
+			request.Header.Set("X-Tenant-ID", "forged-account")
+			response := httptest.NewRecorder()
+			newTestHandler(t, workflow).ServeHTTP(response, request)
+			if response.Code != result.status || workflow.settingsCalls != 1 || string(workflow.settingsCredential.CopyBytes()) != "current" {
+				t.Fatalf("settings route lost credential or closed outcome: %s status=%d", endpoint.method, response.Code)
+			}
+			if endpoint.method == http.MethodPut && (workflow.settingsRequest.RequestID != "settings-command" || workflow.settingsRequest.MFA.RequiredForUsers) {
+				t.Fatal("explicit false or original intent was lost")
+			}
+			if endpoint.method == http.MethodGet && workflow.settingsCommand != "settings-command" {
+				t.Fatal("completion route lost command ID")
+			}
+			if result.err == nil && !strings.Contains(response.Body.String(), `"accountId":"account-catalog"`) {
+				t.Fatal("caller supplied account scope")
+			}
+			workflow.settingsErr = nil
+			workflow.settingsChange.CallerSessionEnded = false
+			request = httptest.NewRequest(endpoint.method, endpoint.path, strings.NewReader(endpoint.body))
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("Authorization", "Bearer current")
+			response = httptest.NewRecorder()
+			newTestHandler(t, workflow).ServeHTTP(response, request)
+			if response.Code != http.StatusServiceUnavailable {
+				t.Fatal("invalid completion escaped response validation")
+			}
+		}
+	}
+	for _, payload := range []string{
+		`{"requestId":"settings-command","stepUpId":"settings-proof","expectedResourceVersion":1,"mfa":{}}`,
+		`{"requestId":"settings-command","stepUpId":"settings-proof","expectedResourceVersion":1,"mfa":{"requiredForUsers":false,"requiredForUsers":true}}`,
+		`{"requestId":"settings-command","stepUpId":"settings-proof","expectedResourceVersion":1,"mfa":{"requiredForUsers":false},"accountId":"other"}`,
+	} {
+		workflow := newHTTPWorkflow(t)
+		request := httptest.NewRequest(http.MethodPut, path, strings.NewReader(payload))
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Authorization", "Bearer current")
+		response := httptest.NewRecorder()
+		newTestHandler(t, workflow).ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest || workflow.settingsCalls != 0 {
+			t.Fatal("ambiguous settings write reached workflow")
+		}
+	}
+	response := httptest.NewRecorder()
+	newTestHandler(t, newHTTPWorkflow(t)).ServeHTTP(response, httptest.NewRequest(http.MethodPost, path, nil))
+	if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != "GET, PUT" {
+		t.Fatal("settings allowed methods are incomplete")
 	}
 }
 
@@ -987,40 +1254,64 @@ func TestIAMHTTPUserDetailUpdateAndDeleteAreBoundToTheRoute(t *testing.T) {
 
 type httpWorkflow struct {
 	Workflow
-	policyCalls             int
-	ownSessionCalls         int
-	policyPlatform          bool
-	policyCredential        iamv1.Secret
-	profileErr              error
-	invalidProfile          bool
-	readiness               iamv1.Readiness
-	status                  iamv1.BootstrapStatus
-	identity                iamv1.ServiceIdentity
-	login                   iamv1.LoginResponse
-	decision                iamv1.AuthorizationDecision
-	verificationDecision    iamv1.AuthorizationDecision
-	loginErr                error
-	identityCalls           int
-	loginCalls              int
-	verifiedChallengeID     string
-	totpCalls               int
-	stepCalls               int
-	stepCredential          iamv1.Secret
-	stepResult              iamv1.StepUp
-	regenerationResult      iamv1.RegenerateRecoveryCodesResponse
-	stepErr                 error
-	getUserCalls            int
-	updateUserCalls         int
-	deleteUserCalls         int
-	userID                  iamv1.PrincipalID
-	updateUser              iamv1.UpdateUserRequest
-	deleteUser              iamv1.DeleteUserRequest
-	authorizeCalls          int
-	keyCalls                int
-	verifyInstallationCalls int
-	settingsCalls           int
-	settingsCredential      iamv1.Secret
-	settingsErr             error
+	policyCalls              int
+	ownSessionCalls          int
+	policyPlatform           bool
+	policyCredential         iamv1.Secret
+	profileErr               error
+	invalidProfile           bool
+	readiness                iamv1.Readiness
+	status                   iamv1.BootstrapStatus
+	identity                 iamv1.ServiceIdentity
+	login                    iamv1.LoginResponse
+	decision                 iamv1.AuthorizationDecision
+	verificationDecision     iamv1.AuthorizationDecision
+	loginErr                 error
+	identityCalls            int
+	loginCalls               int
+	verifiedChallengeID      string
+	enrollmentCalls          int
+	enrollmentCredential     iamv1.Secret
+	enrollmentRequestID      string
+	enrollmentVerificationID string
+	enrollmentState          iamv1.EnrollmentChallengeState
+	enrollmentStart          iamv1.StartTOTPEnrollmentResponse
+	enrollmentConfirmation   iamv1.ConfirmTOTPEnrollmentResponse
+	enrollmentMail           iamv1.NotificationContactVerification
+	enrollmentErr            error
+	totpCalls                int
+	stepCalls                int
+	stepCredential           iamv1.Secret
+	stepResult               iamv1.StepUp
+	regenerationResult       iamv1.RegenerateRecoveryCodesResponse
+	stepErr                  error
+	getUserCalls             int
+	updateUserCalls          int
+	deleteUserCalls          int
+	userID                   iamv1.PrincipalID
+	updateUser               iamv1.UpdateUserRequest
+	deleteUser               iamv1.DeleteUserRequest
+	authorizeCalls           int
+	keyCalls                 int
+	verifyInstallationCalls  int
+	settingsCalls            int
+	settingsCredential       iamv1.Secret
+	settingsErr              error
+	settingsRequest          iamv1.UpdateAccountSecuritySettingsRequest
+	settingsChange           iamv1.AccountSecuritySettingsChange
+	settingsCommand          string
+}
+
+func (value *httpWorkflow) UpdateAccountSecuritySettings(_ context.Context, credential iamv1.Secret, request iamv1.UpdateAccountSecuritySettingsRequest) (iamv1.UpdateAccountSecuritySettingsResponse, error) {
+	value.settingsCalls++
+	value.settingsCredential, value.settingsRequest = credential, request
+	return iamv1.UpdateAccountSecuritySettingsResponse{Outcome: "APPLIED", Change: value.settingsChange}, value.settingsErr
+}
+
+func (value *httpWorkflow) SecuritySettingsChange(_ context.Context, credential iamv1.Secret, command, _ string) (iamv1.AccountSecuritySettingsChange, error) {
+	value.settingsCalls++
+	value.settingsCredential, value.settingsCommand = credential, command
+	return value.settingsChange, value.settingsErr
 }
 
 func (value *httpWorkflow) AccountSecuritySettings(_ context.Context, credential iamv1.Secret, _ string) (iamv1.AccountSecuritySettings, error) {
@@ -1272,6 +1563,37 @@ func (workflow *httpWorkflow) InspectAuthenticatorRecovery(_ context.Context, id
 func (workflow *httpWorkflow) AuthenticatorState(context.Context, iamv1.Secret) (iamv1.AuthenticatorState, error) {
 	workflow.totpCalls++
 	return iamv1.AuthenticatorState{}, identityaccess.ErrUnavailable
+}
+
+func (workflow *httpWorkflow) InspectEnrollmentChallenge(_ context.Context, id string, body iamv1.InspectEnrollmentChallengeRequest) (iamv1.EnrollmentChallengeState, error) {
+	workflow.enrollmentCalls++
+	workflow.verifiedChallengeID, workflow.enrollmentCredential = id, body.ChallengeCredential
+	return workflow.enrollmentState, workflow.enrollmentErr
+}
+
+func (workflow *httpWorkflow) StartChallengeTOTPEnrollment(_ context.Context, id string, body iamv1.StartChallengeTOTPEnrollmentRequest) (iamv1.StartTOTPEnrollmentResponse, error) {
+	workflow.enrollmentCalls++
+	workflow.verifiedChallengeID, workflow.enrollmentCredential, workflow.enrollmentRequestID = id, body.ChallengeCredential, body.RequestID
+	return workflow.enrollmentStart, workflow.enrollmentErr
+}
+
+func (workflow *httpWorkflow) ConfirmChallengeTOTPEnrollment(_ context.Context, id string, body iamv1.VerifyAuthenticationChallengeRequest) (iamv1.ConfirmTOTPEnrollmentResponse, error) {
+	workflow.enrollmentCalls++
+	workflow.verifiedChallengeID, workflow.enrollmentCredential, workflow.enrollmentRequestID = id, body.ChallengeCredential, body.RequestID
+	return workflow.enrollmentConfirmation, workflow.enrollmentErr
+}
+
+func (workflow *httpWorkflow) StartChallengeNotificationVerification(_ context.Context, id string, body iamv1.StartChallengeNotificationContactVerificationRequest) (iamv1.NotificationContactVerification, error) {
+	workflow.enrollmentCalls++
+	workflow.verifiedChallengeID, workflow.enrollmentCredential, workflow.enrollmentRequestID = id, body.ChallengeCredential, body.RequestID
+	return workflow.enrollmentMail, workflow.enrollmentErr
+}
+
+func (workflow *httpWorkflow) ConfirmChallengeNotificationContact(_ context.Context, id, verificationID string, body iamv1.ConfirmChallengeNotificationContactVerificationRequest) (iamv1.NotificationContactVerification, error) {
+	workflow.enrollmentCalls++
+	workflow.verifiedChallengeID, workflow.enrollmentCredential, workflow.enrollmentRequestID = id, body.ChallengeCredential, body.RequestID
+	workflow.enrollmentVerificationID = verificationID
+	return workflow.enrollmentMail, workflow.enrollmentErr
 }
 
 func (workflow *httpWorkflow) StartStepUp(_ context.Context, credential iamv1.Secret, _ iamv1.StartStepUpRequest) (iamv1.StepUp, error) {

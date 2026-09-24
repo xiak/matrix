@@ -149,7 +149,7 @@ func ValidateNotificationContactVerification(value NotificationContactVerificati
 		ValidateID("id", value.ID) != nil || ValidateID("accountId", string(value.AccountID)) != nil ||
 		ValidateID("userId", string(value.UserID)) != nil || ValidateID("requestId", value.RequestID) != nil ||
 		ValidateSecurityMailAddress(value.Email) != nil || validateTime("issuedAt", value.IssuedAt) != nil ||
-		validateTime("expiresAt", value.ExpiresAt) != nil || value.ExpiresAt.Sub(value.IssuedAt) != 10*time.Minute ||
+		validateTime("expiresAt", value.ExpiresAt) != nil || !value.ExpiresAt.After(value.IssuedAt) || value.ExpiresAt.Sub(value.IssuedAt) > 10*time.Minute ||
 		ValidateNotificationDeliveryObservation(value.Delivery) != nil || value.Delivery.UpdatedAt.Before(value.IssuedAt) {
 		return errors.New("notification contact verification is invalid")
 	}
@@ -588,7 +588,7 @@ func ValidateAccountSecuritySettingsChange(value AccountSecuritySettingsChange) 
 		ValidateAccountSecuritySettings(value.Settings) != nil ||
 		ValidateSecuritySettingsUpdateIntent(SecuritySettingsUpdateIntent{ExpectedResourceVersion: value.ExpectedResourceVersion, MFA: value.Settings.MFA}) != nil ||
 		value.Settings.ResourceVersion != value.ExpectedResourceVersion+1 ||
-		(value.CallerSessionEnded && !value.Settings.MFA.RequiredForUsers) {
+		!value.CallerSessionEnded {
 		return errors.New("account security settings change is invalid")
 	}
 	return ValidateID("requestId", value.RequestID)
@@ -603,7 +603,7 @@ func ValidateUpdateAccountSecuritySettingsResponse(value UpdateAccountSecuritySe
 
 func ValidateStepUp(value StepUp) error {
 	if value.APIVersion != APIVersion || value.Kind != "StepUp" ||
-		value.Operation != StepUpRegenerateRecoveryCodes || value.ExpectedFactorRevision < 2 || validatePositiveVersion(value.ExpectedFactorRevision) != nil ||
+		validateStepUpOperation(value.Operation, value.SecuritySettings) != nil || value.ExpectedFactorRevision < 2 || validatePositiveVersion(value.ExpectedFactorRevision) != nil ||
 		ValidateID("stepUp.id", value.ID) != nil || ValidateID("stepUp.requestId", value.RequestID) != nil ||
 		validateTime("createdAt", value.CreatedAt) != nil || validateTime("expiresAt", value.ExpiresAt) != nil ||
 		value.ExpiresAt.Sub(value.CreatedAt) != 2*time.Minute {
@@ -640,10 +640,24 @@ func ValidateStepUp(value StepUp) error {
 }
 
 func ValidateStartStepUpRequest(value StartStepUpRequest) error {
-	if value.Operation != StepUpRegenerateRecoveryCodes || value.ExpectedFactorRevision < 2 || validatePositiveVersion(value.ExpectedFactorRevision) != nil {
+	if validateStepUpOperation(value.Operation, value.SecuritySettings) != nil || value.ExpectedFactorRevision < 2 || validatePositiveVersion(value.ExpectedFactorRevision) != nil {
 		return errors.New("step-up operation is invalid")
 	}
 	return ValidateID("requestId", value.RequestID)
+}
+
+func validateStepUpOperation(operation StepUpOperation, settings *SecuritySettingsUpdateIntent) error {
+	switch operation {
+	case StepUpRegenerateRecoveryCodes:
+		if settings == nil {
+			return nil
+		}
+	case StepUpUpdateSecuritySettings:
+		if settings != nil {
+			return ValidateSecuritySettingsUpdateIntent(*settings)
+		}
+	}
+	return errors.New("step-up operation intent is invalid")
 }
 
 func ValidateVerifyStepUpRequest(value VerifyStepUpRequest) error {

@@ -132,8 +132,59 @@ BEGIN
     END IF;
 END $account_security_settings$;
 
--- The read slice has no mutation authority. Creation records the initial
--- settings in the same Account insert; updates cannot invent unenforced MFA.
+ALTER TABLE iam.accounts DROP CONSTRAINT IF EXISTS account_security_settings_initial;
+ALTER TABLE iam.accounts DROP CONSTRAINT IF EXISTS account_security_settings_values;
+ALTER TABLE iam.accounts ADD CONSTRAINT account_security_settings_values CHECK(
+    security_settings_version BETWEEN 1 AND 9007199254740991 AND isfinite(security_settings_updated_at)
+    AND security_settings_updated_at>=created_at
+    AND (security_settings_version<>1 OR (NOT mfa_required_for_users AND security_settings_updated_at=created_at)));
+
+-- This immutable completion is the settings lineage, not a general receipt.
+-- Its StepUp foreign key is added by the existing MFA migration after that
+-- table exists on a clean installation.
+CREATE TABLE IF NOT EXISTS iam.account_security_settings_changes (
+    tenant_id text COLLATE "C" NOT NULL REFERENCES iam.accounts(id),
+    user_id text COLLATE "C" NOT NULL,
+    request_id text COLLATE "C" NOT NULL CHECK(request_id ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'),
+    step_up_id text COLLATE "C" NOT NULL,
+    source_session_id text COLLATE "C" NOT NULL,
+    expected_version bigint NOT NULL CHECK(expected_version BETWEEN 1 AND 9007199254740990),
+    previous_required_for_users boolean NOT NULL,
+    required_for_users boolean NOT NULL,
+    event_id text COLLATE "C" NOT NULL,
+    decision_id text COLLATE "C" NOT NULL,
+    request_digest text NOT NULL CHECK(request_digest ~ '^sha256:[0-9a-f]{64}$'),
+    created_at timestamptz(6) NOT NULL CHECK(isfinite(created_at)),
+    PRIMARY KEY(tenant_id,user_id,request_id),
+    UNIQUE(tenant_id,expected_version),
+    UNIQUE(tenant_id,step_up_id),
+    UNIQUE(tenant_id,event_id),
+    CHECK(previous_required_for_users<>required_for_users),
+    FOREIGN KEY(tenant_id,user_id) REFERENCES iam.principals(tenant_id,id),
+    FOREIGN KEY(tenant_id,source_session_id) REFERENCES iam.sessions(tenant_id,id),
+    FOREIGN KEY(tenant_id,decision_id) REFERENCES iam.authorization_decisions(tenant_id,id),
+    FOREIGN KEY(tenant_id,event_id) REFERENCES iam.audit_outbox(tenant_id,event_id) DEFERRABLE INITIALLY DEFERRED
+);
+ALTER TABLE iam.account_security_settings_changes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE iam.account_security_settings_changes FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON iam.account_security_settings_changes;
+CREATE POLICY tenant_isolation ON iam.account_security_settings_changes
+    USING(tenant_id=iam.current_tenant_id()) WITH CHECK(tenant_id=iam.current_tenant_id());
+REVOKE ALL ON iam.account_security_settings_changes FROM PUBLIC,matrix_iam_api,matrix_iam_worker,
+    matrix_iam_notification_worker,matrix_iam_credential_recovery,matrix_iam_authentication_recovery,matrix_iam_backup_custody;
+DO $immutable_settings$
+DECLARE operation_name text;
+BEGIN
+    FOREACH operation_name IN ARRAY ARRAY['update','delete','truncate'] LOOP
+        EXECUTE format('DROP TRIGGER IF EXISTS cannot_%s ON iam.account_security_settings_changes',operation_name);
+        EXECUTE format('CREATE TRIGGER cannot_%s BEFORE %s ON iam.account_security_settings_changes FOR EACH %s EXECUTE FUNCTION iam.reject_policy_history_change()',
+            operation_name,upper(operation_name),CASE WHEN operation_name='truncate' THEN 'STATEMENT' ELSE 'ROW' END);
+        EXECUTE format('ALTER TABLE iam.account_security_settings_changes ENABLE ALWAYS TRIGGER cannot_%s',operation_name);
+    END LOOP;
+END $immutable_settings$;
+
+-- Creation stays 1/false. Updates must already have their exact same-transaction
+-- completion; the deferred proof below also checks consumed StepUp and outbox.
 CREATE OR REPLACE FUNCTION iam.guard_account_security_settings()
 RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
 BEGIN
@@ -145,7 +196,14 @@ BEGIN
         NEW.security_settings_updated_at:=NEW.created_at;
     ELSIF ROW(NEW.security_settings_version,NEW.mfa_required_for_users,NEW.security_settings_updated_at)
         IS DISTINCT FROM ROW(OLD.security_settings_version,OLD.mfa_required_for_users,OLD.security_settings_updated_at) THEN
-        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='IAM security settings mutation is unavailable';
+        IF NEW.security_settings_version<>OLD.security_settings_version+1
+            OR NEW.mfa_required_for_users=OLD.mfa_required_for_users
+            OR NEW.security_settings_updated_at IS DISTINCT FROM transaction_timestamp()
+            OR NOT EXISTS(SELECT 1 FROM iam.account_security_settings_changes c WHERE c.tenant_id=NEW.id
+                AND c.expected_version=OLD.security_settings_version AND c.previous_required_for_users=OLD.mfa_required_for_users
+                AND c.required_for_users=NEW.mfa_required_for_users AND c.created_at=NEW.security_settings_updated_at) THEN
+            RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='IAM security settings mutation has no completion';
+        END IF;
     END IF;
     RETURN NEW;
 END $function$;
@@ -162,8 +220,8 @@ BEGIN
     PERFORM set_config('matrix.iam_tenant_id',tenant,true);
     SELECT a.* INTO stored FROM iam.accounts a WHERE a.id=tenant AND a.status='ACTIVE' FOR SHARE;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='IAM account is unavailable'; END IF;
-    IF stored.security_settings_version IS DISTINCT FROM 1 OR stored.mfa_required_for_users IS DISTINCT FROM false
-       OR stored.security_settings_updated_at IS DISTINCT FROM stored.created_at OR NOT isfinite(stored.security_settings_updated_at) THEN
+    IF stored.security_settings_version IS NULL OR stored.security_settings_version NOT BETWEEN 1 AND 9007199254740991
+       OR NOT isfinite(stored.security_settings_updated_at) THEN
         RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='IAM security settings authority is invalid';
     END IF;
     RETURN jsonb_build_object('apiVersion','iam.matrix.xiak.com/v1','kind','AccountSecuritySettings',
@@ -172,16 +230,278 @@ BEGIN
         'updatedAt',to_char(stored.security_settings_updated_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'));
 END $function$;
 
+CREATE OR REPLACE FUNCTION iam.security_settings_change_snapshot(tenant text,actor text,command_id text)
+RETURNS jsonb LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $function$
+    SELECT jsonb_build_object('apiVersion','iam.matrix.xiak.com/v1','kind','AccountSecuritySettingsChange',
+        'requestId',c.request_id,'expectedResourceVersion',c.expected_version,'callerSessionEnded',true,
+        'settings',jsonb_build_object('apiVersion','iam.matrix.xiak.com/v1','kind','AccountSecuritySettings',
+            'accountId',c.tenant_id,'resourceVersion',c.expected_version+1,'mfa',jsonb_build_object('requiredForUsers',c.required_for_users),
+            'updatedAt',to_char(c.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')))
+    FROM iam.account_security_settings_changes c WHERE c.tenant_id=tenant AND c.user_id=actor AND c.request_id=command_id
+$function$;
+
+CREATE OR REPLACE FUNCTION iam.assert_security_settings_change(tenant text,actor text,command_id text)
+RETURNS void LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE receipt iam.account_security_settings_changes%ROWTYPE; proof record; current_account iam.accounts%ROWTYPE; fact jsonb; notice record;
+BEGIN
+    SELECT * INTO receipt FROM iam.account_security_settings_changes c WHERE c.tenant_id=tenant AND c.user_id=actor AND c.request_id=command_id;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='settings completion is missing'; END IF;
+    SELECT * INTO proof FROM iam.step_ups p WHERE p.tenant_id=tenant AND p.id=receipt.step_up_id;
+    IF NOT FOUND OR (proof.user_id,proof.request_id,proof.source_session_id,proof.operation,proof.state,proof.consumed_at,
+        proof.expected_settings_version,proof.required_for_users) IS DISTINCT FROM
+        (actor,command_id,receipt.source_session_id,'SECURITY_SETTINGS_UPDATE'::text,'CONSUMED'::text,receipt.created_at,
+         receipt.expected_version,receipt.required_for_users)
+        OR NOT EXISTS(SELECT 1 FROM iam.sessions s WHERE s.tenant_id=tenant AND s.id=receipt.source_session_id
+            AND s.principal_id=actor AND s.credential_version=proof.credential_generation
+            AND s.authentication_method='PASSWORD_TOTP' AND s.mfa_revision=proof.mfa_revision
+            AND s.security_settings_version=receipt.expected_version) THEN
+        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='settings proof differs';
+    END IF;
+    SELECT * INTO current_account FROM iam.accounts a WHERE a.id=tenant;
+    IF NOT FOUND OR current_account.security_settings_version<receipt.expected_version+1
+        OR (current_account.security_settings_version=receipt.expected_version+1 AND
+            (current_account.mfa_required_for_users,current_account.security_settings_updated_at)
+                IS DISTINCT FROM (receipt.required_for_users,receipt.created_at))
+        OR (receipt.expected_version=1 AND receipt.previous_required_for_users)
+        OR (receipt.expected_version>1 AND NOT EXISTS(SELECT 1 FROM iam.account_security_settings_changes previous
+            WHERE previous.tenant_id=tenant AND previous.expected_version=receipt.expected_version-1
+                AND previous.required_for_users=receipt.previous_required_for_users AND previous.created_at<=receipt.created_at)) THEN
+        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='settings lineage differs';
+    END IF;
+    IF NOT EXISTS(SELECT 1 FROM iam.authorization_decisions d WHERE d.tenant_id=tenant AND d.id=receipt.decision_id
+        AND d.principal_id=actor AND d.subject_type='USER' AND d.contract_version=4 AND d.access_key_id IS NULL AND d.allowed
+        AND d.action_name='iam.security-settings.update' AND d.target_kind='ACCOUNT' AND d.target_id=tenant
+        AND d.resource_mode='INSTANCE' AND d.collection_usage IS NULL AND d.request_id=command_id AND d.decided_at=receipt.created_at) THEN
+        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='settings historical decision differs';
+    END IF;
+    SELECT o.event_document INTO fact FROM iam.audit_outbox o WHERE o.tenant_id=tenant AND o.event_id=receipt.event_id;
+    IF fact IS NULL OR fact->>'action' IS DISTINCT FROM 'iam.security-settings.updated'
+        OR fact->>'tenantId' IS DISTINCT FROM tenant OR fact->>'result' IS DISTINCT FROM 'SUCCEEDED'
+        OR fact->'actor' IS DISTINCT FROM jsonb_build_object('type','USER','id',actor)
+        OR fact->'target' IS DISTINCT FROM jsonb_build_object('kind','ACCOUNT','id',tenant)
+        OR fact->>'iamDecisionId' IS DISTINCT FROM receipt.decision_id OR fact->>'requestId' IS DISTINCT FROM command_id
+        OR fact->>'correlationId' IS DISTINCT FROM command_id OR fact->>'requestDigest' IS DISTINCT FROM receipt.request_digest
+        OR (fact->>'occurredAt')::timestamptz IS DISTINCT FROM receipt.created_at OR fact ?| ARRAY['installationId','operationId'] THEN
+        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='settings immutable fact differs';
+    END IF;
+    SELECT n.* INTO notice FROM iam.security_notifications n WHERE n.tenant_id=tenant AND n.id=receipt.event_id;
+    IF NOT FOUND OR (notice.user_id,notice.event_id,notice.kind,notice.created_at,notice.contact_revision)
+        IS DISTINCT FROM (actor,receipt.event_id,'SECURITY_SETTINGS_CHANGED'::text,receipt.created_at,1::bigint)
+        OR notice.installation_id IS DISTINCT FROM (SELECT f.installation_id FROM iam.totp_authenticators f
+            WHERE f.tenant_id=tenant AND f.id=proof.factor_id AND f.user_id=actor)
+        OR NOT EXISTS(SELECT 1 FROM iam.notification_contact_verifications v WHERE v.tenant_id=tenant AND v.id=notice.verification_id
+            AND v.user_id=actor AND v.state='VERIFIED' AND v.email=notice.email AND v.completed_at<=receipt.created_at) THEN
+        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='settings security notice differs';
+    END IF;
+END $function$;
+
+CREATE OR REPLACE FUNCTION iam.verify_security_settings_change()
+RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE tenant text; actor text; command_id text;
+BEGIN
+    CASE TG_TABLE_NAME
+        WHEN 'accounts' THEN
+            IF NEW.security_settings_version=1 THEN RETURN NULL; END IF;
+            tenant:=NEW.id;
+            PERFORM set_config('matrix.iam_tenant_id',tenant,true);
+            SELECT c.user_id,c.request_id INTO actor,command_id FROM iam.account_security_settings_changes c
+                WHERE c.tenant_id=tenant AND c.expected_version=NEW.security_settings_version-1;
+        WHEN 'account_security_settings_changes' THEN tenant:=NEW.tenant_id; actor:=NEW.user_id; command_id:=NEW.request_id;
+        WHEN 'step_ups' THEN
+            IF NEW.operation<>'SECURITY_SETTINGS_UPDATE' OR NEW.state<>'CONSUMED' THEN RETURN NULL; END IF;
+            tenant:=NEW.tenant_id; actor:=NEW.user_id; command_id:=NEW.request_id;
+        WHEN 'audit_outbox' THEN
+            IF NEW.event_document->>'action'<>'iam.security-settings.updated' THEN RETURN NULL; END IF;
+            tenant:=NEW.tenant_id; actor:=NEW.event_document#>>'{actor,id}'; command_id:=NEW.event_document->>'requestId';
+        WHEN 'security_notifications' THEN
+            IF NEW.kind<>'SECURITY_SETTINGS_CHANGED' THEN RETURN NULL; END IF;
+            tenant:=NEW.tenant_id; actor:=NEW.user_id;
+            PERFORM set_config('matrix.iam_tenant_id',tenant,true);
+            SELECT c.request_id INTO command_id FROM iam.account_security_settings_changes c
+                WHERE c.tenant_id=tenant AND c.user_id=actor AND c.event_id=NEW.event_id;
+        ELSE RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='settings proof source is invalid';
+    END CASE;
+    PERFORM set_config('matrix.iam_tenant_id',tenant,true);
+    PERFORM iam.assert_security_settings_change(tenant,actor,command_id);
+    RETURN NULL;
+END $function$;
+DO $settings_proof$
+DECLARE relation_name text;
+BEGIN
+    FOREACH relation_name IN ARRAY ARRAY['accounts','account_security_settings_changes','audit_outbox'] LOOP
+        EXECUTE format('DROP TRIGGER IF EXISTS verify_security_settings_change ON iam.%I',relation_name);
+        EXECUTE format('CREATE CONSTRAINT TRIGGER verify_security_settings_change AFTER INSERT OR UPDATE ON iam.%I DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION iam.verify_security_settings_change()',relation_name);
+        EXECUTE format('ALTER TABLE iam.%I ENABLE ALWAYS TRIGGER verify_security_settings_change',relation_name);
+    END LOOP;
+END $settings_proof$;
+
+CREATE OR REPLACE FUNCTION iam.lock_account_security_settings(tenant text,actor text,caller text)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+BEGIN
+    PERFORM iam.assert_authentication_open();
+    PERFORM set_config('matrix.iam_tenant_id',tenant,true);
+    PERFORM 1 FROM iam.accounts a WHERE a.id=tenant AND a.status='ACTIVE' FOR UPDATE;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='settings account is unavailable'; END IF;
+    PERFORM iam.lock_mfa_session(tenant,actor,caller);
+    IF (SELECT s.authentication_method FROM iam.sessions s WHERE s.tenant_id=tenant AND s.id=caller) IS DISTINCT FROM 'PASSWORD_TOTP' THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='settings authentication is unavailable';
+    END IF;
+END $function$;
+
+CREATE OR REPLACE FUNCTION iam.update_account_security_settings(tenant text,actor text,caller text,decision text,
+    command_id text,proof_id text,expected_version bigint,required_for_users boolean,event jsonb)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE previous iam.account_security_settings_changes%ROWTYPE; stored iam.accounts%ROWTYPE; proof record; contact record; installation text;
+BEGIN
+    PERFORM iam.lock_account_security_settings(tenant,actor,caller);
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.security-settings.update','ACCOUNT',tenant,'INSTANCE',NULL);
+    IF command_id IS NULL OR command_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        OR expected_version IS NULL OR expected_version NOT BETWEEN 1 AND 9007199254740990 OR required_for_users IS NULL THEN
+        RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='settings command is invalid';
+    END IF;
+    SELECT * INTO previous FROM iam.account_security_settings_changes c WHERE c.tenant_id=tenant AND c.user_id=actor AND c.request_id=command_id;
+    IF FOUND THEN
+        IF (previous.step_up_id,previous.expected_version,previous.required_for_users,previous.request_digest)
+            IS DISTINCT FROM (proof_id,expected_version,required_for_users,event->>'requestDigest') THEN
+            RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='settings command differs';
+        END IF;
+        PERFORM iam.assert_security_settings_change(tenant,actor,command_id);
+        RETURN jsonb_build_object('outcome','EQUAL_REPLAY','change',iam.security_settings_change_snapshot(tenant,actor,command_id));
+    END IF;
+    SELECT * INTO stored FROM iam.accounts a WHERE a.id=tenant;
+    IF stored.security_settings_version<>expected_version OR stored.mfa_required_for_users=required_for_users THEN
+        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='settings version or value differs';
+    END IF;
+    proof:=iam.lock_step_up(tenant,actor,caller,proof_id);
+    IF proof.operation<>'SECURITY_SETTINGS_UPDATE' OR proof.state<>'PROVED' OR proof.request_id IS DISTINCT FROM command_id
+        OR proof.expected_settings_version IS DISTINCT FROM expected_version OR proof.required_for_users IS DISTINCT FROM required_for_users
+        OR event->>'requestId' IS DISTINCT FROM command_id THEN
+        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='settings command proof differs';
+    END IF;
+    -- Audit shape and exact same-transaction decision are checked before any
+    -- effect. All following writes, including deferred lineage, commit together.
+    SELECT c.* INTO contact FROM iam.notification_contacts c WHERE c.tenant_id=tenant AND c.user_id=actor FOR SHARE;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='verified security contact is required'; END IF;
+    SELECT f.installation_id INTO installation FROM iam.totp_authenticators f WHERE f.tenant_id=tenant AND f.id=proof.factor_id AND f.user_id=actor;
+    PERFORM iam.append_account_event(tenant,actor,decision,'iam.security-settings.updated','ACCOUNT',tenant,event);
+    IF proof.expires_at<=clock_timestamp() THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='settings proof expired'; END IF;
+    INSERT INTO iam.account_security_settings_changes(tenant_id,user_id,request_id,step_up_id,source_session_id,expected_version,
+        previous_required_for_users,required_for_users,event_id,decision_id,request_digest,created_at)
+        VALUES(tenant,actor,command_id,proof_id,caller,expected_version,stored.mfa_required_for_users,required_for_users,
+            event->>'eventId',decision,event->>'requestDigest',transaction_timestamp());
+    UPDATE iam.step_ups p SET state='CONSUMED',consumed_at=transaction_timestamp() WHERE p.tenant_id=tenant AND p.id=proof_id;
+    UPDATE iam.accounts a SET security_settings_version=expected_version+1,mfa_required_for_users=required_for_users,
+        security_settings_updated_at=transaction_timestamp() WHERE a.id=tenant;
+    -- One fixed notice per original fact. Receipt replay returns above and
+    -- never chooses a new recipient or creates another notification.
+    INSERT INTO iam.security_notifications(tenant_id,id,user_id,installation_id,verification_id,event_id,kind,email,contact_revision,created_at,state,next_attempt_at,updated_at)
+        VALUES(tenant,event->>'eventId',actor,installation,contact.verification_id,event->>'eventId','SECURITY_SETTINGS_CHANGED',
+            contact.email,contact.resource_version,transaction_timestamp(),'PENDING',transaction_timestamp(),transaction_timestamp());
+    RETURN jsonb_build_object('outcome','APPLIED','change',iam.security_settings_change_snapshot(tenant,actor,command_id));
+END $function$;
+
+CREATE OR REPLACE FUNCTION iam.read_security_settings_change(tenant text,actor text,decision text,command_id text)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+BEGIN
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.security-settings.read','ACCOUNT',tenant,'INSTANCE',NULL);
+    IF NOT EXISTS(SELECT 1 FROM iam.account_security_settings_changes c WHERE c.tenant_id=tenant AND c.user_id=actor AND c.request_id=command_id) THEN
+        RAISE EXCEPTION USING ERRCODE='P0002',MESSAGE='settings change was not found';
+    END IF;
+    PERFORM iam.assert_security_settings_change(tenant,actor,command_id);
+    RETURN iam.security_settings_change_snapshot(tenant,actor,command_id);
+END $function$;
+REVOKE ALL ON FUNCTION iam.security_settings_change_snapshot(text,text,text),iam.assert_security_settings_change(text,text,text),iam.verify_security_settings_change()
+    FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_notification_worker,matrix_iam_credential_recovery,matrix_iam_authentication_recovery,matrix_iam_backup_custody;
+REVOKE ALL ON FUNCTION iam.lock_account_security_settings(text,text,text),iam.update_account_security_settings(text,text,text,text,text,text,bigint,boolean,jsonb),
+    iam.read_security_settings_change(text,text,text,text)
+    FROM PUBLIC,matrix_iam_worker,matrix_iam_notification_worker,matrix_iam_credential_recovery,matrix_iam_authentication_recovery,matrix_iam_backup_custody;
+GRANT EXECUTE ON FUNCTION iam.lock_account_security_settings(text,text,text),iam.update_account_security_settings(text,text,text,text,text,text,bigint,boolean,jsonb),
+    iam.read_security_settings_change(text,text,text,text) TO matrix_iam_api;
+
+CREATE OR REPLACE FUNCTION iam.account_security_settings_mutation_ready()
+RETURNS boolean LANGUAGE plpgsql STABLE SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE expected record; entry pg_proc%ROWTYPE; relation_oid oid:=to_regclass('iam.account_security_settings_changes');
+    denied_role text;
+BEGIN
+    IF relation_oid IS NULL OR NOT EXISTS(SELECT 1 FROM pg_class c WHERE c.oid=relation_oid AND c.relkind='r'
+        AND c.relowner='matrix_iam_owner'::regrole AND c.relrowsecurity AND c.relforcerowsecurity)
+        OR NOT EXISTS(SELECT 1 FROM pg_policy p WHERE p.polrelid=relation_oid AND p.polname='tenant_isolation'
+            AND p.polcmd='*' AND p.polpermissive AND p.polroles=ARRAY[0::oid]) THEN RETURN false; END IF;
+    IF (SELECT count(*) FROM pg_attribute a WHERE a.attrelid=relation_oid AND a.attnum>0 AND NOT a.attisdropped)<>12 THEN RETURN false; END IF;
+    FOR expected IN SELECT * FROM (VALUES
+        ('tenant_id','text',-1),('user_id','text',-1),('request_id','text',-1),('step_up_id','text',-1),('source_session_id','text',-1),
+        ('expected_version','bigint',-1),('previous_required_for_users','boolean',-1),('required_for_users','boolean',-1),
+        ('event_id','text',-1),('decision_id','text',-1),('request_digest','text',-1),('created_at','timestamptz',6)
+    ) e(name,kind,precision) LOOP
+        IF NOT EXISTS(SELECT 1 FROM pg_attribute a WHERE a.attrelid=relation_oid AND a.attname=expected.name
+            AND a.atttypid=expected.kind::regtype AND a.atttypmod=expected.precision AND a.attnotnull AND NOT a.attisdropped)
+            THEN RETURN false; END IF;
+    END LOOP;
+    FOR expected IN SELECT * FROM (VALUES
+        ('p','tenant_id,user_id,request_id',NULL,NULL,false),
+        ('u','tenant_id,expected_version',NULL,NULL,false),('u','tenant_id,step_up_id',NULL,NULL,false),('u','tenant_id,event_id',NULL,NULL,false),
+        ('f','tenant_id','iam.accounts','id',false),('f','tenant_id,user_id','iam.principals','tenant_id,id',false),
+        ('f','tenant_id,source_session_id','iam.sessions','tenant_id,id',false),
+        ('f','tenant_id,decision_id','iam.authorization_decisions','tenant_id,id',false),
+        ('f','tenant_id,event_id','iam.audit_outbox','tenant_id,event_id',true),('f','tenant_id,step_up_id','iam.step_ups','tenant_id,id',false)
+    ) e(kind,columns,reference_table,reference_columns,deferred) LOOP
+        IF NOT EXISTS(SELECT 1 FROM pg_constraint c WHERE c.conrelid=relation_oid AND c.contype::text=expected.kind
+            AND c.convalidated AND c.conenforced AND c.condeferrable=expected.deferred AND c.condeferred=expected.deferred
+            AND ARRAY(SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY k(number,position)
+                JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.number ORDER BY k.position)=string_to_array(expected.columns,',')
+            AND (expected.kind<>'f' OR (c.confrelid=to_regclass(expected.reference_table) AND c.confupdtype='a' AND c.confdeltype='a' AND c.confmatchtype='s'
+                AND ARRAY(SELECT a.attname::text FROM unnest(c.confkey) WITH ORDINALITY k(number,position)
+                    JOIN pg_attribute a ON a.attrelid=c.confrelid AND a.attnum=k.number ORDER BY k.position)=string_to_array(expected.reference_columns,',')))) THEN RETURN false; END IF;
+    END LOOP;
+    IF (SELECT count(*) FROM pg_constraint c WHERE c.conrelid=relation_oid AND c.contype='c' AND c.convalidated AND c.conenforced)<>5 THEN RETURN false; END IF;
+    FOR expected IN SELECT * FROM (VALUES ('cannot_update',19),('cannot_delete',11),('cannot_truncate',34)) e(name,kind) LOOP
+        IF NOT EXISTS(SELECT 1 FROM pg_trigger t WHERE t.tgrelid=relation_oid AND t.tgname=expected.name
+            AND t.tgenabled='A' AND NOT t.tgisinternal AND t.tgtype=expected.kind AND t.tgnargs=0 AND t.tgqual IS NULL
+            AND t.tgfoid=to_regprocedure('iam.reject_policy_history_change()')) THEN RETURN false; END IF;
+    END LOOP;
+    FOR expected IN SELECT unnest(ARRAY['accounts','account_security_settings_changes','step_ups','audit_outbox','security_notifications']) AS name LOOP
+        IF NOT EXISTS(SELECT 1 FROM pg_trigger t WHERE t.tgrelid=to_regclass('iam.'||expected.name)
+            AND t.tgname='verify_security_settings_change' AND t.tgenabled='A' AND NOT t.tgisinternal
+            AND t.tgtype=21 AND t.tgnargs=0 AND t.tgqual IS NULL AND t.tgdeferrable AND t.tginitdeferred
+            AND t.tgfoid=to_regprocedure('iam.verify_security_settings_change()')) THEN RETURN false; END IF;
+    END LOOP;
+    FOR expected IN SELECT * FROM (VALUES
+        ('iam.lock_account_security_settings(text,text,text)',true,'void','v','tenant,actor,caller'),
+        ('iam.update_account_security_settings(text,text,text,text,text,text,bigint,boolean,jsonb)',true,'jsonb','v','tenant,actor,caller,decision,command_id,proof_id,expected_version,required_for_users,event'),
+        ('iam.read_security_settings_change(text,text,text,text)',true,'jsonb','v','tenant,actor,decision,command_id'),
+        ('iam.security_settings_change_snapshot(text,text,text)',false,'jsonb','s','tenant,actor,command_id'),
+        ('iam.assert_security_settings_change(text,text,text)',false,'void','v','tenant,actor,command_id'),
+        ('iam.verify_security_settings_change()',false,'trigger','v','')
+    ) e(signature,api,result,volatility,arguments) LOOP
+        SELECT * INTO entry FROM pg_proc p WHERE p.oid=to_regprocedure(expected.signature);
+        IF NOT FOUND OR entry.proowner<>'matrix_iam_owner'::regrole OR entry.prosecdef<>expected.api OR entry.proretset
+            OR entry.prorettype<>expected.result::regtype OR entry.provolatile::text<>expected.volatility OR entry.proparallel<>'u'
+            OR COALESCE(entry.proargnames,ARRAY[]::text[])<>string_to_array(expected.arguments,',')
+            OR entry.proconfig IS DISTINCT FROM ARRAY['search_path=pg_catalog, pg_temp']::text[]
+            OR has_function_privilege('matrix_iam_api',entry.oid,'EXECUTE')<>expected.api THEN RETURN false; END IF;
+        FOREACH denied_role IN ARRAY ARRAY['public','matrix_iam_worker','matrix_iam_notification_worker','matrix_iam_credential_recovery','matrix_iam_authentication_recovery','matrix_iam_backup_custody'] LOOP
+            IF has_function_privilege(denied_role,entry.oid,'EXECUTE') THEN RETURN false; END IF;
+        END LOOP;
+    END LOOP;
+    FOREACH denied_role IN ARRAY ARRAY['public','matrix_iam_api','matrix_iam_worker','matrix_iam_notification_worker','matrix_iam_credential_recovery','matrix_iam_authentication_recovery','matrix_iam_backup_custody'] LOOP
+        IF has_table_privilege(denied_role,relation_oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+            OR has_any_column_privilege(denied_role,relation_oid,'SELECT,INSERT,UPDATE,REFERENCES') THEN RETURN false; END IF;
+    END LOOP;
+    RETURN true;
+END $function$;
+REVOKE ALL ON FUNCTION iam.account_security_settings_mutation_ready() FROM PUBLIC,matrix_iam_api,matrix_iam_worker,
+    matrix_iam_notification_worker,matrix_iam_credential_recovery,matrix_iam_authentication_recovery,matrix_iam_backup_custody;
+
 CREATE OR REPLACE FUNCTION iam.account_security_settings_contract_ready()
 RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $function$
-    SELECT (SELECT count(*) FROM pg_catalog.pg_attribute a
+    SELECT iam.account_security_settings_mutation_ready() AND (SELECT count(*) FROM pg_catalog.pg_attribute a
         JOIN (VALUES ('security_settings_version','bigint'::regtype::oid,-1),
                      ('mfa_required_for_users','boolean'::regtype::oid,-1),
                      ('security_settings_updated_at','timestamptz'::regtype::oid,6)) e(name,kind,precision)
           ON a.attname=e.name AND a.atttypid=e.kind AND a.atttypmod=e.precision
         WHERE a.attrelid='iam.accounts'::regclass AND a.attnotnull AND NOT a.attisdropped)=3
     AND EXISTS(SELECT 1 FROM pg_catalog.pg_constraint c WHERE c.conrelid='iam.accounts'::regclass
-        AND c.conname='account_security_settings_initial' AND c.contype='c' AND c.convalidated)
+        AND c.conname='account_security_settings_values' AND c.contype='c' AND c.convalidated)
     AND EXISTS(SELECT 1 FROM pg_catalog.pg_trigger t WHERE t.tgrelid='iam.accounts'::regclass
         AND t.tgname='guard_security_settings' AND t.tgenabled='A' AND NOT t.tgisinternal
         AND t.tgtype=23 AND t.tgnargs=0 AND t.tgqual IS NULL

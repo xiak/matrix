@@ -68,6 +68,7 @@ type Transaction interface {
 	RejectPasswordAttempt(context.Context, PasswordAttempt) error
 	ReadLoginAuthenticationState(context.Context, iamv1.AccountID, iamv1.PrincipalID) (LoginAuthenticationState, error)
 	ReadAuthenticatorState(context.Context, iamv1.Session) (iamv1.AuthenticatorState, error)
+	ReadEnrollmentChallenge(context.Context, AuthenticationChallengeCredential) (EnrollmentChallengeInspection, error)
 	StartTOTPEnrollment(context.Context, TOTPEnrollmentStart) (TOTPEnrollmentStartResult, error)
 	ReadTOTPEnrollment(context.Context, iamv1.Session, string) (iamv1.TOTPEnrollment, error)
 	ReadTOTPEnrollmentByRequest(context.Context, iamv1.Session, string) (iamv1.TOTPEnrollment, error)
@@ -116,6 +117,9 @@ type Transaction interface {
 	RevokePolicyAttachment(context.Context, PolicyAttachmentRevocationMutation) (iamv1.Revocation, bool, error)
 	ReadAccount(context.Context, iamv1.AccountID, iamv1.PrincipalID) (iamv1.Account, error)
 	ReadAccountSecuritySettings(context.Context, AccountRead) (iamv1.AccountSecuritySettings, error)
+	LockAccountSecuritySettings(context.Context, iamv1.Session) error
+	UpdateAccountSecuritySettings(context.Context, SecuritySettingsMutation) (iamv1.UpdateAccountSecuritySettingsResponse, error)
+	ReadSecuritySettingsChange(context.Context, AccountRead, string) (iamv1.AccountSecuritySettingsChange, error)
 	ListUsers(context.Context, AccountRead) (iamv1.UserList, error)
 	ReadUser(context.Context, AccountRead, iamv1.PrincipalID) (iamv1.UserAccess, error)
 	ListGroups(context.Context, AccountRead) (iamv1.GroupList, error)

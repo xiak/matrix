@@ -518,7 +518,8 @@ func (value *StepUp) UnmarshalJSON(source []byte) error {
 	}
 	_, proved := fields["provedAt"]
 	_, consumed := fields["consumedAt"]
-	if proved != (decoded.ProvedAt != nil) || consumed != (decoded.ConsumedAt != nil) {
+	_, settings := fields["securitySettings"]
+	if proved != (decoded.ProvedAt != nil) || consumed != (decoded.ConsumedAt != nil) || settings != (decoded.SecuritySettings != nil) {
 		return contractjson.ErrInvalidDocument
 	}
 	*value = StepUp(decoded)
@@ -529,6 +530,13 @@ func (value *StartStepUpRequest) UnmarshalJSON(source []byte) error {
 	type wire StartStepUpRequest
 	var decoded wire
 	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil || ValidateStartStepUpRequest(StartStepUpRequest(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(source, &fields) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	if _, present := fields["securitySettings"]; present != (decoded.SecuritySettings != nil) {
 		return contractjson.ErrInvalidDocument
 	}
 	*value = StartStepUpRequest(decoded)

@@ -183,6 +183,7 @@ const (
 	ActionIAMAccountAliasSet               Action = "iam.account.alias-set"
 	ActionIAMUserList                      Action = "iam.user.list"
 	ActionIAMSecuritySettingsRead          Action = "iam.security-settings.read"
+	ActionIAMSecuritySettingsUpdate        Action = "iam.security-settings.update"
 	ActionIAMPolicyList                    Action = "iam.policy.list"
 	ActionIAMPolicyCreate                  Action = "iam.policy.create"
 	ActionIAMPolicyRead                    Action = "iam.policy.read"
@@ -426,7 +427,7 @@ func AllServicePurposes() []ServicePurpose {
 // ActionDefinition and contract enum order are derived projections, not a second
 // editable source. Product revision changes must accompany changed declarations.
 var authorizationProfiles = [...]AuthorizationProfile{
-	iamSecuritySettingsReadProfile(),
+	iamSecuritySettingsProfile(),
 	roleBusinessProfile(paasProfileRevisionOne),
 	declaredProductProfile(ProductManagedService, ServicePaaS, 1,
 		declaredProfileAction(ActionManagedServiceOfferingRead, ResourceServiceOffering, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}, {Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
@@ -488,7 +489,7 @@ var iamProfileRevisionOne = declaredProductProfile(ProductIAM, ServiceIAM, 1,
 )
 
 func HistoricalAuthorizationProfiles() []AuthorizationProfile {
-	return []AuthorizationProfile{cloneAuthorizationProfile(iamProfileRevisionOne), iamRoleManagementProfile(), iamRoleSessionProfile(), iamRoleSessionManagementProfile(), iamAccessKeyManagementProfile(), cloneAuthorizationProfile(paasProfileRevisionOne), cloneAuthorizationProfile(auditProfileRevisionOne)}
+	return []AuthorizationProfile{cloneAuthorizationProfile(iamProfileRevisionOne), iamRoleManagementProfile(), iamRoleSessionProfile(), iamRoleSessionManagementProfile(), iamAccessKeyManagementProfile(), iamSecuritySettingsReadProfile(), cloneAuthorizationProfile(paasProfileRevisionOne), cloneAuthorizationProfile(auditProfileRevisionOne)}
 }
 
 var paasProfileRevisionOne = declaredProductProfile(ProductPaaS, ServicePaaS, 1,
@@ -607,6 +608,16 @@ func iamSecuritySettingsReadProfile() AuthorizationProfile {
 	read.SubjectTypes = []SubjectType{SubjectUser}
 	read.UserAuthenticationMethods = []UserAuthenticationMethod{UserAuthenticationLoginSession}
 	profile.Actions = append(profile.Actions, read)
+	return profile
+}
+
+func iamSecuritySettingsProfile() AuthorizationProfile {
+	profile := iamSecuritySettingsReadProfile()
+	profile.Revision = 7
+	update := declaredProfileAction(ActionIAMSecuritySettingsUpdate, ResourceAccount, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}})
+	update.SubjectTypes = []SubjectType{SubjectUser}
+	update.UserAuthenticationMethods = []UserAuthenticationMethod{UserAuthenticationLoginSession}
+	profile.Actions = append(profile.Actions, update)
 	return profile
 }
 

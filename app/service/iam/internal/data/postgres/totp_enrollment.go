@@ -42,14 +42,75 @@ func decodeTOTPEnrollment(encoded []byte) (iamv1.TOTPEnrollment, error) {
 	return result, nil
 }
 
-func (value *transaction) StartTOTPEnrollment(ctx context.Context, mutation identityaccess.TOTPEnrollmentStart) (identityaccess.TOTPEnrollmentStartResult, error) {
-	if mutation.Attempt.Purpose != identityaccess.PasswordAttemptTOTPEnrollment || mutation.Sealed.FormatVersion != 1 {
-		return identityaccess.TOTPEnrollmentStartResult{}, identityaccess.ErrInvalidArgument
+func (value *transaction) ReadEnrollmentChallenge(ctx context.Context, identity identityaccess.AuthenticationChallengeCredential) (identityaccess.EnrollmentChallengeInspection, error) {
+	if identity.Purpose != "ENROLLMENT" || (identity.NextStep != "PASSWORD_CHANGE" && identity.NextStep != "ENROLLMENT") {
+		return identityaccess.EnrollmentChallengeInspection{}, identityaccess.ErrUnauthenticated
 	}
 	var encoded []byte
-	err := value.tx.QueryRow(ctx, "SELECT iam.start_totp_enrollment($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)",
-		mutation.Attempt.AccountID, mutation.Attempt.PrincipalID, mutation.Attempt.SessionID, mutation.ExpectedRevision,
-		mutation.RequestID, mutation.Attempt.IntentDigest, mutation.Attempt.ID, mutation.Attempt.Sequence, mutation.FactorID,
+	if err := value.tx.QueryRow(ctx, "SELECT iam.inspect_initial_enrollment_challenge($1,$2,$3,$4)",
+		identity.AccountID, identity.UserID, identity.ID, identity.NextStep).Scan(&encoded); err != nil {
+		return identityaccess.EnrollmentChallengeInspection{}, mapSubjectDatabaseError("inspect initial enrollment", err)
+	}
+	// PostgreSQL renders timestamptz with its session offset. Decode this
+	// storage projection before applying the public UTC-only observation
+	// decoder, then normalize and validate every field below.
+	var stored struct {
+		State struct {
+			Challenge           iamv1.AuthenticationChallenge `json:"challenge"`
+			NotificationContact *iamv1.NotificationContact    `json:"notificationContact,omitempty"`
+			Enrollment          *iamv1.TOTPEnrollment         `json:"enrollment,omitempty"`
+		} `json:"state"`
+		CredentialGeneration uint64 `json:"credentialGeneration"`
+	}
+	if contractjson.DecodeObjectBytes(encoded, 8192, &stored) != nil {
+		return identityaccess.EnrollmentChallengeInspection{}, identityaccess.ErrUnavailable
+	}
+	result := identityaccess.EnrollmentChallengeInspection{CredentialGeneration: stored.CredentialGeneration,
+		State: iamv1.EnrollmentChallengeState{Challenge: stored.State.Challenge,
+			NotificationContact: stored.State.NotificationContact, Enrollment: stored.State.Enrollment}}
+	result.State.Challenge.ExpiresAt = result.State.Challenge.ExpiresAt.UTC()
+	if contact := result.State.NotificationContact; contact != nil && contact.VerifiedAt != nil {
+		normalized := contact.VerifiedAt.UTC()
+		contact.VerifiedAt = &normalized
+	}
+	if enrollment := result.State.Enrollment; enrollment != nil {
+		enrollment.CreatedAt, enrollment.ExpiresAt = enrollment.CreatedAt.UTC(), enrollment.ExpiresAt.UTC()
+		if enrollment.CompletedAt != nil {
+			normalized := enrollment.CompletedAt.UTC()
+			enrollment.CompletedAt = &normalized
+		}
+	}
+	if result.CredentialGeneration == 0 || result.CredentialGeneration > 9007199254740991 ||
+		iamv1.ValidateEnrollmentChallengeState(result.State) != nil || result.State.Challenge.ID != identity.ID ||
+		result.State.Challenge.Purpose != identity.Purpose || result.State.Challenge.NextStep != identity.NextStep ||
+		(result.State.NotificationContact != nil && (result.State.NotificationContact.AccountID != identity.AccountID || result.State.NotificationContact.UserID != identity.UserID)) {
+		return identityaccess.EnrollmentChallengeInspection{}, identityaccess.ErrUnavailable
+	}
+	return result, nil
+}
+
+func (value *transaction) StartTOTPEnrollment(ctx context.Context, mutation identityaccess.TOTPEnrollmentStart) (identityaccess.TOTPEnrollmentStartResult, error) {
+	if mutation.Sealed.FormatVersion != 1 {
+		return identityaccess.TOTPEnrollmentStartResult{}, identityaccess.ErrInvalidArgument
+	}
+	account, user, caller := mutation.Attempt.AccountID, mutation.Attempt.PrincipalID, mutation.Attempt.SessionID
+	var attemptID, attemptSequence any
+	if mutation.Challenge.ID == "" {
+		if mutation.Attempt.Purpose != identityaccess.PasswordAttemptTOTPEnrollment || caller == "" || mutation.IntentDigest != mutation.Attempt.IntentDigest {
+			return identityaccess.TOTPEnrollmentStartResult{}, identityaccess.ErrInvalidArgument
+		}
+		attemptID, attemptSequence = mutation.Attempt.ID, mutation.Attempt.Sequence
+	} else {
+		if mutation.Challenge.Purpose != "ENROLLMENT" || mutation.Challenge.NextStep != "ENROLLMENT" || mutation.ExpectedRevision != 1 ||
+			mutation.Attempt.ID != "" || mutation.Attempt.Sequence != 0 || mutation.Attempt.Purpose != "" || caller != "" || account != "" || user != "" {
+			return identityaccess.TOTPEnrollmentStartResult{}, identityaccess.ErrInvalidArgument
+		}
+		account, user = mutation.Challenge.AccountID, mutation.Challenge.UserID
+	}
+	var encoded []byte
+	err := value.tx.QueryRow(ctx, "SELECT iam.start_totp_enrollment($1,$2,NULLIF($3::text,''),NULLIF($4::text,''),$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)",
+		account, user, caller, mutation.Challenge.ID, mutation.ExpectedRevision,
+		mutation.RequestID, mutation.IntentDigest, attemptID, attemptSequence, mutation.FactorID,
 		mutation.Scope.InstallationID, mutation.Scope.BootstrapDigest, mutation.Sealed.KeyID, mutation.Sealed.Nonce, mutation.Sealed.Ciphertext).Scan(&encoded)
 	if err != nil {
 		return identityaccess.TOTPEnrollmentStartResult{}, mapTOTPEnrollmentError("start TOTP enrollment", err)
@@ -92,7 +153,7 @@ func (value *transaction) enrollmentMetadata(ctx context.Context, query string, 
 
 func (value *transaction) ConfirmTOTPEnrollment(ctx context.Context, mutation identityaccess.TOTPBindingConfirmation) (iamv1.TOTPEnrollment, error) {
 	a := mutation.Attempt
-	if a.Purpose != "ENROLLMENT" || a.SessionID == "" || len(mutation.Codes) != 10 ||
+	if !((a.Purpose == "ENROLLMENT" && a.SessionID != "") || (a.Purpose == "INITIAL_ENROLLMENT" && a.SessionID == "")) || len(mutation.Codes) != 10 ||
 		mutation.AuditEvent.Action != auditv1.ActionIAMAuthenticatorBound ||
 		auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil ||
 		string(mutation.AuditEvent.TenantID) != string(a.AccountID) || string(mutation.AuditEvent.Actor.ID) != string(a.UserID) {
@@ -109,8 +170,8 @@ func (value *transaction) ConfirmTOTPEnrollment(ctx context.Context, mutation id
 	}
 	defer clear(codes)
 	var encoded []byte
-	err = value.tx.QueryRow(ctx, "SELECT iam.confirm_totp_enrollment($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10,$11::jsonb)",
-		a.AccountID, a.UserID, a.SessionID, a.ReferenceID, a.ID, a.Sequence, mutation.VerifiedStep,
+	err = value.tx.QueryRow(ctx, "SELECT iam.confirm_totp_enrollment($1,$2,NULLIF($3::text,''),$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12::jsonb)",
+		a.AccountID, a.UserID, a.SessionID, a.ReferenceID, a.Purpose, a.ID, a.Sequence, mutation.VerifiedStep,
 		mutation.BatchID, codes, mutation.NotificationID, event).Scan(&encoded)
 	if err != nil {
 		return iamv1.TOTPEnrollment{}, mapTOTPEnrollmentError("confirm TOTP enrollment", err)

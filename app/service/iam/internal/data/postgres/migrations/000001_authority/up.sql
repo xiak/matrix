@@ -1454,7 +1454,7 @@ BEGIN
         ) AND submitted_event ? 'iamDecisionId')
         OR (expected_action IN (
             'iam.account.created', 'iam.account.disabled', 'iam.account.enabled',
-            'iam.account-root.credentials-recovered', 'iam.account.alias-set',
+            'iam.account-root.credentials-recovered', 'iam.account.alias-set','iam.security-settings.updated',
             'iam.user.created', 'iam.user.updated', 'iam.user.deleted',
             'iam.user.permission-boundary.set','iam.user.permission-boundary.removed',
             'iam.policy.created','iam.policy.updated','iam.policy.deleted','iam.policy-version.created','iam.policy-version.deleted','iam.policy.default-version-set','iam.group.created','iam.group.updated','iam.group.deleted',
@@ -1955,7 +1955,7 @@ BEGIN
                SELECT 1 FROM iam.audit_outbox AS outbox
                 WHERE outbox.status = 'DEAD_LETTER' OR outbox.attempts >= 100
            ),
-           42::bigint,
+           43::bigint,
            transaction_timestamp();
 END
 $function$;
@@ -2211,7 +2211,8 @@ BEGIN
     effective_expires_at := effective_now + make_interval(secs => submitted_lifetime_seconds);
     PERFORM set_config('matrix.iam_tenant_id', submitted_tenant_id, true);
     authentication_state:=iam.login_authentication_state(submitted_tenant_id,submitted_principal_id);
-    IF authentication_state->>'state' IS DISTINCT FROM 'NEVER_BOUND' THEN
+    IF authentication_state->>'state' IS DISTINCT FROM 'NEVER_BOUND'
+        OR authentication_state->'enrollmentRequired' IS DISTINCT FROM 'false'::jsonb THEN
         RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='further authentication is required';
     END IF;
     password_version:=iam.consume_password_attempt(submitted_tenant_id,submitted_principal_id,NULL,submitted_attempt_id,submitted_attempt_sequence,'LOGIN',NULL);

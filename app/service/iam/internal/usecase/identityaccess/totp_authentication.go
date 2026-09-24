@@ -13,9 +13,10 @@ import (
 // These private projections describe a locked ceremony, never a bearer
 // identity or cacheable authority. Missing state is not NEVER_BOUND.
 type LoginAuthenticationState struct {
-	State    string `json:"state"`
-	Revision uint64 `json:"revision"`
-	FactorID string `json:"factorId,omitempty"`
+	State              string `json:"state"`
+	Revision           uint64 `json:"revision"`
+	FactorID           string `json:"factorId,omitempty"`
+	EnrollmentRequired bool   `json:"enrollmentRequired"`
 }
 
 type LoginChallengeCreation struct {
@@ -89,7 +90,29 @@ func (ChallengePasswordMutation) GoString() string {
 }
 func (ChallengePasswordMutation) MarshalJSON() ([]byte, error) { return nil, ErrUnavailable }
 
-func (service *Authority) createLoginChallenge(ctx context.Context, tx Transaction, attempt PasswordAttempt, requestID, requestDigest string) (iamv1.LoginResponse, error) {
+func (service *Authority) createLoginChallenge(ctx context.Context, tx Transaction, attempt PasswordAttempt, state LoginAuthenticationState, requestID, requestDigest string) (iamv1.LoginResponse, error) {
+	purpose, step := "LOGIN", "TOTP"
+	switch state.State {
+	case "BOUND":
+		if state.Revision <= 1 || iamv1.ValidateID("factorId", state.FactorID) != nil || state.EnrollmentRequired {
+			return iamv1.LoginResponse{}, ErrUnavailable
+		}
+	case "RECOVERY_REQUIRED":
+		if state.Revision == 0 || state.FactorID != "" || state.EnrollmentRequired {
+			return iamv1.LoginResponse{}, ErrUnavailable
+		}
+		step = "RECOVER"
+	case "NEVER_BOUND":
+		if state.Revision != 1 || state.FactorID != "" || !state.EnrollmentRequired {
+			return iamv1.LoginResponse{}, ErrUnavailable
+		}
+		purpose, step = "ENROLLMENT", "ENROLLMENT"
+		if attempt.MustChangePassword {
+			step = "PASSWORD_CHANGE"
+		}
+	default:
+		return iamv1.LoginResponse{}, ErrUnavailable
+	}
 	id, err := service.config.NewID("authentication-challenge")
 	if err != nil {
 		return iamv1.LoginResponse{}, ErrUnavailable
@@ -103,8 +126,7 @@ func (service *Authority) createLoginChallenge(ctx context.Context, tx Transacti
 	if err != nil {
 		return iamv1.LoginResponse{}, err
 	}
-	if iamv1.ValidateAuthenticationChallenge(challenge) != nil || challenge.ID != id || challenge.Purpose != "LOGIN" ||
-		(challenge.NextStep != "TOTP" && challenge.NextStep != "RECOVER") {
+	if iamv1.ValidateAuthenticationChallenge(challenge) != nil || challenge.ID != id || challenge.Purpose != purpose || challenge.NextStep != step {
 		return iamv1.LoginResponse{}, ErrUnavailable
 	}
 	return iamv1.LoginResponse{Outcome: iamv1.LoginChallengeRequired, Challenge: &challenge, ChallengeCredential: issued.Credential}, nil
@@ -280,7 +302,7 @@ func (service *Authority) ChangeChallengePassword(ctx context.Context, id string
 		if err != nil {
 			return err
 		}
-		if identity.Purpose != "LOGIN" || identity.NextStep != "PASSWORD_CHANGE" {
+		if (identity.Purpose != "LOGIN" && identity.Purpose != "ENROLLMENT") || identity.NextStep != "PASSWORD_CHANGE" {
 			return ErrUnauthenticated
 		}
 		original, err = tx.ReadPasswordChallenge(ctx, identity)
@@ -289,9 +311,10 @@ func (service *Authority) ChangeChallengePassword(ctx context.Context, id string
 	if err != nil {
 		return iamv1.ChallengePasswordChangeResponse{}, err
 	}
-	// The caller has already proved both factors. This comparison rejects a
-	// no-op password replacement, not another authentication attempt. Neither
-	// expensive operation holds a database connection or a principal lock.
+	// SQL verifies the exact original ceremony: completed TOTP for LOGIN,
+	// password-proved first setup for ENROLLMENT. This comparison only rejects
+	// a no-op replacement; it does not assert that both factors were proved.
+	// Neither expensive operation holds a connection or a principal lock.
 	same, err := service.passwords.Verify(request.NewPassword, original.PasswordHash)
 	if err != nil {
 		return iamv1.ChallengePasswordChangeResponse{}, ErrUnavailable

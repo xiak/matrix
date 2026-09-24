@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS iam.notification_contact_verifications (
     tenant_id text COLLATE "C" NOT NULL,
     id text COLLATE "C" NOT NULL CHECK(id ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'),
     user_id text COLLATE "C" NOT NULL,
-    session_id text COLLATE "C" NOT NULL,
+    session_id text COLLATE "C",
     request_id text COLLATE "C" NOT NULL CHECK(request_id ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'),
     intent_digest text NOT NULL CHECK(intent_digest ~ '^sha256:[0-9a-f]{64}$'),
     installation_id text COLLATE "C" NOT NULL,
@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS iam.notification_contact_verifications (
     nonce bytea NOT NULL CHECK(octet_length(nonce)=12),
     ciphertext bytea NOT NULL CHECK(octet_length(ciphertext)=24),
     issued_at timestamptz(6) NOT NULL,
-    expires_at timestamptz(6) NOT NULL CHECK(expires_at=issued_at+interval '10 minutes'),
+    expires_at timestamptz(6) NOT NULL,
     state text NOT NULL CHECK(state IN ('PENDING','VERIFIED','CANCELLED','EXPIRED')),
     completed_at timestamptz(6),
     confirmation_request_id text COLLATE "C",
@@ -63,12 +63,37 @@ CREATE TABLE IF NOT EXISTS iam.notification_contact_verifications (
     FOREIGN KEY(installation_id,key_id) REFERENCES iam.email_verification_keys(installation_id,key_id),
     FOREIGN KEY(tenant_id,started_event_id) REFERENCES iam.audit_outbox(tenant_id,event_id) DEFERRABLE INITIALLY DEFERRED,
     FOREIGN KEY(tenant_id,completion_event_id) REFERENCES iam.audit_outbox(tenant_id,event_id) DEFERRABLE INITIALLY DEFERRED,
-    CHECK((state='PENDING' AND completed_at IS NULL AND confirmation_request_id IS NULL AND completion_event_id IS NULL)
+    CONSTRAINT notification_verification_completion CHECK((state='PENDING' AND completed_at IS NULL AND confirmation_request_id IS NULL AND completion_event_id IS NULL)
         OR (state='VERIFIED' AND completed_at IS NOT NULL AND completed_at>=issued_at AND completed_at<expires_at
             AND confirmation_request_id IS NOT NULL AND confirmation_request_id ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' AND completion_event_id IS NOT NULL)
         OR (state='CANCELLED' AND completed_at IS NOT NULL AND completed_at>=issued_at AND confirmation_request_id IS NULL AND completion_event_id IS NULL)
         OR (state='EXPIRED' AND completed_at IS NOT NULL AND completed_at=expires_at AND confirmation_request_id IS NULL AND completion_event_id IS NULL))
 );
+ALTER TABLE iam.notification_contact_verifications ADD COLUMN IF NOT EXISTS enrollment_challenge_id text COLLATE "C";
+ALTER TABLE iam.notification_contact_verifications ALTER COLUMN session_id DROP NOT NULL;
+-- The original ten-minute Session ceremony is unchanged. Initial setup can
+-- only use the remaining lifetime of its original five-minute challenge.
+ALTER TABLE iam.notification_contact_verifications DROP CONSTRAINT IF EXISTS notification_contact_verifications_check;
+ALTER TABLE iam.notification_contact_verifications DROP CONSTRAINT IF EXISTS notification_contact_verifications_check1;
+ALTER TABLE iam.notification_contact_verifications DROP CONSTRAINT IF EXISTS notification_verification_completion;
+ALTER TABLE iam.notification_contact_verifications ADD CONSTRAINT notification_verification_completion CHECK(
+    (state='PENDING' AND completed_at IS NULL AND confirmation_request_id IS NULL AND completion_event_id IS NULL)
+    OR (state='VERIFIED' AND completed_at IS NOT NULL AND completed_at>=issued_at AND completed_at<expires_at
+        AND confirmation_request_id IS NOT NULL AND confirmation_request_id ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' AND completion_event_id IS NOT NULL)
+    OR (state='CANCELLED' AND completed_at IS NOT NULL AND completed_at>=issued_at AND confirmation_request_id IS NULL AND completion_event_id IS NULL)
+    OR (state='EXPIRED' AND completed_at IS NOT NULL AND completed_at=expires_at AND confirmation_request_id IS NULL AND completion_event_id IS NULL));
+ALTER TABLE iam.notification_contact_verifications DROP CONSTRAINT IF EXISTS notification_verification_origin;
+ALTER TABLE iam.notification_contact_verifications ADD CONSTRAINT notification_verification_origin CHECK(
+    num_nonnulls(session_id,enrollment_challenge_id)=1 AND expires_at>issued_at
+    AND expires_at<=issued_at+interval '10 minutes'
+    AND (session_id IS NULL OR expires_at=issued_at+interval '10 minutes'));
+DO $contact_challenge$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_constraint WHERE conrelid='iam.notification_contact_verifications'::regclass AND conname='contact_initial_enrollment') THEN
+        ALTER TABLE iam.notification_contact_verifications ADD CONSTRAINT contact_initial_enrollment
+            FOREIGN KEY(tenant_id,enrollment_challenge_id) REFERENCES iam.authentication_challenges(tenant_id,id);
+    END IF;
+END $contact_challenge$;
 CREATE UNIQUE INDEX IF NOT EXISTS notification_contact_one_pending ON iam.notification_contact_verifications(tenant_id,user_id) WHERE state='PENDING';
 
 CREATE TABLE IF NOT EXISTS iam.notification_contacts (
@@ -142,11 +167,15 @@ CREATE INDEX IF NOT EXISTS security_notifications_due ON iam.security_notificati
 -- constraints remain; an MFA notice carries no verification code envelope.
 ALTER TABLE iam.security_notifications DROP CONSTRAINT IF EXISTS security_notifications_kind_check;
 ALTER TABLE iam.security_notifications ADD CONSTRAINT security_notifications_kind_check
-    CHECK(kind IN ('ADDRESS_VERIFICATION','CONTACT_VERIFIED','AUTHENTICATOR_BOUND','RECOVERY_STARTED','AUTHENTICATOR_RECOVERED','RECOVERY_CODES_REGENERATED'));
+    CHECK(kind IN ('ADDRESS_VERIFICATION','CONTACT_VERIFIED','AUTHENTICATOR_BOUND','RECOVERY_STARTED','AUTHENTICATOR_RECOVERED','RECOVERY_CODES_REGENERATED','SECURITY_SETTINGS_CHANGED'));
 ALTER TABLE iam.security_notifications DROP CONSTRAINT IF EXISTS security_notifications_check2;
 ALTER TABLE iam.security_notifications ADD CONSTRAINT security_notifications_check2
     CHECK((kind='ADDRESS_VERIFICATION' AND contact_revision=0)
-        OR (kind IN ('CONTACT_VERIFIED','AUTHENTICATOR_BOUND','RECOVERY_STARTED','AUTHENTICATOR_RECOVERED','RECOVERY_CODES_REGENERATED') AND contact_revision=1));
+        OR (kind IN ('CONTACT_VERIFIED','AUTHENTICATOR_BOUND','RECOVERY_STARTED','AUTHENTICATOR_RECOVERED','RECOVERY_CODES_REGENERATED','SECURITY_SETTINGS_CHANGED') AND contact_revision=1));
+DROP TRIGGER IF EXISTS verify_security_settings_change ON iam.security_notifications;
+CREATE CONSTRAINT TRIGGER verify_security_settings_change AFTER INSERT OR UPDATE ON iam.security_notifications
+    DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION iam.verify_security_settings_change();
+ALTER TABLE iam.security_notifications ENABLE ALWAYS TRIGGER verify_security_settings_change;
 DROP TRIGGER IF EXISTS verify_totp_binding ON iam.security_notifications;
 CREATE CONSTRAINT TRIGGER verify_totp_binding AFTER INSERT OR UPDATE ON iam.security_notifications
     DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION iam.verify_totp_binding();
@@ -257,8 +286,9 @@ BEGIN
         WHERE b.scope=budget_scope AND b.subject=budget_subject;
 END $function$;
 
+DROP FUNCTION IF EXISTS iam.start_notification_verification(text,text,text,text,bigint,text,text,text,text,text,text,bigint,text,text,bytea,bytea,timestamptz,timestamptz,jsonb);
 CREATE OR REPLACE FUNCTION iam.start_notification_verification(
-    tenant text,subject_id text,caller_id text,password_attempt text,password_sequence bigint,
+    tenant text,subject_id text,caller_id text,enrollment_challenge text,password_attempt text,password_sequence bigint,
     request_id text,intent_digest text,verification_id text,notification_id text,
     installation text,bootstrap_digest text,credential_generation bigint,recipient text,key_id text,
     nonce bytea,ciphertext bytea,issued_at timestamptz,expires_at timestamptz,audit_event jsonb
@@ -271,18 +301,25 @@ BEGIN
         OR registration->>'activeKeyId' IS DISTINCT FROM key_id THEN
         RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='notification material unavailable';
     END IF;
-    generation:=iam.lock_notification_subject(tenant,subject_id,caller_id);
+    generation:=iam.lock_notification_subject(tenant,subject_id,caller_id,enrollment_challenge);
     IF generation IS DISTINCT FROM credential_generation OR NOT iam.valid_security_mail_address(recipient)
         OR COALESCE(request_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         OR COALESCE(intent_digest,'') !~ '^sha256:[0-9a-f]{64}$'
-        OR issued_at IS DISTINCT FROM transaction_timestamp() OR expires_at IS DISTINCT FROM issued_at+interval '10 minutes'
+        OR issued_at IS DISTINCT FROM transaction_timestamp()
+        OR expires_at IS DISTINCT FROM (CASE WHEN enrollment_challenge IS NULL THEN issued_at+interval '10 minutes'
+            ELSE (SELECT c.expires_at FROM iam.authentication_challenges c WHERE c.tenant_id=tenant AND c.id=enrollment_challenge) END)
         OR expires_at<=clock_timestamp() OR octet_length(nonce) IS DISTINCT FROM 12 OR octet_length(ciphertext) IS DISTINCT FROM 24 THEN
         RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='notification verification input is invalid';
     END IF;
-    PERFORM iam.consume_password_attempt(tenant,subject_id,caller_id,password_attempt,password_sequence,'NOTIFICATION_CONTACT_VERIFY',intent_digest);
+    IF enrollment_challenge IS NULL THEN
+        PERFORM iam.consume_password_attempt(tenant,subject_id,caller_id,password_attempt,password_sequence,'NOTIFICATION_CONTACT_VERIFY',intent_digest);
+    ELSIF password_attempt IS NOT NULL OR password_sequence IS NOT NULL THEN
+        RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='notification authentication origins are mutually exclusive';
+    END IF;
     SELECT * INTO existing FROM iam.notification_contact_verifications v WHERE v.tenant_id=tenant AND v.user_id=subject_id AND v.request_id=start_notification_verification.request_id;
     IF FOUND THEN
-        IF existing.session_id<>caller_id OR existing.credential_generation<>generation OR existing.email<>recipient OR existing.intent_digest<>intent_digest THEN
+        IF (existing.session_id,existing.enrollment_challenge_id) IS DISTINCT FROM (caller_id,enrollment_challenge)
+            OR existing.credential_generation<>generation OR existing.email<>recipient OR existing.intent_digest<>intent_digest THEN
             RAISE EXCEPTION USING ERRCODE='P0002',MESSAGE='notification request conflicts';
         END IF;
         RETURN iam.notification_verification_snapshot(tenant,existing.id);
@@ -306,9 +343,9 @@ BEGIN
     PERFORM iam.assert_audit_event(audit_event,tenant,'iam.notification-contact.verification-started','USER',subject_id,'SUCCEEDED');
     PERFORM iam.assert_user_audit_actor(tenant,subject_id,audit_event);
     IF audit_event->>'requestId' IS DISTINCT FROM request_id THEN RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='notification request fact differs'; END IF;
-    INSERT INTO iam.notification_contact_verifications(tenant_id,id,user_id,session_id,request_id,intent_digest,installation_id,bootstrap_digest,
+    INSERT INTO iam.notification_contact_verifications(tenant_id,id,user_id,session_id,enrollment_challenge_id,request_id,intent_digest,installation_id,bootstrap_digest,
         credential_generation,contact_revision,email,key_id,nonce,ciphertext,issued_at,expires_at,state,started_event_id,notification_id)
-    VALUES(tenant,verification_id,subject_id,caller_id,request_id,intent_digest,installation,bootstrap_digest,generation,0,recipient,key_id,
+    VALUES(tenant,verification_id,subject_id,caller_id,enrollment_challenge,request_id,intent_digest,installation,bootstrap_digest,generation,0,recipient,key_id,
         nonce,ciphertext,issued_at,expires_at,'PENDING',audit_event->>'eventId',notification_id);
     INSERT INTO iam.audit_outbox(tenant_id,event_id,event_document,next_attempt_at,created_at,updated_at)
         VALUES(tenant,audit_event->>'eventId',audit_event,transaction_timestamp(),transaction_timestamp(),transaction_timestamp());
@@ -317,16 +354,18 @@ BEGIN
     RETURN iam.notification_verification_snapshot(tenant,verification_id);
 END $function$;
 
-CREATE OR REPLACE FUNCTION iam.reserve_notification_confirmation(tenant text,subject_id text,caller_id text,verification text,attempt text)
+DROP FUNCTION IF EXISTS iam.reserve_notification_confirmation(text,text,text,text,text);
+CREATE OR REPLACE FUNCTION iam.reserve_notification_confirmation(tenant text,subject_id text,caller_id text,enrollment_challenge text,verification text,attempt text)
 RETURNS TABLE(installation_id text,bootstrap_digest text,credential_generation bigint,contact_revision bigint,email text,
     issued_at timestamptz,expires_at timestamptz,key_id text,nonce bytea,ciphertext bytea,attempt_sequence bigint)
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE generation bigint; original iam.notification_contact_verifications%ROWTYPE;
     budget iam.notification_confirmation_attempts%ROWTYPE; effective_now timestamptz(6); used_count integer; started timestamptz; next_sequence bigint;
 BEGIN
-    generation:=iam.lock_notification_subject(tenant,subject_id,caller_id);
+    generation:=iam.lock_notification_subject(tenant,subject_id,caller_id,enrollment_challenge);
     SELECT * INTO original FROM iam.notification_contact_verifications v WHERE v.tenant_id=tenant AND v.id=verification AND v.user_id=subject_id FOR UPDATE;
-    IF NOT FOUND OR original.session_id<>caller_id OR original.credential_generation<>generation THEN
+    IF NOT FOUND OR (original.session_id,original.enrollment_challenge_id) IS DISTINCT FROM (caller_id,enrollment_challenge)
+        OR original.credential_generation<>generation THEN
         RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='notification verification unavailable';
     END IF;
     effective_now:=clock_timestamp();
@@ -358,14 +397,16 @@ BEGIN
         WHERE b.tenant_id=tenant AND b.user_id=subject_id AND b.attempt_id=attempt AND b.sequence=attempt_sequence AND b.state='RESERVED';
 END $function$;
 
-CREATE OR REPLACE FUNCTION iam.confirm_notification_contact(tenant text,subject_id text,caller_id text,verification text,
+DROP FUNCTION IF EXISTS iam.confirm_notification_contact(text,text,text,text,text,bigint,text,jsonb);
+CREATE OR REPLACE FUNCTION iam.confirm_notification_contact(tenant text,subject_id text,caller_id text,enrollment_challenge text,verification text,
     attempt text,attempt_sequence bigint,notification_id text,audit_event jsonb)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE generation bigint; original iam.notification_contact_verifications%ROWTYPE; budget iam.notification_confirmation_attempts%ROWTYPE; effective_now timestamptz;
 BEGIN
-    generation:=iam.lock_notification_subject(tenant,subject_id,caller_id);
+    generation:=iam.lock_notification_subject(tenant,subject_id,caller_id,enrollment_challenge);
     SELECT * INTO original FROM iam.notification_contact_verifications v WHERE v.tenant_id=tenant AND v.id=verification AND v.user_id=subject_id FOR UPDATE;
-    IF NOT FOUND OR original.session_id<>caller_id OR original.credential_generation<>generation THEN
+    IF NOT FOUND OR (original.session_id,original.enrollment_challenge_id) IS DISTINCT FROM (caller_id,enrollment_challenge)
+        OR original.credential_generation<>generation THEN
         RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='notification verification unavailable';
     END IF;
     SELECT * INTO budget FROM iam.notification_confirmation_attempts b WHERE b.tenant_id=tenant AND b.user_id=subject_id FOR UPDATE;
@@ -412,10 +453,18 @@ END $function$;
 
 -- Internal lock order: Account -> USER -> credential -> actual caller Session.
 -- A claim can deliver already queued bytes but never obtains this capability.
-CREATE OR REPLACE FUNCTION iam.lock_notification_subject(tenant text,subject_id text,caller_id text)
+DROP FUNCTION IF EXISTS iam.lock_notification_subject(text,text,text);
+CREATE OR REPLACE FUNCTION iam.lock_notification_subject(tenant text,subject_id text,caller_id text,enrollment_challenge text)
 RETURNS bigint LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
-DECLARE credential iam.user_credentials%ROWTYPE; caller iam.sessions%ROWTYPE;
+DECLARE credential iam.user_credentials%ROWTYPE; caller iam.sessions%ROWTYPE; challenge iam.authentication_challenges%ROWTYPE;
 BEGIN
+    IF num_nonnulls(caller_id,enrollment_challenge)<>1 THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='notification authentication origin is unavailable';
+    END IF;
+    IF enrollment_challenge IS NOT NULL THEN
+        challenge:=iam.lock_initial_enrollment_challenge(tenant,subject_id,enrollment_challenge,'ENROLLMENT');
+        RETURN challenge.credential_generation;
+    END IF;
     PERFORM set_config('matrix.iam_tenant_id',tenant,true);
     PERFORM 1 FROM iam.accounts a WHERE a.id=tenant AND a.status='ACTIVE' FOR SHARE;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='notification subject unavailable'; END IF;
@@ -450,27 +499,38 @@ RETURNS jsonb LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $functio
     WHERE v.tenant_id=tenant AND v.id=verification
 $function$;
 
-CREATE OR REPLACE FUNCTION iam.read_notification_contact(tenant text,subject_id text,caller_id text)
-RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
-DECLARE generation bigint; contact iam.notification_contacts%ROWTYPE; pending text;
+CREATE OR REPLACE FUNCTION iam.notification_contact_snapshot(tenant text,subject_id text,caller_id text,enrollment_challenge text,generation bigint)
+RETURNS jsonb LANGUAGE plpgsql STABLE SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE contact iam.notification_contacts%ROWTYPE; pending text;
 BEGIN
-    generation:=iam.lock_notification_subject(tenant,subject_id,caller_id);
     SELECT * INTO contact FROM iam.notification_contacts c WHERE c.tenant_id=tenant AND c.user_id=subject_id;
     IF FOUND THEN RETURN jsonb_build_object('apiVersion','iam.matrix.xiak.com/v1','kind','NotificationContact','accountId',tenant,
         'userId',subject_id,'state','VERIFIED','resourceVersion',contact.resource_version,'email',contact.email,'verifiedAt',contact.verified_at); END IF;
     SELECT id INTO pending FROM iam.notification_contact_verifications v WHERE v.tenant_id=tenant AND v.user_id=subject_id
-        AND v.session_id=caller_id AND v.credential_generation=generation AND v.state='PENDING' AND v.expires_at>clock_timestamp();
+        AND (v.session_id,v.enrollment_challenge_id) IS NOT DISTINCT FROM (caller_id,enrollment_challenge)
+        AND v.credential_generation=generation AND v.state='PENDING' AND v.expires_at>clock_timestamp();
     RETURN jsonb_strip_nulls(jsonb_build_object('apiVersion','iam.matrix.xiak.com/v1','kind','NotificationContact','accountId',tenant,
         'userId',subject_id,'state','NONE','resourceVersion',0,'pendingVerificationId',pending));
 END $function$;
 
-CREATE OR REPLACE FUNCTION iam.read_notification_verification(tenant text,subject_id text,caller_id text,verification text)
+DROP FUNCTION IF EXISTS iam.read_notification_contact(text,text,text);
+CREATE OR REPLACE FUNCTION iam.read_notification_contact(tenant text,subject_id text,caller_id text,enrollment_challenge text)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE generation bigint;
 BEGIN
-    generation:=iam.lock_notification_subject(tenant,subject_id,caller_id);
+    generation:=iam.lock_notification_subject(tenant,subject_id,caller_id,enrollment_challenge);
+    RETURN iam.notification_contact_snapshot(tenant,subject_id,caller_id,enrollment_challenge,generation);
+END $function$;
+
+DROP FUNCTION IF EXISTS iam.read_notification_verification(text,text,text,text);
+CREATE OR REPLACE FUNCTION iam.read_notification_verification(tenant text,subject_id text,caller_id text,enrollment_challenge text,verification text)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE generation bigint;
+BEGIN
+    generation:=iam.lock_notification_subject(tenant,subject_id,caller_id,enrollment_challenge);
     IF NOT EXISTS(SELECT 1 FROM iam.notification_contact_verifications v WHERE v.tenant_id=tenant AND v.id=verification
-        AND v.user_id=subject_id AND v.session_id=caller_id AND v.credential_generation=generation) THEN
+        AND v.user_id=subject_id AND (v.session_id,v.enrollment_challenge_id) IS NOT DISTINCT FROM (caller_id,enrollment_challenge)
+        AND v.credential_generation=generation) THEN
         RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='notification verification unavailable';
     END IF;
     RETURN iam.notification_verification_snapshot(tenant,verification);
@@ -549,17 +609,25 @@ BEGIN
                 WHERE n.tenant_id=candidate.tenant_id AND n.id=candidate.id;
             CONTINUE;
         END IF;
-        eligible:=candidate.kind IN ('CONTACT_VERIFIED','AUTHENTICATOR_BOUND','RECOVERY_STARTED','AUTHENTICATOR_RECOVERED','RECOVERY_CODES_REGENERATED');
+        eligible:=candidate.kind IN ('CONTACT_VERIFIED','AUTHENTICATOR_BOUND','RECOVERY_STARTED','AUTHENTICATOR_RECOVERED','RECOVERY_CODES_REGENERATED','SECURITY_SETTINGS_CHANGED');
         IF candidate.kind='ADDRESS_VERIFICATION' THEN
             SELECT EXISTS(SELECT 1 FROM iam.accounts a JOIN iam.principals p ON p.tenant_id=a.id
                 JOIN iam.user_credentials c ON (c.tenant_id,c.principal_id)=(p.tenant_id,p.id)
-                JOIN iam.sessions s ON (s.tenant_id,s.principal_id)=(p.tenant_id,p.id)
                 WHERE a.id=candidate.tenant_id AND a.status='ACTIVE' AND p.id=candidate.user_id AND p.principal_type='USER'
                     AND p.status='ACTIVE' AND p.deleted_at IS NULL AND NOT p.must_change_password
-                    AND c.credential_version=original.credential_generation AND s.id=original.session_id AND s.status='ACTIVE'
-                    AND s.revoked_at IS NULL AND s.credential_version=c.credential_version AND s.expires_at>effective_now
+                    AND c.credential_version=original.credential_generation
                     AND original.state='PENDING' AND original.expires_at>effective_now
-                    AND iam.session_mfa_eligible(p.tenant_id,p.id,s.id)) INTO eligible;
+                    AND ((original.enrollment_challenge_id IS NULL AND EXISTS(SELECT 1 FROM iam.sessions s
+                        WHERE (s.tenant_id,s.principal_id,s.id)=(p.tenant_id,p.id,original.session_id)
+                            AND s.status='ACTIVE' AND s.revoked_at IS NULL AND s.credential_version=c.credential_version
+                            AND s.expires_at>effective_now AND iam.session_mfa_eligible(p.tenant_id,p.id,s.id)))
+                        OR (original.session_id IS NULL AND iam.requires_initial_enrollment(p.tenant_id,p.id)
+                            AND EXISTS(SELECT 1 FROM iam.authentication_challenges challenge
+                                WHERE (challenge.tenant_id,challenge.user_id,challenge.id)=(p.tenant_id,p.id,original.enrollment_challenge_id)
+                                    AND challenge.purpose='ENROLLMENT' AND challenge.next_step='ENROLLMENT' AND challenge.state='PENDING'
+                                    AND challenge.credential_generation=c.credential_version AND challenge.expires_at>effective_now
+                                    AND challenge.account_version=a.resource_version AND challenge.principal_version=p.resource_version
+                                    AND challenge.security_settings_version=a.security_settings_version)))) INTO eligible;
         END IF;
         IF NOT eligible THEN
             UPDATE iam.security_notifications n SET state='EXPIRED',updated_at=effective_now
@@ -666,7 +734,12 @@ BEGIN
     ELSE original_id:=NEW.verification_id;
     END IF;
     SELECT * INTO original FROM iam.notification_contact_verifications v WHERE v.tenant_id=candidate_tenant AND v.id=original_id;
-    IF NOT FOUND OR NOT EXISTS(SELECT 1 FROM iam.sessions s WHERE s.tenant_id=candidate_tenant AND s.id=original.session_id AND s.principal_id=original.user_id)
+    IF NOT FOUND OR NOT ((original.enrollment_challenge_id IS NULL AND EXISTS(SELECT 1 FROM iam.sessions s
+            WHERE s.tenant_id=candidate_tenant AND s.id=original.session_id AND s.principal_id=original.user_id))
+        OR (original.session_id IS NULL AND EXISTS(SELECT 1 FROM iam.authentication_challenges c
+            WHERE (c.tenant_id,c.user_id,c.id)=(candidate_tenant,original.user_id,original.enrollment_challenge_id)
+                AND c.purpose='ENROLLMENT' AND c.next_step='ENROLLMENT' AND c.credential_generation=original.credential_generation
+                AND c.created_at<=original.issued_at AND c.expires_at=original.expires_at)))
         OR NOT EXISTS(SELECT 1 FROM iam.principals p WHERE p.tenant_id=candidate_tenant AND p.id=original.user_id AND p.principal_type='USER')
         OR NOT EXISTS(SELECT 1 FROM iam.bootstrap_receipts r WHERE r.installation_id=original.installation_id AND r.content_digest=original.bootstrap_digest) THEN
         RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='notification origin is missing';
@@ -811,19 +884,20 @@ GRANT USAGE ON SCHEMA iam TO matrix_iam_notification_worker;
 -- New internal functions are private by default; list them explicitly so no
 -- global function revocation changes another owner's accepted runtime grants.
 REVOKE ALL ON FUNCTION iam.valid_security_mail_address(text),iam.register_email_verification_keyset(jsonb),iam.read_email_verification_keyset(),
-    iam.debit_notification_send_budget(text,text,integer,integer),iam.lock_notification_subject(text,text,text),iam.notification_verification_snapshot(text,text),
-    iam.read_notification_contact(text,text,text),iam.read_notification_verification(text,text,text,text),
-    iam.start_notification_verification(text,text,text,text,bigint,text,text,text,text,text,text,bigint,text,text,bytea,bytea,timestamptz,timestamptz,jsonb),
-    iam.reserve_notification_confirmation(text,text,text,text,text),iam.reject_notification_confirmation(text,text,text,bigint),
-    iam.confirm_notification_contact(text,text,text,text,text,bigint,text,jsonb),iam.assert_notification_worker(),iam.notification_retry_delay(integer),
+    iam.debit_notification_send_budget(text,text,integer,integer),iam.lock_notification_subject(text,text,text,text),iam.notification_verification_snapshot(text,text),
+    iam.notification_contact_snapshot(text,text,text,text,bigint),
+    iam.read_notification_contact(text,text,text,text),iam.read_notification_verification(text,text,text,text,text),
+    iam.start_notification_verification(text,text,text,text,text,bigint,text,text,text,text,text,text,bigint,text,text,bytea,bytea,timestamptz,timestamptz,jsonb),
+    iam.reserve_notification_confirmation(text,text,text,text,text,text),iam.reject_notification_confirmation(text,text,text,bigint),
+    iam.confirm_notification_contact(text,text,text,text,text,text,bigint,text,jsonb),iam.assert_notification_worker(),iam.notification_retry_delay(integer),
     iam.claim_security_notification(text),iam.complete_security_notification(text,text,text,bigint,text,integer),
     iam.guard_notification_history(),iam.verify_notification_facts(),iam.verify_notification_delivery()
     FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery,matrix_iam_backup_custody,matrix_iam_notification_worker;
 GRANT EXECUTE ON FUNCTION iam.register_email_verification_keyset(jsonb),iam.read_email_verification_keyset(),
-    iam.read_notification_contact(text,text,text),iam.read_notification_verification(text,text,text,text),
-    iam.start_notification_verification(text,text,text,text,bigint,text,text,text,text,text,text,bigint,text,text,bytea,bytea,timestamptz,timestamptz,jsonb),
-    iam.reserve_notification_confirmation(text,text,text,text,text),iam.reject_notification_confirmation(text,text,text,bigint),
-    iam.confirm_notification_contact(text,text,text,text,text,bigint,text,jsonb) TO matrix_iam_api;
+    iam.read_notification_contact(text,text,text,text),iam.read_notification_verification(text,text,text,text,text),
+    iam.start_notification_verification(text,text,text,text,text,bigint,text,text,text,text,text,text,bigint,text,text,bytea,bytea,timestamptz,timestamptz,jsonb),
+    iam.reserve_notification_confirmation(text,text,text,text,text,text),iam.reject_notification_confirmation(text,text,text,bigint),
+    iam.confirm_notification_contact(text,text,text,text,text,text,bigint,text,jsonb) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.read_email_verification_keyset(),iam.claim_security_notification(text),
     iam.complete_security_notification(text,text,text,bigint,text,integer) TO matrix_iam_notification_worker;
 
@@ -848,6 +922,20 @@ RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $funct
         AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_constraint c WHERE c.conrelid IN (
             to_regclass('iam.notification_contacts'),to_regclass('iam.notification_contact_verifications'),to_regclass('iam.notification_confirmation_attempts'),
             to_regclass('iam.security_notifications'),to_regclass('iam.security_notification_attempts')) AND NOT c.convalidated)
+        AND (SELECT count(*)=2 FROM pg_catalog.pg_attribute a WHERE a.attrelid=to_regclass('iam.notification_contact_verifications')
+            AND a.attname IN ('session_id','enrollment_challenge_id') AND a.attnum>0 AND NOT a.attisdropped
+            AND a.atttypid='text'::regtype AND a.attcollation='"C"'::regcollation AND NOT a.attnotnull AND NOT a.atthasdef)
+        AND (SELECT count(*)=2 FROM pg_catalog.pg_constraint c WHERE c.conrelid=to_regclass('iam.notification_contact_verifications')
+            AND c.conname IN ('notification_verification_origin','notification_verification_completion')
+            AND c.contype='c' AND c.convalidated AND c.conenforced)
+        AND EXISTS(SELECT 1 FROM pg_catalog.pg_constraint c WHERE c.conrelid=to_regclass('iam.notification_contact_verifications')
+            AND c.conname='contact_initial_enrollment' AND c.contype='f' AND c.convalidated AND c.conenforced
+            AND NOT c.condeferrable AND c.confrelid=to_regclass('iam.authentication_challenges')
+            AND c.confupdtype='a' AND c.confdeltype='a' AND c.confmatchtype='s'
+            AND ARRAY(SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY k(number,position)
+                JOIN pg_catalog.pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.number ORDER BY k.position)=ARRAY['tenant_id','enrollment_challenge_id']
+            AND ARRAY(SELECT a.attname::text FROM unnest(c.confkey) WITH ORDINALITY k(number,position)
+                JOIN pg_catalog.pg_attribute a ON a.attrelid=c.confrelid AND a.attnum=k.number ORDER BY k.position)=ARRAY['tenant_id','id'])
         AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_roles r WHERE r.rolname IN ('matrix_iam_api','matrix_iam_worker','matrix_iam_backup_custody','matrix_iam_credential_recovery')
             AND (pg_has_role(r.oid,'matrix_iam_notification_worker','MEMBER') OR pg_has_role('matrix_iam_notification_worker',r.oid,'MEMBER')))
         AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_class c WHERE c.relnamespace='iam'::regnamespace AND c.relkind IN ('r','p','v','m','f')
@@ -858,10 +946,10 @@ RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $funct
             AND has_function_privilege('matrix_iam_notification_worker',p.oid,'EXECUTE'))
         AND (SELECT count(*)=10 FROM pg_catalog.pg_proc p WHERE p.oid IN (
             to_regprocedure('iam.register_email_verification_keyset(jsonb)'),to_regprocedure('iam.read_email_verification_keyset()'),
-            to_regprocedure('iam.read_notification_contact(text,text,text)'),to_regprocedure('iam.read_notification_verification(text,text,text,text)'),
-            to_regprocedure('iam.start_notification_verification(text,text,text,text,bigint,text,text,text,text,text,text,bigint,text,text,bytea,bytea,timestamptz,timestamptz,jsonb)'),
-            to_regprocedure('iam.reserve_notification_confirmation(text,text,text,text,text)'),to_regprocedure('iam.reject_notification_confirmation(text,text,text,bigint)'),
-            to_regprocedure('iam.confirm_notification_contact(text,text,text,text,text,bigint,text,jsonb)'),to_regprocedure('iam.claim_security_notification(text)'),
+            to_regprocedure('iam.read_notification_contact(text,text,text,text)'),to_regprocedure('iam.read_notification_verification(text,text,text,text,text)'),
+            to_regprocedure('iam.start_notification_verification(text,text,text,text,text,bigint,text,text,text,text,text,text,bigint,text,text,bytea,bytea,timestamptz,timestamptz,jsonb)'),
+            to_regprocedure('iam.reserve_notification_confirmation(text,text,text,text,text,text)'),to_regprocedure('iam.reject_notification_confirmation(text,text,text,bigint)'),
+            to_regprocedure('iam.confirm_notification_contact(text,text,text,text,text,text,bigint,text,jsonb)'),to_regprocedure('iam.claim_security_notification(text)'),
             to_regprocedure('iam.complete_security_notification(text,text,text,bigint,text,integer)'))
             AND p.proowner='matrix_iam_owner'::regrole AND p.prosecdef AND p.proconfig=ARRAY['search_path=pg_catalog, pg_temp']
             AND NOT has_function_privilege('public',p.oid,'EXECUTE') AND NOT has_function_privilege('matrix_iam_worker',p.oid,'EXECUTE')
@@ -874,20 +962,21 @@ RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $funct
                 THEN 'matrix_iam_notification_worker' ELSE 'matrix_iam_api' END,p.oid,'EXECUTE'))
         AND (SELECT count(*)=10 FROM (VALUES
             ('iam.register_email_verification_keyset(jsonb)','void'),('iam.read_email_verification_keyset()','jsonb'),
-            ('iam.read_notification_contact(text,text,text)','jsonb'),('iam.read_notification_verification(text,text,text,text)','jsonb'),
-            ('iam.start_notification_verification(text,text,text,text,bigint,text,text,text,text,text,text,bigint,text,text,bytea,bytea,timestamptz,timestamptz,jsonb)','jsonb'),
-            ('iam.reserve_notification_confirmation(text,text,text,text,text)',
+            ('iam.read_notification_contact(text,text,text,text)','jsonb'),('iam.read_notification_verification(text,text,text,text,text)','jsonb'),
+            ('iam.start_notification_verification(text,text,text,text,text,bigint,text,text,text,text,text,text,bigint,text,text,bytea,bytea,timestamptz,timestamptz,jsonb)','jsonb'),
+            ('iam.reserve_notification_confirmation(text,text,text,text,text,text)',
                 'TABLE(installation_id text, bootstrap_digest text, credential_generation bigint, contact_revision bigint, email text, issued_at timestamp with time zone, expires_at timestamp with time zone, key_id text, nonce bytea, ciphertext bytea, attempt_sequence bigint)'),
             ('iam.reject_notification_confirmation(text,text,text,bigint)','void'),
-            ('iam.confirm_notification_contact(text,text,text,text,text,bigint,text,jsonb)','jsonb'),
+            ('iam.confirm_notification_contact(text,text,text,text,text,text,bigint,text,jsonb)','jsonb'),
             ('iam.claim_security_notification(text)',
                 'TABLE(tenant_id text, notification_id text, user_id text, installation_id text, kind text, email text, created_at timestamp with time zone, fence bigint, lease_expires_at timestamp with time zone, verification_id text, bootstrap_digest text, credential_generation bigint, contact_revision bigint, issued_at timestamp with time zone, expires_at timestamp with time zone, key_id text, nonce bytea, ciphertext bytea)'),
             ('iam.complete_security_notification(text,text,text,bigint,text,integer)','void')) expected(signature,result)
             JOIN pg_catalog.pg_proc p ON p.oid=to_regprocedure(expected.signature)
             WHERE pg_get_function_result(p.oid)=expected.result AND p.proretset=(left(expected.result,6)='TABLE('))
-        AND (SELECT count(*)=9 FROM pg_catalog.pg_proc p WHERE p.oid IN (
+        AND (SELECT count(*)=10 FROM pg_catalog.pg_proc p WHERE p.oid IN (
             to_regprocedure('iam.valid_security_mail_address(text)'),to_regprocedure('iam.debit_notification_send_budget(text,text,integer,integer)'),
-            to_regprocedure('iam.lock_notification_subject(text,text,text)'),to_regprocedure('iam.notification_verification_snapshot(text,text)'),
+            to_regprocedure('iam.lock_notification_subject(text,text,text,text)'),to_regprocedure('iam.notification_verification_snapshot(text,text)'),
+            to_regprocedure('iam.notification_contact_snapshot(text,text,text,text,bigint)'),
             to_regprocedure('iam.assert_notification_worker()'),to_regprocedure('iam.notification_retry_delay(integer)'),
             to_regprocedure('iam.guard_notification_history()'),to_regprocedure('iam.verify_notification_facts()'),to_regprocedure('iam.verify_notification_delivery()'))
             AND p.proowner='matrix_iam_owner'::regrole AND NOT p.prosecdef AND p.proconfig=ARRAY['search_path=pg_catalog, pg_temp']
@@ -902,7 +991,7 @@ RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $funct
             AND t.tgfoid=to_regprocedure('iam.guard_notification_history()'))
         AND (SELECT count(*)=2 FROM pg_catalog.pg_trigger t WHERE t.tgname='notification_delivery_link' AND t.tgenabled='A'
             AND t.tgfoid=to_regprocedure('iam.verify_notification_delivery()') AND t.tgdeferrable AND t.tginitdeferred)
-        AND has_function_privilege('matrix_iam_api','iam.start_notification_verification(text,text,text,text,bigint,text,text,text,text,text,text,bigint,text,text,bytea,bytea,timestamptz,timestamptz,jsonb)','EXECUTE')
+        AND has_function_privilege('matrix_iam_api','iam.start_notification_verification(text,text,text,text,text,bigint,text,text,text,text,text,text,bigint,text,text,bytea,bytea,timestamptz,timestamptz,jsonb)','EXECUTE')
         AND has_function_privilege('matrix_iam_notification_worker','iam.claim_security_notification(text)','EXECUTE')
         AND has_function_privilege('matrix_iam_notification_worker','iam.complete_security_notification(text,text,text,bigint,text,integer)','EXECUTE')
         AND has_function_privilege('matrix_iam_notification_worker','iam.read_email_verification_keyset()','EXECUTE')

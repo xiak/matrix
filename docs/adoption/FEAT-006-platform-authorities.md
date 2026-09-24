@@ -723,6 +723,16 @@ helpers, optional predecessor switches or routine-SKIP compatibility matrix.
 This rejects redundant test paths, not the existing published Audit encoding
 or installation consumer contracts; their owners retain those real boundaries.
 
+For S2c's Account settings notification, fixed
+`6f05745636f3dd31fbc84591e839e332c7cd57e8` is `REUSE` for the original
+`SECURITY_SETTINGS_CHANGED` mail kind, closed SMTP rendering, verified
+NotificationContact and restricted delivery/lease owner. Its SQL does not yet
+admit that kind; `ADAPT` the existing atomic settings completion and mail
+constraints to one notice bound to the original fact and actor's verified
+recipient revision. `REJECT` caller-selected recipients, a parallel queue,
+administrator broadcast assumptions or treating an Audit append/PENDING row
+as SMTP delivery. This reuses no foreign worktree or installation evidence.
+
 The same fixed process owner is `ADAPT`ed for secret-absence inspection:
 scan decoded JSON values literally, and `REUSE` the public Audit event
 validator to identify its request digest. `REJECT` SQL LIKE wildcard

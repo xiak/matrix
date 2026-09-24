@@ -18,14 +18,21 @@ func (value *transaction) ReadLoginAuthenticationState(ctx context.Context, acco
 	if err := value.tx.QueryRow(ctx, "SELECT iam.login_authentication_state($1,$2)", account, user).Scan(&encoded); err != nil {
 		return identityaccess.LoginAuthenticationState{}, mapSubjectDatabaseError("read login authentication state", err)
 	}
-	var state identityaccess.LoginAuthenticationState
-	if contractjson.DecodeObjectBytes(encoded, 1024, &state) != nil || state.Revision == 0 || state.Revision > 9007199254740991 ||
+	var state struct {
+		State              string `json:"state"`
+		Revision           uint64 `json:"revision"`
+		FactorID           string `json:"factorId,omitempty"`
+		EnrollmentRequired *bool  `json:"enrollmentRequired"`
+	}
+	if contractjson.DecodeObjectBytes(encoded, 1024, &state) != nil || state.EnrollmentRequired == nil || state.Revision == 0 || state.Revision > 9007199254740991 ||
 		(state.State != "NEVER_BOUND" && state.State != "BOUND" && state.State != "RECOVERY_REQUIRED") ||
 		(state.State == "NEVER_BOUND" && (state.Revision != 1 || state.FactorID != "")) ||
-		(state.State == "BOUND" && (state.Revision <= 1 || iamv1.ValidateID("factorId", state.FactorID) != nil)) {
+		(state.State == "BOUND" && (state.Revision <= 1 || iamv1.ValidateID("factorId", state.FactorID) != nil)) ||
+		(state.State != "NEVER_BOUND" && *state.EnrollmentRequired) {
 		return identityaccess.LoginAuthenticationState{}, identityaccess.ErrUnavailable
 	}
-	return state, nil
+	return identityaccess.LoginAuthenticationState{State: state.State, Revision: state.Revision, FactorID: state.FactorID,
+		EnrollmentRequired: *state.EnrollmentRequired}, nil
 }
 
 func (value *transaction) CreateLoginChallenge(ctx context.Context, mutation identityaccess.LoginChallengeCreation) (iamv1.AuthenticationChallenge, error) {
@@ -147,7 +154,7 @@ func (value *transaction) BeginPasswordChallenge(ctx context.Context, mutation i
 }
 
 func (value *transaction) ReadPasswordChallenge(ctx context.Context, identity identityaccess.AuthenticationChallengeCredential) (identityaccess.ChallengePasswordMaterial, error) {
-	if identity.Purpose != "LOGIN" || identity.NextStep != "PASSWORD_CHANGE" {
+	if (identity.Purpose != "LOGIN" && identity.Purpose != "ENROLLMENT") || identity.NextStep != "PASSWORD_CHANGE" {
 		return identityaccess.ChallengePasswordMaterial{}, identityaccess.ErrUnauthenticated
 	}
 	var result identityaccess.ChallengePasswordMaterial
@@ -165,7 +172,7 @@ func (value *transaction) ReadPasswordChallenge(ctx context.Context, identity id
 
 func (value *transaction) ChangeChallengePassword(ctx context.Context, mutation identityaccess.ChallengePasswordMutation) (iamv1.ChallengePasswordChangeResponse, error) {
 	identity := mutation.Identity
-	if identity.Purpose != "LOGIN" || identity.NextStep != "PASSWORD_CHANGE" || mutation.AuditEvent.Action != auditv1.ActionIAMUserPasswordChanged ||
+	if (identity.Purpose != "LOGIN" && identity.Purpose != "ENROLLMENT") || identity.NextStep != "PASSWORD_CHANGE" || mutation.AuditEvent.Action != auditv1.ActionIAMUserPasswordChanged ||
 		string(mutation.AuditEvent.TenantID) != string(identity.AccountID) || string(mutation.AuditEvent.Actor.ID) != string(identity.UserID) ||
 		mutation.AuditEvent.Target.Kind != auditv1.TargetUser || mutation.AuditEvent.Target.ID != string(identity.UserID) ||
 		auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil {

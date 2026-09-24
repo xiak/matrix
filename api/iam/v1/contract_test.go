@@ -219,7 +219,7 @@ func securitySettingsContractSamples() []struct {
 } {
 	mfa := `{"requiredForUsers":false}`
 	settings := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccountSecuritySettings","accountId":"account-a","resourceVersion":2,"mfa":` + mfa + `,"updatedAt":"2026-09-24T12:00:00Z"}`
-	change := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccountSecuritySettingsChange","requestId":"change-a","expectedResourceVersion":1,"settings":` + settings + `,"callerSessionEnded":false}`
+	change := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccountSecuritySettingsChange","requestId":"change-a","expectedResourceVersion":1,"settings":` + settings + `,"callerSessionEnded":true}`
 	return []struct {
 		kind, wire string
 		newValue   func() any
@@ -307,9 +307,9 @@ func TestAccountSecuritySettingsRejectAmbiguityWithoutChangingPriorValue(t *test
 			}
 			if strings.Contains(sample.wire, `"callerSessionEnded"`) {
 				malformed = append(malformed,
-					strings.Replace(sample.wire, `,"callerSessionEnded":false`, "", 1),
-					strings.Replace(sample.wire, `"callerSessionEnded":false`, `"callerSessionEnded":null`, 1),
-					strings.Replace(sample.wire, `"callerSessionEnded":false`, `"callerSessionEnded":true`, 1),
+					strings.Replace(sample.wire, `,"callerSessionEnded":true`, "", 1),
+					strings.Replace(sample.wire, `"callerSessionEnded":true`, `"callerSessionEnded":null`, 1),
+					strings.Replace(sample.wire, `"callerSessionEnded":true`, `"callerSessionEnded":false`, 1),
 					strings.Replace(sample.wire, `"resourceVersion":2`, `"resourceVersion":3`, 1),
 				)
 			}
@@ -339,15 +339,38 @@ func TestAccountSecuritySettingsRejectAmbiguityWithoutChangingPriorValue(t *test
 	}
 }
 
-func TestSettingsIntentDoesNotExpandTheCurrentStepUpOperation(t *testing.T) {
+func TestSettingsStepUpBindsExactIntentWithoutExpandingOtherOperations(t *testing.T) {
+	intent := `{"expectedResourceVersion":1,"mfa":{"requiredForUsers":false}}`
+	start := `{"requestId":"settings-a","operation":"SECURITY_SETTINGS_UPDATE","expectedFactorRevision":2,"securitySettings":` + intent + `}`
+	for _, wire := range []string{start, strings.Replace(start, "false", "true", 1)} {
+		var value StartStepUpRequest
+		if DecodeRequest(strings.NewReader(wire), &value) != nil {
+			t.Fatal("exact settings intent rejected")
+		}
+		encoded, err := json.Marshal(value)
+		if err != nil || string(encoded) != wire {
+			t.Fatal("settings proof lost exact intended values")
+		}
+	}
 	for _, wire := range []string{
 		`{"requestId":"settings-a","operation":"SECURITY_SETTINGS_UPDATE","expectedResourceVersion":1,"mfa":{"requiredForUsers":true}}`,
 		`{"requestId":"settings-a","operation":"SECURITY_SETTINGS_UPDATE","expectedFactorRevision":2}`,
 		`{"requestId":"settings-a","operation":"RECOVERY_CODES_REGENERATE","expectedFactorRevision":2,"intent":{"expectedResourceVersion":1,"mfa":{"requiredForUsers":true}}}`,
+		strings.Replace(start, "SECURITY_SETTINGS_UPDATE", "RECOVERY_CODES_REGENERATE", 1),
+		strings.Replace(start, "SECURITY_SETTINGS_UPDATE", "iam.security-settings.update", 1),
+		strings.Replace(start, intent, "null", 1),
+		strings.Replace(start, intent, `{}`, 1),
+		strings.Replace(start, `"requiredForUsers":false`, `"requiredForUsers":null`, 1),
+		strings.Replace(start, `"requiredForUsers":false`, `"requiredForUsers":false,"requiredForUsers":true`, 1),
+		strings.Replace(start, `"expectedResourceVersion":1`, `"expectedResourceVersion":9007199254740991`, 1),
+		strings.Replace(start, `"securitySettings":`, `"SecuritySettings":`, 1),
+		strings.TrimSuffix(start, "}") + `,"accountId":"other"}`,
+		strings.Replace(start, `"mfa":`, `"accountId":"other","mfa":`, 1),
+		`{"requestId":"codes-a","operation":"RECOVERY_CODES_REGENERATE","expectedFactorRevision":2,"securitySettings":null}`,
 	} {
 		var value StartStepUpRequest
 		if DecodeRequest(strings.NewReader(wire), &value) == nil {
-			t.Fatal("pure settings intent opened an unimplemented runtime proof operation")
+			t.Fatal("proof accepted missing, ambiguous or foreign operation intent")
 		}
 	}
 }
@@ -582,6 +605,8 @@ func TestRecoveryCodeRegenerationReplaysOnlyNonSecretCompletion(t *testing.T) {
 func FuzzStepUpContractRoundTrip(f *testing.F) {
 	f.Add(uint8(0), `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"StepUp","id":"proof-a","requestId":"regenerate-a","operation":"RECOVERY_CODES_REGENERATE","expectedFactorRevision":2,"state":"PENDING","createdAt":"2026-09-21T12:00:00Z","expiresAt":"2026-09-21T12:02:00Z"}`)
 	f.Add(uint8(1), `{"requestId":"regenerate-a","operation":"RECOVERY_CODES_REGENERATE","expectedFactorRevision":2}`)
+	f.Add(uint8(0), `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"StepUp","id":"proof-a","requestId":"settings-a","operation":"SECURITY_SETTINGS_UPDATE","expectedFactorRevision":2,"securitySettings":{"expectedResourceVersion":1,"mfa":{"requiredForUsers":false}},"state":"PENDING","createdAt":"2026-09-21T12:00:00Z","expiresAt":"2026-09-21T12:02:00Z"}`)
+	f.Add(uint8(1), `{"requestId":"settings-a","operation":"SECURITY_SETTINGS_UPDATE","expectedFactorRevision":2,"securitySettings":{"expectedResourceVersion":1,"mfa":{"requiredForUsers":true}}}`)
 	f.Add(uint8(2), `{"requestId":"verify-a","password":"synthetic-password","code":"nonempty-attempt"}`)
 	f.Add(uint8(3), `{"requestId":"regenerate-a","stepUpId":"proof-a","expectedFactorRevision":2}`)
 	f.Add(uint8(4), `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"RecoveryCodeRegeneration","id":"regeneration-a","requestId":"regenerate-a","factorId":"factor-a","factorRevision":2,"createdAt":"2026-09-21T12:01:00Z"}`)
@@ -788,8 +813,17 @@ func TestNotificationContactAndVerificationAreClosedCurrentUserContracts(t *test
 	if err := ValidateNotificationContactVerification(verification); err != nil {
 		t.Fatal(err)
 	}
+	for _, lifetime := range []time.Duration{time.Microsecond, 3 * time.Minute, 5 * time.Minute, 10 * time.Minute} {
+		shortened := verification
+		shortened.ExpiresAt = shortened.IssuedAt.Add(lifetime)
+		if err := ValidateNotificationContactVerification(shortened); err != nil {
+			t.Fatalf("valid bounded verification lifetime %s: %v", lifetime, err)
+		}
+	}
 	for _, change := range []func(*NotificationContactVerification){
 		func(v *NotificationContactVerification) { v.ExpiresAt = v.ExpiresAt.Add(time.Second) },
+		func(v *NotificationContactVerification) { v.ExpiresAt = v.IssuedAt },
+		func(v *NotificationContactVerification) { v.ExpiresAt = v.IssuedAt.Add(-time.Microsecond) },
 		func(v *NotificationContactVerification) { v.CompletedAt = &now },
 		func(v *NotificationContactVerification) { v.State = "VERIFIED" },
 		func(v *NotificationContactVerification) { v.Delivery.UpdatedAt = now.Add(-time.Microsecond) },
@@ -1711,9 +1745,9 @@ func FuzzAccessKeySignatureWire(f *testing.F) {
 	})
 }
 
-func TestSecuritySettingsReadRequiresCurrentUserSessionAndExactAccount(t *testing.T) {
+func TestSecuritySettingsRequireCurrentUserSessionAndExactAccount(t *testing.T) {
 	profile, ok := LookupAuthorizationProfile(ProductIAM)
-	if !ok || profile.Revision != 6 {
+	if !ok || profile.Revision != 7 {
 		t.Fatal("security settings must publish a distinct profile revision")
 	}
 	_, digest, err := CanonicalizeAuthorizationProfile(profile)
@@ -1721,51 +1755,49 @@ func TestSecuritySettingsReadRequiresCurrentUserSessionAndExactAccount(t *testin
 		t.Fatal(err)
 	}
 	ref := AuthorizationProfileReference{Product: profile.Product, Revision: profile.Revision, ContentDigest: digest}
-	action := ActionIAMSecuritySettingsRead
-	definition, ok := LookupActionDefinition(action)
-	if !ok || definition.ResourceKind != ResourceAccount || definition.AuthorityScope != AuthorityScopeTenant || definition.CallingService != ServiceIAM {
-		t.Fatal("settings read acquired a different authority boundary")
-	}
-	for _, subject := range []SubjectType{SubjectUser, SubjectRole, SubjectServiceAccount} {
-		if allowed := CheckAuthorizationProfileSubject(profile, ref, action, subject) == nil; allowed != (subject == SubjectUser) {
-			t.Fatal("settings read widened its subject types")
+	for _, action := range []Action{ActionIAMSecuritySettingsRead, ActionIAMSecuritySettingsUpdate} {
+		definition, ok := LookupActionDefinition(action)
+		if !ok || definition.ResourceKind != ResourceAccount || definition.AuthorityScope != AuthorityScopeTenant || definition.CallingService != ServiceIAM {
+			t.Fatal("settings read acquired a different authority boundary")
 		}
-	}
-	for _, method := range []UserAuthenticationMethod{UserAuthenticationLoginSession, UserAuthenticationAccessKey} {
-		if allowed := CheckAuthorizationProfileUserAuthentication(profile, ref, action, method) == nil; allowed != (method == UserAuthenticationLoginSession) {
-			t.Fatal("settings read widened its authentication methods")
-		}
-	}
-	resource := ResourceReference{Kind: ResourceAccount, ID: "account-a"}
-	if _, err := NewAuthorizationRequest(action, resource, AuthorizationResourceInstance, "", "settings-read", "settings-read"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := NewAuthorizationRequest(action, resource, AuthorizationResourceCollection, AuthorizationCollectionList, "settings-read", "settings-read"); err == nil {
-		t.Fatal("settings read admitted an unbound collection")
-	}
-	foundPrevious := false
-	for _, old := range HistoricalAuthorizationProfiles() {
-		if old.Product != ProductIAM {
-			continue
-		}
-		foundPrevious = foundPrevious || old.Revision == 5
-		for _, declaration := range old.Actions {
-			if declaration.Action == action {
-				t.Fatal("an immutable prior profile gained settings authority")
+		for _, subject := range []SubjectType{SubjectUser, SubjectRole, SubjectServiceAccount} {
+			if allowed := CheckAuthorizationProfileSubject(profile, ref, action, subject) == nil; allowed != (subject == SubjectUser) {
+				t.Fatal("settings read widened its subject types")
 			}
 		}
-	}
-	if !foundPrevious {
-		t.Fatal("the previous profile must remain available to historical evidence")
-	}
-	if _, ok := LookupActionDefinition("iam.security-settings.update"); ok {
-		t.Fatal("unfinished settings mutation must not be advertised")
+		for _, method := range []UserAuthenticationMethod{UserAuthenticationLoginSession, UserAuthenticationAccessKey} {
+			if allowed := CheckAuthorizationProfileUserAuthentication(profile, ref, action, method) == nil; allowed != (method == UserAuthenticationLoginSession) {
+				t.Fatal("settings read widened its authentication methods")
+			}
+		}
+		resource := ResourceReference{Kind: ResourceAccount, ID: "account-a"}
+		if _, err := NewAuthorizationRequest(action, resource, AuthorizationResourceInstance, "", "settings-read", "settings-read"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := NewAuthorizationRequest(action, resource, AuthorizationResourceCollection, AuthorizationCollectionList, "settings-read", "settings-read"); err == nil {
+			t.Fatal("settings read admitted an unbound collection")
+		}
+		foundPrevious := false
+		for _, old := range HistoricalAuthorizationProfiles() {
+			if old.Product != ProductIAM {
+				continue
+			}
+			foundPrevious = foundPrevious || old.Revision == 5
+			for _, declaration := range old.Actions {
+				if declaration.Action == action && (action != ActionIAMSecuritySettingsRead || old.Revision < 6) {
+					t.Fatal("an immutable prior profile gained settings authority")
+				}
+			}
+		}
+		if !foundPrevious {
+			t.Fatal("the previous profile must remain available to historical evidence")
+		}
 	}
 }
 
 func TestAccessKeyManagementUsesAnExplicitNewUserOnlyProfile(t *testing.T) {
 	profile, found := LookupAuthorizationProfile(ProductIAM)
-	if !found || profile.Revision != 6 {
+	if !found || profile.Revision != 7 {
 		t.Fatal("missing source-owned access key management declaration")
 	}
 	_, digest, err := CanonicalizeAuthorizationProfile(profile)
@@ -3668,7 +3700,7 @@ func TestAuthorizationProfileUserAuthenticationIsExplicitAndCommitted(t *testing
 	}
 	for _, source := range AllAuthorizationProfiles() {
 		for _, declared := range source.Actions {
-			if source.Product == ProductIAM && declared.Action == ActionIAMSecuritySettingsRead {
+			if source.Product == ProductIAM && (declared.Action == ActionIAMSecuritySettingsRead || declared.Action == ActionIAMSecuritySettingsUpdate) {
 				if !slices.Equal(declared.UserAuthenticationMethods, []UserAuthenticationMethod{UserAuthenticationLoginSession}) {
 					t.Fatal("settings read widened the actual authentication carrier")
 				}

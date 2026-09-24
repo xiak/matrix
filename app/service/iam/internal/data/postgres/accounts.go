@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+
+	"github.com/jackc/pgx/v5/pgconn"
 
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 	"github.com/xiak/matrix/api/contractjson"
@@ -59,6 +62,55 @@ func (value *transaction) ReadAccountSecuritySettings(ctx context.Context, read 
 	var result iamv1.AccountSecuritySettings
 	if iamv1.DecodeRequest(bytes.NewReader(encoded), &result) != nil || iamv1.ValidateAccountSecuritySettings(result) != nil || result.AccountID != read.AccountID {
 		return iamv1.AccountSecuritySettings{}, identityaccess.ErrUnavailable
+	}
+	return result, nil
+}
+
+func (value *transaction) LockAccountSecuritySettings(ctx context.Context, caller iamv1.Session) error {
+	_, err := value.tx.Exec(ctx, "SELECT iam.lock_account_security_settings($1,$2,$3)", caller.AccountID, caller.PrincipalID, caller.ID)
+	return mapSubjectDatabaseError("lock IAM security settings", err)
+}
+
+func (value *transaction) UpdateAccountSecuritySettings(ctx context.Context, mutation identityaccess.SecuritySettingsMutation) (iamv1.UpdateAccountSecuritySettingsResponse, error) {
+	s, r := mutation.Session, mutation.Request
+	if iamv1.ValidateUpdateAccountSecuritySettingsRequest(r) != nil || auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil ||
+		mutation.AuditEvent.Action != auditv1.ActionIAMSecuritySettingsUpdated || string(mutation.AuditEvent.TenantID) != string(s.AccountID) ||
+		string(mutation.AuditEvent.Actor.ID) != string(s.PrincipalID) || mutation.AuditEvent.RequestID != r.RequestID {
+		return iamv1.UpdateAccountSecuritySettingsResponse{}, identityaccess.ErrInvalidArgument
+	}
+	event, err := json.Marshal(mutation.AuditEvent)
+	if err != nil {
+		return iamv1.UpdateAccountSecuritySettingsResponse{}, identityaccess.ErrUnavailable
+	}
+	defer clear(event)
+	var encoded []byte
+	err = value.tx.QueryRow(ctx, "SELECT iam.update_account_security_settings($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)",
+		s.AccountID, s.PrincipalID, s.ID, mutation.DecisionID, r.RequestID, r.StepUpID, r.ExpectedResourceVersion, r.MFA.RequiredForUsers, event).Scan(&encoded)
+	if err != nil {
+		return iamv1.UpdateAccountSecuritySettingsResponse{}, mapStepUpError("update IAM security settings", err)
+	}
+	defer clear(encoded)
+	var result iamv1.UpdateAccountSecuritySettingsResponse
+	if contractjson.DecodeObjectBytes(encoded, 2048, &result) != nil {
+		return iamv1.UpdateAccountSecuritySettingsResponse{}, identityaccess.ErrUnavailable
+	}
+	return result, nil
+}
+
+func (value *transaction) ReadSecuritySettingsChange(ctx context.Context, read identityaccess.AccountRead, commandID string) (iamv1.AccountSecuritySettingsChange, error) {
+	var encoded []byte
+	err := value.tx.QueryRow(ctx, "SELECT iam.read_security_settings_change($1,$2,$3,$4)", read.AccountID, read.ActorPrincipalID, read.DecisionID, commandID).Scan(&encoded)
+	if err != nil {
+		var failure *pgconn.PgError
+		if errors.As(err, &failure) && failure.Code == "P0002" {
+			return iamv1.AccountSecuritySettingsChange{}, identityaccess.ErrSecuritySettingsChangeNotFound
+		}
+		return iamv1.AccountSecuritySettingsChange{}, mapAuthorizationDatabaseError("read IAM security settings change", err)
+	}
+	defer clear(encoded)
+	var result iamv1.AccountSecuritySettingsChange
+	if contractjson.DecodeObjectBytes(encoded, 2048, &result) != nil {
+		return iamv1.AccountSecuritySettingsChange{}, identityaccess.ErrUnavailable
 	}
 	return result, nil
 }

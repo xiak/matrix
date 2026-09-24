@@ -9,17 +9,20 @@ import (
 	"github.com/xiak/matrix/app/service/iam/internal/authority"
 )
 
-// This private tuple is derived from an actual LOGIN_SESSION, never a caller
-// account/user selector. It does not create another principal or MFA factor.
+// This private tuple is derived from one actual LOGIN_SESSION or the closed
+// initial ENROLLMENT ceremony. Both fields together, or neither, are invalid.
+// It is never a caller account/user selector or another principal.
 type NotificationContactSubject struct {
-	AccountID iamv1.AccountID
-	UserID    iamv1.PrincipalID
-	SessionID iamv1.SessionID
+	AccountID   iamv1.AccountID
+	UserID      iamv1.PrincipalID
+	SessionID   iamv1.SessionID
+	ChallengeID string
 }
 
 type NotificationVerificationStart struct {
 	Subject         NotificationContactSubject
 	PasswordAttempt PasswordAttempt
+	IntentDigest    string
 	RequestID       string
 	NotificationID  string
 	Binding         iamv1.EmailVerificationBinding
@@ -53,7 +56,25 @@ func (NotificationConfirmationAttempt) GoString() string {
 func (NotificationConfirmationAttempt) MarshalJSON() ([]byte, error) { return nil, ErrUnavailable }
 
 func notificationSubject(subject SessionCredential) NotificationContactSubject {
-	return NotificationContactSubject{subject.Subject.Organization.ID, subject.Subject.Principal.ID, subject.Subject.Session.ID}
+	return NotificationContactSubject{AccountID: subject.Subject.Organization.ID, UserID: subject.Subject.Principal.ID, SessionID: subject.Subject.Session.ID}
+}
+
+func (service *Authority) enrollmentNotificationSubject(ctx context.Context, tx Transaction, id string, credential iamv1.Secret) (NotificationContactSubject, EnrollmentChallengeInspection, error) {
+	identity, err := service.authenticateChallenge(ctx, tx, id, credential)
+	if err != nil {
+		return NotificationContactSubject{}, EnrollmentChallengeInspection{}, err
+	}
+	if identity.Purpose != "ENROLLMENT" || identity.NextStep != "ENROLLMENT" {
+		return NotificationContactSubject{}, EnrollmentChallengeInspection{}, ErrUnauthenticated
+	}
+	inspection, err := readEnrollmentChallenge(ctx, tx, identity)
+	if err != nil {
+		return NotificationContactSubject{}, EnrollmentChallengeInspection{}, err
+	}
+	if err := service.checkEmailVerificationCustody(ctx, tx); err != nil {
+		return NotificationContactSubject{}, EnrollmentChallengeInspection{}, err
+	}
+	return NotificationContactSubject{AccountID: identity.AccountID, UserID: identity.UserID, ChallengeID: identity.ID}, inspection, nil
 }
 
 // Startup registration only. Public requests cannot choose material or scope.
@@ -198,7 +219,7 @@ func (service *Authority) StartNotificationVerification(ctx context.Context, cre
 		if err != nil {
 			return err
 		}
-		if notificationSubject(subject) != (NotificationContactSubject{attempt.AccountID, attempt.PrincipalID, attempt.SessionID}) ||
+		if notificationSubject(subject) != (NotificationContactSubject{AccountID: attempt.AccountID, UserID: attempt.PrincipalID, SessionID: attempt.SessionID}) ||
 			subject.CredentialGeneration != attempt.CredentialGeneration || attempt.Purpose != PasswordAttemptNotificationContact {
 			return ErrUnauthenticated
 		}
@@ -206,27 +227,10 @@ func (service *Authority) StartNotificationVerification(ctx context.Context, cre
 		if err != nil {
 			return err
 		}
-		scope := service.email.Registration().Scope
-		binding := iamv1.EmailVerificationBinding{InstallationID: scope.InstallationID, BootstrapDigest: scope.BootstrapDigest,
-			AccountID: attempt.AccountID, UserID: attempt.PrincipalID, VerificationID: verificationID, Recipient: request.Email,
-			CredentialGeneration: attempt.CredentialGeneration, IssuedAt: now, ExpiresAt: now.Add(10 * time.Minute)}
-		sealed, err := service.email.Seal(binding, code)
-		if err != nil {
-			return ErrUnavailable
-		}
-		defer clear(sealed.Nonce)
-		defer clear(sealed.Ciphertext)
-		// No address, password, code or encrypted material enters the Audit fact.
-		digest, err := digestSanitized("notification-contact-start", struct{ VerificationID, RequestID string }{verificationID, request.RequestID})
-		if err != nil {
-			return err
-		}
-		event, err := service.newManagementEvent(subject, auditv1.ActionIAMNotificationContactVerificationStarted, auditv1.TargetUser, string(attempt.PrincipalID), "", digest, request.RequestID, now)
-		if err != nil {
-			return err
-		}
-		result, err = tx.StartNotificationVerification(ctx, NotificationVerificationStart{Subject: notificationSubject(subject), PasswordAttempt: attempt,
-			RequestID: request.RequestID, NotificationID: notificationID, Binding: binding, Sealed: sealed, AuditEvent: event})
+		result, err = service.recordNotificationVerification(ctx, tx, NotificationVerificationStart{Subject: notificationSubject(subject), PasswordAttempt: attempt,
+			IntentDigest: attempt.IntentDigest, RequestID: request.RequestID, NotificationID: notificationID,
+			Binding: iamv1.EmailVerificationBinding{AccountID: attempt.AccountID, UserID: attempt.PrincipalID, VerificationID: verificationID,
+				Recipient: request.Email, CredentialGeneration: attempt.CredentialGeneration, IssuedAt: now, ExpiresAt: now.Add(10 * time.Minute)}}, code)
 		return err
 	})
 	if err != nil {
@@ -238,10 +242,111 @@ func (service *Authority) StartNotificationVerification(ctx context.Context, cre
 	return result, nil
 }
 
+func (service *Authority) StartChallengeNotificationVerification(ctx context.Context, id string, request iamv1.StartChallengeNotificationContactVerificationRequest) (iamv1.NotificationContactVerification, error) {
+	if iamv1.ValidateID("challengeId", id) != nil || iamv1.ValidateStartChallengeNotificationContactVerificationRequest(request) != nil {
+		return iamv1.NotificationContactVerification{}, ErrInvalidArgument
+	}
+	verificationID, err := service.config.NewID("email-verification")
+	if err != nil {
+		return iamv1.NotificationContactVerification{}, ErrUnavailable
+	}
+	notificationID, err := service.config.NewID("notification")
+	if err != nil {
+		return iamv1.NotificationContactVerification{}, ErrUnavailable
+	}
+	code, err := service.credentials.IssueEmailVerificationCode()
+	if err != nil {
+		return iamv1.NotificationContactVerification{}, ErrUnavailable
+	}
+	var result iamv1.NotificationContactVerification
+	err = service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
+		subject, inspection, err := service.enrollmentNotificationSubject(ctx, tx, id, request.ChallengeCredential)
+		if err != nil {
+			return err
+		}
+		now, err := transactionTime(ctx, tx)
+		if err != nil {
+			return err
+		}
+		// Private binding of the already password-proved ceremony, not a new
+		// password attempt or an authorization decision for another identity.
+		intent, err := digestSanitized("initial-enrollment-contact", struct{ ChallengeID, RequestID, Email string }{id, request.RequestID, request.Email})
+		if err != nil {
+			return err
+		}
+		result, err = service.recordNotificationVerification(ctx, tx, NotificationVerificationStart{Subject: subject, IntentDigest: intent,
+			RequestID: request.RequestID, NotificationID: notificationID,
+			Binding: iamv1.EmailVerificationBinding{AccountID: subject.AccountID, UserID: subject.UserID, VerificationID: verificationID,
+				Recipient: request.Email, CredentialGeneration: inspection.CredentialGeneration, IssuedAt: now, ExpiresAt: inspection.State.Challenge.ExpiresAt}}, code)
+		return err
+	})
+	if err != nil {
+		return iamv1.NotificationContactVerification{}, err
+	}
+	if iamv1.ValidateNotificationContactVerification(result) != nil {
+		return iamv1.NotificationContactVerification{}, ErrUnavailable
+	}
+	return result, nil
+}
+
+func (service *Authority) recordNotificationVerification(ctx context.Context, tx Transaction, change NotificationVerificationStart, code iamv1.Secret) (iamv1.NotificationContactVerification, error) {
+	scope := service.email.Registration().Scope
+	change.Binding.InstallationID, change.Binding.BootstrapDigest = scope.InstallationID, scope.BootstrapDigest
+	sealed, err := service.email.Seal(change.Binding, code)
+	if err != nil {
+		return iamv1.NotificationContactVerification{}, ErrUnavailable
+	}
+	defer clear(sealed.Nonce)
+	defer clear(sealed.Ciphertext)
+	change.Sealed = sealed
+	// No recipient, password, code or encrypted bytes enter the Audit fact.
+	digest, err := digestSanitized("notification-contact-start", struct{ VerificationID, RequestID string }{change.Binding.VerificationID, change.RequestID})
+	if err != nil {
+		return iamv1.NotificationContactVerification{}, err
+	}
+	change.AuditEvent, err = service.notificationContactEvent(change.Subject, auditv1.ActionIAMNotificationContactVerificationStarted, digest, change.RequestID, change.Binding.IssuedAt)
+	if err != nil {
+		return iamv1.NotificationContactVerification{}, err
+	}
+	return tx.StartNotificationVerification(ctx, change)
+}
+
+func (service *Authority) notificationContactEvent(subject NotificationContactSubject, action auditv1.Action, digest, requestID string, now time.Time) (auditv1.Event, error) {
+	if action != auditv1.ActionIAMNotificationContactVerificationStarted && action != auditv1.ActionIAMNotificationContactVerified {
+		return auditv1.Event{}, ErrInvalidArgument
+	}
+	id, err := service.config.NewID("event")
+	if err != nil {
+		return auditv1.Event{}, ErrUnavailable
+	}
+	return newAuditEvent(id, subject.AccountID, "", auditv1.ActorReference{Type: auditv1.ActorUser, ID: auditv1.ActorID(subject.UserID)},
+		action, auditv1.TargetReference{Kind: auditv1.TargetUser, ID: string(subject.UserID)}, auditv1.ResultSucceeded, "", digest, requestID, requestID, now)
+}
+
 func (service *Authority) ConfirmNotificationContact(ctx context.Context, credential iamv1.Secret, id string, request iamv1.ConfirmNotificationContactVerificationRequest) (iamv1.NotificationContactVerification, error) {
 	if iamv1.ValidateID("verificationId", id) != nil || iamv1.ValidateConfirmNotificationContactVerificationRequest(request) != nil {
 		return iamv1.NotificationContactVerification{}, ErrInvalidArgument
 	}
+	return service.confirmNotificationContact(ctx, id, request.RequestID, request.Code, func(ctx context.Context, tx Transaction) (NotificationContactSubject, uint64, error) {
+		subject, err := service.notificationSession(ctx, tx, credential)
+		return notificationSubject(subject), subject.CredentialGeneration, err
+	})
+}
+
+func (service *Authority) ConfirmChallengeNotificationContact(ctx context.Context, challengeID, id string, request iamv1.ConfirmChallengeNotificationContactVerificationRequest) (iamv1.NotificationContactVerification, error) {
+	if iamv1.ValidateID("challengeId", challengeID) != nil || iamv1.ValidateID("verificationId", id) != nil || iamv1.ValidateConfirmChallengeNotificationContactVerificationRequest(request) != nil {
+		return iamv1.NotificationContactVerification{}, ErrInvalidArgument
+	}
+	return service.confirmNotificationContact(ctx, id, request.RequestID, request.Code, func(ctx context.Context, tx Transaction) (NotificationContactSubject, uint64, error) {
+		subject, inspection, err := service.enrollmentNotificationSubject(ctx, tx, challengeID, request.ChallengeCredential)
+		return subject, inspection.CredentialGeneration, err
+	})
+}
+
+// Only the two closed public methods above supply authentication. The shared
+// reservation/comparison/finalization keeps their same persistent guess budget.
+func (service *Authority) confirmNotificationContact(ctx context.Context, id, requestID string, code iamv1.Secret,
+	authenticate func(context.Context, Transaction) (NotificationContactSubject, uint64, error)) (iamv1.NotificationContactVerification, error) {
 	attemptID, err := service.config.NewID("email-attempt")
 	if err != nil {
 		return iamv1.NotificationContactVerification{}, ErrUnavailable
@@ -249,11 +354,11 @@ func (service *Authority) ConfirmNotificationContact(ctx context.Context, creden
 	var attempt NotificationConfirmationAttempt
 	var admitted bool
 	err = service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
-		subject, err := service.notificationSession(ctx, tx, credential)
+		subject, _, err := authenticate(ctx, tx)
 		if err != nil {
 			return err
 		}
-		attempt, admitted, err = tx.ReserveNotificationConfirmation(ctx, notificationSubject(subject), id, attemptID)
+		attempt, admitted, err = tx.ReserveNotificationConfirmation(ctx, subject, id, attemptID)
 		return err
 	})
 	if err != nil {
@@ -270,7 +375,7 @@ func (service *Authority) ConfirmNotificationContact(ctx context.Context, creden
 	if err != nil {
 		return iamv1.NotificationContactVerification{}, ErrUnavailable
 	}
-	matched, err := authority.CompareEmailVerificationCode(expected, request.Code)
+	matched, err := authority.CompareEmailVerificationCode(expected, code)
 	if err != nil || !matched {
 		if err := service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
 			return tx.RejectNotificationConfirmation(ctx, attempt)
@@ -285,22 +390,22 @@ func (service *Authority) ConfirmNotificationContact(ctx context.Context, creden
 	}
 	var result iamv1.NotificationContactVerification
 	err = service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
-		subject, err := service.notificationSession(ctx, tx, credential)
+		subject, generation, err := authenticate(ctx, tx)
 		if err != nil {
 			return err
 		}
-		if notificationSubject(subject) != attempt.Subject || subject.CredentialGeneration != attempt.Binding.CredentialGeneration {
+		if subject != attempt.Subject || generation != attempt.Binding.CredentialGeneration {
 			return ErrUnauthenticated
 		}
 		now, err := transactionTime(ctx, tx)
 		if err != nil {
 			return err
 		}
-		digest, err := digestSanitized("notification-contact-confirm", struct{ VerificationID, RequestID string }{id, request.RequestID})
+		digest, err := digestSanitized("notification-contact-confirm", struct{ VerificationID, RequestID string }{id, requestID})
 		if err != nil {
 			return err
 		}
-		event, err := service.newManagementEvent(subject, auditv1.ActionIAMNotificationContactVerified, auditv1.TargetUser, string(attempt.Subject.UserID), "", digest, request.RequestID, now)
+		event, err := service.notificationContactEvent(subject, auditv1.ActionIAMNotificationContactVerified, digest, requestID, now)
 		if err != nil {
 			return err
 		}

@@ -323,6 +323,7 @@ BEGIN
         ('iam.account.enabled', 'IAM', 'ACCOUNT', 'SUCCEEDED', true, true, false),
         ('iam.account-root.credentials-recovered', 'IAM', 'USER', 'SUCCEEDED', true, true, false),
         ('iam.account.alias-set', 'IAM', 'ACCOUNT', 'SUCCEEDED', true, true, false),
+        ('iam.security-settings.updated', 'IAM', 'ACCOUNT', 'SUCCEEDED', true, true, false),
         ('iam.user.created', 'IAM', 'USER', 'SUCCEEDED', true, true, false),
         ('iam.user.updated', 'IAM', 'USER', 'SUCCEEDED', true, true, false),
         ('iam.user.deleted', 'IAM', 'USER', 'SUCCEEDED', true, true, false),
@@ -513,7 +514,7 @@ BEGIN
             'iam.authenticator.recovery-started','iam.authenticator.recovered','iam.recovery-codes.regenerated') AND (
             submitted_event#>>'{actor,type}' IS DISTINCT FROM 'USER'
             OR submitted_event#>>'{actor,id}' IS DISTINCT FROM submitted_event#>>'{target,id}'))
-        OR (action_name IN ('iam.account.alias-set','iam.user.created','iam.user.updated','iam.user.deleted','iam.user.status-set',
+        OR (action_name IN ('iam.account.alias-set','iam.security-settings.updated','iam.user.created','iam.user.updated','iam.user.deleted','iam.user.status-set',
             'iam.policy.created','iam.policy.updated','iam.policy.deleted','iam.policy-version.created','iam.policy-version.deleted','iam.policy.default-version-set','iam.group.created','iam.group.updated','iam.group.deleted','iam.group-membership.created','iam.group-membership.removed',
             'iam.role.created','iam.role.updated','iam.role.disabled','iam.role.enabled','iam.role.trust-set','iam.role.deleted',
             'iam.role.permission-boundary.set','iam.role.permission-boundary.removed',
@@ -597,7 +598,7 @@ AS $function$
         AND to_regclass('audit.records') IS NOT NULL
         AND to_regclass('audit.event_registry') IS NOT NULL
         AND audit.role_actor_contract_ready(),
-        24::bigint,
+        25::bigint,
         transaction_timestamp()
 $function$;
 
@@ -897,7 +898,7 @@ BEGIN
             AND submitted_to < submitted_from)
         OR (submitted_action IS NOT NULL AND submitted_action NOT IN (
             'iam.account.created', 'iam.account.disabled', 'iam.account.enabled',
-            'iam.account-root.credentials-recovered', 'iam.account.alias-set',
+            'iam.account-root.credentials-recovered', 'iam.account.alias-set','iam.security-settings.updated',
             'iam.user.created', 'iam.user.updated', 'iam.user.deleted',
             'iam.policy.created','iam.policy.updated','iam.policy.deleted','iam.policy-version.created','iam.policy-version.deleted','iam.policy.default-version-set','iam.group.created','iam.group.updated','iam.group.deleted',
             'iam.role.created','iam.role.updated','iam.role.disabled','iam.role.enabled','iam.role.trust-set','iam.role.deleted',

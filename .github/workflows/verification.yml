@@ -109,7 +109,7 @@ jobs:
               databases=(matrix_iam_totp_recovery_exhaustion_ci)
               ;;
             authority-step-up)
-              databases=(matrix_iam_step_up_ci)
+              databases=(matrix_iam_step_up_ci matrix_iam_security_settings_ci)
               ;;
             *) exit 1 ;;
           esac
@@ -163,7 +163,7 @@ jobs:
           while IFS= read -r iam_test; do
             [[ "$iam_test" =~ ^Test[A-Za-z0-9_]+$ ]] || continue
             case "$iam_test" in
-              TestIAMRoleAndManagementReferencesPostgres|TestIAMOwnSessionPostgres|TestIAMOwnSessionExpiryPostgres|TestIAMOwnSessionBulkPostgres|TestIAMPasswordAttemptsPostgres|TestIAMTOTPCustodyPostgres|TestIAMTOTPEnrollmentPostgres|TestIAMTOTPRecoveryExhaustionPostgres|TestIAMStepUpPostgres|TestIAMTOTPBackupSnapshotPostgres|TestIAMNotificationContactPostgres) continue ;;
+              TestIAMRoleAndManagementReferencesPostgres|TestIAMOwnSessionPostgres|TestIAMOwnSessionExpiryPostgres|TestIAMOwnSessionBulkPostgres|TestIAMPasswordAttemptsPostgres|TestIAMTOTPCustodyPostgres|TestIAMTOTPEnrollmentPostgres|TestIAMTOTPRecoveryExhaustionPostgres|TestIAMStepUpPostgres|TestIAMSecuritySettingsPostgres|TestIAMTOTPBackupSnapshotPostgres|TestIAMNotificationContactPostgres) continue ;;
             esac
             printf 'IAM fixture: %s\n' "$iam_test"
             time go test -race -p 1 -count=1 ./app/service/iam/internal/integration -run "^${iam_test}$"
@@ -200,13 +200,14 @@ jobs:
           MATRIX_IAM_BACKUP_POSTGRES_TASK: iam-authority-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.lane }}
         run: time go test -race -p 1 -count=1 ./test/authorityprocess
 
-      - name: Operation-bound proof and saved-code regeneration
+      - name: Operation-bound proof, saved-code regeneration and account requirements
         if: matrix.lane == 'authority-step-up'
         env:
           MATRIX_IAM_STEP_UP_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_step_up_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_SECURITY_SETTINGS_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_security_settings_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
         run: |
           time go test -race -p 1 -count=1 ./app/service/iam/internal/integration \
-            -run '^TestIAMStepUpPostgres$'
+            -run '^TestIAM(StepUp|SecuritySettings)Postgres$'
 
       - name: Saved-code exhaustion across actual authentication windows
         if: matrix.lane == 'authority-recovery-window'

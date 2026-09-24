@@ -14,9 +14,15 @@ import (
 
 func (value *transaction) StartStepUp(ctx context.Context, mutation identityaccess.StepUpStart) (iamv1.StepUp, error) {
 	s, r := mutation.Session, mutation.Request
+	var expectedSettingsVersion *uint64
+	var requiredForUsers *bool
+	if r.SecuritySettings != nil {
+		expectedSettingsVersion = &r.SecuritySettings.ExpectedResourceVersion
+		requiredForUsers = &r.SecuritySettings.MFA.RequiredForUsers
+	}
 	var encoded []byte
-	err := value.tx.QueryRow(ctx, "SELECT iam.start_step_up($1,$2,$3,$4,$5,$6,$7)", s.AccountID, s.PrincipalID, s.ID,
-		mutation.ID, r.RequestID, r.Operation, r.ExpectedFactorRevision).Scan(&encoded)
+	err := value.tx.QueryRow(ctx, "SELECT iam.start_step_up($1,$2,$3,$4,$5,$6,$7,$8,$9)", s.AccountID, s.PrincipalID, s.ID,
+		mutation.ID, r.RequestID, r.Operation, r.ExpectedFactorRevision, expectedSettingsVersion, requiredForUsers).Scan(&encoded)
 	if err != nil {
 		return iamv1.StepUp{}, mapStepUpError("start operation proof", err)
 	}

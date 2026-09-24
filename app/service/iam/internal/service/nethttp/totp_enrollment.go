@@ -5,7 +5,63 @@ import (
 	"strings"
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
+	"github.com/xiak/matrix/app/service/iam/internal/usecase/identityaccess"
 )
+
+// The existing challenge router enforces one secret carrier and POST-only
+// access. Authentication and the current stage are rechecked by the use case.
+func (value *handler) challengeTOTPEnrollment(response http.ResponseWriter, request *http.Request, id, suffix string) {
+	var encoded []byte
+	var err error
+	switch suffix {
+	case ":enrollment-state":
+		body, ok := decodeJSON[iamv1.InspectEnrollmentChallengeRequest](value, response, request)
+		if !ok {
+			return
+		}
+		result, err := value.workflow.InspectEnrollmentChallenge(request.Context(), id, body)
+		if err != nil {
+			value.writeError(response, request, err)
+			return
+		}
+		if iamv1.ValidateEnrollmentChallengeState(result) != nil || result.Challenge.ID != id {
+			value.writeError(response, request, identityaccess.ErrUnavailable)
+			return
+		}
+		writeJSON(response, http.StatusOK, result)
+		return
+	case ":enroll":
+		body, ok := decodeJSON[iamv1.StartChallengeTOTPEnrollmentRequest](value, response, request)
+		if !ok {
+			return
+		}
+		var result iamv1.StartTOTPEnrollmentResponse
+		result, err = value.workflow.StartChallengeTOTPEnrollment(request.Context(), id, body)
+		if err == nil {
+			if result.Enrollment.RequestID != body.RequestID {
+				err = identityaccess.ErrUnavailable
+			} else {
+				encoded, err = iamv1.EncodeStartTOTPEnrollmentResponse(result)
+			}
+		}
+	case ":confirm-enrollment":
+		body, ok := decodeJSON[iamv1.VerifyAuthenticationChallengeRequest](value, response, request)
+		if !ok {
+			return
+		}
+		var result iamv1.ConfirmTOTPEnrollmentResponse
+		result, err = value.workflow.ConfirmChallengeTOTPEnrollment(request.Context(), id, body)
+		if err == nil {
+			encoded, err = iamv1.EncodeConfirmTOTPEnrollmentResponse(result)
+		}
+	}
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	defer clear(encoded)
+	writeEncodedJSON(response, http.StatusOK, encoded)
+}
 
 // The shared challenge router already rejects a bearer, query parameters and
 // every method except POST. No caller-supplied tenant/user selector is read.

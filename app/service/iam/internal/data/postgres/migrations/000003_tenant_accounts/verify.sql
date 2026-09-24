@@ -1,9 +1,9 @@
 DO $verify_accounts$
 BEGIN
     IF NOT iam.account_security_settings_contract_ready() THEN
-        RAISE EXCEPTION 'IAM security settings read contract is unavailable';
+        RAISE EXCEPTION 'IAM security settings contract is unavailable';
     END IF;
-    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 42::bigint THEN
+    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 43::bigint THEN
         RAISE EXCEPTION 'IAM account/proof schema version is incompatible';
     END IF;
     IF NOT EXISTS (

@@ -150,9 +150,9 @@ func TestAccountSecuritySettingsSchemasRejectMissingConfigurationAndAuthoritySel
 			}
 			if strings.Contains(sample.wire, `"callerSessionEnded"`) {
 				for _, changed := range []string{
-					strings.Replace(sample.wire, `,"callerSessionEnded":false`, "", 1),
-					strings.Replace(sample.wire, `"callerSessionEnded":false`, `"callerSessionEnded":null`, 1),
-					strings.Replace(sample.wire, `"callerSessionEnded":false`, `"callerSessionEnded":true`, 1),
+					strings.Replace(sample.wire, `,"callerSessionEnded":true`, "", 1),
+					strings.Replace(sample.wire, `"callerSessionEnded":true`, `"callerSessionEnded":null`, 1),
+					strings.Replace(sample.wire, `"callerSessionEnded":true`, `"callerSessionEnded":false`, 1),
 				} {
 					cases = append(cases, struct {
 						wire  string
@@ -191,6 +191,9 @@ func TestStepUpSchemasKeepOperationProofSeparateFromLoginAndSecretReplay(t *test
 	api := loadIAMOpenAPI(t)
 	step := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"StepUp","id":"proof-a","requestId":"regenerate-a","operation":"RECOVERY_CODES_REGENERATE","expectedFactorRevision":2,"state":"PENDING","createdAt":"2026-09-21T12:00:00Z","expiresAt":"2026-09-21T12:02:00Z"}`
 	start := `{"requestId":"regenerate-a","operation":"RECOVERY_CODES_REGENERATE","expectedFactorRevision":2}`
+	settingsIntent := `{"expectedResourceVersion":1,"mfa":{"requiredForUsers":true}}`
+	settingsStep := strings.TrimSuffix(strings.Replace(step, "RECOVERY_CODES_REGENERATE", "SECURITY_SETTINGS_UPDATE", 1), "}") + `,"securitySettings":` + settingsIntent + `}`
+	settingsStart := strings.TrimSuffix(strings.Replace(start, "RECOVERY_CODES_REGENERATE", "SECURITY_SETTINGS_UPDATE", 1), "}") + `,"securitySettings":` + settingsIntent + `}`
 	verify := `{"requestId":"verify-a","password":"synthetic-password","code":"malformed-nonempty-candidate"}`
 	command := `{"requestId":"regenerate-a","stepUpId":"proof-a","expectedFactorRevision":2}`
 	result := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"RecoveryCodeRegeneration","id":"regeneration-a","requestId":"regenerate-a","factorId":"factor-a","factorRevision":2,"createdAt":"2026-09-21T12:01:00Z"}`
@@ -216,6 +219,14 @@ func TestStepUpSchemasKeepOperationProofSeparateFromLoginAndSecretReplay(t *test
 		valid      bool
 	}{
 		{"StepUp", step, true},
+		{"StepUp", settingsStep, true},
+		{"StepUp", strings.Replace(settingsStep, "true", "false", 1), true},
+		{"StepUp", strings.Replace(settingsStep, settingsIntent, "null", 1), false},
+		{"StepUp", strings.Replace(step, "RECOVERY_CODES_REGENERATE", "SECURITY_SETTINGS_UPDATE", 1), false},
+		{"StepUp", strings.Replace(settingsStep, "SECURITY_SETTINGS_UPDATE", "RECOVERY_CODES_REGENERATE", 1), false},
+		{"StepUp", strings.TrimSuffix(step, "}") + `,"securitySettings":null}`, false},
+		{"StepUp", strings.Replace(settingsStep, "PENDING", "PROVED", 1), false},
+		{"StepUp", strings.TrimSuffix(strings.Replace(settingsStep, "PENDING", "PROVED", 1), "}") + `,"provedAt":"2026-09-21T12:00:30Z"}`, true},
 		{"StepUp", proved, true},
 		{"StepUp", consumed, true},
 		{"StepUp", strings.Replace(step, "PENDING", "EXPIRED", 1), true},
@@ -229,6 +240,14 @@ func TestStepUpSchemasKeepOperationProofSeparateFromLoginAndSecretReplay(t *test
 		{"StepUp", strings.Replace(step, `"expectedFactorRevision":2`, `"expectedFactorRevision":1`, 1), false},
 		{"StepUp", strings.Replace(step, `"expectedFactorRevision":2`, `"expectedFactorRevision":9007199254740991`, 1), true},
 		{"StartStepUpRequest", start, true},
+		{"StartStepUpRequest", settingsStart, true},
+		{"StartStepUpRequest", strings.Replace(settingsStart, "true", "false", 1), true},
+		{"StartStepUpRequest", strings.Replace(settingsStart, settingsIntent, "null", 1), false},
+		{"StartStepUpRequest", strings.Replace(settingsStart, settingsIntent, `{}`, 1), false},
+		{"StartStepUpRequest", strings.Replace(settingsStart, `"requiredForUsers":true`, `"requiredForUsers":null`, 1), false},
+		{"StartStepUpRequest", strings.Replace(settingsStart, `"expectedResourceVersion":1`, `"expectedResourceVersion":9007199254740991`, 1), false},
+		{"StartStepUpRequest", strings.Replace(settingsStart, "SECURITY_SETTINGS_UPDATE", "RECOVERY_CODES_REGENERATE", 1), false},
+		{"StartStepUpRequest", strings.TrimSuffix(start, "}") + `,"securitySettings":null}`, false},
 		{"StartStepUpRequest", strings.Replace(start, ":2}", ":1}", 1), false},
 		{"StartStepUpRequest", strings.TrimSuffix(start, "}") + `,"input":{}}`, false},
 		{"VerifyStepUpRequest", verify, true},

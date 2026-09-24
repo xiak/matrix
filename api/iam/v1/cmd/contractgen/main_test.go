@@ -34,18 +34,52 @@ func TestPasswordOverloadOnlyDocumentsTheBoundedAuthenticationEntrypoints(t *tes
 	}
 }
 
-func TestSecuritySettingsOnlyPublishesImplementedRead(t *testing.T) {
+func TestSecuritySettingsPublishesExactMutationAndOwnCompletion(t *testing.T) {
 	document := buildDocument()
-	found := false
+	found := 0
 	for path, value := range document["paths"].(object) {
 		if strings.HasPrefix(path, "/v1/account/security-settings") {
-			if path != "/v1/account/security-settings" || len(value.(object)) != 1 || value.(object)["get"] == nil {
-				t.Fatal("read slice published an unimplemented settings mutation or completion route")
+			methods := value.(object)
+			if path == "/v1/account/security-settings" {
+				if len(methods) != 2 || methods["get"] == nil || methods["put"] == nil {
+					t.Fatal("settings methods differ")
+				}
+			} else if path != "/v1/account/security-settings/changes/{requestId}" || len(methods) != 1 || methods["get"] == nil {
+				t.Fatal("settings exposes an extra selector or completion mutation")
 			}
-			found = true
+			found++
 		}
 	}
-	if !found {
-		t.Fatal("implemented settings read is not documented")
+	if found != 2 {
+		t.Fatal("settings command or completion is not documented")
+	}
+}
+
+func TestInitialEnrollmentDocumentsItsOwnCredentialCarrier(t *testing.T) {
+	paths := buildDocument()["paths"].(object)
+	for _, sample := range []struct{ path, operation, request, response string }{
+		{"/v1/auth/challenges/{challengeId}:enrollment-state", "inspectEnrollmentChallenge", "InspectEnrollmentChallengeRequest", "EnrollmentChallengeState"},
+		{"/v1/auth/challenges/{challengeId}:enroll", "startChallengeTOTPEnrollment", "StartChallengeTOTPEnrollmentRequest", "StartTOTPEnrollmentResponse"},
+		{"/v1/auth/challenges/{challengeId}:confirm-enrollment", "confirmChallengeTOTPEnrollment", "VerifyAuthenticationChallengeRequest", "ConfirmTOTPEnrollmentResponse"},
+		{"/v1/auth/challenges/{challengeId}/notification-contact/verifications", "startChallengeNotificationVerification", "StartChallengeNotificationContactVerificationRequest", "NotificationContactVerification"},
+		{"/v1/auth/challenges/{challengeId}/notification-contact/verifications/{verificationId}:confirm", "confirmChallengeNotificationContact", "ConfirmChallengeNotificationContactVerificationRequest", "NotificationContactVerification"},
+	} {
+		path, ok := paths[sample.path].(object)
+		if !ok || len(path) != 1 {
+			t.Fatal("restricted command route missing or exposes an extra method")
+		}
+		operation, ok := path["post"].(object)
+		if !ok || operation["operationId"] != sample.operation {
+			t.Fatal("wrong enrollment operation")
+		}
+		security, ok := operation["security"].([]any)
+		if !ok || len(security) != 0 {
+			t.Fatal("challenge command inherited normal Session bearer security")
+		}
+		request := operation["requestBody"].(object)["content"].(object)["application/json"].(object)["schema"].(object)
+		response := operation["responses"].(object)["200"].(object)["content"].(object)["application/json"].(object)["schema"].(object)
+		if request["$ref"] != "#/components/schemas/"+sample.request || response["$ref"] != "#/components/schemas/"+sample.response {
+			t.Fatal("command reused a broader authentication body or response")
+		}
 	}
 }
