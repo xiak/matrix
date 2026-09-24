@@ -4,7 +4,7 @@ import { useId, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Alert, Button, Checkbox, FormField, Input, Radio, SearchInput, Select, TablePagination, TextArea } from "@ui/xiak";
 import type { AccountPolicyDocument, AuthorizationProfileAction, AuthorizationProfileDirectory } from "../domain/accounts";
-import { visualActionGroups, type VisualActionGroup } from "../domain/accountPolicyVisualAuthoring";
+import { visualActionGroups, visualActionShapeKey, type VisualActionGroup } from "../domain/accountPolicyVisualAuthoring";
 import styles from "./AccountPolicyVisualEditor.module.css";
 
 type Statement = AccountPolicyDocument["statements"][number];
@@ -16,10 +16,10 @@ const stringOperators = ["STRING_EQUALS", "STRING_NOT_EQUALS"] as const;
 const timeOperators = ["DATE_GREATER_THAN_EQUALS", "DATE_LESS_THAN"] as const;
 const maxStatementActions = 128;
 const emptySelectedActions: string[] = [];
-const collectionOnly = (action: AuthorizationProfileAction) => action.resourceShapes.every((shape) => shape.mode === "COLLECTION");
+const collectionOnly = (action: AuthorizationProfileAction) => visualActionShapeKey(action) === "COLLECTION";
 
 function canUseAction(action: AuthorizationProfileAction, statement: Statement, selected: AuthorizationProfileAction[]): boolean {
-  if (selected.length && collectionOnly(action) !== collectionOnly(selected[0]!)) return false;
+  if (selected.length && visualActionShapeKey(action) !== visualActionShapeKey(selected[0]!)) return false;
   if (statement.resources.some((resource) => resource.match === "PREFIX_IN_AUTHORITY") &&
       !action.resourceShapes.some((shape) => shape.mode === "INSTANCE" && shape.prefixAllowed)) return false;
   if (collectionOnly(action) &&

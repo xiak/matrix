@@ -6,6 +6,12 @@ export type VisualActionGroup = {
   actions: AuthorizationProfileAction[];
 };
 
+// A shared selector is only an honest visual model when every Action accepts
+// the same request-shape modes. Collection purpose labels can still differ.
+export function visualActionShapeKey(action: AuthorizationProfileAction): string {
+  return [...new Set(action.resourceShapes.map((shape) => shape.mode))].sort().join("|");
+}
+
 // The catalog describes current product declarations, not a grant or a frozen
 // version. Keep authoring limited to exact TENANT actions; IAM remains the
 // authority for publication and may reject a stale catalog.
@@ -90,8 +96,7 @@ export function visualDraftFromJSON(text: string, directory: AuthorizationProfil
     if (!group) return { status: "catalogMismatch" };
     const selected = group.actions.filter((action) => actionNames.includes(action.action));
     if (selected.length !== actionNames.length || selected.some((action) =>
-      action.resourceShapes.every((shape) => shape.mode === "COLLECTION") !==
-        selected[0]!.resourceShapes.every((shape) => shape.mode === "COLLECTION"))) return { status: "catalogMismatch" };
+      visualActionShapeKey(action) !== visualActionShapeKey(selected[0]!))) return { status: "catalogMismatch" };
     if (statement.resources.some((resource: unknown) => !record(resource) ||
         !keysAre(resource, ["kind", "match"], ["id"]) || resource.kind !== group.resourceKind ||
         !["EXACT", "PREFIX_IN_AUTHORITY", "ANY_IN_AUTHORITY"].includes(String(resource.match)) ||

@@ -7,6 +7,7 @@
 .directoryHeading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--xiak-spacing-default); padding: var(--xiak-spacing-narrow) var(--xiak-table-cell-padding-inline) 0; border-bottom: var(--xiak-border-subtle); }
 .directoryHeading [role="tablist"] { border-bottom: 0; }
 .note { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: 1.7; margin: 0; overflow-wrap: anywhere; }
+.previewNotice { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-default); }
 .actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--xiak-spacing-tight); min-width: 0; }
 .policyTable { table-layout: fixed; min-width: 900px; }
 .policyTable td { padding-block: var(--xiak-spacing-default); }

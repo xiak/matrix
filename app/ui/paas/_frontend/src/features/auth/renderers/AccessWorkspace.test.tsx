@@ -405,6 +405,25 @@ describe("policy creation entry and directory contract", () => {
     }
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
   });
+  it("previews the current IAM policy author from the MOCK directory without creating or granting", async () => {
+    const { user, repository } = await open("policies");
+    await user.click(screen.getByRole("button", { name: "体验新版策略编辑" }));
+    expect(screen.getByRole("heading", { name: "体验 IAM 策略声明" })).toBeTruthy();
+    expect(screen.getByText(/审阅与完成体验均不调用真实 IAM/)).toBeTruthy();
+    expect(repository.listAuthorizationProfiles).not.toHaveBeenCalled();
+    await user.type(screen.getByRole("textbox", { name: "策略名称" }), "DemoReader");
+    await user.click(screen.getByRole("tab", { name: "可视化编辑" }));
+    await user.click(await screen.findByRole("radio", { name: /paas.application.read/ }));
+    await user.type(screen.getByRole("textbox", { name: "资源 ID 或前缀" }), "app-demo");
+    await user.click(screen.getByRole("button", { name: "审阅策略" }));
+    expect(screen.getByRole("heading", { name: "审阅新策略" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "完成体验" }));
+    expect(screen.getByText(/没有创建策略、关联身份或授予资源权限/)).toBeTruthy();
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+    expect(repository.execute).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "返回策略目录" }));
+    expect(screen.getByRole("table", { name: "策略" })).toBeTruthy();
+  });
   it("matches CAM directory columns, omits preset metadata in custom view and restores chooser focus", async () => {
     const { user, repository } = await open("policies");
     const headings = () => within(screen.getByRole("table", { name: "策略" })).getAllByRole("columnheader").map((cell) => cell.textContent).filter(Boolean);
@@ -2578,7 +2597,7 @@ describe("CAM-style access workspace", () => {
     expect(repository.listUsers).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: "新建用户组" })).toBeNull();
   });
-  it.each(["keys", "create-policy", "simulator"] as const)("shows an honest unavailable state for %s on the live adapter", async (view) => {
+  it.each(["keys", "create-policy", "policy-language", "simulator"] as const)("shows an honest unavailable state for %s on the live adapter", async (view) => {
     const { repository } = await open(view, { live: true });
     await screen.findByText("此能力尚未接入后端");
     expect(repository.execute).not.toHaveBeenCalled();

@@ -632,6 +632,10 @@
         "label": "新建策略",
         "hint": "编写、审阅并关联权限"
       },
+      "policy-language": {
+        "label": "IAM 策略声明预览",
+        "hint": "隔离 MOCK · 不创建或授权"
+      },
       "create-role": {
         "label": "新建角色",
         "hint": "信任、权限与临时会话"
@@ -1490,6 +1494,13 @@
   },
   "LivePolicyCreate": {
     "title": "新建自定义策略",
+    "previewTitle": "体验 IAM 策略声明",
+    "previewScopeNotice": "MOCK 体验 · 此页复用 LIVE 策略作者，但目录是示例数据。审阅与完成体验均不调用真实 IAM，不创建策略，也不授予权限。",
+    "previewNameHint": "仅在当前体验页使用，不会占用真实策略名称或生成策略 ID。",
+    "previewDocumentHint": "示例目录仅供编辑体验；可视化选择和 JSON 内容不会保存，真实有效性须由 IAM 校验。",
+    "previewReviewNotice": "这是本地预览审阅。检查 Action、资源和条件后结束体验；不会提交、创建或授权。",
+    "finishPreview": "完成体验",
+    "previewDone": "本地策略声明审阅已完成。没有创建策略、关联身份或授予资源权限。",
     "scopeNotice": "策略归当前租户所有。创建时会生成首个默认版本，但不会自动关联用户、组或角色，也不授予任何身份权限。",
     "name": "策略名称",
     "nameHint": "当前租户的有效自定义策略名称不能重复；最多 128 字节。稳定策略 ID 由 IAM 生成。",
@@ -2552,6 +2563,7 @@
     "administration": "平台管理",
     "createGroup": "新建用户组",
     "createPolicy": "新建策略",
+    "policyLanguagePreview": "IAM 策略声明预览",
     "createRole": "新建角色",
     "createProvider": "新建身份提供商",
     "createFederation": "新建联合身份映射",
@@ -2978,6 +2990,8 @@
     "selected": "已选 {count} 个策略",
     "batchAttach": "批量关联",
     "batchLimit": "每次最多选择 30 个策略；筛选和分页保留选择。",
+    "previewLanguageHint": "新版 IAM 策略作者可单独预览；示例目录和本地草稿不会替代当前四种 MOCK 创建方式。",
+    "previewLanguage": "体验新版策略编辑",
     "clearSelected": "清空已选",
     "resultCount": "{count} 个策略",
     "presetDescriptions": {

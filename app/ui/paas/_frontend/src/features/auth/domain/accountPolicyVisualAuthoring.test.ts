@@ -43,6 +43,12 @@ describe("lossless catalog-backed policy visual authoring", () => {
     const collectionActions = { ...instanceActions, statements: [{ ...instanceActions.statements[0],
       actions: ["paas.application.list", "paas.application.read"] }] };
     expect(visualDraftFromJSON(JSON.stringify(collectionActions), catalog).status).toBe("catalogMismatch");
+    const mixedCatalog = structuredClone(catalog);
+    mixedCatalog.items[0]!.profile.actions.push({ action: "paas.application.upsert", resourceKind: "APPLICATION", scope: "TENANT",
+      resourceShapes: [{ mode: "INSTANCE", prefixAllowed: true }, { mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_CREATE" }] });
+    const mixedShapeActions = { ...instanceActions, statements: [{ ...instanceActions.statements[0],
+      actions: ["paas.application.read", "paas.application.upsert"] }] };
+    expect(visualDraftFromJSON(JSON.stringify(mixedShapeActions), mixedCatalog).status).toBe("catalogMismatch");
     expect(visualDraftFromJSON(JSON.stringify({ ...instanceActions, statements: [{ ...instanceActions.statements[0],
       actions: Array.from({ length: 129 }, (_, index) => `paas.application.read-${index}`) }] }), catalog).status).toBe("shapeInvalid");
   });

@@ -632,6 +632,10 @@
         "label": "Create policy",
         "hint": "Author, review and associate permissions"
       },
+      "policy-language": {
+        "label": "IAM policy author preview",
+        "hint": "Isolated MOCK · no creation or grant"
+      },
       "create-role": {
         "label": "Create role",
         "hint": "Trust, permissions and temporary sessions"
@@ -1490,6 +1494,13 @@
   },
   "LivePolicyCreate": {
     "title": "Create custom policy",
+    "previewTitle": "Explore IAM policy authoring",
+    "previewScopeNotice": "MOCK preview · This uses the LIVE policy author with an example catalog. Reviewing or finishing never calls IAM, creates a policy, or grants access.",
+    "previewNameHint": "Used only in this preview; no real policy name is reserved and no policy ID is generated.",
+    "previewDocumentHint": "The example catalog is for authoring exploration only. Visual and JSON content are not saved; IAM must validate a real document.",
+    "previewReviewNotice": "This is a local review. Inspect Actions, resources, and conditions before finishing; nothing is submitted, created, or granted.",
+    "finishPreview": "Finish preview",
+    "previewDone": "Local policy review is complete. No policy or identity association was created, and no resource access was granted.",
     "scopeNotice": "This policy belongs to the current tenant. Creation establishes its first default version, but does not attach it to a user, group or role or grant access to any identity.",
     "name": "Policy name",
     "nameHint": "Active custom policy names must be unique within this tenant and at most 128 bytes. IAM generates the stable policy ID.",
@@ -2552,6 +2563,7 @@
     "administration": "Platform administration",
     "createGroup": "Create group",
     "createPolicy": "Create policy",
+    "policyLanguagePreview": "IAM policy author preview",
     "createRole": "Create role",
     "createProvider": "Create provider",
     "createFederation": "Create federated identity mapping",
@@ -2978,6 +2990,8 @@
     "selected": "{count} policies selected",
     "batchAttach": "Attach policies",
     "batchLimit": "Select up to 30 policies; filters and pagination preserve selection.",
+    "previewLanguageHint": "Explore the new IAM policy author separately. Its example catalog and local draft do not replace the four existing MOCK creation methods.",
+    "previewLanguage": "Explore new policy editor",
     "clearSelected": "Clear selection",
     "resultCount": "{count, plural, one {# policy} other {# policies}}",
     "presetDescriptions": {

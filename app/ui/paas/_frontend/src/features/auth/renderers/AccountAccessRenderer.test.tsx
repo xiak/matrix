@@ -1191,6 +1191,8 @@ describe("account access", () => {
     const catalog = profileDirectory();
     catalog.items[0]!.profile.actions.push({ action: "paas.application.inspect", resourceKind: "APPLICATION", scope: "TENANT",
       resourceShapes: [{ mode: "INSTANCE", prefixAllowed: true }] });
+    catalog.items[0]!.profile.actions.push({ action: "paas.application.upsert", resourceKind: "APPLICATION", scope: "TENANT",
+      resourceShapes: [{ mode: "INSTANCE", prefixAllowed: true }, { mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_CREATE" }] });
     const { user } = await openAccess(accounts({ ...fixture.repository, listAuthorizationProfiles: vi.fn().mockResolvedValue(catalog) }), iam(), "policies");
     await user.click(await screen.findByRole("button", { name: "LogBoundary" }));
     await user.click(await screen.findByRole("tab", { name: "策略版本" }));
@@ -1199,6 +1201,7 @@ describe("account access", () => {
     await user.click(screen.getByRole("tab", { name: "可视化编辑" }));
     const read = await screen.findByRole("checkbox", { name: /paas.application.read/ });
     expect(read).toHaveProperty("disabled", true);
+    expect(screen.getByRole("checkbox", { name: /paas.application.upsert/ })).toHaveProperty("disabled", true);
     await user.click(screen.getByRole("checkbox", { name: /paas.application.inspect/ }));
     expect(read).toHaveProperty("disabled", false);
     expect(screen.getByText(/已选 2 \/ 128 个操作/)).toBeTruthy();

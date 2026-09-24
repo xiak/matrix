@@ -24,8 +24,9 @@ export function usePolicyDescription() {
 
 // Policy-specific directory complexity lives here, not in the generic collection
 // used by small identity directories. All controls still use the public UI owner.
-export function PolicyDirectory({ workspace, onCreate, onOpen, onAssociate }: {
+export function PolicyDirectory({ workspace, onCreate, onOpen, onAssociate, onPreviewLanguage }: {
   workspace: AccessWorkspace; onCreate(): void; onOpen(id: string): void; onAssociate(policies: AccessPolicy[], additive?: boolean): void;
+  onPreviewLanguage(): void;
 }) {
   const t = useTranslations("PolicyWorkspace"), w = useTranslations("IamWorkspace"), r = useTranslations("PolicyRules");
   const catalog = useTranslations("AuthorizationProfileCatalog");
@@ -107,6 +108,9 @@ export function PolicyDirectory({ workspace, onCreate, onOpen, onAssociate }: {
       </Tabs.Content>
       <Tabs.Content forceMount={catalogMounted || undefined} value="profiles">{catalogMounted ? <AccountAuthorizationProfileCatalog /> : null}</Tabs.Content>
     </Card>
-    {section === "policies" ? <p className={styles.note}>{t("batchLimit")} {t("categoryHint")}</p> : null}
+    {section === "policies" ? <><p className={styles.note}>{t("batchLimit")} {t("categoryHint")}</p>
+      <div className={styles.previewNotice}><p className={styles.note}>{t("previewLanguageHint")}</p>
+        <Button variant="ghost" size="small" onClick={onPreviewLanguage}>{t("previewLanguage")}</Button>
+      </div></> : null}
   </Tabs.Root>;
 }

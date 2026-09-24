@@ -144,7 +144,7 @@ function ConsolePageHeader({ selection, pendingHref, title, ...props }: Omit<Com
   const { navigate } = useConsoleNavigation();
   const navigationText = useTranslations("ServiceNavigation");
   const w = useTranslations("IamWorkspace");
-  const workflowParents = { "create-user": "users", "create-group": "groups", "create-policy": "policies", "create-role": "roles" } as const;
+  const workflowParents = { "create-user": "users", "create-group": "groups", "create-policy": "policies", "policy-language": "policies", "create-role": "roles" } as const;
   const view = selection.view;
   const id = pendingHref ? new URL(pendingHref, "https://matrix.invalid").searchParams.get("id") : query.get("id");
   const parent = selection.section !== "access" || !view ? null : view in workflowParents ? workflowParents[view as keyof typeof workflowParents] : id && ["users", "groups", "policies", "roles"].includes(view) ? view : null;
@@ -335,7 +335,7 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
     if (item.id === "tenants") return accountCapabilities.canReadAccounts;
     return accountCapabilities.hasPreviewWorkspace && accountCapabilities.canListUsers;
   });
-  const accessTitles = { "create-user": accountText("createUserTitle"), "create-group": iamWorkspaceText("createGroup"), "create-policy": iamWorkspaceText("createPolicy"), "create-role": iamWorkspaceText("createRole"), "role-access": accountText("roleAccessTitle"), tenants: accountText("tenantAccounts") };
+  const accessTitles = { "create-user": accountText("createUserTitle"), "create-group": iamWorkspaceText("createGroup"), "create-policy": iamWorkspaceText("createPolicy"), "policy-language": iamWorkspaceText("policyLanguagePreview"), "create-role": iamWorkspaceText("createRole"), "role-access": accountText("roleAccessTitle"), tenants: accountText("tenantAccounts") };
   const accessView = frame.section === "access" ? pendingSelection?.view ?? navigation.selection.view : undefined;
   const pageTitle = accessView && accessView in accessTitles ? accessTitles[accessView as keyof typeof accessTitles] : selectedPage ? navigationText(`items.${selectedPage.messageKey}.label`) : frame.section === "overview" ? dashboard("title") : t(`pages.${frame.section}.title`);
   const loadingLabel = pendingSelection || !scene ? t("openingPage", { name: pageTitle }) : t("refreshingPage");
