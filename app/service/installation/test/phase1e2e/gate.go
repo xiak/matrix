@@ -152,6 +152,26 @@ func (value *gate) activateReleaseA(ctx context.Context) error {
 	return nil
 }
 
+func (value *gate) rejectSuccessorAsInitialRelease(ctx context.Context) error {
+	arguments, err := releaseInstallArguments(value.config, value.releases.b)
+	if err != nil {
+		return fail("successor-initial-install-arguments")
+	}
+	command, stdout, stderr, err := startMX(ctx, value.releases.b, "install", arguments)
+	if err != nil {
+		return fail("successor-initial-install-start")
+	}
+	if err := validateExpectedMXFailure(command.Wait(), stdout, stderr, "install", value.pathLeakage(),
+		3, "PRECONDITION_FAILED", "INSTALL_RELEASE_HAS_PREDECESSOR"); err != nil {
+		return err
+	}
+	if err := value.assertFreshHost(ctx); err != nil {
+		return fail("successor-initial-install-effects")
+	}
+	emit("signed-successor-initial-install-rejected-before-effects")
+	return nil
+}
+
 func releaseInstallArguments(config options, initial release.VerifiedBundle) ([]string, error) {
 	arguments := []string{
 		"--bundle", initial.Root,
@@ -213,6 +233,9 @@ func (value *gate) beforeRestart(ctx context.Context) (gateErr error) {
 	}()
 	value.config.securityMailConfiguration = value.mail.path
 	value.edge.addForbidden(value.mail.password)
+	if err := value.rejectSuccessorAsInitialRelease(ctx); err != nil {
+		return err
+	}
 	if err := value.activateReleaseA(ctx); err != nil {
 		return err
 	}
