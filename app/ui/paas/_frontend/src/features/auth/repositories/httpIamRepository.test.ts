@@ -1202,6 +1202,40 @@ describe("IAM HTTP account boundary", () => {
     }
   });
 
+  it("publishes a customer version against the exact policy revision without changing its default", async () => {
+    const document = { languageVersion: "1", scope: "TENANT", statements: [{
+      sid: "read-applications", effect: "ALLOW", actions: ["paas.application.read"],
+      resources: [{ kind: "APPLICATION", match: "ANY_IN_AUTHORITY" }]
+    }] };
+    const version = { policyId: customerPolicy.id, versionId: "version-new", document,
+      contentDigest: `sha256:${"c".repeat(64)}`, contractVersion: 1 };
+    const published = { apiVersion, kind: "PolicyVersionDetail", policy: {
+      ...customerPolicy, resourceVersion: customerPolicy.resourceVersion + 1
+    }, version };
+    const command = { document: document as import("../domain/accounts").AccountPolicyDocument,
+      resourceVersion: customerPolicy.resourceVersion, expectedDefaultVersionId: customerPolicy.defaultVersionId,
+      requestId: "ui-publish-version-fixed" };
+    let fetcher = reply(published);
+    const detail = await httpAccountRepository.createPolicyVersion!("bearer", account.id, customerPolicy.id, command);
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/policies/customer.build/versions");
+    expect(firstRequest(fetcher)[1].method).toBe("POST");
+    expect(requestBody(fetcher)).toEqual({ document, resourceVersion: command.resourceVersion, requestId: command.requestId });
+    expect(detail.version.versionId).toBe("version-new");
+    expect(detail.policy.defaultVersionId).toBe(customerPolicy.defaultVersionId);
+    for (const invalid of [
+      { ...published, kind: "PolicyDetail" },
+      { ...published, policy: { ...published.policy, management: "SYSTEM" } },
+      { ...published, policy: { ...published.policy, accountId: "foreign-account" } },
+      { ...published, policy: { ...published.policy, resourceVersion: customerPolicy.resourceVersion + 2 } },
+      { ...published, policy: { ...published.policy, defaultVersionId: "version-new" } },
+      { ...published, version: { ...version, policyId: "customer.other" } },
+      { ...published, version: { ...version, document: { ...document, statements: [{ ...document.statements[0], actions: ["paas.application.list"] }] } } }
+    ]) {
+      fetcher = reply(invalid);
+      await expect(httpAccountRepository.createPolicyVersion!("bearer", account.id, customerPolicy.id, command)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+  });
+
   it("binds default selection and non-default retirement to the exact customer policy revision", async () => {
     const document = { languageVersion: "1", scope: "TENANT", statements: [{
       sid: "read-applications", effect: "ALLOW", actions: ["paas.application.read"],

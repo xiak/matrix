@@ -12,6 +12,7 @@ import type {
   AccountCommand,
   AccountIdentity,
   AccountPolicyDetail,
+  AccountPolicyDocument,
   AccountPolicyVersionDirectory,
   AccountSecuritySettings,
   DirectoryPage,
@@ -157,6 +158,8 @@ export interface AccountRepository {
   readPolicy?(credential: string, accountId: string, policyId: string): Promise<AccountPolicyDetail>;
   listPolicyVersions?(credential: string, accountId: string, policyId: string): Promise<AccountPolicyVersionDirectory>;
   readPolicyVersion?(credential: string, accountId: string, policyId: string, versionId: string): Promise<AccountPolicyDetail>;
+  createPolicyVersion?(credential: string, accountId: string, policyId: string,
+    command: { document: AccountPolicyDocument; resourceVersion: number; expectedDefaultVersionId: string; requestId: string }): Promise<AccountPolicyDetail>;
   setDefaultPolicyVersion?(credential: string, accountId: string, policyId: string,
     command: { versionId: string; resourceVersion: number; requestId: string }): Promise<AccountPolicyDetail>;
   retirePolicyVersion?(credential: string, accountId: string, policyId: string, versionId: string,

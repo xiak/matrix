@@ -207,6 +207,7 @@
 .policyVersionAcknowledge input { margin-top: .3em; accent-color: var(--xiak-color-accent-text); }
 .policyVersionReview .policyComparison > section { min-width: 0; }
 .policyVersionReview .policyComparison h4 { margin: 0 0 var(--xiak-spacing-tight); }
+.policyVersionEditor { width: 100%; min-width: 0; font-family: var(--xiak-font-mono); font-size: var(--xiak-font-size-small); }
 .policyStatementTable code, .policyRawDocument code { overflow-wrap: anywhere; white-space: normal; }
 .policyStackedValues { display: grid; gap: var(--xiak-spacing-narrow); min-width: 0; overflow-wrap: anywhere; }
 .policyResolved { display: grid; gap: var(--xiak-spacing-narrow); padding-top: var(--xiak-spacing-tight); border-top: var(--xiak-border-subtle); }

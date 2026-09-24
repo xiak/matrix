@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { Profiler, useState } from "react";
 import userEvent from "@testing-library/user-event";
 import { LocaleProvider, useLocalePreference } from "@/i18n/LocaleProvider";
@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { SessionProvider, useSession } from "../application/SessionProvider";
 import { AccountAccessProvider, useAccountAccess, useAccountCapabilities, type RoleAccessClient, type RoleSessionRevokeIntent } from "../application/AccountAccessProvider";
-import type { Account, AccountAccess, AccountAccessView, AccountIdentity, AccountPolicy, AccountPolicyDetail, AccountPolicyVersion, ActionCapability, AuthorizationProfileDirectory, CapabilityRestriction, IamAction, PolicyDirectory, User, UserAccess, UserPolicyAttachment, UserPermissionBoundary } from "../domain/accounts";
+import type { Account, AccountAccess, AccountAccessView, AccountIdentity, AccountPolicy, AccountPolicyDetail, AccountPolicyDocument, AccountPolicyVersion, ActionCapability, AuthorizationProfileDirectory, CapabilityRestriction, IamAction, PolicyDirectory, User, UserAccess, UserPolicyAttachment, UserPermissionBoundary } from "../domain/accounts";
 import type { AuthenticatorState, NotificationContact } from "../domain/personalSecurity";
 import type { AccountRepository, IamRepository } from "../repositories/iamRepository";
 import type { RoleAccess, RoleCapabilityAction, RoleDirectory } from "../domain/roles";
@@ -132,6 +132,15 @@ function livePolicyVersions() {
   let versions = [earlier, current];
   const readPolicy = vi.fn(async () => ({ policy: structuredClone(policy), version: structuredClone(versions.find((item) => item.versionId === policy.defaultVersionId)!) }));
   const listPolicyVersions = vi.fn(async () => ({ policy: structuredClone(policy), items: structuredClone(versions) }));
+  const createPolicyVersion = vi.fn(async (_credential: string, _accountId: string, _policyId: string,
+    command: { document: AccountPolicyDocument; resourceVersion: number; expectedDefaultVersionId: string; requestId: string }) => {
+    if (command.resourceVersion !== policy.resourceVersion || command.expectedDefaultVersionId !== policy.defaultVersionId) throw new HttpProblem(409, "IAM_CONFLICT");
+    const version: AccountPolicyVersion = { ...current, versionId: "version-new", document: structuredClone(command.document),
+      contentDigest: `sha256:${"c".repeat(64)}` };
+    versions = [...versions, version].sort((left, right) => left.versionId.localeCompare(right.versionId));
+    policy = { ...policy, resourceVersion: policy.resourceVersion + 1 };
+    return { policy: structuredClone(policy), version: structuredClone(version) };
+  });
   const setDefaultPolicyVersion = vi.fn(async (_credential: string, _accountId: string, _policyId: string,
     command: { versionId: string; resourceVersion: number; requestId: string }) => {
     if (command.resourceVersion !== policy.resourceVersion) throw new HttpProblem(409, "IAM_CONFLICT");
@@ -147,9 +156,9 @@ function livePolicyVersions() {
   });
   const repository = accounts({ readPolicy, listPolicyVersions, readPolicyVersion: vi.fn(async (_credential, _accountId, _policyId, versionId) =>
     ({ policy: structuredClone(policy), version: structuredClone(versions.find((item) => item.versionId === versionId)!) })),
-  setDefaultPolicyVersion, retirePolicyVersion,
+  createPolicyVersion, setDefaultPolicyVersion, retirePolicyVersion,
   listPolicies: vi.fn(async (_credential: string, platform: boolean) => platform ? directory(true) : { ...directory(false), items: [structuredClone(policy)] }) });
-  return { repository, readPolicy, listPolicyVersions, setDefaultPolicyVersion, retirePolicyVersion };
+  return { repository, readPolicy, listPolicyVersions, createPolicyVersion, setDefaultPolicyVersion, retirePolicyVersion };
 }
 
 function boundaryFixture() {
@@ -1110,6 +1119,95 @@ describe("account access", () => {
       resourceVersion: 5, expectedDefaultVersionId: "version-a", requestId: expect.stringMatching(/^ui-policy-version-/)
     }]);
     expect(await screen.findByText("当前可管理版本：1 / 5")).toBeTruthy();
+  });
+
+  it("reviews and publishes a live policy version without switching the default or leaving the content area", async () => {
+    const fixture = livePolicyVersions();
+    const { user } = await openAccess(fixture.repository, iam(), "policies");
+    await user.click(await screen.findByRole("button", { name: "LogBoundary" }));
+    await user.click(await screen.findByRole("tab", { name: "策略版本" }));
+    await screen.findByRole("table", { name: "策略版本目录" });
+    await user.click(screen.getByRole("button", { name: "发布新版本" }));
+    expect(screen.getByRole("heading", { name: "编写新版本" })).toBe(document.activeElement);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    const proposed = structuredClone(tenantPolicyDetail.version.document);
+    proposed.statements[0]!.actions = ["paas.application.list"];
+    fireEvent.change(screen.getByRole("textbox", { name: "待发布声明 JSON" }), { target: { value: JSON.stringify(proposed, null, 2) } });
+    await user.click(screen.getByRole("button", { name: "审阅变更" }));
+    expect(screen.getByRole("heading", { name: "审阅待发布版本" })).toBe(document.activeElement);
+    expect(screen.getByText(/发布只创建不可变版本/)).toBeTruthy();
+    expect(fixture.createPolicyVersion).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "确认发布新版本" }));
+    await waitFor(() => expect(fixture.createPolicyVersion).toHaveBeenCalledTimes(1));
+    expect(fixture.createPolicyVersion.mock.calls[0]).toEqual([credential, account.id, "customer.logs", {
+      document: proposed, resourceVersion: 4, expectedDefaultVersionId: "version-logs", requestId: expect.stringMatching(/^ui-policy-version-/)
+    }]);
+    expect(await screen.findByRole("heading", { name: "版本 version-new 已发布" })).toBeTruthy();
+    expect(screen.getByText(/当前默认版本仍是 version-logs/)).toBeTruthy();
+    expect(fixture.setDefaultPolicyVersion).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("replays the exact unpublished document after an unknown publish response", async () => {
+    const fixture = livePolicyVersions();
+    fixture.createPolicyVersion.mockRejectedValueOnce(new HttpProblem(503, "IAM_UNAVAILABLE"));
+    const { user } = await openAccess(fixture.repository, iam(), "policies");
+    await user.click(await screen.findByRole("button", { name: "LogBoundary" }));
+    await user.click(await screen.findByRole("tab", { name: "策略版本" }));
+    await screen.findByRole("table", { name: "策略版本目录" });
+    await user.click(screen.getByRole("button", { name: "发布新版本" }));
+    const proposed = structuredClone(tenantPolicyDetail.version.document);
+    proposed.statements[0]!.actions = ["paas.application.list"];
+    fireEvent.change(screen.getByRole("textbox", { name: "待发布声明 JSON" }), { target: { value: JSON.stringify(proposed) } });
+    await user.click(screen.getByRole("button", { name: "审阅变更" }));
+    await user.click(screen.getByRole("button", { name: "确认发布新版本" }));
+    expect(await screen.findByRole("heading", { name: "版本变更结果未确认" })).toBeTruthy();
+    expect(screen.getByText(/原请求：发布新版本/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "发布新版本" }).hasAttribute("disabled")).toBe(true);
+    await user.click(screen.getByRole("button", { name: "按原请求重试" }));
+    await waitFor(() => expect(fixture.createPolicyVersion).toHaveBeenCalledTimes(2));
+    expect(fixture.createPolicyVersion.mock.calls[1]).toEqual(fixture.createPolicyVersion.mock.calls[0]);
+    expect(fixture.setDefaultPolicyVersion).not.toHaveBeenCalled();
+  });
+
+  it("keeps invalid publish input local and a definite IAM validation rejection in review", async () => {
+    const fixture = livePolicyVersions();
+    fixture.createPolicyVersion.mockRejectedValueOnce(new HttpProblem(422, "iam.argument.invalid"));
+    const { user } = await openAccess(fixture.repository, iam(), "policies");
+    await user.click(await screen.findByRole("button", { name: "LogBoundary" }));
+    await user.click(await screen.findByRole("tab", { name: "策略版本" }));
+    await screen.findByRole("table", { name: "策略版本目录" });
+    await user.click(screen.getByRole("button", { name: "发布新版本" }));
+    const editor = screen.getByRole("textbox", { name: "待发布声明 JSON" });
+    fireEvent.change(editor, { target: { value: "{" } });
+    await user.click(screen.getByRole("button", { name: "审阅变更" }));
+    expect(screen.getByText("JSON 语法无效，请修正后再审阅。")).toBeTruthy();
+    expect(fixture.createPolicyVersion).not.toHaveBeenCalled();
+    fireEvent.change(editor, { target: { value: JSON.stringify(tenantPolicyDetail.version.document) } });
+    await user.click(screen.getByRole("button", { name: "审阅变更" }));
+    await user.click(screen.getByRole("button", { name: "确认发布新版本" }));
+    expect(await screen.findByText("提交未通过校验；请核对当前版本与声明。")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "审阅待发布版本" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "版本变更结果未确认" })).toBeNull();
+  });
+
+  it("keeps an edited live version draft until the operator explicitly discards it", async () => {
+    const fixture = livePolicyVersions();
+    const { user } = await openAccess(fixture.repository, iam(), "policies");
+    await user.click(await screen.findByRole("button", { name: "LogBoundary" }));
+    await user.click(await screen.findByRole("tab", { name: "策略版本" }));
+    await screen.findByRole("table", { name: "策略版本目录" });
+    await user.click(screen.getByRole("button", { name: "发布新版本" }));
+    const editor = screen.getByRole("textbox", { name: "待发布声明 JSON" });
+    fireEvent.change(editor, { target: { value: "{\n  \"languageVersion\": \"1\"\n}" } });
+    await user.click(screen.getByTestId("nav-users"));
+    expect(await screen.findByRole("dialog", { name: "离开未发布的策略草稿？" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "继续编辑" }));
+    expect((screen.getByRole("textbox", { name: "待发布声明 JSON" }) as HTMLTextAreaElement).value).toContain("languageVersion");
+    expect(fixture.createPolicyVersion).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "取消" }));
+    await user.click(await screen.findByRole("button", { name: "放弃并离开" }));
+    expect(await screen.findByRole("table", { name: "策略版本目录" })).toBeTruthy();
   });
 
   it("keeps an uncertain live version intent across IAM navigation and retries with identical input", async () => {

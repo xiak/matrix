@@ -6,6 +6,7 @@ import { useSession, useSessionCredential } from "./SessionProvider";
 import type {
   AccountCommand,
   AccountPolicyDetail,
+  AccountPolicyDocument,
   AccountPolicyVersionDirectory,
   AccountSecuritySettings,
   AccountPolicy,
@@ -86,15 +87,21 @@ export type AccountPolicyReadClient = {
   readVersion?(policyId: string, versionId: string): Promise<AccountPolicyReadLoad>;
 };
 
-export type PolicyVersionMutationInput = {
-  kind: "set-default" | "retire";
+type PolicyVersionMutationBase = {
   policyId: string;
-  versionId: string;
   expectedDefaultVersionId: string;
   resourceVersion: number;
 };
 
-export type PolicyVersionMutationIntent = PolicyVersionMutationInput & {
+export type PolicyVersionMutationInput = PolicyVersionMutationBase & (
+  | { kind: "publish"; document: AccountPolicyDocument }
+  | { kind: "set-default" | "retire"; versionId: string }
+);
+
+export type PolicyVersionMutationIntent = PolicyVersionMutationBase & (
+  | { kind: "publish"; documentJSON: string }
+  | { kind: "set-default" | "retire"; versionId: string }
+) & {
   accountId: string;
   requestId: string;
   phase: "submitting" | "unknown" | "observing";
@@ -109,6 +116,7 @@ export type PolicyVersionMutationResult =
 
 export type PolicyVersionMutationClient = {
   pending: PolicyVersionMutationIntent | null;
+  canPublish: boolean;
   begin(input: PolicyVersionMutationInput): Promise<PolicyVersionMutationResult>;
   retry(): Promise<PolicyVersionMutationResult>;
   observe(): Promise<boolean>;
@@ -276,7 +284,9 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       if (!current || current.requestId !== expectedRequestId) return false;
       if (next && (
         next.requestId !== current.requestId || next.accountId !== current.accountId || next.policyId !== current.policyId ||
-        next.kind !== current.kind || next.versionId !== current.versionId || next.resourceVersion !== current.resourceVersion ||
+        next.kind !== current.kind || next.resourceVersion !== current.resourceVersion ||
+        (next.kind === "publish" && current.kind === "publish" ? next.documentJSON !== current.documentJSON :
+          next.kind !== "publish" && current.kind !== "publish" ? next.versionId !== current.versionId : true) ||
         next.expectedDefaultVersionId !== current.expectedDefaultVersionId
       )) return false;
     }
@@ -527,8 +537,12 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     };
     const attempt = async (intent: PolicyVersionMutationIntent, retrying: boolean): Promise<PolicyVersionMutationResult> => {
       try {
-        const detail = intent.kind === "set-default"
-          ? await repository.setDefaultPolicyVersion!(credential, accountId, intent.policyId, {
+        const detail = intent.kind === "publish"
+          ? await repository.createPolicyVersion!(credential, accountId, intent.policyId, {
+            document: JSON.parse(intent.documentJSON) as AccountPolicyDocument,
+            resourceVersion: intent.resourceVersion, expectedDefaultVersionId: intent.expectedDefaultVersionId, requestId: intent.requestId
+          })
+          : intent.kind === "set-default" ? await repository.setDefaultPolicyVersion!(credential, accountId, intent.policyId, {
             versionId: intent.versionId, resourceVersion: intent.resourceVersion, requestId: intent.requestId
           })
           : await repository.retirePolicyVersion!(credential, accountId, intent.policyId, intent.versionId, {
@@ -541,7 +555,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         return { status: "applied", detail };
       } catch (failure) {
         if (!owned(intent)) return { status: "blocked" };
-        if (!retrying && failure instanceof HttpProblem && [400, 401, 403, 404, 409, 422].includes(failure.status)) {
+        if (!retrying && failure instanceof HttpProblem && [400, 401, 403, 404, 409, 413, 415, 422].includes(failure.status)) {
           rememberVersionMutation(intent.requestId, null);
           if (failure.status === 401) expire();
           return { status: "rejected", reason: failure.status === 401 ? "expired" : failure.status === 403 ? "forbidden" : failure.status === 404 ? "notFound" : failure.status === 409 ? "conflict" : "invalid" };
@@ -553,13 +567,19 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     };
     return {
       pending: versionMutationIntent,
+      canPublish: Boolean(repository.createPolicyVersion),
       begin(input) {
-        if (input.kind === "retire" && input.versionId === input.expectedDefaultVersionId ||
+        if (input.kind === "publish" && !repository.createPolicyVersion ||
+            input.kind === "retire" && input.versionId === input.expectedDefaultVersionId ||
             input.kind === "set-default" && input.versionId === input.expectedDefaultVersionId ||
             !scene.policies.some((policy) => policy.id === input.policyId && policy.management === "CUSTOMER" && policy.accountId === accountId && policy.scope === "TENANT" && policy.status === "ACTIVE")) {
           return Promise.resolve({ status: "blocked" });
         }
-        const intent: PolicyVersionMutationIntent = { ...input, accountId, requestId: requestToken("ui-policy-version-"),
+        const subject = input.kind === "publish" ? { kind: "publish" as const, documentJSON: JSON.stringify(input.document) } :
+          { kind: input.kind, versionId: input.versionId };
+        const intent: PolicyVersionMutationIntent = { ...subject, policyId: input.policyId,
+          expectedDefaultVersionId: input.expectedDefaultVersionId, resourceVersion: input.resourceVersion,
+          accountId, requestId: requestToken("ui-policy-version-"),
           phase: "submitting", observation: null, observationError: null };
         if (!rememberVersionMutation(null, intent)) return Promise.resolve({ status: "blocked" });
         return attempt(intent, false);

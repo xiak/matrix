@@ -1423,14 +1423,30 @@ function parsePolicyVersionDirectory(value: unknown, accountId: string, policyId
   return { policy, items };
 }
 
-function parsePolicyVersionDetail(value: unknown, accountId: string, policyId: string, versionId: string): AccountPolicyDetail {
+function parsePolicyVersionDetail(value: unknown, accountId: string, policyId: string, versionId?: string): AccountPolicyDetail {
   const wire = accountRecord(value);
   exactKeys(wire, ["apiVersion", "kind", "policy", "version"]);
   requireAccountKind(wire, "PolicyVersionDetail");
   const policy = parseCustomerVersionPolicy(wire.policy, accountId, policyId);
   const version = parsePolicyVersion(wire.version, policyId);
-  if (version.versionId !== versionId) throw new Error("INVALID_IAM_RESPONSE");
+  if (versionId !== undefined && version.versionId !== versionId) throw new Error("INVALID_IAM_RESPONSE");
   return { policy, version };
+}
+
+// Compare a publish response with the submitted declaration after the
+// contract's order-insensitive sets are sorted. This verifies response
+// identity; IAM alone validates action/resource/condition semantics.
+function comparablePolicyDocument(document: AccountPolicyDocument): string {
+  const compare = (left: string, right: string) => left < right ? -1 : left > right ? 1 : 0;
+  return JSON.stringify({ languageVersion: document.languageVersion, scope: document.scope,
+    statements: document.statements.map((statement) => ({ sid: statement.sid, effect: statement.effect,
+      actions: [...statement.actions].sort(),
+      resources: statement.resources.map((resource) => ({ kind: resource.kind, match: resource.match, ...(resource.id === undefined ? {} : { id: resource.id }) }))
+        .sort((left, right) => compare(`${left.kind}\0${left.match}\0${left.id ?? ""}`, `${right.kind}\0${right.match}\0${right.id ?? ""}`)),
+      ...(statement.conditions?.length ? { conditions: statement.conditions.map((condition) => ({ key: condition.key,
+        operator: condition.operator, values: [...condition.values].sort() }))
+        .sort((left, right) => compare(`${left.key}\0${left.operator}`, `${right.key}\0${right.operator}`)) } : {})
+    })).sort((left, right) => compare(left.sid, right.sid)) });
 }
 
 function parsePolicyDirectory(value: unknown, expectedScope: PolicyScope): PolicyDirectory {
@@ -1741,6 +1757,22 @@ export const httpAccountRepository: AccountRepository = {
   },
   async readPolicyVersion(credential, accountId, policyId, versionId) {
     return parsePolicyVersionDetail(await requestJSON<unknown>(`/api/iam/v1/policies/${encodeURIComponent(accountIdentifier(policyId))}/versions/${encodeURIComponent(accountIdentifier(versionId))}`, { headers: accountHeaders(credential) }), accountIdentifier(accountId), policyId, versionId);
+  },
+  async createPolicyVersion(credential, accountId, policyId, command) {
+    const resourceVersion = accountVersion(command.resourceVersion);
+    if (resourceVersion === Number.MAX_SAFE_INTEGER) throw new Error("INVALID_IAM_REQUEST");
+    const expectedDefaultVersionId = accountIdentifier(command.expectedDefaultVersionId);
+    const detail = parsePolicyVersionDetail(await requestJSON<unknown>(
+      `/api/iam/v1/policies/${encodeURIComponent(accountIdentifier(policyId))}/versions`, {
+        method: "POST", headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
+        body: JSON.stringify({ document: command.document, resourceVersion, requestId: accountIdentifier(command.requestId) })
+      }
+    ), accountIdentifier(accountId), policyId);
+    if (detail.policy.resourceVersion !== resourceVersion + 1 ||
+        detail.policy.defaultVersionId !== expectedDefaultVersionId ||
+        detail.version.versionId === expectedDefaultVersionId ||
+        comparablePolicyDocument(detail.version.document) !== comparablePolicyDocument(command.document)) throw new Error("INVALID_IAM_RESPONSE");
+    return detail;
   },
   async setDefaultPolicyVersion(credential, accountId, policyId, command) {
     const resourceVersion = accountVersion(command.resourceVersion);
