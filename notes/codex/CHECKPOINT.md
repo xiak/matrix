@@ -3,10 +3,10 @@
 > Non-authoritative portable memory. Validate it against Git and the owning
 > FEAT before continuing.
 
-- Updated: 2026-09-24
+- Updated: 2026-09-25
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `3b023711`
+- Pushed UI source: `b5231103`
 
 ## Authoritative route
 
@@ -31,20 +31,11 @@ FEAT owners. Integrate fixed backend contracts while preserving this branch's
 UI, full static host/export and independent MOCK entry; do not replace them
 with another branch's renderer or inherit that branch's UI acceptance.
 
-The current milestone preserves the purpose-limited recovery-code client,
-strict LIVE read-only Account MFA settings and independent MOCK security surface.
-It includes isolated MOCK active authenticator replacement with a fixed proof
-deadline, old-factor preservation until confirmation and real preview-code
-rotation. The latest slices keep the read-only capability catalog's stable
-toolbar during local loading/retry and stop the MOCK replacement view when its
-proof expires, its rule changes or confirmation cannot be proven; an in-flight
-confirmation hides setup material. User SSO configuration remains distinct from
-Role SSO providers. No LIVE SSO or authenticator-replacement contract is inferred.
-The Account-rule response-lost path still requires normal
-TOTP re-login before original-request inspection. LIVE authenticator
-replacement, settings update and S4 report APIs remain unavailable. The
-complete shared gates passed. Detailed contract behavior, evidence and
-real-process limitations remain only in the FEAT owners.
+The current milestone keeps the independent MOCK preview, fixed-contract LIVE
+paths and synchronized static Go host. It corrects owner-specific permission
+boundary UX and the unknown-result authenticator-replacement guidance without
+adding a new LIVE contract. The shared development gates passed; detailed
+behavior, evidence and open real-process gates remain only in the FEAT owners.
 
 ## Continuation
 
