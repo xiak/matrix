@@ -3,6 +3,7 @@ package installationv1
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"math"
 	"reflect"
 	"strings"
@@ -20,16 +21,18 @@ func TestAuthenticationRecoveryProcessBoundaryIsClosed(t *testing.T) {
 		t.Fatal("authentication recovery commands are ambiguous")
 	}
 	environments := map[string]bool{
-		AuthenticationRecoveryDatabaseDSNFileEnvironment:  true,
-		AuthenticationRecoveryMigrationDSNFileEnvironment: true,
-		AuthenticationRecoveryIntentFileEnvironment:       true,
-		AuthenticationRecoveryClosureFileEnvironment:      true,
+		AuthenticationRecoveryDatabaseDSNFileEnvironment:      true,
+		AuthenticationRecoveryMigrationDSNFileEnvironment:     true,
+		AuthenticationRecoveryIntentFileEnvironment:           true,
+		AuthenticationRecoveryClosureFileEnvironment:          true,
+		AuthenticationRecoverySecuritySnapshotFileEnvironment: true,
 	}
-	if len(environments) != 4 ||
+	if len(environments) != 5 ||
 		!environments["MATRIX_IAM_AUTHENTICATION_RECOVERY_DATABASE_DSN_FILE"] ||
 		!environments["MATRIX_MIGRATION_IAM_AUTHENTICATION_RECOVERY_DSN_FILE"] ||
 		!environments["MATRIX_IAM_AUTHENTICATION_RECOVERY_INTENT_FILE"] ||
-		!environments["MATRIX_IAM_AUTHENTICATION_RECOVERY_CLOSURE_FILE"] {
+		!environments["MATRIX_IAM_AUTHENTICATION_RECOVERY_CLOSURE_FILE"] ||
+		!environments["MATRIX_IAM_AUTHENTICATION_RECOVERY_SECURITY_SNAPSHOT_FILE"] {
 		t.Fatal("authentication recovery file environments are ambiguous")
 	}
 	if AuthenticationRecoveryExitSuccess != 0 || AuthenticationRecoveryExitInvalid != 2 ||
@@ -373,6 +376,279 @@ func FuzzAuthenticationRecoveryIntentCanonicalBytes(f *testing.F) {
 			t.Fatal("accepted intent was not canonical")
 		}
 	})
+}
+
+func TestAuthenticationRecoverySnapshotHasOneExplicitRepresentation(t *testing.T) {
+	value := authenticationRecoverySnapshotFixture()
+	encoded, err := EncodeAuthenticationRecoverySecuritySnapshot(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeAuthenticationRecoverySecuritySnapshot(bytes.NewReader(encoded))
+	if err != nil || !reflect.DeepEqual(decoded, value) {
+		t.Fatal("snapshot canonical round trip failed", err)
+	}
+	digest, err := AuthenticationRecoverySecuritySnapshotDigest(value)
+	if err != nil || !validDigest(digest) {
+		t.Fatal("snapshot digest unavailable", err)
+	}
+	changed := authenticationRecoverySnapshotFixture()
+	changed.Accounts[0].Users[0].PasswordAttempts.UsedAttempts++
+	changedDigest, err := AuthenticationRecoverySecuritySnapshotDigest(changed)
+	if err != nil || changedDigest == digest {
+		t.Fatal("snapshot digest omitted attempt debit")
+	}
+
+	noFactor := authenticationRecoverySnapshotFixture()
+	noFactor.Accounts[0].Users[0] = AuthenticationRecoveryUserReplay{UserID: "user-a", LastConsumedStep: -1}
+	canonical, err := EncodeAuthenticationRecoverySecuritySnapshot(noFactor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(canonical, []byte(`"factorId":"","lastConsumedStep":-1,"passwordAttempts":null,"totpAttempts":null`)) {
+		t.Fatal("absent factor/attempt rows lack an explicit encoding")
+	}
+	for name, data := range map[string][]byte{
+		"missing factor":          bytes.Replace(canonical, []byte(`"factorId":"",`), nil, 1),
+		"null factor":             bytes.Replace(canonical, []byte(`"factorId":""`), []byte(`"factorId":null`), 1),
+		"missing password window": bytes.Replace(canonical, []byte(`,"passwordAttempts":null`), nil, 1),
+		"missing OTP window":      bytes.Replace(canonical, []byte(`,"totpAttempts":null`), nil, 1),
+		"missing users":           bytes.Replace(canonical, []byte(`"users":`), []byte(`"missing":`), 1),
+		"missing field":           bytes.Replace(encoded, []byte(`"usedAttempts":1,`), nil, 1),
+		"duplicate":               bytes.Replace(encoded, []byte(`"usedAttempts":1`), []byte(`"usedAttempts":1,"usedAttempts":1`), 1),
+		"unknown secret":          bytes.Replace(encoded, []byte(`"usedAttempts":1`), []byte(`"password":"never-accepted","usedAttempts":1`), 1),
+		"leading whitespace":      append([]byte(" "), encoded...),
+		"trailing value":          append(append([]byte(nil), encoded...), []byte(`{}`)...),
+		"over byte limit":         bytes.Repeat([]byte(" "), int(MaximumAuthenticationRecoverySecuritySnapshotBytes)+1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			result, err := DecodeAuthenticationRecoverySecuritySnapshot(bytes.NewReader(data))
+			if !errors.Is(err, ErrInvalidAuthenticationRecoverySecuritySnapshot) || !reflect.DeepEqual(result, AuthenticationRecoverySecuritySnapshot{}) {
+				t.Fatal("ambiguous snapshot returned data")
+			}
+		})
+	}
+}
+
+func TestAuthenticationRecoverySnapshotRejectsInvalidAuthorityAndReplayShape(t *testing.T) {
+	for name, mutate := range map[string]func(*AuthenticationRecoverySecuritySnapshot){
+		"wrong purpose":        func(v *AuthenticationRecoverySecuritySnapshot) { v.Purpose = "IAM_TOTP_BACKUP_CUSTODY" },
+		"wrong kind":           func(v *AuthenticationRecoverySecuritySnapshot) { v.Kind = AuthenticationRecoveryClosureKind },
+		"invalid installation": func(v *AuthenticationRecoverySecuritySnapshot) { v.InstallationID = "other" },
+		"missing bootstrap":    func(v *AuthenticationRecoverySecuritySnapshot) { v.BootstrapDigest = "" },
+		"missing state digest": func(v *AuthenticationRecoverySecuritySnapshot) { v.AuthenticationStateDigest = "" },
+		"missing intent":       func(v *AuthenticationRecoverySecuritySnapshot) { v.RecoveryIntentDigest = "" },
+		"zero epoch":           func(v *AuthenticationRecoverySecuritySnapshot) { v.Epoch = 0 },
+		"wrong command":        func(v *AuthenticationRecoverySecuritySnapshot) { v.CommandID = "cmd-other" },
+		"zero time":            func(v *AuthenticationRecoverySecuritySnapshot) { v.ClosedAt = time.Time{} },
+		"nanosecond":           func(v *AuthenticationRecoverySecuritySnapshot) { v.ClosedAt = v.ClosedAt.Add(time.Nanosecond) },
+		"missing accounts":     func(v *AuthenticationRecoverySecuritySnapshot) { v.Accounts = nil },
+		"empty accounts":       func(v *AuthenticationRecoverySecuritySnapshot) { v.Accounts = []AuthenticationRecoveryAccountReplay{} },
+		"duplicate account":    func(v *AuthenticationRecoverySecuritySnapshot) { v.Accounts = append(v.Accounts, v.Accounts[0]) },
+		"empty users": func(v *AuthenticationRecoverySecuritySnapshot) {
+			v.Accounts[0].Users = []AuthenticationRecoveryUserReplay{}
+		},
+		"duplicate user": func(v *AuthenticationRecoverySecuritySnapshot) {
+			v.Accounts[0].Users = append(v.Accounts[0].Users, v.Accounts[0].Users[0])
+		},
+		"unordered user": func(v *AuthenticationRecoverySecuritySnapshot) {
+			v.Accounts[0].Users = append(v.Accounts[0].Users, AuthenticationRecoveryUserReplay{UserID: "a", LastConsumedStep: -1})
+		},
+		"reused factor": func(v *AuthenticationRecoverySecuritySnapshot) {
+			other := v.Accounts[0].Users[0]
+			other.UserID = "user-b"
+			v.Accounts[0].Users = append(v.Accounts[0].Users, other)
+		},
+		"absent factor with step":    func(v *AuthenticationRecoverySecuritySnapshot) { v.Accounts[0].Users[0].FactorID = "" },
+		"factor without consumption": func(v *AuthenticationRecoverySecuritySnapshot) { v.Accounts[0].Users[0].LastConsumedStep = -1 },
+		"step beyond allowed future window": func(v *AuthenticationRecoverySecuritySnapshot) {
+			v.Accounts[0].Users[0].LastConsumedStep = v.ClosedAt.Unix()/30 + 2
+		},
+		"zero sequence": func(v *AuthenticationRecoverySecuritySnapshot) { v.Accounts[0].Users[0].PasswordAttempts.Sequence = 0 },
+		"too large sequence": func(v *AuthenticationRecoverySecuritySnapshot) {
+			v.Accounts[0].Users[0].PasswordAttempts.Sequence = uint64(math.MaxInt64) + 1
+		},
+		"unknown budget": func(v *AuthenticationRecoverySecuritySnapshot) { v.Accounts[0].Users[0].TOTPAttempts.UsedAttempts = 6 },
+		"zero OTP debit": func(v *AuthenticationRecoverySecuritySnapshot) { v.Accounts[0].Users[0].TOTPAttempts.UsedAttempts = 0 },
+		"future window": func(v *AuthenticationRecoverySecuritySnapshot) {
+			v.Accounts[0].Users[0].TOTPAttempts.WindowStartedAt = v.ClosedAt.Add(time.Microsecond)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := authenticationRecoverySnapshotFixture()
+			mutate(&value)
+			if data, err := EncodeAuthenticationRecoverySecuritySnapshot(value); !errors.Is(err, ErrInvalidAuthenticationRecoverySecuritySnapshot) || len(data) != 0 {
+				t.Fatal("invalid snapshot was encoded")
+			}
+		})
+	}
+	value := authenticationRecoverySnapshotFixture()
+	value.Accounts[0].Users[0].PasswordAttempts.UsedAttempts = 0
+	if _, err := EncodeAuthenticationRecoverySecuritySnapshot(value); err != nil {
+		t.Fatal("legitimate successful password budget was rejected", err)
+	}
+}
+
+func TestAuthenticationRecoverySnapshotBoundedMaximum(t *testing.T) {
+	value := authenticationRecoverySnapshotFixture()
+	value.Accounts[0].AccountID = strings.Repeat("a", 128)
+	value.Accounts[0].Users = make([]AuthenticationRecoveryUserReplay, MaximumAuthenticationRecoverySnapshotItems-1)
+	for i := range value.Accounts[0].Users {
+		user := authenticationRecoverySnapshotFixture().Accounts[0].Users[0]
+		user.UserID = fmt.Sprintf("u%0127d", i)
+		user.FactorID = fmt.Sprintf("f%0127d", i)
+		user.PasswordAttempts.Sequence = math.MaxInt64
+		user.TOTPAttempts.Sequence = math.MaxInt64
+		value.Accounts[0].Users[i] = user
+	}
+	encoded, err := EncodeAuthenticationRecoverySecuritySnapshot(value)
+	if err != nil || int64(len(encoded)) > MaximumAuthenticationRecoverySecuritySnapshotBytes {
+		t.Fatal("declared item maximum exceeds transport", err)
+	}
+	if _, err := DecodeAuthenticationRecoverySecuritySnapshot(bytes.NewReader(encoded)); err != nil {
+		t.Fatal("maximum snapshot failed to decode", err)
+	}
+	t.Logf("canonical bounded snapshot: items=%d bytes=%d (codec only, not SQL capacity)", MaximumAuthenticationRecoverySnapshotItems, len(encoded))
+	value.Accounts[0].Users = append(value.Accounts[0].Users, AuthenticationRecoveryUserReplay{UserID: "z", LastConsumedStep: -1})
+	if _, err := EncodeAuthenticationRecoverySecuritySnapshot(value); !errors.Is(err, ErrInvalidAuthenticationRecoverySecuritySnapshot) {
+		t.Fatal("snapshot item limit did not reject extra USER")
+	}
+}
+
+func TestAuthenticationRecoveryEnvelopeBindsExactIntentAndCompletion(t *testing.T) {
+	intent := authenticationRecoveryIntentFixture()
+	intent.AuthenticationStateDigest = "sha256:" + strings.Repeat("7", 64)
+	envelope := authenticationRecoveryEnvelopeFixture(t, intent)
+	bootstrapDigest := "sha256:" + strings.Repeat("6", 64)
+	if err := ValidateAuthenticationRecoveryClosureEnvelopeForIntent(envelope, intent, bootstrapDigest); err != nil {
+		t.Fatal(err)
+	}
+	if ValidateAuthenticationRecoveryClosureEnvelopeForIntent(envelope, intent, "sha256:"+strings.Repeat("5", 64)) == nil {
+		t.Fatal("another sealed bootstrap authority matched the envelope")
+	}
+	encoded, err := EncodeAuthenticationRecoveryClosureEnvelope(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeAuthenticationRecoveryClosureEnvelope(bytes.NewReader(encoded))
+	if err != nil || !reflect.DeepEqual(decoded, envelope) {
+		t.Fatal("envelope round trip failed", err)
+	}
+	if _, err := DecodeAuthenticationRecoveryClosureEnvelope(strings.NewReader(`{}`)); !errors.Is(err, ErrInvalidAuthenticationRecoveryClosureEnvelope) {
+		t.Fatal("empty envelope accepted")
+	}
+	legacy, err := EncodeAuthenticationRecoveryClosure(authenticationRecoveryClosureFixture())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeAuthenticationRecoveryClosureEnvelope(bytes.NewReader(legacy)); !errors.Is(err, ErrInvalidAuthenticationRecoveryClosureEnvelope) {
+		t.Fatal("legacy closure became a new-execution fallback")
+	}
+	if ValidateCurrentAuthenticationRecoveryIntent(authenticationRecoveryIntentFixture()) == nil || ValidateCurrentAuthenticationRecoveryClosure(authenticationRecoveryClosureFixture()) == nil {
+		t.Fatal("missing current authority evidence accepted")
+	}
+	for name, mutate := range map[string]func(*AuthenticationRecoveryClosureEnvelope){
+		"other epoch": func(v *AuthenticationRecoveryClosureEnvelope) { v.SecuritySnapshot.Epoch++ },
+		"other command": func(v *AuthenticationRecoveryClosureEnvelope) {
+			v.SecuritySnapshot.CommandID = "cmd-" + strings.Repeat("f", 32)
+		},
+		"other installation": func(v *AuthenticationRecoveryClosureEnvelope) {
+			v.SecuritySnapshot.InstallationID = "mxi-" + strings.Repeat("f", 32)
+		},
+		"other intent": func(v *AuthenticationRecoveryClosureEnvelope) {
+			v.SecuritySnapshot.RecoveryIntentDigest = "sha256:" + strings.Repeat("f", 64)
+		},
+		"other time": func(v *AuthenticationRecoveryClosureEnvelope) {
+			v.SecuritySnapshot.ClosedAt = v.SecuritySnapshot.ClosedAt.Add(time.Microsecond)
+		},
+		"changed debit": func(v *AuthenticationRecoveryClosureEnvelope) {
+			v.SecuritySnapshot.Accounts[0].Users[0].TOTPAttempts.UsedAttempts++
+		},
+		"missing digest": func(v *AuthenticationRecoveryClosureEnvelope) { v.Closure.SecuritySnapshotDigest = "" },
+		"other kind":     func(v *AuthenticationRecoveryClosureEnvelope) { v.Kind = AuthenticationRecoveryClosureKind },
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := authenticationRecoveryEnvelopeFixture(t, intent)
+			mutate(&value)
+			if _, err := EncodeAuthenticationRecoveryClosureEnvelope(value); !errors.Is(err, ErrInvalidAuthenticationRecoveryClosureEnvelope) {
+				t.Fatal("changed envelope accepted")
+			}
+		})
+	}
+	completion := authenticationRecoveryCompletionFixture()
+	completion.ClosureDigest, err = AuthenticationRecoveryClosureDigest(envelope.Closure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ValidateAuthenticationRecoveryCompletionForClosure(completion, envelope.Closure) == nil {
+		t.Fatal("completion omitted snapshot binding")
+	}
+	completion.SecuritySnapshotDigest = envelope.Closure.SecuritySnapshotDigest
+	if err := ValidateAuthenticationRecoveryCompletionForClosure(completion, envelope.Closure); err != nil {
+		t.Fatal("bound completion refused", err)
+	}
+	// Even a self-consistent re-encoded envelope is not valid for a different
+	// authenticated backup intent. A digest is not an authority signature.
+	envelope.SecuritySnapshot.AuthenticationStateDigest = "sha256:" + strings.Repeat("8", 64)
+	envelope.Closure.SecuritySnapshotDigest, err = AuthenticationRecoverySecuritySnapshotDigest(envelope.SecuritySnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ValidateAuthenticationRecoveryClosureEnvelopeForIntent(envelope, intent, bootstrapDigest) == nil {
+		t.Fatal("another authority state matched original backup intent")
+	}
+}
+
+func FuzzAuthenticationRecoverySecuritySnapshotCanonicalBytes(f *testing.F) {
+	encoded, err := EncodeAuthenticationRecoverySecuritySnapshot(authenticationRecoverySnapshotFixture())
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add(encoded)
+	f.Fuzz(func(t *testing.T, source []byte) {
+		value, err := DecodeAuthenticationRecoverySecuritySnapshot(bytes.NewReader(source))
+		if err != nil {
+			if !reflect.DeepEqual(value, AuthenticationRecoverySecuritySnapshot{}) {
+				t.Fatal("invalid snapshot returned partial data")
+			}
+			return
+		}
+		canonical, err := EncodeAuthenticationRecoverySecuritySnapshot(value)
+		if err != nil || !bytes.Equal(source, canonical) {
+			t.Fatal("accepted snapshot was not canonical")
+		}
+	})
+}
+
+func authenticationRecoverySnapshotFixture() AuthenticationRecoverySecuritySnapshot {
+	closure := authenticationRecoveryClosureFixture()
+	return AuthenticationRecoverySecuritySnapshot{
+		APIVersion: AuthenticationRecoveryAPIVersion, Kind: AuthenticationRecoverySecuritySnapshotKind, Purpose: AuthenticationRecoveryPurpose,
+		InstallationID: closure.InstallationID, BootstrapDigest: "sha256:" + strings.Repeat("6", 64), Epoch: closure.Epoch, CommandID: closure.CommandID,
+		RecoveryIntentDigest: closure.RecoveryIntentDigest, ClosedAt: closure.ClosedAt, AuthenticationStateDigest: "sha256:" + strings.Repeat("7", 64),
+		Accounts: []AuthenticationRecoveryAccountReplay{{AccountID: "account-a", Users: []AuthenticationRecoveryUserReplay{{UserID: "user-a", FactorID: "factor-a", LastConsumedStep: closure.ClosedAt.Unix() / 30,
+			PasswordAttempts: &AuthenticationRecoveryAttemptWindow{WindowStartedAt: closure.ClosedAt.Add(-time.Second), UsedAttempts: 1, Sequence: 3},
+			TOTPAttempts:     &AuthenticationRecoveryAttemptWindow{WindowStartedAt: closure.ClosedAt.Add(-time.Second), UsedAttempts: 1, Sequence: 4},
+		}}}},
+	}
+}
+
+func authenticationRecoveryEnvelopeFixture(t *testing.T, intent AuthenticationRecoveryIntent) AuthenticationRecoveryClosureEnvelope {
+	t.Helper()
+	closure := authenticationRecoveryClosureFixture()
+	snapshot := authenticationRecoverySnapshotFixture()
+	digest, err := AuthenticationRecoveryIntentDigest(intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closure.RecoveryIntentDigest = digest
+	snapshot.RecoveryIntentDigest = digest
+	snapshot.AuthenticationStateDigest = intent.AuthenticationStateDigest
+	closure.SecuritySnapshotDigest, err = AuthenticationRecoverySecuritySnapshotDigest(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return AuthenticationRecoveryClosureEnvelope{APIVersion: AuthenticationRecoveryAPIVersion, Kind: AuthenticationRecoveryClosureEnvelopeKind, Purpose: AuthenticationRecoveryPurpose, Closure: closure, SecuritySnapshot: snapshot}
 }
 
 func authenticationRecoveryClosureFixture() AuthenticationRecoveryClosure {
