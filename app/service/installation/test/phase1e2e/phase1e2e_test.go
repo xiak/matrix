@@ -53,6 +53,46 @@ func TestMissingAuditActionsAreStableAndTargetBound(t *testing.T) {
 	}
 }
 
+func TestAuthenticationRecoveryAuditFactBindsTheOriginalCommandAndInstallation(t *testing.T) {
+	const installationID, commandID = "installation-example", "cmd-recovery-example"
+	action := auditv1.ActionIAMAuthenticationRecoveryReopened
+	baseline := auditv1.AuditRecord{Source: auditv1.SourceIAM, Event: auditv1.Event{
+		InstallationID: installationID,
+		Actor:          auditv1.ActorReference{Type: auditv1.ActorSystem, ID: "iam-authentication-recovery"},
+		Action:         action,
+		Target:         auditv1.TargetReference{Kind: auditv1.TargetInstallation, ID: installationID},
+		Result:         auditv1.ResultSucceeded,
+		RequestID:      commandID,
+		CorrelationID:  commandID,
+	}}
+	if !matchesAuthenticationRecoveryAuditRecord(baseline, installationID, commandID, action) {
+		t.Fatal("valid recovery fact was rejected")
+	}
+	for _, scenario := range []struct {
+		name   string
+		mutate func(*auditv1.AuditRecord)
+	}{
+		{"source", func(record *auditv1.AuditRecord) { record.Source = auditv1.SourcePaaS }},
+		{"installation", func(record *auditv1.AuditRecord) { record.Event.InstallationID = "another-installation" }},
+		{"tenant", func(record *auditv1.AuditRecord) { record.Event.TenantID = "organization-default" }},
+		{"actor", func(record *auditv1.AuditRecord) { record.Event.Actor.ID = "another-system" }},
+		{"action", func(record *auditv1.AuditRecord) { record.Event.Action = auditv1.ActionIAMAuthenticationRecoveryClosed }},
+		{"target", func(record *auditv1.AuditRecord) { record.Event.Target.ID = "another-installation" }},
+		{"result", func(record *auditv1.AuditRecord) { record.Event.Result = auditv1.ResultDenied }},
+		{"decision", func(record *auditv1.AuditRecord) { record.Event.IAMDecisionID = "decision-other" }},
+		{"request", func(record *auditv1.AuditRecord) { record.Event.RequestID = "cmd-other" }},
+		{"correlation", func(record *auditv1.AuditRecord) { record.Event.CorrelationID = "cmd-other" }},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			candidate := baseline
+			scenario.mutate(&candidate)
+			if matchesAuthenticationRecoveryAuditRecord(candidate, installationID, commandID, action) {
+				t.Fatal("unrelated recovery fact matched")
+			}
+		})
+	}
+}
+
 func TestSecurityMailFixtureReceivesAuthenticatedTLSMessageAndCleansUp(t *testing.T) {
 	certificate, trust, err := securityMailCertificate(net.ParseIP("127.0.0.1"))
 	if err != nil {

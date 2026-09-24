@@ -280,6 +280,99 @@ func (value *gate) rejectIncompatibleTOTPBackupKey(ctx context.Context, backupID
 	return nil
 }
 
+func matchesAuthenticationRecoveryAuditRecord(record auditv1.AuditRecord, installationID, commandID string, action auditv1.Action) bool {
+	event := record.Event
+	return record.Source == auditv1.SourceIAM && event.Action == action &&
+		event.InstallationID == installationID && event.TenantID == "" &&
+		event.Actor == (auditv1.ActorReference{Type: auditv1.ActorSystem, ID: "iam-authentication-recovery"}) &&
+		event.Target == (auditv1.TargetReference{Kind: auditv1.TargetInstallation, ID: installationID}) &&
+		event.Result == auditv1.ResultSucceeded && event.IAMDecisionID == "" &&
+		event.RequestID == commandID && event.CorrelationID == commandID
+}
+
+func (value *gate) assertAuthenticationRecoveryAudit(ctx context.Context, bearer []byte, installationID, commandID string) error {
+	actions := []auditv1.Action{
+		auditv1.ActionIAMAuthenticationRecoveryClosed,
+		auditv1.ActionIAMAuthenticationRecoveryReconciled,
+		auditv1.ActionIAMAuthenticationRecoveryReopened,
+	}
+	poll, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	for poll.Err() == nil {
+		matched := 0
+		unavailable := false
+		for _, action := range actions {
+			request := auditv1.QueryRecordsRequest{PageSize: auditv1.MaxPageSize, Action: action}
+			seenCursors := make(map[auditv1.Cursor]struct{}, maximumAuditAcceptancePages)
+			found := false
+			finished := false
+			for pageNumber := 0; pageNumber < maximumAuditAcceptancePages; pageNumber++ {
+				response, err := value.edge.json(poll, http.MethodPost, "/api/audit/v1/platform/records:query",
+					bearer, request, nil, http.StatusOK)
+				if err != nil {
+					unavailable = true
+					break
+				}
+				var page auditv1.RecordPage
+				valid := decodeOne(response.body, &page) == nil && auditv1.ValidateRecordPage(page) == nil &&
+					page.InstallationID == installationID
+				clear(response.body)
+				if !valid {
+					return fail("successor-authentication-recovery-audit-page")
+				}
+				for _, record := range page.Records {
+					if record.Event.Action != action {
+						return fail("successor-authentication-recovery-audit-filter")
+					}
+					if record.Event.RequestID != commandID {
+						continue
+					}
+					if found || !matchesAuthenticationRecoveryAuditRecord(record, installationID, commandID, action) {
+						return fail("successor-authentication-recovery-audit-fact")
+					}
+					found = true
+				}
+				if page.NextCursor == "" {
+					finished = true
+					break
+				}
+				if _, duplicate := seenCursors[page.NextCursor]; duplicate {
+					return fail("successor-authentication-recovery-audit-cursor")
+				}
+				seenCursors[page.NextCursor] = struct{}{}
+				request.Cursor = page.NextCursor
+			}
+			if unavailable {
+				break
+			}
+			if !finished {
+				return fail("successor-authentication-recovery-audit-bound")
+			}
+			if found {
+				matched++
+			}
+		}
+		if !unavailable && matched == len(actions) {
+			response, err := value.edge.json(poll, http.MethodPost, "/api/audit/v1/platform/integrity:verify", bearer,
+				auditv1.VerifyChainRequest{FromSequence: 1, MaximumRecords: auditv1.MaxVerifyRecords}, nil, http.StatusOK)
+			if err == nil {
+				var verification auditv1.ChainVerification
+				valid := decodeOne(response.body, &verification) == nil && auditv1.ValidateChainVerification(verification) == nil &&
+					verification.InstallationID == installationID && verification.State == auditv1.VerificationVerified &&
+					verification.Complete && verification.RecordCount >= len(actions)
+				clear(response.body)
+				if valid {
+					return nil
+				}
+			}
+		}
+		if !waitPoll(poll, 250*time.Millisecond) {
+			break
+		}
+	}
+	return fail("successor-authentication-recovery-audit-delivery")
+}
+
 func releaseInstallArguments(config options, initial release.VerifiedBundle) ([]string, error) {
 	arguments := []string{
 		"--bundle", initial.Root,
@@ -777,6 +870,12 @@ func (value *gate) beforeRestart(ctx context.Context) (gateErr error) {
 		restoredSuccessorAudit, err := value.edge.allAuditRecords(ctx, bearer)
 		if err != nil || !containsAuditHistory(restoredSuccessorAudit, auditRecordHashes(postUpgradeAudit)) {
 			return fail("successor-backup-audit-history")
+		}
+		if interruptedRecoveryID != "" {
+			if err := value.assertAuthenticationRecoveryAudit(ctx, bearer, state.InstallationID, interruptedRecoveryID); err != nil {
+				return err
+			}
+			emit("successor-authentication-recovery-audit-chain")
 		}
 		if err := value.repeatedStatusAndVerify(
 			ctx, value.releases.b, value.releases.b.Manifest.Release.ID, "",
