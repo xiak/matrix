@@ -512,6 +512,9 @@ the signed installation path, not only pure contract tests:
 2. A matching committed backup restores the intended data while preserving
    current authentication qualification, OTP replay bounds, Audit history and
    the explicit closed/reconciled/reopened chain; old Sessions do not return.
+   Four failed password attempts after the selected backup must still leave
+   only the fifth attempt in the original window after restore; a second
+   restore must not refund that budget or reset its sequence.
 3. A lost close result replays the exact original receipt and snapshot. Missing,
    changed, truncated, oversized or incomplete protected snapshot material
    cannot advance restore or reopen, including after process interruption.
