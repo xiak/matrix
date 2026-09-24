@@ -411,6 +411,15 @@ func (value *gate) beforeRestart(ctx context.Context) (gateErr error) {
 		); err != nil {
 			return err
 		}
+		if err := value.edge.unauthorizedMe(ctx, bearer); err != nil {
+			return fail("cross-profile-recovery-old-session-denial")
+		}
+		bearer, err = value.edge.login(ctx, newPassword, "phase1-after-failed-upgrade-recovery-login")
+		if err != nil {
+			return fail("cross-profile-recovery-password-reauthentication")
+		}
+		value.sensitive = append(value.sensitive, bearer)
+		value.edge.addForbidden(bearer)
 		emit("cross-profile-upgrade-failure-authenticated-recovery")
 	}
 	if err := value.assertNativeNodes(ctx, bearer, false); err != nil {
