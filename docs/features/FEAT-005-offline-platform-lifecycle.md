@@ -294,6 +294,16 @@ factor-creation/rotation snapshot gate or every crash/resume point above.
 Those remaining acceptance cases must be reconciled with their focused
 real-runtime evidence before this Phase 3 extension is marked accepted.
 
+A focused PostgreSQL 18 process gate now holds an actual restricted backup
+snapshot while the real IAM process registers a second TOTP keyset revision.
+Its imported old dump retains revision 1 and no factor references; after a
+committed reference to the new key, the next lease and imported dump require
+exactly that key at revision 2. The same gate retains revoked and pending
+factor references across snapshot boundaries and exercises closure failures.
+Those reference rows are opaque storage fixtures, not completed enrollment;
+this evidence does not yet replace a concurrent HTTP factor-creation gate or
+the signed restore/crash-resume acceptance above.
+
 ## Incremental acceptance
 
 ### Gate A: release and CLI contract

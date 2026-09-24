@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -104,20 +105,79 @@ func TestIAMTOTPBackupProcesses(t *testing.T) {
 	if !strings.Contains(string(version), "(PostgreSQL) 18.") {
 		t.Fatal("backup gate requires PostgreSQL 18 client")
 	}
-	insertRetained := func(id, state string) {
+	insertRetained := func(id, state, keyID string) {
 		t.Helper()
 		// Deliberately opaque negative fixtures: this gate proves retaining all
 		// ciphertext references, not enrollment or successful seed decryption.
 		if _, err := admin.Exec(ctx, `INSERT INTO iam.totp_authenticators
 		 (id,tenant_id,user_id,installation_id,key_id,format_version,nonce,ciphertext,state,last_consumed_step,created_at)
-		 VALUES($1,$2,$3,$4,'process-totp',1,$5,$6,$7,-1,clock_timestamp())`, id, bootstrap.Organization.ID,
-			bootstrap.Administrator.ID, bootstrap.InstallationID, bytes.Repeat([]byte{0x21}, 12), bytes.Repeat([]byte{0x34}, 36), state); err != nil {
+			 VALUES($1,$2,$3,$4,$5,1,$6,$7,$8,-1,clock_timestamp())`, id, bootstrap.Organization.ID,
+			bootstrap.Administrator.ID, bootstrap.InstallationID, keyID, bytes.Repeat([]byte{0x21}, 12), bytes.Repeat([]byte{0x34}, 36), state); err != nil {
 			t.Fatal(err)
 		}
 	}
+	// Rotate through the real IAM process while the backup helper holds the
+	// original database snapshot. Opaque retained-row fixtures are inserted only
+	// after IAM stops: startup deliberately rejects such non-enrollment rows.
+	beforeRotation, oldLease := startTOTPBackupProcess(t, ctx, root, backupBinary, backupDSN)
+	if oldLease.Custody.KeysetRevision != 1 || len(oldLease.Custody.RequiredKeys) != 0 ||
+		oldLease.Custody.InstallationID != bootstrap.InstallationID {
+		t.Fatal("pre-rotation lease did not bind the original empty factor set")
+	}
+	digest, err := iamv1.BootstrapDigest(bootstrap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotated := iamv1.TOTPKeyring{APIVersion: iamv1.APIVersion, Kind: "TOTPKeyring", Purpose: iamv1.TOTPWrappingPurpose,
+		Scope:          iamv1.TOTPWrappingScope{InstallationID: bootstrap.InstallationID, BootstrapDigest: digest},
+		KeysetRevision: 2, ActiveKeyID: "process-totp-next",
+		Keys: []iamv1.TOTPWrappingKey{
+			{KeyID: "process-totp", FormatVersion: 1, KeyMaterial: processSecret(t, base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x74}, 32)))},
+			{KeyID: "process-totp-next", FormatVersion: 1, KeyMaterial: processSecret(t, base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x75}, 32)))},
+		}}
+	rotatedBytes, err := iamv1.EncodeTOTPKeyring(rotated)
+	rotated = iamv1.TOTPKeyring{}
+	if err != nil {
+		t.Fatal(err)
+	}
+	rotatedPath := writeProtectedFile(t, temporary, "iam-totp-rotated.json", rotatedBytes)
+	clear(rotatedBytes)
+	rotatedNetwork := startChild(t, root, iamBinary, []string{
+		"MATRIX_IAM_DATABASE_DSN_FILE=" + iamDSN, "MATRIX_IAM_BOOTSTRAP_FILE=" + bootstrapFile,
+		"MATRIX_IAM_LISTEN_ADDRESS=" + address,
+		"MATRIX_IAM_CURSOR_KEY_FILE=" + cursorPath,
+		"MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE=" + accessKeyWrappingPath,
+		"MATRIX_IAM_TOTP_KEYRING_FILE=" + rotatedPath,
+		"MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE=" + writeProcessEmailVerificationKeyring(t, temporary, bootstrap),
+	})
+	defer rotatedNetwork.stop()
+	waitHTTPStatus(t, ctx, rotatedNetwork, "http://"+address+"/ready", http.StatusOK)
+	rotatedNetwork.stop()
+	assertProcessOutputsSanitized(t, []*childProcess{rotatedNetwork}, processDBPassword, initialAdminPassword)
+	insertRetained("backup-process-next-key", "REVOKED", "process-totp-next")
+	oldDump := runTOTPPostgresTool(t, ctx, config, "pg_dump", nil, "--format=custom", "--no-owner", "--no-privileges",
+		"--section=pre-data", "--section=data", "--table=iam.totp_wrapping_registry", "--table=iam.totp_keysets",
+		"--table=iam.totp_authenticators", "--snapshot="+oldLease.SnapshotID)
+	proveTOTPImportedDump(t, ctx, admin, config, oldDump, oldLease, 0)
+	if exit := beforeRotation.finish(t, installationv1.TOTPBackupCustodyReleaseFrame); exit != installationv1.TOTPBackupCustodyExitSuccess {
+		t.Fatal("pre-rotation snapshot did not close", exit)
+	}
+	afterRotation, newLease := startTOTPBackupProcess(t, ctx, root, backupBinary, backupDSN)
+	if newLease.Custody.KeysetRevision != 2 || len(newLease.Custody.RequiredKeys) != 1 ||
+		newLease.Custody.InstallationID != bootstrap.InstallationID ||
+		newLease.Custody.RequiredKeys[0].KeyID != "process-totp-next" {
+		t.Fatal("post-rotation lease omitted the committed new key")
+	}
+	newDump := runTOTPPostgresTool(t, ctx, config, "pg_dump", nil, "--format=custom", "--no-owner", "--no-privileges",
+		"--section=pre-data", "--section=data", "--table=iam.totp_wrapping_registry", "--table=iam.totp_keysets",
+		"--table=iam.totp_authenticators", "--snapshot="+newLease.SnapshotID)
+	proveTOTPImportedDump(t, ctx, admin, config, newDump, newLease, 1)
+	if exit := afterRotation.finish(t, installationv1.TOTPBackupCustodyReleaseFrame); exit != installationv1.TOTPBackupCustodyExitSuccess {
+		t.Fatal("post-rotation snapshot did not close", exit)
+	}
 	for phase := 0; phase < 2; phase++ {
 		child, lease := startTOTPBackupProcess(t, ctx, root, backupBinary, backupDSN)
-		if len(lease.Custody.RequiredKeys) != phase || lease.Custody.KeysetRevision != 1 || lease.Custody.InstallationID != bootstrap.InstallationID {
+		if len(lease.Custody.RequiredKeys) != phase+1 || lease.Custody.KeysetRevision != 2 || lease.Custody.InstallationID != bootstrap.InstallationID {
 			t.Fatal("helper lease did not report actual reference scope")
 		}
 		var live int
@@ -126,9 +186,9 @@ func TestIAMTOTPBackupProcesses(t *testing.T) {
 			t.Fatal("helper did not hold an actual restricted snapshot", err)
 		}
 		if phase == 0 {
-			insertRetained("backup-process-revoked", "REVOKED")
+			insertRetained("backup-process-revoked", "REVOKED", "process-totp")
 		} else {
-			insertRetained("backup-process-pending", "PENDING")
+			insertRetained("backup-process-pending", "PENDING", "process-totp")
 		}
 		dump := runTOTPPostgresTool(t, ctx, config, "pg_dump", nil, "--format=custom", "--no-owner", "--no-privileges",
 			"--section=pre-data", "--section=data", "--table=iam.totp_wrapping_registry", "--table=iam.totp_keysets",
@@ -136,7 +196,7 @@ func TestIAMTOTPBackupProcesses(t *testing.T) {
 		if len(dump) == 0 || len(dump) > 2<<20 {
 			t.Fatal("invalid bounded snapshot dump")
 		}
-		proveTOTPImportedDump(t, ctx, admin, config, dump, lease, phase)
+		proveTOTPImportedDump(t, ctx, admin, config, dump, lease, phase+1)
 		if exit := child.finish(t, installationv1.TOTPBackupCustodyReleaseFrame); exit != installationv1.TOTPBackupCustodyExitSuccess {
 			t.Fatal("normal helper rollback/close failed", exit)
 		}
