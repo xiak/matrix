@@ -2846,8 +2846,15 @@ func TestAuthenticationRecoverySealsAndRequiresExactSecuritySnapshot(t *testing.
 	}
 	effects, runtimeBoundary, recovery := authenticationRecoveryEffectFixture(t)
 	recovery.AuthenticationIntent.AuthenticationStateDigest = "sha256:" + strings.Repeat("a", 64)
+	runtimeBoundary.authenticationLoseResult = true
+	if err := effects.closeAuthenticationRecovery(t.Context(), recovery); !errors.Is(err, platformcommand.ErrEffectOutcomeUnknown) {
+		t.Fatalf("lost committed close result = %v", err)
+	}
+	if _, exists, err := readAuthenticationRecoveryClosure(recovery.Current.Root, recovery.AuthenticationIntent.CommandID); err != nil || exists {
+		t.Fatalf("lost result published an unverified closure: exists=%t err=%v", exists, err)
+	}
 	if err := effects.closeAuthenticationRecovery(t.Context(), recovery); err != nil {
-		t.Fatalf("close with bounded security snapshot: %v", err)
+		t.Fatalf("replay close with bounded security snapshot: %v", err)
 	}
 	closure, exists, err := readAuthenticationRecoveryClosure(recovery.Current.Root, recovery.AuthenticationIntent.CommandID)
 	if err != nil || !exists || closure.SecuritySnapshotDigest == "" {
@@ -2888,6 +2895,12 @@ func TestAuthenticationRecoverySealsAndRequiresExactSecuritySnapshot(t *testing.
 	}
 	if err := effects.reconcileAuthenticationRecovery(t.Context(), recovery); !errors.Is(err, platformcommand.ErrEffectConflict) || runtimeBoundary.authenticationStarts != starts {
 		t.Fatalf("changed snapshot reached reconcile: %v / starts=%d", err, runtimeBoundary.authenticationStarts)
+	}
+	if err := os.WriteFile(path, encoded[:len(encoded)-1], 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := effects.reconcileAuthenticationRecovery(t.Context(), recovery); !errors.Is(err, platformcommand.ErrEffectConflict) || runtimeBoundary.authenticationStarts != starts {
+		t.Fatalf("truncated snapshot reached reconcile: %v / starts=%d", err, runtimeBoundary.authenticationStarts)
 	}
 	if err := os.WriteFile(path, encoded, 0o600); err != nil {
 		t.Fatal(err)
@@ -2946,6 +2959,21 @@ func TestAuthenticationRecoverySealsAndRequiresExactSecuritySnapshot(t *testing.
 	completion, _, exists, err := readAuthenticationRecoveryCompletion(recovery.Current.Root)
 	if err != nil || !exists || completion.SecuritySnapshotDigest != closure.SecuritySnapshotDigest {
 		t.Fatalf("snapshot-bound completion = %#v / %t / %v", completion, exists, err)
+	}
+	nextIntent := recovery.AuthenticationIntent
+	nextIntent.CommandID = "cmd-" + strings.Repeat("c", 32)
+	nextIntent.Epoch++
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateAuthenticationRecoveryAnchor(recovery.Current.Root, nextIntent, false); err == nil {
+		t.Fatal("next recovery epoch accepted a missing completed security snapshot")
+	}
+	if err := writeManagedOnce(recovery.Current.Root, relative, encoded); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateAuthenticationRecoveryAnchor(recovery.Current.Root, nextIntent, false); err != nil {
+		t.Fatalf("intact prior snapshot cannot anchor the next epoch: %v", err)
 	}
 }
 
@@ -3992,6 +4020,7 @@ type platformStartRuntime struct {
 	authenticationStarts      int
 	authenticationRemovals    int
 	authenticationExitCodes   map[string]int
+	authenticationLoseResult  bool
 	recoveryEvents            []string
 }
 
@@ -4507,6 +4536,11 @@ func (runtimeBoundary *platformStartRuntime) runAuthenticationRecovery(arguments
 		runtimeBoundary.authenticationStarts++
 		runtimeBoundary.authenticationContainer.State = platformContainerState{Status: "exited", ExitCode: code}
 		runtimeBoundary.recoveryEvents = append(runtimeBoundary.recoveryEvents, "authentication-"+mode)
+		if runtimeBoundary.authenticationLoseResult {
+			runtimeBoundary.authenticationLoseResult = false
+			clear(output)
+			return nil, true, errors.New("authentication recovery test result was lost after commit")
+		}
 		return output, true, nil
 	case "rm":
 		identity := arguments[len(arguments)-1]

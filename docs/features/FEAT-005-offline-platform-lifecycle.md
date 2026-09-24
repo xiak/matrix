@@ -479,6 +479,17 @@ retrieve only the original committed snapshot for the same intent, not sample
 later state. The bounded replay snapshot is not a substitute for the full
 state digest or a source of policy, role or platform-recovery authority.
 
+The installation consumer at `4b3920fb` carries the sealed backup's state
+digest into the recovery intent, validates the close envelope against the
+locally sealed bootstrap scope, durably stores and rereads the exact replay
+snapshot before publishing closure, and validates a read-only snapshot mount
+before reconcile or reopen. Task-local Linux race tests prove retry after a
+lost close result and reject missing, changed, truncated, oversized or
+wrong-scope snapshots before launching the recovery container. Losing a
+completed snapshot also blocks the next recovery epoch. This does not
+establish the IAM producer transaction, enable v5 for
+the current database profile, or complete the signed runtime gate.
+
 After restore, missing, changed or weaker evidence stays CLOSED. In
 particular, an older backup's `requiredForUsers=false` or superseded TOTP
 factor cannot silently replace a current requirement or factor. The first
