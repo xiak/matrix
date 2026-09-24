@@ -113,7 +113,12 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='authentication recovery state is protected';
     END IF;
     IF OLD.state='OPEN' THEN
-        IF NEW.state<>'CLOSED' OR NEW.epoch<>OLD.epoch+1 OR NEW.active_command_id IS NULL THEN
+        IF NEW.state<>'CLOSED' OR NEW.active_command_id IS NULL OR
+          (NEW.epoch<>OLD.epoch+1 AND NOT EXISTS(
+            SELECT 1 FROM iam.authentication_recovery_closures c
+            JOIN iam.authentication_recovery_reconciliations r ON r.command_id=c.command_id
+            WHERE c.command_id=NEW.active_command_id AND c.epoch=NEW.epoch
+              AND c.origin='RESTORED' AND NEW.epoch>OLD.epoch)) THEN
             RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='authentication recovery close transition is invalid';
         END IF;
     ELSIF OLD.state='CLOSED' THEN
@@ -309,7 +314,11 @@ BEGIN
         RETURN stored.closure_document;
     END IF;
     SELECT * INTO current_state FROM iam.authentication_recovery_state WHERE singleton FOR UPDATE;
-    IF NOT FOUND OR current_state.state<>'OPEN' OR numeric_epoch<>current_state.epoch+1
+    -- A retained backup may predate several completed recovery epochs. The
+    -- installation authenticates the external closure before this restored
+    -- authority records it; the trigger permits the jump only with the
+    -- matching immutable RESTORED closure and reconciliation in this transaction.
+    IF NOT FOUND OR current_state.state<>'OPEN' OR numeric_epoch<=current_state.epoch
       OR EXISTS(SELECT 1 FROM iam.authentication_recovery_closures c WHERE c.epoch=numeric_epoch) THEN
         RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='authentication recovery reconciliation conflicts';
     END IF;
