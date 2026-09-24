@@ -309,7 +309,8 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 [`80225dce692921aaaeda12e96b58a464f931da30`](https://github.com/xiak/matrix/commit/80225dce692921aaaeda12e96b58a464f931da30)；
 既有恢复/换绑隔离体验仍由 `dabe85d1e64bf20fdcfbe579791694dd9a257e40` 保留，首次绑定未知结果加固固定在
 [`d7d6333d`](https://github.com/xiak/matrix/commit/d7d6333d135a65648269443789799d1fccf0b638)，恢复码再生成 LIVE 客户端与同步嵌入资源固定在
-[`a2ff4f6ff1fc56fa9a43ab56499962e03ac05733`](https://github.com/xiak/matrix/commit/a2ff4f6ff1fc56fa9a43ab56499962e03ac05733)。
+[`a2ff4f6ff1fc56fa9a43ab56499962e03ac05733`](https://github.com/xiak/matrix/commit/a2ff4f6ff1fc56fa9a43ab56499962e03ac05733)，跨会话迟到秘密隔离固定在
+[`3b954402`](https://github.com/xiak/matrix/commit/3b954402)。
 
 - LIVE 首次绑定只有在已验证通知地址与 `NEVER_BOUND` 状态下开放，以当前密码、稳定 requestId 和 factor revision 发起。严格适配器验证五分钟生命周期、所有 ID/revision 关联及状态完成时间；首次 `APPLIED` 才接受 provisioning，`EQUAL_REPLAY` 携带 secret/URI 会失败关闭。
 - UI 不调用外部二维码服务，只在首次 `APPLIED` 的当前内存流程显示手动 seed/URI 和六位确认框。等值重放不显示秘密或确认框，只允许取消仍待处理的原流程；终态才允许使用新 requestId 重新开始。组件用例锁定该边界。
@@ -317,8 +318,9 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 - 确认成功只接受十条非空且唯一的恢复码与 `REAUTHENTICATE`。Provider 立即清除旧 credential/current/challenge，仅在内存一次显示恢复材料；用户确认已保存后清除材料并返回重新登录，不写 URL、DOM 持久态或浏览器存储。
 - `BOUND` 设置页通过固定五路由开放恢复码再生成，仍不开放因子替换或移除。严格适配器验证两分钟 step-up、operation/revision/request 关联、状态时间、regeneration 归属及一次性十码；`EQUAL_REPLAY` 携带秘密、重复码、额外字段或错配 revision 均失败关闭。验证端的通用 401 不被擅自解释为 bearer 过期；后续 bearer-only 读取才是 Session 是否仍有效的权威观察。
 - Provider 在写入前登记原意图。开始未知只允许等价重试或查询，验证未知只查询原 step-up，重新生成未知只查询原 regeneration；页面不会重放密码、OTP 或生成命令。同一 User 以新 Session 登录仍可查询原非秘密 regeneration，旧 Session 的 step-up 不能继续。首次 `APPLIED` 的十码只在当前组件内存显示，确认后从 DOM 清除；by-request 完成只说明材料已丢失并要求新意图。
+- 身份认证代际同时限定迟到的一次性秘密：即使旧请求在同一 User 的新 Session 或另一 User 建立新意图后才返回 `APPLIED`，Provider 也不会将旧十码交给新视图；本人安全页面按 Session 重新挂载，恢复码组件还逐次核对当前 Session 与原 requestId。deferred-promise 用例覆盖同一 User、不同 User 和意外复用 bearer 的情况，证明新意图与 DOM、浏览器存储均不含旧码。
 - Role 创建同时补强 Session 归属：客户端改变时立即清除草稿、未知结果和成功态，并忽略旧 client 的迟到回包。行为用例证明旧会话结果不能进入新会话视图。
-- 完整前端 42 个测试文件、682 条用例和三条静态归一化用例通过；类型、lint、架构、228 组主题对比、40 页生产导出、223 个嵌入文件等价、`go test ./...` 与 `go vet ./...` 通过。恢复码固定后端独立 CI 因 runner 未分配而没有执行，不能写成后端 CI 通过；尚未以真实 IAM 进程执行 step-up、一次性十码交付、重新登录查询或首次绑定的浏览器闭环。
+- 完整前端 42 个测试文件、685 条用例和三条静态归一化用例通过；类型、lint、架构、228 组主题对比、40 页生产导出、223 个嵌入文件等价、`go test -p 2 ./...` 与 `go vet -p 2 ./...` 通过。恢复码固定后端独立 CI 因 runner 未分配而没有执行，不能写成后端 CI 通过；尚未以真实 IAM 进程执行 step-up、一次性十码交付、重新登录查询或首次绑定的浏览器闭环。
 
 ### 登录挑战固定契约的开发验收证据
 
@@ -349,15 +351,16 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 
 2026-09-20，前端实现固定在已推送的
 [`2c460a39`](https://github.com/xiak/matrix/commit/2c460a3904daebcd5c00e4cb9683e89ab8b169b4)，
-设计来源为本文件记录的 IAM-009 S2/S3 固定提交。
+本人前置条件收紧固定在 [`3b954402`](https://github.com/xiak/matrix/commit/3b954402)；设计参考 IAM-009 S2/S3 的固定来源 `d570673ba87c113f7474fdab79b5e22a83c2b323`，不继承其未完成的运行时验收。
 
 - Account 安全规则使用独立语义组件，不再混入本人认证器与安全通知；默认先呈现只读规则摘要，只有显式进入编辑后才显示控件。编辑、准确目标审阅、作用域 step-up 和预览保存均在稳定的内容区完成，不打开 Dialog，也不在阶段切换时卸载固定标题与范围说明。
+- 操作者本人尚未绑定 TOTP 时只读规则摘要并引导至个人安全区；绑定后旧会话尚未通过正常重新登录时，编辑仍被禁用。隔离预览领域命令同样拒绝未绑定或待重新登录的直接保存，不能绕过页面按钮。本人因子状态不替代当前 Session 已完成 MFA 的证据，也不替代独立 `read`/`update` 权限；未来真实读取和更新必须各自按固定 IAM 能力与 Session 校验，不从 Root 名称或此 MOCK 状态推断放行。
 - 审阅固定展示 `org-xiak`、普通 IAM User、受保护 Root/平台托管身份及收紧/放宽规则的会话影响。step-up 组件由本人安全操作和 Account 规则复用，但操作类型、目标和输入绑定保持显式，不产生通用提权能力。
-- 账号规则保存与用户 SSO 保存使用独立预览命令，读取规则与更新规则也保持独立能力。读取允许但更新被拒绝时，当前规则保持不变，页面丢弃一次性证明、密码与 TOTP，不自动重试；`409` 冲突进入页内失效态，必须重新读取基线、审阅和验证。
+- 账号规则保存与用户 SSO 保存使用独立预览命令。当前预览可演示“可读但更新被拒绝”，却尚不能代表真实 `read`/`update` 能力目录或无读取权限的返回；这两种能力必须在后续固定读取契约到位后分别接入。更新被拒绝时当前规则保持不变，页面丢弃一次性证明、密码与 TOTP，不自动重试；`409` 冲突进入页内失效态，必须重新读取基线、审阅和验证。
 - 提交后响应丢失会保存原始意图并进入跨路由保留的 `UNKNOWN` 锁定态；预览仓库真正 reject/超时时也会先把同一非秘密意图记入隔离恢复日志，再向页面暴露 UNKNOWN。若保存与恢复日志同时不可用，Provider 持有当前体验会话的 `UNRECOVERABLE` 写锁，普通路由切换或后续成功读取不能用仓库的空 pending 覆盖它，页面也不提供虚假的结果查询；只有结束并重新进入隔离体验会话才重置。该重置边界不代表真实平台可以用重新登录替代权威结果查询。页面不播报成功、不允许第二次保存，也不复用密码、TOTP 或操作证明。对于可查询意图，`NOT_FOUND` 与查询暂不可用都继续保持未知；只有权威的已应用或已拒绝结果才解除锁定。
 - 预览设置模型只保留账号级 MFA 要求和用户 SSO 选择；无契约所有者的密码规则、账号会话时长与泛化敏感操作字段及报告检查已经删除。安全总览因此只计算五项有明确证据来源的检查，不制造隐藏配置或伪状态。
-- `539px` DEV 浏览器验证未知态无页面横向溢出或 Dialog，document/body 均保持 `clientWidth == scrollWidth == 539`；离开设置页再返回仍保持锁定，查询不到结果仍未知，权威已应用结果才恢复只读摘要。
-- 账户工作区与预览仓库 192 条定向行为用例、完整前端 40 个文件/609 条用例、三条静态归一化、228 组主题对比、40 页生产导出、222 个嵌入文件及 `go test ./...`、`go vet ./...` 均通过。新增用例覆盖仓库真实 reject 后的可查询 UNKNOWN，以及保存和恢复日志同时失败后再切页、重新读取仍保持不可恢复写锁。完整共享门禁由 [FEAT-007 current development evidence](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence) 唯一拥有；本证据不宣称 IAM-009 已有公开 HTTP、真实持久化、会话失效、权威未知结果查询或后端执行验收。
+- `539px` DEV 浏览器验证未知态无页面横向溢出或 Dialog，document/body 均保持 `clientWidth == scrollWidth == 539`；离开设置页再返回仍保持锁定，查询不到结果仍未知，权威已应用结果才恢复只读摘要。新增 `390 × 844` DEV 检查证明只读提示可见、引导按钮聚焦本人安全标题，document/body 均无横向溢出且 warning/error 为空。
+- 账户工作区与预览仓库定向行为用例、完整前端 42 个文件/685 条用例、三条静态归一化、228 组主题对比、40 页生产导出、223 个嵌入文件及 `go test -p 2 ./...`、`go vet -p 2 ./...` 均通过。用例同时覆盖未绑定与绑定后待重新登录的拒绝、仓库真实 reject 后的可查询 UNKNOWN，以及保存和恢复日志同时失败后的不可恢复写锁。完整共享门禁由 [FEAT-007 current development evidence](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence) 唯一拥有；本证据不宣称 IAM-009 已有可消费安全设置运行时、真实持久化、会话失效、权威未知结果查询或后端执行验收。
 
 ### 安全报告证据覆盖 MOCK 的开发验收证据
 
