@@ -8,19 +8,37 @@
   IAM/012 for mail, then owning code/tests. Fixed adoption belongs to
   docs/adoption/FEAT-006-platform-authorities.md, not this checkpoint.
 - Latest implemented and pushed fixed candidate:
-  **b7a70bfa9e53f0a5f16619c60523c84613cb7b0b**, parent81a0dc53.
-  Session-held step-up/recovery-code regeneration plus fixed offline
-  authentication-recovery fence integration. Source IAM40/Audit24/PaaS2;
-  installation/release profile/revision unchanged and not allocated.
-- Exact https://github.com/xiak/matrix/actions/runs/35953732463 is
-  completed/failure. All seven jobs runner_id=0/steps=0; the go annotation
-  explicitly says account payment/spending limit prevented execution.
+  **d570673ba87c113f7474fdab79b5e22a83c2b323**, parent86e68f3b.
+  S2c pure Account security-settings contracts only; no new runtime routes,
+  StepUp operation, actions, SQL, schema or release profile. Runtime still
+  uses fixedb7a70bfa9e53f0a5f16619c60523c84613cb7b0b's Session-held
+  step-up/regeneration and recovery fences, IAM40/Audit24/PaaS2.
+- Exact https://github.com/xiak/matrix/actions/runs/35955820844 for d570
+  and35953732463 for b7 are completed/failure. All seven jobs each have
+  runner_id=0/steps=0; go annotations explicitly say account payment/spending
+  limit prevented execution.
   Independent CI is NOT accepted. Do not change billing or repeatedly
   rerun the unchanged blockage. Older zero-execution runs remain separate
   from 5e185e95's actual Audit runtime-probe failure.
 - This fixed candidate is not a signed release or complete MFA acceptance.
   New regeneration SMTP, real UI/browser, independent CI and release
   recovery remain open, as do remaining009 S2/S3/S4 requirements.
+
+## Current pure settings contract
+
+IAM/009 S3 owns the exact six new nonsecret types and their design. Explicit
+MFA false/true is required; missing/null, selectors and arbitrary payloads
+fail. Versioned intent leaves space for expected+1. Immutable change refers
+to the original request and snapshot; callerSessionEnded describes only the
+original caller, never an instruction to log out a later reader's Session.
+No settings route or operation is LIVE. Current StepUp rejects it.
+
+All API/architecture race, APIvet,122-file repeat generation and IAM/Audit
+default tests passed. New single-worker15s fuzz221734executions passed.
+Defaults' external DB skips are NOT real runtime evidence. Current fixed
+adoption is b7; no UI/installation/profile state was imported. Next implement
+the full009 S2c transaction/permissions/forced enrollment/Session-Role barrier,
+not merely the types; coordinate actual ABI before allocating versions.
 
 ## Current runtime contract
 
@@ -154,9 +172,16 @@ UI/real browser and signed release recovery remain separate owner gates.
 
 All UI task01a07b21-9a0d-7fd0-b090-7827ce18262e, branch
 feat/cloud-console-ux. Fixed objects only; never read/copy its WIP.
-It received b7 and will treat it as development integration, not release
-permission; current priority is its existing IAM006 Role LIVE slice,
-then009 step-up client. Do not replace or parallel-implement UI here.
+It received b7 and d570; only b7's five runtime routes are LIVE development
+contracts, settings remains MOCK. It finished fixed
+f0455570c3f5ae9f18bd266dffd5eb386e473c4e Role creation and is now consuming
+the b7 recovery-code routes. Its first long SHA was incorrect; the actual
+object was resolved from fixed docs9dc2fc090bbdeb5b44aa606e39a387b2976eb4f7
+and confirmed by the owner. Read-only shared contract review matched the
+six create fields/current Account/USERtrust/duration and exact unknown retry.
+Requested same-Account USER/Session change and delayed-result isolation
+regression in its existing UI tests; did not claim full UI/browser acceptance.
+Do not replace or parallel-implement UI here.
 
 Fixedc5ec1f945cdcd7af61941aafed8da4d7e68f839c read-only focused review
 passed navigation intent P1:AccountAccessProvider survives keyed view

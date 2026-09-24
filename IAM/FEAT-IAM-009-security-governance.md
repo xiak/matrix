@@ -661,7 +661,7 @@ RootIdentity仍是原Account的原USER，恢复不能转让root、启用暂停�
 
 `callerSessionEnded`必须显式存在，描述**原命令调用Session**是否被这次收紧淘汰；它不是当前读取者的登出指令，也不是请求方可选的保留会话参数。新配置为false时不得报告本次变更终止了caller。历史查询及EQUAL_REPLAY始终返回原快照/原结果，不因当前配置、当前登录Session或后续授权改变而改写。正常重新登录后读到旧的true不得再退出新Session；APPLIED使原caller失效时则必须正常重新认证。该字段不列举其他会话、不授予其查询权，也不能推断Role/其他身份获得更强认证。
 
-S2c当前只实施上述六个非秘密API类型、严格解码/验证及OpenAPI组件。2026-09-24本地Go1.26.7、`GOMAXPROCS=2`、`GOMEMLIMIT=512MiB`下，API与架构`-race -p 2`、API vet及122个已跟踪API文件的重复生成一致性通过；新增模糊测试单worker运行15秒（终端17.214s，221734次执行）通过。IAM/Audit默认回归也通过，其中外部数据库用例的跳过不计作实跑。既有测试owner覆盖显式false/true、缺失/null、未知或重复字段、请求方身份/权限选择、版本上限及历史完成与新Session分离；JSON Schema证明结构与封闭枚举，expected+1跨字段关系仍由Go验证，不能宣称Schema独自证明事务。当前step-up拒绝设置操作，OpenAPI不发布设置路由；未新增Action、SQL、schema版本、发布profile或UI。此证据不是配置CAS、强制初始绑定、跨副本Session/Role屏障、真实邮件、独立CI或发布验收，后续运行时切片必须完成这些目标。
+S2c当前固定`d570673ba87c113f7474fdab79b5e22a83c2b323`只实施上述六个非秘密API类型、严格解码/验证及OpenAPI组件。2026-09-24本地Go1.26.7、`GOMAXPROCS=2`、`GOMEMLIMIT=512MiB`下，API与架构`-race -p 2`、API vet及122个已跟踪API文件的重复生成一致性通过；新增模糊测试单worker运行15秒（终端17.214s，221734次执行）通过。IAM/Audit默认回归也通过，其中外部数据库用例的跳过不计作实跑。既有测试owner覆盖显式false/true、缺失/null、未知或重复字段、请求方身份/权限选择、版本上限及历史完成与新Session分离；JSON Schema证明结构与封闭枚举，expected+1跨字段关系仍由Go验证，不能宣称Schema独自证明事务。当前step-up拒绝设置操作，OpenAPI不发布设置路由；未新增Action、SQL、schema版本、发布profile或UI。其精确SHA的[Verification 35955820844](https://github.com/xiak/matrix/actions/runs/35955820844)已终止failure：七项均runner_id=0、steps=0，go注释明确为GitHub账号付款/支出限制，未执行任何测试，不能当作独立CI通过或代码失败证据。此证据不是配置CAS、强制初始绑定、跨副本Session/Role屏障、真实邮件、独立CI或发布验收，后续运行时切片必须完成这些目标。
 
 当前首片只有TOTP，故不提供算法、允许因子清单、宽限期、按组例外或平台底线开关；新Account的`requiredForUsers=false`只是未强制日常User，不关闭用户主动绑定的因子。已有安装安全配置只能从实际可信旧状态迁移，不能以默认false覆盖生效决定；缺少应存在的行不得在读取时临时生成。用户NEVER_BOUND的首次设置、具备合法解绑完成的REMOVED重新设置及因子丢失必须区分。
 
