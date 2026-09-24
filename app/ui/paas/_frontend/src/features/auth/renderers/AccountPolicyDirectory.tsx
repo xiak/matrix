@@ -200,9 +200,10 @@ function PolicyVersionPublisher({ policy, defaultVersion, mutation, onPublished,
         <section className={styles.policyRawDocument}><h4>{t("currentDocument", { version: defaultVersion.versionId })}</h4><pre tabIndex={0}>{JSON.stringify(defaultVersion.document, null, 2)}</pre></section>
         <section className={styles.policyRawDocument}><h4>{t("proposedDocument")}</h4><pre tabIndex={0}>{JSON.stringify(review.document, null, 2)}</pre></section>
       </div>
-    </> : <AccountPolicyDocumentAuthor text={text} onChange={setText} error={Boolean(error)} onClearError={() => setError(null)}
+    </> : null}
+    <div hidden={Boolean(review)}><AccountPolicyDocumentAuthor text={text} onChange={setText} error={Boolean(error)} onClearError={() => setError(null)}
       mode={editorMode} onModeChange={setEditorMode} onVisualReadyChange={setVisualReady}
-      label={t("proposedDocument")} hint={t("publishEditorHint")} />}
+      label={t("proposedDocument")} hint={t("publishEditorHint")} /></div>
     {error ? <Alert status="danger">{error}</Alert> : null}
     <div className={styles.actions}>
       {review ? <><Button disabled={busy || Boolean(error)} onClick={() => void publish()}>{t("confirmPublish")}</Button>

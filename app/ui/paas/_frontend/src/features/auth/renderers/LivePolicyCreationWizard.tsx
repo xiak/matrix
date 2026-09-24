@@ -56,6 +56,8 @@ export function LivePolicyCreationWizard(props: {
   const id = useId();
   const form = useRef<HTMLFormElement>(null);
   const reviewHeading = useRef<HTMLHeadingElement>(null);
+  const nameInput = useRef<HTMLInputElement>(null);
+  const returningFromReview = useRef(false);
   const [name, setName] = useState("");
   const [text, setText] = useState(initialText);
   const [mode, setMode] = useState<PolicyAuthorMode>("json");
@@ -67,7 +69,10 @@ export function LivePolicyCreationWizard(props: {
   const [busy, setBusy] = useState(false);
   const requestLeave = useAccessDraft({ dirty: Boolean(name || text !== initialText) && !client?.pending && !createdId && !previewComplete, busy,
     title: t("cancelTitle"), description: t("cancelHint"), form });
-  useLayoutEffect(() => { if (review) reviewHeading.current?.focus({ preventScroll: true }); }, [review]);
+  useLayoutEffect(() => {
+    if (review) reviewHeading.current?.focus({ preventScroll: true });
+    else if (returningFromReview.current) { nameInput.current?.focus({ preventScroll: true }); returningFromReview.current = false; }
+  }, [review]);
   const inspect = () => onBack();
   if (client?.pending) return <WorkspaceDetail title={t("title")} onBack={inspect}>
     <PolicyCreateRecovery client={client} pending={client.pending} onDone={setCreatedId} onInspect={inspect} />
@@ -124,17 +129,18 @@ export function LivePolicyCreationWizard(props: {
           <dl className={styles.catalogFacts}><div><dt>{t("name")}</dt><dd>{review.name}</dd></div><div><dt>{t("scope")}</dt><dd>{t("tenant")}</dd></div></dl>
           <Alert status={props.preview ? "info" : "warning"}>{t(props.preview ? "previewReviewNotice" : "reviewNotice")}</Alert>
           <section className={styles.policyRawDocument}><h3>{t("document")}</h3><pre tabIndex={0}>{JSON.stringify(review.document, null, 2)}</pre></section>
-        </> : <>
+        </> : null}
+        <div hidden={Boolean(review)}>
           <FormField id={id + "-name"} label={t("name")} hint={t(props.preview ? "previewNameHint" : "nameHint")}>
-            <Input id={id + "-name"} maxLength={128} value={name} onChange={(event) => { setName(event.target.value); setError(null); }} />
+            <Input ref={nameInput} id={id + "-name"} maxLength={128} value={name} onChange={(event) => { setName(event.target.value); setError(null); }} />
           </FormField>
           <AccountPolicyDocumentAuthor text={text} onChange={setText} error={Boolean(error)} onClearError={() => setError(null)}
             mode={mode} onModeChange={setMode} onVisualReadyChange={setVisualReady} allowEmpty label={t("document")} hint={t(props.preview ? "previewDocumentHint" : "documentHint")} />
-        </>}
+        </div>
         {error ? <Alert status="danger" tabIndex={-1}>{error}</Alert> : null}
         <div className={styles.actions}>
           <Button type="submit" disabled={busy}>{review ? t(props.preview ? "finishPreview" : "confirmCreate") : t("review")}</Button>
-          <Button type="button" variant="secondary" disabled={busy} onClick={() => { if (review) { setReview(null); setError(null); } else requestLeave(onBack); }}>{review ? t("backToEdit") : t("cancel")}</Button>
+          <Button type="button" variant="secondary" disabled={busy} onClick={() => { if (review) { returningFromReview.current = true; setReview(null); setError(null); } else requestLeave(onBack); }}>{review ? t("backToEdit") : t("cancel")}</Button>
         </div>
       </form>
     </Card.Body></Card>

@@ -1178,6 +1178,11 @@ describe("account access", () => {
     await user.click(screen.getByRole("button", { name: "审阅变更" }));
     expect(screen.getByRole("heading", { name: "审阅待发布版本" })).toBeTruthy();
     expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "返回编辑" }));
+    expect(screen.getByRole("checkbox", { name: /paas.application.read/ })).toHaveProperty("checked", true);
+    expect((screen.getByRole("textbox", { name: "资源 ID 或前缀" }) as HTMLInputElement).value).toBe("app-prod");
+    expect(listAuthorizationProfiles).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "审阅变更" }));
     await user.click(screen.getByRole("button", { name: "确认发布新版本" }));
     await waitFor(() => expect(fixture.createPolicyVersion).toHaveBeenCalledTimes(1));
     const submitted = fixture.createPolicyVersion.mock.calls[0]![3].document;
@@ -1241,6 +1246,13 @@ describe("account access", () => {
     await user.type(screen.getByRole("textbox", { name: "资源 ID 或前缀" }), "app-prod");
     await user.click(screen.getByRole("button", { name: "审阅策略" }));
     expect(screen.getByRole("heading", { name: "审阅新策略" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "返回编辑" }));
+    expect((screen.getByRole("textbox", { name: "策略名称" }) as HTMLInputElement).value).toBe("Application reader");
+    expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "策略名称" }));
+    expect(screen.getByRole("checkbox", { name: /paas.application.read/ })).toHaveProperty("checked", true);
+    expect((screen.getByRole("textbox", { name: "资源 ID 或前缀" }) as HTMLInputElement).value).toBe("app-prod");
+    expect(listAuthorizationProfiles).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "审阅策略" }));
     await user.click(screen.getByRole("button", { name: "确认创建" }));
     await waitFor(() => expect(createPolicy).toHaveBeenCalledTimes(1));
     const submitted = createPolicy.mock.calls[0]![2];

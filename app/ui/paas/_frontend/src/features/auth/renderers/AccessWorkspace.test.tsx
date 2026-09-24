@@ -417,6 +417,12 @@ describe("policy creation entry and directory contract", () => {
     await user.type(screen.getByRole("textbox", { name: "资源 ID 或前缀" }), "app-demo");
     await user.click(screen.getByRole("button", { name: "审阅策略" }));
     expect(screen.getByRole("heading", { name: "审阅新策略" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "返回编辑" }));
+    expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "策略名称" }));
+    expect((screen.getByRole("textbox", { name: "资源 ID 或前缀" }) as HTMLInputElement).value).toBe("app-demo");
+    expect(screen.getByRole("checkbox", { name: /paas.application.read/ })).toHaveProperty("checked", true);
+    expect(repository.listAuthorizationProfiles).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "审阅策略" }));
     await user.click(screen.getByRole("button", { name: "完成体验" }));
     expect(screen.getByText(/没有创建策略、关联身份或授予资源权限/)).toBeTruthy();
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
