@@ -4551,46 +4551,44 @@ func assertAuthorityPlaintextAbsent(
 	plaintexts ...string,
 ) {
 	t.Helper()
-	for _, plaintext := range plaintexts {
-		var present bool
+	for index, plaintext := range plaintexts {
+		var present [7]bool
 		if err := admin.QueryRow(
 			ctx,
 			`SELECT
 				EXISTS (
 					SELECT 1 FROM iam.audit_outbox
-					 WHERE event_document::text LIKE '%' || $1 || '%'
-				)
-				OR EXISTS (
+					 WHERE strpos(event_document::text, $1) > 0
+				), EXISTS (
 					SELECT 1 FROM paas.audit_outbox
-					 WHERE document::text LIKE '%' || $1 || '%'
-				)
-				OR EXISTS (
+					 WHERE strpos(document::text, $1) > 0
+				), EXISTS (
 					SELECT 1 FROM paas.operations
-					 WHERE document::text LIKE '%' || $1 || '%'
-				)
-				OR EXISTS (
+					 WHERE strpos(document::text, $1) > 0
+				), EXISTS (
 					SELECT 1 FROM managedservice.audit_outbox
-					 WHERE document::text LIKE '%' || $1 || '%'
-				)
-				OR EXISTS (
+					 WHERE strpos(document::text, $1) > 0
+				), EXISTS (
 					SELECT 1 FROM managedservice.operations AS operation
-					 WHERE row_to_json(operation)::text LIKE '%' || $1 || '%'
-				)
-				OR EXISTS (
+					 WHERE strpos(row_to_json(operation)::text, $1) > 0
+				), EXISTS (
 					SELECT 1 FROM audit.records
-					 WHERE event_document::text LIKE '%' || $1 || '%'
-					    OR canonical_document LIKE '%' || $1 || '%'
-				)
-				OR EXISTS (
+					 WHERE strpos(event_document::text, $1) > 0
+					    OR strpos(canonical_document, $1) > 0
+				), EXISTS (
 					SELECT 1 FROM iam.local_credential_recoveries AS receipt
-					 WHERE row_to_json(receipt)::text LIKE '%' || $1 || '%'
+					 WHERE strpos(row_to_json(receipt)::text, $1) > 0
 				)`,
 			plaintext,
-		).Scan(&present); err != nil {
+		).Scan(&present[0], &present[1], &present[2], &present[3], &present[4], &present[5], &present[6]); err != nil {
 			t.Fatalf("inspect authority plaintext storage: %v", err)
 		}
-		if present {
-			t.Fatal("authority stored plaintext credential")
+		for source, stored := range present {
+			if stored {
+				t.Fatalf("authority stored plaintext credential at input %d in %s", index,
+					[...]string{"iam.audit_outbox", "paas.audit_outbox", "paas.operations", "managedservice.audit_outbox",
+						"managedservice.operations", "audit.records", "iam.local_credential_recoveries"}[source])
+			}
 		}
 	}
 }
