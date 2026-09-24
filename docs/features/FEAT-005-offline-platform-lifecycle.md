@@ -313,6 +313,22 @@ a new snapshot and publishes an authenticated backup. This is a bounded
 provider-failure/resume check, not a signed process-kill or restore-stage
 crash claim.
 
+The same task-local signed A/B pair passed a second disconnected lifecycle in
+462.32 seconds with the enabling release's `pg_dump --snapshot` exit held after
+the real dump completed. Killing `mx` left its durable `BACKING_UP` intent and
+unpublished partial directory; replay through the signed command reused the
+same backup and correlation IDs, acquired a new lease and removed the partial.
+The run also retained first MFA enrollment, authenticated backup recovery,
+cross-profile rollback refusal and application data. After restarting only
+the isolated local Docker engine, the first immediate status attempt met a
+transient not-ready condition; an unchanged retry passed the full post-restart
+gate in 14.34 seconds. The test-owned container and all three volumes were
+deleted. [Verification 36003766294](https://github.com/xiak/matrix/actions/runs/36003766294)
+passed Go, UI, authority-process and node-process for the preceding focused
+backup gate. This adds one signed dump-completion crash point, not snapshot
+export, closure, restore or reopen crash coverage, and does not accept the full
+extension.
+
 ## Incremental acceptance
 
 ### Gate A: release and CLI contract

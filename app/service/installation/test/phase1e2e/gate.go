@@ -496,10 +496,17 @@ func (value *gate) beforeRestart(ctx context.Context) (gateErr error) {
 		if err := value.edge.logoutWithID(ctx, bearer, "phase1-successor-backup-logout"); err != nil {
 			return fail("successor-backup-session-revocation")
 		}
-		successorBackup, err = runMX(
-			ctx, value.releases.b, "backup", []string{"--root", value.config.root},
-			value.forbidden(secret, newPassword, bearer),
-		)
+		if profile := value.releases.b.Manifest.Database; profile == release.CurrentDatabaseProfile() && profile.Authorities.IAM >= 40 {
+			successorBackup, err = value.interruptBackupDump(ctx, value.forbidden(secret, newPassword, bearer))
+			if err == nil {
+				emit("successor-backup-process-kill-resume")
+			}
+		} else {
+			successorBackup, err = runMX(
+				ctx, value.releases.b, "backup", []string{"--root", value.config.root},
+				value.forbidden(secret, newPassword, bearer),
+			)
+		}
 		if err != nil || successorBackup.BackupID == "" || !successorBackup.Changed {
 			return fail("successor-protected-backup")
 		}

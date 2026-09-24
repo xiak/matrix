@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/xiak/matrix/app/service/installation/internal/journal"
+	"github.com/xiak/matrix/app/service/installation/internal/layout"
 	"github.com/xiak/matrix/app/service/installation/internal/lifecycle"
 	"github.com/xiak/matrix/app/service/installation/release"
 	"github.com/xiak/matrix/app/service/installation/topology"
@@ -353,6 +354,153 @@ exec %q "$@"
 		return mxResult{}, fail("credential-recovery-operator-input-removal")
 	}
 	return runMX(ctx, value.releases.a, "recover-credentials", []string{"--root", value.config.root, "--resume"}, forbidden)
+}
+
+// The wrapper passes the real snapshot-bound pg_dump through unchanged, then
+// withholds only its process exit. Killing mx at that point leaves its durable
+// backup intent and unpublished partial artifact, without a production hook
+// or a fabricated database result. The same signed command must take a new
+// lease on replay and publish exactly the original backup identity.
+func (value *gate) interruptBackupDump(ctx context.Context, forbidden [][]byte) (mxResult, error) {
+	realDocker, err := exec.LookPath("docker")
+	if err != nil || !filepath.IsAbs(realDocker) {
+		return mxResult{}, fail("backup-interruption-provider-path")
+	}
+	before, err := readJournal(ctx, value.config.root)
+	if err != nil || before.Active != nil || before.InstallationID == "" ||
+		before.CurrentReleaseID != value.releases.b.Manifest.Release.ID {
+		return mxResult{}, fail("backup-interruption-preflight")
+	}
+	directory, err := os.MkdirTemp(value.config.root, ".backup-interruption-")
+	if err != nil {
+		return mxResult{}, fail("backup-interruption-fixture")
+	}
+	defer os.RemoveAll(directory)
+	for _, path := range []string{realDocker, directory} {
+		if strings.ContainsAny(path, " \t\r\n'\"$\\") || strings.ContainsRune(path, 96) {
+			return mxResult{}, fail("backup-interruption-provider-path")
+		}
+	}
+	marker, fifo := filepath.Join(directory, "dump-completed"), filepath.Join(directory, "release")
+	output, err := runProcess(ctx, "mkfifo", "-m", "600", fifo)
+	if err != nil || output.exit != 0 {
+		return mxResult{}, fail("backup-interruption-fixture")
+	}
+	releasePipe, err := os.OpenFile(fifo, os.O_RDWR, 0)
+	if err != nil {
+		return mxResult{}, fail("backup-interruption-fixture")
+	}
+	defer releasePipe.Close()
+	script := fmt.Sprintf(`#!/bin/sh
+set -u
+umask 077
+if [ "$#" -ge 6 ] && [ "$1" = exec ] && [ "$2" = --user ] && [ "$3" = postgres ] && [ "$5" = pg_dump ]; then
+  snapshot=0
+  for argument in "$@"; do
+    case "$argument" in --snapshot=*) snapshot=1 ;; esac
+  done
+  if [ "$snapshot" -eq 1 ]; then
+    actual=$(%q container inspect --format '{{index .Config.Labels "com.xiak.matrix.installation"}} {{index .Config.Labels "com.xiak.matrix.release"}} {{index .Config.Labels "com.xiak.matrix.role"}}' "$4") || exit "$?"
+    if [ "$actual" = %q ]; then
+      status=0
+      %q "$@" || status=$?
+      if [ "$status" -eq 0 ]; then
+        printf complete > %q
+        mv %q %q
+        IFS= read -r released < %q || :
+      fi
+      exit "$status"
+    fi
+  fi
+fi
+exec %q "$@"
+`, realDocker, before.InstallationID+" "+before.CurrentReleaseID+" postgres", realDocker,
+		marker+".pending", marker+".pending", marker, fifo, realDocker)
+	if os.WriteFile(filepath.Join(directory, "docker"), []byte(script), 0o700) != nil {
+		return mxResult{}, fail("backup-interruption-fixture")
+	}
+	interruption, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
+	command, stdout, stderr, err := startMX(interruption, value.releases.b, "backup",
+		[]string{"--root", value.config.root}, "PATH="+directory+":"+os.Getenv("PATH"))
+	if err != nil {
+		return mxResult{}, fail("backup-interruption-start")
+	}
+	waited := make(chan error, 1)
+	go func() { waited <- command.Wait() }()
+	finished := false
+	defer func() {
+		if !finished {
+			_ = command.Process.Kill()
+			_, _ = releasePipe.Write([]byte("continue\n"))
+			<-waited
+		}
+	}()
+	for {
+		select {
+		case <-waited:
+			finished = true
+			return mxResult{}, fail("backup-ended-before-interruption")
+		default:
+		}
+		content, readErr := os.ReadFile(marker)
+		if readErr == nil {
+			if string(content) != "complete" {
+				return mxResult{}, fail("backup-interruption-marker")
+			}
+			break
+		}
+		if !errors.Is(readErr, os.ErrNotExist) || !waitPoll(interruption, 50*time.Millisecond) {
+			return mxResult{}, fail("backup-interruption-boundary")
+		}
+	}
+	if command.Process.Kill() != nil {
+		return mxResult{}, fail("backup-installer-kill")
+	}
+	_, _ = releasePipe.Write([]byte("continue\n"))
+	waitErr := <-waited
+	finished = true
+	if waitErr == nil || stdout.overflow || stderr.overflow || stdout.content.Len() != 0 ||
+		containsAny(stdout.content.Bytes(), forbidden) || containsAny(stderr.content.Bytes(), forbidden) {
+		return mxResult{}, fail("backup-interrupted-output")
+	}
+	pending, err := readJournal(ctx, value.config.root)
+	if err != nil || pending.Active == nil || pending.Active.Command.Action != lifecycle.ActionBackup ||
+		pending.Active.Phase != lifecycle.PhaseBackingUp || pending.Active.Command.ID == "" ||
+		pending.Active.Command.BackupID == "" || pending.CurrentReleaseID != before.CurrentReleaseID {
+		return mxResult{}, fail("backup-interrupted-intent")
+	}
+	backupID := pending.Active.Command.BackupID
+	backupRoot := filepath.Join(value.config.root, filepath.FromSlash(layout.BackupDirectory))
+	if _, err := os.Lstat(filepath.Join(backupRoot, backupID)); !errors.Is(err, os.ErrNotExist) {
+		return mxResult{}, fail("backup-interruption-published-partial")
+	}
+	if info, err := os.Lstat(filepath.Join(backupRoot, "."+backupID+".partial")); err != nil || !info.IsDir() {
+		return mxResult{}, fail("backup-interruption-missing-partial")
+	}
+	for deadline := time.Now().Add(30 * time.Second); ; {
+		ids, err := dockerLines(ctx, "container", "ls", "--all", "--quiet",
+			"--filter", "label=com.xiak.matrix.installation="+before.InstallationID,
+			"--filter", "label=com.xiak.matrix.role=iam-backup-custody",
+			"--filter", "label=com.xiak.matrix.backup="+backupID)
+		if err != nil {
+			return mxResult{}, fail("backup-interruption-custody-observation")
+		}
+		if len(ids) == 0 {
+			break
+		}
+		if time.Now().After(deadline) || !waitPoll(ctx, 50*time.Millisecond) {
+			return mxResult{}, fail("backup-interruption-orphaned-custody")
+		}
+	}
+	result, err := runMX(ctx, value.releases.b, "backup", []string{"--root", value.config.root}, forbidden)
+	if err != nil || result.BackupID != backupID || result.CorrelationID != pending.Active.Command.ID || !result.Changed {
+		return mxResult{}, fail("backup-interruption-resume")
+	}
+	if _, err := os.Lstat(filepath.Join(backupRoot, "."+backupID+".partial")); !errors.Is(err, os.ErrNotExist) {
+		return mxResult{}, fail("backup-interruption-retained-partial")
+	}
+	return result, nil
 }
 
 func validateExpectedMXFailure(
