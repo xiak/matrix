@@ -289,10 +289,10 @@ task-owned data, Docker and release volumes; its container and volumes were
 deleted after the restart gate. The signatures use a task-local test signer,
 not a published production release key.
 
-This sequential signed lifecycle does not alone prove the concurrent
-factor-creation/rotation snapshot gate or every crash/resume point above.
-Those remaining acceptance cases must be reconciled with their focused
-real-runtime evidence before this Phase 3 extension is marked accepted.
+This sequential signed lifecycle alone does not prove concurrent factor
+creation/rotation or every crash/resume point. The focused and interrupted
+runtime gates below provide separate evidence; they must be reconciled with
+every acceptance item before this Phase 3 extension is marked accepted.
 
 A focused PostgreSQL 18 process gate now holds an actual restricted backup
 snapshot while an IAM HTTP enrollment creates a pending TOTP factor after
@@ -313,8 +313,11 @@ a new snapshot and publishes an authenticated backup. This is a bounded
 provider-failure/resume check, not a signed process-kill or restore-stage
 crash claim.
 
-The same task-local signed A/B pair passed a disconnected lifecycle in 472.41
-seconds with five real installer process kills. The IAM helper's exported
+The same task-local signed A/B pair passed a fresh disconnected lifecycle in
+489.96 seconds. Before installing A, the actual signed B executable rejected
+an attempted initial B installation with `INSTALL_RELEASE_HAS_PREDECESSOR`;
+the installation root and Docker state remained empty. Five real installer
+process kills then passed. The IAM helper's exported
 PostgreSQL snapshot frame and the real `pg_dump --snapshot` process exit were
 each withheld at a separate `BACKING_UP` intent. Replay kept each backup and
 correlation ID, took a fresh snapshot lease, removed the unpublished partial
@@ -331,12 +334,17 @@ completed the restored archive. Killing it after reopen left the command in
 Session. First MFA enrollment, application data, Audit history and
 cross-profile rollback refusal remained intact. After restarting only the
 isolated local Docker engine and observing its daemon ready, the post-restart
-gate passed on its first attempt in 14.64 seconds. The test-owned container
-and all volumes were deleted. [Verification 36010921815](https://github.com/xiak/matrix/actions/runs/36010921815)
-passed Go, UI, authority-process and node-process for the preceding
-close/reopen gate. These checks prove five exact injected crash boundaries;
-the full extension still requires independent verification of the combined
-source and reconciliation against every acceptance item before it is accepted.
+gate passed on its first attempt in 14.50 seconds. The test-owned container,
+volumes and transient test executable were deleted.
+[Verification 36016699660](https://github.com/xiak/matrix/actions/runs/36016699660)
+passed Go, UI, authority-process and node-process on the combined test source.
+An earlier run of the preceding source failed the node-process generic
+plaintext-storage assertion without identifying the matching input or table;
+the subsequent test reports only a safe input index and table name if that
+assertion recurs. Its cause is not established by the successful rerun. These
+checks prove the exact signed negative install and five injected crash
+boundaries; the full extension still requires reconciliation against every
+acceptance item before it is accepted.
 
 ## Incremental acceptance
 
