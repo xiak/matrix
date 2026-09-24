@@ -2,6 +2,7 @@ package localmachine
 
 import (
 	"bytes"
+	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"crypto/x509"
@@ -17,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	installationv1 "github.com/xiak/matrix/api/adapter/installation/v1"
 	nodev1 "github.com/xiak/matrix/api/adapter/node/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
@@ -24,9 +26,36 @@ import (
 	"github.com/xiak/matrix/app/service/installation/internal/platformcommand"
 	"github.com/xiak/matrix/app/service/installation/nodeconfig"
 	"github.com/xiak/matrix/app/service/installation/release"
+	"github.com/xiak/matrix/app/service/installation/topology"
 )
 
 const maximumCredentialFile = 16 * 1024
+
+func (effects *Effects) ReadSecurityMailConfiguration(
+	ctx context.Context,
+	path string,
+) (platformcommand.SecurityMailInput, error) {
+	if effects == nil || ctx == nil || ctx.Err() != nil || !filepath.IsAbs(path) ||
+		filepath.Clean(path) != path || len(path) > 4096 || strings.ContainsAny(path, "\x00\r\n") ||
+		validateManagedRoot(filepath.Dir(path)) != nil {
+		return platformcommand.SecurityMailInput{}, platformcommand.ErrEffectVerification
+	}
+	encoded, err := readManagedFile(filepath.Dir(path), filepath.Base(path), installationv1.MaximumSecurityMailConfigurationBytes)
+	defer clear(encoded)
+	if err != nil {
+		return platformcommand.SecurityMailInput{}, platformcommand.ErrEffectVerification
+	}
+	configuration, err := installationv1.DecodeSecurityMailConfiguration(bytes.NewReader(encoded))
+	if err != nil {
+		return platformcommand.SecurityMailInput{}, platformcommand.ErrEffectVerification
+	}
+	digest, err := installationv1.SecurityMailConfigurationDigest(configuration)
+	if err != nil {
+		configuration.Clear()
+		return platformcommand.SecurityMailInput{}, platformcommand.ErrEffectVerification
+	}
+	return platformcommand.SecurityMailInput{Digest: digest, Configuration: configuration}, nil
+}
 
 // Recovery input is an explicitly selected private file, never a directory
 // adopted by the installation. Its owned, private parent and exact regular
@@ -102,6 +131,11 @@ func stageInstallation(plan platformcommand.InstallPlan, entropy io.Reader) erro
 	if err := ensureTOTPKeyring(plan.Root, plan.InstallationID, entropy); err != nil {
 		return err
 	}
+	if plan.Bundle.Manifest.TopologyDigest == topology.ContractDigest() {
+		if err := ensureSecurityMail(plan.Root, plan.InstallationID, entropy, plan.SecurityMail); err != nil {
+			return err
+		}
+	}
 	if err := ensureLocalCredentialRecoveryAuthority(plan.Root, plan.InstallationID, entropy); err != nil {
 		return err
 	}
@@ -172,6 +206,7 @@ func stageInstallation(plan platformcommand.InstallPlan, entropy io.Reader) erro
 		{path: layout.IAMCredentialRecovery, role: "matrix_iam_credential_recovery_login"},
 		{path: layout.IAMAuthenticationRecovery, role: "matrix_iam_authentication_recovery_login"},
 		{path: layout.IAMBackupCustody, role: "matrix_iam_backup_custody_login"},
+		{path: layout.IAMNotificationWorker, role: "matrix_iam_notification_worker_login"},
 		{path: layout.AuditRuntime, role: "matrix_audit_runtime_login"},
 		{path: layout.PaaSAPI, role: "matrix_paas_api_login"},
 		{path: layout.PaaSWorker, role: "matrix_paas_worker_login"},
@@ -929,6 +964,147 @@ func sealedIAMBootstrapScope(root, installationID string) (string, string, error
 		return "", "", platformcommand.ErrEffectVerification
 	}
 	return document.InstallationID, digest, nil
+}
+
+func ensureSecurityMail(
+	root string,
+	installationID string,
+	entropy io.Reader,
+	input platformcommand.SecurityMailInput,
+) error {
+	if installationv1.ValidateSecurityMailConfiguration(input.Configuration) != nil {
+		return platformcommand.ErrEffectVerification
+	}
+	digest, err := installationv1.SecurityMailConfigurationDigest(input.Configuration)
+	if err != nil || digest != input.Digest {
+		return platformcommand.ErrEffectVerification
+	}
+	keyPath := filepath.FromSlash(layout.IAMEmailVerificationKeyring)
+	channelPath := filepath.FromSlash(layout.IAMSecurityMailSMTPChannel)
+	keyExists, err := managedFileExists(root, keyPath)
+	if err != nil {
+		return errors.Join(platformcommand.ErrEffectConflict, err)
+	}
+	channelExists, err := managedFileExists(root, channelPath)
+	if err != nil {
+		return errors.Join(platformcommand.ErrEffectConflict, err)
+	}
+	if channelExists && !keyExists {
+		return platformcommand.ErrEffectVerification
+	}
+	scope, err := securityMailScope(root, installationID)
+	if err != nil {
+		return err
+	}
+	if keyExists {
+		if _, err := readEmailVerificationKeyring(root, installationID); err != nil {
+			return err
+		}
+	} else {
+		materialBytes := make([]byte, 32)
+		if _, err := io.ReadFull(entropy, materialBytes); err != nil {
+			clear(materialBytes)
+			return errors.Join(platformcommand.ErrEffectUnavailable, err)
+		}
+		materialText := base64.RawURLEncoding.EncodeToString(materialBytes)
+		clear(materialBytes)
+		material, err := iamv1.NewSecret(materialText)
+		materialText = ""
+		if err != nil {
+			return platformcommand.ErrEffectVerification
+		}
+		const keyID = "email-verification-v1"
+		keyring := iamv1.EmailVerificationKeyring{
+			APIVersion: iamv1.APIVersion, Kind: "EmailVerificationKeyring",
+			Purpose: iamv1.EmailVerificationWrappingPurpose, Scope: scope,
+			KeysetRevision: 1, ActiveKeyID: keyID,
+			Keys: []iamv1.EmailVerificationWrappingKey{{KeyID: keyID, FormatVersion: 1, KeyMaterial: material}},
+		}
+		encoded, err := iamv1.EncodeEmailVerificationKeyring(keyring)
+		keyring = iamv1.EmailVerificationKeyring{}
+		if err != nil {
+			return platformcommand.ErrEffectVerification
+		}
+		defer clear(encoded)
+		if err := writeManagedOnce(root, keyPath, encoded); err != nil {
+			return errors.Join(platformcommand.ErrEffectConflict, err)
+		}
+	}
+	channel := iamv1.SecurityMailSMTPChannel{
+		APIVersion: iamv1.APIVersion, Kind: "SecurityMailSMTPChannel",
+		Purpose: iamv1.SecurityMailSubmissionPurpose, Scope: scope,
+		Host: input.Configuration.Host, Port: input.Configuration.Port,
+		TLSMode: input.Configuration.TLSMode, Username: input.Configuration.Username,
+		Password: input.Configuration.Password, From: input.Configuration.From,
+		TrustedCAPEM: input.Configuration.TrustedCAPEM,
+	}
+	if channelExists {
+		actual, err := readSecurityMailSMTPChannel(root, installationID)
+		if err != nil || !equalSecurityMailSMTPChannels(actual, channel) {
+			return platformcommand.ErrEffectVerification
+		}
+		return nil
+	}
+	encoded, err := iamv1.EncodeSecurityMailSMTPChannel(channel)
+	channel = iamv1.SecurityMailSMTPChannel{}
+	if err != nil {
+		return platformcommand.ErrEffectVerification
+	}
+	defer clear(encoded)
+	if err := writeManagedOnce(root, channelPath, encoded); err != nil {
+		return errors.Join(platformcommand.ErrEffectConflict, err)
+	}
+	return nil
+}
+
+func equalSecurityMailSMTPChannels(left, right iamv1.SecurityMailSMTPChannel) bool {
+	leftEncoded, leftErr := iamv1.EncodeSecurityMailSMTPChannel(left)
+	defer clear(leftEncoded)
+	rightEncoded, rightErr := iamv1.EncodeSecurityMailSMTPChannel(right)
+	defer clear(rightEncoded)
+	return leftErr == nil && rightErr == nil && bytes.Equal(leftEncoded, rightEncoded)
+}
+
+func securityMailScope(root, installationID string) (iamv1.SecurityMailInstallationScope, error) {
+	sealedInstallationID, bootstrapDigest, err := sealedIAMBootstrapScope(root, installationID)
+	if err != nil {
+		return iamv1.SecurityMailInstallationScope{}, err
+	}
+	return iamv1.SecurityMailInstallationScope{InstallationID: sealedInstallationID, BootstrapDigest: bootstrapDigest}, nil
+}
+
+func readEmailVerificationKeyring(root, installationID string) (iamv1.EmailVerificationKeyring, error) {
+	expected, err := securityMailScope(root, installationID)
+	if err != nil {
+		return iamv1.EmailVerificationKeyring{}, err
+	}
+	encoded, err := readManagedFile(root, filepath.FromSlash(layout.IAMEmailVerificationKeyring), iamv1.MaxEmailVerificationKeyringBytes)
+	if err != nil {
+		return iamv1.EmailVerificationKeyring{}, platformcommand.ErrEffectVerification
+	}
+	defer clear(encoded)
+	keyring, err := iamv1.DecodeEmailVerificationKeyring(bytes.NewReader(encoded))
+	if err != nil || keyring.Scope != expected {
+		return iamv1.EmailVerificationKeyring{}, platformcommand.ErrEffectVerification
+	}
+	return keyring, nil
+}
+
+func readSecurityMailSMTPChannel(root, installationID string) (iamv1.SecurityMailSMTPChannel, error) {
+	expected, err := securityMailScope(root, installationID)
+	if err != nil {
+		return iamv1.SecurityMailSMTPChannel{}, err
+	}
+	encoded, err := readManagedFile(root, filepath.FromSlash(layout.IAMSecurityMailSMTPChannel), iamv1.MaxSecurityMailSMTPChannelBytes)
+	if err != nil {
+		return iamv1.SecurityMailSMTPChannel{}, platformcommand.ErrEffectVerification
+	}
+	defer clear(encoded)
+	channel, err := iamv1.DecodeSecurityMailSMTPChannel(bytes.NewReader(encoded))
+	if err != nil || channel.Scope != expected {
+		return iamv1.SecurityMailSMTPChannel{}, platformcommand.ErrEffectVerification
+	}
+	return channel, nil
 }
 
 // The local issuing key is installation-owned, not a service credential or

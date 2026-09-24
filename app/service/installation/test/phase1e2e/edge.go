@@ -33,6 +33,8 @@ type edgeClient struct {
 	endpoint            string
 	http                *http.Client
 	forbidden           [][]byte
+	transientSecrets    [][]byte
+	lastTOTPStep        int64
 	creationRetryDelays [3]time.Duration
 }
 
@@ -80,6 +82,9 @@ func newEdgeClient(endpoint string) *edgeClient {
 func (client *edgeClient) close() {
 	if client != nil && client.http != nil {
 		client.http.CloseIdleConnections()
+		for _, secret := range client.transientSecrets {
+			clear(secret)
+		}
 	}
 }
 
@@ -210,9 +215,13 @@ func (client *edgeClient) changePassword(
 }
 
 func (client *edgeClient) logout(ctx context.Context, bearer []byte) error {
+	return client.logoutWithID(ctx, bearer, "phase1-logout")
+}
+
+func (client *edgeClient) logoutWithID(ctx context.Context, bearer []byte, requestID string) error {
 	response, err := client.json(
 		ctx, http.MethodPost, "/api/iam/v1/auth/logout", bearer,
-		iamv1.LogoutRequest{RequestID: "phase1-logout"}, nil, http.StatusOK,
+		iamv1.LogoutRequest{RequestID: requestID}, nil, http.StatusOK,
 	)
 	if err != nil {
 		return err

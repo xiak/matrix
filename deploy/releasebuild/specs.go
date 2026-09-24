@@ -28,6 +28,7 @@ var binarySpecifications = []binarySpecification{
 	{name: "matrix-iam-authentication-recovery", packagePath: "./app/service/iam/cmd/matrix-iam-authentication-recovery"},
 	{name: "matrix-iam-local-recovery", packagePath: "./app/service/iam/cmd/matrix-iam-local-recovery"},
 	{name: "matrix-iam-migrate", packagePath: "./app/service/iam/cmd/matrix-iam-migrate"},
+	{name: "matrix-iam-notification-dispatcher", packagePath: "./app/service/iam/cmd/matrix-iam-notification-dispatcher"},
 	{name: "matrix-paas", packagePath: "./app/service/paas/cmd/matrix-paas"},
 	{name: "matrix-paas-audit-dispatcher", packagePath: "./app/service/paas/cmd/matrix-paas-audit-dispatcher"},
 	{name: "matrix-paas-migrate", packagePath: "./app/service/paas/cmd/matrix-paas-migrate"},
@@ -55,7 +56,7 @@ var imageRecipes = []imageRecipe{
 	},
 	{
 		component: "iam", baseReference: "scratch",
-		binaries: []string{"matrix-iam", "matrix-iam-audit-dispatcher", "matrix-iam-authentication-recovery", "matrix-iam-backup-custody", "matrix-iam-local-recovery", "matrix-iam-migrate", "matrix-health"},
+		binaries: []string{"matrix-iam", "matrix-iam-audit-dispatcher", "matrix-iam-authentication-recovery", "matrix-iam-backup-custody", "matrix-iam-local-recovery", "matrix-iam-migrate", "matrix-iam-notification-dispatcher", "matrix-health"},
 	},
 	{
 		component: "paas", baseReference: DockerBaseReference,

@@ -74,6 +74,9 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	enrollmentIngressMounts := 0
 	accessKeyWrappingMounts := 0
 	totpKeyringMounts := 0
+	emailKeyringMounts := 0
+	securityMailChannelMounts := 0
+	notificationDSNMounts := 0
 	iamCursorKeyMounts := 0
 	for name, raw := range services {
 		service := raw.(map[string]any)
@@ -121,6 +124,25 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 					t.Fatal("TOTP keyring crossed its IAM API boundary")
 				}
 			}
+			if mount["source"] == path.Join(options.Root, layout.IAMEmailVerificationKeyring) {
+				emailKeyringMounts++
+				if (name != "iam" && name != "iam-notification-dispatcher") ||
+					mount["target"] != "/run/matrix/iam-email-verification-keyring.json" || mount["read_only"] != true {
+					t.Fatal("email verification keyring crossed its IAM/notification boundary")
+				}
+			}
+			if mount["source"] == path.Join(options.Root, layout.IAMSecurityMailSMTPChannel) {
+				securityMailChannelMounts++
+				if name != "iam-notification-dispatcher" || mount["target"] != "/run/matrix/iam-security-mail-smtp-channel.json" || mount["read_only"] != true {
+					t.Fatal("SMTP channel crossed its notification-only boundary")
+				}
+			}
+			if mount["source"] == path.Join(options.Root, layout.IAMNotificationWorker) {
+				notificationDSNMounts++
+				if name != "iam-notification-dispatcher" || mount["target"] != "/run/matrix/iam-notification-worker-dsn" || mount["read_only"] != true {
+					t.Fatal("notification database identity crossed its worker boundary")
+				}
+			}
 			if mount["source"] == path.Join(options.Root, layout.IAMCursorKey) {
 				iamCursorKeyMounts++
 				if name != "iam" || mount["target"] != "/run/matrix/iam-cursor-key" || mount["read_only"] != true {
@@ -144,6 +166,9 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	if totpKeyringMounts != 1 {
 		t.Fatal("TOTP keyring lacks its single IAM API mount")
 	}
+	if emailKeyringMounts != 2 || securityMailChannelMounts != 1 || notificationDSNMounts != 1 {
+		t.Fatal("security mail custody lacks its exact API and purpose-worker mounts")
+	}
 	if iamCursorKeyMounts != 1 {
 		t.Fatal("IAM cursor key lacks its single IAM API mount")
 	}
@@ -152,6 +177,9 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	}
 	if services["iam"].(map[string]any)["environment"].(map[string]any)["MATRIX_IAM_TOTP_KEYRING_FILE"] != "/run/matrix/iam-totp-keyring.json" {
 		t.Fatal("IAM does not receive the installation-owned TOTP keyring")
+	}
+	if services["iam"].(map[string]any)["environment"].(map[string]any)["MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE"] != "/run/matrix/iam-email-verification-keyring.json" {
+		t.Fatal("IAM does not receive the installation-owned email verification keyring")
 	}
 	if services["paas-api"].(map[string]any)["environment"].(map[string]any)["MATRIX_PAAS_NODE_CONNECTIONS_FILE"] != "/run/matrix/node-controller/configuration.json" {
 		t.Fatal("PaaS does not consume the signed controller mount")
@@ -173,13 +201,14 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	foundPostgresData := false
 	foundAPISIXRuntimeBoundary := false
 	expectedEntrypoints := map[string]string{
-		"audit":                 "/matrix/bin/matrix-audit",
-		"iam":                   "/matrix/bin/matrix-iam",
-		"iam-audit-dispatcher":  "/matrix/bin/matrix-iam-audit-dispatcher",
-		"paas-api":              "/matrix/bin/matrix-paas",
-		"paas-audit-dispatcher": "/matrix/bin/matrix-paas-audit-dispatcher",
-		"paas-ui":               "/matrix/bin/matrix-paas-ui",
-		"paas-worker":           "/matrix/bin/matrix-paas-worker",
+		"audit":                       "/matrix/bin/matrix-audit",
+		"iam":                         "/matrix/bin/matrix-iam",
+		"iam-audit-dispatcher":        "/matrix/bin/matrix-iam-audit-dispatcher",
+		"iam-notification-dispatcher": "/matrix/bin/matrix-iam-notification-dispatcher",
+		"paas-api":                    "/matrix/bin/matrix-paas",
+		"paas-audit-dispatcher":       "/matrix/bin/matrix-paas-audit-dispatcher",
+		"paas-ui":                     "/matrix/bin/matrix-paas-ui",
+		"paas-worker":                 "/matrix/bin/matrix-paas-worker",
 	}
 	expectedEnvironmentKeys := map[string][]string{
 		"audit": {
@@ -190,12 +219,17 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 		},
 		"iam": {
 			"MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE", "MATRIX_IAM_BOOTSTRAP_FILE", "MATRIX_IAM_CURSOR_KEY_FILE",
-			"MATRIX_IAM_DATABASE_DSN_FILE", "MATRIX_IAM_LISTEN_ADDRESS", "MATRIX_IAM_TOTP_KEYRING_FILE",
+			"MATRIX_IAM_DATABASE_DSN_FILE", "MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE", "MATRIX_IAM_LISTEN_ADDRESS", "MATRIX_IAM_TOTP_KEYRING_FILE",
 		},
 		"iam-audit-dispatcher": {
 			"MATRIX_IAM_AUDIT_CREDENTIAL_FILE", "MATRIX_IAM_AUDIT_DATABASE_DSN_FILE",
 			"MATRIX_IAM_AUDIT_ENDPOINT", "MATRIX_IAM_AUDIT_LISTEN_ADDRESS",
 			"MATRIX_IAM_AUDIT_WORKER_ID",
+		},
+		"iam-notification-dispatcher": {
+			"MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE", "MATRIX_IAM_NOTIFICATION_DATABASE_DSN_FILE",
+			"MATRIX_IAM_NOTIFICATION_LISTEN_ADDRESS", "MATRIX_IAM_NOTIFICATION_WORKER_ID",
+			"MATRIX_IAM_SECURITY_MAIL_SMTP_CHANNEL_FILE",
 		},
 		"paas-api": {
 			"MATRIX_PAAS_DATABASE_DSN_FILE", "MATRIX_PAAS_ENROLLMENT_CONTROLLER_CERTIFICATE_FILE",
@@ -233,7 +267,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	}
 	expectedImageComponents := map[string]string{
 		"apisix": "apisix", "audit": "audit", "iam": "iam",
-		"iam-audit-dispatcher": "iam", "paas-api": "paas",
+		"iam-audit-dispatcher": "iam", "iam-notification-dispatcher": "iam", "paas-api": "paas",
 		"paas-audit-dispatcher": "paas", "paas-ui": "paas-ui",
 		"paas-worker": "paas",
 	}
@@ -278,9 +312,9 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 		} else if slices.Contains(actualServiceNetworks, "edge") {
 			t.Fatalf("service %q can join the northbound edge network", name)
 		}
-		controllerProcess := name == "paas-api" || name == "paas-worker"
-		if slices.Contains(actualServiceNetworks, "management") != controllerProcess {
-			t.Fatalf("service %q crosses the node management boundary", name)
+		managementProcess := name == "paas-api" || name == "paas-worker" || name == "iam-notification-dispatcher"
+		if slices.Contains(actualServiceNetworks, "management") != managementProcess {
+			t.Fatalf("service %q crosses the external management boundary", name)
 		}
 		labels, ok := service["labels"].(map[string]any)
 		if !ok || labels["com.xiak.matrix.managed"] != "true" ||
@@ -497,8 +531,8 @@ func TestCompileInstalledPinsCurrentAndExactPredecessorProfilePairs(t *testing.T
 	if err != nil || !reflect.DeepEqual(gotCurrent, wantCurrent) {
 		t.Fatal("current installed topology changed through predecessor admission")
 	}
-	if ContractDigest() != SupportedPredecessorContractDigest() {
-		t.Fatal("the exact predecessor changed a topology contract that its source did not change")
+	if ContractDigest() == SupportedPredecessorContractDigest() {
+		t.Fatal("the enabling topology failed to declare its notification worker change")
 	}
 
 	predecessor := current
@@ -523,7 +557,9 @@ func TestCompileInstalledPinsCurrentAndExactPredecessorProfilePairs(t *testing.T
 	}
 	compiled, err := CompileInstalled(predecessor, options)
 	if err != nil || compiled.ContractDigest != predecessor.TopologyDigest ||
-		!bytes.Equal(compiled.ComposeJSON, gotCurrent.ComposeJSON) {
+		bytes.Equal(compiled.ComposeJSON, gotCurrent.ComposeJSON) ||
+		bytes.Contains(compiled.ComposeJSON, []byte("iam-notification-dispatcher")) ||
+		!bytes.Contains(gotCurrent.ComposeJSON, []byte("iam-notification-dispatcher")) {
 		t.Fatalf("compile predecessor topology: %#v %v", compiled, err)
 	}
 

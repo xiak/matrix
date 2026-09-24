@@ -33,6 +33,7 @@ type Request struct {
 	Bundle                      string
 	TrustKey                    string
 	NorthboundOrigin            string
+	SecurityMailConfiguration   string
 	Join                        string
 	BackupID                    string
 	SupportOutput               string

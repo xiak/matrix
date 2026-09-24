@@ -10,6 +10,7 @@ import (
 func TestInstallUsesExactReplayAndPublishesOnlyAfterReady(t *testing.T) {
 	journal := newJournal(t)
 	command := lifecycleCommand(ActionInstall, releaseA, '1', 0)
+	command.SecurityMailDigest = digest('9')
 	started, err := Start(journal, command)
 	if err != nil || started.Replay != ReplayNone || started.Execution.Phase != PhasePreflight {
 		t.Fatalf("start install = %#v / %v", started, err)
@@ -29,6 +30,11 @@ func TestInstallUsesExactReplayAndPublishesOnlyAfterReady(t *testing.T) {
 	if _, err := Start(started.Journal, changed); !errors.Is(err, ErrCommandConflict) {
 		t.Fatalf("changed input replay error = %v, want conflict", err)
 	}
+	changed = replayedCommand
+	changed.SecurityMailDigest = digest('8')
+	if _, err := Start(started.Journal, changed); !errors.Is(err, ErrCommandConflict) {
+		t.Fatalf("changed security mail replay error = %v, want conflict", err)
+	}
 	other := lifecycleCommand(ActionInstall, releaseA, '1', 1)
 	if _, err := Start(started.Journal, other); !errors.Is(err, ErrCommandInProgress) {
 		t.Fatalf("parallel command error = %v, want in progress", err)
@@ -36,6 +42,7 @@ func TestInstallUsesExactReplayAndPublishesOnlyAfterReady(t *testing.T) {
 
 	completed := completeActive(t, started.Journal)
 	if completed.CurrentReleaseID != releaseA || completed.CurrentReleaseDigest != digest('1') ||
+		completed.SecurityMailDigest != command.SecurityMailDigest ||
 		completed.PreviousRelease != "" || completed.PreviousReleaseDigest != "" ||
 		completed.Active != nil || completed.Last == nil || completed.Last.Outcome != OutcomeSucceeded {
 		t.Fatalf("completed install journal = %#v", completed)
@@ -54,6 +61,11 @@ func TestNodeLifecycleCannotEnterPlatformEffects(t *testing.T) {
 		t.Fatal(err)
 	}
 	command := lifecycleCommand(ActionInstall, releaseA, '1', 0)
+	mailCommand := command
+	mailCommand.SecurityMailDigest = digest('9')
+	if _, err := Start(node, mailCommand); err == nil {
+		t.Fatal("node install accepted platform security mail custody")
+	}
 	started, err := Start(node, command)
 	if err != nil {
 		t.Fatal(err)

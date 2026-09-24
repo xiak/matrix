@@ -5,23 +5,25 @@ import (
 	"fmt"
 
 	"github.com/xiak/matrix/app/service/installation/release"
+	"github.com/xiak/matrix/app/service/installation/topology"
 )
 
 const defaultEdgeEndpoint = "http://127.0.0.1:8080"
 
 type options struct {
-	root                    string
-	releaseBase             string
-	releaseA                string
-	releaseB                string
-	trustKey                string
-	edge                    string
-	afterStart              bool
-	browserReady            bool
-	multiHostLifecycle      bool
-	nativeNodes             string
-	nativeDeploymentRuntime bool
-	browserPasswordFile     string
+	root                      string
+	releaseBase               string
+	releaseA                  string
+	releaseB                  string
+	trustKey                  string
+	edge                      string
+	afterStart                bool
+	browserReady              bool
+	multiHostLifecycle        bool
+	nativeNodes               string
+	nativeDeploymentRuntime   bool
+	browserPasswordFile       string
+	securityMailConfiguration string
 }
 
 type releasePair struct {
@@ -69,12 +71,12 @@ func validateReleaseTransition(a, b release.VerifiedBundle) error {
 	}
 	// Each directory is already authenticated. Admit distinct source binaries,
 	// but do not start a destructive lifecycle exercise for an unproved profile.
-	// The one retained-data profile transition changed only its authority
-	// profile, so both equal-profile and cross-profile pairs retain the exact
-	// published topology contract.
+	// Each profile is coupled to its one authenticated topology. The current
+	// enabling release deliberately adds the purpose-only notification worker;
+	// no arbitrary topology transition is admitted.
 	if a.Manifest.Kind != release.ManifestKind || b.Manifest.Kind != release.ManifestKind ||
 		release.ValidateDatabaseUpgradePath(a.Manifest.Database, b.Manifest.Database) != nil ||
-		a.Manifest.TopologyDigest != b.Manifest.TopologyDigest {
+		!supportedPlatformTopology(a.Manifest) || !supportedPlatformTopology(b.Manifest) {
 		return fail("release-pair-compatibility")
 	}
 	if _, ok := workloadImage(a.Manifest); !ok {
@@ -84,6 +86,12 @@ func validateReleaseTransition(a, b release.VerifiedBundle) error {
 		return fail("release-b-workload")
 	}
 	return nil
+}
+
+func supportedPlatformTopology(manifest release.Manifest) bool {
+	return manifest.Database == release.CurrentDatabaseProfile() && manifest.TopologyDigest == topology.ContractDigest() ||
+		manifest.Database == release.SupportedDatabaseUpgradePredecessorProfile() &&
+			manifest.TopologyDigest == topology.SupportedPredecessorContractDigest()
 }
 
 func workloadImage(manifest release.Manifest) (release.Image, bool) {

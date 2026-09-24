@@ -51,6 +51,7 @@ type gate struct {
 	controllerConfigDigest string
 	releaseAPreviousID     string
 	nodes                  *nativeNodes
+	mail                   *securityMailFixture
 }
 
 func newGate(config options, releases releasePair) *gate {
@@ -157,9 +158,12 @@ func releaseInstallArguments(config options, initial release.VerifiedBundle) ([]
 		"--root", config.root,
 		"--trust-key", config.trustKey,
 	}
-	if initial.Manifest.Database == release.CurrentDatabaseProfile() ||
-		initial.Manifest.Database == release.SupportedDatabaseUpgradePredecessorProfile() {
+	if initial.Manifest.Database == release.SupportedDatabaseUpgradePredecessorProfile() {
 		return append(arguments, "--northbound-origin", config.edge), nil
+	}
+	if initial.Manifest.Database == release.CurrentDatabaseProfile() && config.securityMailConfiguration != "" {
+		return append(arguments, "--northbound-origin", config.edge,
+			"--security-mail-configuration", config.securityMailConfiguration), nil
 	}
 	return nil, errors.New("release installation profile is unsupported")
 }
@@ -169,10 +173,11 @@ func releaseUpgradeArguments(config options, candidate release.VerifiedBundle) [
 		"--bundle", candidate.Root,
 		"--root", config.root,
 		"--northbound-origin", config.edge,
+		"--security-mail-configuration", config.securityMailConfiguration,
 	}
 }
 
-func (value *gate) beforeRestart(ctx context.Context) error {
+func (value *gate) beforeRestart(ctx context.Context) (gateErr error) {
 	defer value.edge.close()
 	defer func() {
 		for _, secret := range value.sensitive {
@@ -197,6 +202,17 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	value.mail, err = startSecurityMailFixture(ctx, value.releases.a.Manifest, value.config.root, state)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := value.mail.close(); err != nil && gateErr == nil {
+			gateErr = fail("security-mail-fixture-cleanup")
+		}
+	}()
+	value.config.securityMailConfiguration = value.mail.path
+	value.edge.addForbidden(value.mail.password)
 	dataRootBefore, err := os.Stat(filepath.Join(value.config.root, filepath.FromSlash(layout.PostgresData)))
 	if err != nil || !dataRootBefore.IsDir() {
 		return fail("postgres-data-identity")
@@ -241,7 +257,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	}
 	defer clear(secret)
 	value.edge.addForbidden(secret)
-	value.sensitive = [][]byte{initialPassword, newPassword, firstSession, bearer, secret}
+	value.sensitive = append(value.sensitive, initialPassword, newPassword, firstSession, bearer, secret)
 	application, err := value.createApplication(ctx, bearer)
 	if err != nil {
 		return err
@@ -313,11 +329,20 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	backupBaseline := auditRecordHashes(recordsBeforeBackup)
 	emit("audit-query-integrity-through-apisix")
 
+	if err := value.edge.logoutWithID(ctx, bearer, "phase1-predecessor-backup-logout"); err != nil {
+		return fail("predecessor-backup-session-revocation")
+	}
 	backup, err := runMX(ctx, value.releases.a, "backup", []string{"--root", value.config.root}, value.forbidden(secret, newPassword, bearer))
 	if err != nil || backup.BackupID == "" || !backup.Changed {
 		return fail("protected-backup")
 	}
 	emit("protected-backup")
+	bearer, err = value.edge.login(ctx, newPassword, "phase1-after-predecessor-backup-login")
+	if err != nil {
+		return fail("predecessor-backup-reauthentication")
+	}
+	value.sensitive = append(value.sensitive, bearer)
+	value.edge.addForbidden(bearer)
 	if err := value.rotateNativeCredentials(ctx, bearer); err != nil {
 		return err
 	}
@@ -443,8 +468,17 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return fail("post-upgrade-audit-association")
 	}
 	emit("release-b-upgrade-preservation")
+	seed, boundBearer, err := value.bindFirstAuthenticator(ctx, bearer, newPassword)
+	if err != nil {
+		return err
+	}
+	bearer = boundBearer
+	emit("mfa-first-enrollment-through-delivered-mail")
 	var successorBackup mxResult
 	if value.releases.a.Manifest.Database != value.releases.b.Manifest.Database {
+		if err := value.edge.logoutWithID(ctx, bearer, "phase1-successor-backup-logout"); err != nil {
+			return fail("successor-backup-session-revocation")
+		}
 		successorBackup, err = runMX(
 			ctx, value.releases.b, "backup", []string{"--root", value.config.root},
 			value.forbidden(secret, newPassword, bearer),
@@ -453,6 +487,12 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 			return fail("successor-protected-backup")
 		}
 		emit("successor-protected-backup")
+		bearer, err = value.edge.loginWithTOTP(ctx, newPassword, seed, "phase1-after-successor-backup-login")
+		if err != nil {
+			return fail("successor-backup-reauthentication")
+		}
+		value.sensitive = append(value.sensitive, bearer)
+		value.edge.addForbidden(bearer)
 	}
 	if err := value.nativeReleasePair(ctx, bearer); err != nil {
 		return err
@@ -517,6 +557,19 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		if _, err := assertPlatform(ctx, value.config.root, value.releases.b.Manifest, ""); err != nil {
 			return err
 		}
+		if err := value.edge.unauthorizedMe(ctx, bearer); err != nil {
+			return fail("successor-backup-old-session-denial")
+		}
+		bearer, err = value.edge.loginWithTOTP(ctx, newPassword, seed, "phase1-after-successor-recovery-login")
+		if err != nil {
+			return fail("successor-backup-mfa-reauthentication")
+		}
+		value.sensitive = append(value.sensitive, bearer)
+		value.edge.addForbidden(bearer)
+		factor, factorErr := value.edge.authenticatorState(ctx, bearer)
+		if factorErr != nil || factor.EnrollmentState != "BOUND" {
+			return fail("successor-backup-factor-preservation")
+		}
 		if err := value.assertWorkload(ctx, value.releases.b.Manifest, updated, 2, "2", settingTwo, secretDigest); err != nil {
 			return err
 		}
@@ -580,6 +633,15 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if _, err := assertPlatform(ctx, value.config.root, value.releases.a.Manifest, ""); err != nil {
 		return err
 	}
+	if err := value.edge.unauthorizedMe(ctx, bearer); err != nil {
+		return fail("predecessor-backup-old-session-denial")
+	}
+	bearer, err = value.edge.login(ctx, newPassword, "phase1-after-predecessor-recovery-login")
+	if err != nil {
+		return fail("predecessor-backup-password-reauthentication")
+	}
+	value.sensitive = append(value.sensitive, bearer)
+	value.edge.addForbidden(bearer)
 	recovered, err := value.readDeployment(ctx, bearer)
 	if err != nil || recovered.Generation != 2 || recovered.Status.ObservedGeneration != 2 ||
 		recovered.Status.Phase != paasv1.DeploymentReady {
@@ -944,7 +1006,11 @@ func (value *gate) pathLeakage() [][]byte {
 	if value.config.browserPasswordFile != "" {
 		result = append(result, []byte(value.config.browserPasswordFile))
 	}
-	return append(result, value.sensitive...)
+	if value.config.securityMailConfiguration != "" {
+		result = append(result, []byte(value.config.securityMailConfiguration))
+	}
+	result = append(result, value.sensitive...)
+	return append(result, value.edge.forbidden...)
 }
 
 func (value *gate) finalPassword() ([]byte, error) {

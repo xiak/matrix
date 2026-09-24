@@ -47,6 +47,7 @@ type commandOptions struct {
 	bundle                      string
 	trustKey                    string
 	northboundOrigin            string
+	securityMailConfiguration   string
 	join                        string
 	backupID                    string
 	supportOutput               string
@@ -136,8 +137,8 @@ func newLifecycleCommand(
 			}
 			request := Request{
 				Subject: subject, Action: action, Root: options.root, Bundle: options.bundle, TrustKey: options.trustKey,
-				NorthboundOrigin: options.northboundOrigin,
-				Join:             options.join, BackupID: options.backupID, SupportOutput: options.supportOutput,
+				NorthboundOrigin: options.northboundOrigin, SecurityMailConfiguration: options.securityMailConfiguration,
+				Join: options.join, BackupID: options.backupID, SupportOutput: options.supportOutput,
 				Configuration:               options.configuration,
 				ExpectedConfigurationDigest: options.expectedConfigurationDigest,
 				RevokePreviousCredentials:   options.revokePreviousCredentials,
@@ -182,6 +183,7 @@ func bindCommandFlags(flags *pflag.FlagSet, subject Subject, action lifecycle.Ac
 			flags.StringVar(&options.join, "join", "", "protected one-time node join file")
 		} else {
 			flags.StringVar(&options.northboundOrigin, "northbound-origin", "", "canonical public origin including explicit port")
+			flags.StringVar(&options.securityMailConfiguration, "security-mail-configuration", "", "protected SMTP security-mail configuration file")
 		}
 	case lifecycle.ActionUpgrade:
 		flags.StringVar(&options.bundle, "bundle", "", "verified offline release bundle directory")
@@ -189,6 +191,7 @@ func bindCommandFlags(flags *pflag.FlagSet, subject Subject, action lifecycle.Ac
 			flags.BoolVar(&options.resume, "resume", false, "resume only the sealed node release change")
 		} else {
 			flags.StringVar(&options.northboundOrigin, "northbound-origin", "", "canonical public origin required when adopting the new edge contract")
+			flags.StringVar(&options.securityMailConfiguration, "security-mail-configuration", "", "protected SMTP security-mail configuration file")
 		}
 	case lifecycle.ActionRecover:
 		flags.StringVar(&options.backupID, "backup", "", "verified installation-owned backup identity")
@@ -225,7 +228,7 @@ func validateCommandFlags(subject Subject, action lifecycle.Action, options *com
 			return errors.New("protected one-time node join is required")
 		}
 		if subject == SubjectPlatform && (strings.TrimSpace(options.northboundOrigin) == "" ||
-			externalrequest.ValidateOrigin(options.northboundOrigin) != nil) {
+			externalrequest.ValidateOrigin(options.northboundOrigin) != nil || strings.TrimSpace(options.securityMailConfiguration) == "") {
 			return errors.New("canonical northbound origin is required")
 		}
 	case lifecycle.ActionUpgrade:
@@ -233,7 +236,7 @@ func validateCommandFlags(subject Subject, action lifecycle.Action, options *com
 			if options.resume == (strings.TrimSpace(options.bundle) != "") || (options.resume && options.bundle != "") {
 				return errors.New("offline node bundle or explicit resume is required, but not both")
 			}
-		} else if strings.TrimSpace(options.bundle) == "" ||
+		} else if strings.TrimSpace(options.bundle) == "" || strings.TrimSpace(options.securityMailConfiguration) == "" ||
 			(options.northboundOrigin != "" && externalrequest.ValidateOrigin(options.northboundOrigin) != nil) {
 			return errors.New("offline bundle and any supplied canonical northbound origin are required")
 		}

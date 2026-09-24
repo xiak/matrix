@@ -2,10 +2,14 @@ package phase1e2e
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/smtp"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -45,6 +49,76 @@ func TestMissingAuditActionsAreStableAndTargetBound(t *testing.T) {
 	if !slices.Equal(missing, wantMissing) ||
 		auditActionFailureStep(missing) != "iam-user-password-changed-and-paas-configuration-created" {
 		t.Fatalf("missing audit actions = %v", missing)
+	}
+}
+
+func TestSecurityMailFixtureReceivesAuthenticatedTLSMessageAndCleansUp(t *testing.T) {
+	certificate, trust, err := securityMailCertificate(net.ParseIP("127.0.0.1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := &securityMailFixture{
+		listener: tls.NewListener(raw, &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{certificate}}),
+		password: []byte("fixture-private-password"), messages: make(chan []byte, 8), connections: make(map[net.Conn]struct{}),
+	}
+	fixture.wait.Add(1)
+	go fixture.serve()
+	defer fixture.close()
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(trust) {
+		t.Fatal("fixture CA is invalid")
+	}
+	secure, err := tls.Dial("tcp", raw.Addr().String(), &tls.Config{MinVersion: tls.VersionTLS12, ServerName: "127.0.0.1", RootCAs: roots})
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := smtp.NewClient(secure, "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if err := client.Auth(smtp.PlainAuth("", "phase1-smtp", "fixture-private-password", "127.0.0.1")); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Mail("security@matrix.test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Rcpt("phase1-admin@matrix.test"); err != nil {
+		t.Fatal(err)
+	}
+	writer, err := client.Data()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Write([]byte("From: security@matrix.test\r\nTo: phase1-admin@matrix.test\r\n\r\nVerification code: 12345678\r\nNotification reference: notification-fixture\r\n")); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	message, err := fixture.receiveVerification(ctx)
+	if err != nil || !strings.Contains(string(message), "Verification code: 12345678\r\n") {
+		t.Fatal("authenticated TLS submission did not reach fixture")
+	}
+	clear(message)
+	if err := client.Quit(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAcceptanceTOTPCodeMatchesPublishedSHA1Profile(t *testing.T) {
+	code, err := fixtureTOTPCode([]byte("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"), time.Unix(59, 0))
+	if err != nil || code != "287082" {
+		t.Fatalf("RFC 6238 six-digit profile differed: %q, %v", code, err)
+	}
+	if _, err := fixtureTOTPCode([]byte("wrong-seed"), time.Unix(59, 0)); err == nil {
+		t.Fatal("invalid provisioning seed was accepted")
 	}
 }
 
@@ -507,6 +581,7 @@ func TestReleasePairRequiresCompatibleImmediatePredecessor(t *testing.T) {
 		}},
 		{name: "exact retained-data profile with published topology", accept: true, mutate: func(a, _ *release.Manifest) {
 			a.Database = release.SupportedDatabaseUpgradePredecessorProfile()
+			a.TopologyDigest = topology.SupportedPredecessorContractDigest()
 		}},
 		{name: "retained-data profile with changed predecessor topology", mutate: func(a, _ *release.Manifest) {
 			a.Database = release.SupportedDatabaseUpgradePredecessorProfile()
@@ -541,7 +616,7 @@ func TestReleasePairRequiresCompatibleImmediatePredecessor(t *testing.T) {
 				Release: release.ReleaseIdentity{
 					ID: "release-a", Version: "v0.1.0", SourceCommit: strings.Repeat("a", 40),
 				},
-				Database: release.CurrentDatabaseProfile(), TopologyDigest: "sha256:" + strings.Repeat("1", 64),
+				Database: release.CurrentDatabaseProfile(), TopologyDigest: topology.ContractDigest(),
 				Images: []release.Image{{Purpose: release.ImageWorkload, SourceDigest: "sha256:a"}},
 			}}
 			b := release.VerifiedBundle{Manifest: release.Manifest{
@@ -565,9 +640,10 @@ func TestReleasePairRequiresCompatibleImmediatePredecessor(t *testing.T) {
 
 func TestReleaseLifecycleArgumentsRespectThePublishedPredecessorCLI(t *testing.T) {
 	base := options{
-		root:     "/data/matrix",
-		trustKey: "/data/release-trust.json",
-		edge:     defaultEdgeEndpoint,
+		root:                      "/data/matrix",
+		trustKey:                  "/data/release-trust.json",
+		edge:                      defaultEdgeEndpoint,
+		securityMailConfiguration: "/private/security-mail.json",
 	}
 	predecessor := release.VerifiedBundle{
 		Root: "/data/release-a",
@@ -583,6 +659,9 @@ func TestReleaseLifecycleArgumentsRespectThePublishedPredecessorCLI(t *testing.T
 	if index < 0 || index+1 >= len(arguments) || arguments[index+1] != defaultEdgeEndpoint {
 		t.Fatalf("published predecessor install arguments=%q", arguments)
 	}
+	if slices.Contains(arguments, "--security-mail-configuration") {
+		t.Fatalf("published predecessor received a flag its CLI does not own: %q", arguments)
+	}
 
 	current := predecessor
 	current.Root = "/data/release-b"
@@ -592,12 +671,16 @@ func TestReleaseLifecycleArgumentsRespectThePublishedPredecessorCLI(t *testing.T
 		t.Fatalf("current install arguments: %v", err)
 	}
 	index = slices.Index(arguments, "--northbound-origin")
-	if index < 0 || index+1 >= len(arguments) || arguments[index+1] != defaultEdgeEndpoint {
+	mail := slices.Index(arguments, "--security-mail-configuration")
+	if index < 0 || index+1 >= len(arguments) || arguments[index+1] != defaultEdgeEndpoint ||
+		mail < 0 || mail+1 >= len(arguments) || arguments[mail+1] != base.securityMailConfiguration {
 		t.Fatalf("current install arguments=%q", arguments)
 	}
 	upgradeArguments := releaseUpgradeArguments(base, current)
 	index = slices.Index(upgradeArguments, "--northbound-origin")
-	if index < 0 || index+1 >= len(upgradeArguments) || upgradeArguments[index+1] != defaultEdgeEndpoint {
+	mail = slices.Index(upgradeArguments, "--security-mail-configuration")
+	if index < 0 || index+1 >= len(upgradeArguments) || upgradeArguments[index+1] != defaultEdgeEndpoint ||
+		mail < 0 || mail+1 >= len(upgradeArguments) || upgradeArguments[mail+1] != base.securityMailConfiguration {
 		t.Fatalf("current upgrade arguments=%q", upgradeArguments)
 	}
 
@@ -612,6 +695,11 @@ func TestReleaseLifecycleArgumentsRespectThePublishedPredecessorCLI(t *testing.T
 	unknown.Manifest.Database = release.DatabaseProfile{}
 	if _, err := releaseInstallArguments(base, unknown); err == nil {
 		t.Fatal("unsupported release profile received install arguments")
+	}
+	missingMail := base
+	missingMail.securityMailConfiguration = ""
+	if _, err := releaseInstallArguments(missingMail, current); err == nil {
+		t.Fatal("current release received install arguments without security mail custody")
 	}
 }
 
@@ -646,7 +734,7 @@ func TestReleaseSequenceRequiresTwoCompatibleImmediateTransitions(t *testing.T) 
 				Release: release.ReleaseIdentity{
 					ID: "release-base", Version: "v0.1.0", SourceCommit: strings.Repeat("a", 40),
 				},
-				Database: bridgeProfile, TopologyDigest: "sha256:" + strings.Repeat("1", 64),
+				Database: bridgeProfile, TopologyDigest: topology.SupportedPredecessorContractDigest(),
 				Images: []release.Image{{Purpose: release.ImageWorkload, SourceDigest: "sha256:base"}},
 			}}
 			bridge := release.VerifiedBundle{Manifest: release.Manifest{
@@ -664,7 +752,7 @@ func TestReleaseSequenceRequiresTwoCompatibleImmediateTransitions(t *testing.T) 
 					ID: "release-successor", Version: "v0.3.0", SourceCommit: strings.Repeat("c", 40),
 					PreviousID: bridge.Manifest.Release.ID, PreviousVersion: bridge.Manifest.Release.Version,
 				},
-				Database: successorProfile, TopologyDigest: bridge.Manifest.TopologyDigest,
+				Database: successorProfile, TopologyDigest: topology.ContractDigest(),
 				Images: []release.Image{{Purpose: release.ImageWorkload, SourceDigest: "sha256:successor"}},
 			}}
 			if scenario.mutate != nil {

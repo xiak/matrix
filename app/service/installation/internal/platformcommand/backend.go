@@ -139,6 +139,24 @@ type InstallPlan struct {
 	Bundle           release.VerifiedBundle
 	Trust            release.TrustRoot
 	TrustBytes       []byte
+	SecurityMail     SecurityMailInput
+}
+
+// SecurityMailInput is the canonical private operator input admitted by the
+// local-machine boundary. Digest alone enters the lifecycle journal; encoded
+// SMTP credentials exist only in memory until the staging phase writes the
+// installation-scoped purpose file.
+type SecurityMailInput struct {
+	Digest        string
+	Configuration installationv1.SecurityMailConfiguration
+}
+
+func (value *SecurityMailInput) Clear() {
+	if value == nil {
+		return
+	}
+	value.Configuration.Clear()
+	*value = SecurityMailInput{}
 }
 
 // InstalledPlan is the sealed identity of the currently committed release.
@@ -279,6 +297,7 @@ func DecodeCredentialRecoveryInput(source []byte) (CredentialRecoveryInput, erro
 // without a known result, it returns ErrEffectOutcomeUnknown and observes
 // ownership on replay.
 type Effects interface {
+	ReadSecurityMailConfiguration(context.Context, string) (SecurityMailInput, error)
 	ApplyInstallPhase(context.Context, InstallPlan, lifecycle.Phase) error
 	RollbackInstall(context.Context, InstallPlan) error
 	ApplyUpgradePhase(context.Context, UpgradePlan, lifecycle.Phase) error
@@ -325,6 +344,13 @@ func (backend *Backend) Run(ctx context.Context, request cli.Request) (cli.Resul
 	}
 	if request.NorthboundOrigin != "" && request.Action != lifecycle.ActionInstall && request.Action != lifecycle.ActionUpgrade {
 		return cli.Result{}, fault(cli.FaultInvalidArgument, "NORTHBOUND_ORIGIN_UNSUPPORTED")
+	}
+	if request.SecurityMailConfiguration != "" && request.Action != lifecycle.ActionInstall && request.Action != lifecycle.ActionUpgrade {
+		return cli.Result{}, fault(cli.FaultInvalidArgument, "SECURITY_MAIL_CONFIGURATION_UNSUPPORTED")
+	}
+	if (request.Action == lifecycle.ActionInstall || request.Action == lifecycle.ActionUpgrade) &&
+		strings.TrimSpace(request.SecurityMailConfiguration) == "" {
+		return cli.Result{}, fault(cli.FaultInvalidArgument, "SECURITY_MAIL_CONFIGURATION_REQUIRED")
 	}
 	switch request.Action {
 	case lifecycle.ActionInstall:
@@ -621,6 +647,11 @@ func (backend *Backend) install(
 		verified.Manifest.Release.PreviousVersion != "" {
 		return cli.Result{}, fault(cli.FaultPrecondition, "INSTALL_RELEASE_HAS_PREDECESSOR")
 	}
+	securityMail, err := backend.effects.ReadSecurityMailConfiguration(ctx, request.SecurityMailConfiguration)
+	if err != nil {
+		return cli.Result{}, fault(cli.FaultVerification, "SECURITY_MAIL_CONFIGURATION_INVALID")
+	}
+	defer securityMail.Clear()
 
 	session, err := journal.Acquire(ctx, request.Root)
 	if err != nil {
@@ -666,6 +697,9 @@ func (backend *Backend) install(
 		if state.NorthboundOrigin != request.NorthboundOrigin {
 			return cli.Result{}, fault(cli.FaultConflict, "NORTHBOUND_ORIGIN_CONFLICT")
 		}
+		if state.SecurityMailDigest != securityMail.Digest {
+			return cli.Result{}, fault(cli.FaultConflict, "SECURITY_MAIL_CONFIGURATION_CONFLICT")
+		}
 		correlationID := ""
 		if state.Last != nil {
 			correlationID = state.Last.Command.ID
@@ -688,12 +722,13 @@ func (backend *Backend) install(
 	}
 
 	command := lifecycle.Command{
-		ID:               commandID,
-		Action:           lifecycle.ActionInstall,
-		InputDigest:      verified.ManifestSHA256,
-		TargetReleaseID:  verified.Manifest.Release.ID,
-		NorthboundOrigin: request.NorthboundOrigin,
-		RequestedAt:      canonicalNow(backend.now()),
+		ID:                 commandID,
+		Action:             lifecycle.ActionInstall,
+		InputDigest:        verified.ManifestSHA256,
+		TargetReleaseID:    verified.Manifest.Release.ID,
+		NorthboundOrigin:   request.NorthboundOrigin,
+		SecurityMailDigest: securityMail.Digest,
+		RequestedAt:        canonicalNow(backend.now()),
 	}
 	started, err := lifecycle.Start(state, command)
 	if err != nil {
@@ -716,7 +751,10 @@ func (backend *Backend) install(
 		Listener:      defaultListener, Port: defaultPort,
 		NorthboundOrigin: started.Execution.Command.NorthboundOrigin, Bundle: verified,
 		Trust: trust, TrustBytes: append([]byte(nil), trustBytes...),
+		SecurityMail: securityMail,
 	}
+	securityMail = SecurityMailInput{}
+	defer plan.SecurityMail.Clear()
 	defer clear(plan.TrustBytes)
 	if started.Replay == lifecycle.ReplayCompleted {
 		return completedResult(started.Journal, started.Execution, false)
@@ -794,12 +832,23 @@ func (backend *Backend) upgrade(
 	if targetBundle.Manifest.Kind != release.ManifestKind {
 		return cli.Result{}, fault(cli.FaultVerification, "RELEASE_PROFILE_UNSUPPORTED")
 	}
+	securityMail, err := backend.effects.ReadSecurityMailConfiguration(ctx, request.SecurityMailConfiguration)
+	if err != nil {
+		return cli.Result{}, fault(cli.FaultVerification, "SECURITY_MAIL_CONFIGURATION_INVALID")
+	}
+	defer securityMail.Clear()
 	if targetBundle.Manifest.TopologyDigest != topology.ContractDigest() {
 		return cli.Result{}, fault(cli.FaultVerification, "TOPOLOGY_CONTRACT_UNSUPPORTED")
+	}
+	if state.SecurityMailDigest != "" && state.SecurityMailDigest != securityMail.Digest {
+		return cli.Result{}, fault(cli.FaultConflict, "SECURITY_MAIL_CONFIGURATION_CONFLICT")
 	}
 	if state.Active == nil && targetBundle.Manifest.Release.ID == state.CurrentReleaseID {
 		if targetBundle.ManifestSHA256 != state.CurrentReleaseDigest {
 			return cli.Result{}, fault(cli.FaultConflict, "RELEASE_CONTENT_CONFLICT")
+		}
+		if state.SecurityMailDigest != securityMail.Digest {
+			return cli.Result{}, fault(cli.FaultConflict, "SECURITY_MAIL_CONFIGURATION_CONFLICT")
 		}
 		correlationID := ""
 		backupID := ""
@@ -842,11 +891,12 @@ func (backend *Backend) upgrade(
 	}
 	started, err := lifecycle.Start(state, lifecycle.Command{
 		ID: commandID, Action: lifecycle.ActionUpgrade,
-		InputDigest:      targetBundle.ManifestSHA256,
-		TargetReleaseID:  targetBundle.Manifest.Release.ID,
-		NorthboundOrigin: northboundOrigin,
-		BackupID:         backupID,
-		RequestedAt:      canonicalNow(backend.now()),
+		InputDigest:        targetBundle.ManifestSHA256,
+		TargetReleaseID:    targetBundle.Manifest.Release.ID,
+		NorthboundOrigin:   northboundOrigin,
+		BackupID:           backupID,
+		SecurityMailDigest: securityMail.Digest,
+		RequestedAt:        canonicalNow(backend.now()),
 	})
 	if err != nil {
 		return cli.Result{}, lifecycleFault(err)
@@ -869,7 +919,10 @@ func (backend *Backend) upgrade(
 		PreviousID:       sourcePlan.ReleaseID, PreviousDigest: sourcePlan.ReleaseDigest,
 		Bundle: targetBundle,
 		Trust:  trust, TrustBytes: append([]byte(nil), trustBytes...),
+		SecurityMail: securityMail,
 	}
+	securityMail = SecurityMailInput{}
+	defer targetPlan.SecurityMail.Clear()
 	defer clear(targetPlan.TrustBytes)
 	plan := UpgradePlan{
 		Source: sourcePlan, Target: targetPlan,

@@ -19,11 +19,11 @@ func TestPlatformCommandSurfaceBuildsExactRequests(t *testing.T) {
 		args []string
 		want Request
 	}{
-		{"install", []string{"platform", "install", "--bundle", "/media/release", "--root", "/srv/matrix", "--trust-key", "/media/trust.json", "--northbound-origin", "https://matrix.example.com:443"}, Request{Action: lifecycle.ActionInstall, Root: "/srv/matrix", Bundle: "/media/release", TrustKey: "/media/trust.json", NorthboundOrigin: "https://matrix.example.com:443"}},
+		{"install", []string{"platform", "install", "--bundle", "/media/release", "--root", "/srv/matrix", "--trust-key", "/media/trust.json", "--northbound-origin", "https://matrix.example.com:443", "--security-mail-configuration", "/private/security-mail.json"}, Request{Action: lifecycle.ActionInstall, Root: "/srv/matrix", Bundle: "/media/release", TrustKey: "/media/trust.json", NorthboundOrigin: "https://matrix.example.com:443", SecurityMailConfiguration: "/private/security-mail.json"}},
 		{"verify", []string{"platform", "verify", "--root", "/srv/matrix"}, Request{Action: lifecycle.ActionVerify, Root: "/srv/matrix"}},
 		{"status", []string{"platform", "status", "--root", "/srv/matrix"}, Request{Action: lifecycle.ActionStatus, Root: "/srv/matrix"}},
 		{"backup", []string{"platform", "backup", "--root", "/srv/matrix"}, Request{Action: lifecycle.ActionBackup, Root: "/srv/matrix"}},
-		{"upgrade", []string{"platform", "upgrade", "--bundle", "/media/release-b", "--root", "/srv/matrix"}, Request{Action: lifecycle.ActionUpgrade, Root: "/srv/matrix", Bundle: "/media/release-b"}},
+		{"upgrade", []string{"platform", "upgrade", "--bundle", "/media/release-b", "--root", "/srv/matrix", "--security-mail-configuration", "/private/security-mail.json"}, Request{Action: lifecycle.ActionUpgrade, Root: "/srv/matrix", Bundle: "/media/release-b", SecurityMailConfiguration: "/private/security-mail.json"}},
 		{"rollback", []string{"platform", "rollback", "--root", "/srv/matrix"}, Request{Action: lifecycle.ActionRollback, Root: "/srv/matrix"}},
 		{"recover", []string{"platform", "recover", "--root", "/srv/matrix", "--backup", "backup-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, Request{Action: lifecycle.ActionRecover, Root: "/srv/matrix", BackupID: "backup-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},
 		{"recover-credentials", []string{"platform", "recover-credentials", "--root", "/srv/matrix", "--recovery-input", "/private/recovery.json"}, Request{Action: lifecycle.ActionRecoverCredentials, Root: "/srv/matrix", RecoveryInput: "/private/recovery.json"}},
@@ -293,6 +293,7 @@ func TestRunWritesVersionedStableJSON(t *testing.T) {
 	exit := Run(context.Background(), []string{
 		"--format", "json", "platform", "install", "--bundle", "/media/release",
 		"--root", "/srv/matrix", "--trust-key", "/media/trust.json", "--northbound-origin", "https://matrix.example.com:443",
+		"--security-mail-configuration", "/private/security-mail.json",
 	}, Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut}, backend)
 	if exit != ExitSuccess || errOut.Len() != 0 {
 		t.Fatalf("run exit/output = %d / %q", exit, errOut.String())

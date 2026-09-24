@@ -1,6 +1,7 @@
 package platformcommand
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -304,6 +305,63 @@ func TestInstallCommitsPinnedReleaseOnlyAfterEffectsAndReplays(t *testing.T) {
 	}
 }
 
+func TestInstallBindsOnlyTheSecurityMailDigestAndRejectsChangedCustody(t *testing.T) {
+	fixture := writeReleaseFixture(t)
+	effects := &installEffects{}
+	backend := newTestBackend(t, effects)
+	root := filepath.Join(t.TempDir(), "matrix")
+	request := installRequest(root, fixture)
+	if _, err := backend.Run(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	state := readJournal(t, root)
+	if state.Last == nil || state.Last.Command.SecurityMailDigest == "" ||
+		!strings.HasPrefix(state.Last.Command.SecurityMailDigest, "sha256:") ||
+		len(effects.securityMailPaths) != 1 || effects.securityMailPaths[0] != request.SecurityMailConfiguration {
+		t.Fatal("install did not bind the exact security mail commitment")
+	}
+	encoded, err := json.Marshal(state)
+	if err != nil || bytes.Contains(encoded, []byte("smtp-test-private-password")) ||
+		bytes.Contains(encoded, []byte("matrix-sender")) {
+		t.Fatal("journal exposed security mail material")
+	}
+	beforeCalls := fmt.Sprint(effects.calls)
+	password, err := iamv1.NewSecret("different-smtp-private-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuration := installationv1.SecurityMailConfiguration{
+		APIVersion: installationv1.SecurityMailConfigurationAPIVersion,
+		Kind:       installationv1.SecurityMailConfigurationKind,
+		Host:       "smtp.matrix.test", Port: 587, TLSMode: iamv1.SecurityMailSTARTTLS,
+		Username: "matrix-sender", Password: password, From: "security@matrix.test",
+	}
+	digest, err := installationv1.SecurityMailConfigurationDigest(configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	effects.securityMail = SecurityMailInput{Digest: digest, Configuration: configuration}
+	defer effects.securityMail.Clear()
+	_, err = backend.Run(context.Background(), request)
+	assertFault(t, err, cli.FaultConflict, "SECURITY_MAIL_CONFIGURATION_CONFLICT")
+	if !reflect.DeepEqual(state, readJournal(t, root)) || fmt.Sprint(effects.calls) != beforeCalls {
+		t.Fatal("changed security mail custody advanced a completed command")
+	}
+}
+
+func TestInstallRequiresSecurityMailBeforeReadingPrivateInputOrJournal(t *testing.T) {
+	fixture := writeReleaseFixture(t)
+	effects := &installEffects{}
+	backend := newTestBackend(t, effects)
+	request := installRequest(filepath.Join(t.TempDir(), "matrix"), fixture)
+	request.SecurityMailConfiguration = ""
+	_, err := backend.Run(context.Background(), request)
+	assertFault(t, err, cli.FaultInvalidArgument, "SECURITY_MAIL_CONFIGURATION_REQUIRED")
+	if len(effects.securityMailPaths) != 0 || len(effects.calls) != 0 {
+		t.Fatal("missing security mail input reached a private reader or lifecycle effect")
+	}
+}
+
 func TestInstallResumesUnknownEffectWithTheSameDurableCommand(t *testing.T) {
 	fixture := writeReleaseFixture(t)
 	effects := &installEffects{
@@ -433,6 +491,7 @@ func TestUpgradeBindsImmediatePredecessorAndBackupBeforePublishing(t *testing.T)
 
 	result, err := backend.Run(context.Background(), cli.Request{
 		Action: lifecycle.ActionUpgrade, Root: root, Bundle: fixtures[1].Root,
+		SecurityMailConfiguration: "/private/security-mail.json",
 	})
 	if err != nil || result.ReleaseID != fixtures[1].Manifest.Release.ID ||
 		result.PreviousID != fixtures[0].Manifest.Release.ID ||
@@ -482,7 +541,8 @@ func TestUpgradeUnknownOutcomeResumesAndDefinitiveFailureRestoresSource(t *testi
 	materializeInstalledRelease(t, root, fixtures[0])
 	request := cli.Request{
 		Action: lifecycle.ActionUpgrade, Root: root, Bundle: fixtures[1].Root,
-		NorthboundOrigin: "https://matrix.example.com:443",
+		NorthboundOrigin:          "https://matrix.example.com:443",
+		SecurityMailConfiguration: "/private/security-mail.json",
 	}
 	_, err := backend.Run(context.Background(), request)
 	assertFault(t, err, cli.FaultUnavailable, "EFFECT_OUTCOME_UNKNOWN")
@@ -527,7 +587,8 @@ func TestCrossProfileUpgradeFailureRequiresAuthenticatedRecovery(t *testing.T) {
 	seedPublishedInstalledRelease(t, root, fixtures[0])
 	request := cli.Request{
 		Action: lifecycle.ActionUpgrade, Root: root, Bundle: fixtures[1].Root,
-		NorthboundOrigin: "https://matrix.example.com:443",
+		NorthboundOrigin:          "https://matrix.example.com:443",
+		SecurityMailConfiguration: "/private/security-mail.json",
 	}
 
 	_, err = backend.Run(context.Background(), request)
@@ -579,6 +640,7 @@ func TestUpgradeRejectsSkippedPredecessorWithoutStartingACommand(t *testing.T) {
 	before := readJournal(t, root)
 	_, err := backend.Run(context.Background(), cli.Request{
 		Action: lifecycle.ActionUpgrade, Root: root, Bundle: fixtures[2].Root,
+		SecurityMailConfiguration: "/private/security-mail.json",
 	})
 	assertFault(t, err, cli.FaultPrecondition, "UPGRADE_PREDECESSOR_MISMATCH")
 	if !reflect.DeepEqual(readJournal(t, root), before) || len(effects.upgradeCalls) != 0 {
@@ -622,6 +684,7 @@ func TestExplicitRollbackReplaysUnknownOutcomeAndCommitsOnlyTheSignedPredecessor
 	materializeInstalledRelease(t, root, fixtures[0])
 	if _, err := backend.Run(context.Background(), cli.Request{
 		Action: lifecycle.ActionUpgrade, Root: root, Bundle: fixtures[1].Root,
+		SecurityMailConfiguration: "/private/security-mail.json",
 	}); err != nil {
 		t.Fatalf("upgrade rollback fixture: %v", err)
 	}
@@ -742,6 +805,9 @@ func TestUnsupportedDatabaseProfilesRejectBeforeEffectsOrJournalChange(t *testin
 				}
 				before := readJournal(t, root)
 				request := cli.Request{Action: action, Root: root, Bundle: fixtures[1].Root}
+				if action == lifecycle.ActionUpgrade {
+					request.SecurityMailConfiguration = "/private/security-mail.json"
+				}
 				failureClass := cli.FaultPrecondition
 				failureCode := string(action) + "_SCHEMA_INCOMPATIBLE"
 				if action == lifecycle.ActionUpgrade && profile.source != current {
@@ -790,7 +856,8 @@ func TestPublishedScalarManifestDoesNotImplyRuntimeTopologyCompatibility(t *test
 	before := readJournal(t, root)
 	_, err = backend.Run(context.Background(), cli.Request{
 		Action: lifecycle.ActionUpgrade, Root: root, Bundle: fixtures[1].Root,
-		NorthboundOrigin: "https://matrix.example.com:443",
+		NorthboundOrigin:          "https://matrix.example.com:443",
+		SecurityMailConfiguration: "/private/security-mail.json",
 	})
 	assertFault(t, err, cli.FaultVerification, "INSTALLATION_RELEASE_INVALID")
 	if !reflect.DeepEqual(before, readJournal(t, root)) || len(effects.upgradeCalls) != 0 {
@@ -812,7 +879,8 @@ func TestExactPreparationPairAllowsUpgradeButRollbackRequiresAuthenticatedRecove
 	seedPublishedInstalledRelease(t, root, fixtures[0])
 	upgraded, err := backend.Run(context.Background(), cli.Request{
 		Action: lifecycle.ActionUpgrade, Root: root, Bundle: fixtures[1].Root,
-		NorthboundOrigin: origin,
+		NorthboundOrigin:          origin,
+		SecurityMailConfiguration: "/private/security-mail.json",
 	})
 	if err != nil || upgraded.ReleaseID != fixtures[1].Manifest.Release.ID || !upgraded.Changed {
 		t.Fatalf("upgrade exact runtime profile pair: %#v / %v", upgraded, err)
@@ -969,6 +1037,7 @@ func TestExplicitRollbackRequiresReadyCurrentReleaseBeforePersistingIntent(t *te
 	materializeInstalledRelease(t, root, fixtures[0])
 	if _, err := backend.Run(context.Background(), cli.Request{
 		Action: lifecycle.ActionUpgrade, Root: root, Bundle: fixtures[1].Root,
+		SecurityMailConfiguration: "/private/security-mail.json",
 	}); err != nil {
 		t.Fatalf("upgrade rollback preflight fixture: %v", err)
 	}
@@ -1002,6 +1071,7 @@ func TestRecoveryBindsSelectedBackupAndResumesUnknownOutcome(t *testing.T) {
 	materializeInstalledRelease(t, root, fixtures[0])
 	if _, err := backend.Run(context.Background(), cli.Request{
 		Action: lifecycle.ActionUpgrade, Root: root, Bundle: fixtures[1].Root,
+		SecurityMailConfiguration: "/private/security-mail.json",
 	}); err != nil {
 		t.Fatalf("upgrade recovery fixture: %v", err)
 	}
@@ -1100,6 +1170,7 @@ func TestRecoveryOfCurrentReleaseDropsRetainedPredecessorFromEffectPlan(t *testi
 	materializeInstalledRelease(t, root, fixtures[0])
 	if _, err := backend.Run(context.Background(), cli.Request{
 		Action: lifecycle.ActionUpgrade, Root: root, Bundle: fixtures[1].Root,
+		SecurityMailConfiguration: "/private/security-mail.json",
 	}); err != nil {
 		t.Fatalf("upgrade recovery fixture: %v", err)
 	}
@@ -1588,6 +1659,9 @@ type installEffects struct {
 	supportErr                error
 	supportPlan               SupportPlan
 	upgradeCalls              map[lifecycle.Phase]int
+	securityMail              SecurityMailInput
+	securityMailErr           error
+	securityMailPaths         []string
 	upgradePlan               UpgradePlan
 	upgradeFailPhase          lifecycle.Phase
 	upgradeFailErr            error
@@ -1623,6 +1697,25 @@ type installEffects struct {
 	nodeCalls                 map[lifecycle.Phase]int
 	nodeFailPhase             lifecycle.Phase
 	nodeFailErr               error
+}
+
+func (effects *installEffects) ReadSecurityMailConfiguration(_ context.Context, path string) (SecurityMailInput, error) {
+	effects.securityMailPaths = append(effects.securityMailPaths, path)
+	if effects.securityMailErr != nil {
+		return SecurityMailInput{}, effects.securityMailErr
+	}
+	if effects.securityMail.Digest != "" {
+		return effects.securityMail, nil
+	}
+	password, _ := iamv1.NewSecret("smtp-test-private-password")
+	configuration := installationv1.SecurityMailConfiguration{
+		APIVersion: installationv1.SecurityMailConfigurationAPIVersion,
+		Kind:       installationv1.SecurityMailConfigurationKind,
+		Host:       "smtp.matrix.test", Port: 587, TLSMode: iamv1.SecurityMailSTARTTLS,
+		Username: "matrix-sender", Password: password, From: "security@matrix.test",
+	}
+	digest, err := installationv1.SecurityMailConfigurationDigest(configuration)
+	return SecurityMailInput{Digest: digest, Configuration: configuration}, err
 }
 
 func (effects *installEffects) NodeConnectionsDigest(_ context.Context, installed InstalledPlan) (string, error) {
@@ -1682,7 +1775,7 @@ func (effects *installEffects) ApplyInstallPhase(
 	effects.calls[phase]++
 	if plan.Root == "" || plan.InstallationID == "" || plan.Bundle.Manifest.Release.ID == "" ||
 		plan.CorrelationID == "" || plan.Trust.KeyID == "" ||
-		len(plan.TrustBytes) == 0 || plan.Port == 0 || plan.NorthboundOrigin == "" {
+		len(plan.TrustBytes) == 0 || plan.Port == 0 || plan.NorthboundOrigin == "" || plan.SecurityMail.Digest == "" {
 		return errors.New("install plan is incomplete")
 	}
 	if phase == effects.failPhase && effects.failErr != nil && (!effects.failOnce || !effects.failed) {
@@ -1714,7 +1807,7 @@ func (effects *installEffects) ApplyUpgradePhase(
 	if plan.Source.ReleaseID == "" || plan.Source.ReleaseDigest == "" ||
 		plan.Target.Bundle.Manifest.Release.ID == "" || plan.BackupID == "" ||
 		plan.CreatedAt.IsZero() || plan.Source.CorrelationID == "" ||
-		plan.Source.CorrelationID != plan.Target.CorrelationID {
+		plan.Source.CorrelationID != plan.Target.CorrelationID || plan.Target.SecurityMail.Digest == "" {
 		return errors.New("upgrade plan is incomplete")
 	}
 	if phase == effects.upgradeFailPhase && effects.upgradeFailErr != nil &&
@@ -1880,7 +1973,8 @@ func installRequest(root string, fixture releasetest.Fixture) cli.Request {
 	return cli.Request{
 		Action: lifecycle.ActionInstall, Root: root,
 		Bundle: fixture.Root, TrustKey: fixture.TrustPath,
-		NorthboundOrigin: "https://matrix.example.com:443",
+		NorthboundOrigin:          "https://matrix.example.com:443",
+		SecurityMailConfiguration: "/private/security-mail.json",
 	}
 }
 

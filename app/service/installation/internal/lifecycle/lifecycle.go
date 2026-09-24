@@ -85,6 +85,7 @@ type Command struct {
 	AuthenticationRecoveryDigest string    `json:"authenticationRecoveryDigest,omitempty"`
 	TargetReleaseID              string    `json:"targetReleaseId,omitempty"`
 	NorthboundOrigin             string    `json:"northboundOrigin,omitempty"`
+	SecurityMailDigest           string    `json:"securityMailDigest,omitempty"`
 	BackupID                     string    `json:"backupId,omitempty"`
 	ExpectedConfigurationDigest  string    `json:"expectedConfigurationDigest,omitempty"`
 	RevokePreviousCredentials    bool      `json:"revokePreviousCredentials,omitempty"`
@@ -110,6 +111,7 @@ type Journal struct {
 	Version                     uint64       `json:"version"`
 	InstallationID              string       `json:"installationId"`
 	NorthboundOrigin            string       `json:"northboundOrigin,omitempty"`
+	SecurityMailDigest          string       `json:"securityMailDigest,omitempty"`
 	ReleaseTrust                ReleaseTrust `json:"releaseTrust"`
 	Node                        *NodeBinding `json:"node,omitempty"`
 	NodeCredentialRotation      *Command     `json:"nodeCredentialRotation,omitempty"`
@@ -367,6 +369,11 @@ func ValidateJournal(journal Journal) error {
 		(journal.CurrentReleaseID == "" && journal.NorthboundOrigin != "") {
 		problems = append(problems, errors.New("installation northbound origin is invalid"))
 	}
+	if (journal.SecurityMailDigest != "" && !digestPattern.MatchString(journal.SecurityMailDigest)) ||
+		(journal.Node != nil && journal.SecurityMailDigest != "") ||
+		(journal.CurrentReleaseID == "" && journal.SecurityMailDigest != "") {
+		problems = append(problems, errors.New("installation security mail commitment is invalid"))
+	}
 	if journal.Node != nil && (!trustKeyIDPattern.MatchString(journal.Node.ExecutionTargetID) ||
 		!digestPattern.MatchString(journal.Node.ConfigurationDigest)) {
 		problems = append(problems, errors.New("node installation binding is invalid"))
@@ -408,6 +415,11 @@ func ValidateJournal(journal Journal) error {
 			journal.NorthboundOrigin != "" && journal.Active.Command.NorthboundOrigin != journal.NorthboundOrigin {
 			problems = append(problems, errors.New("active upgrade changed the sealed northbound origin"))
 		}
+		if journal.Node == nil && journal.Active.Command.Action == ActionUpgrade &&
+			journal.SecurityMailDigest != "" &&
+			journal.Active.Command.SecurityMailDigest != journal.SecurityMailDigest {
+			problems = append(problems, errors.New("active upgrade changed the security mail commitment"))
+		}
 		if journal.Active.Command.Action == ActionRotateCredentials &&
 			(journal.Node == nil || journal.Active.Command.ExpectedConfigurationDigest != journal.Node.ConfigurationDigest) {
 			problems = append(problems, errors.New("active rotation source does not match the node commitment"))
@@ -447,7 +459,8 @@ func ValidateNodeTransition(before, after Journal) error {
 		if after.NodeCredentialRotation != nil || after.NodeReleaseChange != nil {
 			return invalid
 		}
-		if before.NorthboundOrigin == after.NorthboundOrigin {
+		if before.NorthboundOrigin == after.NorthboundOrigin &&
+			before.SecurityMailDigest == after.SecurityMailDigest {
 			return nil
 		}
 		if before.Active == nil || after.Active != nil || after.Last == nil ||
@@ -456,7 +469,8 @@ func ValidateNodeTransition(before, after Journal) error {
 			return invalid
 		}
 		expected, err := Advance(before, before.Active.Command.ID, PhaseReady, after.Last.CompletedAt)
-		if err != nil || expected.NorthboundOrigin != after.NorthboundOrigin || *expected.Last != *after.Last {
+		if err != nil || expected.NorthboundOrigin != after.NorthboundOrigin ||
+			expected.SecurityMailDigest != after.SecurityMailDigest || *expected.Last != *after.Last {
 			return invalid
 		}
 		return nil
@@ -522,6 +536,13 @@ func validateCommand(command Command, node bool) error {
 	if command.Action != ActionRecover &&
 		(command.AuthenticationRecoveryEpoch != 0 || command.AuthenticationRecoveryDigest != "") {
 		return errors.New("installation command contains unrelated authentication recovery input")
+	}
+	if command.SecurityMailDigest != "" && (node ||
+		(command.Action != ActionInstall && command.Action != ActionUpgrade)) {
+		return errors.New("installation command contains unrelated security mail input")
+	}
+	if command.SecurityMailDigest != "" && !digestPattern.MatchString(command.SecurityMailDigest) {
+		return errors.New("installation command security mail input is invalid")
 	}
 	switch command.Action {
 	case ActionConfigureNodes:
@@ -725,6 +746,7 @@ func sameCommandInput(left, right Command) bool {
 	return left.ID == right.ID && left.Action == right.Action &&
 		left.InputDigest == right.InputDigest && left.TargetReleaseID == right.TargetReleaseID &&
 		left.NorthboundOrigin == right.NorthboundOrigin &&
+		left.SecurityMailDigest == right.SecurityMailDigest &&
 		left.BackupID == right.BackupID && left.BackupDigest == right.BackupDigest &&
 		left.AuthenticationRecoveryEpoch == right.AuthenticationRecoveryEpoch &&
 		left.AuthenticationRecoveryDigest == right.AuthenticationRecoveryDigest &&
@@ -814,12 +836,18 @@ func applySuccessfulPointerChange(journal *Journal, execution Execution) {
 		journal.PreviousRelease = ""
 		journal.PreviousReleaseDigest = ""
 		journal.NorthboundOrigin = execution.Command.NorthboundOrigin
+		if execution.Command.SecurityMailDigest != "" {
+			journal.SecurityMailDigest = execution.Command.SecurityMailDigest
+		}
 	case ActionUpgrade:
 		journal.PreviousRelease = execution.SourceRelease
 		journal.PreviousReleaseDigest = execution.SourceDigest
 		journal.CurrentReleaseID = execution.Destination
 		journal.CurrentReleaseDigest = execution.DestinationDigest
 		journal.NorthboundOrigin = execution.Command.NorthboundOrigin
+		if execution.Command.SecurityMailDigest != "" {
+			journal.SecurityMailDigest = execution.Command.SecurityMailDigest
+		}
 	case ActionRollback:
 		journal.CurrentReleaseID = execution.Destination
 		journal.CurrentReleaseDigest = execution.DestinationDigest
@@ -865,6 +893,11 @@ func validateCompletedPointers(journal Journal, execution Execution) error {
 			(journal.PreviousRelease != execution.SourceRelease ||
 				journal.PreviousReleaseDigest != execution.SourceDigest) {
 			return errors.New("successful upgrade did not retain its source release")
+		}
+		if (execution.Command.Action == ActionInstall || execution.Command.Action == ActionUpgrade) &&
+			execution.Command.SecurityMailDigest != "" &&
+			journal.SecurityMailDigest != execution.Command.SecurityMailDigest {
+			return errors.New("successful command lost its security mail commitment")
 		}
 		if (execution.Command.Action == ActionInstall || execution.Command.Action == ActionRollback ||
 			execution.Command.Action == ActionRecover) && journal.PreviousRelease != "" {

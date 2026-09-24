@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"slices"
 	"strings"
@@ -1106,6 +1107,7 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		readTestFile(t, plan.Root, layout.IAMCredentialRecovery),
 		readTestFile(t, plan.Root, layout.IAMAuthenticationRecovery),
 		readTestFile(t, plan.Root, layout.IAMBackupCustody),
+		readTestFile(t, plan.Root, layout.IAMNotificationWorker),
 		issuerPrivateKey,
 		ingressPrivateKeyPEM,
 		controllerPrivateKeyPEM,
@@ -1391,6 +1393,136 @@ func TestTOTPKeyringCannotAdoptWrongScopeOrMalformedMaterial(t *testing.T) {
 			}
 			if !equalSnapshots(before, snapshotManagedCredentials(t, plan.Root)) {
 				t.Fatal("rejected TOTP keyring changed installation credentials")
+			}
+		})
+	}
+}
+
+func TestSecurityMailCustodyIsScopedImmutableAndResumable(t *testing.T) {
+	plan := newInstallPlan(t)
+	if err := stageInstallation(plan, rand.Reader); err != nil {
+		t.Fatal(err)
+	}
+	scope, err := securityMailScope(plan.Root, plan.InstallationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyring, err := readEmailVerificationKeyring(plan.Root, plan.InstallationID)
+	if err != nil || keyring.Scope != scope || keyring.Purpose != iamv1.EmailVerificationWrappingPurpose ||
+		keyring.KeysetRevision != 1 || len(keyring.Keys) != 1 || !keyring.Keys[0].KeyMaterial.Present() {
+		t.Fatalf("email verification custody = %#v / %v", keyring, err)
+	}
+	channel, err := readSecurityMailSMTPChannel(plan.Root, plan.InstallationID)
+	expected := iamv1.SecurityMailSMTPChannel{
+		APIVersion: iamv1.APIVersion, Kind: "SecurityMailSMTPChannel",
+		Purpose: iamv1.SecurityMailSubmissionPurpose, Scope: scope,
+		Host: plan.SecurityMail.Configuration.Host, Port: plan.SecurityMail.Configuration.Port,
+		TLSMode: plan.SecurityMail.Configuration.TLSMode, Username: plan.SecurityMail.Configuration.Username,
+		Password: plan.SecurityMail.Configuration.Password, From: plan.SecurityMail.Configuration.From,
+		TrustedCAPEM: plan.SecurityMail.Configuration.TrustedCAPEM,
+	}
+	if err != nil || !equalSecurityMailSMTPChannels(channel, expected) {
+		t.Fatal("scoped SMTP channel differs from the admitted operator input")
+	}
+	before := snapshotManagedCredentials(t, plan.Root)
+	if err := stageInstallation(plan, failingEntropy{}); err != nil ||
+		!equalSnapshots(before, snapshotManagedCredentials(t, plan.Root)) {
+		t.Fatal("equal staging replay changed security mail custody")
+	}
+
+	changed := plan
+	changed.SecurityMail = newSecurityMailInput(t)
+	changed.SecurityMail.Configuration.Host = "smtp-rotated.matrix.test"
+	changed.SecurityMail.Digest, err = installationv1.SecurityMailConfigurationDigest(changed.SecurityMail.Configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := stageInstallation(changed, failingEntropy{}); !errors.Is(err, platformcommand.ErrEffectVerification) ||
+		!equalSnapshots(before, snapshotManagedCredentials(t, plan.Root)) {
+		t.Fatal("staging adopted a different SMTP authority")
+	}
+
+	channelPath := filepath.Join(plan.Root, filepath.FromSlash(layout.IAMSecurityMailSMTPChannel))
+	if err := os.Remove(channelPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureSecurityMail(plan.Root, plan.InstallationID, failingEntropy{}, plan.SecurityMail); err != nil {
+		t.Fatalf("key-first interrupted staging did not resume: %v", err)
+	}
+	keyPath := filepath.Join(plan.Root, filepath.FromSlash(layout.IAMEmailVerificationKeyring))
+	if err := os.Remove(keyPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureSecurityMail(plan.Root, plan.InstallationID, rand.Reader, plan.SecurityMail); !errors.Is(err, platformcommand.ErrEffectVerification) {
+		t.Fatal("channel without its wrapping key was adopted")
+	}
+}
+
+func TestReadSecurityMailConfigurationRequiresExactProtectedCanonicalInput(t *testing.T) {
+	private := filepath.Clean(t.TempDir())
+	if err := os.Chmod(private, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	input := newSecurityMailInput(t)
+	encoded, err := installationv1.EncodeSecurityMailConfiguration(input.Configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(encoded)
+	original := filepath.Join(private, "security-mail.json")
+	if err := os.WriteFile(original, encoded, 0o600); err != nil || os.Chmod(original, 0o600) != nil {
+		t.Fatal("write protected security mail input")
+	}
+	for _, mode := range []string{"valid", "relative", "missing", "directory", "trailing bytes", "unknown field", "file link", "public file", "public parent"} {
+		t.Run(mode, func(t *testing.T) {
+			path := original
+			switch mode {
+			case "relative":
+				path = "security-mail.json"
+			case "missing":
+				path = filepath.Join(private, "missing.json")
+			case "directory":
+				path = private
+			case "trailing bytes":
+				path = filepath.Join(private, "trailing.json")
+				if os.WriteFile(path, append(append([]byte(nil), encoded...), '\n'), 0o600) != nil {
+					t.Fatal("write noncanonical fixture")
+				}
+			case "unknown field":
+				path = filepath.Join(private, "unknown.json")
+				content := bytes.Replace(encoded, []byte(`"kind":"SecurityMailConfiguration"`), []byte(`"kind":"SecurityMailConfiguration","selector":"foreign"`), 1)
+				if os.WriteFile(path, content, 0o600) != nil {
+					t.Fatal("write closed-input fixture")
+				}
+			case "file link":
+				path = filepath.Join(private, "link.json")
+				if err := os.Symlink(original, path); err != nil {
+					t.Skip("host cannot create a symlink fixture")
+				}
+			case "public file", "public parent":
+				if runtime.GOOS == "windows" {
+					t.Skip("POSIX ownership is enforced by the Linux installation boundary")
+				}
+				target, permissions := original, os.FileMode(0o644)
+				if mode == "public parent" {
+					target, permissions = private, 0o755
+				}
+				if os.Chmod(target, permissions) != nil {
+					t.Fatal("change input permissions")
+				}
+				defer os.Chmod(target, map[bool]os.FileMode{true: 0o700, false: 0o600}[mode == "public parent"])
+			}
+			got, readErr := (&Effects{}).ReadSecurityMailConfiguration(context.Background(), path)
+			defer got.Clear()
+			if mode == "valid" {
+				if readErr != nil || got.Digest != input.Digest || !reflect.DeepEqual(got.Configuration, input.Configuration) {
+					t.Fatal("valid protected security mail input was rejected")
+				}
+				return
+			}
+			if !errors.Is(readErr, platformcommand.ErrEffectVerification) || got.Digest != "" ||
+				strings.Contains(readErr.Error(), "smtp-test-private-password") || strings.Contains(readErr.Error(), private) {
+				t.Fatal("unsafe security mail input was accepted or leaked")
 			}
 		})
 	}
@@ -2057,13 +2189,16 @@ func TestMigrateInstallationUsesFixedGoBinariesWithoutCredentialArguments(t *tes
 		recoveryMount := "type=bind,src=" + filepath.Join(plan.Root, filepath.FromSlash(layout.IAMCredentialRecovery)) + ",dst=/run/matrix/iam-recovery-dsn,readonly"
 		authenticationRecoveryMount := "type=bind,src=" + filepath.Join(plan.Root, filepath.FromSlash(layout.IAMAuthenticationRecovery)) + ",dst=/run/matrix/iam-authentication-recovery-dsn,readonly"
 		custodyMount := "type=bind,src=" + filepath.Join(plan.Root, filepath.FromSlash(layout.IAMBackupCustody)) + ",dst=/run/matrix/iam-backup-custody-dsn,readonly"
+		notificationMount := "type=bind,src=" + filepath.Join(plan.Root, filepath.FromSlash(layout.IAMNotificationWorker)) + ",dst=/run/matrix/iam-notification-worker-dsn,readonly"
 		iamMigration := wantEntrypoints[index] == "/matrix/bin/matrix-iam-migrate"
 		if hasArgumentPair(arguments, "--mount", recoveryMount) != iamMigration ||
 			hasArgumentPair(arguments, "--env", "MATRIX_MIGRATION_IAM_RECOVERY_DSN_FILE=/run/matrix/iam-recovery-dsn") != iamMigration ||
 			hasArgumentPair(arguments, "--mount", authenticationRecoveryMount) != iamMigration ||
 			hasArgumentPair(arguments, "--env", installationv1.AuthenticationRecoveryMigrationDSNFileEnvironment+"=/run/matrix/iam-authentication-recovery-dsn") != iamMigration ||
 			hasArgumentPair(arguments, "--mount", custodyMount) != iamMigration ||
-			hasArgumentPair(arguments, "--env", installationv1.TOTPBackupCustodyMigrationDSNFileEnvironment+"=/run/matrix/iam-backup-custody-dsn") != iamMigration {
+			hasArgumentPair(arguments, "--env", installationv1.TOTPBackupCustodyMigrationDSNFileEnvironment+"=/run/matrix/iam-backup-custody-dsn") != iamMigration ||
+			hasArgumentPair(arguments, "--mount", notificationMount) != iamMigration ||
+			hasArgumentPair(arguments, "--env", "MATRIX_MIGRATION_IAM_NOTIFICATION_DSN_FILE=/run/matrix/iam-notification-worker-dsn") != iamMigration {
 			t.Fatal("purpose-only IAM database capability escaped the IAM role-provisioning boundary")
 		}
 	}
@@ -3267,7 +3402,27 @@ func newInstallPlan(t *testing.T, profiles ...release.DatabaseProfile) platformc
 		Listener:      "0.0.0.0", Port: 8080, Bundle: bundle,
 		NorthboundOrigin: "https://matrix.example.com:443",
 		Trust:            fixture.Trust, TrustBytes: trustBytes,
+		SecurityMail: newSecurityMailInput(t),
 	}
+}
+
+func newSecurityMailInput(t *testing.T) platformcommand.SecurityMailInput {
+	t.Helper()
+	password, err := iamv1.NewSecret("smtp-test-private-password")
+	if err != nil {
+		t.Fatalf("create security mail password: %v", err)
+	}
+	configuration := installationv1.SecurityMailConfiguration{
+		APIVersion: installationv1.SecurityMailConfigurationAPIVersion,
+		Kind:       installationv1.SecurityMailConfigurationKind,
+		Host:       "smtp.matrix.test", Port: 587, TLSMode: iamv1.SecurityMailSTARTTLS,
+		Username: "matrix-sender", Password: password, From: "security@matrix.test",
+	}
+	digest, err := installationv1.SecurityMailConfigurationDigest(configuration)
+	if err != nil {
+		t.Fatalf("digest security mail configuration: %v", err)
+	}
+	return platformcommand.SecurityMailInput{Digest: digest, Configuration: configuration}
 }
 
 func newUpgradePlan(t *testing.T, profiles ...release.DatabaseProfile) platformcommand.UpgradePlan {
@@ -3426,6 +3581,7 @@ func snapshotManagedCredentials(t *testing.T, root string) map[string]string {
 		layout.PostgresPassword, layout.PostgresMigration, layout.IAMAPI,
 		layout.IAMWorker, layout.AuditRuntime, layout.PaaSAPI, layout.PaaSWorker,
 		layout.IAMCredentialRecovery, layout.IAMAuthenticationRecovery, layout.IAMBackupCustody,
+		layout.IAMNotificationWorker, layout.IAMEmailVerificationKeyring, layout.IAMSecurityMailSMTPChannel,
 		layout.IAMLocalRecoveryAuthority,
 	}
 	result := make(map[string]string, len(paths))

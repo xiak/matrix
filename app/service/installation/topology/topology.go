@@ -50,7 +50,7 @@ type contract struct {
 }
 
 var platformServiceNames = []string{
-	"apisix", "audit", "iam", "iam-audit-dispatcher", "paas-api",
+	"apisix", "audit", "iam", "iam-audit-dispatcher", "iam-notification-dispatcher", "paas-api",
 	"paas-audit-dispatcher", "paas-ui", "paas-worker", "postgres",
 }
 
@@ -90,6 +90,10 @@ func contractDescriptionDigest(value contract) string {
 }
 
 func contractDescription() contract {
+	return platformContractDescription(true)
+}
+
+func platformContractDescription(securityMail bool) contract {
 	options := Options{
 		InstallationID:   "mxi-00000000000000000000000000000000",
 		Root:             "/matrix-installation-root",
@@ -111,7 +115,7 @@ func contractDescription() contract {
 	}
 	document := composeDocument{
 		Name:     "matrix-00000000000000000000000000000000",
-		Services: compileServices(manifest, images, options),
+		Services: compileServices(manifest, images, options, securityMail),
 		Networks: map[string]networkConfig{
 			"control":    {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-control")},
 			"edge":       {Internal: false, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-edge")},
@@ -132,7 +136,7 @@ func contractDescription() contract {
 }
 
 func predecessorContractDescription() contract {
-	return contractDescription()
+	return platformContractDescription(false)
 }
 
 func Compile(manifest release.Manifest, options Options) (Result, error) {
@@ -204,7 +208,7 @@ func compile(manifest release.Manifest, options Options, digest string) (Result,
 	if externalrequest.ValidateOrigin(options.NorthboundOrigin) != nil {
 		return Result{}, errors.New("platform northbound origin is invalid")
 	}
-	services := compileServices(manifest, images, options)
+	services := compileServices(manifest, images, options, digest == ContractDigest())
 	document := composeDocument{
 		Name:     "matrix-" + strings.TrimPrefix(options.InstallationID, "mxi-"),
 		Services: services,
@@ -314,17 +318,21 @@ func compileServices(
 	manifest release.Manifest,
 	images map[string]string,
 	options Options,
+	securityMail bool,
 ) map[string]serviceConfig {
 	root := options.Root
 	postgresPassword := path.Join(root, layout.PostgresPassword)
 	iamAPIDSN := path.Join(root, layout.IAMAPI)
 	iamWorkerDSN := path.Join(root, layout.IAMWorker)
+	iamNotificationDSN := path.Join(root, layout.IAMNotificationWorker)
 	auditRuntimeDSN := path.Join(root, layout.AuditRuntime)
 	paasAPIDSN := path.Join(root, layout.PaaSAPI)
 	paasWorkerDSN := path.Join(root, layout.PaaSWorker)
 	bootstrapIAM := path.Join(root, layout.IAMBootstrap)
 	accessKeyWrappingKeyring := path.Join(root, layout.IAMAccessKeyWrappingKeyring)
 	totpKeyring := path.Join(root, layout.IAMTOTPKeyring)
+	emailKeyring := path.Join(root, layout.IAMEmailVerificationKeyring)
+	securityMailChannel := path.Join(root, layout.IAMSecurityMailSMTPChannel)
 	iamCursorKey := path.Join(root, layout.IAMCursorKey)
 	auditIAMCredential := path.Join(root, layout.AuditIAMCredential)
 	iamAuditCredential := path.Join(root, layout.IAMAuditCredential)
@@ -409,6 +417,10 @@ func compileServices(
 		bind(totpKeyring, "/run/matrix/iam-totp-keyring.json", true),
 		bind(iamCursorKey, "/run/matrix/iam-cursor-key", true),
 	}
+	if securityMail {
+		iam.Environment["MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE"] = "/run/matrix/iam-email-verification-keyring.json"
+		iam.Volumes = append(iam.Volumes, bind(emailKeyring, "/run/matrix/iam-email-verification-keyring.json", true))
+	}
 	iam.DependsOn = healthy("postgres")
 
 	audit := service(
@@ -448,6 +460,25 @@ func compileServices(
 		bind(iamAuditCredential, "/run/matrix/iam-audit-credential", true),
 	}
 	iamAudit.DependsOn = healthy("postgres", "audit")
+
+	iamNotification := service(
+		"iam-notification-dispatcher", "iam", images["iam"], []string{"control", "management"},
+		[]string{"/matrix/bin/matrix-iam-notification-dispatcher"},
+		"0.5", "384M", "http://127.0.0.1:8080/ready",
+	)
+	iamNotification.Environment = map[string]string{
+		"MATRIX_IAM_NOTIFICATION_DATABASE_DSN_FILE":  "/run/matrix/iam-notification-worker-dsn",
+		"MATRIX_IAM_SECURITY_MAIL_SMTP_CHANNEL_FILE": "/run/matrix/iam-security-mail-smtp-channel.json",
+		"MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE": "/run/matrix/iam-email-verification-keyring.json",
+		"MATRIX_IAM_NOTIFICATION_WORKER_ID":          "iam-notification-" + strings.TrimPrefix(options.InstallationID, "mxi-"),
+		"MATRIX_IAM_NOTIFICATION_LISTEN_ADDRESS":     "0.0.0.0:8080",
+	}
+	iamNotification.Volumes = []mount{
+		bind(iamNotificationDSN, "/run/matrix/iam-notification-worker-dsn", true),
+		bind(securityMailChannel, "/run/matrix/iam-security-mail-smtp-channel.json", true),
+		bind(emailKeyring, "/run/matrix/iam-email-verification-keyring.json", true),
+	}
+	iamNotification.DependsOn = healthy("postgres", "iam")
 
 	paasAPI := service(
 		"paas-api", "paas", images["paas"], []string{"control", "management"}, []string{"/matrix/bin/matrix-paas"},
@@ -570,12 +601,16 @@ func compileServices(
 	apisix.CapAdd = []string{"CAP_CHOWN", "CAP_SETGID", "CAP_SETUID"}
 	apisix.DependsOn = healthy("audit", "iam", "paas-api", "paas-ui")
 
-	return map[string]serviceConfig{
+	services := map[string]serviceConfig{
 		"apisix": apisix, "audit": audit, "iam": iam,
 		"iam-audit-dispatcher": iamAudit, "paas-api": paasAPI,
 		"paas-audit-dispatcher": paasAudit, "paas-ui": ui, "paas-worker": paasWorker,
 		"postgres": postgres,
 	}
+	if securityMail {
+		services["iam-notification-dispatcher"] = iamNotification
+	}
+	return services
 }
 
 func platformServiceLabels(
