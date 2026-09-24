@@ -301,22 +301,28 @@ func TestDatabaseUpgradePathIsExactAndNotNumeric(t *testing.T) {
 	}
 }
 
-func TestPreparationRecoveryDoesNotInheritUpgradeCompatibility(t *testing.T) {
+func TestEnablingRecoveryAdmitsOnlyItsExactPreparationPredecessor(t *testing.T) {
 	current := CurrentDatabaseProfile()
 	upgradePredecessor := SupportedDatabaseUpgradePredecessorProfile()
-	if _, supported := SupportedDatabaseRecoveryPredecessorProfile(); supported {
-		t.Fatal("preparation release unexpectedly publishes a destructive-recovery predecessor")
+	recoveryPredecessor, supported := SupportedDatabaseRecoveryPredecessorProfile()
+	if !supported || recoveryPredecessor != upgradePredecessor {
+		t.Fatal("enabling release did not publish its exact preparation predecessor")
 	}
 	if err := ValidateDatabaseRecoveryPath(current, current); err != nil {
 		t.Fatalf("same-profile recovery rejected: %v", err)
 	}
-	if ValidateDatabaseRecoveryPath(upgradePredecessor, current) == nil {
-		t.Fatal("upgrade-only predecessor was admitted as a destructive-recovery target")
+	if err := ValidateDatabaseRecoveryPath(upgradePredecessor, current); err != nil {
+		t.Fatalf("exact preparation recovery rejected: %v", err)
 	}
 	invalid := current
 	invalid.ContractRevision++
 	if ValidateDatabaseRecoveryPath(invalid, current) == nil {
 		t.Fatal("unpublished recovery source was admitted")
+	}
+	skipped := upgradePredecessor
+	skipped.ContractRevision--
+	if ValidateDatabaseRecoveryPath(skipped, current) == nil {
+		t.Fatal("skipped recovery predecessor was admitted")
 	}
 }
 

@@ -798,7 +798,7 @@ func TestPublishedScalarManifestDoesNotImplyRuntimeTopologyCompatibility(t *test
 	}
 }
 
-func TestExactUpgradePredecessorCannotBecomePreparationRecoveryTarget(t *testing.T) {
+func TestExactPreparationPairAllowsUpgradeButRollbackRequiresAuthenticatedRecovery(t *testing.T) {
 	const origin = "https://matrix.example.com:443"
 	current := release.CurrentDatabaseProfile()
 	predecessor := release.SupportedDatabaseUpgradePredecessorProfile()
@@ -840,14 +840,23 @@ func TestExactUpgradePredecessorCannotBecomePreparationRecoveryTarget(t *testing
 		ReleaseDigest:     fixtures[0].ManifestDigest,
 		Database:          fixtures[0].Manifest.Database,
 	}
-	_, err = backend.Run(context.Background(), cli.Request{
+	recovered, err := backend.Run(context.Background(), cli.Request{
 		Action: lifecycle.ActionRecover, Root: root, BackupID: backupID,
 	})
-	assertFault(t, err, cli.FaultPrecondition, "RECOVERY_TARGET_UNSUPPORTED")
-	unchanged := readJournal(t, root)
-	if !reflect.DeepEqual(unchanged, state) || effects.recoveryInspectCalls != 1 ||
-		len(effects.recoveryCalls) != 0 {
-		t.Fatalf("unsupported destructive recovery changed state or reached write effects: %#v / %#v", unchanged, effects)
+	if err != nil || recovered.ReleaseID != fixtures[0].Manifest.Release.ID ||
+		recovered.PreviousID != "" || !recovered.Changed ||
+		effects.recoveryCalls[lifecycle.PhaseRecovering] != 1 ||
+		effects.recoveryCalls[lifecycle.PhaseStarting] != 1 ||
+		effects.recoveryCalls[lifecycle.PhaseVerifying] != 1 {
+		t.Fatalf("authenticated cross-profile recovery = %#v / %v / effects=%#v", recovered, err, effects)
+	}
+	completed := readJournal(t, root)
+	encoded, err := json.Marshal(completed)
+	if err != nil || completed.NorthboundOrigin != origin || completed.Last == nil ||
+		completed.Last.Command.NorthboundOrigin != origin ||
+		!strings.Contains(string(encoded), `"northboundOrigin":"`+origin+`"`) ||
+		effects.recoveryPlan.Target.NorthboundOrigin != origin {
+		t.Fatal("exact predecessor recovery lost its published northbound origin")
 	}
 }
 
