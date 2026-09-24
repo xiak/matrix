@@ -94,6 +94,10 @@ DEV `AccessSettings` 也只拥有账号级 MFA 要求与用户 SSO 选择。先�
 
 产品详情在同一内容区展示完整当前声明，并保留目录搜索、公共表格、分页、移动堆叠和进入/返回焦点。`INSTALLATION` 与 `INSTALLATION_PROBE` 只作为平台范围元数据展示，不能在租户 CUSTOMER 作者流程中选择。DEV 体验仓库提供同结构的隔离示例，但显式标记 MOCK、示例摘要不可信且不授予真实权限。
 
+自定义策略的 LIVE 新版本作者依照 IAM 工程师固定来源 `aefe4f786242d7d6816f253b6389d5c94c314a75` 的 CAT-06/IAM-005 边界，在原 JSON 路径旁提供目录驱动的可视化编辑：只在主动打开可视化页签时读取当前完整目录，不因打开版本详情或 JSON 编辑而请求目录。每条声明只选择一个目录中准确的 `TENANT` Action；产品与资源类型来自声明本身，不靠 Action 名称猜测。资源选择器只表达 `EXACT`、合资格的字面 `PREFIX_IN_AUTHORITY` 和 `ANY_IN_AUTHORITY`；条件只表达所选 Action 明确声明的 IAM 身份/时间键及 IAM-005 封闭操作符。集合目标、集合用途与成功结果资源用于说明能力，不被误写成资源选择器。Action 分页、声明选择与资源/条件编辑只挂载当前声明，避免目录增大时整页渲染所有表单。
+
+JSON 是无损来源：含 Action 家族、多 Action 声明、未知字段或当前表单无法完整表达的资源/条件时不切换为部分可视化，更不会丢弃原文。目录无权、路由缺失、会话失效、网络或协议失败时可视化区局部失败，JSON 仍可用，不回退 MOCK。可视化草稿只在审阅前对可见字段做轻量检查；目录不是权限、资源清单、编译预演或 Allow 结果。发布仍提交 `languageVersion: "1"` 的 `PolicyDocument` 到已有 IAM-005 审阅与版本命令，保留原 requestId/资源版本/结果未知恢复边界；不提交目录、摘要、编译快照或虚构的 language version 2。完整合法性由 IAM 发布时校验。
+
 ### 当前身份的权限上限投影
 
 严格消费必需的 `CurrentIdentity.permissionBoundary`，匹配当前 Account、User 和 User resourceVersion。缺字段、错误归属/修订、非法引用或摘要使读取失败；只有明确 `policy: null` 表示无边界。RootIdentity 只允许明确无边界。
@@ -157,7 +161,7 @@ Secret 只在创建结果明确为 `APPLIED` 时展示一次，并在确认离�
 
 ### 剩余接入边界
 
-真实策略版本读取、发布、切默认与退休已有前端客户端，但仍需与固定 IAM 进程完成浏览器联调；当前目录元数据和边界引用不能替代这些权威结果。发布目前仅提供 JSON 作者流程，完整可视化策略作者表单仍待独立接入和验证；不能由切默认路由推导出发布能力。只读权限能力目录客户端已经接入固定契约，但仍需真实进程浏览器验收；产品声明管理不是租户策略功能。
+真实策略版本读取、发布、切默认与退休已有前端客户端，JSON 与当前目录驱动的可视化版本作者也已有行为测试，但仍需与固定 IAM 进程完成浏览器联调；当前目录元数据和边界引用不能替代这些权威结果。完整策略新建、Action 家族、多 Action 可视化、更多云产品条件与资源挑选尚未纳入此 LIVE 表单；现有 DEV 创建策略四路径是隔离 MOCK 体验，不构成 IAM 当前发布能力。只读权限能力目录客户端同样仍需真实进程浏览器验收；产品声明管理不是租户策略功能。
 
 Role 管理 list/read/create 与管理员 RoleSession list/read/revoke 的固定 LIVE 客户端已经完成，但仍需真实 IAM 进程浏览器联调；Role update/status/delete、trust 与 policy attachment 变更、权限边界、可承担角色发现、AssumeRole、当前 Role 身份、签发结果 by-request 恢复和 Role logout 仍待各自固定契约接入。恢复码再生成的固定 LIVE 客户端已经完成，但仍需固定 IAM 进程验证 step-up、一次性秘密交付和重新登录查询闭环；账号安全规则仍是隔离 MOCK，不能从纯设计契约推导 LIVE 写入。SSO 与其余登录安全专项按各自固定后端契约推进。访问密钥 LIVE 客户端已固定到 IAM-007 的每用户管理契约，但仍需真实 IAM 进程的浏览器联调；产品 Profile 尚不接受 AccessKey，不能据此宣称云产品 API 已可使用长期密钥。本片不宣称全部错误页面或完整访问管理已验收，也不改变保留 MOCK 验收入口的安排。
 
@@ -225,7 +229,8 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 - 2026-09-24，LIVE 版本发布客户端、内容区 JSON 编辑/审阅及同步嵌入资源固定在已推送的 [`7def8761`](https://github.com/xiak/matrix/commit/7def8761)。仅对当前 Account 的 ACTIVE CUSTOMER/TENANT 策略使用 `POST /v1/policies/{policyId}/versions`；请求含文档、精确资源修订与 requestId，不发送 Account selector。严格响应核对归属、非默认新版本、资源修订加一、默认指针未动及声明内容一致性；即使发布成功也不显示为已授权或已激活。
 - 版本编辑器从当前默认不可变声明复制 JSON，仅在点击审阅时检查语法、大小和顶层结构；声明差异、当前默认 ID、提交修订与“发布不改变授权”在内容区固定呈现。Action、资源、条件及编译合法性仍以 IAM 发布事务的 400/422 等结果为准；当前后端无稳定字段级路径或通用在线编译预演 API，页面不伪造它们。可管理版本满五项时不提供发布入口；服务器仍作最终并发和授权判断。未发布草稿切页/取消使用既有离开保护，继续编辑保留原输入。
 - 发布意图在发出前冻结完整 JSON 与 requestId；网络、5xx 或无效成功体保持同一 Account/Session 的 UNKNOWN 写锁，等价重试复用原完整文档，重试 409 和当前状态读取仍不证明原结果。首次明确 400/401/403/404/409/413/415/422 按分类反馈，403 留在审阅区；成功后仅把新版本加入当前目录并显示默认版本仍旧不变，不触发整页重载。内存锁不跨浏览器刷新/重新登录；缺少后端 by-request 结果查询时仍不能作为可发布的未知结果闭环。
-- 定向适配器和组件用例覆盖成功响应及错误绑定、发布不自动切默认、无效 JSON、422 拒绝、UNKNOWN 等价重试及草稿离开保护；原显式 MOCK 策略作者流程完全保留。完整前端 43 文件/712 用例、三条静态导出归一化、类型、lint、架构、228 组主题对比、40 页生产导出、223 个嵌入文件等价、全仓 Go test/vet 已通过。默认五秒 Vitest 时间门禁未宣称通过；未用真实 IAM 进程做发布写入浏览器验收，也未用 MOCK 浏览器替代该门禁。共享门禁归 [FEAT-007](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence) 所有。
+- 定向适配器和组件用例覆盖成功响应及错误绑定、发布不自动切默认、无效 JSON、422 拒绝、UNKNOWN 等价重试及草稿离开保护；原显式 MOCK 策略作者流程完全保留。未用真实 IAM 进程做发布写入浏览器验收，也未用 MOCK 浏览器替代该门禁。共享构建和回归门禁归 [FEAT-007](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence) 所有。
+- 2026-09-24，LIVE 策略新版本的目录驱动可视化作者、无损 JSON 回退及同步嵌入资源固定在已推送的 [`4426f9a5`](https://github.com/xiak/matrix/commit/4426f9a5)。只在选择可视化页签时请求当前完整目录；筛选 `TENANT` 精确 Action 并按产品/资源类型分组，每次只挂载当前声明和当前 Action 页。集合型 Action 的 `EXACT collection` 为字面目标，不能由资源 ID 反推请求模式；`PREFIX_IN_AUTHORITY` 只对声明支持的实例 Action 可选，`ANY_IN_AUTHORITY` 明示限定在当前权威域内。目录不可用时 JSON 编辑仍可用；不能无损映射的版本原文不被表单覆盖。定向用例覆盖懒目录读取、403 局部失败、审阅后精确提交、不自动切默认、1200 个以上 Action 的 10 项挂载页，以及未知 JSON 字段不丢失。DEV 390px 仅检查保留的 MOCK 创建策略页无溢出或覆盖；尚未对这片 LIVE 可视化作者做真实 IAM 浏览器验收。
 
 ### 服务授权 MOCK 的开发验收证据
 
@@ -419,4 +424,4 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 
 公共 UI、生产导出、完整前端及 Go 回归证据只归
 [FEAT-007](../docs/features/FEAT-007-control-plane-console.md#current-user-boundarynavigation-development-evidence)
-所有。真实 PolicyVersion/授权目录作者流程、Role/trust/policy 变更与 STS、SSO，个人 MFA 的替换/移除/恢复 LIVE 适配，Role 只读、首次绑定与访问密钥的真实后端浏览器联调，以及本边界片的浅色/混色浏览器与键盘专项尚未完成。仍需与固定后端原子整合并执行相应发布门禁；本 UX 分支独立运行不等于完整 IAM 安装候选已验收。
+所有。真实 PolicyVersion/授权目录作者流程的后端浏览器联调、Role/trust/policy 变更与 STS、SSO，个人 MFA 的替换/移除/恢复 LIVE 适配，Role 只读、首次绑定与访问密钥的真实后端浏览器联调，以及本边界片的浅色/混色浏览器与键盘专项尚未完成。仍需与固定后端原子整合并执行相应发布门禁；本 UX 分支独立运行不等于完整 IAM 安装候选已验收。
