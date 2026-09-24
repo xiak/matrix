@@ -6,7 +6,7 @@
 - Updated: 2026-09-24
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `3b954402`
+- Pushed UI source: `c62e7949`
 
 ## Authoritative route
 
@@ -31,10 +31,10 @@ FEAT owners. Integrate fixed backend contracts while preserving this branch's
 UI, full static host/export and independent MOCK entry; do not replace them
 with another branch's renderer or inherit that branch's UI acceptance.
 
-The current milestone keeps the purpose-limited recovery-code client and
-independent MOCK security surface. Late one-time codes cannot move across a
-new Session or intent; the account-rule MOCK also requires personal TOTP and
-normal re-login before editing. The complete 685-case frontend run,
+The current milestone preserves the purpose-limited recovery-code client and
+independent MOCK security surface. It adds strict LIVE read-only Account MFA
+settings against the fixed IAM read contract while leaving real update,
+operation proof and history unavailable. The complete 693-case frontend run,
 static/export/embed and Go gates passed. Detailed contract behavior, evidence
 and real-process limitations remain only in the linked FEAT owners.
 
@@ -51,8 +51,8 @@ checks. Do not duplicate the donor application or move installer-owned secrets
 into the UI.
 
 Next integration must select one fixed boundary from the owning FEAT. Do not
-infer account-security, remaining Role or SSO wire contracts from the MOCK UI or
-from another task's unpushed work.
+infer account-security update, remaining Role or SSO wire contracts from the
+MOCK UI or from another task's unpushed work.
 
 Replace this file only at another committed-and-pushed milestone. Do not append
 command logs, chat transcripts, secrets, raw provider payloads, or machine-local
