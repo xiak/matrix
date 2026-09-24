@@ -187,7 +187,8 @@ const (
 
 // AuthenticationChallenge describes the next restricted authentication step,
 // never an identity or permission. LOGIN may require TOTP then a separately
-// credentialed PASSWORD_CHANGE; enrollment, recovery and step-up are not LOGIN.
+// credentialed PASSWORD_CHANGE. ENROLLMENT permits only first-factor setup
+// (after any required password change), not login, recovery or step-up authority.
 type AuthenticationChallenge struct {
 	APIVersion string    `json:"apiVersion"`
 	Kind       string    `json:"kind"`
@@ -195,6 +196,26 @@ type AuthenticationChallenge struct {
 	Purpose    string    `json:"purpose"`
 	NextStep   string    `json:"nextStep"`
 	ExpiresAt  time.Time `json:"expiresAt"`
+}
+
+// EnrollmentChallengeState is an observation held by one restricted
+// ENROLLMENT credential. A required password change exposes no contact or
+// factor state. It never contains a Session, provisioning or another secret.
+type EnrollmentChallengeState struct {
+	Challenge           AuthenticationChallenge `json:"challenge"`
+	NotificationContact *NotificationContact    `json:"notificationContact,omitempty"`
+	Enrollment          *TOTPEnrollment         `json:"enrollment,omitempty"`
+}
+
+type InspectEnrollmentChallengeRequest struct {
+	ChallengeCredential Secret `json:"challengeCredential"`
+}
+
+// The factor revision and USER are taken from locked challenge authority,
+// not supplied by the client. This is not the normal Session enrollment API.
+type StartChallengeTOTPEnrollmentRequest struct {
+	RequestID           string `json:"requestId"`
+	ChallengeCredential Secret `json:"challengeCredential"`
 }
 
 // AccountMFASettings governs ordinary USER login requirements, not whether

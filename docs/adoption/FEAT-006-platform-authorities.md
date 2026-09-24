@@ -679,6 +679,20 @@ these source decisions do not themselves confer an implementation capability.
 | Matrix `48e56cbb1d3490ee8cee8314a41cfc26d1f24b2e`, `totp_enrollment.go`, `totp_authentication.go`, password attempts and `000012_totp` recovery-batch provenance | `REUSE` current USER/Session authentication, shared durable password/OTP budgets, one-way saved codes and transactional facts; `ADAPT` a Session-held, operation-bound proof and closed regeneration provenance | IAM/009 defines the regeneration target before this inspection. An original batch is bound to the factor's immutable binding event; a replacement must prove its own exact completion without rewriting that event or simply removing the equality guard. `REJECT` a new bearer, generic cached permit, arbitrary action/payload, a Session-wide strength upgrade, or replaying one-time codes. The first operation is only the user's own recovery-code regeneration; metadata codecs alone do not implement its HTTP/SQL workflow. |
 | Matrix `b7a70bfa9e53f0a5f16619c60523c84613cb7b0b`, Account/USER/Session and closed StepUp contracts, product Profile/PDP, `withAccountAuthorization`, Account storage and strict API codecs | `REUSE` the actual ACCOUNT resource, Session-held proof boundary, immutable system-policy versions, same-transaction authorization and current contract owners; `ADAPT` explicit Account settings persistence/read plus exact intent and nonsecret historical completion | IAM/009 fixes the ordinary-user setting, before-change authorization and monotonic Session qualification target before this slice. The predecessor has no account-wide MFA switch: only initial migration and Account creation record explicit initial state, never a read-time fallback. Read requires a distinct current product revision and an explicit grant; fixed prior product/system policy bytes remain historical evidence. Configuration is not factor state, authentication strength, a policy or a transferable permit. Historical completion describes its original caller, not a later reader's Session. `REJECT` a second security-policy model, selectors, generic merge/attributes, inferred false for missing authority, automatic new rights on existing attachments or accepting a new StepUp operation before its transaction exists. No UI, installation profile or foreign acceptance is imported. |
 
+The S2c initial-enrollment contract `REUSE`s fixed
+`018fbd7505ae16d59dcfe857df7fbbe870bf1a13`'s disjoint LoginResponse,
+AuthenticationChallenge, redacted Secret codecs, first-factor enrollment
+metadata and NotificationContact. It `ADAPT`s a separate ENROLLMENT purpose
+and four closed request shapes, with no ordinary Session or caller-selected
+identity/revision. A pending first factor inherits the challenge deadline;
+the original Session issuer is not broadened merely because the shared
+validator understands that purpose. `REJECT` a second factor/contact model,
+normal-session-before-MFA shortcut, RECOVERY-to-first-enrollment conversion,
+replayed provisioning, or an account-setting write before its full barrier
+and supported-restore obligations are implemented. This fixed predecessor
+has only read-only Account settings; its SQL, installation profile and
+runtime acceptance are not reclassified by the contract increment.
+
 The online step-up combination `ADAPT`s fixed
 `a4cbd18598099751eb1bd3eac896e191db474524`'s purpose-only authentication
 recovery transaction, `000014` state/fences and closed SYSTEM Audit facts.

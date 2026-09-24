@@ -14,6 +14,107 @@ import (
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 )
 
+func TestEnrollmentChallengeSchemasSeparatePurposeAndSecretCarrier(t *testing.T) {
+	api := loadIAMOpenAPI(t)
+	for _, sample := range enrollmentChallengeRequestSamples() {
+		t.Run(sample.kind, func(t *testing.T) {
+			schema := compileIAMOpenAPISchema(t, api, sample.kind)
+			var fields map[string]any
+			if json.Unmarshal([]byte(sample.wire), &fields) != nil || schema.Validate(fields) != nil {
+				t.Fatal("explicit restricted request not represented by schema")
+			}
+			for _, field := range []string{"userId", "accountId", "tenantId", "credential", "session", "password", "purpose", "nextStep", "expectedFactorRevision", "smtpHost"} {
+				fields[field] = nil
+				if schema.Validate(fields) == nil {
+					t.Fatal("schema permits an authority selector or second carrier")
+				}
+				delete(fields, field)
+			}
+			for field, original := range fields {
+				fields[field] = nil
+				if schema.Validate(fields) == nil {
+					t.Fatal("schema permits null required authentication input")
+				}
+				delete(fields, field)
+				if schema.Validate(fields) == nil {
+					t.Fatal("schema permits missing authentication input")
+				}
+				fields[field] = original
+			}
+		})
+	}
+	challengeSchema := compileIAMOpenAPISchema(t, api, "AuthenticationChallenge")
+	loginSchema := compileIAMOpenAPISchema(t, api, "LoginResponse")
+	for _, purpose := range []string{"LOGIN", "RECOVERY", "ENROLLMENT", "STEP_UP", "SESSION"} {
+		for _, step := range []string{"TOTP", "PASSWORD_CHANGE", "RECOVER", "ENROLLMENT", "AUTHENTICATED"} {
+			challenge := AuthenticationChallenge{APIVersion: APIVersion, Kind: "AuthenticationChallenge", ID: "challenge-one", Purpose: purpose, NextStep: step,
+				ExpiresAt: time.Date(2026, 9, 24, 12, 5, 0, 0, time.UTC)}
+			encoded, _ := json.Marshal(challenge)
+			var raw any
+			_ = json.Unmarshal(encoded, &raw)
+			want := purpose == "LOGIN" && (step == "TOTP" || step == "PASSWORD_CHANGE" || step == "RECOVER") ||
+				purpose == "RECOVERY" && step == "ENROLLMENT" || purpose == "ENROLLMENT" && (step == "PASSWORD_CHANGE" || step == "ENROLLMENT")
+			if (challengeSchema.Validate(raw) == nil) != want || (ValidateAuthenticationChallenge(challenge) == nil) != want {
+				t.Fatalf("purpose/stage %s/%s differs", purpose, step)
+			}
+			wire := `{"outcome":"CHALLENGE_REQUIRED","challenge":` + string(encoded) + `,"challengeCredential":"synthetic-only-secret"}`
+			_ = json.Unmarshal([]byte(wire), &raw)
+			var response LoginResponse
+			wantLogin := want && purpose != "RECOVERY"
+			if (loginSchema.Validate(raw) == nil) != wantLogin || (DecodeRequest(strings.NewReader(wire), &response) == nil) != wantLogin {
+				t.Fatalf("login admitted wrong challenge purpose/stage %s/%s", purpose, step)
+			}
+			if wantLogin {
+				transport, err := EncodeLoginResponse(response)
+				defer clear(transport)
+				if err != nil || DecodeRequest(bytes.NewReader(transport), &response) != nil {
+					t.Fatal("explicit challenge transport failed")
+				}
+				for _, extra := range []string{`"session":null`, `"credential":null`, `"mustChangePassword":false`, `"mustChangePassword":true`} {
+					attack := strings.TrimSuffix(wire, "}") + `,` + extra + `}`
+					_ = json.Unmarshal([]byte(attack), &raw)
+					if loginSchema.Validate(raw) == nil || DecodeRequest(strings.NewReader(attack), &response) == nil {
+						t.Fatal("enrollment leaked a partial login authority")
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestEnrollmentChallengeStateSchemaKeepsPasswordStageAndFirstFactorDistinct(t *testing.T) {
+	schema := compileIAMOpenAPISchema(t, loadIAMOpenAPI(t), "EnrollmentChallengeState")
+	challenge := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AuthenticationChallenge","id":"challenge-first","purpose":"ENROLLMENT","nextStep":"ENROLLMENT","expiresAt":"2026-09-24T12:05:00Z"}`
+	contact := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"NotificationContact","accountId":"account-a","userId":"user-a","state":"NONE","resourceVersion":0}`
+	verified := strings.Replace(contact, `"state":"NONE","resourceVersion":0`, `"state":"VERIFIED","resourceVersion":1,"email":"first@example.invalid","verifiedAt":"2026-09-24T12:04:00Z"`, 1)
+	factor := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"TOTPEnrollment","id":"factor-first","requestId":"first-bind","factorRevision":1,"state":"PENDING","createdAt":"2026-09-24T12:04:30Z","expiresAt":"2026-09-24T12:05:00Z"}`
+	for _, sample := range []struct {
+		wire  string
+		valid bool
+	}{
+		{`{"challenge":` + challenge + `,"notificationContact":` + contact + `}`, true},
+		{`{"challenge":` + challenge + `,"notificationContact":` + verified + `}`, true},
+		{`{"challenge":` + challenge + `,"notificationContact":` + verified + `,"enrollment":` + factor + `}`, true},
+		{`{"challenge":` + challenge + `,"notificationContact":` + contact + `,"enrollment":` + factor + `}`, false},
+		{`{"challenge":` + challenge + `,"notificationContact":` + verified + `,"enrollment":` + strings.Replace(factor, `"factorRevision":1`, `"factorRevision":2`, 1) + `}`, false},
+		{`{"challenge":` + challenge + `}`, false},
+		{`{"challenge":` + challenge + `,"notificationContact":null}`, false},
+		{`{"challenge":` + challenge + `,"notificationContact":` + verified + `,"enrollment":null}`, false},
+		{`{"challenge":` + strings.Replace(challenge, `"purpose":"ENROLLMENT"`, `"purpose":"RECOVERY"`, 1) + `,"notificationContact":` + contact + `}`, false},
+		{`{"challenge":` + strings.Replace(challenge, `"nextStep":"ENROLLMENT"`, `"nextStep":"PASSWORD_CHANGE"`, 1) + `}`, true},
+		{`{"challenge":` + strings.Replace(challenge, `"nextStep":"ENROLLMENT"`, `"nextStep":"PASSWORD_CHANGE"`, 1) + `,"notificationContact":` + contact + `}`, false},
+	} {
+		var raw any
+		if json.Unmarshal([]byte(sample.wire), &raw) != nil {
+			t.Fatal("bad observation fixture")
+		}
+		var observation EnrollmentChallengeState
+		if (schema.Validate(raw) == nil) != sample.valid || (DecodeRequest(strings.NewReader(sample.wire), &observation) == nil) != sample.valid {
+			t.Fatalf("observation contract differs, expected valid=%v", sample.valid)
+		}
+	}
+}
+
 func TestAccountSecuritySettingsSchemasRejectMissingConfigurationAndAuthoritySelectors(t *testing.T) {
 	api := loadIAMOpenAPI(t)
 	for _, sample := range securitySettingsContractSamples() {

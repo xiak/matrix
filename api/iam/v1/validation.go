@@ -78,6 +78,22 @@ func ValidateConfirmNotificationContactVerificationRequest(value ConfirmNotifica
 	return nil
 }
 
+func ValidateStartChallengeNotificationContactVerificationRequest(value StartChallengeNotificationContactVerificationRequest) error {
+	if !value.ChallengeCredential.Present() || ValidateSecurityMailAddress(value.Email) != nil || ValidateID("requestId", value.RequestID) != nil {
+		return errors.New("enrollment contact verification request is invalid")
+	}
+	return nil
+}
+
+func ValidateConfirmChallengeNotificationContactVerificationRequest(value ConfirmChallengeNotificationContactVerificationRequest) error {
+	if !value.ChallengeCredential.Present() {
+		return ErrInvalidSecret
+	}
+	return ValidateConfirmNotificationContactVerificationRequest(ConfirmNotificationContactVerificationRequest{
+		Code: value.Code, RequestID: value.RequestID,
+	})
+}
+
 func ValidateNotificationDeliveryObservation(value NotificationDeliveryObservation) error {
 	if value.Attempts > 5 || validateTime("updatedAt", value.UpdatedAt) != nil {
 		return errors.New("notification delivery observation is invalid")
@@ -284,7 +300,8 @@ func ValidateLoginResponse(value LoginResponse) error {
 		return ValidateSession(value.Session)
 	case LoginChallengeRequired:
 		if value.Challenge == nil || !value.ChallengeCredential.Present() || value.Credential.Present() ||
-			value.Session != (Session{}) || value.MustChangePassword || value.Challenge.Purpose != "LOGIN" {
+			value.Session != (Session{}) || value.MustChangePassword ||
+			(value.Challenge.Purpose != "LOGIN" && value.Challenge.Purpose != "ENROLLMENT") {
 			return errors.New("challenged login result is invalid")
 		}
 		return ValidateAuthenticationChallenge(*value.Challenge)
@@ -315,10 +332,50 @@ func ValidateAuthenticationChallenge(value AuthenticationChallenge) error {
 		if value.NextStep != "ENROLLMENT" {
 			return errors.New("recovery challenge stage is invalid")
 		}
+	case "ENROLLMENT":
+		if value.NextStep != "PASSWORD_CHANGE" && value.NextStep != "ENROLLMENT" {
+			return errors.New("enrollment challenge stage is invalid")
+		}
 	default:
 		return errors.New("authentication challenge purpose is invalid")
 	}
 	return errors.Join(ValidateID("challenge.id", value.ID), validateTime("challenge.expiresAt", value.ExpiresAt))
+}
+
+func ValidateInspectEnrollmentChallengeRequest(value InspectEnrollmentChallengeRequest) error {
+	if !value.ChallengeCredential.Present() {
+		return ErrInvalidSecret
+	}
+	return nil
+}
+
+func ValidateStartChallengeTOTPEnrollmentRequest(value StartChallengeTOTPEnrollmentRequest) error {
+	if !value.ChallengeCredential.Present() {
+		return ErrInvalidSecret
+	}
+	return ValidateID("requestId", value.RequestID)
+}
+
+func ValidateEnrollmentChallengeState(value EnrollmentChallengeState) error {
+	if ValidateAuthenticationChallenge(value.Challenge) != nil || value.Challenge.Purpose != "ENROLLMENT" {
+		return errors.New("enrollment challenge observation is invalid")
+	}
+	if value.Challenge.NextStep == "PASSWORD_CHANGE" {
+		if value.NotificationContact != nil || value.Enrollment != nil {
+			return errors.New("password change challenge exposes enrollment state")
+		}
+		return nil
+	}
+	if value.NotificationContact == nil || ValidateNotificationContact(*value.NotificationContact) != nil {
+		return errors.New("enrollment contact observation is required")
+	}
+	if value.Enrollment != nil && (ValidateTOTPEnrollment(*value.Enrollment) != nil ||
+		value.Enrollment.State != "PENDING" || value.Enrollment.FactorRevision != 1 ||
+		!value.Enrollment.ExpiresAt.Equal(value.Challenge.ExpiresAt) || value.NotificationContact.State != "VERIFIED" ||
+		value.NotificationContact.VerifiedAt.After(value.Enrollment.CreatedAt)) {
+		return errors.New("enrollment must retain its original challenge deadline and first-binding prerequisites")
+	}
+	return nil
 }
 
 func ValidateChallengePasswordChangeRequest(value ChallengePasswordChangeRequest) error {
@@ -362,7 +419,7 @@ func ValidateTOTPEnrollment(value TOTPEnrollment) error {
 	if value.APIVersion != APIVersion || value.Kind != "TOTPEnrollment" || value.FactorRevision == 0 || value.FactorRevision > 9007199254740990 ||
 		ValidateID("id", value.ID) != nil || ValidateID("requestId", value.RequestID) != nil ||
 		validateTime("createdAt", value.CreatedAt) != nil || validateTime("expiresAt", value.ExpiresAt) != nil ||
-		value.ExpiresAt.Sub(value.CreatedAt) != 5*time.Minute {
+		!value.ExpiresAt.After(value.CreatedAt) || value.ExpiresAt.Sub(value.CreatedAt) > 5*time.Minute {
 		return errors.New("TOTP enrollment is invalid")
 	}
 	switch value.State {

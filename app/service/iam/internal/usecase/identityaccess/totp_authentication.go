@@ -102,7 +102,8 @@ func (service *Authority) createLoginChallenge(ctx context.Context, tx Transacti
 	if err != nil {
 		return iamv1.LoginResponse{}, err
 	}
-	if iamv1.ValidateAuthenticationChallenge(challenge) != nil || challenge.ID != id {
+	if iamv1.ValidateAuthenticationChallenge(challenge) != nil || challenge.ID != id || challenge.Purpose != "LOGIN" ||
+		(challenge.NextStep != "TOTP" && challenge.NextStep != "RECOVER") {
 		return iamv1.LoginResponse{}, ErrUnavailable
 	}
 	return iamv1.LoginResponse{Outcome: iamv1.LoginChallengeRequired, Challenge: &challenge, ChallengeCredential: issued.Credential}, nil
@@ -210,7 +211,7 @@ func (service *Authority) VerifyAuthenticationChallenge(ctx context.Context, id 
 			if err != nil {
 				return err
 			}
-			if challenge.ID != passwordChallengeID || challenge.NextStep != "PASSWORD_CHANGE" || iamv1.ValidateAuthenticationChallenge(challenge) != nil {
+			if challenge.ID != passwordChallengeID || challenge.Purpose != "LOGIN" || challenge.NextStep != "PASSWORD_CHANGE" || iamv1.ValidateAuthenticationChallenge(challenge) != nil {
 				return ErrUnavailable
 			}
 			response = iamv1.LoginResponse{Outcome: iamv1.LoginChallengeRequired, Challenge: &challenge, ChallengeCredential: passwordChallengeCredential.Credential}

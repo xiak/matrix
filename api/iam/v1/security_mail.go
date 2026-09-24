@@ -52,6 +52,20 @@ type ConfirmNotificationContactVerificationRequest struct {
 	RequestID string `json:"requestId"`
 }
 
+// First-address verification under an ENROLLMENT challenge is a distinct
+// carrier. It cannot replace a verified contact or accept a login Session.
+type StartChallengeNotificationContactVerificationRequest struct {
+	Email               string `json:"email"`
+	RequestID           string `json:"requestId"`
+	ChallengeCredential Secret `json:"challengeCredential"`
+}
+
+type ConfirmChallengeNotificationContactVerificationRequest struct {
+	Code                Secret `json:"code"`
+	RequestID           string `json:"requestId"`
+	ChallengeCredential Secret `json:"challengeCredential"`
+}
+
 // An SMTP acceptance is not delivery or read confirmation. LastOutcome is
 // absent until an attempt has an observation; a lease itself proves no send.
 type NotificationDeliveryObservation struct {
@@ -90,6 +104,14 @@ func (StartNotificationContactVerificationRequest) GoString() string {
 func (ConfirmNotificationContactVerificationRequest) String() string { return "[REDACTED]" }
 func (ConfirmNotificationContactVerificationRequest) GoString() string {
 	return "iamv1.ConfirmNotificationContactVerificationRequest{[REDACTED]}"
+}
+func (StartChallengeNotificationContactVerificationRequest) String() string { return "[REDACTED]" }
+func (StartChallengeNotificationContactVerificationRequest) GoString() string {
+	return "iamv1.StartChallengeNotificationContactVerificationRequest{[REDACTED]}"
+}
+func (ConfirmChallengeNotificationContactVerificationRequest) String() string { return "[REDACTED]" }
+func (ConfirmChallengeNotificationContactVerificationRequest) GoString() string {
+	return "iamv1.ConfirmChallengeNotificationContactVerificationRequest{[REDACTED]}"
 }
 
 type SecurityMailInstallationScope struct {

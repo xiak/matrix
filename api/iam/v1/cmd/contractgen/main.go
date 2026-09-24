@@ -495,6 +495,9 @@ func structContracts() map[string]reflect.Type {
 		"ChallengePasswordChangeResponse":               openapi31.StructType[iamv1.ChallengePasswordChangeResponse](),
 		"LoginResponse":                                 openapi31.StructType[iamv1.LoginResponse](),
 		"AuthenticationChallenge":                       openapi31.StructType[iamv1.AuthenticationChallenge](),
+		"EnrollmentChallengeState":                      openapi31.StructType[iamv1.EnrollmentChallengeState](),
+		"InspectEnrollmentChallengeRequest":             openapi31.StructType[iamv1.InspectEnrollmentChallengeRequest](),
+		"StartChallengeTOTPEnrollmentRequest":           openapi31.StructType[iamv1.StartChallengeTOTPEnrollmentRequest](),
 		"AccountMFASettings":                            openapi31.StructType[iamv1.AccountMFASettings](),
 		"AccountSecuritySettings":                       openapi31.StructType[iamv1.AccountSecuritySettings](),
 		"SecuritySettingsUpdateIntent":                  openapi31.StructType[iamv1.SecuritySettingsUpdateIntent](),
@@ -611,6 +614,9 @@ func structContracts() map[string]reflect.Type {
 		"AccessKeyHTTPRequest":                          openapi31.StructType[iamv1.AccessKeyHTTPRequest](),
 		"Readiness":                                     openapi31.StructType[iamv1.Readiness](),
 		"Problem":                                       openapi31.StructType[iamv1.Problem](),
+
+		"StartChallengeNotificationContactVerificationRequest":   openapi31.StructType[iamv1.StartChallengeNotificationContactVerificationRequest](),
+		"ConfirmChallengeNotificationContactVerificationRequest": openapi31.StructType[iamv1.ConfirmChallengeNotificationContactVerificationRequest](),
 	}
 }
 
@@ -657,7 +663,7 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 	if owner == "AuthenticationChallenge" {
 		switch jsonName {
 		case "purpose":
-			return object{"enum": []string{"LOGIN", "RECOVERY"}}
+			return object{"enum": []string{"LOGIN", "RECOVERY", "ENROLLMENT"}}
 		case "nextStep":
 			return object{"enum": []string{"TOTP", "PASSWORD_CHANGE", "RECOVER", "ENROLLMENT"}}
 		}
@@ -665,7 +671,7 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 	if owner == "ChallengePasswordChangeResponse" && jsonName == "nextStep" {
 		return object{"const": "REAUTHENTICATE"}
 	}
-	if (owner == "NotificationContact" || owner == "NotificationContactVerification" || owner == "StartNotificationContactVerificationRequest") && jsonName == "email" {
+	if (owner == "NotificationContact" || owner == "NotificationContactVerification" || owner == "StartNotificationContactVerificationRequest" || owner == "StartChallengeNotificationContactVerificationRequest") && jsonName == "email" {
 		return object{"type": "string", "minLength": 3, "maxLength": 254, "description": "One ASCII dot-atom address and canonical lower-case DNS domain. No display name, address list, literal IP, SMTPUTF8 or normalization of local-part case. Authoritative syntax validation applies."}
 	}
 	if owner == "NotificationContact" {
@@ -681,7 +687,7 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 	if owner == "NotificationContactVerification" && jsonName == "state" {
 		return object{"type": "string", "enum": []string{"PENDING", "VERIFIED", "CANCELLED", "EXPIRED"}}
 	}
-	if owner == "ConfirmNotificationContactVerificationRequest" && jsonName == "code" {
+	if (owner == "ConfirmNotificationContactVerificationRequest" || owner == "ConfirmChallengeNotificationContactVerificationRequest") && jsonName == "code" {
 		return object{"type": "string", "pattern": "^[0-9]{8}$", "minLength": 8, "maxLength": 8, "writeOnly": true}
 	}
 	if owner == "NotificationDeliveryObservation" {
@@ -1011,6 +1017,24 @@ func applySemanticOverlays(schemas object) {
 	schemas["AuthenticationChallenge"].(object)["oneOf"] = []any{
 		object{"properties": object{"purpose": object{"const": "LOGIN"}, "nextStep": object{"enum": []string{"TOTP", "PASSWORD_CHANGE", "RECOVER"}}}},
 		object{"properties": object{"purpose": object{"const": "RECOVERY"}, "nextStep": object{"const": "ENROLLMENT"}}},
+		object{"properties": object{"purpose": object{"const": "ENROLLMENT"}, "nextStep": object{"enum": []string{"PASSWORD_CHANGE", "ENROLLMENT"}}}},
+	}
+	schemas["EnrollmentChallengeState"].(object)["description"] = "Purpose-limited first-enrollment observation, not an identity or permission. Runtime validation additionally requires a pending first factor to retain its challenge's exact absolute expiry. Contract only; no runtime route in this slice."
+	schemas["EnrollmentChallengeState"].(object)["properties"].(object)["challenge"] = object{"allOf": []any{openapi31.Ref("AuthenticationChallenge"), object{"properties": object{"purpose": object{"const": "ENROLLMENT"}}}}}
+	schemas["EnrollmentChallengeState"].(object)["oneOf"] = []any{
+		object{"properties": object{"challenge": object{"properties": object{"nextStep": object{"const": "PASSWORD_CHANGE"}}}, "notificationContact": false, "enrollment": false}},
+		object{"required": []string{"notificationContact"}, "properties": object{
+			"challenge":           object{"properties": object{"nextStep": object{"const": "ENROLLMENT"}}},
+			"notificationContact": object{"type": "object"}, "enrollment": false,
+		}},
+		object{"required": []string{"notificationContact", "enrollment"}, "properties": object{
+			"challenge":           object{"properties": object{"nextStep": object{"const": "ENROLLMENT"}}},
+			"notificationContact": object{"type": "object", "properties": object{"state": object{"const": "VERIFIED"}}},
+			"enrollment":          object{"type": "object", "properties": object{"state": object{"const": "PENDING"}, "factorRevision": object{"const": 1}}},
+		}},
+	}
+	for _, name := range []string{"InspectEnrollmentChallengeRequest", "StartChallengeTOTPEnrollmentRequest", "StartChallengeNotificationContactVerificationRequest", "ConfirmChallengeNotificationContactVerificationRequest"} {
+		schemas[name].(object)["description"] = "Only the current ENROLLMENT challenge credential; never a login Session or caller identity selector. Contract only; corresponding runtime routes are not registered in this slice."
 	}
 	schemas["AuthenticatorRecovery"].(object)["description"] = "Non-secret observation of one purpose-limited recovery. Authoritative validation enforces at most five minutes and completion before expiry; metadata never conveys recovery authority."
 	schemas["AuthenticatorRecovery"].(object)["oneOf"] = []any{
@@ -1043,7 +1067,7 @@ func applySemanticOverlays(schemas object) {
 			"mustChangePassword": object{"type": "boolean"}, "challenge": false, "challengeCredential": false,
 		}},
 		object{"required": []string{"challenge", "challengeCredential"}, "properties": object{
-			"outcome": object{"const": string(iamv1.LoginChallengeRequired)}, "challenge": object{"type": "object", "properties": object{"purpose": object{"const": "LOGIN"}}},
+			"outcome": object{"const": string(iamv1.LoginChallengeRequired)}, "challenge": object{"type": "object", "properties": object{"purpose": object{"enum": []string{"LOGIN", "ENROLLMENT"}}}},
 			"session": false, "credential": false, "mustChangePassword": false,
 		}},
 	}

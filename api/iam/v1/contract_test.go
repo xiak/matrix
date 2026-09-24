@@ -26,6 +26,193 @@ import (
 	"github.com/xiak/matrix/api/contractjson"
 )
 
+func enrollmentChallengeRequestSamples() []struct {
+	kind, wire string
+	newValue   func() any
+	encode     func(any) ([]byte, error)
+} {
+	return []struct {
+		kind, wire string
+		newValue   func() any
+		encode     func(any) ([]byte, error)
+	}{
+		{"InspectEnrollmentChallengeRequest", `{"challengeCredential":"synthetic-enrollment-secret"}`,
+			func() any { return new(InspectEnrollmentChallengeRequest) },
+			func(v any) ([]byte, error) {
+				return EncodeInspectEnrollmentChallengeRequest(*v.(*InspectEnrollmentChallengeRequest))
+			}},
+		{"StartChallengeTOTPEnrollmentRequest", `{"requestId":"first-factor","challengeCredential":"synthetic-enrollment-secret"}`,
+			func() any { return new(StartChallengeTOTPEnrollmentRequest) },
+			func(v any) ([]byte, error) {
+				return EncodeStartChallengeTOTPEnrollmentRequest(*v.(*StartChallengeTOTPEnrollmentRequest))
+			}},
+		{"StartChallengeNotificationContactVerificationRequest", `{"email":"first@example.invalid","requestId":"first-address","challengeCredential":"synthetic-enrollment-secret"}`,
+			func() any { return new(StartChallengeNotificationContactVerificationRequest) },
+			func(v any) ([]byte, error) {
+				return EncodeStartChallengeNotificationContactVerificationRequest(*v.(*StartChallengeNotificationContactVerificationRequest))
+			}},
+		{"ConfirmChallengeNotificationContactVerificationRequest", `{"code":"00123456","requestId":"confirm-address","challengeCredential":"synthetic-enrollment-secret"}`,
+			func() any { return new(ConfirmChallengeNotificationContactVerificationRequest) },
+			func(v any) ([]byte, error) {
+				return EncodeConfirmChallengeNotificationContactVerificationRequest(*v.(*ConfirmChallengeNotificationContactVerificationRequest))
+			}},
+	}
+}
+
+func TestEnrollmentChallengeRequestsKeepOneSecretCarrierAndNoAuthoritySelectors(t *testing.T) {
+	for _, sample := range enrollmentChallengeRequestSamples() {
+		t.Run(sample.kind, func(t *testing.T) {
+			value := sample.newValue()
+			if err := DecodeRequest(strings.NewReader(sample.wire), value); err != nil {
+				t.Fatal("valid purpose-limited input rejected", err)
+			}
+			if encoded, err := json.Marshal(value); err == nil || len(encoded) != 0 {
+				t.Fatal("ordinary JSON exposed authentication material")
+			}
+			formatted := fmt.Sprintf("%v %+v %#v", value, value, value)
+			for _, private := range []string{"synthetic-enrollment-secret", "00123456", "first@example.invalid"} {
+				if strings.Contains(formatted, private) {
+					t.Fatal("formatted request disclosed private input")
+				}
+			}
+			encoded, err := sample.encode(value)
+			defer clear(encoded)
+			if err != nil || DecodeRequest(bytes.NewReader(encoded), sample.newValue()) != nil {
+				t.Fatal("explicit one-time transport failed", err)
+			}
+			// Neither a client selector nor a second credential can enlarge the
+			// purpose. Reject null placeholders as well as non-empty values.
+			for _, field := range []string{"accountId", "tenantId", "userId", "principalId", "session", "sessionId", "credential", "password", "purpose", "nextStep", "expectedFactorRevision", "requiredForUsers", "recoveryCode", "smtpHost"} {
+				for _, extra := range []string{`null`, `"other"`} {
+					attack := strings.TrimSuffix(sample.wire, "}") + `,"` + field + `":` + extra + `}`
+					if DecodeRequest(strings.NewReader(attack), sample.newValue()) == nil || json.Unmarshal([]byte(attack), sample.newValue()) == nil {
+						t.Fatalf("accepted %s selector or another carrier", field)
+					}
+				}
+			}
+			var fields map[string]json.RawMessage
+			if json.Unmarshal([]byte(sample.wire), &fields) != nil {
+				t.Fatal("bad fixture")
+			}
+			for field, original := range fields {
+				duplicate := strings.TrimSuffix(sample.wire, "}") + `,"` + field + `":` + string(original) + `}`
+				if DecodeRequest(strings.NewReader(duplicate), sample.newValue()) == nil {
+					t.Fatal("duplicate credential/intent field accepted")
+				}
+				for _, replacement := range []json.RawMessage{json.RawMessage(`null`), json.RawMessage(`""`), json.RawMessage(`true`)} {
+					fields[field] = replacement
+					attack, _ := json.Marshal(fields)
+					if DecodeRequest(bytes.NewReader(attack), sample.newValue()) == nil {
+						t.Fatalf("invalid %s accepted", field)
+					}
+				}
+				delete(fields, field)
+				attack, _ := json.Marshal(fields)
+				if DecodeRequest(bytes.NewReader(attack), sample.newValue()) == nil {
+					t.Fatalf("missing %s accepted", field)
+				}
+				fields[field] = original
+			}
+		})
+	}
+}
+
+func TestEnrollmentChallengeObservationCannotAdvancePasswordStageOrExtendBinding(t *testing.T) {
+	expires := time.Date(2026, 9, 24, 12, 5, 0, 0, time.UTC)
+	challenge := AuthenticationChallenge{APIVersion: APIVersion, Kind: "AuthenticationChallenge", ID: "first-challenge", Purpose: "ENROLLMENT", NextStep: "ENROLLMENT", ExpiresAt: expires}
+	contact := NotificationContact{APIVersion: APIVersion, Kind: "NotificationContact", AccountID: "account-a", UserID: "user-a", State: "NONE"}
+	value := EnrollmentChallengeState{Challenge: challenge, NotificationContact: &contact}
+	if ValidateEnrollmentChallengeState(value) != nil {
+		t.Fatal("first address state rejected")
+	}
+	verifiedAt := expires.Add(-time.Minute)
+	contact.State, contact.ResourceVersion, contact.Email, contact.VerifiedAt = "VERIFIED", 1, "first@example.invalid", &verifiedAt
+	value.Enrollment = &TOTPEnrollment{APIVersion: APIVersion, Kind: "TOTPEnrollment", ID: "first-factor", RequestID: "first-intent",
+		FactorRevision: 1, State: "PENDING", CreatedAt: expires.Add(-45 * time.Second), ExpiresAt: expires}
+	if ValidateEnrollmentChallengeState(value) != nil {
+		t.Fatal("remaining absolute challenge window rejected")
+	}
+	for _, change := range []func(*EnrollmentChallengeState){
+		func(v *EnrollmentChallengeState) { v.Challenge.Purpose = "LOGIN" },
+		func(v *EnrollmentChallengeState) { v.Challenge.Purpose = "RECOVERY" },
+		func(v *EnrollmentChallengeState) { v.Challenge.NextStep = "PASSWORD_CHANGE" },
+		func(v *EnrollmentChallengeState) { v.NotificationContact = nil },
+		func(v *EnrollmentChallengeState) { v.NotificationContact.State = "NONE" },
+		func(v *EnrollmentChallengeState) {
+			late := v.Enrollment.CreatedAt.Add(time.Microsecond)
+			v.NotificationContact.VerifiedAt = &late
+		},
+		func(v *EnrollmentChallengeState) { v.Enrollment.FactorRevision = 2 },
+		func(v *EnrollmentChallengeState) { v.Enrollment.ExpiresAt = v.Enrollment.ExpiresAt.Add(time.Second) },
+		func(v *EnrollmentChallengeState) { v.Enrollment.ExpiresAt = v.Enrollment.ExpiresAt.Add(-time.Second) },
+		func(v *EnrollmentChallengeState) { v.Enrollment.CreatedAt = v.Enrollment.ExpiresAt },
+		func(v *EnrollmentChallengeState) {
+			v.Enrollment.CreatedAt = v.Enrollment.ExpiresAt.Add(-5*time.Minute - time.Microsecond)
+		},
+		func(v *EnrollmentChallengeState) {
+			v.Enrollment.State = "CONFIRMED"
+			v.Enrollment.CompletedAt = &verifiedAt
+		},
+	} {
+		candidate, copiedContact, copiedEnrollment := value, *value.NotificationContact, *value.Enrollment
+		candidate.NotificationContact, candidate.Enrollment = &copiedContact, &copiedEnrollment
+		change(&candidate)
+		if ValidateEnrollmentChallengeState(candidate) == nil {
+			t.Fatal("observation supplied invalid state or authentication authority")
+		}
+	}
+	password := EnrollmentChallengeState{Challenge: challenge}
+	password.Challenge.NextStep = "PASSWORD_CHANGE"
+	if ValidateEnrollmentChallengeState(password) != nil {
+		t.Fatal("purpose-only password stage rejected")
+	}
+	for _, input := range []EnrollmentChallengeState{value, password} {
+		encoded, err := json.Marshal(input)
+		var decoded EnrollmentChallengeState
+		if err != nil || DecodeRequest(bytes.NewReader(encoded), &decoded) != nil {
+			t.Fatal("valid observation did not round trip")
+		}
+		for _, extra := range []string{`"credential":null`, `"challengeCredential":"secret"`, `"session":null`, `"provisioning":null`, `"recoveryCodes":[]`} {
+			if DecodeRequest(strings.NewReader(strings.TrimSuffix(string(encoded), "}")+`,`+extra+`}`), &decoded) == nil {
+				t.Fatal("inspection exposed secret or login authority")
+			}
+		}
+	}
+	encoded, _ := json.Marshal(password)
+	for _, field := range []string{"notificationContact", "enrollment"} {
+		var decoded EnrollmentChallengeState
+		if DecodeRequest(strings.NewReader(strings.TrimSuffix(string(encoded), "}")+`,"`+field+`":null}`), &decoded) == nil {
+			t.Fatal("password stage accepted a later-state placeholder")
+		}
+	}
+}
+
+func FuzzEnrollmentChallengeRequests(f *testing.F) {
+	samples := enrollmentChallengeRequestSamples()
+	for index, sample := range samples {
+		f.Add(uint8(index), sample.wire)
+	}
+	f.Add(uint8(0), `{"challengeCredential":"one","challengeCredential":"two"}`)
+	f.Fuzz(func(t *testing.T, index uint8, input string) {
+		if len(input) > int(MaxRequestBytes) {
+			return
+		}
+		sample := samples[int(index)%len(samples)]
+		value := sample.newValue()
+		if DecodeRequest(strings.NewReader(input), value) != nil {
+			return
+		}
+		if encoded, err := json.Marshal(value); err == nil || len(encoded) != 0 {
+			t.Fatal("decoded secret could escape ordinary JSON")
+		}
+		encoded, err := sample.encode(value)
+		defer clear(encoded)
+		if err != nil || DecodeRequest(bytes.NewReader(encoded), sample.newValue()) != nil {
+			t.Fatal("accepted input could not use its closed encoder")
+		}
+	})
+}
+
 func securitySettingsContractSamples() []struct {
 	kind, wire string
 	newValue   func() any

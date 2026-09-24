@@ -36,6 +36,34 @@ func newCoreAuthority(repository Repository, config Config) (*Authority, error) 
 	return NewAuthority(repository, config)
 }
 
+func TestLoginChallengeIssuerCannotSubstituteEnrollmentOrRecoveryPurpose(t *testing.T) {
+	tx := newCoreTransaction()
+	service, err := newCoreAuthority(&coreRepository{transaction: tx}, Config{NewID: func(string) (string, error) { return "challenge-issued", nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sample := range []struct {
+		purpose, step string
+		allowed       bool
+	}{
+		{"LOGIN", "TOTP", true}, {"LOGIN", "RECOVER", true},
+		{"LOGIN", "PASSWORD_CHANGE", false},
+		{"ENROLLMENT", "ENROLLMENT", false}, {"ENROLLMENT", "PASSWORD_CHANGE", false},
+		{"RECOVERY", "ENROLLMENT", false},
+	} {
+		tx.loginChallenge = iamv1.AuthenticationChallenge{APIVersion: iamv1.APIVersion, Kind: "AuthenticationChallenge", ID: "challenge-issued",
+			Purpose: sample.purpose, NextStep: sample.step, ExpiresAt: tx.now.Add(5 * time.Minute)}
+		result, err := service.createLoginChallenge(t.Context(), tx, PasswordAttempt{}, "request-one", "sha256:"+strings.Repeat("a", 64))
+		if sample.allowed {
+			if err != nil || iamv1.ValidateLoginResponse(result) != nil {
+				t.Fatal("declared LOGIN purpose rejected", err)
+			}
+		} else if !errors.Is(err, ErrUnavailable) || result.ChallengeCredential.Present() || result.Credential.Present() || result.Challenge != nil {
+			t.Fatal("existing issuer leaked an unsupported purpose or secret", err)
+		}
+	}
+}
+
 func TestTOTPCustodyFencesActualLoginAndSessionNotOnlyReadiness(t *testing.T) {
 	tx := newCoreTransaction()
 	repository := &coreRepository{transaction: tx}
@@ -1514,6 +1542,7 @@ func TestRecoveryCodeMatchUsesCompleteOriginalBatchAndScope(t *testing.T) {
 
 type coreTransaction struct {
 	Transaction
+	loginChallenge          iamv1.AuthenticationChallenge
 	now                     time.Time
 	status                  iamv1.BootstrapStatus
 	contentDigest           string
@@ -1550,6 +1579,10 @@ type coreTransaction struct {
 	totpReservations        []TOTPAttempt
 	denyTOTPReservation     bool
 	totpAttemptReads        int
+}
+
+func (tx *coreTransaction) CreateLoginChallenge(context.Context, LoginChallengeCreation) (iamv1.AuthenticationChallenge, error) {
+	return tx.loginChallenge, nil
 }
 
 func (transaction *coreTransaction) ReadStepUpForVerification(_ context.Context, caller iamv1.Session, id string) (iamv1.StepUp, error) {
