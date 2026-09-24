@@ -5,10 +5,12 @@
 - Updated: 2026-09-25
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/phase3-mfa-enabling`
-- Pushed milestone: `8028738c` (installation consumes the fixed bounded
-  authentication-recovery snapshot contract; Linux installation race and
-  independent [Verification 36049571005](https://github.com/xiak/matrix/actions/runs/36049571005)
-  passed)
+- Pushed milestone: `397d5952` (native one-time join cleanup survives a
+  canceled gate, reports remote failure and passed Linux race plus independent
+  [Verification 36053002247](https://github.com/xiak/matrix/actions/runs/36053002247))
+- Earlier bounded authentication-recovery snapshot consumer: `8028738c`,
+  independently verified by
+  [Verification 36049571005](https://github.com/xiak/matrix/actions/runs/36049571005).
 - Accepted host self-enrollment baseline in this branch's ancestry:
   `be3c4a96b4381426c01cd6315eaa3713c2855982`
 

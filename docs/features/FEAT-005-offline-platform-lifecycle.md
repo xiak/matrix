@@ -531,6 +531,13 @@ to belong to that run. Do not reboot a remote host or its Docker daemon, use
 the 172.30.1.3 ZFS host, or touch Phase 2. A task-local signature proves the
 offline mechanics but is not a production trust-root publication.
 
+The native gate's one-time join transfer now attempts bounded, exact-path
+secret cleanup even when the install context was canceled, and reports a
+failed remote deletion for explicit follow-up. The Linux fake-SSH race gate
+and [Verification 36053002247](https://github.com/xiak/matrix/actions/runs/36053002247)
+passed for `397d5952`; this is test-resource safety evidence, not the final
+combined signed release gate.
+
 ## Incremental acceptance
 
 ### Gate A: release and CLI contract
