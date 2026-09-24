@@ -157,6 +157,10 @@ export interface AccountRepository {
   readPolicy?(credential: string, accountId: string, policyId: string): Promise<AccountPolicyDetail>;
   listPolicyVersions?(credential: string, accountId: string, policyId: string): Promise<AccountPolicyVersionDirectory>;
   readPolicyVersion?(credential: string, accountId: string, policyId: string, versionId: string): Promise<AccountPolicyDetail>;
+  setDefaultPolicyVersion?(credential: string, accountId: string, policyId: string,
+    command: { versionId: string; resourceVersion: number; requestId: string }): Promise<AccountPolicyDetail>;
+  retirePolicyVersion?(credential: string, accountId: string, policyId: string, versionId: string,
+    command: { resourceVersion: number; expectedDefaultVersionId: string; requestId: string }): Promise<AccountPolicyDetail>;
   // Complete current product declarations under the caller's existing policy
   // list permission. There is deliberately no account or revision selector.
   listAuthorizationProfiles(credential: string): Promise<AuthorizationProfileDirectory>;

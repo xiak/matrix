@@ -199,6 +199,14 @@
 .policyMetadataTable td:first-child { min-width: 240px; }
 .policyStatementTable { min-width: 820px; }
 .policyVersionTable code { white-space: normal; overflow-wrap: anywhere; }
+.policyVersionRecovery, .policyVersionReview { display: grid; min-width: 0; gap: var(--xiak-spacing-default); padding: var(--xiak-spacing-comfortable); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); background: var(--xiak-color-bg-panel); }
+.policyVersionRecovery { margin-bottom: var(--xiak-spacing-comfortable); }
+.policyVersionRecovery p, .policyVersionReview p { margin: 0; overflow-wrap: anywhere; }
+.policyVersionAcknowledge { display: flex; flex-wrap: wrap; align-items: center; gap: var(--xiak-spacing-default); padding-top: var(--xiak-spacing-default); border-top: var(--xiak-border-subtle); }
+.policyVersionAcknowledge label { display: flex; align-items: flex-start; gap: var(--xiak-spacing-tight); max-width: 70ch; line-height: 1.6; }
+.policyVersionAcknowledge input { margin-top: .3em; accent-color: var(--xiak-color-accent-text); }
+.policyVersionReview .policyComparison > section { min-width: 0; }
+.policyVersionReview .policyComparison h4 { margin: 0 0 var(--xiak-spacing-tight); }
 .policyStatementTable code, .policyRawDocument code { overflow-wrap: anywhere; white-space: normal; }
 .policyStackedValues { display: grid; gap: var(--xiak-spacing-narrow); min-width: 0; overflow-wrap: anywhere; }
 .policyResolved { display: grid; gap: var(--xiak-spacing-narrow); padding-top: var(--xiak-spacing-tight); border-top: var(--xiak-border-subtle); }

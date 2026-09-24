@@ -1,7 +1,7 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { HttpProblem } from "@/infrastructure/http/jsonRequest";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
 import { useSession, useSessionCredential } from "./SessionProvider";
 import type {
   AccountCommand,
@@ -86,6 +86,35 @@ export type AccountPolicyReadClient = {
   readVersion?(policyId: string, versionId: string): Promise<AccountPolicyReadLoad>;
 };
 
+export type PolicyVersionMutationInput = {
+  kind: "set-default" | "retire";
+  policyId: string;
+  versionId: string;
+  expectedDefaultVersionId: string;
+  resourceVersion: number;
+};
+
+export type PolicyVersionMutationIntent = PolicyVersionMutationInput & {
+  accountId: string;
+  requestId: string;
+  phase: "submitting" | "unknown" | "observing";
+  observation: { resourceVersion: number; defaultVersionId: string; versionIds: string[] } | null;
+  observationError: "forbidden" | "expired" | "unavailable" | null;
+};
+
+export type PolicyVersionMutationResult =
+  | { status: "applied"; detail: AccountPolicyDetail }
+  | { status: "rejected"; reason: "forbidden" | "conflict" | "invalid" | "notFound" | "expired" }
+  | { status: "unknown" | "blocked" };
+
+export type PolicyVersionMutationClient = {
+  pending: PolicyVersionMutationIntent | null;
+  begin(input: PolicyVersionMutationInput): Promise<PolicyVersionMutationResult>;
+  retry(): Promise<PolicyVersionMutationResult>;
+  observe(): Promise<boolean>;
+  acknowledge(): boolean;
+};
+
 export type AccountSecuritySettingsLoad =
   | { status: "ready"; settings: AccountSecuritySettings }
   | { status: "forbidden" | "routeUnavailable" | "unavailable" | "expired" };
@@ -147,6 +176,7 @@ type AccountAccess = {
   permissionBoundaries: UserBoundaryClient | null;
   authorizationProfiles: AuthorizationProfileClient | null;
   policyRead: AccountPolicyReadClient | null;
+  policyVersionMutation: PolicyVersionMutationClient | null;
   accountSecuritySettings: AccountSecuritySettingsClient | null;
   accessKeys: AccessKeyClient | null;
   roles: RoleAccessClient | null;
@@ -228,9 +258,33 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   const directoryRequest = useRef({ users: 0, accounts: 0 });
   // View context survives list/detail navigation, not account/session changes.
   // Keeping it outside React state avoids rerendering the shell on each keystroke.
-  const viewSession = useMemo(() => ({ credential, tenantId, principalId }), [credential, tenantId, principalId]);
+  const viewSession = useMemo(() => ({ credential, tenantId, principalId, sessionRevision }), [credential, tenantId, principalId, sessionRevision]);
+  const currentViewSession = useRef(viewSession);
+  useLayoutEffect(() => { currentViewSession.current = viewSession; }, [viewSession]);
   const [storedRoleSessionRevokeIntent, setStoredRoleSessionRevokeIntent] = useState<{ session: typeof viewSession; intent: RoleSessionRevokeIntent } | null>(null);
   const roleSessionRevokeIntent = storedRoleSessionRevokeIntent?.session === viewSession ? storedRoleSessionRevokeIntent.intent : null;
+  const versionMutationRef = useRef<{ session: typeof viewSession; intent: PolicyVersionMutationIntent } | null>(null);
+  const [storedVersionMutation, setStoredVersionMutation] = useState<typeof versionMutationRef.current>(null);
+  const versionMutationIntent = storedVersionMutation?.session === viewSession ? storedVersionMutation.intent : null;
+  const rememberVersionMutation = useCallback((expectedRequestId: string | null, next: PolicyVersionMutationIntent | null): boolean => {
+    if (currentViewSession.current !== viewSession) return false;
+    const stored = versionMutationRef.current;
+    const current = stored?.session === viewSession ? stored.intent : null;
+    if (expectedRequestId === null) {
+      if (current || !next || next.accountId !== tenantId) return false;
+    } else {
+      if (!current || current.requestId !== expectedRequestId) return false;
+      if (next && (
+        next.requestId !== current.requestId || next.accountId !== current.accountId || next.policyId !== current.policyId ||
+        next.kind !== current.kind || next.versionId !== current.versionId || next.resourceVersion !== current.resourceVersion ||
+        next.expectedDefaultVersionId !== current.expectedDefaultVersionId
+      )) return false;
+    }
+    const updated = next ? { session: viewSession, intent: next } : null;
+    versionMutationRef.current = updated;
+    setStoredVersionMutation(updated);
+    return true;
+  }, [tenantId, viewSession]);
   const changeRoleSessionRevokeIntent = useCallback((expectedRequestId: string | null, next: RoleSessionRevokeIntent | null) => {
     setStoredRoleSessionRevokeIntent((stored) => {
       const current = stored?.session === viewSession ? stored.intent : null;
@@ -458,6 +512,102 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     };
   }, [active, credential, expireSession, repository, scene, sessionRevision, tenantId]);
 
+  const policyVersionMutation = useMemo<PolicyVersionMutationClient | null>(() => {
+    if (!active || !credential || !scene || scene.accountId !== tenantId || repository.workspace ||
+        !repository.setDefaultPolicyVersion || !repository.retirePolicyVersion || !repository.readPolicy || !repository.listPolicyVersions) return null;
+    const accountId = scene.accountId;
+    const owned = (intent: PolicyVersionMutationIntent) => {
+      const stored = versionMutationRef.current;
+      return stored?.session === viewSession && stored.intent.requestId === intent.requestId;
+    };
+    const expire = () => {
+      if (expireSession(credential, sessionRevision)) {
+        setScene(null); setWorkspace(null); setWorkspaceError(null); setSuccess(null); setError("expired");
+      }
+    };
+    const attempt = async (intent: PolicyVersionMutationIntent, retrying: boolean): Promise<PolicyVersionMutationResult> => {
+      try {
+        const detail = intent.kind === "set-default"
+          ? await repository.setDefaultPolicyVersion!(credential, accountId, intent.policyId, {
+            versionId: intent.versionId, resourceVersion: intent.resourceVersion, requestId: intent.requestId
+          })
+          : await repository.retirePolicyVersion!(credential, accountId, intent.policyId, intent.versionId, {
+            resourceVersion: intent.resourceVersion, expectedDefaultVersionId: intent.expectedDefaultVersionId, requestId: intent.requestId
+          });
+        if (!rememberVersionMutation(intent.requestId, null)) return { status: "blocked" };
+        setScene((current) => current?.accountId === accountId ? { ...current,
+          policies: current.policies.map((policy) => policy.id === intent.policyId ? { ...policy, ...detail.policy } : policy)
+        } : current);
+        return { status: "applied", detail };
+      } catch (failure) {
+        if (!owned(intent)) return { status: "blocked" };
+        if (!retrying && failure instanceof HttpProblem && [400, 401, 403, 404, 409, 422].includes(failure.status)) {
+          rememberVersionMutation(intent.requestId, null);
+          if (failure.status === 401) expire();
+          return { status: "rejected", reason: failure.status === 401 ? "expired" : failure.status === 403 ? "forbidden" : failure.status === 404 ? "notFound" : failure.status === 409 ? "conflict" : "invalid" };
+        }
+        rememberVersionMutation(intent.requestId, { ...intent, phase: "unknown", observation: null, observationError: null });
+        if (failure instanceof HttpProblem && failure.status === 401) expire();
+        return { status: "unknown" };
+      }
+    };
+    return {
+      pending: versionMutationIntent,
+      begin(input) {
+        if (input.kind === "retire" && input.versionId === input.expectedDefaultVersionId ||
+            input.kind === "set-default" && input.versionId === input.expectedDefaultVersionId ||
+            !scene.policies.some((policy) => policy.id === input.policyId && policy.management === "CUSTOMER" && policy.accountId === accountId && policy.scope === "TENANT" && policy.status === "ACTIVE")) {
+          return Promise.resolve({ status: "blocked" });
+        }
+        const intent: PolicyVersionMutationIntent = { ...input, accountId, requestId: requestToken("ui-policy-version-"),
+          phase: "submitting", observation: null, observationError: null };
+        if (!rememberVersionMutation(null, intent)) return Promise.resolve({ status: "blocked" });
+        return attempt(intent, false);
+      },
+      retry() {
+        const current = versionMutationRef.current;
+        if (current?.session !== viewSession || current.intent.phase !== "unknown") return Promise.resolve({ status: "blocked" });
+        const intent = { ...current.intent, phase: "submitting" as const, observation: null, observationError: null };
+        if (!rememberVersionMutation(intent.requestId, intent)) return Promise.resolve({ status: "blocked" });
+        return attempt(intent, true);
+      },
+      async observe() {
+        const current = versionMutationRef.current;
+        if (current?.session !== viewSession || current.intent.phase !== "unknown") return false;
+        const intent = { ...current.intent, phase: "observing" as const, observation: null, observationError: null };
+        if (!rememberVersionMutation(intent.requestId, intent)) return false;
+        try {
+          const detail = await repository.readPolicy!(credential, accountId, intent.policyId);
+          const directory = await repository.listPolicyVersions!(credential, accountId, intent.policyId);
+          if (detail.policy.id !== intent.policyId || directory.policy.id !== intent.policyId ||
+              detail.policy.accountId !== accountId || directory.policy.accountId !== accountId ||
+              detail.policy.management !== "CUSTOMER" || directory.policy.management !== "CUSTOMER" ||
+              detail.policy.scope !== "TENANT" || directory.policy.scope !== "TENANT" ||
+              detail.policy.status !== "ACTIVE" || directory.policy.status !== "ACTIVE" ||
+              detail.policy.resourceVersion !== directory.policy.resourceVersion ||
+              detail.policy.defaultVersionId !== directory.policy.defaultVersionId ||
+              detail.version.versionId !== detail.policy.defaultVersionId ||
+              !directory.items.some((item) => item.versionId === directory.policy.defaultVersionId)) throw new Error("INVALID_IAM_RESPONSE");
+          return rememberVersionMutation(intent.requestId, { ...intent, phase: "unknown", observation: {
+            resourceVersion: detail.policy.resourceVersion, defaultVersionId: detail.policy.defaultVersionId,
+            versionIds: directory.items.map((item) => item.versionId)
+          }, observationError: null });
+        } catch (failure) {
+          const observationError = failure instanceof HttpProblem && failure.status === 403 ? "forbidden" :
+            failure instanceof HttpProblem && failure.status === 401 ? "expired" : "unavailable";
+          rememberVersionMutation(intent.requestId, { ...intent, phase: "unknown", observation: null, observationError });
+          if (observationError === "expired") expire();
+          return false;
+        }
+      },
+      acknowledge() {
+        const current = versionMutationRef.current;
+        if (current?.session !== viewSession || current.intent.phase !== "unknown" || !current.intent.observation) return false;
+        return rememberVersionMutation(current.intent.requestId, null);
+      }
+    };
+  }, [active, credential, expireSession, rememberVersionMutation, repository, scene, sessionRevision, tenantId, versionMutationIntent, viewSession]);
+
   const accountSecuritySettings = useMemo<AccountSecuritySettingsClient | null>(() => {
     const reader = repository.accountSecuritySettings;
     if (!active || !credential || !scene || scene.accountId !== tenantId || !principalId || !sessionId || !reader) return null;
@@ -616,6 +766,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     permissionBoundaries,
     authorizationProfiles,
     policyRead,
+    policyVersionMutation,
     accessKeys,
     roles,
     roleSessionRevokeIntent: roleSessionRevokeIntent?.accountId === tenantId ? roleSessionRevokeIntent : null,
@@ -688,7 +839,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       } catch (failure) { setError(accountError(failure)); return false; }
       finally { mutationPending.current = false; setBusy(false); }
     }
-  }), [active, busy, credential, error, loading, repository, scene, success, tenantId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, permissionBoundaries, authorizationProfiles, policyRead, accountSecuritySettings, accessKeys, roles, roleSessionRevokeIntent, changeRoleSessionRevokeIntent, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
+  }), [active, busy, credential, error, loading, repository, scene, success, tenantId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, permissionBoundaries, authorizationProfiles, policyRead, policyVersionMutation, accountSecuritySettings, accessKeys, roles, roleSessionRevokeIntent, changeRoleSessionRevokeIntent, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
 
   return <AccountCapabilitiesContext.Provider value={capabilities}>
     <AccountAccessContext.Provider value={value}>{children}</AccountAccessContext.Provider>

@@ -1202,6 +1202,56 @@ describe("IAM HTTP account boundary", () => {
     }
   });
 
+  it("binds default selection and non-default retirement to the exact customer policy revision", async () => {
+    const document = { languageVersion: "1", scope: "TENANT", statements: [{
+      sid: "read-applications", effect: "ALLOW", actions: ["paas.application.read"],
+      resources: [{ kind: "APPLICATION", match: "ANY_IN_AUTHORITY" }]
+    }] };
+    const current = { policyId: customerPolicy.id, versionId: customerPolicy.defaultVersionId, document,
+      contentDigest: `sha256:${"a".repeat(64)}`, contractVersion: 1 };
+    const earlier = { ...current, versionId: "version-a", contentDigest: `sha256:${"b".repeat(64)}` };
+    const selected = { apiVersion, kind: "PolicyDetail", policy: { ...customerPolicy,
+      defaultVersionId: earlier.versionId, resourceVersion: customerPolicy.resourceVersion + 1 }, version: earlier };
+    let fetcher = reply(selected);
+    const command = { versionId: earlier.versionId, resourceVersion: customerPolicy.resourceVersion, requestId: "ui-select-version-fixed" };
+    const result = await httpAccountRepository.setDefaultPolicyVersion!("bearer", account.id, customerPolicy.id, command);
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/policies/customer.build:set-default-version");
+    expect(firstRequest(fetcher)[1].method).toBe("POST");
+    expect(requestBody(fetcher)).toEqual(command);
+    expect(result.policy.defaultVersionId).toBe(earlier.versionId);
+
+    const retired = { apiVersion, kind: "PolicyDetail", policy: { ...customerPolicy,
+      resourceVersion: customerPolicy.resourceVersion + 1 }, version: current };
+    fetcher = reply(retired);
+    const retirement = { resourceVersion: customerPolicy.resourceVersion,
+      expectedDefaultVersionId: customerPolicy.defaultVersionId, requestId: "ui-retire-version-fixed" };
+    await httpAccountRepository.retirePolicyVersion!("bearer", account.id, customerPolicy.id, earlier.versionId, retirement);
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/policies/customer.build/versions/version-a");
+    expect(firstRequest(fetcher)[1].method).toBe("DELETE");
+    expect(requestBody(fetcher)).toEqual({ resourceVersion: retirement.resourceVersion, requestId: retirement.requestId });
+
+    for (const invalid of [
+      { ...selected, policy: { ...selected.policy, accountId: "foreign-account" } },
+      { ...selected, policy: { ...selected.policy, resourceVersion: customerPolicy.resourceVersion + 2 } },
+      { ...selected, policy: { ...selected.policy, defaultVersionId: customerPolicy.defaultVersionId }, version: current },
+      { ...selected, policy: { ...selected.policy, management: "SYSTEM" } }
+    ]) {
+      reply(invalid);
+      await expect(httpAccountRepository.setDefaultPolicyVersion!("bearer", account.id, customerPolicy.id, command)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+    for (const invalid of [
+      { ...retired, policy: { ...retired.policy, resourceVersion: customerPolicy.resourceVersion + 2 } },
+      { ...retired, policy: { ...retired.policy, defaultVersionId: earlier.versionId }, version: earlier },
+      { ...retired, policy: { ...retired.policy, management: "SYSTEM" } }
+    ]) {
+      reply(invalid);
+      await expect(httpAccountRepository.retirePolicyVersion!("bearer", account.id, customerPolicy.id, earlier.versionId, retirement)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+    const noRequest = vi.fn(); vi.stubGlobal("fetch", noRequest);
+    await expect(httpAccountRepository.retirePolicyVersion!("bearer", account.id, customerPolicy.id, current.versionId, retirement)).rejects.toThrow("INVALID_IAM_REQUEST");
+    expect(noRequest).not.toHaveBeenCalled();
+  });
+
   it("reads the complete current authorization profiles without an account or version selector", async () => {
     const fetcher = reply({ apiVersion, kind: "AuthorizationProfileList", accountId: account.id, items: [profileEntry("iam"), profileEntry("paas")] });
     const result = await httpAccountRepository.listAuthorizationProfiles("bearer");

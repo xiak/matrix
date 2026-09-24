@@ -1742,6 +1742,35 @@ export const httpAccountRepository: AccountRepository = {
   async readPolicyVersion(credential, accountId, policyId, versionId) {
     return parsePolicyVersionDetail(await requestJSON<unknown>(`/api/iam/v1/policies/${encodeURIComponent(accountIdentifier(policyId))}/versions/${encodeURIComponent(accountIdentifier(versionId))}`, { headers: accountHeaders(credential) }), accountIdentifier(accountId), policyId, versionId);
   },
+  async setDefaultPolicyVersion(credential, accountId, policyId, command) {
+    const resourceVersion = accountVersion(command.resourceVersion);
+    if (resourceVersion === Number.MAX_SAFE_INTEGER) throw new Error("INVALID_IAM_REQUEST");
+    const versionId = accountIdentifier(command.versionId);
+    const detail = parsePolicyDetail(await requestJSON<unknown>(
+      `/api/iam/v1/policies/${encodeURIComponent(accountIdentifier(policyId))}:set-default-version`, {
+        method: "POST", headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
+        body: JSON.stringify({ versionId, resourceVersion, requestId: accountIdentifier(command.requestId) })
+      }
+    ), accountIdentifier(accountId), policyId);
+    if (detail.policy.management !== "CUSTOMER" || detail.policy.accountId !== accountId ||
+        detail.policy.resourceVersion !== resourceVersion + 1 || detail.policy.defaultVersionId !== versionId) throw new Error("INVALID_IAM_RESPONSE");
+    return detail;
+  },
+  async retirePolicyVersion(credential, accountId, policyId, versionId, command) {
+    const resourceVersion = accountVersion(command.resourceVersion);
+    if (resourceVersion === Number.MAX_SAFE_INTEGER) throw new Error("INVALID_IAM_REQUEST");
+    const expectedDefaultVersionId = accountIdentifier(command.expectedDefaultVersionId);
+    if (versionId === expectedDefaultVersionId) throw new Error("INVALID_IAM_REQUEST");
+    const detail = parsePolicyDetail(await requestJSON<unknown>(
+      `/api/iam/v1/policies/${encodeURIComponent(accountIdentifier(policyId))}/versions/${encodeURIComponent(accountIdentifier(versionId))}`, {
+        method: "DELETE", headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
+        body: JSON.stringify({ resourceVersion, requestId: accountIdentifier(command.requestId) })
+      }
+    ), accountIdentifier(accountId), policyId);
+    if (detail.policy.management !== "CUSTOMER" || detail.policy.accountId !== accountId ||
+        detail.policy.resourceVersion !== resourceVersion + 1 || detail.policy.defaultVersionId !== expectedDefaultVersionId) throw new Error("INVALID_IAM_RESPONSE");
+    return detail;
+  },
   async listAuthorizationProfiles(credential) {
     return parseAuthorizationProfileDirectory(await requestJSON<unknown>("/api/iam/v1/authorization-profiles", { headers: accountHeaders(credential) }));
   },

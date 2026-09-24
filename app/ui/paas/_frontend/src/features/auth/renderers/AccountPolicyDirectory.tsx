@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Alert, Badge, Button, Card, ContentPage, EmptyState, Table, TablePagination, TableSkeleton, TableToolbar, Tabs } from "@ui/xiak";
+import { ActionMenu, Alert, Badge, Button, Card, ContentPage, EmptyState, Table, TablePagination, TableSkeleton, TableToolbar, Tabs } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
-import { useAccountAccess, type AccountPolicyReadClient, type AccountPolicyReadLoad, type AccountPolicyVersionDirectoryLoad } from "../application/AccountAccessProvider";
+import { useAccountAccess, type AccountPolicyReadClient, type AccountPolicyReadLoad, type AccountPolicyVersionDirectoryLoad, type PolicyVersionMutationClient, type PolicyVersionMutationResult } from "../application/AccountAccessProvider";
 import type { AccountPolicy, AccountPolicyVersion } from "../domain/accounts";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
 import { WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
@@ -13,6 +13,85 @@ import styles from "./AccountAccessRenderer.module.css";
 
 type PolicyDetailState = { status: "loading" } | AccountPolicyReadLoad;
 type PolicyVersionDirectoryState = { status: "loading" } | AccountPolicyVersionDirectoryLoad;
+type VersionReview = { kind: "set-default" | "retire"; versionId: string };
+
+function PolicyVersionRecovery({ mutation, onApplied, onInspect }: { mutation: PolicyVersionMutationClient; onApplied(): void; onInspect(policyId: string): void }) {
+  const t = useTranslations("AccountPolicyDirectory");
+  const pending = mutation.pending;
+  const [acknowledged, setAcknowledged] = useState(false);
+  const [feedback, setFeedback] = useState<string | null>(null);
+  const [showBusy, setShowBusy] = useState(false);
+  const heading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (pending?.phase !== "submitting") return;
+    const timer = window.setTimeout(() => setShowBusy(true), 250);
+    return () => window.clearTimeout(timer);
+  }, [pending?.phase, pending?.requestId]);
+  useEffect(() => {
+    if (pending?.phase !== "unknown") return;
+    const timer = window.setTimeout(() => heading.current?.focus({ preventScroll: true }), 0);
+    return () => window.clearTimeout(timer);
+  }, [pending?.phase]);
+  if (!pending) return null;
+  if (pending.phase === "submitting" && !showBusy) return null;
+  const busy = pending.phase !== "unknown";
+  const handleRetry = async () => {
+    setFeedback(null); setAcknowledged(false); setShowBusy(true);
+    const result = await mutation.retry();
+    if (result.status === "applied") onApplied();
+    else if (result.status === "blocked") setFeedback(t("mutationBlocked"));
+  };
+  return <section className={styles.policyVersionRecovery} aria-label={t("recoveryTitle")}>
+    <Alert status="warning">{t(pending.phase === "submitting" ? "mutationSubmitting" : pending.phase === "observing" ? "observationLoading" : "mutationUnknown")}</Alert>
+    <h2 ref={heading} tabIndex={-1} className={styles.stepTitle}>{t("recoveryTitle")}</h2>
+    <p>{t("pendingIntent", { kind: t(pending.kind === "set-default" ? "setDefault" : "retireVersion"), policy: pending.policyId, version: pending.versionId })}</p>
+    <p className={styles.note}>{t("unknownExplanation")}</p>
+    {pending.observation ? <div className={styles.catalogNotice}>
+      <p>{t("observedCurrent", { version: pending.observation.defaultVersionId, revision: pending.observation.resourceVersion })}</p>
+      <p>{t("observedVersions", { versions: pending.observation.versionIds.join(", ") || "—" })}</p>
+      <Alert status="warning">{t("observationNotProof")}</Alert>
+    </div> : null}
+    {pending.observationError ? <Alert status="danger">{t(`observationErrors.${pending.observationError}`)}</Alert> : null}
+    {feedback ? <Alert status="warning">{feedback}</Alert> : null}
+    <div className={styles.actions}>
+      <Button variant="secondary" disabled={busy} onClick={() => void handleRetry()}>{t("retryOriginal")}</Button>
+      <Button variant="secondary" disabled={busy} onClick={() => { setFeedback(null); setAcknowledged(false); void mutation.observe(); }}>{t("rereadCurrent")}</Button>
+      <Button variant="ghost" onClick={() => onInspect(pending.policyId)}>{t("inspectAffectedPolicy")}</Button>
+    </div>
+    {pending.observation ? <div className={styles.policyVersionAcknowledge}>
+      <label><input type="checkbox" checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} /> {t("acknowledgeUnknown")}</label>
+      <Button variant="secondary" disabled={!acknowledged || busy} onClick={() => { if (mutation.acknowledge()) onApplied(); }}>{t("endOldIntent")}</Button>
+    </div> : null}
+  </section>;
+}
+
+function VersionMutationReview({ review, policy, versions, busy, error, onSubmit, onCancel }: {
+  review: VersionReview; policy: AccountPolicy; versions: AccountPolicyVersion[]; busy: boolean; error: string | null;
+  onSubmit(): void; onCancel(): void;
+}) {
+  const t = useTranslations("AccountPolicyDirectory");
+  const heading = useRef<HTMLHeadingElement>(null);
+  useLayoutEffect(() => { heading.current?.focus({ preventScroll: true }); }, []);
+  const current = versions.find((item) => item.versionId === policy.defaultVersionId);
+  const target = versions.find((item) => item.versionId === review.versionId);
+  if (!current || !target || current.versionId === target.versionId) return <Alert status="danger">{t("reviewStale")}</Alert>;
+  return <section className={styles.policyVersionReview} aria-label={t("reviewTitle")}>
+    <div className={styles.catalogDetailHeading}><h3 ref={heading} tabIndex={-1} className={styles.stepTitle}>{t(review.kind === "set-default" ? "reviewSetDefault" : "reviewRetire", { version: review.versionId })}</h3><Badge>{t("revisionLabel", { revision: policy.resourceVersion })}</Badge></div>
+    <Alert status="warning">{t(review.kind === "set-default" ? "setDefaultImpact" : "retireImpact")}</Alert>
+    <p className={styles.note}>{t("authorizationNotice")}</p>
+    <dl className={styles.catalogFacts}>
+      <div><dt>{t("currentDefault")}</dt><dd><code>{current.versionId}</code></dd></div>
+      <div><dt>{t("targetVersion")}</dt><dd><code>{target.versionId}</code></dd></div>
+      <div><dt>{t("digest")}</dt><dd><code>{target.contentDigest}</code></dd></div>
+    </dl>
+    <details className={styles.policyRawDocument}><summary>{t("compareDocuments")}</summary><div className={styles.policyComparison}>
+      <section><h4>{t("currentDocument", { version: current.versionId })}</h4><pre tabIndex={0}>{JSON.stringify(current.document, null, 2)}</pre></section>
+      <section><h4>{t("targetDocument", { version: target.versionId })}</h4><pre tabIndex={0}>{JSON.stringify(target.document, null, 2)}</pre></section>
+    </div></details>
+    {error ? <Alert status="danger">{error}</Alert> : null}
+    <div className={styles.actions}><Button variant={review.kind === "retire" ? "danger" : "primary"} disabled={busy || Boolean(error)} onClick={onSubmit}>{t(review.kind === "set-default" ? "confirmSetDefault" : "confirmRetire")}</Button><Button variant="secondary" disabled={busy} onClick={onCancel}>{t("cancel")}</Button></div>
+  </section>;
+}
 
 function PolicyStatementTable({ version }: { version: AccountPolicyVersion }) {
   const t = useTranslations("AccountPolicyDirectory");
@@ -49,10 +128,13 @@ function PolicyVersionDocument({ version, title }: { version: AccountPolicyVersi
   </section>;
 }
 
-function AccountPolicyVersions({ policy, listVersions, readVersion }: {
+function AccountPolicyVersions({ policy, listVersions, readVersion, mutation, onApplied, refreshRevision }: {
   policy: AccountPolicy;
   listVersions: NonNullable<AccountPolicyReadClient["listVersions"]>;
   readVersion: NonNullable<AccountPolicyReadClient["readVersion"]>;
+  mutation: PolicyVersionMutationClient | null;
+  onApplied(): void;
+  refreshRevision: number;
 }) {
   const t = useTranslations("AccountPolicyDirectory");
   const [state, setState] = useState<PolicyVersionDirectoryState>({ status: "loading" });
@@ -60,14 +142,18 @@ function AccountPolicyVersions({ policy, listVersions, readVersion }: {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selected, setSelected] = useState<PolicyDetailState>({ status: "loading" });
   const [selectedRevision, setSelectedRevision] = useState(0);
+  const [review, setReview] = useState<VersionReview | null>(null);
+  const [mutationBusy, setMutationBusy] = useState(false);
+  const [mutationError, setMutationError] = useState<string | null>(null);
   const title = useRef<HTMLHeadingElement>(null);
   const list = useRef<HTMLDivElement>(null);
   const opener = useRef<string | null>(null);
+  const reviewOpener = useRef<string | null>(null);
   useEffect(() => {
     let current = true;
     void listVersions(policy.id).then((result) => { if (current) setState(result); });
     return () => { current = false; };
-  }, [listVersions, policy.id, revision]);
+  }, [listVersions, policy.id, revision, refreshRevision]);
   useEffect(() => {
     if (!selectedId) return;
     let current = true;
@@ -82,6 +168,45 @@ function AccountPolicyVersions({ policy, listVersions, readVersion }: {
       target?.focus(); opener.current = null;
     }
   }, [selectedId]);
+  useLayoutEffect(() => {
+    if (review || !reviewOpener.current) return;
+    const button = Array.from(list.current?.querySelectorAll<HTMLButtonElement>("button[aria-label]") ?? [])
+      .find((item) => item.getAttribute("aria-label") === t("versionActions", { version: reviewOpener.current! }));
+    (button ?? list.current)?.focus({ preventScroll: true });
+    reviewOpener.current = null;
+  }, [review, t]);
+  const submit = async () => {
+    if (!review || !mutation || state.status !== "ready" || mutationBusy) return;
+    const snapshot = state.directory;
+    if (!snapshot.items.some((item) => item.versionId === review.versionId) ||
+        snapshot.policy.defaultVersionId === review.versionId || mutation.pending) {
+      setMutationError(t("reviewStale")); return;
+    }
+    setMutationBusy(true); setMutationError(null);
+    let result: PolicyVersionMutationResult;
+    try {
+      result = await mutation.begin({ ...review, policyId: policy.id,
+        expectedDefaultVersionId: snapshot.policy.defaultVersionId, resourceVersion: snapshot.policy.resourceVersion });
+    } finally { setMutationBusy(false); }
+    if (result.status === "applied") {
+      setReview(null);
+      setState({ status: "ready", directory: { policy: result.detail.policy,
+        items: review.kind === "retire" ? snapshot.items.filter((item) => item.versionId !== review.versionId) : snapshot.items } });
+      setRevision((value) => value + 1); onApplied();
+    } else if (result.status === "unknown") {
+      setReview(null);
+    } else if (result.status === "rejected" && result.reason === "conflict") {
+      setReview(null); setMutationError(t("mutationErrors.conflict")); setState({ status: "loading" }); setRevision((value) => value + 1);
+    } else if (result.status === "rejected") {
+      setMutationError(t(`mutationErrors.${result.reason}`));
+    } else {
+      setMutationError(t("mutationBlocked"));
+    }
+  };
+  if (review && state.status === "ready") return <div className={styles.catalogNotice}>
+    <Button variant="ghost" onClick={() => { setReview(null); setMutationError(null); }} disabled={mutationBusy}>{t("backToVersions")}</Button>
+    <VersionMutationReview review={review} policy={state.directory.policy} versions={state.directory.items} busy={mutationBusy} error={mutationError} onSubmit={() => void submit()} onCancel={() => { setReview(null); setMutationError(null); }} />
+  </div>;
   if (selectedId) return <div className={styles.catalogNotice}>
     <div><Button variant="secondary" onClick={() => setSelectedId(null)}>{t("backToVersions")}</Button></div>
     <h2 ref={title} tabIndex={-1} className={styles.stepTitle}>{t("versionInspection", { version: selectedId })}</h2>
@@ -90,26 +215,31 @@ function AccountPolicyVersions({ policy, listVersions, readVersion }: {
         {selected.status !== "expired" ? <div><Button variant="secondary" onClick={() => { setSelected({ status: "loading" }); setSelectedRevision((value) => value + 1); }}>{t("retry")}</Button></div> : null}</div> :
       <PolicyVersionDocument version={selected.detail.version} title={t("versionDocument", { version: selectedId })} />}
   </div>;
-  return <div ref={list} className={styles.catalogNotice}>
+  return <div ref={list} tabIndex={-1} className={styles.catalogNotice}>
     <p className={styles.note}>{t("versionDirectoryNotice")}</p>
+    {mutationError ? <Alert status="danger">{mutationError}</Alert> : null}
     {state.status === "loading" ? <TableSkeleton label={t("loadingVersions")} rows={3} header={false} /> :
       state.status !== "ready" ? <div className={styles.catalogNotice}><Alert status={state.status === "forbidden" ? "warning" : "danger"}>{t(`versionErrors.${state.status}`)}</Alert>
         {state.status !== "expired" ? <div><Button variant="secondary" onClick={() => { setState({ status: "loading" }); setRevision((value) => value + 1); }}>{t("retry")}</Button></div> : null}</div> : <>
         <p>{t("versionCount", { count: state.directory.items.length })}</p>
         <Table aria-label={t("versionTable")} mobileLayout="stack" className={styles.policyVersionTable}>
-          <thead><tr><th scope="col">{t("versionId")}</th><th scope="col">{t("defaultVersion")}</th><th scope="col">{t("versionContract")}</th><th scope="col">{t("digest")}</th></tr></thead>
+          <thead><tr><th scope="col">{t("versionId")}</th><th scope="col">{t("defaultVersion")}</th><th scope="col">{t("versionContract")}</th><th scope="col">{t("digest")}</th>{mutation ? <th scope="col">{t("actions")}</th> : null}</tr></thead>
           <tbody>{state.directory.items.map((item) => <tr key={item.versionId}>
             <td data-label={t("versionId")}><button className={styles.userLink} data-version-id={item.versionId} onClick={() => { opener.current = item.versionId; setSelected({ status: "loading" }); setSelectedId(item.versionId); }}>{item.versionId}</button></td>
             <td data-label={t("defaultVersion")}>{item.versionId === state.directory.policy.defaultVersionId ? <Badge status="success">{t("currentDefault")}</Badge> : "—"}</td>
             <td data-label={t("versionContract")}>{t("contractVersion", { version: item.contractVersion })}</td>
             <td data-label={t("digest")}><code>{item.contentDigest}</code></td>
+            {mutation ? <td data-label={t("actions")}>{item.versionId !== state.directory.policy.defaultVersionId ? <ActionMenu iconOnly label={t("versionActions", { version: item.versionId })} actions={[
+              { id: "set-default", label: t("setDefault"), disabledReason: mutation.pending ? t("mutationBlocked") : undefined, onSelect: () => { reviewOpener.current = item.versionId; setMutationError(null); setReview({ kind: "set-default", versionId: item.versionId }); } },
+              { id: "retire", label: t("retireVersion"), danger: true, disabledReason: mutation.pending ? t("mutationBlocked") : undefined, onSelect: () => { reviewOpener.current = item.versionId; setMutationError(null); setReview({ kind: "retire", versionId: item.versionId }); } }
+            ]} /> : <span aria-hidden="true">—</span>}</td> : null}
           </tr>)}</tbody>
         </Table>
       </>}
   </div>;
 }
 
-function AccountPolicyDetailView({ policy, client, onBack }: { policy: AccountPolicy; client: AccountPolicyReadClient | null; onBack(): void }) {
+function AccountPolicyDetailView({ policy, client, mutation, refreshRevision, onApplied, onBack }: { policy: AccountPolicy; client: AccountPolicyReadClient | null; mutation: PolicyVersionMutationClient | null; refreshRevision: number; onApplied(): void; onBack(): void }) {
   const t = useTranslations("AccountPolicyDirectory");
   const [state, setState] = useState<PolicyDetailState>({ status: "loading" });
   const [revision, setRevision] = useState(0);
@@ -120,7 +250,7 @@ function AccountPolicyDetailView({ policy, client, onBack }: { policy: AccountPo
     let current = true;
     void client.read(policy.id).then((result) => { if (current) setState(result); });
     return () => { current = false; };
-  }, [client, policy.id, policy.scope, revision]);
+  }, [client, policy.id, policy.scope, revision, refreshRevision]);
   const detail = state.status === "ready" ? state.detail : null;
   const documentRegion = policy.scope === "INSTALLATION" ? <Alert status="info">{t("platformDetailUnavailable")}</Alert> :
     !client ? <Alert status="danger">{t("errors.unavailable")}</Alert> :
@@ -141,7 +271,7 @@ function AccountPolicyDetailView({ policy, client, onBack }: { policy: AccountPo
       <Tabs.Root value={section} onValueChange={(next) => { setSection(next); if (next === "versions") setVersionsMounted(true); }}>
         <Tabs.List aria-label={t("detailSections")}><Tabs.Trigger value="document">{t("defaultDocument")}</Tabs.Trigger><Tabs.Trigger value="versions">{t("versionsTab")}</Tabs.Trigger></Tabs.List>
         <Tabs.Content value="document">{documentRegion}</Tabs.Content>
-        <Tabs.Content value="versions" forceMount={versionsMounted || undefined}>{versionsMounted ? <AccountPolicyVersions policy={policy} listVersions={client.listVersions} readVersion={client.readVersion} /> : null}</Tabs.Content>
+        <Tabs.Content value="versions" forceMount={versionsMounted || undefined}>{versionsMounted ? <AccountPolicyVersions policy={policy} listVersions={client.listVersions} readVersion={client.readVersion} mutation={mutation} refreshRevision={refreshRevision} onApplied={onApplied} /> : null}</Tabs.Content>
       </Tabs.Root> : documentRegion}
   </WorkspaceDetail>;
 }
@@ -149,7 +279,11 @@ function AccountPolicyDetailView({ policy, client, onBack }: { policy: AccountPo
 export function AccountPolicyDirectory({ scene, entityId, onOpen }: { scene: AccountAccessScene; entityId?: string; onOpen(id?: string): void }) {
   const t = useTranslations("AccountPolicyDirectory");
   const toolbarLabels = useTableToolbarLabels();
-  const client = useAccountAccess().policyRead;
+  const access = useAccountAccess();
+  const client = access.policyRead;
+  const mutation = access.policyVersionMutation;
+  const [refreshRevision, setRefreshRevision] = useState(0);
+  const onApplied = () => setRefreshRevision((value) => value + 1);
   const selected = entityId ? scene.policies.find((policy) => policy.id === entityId) : null;
   const [query, setQuery] = useState("");
   const [management, setManagement] = useState("all");
@@ -174,11 +308,12 @@ export function AccountPolicyDirectory({ scene, entityId, onOpen }: { scene: Acc
   const reset = () => { setQuery(""); setManagement("all"); setScope("all"); setStatus("all"); setPage(1); };
   const partial = !scene.tenantPoliciesAvailable || !scene.platformPoliciesAvailable;
 
-  if (entityId) return selected
-    ? <AccountPolicyDetailView key={`${client?.accountId ?? scene.accountId}:${client?.sessionRevision ?? "none"}:${entityId}`} policy={selected} client={client} onBack={() => onOpen()} />
-    : <EmptyState title={t("notFound")} description={t("notFoundHint")} action={<Button variant="secondary" onClick={() => onOpen()}>{t("back")}</Button>} />;
+  const recovery = mutation?.pending ? <PolicyVersionRecovery key={mutation.pending.requestId} mutation={mutation} onApplied={onApplied} onInspect={(id) => onOpen(id)} /> : null;
+  if (entityId) return <>{recovery}{selected
+    ? <AccountPolicyDetailView key={`${client?.accountId ?? scene.accountId}:${client?.sessionRevision ?? "none"}:${entityId}`} policy={selected} client={client} mutation={mutation} refreshRevision={refreshRevision} onApplied={onApplied} onBack={() => onOpen()} />
+    : <EmptyState title={t("notFound")} description={t("notFoundHint")} action={<Button variant="secondary" onClick={() => onOpen()}>{t("back")}</Button>} />}</>;
 
-  return <Card>
+  return <>{recovery}<Card>
     <ContentPage.Heading title={t("title")} scrollKey="policy-directory" />
     <Tabs.Root value={section} onValueChange={(next) => { setSection(next); if (next === "profiles") setCatalogMounted(true); }}>
       <Tabs.List aria-label={t("sections")} className={styles.policyDirectoryTabs}><Tabs.Trigger value="policies">{t("policiesTab")}</Tabs.Trigger><Tabs.Trigger value="profiles">{t("profilesTab")}</Tabs.Trigger></Tabs.List>
@@ -211,5 +346,5 @@ export function AccountPolicyDirectory({ scene, entityId, onOpen }: { scene: Acc
       </Tabs.Content>
       <Tabs.Content forceMount={catalogMounted || undefined} value="profiles">{catalogMounted ? <AccountAuthorizationProfileCatalog /> : null}</Tabs.Content>
     </Tabs.Root>
-  </Card>;
+  </Card></>;
 }
