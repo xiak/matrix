@@ -2375,12 +2375,16 @@ describe("CAM-style access workspace", () => {
     expect(screen.queryByLabelText("6 位动态验证码")).toBeNull();
     await user.type(screen.getByLabelText("当前密码"), "demo-password");
     await user.click(screen.getByRole("button", { name: "验证并继续" }));
-    expect(screen.getByRole("heading", { name: "设置身份验证器" })).toBeTruthy();
+    const enrollmentHeading = screen.getByRole("heading", { name: "设置身份验证器" });
+    expect(enrollmentHeading).toBe(document.activeElement);
     expect(screen.getByText(/必须先完成强制改密/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "继续" }));
+    expect(enrollmentHeading).toBe(document.activeElement);
     await user.click(screen.getByRole("button", { name: "已添加，下一步" }));
+    expect(enrollmentHeading).toBe(document.activeElement);
     await user.type(screen.getByLabelText("6 位动态验证码"), "624810");
     await user.click(screen.getByRole("button", { name: "验证并绑定" }));
+    expect(enrollmentHeading).toBe(document.activeElement);
     expect((await extension.read("preview")).personalMfa).toEqual({ factorState: "bound", reauthenticationRequired: true, recoveryState: "idle" });
     const firstCode = extension.recoveryCodes()[0]!;
     const oneTimeCodes = screen.getByText(firstCode).closest("article")!;
@@ -2392,6 +2396,20 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByRole("button", { name: "Enter" })).toBeTruthy();
     expect((await extension.read("preview")).personalMfa).toEqual({ factorState: "bound", reauthenticationRequired: true, recoveryState: "idle" });
   });
+  it("returns focus to the replacement trigger after cancelling either inline stage", async () => {
+    const { user, extension } = await open("settings", { seed: seedBoundAccountRuleOperator });
+    await user.click(screen.getByRole("button", { name: "替换验证器" }));
+    await user.click(screen.getByRole("button", { name: "取消" }));
+    expect(screen.getByRole("button", { name: "替换验证器" })).toBe(document.activeElement);
+    await user.click(screen.getByRole("button", { name: "替换验证器" }));
+    await user.type(screen.getByLabelText("当前密码"), "demo-password");
+    await user.type(screen.getByLabelText("6 位动态验证码"), "624810");
+    await user.click(screen.getByRole("button", { name: "验证并继续" }));
+    expect(await screen.findByRole("heading", { name: "替换身份验证器" })).toBe(document.activeElement);
+    await user.click(screen.getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "替换验证器" })).toBe(document.activeElement));
+    expect((await extension.read("preview")).personalMfa).toMatchObject({ factorState: "bound", reauthenticationRequired: false });
+  });
   it("keeps authenticator replacement inline and reveals rotated recovery codes only after confirmation", async () => {
     const { user, extension } = await open("settings", { seed: seedBoundAccountRuleOperator });
     const oldCodes = extension.recoveryCodes();
@@ -2400,7 +2418,7 @@ describe("CAM-style access workspace", () => {
     await user.type(screen.getByLabelText("当前密码"), "demo-password");
     await user.type(screen.getByLabelText("6 位动态验证码"), "624810");
     await user.click(screen.getByRole("button", { name: "验证并继续" }));
-    expect(await screen.findByRole("heading", { name: "替换身份验证器" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "替换身份验证器" })).toBe(document.activeElement);
     expect((await extension.read("preview")).personalMfa).toMatchObject({ factorState: "bound", reauthenticationRequired: false, pendingReplacement: { accountRuleVersion: 1 } });
     expect(extension.recoveryCodes()).toEqual(oldCodes);
     await user.click(screen.getByRole("button", { name: "继续" }));
@@ -2434,13 +2452,14 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: "已添加，下一步" }));
     await user.type(screen.getByLabelText("6 位动态验证码"), "731942");
     await user.click(screen.getByRole("button", { name: "验证并绑定" }));
-    expect(await screen.findByRole("heading", { name: "本次替换已停止" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "本次替换已停止" })).toBe(document.activeElement);
     expect(screen.getByText(/当前无法证明替换已完成/)).toBeTruthy();
     expect(screen.queryByText("MTRX-DEMO-NOT-A-SECRET")).toBeNull();
     expect(screen.queryByRole("button", { name: "验证并绑定" })).toBeNull();
     expect(execute.mock.calls.filter(([, command]) => command.kind === "confirm-personal-mfa-replacement")).toHaveLength(1);
     await user.click(screen.getByRole("button", { name: "返回安全设置" }));
     expect(screen.getByRole("heading", { name: "验证器替换尚未确认" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "身份验证方法" })).toBe(document.activeElement);
     expect(screen.getByText(/若确认结果不明，不要据此判断旧或新验证器是否有效/)).toBeTruthy();
     expect(extension.recoveryCodes()).toEqual(previousCodes);
   });
@@ -2462,12 +2481,13 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: "已添加，下一步" }));
     await user.type(screen.getByLabelText("6 位动态验证码"), "731942");
     await user.click(screen.getByRole("button", { name: "验证并绑定" }));
-    expect(screen.getByRole("heading", { name: "正在核对替换结果" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "正在核对替换结果" })).toBe(document.activeElement);
     expect(screen.queryByText("MTRX-DEMO-NOT-A-SECRET")).toBeNull();
     expect(screen.queryByRole("button", { name: "验证并绑定" })).toBeNull();
     await act(async () => release());
     expect(screen.queryByRole("heading", { name: "本次替换已停止" })).toBeNull();
     expect(await screen.findByText(extension.recoveryCodes()[0]!)).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "替换身份验证器" })).toBe(document.activeElement);
   });
   it("removes replacement setup material when the account rule changes before confirmation", async () => {
     const { user, extension } = await open("settings", { seed: seedBoundAccountRuleOperator });
@@ -2610,9 +2630,14 @@ describe("CAM-style access workspace", () => {
   it("shows the reviewed rule version and requires a new login after an applied account-rule change", async () => {
     const { user, extension, repository } = await open("settings", { seed: seedBoundAccountRuleOperator });
     await user.click(screen.getByRole("button", { name: "编辑模拟规则" }));
-    await user.click(screen.getByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" }));
+    const ruleInput = screen.getByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" });
+    expect(ruleInput).toBe(document.activeElement);
+    await user.click(ruleInput);
     await user.click(screen.getByRole("button", { name: "审阅规则变更" }));
-    expect(screen.getByRole("heading", { name: "审阅账号安全规则变更" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "审阅账号安全规则变更" })).toBe(document.activeElement);
+    await user.click(screen.getByRole("button", { name: "上一步" }));
+    expect(screen.getByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" })).toBe(document.activeElement);
+    await user.click(screen.getByRole("button", { name: "审阅规则变更" }));
     expect(screen.getByText("规则版本").nextElementSibling?.textContent).toBe("1");
     await user.click(screen.getByRole("button", { name: "继续验证身份" }));
     await user.type(screen.getByLabelText("当前密码"), "demo-password");

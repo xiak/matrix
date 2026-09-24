@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState, type FormEvent } from "react";
+import { useId, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import { useLocale, useTranslations } from "next-intl";
 import { ArrowLeft, ArrowRight, CheckCircle2, LoaderCircle, ShieldCheck } from "lucide-react";
@@ -22,12 +22,15 @@ export function AuthenticationChallengeForm({ returnTo }: { returnTo: string }) 
   const [confirmedPassword, setConfirmedPassword] = useState("");
   const [mismatch, setMismatch] = useState(false);
   const challenge = session.challenge;
+  const heading = useRef<HTMLHeadingElement>(null);
+  const focusStage = session.phase === "reauthentication-required" ? "complete" : session.phase === "challenge-password-required" || session.phase === "changing-challenge-password" ? "password" : challenge ? "code" : "none";
+  useLayoutEffect(() => { heading.current?.focus({ preventScroll: true }); }, [focusStage, challenge?.challenge.id]);
 
   if (session.phase === "reauthentication-required") {
     return <div className={styles.challengeCompletion}>
       <CheckCircle2 aria-hidden="true" />
       <div className={styles.cardHeading}>
-        <h1>{t("challengePasswordChanged")}</h1>
+        <h1 ref={heading} tabIndex={-1}>{t("challengePasswordChanged")}</h1>
         <p>{t("challengeReauthenticateHint")}</p>
       </div>
       <Button block onClick={session.acknowledgeReauthentication} size="large">
@@ -65,7 +68,7 @@ export function AuthenticationChallengeForm({ returnTo }: { returnTo: string }) 
   return <>
     <div className={styles.cardHeading}>
       <span className={styles.challengeIcon}><ShieldCheck aria-hidden="true" /></span>
-      <h1>{t(changingPassword ? "challengePasswordTitle" : "challengeTitle")}</h1>
+      <h1 ref={heading} tabIndex={-1}>{t(changingPassword ? "challengePasswordTitle" : "challengeTitle")}</h1>
       <p>{t(changingPassword ? "challengePasswordHint" : "challengeHint", { time: expiresAt })}</p>
     </div>
     <div className={styles.challengeIdentity}>

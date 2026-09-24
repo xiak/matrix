@@ -30,9 +30,10 @@ export function AccountSecuritySettingsPreview({ workspace }: { workspace: Acces
   const [reviewBaseline, setReviewBaseline] = useState<{ version: number; required: boolean } | null>(null);
   const [localPending, setLocalPending] = useState<PendingAccountRuleChange | null>(null);
   const trigger = useRef<HTMLButtonElement>(null);
+  const ruleInput = useRef<HTMLInputElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const flowHeading = useRef<HTMLHeadingElement>(null);
-  const focus = useRef<"trigger" | "heading" | "flow" | null>(null);
+  const focus = useRef<"trigger" | "input" | "heading" | "flow" | null>(null);
   const changed = required !== workspace.settings.loginProtection;
   const pending = workspace.pendingAccountRuleChange ?? localPending;
   const factorReady = workspace.personalMfa.factorState === "bound" && workspace.personalMfa.recoveryState === "idle";
@@ -50,6 +51,7 @@ export function AccountSecuritySettingsPreview({ workspace }: { workspace: Acces
     const target = focus.current;
     focus.current = null;
     if (target === "trigger") trigger.current?.focus();
+    else if (target === "input") ruleInput.current?.focus();
     else if (target === "flow") flowHeading.current?.focus();
     else heading.current?.focus();
   }, [stage, workspace.settings.loginProtection]);
@@ -61,7 +63,7 @@ export function AccountSecuritySettingsPreview({ workspace }: { workspace: Acces
     setStage("review");
   };
   const backToEdit = () => {
-    focus.current = "trigger";
+    focus.current = "input";
     setStage("edit");
   };
   const save = async () => {
@@ -194,9 +196,9 @@ export function AccountSecuritySettingsPreview({ workspace }: { workspace: Acces
         </dl>
         <Alert>{t("accountMockBoundary")}</Alert>
         {!factorReady ? <Alert status="warning">{t("accountFactorRequired")}</Alert> : workspace.personalMfa.reauthenticationRequired ? <Alert status="warning">{t("accountReauthenticationRequired")}</Alert> : null}
-        <div className={styles.flowActions}>{!factorReady ? <Button onClick={focusPersonalSecurity} variant="secondary">{t("goToPersonalSecurity")}</Button> : workspace.personalMfa.reauthenticationRequired ? <><Button disabled variant="secondary">{t("editAccountRule")}</Button><Button onClick={returnToLogin}>{t("accountReturnToLogin")}</Button></> : <Button disabled={!canChangeRule || access.loading || access.busy} ref={trigger} onClick={() => { setFeedback(null); setRequired(workspace.settings.loginProtection); setScenario("success"); setRequestId(`mock-account-rule-${crypto.randomUUID()}`); setStage("edit"); }}>{t("editAccountRule")}</Button>}</div>
+        <div className={styles.flowActions}>{!factorReady ? <Button onClick={focusPersonalSecurity} variant="secondary">{t("goToPersonalSecurity")}</Button> : workspace.personalMfa.reauthenticationRequired ? <><Button disabled variant="secondary">{t("editAccountRule")}</Button><Button onClick={returnToLogin}>{t("accountReturnToLogin")}</Button></> : <Button disabled={!canChangeRule || access.loading || access.busy} ref={trigger} onClick={() => { setFeedback(null); setRequired(workspace.settings.loginProtection); setScenario("success"); setRequestId(`mock-account-rule-${crypto.randomUUID()}`); focus.current = "input"; setStage("edit"); }}>{t("editAccountRule")}</Button>}</div>
       </div> : <form className={styles.policyForm} onSubmit={(event) => { event.preventDefault(); review(); }}>
-        <Checkbox checked={required} onChange={(event) => { setRequired(event.target.checked); setFeedback(null); }}>{t("requireForUsers")}</Checkbox>
+        <Checkbox ref={ruleInput} checked={required} onChange={(event) => { setRequired(event.target.checked); setFeedback(null); }}>{t("requireForUsers")}</Checkbox>
         <p>{t("requireForUsersHint")}</p>
         {changed && required ? <Alert status="warning">{t("reauthenticationWarning")}</Alert> : null}
         <Alert>{t("accountMockBoundary")}</Alert>

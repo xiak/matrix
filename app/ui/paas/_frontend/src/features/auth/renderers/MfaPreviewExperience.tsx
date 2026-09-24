@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { useFormatter, useTranslations } from "next-intl";
 import {
   AlertTriangle,
@@ -89,8 +89,12 @@ function EnrollmentWizard({ reason, onCancel, onAbandon, onConfirmed, onFinish, 
   const [deadlineReached, setDeadlineReached] = useState(() => reason === "replace" && replacementDeadlineElapsed(replacement?.expiresAt));
   const [confirmationUnknown, setConfirmationUnknown] = useState(false);
   const confirming = useRef(false);
+  const heading = useRef<HTMLHeadingElement>(null);
   const codeId = useId();
   const replacementExpiresAt = replacement?.expiresAt;
+  const stopped = reason === "replace" && step !== 3 && (confirmationUnknown || !replacement?.active || deadlineReached);
+  const visibleStage = reason === "replace" && busy ? "checking" : stopped ? "stopped" : `step-${step}`;
+  useLayoutEffect(() => { heading.current?.focus({ preventScroll: true }); }, [visibleStage]);
   useEffect(() => {
     if (reason !== "replace" || !replacementExpiresAt) return;
     const remaining = Date.parse(replacementExpiresAt) - Date.now();
@@ -122,18 +126,18 @@ function EnrollmentWizard({ reason, onCancel, onAbandon, onConfirmed, onFinish, 
     }
   }
   if (reason === "replace" && busy) return <Card className={styles.flowCard}>
-    <Card.Header><Typography.Title as="h2" level={3}>{t("replacementCheckingTitle")}</Typography.Title><Badge status="info">MOCK</Badge></Card.Header>
+    <Card.Header><h2 className={styles.flowTitle} ref={heading} tabIndex={-1}>{t("replacementCheckingTitle")}</h2><Badge status="info">MOCK</Badge></Card.Header>
     <Card.Body><Alert>{t("replacementCheckingHint")}</Alert></Card.Body>
   </Card>;
-  if (reason === "replace" && step !== 3 && (confirmationUnknown || !replacement?.active || deadlineReached)) return <Card className={styles.flowCard}>
-    <Card.Header><Typography.Title as="h2" level={3}>{t("replacementStoppedTitle")}</Typography.Title><Badge status="warning">MOCK</Badge></Card.Header>
+  if (stopped) return <Card className={styles.flowCard}>
+    <Card.Header><h2 className={styles.flowTitle} ref={heading} tabIndex={-1}>{t("replacementStoppedTitle")}</h2><Badge status="warning">MOCK</Badge></Card.Header>
     <Card.Body className={styles.flowBody}>
       <Alert status="warning">{t(confirmationUnknown ? "replacementOutcomeUnknown" : "replacementNoLongerValid")}</Alert>
       <div className={styles.flowActions}><Button onClick={onAbandon} variant="secondary">{t("returnToSecurity")}</Button></div>
     </Card.Body>
   </Card>;
   return <Card className={styles.flowCard}>
-    <Card.Header><div><Typography.Title as="h2" level={3}>{t(`enrollment.${reason}.title`)}</Typography.Title><Typography.Text tone="muted">{t(`enrollment.${reason}.hint`)}</Typography.Text></div><Badge status="info">MOCK</Badge></Card.Header>
+    <Card.Header><div><h2 className={styles.flowTitle} ref={heading} tabIndex={-1}>{t(`enrollment.${reason}.title`)}</h2><Typography.Text tone="muted">{t(`enrollment.${reason}.hint`)}</Typography.Text></div><Badge status="info">MOCK</Badge></Card.Header>
     <Card.Body className={styles.flowBody}>
       <FlowSteps current={step} />
       {reason === "replace" && replacement?.active && step < 3 ? <p className={styles.boundary}>{t("replacementDeadline")}: {format.dateTime(new Date(replacement.expiresAt), { hour: "2-digit", minute: "2-digit", second: "2-digit", timeZoneName: "short" })}</p> : null}
@@ -214,11 +218,26 @@ export function MfaSecurityPreview({ workspace }: { workspace: AccessWorkspace }
   const [regeneratedCodes, setRegeneratedCodes] = useState<string[] | null>(null);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [verifiedNotificationAddress, setVerifiedNotificationAddress] = useState<string | null>(null);
+  const personalHeading = useRef<HTMLHeadingElement>(null);
+  const bindTrigger = useRef<HTMLButtonElement>(null);
+  const replaceTrigger = useRef<HTMLButtonElement>(null);
+  const removeTrigger = useRef<HTMLButtonElement>(null);
+  const regenerateTrigger = useRef<HTMLButtonElement>(null);
+  const lastAction = useRef<SecurityStepUpAction | null>(null);
+  const restoreFocus = useRef(false);
   const { factorState, reauthenticationRequired, pendingReplacement } = workspace.personalMfa;
   const required = workspace.settings.loginProtection;
   const blockedActionHint = t(workspace.pendingAccountRuleChange?.status === "UNKNOWN" ? "accountOutcomeUnknownActionBlocked" : "reauthenticationActionBlocked");
 
-  function begin(action: SecurityStepUpAction) { setFeedback(null); setStepUp(action); setEnrollment(null); setRegeneratedCodes(null); }
+  useLayoutEffect(() => {
+    if (stepUp || enrollment || regeneratedCodes || !restoreFocus.current) return;
+    restoreFocus.current = false;
+    const trigger = lastAction.current === "bind" ? bindTrigger.current : lastAction.current === "replace" ? replaceTrigger.current : lastAction.current === "remove" ? removeTrigger.current : lastAction.current === "regenerate" ? regenerateTrigger.current : null;
+    if (trigger && !trigger.disabled) trigger.focus({ preventScroll: true });
+    else personalHeading.current?.focus({ preventScroll: true });
+  }, [stepUp, enrollment, regeneratedCodes]);
+
+  function begin(action: SecurityStepUpAction) { lastAction.current = action; setFeedback(null); setStepUp(action); setEnrollment(null); setRegeneratedCodes(null); }
   async function verified(proofStartedAt: string) {
     if (stepUp === "bind") { setEnrollment("first"); setStepUp(null); return; }
     if (stepUp === "replace") {
@@ -238,12 +257,12 @@ export function MfaSecurityPreview({ workspace }: { workspace: AccessWorkspace }
       if (credential) session.expire(credential);
     }
   }
-  if (enrollment) return <EnrollmentWizard reason={enrollment} replacement={enrollment === "replace" ? { active: Boolean(replacementRequestId && pendingReplacement?.requestId === replacementRequestId && pendingReplacement.accountRuleVersion === workspace.settings.accountRuleVersion && Number.isFinite(Date.parse(pendingReplacement.expiresAt)) && !reauthenticationRequired && !workspace.pendingAccountRuleChange), expiresAt: pendingReplacement?.expiresAt ?? "" } : undefined} verificationCode={enrollment === "replace" ? nextPreviewTotpCode(workspace.personalMfa) : demonstrationCode} onAbandon={() => { setEnrollment(null); setReplacementRequestId(null); }} onCancel={() => {
+  if (enrollment) return <EnrollmentWizard reason={enrollment} replacement={enrollment === "replace" ? { active: Boolean(replacementRequestId && pendingReplacement?.requestId === replacementRequestId && pendingReplacement.accountRuleVersion === workspace.settings.accountRuleVersion && Number.isFinite(Date.parse(pendingReplacement.expiresAt)) && !reauthenticationRequired && !workspace.pendingAccountRuleChange), expiresAt: pendingReplacement?.expiresAt ?? "" } : undefined} verificationCode={enrollment === "replace" ? nextPreviewTotpCode(workspace.personalMfa) : demonstrationCode} onAbandon={() => { restoreFocus.current = true; setEnrollment(null); setReplacementRequestId(null); }} onCancel={() => {
     if (enrollment === "replace" && replacementRequestId) {
       void access.executeWorkspace({ kind: "cancel-personal-mfa-replacement", requestId: replacementRequestId }).then((result) => {
-        if (result) { setEnrollment(null); setReplacementRequestId(null); }
+        if (result) { restoreFocus.current = true; setEnrollment(null); setReplacementRequestId(null); }
       });
-    } else setEnrollment(null);
+    } else { restoreFocus.current = true; setEnrollment(null); }
   }} onConfirmed={async () => {
     if (enrollment === "replace") {
       if (!replacementRequestId) return false;
@@ -253,8 +272,8 @@ export function MfaSecurityPreview({ workspace }: { workspace: AccessWorkspace }
     const result = await access.executeWorkspace({ kind: "confirm-personal-mfa" });
     return result?.recoveryCodes?.length === 10 ? result.recoveryCodes : false;
   }} onFinish={() => { setEnrollment(null); setReplacementRequestId(null); setFeedback(enrollment === "replace" ? "replaced" : "bound"); if (credential) session.expire(credential); }} />;
-  if (regeneratedCodes) return <Card className={styles.flowCard}><Card.Header><Typography.Title as="h2" level={3}>{t("regenerateTitle")}</Typography.Title><Badge status="warning">MOCK</Badge></Card.Header><Card.Body><RecoveryCodes codes={regeneratedCodes} onDone={() => { setRegeneratedCodes(null); setFeedback("regenerated"); }} /></Card.Body></Card>;
-  if (stepUp) return <SecurityStepUpPreview action={stepUp} demonstrationCode={previewTotpCode(workspace.personalMfa)} onCancel={() => setStepUp(null)} onVerified={verified} />;
+  if (regeneratedCodes) return <Card className={styles.flowCard}><Card.Header><Typography.Title as="h2" level={3}>{t("regenerateTitle")}</Typography.Title><Badge status="warning">MOCK</Badge></Card.Header><Card.Body><RecoveryCodes codes={regeneratedCodes} onDone={() => { restoreFocus.current = true; setRegeneratedCodes(null); setFeedback("regenerated"); }} /></Card.Body></Card>;
+  if (stepUp) return <SecurityStepUpPreview action={stepUp} demonstrationCode={previewTotpCode(workspace.personalMfa)} onCancel={() => { restoreFocus.current = true; setStepUp(null); }} onVerified={verified} />;
 
   return <>
     {feedback ? <Alert status="success">{t(`feedback.${feedback}`)}</Alert> : null}
@@ -262,15 +281,15 @@ export function MfaSecurityPreview({ workspace }: { workspace: AccessWorkspace }
     {pendingReplacement ? <Card className={styles.flowCard}><Card.Header><Typography.Title as="h2" level={3}>{t("replacementPendingTitle")}</Typography.Title><Badge status="warning">MOCK</Badge></Card.Header><Card.Body className={styles.form}><Alert status="warning">{t("replacementPendingHint")}</Alert><dl className={styles.facts}><div><dt>{t("replacementRequest")}</dt><dd><code>{pendingReplacement.requestId}</code></dd></div><div><dt>{t("replacementDeadline")}</dt><dd>{format.dateTime(new Date(pendingReplacement.expiresAt), { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", timeZoneName: "short" })}</dd></div></dl><div className={styles.flowActions}><Button onClick={() => void access.executeWorkspace({ kind: "cancel-personal-mfa-replacement", requestId: pendingReplacement.requestId })} variant="secondary">{t("cancelReplacement")}</Button></div></Card.Body></Card> : null}
     <SecurityNotificationAddressPreview onVerified={setVerifiedNotificationAddress} verifiedAddress={verifiedNotificationAddress} />
     <section aria-labelledby="personal-security" className={styles.section}>
-      <div className={styles.sectionHeading}><div><p>{t("personalEyebrow")}</p><h2 id="personal-security" tabIndex={-1}>{t("personalTitle")}</h2><span>{t("personalHint")}</span></div><Badge status={reauthenticationRequired ? "warning" : factorState === "bound" ? "success" : required ? "warning" : "neutral"}>{t(reauthenticationRequired ? "reauthenticate" : factorState === "bound" ? "bound" : required ? "bindingRequired" : "notBound")}</Badge></div>
+      <div className={styles.sectionHeading}><div><p>{t("personalEyebrow")}</p><h2 id="personal-security" ref={personalHeading} tabIndex={-1}>{t("personalTitle")}</h2><span>{t("personalHint")}</span></div><Badge status={reauthenticationRequired ? "warning" : factorState === "bound" ? "success" : required ? "warning" : "neutral"}>{t(reauthenticationRequired ? "reauthenticate" : factorState === "bound" ? "bound" : required ? "bindingRequired" : "notBound")}</Badge></div>
       <div className={styles.securityCards}>
         <Card><Card.Header><div className={styles.cardTitle}><span><Smartphone aria-hidden="true" /></span><div><Typography.Title as="h3" level={3}>{t("authenticatorTitle")}</Typography.Title><Typography.Text tone="muted">{t("authenticatorHint")}</Typography.Text></div></div></Card.Header><Card.Body className={styles.cardBody}>
           <dl className={styles.facts}><div><dt>{t("method")}</dt><dd>{t("totp")}</dd></div><div><dt>{t("state")}</dt><dd>{t(factorState === "bound" ? "bound" : "notBound")}</dd></div><div><dt>{t("scope")}</dt><dd>{t("currentUserOnly")}</dd></div></dl>
-          <div className={styles.actions}>{factorState === "bound" ? <><Button disabled={reauthenticationRequired || Boolean(pendingReplacement)} onClick={() => begin("replace")} title={reauthenticationRequired ? blockedActionHint : undefined} variant="secondary">{t("replace")}</Button><Button disabled={required || reauthenticationRequired || Boolean(pendingReplacement)} onClick={() => begin("remove")} title={reauthenticationRequired ? blockedActionHint : required ? t("removeBlocked") : undefined} variant="ghost">{t("remove")}</Button></> : <Button disabled={!verifiedNotificationAddress || reauthenticationRequired} onClick={() => begin("bind")} title={reauthenticationRequired ? blockedActionHint : !verifiedNotificationAddress ? t("bindRequiresVerifiedAddress") : undefined}>{t("bind")}</Button>}</div>
+          <div className={styles.actions}>{factorState === "bound" ? <><Button ref={replaceTrigger} disabled={reauthenticationRequired || Boolean(pendingReplacement)} onClick={() => begin("replace")} title={reauthenticationRequired ? blockedActionHint : undefined} variant="secondary">{t("replace")}</Button><Button ref={removeTrigger} disabled={required || reauthenticationRequired || Boolean(pendingReplacement)} onClick={() => begin("remove")} title={reauthenticationRequired ? blockedActionHint : required ? t("removeBlocked") : undefined} variant="ghost">{t("remove")}</Button></> : <Button ref={bindTrigger} disabled={!verifiedNotificationAddress || reauthenticationRequired} onClick={() => begin("bind")} title={reauthenticationRequired ? blockedActionHint : !verifiedNotificationAddress ? t("bindRequiresVerifiedAddress") : undefined}>{t("bind")}</Button>}</div>
         </Card.Body></Card>
         <Card><Card.Header><div className={styles.cardTitle}><span><KeyRound aria-hidden="true" /></span><div><Typography.Title as="h3" level={3}>{t("recoveryTitle")}</Typography.Title><Typography.Text tone="muted">{t("recoverySummary")}</Typography.Text></div></div></Card.Header><Card.Body className={styles.cardBody}>
           <dl className={styles.facts}><div><dt>{t("state")}</dt><dd>{t(factorState === "bound" ? "recoveryBatchReady" : "notAvailable")}</dd></div><div><dt>{t("display")}</dt><dd>{t("oneTimeOnly")}</dd></div><div><dt>{t("use")}</dt><dd>{t("restrictedRebind")}</dd></div></dl>
-          <div className={styles.actions}><Button disabled={factorState !== "bound" || reauthenticationRequired || Boolean(pendingReplacement)} onClick={() => begin("regenerate")} title={reauthenticationRequired ? blockedActionHint : undefined} variant="secondary"><RefreshCw aria-hidden="true" />{t("regenerate")}</Button></div>
+          <div className={styles.actions}><Button ref={regenerateTrigger} disabled={factorState !== "bound" || reauthenticationRequired || Boolean(pendingReplacement)} onClick={() => begin("regenerate")} title={reauthenticationRequired ? blockedActionHint : undefined} variant="secondary"><RefreshCw aria-hidden="true" />{t("regenerate")}</Button></div>
         </Card.Body></Card>
       </div>
     </section>

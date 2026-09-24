@@ -79,7 +79,7 @@ describe("branded sign-in flows", () => {
   it("keeps the MFA preview sessionless until the challenge is complete", async () => {
     const { user } = open(previewIamRepository);
     await user.click(screen.getByRole("button", { name: "体验 MFA 登录挑战" }));
-    expect(screen.getByRole("heading", { name: "完成安全验证" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "完成安全验证" })).toBe(document.activeElement);
     expect(screen.getByText(/验证码通过前不会创建登录会话/)).toBeTruthy();
     expect(navigation.replace).not.toHaveBeenCalled();
     await user.type(screen.getByLabelText("6 位动态验证码"), "000000");
@@ -192,12 +192,12 @@ describe("branded sign-in flows", () => {
     await user.click(screen.getByRole("button", { name: "体验 MFA 登录挑战" }));
     await user.type(screen.getByLabelText("6 位动态验证码"), "624811");
     await user.click(screen.getByRole("button", { name: "验证并登录" }));
-    expect(await screen.findByRole("heading", { name: "验证完成，请更新密码" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "验证完成，请更新密码" })).toBe(document.activeElement);
     expect(navigation.replace).not.toHaveBeenCalled();
     await user.type(screen.getByLabelText("新密码", { exact: true }), "Replacement-Password-49!");
     await user.type(screen.getByLabelText("确认新密码"), "Replacement-Password-49!");
     await user.click(screen.getByRole("button", { name: "更新密码" }));
-    expect(await screen.findByRole("heading", { name: "密码已更新" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "密码已更新" })).toBe(document.activeElement);
     expect(navigation.replace).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "返回登录" }));
     expect(screen.getByRole("heading", { name: "登录控制台" })).toBeTruthy();
