@@ -466,6 +466,10 @@ describe("account access", () => {
     expect(admin.getByText("IAM 子用户")).toBeTruthy();
     expect(admin.getByText("ReadOnlyAccess")).toBeTruthy();
     expect(admin.queryByText("主账号")).toBeNull();
+    const userTable = screen.getByRole("table", { name: "租户用户列表" });
+    expect(userTable.getAttribute("data-mobile-layout")).toBe("stack");
+    expect(admin.getByText("ReadOnlyAccess").closest("td")?.getAttribute("data-label")).toBe("策略关联");
+    expect(admin.getByText("控制台访问").closest("td")?.getAttribute("data-label")).toBe("访问方式");
     await user.click(screen.getByRole("button", { name: "筛选" }));
     await user.click(screen.getByRole("combobox", { name: "筛选策略来源" }));
     await user.click(screen.getByRole("option", { name: "未关联授权策略" }));

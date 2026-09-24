@@ -27,8 +27,8 @@ function AccountUserRow({ user, principalId, workspace, grants, checked, disable
       {user.name && user.name !== user.loginName ? <span className={styles.userDisplayName}>{user.name}</span> : null}
     </div><small className={styles.userIdentifier}>{user.id}</small></td>
     <td>{t("child")}{user.id === principalId ? <small>{t("signedIn")}</small> : null}</td>
-    <td><AccountUserAccessMethods user={user} workspace={workspace} /></td>
-    <td>{workspace ? <div className={styles.permissionSources}>
+    <td data-label={t("accessMethods")}><AccountUserAccessMethods user={user} workspace={workspace} /></td>
+    <td data-label={w("policyAssociations")}>{workspace ? <div className={styles.permissionSources}>
       {grants!.direct > 0 ? <span>{w("directPolicyCount", { count: grants!.direct })}</span> : null}
       {grants!.inherited > 0 ? <span>{w("groupPolicyCount", { count: grants!.inherited })}</span> : null}
       {!grants!.direct && !grants!.inherited ? w("noPolicyGrants") : null}
@@ -137,7 +137,7 @@ export function AccountUserDirectory({ scene, entityId, onCreate, onOpen }: { sc
           { id: "role", label: w("filterPolicySource"), value: role, onChange: (value) => changeFilter(() => setRole(value)), options: workspace ? [{ value: "all", label: w("allPolicySources") }, { value: "ungranted", label: w("noPolicyGrants") }, { value: "direct", label: w("directPolicies") }, { value: "inherited", label: w("groupPolicyGrants") }] : [{ value: "all", label: w("allPolicySources") }, { value: "ungranted", label: w("noPolicyGrants") }, { value: "direct", label: w("directPolicies") }, { value: "platform", label: t("platformPolicyAttachments") }] }
         ]} />
       {!access.supportsUserBatch || visible.length > userBatchLimit ? <p className={styles.selectionHint}>{batch(!access.supportsUserBatch ? "unsupportedHint" : "limitHint", { limit: userBatchLimit })}</p> : null}
-      {filtered.length ? <Table aria-label={t("userTable")} aria-busy={filtering || undefined} className={styles.userTable}>
+      {filtered.length ? <Table aria-label={t("userTable")} aria-busy={filtering || undefined} className={styles.userTable} mobileLayout="stack">
           <thead><tr><TableSelectionCell header label={batch("selectPage")} checked={allChecked ? true : visibleCheckedUsers.length ? "mixed" : false} disabled={blocked || visible.length > userBatchLimit} onChange={(checked) => setSelection({ scene, ids: checked ? visible.map((user) => user.id) : [] })} /><th scope="col">{t("user")}</th><th scope="col">{t("userType")}</th><th scope="col">{t("accessMethods")}</th><th scope="col">{w("policyAssociations")}</th><th scope="col">{t("status")}</th></tr></thead>
           <tbody>{visible.map((user) => <AccountUserRow key={user.id} user={user} principalId={scene.currentUserId} workspace={workspace} grants={associations.get(user.id)}
             checked={checkedIds.has(user.id)} disabled={blocked || !checkedIds.has(user.id) && checkedUsers.length >= userBatchLimit}
