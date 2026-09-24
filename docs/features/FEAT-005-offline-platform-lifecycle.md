@@ -281,6 +281,24 @@ fresh externally disconnected signed preparation-to-enabling upgrade,
 rollback-refusal, backup/recovery, crash-resume, restart and cleanup run remain
 required. No Docker engine or remote host was started for the current evidence.
 
+Fixed integration source `7d002ea2` closes a release packaging gap: the
+enabling topology now includes the dedicated IAM notification dispatcher, a
+purpose-only database login, installation-owned email verification keyring,
+and an installation-scoped SMTP channel. Current-release install and upgrade
+require `--security-mail-configuration <protected-file>`; its canonical input
+is bound to the sealed installation and a digest-only journal commitment.
+Completed replay rejects changed configuration. The credential and keyring
+remain outside bundle metadata and command output. The acceptance driver now
+receives an actual authenticated TLS SMTP message, consumes its verification
+code through IAM, binds TOTP, and reauthenticates after factor and backup
+transitions. Its listener and exact private input file are removed on exit.
+The source passed affected Go package tests, the architecture gate, focused
+vet and a self-contained TLS SMTP fixture test. The full Go run initially
+found only an unapproved test dependency; the fixture was changed to use Go
+standard-library TOTP and the affected plus architecture gates then passed.
+No signed runtime or Docker-based release acceptance is claimed for this
+source. The complete Phase 3 extension remains open.
+
 ## Incremental acceptance
 
 ### Gate A: release and CLI contract
