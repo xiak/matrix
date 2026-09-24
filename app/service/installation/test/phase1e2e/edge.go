@@ -161,6 +161,25 @@ type loginWire struct {
 	RequestID string `json:"requestId"`
 }
 
+// The fixed preparation release predates the disjoint MFA login outcome.
+// Keep its response closed instead of accepting both shapes at either stage.
+type preparationLoginResponse struct {
+	Session            iamv1.Session `json:"session"`
+	Credential         iamv1.Secret  `json:"credential"`
+	MustChangePassword *bool         `json:"mustChangePassword"`
+}
+
+func decodePreparationLoginResponse(content []byte) ([]byte, error) {
+	var result preparationLoginResponse
+	if decodeOne(content, &result) != nil || result.MustChangePassword == nil ||
+		iamv1.ValidateSession(result.Session) != nil ||
+		result.Session.PrincipalID != "principal-admin" || result.Session.AccountID != "organization-default" ||
+		result.Session.Status != iamv1.SessionActive || !result.Credential.Present() {
+		return nil, errors.New("preparation IAM login response failed")
+	}
+	return result.Credential.CopyBytes(), nil
+}
+
 type changePasswordWire struct {
 	CurrentPassword string `json:"currentPassword"`
 	NewPassword     string `json:"newPassword"`
@@ -177,17 +196,7 @@ func (client *edgeClient) login(ctx context.Context, password []byte, requestID 
 		return nil, err
 	}
 	defer clear(response.body)
-	var result iamv1.LoginResponse
-	if decodeOne(response.body, &result) != nil || iamv1.ValidateLoginResponse(result) != nil ||
-		result.Session.PrincipalID != "principal-admin" || result.Session.AccountID != "organization-default" ||
-		result.Session.Status != iamv1.SessionActive {
-		return nil, errors.New("IAM login response failed")
-	}
-	credential := result.Credential.CopyBytes()
-	if len(credential) == 0 {
-		return nil, errors.New("IAM login credential failed")
-	}
-	return credential, nil
+	return decodePreparationLoginResponse(response.body)
 }
 
 func (client *edgeClient) changePassword(

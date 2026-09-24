@@ -21,6 +21,7 @@ import (
 
 	nodev1 "github.com/xiak/matrix/api/adapter/node/v1"
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/installation/internal/releasetest"
 	"github.com/xiak/matrix/app/service/installation/release"
@@ -138,6 +139,35 @@ func TestSecurityMailFixtureUsesIsolatedDefaultBridgeGateway(t *testing.T) {
 				t.Fatalf("gateway = %v, %v; want %s", gateway, err, tt.want)
 			}
 		})
+	}
+}
+
+func TestPreparationLoginResponseRejectsTheEnablingWireShape(t *testing.T) {
+	issued := time.Date(2026, 9, 24, 7, 0, 0, 0, time.UTC)
+	wire := struct {
+		Session            iamv1.Session `json:"session"`
+		Credential         string        `json:"credential"`
+		MustChangePassword bool          `json:"mustChangePassword"`
+	}{
+		Session: iamv1.Session{
+			APIVersion: iamv1.APIVersion, Kind: "Session", ID: "session-preparation",
+			AccountID: "organization-default", PrincipalID: "principal-admin",
+			Status: iamv1.SessionActive, IssuedAt: issued, ExpiresAt: issued.Add(time.Hour),
+		},
+		Credential: "preparation-credential-0123456789abcdefghij", MustChangePassword: true,
+	}
+	encoded, err := json.Marshal(wire)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential, err := decodePreparationLoginResponse(encoded)
+	if err != nil || !slices.Equal(credential, []byte(wire.Credential)) {
+		t.Fatal("fixed preparation login response was rejected")
+	}
+	clear(credential)
+	enabling := strings.Replace(string(encoded), `"session":`, `"outcome":"AUTHENTICATED","session":`, 1)
+	if _, err := decodePreparationLoginResponse([]byte(enabling)); err == nil {
+		t.Fatal("enabling login response was accepted as the fixed preparation contract")
 	}
 }
 
