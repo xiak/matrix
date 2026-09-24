@@ -1405,6 +1405,18 @@ function parsePolicyDetail(value: unknown, accountId: string, policyId: string):
   return { policy, version };
 }
 
+function parseCreatedPolicyDetail(value: unknown, accountId: string, command: { displayName: string; document: AccountPolicyDocument }): AccountPolicyDetail {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "policy", "version"]);
+  requireAccountKind(wire, "PolicyDetail");
+  const policy = parsePolicy(wire.policy);
+  const detail = parsePolicyDetail(value, accountId, policy.id);
+  if (policy.management !== "CUSTOMER" || policy.accountId !== accountId || policy.status !== "ACTIVE" ||
+      policy.displayName !== command.displayName ||
+      comparablePolicyDocument(detail.version.document) !== comparablePolicyDocument(command.document)) throw new Error("INVALID_IAM_RESPONSE");
+  return detail;
+}
+
 function parseCustomerVersionPolicy(value: unknown, accountId: string, policyId: string): AccountPolicy {
   const policy = parsePolicy(value);
   if (policy.id !== policyId || policy.management !== "CUSTOMER" || policy.accountId !== accountId ||
@@ -1751,6 +1763,14 @@ export const httpAccountRepository: AccountRepository = {
   },
   async readPolicy(credential, accountId, policyId) {
     return parsePolicyDetail(await requestJSON<unknown>(`/api/iam/v1/policies/${encodeURIComponent(accountIdentifier(policyId))}`, { headers: accountHeaders(credential) }), accountIdentifier(accountId), policyId);
+  },
+  async createPolicy(credential, accountId, command) {
+    const displayName = command.displayName.trim();
+    if (!displayName || displayName !== command.displayName || new TextEncoder().encode(displayName).length > 128) throw new Error("INVALID_IAM_REQUEST");
+    return parseCreatedPolicyDetail(await requestJSON<unknown>("/api/iam/v1/policies", {
+      method: "POST", headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
+      body: JSON.stringify({ displayName, document: command.document, requestId: accountIdentifier(command.requestId) })
+    }), accountIdentifier(accountId), command);
   },
   async listPolicyVersions(credential, accountId, policyId) {
     return parsePolicyVersionDirectory(await requestJSON<unknown>(`/api/iam/v1/policies/${encodeURIComponent(accountIdentifier(policyId))}/versions`, { headers: accountHeaders(credential) }), accountIdentifier(accountId), policyId);

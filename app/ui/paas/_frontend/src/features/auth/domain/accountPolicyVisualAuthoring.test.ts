@@ -46,4 +46,11 @@ describe("lossless catalog-backed policy visual authoring", () => {
     expect(visualDraftHasIncompleteFields({ ...supported.document, statements: [{ ...statement, resources: [{ kind: "APPLICATION", match: "EXACT", id: "" }] }] })).toBe(true);
     expect(visualDraftHasIncompleteFields({ ...supported.document, statements: [{ ...statement, conditions: [{ key: "iam.account-id", operator: "STRING_EQUALS", values: [""] }] }] })).toBe(true);
   });
+  it("permits an empty visual starting point only in a new-policy editor, never at review", () => {
+    const empty = JSON.stringify({ languageVersion: "1", scope: "TENANT", statements: [] });
+    expect(visualDraftFromJSON(empty, catalog).status).toBe("shapeInvalid");
+    const result = visualDraftFromJSON(empty, catalog, true);
+    expect(result.status).toBe("ready");
+    if (result.status === "ready") expect(visualDraftHasIncompleteFields(result.document)).toBe(true);
+  });
 });

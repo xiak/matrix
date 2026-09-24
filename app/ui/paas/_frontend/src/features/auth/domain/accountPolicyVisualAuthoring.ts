@@ -40,6 +40,7 @@ const policyId = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 // This is only a quick authoring check for fields the form can create. IAM's
 // publication validator remains authoritative for the complete policy grammar.
 export function visualDraftHasIncompleteFields(document: AccountPolicyDocument): boolean {
+  if (!document.statements.length) return true;
   const sids = new Set<string>();
   for (const statement of document.statements) {
     if (!policyId.test(statement.sid) || sids.has(statement.sid)) return true;
@@ -68,11 +69,12 @@ export function visualDraftHasIncompleteFields(document: AccountPolicyDocument):
 
 // A JSON-to-visual switch must be lossless. Never drop an unknown property,
 // action family, selector or condition merely because a form cannot show it.
-export function visualDraftFromJSON(text: string, directory: AuthorizationProfileDirectory): VisualDraftResult {
+export function visualDraftFromJSON(text: string, directory: AuthorizationProfileDirectory, allowEmpty = false): VisualDraftResult {
   let parsed: unknown;
   try { parsed = JSON.parse(text); } catch { return { status: "jsonInvalid" }; }
   if (!record(parsed) || !keysAre(parsed, ["languageVersion", "scope", "statements"]) ||
-      parsed.languageVersion !== "1" || parsed.scope !== "TENANT" || !Array.isArray(parsed.statements) || !parsed.statements.length || parsed.statements.length > 64) {
+      parsed.languageVersion !== "1" || parsed.scope !== "TENANT" || !Array.isArray(parsed.statements) ||
+      (!allowEmpty && !parsed.statements.length) || parsed.statements.length > 64) {
     return { status: "shapeInvalid" };
   }
   const groups = visualActionGroups(directory);

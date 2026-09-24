@@ -79,6 +79,26 @@ type AccountPolicyReadFailure = { status: "forbidden" | "routeUnavailable" | "un
 export type AccountPolicyReadLoad = { status: "ready"; detail: AccountPolicyDetail } | AccountPolicyReadFailure;
 export type AccountPolicyVersionDirectoryLoad = { status: "ready"; directory: AccountPolicyVersionDirectory } | AccountPolicyReadFailure;
 
+export type PolicyCreateIntent = {
+  accountId: string;
+  displayName: string;
+  documentJSON: string;
+  requestId: string;
+  phase: "submitting" | "unknown";
+};
+
+export type PolicyCreateResult =
+  | { status: "applied"; detail: AccountPolicyDetail }
+  | { status: "rejected"; reason: "forbidden" | "conflict" | "invalid" | "expired" | "routeUnavailable" }
+  | { status: "unknown" | "blocked" };
+
+export type PolicyCreateClient = {
+  pending: PolicyCreateIntent | null;
+  begin(input: { displayName: string; document: AccountPolicyDocument }): Promise<PolicyCreateResult>;
+  retry(): Promise<PolicyCreateResult>;
+  acknowledge(): boolean;
+};
+
 export type AccountPolicyReadClient = {
   accountId: string;
   sessionRevision: number;
@@ -184,6 +204,7 @@ type AccountAccess = {
   permissionBoundaries: UserBoundaryClient | null;
   authorizationProfiles: AuthorizationProfileClient | null;
   policyRead: AccountPolicyReadClient | null;
+  policyCreate: PolicyCreateClient | null;
   policyVersionMutation: PolicyVersionMutationClient | null;
   accountSecuritySettings: AccountSecuritySettingsClient | null;
   accessKeys: AccessKeyClient | null;
@@ -271,6 +292,24 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   useLayoutEffect(() => { currentViewSession.current = viewSession; }, [viewSession]);
   const [storedRoleSessionRevokeIntent, setStoredRoleSessionRevokeIntent] = useState<{ session: typeof viewSession; intent: RoleSessionRevokeIntent } | null>(null);
   const roleSessionRevokeIntent = storedRoleSessionRevokeIntent?.session === viewSession ? storedRoleSessionRevokeIntent.intent : null;
+  const policyCreateRef = useRef<{ session: typeof viewSession; intent: PolicyCreateIntent } | null>(null);
+  const [storedPolicyCreate, setStoredPolicyCreate] = useState<typeof policyCreateRef.current>(null);
+  const policyCreateIntent = storedPolicyCreate?.session === viewSession ? storedPolicyCreate.intent : null;
+  const rememberPolicyCreate = useCallback((expectedRequestId: string | null, next: PolicyCreateIntent | null): boolean => {
+    if (currentViewSession.current !== viewSession) return false;
+    const stored = policyCreateRef.current;
+    const current = stored?.session === viewSession ? stored.intent : null;
+    if (expectedRequestId === null) {
+      if (current || !next || next.accountId !== tenantId) return false;
+    } else if (!current || current.requestId !== expectedRequestId || next && (
+      next.accountId !== current.accountId || next.requestId !== current.requestId ||
+      next.displayName !== current.displayName || next.documentJSON !== current.documentJSON
+    )) return false;
+    const updated = next ? { session: viewSession, intent: next } : null;
+    policyCreateRef.current = updated;
+    setStoredPolicyCreate(updated);
+    return true;
+  }, [tenantId, viewSession]);
   const versionMutationRef = useRef<{ session: typeof viewSession; intent: PolicyVersionMutationIntent } | null>(null);
   const [storedVersionMutation, setStoredVersionMutation] = useState<typeof versionMutationRef.current>(null);
   const versionMutationIntent = storedVersionMutation?.session === viewSession ? storedVersionMutation.intent : null;
@@ -521,6 +560,61 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       } : undefined
     };
   }, [active, credential, expireSession, repository, scene, sessionRevision, tenantId]);
+
+  const policyCreate = useMemo<PolicyCreateClient | null>(() => {
+    if (!active || !credential || !scene || scene.accountId !== tenantId || repository.workspace || !repository.createPolicy) return null;
+    const accountId = scene.accountId;
+    const expire = () => {
+      if (expireSession(credential, sessionRevision)) {
+        setScene(null); setWorkspace(null); setWorkspaceError(null); setSuccess(null); setError("expired");
+      }
+    };
+    const attempt = async (intent: PolicyCreateIntent, retrying: boolean): Promise<PolicyCreateResult> => {
+      try {
+        const detail = await repository.createPolicy!(credential, accountId, {
+          displayName: intent.displayName, document: JSON.parse(intent.documentJSON) as AccountPolicyDocument, requestId: intent.requestId
+        });
+        if (!rememberPolicyCreate(intent.requestId, null)) return { status: "blocked" };
+        setScene((current) => current?.accountId === accountId ? { ...current,
+          policies: current.policies.some((policy) => policy.id === detail.policy.id) ? current.policies : [...current.policies,
+            { ...detail.policy, owner: "tenant" as const, scopeKind: "tenant" as const, available: true }]
+        } : current);
+        return { status: "applied", detail };
+      } catch (failure) {
+        if (policyCreateRef.current?.session !== viewSession || policyCreateRef.current.intent.requestId !== intent.requestId) return { status: "blocked" };
+        if (!retrying && failure instanceof HttpProblem && [400, 401, 403, 404, 409, 413, 415, 422].includes(failure.status)) {
+          rememberPolicyCreate(intent.requestId, null);
+          if (failure.status === 401) expire();
+          return { status: "rejected", reason: failure.status === 401 ? "expired" : failure.status === 403 ? "forbidden" :
+            failure.status === 404 ? "routeUnavailable" : failure.status === 409 ? "conflict" : "invalid" };
+        }
+        rememberPolicyCreate(intent.requestId, { ...intent, phase: "unknown" });
+        if (failure instanceof HttpProblem && failure.status === 401) expire();
+        return { status: "unknown" };
+      }
+    };
+    return {
+      pending: policyCreateIntent,
+      begin(input) {
+        if (!input.displayName.trim() || input.document.scope !== "TENANT") return Promise.resolve({ status: "blocked" });
+        const intent: PolicyCreateIntent = { accountId, displayName: input.displayName.trim(),
+          documentJSON: JSON.stringify(input.document), requestId: requestToken("ui-policy-create-"), phase: "submitting" };
+        if (!rememberPolicyCreate(null, intent)) return Promise.resolve({ status: "blocked" });
+        return attempt(intent, false);
+      },
+      retry() {
+        const current = policyCreateRef.current;
+        if (current?.session !== viewSession || current.intent.phase !== "unknown") return Promise.resolve({ status: "blocked" });
+        const intent = { ...current.intent, phase: "submitting" as const };
+        if (!rememberPolicyCreate(intent.requestId, intent)) return Promise.resolve({ status: "blocked" });
+        return attempt(intent, true);
+      },
+      acknowledge() {
+        const current = policyCreateRef.current;
+        return current?.session === viewSession && current.intent.phase === "unknown" && rememberPolicyCreate(current.intent.requestId, null);
+      }
+    };
+  }, [active, credential, expireSession, policyCreateIntent, rememberPolicyCreate, repository, scene, sessionRevision, tenantId, viewSession]);
 
   const policyVersionMutation = useMemo<PolicyVersionMutationClient | null>(() => {
     if (!active || !credential || !scene || scene.accountId !== tenantId || repository.workspace ||
@@ -786,6 +880,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     permissionBoundaries,
     authorizationProfiles,
     policyRead,
+    policyCreate,
     policyVersionMutation,
     accessKeys,
     roles,
@@ -859,7 +954,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       } catch (failure) { setError(accountError(failure)); return false; }
       finally { mutationPending.current = false; setBusy(false); }
     }
-  }), [active, busy, credential, error, loading, repository, scene, success, tenantId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, permissionBoundaries, authorizationProfiles, policyRead, policyVersionMutation, accountSecuritySettings, accessKeys, roles, roleSessionRevokeIntent, changeRoleSessionRevokeIntent, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
+  }), [active, busy, credential, error, loading, repository, scene, success, tenantId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, permissionBoundaries, authorizationProfiles, policyRead, policyCreate, policyVersionMutation, accountSecuritySettings, accessKeys, roles, roleSessionRevokeIntent, changeRoleSessionRevokeIntent, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
 
   return <AccountCapabilitiesContext.Provider value={capabilities}>
     <AccountAccessContext.Provider value={value}>{children}</AccountAccessContext.Provider>

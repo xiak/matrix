@@ -26,6 +26,7 @@ import { LiveAccessCredentials } from "./LiveAccessCredentials";
 import { AccessSecuritySettings, AccessUserSso } from "./AccessSecuritySettings";
 import { AccessEnterpriseAccounts } from "./AccessEnterpriseAccounts";
 import { AccountPolicyDirectory } from "./AccountPolicyDirectory";
+import { LivePolicyCreationWizard } from "./LivePolicyCreationWizard";
 import { AccountTenantWorkspace } from "./AccountTenantWorkspace";
 import { OwnSessionsPage } from "./OwnSessionsPage";
 import { LivePersonalSecuritySettings } from "./LivePersonalSecuritySettings";
@@ -127,7 +128,9 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
       view === "create-user" ? <CreateUserWizard onBack={() => onNavigate("users")} /> :
       view === "tenants" ? <TenantDirectory scene={scene} /> :
       view === "settings" ? <><UserSettings key={scene.accountVersion} scene={scene} />{workspace ? <AccessSecuritySettings workspace={workspace} /> : <><LivePersonalSecuritySettings /><LiveAccountSecuritySettings client={access.accountSecuritySettings} /></>}</> :
-      view === "policies" && !workspace ? <AccountPolicyDirectory scene={scene} entityId={entityId} onOpen={(id) => onNavigate("policies", id)} /> :
+      view === "policies" && !workspace ? <AccountPolicyDirectory scene={scene} entityId={entityId} onOpen={(id) => onNavigate("policies", id)} onCreate={() => onNavigate("create-policy")} /> :
+      view === "create-policy" && !workspace && access.policyCreate ? <LivePolicyCreationWizard client={access.policyCreate}
+        onBack={() => onNavigate("policies")} onDone={(id) => onNavigate("policies", id)} /> :
       view === "create-group" ? <GroupCreationWizard workspace={workspace ?? undefined} onBack={() => onNavigate("groups")} onDone={(id) => onNavigate("groups", id)} /> :
       view === "groups" && workspace ? <AccessGroups key={entityId ?? "groups"} entityId={entityId} workspace={workspace} scene={scene} onCreate={() => onNavigate("create-group")} onOpen={onNavigate} /> :
       view === "groups" && access.groups ? <AccountLiveGroups key={`${access.groups.accountId}:${entityId ?? "groups"}`} client={access.groups} entityId={entityId} scene={scene} onCreate={() => onNavigate("create-group")} onOpen={onNavigate} /> :

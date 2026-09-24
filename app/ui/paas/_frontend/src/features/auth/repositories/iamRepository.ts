@@ -156,6 +156,8 @@ export interface AccountRepository {
   // TENANT default-version read only. A list permission is not a read grant;
   // the server independently authorizes the exact Policy target.
   readPolicy?(credential: string, accountId: string, policyId: string): Promise<AccountPolicyDetail>;
+  createPolicy?(credential: string, accountId: string,
+    command: { displayName: string; document: AccountPolicyDocument; requestId: string }): Promise<AccountPolicyDetail>;
   listPolicyVersions?(credential: string, accountId: string, policyId: string): Promise<AccountPolicyVersionDirectory>;
   readPolicyVersion?(credential: string, accountId: string, policyId: string, versionId: string): Promise<AccountPolicyDetail>;
   createPolicyVersion?(credential: string, accountId: string, policyId: string,

@@ -1183,6 +1183,66 @@ describe("account access", () => {
     expect(fixture.setDefaultPolicyVersion).not.toHaveBeenCalled();
   });
 
+  it("creates a live custom policy from an explicitly selected catalog Action without attaching it", async () => {
+    const createPolicy = vi.fn(async (_credential: string, _accountId: string,
+      command: { displayName: string; document: AccountPolicyDocument; requestId: string }): Promise<AccountPolicyDetail> => {
+      const policy: AccountPolicy = { ...tenantPolicy, id: "customer.new", management: "CUSTOMER", accountId: account.id,
+        displayName: command.displayName, defaultVersionId: "version-new", resourceVersion: 1 };
+      return { policy, version: { ...tenantPolicyDetail.version, policyId: policy.id, versionId: policy.defaultVersionId,
+        document: structuredClone(command.document) } };
+    });
+    const listAuthorizationProfiles = vi.fn().mockResolvedValue(profileDirectory());
+    const readPolicy = vi.fn(async (_credential: string, _accountId: string, policyId: string) => {
+      const call = createPolicy.mock.calls[0];
+      if (policyId !== "customer.new" || !call) throw new Error("INVALID_TEST_TARGET");
+      return createPolicy.mock.results[0]!.value;
+    });
+    const { user } = await openAccess(accounts({ createPolicy, readPolicy, listAuthorizationProfiles }), iam(), "policies");
+    await user.click(screen.getByRole("button", { name: "新建自定义策略" }));
+    expect(listAuthorizationProfiles).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByRole("textbox", { name: "策略名称" }), { target: { value: "Application reader" } });
+    await user.click(screen.getByRole("tab", { name: "可视化编辑" }));
+    const action = await screen.findByRole("radio", { name: /paas.application.read/ });
+    await user.click(action);
+    expect(screen.getAllByText("paas.application.read", { selector: "code" }).length).toBeGreaterThan(0);
+    await user.click(screen.getByRole("button", { name: "审阅策略" }));
+    expect(screen.getByText(/可视化声明还有未完成/)).toBeTruthy();
+    await user.type(screen.getByRole("textbox", { name: "资源 ID 或前缀" }), "app-prod");
+    await user.click(screen.getByRole("button", { name: "审阅策略" }));
+    expect(screen.getByRole("heading", { name: "审阅新策略" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "确认创建" }));
+    await waitFor(() => expect(createPolicy).toHaveBeenCalledTimes(1));
+    const submitted = createPolicy.mock.calls[0]![2];
+    expect(submitted.displayName).toBe("Application reader");
+    expect(submitted.document).toEqual({ languageVersion: "1", scope: "TENANT", statements: [{ sid: "statement-1", effect: "ALLOW",
+      actions: ["paas.application.read"], resources: [{ kind: "APPLICATION", match: "EXACT", id: "app-prod" }] }] });
+    expect(submitted.requestId).toMatch(/^ui-policy-create-/);
+    expect(await screen.findByText(/策略 customer.new 已创建/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "查看策略" }));
+    expect(await screen.findByText("customer.new")).toBeTruthy();
+  });
+
+  it("keeps an unknown policy creation frozen across navigation and retries byte-equivalently", async () => {
+    const createPolicy = vi.fn().mockRejectedValueOnce(new HttpProblem(503, "IAM_UNAVAILABLE"))
+      .mockRejectedValueOnce(new HttpProblem(409, "IAM_CONFLICT"));
+    const { user } = await openAccess(accounts({ createPolicy }), iam(), "policies");
+    await user.click(screen.getByRole("button", { name: "新建自定义策略" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "策略名称" }), { target: { value: "Uncertain policy" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "策略声明 JSON" }), { target: { value: JSON.stringify(tenantPolicyDetail.version.document) } });
+    await user.click(screen.getByRole("button", { name: "审阅策略" }));
+    await user.click(screen.getByRole("button", { name: "确认创建" }));
+    expect(await screen.findByRole("heading", { name: "策略创建结果未确认" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "查看策略目录" }));
+    expect(screen.getByRole("button", { name: "新建自定义策略" })).toHaveProperty("disabled", true);
+    await user.click(screen.getByRole("button", { name: "按原请求重试" }));
+    await waitFor(() => expect(createPolicy).toHaveBeenCalledTimes(2));
+    expect(createPolicy.mock.calls[1]).toEqual(createPolicy.mock.calls[0]);
+    expect(screen.getByRole("heading", { name: "策略创建结果未确认" })).toBeTruthy();
+    await user.click(screen.getByRole("checkbox", { name: /我理解结果仍未知/ }));
+    await user.click(screen.getByRole("button", { name: "结束旧意图" }));
+    expect(screen.getByRole("button", { name: "新建自定义策略" })).toHaveProperty("disabled", false);
+  });
+
   it("keeps JSON available when the live catalog is forbidden", async () => {
     const fixture = livePolicyVersions();
     const listAuthorizationProfiles = vi.fn().mockRejectedValue(new HttpProblem(403, "IAM_FORBIDDEN"));
@@ -1193,6 +1253,9 @@ describe("account access", () => {
     await user.click(screen.getByRole("button", { name: "发布新版本" }));
     await user.click(screen.getByRole("tab", { name: "可视化编辑" }));
     expect(await screen.findByText(/无权读取权限能力目录/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "审阅变更" }));
+    expect(screen.getByText(/可视化草稿还有未完成/)).toBeTruthy();
+    expect(fixture.createPolicyVersion).not.toHaveBeenCalled();
     await user.click(screen.getByRole("tab", { name: "JSON 编辑" }));
     expect((screen.getByRole("textbox", { name: "待发布声明 JSON" }) as HTMLTextAreaElement).value).toContain("read-applications");
     expect(fixture.createPolicyVersion).not.toHaveBeenCalled();

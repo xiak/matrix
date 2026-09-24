@@ -23,22 +23,43 @@ function canUseAction(action: AuthorizationProfileAction, statement: Statement):
   return !(statement.conditions ?? []).some((condition) => !(action.conditions ?? []).some((item) => item.key === condition.key));
 }
 
-function StatementFields({ statement, group, onChange }: {
-  statement: Statement; group: VisualActionGroup; onChange(next: Statement): void;
+function ActionChoices({ group, selectedAction, compatible, onSelect }: {
+  group: VisualActionGroup; selectedAction?: string; compatible?: (action: AuthorizationProfileAction) => boolean;
+  onSelect(action: AuthorizationProfileAction): void;
 }) {
   const t = useTranslations("PolicyVisualAuthoring");
   const id = useId();
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+  const filtered = useMemo(() => group.actions.filter((action) => action.action.toLowerCase().includes(query.normalize("NFKC").trim().toLowerCase())), [group.actions, query]);
+  const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const currentPage = Math.min(page, pages);
+  return <>
+    <SearchInput aria-label={t("searchActions")} placeholder={t("searchActions")} value={query} onChange={(event) => { setQuery(event.target.value); setPage(1); }}
+      clearAction={query ? { label: t("clearSearch"), onClear: () => { setQuery(""); setPage(1); } } : undefined} />
+    <div className={styles.actionList}>{filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize).map((action) => {
+      const enabled = compatible?.(action) ?? true;
+      const target = action.resourceShapes.map((shape) => t(`targets.${shape.mode === "INSTANCE" ? "INSTANCE" : shape.collectionUsage ?? "COLLECTION"}`)).join(" · ");
+      return <Radio key={action.action} name={id + "-action"} checked={selectedAction === action.action} disabled={!enabled}
+        title={!enabled ? t("incompatibleAction") : undefined} onChange={() => onSelect(action)}>
+        <span className={styles.actionChoice}><code>{action.action}</code><small>{target}</small></span>
+      </Radio>;
+    })}{!filtered.length ? <p className={styles.note}>{t("noActions")}</p> : null}</div>
+    <TablePagination page={currentPage} pages={pages} pageSize={pageSize} onPageChange={setPage}
+      onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} labels={{ summary: t("page", { page: currentPage, pages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} />
+  </>;
+}
+
+function StatementFields({ statement, group, onChange }: {
+  statement: Statement; group: VisualActionGroup; onChange(next: Statement): void;
+}) {
+  const t = useTranslations("PolicyVisualAuthoring");
+  const id = useId();
   const selected = group.actions.filter((action) => statement.actions.includes(action.action));
   const collectionOnly = selected.length === 1 && selected[0]!.resourceShapes.every((shape) => shape.mode === "COLLECTION");
   const prefixAllowed = selected.every((action) => action.resourceShapes.some((shape) => shape.mode === "INSTANCE" && shape.prefixAllowed));
   const availableConditions = conditionKeys.filter((key) => selected.every((action) => (action.conditions ?? []).some((condition) => condition.key === key)));
-  const filtered = useMemo(() => group.actions.filter((action) => action.action.toLowerCase().includes(query.normalize("NFKC").trim().toLowerCase())), [group.actions, query]);
-  const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
-  const currentPage = Math.min(page, pages);
-  const actions = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
   const nextCondition = availableConditions.flatMap((key) => (key === "iam.current-time" ? timeOperators : stringOperators)
     .map((operator) => ({ key, operator }))).find((candidate) => !(statement.conditions ?? []).some((condition) => condition.key === candidate.key && condition.operator === candidate.operator));
   const updateResource = (index: number, next: Resource) => onChange({ ...statement, resources: statement.resources.map((resource, at) => at === index ? next : resource) });
@@ -56,19 +77,8 @@ function StatementFields({ statement, group, onChange }: {
     <section className={styles.groupSection} aria-label={t("actions")}>
       <div className={styles.sectionHeading}><div><h4>{t("actions")}</h4><p>{t("actionGroup", { product: group.product, kind: group.resourceKind })}</p></div></div>
       <p className={styles.selectedAction}>{t("selectedAction")}: <code>{statement.actions[0]}</code></p>
-      <SearchInput aria-label={t("searchActions")} placeholder={t("searchActions")} value={query} onChange={(event) => { setQuery(event.target.value); setPage(1); }}
-        clearAction={query ? { label: t("clearSearch"), onClear: () => { setQuery(""); setPage(1); } } : undefined} />
-      <div className={styles.actionList}>{actions.length ? actions.map((action) => {
-        const compatible = canUseAction(action, statement);
-        const target = action.resourceShapes.map((shape) => t(`targets.${shape.mode === "INSTANCE" ? "INSTANCE" : shape.collectionUsage ?? "COLLECTION"}`)).join(" · ");
-        return <Radio key={action.action} name={id + "-action"} checked={statement.actions[0] === action.action} disabled={!compatible}
-          title={!compatible ? t("incompatibleAction") : undefined}
-          onChange={() => onChange({ ...statement, actions: [action.action] })}>
-          <span className={styles.actionChoice}><code>{action.action}</code><small>{target}</small></span>
-        </Radio>;
-      }) : <p className={styles.note}>{t("noActions")}</p>}</div>
-      <TablePagination page={currentPage} pages={pages} pageSize={pageSize} onPageChange={setPage}
-        onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} labels={{ summary: t("page", { page: currentPage, pages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} />
+      <ActionChoices group={group} selectedAction={statement.actions[0]} compatible={(action) => canUseAction(action, statement)}
+        onSelect={(action) => onChange({ ...statement, actions: [action.action] })} />
     </section>
     <section className={styles.groupSection} aria-label={t("resources")}>
       <div className={styles.sectionHeading}><div><h4>{t("resources")}</h4><p>{t("resourceHint", { kind: group.resourceKind })}</p></div></div>
@@ -129,19 +139,22 @@ export function AccountPolicyVisualEditor({ document, directory, onChange }: {
   const groups = useMemo(() => visualActionGroups(directory), [directory]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [newGroup, setNewGroup] = useState("0");
+  const [adding, setAdding] = useState(false);
   const [removePending, setRemovePending] = useState(false);
-  const index = Math.min(selectedIndex, document.statements.length - 1);
-  const statement = document.statements[index]!;
-  const group = groups.find((candidate) => candidate.actions.some((action) => action.action === statement.actions[0]))!;
+  const index = Math.max(0, Math.min(selectedIndex, document.statements.length - 1));
+  const statement = document.statements[index];
+  const group = statement ? groups.find((candidate) => candidate.actions.some((action) => action.action === statement.actions[0])) : undefined;
   const replace = (next: Statement) => onChange({ ...document, statements: document.statements.map((item, at) => at === index ? next : item) });
-  const add = () => {
+  const add = (action: AuthorizationProfileAction) => {
     const selected = groups[Number(newGroup)];
-    if (!selected?.actions.length || document.statements.length >= 64) return;
+    if (!selected?.actions.some((candidate) => candidate.action === action.action) || document.statements.length >= 64) return;
     let number = document.statements.length + 1;
     while (document.statements.some((item) => item.sid === `statement-${number}`)) number++;
-    const action = selected.actions[0]!;
-    onChange({ ...document, statements: [...document.statements, { sid: `statement-${number}`, effect: "ALLOW", actions: [action.action], resources: [{ kind: selected.resourceKind, match: "ANY_IN_AUTHORITY" }] }] });
+    const collectionOnly = action.resourceShapes.every((shape) => shape.mode === "COLLECTION");
+    onChange({ ...document, statements: [...document.statements, { sid: `statement-${number}`, effect: "ALLOW", actions: [action.action],
+      resources: [{ kind: selected.resourceKind, match: "EXACT", id: collectionOnly ? "collection" : "" }] }] });
     setSelectedIndex(document.statements.length);
+    setAdding(false);
     setRemovePending(false);
   };
   const remove = () => {
@@ -152,21 +165,26 @@ export function AccountPolicyVisualEditor({ document, directory, onChange }: {
   };
   return <div className={styles.editor}>
     <Alert status="info">{t("catalogNotice")}</Alert>
-    <div className={styles.statementToolbar}>
+    {statement ? <div className={styles.statementToolbar}>
       <FormField id={id + "-statement"} label={t("statement")}>
-        <Select id={id + "-statement"} value={String(index)} onValueChange={(value) => { setSelectedIndex(Number(value)); setRemovePending(false); }}
+        <Select id={id + "-statement"} value={String(index)} onValueChange={(value) => { setSelectedIndex(Number(value)); setRemovePending(false); setAdding(false); }}
           options={document.statements.map((item, at) => ({ value: String(at), label: t("statementOption", { number: at + 1, sid: item.sid }) }))} />
       </FormField>
+      <Button variant="secondary" disabled={document.statements.length >= 64 || !groups.length} onClick={() => setAdding(true)}>{t("addStatement")}</Button>
+      <Button variant="ghost" disabled={document.statements.length <= 1} onClick={() => setRemovePending(true)}>{t("removeStatement")}</Button>
+    </div> : null}
+    {removePending && statement ? <Alert status="warning"><div className={styles.removal}><p>{t("removeStatementConfirm", { sid: statement.sid })}</p><div>
+      <Button variant="danger" onClick={remove}>{t("confirmRemove")}</Button><Button variant="ghost" onClick={() => setRemovePending(false)}>{t("cancelRemove")}</Button>
+    </div></div></Alert> : null}
+    {(!statement || adding) && groups.length ? <section className={styles.groupSection} aria-label={t("chooseActionForNewStatement")}>
+      <div className={styles.sectionHeading}><div><h4>{t("chooseActionForNewStatement")}</h4><p>{t("newStatementHint")}</p></div></div>
       <FormField id={id + "-group"} label={t("newStatementProduct")}>
         <Select id={id + "-group"} value={newGroup} onValueChange={setNewGroup}
           options={groups.map((item, at) => ({ value: String(at), label: `${item.product} · ${item.resourceKind}` }))} />
       </FormField>
-      <Button variant="secondary" disabled={document.statements.length >= 64 || !groups.length} onClick={add}>{t("addStatement")}</Button>
-      <Button variant="ghost" disabled={document.statements.length <= 1} onClick={() => setRemovePending(true)}>{t("removeStatement")}</Button>
-    </div>
-    {removePending ? <Alert status="warning"><div className={styles.removal}><p>{t("removeStatementConfirm", { sid: statement.sid })}</p><div>
-      <Button variant="danger" onClick={remove}>{t("confirmRemove")}</Button><Button variant="ghost" onClick={() => setRemovePending(false)}>{t("cancelRemove")}</Button>
-    </div></div></Alert> : null}
-    <StatementFields key={index} statement={statement} group={group} onChange={replace} />
+      <ActionChoices key={newGroup} group={groups[Number(newGroup)]!} onSelect={add} />
+      {statement ? <div><Button variant="ghost" onClick={() => setAdding(false)}>{t("cancelAdd")}</Button></div> : null}
+    </section> : !statement ? <Alert status="warning">{t("noActions")}</Alert> : null}
+    {statement && group && !adding ? <StatementFields key={index} statement={statement} group={group} onChange={replace} /> : null}
   </div>;
 }
