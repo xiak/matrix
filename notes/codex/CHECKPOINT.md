@@ -3,10 +3,10 @@
 > Non-authoritative portable memory. Validate it against Git and the owning
 > FEAT before continuing.
 
-- Updated: 2026-09-21
+- Updated: 2026-09-24
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `846d23b39b394eb938a94b4ad3e41ddc38b3c229`
+- Pushed UI source: `c5ec1f945cdcd7af61941aafed8da4d7e68f839c`
 
 ## Authoritative route
 
@@ -30,6 +30,13 @@ acceptance. Evidence, limitations and remaining work belong only to the linked
 FEAT owners. Integrate fixed backend contracts while preserving this branch's
 UI, full static host/export and independent MOCK entry; do not replace them
 with another branch's renderer or inherit that branch's UI acceptance.
+
+The current milestone strictly consumes fixed administrator RoleSession
+list/read/revoke contracts while keeping member assumption in its separate
+self-service surface. Service authorization remains an isolated MOCK because
+its tenant mutation and assumption wire is not fixed; its review now exposes
+the exact target Account and the actor/Role/workload/purpose boundary. Detailed
+contract behavior and gate evidence remain only in the linked FEAT owners.
 
 ## Continuation
 
