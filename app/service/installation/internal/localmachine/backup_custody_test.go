@@ -67,7 +67,7 @@ func TestBackupCustodyFailureRemovesUnpublishedPartialArtifacts(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("local-machine backup custody process targets Linux")
 	}
-	for index, mode := range []string{"invalid", "premature", "release-failure"} {
+	for index, mode := range []string{"invalid", "premature", "release-failure", "dump-failure"} {
 		t.Run(mode, func(t *testing.T) {
 			plan, expectation := configuredPlatformStartFixture(t)
 			runtimeBoundary := newPlatformStartRuntime(plan, expectation)
@@ -86,6 +86,26 @@ func TestBackupCustodyFailureRemovesUnpublishedPartialArtifacts(t *testing.T) {
 				_, statErr := os.Lstat(filepath.Join(plan.Root, filepath.FromSlash(layout.BackupDirectory), name))
 				if !errors.Is(statErr, os.ErrNotExist) {
 					t.Fatalf("broken custody lifecycle retained %s: %v", name, statErr)
+				}
+			}
+			if mode == "dump-failure" {
+				if runtimeBoundary.backupStreams != 1 || runtimeBoundary.backupCustodyRuns != 1 ||
+					runtimeBoundary.backupCustodyAborts != 1 || runtimeBoundary.backupCustodyReleases != 0 {
+					t.Fatal("interrupted dump did not abort its exact held snapshot")
+				}
+				runtimeBoundary.backupCustodyMode = ""
+				if err := effects.CreateBackup(t.Context(), platformcommand.BackupPlan{
+					InstalledPlan: installedPlanFrom(plan), BackupID: backupID,
+					CreatedAt: time.Date(2026, 9, 20, 8, index, 0, 0, time.UTC),
+				}); err != nil {
+					t.Fatalf("resume fixed backup after interrupted dump: %v", err)
+				}
+				if runtimeBoundary.backupStreams != 2 || runtimeBoundary.backupCustodyRuns != 2 ||
+					runtimeBoundary.backupCustodyAborts != 1 || runtimeBoundary.backupCustodyReleases != 1 {
+					t.Fatal("backup retry reused a failed snapshot or omitted its release")
+				}
+				if _, err := effects.InspectBackup(t.Context(), installedPlanFrom(plan), backupID); err != nil {
+					t.Fatalf("resumed backup is not authenticated: %v", err)
 				}
 			}
 		})

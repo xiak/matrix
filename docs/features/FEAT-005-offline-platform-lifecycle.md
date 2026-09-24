@@ -306,6 +306,13 @@ failures, not completed enrollment. This proves the concurrent creation and
 rotation snapshot boundary, but not signed restore or every crash/resume
 point above.
 
+The Linux backup adapter gate also injects a partially written PostgreSQL
+dump failure after snapshot export. It verifies the lease is aborted, no
+partial or published backup remains, and retry with the same backup ID takes
+a new snapshot and publishes an authenticated backup. This is a bounded
+provider-failure/resume check, not a signed process-kill or restore-stage
+crash claim.
+
 ## Incremental acceptance
 
 ### Gate A: release and CLI contract

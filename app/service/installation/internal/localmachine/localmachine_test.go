@@ -3865,6 +3865,7 @@ type platformStartRuntime struct {
 	backupStreams             int
 	backupCustodyRuns         int
 	backupCustodyReleases     int
+	backupCustodyAborts       int
 	backupLease               installationv1.TOTPBackupSnapshotLease
 	backupLeaseError          error
 	backupCustodyMode         string
@@ -4611,6 +4612,7 @@ func (runtimeBoundary *platformStartRuntime) RunTo(
 		}
 		frame, err := io.ReadAll(io.LimitReader(input, int64(len(installationv1.TOTPBackupCustodyReleaseFrame)+1)))
 		if err != nil || string(frame) != installationv1.TOTPBackupCustodyReleaseFrame {
+			runtimeBoundary.backupCustodyAborts++
 			return true, errors.New("TOTP backup custody release frame is invalid")
 		}
 		if runtimeBoundary.backupCustodyMode == "release-failure" {
@@ -4706,6 +4708,10 @@ func (runtimeBoundary *platformStartRuntime) RunTo(
 		return false, errors.New("platform backup streaming invocation is invalid")
 	}
 	runtimeBoundary.backupStreams++
+	if runtimeBoundary.backupCustodyMode == "dump-failure" {
+		_, _ = output.Write(runtimeBoundary.databaseDump[:len(runtimeBoundary.databaseDump)/2])
+		return true, errors.New("PostgreSQL backup dump interrupted")
+	}
 	_, err := output.Write(runtimeBoundary.databaseDump)
 	return true, err
 }

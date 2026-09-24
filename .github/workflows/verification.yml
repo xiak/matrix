@@ -63,7 +63,8 @@ jobs:
 
   authority-process:
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    # Retained-data and real-process race gates run serially against a 1-CPU PG.
+    timeout-minutes: 15
     services:
       postgres:
         image: postgres@sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a
