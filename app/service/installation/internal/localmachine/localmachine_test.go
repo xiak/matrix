@@ -1458,6 +1458,46 @@ func TestSecurityMailCustodyIsScopedImmutableAndResumable(t *testing.T) {
 	}
 }
 
+func TestInstalledSecurityMailCommitmentRejectsValidChannelReplacement(t *testing.T) {
+	plan := newInstallPlan(t)
+	if err := stageInstallation(plan, rand.Reader); err != nil {
+		t.Fatal(err)
+	}
+	installed := installedPlanFrom(plan)
+	installed.SecurityMailDigest = plan.SecurityMail.Digest
+	verified, err := authenticateInstalledPlan(installed)
+	if err != nil || verified.SecurityMail.Digest != plan.SecurityMail.Digest {
+		t.Fatal("sealed mail commitment was not passed to installed verification")
+	}
+	if err := verifySecurityMailCustody(verified); err != nil {
+		t.Fatalf("original installed mail custody was rejected: %v", err)
+	}
+	channel, err := readSecurityMailSMTPChannel(plan.Root, plan.InstallationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	channel.Password, err = iamv1.NewSecret("different-valid-smtp-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := iamv1.EncodeSecurityMailSMTPChannel(channel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(plan.Root, filepath.FromSlash(layout.IAMSecurityMailSMTPChannel))
+	if err := os.WriteFile(path, encoded, 0o600); err != nil {
+		clear(encoded)
+		t.Fatal(err)
+	}
+	clear(encoded)
+	if _, err := readSecurityMailSMTPChannel(plan.Root, plan.InstallationID); err != nil {
+		t.Fatalf("test replacement did not retain a valid scoped channel: %v", err)
+	}
+	if err := verifySecurityMailCustody(verified); err == nil {
+		t.Fatal("valid but different SMTP credentials passed installed verification")
+	}
+}
+
 func TestReadSecurityMailConfigurationRequiresExactProtectedCanonicalInput(t *testing.T) {
 	private := filepath.Clean(t.TempDir())
 	if err := os.Chmod(private, 0o700); err != nil {
@@ -3525,13 +3565,14 @@ func installedPlanFrom(plan platformcommand.InstallPlan) platformcommand.Install
 		Root: plan.Root, InstallationID: plan.InstallationID,
 		CorrelationID: plan.CorrelationID,
 		Listener:      plan.Listener, Port: plan.Port,
-		NorthboundOrigin: plan.NorthboundOrigin,
-		ReleaseID:        plan.Bundle.Manifest.Release.ID,
-		ReleaseDigest:    plan.Bundle.ManifestSHA256,
-		PreviousID:       plan.PreviousID,
-		PreviousDigest:   plan.PreviousDigest,
-		TrustKeyID:       plan.Trust.KeyID,
-		TrustFingerprint: plan.Trust.PublicKeyFingerprint,
+		NorthboundOrigin:   plan.NorthboundOrigin,
+		SecurityMailDigest: plan.SecurityMail.Digest,
+		ReleaseID:          plan.Bundle.Manifest.Release.ID,
+		ReleaseDigest:      plan.Bundle.ManifestSHA256,
+		PreviousID:         plan.PreviousID,
+		PreviousDigest:     plan.PreviousDigest,
+		TrustKeyID:         plan.Trust.KeyID,
+		TrustFingerprint:   plan.Trust.PublicKeyFingerprint,
 	}
 }
 

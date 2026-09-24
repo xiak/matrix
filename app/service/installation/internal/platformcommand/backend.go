@@ -163,18 +163,19 @@ func (value *SecurityMailInput) Clear() {
 // Local-machine effects must reauthenticate installation-owned files against
 // these values before trusting provider state.
 type InstalledPlan struct {
-	Root             string
-	InstallationID   string
-	CorrelationID    string
-	Listener         string
-	Port             uint16
-	NorthboundOrigin string
-	ReleaseID        string
-	ReleaseDigest    string
-	PreviousID       string
-	PreviousDigest   string
-	TrustKeyID       string
-	TrustFingerprint string
+	Root               string
+	InstallationID     string
+	CorrelationID      string
+	Listener           string
+	Port               uint16
+	NorthboundOrigin   string
+	SecurityMailDigest string
+	ReleaseID          string
+	ReleaseDigest      string
+	PreviousID         string
+	PreviousDigest     string
+	TrustKeyID         string
+	TrustFingerprint   string
 }
 
 type BackupPlan struct {
@@ -583,8 +584,9 @@ func installedPlan(root string, state lifecycle.Journal) InstalledPlan {
 	return InstalledPlan{
 		Root: root, InstallationID: state.InstallationID,
 		Listener: defaultListener, Port: defaultPort,
-		NorthboundOrigin: state.NorthboundOrigin,
-		ReleaseID:        state.CurrentReleaseID, ReleaseDigest: state.CurrentReleaseDigest,
+		NorthboundOrigin:   state.NorthboundOrigin,
+		SecurityMailDigest: state.SecurityMailDigest,
+		ReleaseID:          state.CurrentReleaseID, ReleaseDigest: state.CurrentReleaseDigest,
 		PreviousID: state.PreviousRelease, PreviousDigest: state.PreviousReleaseDigest,
 		TrustKeyID:       state.ReleaseTrust.KeyID,
 		TrustFingerprint: state.ReleaseTrust.Fingerprint,
@@ -595,8 +597,9 @@ func previousInstalledPlan(root string, state lifecycle.Journal) InstalledPlan {
 	return InstalledPlan{
 		Root: root, InstallationID: state.InstallationID,
 		Listener: defaultListener, Port: defaultPort,
-		NorthboundOrigin: state.NorthboundOrigin,
-		ReleaseID:        state.PreviousRelease, ReleaseDigest: state.PreviousReleaseDigest,
+		NorthboundOrigin:   state.NorthboundOrigin,
+		SecurityMailDigest: state.SecurityMailDigest,
+		ReleaseID:          state.PreviousRelease, ReleaseDigest: state.PreviousReleaseDigest,
 		TrustKeyID:       state.ReleaseTrust.KeyID,
 		TrustFingerprint: state.ReleaseTrust.Fingerprint,
 	}
@@ -1048,6 +1051,7 @@ func (backend *Backend) rollback(
 		CorrelationID: commandID,
 		Listener:      defaultListener, Port: defaultPort,
 		NorthboundOrigin: started.Journal.NorthboundOrigin,
+		SecurityMail:     SecurityMailInput{Digest: started.Journal.SecurityMailDigest},
 		PreviousID:       started.Journal.PreviousRelease, PreviousDigest: started.Journal.PreviousReleaseDigest,
 		Bundle: currentBundle,
 		Trust:  trust, TrustBytes: append([]byte(nil), trustBytes...),
@@ -1199,6 +1203,7 @@ func (backend *Backend) recover(
 		CorrelationID: commandID,
 		Listener:      defaultListener, Port: defaultPort,
 		NorthboundOrigin: started.Journal.NorthboundOrigin,
+		SecurityMail:     SecurityMailInput{Digest: started.Journal.SecurityMailDigest},
 		PreviousID:       started.Journal.PreviousRelease, PreviousDigest: started.Journal.PreviousReleaseDigest,
 		Bundle: currentBundle,
 		Trust:  trust, TrustBytes: append([]byte(nil), trustBytes...),
@@ -1209,6 +1214,7 @@ func (backend *Backend) recover(
 		CorrelationID: commandID,
 		Listener:      defaultListener, Port: defaultPort,
 		NorthboundOrigin: destinationOrigin,
+		SecurityMail:     SecurityMailInput{Digest: started.Journal.SecurityMailDigest},
 		Bundle:           targetBundle,
 		Trust:            trust, TrustBytes: append([]byte(nil), trustBytes...),
 	}

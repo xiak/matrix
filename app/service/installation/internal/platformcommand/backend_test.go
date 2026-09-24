@@ -317,6 +317,7 @@ func TestInstallBindsOnlyTheSecurityMailDigestAndRejectsChangedCustody(t *testin
 	state := readJournal(t, root)
 	if state.Last == nil || state.Last.Command.SecurityMailDigest == "" ||
 		!strings.HasPrefix(state.Last.Command.SecurityMailDigest, "sha256:") ||
+		installedPlan(root, state).SecurityMailDigest != state.SecurityMailDigest ||
 		len(effects.securityMailPaths) != 1 || effects.securityMailPaths[0] != request.SecurityMailConfiguration {
 		t.Fatal("install did not bind the exact security mail commitment")
 	}

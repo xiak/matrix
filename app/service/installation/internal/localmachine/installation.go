@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 
+	installationv1 "github.com/xiak/matrix/api/adapter/installation/v1"
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
 	"github.com/xiak/matrix/app/service/installation/internal/platformcommand"
 	"github.com/xiak/matrix/app/service/installation/release"
@@ -50,6 +51,7 @@ func authenticateInstalledPlan(
 		CorrelationID: installed.CorrelationID,
 		Listener:      installed.Listener, Port: installed.Port,
 		NorthboundOrigin: installed.NorthboundOrigin,
+		SecurityMail:     platformcommand.SecurityMailInput{Digest: installed.SecurityMailDigest},
 		PreviousID:       installed.PreviousID, PreviousDigest: installed.PreviousDigest,
 		Bundle: bundle, Trust: trust, TrustBytes: trustBytes,
 	}, nil
@@ -95,6 +97,9 @@ func verifiedInstallationConfiguration(
 		return verifiedInstallation{}, err
 	}
 	if compiled.ContractDigest == topology.ContractDigest() {
+		if err := verifySecurityMailCustody(plan); err != nil {
+			return verifiedInstallation{}, errors.New("security mail custody differs from the sealed installation")
+		}
 		if err := ensureEnrollmentIngress(plan.Root, plan.InstallationID, nil); err != nil {
 			return verifiedInstallation{}, errors.New("node enrollment ingress authority is unsafe")
 		}
@@ -152,4 +157,30 @@ func verifiedInstallationConfiguration(
 	return verifiedInstallation{
 		bundle: staged, topology: compiled, composePath: composePath,
 	}, nil
+}
+
+func verifySecurityMailCustody(plan platformcommand.InstallPlan) error {
+	if plan.SecurityMail.Digest == "" {
+		return errors.New("security mail commitment is missing")
+	}
+	if _, err := readEmailVerificationKeyring(plan.Root, plan.InstallationID); err != nil {
+		return err
+	}
+	channel, err := readSecurityMailSMTPChannel(plan.Root, plan.InstallationID)
+	if err != nil {
+		return err
+	}
+	configuration := installationv1.SecurityMailConfiguration{
+		APIVersion: installationv1.SecurityMailConfigurationAPIVersion,
+		Kind:       installationv1.SecurityMailConfigurationKind,
+		Host:       channel.Host, Port: channel.Port, TLSMode: channel.TLSMode,
+		Username: channel.Username, Password: channel.Password, From: channel.From,
+		TrustedCAPEM: channel.TrustedCAPEM,
+	}
+	digest, err := installationv1.SecurityMailConfigurationDigest(configuration)
+	configuration.Clear()
+	if err != nil || digest != plan.SecurityMail.Digest {
+		return errors.New("security mail commitment differs")
+	}
+	return nil
 }
