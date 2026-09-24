@@ -313,21 +313,25 @@ a new snapshot and publishes an authenticated backup. This is a bounded
 provider-failure/resume check, not a signed process-kill or restore-stage
 crash claim.
 
-The same task-local signed A/B pair passed a second disconnected lifecycle in
-462.32 seconds with the enabling release's `pg_dump --snapshot` exit held after
-the real dump completed. Killing `mx` left its durable `BACKING_UP` intent and
-unpublished partial directory; replay through the signed command reused the
-same backup and correlation IDs, acquired a new lease and removed the partial.
-The run also retained first MFA enrollment, authenticated backup recovery,
-cross-profile rollback refusal and application data. After restarting only
-the isolated local Docker engine, the first immediate status attempt met a
-transient not-ready condition; an unchanged retry passed the full post-restart
-gate in 14.34 seconds. The test-owned container and all three volumes were
-deleted. [Verification 36003766294](https://github.com/xiak/matrix/actions/runs/36003766294)
-passed Go, UI, authority-process and node-process for the preceding focused
-backup gate. This adds one signed dump-completion crash point, not snapshot
-export, closure, restore or reopen crash coverage, and does not accept the full
-extension.
+The same task-local signed A/B pair passed another disconnected lifecycle in
+463.86 seconds with two actual process kills. First, the real IAM helper
+exported its PostgreSQL snapshot while the lease frame was withheld from
+`mx`; then the real `pg_dump --snapshot` completed while its process exit was
+withheld. At each boundary killing `mx` left a durable `BACKING_UP` intent and
+unpublished partial directory. The next signed invocation kept that backup
+and correlation ID, acquired a fresh snapshot lease, removed the partial and
+published an authenticated backup. The run retained first MFA enrollment,
+backup recovery, cross-profile rollback refusal and application data. After
+restarting only the isolated local Docker engine and observing its daemon
+ready, the post-restart gate passed on its first attempt in 16.84 seconds.
+The test-owned container and all volumes were deleted. A prior immediate
+post-restart attempt had found the engine temporarily not ready; this run
+separates that startup condition from installation status convergence.
+[Verification 36006463893](https://github.com/xiak/matrix/actions/runs/36006463893)
+passed Go, UI, authority-process and node-process for the preceding
+dump-completion gate. Snapshot export and dump completion are now covered by
+signed process-kill/resume, but closure, restore and reopen crash points are
+not. The full extension remains unaccepted.
 
 ## Incremental acceptance
 

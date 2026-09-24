@@ -497,9 +497,16 @@ func (value *gate) beforeRestart(ctx context.Context) (gateErr error) {
 			return fail("successor-backup-session-revocation")
 		}
 		if profile := value.releases.b.Manifest.Database; profile == release.CurrentDatabaseProfile() && profile.Authorities.IAM >= 40 {
+			first, firstErr := value.interruptBackupSnapshotExport(ctx, value.forbidden(secret, newPassword, bearer))
+			if firstErr != nil || first.BackupID == "" || !first.Changed {
+				return fail("successor-snapshot-export-resume")
+			}
+			emit("successor-snapshot-export-process-kill-resume")
 			successorBackup, err = value.interruptBackupDump(ctx, value.forbidden(secret, newPassword, bearer))
-			if err == nil {
+			if err == nil && successorBackup.BackupID != first.BackupID {
 				emit("successor-backup-process-kill-resume")
+			} else {
+				return fail("successor-dump-completion-resume")
 			}
 		} else {
 			successorBackup, err = runMX(
