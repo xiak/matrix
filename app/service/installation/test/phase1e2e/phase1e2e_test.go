@@ -112,6 +112,35 @@ func TestSecurityMailFixtureReceivesAuthenticatedTLSMessageAndCleansUp(t *testin
 	}
 }
 
+func TestSecurityMailFixtureUsesIsolatedDefaultBridgeGateway(t *testing.T) {
+	tests := []struct {
+		name    string
+		inspect string
+		want    string
+	}{
+		{"default bridge", `[{"Name":"bridge","Driver":"bridge","Internal":false,"IPAM":{"Config":[{"Gateway":"172.17.0.1"}]}}]`, "172.17.0.1"},
+		{"release network", `[{"Name":"matrix_management","Driver":"bridge","IPAM":{"Config":[{"Gateway":"172.17.0.1"}]}}]`, ""},
+		{"internal network", `[{"Name":"bridge","Driver":"bridge","Internal":true,"IPAM":{"Config":[{"Gateway":"172.17.0.1"}]}}]`, ""},
+		{"public gateway", `[{"Name":"bridge","Driver":"bridge","IPAM":{"Config":[{"Gateway":"8.8.8.8"}]}}]`, ""},
+		{"multiple gateways", `[{"Name":"bridge","Driver":"bridge","IPAM":{"Config":[{"Gateway":"172.17.0.1"},{"Gateway":"172.18.0.1"}]}}]`, ""},
+		{"missing network", `[]`, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gateway, err := securityMailBridgeGateway([]byte(tt.inspect))
+			if tt.want == "" {
+				if err == nil {
+					t.Fatalf("unsafe gateway was accepted: %s", gateway)
+				}
+				return
+			}
+			if err != nil || gateway.String() != tt.want {
+				t.Fatalf("gateway = %v, %v; want %s", gateway, err, tt.want)
+			}
+		})
+	}
+}
+
 func TestAcceptanceTOTPCodeMatchesPublishedSHA1Profile(t *testing.T) {
 	code, err := fixtureTOTPCode([]byte("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"), time.Unix(59, 0))
 	if err != nil || code != "287082" {
@@ -682,6 +711,11 @@ func TestReleaseLifecycleArgumentsRespectThePublishedPredecessorCLI(t *testing.T
 	if index < 0 || index+1 >= len(upgradeArguments) || upgradeArguments[index+1] != defaultEdgeEndpoint ||
 		mail < 0 || mail+1 >= len(upgradeArguments) || upgradeArguments[mail+1] != base.securityMailConfiguration {
 		t.Fatalf("current upgrade arguments=%q", upgradeArguments)
+	}
+	bridgeArguments := releaseAUpgradeArguments(base, current)
+	mail = slices.Index(bridgeArguments, "--security-mail-configuration")
+	if mail < 0 || mail+1 >= len(bridgeArguments) || bridgeArguments[mail+1] != base.securityMailConfiguration {
+		t.Fatalf("predecessor-to-current bridge upgrade omitted mail custody: %q", bridgeArguments)
 	}
 
 	changed := base

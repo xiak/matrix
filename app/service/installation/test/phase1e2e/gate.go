@@ -101,9 +101,8 @@ func (value *gate) activateReleaseA(ctx context.Context) error {
 	emit("release-base-install-status-verify")
 
 	upgrade := func(step string) error {
-		result, err := runMX(ctx, value.releases.a, "upgrade", []string{
-			"--bundle", value.releases.a.Root, "--root", value.config.root,
-		}, value.pathLeakage())
+		result, err := runMX(ctx, value.releases.a, "upgrade",
+			releaseAUpgradeArguments(value.config, value.releases.a), value.pathLeakage())
 		if err != nil || result.ReleaseID != value.releases.a.Manifest.Release.ID ||
 			result.PreviousID != initial.Manifest.Release.ID || !result.Changed {
 			return fail(step)
@@ -177,6 +176,14 @@ func releaseUpgradeArguments(config options, candidate release.VerifiedBundle) [
 	}
 }
 
+func releaseAUpgradeArguments(config options, candidate release.VerifiedBundle) []string {
+	return []string{
+		"--bundle", candidate.Root,
+		"--root", config.root,
+		"--security-mail-configuration", config.securityMailConfiguration,
+	}
+}
+
 func (value *gate) beforeRestart(ctx context.Context) (gateErr error) {
 	defer value.edge.close()
 	defer func() {
@@ -193,6 +200,18 @@ func (value *gate) beforeRestart(ctx context.Context) (gateErr error) {
 	if _, err := os.Stat(value.config.root); err == nil || !errors.Is(err, os.ErrNotExist) {
 		return fail("empty-installation-root")
 	}
+	mail, err := startSecurityMailFixture(ctx)
+	if err != nil {
+		return err
+	}
+	value.mail = mail
+	defer func() {
+		if err := value.mail.close(); err != nil && gateErr == nil {
+			gateErr = fail("security-mail-fixture-cleanup")
+		}
+	}()
+	value.config.securityMailConfiguration = value.mail.path
+	value.edge.addForbidden(value.mail.password)
 	if err := value.activateReleaseA(ctx); err != nil {
 		return err
 	}
@@ -202,17 +221,6 @@ func (value *gate) beforeRestart(ctx context.Context) (gateErr error) {
 	if err != nil {
 		return err
 	}
-	value.mail, err = startSecurityMailFixture(ctx, value.releases.a.Manifest, value.config.root, state)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if err := value.mail.close(); err != nil && gateErr == nil {
-			gateErr = fail("security-mail-fixture-cleanup")
-		}
-	}()
-	value.config.securityMailConfiguration = value.mail.path
-	value.edge.addForbidden(value.mail.password)
 	dataRootBefore, err := os.Stat(filepath.Join(value.config.root, filepath.FromSlash(layout.PostgresData)))
 	if err != nil || !dataRootBefore.IsDir() {
 		return fail("postgres-data-identity")

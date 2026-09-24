@@ -32,13 +32,12 @@ import (
 
 	installationv1 "github.com/xiak/matrix/api/adapter/installation/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
-	"github.com/xiak/matrix/app/service/installation/internal/lifecycle"
-	"github.com/xiak/matrix/app/service/installation/release"
 )
 
-// The signed gate uses an actual TLS SMTP exchange from the notification
-// container to the existing installation bridge. The fixture owns only its
-// listener and protected input file; it creates no Docker resources.
+// The signed gate uses an actual TLS SMTP exchange through the isolated
+// engine's default bridge gateway. Platform release networks are replaced
+// during upgrade; the default bridge survives that transition. The fixture
+// owns only its listener and protected input file.
 type securityMailFixture struct {
 	listener    net.Listener
 	directory   string
@@ -50,39 +49,14 @@ type securityMailFixture struct {
 	wait        sync.WaitGroup
 }
 
-func startSecurityMailFixture(ctx context.Context, manifest release.Manifest, root string, state lifecycle.Journal) (*securityMailFixture, error) {
-	compiled, _, err := expectedPlatformServices(manifest, root, state.InstallationID, state.NorthboundOrigin)
-	if err != nil {
-		return nil, fail("security-mail-network-contract")
-	}
-	content, err := docker(ctx, "network", "inspect", compiled.ProjectName+"_management")
+func startSecurityMailFixture(ctx context.Context) (*securityMailFixture, error) {
+	content, err := docker(ctx, "network", "inspect", "bridge")
 	if err != nil {
 		return nil, fail("security-mail-network-inspection")
 	}
-	var networks []struct {
-		Name     string            `json:"Name"`
-		Driver   string            `json:"Driver"`
-		Internal bool              `json:"Internal"`
-		Labels   map[string]string `json:"Labels"`
-		IPAM     struct {
-			Config []struct {
-				Gateway string `json:"Gateway"`
-			} `json:"Config"`
-		} `json:"IPAM"`
-	}
-	if json.Unmarshal(content, &networks) != nil || len(networks) != 1 {
-		return nil, fail("security-mail-network-inspection")
-	}
-	network := networks[0]
-	if network.Name != compiled.ProjectName+"_management" || network.Driver != "bridge" || network.Internal ||
-		network.Labels["com.docker.compose.project"] != compiled.ProjectName ||
-		network.Labels["com.xiak.matrix.installation"] != state.InstallationID ||
-		network.Labels["com.xiak.matrix.role"] != "network-management" || len(network.IPAM.Config) != 1 {
-		return nil, fail("security-mail-network-boundary")
-	}
-	gateway := net.ParseIP(network.IPAM.Config[0].Gateway).To4()
-	if gateway == nil || gateway.IsLoopback() || gateway.IsUnspecified() {
-		return nil, fail("security-mail-network-gateway")
+	gateway, err := securityMailBridgeGateway(content)
+	if err != nil {
+		return nil, err
 	}
 	certificate, trust, err := securityMailCertificate(gateway)
 	if err != nil {
@@ -147,6 +121,31 @@ func startSecurityMailFixture(ctx context.Context, manifest release.Manifest, ro
 	fixture.wait.Add(1)
 	go fixture.serve()
 	return fixture, nil
+}
+
+func securityMailBridgeGateway(content []byte) (net.IP, error) {
+	var networks []struct {
+		Name     string `json:"Name"`
+		Driver   string `json:"Driver"`
+		Internal bool   `json:"Internal"`
+		IPAM     struct {
+			Config []struct {
+				Gateway string `json:"Gateway"`
+			} `json:"Config"`
+		} `json:"IPAM"`
+	}
+	if json.Unmarshal(content, &networks) != nil || len(networks) != 1 {
+		return nil, fail("security-mail-network-inspection")
+	}
+	network := networks[0]
+	if network.Name != "bridge" || network.Driver != "bridge" || network.Internal || len(network.IPAM.Config) != 1 {
+		return nil, fail("security-mail-network-boundary")
+	}
+	gateway := net.ParseIP(network.IPAM.Config[0].Gateway).To4()
+	if gateway == nil || !gateway.IsPrivate() {
+		return nil, fail("security-mail-network-gateway")
+	}
+	return gateway, nil
 }
 
 func securityMailCertificate(gateway net.IP) (tls.Certificate, []byte, error) {
