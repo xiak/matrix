@@ -346,6 +346,24 @@ checks prove the exact signed negative install and five injected crash
 boundaries; the full extension still requires reconciliation against every
 acceptance item before it is accepted.
 
+The same signed A/B pair then passed another fresh disconnected lifecycle on
+source `c68a88475c298f58d5315c75fe6e0f9bb08a5f8b` in 481.60 seconds.
+After a populated B backup, the test replaced only the isolated
+installation's protected TOTP keyring with two individually valid keyrings:
+one missing the backup-required key ID and one retaining that ID with changed
+key material. Each real `mx recover` failed with
+`RECOVERY_SOURCE_VERIFICATION_FAILED` before changing the sealed journal;
+the original keyring was restored and the platform remained healthy. The
+subsequent authenticated recovery, MFA login, five process-kill replay gates,
+and post-engine-restart check (15.41 seconds) passed. Only the task-owned
+local Docker engine was restarted; the exact test container, volumes and
+transient executable were deleted afterward. This proves a signed restore
+pre-effect denial for unavailable custody, not acceptance of arbitrary
+keyring rotation or a historical N-1 release profile.
+[Verification 36020911215](https://github.com/xiak/matrix/actions/runs/36020911215)
+completed successfully for the exact source, with Go, UI,
+authority-process and node-process jobs all passing.
+
 ## Incremental acceptance
 
 ### Gate A: release and CLI contract
