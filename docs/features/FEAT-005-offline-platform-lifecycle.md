@@ -399,6 +399,21 @@ The signatures are task-local test signatures, not a production trust root.
 completed successfully for the exact test source; Go, UI, authority-process
 and node-process jobs all passed.
 
+On the same committed source (`201779db220b2150f1940c0441cfce261cd7ae7c`),
+the focused PostgreSQL 18 process and custody gates were also run inside a
+task-owned Docker network namespace with no external network. The real IAM
+process, restricted backup helper, `pg_dump --snapshot` and imported dumps
+proved that enrollment after a held snapshot is absent from that dump but
+present with its key in the next lease; a rotation during another held
+snapshot leaves the old dump at revision 1 while the next requires both keys
+at revision 2. A separate real-database gate exercised password login,
+existing Session, readiness, conflicting key registrations and retained
+factor fail-closed behavior. Both focused tests passed. Their temporary
+PostgreSQL container, database volume and combined Go/PostgreSQL test image
+were removed after the run; no shared or remote resource was touched. These
+focused gates close the disconnected concurrent-snapshot evidence gap, but do
+not by themselves turn the Phase 3 extension into an accepted release.
+
 ## Incremental acceptance
 
 ### Gate A: release and CLI contract
