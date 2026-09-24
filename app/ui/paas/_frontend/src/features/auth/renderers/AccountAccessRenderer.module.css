@@ -197,6 +197,14 @@
 .policyDirectoryTabs { padding-inline: var(--xiak-panel-padding); }
 .policyMetadataTable { min-width: 820px; }
 .policyMetadataTable td:first-child { min-width: 240px; }
+.policyStatementTable { min-width: 820px; }
+.policyStatementTable code, .policyRawDocument code { overflow-wrap: anywhere; white-space: normal; }
+.policyStackedValues { display: grid; gap: var(--xiak-spacing-narrow); min-width: 0; overflow-wrap: anywhere; }
+.policyResolved { display: grid; gap: var(--xiak-spacing-narrow); padding-top: var(--xiak-spacing-tight); border-top: var(--xiak-border-subtle); }
+.policyResolved strong { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
+.policyRawDocument { min-width: 0; }
+.policyRawDocument summary { cursor: pointer; color: var(--xiak-color-accent-text); }
+.policyRawDocument pre { max-height: 440px; overflow: auto; padding: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-small); background: var(--xiak-color-bg-panel-hover); font-size: var(--xiak-font-size-small); }
 .batchChoices { margin: 0; padding-inline-start: var(--xiak-spacing-comfortable); overflow-wrap: anywhere; }
 .accessMethods { display: grid; gap: var(--xiak-spacing-narrow); margin: 0; padding: 0; list-style: none; }
 .accessMethods li { display: flex; align-items: baseline; gap: var(--xiak-spacing-tight); font-size: var(--xiak-font-size-small); overflow-wrap: anywhere; }
@@ -248,4 +256,5 @@
   .catalogSection { padding-inline: var(--xiak-spacing-default); }
   .catalogFacts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .catalogActionTable { min-width: 0; }
+  .policyStatementTable { min-width: 0; }
 }

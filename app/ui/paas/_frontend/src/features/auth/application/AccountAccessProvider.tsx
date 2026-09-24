@@ -5,6 +5,7 @@ import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { useSession, useSessionCredential } from "./SessionProvider";
 import type {
   AccountCommand,
+  AccountPolicyDetail,
   AccountSecuritySettings,
   AccountPolicy,
   AuthorizationProfileDirectory,
@@ -72,6 +73,16 @@ export type AuthorizationProfileClient = {
   load(): Promise<AuthorizationProfileLoad>;
 };
 
+export type AccountPolicyReadLoad =
+  | { status: "ready"; detail: AccountPolicyDetail }
+  | { status: "forbidden" | "routeUnavailable" | "unavailable" | "expired" };
+
+export type AccountPolicyReadClient = {
+  accountId: string;
+  sessionRevision: number;
+  read(policyId: string): Promise<AccountPolicyReadLoad>;
+};
+
 export type AccountSecuritySettingsLoad =
   | { status: "ready"; settings: AccountSecuritySettings }
   | { status: "forbidden" | "routeUnavailable" | "unavailable" | "expired" };
@@ -132,6 +143,7 @@ type AccountAccess = {
   groups: GroupAccessClient | null;
   permissionBoundaries: UserBoundaryClient | null;
   authorizationProfiles: AuthorizationProfileClient | null;
+  policyRead: AccountPolicyReadClient | null;
   accountSecuritySettings: AccountSecuritySettingsClient | null;
   accessKeys: AccessKeyClient | null;
   roles: RoleAccessClient | null;
@@ -391,6 +403,35 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     };
   }, [active, credential, expireSession, repository, scene, tenantId]);
 
+  const policyRead = useMemo<AccountPolicyReadClient | null>(() => {
+    if (!active || !credential || !scene || scene.accountId !== tenantId || !scene.canViewPolicies || !repository.readPolicy || repository.workspace) return null;
+    const accountId = scene.accountId;
+    return {
+      accountId, sessionRevision,
+      async read(policyId) {
+        try {
+          const detail = await repository.readPolicy!(credential, accountId, policyId);
+          if (detail.policy.id !== policyId || detail.policy.scope !== "TENANT" ||
+              detail.policy.accountId !== null && detail.policy.accountId !== accountId ||
+              detail.version.policyId !== policyId || detail.version.versionId !== detail.policy.defaultVersionId) throw new Error("INVALID_IAM_RESPONSE");
+          return { status: "ready", detail };
+        } catch (failure) {
+          if (failure instanceof HttpProblem) {
+            if (failure.status === 401) {
+              if (expireSession(credential, sessionRevision)) {
+                setScene(null); setWorkspace(null); setWorkspaceError(null); setSuccess(null); setError("expired");
+              }
+              return { status: "expired" };
+            }
+            if (failure.status === 403) return { status: "forbidden" };
+            if (failure.status === 404) return { status: "routeUnavailable" };
+          }
+          return { status: "unavailable" };
+        }
+      }
+    };
+  }, [active, credential, expireSession, repository, scene, sessionRevision, tenantId]);
+
   const accountSecuritySettings = useMemo<AccountSecuritySettingsClient | null>(() => {
     const reader = repository.accountSecuritySettings;
     if (!active || !credential || !scene || scene.accountId !== tenantId || !principalId || !sessionId || !reader) return null;
@@ -548,6 +589,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     groups,
     permissionBoundaries,
     authorizationProfiles,
+    policyRead,
     accessKeys,
     roles,
     roleSessionRevokeIntent: roleSessionRevokeIntent?.accountId === tenantId ? roleSessionRevokeIntent : null,
@@ -620,7 +662,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       } catch (failure) { setError(accountError(failure)); return false; }
       finally { mutationPending.current = false; setBusy(false); }
     }
-  }), [active, busy, credential, error, loading, repository, scene, success, tenantId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, permissionBoundaries, authorizationProfiles, accountSecuritySettings, accessKeys, roles, roleSessionRevokeIntent, changeRoleSessionRevokeIntent, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
+  }), [active, busy, credential, error, loading, repository, scene, success, tenantId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, permissionBoundaries, authorizationProfiles, policyRead, accountSecuritySettings, accessKeys, roles, roleSessionRevokeIntent, changeRoleSessionRevokeIntent, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
 
   return <AccountCapabilitiesContext.Provider value={capabilities}>
     <AccountAccessContext.Provider value={value}>{children}</AccountAccessContext.Provider>

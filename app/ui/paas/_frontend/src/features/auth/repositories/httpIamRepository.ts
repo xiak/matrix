@@ -5,6 +5,9 @@ import type {
   AccountIdentity,
   AccountSecuritySettings,
   AccountPolicy,
+  AccountPolicyDetail,
+  AccountPolicyDocument,
+  AccountPolicyVersion,
   ActionCapability,
   AuthorizationAuthorityScope,
   AuthorizationProfile,
@@ -1267,6 +1270,140 @@ function parsePolicy(value: unknown): AccountPolicy {
   };
 }
 
+function policyArray(value: unknown, maximum: number): unknown[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > maximum) throw new Error("INVALID_IAM_RESPONSE");
+  return value;
+}
+
+function policyDigest(value: unknown): string {
+  if (typeof value !== "string" || !/^sha256:[a-f0-9]{64}$/.test(value)) throw new Error("INVALID_IAM_RESPONSE");
+  return value;
+}
+
+const exactPolicyAction = /^[a-z][a-z0-9_-]{0,63}(\.[a-z][a-z0-9_-]{0,63}){1,4}$/;
+const familyPolicyAction = /^[a-z][a-z0-9_-]{0,63}\.[a-z][a-z0-9_-]{0,63}\.\*$/;
+const policyResourceKinds = new Set([
+  "ACCOUNT", "POLICY", "INSTALLATION", "USER", "GROUP", "GROUP_MEMBERSHIP", "POLICY_ATTACHMENT", "SESSION", "ROLE", "ROLE_SESSION", "ACCESS_KEY",
+  "EXECUTION_POOL", "EXECUTION_TARGET", "NODE_ENROLLMENT", "OPERATION", "APPLICATION", "CONFIGURATION", "CONFIGURATION_REVISION", "APPLICATION_REVISION",
+  "DEPLOYMENT", "SERVICE_OFFERING", "REGION", "QUOTA_ENTITLEMENT", "SERVICE_INSTALLATION", "AUDIT_RECORD", "AUDIT_CHAIN"
+]);
+
+function parsePolicyDocument(value: unknown): AccountPolicyDocument {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["languageVersion", "scope", "statements"]);
+  if (wire.languageVersion !== "1" || wire.scope !== "TENANT" || new TextEncoder().encode(JSON.stringify(wire)).length > 64 * 1024) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  const statements: AccountPolicyDocument["statements"] = policyArray(wire.statements, 64).map((item) => {
+    const statement = accountRecord(item);
+    exactKeys(statement, ["sid", "effect", "actions", "resources"], ["conditions"]);
+    const sid = accountIdentifier(statement.sid);
+    const effect = statement.effect;
+    if (effect !== "ALLOW" && effect !== "DENY") throw new Error("INVALID_IAM_RESPONSE");
+    const actions = policyArray(statement.actions, 128).map((action) => {
+      const id = accountText(action);
+      if ((!exactPolicyAction.test(id) && !familyPolicyAction.test(id)) || id.length > 128) throw new Error("INVALID_IAM_RESPONSE");
+      return id;
+    });
+    if (new Set(actions).size !== actions.length) throw new Error("INVALID_IAM_RESPONSE");
+    const resources: AccountPolicyDocument["statements"][number]["resources"] = policyArray(statement.resources, 64).map((item) => {
+      const resource = accountRecord(item);
+      exactKeys(resource, ["kind", "match"], ["id"]);
+      const match = accountText(resource.match);
+      if (typeof resource.kind !== "string" || !policyResourceKinds.has(resource.kind) ||
+          match !== "EXACT" && match !== "PREFIX_IN_AUTHORITY" && match !== "ANY_IN_AUTHORITY" ||
+          match === "ANY_IN_AUTHORITY" && resource.id !== undefined ||
+          match !== "ANY_IN_AUTHORITY" && resource.id === undefined) throw new Error("INVALID_IAM_RESPONSE");
+      return { kind: resource.kind, match, ...(resource.id === undefined ? {} : { id: accountIdentifier(resource.id) }) };
+    });
+    if (new Set(resources.map((resource) => JSON.stringify(resource))).size !== resources.length) throw new Error("INVALID_IAM_RESPONSE");
+    const conditions = statement.conditions === undefined ? undefined : policyArray(statement.conditions, 16).map((item) => {
+      const condition = accountRecord(item);
+      exactKeys(condition, ["key", "operator", "values"]);
+      const key = accountText(condition.key);
+      const operator = accountText(condition.operator);
+      if ((key !== "iam.account-id" && key !== "iam.principal-id" && key !== "iam.current-time") ||
+          (key === "iam.current-time"
+            ? operator !== "DATE_GREATER_THAN_EQUALS" && operator !== "DATE_LESS_THAN"
+            : operator !== "STRING_EQUALS" && operator !== "STRING_NOT_EQUALS")) throw new Error("INVALID_IAM_RESPONSE");
+      const values = policyArray(condition.values, key === "iam.current-time" ? 1 : 16).map((entry) =>
+        key === "iam.current-time" ? accountTimestamp(entry) : accountIdentifier(entry));
+      if (new Set(values).size !== values.length) throw new Error("INVALID_IAM_RESPONSE");
+      return { key, operator, values };
+    });
+    if (conditions && new Set(conditions.map((condition) => JSON.stringify(condition))).size !== conditions.length) throw new Error("INVALID_IAM_RESPONSE");
+    return { sid, effect, actions, resources, ...(conditions ? { conditions } : {}) };
+  });
+  if (new Set(statements.map((statement) => statement.sid)).size !== statements.length) throw new Error("INVALID_IAM_RESPONSE");
+  return { languageVersion: "1", scope: "TENANT", statements };
+}
+
+function parsePolicyVersion(value: unknown, policyId: string): AccountPolicyVersion {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["policyId", "versionId", "document", "contentDigest", "contractVersion"], ["compilation"]);
+  if (accountIdentifier(wire.policyId) !== policyId) throw new Error("INVALID_IAM_RESPONSE");
+  const versionId = accountIdentifier(wire.versionId);
+  const document = parsePolicyDocument(wire.document);
+  const contentDigest = policyDigest(wire.contentDigest);
+  if (wire.contractVersion === 1 && wire.compilation === undefined) {
+    if (document.statements.some((statement) => statement.actions.some((action) => familyPolicyAction.test(action)))) throw new Error("INVALID_IAM_RESPONSE");
+    return { policyId, versionId, document, contentDigest, contractVersion: 1 };
+  }
+  if (wire.contractVersion !== 2 || wire.compilation === undefined) throw new Error("INVALID_IAM_RESPONSE");
+  const compilation = accountRecord(wire.compilation);
+  exactKeys(compilation, ["compilationVersion", "profiles", "resolvedStatements"]);
+  if (compilation.compilationVersion !== "1" || new TextEncoder().encode(JSON.stringify(compilation)).length > 128 * 1024) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  const profiles = policyArray(compilation.profiles, 16).map((item) => {
+    const reference = accountRecord(item);
+    exactKeys(reference, ["product", "revision", "contentDigest"]);
+    if (typeof reference.product !== "string" || !/^[a-z][a-z0-9_-]{0,63}$/.test(reference.product)) throw new Error("INVALID_IAM_RESPONSE");
+    return { product: reference.product, revision: accountVersion(reference.revision), contentDigest: policyDigest(reference.contentDigest) };
+  });
+  const resolvedStatements = policyArray(compilation.resolvedStatements, 64).map((item) => {
+    const resolved = accountRecord(item);
+    exactKeys(resolved, ["sid", "actions"]);
+    const actions = policyArray(resolved.actions, 128).map((action) => accountText(action));
+    if (actions.some((action) => !exactPolicyAction.test(action)) || new Set(actions).size !== actions.length) throw new Error("INVALID_IAM_RESPONSE");
+    return { sid: accountIdentifier(resolved.sid), actions };
+  });
+  if (resolvedStatements.length !== document.statements.length ||
+      new Set(resolvedStatements.map((item) => item.sid)).size !== resolvedStatements.length ||
+      resolvedStatements.some((item) => !document.statements.some((statement) => statement.sid === item.sid)) ||
+      new Set(profiles.map((item) => item.product)).size !== profiles.length) throw new Error("INVALID_IAM_RESPONSE");
+  const products = new Set<string>();
+  for (const statement of document.statements) {
+    const resolved = resolvedStatements.find((item) => item.sid === statement.sid)!;
+    const frozen = new Set(resolved.actions);
+    if (statement.actions.some((action) => exactPolicyAction.test(action) && !frozen.has(action))) throw new Error("INVALID_IAM_RESPONSE");
+    for (const action of resolved.actions) {
+      const covered = statement.actions.some((authorAction) => authorAction === action ||
+        familyPolicyAction.test(authorAction) && action.startsWith(authorAction.slice(0, -1)) &&
+          !action.slice(authorAction.length - 1).includes("."));
+      if (!covered) throw new Error("INVALID_IAM_RESPONSE");
+      products.add(action.split(".")[0]!);
+    }
+    if (statement.actions.some((authorAction) => familyPolicyAction.test(authorAction) &&
+        !resolved.actions.some((action) => action.startsWith(authorAction.slice(0, -1))))) throw new Error("INVALID_IAM_RESPONSE");
+  }
+  if (profiles.length !== products.size || profiles.some((item) => !products.has(item.product))) throw new Error("INVALID_IAM_RESPONSE");
+  return { policyId, versionId, document, contentDigest, contractVersion: 2,
+    compilation: { compilationVersion: "1", profiles, resolvedStatements } };
+}
+
+function parsePolicyDetail(value: unknown, accountId: string, policyId: string): AccountPolicyDetail {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "policy", "version"]);
+  requireAccountKind(wire, "PolicyDetail");
+  const policy = parsePolicy(wire.policy);
+  if (policy.id !== policyId || policy.scope !== "TENANT" || policy.status !== "ACTIVE" ||
+      policy.accountId !== null && policy.accountId !== accountId) throw new Error("INVALID_IAM_RESPONSE");
+  const version = parsePolicyVersion(wire.version, policyId);
+  if (version.versionId !== policy.defaultVersionId) throw new Error("INVALID_IAM_RESPONSE");
+  return { policy, version };
+}
+
 function parsePolicyDirectory(value: unknown, expectedScope: PolicyScope): PolicyDirectory {
   const wire = accountRecord(value);
   exactKeys(wire, ["apiVersion", "kind", "accountId", "scope", "items"], ["installationId"]);
@@ -1566,6 +1703,9 @@ export const httpAccountRepository: AccountRepository = {
   },
   async listPolicies(credential, platform) {
     return parsePolicyDirectory(await requestJSON<unknown>(platform ? "/api/iam/v1/platform-policies" : "/api/iam/v1/policies", { headers: accountHeaders(credential) }), platform ? "INSTALLATION" : "TENANT");
+  },
+  async readPolicy(credential, accountId, policyId) {
+    return parsePolicyDetail(await requestJSON<unknown>(`/api/iam/v1/policies/${encodeURIComponent(accountIdentifier(policyId))}`, { headers: accountHeaders(credential) }), accountIdentifier(accountId), policyId);
   },
   async listAuthorizationProfiles(credential) {
     return parseAuthorizationProfileDirectory(await requestJSON<unknown>("/api/iam/v1/authorization-profiles", { headers: accountHeaders(credential) }));

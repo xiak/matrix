@@ -11,6 +11,7 @@ import type {
   AccountAccess,
   AccountCommand,
   AccountIdentity,
+  AccountPolicyDetail,
   AccountSecuritySettings,
   DirectoryPage,
   Group,
@@ -150,6 +151,9 @@ export interface AccountRepository {
   listUsers(credential: string, after?: string): Promise<DirectoryPage<UserAccess>>;
   getUser(credential: string, userId: string): Promise<UserAccess>;
   listPolicies(credential: string, platform: boolean): Promise<PolicyDirectory>;
+  // TENANT default-version read only. A list permission is not a read grant;
+  // the server independently authorizes the exact Policy target.
+  readPolicy?(credential: string, accountId: string, policyId: string): Promise<AccountPolicyDetail>;
   // Complete current product declarations under the caller's existing policy
   // list permission. There is deliberately no account or revision selector.
   listAuthorizationProfiles(credential: string): Promise<AuthorizationProfileDirectory>;

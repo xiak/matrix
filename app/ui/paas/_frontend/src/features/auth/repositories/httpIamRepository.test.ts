@@ -1092,6 +1092,69 @@ describe("IAM HTTP account boundary", () => {
     }
   });
 
+  it("reads only the exact tenant policy's current default document without an account selector", async () => {
+    const document = { languageVersion: "1", scope: "TENANT", statements: [{
+      sid: "read-applications", effect: "ALLOW", actions: ["paas.application.read"],
+      resources: [{ kind: "APPLICATION", match: "ANY_IN_AUTHORITY" }]
+    }] };
+    const version = { policyId: customerPolicy.id, versionId: customerPolicy.defaultVersionId, document,
+      contentDigest: `sha256:${"a".repeat(64)}`, contractVersion: 1 };
+    const body = { apiVersion, kind: "PolicyDetail", policy: customerPolicy, version };
+    const fetcher = reply(body);
+    const detail = await httpAccountRepository.readPolicy!("bearer", account.id, customerPolicy.id);
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/policies/customer.build");
+    expect(firstRequest(fetcher)[1]).toMatchObject({ cache: "no-store", headers: { Authorization: "Bearer bearer" } });
+    expect(firstRequest(fetcher)[1].body).toBeUndefined();
+    expect(detail.version.document.statements[0]?.actions).toEqual(["paas.application.read"]);
+
+    for (const invalid of [
+      { ...body, policy: { ...customerPolicy, accountId: "another-account" } },
+      { ...body, policy: { ...customerPolicy, id: "customer.other" } },
+      { ...body, policy: { ...customerPolicy, scope: "INSTALLATION" } },
+      { ...body, version: { ...version, versionId: "version-other" } },
+      { ...body, version: { ...version, document: { ...document, statements: [{ ...document.statements[0], actions: ["paas.application.*"] }] } } },
+      { ...body, version: { ...version, contractVersion: 2 } },
+      { ...body, version: { ...version, document: { ...document, statements: [{ ...document.statements[0], resources: [{ kind: "OTHER", match: "ANY_IN_AUTHORITY" }] }] } } },
+      { ...body, version: { ...version, extra: true } }
+    ]) {
+      reply(invalid);
+      await expect(httpAccountRepository.readPolicy!("bearer", account.id, customerPolicy.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+  });
+
+  it("shows the author action family and its immutable v2 expansion as separate policy facts", async () => {
+    const document = { languageVersion: "1", scope: "TENANT", statements: [{
+      sid: "read-applications", effect: "ALLOW", actions: ["paas.application.*"],
+      resources: [{ kind: "APPLICATION", match: "ANY_IN_AUTHORITY" }]
+    }] };
+    const compilation = { compilationVersion: "1", profiles: [{ product: "paas", revision: 2,
+      contentDigest: `sha256:${"b".repeat(64)}` }], resolvedStatements: [{ sid: "read-applications",
+      actions: ["paas.application.list", "paas.application.read"] }] };
+    const version = { policyId: customerPolicy.id, versionId: customerPolicy.defaultVersionId, document,
+      contentDigest: `sha256:${"a".repeat(64)}`, contractVersion: 2, compilation };
+    const body = { apiVersion, kind: "PolicyDetail", policy: customerPolicy, version };
+    reply(body);
+    const detail = await httpAccountRepository.readPolicy!("bearer", account.id, customerPolicy.id);
+    expect(detail.version.document.statements[0]?.actions).toEqual(["paas.application.*"]);
+    expect(detail.version.compilation?.resolvedStatements[0]?.actions).toEqual(["paas.application.list", "paas.application.read"]);
+    expect(detail.version.compilation?.profiles[0]?.revision).toBe(2);
+
+    for (const invalid of [
+      { ...compilation, profiles: [] },
+      { ...compilation, profiles: [{ ...compilation.profiles[0], product: "iam" }] },
+      { ...compilation, resolvedStatements: [{ sid: "read-applications", actions: ["paas.application.read", "paas.application.read"] }] },
+      { ...compilation, resolvedStatements: [{ sid: "read-applications", actions: ["paas.application.read", "paas.deployment.read"] }] },
+      { ...compilation, resolvedStatements: [{ sid: "other", actions: ["paas.application.read"] }] }
+    ]) {
+      reply({ ...body, version: { ...version, compilation: invalid } });
+      await expect(httpAccountRepository.readPolicy!("bearer", account.id, customerPolicy.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+    reply({ ...body, version: { ...version, document: { ...document, statements: [{ ...document.statements[0],
+      actions: ["paas.application.*", "paas.application.read"] }] }, compilation: { ...compilation,
+      resolvedStatements: [{ sid: "read-applications", actions: ["paas.application.list"] }] } } });
+    await expect(httpAccountRepository.readPolicy!("bearer", account.id, customerPolicy.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
+  });
+
   it("reads the complete current authorization profiles without an account or version selector", async () => {
     const fetcher = reply({ apiVersion, kind: "AuthorizationProfileList", accountId: account.id, items: [profileEntry("iam"), profileEntry("paas")] });
     const result = await httpAccountRepository.listAuthorizationProfiles("bearer");

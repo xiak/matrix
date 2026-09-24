@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { SessionProvider, useSession } from "../application/SessionProvider";
 import { AccountAccessProvider, useAccountAccess, useAccountCapabilities, type RoleAccessClient, type RoleSessionRevokeIntent } from "../application/AccountAccessProvider";
-import type { Account, AccountAccess, AccountAccessView, AccountIdentity, AccountPolicy, ActionCapability, AuthorizationProfileDirectory, CapabilityRestriction, IamAction, PolicyDirectory, User, UserAccess, UserPolicyAttachment, UserPermissionBoundary } from "../domain/accounts";
+import type { Account, AccountAccess, AccountAccessView, AccountIdentity, AccountPolicy, AccountPolicyDetail, ActionCapability, AuthorizationProfileDirectory, CapabilityRestriction, IamAction, PolicyDirectory, User, UserAccess, UserPolicyAttachment, UserPermissionBoundary } from "../domain/accounts";
 import type { AuthenticatorState, NotificationContact } from "../domain/personalSecurity";
 import type { AccountRepository, IamRepository } from "../repositories/iamRepository";
 import type { RoleAccess, RoleCapabilityAction, RoleDirectory } from "../domain/roles";
@@ -30,6 +30,11 @@ const profileDirectory = (): AuthorizationProfileDirectory => ({ accountId: acco
   profile: { product: "paas", revision: 1, callingService: "PAAS", actions: [{ action: "paas.application.read", resourceKind: "APPLICATION", scope: "TENANT", resourceShapes: [{ mode: "INSTANCE", prefixAllowed: true }], conditions: [{ key: "iam.account-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" }] }] },
   contentDigest: `sha256:${"a".repeat(64)}`
 }] });
+const tenantPolicyDetail: AccountPolicyDetail = { policy: tenantPolicy, version: {
+  policyId: tenantPolicy.id, versionId: tenantPolicy.defaultVersionId, contentDigest: `sha256:${"a".repeat(64)}`, contractVersion: 1,
+  document: { languageVersion: "1", scope: "TENANT", statements: [{ sid: "read-applications", effect: "ALLOW",
+    actions: ["paas.application.read"], resources: [{ kind: "APPLICATION", match: "ANY_IN_AUTHORITY" }] }] }
+} };
 const capability = (action: IamAction, kind: ActionCapability["resource"]["kind"], id: string, reason: CapabilityRestriction | null = null): ActionCapability => ({ action, resource: { kind, id }, available: reason === null, restrictionReason: reason });
 const currentCapabilities = (available = true): ActionCapability[] => [
   capability("iam.account.create", "ACCOUNT", "collection", available ? null : "AUTHORITY_REQUIRED"),
@@ -979,6 +984,54 @@ describe("account access", () => {
     expect(screen.getByText("ReadOnlyAccess")).toBeTruthy();
     expect(screen.getByText(/租户策略仍可查看/)).toBeTruthy();
     expect(listPolicies).toHaveBeenCalledTimes(2);
+  });
+
+  it("reads a tenant policy's default document only after opening its detail and keeps platform metadata separate", async () => {
+    const readPolicy = vi.fn().mockResolvedValue(tenantPolicyDetail);
+    const { user } = await openAccess(accounts({ readPolicy }), iam(), "policies");
+    await screen.findByRole("table", { name: "策略元数据目录" });
+    expect(readPolicy).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: tenantPolicy.displayName }));
+    expect(await screen.findByRole("table", { name: "策略声明" })).toBeTruthy();
+    expect(readPolicy).toHaveBeenCalledWith(credential, account.id, tenantPolicy.id);
+    expect(screen.getByText("paas.application.read")).toBeTruthy();
+    expect(screen.getByText(/不代表当前身份或任何主体的有效权限/)).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("button", { name: "保存" })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "返回列表" }));
+    await user.click(screen.getByRole("button", { name: platformPolicy.displayName }));
+    expect(screen.getByText(/平台安装策略当前只提供目录元数据/)).toBeTruthy();
+    expect(readPolicy).toHaveBeenCalledTimes(1);
+  });
+
+  it("separates authored family syntax from the frozen v2 action expansion", async () => {
+    const readPolicy = vi.fn().mockResolvedValue({ ...tenantPolicyDetail, version: {
+      ...tenantPolicyDetail.version, contractVersion: 2,
+      document: { ...tenantPolicyDetail.version.document, statements: [{ ...tenantPolicyDetail.version.document.statements[0],
+        actions: ["paas.application.*"] }] },
+      compilation: { compilationVersion: "1", profiles: [{ product: "paas", revision: 2,
+        contentDigest: `sha256:${"b".repeat(64)}` }], resolvedStatements: [{ sid: "read-applications", actions: ["paas.application.read"] }] }
+    } });
+    const { user } = await openAccess(accounts({ readPolicy }), iam(), "policies");
+    await user.click(await screen.findByRole("button", { name: tenantPolicy.displayName }));
+    const table = await screen.findByRole("table", { name: "策略声明" });
+    expect(within(table).getByText("paas.application.*")).toBeTruthy();
+    expect(within(table).getByText("发布时冻结的 Action")).toBeTruthy();
+    expect(within(table).getByText("paas.application.read")).toBeTruthy();
+    expect(screen.getByText("paas @ 2")).toBeTruthy();
+  });
+
+  it("keeps a forbidden policy detail local and never substitutes MOCK content", async () => {
+    const readPolicy = vi.fn().mockRejectedValue(new HttpProblem(403, "FORBIDDEN"));
+    const { user } = await openAccess(accounts({ readPolicy }), iam(), "policies");
+    await user.click(await screen.findByRole("button", { name: tenantPolicy.displayName }));
+    expect(await screen.findByText(/无权读取该策略的详情/)).toBeTruthy();
+    expect(screen.queryByRole("table", { name: "策略声明" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "返回列表" }));
+    expect(screen.getByRole("table", { name: "策略元数据目录" })).toBeTruthy();
+    expect(screen.queryByText(/隔离 MOCK 的权限能力目录/)).toBeNull();
   });
 
   it("loads the permission catalog only after its tab opens and keeps product detail in the content area", async () => {

@@ -128,6 +128,33 @@ export type PolicyDirectory = {
   items: AccountPolicy[];
 };
 
+export type AccountPolicyDocument = {
+  languageVersion: "1";
+  scope: "TENANT";
+  statements: {
+    sid: string;
+    effect: "ALLOW" | "DENY";
+    actions: string[];
+    resources: { kind: string; match: "EXACT" | "PREFIX_IN_AUTHORITY" | "ANY_IN_AUTHORITY"; id?: string }[];
+    conditions?: { key: string; operator: string; values: string[] }[];
+  }[];
+};
+
+export type AccountPolicyVersion = {
+  policyId: string;
+  versionId: string;
+  document: AccountPolicyDocument;
+  contentDigest: string;
+  contractVersion: 1 | 2;
+  compilation?: {
+    compilationVersion: "1";
+    profiles: { product: string; revision: number; contentDigest: string }[];
+    resolvedStatements: { sid: string; actions: string[] }[];
+  };
+};
+
+export type AccountPolicyDetail = { policy: AccountPolicy; version: AccountPolicyVersion };
+
 // Product-owned authorization declarations are policy-authoring metadata. They
 // are not Policy records, grants, effective permissions or tenant-owned
 // registration state, so keep their open action namespace separate from the
