@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	installationv1 "github.com/xiak/matrix/api/adapter/installation/v1"
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
@@ -578,11 +579,31 @@ func (value *gate) beforeRestart(ctx context.Context) (gateErr error) {
 		}
 		emit("cross-profile-platform-rollback-rejected")
 
+		interruptedRecoveryID := ""
+		if profile := value.releases.b.Manifest.Database; profile == release.CurrentDatabaseProfile() && profile.Authorities.IAM >= 40 {
+			closedID, closeErr := value.interruptAuthenticationRecoveryPhase(ctx, successorBackup.BackupID,
+				installationv1.AuthenticationRecoveryCloseCommand, value.forbidden(secret, newPassword, bearer))
+			if closeErr != nil || closedID == "" {
+				return fail("successor-authentication-close-crash")
+			}
+			if err := value.edge.unauthorizedMe(ctx, bearer); err != nil {
+				return fail("successor-authentication-closed-session-denial")
+			}
+			emit("successor-authentication-close-process-kill-resume")
+			reopenedID, reopenErr := value.interruptAuthenticationRecoveryPhase(ctx, successorBackup.BackupID,
+				installationv1.AuthenticationRecoveryReopenCommand, value.forbidden(secret, newPassword, bearer))
+			if reopenErr != nil || reopenedID != closedID {
+				return fail("successor-authentication-reopen-crash")
+			}
+			interruptedRecoveryID = closedID
+			emit("successor-authentication-reopen-process-kill-resume")
+		}
 		restoredSuccessor, err := runMX(ctx, value.releases.b, "recover", []string{
 			"--root", value.config.root, "--backup", successorBackup.BackupID,
 		}, value.forbidden(secret, newPassword, bearer))
 		if err != nil || restoredSuccessor.ReleaseID != value.releases.b.Manifest.Release.ID ||
-			restoredSuccessor.PreviousID != "" || !restoredSuccessor.Changed {
+			restoredSuccessor.PreviousID != "" || !restoredSuccessor.Changed ||
+			(interruptedRecoveryID != "" && restoredSuccessor.CorrelationID != interruptedRecoveryID) {
 			return fail("successor-backup-recovery")
 		}
 		if _, err := assertPlatform(ctx, value.config.root, value.releases.b.Manifest, ""); err != nil {
