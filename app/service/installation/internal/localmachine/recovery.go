@@ -1,9 +1,11 @@
 package localmachine
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -21,36 +23,39 @@ const (
 	recoveryVerificationComponent    = "probe"
 	recoveryVerificationDownTimeout  = "30"
 	maximumDatabaseRestoreDiagnostic = 64
-	databaseRestoreScript            = `umask 077
+	databaseRestorePrelude           = `BEGIN;
+DROP SCHEMA IF EXISTS audit, iam, managedservice, paas CASCADE;
+CREATE SCHEMA audit AUTHORIZATION matrix_audit_owner;
+CREATE SCHEMA iam AUTHORIZATION matrix_iam_owner;
+CREATE SCHEMA managedservice AUTHORIZATION CURRENT_USER;
+CREATE SCHEMA paas AUTHORIZATION CURRENT_USER;
+`
+	databaseRestoreSuspendDecisionConstraint = `CREATE TEMP TABLE matrix_restore_decision_constraint AS
+SELECT pg_get_constraintdef(oid) AS definition FROM pg_catalog.pg_constraint
+WHERE conrelid='iam.authorization_decisions'::regclass
+  AND conname='authorization_decision_contract_valid' AND contype='c';
+ALTER TABLE iam.authorization_decisions DROP CONSTRAINT authorization_decision_contract_valid;
+`
+	databaseRestoreValidateDecisionConstraint = `DO $matrix_restore_decision$
+DECLARE exact_definition text;
+BEGIN
+  SELECT definition INTO STRICT exact_definition FROM pg_temp.matrix_restore_decision_constraint;
+  EXECUTE 'ALTER TABLE iam.authorization_decisions ADD CONSTRAINT authorization_decision_contract_valid ' || exact_definition;
+END $matrix_restore_decision$;
+COMMIT;
+`
+	databaseRestoreScript = `umask 077
 diagnostic="$(mktemp)"
 trap 'rm -f -- "${diagnostic}"' EXIT
 set +e
-{
-  printf '%s\n' \
-    'BEGIN;' \
-    'DROP SCHEMA IF EXISTS audit, iam, managedservice, paas CASCADE;' \
-    'CREATE SCHEMA audit AUTHORIZATION matrix_audit_owner;' \
-    'CREATE SCHEMA iam AUTHORIZATION matrix_iam_owner;' \
-    'CREATE SCHEMA managedservice AUTHORIZATION CURRENT_USER;' \
-    'CREATE SCHEMA paas AUTHORIZATION CURRENT_USER;'
-  if pg_restore --file=- --exit-on-error --no-privileges --no-password --strict-names \
-      --schema=audit --schema=iam --schema=managedservice --schema=paas 2>/dev/null; then
-    printf '%s\n' 'COMMIT;'
-  else
-    printf '%s\n' 'ROLLBACK;'
-    exit 1
-  fi
-} | LC_ALL=C psql -X --set=ON_ERROR_STOP=1 --set=VERBOSITY=sqlstate \
-    --no-password --username=matrix --dbname=matrix >/dev/null 2>"${diagnostic}"
-statuses=("${PIPESTATUS[@]}")
+LC_ALL=C psql -X --set=ON_ERROR_STOP=1 --set=VERBOSITY=sqlstate \
+  --no-password --username=matrix --dbname=matrix >/dev/null 2>"${diagnostic}"
+database_status="$?"
 set -e
-generator_status="${statuses[0]:-1}"
-database_status="${statuses[1]:-1}"
-if [ "${generator_status}" -eq 0 ] && [ "${database_status}" -eq 0 ]; then
+if [ "${database_status}" -eq 0 ]; then
   exit 0
 fi
-if [ "${database_status}" -ne 0 ]; then
-  sqlstate="$(LC_ALL=C awk '{
+sqlstate="$(LC_ALL=C awk '{
     for (field = 1; field < NF; field++) {
       if (($field == "ERROR:" || $field == "FATAL:" || $field == "PANIC:") &&
           $(field + 1) ~ /^[0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z]$/) {
@@ -58,8 +63,8 @@ if [ "${database_status}" -ne 0 ]; then
         exit
       }
     }
-  }' "${diagnostic}")"
-  case "${sqlstate}" in
+}' "${diagnostic}")"
+case "${sqlstate}" in
     42P06|42P07|42710) printf '%s\n' 'RESTORE_OBJECT_CONFLICT' ;;
     42704) printf '%s\n' 'RESTORE_MISSING_OBJECT' ;;
     42P01) printf '%s\n' 'RESTORE_MISSING_RELATION' ;;
@@ -76,10 +81,7 @@ if [ "${database_status}" -ne 0 ]; then
         *) printf '%s\n' 'RESTORE_CLIENT' ;;
       esac
       ;;
-  esac
-else
-  printf '%s\n' 'RESTORE_PIPELINE'
-fi
+esac
 exit 1
 `
 )
@@ -886,37 +888,111 @@ func restoreDatabaseDump(
 		return errors.Join(platformcommand.ErrEffectVerification, err)
 	}
 	defer file.Close()
-	var diagnostic boundedOutput
-	diagnostic.maximum = maximumDatabaseRestoreDiagnostic
-	started, err := runtimeBoundary.RunTo(
-		ctx, file, &diagnostic,
-		"exec", "--interactive", "--user", "postgres", postgresID,
-		// The authenticated custom archive carries the exact IAM/Audit owner
-		// roles. Stream it through one transaction that first removes only the
-		// Matrix-owned schemas, then selects exactly those schemas from the
-		// authenticated archive. This removes authenticated successor-only
-		// dependencies that an older backup cannot name in its cleanup TOC
-		// without replaying unrelated public or extension data.
-		// ACLs remain release-owned and are reapplied by target migrations.
-		"/bin/bash", "-o", "pipefail", "-ceu", databaseRestoreScript,
-	)
-	if err == nil {
-		if diagnostic.exceeded || len(bytes.TrimSpace(diagnostic.Bytes())) != 0 {
-			return errors.Join(
-				platformcommand.ErrEffectVerification,
-				errors.New("PostgreSQL backup recovery output is invalid"),
-			)
-		}
-		return nil
+	type restoreProcess struct {
+		started bool
+		err     error
+		output  boundedOutput
 	}
-	if !started {
-		return errors.Join(platformcommand.ErrEffectUnavailable, err)
-	}
+	sqlReader, sqlWriter := io.Pipe()
+	databaseFinished := make(chan restoreProcess, 1)
+	go func() {
+		var output boundedOutput
+		output.maximum = maximumDatabaseRestoreDiagnostic
+		started, runErr := runtimeBoundary.RunTo(ctx, sqlReader, &output,
+			"exec", "--interactive", "--user", "postgres", postgresID,
+			"/bin/bash", "-o", "pipefail", "-ceu", databaseRestoreScript)
+		_ = sqlReader.CloseWithError(runErr)
+		databaseFinished <- restoreProcess{started: started, err: runErr, output: output}
+	}()
+	archiveReader, archiveWriter := io.Pipe()
+	generatorFinished := make(chan restoreProcess, 1)
+	go func() {
+		started, runErr := runtimeBoundary.RunTo(ctx, file, archiveWriter,
+			"exec", "--interactive", "--user", "postgres", postgresID,
+			"pg_restore", "--file=-", "--exit-on-error", "--no-privileges", "--no-password", "--strict-names",
+			"--schema=audit", "--schema=iam", "--schema=managedservice", "--schema=paas")
+		_ = archiveWriter.CloseWithError(runErr)
+		generatorFinished <- restoreProcess{started: started, err: runErr}
+	}()
+	streamErr := streamDatabaseRestoreSQL(archiveReader, sqlWriter)
+	_ = archiveReader.CloseWithError(streamErr)
+	generator := <-generatorFinished
+	_ = sqlWriter.CloseWithError(errors.Join(streamErr, generator.err))
+	database := <-databaseFinished
 	if ctx.Err() != nil {
 		return errors.Join(platformcommand.ErrEffectOutcomeUnknown, ctx.Err())
 	}
-	boundary := classifyDatabaseRestoreDiagnostic(diagnostic.Bytes(), diagnostic.exceeded)
-	return errors.Join(platformcommand.ErrEffectVerification, &databaseRestoreFailure{boundary: boundary})
+	if !database.started || !generator.started {
+		return errors.Join(platformcommand.ErrEffectUnavailable, errors.New("PostgreSQL restore process did not start"))
+	}
+	if database.err != nil {
+		boundary := classifyDatabaseRestoreDiagnostic(database.output.Bytes(), database.output.exceeded)
+		return errors.Join(platformcommand.ErrEffectVerification, &databaseRestoreFailure{boundary: boundary})
+	}
+	if streamErr != nil || generator.err != nil {
+		return errors.Join(platformcommand.ErrEffectVerification, &databaseRestoreFailure{
+			boundary: platformcommand.RecoveryFailureDatabaseRestorePipeline,
+		})
+	}
+	if database.output.exceeded || len(bytes.TrimSpace(database.output.Bytes())) != 0 {
+		return errors.Join(platformcommand.ErrEffectVerification,
+			errors.New("PostgreSQL backup recovery output is invalid"))
+	}
+	return nil
+}
+
+// The archive is generated as SQL in one bounded stream and consumed by one
+// psql transaction. Its decision CHECK reads authorization_profiles, whose
+// TABLE DATA appears later in PostgreSQL's default order. We remove only that
+// exact archived CHECK before its COPY, then re-add and validate the archived
+// definition after all data is present. No backup-sized temporary copy or
+// unchecked data is committed.
+func streamDatabaseRestoreSQL(source io.Reader, destination io.Writer) error {
+	if _, err := io.WriteString(destination, databaseRestorePrelude); err != nil {
+		return err
+	}
+	reader := bufio.NewReaderSize(source, 64*1024)
+	inCopy, found := false, false
+	lineStart := true
+	for {
+		segment, readErr := reader.ReadSlice('\n')
+		if len(segment) != 0 {
+			if lineStart {
+				if inCopy {
+					if bytes.Equal(segment, []byte("\\.\n")) {
+						inCopy = false
+					}
+				} else if bytes.HasPrefix(segment, []byte("COPY ")) &&
+					bytes.Contains(segment, []byte(" FROM stdin;")) {
+					if bytes.HasPrefix(segment, []byte("COPY iam.authorization_decisions (")) {
+						if found {
+							return errors.New("backup repeats decision COPY")
+						}
+						if _, err := io.WriteString(destination, databaseRestoreSuspendDecisionConstraint); err != nil {
+							return err
+						}
+						found = true
+					}
+					inCopy = true
+				}
+			}
+			if _, err := destination.Write(segment); err != nil {
+				return err
+			}
+		}
+		lineStart = readErr != bufio.ErrBufferFull
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil && readErr != bufio.ErrBufferFull {
+			return readErr
+		}
+	}
+	if !found || inCopy {
+		return errors.New("backup decision COPY is absent or incomplete")
+	}
+	_, err := io.WriteString(destination, "\n"+databaseRestoreValidateDecisionConstraint)
+	return err
 }
 
 func classifyDatabaseRestoreDiagnostic(

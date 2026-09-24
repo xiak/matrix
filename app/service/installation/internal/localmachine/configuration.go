@@ -96,6 +96,23 @@ func restoreUpgradeConfiguration(plan platformcommand.UpgradePlan) error {
 	if err := validateUpgradeIdentity(source, plan.Target); err != nil {
 		return errors.Join(platformcommand.ErrEffectVerification, err)
 	}
+	// Preflight and backup can fail before the candidate is staged. In that
+	// state the source configuration must still be exact; there is no target
+	// configuration to restore from, and treating its absence as a rollback
+	// failure would hide the original, normalized failure code.
+	staged, err := managedDirectoryExists(
+		plan.Target.Root,
+		filepath.FromSlash(layout.ReleaseDirectory(plan.Target.Bundle.Manifest.Release.ID)),
+	)
+	if err != nil {
+		return errors.Join(platformcommand.ErrEffectConflict, err)
+	}
+	if !staged {
+		if _, err := verifiedInstallationConfiguration(source); err != nil {
+			return errors.Join(platformcommand.ErrEffectVerification, err)
+		}
+		return nil
+	}
 	return replaceReleaseConfiguration(plan.Target, source)
 }
 

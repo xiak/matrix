@@ -172,6 +172,23 @@ func classifyMXFailure(output commandOutput, action string) (string, bool) {
 	return envelope.Error.Code, true
 }
 
+func completedMXFailureCode(
+	waitErr error,
+	stdout, stderr *boundedBuffer,
+	action string,
+	forbidden [][]byte,
+) (string, bool) {
+	var exit *exec.ExitError
+	if !errors.As(waitErr, &exit) || stdout == nil || stderr == nil ||
+		stdout.overflow || stderr.overflow ||
+		containsAny(stdout.content.Bytes(), forbidden) || containsAny(stderr.content.Bytes(), forbidden) {
+		return "", false
+	}
+	return classifyMXFailure(commandOutput{
+		stdout: stdout.content.Bytes(), stderr: stderr.content.Bytes(), exit: exit.ExitCode(),
+	}, action)
+}
+
 func mxFailureContract(class string) (int, string, bool) {
 	switch class {
 	case "INVALID_ARGUMENT":

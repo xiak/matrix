@@ -1768,6 +1768,38 @@ func TestUpgradeConfigurationReplacesOnlyReleaseDerivedFilesAndReplaysBothWays(t
 	}
 }
 
+func TestUpgradeRollbackBeforeCandidateStagingKeepsOnlyVerifiedSourceConfiguration(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine upgrade configuration targets Linux")
+	}
+	plan := newUpgradePlan(t)
+	source, err := authenticateInstalledPlan(plan.Source)
+	if err != nil {
+		t.Fatalf("authenticate source: %v", err)
+	}
+	defer clear(source.TrustBytes)
+	if err := removeManagedTree(
+		plan.Target.Root,
+		filepath.FromSlash(layout.ReleaseDirectory(plan.Target.Bundle.Manifest.Release.ID)),
+	); err != nil {
+		t.Fatalf("remove uncommitted candidate: %v", err)
+	}
+	if err := restoreUpgradeConfiguration(plan); err != nil {
+		t.Fatalf("restore before candidate staging: %v", err)
+	}
+	assertReleaseConfiguration(t, source)
+	if err := restoreUpgradeConfiguration(plan); err != nil {
+		t.Fatalf("replay pre-staging restore: %v", err)
+	}
+	composePath := filepath.Join(source.Root, filepath.FromSlash(layout.Compose))
+	if err := os.WriteFile(composePath, []byte(`{"unowned":true}`), 0o600); err != nil {
+		t.Fatalf("drift source configuration: %v", err)
+	}
+	if err := restoreUpgradeConfiguration(plan); !errors.Is(err, platformcommand.ErrEffectVerification) {
+		t.Fatalf("drifted source configuration was accepted: %v", err)
+	}
+}
+
 func TestUpgradeConfigurationRetainsAndRestoresTheExactAdjacentTopology(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("local-machine upgrade configuration targets Linux")
@@ -3493,6 +3525,9 @@ func newUpgradePlan(t *testing.T, profiles ...release.DatabaseProfile) platformc
 		Trust: fixtures[0].Trust, TrustBytes: trustBytes,
 		NorthboundOrigin: "https://matrix.example.com:443",
 	}
+	if source.Bundle.Manifest.TopologyDigest == topology.ContractDigest() {
+		source.SecurityMail = newSecurityMailInput(t)
+	}
 	if err := stageInstallation(source, rand.Reader); err != nil {
 		t.Fatalf("stage upgrade source: %v", err)
 	}
@@ -3519,6 +3554,9 @@ func newUpgradePlan(t *testing.T, profiles ...release.DatabaseProfile) platformc
 	}
 	target := source
 	target.Bundle = bundles[1]
+	if target.Bundle.Manifest.TopologyDigest == topology.ContractDigest() && target.SecurityMail.Digest == "" {
+		target.SecurityMail = newSecurityMailInput(t)
+	}
 	target.PreviousID = source.Bundle.Manifest.Release.ID
 	target.PreviousDigest = source.Bundle.ManifestSHA256
 	if err := stageInstallation(target, rand.Reader); err != nil {
@@ -4511,14 +4549,22 @@ func (runtimeBoundary *platformStartRuntime) RunTo(
 			_, err = output.Write([]byte("; Archive created for test\n"))
 			return true, err
 		}
-		return true, errors.New("recovery used direct pg_restore outside its schema-reset transaction")
+		if !slices.Contains(arguments, "--file=-") || slices.Contains(arguments, "--clean") ||
+			!hasArgumentPair(arguments, "--user", "postgres") {
+			return true, errors.New("recovery SQL generator boundary is invalid")
+		}
+		_, err = output.Write([]byte("COPY iam.authorization_decisions (id) FROM stdin;\n\\.\n"))
+		return true, err
 	}
 	if slices.Contains(arguments, databaseRestoreScript) {
 		if input == nil {
 			return false, errors.New("recovery restore stdin is absent")
 		}
 		content, err := io.ReadAll(input)
-		if err != nil || !bytes.Equal(content, runtimeBoundary.databaseDump) {
+		if err != nil || !bytes.Contains(content, []byte(databaseRestorePrelude)) ||
+			!bytes.Contains(content, []byte(databaseRestoreSuspendDecisionConstraint)) ||
+			!bytes.Contains(content, []byte(databaseRestoreValidateDecisionConstraint)) ||
+			!bytes.Contains(content, []byte("COPY iam.authorization_decisions (id) FROM stdin;\n\\.\n")) {
 			return true, errors.New("recovery restore content is invalid")
 		}
 		wantTail := []string{
@@ -4530,20 +4576,13 @@ func (runtimeBoundary *platformStartRuntime) RunTo(
 			return true, errors.New("recovery restore process boundary is invalid")
 		}
 		for _, required := range []string{
-			"BEGIN;", "DROP SCHEMA IF EXISTS audit, iam, managedservice, paas CASCADE;",
-			"CREATE SCHEMA audit AUTHORIZATION matrix_audit_owner;",
-			"CREATE SCHEMA iam AUTHORIZATION matrix_iam_owner;",
-			"CREATE SCHEMA managedservice AUTHORIZATION CURRENT_USER;",
-			"CREATE SCHEMA paas AUTHORIZATION CURRENT_USER;",
-			"pg_restore --file=- --exit-on-error --no-privileges --no-password --strict-names",
-			"--schema=audit --schema=iam --schema=managedservice --schema=paas 2>/dev/null",
-			"COMMIT;", "ROLLBACK;", "psql -X --set=ON_ERROR_STOP=1",
+			"psql -X --set=ON_ERROR_STOP=1",
 			"--set=VERBOSITY=sqlstate", "mktemp", "RESTORE_OBJECT_CONFLICT",
 			"RESTORE_MISSING_OBJECT", "RESTORE_MISSING_RELATION", "RESTORE_MISSING_SCHEMA",
 			"RESTORE_AUTHORITY", "RESTORE_DEPENDENCY",
-			"RESTORE_INTEGRITY", "RESTORE_TRANSACTION", "RESTORE_PIPELINE",
+			"RESTORE_INTEGRITY", "RESTORE_TRANSACTION",
 			"RESTORE_CLIENT", "RESTORE_CLIENT_FATAL", "RESTORE_CONNECTION",
-			"RESTORE_CLIENT_SCRIPT", "PIPESTATUS",
+			"RESTORE_CLIENT_SCRIPT",
 			"--username=matrix --dbname=matrix",
 		} {
 			if !strings.Contains(databaseRestoreScript, required) {
@@ -4557,13 +4596,15 @@ func (runtimeBoundary *platformStartRuntime) RunTo(
 				return true, fmt.Errorf("recovery restore transaction contains %s", forbidden)
 			}
 		}
-		drop := strings.Index(databaseRestoreScript, "DROP SCHEMA IF EXISTS audit, iam, managedservice, paas CASCADE;")
-		audit := strings.Index(databaseRestoreScript, "CREATE SCHEMA audit AUTHORIZATION matrix_audit_owner;")
-		iam := strings.Index(databaseRestoreScript, "CREATE SCHEMA iam AUTHORIZATION matrix_iam_owner;")
-		managedservice := strings.Index(databaseRestoreScript, "CREATE SCHEMA managedservice AUTHORIZATION CURRENT_USER;")
-		paas := strings.Index(databaseRestoreScript, "CREATE SCHEMA paas AUTHORIZATION CURRENT_USER;")
-		restore := strings.Index(databaseRestoreScript, "pg_restore --file=-")
-		if drop < 0 || !(drop < audit && audit < iam && iam < managedservice && managedservice < paas && paas < restore) {
+		drop := strings.Index(string(content), "DROP SCHEMA IF EXISTS audit, iam, managedservice, paas CASCADE;")
+		audit := strings.Index(string(content), "CREATE SCHEMA audit AUTHORIZATION matrix_audit_owner;")
+		iam := strings.Index(string(content), "CREATE SCHEMA iam AUTHORIZATION matrix_iam_owner;")
+		managedservice := strings.Index(string(content), "CREATE SCHEMA managedservice AUTHORIZATION CURRENT_USER;")
+		paas := strings.Index(string(content), "CREATE SCHEMA paas AUTHORIZATION CURRENT_USER;")
+		suspend := strings.Index(string(content), databaseRestoreSuspendDecisionConstraint)
+		restore := strings.Index(string(content), "COPY iam.authorization_decisions (id) FROM stdin;")
+		validate := strings.Index(string(content), databaseRestoreValidateDecisionConstraint)
+		if drop < 0 || !(drop < audit && audit < iam && iam < managedservice && managedservice < paas && paas < suspend && suspend < restore && restore < validate) {
 			return true, errors.New("recovery restore schema reset order is invalid")
 		}
 		runtimeBoundary.recoveryRestores++
@@ -4607,6 +4648,13 @@ func (runtimeBoundary *databaseRestoreDiagnosticRuntime) RunTo(
 ) (bool, error) {
 	content, err := io.ReadAll(input)
 	if err != nil {
+		return true, err
+	}
+	if slices.Contains(arguments, "pg_restore") {
+		if !bytes.Equal(content, []byte("authenticated custom archive")) {
+			return true, errors.New("restore generator input is invalid")
+		}
+		_, err = output.Write([]byte("COPY iam.authorization_decisions (id) FROM stdin;\n\\.\n"))
 		return true, err
 	}
 	runtimeBoundary.input = content
@@ -4657,7 +4705,8 @@ func TestRestoreDatabaseDumpReturnsOnlyClosedDiagnostics(t *testing.T) {
 		)
 		if !errors.Is(err, platformcommand.ErrEffectVerification) ||
 			databaseRestoreFailureBoundary(err) != want ||
-			!bytes.Equal(runtimeBoundary.input, dump) ||
+			!bytes.Contains(runtimeBoundary.input, []byte(databaseRestoreSuspendDecisionConstraint)) ||
+			!bytes.Contains(runtimeBoundary.input, []byte(databaseRestoreValidateDecisionConstraint)) ||
 			!slices.Contains(runtimeBoundary.arguments, databaseRestoreScript) {
 			t.Fatalf("diagnostic %q = %v / %q / input=%q / args=%q", diagnostic, err, databaseRestoreFailureBoundary(err), runtimeBoundary.input, runtimeBoundary.arguments)
 		}
@@ -4695,22 +4744,52 @@ func TestRestoreDatabaseDumpReturnsOnlyClosedDiagnostics(t *testing.T) {
 	})
 }
 
+func TestStreamDatabaseRestoreSQLValidatesArchivedDecisionConstraint(t *testing.T) {
+	decisionCopy := "COPY iam.authorization_decisions (id) FROM stdin;\n"
+	otherCopy := "COPY iam.other_table (value) FROM stdin;\n"
+	largeRow := strings.Repeat("x", 128*1024) + "\n"
+	archive := otherCopy + decisionCopy + largeRow + "\\.\n" + decisionCopy + "1\n\\.\n"
+	var output bytes.Buffer
+	if err := streamDatabaseRestoreSQL(strings.NewReader(archive), &output); err != nil {
+		t.Fatalf("transform authenticated archive: %v", err)
+	}
+	content := output.String()
+	if strings.Count(content, databaseRestoreSuspendDecisionConstraint) != 1 ||
+		strings.Count(content, databaseRestoreValidateDecisionConstraint) != 1 ||
+		strings.Count(content, decisionCopy) != 2 ||
+		!strings.Contains(content, otherCopy+decisionCopy+largeRow+"\\.\n") ||
+		!(strings.Index(content, databaseRestoreSuspendDecisionConstraint) <
+			strings.LastIndex(content, decisionCopy) &&
+			strings.LastIndex(content, decisionCopy) <
+				strings.Index(content, databaseRestoreValidateDecisionConstraint)) {
+		t.Fatal("decision constraint was not suspended only around the archived decision data")
+	}
+	for _, invalidArchive := range []string{
+		otherCopy + "1\n\\.\n",
+		decisionCopy + "1\n\\.\n" + decisionCopy + "2\n\\.\n",
+		decisionCopy + "1\n",
+	} {
+		output.Reset()
+		if err := streamDatabaseRestoreSQL(strings.NewReader(invalidArchive), &output); err == nil ||
+			strings.Contains(output.String(), databaseRestoreValidateDecisionConstraint) {
+			t.Fatal("invalid archive committed or validated a partial restore")
+		}
+	}
+}
+
 func TestDatabaseRestoreScriptEmitsOnlyClosedSQLStateClass(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("database restore command targets the Linux release image")
 	}
 	bin := t.TempDir()
 	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
-	run := func(t *testing.T, restore, psql, want string, wantSuccess bool) {
+	run := func(t *testing.T, psql, want string, wantSuccess bool) {
 		t.Helper()
-		if err := os.WriteFile(filepath.Join(bin, "pg_restore"), []byte(restore), 0o700); err != nil {
-			t.Fatalf("write fake pg_restore: %v", err)
-		}
 		if err := os.WriteFile(filepath.Join(bin, "psql"), []byte(psql), 0o700); err != nil {
 			t.Fatalf("write fake psql: %v", err)
 		}
 		command := exec.Command("/bin/bash", "-o", "pipefail", "-ceu", databaseRestoreScript)
-		command.Stdin = strings.NewReader("archive")
+		command.Stdin = strings.NewReader("BEGIN;\nROLLBACK;\n")
 		output, err := command.Output()
 		if (err == nil) != wantSuccess || string(output) != want ||
 			strings.Contains(string(output), "private relation") {
@@ -4719,14 +4798,12 @@ func TestDatabaseRestoreScriptEmitsOnlyClosedSQLStateClass(t *testing.T) {
 	}
 	t.Run("server SQLSTATE", func(t *testing.T) {
 		run(t,
-			"#!/bin/sh\nprintf '%s\\n' 'SELECT 1;'\n",
 			"#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' 'ERROR:  42P07' 'private relation name' >&2\nexit 3\n",
 			"RESTORE_OBJECT_CONFLICT\n", false,
 		)
 	})
 	t.Run("server SQLSTATE with source prefix", func(t *testing.T) {
 		run(t,
-			"#!/bin/sh\nprintf '%s\\n' 'SELECT 1;'\n",
 			"#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' 'psql:<stdin>:17: ERROR:  42P07' 'private relation name' >&2\nexit 3\n",
 			"RESTORE_OBJECT_CONFLICT\n", false,
 		)
@@ -4739,50 +4816,37 @@ func TestDatabaseRestoreScriptEmitsOnlyClosedSQLStateClass(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			parts := strings.Fields(sqlstateAndDiagnostic)
 			run(t,
-				"#!/bin/sh\nprintf '%s\\n' 'SELECT 1;'\n",
 				"#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' 'ERROR:  "+parts[0]+"' >&2\nexit 3\n",
 				parts[1]+"\n", false,
 			)
 		})
 	}
-	t.Run("archive pipeline", func(t *testing.T) {
-		run(t,
-			"#!/bin/sh\nprintf '%s\\n' 'SELECT 1;'\nexit 9\n",
-			"#!/bin/sh\ncat >/dev/null\n",
-			"RESTORE_PIPELINE\n", false,
-		)
-	})
 	t.Run("unclassified client failure", func(t *testing.T) {
 		run(t,
-			"#!/bin/sh\nprintf '%s\\n' 'SELECT 1;'\n",
 			"#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' 'client failed without SQLSTATE' >&2\nexit 3\n",
 			"RESTORE_CLIENT_SCRIPT\n", false,
 		)
 	})
 	t.Run("fatal client failure", func(t *testing.T) {
 		run(t,
-			"#!/bin/sh\nprintf '%s\\n' 'SELECT 1;'\n",
 			"#!/bin/sh\ncat >/dev/null\nexit 1\n",
 			"RESTORE_CLIENT_FATAL\n", false,
 		)
 	})
 	t.Run("connection failure", func(t *testing.T) {
 		run(t,
-			"#!/bin/sh\nprintf '%s\\n' 'SELECT 1;'\n",
 			"#!/bin/sh\ncat >/dev/null\nexit 2\n",
 			"RESTORE_CONNECTION\n", false,
 		)
 	})
 	t.Run("unrecognized client status", func(t *testing.T) {
 		run(t,
-			"#!/bin/sh\nprintf '%s\\n' 'SELECT 1;'\n",
 			"#!/bin/sh\ncat >/dev/null\nexit 9\n",
 			"RESTORE_CLIENT\n", false,
 		)
 	})
 	t.Run("success", func(t *testing.T) {
 		run(t,
-			"#!/bin/sh\nprintf '%s\\n' 'SELECT 1;'\n",
 			"#!/bin/sh\ncat >/dev/null\n",
 			"", true,
 		)

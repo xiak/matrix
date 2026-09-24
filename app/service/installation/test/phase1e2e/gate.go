@@ -1400,7 +1400,12 @@ func (value *gate) failedUpgrade(
 	injected := false
 	for !injected && upgradeContext.Err() == nil {
 		select {
-		case <-waited:
+		case waitErr := <-waited:
+			if code, ok := completedMXFailureCode(
+				waitErr, stdout, stderr, "upgrade", value.forbidden(secret, password, bearer),
+			); ok {
+				return "", fail("failed-upgrade-ended-before-injection-" + code)
+			}
 			return "", fail("failed-upgrade-ended-before-injection")
 		default:
 		}
