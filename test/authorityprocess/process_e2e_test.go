@@ -358,7 +358,7 @@ func TestIAMRetainedPrePlatformProcessUpgrade(t *testing.T) {
 
 func TestIAMRetainedPreMFAProcessUpgrade(t *testing.T) {
 	testIAMRetainedSessionSource(t, "MATRIX_IAM_PRE_MFA_UPGRADE_POSTGRES_TEST_DSN", "matrix_iam_upgrade_pre_mfa_",
-		"07aa50627318708ed4d3ac9ce481b1e5829669d6", 36)
+		"9d8ff34fdc2e1c45a278357d45e2803b799eaa29", 36)
 }
 
 func testIAMRetainedSessionSource(t *testing.T, variable, databasePrefix, source string, sourceSchema uint64) {
@@ -383,9 +383,9 @@ func testIAMRetainedSessionSource(t *testing.T, variable, databasePrefix, source
 	assertCleanSchemas(t, ctx, admin)
 	root, temporary := repositoryRoot(t), t.TempDir()
 	// Fixed accepted predecessors create the data through their own binaries:
-	// IAM32 predates TOTP custody, IAM36 has the real first-contact writer but
-	// no MFA ceremony. This is not a replay of every unpublished migration or
-	// permission to cross a signed release profile.
+	// IAM32 predates TOTP custody, while exact preparation IAM36 has the real
+	// first-contact writer and recovery fence but no MFA creation ceremony.
+	// This is not permission to cross any other signed release profile.
 	baseline := extractFixedIAMSource(t, ctx, root, temporary, source)
 	oldMigrator := buildAuthorityBinary(t, ctx, baseline, temporary, "iam-session-predecessor-migrate", "./app/service/iam/cmd/matrix-iam-migrate")
 	oldBinary := buildAuthorityBinary(t, ctx, baseline, temporary, "iam-session-predecessor", "./app/service/iam/cmd/matrix-iam")
