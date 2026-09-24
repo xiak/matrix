@@ -29,6 +29,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"runtime"
 	"strings"
 	"sync"
@@ -4552,34 +4553,35 @@ func assertAuthorityPlaintextAbsent(
 ) {
 	t.Helper()
 	for index, plaintext := range plaintexts {
+		codePattern := authorityPlaintextCodePattern(plaintext)
 		var present [7]bool
 		if err := admin.QueryRow(
 			ctx,
 			`SELECT
 				EXISTS (
 					SELECT 1 FROM iam.audit_outbox
-					 WHERE strpos(event_document::text, $1) > 0
+					 WHERE CASE WHEN $3 THEN event_document::text ~ $2 ELSE strpos(event_document::text, $1) > 0 END
 				), EXISTS (
 					SELECT 1 FROM paas.audit_outbox
-					 WHERE strpos(document::text, $1) > 0
+					 WHERE CASE WHEN $3 THEN document::text ~ $2 ELSE strpos(document::text, $1) > 0 END
 				), EXISTS (
 					SELECT 1 FROM paas.operations
-					 WHERE strpos(document::text, $1) > 0
+					 WHERE CASE WHEN $3 THEN document::text ~ $2 ELSE strpos(document::text, $1) > 0 END
 				), EXISTS (
 					SELECT 1 FROM managedservice.audit_outbox
-					 WHERE strpos(document::text, $1) > 0
+					 WHERE CASE WHEN $3 THEN document::text ~ $2 ELSE strpos(document::text, $1) > 0 END
 				), EXISTS (
 					SELECT 1 FROM managedservice.operations AS operation
-					 WHERE strpos(row_to_json(operation)::text, $1) > 0
+					 WHERE CASE WHEN $3 THEN row_to_json(operation)::text ~ $2 ELSE strpos(row_to_json(operation)::text, $1) > 0 END
 				), EXISTS (
 					SELECT 1 FROM audit.records
-					 WHERE strpos(event_document::text, $1) > 0
-					    OR strpos(canonical_document, $1) > 0
+					 WHERE CASE WHEN $3 THEN event_document::text ~ $2 ELSE strpos(event_document::text, $1) > 0 END
+					    OR CASE WHEN $3 THEN canonical_document ~ $2 ELSE strpos(canonical_document, $1) > 0 END
 				), EXISTS (
 					SELECT 1 FROM iam.local_credential_recoveries AS receipt
-					 WHERE strpos(row_to_json(receipt)::text, $1) > 0
+					 WHERE CASE WHEN $3 THEN row_to_json(receipt)::text ~ $2 ELSE strpos(row_to_json(receipt)::text, $1) > 0 END
 				)`,
-			plaintext,
+			plaintext, codePattern, codePattern != "",
 		).Scan(&present[0], &present[1], &present[2], &present[3], &present[4], &present[5], &present[6]); err != nil {
 			t.Fatalf("inspect authority plaintext storage: %v", err)
 		}
@@ -4589,6 +4591,45 @@ func assertAuthorityPlaintextAbsent(
 					[...]string{"iam.audit_outbox", "paas.audit_outbox", "paas.operations", "managedservice.audit_outbox",
 						"managedservice.operations", "audit.records", "iam.local_credential_recoveries"}[source])
 			}
+		}
+	}
+}
+
+// A six-digit TOTP code is short enough to occur inside an unrelated hash or
+// identifier by chance. Its stored plaintext must be a distinct token, not a
+// substring of a longer alphanumeric value. Long credentials remain exact
+// substring checks; the SQL receives only a parameterized fixed-shape pattern.
+func authorityPlaintextCodePattern(plaintext string) string {
+	if len(plaintext) != 6 {
+		return ""
+	}
+	for _, digit := range plaintext {
+		if digit < '0' || digit > '9' {
+			return ""
+		}
+	}
+	return `(^|[^[:alnum:]])` + plaintext + `([^[:alnum:]]|$)`
+}
+
+func TestAuthorityPlaintextCodePatternRequiresADistinctToken(t *testing.T) {
+	pattern := authorityPlaintextCodePattern("123456")
+	if pattern == "" || authorityPlaintextCodePattern("12345") != "" ||
+		authorityPlaintextCodePattern("12345a") != "" ||
+		authorityPlaintextCodePattern("Initial-Process-Admin-Password-49!") != "" {
+		t.Fatal("storage scan did not distinguish short codes from long credentials")
+	}
+	for _, scenario := range []struct {
+		content string
+		want    bool
+	}{
+		{`{"code":"123456"}`, true},
+		{`?code=123456&next=1`, true},
+		{`"digest":"abc123456def"`, false},
+		{`"timestamp":1234567890`, false},
+	} {
+		matched, err := regexp.MatchString(pattern, scenario.content)
+		if err != nil || matched != scenario.want {
+			t.Fatalf("short-code storage pattern matched=%t, want %t: %v", matched, scenario.want, err)
 		}
 	}
 }
