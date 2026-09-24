@@ -350,6 +350,7 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 - MOCK 成功态只呈现非秘密会话身份、来源 User、签发和到期时间，明确不返回或保存真实 credential、不替换 Header 当前登录。退出确认说明真实 Role logout 不签发或复活来源 USER 凭据，来源会话必须重新检查。选择、审阅、成功与退出均在内容区完成，没有 Dialog。
 - 完整前端 40 个测试文件、590 条用例及三条静态归一化用例通过；类型、lint、架构、228 组主题对比、40 页生产导出、223 个嵌入文件等价和 Go UI 宿主门禁通过。真实 DEV 在默认紧凑视口与 `360 × 800` 验证账号菜单入口、审阅、成功及未知结果恢复态；小屏 document `clientWidth == scrollWidth == 360`、Dialog 数为零，最终控制台 warning/error 为空。
 - 该证据不表示 IAM-006 固定提交已经进入本分支，也不表示真实 `GET /v1/auth/assumable-roles`、`POST :assume`、当前 Role 身份、by-request 恢复或 logout 已接入。后续 LIVE 适配必须消费固定契约且不得在网络、5xx、404 或协议失败后回退本 MOCK。
+- 2026-09-25 已推送 [`e6ec141b`](https://github.com/xiak/matrix/commit/e6ec141b)：修正体验会话的固定旧日期。签发时刻来自当前点击，所选时长决定到期；定时器和后台页面恢复都使到期身份转为不可用提示，隐藏有效会话的退出操作，并提供返回发现入口。定向用例验证实际时间窗、到期和后台恢复；`390px` DEV 实测页面与视口均为 390px，无新增 warning/error。完整共享门禁归 [FEAT-007](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence) 所有；本地时间仅支撑 MOCK 展示，不证明真实 RoleSession 权威状态。
 
 ### Role 管理与管理员会话 LIVE 客户端的开发验收证据
 

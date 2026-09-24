@@ -6,7 +6,7 @@
 - Updated: 2026-09-25
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `7d04fe84`
+- Pushed UI source: `e6ec141b`
 
 ## Authoritative route
 
@@ -34,9 +34,10 @@ with another branch's renderer or inherit that branch's UI acceptance.
 The current milestone keeps the independent MOCK preview, fixed-contract LIVE
 paths and synchronized static Go host. It gives catalog-driven visual policy
 creation and LIVE version publishing the same compact statement-by-statement
-review while preserving lossless JSON review/comparison, without adding a LIVE
-contract. The shared development gates passed; detailed behavior, evidence and
-open real-process gates remain only in the FEAT owners.
+review while preserving lossless JSON review/comparison, and keeps MOCK member
+RoleSession timing accurate across issue, expiry and background-tab return.
+No LIVE contract was added. The shared development gates passed; detailed
+behavior, evidence and open real-process gates remain only in the FEAT owners.
 
 ## Continuation
 
