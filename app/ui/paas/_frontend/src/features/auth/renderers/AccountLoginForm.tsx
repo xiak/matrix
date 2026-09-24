@@ -10,7 +10,7 @@ import { uxPreviewEnabled } from "@/infrastructure/runtime/uxPreviewMode";
 import { preparePreviewPersonalMfaDemo } from "../repositories/previewIamRepository";
 import styles from "./LoginRenderer.module.css";
 
-export function AccountLoginForm({ returnTo }: { returnTo: string }) {
+export function AccountLoginForm({ returnTo, onPreviewEnrollment }: { returnTo: string; onPreviewEnrollment?: () => void }) {
   const router = useRouter();
   const session = useSession();
   const t = useTranslations("Auth");
@@ -113,6 +113,9 @@ export function AccountLoginForm({ returnTo }: { returnTo: string }) {
         {busy && submission === "mfa" ? <LoaderCircle aria-hidden="true" className={styles.spinner} /> : null}
         {t("previewMfaAction")}
       </Button>
+      {onPreviewEnrollment ? <Button block disabled={busy} onClick={onPreviewEnrollment} variant="ghost">
+        {t("previewEnrollmentAction")}
+      </Button> : null}
     </div> : null}
   </>;
 }

@@ -93,6 +93,80 @@ describe("branded sign-in flows", () => {
     expect(localStorage.length + sessionStorage.length).toBe(0);
     expect(document.body.textContent).not.toContain("preview-challenge-");
   });
+  it("previews required first-time MFA setup without invoking IAM or creating a session", async () => {
+    const iam = repository();
+    const { user } = open(iam);
+    await user.click(screen.getByRole("button", { name: "体验首次强制 MFA 设置" }));
+    expect(screen.getByRole("heading", { name: "首次强制 MFA 设置" })).toBeTruthy();
+    expect(screen.getAllByText(/NEVER_BOUND/).length).toBeGreaterThan(0);
+    await user.click(screen.getByRole("button", { name: "已有可信通知地址" }));
+    expect(screen.getByRole("heading", { name: "绑定身份验证器" })).toBeTruthy();
+    expect(screen.getByText("MTRXPREVIEWFIRSTFACTORNOTREAL")).toBeTruthy();
+    await user.type(screen.getByLabelText("身份验证器 6 位验证码"), "000000");
+    await user.click(screen.getByRole("button", { name: "确认演示绑定" }));
+    expect(screen.getAllByRole("alert").some((alert) => alert.textContent?.includes("演示验证码不正确"))).toBe(true);
+    await user.clear(screen.getByLabelText("身份验证器 6 位验证码"));
+    await user.type(screen.getByLabelText("身份验证器 6 位验证码"), "624810");
+    await user.click(screen.getByRole("button", { name: "确认演示绑定" }));
+    expect(screen.getByRole("heading", { name: "保存一次性恢复码" })).toBeTruthy();
+    expect(screen.getAllByText(/^MTRX-FIRST-/)).toHaveLength(10);
+    expect(screen.getByRole("button", { name: "完成并返回登录" }).hasAttribute("disabled")).toBe(true);
+    await user.click(screen.getByRole("checkbox", { name: "我已了解真实恢复码须单独安全保存" }));
+    await user.click(screen.getByRole("button", { name: "完成并返回登录" }));
+    expect(screen.getByRole("heading", { name: "设置完成" })).toBeTruthy();
+    expect(document.body.textContent).not.toContain("MTRX-FIRST-");
+    expect(document.body.textContent).not.toContain("MTRXPREVIEWFIRSTFACTORNOTREAL");
+    expect(iam.login).not.toHaveBeenCalled();
+    expect(navigation.replace).not.toHaveBeenCalled();
+    expect(localStorage.length + sessionStorage.length).toBe(0);
+    await user.click(screen.getByRole("button", { name: "返回登录" }));
+    expect(screen.getByRole("heading", { name: "登录控制台" })).toBeTruthy();
+  });
+  it("requires a fresh challenge after password change and address proof before first-time TOTP setup", async () => {
+    const iam = repository();
+    const { user } = open(iam);
+    await user.click(screen.getByRole("button", { name: "体验首次强制 MFA 设置" }));
+    await user.click(screen.getByRole("button", { name: "初始密码及通知地址尚未就绪" }));
+    expect(screen.getByRole("heading", { name: "先更新初始密码" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "模拟完成改密" }));
+    expect(screen.getByRole("heading", { name: "用新密码重新验证" })).toBeTruthy();
+    expect(screen.getByText(/旧挑战及其剩余时间已结束/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "模拟新的绑定挑战" }));
+    expect(screen.getByRole("heading", { name: "验证安全通知地址" })).toBeTruthy();
+    expect(document.body.textContent).not.toContain("MTRXPREVIEWFIRSTFACTORNOTREAL");
+    await user.click(screen.getByRole("button", { name: "显示演示验证码" }));
+    await user.type(screen.getByLabelText("地址验证码"), "000000");
+    await user.click(screen.getByRole("button", { name: "确认演示地址" }));
+    expect(screen.getAllByRole("alert").some((alert) => alert.textContent?.includes("演示验证码不正确"))).toBe(true);
+    await user.clear(screen.getByLabelText("地址验证码"));
+    await user.type(screen.getByLabelText("地址验证码"), "624810");
+    await user.click(screen.getByRole("button", { name: "确认演示地址" }));
+    expect(screen.getByRole("heading", { name: "绑定身份验证器" })).toBeTruthy();
+    expect(iam.login).not.toHaveBeenCalled();
+    expect(iam.changePassword).not.toHaveBeenCalled();
+    expect(navigation.replace).not.toHaveBeenCalled();
+    expect(localStorage.length + sessionStorage.length).toBe(0);
+  });
+  it("ends the isolated enrollment challenge after its absolute five-minute deadline", async () => {
+    const startedAt = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(startedAt);
+    try {
+      const iam = repository();
+      const { user } = open(iam);
+      await user.click(screen.getByRole("button", { name: "体验首次强制 MFA 设置" }));
+      await user.click(screen.getByRole("button", { name: "已有可信通知地址" }));
+      expect(screen.getByRole("heading", { name: "绑定身份验证器" })).toBeTruthy();
+      clock.mockReturnValue(startedAt + 5 * 60_000);
+      await user.type(screen.getByLabelText("身份验证器 6 位验证码"), "624810");
+      await user.click(screen.getByRole("button", { name: "确认演示绑定" }));
+      expect(screen.getByRole("heading", { name: "挑战已过期" })).toBeTruthy();
+      expect(document.body.textContent).not.toContain("MTRXPREVIEWFIRSTFACTORNOTREAL");
+      expect(iam.login).not.toHaveBeenCalled();
+      expect(navigation.replace).not.toHaveBeenCalled();
+    } finally {
+      clock.mockRestore();
+    }
+  });
   it("previews irreversible authenticator recovery without creating a session or persisting secrets", async () => {
     const { user } = open(previewIamRepository);
     await user.click(screen.getByRole("button", { name: "体验 MFA 登录挑战" }));

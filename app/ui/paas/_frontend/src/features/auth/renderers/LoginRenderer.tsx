@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useTranslations } from "next-intl";
 import { ChartNoAxesCombined, Database, Gauge, GitBranch, Layers3, MapPin, ShieldCheck } from "lucide-react";
 import { App, Brand } from "@ui/xiak";
@@ -11,9 +12,11 @@ import { AuthenticationChallengeForm } from "./AuthenticationChallengeForm";
 import { PasswordChangeForm } from "./PasswordChangeForm";
 import { EnrollmentRecoveryCodes } from "./EnrollmentRecoveryCodes";
 import { AuthenticatorRecoveryForm, isAuthenticatorRecoveryPhase } from "./AuthenticatorRecoveryForm";
+import { PreviewMandatoryEnrollment } from "./PreviewMandatoryEnrollment";
 import styles from "./LoginRenderer.module.css";
 
 export function LoginRenderer({ returnTo = "/console/" }: { returnTo?: string }) {
+  const [previewEnrollmentOpen, setPreviewEnrollmentOpen] = useState(false);
   const session = useSession();
   const t = useTranslations("Auth");
   const firstLogin = Boolean(session.current && session.phase !== "authenticated");
@@ -46,11 +49,13 @@ export function LoginRenderer({ returnTo = "/console/" }: { returnTo?: string })
           </div>
         </section>
         <section aria-label={t("region")} className={styles.loginCard}>
-          {session.phase === "recovery-codes-required" ? <EnrollmentRecoveryCodes />
+          {uxPreviewEnabled && previewEnrollmentOpen && session.phase === "anonymous"
+            ? <PreviewMandatoryEnrollment onClose={() => setPreviewEnrollmentOpen(false)} />
+            : session.phase === "recovery-codes-required" ? <EnrollmentRecoveryCodes />
             : recovering ? <AuthenticatorRecoveryForm />
             : challenged ? <AuthenticationChallengeForm returnTo={returnTo} />
             : firstLogin ? <PasswordChangeForm returnTo={returnTo} />
-              : <AccountLoginForm returnTo={returnTo} />}
+              : <AccountLoginForm returnTo={returnTo} onPreviewEnrollment={() => setPreviewEnrollmentOpen(true)} />}
           <p className={styles.securityNote}><ShieldCheck aria-hidden="true" /><span>{t(uxPreviewEnabled ? "previewSecurity" : "security")}</span></p>
         </section>
       </main>

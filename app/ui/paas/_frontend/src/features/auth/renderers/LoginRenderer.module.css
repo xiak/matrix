@@ -26,6 +26,12 @@
 .challengeCompletion > svg { width: 40px; height: 40px; color: var(--xiak-color-status-success); }
 .challengeCompletion .cardHeading { margin-bottom: 0; }
 .previewChallengeHint { margin: -4px 0 0; color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: 1.5; }
+.previewEnrollment { display: grid; min-width: 0; gap: var(--xiak-spacing-roomy); }
+.previewEnrollment .cardHeading { margin-bottom: 0; }
+.previewEnrollment .challengeIdentity { margin-bottom: 0; }
+.previewCodeList { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; }
+.previewCodeList li { min-width: 0; border: var(--xiak-border-subtle); padding: 8px 10px; background: var(--xiak-color-bg-control); overflow-wrap: anywhere; }
+.previewCodeList code { color: var(--xiak-color-text-strong); font-family: var(--xiak-font-mono); font-size: var(--xiak-font-size-small); }
 .recoverySecret { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; border: var(--xiak-border-subtle); border-left: 2px solid var(--xiak-color-brand); padding: 16px; background: var(--xiak-color-bg-control); }
 .recoverySecret > div { display: grid; grid-column: 1 / -1; gap: 4px; }
 .recoverySecret span { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: 1.6; }
@@ -68,5 +74,6 @@
   .recoverySecret { grid-template-columns: 1fr; }
   .recoverySecret > div { grid-column: auto; }
   .recoverySecret button { width: 100%; }
+  .previewCodeList { grid-template-columns: 1fr; }
   .footer { flex-direction: column; }
 }
