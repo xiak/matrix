@@ -40,7 +40,7 @@ Role、身份提供商、联合身份和企业账号均为详情优先的管理�
 
 高级体验仓库仍只通过一键 MOCK 入口选择。真实角色、策略编写、SSO 或模拟器未接入时明确说明；访问密钥页面在存在固定 HTTP 能力时使用 LIVE per-User 适配，否则只允许显式 MOCK 工作区继续展示体验。任何真实失败都不调用体验仓库兜底。UI 原型与后端固定契约逐片衔接，不能据此发布一个尚未整合后端的安装版本。
 
-身份安全概览与报告继续归 IAM-009 S4 的真实治理契约所有。当前控制台只从隔离体验仓库派生本地建议，明确区分“需复核、已配置、不适用、状态未知”，且把设置开关与认证器绑定证据分开；缺少认证器、最近使用或采集水位时必须为未知，不能猜成 `false`、安全或从未使用。报告只导出字段白名单中的 MOCK 快照，不建立真实报告 API、风险分或自动处置能力。
+身份安全概览与报告继续归 IAM-009 S4 的真实治理契约所有。当前控制台只从隔离体验仓库派生本地建议，明确区分“需复核、已配置、不适用、状态未知”，且把设置开关与认证器绑定证据分开。活动区按成功登录、Key 使用、Role 活动与业务结果分别呈现；只有当前 MOCK Session 的实际签发可作当前身份的登录样例，普通操作事件不能冒充成功登录，Key 创建/修改时间、Role 或 RoleSession 存在及 IAM Allow 不能分别冒充真实使用或业务成功。缺少认证器、最近使用、完整采集窗口或来源水位时必须为未知，不能猜成 `false`、安全、闲置或从未使用。报告只导出字段白名单中的 MOCK 快照，并显式保留观察时间及采集缺口；不建立真实报告 API、风险分或自动处置能力。
 
 ### 本人安全通知地址的固定客户端接入
 
@@ -435,15 +435,16 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 
 ### 安全报告证据覆盖 MOCK 的开发验收证据
 
-2026-09-20，前端实现固定在已推送的
-[`0bdcc210`](https://github.com/xiak/matrix/commit/0bdcc210)。
+2026-09-24，隔离 MOCK 的当前实现固定在已推送的
+[`a2366dda`](https://github.com/xiak/matrix/commit/a2366dda)；IAM-009 S4 的设计参照固定来源 `fea7a772a3af5a31b3b790f79689a1843bcf70d7`，不继承其尚未完成的 LIVE/CI 验收。
 
 - 身份安全概览保留原有建议状态，并新增独立证据覆盖摘要。每一项检查都同时展示结论和证据状态，当前 DEV 快照明确显示四项已观测、一项未观测；没有以风险分压平信息来源。
 - 用户目录存在下一页时，用户直接授权、登录保护适用范围与待修改密码只标记覆盖不完整；即使已加载的非空目录内可见数量为零，仍保持未知，不能把当前页的零外推到整个 Account。仅已加载范围内出现的正向发现可以标记待审阅，并明确它只是下界。当目录尚未证明没有适用身份时，状态保持未知而不是不适用。认证器目录未接入时 MFA 证据始终标记未观测，不能推断未绑定或安全。
-- 导出的 allowlist 报告只包含当前 MOCK 快照及明确覆盖词汇，区分目录 `COMPLETE/PARTIAL`、认证器未观测、AccessKey 模拟清单已观测和活动证据未观测；不包含密码、Secret、原始实体描述或虚构 last-used/在线/来源/风险字段。
-- 访问工作区 123 条行为用例、完整前端 40 个文件/602 条用例、三条静态归一化、228 组主题对比、40 页生产导出、222 个嵌入文件及 `go test ./...`、`go vet ./...` 均通过。真实 DEV 小屏检查保持 2×2 摘要和清晰主次层级，干净重载后新增 warning/error 为空。
+- 活动区分别显示当前模拟 Session 签发、Key 使用、Role 活动和业务结果。普通“登录”操作事件不充当成功会话证据；仅匹配当前 Account 与身份的 Session 能展示其样例签发时间，不能外推为其他成员的最近登录。Key 状态/创建时间、RoleSession 存在和 IAM Allow 均不转译成真实使用或业务成功。缺少完整窗口和来源水位时明确为未知，不得从没有记录推导闲置或从未使用。
+- 导出的 allowlist 报告只包含当前 MOCK 快照、观察时间与逐来源采集缺口，区分目录 `COMPLETE/PARTIAL`、认证器未观测、AccessKey 模拟清单已观测、活动窗口缺失和来源水位缺失；不包含密码、Secret、原始实体描述或虚构 last-used/在线/来源/风险字段。
+- 定向用例覆盖活动来源、跨 Account/跨身份 Session 拒绝及报告字段白名单。真实 DEV 在 `390 × 844` 观察活动区，document/body 均为 390px，无新增 warning/error；完整共享门禁归 [FEAT-007 current development evidence](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence) 所有。
 - 本证据只接受信息架构和隔离 MOCK 计算，不声称 IAM 已提供安全报告 HTTP、完整观测数据、风险模型或真实审计证明。
 
 公共 UI、生产导出、完整前端及 Go 回归证据只归
-[FEAT-007](../docs/features/FEAT-007-control-plane-console.md#current-user-boundarynavigation-development-evidence)
+[FEAT-007](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence)
 所有。真实 PolicyVersion/授权目录作者流程的后端浏览器联调、Role/trust/policy 变更与 STS、SSO，个人 MFA 的替换/移除/恢复 LIVE 适配，Role 只读、首次绑定与访问密钥的真实后端浏览器联调，以及本边界片的浅色/混色浏览器与键盘专项尚未完成。仍需与固定后端原子整合并执行相应发布门禁；本 UX 分支独立运行不等于完整 IAM 安装候选已验收。
