@@ -616,7 +616,7 @@
       },
       "AccountSecuritySettings": {
         "additionalProperties": false,
-        "description": "Non-secret current-account configuration. Contract component only; this slice does not publish settings routes or permissions.",
+        "description": "Non-secret current-account configuration returned only under a current instance-scoped read decision. Neither factor state nor Session authentication facts.",
         "properties": {
           "accountId": {
             "$ref": "#/components/schemas/ID"
@@ -780,6 +780,7 @@
           "iam.access-key.read",
           "iam.access-key.set-status",
           "iam.access-key.delete",
+          "iam.security-settings.read",
           "paas.execution-pool.create",
           "paas.execution-pool.read",
           "paas.execution-target.register",
@@ -1482,9 +1483,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -1556,9 +1557,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -1609,9 +1610,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -1662,9 +1663,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -1715,9 +1716,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -1768,9 +1769,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -1821,9 +1822,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -1874,9 +1875,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -1927,9 +1928,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -1980,9 +1981,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -2033,9 +2034,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -2086,9 +2087,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -2139,9 +2140,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -2192,9 +2193,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -2245,9 +2246,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -2298,9 +2299,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -2351,9 +2352,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -2404,9 +2405,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -2457,9 +2458,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -2510,9 +2511,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -2563,9 +2564,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -2616,9 +2617,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -2669,9 +2670,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -2722,9 +2723,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -2775,9 +2776,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -2828,9 +2829,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -2881,9 +2882,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -2934,9 +2935,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -2987,9 +2988,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -3040,9 +3041,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -3093,9 +3094,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -3146,9 +3147,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -3199,9 +3200,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -3252,9 +3253,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -3305,9 +3306,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -3358,9 +3359,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -3411,9 +3412,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -3464,9 +3465,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -3517,9 +3518,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -3570,9 +3571,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -3623,9 +3624,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -3676,9 +3677,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -3729,9 +3730,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -3782,9 +3783,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -3835,9 +3836,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -3888,9 +3889,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -3941,9 +3942,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -3994,9 +3995,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -4047,9 +4048,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -4100,9 +4101,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -4153,9 +4154,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -4206,9 +4207,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -4259,9 +4260,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -4312,9 +4313,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -4365,9 +4366,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -4418,9 +4419,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -4471,9 +4472,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -4524,9 +4525,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -4577,9 +4578,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -4630,15 +4631,68 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "ACCESS_KEY"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "accessKeyId": false,
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.security-settings.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "product": "iam",
+                    "revision": 6
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ACCOUNT"
                     }
                   }
                 },
@@ -7347,9 +7401,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -7411,9 +7465,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -7454,9 +7508,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -7497,9 +7551,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -7540,9 +7594,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -7583,9 +7637,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -7626,9 +7680,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -7669,9 +7723,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -7712,9 +7766,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -7755,9 +7809,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -7798,9 +7852,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -7841,9 +7895,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -7884,9 +7938,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -7927,9 +7981,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -7970,9 +8024,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -8013,9 +8067,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -8056,9 +8110,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -8099,9 +8153,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -8142,9 +8196,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -8185,9 +8239,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -8228,9 +8282,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -8271,9 +8325,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -8314,9 +8368,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -8357,9 +8411,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -8400,9 +8454,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -8443,9 +8497,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -8486,9 +8540,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -8529,9 +8583,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -8572,9 +8626,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -8615,9 +8669,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -8658,9 +8712,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -8701,9 +8755,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -8744,9 +8798,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -8787,9 +8841,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -8830,9 +8884,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -8873,9 +8927,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -8916,9 +8970,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -8959,9 +9013,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -9002,9 +9056,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -9045,9 +9099,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -9088,9 +9142,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -9131,9 +9185,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -9174,9 +9228,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -9217,9 +9271,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -9260,9 +9314,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -9303,9 +9357,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -9346,9 +9400,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -9389,9 +9443,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -9432,9 +9486,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -9475,9 +9529,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -9518,9 +9572,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -9561,9 +9615,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -9604,9 +9658,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -9647,9 +9701,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -9690,9 +9744,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -9733,9 +9787,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -9776,9 +9830,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -9819,9 +9873,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -9862,9 +9916,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
@@ -9905,15 +9959,58 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 6
                   }
                 },
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "ACCESS_KEY"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.security-settings.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:1ba89ee02b56e07cc5e6fae0b620a2e929a0561287c9b425add61a6a372c92c2",
+                    "product": "iam",
+                    "revision": 6
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ACCOUNT"
                     }
                   }
                 }
@@ -14354,6 +14451,8 @@
                             "iam.role.read",
                             "iam.role.set-status",
                             "iam.role.update",
+                            "iam.security-settings.*",
+                            "iam.security-settings.read",
                             "iam.session.*",
                             "iam.session.revoke",
                             "iam.user.*",
@@ -14893,6 +14992,8 @@
                         "iam.role.*",
                         "iam.role.create",
                         "iam.role.list",
+                        "iam.security-settings.*",
+                        "iam.security-settings.read",
                         "iam.user.*",
                         "iam.user.create",
                         "iam.user.list"
@@ -14936,6 +15037,8 @@
                       "iam.role.*",
                       "iam.role.create",
                       "iam.role.list",
+                      "iam.security-settings.*",
+                      "iam.security-settings.read",
                       "iam.user.*",
                       "iam.user.create",
                       "iam.user.list"
@@ -17325,6 +17428,33 @@
                 "actions": {
                   "contains": {
                     "enum": [
+                      "iam.security-settings.read",
+                      "iam.security-settings.*"
+                    ]
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "ACCOUNT"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "enum": [
                       "paas.execution-pool.create"
                     ]
                   }
@@ -19558,6 +19688,7 @@
                 "iam.access-key.read",
                 "iam.access-key.set-status",
                 "iam.access-key.delete",
+                "iam.security-settings.read",
                 "paas.execution-pool.create",
                 "paas.execution-pool.read",
                 "paas.execution-target.register",
@@ -19608,6 +19739,7 @@
                 "iam.role-session.*",
                 "iam.role-trust.*",
                 "iam.role.*",
+                "iam.security-settings.*",
                 "iam.session.*",
                 "iam.user.*",
                 "managedservice.offering.*",
@@ -23012,6 +23144,36 @@
         },
         "security": [],
         "summary": "Get IAM readiness"
+      }
+    },
+    "/v1/account/security-settings": {
+      "get": {
+        "operationId": "readAccountSecuritySettings",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountSecuritySettings"
+                }
+              }
+            },
+            "description": "Current authority state."
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Read authenticated Account security settings using the current instance permission"
       }
     },
     "/v1/account:alias": {

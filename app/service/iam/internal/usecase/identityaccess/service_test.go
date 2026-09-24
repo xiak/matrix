@@ -507,6 +507,49 @@ func TestRoleSelfExitUsesOnlyExactCredentialPossession(t *testing.T) {
 	}
 }
 
+func TestAccountSecuritySettingsCannotBypassCurrentSessionAndExplicitAuthority(t *testing.T) {
+	tx := newCoreTransaction()
+	service, err := newCoreAuthority(&coreRepository{transaction: tx}, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootstrap := coreBootstrap(t)
+	if _, err := service.Bootstrap(t.Context(), bootstrap); err != nil {
+		t.Fatal(err)
+	}
+	login, err := service.Login(t.Context(), iamv1.LoginRequest{LoginName: "admin", Password: bootstrap.Administrator.Password, RequestID: "settings-login"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.ChangePassword(t.Context(), login.Credential, iamv1.ChangePasswordRequest{CurrentPassword: bootstrap.Administrator.Password,
+		NewPassword: coreSecret(t, "Settings-Changed-Password-57!"), RequestID: "settings-password"}); err != nil {
+		t.Fatal(err)
+	}
+	if result, err := service.AccountSecuritySettings(t.Context(), login.Credential, "settings-denied"); !errors.Is(err, ErrForbidden) || result.AccountID != "" {
+		t.Fatal("root/platform membership substituted for explicit settings authority", err)
+	}
+	last := tx.authorizations[len(tx.authorizations)-1]
+	if last.Decision.Allowed || last.Decision.Action != iamv1.ActionIAMSecuritySettingsRead ||
+		last.Decision.Resource != (iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: string(bootstrap.Organization.ID)}) || last.AuditEvent.Action != auditv1.ActionIAMAuthorizationDecided {
+		t.Fatal("settings denial did not bind the current real Account and audit decision")
+	}
+	before := len(tx.authorizations)
+	tx.profileErr = ErrUnavailable
+	if _, err := service.AccountSecuritySettings(t.Context(), login.Credential, "settings-drift"); !errors.Is(err, ErrUnavailable) || len(tx.authorizations) != before {
+		t.Fatal("unavailable product authority produced an ordinary settings result")
+	}
+	tx.profileErr = nil
+	if _, err := service.AccountSecuritySettings(t.Context(), coreServiceCredential(t, bootstrap, iamv1.ServicePaaS), "settings-service"); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatal("service credential reached settings authority")
+	}
+	if _, err := service.Logout(t.Context(), login.Credential, iamv1.LogoutRequest{RequestID: "settings-logout"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.AccountSecuritySettings(t.Context(), login.Credential, "settings-old-session"); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatal("revoked session reached settings authority")
+	}
+}
+
 func TestAuthorizationProfileDiscoveryRequiresCurrentAuthorityAndNoPermitCache(t *testing.T) {
 	tx := newCoreTransaction()
 	service, err := newCoreAuthority(&coreRepository{transaction: tx}, Config{})

@@ -216,7 +216,7 @@ func testIAMRetainedSessionSource(t *testing.T, variable, databasePrefix, source
 		response := performJSON(t, http.MethodGet, endpoint+"/ready", "", nil)
 		var readiness iamv1.Readiness
 		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &readiness) != nil || readiness.SchemaVersion != version {
-			t.Fatal("session executable readiness does not match its actual schema")
+			t.Fatalf("session executable readiness schema=%d status=%d, expected schema=%d", readiness.SchemaVersion, response.Status, version)
 		}
 		return child
 	}
@@ -292,11 +292,19 @@ func testIAMRetainedSessionSource(t *testing.T, variable, databasePrefix, source
 	if sourceSchema == 37 {
 		assertRetainedMFA, recoverRetainedMFA = prepareRetainedMFAProcesses(t, ctx, admin, endpoint, primary.Credential, &sensitive)
 	}
+	var originalIAMProfileRevision uint64
+	var originalIAMProfileDocument, originalIAMProfileDigest string
+	if err := admin.QueryRow(ctx, `SELECT p.revision,p.canonical_document,p.content_digest FROM iam.authorization_profiles p
+	 JOIN iam.authorization_profile_heads h ON (h.product,h.revision)=(p.product,p.revision) WHERE h.product='iam'`).Scan(
+		&originalIAMProfileRevision, &originalIAMProfileDocument, &originalIAMProfileDigest); err != nil {
+		t.Fatal("read actual predecessor IAM product declaration", err)
+	}
 	identityState := func() []byte {
 		t.Helper()
 		var state []byte
 		if err := admin.QueryRow(ctx, `SELECT jsonb_build_object(
 		 'bootstrap',(SELECT jsonb_agg(jsonb_build_array(singleton,installation_id,content_digest,organization_id,administrator_principal_id,applied_at)) FROM iam.bootstrap_receipts),
+		 'accounts',(SELECT jsonb_agg(jsonb_build_array(id,status,resource_version,created_at,updated_at) ORDER BY id) FROM iam.accounts),
 		 'credentials',(SELECT jsonb_agg(jsonb_build_array(tenant_id,principal_id,password_hash,credential_version,changed_at) ORDER BY tenant_id,principal_id) FROM iam.user_credentials),
 		 'users',(SELECT jsonb_agg(jsonb_build_array(tenant_id,id,status,must_change_password,resource_version) ORDER BY tenant_id,id) FROM iam.principals),
 		 'attachments',(SELECT jsonb_agg(jsonb_build_array(tenant_id,id,target_id,policy_id,authority_scope,installation_id,resource_version,revoked_at) ORDER BY tenant_id,id) FROM iam.policy_attachments),
@@ -335,7 +343,7 @@ func testIAMRetainedSessionSource(t *testing.T, variable, databasePrefix, source
 		}
 	}
 	var shape bool
-	if err := admin.QueryRow(ctx, `SELECT schema_version=40 AND iam.login_session_contract_ready() AND iam.password_attempt_contract_ready()
+	if err := admin.QueryRow(ctx, `SELECT schema_version=41 AND iam.account_security_settings_contract_ready() AND iam.login_session_contract_ready() AND iam.password_attempt_contract_ready()
 	 AND iam.totp_authentication_contract_ready()
 	 AND to_regprocedure('iam.revoke_session(text,text,text,text,jsonb)') IS NULL
 	 AND to_regprocedure('iam.revoke_session(text,text,text,text,jsonb,text)') IS NOT NULL
@@ -346,9 +354,16 @@ func testIAMRetainedSessionSource(t *testing.T, variable, databasePrefix, source
 	 FROM iam.readiness()`).Scan(&shape); err != nil || !shape {
 		t.Fatal("retained database did not replace the exact Session ABI", err)
 	}
-	current := start(currentBinary, 40)
+	current := start(currentBinary, 41)
 	if !bytes.Equal(originalState, identityState()) {
 		t.Fatal("migration or equal bootstrap changed original identity/credential state")
+	}
+	if err := admin.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM iam.authorization_profiles WHERE product='iam' AND revision=$1
+	 AND canonical_document=$2 AND content_digest=$3)
+	 AND EXISTS(SELECT 1 FROM iam.authorization_profile_heads WHERE product='iam' AND revision=6)
+	 AND NOT EXISTS(SELECT 1 FROM iam.accounts WHERE security_settings_version<>1 OR mfa_required_for_users
+	 OR security_settings_updated_at IS DISTINCT FROM created_at)`, originalIAMProfileRevision, originalIAMProfileDocument, originalIAMProfileDigest).Scan(&shape); err != nil || !shape {
+		t.Fatal("settings migration rewrote the actual old product declaration or invented configuration history", err)
 	}
 	if sourceSchema < 37 {
 		if err := admin.QueryRow(ctx, `SELECT NOT EXISTS(SELECT 1 FROM iam.principals p LEFT JOIN iam.user_mfa_states m
@@ -445,7 +460,7 @@ func testIAMRetainedSessionSource(t *testing.T, variable, databasePrefix, source
 	if err := iammigration.Up(ctx, admin); err != nil {
 		t.Fatal("replay completed own-session schema", err)
 	}
-	current = start(currentBinary, 40)
+	current = start(currentBinary, 41)
 	if !bytes.Equal(completedState, identityState()) {
 		t.Fatal("restart/schema replay changed completed session state")
 	}
@@ -493,7 +508,7 @@ func testIAMRetainedSessionSource(t *testing.T, variable, databasePrefix, source
 				t.Fatal("actual migrator rejected completed recovery history")
 			}
 		}
-		current = start(currentBinary, 40)
+		current = start(currentBinary, 41)
 		assertRecovered()
 	}
 	for _, event := range originalFacts {
@@ -512,7 +527,7 @@ func testIAMRetainedSessionSource(t *testing.T, variable, databasePrefix, source
 		}
 	}
 	current.stop()
-	t.Logf("actual IAM%d -> IAM40 migrator/runtime retained sessions/individual completion, unknown credential lineage, forced bulk reduction, shared attempts, exact replay/new-login survival, original receipt/canonical/proof and restart; no release compatibility claim", sourceSchema)
+	t.Logf("actual IAM%d -> IAM41 migrator/runtime retained sessions/individual completion, unknown credential lineage, forced bulk reduction, shared attempts, exact replay/new-login survival, original receipt/canonical/proof and restart; no release compatibility claim", sourceSchema)
 }
 
 // The fixed IAM37 executable, not fixture DML or today's implementation,
@@ -669,7 +684,7 @@ func prepareRetainedMFAProcesses(t *testing.T, ctx context.Context, admin *pgx.C
 		newBearer := secret(result.Credential)
 		completedState := snapshot()
 		t.Cleanup(func() { clear(completedState) })
-		t.Log("actual IAM37 encrypted factor, OTP consumption, ten original saved codes, Session and pending challenge retained through IAM40 apply-twice/bootstrap/restart; original code then revoked old MFA Session and completed new-factor login")
+		t.Log("actual IAM37 encrypted factor, OTP consumption, ten original saved codes, Session and pending challenge retained through IAM41 apply-twice/bootstrap/restart; original code then revoked old MFA Session and completed new-factor login")
 		return func() {
 			t.Helper()
 			after := snapshot()
@@ -692,7 +707,7 @@ func prepareRetainedMFAProcesses(t *testing.T, ctx context.Context, admin *pgx.C
 			call(http.MethodGet, "/v1/auth/me", newBearer, nil, http.StatusOK, nil)
 			call(http.MethodPost, "/v1/auth/challenges/"+pending.Challenge.ID+":recover", "",
 				map[string]string{"requestId": "retained-mfa-recover", "challengeCredential": secret(pending.ChallengeCredential), "recoveryCode": secret(bound.RecoveryCodes[0])}, http.StatusUnauthorized, nil)
-			t.Log("actual IAM40 migration/verify/bootstrap/restart after recovery preserved exact completion, consumed code and terminated batch; old MFA bearer/source challenge remained rejected")
+			t.Log("actual IAM41 migration/verify/bootstrap/restart after recovery preserved exact completion, consumed code and terminated batch; old MFA bearer/source challenge remained rejected")
 		}
 	}
 	return assertRetained, recoverOriginal
@@ -2616,7 +2631,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	// Exercise the exact source services together without weakening install
 	// admission: the workflow separately proves the published installer rejects
 	// this unmatched database shape before effects.
-	sourceProfile := installationrelease.AuthoritySchemas{IAM: 40, Audit: 24, PaaS: 2}
+	sourceProfile := installationrelease.AuthoritySchemas{IAM: 41, Audit: 24, PaaS: 2}
 	publishedProfile := installationrelease.CurrentDatabaseProfile()
 	if publishedProfile.Authorities == sourceProfile {
 		t.Fatal("unreleased authority source shape was published without a final profile gate")
@@ -5445,6 +5460,7 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 	call(replica, http.MethodGet, a.path+"?accountId="+string(b.target.AccountID), a.manager, nil, http.StatusBadRequest, nil)
 	secret := a.key.Secret.CopyBytes()
 	call(endpoint, http.MethodGet, a.path, string(secret), nil, http.StatusUnauthorized, nil)
+	call(endpoint, http.MethodGet, "/v1/account/security-settings", string(secret), nil, http.StatusUnauthorized, nil)
 	clear(secret)
 	// Exercise the actual internal RPC in both IAM executables, without
 	// pretending a fixture is a product PEP or enabling a source Profile.
@@ -5862,6 +5878,7 @@ func proveTenantAccountProcesses(
 		t.Fatal("tenant owner gained audit producer authority")
 	}
 	retainedQuota, retainedDatabase, resourceSecrets := proveTenantResourceProcesses(t, ctx, admin, endpoint, auditEndpoint, paasEndpoint, bearer, primary.Credential, childLogin)
+	proveAccountSecuritySettingsProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, bearer, primary.Credential, childLogin, restartIAM)
 	sensitive := append(resourceSecrets, initial, changed, primary.Credential, childLogin.Credential)
 	sensitive = append(sensitive, proveGroupResourceProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, paasEndpoint, bearer, primary.Credential, withAuditOutage, restartIAM)...)
 	roleOperator := loginIAM(t, endpoint, "customer.primary", changed, "process-role-operator-login")
@@ -7210,6 +7227,7 @@ func proveRoleManagementProcesses(t *testing.T, ctx context.Context, admin *pgx.
 			t.Fatal("replica reissued or replaced role credential")
 		}
 		call(http.MethodGet, replicaEndpoint, "/v1/auth/me", roleCredential, nil, http.StatusUnauthorized, nil)
+		call(http.MethodGet, replicaEndpoint, "/v1/account/security-settings", roleCredential, nil, http.StatusUnauthorized, nil)
 		call(http.MethodPost, replicaEndpoint, "/v1/auth/sessions:revoke-others", roleCredential,
 			iamv1.RevokeSessionRequest{RequestID: "process-role-cannot-end-user-logins"}, http.StatusUnauthorized, nil)
 		call(http.MethodGet, iamEndpoint, "/v1/auth/sessions", member.Credential, nil, http.StatusOK, nil)
@@ -7304,11 +7322,32 @@ func proveRoleManagementProcesses(t *testing.T, ctx context.Context, admin *pgx.
 	// Delivery uses committed IAM facts, not the now-revoked original session.
 	waitAllIAMOutboxDelivered(t, ctx, admin)
 	waitAllPaaSOutboxDelivered(t, ctx, admin)
-	policyHistory := queryAudit(t, auditEndpoint, ownerBearer, auditv1.QueryRecordsRequest{PageSize: 100, Action: auditv1.ActionIAMPolicyCreated}, http.StatusOK)
-	if policyHistory.TenantID != tenant || len(policyHistory.Records) != 1 || policyHistory.NextCursor != "" ||
-		policyHistory.Records[0].Source != auditv1.SourceIAM || policyHistory.Records[0].Event.Target.ID != string(sourcePolicy.Policy.ID) ||
-		policyHistory.Records[0].Event.RequestID != "process-self-assume-policy" || policyHistory.Records[0].Event.Actor.ID != auditv1.ActorID(actor.User.ID) {
-		t.Fatal("self assumption policy lost its precise immutable tenant provenance")
+	policyQuery := auditv1.QueryRecordsRequest{PageSize: 100, Action: auditv1.ActionIAMPolicyCreated}
+	policyFacts := 0
+	for pages := 0; ; pages++ {
+		if pages == 16 {
+			t.Fatal("policy history exceeded the process fixture's bounded directory")
+		}
+		policyHistory := queryAudit(t, auditEndpoint, ownerBearer, policyQuery, http.StatusOK)
+		if policyHistory.TenantID != tenant {
+			t.Fatal("policy history crossed tenant authority")
+		}
+		for _, record := range policyHistory.Records {
+			if record.Event.Target.ID != string(sourcePolicy.Policy.ID) {
+				continue
+			}
+			policyFacts++
+			if record.Source != auditv1.SourceIAM || record.Event.RequestID != "process-self-assume-policy" || record.Event.Actor.ID != auditv1.ActorID(actor.User.ID) {
+				t.Fatal("self assumption policy lost its precise immutable tenant provenance")
+			}
+		}
+		if policyHistory.NextCursor == "" {
+			break
+		}
+		policyQuery.Cursor = policyHistory.NextCursor
+	}
+	if policyFacts != 1 {
+		t.Fatal("self assumption policy fact was missing or duplicated")
 	}
 	for _, action := range []auditv1.Action{auditv1.ActionIAMRoleCreated, auditv1.ActionIAMRoleUpdated, auditv1.ActionIAMRoleDisabled, auditv1.ActionIAMRoleEnabled, auditv1.ActionIAMRoleTrustSet, auditv1.ActionIAMRoleDeleted,
 		auditv1.ActionIAMRolePermissionBoundarySet, auditv1.ActionIAMRolePermissionBoundaryRemoved} {
@@ -7783,6 +7822,68 @@ func proveGroupResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.C
 		t.Fatal("group lifecycle changed tenant chain integrity")
 	}
 	return []string{member.Credential}
+}
+
+func proveAccountSecuritySettingsProcesses(t *testing.T, ctx context.Context, database *pgx.Conn, endpoint, replica, auditEndpoint, platform, owner string, member loginResult, restartIAM func()) {
+	t.Helper()
+	const path = "/v1/account/security-settings"
+	for _, credential := range []string{platform, owner, member.Credential} {
+		if response := performJSON(t, http.MethodGet, endpoint+path, credential, nil); response.Status != http.StatusForbidden {
+			t.Fatal("existing runtime policy automatically gained security settings read")
+		}
+	}
+	response := performJSON(t, http.MethodPost, endpoint+"/v1/policies", owner, iamv1.CreatePolicyRequest{
+		DisplayName: "Process settings reader", RequestID: "process-settings-policy",
+		Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+			Statements: []iamv1.PolicyStatement{{SID: "settings", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMSecuritySettingsRead},
+				Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceAccount, Match: iamv1.PolicyResourceExact, ID: string(member.Session.AccountID)}}}}}})
+	var policy iamv1.PolicyDetail
+	if response.Status != http.StatusCreated || json.Unmarshal(response.Body, &policy) != nil {
+		t.Fatal("real process could not publish settings policy")
+	}
+	attachment := createIAMPolicyAttachment(t, endpoint, owner, member.Session.PrincipalID, policy.Policy.ID, "process-settings-grant")
+	var initial iamv1.AccountSecuritySettings
+	for _, address := range []string{endpoint, replica} {
+		response := performJSON(t, http.MethodGet, address+path, member.Credential, nil)
+		var settings iamv1.AccountSecuritySettings
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &settings) != nil || iamv1.ValidateAccountSecuritySettings(settings) != nil ||
+			settings.AccountID != member.Session.AccountID || settings.MFA.RequiredForUsers || settings.ResourceVersion != 1 {
+			t.Fatal("independent settings replica did not read the actual same Account")
+		}
+		if initial.AccountID != "" && settings != initial {
+			t.Fatal("independent settings replicas disagree")
+		}
+		initial = settings
+	}
+	var decisionID string
+	if err := database.QueryRow(ctx, `SELECT id FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2
+		AND action_name='iam.security-settings.read' AND allowed ORDER BY decided_at,id LIMIT 1`, member.Session.AccountID, member.Session.PrincipalID).Scan(&decisionID); err != nil {
+		t.Fatal("real settings request lost its original authority decision")
+	}
+	restartIAM()
+	response = performJSON(t, http.MethodGet, endpoint+path, member.Credential, nil)
+	var after iamv1.AccountSecuritySettings
+	if response.Status != http.StatusOK || json.Unmarshal(response.Body, &after) != nil || after != initial {
+		t.Fatal("settings or original grant changed after IAM process restart")
+	}
+	revokeIAMPolicyAttachment(t, replica, owner, attachment.ID, attachment.ResourceVersion, "process-settings-revoke")
+	for _, address := range []string{endpoint, replica} {
+		if response := performJSON(t, http.MethodGet, address+path, member.Credential, nil); response.Status != http.StatusForbidden {
+			t.Fatal("another process retained revoked settings permission")
+		}
+	}
+	waitAllIAMOutboxDelivered(t, ctx, database)
+	page := queryAudit(t, auditEndpoint, owner, auditv1.QueryRecordsRequest{PageSize: 100, Action: auditv1.ActionIAMAuthorizationDecided,
+		Actor: &auditv1.ActorReference{Type: auditv1.ActorUser, ID: auditv1.ActorID(member.Session.PrincipalID)}}, http.StatusOK)
+	found := false
+	for _, record := range page.Records {
+		if record.Event.IAMDecisionID == auditv1.DecisionID(decisionID) {
+			found = record.Event.TenantID == auditv1.TenantID(member.Session.AccountID)
+		}
+	}
+	if !found {
+		t.Fatal("settings historical decision failed real producer proof/outbox/Audit delivery after revocation")
+	}
 }
 
 func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.Conn, iamEndpoint, auditEndpoint, paasEndpoint, homeBearer, customerBearer string, customer loginResult) (managedservicev1.QuotaEntitlement, managedservicev1.ServiceInstallation, []string) {

@@ -826,6 +826,55 @@ func TestIAMHTTPManagementCommandsRequireCurrentSession(t *testing.T) {
 	}
 }
 
+func TestIAMSecuritySettingsReadHasNoSelectorOrMutationSurface(t *testing.T) {
+	workflow := newHTTPWorkflow(t)
+	handler := newTestHandler(t, workflow)
+	const path = "/v1/account/security-settings"
+	for _, attack := range []struct {
+		name, method, path, body, bearer string
+		status                           int
+	}{
+		{"anonymous", http.MethodGet, path, "", "", http.StatusUnauthorized},
+		{"query", http.MethodGet, path + "?accountId=other", "", "current", http.StatusBadRequest},
+		{"body", http.MethodGet, path, `{"tenantId":"other"}`, "current", http.StatusBadRequest},
+		{"write", http.MethodPut, path, `{"mfa":{"requiredForUsers":true}}`, "current", http.StatusMethodNotAllowed},
+		{"history", http.MethodGet, path + "/changes/request-a", "", "current", http.StatusNotFound},
+		{"account path", http.MethodGet, "/v1/accounts/other/security-settings", "", "current", http.StatusNotFound},
+	} {
+		t.Run(attack.name, func(t *testing.T) {
+			request := httptest.NewRequest(attack.method, attack.path, strings.NewReader(attack.body))
+			if attack.bearer != "" {
+				request.Header.Set("Authorization", "Bearer "+attack.bearer)
+			}
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != attack.status || workflow.settingsCalls != 0 {
+				t.Fatalf("rejected surface reached workflow: status=%d calls=%d", response.Code, workflow.settingsCalls)
+			}
+		})
+	}
+	for _, result := range []struct {
+		err    error
+		status int
+	}{{nil, http.StatusOK}, {identityaccess.ErrForbidden, http.StatusForbidden}, {identityaccess.ErrUnauthenticated, http.StatusUnauthorized}, {identityaccess.ErrUnavailable, http.StatusServiceUnavailable}} {
+		workflow.settingsErr = result.err
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.Header.Set("Authorization", "Bearer current")
+		request.Header.Set("X-Tenant-ID", "other")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != result.status || string(workflow.settingsCredential.CopyBytes()) != "current" {
+			t.Fatal("settings read did not preserve credential or sanitized outcome")
+		}
+		if result.err == nil {
+			var settings iamv1.AccountSecuritySettings
+			if json.Unmarshal(response.Body.Bytes(), &settings) != nil || iamv1.ValidateAccountSecuritySettings(settings) != nil || settings.AccountID != "account-catalog" {
+				t.Fatal("settings response accepted the caller's tenant header")
+			}
+		}
+	}
+}
+
 func TestIAMAccountRoutesRejectSelectorsAndMissingCredentialsBeforeWorkflow(t *testing.T) {
 	handler := newTestHandler(t, newHTTPWorkflow(t))
 	for _, target := range []string{"/v1/auth/me", "/v1/users", "/v1/accounts", "/v1/accounts/account-a"} {
@@ -969,6 +1018,16 @@ type httpWorkflow struct {
 	authorizeCalls          int
 	keyCalls                int
 	verifyInstallationCalls int
+	settingsCalls           int
+	settingsCredential      iamv1.Secret
+	settingsErr             error
+}
+
+func (value *httpWorkflow) AccountSecuritySettings(_ context.Context, credential iamv1.Secret, _ string) (iamv1.AccountSecuritySettings, error) {
+	value.settingsCalls++
+	value.settingsCredential = credential
+	return iamv1.AccountSecuritySettings{APIVersion: iamv1.APIVersion, Kind: "AccountSecuritySettings", AccountID: "account-catalog",
+		ResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: false}, UpdatedAt: time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC)}, value.settingsErr
 }
 
 func (value *httpWorkflow) ListAuthorizationProfiles(_ context.Context, credential iamv1.Secret, _ string) (iamv1.AuthorizationProfileList, error) {

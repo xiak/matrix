@@ -333,6 +333,25 @@ func userCapabilities(subject SessionCredential, account iamv1.Account, target i
 	return result, nil
 }
 
+func (service *Authority) AccountSecuritySettings(ctx context.Context, credential iamv1.Secret, requestID string) (iamv1.AccountSecuritySettings, error) {
+	if iamv1.ValidateID("requestId", requestID) != nil {
+		return iamv1.AccountSecuritySettings{}, ErrInvalidArgument
+	}
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMSecuritySettingsRead, iamv1.AuthorizationResourceInstance, "",
+		iamv1.ResourceReference{Kind: iamv1.ResourceAccount}, requestID,
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.AccountSecuritySettings, error) {
+			result, err := tx.ReadAccountSecuritySettings(ctx, AccountRead{AccountID: subject.Subject.Organization.ID,
+				ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID})
+			if err != nil {
+				return iamv1.AccountSecuritySettings{}, err
+			}
+			if iamv1.ValidateAccountSecuritySettings(result) != nil || result.AccountID != subject.Subject.Organization.ID || result.UpdatedAt.After(now) {
+				return iamv1.AccountSecuritySettings{}, ErrUnavailable
+			}
+			return result, nil
+		})
+}
+
 func (service *Authority) ListAuthorizationProfiles(ctx context.Context, credential iamv1.Secret, requestID string) (iamv1.AuthorizationProfileList, error) {
 	if iamv1.ValidateID("requestId", requestID) != nil {
 		return iamv1.AuthorizationProfileList{}, ErrInvalidArgument

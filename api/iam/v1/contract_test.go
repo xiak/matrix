@@ -1524,9 +1524,61 @@ func FuzzAccessKeySignatureWire(f *testing.F) {
 	})
 }
 
+func TestSecuritySettingsReadRequiresCurrentUserSessionAndExactAccount(t *testing.T) {
+	profile, ok := LookupAuthorizationProfile(ProductIAM)
+	if !ok || profile.Revision != 6 {
+		t.Fatal("security settings must publish a distinct profile revision")
+	}
+	_, digest, err := CanonicalizeAuthorizationProfile(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := AuthorizationProfileReference{Product: profile.Product, Revision: profile.Revision, ContentDigest: digest}
+	action := ActionIAMSecuritySettingsRead
+	definition, ok := LookupActionDefinition(action)
+	if !ok || definition.ResourceKind != ResourceAccount || definition.AuthorityScope != AuthorityScopeTenant || definition.CallingService != ServiceIAM {
+		t.Fatal("settings read acquired a different authority boundary")
+	}
+	for _, subject := range []SubjectType{SubjectUser, SubjectRole, SubjectServiceAccount} {
+		if allowed := CheckAuthorizationProfileSubject(profile, ref, action, subject) == nil; allowed != (subject == SubjectUser) {
+			t.Fatal("settings read widened its subject types")
+		}
+	}
+	for _, method := range []UserAuthenticationMethod{UserAuthenticationLoginSession, UserAuthenticationAccessKey} {
+		if allowed := CheckAuthorizationProfileUserAuthentication(profile, ref, action, method) == nil; allowed != (method == UserAuthenticationLoginSession) {
+			t.Fatal("settings read widened its authentication methods")
+		}
+	}
+	resource := ResourceReference{Kind: ResourceAccount, ID: "account-a"}
+	if _, err := NewAuthorizationRequest(action, resource, AuthorizationResourceInstance, "", "settings-read", "settings-read"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewAuthorizationRequest(action, resource, AuthorizationResourceCollection, AuthorizationCollectionList, "settings-read", "settings-read"); err == nil {
+		t.Fatal("settings read admitted an unbound collection")
+	}
+	foundPrevious := false
+	for _, old := range HistoricalAuthorizationProfiles() {
+		if old.Product != ProductIAM {
+			continue
+		}
+		foundPrevious = foundPrevious || old.Revision == 5
+		for _, declaration := range old.Actions {
+			if declaration.Action == action {
+				t.Fatal("an immutable prior profile gained settings authority")
+			}
+		}
+	}
+	if !foundPrevious {
+		t.Fatal("the previous profile must remain available to historical evidence")
+	}
+	if _, ok := LookupActionDefinition("iam.security-settings.update"); ok {
+		t.Fatal("unfinished settings mutation must not be advertised")
+	}
+}
+
 func TestAccessKeyManagementUsesAnExplicitNewUserOnlyProfile(t *testing.T) {
 	profile, found := LookupAuthorizationProfile(ProductIAM)
-	if !found || profile.Revision != 5 {
+	if !found || profile.Revision != 6 {
 		t.Fatal("missing source-owned access key management declaration")
 	}
 	_, digest, err := CanonicalizeAuthorizationProfile(profile)
@@ -1555,7 +1607,7 @@ func TestAccessKeyManagementUsesAnExplicitNewUserOnlyProfile(t *testing.T) {
 			t.Fatal("key management widened the USER boundary")
 		}
 		for _, historical := range HistoricalAuthorizationProfiles() {
-			if historical.Product != ProductIAM {
+			if historical.Product != ProductIAM || historical.Revision >= 5 {
 				continue
 			}
 			for _, declaration := range historical.Actions {
@@ -3429,8 +3481,12 @@ func TestAuthorizationProfileUserAuthenticationIsExplicitAndCommitted(t *testing
 	}
 	for _, source := range AllAuthorizationProfiles() {
 		for _, declared := range source.Actions {
-			if declared.UserAuthenticationMethods != nil {
-				t.Fatal("pure capability contract changed current product admission")
+			if source.Product == ProductIAM && declared.Action == ActionIAMSecuritySettingsRead {
+				if !slices.Equal(declared.UserAuthenticationMethods, []UserAuthenticationMethod{UserAuthenticationLoginSession}) {
+					t.Fatal("settings read widened the actual authentication carrier")
+				}
+			} else if declared.UserAuthenticationMethods != nil {
+				t.Fatal("unrelated product admission changed")
 			}
 		}
 		_, sourceDigest, _ := CanonicalizeAuthorizationProfile(source)

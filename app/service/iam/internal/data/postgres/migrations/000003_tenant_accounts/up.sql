@@ -103,6 +103,115 @@ END $root_relation_cutover$;
 DROP POLICY account_root_cutover_owner_read ON iam.principals;
 DROP POLICY account_root_cutover_owner_read ON iam.accounts;
 
+-- The pre-settings source had no account-wide MFA switch. Establish its
+-- explicit initial value once; equal replay must not repair damaged settings.
+DO $account_security_settings$
+DECLARE columns_present integer; tenant text; prior_tenant text:=current_setting('matrix.iam_tenant_id',true);
+BEGIN
+    SELECT count(*) INTO columns_present FROM pg_catalog.pg_attribute
+    WHERE attrelid='iam.accounts'::regclass AND NOT attisdropped
+      AND attname IN ('security_settings_version','mfa_required_for_users','security_settings_updated_at');
+    IF columns_present=0 THEN
+        IF to_regprocedure('iam.read_account_security_settings(text,text,text)') IS NOT NULL THEN
+            RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='IAM security settings authority is missing';
+        END IF;
+        ALTER TABLE iam.accounts ADD COLUMN security_settings_version bigint NOT NULL DEFAULT 1;
+        ALTER TABLE iam.accounts ADD COLUMN mfa_required_for_users boolean NOT NULL DEFAULT false;
+        ALTER TABLE iam.accounts ADD COLUMN security_settings_updated_at timestamptz(6);
+        FOR tenant IN SELECT r.account_id FROM iam.account_roots r ORDER BY r.account_id COLLATE "C" LOOP
+            PERFORM set_config('matrix.iam_tenant_id',tenant,true);
+            UPDATE iam.accounts SET security_settings_updated_at=created_at WHERE id=tenant;
+        END LOOP;
+        ALTER TABLE iam.accounts ALTER COLUMN security_settings_updated_at SET NOT NULL;
+        ALTER TABLE iam.accounts ADD CONSTRAINT account_security_settings_initial CHECK(
+            security_settings_version=1 AND NOT mfa_required_for_users
+            AND security_settings_updated_at=created_at AND isfinite(security_settings_updated_at));
+        PERFORM set_config('matrix.iam_tenant_id',COALESCE(prior_tenant,''),true);
+    ELSIF columns_present<>3 THEN
+        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='IAM security settings authority is incomplete';
+    END IF;
+END $account_security_settings$;
+
+-- The read slice has no mutation authority. Creation records the initial
+-- settings in the same Account insert; updates cannot invent unenforced MFA.
+CREATE OR REPLACE FUNCTION iam.guard_account_security_settings()
+RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
+BEGIN
+    IF TG_OP='INSERT' THEN
+        IF NEW.security_settings_version IS DISTINCT FROM 1 OR NEW.mfa_required_for_users IS DISTINCT FROM false
+           OR NEW.security_settings_updated_at IS NOT NULL THEN
+            RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='IAM initial security settings are invalid';
+        END IF;
+        NEW.security_settings_updated_at:=NEW.created_at;
+    ELSIF ROW(NEW.security_settings_version,NEW.mfa_required_for_users,NEW.security_settings_updated_at)
+        IS DISTINCT FROM ROW(OLD.security_settings_version,OLD.mfa_required_for_users,OLD.security_settings_updated_at) THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='IAM security settings mutation is unavailable';
+    END IF;
+    RETURN NEW;
+END $function$;
+DROP TRIGGER IF EXISTS guard_security_settings ON iam.accounts;
+CREATE TRIGGER guard_security_settings BEFORE INSERT OR UPDATE ON iam.accounts
+    FOR EACH ROW EXECUTE FUNCTION iam.guard_account_security_settings();
+ALTER TABLE iam.accounts ENABLE ALWAYS TRIGGER guard_security_settings;
+
+CREATE OR REPLACE FUNCTION iam.read_account_security_settings(tenant text,actor text,decision text)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE stored iam.accounts%ROWTYPE;
+BEGIN
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.security-settings.read','ACCOUNT',tenant,'INSTANCE',NULL);
+    PERFORM set_config('matrix.iam_tenant_id',tenant,true);
+    SELECT a.* INTO stored FROM iam.accounts a WHERE a.id=tenant AND a.status='ACTIVE' FOR SHARE;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='IAM account is unavailable'; END IF;
+    IF stored.security_settings_version IS DISTINCT FROM 1 OR stored.mfa_required_for_users IS DISTINCT FROM false
+       OR stored.security_settings_updated_at IS DISTINCT FROM stored.created_at OR NOT isfinite(stored.security_settings_updated_at) THEN
+        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='IAM security settings authority is invalid';
+    END IF;
+    RETURN jsonb_build_object('apiVersion','iam.matrix.xiak.com/v1','kind','AccountSecuritySettings',
+        'accountId',stored.id,'resourceVersion',stored.security_settings_version,
+        'mfa',jsonb_build_object('requiredForUsers',stored.mfa_required_for_users),
+        'updatedAt',to_char(stored.security_settings_updated_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'));
+END $function$;
+
+CREATE OR REPLACE FUNCTION iam.account_security_settings_contract_ready()
+RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $function$
+    SELECT (SELECT count(*) FROM pg_catalog.pg_attribute a
+        JOIN (VALUES ('security_settings_version','bigint'::regtype::oid,-1),
+                     ('mfa_required_for_users','boolean'::regtype::oid,-1),
+                     ('security_settings_updated_at','timestamptz'::regtype::oid,6)) e(name,kind,precision)
+          ON a.attname=e.name AND a.atttypid=e.kind AND a.atttypmod=e.precision
+        WHERE a.attrelid='iam.accounts'::regclass AND a.attnotnull AND NOT a.attisdropped)=3
+    AND EXISTS(SELECT 1 FROM pg_catalog.pg_constraint c WHERE c.conrelid='iam.accounts'::regclass
+        AND c.conname='account_security_settings_initial' AND c.contype='c' AND c.convalidated)
+    AND EXISTS(SELECT 1 FROM pg_catalog.pg_trigger t WHERE t.tgrelid='iam.accounts'::regclass
+        AND t.tgname='guard_security_settings' AND t.tgenabled='A' AND NOT t.tgisinternal
+        AND t.tgtype=23 AND t.tgnargs=0 AND t.tgqual IS NULL
+        AND t.tgfoid=to_regprocedure('iam.guard_account_security_settings()'))
+    AND EXISTS(SELECT 1 FROM pg_catalog.pg_proc p WHERE p.oid=to_regprocedure('iam.read_account_security_settings(text,text,text)')
+        AND p.proowner='matrix_iam_owner'::regrole AND p.prosecdef AND NOT p.proretset
+        AND p.prorettype='jsonb'::regtype AND p.provolatile='v' AND p.proparallel='u'
+        AND p.proargnames=ARRAY['tenant','actor','decision']::text[]
+        AND p.proconfig=ARRAY['search_path=pg_catalog, pg_temp']::text[]
+        AND has_function_privilege('matrix_iam_api',p.oid,'EXECUTE')
+        AND NOT has_function_privilege('public',p.oid,'EXECUTE')
+        AND NOT has_function_privilege('matrix_iam_worker',p.oid,'EXECUTE')
+        AND NOT has_function_privilege('matrix_iam_notification_worker',p.oid,'EXECUTE')
+        AND NOT has_function_privilege('matrix_iam_credential_recovery',p.oid,'EXECUTE')
+        AND NOT has_function_privilege('matrix_iam_authentication_recovery',p.oid,'EXECUTE')
+        AND NOT has_function_privilege('matrix_iam_backup_custody',p.oid,'EXECUTE'))
+    AND EXISTS(SELECT 1 FROM pg_catalog.pg_proc p WHERE p.oid=to_regprocedure('iam.guard_account_security_settings()')
+        AND p.proowner='matrix_iam_owner'::regrole AND NOT p.prosecdef AND NOT p.proretset
+        AND p.prorettype='trigger'::regtype AND p.provolatile='v' AND p.proparallel='u'
+        AND p.proconfig=ARRAY['search_path=pg_catalog, pg_temp']::text[]
+        AND NOT has_function_privilege('public',p.oid,'EXECUTE')
+        AND NOT has_function_privilege('matrix_iam_api',p.oid,'EXECUTE')
+        AND NOT has_function_privilege('matrix_iam_worker',p.oid,'EXECUTE'))
+$function$;
+
+REVOKE ALL ON FUNCTION iam.guard_account_security_settings() FROM PUBLIC,matrix_iam_api,matrix_iam_worker;
+REVOKE ALL ON FUNCTION iam.account_security_settings_contract_ready() FROM PUBLIC,matrix_iam_api,matrix_iam_worker;
+REVOKE ALL ON FUNCTION iam.read_account_security_settings(text,text,text) FROM PUBLIC,matrix_iam_worker;
+GRANT EXECUTE ON FUNCTION iam.read_account_security_settings(text,text,text) TO matrix_iam_api;
+
 CREATE TABLE IF NOT EXISTS iam.account_aliases (
     alias text COLLATE "C" PRIMARY KEY,
     tenant_id text COLLATE "C" NOT NULL REFERENCES iam.accounts (id),

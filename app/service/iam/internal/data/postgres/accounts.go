@@ -50,6 +50,19 @@ func decodeUserPermissionBoundary(encoded []byte, account iamv1.AccountID, user 
 	return result, nil
 }
 
+func (value *transaction) ReadAccountSecuritySettings(ctx context.Context, read identityaccess.AccountRead) (iamv1.AccountSecuritySettings, error) {
+	var encoded []byte
+	if err := value.tx.QueryRow(ctx, "SELECT iam.read_account_security_settings($1,$2,$3)", read.AccountID, read.ActorPrincipalID, read.DecisionID).Scan(&encoded); err != nil {
+		return iamv1.AccountSecuritySettings{}, mapAuthorizationDatabaseError("read IAM security settings", err)
+	}
+	defer clear(encoded)
+	var result iamv1.AccountSecuritySettings
+	if iamv1.DecodeRequest(bytes.NewReader(encoded), &result) != nil || iamv1.ValidateAccountSecuritySettings(result) != nil || result.AccountID != read.AccountID {
+		return iamv1.AccountSecuritySettings{}, identityaccess.ErrUnavailable
+	}
+	return result, nil
+}
+
 func normalizeAccount(value *iamv1.Account) {
 	value.CreatedAt = value.CreatedAt.UTC()
 	value.UpdatedAt = value.UpdatedAt.UTC()

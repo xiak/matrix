@@ -115,6 +115,7 @@ type Transaction interface {
 	CreatePolicyAttachment(context.Context, PolicyAttachmentMutation) (iamv1.PolicyAttachment, error)
 	RevokePolicyAttachment(context.Context, PolicyAttachmentRevocationMutation) (iamv1.Revocation, bool, error)
 	ReadAccount(context.Context, iamv1.AccountID, iamv1.PrincipalID) (iamv1.Account, error)
+	ReadAccountSecuritySettings(context.Context, AccountRead) (iamv1.AccountSecuritySettings, error)
 	ListUsers(context.Context, AccountRead) (iamv1.UserList, error)
 	ReadUser(context.Context, AccountRead, iamv1.PrincipalID) (iamv1.UserAccess, error)
 	ListGroups(context.Context, AccountRead) (iamv1.GroupList, error)

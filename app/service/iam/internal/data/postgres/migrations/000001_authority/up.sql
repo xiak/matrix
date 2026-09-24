@@ -1825,6 +1825,7 @@ BEGIN
            AND iam.role_contract_ready()
            AND iam.access_key_contract_ready()
            AND iam.login_session_contract_ready()
+           AND iam.account_security_settings_contract_ready()
            AND to_regprocedure('iam.create_group(text,text,text,text,text,text,jsonb)') IS NOT NULL
            AND (SELECT count(*) FROM pg_catalog.pg_proc AS policy_entry
                 WHERE policy_entry.oid IN (to_regprocedure('iam.read_policy(text,text,text,text)'),
@@ -1954,7 +1955,7 @@ BEGIN
                SELECT 1 FROM iam.audit_outbox AS outbox
                 WHERE outbox.status = 'DEAD_LETTER' OR outbox.attempts >= 100
            ),
-           40::bigint,
+           41::bigint,
            transaction_timestamp();
 END
 $function$;

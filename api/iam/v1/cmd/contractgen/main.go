@@ -69,6 +69,9 @@ func buildDocument() object {
 
 func buildPaths() object {
 	return object{
+		"/v1/account/security-settings": object{
+			"get": readOperation("readAccountSecuritySettings", "Read authenticated Account security settings using the current instance permission", "AccountSecuritySettings", nil, nil),
+		},
 		"/v1/roles": object{
 			"get":  readOperation("listRoles", "List current-account roles and exact resource capabilities", "RoleList", nil, accountPageParameters()),
 			"post": mutationOperation("createRole", "Create a customer role without credentials or permission attachments", "CreateRoleRequest", "Role", "201", nil, nil),
@@ -983,7 +986,7 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 
 func applySemanticOverlays(schemas object) {
 	schemas["AccountMFASettings"].(object)["description"] = "Explicit ordinary USER MFA requirement, not factor state, Session authentication facts or an exception for protected identities. Missing or null is invalid, never an inferred false."
-	schemas["AccountSecuritySettings"].(object)["description"] = "Non-secret current-account configuration. Contract component only; this slice does not publish settings routes or permissions."
+	schemas["AccountSecuritySettings"].(object)["description"] = "Non-secret current-account configuration returned only under a current instance-scoped read decision. Neither factor state nor Session authentication facts."
 	schemas["SecuritySettingsUpdateIntent"].(object)["description"] = "Exact non-secret target for a future Session-held operation proof. Not a selector or permit; current StepUp operations do not yet accept it."
 	schemas["UpdateAccountSecuritySettingsRequest"].(object)["description"] = "Replace the supported MFA configuration at one expected version using a proof held by the actual current Session. No identity selector, arbitrary patch or caller-controlled Session retention. Contract only; no runtime route in this slice."
 	schemas["AccountSecuritySettingsChange"].(object)["description"] = "Immutable historical completion. Runtime validation additionally requires settings.resourceVersion == expectedResourceVersion + 1. settings.updatedAt is the original completion time, not observation time; requestId is not lookup authority."

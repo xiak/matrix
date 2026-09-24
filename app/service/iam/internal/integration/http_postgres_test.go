@@ -1074,6 +1074,7 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 		})
 	}
 	runFlow("policy directories isolate metadata and permissions", provePolicyDirectories)
+	runFlow("account security settings read authority", proveAccountSecuritySettingsRead)
 	runFlow("user_permission_boundaries", proveUserPermissionBoundaries)
 	runFlow("user_boundary_policy_competition", proveUserBoundaryPolicyRaces)
 	runFlow("direct policy attachment management", proveDirectPolicyAttachments)
@@ -1955,6 +1956,204 @@ func proveAuthorizationProfileRegistry(t *testing.T, ctx context.Context, dsn st
 	if _, err := admin.Exec(ctx, "ROLLBACK"); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func proveAccountSecuritySettingsRead(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, root string) {
+	t.Helper()
+	const path = "/v1/account/security-settings"
+	const accountA = "organization-http-integration"
+	const accountB = "account-settings-b"
+	call := func(method, target, credential string, body any, want int, destination any) {
+		t.Helper()
+		var encoded []byte
+		if body != nil {
+			encoded = mustIAMJSON(t, body)
+		}
+		response := performIAMRequest(handler, method, target, credential, encoded)
+		if response.Code != want {
+			t.Fatalf("settings %s %s: status=%d want=%d body=%s", method, target, response.Code, want, response.Body.String())
+		}
+		if destination != nil && json.Unmarshal(response.Body.Bytes(), destination) != nil {
+			t.Fatal("invalid settings workflow response")
+		}
+	}
+	read := func(credential string, account iamv1.AccountID) iamv1.AccountSecuritySettings {
+		t.Helper()
+		var result iamv1.AccountSecuritySettings
+		call(http.MethodGet, path, credential, nil, http.StatusOK, &result)
+		if iamv1.ValidateAccountSecuritySettings(result) != nil || result.AccountID != account || result.ResourceVersion != 1 || result.MFA.RequiredForUsers {
+			t.Fatal("settings projection did not return the actual initial Account state")
+		}
+		var created time.Time
+		if err := database.QueryRow(ctx, `SELECT created_at FROM iam.accounts WHERE id=$1`, account).Scan(&created); err != nil || !result.UpdatedAt.Equal(created) {
+			t.Fatal("settings time was synthesized at read time")
+		}
+		return result
+	}
+	createPolicy := func(administrator, label string, effect iamv1.PolicyEffect, target string) iamv1.PolicyDetail {
+		t.Helper()
+		var result iamv1.PolicyDetail
+		call(http.MethodPost, "/v1/policies", administrator, iamv1.CreatePolicyRequest{DisplayName: label, RequestID: label,
+			Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+				Statements: []iamv1.PolicyStatement{{SID: "settings", Effect: effect, Actions: []iamv1.Action{iamv1.ActionIAMSecuritySettingsRead},
+					Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceAccount, Match: iamv1.PolicyResourceExact, ID: target}}}}}}, http.StatusCreated, &result)
+		return result
+	}
+	attach := func(administrator string, user iamv1.User, policy iamv1.PolicyDetail, id string) iamv1.PolicyAttachment {
+		t.Helper()
+		var result iamv1.PolicyAttachment
+		call(http.MethodPost, "/v1/policy-attachments", administrator, iamv1.CreatePolicyAttachmentRequest{
+			Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(user.ID)}, PolicyID: policy.Policy.ID,
+			PolicyResourceVersion: policy.Policy.ResourceVersion, RequestID: id}, http.StatusOK, &result)
+		return result
+	}
+	revoke := func(administrator string, attachment iamv1.PolicyAttachment, id string) {
+		t.Helper()
+		call(http.MethodPost, "/v1/policy-attachments/"+string(attachment.ID)+":revoke", administrator,
+			iamv1.RevokePolicyAttachmentRequest{ResourceVersion: attachment.ResourceVersion, RequestID: id}, http.StatusOK, nil)
+	}
+	member := func(administrator, id string) (iamv1.User, string) {
+		t.Helper()
+		var user iamv1.User
+		call(http.MethodPost, "/v1/users", administrator, map[string]any{"loginName": "settings-reader", "displayName": "Settings reader",
+			"initialPassword": initialDeveloperPassword, "requestId": id}, http.StatusCreated, &user)
+		bearer := localRecoveryLogin(t, handler, user.LoginName+"@"+string(user.AccountID), initialDeveloperPassword, true)
+		return user, localRecoveryChangePassword(t, handler, bearer, initialDeveloperPassword, changedDeveloperPassword)
+	}
+	// Catalog publication does not rewrite immutable system policies or grant
+	// platform operators tenant settings access. Only a new explicit policy does.
+	call(http.MethodGet, path, root, nil, http.StatusForbidden, nil)
+	var second iamv1.Account
+	call(http.MethodPost, "/v1/accounts", root, map[string]any{"id": accountB, "displayName": "Settings B", "rootLoginName": "settings-root-b",
+		"rootDisplayName": "Settings B root", "initialPassword": initialDeveloperPassword, "requestId": "settings-create-account-b"}, http.StatusCreated, &second)
+	rootB := localRecoveryLogin(t, handler, "settings-root-b", initialDeveloperPassword, true)
+	rootB = localRecoveryChangePassword(t, handler, rootB, initialDeveloperPassword, changedDeveloperPassword)
+	call(http.MethodGet, path, rootB, nil, http.StatusForbidden, nil)
+	userA, bearerA := member(root, "settings-create-user-a")
+	userB, bearerB := member(rootB, "settings-create-user-b")
+	call(http.MethodGet, path, bearerA, nil, http.StatusForbidden, nil)
+	policyA := createPolicy(root, "settings-read-a", iamv1.PolicyAllow, accountA)
+	policyB := createPolicy(rootB, "settings-read-b", iamv1.PolicyAllow, accountB)
+	allowA := attach(root, userA, policyA, "settings-attach-a")
+	attach(rootB, userB, policyB, "settings-attach-b")
+	initial := read(bearerA, accountA)
+	read(bearerB, accountB)
+	call(http.MethodPost, "/v1/policy-attachments", rootB, iamv1.CreatePolicyAttachmentRequest{
+		Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(userB.ID)}, PolicyID: policyA.Policy.ID,
+		PolicyResourceVersion: policyA.Policy.ResourceVersion, RequestID: "settings-cross-account-policy"}, http.StatusForbidden, nil)
+	for _, target := range []string{path + "?accountId=" + accountB, path + "?tenantId=" + accountB, path + "?after=" + accountB} {
+		call(http.MethodGet, target, bearerA, nil, http.StatusBadRequest, nil)
+	}
+	request := httptest.NewRequest(http.MethodGet, path, nil).WithContext(ctx)
+	request.Header.Set("Authorization", "Bearer "+bearerA)
+	request.Header.Set("X-Tenant-ID", accountB)
+	request.Header.Set("X-Account-ID", accountB)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	var selected iamv1.AccountSecuritySettings
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &selected) != nil || selected.AccountID != accountA {
+		t.Fatal("caller headers changed the authoritative Account")
+	}
+	call(http.MethodGet, path, paasCredential, nil, http.StatusUnauthorized, nil)
+	call(http.MethodPut, path, bearerA, map[string]any{"mfa": map[string]bool{"requiredForUsers": true}}, http.StatusMethodNotAllowed, nil)
+	// An exact policy for B attached in A is not a cross-Account permit.
+	wrong := createPolicy(root, "settings-wrong-account", iamv1.PolicyAllow, accountB)
+	wrongAttachment := attach(root, userA, wrong, "settings-wrong-attach")
+	revoke(root, allowA, "settings-revoke-a")
+	call(http.MethodGet, path, bearerA, nil, http.StatusForbidden, nil)
+	read(bearerB, accountB)
+	revoke(root, wrongAttachment, "settings-revoke-wrong")
+	allowA = attach(root, userA, policyA, "settings-attach-a-again")
+	deny := createPolicy(root, "settings-deny-a", iamv1.PolicyDeny, accountA)
+	denial := attach(root, userA, deny, "settings-attach-deny")
+	call(http.MethodGet, path, bearerA, nil, http.StatusForbidden, nil)
+	revoke(root, denial, "settings-remove-deny")
+	read(bearerA, accountA)
+	boundaryPath := "/v1/users/" + string(userA.ID) + "/permission-boundary"
+	var boundary iamv1.UserPermissionBoundary
+	call(http.MethodGet, boundaryPath, root, nil, http.StatusOK, &boundary)
+	call(http.MethodPut, boundaryPath, root, iamv1.SetUserPermissionBoundaryRequest{PolicyID: iamv1.SystemPolicyAccountAdministrator,
+		PolicyResourceVersion: 1, ResourceVersion: boundary.ResourceVersion, RequestID: "settings-boundary-set"}, http.StatusOK, &boundary)
+	call(http.MethodGet, path, bearerA, nil, http.StatusForbidden, nil)
+	call(http.MethodDelete, boundaryPath, root, iamv1.RemoveUserPermissionBoundaryRequest{ResourceVersion: boundary.ResourceVersion,
+		RequestID: "settings-boundary-remove"}, http.StatusOK, &boundary)
+	read(bearerA, accountA)
+	// A real least-privilege login cannot bypass the same-transaction decision.
+	config := database.Config().Copy()
+	config.User, config.Password = iamHTTPTestRole, iamHTTPTestPassword
+	runtime, err := pgx.ConnectConfig(ctx, config)
+	if err != nil {
+		t.Fatal("connect actual settings runtime login")
+	}
+	defer runtime.Close(context.Background())
+	var sessionUser, currentUser string
+	if err := runtime.QueryRow(ctx, `SELECT session_user,current_user`).Scan(&sessionUser, &currentUser); err != nil || sessionUser != iamHTTPTestRole || currentUser != iamHTTPTestRole {
+		t.Fatal("settings database gate did not use its restricted login")
+	}
+	var priorDecision string
+	if err := database.QueryRow(ctx, `SELECT id FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2
+		AND action_name='iam.security-settings.read' AND allowed ORDER BY decided_at DESC,id DESC LIMIT 1`, accountA, userA.ID).Scan(&priorDecision); err != nil {
+		t.Fatal("missing committed read decision")
+	}
+	for name, command := range map[string]string{
+		"table-read":        `SELECT security_settings_version FROM iam.accounts`,
+		"table-write":       `UPDATE iam.accounts SET mfa_required_for_users=true`,
+		"unbound":           `SELECT iam.read_account_security_settings('` + accountA + `','` + string(userA.ID) + `','missing')`,
+		"historical":        `SELECT iam.read_account_security_settings('` + accountA + `','` + string(userA.ID) + `','` + priorDecision + `')`,
+		"different-account": `SELECT iam.read_account_security_settings('` + accountB + `','` + string(userA.ID) + `','` + priorDecision + `')`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := runtime.Exec(ctx, command)
+			var failure *pgconn.PgError
+			if !errors.As(err, &failure) || failure.Code != "42501" {
+				t.Fatalf("settings runtime authority escaped: %v", err)
+			}
+		})
+	}
+	for name, damage := range map[string]string{
+		"missing-field":         `ALTER TABLE iam.accounts DROP COLUMN security_settings_updated_at CASCADE`,
+		"nullable":              `ALTER TABLE iam.accounts ALTER COLUMN mfa_required_for_users DROP NOT NULL`,
+		"precision":             `ALTER TABLE iam.accounts ALTER COLUMN security_settings_updated_at TYPE timestamptz`,
+		"missing-constraint":    `ALTER TABLE iam.accounts DROP CONSTRAINT account_security_settings_initial`,
+		"disabled-guard":        `ALTER TABLE iam.accounts DISABLE TRIGGER guard_security_settings`,
+		"wrong-guard-mode":      `ALTER TABLE iam.accounts ENABLE TRIGGER guard_security_settings`,
+		"untrusted-search-path": `ALTER FUNCTION iam.read_account_security_settings(text,text,text) SET search_path=public,pg_catalog`,
+		"no-api-grant":          `REVOKE EXECUTE ON FUNCTION iam.read_account_security_settings(text,text,text) FROM matrix_iam_api`,
+		"worker-grant":          `GRANT EXECUTE ON FUNCTION iam.read_account_security_settings(text,text,text) TO matrix_iam_worker`,
+		"notification-grant":    `GRANT EXECUTE ON FUNCTION iam.read_account_security_settings(text,text,text) TO matrix_iam_notification_worker`,
+		"public-grant":          `GRANT EXECUTE ON FUNCTION iam.read_account_security_settings(text,text,text) TO PUBLIC`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			tx, err := database.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback(ctx)
+			if _, err := tx.Exec(ctx, damage); err != nil {
+				t.Fatal("install isolated settings contract drift", err)
+			}
+			var ready bool
+			if err := tx.QueryRow(ctx, `SELECT iam.account_security_settings_contract_ready()`).Scan(&ready); err == nil && ready {
+				t.Fatal("damaged settings contract advertised readiness")
+			}
+		})
+	}
+	// Replay preserves actual values; it must not replace them with a fresh
+	// timestamp or create new authority on the immutable old system policies.
+	applyIAMSchema(t, ctx, database)
+	if after := read(bearerA, accountA); after != initial {
+		t.Fatal("equal migration replay changed Account settings")
+	}
+	call(http.MethodGet, path, root, nil, http.StatusForbidden, nil)
+	var correlated bool
+	if err := database.QueryRow(ctx, `SELECT count(*)>0 AND bool_and(COALESCE(o.event_document->>'iamDecisionId'=d.id
+		AND o.event_document->>'tenantId'=d.tenant_id,false)) FROM iam.authorization_decisions d
+		LEFT JOIN iam.audit_outbox o ON o.tenant_id=d.tenant_id AND o.event_document->>'iamDecisionId'=d.id
+		WHERE d.action_name='iam.security-settings.read'`).Scan(&correlated); err != nil || !correlated {
+		t.Fatal("settings authorization lost tenant audit correlation")
+	}
+	revoke(root, allowA, "settings-final-revoke")
+	call(http.MethodGet, path, bearerA, nil, http.StatusForbidden, nil)
 }
 
 func proveUserPermissionBoundaries(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, root string) {

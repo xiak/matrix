@@ -34,11 +34,18 @@ func TestPasswordOverloadOnlyDocumentsTheBoundedAuthenticationEntrypoints(t *tes
 	}
 }
 
-func TestSecuritySettingsComponentsDoNotPublishAnUnimplementedRoute(t *testing.T) {
+func TestSecuritySettingsOnlyPublishesImplementedRead(t *testing.T) {
 	document := buildDocument()
-	for path := range document["paths"].(object) {
+	found := false
+	for path, value := range document["paths"].(object) {
 		if strings.HasPrefix(path, "/v1/account/security-settings") {
-			t.Fatal("pure contract slice published an unimplemented settings workflow")
+			if path != "/v1/account/security-settings" || len(value.(object)) != 1 || value.(object)["get"] == nil {
+				t.Fatal("read slice published an unimplemented settings mutation or completion route")
+			}
+			found = true
 		}
+	}
+	if !found {
+		t.Fatal("implemented settings read is not documented")
 	}
 }

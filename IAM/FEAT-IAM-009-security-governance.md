@@ -644,7 +644,7 @@ RootIdentity仍是原Account的原USER，恢复不能转让root、启用暂停�
 
 账号安全配置是Account内单份有resourceVersion的治理状态，首片不另建可附件到Group/Role的安全策略语言或任意用户例外。`Policy/PolicyVersion`负责谁能操作资源，`security-settings`是该授权所管理的资源；两个对象不能合并。普通User仅可在其已验证身份下取得设置自己新密码所需的有效约束，不取得全账号安全报告或其他用户状态。未认证登录响应不公开按realm变化的配置。
 
-本次权限与入口的设计如下；S2c先在现有API owner固定非秘密配置、准确变更意图及历史完成的数据契约，不在运行时提前注册入口、操作值或授予权限。数据类型存在不代表下列路由已经可用。
+本次权限与入口如下。S2c已固定非秘密配置、准确变更意图及历史完成的数据契约；当前运行时增量只实现读取。写入、设置专属step-up和完成查询仍随强制绑定、会话屏障及恢复保护一起交付，不能因数据类型存在而提前开放。
 
 | 项目 | 设计 |
 | --- | --- |
@@ -661,9 +661,26 @@ RootIdentity仍是原Account的原USER，恢复不能转让root、启用暂停�
 
 `callerSessionEnded`必须显式存在，描述**原命令调用Session**是否被这次收紧淘汰；它不是当前读取者的登出指令，也不是请求方可选的保留会话参数。新配置为false时不得报告本次变更终止了caller。历史查询及EQUAL_REPLAY始终返回原快照/原结果，不因当前配置、当前登录Session或后续授权改变而改写。正常重新登录后读到旧的true不得再退出新Session；APPLIED使原caller失效时则必须正常重新认证。该字段不列举其他会话、不授予其查询权，也不能推断Role/其他身份获得更强认证。
 
-S2c当前固定`d570673ba87c113f7474fdab79b5e22a83c2b323`只实施上述六个非秘密API类型、严格解码/验证及OpenAPI组件。2026-09-24本地Go1.26.7、`GOMAXPROCS=2`、`GOMEMLIMIT=512MiB`下，API与架构`-race -p 2`、API vet及122个已跟踪API文件的重复生成一致性通过；新增模糊测试单worker运行15秒（终端17.214s，221734次执行）通过。IAM/Audit默认回归也通过，其中外部数据库用例的跳过不计作实跑。既有测试owner覆盖显式false/true、缺失/null、未知或重复字段、请求方身份/权限选择、版本上限及历史完成与新Session分离；JSON Schema证明结构与封闭枚举，expected+1跨字段关系仍由Go验证，不能宣称Schema独自证明事务。当前step-up拒绝设置操作，OpenAPI不发布设置路由；未新增Action、SQL、schema版本、发布profile或UI。其精确SHA的[Verification 35955820844](https://github.com/xiak/matrix/actions/runs/35955820844)已终止failure：七项均runner_id=0、steps=0，go注释明确为GitHub账号付款/支出限制，未执行任何测试，不能当作独立CI通过或代码失败证据。此证据不是配置CAS、强制初始绑定、跨副本Session/Role屏障、真实邮件、独立CI或发布验收，后续运行时切片必须完成这些目标。
+非秘密数据契约的固定基线为`d570673ba87c113f7474fdab79b5e22a83c2b323`，当时只发布上述六个类型及OpenAPI组件，没有运行时路由、Action或SQL。既有测试owner覆盖显式false/true、缺失/null、未知或重复字段、请求方身份/权限选择、版本上限及历史完成与新Session分离；JSON Schema证明结构与封闭枚举，expected+1仍由Go验证，不证明事务。该固定基线的API/架构race、vet、122文件生成一致性和单worker15秒fuzz（221734次执行）本地通过；[Verification 35955820844](https://github.com/xiak/matrix/actions/runs/35955820844)因GitHub付款/支出限制终止failure，七项均runner_id=0、steps=0，没有独立测试执行。其证据不代表下述运行时增量或完整S2c已验收。
 
 当前首片只有TOTP，故不提供算法、允许因子清单、宽限期、按组例外或平台底线开关；新Account的`requiredForUsers=false`只是未强制日常User，不关闭用户主动绑定的因子。已有安装安全配置只能从实际可信旧状态迁移，不能以默认false覆盖生效决定；缺少应存在的行不得在读取时临时生成。用户NEVER_BOUND的首次设置、具备合法解绑完成的REMOVED重新设置及因子丢失必须区分。
+
+S2c运行时的首个有界交付是配置读取：`GET /v1/account/security-settings`在同一事务中使用当前USER/LOGIN_SESSION、当前PDP及真实Account实例，唯一SQL入口`iam.read_account_security_settings(text,text,text)`精确消费本事务内的允许决定。原`iam.accounts`增加`security_settings_version`、`mfa_required_for_users`、`security_settings_updated_at`三列，不增加平行Account实体，不在读取时生成默认行或时间。源IAM schema为41、Audit仍24；这是源码形状，不分配或替换安装release profile。
+
+前驱没有账号级强制开关，首次迁移仅记录version=1、requiredForUsers=false、updatedAt=Account原createdAt；新Account也在原创建事务中记录相同初始状态。此只读阶段由约束和ALWAYS触发器拒绝任何设置变更，不能存入尚未执行的true；等值迁移不改设置，缺失或部分字段不能用默认false重建应有权威。readiness/verify核对列类型/精度/非空、约束、触发器、精确函数及API/worker/通知/离线恢复等执行权限。IAM产品Profile从5推进到6，保留历史5；新动作只允许TENANT/ACCOUNT实例/USER/LOGIN_SESSION，旧系统策略及附件不自动补权。
+
+本片不注册update、不开放写入/设置proof，也不声明强制要求已执行。真实验收覆盖两Account、授权/撤权、Deny/Boundary、无授权平台身份、USER以外载体、selector、受限DB登录、历史decision重用拒绝、原审计关联、迁移重放和重启。随后写入须与首次受限ENROLLMENT、登录资格修订及受支持恢复的非回退证据一起实现；受支持旧备份的配置值不能独自充当当前安全要求，此衔接仍需installation owner共同冻结，不靠默认false或仅可回滚数据库版本来证明。
+
+2026-09-24只读增量的本地证据使用独立Windows PostgreSQL18.6，Windows Job硬限2逻辑CPU/1GiB/24进程，16连接、64MiB shared_buffers、4MiB work_mem、无parallel worker；Go1.26.7、GOMAXPROCS=2/GOMEMLIMIT=512MiB，真实门禁串行`-race -p 1`。数据库最终在零其他客户端连接时正常停止，未操作共享或远端服务。
+
+| 现有门禁拥有者 | 本地实跑结果与证明范围 |
+| --- | --- |
+| `TestIAMPolicyAuthorityStoragePostgres` | 整组142.48s通过；最终读取子片及其父级保留检查18.60s（包22.017s）通过。两个Account同名成员、显式自定义策略、旧root/平台策略不补权、Deny与Boundary、即时撤权及另一个Account不受影响；真实session_user/current_user受限登录、五类直接SQL/历史决定越权拒绝、11项列/触发器/ACL/函数漂移关闭、原设置时间与迁移重放、授权事实关联。 |
+| `TestIAMRetainedMFAProcessUpgrade` | 固定`f5cec0e132ad18900d9a5a5629eae04fda4817f1`实际IAM37二进制产生的数据→IAM41，最终23.41s（包26.768s）通过。原Account、凭据、附件、Session和历史事实保持；原IAM产品Profile的实际canonical/digest逐字保留，新head为6；只初始化此前不存在的设置，更新时间仍为原Account创建时间。原TOTP、恢复码、挑战及完成继续经历真实重放/重启与恢复，不构成签名release跨profile升级许可。 |
+| `TestIndependentIAMAuditAndPaaSProcesses` | 最终127.29s（包130.724s）通过。两个IAM进程、受限运行登录、显式授权、跨副本读取/撤权、重启后原设置、有效RoleSession/AccessKey不能充当LOGIN_SESSION；读取的历史决定在撤权后仍通过原producer proof/outbox投递至正确租户Audit。原双租户业务、MFA绑定/恢复/step-up及真实断TCP门禁保留；通知夹具不是SMTP证据。 |
+| 原Audit PostgreSQL/HTTP拥有者 | `TestPostgresAuthorityIntegration`5.45s（包8.346s）及`TestAuditHTTPPostgresVerticalSlice`1.30s（包4.279s）通过；当前IAM readiness期待同步41，原最小权限、不可变记录、双范围并发及失败事务保持。 |
+
+本片全仓`go test -race -count=1 -p 2 ./...`、`go vet -p 2 ./...`、模块验证、Linux/amd64全包构建、122个API文件两次生成一致性及gofmt/diff检查通过。默认测试中跳过的外部运行环境不计作实跑，真实证据仅以上列门禁为准。源码读取闭环不等于完整S2c验收。独立CI、设置写入/强制绑定/会话屏障、真实邮件、新UI浏览器及签名恢复仍分别需要实际证据；旧CI的零执行账单限制不能作为本片通过凭据。
 
 新动作进入IAM产品Profile和策略编译器，不由handler比较角色名称。现有系统策略版本保持不可变；具体新内置版本及其生效范围归002，在实现窗口明确验证，不因为目录新增Action就自动给所有旧附件补权。自定义策略可按已有发布/附件流程显式授予这两个动作，不能跳过Boundary或Deny；平台操作员的安装权限不隐含租户设置权限。
 

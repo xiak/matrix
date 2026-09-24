@@ -695,6 +695,41 @@ func TestDeclaredModesBindBothDecisionsAndRejectUntrustedProfileContexts(t *test
 	}
 }
 
+func TestSecuritySettingsReadDoesNotExpandExistingSystemAuthority(t *testing.T) {
+	now := authorityTestTime()
+	request := boundAuthorizationRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionIAMSecuritySettingsRead,
+		Resource:  iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: "organization-example"},
+		RequestID: "settings-read", CorrelationID: "settings-read"}, iamv1.AuthorizationResourceInstance, "")
+	for _, id := range testSystemPolicyIDs {
+		if id == iamv1.SystemPolicyInstallationVerifier {
+			continue
+		}
+		subject := authoritySubject(now, id)
+		decision, err := Decide(subject, iamv1.ServiceIAM, request, "settings-existing", now)
+		if err != nil || decision.Allowed {
+			t.Fatalf("existing system policy %s gained settings read: %v", id, err)
+		}
+	}
+	subject := authoritySubject(now)
+	subject.Policies = authorityPoliciesForAction(t, now, request.Action)
+	decision, err := Decide(subject, iamv1.ServiceIAM, request, "settings-explicit", now)
+	if err != nil || !decision.Allowed || decision.TenantID != subject.Organization.ID || len(decision.PolicyEvidence) != 1 {
+		t.Fatal("explicit current policy did not authorize its tenant", err)
+	}
+	subject.Principal.MustChangePassword = true
+	decision, err = Decide(subject, iamv1.ServiceIAM, request, "settings-forced-password", now)
+	if err != nil || decision.Allowed {
+		t.Fatal("forced temporary credential gained settings access", err)
+	}
+	subject.Principal.MustChangePassword = false
+	revokedAt := now
+	subject.Policies[0].Attachment.RevokedAt = &revokedAt
+	decision, err = Decide(subject, iamv1.ServiceIAM, request, "settings-revoked", now)
+	if !errors.Is(err, ErrAuthorityUnavailable) || decision.Allowed {
+		t.Fatal("revoked settings authority remained usable", err)
+	}
+}
+
 func TestCatalogConfinementIsEnforcedByActualDecisions(t *testing.T) {
 	now := authorityTestTime()
 	for _, definition := range iamv1.AllActionDefinitions() {

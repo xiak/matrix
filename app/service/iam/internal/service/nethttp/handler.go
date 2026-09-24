@@ -25,6 +25,7 @@ type Workflow interface {
 	SetAccessKeyStatus(context.Context, iamv1.Secret, iamv1.PrincipalID, iamv1.AccessKeyID, iamv1.SetAccessKeyStatusRequest) (iamv1.SetAccessKeyStatusResponse, error)
 	DeleteAccessKey(context.Context, iamv1.Secret, iamv1.PrincipalID, iamv1.AccessKeyID, iamv1.DeleteAccessKeyRequest) (iamv1.DeleteAccessKeyResponse, error)
 	CurrentIdentity(context.Context, iamv1.Secret) (iamv1.CurrentIdentity, error)
+	AccountSecuritySettings(context.Context, iamv1.Secret, string) (iamv1.AccountSecuritySettings, error)
 	ListUsers(context.Context, iamv1.Secret, string, string) (iamv1.UserList, error)
 	GetUser(context.Context, iamv1.Secret, iamv1.PrincipalID, string) (iamv1.UserAccess, error)
 	GetUserPermissionBoundary(context.Context, iamv1.Secret, iamv1.PrincipalID, string) (iamv1.UserPermissionBoundary, error)
@@ -182,6 +183,7 @@ func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 	routes.HandleFunc("/v1/accounts", value.accounts)
 	routes.HandleFunc("/v1/accounts/", value.account)
 	routes.HandleFunc("/v1/account:alias", value.setAccountAlias)
+	routes.HandleFunc("/v1/account/security-settings", value.accountSecuritySettings)
 	routes.HandleFunc("/v1/auth/logout", value.logout)
 	routes.HandleFunc("/v1/auth/sessions", value.listOwnSessions)
 	routes.HandleFunc("/v1/auth/sessions:revoke-others", value.revokeOtherSessions)
@@ -920,6 +922,22 @@ func directoryPage(response http.ResponseWriter, request *http.Request, validate
 		return "", false
 	}
 	return values[0], true
+}
+
+func (value *handler) accountSecuritySettings(response http.ResponseWriter, request *http.Request) {
+	if !value.requireMethod(response, request, http.MethodGet) || !rejectQueryAndBody(response, request) {
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.AccountSecuritySettings(request.Context(), credential, requestID(request))
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
 }
 
 func (value *handler) listUsers(response http.ResponseWriter, request *http.Request) {
