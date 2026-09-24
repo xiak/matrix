@@ -4286,6 +4286,8 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 		{`UPDATE iam.sessions SET mfa_revision=mfa_revision+1 WHERE tenant_id=$1 AND id=$2`, []any{account, completed.Session.ID}, "session authentication facts are immutable"},
 		{`UPDATE iam.authentication_challenges SET state='PENDING',completed_at=NULL,session_id=NULL,issuance_event_id=NULL WHERE tenant_id=$1 AND id=$2`, []any{account, challenges[winner].id}, "challenge identity and completion are immutable"},
 		{`UPDATE iam.authentication_challenges SET expires_at=expires_at+interval '30 minutes' WHERE tenant_id=$1 AND id=$2`, []any{account, challenges[1-winner].id}, "challenge identity and completion are immutable"},
+		{`UPDATE iam.authentication_challenges SET purpose='ENROLLMENT' WHERE tenant_id=$1 AND id=$2`, []any{account, challenges[1-winner].id}, "challenge identity and completion are immutable"},
+		{`UPDATE iam.authentication_challenges SET purpose='RECOVERY' WHERE tenant_id=$1 AND id=$2`, []any{account, challenges[winner].id}, "challenge identity and completion are immutable"},
 		{`INSERT INTO iam.sessions(tenant_id,id,principal_id,verification_digest,status,resource_version,issued_at,expires_at,credential_version,authentication_method,authenticated_at,mfa_revision)
 		 SELECT tenant_id,'mfa-forged-session',principal_id,verification_digest,'ACTIVE',1,issued_at,expires_at,credential_version,authentication_method,authenticated_at,mfa_revision FROM iam.sessions WHERE tenant_id=$1 AND id=$2`, []any{account, completed.Session.ID}, "MFA session has no completed challenge"},
 	} {
@@ -4640,6 +4642,11 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 				AS 'SELECT NULL::bigint,NULL::text WHERE false'; ALTER FUNCTION iam.read_password_challenge(text,text,text) OWNER TO matrix_iam_owner;
 				REVOKE ALL ON FUNCTION iam.read_password_challenge(text,text,text) FROM PUBLIC; GRANT EXECUTE ON FUNCTION iam.read_password_challenge(text,text,text) TO matrix_iam_api;`},
 			{"nullable_attempts", "ALTER TABLE iam.authentication_challenges ALTER COLUMN attempts DROP NOT NULL"},
+			{"missing_purpose", "ALTER TABLE iam.authentication_challenges DROP COLUMN purpose CASCADE"},
+			{"nullable_purpose", "ALTER TABLE iam.authentication_challenges ALTER COLUMN purpose DROP NOT NULL"},
+			{"implicit_purpose", "ALTER TABLE iam.authentication_challenges ALTER COLUMN purpose SET DEFAULT 'LOGIN'"},
+			{"missing_purpose_lineage", "ALTER TABLE iam.authentication_challenges DROP CONSTRAINT authentication_challenges_purpose"},
+			{"public_challenge_snapshot", "GRANT EXECUTE ON FUNCTION iam.authentication_challenge_snapshot(text,text) TO matrix_iam_api"},
 			{"generation_type", "ALTER TABLE iam.authentication_challenges ALTER COLUMN credential_generation TYPE numeric"},
 			{"missing_lifetime", "ALTER TABLE iam.authentication_challenges DROP CONSTRAINT authentication_challenges_lifetime"},
 			{"unvalidated_lifetime", "ALTER TABLE iam.authentication_challenges DROP CONSTRAINT authentication_challenges_lifetime; ALTER TABLE iam.authentication_challenges ADD CONSTRAINT authentication_challenges_lifetime CHECK(expires_at>created_at AND expires_at<=created_at+interval '5 minutes') NOT VALID"},
@@ -5974,6 +5981,25 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 		awaitSubmission(notificationID)
 		stopDelivery()
 		t.Log("real mailbox verification -> HTTP TOTP binding -> revoked old sessions -> separate restricted notification executable restart -> actual STARTTLS mailbox receipt; DATA250 persisted")
+	})
+	t.Run("equal_migration_does_not_reclassify_missing_challenge_purpose", func(t *testing.T) {
+		tx, err := admin.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback(context.Background())
+		if _, err := tx.Exec(ctx, "ALTER TABLE iam.authentication_challenges DROP COLUMN purpose CASCADE"); err != nil {
+			t.Fatal("isolated missing-purpose fixture did not apply", err)
+		}
+		if err := iammigration.Up(ctx, tx); err == nil {
+			t.Fatal("equal migration reclassified damaged current challenge authority as a predecessor")
+		}
+		if err := tx.Rollback(ctx); err != nil {
+			t.Fatal("rollback isolated missing-purpose attack", err)
+		}
+		if ready, err := service.Readiness(ctx); err != nil || ready.State != iamv1.ReadinessReady {
+			t.Fatal("failed reclassification damaged the original authority", err)
+		}
 	})
 	t.Run("equal_migration_does_not_invent_missing_mfa_authority", func(t *testing.T) {
 		initial := iamHTTPSecret(t, "Missing-MFA-State-Initial-935!")

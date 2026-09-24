@@ -693,6 +693,26 @@ and supported-restore obligations are implemented. This fixed predecessor
 has only read-only Account settings; its SQL, installation profile and
 runtime acceptance are not reclassified by the contract increment.
 
+The S2c challenge runtime `ADAPT`s fixed
+`0a237aae5c904e0e32e5766544e31c1cfed5a02a`'s existing PostgreSQL LOGIN/RECOVERY
+ceremonies to retain an immutable, explicit purpose in the original row and
+private lookup. `REUSE` its shared attempt budgets, closed predecessor proof,
+transaction locks and deferred completion checks; `REJECT` inferring authority
+from a shared next-step string, a missing purpose default, a client selector or
+a factor-bound flag. Its actual executable supplies the retained recovery
+fixture; the earlier fixed `f5cec0e132ad18900d9a5a5629eae04fda4817f1` remains
+the independent original LOGIN source. Classifying those exact original
+ceremonies does not issue a first-enrollment capability or authorize a release
+upgrade, and no installation/UX worktree or external acceptance is imported.
+
+The same fixed process owner is `ADAPT`ed for secret-absence inspection:
+scan decoded JSON values literally, and `REUSE` the public Audit event
+validator to identify its request digest. `REJECT` SQL LIKE wildcard
+interpretation, treating a six-digit OTP's accidental substring in that
+validated digest as disclosure, or broadly exempting other fields/secrets.
+This changes no production redaction or historical proof contract; the
+original process gate still checks actual event/proof binding and logs.
+
 The online step-up combination `ADAPT`s fixed
 `a4cbd18598099751eb1bd3eac896e191db474524`'s purpose-only authentication
 recovery transaction, `000014` state/fences and closed SYSTEM Audit facts.

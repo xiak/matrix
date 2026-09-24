@@ -84,7 +84,7 @@ func (service *Authority) reserveRecoveryAttempt(ctx context.Context, id string,
 		if err != nil {
 			return err
 		}
-		if !recoveryStep(identity.NextStep, purpose) {
+		if !recoveryStep(identity, purpose) {
 			return ErrUnauthenticated
 		}
 		if err := service.checkEmailVerificationCustody(ctx, tx); err != nil {
@@ -102,8 +102,9 @@ func (service *Authority) reserveRecoveryAttempt(ctx context.Context, id string,
 	return attempt, nil
 }
 
-func recoveryStep(step, purpose string) bool {
-	return purpose == "RECOVERY_CODE" && (step == "TOTP" || step == "RECOVER") || purpose == "RECOVERY_CONFIRM" && step == "ENROLLMENT"
+func recoveryStep(identity AuthenticationChallengeCredential, purpose string) bool {
+	return purpose == "RECOVERY_CODE" && identity.Purpose == "LOGIN" && (identity.NextStep == "TOTP" || identity.NextStep == "RECOVER") ||
+		purpose == "RECOVERY_CONFIRM" && identity.Purpose == "RECOVERY" && identity.NextStep == "ENROLLMENT"
 }
 
 func (service *Authority) checkRecoveryAttempt(ctx context.Context, tx Transaction, attempt TOTPAttempt, credential iamv1.Secret) error {
@@ -111,7 +112,7 @@ func (service *Authority) checkRecoveryAttempt(ctx context.Context, tx Transacti
 	if err != nil {
 		return err
 	}
-	if identity.AccountID != attempt.AccountID || identity.UserID != attempt.UserID || !recoveryStep(identity.NextStep, attempt.Purpose) {
+	if identity.AccountID != attempt.AccountID || identity.UserID != attempt.UserID || !recoveryStep(identity, attempt.Purpose) {
 		return ErrUnauthenticated
 	}
 	return service.checkEmailVerificationCustody(ctx, tx)
@@ -312,7 +313,7 @@ func (service *Authority) InspectAuthenticatorRecovery(ctx context.Context, id s
 		if err != nil {
 			return err
 		}
-		if identity.NextStep != "TOTP" && identity.NextStep != "RECOVER" {
+		if !recoveryStep(identity, "RECOVERY_CODE") {
 			return ErrUnauthenticated
 		}
 		result, err = tx.InspectAuthenticatorRecovery(ctx, identity, request.RequestID)

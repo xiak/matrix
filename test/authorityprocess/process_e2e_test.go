@@ -115,6 +115,11 @@ func TestIAMRetainedMFAProcessUpgrade(t *testing.T) {
 		"f5cec0e132ad18900d9a5a5629eae04fda4817f1", 37)
 }
 
+func TestIAMRetainedChallengePurposeProcessUpgrade(t *testing.T) {
+	testIAMRetainedSessionSource(t, "MATRIX_IAM_CHALLENGE_UPGRADE_POSTGRES_TEST_DSN", "matrix_iam_upgrade_challenge_",
+		"0a237aae5c904e0e32e5766544e31c1cfed5a02a", 41)
+}
+
 func testIAMRetainedSessionSource(t *testing.T, variable, databasePrefix, source string, sourceSchema uint64) {
 	t.Helper()
 	dsn := os.Getenv(variable)
@@ -289,8 +294,29 @@ func testIAMRetainedSessionSource(t *testing.T, variable, databasePrefix, source
 	}
 	var assertRetainedMFA func()
 	var recoverRetainedMFA func() func()
-	if sourceSchema == 37 {
-		assertRetainedMFA, recoverRetainedMFA = prepareRetainedMFAProcesses(t, ctx, admin, endpoint, primary.Credential, &sensitive)
+	if sourceSchema == 37 || sourceSchema == 41 {
+		assertRetainedMFA, recoverRetainedMFA = prepareRetainedMFAProcesses(t, ctx, admin, endpoint, primary.Credential, &sensitive, sourceSchema == 41)
+	}
+	if sourceSchema == 41 {
+		// Both tenants' real predecessor ceremonies must survive the one-time
+		// classification under forced RLS, including deferred history proofs.
+		response := performJSON(t, http.MethodPost, endpoint+"/v1/accounts", primary.Credential, map[string]any{
+			"id": "retained-challenge-second", "displayName": "Retained challenge second account", "rootLoginName": "retained.challenge.root",
+			"rootDisplayName": "Retained challenge root", "initialPassword": initialReaderPassword, "requestId": "challenge-second-account",
+		})
+		if response.Status != http.StatusCreated {
+			t.Fatal("actual IAM41 did not create the second challenge owner", response.Status)
+		}
+		secondRoot := loginIAM(t, endpoint, "retained.challenge.root", initialReaderPassword, "challenge-second-root-login")
+		sensitive = append(sensitive, secondRoot.Credential)
+		changePasswordIAM(t, endpoint, secondRoot.Credential, initialReaderPassword, changedReaderPassword, "challenge-second-root-password")
+		secondCheck, secondRecover := prepareRetainedMFAProcesses(t, ctx, admin, endpoint, secondRoot.Credential, &sensitive, true)
+		firstCheck, firstRecover := assertRetainedMFA, recoverRetainedMFA
+		assertRetainedMFA = func() { firstCheck(); secondCheck() }
+		recoverRetainedMFA = func() func() {
+			firstCompleted, secondCompleted := firstRecover(), secondRecover()
+			return func() { firstCompleted(); secondCompleted() }
+		}
 	}
 	var originalIAMProfileRevision uint64
 	var originalIAMProfileDocument, originalIAMProfileDigest string
@@ -343,7 +369,7 @@ func testIAMRetainedSessionSource(t *testing.T, variable, databasePrefix, source
 		}
 	}
 	var shape bool
-	if err := admin.QueryRow(ctx, `SELECT schema_version=41 AND iam.account_security_settings_contract_ready() AND iam.login_session_contract_ready() AND iam.password_attempt_contract_ready()
+	if err := admin.QueryRow(ctx, `SELECT schema_version=42 AND iam.account_security_settings_contract_ready() AND iam.login_session_contract_ready() AND iam.password_attempt_contract_ready()
 	 AND iam.totp_authentication_contract_ready()
 	 AND to_regprocedure('iam.revoke_session(text,text,text,text,jsonb)') IS NULL
 	 AND to_regprocedure('iam.revoke_session(text,text,text,text,jsonb,text)') IS NOT NULL
@@ -354,7 +380,7 @@ func testIAMRetainedSessionSource(t *testing.T, variable, databasePrefix, source
 	 FROM iam.readiness()`).Scan(&shape); err != nil || !shape {
 		t.Fatal("retained database did not replace the exact Session ABI", err)
 	}
-	current := start(currentBinary, 41)
+	current := start(currentBinary, 42)
 	if !bytes.Equal(originalState, identityState()) {
 		t.Fatal("migration or equal bootstrap changed original identity/credential state")
 	}
@@ -460,7 +486,7 @@ func testIAMRetainedSessionSource(t *testing.T, variable, databasePrefix, source
 	if err := iammigration.Up(ctx, admin); err != nil {
 		t.Fatal("replay completed own-session schema", err)
 	}
-	current = start(currentBinary, 41)
+	current = start(currentBinary, 42)
 	if !bytes.Equal(completedState, identityState()) {
 		t.Fatal("restart/schema replay changed completed session state")
 	}
@@ -508,7 +534,7 @@ func testIAMRetainedSessionSource(t *testing.T, variable, databasePrefix, source
 				t.Fatal("actual migrator rejected completed recovery history")
 			}
 		}
-		current = start(currentBinary, 41)
+		current = start(currentBinary, 42)
 		assertRecovered()
 	}
 	for _, event := range originalFacts {
@@ -527,12 +553,12 @@ func testIAMRetainedSessionSource(t *testing.T, variable, databasePrefix, source
 		}
 	}
 	current.stop()
-	t.Logf("actual IAM%d -> IAM41 migrator/runtime retained sessions/individual completion, unknown credential lineage, forced bulk reduction, shared attempts, exact replay/new-login survival, original receipt/canonical/proof and restart; no release compatibility claim", sourceSchema)
+	t.Logf("actual IAM%d -> IAM42 migrator/runtime retained sessions/individual completion, unknown credential lineage, forced bulk reduction, shared attempts, exact replay/new-login survival, original receipt/canonical/proof and restart; no release compatibility claim", sourceSchema)
 }
 
-// The fixed IAM37 executable, not fixture DML or today's implementation,
+// A fixed predecessor executable, not fixture DML or today's implementation,
 // creates every positive factor, saved code, challenge and MFA Session here.
-func prepareRetainedMFAProcesses(t *testing.T, ctx context.Context, admin *pgx.Conn, endpoint, root string, sensitive *[]string) (func(), func() func()) {
+func prepareRetainedMFAProcesses(t *testing.T, ctx context.Context, admin *pgx.Conn, endpoint, root string, sensitive *[]string, recoveryBeforeUpgrade bool) (func(), func() func()) {
 	t.Helper()
 	const initial, password = "Retained-MFA-Initial-Password-73!", "Retained-MFA-Changed-Password-91!"
 	*sensitive = append(*sensitive, initial, password)
@@ -604,6 +630,23 @@ func prepareRetainedMFAProcesses(t *testing.T, ctx context.Context, admin *pgx.C
 	}
 	oldBearer := secret(authenticated.Credential)
 	pending := login("retained-mfa-old-pending")
+	startRecovery := func() iamv1.StartAuthenticatorRecoveryResponse {
+		t.Helper()
+		var started iamv1.StartAuthenticatorRecoveryResponse
+		call(http.MethodPost, "/v1/auth/challenges/"+pending.Challenge.ID+":recover", "",
+			map[string]string{"requestId": "retained-mfa-recover", "challengeCredential": secret(pending.ChallengeCredential), "recoveryCode": secret(bound.RecoveryCodes[0])}, http.StatusOK, &started)
+		if !started.Recovery.ExpiresAt.Equal(pending.Challenge.ExpiresAt) || started.Challenge.Purpose != "RECOVERY" {
+			t.Fatal("recovery changed the original challenge lifetime or purpose")
+		}
+		secret(started.ChallengeCredential)
+		secret(started.Provisioning.Seed)
+		secret(started.Provisioning.URI)
+		return started
+	}
+	var originalRecovery iamv1.StartAuthenticatorRecoveryResponse
+	if recoveryBeforeUpgrade {
+		originalRecovery = startRecovery()
+	}
 	snapshot := func() []byte {
 		t.Helper()
 		// Preserve the original batch's ownership, factor/event provenance and
@@ -618,11 +661,25 @@ func prepareRetainedMFAProcesses(t *testing.T, ctx context.Context, admin *pgx.C
 				ORDER BY b.id) FROM iam.mfa_recovery_batches b WHERE tenant_id=$1 AND user_id=$2),
 			'codes',(SELECT jsonb_agg(to_jsonb(c)-'recovery_id' ORDER BY c.id) FROM iam.mfa_recovery_codes c
 				JOIN iam.mfa_recovery_batches b ON (b.tenant_id,b.id)=(c.tenant_id,c.batch_id) WHERE b.tenant_id=$1 AND b.user_id=$2),
-			'challenges',(SELECT jsonb_agg(to_jsonb(c)-'recovery_id' ORDER BY id) FROM iam.authentication_challenges c WHERE tenant_id=$1 AND user_id=$2),
+			'challenges',(SELECT jsonb_agg(to_jsonb(c)-ARRAY['recovery_id','purpose'] ORDER BY id) FROM iam.authentication_challenges c WHERE tenant_id=$1 AND user_id=$2),
 			'attempt',(SELECT to_jsonb(a) FROM iam.totp_attempts a WHERE tenant_id=$1 AND user_id=$2),
 			'sessions',(SELECT jsonb_agg(to_jsonb(s) ORDER BY id) FROM iam.sessions s WHERE tenant_id=$1 AND principal_id=$2),
 			'notices',(SELECT jsonb_agg(to_jsonb(n) ORDER BY id) FROM iam.security_notifications n WHERE tenant_id=$1 AND user_id=$2))`, user.AccountID, user.ID).Scan(&state); err != nil {
 			t.Fatal("read original MFA authority invariants", err)
+		}
+		if recoveryBeforeUpgrade {
+			var recovery []byte
+			if err := admin.QueryRow(ctx, `SELECT jsonb_build_object(
+				'recoveries',(SELECT jsonb_agg(to_jsonb(r) ORDER BY id) FROM iam.authenticator_recoveries r WHERE tenant_id=$1 AND user_id=$2),
+				'state',(SELECT to_jsonb(m) FROM iam.user_mfa_states m WHERE tenant_id=$1 AND user_id=$2),
+				'factorOrigins',(SELECT jsonb_agg(jsonb_build_array(id,recovery_id) ORDER BY id) FROM iam.totp_authenticators WHERE tenant_id=$1 AND user_id=$2),
+				'challengeOrigins',(SELECT jsonb_agg(jsonb_build_array(id,recovery_id) ORDER BY id) FROM iam.authentication_challenges WHERE tenant_id=$1 AND user_id=$2),
+				'codes',(SELECT jsonb_agg(to_jsonb(c) ORDER BY c.id) FROM iam.mfa_recovery_codes c
+				 JOIN iam.mfa_recovery_batches b ON (b.tenant_id,b.id)=(c.tenant_id,c.batch_id) WHERE b.tenant_id=$1 AND b.user_id=$2))`, user.AccountID, user.ID).Scan(&recovery); err != nil {
+				t.Fatal("read actual predecessor recovery lineage", err)
+			}
+			state = append(append(state, '\n'), recovery...)
+			clear(recovery)
 		}
 		return state
 	}
@@ -636,8 +693,22 @@ func prepareRetainedMFAProcesses(t *testing.T, ctx context.Context, admin *pgx.C
 			t.Fatal("migration/bootstrap/restart changed retained MFA authority or consumed-step evidence")
 		}
 		var shape bool
+		if recoveryBeforeUpgrade {
+			if err := admin.QueryRow(ctx, `SELECT
+				(SELECT state='STARTED' AND challenge_id=$4 FROM iam.authenticator_recoveries WHERE tenant_id=$1 AND user_id=$2 AND id=$3)
+				AND (SELECT purpose='RECOVERY' AND next_step='ENROLLMENT' AND state='PENDING' AND recovery_id=$3
+				 FROM iam.authentication_challenges WHERE tenant_id=$1 AND user_id=$2 AND id=$4)
+				AND NOT EXISTS(SELECT 1 FROM iam.authentication_challenges
+				 WHERE purpose IS DISTINCT FROM CASE WHEN next_step='ENROLLMENT' THEN 'RECOVERY' ELSE 'LOGIN' END)
+				AND NOT EXISTS(SELECT 1 FROM iam.step_ups) AND NOT EXISTS(SELECT 1 FROM iam.recovery_code_regenerations)`,
+				user.AccountID, user.ID, originalRecovery.Recovery.ID, originalRecovery.Challenge.ID).Scan(&shape); err != nil || !shape {
+				t.Fatal("actual predecessor recovery lost its exact purpose or gained new authority", err)
+			}
+			call(http.MethodGet, "/v1/auth/me", oldBearer, nil, http.StatusUnauthorized, nil)
+			return
+		}
 		if err := admin.QueryRow(ctx, `SELECT NOT EXISTS(SELECT 1 FROM iam.authenticator_recoveries)
-			AND NOT EXISTS(SELECT 1 FROM iam.authentication_challenges WHERE next_step NOT IN ('TOTP','PASSWORD_CHANGE') OR recovery_id IS NOT NULL)
+			AND NOT EXISTS(SELECT 1 FROM iam.authentication_challenges WHERE next_step NOT IN ('TOTP','PASSWORD_CHANGE') OR recovery_id IS NOT NULL OR purpose IS DISTINCT FROM 'LOGIN')
 			AND NOT EXISTS(SELECT 1 FROM iam.totp_authenticators WHERE recovery_id IS NOT NULL)
 			AND NOT EXISTS(SELECT 1 FROM iam.mfa_recovery_codes WHERE recovery_id IS NOT NULL OR consumed_at IS NOT NULL)
 			AND NOT EXISTS(SELECT 1 FROM iam.mfa_recovery_batches WHERE revocation_recovery_id IS NOT NULL
@@ -655,11 +726,9 @@ func prepareRetainedMFAProcesses(t *testing.T, ctx context.Context, admin *pgx.C
 	}
 	recoverOriginal := func() func() {
 		t.Helper()
-		var started iamv1.StartAuthenticatorRecoveryResponse
-		call(http.MethodPost, "/v1/auth/challenges/"+pending.Challenge.ID+":recover", "",
-			map[string]string{"requestId": "retained-mfa-recover", "challengeCredential": secret(pending.ChallengeCredential), "recoveryCode": secret(bound.RecoveryCodes[0])}, http.StatusOK, &started)
-		if !started.Recovery.ExpiresAt.Equal(pending.Challenge.ExpiresAt) {
-			t.Fatal("recovery renewed an old executable's challenge")
+		started := originalRecovery
+		if !recoveryBeforeUpgrade {
+			started = startRecovery()
 		}
 		call(http.MethodGet, "/v1/auth/me", oldBearer, nil, http.StatusUnauthorized, nil)
 		newSeed := secret(started.Provisioning.Seed)
@@ -684,7 +753,7 @@ func prepareRetainedMFAProcesses(t *testing.T, ctx context.Context, admin *pgx.C
 		newBearer := secret(result.Credential)
 		completedState := snapshot()
 		t.Cleanup(func() { clear(completedState) })
-		t.Log("actual IAM37 encrypted factor, OTP consumption, ten original saved codes, Session and pending challenge retained through IAM41 apply-twice/bootstrap/restart; original code then revoked old MFA Session and completed new-factor login")
+		t.Log("actual predecessor factor, OTP consumption, saved codes and LOGIN/RECOVERY lineage retained through IAM42 apply-twice/bootstrap/restart; original recovery credential completed new-factor login")
 		return func() {
 			t.Helper()
 			after := snapshot()
@@ -707,7 +776,7 @@ func prepareRetainedMFAProcesses(t *testing.T, ctx context.Context, admin *pgx.C
 			call(http.MethodGet, "/v1/auth/me", newBearer, nil, http.StatusOK, nil)
 			call(http.MethodPost, "/v1/auth/challenges/"+pending.Challenge.ID+":recover", "",
 				map[string]string{"requestId": "retained-mfa-recover", "challengeCredential": secret(pending.ChallengeCredential), "recoveryCode": secret(bound.RecoveryCodes[0])}, http.StatusUnauthorized, nil)
-			t.Log("actual IAM41 migration/verify/bootstrap/restart after recovery preserved exact completion, consumed code and terminated batch; old MFA bearer/source challenge remained rejected")
+			t.Log("actual IAM42 migration/verify/bootstrap/restart after recovery preserved exact completion, consumed code and terminated batch; old MFA bearer/source challenge remained rejected")
 		}
 	}
 	return assertRetained, recoverOriginal
@@ -2631,7 +2700,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	// Exercise the exact source services together without weakening install
 	// admission: the workflow separately proves the published installer rejects
 	// this unmatched database shape before effects.
-	sourceProfile := installationrelease.AuthoritySchemas{IAM: 41, Audit: 24, PaaS: 2}
+	sourceProfile := installationrelease.AuthoritySchemas{IAM: 42, Audit: 24, PaaS: 2}
 	publishedProfile := installationrelease.CurrentDatabaseProfile()
 	if publishedProfile.Authorities == sourceProfile {
 		t.Fatal("unreleased authority source shape was published without a final profile gate")
@@ -8823,47 +8892,139 @@ func assertAuthorityPlaintextAbsent(
 	plaintexts ...string,
 ) {
 	t.Helper()
-	for _, plaintext := range plaintexts {
-		var present bool
-		if err := admin.QueryRow(
-			ctx,
-			`SELECT
-				EXISTS (
-					SELECT 1 FROM iam.audit_outbox
-					 WHERE event_document::text LIKE '%' || $1 || '%'
-				)
-				OR EXISTS (
-					SELECT 1 FROM paas.audit_outbox
-					 WHERE document::text LIKE '%' || $1 || '%'
-				)
-				OR EXISTS (
-					SELECT 1 FROM paas.operations
-					 WHERE document::text LIKE '%' || $1 || '%'
-				)
-				OR EXISTS (
-					SELECT 1 FROM managedservice.audit_outbox
-					 WHERE document::text LIKE '%' || $1 || '%'
-				)
-				OR EXISTS (
-					SELECT 1 FROM managedservice.operations AS operation
-					 WHERE row_to_json(operation)::text LIKE '%' || $1 || '%'
-				)
-				OR EXISTS (
-					SELECT 1 FROM audit.records
-					 WHERE event_document::text LIKE '%' || $1 || '%'
-					    OR canonical_document LIKE '%' || $1 || '%'
-				)
-				OR EXISTS (
-					SELECT 1 FROM iam.local_credential_recoveries AS receipt
-					 WHERE row_to_json(receipt)::text LIKE '%' || $1 || '%'
-				)`,
-			plaintext,
-		).Scan(&present); err != nil {
-			t.Fatalf("inspect authority plaintext storage: %v", err)
+	rows, err := admin.Query(ctx, `SELECT 'iam.outbox',event_document::text FROM iam.audit_outbox
+		UNION ALL SELECT 'paas.outbox',document::text FROM paas.audit_outbox
+		UNION ALL SELECT 'paas.operation',document::text FROM paas.operations
+		UNION ALL SELECT 'managedservice.outbox',document::text FROM managedservice.audit_outbox
+		UNION ALL SELECT 'managedservice.operation',row_to_json(o)::text FROM managedservice.operations o
+		UNION ALL SELECT 'audit.document',event_document::text FROM audit.records
+		UNION ALL SELECT 'audit.canonical',canonical_document FROM audit.records
+		UNION ALL SELECT 'iam.local-recovery',row_to_json(r)::text FROM iam.local_credential_recoveries r`)
+	if err != nil {
+		t.Fatal("inspect authority plaintext storage")
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var source, document string
+		if rows.Scan(&source, &document) != nil {
+			t.Fatal("read authority plaintext inspection")
+		}
+		present, err := authorityDocumentContainsPlaintext(document, plaintexts...)
+		if err != nil {
+			t.Fatal("invalid authority plaintext inspection")
 		}
 		if present {
-			t.Fatal("authority stored plaintext credential")
+			t.Fatalf("authority stored plaintext credential: %s", source)
 		}
+	}
+	if rows.Err() != nil {
+		t.Fatal("authority plaintext inspection incomplete")
+	}
+}
+
+// Decode strings before scanning: JSON escapes must not hide a credential,
+// and SQL LIKE metacharacters in a credential are literal, not wildcards.
+// Only a six-digit code inside a contract-valid Audit requestDigest is not
+// disclosure. That digest's real request/proof binding is checked separately
+// by the process gate; a decimal coincidence is not evidence of plaintext.
+func authorityDocumentContainsPlaintext(document string, plaintexts ...string) (bool, error) {
+	for _, plaintext := range plaintexts {
+		if plaintext == "" {
+			return false, errors.New("empty plaintext inspection input")
+		}
+	}
+	decoder := json.NewDecoder(strings.NewReader(document))
+	decoder.UseNumber()
+	var value any
+	if decoder.Decode(&value) != nil || decoder.Decode(new(any)) != io.EOF {
+		return false, errors.New("invalid plaintext inspection document")
+	}
+	contains := func(text string, requestDigest bool) bool {
+		for _, plaintext := range plaintexts {
+			if !strings.Contains(text, plaintext) {
+				continue
+			}
+			if requestDigest && len(plaintext) == 6 && strings.IndexFunc(plaintext, func(r rune) bool { return r < '0' || r > '9' }) == -1 {
+				continue
+			}
+			return true
+		}
+		return false
+	}
+	var inspect func(any, bool) bool
+	inspect = func(value any, requestDigest bool) bool {
+		switch item := value.(type) {
+		case map[string]any:
+			validEvent := false
+			if item["apiVersion"] == auditv1.APIVersion && item["kind"] == "AuditEvent" {
+				encoded, err := json.Marshal(item)
+				var event auditv1.Event
+				validEvent = err == nil && json.Unmarshal(encoded, &event) == nil && auditv1.ValidateEvent(event) == nil
+			}
+			for key, child := range item {
+				if contains(key, false) || inspect(child, validEvent && key == "requestDigest") {
+					return true
+				}
+			}
+		case []any:
+			for _, child := range item {
+				if inspect(child, false) {
+					return true
+				}
+			}
+		case string:
+			return contains(item, requestDigest)
+		case json.Number:
+			return contains(item.String(), false)
+		}
+		return false
+	}
+	return inspect(value, false), nil
+}
+
+func TestAuthorityPlaintextInspection(t *testing.T) {
+	code := "123456"
+	event := auditv1.Event{APIVersion: auditv1.APIVersion, Kind: "AuditEvent", EventID: "event-secret-inspection", TenantID: "account-one",
+		Actor: auditv1.ActorReference{Type: auditv1.ActorUser, ID: "user-one"}, Action: auditv1.ActionIAMAuthenticatorBound,
+		Target: auditv1.TargetReference{Kind: auditv1.TargetPrincipal, ID: "user-one"}, Result: auditv1.ResultSucceeded,
+		RequestDigest: "sha256:" + strings.Repeat("a", 58) + code, RequestID: "request-one", CorrelationID: "request-one",
+		OccurredAt: time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC)}
+	canonical, _, err := auditv1.CanonicalizeEvent(auditv1.SourceIAM, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name, document, plaintext string
+		present, invalid          bool
+	}{
+		{"code-in-request-digest", string(encoded), code, false, false},
+		{"code-in-canonical-request-digest", canonical, code, false, false},
+		{"plaintext-code", `{"code":"123456"}`, code, true, false},
+		{"numeric-code", `{"code":123456}`, code, true, false},
+		{"embedded-code", `{"message":"received code 123456"}`, code, true, false},
+		{"nested-code", `{"items":[{"code":"123456"}]}`, code, true, false},
+		{"key-disclosure", `{"123456":"value"}`, code, true, false},
+		{"escaped-string", `{"password":"literal\u005fpercent%password"}`, "literal_percent%password", true, false},
+		{"literal-not-wildcard", `{"password":"literalXpercentYpassword"}`, "literal_percent%password", false, false},
+		{"digest-in-another-field", `{"password":"` + event.RequestDigest + `"}`, code, true, false},
+		{"unproved-digest-shape", `{"requestDigest":"` + event.RequestDigest + `"}`, code, true, false},
+		{"malformed-audit-digest", strings.Replace(string(encoded), event.RequestDigest, "sha256:"+code, 1), code, true, false},
+		{"additional-audit-disclosure", strings.Replace(string(encoded), `"request-one"`, `"request-123456"`, 1), code, true, false},
+		{"full-digest-material", string(encoded), event.RequestDigest, true, false},
+		{"empty-input", `{}`, "", false, true},
+		{"invalid-json", `{"code":`, code, false, true},
+		{"trailing-json", `{} {}`, code, false, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			present, err := authorityDocumentContainsPlaintext(test.document, test.plaintext)
+			if (err != nil) != test.invalid || present != test.present {
+				t.Fatalf("plaintext inspection: present=%t invalid=%t", present, err != nil)
+			}
+		})
 	}
 }
 

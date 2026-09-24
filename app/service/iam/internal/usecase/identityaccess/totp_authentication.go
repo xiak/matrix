@@ -27,6 +27,7 @@ type AuthenticationChallengeCredential struct {
 	AccountID          iamv1.AccountID   `json:"accountId"`
 	UserID             iamv1.PrincipalID `json:"userId"`
 	ID                 string            `json:"id"`
+	Purpose            string            `json:"purpose"`
 	NextStep           string            `json:"nextStep"`
 	VerificationDigest string            `json:"verificationDigest"`
 }
@@ -124,7 +125,8 @@ func (service *Authority) authenticateChallenge(ctx context.Context, tx Transact
 	if !found || stored.ID != id {
 		return AuthenticationChallengeCredential{}, ErrUnauthenticated
 	}
-	if iamv1.ValidateID("accountId", string(stored.AccountID)) != nil || iamv1.ValidateID("userId", string(stored.UserID)) != nil {
+	if iamv1.ValidateID("accountId", string(stored.AccountID)) != nil || iamv1.ValidateID("userId", string(stored.UserID)) != nil ||
+		(stored.Purpose != "LOGIN" && stored.Purpose != "RECOVERY" && stored.Purpose != "ENROLLMENT") {
 		return AuthenticationChallengeCredential{}, ErrUnavailable
 	}
 	verified, err := authority.VerifyCredential(authority.CredentialAuthenticationChallenge, id, credential, stored.VerificationDigest)
@@ -155,7 +157,7 @@ func (service *Authority) VerifyAuthenticationChallenge(ctx context.Context, id 
 		if err != nil {
 			return err
 		}
-		if stored.NextStep != "TOTP" {
+		if stored.Purpose != "LOGIN" || stored.NextStep != "TOTP" {
 			return ErrUnauthenticated
 		}
 		attempt, admitted, err = tx.ReserveTOTPAttempt(ctx, TOTPAttempt{AccountID: stored.AccountID, UserID: stored.UserID,
@@ -191,7 +193,7 @@ func (service *Authority) VerifyAuthenticationChallenge(ctx context.Context, id 
 		if err != nil {
 			return err
 		}
-		if stored.AccountID != attempt.AccountID || stored.UserID != attempt.UserID || stored.NextStep != "TOTP" {
+		if stored.AccountID != attempt.AccountID || stored.UserID != attempt.UserID || stored.Purpose != "LOGIN" || stored.NextStep != "TOTP" {
 			return ErrUnavailable
 		}
 		step, mustChangePassword, err := service.verifyReservedTOTP(ctx, tx, attempt, request.Code)
@@ -278,7 +280,7 @@ func (service *Authority) ChangeChallengePassword(ctx context.Context, id string
 		if err != nil {
 			return err
 		}
-		if identity.NextStep != "PASSWORD_CHANGE" {
+		if identity.Purpose != "LOGIN" || identity.NextStep != "PASSWORD_CHANGE" {
 			return ErrUnauthenticated
 		}
 		original, err = tx.ReadPasswordChallenge(ctx, identity)

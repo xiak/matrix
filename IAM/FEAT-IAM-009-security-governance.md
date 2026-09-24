@@ -1,6 +1,6 @@
 # FEAT-IAM-009：登录保护与安全治理
 
-- 状态：S1本人会话目录/逐个撤销已验收；S1b一键结束其他登录会话的后端切片也已验收，累计固定`7cf857bba48eb5d7da487162c43e8f52534db133`通过本地真库、保留数据、独立进程、全仓检查及五项独立CI。一般事务分组及失败证据归011，既有Role管理门禁的准备复用归006。S3a登录/改密共享密码尝试已实施，本地回归及固定92e3073的五项独立CI通过，未分配发布revision。S2首次TOTP绑定、登录挑战及强制改密已固定f5cec0e1；在线恢复码重绑后端及其本地数据库/进程/真实邮件证据归下述S2b，该固定源码为IAM38/Audit22，尚无独立CI验收；后继step-up与固定恢复隔离的组合已固定推送b7a70bfa，源码IAM40/Audit24，本地真库/保留数据/独立进程与全仓检查通过，新增邮件、UI、独立CI及发布仍未验收。完整S2/S3/S4、UI与009发布均未完成；尚未实现的详细设计路由不是可用API，离线恢复及材料/通知的安装发布前置仍由其真实owner另验。
+- 状态：S1本人会话管理与一键结束其他会话、S3a共享密码尝试已有各自真实运行及独立CI验收。S2主动TOTP绑定、登录/强制改密、恢复码重绑及step-up，S3安全设置只读已具备下述固定后端和分项证据；当前挑战用途隔离为IAM42/Audit24/PaaS2，新增本地真库、双账号保留数据与独立进程证据，但完整S2c首次强制设置、设置写入/资格屏障、S3/S4及009发布仍未完成。独立CI、新增真实邮件、UI与签名安装组合不得继承前置验收；尚未实现的设计路由不是可用API，离线恢复及材料/通知前置继续由安装owner另验。
 - 依赖：003、005、007。
 - Owner：IAM 身份/凭据/会话治理，Audit evidence。
 
@@ -504,9 +504,21 @@ S2c首次设置的公共契约复用`AuthenticationChallenge`，purpose为独立
 
 012拥有首次邮箱子步骤：`StartChallengeNotificationContactVerificationRequest{requestId,challengeCredential,email}`及`ConfirmChallengeNotificationContactVerificationRequest{requestId,challengeCredential,code}`不接受普通密码/Session或SMTP选择。先证明ENROLLMENT用途、未过期、原密码/因子/配置资格仍有效且无可信地址，再使用原共享发送/猜码预算；确认期限取原验证意图与challenge期限的交集。已有VERIFIED地址只能沿原记录使用，不能借设置流程替换。inspect仅是当前挑战持有者的非秘密观察，不重发种子、码或挑战凭据；回包未知不改变原意图。
 
-上述新增契约在本基础片不注册HTTP路径、不改SQL或源码schema、不开放账号update/新StepUp值，也不证明已实现强制设置。实际路由与事务须在同一后继纵向片接入；普通Session本人绑定和RECOVERY路径保持原约束。基础门禁覆盖用途/阶段/载体互斥、严格字段及秘密编码、缩短但不可延长的绑定期限、跨目的和半会话拒绝；真实PG并发、安装恢复及浏览器仍属后继验收。
+固定`0a237aae`的新增契约不注册HTTP路径、不改SQL或源码schema、不开放账号update/新StepUp值，也不证明已实现强制设置。实际首次设置路由、设置写入和资格屏障仍须在后继纵向片接入；普通Session本人绑定和RECOVERY路径保持原约束。基础门禁覆盖用途/阶段/载体互斥、严格字段及秘密编码、缩短但不可延长的绑定期限、跨目的和半会话拒绝。
 
-该基础片已在Go1.26.7、GOMAXPROCS=2/GOMEMLIMIT=512MiB下完成全仓默认race、vet、模块校验、Linux/amd64构建与122个API生成文件字节一致检查；最终受影响API/生成器、identityaccess/nethttp及architecture再次race通过。原测试owner覆盖25组challenge用途/阶段组合、四种请求的缺失/null/重复/身份与第二载体注入、PASSWORD_CHANGE不得暴露后继状态、非首因子/晚于绑定的地址验证时间/挑战期限不匹配拒绝；现有LOGIN发行器拒绝ENROLLMENT/RECOVERY和未经TOTP的PASSWORD_CHANGE返回。单worker、15秒请求fuzz完成72241次执行无失败。此片没有启动数据库/SMTP/浏览器，默认外部门禁SKIP不计真实运行；源码仍IAM41/Audit24/PaaS2，不分配发布profile，独立CI与完整S2c仍未验收。
+运行时用途已落到原`authentication_challenges`：不可变且无默认值的`purpose`与原阶段/来源约束共同定义能力。登录TOTP与其已证明的改密后继为LOGIN，消耗原恢复码而产生的重绑后继为RECOVERY；后继首次设置具有独立ENROLLMENT用途，不能仅按相同步骤名授予这些不同流程的能力。私有lookup必须返回真实purpose，入口、共享尝试保留、末端锁和延迟完成证明分别核对，不从缺字段、客户端输入、当前MFA标志或普通Session补造。当前数据库仍未发行首次设置ENROLLMENT用途，也未开放配置写入。
+
+真正的前用途固定程序所产生的记录，只按其当时封闭的阶段及原来源关系做一次精确分类，不改变原密码证明、因子、期限、会话、消费记录、事实字节或哈希。已具备用途模型后缺列、NULL或损坏关系必须失败关闭，等值迁移不得重新猜测用途。新源码IAM42/Audit24/PaaS2只描述实际数据库与私有lookup形状，不分配安装release profile，也不宣称旧二进制或跨profile兼容。保留数据门禁同时覆盖固定IAM37的原LOGIN及固定IAM41实际消耗恢复码产生的待完成RECOVERY；不能由新程序手工补出旧恢复正向证据。
+
+用途运行时在2026-09-24的本任务独立原生PG18.6上以Go1.26.7、GOMAXPROCS=2/GOMEMLIMIT=512MiB、重型race-p1串行验证。PG使用Windows Job硬限2逻辑CPU/1GiB/24进程、16连接、64MiB shared_buffers、4MiB work_mem和零并行worker。真实TOTP绑定/恢复/改密及schema/ACL门禁106.06s通过：待用及已完成challenge用途不可篡改，缺列、可空、默认值、缺关系约束或私有snapshot被授予API均不READY；损坏当前用途后等值迁移失败，原事务回滚后仍READY。迁移按实际Account逐一运行原延迟完成证明，不停用这些证明或借分类掩盖损坏历史。
+
+现有保留数据owner实跑固定`f5cec0e132ad18900d9a5a5629eae04fda4817f1`的IAM37原LOGIN至42（38.19s）；新增同owner实跑固定`0a237aae5c904e0e32e5766544e31c1cfed5a02a`的IAM41至42（41.90s），两个Account、同名User各由旧HTTP真实绑定及消费原恢复码，保留待完成RECOVERY，再由新程序完成原重绑。原凭据、期限、消费及因子历史、receipt、事件canonical和哈希保持；双迁移、等值bootstrap和重启不补权限或重发材料。这些是明确固定起点的数据保留证据，不增加开发期全历史升级承诺。
+
+最终独立IAM双副本/Audit/PaaS/dispatcher门禁135.70s通过：真实受限数据库登录、绑定/强制改密/恢复/step-up提交后丢失TCP回包、重启及原意图重放、跨副本一次OTP成功、停用后历史outbox和链验证均保留。此前末尾明文检查的失败已在保留数据库只读定位为真实六位OTP偶然命中合法`requestDigest`的SHA256子串；检查改为解码JSON后逐值核对，仅对契约有效Audit事件的该摘要字段区分六位短码碰撞，原请求/历史证明的绑定仍由门禁另验。18组默认反例包含真实字符串/数字/嵌套/键名泄漏、JSON转义、LIKE字符、坏摘要和其他字段伪装；不能通过把码放入另一个字段或伪造摘要逃过检查。真实SMTP子门禁本轮明确SKIP，不以合成联系人、入队或上述进程通过冒充邮件交付；浏览器和发布组合仍未验收。
+
+用途运行时的最终源码已通过全仓默认race/architecture、vet、模块校验、Linux/amd64全包构建、122个API文件重生成字节一致及格式/diff检查；默认外部门禁SKIP不替代上述实际运行。7组错误用途用有效challenge凭据分别证明在尝试预算和因子材料读取之前拒绝，缺失用途属于权威不可用而非可推断默认。独立PG在确认无其他客户端后正常停止，保留数据未删除；没有共享Docker/系统服务或远端重启。固定源独立CI仍须另外核实，不能因本地通过完成整片S2c。
+
+固定`0a237aae`的纯契约基础片已在Go1.26.7、GOMAXPROCS=2/GOMEMLIMIT=512MiB下完成全仓默认race、vet、模块校验、Linux/amd64构建与122个API生成文件字节一致检查；最终受影响API/生成器、identityaccess/nethttp及architecture再次race通过。原测试owner覆盖25组challenge用途/阶段组合、四种请求的缺失/null/重复/身份与第二载体注入、PASSWORD_CHANGE不得暴露后继状态、非首因子/晚于绑定的地址验证时间/挑战期限不匹配拒绝；现有LOGIN发行器拒绝ENROLLMENT/RECOVERY和未经TOTP的PASSWORD_CHANGE返回。单worker、15秒请求fuzz完成72241次执行无失败。该固定片没有启动数据库/SMTP/浏览器，默认外部门禁SKIP不计真实运行；其源码为IAM41/Audit24/PaaS2，不分配发布profile，独立CI与完整S2c仍未验收。
 
 该纯契约/发行器防错片固定并推送于`0a237aae5c904e0e32e5766544e31c1cfed5a02a`。GitHub API核实[Verification35961451647](https://github.com/xiak/matrix/actions/runs/35961451647)精确SHA及completed/failure，七项均runner_id=0/steps=0；go annotation仍为付款/支出限制导致未启动。它是已本地验证的固定候选，不是独立CI通过，不继承此前数据库、邮件或UI证据。
 

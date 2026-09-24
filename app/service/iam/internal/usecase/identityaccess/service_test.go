@@ -64,6 +64,54 @@ func TestLoginChallengeIssuerCannotSubstituteEnrollmentOrRecoveryPurpose(t *test
 	}
 }
 
+func TestChallengePurposeRejectsCrossCeremonyBeforeAttemptReservation(t *testing.T) {
+	for _, sample := range []struct{ purpose, step, operation string }{
+		{"ENROLLMENT", "ENROLLMENT", "RECOVERY_CONFIRM"},
+		{"LOGIN", "ENROLLMENT", "RECOVERY_CONFIRM"},
+		{"RECOVERY", "TOTP", "RECOVERY_CODE"},
+		{"ENROLLMENT", "TOTP", "RECOVERY_CODE"},
+		{"RECOVERY", "ENROLLMENT", "LOGIN"},
+		{"ENROLLMENT", "TOTP", "LOGIN"},
+		{"", "TOTP", "LOGIN"},
+	} {
+		t.Run(sample.purpose+"_"+sample.step+"_"+sample.operation, func(t *testing.T) {
+			tx := newCoreTransaction()
+			service, err := newCoreAuthority(&coreRepository{transaction: tx}, Config{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := service.Bootstrap(t.Context(), coreBootstrap(t)); err != nil {
+				t.Fatal(err)
+			}
+			issued, err := service.credentials.Issue(authority.CredentialAuthenticationChallenge, "challenge-purpose")
+			if err != nil {
+				t.Fatal(err)
+			}
+			tx.challengeLookupDigest = issued.LookupDigest
+			tx.challengeCredential = AuthenticationChallengeCredential{AccountID: tx.organization.ID, UserID: tx.principal.ID,
+				ID: "challenge-purpose", Purpose: sample.purpose, NextStep: sample.step, VerificationDigest: issued.VerificationDigest}
+			if sample.operation == "LOGIN" {
+				code, _ := iamv1.NewSecret("123456")
+				var response iamv1.LoginResponse
+				response, err = service.VerifyAuthenticationChallenge(t.Context(), "challenge-purpose", iamv1.VerifyAuthenticationChallengeRequest{
+					RequestID: "request-purpose", ChallengeCredential: issued.Credential, Code: code})
+				if response.Credential.Present() || response.ChallengeCredential.Present() || response.Session != (iamv1.Session{}) {
+					t.Fatal("cross-purpose challenge returned authentication material")
+				}
+			} else {
+				_, err = service.reserveRecoveryAttempt(t.Context(), "challenge-purpose", issued.Credential, sample.operation)
+			}
+			want := ErrUnauthenticated
+			if sample.purpose == "" {
+				want = ErrUnavailable
+			}
+			if !errors.Is(err, want) || len(tx.totpReservations) != 0 || tx.totpAttemptReads != 0 {
+				t.Fatal("another ceremony reached the attempt budget or factor material", err)
+			}
+		})
+	}
+}
+
 func TestTOTPCustodyFencesActualLoginAndSessionNotOnlyReadiness(t *testing.T) {
 	tx := newCoreTransaction()
 	repository := &coreRepository{transaction: tx}
@@ -1543,6 +1591,8 @@ func TestRecoveryCodeMatchUsesCompleteOriginalBatchAndScope(t *testing.T) {
 type coreTransaction struct {
 	Transaction
 	loginChallenge          iamv1.AuthenticationChallenge
+	challengeCredential     AuthenticationChallengeCredential
+	challengeLookupDigest   string
 	now                     time.Time
 	status                  iamv1.BootstrapStatus
 	contentDigest           string
@@ -1583,6 +1633,10 @@ type coreTransaction struct {
 
 func (tx *coreTransaction) CreateLoginChallenge(context.Context, LoginChallengeCreation) (iamv1.AuthenticationChallenge, error) {
 	return tx.loginChallenge, nil
+}
+
+func (tx *coreTransaction) LookupAuthenticationChallenge(_ context.Context, digest string) (AuthenticationChallengeCredential, bool, error) {
+	return tx.challengeCredential, digest == tx.challengeLookupDigest, nil
 }
 
 func (transaction *coreTransaction) ReadStepUpForVerification(_ context.Context, caller iamv1.Session, id string) (iamv1.StepUp, error) {

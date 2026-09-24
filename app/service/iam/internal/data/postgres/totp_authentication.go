@@ -60,6 +60,7 @@ func (value *transaction) LookupAuthenticationChallenge(ctx context.Context, dig
 	var result identityaccess.AuthenticationChallengeCredential
 	if contractjson.DecodeObjectBytes(encoded, 1024, &result) != nil ||
 		iamv1.ValidateID("accountId", string(result.AccountID)) != nil || iamv1.ValidateID("userId", string(result.UserID)) != nil ||
+		(result.Purpose != "LOGIN" && result.Purpose != "RECOVERY" && result.Purpose != "ENROLLMENT") ||
 		(result.NextStep != "TOTP" && result.NextStep != "PASSWORD_CHANGE" && result.NextStep != "RECOVER" && result.NextStep != "ENROLLMENT") ||
 		iamv1.ValidateID("id", result.ID) != nil || iamv1.ValidateDigest("verificationDigest", result.VerificationDigest) != nil {
 		return identityaccess.AuthenticationChallengeCredential{}, false, identityaccess.ErrUnavailable
@@ -146,7 +147,7 @@ func (value *transaction) BeginPasswordChallenge(ctx context.Context, mutation i
 }
 
 func (value *transaction) ReadPasswordChallenge(ctx context.Context, identity identityaccess.AuthenticationChallengeCredential) (identityaccess.ChallengePasswordMaterial, error) {
-	if identity.NextStep != "PASSWORD_CHANGE" {
+	if identity.Purpose != "LOGIN" || identity.NextStep != "PASSWORD_CHANGE" {
 		return identityaccess.ChallengePasswordMaterial{}, identityaccess.ErrUnauthenticated
 	}
 	var result identityaccess.ChallengePasswordMaterial
@@ -164,7 +165,7 @@ func (value *transaction) ReadPasswordChallenge(ctx context.Context, identity id
 
 func (value *transaction) ChangeChallengePassword(ctx context.Context, mutation identityaccess.ChallengePasswordMutation) (iamv1.ChallengePasswordChangeResponse, error) {
 	identity := mutation.Identity
-	if identity.NextStep != "PASSWORD_CHANGE" || mutation.AuditEvent.Action != auditv1.ActionIAMUserPasswordChanged ||
+	if identity.Purpose != "LOGIN" || identity.NextStep != "PASSWORD_CHANGE" || mutation.AuditEvent.Action != auditv1.ActionIAMUserPasswordChanged ||
 		string(mutation.AuditEvent.TenantID) != string(identity.AccountID) || string(mutation.AuditEvent.Actor.ID) != string(identity.UserID) ||
 		mutation.AuditEvent.Target.Kind != auditv1.TargetUser || mutation.AuditEvent.Target.ID != string(identity.UserID) ||
 		auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil {
