@@ -20,6 +20,8 @@ import type { IamRepository } from "../repositories/iamRepository";
 export type PersonalSecurityClient = {
   accountId: string;
   userId: string;
+  sessionId: string;
+  sessionRevision: number;
   totpEnrollmentIntent: TOTPEnrollmentIntent | null;
   recoveryCodeRegenerationAvailable: boolean;
   recoveryCodeRegenerationIntent: RecoveryCodeRegenerationIntent | null;
@@ -45,11 +47,13 @@ export type PersonalSecurityClient = {
 
 const PersonalSecurityContext = createContext<PersonalSecurityClient | null>(null);
 
-export function PersonalSecurityProvider({ children, repository, credential, current, expire, completeEnrollment }: {
+export function PersonalSecurityProvider({ children, repository, credential, current, sessionRevision, isCurrentSession, expire, completeEnrollment }: {
   children: ReactNode;
   repository: IamRepository;
   credential: string | null;
   current: AuthenticatedSession | null;
+  sessionRevision: number;
+  isCurrentSession(expectedCredential: string, expectedRevision: number): boolean;
   expire(expectedCredential: string): boolean;
   completeEnrollment(expectedCredential: string, enrollmentId: string, recoveryCodes: string[]): boolean;
 }) {
@@ -70,6 +74,7 @@ export function PersonalSecurityProvider({ children, repository, credential, cur
     const security = repository.personalSecurity;
     if (!security || !credential || !current) return null;
     const expectedCredential = credential;
+    const expectedRevision = sessionRevision;
     const accountId = current.session.organizationId;
     const userId = current.session.principalId;
     const currentIntent = enrollmentIntent?.credential === expectedCredential &&
@@ -84,7 +89,7 @@ export function PersonalSecurityProvider({ children, repository, credential, cur
     const scoped = async <T,>(request: Promise<T>): Promise<T> => {
       try { return await request; }
       catch (failure) {
-        if (failure instanceof HttpProblem && failure.status === 401) expire(expectedCredential);
+        if (failure instanceof HttpProblem && failure.status === 401 && isCurrentSession(expectedCredential, expectedRevision)) expire(expectedCredential);
         throw failure;
       }
     };
@@ -98,6 +103,7 @@ export function PersonalSecurityProvider({ children, repository, credential, cur
     };
     const recoveryCodes = security.recoveryCodes;
     const replaceRegeneration = (requestId: string, update: (value: RecoveryCodeRegenerationIntent) => RecoveryCodeRegenerationIntent) => {
+      if (!isCurrentSession(expectedCredential, expectedRevision)) return;
       setRegenerationIntent((value) => value?.accountId === accountId && value.userId === userId && value.intent.requestId === requestId
         ? { ...value, credential: expectedCredential, intent: update(value.intent) }
         : value);
@@ -121,6 +127,8 @@ export function PersonalSecurityProvider({ children, repository, credential, cur
     return {
       accountId,
       userId,
+      sessionId: current.session.id,
+      sessionRevision: expectedRevision,
       totpEnrollmentIntent: currentIntent,
       recoveryCodeRegenerationAvailable: Boolean(recoveryCodes),
       recoveryCodeRegenerationIntent: currentRegeneration,
@@ -241,6 +249,7 @@ export function PersonalSecurityProvider({ children, repository, credential, cur
           expectedFactorRevision: intent.expectedFactorRevision
         }));
         const regeneration = validateRegeneration(result.regeneration, intent);
+        if (!isCurrentSession(expectedCredential, expectedRevision)) throw new Error("STALE_IAM_SESSION");
         replaceRegeneration(intent.requestId, (value) => ({ ...value, state: "COMPLETED", stepUp: value.stepUp ? { ...value.stepUp, state: "CONSUMED" } : null, regeneration }));
         return result;
       },
@@ -258,7 +267,7 @@ export function PersonalSecurityProvider({ children, repository, credential, cur
         });
       }
     };
-  }, [completeEnrollment, credential, current, enrollmentIntent, expire, regenerationIntent, repository.personalSecurity]);
+  }, [completeEnrollment, credential, current, enrollmentIntent, expire, isCurrentSession, regenerationIntent, repository.personalSecurity, sessionRevision]);
 
   return <PersonalSecurityContext.Provider value={client}>{children}</PersonalSecurityContext.Provider>;
 }

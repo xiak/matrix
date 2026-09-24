@@ -5,7 +5,7 @@ import { useFormatter, useTranslations } from "next-intl";
 import { KeyRound, Mail, RefreshCcw, ShieldCheck, Smartphone } from "lucide-react";
 import { Alert, Badge, Button, Card, FormField, Input, PasswordInput, Skeleton, Typography } from "@ui/xiak";
 import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
-import { usePersonalSecurity } from "../application/PersonalSecurityProvider";
+import { usePersonalSecurity, type PersonalSecurityClient } from "../application/PersonalSecurityProvider";
 import type { AuthenticatorState, NotificationContact, NotificationContactVerification, TOTPEnrollmentStart } from "../domain/personalSecurity";
 import { LiveRecoveryCodeRegeneration } from "./LiveRecoveryCodeRegeneration";
 import styles from "./MfaPreviewExperience.module.css";
@@ -19,12 +19,17 @@ function localTime(value: string, format: ReturnType<typeof useFormatter>) {
 }
 
 export function LivePersonalSecuritySettings() {
+  const client = usePersonalSecurity();
+  const scope = client ? `${client.accountId}:${client.userId}:${client.sessionId}:${client.sessionRevision}` : "unavailable";
+  return <SessionPersonalSecuritySettings key={scope} client={client} />;
+}
+
+function SessionPersonalSecuritySettings({ client }: { client: PersonalSecurityClient | null }) {
   const t = useTranslations("PersonalSecurity");
   const auth = useTranslations("Auth");
   const format = useFormatter();
-  const client = usePersonalSecurity();
   const clientRef = useRef(client);
-  const clientScope = client ? `${client.accountId}:${client.userId}` : null;
+  const clientScope = client ? `${client.accountId}:${client.userId}:${client.sessionId}:${client.sessionRevision}` : null;
   const emailId = useId();
   const contactCodeId = useId();
   const passwordId = useId();
@@ -202,7 +207,7 @@ export function LivePersonalSecuritySettings() {
               <div className={styles.flowActions}><Button disabled={busy} onClick={() => void inspectEnrollmentIntent()} type="button" variant="secondary"><RefreshCcw aria-hidden="true" />{busy ? t("factor.inspecting") : t("factor.inspect")}</Button></div>
             </div> : null}
             {factor.enrollmentState === "NEVER_BOUND" && verified && !client.totpEnrollmentIntent ? <form className={styles.form} onSubmit={(event) => void startEnrollment(event)}><Alert>{t("factor.firstOnly")}</Alert><FormField id={passwordId} label={t("currentPassword")}><PasswordInput autoComplete="current-password" capsLockLabel={auth("capsLock")} hideLabel={auth("hidePassword")} id={passwordId} onChange={(event) => { setFactorPassword(event.target.value); enrollmentRequest.current = requestToken("ui-totp-enroll-"); }} required showLabel={auth("showPassword")} value={factorPassword} /></FormField><div className={styles.flowActions}><Button disabled={busy || !factorPassword} type="submit"><KeyRound aria-hidden="true" />{busy ? t("saving") : t("factor.start")}</Button></div></form> : null}
-            {factor.enrollmentState === "BOUND" ? <LiveRecoveryCodeRegeneration factor={factor} /> : null}
+            {factor.enrollmentState === "BOUND" ? <LiveRecoveryCodeRegeneration key={`${client.sessionId}:${client.sessionRevision}`} factor={factor} /> : null}
             {factor.enrollmentState === "RECOVERY_REQUIRED" ? <Alert status="warning">{t("factor.recoveryUnavailable")}</Alert> : null}
           </> : null}
           {loadState === "ready" && enrollment ? <form className={styles.form} onSubmit={(event) => void confirmEnrollment(event)}>

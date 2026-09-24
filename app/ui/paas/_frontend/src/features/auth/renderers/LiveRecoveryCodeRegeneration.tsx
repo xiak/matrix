@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useRef, useState, type FormEvent } from "react";
+import { useId, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { useFormatter, useTranslations } from "next-intl";
 import { Copy, KeyRound, RefreshCcw, ShieldCheck } from "lucide-react";
 import { Alert, Button, Checkbox, FormField, Input, PasswordInput } from "@ui/xiak";
@@ -21,6 +21,7 @@ export function LiveRecoveryCodeRegeneration({ factor }: { factor: BoundFactor }
   const auth = useTranslations("Auth");
   const format = useFormatter();
   const client = usePersonalSecurity();
+  const activeClient = useRef(client);
   const passwordId = useId();
   const codeId = useId();
   const verifyRequest = useRef(requestToken("ui-recovery-codes-verify-"));
@@ -32,6 +33,11 @@ export function LiveRecoveryCodeRegeneration({ factor }: { factor: BoundFactor }
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<FlowError>(null);
   const intent = client?.recoveryCodeRegenerationIntent ?? null;
+
+  useLayoutEffect(() => {
+    activeClient.current = client;
+    return () => { activeClient.current = null; };
+  }, [client]);
 
   async function start() {
     if (!client) return;
@@ -78,14 +84,17 @@ export function LiveRecoveryCodeRegeneration({ factor }: { factor: BoundFactor }
   }
 
   async function regenerate() {
-    if (!client) return;
+    if (!client || !intent) return;
+    const currentIntent = () => activeClient.current?.sessionId === client.sessionId &&
+      activeClient.current.sessionRevision === client.sessionRevision &&
+      activeClient.current.recoveryCodeRegenerationIntent?.requestId === intent.requestId;
     setBusy(true); setError(null);
     try {
       const result = await client.regenerateRecoveryCodes();
-      setCodes(result.outcome === "APPLIED" ? [...result.recoveryCodes] : null);
+      if (currentIntent()) setCodes(result.outcome === "APPLIED" ? [...result.recoveryCodes] : null);
     } catch {
-      setCodes(null); setError("regenerateUnknown");
-    } finally { setBusy(false); }
+      if (currentIntent()) { setCodes(null); setError("regenerateUnknown"); }
+    } finally { if (currentIntent()) setBusy(false); }
   }
 
   async function inspectRegeneration() {

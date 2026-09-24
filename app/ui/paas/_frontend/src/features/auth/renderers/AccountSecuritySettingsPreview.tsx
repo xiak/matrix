@@ -31,6 +31,14 @@ export function AccountSecuritySettingsPreview({ workspace }: { workspace: Acces
   const focus = useRef<"trigger" | "heading" | "flow" | null>(null);
   const changed = required !== workspace.settings.loginProtection;
   const pending = workspace.pendingAccountRuleChange ?? localPending;
+  const factorReady = workspace.personalMfa.factorState === "bound" && workspace.personalMfa.recoveryState === "idle";
+  const canChangeRule = factorReady && !workspace.personalMfa.reauthenticationRequired;
+
+  const focusPersonalSecurity = () => {
+    const personalSecurity = document.getElementById("personal-security");
+    personalSecurity?.focus();
+    personalSecurity?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+  };
 
   useLayoutEffect(() => {
     if (!focus.current) return;
@@ -174,7 +182,8 @@ export function AccountSecuritySettingsPreview({ workspace }: { workspace: Acces
           <div><dt>{t("protectedIdentities")}</dt><dd>{t("protectedIdentitiesValue")}</dd></div>
         </dl>
         <Alert>{t("accountMockBoundary")}</Alert>
-        <div className={styles.flowActions}><Button disabled={access.loading || access.busy} ref={trigger} onClick={() => { setFeedback(null); setRequired(workspace.settings.loginProtection); setScenario("success"); setRequestId(`mock-account-rule-${crypto.randomUUID()}`); setStage("edit"); }}>{t("editAccountRule")}</Button></div>
+        {!factorReady ? <Alert status="warning">{t("accountFactorRequired")}</Alert> : workspace.personalMfa.reauthenticationRequired ? <Alert status="warning">{t("accountReauthenticationRequired")}</Alert> : null}
+        <div className={styles.flowActions}>{!factorReady ? <Button onClick={focusPersonalSecurity} variant="secondary">{t("goToPersonalSecurity")}</Button> : <Button disabled={!canChangeRule || access.loading || access.busy} ref={trigger} onClick={() => { setFeedback(null); setRequired(workspace.settings.loginProtection); setScenario("success"); setRequestId(`mock-account-rule-${crypto.randomUUID()}`); setStage("edit"); }}>{t("editAccountRule")}</Button>}</div>
       </div> : <form className={styles.policyForm} onSubmit={(event) => { event.preventDefault(); review(); }}>
         <Checkbox checked={required} onChange={(event) => { setRequired(event.target.checked); setFeedback(null); }}>{t("requireForUsers")}</Checkbox>
         <p>{t("requireForUsersHint")}</p>

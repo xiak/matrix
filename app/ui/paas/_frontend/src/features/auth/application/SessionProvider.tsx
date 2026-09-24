@@ -122,6 +122,7 @@ export function SessionProvider({
   const [authenticatorRecovery, setAuthenticatorRecovery] = useState<PendingAuthenticatorRecovery | null>(null);
   const [enrollmentRecovery, setEnrollmentRecovery] = useState<EnrollmentRecoveryMaterial | null>(null);
   const [credential, setCredential] = useState<string | null>(null);
+  const [sessionRevision, setSessionRevision] = useState(0);
   const credentialRef = useRef<string | null>(null);
   const challengeRef = useRef<PendingAuthenticationChallenge | null>(null);
   const authenticatorRecoveryRef = useRef<PendingAuthenticatorRecovery | null>(null);
@@ -179,6 +180,8 @@ export function SessionProvider({
     forget();
     return true;
   }, [forget]);
+  const isCurrentSession = useCallback((expectedCredential: string, expectedRevision: number) =>
+    credentialRef.current === expectedCredential && authenticationRevisionRef.current === expectedRevision, []);
 
   useEffect(() => {
     if (!current) return;
@@ -220,6 +223,7 @@ export function SessionProvider({
       credentialRef.current = result.credential;
       setCredential(result.credential);
       setCurrent({ loginName, session: result.session });
+      setSessionRevision(authenticationRevision);
       const outcome: LoginOutcome = result.mustChangePassword
         ? "password-change-required"
         : "authenticated";
@@ -262,6 +266,7 @@ export function SessionProvider({
       credentialRef.current = result.credential;
       setCredential(result.credential);
       setCurrent({ loginName: challenge.loginName, session: result.session });
+      setSessionRevision(authenticationRevision);
       const outcome: LoginOutcome = result.mustChangePassword ? "password-change-required" : "authenticated";
       setPhase(outcome);
       return outcome;
@@ -614,7 +619,7 @@ export function SessionProvider({
   return (
     <CredentialContext.Provider value={credentialValue}>
       <SessionContext.Provider value={sessionValue}>
-        <PersonalSecurityProvider repository={repository} credential={credential} current={current} expire={expire} completeEnrollment={completeEnrollment}>
+        <PersonalSecurityProvider repository={repository} credential={credential} current={current} sessionRevision={sessionRevision} isCurrentSession={isCurrentSession} expire={expire} completeEnrollment={completeEnrollment}>
           <OwnSessionsProvider repository={repository} credential={credential} current={current} expire={expire}>
             {children}
           </OwnSessionsProvider>

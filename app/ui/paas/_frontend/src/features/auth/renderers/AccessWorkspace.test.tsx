@@ -113,6 +113,10 @@ async function open(initialView: AccountAccessView, options?: { live?: boolean; 
   await waitFor(() => expect(screen.queryByLabelText("正在读取 IAM 账号信息…")).toBeNull());
   return { user, repository, extension };
 }
+async function seedBoundAccountRuleOperator(extension: ReturnType<typeof createPreviewAccessWorkspace>) {
+  await extension.execute("preview", { kind: "confirm-personal-mfa" });
+  await extension.execute("preview", { kind: "complete-personal-mfa-reauthentication" });
+}
 async function select(user: ReturnType<typeof userEvent.setup>, label: string, option: string) {
   if (!screen.queryByRole("combobox", { name: label })) await user.click(screen.getByRole("button", { name: /^筛选(?: \d+)?$/ }));
   await user.click(screen.getByRole("combobox", { name: label }));
@@ -714,6 +718,7 @@ describe("CAM-style access workspace", () => {
       await extension.execute("preview", { kind: "change-group-policies", id: "group-auditors", added: [], removed: ["policy-audit"] });
       await extension.execute("preview", { kind: "change-group-policies", id: "group-operators", added: [], removed: ["policy-delivery", "policy-tag-logs"] });
       await extension.execute("preview", { kind: "set-key-status", id: "MOCK-pipeline-key", ownerState: "active", status: "DISABLED", resourceVersion: 2, requestId: "disable-pipeline-key" });
+      await seedBoundAccountRuleOperator(extension);
       await extension.execute("preview", { kind: "save-account-rule", requestId: "seed-account-rule", expectedLoginProtection: false, loginProtection: true, responseMode: "success" });
     } });
     expect(await screen.findByText(/0 个启用的模拟长期密钥/)).toBeTruthy();
@@ -2310,7 +2315,10 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByRole("heading", { name: "多因素认证要求" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "登录时的 MFA 要求" })).toBeTruthy();
     expect(screen.getByText("当前规则")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "编辑模拟规则" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "编辑模拟规则" })).toBeNull();
+    expect(screen.getByText(/操作者本人必须先绑定验证器/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "查看本人身份验证方法" }));
+    expect(screen.getByRole("heading", { name: "身份验证方法" })).toBe(document.activeElement);
     expect(screen.queryByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" })).toBeNull();
     expect(screen.queryByLabelText("密码最小长度")).toBeNull();
     expect(screen.queryByLabelText("会话时长（分钟）")).toBeNull();
@@ -2346,6 +2354,12 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: "完成设置" }));
     expect(screen.getByRole("button", { name: "Enter" })).toBeTruthy();
     expect((await extension.read("preview")).personalMfa).toEqual({ factorState: "bound", reauthenticationRequired: true, recoveryState: "idle" });
+  });
+  it("keeps account-rule editing closed until a newly bound operator signs in again", async () => {
+    const { extension } = await open("settings", { seed: async (workspace) => { await workspace.execute("preview", { kind: "confirm-personal-mfa" }); } });
+    expect(screen.getByText(/通过正常登录重新验证后再修改账号规则/)).toBeTruthy();
+    expect((screen.getByRole("button", { name: "编辑模拟规则" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(await extension.read("preview")).toMatchObject({ personalMfa: { factorState: "bound", reauthenticationRequired: true } });
   });
   it("blocks workspace and group management while the old session requires reauthentication", async () => {
     const createGroup = vi.fn().mockRejectedValue(new Error("must not be called"));
@@ -2414,7 +2428,7 @@ describe("CAM-style access workspace", () => {
     expect(repository.execute).not.toHaveBeenCalled();
   });
   it("locks an unknown account-rule save, discards secrets and recovers only through the original intent", async () => {
-    const { user, extension } = await open("settings");
+    const { user, extension } = await open("settings", { seed: seedBoundAccountRuleOperator });
     await user.click(screen.getByRole("button", { name: "编辑模拟规则" }));
     await user.click(screen.getByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" }));
     await user.click(screen.getByRole("button", { name: "审阅规则变更" }));
@@ -2447,7 +2461,7 @@ describe("CAM-style access workspace", () => {
     expect((await extension.read("preview")).pendingAccountRuleChange).toBeNull();
   });
   it("journals an unavailable account-rule save before exposing UNKNOWN and keeps it locked after reload", async () => {
-    const { user, repository, extension } = await open("settings");
+    const { user, repository, extension } = await open("settings", { seed: seedBoundAccountRuleOperator });
     await user.click(screen.getByRole("button", { name: "编辑模拟规则" }));
     await user.click(screen.getByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" }));
     await user.click(screen.getByRole("button", { name: "审阅规则变更" }));
@@ -2473,7 +2487,7 @@ describe("CAM-style access workspace", () => {
     expect((await extension.read("preview")).pendingAccountRuleChange).toEqual(pending);
   });
   it("keeps account-rule writes closed when both the save and recovery journal are unavailable", async () => {
-    const { user, repository, extension } = await open("settings");
+    const { user, repository, extension } = await open("settings", { seed: seedBoundAccountRuleOperator });
     await user.click(screen.getByRole("button", { name: "编辑模拟规则" }));
     await user.click(screen.getByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" }));
     await user.click(screen.getByRole("button", { name: "审阅规则变更" }));
@@ -2501,7 +2515,7 @@ describe("CAM-style access workspace", () => {
     expect(screen.queryByRole("button", { name: "编辑模拟规则" })).toBeNull();
   });
   it("keeps readable account rules unchanged when update capability is denied", async () => {
-    const { user, extension } = await open("settings");
+    const { user, extension } = await open("settings", { seed: seedBoundAccountRuleOperator });
     const before = await extension.read("preview");
     await user.click(screen.getByRole("button", { name: "编辑模拟规则" }));
     await user.click(screen.getByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" }));
@@ -2517,7 +2531,7 @@ describe("CAM-style access workspace", () => {
     expect(await extension.read("preview")).toEqual(before);
   });
   it("discards a stale account-rule review and its operation-bound proof after conflict", async () => {
-    const { user, repository, extension } = await open("settings");
+    const { user, repository, extension } = await open("settings", { seed: seedBoundAccountRuleOperator });
     const before = await extension.read("preview");
     await user.click(screen.getByRole("button", { name: "编辑模拟规则" }));
     await user.click(screen.getByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" }));

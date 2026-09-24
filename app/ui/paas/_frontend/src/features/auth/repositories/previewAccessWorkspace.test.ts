@@ -640,7 +640,11 @@ describe("access workspace preview invariants", () => {
     expect(updated.settings.userSsoEnabled).toBe(true);
   });
   it("locks an unknown account-rule intent until its original result is definitive", () => {
-    const initial = initialAccessWorkspace("org-xiak");
+    const unbound = initialAccessWorkspace("org-xiak");
+    expect(() => applyAccessWorkspaceCommand(unbound, { kind: "save-account-rule", requestId: "unbound", expectedLoginProtection: false, loginProtection: true, responseMode: "success" }, context)).toThrow("invalid");
+    const awaitingLogin = applyAccessWorkspaceCommand(unbound, { kind: "confirm-personal-mfa" }, context);
+    expect(() => applyAccessWorkspaceCommand(awaitingLogin, { kind: "save-account-rule", requestId: "old-session", expectedLoginProtection: false, loginProtection: true, responseMode: "success" }, context)).toThrow("invalid");
+    const initial = applyAccessWorkspaceCommand(awaitingLogin, { kind: "complete-personal-mfa-reauthentication" }, context);
     const journaled = applyAccessWorkspaceCommand(initial, { kind: "remember-account-rule-change-unknown", requestId: "account-rule-timeout", expectedLoginProtection: false, loginProtection: true }, context);
     expect(journaled.pendingAccountRuleChange).toEqual({ requestId: "account-rule-timeout", baselineLoginProtection: false, requestedLoginProtection: true, status: "UNKNOWN" });
     expect(journaled.events).toEqual(initial.events);

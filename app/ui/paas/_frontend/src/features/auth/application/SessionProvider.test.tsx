@@ -1,7 +1,9 @@
+import { useState } from "react";
 import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import type { LoginResult } from "../domain/session";
+import type { RecoveryCodeRegenerationResponse } from "../domain/personalSecurity";
 import type { IamRepository, StartAuthenticatorRecoveryCommand } from "../repositories/iamRepository";
 import { SessionProvider, useSession } from "./SessionProvider";
 import { usePersonalSecurity } from "./PersonalSecurityProvider";
@@ -21,6 +23,7 @@ function deferred<T>() {
 function Probe() {
   const session = useSession();
   const security = usePersonalSecurity();
+  const [returnedCodes, setReturnedCodes] = useState<string[]>([]);
   return (
     <div>
       <span data-testid="phase">{session.phase}</span>
@@ -30,6 +33,7 @@ function Probe() {
       <span data-testid="recovery">{session.enrollmentRecovery?.recoveryCodes.join("|") ?? "none"}</span>
       <span data-testid="authenticator-recovery">{session.authenticatorRecovery?.state ?? "none"}</span>
       <span data-testid="code-regeneration">{security?.recoveryCodeRegenerationIntent?.state ?? "none"}</span>
+      <span data-testid="returned-codes">{returnedCodes.join("|") || "none"}</span>
       <button onClick={() => void session.login("admin", "password")} type="button">login</button>
       <button onClick={() => void session.login("bravo", "password")} type="button">login-b</button>
       <button
@@ -49,9 +53,12 @@ function Probe() {
       <button onClick={session.acknowledgeEnrollmentRecovery} type="button">acknowledge-recovery</button>
       {security ? <button onClick={() => void security.confirmTOTPEnrollment("enrollment-one", { requestId: "confirm-one", code: "123456" })} type="button">confirm-enrollment</button> : null}
       {security ? <button onClick={() => void security.startRecoveryCodeRegeneration({ requestId: "regenerate-one", factorId: "factor-one", expectedFactorRevision: 2 })} type="button">start-code-regeneration</button> : null}
+      {security ? <button onClick={() => void security.startRecoveryCodeRegeneration({ requestId: "regenerate-two", factorId: "factor-two", expectedFactorRevision: 2 })} type="button">start-code-regeneration-b</button> : null}
       {security ? <button onClick={() => void security.verifyRecoveryCodeStepUp({ requestId: "verify-one", password: "password", code: "123456" })} type="button">verify-code-regeneration</button> : null}
       {security ? <button onClick={() => void security.regenerateRecoveryCodes().catch(() => undefined)} type="button">regenerate-codes</button> : null}
+      {security ? <button onClick={() => void security.regenerateRecoveryCodes().then((result) => setReturnedCodes(result.outcome === "APPLIED" ? result.recoveryCodes : [])).catch(() => undefined)} type="button">capture-regenerated-codes</button> : null}
       {security ? <button onClick={() => void security.inspectRecoveryCodeRegeneration()} type="button">inspect-code-regeneration</button> : null}
+      {security?.recoveryCodeRegenerationIntent ? <button onClick={() => security.clearRecoveryCodeRegenerationIntent(security.recoveryCodeRegenerationIntent!.requestId)} type="button">clear-code-regeneration</button> : null}
       <button onClick={session.cancelAuthenticationChallenge} type="button">cancel-challenge</button>
       <button onClick={() => session.expire(secretCredential)} type="button">expire</button>
     </div>
@@ -189,6 +196,53 @@ describe("SessionProvider", () => {
     expect(iam.personalSecurity.recoveryCodes!.regenerationByRequest).toHaveBeenCalledWith(`${secretCredential}-2`, "regenerate-one");
     expect(screen.getByTestId("code-regeneration").textContent).toBe("COMPLETED");
     expect(screen.container.textContent).not.toContain(secretCredential);
+  });
+  it.each(["same USER", "different USER"])("never returns a late one-time batch to a new %s Session or overwrites its intent", async (nextIdentity) => {
+    const late = deferred<RecoveryCodeRegenerationResponse>();
+    const iam = repository();
+    let loginCount = 0;
+    iam.login = vi.fn(async ({ loginName }) => {
+      loginCount += 1;
+      return {
+        outcome: "AUTHENTICATED" as const,
+        credential: nextIdentity === "same USER" ? secretCredential : `${secretCredential}-${loginCount}`,
+        mustChangePassword: false,
+        session: { id: `session-${loginCount}`, organizationId: "organization-test", principalId: nextIdentity === "same USER" ? "principal-test" : `principal-${loginName}`, status: "ACTIVE" as const, issuedAt: "2026-08-26T12:00:00Z", expiresAt: "2099-08-26T20:00:00Z" }
+      };
+    });
+    iam.personalSecurity = {
+      notificationContact: vi.fn(), startNotificationVerification: vi.fn(), notificationVerification: vi.fn(), confirmNotificationVerification: vi.fn(), authenticatorState: vi.fn(), startTOTPEnrollment: vi.fn(), totpEnrollment: vi.fn(), totpEnrollmentByRequest: vi.fn(), cancelTOTPEnrollment: vi.fn(), confirmTOTPEnrollment: vi.fn(),
+      recoveryCodes: {
+        startStepUp: vi.fn(async (_credential, command) => ({ id: `step-up-${command.requestId}`, requestId: command.requestId, operation: "RECOVERY_CODES_REGENERATE" as const, expectedFactorRevision: 2, state: "PENDING" as const, createdAt: "2026-09-21T01:00:00Z", expiresAt: "2099-09-21T01:02:00Z", provedAt: null, consumedAt: null })),
+        stepUpByRequest: vi.fn(),
+        verifyStepUp: vi.fn(async (_credential, _stepUpId, command) => ({ id: `step-up-${command.requestId === "verify-one" ? "regenerate-one" : "regenerate-two"}`, requestId: command.requestId === "verify-one" ? "regenerate-one" : "regenerate-two", operation: "RECOVERY_CODES_REGENERATE" as const, expectedFactorRevision: 2, state: "PROVED" as const, createdAt: "2026-09-21T01:00:00Z", expiresAt: "2099-09-21T01:02:00Z", provedAt: "2026-09-21T01:00:30Z", consumedAt: null })),
+        regenerate: vi.fn(() => late.promise),
+        regenerationByRequest: vi.fn(async () => ({ id: "regeneration-one", requestId: "regenerate-one", factorId: "factor-one", factorRevision: 2, createdAt: "2026-09-21T01:00:40Z" }))
+      }
+    };
+    const screen = render(<SessionProvider repository={iam}><Probe /></SessionProvider>);
+    await act(async () => fireEvent.click(screen.getByText("login")));
+    await act(async () => fireEvent.click(screen.getByText("start-code-regeneration")));
+    await act(async () => fireEvent.click(screen.getByText("verify-code-regeneration")));
+    await act(async () => fireEvent.click(screen.getByText("capture-regenerated-codes")));
+    expect(screen.getByTestId("code-regeneration").textContent).toBe("REGENERATION_UNKNOWN");
+
+    await act(async () => fireEvent.click(screen.getByText(nextIdentity === "same USER" ? "login" : "login-b")));
+    if (nextIdentity === "same USER") {
+      await act(async () => fireEvent.click(screen.getByText("inspect-code-regeneration")));
+      await act(async () => fireEvent.click(screen.getByText("clear-code-regeneration")));
+    }
+    await act(async () => fireEvent.click(screen.getByText("start-code-regeneration-b")));
+    expect(screen.getByTestId("code-regeneration").textContent).toBe("PENDING");
+
+    await act(async () => {
+      late.resolve({ outcome: "APPLIED", regeneration: { id: "regeneration-one", requestId: "regenerate-one", factorId: "factor-one", factorRevision: 2, createdAt: "2026-09-21T01:00:40Z" }, recoveryCodes: Array.from({ length: 10 }, (_, index) => `A-ONLY-CODE-${index}`) });
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("returned-codes").textContent).toBe("none");
+    expect(screen.getByTestId("code-regeneration").textContent).toBe("PENDING");
+    expect(screen.container.textContent).not.toContain("A-ONLY-CODE-");
+    expect(localStorage.length + sessionStorage.length).toBe(0);
   });
   it("keeps the bearer only in provider memory", async () => {
     const screen = render(<SessionProvider repository={repository()}><Probe /></SessionProvider>);

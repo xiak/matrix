@@ -489,7 +489,7 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
       target = enterprise.name; break;
     }
     case "save-account-rule": {
-      if (state.pendingAccountRuleChange || !command.requestId.trim() || typeof command.expectedLoginProtection !== "boolean" || typeof command.loginProtection !== "boolean" || command.expectedLoginProtection !== state.settings.loginProtection) invalid();
+      if (state.personalMfa.factorState !== "bound" || state.personalMfa.reauthenticationRequired || state.personalMfa.recoveryState !== "idle" || state.pendingAccountRuleChange || !command.requestId.trim() || typeof command.expectedLoginProtection !== "boolean" || typeof command.loginProtection !== "boolean" || command.expectedLoginProtection !== state.settings.loginProtection) invalid();
       if (command.responseMode === "response-lost") state.pendingAccountRuleChange = { requestId: command.requestId, baselineLoginProtection: command.expectedLoginProtection, requestedLoginProtection: command.loginProtection, status: "UNKNOWN" };
       else state.settings = { ...state.settings, loginProtection: command.loginProtection };
       target = source.accountId; break;
