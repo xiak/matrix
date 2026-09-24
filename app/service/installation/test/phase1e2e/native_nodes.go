@@ -15,6 +15,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"maps"
 	"math/big"
@@ -871,7 +872,10 @@ func (value *gate) enrollNativeNodes(ctx context.Context, bearer []byte) error {
 		removeLocalErr := os.Remove(joinPath)
 		removeDirectoryErr := os.Remove(joinDirectory)
 		if copyErr != nil || removeLocalErr != nil || removeDirectoryErr != nil {
-			_, _ = fixture.command(ctx, index, "rm", "--", remoteJoin)
+			cleanupErr := fixture.removeNativeJoin(ctx, index, remoteJoin)
+			if cleanupErr != nil {
+				return errors.Join(fail("native-enrollment-join-transfer"), fail("native-enrollment-join-cleanup"))
+			}
 			return fail("native-enrollment-join-transfer")
 		}
 		result, installErr := fixture.mx(
@@ -881,8 +885,11 @@ func (value *gate) enrollNativeNodes(ctx context.Context, bearer []byte) error {
 			"--trust-key", fixture.root()+"/trust.json",
 			"--join", remoteJoin,
 		)
-		_, removeRemoteErr := fixture.command(ctx, index, "rm", "--", remoteJoin)
+		removeRemoteErr := fixture.removeNativeJoin(ctx, index, remoteJoin)
 		if installErr != nil {
+			if removeRemoteErr != nil {
+				return errors.Join(installErr, fail("native-enrollment-join-cleanup"))
+			}
 			return installErr
 		}
 		if removeRemoteErr != nil {
@@ -904,6 +911,16 @@ func (value *gate) enrollNativeNodes(ctx context.Context, bearer []byte) error {
 	})
 	emit("two-current-native-hosts-through-atomic-node-enrollment")
 	return nil
+}
+
+func (fixture *nativeNodes) removeNativeJoin(ctx context.Context, index int, remoteJoin string) error {
+	// The main gate context may already be canceled after a failed or
+	// interrupted install. Still make one bounded attempt to remove this exact
+	// transferred secret, and surface failure for explicit operator cleanup.
+	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer cancel()
+	_, err := fixture.command(cleanup, index, "rm", "--", remoteJoin)
+	return err
 }
 
 func (fixture *nativeNodes) credentials(ctx context.Context, value *gate, rotate bool) error {

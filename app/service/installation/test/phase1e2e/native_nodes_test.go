@@ -112,6 +112,38 @@ func TestNativeBootEvidenceRequiresNewKernelAndSameIdentity(t *testing.T) {
 	}
 }
 
+func TestNativeJoinCleanupSurvivesCanceledGateAndTargetsOnlyTransferredSecret(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the fake SSH executable is a POSIX script")
+	}
+	directory := t.TempDir()
+	logPath := filepath.Join(directory, "ssh-arguments")
+	fakeSSH := filepath.Join(directory, "ssh")
+	if err := os.WriteFile(fakeSSH, []byte("#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$MATRIX_NATIVE_JOIN_CLEANUP_LOG\"\nif [ \"$MATRIX_FAKE_SSH_FAIL\" = 1 ]; then exit 7; fi\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", directory+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("MATRIX_NATIVE_JOIN_CLEANUP_LOG", logPath)
+	fixture := nativeNodes{
+		input: nativeFixtureInput{IdentityFile: "/unused/id", KnownHostsFile: "/unused/hosts"},
+		nodes: []nativeNodeState{{input: nativeNodeInput{Port: 2222}}},
+	}
+	remote := "/data/xiak/matrix-native-test/matrix-node-join.json"
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := fixture.removeNativeJoin(canceled, 0, remote); err != nil {
+		t.Fatalf("cleanup did not survive canceled gate: %v", err)
+	}
+	arguments, err := os.ReadFile(logPath)
+	if err != nil || !strings.HasSuffix(string(arguments), "'rm' '--' '"+remote+"'\n") {
+		t.Fatalf("cleanup targeted a different path: %q / %v", arguments, err)
+	}
+	t.Setenv("MATRIX_FAKE_SSH_FAIL", "1")
+	if err := fixture.removeNativeJoin(canceled, 0, remote); err == nil {
+		t.Fatal("remote cleanup failure was hidden")
+	}
+}
+
 func TestNativeRestartReceiptUsesTheAuthenticatedControllerTarget(t *testing.T) {
 	now := time.Date(2026, 9, 2, 1, 2, 3, 0, time.UTC)
 	terminal := now
