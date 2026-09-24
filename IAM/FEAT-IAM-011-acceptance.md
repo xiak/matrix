@@ -45,7 +45,7 @@
 
 ### 当前开发窗口的验证
 
-2026-09-24按用户要求在原authorityprocess owner收敛，先保存本地真库验证并推送的`09fac913`回滚点。删除9个过时IAM升级入口及仅供它们使用的旧RoleBinding wire、schema分支和夹具；CI从7条IAM前驱路径收敛为1条，同时移除6个额外数据库及对应DSN配置。保留原受限身份、当前IAM/Audit/PaaS业务、Purpose/OTP/恢复、并发、秘密检查及所有原期限/成本，不删失败安全断言、不放宽版本/profile判断。
+2026-09-24按用户要求在原authorityprocess owner收敛，先保存本地真库验证并推送的`09fac913`回滚点。固定`aefe4f786242d7d6816f253b6389d5c94c314a75`删除9个过时IAM升级入口及仅供它们使用的旧RoleBinding wire、schema分支和夹具；CI从7条IAM前驱路径收敛为1条，同时移除6个额外数据库及对应DSN配置。保留原受限身份、当前IAM/Audit/PaaS业务、Purpose/OTP/恢复、并发、秘密检查及所有原期限/成本，不删失败安全断言、不放宽版本/profile判断。精确源码的[Verification35972120363](https://github.com/xiak/matrix/actions/runs/35972120363)已触发，当前尚未取得最终独立通过结论。
 
 唯一`TestIAMRetainedPredecessorProcessUpgrade`在限额的原生PG18.6、Go1.26.7/GOMAXPROCS2/GOMEMLIMIT512MiB、串行race-p1下通过37.13s（包40.525s）。实际前驱程序创建双Account/同名User、已撤附件、正常/撤销/NULL代际Session、本人完成、待验证邮件和原MFA/恢复历史；当前版本在真实末端DDL故障时完整回滚，再双次迁移、重放、重启及原恢复完成，旧凭据/完成不复活。测试依据非事务sequence确认注入故障确已到达，不读取或透传迁移器已刻意抹除的底层错误。
 
