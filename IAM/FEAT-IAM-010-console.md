@@ -267,6 +267,7 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 - LIVE 页面固定显示名称、范围与 JSON 编辑区；可视化只在用户打开时懒读目录，新声明须显式选取 Action，实例资源默认精确 ID 而非自动扩大到全部资源。Action 列表分页挂载，目录不可用仍允许 JSON 编辑；现有四方法 MOCK 创建页独立保留。
 - 提交审阅显示完整声明和“创建不等于授权”；成功只接受当前 Account 的 CUSTOMER/TENANT Policy、与提交一致的名称和默认版本声明，再提供进入详情的显式动作。403 与语义拒绝留在本页，不回退 MOCK。网络、5xx 或无效成功体保留同一认证代次的原始意图，跨 IAM 内容页仍锁定；只能以原名称、完整文档和 requestId 等价重试，重试 409 保持 UNKNOWN。目录同名项不作为原请求完成证据，结束未知意图须操作者明确确认。
 - 定向 HTTP/渲染用例覆盖准确请求体与归属核对、显式 Action/精确资源、不可审阅的未完成视觉草稿、创建后不自动关联、跨页 UNKNOWN、等价重试和版本作者目录 403 的局部失败。共享回归及嵌入门禁由 [FEAT-007](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence) 汇总；这里不宣称真实 IAM 浏览器联调、跨重新登录的 by-request 恢复或最终发布验收。
+- 2026-09-25 已推送 [`3dddc532`](https://github.com/xiak/matrix/commit/3dddc532)：共用策略创建作者的可视化审阅先逐声明显示效果、Action、资源选择器与条件；多声明通过选择器一次仅挂载一条摘要，完整 JSON 可展开。摘要明确不是 IAM 校验，JSON 自由编辑继续直接显示完整原文。定向用例覆盖条件、多声明切换、MOCK 零写入和 JSON 路径；`390px` DEV 从选择 Action、填写精确资源到审阅及展开 JSON 均无页面横向溢出，新开验收标签 warning/error 为空。该片只改善信息核对，不改变创建请求、权限语义或真实 IAM 浏览器验收状态；共享完整门禁归 [FEAT-007](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence) 所有。
 
 ### 服务授权 MOCK 的开发验收证据
 
