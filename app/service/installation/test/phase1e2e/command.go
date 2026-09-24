@@ -58,12 +58,19 @@ func (value *boundedBuffer) Write(content []byte) (int, error) {
 }
 
 func runProcess(ctx context.Context, executable string, arguments ...string) (commandOutput, error) {
+	return runProcessWithEnvironment(ctx, nil, executable, arguments...)
+}
+
+func runProcessWithEnvironment(ctx context.Context, environment []string, executable string, arguments ...string) (commandOutput, error) {
 	stdout := newBoundedBuffer(maximumCommandOutput)
 	stderr := newBoundedBuffer(maximumCommandOutput)
 	command := exec.CommandContext(ctx, executable, arguments...)
 	command.Stdin = nil
 	command.Stdout = stdout
 	command.Stderr = stderr
+	if environment != nil {
+		command.Env = environment
+	}
 	err := command.Run()
 	result := commandOutput{
 		stdout: append([]byte(nil), stdout.content.Bytes()...),
@@ -381,11 +388,30 @@ func containsAny(content []byte, values [][]byte) bool {
 }
 
 func docker(ctx context.Context, arguments ...string) ([]byte, error) {
-	output, err := runProcess(ctx, "docker", arguments...)
+	// The acceptance driver and mx must inspect and mutate the same local
+	// engine. Inherited Docker contexts can otherwise target a remote host.
+	output, err := runProcessWithEnvironment(ctx, dockerAcceptanceEnvironment(os.Environ()),
+		"docker", dockerAcceptanceArguments(arguments...)...)
 	if err != nil || output.exit != 0 || len(output.stderr) != 0 {
 		return nil, errors.New("Docker acceptance command failed")
 	}
 	return output.stdout, nil
+}
+
+func dockerAcceptanceArguments(arguments ...string) []string {
+	return append([]string{"--host", "unix:///var/run/docker.sock"}, arguments...)
+}
+
+func dockerAcceptanceEnvironment(source []string) []string {
+	result := make([]string, 0, len(source))
+	for _, value := range source {
+		name, _, valid := strings.Cut(value, "=")
+		if valid && strings.HasPrefix(strings.ToUpper(name), "DOCKER_") {
+			continue
+		}
+		result = append(result, value)
+	}
+	return result
 }
 
 func dockerLines(ctx context.Context, arguments ...string) ([]string, error) {

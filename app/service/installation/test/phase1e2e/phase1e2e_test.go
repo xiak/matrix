@@ -141,6 +141,20 @@ func TestSecurityMailFixtureUsesIsolatedDefaultBridgeGateway(t *testing.T) {
 	}
 }
 
+func TestAcceptanceDockerCommandsStayOnTheLocalEngine(t *testing.T) {
+	arguments := dockerAcceptanceArguments("container", "ls", "--all")
+	if !slices.Equal(arguments, []string{"--host", "unix:///var/run/docker.sock", "container", "ls", "--all"}) {
+		t.Fatalf("acceptance Docker endpoint is not fixed locally: %q", arguments)
+	}
+	environment := dockerAcceptanceEnvironment([]string{
+		"PATH=/usr/bin", "DOCKER_HOST=ssh://remote.example", "DOCKER_CONTEXT=remote",
+		"DOCKER_TLS_VERIFY=1", "DOCKER_CONFIG=/private/context", "HOME=/home/acceptance",
+	})
+	if !slices.Equal(environment, []string{"PATH=/usr/bin", "HOME=/home/acceptance"}) {
+		t.Fatalf("remote Docker environment survived: %q", environment)
+	}
+}
+
 func TestAcceptanceTOTPCodeMatchesPublishedSHA1Profile(t *testing.T) {
 	code, err := fixtureTOTPCode([]byte("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ"), time.Unix(59, 0))
 	if err != nil || code != "287082" {
