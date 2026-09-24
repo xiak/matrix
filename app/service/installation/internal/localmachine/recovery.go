@@ -163,6 +163,26 @@ func recoverBackup(
 			))
 		}
 	}
+	// A failed cross-profile upgrade can leave only the retained database
+	// volume: the installed platform project (including its control network)
+	// has already been removed. Start PostgreSQL alone so the purpose-only IAM
+	// entry can close authentication before any database restore. A persisted
+	// closure is authoritative on resume and does not require this bootstrap.
+	beforeClose, inspectErr := inspectUpgradeProject(ctx, runtimeBoundary, current, target)
+	if inspectErr != nil {
+		return platformcommand.BindRecoveryFailure(platformcommand.RecoveryFailureProviderState, inspectErr)
+	}
+	if beforeClose.releaseID == "" {
+		_, closed, closureErr := readAuthenticationRecoveryClosure(plan.Current.Root, plan.AuthenticationIntent.CommandID)
+		if closureErr != nil {
+			return platformcommand.BindRecoveryFailure(platformcommand.RecoveryFailureAuthenticationClose, closureErr)
+		}
+		if !closed {
+			if _, startErr := startRecoveryPostgres(ctx, runtimeBoundary, current); startErr != nil {
+				return platformcommand.BindRecoveryFailure(platformcommand.RecoveryFailureDatabaseStart, startErr)
+			}
+		}
+	}
 	if err := effects.closeAuthenticationRecovery(ctx, plan); err != nil {
 		return platformcommand.BindRecoveryFailure(platformcommand.RecoveryFailureAuthenticationClose, err)
 	}

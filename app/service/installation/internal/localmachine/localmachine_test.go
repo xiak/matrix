@@ -2840,6 +2840,53 @@ func TestAuthenticationRecoveryFailureBoundariesRemainFailClosed(t *testing.T) {
 	})
 }
 
+func TestRecoveryRestartsOnlyPostgresBeforeClosingAuthenticationWhenProjectIsAbsent(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine recovery effects target Linux")
+	}
+	effects, runtimeBoundary, recovery := authenticationRecoveryEffectFixture(t)
+	// A failed cross-profile upgrade may have removed every platform container
+	// and network while preserving the database volume and protected backup.
+	runtimeBoundary.started = false
+	runtimeBoundary.networkCreated = false
+	runtimeBoundary.removedContainers = nil
+	runtimeBoundary.removedNetworks = nil
+	before := len(runtimeBoundary.recoveryEvents)
+	if err := effects.ApplyRecoveryPhase(context.Background(), recovery, lifecycle.PhaseRecovering); err != nil {
+		t.Fatalf("recover after platform teardown: %v", err)
+	}
+	events := runtimeBoundary.recoveryEvents[before:]
+	bootstrap := slices.Index(events, "compose")
+	closed := slices.Index(events, "authentication-close")
+	restored := slices.Index(events, "database-restore")
+	if bootstrap < 0 || closed < 0 || restored < 0 ||
+		!(bootstrap < closed && closed < restored) || runtimeBoundary.recoveryRestores != 1 {
+		t.Fatalf("isolated database startup, close and restore order = %v", events)
+	}
+}
+
+func TestRecoveryWithoutProjectStillRefusesRestoreWhenAuthenticationCloseFails(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine recovery effects target Linux")
+	}
+	effects, runtimeBoundary, recovery := authenticationRecoveryEffectFixture(t)
+	runtimeBoundary.started = false
+	runtimeBoundary.networkCreated = false
+	runtimeBoundary.removedContainers = nil
+	runtimeBoundary.removedNetworks = nil
+	runtimeBoundary.authenticationExitCodes = map[string]int{
+		installationv1.AuthenticationRecoveryCloseCommand: installationv1.AuthenticationRecoveryExitForbidden,
+	}
+	before := len(runtimeBoundary.recoveryEvents)
+	err := effects.ApplyRecoveryPhase(context.Background(), recovery, lifecycle.PhaseRecovering)
+	if !errors.Is(err, platformcommand.ErrEffectPrecondition) ||
+		runtimeBoundary.recoveryRestores != 0 || runtimeBoundary.composeCalls != 1 ||
+		!runtimeBoundary.postgresOnly || !slices.Equal(runtimeBoundary.recoveryEvents[before:],
+		[]string{"compose", "authentication-close"}) {
+		t.Fatalf("failed close after isolated database start: err=%v events=%v", err, runtimeBoundary.recoveryEvents[before:])
+	}
+}
+
 func authenticationRecoveryEffectFixture(t *testing.T) (*Effects, *platformStartRuntime, platformcommand.RecoveryPlan) {
 	t.Helper()
 	plan, expectation := configuredPlatformStartFixture(t)
