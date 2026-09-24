@@ -577,6 +577,10 @@ func (value *gate) beforeRestart(ctx context.Context) (gateErr error) {
 		if err := value.edge.unauthorizedMe(ctx, bearer); err != nil {
 			return fail("successor-backup-old-session-denial")
 		}
+		// Recovery fences the current TOTP step in the restored authority.
+		// A new login must wait for the next step rather than treat that
+		// deliberate replay rejection as a lost authenticator.
+		value.edge.lastTOTPStep = max(value.edge.lastTOTPStep, time.Now().Unix()/30)
 		bearer, err = value.edge.loginWithTOTP(ctx, newPassword, seed, "phase1-after-successor-recovery-login")
 		if err != nil {
 			return fail("successor-backup-mfa-reauthentication")
