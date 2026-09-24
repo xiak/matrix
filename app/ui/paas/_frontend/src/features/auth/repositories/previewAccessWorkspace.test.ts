@@ -568,6 +568,23 @@ describe("access workspace preview invariants", () => {
     expect(found.workspace.pendingKeyCreation).toMatchObject({ ownerId: "principal-chen", requestId: "stable-request", status: "COMMITTED_SECRET_LOST" });
     expect(found.workspace.keys).toHaveLength(first.workspace.keys.length);
   });
+  it("retains a verified MOCK notification address across MFA reauthentication but resets it with the preview", async () => {
+    const repository = createPreviewAccessWorkspace("org-xiak", () => ["principal-lin"], "admin");
+    for (const address of ["", "not-an-address", "preview@example.invalid ", "preview@invalid"]) {
+      await expect(repository.execute("mock", { kind: "verify-personal-notification-address", address })).rejects.toMatchObject({ code: "invalid" });
+    }
+    const eventCount = (await repository.read("mock")).events.length;
+    const verified = await repository.execute("mock", { kind: "verify-personal-notification-address", address: "preview@example.invalid" });
+    expect(verified.workspace.personalNotificationAddress).toBe("preview@example.invalid");
+    expect(verified.workspace.events).toHaveLength(eventCount);
+    expect(verified.workspace.events.some((event) => event.target === "preview@example.invalid")).toBe(false);
+    await expect(repository.execute("mock", { kind: "verify-personal-notification-address", address: "other@example.invalid" })).rejects.toMatchObject({ code: "invalid" });
+    await repository.execute("mock", { kind: "confirm-personal-mfa" });
+    await repository.execute("new-session", { kind: "complete-personal-mfa-reauthentication" });
+    expect((await repository.read("new-session")).personalNotificationAddress).toBe("preview@example.invalid");
+    repository.reset();
+    expect((await repository.read("mock")).personalNotificationAddress).toBeNull();
+  });
   it("keeps personal MFA mutations locked behind a normal reauthentication across workspace reads", async () => {
     const repository = createPreviewAccessWorkspace("org-xiak", () => ["principal-lin"], "admin");
     const result = await repository.execute("mock", { kind: "confirm-personal-mfa" });

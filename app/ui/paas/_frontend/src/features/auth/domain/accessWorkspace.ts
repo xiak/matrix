@@ -85,9 +85,16 @@ export type PersonalMfaPreviewState = {
   pendingReplacement?: { requestId: string; expiresAt: string; accountRuleVersion: number; status: "PENDING" | "CONFIRMATION_UNKNOWN" };
   demoCode?: "624810" | "731942";
 };
+export function validPreviewNotificationAddress(value: string): boolean {
+  const parts = value.split("@");
+  if (parts.length !== 2) return false;
+  const [local, domain] = parts;
+  if (!local || local.length > 64 || !/^[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*$/.test(local)) return false;
+  return Boolean(domain && domain.length <= 253 && domain.includes(".") && domain.split(".").every((label) => /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/.test(label)));
+}
 export function previewTotpCode(state: PersonalMfaPreviewState): "624810" | "731942" { return state.demoCode ?? "624810"; }
 export function nextPreviewTotpCode(state: PersonalMfaPreviewState): "624810" | "731942" { return previewTotpCode(state) === "624810" ? "731942" : "624810"; }
-export type AccessEvent = { id: string; action: Exclude<AccessWorkspaceCommand["kind"], "remember-account-rule-change-unknown" | "mark-personal-mfa-replacement-unknown" | "inspect-personal-mfa-replacement"> | "sign-in" | "batch-users"; target: string; at: string };
+export type AccessEvent = { id: string; action: Exclude<AccessWorkspaceCommand["kind"], "remember-account-rule-change-unknown" | "mark-personal-mfa-replacement-unknown" | "inspect-personal-mfa-replacement" | "verify-personal-notification-address"> | "sign-in" | "batch-users"; target: string; at: string };
 export type PreviewUserProfile = {
   consoleAccess: boolean; programmaticAccess: boolean; passwordResetRequired: boolean;
   loginProtection: boolean; tags: { key: string; value: string }[];
@@ -98,6 +105,7 @@ export type AccessWorkspace = {
   roles: AccessRole[]; providers: IdentityProvider[]; federations: FederatedAccount[]; keys: AccessKey[];
   userPolicies: Record<string, string[]>; settings: AccessSettings; events: AccessEvent[];
   personalMfa: PersonalMfaPreviewState;
+  personalNotificationAddress: string | null;
   enterprises: EnterpriseAccount[]; enterpriseMembers: EnterpriseMember[];
   userProfiles: Record<string, PreviewUserProfile>;
   userBoundaries: Record<string, string>; roleSessions: AccessRoleSession[];
@@ -140,6 +148,7 @@ export type AccessWorkspaceCommand =
   | { kind: "set-key-status"; id: string; ownerState: AccessKeyOwnerState; status: AccessKey["status"]; resourceVersion: number; requestId: string }
   | { kind: "delete-key"; id: string; resourceVersion: number; requestId: string }
   | { kind: "confirm-personal-mfa" }
+  | { kind: "verify-personal-notification-address"; address: string }
   | { kind: "begin-personal-mfa-replacement"; requestId: string; proofStartedAt: string }
   | { kind: "mark-personal-mfa-replacement-unknown"; requestId: string }
   | { kind: "inspect-personal-mfa-replacement"; requestId: string }
@@ -479,6 +488,11 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
       state.keys = state.keys.filter((entry) => entry.id !== id);
       if (state.pendingKeyCreation?.status === "COMMITTED_SECRET_LOST" && state.pendingKeyCreation.keyId === id) state.pendingKeyCreation = null;
       break;
+    case "verify-personal-notification-address":
+      if (state.personalNotificationAddress || !validPreviewNotificationAddress(command.address)) invalid();
+      state.personalNotificationAddress = command.address;
+      recordEvent = false;
+      target = context.primaryPrincipalId; break;
     case "confirm-personal-mfa":
       if (state.personalMfa.factorState === "bound" || state.personalMfa.pendingReplacement || (state.personalMfa.reauthenticationRequired && state.personalMfa.recoveryState !== "rebind-required")) invalid();
       state.personalMfa = { factorState: "bound", reauthenticationRequired: true, recoveryState: "idle" };
@@ -604,6 +618,6 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
       state.settings = { ...state.settings, userSsoEnabled: command.userSsoEnabled, userSsoConfiguration: config ? structuredClone(config) : null }; target = source.accountId; break;
     }
   }
-  if (recordEvent && command.kind !== "remember-account-rule-change-unknown" && command.kind !== "mark-personal-mfa-replacement-unknown" && command.kind !== "inspect-personal-mfa-replacement") state.events = [{ id: context.id, action: command.kind, target, at: context.at }, ...state.events].slice(0, 100);
+  if (recordEvent && command.kind !== "remember-account-rule-change-unknown" && command.kind !== "mark-personal-mfa-replacement-unknown" && command.kind !== "inspect-personal-mfa-replacement" && command.kind !== "verify-personal-notification-address") state.events = [{ id: context.id, action: command.kind, target, at: context.at }, ...state.events].slice(0, 100);
   return state;
 }

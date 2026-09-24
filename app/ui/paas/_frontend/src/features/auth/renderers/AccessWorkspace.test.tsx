@@ -2605,7 +2605,7 @@ describe("CAM-style access workspace", () => {
     expect(await screen.findByText(/当前会话不能继续执行受保护操作/)).toBeTruthy();
   });
   it("keeps first security-notification address verification personal, inline, and explicitly MOCK", async () => {
-    const { user, repository } = await open("settings");
+    const { user, repository, extension } = await open("settings");
     const trigger = screen.getByRole("button", { name: "验证第一条地址" });
     await user.click(trigger);
     const flowTitle = screen.getByRole("heading", { name: "验证第一条安全通知地址" });
@@ -2639,7 +2639,25 @@ describe("CAM-style access workspace", () => {
     expect(within(notification).getAllByText("已验证").length).toBeGreaterThan(0);
     expect(within(notification).getByText(/不提供弱化旁路/)).toBeTruthy();
     expect(within(notification).queryByRole("button")).toBeNull();
+    expect((await extension.read("preview")).personalNotificationAddress).toBe("preview.security@example.com");
+    await user.click(screen.getByTestId("go-users"));
+    await user.click(screen.getByTestId("go-settings"));
+    expect(within(screen.getByRole("region", { name: "安全通知" })).getByText("preview.security@example.com")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "绑定验证器" }).hasAttribute("disabled")).toBe(false);
     expect(repository.execute).not.toHaveBeenCalled();
+  });
+  it("does not claim a MOCK address was verified when its workspace write fails", async () => {
+    const { user, repository, extension } = await open("settings");
+    await user.click(screen.getByRole("button", { name: "验证第一条地址" }));
+    await user.type(screen.getByLabelText("安全通知邮箱"), "preview@example.invalid");
+    await user.type(screen.getByLabelText("当前密码"), "demo-password");
+    await user.click(screen.getByRole("button", { name: "创建验证意图" }));
+    vi.mocked(repository.workspace!.execute).mockRejectedValueOnce(new Error("offline"));
+    await user.type(screen.getByLabelText("8 位邮箱验证码"), "48392017");
+    await user.click(screen.getByRole("button", { name: "确认地址" }));
+    expect(await screen.findByText(/暂时无法确认这条地址/)).toBeTruthy();
+    expect((await extension.read("preview")).personalNotificationAddress).toBeNull();
+    expect(screen.queryByText("安全通知地址已在当前页面的 MOCK 状态中验证")).toBeNull();
   });
   it("retains user SSO inputs on failure and saves only its owned settings on retry", async () => {
     const { user, repository, extension } = await open("user-sso", { seed: async (preview) => {
@@ -2691,6 +2709,7 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: "编辑模拟规则" }));
     await user.click(screen.getByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" }));
     await user.click(screen.getByRole("button", { name: "审阅规则变更" }));
+    await user.click(screen.getByText("体验异常结果（仅 MOCK）"));
     await select(user, "MOCK 保存结果", "提交后响应丢失（结果未知）");
     await user.click(screen.getByRole("button", { name: "继续验证身份" }));
     await user.type(screen.getByLabelText("当前密码"), "demo-password");
@@ -2793,6 +2812,7 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: "编辑模拟规则" }));
     await user.click(screen.getByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" }));
     await user.click(screen.getByRole("button", { name: "审阅规则变更" }));
+    await user.click(screen.getByText("体验异常结果（仅 MOCK）"));
     await select(user, "MOCK 保存结果", "读取允许，但更新被拒绝");
     await user.click(screen.getByRole("button", { name: "继续验证身份" }));
     await user.type(screen.getByLabelText("当前密码"), "demo-password");

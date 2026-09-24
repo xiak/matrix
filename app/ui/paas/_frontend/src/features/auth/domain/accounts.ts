@@ -86,6 +86,23 @@ export type AccountSecuritySettings = {
   updatedAt: string;
 };
 
+export type SecuritySettingsUpdateIntent = {
+  expectedResourceVersion: number;
+  mfa: { requiredForUsers: boolean };
+};
+
+export type AccountSecuritySettingsChange = {
+  requestId: string;
+  expectedResourceVersion: number;
+  settings: AccountSecuritySettings;
+  callerSessionEnded: true;
+};
+
+export type AccountSecuritySettingsUpdate = {
+  outcome: "APPLIED" | "EQUAL_REPLAY";
+  change: AccountSecuritySettingsChange;
+};
+
 export type User = {
   id: string;
   accountId: string;

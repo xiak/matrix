@@ -140,8 +140,10 @@ export function AccountSecuritySettingsPreview({ workspace }: { workspace: Acces
           <div><dt>{t("sessionEffect")}</dt><dd>{t(required ? "sessionEffectTighten" : "sessionEffectRelax")}</dd></div>
         </dl>
         <Alert status="warning">{t("accountReviewBoundary")}</Alert>
-        <FormField id={scenarioId} label={t("accountSaveScenario")}><Select id={scenarioId} value={scenario} onValueChange={(value) => setScenario(value as SaveScenario)} options={(["success", "denied", "conflict", "response-lost"] as const).map((value) => ({ value, label: t(`accountSaveScenarios.${value}`) }))} /></FormField>
-        <p className={styles.boundary}>{t("accountSaveScenarioHint")}</p>
+        <details className={styles.scenarioDetails}><summary>{t("accountTryOtherOutcomes")}{scenario !== "success" ? ` · ${t(`accountSaveScenarios.${scenario}`)}` : ""}</summary>
+          <FormField id={scenarioId} label={t("accountSaveScenario")}><Select id={scenarioId} value={scenario} onValueChange={(value) => setScenario(value as SaveScenario)} options={(["success", "denied", "conflict", "response-lost"] as const).map((value) => ({ value, label: t(`accountSaveScenarios.${value}`) }))} /></FormField>
+          <p className={styles.boundary}>{t("accountSaveScenarioHint")}</p>
+        </details>
         <div className={styles.flowActions}><Button onClick={backToEdit} variant="ghost">{t("back")}</Button><Button onClick={() => setStage("verify")}>{t("verifyAccountChange")}</Button></div>
       </Card.Body>
     </Card> : null}

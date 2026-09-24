@@ -1,3 +1,5 @@
+import type { SecuritySettingsUpdateIntent } from "./accounts";
+
 export type NotificationContact =
   | {
       accountId: string;
@@ -86,8 +88,9 @@ export type SecurityStepUpState = "PENDING" | "PROVED" | "CONSUMED" | "EXPIRED";
 export type SecurityStepUp = {
   id: string;
   requestId: string;
-  operation: "RECOVERY_CODES_REGENERATE" | "TOTP_REPLACE";
+  operation: "RECOVERY_CODES_REGENERATE" | "TOTP_REPLACE" | "SECURITY_SETTINGS_UPDATE";
   expectedFactorRevision: number;
+  securitySettings?: SecuritySettingsUpdateIntent;
   state: SecurityStepUpState;
   createdAt: string;
   expiresAt: string;

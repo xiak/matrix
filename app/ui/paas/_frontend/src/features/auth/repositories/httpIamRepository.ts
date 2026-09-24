@@ -4,6 +4,9 @@ import type {
   AccountAccess,
   AccountIdentity,
   AccountSecuritySettings,
+  AccountSecuritySettingsChange,
+  AccountSecuritySettingsUpdate,
+  SecuritySettingsUpdateIntent,
   AccountPolicy,
   AccountPolicyDetail,
   AccountPolicyDocument,
@@ -615,14 +618,31 @@ function boundedFactorRevision(value: unknown): number {
   return revision;
 }
 
-function parseSecurityStepUp(value: unknown, operation: SecurityStepUp["operation"]): SecurityStepUp {
+function parseSecuritySettingsIntent(value: unknown): SecuritySettingsUpdateIntent {
   const wire = accountRecord(value);
-  exactKeys(wire, ["apiVersion", "kind", "id", "requestId", "operation", "expectedFactorRevision", "state", "createdAt", "expiresAt"], ["provedAt", "consumedAt"]);
+  exactKeys(wire, ["expectedResourceVersion", "mfa"]);
+  const mfa = accountRecord(wire.mfa);
+  exactKeys(mfa, ["requiredForUsers"]);
+  const expectedResourceVersion = accountVersion(wire.expectedResourceVersion);
+  if (expectedResourceVersion >= Number.MAX_SAFE_INTEGER || typeof mfa.requiredForUsers !== "boolean") throw new Error("INVALID_IAM_RESPONSE");
+  return { expectedResourceVersion, mfa: { requiredForUsers: mfa.requiredForUsers } };
+}
+
+function sameSecuritySettingsIntent(actual: SecuritySettingsUpdateIntent, expected: SecuritySettingsUpdateIntent): boolean {
+  return actual.expectedResourceVersion === expected.expectedResourceVersion && actual.mfa.requiredForUsers === expected.mfa.requiredForUsers;
+}
+
+function parseSecurityStepUp(value: unknown, operation: SecurityStepUp["operation"], expectedIntent?: SecuritySettingsUpdateIntent): SecurityStepUp {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "id", "requestId", "operation", "expectedFactorRevision", ...(operation === "SECURITY_SETTINGS_UPDATE" ? ["securitySettings"] : []), "state", "createdAt", "expiresAt"], ["provedAt", "consumedAt"]);
   requireAccountKind(wire, "StepUp");
   if (wire.operation !== operation ||
+      (operation === "SECURITY_SETTINGS_UPDATE") !== Boolean(expectedIntent) ||
       wire.state !== "PENDING" && wire.state !== "PROVED" && wire.state !== "CONSUMED" && wire.state !== "EXPIRED") {
     throw new Error("INVALID_IAM_RESPONSE");
   }
+  const securitySettings = operation === "SECURITY_SETTINGS_UPDATE" ? parseSecuritySettingsIntent(wire.securitySettings) : undefined;
+  if (securitySettings && expectedIntent && !sameSecuritySettingsIntent(securitySettings, expectedIntent)) throw new Error("INVALID_IAM_RESPONSE");
   const createdAt = accountTimestamp(wire.createdAt);
   const expiresAt = accountTimestamp(wire.expiresAt);
   if (timestampMicros(expiresAt) - timestampMicros(createdAt) !== 120n * 1_000_000n) throw new Error("INVALID_IAM_RESPONSE");
@@ -641,6 +661,7 @@ function parseSecurityStepUp(value: unknown, operation: SecurityStepUp["operatio
     requestId: accountIdentifier(wire.requestId),
     operation,
     expectedFactorRevision: boundedFactorRevision(wire.expectedFactorRevision),
+    ...(securitySettings ? { securitySettings } : {}),
     state: wire.state,
     createdAt,
     expiresAt,
@@ -1603,12 +1624,91 @@ function parseAccountSecuritySettings(value: unknown, expectedAccountId: string)
   return { accountId, resourceVersion: accountVersion(wire.resourceVersion), mfa: { requiredForUsers: mfa.requiredForUsers }, updatedAt: accountTimestamp(wire.updatedAt) };
 }
 
+function parseAccountSecuritySettingsChange(value: unknown, accountId: string, requestId: string, intent: SecuritySettingsUpdateIntent): AccountSecuritySettingsChange {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "requestId", "expectedResourceVersion", "settings", "callerSessionEnded"]);
+  requireAccountKind(wire, "AccountSecuritySettingsChange");
+  const settings = parseAccountSecuritySettings(wire.settings, accountId);
+  if (accountIdentifier(wire.requestId) !== requestId || accountVersion(wire.expectedResourceVersion) !== intent.expectedResourceVersion ||
+      settings.resourceVersion !== intent.expectedResourceVersion + 1 || settings.mfa.requiredForUsers !== intent.mfa.requiredForUsers ||
+      wire.callerSessionEnded !== true) throw new Error("INVALID_IAM_RESPONSE");
+  return { requestId, expectedResourceVersion: intent.expectedResourceVersion, settings, callerSessionEnded: true };
+}
+
+function parseAccountSecuritySettingsUpdate(value: unknown, accountId: string, requestId: string, intent: SecuritySettingsUpdateIntent): AccountSecuritySettingsUpdate {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["outcome", "change"]);
+  if (wire.outcome !== "APPLIED" && wire.outcome !== "EQUAL_REPLAY") throw new Error("INVALID_IAM_RESPONSE");
+  return { outcome: wire.outcome, change: parseAccountSecuritySettingsChange(wire.change, accountId, requestId, intent) };
+}
+
 export const httpAccountRepository: AccountRepository = {
   accountSecuritySettings: {
     async read(credential, accountId) {
       return parseAccountSecuritySettings(await requestJSON<unknown>("/api/iam/v1/account/security-settings", {
         headers: accountHeaders(credential)
       }), accountId);
+    },
+    update: {
+      async startStepUp(credential, command) {
+        const requestId = accountIdentifier(command.requestId);
+        const expectedFactorRevision = boundedFactorRevision(command.expectedFactorRevision);
+        const intent = parseSecuritySettingsIntent(command.intent);
+        const result = parseSecurityStepUp(await requestJSON<unknown>("/api/iam/v1/auth/step-up", {
+          method: "POST",
+          headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
+          body: JSON.stringify({ requestId, operation: "SECURITY_SETTINGS_UPDATE", expectedFactorRevision, securitySettings: intent })
+        }), "SECURITY_SETTINGS_UPDATE", intent);
+        if (result.requestId !== requestId || result.expectedFactorRevision !== expectedFactorRevision || result.state !== "PENDING") throw new Error("INVALID_IAM_RESPONSE");
+        return result;
+      },
+      async stepUpByRequest(credential, requestId, expectedFactorRevision, expectedIntent) {
+        const target = accountIdentifier(requestId);
+        const revision = boundedFactorRevision(expectedFactorRevision);
+        const intent = parseSecuritySettingsIntent(expectedIntent);
+        const result = parseSecurityStepUp(await requestJSON<unknown>(
+          `/api/iam/v1/auth/step-up/by-request/${encodeURIComponent(target)}`,
+          { headers: accountHeaders(credential) }
+        ), "SECURITY_SETTINGS_UPDATE", intent);
+        if (result.requestId !== target || result.expectedFactorRevision !== revision) throw new Error("INVALID_IAM_RESPONSE");
+        return result;
+      },
+      async verifyStepUp(credential, stepUpId, originalRequestId, expectedFactorRevision, expectedIntent, command) {
+        const target = accountIdentifier(stepUpId);
+        const original = accountIdentifier(originalRequestId);
+        const revision = boundedFactorRevision(expectedFactorRevision);
+        const intent = parseSecuritySettingsIntent(expectedIntent);
+        const result = parseSecurityStepUp(await requestJSON<unknown>(
+          `/api/iam/v1/auth/step-up/${encodeURIComponent(target)}:verify`, {
+            method: "POST",
+            headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
+            body: JSON.stringify({ requestId: accountIdentifier(command.requestId), password: accountText(command.password), code: accountText(command.code) })
+          }
+        ), "SECURITY_SETTINGS_UPDATE", intent);
+        if (result.id !== target || result.requestId !== original || result.expectedFactorRevision !== revision ||
+            result.state !== "PROVED" && result.state !== "EXPIRED") throw new Error("INVALID_IAM_RESPONSE");
+        return result;
+      },
+      async apply(credential, accountId, command) {
+        const target = accountIdentifier(accountId);
+        const requestId = accountIdentifier(command.requestId);
+        const stepUpId = accountIdentifier(command.stepUpId);
+        const intent = parseSecuritySettingsIntent(command.intent);
+        return parseAccountSecuritySettingsUpdate(await requestJSON<unknown>("/api/iam/v1/account/security-settings", {
+          method: "PUT",
+          headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
+          body: JSON.stringify({ requestId, stepUpId, expectedResourceVersion: intent.expectedResourceVersion, mfa: intent.mfa })
+        }), target, requestId, intent);
+      },
+      async changeByRequest(credential, accountId, requestId, expectedIntent) {
+        const target = accountIdentifier(accountId);
+        const original = accountIdentifier(requestId);
+        const intent = parseSecuritySettingsIntent(expectedIntent);
+        return parseAccountSecuritySettingsChange(await requestJSON<unknown>(
+          `/api/iam/v1/account/security-settings/changes/${encodeURIComponent(original)}`,
+          { headers: accountHeaders(credential) }
+        ), target, original, intent);
+      }
     }
   },
   roles: {

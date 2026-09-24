@@ -78,6 +78,7 @@ export function initialAccessWorkspace(accountId: string): AccessWorkspace {
     userPolicies: { "principal-lin": ["policy-prod-logs"], "principal-qiao": ["policy-tag-logs", "policy-production-guard", "policy-assume-reviewer"] },
     settings: { loginProtection: false, accountRuleVersion: 1, userSsoEnabled: false, userSsoConfiguration: null },
     personalMfa: { factorState: "never-bound", reauthenticationRequired: false, recoveryState: "idle" },
+    personalNotificationAddress: null,
     events: [{ id: "event-sign-in", action: "sign-in", target: "preview-admin", at: "2026-09-09T01:10:00Z" }]
   };
 }

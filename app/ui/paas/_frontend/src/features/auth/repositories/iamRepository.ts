@@ -15,6 +15,9 @@ import type {
   AccountPolicyDocument,
   AccountPolicyVersionDirectory,
   AccountSecuritySettings,
+  AccountSecuritySettingsChange,
+  AccountSecuritySettingsUpdate,
+  SecuritySettingsUpdateIntent,
   DirectoryPage,
   Group,
   GroupAccess,
@@ -106,6 +109,14 @@ export interface AccountRepository {
     // The authenticated Session selects the account; accountId only verifies
     // the response locally and is never sent as an authority selector.
     read(credential: string, accountId: string): Promise<AccountSecuritySettings>;
+    /** Staged against the fixed IAM contract; not exposed by the current LIVE settings page. */
+    update?: {
+      startStepUp(credential: string, command: { requestId: string; expectedFactorRevision: number; intent: SecuritySettingsUpdateIntent }): Promise<SecurityStepUp>;
+      stepUpByRequest(credential: string, requestId: string, expectedFactorRevision: number, intent: SecuritySettingsUpdateIntent): Promise<SecurityStepUp>;
+      verifyStepUp(credential: string, stepUpId: string, originalRequestId: string, expectedFactorRevision: number, intent: SecuritySettingsUpdateIntent, command: { requestId: string; password: string; code: string }): Promise<SecurityStepUp>;
+      apply(credential: string, accountId: string, command: { requestId: string; stepUpId: string; intent: SecuritySettingsUpdateIntent }): Promise<AccountSecuritySettingsUpdate>;
+      changeByRequest(credential: string, accountId: string, requestId: string, intent: SecuritySettingsUpdateIntent): Promise<AccountSecuritySettingsChange>;
+    };
   };
   // Live boundary lifecycle is separate from the isolated MOCK workspace.
   // Account/user IDs bind responses locally; they never select HTTP authority.

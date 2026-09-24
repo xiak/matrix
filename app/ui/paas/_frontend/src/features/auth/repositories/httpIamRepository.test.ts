@@ -1400,6 +1400,80 @@ describe("IAM HTTP account boundary", () => {
     }
   });
 
+  it("binds account MFA updates to one exact operation proof and original request", async () => {
+    const update = httpAccountRepository.accountSecuritySettings!.update!;
+    const intent = { expectedResourceVersion: 4, mfa: { requiredForUsers: true } };
+    const stepUp = { apiVersion, kind: "StepUp", id: "settings-proof-1", requestId: "settings-change-1",
+      operation: "SECURITY_SETTINGS_UPDATE", expectedFactorRevision: 2, securitySettings: intent,
+      state: "PENDING", createdAt: timestamp, expiresAt: "2026-09-11T08:02:00Z" };
+    const settings = { apiVersion, kind: "AccountSecuritySettings", accountId: account.id,
+      resourceVersion: 5, mfa: { requiredForUsers: true }, updatedAt: timestamp };
+    const change = { apiVersion, kind: "AccountSecuritySettingsChange", requestId: stepUp.requestId,
+      expectedResourceVersion: 4, settings, callerSessionEnded: true };
+
+    let fetcher = reply(stepUp);
+    await expect(update.startStepUp("bearer", { requestId: stepUp.requestId, expectedFactorRevision: 2, intent })).resolves.toMatchObject({ operation: "SECURITY_SETTINGS_UPDATE", securitySettings: intent });
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/step-up");
+    expect(requestBody(fetcher)).toEqual({ requestId: stepUp.requestId, operation: "SECURITY_SETTINGS_UPDATE", expectedFactorRevision: 2, securitySettings: intent });
+
+    fetcher = reply(stepUp);
+    await update.stepUpByRequest("bearer", stepUp.requestId, 2, intent);
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/auth/step-up/by-request/${stepUp.requestId}`);
+
+    fetcher = reply({ ...stepUp, state: "PROVED", provedAt: "2026-09-11T08:00:30Z" });
+    await update.verifyStepUp("bearer", stepUp.id, stepUp.requestId, 2, intent,
+      { requestId: "verify-settings-1", password: "private-password", code: "123456" });
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/auth/step-up/${stepUp.id}:verify`);
+    expect(requestBody(fetcher)).toEqual({ requestId: "verify-settings-1", password: "private-password", code: "123456" });
+
+    fetcher = reply({ outcome: "APPLIED", change });
+    await expect(update.apply("bearer", account.id, { requestId: stepUp.requestId, stepUpId: stepUp.id, intent })).resolves.toMatchObject({ outcome: "APPLIED", change: { callerSessionEnded: true, settings: { resourceVersion: 5 } } });
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/account/security-settings");
+    expect(firstRequest(fetcher)[1].method).toBe("PUT");
+    expect(requestBody(fetcher)).toEqual({ requestId: stepUp.requestId, stepUpId: stepUp.id, expectedResourceVersion: 4, mfa: { requiredForUsers: true } });
+
+    fetcher = reply(change);
+    await expect(update.changeByRequest("new-bearer", account.id, stepUp.requestId, intent)).resolves.toMatchObject({ requestId: stepUp.requestId, callerSessionEnded: true });
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/account/security-settings/changes/${stepUp.requestId}`);
+    expect(firstRequest(fetcher)[1].method).toBeUndefined();
+  });
+
+  it("rejects drifted security proofs and account-rule completions without treating them as success", async () => {
+    const update = httpAccountRepository.accountSecuritySettings!.update!;
+    const intent = { expectedResourceVersion: 4, mfa: { requiredForUsers: true } };
+    const stepUp = { apiVersion, kind: "StepUp", id: "settings-proof-1", requestId: "settings-change-1",
+      operation: "SECURITY_SETTINGS_UPDATE", expectedFactorRevision: 2, securitySettings: intent,
+      state: "PENDING", createdAt: timestamp, expiresAt: "2026-09-11T08:02:00Z" };
+    const settings = { apiVersion, kind: "AccountSecuritySettings", accountId: account.id,
+      resourceVersion: 5, mfa: { requiredForUsers: true }, updatedAt: timestamp };
+    const change = { apiVersion, kind: "AccountSecuritySettingsChange", requestId: stepUp.requestId,
+      expectedResourceVersion: 4, settings, callerSessionEnded: true };
+    for (const invalid of [
+      { ...stepUp, operation: "TOTP_REPLACE" },
+      { ...stepUp, securitySettings: undefined },
+      { ...stepUp, securitySettings: { ...intent, mfa: { requiredForUsers: false } } },
+      { ...stepUp, expectedFactorRevision: 3 },
+      { ...stepUp, securitySettings: { ...intent, unrelated: true } }
+    ]) {
+      reply(invalid);
+      await expect(update.startStepUp("bearer", { requestId: stepUp.requestId, expectedFactorRevision: 2, intent })).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+    for (const invalid of [
+      { ...change, requestId: "other-change" },
+      { ...change, expectedResourceVersion: 3 },
+      { ...change, callerSessionEnded: false },
+      { ...change, settings: { ...settings, accountId: "other-account" } },
+      { ...change, settings: { ...settings, resourceVersion: 6 } },
+      { ...change, settings: { ...settings, mfa: { requiredForUsers: false } } },
+      { ...change, extra: true }
+    ]) {
+      reply({ outcome: "APPLIED", change: invalid });
+      await expect(update.apply("bearer", account.id, { requestId: stepUp.requestId, stepUpId: stepUp.id, intent })).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+    reply({ outcome: "UNKNOWN", change });
+    await expect(update.apply("bearer", account.id, { requestId: stepUp.requestId, stepUpId: stepUp.id, intent })).rejects.toThrow("INVALID_IAM_RESPONSE");
+  });
+
   it("fails closed on partial, reordered or semantically invalid authorization profile declarations", async () => {
     const valid = profileEntry("paas");
     const action = valid.profile.actions[0]!;

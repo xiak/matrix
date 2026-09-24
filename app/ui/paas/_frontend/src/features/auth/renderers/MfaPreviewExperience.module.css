@@ -1,4 +1,8 @@
 .securityRoot, .flowBody, .form, .loginFlow, .cardBody, .policyForm { display: grid; gap: var(--xiak-spacing-comfortable); }
+.scenarioDetails { border-top: var(--xiak-border-subtle); padding-top: var(--xiak-spacing-default); }
+.scenarioDetails summary { cursor: pointer; color: var(--xiak-color-accent-text); font-size: var(--xiak-font-size-small); font-weight: var(--xiak-font-weight-medium); }
+.scenarioDetails[open] { display: grid; gap: var(--xiak-spacing-default); }
+.scenarioDetails summary:focus-visible { outline: 2px solid var(--xiak-color-border-focus); outline-offset: 2px; }
 .securityRoot { gap: 28px; }
 .section { display: grid; gap: var(--xiak-spacing-comfortable); }
 .section + .section { border-top: var(--xiak-border-subtle); padding-top: 28px; }

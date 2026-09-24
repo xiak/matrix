@@ -465,6 +465,7 @@
     "sessionEffectRelax": "Relaxing never revives a session that is already invalid",
     "accountReviewBoundary": "Reauthentication is bound to this account, target value, and operation. It is not general authorization and cannot bypass the permission check when saving.",
     "accountSaveScenario": "MOCK save outcome",
+    "accountTryOtherOutcomes": "Try other outcomes (MOCK only)",
     "accountSaveScenarioHint": "This selection only exercises recovery paths. It is not a backend request field or public contract.",
     "accountSaveScenarios": {
       "success": "Save succeeds",
@@ -573,6 +574,7 @@
     "codeLabel": "8-digit email verification code",
     "codeHint": "A real code is single-use. Wrong attempts spend the shared budget; a new session or intent does not refund it.",
     "invalidCode": "The code is invalid, used, or expired. The address remains unverified.",
+    "verificationUnavailable": "Unable to confirm this address right now. It remains pending; retry when available.",
     "stateVocabulary": "Real delivery distinguishes PENDING, IN_FLIGHT, RETRY_WAIT, ACCEPTED, FAILED, and EXPIRED. It never overwrites an unknown result with “delivered.”",
     "closeForNow": "Close for now",
     "confirm": "Confirm address"

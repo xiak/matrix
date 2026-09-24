@@ -465,6 +465,7 @@
     "sessionEffectRelax": "降低要求不会恢复已经失效的会话",
     "accountReviewBoundary": "再次认证只绑定当前账号、目标规则值和本次操作；它不是通用授权，也不能绕过保存时的权限检查。",
     "accountSaveScenario": "MOCK 保存结果",
+    "accountTryOtherOutcomes": "体验异常结果（仅 MOCK）",
     "accountSaveScenarioHint": "此选择仅用于验收不同恢复路径，不代表后端请求参数或公开契约。",
     "accountSaveScenarios": {
       "success": "保存成功",
@@ -573,6 +574,7 @@
     "codeLabel": "8 位邮箱验证码",
     "codeHint": "真实验证码一次消费；错误尝试会占用共享预算，换 Session 或重建意图不会返还额度。",
     "invalidCode": "验证码无效、已使用或已过期。地址仍未验证。",
+    "verificationUnavailable": "暂时无法确认这条地址。仍保持待验证，请重试；不会把失败当作已验证。",
     "stateVocabulary": "真实投递会区分 PENDING、IN_FLIGHT、RETRY_WAIT、ACCEPTED、FAILED 与 EXPIRED；不会用“已送达”覆盖未知结果。",
     "closeForNow": "暂时关闭",
     "confirm": "确认地址"

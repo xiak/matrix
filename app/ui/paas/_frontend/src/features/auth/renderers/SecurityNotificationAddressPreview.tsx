@@ -4,6 +4,7 @@ import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent } f
 import { Mail } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { Alert, Badge, Button, Card, FormField, Input, PasswordInput, Typography } from "@ui/xiak";
+import { validPreviewNotificationAddress } from "../domain/accessWorkspace";
 import styles from "./MfaPreviewExperience.module.css";
 
 const demonstrationCode = "48392017";
@@ -12,14 +13,6 @@ const contactSteps = ["address", "verify", "complete"] as const;
 
 type ContactStage = "summary" | "address" | "verify";
 type FocusTarget = "trigger" | "summary" | null;
-
-function validAddress(value: string): boolean {
-  const parts = value.split("@");
-  if (parts.length !== 2) return false;
-  const [local, domain] = parts;
-  if (!local || local.length > 64 || !/^[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[A-Za-z0-9!#$%&'*+/=?^_`{|}~-]+)*$/.test(local)) return false;
-  return Boolean(domain && domain.length <= 253 && domain.includes(".") && domain.split(".").every((label) => /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/.test(label)));
-}
 
 function ContactProgress({ current }: { current: number }) {
   const t = useTranslations("SecurityNotificationPreview");
@@ -32,7 +25,7 @@ function ContactProgress({ current }: { current: number }) {
 
 export function SecurityNotificationAddressPreview({ verifiedAddress: controlledVerifiedAddress, onVerified }: {
   verifiedAddress?: string | null;
-  onVerified?(address: string): void;
+  onVerified?(address: string): boolean | void | Promise<boolean | void>;
 } = {}) {
   const t = useTranslations("SecurityNotificationPreview");
   const auth = useTranslations("Auth");
@@ -43,7 +36,9 @@ export function SecurityNotificationAddressPreview({ verifiedAddress: controlled
   const [localVerifiedAddress, setLocalVerifiedAddress] = useState<string | null>(null);
   const verifiedAddress = controlledVerifiedAddress === undefined ? localVerifiedAddress : controlledVerifiedAddress;
   const [code, setCode] = useState("");
-  const [error, setError] = useState<"credentials" | "code" | null>(null);
+  const [error, setError] = useState<"credentials" | "code" | "unavailable" | null>(null);
+  const [confirming, setConfirming] = useState(false);
+  const confirmingRef = useRef(false);
   const [completed, setCompleted] = useState(false);
   const addressId = useId();
   const passwordId = useId();
@@ -78,7 +73,7 @@ export function SecurityNotificationAddressPreview({ verifiedAddress: controlled
   const prepare = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const candidate = address.trim();
-    if (!validAddress(candidate) || password !== demonstrationPassword) {
+    if (!validPreviewNotificationAddress(candidate) || password !== demonstrationPassword) {
       setError("credentials");
       return;
     }
@@ -89,20 +84,30 @@ export function SecurityNotificationAddressPreview({ verifiedAddress: controlled
     setError(null);
     setStage("verify");
   };
-  const confirm = (event: FormEvent<HTMLFormElement>) => {
+  const confirm = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (confirmingRef.current) return;
     if (code !== demonstrationCode || !pendingAddress) {
       setError("code");
       return;
     }
-    if (controlledVerifiedAddress === undefined) setLocalVerifiedAddress(pendingAddress);
-    onVerified?.(pendingAddress);
-    setPendingAddress(null);
-    setCode("");
-    setError(null);
-    setCompleted(true);
-    focusTarget.current = "summary";
-    setStage("summary");
+    confirmingRef.current = true;
+    setConfirming(true);
+    try {
+      if (await onVerified?.(pendingAddress) === false) throw new Error("MOCK_VERIFICATION_UNAVAILABLE");
+      if (controlledVerifiedAddress === undefined) setLocalVerifiedAddress(pendingAddress);
+      setPendingAddress(null);
+      setCode("");
+      setError(null);
+      setCompleted(true);
+      focusTarget.current = "summary";
+      setStage("summary");
+    } catch {
+      setError("unavailable");
+    } finally {
+      confirmingRef.current = false;
+      setConfirming(false);
+    }
   };
 
   if (stage === "address") return <Card className={styles.flowCard}>
@@ -133,11 +138,12 @@ export function SecurityNotificationAddressPreview({ verifiedAddress: controlled
       </dl>
       <Alert status="warning">{t("pendingBoundary")}</Alert>
       <Alert>{t("demoCode", { code: demonstrationCode })}</Alert>
-      <form className={styles.form} onSubmit={confirm}>
+      <form className={styles.form} onSubmit={(event) => void confirm(event)}>
         <FormField id={codeId} label={t("codeLabel")} hint={t("codeHint")}><Input autoComplete="one-time-code" id={codeId} inputMode="numeric" maxLength={8} onChange={(event) => { setCode(event.target.value.replace(/\D/g, "")); setError(null); }} pattern="[0-9]{8}" required value={code} /></FormField>
         {error === "code" ? <Alert status="danger">{t("invalidCode")}</Alert> : null}
+        {error === "unavailable" ? <Alert status="danger">{t("verificationUnavailable")}</Alert> : null}
         <p className={styles.boundary}><Mail aria-hidden="true" />{t("stateVocabulary")}</p>
-        <div className={styles.flowActions}><Button onClick={close} type="button" variant="ghost">{t("closeForNow")}</Button><Button disabled={code.length !== 8} type="submit">{t("confirm")}</Button></div>
+        <div className={styles.flowActions}><Button disabled={confirming} onClick={close} type="button" variant="ghost">{t("closeForNow")}</Button><Button disabled={confirming || code.length !== 8} type="submit">{t("confirm")}</Button></div>
       </form>
     </Card.Body>
   </Card>;
