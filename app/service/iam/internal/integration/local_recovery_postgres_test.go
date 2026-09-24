@@ -255,6 +255,14 @@ func TestIAMLocalCredentialRecoveryPostgres(t *testing.T) {
 	if response := performIAMRequest(handler, http.MethodPost, "/v1/policy-attachments", primary, bindingBody); response.Code != http.StatusOK {
 		t.Fatal("grant separate platform operator")
 	}
+	// A real INSTALLATION grant ends the target's pre-grant Sessions.
+	// Reauthenticate the separate operator before exercising its authority;
+	// accepting 401 below would only test a stale bearer, not the protected
+	// primary or either order of the actual recovery/revocation transaction.
+	if response := performIAMRequest(handler, http.MethodGet, "/v1/auth/me", operatorSession, nil); response.Code != http.StatusUnauthorized {
+		t.Fatal("platform grant retained the operator's pre-grant Session")
+	}
+	operatorSession = localRecoveryLogin(t, handler, "recovery.operator@"+string(authority.Scope.AccountID), "Other-Operator-Changed-92!", false)
 	adminBindingBody, _ := json.Marshal(iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(operator.ID)}, PolicyID: iamv1.SystemPolicyAccountAdministrator, PolicyResourceVersion: 1, RequestID: "grant-recovery-organization-admin"})
 	if response := performIAMRequest(handler, http.MethodPost, "/v1/policy-attachments", primary, adminBindingBody); response.Code != http.StatusOK {
 		t.Fatal("grant independent organization administrator")

@@ -534,7 +534,11 @@ S2c本片为IAM43/Audit25/PaaS2源码候选，不是发布profile或独立CI已�
 
 `TestIAMPolicyAttachmentSessionPostgres`在另一新库完整race通过60.69s（包64.228s），仍用原两分钟期限：USER/Group/platform的48种附件授撤与登出、各改密选项、重置、停用及当前授权竞争全部保留。平台附件授予后原bearer拒绝；新登录请求通过认证/PDP并等待真实数据库屏障时，撤销再重新授予平台附件，原两个Session及在途写入仍拒绝，无错误成功事实。双次schema与等值bootstrap后拒绝保持。本轮只移除矩阵中28次完全未使用的第二Session登录；跨Session改密及平台撤权/重授所需的第二Session仍真实签发，没有减少安全场景、降低密码成本或增加期限。
 
-固定`847fc85307f8f50992a04f67b71caecf7581683d`的[Verification35997837317](https://github.com/xiak/matrix/actions/runs/35997837317)已确认authority-storage失败：上述矩阵在末尾第二次schema replay触及120秒截止，不能继承本地68.39s的旧通过。go、node-process、authority-runtime与authority-step-up已分别成功；剩余lane当时仍运行，不能称整体CI通过。去除无消费登录后的本地通过不自动证明独立CI已修复，后继固定修正仍需自身精确SHA验证。以上也不代表全部设置/因子竞争或发布已验收。
+固定`847fc85307f8f50992a04f67b71caecf7581683d`的[Verification35997837317](https://github.com/xiak/matrix/actions/runs/35997837317)已确认authority-storage失败：上述矩阵在末尾第二次schema replay触及120秒截止，不能继承本地68.39s的旧通过。后继投递修正`fea7a772a3af5a31b3b790f79689a1843bcf70d7`的[Verification36002470008](https://github.com/xiak/matrix/actions/runs/36002470008)也未通过storage：旧离线恢复夹具仍使用平台附件授予前的operator Session，实际401导致原403断言和锁等待失败。该失败已在新PG18.6库复现35.56s；只在原owner补充原Session必须401、正常重新登录后继续全部原权限/并发断言，没有接受401冒充受保护身份拒绝。修正后完整`TestIAMLocalCredentialRecoveryPostgres`通过24.43s，保留专用SQL身份、精确receipt、两种恢复/撤权次序和schema/bootstrap不复活。以上失败不能由后继本地通过回填，当前修正仍须自身精确SHA独立CI。
+
+设置竞争门禁`TestIAMSecuritySettingsRacesPostgres`在另一独立空白PG18.6库串行race通过22.53s，与上述恢复门禁的组合包50.514s通过。六个Account均经正常创建、首次改密、显式设置授权、联系人确认、实际TOTP绑定和密码+TOTP登录；设置收紧分别与logout、保留当前Session的日常改密、保存码开始因子恢复交错，原outbox屏障及第二副本的真实锁依赖控制双方先提交。设置先提交时旧Session/LOGIN挑战拒绝；改密先提交时当前Session继续有效但旧generation的StepUp拒绝；logout/恢复先提交时设置没有部分版本、证明消费、完成、成功Audit或邮件意图。真实generation/因子修订/一次恢复码消费、单一赢家及当前schema重放、新Authority后的败方拒绝逐项核对；没有隐藏deadlock重试。原三分钟期限、密码成本和共享尝试预算保持，不移动时钟、回填正向数据或宣称进程重启/SMTP/发布验收。设置放宽、其他因子/reset及Role竞争仍按完整矩阵继续。
+
+该测试增量的全仓默认race（含architecture）及vet通过，workflow YAML及14段Bash语法、gofmt/diff检查通过。新门禁进入原step-up lane的独立数据库，storage排除重复执行，未新增lane、提高资源/并发或放宽期限。默认外部环境SKIP不是运行证据；本片真库范围仅为上述两个完整门禁，不重复启动整套进程/SMTP。没有生产API/SQL/schema/profile、安装或UI变更；自有PG核对精确进程/路径/监听及零其他客户端后正常停机保留数据。
 
 原`TestIAMStepUpPostgres`完整九场景在另一独立PG18.6库串行race通过388.34s（包391.890s）：原重发/后续恢复、双证明、另一Session、共享预算、登出/改密/重置/停用及真实行锁等待120秒到期全部保留，不放宽原七分钟期限。该轮完成于设置通知接入之前；SMTP历史通知子例明确SKIP，不计实收。设置专属意图已归上面的独立`TestIAMSecuritySettingsPostgres`，不再与会话会被账号变更终止的旧公共fixture混跑。其证明准确绑定版本/值，变体或无变化值409，不能当PDP许可或消费恢复码重发。API/生成器、工作流、HTTP和architecture聚焦race通过；工作流反例拒绝存储端返回缺失/变体设置意图，单worker10秒StepUp fuzz完成25437次无失败。所有真实设置变更均返回原调用方`callerSessionEnded=true`，包括放宽要求。上述证据不替代完整S2c竞争矩阵或发布门禁。
 
@@ -677,6 +681,8 @@ RootIdentity仍是原Account的原USER，恢复不能转让root、启用暂停�
 | UX/UI owner | 独立真实认证器完成主动绑定、首次强制设置、登录挑战、过期/等待新码、秘密回包丢失、合法重绑及设置权限拒绝；浏览器不能读取持久缓存中的秘密 |
 | 原011容量owner | 明确副本/CPU/内存/连接/数据及尝试预算，错误登录与复杂PDP并行时没有无界队列；不提前宣称生产QPS、公平性SLO或数据库HA |
 
+设置竞争的有界门禁沿原integration owner复用真实初始化：六个独立Account，各自正常改密、确认通知地址、绑定TOTP、登录并取得准确设置意图的PROVED证明。设置false→true分别与本人logout、保留当前Session的日常改密、保存恢复码开始重绑竞争，每项控制两种提交次序。在第一事务的原成功outbox写入处暂停，实际观察第二副本的数据库锁依赖后才释放，不以goroutine启动顺序代替串行化证据。先提交设置则旧Session/LOGIN挑战不能再操作；先提交logout/恢复则旧Session不能更新设置；先提交保留当前Session的改密也必须使旧凭据代际的StepUp失效。逐项核对版本、generation、因子/恢复码消费、证明消费及完成/Audit/通知原子结果，schema等值重放及新Authority不得复活败方资格。独立三分钟期限及原尝试预算不变，不改时钟或直写正向身份；通知地址代码的存储解封只证明事务，不冒充SMTP。局部真实证据归上文，六项不替代上表其余因子/设置放宽/reset/Role竞争。
+
 实现顺序在本FEAT内细分，不新建重复FEAT：
 
 1. S2a：冻结私有材料、挑战/失败结果、现有锁序和消费者联合响应；补纯契约/域门禁，尚不开放MFA。
@@ -706,7 +712,7 @@ RootIdentity仍是原Account的原USER，恢复不能转让root、启用暂停�
 
 账号安全配置是Account内单份有resourceVersion的治理状态，首片不另建可附件到Group/Role的安全策略语言或任意用户例外。`Policy/PolicyVersion`负责谁能操作资源，`security-settings`是该授权所管理的资源；两个对象不能合并。普通User仅可在其已验证身份下取得设置自己新密码所需的有效约束，不取得全账号安全报告或其他用户状态。未认证登录响应不公开按realm变化的配置。
 
-本次权限与入口如下。S2c已固定非秘密配置、准确变更意图及历史完成的数据契约；当前未提交候选已实现读取、写入、设置专属step-up及完成查询，本地证据归上文。强制绑定、会话屏障、并发及受支持恢复仍须按完整验收矩阵交付，不能因数据类型或部分运行门禁通过而视为发布完成。
+本次权限与入口如下。S2c已固定非秘密配置、准确变更意图及历史完成的数据契约；固定`847fc853`及后继候选已实现读取、写入、设置专属step-up及完成查询，本地证据归上文。强制绑定、会话屏障、并发及受支持恢复仍须按完整验收矩阵交付，不能因数据类型或部分运行门禁通过而视为发布完成。
 
 | 项目 | 设计 |
 | --- | --- |
