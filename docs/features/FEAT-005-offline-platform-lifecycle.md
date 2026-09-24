@@ -258,22 +258,28 @@ the following in an externally disconnected, task-owned runtime:
    writes the closed Audit evidence, passes restart plus signed
    upgrade/rollback gates, and leaves Phase 2 and every remote host untouched.
 
-Current source `d479e1c57b6458852dd029227d32f3d56df6c5ad` freezes the
-installation-owned, non-secret same-snapshot adapter contract. It binds the
-sealed installation/bootstrap scope, the observed keyset revision and the
-strictly sorted required `keyId`/format/commitment triples; its custody digest
-excludes the ephemeral PostgreSQL snapshot identifier. Canonical decoding
-rejects missing, null, duplicate, reordered, unknown, oversized or trailing
-input, while an explicit empty requirement set remains representable only for
-IAM to assert after a complete snapshot query. The exact source passed all
-four jobs in
-[independent CI](https://github.com/xiak/matrix/actions/runs/35491112269),
-plus local full-repository tests, focused race, architecture and vet. This is
-only the cross-process evidence contract: the purpose-only IAM snapshot
-helper, sealed backup-manifest consumption, restore-time keyring-superset
-check, durable `CLOSED`/one-shot reopen transactions, signed two-release
-transition and disconnected populated recovery gates remain unaccepted. The
-published database profile is unchanged.
+Fixed preparation source `9d8ff34f` publishes IAM 36, Audit 19, PaaS 6 and
+contract revision 14 with installation-owned TOTP custody, same-snapshot
+backup evidence and authentication recovery closure, but no MFA creation.
+Enabling runtime source `ea0122f2` integrates transactional TOTP enrollment,
+login challenges, online authenticator recovery, Session-bound step-up and
+recovery-code regeneration while retaining the host and PaaS 6 authorities.
+Release source `b0d2dd24` publishes IAM 40, Audit 24, PaaS 6 and contract
+revision 15. It admits only the exact preparation profile for retained-data
+upgrade and authenticated destructive recovery; direct cross-profile rollback,
+skipped sources and arbitrary numeric predecessors remain closed before
+effects.
+
+That clean source passed full Go tests and vet, focused race across IAM, Audit,
+installation and architecture boundaries, two deterministic generation runs,
+Linux/amd64 CGO-disabled compilation, and the complete control-plane UI gate:
+type checking, lint, architecture, 20 contrast pairs, 163 tests and comparison
+against 72 embedded files. The task-local Node dependency tree, build output
+and npm cache were deleted after verification. This does not accept the Phase
+3 extension: a target-owned PostgreSQL 18 retained-data/process gate and a
+fresh externally disconnected signed preparation-to-enabling upgrade,
+rollback-refusal, backup/recovery, crash-resume, restart and cleanup run remain
+required. No Docker engine or remote host was started for the current evidence.
 
 ## Incremental acceptance
 
