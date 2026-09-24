@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -277,6 +278,88 @@ func (value *gate) rejectIncompatibleTOTPBackupKey(ctx context.Context, backupID
 		}
 		emit("successor-backup-" + scenario + "-key-rejected-before-effects")
 	}
+	return nil
+}
+
+type rejectedUpgradeBoundary struct {
+	journal    lifecycle.Journal
+	backups    []string
+	releases   []string
+	containers []string
+	images     []string
+	volumes    []string
+	networks   []string
+}
+
+func directoryEntryNames(path string) ([]string, error) {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, len(entries))
+	for index, entry := range entries {
+		names[index] = entry.Name()
+	}
+	return names, nil
+}
+
+func (value *gate) captureRejectedUpgradeBoundary(ctx context.Context) (rejectedUpgradeBoundary, error) {
+	var result rejectedUpgradeBoundary
+	var err error
+	result.journal, err = readJournal(ctx, value.config.root)
+	if err != nil {
+		return rejectedUpgradeBoundary{}, err
+	}
+	result.backups, err = directoryEntryNames(filepath.Join(value.config.root, filepath.FromSlash(layout.BackupDirectory)))
+	if err != nil {
+		return rejectedUpgradeBoundary{}, err
+	}
+	result.releases, err = directoryEntryNames(filepath.Join(value.config.root, "releases"))
+	if err != nil {
+		return rejectedUpgradeBoundary{}, err
+	}
+	for _, inventory := range []struct {
+		arguments []string
+		target    *[]string
+	}{
+		{[]string{"container", "ls", "--all", "--quiet", "--no-trunc"}, &result.containers},
+		{[]string{"image", "ls", "--quiet", "--no-trunc"}, &result.images},
+		{[]string{"volume", "ls", "--quiet"}, &result.volumes},
+		{[]string{"network", "ls", "--quiet"}, &result.networks},
+	} {
+		*inventory.target, err = dockerLines(ctx, inventory.arguments...)
+		if err != nil {
+			return rejectedUpgradeBoundary{}, err
+		}
+		slices.Sort(*inventory.target)
+	}
+	return result, nil
+}
+
+func (value *gate) rejectInvalidPredecessorUpgrade(ctx context.Context, candidate release.VerifiedBundle, scenario string, forbidden [][]byte) error {
+	before, err := value.captureRejectedUpgradeBoundary(ctx)
+	if err != nil {
+		return fail(scenario + "-initial-state")
+	}
+	command, stdout, stderr, err := startMX(ctx, value.releases.b, "upgrade", releaseUpgradeArguments(value.config, candidate))
+	if err != nil {
+		return fail(scenario + "-upgrade-start")
+	}
+	if err := validateExpectedMXFailure(command.Wait(), stdout, stderr, "upgrade", forbidden,
+		3, "PRECONDITION_FAILED", "UPGRADE_PREDECESSOR_MISMATCH"); err != nil {
+		return fail(scenario + "-upgrade-denial")
+	}
+	after, err := value.captureRejectedUpgradeBoundary(ctx)
+	if err != nil || !reflect.DeepEqual(before, after) {
+		return fail(scenario + "-upgrade-effects")
+	}
+	if _, err := assertPlatform(ctx, value.config.root, value.releases.a.Manifest, value.releaseAPreviousID); err != nil {
+		return err
+	}
+	if err := assertNoPlatformReleaseContainers(ctx, value.releases.b.Manifest.Release.ID); err != nil {
+		return err
+	}
+	emit("signed-" + scenario + "-upgrade-rejected-before-effects")
 	return nil
 }
 
@@ -578,6 +661,23 @@ func (value *gate) beforeRestart(ctx context.Context) (gateErr error) {
 	value.edge.addForbidden(bearer)
 	if err := value.rotateNativeCredentials(ctx, bearer); err != nil {
 		return err
+	}
+	if value.releases.skipped != nil && value.releases.mismatched != nil {
+		for _, rejected := range []struct {
+			bundle   release.VerifiedBundle
+			scenario string
+		}{
+			{*value.releases.skipped, "skipped-predecessor"},
+			{*value.releases.mismatched, "mismatched-predecessor"},
+		} {
+			if err := value.rejectInvalidPredecessorUpgrade(ctx, rejected.bundle, rejected.scenario,
+				value.forbidden(secret, newPassword, bearer)); err != nil {
+				return err
+			}
+		}
+		if err := value.assertWorkload(ctx, value.releases.a.Manifest, updated, 2, "2", settingTwo, secretDigest); err != nil {
+			return err
+		}
 	}
 
 	failureBackupID, err := value.failedUpgrade(ctx, secret, newPassword, bearer)
@@ -1299,6 +1399,9 @@ func (value *gate) pathLeakage() [][]byte {
 	}
 	if value.config.releaseBase != "" {
 		result = append(result, []byte(value.config.releaseBase))
+	}
+	if value.config.skippedRelease != "" {
+		result = append(result, []byte(value.config.skippedRelease), []byte(value.config.mismatchedRelease))
 	}
 	if value.config.browserPasswordFile != "" {
 		result = append(result, []byte(value.config.browserPasswordFile))

@@ -751,6 +751,53 @@ func TestReleasePairRequiresCompatibleImmediatePredecessor(t *testing.T) {
 	}
 }
 
+func TestRejectedPredecessorCandidatesKeepTheSignedSuccessorIdentity(t *testing.T) {
+	a := release.VerifiedBundle{Manifest: release.Manifest{Release: release.ReleaseIdentity{
+		ID: "matrix-v0.3.0-aaaaaaaaaaaa", Version: "v0.3.0", SourceCommit: strings.Repeat("a", 40),
+	}}}
+	b := release.VerifiedBundle{Manifest: release.Manifest{
+		Kind: release.ManifestKind,
+		Release: release.ReleaseIdentity{
+			ID: "matrix-v0.4.0-bbbbbbbbbbbb", Version: "v0.4.0", SourceCommit: strings.Repeat("b", 40),
+			PreviousID: a.Manifest.Release.ID, PreviousVersion: a.Manifest.Release.Version,
+		},
+		Database: release.CurrentDatabaseProfile(), TopologyDigest: topology.ContractDigest(),
+	}}
+	skipped := b
+	skipped.Manifest.Release.PreviousID = "matrix-v0.2.0-000000000000"
+	skipped.Manifest.Release.PreviousVersion = "v0.2.0"
+	mismatched := b
+	mismatched.Manifest.Release.PreviousID = "matrix-v0.3.0-111111111111"
+	if err := validateRejectedPredecessorCandidates(a, b, skipped, mismatched); err != nil {
+		t.Fatal("separately signed bad-predecessor candidates rejected", err)
+	}
+	for _, scenario := range []struct {
+		name   string
+		mutate func(*release.VerifiedBundle, *release.VerifiedBundle)
+	}{
+		{"skipped is actual predecessor", func(value, _ *release.VerifiedBundle) {
+			value.Manifest.Release.PreviousID, value.Manifest.Release.PreviousVersion = a.Manifest.Release.ID, a.Manifest.Release.Version
+		}},
+		{"mismatched is actual predecessor", func(_, value *release.VerifiedBundle) {
+			value.Manifest.Release.PreviousID = a.Manifest.Release.ID
+		}},
+		{"wrong successor source", func(value, _ *release.VerifiedBundle) {
+			value.Manifest.Release.SourceCommit = strings.Repeat("c", 40)
+		}},
+		{"wrong topology", func(_, value *release.VerifiedBundle) {
+			value.Manifest.TopologyDigest = "sha256:" + strings.Repeat("3", 64)
+		}},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			rejectedSkipped, rejectedMismatched := skipped, mismatched
+			scenario.mutate(&rejectedSkipped, &rejectedMismatched)
+			if validateRejectedPredecessorCandidates(a, b, rejectedSkipped, rejectedMismatched) == nil {
+				t.Fatal("candidate no longer proves the intended predecessor mismatch")
+			}
+		})
+	}
+}
+
 func TestReleaseLifecycleArgumentsRespectThePublishedPredecessorCLI(t *testing.T) {
 	base := options{
 		root:                      "/data/matrix",
@@ -973,6 +1020,8 @@ func TestSpecializedAcceptancePhasesOwnOnlyTheirRequiredInputs(t *testing.T) {
 			t.Setenv("MATRIX_PHASE1_RELEASE_BASE", "")
 			t.Setenv("MATRIX_PHASE1_RELEASE_A", filepath.Join(directory, "release-a"))
 			t.Setenv("MATRIX_PHASE1_RELEASE_B", filepath.Join(directory, "release-b"))
+			t.Setenv("MATRIX_PHASE1_SKIPPED_RELEASE", "")
+			t.Setenv("MATRIX_PHASE1_MISMATCHED_RELEASE", "")
 			t.Setenv("MATRIX_PHASE1_TRUST_KEY", filepath.Join(directory, "trust.pem"))
 			t.Setenv("MATRIX_PHASE1_NATIVE_NODES", "")
 			t.Setenv("MATRIX_PHASE1_NATIVE_DEPLOYMENT_RUNTIME", "")
@@ -1006,6 +1055,8 @@ func optionsFromEnvironment() (options, error) {
 		releaseBase:             os.Getenv("MATRIX_PHASE1_RELEASE_BASE"),
 		releaseA:                os.Getenv("MATRIX_PHASE1_RELEASE_A"),
 		releaseB:                os.Getenv("MATRIX_PHASE1_RELEASE_B"),
+		skippedRelease:          os.Getenv("MATRIX_PHASE1_SKIPPED_RELEASE"),
+		mismatchedRelease:       os.Getenv("MATRIX_PHASE1_MISMATCHED_RELEASE"),
 		trustKey:                os.Getenv("MATRIX_PHASE1_TRUST_KEY"),
 		edge:                    defaultEdgeEndpoint,
 		afterStart:              phase == "after-restart",
@@ -1027,6 +1078,15 @@ func optionsFromEnvironment() (options, error) {
 	if config.releaseBase != "" && (!filepath.IsAbs(config.releaseBase) ||
 		filepath.Clean(config.releaseBase) != config.releaseBase) {
 		return options{}, fail("command-input")
+	}
+	if (config.skippedRelease == "") != (config.mismatchedRelease == "") ||
+		(phase != "run" && config.skippedRelease != "") {
+		return options{}, fail("command-input")
+	}
+	for _, path := range []string{config.skippedRelease, config.mismatchedRelease} {
+		if path != "" && (!filepath.IsAbs(path) || filepath.Clean(path) != path) {
+			return options{}, fail("command-input")
+		}
 	}
 	if config.nativeNodes != "" && (!filepath.IsAbs(config.nativeNodes) || filepath.Clean(config.nativeNodes) != config.nativeNodes) {
 		return options{}, fail("command-input")
@@ -1083,6 +1143,23 @@ func runGate(ctx context.Context, config options) error {
 			return err
 		}
 		releases.base = &base
+	}
+	if config.skippedRelease != "" {
+		skipped, err := release.VerifyDirectory(config.skippedRelease, trust)
+		if err != nil {
+			return fail("skipped-release-authentication")
+		}
+		mismatched, err := release.VerifyDirectory(config.mismatchedRelease, trust)
+		if err != nil {
+			return fail("mismatched-release-authentication")
+		}
+		if err := validateRejectedPredecessorCandidates(a, b, skipped, mismatched); err != nil {
+			return err
+		}
+		releases.skipped, releases.mismatched = &skipped, &mismatched
+	} else if b.Manifest.Database == release.CurrentDatabaseProfile() && b.Manifest.Database.Authorities.IAM >= 40 &&
+		!config.browserReady && !config.multiHostLifecycle {
+		return fail("rejected-predecessor-releases-required")
 	}
 	return newGate(config, releases).beforeRestart(ctx)
 }

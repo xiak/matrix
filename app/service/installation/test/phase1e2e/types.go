@@ -15,6 +15,8 @@ type options struct {
 	releaseBase               string
 	releaseA                  string
 	releaseB                  string
+	skippedRelease            string
+	mismatchedRelease         string
 	trustKey                  string
 	edge                      string
 	afterStart                bool
@@ -27,9 +29,11 @@ type options struct {
 }
 
 type releasePair struct {
-	base *release.VerifiedBundle
-	a    release.VerifiedBundle
-	b    release.VerifiedBundle
+	base       *release.VerifiedBundle
+	a          release.VerifiedBundle
+	b          release.VerifiedBundle
+	skipped    *release.VerifiedBundle
+	mismatched *release.VerifiedBundle
 }
 
 type safeError struct {
@@ -84,6 +88,26 @@ func validateReleaseTransition(a, b release.VerifiedBundle) error {
 	}
 	if _, ok := workloadImage(b.Manifest); !ok {
 		return fail("release-b-workload")
+	}
+	return nil
+}
+
+func validateRejectedPredecessorCandidates(a, b, skipped, mismatched release.VerifiedBundle) error {
+	for _, candidate := range []release.VerifiedBundle{skipped, mismatched} {
+		if candidate.Manifest.Kind != b.Manifest.Kind ||
+			candidate.Manifest.Release.ID != b.Manifest.Release.ID ||
+			candidate.Manifest.Release.Version != b.Manifest.Release.Version ||
+			candidate.Manifest.Release.SourceCommit != b.Manifest.Release.SourceCommit ||
+			candidate.Manifest.Database != b.Manifest.Database ||
+			candidate.Manifest.TopologyDigest != b.Manifest.TopologyDigest ||
+			candidate.Manifest.Release.PreviousID == a.Manifest.Release.ID {
+			return fail("rejected-predecessor-release-contract")
+		}
+	}
+	if skipped.Manifest.Release.PreviousVersion == a.Manifest.Release.Version ||
+		mismatched.Manifest.Release.PreviousVersion != a.Manifest.Release.Version ||
+		skipped.Manifest.Release.PreviousID == mismatched.Manifest.Release.PreviousID {
+		return fail("rejected-predecessor-release-contract")
 	}
 	return nil
 }
