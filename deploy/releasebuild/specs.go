@@ -7,8 +7,8 @@ const (
 	AlpineBaseImageID     = "sha256:28bd5fe8b56d1bd048e5babf5b10710ebe0bae67db86916198a6eec434943f8b"
 	DockerBaseReference   = "docker:27.5.1-dind-alpine3.21"
 	DockerBaseImageID     = "sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce"
-	PostgresReference     = "postgres:18"
 	PostgresImageID       = "sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a"
+	PostgresReference     = "postgres@" + PostgresImageID
 	minimumDockerVersion  = "27.5.1"
 	minimumComposeVersion = "2.33.0"
 )

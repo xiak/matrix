@@ -32,6 +32,13 @@ func TestLocalImageBuildEffectIsNetworkAndPullClosed(t *testing.T) {
 	}
 }
 
+func TestPostgresArchiveSourceDoesNotFollowAMutableTag(t *testing.T) {
+	if PostgresReference != "postgres@"+PostgresImageID ||
+		!allowedImageReference(PostgresReference) || allowedImageReference("postgres:18") {
+		t.Fatal("PostgreSQL archive source must use only its fixed image digest")
+	}
+}
+
 func TestLocalWorkloadShellVerificationIsIsolatedAndNonRoot(t *testing.T) {
 	var observed localCommand
 	effects := &LocalEffects{run: func(_ context.Context, command localCommand) ([]byte, error) {
