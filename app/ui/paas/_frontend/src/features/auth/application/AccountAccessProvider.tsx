@@ -25,7 +25,7 @@ import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDi
 import { httpAccountRepository } from "../repositories/httpIamRepository";
 import { buildAccountAccessScene, buildAccountTenantScene, buildAccountUserScene, findActionCapability, type AccountAccessScene, type AccountUserScene } from "../scenes/accountAccessScene";
 import { userBatchDisabledReason, type UserBatchCommand } from "../domain/userBatch";
-import type { RoleAccess, RoleDirectory, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionRevocation } from "../domain/roles";
+import type { RoleAccess, RoleDirectory, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionListing, RoleSessionRevocation } from "../domain/roles";
 
 type AccountError = "expired" | "forbidden" | "conflict" | "invalid" | "unavailable";
 type WorkspaceExecutionError = AccessWorkspaceError["code"] | AccountError;
@@ -89,6 +89,16 @@ export type RoleAccessClient = {
   revokeSession(roleId: string, sessionId: string, requestId: string): Promise<RoleSessionRevocation>;
 };
 
+export type RoleSessionRevokeIntent = {
+  accountId: string;
+  roleId: string;
+  item: RoleSessionListing;
+  requestId: string;
+  phase: "confirm" | "submitting" | "unknown" | "checking";
+  open: boolean;
+  observation?: RoleSessionListing;
+};
+
 export type PolicyDirectoryView = { query: string; kind: string; service: string; category: string; sort: string; page: number; pageSize: number };
 export const defaultPolicyDirectoryView: PolicyDirectoryView = { query: "", kind: "all", service: "all", category: "all", sort: "name", page: 1, pageSize: 10 };
 export type UserDirectoryView = { query: string; state: string; role: string };
@@ -109,6 +119,8 @@ type AccountAccess = {
   authorizationProfiles: AuthorizationProfileClient | null;
   accessKeys: AccessKeyClient | null;
   roles: RoleAccessClient | null;
+  roleSessionRevokeIntent: RoleSessionRevokeIntent | null;
+  changeRoleSessionRevokeIntent(expectedRequestId: string | null, next: RoleSessionRevokeIntent | null): void;
   scene: AccountAccessScene | null;
   loading: boolean;
   busy: boolean;
@@ -184,6 +196,23 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   // View context survives list/detail navigation, not account/session changes.
   // Keeping it outside React state avoids rerendering the shell on each keystroke.
   const viewSession = useMemo(() => ({ credential, tenantId, principalId }), [credential, tenantId, principalId]);
+  const [storedRoleSessionRevokeIntent, setStoredRoleSessionRevokeIntent] = useState<{ session: typeof viewSession; intent: RoleSessionRevokeIntent } | null>(null);
+  const roleSessionRevokeIntent = storedRoleSessionRevokeIntent?.session === viewSession ? storedRoleSessionRevokeIntent.intent : null;
+  const changeRoleSessionRevokeIntent = useCallback((expectedRequestId: string | null, next: RoleSessionRevokeIntent | null) => {
+    setStoredRoleSessionRevokeIntent((stored) => {
+      const current = stored?.session === viewSession ? stored.intent : null;
+      if (expectedRequestId === null) {
+        if (current || !next || next.accountId !== tenantId || next.item.session.accountId !== tenantId || next.item.session.roleId !== next.roleId) return stored;
+        return { session: viewSession, intent: next };
+      }
+      if (!current || current.requestId !== expectedRequestId) return stored;
+      if (next && (
+        next.requestId !== current.requestId || next.accountId !== current.accountId || next.roleId !== current.roleId ||
+        next.item.session.id !== current.item.session.id || next.item.session.accountId !== current.item.session.accountId || next.item.session.roleId !== current.item.session.roleId
+      )) return stored;
+      return next ? { session: viewSession, intent: next } : null;
+    });
+  }, [tenantId, viewSession]);
   const unrecoverableAccountRule = useRef<{ session: typeof viewSession; intent: PendingAccountRuleChange } | null>(null);
   const storedPolicyView = useRef<{ session: typeof viewSession; view: PolicyDirectoryView } | null>(null);
   const policyDirectoryView = useMemo(() => ({
@@ -472,6 +501,8 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     authorizationProfiles,
     accessKeys,
     roles,
+    roleSessionRevokeIntent: roleSessionRevokeIntent?.accountId === tenantId ? roleSessionRevokeIntent : null,
+    changeRoleSessionRevokeIntent,
     workspace, workspaceError,
     clearWorkspaceError, clearFeedback,
     async executeWorkspace(command, onError) {
@@ -540,7 +571,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       } catch (failure) { setError(accountError(failure)); return false; }
       finally { mutationPending.current = false; setBusy(false); }
     }
-  }), [active, busy, credential, error, loading, repository, scene, success, tenantId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, permissionBoundaries, authorizationProfiles, accessKeys, roles, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
+  }), [active, busy, credential, error, loading, repository, scene, success, tenantId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, permissionBoundaries, authorizationProfiles, accessKeys, roles, roleSessionRevokeIntent, changeRoleSessionRevokeIntent, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
 
   return <AccountCapabilitiesContext.Provider value={capabilities}>
     <AccountAccessContext.Provider value={value}>{children}</AccountAccessContext.Provider>

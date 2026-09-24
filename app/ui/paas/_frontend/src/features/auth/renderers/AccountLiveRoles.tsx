@@ -4,11 +4,11 @@ import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "rea
 import { useTranslations } from "next-intl";
 import { Alert, Badge, Button, Card, ContentPage, EmptyState, Table, TablePagination, TableSkeleton, TableToolbar, Tabs } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
-import { accountError, type RoleAccessClient } from "../application/AccountAccessProvider";
+import { accountError, type RoleAccessClient, type RoleSessionRevokeIntent } from "../application/AccountAccessProvider";
 import type { AccountAccessView } from "../domain/accounts";
 import type { RoleAccess, RoleCapability, RoleListing } from "../domain/roles";
 import { WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
-import { LiveRoleSessions, type LiveRoleSessionRevokeIntent } from "./LiveRoleSessions";
+import { LiveRoleSessions } from "./LiveRoleSessions";
 import styles from "./AccountAccessRenderer.module.css";
 
 type OpenRoleEntity = (view: AccountAccessView, id?: string) => void;
@@ -26,8 +26,8 @@ function RoleDetail({ client, roleId, onOpen, revokeIntent, onRevokeIntentChange
   client: RoleAccessClient;
   roleId: string;
   onOpen: OpenRoleEntity;
-  revokeIntent: LiveRoleSessionRevokeIntent | null;
-  onRevokeIntentChange(intent: LiveRoleSessionRevokeIntent | null): void;
+  revokeIntent: RoleSessionRevokeIntent | null;
+  onRevokeIntentChange(expectedRequestId: string | null, intent: RoleSessionRevokeIntent | null): void;
 }) {
   const t = useTranslations("RoleWorkspace");
   const w = useTranslations("IamWorkspace");
@@ -136,7 +136,13 @@ function RoleDetail({ client, roleId, onOpen, revokeIntent, onRevokeIntentChange
   </WorkspaceDetail>;
 }
 
-export function AccountLiveRoles({ client, entityId, onOpen }: { client: RoleAccessClient; entityId?: string; onOpen: OpenRoleEntity }) {
+export function AccountLiveRoles({ client, entityId, onOpen, revokeIntent, onRevokeIntentChange }: {
+  client: RoleAccessClient;
+  entityId?: string;
+  onOpen: OpenRoleEntity;
+  revokeIntent: RoleSessionRevokeIntent | null;
+  onRevokeIntentChange(expectedRequestId: string | null, intent: RoleSessionRevokeIntent | null): void;
+}) {
   const t = useTranslations("RoleWorkspace");
   const w = useTranslations("IamWorkspace");
   const a = useTranslations("AccountAccess");
@@ -150,7 +156,6 @@ export function AccountLiveRoles({ client, entityId, onOpen }: { client: RoleAcc
   const [state, setState] = useState("all");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
-  const [revokeIntent, setRevokeIntent] = useState<LiveRoleSessionRevokeIntent | null>(null);
   const deferredQuery = useDeferredValue(query);
 
   const retry = useCallback(() => {
@@ -189,7 +194,7 @@ export function AccountLiveRoles({ client, entityId, onOpen }: { client: RoleAcc
   const pages = Math.max(1, Math.ceil(matches.length / pageSize));
   const currentPage = Math.min(page, pages);
 
-  if (entityId) return <RoleDetail client={client} roleId={entityId} onOpen={onOpen} revokeIntent={revokeIntent} onRevokeIntentChange={setRevokeIntent} />;
+  if (entityId) return <RoleDetail client={client} roleId={entityId} onOpen={onOpen} revokeIntent={revokeIntent} onRevokeIntentChange={onRevokeIntentChange} />;
 
   return <Card aria-description={t("liveDirectoryHint")}>
     <ContentPage.Heading title={w("roles")} scrollKey="live-role-directory" />

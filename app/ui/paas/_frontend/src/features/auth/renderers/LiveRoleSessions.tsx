@@ -4,20 +4,12 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { ActionMenu, Alert, Badge, Button, EmptyState, Table, TablePagination, TableSkeleton, TableToolbar } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
-import { accountError, type RoleAccessClient } from "../application/AccountAccessProvider";
+import { accountError, type RoleAccessClient, type RoleSessionRevokeIntent } from "../application/AccountAccessProvider";
 import type { RoleCapability, RoleSessionDirectory, RoleSessionFilter, RoleSessionFilterLifecycle, RoleSessionListing } from "../domain/roles";
 import { WorkspaceTime } from "./AccessWorkspaceUi";
 import styles from "./AccountAccessRenderer.module.css";
 
 const exactIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
-export type LiveRoleSessionRevokeIntent = {
-  item: RoleSessionListing;
-  requestId: string;
-  phase: "confirm" | "submitting" | "unknown" | "checking";
-  open: boolean;
-  observation?: RoleSessionListing;
-};
-
 function replaceSession(directory: RoleSessionDirectory | null, item: RoleSessionListing, filter: RoleSessionFilter): RoleSessionDirectory | null {
   if (!directory) return directory;
   const matchesLifecycle = filter.lifecycle === "ALL" || filter.lifecycle === item.lifecycle;
@@ -29,15 +21,15 @@ export function LiveRoleSessions({ client, roleId, listCapability, revokeIntent,
   client: RoleAccessClient;
   roleId: string;
   listCapability: RoleCapability;
-  revokeIntent: LiveRoleSessionRevokeIntent | null;
-  onRevokeIntentChange(intent: LiveRoleSessionRevokeIntent | null): void;
+  revokeIntent: RoleSessionRevokeIntent | null;
+  onRevokeIntentChange(expectedRequestId: string | null, intent: RoleSessionRevokeIntent | null): void;
 }) {
   const t = useTranslations("RoleWorkspace"), w = useTranslations("IamWorkspace"), a = useTranslations("AccountAccess"), toolbarLabels = useTableToolbarLabels();
   const [queryKind, setQueryKind] = useState<RoleSessionFilter["exactKind"]>("session"), [query, setQuery] = useState(""), [appliedQuery, setAppliedQuery] = useState("");
   const [lifecycle, setLifecycle] = useState<RoleSessionFilterLifecycle>("UNREVOKED"), [directory, setDirectory] = useState<RoleSessionDirectory | null>(null);
   const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading"), [completedRequest, setCompletedRequest] = useState(""), [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null), [page, setPage] = useState(1), [pageSize, setPageSize] = useState(10), [refresh, setRefresh] = useState(0);
-  const ownedRevokeIntent = revokeIntent?.item.session.roleId === roleId ? revokeIntent : null;
+  const ownedRevokeIntent = revokeIntent?.accountId === client.accountId && revokeIntent.roleId === roleId && revokeIntent.item.session.roleId === roleId ? revokeIntent : null;
   const directoryRegion = useRef<HTMLDivElement>(null), heading = useRef<HTMLHeadingElement>(null), returnFocus = useRef<string | null>(null);
   const previousIntentOpen = useRef(ownedRevokeIntent?.open ?? false), requests = useRef(0), pageRequests = useRef(0);
   const normalized = query.trim(), queryValid = !normalized || exactIdPattern.test(normalized);
@@ -71,24 +63,24 @@ export function LiveRoleSessions({ client, roleId, listCapability, revokeIntent,
   if (ownedRevokeIntent?.open) {
     const observed = ownedRevokeIntent.observation;
     const terminalObservation = observed?.lifecycle === "REVOKED" || observed?.lifecycle === "EXPIRED";
-    const close = () => onRevokeIntentChange(ownedRevokeIntent.phase === "unknown" && !terminalObservation ? { ...ownedRevokeIntent, open: false } : null);
+    const close = () => onRevokeIntentChange(ownedRevokeIntent.requestId, ownedRevokeIntent.phase === "unknown" && !terminalObservation ? { ...ownedRevokeIntent, open: false } : null);
     const confirm = async () => {
-      onRevokeIntentChange({ ...ownedRevokeIntent, phase: "submitting" });
+      onRevokeIntentChange(ownedRevokeIntent.requestId, { ...ownedRevokeIntent, phase: "submitting" });
       try {
         const result = await client.revokeSession(roleId, ownedRevokeIntent.item.session.id, ownedRevokeIntent.requestId);
         const revoked: RoleSessionListing = { ...ownedRevokeIntent.item, session: result.session, lifecycle: "REVOKED", revokeCapability: { ...ownedRevokeIntent.item.revokeCapability, available: false, restrictionReason: "SESSION_NOT_REVOCABLE" } };
-        setDirectory((current) => replaceSession(current, revoked, filter)); onRevokeIntentChange(null);
+        setDirectory((current) => replaceSession(current, revoked, filter)); onRevokeIntentChange(ownedRevokeIntent.requestId, null);
       } catch {
-        onRevokeIntentChange({ ...ownedRevokeIntent, phase: "unknown" });
+        onRevokeIntentChange(ownedRevokeIntent.requestId, { ...ownedRevokeIntent, phase: "unknown" });
       }
     };
     const inspect = async () => {
-      onRevokeIntentChange({ ...ownedRevokeIntent, phase: "checking" });
+      onRevokeIntentChange(ownedRevokeIntent.requestId, { ...ownedRevokeIntent, phase: "checking" });
       try {
         const result = await client.readSession(roleId, ownedRevokeIntent.item.session.id);
         setDirectory((current) => replaceSession(current, result.item, filter));
-        onRevokeIntentChange({ ...ownedRevokeIntent, phase: "unknown", observation: result.item });
-      } catch { onRevokeIntentChange({ ...ownedRevokeIntent, phase: "unknown" }); }
+        onRevokeIntentChange(ownedRevokeIntent.requestId, { ...ownedRevokeIntent, phase: "unknown", observation: result.item });
+      } catch { onRevokeIntentChange(ownedRevokeIntent.requestId, { ...ownedRevokeIntent, phase: "unknown" }); }
     };
     const busy = ownedRevokeIntent.phase === "submitting" || ownedRevokeIntent.phase === "checking";
     return <section className={styles.stack} role="group" aria-label={t("revoke")}>
@@ -126,7 +118,7 @@ export function LiveRoleSessions({ client, roleId, listCapability, revokeIntent,
   return <div className={styles.stack} ref={directoryRegion} aria-busy={pending || loadingMore}>
     <div className={styles.actionHeader}><h3 ref={heading} tabIndex={-1}>{t("liveSessions")}</h3><Badge status="success">LIVE</Badge></div>
     <Alert>{t("liveSessionDirectoryHint")}</Alert>
-    {ownedRevokeIntent?.phase === "unknown" ? <div className={styles.stack}><Alert status="warning">{t("pendingUnknownRevoke", { id: ownedRevokeIntent.item.session.id })}</Alert><div className={styles.actions}><Button size="small" variant="secondary" onClick={() => { returnFocus.current = ownedRevokeIntent.item.session.id; onRevokeIntentChange({ ...ownedRevokeIntent, open: true }); }}>{t("resumeUnknownRevoke")}</Button></div></div> : null}
+    {ownedRevokeIntent?.phase === "unknown" ? <div className={styles.stack}><Alert status="warning">{t("pendingUnknownRevoke", { id: ownedRevokeIntent.item.session.id })}</Alert><div className={styles.actions}><Button size="small" variant="secondary" onClick={() => { returnFocus.current = ownedRevokeIntent.item.session.id; onRevokeIntentChange(ownedRevokeIntent.requestId, { ...ownedRevokeIntent, open: true }); }}>{t("resumeUnknownRevoke")}</Button></div></div> : null}
     <TableToolbar labels={toolbarLabels} search={{ label: t(queryKind === "session" ? "exactSessionSearch" : "exactSourceUserSearch"), value: query, onChange: (value) => { setQuery(value); resetDirectoryQuery(); } }}
       filters={[
         { id: "exact-kind", label: t("exactQueryKind"), value: queryKind, defaultValue: "session", onChange: (value) => { setQueryKind(value as RoleSessionFilter["exactKind"]); resetDirectoryQuery(); }, options: [{ value: "session", label: t("sessionId") }, { value: "sourceUser", label: t("sourceUserId") }] },
@@ -137,7 +129,7 @@ export function LiveRoleSessions({ client, roleId, listCapability, revokeIntent,
     {!queryValid ? <Alert status="warning">{t("exactIdInvalid")}</Alert> : null}
     {phase === "loading" ? <TableSkeleton label={t("loadingSessions")} rows={4} /> : null}
     {phase === "error" ? <EmptyState title={t("sessionDirectoryUnavailable")} description={error ?? undefined} action={<Button variant="secondary" onClick={() => { setError(null); setRefresh((value) => value + 1); }}>{t("retry")}</Button>} /> : null}
-      {phase === "ready" && items.length ? <><Table aria-label={t("liveSessions")} mobileLayout="stack"><thead><tr><th scope="col">{t("caller")}</th><th scope="col">{t("sessionStatus")}</th><th scope="col">{t("issued")}</th><th scope="col">{t("expires")}</th><th scope="col">{w("actions")}</th></tr></thead><tbody>{items.slice((current - 1) * pageSize, current * pageSize).map((item) => { const resumesPending = ownedRevokeIntent?.phase === "unknown" && ownedRevokeIntent.item.session.id === item.session.id; const blockedByPending = revokeIntent?.phase === "unknown" && !resumesPending; return <tr key={item.session.id}><td data-label={t("caller")}><strong>{item.sourceUser.loginName}</strong><small>{item.sourceUser.displayName} · {item.sourceUser.id}</small><small>{item.session.id}</small></td><td data-label={t("sessionStatus")}><Badge status={item.lifecycle === "UNREVOKED" ? "success" : "neutral"}>{t(`liveLifecycle.${item.lifecycle}`)}</Badge></td><td data-label={t("issued")}><WorkspaceTime value={item.session.issuedAt} /></td><td data-label={t("expires")}><WorkspaceTime value={item.session.expiresAt} /></td><td data-label={w("actions")}><span data-live-session-actions={item.session.id}><ActionMenu iconOnly label={t("sessionActions", { id: item.session.id })} actions={[{ id: "revoke", label: t(resumesPending ? "resumeUnknownRevoke" : "revoke"), danger: true, disabledReason: blockedByPending ? t("pendingRevokeAnother") : item.revokeCapability.available ? undefined : t("revokeUnavailable"), onSelect: () => { returnFocus.current = item.session.id; onRevokeIntentChange(resumesPending && ownedRevokeIntent ? { ...ownedRevokeIntent, open: true } : { item, requestId: `ui-role-session-revoke-${crypto.randomUUID()}`, phase: "confirm", open: true }); } }]} /></span></td></tr>; })}</tbody></Table><Table.Footer note={t("liveSessionPageHint")}><TablePagination page={current} pages={pages} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} trailing={directory?.nextAfter ? <Button size="small" variant="secondary" disabled={pending || loadingMore} onClick={() => void loadMore()}>{t("loadMore")}</Button> : null} labels={{ summary: w("page", { page: current, pages }), pageSize: w("pageSize"), previous: w("previous"), next: w("next") }} /></Table.Footer></> : null}
+      {phase === "ready" && items.length ? <><Table aria-label={t("liveSessions")} mobileLayout="stack"><thead><tr><th scope="col">{t("caller")}</th><th scope="col">{t("sessionStatus")}</th><th scope="col">{t("issued")}</th><th scope="col">{t("expires")}</th><th scope="col">{w("actions")}</th></tr></thead><tbody>{items.slice((current - 1) * pageSize, current * pageSize).map((item) => { const resumesPending = ownedRevokeIntent?.phase === "unknown" && ownedRevokeIntent.item.session.id === item.session.id; const blockedByPending = Boolean(revokeIntent) && !resumesPending; return <tr key={item.session.id}><td data-label={t("caller")}><strong>{item.sourceUser.loginName}</strong><small>{item.sourceUser.displayName} · {item.sourceUser.id}</small><small>{item.session.id}</small></td><td data-label={t("sessionStatus")}><Badge status={item.lifecycle === "UNREVOKED" ? "success" : "neutral"}>{t(`liveLifecycle.${item.lifecycle}`)}</Badge></td><td data-label={t("issued")}><WorkspaceTime value={item.session.issuedAt} /></td><td data-label={t("expires")}><WorkspaceTime value={item.session.expiresAt} /></td><td data-label={w("actions")}><span data-live-session-actions={item.session.id}><ActionMenu iconOnly label={t("sessionActions", { id: item.session.id })} actions={[{ id: "revoke", label: t(resumesPending ? "resumeUnknownRevoke" : "revoke"), danger: true, disabledReason: blockedByPending ? t("pendingRevokeAnother") : item.revokeCapability.available ? undefined : t("revokeUnavailable"), onSelect: () => { returnFocus.current = item.session.id; if (resumesPending && ownedRevokeIntent) onRevokeIntentChange(ownedRevokeIntent.requestId, { ...ownedRevokeIntent, open: true }); else onRevokeIntentChange(null, { accountId: client.accountId, roleId, item, requestId: `ui-role-session-revoke-${crypto.randomUUID()}`, phase: "confirm", open: true }); } }]} /></span></td></tr>; })}</tbody></Table><Table.Footer note={t("liveSessionPageHint")}><TablePagination page={current} pages={pages} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} trailing={directory?.nextAfter ? <Button size="small" variant="secondary" disabled={pending || loadingMore} onClick={() => void loadMore()}>{t("loadMore")}</Button> : null} labels={{ summary: w("page", { page: current, pages }), pageSize: w("pageSize"), previous: w("previous"), next: w("next") }} /></Table.Footer></> : null}
     {phase === "ready" && !items.length ? <EmptyState title={directory?.nextAfter ? t("emptySessionWindow") : t("noMatchingSessions")} description={directory?.nextAfter ? t("emptySessionWindowHint") : t("noMatchingSessionsHint")} action={directory?.nextAfter ? <Button variant="secondary" disabled={pending || loadingMore} onClick={() => void loadMore()}>{t("continueSessionScan")}</Button> : undefined} /> : null}
     {error && phase === "ready" ? <Alert status="warning">{error}</Alert> : null}
   </div>;

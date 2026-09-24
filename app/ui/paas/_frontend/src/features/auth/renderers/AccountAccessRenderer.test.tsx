@@ -6,10 +6,11 @@ import { UnsavedChangesProvider, useLeaveConfirmation } from "@ui/xiak";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { SessionProvider, useSession } from "../application/SessionProvider";
-import { AccountAccessProvider, useAccountCapabilities } from "../application/AccountAccessProvider";
+import { AccountAccessProvider, useAccountAccess, useAccountCapabilities, type RoleSessionRevokeIntent } from "../application/AccountAccessProvider";
 import type { Account, AccountAccess, AccountAccessView, AccountIdentity, AccountPolicy, ActionCapability, AuthorizationProfileDirectory, CapabilityRestriction, IamAction, PolicyDirectory, User, UserAccess, UserPolicyAttachment, UserPermissionBoundary } from "../domain/accounts";
 import type { AuthenticatorState, NotificationContact } from "../domain/personalSecurity";
 import type { AccountRepository, IamRepository } from "../repositories/iamRepository";
+import type { RoleAccess, RoleCapabilityAction, RoleDirectory } from "../domain/roles";
 import { AccountAccessRenderer } from "./AccountAccessRenderer";
 import { LoginRenderer } from "./LoginRenderer";
 import { buildAccountAccessScene } from "../scenes/accountAccessScene";
@@ -60,6 +61,42 @@ const identity: AccountIdentity = {
 };
 const childUser: User = { ...rootUser, id: "child-a", loginName: "developer", displayName: "Developer A" };
 const child: UserAccess = { user: childUser, policyAttachments: [attachment("child-a", tenantPolicy)], capabilities: userCapabilities(childUser, [attachment("child-a", tenantPolicy)]) };
+const managedRole = {
+  id: "role-reviewer", accountId: account.id, name: "ProductionLogReviewer", description: "Review production logs during an incident",
+  tags: [{ key: "team", value: "operations" }], management: "CUSTOMER" as const, status: "ACTIVE" as const,
+  maxSessionDurationSeconds: 3600, resourceVersion: 3, currentTrustVersionId: "trust-reviewer-v2", createdAt: timestamp, updatedAt: timestamp
+};
+const managedRoleActions: RoleCapabilityAction[] = [
+  "iam.role.read", "iam.role.update", "iam.role.set-status", "iam.role.delete", "iam.role-trust.set",
+  "iam.role-policy-attachment.create", "iam.role.permission-boundary.set", "iam.role.permission-boundary.remove", "iam.role-session.list"
+];
+const managedRoleCapabilities = managedRoleActions.map((action) => ({
+  action, resource: { kind: "ROLE" as const, id: managedRole.id }, available: action !== "iam.role.delete",
+  restrictionReason: action === "iam.role.delete" ? "AUTHORITY_REQUIRED" as const : null
+}));
+const managedRoleDirectory: RoleDirectory = { accountId: account.id, items: [{ role: managedRole, capabilities: managedRoleCapabilities }], nextAfter: null };
+const managedRoleAccess: RoleAccess = {
+  role: managedRole,
+  trustVersion: {
+    id: managedRole.currentTrustVersionId, accountId: account.id, roleId: managedRole.id, createdAt: timestamp,
+    contentDigest: `sha256:${"a".repeat(64)}`,
+    document: { languageVersion: "1", statements: [{ sid: "incident-review", effect: "ALLOW", principals: [{ type: "USER", id: childUser.id }] }] }
+  },
+  policyAttachments: [],
+  capabilities: [...managedRoleCapabilities, {
+    action: "iam.role.assume", resource: { kind: "ROLE", id: managedRole.id }, available: false, restrictionReason: "AUTHORITY_REQUIRED"
+  }]
+};
+const managedRoleSession = {
+  id: "rs1.incident-review", accountId: account.id, roleId: managedRole.id, sourceUserId: childUser.id, status: "ACTIVE" as const,
+  issuedAt: timestamp, expiresAt: "2026-09-21T09:00:00Z", revokedAt: null
+};
+const managedRoleSessionItem = {
+  session: managedRoleSession,
+  sourceUser: { id: childUser.id, loginName: childUser.loginName, displayName: childUser.displayName },
+  lifecycle: "UNREVOKED" as const,
+  revokeCapability: { action: "iam.role-session.revoke" as const, resource: { kind: "ROLE_SESSION" as const, id: managedRoleSession.id }, available: true, restrictionReason: null }
+};
 
 function iam(overrides: Partial<IamRepository> = {}, id = "primary-a"): IamRepository {
   return {
@@ -141,6 +178,29 @@ function CapabilityProbe() {
     <output data-testid="can-manage">{String(capabilities.canListUsers)}</output>
     <output data-testid="can-read-accounts">{String(capabilities.canReadAccounts)}</output>
   </Profiler>;
+}
+
+const accountSwitchIntent: RoleSessionRevokeIntent = {
+  accountId: account.id,
+  roleId: managedRole.id,
+  item: managedRoleSessionItem,
+  requestId: "ui-role-session-revoke-account-switch",
+  phase: "unknown",
+  open: false
+};
+
+function AccountIntentProbe() {
+  const session = useSession();
+  const access = useAccountAccess();
+  return <>
+    <button onClick={() => void session.login("admin-a", "password-a")}>login-a</button>
+    <button onClick={() => void session.logout()}>logout</button>
+    <button onClick={() => void session.login("admin-b", "password-b")}>login-b</button>
+    <button onClick={() => access.changeRoleSessionRevokeIntent(null, accountSwitchIntent)}>remember-revoke</button>
+    <button onClick={() => access.changeRoleSessionRevokeIntent(accountSwitchIntent.requestId, { ...accountSwitchIntent, phase: "checking" })}>late-old-update</button>
+    <output aria-label="active-account">{access.scene?.accountId ?? "none"}</output>
+    <output aria-label="pending-revoke">{access.roleSessionRevokeIntent?.requestId ?? "none"}</output>
+  </>;
 }
 
 function AuthenticatedAccess({ repository, initialView }: { repository: AccountRepository; initialView: AccountAccessView }) {
@@ -790,6 +850,89 @@ describe("account access", () => {
     expect(await screen.findByText(/权限能力目录暂时不可用/)).toBeTruthy();
     await user.click(screen.getByRole("tab", { name: "策略目录" }));
     expect(screen.getByRole("table", { name: "策略元数据目录" })).toBeTruthy();
+  });
+
+  it("retains one uncertain role-session revoke across the real keyed directory navigation boundary", async () => {
+    const roleIdentity: AccountIdentity = { ...identity, capabilities: [
+      ...identity.capabilities,
+      capability("iam.role.list", "ACCOUNT", account.id),
+      capability("iam.role.create", "ACCOUNT", "collection")
+    ] };
+    const revoked = { ...managedRoleSession, status: "REVOKED" as const, revokedAt: "2026-09-21T08:31:00Z" };
+    const revokeSession = vi.fn().mockRejectedValueOnce(new Error("connection lost after submit")).mockResolvedValue({ outcome: "EQUAL_REPLAY" as const, session: revoked });
+    const repository = accounts({
+      currentIdentity: vi.fn().mockResolvedValue(roleIdentity),
+      roles: {
+        list: vi.fn().mockResolvedValue(managedRoleDirectory),
+        read: vi.fn().mockResolvedValue(managedRoleAccess),
+        listSessions: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, observedAt: timestamp, items: [managedRoleSessionItem], nextAfter: null }),
+        readSession: vi.fn().mockResolvedValue({ observedAt: timestamp, item: managedRoleSessionItem }),
+        revokeSession
+      }
+    });
+    const { user } = await openAccess(repository, iam(), "roles");
+
+    await user.click(await screen.findByRole("button", { name: managedRole.name }));
+    await user.click(await screen.findByRole("tab", { name: "角色会话" }));
+    await user.click(await screen.findByRole("button", { name: `会话 ${managedRoleSession.id} 的操作` }));
+    await user.click(screen.getByRole("menuitem", { name: "撤销会话" }));
+    let workflow = screen.getByRole("group", { name: "撤销会话" });
+    await user.click(within(workflow).getByRole("button", { name: "撤销会话" }));
+    expect(await within(workflow).findByText("撤销结果尚未确认", { exact: false })).toBeTruthy();
+    const originalRequestId = revokeSession.mock.calls[0]?.[4];
+    await user.click(within(workflow).getByRole("button", { name: "取消" }));
+    await user.click(screen.getByRole("button", { name: "返回列表" }));
+    await user.click(await screen.findByRole("button", { name: managedRole.name }));
+    await user.click(await screen.findByRole("tab", { name: "角色会话" }));
+    await user.click(await screen.findByRole("button", { name: "继续处理未知结果" }));
+    workflow = screen.getByRole("group", { name: "撤销会话" });
+    expect(within(workflow).getByText(originalRequestId ?? "missing")).toBeTruthy();
+    await user.click(within(workflow).getByRole("button", { name: "重试原请求" }));
+    await waitFor(() => expect(revokeSession).toHaveBeenCalledTimes(2));
+    expect(revokeSession.mock.calls[1]?.[4]).toBe(originalRequestId);
+  });
+
+  it("clears a pending role-session revoke across accounts and rejects a late callback from the old account", async () => {
+    const identityFor = (suffix: "a" | "b"): AccountIdentity => {
+      const tenant = `tenant-${suffix}`;
+      const principal = `primary-${suffix}`;
+      return {
+        account: { id: tenant, displayName: `Team ${suffix.toUpperCase()}`, status: "ACTIVE", rootIdentity: { principalId: principal, loginName: `admin-${suffix}` }, loginAlias: null, resourceVersion: 1 },
+        user: { id: principal, accountId: tenant, loginName: `admin-${suffix}`, displayName: `Admin ${suffix.toUpperCase()}`, status: "ACTIVE", resourceVersion: 1, mustChangePassword: false },
+        identityKind: "ROOT_IDENTITY",
+        policySources: [],
+        permissionBoundary: { accountId: tenant, userId: principal, resourceVersion: 1, policy: null },
+        capabilities: []
+      };
+    };
+    const auth = iam({
+      login: vi.fn(async ({ loginName }) => {
+        const suffix = loginName.endsWith("-b") ? "b" : "a";
+        return { outcome: "AUTHENTICATED" as const, credential: `credential-tenant-${suffix}`, mustChangePassword: false, session: { id: `session-${suffix}`, organizationId: `tenant-${suffix}`, principalId: `primary-${suffix}`, status: "ACTIVE" as const, issuedAt: timestamp, expiresAt: "2099-08-27T00:00:00Z" } };
+      })
+    });
+    const repository = accounts({
+      currentIdentity: vi.fn(async (activeCredential: string) => identityFor(activeCredential.endsWith("-b") ? "b" : "a")),
+      listPolicies: vi.fn(async (activeCredential: string, platform: boolean) => ({
+        accountId: activeCredential.endsWith("-b") ? "tenant-b" : "tenant-a",
+        scope: platform ? "INSTALLATION" as const : "TENANT" as const,
+        installationId: platform ? "installation-test" : null,
+        items: []
+      }))
+    });
+    const user = userEvent.setup();
+    render(<LocaleProvider><SessionProvider repository={auth}><AccountAccessProvider repository={repository}><AccountIntentProbe /></AccountAccessProvider></SessionProvider></LocaleProvider>);
+
+    await user.click(screen.getByRole("button", { name: "login-a" }));
+    await waitFor(() => expect(screen.getByLabelText("active-account").textContent).toBe("tenant-a"));
+    await user.click(screen.getByRole("button", { name: "remember-revoke" }));
+    expect(screen.getByLabelText("pending-revoke").textContent).toBe(accountSwitchIntent.requestId);
+    await user.click(screen.getByRole("button", { name: "logout" }));
+    await waitFor(() => expect(screen.getByLabelText("pending-revoke").textContent).toBe("none"));
+    await user.click(screen.getByRole("button", { name: "login-b" }));
+    await waitFor(() => expect(screen.getByLabelText("active-account").textContent).toBe("tenant-b"));
+    await user.click(screen.getByRole("button", { name: "late-old-update" }));
+    expect(screen.getByLabelText("pending-revoke").textContent).toBe("none");
   });
 
   it("fails the live scene without substituting MOCK data when a policy directory has a non-authorization error", async () => {

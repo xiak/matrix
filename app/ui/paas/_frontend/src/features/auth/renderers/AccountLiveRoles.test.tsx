@@ -1,8 +1,10 @@
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useState } from "react";
 import { LocaleProvider } from "@/i18n/LocaleProvider";
-import type { RoleAccessClient } from "../application/AccountAccessProvider";
+import type { RoleAccessClient, RoleSessionRevokeIntent } from "../application/AccountAccessProvider";
+import type { AccountAccessView } from "../domain/accounts";
 import type { RoleAccess, RoleCapabilityAction, RoleDirectory } from "../domain/roles";
 import { AccountLiveRoles } from "./AccountLiveRoles";
 
@@ -60,13 +62,22 @@ function client(overrides: Partial<RoleAccessClient> = {}): RoleAccessClient {
   };
 }
 
+function RolesHarness({ api, entityId, onOpen = vi.fn() }: { api: RoleAccessClient; entityId?: string; onOpen?: (view: AccountAccessView, id?: string) => void }) {
+  const [intent, setIntent] = useState<RoleSessionRevokeIntent | null>(null);
+  const changeIntent = (expectedRequestId: string | null, next: RoleSessionRevokeIntent | null) => setIntent((current) => {
+    if (expectedRequestId === null) return current ?? next;
+    return current?.requestId === expectedRequestId ? next : current;
+  });
+  return <AccountLiveRoles client={api} entityId={entityId} onOpen={onOpen} revokeIntent={intent} onRevokeIntentChange={changeIntent} />;
+}
+
 afterEach(cleanup);
 
 describe("AccountLiveRoles", () => {
   it("keeps the fixed directory shell visible while only role data loads", async () => {
     let resolve!: (value: RoleDirectory) => void;
     const api = client({ list: vi.fn().mockImplementation(() => new Promise<RoleDirectory>((done) => { resolve = done; })) });
-    render(<LocaleProvider><AccountLiveRoles client={api} onOpen={vi.fn()} /></LocaleProvider>);
+    render(<LocaleProvider><RolesHarness api={api} /></LocaleProvider>);
 
     expect(screen.getByRole("heading", { name: "角色" })).toBeTruthy();
     expect(screen.getByText("角色是可被信任身份申请的临时身份", { exact: false })).toBeTruthy();
@@ -79,7 +90,7 @@ describe("AccountLiveRoles", () => {
   it("opens an inline detail with distinct trust, grant and capability evidence", async () => {
     const user = userEvent.setup();
     const api = client();
-    render(<LocaleProvider><AccountLiveRoles client={api} entityId={role.id} onOpen={vi.fn()} /></LocaleProvider>);
+    render(<LocaleProvider><RolesHarness api={api} entityId={role.id} /></LocaleProvider>);
 
     expect(screen.getByRole("heading", { name: role.id })).toBeTruthy();
     expect(await screen.findByRole("heading", { name: role.name })).toBeTruthy();
@@ -101,7 +112,7 @@ describe("AccountLiveRoles", () => {
       readSession: vi.fn().mockResolvedValue({ observedAt: "2026-09-21T08:30:10Z", item: liveSessionItem }),
       revokeSession: vi.fn().mockRejectedValueOnce(new Error("connection lost")).mockResolvedValue({ outcome: "APPLIED", session: revoked })
     });
-    render(<LocaleProvider><AccountLiveRoles client={api} entityId={role.id} onOpen={vi.fn()} /></LocaleProvider>);
+    render(<LocaleProvider><RolesHarness api={api} entityId={role.id} /></LocaleProvider>);
 
     expect(await screen.findByRole("heading", { name: role.name })).toBeTruthy();
     expect(api.listSessions).not.toHaveBeenCalled();
@@ -153,7 +164,7 @@ describe("AccountLiveRoles", () => {
         return Promise.resolve({ accountId: role.accountId, roleId: role.id, observedAt: "2026-09-21T08:30:00Z", items: [], nextAfter: "ic1.unrevoked" });
       })
     });
-    render(<LocaleProvider><AccountLiveRoles client={api} entityId={role.id} onOpen={vi.fn()} /></LocaleProvider>);
+    render(<LocaleProvider><RolesHarness api={api} entityId={role.id} /></LocaleProvider>);
 
     await user.click(await screen.findByRole("tab", { name: "角色会话" }));
     expect(await screen.findByRole("heading", { name: "当前扫描窗口没有匹配会话" })).toBeTruthy();
@@ -176,7 +187,7 @@ describe("AccountLiveRoles", () => {
       readSession: vi.fn().mockResolvedValue({ observedAt: "2026-09-21T08:30:00Z", item: expiredItem }),
       revokeSession: vi.fn().mockRejectedValue(new Error("connection lost"))
     });
-    render(<LocaleProvider><AccountLiveRoles client={api} entityId={role.id} onOpen={vi.fn()} /></LocaleProvider>);
+    render(<LocaleProvider><RolesHarness api={api} entityId={role.id} /></LocaleProvider>);
 
     await user.click(await screen.findByRole("tab", { name: "角色会话" }));
     await user.click(await screen.findByRole("button", { name: `会话 ${liveSession.id} 的操作` }));
@@ -191,7 +202,7 @@ describe("AccountLiveRoles", () => {
 
   it("shows a local LIVE error and never substitutes preview role data", async () => {
     const api = client({ list: vi.fn().mockRejectedValue(new Error("network")) });
-    render(<LocaleProvider><AccountLiveRoles client={api} onOpen={vi.fn()} /></LocaleProvider>);
+    render(<LocaleProvider><RolesHarness api={api} /></LocaleProvider>);
 
     expect(await screen.findByRole("heading", { name: "角色目录暂时不可用" })).toBeTruthy();
     expect(screen.queryByText("SupportRole")).toBeNull();
