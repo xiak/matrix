@@ -6,7 +6,7 @@
 - Updated: 2026-09-25
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `f6312fef`
+- Pushed UI source: `c724696d`
 
 ## Authoritative route
 
@@ -33,9 +33,9 @@ with another branch's renderer or inherit that branch's UI acceptance.
 
 The current milestone keeps the independent MOCK preview, fixed-contract LIVE
 paths and synchronized static Go host. It aligns Root UX with the IAM target
-architecture and gives both policy directories readable compact rows without
-adding a LIVE contract. The shared development gates passed; detailed behavior,
-evidence and open real-process gates remain only in the FEAT owners.
+architecture and gives policy and user directories readable compact rows
+without adding a LIVE contract. The shared development gates passed; detailed
+behavior, evidence and open real-process gates remain only in the FEAT owners.
 
 ## Continuation
 
