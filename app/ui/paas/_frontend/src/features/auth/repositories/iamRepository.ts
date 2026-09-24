@@ -28,7 +28,7 @@ import type { AccessWorkspace, AccessWorkspaceCommand } from "../domain/accessWo
 import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDirectory, AccessKeyStatus, AccessKeyStatusChange } from "../domain/accessKeys";
 import type { AuthenticatorState, NotificationContact, NotificationContactVerification, TOTPEnrollment, TOTPEnrollmentConfirmation, TOTPEnrollmentStart } from "../domain/personalSecurity";
 import type { UserBatchCommand } from "../domain/userBatch";
-import type { RoleAccess, RoleDirectory, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionRevocation } from "../domain/roles";
+import type { CreateRoleCommand, Role, RoleAccess, RoleDirectory, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionRevocation } from "../domain/roles";
 
 export type LoginCommand = { loginName: string; password: string };
 export type ChangePasswordCommand = { currentPassword: string; newPassword: string; revokeOtherSessions?: boolean };
@@ -122,6 +122,7 @@ export interface AccountRepository {
   roles?: {
     list(credential: string, accountId: string, after?: string): Promise<RoleDirectory>;
     read(credential: string, accountId: string, roleId: string): Promise<RoleAccess>;
+    create(credential: string, accountId: string, command: CreateRoleCommand): Promise<Role>;
     listSessions(credential: string, accountId: string, roleId: string, filter: RoleSessionFilter, after?: string): Promise<RoleSessionDirectory>;
     readSession(credential: string, accountId: string, roleId: string, sessionId: string): Promise<RoleSessionAccess>;
     revokeSession(credential: string, accountId: string, roleId: string, sessionId: string, requestId: string): Promise<RoleSessionRevocation>;

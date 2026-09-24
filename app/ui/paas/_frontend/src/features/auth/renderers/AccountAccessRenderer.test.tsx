@@ -852,6 +852,55 @@ describe("account access", () => {
     expect(screen.getByRole("table", { name: "策略元数据目录" })).toBeTruthy();
   });
 
+  it("creates a live role in the content area and retains the exact request after an unknown result", async () => {
+    const roleIdentity: AccountIdentity = { ...identity, capabilities: [
+      ...identity.capabilities,
+      capability("iam.role.list", "ACCOUNT", account.id),
+      capability("iam.role.create", "ACCOUNT", account.id)
+    ] };
+    const create = vi.fn()
+      .mockRejectedValueOnce(new Error("connection lost after submit"))
+      .mockResolvedValue({ ...managedRole, name: "IncidentResponder", description: "Temporary incident response" });
+    const repository = accounts({
+      currentIdentity: vi.fn().mockResolvedValue(roleIdentity),
+      roles: {
+        list: vi.fn().mockResolvedValue(managedRoleDirectory),
+        read: vi.fn().mockResolvedValue(managedRoleAccess),
+        create,
+        listSessions: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, observedAt: timestamp, items: [], nextAfter: null }),
+        readSession: vi.fn().mockRejectedValue(new Error("unused session read")),
+        revokeSession: vi.fn().mockRejectedValue(new Error("unused session revoke"))
+      }
+    });
+    const { user } = await openAccess(repository, iam(), "roles");
+
+    await user.click(await screen.findByRole("button", { name: "新建角色" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    expect(screen.getByRole("alert").textContent).toContain("至少选择一名");
+    await user.click(screen.getByRole("checkbox", { name: "developer" }));
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.type(screen.getByLabelText("名称", { exact: true }), "IncidentResponder");
+    await user.type(screen.getByLabelText("描述", { exact: true }), "Temporary incident response");
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    expect(create).not.toHaveBeenCalled();
+    expect(screen.getByText("本次命令只创建角色元数据", { exact: false })).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "新建角色" }));
+    expect(await screen.findByText("创建结果尚未确认", { exact: false })).toBeTruthy();
+    const original = create.mock.calls[0]?.[2];
+    expect(original).toMatchObject({
+      name: "IncidentResponder",
+      description: "Temporary incident response",
+      maxSessionDurationSeconds: 3600,
+      trustPolicy: { statements: [{ principals: [{ type: "USER", id: childUser.id }] }] }
+    });
+    await user.click(screen.getByRole("button", { name: "重试原请求" }));
+    expect(await screen.findByRole("heading", { name: "角色已创建" })).toBeTruthy();
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(create.mock.calls[1]?.[2]).toEqual(original);
+  });
+
   it("retains one uncertain role-session revoke across the real keyed directory navigation boundary", async () => {
     const roleIdentity: AccountIdentity = { ...identity, capabilities: [
       ...identity.capabilities,
@@ -865,6 +914,7 @@ describe("account access", () => {
       roles: {
         list: vi.fn().mockResolvedValue(managedRoleDirectory),
         read: vi.fn().mockResolvedValue(managedRoleAccess),
+        create: vi.fn().mockResolvedValue(managedRole),
         listSessions: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, observedAt: timestamp, items: [managedRoleSessionItem], nextAfter: null }),
         readSession: vi.fn().mockResolvedValue({ observedAt: timestamp, item: managedRoleSessionItem }),
         revokeSession

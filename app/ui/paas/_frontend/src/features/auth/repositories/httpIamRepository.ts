@@ -1338,6 +1338,27 @@ export const httpAccountRepository: AccountRepository = {
       await verifyRoleTrustDigest(access.trustVersion);
       return access;
     },
+    async create(credential, accountId, command) {
+      const owner = accountIdentifier(accountId);
+      const name = groupText(command.name, 1, 64);
+      const description = groupText(command.description, 0, 512);
+      const tags = command.tags.map((tag) => ({ key: groupText(tag.key, 1, 64), value: groupText(tag.value, 0, 256) }));
+      const maxSessionDurationSeconds = command.maxSessionDurationSeconds;
+      const trustPolicy = parseRoleTrustDocument(command.trustPolicy);
+      const requestId = accountIdentifier(command.requestId);
+      if (tags.length > 50 || new Set(tags.map((tag) => tag.key)).size !== tags.length ||
+          tags.reduce((size, tag) => size + tag.key.length + tag.value.length, name.length + description.length) > 4096 ||
+          !Number.isSafeInteger(maxSessionDurationSeconds) || maxSessionDurationSeconds < 60 || maxSessionDurationSeconds > 43200) {
+        throw new Error("INVALID_IAM_REQUEST");
+      }
+      const role = parseRole(await postAccount(credential, "/api/iam/v1/roles", {
+        name, description, tags, maxSessionDurationSeconds, trustPolicy, requestId
+      }));
+      if (role.accountId !== owner || role.name !== name || role.description !== description ||
+          role.maxSessionDurationSeconds !== maxSessionDurationSeconds || role.status !== "ACTIVE" ||
+          JSON.stringify(role.tags) !== JSON.stringify(tags)) throw new Error("INVALID_IAM_RESPONSE");
+      return role;
+    },
     async listSessions(credential, accountId, roleId, filter, after) {
       const target = accountIdentifier(roleId);
       return parseRoleSessionDirectory(await requestJSON<unknown>(

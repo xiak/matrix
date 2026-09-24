@@ -31,6 +31,7 @@ import { OwnSessionsPage } from "./OwnSessionsPage";
 import { LivePersonalSecuritySettings } from "./LivePersonalSecuritySettings";
 import { RoleSelfServicePreview } from "./RoleSelfServicePreview";
 import { AccountLiveRoles } from "./AccountLiveRoles";
+import { LiveRoleCreationWizard } from "./LiveRoleCreationWizard";
 import styles from "./AccountAccessRenderer.module.css";
 
 const aliasPattern = "[a-z][a-z0-9\\-]{1,61}[a-z0-9]";
@@ -108,6 +109,7 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
     (view === "create-user" && !scene.canCreateUsers) ||
     (view === "groups" && !(workspace ? scene.canListUsers : scene.canListGroups)) ||
     (view === "roles" && (workspace ? !scene.canListUsers : capabilities.supportsLiveRoles && !scene.canListRoles)) ||
+    (view === "create-role" && !workspace && (!access.roles || !scene.canCreateRoles)) ||
     (view === "create-group" && !(workspace ? scene.canListUsers : scene.canCreateGroups)) ||
     (view === "tenants" && !scene.canReadAccounts) ||
     (view === "policies" && !(workspace ? scene.canListUsers : scene.canViewPolicies)) ||
@@ -128,7 +130,8 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
       view === "create-group" ? <GroupCreationWizard workspace={workspace ?? undefined} onBack={() => onNavigate("groups")} onDone={(id) => onNavigate("groups", id)} /> :
       view === "groups" && workspace ? <AccessGroups key={entityId ?? "groups"} entityId={entityId} workspace={workspace} scene={scene} onCreate={() => onNavigate("create-group")} onOpen={onNavigate} /> :
       view === "groups" && access.groups ? <AccountLiveGroups key={`${access.groups.accountId}:${entityId ?? "groups"}`} client={access.groups} entityId={entityId} scene={scene} onCreate={() => onNavigate("create-group")} onOpen={onNavigate} /> :
-      view === "roles" && !workspace && access.roles ? <AccountLiveRoles key={`${access.roles.accountId}:${entityId ?? "roles"}`} client={access.roles} entityId={entityId} onOpen={onNavigate} revokeIntent={access.roleSessionRevokeIntent} onRevokeIntentChange={access.changeRoleSessionRevokeIntent} /> :
+      view === "roles" && !workspace && access.roles ? <AccountLiveRoles key={`${access.roles.accountId}:${entityId ?? "roles"}`} client={access.roles} entityId={entityId} onCreate={() => onNavigate("create-role")} onOpen={onNavigate} revokeIntent={access.roleSessionRevokeIntent} onRevokeIntentChange={access.changeRoleSessionRevokeIntent} /> :
+      view === "create-role" && !workspace && access.roles ? <LiveRoleCreationWizard client={access.roles} scene={scene} onBack={() => onNavigate("roles")} onDone={(id) => onNavigate("roles", id)} /> :
       view === "keys" && !workspace && access.accessKeys ? <LiveAccessCredentials client={access.accessKeys} scene={scene} /> :
       !workspace ? <EmptyState title={w("notConnected")} description={w("notConnectedHint")} /> :
       view === "create-policy" ? <PolicyAuthoringWizard method={policyCreationMethod(policyMethod)} workspace={workspace} scene={scene} doneLabel={w("finishBack")} onBack={() => onNavigate("policies")} onDone={() => onNavigate("policies")} /> :

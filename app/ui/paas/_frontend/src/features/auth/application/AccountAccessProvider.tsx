@@ -25,7 +25,7 @@ import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDi
 import { httpAccountRepository } from "../repositories/httpIamRepository";
 import { buildAccountAccessScene, buildAccountTenantScene, buildAccountUserScene, findActionCapability, type AccountAccessScene, type AccountUserScene } from "../scenes/accountAccessScene";
 import { userBatchDisabledReason, type UserBatchCommand } from "../domain/userBatch";
-import type { RoleAccess, RoleDirectory, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionListing, RoleSessionRevocation } from "../domain/roles";
+import type { CreateRoleCommand, Role, RoleAccess, RoleDirectory, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionListing, RoleSessionRevocation } from "../domain/roles";
 
 type AccountError = "expired" | "forbidden" | "conflict" | "invalid" | "unavailable";
 type WorkspaceExecutionError = AccessWorkspaceError["code"] | AccountError;
@@ -82,8 +82,11 @@ export type AccessKeyClient = {
 
 export type RoleAccessClient = {
   accountId: string;
+  canCreate: boolean;
+  createRestrictionReason: CapabilityRestriction | null;
   list(after?: string): Promise<RoleDirectory>;
   read(roleId: string): Promise<RoleAccess>;
+  create(command: CreateRoleCommand): Promise<Role>;
   listSessions(roleId: string, filter: RoleSessionFilter, after?: string): Promise<RoleSessionDirectory>;
   readSession(roleId: string, sessionId: string): Promise<RoleSessionAccess>;
   revokeSession(roleId: string, sessionId: string, requestId: string): Promise<RoleSessionRevocation>;
@@ -402,7 +405,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
 
   const roles = useMemo<RoleAccessClient | null>(() => {
     const roleRepository = repository.roles;
-    if (!active || !credential || !scene || scene.accountId !== tenantId || !roleRepository || !scene.canListRoles) return null;
+    if (!active || !credential || !scene || scene.accountId !== tenantId || !roleRepository || (!scene.canListRoles && !scene.canCreateRoles)) return null;
     const accountId = scene.accountId;
     const scoped = async <T,>(request: Promise<T>): Promise<T> => {
       try { return await request; }
@@ -415,13 +418,16 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     };
     return {
       accountId,
+      canCreate: scene.canCreateRoles,
+      createRestrictionReason: scene.createRolesRestrictionReason,
       list: (after) => scoped(roleRepository.list(credential, accountId, after)),
       read: (roleId) => scoped(roleRepository.read(credential, accountId, roleId)),
+      create: (command) => protectedMutation(() => scoped(roleRepository.create(credential, accountId, command))),
       listSessions: (roleId, filter, after) => scoped(roleRepository.listSessions(credential, accountId, roleId, filter, after)),
       readSession: (roleId, sessionId) => scoped(roleRepository.readSession(credential, accountId, roleId, sessionId)),
       revokeSession: (roleId, sessionId, requestId) => scoped(roleRepository.revokeSession(credential, accountId, roleId, sessionId, requestId))
     };
-  }, [active, credential, expireSession, repository, scene, tenantId]);
+  }, [active, credential, expireSession, protectedMutation, repository, scene, tenantId]);
 
   const loadUsersPage = useCallback(async (after: string) => {
     if (!active || !credential || !scene || loading || mutationPending.current) return;

@@ -62,6 +62,15 @@ export type RoleTrustVersion = {
   createdAt: string;
 };
 
+export type CreateRoleCommand = {
+  name: string;
+  description: string;
+  tags: RoleTag[];
+  maxSessionDurationSeconds: number;
+  trustPolicy: RoleTrustDocument;
+  requestId: string;
+};
+
 export type RolePolicyAttachment = {
   id: string;
   accountId: string;

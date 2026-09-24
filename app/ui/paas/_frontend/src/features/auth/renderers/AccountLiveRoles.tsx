@@ -2,6 +2,7 @@
 
 import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
+import { Plus } from "lucide-react";
 import { Alert, Badge, Button, Card, ContentPage, EmptyState, Table, TablePagination, TableSkeleton, TableToolbar, Tabs } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import { accountError, type RoleAccessClient, type RoleSessionRevokeIntent } from "../application/AccountAccessProvider";
@@ -136,9 +137,10 @@ function RoleDetail({ client, roleId, onOpen, revokeIntent, onRevokeIntentChange
   </WorkspaceDetail>;
 }
 
-export function AccountLiveRoles({ client, entityId, onOpen, revokeIntent, onRevokeIntentChange }: {
+export function AccountLiveRoles({ client, entityId, onCreate, onOpen, revokeIntent, onRevokeIntentChange }: {
   client: RoleAccessClient;
   entityId?: string;
+  onCreate(): void;
   onOpen: OpenRoleEntity;
   revokeIntent: RoleSessionRevokeIntent | null;
   onRevokeIntentChange(expectedRequestId: string | null, intent: RoleSessionRevokeIntent | null): void;
@@ -197,7 +199,8 @@ export function AccountLiveRoles({ client, entityId, onOpen, revokeIntent, onRev
   if (entityId) return <RoleDetail client={client} roleId={entityId} onOpen={onOpen} revokeIntent={revokeIntent} onRevokeIntentChange={onRevokeIntentChange} />;
 
   return <Card aria-description={t("liveDirectoryHint")}>
-    <ContentPage.Heading title={w("roles")} scrollKey="live-role-directory" />
+    <ContentPage.Heading title={w("roles")} scrollKey="live-role-directory" actions={<ContentPage.Commands label={w("roles")}
+      primary={{ id: "create", label: w("createRole"), icon: <Plus aria-hidden="true" />, disabled: !client.canCreate, disabledReason: client.createRestrictionReason ?? undefined, onSelect: onCreate }} />} />
     <div className={styles.policyDirectoryIntro}><p>{t("liveDirectoryHint")}</p></div>
     <TableToolbar
       labels={toolbarLabels}

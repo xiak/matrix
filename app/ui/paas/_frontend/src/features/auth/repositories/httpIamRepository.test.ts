@@ -187,6 +187,44 @@ describe("IAM HTTP role boundary", () => {
     expect(result.policyAttachments[0]?.target).toEqual({ kind: "ROLE", id: role.id });
   });
 
+  it("creates a role with only metadata, USER trust and one retained request ID", async () => {
+    const trustPolicy = { languageVersion: "1" as const, statements: [{ sid: "trusted-users", effect: "ALLOW" as const, principals: [{ type: "USER" as const, id: user.id }] }] };
+    const fetcher = reply(role);
+    const created = await httpAccountRepository.roles!.create("bearer", account.id, {
+      name: role.name,
+      description: role.description,
+      tags: role.tags,
+      maxSessionDurationSeconds: role.maxSessionDurationSeconds,
+      trustPolicy,
+      requestId: "ui-create-role-one"
+    });
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/roles");
+    expect(requestBody(fetcher)).toEqual({
+      name: role.name,
+      description: role.description,
+      tags: role.tags,
+      maxSessionDurationSeconds: role.maxSessionDurationSeconds,
+      trustPolicy,
+      requestId: "ui-create-role-one"
+    });
+    expect(created).toMatchObject({ id: role.id, accountId: account.id, status: "ACTIVE" });
+  });
+
+  it("rejects a create response that changes the submitted owner or metadata", async () => {
+    const command = {
+      name: role.name,
+      description: role.description,
+      tags: role.tags,
+      maxSessionDurationSeconds: role.maxSessionDurationSeconds,
+      trustPolicy: { languageVersion: "1" as const, statements: [{ sid: "trusted-users", effect: "ALLOW" as const, principals: [{ type: "USER" as const, id: user.id }] }] },
+      requestId: "ui-create-role-one"
+    };
+    for (const response of [{ ...role, accountId: "account-foreign" }, { ...role, name: "DifferentRole" }, { ...role, status: "DISABLED" }]) {
+      reply(response);
+      await expect(httpAccountRepository.roles!.create("bearer", account.id, command)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+  });
+
   it("rejects foreign ownership, invented trust carriers, mismatched revisions and bad digests", async () => {
     const base = await roleAccess();
     const invalid = [

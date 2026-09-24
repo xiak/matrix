@@ -2018,7 +2018,19 @@
     "saving": "正在创建…",
     "created": "角色已创建",
     "createdHint": "仅保存到本次 MOCK 会话；未改变真实权限、凭证或登录身份。",
+    "liveCreatedHint": "IAM 已创建角色及首个不可变信任版本。角色仍未获得业务资源权限，且必须另行设置权限边界后才能承担。",
+    "liveCreateHint": "连接 IAM · 创建客户管理角色",
     "viewRole": "查看角色",
+    "liveSteps": {
+      "trust": "选择可信用户",
+      "details": "填写角色信息",
+      "review": "审阅并创建"
+    },
+    "liveHints": {
+      "trust": "首版只接受当前账号中的明确用户；信任不会授予用户承担权限，也不会授予角色资源权限。",
+      "details": "设置角色名称、标签和新会话最长有效期。角色没有密码或长期访问密钥。",
+      "review": "核对创建意图。权限策略、权限边界及调用者的承担授权必须在角色详情中分别配置。"
+    },
     "steps": {
       "trust": "选择可信身份",
       "permissions": "配置角色权限",
@@ -2040,6 +2052,7 @@
     "trustedUsers": "可信用户",
     "choosePrincipal": "请选择身份",
     "durationHint": "15–720 分钟，限制新会话可申请的最长有效期。",
+    "liveDurationHint": "1–720 分钟。该上限仅约束以后签发的新会话。",
     "consoleHint": "仅声明控制台访问意图；体验环境不会实际登录为该角色。",
     "boundary": "权限边界",
     "boundaryHint": "权限边界限制权限上限，必须同时被授权策略和边界允许才能访问。边界本身不授予权限，始终使用策略的当前默认版本。",
@@ -2061,6 +2074,18 @@
     "reviewHint": "创建信任关系并不自动授予调用者扮演权限。账号用户仍需显式拥有 iam:assumeRole 授权。",
     "cancelTitle": "放弃角色草稿？",
     "cancelHint": "将丢弃尚未保存的信任配置、策略及角色信息，不会创建任何角色。",
+    "liveCancelHint": "将丢弃尚未提交的可信用户及角色信息，不会创建任何角色。",
+    "unknownLeaveTitle": "离开结果未知的创建请求？",
+    "unknownLeaveHint": "IAM 可能已经创建角色。离开会丢失原请求 ID，之后不能把新请求当作本次重试。",
+    "liveTrustCreateHint": "可信用户仍需被策略显式授予该角色的 iam.role.assume 操作；信任策略只是承担准入的一侧。",
+    "loadedUsersOnly": "当前只显示已加载的用户目录。需要选择其他用户时，请先返回用户列表继续加载；这里不会猜测未读取的身份。",
+    "liveCreationScope": "本次命令只创建角色元数据和首个 USER 信任版本，不关联权限策略、不设置权限边界，也不签发凭证。",
+    "createOutcomeUnknown": "创建结果尚未确认。已锁定原始内容和请求 ID；只能使用下方按钮重试完全相同的请求：",
+    "liveErrors": {
+      "invalidTrust": "请至少选择一名当前已加载且属于本账号的用户。",
+      "invalidName": "请输入 1–64 个字符的名称，不含尖括号或控制字符。",
+      "invalidMetadata": "请检查描述、标签及会话有效期；标签键不可重复，有效期为 1–720 分钟。"
+    },
     "editMetadata": "编辑角色信息",
     "backToRoleDetails": "返回角色详情",
     "editTrust": "修改信任关系",

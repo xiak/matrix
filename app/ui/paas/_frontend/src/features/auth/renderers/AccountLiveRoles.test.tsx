@@ -53,8 +53,11 @@ const liveSessionItem = {
 function client(overrides: Partial<RoleAccessClient> = {}): RoleAccessClient {
   return {
     accountId: role.accountId,
+    canCreate: true,
+    createRestrictionReason: null,
     list: vi.fn().mockResolvedValue(directory),
     read: vi.fn().mockResolvedValue(access),
+    create: vi.fn().mockResolvedValue(role),
     listSessions: vi.fn().mockResolvedValue({ accountId: role.accountId, roleId: role.id, observedAt: timestamp, items: [], nextAfter: null }),
     readSession: vi.fn().mockRejectedValue(new Error("unused session read")),
     revokeSession: vi.fn().mockRejectedValue(new Error("unused session revoke")),
@@ -68,7 +71,7 @@ function RolesHarness({ api, entityId, onOpen = vi.fn() }: { api: RoleAccessClie
     if (expectedRequestId === null) return current ?? next;
     return current?.requestId === expectedRequestId ? next : current;
   });
-  return <AccountLiveRoles client={api} entityId={entityId} onOpen={onOpen} revokeIntent={intent} onRevokeIntentChange={changeIntent} />;
+  return <AccountLiveRoles client={api} entityId={entityId} onCreate={vi.fn()} onOpen={onOpen} revokeIntent={intent} onRevokeIntentChange={changeIntent} />;
 }
 
 afterEach(cleanup);

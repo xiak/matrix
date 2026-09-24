@@ -2018,7 +2018,19 @@
     "saving": "Creating…",
     "created": "Role created",
     "createdHint": "Saved in this MOCK session only. No real permissions, credentials or login session were changed.",
+    "liveCreatedHint": "IAM created the role and its first immutable trust version. The role still has no business permissions and cannot be assumed until a permission boundary is configured separately.",
+    "liveCreateHint": "Connected to IAM · create a customer-managed role",
     "viewRole": "View role",
+    "liveSteps": {
+      "trust": "Trusted users",
+      "details": "Role details",
+      "review": "Review and create"
+    },
+    "liveHints": {
+      "trust": "The first release accepts only explicit users in this account. Trust grants neither the user's assume permission nor the role's resource permissions.",
+      "details": "Set the role name, tags and maximum duration for new sessions. A role has no password or long-lived access key.",
+      "review": "Review this creation intent. Permission policies, the permission boundary and the caller's assume grant are configured separately from role details."
+    },
     "steps": {
       "trust": "Trusted identity",
       "permissions": "Permissions",
@@ -2040,6 +2052,7 @@
     "trustedUsers": "Trusted users",
     "choosePrincipal": "Choose an identity",
     "durationHint": "15–720 minutes. This is the maximum duration for new sessions.",
+    "liveDurationHint": "1–720 minutes. This limit applies only to newly issued sessions.",
     "consoleHint": "Declares console-entry intent only. This preview never signs in as the role.",
     "boundary": "Permission boundary",
     "boundaryHint": "A boundary limits the maximum permissions. Both a grant and the boundary must allow a request; a boundary alone grants nothing. Uses the policy's current default version.",
@@ -2061,6 +2074,18 @@
     "reviewHint": "Creating trust does not grant callers permission to assume the role. Account users still need an explicit grant for iam:assumeRole.",
     "cancelTitle": "Discard role draft?",
     "cancelHint": "The unsaved trust, policies and role details will be discarded. Nothing has been created.",
+    "liveCancelHint": "The unsubmitted trusted users and role details will be discarded. Nothing will be created.",
+    "unknownLeaveTitle": "Leave a create request with an unknown result?",
+    "unknownLeaveHint": "IAM may already have created the role. Leaving loses the original request ID, so a new request cannot be treated as a retry.",
+    "liveTrustCreateHint": "A trusted user still needs an explicit policy grant for iam.role.assume on this role. Trust is only one side of admission.",
+    "loadedUsersOnly": "Only the currently loaded user directory is shown. Return to the user list and continue loading before selecting another user; this page never guesses unread identities.",
+    "liveCreationScope": "This command creates only role metadata and the first USER trust version. It attaches no permission policy, sets no permission boundary and issues no credential.",
+    "createOutcomeUnknown": "The create result is unknown. The original payload and request ID are locked; only retry the exact same request below:",
+    "liveErrors": {
+      "invalidTrust": "Select at least one currently loaded user that belongs to this account.",
+      "invalidName": "Enter a name of 1–64 characters without angle brackets or control characters.",
+      "invalidMetadata": "Check the description, tags and session duration. Tag keys must be unique and duration must be 1–720 minutes."
+    },
     "editMetadata": "Edit role information",
     "backToRoleDetails": "Back to role details",
     "editTrust": "Edit trust",
