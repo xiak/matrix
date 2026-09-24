@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -169,6 +170,113 @@ func (value *gate) rejectSuccessorAsInitialRelease(ctx context.Context) error {
 		return fail("successor-initial-install-effects")
 	}
 	emit("signed-successor-initial-install-rejected-before-effects")
+	return nil
+}
+
+func replaceProtectedGateFile(path string, content []byte) error {
+	file, err := os.CreateTemp(filepath.Dir(path), ".gate-custody-")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(file.Name())
+	defer file.Close()
+	if err := file.Chmod(0o600); err != nil {
+		return err
+	}
+	if _, err := file.Write(content); err != nil {
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return os.Rename(file.Name(), path)
+}
+
+func (value *gate) rejectIncompatibleTOTPBackupKey(ctx context.Context, backupID string, forbidden [][]byte) (gateErr error) {
+	path := filepath.Join(value.config.root, filepath.FromSlash(layout.IAMTOTPKeyring))
+	original, err := os.ReadFile(path)
+	if err != nil || len(original) == 0 || int64(len(original)) > iamv1.MaxTOTPKeyringBytes {
+		return fail("successor-backup-keyring-fixture")
+	}
+	defer clear(original)
+	keyring, err := iamv1.DecodeTOTPKeyring(bytes.NewReader(original))
+	if err != nil || len(keyring.Keys) != 1 || keyring.Keys[0].KeyID != keyring.ActiveKeyID {
+		return fail("successor-backup-keyring-fixture")
+	}
+	material := make([]byte, 32)
+	if _, err := rand.Read(material); err != nil {
+		return fail("successor-backup-keyring-fixture")
+	}
+	defer clear(material)
+	encodedMaterial := base64.RawURLEncoding.EncodeToString(material)
+	originalMaterial := keyring.Keys[0].KeyMaterial.CopyBytes()
+	defer clear(originalMaterial)
+	alternateMaterial := []byte(encodedMaterial)
+	defer clear(alternateMaterial)
+	if bytes.Equal(originalMaterial, alternateMaterial) {
+		return fail("successor-backup-keyring-fixture")
+	}
+	forbidden = append(forbidden, originalMaterial, alternateMaterial)
+	alternate, err := iamv1.NewSecret(encodedMaterial)
+	if err != nil {
+		return fail("successor-backup-keyring-fixture")
+	}
+	mutated := false
+	defer func() {
+		if mutated && replaceProtectedGateFile(path, original) != nil {
+			gateErr = fail("successor-backup-keyring-restore")
+		}
+	}()
+	for _, scenario := range []string{"missing", "changed"} {
+		changed := keyring
+		changed.Keys = append([]iamv1.TOTPWrappingKey(nil), keyring.Keys...)
+		switch scenario {
+		case "missing":
+			changed.Keys[0].KeyID = "phase1-replacement-key"
+			changed.ActiveKeyID = changed.Keys[0].KeyID
+			changed.KeysetRevision++
+			changed.Keys[0].KeyMaterial = alternate
+		case "changed":
+			changed.Keys[0].KeyMaterial = alternate
+		}
+		altered, err := iamv1.EncodeTOTPKeyring(changed)
+		if err != nil {
+			return fail("successor-backup-keyring-fixture")
+		}
+		before, err := readJournal(ctx, value.config.root)
+		if err != nil || replaceProtectedGateFile(path, altered) != nil {
+			clear(altered)
+			return fail("successor-backup-keyring-fixture")
+		}
+		clear(altered)
+		mutated = true
+		command, stdout, stderr, err := startMX(ctx, value.releases.b, "recover", []string{
+			"--root", value.config.root, "--backup", backupID,
+		})
+		if err != nil {
+			return fail("successor-backup-key-recovery-start")
+		}
+		failure := validateExpectedMXFailure(command.Wait(), stdout, stderr, "recover", forbidden,
+			5, "VERIFICATION_FAILED", "RECOVERY_SOURCE_VERIFICATION_FAILED")
+		if replaceProtectedGateFile(path, original) != nil {
+			return fail("successor-backup-keyring-restore")
+		}
+		mutated = false
+		if failure != nil {
+			return failure
+		}
+		after, err := readJournal(ctx, value.config.root)
+		if err != nil || !reflect.DeepEqual(before, after) {
+			return fail("successor-backup-key-recovery-changed-journal")
+		}
+		if _, err := assertPlatform(ctx, value.config.root, value.releases.b.Manifest, value.releases.a.Manifest.Release.ID); err != nil {
+			return err
+		}
+		emit("successor-backup-" + scenario + "-key-rejected-before-effects")
+	}
 	return nil
 }
 
@@ -548,6 +656,12 @@ func (value *gate) beforeRestart(ctx context.Context) (gateErr error) {
 		}
 		value.sensitive = append(value.sensitive, bearer)
 		value.edge.addForbidden(bearer)
+		if profile := value.releases.b.Manifest.Database; profile == release.CurrentDatabaseProfile() && profile.Authorities.IAM >= 40 {
+			if err := value.rejectIncompatibleTOTPBackupKey(ctx, successorBackup.BackupID,
+				value.forbidden(secret, newPassword, bearer)); err != nil {
+				return err
+			}
+		}
 	}
 	if err := value.nativeReleasePair(ctx, bearer); err != nil {
 		return err
