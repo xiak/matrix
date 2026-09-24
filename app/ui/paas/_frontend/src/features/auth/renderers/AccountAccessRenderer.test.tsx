@@ -1001,6 +1001,34 @@ describe("account access", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "paas" })).toBe(document.activeElement));
   });
 
+  it("pages a complete product snapshot locally and preserves the page when returning from detail", async () => {
+    const sample = profileDirectory().items[0]!;
+    const items = Array.from({ length: 12 }, (_, index) => ({
+      ...sample,
+      profile: { ...sample.profile, product: `product-${String(index).padStart(2, "0")}` }
+    }));
+    const { user } = await openAccess(accounts({ listAuthorizationProfiles: vi.fn().mockResolvedValue({ accountId: account.id, items }) }), iam(), "policies");
+    await user.click(await screen.findByRole("tab", { name: "权限能力目录" }));
+    const table = await screen.findByRole("table", { name: "产品权限能力目录" });
+    expect(within(table).getAllByRole("row")).toHaveLength(11);
+    expect(within(table).queryByRole("button", { name: "product-10" })).toBeNull();
+    expect(screen.getByText("第 1 / 2 页")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "下一页" }));
+    expect(within(table).getAllByRole("row")).toHaveLength(3);
+    await user.click(within(table).getByRole("button", { name: "product-11" }));
+    expect(screen.getByRole("heading", { level: 2, name: "product-11" })).toBe(document.activeElement);
+    await user.click(screen.getByRole("button", { name: "返回能力目录" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "product-11" })).toBe(document.activeElement));
+    expect(screen.getByText("第 2 / 2 页")).toBeTruthy();
+
+    await user.type(screen.getByRole("searchbox", { name: "搜索产品能力" }), "product-03");
+    expect(screen.getByText("第 1 / 1 页")).toBeTruthy();
+    const filteredTable = screen.getByRole("table", { name: "产品权限能力目录" });
+    expect(within(filteredTable).getAllByRole("row")).toHaveLength(2);
+    expect(within(filteredTable).getByRole("button", { name: "product-03" })).toBeTruthy();
+  });
+
   it.each([
     [403, "当前身份无权读取权限能力目录"],
     [404, "后端版本或路由可能未匹配"],

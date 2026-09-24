@@ -1335,7 +1335,7 @@
     "actions": "Actions",
     "scope": "Authority scope",
     "digest": "Content digest",
-    "completeProducts": "Loaded all {count} current product declarations. There is no paging, historical selector or tenant registration action.",
+    "completeProducts": "Loaded all {count} current product declarations. Pages here only limit local display; there is no backend paging, historical selector or tenant registration action.",
     "noProducts": "No matching product declarations",
     "noProductsHint": "Try a product name, calling service or Action keyword.",
     "productDetail": "Permission capabilities for {product}",

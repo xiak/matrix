@@ -31,6 +31,8 @@ function AuthorizationProfileCatalog({ client }: { client: AuthorizationProfileC
   const [state, setState] = useState<CatalogState>({ status: "loading" });
   const [query, setQuery] = useState("");
   const [actionQuery, setActionQuery] = useState("");
+  const [productPage, setProductPage] = useState(1);
+  const [productPageSize, setProductPageSize] = useState(10);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [selected, setSelected] = useState<AuthorizationProfileEntry | null>(null);
@@ -86,6 +88,9 @@ function AuthorizationProfileCatalog({ client }: { client: AuthorizationProfileC
     });
   }, [actionQuery, selected]);
 
+  const productPages = Math.max(1, Math.ceil(filteredEntries.length / productPageSize));
+  const currentProductPage = Math.min(productPage, productPages);
+  const visibleProducts = filteredEntries.slice((currentProductPage - 1) * productPageSize, currentProductPage * productPageSize);
   const pages = Math.max(1, Math.ceil(filteredActions.length / pageSize));
   const currentPage = Math.min(page, pages);
   const visibleActions = filteredActions.slice((currentPage - 1) * pageSize, currentPage * pageSize);
@@ -143,11 +148,11 @@ function AuthorizationProfileCatalog({ client }: { client: AuthorizationProfileC
   return <section aria-label={t("title")} className={styles.catalogSection}>
     <CatalogNotice preview={client.preview} />
     <TableToolbar labels={toolbarLabels}
-      search={{ label: t("searchProducts"), placeholder: t("searchProductsPlaceholder"), value: query, onChange: setQuery }}
+      search={{ label: t("searchProducts"), placeholder: t("searchProductsPlaceholder"), value: query, onChange: (value) => { setQuery(value); setProductPage(1); } }}
       status={t("productCount", { count: filteredEntries.length })} />
-    {filteredEntries.length ? <Table aria-label={t("table")} mobileLayout="stack" className={styles.catalogProductTable}>
+    {visibleProducts.length ? <Table aria-label={t("table")} mobileLayout="stack" className={styles.catalogProductTable}>
       <thead><tr><th scope="col">{t("product")}</th><th scope="col">{t("callingService")}</th><th scope="col">{t("revision")}</th><th scope="col">{t("actions")}</th><th scope="col">{t("scope")}</th><th scope="col">{t("digest")}</th></tr></thead>
-      <tbody>{filteredEntries.map((entry) => {
+      <tbody>{visibleProducts.map((entry) => {
         const scopes = [...new Set(entry.profile.actions.map((action) => action.scope))];
         return <tr key={entry.profile.product}>
           <td data-label={t("product")}><button
@@ -165,8 +170,8 @@ function AuthorizationProfileCatalog({ client }: { client: AuthorizationProfileC
           <td data-label={t("digest")}><code className={styles.catalogDigestShort} title={entry.contentDigest}>{entry.contentDigest.slice(0, 18)}…</code></td>
         </tr>;
       })}</tbody>
-    </Table> : <EmptyState title={t("noProducts")} description={t("noProductsHint")} action={<Button variant="secondary" onClick={() => setQuery("")}>{toolbarLabels.resetQuery}</Button>} />}
-    <Table.Footer note={t("completeProducts", { count: entries.length })} />
+    </Table> : <EmptyState title={t("noProducts")} description={t("noProductsHint")} action={<Button variant="secondary" onClick={() => { setQuery(""); setProductPage(1); }}>{toolbarLabels.resetQuery}</Button>} />}
+    <Table.Footer note={t("completeProducts", { count: entries.length })}><TablePagination page={currentProductPage} pages={productPages} pageSize={productPageSize} onPageChange={setProductPage} onPageSizeChange={(size) => { setProductPageSize(size); setProductPage(1); }} labels={{ summary: t("page", { page: currentProductPage, pages: productPages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} /></Table.Footer>
   </section>;
 }
 

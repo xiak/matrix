@@ -1335,7 +1335,7 @@
     "actions": "Action 数量",
     "scope": "权限范围",
     "digest": "内容摘要",
-    "completeProducts": "完整读取 {count} 个当前产品声明；没有分页、历史版本或租户注册操作。",
+    "completeProducts": "已读取全部 {count} 个当前产品声明；这里只做本地分页，没有后端分页、历史版本或租户注册操作。",
     "noProducts": "没有匹配的产品声明",
     "noProductsHint": "试试产品名、调用服务或 Action 关键词。",
     "productDetail": "产品 {product} 的权限能力",
