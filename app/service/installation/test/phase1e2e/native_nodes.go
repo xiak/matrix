@@ -295,15 +295,15 @@ func validateNativeFixtureReleasePair(
 	usesNodeEnrollment := requireEnrollment || input.ControlPlaneAddress != ""
 	if usesNodeEnrollment {
 		if err := validateNativeEnrollmentFixture(input); err != nil {
-			return false, err
+			return false, fail("native-enrollment-fixture")
 		}
 		if err := validateNativeEnrollmentReleasePair(a, b); err != nil {
-			return false, err
+			return false, fail("native-current-enrollment-release-pair")
 		}
 		return true, nil
 	}
 	if err := validateNativeReleasePair(a, b); err != nil {
-		return false, err
+		return false, fail("native-real-predecessor-pair")
 	}
 	return false, nil
 }
@@ -339,7 +339,7 @@ func (value *gate) prepareNativeNodes(
 	}
 	usesNodeEnrollment, err := validateNativeFixtureReleasePair(input, a, b, value.config.multiHostLifecycle)
 	if err != nil {
-		return fail("native-fixture-release-pair")
+		return err
 	}
 	directory, err := os.MkdirTemp(filepath.Dir(value.config.nativeNodes), ".combined-enrollment-")
 	if err != nil {
