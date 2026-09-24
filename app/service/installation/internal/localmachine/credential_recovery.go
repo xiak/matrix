@@ -303,9 +303,9 @@ func (effects *Effects) runCredentialRecoveryEntry(ctx context.Context, plan pla
 	return invokeCredentialRecoveryEntry(ctx, effects.runtime, arguments, expected)
 }
 
-func invokeCredentialRecoveryEntry(ctx context.Context, runtimeBoundary dockerRuntime, arguments []string, expected credentialRecoveryContainerExpectation) ([]byte, error) {
+func invokeCredentialRecoveryEntry(ctx context.Context, runtimeBoundary dockerRuntime, arguments []string, expected purposeOnlyIAMContainerExpectation) ([]byte, error) {
 	mode := expected.mode
-	current, exists, err := findCredentialRecoveryContainer(ctx, runtimeBoundary, expected)
+	current, exists, err := findPurposeOnlyIAMContainer(ctx, runtimeBoundary, expected)
 	if err != nil {
 		return nil, err
 	}
@@ -328,7 +328,7 @@ func invokeCredentialRecoveryEntry(ctx context.Context, runtimeBoundary dockerRu
 					return nil, platformcommand.ErrEffectOutcomeUnknown
 				}
 			}
-			if err := removeCredentialRecoveryContainer(ctx, runtimeBoundary, current); err != nil {
+			if err := removePurposeOnlyIAMContainer(ctx, runtimeBoundary, current); err != nil {
 				return nil, err
 			}
 			exists = false
@@ -342,19 +342,19 @@ func invokeCredentialRecoveryEntry(ctx context.Context, runtimeBoundary dockerRu
 			return nil, platformcommand.ErrEffectOutcomeUnknown
 		}
 		current, err = inspectPlatformContainer(ctx, runtimeBoundary, identity)
-		if err != nil || validateCredentialRecoveryContainer(current, expected) != nil || current.State.Status != "created" {
+		if err != nil || validatePurposeOnlyIAMContainer(current, expected) != nil || current.State.Status != "created" {
 			return nil, platformcommand.ErrEffectOutcomeUnknown
 		}
 	}
 	output, _, startErr := runtimeBoundary.Run(ctx, nil, "container", "start", "--attach", current.ID)
 	completed, inspectErr := inspectPlatformContainer(ctx, runtimeBoundary, current.ID)
-	if inspectErr != nil || validateCredentialRecoveryContainer(completed, expected) != nil ||
+	if inspectErr != nil || validatePurposeOnlyIAMContainer(completed, expected) != nil ||
 		completed.State.Running || completed.State.Status != "exited" || completed.State.OOMKilled || completed.State.Error != "" {
 		clear(output)
 		return nil, platformcommand.ErrEffectOutcomeUnknown
 	}
 	if mode == "inspect" {
-		if err := removeCredentialRecoveryContainer(ctx, runtimeBoundary, completed); err != nil {
+		if err := removePurposeOnlyIAMContainer(ctx, runtimeBoundary, completed); err != nil {
 			clear(output)
 			return nil, err
 		}
@@ -370,17 +370,18 @@ func invokeCredentialRecoveryEntry(ctx context.Context, runtimeBoundary dockerRu
 	return output, nil
 }
 
-type credentialRecoveryContainerExpectation struct {
+type purposeOnlyIAMContainerExpectation struct {
 	name        string
 	service     platformExpectedService
 	environment []string
+	entrypoint  string
 	mode        string
 	networkID   string
 	networkName string
 }
 
-func (effects *Effects) credentialRecoveryContainer(ctx context.Context, plan platformcommand.CredentialRecoveryPlan, mode string, requestFile bool) ([]string, credentialRecoveryContainerExpectation, error) {
-	var expected credentialRecoveryContainerExpectation
+func (effects *Effects) credentialRecoveryContainer(ctx context.Context, plan platformcommand.CredentialRecoveryPlan, mode string, requestFile bool) ([]string, purposeOnlyIAMContainerExpectation, error) {
+	var expected purposeOnlyIAMContainerExpectation
 	if (mode != "inspect" && mode != "apply") || mode == "apply" && !requestFile ||
 		(requestFile && (lifecycle.ValidateCommandID(plan.CommandID) != nil || iamv1.ValidateDigest("inputCommitment", plan.InputCommitment) != nil)) {
 		return nil, expected, platformcommand.ErrEffectVerification
@@ -426,7 +427,7 @@ func (effects *Effects) credentialRecoveryContainer(ctx context.Context, plan pl
 		}
 	}
 	expected.name = configuration.topology.ProjectName + "-iam-local-recovery-" + mode
-	expected.mode, expected.networkID = mode, networkID
+	expected.mode, expected.networkID, expected.entrypoint = mode, networkID, localRecoveryEntrypoint
 	expected.networkName = network.Name
 	expected.service = platformExpectedService{
 		Image: imageID, User: "0:0", Restart: "no", ReadOnly: true,
@@ -474,7 +475,7 @@ func (effects *Effects) credentialRecoveryContainer(ctx context.Context, plan pl
 	return arguments, expected, nil
 }
 
-func findCredentialRecoveryContainer(ctx context.Context, runtimeBoundary dockerRuntime, expected credentialRecoveryContainerExpectation) (platformContainerInspection, bool, error) {
+func findPurposeOnlyIAMContainer(ctx context.Context, runtimeBoundary dockerRuntime, expected purposeOnlyIAMContainerExpectation) (platformContainerInspection, bool, error) {
 	output, _, err := runtimeBoundary.Run(ctx, nil, "container", "ls", "--all", "--quiet", "--no-trunc", "--filter", "name=^/"+expected.name+"$")
 	if err != nil {
 		return platformContainerInspection{}, false, platformcommand.ErrEffectUnavailable
@@ -487,13 +488,13 @@ func findCredentialRecoveryContainer(ctx context.Context, runtimeBoundary docker
 		return platformContainerInspection{}, false, platformcommand.ErrEffectConflict
 	}
 	current, err := inspectPlatformContainer(ctx, runtimeBoundary, identities[0])
-	if err != nil || validateCredentialRecoveryContainer(current, expected) != nil {
+	if err != nil || validatePurposeOnlyIAMContainer(current, expected) != nil {
 		return current, true, platformcommand.ErrEffectConflict
 	}
 	return current, true, nil
 }
 
-func validateCredentialRecoveryContainer(actual platformContainerInspection, expected credentialRecoveryContainerExpectation) error {
+func validatePurposeOnlyIAMContainer(actual platformContainerInspection, expected purposeOnlyIAMContainerExpectation) error {
 	// Docker has no attached endpoint before start (and can clear it after
 	// exit). Check the exact configured network name AND immutable NetworkMode
 	// ID in these states; do not mistake an unassigned endpoint for drift or
@@ -509,7 +510,7 @@ func validateCredentialRecoveryContainer(actual platformContainerInspection, exp
 		}{expected.networkName: endpoint}
 	}
 	if actual.Name != "/"+expected.name || validatePlatformContainer(actual, expected.service, map[string]string{"control": expected.networkID}) != nil ||
-		!slices.Equal(actual.Config.Entrypoint, []string{localRecoveryEntrypoint}) || !slices.Equal(actual.Config.Cmd, []string{expected.mode}) ||
+		!slices.Equal(actual.Config.Entrypoint, []string{expected.entrypoint}) || !slices.Equal(actual.Config.Cmd, []string{expected.mode}) ||
 		!equalStringInventory(actual.Config.Env, expected.environment, false) || actual.HostConfig.NetworkMode != expected.networkID ||
 		actual.HostConfig.PidsLimit == nil || *actual.HostConfig.PidsLimit != 64 || actual.HostConfig.MemorySwap != 256*1024*1024 ||
 		actual.HostConfig.LogConfig.Type != "none" || actual.HostConfig.PidMode != "" || actual.HostConfig.UTSMode != "" ||
@@ -526,7 +527,7 @@ func validateCredentialRecoveryContainer(actual platformContainerInspection, exp
 	return nil
 }
 
-func removeCredentialRecoveryContainer(ctx context.Context, runtimeBoundary dockerRuntime, current platformContainerInspection) error {
+func removePurposeOnlyIAMContainer(ctx context.Context, runtimeBoundary dockerRuntime, current platformContainerInspection) error {
 	if !providerIdentity.MatchString(current.ID) || current.State.Running || (current.State.Status != "exited" && current.State.Status != "created") {
 		return platformcommand.ErrEffectOutcomeUnknown
 	}
@@ -565,12 +566,12 @@ func (effects *Effects) finalizeCredentialRecovery(ctx context.Context, plan pla
 		if err != nil {
 			return err
 		}
-		container, found, err := findCredentialRecoveryContainer(ctx, effects.runtime, expected)
+		container, found, err := findPurposeOnlyIAMContainer(ctx, effects.runtime, expected)
 		if err != nil {
 			return err
 		}
 		if found {
-			if err := removeCredentialRecoveryContainer(ctx, effects.runtime, container); err != nil {
+			if err := removePurposeOnlyIAMContainer(ctx, effects.runtime, container); err != nil {
 				return err
 			}
 		}

@@ -2597,7 +2597,7 @@ func TestIAMTOTPCustodyPostgres(t *testing.T) {
 		t.Fatal("restart reclassified retained factor", err)
 	}
 	var shape bool
-	if err := database.QueryRow(ctx, "SELECT iam.totp_custody_contract_ready() AND iam.totp_backup_custody_contract_ready() AND (SELECT schema_version=35 FROM iam.readiness())").Scan(&shape); err != nil || !shape {
+	if err := database.QueryRow(ctx, "SELECT iam.totp_custody_contract_ready() AND iam.totp_backup_custody_contract_ready() AND (SELECT schema_version=36 FROM iam.readiness())").Scan(&shape); err != nil || !shape {
 		t.Fatal("TOTP contract shape", err)
 	}
 }
@@ -3049,7 +3049,7 @@ func TestIAMPasswordAttemptsPostgres(t *testing.T) {
 		t.Fatal("suppressed calls changed the attempt", err)
 	}
 	var shape bool
-	if err := database.QueryRow(ctx, "SELECT iam.password_attempt_contract_ready() AND (SELECT schema_version=35 FROM iam.readiness())").Scan(&shape); err != nil || !shape {
+	if err := database.QueryRow(ctx, "SELECT iam.password_attempt_contract_ready() AND (SELECT schema_version=36 FROM iam.readiness())").Scan(&shape); err != nil || !shape {
 		t.Fatal("password function/ACL shape not ready", err)
 	}
 	apiConfig := config.Copy()

@@ -278,7 +278,7 @@ func TestPublishedManifestCanonicalDatabaseBytesRemainVerifiable(t *testing.T) {
 
 func TestDatabaseUpgradePathIsExactAndNotNumeric(t *testing.T) {
 	current := CurrentDatabaseProfile()
-	predecessor := SupportedDatabasePredecessorProfile()
+	predecessor := SupportedDatabaseUpgradePredecessorProfile()
 	if err := ValidateDatabaseUpgradePath(predecessor, current); err != nil {
 		t.Fatalf("admit exact deployment-runtime predecessor: %v", err)
 	}
@@ -298,6 +298,25 @@ func TestDatabaseUpgradePathIsExactAndNotNumeric(t *testing.T) {
 		if ValidateDatabaseUpgradePath(pair[0], pair[1]) == nil {
 			t.Fatalf("%s profile pair was admitted", name)
 		}
+	}
+}
+
+func TestPreparationRecoveryDoesNotInheritUpgradeCompatibility(t *testing.T) {
+	current := CurrentDatabaseProfile()
+	upgradePredecessor := SupportedDatabaseUpgradePredecessorProfile()
+	if _, supported := SupportedDatabaseRecoveryPredecessorProfile(); supported {
+		t.Fatal("preparation release unexpectedly publishes a destructive-recovery predecessor")
+	}
+	if err := ValidateDatabaseRecoveryPath(current, current); err != nil {
+		t.Fatalf("same-profile recovery rejected: %v", err)
+	}
+	if ValidateDatabaseRecoveryPath(upgradePredecessor, current) == nil {
+		t.Fatal("upgrade-only predecessor was admitted as a destructive-recovery target")
+	}
+	invalid := current
+	invalid.ContractRevision++
+	if ValidateDatabaseRecoveryPath(invalid, current) == nil {
+		t.Fatal("unpublished recovery source was admitted")
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"mime"
 	"net/http"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -21,7 +22,12 @@ import (
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 )
 
-const maximumHTTPBody = 1024 * 1024
+const (
+	maximumHTTPBody             = 1024 * 1024
+	maximumAuditAcceptancePages = (auditv1.MaxVerifyRecords + auditv1.MaxPageSize - 1) / auditv1.MaxPageSize
+)
+
+var errAuditActionsDidNotArrive = errors.New("Audit actions did not arrive")
 
 type edgeClient struct {
 	endpoint            string
@@ -569,7 +575,8 @@ func (client *edgeClient) allAuditRecords(
 ) ([]auditv1.AuditRecord, error) {
 	request := auditv1.QueryRecordsRequest{PageSize: auditv1.MaxPageSize}
 	var records []auditv1.AuditRecord
-	for pageNumber := 0; pageNumber < 8; pageNumber++ {
+	seenCursors := make(map[auditv1.Cursor]struct{}, maximumAuditAcceptancePages)
+	for pageNumber := 0; pageNumber < maximumAuditAcceptancePages; pageNumber++ {
 		page, err := client.queryAudit(ctx, bearer, request)
 		if err != nil {
 			return nil, err
@@ -578,9 +585,43 @@ func (client *edgeClient) allAuditRecords(
 		if page.NextCursor == "" {
 			return records, nil
 		}
+		if _, duplicate := seenCursors[page.NextCursor]; duplicate {
+			return nil, errors.New("Audit query repeated its cursor")
+		}
+		seenCursors[page.NextCursor] = struct{}{}
 		request.Cursor = page.NextCursor
 	}
 	return nil, errors.New("Audit query exceeded acceptance page bound")
+}
+
+func missingAuditActions(
+	records []auditv1.AuditRecord,
+	want map[auditv1.Action]string,
+) []auditv1.Action {
+	remaining := make(map[auditv1.Action]string, len(want))
+	for action, target := range want {
+		remaining[action] = target
+	}
+	for _, record := range records {
+		target, found := remaining[record.Event.Action]
+		if found && (target == "" || record.Event.Target.ID == target) {
+			delete(remaining, record.Event.Action)
+		}
+	}
+	result := make([]auditv1.Action, 0, len(remaining))
+	for action := range remaining {
+		result = append(result, action)
+	}
+	slices.Sort(result)
+	return result
+}
+
+func auditActionFailureStep(actions []auditv1.Action) string {
+	parts := make([]string, len(actions))
+	for index, action := range actions {
+		parts[index] = strings.ReplaceAll(string(action), ".", "-")
+	}
+	return strings.Join(parts, "-and-")
 }
 
 func (client *edgeClient) waitAuditActions(
@@ -590,20 +631,14 @@ func (client *edgeClient) waitAuditActions(
 ) ([]auditv1.AuditRecord, error) {
 	poll, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
+	var lastRecords []auditv1.AuditRecord
+	queried := false
 	for poll.Err() == nil {
 		records, err := client.allAuditRecords(poll, bearer)
 		if err == nil {
-			remaining := make(map[auditv1.Action]string, len(want))
-			for action, target := range want {
-				remaining[action] = target
-			}
-			for _, record := range records {
-				target, found := remaining[record.Event.Action]
-				if found && (target == "" || record.Event.Target.ID == target) {
-					delete(remaining, record.Event.Action)
-				}
-			}
-			if len(remaining) == 0 {
+			queried = true
+			lastRecords = records
+			if len(missingAuditActions(records, want)) == 0 {
 				return records, nil
 			}
 		}
@@ -611,7 +646,10 @@ func (client *edgeClient) waitAuditActions(
 			break
 		}
 	}
-	return nil, errors.New("Audit actions did not arrive")
+	if queried {
+		return lastRecords, errAuditActionsDidNotArrive
+	}
+	return nil, errors.New("Audit query did not complete")
 }
 
 func (client *edgeClient) verifyAuditChain(

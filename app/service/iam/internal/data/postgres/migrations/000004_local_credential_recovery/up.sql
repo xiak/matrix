@@ -86,7 +86,8 @@ DECLARE
     expected jsonb;
     result jsonb;
 BEGIN
-    PERFORM iam.assert_local_recovery_scope(scope);
+	PERFORM iam.assert_authentication_open();
+	PERFORM iam.assert_local_recovery_scope(scope);
     result := jsonb_build_object('apiVersion','iam.matrix.xiak.com/v1',
         'kind','LocalCredentialRecoveryInspection','scope',scope);
     IF submitted_command_id IS NOT NULL OR submitted_input_commitment IS NOT NULL THEN
@@ -135,7 +136,8 @@ DECLARE
     version_name text;
     result jsonb;
 BEGIN
-    PERFORM iam.assert_local_recovery_scope(scope);
+	PERFORM iam.assert_authentication_open();
+	PERFORM iam.assert_local_recovery_scope(scope);
     IF submitted_command_id IS NULL OR submitted_command_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         OR submitted_input_commitment IS NULL OR submitted_input_commitment COLLATE "C" !~ '^sha256:[0-9a-f]{64}$'
         OR new_password_hash IS NULL OR new_password_hash COLLATE "C"

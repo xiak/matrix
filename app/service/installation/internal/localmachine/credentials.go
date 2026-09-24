@@ -170,6 +170,7 @@ func stageInstallation(plan platformcommand.InstallPlan, entropy io.Reader) erro
 		{path: layout.IAMAPI, role: "matrix_iam_api_login"},
 		{path: layout.IAMWorker, role: "matrix_iam_worker_login"},
 		{path: layout.IAMCredentialRecovery, role: "matrix_iam_credential_recovery_login"},
+		{path: layout.IAMAuthenticationRecovery, role: "matrix_iam_authentication_recovery_login"},
 		{path: layout.IAMBackupCustody, role: "matrix_iam_backup_custody_login"},
 		{path: layout.AuditRuntime, role: "matrix_audit_runtime_login"},
 		{path: layout.PaaSAPI, role: "matrix_paas_api_login"},

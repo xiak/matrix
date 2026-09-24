@@ -902,8 +902,8 @@ func runAuthorityProcesses(t *testing.T, dsnVariable string, nodeFixture func(*t
 	// Exercise the exact source services together and keep the signed release
 	// profile aligned with the now-complete MFA preparation runtime and backup
 	// custody contract.
-	profile := installationrelease.AuthoritySchemas{IAM: 35, Audit: 18, PaaS: 6}
-	if current := installationrelease.CurrentDatabaseProfile(); current.Authorities != profile || current.ContractRevision != 13 {
+	profile := installationrelease.AuthoritySchemas{IAM: 36, Audit: 19, PaaS: 6}
+	if current := installationrelease.CurrentDatabaseProfile(); current.Authorities != profile || current.ContractRevision != 14 {
 		t.Fatalf("published database profile = %#v, want authorities %#v revision 13", current, profile)
 	}
 	for _, authority := range []struct {

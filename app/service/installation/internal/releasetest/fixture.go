@@ -116,7 +116,7 @@ func writeSequence(
 			if manifest.Database.SchemaVersion != 0 {
 				manifest.APIVersion = release.LegacyManifestAPIVersion
 			}
-			if manifest.Database == release.SupportedDatabasePredecessorProfile() {
+			if manifest.Database == release.SupportedDatabaseUpgradePredecessorProfile() {
 				manifest.TopologyDigest = topology.SupportedPredecessorContractDigest()
 			}
 		}

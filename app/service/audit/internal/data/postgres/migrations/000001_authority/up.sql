@@ -304,8 +304,9 @@ BEGIN
     platform_only := action_name IN (
         'iam.account.created', 'iam.account.disabled', 'iam.account.enabled', 'iam.account-root.credentials-recovered',
         'iam.tenant.created', 'iam.tenant.disabled', 'iam.tenant.enabled', 'iam.tenant-administrator.recovered',
-        'iam.installation-primary.credentials-recovered',
-        'iam.platform-policy-attachment.created', 'iam.platform-policy-attachment.revoked',
+		'iam.installation-primary.credentials-recovered',
+		'iam.authentication-recovery.closed', 'iam.authentication-recovery.reconciled', 'iam.authentication-recovery.reopened',
+		'iam.platform-policy-attachment.created', 'iam.platform-policy-attachment.revoked',
         'paas.execution-pool.created', 'paas.execution-target.registered',
         'paas.execution-target.drained', 'paas.execution-target.activated', 'paas.execution-target.removed',
         'audit.platform-records.read', 'audit.platform-integrity.verified'
@@ -361,8 +362,11 @@ BEGIN
         ('iam.tenant.disabled', 'IAM', 'ORGANIZATION', 'SUCCEEDED', true, true, false),
         ('iam.tenant.enabled', 'IAM', 'ORGANIZATION', 'SUCCEEDED', true, true, false),
         ('iam.tenant-administrator.recovered', 'IAM', 'PRINCIPAL', 'SUCCEEDED', true, true, false),
-        ('iam.installation-primary.credentials-recovered', 'IAM', 'PRINCIPAL', 'SUCCEEDED', false, false, false),
-        ('iam.organization.created', 'IAM', 'ORGANIZATION', 'SUCCEEDED', true, true, false),
+		('iam.installation-primary.credentials-recovered', 'IAM', 'PRINCIPAL', 'SUCCEEDED', false, false, false),
+		('iam.authentication-recovery.closed', 'IAM', 'INSTALLATION', 'SUCCEEDED', false, false, false),
+		('iam.authentication-recovery.reconciled', 'IAM', 'INSTALLATION', 'SUCCEEDED', false, false, false),
+		('iam.authentication-recovery.reopened', 'IAM', 'INSTALLATION', 'SUCCEEDED', false, false, false),
+		('iam.organization.created', 'IAM', 'ORGANIZATION', 'SUCCEEDED', true, true, false),
         ('iam.account-alias.set', 'IAM', 'ORGANIZATION', 'SUCCEEDED', true, true, false),
         ('iam.principal.status-set', 'IAM', 'PRINCIPAL', 'SUCCEEDED', true, true, false),
         ('iam.password.reset', 'IAM', 'PRINCIPAL', 'SUCCEEDED', true, true, false),
@@ -475,11 +479,18 @@ BEGIN
             OR jsonb_typeof(submitted_event->'installationId') IS DISTINCT FROM 'string'
             OR submitted_event->>'installationId' IS DISTINCT FROM substr(submitted_chain_id, 14)
             OR submitted_event ? 'tenantId'
-            OR (action_name <> 'iam.installation-primary.credentials-recovered' AND submitted_event#>>'{actor,type}' IS DISTINCT FROM 'USER')
-            OR (action_name = 'iam.installation-primary.credentials-recovered' AND (
-                submitted_event#>>'{actor,type}' IS DISTINCT FROM 'SYSTEM'
-                OR submitted_event#>>'{actor,id}' IS DISTINCT FROM 'iam-local-recovery'))
-          ))
+			OR (action_name NOT IN ('iam.installation-primary.credentials-recovered','iam.authentication-recovery.closed',
+				'iam.authentication-recovery.reconciled','iam.authentication-recovery.reopened')
+				AND submitted_event#>>'{actor,type}' IS DISTINCT FROM 'USER')
+			OR (action_name = 'iam.installation-primary.credentials-recovered' AND (
+				submitted_event#>>'{actor,type}' IS DISTINCT FROM 'SYSTEM'
+				OR submitted_event#>>'{actor,id}' IS DISTINCT FROM 'iam-local-recovery'))
+			OR (action_name IN ('iam.authentication-recovery.closed','iam.authentication-recovery.reconciled',
+				'iam.authentication-recovery.reopened') AND (
+				submitted_event#>>'{actor,type}' IS DISTINCT FROM 'SYSTEM'
+				OR submitted_event#>>'{actor,id}' IS DISTINCT FROM 'iam-authentication-recovery'
+				OR submitted_event#>>'{target,id}' IS DISTINCT FROM submitted_event->>'installationId'))
+		  ))
        OR (NOT platform_only AND (
             left(submitted_chain_id, 7) IS DISTINCT FROM 'tenant:'
             OR jsonb_typeof(submitted_event->'tenantId') IS DISTINCT FROM 'string'
@@ -587,7 +598,7 @@ AS $function$
         AND to_regclass('audit.records') IS NOT NULL
         AND to_regclass('audit.event_registry') IS NOT NULL
         AND audit.role_actor_contract_ready(),
-        18::bigint,
+		19::bigint,
         transaction_timestamp()
 $function$;
 
@@ -906,8 +917,9 @@ BEGIN
             'iam.organization.created', 'iam.account-alias.set',
             'iam.tenant.created', 'iam.tenant.disabled', 'iam.tenant.enabled',
             'iam.tenant-administrator.recovered',
-            'iam.installation-primary.credentials-recovered',
-            'iam.principal.status-set', 'iam.password.reset',
+			'iam.installation-primary.credentials-recovered',
+			'iam.authentication-recovery.closed','iam.authentication-recovery.reconciled','iam.authentication-recovery.reopened',
+			'iam.principal.status-set', 'iam.password.reset',
             'iam.role-binding.revoked', 'iam.authorization.decided',
             'paas.application.created', 'paas.configuration.created',
             'paas.configuration-revision.created',

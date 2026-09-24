@@ -19,6 +19,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -321,6 +322,146 @@ func TestLocalRecoveryInvocationUsesOwnedProcessOutcomeAndNeverKillsPendingWork(
 	}
 }
 
+func TestAuthenticationRecoveryInvocationRemovesKnownWorkAndRetainsUnknownWork(t *testing.T) {
+	for _, scenario := range []struct {
+		name, existingState        string
+		exitCode, existingExitCode int
+		attachErr                  bool
+		want                       error
+		wantStarts, wantRemoves    int
+	}{
+		{name: "success", wantStarts: 1, wantRemoves: 1},
+		{name: "invalid", exitCode: 2, want: platformcommand.ErrEffectVerification, wantStarts: 1, wantRemoves: 1},
+		{name: "forbidden", exitCode: 3, want: platformcommand.ErrEffectPrecondition, wantStarts: 1, wantRemoves: 1},
+		{name: "conflict", exitCode: 4, want: platformcommand.ErrEffectConflict, wantStarts: 1, wantRemoves: 1},
+		{name: "unavailable", exitCode: 6, want: platformcommand.ErrEffectOutcomeUnknown, wantStarts: 1, wantRemoves: 1},
+		{name: "committed but attach lost", attachErr: true, want: platformcommand.ErrEffectOutcomeUnknown, wantStarts: 1, wantRemoves: 1},
+		{name: "resume created invocation", existingState: "created", wantStarts: 1, wantRemoves: 1},
+		{name: "prior invocation still running", existingState: "running", want: platformcommand.ErrEffectOutcomeUnknown},
+		{name: "replay prior successful invocation", existingState: "exited", wantStarts: 1, wantRemoves: 2},
+		{name: "retain prior rejection", existingState: "exited", existingExitCode: 3, want: platformcommand.ErrEffectPrecondition, wantRemoves: 1},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			expected, actual := authenticationRecoveryInvocationFixture(installationv1.AuthenticationRecoveryCloseCommand)
+			runtimeBoundary := &localRecoveryInvocationRuntime{container: actual, exitCode: scenario.exitCode, attachErr: scenario.attachErr}
+			if scenario.existingState != "" {
+				runtimeBoundary.present = true
+				runtimeBoundary.container.State.Status = scenario.existingState
+				runtimeBoundary.container.State.ExitCode = scenario.existingExitCode
+				runtimeBoundary.container.State.Running = scenario.existingState == "running"
+				if runtimeBoundary.container.State.Running {
+					endpoint := runtimeBoundary.container.NetworkSettings.Networks[expected.networkName]
+					endpoint.NetworkID = expected.networkID
+					runtimeBoundary.container.NetworkSettings.Networks[expected.networkName] = endpoint
+				}
+			}
+			output, err := invokeAuthenticationRecoveryEntry(context.Background(), runtimeBoundary, []string{"container", "create"}, expected)
+			if !errors.Is(err, scenario.want) || runtimeBoundary.starts != scenario.wantStarts || runtimeBoundary.removes != scenario.wantRemoves {
+				t.Fatalf("one-shot outcome=%v, starts=%d, removals=%d", err, runtimeBoundary.starts, runtimeBoundary.removes)
+			}
+			if err != nil && (len(output) != 0 || strings.Contains(err.Error(), "private-native-error")) {
+				t.Fatal("unverified output or provider error escaped")
+			}
+		})
+	}
+}
+
+func TestAuthenticationRecoveryCompletionAnchorAdvancesOnlyAcrossExactEpochs(t *testing.T) {
+	root := filepath.Clean(t.TempDir())
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	intentOne, closureOne, completionOne := authenticationRecoveryEvidenceFixture(t, 1, 'a')
+	encodedClosure, err := installationv1.EncodeAuthenticationRecoveryClosure(closureOne)
+	if err != nil || writeManagedOnce(root, filepath.FromSlash(layout.IAMAuthenticationRecoveryClosure(intentOne.CommandID)), encodedClosure) != nil {
+		t.Fatal("stage first authentication recovery closure")
+	}
+	clear(encodedClosure)
+	if err := persistAuthenticationRecoveryCompletion(root, intentOne, closureOne, completionOne); err != nil {
+		t.Fatalf("publish first authentication recovery completion: %v", err)
+	}
+	before := readTestFile(t, root, layout.IAMAuthenticationRecoveryCompletion)
+	if err := persistAuthenticationRecoveryCompletion(root, intentOne, closureOne, completionOne); err != nil ||
+		!bytes.Equal(before, readTestFile(t, root, layout.IAMAuthenticationRecoveryCompletion)) {
+		t.Fatal("equal first completion did not replay")
+	}
+
+	skippedIntent, skippedClosure, skippedCompletion := authenticationRecoveryEvidenceFixture(t, 3, 'c')
+	encodedClosure, err = installationv1.EncodeAuthenticationRecoveryClosure(skippedClosure)
+	if err != nil || writeManagedOnce(root, filepath.FromSlash(layout.IAMAuthenticationRecoveryClosure(skippedIntent.CommandID)), encodedClosure) != nil {
+		t.Fatal("stage skipped authentication recovery closure")
+	}
+	clear(encodedClosure)
+	if err := persistAuthenticationRecoveryCompletion(root, skippedIntent, skippedClosure, skippedCompletion); !errors.Is(err, platformcommand.ErrEffectConflict) ||
+		!bytes.Equal(before, readTestFile(t, root, layout.IAMAuthenticationRecoveryCompletion)) {
+		t.Fatal("skipped recovery epoch changed the completion anchor")
+	}
+
+	intentTwo, closureTwo, completionTwo := authenticationRecoveryEvidenceFixture(t, 2, 'b')
+	encodedClosure, err = installationv1.EncodeAuthenticationRecoveryClosure(closureTwo)
+	if err != nil || writeManagedOnce(root, filepath.FromSlash(layout.IAMAuthenticationRecoveryClosure(intentTwo.CommandID)), encodedClosure) != nil {
+		t.Fatal("stage second authentication recovery closure")
+	}
+	clear(encodedClosure)
+	if err := persistAuthenticationRecoveryCompletion(root, intentTwo, closureTwo, completionTwo); err != nil {
+		t.Fatalf("advance authentication recovery completion: %v", err)
+	}
+	actual, encoded, exists, err := readAuthenticationRecoveryCompletion(root)
+	defer clear(encoded)
+	if err != nil || !exists || actual != completionTwo || bytes.Equal(before, encoded) {
+		t.Fatal("authentication recovery completion did not advance exactly once")
+	}
+	if validateAuthenticationRecoveryAnchor(root, intentTwo, true) != nil {
+		t.Fatal("current completed recovery was not an exact replay")
+	}
+	changed := intentTwo
+	changed.CommandID = "cmd-" + strings.Repeat("d", 32)
+	if validateAuthenticationRecoveryAnchor(root, changed, true) == nil {
+		t.Fatal("same-epoch different recovery intent reused the completion anchor")
+	}
+}
+
+func authenticationRecoveryEvidenceFixture(
+	t *testing.T,
+	epoch uint64,
+	identity byte,
+) (installationv1.AuthenticationRecoveryIntent, installationv1.AuthenticationRecoveryClosure, installationv1.AuthenticationRecoveryCompletion) {
+	t.Helper()
+	value := string(identity)
+	intent := installationv1.AuthenticationRecoveryIntent{
+		APIVersion: installationv1.AuthenticationRecoveryAPIVersion, Kind: installationv1.AuthenticationRecoveryIntentKind,
+		Purpose: installationv1.AuthenticationRecoveryPurpose, InstallationID: "mxi-" + strings.Repeat("1", 32),
+		Epoch: epoch, CommandID: "cmd-" + strings.Repeat(value, 32), BackupID: "backup-" + strings.Repeat(value, 32),
+		BackupDigest:    "sha256:" + strings.Repeat(value, 64),
+		SourceReleaseID: "matrix-v1.2.3-source-0123456789ab", SourceReleaseDigest: "sha256:" + strings.Repeat("2", 64),
+		TargetReleaseID: "matrix-v1.2.3-target-abcdef012345", TargetReleaseDigest: "sha256:" + strings.Repeat("3", 64),
+		TOTPCustodyDigest: "sha256:" + strings.Repeat("4", 64),
+	}
+	intentDigest, err := installationv1.AuthenticationRecoveryIntentDigest(intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closure := installationv1.AuthenticationRecoveryClosure{
+		APIVersion: installationv1.AuthenticationRecoveryAPIVersion, Kind: installationv1.AuthenticationRecoveryClosureKind,
+		Purpose: installationv1.AuthenticationRecoveryPurpose, InstallationID: intent.InstallationID,
+		Epoch: epoch, State: installationv1.AuthenticationRecoveryStateClosed, CommandID: intent.CommandID,
+		BackupID: intent.BackupID, BackupDigest: intent.BackupDigest, RecoveryIntentDigest: intentDigest,
+		TOTPCustodyDigest: intent.TOTPCustodyDigest,
+		ClosedAt:          time.Date(2026, 9, 21, 2, int(epoch), 0, 0, time.UTC),
+	}
+	closureDigest, err := installationv1.AuthenticationRecoveryClosureDigest(closure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	completion := installationv1.AuthenticationRecoveryCompletion{
+		APIVersion: installationv1.AuthenticationRecoveryAPIVersion, Kind: installationv1.AuthenticationRecoveryCompletionKind,
+		Purpose: installationv1.AuthenticationRecoveryPurpose, InstallationID: intent.InstallationID,
+		Epoch: epoch, State: installationv1.AuthenticationRecoveryStateReopened, CommandID: intent.CommandID,
+		ClosureDigest: closureDigest, CompletedAt: closure.ClosedAt.Add(time.Microsecond),
+	}
+	return intent, closure, completion
+}
+
 func TestLocalRecoveryInvocationRejectsSubstitutedRuntimeAuthority(t *testing.T) {
 	for name, mutate := range map[string]func(*platformContainerInspection){
 		"image":      func(v *platformContainerInspection) { v.Image = "sha256:" + strings.Repeat("f", 64) },
@@ -372,8 +513,8 @@ func TestLocalRecoveryInvocationRejectsSubstitutedRuntimeAuthority(t *testing.T)
 	}
 }
 
-func localRecoveryInvocationFixture(mode string) (credentialRecoveryContainerExpectation, platformContainerInspection) {
-	expected := credentialRecoveryContainerExpectation{name: "mxi-local-iam-local-recovery-" + mode, mode: mode, networkID: "network-private", networkName: "private", environment: []string{"PATH=/usr/bin", "MATRIX_IAM_LOCAL_RECOVERY_AUTHORITY_FILE=/run/private/authority"}}
+func localRecoveryInvocationFixture(mode string) (purposeOnlyIAMContainerExpectation, platformContainerInspection) {
+	expected := purposeOnlyIAMContainerExpectation{name: "mxi-local-iam-local-recovery-" + mode, mode: mode, entrypoint: localRecoveryEntrypoint, networkID: "network-private", networkName: "private", environment: []string{"PATH=/usr/bin", "MATRIX_IAM_LOCAL_RECOVERY_AUTHORITY_FILE=/run/private/authority"}}
 	expected.service = platformExpectedService{Image: "sha256:" + strings.Repeat("a", 64), User: "0:0", ReadOnly: true, Restart: "no", Networks: []string{"control"},
 		CapDrop: []string{"ALL"}, SecurityOpt: []string{"no-new-privileges:true"}, Tmpfs: []string{"/tmp:rw,noexec,nosuid,size=64m"},
 		Volumes: []platformMount{{Type: "bind", Source: "/root/private/authority", Target: "/run/private/authority", ReadOnly: true}},
@@ -386,6 +527,44 @@ func localRecoveryInvocationFixture(mode string) (credentialRecoveryContainerExp
 		HostConfig: platformHostConfig{ReadonlyRootfs: true, NetworkMode: expected.networkID, Memory: 256 * 1024 * 1024, MemorySwap: 256 * 1024 * 1024, NanoCPUs: 1_000_000_000,
 			PidsLimit: &limit, CapDrop: []string{"ALL"}, SecurityOpt: []string{"no-new-privileges:true"}, Tmpfs: map[string]string{"/tmp": "rw,noexec,nosuid,size=64m"}, IpcMode: "private", CgroupnsMode: "private"},
 		Mounts: []platformProviderMount{{Type: "bind", Source: "/root/private/authority", Destination: "/run/private/authority"}}}
+	actual.HostConfig.RestartPolicy.Name = "no"
+	actual.HostConfig.LogConfig.Type = "none"
+	actual.NetworkSettings.Networks = map[string]struct {
+		NetworkID string `json:"NetworkID"`
+	}{"private": {}}
+	return expected, actual
+}
+
+func authenticationRecoveryInvocationFixture(mode string) (purposeOnlyIAMContainerExpectation, platformContainerInspection) {
+	expected := purposeOnlyIAMContainerExpectation{
+		name: "mxi-local-iam-authentication-recovery-" + mode, mode: mode,
+		entrypoint: authenticationRecoveryEntrypoint, networkID: "network-private", networkName: "private",
+		environment: []string{
+			"PATH=/usr/bin",
+			installationv1.AuthenticationRecoveryDatabaseDSNFileEnvironment + "=/run/matrix/authentication-recovery-dsn",
+			installationv1.AuthenticationRecoveryIntentFileEnvironment + "=/run/matrix/authentication-recovery-input.json",
+		},
+	}
+	expected.service = platformExpectedService{Image: "sha256:" + strings.Repeat("a", 64), User: "0:0", ReadOnly: true, Restart: "no", Networks: []string{"control"},
+		CapDrop: []string{"ALL"}, SecurityOpt: []string{"no-new-privileges:true"}, Tmpfs: []string{"/tmp:rw,noexec,nosuid,size=64m"},
+		Volumes: []platformMount{
+			{Type: "bind", Source: "/root/private/authentication-recovery-dsn", Target: "/run/matrix/authentication-recovery-dsn", ReadOnly: true},
+			{Type: "bind", Source: "/root/private/intent", Target: "/run/matrix/authentication-recovery-input.json", ReadOnly: true},
+		},
+		Labels: map[string]string{"com.xiak.matrix.command": "cmd-" + strings.Repeat("a", 32)},
+	}
+	expected.service.Deploy.Resources.Limits.CPUs, expected.service.Deploy.Resources.Limits.Memory = "1", "256M"
+	limit := int64(64)
+	actual := platformContainerInspection{ID: strings.Repeat("c", 64), Name: "/" + expected.name, Image: expected.service.Image,
+		Config: platformContainerConfig{User: "0:0", Labels: cloneTestLabels(expected.service.Labels), Env: slices.Clone(expected.environment), Entrypoint: []string{authenticationRecoveryEntrypoint}, Cmd: []string{mode}},
+		State:  platformContainerState{Status: "created"},
+		HostConfig: platformHostConfig{ReadonlyRootfs: true, NetworkMode: expected.networkID, Memory: 256 * 1024 * 1024, MemorySwap: 256 * 1024 * 1024, NanoCPUs: 1_000_000_000,
+			PidsLimit: &limit, CapDrop: []string{"ALL"}, SecurityOpt: []string{"no-new-privileges:true"}, Tmpfs: map[string]string{"/tmp": "rw,noexec,nosuid,size=64m"}, IpcMode: "private", CgroupnsMode: "private"},
+		Mounts: []platformProviderMount{
+			{Type: "bind", Source: "/root/private/authentication-recovery-dsn", Destination: "/run/matrix/authentication-recovery-dsn"},
+			{Type: "bind", Source: "/root/private/intent", Destination: "/run/matrix/authentication-recovery-input.json"},
+		},
+	}
 	actual.HostConfig.RestartPolicy.Name = "no"
 	actual.HostConfig.LogConfig.Type = "none"
 	actual.NetworkSettings.Networks = map[string]struct {
@@ -526,31 +705,37 @@ func TestProviderVersionComparisonAcceptsBoundedDistributionMetadata(t *testing.
 	}
 }
 
-func TestFrozenPredecessorAPISIXRoutesMatchPublishedContract(t *testing.T) {
-	const publishedDigest = "sha256:9bd36e4e60ce2cc211bb5f2e36391686319212e1b5722a3106a9826b033ef07d"
-	digest := sha256.Sum256(predecessorAPISIXStandaloneConfig())
-	if got := "sha256:" + hex.EncodeToString(digest[:]); got != publishedDigest {
-		t.Fatalf("frozen predecessor APISIX digest = %q, want %q", got, publishedDigest)
+func TestExactPredecessorAPISIXRoutesMatchPublishedCurrentContract(t *testing.T) {
+	const publishedDigest = "sha256:53c4f1f5dd6eb0f5e922861ddeac879479171e107f8666b490d6075fbc450cc0"
+	const origin = "https://matrix.example.com:443"
+	current, err := apisixStandaloneConfig(origin)
+	if err != nil {
+		t.Fatal(err)
 	}
-	current, err := apisixStandaloneConfig("https://matrix.example.com:443")
-	if err != nil || bytes.Equal(predecessorAPISIXStandaloneConfig(), current) {
-		t.Fatal("current APISIX routes did not advance beyond the frozen predecessor")
+	digest := sha256.Sum256(current)
+	if got := "sha256:" + hex.EncodeToString(digest[:]); got != publishedDigest {
+		t.Fatalf("exact predecessor APISIX digest = %q, want %q", got, publishedDigest)
+	}
+	predecessor := newInstallPlan(t, release.SupportedDatabaseUpgradePredecessorProfile()).Bundle.Manifest
+	installed, err := installedAPISIXStandaloneConfig(predecessor, origin)
+	if err != nil || !bytes.Equal(installed, current) {
+		t.Fatal("exact predecessor APISIX routes differ from their published current contract")
 	}
 	if bytes.Count(current, []byte(`X-Matrix-External-Origin: "https://matrix.example.com:443"`)) != 2 ||
 		bytes.Count(current, []byte(`X-Matrix-External-Request-Target: "$request_uri"`)) != 2 {
 		t.Fatal("current APISIX routes do not inject the exact external request boundary")
 	}
-	const publishedMainDigest = "sha256:af92fe49e77330f574bc1b06c86ebc16e3e87a56ecbc3e86c0286c6bb864460f"
-	mainDigest := sha256.Sum256(predecessorAPISIXMainConfig())
+	const publishedMainDigest = "sha256:dab1f95a4a5196df40d1064d969b4109037d3640f1399db2c0799497be11d14e"
+	currentMain := apisixMainConfig()
+	mainDigest := sha256.Sum256(currentMain)
 	if got := "sha256:" + hex.EncodeToString(mainDigest[:]); got != publishedMainDigest {
-		t.Fatalf("frozen predecessor APISIX main digest = %q, want %q", got, publishedMainDigest)
+		t.Fatalf("exact predecessor APISIX main digest = %q, want %q", got, publishedMainDigest)
 	}
-	if bytes.Equal(predecessorAPISIXMainConfig(), apisixMainConfig()) {
-		t.Fatal("current APISIX main configuration did not advance beyond the frozen predecessor")
-	}
-	if !bytes.Contains(predecessorAPISIXMainConfig(), []byte("ssl_protocols TLSv1.3;")) ||
-		!bytes.Contains(predecessorAPISIXMainConfig(), []byte("recover|complete")) {
-		t.Fatal("frozen predecessor APISIX main configuration differs from its TLS bootstrap contract")
+	installedMain, err := installedAPISIXMainConfig(predecessor)
+	if err != nil || !bytes.Equal(installedMain, currentMain) ||
+		!bytes.Contains(currentMain, []byte("ssl_protocols TLSv1.3;")) ||
+		!bytes.Contains(currentMain, []byte("recover|complete")) {
+		t.Fatal("exact predecessor APISIX main configuration differs from its published contract")
 	}
 }
 
@@ -731,6 +916,7 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		{layout.IAMAPI, "matrix_iam_api_login"},
 		{layout.IAMWorker, "matrix_iam_worker_login"},
 		{layout.IAMCredentialRecovery, "matrix_iam_credential_recovery_login"},
+		{layout.IAMAuthenticationRecovery, "matrix_iam_authentication_recovery_login"},
 		{layout.IAMBackupCustody, "matrix_iam_backup_custody_login"},
 		{layout.AuditRuntime, "matrix_audit_runtime_login"},
 		{layout.PaaSAPI, "matrix_paas_api_login"},
@@ -905,7 +1091,7 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 			if mount.Type != "bind" {
 				continue
 			}
-			for _, private := range []string{layout.IAMCredentialRecovery, layout.IAMBackupCustody, layout.IAMLocalRecoveryAuthority, layout.IAMLocalRecoveryRequest, layout.IAMLocalRecoveryQuery} {
+			for _, private := range []string{layout.IAMCredentialRecovery, layout.IAMAuthenticationRecovery, layout.IAMBackupCustody, layout.IAMLocalRecoveryAuthority, layout.IAMLocalRecoveryRequest, layout.IAMLocalRecoveryQuery} {
 				privatePath := "/matrix-installation-root/" + private
 				if mount.Source == privatePath || strings.HasPrefix(privatePath, strings.TrimRight(mount.Source, "/")+"/") {
 					t.Fatal("ordinary platform service mounted a local recovery capability or its parent")
@@ -918,6 +1104,7 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		readTestFile(t, plan.Root, layout.PostgresPassword),
 		readTestFile(t, plan.Root, layout.BackupSealKey),
 		readTestFile(t, plan.Root, layout.IAMCredentialRecovery),
+		readTestFile(t, plan.Root, layout.IAMAuthenticationRecovery),
 		readTestFile(t, plan.Root, layout.IAMBackupCustody),
 		issuerPrivateKey,
 		ingressPrivateKeyPEM,
@@ -1209,7 +1396,7 @@ func TestTOTPKeyringCannotAdoptWrongScopeOrMalformedMaterial(t *testing.T) {
 	}
 }
 
-func TestBackupBindsCurrentAccessKeyWrappingKeyWithoutArchivingIt(t *testing.T) {
+func TestBackupBindsAdmittedProfilesToAccessKeyWrappingWithoutArchivingIt(t *testing.T) {
 	plan := newInstallPlan(t)
 	if err := stageInstallation(plan, rand.Reader); err != nil {
 		t.Fatal(err)
@@ -1248,14 +1435,14 @@ func TestBackupBindsCurrentAccessKeyWrappingKeyWithoutArchivingIt(t *testing.T) 
 		t.Fatal("non-secret commitment was confused with raw keyring bytes")
 	}
 
-	predecessor := newInstallPlan(t, release.SupportedDatabasePredecessorProfile())
+	predecessor := newInstallPlan(t, release.SupportedDatabaseUpgradePredecessorProfile())
 	if err := stageInstallation(predecessor, rand.Reader); err != nil {
 		t.Fatal(err)
 	}
-	legacyBinding, legacyVersion, err := backupAccessKeyWrappingForRelease(predecessor)
-	if err != nil || legacyBinding == nil || !validSHA256(legacyBinding.Commitment) ||
-		legacyVersion != accessKeyBackupAPIVersion {
-		t.Fatalf("predecessor backup wrapping contract = %#v / %q / %v", legacyBinding, legacyVersion, err)
+	predecessorBinding, predecessorVersion, err := backupAccessKeyWrappingForRelease(predecessor)
+	if err != nil || predecessorBinding == nil || !validSHA256(predecessorBinding.Commitment) ||
+		predecessorVersion != backupAPIVersion {
+		t.Fatalf("predecessor backup wrapping contract = %#v / %q / %v", predecessorBinding, predecessorVersion, err)
 	}
 }
 
@@ -1409,12 +1596,12 @@ func TestUpgradeConfigurationReplacesOnlyReleaseDerivedFilesAndReplaysBothWays(t
 	}
 }
 
-func TestUpgradeConfigurationRetainsAndRestoresTheFrozenAdjacentTopology(t *testing.T) {
+func TestUpgradeConfigurationRetainsAndRestoresTheExactAdjacentTopology(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("local-machine upgrade configuration targets Linux")
 	}
 	current := release.CurrentDatabaseProfile()
-	predecessor := release.SupportedDatabasePredecessorProfile()
+	predecessor := release.SupportedDatabaseUpgradePredecessorProfile()
 	plan := newUpgradePlan(t, predecessor, current)
 	source, err := authenticateInstalledPlan(plan.Source)
 	if err != nil {
@@ -1431,19 +1618,19 @@ func TestUpgradeConfigurationRetainsAndRestoresTheFrozenAdjacentTopology(t *test
 		!bytes.Contains(predecessorCompose, []byte("MATRIX_PAAS_ENROLLMENT_ISSUER_PRIVATE_KEY_FILE")) ||
 		!bytes.Contains(predecessorCompose, []byte("MATRIX_PAAS_ENROLLMENT_CONTROLLER_CERTIFICATE_FILE")) ||
 		!bytes.Contains(predecessorCompose, []byte("MATRIX_PAAS_WORKER_ENROLLMENT_CONTROLLER_CERTIFICATE_FILE")) ||
-		bytes.Contains(predecessorCompose, []byte("MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE")) ||
-		bytes.Contains(predecessorCompose, []byte("MATRIX_PAAS_NORTHBOUND_ORIGIN")) ||
-		bytes.Contains(predecessorCompose, []byte("MATRIX_AUDIT_NORTHBOUND_ORIGIN")) ||
+		!bytes.Contains(predecessorCompose, []byte("MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE")) ||
+		!bytes.Contains(predecessorCompose, []byte("MATRIX_PAAS_NORTHBOUND_ORIGIN")) ||
+		!bytes.Contains(predecessorCompose, []byte("MATRIX_AUDIT_NORTHBOUND_ORIGIN")) ||
 		!bytes.Contains(predecessorCompose, []byte(layout.EnrollmentIngressCertificate)) ||
 		!bytes.Contains(predecessorCompose, []byte(layout.EnrollmentIngressPrivateKey)) ||
 		!bytes.Contains(predecessorRoutes, []byte("matrix-paas-terminal")) ||
 		!bytes.Contains(predecessorRoutes, []byte("X-Matrix-Public-Origin")) ||
 		!bytes.Contains(predecessorRoutes, []byte("matrix-paas-node-enrollment-bootstrap")) ||
 		!bytes.Contains(predecessorRoutes, []byte("/complete")) ||
-		bytes.Contains(predecessorRoutes, []byte("X-Matrix-External-Origin")) ||
-		bytes.Contains(predecessorRoutes, []byte("X-Matrix-External-Request-Target")) ||
-		!bytes.Equal(predecessorMainConfig, predecessorAPISIXMainConfig()) {
-		t.Fatal("frozen adjacent predecessor differs from its signed topology")
+		!bytes.Contains(predecessorRoutes, []byte("X-Matrix-External-Origin")) ||
+		!bytes.Contains(predecessorRoutes, []byte("X-Matrix-External-Request-Target")) ||
+		!bytes.Equal(predecessorMainConfig, apisixMainConfig()) {
+		t.Fatal("exact adjacent predecessor differs from its signed topology")
 	}
 	if _, err := verifiedInstallationConfiguration(source); err != nil {
 		t.Fatalf("verify predecessor installation: %v", err)
@@ -1472,16 +1659,16 @@ func TestUpgradeConfigurationRetainsAndRestoresTheFrozenAdjacentTopology(t *test
 		!bytes.Contains(successorCompose, []byte("MATRIX_AUDIT_NORTHBOUND_ORIGIN")) ||
 		!bytes.Contains(successorCompose, []byte(layout.EnrollmentIngressCertificate)) ||
 		!bytes.Contains(successorCompose, []byte(layout.EnrollmentIngressPrivateKey)) ||
-		bytes.Equal(successorRoutes, predecessorRoutes) ||
+		!bytes.Equal(successorRoutes, predecessorRoutes) ||
 		!bytes.Contains(successorRoutes, []byte("matrix-paas-terminal")) ||
 		!bytes.Contains(successorRoutes, []byte("X-Matrix-Public-Origin")) ||
 		!bytes.Contains(successorRoutes, []byte("matrix-paas-node-enrollment-bootstrap")) ||
 		!bytes.Contains(successorRoutes, []byte("/complete")) ||
 		!bytes.Contains(successorRoutes, []byte("X-Matrix-External-Origin")) ||
 		!bytes.Contains(successorRoutes, []byte("X-Matrix-External-Request-Target")) ||
-		bytes.Equal(successorMainConfig, predecessorMainConfig) ||
+		!bytes.Equal(successorMainConfig, predecessorMainConfig) ||
 		!bytes.Equal(successorMainConfig, apisixMainConfig()) {
-		t.Fatal("schema upgrade did not add the external-request trust boundary while retaining enrollment topology")
+		t.Fatal("database-only profile upgrade changed the fixed edge trust boundary")
 	}
 
 	if err := restoreUpgradeConfiguration(plan); err != nil {
@@ -1499,47 +1686,29 @@ func TestUpgradeConfigurationRetainsAndRestoresTheFrozenAdjacentTopology(t *test
 	assertReleaseConfiguration(t, source)
 }
 
-func TestFrozenPredecessorVerificationDoesNotRequireFutureIAMSecrets(t *testing.T) {
+func TestExactPredecessorVerificationRequiresItsPublishedIAMSecrets(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("local-machine upgrade configuration targets Linux")
 	}
 	plan := newUpgradePlan(
-		t, release.SupportedDatabasePredecessorProfile(), release.CurrentDatabaseProfile(),
+		t, release.SupportedDatabaseUpgradePredecessorProfile(), release.CurrentDatabaseProfile(),
 	)
-	for _, relative := range []string{layout.IAMAccessKeyWrappingKeyring, layout.IAMTOTPKeyring, layout.IAMCursorKey} {
-		// newUpgradePlan stages both sides of the transition in one fixture root.
-		// Reconstruct the frozen predecessor state before authenticating it;
-		// staging the successor below must recreate both successor-only secrets.
-		if err := os.Remove(filepath.Join(
-			plan.Source.Root, filepath.FromSlash(relative),
-		)); err != nil {
-			t.Fatalf("remove staged successor IAM secret %q: %v", relative, err)
-		}
-		if _, err := os.Stat(filepath.Join(
-			plan.Source.Root, filepath.FromSlash(relative),
-		)); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("frozen predecessor future IAM secret %q error = %v", relative, err)
-		}
-	}
 	source, err := authenticateInstalledPlan(plan.Source)
 	if err != nil {
 		t.Fatalf("authenticate frozen predecessor: %v", err)
 	}
 	defer clear(source.TrustBytes)
 	if _, err := verifiedInstallationConfiguration(source); err != nil {
-		t.Fatalf("verify frozen predecessor without future IAM secrets: %v", err)
-	}
-	if err := stageInstallation(plan.Target, rand.Reader); err != nil {
-		t.Fatalf("stage successor credentials: %v", err)
+		t.Fatalf("verify exact predecessor with its published IAM secrets: %v", err)
 	}
 	if _, err := readAccessKeyWrappingKeyring(plan.Target.Root, plan.Target.InstallationID); err != nil {
-		t.Fatalf("successor staging did not materialize access-key wrapping keyring: %v", err)
+		t.Fatalf("exact predecessor access-key wrapping keyring: %v", err)
 	}
 	if _, err := readTOTPKeyring(plan.Target.Root, plan.Target.InstallationID); err != nil {
 		t.Fatalf("successor staging did not materialize TOTP keyring: %v", err)
 	}
 	if cursorKey := readTestFile(t, plan.Target.Root, layout.IAMCursorKey); len(cursorKey) != 64 {
-		t.Fatal("successor staging did not materialize the IAM cursor key")
+		t.Fatal("exact predecessor did not retain the IAM cursor key")
 	}
 }
 
@@ -1602,7 +1771,7 @@ func TestCrossProfileAutomaticRollbackCleansCandidateWithoutStartingSource(t *te
 		t.Skip("local-machine release rollback targets Linux")
 	}
 	plan := newUpgradePlan(
-		t, release.SupportedDatabasePredecessorProfile(), release.CurrentDatabaseProfile(),
+		t, release.SupportedDatabaseUpgradePredecessorProfile(), release.CurrentDatabaseProfile(),
 	)
 	source, err := authenticateInstalledPlan(plan.Source)
 	if err != nil {
@@ -1654,7 +1823,7 @@ func TestSupportedPredecessorUpgradeAdmitsItsOwnedSharedIngressListener(t *testi
 		t.Skip("local-machine release upgrade targets Linux")
 	}
 	plan := newUpgradePlan(
-		t, release.SupportedDatabasePredecessorProfile(), release.CurrentDatabaseProfile(),
+		t, release.SupportedDatabaseUpgradePredecessorProfile(), release.CurrentDatabaseProfile(),
 	)
 	source, err := authenticateInstalledPlan(plan.Source)
 	if err != nil {
@@ -1669,10 +1838,11 @@ func TestSupportedPredecessorUpgradeAdmitsItsOwnedSharedIngressListener(t *testi
 	plan.Source.Listener = updatedSource.Listener
 	plan.Target.Listener = updatedSource.Listener
 	compiled, err := topology.CompileInstalled(updatedSource.Bundle.Manifest, topology.Options{
-		InstallationID: updatedSource.InstallationID,
-		Root:           updatedSource.Root,
-		Listener:       updatedSource.Listener,
-		Port:           updatedSource.Port,
+		InstallationID:   updatedSource.InstallationID,
+		Root:             updatedSource.Root,
+		Listener:         updatedSource.Listener,
+		Port:             updatedSource.Port,
+		NorthboundOrigin: updatedSource.NorthboundOrigin,
 	})
 	if err != nil {
 		t.Fatalf("compile predecessor fixture: %v", err)
@@ -1862,6 +2032,7 @@ func TestMigrateInstallationUsesFixedGoBinariesWithoutCredentialArguments(t *tes
 		readTestFile(t, plan.Root, layout.IAMAPI),
 		readTestFile(t, plan.Root, layout.IAMWorker),
 		readTestFile(t, plan.Root, layout.IAMCredentialRecovery),
+		readTestFile(t, plan.Root, layout.IAMAuthenticationRecovery),
 		readTestFile(t, plan.Root, layout.IAMBackupCustody),
 		readTestFile(t, plan.Root, layout.AuditRuntime),
 		readTestFile(t, plan.Root, layout.PaaSAPI),
@@ -1884,10 +2055,13 @@ func TestMigrateInstallationUsesFixedGoBinariesWithoutCredentialArguments(t *tes
 			}
 		}
 		recoveryMount := "type=bind,src=" + filepath.Join(plan.Root, filepath.FromSlash(layout.IAMCredentialRecovery)) + ",dst=/run/matrix/iam-recovery-dsn,readonly"
+		authenticationRecoveryMount := "type=bind,src=" + filepath.Join(plan.Root, filepath.FromSlash(layout.IAMAuthenticationRecovery)) + ",dst=/run/matrix/iam-authentication-recovery-dsn,readonly"
 		custodyMount := "type=bind,src=" + filepath.Join(plan.Root, filepath.FromSlash(layout.IAMBackupCustody)) + ",dst=/run/matrix/iam-backup-custody-dsn,readonly"
 		iamMigration := wantEntrypoints[index] == "/matrix/bin/matrix-iam-migrate"
 		if hasArgumentPair(arguments, "--mount", recoveryMount) != iamMigration ||
 			hasArgumentPair(arguments, "--env", "MATRIX_MIGRATION_IAM_RECOVERY_DSN_FILE=/run/matrix/iam-recovery-dsn") != iamMigration ||
+			hasArgumentPair(arguments, "--mount", authenticationRecoveryMount) != iamMigration ||
+			hasArgumentPair(arguments, "--env", installationv1.AuthenticationRecoveryMigrationDSNFileEnvironment+"=/run/matrix/iam-authentication-recovery-dsn") != iamMigration ||
 			hasArgumentPair(arguments, "--mount", custodyMount) != iamMigration ||
 			hasArgumentPair(arguments, "--env", installationv1.TOTPBackupCustodyMigrationDSNFileEnvironment+"=/run/matrix/iam-backup-custody-dsn") != iamMigration {
 			t.Fatal("purpose-only IAM database capability escaped the IAM role-provisioning boundary")
@@ -2185,7 +2359,7 @@ func TestCreateBackupSealsDatabaseAndWorkloadSecretsAndReplays(t *testing.T) {
 		t.Fatalf("read backup manifest: %v", err)
 	}
 	sealKey := readTestFile(t, plan.Root, layout.BackupSealKey)
-	for _, forbidden := range [][]byte{secret, sealKey, capabilityKey, readTestFile(t, plan.Root, layout.IAMCredentialRecovery), readTestFile(t, plan.Root, layout.IAMBackupCustody), []byte(plan.Root)} {
+	for _, forbidden := range [][]byte{secret, sealKey, capabilityKey, readTestFile(t, plan.Root, layout.IAMCredentialRecovery), readTestFile(t, plan.Root, layout.IAMAuthenticationRecovery), readTestFile(t, plan.Root, layout.IAMBackupCustody), []byte(plan.Root)} {
 		if bytes.Contains(manifestContent, forbidden) {
 			t.Fatal("backup manifest contains secret or absolute-path material")
 		}
@@ -2345,6 +2519,7 @@ func TestRecoverBackupRestoresSelectedSnapshotAndConvergesTarget(t *testing.T) {
 		BackupID:     source.BackupID,
 		BackupDigest: source.BackupDigest,
 	}
+	recovery.AuthenticationIntent = testAuthenticationRecoveryIntent(recovery, source.TOTPCustodyDigest, 1)
 	for _, phase := range []lifecycle.Phase{
 		lifecycle.PhaseRecovering, lifecycle.PhaseStarting, lifecycle.PhaseVerifying,
 	} {
@@ -2362,6 +2537,8 @@ func TestRecoverBackupRestoresSelectedSnapshotAndConvergesTarget(t *testing.T) {
 	clear(restored)
 	if runtimeBoundary.recoveryRestores != 1 || runtimeBoundary.postgresOnly ||
 		!runtimeBoundary.started || runtimeBoundary.providerRemovals == removals ||
+		runtimeBoundary.authenticationStarts != 3 || runtimeBoundary.authenticationRemovals != 3 ||
+		runtimeBoundary.authenticationPresent ||
 		verifier.calls != 1 ||
 		verifier.plan.Bundle.Manifest.Release.ID != plan.Bundle.Manifest.Release.ID {
 		t.Fatalf(
@@ -2370,6 +2547,78 @@ func TestRecoverBackupRestoresSelectedSnapshotAndConvergesTarget(t *testing.T) {
 			runtimeBoundary.started, runtimeBoundary.providerRemovals, verifier.calls,
 		)
 	}
+	closed := slices.Index(runtimeBoundary.recoveryEvents, "authentication-close")
+	restoreIndex := slices.Index(runtimeBoundary.recoveryEvents, "database-restore")
+	reconciled := slices.Index(runtimeBoundary.recoveryEvents, "authentication-reconcile")
+	reopened := slices.Index(runtimeBoundary.recoveryEvents, "authentication-reopen")
+	if closed < 0 || restoreIndex < 0 || reconciled < 0 || reopened < 0 ||
+		!(closed < restoreIndex && restoreIndex < reconciled && reconciled < reopened) {
+		t.Fatalf("authentication recovery order = %v", runtimeBoundary.recoveryEvents)
+	}
+}
+
+func TestAuthenticationRecoveryFailureBoundariesRemainFailClosed(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine recovery effects target Linux")
+	}
+	t.Run("close precedes every destructive effect", func(t *testing.T) {
+		effects, runtimeBoundary, recovery := authenticationRecoveryEffectFixture(t)
+		runtimeBoundary.authenticationExitCodes = map[string]int{installationv1.AuthenticationRecoveryCloseCommand: installationv1.AuthenticationRecoveryExitForbidden}
+		removals := runtimeBoundary.providerRemovals
+		migrations := len(runtimeBoundary.migrationRuns)
+		composeCalls := runtimeBoundary.composeCalls
+		events := len(runtimeBoundary.recoveryEvents)
+		err := effects.ApplyRecoveryPhase(context.Background(), recovery, lifecycle.PhaseRecovering)
+		if !errors.Is(err, platformcommand.ErrEffectPrecondition) ||
+			runtimeBoundary.recoveryRestores != 0 || runtimeBoundary.providerRemovals != removals ||
+			len(runtimeBoundary.migrationRuns) != migrations || runtimeBoundary.composeCalls != composeCalls ||
+			!runtimeBoundary.started || runtimeBoundary.authenticationStarts != 1 ||
+			runtimeBoundary.authenticationRemovals != 1 || runtimeBoundary.authenticationPresent ||
+			!slices.Equal(runtimeBoundary.recoveryEvents[events:], []string{"authentication-close"}) {
+			t.Fatalf("failed close reached a destructive effect: err=%v events=%v", err, runtimeBoundary.recoveryEvents)
+		}
+	})
+	t.Run("reopen precedes ordinary service start", func(t *testing.T) {
+		effects, runtimeBoundary, recovery := authenticationRecoveryEffectFixture(t)
+		if err := effects.ApplyRecoveryPhase(context.Background(), recovery, lifecycle.PhaseRecovering); err != nil {
+			t.Fatalf("prepare restored authority: %v", err)
+		}
+		composeCalls := runtimeBoundary.composeCalls
+		runtimeBoundary.authenticationExitCodes = map[string]int{installationv1.AuthenticationRecoveryReopenCommand: installationv1.AuthenticationRecoveryExitForbidden}
+		err := effects.ApplyRecoveryPhase(context.Background(), recovery, lifecycle.PhaseStarting)
+		if !errors.Is(err, platformcommand.ErrEffectPrecondition) || runtimeBoundary.composeCalls != composeCalls ||
+			!runtimeBoundary.postgresOnly || runtimeBoundary.authenticationStarts != 3 ||
+			runtimeBoundary.authenticationRemovals != 3 || runtimeBoundary.authenticationPresent {
+			t.Fatalf("failed reopen started ordinary services: err=%v events=%v", err, runtimeBoundary.recoveryEvents)
+		}
+	})
+}
+
+func authenticationRecoveryEffectFixture(t *testing.T) (*Effects, *platformStartRuntime, platformcommand.RecoveryPlan) {
+	t.Helper()
+	plan, expectation := configuredPlatformStartFixture(t)
+	runtimeBoundary := newPlatformStartRuntime(plan, expectation)
+	runtimeBoundary.started = true
+	effects := &Effects{
+		runtime: runtimeBoundary, entropy: rand.Reader, verifier: &recordingInstallationVerifier{},
+		projectInspector: newRecoveryProbeInspector(t, plan),
+	}
+	backup := platformcommand.BackupPlan{
+		InstalledPlan: installedPlanFrom(plan), BackupID: "backup-eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+		CreatedAt: time.Date(2026, 9, 21, 2, 0, 0, 0, time.UTC),
+	}
+	if err := effects.CreateBackup(context.Background(), backup); err != nil {
+		t.Fatal(err)
+	}
+	source, err := effects.InspectBackup(context.Background(), backup.InstalledPlan, backup.BackupID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovery := platformcommand.RecoveryPlan{
+		Current: plan, Target: plan, BackupID: source.BackupID, BackupDigest: source.BackupDigest,
+	}
+	recovery.AuthenticationIntent = testAuthenticationRecoveryIntent(recovery, source.TOTPCustodyDigest, 1)
+	return effects, runtimeBoundary, recovery
 }
 
 func TestPublishedBackupSealRemainsDecodableButDoesNotGrantRuntimeCompatibility(t *testing.T) {
@@ -2443,7 +2692,7 @@ func TestPublishedBackupSealRemainsDecodableButDoesNotGrantRuntimeCompatibility(
 		t.Fatal("rejected legacy backup replay rewrote its sealed bytes")
 	}
 
-	manifest.APIVersion, manifest.SchemaVersion, manifest.Database = predecessorBackupAPIVersion, 0, release.SupportedDatabasePredecessorProfile()
+	manifest.APIVersion, manifest.SchemaVersion, manifest.Database = predecessorBackupAPIVersion, 0, release.SupportedDatabaseUpgradePredecessorProfile()
 	substituted, err := sealBackupManifest(manifest, key)
 	if err != nil {
 		t.Fatal(err)
@@ -2461,7 +2710,7 @@ func TestRecoveryAuthenticatesSupportedCrossProfileImmediatePredecessor(t *testi
 		t.Skip("local-machine recovery effects target Linux")
 	}
 	pair := newUpgradePlan(
-		t, release.SupportedDatabasePredecessorProfile(), release.CurrentDatabaseProfile(),
+		t, release.SupportedDatabaseUpgradePredecessorProfile(), release.CurrentDatabaseProfile(),
 	)
 	target, err := authenticateInstalledPlan(pair.Source)
 	if err != nil {
@@ -2490,6 +2739,18 @@ func TestRecoveryAuthenticatesSupportedCrossProfileImmediatePredecessor(t *testi
 	if err := effects.CreateBackup(context.Background(), backup); err != nil {
 		t.Fatal(err)
 	}
+	manifestContent, err := os.ReadFile(filepath.Join(
+		target.Root, filepath.FromSlash(layout.BackupDirectory), backup.BackupID, backupManifestFilename,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var predecessorBackup backupManifest
+	if json.Unmarshal(manifestContent, &predecessorBackup) != nil ||
+		predecessorBackup.APIVersion != backupAPIVersion ||
+		predecessorBackup.AccessKeyWrapping == nil || predecessorBackup.TOTPBackupCustody == nil {
+		t.Fatalf("supported predecessor backup lost its custody contract: %#v", predecessorBackup)
+	}
 	source, err := effects.InspectBackup(context.Background(), pair.Source, backup.BackupID)
 	if err != nil {
 		t.Fatal(err)
@@ -2498,6 +2759,7 @@ func TestRecoveryAuthenticatesSupportedCrossProfileImmediatePredecessor(t *testi
 		Current: pair.Target, Target: target,
 		BackupID: source.BackupID, BackupDigest: source.BackupDigest,
 	}
+	recovery.AuthenticationIntent = testAuthenticationRecoveryIntent(recovery, source.TOTPCustodyDigest, 1)
 	current, recoveredTarget, manifest, err := authenticateRecoveryPlan(recovery)
 	if err != nil {
 		t.Fatalf("authenticate supported cross-profile recovery: %v", err)
@@ -2505,7 +2767,7 @@ func TestRecoveryAuthenticatesSupportedCrossProfileImmediatePredecessor(t *testi
 	defer clear(current.TrustBytes)
 	defer clear(recoveredTarget.TrustBytes)
 	if current.Bundle.Manifest.Database != release.CurrentDatabaseProfile() ||
-		recoveredTarget.Bundle.Manifest.Database != release.SupportedDatabasePredecessorProfile() ||
+		recoveredTarget.Bundle.Manifest.Database != release.SupportedDatabaseUpgradePredecessorProfile() ||
 		current.Bundle.Manifest.Release.PreviousID != recoveredTarget.Bundle.Manifest.Release.ID ||
 		current.Bundle.Manifest.Release.PreviousVersion != recoveredTarget.Bundle.Manifest.Release.Version ||
 		manifest.ReleaseID != recoveredTarget.Bundle.Manifest.Release.ID ||
@@ -2571,6 +2833,7 @@ func TestRecoveryRejectsUnsupportedProfileTransitionAtEveryEffectBoundary(t *tes
 			}()
 			recovery := platformcommand.RecoveryPlan{Current: pair.Target, Target: target,
 				BackupID: source.BackupID, BackupDigest: source.BackupDigest}
+			recovery.AuthenticationIntent = testAuthenticationRecoveryIntent(recovery, source.TOTPCustodyDigest, 1)
 			composeBefore, removalsBefore, restoresBefore := runtimeBoundary.composeCalls, runtimeBoundary.providerRemovals, runtimeBoundary.recoveryRestores
 			migrationsBefore, verificationsBefore := len(runtimeBoundary.migrationRuns), verifier.calls
 			for _, phase := range []lifecycle.Phase{lifecycle.PhaseRecovering, lifecycle.PhaseStarting, lifecycle.PhaseVerifying} {
@@ -2658,6 +2921,7 @@ func TestSupportEvidenceIsBoundedSanitizedAndUsefulWhenDegraded(t *testing.T) {
 		secret,
 		capabilityKey,
 		readTestFile(t, plan.Root, layout.IAMCredentialRecovery),
+		readTestFile(t, plan.Root, layout.IAMAuthenticationRecovery),
 		readTestFile(t, plan.Root, layout.IAMBackupCustody),
 		readTestFile(t, plan.Root, layout.BackupSealKey),
 		readTestFile(t, plan.Root, layout.PaaSAPI),
@@ -3032,21 +3296,12 @@ func newUpgradePlan(t *testing.T, profiles ...release.DatabaseProfile) platformc
 		CorrelationID: "cmd-11111111111111111111111111111111",
 		Listener:      "0.0.0.0", Port: 8080, Bundle: bundles[0],
 		Trust: fixtures[0].Trust, TrustBytes: trustBytes,
-	}
-	if source.Bundle.Manifest.TopologyDigest == topology.ContractDigest() {
-		source.NorthboundOrigin = "https://matrix.example.com:443"
+		NorthboundOrigin: "https://matrix.example.com:443",
 	}
 	if err := stageInstallation(source, rand.Reader); err != nil {
 		t.Fatalf("stage upgrade source: %v", err)
 	}
-	if source.Bundle.Manifest.TopologyDigest == topology.SupportedPredecessorContractDigest() {
-		for _, relative := range []string{layout.IAMAccessKeyWrappingKeyring, layout.IAMTOTPKeyring, layout.IAMCursorKey} {
-			if err := os.Remove(filepath.Join(source.Root, filepath.FromSlash(relative))); err != nil {
-				t.Fatalf("remove future predecessor fixture %q: %v", relative, err)
-			}
-		}
-	}
-	if source.Bundle.Manifest.TopologyDigest == topology.ContractDigest() {
+	if source.Bundle.Manifest.Database == release.CurrentDatabaseProfile() {
 		if err := configureInstallation(
 			context.Background(), newImageRuntime(source.Bundle.Manifest, true), source,
 		); err != nil {
@@ -3069,9 +3324,6 @@ func newUpgradePlan(t *testing.T, profiles ...release.DatabaseProfile) platformc
 	}
 	target := source
 	target.Bundle = bundles[1]
-	if target.Bundle.Manifest.TopologyDigest == topology.ContractDigest() {
-		target.NorthboundOrigin = "https://matrix.example.com:443"
-	}
 	target.PreviousID = source.Bundle.Manifest.Release.ID
 	target.PreviousDigest = source.Bundle.ManifestSHA256
 	if err := stageInstallation(target, rand.Reader); err != nil {
@@ -3128,6 +3380,28 @@ func installedPlanFrom(plan platformcommand.InstallPlan) platformcommand.Install
 	}
 }
 
+func testAuthenticationRecoveryIntent(
+	plan platformcommand.RecoveryPlan,
+	custodyDigest string,
+	epoch uint64,
+) installationv1.AuthenticationRecoveryIntent {
+	return installationv1.AuthenticationRecoveryIntent{
+		APIVersion:          installationv1.AuthenticationRecoveryAPIVersion,
+		Kind:                installationv1.AuthenticationRecoveryIntentKind,
+		Purpose:             installationv1.AuthenticationRecoveryPurpose,
+		InstallationID:      plan.Current.InstallationID,
+		Epoch:               epoch,
+		CommandID:           plan.Current.CorrelationID,
+		BackupID:            plan.BackupID,
+		BackupDigest:        plan.BackupDigest,
+		SourceReleaseID:     plan.Current.Bundle.Manifest.Release.ID,
+		SourceReleaseDigest: plan.Current.Bundle.ManifestSHA256,
+		TargetReleaseID:     plan.Target.Bundle.Manifest.Release.ID,
+		TargetReleaseDigest: plan.Target.Bundle.ManifestSHA256,
+		TOTPCustodyDigest:   custodyDigest,
+	}
+}
+
 func readTestFile(t *testing.T, root, relative string) []byte {
 	t.Helper()
 	content, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(relative)))
@@ -3151,7 +3425,7 @@ func snapshotManagedCredentials(t *testing.T, root string) map[string]string {
 		layout.InitialAdministratorPassword,
 		layout.PostgresPassword, layout.PostgresMigration, layout.IAMAPI,
 		layout.IAMWorker, layout.AuditRuntime, layout.PaaSAPI, layout.PaaSWorker,
-		layout.IAMCredentialRecovery, layout.IAMBackupCustody,
+		layout.IAMCredentialRecovery, layout.IAMAuthenticationRecovery, layout.IAMBackupCustody,
 		layout.IAMLocalRecoveryAuthority,
 	}
 	result := make(map[string]string, len(paths))
@@ -3282,6 +3556,12 @@ type platformStartRuntime struct {
 	removedNetworks           map[string]bool
 	providerRemovals          int
 	probe                     *recoveryProbeRuntime
+	authenticationContainer   platformContainerInspection
+	authenticationPresent     bool
+	authenticationStarts      int
+	authenticationRemovals    int
+	authenticationExitCodes   map[string]int
+	recoveryEvents            []string
 }
 
 type platformCleanupRuntime struct {
@@ -3339,11 +3619,12 @@ func newPlatformStartRuntime(
 		images[image.ImageID] = true
 	}
 	lease, leaseErr := platformTestTOTPBackupLease(plan)
+	backupVersion, _ := backupAPIVersionForDatabaseProfile(plan.Bundle.Manifest.Database)
 	return &platformStartRuntime{
 		expectation: expectation, images: images,
 		databaseDump: []byte("matrix-postgresql-custom-backup-fixture"),
 		backupLease:  lease, backupLeaseError: leaseErr,
-		backupSnapshotRequired: plan.Bundle.Manifest.Database == release.CurrentDatabaseProfile(),
+		backupSnapshotRequired: backupVersion == backupAPIVersion,
 	}
 }
 
@@ -3576,6 +3857,9 @@ func (runtimeBoundary *platformStartRuntime) Run(
 	if input != nil {
 		return nil, false, errors.New("platform start Docker invocation has unexpected stdin")
 	}
+	if output, handled, err := runtimeBoundary.runAuthenticationRecovery(arguments); handled {
+		return output, true, err
+	}
 	if arguments[0] == "exec" && slices.Contains(arguments, "psql") {
 		if !slices.Contains(arguments, "--no-password") {
 			return nil, false, errors.New("platform database observation may prompt for a password")
@@ -3586,6 +3870,9 @@ func (runtimeBoundary *platformStartRuntime) Run(
 		imageID := arguments[4]
 		if !runtimeBoundary.images[imageID] {
 			return nil, true, errors.New("platform image is absent")
+		}
+		if arguments[3] == "{{json .Config.Env}}" {
+			return []byte(`["PATH=/usr/bin"]`), true, nil
 		}
 		return []byte(imageID + "|linux|amd64\n"), true, nil
 	}
@@ -3605,6 +3892,7 @@ func (runtimeBoundary *platformStartRuntime) Run(
 		}
 		runtimeBoundary.composeCalls++
 		runtimeBoundary.composeArguments = slices.Clone(arguments)
+		runtimeBoundary.recoveryEvents = append(runtimeBoundary.recoveryEvents, "compose")
 		runtimeBoundary.started = true
 		runtimeBoundary.postgresOnly = arguments[len(arguments)-1] == "postgres"
 		runtimeBoundary.networkCreated = true
@@ -3616,6 +3904,7 @@ func (runtimeBoundary *platformStartRuntime) Run(
 		runtimeBoundary.migrationRuns = append(
 			runtimeBoundary.migrationRuns, slices.Clone(arguments),
 		)
+		runtimeBoundary.recoveryEvents = append(runtimeBoundary.recoveryEvents, "migration")
 		return nil, true, nil
 	}
 	if len(arguments) >= 2 && arguments[1] == "ls" {
@@ -3725,6 +4014,229 @@ func (runtimeBoundary *platformStartRuntime) Run(
 	return nil, false, fmt.Errorf("unexpected platform Docker command: %q", strings.Join(arguments, " "))
 }
 
+func (runtimeBoundary *platformStartRuntime) runAuthenticationRecovery(arguments []string) ([]byte, bool, error) {
+	if len(arguments) < 2 || arguments[0] != "container" {
+		return nil, false, nil
+	}
+	switch arguments[1] {
+	case "ls":
+		selected := false
+		for index := 2; index+1 < len(arguments); index++ {
+			if arguments[index] == "--filter" && strings.Contains(arguments[index+1], "-iam-authentication-recovery-") {
+				selected = true
+			}
+		}
+		if !selected {
+			return nil, false, nil
+		}
+		if !runtimeBoundary.authenticationPresent {
+			return nil, true, nil
+		}
+		return []byte(runtimeBoundary.authenticationContainer.ID + "\n"), true, nil
+	case "create":
+		if !slices.Contains(arguments, authenticationRecoveryEntrypoint) {
+			return nil, false, nil
+		}
+		if runtimeBoundary.authenticationPresent {
+			return nil, true, errors.New("authentication recovery test container already exists")
+		}
+		container, err := authenticationRecoveryTestContainer(runtimeBoundary.expectation.Name, arguments)
+		if err != nil {
+			return nil, true, err
+		}
+		runtimeBoundary.authenticationContainer = container
+		runtimeBoundary.authenticationPresent = true
+		return []byte(container.ID + "\n"), true, nil
+	case "inspect":
+		identity := arguments[len(arguments)-1]
+		if !runtimeBoundary.authenticationPresent || identity != runtimeBoundary.authenticationContainer.ID {
+			return nil, false, nil
+		}
+		content, err := json.Marshal(runtimeBoundary.authenticationContainer)
+		return content, true, err
+	case "start":
+		identity := arguments[len(arguments)-1]
+		if !runtimeBoundary.authenticationPresent || identity != runtimeBoundary.authenticationContainer.ID {
+			return nil, false, nil
+		}
+		if !slices.Equal(arguments, []string{"container", "start", "--attach", identity}) ||
+			runtimeBoundary.authenticationContainer.State.Status != "created" {
+			return nil, true, errors.New("authentication recovery test start is invalid")
+		}
+		mode := runtimeBoundary.authenticationContainer.Config.Cmd[0]
+		code := runtimeBoundary.authenticationExitCodes[mode]
+		var output []byte
+		var err error
+		if code == 0 {
+			output, err = authenticationRecoveryTestOutput(runtimeBoundary.authenticationContainer)
+			if err != nil {
+				return nil, true, err
+			}
+		}
+		runtimeBoundary.authenticationStarts++
+		runtimeBoundary.authenticationContainer.State = platformContainerState{Status: "exited", ExitCode: code}
+		runtimeBoundary.recoveryEvents = append(runtimeBoundary.recoveryEvents, "authentication-"+mode)
+		return output, true, nil
+	case "rm":
+		identity := arguments[len(arguments)-1]
+		if !runtimeBoundary.authenticationPresent || identity != runtimeBoundary.authenticationContainer.ID {
+			return nil, false, nil
+		}
+		if !slices.Equal(arguments, []string{"container", "rm", identity}) ||
+			runtimeBoundary.authenticationContainer.State.Running ||
+			(runtimeBoundary.authenticationContainer.State.Status != "created" && runtimeBoundary.authenticationContainer.State.Status != "exited") {
+			return nil, true, errors.New("authentication recovery test removal is invalid")
+		}
+		runtimeBoundary.authenticationPresent = false
+		runtimeBoundary.authenticationRemovals++
+		return nil, true, nil
+	default:
+		return nil, false, nil
+	}
+}
+
+func authenticationRecoveryTestContainer(project string, arguments []string) (platformContainerInspection, error) {
+	if len(arguments) < 5 || arguments[len(arguments)-2] == "" ||
+		!hasArgumentPair(arguments, "--pull", "never") ||
+		!hasArgumentPair(arguments, "--entrypoint", authenticationRecoveryEntrypoint) ||
+		!hasArgumentPair(arguments, "--user", "0:0") ||
+		!hasArgumentPair(arguments, "--cpus", "1") ||
+		!hasArgumentPair(arguments, "--memory", "256m") ||
+		!hasArgumentPair(arguments, "--memory-swap", "256m") ||
+		!hasArgumentPair(arguments, "--pids-limit", "64") ||
+		!hasArgumentPair(arguments, "--ipc", "private") ||
+		!hasArgumentPair(arguments, "--cgroupns", "private") ||
+		!hasArgumentPair(arguments, "--restart", "no") ||
+		!hasArgumentPair(arguments, "--log-driver", "none") ||
+		!hasArgumentPair(arguments, "--cap-drop", "ALL") ||
+		!hasArgumentPair(arguments, "--security-opt", "no-new-privileges:true") ||
+		!slices.Contains(arguments, "--read-only") {
+		return platformContainerInspection{}, errors.New("authentication recovery test isolation is incomplete")
+	}
+	mode := arguments[len(arguments)-1]
+	if mode != installationv1.AuthenticationRecoveryCloseCommand &&
+		mode != installationv1.AuthenticationRecoveryReconcileCommand &&
+		mode != installationv1.AuthenticationRecoveryReopenCommand {
+		return platformContainerInspection{}, errors.New("authentication recovery test mode is invalid")
+	}
+	valueAfter := func(flag string) string {
+		for index := 0; index+1 < len(arguments); index++ {
+			if arguments[index] == flag {
+				return arguments[index+1]
+			}
+		}
+		return ""
+	}
+	labels := map[string]string{}
+	environment := []string{"PATH=/usr/bin"}
+	mounts := []platformProviderMount{}
+	for index := 0; index+1 < len(arguments); index++ {
+		switch arguments[index] {
+		case "--label":
+			key, value, found := strings.Cut(arguments[index+1], "=")
+			if !found {
+				return platformContainerInspection{}, errors.New("authentication recovery test label is invalid")
+			}
+			labels[key] = value
+		case "--env":
+			environment = append(environment, arguments[index+1])
+		case "--mount":
+			parts := strings.Split(arguments[index+1], ",")
+			values := map[string]string{}
+			readonly := false
+			for _, part := range parts {
+				if part == "readonly" {
+					readonly = true
+					continue
+				}
+				key, value, found := strings.Cut(part, "=")
+				if found {
+					values[key] = value
+				}
+			}
+			if values["type"] != "bind" || values["src"] == "" || values["dst"] == "" || !readonly {
+				return platformContainerInspection{}, errors.New("authentication recovery test mount is invalid")
+			}
+			mounts = append(mounts, platformProviderMount{Type: "bind", Source: values["src"], Destination: values["dst"]})
+		}
+	}
+	limit := int64(64)
+	container := platformContainerInspection{
+		ID: strings.Repeat("d", 64), Name: "/" + valueAfter("--name"), Image: arguments[len(arguments)-2],
+		Config: platformContainerConfig{User: "0:0", Labels: labels, Env: environment, Entrypoint: []string{authenticationRecoveryEntrypoint}, Cmd: []string{mode}},
+		State:  platformContainerState{Status: "created"},
+		HostConfig: platformHostConfig{ReadonlyRootfs: true, NetworkMode: valueAfter("--network"), Memory: 256 * 1024 * 1024,
+			MemorySwap: 256 * 1024 * 1024, NanoCPUs: 1_000_000_000, PidsLimit: &limit,
+			IpcMode: "private", CgroupnsMode: "private", CapDrop: []string{"ALL"},
+			SecurityOpt: []string{"no-new-privileges:true"}, Tmpfs: map[string]string{"/tmp": "rw,noexec,nosuid,size=64m"}},
+		Mounts: mounts,
+	}
+	container.HostConfig.RestartPolicy.Name = "no"
+	container.HostConfig.LogConfig.Type = "none"
+	container.NetworkSettings.Networks = map[string]struct {
+		NetworkID string `json:"NetworkID"`
+	}{project + "_control": {}}
+	return container, nil
+}
+
+func authenticationRecoveryTestOutput(container platformContainerInspection) ([]byte, error) {
+	if len(container.Config.Cmd) != 1 || len(container.Mounts) != 2 {
+		return nil, errors.New("authentication recovery test input is incomplete")
+	}
+	inputPath := ""
+	for _, mount := range container.Mounts {
+		if mount.Destination == "/run/matrix/authentication-recovery-input.json" {
+			inputPath = mount.Source
+		}
+	}
+	content, err := os.ReadFile(inputPath)
+	if err != nil {
+		return nil, err
+	}
+	defer clear(content)
+	switch container.Config.Cmd[0] {
+	case installationv1.AuthenticationRecoveryCloseCommand:
+		intent, err := installationv1.DecodeAuthenticationRecoveryIntent(bytes.NewReader(content))
+		if err != nil {
+			return nil, err
+		}
+		digest, err := installationv1.AuthenticationRecoveryIntentDigest(intent)
+		if err != nil {
+			return nil, err
+		}
+		return installationv1.EncodeAuthenticationRecoveryClosure(installationv1.AuthenticationRecoveryClosure{
+			APIVersion: installationv1.AuthenticationRecoveryAPIVersion, Kind: installationv1.AuthenticationRecoveryClosureKind,
+			Purpose: installationv1.AuthenticationRecoveryPurpose, InstallationID: intent.InstallationID,
+			Epoch: intent.Epoch, State: installationv1.AuthenticationRecoveryStateClosed, CommandID: intent.CommandID,
+			BackupID: intent.BackupID, BackupDigest: intent.BackupDigest, RecoveryIntentDigest: digest,
+			TOTPCustodyDigest: intent.TOTPCustodyDigest, ClosedAt: time.Date(2026, 9, 21, 2, 3, 4, 5_000, time.UTC),
+		})
+	case installationv1.AuthenticationRecoveryReconcileCommand:
+		closure, err := installationv1.DecodeAuthenticationRecoveryClosure(bytes.NewReader(content))
+		if err != nil {
+			return nil, err
+		}
+		return installationv1.EncodeAuthenticationRecoveryClosure(closure)
+	case installationv1.AuthenticationRecoveryReopenCommand:
+		closure, err := installationv1.DecodeAuthenticationRecoveryClosure(bytes.NewReader(content))
+		if err != nil {
+			return nil, err
+		}
+		digest, err := installationv1.AuthenticationRecoveryClosureDigest(closure)
+		if err != nil {
+			return nil, err
+		}
+		return installationv1.EncodeAuthenticationRecoveryCompletion(installationv1.AuthenticationRecoveryCompletion{
+			APIVersion: installationv1.AuthenticationRecoveryAPIVersion, Kind: installationv1.AuthenticationRecoveryCompletionKind,
+			Purpose: installationv1.AuthenticationRecoveryPurpose, InstallationID: closure.InstallationID,
+			Epoch: closure.Epoch, State: installationv1.AuthenticationRecoveryStateReopened, CommandID: closure.CommandID,
+			ClosureDigest: digest, CompletedAt: closure.ClosedAt.Add(time.Microsecond),
+		})
+	default:
+		return nil, errors.New("authentication recovery test mode is invalid")
+	}
+}
+
 func (runtimeBoundary *platformStartRuntime) RunTo(
 	ctx context.Context,
 	input io.Reader,
@@ -3738,7 +4250,7 @@ func (runtimeBoundary *platformStartRuntime) RunTo(
 		joined := strings.Join(arguments, "\x00")
 		for _, forbidden := range []string{
 			layout.IAMTOTPKeyring, layout.PostgresMigration, layout.IAMAPI,
-			layout.IAMWorker, layout.IAMCredentialRecovery, layout.IAMLocalRecoveryAuthority,
+			layout.IAMWorker, layout.IAMCredentialRecovery, layout.IAMAuthenticationRecovery, layout.IAMLocalRecoveryAuthority,
 		} {
 			if strings.Contains(joined, forbidden) {
 				return false, errors.New("TOTP backup custody received an unrelated authority")
@@ -3822,20 +4334,43 @@ func (runtimeBoundary *platformStartRuntime) RunTo(
 		}
 		for _, required := range []string{
 			"BEGIN;", "DROP SCHEMA IF EXISTS audit, iam, managedservice, paas CASCADE;",
-			"pg_restore --file=- --exit-on-error --no-privileges --no-password",
+			"CREATE SCHEMA audit AUTHORIZATION matrix_audit_owner;",
+			"CREATE SCHEMA iam AUTHORIZATION matrix_iam_owner;",
+			"CREATE SCHEMA managedservice AUTHORIZATION CURRENT_USER;",
+			"CREATE SCHEMA paas AUTHORIZATION CURRENT_USER;",
+			"pg_restore --file=- --exit-on-error --no-privileges --no-password --strict-names",
+			"--schema=audit --schema=iam --schema=managedservice --schema=paas 2>/dev/null",
 			"COMMIT;", "ROLLBACK;", "psql -X --set=ON_ERROR_STOP=1",
+			"--set=VERBOSITY=sqlstate", "mktemp", "RESTORE_OBJECT_CONFLICT",
+			"RESTORE_MISSING_OBJECT", "RESTORE_MISSING_RELATION", "RESTORE_MISSING_SCHEMA",
+			"RESTORE_AUTHORITY", "RESTORE_DEPENDENCY",
+			"RESTORE_INTEGRITY", "RESTORE_TRANSACTION", "RESTORE_PIPELINE",
+			"RESTORE_CLIENT", "RESTORE_CLIENT_FATAL", "RESTORE_CONNECTION",
+			"RESTORE_CLIENT_SCRIPT", "PIPESTATUS",
 			"--username=matrix --dbname=matrix",
 		} {
 			if !strings.Contains(databaseRestoreScript, required) {
 				return true, fmt.Errorf("recovery restore transaction lacks %s", required)
 			}
 		}
-		for _, forbidden := range []string{"--clean", "--no-owner"} {
+		for _, forbidden := range []string{
+			"--clean", "--no-owner", "--schema=public", "CREATE SCHEMA public",
+		} {
 			if strings.Contains(databaseRestoreScript, forbidden) {
 				return true, fmt.Errorf("recovery restore transaction contains %s", forbidden)
 			}
 		}
+		drop := strings.Index(databaseRestoreScript, "DROP SCHEMA IF EXISTS audit, iam, managedservice, paas CASCADE;")
+		audit := strings.Index(databaseRestoreScript, "CREATE SCHEMA audit AUTHORIZATION matrix_audit_owner;")
+		iam := strings.Index(databaseRestoreScript, "CREATE SCHEMA iam AUTHORIZATION matrix_iam_owner;")
+		managedservice := strings.Index(databaseRestoreScript, "CREATE SCHEMA managedservice AUTHORIZATION CURRENT_USER;")
+		paas := strings.Index(databaseRestoreScript, "CREATE SCHEMA paas AUTHORIZATION CURRENT_USER;")
+		restore := strings.Index(databaseRestoreScript, "pg_restore --file=-")
+		if drop < 0 || !(drop < audit && audit < iam && iam < managedservice && managedservice < paas && paas < restore) {
+			return true, errors.New("recovery restore schema reset order is invalid")
+		}
 		runtimeBoundary.recoveryRestores++
+		runtimeBoundary.recoveryEvents = append(runtimeBoundary.recoveryEvents, "database-restore")
 		return true, nil
 	}
 	hasSnapshot := slices.Contains(arguments, "--snapshot="+runtimeBoundary.backupLease.SnapshotID)
@@ -3849,6 +4384,212 @@ func (runtimeBoundary *platformStartRuntime) RunTo(
 	runtimeBoundary.backupStreams++
 	_, err := output.Write(runtimeBoundary.databaseDump)
 	return true, err
+}
+
+type databaseRestoreDiagnosticRuntime struct {
+	output    []byte
+	started   bool
+	err       error
+	input     []byte
+	arguments []string
+}
+
+func (*databaseRestoreDiagnosticRuntime) Run(
+	context.Context,
+	io.Reader,
+	...string,
+) ([]byte, bool, error) {
+	return nil, false, errors.New("unexpected non-streaming restore command")
+}
+
+func (runtimeBoundary *databaseRestoreDiagnosticRuntime) RunTo(
+	_ context.Context,
+	input io.Reader,
+	output io.Writer,
+	arguments ...string,
+) (bool, error) {
+	content, err := io.ReadAll(input)
+	if err != nil {
+		return true, err
+	}
+	runtimeBoundary.input = content
+	runtimeBoundary.arguments = slices.Clone(arguments)
+	if len(runtimeBoundary.output) != 0 {
+		if _, writeErr := output.Write(runtimeBoundary.output); writeErr != nil {
+			return true, writeErr
+		}
+	}
+	return runtimeBoundary.started, runtimeBoundary.err
+}
+
+func TestRestoreDatabaseDumpReturnsOnlyClosedDiagnostics(t *testing.T) {
+	root := t.TempDir()
+	relative := filepath.Join("backups", "backup-test", databaseDumpFilename)
+	target := filepath.Join(root, relative)
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		t.Fatalf("create restore fixture: %v", err)
+	}
+	dump := []byte("authenticated custom archive")
+	if err := os.WriteFile(target, dump, 0o600); err != nil {
+		t.Fatalf("write restore fixture: %v", err)
+	}
+
+	for diagnostic, want := range map[string]platformcommand.RecoveryFailureBoundary{
+		"RESTORE_OBJECT_CONFLICT\n":     platformcommand.RecoveryFailureDatabaseRestoreObjectConflict,
+		"RESTORE_MISSING_OBJECT\n":      platformcommand.RecoveryFailureDatabaseRestoreMissingObject,
+		"RESTORE_MISSING_RELATION\n":    platformcommand.RecoveryFailureDatabaseRestoreMissingRelation,
+		"RESTORE_MISSING_SCHEMA\n":      platformcommand.RecoveryFailureDatabaseRestoreMissingSchema,
+		"RESTORE_AUTHORITY\n":           platformcommand.RecoveryFailureDatabaseRestoreAuthority,
+		"RESTORE_DEPENDENCY\n":          platformcommand.RecoveryFailureDatabaseRestoreDependency,
+		"RESTORE_INTEGRITY\n":           platformcommand.RecoveryFailureDatabaseRestoreIntegrity,
+		"RESTORE_TRANSACTION\n":         platformcommand.RecoveryFailureDatabaseRestoreTransaction,
+		"RESTORE_PIPELINE\n":            platformcommand.RecoveryFailureDatabaseRestorePipeline,
+		"RESTORE_CLIENT\n":              platformcommand.RecoveryFailureDatabaseRestoreClient,
+		"RESTORE_CLIENT_FATAL\n":        platformcommand.RecoveryFailureDatabaseRestoreClientFatal,
+		"RESTORE_CONNECTION\n":          platformcommand.RecoveryFailureDatabaseRestoreConnection,
+		"RESTORE_CLIENT_SCRIPT\n":       platformcommand.RecoveryFailureDatabaseRestoreClientScript,
+		"RESTORE_UNKNOWN\n":             platformcommand.RecoveryFailureDatabaseRestore,
+		"private relation name\n":       platformcommand.RecoveryFailureDatabaseRestore,
+		"RESTORE_MISSING_OBJECT\nextra": platformcommand.RecoveryFailureDatabaseRestore,
+	} {
+		runtimeBoundary := &databaseRestoreDiagnosticRuntime{
+			output: []byte(diagnostic), started: true, err: errors.New("restore failed"),
+		}
+		err := restoreDatabaseDump(
+			context.Background(), runtimeBoundary, root, relative, "postgres-container",
+		)
+		if !errors.Is(err, platformcommand.ErrEffectVerification) ||
+			databaseRestoreFailureBoundary(err) != want ||
+			!bytes.Equal(runtimeBoundary.input, dump) ||
+			!slices.Contains(runtimeBoundary.arguments, databaseRestoreScript) {
+			t.Fatalf("diagnostic %q = %v / %q / input=%q / args=%q", diagnostic, err, databaseRestoreFailureBoundary(err), runtimeBoundary.input, runtimeBoundary.arguments)
+		}
+		if strings.Contains(err.Error(), diagnostic) || strings.Contains(err.Error(), "private relation") {
+			t.Fatalf("diagnostic %q leaked through error %q", diagnostic, err)
+		}
+	}
+
+	t.Run("successful restore rejects output", func(t *testing.T) {
+		runtimeBoundary := &databaseRestoreDiagnosticRuntime{
+			output: []byte("unexpected output"), started: true,
+		}
+		err := restoreDatabaseDump(
+			context.Background(), runtimeBoundary, root, relative, "postgres-container",
+		)
+		if !errors.Is(err, platformcommand.ErrEffectVerification) ||
+			databaseRestoreFailureBoundary(err) != platformcommand.RecoveryFailureDatabaseRestore {
+			t.Fatalf("successful restore output = %v", err)
+		}
+	})
+
+	t.Run("oversized failure output closes to generic boundary", func(t *testing.T) {
+		runtimeBoundary := &databaseRestoreDiagnosticRuntime{
+			output:  bytes.Repeat([]byte("x"), maximumDatabaseRestoreDiagnostic+1),
+			started: true,
+			err:     errors.New("restore failed"),
+		}
+		err := restoreDatabaseDump(
+			context.Background(), runtimeBoundary, root, relative, "postgres-container",
+		)
+		if !errors.Is(err, platformcommand.ErrEffectVerification) ||
+			databaseRestoreFailureBoundary(err) != platformcommand.RecoveryFailureDatabaseRestore {
+			t.Fatalf("oversized restore diagnostic = %v", err)
+		}
+	})
+}
+
+func TestDatabaseRestoreScriptEmitsOnlyClosedSQLStateClass(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("database restore command targets the Linux release image")
+	}
+	bin := t.TempDir()
+	t.Setenv("PATH", bin+":"+os.Getenv("PATH"))
+	run := func(t *testing.T, restore, psql, want string, wantSuccess bool) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(bin, "pg_restore"), []byte(restore), 0o700); err != nil {
+			t.Fatalf("write fake pg_restore: %v", err)
+		}
+		if err := os.WriteFile(filepath.Join(bin, "psql"), []byte(psql), 0o700); err != nil {
+			t.Fatalf("write fake psql: %v", err)
+		}
+		command := exec.Command("/bin/bash", "-o", "pipefail", "-ceu", databaseRestoreScript)
+		command.Stdin = strings.NewReader("archive")
+		output, err := command.Output()
+		if (err == nil) != wantSuccess || string(output) != want ||
+			strings.Contains(string(output), "private relation") {
+			t.Fatalf("restore script diagnostic = %q / %v", output, err)
+		}
+	}
+	t.Run("server SQLSTATE", func(t *testing.T) {
+		run(t,
+			"#!/bin/sh\nprintf '%s\\n' 'SELECT 1;'\n",
+			"#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' 'ERROR:  42P07' 'private relation name' >&2\nexit 3\n",
+			"RESTORE_OBJECT_CONFLICT\n", false,
+		)
+	})
+	t.Run("server SQLSTATE with source prefix", func(t *testing.T) {
+		run(t,
+			"#!/bin/sh\nprintf '%s\\n' 'SELECT 1;'\n",
+			"#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' 'psql:<stdin>:17: ERROR:  42P07' 'private relation name' >&2\nexit 3\n",
+			"RESTORE_OBJECT_CONFLICT\n", false,
+		)
+	})
+	for name, sqlstateAndDiagnostic := range map[string]string{
+		"missing object":   "42704 RESTORE_MISSING_OBJECT",
+		"missing relation": "42P01 RESTORE_MISSING_RELATION",
+		"missing schema":   "3F000 RESTORE_MISSING_SCHEMA",
+	} {
+		t.Run(name, func(t *testing.T) {
+			parts := strings.Fields(sqlstateAndDiagnostic)
+			run(t,
+				"#!/bin/sh\nprintf '%s\\n' 'SELECT 1;'\n",
+				"#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' 'ERROR:  "+parts[0]+"' >&2\nexit 3\n",
+				parts[1]+"\n", false,
+			)
+		})
+	}
+	t.Run("archive pipeline", func(t *testing.T) {
+		run(t,
+			"#!/bin/sh\nprintf '%s\\n' 'SELECT 1;'\nexit 9\n",
+			"#!/bin/sh\ncat >/dev/null\n",
+			"RESTORE_PIPELINE\n", false,
+		)
+	})
+	t.Run("unclassified client failure", func(t *testing.T) {
+		run(t,
+			"#!/bin/sh\nprintf '%s\\n' 'SELECT 1;'\n",
+			"#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' 'client failed without SQLSTATE' >&2\nexit 3\n",
+			"RESTORE_CLIENT_SCRIPT\n", false,
+		)
+	})
+	t.Run("fatal client failure", func(t *testing.T) {
+		run(t,
+			"#!/bin/sh\nprintf '%s\\n' 'SELECT 1;'\n",
+			"#!/bin/sh\ncat >/dev/null\nexit 1\n",
+			"RESTORE_CLIENT_FATAL\n", false,
+		)
+	})
+	t.Run("connection failure", func(t *testing.T) {
+		run(t,
+			"#!/bin/sh\nprintf '%s\\n' 'SELECT 1;'\n",
+			"#!/bin/sh\ncat >/dev/null\nexit 2\n",
+			"RESTORE_CONNECTION\n", false,
+		)
+	})
+	t.Run("unrecognized client status", func(t *testing.T) {
+		run(t,
+			"#!/bin/sh\nprintf '%s\\n' 'SELECT 1;'\n",
+			"#!/bin/sh\ncat >/dev/null\nexit 9\n",
+			"RESTORE_CLIENT\n", false,
+		)
+	})
+	t.Run("success", func(t *testing.T) {
+		run(t,
+			"#!/bin/sh\nprintf '%s\\n' 'SELECT 1;'\n",
+			"#!/bin/sh\ncat >/dev/null\n",
+			"", true,
+		)
+	})
 }
 
 func (runtimeBoundary *platformStartRuntime) inspectNetworkLabels(
@@ -3878,7 +4619,8 @@ func (runtimeBoundary *platformStartRuntime) inspectNetwork(
 	labels["com.docker.compose.project"] = runtimeBoundary.expectation.Name
 	labels["com.docker.compose.network"] = logicalName
 	content, err := json.Marshal(map[string]any{
-		"Id": identity, "Internal": expected.Internal, "Labels": labels,
+		"Id": identity, "Name": runtimeBoundary.expectation.Name + "_" + logicalName,
+		"Internal": expected.Internal, "Labels": labels,
 	})
 	return content, true, err
 }

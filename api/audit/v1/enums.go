@@ -74,6 +74,9 @@ const (
 	ActionIAMTenantEnabled                           Action = "iam.tenant.enabled"
 	ActionIAMTenantAdministratorRecovered            Action = "iam.tenant-administrator.recovered"
 	ActionIAMInstallationPrimaryCredentialsRecovered Action = "iam.installation-primary.credentials-recovered"
+	ActionIAMAuthenticationRecoveryClosed            Action = "iam.authentication-recovery.closed"
+	ActionIAMAuthenticationRecoveryReconciled        Action = "iam.authentication-recovery.reconciled"
+	ActionIAMAuthenticationRecoveryReopened          Action = "iam.authentication-recovery.reopened"
 	ActionIAMAccountAliasSet                         Action = "iam.account-alias.set"
 	ActionIAMPrincipalStatusSet                      Action = "iam.principal.status-set"
 	ActionIAMPasswordReset                           Action = "iam.password.reset"
@@ -182,17 +185,19 @@ const (
 // ActionContract is the closed Audit event union. Source is authority
 // context supplied by authentication and is never accepted from event JSON.
 type ActionContract struct {
-	Source                  Source
-	Target                  TargetKind
-	Results                 []Result
-	IAMDecisionPermitted    bool
-	IAMDecisionRequired     bool
-	OperationRequired       bool
-	PlatformOnly            bool
-	UserActorRequired       bool
-	RoleActorPermitted      bool
-	RoleActorRequired       bool
-	AccessKeyActorPermitted bool
+	Source                    Source
+	Target                    TargetKind
+	Results                   []Result
+	IAMDecisionPermitted      bool
+	IAMDecisionRequired       bool
+	OperationRequired         bool
+	PlatformOnly              bool
+	UserActorRequired         bool
+	RoleActorPermitted        bool
+	RoleActorRequired         bool
+	AccessKeyActorPermitted   bool
+	PlatformSystemActorID     ActorID
+	TargetMatchesInstallation bool
 }
 
 func AllActions() []Action {
@@ -255,6 +260,9 @@ var allActions = []Action{
 	ActionIAMTenantEnabled,
 	ActionIAMTenantAdministratorRecovered,
 	ActionIAMInstallationPrimaryCredentialsRecovered,
+	ActionIAMAuthenticationRecoveryClosed,
+	ActionIAMAuthenticationRecoveryReconciled,
+	ActionIAMAuthenticationRecoveryReopened,
 	ActionIAMAccountAliasSet,
 	ActionIAMPrincipalStatusSet,
 	ActionIAMPasswordReset,
@@ -398,6 +406,19 @@ var actionContracts = map[Action]ActionContract{
 	},
 	ActionIAMInstallationPrimaryCredentialsRecovered: {
 		Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, PlatformOnly: true,
+		PlatformSystemActorID: "iam-local-recovery",
+	},
+	ActionIAMAuthenticationRecoveryClosed: {
+		Source: SourceIAM, Target: TargetInstallation, Results: []Result{ResultSucceeded}, PlatformOnly: true,
+		PlatformSystemActorID: "iam-authentication-recovery", TargetMatchesInstallation: true,
+	},
+	ActionIAMAuthenticationRecoveryReconciled: {
+		Source: SourceIAM, Target: TargetInstallation, Results: []Result{ResultSucceeded}, PlatformOnly: true,
+		PlatformSystemActorID: "iam-authentication-recovery", TargetMatchesInstallation: true,
+	},
+	ActionIAMAuthenticationRecoveryReopened: {
+		Source: SourceIAM, Target: TargetInstallation, Results: []Result{ResultSucceeded}, PlatformOnly: true,
+		PlatformSystemActorID: "iam-authentication-recovery", TargetMatchesInstallation: true,
 	},
 	ActionIAMOrganizationCreated: {
 		Source: SourceIAM, Target: TargetOrganization, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true,

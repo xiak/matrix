@@ -206,6 +206,12 @@ func TestAuditActionCatalogIsClosedAndSourceBound(t *testing.T) {
 			event.TenantID, event.InstallationID = "", "installation-example"
 			event.Actor.Type = ActorUser
 		}
+		if contract.PlatformSystemActorID != "" {
+			event.Actor = ActorReference{Type: ActorSystem, ID: contract.PlatformSystemActorID}
+		}
+		if contract.TargetMatchesInstallation {
+			event.Target.ID = event.InstallationID
+		}
 		if contract.UserActorRequired {
 			event.Actor.Type = ActorUser
 		}
@@ -213,14 +219,30 @@ func TestAuditActionCatalogIsClosedAndSourceBound(t *testing.T) {
 			event.Actor = ActorReference{Type: ActorRole, ID: "role-example",
 				RoleSession: &RoleSessionReference{SessionID: event.Target.ID, SourceUserID: "source-example"}}
 		}
-		if action == ActionIAMInstallationPrimaryCredentialsRecovered {
-			event.Actor = ActorReference{Type: ActorSystem, ID: "iam-local-recovery"}
-		}
 		if action == ActionIAMAccountRootCredentialsRecovered || action == ActionIAMTenantAdministratorRecovered || action == ActionIAMInstallationPrimaryCredentialsRecovered {
 			event.Target.TenantID = "organization-recovered"
 		}
 		if err := ValidateEventForSource(contract.Source, event); err != nil {
 			t.Fatalf("valid action contract %q rejected: %v", action, err)
+		}
+		if contract.PlatformSystemActorID != "" {
+			for _, mutation := range []func(*Event){
+				func(candidate *Event) { candidate.Actor.Type = ActorUser },
+				func(candidate *Event) { candidate.Actor.ID = "another-system" },
+			} {
+				forged := event
+				mutation(&forged)
+				if ValidateEvent(forged) == nil {
+					t.Fatalf("action %q accepted a forged platform system actor", action)
+				}
+			}
+		}
+		if contract.TargetMatchesInstallation {
+			forged := event
+			forged.Target.ID = "another-installation"
+			if ValidateEvent(forged) == nil {
+				t.Fatalf("action %q accepted another installation target", action)
+			}
 		}
 		if contract.RoleActorRequired {
 			for _, actorType := range []ActorType{ActorUser, ActorSystem, ActorServiceAccount} {

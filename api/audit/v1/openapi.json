@@ -61,6 +61,9 @@
           "iam.tenant.enabled",
           "iam.tenant-administrator.recovered",
           "iam.installation-primary.credentials-recovered",
+          "iam.authentication-recovery.closed",
+          "iam.authentication-recovery.reconciled",
+          "iam.authentication-recovery.reopened",
           "iam.account-alias.set",
           "iam.principal.status-set",
           "iam.password.reset",
@@ -1353,6 +1356,84 @@
                   "properties": {
                     "action": {
                       "const": "iam.installation-primary.credentials-recovered"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "IAM"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.authentication-recovery.closed"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "IAM"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.authentication-recovery.reconciled"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "IAM"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.authentication-recovery.reopened"
                     }
                   },
                   "required": [
@@ -4662,6 +4743,153 @@
                   "required": [
                     "kind",
                     "tenantId"
+                  ]
+                },
+                "tenantId": false
+              },
+              "required": [
+                "installationId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.authentication-recovery.closed"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actor": {
+                  "properties": {
+                    "accessKeyId": false,
+                    "id": {
+                      "const": "iam-authentication-recovery"
+                    },
+                    "type": {
+                      "const": "SYSTEM"
+                    }
+                  }
+                },
+                "iamDecisionId": false,
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "INSTALLATION"
+                    },
+                    "tenantId": false
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                },
+                "tenantId": false
+              },
+              "required": [
+                "installationId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.authentication-recovery.reconciled"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actor": {
+                  "properties": {
+                    "accessKeyId": false,
+                    "id": {
+                      "const": "iam-authentication-recovery"
+                    },
+                    "type": {
+                      "const": "SYSTEM"
+                    }
+                  }
+                },
+                "iamDecisionId": false,
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "INSTALLATION"
+                    },
+                    "tenantId": false
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                },
+                "tenantId": false
+              },
+              "required": [
+                "installationId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.authentication-recovery.reopened"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actor": {
+                  "properties": {
+                    "accessKeyId": false,
+                    "id": {
+                      "const": "iam-authentication-recovery"
+                    },
+                    "type": {
+                      "const": "SYSTEM"
+                    }
+                  }
+                },
+                "iamDecisionId": false,
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "INSTALLATION"
+                    },
+                    "tenantId": false
+                  },
+                  "required": [
+                    "kind"
                   ]
                 },
                 "tenantId": false

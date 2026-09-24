@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	installationv1 "github.com/xiak/matrix/api/adapter/installation/v1"
 	"github.com/xiak/matrix/api/contractjson"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/app/service/installation/internal/cli"
@@ -51,6 +52,78 @@ var (
 	ErrCredentialRecoveryForbidden = errors.New("local credential recovery is forbidden")
 	ErrCredentialRecoveryConflict  = errors.New("local credential recovery intent conflicts")
 )
+
+// RecoveryFailureBoundary is a closed, non-secret diagnostic classification
+// for destructive restore verification. It lets the CLI persist and return a
+// useful stable code without exposing adapter errors, paths, provider output,
+// database content, or recovery material.
+type RecoveryFailureBoundary string
+
+const (
+	RecoveryFailureSource                         RecoveryFailureBoundary = "SOURCE"
+	RecoveryFailureReleaseImages                  RecoveryFailureBoundary = "RELEASE_IMAGES"
+	RecoveryFailureProviderState                  RecoveryFailureBoundary = "PROVIDER_STATE"
+	RecoveryFailureDatabaseStart                  RecoveryFailureBoundary = "DATABASE_START"
+	RecoveryFailureDatabaseDump                   RecoveryFailureBoundary = "DATABASE_DUMP"
+	RecoveryFailureDatabaseRestore                RecoveryFailureBoundary = "DATABASE_RESTORE"
+	RecoveryFailureDatabaseRestoreObjectConflict  RecoveryFailureBoundary = "DATABASE_RESTORE_OBJECT_CONFLICT"
+	RecoveryFailureDatabaseRestoreMissingObject   RecoveryFailureBoundary = "DATABASE_RESTORE_MISSING_OBJECT"
+	RecoveryFailureDatabaseRestoreMissingRelation RecoveryFailureBoundary = "DATABASE_RESTORE_MISSING_RELATION"
+	RecoveryFailureDatabaseRestoreMissingSchema   RecoveryFailureBoundary = "DATABASE_RESTORE_MISSING_SCHEMA"
+	RecoveryFailureDatabaseRestoreAuthority       RecoveryFailureBoundary = "DATABASE_RESTORE_AUTHORITY"
+	RecoveryFailureDatabaseRestoreDependency      RecoveryFailureBoundary = "DATABASE_RESTORE_DEPENDENCY"
+	RecoveryFailureDatabaseRestoreIntegrity       RecoveryFailureBoundary = "DATABASE_RESTORE_INTEGRITY"
+	RecoveryFailureDatabaseRestoreTransaction     RecoveryFailureBoundary = "DATABASE_RESTORE_TRANSACTION"
+	RecoveryFailureDatabaseRestorePipeline        RecoveryFailureBoundary = "DATABASE_RESTORE_PIPELINE"
+	RecoveryFailureDatabaseRestoreClient          RecoveryFailureBoundary = "DATABASE_RESTORE_CLIENT"
+	RecoveryFailureDatabaseRestoreClientFatal     RecoveryFailureBoundary = "DATABASE_RESTORE_CLIENT_FATAL"
+	RecoveryFailureDatabaseRestoreConnection      RecoveryFailureBoundary = "DATABASE_RESTORE_CONNECTION"
+	RecoveryFailureDatabaseRestoreClientScript    RecoveryFailureBoundary = "DATABASE_RESTORE_CLIENT_SCRIPT"
+	RecoveryFailureSecretRestore                  RecoveryFailureBoundary = "SECRET_RESTORE"
+	RecoveryFailureMigration                      RecoveryFailureBoundary = "MIGRATION"
+	RecoveryFailureAuthenticationClose            RecoveryFailureBoundary = "AUTHENTICATION_CLOSE"
+	RecoveryFailureAuthenticationReconcile        RecoveryFailureBoundary = "AUTHENTICATION_RECONCILE"
+	RecoveryFailureAuthenticationReopen           RecoveryFailureBoundary = "AUTHENTICATION_REOPEN"
+)
+
+type recoveryFailureBoundaryError struct {
+	boundary RecoveryFailureBoundary
+	cause    error
+}
+
+func (failure *recoveryFailureBoundaryError) Error() string {
+	return "platform recovery failed at " + string(failure.boundary)
+}
+
+func (failure *recoveryFailureBoundaryError) Unwrap() error {
+	return failure.cause
+}
+
+func BindRecoveryFailure(boundary RecoveryFailureBoundary, cause error) error {
+	if cause == nil {
+		return nil
+	}
+	switch boundary {
+	case RecoveryFailureSource, RecoveryFailureReleaseImages, RecoveryFailureProviderState,
+		RecoveryFailureDatabaseStart, RecoveryFailureDatabaseDump, RecoveryFailureDatabaseRestore,
+		RecoveryFailureDatabaseRestoreObjectConflict, RecoveryFailureDatabaseRestoreMissingObject,
+		RecoveryFailureDatabaseRestoreMissingRelation, RecoveryFailureDatabaseRestoreMissingSchema,
+		RecoveryFailureDatabaseRestoreAuthority, RecoveryFailureDatabaseRestoreDependency,
+		RecoveryFailureDatabaseRestoreIntegrity, RecoveryFailureDatabaseRestoreTransaction,
+		RecoveryFailureDatabaseRestorePipeline, RecoveryFailureDatabaseRestoreClient,
+		RecoveryFailureDatabaseRestoreClientFatal, RecoveryFailureDatabaseRestoreConnection,
+		RecoveryFailureDatabaseRestoreClientScript,
+		RecoveryFailureSecretRestore, RecoveryFailureMigration,
+		RecoveryFailureAuthenticationClose, RecoveryFailureAuthenticationReconcile,
+		RecoveryFailureAuthenticationReopen:
+		return &recoveryFailureBoundaryError{boundary: boundary, cause: cause}
+	default:
+		return errors.Join(
+			ErrEffectVerification,
+			errors.New("platform recovery failure boundary is invalid"),
+		)
+	}
+}
 
 // InstallPlan is authenticated input plus the installation-owned identity.
 // TrustBytes contains a public key document, never credential material.
@@ -120,21 +193,23 @@ type RollbackPlan struct {
 // by a selected protected backup. BackupDigest binds the sealed manifest and
 // its exact artifact commitments into the durable recovery command.
 type RecoverySource struct {
-	InstallationID string
-	BackupID       string
-	BackupDigest   string
-	ReleaseID      string
-	ReleaseDigest  string
-	Database       release.DatabaseProfile
+	InstallationID    string
+	BackupID          string
+	BackupDigest      string
+	TOTPCustodyDigest string
+	ReleaseID         string
+	ReleaseDigest     string
+	Database          release.DatabaseProfile
 }
 
 // RecoveryPlan binds the current committed release, the authenticated release
 // named by the selected backup, and the exact protected backup identity.
 type RecoveryPlan struct {
-	Current      InstallPlan
-	Target       InstallPlan
-	BackupID     string
-	BackupDigest string
+	Current              InstallPlan
+	Target               InstallPlan
+	BackupID             string
+	BackupDigest         string
+	AuthenticationIntent installationv1.AuthenticationRecoveryIntent
 }
 
 // SupportsRecoveryTarget is the recovery policy shared by the use case and
@@ -148,7 +223,7 @@ func SupportsRecoveryTarget(current, target release.Manifest) bool {
 	immediatePredecessor := current.Release.PreviousID == target.Release.ID &&
 		current.Release.PreviousVersion == target.Release.Version
 	return (sameRelease || immediatePredecessor) &&
-		release.ValidateDatabaseUpgradePath(target.Database, current.Database) == nil
+		release.ValidateDatabaseRecoveryPath(target.Database, current.Database) == nil
 }
 
 // CredentialRecoveryInput is the operator's private intent, not an IAM
@@ -176,7 +251,7 @@ type CredentialRecoveryPlan struct {
 func ValidateCredentialRecoveryProfile(profile release.DatabaseProfile) error {
 	current := release.CurrentDatabaseProfile()
 	if release.ValidateDatabaseUpgradePath(profile, current) != nil ||
-		(profile != current && profile != release.SupportedDatabasePredecessorProfile()) {
+		(profile != current && profile != release.SupportedDatabaseUpgradePredecessorProfile()) {
 		return ErrEffectPrecondition
 	}
 	return nil
@@ -988,10 +1063,14 @@ func (backend *Backend) recover(
 		if ctx.Err() != nil {
 			return cli.Result{}, fault(cli.FaultInterrupted, "COMMAND_INTERRUPTED")
 		}
-		return cli.Result{}, effectFault(lifecycle.PhaseRecovering, err)
+		return cli.Result{}, effectFault(
+			lifecycle.PhaseRecovering,
+			BindRecoveryFailure(RecoveryFailureSource, err),
+		)
 	}
 	if source.InstallationID != state.InstallationID || source.BackupID != request.BackupID ||
 		source.ReleaseID == "" || source.ReleaseDigest == "" || source.BackupDigest == "" ||
+		iamv1.ValidateDigest("TOTP custody digest", source.TOTPCustodyDigest) != nil ||
 		release.ValidateDatabaseProfile(source.Database) != nil {
 		return cli.Result{}, fault(cli.FaultVerification, "RECOVERY_SOURCE_INVALID")
 	}
@@ -1020,9 +1099,33 @@ func (backend *Backend) recover(
 			return cli.Result{}, fault(cli.FaultInternal, "COMMAND_ID_GENERATION_FAILED")
 		}
 	}
+	recoveryEpoch := state.AuthenticationRecoveryEpoch + 1
+	if state.Active != nil {
+		recoveryEpoch = state.Active.Command.AuthenticationRecoveryEpoch
+	}
+	intent := installationv1.AuthenticationRecoveryIntent{
+		APIVersion:          installationv1.AuthenticationRecoveryAPIVersion,
+		Kind:                installationv1.AuthenticationRecoveryIntentKind,
+		Purpose:             installationv1.AuthenticationRecoveryPurpose,
+		InstallationID:      state.InstallationID,
+		Epoch:               recoveryEpoch,
+		CommandID:           commandID,
+		BackupID:            source.BackupID,
+		BackupDigest:        source.BackupDigest,
+		SourceReleaseID:     currentBundle.Manifest.Release.ID,
+		SourceReleaseDigest: currentBundle.ManifestSHA256,
+		TargetReleaseID:     targetBundle.Manifest.Release.ID,
+		TargetReleaseDigest: targetBundle.ManifestSHA256,
+		TOTPCustodyDigest:   source.TOTPCustodyDigest,
+	}
+	intentDigest, err := installationv1.AuthenticationRecoveryIntentDigest(intent)
+	if err != nil {
+		return cli.Result{}, fault(cli.FaultVerification, "RECOVERY_AUTHENTICATION_INTENT_INVALID")
+	}
 	started, err := lifecycle.Start(state, lifecycle.Command{
 		ID: commandID, Action: lifecycle.ActionRecover,
 		InputDigest: source.ReleaseDigest, BackupDigest: source.BackupDigest,
+		AuthenticationRecoveryEpoch: recoveryEpoch, AuthenticationRecoveryDigest: intentDigest,
 		TargetReleaseID: source.ReleaseID, BackupID: source.BackupID,
 		NorthboundOrigin: destinationOrigin,
 		RequestedAt:      canonicalNow(backend.now()),
@@ -1060,6 +1163,7 @@ func (backend *Backend) recover(
 	plan := RecoveryPlan{
 		Current: currentPlan, Target: targetPlan,
 		BackupID: source.BackupID, BackupDigest: source.BackupDigest,
+		AuthenticationIntent: intent,
 	}
 	return backend.driveReleaseChange(
 		ctx, session, lifecycle.ActionRecover,
@@ -1399,12 +1503,36 @@ func effectFault(phase lifecycle.Phase, err error) *cli.Fault {
 		code = "OWNERSHIP_CONFLICT"
 	case errors.Is(err, ErrEffectVerification):
 		class = cli.FaultVerification
-		code = phaseFailureCode(phase, "VERIFICATION_FAILED")
+		code = recoveryVerificationFailureCode(phase, err)
 	case errors.Is(err, ErrEffectUnavailable):
 		class = cli.FaultUnavailable
 		code = "DEPENDENCY_UNAVAILABLE"
 	}
 	return fault(class, code)
+}
+
+func recoveryVerificationFailureCode(phase lifecycle.Phase, err error) string {
+	var failure *recoveryFailureBoundaryError
+	if !errors.As(err, &failure) {
+		return phaseFailureCode(phase, "VERIFICATION_FAILED")
+	}
+	switch failure.boundary {
+	case RecoveryFailureSource, RecoveryFailureReleaseImages, RecoveryFailureProviderState,
+		RecoveryFailureDatabaseStart, RecoveryFailureDatabaseDump, RecoveryFailureDatabaseRestore,
+		RecoveryFailureDatabaseRestoreObjectConflict, RecoveryFailureDatabaseRestoreMissingObject,
+		RecoveryFailureDatabaseRestoreMissingRelation, RecoveryFailureDatabaseRestoreMissingSchema,
+		RecoveryFailureDatabaseRestoreAuthority, RecoveryFailureDatabaseRestoreDependency,
+		RecoveryFailureDatabaseRestoreIntegrity, RecoveryFailureDatabaseRestoreTransaction,
+		RecoveryFailureDatabaseRestorePipeline, RecoveryFailureDatabaseRestoreClient,
+		RecoveryFailureDatabaseRestoreClientFatal, RecoveryFailureDatabaseRestoreConnection,
+		RecoveryFailureDatabaseRestoreClientScript,
+		RecoveryFailureSecretRestore, RecoveryFailureMigration,
+		RecoveryFailureAuthenticationClose, RecoveryFailureAuthenticationReconcile,
+		RecoveryFailureAuthenticationReopen:
+		return "RECOVERY_" + string(failure.boundary) + "_VERIFICATION_FAILED"
+	default:
+		return phaseFailureCode(phase, "VERIFICATION_FAILED")
+	}
 }
 
 func phaseFailureCode(phase lifecycle.Phase, suffix string) string {

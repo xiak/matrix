@@ -34,6 +34,10 @@ type Repository interface {
 		context.Context,
 		func(context.Context, Transaction) error,
 	) error
+	WithinLocalCredentialRecoveryTransaction(
+		context.Context,
+		func(context.Context, Transaction) error,
+	) error
 }
 
 type Transaction interface {

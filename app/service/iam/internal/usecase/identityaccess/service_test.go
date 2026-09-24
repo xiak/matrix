@@ -1118,6 +1118,20 @@ func (repository *coreRepository) WithinTransaction(
 	ctx context.Context,
 	callback func(context.Context, Transaction) error,
 ) error {
+	return repository.run(ctx, callback)
+}
+
+func (repository *coreRepository) WithinLocalCredentialRecoveryTransaction(
+	ctx context.Context,
+	callback func(context.Context, Transaction) error,
+) error {
+	return repository.run(ctx, callback)
+}
+
+func (repository *coreRepository) run(
+	ctx context.Context,
+	callback func(context.Context, Transaction) error,
+) error {
 	repository.inTransaction = true
 	err := callback(ctx, repository.transaction)
 	repository.inTransaction = false

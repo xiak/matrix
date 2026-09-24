@@ -200,7 +200,7 @@ func (effects *Effects) ApplyRecoveryPhase(
 			)
 		}
 		return recoverBackup(
-			ctx, effects.runtime, streaming, effects.projectInspector, plan,
+			ctx, effects, effects.runtime, streaming, effects.projectInspector, plan,
 		)
 	case lifecycle.PhaseStarting:
 		current, target, _, err := authenticateRecoveryPlan(plan)
@@ -209,6 +209,9 @@ func (effects *Effects) ApplyRecoveryPhase(
 		}
 		defer clear(current.TrustBytes)
 		defer clear(target.TrustBytes)
+		if err := effects.reopenAuthenticationRecovery(ctx, plan); err != nil {
+			return platformcommand.BindRecoveryFailure(platformcommand.RecoveryFailureAuthenticationReopen, err)
+		}
 		return startInstallation(ctx, effects.runtime, target)
 	case lifecycle.PhaseVerifying:
 		return verifyRecoveredInstallation(

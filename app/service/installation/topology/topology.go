@@ -12,7 +12,6 @@ import (
 	"net"
 	"net/netip"
 	"path"
-	"slices"
 	"strings"
 
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
@@ -73,9 +72,10 @@ func ContractDigest() string {
 }
 
 // SupportedPredecessorContractDigest is the exact signed topology emitted by
-// the one platform release that this source can upgrade in place. It remains
-// distinct from ContractDigest so an authenticated database profile cannot be
-// crossed with a different Compose contract.
+// the one platform release that this source can upgrade in place. The retained
+// predecessor changed the database profile without changing the platform
+// topology, so its authenticated profile/digest pair intentionally shares the
+// current digest.
 func SupportedPredecessorContractDigest() string {
 	return contractDescriptionDigest(predecessorContractDescription())
 }
@@ -132,43 +132,14 @@ func contractDescription() contract {
 }
 
 func predecessorContractDescription() contract {
-	description := contractDescription()
-	description.Substitutions = slices.DeleteFunc(description.Substitutions, func(value string) bool {
-		return value == "northboundOrigin"
-	})
-	removeSuccessorIAMSecrets(description.Compose.Services)
-	removeExternalRequestBoundary(description.Compose.Services)
-	return description
-}
-
-func removeSuccessorIAMSecrets(services map[string]serviceConfig) {
-	iam := services["iam"]
-	delete(iam.Environment, "MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE")
-	delete(iam.Environment, "MATRIX_IAM_TOTP_KEYRING_FILE")
-	delete(iam.Environment, "MATRIX_IAM_CURSOR_KEY_FILE")
-	iam.Volumes = slices.DeleteFunc(iam.Volumes, func(value mount) bool {
-		return value.Target == "/run/matrix/iam-access-key-wrapping-keyring.json" ||
-			value.Target == "/run/matrix/iam-totp-keyring.json" ||
-			value.Target == "/run/matrix/iam-cursor-key"
-	})
-	services["iam"] = iam
-}
-
-func removeExternalRequestBoundary(services map[string]serviceConfig) {
-	audit := services["audit"]
-	delete(audit.Environment, "MATRIX_AUDIT_INSTALLATION_ID")
-	delete(audit.Environment, "MATRIX_AUDIT_NORTHBOUND_ORIGIN")
-	services["audit"] = audit
-	paas := services["paas-api"]
-	delete(paas.Environment, "MATRIX_PAAS_NORTHBOUND_ORIGIN")
-	services["paas-api"] = paas
+	return contractDescription()
 }
 
 func Compile(manifest release.Manifest, options Options) (Result, error) {
 	if err := release.ValidateManifest(manifest); err != nil {
 		return Result{}, fmt.Errorf("release manifest cannot supply platform topology: %w", err)
 	}
-	if manifest.TopologyDigest != ContractDigest() {
+	if manifest.Database != release.CurrentDatabaseProfile() || manifest.TopologyDigest != ContractDigest() {
 		return Result{}, errors.New("release topology contract digest is unsupported")
 	}
 	return compile(manifest, options, ContractDigest())
@@ -192,25 +163,16 @@ func ValidateInstalledContract(manifest release.Manifest) error {
 }
 
 // ResolveInstalledNorthboundOrigin returns the origin state owned by the
-// authenticated installed topology. The current topology requires the
-// already sealed canonical origin, while the frozen predecessor predates the
-// boundary and must not retain successor-only journal state.
+// authenticated installed topology. Both the current release and its exact
+// supported predecessor use the same origin-aware topology contract.
 func ResolveInstalledNorthboundOrigin(manifest release.Manifest, current string) (string, error) {
-	digest, err := installedContractDigest(manifest)
-	if err != nil {
+	if _, err := installedContractDigest(manifest); err != nil {
 		return "", err
 	}
-	switch digest {
-	case ContractDigest():
-		if externalrequest.ValidateOrigin(current) != nil {
-			return "", errors.New("platform northbound origin is invalid")
-		}
-		return current, nil
-	case SupportedPredecessorContractDigest():
-		return "", nil
-	default:
-		return "", errors.New("installed platform topology contract is unsupported")
+	if externalrequest.ValidateOrigin(current) != nil {
+		return "", errors.New("platform northbound origin is invalid")
 	}
+	return current, nil
 }
 
 func installedContractDigest(manifest release.Manifest) (string, error) {
@@ -220,7 +182,7 @@ func installedContractDigest(manifest release.Manifest) (string, error) {
 	switch {
 	case manifest.Database == release.CurrentDatabaseProfile() && manifest.TopologyDigest == ContractDigest():
 		return ContractDigest(), nil
-	case manifest.Database == release.SupportedDatabasePredecessorProfile() &&
+	case manifest.Database == release.SupportedDatabaseUpgradePredecessorProfile() &&
 		manifest.TopologyDigest == SupportedPredecessorContractDigest():
 		return SupportedPredecessorContractDigest(), nil
 	default:
@@ -236,18 +198,13 @@ func compile(manifest release.Manifest, options Options, digest string) (Result,
 	for _, image := range manifest.Images {
 		images[image.Component] = image.ImageID
 	}
-	services := compileServices(manifest, images, options)
-	switch digest {
-	case ContractDigest():
-		if externalrequest.ValidateOrigin(options.NorthboundOrigin) != nil {
-			return Result{}, errors.New("platform northbound origin is invalid")
-		}
-	case SupportedPredecessorContractDigest():
-		removeSuccessorIAMSecrets(services)
-		removeExternalRequestBoundary(services)
-	default:
+	if digest != ContractDigest() && digest != SupportedPredecessorContractDigest() {
 		return Result{}, errors.New("platform topology contract is unsupported")
 	}
+	if externalrequest.ValidateOrigin(options.NorthboundOrigin) != nil {
+		return Result{}, errors.New("platform northbound origin is invalid")
+	}
+	services := compileServices(manifest, images, options)
 	document := composeDocument{
 		Name:     "matrix-" + strings.TrimPrefix(options.InstallationID, "mxi-"),
 		Services: services,

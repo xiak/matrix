@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	installationv1 "github.com/xiak/matrix/api/adapter/installation/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/app/service/installation/internal/cli"
 	"github.com/xiak/matrix/app/service/installation/internal/journal"
@@ -252,7 +253,7 @@ func TestCredentialRecoveryProfilePolicyRejectsEveryUnretainedContract(t *testin
 }
 
 func TestCredentialRecoveryRetainsExactPhase3Predecessor(t *testing.T) {
-	profile := release.SupportedDatabasePredecessorProfile()
+	profile := release.SupportedDatabaseUpgradePredecessorProfile()
 	if err := ValidateCredentialRecoveryProfile(profile); err != nil {
 		t.Fatalf("phase3 predecessor credential recovery profile: %v", err)
 	}
@@ -511,7 +512,7 @@ func TestUpgradeUnknownOutcomeResumesAndDefinitiveFailureRestoresSource(t *testi
 func TestCrossProfileUpgradeFailureRequiresAuthenticatedRecovery(t *testing.T) {
 	fixtures, err := releasetest.WriteSequence(
 		t.TempDir(), 2,
-		release.SupportedDatabasePredecessorProfile(), release.CurrentDatabaseProfile(),
+		release.SupportedDatabaseUpgradePredecessorProfile(), release.CurrentDatabaseProfile(),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -753,8 +754,9 @@ func TestUnsupportedDatabaseProfilesRejectBeforeEffectsOrJournalChange(t *testin
 					request.BackupID = "backup-" + strings.Repeat("d", 32)
 					effects.recoverySource = RecoverySource{
 						InstallationID: before.InstallationID, BackupID: request.BackupID,
-						BackupDigest: "sha256:" + strings.Repeat("e", 64),
-						ReleaseID:    fixtures[0].Manifest.Release.ID, ReleaseDigest: fixtures[0].ManifestDigest,
+						BackupDigest:      "sha256:" + strings.Repeat("e", 64),
+						TOTPCustodyDigest: "sha256:" + strings.Repeat("9", 64),
+						ReleaseID:         fixtures[0].Manifest.Release.ID, ReleaseDigest: fixtures[0].ManifestDigest,
 						Database: fixtures[0].Manifest.Database,
 					}
 					failureClass = cli.FaultVerification
@@ -796,9 +798,10 @@ func TestPublishedScalarManifestDoesNotImplyRuntimeTopologyCompatibility(t *test
 	}
 }
 
-func TestFrozenAdjacentProfilePairAllowsUpgradeButRollbackRequiresAuthenticatedRecovery(t *testing.T) {
+func TestExactUpgradePredecessorCannotBecomePreparationRecoveryTarget(t *testing.T) {
+	const origin = "https://matrix.example.com:443"
 	current := release.CurrentDatabaseProfile()
-	predecessor := release.SupportedDatabasePredecessorProfile()
+	predecessor := release.SupportedDatabaseUpgradePredecessorProfile()
 	fixtures, err := releasetest.WriteSequence(t.TempDir(), 2, predecessor, current)
 	if err != nil {
 		t.Fatal(err)
@@ -809,7 +812,7 @@ func TestFrozenAdjacentProfilePairAllowsUpgradeButRollbackRequiresAuthenticatedR
 	seedPublishedInstalledRelease(t, root, fixtures[0])
 	upgraded, err := backend.Run(context.Background(), cli.Request{
 		Action: lifecycle.ActionUpgrade, Root: root, Bundle: fixtures[1].Root,
-		NorthboundOrigin: "https://matrix.example.com:443",
+		NorthboundOrigin: origin,
 	})
 	if err != nil || upgraded.ReleaseID != fixtures[1].Manifest.Release.ID || !upgraded.Changed {
 		t.Fatalf("upgrade exact runtime profile pair: %#v / %v", upgraded, err)
@@ -829,30 +832,22 @@ func TestFrozenAdjacentProfilePairAllowsUpgradeButRollbackRequiresAuthenticatedR
 
 	backupID := "backup-" + strings.Repeat("c", 32)
 	effects.recoverySource = RecoverySource{
-		InstallationID: state.InstallationID,
-		BackupID:       backupID,
-		BackupDigest:   "sha256:" + strings.Repeat("d", 64),
-		ReleaseID:      fixtures[0].Manifest.Release.ID,
-		ReleaseDigest:  fixtures[0].ManifestDigest,
-		Database:       fixtures[0].Manifest.Database,
+		InstallationID:    state.InstallationID,
+		BackupID:          backupID,
+		BackupDigest:      "sha256:" + strings.Repeat("d", 64),
+		TOTPCustodyDigest: "sha256:" + strings.Repeat("9", 64),
+		ReleaseID:         fixtures[0].Manifest.Release.ID,
+		ReleaseDigest:     fixtures[0].ManifestDigest,
+		Database:          fixtures[0].Manifest.Database,
 	}
-	recovered, err := backend.Run(context.Background(), cli.Request{
+	_, err = backend.Run(context.Background(), cli.Request{
 		Action: lifecycle.ActionRecover, Root: root, BackupID: backupID,
 	})
-	if err != nil || recovered.ReleaseID != fixtures[0].Manifest.Release.ID ||
-		recovered.PreviousID != "" || !recovered.Changed ||
-		effects.recoveryCalls[lifecycle.PhaseRecovering] != 1 ||
-		effects.recoveryCalls[lifecycle.PhaseStarting] != 1 ||
-		effects.recoveryCalls[lifecycle.PhaseVerifying] != 1 {
-		t.Fatalf("authenticated cross-profile recovery = %#v / %v / effects=%#v", recovered, err, effects)
-	}
-	completed := readJournal(t, root)
-	encoded, err := json.Marshal(completed)
-	if err != nil || completed.NorthboundOrigin != "" || completed.Last == nil ||
-		completed.Last.Command.NorthboundOrigin != "" ||
-		strings.Contains(string(encoded), `"northboundOrigin"`) ||
-		effects.recoveryPlan.Target.NorthboundOrigin != "" {
-		t.Fatalf("predecessor recovery retained successor-only origin state: %s / %#v", encoded, effects.recoveryPlan)
+	assertFault(t, err, cli.FaultPrecondition, "RECOVERY_TARGET_UNSUPPORTED")
+	unchanged := readJournal(t, root)
+	if !reflect.DeepEqual(unchanged, state) || effects.recoveryInspectCalls != 1 ||
+		len(effects.recoveryCalls) != 0 {
+		t.Fatalf("unsupported destructive recovery changed state or reached write effects: %#v / %#v", unchanged, effects)
 	}
 }
 
@@ -886,12 +881,13 @@ func TestRecoveryRejectsSkippedSignedTargetBeforePersistingIntent(t *testing.T) 
 	before := readJournal(t, root)
 	backupID := "backup-" + strings.Repeat("e", 32)
 	effects.recoverySource = RecoverySource{
-		InstallationID: before.InstallationID,
-		BackupID:       backupID,
-		BackupDigest:   "sha256:" + strings.Repeat("f", 64),
-		ReleaseID:      fixtures[0].Manifest.Release.ID,
-		ReleaseDigest:  fixtures[0].ManifestDigest,
-		Database:       fixtures[0].Manifest.Database,
+		InstallationID:    before.InstallationID,
+		BackupID:          backupID,
+		BackupDigest:      "sha256:" + strings.Repeat("f", 64),
+		TOTPCustodyDigest: "sha256:" + strings.Repeat("9", 64),
+		ReleaseID:         fixtures[0].Manifest.Release.ID,
+		ReleaseDigest:     fixtures[0].ManifestDigest,
+		Database:          fixtures[0].Manifest.Database,
 	}
 	_, err = backend.Run(context.Background(), cli.Request{
 		Action: lifecycle.ActionRecover, Root: root, BackupID: backupID,
@@ -1005,12 +1001,13 @@ func TestRecoveryBindsSelectedBackupAndResumesUnknownOutcome(t *testing.T) {
 	backupID := "backup-" + strings.Repeat("d", 32)
 	backupDigest := "sha256:" + strings.Repeat("e", 64)
 	effects.recoverySource = RecoverySource{
-		InstallationID: installed.InstallationID,
-		BackupID:       backupID,
-		BackupDigest:   backupDigest,
-		ReleaseID:      fixtures[0].Manifest.Release.ID,
-		ReleaseDigest:  fixtures[0].ManifestDigest,
-		Database:       fixtures[0].Manifest.Database,
+		InstallationID:    installed.InstallationID,
+		BackupID:          backupID,
+		BackupDigest:      backupDigest,
+		TOTPCustodyDigest: "sha256:" + strings.Repeat("9", 64),
+		ReleaseID:         fixtures[0].Manifest.Release.ID,
+		ReleaseDigest:     fixtures[0].ManifestDigest,
+		Database:          fixtures[0].Manifest.Database,
 	}
 	request := cli.Request{
 		Action: lifecycle.ActionRecover, Root: root, BackupID: backupID,
@@ -1025,8 +1022,16 @@ func TestRecoveryBindsSelectedBackupAndResumesUnknownOutcome(t *testing.T) {
 		active.Active.Command.BackupDigest != backupDigest ||
 		active.Active.Command.TargetReleaseID != fixtures[0].Manifest.Release.ID ||
 		active.Active.Command.InputDigest != fixtures[0].ManifestDigest ||
+		active.Active.Command.AuthenticationRecoveryEpoch != 1 ||
 		active.CurrentReleaseID != fixtures[1].Manifest.Release.ID {
 		t.Fatalf("unknown recovery journal = %#v", active)
+	}
+	intentDigest, digestErr := installationv1.AuthenticationRecoveryIntentDigest(effects.recoveryPlan.AuthenticationIntent)
+	if digestErr != nil || intentDigest != active.Active.Command.AuthenticationRecoveryDigest ||
+		effects.recoveryPlan.AuthenticationIntent.CommandID != active.Active.Command.ID ||
+		effects.recoveryPlan.AuthenticationIntent.Epoch != 1 ||
+		effects.recoveryPlan.AuthenticationIntent.TOTPCustodyDigest != effects.recoverySource.TOTPCustodyDigest {
+		t.Fatalf("recovery authentication intent = %#v / %v", effects.recoveryPlan.AuthenticationIntent, digestErr)
 	}
 	commandID := active.Active.Command.ID
 
@@ -1093,12 +1098,13 @@ func TestRecoveryOfCurrentReleaseDropsRetainedPredecessorFromEffectPlan(t *testi
 	installed := readJournal(t, root)
 	backupID := "backup-" + strings.Repeat("a", 32)
 	effects.recoverySource = RecoverySource{
-		InstallationID: installed.InstallationID,
-		BackupID:       backupID,
-		BackupDigest:   "sha256:" + strings.Repeat("b", 64),
-		ReleaseID:      fixtures[1].Manifest.Release.ID,
-		ReleaseDigest:  fixtures[1].ManifestDigest,
-		Database:       fixtures[1].Manifest.Database,
+		InstallationID:    installed.InstallationID,
+		BackupID:          backupID,
+		BackupDigest:      "sha256:" + strings.Repeat("b", 64),
+		TOTPCustodyDigest: "sha256:" + strings.Repeat("9", 64),
+		ReleaseID:         fixtures[1].Manifest.Release.ID,
+		ReleaseDigest:     fixtures[1].ManifestDigest,
+		Database:          fixtures[1].Manifest.Database,
 	}
 
 	result, err := backend.Run(context.Background(), cli.Request{
@@ -1140,12 +1146,13 @@ func TestRecoveryRejectsUntrustedSourceBeforePersistingIntent(t *testing.T) {
 	}
 
 	effects.recoverySource = RecoverySource{
-		InstallationID: before.InstallationID,
-		BackupID:       backupID,
-		BackupDigest:   "sha256:" + strings.Repeat("c", 64),
-		ReleaseID:      "matrix-v0.9.9-ffffffffffff",
-		ReleaseDigest:  "sha256:" + strings.Repeat("f", 64),
-		Database:       fixture.Manifest.Database,
+		InstallationID:    before.InstallationID,
+		BackupID:          backupID,
+		BackupDigest:      "sha256:" + strings.Repeat("c", 64),
+		TOTPCustodyDigest: "sha256:" + strings.Repeat("9", 64),
+		ReleaseID:         "matrix-v0.9.9-ffffffffffff",
+		ReleaseDigest:     "sha256:" + strings.Repeat("f", 64),
+		Database:          fixture.Manifest.Database,
 	}
 	_, err = backend.Run(context.Background(), cli.Request{
 		Action: lifecycle.ActionRecover, Root: root, BackupID: backupID,
@@ -1195,12 +1202,13 @@ func TestRecoveryDefinitiveFailureRequiresManualIntervention(t *testing.T) {
 	before := readJournal(t, root)
 	backupID := "backup-" + strings.Repeat("b", 32)
 	effects.recoverySource = RecoverySource{
-		InstallationID: before.InstallationID,
-		BackupID:       backupID,
-		BackupDigest:   "sha256:" + strings.Repeat("d", 64),
-		ReleaseID:      fixture.Manifest.Release.ID,
-		ReleaseDigest:  fixture.ManifestDigest,
-		Database:       fixture.Manifest.Database,
+		InstallationID:    before.InstallationID,
+		BackupID:          backupID,
+		BackupDigest:      "sha256:" + strings.Repeat("d", 64),
+		TOTPCustodyDigest: "sha256:" + strings.Repeat("9", 64),
+		ReleaseID:         fixture.Manifest.Release.ID,
+		ReleaseDigest:     fixture.ManifestDigest,
+		Database:          fixture.Manifest.Database,
 	}
 
 	_, err := backend.Run(context.Background(), cli.Request{
@@ -1217,6 +1225,91 @@ func TestRecoveryDefinitiveFailureRequiresManualIntervention(t *testing.T) {
 		failed.Last.FailureCode != "RECOVERY_VERIFICATION_FAILED" ||
 		effects.recoveryCalls[lifecycle.PhaseRecovering] != 1 {
 		t.Fatalf("failed recovery journal = %#v / effects=%#v", failed, effects)
+	}
+}
+
+func TestRecoveryInspectionFailureHasSafeSourceCodeBeforeJournalMutation(t *testing.T) {
+	fixture := writeReleaseFixture(t)
+	effects := &installEffects{recoveryInspectErr: errors.Join(
+		ErrEffectVerification,
+		errors.New("private backup path must never cross the CLI boundary"),
+	)}
+	backend := newTestBackend(t, effects)
+	root := filepath.Join(t.TempDir(), "matrix")
+	if _, err := backend.Run(context.Background(), installRequest(root, fixture)); err != nil {
+		t.Fatalf("install recovery-inspection fixture: %v", err)
+	}
+	materializeInstalledRelease(t, root, fixture)
+	before := readJournal(t, root)
+	_, err := backend.Run(context.Background(), cli.Request{
+		Action: lifecycle.ActionRecover,
+		Root:   root, BackupID: "backup-" + strings.Repeat("b", 32),
+	})
+	assertFault(t, err, cli.FaultVerification, "RECOVERY_SOURCE_VERIFICATION_FAILED")
+	if !reflect.DeepEqual(before, readJournal(t, root)) || effects.recoveryInspectCalls != 1 ||
+		len(effects.recoveryCalls) != 0 {
+		t.Fatal("failed backup inspection changed the journal or reached recovery effects")
+	}
+}
+
+func TestRecoveryFailureBoundaryReturnsOnlyClosedSafeCodes(t *testing.T) {
+	unsafeCause := errors.Join(
+		ErrEffectVerification,
+		errors.New("private recovery material at /unsafe/path"),
+	)
+	for boundary, wantCode := range map[RecoveryFailureBoundary]string{
+		RecoveryFailureSource:                         "RECOVERY_SOURCE_VERIFICATION_FAILED",
+		RecoveryFailureReleaseImages:                  "RECOVERY_RELEASE_IMAGES_VERIFICATION_FAILED",
+		RecoveryFailureProviderState:                  "RECOVERY_PROVIDER_STATE_VERIFICATION_FAILED",
+		RecoveryFailureDatabaseStart:                  "RECOVERY_DATABASE_START_VERIFICATION_FAILED",
+		RecoveryFailureDatabaseDump:                   "RECOVERY_DATABASE_DUMP_VERIFICATION_FAILED",
+		RecoveryFailureDatabaseRestore:                "RECOVERY_DATABASE_RESTORE_VERIFICATION_FAILED",
+		RecoveryFailureDatabaseRestoreObjectConflict:  "RECOVERY_DATABASE_RESTORE_OBJECT_CONFLICT_VERIFICATION_FAILED",
+		RecoveryFailureDatabaseRestoreMissingObject:   "RECOVERY_DATABASE_RESTORE_MISSING_OBJECT_VERIFICATION_FAILED",
+		RecoveryFailureDatabaseRestoreMissingRelation: "RECOVERY_DATABASE_RESTORE_MISSING_RELATION_VERIFICATION_FAILED",
+		RecoveryFailureDatabaseRestoreMissingSchema:   "RECOVERY_DATABASE_RESTORE_MISSING_SCHEMA_VERIFICATION_FAILED",
+		RecoveryFailureDatabaseRestoreAuthority:       "RECOVERY_DATABASE_RESTORE_AUTHORITY_VERIFICATION_FAILED",
+		RecoveryFailureDatabaseRestoreDependency:      "RECOVERY_DATABASE_RESTORE_DEPENDENCY_VERIFICATION_FAILED",
+		RecoveryFailureDatabaseRestoreIntegrity:       "RECOVERY_DATABASE_RESTORE_INTEGRITY_VERIFICATION_FAILED",
+		RecoveryFailureDatabaseRestoreTransaction:     "RECOVERY_DATABASE_RESTORE_TRANSACTION_VERIFICATION_FAILED",
+		RecoveryFailureDatabaseRestorePipeline:        "RECOVERY_DATABASE_RESTORE_PIPELINE_VERIFICATION_FAILED",
+		RecoveryFailureDatabaseRestoreClient:          "RECOVERY_DATABASE_RESTORE_CLIENT_VERIFICATION_FAILED",
+		RecoveryFailureDatabaseRestoreClientFatal:     "RECOVERY_DATABASE_RESTORE_CLIENT_FATAL_VERIFICATION_FAILED",
+		RecoveryFailureDatabaseRestoreConnection:      "RECOVERY_DATABASE_RESTORE_CONNECTION_VERIFICATION_FAILED",
+		RecoveryFailureDatabaseRestoreClientScript:    "RECOVERY_DATABASE_RESTORE_CLIENT_SCRIPT_VERIFICATION_FAILED",
+		RecoveryFailureSecretRestore:                  "RECOVERY_SECRET_RESTORE_VERIFICATION_FAILED",
+		RecoveryFailureMigration:                      "RECOVERY_MIGRATION_VERIFICATION_FAILED",
+		RecoveryFailureAuthenticationClose:            "RECOVERY_AUTHENTICATION_CLOSE_VERIFICATION_FAILED",
+		RecoveryFailureAuthenticationReconcile:        "RECOVERY_AUTHENTICATION_RECONCILE_VERIFICATION_FAILED",
+		RecoveryFailureAuthenticationReopen:           "RECOVERY_AUTHENTICATION_REOPEN_VERIFICATION_FAILED",
+	} {
+		bound := BindRecoveryFailure(boundary, unsafeCause)
+		if !errors.Is(bound, ErrEffectVerification) ||
+			strings.Contains(bound.Error(), "private recovery material") ||
+			strings.Contains(bound.Error(), "/unsafe/path") {
+			t.Fatalf("boundary %q leaked or lost its verification class: %v", boundary, bound)
+		}
+		got := effectFault(lifecycle.PhaseRecovering, bound)
+		if got.Class != cli.FaultVerification || got.Code != wantCode {
+			t.Fatalf("boundary %q fault = %#v", boundary, got)
+		}
+	}
+	if BindRecoveryFailure(RecoveryFailureSource, nil) != nil {
+		t.Fatal("nil recovery failure acquired a boundary")
+	}
+	invalid := effectFault(
+		lifecycle.PhaseRecovering,
+		BindRecoveryFailure(RecoveryFailureBoundary("UNDECLARED"), unsafeCause),
+	)
+	if invalid.Class != cli.FaultVerification || invalid.Code != "RECOVERY_VERIFICATION_FAILED" {
+		t.Fatalf("undeclared recovery boundary fault = %#v", invalid)
+	}
+	conflict := effectFault(
+		lifecycle.PhaseRecovering,
+		BindRecoveryFailure(RecoveryFailureSecretRestore, ErrEffectConflict),
+	)
+	if conflict.Class != cli.FaultConflict || conflict.Code != "OWNERSHIP_CONFLICT" {
+		t.Fatalf("bounded recovery conflict = %#v", conflict)
 	}
 }
 
@@ -1687,7 +1780,10 @@ func (effects *installEffects) ApplyRecoveryPhase(
 		plan.Target.Bundle.Manifest.Release.ID == "" ||
 		plan.BackupID == "" || plan.BackupDigest == "" ||
 		plan.Current.CorrelationID == "" ||
-		plan.Current.CorrelationID != plan.Target.CorrelationID {
+		plan.Current.CorrelationID != plan.Target.CorrelationID ||
+		installationv1.ValidateAuthenticationRecoveryIntent(plan.AuthenticationIntent) != nil ||
+		plan.AuthenticationIntent.CommandID != plan.Current.CorrelationID ||
+		plan.AuthenticationIntent.InstallationID != plan.Current.InstallationID {
 		return errors.New("recovery plan is incomplete")
 	}
 	if phase == effects.recoveryFailPhase && effects.recoveryFailErr != nil &&

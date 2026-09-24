@@ -50,6 +50,32 @@ func VerifyInstalledWithLocalRecovery(ctx context.Context, adminDSN, apiDSN, wor
 	return postgresmigration.VerifyInstalled(ctx, adminDSN, iammigrations.Source(), localRecoveryLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN))
 }
 
+// ApplyWithAuthenticationRecovery provisions the final purpose-only login
+// used to close, reconcile and reopen IAM around an authenticated database
+// restore. It never performs a recovery effect during migration.
+func ApplyWithAuthenticationRecovery(
+	ctx context.Context,
+	adminDSN, apiDSN, workerDSN, recoveryDSN, custodyDSN, authenticationRecoveryDSN string,
+) error {
+	return postgresmigration.Apply(ctx, adminDSN, iammigrations.Source(),
+		authenticationRecoveryLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN, authenticationRecoveryDSN))
+}
+
+func VerifyInstalledWithAuthenticationRecovery(
+	ctx context.Context,
+	adminDSN, apiDSN, workerDSN, recoveryDSN, custodyDSN, authenticationRecoveryDSN string,
+) error {
+	return postgresmigration.VerifyInstalled(ctx, adminDSN, iammigrations.Source(),
+		authenticationRecoveryLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN, authenticationRecoveryDSN))
+}
+
+func authenticationRecoveryLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN, authenticationRecoveryDSN string) []postgresmigration.Login {
+	logins := localRecoveryLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN)
+	return append(append(logins[:1:1], postgresmigration.Login{
+		Name: "matrix_iam_authentication_recovery_login", Group: "matrix_iam_authentication_recovery", DSN: authenticationRecoveryDSN,
+	}), logins[1:]...)
+}
+
 func localRecoveryLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN string) []postgresmigration.Login {
 	return []postgresmigration.Login{
 		{Name: "matrix_iam_api_login", Group: "matrix_iam_api", DSN: apiDSN},

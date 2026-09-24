@@ -77,16 +77,18 @@ const (
 )
 
 type Command struct {
-	ID                          string    `json:"id"`
-	Action                      Action    `json:"action"`
-	InputDigest                 string    `json:"inputDigest,omitempty"`
-	BackupDigest                string    `json:"backupDigest,omitempty"`
-	TargetReleaseID             string    `json:"targetReleaseId,omitempty"`
-	NorthboundOrigin            string    `json:"northboundOrigin,omitempty"`
-	BackupID                    string    `json:"backupId,omitempty"`
-	ExpectedConfigurationDigest string    `json:"expectedConfigurationDigest,omitempty"`
-	RevokePreviousCredentials   bool      `json:"revokePreviousCredentials,omitempty"`
-	RequestedAt                 time.Time `json:"requestedAt"`
+	ID                           string    `json:"id"`
+	Action                       Action    `json:"action"`
+	InputDigest                  string    `json:"inputDigest,omitempty"`
+	BackupDigest                 string    `json:"backupDigest,omitempty"`
+	AuthenticationRecoveryEpoch  uint64    `json:"authenticationRecoveryEpoch,omitempty"`
+	AuthenticationRecoveryDigest string    `json:"authenticationRecoveryDigest,omitempty"`
+	TargetReleaseID              string    `json:"targetReleaseId,omitempty"`
+	NorthboundOrigin             string    `json:"northboundOrigin,omitempty"`
+	BackupID                     string    `json:"backupId,omitempty"`
+	ExpectedConfigurationDigest  string    `json:"expectedConfigurationDigest,omitempty"`
+	RevokePreviousCredentials    bool      `json:"revokePreviousCredentials,omitempty"`
+	RequestedAt                  time.Time `json:"requestedAt"`
 }
 
 type Execution struct {
@@ -104,20 +106,21 @@ type Execution struct {
 }
 
 type Journal struct {
-	APIVersion             string       `json:"apiVersion"`
-	Version                uint64       `json:"version"`
-	InstallationID         string       `json:"installationId"`
-	NorthboundOrigin       string       `json:"northboundOrigin,omitempty"`
-	ReleaseTrust           ReleaseTrust `json:"releaseTrust"`
-	Node                   *NodeBinding `json:"node,omitempty"`
-	NodeCredentialRotation *Command     `json:"nodeCredentialRotation,omitempty"`
-	NodeReleaseChange      *Execution   `json:"nodeReleaseChange,omitempty"`
-	CurrentReleaseID       string       `json:"currentReleaseId,omitempty"`
-	CurrentReleaseDigest   string       `json:"currentReleaseDigest,omitempty"`
-	PreviousRelease        string       `json:"previousReleaseId,omitempty"`
-	PreviousReleaseDigest  string       `json:"previousReleaseDigest,omitempty"`
-	Active                 *Execution   `json:"active,omitempty"`
-	Last                   *Execution   `json:"last,omitempty"`
+	APIVersion                  string       `json:"apiVersion"`
+	Version                     uint64       `json:"version"`
+	InstallationID              string       `json:"installationId"`
+	NorthboundOrigin            string       `json:"northboundOrigin,omitempty"`
+	ReleaseTrust                ReleaseTrust `json:"releaseTrust"`
+	Node                        *NodeBinding `json:"node,omitempty"`
+	NodeCredentialRotation      *Command     `json:"nodeCredentialRotation,omitempty"`
+	NodeReleaseChange           *Execution   `json:"nodeReleaseChange,omitempty"`
+	CurrentReleaseID            string       `json:"currentReleaseId,omitempty"`
+	CurrentReleaseDigest        string       `json:"currentReleaseDigest,omitempty"`
+	PreviousRelease             string       `json:"previousReleaseId,omitempty"`
+	PreviousReleaseDigest       string       `json:"previousReleaseDigest,omitempty"`
+	AuthenticationRecoveryEpoch uint64       `json:"authenticationRecoveryEpoch,omitempty"`
+	Active                      *Execution   `json:"active,omitempty"`
+	Last                        *Execution   `json:"last,omitempty"`
 }
 
 // NodeBinding seals the purpose of this installation root and the complete
@@ -392,6 +395,9 @@ func ValidateJournal(journal Journal) error {
 			journal.PreviousRelease == journal.CurrentReleaseID || journal.CurrentReleaseID == "")) {
 		problems = append(problems, errors.New("previous release identity is invalid"))
 	}
+	if journal.AuthenticationRecoveryEpoch > 9007199254740991 {
+		problems = append(problems, errors.New("authentication recovery epoch is invalid"))
+	}
 	if journal.Active != nil {
 		problems = append(problems, validateExecution(*journal.Active, false, journal.Node != nil))
 		if journal.CurrentReleaseID != journal.Active.SourceRelease ||
@@ -405,6 +411,11 @@ func ValidateJournal(journal Journal) error {
 		if journal.Active.Command.Action == ActionRotateCredentials &&
 			(journal.Node == nil || journal.Active.Command.ExpectedConfigurationDigest != journal.Node.ConfigurationDigest) {
 			problems = append(problems, errors.New("active rotation source does not match the node commitment"))
+		}
+		if journal.Active.Command.Action == ActionRecover &&
+			(journal.AuthenticationRecoveryEpoch >= 9007199254740991 ||
+				journal.Active.Command.AuthenticationRecoveryEpoch != journal.AuthenticationRecoveryEpoch+1) {
+			problems = append(problems, errors.New("active recovery authentication epoch is invalid"))
 		}
 	}
 	if journal.Last != nil {
@@ -508,6 +519,10 @@ func validateCommand(command Command, node bool) error {
 		(command.ExpectedConfigurationDigest != "" || command.RevokePreviousCredentials) {
 		return errors.New("installation command contains unrelated credential input")
 	}
+	if command.Action != ActionRecover &&
+		(command.AuthenticationRecoveryEpoch != 0 || command.AuthenticationRecoveryDigest != "") {
+		return errors.New("installation command contains unrelated authentication recovery input")
+	}
 	switch command.Action {
 	case ActionConfigureNodes:
 		if !digestPattern.MatchString(command.InputDigest) || !digestPattern.MatchString(command.ExpectedConfigurationDigest) ||
@@ -541,7 +556,9 @@ func validateCommand(command Command, node bool) error {
 		if !digestPattern.MatchString(command.InputDigest) ||
 			!releaseIDPattern.MatchString(command.TargetReleaseID) ||
 			!backupIDPattern.MatchString(command.BackupID) ||
-			!digestPattern.MatchString(command.BackupDigest) {
+			!digestPattern.MatchString(command.BackupDigest) ||
+			command.AuthenticationRecoveryEpoch == 0 || command.AuthenticationRecoveryEpoch > 9007199254740991 ||
+			!digestPattern.MatchString(command.AuthenticationRecoveryDigest) {
 			return errors.New("recovery command input is invalid")
 		}
 	case ActionBackup:
@@ -594,7 +611,8 @@ func validateActionPrecondition(journal Journal, command Command) error {
 			return ErrPrecondition
 		}
 	case ActionRecover:
-		if journal.CurrentReleaseID == "" {
+		if journal.CurrentReleaseID == "" || journal.AuthenticationRecoveryEpoch >= 9007199254740991 ||
+			command.AuthenticationRecoveryEpoch != journal.AuthenticationRecoveryEpoch+1 {
 			return ErrPrecondition
 		}
 	}
@@ -708,6 +726,8 @@ func sameCommandInput(left, right Command) bool {
 		left.InputDigest == right.InputDigest && left.TargetReleaseID == right.TargetReleaseID &&
 		left.NorthboundOrigin == right.NorthboundOrigin &&
 		left.BackupID == right.BackupID && left.BackupDigest == right.BackupDigest &&
+		left.AuthenticationRecoveryEpoch == right.AuthenticationRecoveryEpoch &&
+		left.AuthenticationRecoveryDigest == right.AuthenticationRecoveryDigest &&
 		left.ExpectedConfigurationDigest == right.ExpectedConfigurationDigest &&
 		left.RevokePreviousCredentials == right.RevokePreviousCredentials
 }
@@ -812,6 +832,7 @@ func applySuccessfulPointerChange(journal *Journal, execution Execution) {
 		journal.PreviousRelease = ""
 		journal.PreviousReleaseDigest = ""
 		journal.NorthboundOrigin = execution.Command.NorthboundOrigin
+		journal.AuthenticationRecoveryEpoch = execution.Command.AuthenticationRecoveryEpoch
 	}
 }
 
@@ -848,6 +869,10 @@ func validateCompletedPointers(journal Journal, execution Execution) error {
 		if (execution.Command.Action == ActionInstall || execution.Command.Action == ActionRollback ||
 			execution.Command.Action == ActionRecover) && journal.PreviousRelease != "" {
 			return errors.New("successful command retained an invalid previous release")
+		}
+		if execution.Command.Action == ActionRecover &&
+			journal.AuthenticationRecoveryEpoch != execution.Command.AuthenticationRecoveryEpoch {
+			return errors.New("successful recovery lost its authentication recovery epoch")
 		}
 	case OutcomeFailed, OutcomeRolledBack, OutcomeManualIntervention:
 		if journal.CurrentReleaseID != execution.SourceRelease ||

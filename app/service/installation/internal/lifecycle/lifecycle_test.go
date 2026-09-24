@@ -503,13 +503,20 @@ func TestRecoveryBindsSelectedBackupAndPublishesOnlyAfterReady(t *testing.T) {
 	started, err := Start(journal, command)
 	if err != nil || started.Execution.Phase != PhaseRecovering ||
 		started.Execution.Destination != releaseA ||
-		started.Journal.CurrentReleaseID != releaseA {
+		started.Journal.CurrentReleaseID != releaseA ||
+		started.Execution.Command.AuthenticationRecoveryEpoch != 1 ||
+		started.Execution.Command.AuthenticationRecoveryDigest != digest('a') {
 		t.Fatalf("start recovery = %#v / %v", started, err)
 	}
 	changed := command
 	changed.BackupDigest = digest('c')
 	if _, err := Start(started.Journal, changed); !errors.Is(err, ErrCommandConflict) {
 		t.Fatalf("changed recovery replay error = %v", err)
+	}
+	changed = command
+	changed.AuthenticationRecoveryDigest = digest('d')
+	if _, err := Start(started.Journal, changed); !errors.Is(err, ErrCommandConflict) {
+		t.Fatalf("changed authentication recovery replay error = %v", err)
 	}
 	missingSource := started.Journal
 	missingSourceExecution := *missingSource.Active
@@ -522,6 +529,7 @@ func TestRecoveryBindsSelectedBackupAndPublishesOnlyAfterReady(t *testing.T) {
 	recovered := completeActive(t, started.Journal)
 	if recovered.CurrentReleaseID != releaseA ||
 		recovered.CurrentReleaseDigest != digest('1') ||
+		recovered.AuthenticationRecoveryEpoch != 1 ||
 		recovered.PreviousRelease != "" || recovered.Active != nil ||
 		recovered.Last == nil || recovered.Last.Outcome != OutcomeSucceeded {
 		t.Fatalf("completed recovery journal = %#v", recovered)
@@ -530,6 +538,26 @@ func TestRecoveryBindsSelectedBackupAndPublishesOnlyAfterReady(t *testing.T) {
 	empty := newJournal(t)
 	if _, err := Start(empty, command); !errors.Is(err, ErrPrecondition) {
 		t.Fatalf("recovery without an installed identity error = %v", err)
+	}
+
+	second := lifecycleCommand(ActionRecover, releaseA, '1', 36)
+	second.BackupID = "backup-" + strings.Repeat("d", 32)
+	second.BackupDigest = digest('e')
+	if _, err := Start(recovered, second); !errors.Is(err, ErrPrecondition) {
+		t.Fatalf("recovery reused authentication epoch one: %v", err)
+	}
+	second.AuthenticationRecoveryEpoch = 2
+	second.AuthenticationRecoveryDigest = digest('f')
+	started, err = Start(recovered, second)
+	if err != nil || started.Journal.Active == nil || started.Journal.Active.Command.AuthenticationRecoveryEpoch != 2 {
+		t.Fatalf("second recovery did not allocate the next authentication epoch: %#v / %v", started, err)
+	}
+	tampered := started.Journal
+	execution := *tampered.Active
+	execution.Command.AuthenticationRecoveryEpoch = 3
+	tampered.Active = &execution
+	if ValidateJournal(tampered) == nil {
+		t.Fatal("active recovery changed its authentication epoch")
 	}
 }
 
@@ -668,6 +696,10 @@ func lifecycleCommand(action Action, target string, digestByte byte, offset int)
 	}
 	if action == ActionUpgrade {
 		command.BackupID = "backup-" + strings.Repeat(string("fedcba9876543210"[offset%16]), 32)
+	}
+	if action == ActionRecover {
+		command.AuthenticationRecoveryEpoch = 1
+		command.AuthenticationRecoveryDigest = digest('a')
 	}
 	return command
 }

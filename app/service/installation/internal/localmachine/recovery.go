@@ -4,11 +4,11 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"io"
 	"path/filepath"
 	"strconv"
 	"strings"
 
+	installationv1 "github.com/xiak/matrix/api/adapter/installation/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
 	"github.com/xiak/matrix/app/service/installation/internal/platformcommand"
@@ -17,20 +17,80 @@ import (
 )
 
 const (
-	recoveryVerificationTenantID    = paasv1.TenantID("organization-default")
-	recoveryVerificationComponent   = "probe"
-	recoveryVerificationDownTimeout = "30"
-	databaseRestoreScript           = `{
-  printf '%s\n' 'BEGIN;' 'DROP SCHEMA IF EXISTS audit, iam, managedservice, paas CASCADE;'
-  if pg_restore --file=- --exit-on-error --no-privileges --no-password; then
+	recoveryVerificationTenantID     = paasv1.TenantID("organization-default")
+	recoveryVerificationComponent    = "probe"
+	recoveryVerificationDownTimeout  = "30"
+	maximumDatabaseRestoreDiagnostic = 64
+	databaseRestoreScript            = `umask 077
+diagnostic="$(mktemp)"
+trap 'rm -f -- "${diagnostic}"' EXIT
+set +e
+{
+  printf '%s\n' \
+    'BEGIN;' \
+    'DROP SCHEMA IF EXISTS audit, iam, managedservice, paas CASCADE;' \
+    'CREATE SCHEMA audit AUTHORIZATION matrix_audit_owner;' \
+    'CREATE SCHEMA iam AUTHORIZATION matrix_iam_owner;' \
+    'CREATE SCHEMA managedservice AUTHORIZATION CURRENT_USER;' \
+    'CREATE SCHEMA paas AUTHORIZATION CURRENT_USER;'
+  if pg_restore --file=- --exit-on-error --no-privileges --no-password --strict-names \
+      --schema=audit --schema=iam --schema=managedservice --schema=paas 2>/dev/null; then
     printf '%s\n' 'COMMIT;'
   else
     printf '%s\n' 'ROLLBACK;'
     exit 1
   fi
-} | psql -X --set=ON_ERROR_STOP=1 --no-password --username=matrix --dbname=matrix
+} | LC_ALL=C psql -X --set=ON_ERROR_STOP=1 --set=VERBOSITY=sqlstate \
+    --no-password --username=matrix --dbname=matrix >/dev/null 2>"${diagnostic}"
+statuses=("${PIPESTATUS[@]}")
+set -e
+generator_status="${statuses[0]:-1}"
+database_status="${statuses[1]:-1}"
+if [ "${generator_status}" -eq 0 ] && [ "${database_status}" -eq 0 ]; then
+  exit 0
+fi
+if [ "${database_status}" -ne 0 ]; then
+  sqlstate="$(LC_ALL=C awk '{
+    for (field = 1; field < NF; field++) {
+      if (($field == "ERROR:" || $field == "FATAL:" || $field == "PANIC:") &&
+          $(field + 1) ~ /^[0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z][0-9A-Z]$/) {
+        print $(field + 1)
+        exit
+      }
+    }
+  }' "${diagnostic}")"
+  case "${sqlstate}" in
+    42P06|42P07|42710) printf '%s\n' 'RESTORE_OBJECT_CONFLICT' ;;
+    42704) printf '%s\n' 'RESTORE_MISSING_OBJECT' ;;
+    42P01) printf '%s\n' 'RESTORE_MISSING_RELATION' ;;
+    3F000) printf '%s\n' 'RESTORE_MISSING_SCHEMA' ;;
+    42501) printf '%s\n' 'RESTORE_AUTHORITY' ;;
+    2BP01) printf '%s\n' 'RESTORE_DEPENDENCY' ;;
+    23???) printf '%s\n' 'RESTORE_INTEGRITY' ;;
+    40???) printf '%s\n' 'RESTORE_TRANSACTION' ;;
+    *)
+      case "${database_status}" in
+        1) printf '%s\n' 'RESTORE_CLIENT_FATAL' ;;
+        2) printf '%s\n' 'RESTORE_CONNECTION' ;;
+        3) printf '%s\n' 'RESTORE_CLIENT_SCRIPT' ;;
+        *) printf '%s\n' 'RESTORE_CLIENT' ;;
+      esac
+      ;;
+  esac
+else
+  printf '%s\n' 'RESTORE_PIPELINE'
+fi
+exit 1
 `
 )
+
+type databaseRestoreFailure struct {
+	boundary platformcommand.RecoveryFailureBoundary
+}
+
+func (failure *databaseRestoreFailure) Error() string {
+	return "PostgreSQL backup recovery failed"
+}
 
 type recoveryVerificationParticipant struct {
 	release release.ReleaseIdentity
@@ -77,6 +137,7 @@ type RecoveryProjectService struct {
 
 func recoverBackup(
 	ctx context.Context,
+	effects *Effects,
 	runtimeBoundary dockerRuntime,
 	streaming streamingDockerRuntime,
 	projectInspector RecoveryProjectInspector,
@@ -84,26 +145,29 @@ func recoverBackup(
 ) error {
 	current, target, manifest, err := authenticateRecoveryPlan(plan)
 	if err != nil {
-		return err
+		return platformcommand.BindRecoveryFailure(platformcommand.RecoveryFailureSource, err)
 	}
 	defer clear(current.TrustBytes)
 	defer clear(target.TrustBytes)
 	for _, image := range target.Bundle.Manifest.Images {
 		present, inspectErr := inspectExactImage(ctx, runtimeBoundary, image.ImageID)
 		if inspectErr != nil {
-			return inspectErr
+			return platformcommand.BindRecoveryFailure(platformcommand.RecoveryFailureReleaseImages, inspectErr)
 		}
 		if !present {
-			return errors.Join(
+			return platformcommand.BindRecoveryFailure(platformcommand.RecoveryFailureReleaseImages, errors.Join(
 				platformcommand.ErrEffectVerification,
 				errors.New("recovery release image identity is absent"),
-			)
+			))
 		}
+	}
+	if err := effects.closeAuthenticationRecovery(ctx, plan); err != nil {
+		return platformcommand.BindRecoveryFailure(platformcommand.RecoveryFailureAuthenticationClose, err)
 	}
 
 	state, err := inspectUpgradeProject(ctx, runtimeBoundary, current, target)
 	if err != nil {
-		return err
+		return platformcommand.BindRecoveryFailure(platformcommand.RecoveryFailureProviderState, err)
 	}
 	if state.releaseID != "" {
 		participant := current
@@ -112,20 +176,20 @@ func recoverBackup(
 			participant = target
 		}
 		if err := rollbackInstallation(ctx, runtimeBoundary, participant); err != nil {
-			return err
+			return platformcommand.BindRecoveryFailure(platformcommand.RecoveryFailureProviderState, err)
 		}
 	}
 	if err := removeRecoveredVerificationProject(
 		ctx, runtimeBoundary, projectInspector, current, target,
 	); err != nil {
-		return err
+		return platformcommand.BindRecoveryFailure(platformcommand.RecoveryFailureProviderState, err)
 	}
 	if err := replaceReleaseConfiguration(current, target); err != nil {
-		return err
+		return platformcommand.BindRecoveryFailure(platformcommand.RecoveryFailureProviderState, err)
 	}
 	postgresID, err := startRecoveryPostgres(ctx, runtimeBoundary, target)
 	if err != nil {
-		return err
+		return platformcommand.BindRecoveryFailure(platformcommand.RecoveryFailureDatabaseStart, err)
 	}
 	backupRelative := filepath.Join(
 		filepath.FromSlash(layout.BackupDirectory), plan.BackupID,
@@ -134,12 +198,12 @@ func recoverBackup(
 	if err := verifyDatabaseDump(
 		ctx, streaming, plan.Current.Root, dumpRelative, postgresID,
 	); err != nil {
-		return err
+		return platformcommand.BindRecoveryFailure(platformcommand.RecoveryFailureDatabaseDump, err)
 	}
 	if err := restoreDatabaseDump(
 		ctx, streaming, plan.Current.Root, dumpRelative, postgresID,
 	); err != nil {
-		return err
+		return platformcommand.BindRecoveryFailure(databaseRestoreFailureBoundary(err), err)
 	}
 	if err := verifyWorkloadSecretRestore(
 		plan.Current.Root,
@@ -147,18 +211,30 @@ func recoverBackup(
 		true,
 	); err != nil {
 		if errors.Is(err, errManagedOutcomeUnknown) {
-			return errors.Join(platformcommand.ErrEffectOutcomeUnknown, err)
+			return platformcommand.BindRecoveryFailure(
+				platformcommand.RecoveryFailureSecretRestore,
+				errors.Join(platformcommand.ErrEffectOutcomeUnknown, err),
+			)
 		}
-		return errors.Join(platformcommand.ErrEffectConflict, err)
+		return platformcommand.BindRecoveryFailure(
+			platformcommand.RecoveryFailureSecretRestore,
+			errors.Join(platformcommand.ErrEffectConflict, err),
+		)
 	}
 	profile, profileErr := manifest.databaseProfile()
 	if profileErr != nil || profile != target.Bundle.Manifest.Database {
-		return errors.Join(
+		return platformcommand.BindRecoveryFailure(platformcommand.RecoveryFailureSource, errors.Join(
 			platformcommand.ErrEffectVerification,
 			errors.New("recovery schema identity changed"),
-		)
+		))
 	}
-	return migrateInstallation(ctx, runtimeBoundary, target)
+	if err := migrateInstallation(ctx, runtimeBoundary, target); err != nil {
+		return platformcommand.BindRecoveryFailure(platformcommand.RecoveryFailureMigration, err)
+	}
+	return platformcommand.BindRecoveryFailure(
+		platformcommand.RecoveryFailureAuthenticationReconcile,
+		effects.reconcileAuthenticationRecovery(ctx, plan),
+	)
 }
 
 func removeRecoveredVerificationProject(
@@ -676,12 +752,31 @@ func authenticateRecoveryPlan(
 		plan.Current.Root, plan.Current.InstallationID, plan.BackupID, relative, key,
 	)
 	profile, profileErr := manifest.databaseProfile()
+	expectedIntent := installationv1.AuthenticationRecoveryIntent{
+		APIVersion:          installationv1.AuthenticationRecoveryAPIVersion,
+		Kind:                installationv1.AuthenticationRecoveryIntentKind,
+		Purpose:             installationv1.AuthenticationRecoveryPurpose,
+		InstallationID:      current.InstallationID,
+		Epoch:               plan.AuthenticationIntent.Epoch,
+		CommandID:           current.CorrelationID,
+		BackupID:            plan.BackupID,
+		BackupDigest:        plan.BackupDigest,
+		SourceReleaseID:     current.Bundle.Manifest.Release.ID,
+		SourceReleaseDigest: current.Bundle.ManifestSHA256,
+		TargetReleaseID:     target.Bundle.Manifest.Release.ID,
+		TargetReleaseDigest: target.Bundle.ManifestSHA256,
+	}
+	if manifest.TOTPBackupCustody != nil {
+		expectedIntent.TOTPCustodyDigest = manifest.TOTPBackupCustody.CustodyDigest
+	}
 	if err != nil || profileErr != nil || digest != plan.BackupDigest ||
 		manifest.ReleaseID != target.Bundle.Manifest.Release.ID ||
 		manifest.ReleaseDigest != target.Bundle.ManifestSHA256 ||
 		profile != target.Bundle.Manifest.Database ||
 		verifyBackupAccessKeyWrapping(plan.Current.Root, plan.Current.InstallationID, target.Bundle.Manifest, manifest) != nil ||
-		verifyBackupTOTPBackupCustody(plan.Current.Root, plan.Current.InstallationID, manifest) != nil {
+		verifyBackupTOTPBackupCustody(plan.Current.Root, plan.Current.InstallationID, manifest) != nil ||
+		installationv1.ValidateAuthenticationRecoveryIntent(plan.AuthenticationIntent) != nil ||
+		plan.AuthenticationIntent != expectedIntent {
 		clear(current.TrustBytes)
 		clear(target.TrustBytes)
 		return platformcommand.InstallPlan{}, platformcommand.InstallPlan{}, backupManifest{},
@@ -791,17 +886,27 @@ func restoreDatabaseDump(
 		return errors.Join(platformcommand.ErrEffectVerification, err)
 	}
 	defer file.Close()
+	var diagnostic boundedOutput
+	diagnostic.maximum = maximumDatabaseRestoreDiagnostic
 	started, err := runtimeBoundary.RunTo(
-		ctx, file, io.Discard,
+		ctx, file, &diagnostic,
 		"exec", "--interactive", "--user", "postgres", postgresID,
 		// The authenticated custom archive carries the exact IAM/Audit owner
 		// roles. Stream it through one transaction that first removes only the
-		// Matrix-owned schemas. This also removes authenticated successor-only
-		// dependencies that an older backup cannot name in its cleanup TOC.
+		// Matrix-owned schemas, then selects exactly those schemas from the
+		// authenticated archive. This removes authenticated successor-only
+		// dependencies that an older backup cannot name in its cleanup TOC
+		// without replaying unrelated public or extension data.
 		// ACLs remain release-owned and are reapplied by target migrations.
 		"/bin/bash", "-o", "pipefail", "-ceu", databaseRestoreScript,
 	)
 	if err == nil {
+		if diagnostic.exceeded || len(bytes.TrimSpace(diagnostic.Bytes())) != 0 {
+			return errors.Join(
+				platformcommand.ErrEffectVerification,
+				errors.New("PostgreSQL backup recovery output is invalid"),
+			)
+		}
 		return nil
 	}
 	if !started {
@@ -810,10 +915,55 @@ func restoreDatabaseDump(
 	if ctx.Err() != nil {
 		return errors.Join(platformcommand.ErrEffectOutcomeUnknown, ctx.Err())
 	}
-	return errors.Join(
-		platformcommand.ErrEffectVerification,
-		errors.New("PostgreSQL backup recovery failed"),
-	)
+	boundary := classifyDatabaseRestoreDiagnostic(diagnostic.Bytes(), diagnostic.exceeded)
+	return errors.Join(platformcommand.ErrEffectVerification, &databaseRestoreFailure{boundary: boundary})
+}
+
+func classifyDatabaseRestoreDiagnostic(
+	output []byte,
+	exceeded bool,
+) platformcommand.RecoveryFailureBoundary {
+	if exceeded {
+		return platformcommand.RecoveryFailureDatabaseRestore
+	}
+	switch string(bytes.TrimSpace(output)) {
+	case "RESTORE_OBJECT_CONFLICT":
+		return platformcommand.RecoveryFailureDatabaseRestoreObjectConflict
+	case "RESTORE_MISSING_OBJECT":
+		return platformcommand.RecoveryFailureDatabaseRestoreMissingObject
+	case "RESTORE_MISSING_RELATION":
+		return platformcommand.RecoveryFailureDatabaseRestoreMissingRelation
+	case "RESTORE_MISSING_SCHEMA":
+		return platformcommand.RecoveryFailureDatabaseRestoreMissingSchema
+	case "RESTORE_AUTHORITY":
+		return platformcommand.RecoveryFailureDatabaseRestoreAuthority
+	case "RESTORE_DEPENDENCY":
+		return platformcommand.RecoveryFailureDatabaseRestoreDependency
+	case "RESTORE_INTEGRITY":
+		return platformcommand.RecoveryFailureDatabaseRestoreIntegrity
+	case "RESTORE_TRANSACTION":
+		return platformcommand.RecoveryFailureDatabaseRestoreTransaction
+	case "RESTORE_PIPELINE":
+		return platformcommand.RecoveryFailureDatabaseRestorePipeline
+	case "RESTORE_CLIENT":
+		return platformcommand.RecoveryFailureDatabaseRestoreClient
+	case "RESTORE_CLIENT_FATAL":
+		return platformcommand.RecoveryFailureDatabaseRestoreClientFatal
+	case "RESTORE_CONNECTION":
+		return platformcommand.RecoveryFailureDatabaseRestoreConnection
+	case "RESTORE_CLIENT_SCRIPT":
+		return platformcommand.RecoveryFailureDatabaseRestoreClientScript
+	default:
+		return platformcommand.RecoveryFailureDatabaseRestore
+	}
+}
+
+func databaseRestoreFailureBoundary(err error) platformcommand.RecoveryFailureBoundary {
+	var failure *databaseRestoreFailure
+	if errors.As(err, &failure) {
+		return failure.boundary
+	}
+	return platformcommand.RecoveryFailureDatabaseRestore
 }
 
 func verifyRecoveredInstallation(

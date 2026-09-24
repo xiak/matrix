@@ -344,11 +344,12 @@ func actionRules() (eventRules []any, recordRules []any) {
 		if contract.PlatformOnly {
 			thenRequired = append(thenRequired, "installationId")
 			thenProperties["tenantId"] = false
-			thenProperties["actor"] = object{"properties": object{"type": object{"const": string(auditv1.ActorUser)}}}
-			if action == auditv1.ActionIAMInstallationPrimaryCredentialsRecovered {
+			if contract.PlatformSystemActorID == "" {
+				thenProperties["actor"] = object{"properties": object{"type": object{"const": string(auditv1.ActorUser)}}}
+			} else {
 				thenProperties["actor"] = object{"properties": object{
 					"type": object{"const": string(auditv1.ActorSystem)},
-					"id":   object{"const": "iam-local-recovery"},
+					"id":   object{"const": string(contract.PlatformSystemActorID)},
 				}}
 			}
 		} else {

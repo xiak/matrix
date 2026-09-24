@@ -77,7 +77,10 @@ func (value *gate) activateReleaseA(ctx context.Context) error {
 	installed, err := runMX(
 		ctx, initial, "install", installArguments, value.pathLeakage(),
 	)
-	if err != nil || installed.ReleaseID != initial.Manifest.Release.ID ||
+	if err != nil {
+		return err
+	}
+	if installed.ReleaseID != initial.Manifest.Release.ID ||
 		installed.PreviousID != "" || !installed.Changed {
 		return fail(installStep)
 	}
@@ -154,16 +157,9 @@ func releaseInstallArguments(config options, initial release.VerifiedBundle) ([]
 		"--root", config.root,
 		"--trust-key", config.trustKey,
 	}
-	switch initial.Manifest.Database {
-	case release.CurrentDatabaseProfile():
+	if initial.Manifest.Database == release.CurrentDatabaseProfile() ||
+		initial.Manifest.Database == release.SupportedDatabaseUpgradePredecessorProfile() {
 		return append(arguments, "--northbound-origin", config.edge), nil
-	case release.SupportedDatabasePredecessorProfile():
-		// The published predecessor predates the explicit origin input and owns
-		// this exact listener as its immutable default. Do not pass a flag that
-		// its CLI cannot parse or invent compatibility in the old executable.
-		if config.edge == defaultEdgeEndpoint {
-			return arguments, nil
-		}
 	}
 	return nil, errors.New("release installation profile is unsupported")
 }
@@ -285,7 +281,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	wantInitialAudit := map[auditv1.Action]string{
 		auditv1.ActionIAMBootstrapApplied:              "",
 		auditv1.ActionIAMSessionIssued:                 "",
-		auditv1.ActionIAMPasswordChanged:               "principal-admin",
+		auditv1.ActionIAMUserPasswordChanged:           "principal-admin",
 		auditv1.ActionIAMAuthorizationDecided:          "",
 		auditv1.ActionPaaSApplicationCreated:           string(applicationID),
 		auditv1.ActionPaaSConfigurationCreated:         string(configurationID),
@@ -295,8 +291,14 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		auditv1.ActionPaaSDeploymentUpdated:            string(deploymentID),
 	}
 	recordsBeforeBackup, err := value.edge.waitAuditActions(ctx, bearer, wantInitialAudit)
-	if err != nil || !scanAuditForConfigurationValues(recordsBeforeBackup, settingOne, settingTwo) {
-		return fail("initial-audit-delivery")
+	if err != nil {
+		if errors.Is(err, errAuditActionsDidNotArrive) {
+			return fail("initial-audit-missing-" + auditActionFailureStep(missingAuditActions(recordsBeforeBackup, wantInitialAudit)))
+		}
+		return fail("initial-audit-query")
+	}
+	if !scanAuditForConfigurationValues(recordsBeforeBackup, settingOne, settingTwo) {
+		return fail("initial-audit-configuration-redaction")
 	}
 	if _, err := value.edge.verifyAuditChain(ctx, bearer); err != nil {
 		return fail("initial-audit-integrity")
@@ -352,9 +354,17 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		recovered, err := runMX(ctx, value.releases.b, "recover", []string{
 			"--root", value.config.root, "--backup", failureBackupID,
 		}, value.forbidden(secret, newPassword, bearer))
-		if err != nil || recovered.ReleaseID != value.releases.a.Manifest.Release.ID ||
-			recovered.PreviousID != "" || !recovered.Changed {
-			return fail("cross-profile-upgrade-recovery")
+		if err != nil {
+			return err
+		}
+		if recovered.ReleaseID != value.releases.a.Manifest.Release.ID {
+			return fail("cross-profile-upgrade-recovery-release")
+		}
+		if recovered.PreviousID != "" {
+			return fail("cross-profile-upgrade-recovery-previous")
+		}
+		if !recovered.Changed {
+			return fail("cross-profile-upgrade-recovery-change")
 		}
 		value.releaseAPreviousID = ""
 		if _, err := assertPlatform(ctx, value.config.root, value.releases.a.Manifest, ""); err != nil {
@@ -433,6 +443,17 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return fail("post-upgrade-audit-association")
 	}
 	emit("release-b-upgrade-preservation")
+	var successorBackup mxResult
+	if value.releases.a.Manifest.Database != value.releases.b.Manifest.Database {
+		successorBackup, err = runMX(
+			ctx, value.releases.b, "backup", []string{"--root", value.config.root},
+			value.forbidden(secret, newPassword, bearer),
+		)
+		if err != nil || successorBackup.BackupID == "" || !successorBackup.Changed {
+			return fail("successor-protected-backup")
+		}
+		emit("successor-protected-backup")
+	}
 	if err := value.nativeReleasePair(ctx, bearer); err != nil {
 		return err
 	}
@@ -485,6 +506,33 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 			return fail("rejected-rollback-retained-successor-audit-history")
 		}
 		emit("cross-profile-platform-rollback-rejected")
+
+		restoredSuccessor, err := runMX(ctx, value.releases.b, "recover", []string{
+			"--root", value.config.root, "--backup", successorBackup.BackupID,
+		}, value.forbidden(secret, newPassword, bearer))
+		if err != nil || restoredSuccessor.ReleaseID != value.releases.b.Manifest.Release.ID ||
+			restoredSuccessor.PreviousID != "" || !restoredSuccessor.Changed {
+			return fail("successor-backup-recovery")
+		}
+		if _, err := assertPlatform(ctx, value.config.root, value.releases.b.Manifest, ""); err != nil {
+			return err
+		}
+		if err := value.assertWorkload(ctx, value.releases.b.Manifest, updated, 2, "2", settingTwo, secretDigest); err != nil {
+			return err
+		}
+		if err := value.assertPostUpgradeApplication(ctx, bearer, postUpgradeOperation, true); err != nil {
+			return err
+		}
+		restoredSuccessorAudit, err := value.edge.allAuditRecords(ctx, bearer)
+		if err != nil || !containsAuditHistory(restoredSuccessorAudit, auditRecordHashes(postUpgradeAudit)) {
+			return fail("successor-backup-audit-history")
+		}
+		if err := value.repeatedStatusAndVerify(
+			ctx, value.releases.b, value.releases.b.Manifest.Release.ID, "",
+		); err != nil {
+			return err
+		}
+		emit("successor-backup-recovery")
 	} else {
 		rollback, err := runMX(ctx, value.releases.b, "rollback", []string{"--root", value.config.root}, value.forbidden(secret, newPassword, bearer))
 		if err != nil || rollback.ReleaseID != value.releases.a.Manifest.Release.ID ||
@@ -748,7 +796,7 @@ func (value *gate) recoverOriginalPlatformCredentials(ctx context.Context, oldBe
 	}
 	value.sensitive = append(value.sensitive, current, other)
 	value.edge.addForbidden(current, other)
-	if _, err := value.edge.json(ctx, http.MethodGet, "/api/iam/v1/organizations", current, nil, nil, http.StatusForbidden); err != nil {
+	if _, err := value.edge.json(ctx, http.MethodGet, "/api/iam/v1/accounts", current, nil, nil, http.StatusForbidden); err != nil {
 		return nil, fail("credential-recovery-forced-change-only")
 	}
 	if err := value.edge.changePassword(ctx, current, temporaryPassword, finalPassword); err != nil {

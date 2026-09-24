@@ -191,13 +191,18 @@ func (effects *Effects) InspectBackup(
 			platformcommand.ErrEffectConflict, err,
 		)
 	}
+	custodyDigest := ""
+	if manifest.TOTPBackupCustody != nil {
+		custodyDigest = manifest.TOTPBackupCustody.CustodyDigest
+	}
 	return platformcommand.RecoverySource{
-		InstallationID: installed.InstallationID,
-		BackupID:       backupID,
-		BackupDigest:   manifestDigest,
-		ReleaseID:      manifest.ReleaseID,
-		ReleaseDigest:  manifest.ReleaseDigest,
-		Database:       profile,
+		InstallationID:    installed.InstallationID,
+		BackupID:          backupID,
+		BackupDigest:      manifestDigest,
+		TOTPCustodyDigest: custodyDigest,
+		ReleaseID:         manifest.ReleaseID,
+		ReleaseDigest:     manifest.ReleaseDigest,
+		Database:          profile,
 	}, nil
 }
 
@@ -877,13 +882,8 @@ func verifyBackupDirectory(
 }
 
 func backupAccessKeyWrappingForRelease(plan platformcommand.InstallPlan) (*backupAccessKeyWrapping, string, error) {
-	version := ""
-	switch plan.Bundle.Manifest.Database {
-	case release.SupportedDatabasePredecessorProfile():
-		version = accessKeyBackupAPIVersion
-	case release.CurrentDatabaseProfile():
-		version = backupAPIVersion
-	default:
+	version, supported := backupAPIVersionForDatabaseProfile(plan.Bundle.Manifest.Database)
+	if !supported {
 		return nil, "", errors.Join(
 			platformcommand.ErrEffectVerification,
 			errors.New("backup release profile is unsupported"),
@@ -907,13 +907,8 @@ func verifyBackupAccessKeyWrapping(
 	manifest release.Manifest,
 	backup backupManifest,
 ) error {
-	wantVersion := ""
-	switch manifest.Database {
-	case release.SupportedDatabasePredecessorProfile():
-		wantVersion = accessKeyBackupAPIVersion
-	case release.CurrentDatabaseProfile():
-		wantVersion = backupAPIVersion
-	default:
+	wantVersion, supported := backupAPIVersionForDatabaseProfile(manifest.Database)
+	if !supported {
 		return errors.New("backup access-key wrapping profile is unsupported")
 	}
 	if backup.APIVersion != wantVersion || backup.AccessKeyWrapping == nil {
@@ -931,6 +926,19 @@ func verifyBackupAccessKeyWrapping(
 		return errors.New("backup access-key wrapping commitment differs from the installation")
 	}
 	return nil
+}
+
+func backupAPIVersionForDatabaseProfile(profile release.DatabaseProfile) (string, bool) {
+	// The exact supported predecessor already owns the v4 TOTP custody
+	// contract. "Predecessor" is a release relationship, not permission to
+	// downgrade the authenticated backup format. Both admitted restore profiles
+	// require the same custody proof; v3 remains decoder-only.
+	switch profile {
+	case release.SupportedDatabaseUpgradePredecessorProfile(), release.CurrentDatabaseProfile():
+		return backupAPIVersion, true
+	default:
+		return "", false
+	}
 }
 
 func readVerifiedBackupDirectory(

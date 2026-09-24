@@ -87,20 +87,28 @@ type AuthoritySchemas struct {
 func CurrentDatabaseProfile() DatabaseProfile {
 	return DatabaseProfile{
 		Compatibility:    "identical-authority-profile",
+		Authorities:      AuthoritySchemas{IAM: 36, Audit: 19, PaaS: 6},
+		ContractRevision: 14,
+	}
+}
+
+// SupportedDatabaseUpgradePredecessorProfile is the one authenticated
+// installed profile that this source can upgrade in place. It is an exact
+// release contract, not a numeric N-1 rule.
+func SupportedDatabaseUpgradePredecessorProfile() DatabaseProfile {
+	return DatabaseProfile{
+		Compatibility:    "identical-authority-profile",
 		Authorities:      AuthoritySchemas{IAM: 35, Audit: 18, PaaS: 6},
 		ContractRevision: 13,
 	}
 }
 
-// SupportedDatabasePredecessorProfile is the one authenticated installed
-// profile that this source can upgrade in place. It is an exact release
-// contract, not a numeric N-1 rule.
-func SupportedDatabasePredecessorProfile() DatabaseProfile {
-	return DatabaseProfile{
-		Compatibility:    "identical-authority-profile",
-		Authorities:      AuthoritySchemas{IAM: 30, Audit: 18, PaaS: 6},
-		ContractRevision: 12,
-	}
+// SupportedDatabaseRecoveryPredecessorProfile is absent in the preparation
+// release. Its upgrade predecessor cannot close and reopen authentication, so
+// a destructive restore may target only the current profile. The enabling
+// release replaces this policy with its exact preparation predecessor.
+func SupportedDatabaseRecoveryPredecessorProfile() (DatabaseProfile, bool) {
+	return DatabaseProfile{}, false
 }
 
 type File struct {

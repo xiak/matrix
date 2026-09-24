@@ -278,10 +278,27 @@ func ValidateDatabaseUpgradePath(source, target DatabaseProfile) error {
 		return errors.New("release database upgrade path is invalid")
 	}
 	if source == target ||
-		(source == SupportedDatabasePredecessorProfile() && target == CurrentDatabaseProfile()) {
+		(source == SupportedDatabaseUpgradePredecessorProfile() && target == CurrentDatabaseProfile()) {
 		return nil
 	}
 	return errors.New("release database upgrade path is unsupported")
+}
+
+// ValidateDatabaseRecoveryPath admits equal profiles and only a separately
+// declared destructive-recovery predecessor. Upgrade compatibility alone is
+// insufficient because the restored binary must enforce the recovery fence.
+func ValidateDatabaseRecoveryPath(source, target DatabaseProfile) error {
+	if ValidateDatabaseProfile(source) != nil || ValidateDatabaseProfile(target) != nil {
+		return errors.New("release database recovery path is invalid")
+	}
+	if source == target {
+		return nil
+	}
+	predecessor, supported := SupportedDatabaseRecoveryPredecessorProfile()
+	if supported && source == predecessor && target == CurrentDatabaseProfile() {
+		return nil
+	}
+	return errors.New("release database recovery path is unsupported")
 }
 
 func validateFiles(files []File, node bool) error {

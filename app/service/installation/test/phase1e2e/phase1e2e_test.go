@@ -3,6 +3,7 @@ package phase1e2e
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,11 +16,70 @@ import (
 	"time"
 
 	nodev1 "github.com/xiak/matrix/api/adapter/node/v1"
+	auditv1 "github.com/xiak/matrix/api/audit/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/installation/internal/releasetest"
 	"github.com/xiak/matrix/app/service/installation/release"
 	"github.com/xiak/matrix/app/service/installation/topology"
 )
+
+func TestMissingAuditActionsAreStableAndTargetBound(t *testing.T) {
+	want := map[auditv1.Action]string{
+		auditv1.ActionIAMBootstrapApplied:      "",
+		auditv1.ActionIAMUserPasswordChanged:   "principal-admin",
+		auditv1.ActionPaaSApplicationCreated:   "application-a",
+		auditv1.ActionPaaSDeploymentUpdated:    "deployment-a",
+		auditv1.ActionPaaSConfigurationCreated: "configuration-a",
+	}
+	records := []auditv1.AuditRecord{
+		{Event: auditv1.Event{Action: auditv1.ActionIAMBootstrapApplied}},
+		{Event: auditv1.Event{Action: auditv1.ActionIAMPasswordChanged, Target: auditv1.TargetReference{ID: "principal-other"}}},
+		{Event: auditv1.Event{Action: auditv1.ActionPaaSApplicationCreated, Target: auditv1.TargetReference{ID: "application-a"}}},
+		{Event: auditv1.Event{Action: auditv1.ActionPaaSDeploymentUpdated, Target: auditv1.TargetReference{ID: "deployment-a"}}},
+	}
+	missing := missingAuditActions(records, want)
+	wantMissing := []auditv1.Action{
+		auditv1.ActionIAMUserPasswordChanged,
+		auditv1.ActionPaaSConfigurationCreated,
+	}
+	if !slices.Equal(missing, wantMissing) ||
+		auditActionFailureStep(missing) != "iam-user-password-changed-and-paas-configuration-created" {
+		t.Fatalf("missing audit actions = %v", missing)
+	}
+}
+
+func TestAuditHistoryPaginationMatchesIntegrityVerificationBound(t *testing.T) {
+	var pages atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		defer request.Body.Close()
+		var query auditv1.QueryRecordsRequest
+		if request.Method != http.MethodPost || request.URL.Path != "/api/audit/v1/records:query" ||
+			json.NewDecoder(request.Body).Decode(&query) != nil || query.PageSize != auditv1.MaxPageSize {
+			http.Error(response, "invalid request", http.StatusBadRequest)
+			return
+		}
+		page := pages.Add(1)
+		next := auditv1.Cursor("")
+		if page < 9 {
+			next = auditv1.Cursor("v1." + fmt.Sprintf("%016d", page) + "." + strings.Repeat("s", 43))
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(response).Encode(auditv1.RecordPage{
+			APIVersion: auditv1.APIVersion,
+			Kind:       "AuditRecordPage",
+			TenantID:   "organization-default",
+			Records:    []auditv1.AuditRecord{},
+			NextCursor: next,
+		})
+	}))
+	defer server.Close()
+	client := newEdgeClient(server.URL)
+	defer client.close()
+	records, err := client.allAuditRecords(context.Background(), []byte("test-bearer"))
+	if err != nil || len(records) != 0 || pages.Load() != 9 {
+		t.Fatalf("audit pages = %d, records = %d, err = %v", pages.Load(), len(records), err)
+	}
+}
 
 func TestPlatformEdgeBoundaryFollowsTheSignedTopology(t *testing.T) {
 	compiled, _, err := expectedPlatformServices(
@@ -370,6 +430,32 @@ func TestOfflinePhase1Lifecycle(t *testing.T) {
 	}
 }
 
+func TestMXFailureClassificationOnlyAdmitsTheClosedCLIContract(t *testing.T) {
+	valid := `{"apiVersion":"cli.matrix.xiak.com/v1","kind":"PlatformCommandFailure","action":"INSTALL","status":"FAILED","error":{"class":"PRECONDITION_FAILED","code":"INSTALLATION_PRECONDITION_FAILED","message":"Platform preconditions are not satisfied"}}
+`
+	for _, scenario := range []struct {
+		name   string
+		output commandOutput
+		action string
+		code   string
+	}{
+		{name: "closed failure", output: commandOutput{stderr: []byte(valid), exit: 3}, action: "install", code: "INSTALLATION_PRECONDITION_FAILED"},
+		{name: "wrong exit", output: commandOutput{stderr: []byte(valid), exit: 4}, action: "install"},
+		{name: "unexpected stdout", output: commandOutput{stdout: []byte("unexpected"), stderr: []byte(valid), exit: 3}, action: "install"},
+		{name: "unknown field", output: commandOutput{stderr: []byte(strings.Replace(valid, `"status":"FAILED"`, `"status":"FAILED","secret":"unsafe"`, 1)), exit: 3}, action: "install"},
+		{name: "unbound action", output: commandOutput{stderr: []byte(valid), exit: 3}, action: "upgrade"},
+		{name: "unsafe code", output: commandOutput{stderr: []byte(strings.Replace(valid, "INSTALLATION_PRECONDITION_FAILED", "INSTALLATION/PRECONDITION", 1)), exit: 3}, action: "install"},
+		{name: "untrusted message", output: commandOutput{stderr: []byte(strings.Replace(valid, "Platform preconditions are not satisfied", "/private/operator-input", 1)), exit: 3}, action: "install"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			code, ok := classifyMXFailure(scenario.output, scenario.action)
+			if ok != (scenario.code != "") || code != scenario.code {
+				t.Fatalf("classification=(%q,%t), want (%q,%t)", code, ok, scenario.code, scenario.code != "")
+			}
+		})
+	}
+}
+
 func offlineLifecycleTimeout(config options) time.Duration {
 	if config.nativeDeploymentRuntime {
 		// Two independent one-vCPU TCG guests exercise signed node upgrade,
@@ -419,8 +505,11 @@ func TestReleasePairRequiresCompatibleImmediatePredecessor(t *testing.T) {
 		{name: "actual different-source predecessor and workload", accept: true, mutate: func(_, b *release.Manifest) {
 			b.Release.SourceCommit = strings.Repeat("b", 40)
 		}},
-		{name: "exact retained-data profile and topology successor", accept: true, mutate: func(a, _ *release.Manifest) {
-			a.Database = release.SupportedDatabasePredecessorProfile()
+		{name: "exact retained-data profile with published topology", accept: true, mutate: func(a, _ *release.Manifest) {
+			a.Database = release.SupportedDatabaseUpgradePredecessorProfile()
+		}},
+		{name: "retained-data profile with changed predecessor topology", mutate: func(a, _ *release.Manifest) {
+			a.Database = release.SupportedDatabaseUpgradePredecessorProfile()
 			a.TopologyDigest = "sha256:" + strings.Repeat("3", 64)
 		}},
 		{name: "same-source lifecycle fixture", accept: true},
@@ -483,15 +572,16 @@ func TestReleaseLifecycleArgumentsRespectThePublishedPredecessorCLI(t *testing.T
 	predecessor := release.VerifiedBundle{
 		Root: "/data/release-a",
 		Manifest: release.Manifest{
-			Database: release.SupportedDatabasePredecessorProfile(),
+			Database: release.SupportedDatabaseUpgradePredecessorProfile(),
 		},
 	}
 	arguments, err := releaseInstallArguments(base, predecessor)
 	if err != nil {
 		t.Fatalf("published predecessor install arguments: %v", err)
 	}
-	if slices.Contains(arguments, "--northbound-origin") {
-		t.Fatal("published predecessor received a flag its CLI cannot parse")
+	index := slices.Index(arguments, "--northbound-origin")
+	if index < 0 || index+1 >= len(arguments) || arguments[index+1] != defaultEdgeEndpoint {
+		t.Fatalf("published predecessor install arguments=%q", arguments)
 	}
 
 	current := predecessor
@@ -501,7 +591,7 @@ func TestReleaseLifecycleArgumentsRespectThePublishedPredecessorCLI(t *testing.T
 	if err != nil {
 		t.Fatalf("current install arguments: %v", err)
 	}
-	index := slices.Index(arguments, "--northbound-origin")
+	index = slices.Index(arguments, "--northbound-origin")
 	if index < 0 || index+1 >= len(arguments) || arguments[index+1] != defaultEdgeEndpoint {
 		t.Fatalf("current install arguments=%q", arguments)
 	}
@@ -513,8 +603,10 @@ func TestReleaseLifecycleArgumentsRespectThePublishedPredecessorCLI(t *testing.T
 
 	changed := base
 	changed.edge = "https://matrix.example.test:443"
-	if _, err := releaseInstallArguments(changed, predecessor); err == nil {
-		t.Fatal("published predecessor accepted a nondefault origin it cannot persist")
+	arguments, err = releaseInstallArguments(changed, predecessor)
+	index = slices.Index(arguments, "--northbound-origin")
+	if err != nil || index < 0 || index+1 >= len(arguments) || arguments[index+1] != changed.edge {
+		t.Fatalf("published predecessor rejected its explicit origin: arguments=%q err=%v", arguments, err)
 	}
 	unknown := predecessor
 	unknown.Manifest.Database = release.DatabaseProfile{}
@@ -542,13 +634,13 @@ func TestReleaseSequenceRequiresTwoCompatibleImmediateTransitions(t *testing.T) 
 		{name: "same-profile bridge changes topology", mutate: func(_, bridge, _ *release.Manifest) {
 			bridge.TopologyDigest = "sha256:" + strings.Repeat("4", 64)
 		}},
-		{name: "successor topology changes without profile transition", mutate: func(_, bridge, successor *release.Manifest) {
-			successor.Database = bridge.Database
+		{name: "successor changes the published topology", mutate: func(_, _, successor *release.Manifest) {
+			successor.TopologyDigest = "sha256:" + strings.Repeat("2", 64)
 		}},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			successorProfile := release.CurrentDatabaseProfile()
-			bridgeProfile := release.SupportedDatabasePredecessorProfile()
+			bridgeProfile := release.SupportedDatabaseUpgradePredecessorProfile()
 			base := release.VerifiedBundle{Manifest: release.Manifest{
 				Kind: release.ManifestKind,
 				Release: release.ReleaseIdentity{
@@ -572,7 +664,7 @@ func TestReleaseSequenceRequiresTwoCompatibleImmediateTransitions(t *testing.T) 
 					ID: "release-successor", Version: "v0.3.0", SourceCommit: strings.Repeat("c", 40),
 					PreviousID: bridge.Manifest.Release.ID, PreviousVersion: bridge.Manifest.Release.Version,
 				},
-				Database: successorProfile, TopologyDigest: "sha256:" + strings.Repeat("2", 64),
+				Database: successorProfile, TopologyDigest: bridge.Manifest.TopologyDigest,
 				Images: []release.Image{{Purpose: release.ImageWorkload, SourceDigest: "sha256:successor"}},
 			}}
 			if scenario.mutate != nil {
