@@ -326,11 +326,27 @@ func (value *gate) bindFirstAuthenticator(ctx context.Context, bearer, password 
 	}
 	response, err := value.edge.json(ctx, http.MethodPost,
 		"/api/iam/v1/auth/notification-contact/verifications", bearer,
-		struct{ Email, Password, RequestID string }{
+		struct {
+			Email     string `json:"email"`
+			Password  string `json:"password"`
+			RequestID string `json:"requestId"`
+		}{
 			Email: "phase1-admin@matrix.test", Password: string(password), RequestID: "phase1-notification-contact",
-		}, nil, http.StatusOK)
+		}, nil, http.StatusOK, http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden,
+		http.StatusNotFound, http.StatusConflict, http.StatusTooManyRequests,
+		http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout)
 	if err != nil {
-		return nil, nil, fail("mfa-notification-start")
+		return nil, nil, fail("mfa-notification-start-contract")
+	}
+	if response.status != http.StatusOK {
+		var problem iamv1.Problem
+		validProblem := decodeOne(response.body, &problem) == nil &&
+			iamv1.ValidateProblem(problem) == nil && problem.Status == response.status
+		clear(response.body)
+		if validProblem {
+			return nil, nil, fail(fmt.Sprintf("mfa-notification-start-%d-%s", response.status, problem.Code))
+		}
+		return nil, nil, fail(fmt.Sprintf("mfa-notification-start-%d", response.status))
 	}
 	var verification iamv1.NotificationContactVerification
 	valid := decodeOne(response.body, &verification) == nil && iamv1.ValidateNotificationContactVerification(verification) == nil &&
@@ -364,7 +380,10 @@ func (value *gate) bindFirstAuthenticator(ctx context.Context, bearer, password 
 	value.edge.addForbidden(mailCode)
 	response, err = value.edge.json(ctx, http.MethodPost,
 		"/api/iam/v1/auth/notification-contact/verifications/"+verification.ID+":confirm", bearer,
-		struct{ Code, RequestID string }{Code: string(mailCode), RequestID: "phase1-notification-confirm"}, nil, http.StatusOK)
+		struct {
+			Code      string `json:"code"`
+			RequestID string `json:"requestId"`
+		}{Code: string(mailCode), RequestID: "phase1-notification-confirm"}, nil, http.StatusOK)
 	if err != nil {
 		return nil, nil, fail("mfa-notification-confirm")
 	}
@@ -381,8 +400,9 @@ func (value *gate) bindFirstAuthenticator(ctx context.Context, bearer, password 
 	}
 	response, err = value.edge.json(ctx, http.MethodPost, "/api/iam/v1/auth/totp/enrollments", bearer,
 		struct {
-			RequestID, Password    string
-			ExpectedFactorRevision uint64
+			RequestID              string `json:"requestId"`
+			Password               string `json:"password"`
+			ExpectedFactorRevision uint64 `json:"expectedFactorRevision"`
 		}{
 			RequestID: "phase1-totp-enrollment", Password: string(password), ExpectedFactorRevision: state.FactorRevision,
 		}, nil, http.StatusOK)
@@ -408,7 +428,10 @@ func (value *gate) bindFirstAuthenticator(ctx context.Context, bearer, password 
 	value.edge.addForbidden(codeBytes)
 	response, err = value.edge.json(ctx, http.MethodPost,
 		"/api/iam/v1/auth/totp/enrollments/"+started.Enrollment.ID+":confirm", bearer,
-		struct{ RequestID, Code string }{RequestID: "phase1-totp-confirm", Code: code}, nil, http.StatusOK)
+		struct {
+			RequestID string `json:"requestId"`
+			Code      string `json:"code"`
+		}{RequestID: "phase1-totp-confirm", Code: code}, nil, http.StatusOK)
 	if err != nil {
 		return nil, nil, fail("mfa-enrollment-confirm")
 	}
