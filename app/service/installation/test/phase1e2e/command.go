@@ -504,6 +504,166 @@ exec %q "$@"
 	return pending.Active.Command.ID, nil
 }
 
+// The SQL restore consumer receives the real, unmodified stream. The proxy
+// forwards its six transaction prelude statements, waits until PostgreSQL
+// reports the resulting transaction idle, then withholds the remainder.
+// Killing mx must abort that open transaction before the same recovery intent
+// can replay the complete authenticated archive.
+func (value *gate) interruptDatabaseRestore(ctx context.Context, backupID, commandID string, forbidden [][]byte) error {
+	realDocker, err := exec.LookPath("docker")
+	if err != nil || !filepath.IsAbs(realDocker) {
+		return fail("restore-interruption-provider-path")
+	}
+	before, err := readJournal(ctx, value.config.root)
+	if err != nil || before.Active == nil || before.Active.Command.Action != lifecycle.ActionRecover ||
+		before.Active.Command.BackupID != backupID || before.Active.Command.ID != commandID ||
+		before.Active.Phase != lifecycle.PhaseRecovering ||
+		before.CurrentReleaseID != value.releases.b.Manifest.Release.ID {
+		return fail("restore-interruption-preflight")
+	}
+	directory, err := os.MkdirTemp(value.config.root, ".restore-interruption-")
+	if err != nil {
+		return fail("restore-interruption-fixture")
+	}
+	defer os.RemoveAll(directory)
+	for _, path := range []string{realDocker, directory} {
+		if strings.ContainsAny(path, " \t\r\n'\"$\\") || strings.ContainsRune(path, 96) {
+			return fail("restore-interruption-provider-path")
+		}
+	}
+	marker, fifo := filepath.Join(directory, "transaction-open"), filepath.Join(directory, "release")
+	output, err := runProcess(ctx, "mkfifo", "-m", "600", fifo)
+	if err != nil || output.exit != 0 {
+		return fail("restore-interruption-fixture")
+	}
+	releasePipe, err := os.OpenFile(fifo, os.O_RDWR, 0)
+	if err != nil {
+		return fail("restore-interruption-fixture")
+	}
+	defer releasePipe.Close()
+	script := fmt.Sprintf(`#!/bin/sh
+set -u
+umask 077
+if [ "$#" -ge 10 ] && [ "$1" = exec ] && [ "$2" = --interactive ] &&
+   [ "$3" = --user ] && [ "$4" = postgres ] && [ "$6" = /bin/bash ]; then
+  actual=$(%q container inspect --format '{{index .Config.Labels "com.xiak.matrix.installation"}} {{index .Config.Labels "com.xiak.matrix.release"}} {{index .Config.Labels "com.xiak.matrix.role"}}' "$5") || exit "$?"
+  if [ "$actual" = %q ]; then
+    {
+      for index in 1 2 3 4 5 6; do
+        IFS= read -r line || exit 1
+        printf '%%s\n' "$line"
+      done
+      printf open > %q
+      mv %q %q
+      IFS= read -r released < %q || :
+      cat
+    } | %q "$@"
+    exit "$?"
+  fi
+fi
+exec %q "$@"
+`, realDocker, before.InstallationID+" "+before.CurrentReleaseID+" postgres",
+		marker+".pending", marker+".pending", marker, fifo, realDocker, realDocker)
+	if os.WriteFile(filepath.Join(directory, "docker"), []byte(script), 0o700) != nil {
+		return fail("restore-interruption-fixture")
+	}
+	interruption, cancel := context.WithTimeout(ctx, 6*time.Minute)
+	defer cancel()
+	command, stdout, stderr, err := startMX(interruption, value.releases.b, "recover",
+		[]string{"--root", value.config.root, "--backup", backupID},
+		"PATH="+directory+":"+os.Getenv("PATH"))
+	if err != nil {
+		return fail("restore-interruption-start")
+	}
+	waited := make(chan error, 1)
+	go func() { waited <- command.Wait() }()
+	finished := false
+	defer func() {
+		if !finished {
+			_ = command.Process.Kill()
+			_, _ = releasePipe.Write([]byte("continue\n"))
+			<-waited
+		}
+	}()
+	for {
+		select {
+		case <-waited:
+			finished = true
+			return fail("restore-ended-before-interruption")
+		default:
+		}
+		content, readErr := os.ReadFile(marker)
+		if readErr == nil {
+			if string(content) != "open" {
+				return fail("restore-interruption-marker")
+			}
+			break
+		}
+		if !errors.Is(readErr, os.ErrNotExist) || !waitPoll(interruption, 50*time.Millisecond) {
+			return fail("restore-interruption-boundary")
+		}
+	}
+	ids, err := dockerLines(ctx, "container", "ls", "--quiet",
+		"--filter", "label=com.xiak.matrix.installation="+before.InstallationID,
+		"--filter", "label=com.xiak.matrix.release="+before.CurrentReleaseID,
+		"--filter", "label=com.xiak.matrix.role=postgres")
+	if err != nil || len(ids) != 1 {
+		return fail("restore-interruption-postgres")
+	}
+	// The container's OS user is postgres, but this installation has no
+	// PostgreSQL login named postgres. Probe as the database owner, matrix.
+	const transactionProbe = "SELECT count(*) FROM pg_stat_activity WHERE datname='matrix' AND usename='matrix' AND state='idle in transaction' AND query LIKE 'CREATE SCHEMA paas AUTHORIZATION CURRENT_USER%';"
+	for {
+		state, queryErr := docker(ctx, "exec", "--user", "postgres", ids[0],
+			"psql", "-X", "-At", "--username=matrix", "--dbname=matrix", "--command", transactionProbe)
+		if queryErr == nil && strings.TrimSpace(string(state)) == "1" {
+			break
+		}
+		select {
+		case <-waited:
+			finished = true
+			return fail("restore-ended-before-transaction")
+		default:
+		}
+		if !waitPoll(interruption, 100*time.Millisecond) {
+			return fail("restore-interruption-transaction")
+		}
+	}
+	if command.Process.Kill() != nil {
+		return fail("restore-installer-kill")
+	}
+	_, _ = releasePipe.Write([]byte("continue\n"))
+	waitErr := <-waited
+	finished = true
+	if waitErr == nil || stdout.overflow || stderr.overflow || stdout.content.Len() != 0 ||
+		containsAny(stdout.content.Bytes(), forbidden) || containsAny(stderr.content.Bytes(), forbidden) {
+		return fail("restore-interrupted-output")
+	}
+	pending, err := readJournal(ctx, value.config.root)
+	if err != nil || pending.Active == nil || pending.Active.Command.Action != lifecycle.ActionRecover ||
+		pending.Active.Command.BackupID != backupID || pending.Active.Command.ID != commandID ||
+		pending.Active.Phase != lifecycle.PhaseRecovering {
+		return fail("restore-interrupted-intent")
+	}
+	for deadline := time.Now().Add(30 * time.Second); ; {
+		state, queryErr := docker(ctx, "exec", "--user", "postgres", ids[0],
+			"psql", "-X", "-At", "--username=matrix", "--dbname=matrix", "--command", transactionProbe)
+		if queryErr == nil && strings.TrimSpace(string(state)) == "0" {
+			break
+		}
+		if time.Now().After(deadline) || !waitPoll(ctx, 100*time.Millisecond) {
+			return fail("restore-interrupted-transaction-retained")
+		}
+	}
+	retained, err := docker(ctx, "exec", "--user", "postgres", ids[0],
+		"psql", "-X", "-At", "--username=matrix", "--dbname=matrix", "--command",
+		"SELECT CASE WHEN count(*) > 0 THEN 1 ELSE 0 END FROM iam.authorization_decisions;")
+	if err != nil || strings.TrimSpace(string(retained)) != "1" {
+		return fail("restore-interrupted-authority-rollback")
+	}
+	return nil
+}
+
 // The wrapper passes the real snapshot-bound pg_dump through unchanged, then
 // withholds only its process exit. Killing mx at that point leaves its durable
 // backup intent and unpublished partial artifact, without a production hook

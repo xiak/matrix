@@ -590,6 +590,11 @@ func (value *gate) beforeRestart(ctx context.Context) (gateErr error) {
 				return fail("successor-authentication-closed-session-denial")
 			}
 			emit("successor-authentication-close-process-kill-resume")
+			if err := value.interruptDatabaseRestore(ctx, successorBackup.BackupID, closedID,
+				value.forbidden(secret, newPassword, bearer)); err != nil {
+				return fail("successor-database-restore-crash")
+			}
+			emit("successor-database-restore-process-kill-resume")
 			reopenedID, reopenErr := value.interruptAuthenticationRecoveryPhase(ctx, successorBackup.BackupID,
 				installationv1.AuthenticationRecoveryReopenCommand, value.forbidden(secret, newPassword, bearer))
 			if reopenErr != nil || reopenedID != closedID {

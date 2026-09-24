@@ -313,27 +313,30 @@ a new snapshot and publishes an authenticated backup. This is a bounded
 provider-failure/resume check, not a signed process-kill or restore-stage
 crash claim.
 
-The same task-local signed A/B pair passed a disconnected lifecycle in 489.63
-seconds with four real installer process kills. The real IAM helper's exported
+The same task-local signed A/B pair passed a disconnected lifecycle in 472.41
+seconds with five real installer process kills. The IAM helper's exported
 PostgreSQL snapshot frame and the real `pg_dump --snapshot` process exit were
 each withheld at a separate `BACKING_UP` intent. Replay kept each backup and
 correlation ID, took a fresh snapshot lease, removed the unpublished partial
 and published an authenticated backup. During same-release recovery, the
 purpose-only IAM close and reopen containers each exited successfully while
 their result was withheld from `mx`. Killing it after close left the original
-`RECOVERING` command without a local closure file, and the old bearer was
-denied. Killing it after reopen left that same command in `STARTING` with its
-closure file; replay preserved the command ID and completed the authenticated
-restore without reviving the old Session. First MFA enrollment, application
-data, Audit history and cross-profile rollback refusal remained intact. After
-restarting only the isolated local Docker engine and observing its daemon
-ready, the post-restart gate passed on its first attempt in 16.20 seconds.
-The test-owned container and all volumes were deleted.
-[Verification 36008663194](https://github.com/xiak/matrix/actions/runs/36008663194)
+`RECOVERING` command without a local closure file and denied the old bearer.
+Between close and reopen, the real SQL restore consumer received its first six
+statements; PostgreSQL reported an open, idle transaction after the four
+schema operations. Killing `mx` ended that transaction without losing the
+original IAM authorization decisions, and replay retained the command ID and
+completed the restored archive. Killing it after reopen left the command in
+`STARTING` with its closure file; replay completed without reviving the old
+Session. First MFA enrollment, application data, Audit history and
+cross-profile rollback refusal remained intact. After restarting only the
+isolated local Docker engine and observing its daemon ready, the post-restart
+gate passed on its first attempt in 14.64 seconds. The test-owned container
+and all volumes were deleted. [Verification 36010921815](https://github.com/xiak/matrix/actions/runs/36010921815)
 passed Go, UI, authority-process and node-process for the preceding
-snapshot-export gate. These signed checks cover four exact unknown-outcome
-windows; an in-flight database restore crash and the remaining recovery
-failure boundaries are not yet proven. The full extension remains unaccepted.
+close/reopen gate. These checks prove five exact injected crash boundaries;
+the full extension still requires independent verification of the combined
+source and reconciliation against every acceptance item before it is accepted.
 
 ## Incremental acceptance
 
