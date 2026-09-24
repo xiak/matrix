@@ -1512,6 +1512,40 @@ describe("account access", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "paas" })).toBe(document.activeElement));
   });
 
+  it("keeps the catalog notice and search in place while its data region waits", async () => {
+    let resolve!: (value: AuthorizationProfileDirectory) => void;
+    const pending = new Promise<AuthorizationProfileDirectory>((done) => { resolve = done; });
+    const listAuthorizationProfiles = vi.fn().mockReturnValue(pending);
+    const { user } = await openAccess(accounts({ listAuthorizationProfiles }), iam(), "policies");
+    await screen.findByRole("table", { name: "策略元数据目录" });
+    await user.click(screen.getByRole("tab", { name: "权限能力目录" }));
+    expect(listAuthorizationProfiles).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/不是当前用户权限/)).toBeTruthy();
+    const search = screen.getByRole("searchbox", { name: "搜索产品能力" });
+    await user.type(search, "paas");
+    expect((search as HTMLInputElement).value).toBe("paas");
+    expect(screen.queryByRole("table", { name: "产品权限能力目录" })).toBeNull();
+    await act(async () => resolve(profileDirectory()));
+    expect(screen.getByRole("searchbox", { name: "搜索产品能力" })).toBe(search);
+    expect(await screen.findByRole("table", { name: "产品权限能力目录" })).toBeTruthy();
+  });
+
+  it("retains the same catalog search control and query through a local retry", async () => {
+    let resolve!: (value: AuthorizationProfileDirectory) => void;
+    const pending = new Promise<AuthorizationProfileDirectory>((done) => { resolve = done; });
+    const listAuthorizationProfiles = vi.fn().mockRejectedValueOnce(new HttpProblem(503, "IAM_UNAVAILABLE")).mockReturnValueOnce(pending);
+    const { user } = await openAccess(accounts({ listAuthorizationProfiles }), iam(), "policies");
+    await user.click(await screen.findByRole("tab", { name: "权限能力目录" }));
+    expect(await screen.findByText(/权限能力目录暂时不可用/)).toBeTruthy();
+    const search = screen.getByRole("searchbox", { name: "搜索产品能力" });
+    await user.type(search, "paas");
+    await user.click(screen.getByRole("button", { name: "重新读取" }));
+    expect(screen.getByRole("searchbox", { name: "搜索产品能力" })).toBe(search);
+    expect((search as HTMLInputElement).value).toBe("paas");
+    await act(async () => resolve(profileDirectory()));
+    expect(within(await screen.findByRole("table", { name: "产品权限能力目录" })).getByRole("button", { name: "paas" })).toBeTruthy();
+  });
+
   it("pages a complete product snapshot locally and preserves the page when returning from detail", async () => {
     const sample = profileDirectory().items[0]!;
     const items = Array.from({ length: 12 }, (_, index) => ({

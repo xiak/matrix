@@ -35,7 +35,7 @@ function AuthorizationProfileCatalog({ client }: { client: AuthorizationProfileC
   const [productPageSize, setProductPageSize] = useState(10);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
-  const [selected, setSelected] = useState<AuthorizationProfileEntry | null>(null);
+  const [selectedProduct, setSelectedProduct] = useState<string | null>(null);
   const [publishingPreview, setPublishingPreview] = useState(false);
   const selectedHeading = useRef<HTMLHeadingElement>(null);
   const publishingTrigger = useRef<HTMLButtonElement>(null);
@@ -57,20 +57,20 @@ function AuthorizationProfileCatalog({ client }: { client: AuthorizationProfileC
     void client.load().then((result) => { if (current === request.current) setState(result); });
     return () => { request.current += 1; };
   }, [client]);
-  useEffect(() => { if (selected) selectedHeading.current?.focus(); }, [selected]);
   useLayoutEffect(() => {
     if (publishingPreview || !restorePublishingFocus.current) return;
     restorePublishingFocus.current = false;
     publishingTrigger.current?.focus();
   }, [publishingPreview]);
+  const entries = useMemo(() => state.status === "ready" ? state.directory.items : [], [state]);
+  const selected = useMemo(() => entries.find((entry) => entry.profile.product === selectedProduct) ?? null, [entries, selectedProduct]);
+  useEffect(() => { if (selected) selectedHeading.current?.focus(); }, [selected]);
   useLayoutEffect(() => {
-    if (selected || !returnProduct.current) return;
+    if (state.status !== "ready" || selected || !returnProduct.current) return;
     const product = returnProduct.current;
     returnProduct.current = null;
     productButtons.current.get(product)?.focus();
-  }, [selected]);
-
-  const entries = useMemo(() => state.status === "ready" ? state.directory.items : [], [state]);
+  }, [selected, state.status]);
   const filteredEntries = useMemo(() => {
     const words = query.normalize("NFKC").trim().toLowerCase().split(/\s+/).filter(Boolean);
     return entries.filter((entry) => {
@@ -97,20 +97,10 @@ function AuthorizationProfileCatalog({ client }: { client: AuthorizationProfileC
   const resetActions = () => { setActionQuery(""); setPage(1); };
   const open = (entry: AuthorizationProfileEntry) => {
     returnProduct.current = entry.profile.product;
-    setActionQuery(""); setPage(1); setSelected(entry);
+    setActionQuery(""); setPage(1); setSelectedProduct(entry.profile.product);
   };
-  const back = () => setSelected(null);
+  const back = () => setSelectedProduct(null);
   const closePublishingPreview = () => { restorePublishingFocus.current = true; setPublishingPreview(false); };
-
-  if (state.status === "loading") return <div className={styles.catalogSection}>
-    <CatalogNotice preview={client.preview} />
-    <TableSkeleton label={t("loading")} rows={4} />
-  </div>;
-  if (state.status !== "ready") return <div className={styles.catalogSection}>
-    <CatalogNotice preview={client.preview} />
-    <Alert status={state.status === "forbidden" ? "warning" : "danger"}>{t(`errors.${state.status}`)}</Alert>
-    {state.status !== "expired" ? <div><Button variant="secondary" onClick={() => load()}>{t("retry")}</Button></div> : null}
-  </div>;
 
   if (selected && publishingPreview) return <AuthorizationProfilePublishingPreview entry={selected} onClose={closePublishingPreview} />;
 
@@ -149,8 +139,13 @@ function AuthorizationProfileCatalog({ client }: { client: AuthorizationProfileC
     <CatalogNotice preview={client.preview} />
     <TableToolbar labels={toolbarLabels}
       search={{ label: t("searchProducts"), placeholder: t("searchProductsPlaceholder"), value: query, onChange: (value) => { setQuery(value); setProductPage(1); } }}
-      status={t("productCount", { count: filteredEntries.length })} />
-    {visibleProducts.length ? <Table aria-label={t("table")} mobileLayout="stack" className={styles.catalogProductTable}>
+      status={state.status === "ready" ? t("productCount", { count: filteredEntries.length }) : state.status === "loading" ? t("loading") : undefined} />
+    {state.status === "loading" ? <TableSkeleton label={t("loading")} rows={4} /> : null}
+    {state.status !== "ready" && state.status !== "loading" ? <>
+      <Alert status={state.status === "forbidden" ? "warning" : "danger"}>{t(`errors.${state.status}`)}</Alert>
+      {state.status !== "expired" ? <div><Button variant="secondary" onClick={() => load()}>{t("retry")}</Button></div> : null}
+    </> : null}
+    {state.status === "ready" ? <>{visibleProducts.length ? <Table aria-label={t("table")} mobileLayout="stack" className={styles.catalogProductTable}>
       <thead><tr><th scope="col">{t("product")}</th><th scope="col">{t("callingService")}</th><th scope="col">{t("revision")}</th><th scope="col">{t("actions")}</th><th scope="col">{t("scope")}</th><th scope="col">{t("digest")}</th></tr></thead>
       <tbody>{visibleProducts.map((entry) => {
         const scopes = [...new Set(entry.profile.actions.map((action) => action.scope))];
@@ -171,7 +166,7 @@ function AuthorizationProfileCatalog({ client }: { client: AuthorizationProfileC
         </tr>;
       })}</tbody>
     </Table> : <EmptyState title={t("noProducts")} description={t("noProductsHint")} action={<Button variant="secondary" onClick={() => { setQuery(""); setProductPage(1); }}>{toolbarLabels.resetQuery}</Button>} />}
-    <Table.Footer note={t("completeProducts", { count: entries.length })}><TablePagination page={currentProductPage} pages={productPages} pageSize={productPageSize} onPageChange={setProductPage} onPageSizeChange={(size) => { setProductPageSize(size); setProductPage(1); }} labels={{ summary: t("page", { page: currentProductPage, pages: productPages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} /></Table.Footer>
+    <Table.Footer note={t("completeProducts", { count: entries.length })}><TablePagination page={currentProductPage} pages={productPages} pageSize={productPageSize} onPageChange={setProductPage} onPageSizeChange={(size) => { setProductPageSize(size); setProductPage(1); }} labels={{ summary: t("page", { page: currentProductPage, pages: productPages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} /></Table.Footer></> : null}
   </section>;
 }
 
