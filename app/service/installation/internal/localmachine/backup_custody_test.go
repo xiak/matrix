@@ -191,6 +191,30 @@ func TestAuthenticationStateBackupVersionCannotRetrofitHistoricalManifests(t *te
 	}
 }
 
+func TestAutomaticAuthenticationRestoreRequiresTheCurrentBackupProof(t *testing.T) {
+	v4 := backupManifest{APIVersion: backupAPIVersion}
+	v5 := backupManifest{
+		APIVersion:                authenticationStateBackupAPIVersion,
+		AuthenticationStateDigest: "sha256:" + strings.Repeat("a", 64),
+	}
+	if err := requireAuthenticationStateBackupForRecovery(backupAPIVersion, v4); err != nil {
+		t.Fatalf("historical v4 release rejected its own backup: %v", err)
+	}
+	if err := requireAuthenticationStateBackupForRecovery(authenticationStateBackupAPIVersion, v4); !errors.Is(err, platformcommand.ErrEffectPrecondition) {
+		t.Fatalf("v5 release accepted a v4 identity backup: %v", err)
+	}
+	if err := requireAuthenticationStateBackupForRecovery(authenticationStateBackupAPIVersion, v5); err != nil {
+		t.Fatalf("v5 release rejected its committed backup: %v", err)
+	}
+	v5.AuthenticationStateDigest = ""
+	if err := requireAuthenticationStateBackupForRecovery(authenticationStateBackupAPIVersion, v5); !errors.Is(err, platformcommand.ErrEffectPrecondition) {
+		t.Fatalf("v5 release accepted a missing state proof: %v", err)
+	}
+	if err := requireAuthenticationStateBackupForRecovery("installation.matrix.xiak.com/unknown", v4); !errors.Is(err, platformcommand.ErrEffectVerification) {
+		t.Fatalf("unknown current backup version was admitted: %v", err)
+	}
+}
+
 func TestTOTPBackupCustodyProcessFailsClosedOnProtocolAndLifecycleDrift(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("local-machine backup custody process targets Linux")

@@ -173,6 +173,16 @@ func (effects *Effects) InspectBackup(
 	if err != nil {
 		return platformcommand.RecoverySource{}, err
 	}
+	currentBackupVersion, supported := backupAPIVersionForDatabaseProfile(current.Bundle.Manifest.Database)
+	if !supported {
+		return platformcommand.RecoverySource{}, errors.Join(
+			platformcommand.ErrEffectVerification,
+			errors.New("current backup profile is unsupported"),
+		)
+	}
+	if err := requireAuthenticationStateBackupForRecovery(currentBackupVersion, manifest); err != nil {
+		return platformcommand.RecoverySource{}, err
+	}
 	targetIdentity := installed
 	targetIdentity.ReleaseID = manifest.ReleaseID
 	targetIdentity.ReleaseDigest = manifest.ReleaseDigest
@@ -944,6 +954,30 @@ func backupAPIVersionForDatabaseProfile(profile release.DatabaseProfile) (string
 		return backupAPIVersion, true
 	default:
 		return "", false
+	}
+}
+
+// A successor that produces v5 backups cannot automatically restore a v4
+// identity database. The selected backup is checked before a recovery command
+// is journaled, and again when a committed command resumes after interruption.
+func requireAuthenticationStateBackupForRecovery(currentBackupVersion string, manifest backupManifest) error {
+	switch currentBackupVersion {
+	case backupAPIVersion:
+		return nil
+	case authenticationStateBackupAPIVersion:
+		if manifest.APIVersion == authenticationStateBackupAPIVersion &&
+			validSHA256(manifest.AuthenticationStateDigest) {
+			return nil
+		}
+		return errors.Join(
+			platformcommand.ErrEffectPrecondition,
+			errors.New("selected backup lacks the current authentication state proof"),
+		)
+	default:
+		return errors.Join(
+			platformcommand.ErrEffectVerification,
+			errors.New("current backup version is unsupported"),
+		)
 	}
 }
 

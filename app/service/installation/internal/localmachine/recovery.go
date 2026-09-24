@@ -773,6 +773,20 @@ func authenticateRecoveryPlan(
 	manifest, digest, err := readVerifiedBackupDirectory(
 		plan.Current.Root, plan.Current.InstallationID, plan.BackupID, relative, key,
 	)
+	if err == nil {
+		currentBackupVersion, supported := backupAPIVersionForDatabaseProfile(current.Bundle.Manifest.Database)
+		if !supported {
+			clear(current.TrustBytes)
+			clear(target.TrustBytes)
+			return platformcommand.InstallPlan{}, platformcommand.InstallPlan{}, backupManifest{},
+				errors.Join(platformcommand.ErrEffectVerification, errors.New("current backup profile is unsupported"))
+		}
+		if stateErr := requireAuthenticationStateBackupForRecovery(currentBackupVersion, manifest); stateErr != nil {
+			clear(current.TrustBytes)
+			clear(target.TrustBytes)
+			return platformcommand.InstallPlan{}, platformcommand.InstallPlan{}, backupManifest{}, stateErr
+		}
+	}
 	profile, profileErr := manifest.databaseProfile()
 	expectedIntent := installationv1.AuthenticationRecoveryIntent{
 		APIVersion:          installationv1.AuthenticationRecoveryAPIVersion,
