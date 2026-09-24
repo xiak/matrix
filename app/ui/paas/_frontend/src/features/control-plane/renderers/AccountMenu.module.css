@@ -184,7 +184,7 @@
 .menuCopy {
   display: grid;
   min-width: 0;
-  gap: var(--xiak-spacing-micro);
+  gap: var(--xiak-spacing-narrow);
 }
 
 .menuCopy strong,

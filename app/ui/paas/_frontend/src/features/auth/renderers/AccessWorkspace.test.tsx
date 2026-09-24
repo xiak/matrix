@@ -2691,6 +2691,47 @@ describe("CAM-style access workspace", () => {
     expect((await extension.read("preview")).settings.userSsoEnabled).toBe(true);
     expect(repository.execute).not.toHaveBeenCalled();
   });
+  it("keeps malformed SAML metadata in the editor and focuses its inline error before review", async () => {
+    const { user, extension } = await open("user-sso");
+    await user.click(screen.getByRole("button", { name: "去配置" }));
+    const metadata = screen.getByLabelText("企业 IdP 的 SAML 元数据 XML") as HTMLTextAreaElement;
+    await user.type(metadata, "not metadata");
+    await user.click(screen.getByRole("button", { name: "审阅配置" }));
+    expect(screen.queryByRole("heading", { name: "审阅用户 SSO 变更" })).toBeNull();
+    expect(screen.getByRole("alert").textContent).toContain("EntityDescriptor");
+    expect(metadata).toBe(document.activeElement);
+    expect(metadata.getAttribute("aria-invalid")).toBe("true");
+    expect((await extension.read("preview")).settings.userSsoConfiguration).toBeNull();
+    await user.clear(metadata);
+    await user.type(metadata, '<EntityDescriptor entityID="preview"></EntityDescriptor>');
+    expect(metadata.getAttribute("aria-invalid")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "审阅配置" }));
+    expect(screen.getByRole("heading", { name: "审阅用户 SSO 变更" })).toBe(document.activeElement);
+  });
+  it("shows OIDC HTTPS and JWKS shape errors next to their fields before review", async () => {
+    const { user, extension } = await open("user-sso");
+    await user.click(screen.getByRole("button", { name: "去配置" }));
+    await select(user, "协议", "OIDC");
+    const issuer = screen.getByLabelText("身份提供商 URL") as HTMLInputElement;
+    await user.type(issuer, "http://login.example.invalid");
+    await user.type(screen.getByLabelText("客户端 ID"), "matrix-preview");
+    await user.type(screen.getByLabelText("授权请求地址"), "https://login.example.invalid/authorize");
+    await user.type(screen.getByLabelText("映射到 IAM 用户的字段"), "preferred_username");
+    const jwks = screen.getByLabelText("签名公钥 JWKS JSON") as HTMLTextAreaElement;
+    fireEvent.change(jwks, { target: { value: "not json" } });
+    await user.click(screen.getByRole("button", { name: "审阅配置" }));
+    expect(issuer).toBe(document.activeElement);
+    expect(screen.getByRole("alert").textContent).toContain("HTTPS");
+    await user.clear(issuer);
+    await user.type(issuer, "https://login.example.invalid");
+    await user.click(screen.getByRole("button", { name: "审阅配置" }));
+    expect(jwks).toBe(document.activeElement);
+    expect(screen.getByRole("alert").textContent).toContain("JWKS JSON");
+    expect((await extension.read("preview")).settings.userSsoConfiguration).toBeNull();
+    fireEvent.change(jwks, { target: { value: '{"keys":[{"kty":"RSA"}]}' } });
+    await user.click(screen.getByRole("button", { name: "审阅配置" }));
+    expect(screen.getByRole("heading", { name: "审阅用户 SSO 变更" })).toBe(document.activeElement);
+  });
   it("configures OIDC user SSO without selecting or modifying a role SSO provider", async () => {
     const { user, extension } = await open("user-sso");
     const before = await extension.read("preview");

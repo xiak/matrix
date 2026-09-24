@@ -50,6 +50,30 @@ export function enterprisePrincipalId(accountId: string, memberId: string): stri
 export type UserSsoConfiguration =
   | { protocol: "SAML"; metadata: string; mappingClaim: "NameID" }
   | { protocol: "OIDC"; issuer: string; clientId: string; authorizationEndpoint: string; mappingClaim: string; jwks: string };
+export type UserSsoConfigurationIssue = "configuration" | "metadata" | "issuer" | "clientId" | "authorizationEndpoint" | "mappingClaim" | "jwks";
+
+/** Local preview shape checks only; this does not verify an IdP, XML signature, key or login. */
+export function userSsoConfigurationIssue(config: UserSsoConfiguration | null): UserSsoConfigurationIssue | null {
+  if (config?.protocol === "SAML") {
+    if (config.mappingClaim !== "NameID" || typeof config.metadata !== "string" || !config.metadata.trim() || config.metadata.length > 65536 || !/<(?:[\w-]+:)?EntityDescriptor[\s>]/.test(config.metadata)) return "metadata";
+    return null;
+  }
+  if (config?.protocol !== "OIDC") return "configuration";
+  function httpsUrl(value: unknown) {
+    if (typeof value !== "string") return false;
+    try { return new URL(value).protocol === "https:"; } catch { return false; }
+  }
+  if (!httpsUrl(config.issuer)) return "issuer";
+  if (typeof config.clientId !== "string" || !config.clientId.trim() || config.clientId.length > 256) return "clientId";
+  if (!httpsUrl(config.authorizationEndpoint)) return "authorizationEndpoint";
+  if (typeof config.mappingClaim !== "string" || !config.mappingClaim.trim() || config.mappingClaim.length > 128) return "mappingClaim";
+  if (typeof config.jwks !== "string" || !config.jwks.trim() || config.jwks.length > 65536) return "jwks";
+  try {
+    const jwks = JSON.parse(config.jwks);
+    if (!jwks || !Array.isArray(jwks.keys) || !jwks.keys.length) return "jwks";
+  } catch { return "jwks"; }
+  return null;
+}
 export type AccessSettings = {
   loginProtection: boolean; accountRuleVersion: number; userSsoEnabled: boolean; userSsoConfiguration: UserSsoConfiguration | null;
 };
@@ -556,17 +580,7 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
     }
     case "save-sso-settings": {
       const config = command.userSsoConfiguration;
-      if (typeof command.userSsoEnabled !== "boolean" || (command.userSsoEnabled && !config)) invalid();
-      if (config?.protocol === "SAML") {
-        if (config.mappingClaim !== "NameID" || !config.metadata.trim() || config.metadata.length > 65536 || !/<(?:[\w-]+:)?EntityDescriptor[\s>]/.test(config.metadata)) invalid();
-      } else if (config?.protocol === "OIDC") {
-        if (!config.clientId.trim() || !config.mappingClaim.trim() || !config.jwks.trim() || config.jwks.length > 65536) invalid();
-        try {
-          if (new URL(config.issuer).protocol !== "https:" || new URL(config.authorizationEndpoint).protocol !== "https:") invalid();
-          const jwks = JSON.parse(config.jwks);
-          if (!Array.isArray(jwks.keys) || !jwks.keys.length) invalid();
-        } catch { invalid(); }
-      } else if (config !== null) invalid();
+      if (typeof command.userSsoEnabled !== "boolean" || (command.userSsoEnabled && !config) || (config !== null && userSsoConfigurationIssue(config))) invalid();
       state.settings = { ...state.settings, userSsoEnabled: command.userSsoEnabled, userSsoConfiguration: config ? structuredClone(config) : null }; target = source.accountId; break;
     }
   }

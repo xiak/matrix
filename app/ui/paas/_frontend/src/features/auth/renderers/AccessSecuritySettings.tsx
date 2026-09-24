@@ -3,7 +3,7 @@ import { useId, useLayoutEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Alert, Badge, Button, Card, Checkbox, FormField, Input, Select, TextArea, Typography } from "@ui/xiak";
 import { useAccountAccess } from "../application/AccountAccessProvider";
-import type { AccessWorkspace, UserSsoConfiguration } from "../domain/accessWorkspace";
+import { userSsoConfigurationIssue, type AccessWorkspace, type UserSsoConfiguration, type UserSsoConfigurationIssue } from "../domain/accessWorkspace";
 import { MfaSecurityPreview } from "./MfaPreviewExperience";
 import { AccountSecuritySettingsPreview } from "./AccountSecuritySettingsPreview";
 import styles from "./AccountAccessRenderer.module.css";
@@ -29,37 +29,52 @@ export function AccessUserSso({ workspace }: { workspace: AccessWorkspace }) {
   const [phase, setPhase] = useState<"summary" | "edit" | "review">("summary");
   const [enabled, setEnabled] = useState(workspace.settings.userSsoEnabled);
   const [configuration, setConfiguration] = useState<UserSsoConfiguration>(workspace.settings.userSsoConfiguration ?? emptySaml);
+  const [validationIssue, setValidationIssue] = useState<UserSsoConfigurationIssue | null>(null);
   const changed = enabled !== workspace.settings.userSsoEnabled || JSON.stringify(configuration) !== JSON.stringify(workspace.settings.userSsoConfiguration);
   const current = workspace.settings.userSsoConfiguration;
   useLayoutEffect(() => { if (phase !== "summary") heading.current?.focus({ preventScroll: true }); }, [phase]);
   function edit() {
     setEnabled(workspace.settings.userSsoEnabled);
     setConfiguration(workspace.settings.userSsoConfiguration ?? emptySaml);
+    setValidationIssue(null);
     access.clearWorkspaceError();
     setPhase("edit");
+  }
+  function review() {
+    const issue = userSsoConfigurationIssue(configuration);
+    if (issue) {
+      setValidationIssue(issue);
+      document.getElementById(id + "-" + (issue === "configuration" ? "protocol" : issue))?.focus();
+      return;
+    }
+    setValidationIssue(null);
+    setPhase("review");
+  }
+  function clearIssue(field: UserSsoConfigurationIssue) {
+    setValidationIssue((current) => current === field ? null : current);
   }
   async function save() {
     const result = await access.executeWorkspace({ kind: "save-sso-settings", userSsoEnabled: enabled, userSsoConfiguration: configuration });
     if (result) setPhase("summary");
   }
-  return <Card><Card.Header><Typography.Title as="h2" level={3}>{t("userSso")}</Typography.Title><Badge status={workspace.settings.userSsoEnabled ? "success" : "neutral"}>{t(workspace.settings.userSsoEnabled ? "enabled" : "disabled")}</Badge></Card.Header><Card.Body className={styles.stack}>
+  return <Card><Card.Header><Typography.Title as="h2" level={3}>{t("userSsoAccountSignIn")}</Typography.Title><Badge status={workspace.settings.userSsoEnabled ? "success" : "neutral"}>{t(workspace.settings.userSsoEnabled ? "enabled" : "disabled")}</Badge></Card.Header><Card.Body className={styles.stack}>
     {phase === "summary" ? <><Alert>{t("ssoHint")}</Alert><p className={styles.note}>{t("ssoFlow")}</p></> : null}
     {phase === "summary" ? <section className={styles.stack}>
       <h3 className={styles.stepTitle}>{t("userSsoConfiguration")}</h3>
       {current ? <dl className={styles.facts}><div><dt>{t("protocol")}</dt><dd>{current.protocol}</dd></div><div><dt>{t("issuer")}</dt><dd>{current.protocol === "OIDC" ? current.issuer : t("samlIssuerFromMetadata")}</dd></div><div><dt>{t("userSsoMapping")}</dt><dd>{current.mappingClaim}</dd></div></dl> : <p className={styles.note}>{t("userSsoNotConfigured")}</p>}
       <div className={styles.actions}><Button onClick={edit} variant="secondary">{t(current ? "edit" : "configure")}</Button></div>
     </section> : null}
-    {phase === "edit" ? <form className={styles.form} onSubmit={(event) => { event.preventDefault(); setPhase("review"); }}>
+    {phase === "edit" ? <form className={styles.form} onSubmit={(event) => { event.preventDefault(); review(); }}>
       <h3 className={styles.stepTitle} ref={heading} tabIndex={-1}>{t("userSsoConfiguration")}</h3>
       <p className={styles.note}>{t("userSsoEditBoundary")}</p>
       <fieldset className={styles.editorFields} disabled={access.busy}>
-        <FormField id={id + "-protocol"} label={t("protocol")}><Select id={id + "-protocol"} value={configuration.protocol} options={[{ value: "SAML", label: "SAML 2.0" }, { value: "OIDC", label: "OIDC" }]} onValueChange={(value) => setConfiguration(value === "OIDC" ? emptyOidc : emptySaml)} /></FormField>
-        {configuration.protocol === "SAML" ? <FormField id={id + "-metadata"} label={t("userSsoSamlMetadata")} hint={t("userSsoLocalOnly")}><TextArea id={id + "-metadata"} required maxLength={65536} rows={6} spellCheck={false} value={configuration.metadata} onChange={(event) => setConfiguration({ protocol: "SAML", metadata: event.target.value, mappingClaim: "NameID" })} /></FormField> : <>
-          <FormField id={id + "-issuer"} label={t("issuer")}><Input id={id + "-issuer"} required type="url" value={configuration.issuer} onChange={(event) => setConfiguration((current) => current.protocol === "OIDC" ? { ...current, issuer: event.target.value } : current)} /></FormField>
-          <FormField id={id + "-client"} label={t("userSsoClientId")}><Input id={id + "-client"} required maxLength={256} value={configuration.clientId} onChange={(event) => setConfiguration((current) => current.protocol === "OIDC" ? { ...current, clientId: event.target.value } : current)} /></FormField>
-          <FormField id={id + "-endpoint"} label={t("userSsoAuthorizationEndpoint")}><Input id={id + "-endpoint"} required type="url" value={configuration.authorizationEndpoint} onChange={(event) => setConfiguration((current) => current.protocol === "OIDC" ? { ...current, authorizationEndpoint: event.target.value } : current)} /></FormField>
-          <FormField id={id + "-claim"} label={t("userSsoMapping")}><Input id={id + "-claim"} required maxLength={128} value={configuration.mappingClaim} onChange={(event) => setConfiguration((current) => current.protocol === "OIDC" ? { ...current, mappingClaim: event.target.value } : current)} /></FormField>
-          <FormField id={id + "-jwks"} label={t("userSsoJwks")} hint={t("userSsoLocalOnly")}><TextArea id={id + "-jwks"} required maxLength={65536} rows={5} spellCheck={false} value={configuration.jwks} onChange={(event) => setConfiguration((current) => current.protocol === "OIDC" ? { ...current, jwks: event.target.value } : current)} /></FormField>
+        <FormField id={id + "-protocol"} label={t("protocol")}><Select id={id + "-protocol"} value={configuration.protocol} options={[{ value: "SAML", label: "SAML 2.0" }, { value: "OIDC", label: "OIDC" }]} onValueChange={(value) => { setConfiguration(value === "OIDC" ? emptyOidc : emptySaml); setValidationIssue(null); }} /></FormField>
+        {configuration.protocol === "SAML" ? <FormField id={id + "-metadata"} label={t("userSsoSamlMetadata")} hint={t("userSsoLocalOnly")} error={validationIssue === "metadata" ? t("userSsoInvalidMetadata") : undefined}><TextArea id={id + "-metadata"} required maxLength={65536} rows={6} spellCheck={false} invalid={validationIssue === "metadata"} aria-describedby={`${id}-metadata-hint${validationIssue === "metadata" ? ` ${id}-metadata-error` : ""}`} value={configuration.metadata} onChange={(event) => { setConfiguration({ protocol: "SAML", metadata: event.target.value, mappingClaim: "NameID" }); clearIssue("metadata"); }} /></FormField> : <>
+          <FormField id={id + "-issuer"} label={t("issuer")} error={validationIssue === "issuer" ? t("userSsoInvalidHttpsUrl") : undefined}><Input id={id + "-issuer"} required type="url" aria-invalid={validationIssue === "issuer"} aria-describedby={validationIssue === "issuer" ? `${id}-issuer-error` : undefined} value={configuration.issuer} onChange={(event) => { setConfiguration((current) => current.protocol === "OIDC" ? { ...current, issuer: event.target.value } : current); clearIssue("issuer"); }} /></FormField>
+          <FormField id={id + "-clientId"} label={t("userSsoClientId")} error={validationIssue === "clientId" ? t("userSsoInvalidClientId") : undefined}><Input id={id + "-clientId"} required maxLength={256} aria-invalid={validationIssue === "clientId"} aria-describedby={validationIssue === "clientId" ? `${id}-clientId-error` : undefined} value={configuration.clientId} onChange={(event) => { setConfiguration((current) => current.protocol === "OIDC" ? { ...current, clientId: event.target.value } : current); clearIssue("clientId"); }} /></FormField>
+          <FormField id={id + "-authorizationEndpoint"} label={t("userSsoAuthorizationEndpoint")} error={validationIssue === "authorizationEndpoint" ? t("userSsoInvalidHttpsUrl") : undefined}><Input id={id + "-authorizationEndpoint"} required type="url" aria-invalid={validationIssue === "authorizationEndpoint"} aria-describedby={validationIssue === "authorizationEndpoint" ? `${id}-authorizationEndpoint-error` : undefined} value={configuration.authorizationEndpoint} onChange={(event) => { setConfiguration((current) => current.protocol === "OIDC" ? { ...current, authorizationEndpoint: event.target.value } : current); clearIssue("authorizationEndpoint"); }} /></FormField>
+          <FormField id={id + "-mappingClaim"} label={t("userSsoMapping")} error={validationIssue === "mappingClaim" ? t("userSsoInvalidMapping") : undefined}><Input id={id + "-mappingClaim"} required maxLength={128} aria-invalid={validationIssue === "mappingClaim"} aria-describedby={validationIssue === "mappingClaim" ? `${id}-mappingClaim-error` : undefined} value={configuration.mappingClaim} onChange={(event) => { setConfiguration((current) => current.protocol === "OIDC" ? { ...current, mappingClaim: event.target.value } : current); clearIssue("mappingClaim"); }} /></FormField>
+          <FormField id={id + "-jwks"} label={t("userSsoJwks")} hint={t("userSsoLocalOnly")} error={validationIssue === "jwks" ? t("userSsoInvalidJwks") : undefined}><TextArea id={id + "-jwks"} required maxLength={65536} rows={5} spellCheck={false} invalid={validationIssue === "jwks"} aria-describedby={`${id}-jwks-hint${validationIssue === "jwks" ? ` ${id}-jwks-error` : ""}`} value={configuration.jwks} onChange={(event) => { setConfiguration((current) => current.protocol === "OIDC" ? { ...current, jwks: event.target.value } : current); clearIssue("jwks"); }} /></FormField>
         </>}
         <Checkbox checked={enabled} onChange={(event) => setEnabled(event.target.checked)}>{t("ssoEnable")}</Checkbox>
         <div className={styles.actions}><Button disabled={!changed || access.busy} type="submit">{t("userSsoReview")}</Button><Button type="button" variant="secondary" onClick={() => setPhase("summary")}>{t("cancel")}</Button></div>
