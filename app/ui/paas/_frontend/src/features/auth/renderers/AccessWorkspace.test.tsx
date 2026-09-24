@@ -1143,8 +1143,10 @@ describe("CAM-style access workspace", () => {
     await user.click(await screen.findByRole("button", { name: "修改权限边界" }));
     expect(screen.queryByRole("dialog")).toBeNull();
     const workflow = screen.getByRole("group", { name: "修改权限边界" }), panel = within(workflow);
+    expect(panel.getByRole("button", { name: "返回角色详情" })).toBeTruthy();
     await select(user, "权限边界", mode === "set" ? "ProductionLogReader" : "未设置权限边界");
     await user.click(panel.getByRole("button", { name: "审阅变更" }));
+    expect(panel.getByText(/已有的角色体验会话/)).toBeTruthy();
     vi.mocked(repository.workspace!.execute).mockRejectedValueOnce(new Error("offline"));
     await user.click(panel.getByRole("button", { name: "保存" }));
     await expectRetainedFailure(workflow);
@@ -1275,8 +1277,13 @@ describe("CAM-style access workspace", () => {
     expect(within(policies).getByText("ProductionLogReader").closest("td")?.getAttribute("data-label")).toBe("名称");
     expect(screen.queryByRole("button", { name: "平台内置角色" })).toBeNull();
     await user.click(await screen.findByRole("button", { name: "修改权限边界" }));
+    const boundaryEditor = screen.getByRole("group", { name: "修改权限边界" });
+    expect(within(boundaryEditor).getByRole("button", { name: "返回用户详情" })).toBeTruthy();
+    expect(within(boundaryEditor).queryByRole("button", { name: "返回角色详情" })).toBeNull();
     await select(user, "权限边界", "MatrixReadOnlyAccess");
     await user.click(screen.getByRole("button", { name: "审阅变更" }));
+    expect(within(boundaryEditor).getByText(/用户的权限上限/)).toBeTruthy();
+    expect(within(boundaryEditor).queryByText(/角色体验会话/)).toBeNull();
     expect((await extension.read("preview-only")).userBoundaries["principal-lin"]).toBeUndefined();
     await user.click(screen.getByRole("button", { name: "保存" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
@@ -2428,12 +2435,13 @@ describe("CAM-style access workspace", () => {
     await user.type(screen.getByLabelText("6 位动态验证码"), "731942");
     await user.click(screen.getByRole("button", { name: "验证并绑定" }));
     expect(await screen.findByRole("heading", { name: "本次替换已停止" })).toBeTruthy();
-    expect(screen.getByText(/确认结果尚不能确定/)).toBeTruthy();
+    expect(screen.getByText(/当前无法证明替换已完成/)).toBeTruthy();
     expect(screen.queryByText("MTRX-DEMO-NOT-A-SECRET")).toBeNull();
     expect(screen.queryByRole("button", { name: "验证并绑定" })).toBeNull();
     expect(execute.mock.calls.filter(([, command]) => command.kind === "confirm-personal-mfa-replacement")).toHaveLength(1);
     await user.click(screen.getByRole("button", { name: "返回安全设置" }));
     expect(screen.getByRole("heading", { name: "验证器替换尚未确认" })).toBeTruthy();
+    expect(screen.getByText(/若确认结果不明，不要据此判断旧或新验证器是否有效/)).toBeTruthy();
     expect(extension.recoveryCodes()).toEqual(previousCodes);
   });
   it("hides replacement secrets while confirmation is in flight and goes directly to one-time codes", async () => {
