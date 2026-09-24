@@ -261,6 +261,7 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 - [`edc1ed9c`](https://github.com/xiak/matrix/commit/edc1ed9c) 将同一声明扩展到契约允许的最多 128 个兼容精确 Action。可视化按产品/资源类型及集合形状守住转换边界；不兼容前缀或条件不会被某个 Action 的能力代替，多选资源和条件始终共同作用于本声明的全部 Action。当前页最多挂载 10 项，可切“仅看已选”；测试覆盖多 Action JSON 无损往返、重复/越界/集合与实例混选拒绝、用户多选后原样提交及目录千项分页。Action 家族和跨资源类型组合仍只走 JSON；未用 MOCK 浏览器结果冒充 LIVE 实际 IAM 发布验收。
 - [`f91d7600`](https://github.com/xiak/matrix/commit/f91d7600) 收紧可视化多选边界：同产品、同资源类型之外，还要求每个 Action 的 INSTANCE/COLLECTION 请求形状集合相同；前缀仍需每个 Action 单独支持，条件仍取共同能力。不同形状的现有 JSON 保留原文，只能在 JSON 编辑，不能被不完整表单覆盖。这是前端无损表达限制，不宣称 IAM 编译器禁止不同形状的合法 JSON 组合。原四种 MOCK 创建方式不变；策略目录另提供隔离的“体验新版策略编辑”入口，复用 LIVE 作者组件和示例目录，但审阅、完成不调用真实 IAM、不生成 Policy ID 或授权。定向测试覆盖混合形状回退、预览导航与零写入；DEV 浏览器验证 Action/资源选择和 390px 无横向溢出、无新增 warning/error。真实 IAM 创建/发布、资源请求形状鉴权、跨会话未知结果恢复和发布验收仍未完成。
 - [`8e2b0806`](https://github.com/xiak/matrix/commit/8e2b0806) 修复共用作者的审阅往返状态：创建与版本发布在审阅时保留编辑器挂载，不再丢失已加载目录、已选 Action、资源草稿或筛选状态，也不重新请求目录；返回创建编辑页时焦点回到策略名称。行为测试同时覆盖 LIVE 创建/发布和隔离 MOCK 预览；DEV 浅色主题实测复现并验证修复，390px 无横向溢出且无新增 warning/error。审阅往返与 MOCK 可检查性不替代真实 IAM 写入浏览器验收。
+- 2026-09-25 已推送 [`7d04fe84`](https://github.com/xiak/matrix/commit/7d04fe84)：LIVE 新版本可视化审阅复用策略创建的逐声明摘要，先显示效果、精确 Action、资源与条件，当前默认/待发布完整 JSON 对照按需展开；自由 JSON 编辑仍直接显示完整对照。定向用例核对两种编辑路径、默认指针不变及审阅往返；共用摘要另由隔离 MOCK 的 `390px` 浏览器路径核对，页面宽度与滚动宽度均为 390px、无新增 warning/error。未用真实 IAM 进程执行发布；MOCK 浏览器结果不替代 LIVE 写入验收。共享完整门禁归 [FEAT-007](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence) 所有。
 
 ### LIVE 自定义策略新建的开发验收证据
 
