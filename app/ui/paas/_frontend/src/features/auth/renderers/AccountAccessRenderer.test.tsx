@@ -1023,6 +1023,56 @@ describe("account access", () => {
     expect(screen.getByText("paas @ 2")).toBeTruthy();
   });
 
+  it("loads customer versions only when selected and inspects a non-default version inline", async () => {
+    const customer = { ...tenantPolicy, id: "customer.logs", management: "CUSTOMER" as const, accountId: account.id,
+      displayName: "LogBoundary", defaultVersionId: "version-logs" };
+    const current = { ...tenantPolicyDetail.version, policyId: customer.id, versionId: customer.defaultVersionId };
+    const earlier = { ...current, versionId: "version-a", contentDigest: `sha256:${"b".repeat(64)}` };
+    const readPolicy = vi.fn().mockResolvedValue({ policy: customer, version: current });
+    const listPolicyVersions = vi.fn().mockResolvedValue({ policy: customer, items: [earlier, current] });
+    const readPolicyVersion = vi.fn().mockResolvedValue({ policy: customer, version: earlier });
+    const repository = accounts({ readPolicy, listPolicyVersions, readPolicyVersion,
+      listPolicies: vi.fn(async (_credential: string, platform: boolean) => platform ? directory(true) : { ...directory(false), items: [customer, tenantPolicy] }) });
+    const { user } = await openAccess(repository, iam(), "policies");
+    await user.click(await screen.findByRole("button", { name: customer.displayName }));
+    expect(await screen.findByRole("tab", { name: "策略版本" })).toBeTruthy();
+    expect(listPolicyVersions).not.toHaveBeenCalled();
+    expect(readPolicyVersion).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("tab", { name: "策略版本" }));
+    const table = await screen.findByRole("table", { name: "策略版本目录" });
+    expect(within(table).getByText("当前默认")).toBeTruthy();
+    expect(screen.getByText("当前可管理版本：2 / 5")).toBeTruthy();
+    expect(listPolicyVersions).toHaveBeenCalledWith(credential, account.id, customer.id);
+    expect(readPolicyVersion).not.toHaveBeenCalled();
+
+    await user.click(within(table).getByRole("button", { name: "version-a" }));
+    expect(await screen.findByRole("heading", { name: "查看版本 version-a" })).toBe(document.activeElement);
+    expect(await screen.findByRole("table", { name: "策略声明" })).toBeTruthy();
+    expect(readPolicyVersion).toHaveBeenCalledWith(credential, account.id, customer.id, "version-a");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "返回版本目录" }));
+    expect(within(screen.getByRole("table", { name: "策略版本目录" })).getByRole("button", { name: "version-a" })).toBe(document.activeElement);
+  });
+
+  it("keeps a forbidden version directory local while the independently readable default remains visible", async () => {
+    const customer = { ...tenantPolicy, id: "customer.logs", management: "CUSTOMER" as const, accountId: account.id,
+      displayName: "LogBoundary", defaultVersionId: "version-logs" };
+    const readPolicy = vi.fn().mockResolvedValue({ policy: customer, version: { ...tenantPolicyDetail.version,
+      policyId: customer.id, versionId: customer.defaultVersionId } });
+    const listPolicyVersions = vi.fn().mockRejectedValue(new HttpProblem(403, "FORBIDDEN"));
+    const repository = accounts({ readPolicy, listPolicyVersions, readPolicyVersion: vi.fn(),
+      listPolicies: vi.fn(async (_credential: string, platform: boolean) => platform ? directory(true) : { ...directory(false), items: [customer] }) });
+    const { user } = await openAccess(repository, iam(), "policies");
+    await user.click(await screen.findByRole("button", { name: customer.displayName }));
+    expect(await screen.findByRole("table", { name: "策略声明" })).toBeTruthy();
+    await user.click(screen.getByRole("tab", { name: "策略版本" }));
+    expect(await screen.findByText(/无权读取这些版本/)).toBeTruthy();
+    await user.click(screen.getByRole("tab", { name: "当前默认版本" }));
+    expect(screen.getByRole("table", { name: "策略声明" })).toBeTruthy();
+    expect(readPolicy).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps a forbidden policy detail local and never substitutes MOCK content", async () => {
     const readPolicy = vi.fn().mockRejectedValue(new HttpProblem(403, "FORBIDDEN"));
     const { user } = await openAccess(accounts({ readPolicy }), iam(), "policies");

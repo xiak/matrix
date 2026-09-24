@@ -1155,6 +1155,53 @@ describe("IAM HTTP account boundary", () => {
     await expect(httpAccountRepository.readPolicy!("bearer", account.id, customerPolicy.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
   });
 
+  it("lists only manageable customer versions and reads an exact non-default version", async () => {
+    const document = { languageVersion: "1", scope: "TENANT", statements: [{
+      sid: "read-applications", effect: "ALLOW", actions: ["paas.application.read"],
+      resources: [{ kind: "APPLICATION", match: "ANY_IN_AUTHORITY" }]
+    }] };
+    const current = { policyId: customerPolicy.id, versionId: customerPolicy.defaultVersionId, document,
+      contentDigest: `sha256:${"a".repeat(64)}`, contractVersion: 1 };
+    const earlier = { ...current, versionId: "version-a", contentDigest: `sha256:${"b".repeat(64)}` };
+    const list = { apiVersion, kind: "PolicyVersionList", policy: customerPolicy, items: [earlier, current] };
+    let fetcher = reply(list);
+    const directory = await httpAccountRepository.listPolicyVersions!("bearer", account.id, customerPolicy.id);
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/policies/customer.build/versions");
+    expect(firstRequest(fetcher)[1]).toMatchObject({ cache: "no-store", headers: { Authorization: "Bearer bearer" } });
+    expect(firstRequest(fetcher)[1].body).toBeUndefined();
+    expect(directory.items.map((item) => item.versionId)).toEqual(["version-a", "version-build"]);
+
+    fetcher = reply({ apiVersion, kind: "PolicyVersionDetail", policy: customerPolicy, version: earlier });
+    const detail = await httpAccountRepository.readPolicyVersion!("bearer", account.id, customerPolicy.id, earlier.versionId);
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/policies/customer.build/versions/version-a");
+    expect(firstRequest(fetcher)[1].body).toBeUndefined();
+    expect(detail.version.versionId).toBe("version-a");
+    expect(detail.policy.defaultVersionId).toBe("version-build");
+
+    for (const invalid of [
+      { ...list, policy: tenantPolicy },
+      { ...list, policy: { ...customerPolicy, accountId: "foreign-account" } },
+      { ...list, policy: { ...customerPolicy, status: "RETIRED" } },
+      { ...list, items: [current, earlier] },
+      { ...list, items: [earlier] },
+      { ...list, items: [earlier, current, current] },
+      { ...list, items: Array.from({ length: 6 }, (_, index) => ({ ...current, versionId: `version-${index}` })) },
+      { ...list, nextAfter: "unsupported" }
+    ]) {
+      reply(invalid);
+      await expect(httpAccountRepository.listPolicyVersions!("bearer", account.id, customerPolicy.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+    for (const invalid of [
+      { apiVersion, kind: "PolicyVersionDetail", policy: customerPolicy, version: current },
+      { apiVersion, kind: "PolicyVersionDetail", policy: { ...customerPolicy, accountId: "foreign-account" }, version: earlier },
+      { apiVersion, kind: "PolicyDetail", policy: customerPolicy, version: earlier },
+      { apiVersion, kind: "PolicyVersionDetail", policy: customerPolicy, version: { ...earlier, policyId: "customer.other" } }
+    ]) {
+      reply(invalid);
+      await expect(httpAccountRepository.readPolicyVersion!("bearer", account.id, customerPolicy.id, earlier.versionId)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+  });
+
   it("reads the complete current authorization profiles without an account or version selector", async () => {
     const fetcher = reply({ apiVersion, kind: "AuthorizationProfileList", accountId: account.id, items: [profileEntry("iam"), profileEntry("paas")] });
     const result = await httpAccountRepository.listAuthorizationProfiles("bearer");

@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Alert, Badge, Button, Card, ContentPage, EmptyState, Table, TablePagination, TableSkeleton, TableToolbar, Tabs } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
-import { useAccountAccess, type AccountPolicyReadClient, type AccountPolicyReadLoad } from "../application/AccountAccessProvider";
+import { useAccountAccess, type AccountPolicyReadClient, type AccountPolicyReadLoad, type AccountPolicyVersionDirectoryLoad } from "../application/AccountAccessProvider";
 import type { AccountPolicy, AccountPolicyVersion } from "../domain/accounts";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
 import { WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
@@ -12,6 +12,7 @@ import { AccountAuthorizationProfileCatalog } from "./AccountAuthorizationProfil
 import styles from "./AccountAccessRenderer.module.css";
 
 type PolicyDetailState = { status: "loading" } | AccountPolicyReadLoad;
+type PolicyVersionDirectoryState = { status: "loading" } | AccountPolicyVersionDirectoryLoad;
 
 function PolicyStatementTable({ version }: { version: AccountPolicyVersion }) {
   const t = useTranslations("AccountPolicyDirectory");
@@ -34,10 +35,86 @@ function PolicyStatementTable({ version }: { version: AccountPolicyVersion }) {
   </section>;
 }
 
+function PolicyVersionDocument({ version, title }: { version: AccountPolicyVersion; title: string }) {
+  const t = useTranslations("AccountPolicyDirectory");
+  return <section className={styles.catalogNotice} aria-label={title}>
+    <div className={styles.catalogDetailHeading}><h2>{title}</h2><Badge>{t("contractVersion", { version: version.contractVersion })}</Badge></div>
+    <p className={styles.note}>{t("documentNotice")}</p>
+    <dl className={styles.catalogFacts}>
+      <div><dt>{t("digest")}</dt><dd><code>{version.contentDigest}</code></dd></div>
+      <div><dt>{t("frozenProfiles")}</dt><dd>{version.compilation ? version.compilation.profiles.map((item) => `${item.product} @ ${item.revision}`).join(" · ") : t("legacyVersion")}</dd></div>
+    </dl>
+    <PolicyStatementTable version={version} />
+    <details className={styles.policyRawDocument}><summary>{t("rawDocument")}</summary><pre tabIndex={0}>{JSON.stringify(version.document, null, 2)}</pre></details>
+  </section>;
+}
+
+function AccountPolicyVersions({ policy, listVersions, readVersion }: {
+  policy: AccountPolicy;
+  listVersions: NonNullable<AccountPolicyReadClient["listVersions"]>;
+  readVersion: NonNullable<AccountPolicyReadClient["readVersion"]>;
+}) {
+  const t = useTranslations("AccountPolicyDirectory");
+  const [state, setState] = useState<PolicyVersionDirectoryState>({ status: "loading" });
+  const [revision, setRevision] = useState(0);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selected, setSelected] = useState<PolicyDetailState>({ status: "loading" });
+  const [selectedRevision, setSelectedRevision] = useState(0);
+  const title = useRef<HTMLHeadingElement>(null);
+  const list = useRef<HTMLDivElement>(null);
+  const opener = useRef<string | null>(null);
+  useEffect(() => {
+    let current = true;
+    void listVersions(policy.id).then((result) => { if (current) setState(result); });
+    return () => { current = false; };
+  }, [listVersions, policy.id, revision]);
+  useEffect(() => {
+    if (!selectedId) return;
+    let current = true;
+    void readVersion(policy.id, selectedId).then((result) => { if (current) setSelected(result); });
+    return () => { current = false; };
+  }, [readVersion, policy.id, selectedId, selectedRevision]);
+  useEffect(() => {
+    if (selectedId) title.current?.focus();
+    else if (opener.current) {
+      const target = Array.from(list.current?.querySelectorAll<HTMLButtonElement>("button[data-version-id]") ?? [])
+        .find((item) => item.dataset.versionId === opener.current);
+      target?.focus(); opener.current = null;
+    }
+  }, [selectedId]);
+  if (selectedId) return <div className={styles.catalogNotice}>
+    <div><Button variant="secondary" onClick={() => setSelectedId(null)}>{t("backToVersions")}</Button></div>
+    <h2 ref={title} tabIndex={-1} className={styles.stepTitle}>{t("versionInspection", { version: selectedId })}</h2>
+    {selected.status === "loading" ? <TableSkeleton label={t("loadingVersion")} rows={3} header={false} /> :
+      selected.status !== "ready" ? <div className={styles.catalogNotice}><Alert status={selected.status === "forbidden" ? "warning" : "danger"}>{t(`versionErrors.${selected.status}`)}</Alert>
+        {selected.status !== "expired" ? <div><Button variant="secondary" onClick={() => { setSelected({ status: "loading" }); setSelectedRevision((value) => value + 1); }}>{t("retry")}</Button></div> : null}</div> :
+      <PolicyVersionDocument version={selected.detail.version} title={t("versionDocument", { version: selectedId })} />}
+  </div>;
+  return <div ref={list} className={styles.catalogNotice}>
+    <p className={styles.note}>{t("versionDirectoryNotice")}</p>
+    {state.status === "loading" ? <TableSkeleton label={t("loadingVersions")} rows={3} header={false} /> :
+      state.status !== "ready" ? <div className={styles.catalogNotice}><Alert status={state.status === "forbidden" ? "warning" : "danger"}>{t(`versionErrors.${state.status}`)}</Alert>
+        {state.status !== "expired" ? <div><Button variant="secondary" onClick={() => { setState({ status: "loading" }); setRevision((value) => value + 1); }}>{t("retry")}</Button></div> : null}</div> : <>
+        <p>{t("versionCount", { count: state.directory.items.length })}</p>
+        <Table aria-label={t("versionTable")} mobileLayout="stack" className={styles.policyVersionTable}>
+          <thead><tr><th scope="col">{t("versionId")}</th><th scope="col">{t("defaultVersion")}</th><th scope="col">{t("versionContract")}</th><th scope="col">{t("digest")}</th></tr></thead>
+          <tbody>{state.directory.items.map((item) => <tr key={item.versionId}>
+            <td data-label={t("versionId")}><button className={styles.userLink} data-version-id={item.versionId} onClick={() => { opener.current = item.versionId; setSelected({ status: "loading" }); setSelectedId(item.versionId); }}>{item.versionId}</button></td>
+            <td data-label={t("defaultVersion")}>{item.versionId === state.directory.policy.defaultVersionId ? <Badge status="success">{t("currentDefault")}</Badge> : "—"}</td>
+            <td data-label={t("versionContract")}>{t("contractVersion", { version: item.contractVersion })}</td>
+            <td data-label={t("digest")}><code>{item.contentDigest}</code></td>
+          </tr>)}</tbody>
+        </Table>
+      </>}
+  </div>;
+}
+
 function AccountPolicyDetailView({ policy, client, onBack }: { policy: AccountPolicy; client: AccountPolicyReadClient | null; onBack(): void }) {
   const t = useTranslations("AccountPolicyDirectory");
   const [state, setState] = useState<PolicyDetailState>({ status: "loading" });
   const [revision, setRevision] = useState(0);
+  const [section, setSection] = useState("document");
+  const [versionsMounted, setVersionsMounted] = useState(false);
   useEffect(() => {
     if (policy.scope !== "TENANT" || !client) return;
     let current = true;
@@ -45,6 +122,12 @@ function AccountPolicyDetailView({ policy, client, onBack }: { policy: AccountPo
     return () => { current = false; };
   }, [client, policy.id, policy.scope, revision]);
   const detail = state.status === "ready" ? state.detail : null;
+  const documentRegion = policy.scope === "INSTALLATION" ? <Alert status="info">{t("platformDetailUnavailable")}</Alert> :
+    !client ? <Alert status="danger">{t("errors.unavailable")}</Alert> :
+    state.status === "loading" ? <TableSkeleton label={t("loadingDetail")} rows={3} header={false} /> :
+    state.status !== "ready" ? <div className={styles.catalogNotice}><Alert status={state.status === "forbidden" ? "warning" : "danger"}>{t(`errors.${state.status}`)}</Alert>
+      {state.status !== "expired" ? <div><Button variant="secondary" onClick={() => { setState({ status: "loading" }); setRevision((value) => value + 1); }}>{t("retry")}</Button></div> : null}</div> :
+    detail ? <PolicyVersionDocument version={detail.version} title={t("defaultDocument")} /> : null;
   return <WorkspaceDetail title={policy.displayName} onBack={onBack}>
     <p className={styles.note}>{t("detailNotice")}</p>
     <dl className={styles.catalogFacts}>
@@ -54,21 +137,12 @@ function AccountPolicyDetailView({ policy, client, onBack }: { policy: AccountPo
       <div><dt>{t("defaultVersion")}</dt><dd><code>{detail?.version.versionId ?? policy.defaultVersionId}</code></dd></div>
       <div><dt>{t("updated")}</dt><dd><WorkspaceTime value={detail?.policy.updatedAt ?? policy.updatedAt} /></dd></div>
     </dl>
-    {policy.scope === "INSTALLATION" ? <Alert status="info">{t("platformDetailUnavailable")}</Alert> :
-      !client ? <Alert status="danger">{t("errors.unavailable")}</Alert> :
-      state.status === "loading" ? <TableSkeleton label={t("loadingDetail")} rows={3} header={false} /> :
-      state.status !== "ready" ? <div className={styles.catalogNotice}><Alert status={state.status === "forbidden" ? "warning" : "danger"}>{t(`errors.${state.status}`)}</Alert>
-        {state.status !== "expired" ? <div><Button variant="secondary" onClick={() => { setState({ status: "loading" }); setRevision((value) => value + 1); }}>{t("retry")}</Button></div> : null}</div> :
-      detail ? <section className={styles.catalogNotice} aria-label={t("defaultDocument")}>
-        <div className={styles.catalogDetailHeading}><h2>{t("defaultDocument")}</h2><Badge>{t("contractVersion", { version: detail.version.contractVersion })}</Badge></div>
-        <p className={styles.note}>{t("documentNotice")}</p>
-        <dl className={styles.catalogFacts}>
-          <div><dt>{t("digest")}</dt><dd><code>{detail.version.contentDigest}</code></dd></div>
-          <div><dt>{t("frozenProfiles")}</dt><dd>{detail.version.compilation ? detail.version.compilation.profiles.map((item) => `${item.product} @ ${item.revision}`).join(" · ") : t("legacyVersion")}</dd></div>
-        </dl>
-        <PolicyStatementTable version={detail.version} />
-        <details className={styles.policyRawDocument}><summary>{t("rawDocument")}</summary><pre tabIndex={0}>{JSON.stringify(detail.version.document, null, 2)}</pre></details>
-      </section> : null}
+    {policy.management === "CUSTOMER" && policy.scope === "TENANT" && client?.listVersions && client.readVersion ?
+      <Tabs.Root value={section} onValueChange={(next) => { setSection(next); if (next === "versions") setVersionsMounted(true); }}>
+        <Tabs.List aria-label={t("detailSections")}><Tabs.Trigger value="document">{t("defaultDocument")}</Tabs.Trigger><Tabs.Trigger value="versions">{t("versionsTab")}</Tabs.Trigger></Tabs.List>
+        <Tabs.Content value="document">{documentRegion}</Tabs.Content>
+        <Tabs.Content value="versions" forceMount={versionsMounted || undefined}>{versionsMounted ? <AccountPolicyVersions policy={policy} listVersions={client.listVersions} readVersion={client.readVersion} /> : null}</Tabs.Content>
+      </Tabs.Root> : documentRegion}
   </WorkspaceDetail>;
 }
 

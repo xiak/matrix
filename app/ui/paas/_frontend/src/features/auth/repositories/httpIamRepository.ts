@@ -8,6 +8,7 @@ import type {
   AccountPolicyDetail,
   AccountPolicyDocument,
   AccountPolicyVersion,
+  AccountPolicyVersionDirectory,
   ActionCapability,
   AuthorizationAuthorityScope,
   AuthorizationProfile,
@@ -1404,6 +1405,34 @@ function parsePolicyDetail(value: unknown, accountId: string, policyId: string):
   return { policy, version };
 }
 
+function parseCustomerVersionPolicy(value: unknown, accountId: string, policyId: string): AccountPolicy {
+  const policy = parsePolicy(value);
+  if (policy.id !== policyId || policy.management !== "CUSTOMER" || policy.accountId !== accountId ||
+      policy.scope !== "TENANT" || policy.status !== "ACTIVE") throw new Error("INVALID_IAM_RESPONSE");
+  return policy;
+}
+
+function parsePolicyVersionDirectory(value: unknown, accountId: string, policyId: string): AccountPolicyVersionDirectory {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "policy", "items"]);
+  requireAccountKind(wire, "PolicyVersionList");
+  const policy = parseCustomerVersionPolicy(wire.policy, accountId, policyId);
+  const items = policyArray(wire.items, 5).map((item) => parsePolicyVersion(item, policyId));
+  if (items.some((item, index) => index > 0 && items[index - 1]!.versionId >= item.versionId) ||
+      !items.some((item) => item.versionId === policy.defaultVersionId)) throw new Error("INVALID_IAM_RESPONSE");
+  return { policy, items };
+}
+
+function parsePolicyVersionDetail(value: unknown, accountId: string, policyId: string, versionId: string): AccountPolicyDetail {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "policy", "version"]);
+  requireAccountKind(wire, "PolicyVersionDetail");
+  const policy = parseCustomerVersionPolicy(wire.policy, accountId, policyId);
+  const version = parsePolicyVersion(wire.version, policyId);
+  if (version.versionId !== versionId) throw new Error("INVALID_IAM_RESPONSE");
+  return { policy, version };
+}
+
 function parsePolicyDirectory(value: unknown, expectedScope: PolicyScope): PolicyDirectory {
   const wire = accountRecord(value);
   exactKeys(wire, ["apiVersion", "kind", "accountId", "scope", "items"], ["installationId"]);
@@ -1706,6 +1735,12 @@ export const httpAccountRepository: AccountRepository = {
   },
   async readPolicy(credential, accountId, policyId) {
     return parsePolicyDetail(await requestJSON<unknown>(`/api/iam/v1/policies/${encodeURIComponent(accountIdentifier(policyId))}`, { headers: accountHeaders(credential) }), accountIdentifier(accountId), policyId);
+  },
+  async listPolicyVersions(credential, accountId, policyId) {
+    return parsePolicyVersionDirectory(await requestJSON<unknown>(`/api/iam/v1/policies/${encodeURIComponent(accountIdentifier(policyId))}/versions`, { headers: accountHeaders(credential) }), accountIdentifier(accountId), policyId);
+  },
+  async readPolicyVersion(credential, accountId, policyId, versionId) {
+    return parsePolicyVersionDetail(await requestJSON<unknown>(`/api/iam/v1/policies/${encodeURIComponent(accountIdentifier(policyId))}/versions/${encodeURIComponent(accountIdentifier(versionId))}`, { headers: accountHeaders(credential) }), accountIdentifier(accountId), policyId, versionId);
   },
   async listAuthorizationProfiles(credential) {
     return parseAuthorizationProfileDirectory(await requestJSON<unknown>("/api/iam/v1/authorization-profiles", { headers: accountHeaders(credential) }));

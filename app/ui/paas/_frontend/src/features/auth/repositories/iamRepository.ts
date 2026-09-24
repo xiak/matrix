@@ -12,6 +12,7 @@ import type {
   AccountCommand,
   AccountIdentity,
   AccountPolicyDetail,
+  AccountPolicyVersionDirectory,
   AccountSecuritySettings,
   DirectoryPage,
   Group,
@@ -154,6 +155,8 @@ export interface AccountRepository {
   // TENANT default-version read only. A list permission is not a read grant;
   // the server independently authorizes the exact Policy target.
   readPolicy?(credential: string, accountId: string, policyId: string): Promise<AccountPolicyDetail>;
+  listPolicyVersions?(credential: string, accountId: string, policyId: string): Promise<AccountPolicyVersionDirectory>;
+  readPolicyVersion?(credential: string, accountId: string, policyId: string, versionId: string): Promise<AccountPolicyDetail>;
   // Complete current product declarations under the caller's existing policy
   // list permission. There is deliberately no account or revision selector.
   listAuthorizationProfiles(credential: string): Promise<AuthorizationProfileDirectory>;

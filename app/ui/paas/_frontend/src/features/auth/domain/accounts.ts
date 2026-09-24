@@ -154,6 +154,7 @@ export type AccountPolicyVersion = {
 };
 
 export type AccountPolicyDetail = { policy: AccountPolicy; version: AccountPolicyVersion };
+export type AccountPolicyVersionDirectory = { policy: AccountPolicy; items: AccountPolicyVersion[] };
 
 // Product-owned authorization declarations are policy-authoring metadata. They
 // are not Policy records, grants, effective permissions or tenant-owned

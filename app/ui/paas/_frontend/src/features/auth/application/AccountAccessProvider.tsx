@@ -6,6 +6,7 @@ import { useSession, useSessionCredential } from "./SessionProvider";
 import type {
   AccountCommand,
   AccountPolicyDetail,
+  AccountPolicyVersionDirectory,
   AccountSecuritySettings,
   AccountPolicy,
   AuthorizationProfileDirectory,
@@ -73,14 +74,16 @@ export type AuthorizationProfileClient = {
   load(): Promise<AuthorizationProfileLoad>;
 };
 
-export type AccountPolicyReadLoad =
-  | { status: "ready"; detail: AccountPolicyDetail }
-  | { status: "forbidden" | "routeUnavailable" | "unavailable" | "expired" };
+type AccountPolicyReadFailure = { status: "forbidden" | "routeUnavailable" | "unavailable" | "expired" };
+export type AccountPolicyReadLoad = { status: "ready"; detail: AccountPolicyDetail } | AccountPolicyReadFailure;
+export type AccountPolicyVersionDirectoryLoad = { status: "ready"; directory: AccountPolicyVersionDirectory } | AccountPolicyReadFailure;
 
 export type AccountPolicyReadClient = {
   accountId: string;
   sessionRevision: number;
   read(policyId: string): Promise<AccountPolicyReadLoad>;
+  listVersions?(policyId: string): Promise<AccountPolicyVersionDirectoryLoad>;
+  readVersion?(policyId: string, versionId: string): Promise<AccountPolicyReadLoad>;
 };
 
 export type AccountSecuritySettingsLoad =
@@ -406,6 +409,19 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   const policyRead = useMemo<AccountPolicyReadClient | null>(() => {
     if (!active || !credential || !scene || scene.accountId !== tenantId || !scene.canViewPolicies || !repository.readPolicy || repository.workspace) return null;
     const accountId = scene.accountId;
+    const readFailure = (failure: unknown): AccountPolicyReadFailure => {
+      if (failure instanceof HttpProblem) {
+        if (failure.status === 401) {
+          if (expireSession(credential, sessionRevision)) {
+            setScene(null); setWorkspace(null); setWorkspaceError(null); setSuccess(null); setError("expired");
+          }
+          return { status: "expired" };
+        }
+        if (failure.status === 403) return { status: "forbidden" };
+        if (failure.status === 404) return { status: "routeUnavailable" };
+      }
+      return { status: "unavailable" };
+    };
     return {
       accountId, sessionRevision,
       async read(policyId) {
@@ -415,20 +431,30 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
               detail.policy.accountId !== null && detail.policy.accountId !== accountId ||
               detail.version.policyId !== policyId || detail.version.versionId !== detail.policy.defaultVersionId) throw new Error("INVALID_IAM_RESPONSE");
           return { status: "ready", detail };
-        } catch (failure) {
-          if (failure instanceof HttpProblem) {
-            if (failure.status === 401) {
-              if (expireSession(credential, sessionRevision)) {
-                setScene(null); setWorkspace(null); setWorkspaceError(null); setSuccess(null); setError("expired");
-              }
-              return { status: "expired" };
-            }
-            if (failure.status === 403) return { status: "forbidden" };
-            if (failure.status === 404) return { status: "routeUnavailable" };
+        } catch (failure) { return readFailure(failure); }
+      },
+      listVersions: repository.listPolicyVersions ? async (policyId) => {
+        try {
+          const directory = await repository.listPolicyVersions!(credential, accountId, policyId);
+          if (directory.policy.id !== policyId || directory.policy.management !== "CUSTOMER" ||
+              directory.policy.accountId !== accountId || directory.policy.scope !== "TENANT" ||
+              directory.policy.status !== "ACTIVE" || !directory.items.some((item) => item.versionId === directory.policy.defaultVersionId)) {
+            throw new Error("INVALID_IAM_RESPONSE");
           }
-          return { status: "unavailable" };
-        }
-      }
+          return { status: "ready", directory };
+        } catch (failure) { return readFailure(failure); }
+      } : undefined,
+      readVersion: repository.readPolicyVersion ? async (policyId, versionId) => {
+        try {
+          const detail = await repository.readPolicyVersion!(credential, accountId, policyId, versionId);
+          if (detail.policy.id !== policyId || detail.policy.management !== "CUSTOMER" ||
+              detail.policy.accountId !== accountId || detail.policy.scope !== "TENANT" ||
+              detail.policy.status !== "ACTIVE" || detail.version.policyId !== policyId || detail.version.versionId !== versionId) {
+            throw new Error("INVALID_IAM_RESPONSE");
+          }
+          return { status: "ready", detail };
+        } catch (failure) { return readFailure(failure); }
+      } : undefined
     };
   }, [active, credential, expireSession, repository, scene, sessionRevision, tenantId]);
 
