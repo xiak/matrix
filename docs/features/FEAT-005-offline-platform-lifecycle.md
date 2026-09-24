@@ -1,6 +1,6 @@
 # FEAT-005: Offline platform distribution and lifecycle
 
-- Status: Phase 1 accepted; Phase 3 signed MFA lifecycle passed, full extension not accepted
+- Status: Phase 1 accepted; Phase 3 authentication recovery extension accepted for the exact signed A/B test pair
 - Target release: Private Application PaaS v0.1
 - Target design date: 2026-08-25
 - Release contract version: `v1`
@@ -291,8 +291,8 @@ not a published production release key.
 
 This sequential signed lifecycle alone does not prove concurrent factor
 creation/rotation or every crash/resume point. The focused and interrupted
-runtime gates below provide separate evidence; they must be reconciled with
-every acceptance item before this Phase 3 extension is marked accepted.
+runtime gates below provide the additional evidence used in the final
+acceptance reconciliation.
 
 A focused PostgreSQL 18 process gate now holds an actual restricted backup
 snapshot while an IAM HTTP enrollment creates a pending TOTP factor after
@@ -343,8 +343,7 @@ plaintext-storage assertion without identifying the matching input or table;
 the subsequent test reports only a safe input index and table name if that
 assertion recurs. Its cause is not established by the successful rerun. These
 checks prove the exact signed negative install and five injected crash
-boundaries; the full extension still requires reconciliation against every
-acceptance item before it is accepted.
+boundaries; they are not a substitute for the concurrent-snapshot gate.
 
 The same signed A/B pair then passed another fresh disconnected lifecycle on
 source `c68a88475c298f58d5315c75fe6e0f9bb08a5f8b` in 481.60 seconds.
@@ -372,7 +371,7 @@ closed, reconciled and reopened IAM recovery facts for the original command:
 SYSTEM actor, installation target, request/correlation identity, no tenant or
 IAM decision. The platform integrity endpoint verified their complete chain.
 This adds signed cross-service evidence to the earlier PostgreSQL outbox
-checks; it does not substitute for the remaining acceptance reconciliation.
+checks.
 The labeled local test container, its two volumes and the transient test
 binary were deleted afterward.
 [Verification 36024686653](https://github.com/xiak/matrix/actions/runs/36024686653)
@@ -410,9 +409,22 @@ at revision 2. A separate real-database gate exercised password login,
 existing Session, readiness, conflicting key registrations and retained
 factor fail-closed behavior. Both focused tests passed. Their temporary
 PostgreSQL container, database volume and combined Go/PostgreSQL test image
-were removed after the run; no shared or remote resource was touched. These
-focused gates close the disconnected concurrent-snapshot evidence gap, but do
-not by themselves turn the Phase 3 extension into an accepted release.
+were removed after the run; no shared or remote resource was touched. The
+actual-login/Session custody fence also passed with external networking
+disabled for missing material, mismatched scope/revision/key/commitment,
+unsupported factors and database unavailability.
+
+Acceptance reconciliation: item 1 is proved by the populated signed A to B
+upgrade and both signed wrong-predecessor pre-effect denials; item 2 by the
+signed MFA and rollback paths together with the disconnected custody process,
+database and login/Session gates; item 3 by the disconnected held-snapshot
+creation/rotation test and signed missing/changed-key restore denials; item 4
+by the five signed process-kill/replay points; and item 5 by signed recovery,
+Audit integrity, engine restart and workload retention. The production code
+under these test additions is byte-for-byte the fixed signed A/B pair. This
+accepts the Phase 3 authentication recovery extension for that exact pair and
+its task-local test signer only. It does not publish a production trust root,
+admit an arbitrary predecessor or complete the separate IAM/PaaS release work.
 
 ## Incremental acceptance
 
