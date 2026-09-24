@@ -13,9 +13,11 @@
   IAM44/Audit26/PaaS2; neither is an accepted release profile.
 - Exact Verification **36044565312**:
   https://github.com/xiak/matrix/actions/runs/36044565312
-  GitHub API confirmed 296 SHA; go, node-process and authority-storage success;
-  authority-runtime in_progress, remaining database lanes queued at inspection.
-  Independent CI UNCONFIRMED. Follow this exact run, not a duplicate.
+  GitHub API confirmed exact 296 SHA and all nine jobs completed/success:
+  go, node-process, authority-storage/runtime/step-up/replacement,
+  authority-replacement-qualification/recovery-window and authority-process.
+  This final result was sent to UX and installation; it does not validate
+  later uncommitted snapshot-consuming runtime changes.
 - Last independently verified production behavior:
   **e24dbdae6b4ea420365a4527a0bd89b16e0d720f**, normal proof-bound TOTP replacement.
   Exact Verification **36033828072** all nine jobs completed/success, confirmed
