@@ -370,7 +370,7 @@ func ValidateEnrollmentChallengeState(value EnrollmentChallengeState) error {
 		return errors.New("enrollment contact observation is required")
 	}
 	if value.Enrollment != nil && (ValidateTOTPEnrollment(*value.Enrollment) != nil ||
-		value.Enrollment.State != "PENDING" || value.Enrollment.FactorRevision != 1 ||
+		value.Enrollment.Purpose != "INITIAL" || value.Enrollment.State != "PENDING" || value.Enrollment.FactorRevision != 1 ||
 		!value.Enrollment.ExpiresAt.Equal(value.Challenge.ExpiresAt) || value.NotificationContact.State != "VERIFIED" ||
 		value.NotificationContact.VerifiedAt.After(value.Enrollment.CreatedAt)) {
 		return errors.New("enrollment must retain its original challenge deadline and first-binding prerequisites")
@@ -422,6 +422,15 @@ func ValidateTOTPEnrollment(value TOTPEnrollment) error {
 		!value.ExpiresAt.After(value.CreatedAt) || value.ExpiresAt.Sub(value.CreatedAt) > 5*time.Minute {
 		return errors.New("TOTP enrollment is invalid")
 	}
+	switch value.Purpose {
+	case "INITIAL":
+	case "REPLACEMENT":
+		if value.FactorRevision < 2 || value.ExpiresAt.Sub(value.CreatedAt) > 2*time.Minute {
+			return errors.New("replacement must retain a bound revision and original proof deadline")
+		}
+	default:
+		return errors.New("TOTP enrollment purpose is invalid")
+	}
 	switch value.State {
 	case "PENDING":
 		if value.CompletedAt != nil {
@@ -446,6 +455,13 @@ func ValidateStartTOTPEnrollmentRequest(value StartTOTPEnrollmentRequest) error 
 		return errors.New("factor revision is invalid")
 	}
 	return ValidateID("requestId", value.RequestID)
+}
+
+func ValidateStartTOTPReplacementRequest(value StartTOTPReplacementRequest) error {
+	if value.ExpectedFactorRevision < 2 || value.ExpectedFactorRevision > 9007199254740990 {
+		return errors.New("replaceable bound factor revision is required")
+	}
+	return errors.Join(ValidateID("requestId", value.RequestID), ValidateID("stepUpId", value.StepUpID))
 }
 
 func ValidateStartTOTPEnrollmentResponse(value StartTOTPEnrollmentResponse) error {
@@ -609,6 +625,9 @@ func ValidateStepUp(value StepUp) error {
 		value.ExpiresAt.Sub(value.CreatedAt) != 2*time.Minute {
 		return errors.New("step-up is invalid")
 	}
+	if value.Operation == StepUpReplaceTOTP && value.ExpectedFactorRevision > 9007199254740990 {
+		return errors.New("factor revision cannot be advanced")
+	}
 	if value.ProvedAt != nil && (validateTime("provedAt", *value.ProvedAt) != nil || value.ProvedAt.Before(value.CreatedAt) || !value.ProvedAt.Before(value.ExpiresAt)) {
 		return errors.New("step-up proof time is invalid")
 	}
@@ -643,12 +662,15 @@ func ValidateStartStepUpRequest(value StartStepUpRequest) error {
 	if validateStepUpOperation(value.Operation, value.SecuritySettings) != nil || value.ExpectedFactorRevision < 2 || validatePositiveVersion(value.ExpectedFactorRevision) != nil {
 		return errors.New("step-up operation is invalid")
 	}
+	if value.Operation == StepUpReplaceTOTP && value.ExpectedFactorRevision > 9007199254740990 {
+		return errors.New("factor revision cannot be advanced")
+	}
 	return ValidateID("requestId", value.RequestID)
 }
 
 func validateStepUpOperation(operation StepUpOperation, settings *SecuritySettingsUpdateIntent) error {
 	switch operation {
-	case StepUpRegenerateRecoveryCodes:
+	case StepUpRegenerateRecoveryCodes, StepUpReplaceTOTP:
 		if settings == nil {
 			return nil
 		}

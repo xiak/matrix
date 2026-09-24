@@ -70,6 +70,7 @@ type Transaction interface {
 	ReadAuthenticatorState(context.Context, iamv1.Session) (iamv1.AuthenticatorState, error)
 	ReadEnrollmentChallenge(context.Context, AuthenticationChallengeCredential) (EnrollmentChallengeInspection, error)
 	StartTOTPEnrollment(context.Context, TOTPEnrollmentStart) (TOTPEnrollmentStartResult, error)
+	StartTOTPReplacement(context.Context, TOTPReplacementStart) (TOTPEnrollmentStartResult, error)
 	ReadTOTPEnrollment(context.Context, iamv1.Session, string) (iamv1.TOTPEnrollment, error)
 	ReadTOTPEnrollmentByRequest(context.Context, iamv1.Session, string) (iamv1.TOTPEnrollment, error)
 	CancelTOTPEnrollment(context.Context, iamv1.Session, string) (iamv1.TOTPEnrollment, error)

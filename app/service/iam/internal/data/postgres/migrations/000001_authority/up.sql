@@ -1449,7 +1449,7 @@ BEGIN
             'iam.bootstrap.applied', 'iam.session.issued',
             'iam.password.changed', 'iam.user.password-changed', 'iam.installation-primary.credentials-recovered',
             'iam.role-session.revoked','iam.role-session.exited',
-            'iam.notification-contact.verification-started','iam.notification-contact.verified','iam.authenticator.bound',
+            'iam.notification-contact.verification-started','iam.notification-contact.verified','iam.authenticator.bound','iam.authenticator.replaced',
             'iam.authenticator.recovery-started','iam.authenticator.recovered','iam.recovery-codes.regenerated'
         ) AND submitted_event ? 'iamDecisionId')
         OR (expected_action IN (
@@ -1955,7 +1955,7 @@ BEGIN
                SELECT 1 FROM iam.audit_outbox AS outbox
                 WHERE outbox.status = 'DEAD_LETTER' OR outbox.attempts >= 100
            ),
-           43::bigint,
+           44::bigint,
            transaction_timestamp();
 END
 $function$;

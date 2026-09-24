@@ -40,6 +40,16 @@ type TOTPEnrollmentStartResult struct {
 	Enrollment iamv1.TOTPEnrollment `json:"enrollment"`
 }
 
+// Replacement prepares a new factor under an exact same-Session operation
+// proof. It never turns a password-only enrollment into replacement authority.
+type TOTPReplacementStart struct {
+	Session  iamv1.Session
+	Request  iamv1.StartTOTPReplacementRequest
+	FactorID string
+	Scope    iamv1.TOTPWrappingScope
+	Sealed   authority.SealedTOTPSeed
+}
+
 // The generation is private evidence for first-contact custody. The public
 // observation remains a restricted ceremony, not a Session or a new permit.
 type EnrollmentChallengeInspection struct {
@@ -274,7 +284,90 @@ func (service *Authority) StartTOTPEnrollment(ctx context.Context, credential ia
 	if err != nil {
 		return iamv1.StartTOTPEnrollmentResponse{}, err
 	}
-	return enrollmentStartResponse(change, provisioning, result)
+	return enrollmentStartResponse(change, "INITIAL", provisioning, result)
+}
+
+func (service *Authority) StartTOTPReplacement(ctx context.Context, credential iamv1.Secret, request iamv1.StartTOTPReplacementRequest) (iamv1.StartTOTPEnrollmentResponse, error) {
+	if iamv1.ValidateStartTOTPReplacementRequest(request) != nil {
+		return iamv1.StartTOTPEnrollmentResponse{}, ErrInvalidArgument
+	}
+	if service == nil || service.totpSeeds == nil {
+		return iamv1.StartTOTPEnrollmentResponse{}, ErrUnavailable
+	}
+	var original SessionCredential
+	var proof iamv1.StepUp
+	err := service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
+		var err error
+		original, err = service.totpSession(ctx, tx, credential)
+		if err != nil {
+			return err
+		}
+		if err := service.checkTOTPCustody(ctx, tx); err != nil {
+			return err
+		}
+		if err := service.checkEmailVerificationCustody(ctx, tx); err != nil {
+			return err
+		}
+		proof, err = tx.ReadStepUpByRequest(ctx, original.Subject.Session, request.RequestID)
+		if err != nil {
+			return err
+		}
+		if iamv1.ValidateStepUp(proof) != nil {
+			return ErrUnavailable
+		}
+		// CONSUMED is only a candidate for metadata replay. The effect port
+		// must find the original factor; it cannot consume this proof again.
+		if proof.ID != request.StepUpID || proof.RequestID != request.RequestID || proof.Operation != iamv1.StepUpReplaceTOTP ||
+			proof.ExpectedFactorRevision != request.ExpectedFactorRevision || (proof.State != "PROVED" && proof.State != "CONSUMED") {
+			return ErrConflict
+		}
+		return nil
+	})
+	if err != nil {
+		return iamv1.StartTOTPEnrollmentResponse{}, err
+	}
+	// Seal once outside the retriable transaction, just as for first binding.
+	change, provisioning, err := service.prepareTOTPEnrollment(original.Subject.Organization.ID, original.Subject.Principal.ID)
+	if err != nil {
+		return iamv1.StartTOTPEnrollmentResponse{}, err
+	}
+	defer clear(change.Sealed.Nonce)
+	defer clear(change.Sealed.Ciphertext)
+	change.RequestID, change.ExpectedRevision = request.RequestID, request.ExpectedFactorRevision
+	var response iamv1.StartTOTPEnrollmentResponse
+	err = service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
+		response = iamv1.StartTOTPEnrollmentResponse{}
+		current, err := service.totpSession(ctx, tx, credential)
+		if err != nil {
+			return err
+		}
+		if current.Subject.Organization.ID != original.Subject.Organization.ID || current.Subject.Principal.ID != original.Subject.Principal.ID ||
+			current.Subject.Session.ID != original.Subject.Session.ID || current.CredentialGeneration != original.CredentialGeneration {
+			return ErrUnauthenticated
+		}
+		if err := service.checkTOTPCustody(ctx, tx); err != nil {
+			return err
+		}
+		if err := service.checkEmailVerificationCustody(ctx, tx); err != nil {
+			return err
+		}
+		result, err := tx.StartTOTPReplacement(ctx, TOTPReplacementStart{Session: current.Subject.Session, Request: request,
+			FactorID: change.FactorID, Scope: change.Scope, Sealed: change.Sealed})
+		if err != nil {
+			return err
+		}
+		// Never renew the original proof deadline or expose material from an
+		// unrelated factor, even if the returned metadata is otherwise valid.
+		if !result.Enrollment.ExpiresAt.Equal(proof.ExpiresAt) || (proof.State == "CONSUMED" && result.Outcome != "EQUAL_REPLAY") {
+			return ErrUnavailable
+		}
+		response, err = enrollmentStartResponse(change, "REPLACEMENT", provisioning, result)
+		return err
+	})
+	if err != nil {
+		return iamv1.StartTOTPEnrollmentResponse{}, err
+	}
+	return response, nil
 }
 
 func (service *Authority) StartChallengeTOTPEnrollment(ctx context.Context, id string, request iamv1.StartChallengeTOTPEnrollmentRequest) (iamv1.StartTOTPEnrollmentResponse, error) {
@@ -323,7 +416,7 @@ func (service *Authority) StartChallengeTOTPEnrollment(ctx context.Context, id s
 	if !result.Enrollment.ExpiresAt.Equal(inspection.State.Challenge.ExpiresAt) {
 		return iamv1.StartTOTPEnrollmentResponse{}, ErrUnavailable
 	}
-	return enrollmentStartResponse(change, provisioning, result)
+	return enrollmentStartResponse(change, "INITIAL", provisioning, result)
 }
 
 func (service *Authority) initialTOTPEnrollment(ctx context.Context, tx Transaction, id string, credential iamv1.Secret) (AuthenticationChallengeCredential, EnrollmentChallengeInspection, error) {
@@ -372,7 +465,7 @@ func (service *Authority) prepareTOTPEnrollment(account iamv1.AccountID, user ia
 	return TOTPEnrollmentStart{FactorID: id, Scope: scope.Installation, Sealed: sealed}, iamv1.TOTPProvisioning{Seed: seed, URI: uri}, nil
 }
 
-func enrollmentStartResponse(change TOTPEnrollmentStart, provisioning iamv1.TOTPProvisioning, result TOTPEnrollmentStartResult) (iamv1.StartTOTPEnrollmentResponse, error) {
+func enrollmentStartResponse(change TOTPEnrollmentStart, purpose string, provisioning iamv1.TOTPProvisioning, result TOTPEnrollmentStartResult) (iamv1.StartTOTPEnrollmentResponse, error) {
 	response := iamv1.StartTOTPEnrollmentResponse{Outcome: result.Outcome, Enrollment: result.Enrollment}
 	if result.Outcome == "APPLIED" {
 		if result.Enrollment.ID != change.FactorID {
@@ -380,7 +473,7 @@ func enrollmentStartResponse(change TOTPEnrollmentStart, provisioning iamv1.TOTP
 		}
 		response.Provisioning = &provisioning
 	}
-	if result.Enrollment.RequestID != change.RequestID || result.Enrollment.FactorRevision != change.ExpectedRevision || iamv1.ValidateStartTOTPEnrollmentResponse(response) != nil {
+	if result.Enrollment.Purpose != purpose || result.Enrollment.RequestID != change.RequestID || result.Enrollment.FactorRevision != change.ExpectedRevision || iamv1.ValidateStartTOTPEnrollmentResponse(response) != nil {
 		return iamv1.StartTOTPEnrollmentResponse{}, ErrUnavailable
 	}
 	return response, nil
@@ -398,8 +491,19 @@ func (service *Authority) ConfirmTOTPEnrollment(ctx context.Context, credential 
 		if err := service.checkEmailVerificationCustody(ctx, tx); err != nil {
 			return TOTPAttempt{}, "", err
 		}
+		enrollment, err := tx.ReadTOTPEnrollment(ctx, subject.Subject.Session, id)
+		if err != nil {
+			return TOTPAttempt{}, "", err
+		}
+		if iamv1.ValidateTOTPEnrollment(enrollment) != nil || enrollment.ID != id {
+			return TOTPAttempt{}, "", ErrUnavailable
+		}
+		purpose := "ENROLLMENT"
+		if enrollment.Purpose == "REPLACEMENT" {
+			purpose = "REPLACEMENT"
+		}
 		return TOTPAttempt{AccountID: subject.Subject.Organization.ID, UserID: subject.Subject.Principal.ID,
-			SessionID: subject.Subject.Session.ID, ReferenceID: id, Purpose: "ENROLLMENT"}, id, nil
+			SessionID: subject.Subject.Session.ID, ReferenceID: id, Purpose: purpose}, id, nil
 	})
 }
 
@@ -490,14 +594,21 @@ func (service *Authority) confirmTOTPEnrollment(ctx context.Context, requestID s
 		if err != nil {
 			return err
 		}
+		action := auditv1.ActionIAMAuthenticatorBound
+		if attempt.Purpose == "REPLACEMENT" {
+			action = auditv1.ActionIAMAuthenticatorReplaced
+		}
 		event, err := newAuditEvent(eventID, attempt.AccountID, "", auditv1.ActorReference{Type: auditv1.ActorUser, ID: auditv1.ActorID(attempt.UserID)},
-			auditv1.ActionIAMAuthenticatorBound, auditv1.TargetReference{Kind: auditv1.TargetPrincipal, ID: string(attempt.UserID)}, auditv1.ResultSucceeded,
+			action, auditv1.TargetReference{Kind: auditv1.TargetPrincipal, ID: string(attempt.UserID)}, auditv1.ResultSucceeded,
 			"", digest, requestID, requestID, now)
 		if err != nil {
 			return err
 		}
 		result, err = tx.ConfirmTOTPEnrollment(ctx, TOTPBindingConfirmation{Attempt: attempt, VerifiedStep: step, BatchID: batchID,
 			NotificationID: notificationID, Codes: verifiers, AuditEvent: event})
+		if err == nil && ((result.Purpose == "REPLACEMENT") != (attempt.Purpose == "REPLACEMENT")) {
+			return ErrUnavailable
+		}
 		return err
 	})
 	if err != nil {

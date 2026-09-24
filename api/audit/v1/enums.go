@@ -42,6 +42,7 @@ const (
 	ActionIAMNotificationContactVerificationStarted Action = "iam.notification-contact.verification-started"
 	ActionIAMNotificationContactVerified            Action = "iam.notification-contact.verified"
 	ActionIAMAuthenticatorBound                     Action = "iam.authenticator.bound"
+	ActionIAMAuthenticatorReplaced                  Action = "iam.authenticator.replaced"
 	ActionIAMAuthenticatorRecoveryStarted           Action = "iam.authenticator.recovery-started"
 	ActionIAMAuthenticatorRecovered                 Action = "iam.authenticator.recovered"
 	ActionIAMRecoveryCodesRegenerated               Action = "iam.recovery-codes.regenerated"
@@ -228,6 +229,7 @@ var allActions = []Action{
 	ActionIAMNotificationContactVerificationStarted,
 	ActionIAMNotificationContactVerified,
 	ActionIAMAuthenticatorBound,
+	ActionIAMAuthenticatorReplaced,
 	ActionIAMAuthenticatorRecoveryStarted,
 	ActionIAMAuthenticatorRecovered,
 	ActionIAMRecoveryCodesRegenerated,
@@ -351,6 +353,7 @@ var actionContracts = map[Action]ActionContract{
 	ActionIAMNotificationContactVerificationStarted: {Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, UserActorRequired: true},
 	ActionIAMNotificationContactVerified:            {Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, UserActorRequired: true},
 	ActionIAMAuthenticatorBound:                     {Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, UserActorRequired: true},
+	ActionIAMAuthenticatorReplaced:                  {Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, UserActorRequired: true},
 	ActionIAMAuthenticatorRecoveryStarted:           {Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, UserActorRequired: true},
 	ActionIAMAuthenticatorRecovered:                 {Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, UserActorRequired: true},
 	ActionIAMRecoveryCodesRegenerated:               {Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, UserActorRequired: true},

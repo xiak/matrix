@@ -36,7 +36,7 @@ IAM负责验证期限/共享尝试预算、验证码一次消费、地址修订�
 
 安全告警只从已提交的封闭安全事件产生，绑定原Account/USER、事件与可信接收地址修订，不从客户端body取得任意收件人或邮件内容。原意图重试不换地址、不再执行安全变更；地址变更对原/新地址的必要告警与历史投递处理需明确，不能以变更收件地址消除已经产生的安全告警。恢复旧数据库时，历史“已验证”地址也不是当前归属证明；可信接收状态须纳入009/安装恢复的关闭与重新开放条件。
 
-009的未提交S2c设置写入候选接入既有`SECURITY_SETTINGS_CHANGED`封闭模板：成功事务向原操作者的已验证NotificationContact保存一条安全通知，与原`iam.security-settings.updated` eventId、Account、USER、安装及地址修订绑定。通知ID复用该唯一事实ID，精确命令重放不另生成任务或改收件人；邮箱、SMTP及正文没有请求方selector。这里只覆盖已存在的本人可信联系关系，不虚构Account级收件人、管理员广播或订阅配置。设置/证明消费/完成/审计/通知必须全有或全无；历史通知的领取不重新要求操作者仍启用或仍有设置权限。原有受限worker、租约/fence、重试及渠道受理语义保持；此接入的真库和真实邮件证据仍须分别归009/本节，不能把已有模板测试或新任务PENDING当成送达。
+009的S2c设置写入接入既有`SECURITY_SETTINGS_CHANGED`封闭模板：成功事务向原操作者的已验证NotificationContact保存一条安全通知，与原`iam.security-settings.updated` eventId、Account、USER、安装及地址修订绑定。通知ID复用该唯一事实ID，精确命令重放不另生成任务或改收件人；邮箱、SMTP及正文没有请求方selector。这里只覆盖已存在的本人可信联系关系，不虚构Account级收件人、管理员广播或订阅配置。设置/证明消费/完成/审计/通知必须全有或全无；历史通知的领取不重新要求操作者仍启用或仍有设置权限。原有受限worker、租约/fence、重试及渠道受理语义保持；此接入的真库和真实邮件证据分别归009/本节，不能把已有模板测试或新任务PENDING当成送达。
 
 SMTP成功最多证明渠道受理，不能冒充最终送达或已读；无可靠回执时保持准确观察。连接/提交结果未知不直接写失败并无条件重复，按提供者可证明能力核对；没有幂等/查询能力时明确允许可识别重复，但不能声称恰好一次。失败有限重试并持久告警；临时投递故障不回滚已经完成的身份安全变更，缺少第一条真实通道则仍阻塞完整MFA发布。
 
@@ -159,7 +159,7 @@ IAM API与通知worker分别读取`MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE`�
 
 本片仍需安装/UI消费者验收；后继MFA/账号配置交错与业务安全事件接入、运维聚合告警和受控恢复后的联系/在途意图隔离仍按上述需求逐片证明。当前只有稳定投递结果/错误类别和持久尝试记录，不把它们描述为已交付聚合告警。现有邮件证据不开放MFA，也不声称已有地址替换、ENROLLMENT/STEP_UP、旧备份重新开放或完整S1验收。
 
-009在线治理消费四个封闭通知：`RECOVERY_STARTED`、`AUTHENTICATOR_RECOVERED`、`RECOVERY_CODES_REGENERATED`、`SECURITY_SETTINGS_CHANGED`。原安全事务绑定原已验证地址/联系修订与各自不可变IAM事实，worker只投递该历史通知，不重做原USER今天的认证。没有扩大18列claim、私有FILE、角色权限、收件人输入或模板协议；这些通知不持有验证码密文，也不能发放认证或恢复能力。dispatcher与模板必须同时识别准确kind，未知类型及夹带验证秘密仍失败关闭，不能以数据库入队或模板单测代替真正经过worker的投递。各自真实Maildir、worker停止/重启、停用USER后的历史投递及秘密排除证据由[009](./FEAT-IAM-009-security-governance.md)拥有，不继承为安装通道或完整S1验收。
+009在线治理消费五个封闭通知：`RECOVERY_STARTED`、`AUTHENTICATOR_RECOVERED`、`RECOVERY_CODES_REGENERATED`、`SECURITY_SETTINGS_CHANGED`、`AUTHENTICATOR_REPLACED`。原安全事务绑定原已验证地址/联系修订与各自不可变IAM事实，worker只投递该历史通知，不重做原USER今天的认证。没有扩大18列claim、私有FILE、角色权限、收件人输入或模板协议；这些通知不持有验证码密文，也不能发放认证或恢复能力。dispatcher与模板必须同时识别准确kind，未知类型及夹带验证秘密仍失败关闭，不能以数据库入队或模板单测代替真正经过worker的投递。各自真实Maildir、worker停止/重启、停用USER后的历史投递及秘密排除证据由[009](./FEAT-IAM-009-security-governance.md)拥有，不继承为安装通道或完整S1验收。
 
 #### 投递、重试与事实
 

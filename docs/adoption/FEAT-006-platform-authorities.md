@@ -702,8 +702,7 @@ ceremonies to retain an immutable, explicit purpose in the original row and
 private lookup. `REUSE` its shared attempt budgets, closed predecessor proof,
 transaction locks and deferred completion checks; `REJECT` inferring authority
 from a shared next-step string, a missing purpose default, a client selector or
-a factor-bound flag. Its actual executable supplies the retained recovery
-fixture and is the sole current development upgrade predecessor. The earlier
+a factor-bound flag. The earlier
 fixed `f5cec0e132ad18900d9a5a5629eae04fda4817f1` is `REFERENCE` for the completed
 original LOGIN experiment, not an additional standing upgrade path. Classifying those exact original
 ceremonies does not issue a first-enrollment capability or authorize a release
@@ -712,7 +711,7 @@ upgrade, and no installation/UX worktree or external acceptance is imported.
 For IAM/011's pre-v1 test-window replacement, fixed
 `09fac9135af99da3273d31c2f9b3e26d6aacfdc5` is the locally verified, pushed
 rollback point. `ADAPT` the original
-authority-process owner to one actual IAM41 predecessor, preserving current
+authority-process owner to one fixed development predecessor, preserving current
 Account/credential/Session/recovery/mail/outbox facts, rollback and restart.
 `REUSE` its real source-built product declaration advance as a current policy
 non-expansion/closed-Deny check, independent of the discarded IAM21 wrapper.
@@ -722,6 +721,16 @@ database identities, multi-tenant PaaS/Operation/Audit and failure gates.
 helpers, optional predecessor switches or routine-SKIP compatibility matrix.
 This rejects redundant test paths, not the existing published Audit encoding
 or installation consumer contracts; their owners retain those real boundaries.
+
+The normal replacement window `REUSE`s fixed
+`a97a8a0c422d8e9d2c8cadb85f74c61c815318c6`'s actual IAM43 migrator and runtime
+as the sole retained-data source. `ADAPT` the same process gate for preserved
+settings-qualified Sessions/challenges, original recovery completion and a
+new TOTP_REPLACE based on the actual old factor/batch. `REJECT` keeping IAM41
+as a parallel path, carrying its missing-qualification expectation forward,
+or manufacturing positive retained factors/permissions with direct SQL.
+Current-shape replay, failure atomicity and immutable historical proof remain;
+this source-window change does not authorize a signed release upgrade.
 
 For S2c's Account settings notification, fixed
 `6f05745636f3dd31fbc84591e839e332c7cd57e8` is `REUSE` for the original
@@ -831,9 +840,7 @@ codec and transaction/outbox owner. It `ADAPT`s the existing LOGIN proof and
 factor transition into a distinct two-stage recovery, rather than treating a
 saved code as a Session or replaying ordinary first enrollment. Recovery
 metadata is separately observable; secret-response replay, automatic budget
-refund and implicit offline recovery authority are `REJECT`. The exact IAM37
-binary/migrator is the retained-data predecessor for its actual factors,
-consumption, challenges and Session facts. No older unpublished schema ladder,
+refund and implicit offline recovery authority are `REJECT`. No older unpublished schema ladder,
 foreign worktree, inherited CI result or signed release compatibility is
 adopted. Fixed `c13f6d11db8055b660c18731a427594d265ff9b2`'s pure recovery
 codec is `REUSE`; it is not evidence of a completed recovery transaction.
@@ -845,7 +852,12 @@ transaction/outbox owners. Its enrollment lifecycle and exact same-Session
 StepUp are `ADAPT`: the old ACTIVE factor and saved-code batch remain usable
 until the new factor is confirmed atomically. The new pending factor retains
 the consumed operation proof's original deadline and exact source links;
-it does not receive a renewed authentication window. The fixed SQL and
+it does not receive a renewed authentication window. The same donor's
+saved-code recovery transaction is `ADAPT` only to retire an unfinished
+normal replacement atomically with the proven recovery, preserving the
+single pending slot and immutable consumed-proof history. Preparation must
+not deny an existing recovery path; partial cancellation is not a recovery.
+The fixed SQL and
 use-case lock/validation paths are `REFERENCE` for that adaptation, not
 evidence that replacement already works. Reusing lost-factor recovery's
 early revocation, direct factor DML, a transferable permit or administrator
@@ -879,7 +891,7 @@ permission to change an installed release profile.
 | Fixed source / slice | Decision | Rationale |
 | --- | --- | --- |
 | Matrix `644fff09446fc8ffb003cc53cf2fb55d4f58828a`, `authority/password.go` and its current tests | `REUSE` the strict versioned Argon2id verifier, salts and redacted secret handling; `ADAPT` new-password rules separately | Account rules must not change hashing cost or reinterpret old password bytes. Existing byte-count/category rules are current behavior, not evidence that account settings, history or a blocklist exist. |
-| Matrix `7cf857bba48eb5d7da487162c43e8f52534db133` (IAM32), original Login/ChangePassword, PostgreSQL adapter and `000001_authority`; byte-identical in those owners to fixed `04041d2d` | `REUSE` strict realm, credential generations, original mutation/outbox and locks; `ADAPT` committed bounded reservations and atomic final consumption; `REJECT` bare hash lookup and no-attempt mutation overloads | The source still runs slow verification in its transaction and callback authentication errors roll back. Moving only the hash is unsafe: a later mutation must consume the original attempt/generation and recheck locked identity versions. IAM32's actual executable is the selected retained-data predecessor; it replaces an ever-growing unpublished schema chain, not a release compatibility claim. |
+| Matrix `7cf857bba48eb5d7da487162c43e8f52534db133` (IAM32), original Login/ChangePassword, PostgreSQL adapter and `000001_authority`; byte-identical in those owners to fixed `04041d2d` | `REUSE` strict realm, credential generations, original mutation/outbox and locks; `ADAPT` committed bounded reservations and atomic final consumption; `REJECT` bare hash lookup and no-attempt mutation overloads | The source still runs slow verification in its transaction and callback authentication errors roll back. Moving only the hash is unsafe: a later mutation must consume the original attempt/generation and recheck locked identity versions. This fixed code adoption does not add a standing retained-data path or release compatibility claim. |
 | Same fixed source, `authentication.go`, `management.go`, `service.go`, `lookup_login`, `user_credentials` and existing password mutation functions | `REUSE` canonical realm resolution, real credential generations and transaction/outbox ownership; `ADAPT` durable authentication outcomes and bounded admission | Current authentication errors roll back the workflow transaction. Failure counts need committed outcomes, while cross-replica in-flight attempts must not bypass a post-hash counter. Existing changed_at is real password history metadata, not a collection of prior password verifiers. |
 | Same fixed source, `issue_session`, `lookup_session`, IAM process/HTTP entry and `processhttp/server.go` | `REUSE` database time, absolute expiry and current qualification; `REFERENCE` process limits only | HTTP connection timeouts and a default eight-hour Session do not provide per-account settings, idle expiry, crypto-work admission or cluster-wide abuse protection. Product/edge source addresses require their actual consumer authority, not arbitrary forwarded headers. |
 | Product reference `1ad6884ff1f844429b477d5578a039ec809211d7`, `04-user-guide/users/login-and-operation-protection.md` | `REFERENCE` configurable password, expiry, history and login restrictions; `REJECT` unsupported implementation/default inference | Product prose supplies requirements, not proof of persisted counters, current MFA or a trusted network source. Do not infer root/platform credential control from tenant administrator status. |

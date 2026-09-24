@@ -127,7 +127,7 @@ func TestEnrollmentChallengeObservationCannotAdvancePasswordStageOrExtendBinding
 	}
 	verifiedAt := expires.Add(-time.Minute)
 	contact.State, contact.ResourceVersion, contact.Email, contact.VerifiedAt = "VERIFIED", 1, "first@example.invalid", &verifiedAt
-	value.Enrollment = &TOTPEnrollment{APIVersion: APIVersion, Kind: "TOTPEnrollment", ID: "first-factor", RequestID: "first-intent",
+	value.Enrollment = &TOTPEnrollment{APIVersion: APIVersion, Kind: "TOTPEnrollment", ID: "first-factor", RequestID: "first-intent", Purpose: "INITIAL",
 		FactorRevision: 1, State: "PENDING", CreatedAt: expires.Add(-45 * time.Second), ExpiresAt: expires}
 	if ValidateEnrollmentChallengeState(value) != nil {
 		t.Fatal("remaining absolute challenge window rejected")
@@ -143,6 +143,7 @@ func TestEnrollmentChallengeObservationCannotAdvancePasswordStageOrExtendBinding
 			v.NotificationContact.VerifiedAt = &late
 		},
 		func(v *EnrollmentChallengeState) { v.Enrollment.FactorRevision = 2 },
+		func(v *EnrollmentChallengeState) { v.Enrollment.Purpose = "REPLACEMENT" },
 		func(v *EnrollmentChallengeState) { v.Enrollment.ExpiresAt = v.Enrollment.ExpiresAt.Add(time.Second) },
 		func(v *EnrollmentChallengeState) { v.Enrollment.ExpiresAt = v.Enrollment.ExpiresAt.Add(-time.Second) },
 		func(v *EnrollmentChallengeState) { v.Enrollment.CreatedAt = v.Enrollment.ExpiresAt },

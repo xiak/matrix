@@ -39,7 +39,7 @@ func TestSelfServiceFactsRequireTheActualTenantUser(t *testing.T) {
 		action Action
 		target TargetKind
 	}{{ActionIAMOtherSessionsRevoked, TargetPrincipal}, {ActionIAMNotificationContactVerificationStarted, TargetUser}, {ActionIAMNotificationContactVerified, TargetUser}, {ActionIAMAuthenticatorBound, TargetPrincipal},
-		{ActionIAMAuthenticatorRecoveryStarted, TargetPrincipal}, {ActionIAMAuthenticatorRecovered, TargetPrincipal}, {ActionIAMRecoveryCodesRegenerated, TargetPrincipal}} {
+		{ActionIAMAuthenticatorReplaced, TargetPrincipal}, {ActionIAMAuthenticatorRecoveryStarted, TargetPrincipal}, {ActionIAMAuthenticatorRecovered, TargetPrincipal}, {ActionIAMRecoveryCodesRegenerated, TargetPrincipal}} {
 		t.Run(string(contract.action), func(t *testing.T) {
 			valid := Event{APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-others", TenantID: "account-one",
 				Actor: ActorReference{Type: ActorUser, ID: "user-one"}, Action: contract.action,
@@ -256,7 +256,7 @@ func TestAuditActionCatalogIsClosedAndSourceBound(t *testing.T) {
 		if contract.UserActorRequired {
 			event.Actor.Type = ActorUser
 		}
-		if action == ActionIAMOtherSessionsRevoked || action == ActionIAMNotificationContactVerificationStarted || action == ActionIAMNotificationContactVerified || action == ActionIAMAuthenticatorBound || action == ActionIAMAuthenticatorRecoveryStarted || action == ActionIAMAuthenticatorRecovered || action == ActionIAMRecoveryCodesRegenerated {
+		if action == ActionIAMOtherSessionsRevoked || action == ActionIAMNotificationContactVerificationStarted || action == ActionIAMNotificationContactVerified || action == ActionIAMAuthenticatorBound || action == ActionIAMAuthenticatorReplaced || action == ActionIAMAuthenticatorRecoveryStarted || action == ActionIAMAuthenticatorRecovered || action == ActionIAMRecoveryCodesRegenerated {
 			event.Target.ID = string(event.Actor.ID)
 		}
 		if contract.RoleActorRequired {

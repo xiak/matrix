@@ -281,6 +281,7 @@ type TOTPEnrollment struct {
 	Kind           string     `json:"kind"`
 	ID             string     `json:"id"`
 	RequestID      string     `json:"requestId"`
+	Purpose        string     `json:"purpose"`
 	FactorRevision uint64     `json:"factorRevision"`
 	State          string     `json:"state"`
 	CreatedAt      time.Time  `json:"createdAt"`
@@ -291,6 +292,14 @@ type TOTPEnrollment struct {
 type StartTOTPEnrollmentRequest struct {
 	RequestID              string `json:"requestId"`
 	Password               Secret `json:"password"`
+	ExpectedFactorRevision uint64 `json:"expectedFactorRevision"`
+}
+
+// Replacement is held by the original effective login Session and an exact
+// TOTP_REPLACE proof. Neither ID can select another identity or act as a bearer.
+type StartTOTPReplacementRequest struct {
+	RequestID              string `json:"requestId"`
+	StepUpID               string `json:"stepUpId"`
 	ExpectedFactorRevision uint64 `json:"expectedFactorRevision"`
 }
 
@@ -363,6 +372,7 @@ type StepUpOperation string
 const (
 	StepUpRegenerateRecoveryCodes StepUpOperation = "RECOVERY_CODES_REGENERATE"
 	StepUpUpdateSecuritySettings  StepUpOperation = "SECURITY_SETTINGS_UPDATE"
+	StepUpReplaceTOTP             StepUpOperation = "TOTP_REPLACE"
 )
 
 // StepUp is non-secret metadata for one operation bound to its original login

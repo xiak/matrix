@@ -59,6 +59,10 @@ jobs:
             minutes: 20
           - lane: authority-step-up
             minutes: 20
+          - lane: authority-replacement
+            minutes: 20
+          - lane: authority-replacement-qualification
+            minutes: 15
           - lane: authority-recovery-window
             minutes: 30
     timeout-minutes: ${{ matrix.minutes }}
@@ -110,6 +114,12 @@ jobs:
               ;;
             authority-step-up)
               databases=(matrix_iam_step_up_ci matrix_iam_security_settings_ci matrix_iam_settings_races_ci)
+              ;;
+            authority-replacement)
+              databases=(matrix_iam_totp_replacement_ci matrix_iam_totp_replacement_security_ci matrix_iam_totp_replacement_settings_ci matrix_iam_totp_replacement_mutations_ci)
+              ;;
+            authority-replacement-qualification)
+              databases=(matrix_iam_totp_replacement_login_ci matrix_iam_totp_replacement_expiry_ci matrix_iam_totp_replacement_qualifications_ci)
               ;;
             *) exit 1 ;;
           esac
@@ -163,7 +173,7 @@ jobs:
           while IFS= read -r iam_test; do
             [[ "$iam_test" =~ ^Test[A-Za-z0-9_]+$ ]] || continue
             case "$iam_test" in
-              TestIAMRoleAndManagementReferencesPostgres|TestIAMOwnSessionPostgres|TestIAMOwnSessionExpiryPostgres|TestIAMOwnSessionBulkPostgres|TestIAMPasswordAttemptsPostgres|TestIAMTOTPCustodyPostgres|TestIAMTOTPEnrollmentPostgres|TestIAMTOTPRecoveryExhaustionPostgres|TestIAMStepUpPostgres|TestIAMSecuritySettingsPostgres|TestIAMSecuritySettingsRacesPostgres|TestIAMTOTPBackupSnapshotPostgres|TestIAMNotificationContactPostgres) continue ;;
+              TestIAMRoleAndManagementReferencesPostgres|TestIAMOwnSessionPostgres|TestIAMOwnSessionExpiryPostgres|TestIAMOwnSessionBulkPostgres|TestIAMPasswordAttemptsPostgres|TestIAMTOTPCustodyPostgres|TestIAMTOTPEnrollmentPostgres|TestIAMTOTPRecoveryExhaustionPostgres|TestIAMStepUpPostgres|TestIAMSecuritySettingsPostgres|TestIAMSecuritySettingsRacesPostgres|TestIAMTOTPReplacementPostgres|TestIAMTOTPReplacementSecurityPostgres|TestIAMTOTPReplacementSettingsPostgres|TestIAMTOTPReplacementMutationsPostgres|TestIAMTOTPReplacementLoginPostgres|TestIAMTOTPReplacementExpiryPostgres|TestIAMTOTPReplacementQualificationsPostgres|TestIAMTOTPBackupSnapshotPostgres|TestIAMNotificationContactPostgres) continue ;;
             esac
             printf 'IAM fixture: %s\n' "$iam_test"
             time go test -race -p 1 -count=1 ./app/service/iam/internal/integration -run "^${iam_test}$"
@@ -209,6 +219,35 @@ jobs:
         run: |
           time go test -race -p 1 -count=1 ./app/service/iam/internal/integration \
             -run '^TestIAM(StepUp|SecuritySettings|SecuritySettingsRaces)Postgres$'
+
+      - name: Normal authenticator replacement and ordered security mutations
+        if: matrix.lane == 'authority-replacement'
+        env:
+          MATRIX_IAM_TOTP_REPLACEMENT_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_replacement_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_TOTP_REPLACEMENT_SECURITY_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_replacement_security_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_TOTP_REPLACEMENT_SETTINGS_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_replacement_settings_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_TOTP_REPLACEMENT_MUTATIONS_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_replacement_mutations_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+        run: |
+          time go test -race -p 1 -count=1 ./app/service/iam/internal/integration \
+            -run '^TestIAMTOTPReplacement(Security)?Postgres$'
+          time go test -race -p 1 -count=1 ./app/service/iam/internal/integration \
+            -run '^TestIAMTOTPReplacementSettingsPostgres$'
+          time go test -race -p 1 -count=1 ./app/service/iam/internal/integration \
+            -run '^TestIAMTOTPReplacementMutationsPostgres$'
+
+      - name: Replacement login, original deadline, and identity qualifications
+        if: matrix.lane == 'authority-replacement-qualification'
+        env:
+          MATRIX_IAM_TOTP_REPLACEMENT_LOGIN_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_replacement_login_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_TOTP_REPLACEMENT_EXPIRY_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_replacement_expiry_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_TOTP_REPLACEMENT_QUALIFICATIONS_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_replacement_qualifications_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+        run: |
+          time go test -race -p 1 -count=1 ./app/service/iam/internal/integration \
+            -run '^TestIAMTOTPReplacementLoginPostgres$'
+          time go test -race -p 1 -count=1 ./app/service/iam/internal/integration \
+            -run '^TestIAMTOTPReplacementExpiryPostgres$'
+          time go test -race -p 1 -count=1 ./app/service/iam/internal/integration \
+            -run '^TestIAMTOTPReplacementQualificationsPostgres$'
 
       - name: Saved-code exhaustion across actual authentication windows
         if: matrix.lane == 'authority-recovery-window'

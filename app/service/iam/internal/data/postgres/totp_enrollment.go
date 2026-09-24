@@ -123,7 +123,36 @@ func (value *transaction) StartTOTPEnrollment(ctx context.Context, mutation iden
 		return identityaccess.TOTPEnrollmentStartResult{}, identityaccess.ErrUnavailable
 	}
 	enrollment, err := decodeTOTPEnrollment(wire.Enrollment)
-	if err != nil || enrollment.RequestID != mutation.RequestID || enrollment.FactorRevision != mutation.ExpectedRevision ||
+	if err != nil || enrollment.Purpose != "INITIAL" || enrollment.RequestID != mutation.RequestID || enrollment.FactorRevision != mutation.ExpectedRevision ||
+		(wire.Outcome == "APPLIED" && (enrollment.ID != mutation.FactorID || enrollment.State != "PENDING")) {
+		return identityaccess.TOTPEnrollmentStartResult{}, identityaccess.ErrUnavailable
+	}
+	return identityaccess.TOTPEnrollmentStartResult{Outcome: wire.Outcome, Enrollment: enrollment}, nil
+}
+
+func (value *transaction) StartTOTPReplacement(ctx context.Context, mutation identityaccess.TOTPReplacementStart) (identityaccess.TOTPEnrollmentStartResult, error) {
+	if mutation.Sealed.FormatVersion != 1 || iamv1.ValidateStartTOTPReplacementRequest(mutation.Request) != nil ||
+		iamv1.ValidateID("factorId", mutation.FactorID) != nil {
+		return identityaccess.TOTPEnrollmentStartResult{}, identityaccess.ErrInvalidArgument
+	}
+	var encoded []byte
+	err := value.tx.QueryRow(ctx, "SELECT iam.start_totp_replacement($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
+		mutation.Session.AccountID, mutation.Session.PrincipalID, mutation.Session.ID, mutation.Request.StepUpID,
+		mutation.Request.RequestID, mutation.Request.ExpectedFactorRevision, mutation.FactorID,
+		mutation.Scope.InstallationID, mutation.Scope.BootstrapDigest, mutation.Sealed.KeyID, mutation.Sealed.Nonce, mutation.Sealed.Ciphertext).Scan(&encoded)
+	if err != nil {
+		return identityaccess.TOTPEnrollmentStartResult{}, mapTOTPEnrollmentError("start TOTP replacement", err)
+	}
+	var wire struct {
+		Outcome    string          `json:"outcome"`
+		Enrollment json.RawMessage `json:"enrollment"`
+	}
+	if contractjson.DecodeObjectBytes(encoded, 3072, &wire) != nil || (wire.Outcome != "APPLIED" && wire.Outcome != "EQUAL_REPLAY") {
+		return identityaccess.TOTPEnrollmentStartResult{}, identityaccess.ErrUnavailable
+	}
+	enrollment, err := decodeTOTPEnrollment(wire.Enrollment)
+	if err != nil || enrollment.Purpose != "REPLACEMENT" || enrollment.RequestID != mutation.Request.RequestID ||
+		enrollment.FactorRevision != mutation.Request.ExpectedFactorRevision ||
 		(wire.Outcome == "APPLIED" && (enrollment.ID != mutation.FactorID || enrollment.State != "PENDING")) {
 		return identityaccess.TOTPEnrollmentStartResult{}, identityaccess.ErrUnavailable
 	}
@@ -153,8 +182,12 @@ func (value *transaction) enrollmentMetadata(ctx context.Context, query string, 
 
 func (value *transaction) ConfirmTOTPEnrollment(ctx context.Context, mutation identityaccess.TOTPBindingConfirmation) (iamv1.TOTPEnrollment, error) {
 	a := mutation.Attempt
-	if !((a.Purpose == "ENROLLMENT" && a.SessionID != "") || (a.Purpose == "INITIAL_ENROLLMENT" && a.SessionID == "")) || len(mutation.Codes) != 10 ||
-		mutation.AuditEvent.Action != auditv1.ActionIAMAuthenticatorBound ||
+	expectedAction := auditv1.ActionIAMAuthenticatorBound
+	if a.Purpose == "REPLACEMENT" {
+		expectedAction = auditv1.ActionIAMAuthenticatorReplaced
+	}
+	if !(((a.Purpose == "ENROLLMENT" || a.Purpose == "REPLACEMENT") && a.SessionID != "") || (a.Purpose == "INITIAL_ENROLLMENT" && a.SessionID == "")) || len(mutation.Codes) != 10 ||
+		mutation.AuditEvent.Action != expectedAction ||
 		auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil ||
 		string(mutation.AuditEvent.TenantID) != string(a.AccountID) || string(mutation.AuditEvent.Actor.ID) != string(a.UserID) {
 		return iamv1.TOTPEnrollment{}, identityaccess.ErrInvalidArgument

@@ -167,11 +167,11 @@ CREATE INDEX IF NOT EXISTS security_notifications_due ON iam.security_notificati
 -- constraints remain; an MFA notice carries no verification code envelope.
 ALTER TABLE iam.security_notifications DROP CONSTRAINT IF EXISTS security_notifications_kind_check;
 ALTER TABLE iam.security_notifications ADD CONSTRAINT security_notifications_kind_check
-    CHECK(kind IN ('ADDRESS_VERIFICATION','CONTACT_VERIFIED','AUTHENTICATOR_BOUND','RECOVERY_STARTED','AUTHENTICATOR_RECOVERED','RECOVERY_CODES_REGENERATED','SECURITY_SETTINGS_CHANGED'));
+    CHECK(kind IN ('ADDRESS_VERIFICATION','CONTACT_VERIFIED','AUTHENTICATOR_BOUND','AUTHENTICATOR_REPLACED','RECOVERY_STARTED','AUTHENTICATOR_RECOVERED','RECOVERY_CODES_REGENERATED','SECURITY_SETTINGS_CHANGED'));
 ALTER TABLE iam.security_notifications DROP CONSTRAINT IF EXISTS security_notifications_check2;
 ALTER TABLE iam.security_notifications ADD CONSTRAINT security_notifications_check2
     CHECK((kind='ADDRESS_VERIFICATION' AND contact_revision=0)
-        OR (kind IN ('CONTACT_VERIFIED','AUTHENTICATOR_BOUND','RECOVERY_STARTED','AUTHENTICATOR_RECOVERED','RECOVERY_CODES_REGENERATED','SECURITY_SETTINGS_CHANGED') AND contact_revision=1));
+        OR (kind IN ('CONTACT_VERIFIED','AUTHENTICATOR_BOUND','AUTHENTICATOR_REPLACED','RECOVERY_STARTED','AUTHENTICATOR_RECOVERED','RECOVERY_CODES_REGENERATED','SECURITY_SETTINGS_CHANGED') AND contact_revision=1));
 DROP TRIGGER IF EXISTS verify_security_settings_change ON iam.security_notifications;
 CREATE CONSTRAINT TRIGGER verify_security_settings_change AFTER INSERT OR UPDATE ON iam.security_notifications
     DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION iam.verify_security_settings_change();
@@ -609,7 +609,7 @@ BEGIN
                 WHERE n.tenant_id=candidate.tenant_id AND n.id=candidate.id;
             CONTINUE;
         END IF;
-        eligible:=candidate.kind IN ('CONTACT_VERIFIED','AUTHENTICATOR_BOUND','RECOVERY_STARTED','AUTHENTICATOR_RECOVERED','RECOVERY_CODES_REGENERATED','SECURITY_SETTINGS_CHANGED');
+        eligible:=candidate.kind IN ('CONTACT_VERIFIED','AUTHENTICATOR_BOUND','AUTHENTICATOR_REPLACED','RECOVERY_STARTED','AUTHENTICATOR_RECOVERED','RECOVERY_CODES_REGENERATED','SECURITY_SETTINGS_CHANGED');
         IF candidate.kind='ADDRESS_VERIFICATION' THEN
             SELECT EXISTS(SELECT 1 FROM iam.accounts a JOIN iam.principals p ON p.tenant_id=a.id
                 JOIN iam.user_credentials c ON (c.tenant_id,c.principal_id)=(p.tenant_id,p.id)

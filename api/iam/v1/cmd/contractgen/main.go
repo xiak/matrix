@@ -174,8 +174,9 @@ func buildPaths() object {
 		"/v1/auth/challenges/{challengeId}/notification-contact/verifications/{verificationId}:confirm": object{"post": mutationOperation(
 			"confirmChallengeNotificationContact", "Consume the original contact-possession code within its initial-enrollment challenge; no session or MFA bypass", "ConfirmChallengeNotificationContactVerificationRequest", "NotificationContactVerification", "200", []any{}, []any{openapi31.PathIDParameter("challengeId"), openapi31.PathIDParameter("verificationId")},
 		)},
-		"/v1/auth/authenticators":   object{"get": readOperation("getAuthenticatorState", "Read this actual login USER's persisted factor state; no inferred settings or permissions", "AuthenticatorState", nil, nil)},
-		"/v1/auth/totp/enrollments": object{"post": mutationOperation("startTOTPEnrollment", "Reauthenticate the current password and start first TOTP enrollment; only APPLIED discloses provisioning", "StartTOTPEnrollmentRequest", "StartTOTPEnrollmentResponse", "200", nil, nil)},
+		"/v1/auth/authenticators":           object{"get": readOperation("getAuthenticatorState", "Read this actual login USER's persisted factor state; no inferred settings or permissions", "AuthenticatorState", nil, nil)},
+		"/v1/auth/totp/enrollments":         object{"post": mutationOperation("startTOTPEnrollment", "Reauthenticate the current password and start first TOTP enrollment; only APPLIED discloses provisioning", "StartTOTPEnrollmentRequest", "StartTOTPEnrollmentResponse", "200", nil, nil)},
+		"/v1/auth/totp/enrollments:replace": object{"post": mutationOperation("startTOTPReplacement", "Consume the original same-Session TOTP_REPLACE proof and prepare a new pending factor within its original deadline; keep the old factor and batch until confirmation; provisioning is returned once", "StartTOTPReplacementRequest", "StartTOTPEnrollmentResponse", "200", nil, nil)},
 		"/v1/auth/totp/enrollments/{enrollmentId}": object{
 			"get":    readOperation("getTOTPEnrollment", "Read original enrollment metadata, never its seed or recovery codes", "TOTPEnrollment", nil, []any{openapi31.PathIDParameter("enrollmentId")}),
 			"delete": readOperation("cancelTOTPEnrollment", "Irreversibly cancel a pending enrollment, never an already confirmed binding; no body", "TOTPEnrollment", nil, []any{openapi31.PathIDParameter("enrollmentId")}),
@@ -532,6 +533,7 @@ func structContracts() map[string]reflect.Type {
 		"TOTPEnrollment":                                openapi31.StructType[iamv1.TOTPEnrollment](),
 		"TOTPProvisioning":                              openapi31.StructType[iamv1.TOTPProvisioning](),
 		"StartTOTPEnrollmentRequest":                    openapi31.StructType[iamv1.StartTOTPEnrollmentRequest](),
+		"StartTOTPReplacementRequest":                   openapi31.StructType[iamv1.StartTOTPReplacementRequest](),
 		"StartTOTPEnrollmentResponse":                   openapi31.StructType[iamv1.StartTOTPEnrollmentResponse](),
 		"ConfirmTOTPEnrollmentRequest":                  openapi31.StructType[iamv1.ConfirmTOTPEnrollmentRequest](),
 		"ConfirmTOTPEnrollmentResponse":                 openapi31.StructType[iamv1.ConfirmTOTPEnrollmentResponse](),
@@ -649,6 +651,9 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 		return object{"type": "integer", "minimum": 1, "maximum": uint64(9007199254740990)}
 	}
 	if jsonName == "factorRevision" || jsonName == "expectedFactorRevision" {
+		if owner == "StartTOTPReplacementRequest" {
+			return object{"type": "integer", "minimum": 2, "maximum": uint64(9007199254740990)}
+		}
 		if owner == "StepUp" || owner == "StartStepUpRequest" || owner == "RegenerateRecoveryCodesRequest" || owner == "RecoveryCodeRegeneration" {
 			return object{"type": "integer", "minimum": 2, "maximum": uint64(9007199254740991)}
 		}
@@ -664,11 +669,14 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 	if owner == "TOTPEnrollment" && jsonName == "state" {
 		return object{"enum": []string{"PENDING", "CONFIRMED", "CANCELLED", "EXPIRED"}}
 	}
+	if owner == "TOTPEnrollment" && jsonName == "purpose" {
+		return object{"enum": []string{"INITIAL", "REPLACEMENT"}}
+	}
 	if owner == "AuthenticatorRecovery" && jsonName == "state" {
 		return object{"enum": []string{"STARTED", "COMPLETED", "SUPERSEDED", "EXPIRED"}}
 	}
 	if (owner == "StepUp" || owner == "StartStepUpRequest") && jsonName == "operation" {
-		return object{"enum": []string{string(iamv1.StepUpRegenerateRecoveryCodes), string(iamv1.StepUpUpdateSecuritySettings)}}
+		return object{"enum": []string{string(iamv1.StepUpRegenerateRecoveryCodes), string(iamv1.StepUpUpdateSecuritySettings), string(iamv1.StepUpReplaceTOTP)}}
 	}
 	if owner == "StepUp" && jsonName == "state" {
 		return object{"enum": []string{"PENDING", "PROVED", "CONSUMED", "EXPIRED"}}
@@ -1026,6 +1034,7 @@ func applySemanticOverlays(schemas object) {
 	for _, name := range []string{"StepUp", "StartStepUpRequest"} {
 		schemas[name].(object)["allOf"] = []any{object{"oneOf": []any{
 			object{"properties": object{"operation": object{"const": string(iamv1.StepUpRegenerateRecoveryCodes)}, "securitySettings": false}},
+			object{"properties": object{"operation": object{"const": string(iamv1.StepUpReplaceTOTP)}, "securitySettings": false, "expectedFactorRevision": object{"maximum": uint64(9007199254740990)}}},
 			object{"required": []string{"securitySettings"}, "properties": object{"operation": object{"const": string(iamv1.StepUpUpdateSecuritySettings)}, "securitySettings": openapi31.Ref("SecuritySettingsUpdateIntent")}},
 		}}}
 	}
@@ -1056,11 +1065,11 @@ func applySemanticOverlays(schemas object) {
 		object{"required": []string{"notificationContact", "enrollment"}, "properties": object{
 			"challenge":           object{"properties": object{"nextStep": object{"const": "ENROLLMENT"}}},
 			"notificationContact": object{"type": "object", "properties": object{"state": object{"const": "VERIFIED"}}},
-			"enrollment":          object{"type": "object", "properties": object{"state": object{"const": "PENDING"}, "factorRevision": object{"const": 1}}},
+			"enrollment":          object{"type": "object", "properties": object{"purpose": object{"const": "INITIAL"}, "state": object{"const": "PENDING"}, "factorRevision": object{"const": 1}}},
 		}},
 	}
 	for _, name := range []string{"InspectEnrollmentChallengeRequest", "StartChallengeTOTPEnrollmentRequest", "StartChallengeNotificationContactVerificationRequest", "ConfirmChallengeNotificationContactVerificationRequest"} {
-		schemas[name].(object)["description"] = "Only the current ENROLLMENT challenge credential; never a login Session or caller identity selector. Contract only; corresponding runtime routes are not registered in this slice."
+		schemas[name].(object)["description"] = "Only the current ENROLLMENT challenge credential; never a login Session or caller identity selector."
 	}
 	schemas["AuthenticatorRecovery"].(object)["description"] = "Non-secret observation of one purpose-limited recovery. Authoritative validation enforces at most five minutes and completion before expiry; metadata never conveys recovery authority."
 	schemas["AuthenticatorRecovery"].(object)["oneOf"] = []any{
@@ -1079,6 +1088,12 @@ func applySemanticOverlays(schemas object) {
 		object{"properties": object{"state": object{"const": "PENDING"}, "completedAt": false}},
 		object{"required": []string{"completedAt"}, "properties": object{"state": object{"enum": []string{"CONFIRMED", "CANCELLED", "EXPIRED"}}, "completedAt": object{"type": "string"}}},
 	}
+	schemas["TOTPEnrollment"].(object)["description"] = "Non-secret observation of initial binding or same-Session replacement. Replacement retains the original operation proof's absolute deadline (at most two minutes); the old factor and batch remain effective until confirmation. Metadata is never authentication authority."
+	schemas["TOTPEnrollment"].(object)["allOf"] = []any{object{"oneOf": []any{
+		object{"properties": object{"purpose": object{"const": "INITIAL"}}},
+		object{"properties": object{"purpose": object{"const": "REPLACEMENT"}, "factorRevision": object{"minimum": 2}}},
+	}}}
+	schemas["StartTOTPReplacementRequest"].(object)["description"] = "The original command and bound factor revision must match a TOTP_REPLACE proof held by the current PASSWORD_TOTP Session. No subject, account, seed, password, Session selector or transferable proof credential."
 	schemas["ConfirmTOTPEnrollmentResponse"].(object)["properties"].(object)["enrollment"] = object{"allOf": []any{openapi31.Ref("TOTPEnrollment"), object{"properties": object{"state": object{"const": "CONFIRMED"}}}}}
 	schemas["AuthenticatorState"].(object)["oneOf"] = []any{
 		object{"properties": object{"enrollmentState": object{"const": "NEVER_BOUND"}, "factorRevision": object{"const": 1}, "factorId": false}},

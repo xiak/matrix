@@ -564,6 +564,16 @@ func EncodeVerifyStepUpRequest(value VerifyStepUpRequest) ([]byte, error) {
 	}{value.RequestID, value.Password.reveal(), value.Code.reveal()})
 }
 
+func (value *StartTOTPReplacementRequest) UnmarshalJSON(source []byte) error {
+	type wire StartTOTPReplacementRequest
+	var decoded wire
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil || ValidateStartTOTPReplacementRequest(StartTOTPReplacementRequest(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = StartTOTPReplacementRequest(decoded)
+	return nil
+}
+
 func (value *RegenerateRecoveryCodesRequest) UnmarshalJSON(source []byte) error {
 	type wire RegenerateRecoveryCodesRequest
 	var decoded wire

@@ -199,7 +199,7 @@ func TestDispatchFailureNeverInventsAnUnsentOrSuccessfulResult(t *testing.T) {
 }
 
 func TestDispatchHistoricalNoticeCannotCarryVerificationSecret(t *testing.T) {
-	for _, kind := range []authority.SecurityMailKind{authority.MailContactVerified, authority.MailAuthenticatorBound, authority.MailRecoveryStarted, authority.MailAuthenticatorRecovered,
+	for _, kind := range []authority.SecurityMailKind{authority.MailContactVerified, authority.MailAuthenticatorBound, authority.MailAuthenticatorReplaced, authority.MailRecoveryStarted, authority.MailAuthenticatorRecovered,
 		authority.MailRecoveryCodesRegenerated, authority.MailSecuritySettingsChanged} {
 		t.Run(string(kind), func(t *testing.T) {
 			config, repository, _ := dispatchFixture(t)

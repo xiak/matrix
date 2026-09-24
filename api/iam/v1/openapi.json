@@ -12365,7 +12365,7 @@
       },
       "ConfirmChallengeNotificationContactVerificationRequest": {
         "additionalProperties": false,
-        "description": "Only the current ENROLLMENT challenge credential; never a login Session or caller identity selector. Contract only; corresponding runtime routes are not registered in this slice.",
+        "description": "Only the current ENROLLMENT challenge credential; never a login Session or caller identity selector.",
         "properties": {
           "challengeCredential": {
             "$ref": "#/components/schemas/Secret",
@@ -13068,6 +13068,9 @@
                   "factorRevision": {
                     "const": 1
                   },
+                  "purpose": {
+                    "const": "INITIAL"
+                  },
                   "state": {
                     "const": "PENDING"
                   }
@@ -13526,7 +13529,7 @@
       },
       "InspectEnrollmentChallengeRequest": {
         "additionalProperties": false,
-        "description": "Only the current ENROLLMENT challenge credential; never a login Session or caller identity selector. Contract only; corresponding runtime routes are not registered in this slice.",
+        "description": "Only the current ENROLLMENT challenge credential; never a login Session or caller identity selector.",
         "properties": {
           "challengeCredential": {
             "$ref": "#/components/schemas/Secret",
@@ -22456,7 +22459,7 @@
       },
       "StartChallengeNotificationContactVerificationRequest": {
         "additionalProperties": false,
-        "description": "Only the current ENROLLMENT challenge credential; never a login Session or caller identity selector. Contract only; corresponding runtime routes are not registered in this slice.",
+        "description": "Only the current ENROLLMENT challenge credential; never a login Session or caller identity selector.",
         "properties": {
           "challengeCredential": {
             "$ref": "#/components/schemas/Secret",
@@ -22481,7 +22484,7 @@
       },
       "StartChallengeTOTPEnrollmentRequest": {
         "additionalProperties": false,
-        "description": "Only the current ENROLLMENT challenge credential; never a login Session or caller identity selector. Contract only; corresponding runtime routes are not registered in this slice.",
+        "description": "Only the current ENROLLMENT challenge credential; never a login Session or caller identity selector.",
         "properties": {
           "challengeCredential": {
             "$ref": "#/components/schemas/Secret",
@@ -22536,6 +22539,17 @@
               },
               {
                 "properties": {
+                  "expectedFactorRevision": {
+                    "maximum": 9007199254740990
+                  },
+                  "operation": {
+                    "const": "TOTP_REPLACE"
+                  },
+                  "securitySettings": false
+                }
+              },
+              {
+                "properties": {
                   "operation": {
                     "const": "SECURITY_SETTINGS_UPDATE"
                   },
@@ -22559,7 +22573,8 @@
           "operation": {
             "enum": [
               "RECOVERY_CODES_REGENERATE",
-              "SECURITY_SETTINGS_UPDATE"
+              "SECURITY_SETTINGS_UPDATE",
+              "TOTP_REPLACE"
             ]
           },
           "requestId": {
@@ -22651,6 +22666,29 @@
         ],
         "type": "object"
       },
+      "StartTOTPReplacementRequest": {
+        "additionalProperties": false,
+        "description": "The original command and bound factor revision must match a TOTP_REPLACE proof held by the current PASSWORD_TOTP Session. No subject, account, seed, password, Session selector or transferable proof credential.",
+        "properties": {
+          "expectedFactorRevision": {
+            "maximum": 9007199254740990,
+            "minimum": 2,
+            "type": "integer"
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "stepUpId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "expectedFactorRevision",
+          "requestId",
+          "stepUpId"
+        ],
+        "type": "object"
+      },
       "StepUp": {
         "additionalProperties": false,
         "allOf": [
@@ -22660,6 +22698,17 @@
                 "properties": {
                   "operation": {
                     "const": "RECOVERY_CODES_REGENERATE"
+                  },
+                  "securitySettings": false
+                }
+              },
+              {
+                "properties": {
+                  "expectedFactorRevision": {
+                    "maximum": 9007199254740990
+                  },
+                  "operation": {
+                    "const": "TOTP_REPLACE"
                   },
                   "securitySettings": false
                 }
@@ -22761,7 +22810,8 @@
           "operation": {
             "enum": [
               "RECOVERY_CODES_REGENERATE",
-              "SECURITY_SETTINGS_UPDATE"
+              "SECURITY_SETTINGS_UPDATE",
+              "TOTP_REPLACE"
             ]
           },
           "provedAt": {
@@ -22857,6 +22907,30 @@
       },
       "TOTPEnrollment": {
         "additionalProperties": false,
+        "allOf": [
+          {
+            "oneOf": [
+              {
+                "properties": {
+                  "purpose": {
+                    "const": "INITIAL"
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "factorRevision": {
+                    "minimum": 2
+                  },
+                  "purpose": {
+                    "const": "REPLACEMENT"
+                  }
+                }
+              }
+            ]
+          }
+        ],
+        "description": "Non-secret observation of initial binding or same-Session replacement. Replacement retains the original operation proof's absolute deadline (at most two minutes); the old factor and batch remain effective until confirmation. Metadata is never authentication authority.",
         "oneOf": [
           {
             "properties": {
@@ -22908,6 +22982,12 @@
           "kind": {
             "type": "string"
           },
+          "purpose": {
+            "enum": [
+              "INITIAL",
+              "REPLACEMENT"
+            ]
+          },
           "requestId": {
             "$ref": "#/components/schemas/ID"
           },
@@ -22927,6 +23007,7 @@
           "factorRevision",
           "id",
           "kind",
+          "purpose",
           "requestId",
           "state"
         ],
@@ -26263,6 +26344,61 @@
           }
         },
         "summary": "Commit binding, OTP consumption, recovery batch, notice and session revocation; return codes once then reauthenticate"
+      }
+    },
+    "/v1/auth/totp/enrollments:replace": {
+      "post": {
+        "operationId": "startTOTPReplacement",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartTOTPReplacementRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartTOTPEnrollmentResponse"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Consume the original same-Session TOTP_REPLACE proof and prepare a new pending factor within its original deadline; keep the old factor and batch until confirmation; provisioning is returned once"
       }
     },
     "/v1/authorization-profiles": {

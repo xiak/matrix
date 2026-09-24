@@ -156,6 +156,35 @@ func (value *handler) startTOTPEnrollment(response http.ResponseWriter, request 
 	writeEncodedJSON(response, http.StatusOK, encoded)
 }
 
+func (value *handler) startTOTPReplacement(response http.ResponseWriter, request *http.Request) {
+	if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	body, ok := decodeJSON[iamv1.StartTOTPReplacementRequest](value, response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.StartTOTPReplacement(request.Context(), credential, body)
+	if err == nil && (result.Enrollment.Purpose != "REPLACEMENT" || result.Enrollment.RequestID != body.RequestID || result.Enrollment.FactorRevision != body.ExpectedFactorRevision) {
+		err = identityaccess.ErrUnavailable
+	}
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	encoded, err := iamv1.EncodeStartTOTPEnrollmentResponse(result)
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	defer clear(encoded)
+	writeEncodedJSON(response, http.StatusOK, encoded)
+}
+
 func (value *handler) totpEnrollmentByRequest(response http.ResponseWriter, request *http.Request) {
 	id, ok := commandPathID(response, request, "/v1/auth/totp/enrollments/by-request/", "", "requestId")
 	if !ok || !value.requireMethod(response, request, http.MethodGet) || !rejectQueryAndBody(response, request) {

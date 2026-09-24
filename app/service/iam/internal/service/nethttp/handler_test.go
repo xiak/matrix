@@ -465,10 +465,77 @@ func TestIAMHTTPInitialEnrollmentProjectionDoesNotPromotePasswordStage(t *testin
 	}
 }
 
+func TestIAMHTTPReplacementKeepsBearerIntentAndOneTimeProvisioning(t *testing.T) {
+	const path = "/v1/auth/totp/enrollments:replace"
+	const body = `{"requestId":"replace-one","stepUpId":"proof-one","expectedFactorRevision":2}`
+	for _, scenario := range []string{"applied", "replay", "initial-purpose", "other-intent", "other-revision", "replayed-secret",
+		"missing-bearer", "query-selector", "body-selector", "duplicate-proof", "wrong-method", "unavailable"} {
+		t.Run(scenario, func(t *testing.T) {
+			workflow := newHTTPWorkflow(t)
+			now := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
+			seed, _ := iamv1.NewSecret("synthetic-replacement-seed")
+			uri, _ := iamv1.NewSecret("synthetic-replacement-uri")
+			workflow.enrollmentStart = iamv1.StartTOTPEnrollmentResponse{Outcome: "APPLIED",
+				Enrollment: iamv1.TOTPEnrollment{APIVersion: iamv1.APIVersion, Kind: "TOTPEnrollment", ID: "new-factor", RequestID: "replace-one", Purpose: "REPLACEMENT",
+					FactorRevision: 2, State: "PENDING", CreatedAt: now, ExpiresAt: now.Add(90 * time.Second)},
+				Provisioning: &iamv1.TOTPProvisioning{Seed: seed, URI: uri}}
+			method, target, input := http.MethodPost, path, body
+			status, calls := http.StatusOK, 1
+			switch scenario {
+			case "replay":
+				workflow.enrollmentStart.Outcome, workflow.enrollmentStart.Provisioning = "EQUAL_REPLAY", nil
+			case "initial-purpose":
+				workflow.enrollmentStart.Enrollment.Purpose = "INITIAL"
+				status = http.StatusServiceUnavailable
+			case "other-intent":
+				workflow.enrollmentStart.Enrollment.RequestID = "other-command"
+				status = http.StatusServiceUnavailable
+			case "other-revision":
+				workflow.enrollmentStart.Enrollment.FactorRevision++
+				status = http.StatusServiceUnavailable
+			case "replayed-secret":
+				workflow.enrollmentStart.Outcome = "EQUAL_REPLAY"
+				status = http.StatusServiceUnavailable
+			case "missing-bearer":
+				status, calls = http.StatusUnauthorized, 0
+			case "query-selector":
+				target += "?accountId=other"
+				status, calls = http.StatusBadRequest, 0
+			case "body-selector":
+				input = strings.TrimSuffix(body, "}") + `,"sessionId":"other"}`
+				status, calls = http.StatusBadRequest, 0
+			case "duplicate-proof":
+				input = strings.TrimSuffix(body, "}") + `,"stepUpId":"proof-one"}`
+				status, calls = http.StatusBadRequest, 0
+			case "wrong-method":
+				method, status, calls = http.MethodGet, http.StatusMethodNotAllowed, 0
+			case "unavailable":
+				workflow.enrollmentErr, status = identityaccess.ErrUnavailable, http.StatusServiceUnavailable
+			}
+			request := httptest.NewRequest(method, target, strings.NewReader(input))
+			request.Header.Set("Content-Type", "application/json")
+			if scenario != "missing-bearer" {
+				request.Header.Set("Authorization", "Bearer synthetic-replacement-session")
+			}
+			response := httptest.NewRecorder()
+			newTestHandler(t, workflow).ServeHTTP(response, request)
+			if response.Code != status || workflow.totpCalls != calls || response.Header().Get("Cache-Control") != "no-store" {
+				t.Fatal("replacement HTTP admission/result differs", response.Code, status, workflow.totpCalls, calls)
+			}
+			if calls != 0 && (!workflow.stepCredential.Present() || workflow.enrollmentRequestID != "replace-one") {
+				t.Fatal("replacement lost its bearer or operation intent")
+			}
+			if bytes.Contains(response.Body.Bytes(), []byte("synthetic-replacement-seed")) != (scenario == "applied") {
+				t.Fatal("replacement material escaped its single successful response")
+			}
+		})
+	}
+}
+
 func TestIAMHTTPInitialEnrollmentResponsesKeepSecretsPurposeBound(t *testing.T) {
 	now := time.Date(2026, 9, 24, 12, 0, 0, 0, time.UTC)
 	completed := now.Add(time.Second)
-	factor := iamv1.TOTPEnrollment{APIVersion: iamv1.APIVersion, Kind: "TOTPEnrollment", ID: "factor-one", RequestID: "first-factor",
+	factor := iamv1.TOTPEnrollment{APIVersion: iamv1.APIVersion, Kind: "TOTPEnrollment", ID: "factor-one", RequestID: "first-factor", Purpose: "INITIAL",
 		FactorRevision: 1, State: "PENDING", CreatedAt: now, ExpiresAt: now.Add(3 * time.Minute)}
 	seed, _ := iamv1.NewSecret("synthetic-initial-provisioning")
 	uri, _ := iamv1.NewSecret("synthetic-initial-uri")
@@ -1624,6 +1691,11 @@ func (workflow *httpWorkflow) RecoveryCodeRegenerationByRequest(_ context.Contex
 func (workflow *httpWorkflow) StartTOTPEnrollment(context.Context, iamv1.Secret, iamv1.StartTOTPEnrollmentRequest) (iamv1.StartTOTPEnrollmentResponse, error) {
 	workflow.totpCalls++
 	return iamv1.StartTOTPEnrollmentResponse{}, identityaccess.ErrUnavailable
+}
+func (workflow *httpWorkflow) StartTOTPReplacement(_ context.Context, credential iamv1.Secret, body iamv1.StartTOTPReplacementRequest) (iamv1.StartTOTPEnrollmentResponse, error) {
+	workflow.totpCalls++
+	workflow.stepCredential, workflow.enrollmentRequestID = credential, body.RequestID
+	return workflow.enrollmentStart, workflow.enrollmentErr
 }
 func (workflow *httpWorkflow) TOTPEnrollment(context.Context, iamv1.Secret, string) (iamv1.TOTPEnrollment, error) {
 	workflow.totpCalls++
