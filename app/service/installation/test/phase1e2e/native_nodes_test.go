@@ -509,6 +509,66 @@ func TestNativeEnrollmentReleasePairRequiresTwoAdjacentCurrentReleases(t *testin
 	}
 }
 
+func TestFullLifecycleSelectsCurrentHostEnrollmentOnlyWithExplicitPrivateFixture(t *testing.T) {
+	verifiedPair := func(source, target uint64) (release.VerifiedBundle, release.VerifiedBundle) {
+		t.Helper()
+		fixtures, err := releasetest.WriteNodeRuntimeSequence(t.TempDir(), source, target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		trust, err := os.ReadFile(fixtures[0].TrustPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		a, err := release.VerifyDirectory(fixtures[0].Root, trust)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b, err := release.VerifyDirectory(fixtures[1].Root, trust)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return a, b
+	}
+	currentA, currentB := verifiedPair(nodeconfig.RuntimeRevision, nodeconfig.RuntimeRevision)
+	legacyA, legacyB := verifiedPair(nodeconfig.DeploymentRuntimePredecessorRevision, nodeconfig.RuntimeRevision)
+	input := nativeFixtureInput{
+		ControlPlaneAddress: "192.168.50.1",
+		Nodes: []nativeNodeInput{
+			{Endpoint: "https://192.168.50.10:16443"},
+			{Endpoint: "https://192.168.50.11:16443"},
+		},
+	}
+	if enrollment, err := validateNativeFixtureReleasePair(input, currentA, currentB, false); err != nil || !enrollment {
+		t.Fatal("full lifecycle rejected the explicit current self-enrollment pair")
+	}
+	if enrollment, err := validateNativeFixtureReleasePair(input, currentA, currentB, true); err != nil || !enrollment {
+		t.Fatal("standalone multi-host enrollment pair was changed")
+	}
+	withoutAddress := input
+	withoutAddress.ControlPlaneAddress = ""
+	if enrollment, err := validateNativeFixtureReleasePair(withoutAddress, currentA, currentB, false); err == nil || enrollment {
+		t.Fatal("current pair silently fell back to legacy target registration")
+	}
+	if enrollment, err := validateNativeFixtureReleasePair(withoutAddress, currentA, currentB, true); err == nil || enrollment {
+		t.Fatal("standalone multi-host gate accepted an absent enrollment endpoint")
+	}
+	if enrollment, err := validateNativeFixtureReleasePair(withoutAddress, legacyA, legacyB, false); err != nil || enrollment {
+		t.Fatal("supported legacy predecessor pair was changed")
+	}
+	if enrollment, err := validateNativeFixtureReleasePair(input, legacyA, legacyB, false); err == nil || enrollment {
+		t.Fatal("legacy pair was accepted as current self-enrollment")
+	}
+	if enrollment, err := validateNativeFixtureReleasePair(input, legacyA, legacyB, true); err == nil || enrollment {
+		t.Fatal("standalone multi-host gate accepted the legacy pair")
+	}
+	publicAddress := input
+	publicAddress.ControlPlaneAddress = "8.8.8.8"
+	if enrollment, err := validateNativeFixtureReleasePair(publicAddress, currentA, currentB, false); err == nil || enrollment {
+		t.Fatal("public enrollment control plane was accepted")
+	}
+}
+
 func TestNativeJoinSourceDecryptsOnlyTheBoundCreationEnvelope(t *testing.T) {
 	wrappingKey, _, err := nativeWrappingKey()
 	if err != nil {

@@ -283,6 +283,31 @@ func validateNativeEnrollmentReleasePair(a, b release.VerifiedBundle) error {
 	return nil
 }
 
+func validateNativeFixtureReleasePair(
+	input nativeFixtureInput,
+	a, b release.VerifiedBundle,
+	requireEnrollment bool,
+) (bool, error) {
+	// A private control-plane address opts the full lifecycle gate into the
+	// current host-local join ceremony. The standalone multi-host gate always
+	// requires that ceremony. Neither path may silently fall back to legacy
+	// configuration-based target registration when its signed pair is wrong.
+	usesNodeEnrollment := requireEnrollment || input.ControlPlaneAddress != ""
+	if usesNodeEnrollment {
+		if err := validateNativeEnrollmentFixture(input); err != nil {
+			return false, err
+		}
+		if err := validateNativeEnrollmentReleasePair(a, b); err != nil {
+			return false, err
+		}
+		return true, nil
+	}
+	if err := validateNativeReleasePair(a, b); err != nil {
+		return false, err
+	}
+	return false, nil
+}
+
 func (value *gate) prepareNativeNodes(
 	ctx context.Context,
 	installationID string,
@@ -309,19 +334,12 @@ func (value *gate) prepareNativeNodes(
 		return fail("native-release-a")
 	}
 	b, err := release.VerifyDirectory(input.ReleaseB, trust)
-	usesNodeEnrollment := value.config.multiHostLifecycle
 	if err != nil {
 		return fail("native-release-b")
 	}
-	if usesNodeEnrollment {
-		if validateNativeEnrollmentFixture(input) != nil {
-			return fail("native-enrollment-fixture")
-		}
-		if validateNativeEnrollmentReleasePair(a, b) != nil {
-			return fail("native-current-enrollment-release-pair")
-		}
-	} else if validateNativeReleasePair(a, b) != nil {
-		return fail("native-real-predecessor-pair")
+	usesNodeEnrollment, err := validateNativeFixtureReleasePair(input, a, b, value.config.multiHostLifecycle)
+	if err != nil {
+		return fail("native-fixture-release-pair")
 	}
 	directory, err := os.MkdirTemp(filepath.Dir(value.config.nativeNodes), ".combined-enrollment-")
 	if err != nil {

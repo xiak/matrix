@@ -426,6 +426,56 @@ accepts the Phase 3 authentication recovery extension for that exact pair and
 its task-local test signer only. It does not publish a production trust root,
 admit an arbitrary predecessor or complete the separate IAM/PaaS release work.
 
+## Phase 3 integrated release closure
+
+The accepted host self-enrollment in [FEAT-008](FEAT-008-linux-host-management.md)
+and the exact A/B authentication recovery extension above do not, separately,
+prove one publishable release composition. The integrated gate remains open.
+Its input must be a fixed, independently verified IAM/Audit source adapted to
+the current PaaS and host owners, one exact database/function profile and
+predecessor, and signed platform and node packages verified before effects.
+Importing another branch's PaaS schema or accepting a matching version tuple
+without function-shape proof is not a substitute.
+
+The existing full offline gate now selects the current host-local enrollment
+path only for an explicit private control-plane fixture and an adjacent signed
+current node release pair; it preserves the legacy predecessor path only for
+its original fixture. Focused and package-wide race tests prove selection and
+wrong-pair rejection. This is test entry coverage, not a two-host runtime pass.
+
+Mutable Account security settings and factor replacement add a recovery fence.
+The close transaction must capture one immutable, bounded snapshot of current
+Account status, root ownership, security-settings version and MFA requirement;
+for each USER it must also bind status, resource and credential generations,
+forced-change state, MFA state/revision, current factor/batch and verified
+contact revision. Closure binds the snapshot's digest and count, and the
+installation durably seals its exact bytes outside the database backup's
+rollback range before destructive restore. A lost close response can retrieve
+only the original committed snapshot for the same intent, not sample later
+state. Policy, role and platform-recovery authority not proved by this snapshot
+must not be inferred from the restored database.
+
+After restore, missing, changed or weaker evidence stays CLOSED. In
+particular, an older backup's `requiredForUsers=false` or superseded TOTP
+factor cannot silently replace a current requirement or factor. The first
+slice is a fail-closed fence, not permission to rewrite old rows or mark a
+principal `RECOVERY_REQUIRED` without a supported proof and re-enrollment
+path; positive recovery requires its own verified policy. The earlier MFA
+custody/closure ABI lacks this proof, so a schema/profile increment alone
+cannot authorize the new signed recovery path.
+
+On that exact composition, a fresh task-owned offline run must use the
+host-local one-time registration command on two independent test hosts while
+exercising the platform-credential and MFA recovery paths, real workloads,
+Operation and Audit delivery, retained host identity and resource samples,
+upgrade/rollback and protected recovery. The authenticated browser ceremony
+and independent CI remain separate required evidence; a process-only fixture
+does not prove the console. Before and after each run, record the exact
+pre-existing host Docker/systemd inventory and delete only resources proved
+to belong to that run. Do not reboot a remote host or its Docker daemon, use
+the 172.30.1.3 ZFS host, or touch Phase 2. A task-local signature proves the
+offline mechanics but is not a production trust-root publication.
+
 ## Incremental acceptance
 
 ### Gate A: release and CLI contract
