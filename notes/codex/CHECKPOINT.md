@@ -9,22 +9,46 @@
   docs/adoption/FEAT-006-platform-authorities.md owns fixed sources.
   Markdown only. UI exclusively belongs to its own task.
 - Latest locally verified, committed and pushed source candidate:
-  **fea7a772a3af5a31b3b790f79689a1843bcf70d7**.
+  **234a401212e4c14a739766fcbb38c17cfa162c88**.
   IAM43/Audit25/PaaS2, unchanged from parent; NOT a release profile.
-- Exact https://github.com/xiak/matrix/actions/runs/36002470008 was checked
+- Exact https://github.com/xiak/matrix/actions/runs/36005275195 was checked
   through GitHub API: correct source SHA, pending. Independent CI is
   UNCONFIRMED. Follow this run, not an earlier green commit.
-- Previous847fc853/Verification35997837317 has confirmed authority-storage
-  FAILURE: attachment Session matrix hit its original120s deadline during
-  the second final schema replay. Go/node/runtime/step-up individually passed,
-  recovery-window was still running at last observation. A corrective push
-  can supersede it through the existing workflow concurrency; do not manually
-  restart because observation expires or report this old source as green.
-- Parent0b01e751 is checkpoint-only; implementation847fc853 is the S2c
-  candidate. Earlier aefe4f78/Verification35972120363 seven jobs passed,
-  but that result does not accept these later changes.
+- fea7a772/Verification36002470008 has confirmed authority-storage FAILURE:
+  local recovery fixture still used its operator's pre-platform-grant bearer.
+  Actual401 invalidated the intended403 and real lock assertions. Go/node
+  individually passed; other lanes were live/queued before this corrective
+  push. Do not report this old run as green or restart on observation timeout.
+- 847fc853/Verification35997837317 also failed storage at attachment matrix's
+  original120s final schema replay. Its redundant unused logins were removed
+  in fea7, not its48 security scenarios. Earlier aefe4f78/35972120363 seven
+  jobs passed but cannot accept these later changes. Parent51516dc5 and
+  earlier0b01e751 are checkpoint-only.
 
 ## Fixed implementation and current evidence
+
+234a4012 changes only existing IAM integration tests, the existing CI routing
+and009 evidence. No production API/SQL/schema/profile/UI/installation change.
+Final serial ownPG18.6/race-p1:
+- TestIAMSecuritySettingsRacesPostgres22.53s: six genuine independent Accounts,
+  explicit policy/contact/TOTP login/operation-bound proof; settings false-to-
+  true versus logout, retained-current daily password change and saved-code
+  recovery start, both orders. Original outbox barrier and actual peer lock
+  dependency prove order, not goroutine scheduling. Changed password keeps
+  current Session but invalidates old-generation StepUp; other losers have
+  no partial completion/version/code consumption/success fact/notice.
+  Equal schema replay and new Authority do not revive lost qualification.
+  This is not a process restart, SMTP, settings loosen or all-factor matrix.
+- TestIAMLocalCredentialRecoveryPostgres24.43s; combined package50.514s.
+  CI's stale operator failure first reproduced locally35.56s. After a real
+  INSTALLATION attachment grant, assert old bearer401 then normally login;
+  preserve original403/protected-primary and both real revoke/recovery lock
+  orders, immutable receipts, SQL privileges and bootstrap/schema rejection.
+- Full default race/architecture and vet, workflow YAML/14 Bash scripts,
+  gofmt/diff passed. New gate uses own DB in original step-up lane, excluded
+  from storage duplicate routing. No new lane/budget/cost increases. Default
+  DSN SKIP is not runtime proof. Both real test handles completed; exact own
+  PG identity/listener and zero other clients checked, normal stop, data kept.
 
 847 introduced exact operation-bound SECURITY_SETTINGS_UPDATE StepUp,
 same-Session proof, current USER/PDP, Account-first locks and CAS. The
@@ -89,8 +113,8 @@ passes into a combined-package or signed-release acceptance.
 
 ## Remaining work and boundaries
 
-S2c/009/full goal incomplete: own exact CI, remaining settings/factor mutation
-races, LIVE UI and supported signed recovery/release. Also remaining password/
+S2c/009/full goal incomplete: own exact CI, remaining settings loosen/factor
+mutation/reset/Role races, LIVE UI and supported signed recovery/release. Also remaining password/
 session governance, reports, external integrations, HA/capacity per FEAT owners.
 After CI, hand off the fixed contract and prepare only an own bounded LIVE
 environment; UI writing/browser work stays with UX/UI.
