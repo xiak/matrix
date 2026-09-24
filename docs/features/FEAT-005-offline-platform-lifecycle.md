@@ -489,6 +489,9 @@ wrong-scope snapshots before launching the recovery container. Losing a
 completed snapshot also blocks the next recovery epoch. This does not
 establish the IAM producer transaction, enable v5 for
 the current database profile, or complete the signed runtime gate.
+[Verification 36049571005](https://github.com/xiak/matrix/actions/runs/36049571005)
+passed Go, UI, authority-process and node-process for the exact supplemental
+snapshot failure-gate source `8028738c`.
 
 After restore, missing, changed or weaker evidence stays CLOSED. In
 particular, an older backup's `requiredForUsers=false` or superseded TOTP
