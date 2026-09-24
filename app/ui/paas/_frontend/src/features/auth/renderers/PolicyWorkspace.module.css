@@ -64,6 +64,15 @@
   .directoryHeading { padding-inline: var(--xiak-spacing-default); }
   .directoryHeading > button { width: 100%; }
 }
+@container xiak-table (max-width: 560px) {
+  .policyTable[data-mobile-layout="stack"] { min-width: 0; }
+  .policyTable[data-mobile-layout="stack"] tbody tr { grid-template-columns: var(--xiak-table-selection-width) minmax(0, 1fr); }
+  .policyTable[data-mobile-layout="stack"] tbody td:first-child { grid-column: 1; grid-row: 1; padding-inline: var(--xiak-spacing-narrow); }
+  .policyTable[data-mobile-layout="stack"] tbody td:nth-child(2) { grid-column: 2; grid-row: 1; padding-inline-start: 0; }
+  .policyTable[data-mobile-layout="stack"] tbody td:nth-child(n + 3) { grid-column: 2; padding-inline-start: 0; }
+  .policyTable[data-mobile-layout="stack"] tbody td:nth-child(2)::before { display: none; }
+  .policyTable[data-mobile-layout="stack"] tbody td[data-mobile-empty] { display: none; }
+}
 @container policy-association (max-width: 520px) {
   .policySet { grid-template-columns: minmax(0, 1fr); }
 }

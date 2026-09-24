@@ -209,7 +209,7 @@ describe("selection-driven user directory", () => {
     expect(state.groups[0]?.memberIds).toEqual(expect.arrayContaining(["principal-lin", "principal-chen"]));
     expect(state.groups[0]?.memberIds).not.toContain("admin");
     expect(state.groups[1]?.memberIds).toContain("principal-chen");
-    expect(within(screen.getByRole("region", { name: "Resource owner" })).getByRole("button", { name: "View user admin" })).toBeTruthy();
+    expect(within(screen.getByRole("region", { name: "Account owner" })).getByRole("button", { name: "View user admin" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "More actions" }).hasAttribute("disabled")).toBe(true);
   });
   it("preserves targets on failure, locks duplicate submissions and requires explicit destructive acknowledgement", async () => {
@@ -433,7 +433,15 @@ describe("policy creation entry and directory contract", () => {
   it("matches CAM directory columns, omits preset metadata in custom view and restores chooser focus", async () => {
     const { user, repository } = await open("policies");
     const headings = () => within(screen.getByRole("table", { name: "策略" })).getAllByRole("columnheader").map((cell) => cell.textContent).filter(Boolean);
+    const table = screen.getByRole("table", { name: "策略" });
+    expect(table.getAttribute("data-mobile-layout")).toBe("stack");
     expect(headings()).toEqual(["策略名", "所属产品", "权限级别", "描述", "上次修改时间"]);
+    const customRow = within(table).getByRole("button", { name: "AssumeLogReviewRole" }).closest("tr")!;
+    expect(customRow.cells[2]?.getAttribute("data-mobile-empty")).toBe("true");
+    expect(customRow.cells[3]?.getAttribute("data-mobile-empty")).toBe("true");
+    expect(customRow.cells[4]?.getAttribute("data-label")).toBe("描述");
+    const productRow = within(table).getByRole("button", { name: "MatrixAuditReadOnly" }).closest("tr")!;
+    expect(productRow.cells[2]?.hasAttribute("data-mobile-empty")).toBe(false);
     await select(user, "权限级别", "全局权限");
     await user.click(screen.getByRole("tab", { name: "自定义策略" }));
     expect(headings()).toEqual(["策略名", "描述", "上次修改时间"]);
@@ -806,8 +814,8 @@ describe("CAM-style access workspace", () => {
   });
   it("presents the account owner outside user selection and group membership", async () => {
     const { user, repository, extension } = await open("users");
-    const owner = within(await screen.findByRole("region", { name: "资源所有者" }));
-    expect(owner.getByText("资源所有者")).toBeTruthy();
+    const owner = within(await screen.findByRole("region", { name: "账号所有者" }));
+    expect(owner.getByText("账号所有者")).toBeTruthy();
     expect(within(screen.getByRole("table", { name: "租户用户列表" })).queryByRole("button", { name: "查看用户 admin" })).toBeNull();
     expect(screen.queryByRole("checkbox", { name: "选择用户 admin" })).toBeNull();
     await user.click(owner.getByRole("button", { name: "查看用户 admin" }));

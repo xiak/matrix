@@ -437,9 +437,10 @@ describe("account access", () => {
 
   it("shows a read-only resource owner with separate identity, access and permission details", async () => {
     const { user, repository } = await openAccess();
-    const owner = within(await screen.findByRole("region", { name: "资源所有者" }));
+    const owner = within(await screen.findByRole("region", { name: "账号所有者" }));
     expect(owner.getByText("主账号")).toBeTruthy();
-    expect(owner.getByText("资源所有者")).toBeTruthy();
+    expect(owner.getByText("账号所有者")).toBeTruthy();
+    expect(owner.getByText("账号管理与恢复权能")).toBeTruthy();
     expect(owner.queryByText("未授权")).toBeNull();
     expect(owner.queryByRole("button", { name: "管理 admin" })).toBeNull();
     await user.click(owner.getByRole("button", { name: "查看用户 admin" }));
@@ -447,7 +448,7 @@ describe("account access", () => {
     expect(screen.getByRole("tab", { name: "身份信息" }).getAttribute("aria-selected")).toBe("true");
     expect(screen.getByText("primary-a")).toBeTruthy();
     await user.click(screen.getByRole("tab", { name: "权限策略" }));
-    expect(screen.getByText(/主账号默认拥有所属账号资源的完整访问权限/)).toBeTruthy();
+    expect(screen.getByText(/具体业务资源操作取决于产品能力和当前安全条件/)).toBeTruthy();
     for (const name of ["禁用用户", "授予角色", "删除", "重置密码", "关联策略"]) expect(screen.queryByRole("button", { name })).toBeNull();
     await user.click(screen.getByRole("tab", { name: "访问方式" }));
     expect(screen.getByText(/当前页面不提供主账号密钥创建或密码重置/)).toBeTruthy();
@@ -469,7 +470,7 @@ describe("account access", () => {
     await user.click(screen.getByRole("combobox", { name: "筛选策略来源" }));
     await user.click(screen.getByRole("option", { name: "未关联授权策略" }));
     expect(screen.getByRole("button", { name: "查看用户 new.user" })).toBeTruthy();
-    expect(within(screen.getByRole("region", { name: "资源所有者" })).getByRole("button", { name: "查看用户 admin" })).toBeTruthy();
+    expect(within(screen.getByRole("region", { name: "账号所有者" })).getByRole("button", { name: "查看用户 admin" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "清除筛选" }));
     expect(within(screen.getByRole("table", { name: "租户用户列表" })).getAllByRole("row")).toHaveLength(3);
   });
@@ -1018,7 +1019,11 @@ describe("account access", () => {
     });
     const repository = accounts({ listPolicies });
     await openAccess(repository, iam(), "policies");
-    expect(await screen.findByRole("table", { name: "策略元数据目录" })).toBeTruthy();
+    const table = await screen.findByRole("table", { name: "策略元数据目录" });
+    expect(table.getAttribute("data-mobile-layout")).toBe("stack");
+    const policyRow = within(table).getByRole("button", { name: "ReadOnlyAccess" }).closest("tr")!;
+    expect(policyRow.cells[0]?.getAttribute("data-label")).toBe("策略");
+    expect(policyRow.cells[5]?.getAttribute("data-label")).toBe("更新时间");
     expect(screen.getByText("ReadOnlyAccess")).toBeTruthy();
     expect(screen.getByText(/租户策略仍可查看/)).toBeTruthy();
     expect(listPolicies).toHaveBeenCalledTimes(2);

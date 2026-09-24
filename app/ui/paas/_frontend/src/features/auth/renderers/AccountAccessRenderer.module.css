@@ -202,6 +202,10 @@
 .policyDirectoryTabs { padding-inline: var(--xiak-panel-padding); }
 .policyMetadataTable { min-width: 820px; }
 .policyMetadataTable td:first-child { min-width: 240px; }
+@container xiak-table (max-width: 560px) {
+  .policyMetadataTable[data-mobile-layout="stack"] { min-width: 0; }
+  .policyMetadataTable[data-mobile-layout="stack"] tbody td:first-child { min-width: 0; }
+}
 .policyStatementTable { min-width: 820px; }
 .policyVersionTable code { white-space: normal; overflow-wrap: anywhere; }
 .policyVersionRecovery, .policyVersionReview { display: grid; min-width: 0; gap: var(--xiak-spacing-default); padding: var(--xiak-spacing-comfortable); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); background: var(--xiak-color-bg-panel); }

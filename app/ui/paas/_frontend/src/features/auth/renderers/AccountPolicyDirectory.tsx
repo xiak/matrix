@@ -445,15 +445,15 @@ export function AccountPolicyDirectory({ scene, entityId, onOpen, onCreate }: { 
             { id: "scope", label: t("scope"), value: scope, onChange: (value) => change(() => setScope(value)), options: [{ value: "all", label: t("all") }, { value: "TENANT", label: t("tenant") }, { value: "INSTALLATION", label: t("installation") }] },
             { id: "status", label: t("status"), value: status, onChange: (value) => change(() => setStatus(value)), options: [{ value: "all", label: t("all") }, { value: "ACTIVE", label: t("active") }, { value: "RETIRED", label: t("retired") }] }
           ]} />
-        {rows.length ? <Table aria-label={t("table")} className={styles.policyMetadataTable}>
+        {rows.length ? <Table aria-label={t("table")} className={styles.policyMetadataTable} mobileLayout="stack">
           <thead><tr><th scope="col">{t("policy")}</th><th scope="col">{t("management")}</th><th scope="col">{t("scope")}</th><th scope="col">{t("status")}</th><th scope="col">{t("defaultVersion")}</th><th scope="col">{t("updated")}</th></tr></thead>
           <tbody>{rows.map((policy) => <tr key={policy.id}>
-            <td><button className={styles.userLink} onClick={() => onOpen(policy.id)}>{policy.displayName}</button><small className={styles.userIdentifier}>{policy.id}</small></td>
-            <td><Badge>{t(policy.management === "SYSTEM" ? "system" : "customer")}</Badge></td>
-            <td>{t(policy.scope === "TENANT" ? "tenant" : "installation")}</td>
-            <td><Badge status={policy.status === "ACTIVE" ? "success" : "neutral"}>{t(policy.status === "ACTIVE" ? "active" : "retired")}</Badge></td>
-            <td>{policy.defaultVersionId}</td>
-            <td><WorkspaceTime value={policy.updatedAt} /></td>
+            <td data-label={t("policy")}><button className={styles.userLink} onClick={() => onOpen(policy.id)}>{policy.displayName}</button><small className={styles.userIdentifier}>{policy.id}</small></td>
+            <td data-label={t("management")}><Badge>{t(policy.management === "SYSTEM" ? "system" : "customer")}</Badge></td>
+            <td data-label={t("scope")}>{t(policy.scope === "TENANT" ? "tenant" : "installation")}</td>
+            <td data-label={t("status")}><Badge status={policy.status === "ACTIVE" ? "success" : "neutral"}>{t(policy.status === "ACTIVE" ? "active" : "retired")}</Badge></td>
+            <td data-label={t("defaultVersion")}>{policy.defaultVersionId}</td>
+            <td data-label={t("updated")}><WorkspaceTime value={policy.updatedAt} /></td>
           </tr>)}</tbody>
         </Table> : <EmptyState title={t(scene.policies.length ? "noResults" : "empty")} description={t(scene.policies.length ? "noResultsHint" : "emptyHint")} action={scene.policies.length ? <Button variant="secondary" onClick={reset}>{toolbarLabels.resetQuery}</Button> : undefined} />}
         <Table.Footer note={t("completeSnapshot", { count: scene.policies.length })}><TablePagination page={currentPage} pages={pages} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} labels={{ summary: t("page", { page: currentPage, pages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} /></Table.Footer>
