@@ -45,6 +45,8 @@ export type AuthenticatorState =
 export type TOTPEnrollment = {
   id: string;
   requestId: string;
+  /** Present only on the fixed replacement wire; the currently integrated initial wire predates it. */
+  purpose?: "INITIAL" | "REPLACEMENT";
   factorRevision: number;
   state: "PENDING" | "CONFIRMED" | "CANCELLED" | "EXPIRED";
   createdAt: string;
@@ -84,7 +86,7 @@ export type SecurityStepUpState = "PENDING" | "PROVED" | "CONSUMED" | "EXPIRED";
 export type SecurityStepUp = {
   id: string;
   requestId: string;
-  operation: "RECOVERY_CODES_REGENERATE";
+  operation: "RECOVERY_CODES_REGENERATE" | "TOTP_REPLACE";
   expectedFactorRevision: number;
   state: SecurityStepUpState;
   createdAt: string;

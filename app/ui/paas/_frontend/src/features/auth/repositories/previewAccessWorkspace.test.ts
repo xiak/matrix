@@ -599,6 +599,23 @@ describe("access workspace preview invariants", () => {
     expect(completed.recoveryCodes?.some((code) => oldCodes.includes(code))).toBe(false);
     await expect(repository.execute("session-a", { kind: "confirm-personal-mfa-replacement", requestId: "replace-one" })).rejects.toMatchObject({ code: "invalid" });
   });
+  it("blocks cancellation after an uncertain replacement until an explicit preview lookup finds the original pending intent", async () => {
+    const repository = createPreviewAccessWorkspace("org-xiak", () => ["principal-lin"], "admin");
+    repository.transact((source) => ({ workspace: { ...source, personalMfa: { factorState: "bound", reauthenticationRequired: false, recoveryState: "idle" } } }));
+    const oldCodes = repository.recoveryCodes();
+    await repository.execute("session-a", { kind: "begin-personal-mfa-replacement", requestId: "replace-unknown", proofStartedAt: new Date().toISOString() });
+    await expect(repository.execute("session-b", { kind: "mark-personal-mfa-replacement-unknown", requestId: "replace-unknown" })).rejects.toMatchObject({ code: "invalid" });
+    const unknown = await repository.execute("session-a", { kind: "mark-personal-mfa-replacement-unknown", requestId: "replace-unknown" });
+    expect(unknown.workspace.personalMfa.pendingReplacement?.status).toBe("CONFIRMATION_UNKNOWN");
+    expect(repository.recoveryCodes()).toEqual(oldCodes);
+    await expect(repository.execute("session-a", { kind: "confirm-personal-mfa-replacement", requestId: "replace-unknown" })).rejects.toMatchObject({ code: "invalid" });
+    await expect(repository.execute("session-b", { kind: "cancel-personal-mfa-replacement", requestId: "replace-unknown" })).rejects.toMatchObject({ code: "invalid" });
+    const observed = await repository.execute("session-b", { kind: "inspect-personal-mfa-replacement", requestId: "replace-unknown" });
+    expect(observed.workspace.personalMfa.pendingReplacement?.status).toBe("PENDING");
+    await repository.execute("session-b", { kind: "cancel-personal-mfa-replacement", requestId: "replace-unknown" });
+    expect((await repository.read("session-b")).personalMfa.pendingReplacement).toBeUndefined();
+    expect(repository.recoveryCodes()).toEqual(oldCodes);
+  });
   it("issues exactly one new preview recovery batch after an approved regeneration", async () => {
     const repository = createPreviewAccessWorkspace("org-xiak", () => ["principal-lin"], "admin");
     await expect(repository.execute("session-a", { kind: "regenerate-personal-recovery-codes" })).rejects.toMatchObject({ code: "invalid" });

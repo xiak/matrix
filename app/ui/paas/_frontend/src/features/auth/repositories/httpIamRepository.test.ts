@@ -509,6 +509,48 @@ describe("IAM HTTP personal-security boundary", () => {
     })).rejects.toThrow("INVALID_IAM_RESPONSE");
   });
 
+  it("binds replacement to a TOTP_REPLACE proof and accepts only the original two-minute window", async () => {
+    const requestId = "replace-factor-1";
+    const stepUp = {
+      apiVersion, kind: "StepUp", id: "step-up-replace-1", requestId,
+      operation: "TOTP_REPLACE", expectedFactorRevision: 2, state: "PENDING",
+      createdAt: timestamp, expiresAt: "2026-09-11T08:02:00Z"
+    };
+    let fetcher = reply(stepUp);
+    await expect(httpIamRepository.personalSecurity!.replacement!.startStepUp("bearer", { requestId, expectedFactorRevision: 2 })).resolves.toMatchObject({ operation: "TOTP_REPLACE", state: "PENDING" });
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/step-up");
+    expect(requestBody(fetcher)).toEqual({ requestId, operation: "TOTP_REPLACE", expectedFactorRevision: 2 });
+
+    fetcher = reply({ ...stepUp, state: "PROVED", provedAt: "2026-09-11T08:00:30Z" });
+    await httpIamRepository.personalSecurity!.replacement!.verifyStepUp("bearer", stepUp.id, { requestId: "verify-replace-1", password: "private-password", code: "123456" });
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/auth/step-up/${stepUp.id}:verify`);
+    expect(requestBody(fetcher)).toEqual({ requestId: "verify-replace-1", password: "private-password", code: "123456" });
+
+    const replacementEnrollment = { ...pendingEnrollment, requestId, purpose: "REPLACEMENT", factorRevision: 2, expiresAt: "2026-09-11T08:01:58Z" };
+    fetcher = reply({ outcome: "APPLIED", enrollment: replacementEnrollment, provisioning: { seed: "NEWSECRET", uri: "otpauth://totp/Matrix:new?secret=NEWSECRET" } });
+    await expect(httpIamRepository.personalSecurity!.replacement!.startEnrollment("bearer", { requestId, stepUpId: stepUp.id, expectedFactorRevision: 2 })).resolves.toMatchObject({ outcome: "APPLIED", enrollment: { purpose: "REPLACEMENT" } });
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/totp/enrollments:replace");
+    expect(requestBody(fetcher)).toEqual({ requestId, stepUpId: stepUp.id, expectedFactorRevision: 2 });
+
+    fetcher = reply(replacementEnrollment);
+    await expect(httpIamRepository.personalSecurity!.replacement!.enrollmentByRequest("bearer", requestId)).resolves.toMatchObject({ purpose: "REPLACEMENT" });
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/auth/totp/enrollments/by-request/${requestId}`);
+
+    for (const invalid of [
+      { ...replacementEnrollment, purpose: undefined },
+      { ...replacementEnrollment, purpose: "INITIAL" },
+      { ...replacementEnrollment, factorRevision: 1 },
+      { ...replacementEnrollment, expiresAt: "2026-09-11T08:02:01Z" }
+    ]) {
+      reply({ outcome: "APPLIED", enrollment: invalid, provisioning: { seed: "NEWSECRET", uri: "otpauth://totp/Matrix:new?secret=NEWSECRET" } });
+      await expect(httpIamRepository.personalSecurity!.replacement!.startEnrollment("bearer", { requestId, stepUpId: stepUp.id, expectedFactorRevision: 2 })).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+    reply({ ...stepUp, operation: "RECOVERY_CODES_REGENERATE" });
+    await expect(httpIamRepository.personalSecurity!.replacement!.stepUpByRequest("bearer", requestId)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    reply({ ...stepUp, operation: "TOTP_REPLACE" });
+    await expect(httpIamRepository.personalSecurity!.recoveryCodes!.stepUpByRequest("bearer", requestId)).rejects.toThrow("INVALID_IAM_RESPONSE");
+  });
+
   it("requires a confirmed enrollment and exactly ten unique recovery codes", async () => {
     const confirmed = { ...pendingEnrollment, state: "CONFIRMED", completedAt: "2026-09-11T08:04:00Z" };
     const recoveryCodes = Array.from({ length: 10 }, (_, index) => `RECOVERY-${index}`);
@@ -534,6 +576,7 @@ describe("IAM HTTP personal-security boundary", () => {
       { action: () => httpIamRepository.personalSecurity!.notificationVerification("bearer", notificationVerification.id), body: { ...notificationVerification, delivery: { state: "EXPIRED", attempts: 1, updatedAt: timestamp } } },
       { action: () => httpIamRepository.personalSecurity!.authenticatorState("bearer"), body: { apiVersion, kind: "AuthenticatorState", enrollmentState: "BOUND", factorRevision: 1, factorId: "factor-one" } },
       { action: () => httpIamRepository.personalSecurity!.totpEnrollment("bearer", pendingEnrollment.id), body: { ...pendingEnrollment, expiresAt: "2026-09-11T08:04:59Z" } },
+      { action: () => httpIamRepository.personalSecurity!.totpEnrollment("bearer", pendingEnrollment.id), body: { ...pendingEnrollment, purpose: "REPLACEMENT" } },
       { action: () => httpIamRepository.personalSecurity!.startTOTPEnrollment("bearer", { requestId: "enroll-factor-1", password: "private-password", expectedFactorRevision: 1 }), body: { outcome: "EQUAL_REPLAY", enrollment: pendingEnrollment, provisioning: { seed: "leaked", uri: "leaked" } } }
     ];
     for (const item of invalidBodies) {

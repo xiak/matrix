@@ -2492,7 +2492,12 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: "返回安全设置" }));
     expect(screen.getByRole("heading", { name: "验证器替换尚未确认" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "身份验证方法" })).toBe(document.activeElement);
-    expect(screen.getByText(/若确认结果不明，不要据此判断旧或新验证器是否有效/)).toBeTruthy();
+    expect(screen.getByText(/不能据此判断旧或新验证器是否有效，也不能直接取消/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "取消本次替换" })).toBeNull();
+    expect((await extension.read("preview")).personalMfa.pendingReplacement?.status).toBe("CONFIRMATION_UNKNOWN");
+    await user.click(screen.getByRole("button", { name: "模拟查询原意图" }));
+    expect(await screen.findByRole("button", { name: "取消本次替换" })).toBeTruthy();
+    expect((await extension.read("preview")).personalMfa.pendingReplacement?.status).toBe("PENDING");
     expect(extension.recoveryCodes()).toEqual(previousCodes);
   });
   it("hides replacement secrets while confirmation is in flight and goes directly to one-time codes", async () => {

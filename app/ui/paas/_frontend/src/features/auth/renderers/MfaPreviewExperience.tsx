@@ -78,7 +78,7 @@ function RecoveryCodes({ onDone, codes }: { onDone(): void; codes: string[] }) {
   </div>;
 }
 
-function EnrollmentWizard({ reason, onCancel, onAbandon, onConfirmed, onFinish, replacement, verificationCode = demonstrationCode }: { reason: EnrollmentReason; onCancel(): void; onAbandon?(): void; onConfirmed(): string[] | false | Promise<string[] | false>; onFinish(): void; replacement?: { active: boolean; expiresAt: string }; verificationCode?: string }) {
+function EnrollmentWizard({ reason, onCancel, onAbandon, onConfirmed, onUnknown, onFinish, replacement, verificationCode = demonstrationCode }: { reason: EnrollmentReason; onCancel(): void; onAbandon?(): void; onConfirmed(): string[] | false | Promise<string[] | false>; onUnknown?(): Promise<void>; onFinish(): void; replacement?: { active: boolean; expiresAt: string }; verificationCode?: string }) {
   const t = useTranslations("MfaPreview");
   const format = useFormatter();
   const [step, setStep] = useState(0);
@@ -101,6 +101,11 @@ function EnrollmentWizard({ reason, onCancel, onAbandon, onConfirmed, onFinish, 
     const timer = window.setTimeout(() => setDeadlineReached(true), Number.isFinite(remaining) ? Math.max(0, remaining) : 0);
     return () => window.clearTimeout(timer);
   }, [reason, replacementExpiresAt]);
+  async function stopUnknown() {
+    setCode("");
+    try { await onUnknown?.(); } catch { /* A failed observation must not re-show one-time material. */ }
+    setConfirmationUnknown(true);
+  }
   async function verify(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (confirming.current || confirmationUnknown || (reason === "replace" && (!replacement?.active || deadlineReached || replacementDeadlineElapsed(replacement.expiresAt)))) return;
@@ -111,14 +116,14 @@ function EnrollmentWizard({ reason, onCancel, onAbandon, onConfirmed, onFinish, 
     try {
       const result = await onConfirmed();
       if (!result || result.length !== 10 || new Set(result).size !== 10) {
-        if (reason === "replace") { setCode(""); setConfirmationUnknown(true); }
+        if (reason === "replace") await stopUnknown();
         else setError("outcome");
         return;
       }
       setIssuedCodes(result);
       setStep(3);
     } catch {
-      if (reason === "replace") { setCode(""); setConfirmationUnknown(true); }
+      if (reason === "replace") await stopUnknown();
       else setError("outcome");
     } finally {
       confirming.current = false;
@@ -215,6 +220,9 @@ export function MfaSecurityPreview({ workspace }: { workspace: AccessWorkspace }
   const [stepUp, setStepUp] = useState<SecurityStepUpAction | null>(null);
   const [enrollment, setEnrollment] = useState<EnrollmentReason | null>(null);
   const [replacementRequestId, setReplacementRequestId] = useState<string | null>(null);
+  const [unresolvedReplacementRequestId, setUnresolvedReplacementRequestId] = useState<string | null>(null);
+  const [pendingInspectBusy, setPendingInspectBusy] = useState(false);
+  const [pendingInspectError, setPendingInspectError] = useState(false);
   const [regeneratedCodes, setRegeneratedCodes] = useState<string[] | null>(null);
   const [feedback, setFeedback] = useState<Feedback | null>(null);
   const [verifiedNotificationAddress, setVerifiedNotificationAddress] = useState<string | null>(null);
@@ -226,6 +234,7 @@ export function MfaSecurityPreview({ workspace }: { workspace: AccessWorkspace }
   const lastAction = useRef<SecurityStepUpAction | null>(null);
   const restoreFocus = useRef(false);
   const { factorState, reauthenticationRequired, pendingReplacement } = workspace.personalMfa;
+  const replacementOutcomeUnknown = pendingReplacement?.status === "CONFIRMATION_UNKNOWN" || Boolean(pendingReplacement && pendingReplacement.requestId === unresolvedReplacementRequestId);
   const required = workspace.settings.loginProtection;
   const blockedActionHint = t(workspace.pendingAccountRuleChange?.status === "UNKNOWN" ? "accountOutcomeUnknownActionBlocked" : "reauthenticationActionBlocked");
 
@@ -257,7 +266,7 @@ export function MfaSecurityPreview({ workspace }: { workspace: AccessWorkspace }
       if (credential) session.expire(credential);
     }
   }
-  if (enrollment) return <EnrollmentWizard reason={enrollment} replacement={enrollment === "replace" ? { active: Boolean(replacementRequestId && pendingReplacement?.requestId === replacementRequestId && pendingReplacement.accountRuleVersion === workspace.settings.accountRuleVersion && Number.isFinite(Date.parse(pendingReplacement.expiresAt)) && !reauthenticationRequired && !workspace.pendingAccountRuleChange), expiresAt: pendingReplacement?.expiresAt ?? "" } : undefined} verificationCode={enrollment === "replace" ? nextPreviewTotpCode(workspace.personalMfa) : demonstrationCode} onAbandon={() => { restoreFocus.current = true; setEnrollment(null); setReplacementRequestId(null); }} onCancel={() => {
+  if (enrollment) return <EnrollmentWizard reason={enrollment} replacement={enrollment === "replace" ? { active: Boolean(replacementRequestId && pendingReplacement?.requestId === replacementRequestId && pendingReplacement.status === "PENDING" && pendingReplacement.accountRuleVersion === workspace.settings.accountRuleVersion && Number.isFinite(Date.parse(pendingReplacement.expiresAt)) && !reauthenticationRequired && !workspace.pendingAccountRuleChange), expiresAt: pendingReplacement?.expiresAt ?? "" } : undefined} verificationCode={enrollment === "replace" ? nextPreviewTotpCode(workspace.personalMfa) : demonstrationCode} onAbandon={() => { restoreFocus.current = true; setEnrollment(null); setReplacementRequestId(null); }} onUnknown={enrollment === "replace" && replacementRequestId ? async () => { setUnresolvedReplacementRequestId(replacementRequestId); await access.executeWorkspace({ kind: "mark-personal-mfa-replacement-unknown", requestId: replacementRequestId }); } : undefined} onCancel={() => {
     if (enrollment === "replace" && replacementRequestId) {
       void access.executeWorkspace({ kind: "cancel-personal-mfa-replacement", requestId: replacementRequestId }).then((result) => {
         if (result) { restoreFocus.current = true; setEnrollment(null); setReplacementRequestId(null); }
@@ -278,7 +287,7 @@ export function MfaSecurityPreview({ workspace }: { workspace: AccessWorkspace }
   return <>
     {feedback ? <Alert status="success">{t(`feedback.${feedback}`)}</Alert> : null}
     {reauthenticationRequired ? <Alert status="warning">{t(workspace.pendingAccountRuleChange?.status === "UNKNOWN" ? "accountOutcomeUnknownReauthenticationRequired" : "reauthenticationRequired")}</Alert> : null}
-    {pendingReplacement ? <Card className={styles.flowCard}><Card.Header><Typography.Title as="h2" level={3}>{t("replacementPendingTitle")}</Typography.Title><Badge status="warning">MOCK</Badge></Card.Header><Card.Body className={styles.form}><Alert status="warning">{t("replacementPendingHint")}</Alert><dl className={styles.facts}><div><dt>{t("replacementRequest")}</dt><dd><code>{pendingReplacement.requestId}</code></dd></div><div><dt>{t("replacementDeadline")}</dt><dd>{format.dateTime(new Date(pendingReplacement.expiresAt), { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", timeZoneName: "short" })}</dd></div></dl><div className={styles.flowActions}><Button onClick={() => void access.executeWorkspace({ kind: "cancel-personal-mfa-replacement", requestId: pendingReplacement.requestId })} variant="secondary">{t("cancelReplacement")}</Button></div></Card.Body></Card> : null}
+    {pendingReplacement ? <Card className={styles.flowCard}><Card.Header><Typography.Title as="h2" level={3}>{t("replacementPendingTitle")}</Typography.Title><Badge status="warning">MOCK</Badge></Card.Header><Card.Body className={styles.form}><Alert status="warning">{t(replacementOutcomeUnknown ? "replacementPendingUnknown" : "replacementPendingHint")}</Alert>{pendingInspectError ? <Alert status="danger">{t("replacementInspectFailed")}</Alert> : null}<dl className={styles.facts}><div><dt>{t("replacementRequest")}</dt><dd><code>{pendingReplacement.requestId}</code></dd></div><div><dt>{t("replacementDeadline")}</dt><dd>{format.dateTime(new Date(pendingReplacement.expiresAt), { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", timeZoneName: "short" })}</dd></div></dl><div className={styles.flowActions}>{replacementOutcomeUnknown ? <Button disabled={pendingInspectBusy} onClick={() => { setPendingInspectBusy(true); setPendingInspectError(false); void access.executeWorkspace({ kind: "inspect-personal-mfa-replacement", requestId: pendingReplacement.requestId }).then((result) => { if (!result) setPendingInspectError(true); else setUnresolvedReplacementRequestId(null); }).catch(() => setPendingInspectError(true)).finally(() => setPendingInspectBusy(false)); }} variant="secondary">{pendingInspectBusy ? t("replacementInspecting") : t("replacementInspectMock")}</Button> : <Button onClick={() => void access.executeWorkspace({ kind: "cancel-personal-mfa-replacement", requestId: pendingReplacement.requestId })} variant="secondary">{t("cancelReplacement")}</Button>}</div></Card.Body></Card> : null}
     <SecurityNotificationAddressPreview onVerified={setVerifiedNotificationAddress} verifiedAddress={verifiedNotificationAddress} />
     <section aria-labelledby="personal-security" className={styles.section}>
       <div className={styles.sectionHeading}><div><p>{t("personalEyebrow")}</p><h2 id="personal-security" ref={personalHeading} tabIndex={-1}>{t("personalTitle")}</h2><span>{t("personalHint")}</span></div><Badge status={reauthenticationRequired ? "warning" : factorState === "bound" ? "success" : required ? "warning" : "neutral"}>{t(reauthenticationRequired ? "reauthenticate" : factorState === "bound" ? "bound" : required ? "bindingRequired" : "notBound")}</Badge></div>

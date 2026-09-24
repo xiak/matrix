@@ -82,12 +82,12 @@ export type PersonalMfaPreviewState = {
   reauthenticationRequired: boolean;
   recoveryState: "idle" | "rebind-required";
   /** Non-secret, preview-only intent; provisioning material stays in the current view. */
-  pendingReplacement?: { requestId: string; expiresAt: string; accountRuleVersion: number };
+  pendingReplacement?: { requestId: string; expiresAt: string; accountRuleVersion: number; status: "PENDING" | "CONFIRMATION_UNKNOWN" };
   demoCode?: "624810" | "731942";
 };
 export function previewTotpCode(state: PersonalMfaPreviewState): "624810" | "731942" { return state.demoCode ?? "624810"; }
 export function nextPreviewTotpCode(state: PersonalMfaPreviewState): "624810" | "731942" { return previewTotpCode(state) === "624810" ? "731942" : "624810"; }
-export type AccessEvent = { id: string; action: Exclude<AccessWorkspaceCommand["kind"], "remember-account-rule-change-unknown"> | "sign-in" | "batch-users"; target: string; at: string };
+export type AccessEvent = { id: string; action: Exclude<AccessWorkspaceCommand["kind"], "remember-account-rule-change-unknown" | "mark-personal-mfa-replacement-unknown" | "inspect-personal-mfa-replacement"> | "sign-in" | "batch-users"; target: string; at: string };
 export type PreviewUserProfile = {
   consoleAccess: boolean; programmaticAccess: boolean; passwordResetRequired: boolean;
   loginProtection: boolean; tags: { key: string; value: string }[];
@@ -141,6 +141,8 @@ export type AccessWorkspaceCommand =
   | { kind: "delete-key"; id: string; resourceVersion: number; requestId: string }
   | { kind: "confirm-personal-mfa" }
   | { kind: "begin-personal-mfa-replacement"; requestId: string; proofStartedAt: string }
+  | { kind: "mark-personal-mfa-replacement-unknown"; requestId: string }
+  | { kind: "inspect-personal-mfa-replacement"; requestId: string }
   | { kind: "cancel-personal-mfa-replacement"; requestId: string }
   | { kind: "confirm-personal-mfa-replacement"; requestId: string }
   | { kind: "regenerate-personal-recovery-codes" }
@@ -487,16 +489,34 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
       const startedAt = Date.parse(context.at);
       if (!Number.isFinite(proofStartedAt) || !Number.isFinite(startedAt) || proofStartedAt > startedAt || startedAt - proofStartedAt >= 120_000) invalid();
       const expiresAt = new Date(proofStartedAt + 120_000).toISOString();
-      state.personalMfa.pendingReplacement = { requestId: command.requestId, expiresAt, accountRuleVersion: state.settings.accountRuleVersion };
+      state.personalMfa.pendingReplacement = { requestId: command.requestId, expiresAt, accountRuleVersion: state.settings.accountRuleVersion, status: "PENDING" };
       target = context.primaryPrincipalId; break;
     }
+    case "mark-personal-mfa-replacement-unknown": {
+      const pending = state.personalMfa.pendingReplacement;
+      if (!pending) throw new AccessWorkspaceError("invalid");
+      if (pending.requestId !== command.requestId || !context.sameReplacementSession || pending.status !== "PENDING") invalid();
+      pending.status = "CONFIRMATION_UNKNOWN";
+      recordEvent = false;
+      break;
+    }
+    case "inspect-personal-mfa-replacement": {
+      const pending = state.personalMfa.pendingReplacement;
+      if (!pending) throw new AccessWorkspaceError("invalid");
+      if (pending.requestId !== command.requestId || pending.status !== "CONFIRMATION_UNKNOWN") invalid();
+      // This explicitly simulates an authoritative by-request read in the
+      // isolated preview. It is not a real IAM observation or a wire contract.
+      pending.status = "PENDING";
+      recordEvent = false;
+      break;
+    }
     case "cancel-personal-mfa-replacement":
-      if (state.personalMfa.pendingReplacement?.requestId !== command.requestId) invalid();
+      if (state.personalMfa.pendingReplacement?.requestId !== command.requestId || state.personalMfa.pendingReplacement.status !== "PENDING") invalid();
       delete state.personalMfa.pendingReplacement;
       target = context.primaryPrincipalId; break;
     case "confirm-personal-mfa-replacement": {
       const pending = state.personalMfa.pendingReplacement;
-      if (!pending || pending.requestId !== command.requestId || !context.sameReplacementSession || new Date(context.at).getTime() >= new Date(pending.expiresAt).getTime() || pending.accountRuleVersion !== state.settings.accountRuleVersion || state.personalMfa.factorState !== "bound" || state.personalMfa.reauthenticationRequired || state.personalMfa.recoveryState !== "idle" || state.pendingAccountRuleChange) invalid();
+      if (!pending || pending.requestId !== command.requestId || pending.status !== "PENDING" || !context.sameReplacementSession || new Date(context.at).getTime() >= new Date(pending.expiresAt).getTime() || pending.accountRuleVersion !== state.settings.accountRuleVersion || state.personalMfa.factorState !== "bound" || state.personalMfa.reauthenticationRequired || state.personalMfa.recoveryState !== "idle" || state.pendingAccountRuleChange) invalid();
       state.personalMfa = { factorState: "bound", reauthenticationRequired: true, recoveryState: "idle", demoCode: nextPreviewTotpCode(state.personalMfa) };
       target = context.primaryPrincipalId; break;
     }
@@ -584,6 +604,6 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
       state.settings = { ...state.settings, userSsoEnabled: command.userSsoEnabled, userSsoConfiguration: config ? structuredClone(config) : null }; target = source.accountId; break;
     }
   }
-  if (recordEvent && command.kind !== "remember-account-rule-change-unknown") state.events = [{ id: context.id, action: command.kind, target, at: context.at }, ...state.events].slice(0, 100);
+  if (recordEvent && command.kind !== "remember-account-rule-change-unknown" && command.kind !== "mark-personal-mfa-replacement-unknown" && command.kind !== "inspect-personal-mfa-replacement") state.events = [{ id: context.id, action: command.kind, target, at: context.at }, ...state.events].slice(0, 100);
   return state;
 }

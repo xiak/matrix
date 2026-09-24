@@ -80,6 +80,13 @@ export interface IamRepository {
     confirmNotificationVerification(credential: string, verificationId: string, command: { code: string; requestId: string }): Promise<NotificationContactVerification>;
     authenticatorState(credential: string): Promise<AuthenticatorState>;
     startTOTPEnrollment(credential: string, command: { requestId: string; password: string; expectedFactorRevision: number }): Promise<TOTPEnrollmentStart>;
+    replacement?: {
+      startStepUp(credential: string, command: { requestId: string; expectedFactorRevision: number }): Promise<SecurityStepUp>;
+      stepUpByRequest(credential: string, requestId: string): Promise<SecurityStepUp>;
+      verifyStepUp(credential: string, stepUpId: string, command: { requestId: string; password: string; code: string }): Promise<SecurityStepUp>;
+      startEnrollment(credential: string, command: { requestId: string; stepUpId: string; expectedFactorRevision: number }): Promise<TOTPEnrollmentStart>;
+      enrollmentByRequest(credential: string, requestId: string): Promise<TOTPEnrollment>;
+    };
     totpEnrollment(credential: string, enrollmentId: string): Promise<TOTPEnrollment>;
     totpEnrollmentByRequest(credential: string, requestId: string): Promise<TOTPEnrollment>;
     cancelTOTPEnrollment(credential: string, enrollmentId: string): Promise<TOTPEnrollment>;
