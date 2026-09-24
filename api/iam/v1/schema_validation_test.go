@@ -14,6 +14,78 @@ import (
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 )
 
+func TestAccountSecuritySettingsSchemasRejectMissingConfigurationAndAuthoritySelectors(t *testing.T) {
+	api := loadIAMOpenAPI(t)
+	for _, sample := range securitySettingsContractSamples() {
+		t.Run(sample.kind, func(t *testing.T) {
+			schema := compileIAMOpenAPISchema(t, api, sample.kind)
+			cases := []struct {
+				wire  string
+				valid bool
+			}{
+				{sample.wire, true},
+				{strings.ReplaceAll(sample.wire, "false", "true"), true},
+				{strings.Replace(sample.wire, `"requiredForUsers":false`, `"requiredForUsers":true`, 1), true},
+				{strings.Replace(sample.wire, "APPLIED", "EQUAL_REPLAY", 1), true},
+				{strings.ReplaceAll(strings.ReplaceAll(sample.wire, `"expectedResourceVersion":1`, `"expectedResourceVersion":9007199254740990`), `"resourceVersion":2`, `"resourceVersion":9007199254740991`), true},
+				{strings.Replace(sample.wire, `"requiredForUsers":false`, "", 1), false},
+				{strings.Replace(sample.wire, `"requiredForUsers":false`, `"requiredForUsers":null`, 1), false},
+				{strings.Replace(sample.wire, `"requiredForUsers":false`, `"requiredForUsers":"false"`, 1), false},
+				{strings.TrimSuffix(sample.wire, "}") + `,"credential":"not-authority"}`, false},
+			}
+			if sample.kind != "AccountMFASettings" {
+				cases = append(cases, struct {
+					wire  string
+					valid bool
+				}{strings.Replace(sample.wire, `"mfa":{"requiredForUsers":false}`, `"mfa":null`, 1), false})
+			}
+			if strings.Contains(sample.wire, `"expectedResourceVersion"`) {
+				for _, version := range []string{"0", "9007199254740991", "null"} {
+					cases = append(cases, struct {
+						wire  string
+						valid bool
+					}{strings.Replace(sample.wire, `"expectedResourceVersion":1`, `"expectedResourceVersion":`+version, 1), false})
+				}
+			}
+			if strings.Contains(sample.wire, `"callerSessionEnded"`) {
+				for _, changed := range []string{
+					strings.Replace(sample.wire, `,"callerSessionEnded":false`, "", 1),
+					strings.Replace(sample.wire, `"callerSessionEnded":false`, `"callerSessionEnded":null`, 1),
+					strings.Replace(sample.wire, `"callerSessionEnded":false`, `"callerSessionEnded":true`, 1),
+				} {
+					cases = append(cases, struct {
+						wire  string
+						valid bool
+					}{changed, false})
+				}
+			}
+			if strings.Contains(sample.wire, `"apiVersion"`) {
+				for _, changed := range []string{
+					strings.Replace(sample.wire, APIVersion, "other/v1", 1),
+					strings.Replace(sample.wire, `"kind":"AccountSecuritySettings`, `"kind":"Session`, 1),
+				} {
+					cases = append(cases, struct {
+						wire  string
+						valid bool
+					}{changed, false})
+				}
+			}
+			for index, sampleCase := range cases {
+				raw, err := jsonschema.UnmarshalJSON(strings.NewReader(sampleCase.wire))
+				if err != nil {
+					t.Fatal("invalid synthetic JSON")
+				}
+				if (schema.Validate(raw) == nil) != sampleCase.valid {
+					t.Fatalf("schema accepted different behavior for case %d", index)
+				}
+				if (json.Unmarshal([]byte(sampleCase.wire), sample.newValue()) == nil) != sampleCase.valid {
+					t.Fatalf("typed contract accepted different behavior for case %d", index)
+				}
+			}
+		})
+	}
+}
+
 func TestStepUpSchemasKeepOperationProofSeparateFromLoginAndSecretReplay(t *testing.T) {
 	api := loadIAMOpenAPI(t)
 	step := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"StepUp","id":"proof-a","requestId":"regenerate-a","operation":"RECOVERY_CODES_REGENERATE","expectedFactorRevision":2,"state":"PENDING","createdAt":"2026-09-21T12:00:00Z","expiresAt":"2026-09-21T12:02:00Z"}`

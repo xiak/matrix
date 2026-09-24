@@ -492,6 +492,12 @@ func structContracts() map[string]reflect.Type {
 		"ChallengePasswordChangeResponse":               openapi31.StructType[iamv1.ChallengePasswordChangeResponse](),
 		"LoginResponse":                                 openapi31.StructType[iamv1.LoginResponse](),
 		"AuthenticationChallenge":                       openapi31.StructType[iamv1.AuthenticationChallenge](),
+		"AccountMFASettings":                            openapi31.StructType[iamv1.AccountMFASettings](),
+		"AccountSecuritySettings":                       openapi31.StructType[iamv1.AccountSecuritySettings](),
+		"SecuritySettingsUpdateIntent":                  openapi31.StructType[iamv1.SecuritySettingsUpdateIntent](),
+		"UpdateAccountSecuritySettingsRequest":          openapi31.StructType[iamv1.UpdateAccountSecuritySettingsRequest](),
+		"AccountSecuritySettingsChange":                 openapi31.StructType[iamv1.AccountSecuritySettingsChange](),
+		"UpdateAccountSecuritySettingsResponse":         openapi31.StructType[iamv1.UpdateAccountSecuritySettingsResponse](),
 		"AuthenticatorState":                            openapi31.StructType[iamv1.AuthenticatorState](),
 		"TOTPEnrollment":                                openapi31.StructType[iamv1.TOTPEnrollment](),
 		"TOTPProvisioning":                              openapi31.StructType[iamv1.TOTPProvisioning](),
@@ -606,6 +612,9 @@ func structContracts() map[string]reflect.Type {
 }
 
 func fieldOverlay(owner string, field reflect.StructField, jsonName string, base object) object {
+	if jsonName == "expectedResourceVersion" && (owner == "SecuritySettingsUpdateIntent" || owner == "UpdateAccountSecuritySettingsRequest" || owner == "AccountSecuritySettingsChange") {
+		return object{"type": "integer", "minimum": 1, "maximum": uint64(9007199254740990)}
+	}
 	if jsonName == "factorRevision" || jsonName == "expectedFactorRevision" {
 		if owner == "StepUp" || owner == "StartStepUpRequest" || owner == "RegenerateRecoveryCodesRequest" || owner == "RecoveryCodeRegeneration" {
 			return object{"type": "integer", "minimum": 2, "maximum": uint64(9007199254740991)}
@@ -631,7 +640,7 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 	if owner == "StepUp" && jsonName == "state" {
 		return object{"enum": []string{"PENDING", "PROVED", "CONSUMED", "EXPIRED"}}
 	}
-	if (owner == "StartTOTPEnrollmentResponse" || owner == "RegenerateRecoveryCodesResponse") && jsonName == "outcome" {
+	if (owner == "StartTOTPEnrollmentResponse" || owner == "RegenerateRecoveryCodesResponse" || owner == "UpdateAccountSecuritySettingsResponse") && jsonName == "outcome" {
 		return object{"enum": []string{"APPLIED", "EQUAL_REPLAY"}}
 	}
 	if owner == "ConfirmTOTPEnrollmentResponse" || owner == "ConfirmAuthenticatorRecoveryResponse" || owner == "RegenerateRecoveryCodesResponse" {
@@ -973,6 +982,17 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 }
 
 func applySemanticOverlays(schemas object) {
+	schemas["AccountMFASettings"].(object)["description"] = "Explicit ordinary USER MFA requirement, not factor state, Session authentication facts or an exception for protected identities. Missing or null is invalid, never an inferred false."
+	schemas["AccountSecuritySettings"].(object)["description"] = "Non-secret current-account configuration. Contract component only; this slice does not publish settings routes or permissions."
+	schemas["SecuritySettingsUpdateIntent"].(object)["description"] = "Exact non-secret target for a future Session-held operation proof. Not a selector or permit; current StepUp operations do not yet accept it."
+	schemas["UpdateAccountSecuritySettingsRequest"].(object)["description"] = "Replace the supported MFA configuration at one expected version using a proof held by the actual current Session. No identity selector, arbitrary patch or caller-controlled Session retention. Contract only; no runtime route in this slice."
+	schemas["AccountSecuritySettingsChange"].(object)["description"] = "Immutable historical completion. Runtime validation additionally requires settings.resourceVersion == expectedResourceVersion + 1. settings.updatedAt is the original completion time, not observation time; requestId is not lookup authority."
+	schemas["AccountSecuritySettingsChange"].(object)["properties"].(object)["callerSessionEnded"] = object{"type": "boolean", "description": "Whether this change ended its original calling Session. Never an instruction to end a later reader's current Session."}
+	schemas["AccountSecuritySettingsChange"].(object)["allOf"] = []any{object{
+		"if":   object{"properties": object{"callerSessionEnded": object{"const": true}}},
+		"then": object{"properties": object{"settings": object{"properties": object{"mfa": object{"properties": object{"requiredForUsers": object{"const": true}}}}}}},
+	}}
+	schemas["UpdateAccountSecuritySettingsResponse"].(object)["description"] = "APPLIED and EQUAL_REPLAY carry the same original non-secret completion, not fresh authorization, current Session state or a credential."
 	schemas["StepUp"].(object)["description"] = "Non-secret metadata bound to one operation and its original effective login Session. It is not a bearer, unlogged challenge or authorization permit. Runtime validation enforces the original 120-second lifetime and proof/consumption ordering; proving never extends expiry."
 	schemas["StepUp"].(object)["oneOf"] = []any{
 		object{"properties": object{"state": object{"const": "PENDING"}, "provedAt": false, "consumedAt": false}},
@@ -1213,6 +1233,7 @@ func applySemanticOverlays(schemas object) {
 		object{"required": []string{"installationId"}, "properties": object{"tenantId": false}},
 	}
 	kinds := map[string]string{
+		"AccountSecuritySettings": "AccountSecuritySettings", "AccountSecuritySettingsChange": "AccountSecuritySettingsChange",
 		"NotificationContact": "NotificationContact", "NotificationContactVerification": "NotificationContactVerification",
 		"AccessKey": "AccessKey", "AccessKeyList": "AccessKeyList", "AccessKeyDeletion": "AccessKeyDeletion",
 		"CurrentRoleIdentity": "CurrentRoleIdentity", "AssumableRoleList": "AssumableRoleList",

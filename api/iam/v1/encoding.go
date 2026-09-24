@@ -325,6 +325,80 @@ func EncodeConfirmAuthenticatorRecoveryResponse(value ConfirmAuthenticatorRecove
 	}{value.Recovery, value.NextStep, codes})
 }
 
+func (value *AccountMFASettings) UnmarshalJSON(source []byte) error {
+	var decoded struct {
+		RequiredForUsers *bool `json:"requiredForUsers"`
+	}
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil || decoded.RequiredForUsers == nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = AccountMFASettings{RequiredForUsers: *decoded.RequiredForUsers}
+	return nil
+}
+
+func (value *AccountSecuritySettings) UnmarshalJSON(source []byte) error {
+	type wire AccountSecuritySettings
+	var decoded wire
+	var fields map[string]json.RawMessage
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil ||
+		ValidateAccountSecuritySettings(AccountSecuritySettings(decoded)) != nil || json.Unmarshal(source, &fields) != nil || fields["mfa"] == nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = AccountSecuritySettings(decoded)
+	return nil
+}
+
+func (value *SecuritySettingsUpdateIntent) UnmarshalJSON(source []byte) error {
+	type wire SecuritySettingsUpdateIntent
+	var decoded wire
+	var fields map[string]json.RawMessage
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil ||
+		ValidateSecuritySettingsUpdateIntent(SecuritySettingsUpdateIntent(decoded)) != nil || json.Unmarshal(source, &fields) != nil || fields["mfa"] == nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = SecuritySettingsUpdateIntent(decoded)
+	return nil
+}
+
+func (value *UpdateAccountSecuritySettingsRequest) UnmarshalJSON(source []byte) error {
+	type wire UpdateAccountSecuritySettingsRequest
+	var decoded wire
+	var fields map[string]json.RawMessage
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil ||
+		ValidateUpdateAccountSecuritySettingsRequest(UpdateAccountSecuritySettingsRequest(decoded)) != nil || json.Unmarshal(source, &fields) != nil || fields["mfa"] == nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = UpdateAccountSecuritySettingsRequest(decoded)
+	return nil
+}
+
+func (value *AccountSecuritySettingsChange) UnmarshalJSON(source []byte) error {
+	type wire AccountSecuritySettingsChange
+	var decoded wire
+	var fields map[string]json.RawMessage
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil ||
+		ValidateAccountSecuritySettingsChange(AccountSecuritySettingsChange(decoded)) != nil || json.Unmarshal(source, &fields) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	ended, present := fields["callerSessionEnded"]
+	if !present || bytes.Equal(bytes.TrimSpace(ended), []byte("null")) {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = AccountSecuritySettingsChange(decoded)
+	return nil
+}
+
+func (value *UpdateAccountSecuritySettingsResponse) UnmarshalJSON(source []byte) error {
+	type wire UpdateAccountSecuritySettingsResponse
+	var decoded wire
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil ||
+		ValidateUpdateAccountSecuritySettingsResponse(UpdateAccountSecuritySettingsResponse(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = UpdateAccountSecuritySettingsResponse(decoded)
+	return nil
+}
+
 func (value *StepUp) UnmarshalJSON(source []byte) error {
 	type wire StepUp
 	var decoded wire

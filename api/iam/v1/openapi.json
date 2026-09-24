@@ -601,6 +601,116 @@
         ],
         "type": "object"
       },
+      "AccountMFASettings": {
+        "additionalProperties": false,
+        "description": "Explicit ordinary USER MFA requirement, not factor state, Session authentication facts or an exception for protected identities. Missing or null is invalid, never an inferred false.",
+        "properties": {
+          "requiredForUsers": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "requiredForUsers"
+        ],
+        "type": "object"
+      },
+      "AccountSecuritySettings": {
+        "additionalProperties": false,
+        "description": "Non-secret current-account configuration. Contract component only; this slice does not publish settings routes or permissions.",
+        "properties": {
+          "accountId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "apiVersion": {
+            "const": "iam.matrix.xiak.com/v1"
+          },
+          "kind": {
+            "const": "AccountSecuritySettings"
+          },
+          "mfa": {
+            "$ref": "#/components/schemas/AccountMFASettings"
+          },
+          "resourceVersion": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "accountId",
+          "apiVersion",
+          "kind",
+          "mfa",
+          "resourceVersion",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
+      "AccountSecuritySettingsChange": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "callerSessionEnded": {
+                  "const": true
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "settings": {
+                  "properties": {
+                    "mfa": {
+                      "properties": {
+                        "requiredForUsers": {
+                          "const": true
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "description": "Immutable historical completion. Runtime validation additionally requires settings.resourceVersion == expectedResourceVersion + 1. settings.updatedAt is the original completion time, not observation time; requestId is not lookup authority.",
+        "properties": {
+          "apiVersion": {
+            "const": "iam.matrix.xiak.com/v1"
+          },
+          "callerSessionEnded": {
+            "description": "Whether this change ended its original calling Session. Never an instruction to end a later reader's current Session.",
+            "type": "boolean"
+          },
+          "expectedResourceVersion": {
+            "maximum": 9007199254740990,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "kind": {
+            "const": "AccountSecuritySettingsChange"
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/AccountSecuritySettings"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "callerSessionEnded",
+          "expectedResourceVersion",
+          "kind",
+          "requestId",
+          "settings"
+        ],
+        "type": "object"
+      },
       "AccountStatus": {
         "enum": [
           "ACTIVE",
@@ -21445,6 +21555,25 @@
         "type": "string",
         "x-matrix-sensitive": true
       },
+      "SecuritySettingsUpdateIntent": {
+        "additionalProperties": false,
+        "description": "Exact non-secret target for a future Session-held operation proof. Not a selector or permit; current StepUp operations do not yet accept it.",
+        "properties": {
+          "expectedResourceVersion": {
+            "maximum": 9007199254740990,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "mfa": {
+            "$ref": "#/components/schemas/AccountMFASettings"
+          }
+        },
+        "required": [
+          "expectedResourceVersion",
+          "mfa"
+        ],
+        "type": "object"
+      },
       "ServiceIdentity": {
         "additionalProperties": false,
         "properties": {
@@ -22390,6 +22519,53 @@
         "required": [
           "id",
           "type"
+        ],
+        "type": "object"
+      },
+      "UpdateAccountSecuritySettingsRequest": {
+        "additionalProperties": false,
+        "description": "Replace the supported MFA configuration at one expected version using a proof held by the actual current Session. No identity selector, arbitrary patch or caller-controlled Session retention. Contract only; no runtime route in this slice.",
+        "properties": {
+          "expectedResourceVersion": {
+            "maximum": 9007199254740990,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "mfa": {
+            "$ref": "#/components/schemas/AccountMFASettings"
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "stepUpId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "expectedResourceVersion",
+          "mfa",
+          "requestId",
+          "stepUpId"
+        ],
+        "type": "object"
+      },
+      "UpdateAccountSecuritySettingsResponse": {
+        "additionalProperties": false,
+        "description": "APPLIED and EQUAL_REPLAY carry the same original non-secret completion, not fresh authorization, current Session state or a credential.",
+        "properties": {
+          "change": {
+            "$ref": "#/components/schemas/AccountSecuritySettingsChange"
+          },
+          "outcome": {
+            "enum": [
+              "APPLIED",
+              "EQUAL_REPLAY"
+            ]
+          }
+        },
+        "required": [
+          "change",
+          "outcome"
         ],
         "type": "object"
       },

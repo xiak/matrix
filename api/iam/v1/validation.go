@@ -505,6 +505,45 @@ func ValidateConfirmAuthenticatorRecoveryResponse(value ConfirmAuthenticatorReco
 	return validateRecoveryCodes(value.RecoveryCodes)
 }
 
+func ValidateAccountSecuritySettings(value AccountSecuritySettings) error {
+	if value.APIVersion != APIVersion || value.Kind != "AccountSecuritySettings" {
+		return errors.New("account security settings type metadata is invalid")
+	}
+	return errors.Join(ValidateID("accountId", string(value.AccountID)), validatePositiveVersion(value.ResourceVersion), validateTime("updatedAt", value.UpdatedAt))
+}
+
+func ValidateSecuritySettingsUpdateIntent(value SecuritySettingsUpdateIntent) error {
+	// A successful command increments the expected revision; both must remain
+	// exact safe integers for every public consumer.
+	if value.ExpectedResourceVersion == 0 || value.ExpectedResourceVersion >= 9007199254740991 {
+		return errors.New("security settings expected version is invalid")
+	}
+	return nil
+}
+
+func ValidateUpdateAccountSecuritySettingsRequest(value UpdateAccountSecuritySettingsRequest) error {
+	return errors.Join(ValidateID("requestId", value.RequestID), ValidateID("stepUpId", value.StepUpID),
+		ValidateSecuritySettingsUpdateIntent(SecuritySettingsUpdateIntent{ExpectedResourceVersion: value.ExpectedResourceVersion, MFA: value.MFA}))
+}
+
+func ValidateAccountSecuritySettingsChange(value AccountSecuritySettingsChange) error {
+	if value.APIVersion != APIVersion || value.Kind != "AccountSecuritySettingsChange" ||
+		ValidateAccountSecuritySettings(value.Settings) != nil ||
+		ValidateSecuritySettingsUpdateIntent(SecuritySettingsUpdateIntent{ExpectedResourceVersion: value.ExpectedResourceVersion, MFA: value.Settings.MFA}) != nil ||
+		value.Settings.ResourceVersion != value.ExpectedResourceVersion+1 ||
+		(value.CallerSessionEnded && !value.Settings.MFA.RequiredForUsers) {
+		return errors.New("account security settings change is invalid")
+	}
+	return ValidateID("requestId", value.RequestID)
+}
+
+func ValidateUpdateAccountSecuritySettingsResponse(value UpdateAccountSecuritySettingsResponse) error {
+	if value.Outcome != "APPLIED" && value.Outcome != "EQUAL_REPLAY" {
+		return errors.New("account security settings outcome is invalid")
+	}
+	return ValidateAccountSecuritySettingsChange(value.Change)
+}
+
 func ValidateStepUp(value StepUp) error {
 	if value.APIVersion != APIVersion || value.Kind != "StepUp" ||
 		value.Operation != StepUpRegenerateRecoveryCodes || value.ExpectedFactorRevision < 2 || validatePositiveVersion(value.ExpectedFactorRevision) != nil ||

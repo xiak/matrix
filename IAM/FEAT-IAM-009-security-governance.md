@@ -644,7 +644,7 @@ RootIdentity仍是原Account的原USER，恢复不能转让root、启用暂停�
 
 账号安全配置是Account内单份有resourceVersion的治理状态，首片不另建可附件到Group/Role的安全策略语言或任意用户例外。`Policy/PolicyVersion`负责谁能操作资源，`security-settings`是该授权所管理的资源；两个对象不能合并。普通User仅可在其已验证身份下取得设置自己新密码所需的有效约束，不取得全账号安全报告或其他用户状态。未认证登录响应不公开按realm变化的配置。
 
-本次拟定权限与入口如下；只形成详细设计，不在代码中提前注册或授予。
+本次权限与入口的设计如下；S2c先在现有API owner固定非秘密配置、准确变更意图及历史完成的数据契约，不在运行时提前注册入口、操作值或授予权限。数据类型存在不代表下列路由已经可用。
 
 | 项目 | 设计 |
 | --- | --- |
@@ -652,10 +652,16 @@ RootIdentity仍是原Account的原USER，恢复不能转让root、启用暂停�
 | 修改动作 | `iam.security-settings.update`，相同scope/资源；不附带User认证器、密码reset、会话管理员、platform或其他Account的权限 |
 | 可用身份载体 | 当前实际USER的LOGIN_SESSION，包含原root但仍需原权限求值；首片不接受RoleSession、AccessKey、ServiceIdentity。SELF不是新增AuthorityScope或万能角色 |
 | 读取入口 | `GET /v1/account/security-settings`，Account从当前身份推导，没有URL/body/header selector；返回`AccountSecuritySettings{apiVersion,kind,accountId,resourceVersion,mfa,updatedAt}`的非秘密配置 |
-| 修改入口 | `PUT /v1/account/security-settings`，严格`{requestId,expectedResourceVersion,mfa:{requiredForUsers},stepUpProof}`；本片完整替换已支持的mfa段，没有任意JSON merge或用户例外数组 |
-| 成功结果 | `outcome=APPLIED\|EQUAL_REPLAY`、原非秘密设置/版本和`reauthenticationRequired`；新执行的输入变体、版本冲突、权限或证明失效均无部分写入。精确完成只在当前caller仍有权限且原输入一致时返回，不要求已消费证明重新可执行，不重复消费或递增版本 |
+| 修改入口 | `PUT /v1/account/security-settings`，严格`{requestId,stepUpId,expectedResourceVersion,mfa:{requiredForUsers}}`；本片完整替换已支持的mfa段，没有任意JSON merge或用户例外数组。`stepUpId`只引用由当前Session持有、绑定准确意图的证明，不是可转移凭据或调用方提供的Allow |
+| 成功结果 | `UpdateAccountSecuritySettingsResponse{outcome,change}`，outcome只为`APPLIED\|EQUAL_REPLAY`；`change`是`AccountSecuritySettingsChange{apiVersion,kind,requestId,expectedResourceVersion,settings,callerSessionEnded}`。settings保存原完成时的非秘密配置快照及updatedAt，新版本必须等于expected+1；requestId是唯一命令引用，不另造完成ID。新执行的输入变体、版本冲突、权限或证明失效均无部分写入。精确完成只在当前caller仍有权限且原输入一致时返回，不要求已消费证明重新可执行，不重复消费或递增版本 |
 | 完成读取 | `GET /v1/account/security-settings/changes/{requestId}`；当前LOGIN_SESSION、当前read权限、同Account且原actor为同一USER，允许该USER重新登录后只读原版本/完成时间/结果。不返回证明秘密、不重做写入，不存在或不属于caller均不泄露其他意图 |
 | 后继字段 | 密码及Session期限随S3相应实现统一增加到实际schema和UI；尚未实现的字段拒绝，不返回伪默认值或预留可写空对象 |
+
+`SecuritySettingsUpdateIntent{expectedResourceVersion,mfa}`只包含未来操作专属证明必须绑定的准确非秘密目标，不是任意Action/payload或PDP许可。尚未接通对应事务时，既有step-up仍只接受`RECOVERY_CODES_REGENERATE`，不得先开放security-settings操作值。`mfa.requiredForUsers`必须显式为true或false；省略、null、空mfa和未知字段均拒绝，不能将缺失配置解码为放宽规则。公开版本为正安全整数；expected必须留出一次递增的空间。
+
+`callerSessionEnded`必须显式存在，描述**原命令调用Session**是否被这次收紧淘汰；它不是当前读取者的登出指令，也不是请求方可选的保留会话参数。新配置为false时不得报告本次变更终止了caller。历史查询及EQUAL_REPLAY始终返回原快照/原结果，不因当前配置、当前登录Session或后续授权改变而改写。正常重新登录后读到旧的true不得再退出新Session；APPLIED使原caller失效时则必须正常重新认证。该字段不列举其他会话、不授予其查询权，也不能推断Role/其他身份获得更强认证。
+
+S2c当前只实施上述六个非秘密API类型、严格解码/验证及OpenAPI组件。2026-09-24本地Go1.26.7、`GOMAXPROCS=2`、`GOMEMLIMIT=512MiB`下，API与架构`-race -p 2`、API vet及122个已跟踪API文件的重复生成一致性通过；新增模糊测试单worker运行15秒（终端17.214s，221734次执行）通过。IAM/Audit默认回归也通过，其中外部数据库用例的跳过不计作实跑。既有测试owner覆盖显式false/true、缺失/null、未知或重复字段、请求方身份/权限选择、版本上限及历史完成与新Session分离；JSON Schema证明结构与封闭枚举，expected+1跨字段关系仍由Go验证，不能宣称Schema独自证明事务。当前step-up拒绝设置操作，OpenAPI不发布设置路由；未新增Action、SQL、schema版本、发布profile或UI。此证据不是配置CAS、强制初始绑定、跨副本Session/Role屏障、真实邮件、独立CI或发布验收，后续运行时切片必须完成这些目标。
 
 当前首片只有TOTP，故不提供算法、允许因子清单、宽限期、按组例外或平台底线开关；新Account的`requiredForUsers=false`只是未强制日常User，不关闭用户主动绑定的因子。已有安装安全配置只能从实际可信旧状态迁移，不能以默认false覆盖生效决定；缺少应存在的行不得在读取时临时生成。用户NEVER_BOUND的首次设置、具备合法解绑完成的REMOVED重新设置及因子丢失必须区分。
 

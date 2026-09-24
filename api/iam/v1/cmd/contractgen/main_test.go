@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -29,6 +30,15 @@ func TestPasswordOverloadOnlyDocumentsTheBoundedAuthenticationEntrypoints(t *tes
 		_, present := responses["429"]
 		if present != (operation == "login" || operation == "changePassword" || operation == "verifyStepUp") {
 			t.Fatal("overload contract leaked to unrelated commands")
+		}
+	}
+}
+
+func TestSecuritySettingsComponentsDoNotPublishAnUnimplementedRoute(t *testing.T) {
+	document := buildDocument()
+	for path := range document["paths"].(object) {
+		if strings.HasPrefix(path, "/v1/account/security-settings") {
+			t.Fatal("pure contract slice published an unimplemented settings workflow")
 		}
 	}
 }

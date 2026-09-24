@@ -197,6 +197,54 @@ type AuthenticationChallenge struct {
 	ExpiresAt  time.Time `json:"expiresAt"`
 }
 
+// AccountMFASettings governs ordinary USER login requirements, not whether
+// a particular USER has a factor or a Session actually authenticated with it.
+// Protected root/installation identities have their own non-tenant boundary.
+type AccountMFASettings struct {
+	RequiredForUsers bool `json:"requiredForUsers"`
+}
+
+type AccountSecuritySettings struct {
+	APIVersion      string             `json:"apiVersion"`
+	Kind            string             `json:"kind"`
+	AccountID       AccountID          `json:"accountId"`
+	ResourceVersion uint64             `json:"resourceVersion"`
+	MFA             AccountMFASettings `json:"mfa"`
+	UpdatedAt       time.Time          `json:"updatedAt"`
+}
+
+// SecuritySettingsUpdateIntent is the exact nonsecret target of a future
+// operation-bound proof. It is not a policy, identity selector or permit.
+// The current StepUp routes do not yet accept this operation.
+type SecuritySettingsUpdateIntent struct {
+	ExpectedResourceVersion uint64             `json:"expectedResourceVersion"`
+	MFA                     AccountMFASettings `json:"mfa"`
+}
+
+type UpdateAccountSecuritySettingsRequest struct {
+	RequestID               string             `json:"requestId"`
+	StepUpID                string             `json:"stepUpId"`
+	ExpectedResourceVersion uint64             `json:"expectedResourceVersion"`
+	MFA                     AccountMFASettings `json:"mfa"`
+}
+
+// This is an immutable historical completion. CallerSessionEnded describes
+// the original calling Session, never the Session reading this result now.
+// RequestID is its sole command reference; it does not grant lookup access.
+type AccountSecuritySettingsChange struct {
+	APIVersion              string                  `json:"apiVersion"`
+	Kind                    string                  `json:"kind"`
+	RequestID               string                  `json:"requestId"`
+	ExpectedResourceVersion uint64                  `json:"expectedResourceVersion"`
+	Settings                AccountSecuritySettings `json:"settings"`
+	CallerSessionEnded      bool                    `json:"callerSessionEnded"`
+}
+
+type UpdateAccountSecuritySettingsResponse struct {
+	Outcome string                        `json:"outcome"`
+	Change  AccountSecuritySettingsChange `json:"change"`
+}
+
 // AuthenticatorState is a projection of the authenticated USER, not a
 // selectable identity, account security policy or inferred permission.
 type AuthenticatorState struct {

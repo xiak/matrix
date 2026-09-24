@@ -26,6 +26,169 @@ import (
 	"github.com/xiak/matrix/api/contractjson"
 )
 
+func securitySettingsContractSamples() []struct {
+	kind, wire string
+	newValue   func() any
+} {
+	mfa := `{"requiredForUsers":false}`
+	settings := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccountSecuritySettings","accountId":"account-a","resourceVersion":2,"mfa":` + mfa + `,"updatedAt":"2026-09-24T12:00:00Z"}`
+	change := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccountSecuritySettingsChange","requestId":"change-a","expectedResourceVersion":1,"settings":` + settings + `,"callerSessionEnded":false}`
+	return []struct {
+		kind, wire string
+		newValue   func() any
+	}{
+		{"AccountMFASettings", mfa, func() any { return new(AccountMFASettings) }},
+		{"AccountSecuritySettings", settings, func() any { return new(AccountSecuritySettings) }},
+		{"SecuritySettingsUpdateIntent", `{"expectedResourceVersion":1,"mfa":` + mfa + `}`, func() any { return new(SecuritySettingsUpdateIntent) }},
+		{"UpdateAccountSecuritySettingsRequest", `{"requestId":"change-a","stepUpId":"proof-a","expectedResourceVersion":1,"mfa":` + mfa + `}`, func() any { return new(UpdateAccountSecuritySettingsRequest) }},
+		{"AccountSecuritySettingsChange", change, func() any { return new(AccountSecuritySettingsChange) }},
+		{"UpdateAccountSecuritySettingsResponse", `{"outcome":"APPLIED","change":` + change + `}`, func() any { return new(UpdateAccountSecuritySettingsResponse) }},
+	}
+}
+
+func TestAccountSecuritySettingsContractsPreserveExplicitValuesAndHistory(t *testing.T) {
+	for _, sample := range securitySettingsContractSamples() {
+		t.Run(sample.kind, func(t *testing.T) {
+			for _, wire := range []string{
+				sample.wire,
+				strings.ReplaceAll(sample.wire, "false", "true"),
+				strings.Replace(sample.wire, `"requiredForUsers":false`, `"requiredForUsers":true`, 1),
+				strings.Replace(sample.wire, "APPLIED", "EQUAL_REPLAY", 1),
+				strings.ReplaceAll(strings.ReplaceAll(sample.wire, `"expectedResourceVersion":1`, `"expectedResourceVersion":9007199254740990`), `"resourceVersion":2`, `"resourceVersion":9007199254740991`),
+			} {
+				value := sample.newValue()
+				if err := DecodeRequest(strings.NewReader(wire), value); err != nil {
+					t.Fatalf("explicit supported configuration rejected: %v", err)
+				}
+				encoded, err := json.Marshal(value)
+				if err != nil {
+					t.Fatal("non-secret settings contract is not serializable")
+				}
+				decoded := sample.newValue()
+				if DecodeRequest(bytes.NewReader(encoded), decoded) != nil || !reflect.DeepEqual(value, decoded) {
+					t.Fatal("explicit configuration or historical result changed under round trip")
+				}
+				var login LoginResponse
+				if DecodeRequest(bytes.NewReader(encoded), &login) == nil {
+					t.Fatal("settings metadata became login authority")
+				}
+			}
+		})
+	}
+}
+
+func TestAccountSecuritySettingsRejectAmbiguityWithoutChangingPriorValue(t *testing.T) {
+	for _, sample := range securitySettingsContractSamples() {
+		t.Run(sample.kind, func(t *testing.T) {
+			malformed := []string{
+				`null`, `[]`, `{}`, sample.wire + `{}`,
+				strings.Replace(sample.wire, `"requiredForUsers":false`, `"requiredForUsers":`+strings.Repeat(" ", int(MaxRequestBytes))+`false`, 1),
+				strings.TrimSuffix(sample.wire, "}") + `,"unknown":true}`,
+			}
+			for _, replacement := range []string{
+				``, `"requiredForUsers":null`, `"requiredForUsers":"false"`, `"requiredForUsers":0`,
+				`"requiredForUsers":[]`, `"RequiredForUsers":false`,
+				`"requiredForUsers":false,"requiredForUsers":true`,
+				`"requiredForUsers":false,"requiredFor\u0055sers":true`,
+				`"requiredForUsers":false,"allowRootException":true`,
+			} {
+				malformed = append(malformed, strings.Replace(sample.wire, `"requiredForUsers":false`, replacement, 1))
+			}
+			if sample.kind != "AccountMFASettings" {
+				malformed = append(malformed,
+					strings.Replace(sample.wire, `,"mfa":{"requiredForUsers":false}`, "", 1),
+					strings.Replace(sample.wire, `"mfa":{"requiredForUsers":false}`, `"mfa":null`, 1),
+					strings.Replace(sample.wire, `"mfa":`, `"MFA":`, 1),
+				)
+			}
+			if strings.Contains(sample.wire, `"expectedResourceVersion"`) {
+				for _, version := range []string{"0", "-1", "1.5", `"1"`, "null", "9007199254740991", "18446744073709551616"} {
+					malformed = append(malformed, strings.Replace(sample.wire, `"expectedResourceVersion":1`, `"expectedResourceVersion":`+version, 1))
+				}
+				malformed = append(malformed, strings.Replace(sample.wire, `"expectedResourceVersion":1,`, "", 1))
+			}
+			if strings.Contains(sample.wire, `"apiVersion"`) {
+				malformed = append(malformed,
+					strings.Replace(sample.wire, APIVersion, "other/v1", 1),
+					strings.Replace(sample.wire, `"kind":"AccountSecuritySettings`, `"kind":"Other`, 1),
+					strings.Replace(sample.wire, `"account-a"`, `""`, 1),
+					strings.Replace(sample.wire, `"resourceVersion":2`, `"resourceVersion":0`, 1),
+					strings.Replace(sample.wire, `"2026-09-24T12:00:00Z"`, `null`, 1),
+					strings.Replace(sample.wire, `"2026-09-24T12:00:00Z"`, `"2026-09-24T13:00:00+01:00"`, 1),
+					strings.Replace(sample.wire, `"2026-09-24T12:00:00Z"`, `"2026-09-24T12:00:00.0000001Z"`, 1),
+				)
+			}
+			if strings.Contains(sample.wire, `"callerSessionEnded"`) {
+				malformed = append(malformed,
+					strings.Replace(sample.wire, `,"callerSessionEnded":false`, "", 1),
+					strings.Replace(sample.wire, `"callerSessionEnded":false`, `"callerSessionEnded":null`, 1),
+					strings.Replace(sample.wire, `"callerSessionEnded":false`, `"callerSessionEnded":true`, 1),
+					strings.Replace(sample.wire, `"resourceVersion":2`, `"resourceVersion":3`, 1),
+				)
+			}
+			if sample.kind == "UpdateAccountSecuritySettingsResponse" {
+				malformed = append(malformed, strings.Replace(sample.wire, "APPLIED", "UNKNOWN", 1))
+			}
+			if sample.kind == "SecuritySettingsUpdateIntent" || sample.kind == "UpdateAccountSecuritySettingsRequest" {
+				for _, selector := range []string{"accountId", "tenantId", "userId", "sessionId", "installationId", "action", "attributes", "password", "code", "challengeCredential", "stepUpProof", "revokeOtherSessions"} {
+					malformed = append(malformed, strings.TrimSuffix(sample.wire, "}")+`,"`+selector+`":"untrusted-value"}`)
+				}
+			}
+			for index, wire := range malformed {
+				value := sample.newValue()
+				if json.Unmarshal([]byte(sample.wire), value) != nil {
+					t.Fatal("invalid baseline fixture")
+				}
+				before, _ := json.Marshal(value)
+				if err := json.Unmarshal([]byte(wire), value); err == nil {
+					t.Fatalf("invalid contract %d accepted", index)
+				}
+				after, _ := json.Marshal(value)
+				if !bytes.Equal(before, after) {
+					t.Fatalf("failed decode %d changed prior configuration/completion", index)
+				}
+			}
+		})
+	}
+}
+
+func TestSettingsIntentDoesNotExpandTheCurrentStepUpOperation(t *testing.T) {
+	for _, wire := range []string{
+		`{"requestId":"settings-a","operation":"SECURITY_SETTINGS_UPDATE","expectedResourceVersion":1,"mfa":{"requiredForUsers":true}}`,
+		`{"requestId":"settings-a","operation":"SECURITY_SETTINGS_UPDATE","expectedFactorRevision":2}`,
+		`{"requestId":"settings-a","operation":"RECOVERY_CODES_REGENERATE","expectedFactorRevision":2,"intent":{"expectedResourceVersion":1,"mfa":{"requiredForUsers":true}}}`,
+	} {
+		var value StartStepUpRequest
+		if DecodeRequest(strings.NewReader(wire), &value) == nil {
+			t.Fatal("pure settings intent opened an unimplemented runtime proof operation")
+		}
+	}
+}
+
+func FuzzAccountSecuritySettingsContractRoundTrip(f *testing.F) {
+	samples := securitySettingsContractSamples()
+	for index, sample := range samples {
+		f.Add(uint8(index), sample.wire)
+	}
+	f.Add(uint8(0), `{"requiredForUsers":null}`)
+	f.Add(uint8(2), `{"expectedResourceVersion":9007199254740991,"mfa":{"requiredForUsers":true}}`)
+	f.Fuzz(func(t *testing.T, kind uint8, source string) {
+		factory := samples[int(kind)%len(samples)].newValue
+		value := factory()
+		if DecodeRequest(strings.NewReader(source), value) != nil {
+			return
+		}
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal("accepted non-secret contract is not serializable")
+		}
+		decoded := factory()
+		if DecodeRequest(bytes.NewReader(encoded), decoded) != nil || !reflect.DeepEqual(value, decoded) {
+			t.Fatal("accepted settings contract changed under round trip")
+		}
+	})
+}
+
 func TestStepUpMetadataIsBoundedAndNeverLoginAuthority(t *testing.T) {
 	created := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
 	proved, consumed := created.Add(time.Second), created.Add(2*time.Second)
