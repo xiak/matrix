@@ -38,13 +38,8 @@ func TestSelfServiceSecurityFactsRequireTheActualTenantUser(t *testing.T) {
 	for _, contract := range []struct {
 		action Action
 		target TargetKind
-	}{
-		{ActionIAMNotificationContactVerificationStarted, TargetUser},
-		{ActionIAMNotificationContactVerified, TargetUser},
-		{ActionIAMAuthenticatorBound, TargetPrincipal},
-		{ActionIAMAuthenticatorRecoveryStarted, TargetPrincipal},
-		{ActionIAMAuthenticatorRecovered, TargetPrincipal},
-	} {
+	}{{ActionIAMNotificationContactVerificationStarted, TargetUser}, {ActionIAMNotificationContactVerified, TargetUser}, {ActionIAMAuthenticatorBound, TargetPrincipal},
+		{ActionIAMAuthenticatorRecoveryStarted, TargetPrincipal}, {ActionIAMAuthenticatorRecovered, TargetPrincipal}, {ActionIAMRecoveryCodesRegenerated, TargetPrincipal}} {
 		t.Run(string(contract.action), func(t *testing.T) {
 			valid := Event{
 				APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-notification-contact",
@@ -251,7 +246,14 @@ func TestAuditActionCatalogIsClosedAndSourceBound(t *testing.T) {
 		}
 		if contract.PlatformOnly {
 			event.TenantID, event.InstallationID = "", "installation-example"
-			event.Actor.Type = ActorUser
+			if contract.PlatformSystemActorID == "" {
+				event.Actor.Type = ActorUser
+			} else {
+				event.Actor = ActorReference{Type: ActorSystem, ID: contract.PlatformSystemActorID}
+			}
+			if contract.TargetMatchesInstallation {
+				event.Target.ID = event.InstallationID
+			}
 		}
 		if contract.PlatformSystemActorID != "" {
 			event.Actor = ActorReference{Type: ActorSystem, ID: contract.PlatformSystemActorID}
@@ -262,7 +264,7 @@ func TestAuditActionCatalogIsClosedAndSourceBound(t *testing.T) {
 		if contract.UserActorRequired {
 			event.Actor.Type = ActorUser
 		}
-		if action == ActionIAMNotificationContactVerificationStarted || action == ActionIAMNotificationContactVerified || action == ActionIAMAuthenticatorBound || action == ActionIAMAuthenticatorRecoveryStarted || action == ActionIAMAuthenticatorRecovered {
+		if action == ActionIAMNotificationContactVerificationStarted || action == ActionIAMNotificationContactVerified || action == ActionIAMAuthenticatorBound || action == ActionIAMAuthenticatorRecoveryStarted || action == ActionIAMAuthenticatorRecovered || action == ActionIAMRecoveryCodesRegenerated {
 			event.Target.ID = string(event.Actor.ID)
 		}
 		if contract.RoleActorRequired {

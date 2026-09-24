@@ -33,6 +33,7 @@
           "iam.authenticator.bound",
           "iam.authenticator.recovery-started",
           "iam.authenticator.recovered",
+          "iam.recovery-codes.regenerated",
           "iam.group.created",
           "iam.role.created",
           "iam.role.updated",
@@ -633,6 +634,32 @@
                   "properties": {
                     "action": {
                       "const": "iam.authenticator.recovered"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "IAM"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.recovery-codes.regenerated"
                     }
                   },
                   "required": [
@@ -3551,6 +3578,52 @@
               "properties": {
                 "action": {
                   "const": "iam.authenticator.recovered"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actor": {
+                  "properties": {
+                    "accessKeyId": false,
+                    "type": {
+                      "const": "USER"
+                    }
+                  }
+                },
+                "iamDecisionId": false,
+                "installationId": false,
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "PRINCIPAL"
+                    },
+                    "tenantId": false
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "tenantId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.recovery-codes.regenerated"
                 }
               },
               "required": [

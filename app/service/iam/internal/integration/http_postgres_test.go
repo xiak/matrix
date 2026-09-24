@@ -2365,15 +2365,42 @@ func proveUserPermissionBoundaries(t *testing.T, ctx context.Context, handler ht
 	call(http.MethodPost, "/v1/audit-producer:resolve", iamProducerCredential, iamv1.ResolveAuditProducerRequest{Event: event}, http.StatusOK, nil)
 }
 
+// This gate proves first-enrollment and login HTTP against restricted PG
+// transactions. Both authority instances remain in this test process. Only
+// the explicitly configured Postfix branch proves real notification delivery.
 func TestIAMTOTPEnrollmentPostgres(t *testing.T) {
-	dsn := os.Getenv("MATRIX_IAM_TOTP_ENROLLMENT_POSTGRES_TEST_DSN")
-	if dsn == "" {
-		t.Skip("set MATRIX_IAM_TOTP_ENROLLMENT_POSTGRES_TEST_DSN to an isolated PostgreSQL 18 database")
+	testIAMTOTPEnrollmentPostgres(t, "enrollment")
+}
+
+// Exhausting ten saved codes necessarily spans two real ten-minute windows.
+// Keep this wall-clock gate separate; do not relax the normal enrollment gate
+// or manufacture successful consumption by editing the authoritative rows.
+func TestIAMTOTPRecoveryExhaustionPostgres(t *testing.T) {
+	testIAMTOTPEnrollmentPostgres(t, "exhaustion")
+}
+
+func TestIAMStepUpPostgres(t *testing.T) {
+	testIAMTOTPEnrollmentPostgres(t, "step-up")
+}
+
+func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
+	t.Helper()
+	environment, prefix, lifetime := "MATRIX_IAM_TOTP_ENROLLMENT_POSTGRES_TEST_DSN", "matrix_iam_totp_enrollment_", 3*time.Minute
+	if mode == "exhaustion" {
+		environment, prefix, lifetime = "MATRIX_IAM_TOTP_RECOVERY_EXHAUSTION_POSTGRES_TEST_DSN", "matrix_iam_totp_recovery_exhaustion_", 25*time.Minute
+	} else if mode == "step-up" {
+		// Independent users cross real TOTP steps, and the final case
+		// waits out an original 120-second proof under an actual row lock.
+		environment, prefix, lifetime = "MATRIX_IAM_STEP_UP_POSTGRES_TEST_DSN", "matrix_iam_step_up_", 7*time.Minute
 	}
-	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+	dsn := os.Getenv(environment)
+	if dsn == "" {
+		t.Skip("set " + environment + " to an isolated PostgreSQL 18 database")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), lifetime)
 	defer cancel()
 	config, err := pgx.ParseConfig(dsn)
-	if err != nil || !strings.HasPrefix(config.Database, "matrix_iam_totp_enrollment_") {
+	if err != nil || !strings.HasPrefix(config.Database, prefix) {
 		t.Fatal("TOTP enrollment gate needs its own database")
 	}
 	config.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
@@ -2401,6 +2428,8 @@ func TestIAMTOTPEnrollmentPostgres(t *testing.T) {
 	}
 	pc.ConnConfig.User, pc.ConnConfig.Password = iamHTTPTestRole, iamHTTPTestPassword
 	pc.MaxConns = 2
+	totpFailureTrace := &iamTransactionFailureTrace{}
+	pc.ConnConfig.Tracer = totpFailureTrace
 	pool, err := pgxpool.NewWithConfig(ctx, pc)
 	if err != nil {
 		t.Fatal(err)
@@ -3036,7 +3065,11 @@ func TestIAMTOTPEnrollmentPostgres(t *testing.T) {
 			t.Fatal("authentication history invariant did not reject the exact attack", err)
 		}
 	}
-	for _, securityChange := range []string{"complete", "reset", "disable-user"} {
+	forcedCases := []string{"complete", "reset", "disable-user"}
+	if mode == "step-up" {
+		forcedCases = nil // Existing forced-login cases keep their original gate.
+	}
+	for _, securityChange := range forcedCases {
 		t.Run("forced_password_challenge/"+securityChange, func(t *testing.T) {
 			initial := iamHTTPSecret(t, "Forced-Initial-Password-684!")
 			current := iamHTTPSecret(t, "Forced-Current-Password-753!")
@@ -3409,6 +3442,21 @@ func TestIAMTOTPEnrollmentPostgres(t *testing.T) {
 			{"recovery_consumption", "ALTER TABLE iam.mfa_recovery_codes DISABLE TRIGGER verify_authenticator_recovery"},
 			{"recovery_fact", "ALTER TABLE iam.audit_outbox DISABLE TRIGGER verify_authenticator_recovery"},
 			{"recovery_notice", "ALTER TABLE iam.security_notifications DISABLE TRIGGER verify_authenticator_recovery"},
+			{"step_up_api_table", "GRANT SELECT ON iam.step_ups TO matrix_iam_api"},
+			{"step_up_worker_effect", "GRANT EXECUTE ON FUNCTION iam.prove_step_up(text,text,text,text,text,text,text,bigint,text,bigint,bigint) TO matrix_iam_worker"},
+			{"step_up_private_proof", "GRANT EXECUTE ON FUNCTION iam.assert_recovery_regeneration(text,text) TO matrix_iam_api"},
+			{"step_up_rls", "ALTER TABLE iam.step_ups NO FORCE ROW LEVEL SECURITY"},
+			{"step_up_lifetime", "ALTER TABLE iam.step_ups DROP CONSTRAINT step_up_lifetime"},
+			{"step_up_completion", "ALTER TABLE iam.step_ups DROP CONSTRAINT step_up_proof"},
+			{"step_up_pending_index", "DROP INDEX iam.step_up_pending"},
+			{"step_up_guard", "ALTER TABLE iam.step_ups DISABLE TRIGGER cannot_update"},
+			{"step_up_delete", "ALTER TABLE iam.step_ups DISABLE TRIGGER cannot_delete"},
+			{"regeneration_fact", "ALTER TABLE iam.audit_outbox DISABLE TRIGGER verify_recovery_regeneration"},
+			{"regeneration_notice", "ALTER TABLE iam.security_notifications DISABLE TRIGGER verify_recovery_regeneration"},
+			{"regeneration_source", "ALTER TABLE iam.mfa_recovery_batches DROP CONSTRAINT regeneration_id_lineage"},
+			{"regeneration_termination", "ALTER TABLE iam.mfa_recovery_batches DROP CONSTRAINT revocation_regeneration_id_lineage"},
+			{"regeneration_immutable", "ALTER TABLE iam.recovery_code_regenerations DISABLE TRIGGER cannot_update"},
+			{"regeneration_truncate", "ALTER TABLE iam.recovery_code_regenerations DISABLE TRIGGER cannot_truncate"},
 		} {
 			t.Run(attack.name, func(t *testing.T) {
 				tx, err := admin.Begin(ctx)
@@ -3429,9 +3477,15 @@ func TestIAMTOTPEnrollmentPostgres(t *testing.T) {
 			t.Fatal("rolled-back schema damage changed actual authority readiness", err)
 		}
 	})
-	for _, recoveryCase := range []string{"real-postfix", "complete", "lost-start", "same-code", "same-challenge", "attempt-budget", "rollback-start", "rollback-confirm", "forced", "reset", "disable-user", "lock-expiry"} {
+	recoveryCases := []string{"real-postfix", "complete", "lost-start", "same-code", "same-challenge", "attempt-budget", "rollback-start", "rollback-confirm", "forced", "reset", "disable-user", "lock-expiry"}
+	if mode == "exhaustion" {
+		recoveryCases = []string{"exhaustion"}
+	} else if mode == "step-up" {
+		recoveryCases = []string{"regenerate", "regenerate-competing-proofs", "regenerate-other-session", "regenerate-budgets", "regenerate-logout", "regenerate-password", "regenerate-reset", "regenerate-disable-user", "regenerate-lock-expiry"}
+	}
+	for _, recoveryCase := range recoveryCases {
 		t.Run("authenticator_recovery/"+recoveryCase, func(t *testing.T) {
-			realMail := recoveryCase == "real-postfix"
+			realMail := recoveryCase == "real-postfix" || (recoveryCase == "regenerate" && startDelivery != nil)
 			if realMail && startDelivery == nil {
 				t.Skip("dedicated Postfix is absent; committed recovery notices are not mailbox evidence")
 			}
@@ -3541,6 +3595,466 @@ func TestIAMTOTPEnrollmentPostgres(t *testing.T) {
 				return result
 			}
 			original := loginRecovery("recovery-login", "TOTP")
+			if strings.HasPrefix(recoveryCase, "regenerate") {
+				// Reuse the real bound USER, contact and lost-factor recovery fixture.
+				// The Session must be earned by password+TOTP; no stored proof or
+				// positive consumption row is manufactured by the database owner.
+				loginBytes, err := iamv1.EncodeVerifyAuthenticationChallengeRequest(iamv1.VerifyAuthenticationChallengeRequest{
+					RequestID: "regeneration-login", ChallengeCredential: original.ChallengeCredential, Code: codeAt(enrollment.Provisioning.Seed, 1)})
+				if err != nil {
+					t.Fatal(err)
+				}
+				var currentSession iamv1.LoginResponse
+				callMFA(secondHandler, http.MethodPost, "/v1/auth/challenges/"+original.Challenge.ID+":verify", iamv1.Secret{}, loginBytes, http.StatusOK, &currentSession)
+				clear(loginBytes)
+				request := iamv1.StartStepUpRequest{RequestID: "regenerate-original", Operation: iamv1.StepUpRegenerateRecoveryCodes, ExpectedFactorRevision: 2}
+				startBytes, err := json.Marshal(request)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var proof, equal iamv1.StepUp
+				callMFA(firstHandler, http.MethodPost, "/v1/auth/step-up", currentSession.Credential, startBytes, http.StatusOK, &proof)
+				callMFA(secondHandler, http.MethodPost, "/v1/auth/step-up", currentSession.Credential, startBytes, http.StatusOK, &equal)
+				if proof != equal || proof.State != "PENDING" {
+					t.Fatal("same operation intent changed proof")
+				}
+				callMFA(secondHandler, http.MethodGet, "/v1/auth/step-up/by-request/"+request.RequestID, completed.Credential, nil, http.StatusNotFound, nil)
+				wrongRevision := request
+				wrongRevision.ExpectedFactorRevision++
+				wrongBytes, err := json.Marshal(wrongRevision)
+				if err != nil {
+					t.Fatal(err)
+				}
+				callMFA(secondHandler, http.MethodPost, "/v1/auth/step-up", currentSession.Credential, wrongBytes, http.StatusConflict, nil)
+				var competingProof iamv1.StepUp
+				for index := range 3 {
+					other := request
+					other.RequestID = fmt.Sprintf("regenerate-pending-%d", index)
+					encoded, err := json.Marshal(other)
+					if err != nil {
+						t.Fatal(err)
+					}
+					status := http.StatusOK
+					if index == 2 {
+						status = http.StatusConflict
+					}
+					var candidate iamv1.StepUp
+					if index == 2 {
+						callMFA(firstHandler, http.MethodPost, "/v1/auth/step-up", currentSession.Credential, encoded, status, nil)
+					} else {
+						callMFA(firstHandler, http.MethodPost, "/v1/auth/step-up", currentSession.Credential, encoded, status, &candidate)
+						if index == 0 {
+							competingProof = candidate
+						}
+					}
+				}
+				command := iamv1.RegenerateRecoveryCodesRequest{RequestID: request.RequestID, StepUpID: proof.ID, ExpectedFactorRevision: 2}
+				commandBytes, err := json.Marshal(command)
+				if err != nil {
+					t.Fatal(err)
+				}
+				callMFA(secondHandler, http.MethodPost, "/v1/auth/recovery-codes:regenerate", currentSession.Credential, commandBytes, http.StatusConflict, nil)
+				// Wait for a new real allowed time step, not a clock/consumption edit.
+				freshTOTP := func() iamv1.Secret {
+					t.Helper()
+					for deadline := time.Now().Add(35 * time.Second); time.Now().Before(deadline); {
+						var step, consumed int64
+						if err := admin.QueryRow(ctx, `SELECT floor(extract(epoch FROM clock_timestamp())/30)::bigint,last_consumed_step
+							FROM iam.totp_authenticators WHERE tenant_id=$1 AND id=$2`, member.AccountID, enrollment.Enrollment.ID).Scan(&step, &consumed); err != nil {
+							t.Fatal(err)
+						}
+						if consumed < step+1 {
+							code, err := hotp.GenerateCode(string(enrollment.Provisioning.Seed.CopyBytes()), uint64(step+1))
+							if err != nil {
+								t.Fatal(err)
+							}
+							return iamHTTPSecret(t, code)
+						}
+						time.Sleep(100 * time.Millisecond)
+					}
+					t.Fatal("no new actual TOTP step within bounded window")
+					return iamv1.Secret{}
+				}
+				if recoveryCase == "regenerate-other-session" {
+					otherLogin := loginRecovery("step-up-other-login", "TOTP")
+					body, err := iamv1.EncodeVerifyAuthenticationChallengeRequest(iamv1.VerifyAuthenticationChallengeRequest{
+						RequestID: "step-up-other-verify", ChallengeCredential: otherLogin.ChallengeCredential, Code: freshTOTP()})
+					if err != nil {
+						t.Fatal(err)
+					}
+					var otherSession iamv1.LoginResponse
+					callMFA(firstHandler, http.MethodPost, "/v1/auth/challenges/"+otherLogin.Challenge.ID+":verify", iamv1.Secret{}, body, http.StatusOK, &otherSession)
+					clear(body)
+					callMFA(secondHandler, http.MethodPost, "/v1/auth/step-up", otherSession.Credential, startBytes, http.StatusConflict, nil)
+					callMFA(secondHandler, http.MethodGet, "/v1/auth/step-up/by-request/"+request.RequestID, otherSession.Credential, nil, http.StatusNotFound, nil)
+					callMFA(secondHandler, http.MethodPost, "/v1/auth/recovery-codes:regenerate", otherSession.Credential, commandBytes, http.StatusUnauthorized, nil)
+					body, err = iamv1.EncodeVerifyStepUpRequest(iamv1.VerifyStepUpRequest{RequestID: "wrong-source-proof", Password: current, Code: iamHTTPSecret(t, "not-a-code")})
+					if err != nil {
+						t.Fatal(err)
+					}
+					callMFA(firstHandler, http.MethodPost, "/v1/auth/step-up/"+proof.ID+":verify", otherSession.Credential, body, http.StatusUnauthorized, nil)
+					clear(body)
+					var untouched bool
+					if err := admin.QueryRow(ctx, `SELECT (SELECT state='PENDING' FROM iam.step_ups WHERE tenant_id=$1 AND id=$2)
+						AND NOT EXISTS(SELECT 1 FROM iam.password_attempts WHERE tenant_id=$1 AND principal_id=$3 AND purpose='STEP_UP')`, member.AccountID, proof.ID, member.ID).Scan(&untouched); err != nil || !untouched {
+						t.Fatal("another valid Session consumed the original proof budget", err)
+					}
+					return
+				}
+				if recoveryCase == "regenerate-budgets" {
+					for index := range 4 {
+						candidatePassword := current
+						if index == 0 {
+							candidatePassword = iamHTTPSecret(t, "Incorrect-Step-Up-Password-571!")
+						}
+						body, err := iamv1.EncodeVerifyStepUpRequest(iamv1.VerifyStepUpRequest{RequestID: fmt.Sprintf("step-up-bad-%d", index), Password: candidatePassword, Code: iamHTTPSecret(t, "not-a-code")})
+						if err != nil {
+							t.Fatal(err)
+						}
+						endpoint := firstHandler
+						if index%2 == 1 {
+							endpoint = secondHandler
+						}
+						callMFA(endpoint, http.MethodPost, "/v1/auth/step-up/"+proof.ID+":verify", currentSession.Credential, body, http.StatusUnauthorized, nil)
+						clear(body)
+					}
+					var charged bool
+					if err := admin.QueryRow(ctx, `SELECT
+						(SELECT used_attempts=4 AND state='REJECTED' AND purpose='STEP_UP' FROM iam.password_attempts WHERE tenant_id=$1 AND principal_id=$2)
+						AND (SELECT used_attempts=5 AND state='REJECTED' AND purpose='STEP_UP' FROM iam.totp_attempts WHERE tenant_id=$1 AND user_id=$2)
+						AND (SELECT state='PENDING' AND proved_at IS NULL FROM iam.step_ups WHERE tenant_id=$1 AND id=$3)`, member.AccountID, member.ID, proof.ID).Scan(&charged); err != nil || !charged {
+						t.Fatal("rejected proof reset or failed to commit shared attempts", err)
+					}
+					body, err := iamv1.EncodeVerifyStepUpRequest(iamv1.VerifyStepUpRequest{RequestID: "step-up-no-extra-budget", Password: current, Code: freshTOTP()})
+					if err != nil {
+						t.Fatal(err)
+					}
+					callMFA(firstHandler, http.MethodPost, "/v1/auth/step-up/"+proof.ID+":verify", currentSession.Credential, body, http.StatusUnauthorized, nil)
+					clear(body)
+					if err := admin.QueryRow(ctx, `SELECT (SELECT used_attempts=5 FROM iam.totp_attempts WHERE tenant_id=$1 AND user_id=$2)
+						AND (SELECT state='PENDING' AND proved_at IS NULL FROM iam.step_ups WHERE tenant_id=$1 AND id=$3)
+						AND NOT EXISTS(SELECT 1 FROM iam.recovery_code_regenerations WHERE tenant_id=$1 AND user_id=$2)`, member.AccountID, member.ID, proof.ID).Scan(&charged); err != nil || !charged {
+						t.Fatal("proof bypassed exhausted shared OTP budget", err)
+					}
+					return
+				}
+				fresh := freshTOTP()
+				verifyBytes, err := iamv1.EncodeVerifyStepUpRequest(iamv1.VerifyStepUpRequest{RequestID: "regenerate-proof", Password: current, Code: fresh})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer clear(verifyBytes)
+				callMFA(firstHandler, http.MethodPost, "/v1/auth/step-up/"+proof.ID+":verify", currentSession.Credential, verifyBytes, http.StatusOK, &equal)
+				if equal.State != "PROVED" || equal.ExpiresAt != proof.ExpiresAt || equal.ID != proof.ID {
+					t.Fatal("proof changed its original identity or expiry")
+				}
+				callMFA(secondHandler, http.MethodPost, "/v1/auth/step-up/"+proof.ID+":verify", currentSession.Credential, verifyBytes, http.StatusConflict, nil)
+				var intact bool
+				if recoveryCase == "regenerate-competing-proofs" {
+					// Both proofs were started against the same real batch before
+					// either could replace it. A new OTP is earned normally; neither
+					// state nor successful verification is manufactured with DML.
+					body, err := iamv1.EncodeVerifyStepUpRequest(iamv1.VerifyStepUpRequest{RequestID: "competing-proof", Password: current, Code: freshTOTP()})
+					if err != nil {
+						t.Fatal(err)
+					}
+					callMFA(secondHandler, http.MethodPost, "/v1/auth/step-up/"+competingProof.ID+":verify", currentSession.Credential, body, http.StatusOK, &competingProof)
+					clear(body)
+					if competingProof.State != "PROVED" || competingProof.ID == proof.ID {
+						t.Fatal("second original batch proof was not independently earned")
+					}
+					competingCommand := iamv1.RegenerateRecoveryCodesRequest{RequestID: competingProof.RequestID, StepUpID: competingProof.ID, ExpectedFactorRevision: 2}
+					competingBytes, err := json.Marshal(competingCommand)
+					if err != nil {
+						t.Fatal(err)
+					}
+					responses := make(chan *httptest.ResponseRecorder, 2)
+					start := make(chan struct{})
+					for _, entry := range []struct {
+						handler http.Handler
+						body    []byte
+					}{{firstHandler, commandBytes}, {secondHandler, competingBytes}} {
+						go func() {
+							<-start
+							req := httptest.NewRequest(http.MethodPost, "/v1/auth/recovery-codes:regenerate", bytes.NewReader(entry.body)).WithContext(ctx)
+							req.Header.Set("Content-Type", "application/json")
+							req.Header.Set("Authorization", "Bearer "+string(currentSession.Credential.CopyBytes()))
+							response := httptest.NewRecorder()
+							entry.handler.ServeHTTP(response, req)
+							responses <- response
+						}()
+					}
+					close(start)
+					applied, denied := 0, 0
+					for range 2 {
+						response := <-responses
+						switch response.Code {
+						case http.StatusOK:
+							var result iamv1.RegenerateRecoveryCodesResponse
+							if iamv1.DecodeRequest(response.Body, &result) != nil || result.Outcome != "APPLIED" || len(result.RecoveryCodes) != 10 {
+								t.Fatal("competing proof returned an invalid success")
+							}
+							applied++
+						case http.StatusUnauthorized:
+							denied++
+						default:
+							t.Fatal("unexpected competing proof result", response.Code)
+						}
+						clear(response.Body.Bytes())
+					}
+					if applied != 1 || denied != 1 {
+						t.Fatal("distinct original batch proofs did not have exactly one winner")
+					}
+					if err := admin.QueryRow(ctx, `SELECT
+						(SELECT count(*)=1 FROM iam.recovery_code_regenerations WHERE tenant_id=$1 AND user_id=$2)
+						AND (SELECT count(*)=2 AND count(*) FILTER(WHERE revoked_at IS NULL)=1 FROM iam.mfa_recovery_batches WHERE tenant_id=$1 AND user_id=$2)
+						AND (SELECT count(*) FILTER(WHERE state='CONSUMED')=1 AND count(*) FILTER(WHERE state='PROVED' AND consumed_at IS NULL)=1
+							FROM iam.step_ups WHERE tenant_id=$1 AND user_id=$2)
+						AND (SELECT count(*)=1 FROM iam.security_notifications WHERE tenant_id=$1 AND user_id=$2 AND kind='RECOVERY_CODES_REGENERATED')
+						AND (SELECT count(*)=1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->'actor'->>'id'=$2
+							AND event_document->>'action'='iam.recovery-codes.regenerated')`, member.AccountID, member.ID).Scan(&intact); err != nil || !intact {
+						t.Fatal("losing proof changed the new batch or immutable success evidence", err)
+					}
+					return
+				}
+				if recoveryCase != "regenerate" {
+					if recoveryCase == "regenerate-lock-expiry" {
+						hold, err := admin.Begin(ctx)
+						if err != nil {
+							t.Fatal(err)
+						}
+						defer hold.Rollback(context.Background())
+						var blocker int32
+						if err := hold.QueryRow(ctx, `SELECT pg_backend_pid() FROM iam.principals WHERE tenant_id=$1 AND id=$2 FOR UPDATE`, member.AccountID, member.ID).Scan(&blocker); err != nil {
+							t.Fatal(err)
+						}
+						responses := make(chan int, 1)
+						go func() {
+							req := httptest.NewRequest(http.MethodPost, "/v1/auth/recovery-codes:regenerate", bytes.NewReader(commandBytes)).WithContext(ctx)
+							req.Header.Set("Content-Type", "application/json")
+							req.Header.Set("Authorization", "Bearer "+string(currentSession.Credential.CopyBytes()))
+							response := httptest.NewRecorder()
+							secondHandler.ServeHTTP(response, req)
+							responses <- response.Code
+						}()
+						waiting := false
+						for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {
+							if err := hold.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database()
+								AND usename=$1 AND wait_event_type='Lock' AND $2=ANY(pg_blocking_pids(pid)))`, iamHTTPTestRole, blocker).Scan(&waiting); err != nil {
+								t.Fatal(err)
+							}
+							if waiting {
+								break
+							}
+							time.Sleep(25 * time.Millisecond)
+						}
+						if !waiting {
+							t.Fatal("regeneration never waited on the actual USER lock")
+						}
+						for {
+							var now time.Time
+							if err := hold.QueryRow(ctx, "SELECT clock_timestamp()").Scan(&now); err != nil {
+								t.Fatal(err)
+							}
+							if !now.Before(proof.ExpiresAt) {
+								break
+							}
+							time.Sleep(200 * time.Millisecond)
+						}
+						if err := hold.Rollback(ctx); err != nil {
+							t.Fatal(err)
+						}
+						select {
+						case status := <-responses:
+							if status != http.StatusUnauthorized {
+								t.Fatal("expired proof survived a real lock wait", status)
+							}
+						case <-ctx.Done():
+							t.Fatal("post-lock regeneration did not finish")
+						}
+						callMFA(firstHandler, http.MethodGet, "/v1/auth/step-up/by-request/"+request.RequestID, currentSession.Credential, nil, http.StatusOK, &equal)
+						if equal.State != "EXPIRED" || equal.ProvedAt == nil || equal.ExpiresAt != proof.ExpiresAt {
+							t.Fatal("proof observation lost its original expiry")
+						}
+					} else {
+						switch recoveryCase {
+						case "regenerate-logout":
+							_, err = service.Logout(ctx, currentSession.Credential, iamv1.LogoutRequest{RequestID: "step-up-logout"})
+						case "regenerate-password":
+							_, err = service.ChangePassword(ctx, currentSession.Credential, iamv1.ChangePasswordRequest{RequestID: "step-up-password", CurrentPassword: current, NewPassword: iamHTTPSecret(t, "Step-Up-Changed-Password-742!")})
+						default:
+							memberState, failure := service.GetUser(ctx, completed.Credential, member.ID, "step-up-security-read")
+							if failure != nil {
+								t.Fatal(failure)
+							}
+							if recoveryCase == "regenerate-reset" {
+								_, err = service.ResetUserPassword(ctx, completed.Credential, member.ID, iamv1.ResetUserPasswordRequest{RequestID: "step-up-reset", ResourceVersion: memberState.User.ResourceVersion, InitialPassword: iamHTTPSecret(t, "Step-Up-Reset-Password-471!")})
+							} else {
+								var disabled iamv1.User
+								disabled, err = service.SetUserStatus(ctx, completed.Credential, member.ID, iamv1.SetUserStatusRequest{RequestID: "step-up-disable", ResourceVersion: memberState.User.ResourceVersion, Status: iamv1.PrincipalDisabled})
+								if err == nil {
+									_, err = service.SetUserStatus(ctx, completed.Credential, member.ID, iamv1.SetUserStatusRequest{RequestID: "step-up-enable", ResourceVersion: disabled.ResourceVersion, Status: iamv1.PrincipalActive})
+								}
+							}
+						}
+						if err != nil {
+							t.Fatal("security change failed", err)
+						}
+						if recoveryCase == "regenerate-password" {
+							callMFA(firstHandler, http.MethodGet, "/v1/auth/me", currentSession.Credential, nil, http.StatusOK, nil)
+						}
+						callMFA(secondHandler, http.MethodPost, "/v1/auth/recovery-codes:regenerate", currentSession.Credential, commandBytes, http.StatusUnauthorized, nil)
+					}
+					if err := admin.QueryRow(ctx, `SELECT
+						(SELECT state='PROVED' AND consumed_at IS NULL FROM iam.step_ups WHERE tenant_id=$1 AND id=$2)
+						AND NOT EXISTS(SELECT 1 FROM iam.recovery_code_regenerations WHERE tenant_id=$1 AND user_id=$3)
+						AND (SELECT count(*)=1 AND bool_and(revoked_at IS NULL) FROM iam.mfa_recovery_batches WHERE tenant_id=$1 AND user_id=$3)
+						AND NOT EXISTS(SELECT 1 FROM iam.security_notifications WHERE tenant_id=$1 AND user_id=$3 AND kind='RECOVERY_CODES_REGENERATED')`, member.AccountID, proof.ID, member.ID).Scan(&intact); err != nil || !intact {
+						t.Fatal("stale proof changed batch or success history", err)
+					}
+					return
+				}
+				if _, err := admin.Exec(ctx, `CREATE FUNCTION public.iam_regeneration_commit_fault() RETURNS trigger LANGUAGE plpgsql AS $body$
+					BEGIN IF NEW.kind='RECOVERY_CODES_REGENERATED' THEN RAISE EXCEPTION 'owned regeneration commit fault'; END IF; RETURN NEW; END $body$;
+					CREATE TRIGGER iam_regeneration_commit_fault BEFORE INSERT ON iam.security_notifications FOR EACH ROW EXECUTE FUNCTION public.iam_regeneration_commit_fault()`); err != nil {
+					t.Fatal(err)
+				}
+				callMFA(firstHandler, http.MethodPost, "/v1/auth/recovery-codes:regenerate", currentSession.Credential, commandBytes, http.StatusServiceUnavailable, nil)
+				if totpFailureTrace.lastSQLState.Load() != "P0001" {
+					t.Fatal("regeneration failed before the injected terminal notification fault", totpFailureTrace.lastSQLState.Load())
+				}
+				if _, err := admin.Exec(ctx, `DROP TRIGGER iam_regeneration_commit_fault ON iam.security_notifications; DROP FUNCTION public.iam_regeneration_commit_fault()`); err != nil {
+					t.Fatal(err)
+				}
+				if err := admin.QueryRow(ctx, `SELECT
+					(SELECT state='PROVED' AND consumed_at IS NULL FROM iam.step_ups WHERE tenant_id=$1 AND id=$2)
+					AND NOT EXISTS(SELECT 1 FROM iam.recovery_code_regenerations WHERE tenant_id=$1 AND user_id=$3)
+					AND (SELECT count(*)=1 AND bool_and(revoked_at IS NULL) FROM iam.mfa_recovery_batches WHERE tenant_id=$1 AND user_id=$3)
+					AND NOT EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.recovery-codes.regenerated')`, member.AccountID, proof.ID, member.ID).Scan(&intact); err != nil || !intact {
+					t.Fatal("failed notification partially replaced recovery codes", err)
+				}
+				results := make(chan *httptest.ResponseRecorder, 2)
+				start := make(chan struct{})
+				for _, endpoint := range []http.Handler{firstHandler, secondHandler} {
+					go func() {
+						<-start
+						req := httptest.NewRequest(http.MethodPost, "/v1/auth/recovery-codes:regenerate", bytes.NewReader(commandBytes)).WithContext(ctx)
+						req.Header.Set("Content-Type", "application/json")
+						req.Header.Set("Authorization", "Bearer "+string(currentSession.Credential.CopyBytes()))
+						response := httptest.NewRecorder()
+						endpoint.ServeHTTP(response, req)
+						results <- response
+					}()
+				}
+				close(start)
+				var regenerated iamv1.RegenerateRecoveryCodesResponse
+				applied, replayed := 0, 0
+				for range 2 {
+					response := <-results
+					var result iamv1.RegenerateRecoveryCodesResponse
+					if response.Code != http.StatusOK || iamv1.DecodeRequest(response.Body, &result) != nil {
+						t.Fatal("concurrent regeneration failed", response.Code)
+					}
+					if result.Outcome == "APPLIED" {
+						applied++
+						regenerated = result
+					} else {
+						replayed++
+						if result.RecoveryCodes != nil {
+							t.Fatal("replay reissued codes")
+						}
+					}
+				}
+				if applied != 1 || replayed != 1 || len(regenerated.RecoveryCodes) != 10 {
+					t.Fatal("replacement lacked a single winner")
+				}
+				var observed iamv1.RecoveryCodeRegeneration
+				callMFA(secondHandler, http.MethodGet, "/v1/auth/recovery-codes/regenerations/by-request/"+request.RequestID, currentSession.Credential, nil, http.StatusOK, &observed)
+				if observed != regenerated.Regeneration {
+					t.Fatal("original completion lookup differs")
+				}
+				callMFA(firstHandler, http.MethodGet, "/v1/auth/me", currentSession.Credential, nil, http.StatusOK, nil)
+				callMFA(firstHandler, http.MethodGet, "/v1/auth/step-up/by-request/"+request.RequestID, currentSession.Credential, nil, http.StatusOK, &equal)
+				if equal.State != "CONSUMED" || equal.ExpiresAt != proof.ExpiresAt {
+					t.Fatal("completed proof was extended or reusable")
+				}
+				if err := admin.QueryRow(ctx, `SELECT
+					(SELECT revision=2 AND enrollment_state='BOUND' AND factor_id=$3 FROM iam.user_mfa_states WHERE tenant_id=$1 AND user_id=$2)
+					AND (SELECT bound_revision=2 AND state='ACTIVE' FROM iam.totp_authenticators WHERE tenant_id=$1 AND id=$3)
+					AND (SELECT count(*)=2 AND count(*) FILTER(WHERE revoked_at IS NULL)=1 FROM iam.mfa_recovery_batches WHERE tenant_id=$1 AND user_id=$2)
+					AND (SELECT count(*)=1 FROM iam.security_notifications WHERE tenant_id=$1 AND user_id=$2 AND kind='RECOVERY_CODES_REGENERATED')
+					AND (SELECT status='ACTIVE' AND mfa_revision=2 AND authentication_method='PASSWORD_TOTP' FROM iam.sessions WHERE tenant_id=$1 AND id=$4)`, member.AccountID, member.ID, enrollment.Enrollment.ID, currentSession.Session.ID).Scan(&intact); err != nil || !intact {
+					t.Fatal("batch-only replacement changed other authentication state", err)
+				}
+				applyIAMSchema(t, ctx, admin)
+				callMFA(secondHandler, http.MethodPost, "/v1/auth/recovery-codes:regenerate", currentSession.Credential, commandBytes, http.StatusOK, nil)
+				// A replacement batch must still support the original lost-factor
+				// recovery ceremony; its factor's bound event is deliberately unchanged.
+				freshLogin := loginRecovery("regenerated-lost-factor", "TOTP")
+				startRecovery, err := iamv1.EncodeStartAuthenticatorRecoveryRequest(iamv1.StartAuthenticatorRecoveryRequest{
+					RequestID: "regenerated-recovery", ChallengeCredential: freshLogin.ChallengeCredential, RecoveryCode: regenerated.RecoveryCodes[0]})
+				if err != nil {
+					t.Fatal(err)
+				}
+				var recoveryResult iamv1.StartAuthenticatorRecoveryResponse
+				callMFA(secondHandler, http.MethodPost, "/v1/auth/challenges/"+freshLogin.Challenge.ID+":recover", iamv1.Secret{}, startRecovery, http.StatusOK, &recoveryResult)
+				clear(startRecovery)
+				confirmRecovery, err := iamv1.EncodeVerifyAuthenticationChallengeRequest(iamv1.VerifyAuthenticationChallengeRequest{
+					RequestID: "regenerated-recovery-confirm", ChallengeCredential: recoveryResult.ChallengeCredential, Code: codeAt(recoveryResult.Provisioning.Seed, 0)})
+				if err != nil {
+					t.Fatal(err)
+				}
+				var recovered iamv1.ConfirmAuthenticatorRecoveryResponse
+				callMFA(firstHandler, http.MethodPost, "/v1/auth/challenges/"+recoveryResult.Challenge.ID+":confirm-recovery", iamv1.Secret{}, confirmRecovery, http.StatusOK, &recovered)
+				clear(confirmRecovery)
+				if recovered.Recovery.State != "COMPLETED" || recovered.NextStep != "REAUTHENTICATE" {
+					t.Fatal("replacement codes lost original recovery semantics")
+				}
+				callMFA(firstHandler, http.MethodGet, "/v1/auth/me", currentSession.Credential, nil, http.StatusUnauthorized, nil)
+				t.Run("historical-regeneration-mail", func(t *testing.T) {
+					if !realMail {
+						t.Skip("dedicated Postfix is absent; regeneration outbox is not mailbox evidence")
+					}
+					memberState, err := service.GetUser(ctx, completed.Credential, member.ID, "regeneration-mail-user")
+					if err != nil {
+						t.Fatal(err)
+					}
+					if _, err := service.SetUserStatus(ctx, completed.Credential, member.ID, iamv1.SetUserStatusRequest{
+						RequestID: "regeneration-mail-disable", ResourceVersion: memberState.User.ResourceVersion, Status: iamv1.PrincipalDisabled}); err != nil {
+						t.Fatal(err)
+					}
+					var notificationID string
+					if err := admin.QueryRow(ctx, `SELECT n.id FROM iam.security_notifications n
+						JOIN iam.recovery_code_regenerations r ON r.tenant_id=n.tenant_id AND r.notification_id=n.id
+						WHERE r.tenant_id=$1 AND r.user_id=$2 AND r.id=$3 AND n.state='PENDING'
+						AND n.kind='RECOVERY_CODES_REGENERATED' AND n.email=$4`, member.AccountID, member.ID, regenerated.Regeneration.ID, email).Scan(&notificationID); err != nil {
+						t.Fatal("original regeneration notice lacks its pending original recipient", err)
+					}
+					stop := startDelivery()
+					defer stop()
+					body, _ := receive(notificationID)
+					defer clear(body)
+					if !bytes.Contains(body, []byte("Subject: MATRIX recovery codes regenerated")) ||
+						bytes.Contains(body, []byte("otpauth://")) || bytes.Contains(body, []byte("Verification code:")) {
+						t.Fatal("real mailbox does not contain the closed regeneration notice")
+					}
+					materials := []iamv1.Secret{initial, current, contactCode, enrollment.Provisioning.Seed, recoveryResult.Provisioning.Seed}
+					materials = append(materials, bound.RecoveryCodes...)
+					materials = append(materials, regenerated.RecoveryCodes...)
+					materials = append(materials, recovered.RecoveryCodes...)
+					for _, material := range materials {
+						candidate := material.CopyBytes()
+						leaked := len(candidate) > 0 && bytes.Contains(body, candidate)
+						clear(candidate)
+						if leaked {
+							t.Fatal("real regeneration notification disclosed authentication material")
+						}
+					}
+					awaitSubmission(notificationID)
+					t.Log("actual STARTTLS Postfix mailbox received the original regeneration notice after USER disable and subsequent factor recovery; no secret material replayed")
+				})
+				return
+			}
 			injectNotificationFailure := func(kind string) {
 				t.Helper()
 				if kind != "RECOVERY_STARTED" && kind != "AUTHENTICATOR_RECOVERED" {
@@ -4027,6 +4541,9 @@ func TestIAMTOTPEnrollmentPostgres(t *testing.T) {
 				t.Log("actual Maildir verification -> recovery start notice -> worker stop -> new-factor confirmation/user disable -> restricted worker restart -> historical completion notice; both DATA250 observations persisted without authentication secrets")
 			}
 		})
+	}
+	if mode != "enrollment" {
+		return
 	}
 	t.Run("issued_recovery_material_is_not_a_mutable_verifier", func(t *testing.T) {
 		for _, mutation := range []string{

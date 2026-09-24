@@ -91,8 +91,9 @@ func TestIAMAuthenticationRecoveryPostgres(t *testing.T) {
 	if err := restoredAPI.RegisterEmailVerificationKeyset(ctx); err != nil {
 		t.Fatal("register restored email verification custody", err)
 	}
-	sourceCredential, _ := prepareAuthenticationRecoveryIdentity(t, ctx, sourceAPI, sourceAdmin, document, false)
-	restoredCredential, restoredSession := prepareAuthenticationRecoveryIdentity(t, ctx, restoredAPI, restoredAdmin, document, true)
+
+	sourceCredential, _, _ := prepareAuthenticationRecoveryIdentity(t, ctx, sourceAPI, sourceAdmin, document, false)
+	restoredCredential, restoredSession, restoredMFA := prepareAuthenticationRecoveryIdentity(t, ctx, restoredAPI, restoredAdmin, document, true)
 	before := readAuthenticationRecoverySecurityState(t, ctx, restoredAdmin, document, restoredSession)
 	if before.activeSessions == 0 || before.accessKeys != 1 || before.recoveryBatches != 1 || before.factorStep < 0 ||
 		before.passwordReserved != 1 || before.totpReserved != 1 || before.challengePending != 1 {
@@ -142,6 +143,9 @@ func TestIAMAuthenticationRecoveryPostgres(t *testing.T) {
 		t.Fatal("restored authority changed the protected source closure")
 	}
 	assertAuthenticationAuthorityClosed(t, ctx, restoredAPI, restoredCredential)
+	if _, err := restoredAPI.RegenerateRecoveryCodes(ctx, restoredMFA.login.Credential, authenticationRecoveryRegenerationRequest(restoredMFA)); !errors.Is(err, identityaccess.ErrUnauthenticated) {
+		t.Fatalf("online regeneration bypassed reconciled CLOSED: %v", err)
+	}
 	if _, err := restoredLocal.InspectLocalCredentialRecovery(ctx, localAuthority, nil); !errors.Is(err, identityaccess.ErrForbidden) {
 		t.Fatalf("restored local credential recovery bypassed reconciled CLOSED: %v", err)
 	}
@@ -190,6 +194,7 @@ func TestIAMAuthenticationRecoveryPostgres(t *testing.T) {
 	}
 	assertAuthenticationRecoveryAuditFacts(t, ctx, sourceAdmin, restoredAdmin)
 	assertAuthenticationRecoveryHistoryImmutable(t, ctx, restoredAdmin)
+	assertAuthenticationRecoveryStepUpFenced(t, ctx, restoredAPI, restoredAdmin, document, restoredMFA)
 	assertAuthenticationAuthorityClosed(t, ctx, sourceAPI, sourceCredential)
 	if _, err := sourceRecovery.Reopen(ctx, closure); !errors.Is(err, authenticationrecovery.ErrConflict) {
 		t.Fatalf("source authority reopened without restored reconciliation: %v", err)
@@ -289,8 +294,16 @@ func authenticationRecoveryWorkflow(t *testing.T, ctx context.Context, dsn strin
 	return service
 }
 
-func prepareAuthenticationRecoveryIdentity(t *testing.T, ctx context.Context, service *identityaccess.Authority, database *pgx.Conn, document iamv1.BootstrapDocument, createReplayMaterial bool) (iamv1.Secret, iamv1.SessionID) {
+type authenticationRecoveryMFAFixture struct {
+	seed     iamv1.Secret
+	factorID string
+	login    iamv1.LoginResponse
+	proof    iamv1.StepUp
+}
+
+func prepareAuthenticationRecoveryIdentity(t *testing.T, ctx context.Context, service *identityaccess.Authority, database *pgx.Conn, document iamv1.BootstrapDocument, createReplayMaterial bool) (iamv1.Secret, iamv1.SessionID, authenticationRecoveryMFAFixture) {
 	t.Helper()
+	var mfa authenticationRecoveryMFAFixture
 	login, err := service.Login(ctx, iamv1.LoginRequest{LoginName: document.Administrator.LoginName, Password: document.Administrator.Password, RequestID: "auth-recovery-initial-login"})
 	if err != nil || !login.MustChangePassword || !login.Credential.Present() {
 		t.Fatalf("login recovery fixture: %v", err)
@@ -371,10 +384,29 @@ func prepareAuthenticationRecoveryIdentity(t *testing.T, ctx context.Context, se
 		if err != nil || created.Outcome != "APPLIED" || !created.Secret.Present() {
 			t.Fatalf("create recovery fixture AccessKey: %v", err)
 		}
-		enrollAuthenticationRecoveryTOTP(t, ctx, service, database, document, keyLogin.Credential)
+		mfa = enrollAuthenticationRecoveryTOTP(t, ctx, service, database, document, keyLogin.Credential)
+		mfa.login = authenticationRecoveryMFALogin(t, ctx, service, database, document, mfa, "before-close")
+		state, err := service.AuthenticatorState(ctx, mfa.login.Credential)
+		if err != nil || state.EnrollmentState != "BOUND" {
+			t.Fatalf("read before-close MFA qualification: %v", err)
+		}
+		mfa.proof, err = service.StartStepUp(ctx, mfa.login.Credential, iamv1.StartStepUpRequest{
+			RequestID: "auth-recovery-pending-regeneration", Operation: iamv1.StepUpRegenerateRecoveryCodes,
+			ExpectedFactorRevision: state.FactorRevision,
+		})
+		if err != nil {
+			t.Fatal("start before-close operation proof", err)
+		}
+		mfa.proof, err = service.VerifyStepUp(ctx, mfa.login.Credential, mfa.proof.ID, iamv1.VerifyStepUpRequest{
+			RequestID: "auth-recovery-before-close-proof", Password: iamHTTPSecret(t, changedDeveloperPassword),
+			Code: authenticationRecoveryFreshTOTP(t, ctx, database, document.Organization.ID, mfa),
+		})
+		if err != nil || mfa.proof.State != "PROVED" {
+			t.Fatalf("prove before-close regeneration: %v", err)
+		}
 		seedAuthenticationRecoveryPendingWork(t, ctx, service, database, document, keyUser.ID)
 	}
-	return login.Credential, login.Session.ID
+	return login.Credential, login.Session.ID, mfa
 }
 
 func authenticationRecoveryEmailKeyring(t *testing.T, document iamv1.BootstrapDocument) iamv1.EmailVerificationKeyring {
@@ -398,7 +430,7 @@ func authenticationRecoveryEmailKeyring(t *testing.T, document iamv1.BootstrapDo
 	}
 }
 
-func enrollAuthenticationRecoveryTOTP(t *testing.T, ctx context.Context, service *identityaccess.Authority, database *pgx.Conn, document iamv1.BootstrapDocument, credential iamv1.Secret) {
+func enrollAuthenticationRecoveryTOTP(t *testing.T, ctx context.Context, service *identityaccess.Authority, database *pgx.Conn, document iamv1.BootstrapDocument, credential iamv1.Secret) authenticationRecoveryMFAFixture {
 	t.Helper()
 	password := iamHTTPSecret(t, changedDeveloperPassword)
 	pending, err := service.StartNotificationVerification(ctx, credential, iamv1.StartNotificationContactVerificationRequest{
@@ -466,6 +498,100 @@ func enrollAuthenticationRecoveryTOTP(t *testing.T, ctx context.Context, service
 	})
 	if err != nil || confirmed.Enrollment.State != "CONFIRMED" || len(confirmed.RecoveryCodes) != 10 {
 		t.Fatalf("confirm recovery fixture TOTP enrollment: %v", err)
+	}
+	return authenticationRecoveryMFAFixture{seed: started.Provisioning.Seed, factorID: started.Enrollment.ID}
+}
+
+func authenticationRecoveryRegenerationRequest(mfa authenticationRecoveryMFAFixture) iamv1.RegenerateRecoveryCodesRequest {
+	return iamv1.RegenerateRecoveryCodesRequest{RequestID: mfa.proof.RequestID, StepUpID: mfa.proof.ID, ExpectedFactorRevision: mfa.proof.ExpectedFactorRevision}
+}
+
+func authenticationRecoveryFreshTOTP(t *testing.T, ctx context.Context, database *pgx.Conn, account iamv1.AccountID, mfa authenticationRecoveryMFAFixture) iamv1.Secret {
+	t.Helper()
+	deadline := time.Now().Add(35 * time.Second)
+	for {
+		var now time.Time
+		var consumed int64
+		if err := database.QueryRow(ctx, `SELECT clock_timestamp(),last_consumed_step FROM iam.totp_authenticators WHERE tenant_id=$1 AND id=$2`, account, mfa.factorID).Scan(&now, &consumed); err != nil {
+			t.Fatal("observe actual TOTP step", err)
+		}
+		if now.Unix()/30 > consumed && now.Unix()%30 < 27 {
+			code, err := hotp.GenerateCode(string(mfa.seed.CopyBytes()), uint64(now.Unix()/30))
+			if err != nil {
+				t.Fatal("compute actual fresh TOTP", err)
+			}
+			return iamHTTPSecret(t, code)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("actual TOTP step did not advance within one production window")
+		}
+		timer := time.NewTimer(100 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			t.Fatal(ctx.Err())
+		case <-timer.C:
+		}
+	}
+}
+
+func authenticationRecoveryMFALogin(t *testing.T, ctx context.Context, service *identityaccess.Authority, database *pgx.Conn, document iamv1.BootstrapDocument, mfa authenticationRecoveryMFAFixture, phase string) iamv1.LoginResponse {
+	t.Helper()
+	challenge, err := service.Login(ctx, iamv1.LoginRequest{
+		LoginName: "auth-recovery-key-user@" + string(document.Organization.ID), Password: iamHTTPSecret(t, changedDeveloperPassword),
+		RequestID: "auth-recovery-mfa-login-" + phase,
+	})
+	if err != nil || challenge.Outcome != iamv1.LoginChallengeRequired || challenge.Challenge == nil {
+		t.Fatalf("password-only login bypassed MFA %s: %v", phase, err)
+	}
+	login, err := service.VerifyAuthenticationChallenge(ctx, challenge.Challenge.ID, iamv1.VerifyAuthenticationChallengeRequest{
+		RequestID: "auth-recovery-mfa-verify-" + phase, ChallengeCredential: challenge.ChallengeCredential,
+		Code: authenticationRecoveryFreshTOTP(t, ctx, database, document.Organization.ID, mfa),
+	})
+	if err != nil || login.Outcome != iamv1.LoginAuthenticated || !login.Credential.Present() {
+		t.Fatalf("fresh MFA login %s failed: %v", phase, err)
+	}
+	return login
+}
+
+func assertAuthenticationRecoveryStepUpFenced(t *testing.T, ctx context.Context, service *identityaccess.Authority, database *pgx.Conn, document iamv1.BootstrapDocument, mfa authenticationRecoveryMFAFixture) {
+	t.Helper()
+	if _, err := service.RegenerateRecoveryCodes(ctx, mfa.login.Credential, authenticationRecoveryRegenerationRequest(mfa)); !errors.Is(err, identityaccess.ErrUnauthenticated) {
+		t.Fatalf("pre-restore proved operation survived its revoked Session: %v", err)
+	}
+	login := authenticationRecoveryMFALogin(t, ctx, service, database, document, mfa, "after-reopen")
+	if _, err := service.RegenerateRecoveryCodes(ctx, login.Credential, authenticationRecoveryRegenerationRequest(mfa)); !errors.Is(err, identityaccess.ErrUnauthenticated) {
+		t.Fatalf("new Session consumed a pre-restore proof: %v", err)
+	}
+	if _, err := service.StartStepUp(ctx, login.Credential, iamv1.StartStepUpRequest{
+		RequestID: "auth-recovery-fenced-batch-regeneration", Operation: iamv1.StepUpRegenerateRecoveryCodes,
+		ExpectedFactorRevision: mfa.proof.ExpectedFactorRevision,
+	}); !errors.Is(err, identityaccess.ErrUnauthenticated) {
+		t.Fatalf("new proof treated a permanently fenced batch as current recovery authority: %v", err)
+	}
+	var state string
+	var consumed bool
+	var completions, regeneratedBatches, regenerationFacts, regenerationNotices int
+	if err := database.QueryRow(ctx, `SELECT state,consumed_at IS NOT NULL,
+      (SELECT count(*) FROM iam.recovery_code_regenerations),
+      (SELECT count(*) FROM iam.mfa_recovery_batches WHERE regeneration_id IS NOT NULL),
+      (SELECT count(*) FROM iam.audit_outbox WHERE event_document->>'action'='iam.recovery-codes.regenerated'),
+      (SELECT count(*) FROM iam.security_notifications WHERE kind='RECOVERY_CODES_REGENERATED')
+      FROM iam.step_ups WHERE tenant_id=$1 AND id=$2`, document.Organization.ID, mfa.proof.ID).
+		Scan(&state, &consumed, &completions, &regeneratedBatches, &regenerationFacts, &regenerationNotices); err != nil {
+		t.Fatal("read fenced operation history", err)
+	}
+	if state != "PROVED" || consumed || completions != 0 || regeneratedBatches != 0 || regenerationFacts != 0 || regenerationNotices != 0 {
+		t.Fatal("rejected post-restore regeneration partially changed proof, batch, fact or notification")
+	}
+	if err := iammigration.Up(ctx, database); err != nil {
+		t.Fatal("replay restored schema", err)
+	}
+	if _, err := service.StartStepUp(ctx, login.Credential, iamv1.StartStepUpRequest{
+		RequestID: "auth-recovery-fenced-batch-after-replay", Operation: iamv1.StepUpRegenerateRecoveryCodes,
+		ExpectedFactorRevision: mfa.proof.ExpectedFactorRevision,
+	}); !errors.Is(err, identityaccess.ErrUnauthenticated) {
+		t.Fatalf("equal schema replay erased the permanent recovery-code fence: %v", err)
 	}
 }
 
@@ -648,7 +774,7 @@ func readAuthenticationRecoverySecurityState(t *testing.T, ctx context.Context, 
 	var result authenticationRecoverySecurityState
 	err := database.QueryRow(ctx, `SELECT
       (SELECT credential_version FROM iam.user_credentials WHERE tenant_id=$1 AND principal_id=$2),
-      COALESCE((SELECT max(last_consumed_step) FROM iam.totp_authenticators WHERE tenant_id=$1 AND state='ACTIVE'),-1),
+	  COALESCE((SELECT max(last_consumed_step) FROM iam.totp_authenticators WHERE tenant_id=$1 AND state='ACTIVE'),-1),
       (SELECT count(*) FROM iam.sessions WHERE tenant_id=$1 AND status='ACTIVE'),
       (SELECT count(*) FROM iam.access_keys WHERE tenant_id=$1),
       (SELECT count(*) FROM iam.mfa_recovery_batches WHERE tenant_id=$1),
@@ -659,10 +785,10 @@ func readAuthenticationRecoverySecurityState(t *testing.T, ctx context.Context, 
       (SELECT count(*) FROM iam.authentication_recovery_completions),
 	  (SELECT count(*) FROM iam.password_attempts WHERE state='RESERVED'),
 	  (SELECT count(*) FROM iam.password_attempts WHERE state='ABANDONED'),
-      (SELECT count(*) FROM iam.totp_attempts WHERE state='RESERVED'),
-      (SELECT count(*) FROM iam.totp_attempts WHERE state='ABANDONED'),
-      (SELECT count(*) FROM iam.authentication_challenges WHERE state='PENDING'),
-      (SELECT count(*) FROM iam.authentication_challenges WHERE state='CANCELLED'),
+	  (SELECT count(*) FROM iam.totp_attempts WHERE state='RESERVED'),
+	  (SELECT count(*) FROM iam.totp_attempts WHERE state='ABANDONED'),
+	  (SELECT count(*) FROM iam.authentication_challenges WHERE state='PENDING'),
+	  (SELECT count(*) FROM iam.authentication_challenges WHERE state='CANCELLED'),
       (SELECT status FROM iam.sessions WHERE tenant_id=$1 AND id=$3)`,
 		document.Organization.ID, document.Administrator.ID, session).Scan(
 		&result.credentialGeneration, &result.factorStep, &result.activeSessions, &result.accessKeys,

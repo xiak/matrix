@@ -43,6 +43,7 @@ const (
 	ActionIAMAuthenticatorBound                     Action = "iam.authenticator.bound"
 	ActionIAMAuthenticatorRecoveryStarted           Action = "iam.authenticator.recovery-started"
 	ActionIAMAuthenticatorRecovered                 Action = "iam.authenticator.recovered"
+	ActionIAMRecoveryCodesRegenerated               Action = "iam.recovery-codes.regenerated"
 	ActionIAMRoleCreated                            Action = "iam.role.created"
 	ActionIAMRoleUpdated                            Action = "iam.role.updated"
 	ActionIAMRoleDisabled                           Action = "iam.role.disabled"
@@ -237,6 +238,7 @@ var allActions = []Action{
 	ActionIAMAuthenticatorBound,
 	ActionIAMAuthenticatorRecoveryStarted,
 	ActionIAMAuthenticatorRecovered,
+	ActionIAMRecoveryCodesRegenerated,
 	ActionIAMGroupCreated,
 	ActionIAMRoleCreated,
 	ActionIAMRoleUpdated,
@@ -358,6 +360,7 @@ var actionContracts = map[Action]ActionContract{
 	ActionIAMAuthenticatorBound:                     {Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, UserActorRequired: true},
 	ActionIAMAuthenticatorRecoveryStarted:           {Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, UserActorRequired: true},
 	ActionIAMAuthenticatorRecovered:                 {Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, UserActorRequired: true},
+	ActionIAMRecoveryCodesRegenerated:               {Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, UserActorRequired: true},
 	ActionIAMGroupCreated: {
 		Source: SourceIAM, Target: TargetGroup, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
 	},

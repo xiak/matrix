@@ -261,7 +261,7 @@ func TestSecurityMailSMTPEncodingIsStableAndClosed(t *testing.T) {
 	}
 	for _, kind := range []authority.SecurityMailKind{authority.MailAuthenticatorBound, authority.MailAuthenticatorReplaced,
 		authority.MailAuthenticatorRemoved, authority.MailRecoveryStarted, authority.MailAuthenticatorRecovered,
-		authority.MailRecoveryCodesChanged, authority.MailSecuritySettingsChanged} {
+		authority.MailRecoveryCodesRegenerated, authority.MailSecuritySettingsChanged} {
 		message = smtpMessage()
 		message.Kind = kind
 		wire := client.encode(message)

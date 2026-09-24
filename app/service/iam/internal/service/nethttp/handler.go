@@ -96,6 +96,11 @@ type Workflow interface {
 	TOTPEnrollmentByRequest(context.Context, iamv1.Secret, string) (iamv1.TOTPEnrollment, error)
 	CancelTOTPEnrollment(context.Context, iamv1.Secret, string) (iamv1.TOTPEnrollment, error)
 	ConfirmTOTPEnrollment(context.Context, iamv1.Secret, string, iamv1.ConfirmTOTPEnrollmentRequest) (iamv1.ConfirmTOTPEnrollmentResponse, error)
+	StartStepUp(context.Context, iamv1.Secret, iamv1.StartStepUpRequest) (iamv1.StepUp, error)
+	StepUpByRequest(context.Context, iamv1.Secret, string) (iamv1.StepUp, error)
+	VerifyStepUp(context.Context, iamv1.Secret, string, iamv1.VerifyStepUpRequest) (iamv1.StepUp, error)
+	RegenerateRecoveryCodes(context.Context, iamv1.Secret, iamv1.RegenerateRecoveryCodesRequest) (iamv1.RegenerateRecoveryCodesResponse, error)
+	RecoveryCodeRegenerationByRequest(context.Context, iamv1.Secret, string) (iamv1.RecoveryCodeRegeneration, error)
 	Logout(context.Context, iamv1.Secret, iamv1.LogoutRequest) (iamv1.LogoutResponse, error)
 	ChangePassword(context.Context, iamv1.Secret, iamv1.ChangePasswordRequest) (iamv1.ChangePasswordResponse, error)
 	NotificationContact(context.Context, iamv1.Secret) (iamv1.NotificationContact, error)
@@ -161,6 +166,11 @@ func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 	routes.HandleFunc("/v1/auth/totp/enrollments", value.startTOTPEnrollment)
 	routes.HandleFunc("/v1/auth/totp/enrollments/by-request/", value.totpEnrollmentByRequest)
 	routes.HandleFunc("/v1/auth/totp/enrollments/", value.totpEnrollment)
+	routes.HandleFunc("/v1/auth/step-up", value.startStepUp)
+	routes.HandleFunc("/v1/auth/step-up/by-request/", value.stepUpByRequest)
+	routes.HandleFunc("/v1/auth/step-up/", value.verifyStepUp)
+	routes.HandleFunc("/v1/auth/recovery-codes:regenerate", value.regenerateRecoveryCodes)
+	routes.HandleFunc("/v1/auth/recovery-codes/regenerations/by-request/", value.recoveryCodeRegenerationByRequest)
 	routes.HandleFunc("/v1/auth/me", value.currentIdentity)
 	routes.HandleFunc("/v1/auth/notification-contact", value.notificationContact)
 	routes.HandleFunc("/v1/auth/notification-contact/verifications", value.startNotificationVerification)
@@ -1254,6 +1264,10 @@ func (value *handler) writeError(response http.ResponseWriter, request *http.Req
 		writeProblem(response, requestID, http.StatusNotFound, "iam.authenticator-recovery.not-found", "Authenticator recovery not found")
 	case errors.Is(err, identityaccess.ErrTOTPEnrollmentNotFound):
 		writeProblem(response, requestID, http.StatusNotFound, "iam.totp.enrollment.not-found", "TOTP enrollment not found")
+	case errors.Is(err, identityaccess.ErrStepUpNotFound):
+		writeProblem(response, requestID, http.StatusNotFound, "iam.step-up.not-found", "Operation proof not found")
+	case errors.Is(err, identityaccess.ErrRecoveryCodeRegenerationNotFound):
+		writeProblem(response, requestID, http.StatusNotFound, "iam.recovery-code-regeneration.not-found", "Recovery code regeneration not found")
 	case errors.Is(err, identityaccess.ErrVerificationRejected):
 		writeProblem(response, requestID, http.StatusUnprocessableEntity, "iam.verification.rejected", "IAM verification rejected")
 	case errors.Is(err, identityaccess.ErrOverloaded):

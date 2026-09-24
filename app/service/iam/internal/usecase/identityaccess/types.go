@@ -77,6 +77,12 @@ type Transaction interface {
 	StartAuthenticatorRecovery(context.Context, AuthenticatorRecoveryStart) (AuthenticatorRecoveryStartResult, error)
 	ConfirmAuthenticatorRecovery(context.Context, TOTPBindingConfirmation) (iamv1.AuthenticatorRecovery, error)
 	InspectAuthenticatorRecovery(context.Context, AuthenticationChallengeCredential, string) (iamv1.AuthenticatorRecovery, error)
+	StartStepUp(context.Context, StepUpStart) (iamv1.StepUp, error)
+	ReadStepUpByRequest(context.Context, iamv1.Session, string) (iamv1.StepUp, error)
+	ReadStepUpForVerification(context.Context, iamv1.Session, string) (iamv1.StepUp, error)
+	ProveStepUp(context.Context, StepUpVerification) (iamv1.StepUp, error)
+	RegenerateRecoveryCodes(context.Context, RecoveryCodeRegenerationMutation) (RecoveryCodeRegenerationResult, error)
+	ReadRecoveryCodeRegeneration(context.Context, iamv1.Session, string) (iamv1.RecoveryCodeRegeneration, error)
 	CreateLoginChallenge(context.Context, LoginChallengeCreation) (iamv1.AuthenticationChallenge, error)
 	LookupAuthenticationChallenge(context.Context, string) (AuthenticationChallengeCredential, bool, error)
 	ReserveTOTPAttempt(context.Context, TOTPAttempt) (TOTPAttempt, bool, error)
@@ -575,6 +581,7 @@ const (
 	PasswordAttemptChange              PasswordAttemptPurpose = "PASSWORD_CHANGE"
 	PasswordAttemptNotificationContact PasswordAttemptPurpose = "NOTIFICATION_CONTACT_VERIFY"
 	PasswordAttemptTOTPEnrollment      PasswordAttemptPurpose = "TOTP_ENROLLMENT"
+	PasswordAttemptStepUp              PasswordAttemptPurpose = "STEP_UP"
 )
 
 // Private, bounded authority snapshot. Success may only be consumed by the

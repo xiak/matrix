@@ -78,7 +78,7 @@ END $verify_policy_authority$;
 DO $verify_customer_policy_publication$
 DECLARE function_name text;
 BEGIN
-    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 39::bigint THEN
+    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 40::bigint THEN
         RAISE EXCEPTION 'IAM policy publication schema version is invalid';
     END IF;
     IF iam.policy_version_contract_ready() IS DISTINCT FROM true THEN

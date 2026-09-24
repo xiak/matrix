@@ -276,10 +276,10 @@ BEGIN
     SELECT * INTO receipt FROM iam.bootstrap_receipts WHERE singleton AND organization_id=caller.tenant_id
       AND installation_id=submitted_installation;
     IF NOT FOUND THEN RETURN NULL; END IF;
-	SELECT * INTO locator FROM iam.access_key_index WHERE key_id=submitted_key_id;
-	IF NOT FOUND THEN RETURN NULL; END IF;
-	IF EXISTS(SELECT 1 FROM iam.authentication_recovery_access_key_fences fence
-		WHERE fence.access_key_id=locator.key_id) THEN RETURN NULL; END IF;
+    SELECT * INTO locator FROM iam.access_key_index WHERE key_id=submitted_key_id;
+    IF NOT FOUND THEN RETURN NULL; END IF;
+    IF EXISTS(SELECT 1 FROM iam.authentication_recovery_access_key_fences fence
+        WHERE fence.access_key_id=locator.key_id) THEN RETURN NULL; END IF;
 
     -- Cross-account RLS is changed only using immutable physical locators.
     -- All Account locks precede all principal locks, even when the key belongs

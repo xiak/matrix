@@ -305,8 +305,8 @@ func securityText(kind authority.SecurityMailKind) (string, string) {
 		return "MATRIX authenticator recovery started", "Recovery of your TOTP authenticator was started."
 	case authority.MailAuthenticatorRecovered:
 		return "MATRIX authenticator recovered", "Recovery of your TOTP authenticator was completed."
-	case authority.MailRecoveryCodesChanged:
-		return "MATRIX recovery codes changed", "A new recovery-code batch was issued; the previous batch was terminated."
+	case authority.MailRecoveryCodesRegenerated:
+		return "MATRIX recovery codes regenerated", "A new recovery-code batch was issued; the previous batch was terminated."
 	case authority.MailSecuritySettingsChanged:
 		return "MATRIX account security settings changed", "Your account's security settings were changed."
 	default:

@@ -784,7 +784,7 @@ BEGIN
     ALTER TABLE iam.password_attempts ADD CONSTRAINT password_attempt_purpose_valid CHECK (
             (purpose='LOGIN' AND session_id IS NULL AND intent_digest IS NULL)
             OR (purpose='PASSWORD_CHANGE' AND session_id IS NOT NULL AND intent_digest IS NULL)
-            OR (purpose IN ('NOTIFICATION_CONTACT_VERIFY','TOTP_ENROLLMENT') AND session_id IS NOT NULL AND intent_digest IS NOT NULL
+            OR (purpose IN ('NOTIFICATION_CONTACT_VERIFY','TOTP_ENROLLMENT','STEP_UP') AND session_id IS NOT NULL AND intent_digest IS NOT NULL
                 AND intent_digest ~ '^sha256:[0-9a-f]{64}$'));
 END $password_purpose$;
 
@@ -1203,7 +1203,7 @@ BEGIN
             'iam.password.changed', 'iam.user.password-changed', 'iam.installation-primary.credentials-recovered',
             'iam.role-session.revoked','iam.role-session.exited',
             'iam.notification-contact.verification-started','iam.notification-contact.verified','iam.authenticator.bound',
-            'iam.authenticator.recovery-started','iam.authenticator.recovered'
+            'iam.authenticator.recovery-started','iam.authenticator.recovered','iam.recovery-codes.regenerated'
         ) AND submitted_event ? 'iamDecisionId')
         OR (expected_action IN (
             'iam.account.created', 'iam.account.disabled', 'iam.account.enabled',
@@ -1650,11 +1650,11 @@ BEGIN
             AND to_regprocedure('iam.set_organization_status(text,text,text,text,text,bigint,jsonb)') IS NULL
             AND to_regprocedure('iam.recover_organization_administrator(text,text,text,text,text,bigint,text,text,jsonb)') IS NULL
            AND iam.password_attempt_contract_ready()
-		   AND iam.totp_custody_contract_ready()
-		   AND iam.totp_backup_custody_contract_ready()
-		   AND iam.totp_authentication_contract_ready()
-		   AND iam.notification_contract_ready()
-		   AND iam.authentication_recovery_contract_ready()
+           AND iam.totp_custody_contract_ready()
+           AND iam.totp_backup_custody_contract_ready()
+           AND iam.totp_authentication_contract_ready()
+           AND iam.notification_contract_ready()
+           AND iam.authentication_recovery_contract_ready()
            AND to_regprocedure('iam.change_password(text,text,text,text,jsonb)') IS NULL
            AND (SELECT count(*) FROM pg_catalog.pg_proc AS recovery
                 WHERE recovery.oid IN (
@@ -1707,7 +1707,7 @@ BEGIN
                SELECT 1 FROM iam.audit_outbox AS outbox
                 WHERE outbox.status = 'DEAD_LETTER' OR outbox.attempts >= 100
            ),
-           39::bigint,
+           40::bigint,
            transaction_timestamp();
 END
 $function$;
@@ -1799,7 +1799,7 @@ BEGIN
     IF submitted_purpose IS NULL OR NOT (
         (submitted_purpose='LOGIN' AND submitted_login_name IS NOT NULL AND submitted_intent_digest IS NULL)
         OR (submitted_purpose='PASSWORD_CHANGE' AND submitted_login_name IS NULL AND submitted_intent_digest IS NULL)
-        OR (submitted_purpose IN ('NOTIFICATION_CONTACT_VERIFY','TOTP_ENROLLMENT') AND submitted_login_name IS NULL
+        OR (submitted_purpose IN ('NOTIFICATION_CONTACT_VERIFY','TOTP_ENROLLMENT','STEP_UP') AND submitted_login_name IS NULL
             AND submitted_intent_digest IS NOT NULL AND submitted_intent_digest ~ '^sha256:[0-9a-f]{64}$')) THEN
         RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='password attempt purpose is invalid';
     END IF;
@@ -1823,7 +1823,7 @@ BEGIN
     SELECT * INTO subject FROM iam.principals p WHERE p.tenant_id=account_id AND p.id=user_id
         AND p.principal_type='USER' AND p.status='ACTIVE' AND p.deleted_at IS NULL FOR UPDATE;
     IF NOT FOUND THEN RETURN; END IF;
-    IF submitted_purpose IN ('NOTIFICATION_CONTACT_VERIFY','TOTP_ENROLLMENT') AND subject.must_change_password THEN RETURN; END IF;
+    IF submitted_purpose IN ('NOTIFICATION_CONTACT_VERIFY','TOTP_ENROLLMENT','STEP_UP') AND subject.must_change_password THEN RETURN; END IF;
     SELECT * INTO credential FROM iam.user_credentials c WHERE c.tenant_id=account_id AND c.principal_id=user_id FOR UPDATE;
     IF NOT FOUND THEN RETURN; END IF;
     IF submitted_session_id IS NOT NULL THEN
@@ -1916,7 +1916,7 @@ BEGIN
         OR budget.credential_version<>credential.credential_version OR budget.account_version<>account_version
         OR budget.principal_version<>subject.resource_version OR budget.expires_at<=effective_now
         OR (session_id IS NOT NULL AND caller.expires_at<=effective_now)
-        OR (expected_purpose IN ('NOTIFICATION_CONTACT_VERIFY','TOTP_ENROLLMENT') AND subject.must_change_password)
+        OR (expected_purpose IN ('NOTIFICATION_CONTACT_VERIFY','TOTP_ENROLLMENT','STEP_UP') AND subject.must_change_password)
         OR (session_id IS NOT NULL AND NOT iam.session_mfa_eligible(tenant,subject_id,session_id)) THEN
         RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='password attempt is unavailable';
     END IF;
