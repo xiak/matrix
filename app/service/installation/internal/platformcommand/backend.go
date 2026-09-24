@@ -1146,6 +1146,17 @@ func (backend *Backend) recover(
 	if err != nil {
 		return cli.Result{}, fault(cli.FaultVerification, "RECOVERY_RELEASE_INVALID")
 	}
+	// The signed target topology, not the current journal, decides whether
+	// security mail exists after recovery. The supported predecessor has no
+	// such field; retaining the successor commitment would make its own CLI
+	// reject the restored journal. Same-release recovery keeps the binding.
+	targetSecurityMailDigest := ""
+	if targetBundle.Manifest.TopologyDigest == topology.ContractDigest() {
+		targetSecurityMailDigest = state.SecurityMailDigest
+		if targetSecurityMailDigest == "" {
+			return cli.Result{}, fault(cli.FaultVerification, "RECOVERY_RELEASE_INVALID")
+		}
+	}
 
 	commandID := ""
 	if state.Active != nil {
@@ -1184,8 +1195,9 @@ func (backend *Backend) recover(
 		InputDigest: source.ReleaseDigest, BackupDigest: source.BackupDigest,
 		AuthenticationRecoveryEpoch: recoveryEpoch, AuthenticationRecoveryDigest: intentDigest,
 		TargetReleaseID: source.ReleaseID, BackupID: source.BackupID,
-		NorthboundOrigin: destinationOrigin,
-		RequestedAt:      canonicalNow(backend.now()),
+		NorthboundOrigin:   destinationOrigin,
+		SecurityMailDigest: targetSecurityMailDigest,
+		RequestedAt:        canonicalNow(backend.now()),
 	})
 	if err != nil {
 		return cli.Result{}, lifecycleFault(err)
@@ -1214,7 +1226,7 @@ func (backend *Backend) recover(
 		CorrelationID: commandID,
 		Listener:      defaultListener, Port: defaultPort,
 		NorthboundOrigin: destinationOrigin,
-		SecurityMail:     SecurityMailInput{Digest: started.Journal.SecurityMailDigest},
+		SecurityMail:     SecurityMailInput{Digest: targetSecurityMailDigest},
 		Bundle:           targetBundle,
 		Trust:            trust, TrustBytes: append([]byte(nil), trustBytes...),
 	}

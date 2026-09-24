@@ -894,6 +894,7 @@ func TestExactPreparationPairAllowsUpgradeButRollbackRequiresAuthenticatedRecove
 	state := readJournal(t, root)
 	if state.CurrentReleaseID != fixtures[1].Manifest.Release.ID ||
 		state.PreviousRelease != fixtures[0].Manifest.Release.ID ||
+		state.SecurityMailDigest == "" ||
 		state.Active != nil || len(effects.upgradeCalls) == 0 ||
 		len(effects.explicitRollbackCalls) != 0 || effects.observeCalls != 0 {
 		t.Fatalf("cross-profile rollback changed state or reached effects: %#v / %#v", state, effects)
@@ -923,6 +924,10 @@ func TestExactPreparationPairAllowsUpgradeButRollbackRequiresAuthenticatedRecove
 	encoded, err := json.Marshal(completed)
 	if err != nil || completed.NorthboundOrigin != origin || completed.Last == nil ||
 		completed.Last.Command.NorthboundOrigin != origin ||
+		completed.SecurityMailDigest != "" || completed.Last.Command.SecurityMailDigest != "" ||
+		effects.recoveryPlan.Current.SecurityMail.Digest != state.SecurityMailDigest ||
+		effects.recoveryPlan.Target.SecurityMail.Digest != "" ||
+		strings.Contains(string(encoded), `"securityMailDigest"`) ||
 		!strings.Contains(string(encoded), `"northboundOrigin":"`+origin+`"`) ||
 		effects.recoveryPlan.Target.NorthboundOrigin != origin {
 		t.Fatal("exact predecessor recovery lost its published northbound origin")
@@ -1198,7 +1203,10 @@ func TestRecoveryOfCurrentReleaseDropsRetainedPredecessorFromEffectPlan(t *testi
 	if effects.recoveryPlan.Current.PreviousID != fixtures[0].Manifest.Release.ID ||
 		effects.recoveryPlan.Current.PreviousDigest != fixtures[0].ManifestDigest ||
 		effects.recoveryPlan.Target.PreviousID != "" ||
-		effects.recoveryPlan.Target.PreviousDigest != "" {
+		effects.recoveryPlan.Target.PreviousDigest != "" ||
+		installed.SecurityMailDigest == "" ||
+		effects.recoveryPlan.Target.SecurityMail.Digest != installed.SecurityMailDigest ||
+		readJournal(t, root).SecurityMailDigest != installed.SecurityMailDigest {
 		t.Fatalf("recovery did not retire predecessor: %#v", effects.recoveryPlan)
 	}
 }

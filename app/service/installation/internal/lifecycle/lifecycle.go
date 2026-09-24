@@ -538,7 +538,7 @@ func validateCommand(command Command, node bool) error {
 		return errors.New("installation command contains unrelated authentication recovery input")
 	}
 	if command.SecurityMailDigest != "" && (node ||
-		(command.Action != ActionInstall && command.Action != ActionUpgrade)) {
+		(command.Action != ActionInstall && command.Action != ActionUpgrade && command.Action != ActionRecover)) {
 		return errors.New("installation command contains unrelated security mail input")
 	}
 	if command.SecurityMailDigest != "" && !digestPattern.MatchString(command.SecurityMailDigest) {
@@ -860,6 +860,7 @@ func applySuccessfulPointerChange(journal *Journal, execution Execution) {
 		journal.PreviousRelease = ""
 		journal.PreviousReleaseDigest = ""
 		journal.NorthboundOrigin = execution.Command.NorthboundOrigin
+		journal.SecurityMailDigest = execution.Command.SecurityMailDigest
 		journal.AuthenticationRecoveryEpoch = execution.Command.AuthenticationRecoveryEpoch
 	}
 }
@@ -906,6 +907,10 @@ func validateCompletedPointers(journal Journal, execution Execution) error {
 		if execution.Command.Action == ActionRecover &&
 			journal.AuthenticationRecoveryEpoch != execution.Command.AuthenticationRecoveryEpoch {
 			return errors.New("successful recovery lost its authentication recovery epoch")
+		}
+		if execution.Command.Action == ActionRecover &&
+			journal.SecurityMailDigest != execution.Command.SecurityMailDigest {
+			return errors.New("successful recovery lost its target security mail commitment")
 		}
 	case OutcomeFailed, OutcomeRolledBack, OutcomeManualIntervention:
 		if journal.CurrentReleaseID != execution.SourceRelease ||
