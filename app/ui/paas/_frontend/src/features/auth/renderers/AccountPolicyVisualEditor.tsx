@@ -17,6 +17,43 @@ const timeOperators = ["DATE_GREATER_THAN_EQUALS", "DATE_LESS_THAN"] as const;
 const maxStatementActions = 128;
 const emptySelectedActions: string[] = [];
 const collectionOnly = (action: AuthorizationProfileAction) => visualActionShapeKey(action) === "COLLECTION";
+const reviewConditionLabelKey = { "iam.account-id": "keys.accountId", "iam.principal-id": "keys.principalId", "iam.current-time": "keys.currentTime" } as const;
+const operatorLabelKey = { STRING_EQUALS: "operators.STRING_EQUALS", STRING_NOT_EQUALS: "operators.STRING_NOT_EQUALS",
+  DATE_GREATER_THAN_EQUALS: "operators.DATE_GREATER_THAN_EQUALS", DATE_LESS_THAN: "operators.DATE_LESS_THAN" } as const;
+
+export function PolicyVisualReview({ document, headingLevel = 3 }: { document: AccountPolicyDocument; headingLevel?: 3 | 4 }) {
+  const t = useTranslations("PolicyVisualAuthoring");
+  const id = useId();
+  const [selectedIndex, setSelectedIndex] = useState(0);
+  const statement = document.statements[selectedIndex];
+  if (!statement) return null;
+  const SummaryHeading = headingLevel === 3 ? "h3" : "h4";
+  const StatementHeading = headingLevel === 3 ? "h4" : "h5";
+  return <section className={styles.reviewSummary} aria-label={t("reviewSummary")}>
+    <div className={styles.reviewHeading}>
+      <SummaryHeading>{t("reviewSummary")}</SummaryHeading>
+      <span>{t("reviewStatementCount", { count: document.statements.length })}</span>
+    </div>
+    {document.statements.length > 1 ? <FormField id={id + "-statement"} label={t("reviewChooseStatement")}>
+      <Select id={id + "-statement"} value={String(selectedIndex)} onValueChange={(value) => setSelectedIndex(Number(value))}
+        options={document.statements.map((item, at) => ({ value: String(at), label: t("statementOption", { number: at + 1, sid: item.sid }) }))} />
+    </FormField> : null}
+    <StatementHeading>{t("statementOption", { number: selectedIndex + 1, sid: statement.sid })}</StatementHeading>
+    <dl className={styles.reviewFields}>
+      <div><dt>{t("effect")}</dt><dd>{t(statement.effect === "DENY" ? "deny" : "allow")}</dd></div>
+      <div><dt>{t("actions")}</dt><dd><ul>{statement.actions.map((action) => <li key={action}><code>{action}</code></li>)}</ul></dd></div>
+      <div><dt>{t("resources")}</dt><dd><ul>{statement.resources.map((resource, at) => <li key={at}>
+        {t(`matches.${resource.match}`)} · <code>{resource.kind}</code>{resource.id ? <> · <code>{resource.id}</code></> : null}
+      </li>)}</ul></dd></div>
+      <div><dt>{t("conditions")}</dt><dd>{statement.conditions?.length ? <ul>{statement.conditions.map((condition, at) => <li key={at}>
+        {Object.hasOwn(reviewConditionLabelKey, condition.key) ? t(reviewConditionLabelKey[condition.key as keyof typeof reviewConditionLabelKey]) : <code>{condition.key}</code>}
+        {" · "}{Object.hasOwn(operatorLabelKey, condition.operator) ? t(operatorLabelKey[condition.operator as keyof typeof operatorLabelKey]) : <code>{condition.operator}</code>}
+        {" · "}<code>{condition.values.join(", ")}</code>
+      </li>)}</ul> : t("reviewNoConditions")}</dd></div>
+    </dl>
+    <p>{t("reviewSummaryHint")}</p>
+  </section>;
+}
 
 function canUseAction(action: AuthorizationProfileAction, statement: Statement, selected: AuthorizationProfileAction[]): boolean {
   if (selected.length && visualActionShapeKey(action) !== visualActionShapeKey(selected[0]!)) return false;

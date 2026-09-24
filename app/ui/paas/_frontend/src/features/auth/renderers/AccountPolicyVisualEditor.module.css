@@ -1,4 +1,15 @@
 .editor { display: grid; min-width: 0; gap: var(--xiak-spacing-comfortable); }
+.reviewSummary { display: grid; min-width: 0; gap: var(--xiak-spacing-default); padding: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-small); background: var(--xiak-color-bg-panel-hover); }
+.reviewHeading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--xiak-spacing-tight); }
+.reviewHeading h3, .reviewHeading h4, .reviewSummary h4, .reviewSummary h5 { margin: 0; color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-body); overflow-wrap: anywhere; }
+.reviewHeading span, .reviewSummary p { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
+.reviewSummary p { margin: 0; }
+.reviewFields { display: grid; gap: var(--xiak-spacing-default); margin: 0; }
+.reviewFields > div { display: grid; min-width: 0; gap: var(--xiak-spacing-micro); }
+.reviewFields dt { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
+.reviewFields dd { min-width: 0; margin: 0; color: var(--xiak-color-text-strong); overflow-wrap: anywhere; }
+.reviewFields ul { display: grid; gap: var(--xiak-spacing-micro); margin: 0; padding-inline-start: 1.25rem; }
+.reviewFields code { white-space: normal; overflow-wrap: anywhere; }
 .statementToolbar { display: grid; grid-template-columns: minmax(180px, 1fr) minmax(180px, 1fr) auto auto; align-items: end; gap: var(--xiak-spacing-default); }
 .statementFields { display: grid; min-width: 0; gap: var(--xiak-spacing-comfortable); border-top: var(--xiak-border-subtle); padding-top: var(--xiak-spacing-comfortable); }
 .identityFields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--xiak-spacing-default); }

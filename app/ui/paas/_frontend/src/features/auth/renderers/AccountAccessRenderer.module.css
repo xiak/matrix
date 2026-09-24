@@ -277,17 +277,6 @@
 .catalogFacts dd { min-width: 0; margin: 0; color: var(--xiak-color-text-strong); overflow-wrap: anywhere; }
 .catalogFacts .catalogDigest { grid-column: 1 / -1; }
 .catalogFacts code, .catalogActionTable code { white-space: normal; overflow-wrap: anywhere; }
-.policyReviewSummary { display: grid; min-width: 0; gap: var(--xiak-spacing-default); padding: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-small); background: var(--xiak-color-bg-panel-hover); }
-.policyReviewHeading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--xiak-spacing-tight); }
-.policyReviewHeading h3, .policyReviewSummary h4 { margin: 0; color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-body); overflow-wrap: anywhere; }
-.policyReviewHeading span, .policyReviewSummary p { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
-.policyReviewSummary p { margin: 0; }
-.policyReviewFields { display: grid; gap: var(--xiak-spacing-default); margin: 0; }
-.policyReviewFields > div { display: grid; min-width: 0; gap: var(--xiak-spacing-micro); }
-.policyReviewFields dt { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
-.policyReviewFields dd { min-width: 0; margin: 0; color: var(--xiak-color-text-strong); overflow-wrap: anywhere; }
-.policyReviewFields ul { display: grid; gap: var(--xiak-spacing-micro); margin: 0; padding-inline-start: 1.25rem; }
-.policyReviewFields code { white-space: normal; overflow-wrap: anywhere; }
 .catalogProductTable th:first-child { min-width: 180px; }
 .catalogProductTable th:last-child { min-width: 180px; }
 .catalogActionTable { min-width: 860px; }

@@ -12,6 +12,7 @@ import type { AccountAccessScene } from "../scenes/accountAccessScene";
 import { WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
 import { AccountAuthorizationProfileCatalog } from "./AccountAuthorizationProfileCatalog";
 import { AccountPolicyDocumentAuthor, type PolicyAuthorMode } from "./AccountPolicyDocumentAuthor";
+import { PolicyVisualReview } from "./AccountPolicyVisualEditor";
 import { PolicyCreateRecovery } from "./LivePolicyCreationWizard";
 import { useAccessDraft } from "./useAccessDraft";
 import styles from "./AccountAccessRenderer.module.css";
@@ -196,10 +197,14 @@ function PolicyVersionPublisher({ policy, defaultVersion, mutation, onPublished,
         <div><dt>{t("currentDefault")}</dt><dd><code>{review.defaultVersionId}</code></dd></div>
         <div><dt>{t("statementCount")}</dt><dd>{review.document.statements.length}</dd></div>
       </dl>
-      <div className={styles.policyComparison}>
+      {editorMode === "visual" ? <PolicyVisualReview document={review.document} headingLevel={4} /> : null}
+      {editorMode === "visual" ? <details className={styles.policyRawDocument}><summary>{t("compareDocuments")}</summary><div className={styles.policyComparison}>
+        <section><h4>{t("currentDocument", { version: defaultVersion.versionId })}</h4><pre tabIndex={0}>{JSON.stringify(defaultVersion.document, null, 2)}</pre></section>
+        <section><h4>{t("proposedDocument")}</h4><pre tabIndex={0}>{JSON.stringify(review.document, null, 2)}</pre></section>
+      </div></details> : <div className={styles.policyComparison}>
         <section className={styles.policyRawDocument}><h4>{t("currentDocument", { version: defaultVersion.versionId })}</h4><pre tabIndex={0}>{JSON.stringify(defaultVersion.document, null, 2)}</pre></section>
         <section className={styles.policyRawDocument}><h4>{t("proposedDocument")}</h4><pre tabIndex={0}>{JSON.stringify(review.document, null, 2)}</pre></section>
-      </div>
+      </div>}
     </> : null}
     <div hidden={Boolean(review)}><AccountPolicyDocumentAuthor text={text} onChange={setText} error={Boolean(error)} onClearError={() => setError(null)}
       mode={editorMode} onModeChange={setEditorMode} onVisualReadyChange={setVisualReady}

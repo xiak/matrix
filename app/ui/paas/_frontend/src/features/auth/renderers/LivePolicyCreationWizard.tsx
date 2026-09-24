@@ -2,54 +2,18 @@
 
 import { useId, useLayoutEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Alert, Button, Card, FormField, Input, Select } from "@ui/xiak";
+import { Alert, Button, Card, FormField, Input } from "@ui/xiak";
 import type { PolicyCreateClient, PolicyCreateIntent } from "../application/AccountAccessProvider";
 import type { AccountPolicyDocument } from "../domain/accounts";
 import { visualDraftHasIncompleteFields } from "../domain/accountPolicyVisualAuthoring";
 import { AccountPolicyDocumentAuthor, type PolicyAuthorMode } from "./AccountPolicyDocumentAuthor";
+import { PolicyVisualReview } from "./AccountPolicyVisualEditor";
 import { WorkspaceDetail } from "./AccessWorkspaceUi";
 import { useAccessDraft } from "./useAccessDraft";
 import styles from "./AccountAccessRenderer.module.css";
 
 const emptyDocument: AccountPolicyDocument = { languageVersion: "1", scope: "TENANT", statements: [] };
 const initialText = JSON.stringify(emptyDocument, null, 2);
-
-const conditionLabelKey = { "iam.account-id": "keys.accountId", "iam.principal-id": "keys.principalId", "iam.current-time": "keys.currentTime" } as const;
-const operatorLabelKey = { STRING_EQUALS: "operators.STRING_EQUALS", STRING_NOT_EQUALS: "operators.STRING_NOT_EQUALS",
-  DATE_GREATER_THAN_EQUALS: "operators.DATE_GREATER_THAN_EQUALS", DATE_LESS_THAN: "operators.DATE_LESS_THAN" } as const;
-
-function PolicyVisualReview({ document }: { document: AccountPolicyDocument }) {
-  const t = useTranslations("LivePolicyCreate");
-  const visual = useTranslations("PolicyVisualAuthoring");
-  const id = useId();
-  const [selectedIndex, setSelectedIndex] = useState(0);
-  const statement = document.statements[selectedIndex];
-  if (!statement) return null;
-  return <section className={styles.policyReviewSummary} aria-label={t("reviewSummary")}>
-    <div className={styles.policyReviewHeading}>
-      <h3>{t("reviewSummary")}</h3>
-      <span>{t("reviewStatementCount", { count: document.statements.length })}</span>
-    </div>
-    {document.statements.length > 1 ? <FormField id={id + "-statement"} label={t("reviewChooseStatement")}>
-      <Select id={id + "-statement"} value={String(selectedIndex)} onValueChange={(value) => setSelectedIndex(Number(value))}
-        options={document.statements.map((item, at) => ({ value: String(at), label: visual("statementOption", { number: at + 1, sid: item.sid }) }))} />
-    </FormField> : null}
-    <h4>{visual("statementOption", { number: selectedIndex + 1, sid: statement.sid })}</h4>
-    <dl className={styles.policyReviewFields}>
-      <div><dt>{visual("effect")}</dt><dd>{visual(statement.effect === "DENY" ? "deny" : "allow")}</dd></div>
-      <div><dt>{visual("actions")}</dt><dd><ul>{statement.actions.map((action) => <li key={action}><code>{action}</code></li>)}</ul></dd></div>
-      <div><dt>{visual("resources")}</dt><dd><ul>{statement.resources.map((resource, at) => <li key={at}>
-        {visual(`matches.${resource.match}`)} · <code>{resource.kind}</code>{resource.id ? <> · <code>{resource.id}</code></> : null}
-      </li>)}</ul></dd></div>
-      <div><dt>{visual("conditions")}</dt><dd>{statement.conditions?.length ? <ul>{statement.conditions.map((condition, at) => <li key={at}>
-        {Object.hasOwn(conditionLabelKey, condition.key) ? visual(conditionLabelKey[condition.key as keyof typeof conditionLabelKey]) : <code>{condition.key}</code>}
-        {" · "}{Object.hasOwn(operatorLabelKey, condition.operator) ? visual(operatorLabelKey[condition.operator as keyof typeof operatorLabelKey]) : <code>{condition.operator}</code>}
-        {" · "}<code>{condition.values.join(", ")}</code>
-      </li>)}</ul> : t("reviewNoConditions")}</dd></div>
-    </dl>
-    <p>{t("reviewSummaryHint")}</p>
-  </section>;
-}
 
 export function PolicyCreateRecovery({ client, pending, onDone, onInspect }: {
   client: PolicyCreateClient; pending: PolicyCreateIntent; onDone(id: string): void; onInspect?(): void;

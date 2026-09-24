@@ -1144,6 +1144,7 @@ describe("account access", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "待发布声明 JSON" }), { target: { value: JSON.stringify(proposed, null, 2) } });
     await user.click(screen.getByRole("button", { name: "审阅变更" }));
     expect(screen.getByRole("heading", { name: "审阅待发布版本" })).toBe(document.activeElement);
+    expect(screen.queryByRole("region", { name: "声明摘要" })).toBeNull();
     expect(screen.getByText(/发布只创建不可变版本/)).toBeTruthy();
     expect(fixture.createPolicyVersion).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "确认发布新版本" }));
@@ -1186,6 +1187,16 @@ describe("account access", () => {
     await user.click(screen.getByRole("button", { name: "显示全部操作" }));
     await user.click(screen.getByRole("button", { name: "审阅变更" }));
     expect(screen.getByRole("heading", { name: "审阅待发布版本" })).toBeTruthy();
+    const summary = screen.getByRole("region", { name: "声明摘要" });
+    expect(within(summary).getByText("拒绝")).toBeTruthy();
+    expect(within(summary).getByText("paas.application.read", { selector: "code" })).toBeTruthy();
+    expect(within(summary).getByText("app-prod", { selector: "code" })).toBeTruthy();
+    const comparison = screen.getByText("对比当前与目标声明 JSON").closest("details");
+    expect(comparison?.open).toBe(false);
+    await user.click(screen.getByText("对比当前与目标声明 JSON"));
+    expect(comparison?.open).toBe(true);
+    expect(within(comparison!).getByRole("heading", { name: /当前默认版本/ })).toBeTruthy();
+    expect(within(comparison!).getByRole("heading", { name: "待发布声明 JSON" })).toBeTruthy();
     expect(screen.queryByRole("dialog")).toBeNull();
     await user.click(screen.getByRole("button", { name: "返回编辑" }));
     expect(screen.getByRole("checkbox", { name: /paas.application.read/ })).toHaveProperty("checked", true);
