@@ -2298,6 +2298,45 @@ func TestMigrateInstallationUsesFixedGoBinariesWithoutCredentialArguments(t *tes
 	}
 }
 
+func TestMigrationArgumentsUseOnlyTheAuthenticatedReleaseCapabilities(t *testing.T) {
+	root := t.TempDir()
+	iamMigration := platformMigrations[0]
+	writeMount := func(mount migrationMount) {
+		t.Helper()
+		target := filepath.Join(root, filepath.FromSlash(mount.relative))
+		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(target, []byte("test-only-dsn"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, mount := range iamMigration.mounts {
+		writeMount(mount)
+	}
+	plan := platformcommand.InstallPlan{Root: root}
+	plan.Bundle.Manifest.TopologyDigest = topology.SupportedPredecessorContractDigest()
+	predecessor, err := migrationArguments(plan, "matrix-test", "network-test", "sha256:"+strings.Repeat("a", 64), iamMigration, "verify")
+	if err != nil || hasArgumentPair(predecessor, "--env", "MATRIX_MIGRATION_IAM_NOTIFICATION_DSN_FILE=/run/matrix/iam-notification-worker-dsn") {
+		t.Fatalf("predecessor IAM verification required an unissued worker identity: %v", err)
+	}
+	plan.Bundle.Manifest.TopologyDigest = topology.ContractDigest()
+	if _, err := migrationArguments(plan, "matrix-test", "network-test", "sha256:"+strings.Repeat("a", 64), iamMigration, "verify"); err == nil {
+		t.Fatal("current IAM verification omitted its notification worker identity")
+	}
+	for _, mount := range iamMigration.currentOnlyMounts {
+		writeMount(mount)
+	}
+	current, err := migrationArguments(plan, "matrix-test", "network-test", "sha256:"+strings.Repeat("a", 64), iamMigration, "verify")
+	if err != nil || !hasArgumentPair(current, "--env", "MATRIX_MIGRATION_IAM_NOTIFICATION_DSN_FILE=/run/matrix/iam-notification-worker-dsn") {
+		t.Fatalf("current IAM verification lost its purpose-only worker identity: %v", err)
+	}
+	plan.Bundle.Manifest.TopologyDigest = "sha256:" + strings.Repeat("f", 64)
+	if _, err := migrationArguments(plan, "matrix-test", "network-test", "sha256:"+strings.Repeat("a", 64), iamMigration, "verify"); err == nil {
+		t.Fatal("unknown migration topology was accepted")
+	}
+}
+
 func TestMigrateUpgradeUsesTargetBinariesOnTheOwnedSourceNetwork(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("local-machine migration effects target Linux")

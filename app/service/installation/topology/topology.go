@@ -72,10 +72,8 @@ func ContractDigest() string {
 }
 
 // SupportedPredecessorContractDigest is the exact signed topology emitted by
-// the one platform release that this source can upgrade in place. The retained
-// predecessor changed the database profile without changing the platform
-// topology, so its authenticated profile/digest pair intentionally shares the
-// current digest.
+// the one platform release that this source can upgrade in place. It excludes
+// the successor's purpose-only security mail notification worker.
 func SupportedPredecessorContractDigest() string {
 	return contractDescriptionDigest(predecessorContractDescription())
 }
