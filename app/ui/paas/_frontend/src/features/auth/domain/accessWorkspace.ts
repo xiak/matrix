@@ -490,8 +490,11 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
       target = enterprise.name; break;
     }
     case "save-account-rule": {
-      if (state.personalMfa.factorState !== "bound" || state.personalMfa.reauthenticationRequired || state.personalMfa.recoveryState !== "idle" || state.pendingAccountRuleChange || !command.requestId.trim() || !Number.isSafeInteger(command.expectedRuleVersion) || command.expectedRuleVersion < 1 || command.expectedRuleVersion !== state.settings.accountRuleVersion || typeof command.expectedLoginProtection !== "boolean" || typeof command.loginProtection !== "boolean" || command.expectedLoginProtection !== state.settings.loginProtection) invalid();
-      if (command.responseMode === "response-lost") state.pendingAccountRuleChange = { requestId: command.requestId, baselineRuleVersion: command.expectedRuleVersion, baselineLoginProtection: command.expectedLoginProtection, requestedLoginProtection: command.loginProtection, status: "UNKNOWN" };
+      if (state.personalMfa.factorState !== "bound" || state.personalMfa.reauthenticationRequired || state.personalMfa.recoveryState !== "idle" || state.pendingAccountRuleChange || !command.requestId.trim() || !Number.isSafeInteger(command.expectedRuleVersion) || command.expectedRuleVersion < 1 || command.expectedRuleVersion !== state.settings.accountRuleVersion || typeof command.expectedLoginProtection !== "boolean" || typeof command.loginProtection !== "boolean" || command.expectedLoginProtection !== state.settings.loginProtection || command.loginProtection === state.settings.loginProtection) invalid();
+      if (command.responseMode === "response-lost") {
+        state.pendingAccountRuleChange = { requestId: command.requestId, baselineRuleVersion: command.expectedRuleVersion, baselineLoginProtection: command.expectedLoginProtection, requestedLoginProtection: command.loginProtection, status: "UNKNOWN" };
+        state.personalMfa = { ...state.personalMfa, reauthenticationRequired: true };
+      }
       else {
         state.settings = { ...state.settings, loginProtection: command.loginProtection, accountRuleVersion: command.expectedRuleVersion + 1 };
         state.personalMfa = { ...state.personalMfa, reauthenticationRequired: true };
@@ -499,21 +502,21 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
       target = source.accountId; break;
     }
     case "remember-account-rule-change-unknown": {
-      if (state.pendingAccountRuleChange || !command.requestId.trim() || !Number.isSafeInteger(command.expectedRuleVersion) || command.expectedRuleVersion < 1 || command.expectedRuleVersion !== state.settings.accountRuleVersion || typeof command.expectedLoginProtection !== "boolean" || typeof command.loginProtection !== "boolean" || command.expectedLoginProtection !== state.settings.loginProtection) invalid();
+      if (state.personalMfa.factorState !== "bound" || state.personalMfa.reauthenticationRequired || state.personalMfa.recoveryState !== "idle" || state.pendingAccountRuleChange || !command.requestId.trim() || !Number.isSafeInteger(command.expectedRuleVersion) || command.expectedRuleVersion < 1 || command.expectedRuleVersion !== state.settings.accountRuleVersion || typeof command.expectedLoginProtection !== "boolean" || typeof command.loginProtection !== "boolean" || command.expectedLoginProtection !== state.settings.loginProtection || command.loginProtection === state.settings.loginProtection) invalid();
       state.pendingAccountRuleChange = { requestId: command.requestId, baselineRuleVersion: command.expectedRuleVersion, baselineLoginProtection: command.expectedLoginProtection, requestedLoginProtection: command.loginProtection, status: "UNKNOWN" };
+      state.personalMfa = { ...state.personalMfa, reauthenticationRequired: true };
       recordEvent = false;
       target = source.accountId; break;
     }
     case "inspect-account-rule-change": {
       const pending = state.pendingAccountRuleChange;
       if (!pending) throw new AccessWorkspaceError("invalid");
-      if (pending.requestId !== command.requestId) invalid();
+      if (pending.requestId !== command.requestId || state.personalMfa.reauthenticationRequired) invalid();
       if (pending.status === "UNRECOVERABLE") throw new AccessWorkspaceError("accountRuleResultUnavailable");
       if (command.resultMode === "not-found") throw new AccessWorkspaceError("accountRuleResultNotFound");
       if (command.resultMode === "unavailable") throw new AccessWorkspaceError("accountRuleResultUnavailable");
       if (command.resultMode === "found-applied") {
         state.settings = { ...state.settings, loginProtection: pending.requestedLoginProtection, accountRuleVersion: pending.baselineRuleVersion + 1 };
-        state.personalMfa = { ...state.personalMfa, reauthenticationRequired: true };
       }
       state.pendingAccountRuleChange = null;
       target = source.accountId; break;

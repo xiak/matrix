@@ -238,7 +238,6 @@ function resetPreviewOwnSessions(): void {
 
 const initialPreviewState = structuredClone({ account, users, accounts, userPlatformPolicies });
 const workspace = createPreviewAccessWorkspace(account.id, () => users.map((user) => user.id), account.rootIdentity.principalId);
-let previewLoginVerified = false;
 
 export function previewPersonalMfaSnapshot() {
   return workspace.snapshot().personalMfa;
@@ -286,19 +285,7 @@ export async function confirmPreviewPersonalMfaRecovery(challenge: string): Prom
   }
 }
 
-export async function completePreviewPersonalMfaLogin(): Promise<boolean> {
-  const state = workspace.snapshot().personalMfa;
-  try {
-    if (state.factorState !== "never-bound") await workspace.execute(previewCredential, { kind: "complete-personal-mfa-reauthentication" });
-    previewLoginVerified = true;
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 export function resetPreviewEnvironment(): void {
-  previewLoginVerified = false;
   activePreviewCredential = null;
   activeRecoveryChallenge = null;
   activeOnlineRecovery = null;
@@ -334,7 +321,7 @@ function loginResult(credential: string): LoginResult {
 export const previewIamRepository: IamRepository = {
   async login() {
     const mfa = workspace.snapshot().personalMfa;
-    if ((mfa.factorState !== "never-bound" || mfa.recoveryState !== "idle") && !previewLoginVerified) {
+    if (mfa.factorState !== "never-bound" || mfa.recoveryState !== "idle") {
       activePreviewCredential = null;
       activeLoginChallenge = {
         id: `preview-login-challenge-${crypto.randomUUID()}`,
@@ -352,7 +339,6 @@ export const previewIamRepository: IamRepository = {
         challengeCredential: activeLoginChallenge.credential
       };
     }
-    previewLoginVerified = false;
     activePreviewCredential = `matrix-ux-preview-${crypto.randomUUID()}`;
     return loginResult(activePreviewCredential);
   },
@@ -383,6 +369,7 @@ export const previewIamRepository: IamRepository = {
           challengeCredential: activeLoginChallenge.credential
         };
       }
+      await workspace.execute(previewCredential, { kind: "complete-personal-mfa-reauthentication" });
       activeLoginChallenge = null;
       activePreviewCredential = `matrix-ux-preview-${crypto.randomUUID()}`;
       return loginResult(activePreviewCredential);
@@ -471,7 +458,6 @@ export const previewIamRepository: IamRepository = {
       previewRecoveryResults.set(recovery.requestId, recovery);
       activeOnlineRecovery = null;
       activePreviewCredential = null;
-      previewLoginVerified = false;
       return {
         recovery,
         nextStep: "REAUTHENTICATE" as const,
@@ -494,7 +480,6 @@ export const previewIamRepository: IamRepository = {
   async logout(credential) {
     requirePreviewCredential(credential);
     invalidateActivePreviewCredential(credential);
-    previewLoginVerified = false;
   },
   sessions: {
     async list(credential, after) {

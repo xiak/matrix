@@ -2387,6 +2387,7 @@ describe("CAM-style access workspace", () => {
     const { extension } = await open("settings", { seed: async (workspace) => { await workspace.execute("preview", { kind: "confirm-personal-mfa" }); } });
     expect(screen.getByText(/通过正常登录重新验证后再修改账号规则/)).toBeTruthy();
     expect((screen.getByRole("button", { name: "编辑模拟规则" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole("button", { name: "重新登录以继续" })).toBeTruthy();
     expect(await extension.read("preview")).toMatchObject({ personalMfa: { factorState: "bound", reauthenticationRequired: true } });
   });
   it("blocks workspace and group management while the old session requires reauthentication", async () => {
@@ -2491,10 +2492,21 @@ describe("CAM-style access workspace", () => {
     expect(screen.queryByRole("button", { name: "编辑模拟规则" })).toBeNull();
     const pending = (await extension.read("preview")).pendingAccountRuleChange;
     expect(pending).toMatchObject({ baselineLoginProtection: false, requestedLoginProtection: true, status: "UNKNOWN" });
+    expect((await extension.read("preview")).personalMfa.reauthenticationRequired).toBe(true);
+    expect(screen.queryByRole("button", { name: "按原意图查询" })).toBeNull();
+    expect(screen.getByText(/账号规则保存结果未知。先重新登录/)).toBeTruthy();
+    expect(screen.queryByText(/身份验证方法或账号规则的变更已生效/)).toBeNull();
+    expect(screen.getByRole("button", { name: "替换验证器" }).getAttribute("title")).toContain("账号规则结果尚未确定");
 
     await user.click(screen.getByTestId("go-users"));
     await user.click(screen.getByTestId("go-settings"));
     expect(await screen.findByRole("heading", { name: "账号规则的保存结果未知" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "重新登录以继续" }));
+    expect(screen.getByRole("button", { name: "Enter" })).toBeTruthy();
+    await extension.execute("preview", { kind: "complete-personal-mfa-reauthentication" });
+    await user.click(screen.getByRole("button", { name: "Enter" }));
+    expect(await screen.findByRole("heading", { name: "账号规则的保存结果未知" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "按原意图查询" })).toBeTruthy();
     await select(user, "MOCK 原意图查询结果", "暂未查询到确定结果（保持未知）");
     await user.click(screen.getByRole("button", { name: "按原意图查询" }));
     expect(await screen.findByText(/状态仍为未知，不能重新保存/)).toBeTruthy();
@@ -2503,9 +2515,9 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: "按原意图查询" }));
     expect(await screen.findByText(/已保存模拟强制 MFA 要求/)).toBeTruthy();
     expect((await extension.read("preview")).settings.loginProtection).toBe(true);
-    expect((await extension.read("preview")).personalMfa.reauthenticationRequired).toBe(true);
-    expect(screen.getByText(/身份验证方法或账号规则的变更已生效/)).toBeTruthy();
-    expect((screen.getByRole("button", { name: "编辑模拟规则" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((await extension.read("preview")).personalMfa.reauthenticationRequired).toBe(false);
+    expect(screen.queryByText(/身份验证方法或账号规则的变更已生效/)).toBeNull();
+    expect((screen.getByRole("button", { name: "编辑模拟规则" }) as HTMLButtonElement).disabled).toBe(false);
     expect((await extension.read("preview")).pendingAccountRuleChange).toBeNull();
   });
   it("journals an unavailable account-rule save before exposing UNKNOWN and keeps it locked after reload", async () => {

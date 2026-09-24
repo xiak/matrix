@@ -172,6 +172,7 @@ export function MfaSecurityPreview({ workspace }: { workspace: AccessWorkspace }
   const [verifiedNotificationAddress, setVerifiedNotificationAddress] = useState<string | null>(null);
   const { factorState, reauthenticationRequired } = workspace.personalMfa;
   const required = workspace.settings.loginProtection;
+  const blockedActionHint = t(workspace.pendingAccountRuleChange?.status === "UNKNOWN" ? "accountOutcomeUnknownActionBlocked" : "reauthenticationActionBlocked");
 
   function begin(action: SecurityStepUpAction) { setFeedback(null); setStepUp(action); setEnrollment(null); setShowCodes(false); }
   async function verified() {
@@ -194,18 +195,18 @@ export function MfaSecurityPreview({ workspace }: { workspace: AccessWorkspace }
 
   return <>
     {feedback ? <Alert status="success">{t(`feedback.${feedback}`)}</Alert> : null}
-    {reauthenticationRequired ? <Alert status="warning">{t("reauthenticationRequired")}</Alert> : null}
+    {reauthenticationRequired ? <Alert status="warning">{t(workspace.pendingAccountRuleChange?.status === "UNKNOWN" ? "accountOutcomeUnknownReauthenticationRequired" : "reauthenticationRequired")}</Alert> : null}
     <SecurityNotificationAddressPreview onVerified={setVerifiedNotificationAddress} verifiedAddress={verifiedNotificationAddress} />
     <section aria-labelledby="personal-security" className={styles.section}>
       <div className={styles.sectionHeading}><div><p>{t("personalEyebrow")}</p><h2 id="personal-security" tabIndex={-1}>{t("personalTitle")}</h2><span>{t("personalHint")}</span></div><Badge status={reauthenticationRequired ? "warning" : factorState === "bound" ? "success" : required ? "warning" : "neutral"}>{t(reauthenticationRequired ? "reauthenticate" : factorState === "bound" ? "bound" : required ? "bindingRequired" : "notBound")}</Badge></div>
       <div className={styles.securityCards}>
         <Card><Card.Header><div className={styles.cardTitle}><span><Smartphone aria-hidden="true" /></span><div><Typography.Title as="h3" level={3}>{t("authenticatorTitle")}</Typography.Title><Typography.Text tone="muted">{t("authenticatorHint")}</Typography.Text></div></div></Card.Header><Card.Body className={styles.cardBody}>
           <dl className={styles.facts}><div><dt>{t("method")}</dt><dd>{t("totp")}</dd></div><div><dt>{t("state")}</dt><dd>{t(factorState === "bound" ? "bound" : "notBound")}</dd></div><div><dt>{t("scope")}</dt><dd>{t("currentUserOnly")}</dd></div></dl>
-          <div className={styles.actions}>{factorState === "bound" ? <><Button disabled={reauthenticationRequired} onClick={() => begin("replace")} variant="secondary">{t("replace")}</Button><Button disabled={required || reauthenticationRequired} onClick={() => begin("remove")} title={reauthenticationRequired ? t("reauthenticationActionBlocked") : required ? t("removeBlocked") : undefined} variant="ghost">{t("remove")}</Button></> : <Button disabled={!verifiedNotificationAddress || reauthenticationRequired} onClick={() => begin("bind")} title={reauthenticationRequired ? t("reauthenticationActionBlocked") : !verifiedNotificationAddress ? t("bindRequiresVerifiedAddress") : undefined}>{t("bind")}</Button>}</div>
+          <div className={styles.actions}>{factorState === "bound" ? <><Button disabled={reauthenticationRequired} onClick={() => begin("replace")} title={reauthenticationRequired ? blockedActionHint : undefined} variant="secondary">{t("replace")}</Button><Button disabled={required || reauthenticationRequired} onClick={() => begin("remove")} title={reauthenticationRequired ? blockedActionHint : required ? t("removeBlocked") : undefined} variant="ghost">{t("remove")}</Button></> : <Button disabled={!verifiedNotificationAddress || reauthenticationRequired} onClick={() => begin("bind")} title={reauthenticationRequired ? blockedActionHint : !verifiedNotificationAddress ? t("bindRequiresVerifiedAddress") : undefined}>{t("bind")}</Button>}</div>
         </Card.Body></Card>
         <Card><Card.Header><div className={styles.cardTitle}><span><KeyRound aria-hidden="true" /></span><div><Typography.Title as="h3" level={3}>{t("recoveryTitle")}</Typography.Title><Typography.Text tone="muted">{t("recoverySummary")}</Typography.Text></div></div></Card.Header><Card.Body className={styles.cardBody}>
           <dl className={styles.facts}><div><dt>{t("state")}</dt><dd>{t(factorState === "bound" ? "recoveryBatchReady" : "notAvailable")}</dd></div><div><dt>{t("display")}</dt><dd>{t("oneTimeOnly")}</dd></div><div><dt>{t("use")}</dt><dd>{t("restrictedRebind")}</dd></div></dl>
-          <div className={styles.actions}><Button disabled={factorState !== "bound" || reauthenticationRequired} onClick={() => begin("regenerate")} title={reauthenticationRequired ? t("reauthenticationActionBlocked") : undefined} variant="secondary"><RefreshCw aria-hidden="true" />{t("regenerate")}</Button></div>
+          <div className={styles.actions}><Button disabled={factorState !== "bound" || reauthenticationRequired} onClick={() => begin("regenerate")} title={reauthenticationRequired ? blockedActionHint : undefined} variant="secondary"><RefreshCw aria-hidden="true" />{t("regenerate")}</Button></div>
         </Card.Body></Card>
       </div>
     </section>

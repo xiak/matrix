@@ -5,6 +5,7 @@ import { ShieldCheck } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { Alert, Badge, Button, Card, Checkbox, FormField, Select, Typography } from "@ui/xiak";
 import { useAccountAccess } from "../application/AccountAccessProvider";
+import { useSession, useSessionCredential } from "../application/SessionProvider";
 import type { AccessWorkspace, PendingAccountRuleChange } from "../domain/accessWorkspace";
 import { SecurityStepUpPreview } from "./SecurityStepUpPreview";
 import styles from "./MfaPreviewExperience.module.css";
@@ -16,6 +17,8 @@ type InspectionScenario = "found-applied" | "found-rejected" | "not-found" | "un
 export function AccountSecuritySettingsPreview({ workspace }: { workspace: AccessWorkspace }) {
   const t = useTranslations("MfaPreview");
   const access = useAccountAccess();
+  const session = useSession();
+  const credential = useSessionCredential();
   const scenarioId = useId();
   const inspectionId = useId();
   const [required, setRequired] = useState(workspace.settings.loginProtection);
@@ -34,6 +37,7 @@ export function AccountSecuritySettingsPreview({ workspace }: { workspace: Acces
   const pending = workspace.pendingAccountRuleChange ?? localPending;
   const factorReady = workspace.personalMfa.factorState === "bound" && workspace.personalMfa.recoveryState === "idle";
   const canChangeRule = factorReady && !workspace.personalMfa.reauthenticationRequired;
+  const returnToLogin = () => { if (credential) session.expire(credential, session.sessionRevision); };
 
   const focusPersonalSecurity = () => {
     const personalSecurity = document.getElementById("personal-security");
@@ -175,7 +179,7 @@ export function AccountSecuritySettingsPreview({ workspace }: { workspace: Acces
           <div><dt>{t("verificationState")}</dt><dd>{t("verificationDiscarded")}</dd></div>
         </dl>
         <Alert status="warning">{t("accountUnknownBoundary")}</Alert>
-        {workspace.pendingAccountRuleChange?.status === "UNKNOWN" ? <><FormField id={inspectionId} label={t("accountInspectionScenario")}><Select id={inspectionId} value={inspection} onValueChange={(value) => setInspection(value as InspectionScenario)} options={(["found-applied", "found-rejected", "not-found", "unavailable"] as const).map((value) => ({ value, label: t(`accountInspectionScenarios.${value}`) }))} /></FormField>
+        {workspace.pendingAccountRuleChange?.status === "UNKNOWN" && workspace.personalMfa.reauthenticationRequired ? <><Alert status="warning">{t("accountUnknownReauthenticationRequired")}</Alert><div className={styles.flowActions}><Button onClick={returnToLogin}>{t("accountReturnToLogin")}</Button></div></> : workspace.pendingAccountRuleChange?.status === "UNKNOWN" ? <><FormField id={inspectionId} label={t("accountInspectionScenario")}><Select id={inspectionId} value={inspection} onValueChange={(value) => setInspection(value as InspectionScenario)} options={(["found-applied", "found-rejected", "not-found", "unavailable"] as const).map((value) => ({ value, label: t(`accountInspectionScenarios.${value}`) }))} /></FormField>
           {access.workspaceError ? <Alert status="danger">{t(`accountInspectionErrors.${access.workspaceError === "accountRuleResultNotFound" ? "notFound" : "unavailable"}`)}</Alert> : null}
           <div className={styles.flowActions}><Button disabled={access.busy} onClick={() => void inspect()}>{t(access.busy ? "inspectingOriginalIntent" : "inspectOriginalIntent")}</Button></div></> : <Alert>{t("accountInspectionUnavailable")}</Alert>}
       </Card.Body>
@@ -190,7 +194,7 @@ export function AccountSecuritySettingsPreview({ workspace }: { workspace: Acces
         </dl>
         <Alert>{t("accountMockBoundary")}</Alert>
         {!factorReady ? <Alert status="warning">{t("accountFactorRequired")}</Alert> : workspace.personalMfa.reauthenticationRequired ? <Alert status="warning">{t("accountReauthenticationRequired")}</Alert> : null}
-        <div className={styles.flowActions}>{!factorReady ? <Button onClick={focusPersonalSecurity} variant="secondary">{t("goToPersonalSecurity")}</Button> : <Button disabled={!canChangeRule || access.loading || access.busy} ref={trigger} onClick={() => { setFeedback(null); setRequired(workspace.settings.loginProtection); setScenario("success"); setRequestId(`mock-account-rule-${crypto.randomUUID()}`); setStage("edit"); }}>{t("editAccountRule")}</Button>}</div>
+        <div className={styles.flowActions}>{!factorReady ? <Button onClick={focusPersonalSecurity} variant="secondary">{t("goToPersonalSecurity")}</Button> : workspace.personalMfa.reauthenticationRequired ? <><Button disabled variant="secondary">{t("editAccountRule")}</Button><Button onClick={returnToLogin}>{t("accountReturnToLogin")}</Button></> : <Button disabled={!canChangeRule || access.loading || access.busy} ref={trigger} onClick={() => { setFeedback(null); setRequired(workspace.settings.loginProtection); setScenario("success"); setRequestId(`mock-account-rule-${crypto.randomUUID()}`); setStage("edit"); }}>{t("editAccountRule")}</Button>}</div>
       </div> : <form className={styles.policyForm} onSubmit={(event) => { event.preventDefault(); review(); }}>
         <Checkbox checked={required} onChange={(event) => { setRequired(event.target.checked); setFeedback(null); }}>{t("requireForUsers")}</Checkbox>
         <p>{t("requireForUsersHint")}</p>
