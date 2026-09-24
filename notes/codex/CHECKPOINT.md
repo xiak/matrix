@@ -6,7 +6,7 @@
 - Updated: 2026-09-25
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `b5231103`
+- Pushed UI source: `8c3eff62`
 
 ## Authoritative route
 
@@ -32,10 +32,10 @@ UI, full static host/export and independent MOCK entry; do not replace them
 with another branch's renderer or inherit that branch's UI acceptance.
 
 The current milestone keeps the independent MOCK preview, fixed-contract LIVE
-paths and synchronized static Go host. It corrects owner-specific permission
-boundary UX and the unknown-result authenticator-replacement guidance without
-adding a new LIVE contract. The shared development gates passed; detailed
-behavior, evidence and open real-process gates remain only in the FEAT owners.
+paths and synchronized static Go host. It fixes security-workflow keyboard
+focus through stage changes without adding a LIVE contract. The shared
+development gates passed; detailed behavior, evidence and open real-process
+gates remain only in the FEAT owners.
 
 ## Continuation
 
