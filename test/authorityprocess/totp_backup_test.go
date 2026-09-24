@@ -94,6 +94,7 @@ func TestIAMTOTPBackupProcesses(t *testing.T) {
 		"MATRIX_IAM_CURSOR_KEY_FILE=" + cursorPath,
 		"MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE=" + accessKeyWrappingPath,
 		"MATRIX_IAM_TOTP_KEYRING_FILE=" + writeProcessTOTPKeyring(t, temporary, bootstrap),
+		"MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE=" + writeProcessEmailVerificationKeyring(t, temporary, bootstrap),
 	})
 	defer network.stop()
 	waitHTTPStatus(t, ctx, network, "http://"+address+"/ready", http.StatusOK)

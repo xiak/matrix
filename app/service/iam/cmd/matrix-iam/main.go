@@ -81,14 +81,11 @@ func run(ctx context.Context) error {
 		return err
 	}
 	defer func() { totpKeyring = iamv1.TOTPKeyring{} }()
-	var emailKeyring *iamv1.EmailVerificationKeyring
-	if config.emailKeyringFile != "" {
-		material, err := readEmailVerificationKeyring(config.emailKeyringFile, document)
-		if err != nil {
-			return err
-		}
-		emailKeyring = &material
+	emailKeyring, err := readEmailVerificationKeyring(config.emailKeyringFile, document)
+	if err != nil {
+		return err
 	}
+	defer func() { emailKeyring = iamv1.EmailVerificationKeyring{} }()
 	dsn, err := processconfig.ReadText(config.databaseDSNFile, 16*1024, true)
 	if err != nil {
 		return err
@@ -109,11 +106,11 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	workflow, err := identityaccess.NewAuthority(repository, identityaccess.Config{CursorKey: cursorKey, AccessKeyWrapping: &keyring, TOTPKeyring: &totpKeyring, EmailVerificationKeyring: emailKeyring})
+	workflow, err := identityaccess.NewAuthority(repository, identityaccess.Config{CursorKey: cursorKey, AccessKeyWrapping: &keyring, TOTPKeyring: &totpKeyring, EmailVerificationKeyring: &emailKeyring})
 	clear(cursorKey)
 	keyring = iamv1.AccessKeyWrappingKeyring{}
 	totpKeyring = iamv1.TOTPKeyring{}
-	emailKeyring = nil
+	emailKeyring = iamv1.EmailVerificationKeyring{}
 	if err != nil {
 		return err
 	}
@@ -128,10 +125,8 @@ func run(ctx context.Context) error {
 	if err := workflow.RegisterTOTPKeyset(ctx); err != nil {
 		return errors.New("IAM TOTP custody is unavailable")
 	}
-	if config.emailKeyringFile != "" {
-		if err := workflow.RegisterEmailVerificationKeyset(ctx); err != nil {
-			return errors.New("IAM email custody is unavailable")
-		}
+	if err := workflow.RegisterEmailVerificationKeyset(ctx); err != nil {
+		return errors.New("IAM email custody is unavailable")
 	}
 	if err := workflow.VerifyAccessKeyCustody(ctx); err != nil {
 		return errors.New("IAM access key custody is unavailable")
@@ -158,7 +153,7 @@ func loadConfiguration() (configuration, error) {
 		emailKeyringFile:      os.Getenv(emailKeyringFileEnvironment),
 	}
 	if config.databaseDSNFile == "" || config.bootstrapFile == "" ||
-		config.listenAddress == "" || config.cursorKeyFile == "" || config.accessKeyWrappingFile == "" || config.totpKeyringFile == "" {
+		config.listenAddress == "" || config.cursorKeyFile == "" || config.accessKeyWrappingFile == "" || config.totpKeyringFile == "" || config.emailKeyringFile == "" {
 		return configuration{}, errors.New("IAM process configuration is incomplete")
 	}
 	return config, nil

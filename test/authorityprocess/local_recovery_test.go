@@ -87,6 +87,7 @@ func TestIAMRetainedLocalRecoveryProcessUpgrade(t *testing.T) {
 	clear(encoded)
 	iamCursorKeyPath, iamAccessKeyWrappingPath := writeProcessIAMPrivateAuthority(t, temporary, bootstrap)
 	iamTOTPKeyPath := writeProcessTOTPKeyring(t, temporary, bootstrap)
+	iamEmailKeyPath := writeProcessEmailVerificationKeyring(t, temporary, bootstrap)
 	dsnPath := writeProtectedFile(t, temporary, "iam-schema3-dsn", []byte(runtimeDSN(t, config, iamAPILogin, processDBPassword)))
 	address := freeAddress(t)
 	endpoint := "http://" + address
@@ -107,7 +108,9 @@ func TestIAMRetainedLocalRecoveryProcessUpgrade(t *testing.T) {
 	start := func(binary string) *childProcess {
 		currentEnvironment := append([]string(nil), environment...)
 		if binary == currentBinary {
-			currentEnvironment = append(currentEnvironment, "MATRIX_IAM_TOTP_KEYRING_FILE="+iamTOTPKeyPath)
+			currentEnvironment = append(currentEnvironment,
+				"MATRIX_IAM_TOTP_KEYRING_FILE="+iamTOTPKeyPath,
+				"MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE="+iamEmailKeyPath)
 		}
 		child := startChild(t, root, binary, currentEnvironment)
 		children = append(children, child)
@@ -152,7 +155,9 @@ func TestIAMRetainedLocalRecoveryProcessUpgrade(t *testing.T) {
 		t.Fatal("schema3 fixture has no real committed facts")
 	}
 	old.stop()
-	unmigratedEnvironment := append(append([]string(nil), environment...), "MATRIX_IAM_TOTP_KEYRING_FILE="+iamTOTPKeyPath)
+	unmigratedEnvironment := append(append([]string(nil), environment...),
+		"MATRIX_IAM_TOTP_KEYRING_FILE="+iamTOTPKeyPath,
+		"MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE="+iamEmailKeyPath)
 	unmigrated := startChild(t, root, currentBinary, unmigratedEnvironment)
 	children = append(children, unmigrated)
 	if err := unmigrated.wait(10 * time.Second); err == nil || errors.Is(err, errProcessWaitTimeout) {

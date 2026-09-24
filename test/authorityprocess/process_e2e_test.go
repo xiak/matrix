@@ -383,8 +383,8 @@ func testIAMRetainedSessionSource(t *testing.T, variable, databasePrefix, source
 	assertCleanSchemas(t, ctx, admin)
 	root, temporary := repositoryRoot(t), t.TempDir()
 	// Fixed accepted predecessors create the data through their own binaries:
-	// IAM32 predates TOTP custody, while exact preparation IAM36 has the real
-	// first-contact writer and recovery fence but no MFA creation ceremony.
+	// IAM32 predates TOTP custody, while exact preparation IAM36 has the
+	// recovery fence but neither first-contact verification nor MFA creation.
 	// This is not permission to cross any other signed release profile.
 	baseline := extractFixedIAMSource(t, ctx, root, temporary, source)
 	oldMigrator := buildAuthorityBinary(t, ctx, baseline, temporary, "iam-session-predecessor-migrate", "./app/service/iam/cmd/matrix-iam-migrate")
@@ -479,6 +479,7 @@ func testIAMRetainedSessionSource(t *testing.T, variable, databasePrefix, source
 	}
 	var mailState func() []byte
 	var originalMail []byte
+	defer func() { clear(originalMail) }()
 	var oldVerification iamv1.NotificationContactVerification
 	var otherPrimary loginResult
 	if sourceSchema == 36 {
@@ -491,24 +492,6 @@ func testIAMRetainedSessionSource(t *testing.T, variable, databasePrefix, source
 		}
 		otherPrimary = loginIAM(t, endpoint, "retained.primary", initialReaderPassword, "pre-mfa-second-root")
 		sensitive = append(sensitive, otherPrimary.Credential)
-		response = performJSON(t, http.MethodPost, endpoint+"/v1/auth/notification-contact/verifications", a.Credential,
-			map[string]any{"requestId": "pre-mfa-contact", "email": "retained@matrix.test", "password": changedReaderPassword})
-		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &oldVerification) != nil {
-			t.Fatal("actual IAM36 did not create its first-contact verification", response.Status)
-		}
-		mailState = func() []byte {
-			t.Helper()
-			var state []byte
-			if err := admin.QueryRow(ctx, `SELECT jsonb_build_object(
-			 'contacts',(SELECT jsonb_agg(to_jsonb(c) ORDER BY tenant_id,user_id) FROM iam.notification_contacts c),
-			 'verifications',(SELECT jsonb_agg(to_jsonb(v) ORDER BY tenant_id,id) FROM iam.notification_contact_verifications v),
-			 'notifications',(SELECT jsonb_agg(to_jsonb(n) ORDER BY tenant_id,id) FROM iam.security_notifications n))`).Scan(&state); err != nil {
-				t.Fatal("read retained notification invariants", err)
-			}
-			return state
-		}
-		originalMail = mailState()
-		defer clear(originalMail)
 	}
 	identityState := func() []byte {
 		t.Helper()
@@ -552,7 +535,7 @@ func testIAMRetainedSessionSource(t *testing.T, variable, databasePrefix, source
 		}
 	}
 	var shape bool
-	if err := admin.QueryRow(ctx, `SELECT schema_version=40 AND iam.login_session_contract_ready()
+	if err := admin.QueryRow(ctx, `SELECT schema_version=40 AND iam.authentication_recovery_contract_ready()
 	 AND iam.password_attempt_contract_ready() AND iam.totp_authentication_contract_ready()
 	 AND (SELECT cardinality(proallargtypes)=25 AND proargnames[25]='credential_generation'
 	      FROM pg_proc WHERE oid='iam.lookup_session(text)'::regprocedure)
@@ -560,6 +543,26 @@ func testIAMRetainedSessionSource(t *testing.T, variable, databasePrefix, source
 		t.Fatal("retained database did not install the enabling authentication ABI", err)
 	}
 	current := start(currentBinary, 40)
+	if sourceSchema == 36 {
+		mailState = func() []byte {
+			t.Helper()
+			var state []byte
+			if err := admin.QueryRow(ctx, `SELECT jsonb_build_object(
+			 'contacts',(SELECT jsonb_agg(to_jsonb(c) ORDER BY tenant_id,user_id) FROM iam.notification_contacts c),
+			 'verifications',(SELECT jsonb_agg(to_jsonb(v) ORDER BY tenant_id,id) FROM iam.notification_contact_verifications v),
+			 'notifications',(SELECT jsonb_agg(to_jsonb(n) ORDER BY tenant_id,id) FROM iam.security_notifications n))`).Scan(&state); err != nil {
+				t.Fatal("read post-upgrade notification invariants", err)
+			}
+			return state
+		}
+		var existingMail int
+		if err := admin.QueryRow(ctx, `SELECT (SELECT count(*) FROM iam.notification_contacts)
+			+(SELECT count(*) FROM iam.notification_contact_verifications)
+			+(SELECT count(*) FROM iam.security_notifications)`).Scan(&existingMail); err != nil || existingMail != 0 {
+			t.Fatal("migration invented first-contact material", err)
+		}
+		originalMail = mailState()
+	}
 	if !bytes.Equal(originalState, identityState()) {
 		t.Fatal("migration or equal bootstrap changed original identity/credential state")
 	}
@@ -578,13 +581,23 @@ func testIAMRetainedSessionSource(t *testing.T, variable, databasePrefix, source
 		if !bytes.Equal(originalMail, mailState()) {
 			t.Fatal("migration/restart rewrote pending notification or verification material")
 		}
-		response := performJSON(t, http.MethodGet, endpoint+"/v1/auth/notification-contact/verifications/"+oldVerification.ID, a.Credential, nil)
-		var currentVerification iamv1.NotificationContactVerification
-		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &currentVerification) != nil || !reflect.DeepEqual(oldVerification, currentVerification) {
-			t.Fatal("retained first-contact intent was replaced or relabelled", response.Status)
+		if oldVerification.ID != "" {
+			response := performJSON(t, http.MethodGet, endpoint+"/v1/auth/notification-contact/verifications/"+oldVerification.ID, a.Credential, nil)
+			var currentVerification iamv1.NotificationContactVerification
+			if response.Status != http.StatusOK || json.Unmarshal(response.Body, &currentVerification) != nil || !reflect.DeepEqual(oldVerification, currentVerification) {
+				t.Fatal("post-upgrade first-contact intent was replaced or relabelled", response.Status)
+			}
 		}
 	}
 	assertRetainedMail()
+	if sourceSchema == 36 {
+		response := performJSON(t, http.MethodPost, endpoint+"/v1/auth/notification-contact/verifications", a.Credential,
+			map[string]any{"requestId": "post-upgrade-contact", "email": "retained@matrix.test", "password": changedReaderPassword})
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &oldVerification) != nil {
+			t.Fatal("current IAM did not create first-contact verification after upgrade", response.Status)
+		}
+		originalMail = mailState()
+	}
 	if sourceSchema == 36 {
 		for _, identity := range []loginResult{a, otherPrimary} {
 			response := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", identity.Credential, nil)
@@ -615,7 +628,7 @@ func testIAMRetainedSessionSource(t *testing.T, variable, databasePrefix, source
 		t.Fatal("migration replay or restart changed retained pre-MFA identity state")
 	}
 	assertRetainedMail()
-	if err := admin.QueryRow(ctx, "SELECT NOT EXISTS(SELECT 1 FROM iam.principals p LEFT JOIN iam.user_mfa_states m ON (m.tenant_id,m.user_id)=(p.tenant_id,p.id) WHERE p.principal_type='USER' AND (m.user_id IS NULL OR m.enrollment_state<>'NEVER_BOUND' OR m.revision<>1 OR m.factor_id IS NOT NULL)) AND NOT EXISTS(SELECT 1 FROM iam.sessions WHERE authentication_method IS NOT NULL OR authenticated_at IS NOT NULL OR mfa_revision IS NOT NULL) AND NOT EXISTS(SELECT 1 FROM iam.authentication_challenges) AND NOT EXISTS(SELECT 1 FROM iam.mfa_recovery_batches)").Scan(&shape); err != nil || !shape {
+	if err := admin.QueryRow(ctx, "SELECT NOT EXISTS(SELECT 1 FROM iam.principals p LEFT JOIN iam.user_mfa_states m ON (m.tenant_id,m.user_id)=(p.tenant_id,p.id) WHERE p.principal_type='USER' AND (m.user_id IS NULL OR m.enrollment_state<>'NEVER_BOUND' OR m.revision<>1 OR m.factor_id IS NOT NULL)) AND NOT EXISTS(SELECT 1 FROM iam.sessions WHERE id<>$1 AND (authentication_method IS NOT NULL OR authenticated_at IS NOT NULL OR mfa_revision IS NOT NULL)) AND NOT EXISTS(SELECT 1 FROM iam.authentication_challenges) AND NOT EXISTS(SELECT 1 FROM iam.mfa_recovery_batches)", fresh.Session.ID).Scan(&shape); err != nil || !shape {
 		t.Fatal("migration replay invented authentication or recovery evidence", err)
 	}
 	for _, identity := range []loginResult{a, b, otherPrimary, fresh} {
@@ -639,7 +652,7 @@ func testIAMRetainedSessionSource(t *testing.T, variable, databasePrefix, source
 		}
 	}
 	current.stop()
-	t.Log("actual IAM36 -> IAM40 migrator/runtime retained Accounts, Sessions, pending notification material and original canonical facts; no factor, challenge or recovery authority was invented")
+	t.Log("actual IAM36 -> IAM40 migrator/runtime retained Accounts, Sessions and original canonical facts; post-upgrade notification survived replay/restart, and no factor, challenge or recovery authority was invented")
 }
 
 type retainedIAMBaseline struct {
@@ -795,7 +808,9 @@ func testIAMRetainedProcessUpgrade(t *testing.T, variable string, baseline retai
 	if rows.Err() != nil || len(retained) == 0 {
 		t.Fatal("old installation has no retained facts")
 	}
-	unmigratedEnvironment := append(append([]string(nil), environment...), "MATRIX_IAM_TOTP_KEYRING_FILE="+iamTOTPKeyPath)
+	unmigratedEnvironment := append(append([]string(nil), environment...),
+		"MATRIX_IAM_TOTP_KEYRING_FILE="+iamTOTPKeyPath,
+		"MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE="+iamEmailKeyPath)
 	unmigrated := startChild(t, root, currentBinary, unmigratedEnvironment)
 	children = append(children, unmigrated)
 	if err := unmigrated.wait(10 * time.Second); err == nil || errors.Is(err, errProcessWaitTimeout) {
@@ -2654,7 +2669,7 @@ func proveTOTPProcesses(t *testing.T, ctx context.Context, admin *pgx.Conn, endp
 		a, b := challenge(endpoint, password, "process-mfa-login-a"), challenge(replica, password, "process-mfa-login-b")
 		for _, at := range []string{endpoint, replica} {
 			call(at, http.MethodGet, "/v1/auth/me", secret(a.ChallengeCredential), nil, http.StatusUnauthorized, nil)
-			call(at, http.MethodGet, "/v1/auth/sessions", secret(a.ChallengeCredential), nil, http.StatusUnauthorized, nil)
+			call(at, http.MethodGet, "/v1/auth/role-session", secret(a.ChallengeCredential), nil, http.StatusUnauthorized, nil)
 		}
 		getPaaSApplication(t, paasEndpoint, secret(a.ChallengeCredential), "application-process", http.StatusUnauthorized)
 		queryAudit(t, auditEndpoint, secret(a.ChallengeCredential), auditv1.QueryRecordsRequest{PageSize: 1}, http.StatusUnauthorized)

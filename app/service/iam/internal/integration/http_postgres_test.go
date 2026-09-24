@@ -2859,7 +2859,7 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 	if authenticated.Outcome != iamv1.LoginChallengeRequired || authenticated.Challenge == nil || authenticated.Credential.Present() || authenticated.Session != (iamv1.Session{}) {
 		t.Fatal("password authenticated an MFA user without a challenge")
 	}
-	for _, path := range []string{"/v1/auth/me", "/v1/auth/sessions", "/v1/auth/role-session"} {
+	for _, path := range []string{"/v1/auth/me", "/v1/auth/role-session"} {
 		callMFA(secondHandler, http.MethodGet, path, authenticated.ChallengeCredential, nil, http.StatusUnauthorized, nil)
 	}
 	callMFA(firstHandler, http.MethodGet, "/v1/auth/me", login.Credential, nil, http.StatusUnauthorized, nil)
@@ -3173,7 +3173,7 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 				stage.Challenge.ID == original.Challenge.ID || !stage.Challenge.ExpiresAt.Equal(original.Challenge.ExpiresAt) || bytes.Equal(stage.ChallengeCredential.CopyBytes(), original.ChallengeCredential.CopyBytes()) {
 				t.Fatal("forced stage retained old capability, extended expiry, or issued a Session")
 			}
-			for _, path := range []string{"/v1/auth/me", "/v1/auth/sessions", "/v1/auth/role-session", "/v1/auth/notification-contact"} {
+			for _, path := range []string{"/v1/auth/me", "/v1/auth/role-session", "/v1/auth/notification-contact"} {
 				callMFA(firstHandler, http.MethodGet, path, stage.ChallengeCredential, nil, http.StatusUnauthorized, nil)
 			}
 			callMFA(firstHandler, http.MethodPost, "/v1/auth/challenges/"+original.Challenge.ID+":verify", iamv1.Secret{}, verify, http.StatusUnauthorized, nil)

@@ -44,7 +44,7 @@ func TestCursorKeyRequiresExactProtectedInstallationFile(t *testing.T) {
 }
 
 func TestIAMNetworkConfigurationRequiresPrivateFiles(t *testing.T) {
-	fields := []string{databaseDSNFileEnvironment, bootstrapFileEnvironment, listenAddressEnvironment, cursorKeyFileEnvironment, accessKeyWrappingFileEnvironment, totpKeyringFileEnvironment}
+	fields := []string{databaseDSNFileEnvironment, bootstrapFileEnvironment, listenAddressEnvironment, cursorKeyFileEnvironment, accessKeyWrappingFileEnvironment, totpKeyringFileEnvironment, emailKeyringFileEnvironment}
 	for _, field := range fields {
 		t.Setenv(field, "fixture")
 	}
