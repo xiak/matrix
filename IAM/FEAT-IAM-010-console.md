@@ -127,7 +127,7 @@ DEV `AccessSettings` 也只拥有账号级 MFA 要求与用户 SSO 选择。先�
 `0567c8b2699521b137db0f8b69f17630c59f04fb` 和来源身份不可复活修正
 `1ebab37aef4bce12b963f52d3919748a9d50d4c6` 为 LIVE 接入依据。管理侧 Role list/read 已由严格客户端接入该固定来源：Account 只用于核对当前认证上下文，不能作为调用者可选参数；响应中的 Role、trust version、policy attachment、能力快照、时间、排序和摘要必须完整核对，协议不符或真实请求失败都不能回退 MOCK。能力快照只描述这次响应允许呈现的动作，不能缓存为后续变更或 AssumeRole 的授权结论。
 
-首个 LIVE 管理片只提供角色目录和详情读取。固定标题、说明、搜索和筛选立即呈现，仅数据区局部加载；目录使用不伪造总数的 opaque cursor，详情在内容区展开并分开呈现权限策略、信任关系与当前能力，不打开 Dialog。真实首版信任仅接受同 Account 的精确 User，信任准入不替代调用 User 对目标 Role 的承担授权，也不授予 Role 对业务资源的访问权。服务身份、身份提供商、跨账号、角色链和通配信任仍属后继能力；体验仓库已有的服务/联合示例继续标成合成 MOCK，不能映射成真实能力或可发行的临时凭据。
+LIVE 管理片提供角色目录、详情读取和角色创建。固定标题、说明、搜索和筛选立即呈现，仅数据区局部加载；目录使用不伪造总数的 opaque cursor，详情与创建向导都在内容区展开，不打开 Dialog。创建只提交当前认证 Account 下的角色元数据与首个不可变 USER trust 版本，不附加策略、不设置权限边界、也不签发密码、长期密钥或临时凭据；客户端不发送 Account selector。真实首版信任仅接受已读取的同 Account 精确 User，信任准入不替代调用 User 对目标 Role 的承担授权，也不授予 Role 对业务资源的访问权。会话时长限制为 1–720 分钟，对应 wire contract 的 60–43200 秒。创建结果未知时，页面冻结原 payload 和 requestId，只允许等价重试；离开页面会明确提示无法再以新意图证明原请求是否提交。服务身份、身份提供商、跨账号、角色链和通配信任仍属后继能力；体验仓库已有的服务/联合示例继续标成合成 MOCK，不能映射成真实能力或可发行的临时凭据。
 
 角色信任关系是详情页中的完整配置工作流。进入后在当前 trust 页签内选择、校验、审阅前后主体及完整信任文档，再显式保存；返回、取消、失败重试和完成都不打开 Dialog，并恢复到稳定触发器。信任只是承担准入，不替代调用 User 针对该 Role 的 `iam:assumeRole` 授权，也不授予角色资源权限。
 
@@ -147,7 +147,7 @@ Secret 只在创建结果明确为 `APPLIED` 时展示一次，并在确认离�
 
 真实 PolicyVersion 正文、服务器编译快照和默认版本变更需要独立接入及浏览器验收；当前目录元数据和边界引用不能替代它。只读权限能力目录客户端已经接入固定契约，但仍需与固定 IAM 真实进程执行独立浏览器验收；产品声明管理不是租户策略功能。在真实作者契约和发布验证完成前，不开放可成功提交的真实可视化作者表单。
 
-Role 管理 list/read 与管理员 RoleSession list/read/revoke 的固定 LIVE 客户端已经完成，但仍需真实 IAM 进程浏览器联调；Role create/update/status/delete、trust/policy attachment 变更、可承担角色发现、AssumeRole、当前 Role 身份、签发结果 by-request 恢复和 Role logout 仍待各自固定契约接入。SSO 与登录安全专项同样按各自固定后端契约推进。访问密钥 LIVE 客户端已固定到 IAM-007 的每用户管理契约，但仍需真实 IAM 进程的浏览器联调；产品 Profile 尚不接受 AccessKey，不能据此宣称云产品 API 已可使用长期密钥。本片不宣称全部错误页面或完整访问管理已验收，也不改变保留 MOCK 验收入口的安排。
+Role 管理 list/read/create 与管理员 RoleSession list/read/revoke 的固定 LIVE 客户端已经完成，但仍需真实 IAM 进程浏览器联调；Role update/status/delete、trust 与 policy attachment 变更、权限边界、可承担角色发现、AssumeRole、当前 Role 身份、签发结果 by-request 恢复和 Role logout 仍待各自固定契约接入。SSO 与登录安全专项同样按各自固定后端契约推进。访问密钥 LIVE 客户端已固定到 IAM-007 的每用户管理契约，但仍需真实 IAM 进程的浏览器联调；产品 Profile 尚不接受 AccessKey，不能据此宣称云产品 API 已可使用长期密钥。本片不宣称全部错误页面或完整访问管理已验收，也不改变保留 MOCK 验收入口的安排。
 
 ## 验收
 
@@ -257,19 +257,21 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 ### Role 管理与管理员会话 LIVE 客户端的开发验收证据
 
 2026-09-24，LIVE 前端适配与同步嵌入资源固定在已推送的
-[`c5ec1f945cdcd7af61941aafed8da4d7e68f839c`](https://github.com/xiak/matrix/commit/c5ec1f945cdcd7af61941aafed8da4d7e68f839c)，
+[`f0455570324f31f07feb715097edb3c307a96c72`](https://github.com/xiak/matrix/commit/f0455570324f31f07feb715097edb3c307a96c72)，
 契约来源为 IAM-006 固定提交 `62a18a48168e87a4158b95eba41427b445ed10d1` 与严格响应修正 `0567c8b2699521b137db0f8b69f17630c59f04fb`。既有 Role/trust/session 与成员承担 MOCK 继续通过上两节记录的独立入口保留。
 
 - 非体验环境通过独立 Role Provider 严格消费 `GET /v1/roles` 与 `GET /v1/roles/{roleId}`。客户端不发送 Account selector，逐项核对当前 Account、Role 归属、资源版本、状态、时间、标签、列表顺序、opaque cursor、trust 当前版本/摘要和 policy attachment；未知字段、越界数量、错误绑定或非法顺序均失败关闭，真实失败不回退 MOCK。
-- 当前身份只接受固定 `iam.role.list` 和 `iam.role.create` Account 能力；`list` 控制 LIVE 目录可见性，`create` 只作为当前响应的展示快照，不开放尚未固定的创建按钮或推断变更权限。Role 列表和详情分别严格要求 9 项与 10 项基础 capability，其中 `iam.role-session.list` 只控制对应 Role 的管理员会话目录可见性。身份或 credential 变化会丢弃旧目录、详情和 cursor，401 只过期发起请求的当前会话状态。
+- 当前身份只接受固定 `iam.role.list` 和 `iam.role.create` Account 能力；两者分别控制 LIVE 目录和创建入口，不能互相推断。Role 列表和详情分别严格要求 9 项与 10 项基础 capability，其中 `iam.role-session.list` 只控制对应 Role 的管理员会话目录可见性。身份或 credential 变化会丢弃旧目录、详情和 cursor，401 只过期发起请求的当前会话状态。
+- 创建向导在内容区按“可信用户 → 角色信息 → 审阅并创建”推进，桌面使用统一页面命令，小屏收敛进公共 `…` 菜单。候选主体只来自当前 Account 已加载的精确 USER；请求只包含名称、说明、标签、60–43200 秒会话时长、首个 USER trust 文档和 requestId，不发送 Account selector。响应必须精确核对提交的 Account、元数据、ACTIVE 状态和初始 trust；任何偏差失败关闭，不能回退 MOCK。
+- 创建只建立 Role 元数据和第一个不可变信任版本，不附加策略、不设置权限边界、不签发任何凭据。网络或 5xx 导致结果未知时，Provider 保存并冻结原 payload 与 requestId；当前页面只允许等价重试，不能修改字段或生成第二个创建意图。离开未知结果页面会明确提示原 requestId 的恢复边界，而不是把未知结果当作未创建。
 - 固定页面框架、标题、边界说明、搜索与状态筛选同步呈现，只有目录或详情数据区局部加载；快速响应不闪现整页粗骨架。目录不制造总数，下一页只使用后端 opaque cursor；窄屏表格显式堆叠。Role 详情在当前内容区展示 metadata、标签、权限附件、精确 User trust 和当前能力，不打开 Dialog。
 - trust 摘要按固定 Go canonical 规则在前端重新计算并核对。页面明确区分 Role 信任准入、调用 User 的承担授权和 Role 的资源权限；当前 LIVE 不解释服务主体、身份提供商、跨账号、角色链、通配信任或合成 MOCK 示例。
 - RoleSession 页签只在显式选择时挂载和读取；固定 Role 标题、页签和说明同步显示，初次只替换会话数据区骨架，筛选和刷新保留旧表格并标记 busy。一个结构化搜索在精确 session ID 与来源 User ID 间切换，生命周期默认 `UNREVOKED`；空页仍按原 opaque cursor 继续，不把空窗口误作目录结束。
 - 严格适配器核对 `RoleSessionList`、`RoleSessionAccess` 和撤销结果的精确字段、Account/Role/Session 绑定、十二小时时长、观察时刻生命周期、来源 User、每条 revoke capability 与排序。`REVOKED` 优先于 `EXPIRED`，终态记录不能显示可撤销；客户端不从 list/read 权限推断 revoke 权限，也不把生命周期解释为业务可用性。
 - 撤销确认留在内容区。响应未知时由 Account/credential 绑定的 Provider 持有原意图；返回角色目录、重新进入同一 Role/Session 或切换详情页签后仍只复用原 requestId。更新按 requestId、Account、Role 与 Session 比较后写入，旧异步回调不能覆盖另一个意图；切换 Account 或 credential 后原意图立即不可见。可选择等价重试或精确读取；权威读到 `REVOKED` 只说明当前状态，页面明确不声称此前未知命令导致撤销。成功后只更新当前会话数据区，并按服务器筛选移除或保留该行，焦点返回行操作或区块标题。
-- 完整前端 42 个测试文件、671 条用例及三条静态归一化用例通过；类型、lint、架构、228 组主题对比、40 页生产导出、223 个嵌入文件等价、`go test ./...` 与 `go vet ./...` 通过。DEV 浏览器验证保留的 MOCK Role 目录及 `390 × 844` 管理会话页签可检查、无 Dialog 或页面横向溢出。
+- 完整前端 42 个测试文件、674 条用例及三条静态归一化用例通过；类型、lint、架构、228 组主题对比、40 页生产导出、223 个嵌入文件等价、`go test ./...` 与 `go vet ./...` 通过。DEV 浏览器同时验证桌面 Role 目录和 `390 × 844` 小屏公共页面命令；“新建角色”和“服务授权”均可从稳定标题区进入，移动端菜单不挤压标题，保留的 MOCK 目录可继续检查且没有 Dialog 或页面横向溢出。
 - IAM 工程师对固定提交执行只读定向复核，确认未决意图的 owner 位于实体 key 之外，所有异步回调携带原 expected requestId，Account、Role 与 Session 比较阻止旧结果覆盖另一意图；该复核不替代真实 IAM 进程浏览器验收。
-- 当前证据接受固定 LIVE Role 与管理员 RoleSession 客户端、响应式信息架构、局部加载和独立 MOCK 可检查性；尚未以真实 IAM 进程执行 Role 目录/详情/会话撤销的浏览器验收，也没有开放 Role/trust/policy 变更、成员可承担角色发现、真实 AssumeRole、临时凭据、当前 Role 身份、签发结果 by-request 恢复或 logout。
+- 当前证据接受固定 LIVE Role 目录/详情/创建与管理员 RoleSession 客户端、响应式信息架构、局部加载和独立 MOCK 可检查性；尚未以真实 IAM 进程执行 Role 创建、目录/详情或会话撤销的浏览器验收，也没有开放 Role 更新/状态/删除、后续 trust/policy attachment/权限边界变更、成员可承担角色发现、真实 AssumeRole、临时凭据、当前 Role 身份、签发结果 by-request 恢复或 logout。
 
 ### 访问密钥生命周期的开发验收证据
 
