@@ -33,6 +33,7 @@ export type SessionErrorCode = "invalidCredentials" | "tooManyAttempts" | "login
 type SessionContextValue = {
   phase: SessionPhase;
   current: AuthenticatedSession | null;
+  sessionRevision: number;
   challenge: PendingAuthenticationChallenge | null;
   authenticatorRecovery: PendingAuthenticatorRecovery | null;
   enrollmentRecovery: EnrollmentRecoveryMaterial | null;
@@ -52,7 +53,7 @@ type SessionContextValue = {
   acknowledgeEnrollmentRecovery(): void;
   changePassword(currentPassword: string, newPassword: string): Promise<boolean>;
   logout(): Promise<boolean>;
-  expire(expectedCredential: string): boolean;
+  expire(expectedCredential: string, expectedSessionRevision?: number): boolean;
 };
 
 type CredentialContextValue = {
@@ -175,8 +176,9 @@ export function SessionProvider({
     return () => window.clearTimeout(timer);
   }, [challenge, replaceAuthenticatorRecovery, replaceChallenge]);
 
-  const expire = useCallback((expectedCredential: string) => {
-    if (credentialRef.current !== expectedCredential) return false;
+  const expire = useCallback((expectedCredential: string, expectedSessionRevision?: number) => {
+    if (credentialRef.current !== expectedCredential ||
+        (expectedSessionRevision !== undefined && authenticationRevisionRef.current !== expectedSessionRevision)) return false;
     forget();
     return true;
   }, [forget]);
@@ -593,6 +595,7 @@ export function SessionProvider({
   const sessionValue = useMemo<SessionContextValue>(() => ({
     phase,
     current,
+    sessionRevision,
     challenge,
     authenticatorRecovery,
     enrollmentRecovery,
@@ -613,7 +616,7 @@ export function SessionProvider({
     changePassword,
     logout,
     expire
-  }), [acknowledgeEnrollmentRecovery, acknowledgeReauthentication, authenticatorRecovery, cancelAuthenticationChallenge, challenge, changeChallengePassword, changePassword, clearError, confirmAuthenticatorRecovery, current, enrollmentRecovery, enterAuthenticatorRecovery, error, expire, inspectAuthenticatorRecovery, leaveAuthenticatorRecovery, login, logout, phase, restartAuthenticatorRecovery, startAuthenticatorRecovery, verifyAuthenticationChallenge]);
+  }), [acknowledgeEnrollmentRecovery, acknowledgeReauthentication, authenticatorRecovery, cancelAuthenticationChallenge, challenge, changeChallengePassword, changePassword, clearError, confirmAuthenticatorRecovery, current, enrollmentRecovery, enterAuthenticatorRecovery, error, expire, inspectAuthenticatorRecovery, leaveAuthenticatorRecovery, login, logout, phase, sessionRevision, restartAuthenticatorRecovery, startAuthenticatorRecovery, verifyAuthenticationChallenge]);
   const credentialValue = useMemo(() => ({ credential }), [credential]);
 
   return (

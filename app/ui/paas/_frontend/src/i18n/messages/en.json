@@ -372,6 +372,14 @@
     "accountHint": "Controls whether regular IAM users in this account must complete MFA. It never deletes authenticators users connected voluntarily.",
     "accountControlTitle": "MFA requirement at sign-in",
     "accountControlHint": "Account rules and personal authenticators are managed separately. This control does not prove that any person has connected a factor.",
+    "accountReadLoading": "Reading the current account rule…",
+    "accountReadDenied": "This identity cannot read account security settings. An authorized administrator must grant the exact iam.security-settings.read permission.",
+    "accountReadUnavailable": "The current account rule is temporarily unavailable. Preview data will never replace live state.",
+    "accountReadRouteUnavailable": "This environment has not yet connected the read-only account security settings route. The separate MOCK still supports review of the editing flow.",
+    "accountReadVersion": "Rule version",
+    "accountReadUpdated": "Updated",
+    "accountReadBoundary": "This is only the current account's live rule. Editing is not available. The value proves neither personal authenticator enrollment nor MFA completion by this Session.",
+    "accountReadRetry": "Read again",
     "required": "Required",
     "optional": "User optional",
     "currentRule": "Current rule",
@@ -437,7 +445,7 @@
       "unavailable": "The original intent cannot be queried now. It remains unknown; retry later with the same intent."
     },
     "accountInspectionUnavailable": "Both the save and the local recovery journal are unavailable, so this MOCK session cannot safely inspect the original intent. Account-rule writes remain closed across ordinary refreshes and route changes; end and re-enter the preview session to reset it. This boundary does not imply that a real platform may replace authoritative result lookup with signing in again.",
-    "accountMockBoundary": "This account rule writes only to the isolated preview repository. IAM has not frozen public security-settings HTTP; a real failure must never fall back to this MOCK.",
+    "accountMockBoundary": "This preview editor writes only to the isolated preview repository. Live account-rule read is available, but update, operation proof and history are not yet exposed; live failures never fall back to this MOCK.",
     "feedback": {
       "removed": "The demonstration authenticator was removed. A real change would end affected login sessions.",
       "replaced": "The demonstration authenticator was replaced. The previous authenticator remained active until confirmation.",

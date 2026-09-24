@@ -11,6 +11,7 @@ import type {
   AccountAccess,
   AccountCommand,
   AccountIdentity,
+  AccountSecuritySettings,
   DirectoryPage,
   Group,
   GroupAccess,
@@ -91,6 +92,11 @@ export interface IamRepository {
 }
 
 export interface AccountRepository {
+  accountSecuritySettings?: {
+    // The authenticated Session selects the account; accountId only verifies
+    // the response locally and is never sent as an authority selector.
+    read(credential: string, accountId: string): Promise<AccountSecuritySettings>;
+  };
   // Live boundary lifecycle is separate from the isolated MOCK workspace.
   // Account/user IDs bind responses locally; they never select HTTP authority.
   permissionBoundaries?: {

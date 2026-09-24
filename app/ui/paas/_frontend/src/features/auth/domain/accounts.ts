@@ -79,6 +79,13 @@ export type Account = {
   resourceVersion: number;
 };
 
+export type AccountSecuritySettings = {
+  accountId: string;
+  resourceVersion: number;
+  mfa: { requiredForUsers: boolean };
+  updatedAt: string;
+};
+
 export type User = {
   id: string;
   accountId: string;

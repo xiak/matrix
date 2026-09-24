@@ -3,6 +3,7 @@ import type {
   Account,
   AccountAccess,
   AccountIdentity,
+  AccountSecuritySettings,
   AccountPolicy,
   ActionCapability,
   AuthorizationAuthorityScope,
@@ -1392,7 +1393,25 @@ function accountPage<T>(value: unknown, kind: string, parse: (item: unknown) => 
 
 function accountHeaders(credential: string): HeadersInit { return { Authorization: `Bearer ${credential}` }; }
 
+function parseAccountSecuritySettings(value: unknown, expectedAccountId: string): AccountSecuritySettings {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "accountId", "resourceVersion", "mfa", "updatedAt"]);
+  requireAccountKind(wire, "AccountSecuritySettings");
+  const accountId = accountIdentifier(wire.accountId);
+  const mfa = accountRecord(wire.mfa);
+  exactKeys(mfa, ["requiredForUsers"]);
+  if (accountId !== accountIdentifier(expectedAccountId) || typeof mfa.requiredForUsers !== "boolean") throw new Error("INVALID_IAM_RESPONSE");
+  return { accountId, resourceVersion: accountVersion(wire.resourceVersion), mfa: { requiredForUsers: mfa.requiredForUsers }, updatedAt: accountTimestamp(wire.updatedAt) };
+}
+
 export const httpAccountRepository: AccountRepository = {
+  accountSecuritySettings: {
+    async read(credential, accountId) {
+      return parseAccountSecuritySettings(await requestJSON<unknown>("/api/iam/v1/account/security-settings", {
+        headers: accountHeaders(credential)
+      }), accountId);
+    }
+  },
   roles: {
     async list(credential, accountId, after) {
       return parseRoleDirectory(await requestJSON<unknown>(

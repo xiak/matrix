@@ -372,6 +372,14 @@
     "accountHint": "控制本账号日常 IAM 用户是否必须完成 MFA；不会删除用户主动绑定的验证器。",
     "accountControlTitle": "登录时的 MFA 要求",
     "accountControlHint": "账号级规则与个人验证器分开管理；本区不代表任何个人已经绑定因子。",
+    "accountReadLoading": "正在读取当前账号规则…",
+    "accountReadDenied": "当前身份没有查看账号安全规则的权限。请由有权管理员关联精确的 iam.security-settings.read 权限。",
+    "accountReadUnavailable": "暂时无法读取当前账号安全规则。不会用模拟数据代替真实状态。",
+    "accountReadRouteUnavailable": "当前环境尚未接入账号安全规则的只读接口。模拟编辑流程仍可在独立 MOCK 中验收。",
+    "accountReadVersion": "规则版本",
+    "accountReadUpdated": "更新时间",
+    "accountReadBoundary": "这里只展示当前账号的真实规则，不提供编辑。此值不能证明任何人已绑定验证器，也不能证明当前会话完成了 MFA。",
+    "accountReadRetry": "重新读取",
     "required": "已要求",
     "optional": "用户可选",
     "currentRule": "当前规则",
@@ -437,7 +445,7 @@
       "unavailable": "暂时无法查询原意图，状态仍为未知，请稍后按同一意图重试。"
     },
     "accountInspectionUnavailable": "保存与本地恢复日志同时不可用，当前 MOCK 会话无法安全查询原意图。账号规则写入保持关闭；普通刷新或切换页面不会解除，需结束并重新进入体验会话。此边界不代表真实平台可用重新登录替代权威结果查询。",
-    "accountMockBoundary": "此账号规则仅写入隔离体验仓库。IAM 尚未固定公开 security-settings HTTP；真实失败不得回退此 MOCK。",
+    "accountMockBoundary": "此模拟编辑只写入隔离体验仓库。真实环境已提供账号规则只读接口，写入、操作验证和历史查询尚未开放；真实失败不会回退此 MOCK。",
     "feedback": {
       "removed": "演示验证器已移除；真实操作会结束受影响的登录会话。",
       "replaced": "演示验证器已替换；原验证器在确认前始终保持有效。",

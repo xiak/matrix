@@ -5,6 +5,7 @@ import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { useSession, useSessionCredential } from "./SessionProvider";
 import type {
   AccountCommand,
+  AccountSecuritySettings,
   AccountPolicy,
   AuthorizationProfileDirectory,
   CapabilityRestriction,
@@ -71,6 +72,17 @@ export type AuthorizationProfileClient = {
   load(): Promise<AuthorizationProfileLoad>;
 };
 
+export type AccountSecuritySettingsLoad =
+  | { status: "ready"; settings: AccountSecuritySettings }
+  | { status: "forbidden" | "routeUnavailable" | "unavailable" | "expired" };
+
+export type AccountSecuritySettingsClient = {
+  accountId: string;
+  principalId: string;
+  sessionId: string;
+  load(): Promise<AccountSecuritySettingsLoad>;
+};
+
 export type AccessKeyClient = {
   accountId: string;
   list(userId: string): Promise<AccessKeyDirectory>;
@@ -120,6 +132,7 @@ type AccountAccess = {
   groups: GroupAccessClient | null;
   permissionBoundaries: UserBoundaryClient | null;
   authorizationProfiles: AuthorizationProfileClient | null;
+  accountSecuritySettings: AccountSecuritySettingsClient | null;
   accessKeys: AccessKeyClient | null;
   roles: RoleAccessClient | null;
   roleSessionRevokeIntent: RoleSessionRevokeIntent | null;
@@ -186,6 +199,8 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   const expireSession = session.expire;
   const tenantId = session.current?.session.organizationId;
   const principalId = session.current?.session.principalId;
+  const sessionId = session.current?.session.id;
+  const sessionRevision = session.sessionRevision;
   const [scene, setScene] = useState<AccountAccessScene | null>(null);
   const [workspace, setWorkspace] = useState<AccessWorkspace | null>(null);
   const [workspaceError, setWorkspaceError] = useState<AccountAccess["workspaceError"]>(null);
@@ -376,6 +391,34 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     };
   }, [active, credential, expireSession, repository, scene, tenantId]);
 
+  const accountSecuritySettings = useMemo<AccountSecuritySettingsClient | null>(() => {
+    const reader = repository.accountSecuritySettings;
+    if (!active || !credential || !scene || scene.accountId !== tenantId || !principalId || !sessionId || !reader) return null;
+    const accountId = scene.accountId;
+    return {
+      accountId, principalId, sessionId,
+      async load() {
+        try {
+          const settings = await reader.read(credential, accountId);
+          if (settings.accountId !== accountId) throw new Error("INVALID_IAM_TENANT");
+          return { status: "ready", settings };
+        } catch (failure) {
+          if (failure instanceof HttpProblem) {
+            if (failure.status === 401) {
+              if (expireSession(credential, sessionRevision)) {
+                setScene(null); setWorkspace(null); setWorkspaceError(null); setSuccess(null); setError("expired");
+              }
+              return { status: "expired" };
+            }
+            if (failure.status === 403) return { status: "forbidden" };
+            if (failure.status === 404) return { status: "routeUnavailable" };
+          }
+          return { status: "unavailable" };
+        }
+      }
+    };
+  }, [active, credential, expireSession, principalId, repository, scene, sessionId, sessionRevision, tenantId]);
+
   const accessKeys = useMemo<AccessKeyClient | null>(() => {
     const keyRepository = repository.accessKeys;
     if (!active || !credential || !scene || scene.accountId !== tenantId || !keyRepository || !scene.canListUsers) return null;
@@ -558,7 +601,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         return null;
       } finally { mutationPending.current = false; setBusy(false); }
     },
-    scene, loading, busy, error, success,
+    accountSecuritySettings, scene, loading, busy, error, success,
     reload() { directoryRequest.current.users += 1; directoryRequest.current.accounts += 1; setLoading(true); setRevision((current) => current + 1); },
     usersPage(after) { void loadUsersPage(after); },
     accountsPage(after) { void loadAccountsPage(after); },
@@ -577,7 +620,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       } catch (failure) { setError(accountError(failure)); return false; }
       finally { mutationPending.current = false; setBusy(false); }
     }
-  }), [active, busy, credential, error, loading, repository, scene, success, tenantId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, permissionBoundaries, authorizationProfiles, accessKeys, roles, roleSessionRevokeIntent, changeRoleSessionRevokeIntent, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
+  }), [active, busy, credential, error, loading, repository, scene, success, tenantId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, permissionBoundaries, authorizationProfiles, accountSecuritySettings, accessKeys, roles, roleSessionRevokeIntent, changeRoleSessionRevokeIntent, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
 
   return <AccountCapabilitiesContext.Provider value={capabilities}>
     <AccountAccessContext.Provider value={value}>{children}</AccountAccessContext.Provider>

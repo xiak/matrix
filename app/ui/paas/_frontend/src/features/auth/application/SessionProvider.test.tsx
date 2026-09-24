@@ -107,6 +107,31 @@ afterEach(() => {
 });
 
 describe("SessionProvider", () => {
+  it("does not let a late 401 from an earlier login expire a new Session that reused the bearer", async () => {
+    let originalRevision = 0;
+    const EpochProbe = () => {
+      const session = useSession();
+      return <>
+        <span data-testid="epoch-phase">{session.phase}</span>
+        <span data-testid="epoch-revision">{session.sessionRevision}</span>
+        <button onClick={() => void session.login("admin", "password")}>login-epoch</button>
+        <button onClick={() => { originalRevision = session.sessionRevision; }}>capture-epoch</button>
+        <button onClick={() => { session.expire(secretCredential, originalRevision); }}>expire-old-epoch</button>
+        <button onClick={() => { session.expire(secretCredential, session.sessionRevision); }}>expire-current-epoch</button>
+      </>;
+    };
+    const view = render(<SessionProvider repository={repository()}><EpochProbe /></SessionProvider>);
+    await act(async () => fireEvent.click(view.getByText("login-epoch")));
+    fireEvent.click(view.getByText("capture-epoch"));
+    const firstRevision = view.getByTestId("epoch-revision").textContent;
+    await act(async () => fireEvent.click(view.getByText("login-epoch")));
+    expect(view.getByTestId("epoch-revision").textContent).not.toBe(firstRevision);
+    fireEvent.click(view.getByText("expire-old-epoch"));
+    expect(view.getByTestId("epoch-phase").textContent).toBe("authenticated");
+    fireEvent.click(view.getByText("expire-current-epoch"));
+    expect(view.getByTestId("epoch-phase").textContent).toBe("anonymous");
+  });
+
   it("keeps one-time recovery material visible after IAM revokes the enrollment session", async () => {
     const iam = repository();
     const codes = Array.from({ length: 10 }, (_, index) => `RECOVERY-${index}`);

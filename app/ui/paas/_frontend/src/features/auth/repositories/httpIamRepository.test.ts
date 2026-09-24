@@ -1107,6 +1107,33 @@ describe("IAM HTTP account boundary", () => {
     } })) });
   });
 
+  it("reads only the authenticated account's security rule and rejects partial or cross-account data", async () => {
+    const settings = { apiVersion, kind: "AccountSecuritySettings", accountId: account.id,
+      resourceVersion: 4, mfa: { requiredForUsers: false }, updatedAt: timestamp };
+    const fetcher = reply(settings);
+    await expect(httpAccountRepository.accountSecuritySettings!.read("bearer", account.id)).resolves.toEqual({
+      accountId: account.id, resourceVersion: 4, mfa: { requiredForUsers: false }, updatedAt: timestamp
+    });
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/account/security-settings");
+    expect(firstRequest(fetcher)[1]).toMatchObject({ cache: "no-store", headers: { Authorization: "Bearer bearer" } });
+    expect(firstRequest(fetcher)[1].method).toBeUndefined();
+    expect(firstRequest(fetcher)[1].body).toBeUndefined();
+    for (const invalid of [
+      { ...settings, accountId: "other-account" },
+      { ...settings, apiVersion: "legacy" },
+      { ...settings, kind: "Account" },
+      { ...settings, mfa: {} },
+      { ...settings, mfa: { requiredForUsers: null } },
+      { ...settings, mfa: { requiredForUsers: false, factorBound: true } },
+      { ...settings, resourceVersion: 0 },
+      { ...settings, updatedAt: "not-a-timestamp" },
+      { ...settings, editAllowed: true }
+    ]) {
+      reply(invalid);
+      await expect(httpAccountRepository.accountSecuritySettings!.read("bearer", account.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+  });
+
   it("fails closed on partial, reordered or semantically invalid authorization profile declarations", async () => {
     const valid = profileEntry("paas");
     const action = valid.profile.actions[0]!;

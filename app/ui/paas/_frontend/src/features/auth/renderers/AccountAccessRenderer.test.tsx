@@ -450,6 +450,26 @@ describe("account access", () => {
     expect(screen.getByRole("button", { name: "保存别名" })).toBeTruthy();
   });
 
+  it("loads the real current-account MFA rule only in settings and keeps read denial local", async () => {
+    const read = vi.fn().mockRejectedValue(new HttpProblem(403, "IAM_AUTHORIZATION_DENIED"));
+    const repository = accounts({ accountSecuritySettings: { read } });
+    const { user } = await openAccess(repository, iam(), "users");
+    await screen.findByRole("table", { name: "租户用户列表" });
+    expect(read).not.toHaveBeenCalled();
+    await user.click(screen.getByTestId("nav-settings"));
+    expect(await screen.findByText(/没有查看账号安全规则的权限/)).toBeTruthy();
+    expect(read).toHaveBeenCalledWith(credential, account.id);
+    expect(screen.getByTestId("nav-settings").getAttribute("aria-current")).toBe("page");
+    expect(screen.queryByText("用户可选")).toBeNull();
+  });
+
+  it("expires the credential on a real account-rule 401 instead of treating it as read denial", async () => {
+    const read = vi.fn().mockRejectedValue(new HttpProblem(401, "IAM_SESSION_EXPIRED"));
+    await openAccess(accounts({ accountSecuritySettings: { read } }), iam(), "settings");
+    expect(await screen.findByRole("button", { name: "登录控制台" })).toBeTruthy();
+    expect(screen.queryByText(/没有查看账号安全规则的权限/)).toBeNull();
+  });
+
   it("switches a settings draft and an existing safe error without reloading IAM", async () => {
     const repository = accounts({ execute: vi.fn().mockRejectedValue(new HttpProblem(409, "PRIVATE UPSTREAM DETAIL")) });
     const { user } = await openAccess(repository);
