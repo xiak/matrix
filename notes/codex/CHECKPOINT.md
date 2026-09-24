@@ -6,7 +6,7 @@
 - Updated: 2026-09-24
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `c62e7949`
+- Pushed UI source: `7499d701` (documentation: `1d4a7b70`)
 
 ## Authoritative route
 
@@ -31,11 +31,12 @@ FEAT owners. Integrate fixed backend contracts while preserving this branch's
 UI, full static host/export and independent MOCK entry; do not replace them
 with another branch's renderer or inherit that branch's UI acceptance.
 
-The current milestone preserves the purpose-limited recovery-code client and
-independent MOCK security surface. It adds strict LIVE read-only Account MFA
-settings against the fixed IAM read contract while leaving real update,
-operation proof and history unavailable. The complete 693-case frontend run,
-static/export/embed and Go gates passed. Detailed contract behavior, evidence
+The current milestone preserves the purpose-limited recovery-code client,
+strict LIVE read-only Account MFA settings and independent MOCK security surface.
+The MOCK Account-rule response-lost path now requires normal TOTP re-login
+before original-request inspection; a historical result does not invalidate the
+new Session. Real update, operation proof and history remain unavailable in
+LIVE. The complete shared gates passed. Detailed contract behavior, evidence
 and real-process limitations remain only in the linked FEAT owners.
 
 ## Continuation
