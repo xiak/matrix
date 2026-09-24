@@ -29,41 +29,43 @@ import (
 )
 
 const (
-	backupAPIVersion                 = "installation.matrix.xiak.com/v4"
-	accessKeyBackupAPIVersion        = "installation.matrix.xiak.com/v3"
-	predecessorBackupAPIVersion      = "installation.matrix.xiak.com/v2"
-	legacyBackupAPIVersion           = "installation.matrix.xiak.com/v1"
-	backupKind                       = "PlatformBackup"
-	backupSealAlgorithm              = "HMAC-SHA256"
-	backupSealKeyID                  = "installation-backup-v1"
-	backupSealDomain                 = "matrix-platform-backup-v1\x00"
-	backupManifestFilename           = "backup.json"
-	databaseDumpFilename             = "database.dump"
-	workloadSecretsFilename          = "workload-secrets.tar"
-	maximumBackupManifestBytes       = int64(64 * 1024)
-	maximumDatabaseDumpBytes         = uint64(64 * 1024 * 1024 * 1024)
-	databaseDumpReserveBytes         = uint64(64 * 1024 * 1024)
-	maximumWorkloadSecretFiles       = 4096
-	maximumWorkloadSecretBytes       = uint64(1024 * 1024 * 1024)
-	maximumWorkloadSecretArchiveSize = maximumWorkloadSecretBytes + 8*1024*1024
+	backupAPIVersion                    = "installation.matrix.xiak.com/v4"
+	authenticationStateBackupAPIVersion = "installation.matrix.xiak.com/v5"
+	accessKeyBackupAPIVersion           = "installation.matrix.xiak.com/v3"
+	predecessorBackupAPIVersion         = "installation.matrix.xiak.com/v2"
+	legacyBackupAPIVersion              = "installation.matrix.xiak.com/v1"
+	backupKind                          = "PlatformBackup"
+	backupSealAlgorithm                 = "HMAC-SHA256"
+	backupSealKeyID                     = "installation-backup-v1"
+	backupSealDomain                    = "matrix-platform-backup-v1\x00"
+	backupManifestFilename              = "backup.json"
+	databaseDumpFilename                = "database.dump"
+	workloadSecretsFilename             = "workload-secrets.tar"
+	maximumBackupManifestBytes          = int64(64 * 1024)
+	maximumDatabaseDumpBytes            = uint64(64 * 1024 * 1024 * 1024)
+	databaseDumpReserveBytes            = uint64(64 * 1024 * 1024)
+	maximumWorkloadSecretFiles          = 4096
+	maximumWorkloadSecretBytes          = uint64(1024 * 1024 * 1024)
+	maximumWorkloadSecretArchiveSize    = maximumWorkloadSecretBytes + 8*1024*1024
 )
 
 var backupIDPattern = regexp.MustCompile(`^backup-[0-9a-f]{32}$`)
 
 type backupManifest struct {
-	APIVersion        string                   `json:"apiVersion"`
-	Kind              string                   `json:"kind"`
-	BackupID          string                   `json:"backupId"`
-	InstallationID    string                   `json:"installationId"`
-	ReleaseID         string                   `json:"releaseId"`
-	ReleaseDigest     string                   `json:"releaseDigest"`
-	SchemaVersion     uint64                   `json:"schemaVersion,omitempty"`
-	CreatedAt         time.Time                `json:"createdAt"`
-	Artifacts         []backupArtifact         `json:"artifacts"`
-	Seal              *backupSeal              `json:"seal,omitempty"`
-	Database          release.DatabaseProfile  `json:"database,omitzero"`
-	AccessKeyWrapping *backupAccessKeyWrapping `json:"accessKeyWrapping,omitempty"`
-	TOTPBackupCustody *backupTOTPBackupCustody `json:"totpBackupCustody,omitempty"`
+	APIVersion                string                   `json:"apiVersion"`
+	Kind                      string                   `json:"kind"`
+	BackupID                  string                   `json:"backupId"`
+	InstallationID            string                   `json:"installationId"`
+	ReleaseID                 string                   `json:"releaseId"`
+	ReleaseDigest             string                   `json:"releaseDigest"`
+	SchemaVersion             uint64                   `json:"schemaVersion,omitempty"`
+	CreatedAt                 time.Time                `json:"createdAt"`
+	Artifacts                 []backupArtifact         `json:"artifacts"`
+	Seal                      *backupSeal              `json:"seal,omitempty"`
+	Database                  release.DatabaseProfile  `json:"database,omitzero"`
+	AccessKeyWrapping         *backupAccessKeyWrapping `json:"accessKeyWrapping,omitempty"`
+	TOTPBackupCustody         *backupTOTPBackupCustody `json:"totpBackupCustody,omitempty"`
+	AuthenticationStateDigest string                   `json:"authenticationStateDigest,omitempty"`
 }
 
 type backupAccessKeyWrapping struct {
@@ -80,6 +82,9 @@ type backupTOTPBackupCustody struct {
 // sealed bytes. New backups must bind the complete release database profile.
 func (manifest backupManifest) databaseProfile() (release.DatabaseProfile, error) {
 	profile := manifest.Database
+	if manifest.APIVersion != authenticationStateBackupAPIVersion && manifest.AuthenticationStateDigest != "" {
+		return release.DatabaseProfile{}, errors.New("historical backup contains an authentication state commitment")
+	}
 	switch manifest.APIVersion {
 	case legacyBackupAPIVersion:
 		if manifest.SchemaVersion == 0 || profile != (release.DatabaseProfile{}) ||
@@ -99,12 +104,13 @@ func (manifest backupManifest) databaseProfile() (release.DatabaseProfile, error
 			!validSHA256(manifest.AccessKeyWrapping.Commitment) || manifest.TOTPBackupCustody != nil {
 			return release.DatabaseProfile{}, errors.New("backup access-key wrapping commitment is invalid")
 		}
-	case backupAPIVersion:
+	case backupAPIVersion, authenticationStateBackupAPIVersion:
 		if manifest.SchemaVersion != 0 || manifest.AccessKeyWrapping == nil ||
 			iamv1.ValidateID("wrappingKeyId", manifest.AccessKeyWrapping.WrappingKeyID) != nil ||
 			!validSHA256(manifest.AccessKeyWrapping.Commitment) ||
-			validateBackupTOTPBackupCustody(manifest.TOTPBackupCustody) != nil {
-			return release.DatabaseProfile{}, errors.New("backup key custody commitment is invalid")
+			validateBackupTOTPBackupCustody(manifest.TOTPBackupCustody) != nil ||
+			manifest.APIVersion == authenticationStateBackupAPIVersion && !validSHA256(manifest.AuthenticationStateDigest) {
+			return release.DatabaseProfile{}, errors.New("backup custody or authentication state commitment is invalid")
 		}
 	default:
 		return release.DatabaseProfile{}, errors.New("backup version is unsupported")

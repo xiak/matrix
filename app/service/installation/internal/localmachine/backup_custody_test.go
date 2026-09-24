@@ -134,6 +134,63 @@ func TestPublishedAccessKeyBackupVersionRemainsDecodableWithoutTOTPClaim(t *test
 	}
 }
 
+func TestAuthenticationStateBackupVersionCannotRetrofitHistoricalManifests(t *testing.T) {
+	custody := installationv1.TOTPBackupCustody{
+		APIVersion:      installationv1.TOTPBackupCustodyAPIVersion,
+		Kind:            installationv1.TOTPBackupCustodyKind,
+		Purpose:         installationv1.TOTPBackupCustodyPurpose,
+		InstallationID:  "mxi-0123456789abcdef0123456789abcdef",
+		BootstrapDigest: "sha256:" + strings.Repeat("a", 64),
+		KeysetRevision:  1,
+		RequiredKeys:    []installationv1.TOTPBackupRequiredKey{},
+	}
+	custodyDigest, err := installationv1.TOTPBackupCustodyDigest(custody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest := backupManifest{
+		APIVersion: authenticationStateBackupAPIVersion,
+		Kind:       backupKind,
+		Database:   release.CurrentDatabaseProfile(),
+		AccessKeyWrapping: &backupAccessKeyWrapping{
+			WrappingKeyID: "access-wrapping-v1",
+			Commitment:    "sha256:" + strings.Repeat("b", 64),
+		},
+		TOTPBackupCustody:         &backupTOTPBackupCustody{Custody: custody, CustodyDigest: custodyDigest},
+		AuthenticationStateDigest: "sha256:" + strings.Repeat("c", 64),
+	}
+	if profile, err := manifest.databaseProfile(); err != nil || profile != release.CurrentDatabaseProfile() {
+		t.Fatalf("v5 authentication state backup profile = %#v / %v", profile, err)
+	}
+	key := make([]byte, sha256.Size)
+	v5, err := sealBackupManifest(manifest, key)
+	if err != nil || !bytes.Contains(v5, []byte(`"authenticationStateDigest"`)) {
+		t.Fatalf("v5 authentication state commitment was not sealed: %v", err)
+	}
+	for name, change := range map[string]func(*backupManifest){
+		"missing v5 commitment":     func(value *backupManifest) { value.AuthenticationStateDigest = "" },
+		"malformed v5 commitment":   func(value *backupManifest) { value.AuthenticationStateDigest = "sha256:short" },
+		"retroactive v4 commitment": func(value *backupManifest) { value.APIVersion = backupAPIVersion },
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := manifest
+			change(&changed)
+			if _, err := changed.databaseProfile(); err == nil {
+				t.Fatal("ambiguous authentication state commitment was accepted")
+			}
+			if _, err := sealBackupManifest(changed, key); err == nil {
+				t.Fatal("ambiguous authentication state commitment was sealed")
+			}
+		})
+	}
+	manifest.APIVersion = backupAPIVersion
+	manifest.AuthenticationStateDigest = ""
+	v4, err := sealBackupManifest(manifest, key)
+	if err != nil || bytes.Contains(v4, []byte(`"authenticationStateDigest"`)) {
+		t.Fatalf("historical v4 bytes acquired a new field: %v", err)
+	}
+}
+
 func TestTOTPBackupCustodyProcessFailsClosedOnProtocolAndLifecycleDrift(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("local-machine backup custody process targets Linux")
@@ -184,6 +241,12 @@ func TestBackupTOTPKeyringMustRemainASupersetOfSealedCustody(t *testing.T) {
 	}}
 	if err := verifyBackupTOTPBackupCustody(plan.Root, plan.InstallationID, value); err != nil {
 		t.Fatalf("verify exact custody: %v", err)
+	}
+	v5 := value
+	v5.APIVersion = authenticationStateBackupAPIVersion
+	v5.AuthenticationStateDigest = "sha256:" + strings.Repeat("c", 64)
+	if err := verifyBackupTOTPBackupCustody(plan.Root, plan.InstallationID, v5); err != nil {
+		t.Fatalf("verify v5 custody from the same installation: %v", err)
 	}
 
 	changed := value

@@ -277,7 +277,7 @@ func verifyBackupTOTPBackupCustody(
 	root, installationID string,
 	manifest backupManifest,
 ) error {
-	if manifest.APIVersion != backupAPIVersion {
+	if manifest.APIVersion != backupAPIVersion && manifest.APIVersion != authenticationStateBackupAPIVersion {
 		if manifest.TOTPBackupCustody != nil {
 			return errors.New("legacy backup contains TOTP custody")
 		}
