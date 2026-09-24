@@ -682,6 +682,8 @@ S2c运行时的首个有界交付是配置读取：`GET /v1/account/security-set
 
 本片全仓`go test -race -count=1 -p 2 ./...`、`go vet -p 2 ./...`、模块验证、Linux/amd64全包构建、122个API文件两次生成一致性及gofmt/diff检查通过。默认测试中跳过的外部运行环境不计作实跑，真实证据仅以上列门禁为准。源码读取闭环不等于完整S2c验收。独立CI、设置写入/强制绑定/会话屏障、真实邮件、新UI浏览器及签名恢复仍分别需要实际证据；旧CI的零执行账单限制不能作为本片通过凭据。
 
+本片固定并推送于`018fbd7505ae16d59dcfe857df7fbbe870bf1a13`。GitHub API核对其[Verification 35959220825](https://github.com/xiak/matrix/actions/runs/35959220825)精确SHA：completed/failure，七项均runner_id=0、steps=0；go annotation明确为账号付款/支出限制，未启动测试。因此本片是已本地验证的固定候选，不是独立CI通过或发布验收。
+
 新动作进入IAM产品Profile和策略编译器，不由handler比较角色名称。现有系统策略版本保持不可变；具体新内置版本及其生效范围归002，在实现窗口明确验证，不因为目录新增Action就自动给所有旧附件补权。自定义策略可按已有发布/附件流程显式授予这两个动作，不能跳过Boundary或Deny；平台操作员的安装权限不隐含租户设置权限。
 
 修改的准入顺序为：确认真实Session及Account → 当前PDP → 当前受保护身份/配置规则 → 操作专属step-up → resourceVersion CAS → 原子变更/事实。顺序是语义条件，具体取锁仍遵守既有锁序。最终事务按**修改前当前有效规则、不可降低的产品底线和该操作自身要求**重检；本片所有设置修改均需近期密码及TOTP的目标限定证明，即使拟提交`requiredForUsers=false`也不能用该新值省略MFA。尚未绑定的操作者应先完成本人合法绑定与正常登录，不以这项权限代替绑定资格。
