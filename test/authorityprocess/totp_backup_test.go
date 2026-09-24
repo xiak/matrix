@@ -99,8 +99,72 @@ func TestIAMTOTPBackupProcesses(t *testing.T) {
 	})
 	defer network.stop()
 	waitHTTPStatus(t, ctx, network, "http://"+address+"/ready", http.StatusOK)
+	endpoint := "http://" + address
+	const factorInitialPassword = "Backup-Factor-Initial-Password-61!"
+	const factorPassword = "Backup-Factor-Changed-Password-82!"
+	owner := loginIAM(t, endpoint, "admin", initialAdminPassword, "backup-owner-login")
+	changePasswordIAM(t, endpoint, owner.Credential, initialAdminPassword, changedAdminPassword, "backup-owner-password")
+	factorUser := createIAMUser(t, endpoint, owner.Credential, "backup.factor", "Backup Factor", factorInitialPassword, "backup-factor-user")
+	factorLogin := loginIAM(t, endpoint, "backup.factor@"+string(factorUser.AccountID), factorInitialPassword, "backup-factor-login")
+	changePasswordIAM(t, endpoint, factorLogin.Credential, factorInitialPassword, factorPassword, "backup-factor-password")
+	var state iamv1.AuthenticatorState
+	response := performJSON(t, http.MethodGet, endpoint+"/v1/auth/authenticators", factorLogin.Credential, nil)
+	if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &state) != nil || state.FactorRevision != 1 {
+		t.Fatal("factor user did not have an unbound authenticator state")
+	}
+	var verification iamv1.NotificationContactVerification
+	response = performJSON(t, http.MethodPost, endpoint+"/v1/auth/notification-contact/verifications", factorLogin.Credential,
+		map[string]string{"email": "backup-factor@matrix.test", "password": factorPassword, "requestId": "backup-factor-contact"})
+	if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &verification) != nil {
+		t.Fatal("factor user did not start contact verification")
+	}
+	contactCode := readProcessContactCode(t, ctx, admin, verification)
+	response = performJSON(t, http.MethodPost, endpoint+"/v1/auth/notification-contact/verifications/"+verification.ID+":confirm",
+		factorLogin.Credential, map[string]string{"requestId": "backup-factor-contact-confirm", "code": contactCode})
+	if response.Status != http.StatusOK {
+		t.Fatal("factor user did not verify contact")
+	}
+	beforeCreation, creationLease := startTOTPBackupProcess(t, ctx, root, backupBinary, backupDSN)
+	if creationLease.Custody.KeysetRevision != 1 || len(creationLease.Custody.RequiredKeys) != 0 {
+		t.Fatal("pre-enrollment snapshot contained a factor reference")
+	}
+	var enrollment iamv1.StartTOTPEnrollmentResponse
+	response = performJSON(t, http.MethodPost, endpoint+"/v1/auth/totp/enrollments", factorLogin.Credential,
+		map[string]any{"requestId": "backup-factor-enroll", "password": factorPassword, "expectedFactorRevision": state.FactorRevision})
+	if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &enrollment) != nil ||
+		enrollment.Outcome != "APPLIED" || enrollment.Enrollment.State != "PENDING" || enrollment.Provisioning == nil {
+		t.Fatal("real HTTP enrollment did not commit a pending factor")
+	}
+	seed := enrollment.Provisioning.Seed.CopyBytes()
+	defer clear(seed)
+	var factorKey, factorState string
+	if err := admin.QueryRow(ctx, `SELECT key_id,state FROM iam.totp_authenticators WHERE tenant_id=$1 AND id=$2`,
+		factorUser.AccountID, enrollment.Enrollment.ID).Scan(&factorKey, &factorState); err != nil ||
+		factorKey != "process-totp" || factorState != "PENDING" {
+		t.Fatal("HTTP enrollment did not persist the expected wrapping-key reference", err)
+	}
+	creationDump := runTOTPPostgresTool(t, ctx, config, "pg_dump", nil, "--format=custom", "--no-owner", "--no-privileges",
+		"--section=pre-data", "--section=data", "--table=iam.totp_wrapping_registry", "--table=iam.totp_keysets",
+		"--table=iam.totp_authenticators", "--snapshot="+creationLease.SnapshotID)
+	proveTOTPImportedDump(t, ctx, admin, config, creationDump, creationLease, 0)
+	if exit := beforeCreation.finish(t, installationv1.TOTPBackupCustodyReleaseFrame); exit != installationv1.TOTPBackupCustodyExitSuccess {
+		t.Fatal("pre-enrollment snapshot did not close", exit)
+	}
+	afterCreation, createdLease := startTOTPBackupProcess(t, ctx, root, backupBinary, backupDSN)
+	if createdLease.Custody.KeysetRevision != 1 || len(createdLease.Custody.RequiredKeys) != 1 ||
+		createdLease.Custody.RequiredKeys[0].KeyID != "process-totp" {
+		t.Fatal("post-enrollment snapshot omitted the real factor key")
+	}
+	createdDump := runTOTPPostgresTool(t, ctx, config, "pg_dump", nil, "--format=custom", "--no-owner", "--no-privileges",
+		"--section=pre-data", "--section=data", "--table=iam.totp_wrapping_registry", "--table=iam.totp_keysets",
+		"--table=iam.totp_authenticators", "--snapshot="+createdLease.SnapshotID)
+	proveTOTPImportedDump(t, ctx, admin, config, createdDump, createdLease, 1)
+	if exit := afterCreation.finish(t, installationv1.TOTPBackupCustodyReleaseFrame); exit != installationv1.TOTPBackupCustodyExitSuccess {
+		t.Fatal("post-enrollment snapshot did not close", exit)
+	}
 	network.stop()
-	assertProcessOutputsSanitized(t, []*childProcess{network}, processDBPassword, initialAdminPassword)
+	assertProcessOutputsSanitized(t, []*childProcess{network}, processDBPassword, initialAdminPassword,
+		changedAdminPassword, factorInitialPassword, factorPassword, contactCode, owner.Credential, factorLogin.Credential, string(seed))
 	version := runTOTPPostgresTool(t, ctx, config, "pg_dump", nil, "--version")
 	if !strings.Contains(string(version), "(PostgreSQL) 18.") {
 		t.Fatal("backup gate requires PostgreSQL 18 client")
@@ -120,9 +184,10 @@ func TestIAMTOTPBackupProcesses(t *testing.T) {
 	// original database snapshot. Opaque retained-row fixtures are inserted only
 	// after IAM stops: startup deliberately rejects such non-enrollment rows.
 	beforeRotation, oldLease := startTOTPBackupProcess(t, ctx, root, backupBinary, backupDSN)
-	if oldLease.Custody.KeysetRevision != 1 || len(oldLease.Custody.RequiredKeys) != 0 ||
+	if oldLease.Custody.KeysetRevision != 1 || len(oldLease.Custody.RequiredKeys) != 1 ||
+		oldLease.Custody.RequiredKeys[0].KeyID != "process-totp" ||
 		oldLease.Custody.InstallationID != bootstrap.InstallationID {
-		t.Fatal("pre-rotation lease did not bind the original empty factor set")
+		t.Fatal("pre-rotation lease did not bind the original factor key")
 	}
 	digest, err := iamv1.BootstrapDigest(bootstrap)
 	if err != nil {
@@ -158,26 +223,26 @@ func TestIAMTOTPBackupProcesses(t *testing.T) {
 	oldDump := runTOTPPostgresTool(t, ctx, config, "pg_dump", nil, "--format=custom", "--no-owner", "--no-privileges",
 		"--section=pre-data", "--section=data", "--table=iam.totp_wrapping_registry", "--table=iam.totp_keysets",
 		"--table=iam.totp_authenticators", "--snapshot="+oldLease.SnapshotID)
-	proveTOTPImportedDump(t, ctx, admin, config, oldDump, oldLease, 0)
+	proveTOTPImportedDump(t, ctx, admin, config, oldDump, oldLease, 1)
 	if exit := beforeRotation.finish(t, installationv1.TOTPBackupCustodyReleaseFrame); exit != installationv1.TOTPBackupCustodyExitSuccess {
 		t.Fatal("pre-rotation snapshot did not close", exit)
 	}
 	afterRotation, newLease := startTOTPBackupProcess(t, ctx, root, backupBinary, backupDSN)
-	if newLease.Custody.KeysetRevision != 2 || len(newLease.Custody.RequiredKeys) != 1 ||
+	if newLease.Custody.KeysetRevision != 2 || len(newLease.Custody.RequiredKeys) != 2 ||
 		newLease.Custody.InstallationID != bootstrap.InstallationID ||
-		newLease.Custody.RequiredKeys[0].KeyID != "process-totp-next" {
+		newLease.Custody.RequiredKeys[0].KeyID != "process-totp" || newLease.Custody.RequiredKeys[1].KeyID != "process-totp-next" {
 		t.Fatal("post-rotation lease omitted the committed new key")
 	}
 	newDump := runTOTPPostgresTool(t, ctx, config, "pg_dump", nil, "--format=custom", "--no-owner", "--no-privileges",
 		"--section=pre-data", "--section=data", "--table=iam.totp_wrapping_registry", "--table=iam.totp_keysets",
 		"--table=iam.totp_authenticators", "--snapshot="+newLease.SnapshotID)
-	proveTOTPImportedDump(t, ctx, admin, config, newDump, newLease, 1)
+	proveTOTPImportedDump(t, ctx, admin, config, newDump, newLease, 2)
 	if exit := afterRotation.finish(t, installationv1.TOTPBackupCustodyReleaseFrame); exit != installationv1.TOTPBackupCustodyExitSuccess {
 		t.Fatal("post-rotation snapshot did not close", exit)
 	}
 	for phase := 0; phase < 2; phase++ {
 		child, lease := startTOTPBackupProcess(t, ctx, root, backupBinary, backupDSN)
-		if len(lease.Custody.RequiredKeys) != phase+1 || lease.Custody.KeysetRevision != 2 || lease.Custody.InstallationID != bootstrap.InstallationID {
+		if len(lease.Custody.RequiredKeys) != 2 || lease.Custody.KeysetRevision != 2 || lease.Custody.InstallationID != bootstrap.InstallationID {
 			t.Fatal("helper lease did not report actual reference scope")
 		}
 		var live int
@@ -196,7 +261,7 @@ func TestIAMTOTPBackupProcesses(t *testing.T) {
 		if len(dump) == 0 || len(dump) > 2<<20 {
 			t.Fatal("invalid bounded snapshot dump")
 		}
-		proveTOTPImportedDump(t, ctx, admin, config, dump, lease, phase+1)
+		proveTOTPImportedDump(t, ctx, admin, config, dump, lease, phase+2)
 		if exit := child.finish(t, installationv1.TOTPBackupCustodyReleaseFrame); exit != installationv1.TOTPBackupCustodyExitSuccess {
 			t.Fatal("normal helper rollback/close failed", exit)
 		}
@@ -279,7 +344,7 @@ func TestIAMTOTPBackupProcesses(t *testing.T) {
 	if err := iammigration.Verify(ctx, admin); err != nil {
 		t.Fatal(err)
 	}
-	t.Log("actual dedicated helper, live snapshot pg_dump/import, retained references, strict release/EOF, rejected roles and failed closure passed; not signed backup/reopen acceptance")
+	t.Log("actual IAM HTTP factor creation and keyset rotation crossed restricted backup snapshots; pg_dump/import, retained references, strict release/EOF, rejected roles and failed closure passed; not signed restore/reopen acceptance")
 }
 
 type totpSnapshotProcess struct {
