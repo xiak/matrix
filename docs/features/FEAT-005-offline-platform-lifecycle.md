@@ -299,6 +299,15 @@ focused vet, SMTP protocol and TOTP vector tests. No signed runtime or
 Docker-based release acceptance is claimed. The complete Phase 3 extension
 remains open.
 
+Fixed acceptance correction `6d9a8a58` starts the SMTP fixture before the
+first install and binds it to the isolated engine's default bridge gateway;
+the platform's release-owned networks are replaced during A/B transitions.
+The predecessor-to-A upgrade also passes the protected mail configuration.
+Default-bridge rejection cases, the SMTP fixture, low-concurrency full Go
+tests, and the focused race gate passed. The signed Docker runtime gate remains
+unrun because no task-local Docker engine was available; no remote engine was
+used.
+
 ## Incremental acceptance
 
 ### Gate A: release and CLI contract
