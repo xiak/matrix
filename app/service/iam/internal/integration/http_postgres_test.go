@@ -3674,7 +3674,7 @@ func proveIAMSecuritySettingsRaces(t *testing.T, ctx context.Context, database *
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, mutation := range []string{"logout", "password", "recovery"} {
+	for _, mutation := range []string{"logout", "password", "recovery", "verify"} {
 		for _, settingsFirst := range []bool{false, true} {
 			name := fmt.Sprintf("%s-settings-first-%t", mutation, settingsFirst)
 			t.Run(name, func(t *testing.T) {
@@ -3721,13 +3721,13 @@ func proveIAMSecuritySettingsRaces(t *testing.T, ctx context.Context, database *
 				if err != nil || enrollment.Provisioning == nil {
 					t.Fatal("prepare actual race authenticator", err)
 				}
-				codeAt := func(advance int64) iamv1.Secret {
+				codeAt := func(seed iamv1.Secret, advance int64) iamv1.Secret {
 					t.Helper()
 					var step int64
 					if err := database.QueryRow(ctx, "SELECT floor(extract(epoch FROM clock_timestamp())/30)::bigint").Scan(&step); err != nil {
 						t.Fatal(err)
 					}
-					material := enrollment.Provisioning.Seed.CopyBytes()
+					material := seed.CopyBytes()
 					defer clear(material)
 					value, err := hotp.GenerateCode(string(material), uint64(step+advance))
 					if err != nil {
@@ -3736,7 +3736,7 @@ func proveIAMSecuritySettingsRaces(t *testing.T, ctx context.Context, database *
 					return iamHTTPSecret(t, value)
 				}
 				bound, err := first.ConfirmTOTPEnrollment(ctx, access.Credential, enrollment.Enrollment.ID,
-					iamv1.ConfirmTOTPEnrollmentRequest{RequestID: "race-enroll-confirm", Code: codeAt(-1)})
+					iamv1.ConfirmTOTPEnrollmentRequest{RequestID: "race-enroll-confirm", Code: codeAt(enrollment.Provisioning.Seed, -1)})
 				if err != nil || len(bound.RecoveryCodes) != 10 {
 					t.Fatal("bind actual race authenticator", err)
 				}
@@ -3759,7 +3759,7 @@ func proveIAMSecuritySettingsRaces(t *testing.T, ctx context.Context, database *
 					return response
 				}
 				loginBody, err := iamv1.EncodeVerifyAuthenticationChallengeRequest(iamv1.VerifyAuthenticationChallengeRequest{
-					RequestID: "race-mfa-verify", ChallengeCredential: challenge.ChallengeCredential, Code: codeAt(0)})
+					RequestID: "race-mfa-verify", ChallengeCredential: challenge.ChallengeCredential, Code: codeAt(enrollment.Provisioning.Seed, 0)})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -3777,7 +3777,7 @@ func proveIAMSecuritySettingsRaces(t *testing.T, ctx context.Context, database *
 					t.Fatal(err)
 				}
 				proof, err = second.VerifyStepUp(ctx, session.Credential, proof.ID,
-					iamv1.VerifyStepUpRequest{RequestID: "race-proof", Password: current, Code: codeAt(1)})
+					iamv1.VerifyStepUpRequest{RequestID: "race-proof", Password: current, Code: codeAt(enrollment.Provisioning.Seed, 1)})
 				if err != nil || proof.State != "PROVED" {
 					t.Fatal("prove actual settings intent", err)
 				}
@@ -3791,6 +3791,9 @@ func proveIAMSecuritySettingsRaces(t *testing.T, ctx context.Context, database *
 					mustIAMJSON(t, iamv1.UpdateAccountSecuritySettingsRequest{RequestID: "race-settings", StepUpID: proof.ID,
 						ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}})}
 				other := command{method: http.MethodPost, request: "race-mutation", bearer: session.Credential}
+				var verification iamv1.LoginResponse
+				var peerFactor string
+				var priorStep int64
 				switch mutation {
 				case "logout":
 					other.path, other.action = "/v1/auth/logout", auditv1.ActionIAMSessionRevoked
@@ -3807,6 +3810,54 @@ func proveIAMSecuritySettingsRaces(t *testing.T, ctx context.Context, database *
 					other.path, other.action, other.bearer = "/v1/auth/challenges/"+original.Challenge.ID+":recover", auditv1.ActionIAMAuthenticatorRecoveryStarted, iamv1.Secret{}
 					other.body, err = iamv1.EncodeStartAuthenticatorRecoveryRequest(iamv1.StartAuthenticatorRecoveryRequest{
 						RequestID: other.request, ChallengeCredential: original.ChallengeCredential, RecoveryCode: bound.RecoveryCodes[0]})
+					if err != nil {
+						t.Fatal(err)
+					}
+				case "verify":
+					// An ordinary USER must obey the changed Account requirement;
+					// this is not the protected root's enrollment exemption.
+					peer, err := first.CreateUser(ctx, session.Credential, iamv1.CreateUserRequest{LoginName: "settings-peer", DisplayName: "Settings peer",
+						InitialPassword: initial, RequestID: "race-peer-create"})
+					if err != nil {
+						t.Fatal(err)
+					}
+					realm := peer.LoginName + "@" + string(peer.AccountID)
+					peerAccess, err := first.Login(ctx, iamv1.LoginRequest{LoginName: realm, Password: initial, RequestID: "race-peer-initial-login"})
+					if err != nil {
+						t.Fatal(err)
+					}
+					if _, err := first.ChangePassword(ctx, peerAccess.Credential, iamv1.ChangePasswordRequest{CurrentPassword: initial, NewPassword: current, RequestID: "race-peer-password"}); err != nil {
+						t.Fatal(err)
+					}
+					peerContact, err := first.StartNotificationVerification(ctx, peerAccess.Credential,
+						iamv1.StartNotificationContactVerificationRequest{Email: "peer-" + name + "@matrix.test", Password: current, RequestID: "race-peer-contact"})
+					if err != nil {
+						t.Fatal(err)
+					}
+					if _, err := first.ConfirmNotificationContact(ctx, peerAccess.Credential, peerContact.ID, iamv1.ConfirmNotificationContactVerificationRequest{
+						Code: iamNotificationStorageCode(t, ctx, database, protector, peerContact), RequestID: "race-peer-contact-confirm"}); err != nil {
+						t.Fatal(err)
+					}
+					peerEnrollment, err := first.StartTOTPEnrollment(ctx, peerAccess.Credential,
+						iamv1.StartTOTPEnrollmentRequest{Password: current, ExpectedFactorRevision: 1, RequestID: "race-peer-enroll"})
+					if err != nil || peerEnrollment.Provisioning == nil {
+						t.Fatal("prepare peer factor", err)
+					}
+					if _, err := first.ConfirmTOTPEnrollment(ctx, peerAccess.Credential, peerEnrollment.Enrollment.ID,
+						iamv1.ConfirmTOTPEnrollmentRequest{RequestID: "race-peer-confirm", Code: codeAt(peerEnrollment.Provisioning.Seed, -1)}); err != nil {
+						t.Fatal(err)
+					}
+					peerFactor = peerEnrollment.Enrollment.ID
+					if err := database.QueryRow(ctx, `SELECT last_consumed_step FROM iam.totp_authenticators WHERE tenant_id=$1 AND id=$2`, account.ID, peerFactor).Scan(&priorStep); err != nil {
+						t.Fatal(err)
+					}
+					verification, err = second.Login(ctx, iamv1.LoginRequest{LoginName: realm, Password: current, RequestID: "race-peer-login"})
+					if err != nil || verification.Challenge == nil || verification.Credential.Present() {
+						t.Fatal("peer password became an ordinary Session", err)
+					}
+					other.path, other.action, other.bearer = "/v1/auth/challenges/"+verification.Challenge.ID+":verify", auditv1.ActionIAMSessionIssued, iamv1.Secret{}
+					other.body, err = iamv1.EncodeVerifyAuthenticationChallengeRequest(iamv1.VerifyAuthenticationChallengeRequest{
+						RequestID: other.request, ChallengeCredential: verification.ChallengeCredential, Code: codeAt(peerEnrollment.Provisioning.Seed, 0)})
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -3853,7 +3904,11 @@ func proveIAMSecuritySettingsRaces(t *testing.T, ctx context.Context, database *
 						t.Fatal("settings race did not finish")
 					}
 				}
-				if results[0].Code != http.StatusOK || results[1].Code != http.StatusUnauthorized {
+				wantTrailing := http.StatusUnauthorized
+				if mutation == "verify" && !settingsFirst {
+					wantTrailing = http.StatusOK
+				}
+				if results[0].Code != http.StatusOK || results[1].Code != wantTrailing {
 					t.Fatalf("ordered settings race status: first=%d second=%d", results[0].Code, results[1].Code)
 				}
 				settingsCount, otherCount, wantGeneration, consumedCodes, wantRevision := 0, 1, 2, 0, 2
@@ -3864,6 +3919,14 @@ func proveIAMSecuritySettingsRaces(t *testing.T, ctx context.Context, database *
 					wantGeneration++
 				} else if mutation == "recovery" {
 					consumedCodes, wantRevision, wantEnrollment = 1, 3, "RECOVERY_REQUIRED"
+				} else if mutation == "verify" {
+					settingsCount, proofState = 1, "CONSUMED"
+				}
+				var issued iamv1.LoginResponse
+				if mutation == "verify" && !settingsFirst {
+					if iamv1.DecodeRequest(results[0].Body, &issued) != nil || issued.Outcome != iamv1.LoginAuthenticated || !issued.Credential.Present() {
+						t.Fatal("verification-first did not actually issue a Session")
+					}
 				}
 				assertState := func() {
 					t.Helper()
@@ -3881,9 +3944,24 @@ func proveIAMSecuritySettingsRaces(t *testing.T, ctx context.Context, database *
 						AND (SELECT count(*)=$13 FROM iam.mfa_recovery_codes WHERE tenant_id=$1 AND consumed_at IS NOT NULL)
 						AND (SELECT count(*)=$13 FROM iam.authenticator_recoveries WHERE tenant_id=$1)
 						AND (SELECT count(*)=$13 FROM iam.security_notifications WHERE tenant_id=$1 AND kind='RECOVERY_STARTED')`,
-						account.ID, session.Session.PrincipalID, 1+settingsCount, settingsFirst, wantGeneration, wantRevision, wantEnrollment,
+						account.ID, session.Session.PrincipalID, 1+settingsCount, settingsCount == 1, wantGeneration, wantRevision, wantEnrollment,
 						proofState, proof.ID, settingsCount, otherCount, string(other.action), consumedCodes).Scan(&intact); err != nil || !intact {
 						t.Fatal("settings race left partial or repeated security effects", err)
+					}
+					if mutation == "verify" {
+						if err := database.QueryRow(ctx, `SELECT
+							(SELECT CASE WHEN $3 THEN state='PENDING' AND session_id IS NULL ELSE state='CONSUMED' AND session_id=$4 END
+								FROM iam.authentication_challenges WHERE tenant_id=$1 AND id=$2)
+							AND (SELECT CASE WHEN $3 THEN last_consumed_step=$6 ELSE last_consumed_step>$6 END
+								FROM iam.totp_authenticators WHERE tenant_id=$1 AND id=$5)`, account.ID, verification.Challenge.ID,
+							settingsFirst, string(issued.Session.ID), peerFactor, priorStep).Scan(&intact); err != nil || !intact {
+							t.Fatal("settings race consumed a rejected challenge or changed original verification evidence", err)
+						}
+						if issued.Credential.Present() {
+							if result := invoke(1, http.MethodGet, "/v1/auth/me", issued.Credential, nil); result.Code != http.StatusUnauthorized {
+								t.Fatal("pre-settings MFA Session retained business qualification", result.Code)
+							}
+						}
 					}
 				}
 				assertState()
@@ -3908,7 +3986,7 @@ func proveIAMSecuritySettingsRaces(t *testing.T, ctx context.Context, database *
 				if result := invoke(1, http.MethodPut, settings.path, session.Credential, settings.body); result.Code != http.StatusUnauthorized {
 					t.Fatal("replay revived old Session or credential-bound proof", result.Code)
 				}
-				if settingsFirst {
+				if settingsFirst || mutation == "verify" {
 					if result := invoke(1, other.method, other.path, other.bearer, other.body); result.Code != http.StatusUnauthorized {
 						t.Fatal("replay revived old mutation qualification", result.Code)
 					}
@@ -9715,15 +9793,38 @@ func proveManagementSessionReferences(t *testing.T, ctx context.Context, handler
 		t.Fatal("revoke attachment reference fixture")
 	}
 	// Explicitly synthetic retained/corrupt session rows, not a claimed old
-	// executable upgrade. They cannot gain current credential authority.
+	// executable upgrade. Copy the real authentication facts so each negative
+	// reference is rejected for its expired/mismatched credential qualification,
+	// not because an unrelated missing MFA fact masks that boundary. No bearer
+	// or Session index is issued for these rows.
 	for _, variant := range []string{"expired", "stale-generation", "null-generation"} {
 		if _, err := database.Exec(ctx, `INSERT INTO iam.sessions(tenant_id,id,principal_id,verification_digest,status,resource_version,
-			issued_at,expires_at,credential_version) SELECT tenant_id,$2,principal_id,verification_digest,'ACTIVE',1,
+			issued_at,expires_at,credential_version,authentication_method,authenticated_at,mfa_revision,security_settings_version)
+			SELECT tenant_id,$2,principal_id,verification_digest,'ACTIVE',1,
 			transaction_timestamp()-interval '2 hours',CASE WHEN $3='expired' THEN transaction_timestamp()-interval '1 hour'
 			ELSE expires_at END,CASE WHEN $3='null-generation' THEN NULL WHEN $3='stale-generation' THEN credential_version-1
-			ELSE credential_version END FROM iam.sessions WHERE tenant_id=$1 AND id=$4`,
+			ELSE credential_version END,authentication_method,authenticated_at,mfa_revision,security_settings_version
+			FROM iam.sessions WHERE tenant_id=$1 AND id=$4`,
 			member.AccountID, "attachment-reference-"+variant, variant, currentID); err != nil {
+			var failure *pgconn.PgError
+			if errors.As(err, &failure) {
+				t.Fatalf("create isolated %s session validity fixture: SQLSTATE=%s constraint=%s", variant, failure.Code, failure.ConstraintName)
+			}
 			t.Fatal("create isolated session validity fixture")
+		}
+		var isolated bool
+		if err := database.QueryRow(ctx, `SELECT
+			(s.principal_id,s.authentication_method,s.authenticated_at,s.mfa_revision,s.security_settings_version)
+			    IS NOT DISTINCT FROM (original.principal_id,original.authentication_method,original.authenticated_at,original.mfa_revision,original.security_settings_version)
+			AND iam.session_mfa_eligible(s.tenant_id,s.principal_id,s.id)
+			AND s.status='ACTIVE' AND s.revoked_at IS NULL
+			AND NOT EXISTS(SELECT 1 FROM iam.session_index i WHERE i.tenant_id=s.tenant_id AND i.session_id=s.id)
+			AND CASE WHEN $3='expired' THEN s.expires_at<=clock_timestamp() AND s.credential_version=original.credential_version
+			    WHEN $3='stale-generation' THEN s.expires_at>clock_timestamp() AND s.credential_version=original.credential_version-1
+			    ELSE s.expires_at>clock_timestamp() AND s.credential_version IS NULL END
+			FROM iam.sessions s JOIN iam.sessions original ON original.tenant_id=s.tenant_id AND original.id=$4
+			WHERE s.tenant_id=$1 AND s.id=$2`, member.AccountID, "attachment-reference-"+variant, variant, currentID).Scan(&isolated); err != nil || !isolated {
+			t.Fatal("negative session reference did not isolate its intended rejection boundary", err)
 		}
 	}
 	candidates := []struct {

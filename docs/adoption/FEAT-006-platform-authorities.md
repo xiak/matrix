@@ -838,6 +838,20 @@ foreign worktree, inherited CI result or signed release compatibility is
 adopted. Fixed `c13f6d11db8055b660c18731a427594d265ff9b2`'s pure recovery
 codec is `REUSE`; it is not evidence of a completed recovery transaction.
 
+The normal authenticator replacement target in IAM/009 `REUSE`s fixed Matrix
+`aefe4f786242d7d6816f253b6389d5c94c314a75`'s sealed TOTP seed, one-time
+provisioning response, shared attempt budget, recovery-code issuer and
+transaction/outbox owners. Its enrollment lifecycle and exact same-Session
+StepUp are `ADAPT`: the old ACTIVE factor and saved-code batch remain usable
+until the new factor is confirmed atomically. The new pending factor retains
+the consumed operation proof's original deadline and exact source links;
+it does not receive a renewed authentication window. The fixed SQL and
+use-case lock/validation paths are `REFERENCE` for that adaptation, not
+evidence that replacement already works. Reusing lost-factor recovery's
+early revocation, direct factor DML, a transferable permit or administrator
+reset of another USER's factor is `REJECT`. No foreign worktree, inherited
+CI result, new seed codec or parallel enrollment framework is adopted.
+
 The same-snapshot backup target remains in IAM/009. It `REUSE`s fixed
 `d479e1c57b6458852dd029227d32f3d56df6c5ad`'s sole
 `api/adapter/installation/v1` custody/lease contract and its same-source

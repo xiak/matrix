@@ -536,9 +536,11 @@ S2c本片为IAM43/Audit25/PaaS2源码候选，不是发布profile或独立CI已�
 
 固定`847fc85307f8f50992a04f67b71caecf7581683d`的[Verification35997837317](https://github.com/xiak/matrix/actions/runs/35997837317)已确认authority-storage失败：上述矩阵在末尾第二次schema replay触及120秒截止，不能继承本地68.39s的旧通过。后继投递修正`fea7a772a3af5a31b3b790f79689a1843bcf70d7`的[Verification36002470008](https://github.com/xiak/matrix/actions/runs/36002470008)也未通过storage：旧离线恢复夹具仍使用平台附件授予前的operator Session，实际401导致原403断言和锁等待失败。该失败已在新PG18.6库复现35.56s；只在原owner补充原Session必须401、正常重新登录后继续全部原权限/并发断言，没有接受401冒充受保护身份拒绝。修正后完整`TestIAMLocalCredentialRecoveryPostgres`通过24.43s，保留专用SQL身份、精确receipt、两种恢复/撤权次序和schema/bootstrap不复活。以上失败不能由后继本地通过回填，当前修正仍须自身精确SHA独立CI。
 
-设置竞争门禁`TestIAMSecuritySettingsRacesPostgres`在另一独立空白PG18.6库串行race通过22.53s，与上述恢复门禁的组合包50.514s通过。六个Account均经正常创建、首次改密、显式设置授权、联系人确认、实际TOTP绑定和密码+TOTP登录；设置收紧分别与logout、保留当前Session的日常改密、保存码开始因子恢复交错，原outbox屏障及第二副本的真实锁依赖控制双方先提交。设置先提交时旧Session/LOGIN挑战拒绝；改密先提交时当前Session继续有效但旧generation的StepUp拒绝；logout/恢复先提交时设置没有部分版本、证明消费、完成、成功Audit或邮件意图。真实generation/因子修订/一次恢复码消费、单一赢家及当前schema重放、新Authority后的败方拒绝逐项核对；没有隐藏deadlock重试。原三分钟期限、密码成本和共享尝试预算保持，不移动时钟、回填正向数据或宣称进程重启/SMTP/发布验收。设置放宽、其他因子/reset及Role竞争仍按完整矩阵继续。
+设置竞争门禁`TestIAMSecuritySettingsRacesPostgres`在独立空白PG18.6库串行race通过35.99s（包39.422s）。八个Account均经正常创建、首次改密、显式设置授权、联系人确认、实际TOTP绑定和密码+TOTP登录；设置收紧分别与logout、保留当前Session的日常改密、保存码开始因子恢复及另一普通USER的LOGIN验码交错，原outbox屏障及第二副本的真实锁依赖控制双方先提交。设置先提交时旧Session/LOGIN挑战拒绝；改密先提交时当前Session继续有效但旧generation的StepUp拒绝；logout/恢复先提交时设置没有部分版本、证明消费、完成、成功Audit或邮件意图。普通USER验码先完成可以真实签发Session，后提交的设置仍合法，但该Session随设置版本变化立即拒绝；两条已提交事实均保留，不错误要求此顺序只能一方成功。设置先完成则旧LOGIN挑战不消费OTP、不签发Session。真实generation/因子修订/恢复码和OTP消费、原完成及当前schema重放、新Authority后的旧资格拒绝逐项核对；没有隐藏deadlock重试。原三分钟期限、密码成本和共享尝试预算保持，不移动时钟、回填正向数据或宣称进程重启/SMTP/发布验收。设置放宽、其他因子/reset及Role竞争仍按完整矩阵继续。
 
-该测试增量的全仓默认race（含architecture）及vet通过，workflow YAML及14段Bash语法、gofmt/diff检查通过。新门禁进入原step-up lane的独立数据库，storage排除重复执行，未新增lane、提高资源/并发或放宽期限。默认外部环境SKIP不是运行证据；本片真库范围仅为上述两个完整门禁，不重复启动整套进程/SMTP。没有生产API/SQL/schema/profile、安装或UI变更；自有PG核对精确进程/路径/监听及零其他客户端后正常停机保留数据。
+固定`234a401212e4c14a739766fcbb38c17cfa162c88`的[Verification36005275195](https://github.com/xiak/matrix/actions/runs/36005275195)已确认storage失败，Go/node分别通过，其余数据库lane仍不能算成功。失败发生于`TestIAMRoleAndManagementReferencesPostgres/private_references`：三条明确合成的负向Session行缺少当前必需的认证事实，被INSERT触发器23514拒绝，原过期/旧代际/NULL代际断言尚未执行。该失败在独立PG18.6复现3.31s；修正只复制原真实登录的认证事实，保留各自无效的期限或凭据代际，额外核对无bearer索引、MFA/设置事实一致且仅预定资格无效。没有停用触发器、伪造正向登录或放宽生产校验。完整private_references子门禁的108种命令/引用组合及末尾双schema/bootstrap保留检查在另一新库race通过（包17.528s）；这是该子门禁，不冒充七组Role门禁全部重跑。
+
+本轮最终全仓默认race（含architecture）及vet、gofmt/diff检查通过；Go1.26.7/GOMAXPROCS2/GOMEMLIMIT512MiB，重型真库仍串行race-p1。新门禁进入原step-up lane的独立数据库，storage排除重复执行，未新增lane、提高资源/并发或放宽期限。默认外部环境SKIP不是运行证据；本轮真库范围为上列明确执行的门禁，不重复启动整套进程/SMTP。没有生产API/SQL/schema/profile、安装或UI变更；核对自有PG精确进程/路径/监听和零其他客户端后正常停机保留数据。当前新增普通USER验码竞争及引用夹具修正还须自身精确SHA独立CI，不能用本地通过覆盖原失败。
 
 原`TestIAMStepUpPostgres`完整九场景在另一独立PG18.6库串行race通过388.34s（包391.890s）：原重发/后续恢复、双证明、另一Session、共享预算、登出/改密/重置/停用及真实行锁等待120秒到期全部保留，不放宽原七分钟期限。该轮完成于设置通知接入之前；SMTP历史通知子例明确SKIP，不计实收。设置专属意图已归上面的独立`TestIAMSecuritySettingsPostgres`，不再与会话会被账号变更终止的旧公共fixture混跑。其证明准确绑定版本/值，变体或无变化值409，不能当PDP许可或消费恢复码重发。API/生成器、工作流、HTTP和architecture聚焦race通过；工作流反例拒绝存储端返回缺失/变体设置意图，单worker10秒StepUp fuzz完成25437次无失败。所有真实设置变更均返回原调用方`callerSessionEnded=true`，包括放宽要求。上述证据不替代完整S2c竞争矩阵或发布门禁。
 
@@ -616,6 +618,33 @@ step-up证明绑定原有效Session、Account/USER、闭合操作、目标、准
 
 RootIdentity仍是原Account的原USER，恢复不能转让root、启用暂停账号或附加INSTALLATION权限。具有未撤销平台附件的USER不能由租户管理员接管因子；平台恢复继续在安装本地能力边界。现有原root/平台密码恢复只证明其已冻结的密码操作，不自动取得因子恢复权。开启这些身份的强制MFA之前，须与相应恢复owner明确最小新目的、当前资格/封存来源、并发撤权和单一审计事实，并实跑防锁死/防绕过路径；这一缺口未解决前不宣称完整MFA或安全治理验收。
 
+#### S2正常更换认证器：下一生产切片
+
+此节是正常更换的具体实施设计，尚未注册新HTTP操作、StepUp值或迁移形状；首次绑定、丢失恢复、正常更换及主动解绑分别验收，不能以其中一条通过代替其他路径。首片先实现正常更换：本人仍持有旧因子和当前密码，不存在把认证降到单因子的步骤。主动解绑及REMOVED资格另片接通；本片不开放管理员重置他人因子，不增设角色、可转移permit或第四类认证挑战。
+
+更换复用原`TOTPEnrollment`作为新PENDING因子的准备/确认生命周期，不另造一套种子托管、恢复码发行或事务框架。为避免消费者把普通首次设置与更换混淆，拟在该投影增加必填`purpose=INITIAL|REPLACEMENT`；已识别的原Session/ENROLLMENT首次绑定来源可准确投影INITIAL，未知历史不能靠缺字段获得合法来源。因子真实ID仍为enrollment ID，新因子必须新建；旧因子身份、密文和已消费步不可改写成新因子。原`AuthenticatorState`在确认前仍为BOUND/原factorRevision，不能提前显示已经更换。
+
+| 拟定入口/对象 | 精确边界 |
+| --- | --- |
+| 原StepUp入口 | 新增封闭`TOTP_REPLACE`操作，沿原`requestId/expectedFactorRevision`绑定当前实际因子、恢复批次、Session及凭据/主体版本；不得携带securitySettings或任意目标selector |
+| `POST /v1/auth/totp/enrollments:replace` | 严格`{requestId,stepUpId,expectedFactorRevision}`；requestId必须是该证明的原操作意图。当前USER的正常PASSWORD_TOTP Session和同Session PROVED证明都必须在锁内有效；Root/平台USER也只操作本人，不借其受保护身份绕过再次认证 |
+| 开始结果 | 复用`StartTOTPEnrollmentResponse`，只在第一次APPLIED返回新provisioning；EQUAL_REPLAY只给原REPLACEMENT元数据。开始原子消费StepUp、保存新PENDING与原proof/旧factor/旧batch/当前可信联系人修订的不可变关联，旧ACTIVE和原恢复码不变 |
+| 原enrollment查询/取消 | 沿同USER的ID/原requestId查非秘密状态；秘密不得通过读取或重放恢复。取消只终止新PENDING，不撤旧因子，不退还原StepUp；新更换需新意图/新证明。NOT_FOUND不证明原请求从未提交 |
+| 原enrollment确认 | `ConfirmTOTPEnrollmentRequest`仍只含requestId和新因子OTP；路径由真实持有Session定位本人原更换。只接受开始时的同一仍有效Session和未过期原证明关联，重新核对旧factor/batch、Account安全设置版本、credential generation及可信联系人修订；不能用新登录或新的宽松设置给旧流程续资格 |
+| 成功结果/未知完成 | 复用确认结果，`nextStep=REAUTHENTICATE`，新十码只在首次提交回包出现。原会话结束后须当前密码+新因子正常登录，才能只读原确认元数据；丢回包不重发恢复码。需要新码时通过现有强认证重生成路径，不回退旧批次 |
+
+开始时的截止时间不得晚于原StepUp的绝对expiresAt，也不得超过原enrollment上限；不能消费证明后再获得一段重新起算的五分钟强认证资格。等值重放、查询、新副本和自然到期都不延长期限。开始后的改密、logout、reset、停用、另一恢复、批次重发、Account要求/可信联系人修订改变，均使原确认资格失败关闭；旧PENDING可以被同USER取消，但不能从失败流程恢复原proof。未确认新种子从不用于正常登录。
+
+最小持久化仍在原`000012_totp`：新PENDING因子增加准确原StepUp关联及开始时的可信联系人修订；旧factor/batch、USER、Session、密码代际和主体版本复用该不可变proof的已有字段，不再建立一套更换对象或通用receipt表。公开purpose从已验证的来源关系投影，不给无来源历史回填INITIAL。原enrollment截止约束按来源分支校验，不能为所有来源一起放宽；原`lock_step_up`继续拒绝CONSUMED，确认只经该新因子唯一关联检查已被其开始事务消费的TOTP_REPLACE，不使其他命令重新使用已消费证明。原十码批次增加准确“因子更换”终止来源，并以deferred历史关联验证新旧批次、factor、proof和单一成功事实；不得用宽松`revoked_at`替代来源。更换必须推进因子修订，因此开始及proof的预期值上限是9007199254740990，不能接受会溢出安全整数范围的最后一个已绑定修订。
+
+确认在原Account→USER→credential→MFA→稳定因子/批次→Session/证明/尝试锁序中，按锁后数据库时间重验，消费新因子OTP并原子完成：旧factor永久REVOKED、新factor ACTIVE、factorRevision单调+1、原恢复批次终止、新批次十码建立、全部旧登录Session及未完成挑战结束、StepUp/Enrollment精确完成关联、一个`iam.authenticator.replaced` tenant事实和一个对应安全邮件意图。派生Role按原来源Session关闭；独立AccessKey、密码、Policy/附件、Account/User状态和工作负载不被更换改变。通知只发向开始时绑定且确认时仍可信的联系人，变更请求不接受收件地址。
+
+新Audit action只允许同一实际USER actor/PRINCIPAL target、tenant成功事实且没有伪业务Decision；producer proof验证原已提交更换和新旧因子/批次来源。后续USER/Session撤销不丢失该事实或通知，旧canonical/chain、ServiceIdentity、lookup_service和Audit claim不变。幂等/未知完成由原enrollment历史承担，不增加通用receipt API。
+
+验收须覆盖：旧因子在准备/取消/自然到期期间仍可正常认证，新种子不提前生效；新OTP错误/重复/跨副本共享预算，两个确认只有一次效果；确认与旧因子登录、设置收紧/放宽、改密/退出/reset/保存码恢复和批次重发的双向实际锁序；末端Audit/通知失败整笔回滚，提交后真正丢回包、原元数据查询、新因子正常登录且旧码/旧Session/旧恢复批次拒绝；两Account隔离、其他身份载体/错误purpose拒绝、当前schema重放/最近实际前驱及重启不复活；真实通知、独立进程和UX/UI另行证明。只在实际函数/约束落地时分配源码schema形状，与安装owner明确完整profile，设计中的新字段/路径不能提前成为LIVE或发布能力。
+
+协作边界已确认：UX/UI在其分支设计隔离MOCK，不提前修改LIVE decoder；installation未占用拟定IAM44/Audit26，仅在本片原子实现和固定验证提交可用后独立消费。当前仍为IAM43/Audit25，没有新增发布revision或跨profile许可。安装侧必须明确识别已提交替换来源并保留恢复隔离的完整当前状态证明，不能因新批次合法便继承整套备份恢复验收。
+
 #### 受支持备份恢复与防回滚边界
 
 本节只覆盖产品提供的受控备份/恢复，不声称抵抗root将数据库、所有磁盘、密钥和封存历史一起回滚。密钥用途隔离保护秘密，事务保护同一次提交；二者都不使数据库外的时间自动单调。将T1已消费/撤销的状态恢复到T0，会重新出现历史有效行；数据库内新增generation、消费表或与数据库一同备份的Audit均不能独立阻止。PostgreSQL的[PITR说明](https://www.postgresql.org/docs/18/continuous-archiving.html)只证明可恢复到选定时点，不提供认证资格不回退的保证。
@@ -682,6 +711,8 @@ RootIdentity仍是原Account的原USER，恢复不能转让root、启用暂停�
 | 原011容量owner | 明确副本/CPU/内存/连接/数据及尝试预算，错误登录与复杂PDP并行时没有无界队列；不提前宣称生产QPS、公平性SLO或数据库HA |
 
 设置竞争的有界门禁沿原integration owner复用真实初始化：六个独立Account，各自正常改密、确认通知地址、绑定TOTP、登录并取得准确设置意图的PROVED证明。设置false→true分别与本人logout、保留当前Session的日常改密、保存恢复码开始重绑竞争，每项控制两种提交次序。在第一事务的原成功outbox写入处暂停，实际观察第二副本的数据库锁依赖后才释放，不以goroutine启动顺序代替串行化证据。先提交设置则旧Session/LOGIN挑战不能再操作；先提交logout/恢复则旧Session不能更新设置；先提交保留当前Session的改密也必须使旧凭据代际的StepUp失效。逐项核对版本、generation、因子/恢复码消费、证明消费及完成/Audit/通知原子结果，schema等值重放及新Authority不得复活败方资格。独立三分钟期限及原尝试预算不变，不改时钟或直写正向身份；通知地址代码的存储解封只证明事务，不冒充SMTP。局部真实证据归上文，六项不替代上表其余因子/设置放宽/reset/Role竞争。
+
+同一门禁继续补设置收紧与另一普通USER的真实LOGIN验证码消费双向竞争：普通USER须正常创建、改密、确认联系人、绑定因子及密码证明，不使用管理员的保护身份豁免。验证先提交时可以正常发行Session，但紧接着已提交的设置变更必须使它立即失效，保留原认证事实；设置先提交时原挑战不得消费OTP或产生Session/成功事实。两序仍用实际数据库锁依赖，并核对原因子消费步、挑战完成关联及schema重放后的拒绝。该项不把密码正确或OTP校验计算成功当作已完成认证，也不要求两个原本可以按顺序合法提交的操作只有一个成功。
 
 实现顺序在本FEAT内细分，不新建重复FEAT：
 
