@@ -4,138 +4,111 @@
 
 - Repository https://github.com/xiak/matrix.git, branch feat/iam. Write only
   this task's independent worktree. Updated 2026-09-24.
-- Full IAM goal remains ACTIVE/incomplete. Read AGENTS, IAM/011 for the
-  development test window, IAM/009 for current MFA work, then owning code.
-  IAM/012 owns mail; docs/adoption/FEAT-006-platform-authorities.md owns
-  fixed sources. Markdown only.
-- Latest implemented and pushed test source:
-  **aefe4f786242d7d6816f253b6389d5c94c314a75**.
-  Test-only reduction; no production API/SQL/schema/profile, installation
-  or UI change. Actual source IAM42/Audit24/PaaS2, not a release profile.
-- Exact https://github.com/xiak/matrix/actions/runs/35972120363 was checked
-  through GitHub API: precise aefe4f78 SHA and all seven jobs completed/success
-  (go, authority-process/storage/runtime/step-up/recovery-window, node-process).
-  The test cleanup is verified, not the next S2c or whole IAM goal. Default
-  skipped external tests are not real-runtime evidence.
-- Verified/pushed rollback point09fac9135af99da3273d31c2f9b3e26d6aacfdc5
-  corrected two Audit integration schema assertions and separated original
-  retained Account/Session fields from new explicit security defaults.
-  Its local real tests passed. Do not inherit an unfinished CI conclusion.
+- Full IAM goal remains ACTIVE/incomplete. Read AGENTS, IAM/009 for current
+  MFA work, IAM/011 for the test window, then owning code. IAM/012 owns mail;
+  docs/adoption/FEAT-006-platform-authorities.md owns fixed sources.
+  Markdown only. UI exclusively belongs to its own task.
+- Latest locally verified and pushed **source candidate**:
+  **847fc85307f8f50992a04f67b71caecf7581683d**.
+  IAM43/Audit25/PaaS2; not a release profile or full MFA acceptance.
+- Exact https://github.com/xiak/matrix/actions/runs/35997837317 was checked
+  through GitHub API. Node-process completed/success; go and authority-storage
+  were genuinely running with assigned runners; other lanes queued.
+  Final independent CI is UNCONFIRMED. Follow this exact run, not an earlier
+  green commit. Queued run-level status did not mean all jobs stopped.
+- Parent6f057456 contains test cleanup aefe4f786242d7d6816f253b6389d5c94c314a75,
+  whose own Verification35972120363 seven jobs succeeded. Do not inherit that
+  result. Earlier verified/pushed rollback09fac913 remains in Git.
 
-## Current development test window
+## Fixed S2c candidate
 
-User explicitly authorized a bounded pre-v1 window and companion review:
-current version plus one fixed necessary predecessor, not schema1..N or one
-old binary for every FEAT. Delete replaced test paths and their helpers/envs,
-not permanent SKIP lists. Exceptions require a real published/non-atomically
-migratable consumer, fixed source, reason and exit condition.
+Original owners implement settings update with exact operation-bound StepUp,
+current USER Session/PDP, Account-first locks and CAS. The transaction consumes
+proof and records immutable completion, tenant Audit fact and
+SECURITY_SETTINGS_CHANGED mail intent to the original operator's verified
+contact. No arbitrary recipient/SMTP selector or new queue. IAM product
+Profile7 archives6; existing policies are never auto-expanded.
 
-TestIAMRetainedPredecessorProcessUpgrade uses actual
-0a237aae5c904e0e32e5766544e31c1cfed5a02a (IAM41) to current42.
-MATRIX_IAM_PREDECESSOR_POSTGRES_TEST_DSN requires a uniquely named
-matrix_iam_upgrade_predecessor_ database. Nine obsolete entry points removed;
-CI seven predecessor paths became one, with six extra databases removed.
-Published Audit bytes and installation effect-before-reject remain supported
-contracts; numeric adjacency never grants upgrade/rollback compatibility.
+First required enrollment uses purpose ENROLLMENT, not a Session or recovery
+capability: PASSWORD_CHANGE if needed, normal reauthentication, first verified
+contact, TOTP confirmation with one-time saved codes, then normal login.
+PASSWORD_CHANGE cannot expose later state. OTP uses pquerna/otp1.5.0. Private
+storage times normalize to UTC before public validation.
 
-Current test retains original bootstrap/outbox/proofs, two Accounts/same
-username, revoked attachment, normal/ended/NULL-generation/forced Session,
-shared budgets, original completion, pending mail and real MFA recovery.
-A true late-DDL failure is reached (private nontransactional sequence proves
-it) and leaves the original schema/data intact; underlying migration errors
-remain sanitized. Apply twice, equal bootstrap, restart and original recovery
-completion remain. Frozen product declaration/non-expansion, explicit default
-selection and incompatible Deny behavior moved out of the obsolete IAM21
-wrapper into this current-authority phase; no hypothetical schema matrix.
+Session and LOGIN/RECOVERY/ENROLLMENT issuance pin Account settings version.
+Historical NULL stays NULL and fails closed. Every real settings change,
+including true-to-false, invalidates old USER/derived Role qualification.
+Actual INSTALLATION USER attachment grant/revoke ends old Sessions and pending
+challenges; equal replay does not repeat. No Account-wide Session UPDATE loop.
+ServiceIdentity, lookup_service5, claim7 and old canonical/hash stay unchanged.
 
-Local final evidence is in IAM/011:
-- Actual predecessor gate37.13s/package40.525; independent IAM pair,
-  PaaS/Audit/dispatchers143.49s/package146.678, both race-p1 serial.
-- Actual restricted runtime logins, tenant/Operation/outbox boundaries,
-  committed TCP-loss/restart/original replay, cross-replica single OTP,
-  revoked identities and secret checks all retained.
-- Full default race-p2 (including architecture), vet, gofmt/diff and workflow
-  YAML/14 Bash blocks passed. No new SMTP/browser/signed-release acceptance.
-- Go1.26.7/GOMAXPROCS2/GOMEMLIMIT512MiB. Owned PG18.6 used Windows Job
-  hard2logicalCPU/1GiB/24processes,16connections,64MiB shared_buffers,
-  4MiB work_mem/no parallel workers. Zero-client check then normal stop;
-  all local test/PG handles terminal. Data retained. No shared/remote restart.
-  Never retry policy-denied temporary cleanup.
+PUT /v1/account/security-settings binds original requestId, expected version,
+target value and same-Session StepUp. APPLIED returns callerSessionEnded=true.
+After unknown outcome, normal new authentication plus original
+GET /v1/account/security-settings/changes/{requestId} observes completion.
+Historical true does not log out the querying newer Session. EQUAL_REPLAY
+does not repeat effects; changed intent409 is not proof of success.
 
-## Current MFA production boundary
+## Evidence and remaining work
 
-Fixed339d37474f2cfbee11479a497514d8dcb4d38b0f adds immutable purpose in
-original authentication_challenges: LOGIN for password-proved login and its
-verified password-change successor, RECOVERY for consumed original saved-code
-rebinding. Private lookup requires purpose; usecase reservations/seed access,
-final locks and deferred completion all check it. No ENROLLMENT SQL issuance.
-Missing/damaged current purpose fails closed, never guessed on equal replay.
-Its earlier CI actually ran but failed on the two test-contract issues fixed
-by09fac; do not report339 as independently accepted.
+Authoritative scopes/times are in IAM/009. Local serial race-p1: full
+policy145.16s/settings86.39s/HTTP92.76s, combined327.873s; full attachment
+Session concurrency68.39s/package71.889s. The new settings revoke-first test
+observes the actual Account lock wait: current authority403, proof unconsumed,
+no settings/completion/success fact/mail. Old bearer fixtures now assert401,
+then normally re-login to retain original Allow/403 boundaries.
 
-Fixed0a237aae supplies only public first-ENROLLMENT contracts. Restricted
-PASSWORD_CHANGE/ENROLLMENT is not a Session, cannot expose later state before
-required password change, and requires verified original contact before factor
-creation. No current first-enrollment HTTP/SQL capability may be inferred.
+Prior final-production evidence: actual predecessor41.75s/package45.195s;
+independent IAM pair/Audit/PaaS/dispatchers settings child145.74s (its combined
+run failed solely on a now-fixed predecessor assertion; not a passing combined
+package). Restricted runtime logins, committed TCP loss/restart/original
+completion, old Role denial and historical delivery after actor revocation/
+disable with chain verification retained. Full StepUp388.34s ran before the
+settings notice addition; TOTP167.49s and Audit dual10.546s are separate scopes.
+Default race/vet/Linux and stable generation passed; final integration default
+race/architecture/vet/diff passed. External SKIP is not runtime proof.
 
-Fixed018fbd75 supplies read-only GET /v1/account/security-settings:
-current USER LOGIN_SESSION plus exact iam.security-settings.read on its
-ACCOUNT; no selector or Role/Key/Service substitute. New existing-account
-fields initially1/false/originalcreatedAt. Current immutable SQL guard forbids
-writes. Product Profile6 archives5; existing policies/attachments gain no right.
-Root/admin can legitimately receive403.
+Go1.26.7/GOMAXPROCS2/GOMEMLIMIT512MiB. Own native PG18.6 used Windows Job hard
+2logicalCPU/1GiB/24processes,16connections,64MiB shared_buffers,4MiB work_mem,
+no parallel workers. All local handles terminal; exact own executable/PID/
+loopback port checked, zero other client connections, normal pg_ctl stop.
+Data retained. No shared/remote service restart or cleanup.
 
-Next S2c target remains real forced initial password/contact/TOTP completion,
-settings PUT CAS with exact operation StepUp/current authority, monotonic
-Session/Role qualification and supported-restore nonrollback requirements.
-Already bound MFA is not a session authentication fact. Settingstrue→false,
-protected binding revoke/regrant and restore must not revive old authority.
-Do not assume a new qualification representation has been implemented/frozen.
+Current test window is current source plus one fixed actual predecessor:
+0a237aae5c904e0e32e5766544e31c1cfed5a02a (IAM41) to43. No schema1..N matrix,
+guessed generation/qualification backfill or hypothetical N+1 path. Actual
+retained bytes/receipt/facts and failure atomicity remain required; source
+numbering never authorizes cross-release-profile restoration.
 
-Fixedb7a70bfa9e53f0a5f16619c60523c84613cb7b0b supplies current Session-held
-step-up/regeneration: only RECOVERY_CODES_REGENERATE,120s absolute,max3 live,
-nonforced PASSWORD_TOTP Session and exact Account/USER/Session/generation/
-factor/revision/batch/intent. APPLIED returns ten codes once; equal replay and
-same-USER completion lookup return metadata only, never change later Session.
-OTP math uses pquerna/otp1.5.0, not a duplicate HMAC implementation.
+Still missing: remaining settings/factor mutation races; actual new settings
+notification SMTP receipt (current contact code is a custody fixture and
+notice only PENDING); LIVE UI; supported signed recovery/release. After CI,
+give fixed-contract handoff and prepare only an own bounded LIVE environment.
+Do not mark009 or the whole goal accepted. Remaining IAM also includes
+password/session governance, reports, external integrations and HA/capacity
+acceptance in their existing owners.
 
-Private recovery donor a4cbd18598099751eb1bd3eac896e191db474524 was ADAPTed
-into existing executable/role/codec and000014 CLOSED/reconcile/reopen fences.
-Keep login_session_contract_ready. Current fixed consumers retain service
-lookup5, Audit claim7 and original canonical semantics. No release profile
-permission follows from development source versions.
-
-## Coordination and remaining boundaries
+## Coordination
 
 Installation task01a04149-5dbb-7300-9e4c-31d9e85c8ada owns protected keys,
-signed consumers/journal/profile and actual restore. Asked to review its own
-obsolete tests and identify any fixed real consumer exception to the rolling
-window; no pause/foreign environment change requested. No final reply yet.
-Its S2c prerequisite remains durable complete current Account security
-requirements outside DB rollback before destructive restore; missing/unknown
-current state cannot restore oldfalse. Snapshot/closure ABI not yet frozen.
-No new recovery codec or release revision allocated here. Real SMTP worker,
-keyring/channel and signed consumer acceptance remain its own evidence.
+signed consumers/journal/profile and actual restore. Sent847fc853 as a fixed
+candidate with CI pending, not inherited release acceptance. Before destructive
+restore, complete current AccountID/security_settings_version/requiredForUsers
+must be proved outside DB rollback. Missing/unknown current state stays CLOSED,
+not restored oldfalse. Current closure/custody ABI does not include it; agree
+its minimal complete snapshot/sealing/replay contract before edits. No new
+recovery codec or release revision allocated by this candidate.
 
 UI task01a07b21-9a0d-7fd0-b090-7827ce18262e, feat/cloud-console-ux,
-exclusively owns UI. It reviewed current slice tests: supported MOCK remains;
-no deletion purely for count. Preserve cross-Session late-reply/secret gates,
-LIVE/MOCK separation, exact unknown-intent retry and409-not-proof.
-Latest reported fixedcd0be0bc/docs cf80c414 are not imported or independently
-accepted here. Owner proceeds with005 CUSTOMER/TENANT version publication;
-publication is not default selection or grant. No invented compile-preview API.
-Current stable backend errors have no field-path array:400 iam.json.invalid,
-422 iam.argument.invalid,413 iam.body.toolarge,415 media/encoding.unsupported,
-401 authentication.failed,403 authorization.denied,409 state.conflict,
-503 iam.unavailable (iam. prefix). Public Problem is type/title/status/code/
-requestId; never expose raw validator, response or secret input.
+exclusively owns UI. Latest reported fixed8e2b0806/abf9a774 preserves policy
+author draft/catalog through review-back;732 frontend tests/embedded/Go passed
+in its owner, not imported or independently accepted here. S2c settings and
+first enrollment remain isolated MOCK. Sent847fc853 fixed contracts, CI pending
+and no LIVE environment yet, including UNKNOWN/new Session/history semantics.
+Do not invent an API or let MOCK count as LIVE/browser evidence.
 
-009/012 own remaining first enrollment/replacement/removal/settings/session
-barrier/password governance, real mail/browser and signed recovery. Whole
-IAM also still lacks final product/service/federation/capacity/HA acceptance.
-No full goal completion from this test cleanup or a green local subset.
-
-Local Git identity Xiak <Jellal@aliyun.com>. No new agents/tasks, foreign
-worktree writes, remote1.3/.160/.161 or withdrawn GitLab/1.5 operations,
-global config/sharedDocker/WSL restart/prune, personal mailbox tests or
-cleanup-policy bypass. Each companion keeps its own branch and resources.
+Git identity is repository-local Xiak <Jellal@aliyun.com>. No new agents/tasks,
+foreign worktree edits, remote1.3/.160/.161 or withdrawn1.5/GitLab operations,
+global configuration/prune/shared Docker/WSL restart, personal mailbox tests
+or cleanup-policy bypass. Each companion owns its branch and resources.
+Checkpoint records committed/pushed work, not local WIP.
