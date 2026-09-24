@@ -159,7 +159,7 @@ IAM API与通知worker分别读取`MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE`�
 
 本片仍需安装/UI消费者验收；后继MFA/账号配置交错与业务安全事件接入、运维聚合告警和受控恢复后的联系/在途意图隔离仍按上述需求逐片证明。当前只有稳定投递结果/错误类别和持久尝试记录，不把它们描述为已交付聚合告警。现有邮件证据不开放MFA，也不声称已有地址替换、ENROLLMENT/STEP_UP、旧备份重新开放或完整S1验收。
 
-009在线恢复增量仅向本机制增加两个既有封闭模板消费者：`RECOVERY_STARTED`与`AUTHENTICATOR_RECOVERED`。原安全事务绑定原已验证地址/联系修订与各自不可变IAM事实，worker只投递该历史通知，不重做原USER今天的认证。没有扩大18列claim、私有FILE、角色权限、收件人输入或模板协议；恢复通知不持有验证码密文，也不能发放恢复能力。两个模板的真实Maildir、worker停止/重启、停用USER后的历史投递及秘密排除证据由[009在线恢复门禁](./FEAT-IAM-009-security-governance.md#s2b受限自助恢复增量)拥有，不继承为安装通道或完整S1验收。
+009在线治理消费四个封闭通知：`RECOVERY_STARTED`、`AUTHENTICATOR_RECOVERED`、`RECOVERY_CODES_REGENERATED`、`SECURITY_SETTINGS_CHANGED`。原安全事务绑定原已验证地址/联系修订与各自不可变IAM事实，worker只投递该历史通知，不重做原USER今天的认证。没有扩大18列claim、私有FILE、角色权限、收件人输入或模板协议；这些通知不持有验证码密文，也不能发放认证或恢复能力。dispatcher与模板必须同时识别准确kind，未知类型及夹带验证秘密仍失败关闭，不能以数据库入队或模板单测代替真正经过worker的投递。各自真实Maildir、worker停止/重启、停用USER后的历史投递及秘密排除证据由[009](./FEAT-IAM-009-security-governance.md)拥有，不继承为安装通道或完整S1验收。
 
 #### 投递、重试与事实
 

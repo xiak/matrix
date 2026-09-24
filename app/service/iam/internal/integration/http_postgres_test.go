@@ -3454,6 +3454,26 @@ func iamNotificationPostfix(t *testing.T, scope iamv1.SecurityMailInstallationSc
 				if !regexp.MustCompile(`^/home/receiver/Maildir/(new|cur)/[a-zA-Z0-9_.,:=+-]+$`).MatchString(path) {
 					t.Fatal("unexpected fixture mailbox path")
 				}
+			}
+			// Filter the bounded mailbox in one container call. Starting one
+			// Docker process per unrelated message can exhaust the original
+			// observation deadline before the next delivery is even listed.
+			var matching []byte
+			if len(files) > 0 {
+				ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+				arguments := append([]string{"--context", dockerContext, "exec", container, "grep", "-l", "-F", "--", "Notification reference: " + reference}, files...)
+				var err error
+				matching, err = exec.CommandContext(ctx, "docker", arguments...).Output()
+				cancel()
+				var status *exec.ExitError
+				if (err != nil && (!errors.As(err, &status) || status.ExitCode() != 1)) || len(matching) > 65536 {
+					t.Fatal("dedicated SMTP mailbox lookup failed")
+				}
+			}
+			for _, path := range strings.Fields(string(matching)) {
+				if !slices.Contains(files, path) {
+					t.Fatal("mailbox match escaped the observed file set")
+				}
 				encoded := localDocker("exec", container, "head", "-c", "16385", "--", path)
 				if len(encoded) > 16384 || bytes.Contains(encoded, []byte("smtp-test-password")) {
 					t.Fatal("unsafe mailbox content")
@@ -3468,12 +3488,16 @@ func iamNotificationPostfix(t *testing.T, scope iamv1.SecurityMailInstallationSc
 				}
 				if !referenceLine.Match(body) {
 					clear(body)
+					clear(encoded)
 					continue
 				}
 				if message.Header.Get("To") != "receiver@matrix.test" || message.Header.Get("From") != "sender@matrix.test" || message.Header.Get("Received") == "" || message.Header.Get("Message-ID") == "" {
 					t.Fatal("actual recipient or submission identity differs")
 				}
-				return body, message.Header.Get("Message-ID")
+				clear(body)
+				// Keep headers for the caller's template and secret-leak checks;
+				// Subject is not part of the parsed MIME body.
+				return encoded, message.Header.Get("Message-ID")
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
@@ -4818,7 +4842,7 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 	}
 	for _, recoveryCase := range recoveryCases {
 		t.Run("authenticator_recovery/"+recoveryCase, func(t *testing.T) {
-			realMail := recoveryCase == "real-postfix" || (recoveryCase == "regenerate" && startDelivery != nil)
+			realMail := recoveryCase == "real-postfix" || (startDelivery != nil && (recoveryCase == "regenerate" || recoveryCase == "regenerate-settings-intent"))
 			if realMail && startDelivery == nil {
 				t.Skip("dedicated Postfix is absent; committed recovery notices are not mailbox evidence")
 			}
@@ -5225,6 +5249,14 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 					if _, err := service.ChangePassword(ctx, weakSession.Credential, iamv1.ChangePasswordRequest{CurrentPassword: initial, NewPassword: current, RequestID: "settings-unbound-password"}); err != nil {
 						t.Fatal(err)
 					}
+					if realMail {
+						// An explicitly authorized independent USER later disables
+						// the writer. Reusing the root's deliberately exhausted OTP
+						// budget would conflate that earlier attack with mail delivery.
+						callMFA(firstHandler, http.MethodPost, "/v1/policy-attachments", completed.Credential,
+							mustIAMJSON(t, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(weak.ID)},
+								PolicyID: iamv1.SystemPolicyAccountAdministrator, PolicyResourceVersion: 1, RequestID: "settings-mail-explicit-administrator"}), http.StatusOK, nil)
+					}
 					forced, err := service.CreateUser(ctx, completed.Credential, iamv1.CreateUserRequest{LoginName: "settings-first-enrollment", DisplayName: "First enrollment",
 						InitialPassword: initial, RequestID: "settings-first-create"})
 					if err != nil {
@@ -5326,17 +5358,44 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 						t.Fatal(err)
 					}
 					callMFA(firstHandler, http.MethodPost, challengePath+":enroll", iamv1.Secret{}, startFirst, http.StatusForbidden, nil)
+					firstEmail := "first-enrollment@matrix.test"
+					if realMail {
+						firstEmail = "receiver@matrix.test"
+					}
 					startContact, err := iamv1.EncodeStartChallengeNotificationContactVerificationRequest(iamv1.StartChallengeNotificationContactVerificationRequest{
-						RequestID: "settings-first-contact", ChallengeCredential: firstEnrollment.ChallengeCredential, Email: "first-enrollment@matrix.test"})
+						RequestID: "settings-first-contact", ChallengeCredential: firstEnrollment.ChallengeCredential, Email: firstEmail})
 					if err != nil {
 						t.Fatal(err)
 					}
 					var firstContact iamv1.NotificationContactVerification
 					callMFA(secondHandler, http.MethodPost, challengePath+"/notification-contact/verifications", iamv1.Secret{}, startContact, http.StatusOK, &firstContact)
 					clear(startContact)
-					// This gate proves custody/verification, not SMTP delivery.
+					var firstContactCode iamv1.Secret
+					if realMail {
+						var verificationID, settingsID string
+						if err := admin.QueryRow(ctx, `SELECT v.notification_id,c.event_id
+							FROM iam.notification_contact_verifications v JOIN iam.account_security_settings_changes c ON c.tenant_id=v.tenant_id
+							WHERE v.tenant_id=$1 AND v.id=$2 AND c.request_id=$3`, member.AccountID, firstContact.ID, applied.Change.RequestID).Scan(&verificationID, &settingsID); err != nil {
+							t.Fatal("read original enrollment and settings notifications", err)
+						}
+						stop := startDelivery()
+						body, _ := receive(verificationID)
+						match := regexp.MustCompile(`(?m)^Verification code: ([0-9]{8})\r?$`).FindSubmatch(body)
+						if len(match) != 2 {
+							clear(body)
+							t.Fatal("real first enrollment mail has no exact code")
+						}
+						firstContactCode = iamHTTPSecret(t, string(match[1]))
+						clear(body)
+						awaitSubmission(verificationID)
+						awaitSubmission(settingsID)
+						stop()
+					} else {
+						// This branch proves custody/verification, not SMTP delivery.
+						firstContactCode = iamNotificationStorageCode(t, ctx, admin, protector, firstContact)
+					}
 					confirmContact, err := iamv1.EncodeConfirmChallengeNotificationContactVerificationRequest(iamv1.ConfirmChallengeNotificationContactVerificationRequest{
-						RequestID: "settings-first-contact-confirm", ChallengeCredential: firstEnrollment.ChallengeCredential, Code: iamNotificationStorageCode(t, ctx, admin, protector, firstContact)})
+						RequestID: "settings-first-contact-confirm", ChallengeCredential: firstEnrollment.ChallengeCredential, Code: firstContactCode})
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -5493,11 +5552,65 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 							JOIN iam.account_security_settings_changes c ON c.tenant_id=n.tenant_id AND c.event_id=n.id AND c.user_id=n.user_id
 							JOIN iam.notification_contact_verifications v ON v.tenant_id=n.tenant_id AND v.id=n.verification_id AND v.user_id=n.user_id
 							WHERE n.tenant_id=$1 AND n.kind='SECURITY_SETTINGS_CHANGED' AND n.event_id=c.event_id
-								AND n.state='PENDING' AND n.contact_revision=1 AND n.email=v.email AND v.state='VERIFIED')
-						AND (SELECT security_settings_version=3 AND authentication_method='PASSWORD' FROM iam.sessions WHERE tenant_id=$1 AND id=$2)`, member.AccountID, weakNew.Session.ID, proof.ID, lowerProof.ID, otherProof.ID).Scan(&intact); err != nil || !intact {
+								AND n.state=CASE WHEN $6::boolean AND c.expected_version=1 THEN 'ACCEPTED' ELSE 'PENDING' END
+								AND n.contact_revision=1 AND n.email=v.email AND v.state='VERIFIED')
+						AND (SELECT security_settings_version=3 AND authentication_method='PASSWORD' FROM iam.sessions WHERE tenant_id=$1 AND id=$2)`, member.AccountID, weakNew.Session.ID, proof.ID, lowerProof.ID, otherProof.ID, realMail).Scan(&intact); err != nil || !intact {
 						t.Fatal("settings replay changed qualification, immutable completion or facts", err)
 					}
 					callMFA(secondHandler, http.MethodGet, "/v1/auth/me", weakNew.Credential, nil, http.StatusOK, nil)
+					t.Run("historical-settings-mail", func(t *testing.T) {
+						if !realMail {
+							t.Skip("dedicated Postfix is absent; settings outbox is not mailbox evidence")
+						}
+						// Use only the fresh Session earned under current settings;
+						// the same USER's pre-change Session remains invalid. Disable
+						// the actual writer before its pending notice is claimed.
+						var writer iamv1.PrincipalID
+						var finalNotice string
+						if err := admin.QueryRow(ctx, `SELECT c.user_id,c.event_id FROM iam.account_security_settings_changes c
+							JOIN iam.security_notifications n ON n.tenant_id=c.tenant_id AND n.id=c.event_id
+							WHERE c.tenant_id=$1 AND c.request_id=$2 AND n.state='PENDING' AND n.email='receiver@matrix.test'`, member.AccountID, lowered.Change.RequestID).Scan(&writer, &finalNotice); err != nil {
+							t.Fatal("last settings change lacks its pending original recipient", err)
+						}
+						writerState, err := service.GetUser(ctx, weakNew.Credential, writer, "settings-mail-writer")
+						if err != nil {
+							t.Fatal(err)
+						}
+						if _, err := service.SetUserStatus(ctx, weakNew.Credential, writer, iamv1.SetUserStatusRequest{
+							RequestID: "settings-mail-disable", ResourceVersion: writerState.User.ResourceVersion, Status: iamv1.PrincipalDisabled}); err != nil {
+							t.Fatal(err)
+						}
+						stop := startDelivery()
+						defer stop()
+						var originalNotice string
+						if err := admin.QueryRow(ctx, `SELECT event_id FROM iam.account_security_settings_changes WHERE tenant_id=$1 AND request_id=$2`, member.AccountID, applied.Change.RequestID).Scan(&originalNotice); err != nil {
+							t.Fatal(err)
+						}
+						for _, id := range []string{originalNotice, finalNotice} {
+							body, _ := receive(id)
+							if !bytes.Contains(body, []byte("Subject: MATRIX account security settings changed")) ||
+								bytes.Contains(body, []byte("otpauth://")) || bytes.Contains(body, []byte("Verification code:")) {
+								clear(body)
+								t.Fatal("actual mailbox lacks the closed settings notice")
+							}
+							materials := []iamv1.Secret{password, newPassword, initial, current, seed, contactCode, firstContactCode,
+								enrollment.Provisioning.Seed, firstFactor.Provisioning.Seed, currentSession.Credential, weakNew.Credential, firstEnrollment.ChallengeCredential}
+							materials = append(materials, bound.RecoveryCodes...)
+							materials = append(materials, firstBound.RecoveryCodes...)
+							for _, material := range materials {
+								candidate := material.CopyBytes()
+								leaked := len(candidate) > 0 && bytes.Contains(body, candidate)
+								clear(candidate)
+								if leaked {
+									clear(body)
+									t.Fatal("settings notification disclosed authentication material")
+								}
+							}
+							clear(body)
+							awaitSubmission(id)
+						}
+						t.Log("actual first-enrollment mailbox code confirmed through HTTP; both settings notices received, final notice after writer disable, original 250 observations retained")
+					})
 					return
 				}
 				if recoveryCase == "regenerate-competing-proofs" {
@@ -9037,7 +9150,14 @@ func provePolicyAttachmentSessions(t *testing.T, ctx context.Context, handler ht
 						}
 						bearer = localRecoveryLogin(t, handler, actorName, changedDeveloperPassword, false)
 					}
-					otherBearer := localRecoveryLogin(t, handler, actorName, changedDeveloperPassword, false)
+					// Only cross-Session password changes and the platform
+					// revoke/regrant assertion consume a second Session. Do not
+					// repeat an unused password login for every matrix cell.
+					var otherBearer string
+					if mutation == "change-default" || mutation == "change-true" || mutation == "change-false" ||
+						(targetKind == "platform" && mutation == "revoke-authority") {
+						otherBearer = localRecoveryLogin(t, handler, actorName, changedDeveloperPassword, false)
+					}
 					request := iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(member.ID)},
 						PolicyID: iamv1.SystemPolicyAuditReader, PolicyResourceVersion: 1, RequestID: requestID}
 					if targetKind == "group" {

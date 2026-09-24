@@ -1,6 +1,6 @@
 # FEAT-IAM-009：登录保护与安全治理
 
-- 状态：S1本人会话管理与一键结束其他会话、S3a共享密码尝试已有各自真实运行及独立CI验收。S2主动TOTP绑定、登录/强制改密、恢复码重绑及step-up，S3安全设置只读已具备下述固定后端和分项证据；本片S2c候选为IAM43/Audit25/PaaS2，设置原子更新、首次强制设置、竞争写入及Session/Role资格屏障已有分项真库/独立进程证据，但完整竞争矩阵、受支持恢复、S3/S4及009发布仍未完成。独立CI、新增真实邮件、UI与签名安装组合不得继承前置验收；尚未实现的设计路由不是可用API，离线恢复及材料/通知前置继续由安装owner另验。
+- 状态：S1本人会话管理与一键结束其他会话、S3a共享密码尝试已有各自真实运行及独立CI验收。S2主动TOTP绑定、登录/强制改密、恢复码重绑及step-up，S3安全设置只读已具备下述固定后端和分项证据；本片S2c候选为IAM43/Audit25/PaaS2，设置原子更新、首次强制设置、竞争写入及Session/Role资格屏障已有分项真库/独立进程证据，但完整竞争矩阵、受支持恢复、S3/S4及009发布仍未完成。设置及恢复码重生成的真实邮件已有下述分项实收；独立CI、UI与签名安装组合仍须分别验收；尚未实现的设计路由不是可用API，离线恢复及材料/通知前置继续由安装owner另验。
 - 依赖：003、005、007。
 - Owner：IAM 身份/凭据/会话治理，Audit evidence。
 
@@ -516,9 +516,11 @@ S2c首次设置的公共契约复用`AuthenticationChallenge`，purpose为独立
 
 S2c本片为IAM43/Audit25/PaaS2源码候选，不是发布profile或独立CI已验收对象。已有受限首次联系人/因子工作流与五条封闭HTTP路由；Session及所有LOGIN/RECOVERY/ENROLLMENT挑战在发行时锁内保存Account安全设置版本，历史NULL不回填。已有Session→Role读取复用同一当前资格判断；平台保护附件真实授撤终止该USER旧Session和待完成挑战。设置专属step-up绑定准确意图，最终事务在Account排他锁后重验同USER/Session、当前PDP和版本；原子保存单调设置、消费证明、不可变完成和tenant事实。IAM产品Profile7仅新增`iam.security-settings.update`并保存历史6，旧系统策略不自动加权。Audit25增加`iam.security-settings.updated`，严格USER→ACCOUNT及原允许决定，不改旧canonical或链。分项本地证据如下，不据此宣称完整竞争矩阵、恢复或发布门禁完成。
 
-2026-09-24新增的`TestIAMSecuritySettingsPostgres`沿用原integration owner和受限PG18.6，在新的独立库完整race-p1通过86.39s：真正PASSWORD_TOTP证明无操作权限仍403；撤权事务停在真实成功事实屏障时，设置请求确已认证并等待其Account锁，撤权提交后403，原PROVED未消费且无配置/完成/成功事实/通知。显式重新授权后，分别在Account更新、通知写入的末端拒绝，全部副作用回滚。false→true→false各只产生一条完成、事实及绑定原已验证地址的`SECURITY_SETTINGS_CHANGED`通知，精确重放和双次schema不重复。旧密码、MFA及原root会话随版本变化拒绝，新MFA登录可查原结果而不终止新Session，变体409；放宽不复活旧挑战。真实新USER完成受限强制改密、首次地址确认、TOTP绑定、十码一次响应及正常PASSWORD_TOTP登录；PASSWORD_CHANGE不暴露后继信息，缺少可信地址403，挑战不能当Session。两名明确授权及真实PROVED的USER竞争version=2，恰一APPLIED、一401，失败证明不消费。17类设置存储/ACL/约束/触发器破坏使readiness关闭。仍用原三分钟期限和真实尝试预算，接入既有step-up串行CI lane，不加lane或期限。联系人码来自加密托管夹具，PENDING通知不计SMTP实收。
+2026-09-24的`TestIAMSecuritySettingsPostgres`沿用原integration owner，在独立PG18.6与真实Postfix上完整race-p1通过85.06s（包88.588s）：真正PASSWORD_TOTP证明无操作权限仍403；撤权事务停在真实成功事实屏障时，设置请求确已认证并等待其Account锁，撤权提交后403，原PROVED未消费且无配置/完成/成功事实/通知。显式重新授权后，Account更新和通知写入的末端拒绝均全部回滚。false→true→false各只产生一条完成、事实及原已验证地址的通知，精确重放和双次schema不重复。旧密码、MFA及原root会话随版本变化拒绝，新MFA登录可查原结果而不终止新Session；放宽不复活旧挑战。新USER经受限强制改密、从实际Maildir取验证码后HTTP确认地址、TOTP绑定及十码一次响应，才能正常PASSWORD_TOTP登录。PASSWORD_CHANGE不暴露后继信息，缺少可信地址403，挑战不能当Session。两名真实授权及PROVED的USER竞争version=2，恰一APPLIED、一401，失败证明不消费；17类设置存储/ACL/约束/触发器破坏使readiness关闭。原三分钟期限、算法成本和真实尝试预算不变。
 
-同轮原`TestIAMPolicyAuthorityStoragePostgres`完整通过145.16s，`TestIAMHTTPPostgresVerticalSlice`完整通过92.76s，与上述设置门禁串行组合包327.873s成功。平台目录、附件、生命周期及密码会话夹具已按当前契约替换：先证明授撤平台附件使原bearer401，再正常重登验证原Allow/403；并发凭据保护入口先确认两名操作者均已认证，不能让失效会话掩盖目标权限检查。保留组继承、策略版本/Deny/Boundary、真实grant与reset/status竞争、原root恢复、双租户及outbox物理归属门禁；设置通知、原会话及双次迁移的不复活检查保持。未放宽生产权限、数据库隔离、原期限或尝试预算。这是本分支真库回归，不替代SMTP、浏览器、签名恢复或独立CI。
+本次两个`SECURITY_SETTINGS_CHANGED`均经独立生产通知可执行程序到达真实Maildir，并保存原通知的一次DATA250/ACCEPTED观察；第二个实际写入者先由另一个明确授权、正常重新登录的USER停用，再启动worker，历史投递仍成功。正文/Subject目的与通知ID、原地址匹配，没有密码、种子/URI、验证码、Session/challenge凭据或恢复码。保留前置root故意耗尽的OTP预算，不能为邮件夹具清零或借旧Session继续操作。专属Postfix3.10.13为2CPU/768MiB/Pids128、独立网络及随机loopback端口；原STARTTLS/错误口令/外部转发拒绝门禁3.07s（包5.390s）通过。IAM HTTP handler仍在测试进程内，通知worker是真实受限登录的独立程序；本地邮箱实收不是公网最终送达、浏览器或签名安装验收。未配置Postfix的分支仍只证明加密托管/事务，明确SKIP邮件子例。
+
+投递器修正前，同一源码的`TestIAMPolicyAuthorityStoragePostgres`145.16s、`TestIAMHTTPPostgresVerticalSlice`92.76s和非SMTP设置门禁86.39s串行组合包327.873s通过。平台目录、附件、生命周期及密码会话夹具已按当前契约替换：先证明授撤平台附件使原bearer401，再正常重登验证原Allow/403；并发凭据保护入口先确认两名操作者均已认证，不能让失效会话掩盖目标权限检查。保留组继承、策略版本/Deny/Boundary、真实grant与reset/status竞争、原root恢复、双租户及outbox物理归属门禁；设置通知、原会话及双次迁移的不复活检查保持。未放宽生产权限、数据库隔离、原期限或尝试预算。这是本分支真库回归，不替代SMTP、浏览器、签名恢复或独立CI。
 
 上述实跑发现并修正了存储投影的时间边界：PG的Asia/Shanghai时间先解码并统一UTC，再执行公共观察校验；不能让嵌套公共JSON decoder在规范化前把合法PASSWORD_CHANGE状态当503。公共UTC、用途、阶段与秘密校验未放宽。联系人码取自原加密托管夹具，证明确认事务而非SMTP实收；浏览器、其他撤权/改密竞争和签名恢复仍需后继验收。原双authority数据库门禁在另一新PG18.6库通过（包10.546s），保留实际受限登录、RLS/不可变记录攻击与IAM43/Audit25精确readiness；不把该通用Audit门禁当作新设置事件的端到端投递证明。全仓默认race（含architecture）、受影响API/IAM/Audit的vet、118个API Go/JSON文件集合生成稳定、workflow YAML及14段Bash语法、格式/diff检查通过；默认外部SKIP不计实跑。Go1.26.7/GOMAXPROCS2/GOMEMLIMIT512MiB，真库仍为原2逻辑CPU/1GiB/24进程/16连接专属Job；该轮零客户端后正常停止并保留数据，后继进程门禁另用新数据库。独立CI与完整S2c尚未完成。
 
@@ -528,11 +530,15 @@ S2c本片为IAM43/Audit25/PaaS2源码候选，不是发布profile或独立CI已�
 
 同一单前驱owner使用实际固定`0a237aae` IAM41程序产生两Account数据，再由最终IAM43设置/通知代码迁移、verify、等值bootstrap及重启，race通过41.75s（包45.195s）。原密码与MFA Session、待完成LOGIN/RECOVERY均保持NULL资格并拒绝，迁移不改原凭据/消费/完成/canonical；新登录取得当前版本，已消费恢复码不退还，新密码证明加另一条原码可显式重启恢复并完成新因子登录。旧MFA会话与待恢复历史由独立USER承担，不回填计数或增加原三分钟期限。曾保留的“当前IAM目录为6”断言已按本片明确Profile7修正；真库核对旧目录字节归档仍在、所有初始设置仍1/false/原createdAt且没有新变更完成，保留这些不扩权/不补造历史断言。原受限runtime登录、提交后历史、产品声明冻结/显式发布选择、撤权及重启门禁保留。这不证明签名release跨profile兼容，也不替代其他S2c竞争或浏览器验收。
 
-原`TestIAMPolicyAttachmentSessionPostgres`在另一新库完整race通过68.39s（包71.889s），仍用原两分钟期限：USER/Group/platform的附件授撤与登出、各改密选项、重置、停用及当前授权竞争全部保留。平台附件授予后原bearer拒绝；新登录请求通过认证/PDP并等待真实数据库屏障时，撤销再重新授予平台附件，原两个Session及在途写入仍拒绝，无错误成功事实。双次schema与等值bootstrap后拒绝保持；该owner的vet通过。这是完整既有附件矩阵，不代表所有新增设置/因子竞争已验收。
+真实SMTP增量暴露并修正了投递器漏接`RECOVERY_CODES_REGENERATED`和`SECURITY_SETTINGS_CHANGED`的问题：此前两者会在领取后被封闭switch拒绝，模板/SQL存在不等于可发送。原dispatcher测试先复现两类失败，再验证准确类型的250观察、夹带验证码密文及未知kind拒绝。`TestIAMStepUpPostgres/authenticator_recovery/regenerate`在新PG18.6库race通过38.51s（包42.063s），其中历史邮件1.49s：本人实际重生成十码、用新码完成因子恢复、再停用USER后，独立worker仍实收原通知，原250结果与地址关联保留，正文/Subject无新旧恢复码或其他认证秘密。这是聚焦重生成路径，不冒充全部九场景重跑。邮箱观察在原十秒期限内一次筛选有界文件集，再校验匹配邮件的精确正文、To/From/Received/Message-ID；不再为每封无关邮件启动Docker进程，也不扩大期限或把SMTP受理当作实收。
+
+`TestIAMPolicyAttachmentSessionPostgres`在另一新库完整race通过60.69s（包64.228s），仍用原两分钟期限：USER/Group/platform的48种附件授撤与登出、各改密选项、重置、停用及当前授权竞争全部保留。平台附件授予后原bearer拒绝；新登录请求通过认证/PDP并等待真实数据库屏障时，撤销再重新授予平台附件，原两个Session及在途写入仍拒绝，无错误成功事实。双次schema与等值bootstrap后拒绝保持。本轮只移除矩阵中28次完全未使用的第二Session登录；跨Session改密及平台撤权/重授所需的第二Session仍真实签发，没有减少安全场景、降低密码成本或增加期限。
+
+固定`847fc85307f8f50992a04f67b71caecf7581683d`的[Verification35997837317](https://github.com/xiak/matrix/actions/runs/35997837317)已确认authority-storage失败：上述矩阵在末尾第二次schema replay触及120秒截止，不能继承本地68.39s的旧通过。go、node-process、authority-runtime与authority-step-up已分别成功；剩余lane当时仍运行，不能称整体CI通过。去除无消费登录后的本地通过不自动证明独立CI已修复，后继固定修正仍需自身精确SHA验证。以上也不代表全部设置/因子竞争或发布已验收。
 
 原`TestIAMStepUpPostgres`完整九场景在另一独立PG18.6库串行race通过388.34s（包391.890s）：原重发/后续恢复、双证明、另一Session、共享预算、登出/改密/重置/停用及真实行锁等待120秒到期全部保留，不放宽原七分钟期限。该轮完成于设置通知接入之前；SMTP历史通知子例明确SKIP，不计实收。设置专属意图已归上面的独立`TestIAMSecuritySettingsPostgres`，不再与会话会被账号变更终止的旧公共fixture混跑。其证明准确绑定版本/值，变体或无变化值409，不能当PDP许可或消费恢复码重发。API/生成器、工作流、HTTP和architecture聚焦race通过；工作流反例拒绝存储端返回缺失/变体设置意图，单worker10秒StepUp fuzz完成25437次无失败。所有真实设置变更均返回原调用方`callerSessionEnded=true`，包括放宽要求。上述证据不替代完整S2c竞争矩阵或发布门禁。
 
-上述S2c局部门禁保持PG硬限2逻辑CPU/1GiB/24进程、16连接及原测试期限；Go1.26.7、GOMAXPROCS2/GOMEMLIMIT512MiB，真实数据库串行race-p1。API及契约生成器、identityaccess、HTTP和architecture聚焦race-p2全部通过，diff检查通过。真实测试结束后仅在零其他客户端且核对精确进程/路径/端口的条件下正常停止自有PG并保留数据；没有共享或远端服务操作。本候选独立CI尚未确认，消费者不能继承本分支验收或当作已验证发布组合。
+上述S2c局部门禁保持PG硬限2逻辑CPU/1GiB/24进程、16连接及原测试期限；Go1.26.7、GOMAXPROCS2/GOMEMLIMIT512MiB，真实数据库串行race-p1。最终投递修正源码的全仓默认race（含architecture）、vet、模块校验、Linux/amd64全包构建及格式/diff检查通过；默认外部门禁SKIP不计真实运行。没有API/SQL/schema/profile或安装/UI改动。实际无其他数据库客户端且核对精确进程/路径/端口后正常停止自有PG并保留数据；测试邮箱队列为空后仅删除准确owner/task的SMTP容器和空网络，标签下无容器/网络/卷残留，没有共享或远端服务操作。本候选独立CI尚未确认，消费者不能继承本分支验收或当作已验证发布组合。
 
 运行时用途已落到原`authentication_challenges`：不可变且无默认值的`purpose`与原阶段/来源约束共同定义能力。登录TOTP与其已证明的改密后继为LOGIN，消耗原恢复码而产生的重绑后继为RECOVERY；后继首次设置具有独立ENROLLMENT用途，不能仅按相同步骤名授予这些不同流程的能力。私有lookup必须返回真实purpose，入口、共享尝试保留、末端锁和延迟完成证明分别核对，不从缺字段、客户端输入、当前MFA标志或普通Session补造。固定IAM42基线不发行首次设置ENROLLMENT；IAM43候选已有锁内发行分支，但在配置写入与前置验收完成前不能合法开启该要求。
 

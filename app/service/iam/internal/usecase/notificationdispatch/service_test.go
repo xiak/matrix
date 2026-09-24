@@ -145,7 +145,7 @@ func TestDispatchSendsOnlyAfterCommitAndPreservesObservation(t *testing.T) {
 }
 
 func TestDispatchFailureNeverInventsAnUnsentOrSuccessfulResult(t *testing.T) {
-	for _, scenario := range []string{"missing-custody", "wrong-custody", "claim-commit-unknown", "bad-ciphertext", "wrong-installation", "wrong-user", "wrong-recipient", "adapter-error", "invalid-observation", "completion-conflict"} {
+	for _, scenario := range []string{"missing-custody", "wrong-custody", "claim-commit-unknown", "bad-ciphertext", "wrong-installation", "wrong-user", "wrong-recipient", "unknown-kind", "adapter-error", "invalid-observation", "completion-conflict"} {
 		t.Run(scenario, func(t *testing.T) {
 			config, repository, _ := dispatchFixture(t)
 			wantSends := 0
@@ -164,6 +164,9 @@ func TestDispatchFailureNeverInventsAnUnsentOrSuccessfulResult(t *testing.T) {
 				repository.claims[0].UserID = "user-b"
 			case "wrong-recipient":
 				repository.claims[0].Recipient = "other@example.test"
+			case "unknown-kind":
+				repository.claims[0].Kind = "OTHER_NOTICE"
+				repository.claims[0].Sealed = authority.SealedEmailVerificationCode{}
 			case "adapter-error", "invalid-observation":
 				wantSends = 1
 			case "completion-conflict":
@@ -196,14 +199,15 @@ func TestDispatchFailureNeverInventsAnUnsentOrSuccessfulResult(t *testing.T) {
 }
 
 func TestDispatchHistoricalNoticeCannotCarryVerificationSecret(t *testing.T) {
-	for _, kind := range []authority.SecurityMailKind{authority.MailContactVerified, authority.MailAuthenticatorBound, authority.MailRecoveryStarted, authority.MailAuthenticatorRecovered} {
+	for _, kind := range []authority.SecurityMailKind{authority.MailContactVerified, authority.MailAuthenticatorBound, authority.MailRecoveryStarted, authority.MailAuthenticatorRecovered,
+		authority.MailRecoveryCodesRegenerated, authority.MailSecuritySettingsChanged} {
 		t.Run(string(kind), func(t *testing.T) {
 			config, repository, _ := dispatchFixture(t)
 			repository.claims[0].Kind = kind
 			sends := 0
 			dispatcher, err := NewDispatcher(repository, dispatchTestSubmitter(func(_ context.Context, message authority.SecurityMail) (authority.MailSubmission, error) {
 				sends++
-				if message.VerificationCode.Present() || !message.VerificationExpiresAt.IsZero() {
+				if message.Kind != kind || message.VerificationCode.Present() || !message.VerificationExpiresAt.IsZero() {
 					t.Error("notice carried old verification")
 				}
 				return authority.MailSubmission{State: authority.MailAccepted, SMTPCode: 250}, nil
@@ -217,7 +221,8 @@ func TestDispatchHistoricalNoticeCannotCarryVerificationSecret(t *testing.T) {
 			_, _, claim := dispatchFixture(t)
 			claim.Kind, claim.Sealed = kind, authority.SealedEmailVerificationCode{}
 			repository.claims = []Claim{claim}
-			if result, err := dispatcher.DispatchOnce(t.Context()); err != nil || !result.Claimed || sends != 1 {
+			if result, err := dispatcher.DispatchOnce(t.Context()); err != nil || !result.Claimed || sends != 1 ||
+				len(repository.observations) != 1 || repository.observations[0] != (authority.MailSubmission{State: authority.MailAccepted, SMTPCode: 250}) {
 				t.Fatal("historical notice rejected", err)
 			}
 		})
