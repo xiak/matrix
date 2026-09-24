@@ -197,6 +197,16 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 - 原型明确把声明及真实 PEP 证据归产品研发，把契约验证和受信登记边界归 IAM/平台发布流程；目录可见性不代表任何主体获得权限，更高修订不自动扩大既有策略，跨产品代操作仍需独立服务身份和客户授权。当前 IAM 没有 Profile 草稿、在线审批或发布 API，因此末步“发布修订”始终禁用，只允许结束体验。
 - 行为用例证明流程不打开 Dialog、不发送 repository/workspace 写命令、LIVE 入口不存在，阶段进入聚焦标题且退出恢复原触发器。完整前端 42 个测试文件、658 条用例及三条静态归一化用例通过；类型、lint、架构、228 组主题对比、40 页生产导出、222 个嵌入文件等价、`go test -p 2 ./...` 与 `go vet -p 2 ./...` 通过。DEV 浏览器在 `539px` 和 `360 × 800` 检查三阶段，document/body 均无横向溢出，Dialog 数为零，warning/error 为空；这仍只接受 UX 原型，不接受真实发布能力。
 
+### 策略默认版本只读详情的开发验收证据
+
+2026-09-24，LIVE 前端只读适配与同步嵌入资源固定在已推送的
+[`2c3dc421`](https://github.com/xiak/matrix/commit/2c3dc421)，契约来源为 IAM-005 当前固定的 `api/iam/v1/policy.go` 与 `GET /v1/policies/{policyId}`。隔离 MOCK 的策略编写、版本和“策略用法”页签继续保留，真实失败不回退 MOCK。
+
+- 租户策略目录仍只载入元数据；用户打开准确的 TENANT Policy 后才请求其当前默认版本。请求不发送 Account selector，服务端独立执行 `iam.policy.read`，不能从 `iam.policy.list`、Root/管理员标签或目录可见性推断详情权限。平台安装策略只有目录时仅显示元数据及接口边界，不借用租户读取路由。
+- 严格适配核对 Policy/Version ID、Account 归属、TENANT/ACTIVE 状态、默认版本一致性、文档形状、大小和摘要字段。v1 只接受精确 Action；v2 将作者 Action 族与发布时冻结的精确展开分开显示，校验 SID、冻结动作覆盖和产品引用。页面不重新编译当前 Profile、不根据摘要或 Action 名称计算有效权限。
+- 固定标题和元数据立即出现，只有文档区域局部骨架；403、404、网络及协议失败只在详情显示准确状态或重试，返回后目录仍可用。401 只过期发起请求的认证代次。详情在内容区而非 Dialog，不提供无授权依据的编辑、关联或保存入口。
+- 定向 126 个客户端/组件用例覆盖懒读取、无权、平台无详情及 v2 冻结展开。当前证据不包含真实 IAM 进程浏览器验收、非默认版本读取/发布、策略写入或完整反向关联查询；后者尚无统一 LIVE 反查接口，MOCK“策略用法”仅表示当前模拟快照，不可解释为完整权威清单。共享构建和测试门禁由 [FEAT-007 current development evidence](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence) 记录。
+
 ### 服务授权 MOCK 的开发验收证据
 
 2026-09-24，前端实现固定在已推送的
