@@ -1,6 +1,6 @@
 # FEAT-005: Offline platform distribution and lifecycle
 
-- Status: Phase 1 accepted; Phase 3 enterprise authentication recovery extension not accepted
+- Status: Phase 1 accepted; Phase 3 signed MFA lifecycle passed, full extension not accepted
 - Target release: Private Application PaaS v0.1
 - Target design date: 2026-08-25
 - Release contract version: `v1`
@@ -258,55 +258,41 @@ the following in an externally disconnected, task-owned runtime:
    writes the closed Audit evidence, passes restart plus signed
    upgrade/rollback gates, and leaves Phase 2 and every remote host untouched.
 
-Fixed preparation source `9d8ff34f` publishes IAM 36, Audit 19, PaaS 6 and
-contract revision 14 with installation-owned TOTP custody, same-snapshot
-backup evidence and authentication recovery closure, but no MFA creation.
-Enabling runtime source `ea0122f2` integrates transactional TOTP enrollment,
-login challenges, online authenticator recovery, Session-bound step-up and
-recovery-code regeneration while retaining the host and PaaS 6 authorities.
-Release source `b0d2dd24` publishes IAM 40, Audit 24, PaaS 6 and contract
-revision 15. It admits only the exact preparation profile for retained-data
-upgrade and authenticated destructive recovery; direct cross-profile rollback,
-skipped sources and arbitrary numeric predecessors remain closed before
-effects.
+The task-local signed preparation source `26dcb50b` publishes IAM 36, Audit
+19, PaaS 6 and contract revision 14. Its sealed target has TOTP custody but
+cannot create MFA; it rejects retained factors across all tenants before
+reopening. Signed enabling source `ec701f54` publishes IAM 40, Audit 24, PaaS
+6 and revision 15. Its exact predecessor is the preparation release, and it
+owns the notification worker, purpose-only database login, mandatory
+installation-owned email keyring and protected SMTP channel. A recovered
+predecessor journal does not retain the successor-only mail commitment;
+same-release recovery preserves it. Both sources passed local full Go tests,
+vet and focused PostgreSQL 18 authentication-recovery integration gates,
+including a restored snapshot whose epoch predates the authenticated closure
+by more than one generation. The enabling source also passed independent
+[Verification 35998187356](https://github.com/xiak/matrix/actions/runs/35998187356)
+with successful Go, UI, authority-process and Linux node-process jobs.
 
-That clean source passed full Go tests and vet, focused race across IAM, Audit,
-installation and architecture boundaries, two deterministic generation runs,
-Linux/amd64 CGO-disabled compilation, and the complete control-plane UI gate:
-type checking, lint, architecture, 20 contrast pairs, 163 tests and comparison
-against 72 embedded files. The task-local Node dependency tree, build output
-and npm cache were deleted after verification. This does not accept the Phase
-3 extension: a target-owned PostgreSQL 18 retained-data/process gate and a
-fresh externally disconnected signed preparation-to-enabling upgrade,
-rollback-refusal, backup/recovery, crash-resume, restart and cleanup run remain
-required. No Docker engine or remote host was started for the current evidence.
+The exact signed pair `matrix-v0.3.0-26dcb50bc7f5` →
+`matrix-v0.4.0-ec701f54f1ce` passed a fresh, externally disconnected,
+task-owned Docker 27.5.1 / PostgreSQL 18 lifecycle in 453.98 seconds, then
+passed the post-engine-restart gate in 15.10 seconds. The run covered
+populated A installation, real applications and Audit history, original
+platform-credential recovery without runtime restart, failure-injected
+cross-profile upgrade with authenticated recovery, retained-data B upgrade,
+delivered TLS mail and first TOTP enrollment, B backup/recovery with old
+Session denial and factor retention, direct rollback refusal, recovery of
+the earliest A backup after multiple recovery epochs, A-owned status/verify,
+application rollback/stop, capacity release and bounded support output. The
+isolated engine had no external network and used two CPU, four GiB memory and
+task-owned data, Docker and release volumes; its container and volumes were
+deleted after the restart gate. The signatures use a task-local test signer,
+not a published production release key.
 
-Fixed integration source `e62593c1` closes a release packaging gap: the
-enabling topology now includes the dedicated IAM notification dispatcher, a
-purpose-only database login, installation-owned email verification keyring,
-and an installation-scoped SMTP channel. Current-release install and upgrade
-require `--security-mail-configuration <protected-file>`; its canonical input
-is bound to the sealed installation and a digest-only journal commitment.
-Completed replay rejects changed configuration; installed verification also
-checks the private channel and keyring against the journal commitment, so a
-well-formed channel with a different password fails. Credentials and keys
-remain outside bundle metadata and command output. The acceptance driver
-receives an actual authenticated TLS SMTP message, consumes its verification
-code through IAM, binds TOTP, and reauthenticates after factor and backup
-transitions. Its listener and exact private input file are removed on exit.
-This source passed the full low-concurrency Go suite, architecture gate,
-focused vet, SMTP protocol and TOTP vector tests. No signed runtime or
-Docker-based release acceptance is claimed. The complete Phase 3 extension
-remains open.
-
-Fixed acceptance correction `6d9a8a58` starts the SMTP fixture before the
-first install and binds it to the isolated engine's default bridge gateway;
-the platform's release-owned networks are replaced during A/B transitions.
-The predecessor-to-A upgrade also passes the protected mail configuration.
-Default-bridge rejection cases, the SMTP fixture, low-concurrency full Go
-tests, and the focused race gate passed. The signed Docker runtime gate remains
-unrun because no task-local Docker engine was available; no remote engine was
-used.
+This sequential signed lifecycle does not alone prove the concurrent
+factor-creation/rotation snapshot gate or every crash/resume point above.
+Those remaining acceptance cases must be reconciled with their focused
+real-runtime evidence before this Phase 3 extension is marked accepted.
 
 ## Incremental acceptance
 
