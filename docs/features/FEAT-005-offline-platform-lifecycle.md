@@ -462,16 +462,19 @@ state: the integrated successor refuses its automatic identity restore before
 effects. Historical decoding remains available for verification, but a
 separate explicit migration/recovery path would need its own proof.
 
-The close transaction must capture one immutable, bounded snapshot of current
-Account status, root ownership, security-settings version and MFA requirement;
-for each USER it must also bind status, resource and credential generations,
-forced-change state, MFA state/revision, current factor/batch and verified
-contact revision. Closure binds the snapshot's digest and count, and the
-installation durably seals its exact bytes outside the database backup's
-rollback range before destructive restore. A lost close response can retrieve
-only the original committed snapshot for the same intent, not sample later
-state. Policy, role and platform-recovery authority not proved by this snapshot
-must not be inferred from the restored database.
+The close transaction reprojects the complete durable authentication and
+authorization state, including Account status/root ownership/settings,
+USER qualification and credential/factor lineage, role/policy authority and
+platform-recovery eligibility. Its digest must equal the selected backup's
+independent state commitment. It also captures one immutable, bounded snapshot
+of the non-rollbackable MFA replay floor: the complete sorted Account/USER
+identity set and each USER's factor identity, last consumed step and explicit
+failure windows. Closure binds both digests and the snapshot count. The
+installation durably seals the exact snapshot bytes outside the database
+backup's rollback range before destructive restore. A lost close response can
+retrieve only the original committed snapshot for the same intent, not sample
+later state. The bounded replay snapshot is not a substitute for the full
+state digest or a source of policy, role or platform-recovery authority.
 
 After restore, missing, changed or weaker evidence stays CLOSED. In
 particular, an older backup's `requiredForUsers=false` or superseded TOTP
