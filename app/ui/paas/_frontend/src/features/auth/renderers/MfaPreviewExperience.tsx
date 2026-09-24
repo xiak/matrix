@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { useFormatter, useTranslations } from "next-intl";
 import {
   AlertTriangle,
@@ -35,6 +35,10 @@ const demonstrationCode = "624810";
 type EnrollmentReason = "first" | "recovery" | "replace";
 type Feedback = "removed" | "replaced" | "bound" | "regenerated";
 const enrollmentSteps = ["prepare", "scan", "verify", "recoveryCodes"] as const;
+function replacementDeadlineElapsed(expiresAt?: string) {
+  const deadline = Date.parse(expiresAt ?? "");
+  return !Number.isFinite(deadline) || Date.now() >= deadline;
+}
 
 function DemoQr() {
   const pattern = "111111101010111111110100001011100100001011101110101110101110111010101110101010111010101110101110111000101000101110001010111011101011101011101000001010001000001011111110101011111111";
@@ -74,26 +78,65 @@ function RecoveryCodes({ onDone, codes }: { onDone(): void; codes: string[] }) {
   </div>;
 }
 
-function EnrollmentWizard({ reason, onCancel, onConfirmed, onFinish, verificationCode = demonstrationCode }: { reason: EnrollmentReason; onCancel(): void; onConfirmed(): string[] | false | Promise<string[] | false>; onFinish(): void; verificationCode?: string }) {
+function EnrollmentWizard({ reason, onCancel, onAbandon, onConfirmed, onFinish, replacement, verificationCode = demonstrationCode }: { reason: EnrollmentReason; onCancel(): void; onAbandon?(): void; onConfirmed(): string[] | false | Promise<string[] | false>; onFinish(): void; replacement?: { active: boolean; expiresAt: string }; verificationCode?: string }) {
   const t = useTranslations("MfaPreview");
+  const format = useFormatter();
   const [step, setStep] = useState(0);
   const [code, setCode] = useState("");
   const [error, setError] = useState<"code" | "outcome" | null>(null);
   const [issuedCodes, setIssuedCodes] = useState<string[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [deadlineReached, setDeadlineReached] = useState(() => reason === "replace" && replacementDeadlineElapsed(replacement?.expiresAt));
+  const [confirmationUnknown, setConfirmationUnknown] = useState(false);
+  const confirming = useRef(false);
   const codeId = useId();
+  const replacementExpiresAt = replacement?.expiresAt;
+  useEffect(() => {
+    if (reason !== "replace" || !replacementExpiresAt) return;
+    const remaining = Date.parse(replacementExpiresAt) - Date.now();
+    const timer = window.setTimeout(() => setDeadlineReached(true), Number.isFinite(remaining) ? Math.max(0, remaining) : 0);
+    return () => window.clearTimeout(timer);
+  }, [reason, replacementExpiresAt]);
   async function verify(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (confirming.current || confirmationUnknown || (reason === "replace" && (!replacement?.active || deadlineReached || replacementDeadlineElapsed(replacement.expiresAt)))) return;
     if (code !== verificationCode) { setError("code"); return; }
+    confirming.current = true;
+    setBusy(true);
     setError(null);
-    const result = await onConfirmed();
-    if (!result || result.length !== 10 || new Set(result).size !== 10) { setError("outcome"); return; }
-    setIssuedCodes(result);
-    setStep(3);
+    try {
+      const result = await onConfirmed();
+      if (!result || result.length !== 10 || new Set(result).size !== 10) {
+        if (reason === "replace") { setCode(""); setConfirmationUnknown(true); }
+        else setError("outcome");
+        return;
+      }
+      setIssuedCodes(result);
+      setStep(3);
+    } catch {
+      if (reason === "replace") { setCode(""); setConfirmationUnknown(true); }
+      else setError("outcome");
+    } finally {
+      confirming.current = false;
+      setBusy(false);
+    }
   }
+  if (reason === "replace" && busy) return <Card className={styles.flowCard}>
+    <Card.Header><Typography.Title as="h2" level={3}>{t("replacementCheckingTitle")}</Typography.Title><Badge status="info">MOCK</Badge></Card.Header>
+    <Card.Body><Alert>{t("replacementCheckingHint")}</Alert></Card.Body>
+  </Card>;
+  if (reason === "replace" && step !== 3 && (confirmationUnknown || !replacement?.active || deadlineReached)) return <Card className={styles.flowCard}>
+    <Card.Header><Typography.Title as="h2" level={3}>{t("replacementStoppedTitle")}</Typography.Title><Badge status="warning">MOCK</Badge></Card.Header>
+    <Card.Body className={styles.flowBody}>
+      <Alert status="warning">{t(confirmationUnknown ? "replacementOutcomeUnknown" : "replacementNoLongerValid")}</Alert>
+      <div className={styles.flowActions}><Button onClick={onAbandon} variant="secondary">{t("returnToSecurity")}</Button></div>
+    </Card.Body>
+  </Card>;
   return <Card className={styles.flowCard}>
     <Card.Header><div><Typography.Title as="h2" level={3}>{t(`enrollment.${reason}.title`)}</Typography.Title><Typography.Text tone="muted">{t(`enrollment.${reason}.hint`)}</Typography.Text></div><Badge status="info">MOCK</Badge></Card.Header>
     <Card.Body className={styles.flowBody}>
       <FlowSteps current={step} />
+      {reason === "replace" && replacement?.active && step < 3 ? <p className={styles.boundary}>{t("replacementDeadline")}: {format.dateTime(new Date(replacement.expiresAt), { hour: "2-digit", minute: "2-digit", second: "2-digit", timeZoneName: "short" })}</p> : null}
       {step === 0 ? <>
         <div className={styles.flowLead}><Smartphone aria-hidden="true" /><div><strong>{t("installTitle")}</strong><p>{t("installHint")}</p></div></div>
         {reason === "first" ? <Alert status="warning"><Mail aria-hidden="true" />{t("firstEnrollmentBoundary")}</Alert> : null}
@@ -108,8 +151,8 @@ function EnrollmentWizard({ reason, onCancel, onConfirmed, onFinish, verificatio
       {step === 2 ? <form className={styles.form} onSubmit={(event) => void verify(event)}>
         <Alert>{t("demoCode", { code: verificationCode })}</Alert>
         <FormField id={codeId} label={t("verificationCode")} hint={t("waitForNewCode")}><Input autoComplete="one-time-code" id={codeId} inputMode="numeric" maxLength={6} onChange={(event) => { setCode(event.target.value.replace(/\D/g, "")); setError(null); }} pattern="[0-9]{6}" required value={code} /></FormField>
-        {error ? <Alert status="danger">{t(error === "code" ? "invalidCode" : reason === "replace" ? "replacementConfirmFailed" : "confirmationFailed")}</Alert> : null}
-        <div className={styles.flowActions}><Button onClick={() => setStep(1)} type="button" variant="ghost">{t("back")}</Button><Button disabled={code.length !== 6} type="submit">{t("confirmBinding")}</Button></div>
+        {error ? <Alert status="danger">{t(error === "code" ? "invalidCode" : "confirmationFailed")}</Alert> : null}
+        <div className={styles.flowActions}><Button disabled={busy} onClick={() => setStep(1)} type="button" variant="ghost">{t("back")}</Button><Button disabled={busy || code.length !== 6} type="submit">{t(busy ? "stepUp.verifying" : "confirmBinding")}</Button></div>
       </form> : null}
       {step === 3 && issuedCodes ? <RecoveryCodes codes={issuedCodes} onDone={onFinish} /> : null}
     </Card.Body>
@@ -195,7 +238,7 @@ export function MfaSecurityPreview({ workspace }: { workspace: AccessWorkspace }
       if (credential) session.expire(credential);
     }
   }
-  if (enrollment) return <EnrollmentWizard reason={enrollment} verificationCode={enrollment === "replace" ? nextPreviewTotpCode(workspace.personalMfa) : demonstrationCode} onCancel={() => {
+  if (enrollment) return <EnrollmentWizard reason={enrollment} replacement={enrollment === "replace" ? { active: Boolean(replacementRequestId && pendingReplacement?.requestId === replacementRequestId && pendingReplacement.accountRuleVersion === workspace.settings.accountRuleVersion && Number.isFinite(Date.parse(pendingReplacement.expiresAt)) && !reauthenticationRequired && !workspace.pendingAccountRuleChange), expiresAt: pendingReplacement?.expiresAt ?? "" } : undefined} verificationCode={enrollment === "replace" ? nextPreviewTotpCode(workspace.personalMfa) : demonstrationCode} onAbandon={() => { setEnrollment(null); setReplacementRequestId(null); }} onCancel={() => {
     if (enrollment === "replace" && replacementRequestId) {
       void access.executeWorkspace({ kind: "cancel-personal-mfa-replacement", requestId: replacementRequestId }).then((result) => {
         if (result) { setEnrollment(null); setReplacementRequestId(null); }
@@ -216,7 +259,7 @@ export function MfaSecurityPreview({ workspace }: { workspace: AccessWorkspace }
   return <>
     {feedback ? <Alert status="success">{t(`feedback.${feedback}`)}</Alert> : null}
     {reauthenticationRequired ? <Alert status="warning">{t(workspace.pendingAccountRuleChange?.status === "UNKNOWN" ? "accountOutcomeUnknownReauthenticationRequired" : "reauthenticationRequired")}</Alert> : null}
-    {pendingReplacement ? <Card className={styles.flowCard}><Card.Header><Typography.Title as="h2" level={3}>{t("replacementPendingTitle")}</Typography.Title><Badge status="warning">MOCK</Badge></Card.Header><Card.Body className={styles.form}><Alert status="warning">{t("replacementPendingHint")}</Alert><dl className={styles.facts}><div><dt>{t("replacementRequest")}</dt><dd><code>{pendingReplacement.requestId}</code></dd></div><div><dt>{t("replacementDeadline")}</dt><dd>{format.dateTime(new Date(pendingReplacement.expiresAt), { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</dd></div></dl><div className={styles.flowActions}><Button onClick={() => void access.executeWorkspace({ kind: "cancel-personal-mfa-replacement", requestId: pendingReplacement.requestId })} variant="secondary">{t("cancelReplacement")}</Button></div></Card.Body></Card> : null}
+    {pendingReplacement ? <Card className={styles.flowCard}><Card.Header><Typography.Title as="h2" level={3}>{t("replacementPendingTitle")}</Typography.Title><Badge status="warning">MOCK</Badge></Card.Header><Card.Body className={styles.form}><Alert status="warning">{t("replacementPendingHint")}</Alert><dl className={styles.facts}><div><dt>{t("replacementRequest")}</dt><dd><code>{pendingReplacement.requestId}</code></dd></div><div><dt>{t("replacementDeadline")}</dt><dd>{format.dateTime(new Date(pendingReplacement.expiresAt), { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", timeZoneName: "short" })}</dd></div></dl><div className={styles.flowActions}><Button onClick={() => void access.executeWorkspace({ kind: "cancel-personal-mfa-replacement", requestId: pendingReplacement.requestId })} variant="secondary">{t("cancelReplacement")}</Button></div></Card.Body></Card> : null}
     <SecurityNotificationAddressPreview onVerified={setVerifiedNotificationAddress} verifiedAddress={verifiedNotificationAddress} />
     <section aria-labelledby="personal-security" className={styles.section}>
       <div className={styles.sectionHeading}><div><p>{t("personalEyebrow")}</p><h2 id="personal-security" tabIndex={-1}>{t("personalTitle")}</h2><span>{t("personalHint")}</span></div><Badge status={reauthenticationRequired ? "warning" : factorState === "bound" ? "success" : required ? "warning" : "neutral"}>{t(reauthenticationRequired ? "reauthenticate" : factorState === "bound" ? "bound" : required ? "bindingRequired" : "notBound")}</Badge></div>

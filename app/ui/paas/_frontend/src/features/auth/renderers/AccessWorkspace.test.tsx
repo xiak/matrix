@@ -2410,6 +2410,88 @@ describe("CAM-style access workspace", () => {
     expect(screen.queryByText(rotated[0]!)).toBeNull();
     expect(screen.getByRole("button", { name: "Enter" })).toBeTruthy();
   });
+  it("stops an uncertain replacement confirmation without repeating the write or re-showing setup material", async () => {
+    const { user, repository, extension } = await open("settings", { seed: seedBoundAccountRuleOperator });
+    const previousCodes = extension.recoveryCodes();
+    const execute = vi.mocked(repository.workspace!.execute);
+    const original = execute.getMockImplementation()!;
+    execute.mockImplementation((credential, command) => command.kind === "confirm-personal-mfa-replacement"
+      ? Promise.reject(new HttpProblem(503, "IAM_UNAVAILABLE"))
+      : original(credential, command));
+    await user.click(screen.getByRole("button", { name: "替换验证器" }));
+    await user.type(screen.getByLabelText("当前密码"), "demo-password");
+    await user.type(screen.getByLabelText("6 位动态验证码"), "624810");
+    await user.click(screen.getByRole("button", { name: "验证并继续" }));
+    await screen.findByRole("heading", { name: "替换身份验证器" });
+    await user.click(screen.getByRole("button", { name: "继续" }));
+    await user.click(screen.getByRole("button", { name: "已添加，下一步" }));
+    await user.type(screen.getByLabelText("6 位动态验证码"), "731942");
+    await user.click(screen.getByRole("button", { name: "验证并绑定" }));
+    expect(await screen.findByRole("heading", { name: "本次替换已停止" })).toBeTruthy();
+    expect(screen.getByText(/确认结果尚不能确定/)).toBeTruthy();
+    expect(screen.queryByText("MTRX-DEMO-NOT-A-SECRET")).toBeNull();
+    expect(screen.queryByRole("button", { name: "验证并绑定" })).toBeNull();
+    expect(execute.mock.calls.filter(([, command]) => command.kind === "confirm-personal-mfa-replacement")).toHaveLength(1);
+    await user.click(screen.getByRole("button", { name: "返回安全设置" }));
+    expect(screen.getByRole("heading", { name: "验证器替换尚未确认" })).toBeTruthy();
+    expect(extension.recoveryCodes()).toEqual(previousCodes);
+  });
+  it("hides replacement secrets while confirmation is in flight and goes directly to one-time codes", async () => {
+    const { user, repository, extension } = await open("settings", { seed: seedBoundAccountRuleOperator });
+    const execute = vi.mocked(repository.workspace!.execute);
+    const original = execute.getMockImplementation()!;
+    let release!: () => void;
+    const gate = new Promise<void>((done) => { release = done; });
+    execute.mockImplementation((credential, command) => command.kind === "confirm-personal-mfa-replacement"
+      ? gate.then(() => original(credential, command))
+      : original(credential, command));
+    await user.click(screen.getByRole("button", { name: "替换验证器" }));
+    await user.type(screen.getByLabelText("当前密码"), "demo-password");
+    await user.type(screen.getByLabelText("6 位动态验证码"), "624810");
+    await user.click(screen.getByRole("button", { name: "验证并继续" }));
+    await screen.findByRole("heading", { name: "替换身份验证器" });
+    await user.click(screen.getByRole("button", { name: "继续" }));
+    await user.click(screen.getByRole("button", { name: "已添加，下一步" }));
+    await user.type(screen.getByLabelText("6 位动态验证码"), "731942");
+    await user.click(screen.getByRole("button", { name: "验证并绑定" }));
+    expect(screen.getByRole("heading", { name: "正在核对替换结果" })).toBeTruthy();
+    expect(screen.queryByText("MTRX-DEMO-NOT-A-SECRET")).toBeNull();
+    expect(screen.queryByRole("button", { name: "验证并绑定" })).toBeNull();
+    await act(async () => release());
+    expect(screen.queryByRole("heading", { name: "本次替换已停止" })).toBeNull();
+    expect(await screen.findByText(extension.recoveryCodes()[0]!)).toBeTruthy();
+  });
+  it("removes replacement setup material when the account rule changes before confirmation", async () => {
+    const { user, extension } = await open("settings", { seed: seedBoundAccountRuleOperator });
+    await user.click(screen.getByRole("button", { name: "替换验证器" }));
+    await user.type(screen.getByLabelText("当前密码"), "demo-password");
+    await user.type(screen.getByLabelText("6 位动态验证码"), "624810");
+    await user.click(screen.getByRole("button", { name: "验证并继续" }));
+    await screen.findByRole("heading", { name: "替换身份验证器" });
+    await user.click(screen.getByRole("button", { name: "继续" }));
+    expect(screen.getByText("MTRX-DEMO-NOT-A-SECRET")).toBeTruthy();
+    extension.transact((source) => ({ workspace: { ...source, settings: { ...source.settings, accountRuleVersion: source.settings.accountRuleVersion + 1 } } }));
+    await user.click(screen.getByTestId("refresh-account"));
+    expect(await screen.findByRole("heading", { name: "本次替换已停止" })).toBeTruthy();
+    expect(screen.getByText(/验证期限或账号规则已变化/)).toBeTruthy();
+    expect(screen.queryByText("MTRX-DEMO-NOT-A-SECRET")).toBeNull();
+    expect(screen.queryByRole("button", { name: "验证并绑定" })).toBeNull();
+  });
+  it("closes the replacement setup view after its absolute proof deadline", async () => {
+    const { user, extension } = await open("settings", { seed: seedBoundAccountRuleOperator });
+    await user.click(screen.getByRole("button", { name: "替换验证器" }));
+    await user.type(screen.getByLabelText("当前密码"), "demo-password");
+    await user.type(screen.getByLabelText("6 位动态验证码"), "624810");
+    await user.click(screen.getByRole("button", { name: "验证并继续" }));
+    await screen.findByRole("heading", { name: "替换身份验证器" });
+    await user.click(screen.getByRole("button", { name: "继续" }));
+    expect(screen.getByText("MTRX-DEMO-NOT-A-SECRET")).toBeTruthy();
+    extension.transact((source) => ({ workspace: { ...source, personalMfa: { ...source.personalMfa, pendingReplacement: { ...source.personalMfa.pendingReplacement!, expiresAt: new Date(Date.now() - 1).toISOString() } } } }));
+    await user.click(screen.getByTestId("refresh-account"));
+    expect(await screen.findByRole("heading", { name: "本次替换已停止" })).toBeTruthy();
+    expect(screen.queryByText("MTRX-DEMO-NOT-A-SECRET")).toBeNull();
+    expect((await extension.read("preview")).personalMfa.pendingReplacement).toBeTruthy();
+  });
   it("does not reissue replacement setup material after leaving the page and permits cancellation", async () => {
     const { user, extension } = await open("settings", { seed: seedBoundAccountRuleOperator });
     await user.click(screen.getByRole("button", { name: "替换验证器" }));
