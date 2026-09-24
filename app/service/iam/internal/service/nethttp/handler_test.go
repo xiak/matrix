@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -441,6 +442,117 @@ func TestIAMHTTPChallengeVerificationRejectsAmbiguousCarriers(t *testing.T) {
 	}
 }
 
+func TestIAMHTTPStepUpUsesOnlySessionAndClosedOperation(t *testing.T) {
+	for _, command := range []struct{ name, path, body string }{
+		{"start", "/v1/auth/step-up", `{"requestId":"regenerate-one","operation":"RECOVERY_CODES_REGENERATE","expectedFactorRevision":2}`},
+		{"verify", "/v1/auth/step-up/proof-one:verify", `{"requestId":"verify-one","password":"synthetic-password","code":"malformed-candidate"}`},
+		{"regenerate", "/v1/auth/recovery-codes:regenerate", `{"requestId":"regenerate-one","stepUpId":"proof-one","expectedFactorRevision":2}`},
+	} {
+		t.Run(command.name, func(t *testing.T) {
+			for _, sample := range []struct {
+				name, method, path, body, bearer string
+				status                           int
+			}{
+				{"valid", "POST", command.path, command.body, "Bearer synthetic-session", 503},
+				{"no-bearer", "POST", command.path, command.body, "", 401},
+				{"wrong-method", "GET", command.path, command.body, "Bearer synthetic-session", 405},
+				{"query-selector", "POST", command.path + "?sessionId=other", command.body, "Bearer synthetic-session", 400},
+				{"body-selector", "POST", command.path, strings.TrimSuffix(command.body, "}") + `,"userId":"other"}`, "Bearer synthetic-session", 400},
+				{"challenge-carrier", "POST", command.path, strings.TrimSuffix(command.body, "}") + `,"challengeCredential":"synthetic-challenge"}`, "Bearer synthetic-session", 400},
+				{"duplicate-intent", "POST", command.path, strings.TrimSuffix(command.body, "}") + `,"requestId":"other"}`, "Bearer synthetic-session", 400},
+				{"null-intent", "POST", command.path, strings.Replace(command.body, `"requestId":`, `"requestId":null,"unknown":`, 1), "Bearer synthetic-session", 400},
+			} {
+				t.Run(sample.name, func(t *testing.T) {
+					workflow := newHTTPWorkflow(t)
+					workflow.stepErr = identityaccess.ErrUnavailable
+					request := httptest.NewRequest(sample.method, sample.path, strings.NewReader(sample.body))
+					request.Header.Set("Content-Type", "application/json")
+					if sample.bearer != "" {
+						request.Header.Set("Authorization", sample.bearer)
+					}
+					response := httptest.NewRecorder()
+					newTestHandler(t, workflow).ServeHTTP(response, request)
+					if response.Code != sample.status || (workflow.stepCalls == 1) != (sample.status == 503) {
+						t.Fatal("step-up transport boundary differs", response.Code, workflow.stepCalls)
+					}
+					if sample.status == 503 {
+						wanted, _ := iamv1.NewSecret("synthetic-session")
+						if workflow.stepCredential != wanted {
+							t.Fatal("actual bearer was replaced")
+						}
+					}
+					if response.Header().Get("Cache-Control") != "no-store" || strings.Contains(response.Body.String(), "synthetic-") || strings.Contains(response.Body.String(), "malformed-candidate") {
+						t.Fatal("step-up failure cached or leaked candidate")
+					}
+				})
+			}
+		})
+	}
+	for _, route := range []string{"/v1/auth/step-up/by-request/regenerate-one", "/v1/auth/recovery-codes/regenerations/by-request/regenerate-one"} {
+		for _, sample := range []struct {
+			method, suffix, body string
+			status               int
+		}{
+			{"GET", "", "", 404}, {"GET", "?accountId=other", "", 400}, {"GET", "", "{}", 400},
+			{"POST", "", "", 405}, {"GET", "/nested", "", 404},
+		} {
+			workflow := newHTTPWorkflow(t)
+			workflow.stepErr = identityaccess.ErrStepUpNotFound
+			if strings.Contains(route, "regenerations") {
+				workflow.stepErr = identityaccess.ErrRecoveryCodeRegenerationNotFound
+			}
+			request := httptest.NewRequest(sample.method, route+sample.suffix, strings.NewReader(sample.body))
+			request.Header.Set("Authorization", "Bearer synthetic-session")
+			response := httptest.NewRecorder()
+			newTestHandler(t, workflow).ServeHTTP(response, request)
+			if response.Code != sample.status || (workflow.stepCalls == 1) != (sample.method == "GET" && sample.suffix == "" && sample.body == "") {
+				t.Fatal("read-only original metadata boundary differs", response.Code, workflow.stepCalls)
+			}
+		}
+	}
+}
+
+func TestIAMHTTPRecoveryCodeRegenerationOnlyDisclosesAppliedCodes(t *testing.T) {
+	workflow := newHTTPWorkflow(t)
+	workflow.regenerationResult = iamv1.RegenerateRecoveryCodesResponse{Outcome: "APPLIED", Regeneration: iamv1.RecoveryCodeRegeneration{
+		APIVersion: iamv1.APIVersion, Kind: "RecoveryCodeRegeneration", ID: "regeneration-one", RequestID: "regenerate-one",
+		FactorID: "factor-one", FactorRevision: 2, CreatedAt: time.Date(2026, 9, 21, 1, 0, 0, 0, time.UTC),
+	}}
+	for index := range 10 {
+		code, _ := iamv1.NewSecret(fmt.Sprintf("synthetic-saved-code-%02d", index))
+		workflow.regenerationResult.RecoveryCodes = append(workflow.regenerationResult.RecoveryCodes, code)
+	}
+	for _, mode := range []string{"applied", "replay-with-codes", "replay"} {
+		if mode != "applied" {
+			workflow.regenerationResult.Outcome = "EQUAL_REPLAY"
+		}
+		if mode == "replay" {
+			workflow.regenerationResult.RecoveryCodes = nil
+		}
+		request := httptest.NewRequest("POST", "/v1/auth/recovery-codes:regenerate", strings.NewReader(`{"requestId":"regenerate-one","stepUpId":"proof-one","expectedFactorRevision":2}`))
+		request.Header.Set("Authorization", "Bearer synthetic-session")
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		newTestHandler(t, workflow).ServeHTTP(response, request)
+		wantedStatus := http.StatusOK
+		if mode == "replay-with-codes" {
+			wantedStatus = http.StatusServiceUnavailable
+		}
+		if response.Code != wantedStatus || response.Header().Get("Cache-Control") != "no-store" {
+			t.Fatal("regeneration encoding failed open", response.Code)
+		}
+		if mode != "applied" && (strings.Contains(response.Body.String(), "recoveryCodes") || strings.Contains(response.Body.String(), "synthetic-saved-code")) {
+			t.Fatal("replay or error reissued saved codes")
+		}
+		if mode == "applied" {
+			var result iamv1.RegenerateRecoveryCodesResponse
+			if json.Unmarshal(response.Body.Bytes(), &result) != nil || len(result.RecoveryCodes) != 10 {
+				t.Fatal("explicit first disclosure failed")
+			}
+		}
+	}
+}
+
 func TestIAMHTTPEnrollmentAcceptsOnlyCurrentSessionAndClosedCommands(t *testing.T) {
 	start := `{"requestId":"enroll-one","password":"synthetic-password","expectedFactorRevision":1}`
 	confirm := `{"requestId":"confirm-one","code":"123456"}`
@@ -843,6 +955,11 @@ type httpWorkflow struct {
 	loginCalls              int
 	verifiedChallengeID     string
 	totpCalls               int
+	stepCalls               int
+	stepCredential          iamv1.Secret
+	stepResult              iamv1.StepUp
+	regenerationResult      iamv1.RegenerateRecoveryCodesResponse
+	stepErr                 error
 	getUserCalls            int
 	updateUserCalls         int
 	deleteUserCalls         int
@@ -1096,6 +1213,32 @@ func (workflow *httpWorkflow) InspectAuthenticatorRecovery(_ context.Context, id
 func (workflow *httpWorkflow) AuthenticatorState(context.Context, iamv1.Secret) (iamv1.AuthenticatorState, error) {
 	workflow.totpCalls++
 	return iamv1.AuthenticatorState{}, identityaccess.ErrUnavailable
+}
+
+func (workflow *httpWorkflow) StartStepUp(_ context.Context, credential iamv1.Secret, _ iamv1.StartStepUpRequest) (iamv1.StepUp, error) {
+	workflow.stepCalls++
+	workflow.stepCredential = credential
+	return workflow.stepResult, workflow.stepErr
+}
+func (workflow *httpWorkflow) StepUpByRequest(_ context.Context, credential iamv1.Secret, _ string) (iamv1.StepUp, error) {
+	workflow.stepCalls++
+	workflow.stepCredential = credential
+	return workflow.stepResult, workflow.stepErr
+}
+func (workflow *httpWorkflow) VerifyStepUp(_ context.Context, credential iamv1.Secret, _ string, _ iamv1.VerifyStepUpRequest) (iamv1.StepUp, error) {
+	workflow.stepCalls++
+	workflow.stepCredential = credential
+	return workflow.stepResult, workflow.stepErr
+}
+func (workflow *httpWorkflow) RegenerateRecoveryCodes(_ context.Context, credential iamv1.Secret, _ iamv1.RegenerateRecoveryCodesRequest) (iamv1.RegenerateRecoveryCodesResponse, error) {
+	workflow.stepCalls++
+	workflow.stepCredential = credential
+	return workflow.regenerationResult, workflow.stepErr
+}
+func (workflow *httpWorkflow) RecoveryCodeRegenerationByRequest(_ context.Context, credential iamv1.Secret, _ string) (iamv1.RecoveryCodeRegeneration, error) {
+	workflow.stepCalls++
+	workflow.stepCredential = credential
+	return workflow.regenerationResult.Regeneration, workflow.stepErr
 }
 func (workflow *httpWorkflow) StartTOTPEnrollment(context.Context, iamv1.Secret, iamv1.StartTOTPEnrollmentRequest) (iamv1.StartTOTPEnrollmentResponse, error) {
 	workflow.totpCalls++

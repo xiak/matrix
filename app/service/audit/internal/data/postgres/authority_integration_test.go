@@ -449,7 +449,7 @@ func assertAuditContractCatalog(
 				invalid = append(invalid, candidate)
 			}
 		}
-		if action == auditv1.ActionIAMOtherSessionsRevoked || action == auditv1.ActionIAMNotificationContactVerificationStarted || action == auditv1.ActionIAMNotificationContactVerified || action == auditv1.ActionIAMAuthenticatorBound || action == auditv1.ActionIAMAuthenticatorRecoveryStarted || action == auditv1.ActionIAMAuthenticatorRecovered {
+		if action == auditv1.ActionIAMOtherSessionsRevoked || action == auditv1.ActionIAMNotificationContactVerificationStarted || action == auditv1.ActionIAMNotificationContactVerified || action == auditv1.ActionIAMAuthenticatorBound || action == auditv1.ActionIAMAuthenticatorRecoveryStarted || action == auditv1.ActionIAMAuthenticatorRecovered || action == auditv1.ActionIAMRecoveryCodesRegenerated {
 			candidate := event
 			candidate.Target.ID = "another-users-principal"
 			invalid = append(invalid, candidate)
@@ -498,7 +498,7 @@ func assertAuditContractCatalog(
 						forged.TenantID, forged.InstallationID = auditv1.TenantID(forged.InstallationID), ""
 					case "actor":
 						forged.Actor.Type = auditv1.ActorSystem
-						if action == auditv1.ActionIAMInstallationPrimaryCredentialsRecovered {
+						if contract.PlatformSystemActorID != "" {
 							forged.Actor.Type = auditv1.ActorUser
 						}
 					case "installation":
@@ -1094,7 +1094,7 @@ func assertIAMLookupBoundaries(
 	); err != nil {
 		t.Fatalf("read IAM readiness: %v", err)
 	}
-	if !ready || schemaVersion != 38 || checkedAt.IsZero() {
+	if !ready || schemaVersion != 40 || checkedAt.IsZero() {
 		t.Fatalf("IAM readiness ready=%t schema=%d checked=%s", ready, schemaVersion, checkedAt)
 	}
 	_, err := iamAPI.Exec(ctx, "SELECT * FROM iam.lookup_login($1)", fixture.LoginName)
@@ -1154,7 +1154,7 @@ func assertIAMUninitialized(t *testing.T, ctx context.Context, iamAPI *pgx.Conn)
 	); err != nil {
 		t.Fatalf("read uninitialized IAM readiness: %v", err)
 	}
-	if ready || schemaVersion != 38 || checkedAt.IsZero() {
+	if ready || schemaVersion != 40 || checkedAt.IsZero() {
 		t.Fatalf("uninitialized IAM readiness ready=%t schema=%d checked=%s", ready, schemaVersion, checkedAt)
 	}
 }
@@ -2371,20 +2371,24 @@ func authorityAuditEvent(
 	}
 	if contract.PlatformOnly {
 		event.TenantID, event.InstallationID = "", string(tenantID)
-		event.Actor.Type = auditv1.ActorUser
+		if contract.PlatformSystemActorID == "" {
+			event.Actor.Type = auditv1.ActorUser
+		} else {
+			event.Actor = auditv1.ActorReference{Type: auditv1.ActorSystem, ID: contract.PlatformSystemActorID}
+		}
+		if contract.TargetMatchesInstallation {
+			event.Target.ID = event.InstallationID
+		}
 	}
 	if contract.UserActorRequired {
 		event.Actor.Type = auditv1.ActorUser
 	}
-	if action == auditv1.ActionIAMOtherSessionsRevoked || action == auditv1.ActionIAMNotificationContactVerificationStarted || action == auditv1.ActionIAMNotificationContactVerified || action == auditv1.ActionIAMAuthenticatorBound || action == auditv1.ActionIAMAuthenticatorRecoveryStarted || action == auditv1.ActionIAMAuthenticatorRecovered {
+	if action == auditv1.ActionIAMOtherSessionsRevoked || action == auditv1.ActionIAMNotificationContactVerificationStarted || action == auditv1.ActionIAMNotificationContactVerified || action == auditv1.ActionIAMAuthenticatorBound || action == auditv1.ActionIAMAuthenticatorRecoveryStarted || action == auditv1.ActionIAMAuthenticatorRecovered || action == auditv1.ActionIAMRecoveryCodesRegenerated {
 		event.Target.ID = string(event.Actor.ID)
 	}
 	if contract.RoleActorRequired {
 		event.Actor = auditv1.ActorReference{Type: auditv1.ActorRole, ID: "catalog-base-role",
 			RoleSession: &auditv1.RoleSessionReference{SessionID: targetID, SourceUserID: "catalog-base-user"}}
-	}
-	if action == auditv1.ActionIAMInstallationPrimaryCredentialsRecovered {
-		event.Actor = auditv1.ActorReference{Type: auditv1.ActorSystem, ID: "iam-local-recovery"}
 	}
 	if action == auditv1.ActionIAMAccountRootCredentialsRecovered ||
 		action == auditv1.ActionIAMTenantAdministratorRecovered ||

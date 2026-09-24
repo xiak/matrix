@@ -95,6 +95,21 @@ func (service *Authority) withinTransaction(
 	ctx context.Context,
 	callback func(context.Context, Transaction) error,
 ) error {
+	return service.withinRepositoryTransaction(ctx, callback, false)
+}
+
+func (service *Authority) withinLocalCredentialRecoveryTransaction(
+	ctx context.Context,
+	callback func(context.Context, Transaction) error,
+) error {
+	return service.withinRepositoryTransaction(ctx, callback, true)
+}
+
+func (service *Authority) withinRepositoryTransaction(
+	ctx context.Context,
+	callback func(context.Context, Transaction) error,
+	localCredentialRecovery bool,
+) error {
 	if service == nil || service.repository == nil {
 		return ErrUnavailable
 	}
@@ -106,7 +121,11 @@ func (service *Authority) withinTransaction(
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		transactionErr = service.repository.WithinTransaction(ctx, callback)
+		if localCredentialRecovery {
+			transactionErr = service.repository.WithinLocalCredentialRecoveryTransaction(ctx, callback)
+		} else {
+			transactionErr = service.repository.WithinTransaction(ctx, callback)
+		}
 		if transactionErr == nil || !errors.Is(transactionErr, ErrRetryableTransaction) {
 			return transactionErr
 		}

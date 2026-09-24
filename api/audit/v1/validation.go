@@ -64,7 +64,6 @@ func ValidateEvent(value Event) error {
 	if !known {
 		problems = append(problems, errors.New("Audit action is invalid"))
 	} else {
-		localRecovery := value.Action == ActionIAMInstallationPrimaryCredentialsRecovered
 		if value.Actor.Type == ActorRole && !contract.RoleActorPermitted {
 			problems = append(problems, errors.New("Audit action cannot contain a ROLE actor"))
 		}
@@ -82,12 +81,13 @@ func ValidateEvent(value Event) error {
 		}
 		if (value.Action == ActionIAMOtherSessionsRevoked || value.Action == ActionIAMNotificationContactVerificationStarted ||
 			value.Action == ActionIAMNotificationContactVerified || value.Action == ActionIAMAuthenticatorBound ||
-			value.Action == ActionIAMAuthenticatorRecoveryStarted || value.Action == ActionIAMAuthenticatorRecovered) && value.Target.ID != string(value.Actor.ID) {
+			value.Action == ActionIAMAuthenticatorRecoveryStarted || value.Action == ActionIAMAuthenticatorRecovered || value.Action == ActionIAMRecoveryCodesRegenerated) && value.Target.ID != string(value.Actor.ID) {
 			problems = append(problems, errors.New("self-service event must target the actual actor"))
 		}
 		if contract.PlatformOnly != (value.InstallationID != "") ||
-			contract.PlatformOnly && !localRecovery && value.Actor.Type != ActorUser ||
-			localRecovery && (value.Actor.Type != ActorSystem || value.Actor.ID != "iam-local-recovery") {
+			contract.PlatformOnly && contract.PlatformSystemActorID == "" && value.Actor.Type != ActorUser ||
+			contract.PlatformSystemActorID != "" && (value.Actor.Type != ActorSystem || value.Actor.ID != contract.PlatformSystemActorID) ||
+			contract.TargetMatchesInstallation && value.Target.ID != value.InstallationID {
 			problems = append(problems, errors.New("Audit action and authority differ"))
 		}
 		if value.Target.Kind != contract.Target {

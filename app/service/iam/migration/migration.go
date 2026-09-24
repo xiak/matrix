@@ -61,6 +61,32 @@ func VerifyInstalledWithNotificationDelivery(ctx context.Context, adminDSN, apiD
 	return postgresmigration.VerifyInstalled(ctx, adminDSN, iammigrations.Source(), notificationDeliveryLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN, notificationDSN))
 }
 
+// ApplyWithAuthenticationRecovery provisions the final purpose-only login
+// used to close, reconcile and reopen IAM around an authenticated database
+// restore. It never performs a recovery effect during migration.
+func ApplyWithAuthenticationRecovery(
+	ctx context.Context,
+	adminDSN, apiDSN, workerDSN, recoveryDSN, custodyDSN, notificationDSN, authenticationRecoveryDSN string,
+) error {
+	return postgresmigration.Apply(ctx, adminDSN, iammigrations.Source(),
+		authenticationRecoveryLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN, notificationDSN, authenticationRecoveryDSN))
+}
+
+func VerifyInstalledWithAuthenticationRecovery(
+	ctx context.Context,
+	adminDSN, apiDSN, workerDSN, recoveryDSN, custodyDSN, notificationDSN, authenticationRecoveryDSN string,
+) error {
+	return postgresmigration.VerifyInstalled(ctx, adminDSN, iammigrations.Source(),
+		authenticationRecoveryLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN, notificationDSN, authenticationRecoveryDSN))
+}
+
+func authenticationRecoveryLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN, notificationDSN, authenticationRecoveryDSN string) []postgresmigration.Login {
+	logins := notificationDeliveryLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN, notificationDSN)
+	return append(append(logins[:1:1], postgresmigration.Login{
+		Name: "matrix_iam_authentication_recovery_login", Group: "matrix_iam_authentication_recovery", DSN: authenticationRecoveryDSN,
+	}), logins[1:]...)
+}
+
 func notificationDeliveryLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN, notificationDSN string) []postgresmigration.Login {
 	logins := localRecoveryLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN)
 	// Maintain the existing sorted login inventory, adding one closed purpose.

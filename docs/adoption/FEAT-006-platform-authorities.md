@@ -678,6 +678,20 @@ these source decisions do not themselves confer an implementation capability.
 | Same fixed source, current product Profile, ACCOUNT resource, tenant credential protection and session lineage | `ADAPT` exactly two tenant security-settings actions and explicit current-setting checks; `REJECT` a new security-policy DSL, blanket SELF role or automatic administrator recovery powers | Account configuration, USER authenticator state and Session authentication facts are distinct. The MFA design changes no current action registration or system policy; publication/grant and protected-target behavior require their own implementation gates. |
 | Matrix `48e56cbb1d3490ee8cee8314a41cfc26d1f24b2e`, `totp_enrollment.go`, `totp_authentication.go`, password attempts and `000012_totp` recovery-batch provenance | `REUSE` current USER/Session authentication, shared durable password/OTP budgets, one-way saved codes and transactional facts; `ADAPT` a Session-held, operation-bound proof and closed regeneration provenance | IAM/009 defines the regeneration target before this inspection. An original batch is bound to the factor's immutable binding event; a replacement must prove its own exact completion without rewriting that event or simply removing the equality guard. `REJECT` a new bearer, generic cached permit, arbitrary action/payload, a Session-wide strength upgrade, or replaying one-time codes. The first operation is only the user's own recovery-code regeneration; metadata codecs alone do not implement its HTTP/SQL workflow. |
 
+The online step-up combination `ADAPT`s fixed
+`a4cbd18598099751eb1bd3eac896e191db474524`'s purpose-only authentication
+recovery transaction, `000014` state/fences and closed SYSTEM Audit facts.
+It `REUSE`s the same fixed tree's sole
+`api/adapter/installation/v1/authentication_recovery.go` canonical
+intent/closure/completion codec, FILE names and exit mapping; it does not
+copy a digest into IAM. Existing login-session shape verification and the
+online batch/proof invariants remain in their current owners. Removing
+those checks to match a divergent donor base, importing installation or
+PaaS/profile state, inherited acceptance, or treating a fenced batch as
+new online recovery authority are `REJECT`. The added purpose executable
+and use-case boundary isolate recovery while the online authority is
+CLOSED; they are not a generic online recovery interface or backup tool.
+
 [RFC6238](https://www.rfc-editor.org/rfc/rfc6238.html) and
 [RFC4226](https://www.rfc-editor.org/rfc/rfc4226.html) are `REFERENCE` for
 the OTP construction and independent fixed vectors, not source-code donors.
@@ -766,7 +780,9 @@ The same-snapshot backup target remains in IAM/009. It `REUSE`s fixed
 `api/adapter/installation/v1` custody/lease contract and its same-source
 authentication-recovery framing/validation dependency. No second digest is
 copied into IAM, and no installation profile, recovery admission or foreign
-acceptance is imported. The CLOSED-only dependency cannot authorize reopening.
+acceptance is imported. The snapshot contract itself cannot authorize
+reopening; the later purpose-only dependency is recorded in the online
+step-up combination above.
 Fixed `2e6714bd95ee7c0d90a289b7b9902539717386d3` is `REUSE` for the same owner's
 bounded command, FILE environment, exact release frame and sanitized exit
 constants; it is not an IAM implementation or backup/recovery acceptance.

@@ -32,6 +32,21 @@ func (repository *Repository) WithinTransaction(
 	ctx context.Context,
 	callback func(context.Context, identityaccess.Transaction) error,
 ) error {
+	return repository.withinIdentityTransaction(ctx, callback, true)
+}
+
+func (repository *Repository) WithinLocalCredentialRecoveryTransaction(
+	ctx context.Context,
+	callback func(context.Context, identityaccess.Transaction) error,
+) error {
+	return repository.withinIdentityTransaction(ctx, callback, false)
+}
+
+func (repository *Repository) withinIdentityTransaction(
+	ctx context.Context,
+	callback func(context.Context, identityaccess.Transaction) error,
+	assertAuthenticationOpen bool,
+) error {
 	if repository == nil || repository.pool == nil {
 		return identityaccess.ErrUnavailable
 	}
@@ -48,6 +63,11 @@ func (repository *Repository) WithinTransaction(
 	defer func() { _ = tx.Rollback(context.Background()) }()
 	if _, err := tx.Exec(ctx, "SET LOCAL TIME ZONE 'UTC'"); err != nil {
 		return mapDatabaseError("set IAM transaction timezone", err)
+	}
+	if assertAuthenticationOpen {
+		if _, err := tx.Exec(ctx, "SELECT iam.assert_authentication_open()"); err != nil {
+			return mapSubjectDatabaseError("check IAM authentication authority", err)
+		}
 	}
 	if err := callback(ctx, &transaction{tx: tx}); err != nil {
 		return err

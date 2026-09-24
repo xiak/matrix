@@ -17,7 +17,7 @@ func (service *Authority) InspectLocalCredentialRecovery(ctx context.Context, lo
 		return iamv1.LocalCredentialRecoveryInspection{}, ErrInvalidArgument
 	}
 	var result iamv1.LocalCredentialRecoveryInspection
-	err := service.withinTransaction(ctx, func(ctx context.Context, transaction Transaction) error {
+	err := service.withinLocalCredentialRecoveryTransaction(ctx, func(ctx context.Context, transaction Transaction) error {
 		var err error
 		result, err = transaction.InspectLocalCredentialRecovery(ctx, local.Scope, query)
 		return err
@@ -66,7 +66,7 @@ func (service *Authority) RecoverLocalCredentials(ctx context.Context, local iam
 		InputCommitment: commitment, PasswordHash: passwordHash,
 	}
 	var result iamv1.LocalCredentialRecoveryResult
-	err = service.withinTransaction(ctx, func(ctx context.Context, transaction Transaction) error {
+	err = service.withinLocalCredentialRecoveryTransaction(ctx, func(ctx context.Context, transaction Transaction) error {
 		now, err := transactionTime(ctx, transaction)
 		if err != nil {
 			return err

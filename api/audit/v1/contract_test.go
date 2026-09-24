@@ -39,7 +39,7 @@ func TestSelfServiceFactsRequireTheActualTenantUser(t *testing.T) {
 		action Action
 		target TargetKind
 	}{{ActionIAMOtherSessionsRevoked, TargetPrincipal}, {ActionIAMNotificationContactVerificationStarted, TargetUser}, {ActionIAMNotificationContactVerified, TargetUser}, {ActionIAMAuthenticatorBound, TargetPrincipal},
-		{ActionIAMAuthenticatorRecoveryStarted, TargetPrincipal}, {ActionIAMAuthenticatorRecovered, TargetPrincipal}} {
+		{ActionIAMAuthenticatorRecoveryStarted, TargetPrincipal}, {ActionIAMAuthenticatorRecovered, TargetPrincipal}, {ActionIAMRecoveryCodesRegenerated, TargetPrincipal}} {
 		t.Run(string(contract.action), func(t *testing.T) {
 			valid := Event{APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-others", TenantID: "account-one",
 				Actor: ActorReference{Type: ActorUser, ID: "user-one"}, Action: contract.action,
@@ -244,26 +244,49 @@ func TestAuditActionCatalogIsClosedAndSourceBound(t *testing.T) {
 		}
 		if contract.PlatformOnly {
 			event.TenantID, event.InstallationID = "", "installation-example"
-			event.Actor.Type = ActorUser
+			if contract.PlatformSystemActorID == "" {
+				event.Actor.Type = ActorUser
+			} else {
+				event.Actor = ActorReference{Type: ActorSystem, ID: contract.PlatformSystemActorID}
+			}
+			if contract.TargetMatchesInstallation {
+				event.Target.ID = event.InstallationID
+			}
 		}
 		if contract.UserActorRequired {
 			event.Actor.Type = ActorUser
 		}
-		if action == ActionIAMOtherSessionsRevoked || action == ActionIAMNotificationContactVerificationStarted || action == ActionIAMNotificationContactVerified || action == ActionIAMAuthenticatorBound || action == ActionIAMAuthenticatorRecoveryStarted || action == ActionIAMAuthenticatorRecovered {
+		if action == ActionIAMOtherSessionsRevoked || action == ActionIAMNotificationContactVerificationStarted || action == ActionIAMNotificationContactVerified || action == ActionIAMAuthenticatorBound || action == ActionIAMAuthenticatorRecoveryStarted || action == ActionIAMAuthenticatorRecovered || action == ActionIAMRecoveryCodesRegenerated {
 			event.Target.ID = string(event.Actor.ID)
 		}
 		if contract.RoleActorRequired {
 			event.Actor = ActorReference{Type: ActorRole, ID: "role-example",
 				RoleSession: &RoleSessionReference{SessionID: event.Target.ID, SourceUserID: "source-example"}}
 		}
-		if action == ActionIAMInstallationPrimaryCredentialsRecovered {
-			event.Actor = ActorReference{Type: ActorSystem, ID: "iam-local-recovery"}
-		}
 		if action == ActionIAMAccountRootCredentialsRecovered || action == ActionIAMTenantAdministratorRecovered || action == ActionIAMInstallationPrimaryCredentialsRecovered {
 			event.Target.TenantID = "organization-recovered"
 		}
 		if err := ValidateEventForSource(contract.Source, event); err != nil {
 			t.Fatalf("valid action contract %q rejected: %v", action, err)
+		}
+		if contract.PlatformSystemActorID != "" {
+			for _, mutation := range []func(*Event){
+				func(candidate *Event) { candidate.Actor.Type = ActorUser },
+				func(candidate *Event) { candidate.Actor.ID = "another-system" },
+			} {
+				forged := event
+				mutation(&forged)
+				if ValidateEvent(forged) == nil {
+					t.Fatalf("action %q accepted a forged platform system actor", action)
+				}
+			}
+		}
+		if contract.TargetMatchesInstallation {
+			forged := event
+			forged.Target.ID = "another-installation"
+			if ValidateEvent(forged) == nil {
+				t.Fatalf("action %q accepted another installation target", action)
+			}
 		}
 		if contract.RoleActorRequired {
 			for _, actorType := range []ActorType{ActorUser, ActorSystem, ActorServiceAccount} {

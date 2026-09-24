@@ -23,11 +23,11 @@ func TestGeneratedOpenAPIIsCurrent(t *testing.T) {
 }
 
 func TestPasswordOverloadOnlyDocumentsTheBoundedAuthenticationEntrypoints(t *testing.T) {
-	for _, operation := range []string{"login", "changePassword", "createUser"} {
+	for _, operation := range []string{"login", "changePassword", "verifyStepUp", "createUser", "regenerateRecoveryCodes"} {
 		value := mutationOperation(operation, "test", "LoginRequest", "LoginResponse", "200", nil, nil)
 		responses := value["responses"].(object)
 		_, present := responses["429"]
-		if present != (operation != "createUser") {
+		if present != (operation == "login" || operation == "changePassword" || operation == "verifyStepUp") {
 			t.Fatal("overload contract leaked to unrelated commands")
 		}
 	}

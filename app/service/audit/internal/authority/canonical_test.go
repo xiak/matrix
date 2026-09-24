@@ -87,6 +87,12 @@ func auditAuthorityEvent(eventID, tenantID string, action auditv1.Action) auditv
 	}
 	if contract.PlatformOnly {
 		event.TenantID, event.InstallationID = "", tenantID
+		if contract.PlatformSystemActorID != "" {
+			event.Actor = auditv1.ActorReference{Type: auditv1.ActorSystem, ID: contract.PlatformSystemActorID}
+		}
+		if contract.TargetMatchesInstallation {
+			event.Target.ID = event.InstallationID
+		}
 	}
 	return event
 }

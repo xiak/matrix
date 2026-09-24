@@ -181,7 +181,7 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='TOTP backup custody context is forbidden';
     END IF;
     IF NOT iam.totp_custody_contract_ready() OR NOT iam.totp_backup_custody_contract_ready()
-        OR (SELECT schema_version FROM iam.readiness())<>38 THEN
+        OR (SELECT schema_version FROM iam.readiness())<>40 THEN
         RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='TOTP backup custody shape is unavailable';
     END IF;
     registration:=iam.totp_keyset_snapshot();
@@ -540,17 +540,21 @@ CREATE TABLE IF NOT EXISTS iam.mfa_recovery_codes (
     FOREIGN KEY(tenant_id,batch_id) REFERENCES iam.mfa_recovery_batches(tenant_id,id)
 );
 ALTER TABLE iam.mfa_recovery_batches ADD COLUMN IF NOT EXISTS revocation_recovery_id text COLLATE "C";
+ALTER TABLE iam.mfa_recovery_batches ADD COLUMN IF NOT EXISTS regeneration_id text COLLATE "C";
+ALTER TABLE iam.mfa_recovery_batches ADD COLUMN IF NOT EXISTS revocation_regeneration_id text COLLATE "C";
 ALTER TABLE iam.mfa_recovery_codes ADD COLUMN IF NOT EXISTS recovery_id text COLLATE "C";
 ALTER TABLE iam.mfa_recovery_codes DROP CONSTRAINT IF EXISTS recovery_consumption_shape;
 ALTER TABLE iam.mfa_recovery_codes ADD CONSTRAINT recovery_consumption_shape CHECK((consumed_at IS NULL)=(recovery_id IS NULL));
 ALTER TABLE iam.mfa_recovery_batches DROP CONSTRAINT IF EXISTS recovery_revocation_shape;
-ALTER TABLE iam.mfa_recovery_batches ADD CONSTRAINT recovery_revocation_shape CHECK((revoked_at IS NULL)=(revocation_recovery_id IS NULL));
+ALTER TABLE iam.mfa_recovery_batches ADD CONSTRAINT recovery_revocation_shape CHECK(
+    (revoked_at IS NULL AND revocation_recovery_id IS NULL AND revocation_regeneration_id IS NULL)
+    OR (revoked_at IS NOT NULL AND num_nonnulls(revocation_recovery_id,revocation_regeneration_id)=1));
 ALTER TABLE iam.totp_attempts DROP CONSTRAINT IF EXISTS totp_attempts_purpose_check;
 ALTER TABLE iam.totp_attempts ADD CONSTRAINT totp_attempts_purpose_check
-    CHECK(purpose IN ('ENROLLMENT','LOGIN','RECOVERY_CODE','RECOVERY_CONFIRM'));
+    CHECK(purpose IN ('ENROLLMENT','LOGIN','RECOVERY_CODE','RECOVERY_CONFIRM','STEP_UP'));
 ALTER TABLE iam.totp_attempts DROP CONSTRAINT IF EXISTS totp_attempts_source;
 ALTER TABLE iam.totp_attempts ADD CONSTRAINT totp_attempts_source CHECK(
-    (purpose='ENROLLMENT' AND source_session_id IS NOT NULL)
+    (purpose IN ('ENROLLMENT','STEP_UP') AND source_session_id IS NOT NULL)
     OR (purpose IN ('LOGIN','RECOVERY_CODE','RECOVERY_CONFIRM') AND source_session_id IS NULL));
 
 -- Two irreversible effects, not a Session or a generic receipt. This lineage
@@ -621,6 +625,95 @@ BEGIN
     END LOOP;
 END $recovery_lineage$;
 
+-- An operation proof belongs to an existing Session, never a bearer lookup.
+-- Its original scope and deadline are immutable; expiry is observed, not reset.
+CREATE TABLE IF NOT EXISTS iam.step_ups (
+    tenant_id text COLLATE "C" NOT NULL,
+    user_id text COLLATE "C" NOT NULL,
+    id text COLLATE "C" NOT NULL CHECK(id ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'),
+    request_id text COLLATE "C" NOT NULL CHECK(request_id ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'),
+    operation text NOT NULL CHECK(operation='RECOVERY_CODES_REGENERATE'),
+    source_session_id text COLLATE "C" NOT NULL,
+    credential_generation bigint NOT NULL CHECK(credential_generation>0),
+    mfa_revision bigint NOT NULL CHECK(mfa_revision BETWEEN 2 AND 9007199254740991),
+    factor_id text COLLATE "C" NOT NULL,
+    batch_id text COLLATE "C" NOT NULL,
+    account_version bigint NOT NULL CHECK(account_version>0),
+    principal_version bigint NOT NULL CHECK(principal_version>0),
+    state text NOT NULL CHECK(state IN ('PENDING','PROVED','CONSUMED')),
+    created_at timestamptz(6) NOT NULL,
+    expires_at timestamptz(6) NOT NULL,
+    proved_at timestamptz(6),
+    consumed_at timestamptz(6),
+    verification_request_id text COLLATE "C",
+    verification_digest text,
+    password_attempt_id text COLLATE "C",
+    password_attempt_sequence bigint,
+    totp_attempt_id text COLLATE "C",
+    totp_attempt_sequence bigint,
+    verified_step bigint,
+    PRIMARY KEY(tenant_id,id),
+    UNIQUE(tenant_id,user_id,request_id),
+    UNIQUE(tenant_id,user_id,password_attempt_id,password_attempt_sequence),
+    UNIQUE(tenant_id,user_id,totp_attempt_id,totp_attempt_sequence),
+    FOREIGN KEY(tenant_id,user_id) REFERENCES iam.principals(tenant_id,id),
+    FOREIGN KEY(tenant_id,source_session_id) REFERENCES iam.sessions(tenant_id,id),
+    FOREIGN KEY(tenant_id,user_id,factor_id) REFERENCES iam.totp_authenticators(tenant_id,user_id,id),
+    FOREIGN KEY(tenant_id,batch_id) REFERENCES iam.mfa_recovery_batches(tenant_id,id),
+    CONSTRAINT step_up_lifetime CHECK(expires_at=created_at+interval '120 seconds'),
+    CONSTRAINT step_up_proof CHECK(
+        (state='PENDING' AND num_nonnulls(proved_at,consumed_at,verification_request_id,verification_digest,password_attempt_id,
+            password_attempt_sequence,totp_attempt_id,totp_attempt_sequence,verified_step)=0)
+        OR (state IN ('PROVED','CONSUMED') AND proved_at IS NOT NULL AND proved_at>=created_at AND proved_at<expires_at
+            AND verification_request_id IS NOT NULL AND verification_request_id ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+            AND verification_digest IS NOT NULL AND verification_digest ~ '^sha256:[0-9a-f]{64}$'
+            AND password_attempt_id IS NOT NULL AND totp_attempt_id IS NOT NULL
+            AND password_attempt_sequence IS NOT NULL AND password_attempt_sequence>0
+            AND totp_attempt_sequence IS NOT NULL AND totp_attempt_sequence>0
+            AND verified_step IS NOT NULL AND verified_step BETWEEN 0 AND 8446743359
+            AND ((state='PROVED' AND consumed_at IS NULL)
+                OR (state='CONSUMED' AND consumed_at IS NOT NULL AND consumed_at>=proved_at AND consumed_at<expires_at))))
+);
+CREATE INDEX IF NOT EXISTS step_up_pending ON iam.step_ups(tenant_id,user_id,expires_at) WHERE state IN ('PENDING','PROVED');
+
+-- One immutable replacement completion binds both batches and the exact proof.
+-- It is not an alternate authenticator recovery or a general command receipt.
+CREATE TABLE IF NOT EXISTS iam.recovery_code_regenerations (
+    tenant_id text COLLATE "C" NOT NULL,
+    user_id text COLLATE "C" NOT NULL,
+    id text COLLATE "C" NOT NULL CHECK(id ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'),
+    request_id text COLLATE "C" NOT NULL,
+    step_up_id text COLLATE "C" NOT NULL,
+    old_batch_id text COLLATE "C" NOT NULL,
+    new_batch_id text COLLATE "C" NOT NULL,
+    event_id text COLLATE "C" NOT NULL,
+    request_digest text NOT NULL CHECK(request_digest ~ '^sha256:[0-9a-f]{64}$'),
+    notification_id text COLLATE "C" NOT NULL,
+    created_at timestamptz(6) NOT NULL,
+    PRIMARY KEY(tenant_id,id),
+    UNIQUE(tenant_id,user_id,request_id),
+    UNIQUE(tenant_id,step_up_id),
+    UNIQUE(tenant_id,old_batch_id),
+    UNIQUE(tenant_id,new_batch_id),
+    UNIQUE(tenant_id,event_id),
+    UNIQUE(tenant_id,notification_id),
+    FOREIGN KEY(tenant_id,user_id) REFERENCES iam.principals(tenant_id,id),
+    FOREIGN KEY(tenant_id,step_up_id) REFERENCES iam.step_ups(tenant_id,id),
+    FOREIGN KEY(tenant_id,old_batch_id) REFERENCES iam.mfa_recovery_batches(tenant_id,id),
+    FOREIGN KEY(tenant_id,new_batch_id) REFERENCES iam.mfa_recovery_batches(tenant_id,id) DEFERRABLE INITIALLY DEFERRED,
+    FOREIGN KEY(tenant_id,event_id) REFERENCES iam.audit_outbox(tenant_id,event_id) DEFERRABLE INITIALLY DEFERRED,
+    CONSTRAINT regeneration_distinct_batches CHECK(old_batch_id<>new_batch_id)
+);
+DO $regeneration_lineage$
+DECLARE column_name text;
+BEGIN
+    FOREACH column_name IN ARRAY ARRAY['regeneration_id','revocation_regeneration_id'] LOOP
+        IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='iam.mfa_recovery_batches'::regclass AND conname=column_name||'_lineage') THEN
+            EXECUTE format('ALTER TABLE iam.mfa_recovery_batches ADD CONSTRAINT %I FOREIGN KEY(tenant_id,%I) REFERENCES iam.recovery_code_regenerations(tenant_id,id) DEFERRABLE INITIALLY DEFERRED',column_name||'_lineage',column_name);
+        END IF;
+    END LOOP;
+END $regeneration_lineage$;
+
 ALTER TABLE iam.sessions ADD COLUMN IF NOT EXISTS authentication_method text;
 ALTER TABLE iam.sessions ADD COLUMN IF NOT EXISTS authenticated_at timestamptz(6);
 ALTER TABLE iam.sessions ADD COLUMN IF NOT EXISTS mfa_revision bigint;
@@ -638,7 +731,7 @@ END $session_authentication$;
 DO $mfa_isolation$
 DECLARE relation_name text; operation_name text;
 BEGIN
-    FOREACH relation_name IN ARRAY ARRAY['user_mfa_states','authentication_challenges','totp_attempts','mfa_recovery_batches','mfa_recovery_codes','authenticator_recoveries'] LOOP
+    FOREACH relation_name IN ARRAY ARRAY['user_mfa_states','authentication_challenges','totp_attempts','mfa_recovery_batches','mfa_recovery_codes','authenticator_recoveries','step_ups','recovery_code_regenerations'] LOOP
         EXECUTE format('ALTER TABLE iam.%I ENABLE ROW LEVEL SECURITY',relation_name);
         EXECUTE format('ALTER TABLE iam.%I FORCE ROW LEVEL SECURITY',relation_name);
         EXECUTE format('DROP POLICY IF EXISTS tenant_isolation ON iam.%I',relation_name);
@@ -662,8 +755,10 @@ BEGIN
         IF OLD.consumed_at IS NULL AND OLD.recovery_id IS NULL AND NEW.consumed_at=transaction_timestamp() AND NEW.recovery_id IS NOT NULL
             AND (to_jsonb(NEW)-ARRAY['consumed_at','recovery_id'])=(to_jsonb(OLD)-ARRAY['consumed_at','recovery_id']) THEN RETURN NEW; END IF;
     ELSIF TG_TABLE_NAME='mfa_recovery_batches' THEN
-        IF OLD.revoked_at IS NULL AND OLD.revocation_recovery_id IS NULL AND NEW.revoked_at=transaction_timestamp() AND NEW.revocation_recovery_id IS NOT NULL
-            AND (to_jsonb(NEW)-ARRAY['revoked_at','revocation_recovery_id'])=(to_jsonb(OLD)-ARRAY['revoked_at','revocation_recovery_id']) THEN RETURN NEW; END IF;
+        IF OLD.revoked_at IS NULL AND OLD.revocation_recovery_id IS NULL AND OLD.revocation_regeneration_id IS NULL
+            AND NEW.revoked_at=transaction_timestamp() AND num_nonnulls(NEW.revocation_recovery_id,NEW.revocation_regeneration_id)=1
+            AND (to_jsonb(NEW)-ARRAY['revoked_at','revocation_recovery_id','revocation_regeneration_id'])
+                =(to_jsonb(OLD)-ARRAY['revoked_at','revocation_recovery_id','revocation_regeneration_id']) THEN RETURN NEW; END IF;
     END IF;
     RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='recovery material is immutable';
 END $function$;
@@ -978,6 +1073,7 @@ CREATE OR REPLACE FUNCTION iam.lookup_authentication_challenge(submitted_lookup 
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE result jsonb; prior_scope text;
 BEGIN
+    PERFORM iam.assert_authentication_open();
     IF COALESCE(submitted_lookup,'') !~ '^sha256:[0-9a-f]{64}$' THEN
         RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='authentication lookup is invalid';
     END IF;
@@ -998,19 +1094,109 @@ BEGIN
     state:=iam.lock_mfa_user(tenant,subject_id);
     SELECT * INTO batch FROM iam.mfa_recovery_batches b WHERE b.tenant_id=tenant AND b.user_id=subject_id AND b.revoked_at IS NULL FOR UPDATE;
     IF NOT FOUND OR batch.revocation_recovery_id IS NOT NULL
+        OR EXISTS(SELECT 1 FROM iam.authentication_recovery_code_fences fence
+            WHERE fence.tenant_id=batch.tenant_id AND fence.batch_id=batch.id)
         OR (SELECT count(*) FROM iam.mfa_recovery_codes c WHERE c.tenant_id=tenant AND c.batch_id=batch.id)<>10 THEN
         RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='recovery context is unavailable';
     END IF;
     SELECT * INTO original FROM iam.totp_authenticators f WHERE f.tenant_id=tenant AND f.user_id=subject_id AND f.id=batch.factor_id FOR UPDATE;
-    IF NOT FOUND OR original.enrollment_outcome IS DISTINCT FROM 'CONFIRMED' OR original.bound_revision IS DISTINCT FROM batch.mfa_revision
-        OR original.bound_event_id IS DISTINCT FROM batch.event_id THEN
+    IF NOT FOUND OR original.enrollment_outcome IS DISTINCT FROM 'CONFIRMED' OR original.bound_revision IS DISTINCT FROM batch.mfa_revision THEN
         RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='recovery context is unavailable';
+    END IF;
+    IF batch.regeneration_id IS NULL THEN
+        IF original.bound_event_id IS DISTINCT FROM batch.event_id THEN
+            RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='recovery context is unavailable';
+        END IF;
+    ELSE
+        PERFORM iam.assert_recovery_regeneration(tenant,batch.regeneration_id);
     END IF;
     IF state.enrollment_state='BOUND' AND state.factor_id=original.id AND state.revision=batch.mfa_revision AND original.state='ACTIVE' THEN RETURN batch; END IF;
     IF state.enrollment_state='RECOVERY_REQUIRED' AND original.state='REVOKED' AND EXISTS(SELECT 1 FROM iam.authenticator_recoveries r
         WHERE r.tenant_id=tenant AND r.user_id=subject_id AND r.id=state.recovery_id AND r.revision=state.revision
             AND r.state='STARTED' AND r.old_batch_id=batch.id) THEN RETURN batch; END IF;
     RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='recovery context is unavailable';
+END $function$;
+
+CREATE OR REPLACE FUNCTION iam.step_up_snapshot(tenant text,proof_id text)
+RETURNS jsonb LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $function$
+    SELECT jsonb_strip_nulls(jsonb_build_object('apiVersion','iam.matrix.xiak.com/v1','kind','StepUp','id',p.id,
+        'requestId',p.request_id,'operation',p.operation,'expectedFactorRevision',p.mfa_revision,
+        'state',CASE WHEN p.state<>'CONSUMED' AND p.expires_at<=clock_timestamp() THEN 'EXPIRED' ELSE p.state END,
+        'createdAt',to_char(p.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
+        'expiresAt',to_char(p.expires_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
+        'provedAt',to_char(p.proved_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
+        'consumedAt',to_char(p.consumed_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')))
+    FROM iam.step_ups p WHERE p.tenant_id=tenant AND p.id=proof_id
+$function$;
+
+CREATE OR REPLACE FUNCTION iam.lock_step_up(tenant text,subject_id text,caller_id text,proof_id text)
+RETURNS iam.step_ups LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE batch iam.mfa_recovery_batches%ROWTYPE; proof iam.step_ups%ROWTYPE; generation bigint;
+BEGIN
+    batch:=iam.lock_recovery_batch(tenant,subject_id);
+    generation:=iam.lock_mfa_session(tenant,subject_id,caller_id);
+    SELECT * INTO proof FROM iam.step_ups p WHERE p.tenant_id=tenant AND p.user_id=subject_id AND p.id=proof_id FOR UPDATE;
+    IF NOT FOUND OR proof.source_session_id<>caller_id OR proof.credential_generation<>generation
+        OR proof.batch_id<>batch.id OR proof.factor_id<>batch.factor_id OR proof.mfa_revision<>batch.mfa_revision
+        OR (SELECT m.enrollment_state FROM iam.user_mfa_states m WHERE m.tenant_id=tenant AND m.user_id=subject_id)<>'BOUND'
+        OR (SELECT s.authentication_method FROM iam.sessions s WHERE s.tenant_id=tenant AND s.id=caller_id) IS DISTINCT FROM 'PASSWORD_TOTP'
+        OR proof.account_version IS DISTINCT FROM (SELECT a.resource_version FROM iam.accounts a WHERE a.id=tenant)
+        OR proof.principal_version IS DISTINCT FROM (SELECT p.resource_version FROM iam.principals p WHERE p.tenant_id=tenant AND p.id=subject_id)
+        OR proof.state='CONSUMED' OR proof.expires_at<=clock_timestamp() THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='operation proof is unavailable';
+    END IF;
+    RETURN proof;
+END $function$;
+
+CREATE OR REPLACE FUNCTION iam.start_step_up(tenant text,subject_id text,caller_id text,proof_id text,
+    command_id text,submitted_operation text,expected_revision bigint)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE batch iam.mfa_recovery_batches%ROWTYPE; previous iam.step_ups%ROWTYPE; generation bigint; effective_now timestamptz(6);
+BEGIN
+    IF COALESCE(proof_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        OR COALESCE(command_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        OR submitted_operation IS DISTINCT FROM 'RECOVERY_CODES_REGENERATE'
+        OR expected_revision IS NULL OR expected_revision NOT BETWEEN 2 AND 9007199254740991 THEN
+        RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='operation proof request is invalid';
+    END IF;
+    batch:=iam.lock_recovery_batch(tenant,subject_id);
+    generation:=iam.lock_mfa_session(tenant,subject_id,caller_id);
+    IF (SELECT m.enrollment_state FROM iam.user_mfa_states m WHERE m.tenant_id=tenant AND m.user_id=subject_id)<>'BOUND'
+        OR (SELECT s.authentication_method FROM iam.sessions s WHERE s.tenant_id=tenant AND s.id=caller_id) IS DISTINCT FROM 'PASSWORD_TOTP' THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='operation proof is unavailable';
+    END IF;
+    SELECT * INTO previous FROM iam.step_ups p WHERE p.tenant_id=tenant AND p.user_id=subject_id AND p.request_id=command_id;
+    IF FOUND THEN
+        IF (previous.source_session_id,previous.operation,previous.mfa_revision)
+            IS DISTINCT FROM (caller_id,submitted_operation,expected_revision) THEN
+            RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='operation intent differs';
+        END IF;
+        RETURN iam.step_up_snapshot(tenant,previous.id);
+    END IF;
+    IF batch.mfa_revision<>expected_revision THEN RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='factor revision differs'; END IF;
+    effective_now:=clock_timestamp();
+    IF (SELECT count(*) FROM iam.step_ups p WHERE p.tenant_id=tenant AND p.user_id=subject_id
+        AND p.state IN ('PENDING','PROVED') AND p.expires_at>effective_now)>=3 THEN
+        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='operation proof limit reached';
+    END IF;
+    INSERT INTO iam.step_ups(tenant_id,user_id,id,request_id,operation,source_session_id,credential_generation,mfa_revision,
+        factor_id,batch_id,account_version,principal_version,state,created_at,expires_at)
+        VALUES(tenant,subject_id,proof_id,command_id,submitted_operation,caller_id,generation,batch.mfa_revision,batch.factor_id,batch.id,
+            (SELECT a.resource_version FROM iam.accounts a WHERE a.id=tenant),
+            (SELECT p.resource_version FROM iam.principals p WHERE p.tenant_id=tenant AND p.id=subject_id),
+            'PENDING',effective_now,effective_now+interval '120 seconds');
+    RETURN iam.step_up_snapshot(tenant,proof_id);
+END $function$;
+
+CREATE OR REPLACE FUNCTION iam.read_step_up_by_request(tenant text,subject_id text,caller_id text,command_id text)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE proof_id text;
+BEGIN
+    PERFORM iam.lock_mfa_session(tenant,subject_id,caller_id);
+    SELECT p.id INTO proof_id FROM iam.step_ups p WHERE p.tenant_id=tenant AND p.user_id=subject_id
+        AND p.source_session_id=caller_id AND p.request_id=command_id;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='P0002',MESSAGE='operation proof was not found'; END IF;
+    RETURN iam.step_up_snapshot(tenant,proof_id);
 END $function$;
 
 CREATE OR REPLACE FUNCTION iam.lock_recovery_login(tenant text,subject_id text,challenge_id text)
@@ -1065,9 +1251,9 @@ END $function$;
 CREATE OR REPLACE FUNCTION iam.lock_totp_verification(tenant text,subject_id text,caller_id text,reference_id text,purpose text)
 RETURNS iam.totp_authenticators LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE state iam.user_mfa_states%ROWTYPE; factor iam.totp_authenticators%ROWTYPE;
-    challenge iam.authentication_challenges%ROWTYPE; generation bigint;
+    challenge iam.authentication_challenges%ROWTYPE; proof iam.step_ups%ROWTYPE; generation bigint;
 BEGIN
-    IF purpose IS NULL OR NOT ((purpose='ENROLLMENT' AND caller_id IS NOT NULL)
+    IF purpose IS NULL OR NOT ((purpose IN ('ENROLLMENT','STEP_UP') AND caller_id IS NOT NULL)
         OR (purpose IN ('LOGIN','RECOVERY_CODE','RECOVERY_CONFIRM') AND caller_id IS NULL)) THEN
         RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='TOTP verification purpose is invalid';
     END IF;
@@ -1077,6 +1263,11 @@ BEGIN
         RETURN factor;
     ELSIF purpose='RECOVERY_CONFIRM' THEN
         RETURN iam.lock_recovery_challenge(tenant,subject_id,reference_id);
+    ELSIF purpose='STEP_UP' THEN
+        proof:=iam.lock_step_up(tenant,subject_id,caller_id,reference_id);
+        IF proof.state<>'PENDING' THEN RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='operation proof is already completed'; END IF;
+        SELECT * INTO factor FROM iam.totp_authenticators f WHERE f.tenant_id=tenant AND f.user_id=subject_id AND f.id=proof.factor_id;
+        RETURN factor;
     END IF;
     state:=iam.lock_mfa_user(tenant,subject_id);
     SELECT c.credential_version INTO generation FROM iam.user_credentials c WHERE c.tenant_id=tenant AND c.principal_id=subject_id;
@@ -1160,7 +1351,7 @@ CREATE OR REPLACE FUNCTION iam.read_totp_attempt(tenant text,subject_id text,cal
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE factor iam.totp_authenticators%ROWTYPE; attempt iam.totp_attempts%ROWTYPE;
 BEGIN
-    IF purpose IS NULL OR purpose NOT IN ('ENROLLMENT','LOGIN','RECOVERY_CONFIRM') THEN
+    IF purpose IS NULL OR purpose NOT IN ('ENROLLMENT','LOGIN','RECOVERY_CONFIRM','STEP_UP') THEN
         RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='TOTP attempt purpose is invalid';
     END IF;
     factor:=iam.lock_totp_verification(tenant,subject_id,caller_id,reference_id,purpose);
@@ -1335,6 +1526,41 @@ BEGIN
     RETURN factor;
 END $function$;
 
+CREATE OR REPLACE FUNCTION iam.read_step_up_for_verification(tenant text,subject_id text,caller_id text,proof_id text)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE proof iam.step_ups%ROWTYPE;
+BEGIN
+    proof:=iam.lock_step_up(tenant,subject_id,caller_id,proof_id);
+    IF proof.state<>'PENDING' THEN RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='operation proof is already completed'; END IF;
+    RETURN iam.step_up_snapshot(tenant,proof_id);
+END $function$;
+
+CREATE OR REPLACE FUNCTION iam.prove_step_up(tenant text,subject_id text,caller_id text,proof_id text,
+    verification_request_id text,verification_digest text,password_attempt_id text,password_attempt_sequence bigint,
+    totp_attempt_id text,totp_attempt_sequence bigint,verified_step bigint)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE proof iam.step_ups%ROWTYPE; factor iam.totp_authenticators%ROWTYPE; generation bigint;
+BEGIN
+    proof:=iam.lock_step_up(tenant,subject_id,caller_id,proof_id);
+    IF proof.state<>'PENDING' THEN RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='operation proof is already completed'; END IF;
+    IF COALESCE(verification_request_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        OR COALESCE(verification_digest,'') !~ '^sha256:[0-9a-f]{64}$' THEN
+        RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='operation verification is invalid';
+    END IF;
+    generation:=iam.consume_password_attempt(tenant,subject_id,caller_id,password_attempt_id,password_attempt_sequence,'STEP_UP',verification_digest);
+    factor:=iam.consume_totp_attempt(tenant,subject_id,caller_id,proof_id,'STEP_UP',totp_attempt_id,totp_attempt_sequence,verified_step);
+    IF generation<>proof.credential_generation OR proof.expires_at<=clock_timestamp() THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='operation proof is unavailable';
+    END IF;
+    UPDATE iam.totp_authenticators f SET last_consumed_step=verified_step WHERE f.tenant_id=tenant AND f.user_id=subject_id AND f.id=proof.factor_id;
+    UPDATE iam.step_ups p SET state='PROVED',proved_at=transaction_timestamp(),
+        verification_request_id=prove_step_up.verification_request_id,verification_digest=prove_step_up.verification_digest,
+        password_attempt_id=prove_step_up.password_attempt_id,password_attempt_sequence=prove_step_up.password_attempt_sequence,
+        totp_attempt_id=prove_step_up.totp_attempt_id,totp_attempt_sequence=prove_step_up.totp_attempt_sequence,verified_step=prove_step_up.verified_step
+        WHERE p.tenant_id=tenant AND p.id=proof_id;
+    RETURN iam.step_up_snapshot(tenant,proof_id);
+END $function$;
+
 CREATE OR REPLACE FUNCTION iam.assert_recovery_codes(batch_id text,notification_id text,recovery_codes jsonb)
 RETURNS void LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE code jsonb;
@@ -1359,6 +1585,80 @@ BEGIN
         OR (SELECT count(DISTINCT value->>'verificationDigest') FROM jsonb_array_elements(recovery_codes))<>10 THEN
         RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='recovery batch is invalid';
     END IF;
+END $function$;
+
+CREATE OR REPLACE FUNCTION iam.recovery_code_regeneration_snapshot(tenant text,regeneration text)
+RETURNS jsonb LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $function$
+    SELECT jsonb_build_object('apiVersion','iam.matrix.xiak.com/v1','kind','RecoveryCodeRegeneration','id',r.id,
+        'requestId',r.request_id,'factorId',p.factor_id,'factorRevision',p.mfa_revision,
+        'createdAt',to_char(r.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'))
+    FROM iam.recovery_code_regenerations r JOIN iam.step_ups p ON p.tenant_id=r.tenant_id AND p.id=r.step_up_id
+    WHERE r.tenant_id=tenant AND r.id=regeneration
+$function$;
+
+CREATE OR REPLACE FUNCTION iam.read_recovery_code_regeneration(tenant text,subject_id text,caller_id text,command_id text)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE regeneration text;
+BEGIN
+    PERFORM iam.lock_mfa_session(tenant,subject_id,caller_id);
+    SELECT r.id INTO regeneration FROM iam.recovery_code_regenerations r
+        WHERE r.tenant_id=tenant AND r.user_id=subject_id AND r.request_id=command_id;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='P0002',MESSAGE='recovery code regeneration was not found'; END IF;
+    PERFORM iam.assert_recovery_regeneration(tenant,regeneration);
+    RETURN iam.recovery_code_regeneration_snapshot(tenant,regeneration);
+END $function$;
+
+CREATE OR REPLACE FUNCTION iam.regenerate_recovery_codes(tenant text,subject_id text,caller_id text,proof_id text,
+    command_id text,expected_revision bigint,regeneration_id text,batch_id text,recovery_codes jsonb,notification_id text,audit_event jsonb)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE previous iam.recovery_code_regenerations%ROWTYPE; proof iam.step_ups%ROWTYPE; contact record; installation text;
+BEGIN
+    PERFORM iam.lock_mfa_user(tenant,subject_id);
+    SELECT * INTO previous FROM iam.recovery_code_regenerations r WHERE r.tenant_id=tenant AND r.user_id=subject_id AND r.request_id=command_id;
+    IF FOUND THEN
+        PERFORM iam.lock_mfa_session(tenant,subject_id,caller_id);
+        SELECT * INTO proof FROM iam.step_ups p WHERE p.tenant_id=tenant AND p.id=previous.step_up_id;
+        IF (previous.step_up_id,proof.source_session_id,proof.mfa_revision,previous.request_digest)
+            IS DISTINCT FROM (proof_id,caller_id,expected_revision,audit_event->>'requestDigest') THEN
+            RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='regeneration intent differs';
+        END IF;
+        PERFORM iam.assert_recovery_regeneration(tenant,previous.id);
+        RETURN jsonb_build_object('outcome','EQUAL_REPLAY','regeneration',iam.recovery_code_regeneration_snapshot(tenant,previous.id));
+    END IF;
+    proof:=iam.lock_step_up(tenant,subject_id,caller_id,proof_id);
+    IF proof.state<>'PROVED' OR proof.operation<>'RECOVERY_CODES_REGENERATE' OR proof.request_id IS DISTINCT FROM command_id
+        OR proof.mfa_revision IS DISTINCT FROM expected_revision THEN
+        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='regeneration proof differs';
+    END IF;
+    IF COALESCE(regeneration_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
+        RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='regeneration identity is invalid';
+    END IF;
+    PERFORM iam.assert_recovery_codes(batch_id,notification_id,recovery_codes);
+    PERFORM iam.assert_audit_event(audit_event,tenant,'iam.recovery-codes.regenerated','PRINCIPAL',subject_id,'SUCCEEDED');
+    PERFORM iam.assert_user_audit_actor(tenant,subject_id,audit_event);
+    IF audit_event->>'requestId' IS DISTINCT FROM command_id THEN
+        RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='regeneration intent differs';
+    END IF;
+    SELECT c.* INTO contact FROM iam.notification_contacts c WHERE c.tenant_id=tenant AND c.user_id=subject_id FOR SHARE;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='verified security contact is required'; END IF;
+    SELECT f.installation_id INTO installation FROM iam.totp_authenticators f WHERE f.tenant_id=tenant AND f.id=proof.factor_id;
+    IF proof.expires_at<=clock_timestamp() THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='operation proof is unavailable'; END IF;
+    INSERT INTO iam.recovery_code_regenerations(tenant_id,user_id,id,request_id,step_up_id,old_batch_id,new_batch_id,event_id,request_digest,notification_id,created_at)
+        VALUES(tenant,subject_id,regeneration_id,command_id,proof_id,proof.batch_id,batch_id,audit_event->>'eventId',
+            audit_event->>'requestDigest',notification_id,transaction_timestamp());
+    UPDATE iam.mfa_recovery_batches b SET revoked_at=transaction_timestamp(),revocation_regeneration_id=regenerate_recovery_codes.regeneration_id
+        WHERE b.tenant_id=tenant AND b.id=proof.batch_id;
+    INSERT INTO iam.mfa_recovery_batches(tenant_id,user_id,id,factor_id,mfa_revision,event_id,created_at,regeneration_id)
+        VALUES(tenant,subject_id,batch_id,proof.factor_id,proof.mfa_revision,audit_event->>'eventId',transaction_timestamp(),regeneration_id);
+    INSERT INTO iam.mfa_recovery_codes(tenant_id,batch_id,id,verification_digest)
+        SELECT tenant,batch_id,value->>'id',value->>'verificationDigest' FROM jsonb_array_elements(recovery_codes);
+    INSERT INTO iam.audit_outbox(tenant_id,event_id,event_document,next_attempt_at,created_at,updated_at)
+        VALUES(tenant,audit_event->>'eventId',audit_event,transaction_timestamp(),transaction_timestamp(),transaction_timestamp());
+    INSERT INTO iam.security_notifications(tenant_id,id,user_id,installation_id,verification_id,event_id,kind,email,contact_revision,created_at,state,next_attempt_at,updated_at)
+        VALUES(tenant,notification_id,subject_id,installation,contact.verification_id,audit_event->>'eventId','RECOVERY_CODES_REGENERATED',
+            contact.email,contact.resource_version,transaction_timestamp(),'PENDING',transaction_timestamp(),transaction_timestamp());
+    UPDATE iam.step_ups p SET state='CONSUMED',consumed_at=transaction_timestamp() WHERE p.tenant_id=tenant AND p.id=proof_id;
+    RETURN jsonb_build_object('outcome','APPLIED','regeneration',iam.recovery_code_regeneration_snapshot(tenant,regeneration_id));
 END $function$;
 
 CREATE OR REPLACE FUNCTION iam.confirm_totp_enrollment(tenant text,subject_id text,caller_id text,factor_id text,
@@ -1596,6 +1896,136 @@ GRANT EXECUTE ON FUNCTION iam.confirm_totp_enrollment(text,text,text,text,text,b
 -- Every successful binding has one immutable original factor/USER/Session,
 -- one recovery batch and one safety notice. Deferred checks admit the single
 -- transaction, not a separately committed 'factor first, audit later' workflow.
+CREATE OR REPLACE FUNCTION iam.guard_step_up_transition()
+RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
+BEGIN
+    IF TG_OP='INSERT' THEN
+        IF NEW.state='PENDING' THEN RETURN NEW; END IF;
+    ELSIF OLD.state='PENDING' AND NEW.state='PROVED'
+        AND NEW.proved_at=transaction_timestamp() AND NEW.expires_at>clock_timestamp()
+        AND (to_jsonb(NEW)-ARRAY['state','proved_at','verification_request_id','verification_digest','password_attempt_id',
+            'password_attempt_sequence','totp_attempt_id','totp_attempt_sequence','verified_step'])
+            =(to_jsonb(OLD)-ARRAY['state','proved_at','verification_request_id','verification_digest','password_attempt_id',
+            'password_attempt_sequence','totp_attempt_id','totp_attempt_sequence','verified_step'])
+        AND EXISTS(SELECT 1 FROM iam.password_attempts a WHERE a.tenant_id=NEW.tenant_id AND a.principal_id=NEW.user_id
+            AND a.session_id=NEW.source_session_id AND a.credential_version=NEW.credential_generation AND a.state='SUCCEEDED'
+            AND a.purpose='STEP_UP' AND a.intent_digest=NEW.verification_digest AND a.attempt_id=NEW.password_attempt_id
+            AND a.attempt_sequence=NEW.password_attempt_sequence AND a.account_version=NEW.account_version AND a.principal_version=NEW.principal_version)
+        AND EXISTS(SELECT 1 FROM iam.totp_attempts a WHERE a.tenant_id=NEW.tenant_id AND a.user_id=NEW.user_id
+            AND a.source_session_id=NEW.source_session_id AND a.credential_generation=NEW.credential_generation AND a.mfa_revision=NEW.mfa_revision
+            AND a.state='SUCCEEDED' AND a.purpose='STEP_UP' AND a.reference_id=NEW.id AND a.attempt_id=NEW.totp_attempt_id AND a.sequence=NEW.totp_attempt_sequence)
+        AND EXISTS(SELECT 1 FROM iam.totp_authenticators f WHERE f.tenant_id=NEW.tenant_id AND f.user_id=NEW.user_id
+            AND f.id=NEW.factor_id AND f.state='ACTIVE' AND f.last_consumed_step=NEW.verified_step) THEN
+        RETURN NEW;
+    ELSIF OLD.state='PROVED' AND NEW.state='CONSUMED' AND NEW.consumed_at=transaction_timestamp() AND NEW.expires_at>clock_timestamp()
+        AND (to_jsonb(NEW)-ARRAY['state','consumed_at'])=(to_jsonb(OLD)-ARRAY['state','consumed_at'])
+        AND EXISTS(SELECT 1 FROM iam.recovery_code_regenerations r WHERE r.tenant_id=NEW.tenant_id AND r.user_id=NEW.user_id
+            AND r.step_up_id=NEW.id AND r.request_id=NEW.request_id AND r.old_batch_id=NEW.batch_id AND r.created_at=NEW.consumed_at) THEN
+        RETURN NEW;
+    END IF;
+    RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='operation proof transition is invalid';
+END $function$;
+DROP TRIGGER IF EXISTS cannot_update ON iam.step_ups;
+CREATE TRIGGER cannot_update BEFORE INSERT OR UPDATE ON iam.step_ups FOR EACH ROW EXECUTE FUNCTION iam.guard_step_up_transition();
+ALTER TABLE iam.step_ups ENABLE ALWAYS TRIGGER cannot_update;
+DROP TRIGGER IF EXISTS cannot_update ON iam.recovery_code_regenerations;
+CREATE TRIGGER cannot_update BEFORE UPDATE ON iam.recovery_code_regenerations FOR EACH ROW EXECUTE FUNCTION iam.reject_policy_history_change();
+ALTER TABLE iam.recovery_code_regenerations ENABLE ALWAYS TRIGGER cannot_update;
+
+-- Immutable historical attribution, never a reauthorization of today's user.
+CREATE OR REPLACE FUNCTION iam.assert_recovery_regeneration(tenant text,regeneration text)
+RETURNS void LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE receipt iam.recovery_code_regenerations%ROWTYPE; proof iam.step_ups%ROWTYPE;
+    original iam.mfa_recovery_batches%ROWTYPE; replacement iam.mfa_recovery_batches%ROWTYPE;
+    factor iam.totp_authenticators%ROWTYPE; notice record; event jsonb;
+BEGIN
+    SELECT * INTO receipt FROM iam.recovery_code_regenerations r WHERE r.tenant_id=tenant AND r.id=regeneration;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='regeneration origin is missing'; END IF;
+    SELECT * INTO proof FROM iam.step_ups p WHERE p.tenant_id=tenant AND p.id=receipt.step_up_id;
+    IF NOT FOUND OR (proof.user_id,proof.request_id,proof.state,proof.operation,proof.batch_id,proof.consumed_at)
+        IS DISTINCT FROM (receipt.user_id,receipt.request_id,'CONSUMED'::text,'RECOVERY_CODES_REGENERATE'::text,receipt.old_batch_id,receipt.created_at)
+        OR NOT EXISTS(SELECT 1 FROM iam.sessions s WHERE s.tenant_id=tenant AND s.principal_id=receipt.user_id AND s.id=proof.source_session_id
+            AND s.authentication_method='PASSWORD_TOTP' AND s.mfa_revision=proof.mfa_revision)
+        OR NOT EXISTS(SELECT 1 FROM iam.principals p WHERE p.tenant_id=tenant AND p.id=receipt.user_id AND p.principal_type='USER') THEN
+        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='regeneration proof differs';
+    END IF;
+    SELECT * INTO original FROM iam.mfa_recovery_batches b WHERE b.tenant_id=tenant AND b.id=receipt.old_batch_id;
+    IF NOT FOUND OR (original.user_id,original.factor_id,original.mfa_revision,original.revoked_at,original.revocation_regeneration_id)
+        IS DISTINCT FROM (receipt.user_id,proof.factor_id,proof.mfa_revision,receipt.created_at,receipt.id)
+        OR original.revocation_recovery_id IS NOT NULL OR original.created_at>proof.created_at THEN
+        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='regeneration old batch differs';
+    END IF;
+    SELECT * INTO replacement FROM iam.mfa_recovery_batches b WHERE b.tenant_id=tenant AND b.id=receipt.new_batch_id;
+    IF NOT FOUND OR (replacement.user_id,replacement.factor_id,replacement.mfa_revision,replacement.event_id,replacement.created_at,replacement.regeneration_id)
+        IS DISTINCT FROM (receipt.user_id,proof.factor_id,proof.mfa_revision,receipt.event_id,receipt.created_at,receipt.id)
+        OR (SELECT count(*) FROM iam.mfa_recovery_codes c WHERE c.tenant_id=tenant AND c.batch_id=replacement.id)<>10
+        OR (SELECT count(DISTINCT c.verification_digest) FROM iam.mfa_recovery_codes c WHERE c.tenant_id=tenant AND c.batch_id=replacement.id)<>10 THEN
+        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='regeneration replacement batch differs';
+    END IF;
+    SELECT * INTO factor FROM iam.totp_authenticators f WHERE f.tenant_id=tenant AND f.user_id=receipt.user_id AND f.id=proof.factor_id;
+    IF NOT FOUND OR factor.enrollment_outcome IS DISTINCT FROM 'CONFIRMED' OR factor.bound_revision IS DISTINCT FROM proof.mfa_revision THEN
+        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='regeneration factor origin differs';
+    END IF;
+    SELECT o.event_document INTO event FROM iam.audit_outbox o WHERE o.tenant_id=tenant AND o.event_id=receipt.event_id;
+    IF event IS NULL OR event->>'action' IS DISTINCT FROM 'iam.recovery-codes.regenerated'
+        OR event->'actor' IS DISTINCT FROM jsonb_build_object('type','USER','id',receipt.user_id)
+        OR event->'target' IS DISTINCT FROM jsonb_build_object('kind','PRINCIPAL','id',receipt.user_id)
+        OR event->>'tenantId' IS DISTINCT FROM tenant OR event->>'result' IS DISTINCT FROM 'SUCCEEDED'
+        OR event->>'requestId' IS DISTINCT FROM receipt.request_id OR event->>'requestDigest' IS DISTINCT FROM receipt.request_digest
+        OR (event->>'occurredAt')::timestamptz IS DISTINCT FROM receipt.created_at
+        OR event ?| ARRAY['installationId','iamDecisionId','operationId'] THEN
+        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='regeneration fact differs';
+    END IF;
+    SELECT n.* INTO notice FROM iam.security_notifications n WHERE n.tenant_id=tenant AND n.id=receipt.notification_id;
+    IF NOT FOUND OR (notice.user_id,notice.installation_id,notice.created_at,notice.contact_revision,notice.event_id,notice.kind)
+        IS DISTINCT FROM (receipt.user_id,factor.installation_id,receipt.created_at,1::bigint,receipt.event_id,'RECOVERY_CODES_REGENERATED'::text)
+        OR NOT EXISTS(SELECT 1 FROM iam.notification_contact_verifications v WHERE v.tenant_id=tenant AND v.id=notice.verification_id
+            AND v.user_id=receipt.user_id AND v.state='VERIFIED' AND v.email=notice.email) THEN
+        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='regeneration notice differs';
+    END IF;
+END $function$;
+
+CREATE OR REPLACE FUNCTION iam.verify_recovery_regeneration()
+RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE tenant text; regeneration text;
+BEGIN
+    tenant:=NEW.tenant_id;
+    PERFORM set_config('matrix.iam_tenant_id',tenant,true);
+    CASE TG_TABLE_NAME
+        WHEN 'recovery_code_regenerations' THEN regeneration:=NEW.id;
+        WHEN 'step_ups' THEN
+            IF NEW.state<>'CONSUMED' THEN RETURN NULL; END IF;
+            SELECT r.id INTO regeneration FROM iam.recovery_code_regenerations r WHERE r.tenant_id=tenant AND r.step_up_id=NEW.id;
+        WHEN 'mfa_recovery_batches' THEN
+            IF NEW.regeneration_id IS NOT NULL THEN PERFORM iam.assert_recovery_regeneration(tenant,NEW.regeneration_id); END IF;
+            regeneration:=NEW.revocation_regeneration_id;
+            IF regeneration IS NULL THEN RETURN NULL; END IF;
+        WHEN 'mfa_recovery_codes' THEN
+            SELECT b.regeneration_id INTO regeneration FROM iam.mfa_recovery_batches b WHERE b.tenant_id=tenant AND b.id=NEW.batch_id;
+            IF regeneration IS NULL THEN RETURN NULL; END IF;
+        WHEN 'audit_outbox' THEN
+            IF NEW.event_document->>'action'<>'iam.recovery-codes.regenerated' THEN RETURN NULL; END IF;
+            SELECT r.id INTO regeneration FROM iam.recovery_code_regenerations r WHERE r.tenant_id=tenant AND r.event_id=NEW.event_id;
+        WHEN 'security_notifications' THEN
+            IF NEW.kind<>'RECOVERY_CODES_REGENERATED' THEN RETURN NULL; END IF;
+            SELECT r.id INTO regeneration FROM iam.recovery_code_regenerations r WHERE r.tenant_id=tenant AND r.notification_id=NEW.id;
+        ELSE RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='regeneration verification source is invalid';
+    END CASE;
+    IF regeneration IS NULL THEN RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='regeneration origin is missing'; END IF;
+    PERFORM iam.assert_recovery_regeneration(tenant,regeneration);
+    RETURN NULL;
+END $function$;
+DO $regeneration_proof$
+DECLARE relation_name text;
+BEGIN
+    -- security_notifications is created by the next existing migration owner.
+    FOREACH relation_name IN ARRAY ARRAY['recovery_code_regenerations','step_ups','mfa_recovery_batches','mfa_recovery_codes','audit_outbox'] LOOP
+        EXECUTE format('DROP TRIGGER IF EXISTS verify_recovery_regeneration ON iam.%I',relation_name);
+        EXECUTE format('CREATE CONSTRAINT TRIGGER verify_recovery_regeneration AFTER INSERT OR UPDATE ON iam.%I DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION iam.verify_recovery_regeneration()',relation_name);
+        EXECUTE format('ALTER TABLE iam.%I ENABLE ALWAYS TRIGGER verify_recovery_regeneration',relation_name);
+    END LOOP;
+END $regeneration_proof$;
+
 CREATE OR REPLACE FUNCTION iam.verify_totp_binding()
 RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE tenant text; binding_event_id text; factor iam.totp_authenticators%ROWTYPE; batch iam.mfa_recovery_batches%ROWTYPE;
@@ -1618,6 +2048,11 @@ BEGIN
             SELECT b.event_id INTO binding_event_id FROM iam.mfa_recovery_batches b WHERE b.tenant_id=tenant AND b.id=NEW.batch_id;
         ELSE RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='binding verification source is invalid';
     END CASE;
+    SELECT b.* INTO batch FROM iam.mfa_recovery_batches b WHERE b.tenant_id=tenant AND b.event_id=binding_event_id;
+    IF FOUND AND batch.regeneration_id IS NOT NULL THEN
+        PERFORM iam.assert_recovery_regeneration(tenant,batch.regeneration_id);
+        RETURN NULL;
+    END IF;
     SELECT f.* INTO factor FROM iam.totp_authenticators f WHERE f.tenant_id=tenant AND f.bound_event_id=binding_event_id;
     IF NOT FOUND OR factor.enrollment_outcome<>'CONFIRMED' OR factor.bound_revision IS NULL
         OR NOT ((factor.recovery_id IS NULL AND EXISTS(SELECT 1 FROM iam.sessions s
@@ -1845,7 +2280,8 @@ BEGIN
             IS DISTINCT FROM (recovery.id,batch.factor_id,recovery.previous_revision,recovery.credential_generation,recovery.created_at,recovery.expires_at)
         OR (code.consumed_at,code.recovery_id) IS DISTINCT FROM (recovery.created_at,recovery.id)
         OR old_factor.state<>'REVOKED' OR old_factor.revoked_at IS NULL OR old_factor.revoked_at>recovery.created_at
-        OR (old_factor.bound_revision,old_factor.bound_event_id) IS DISTINCT FROM (batch.mfa_revision,batch.event_id)
+        OR old_factor.bound_revision IS DISTINCT FROM batch.mfa_revision
+        OR (batch.regeneration_id IS NULL AND old_factor.bound_event_id IS DISTINCT FROM batch.event_id)
         OR (child.next_step,child.source_challenge_id,child.recovery_id,child.factor_id,child.mfa_revision,child.credential_generation,child.created_at,child.expires_at)
             IS DISTINCT FROM ('ENROLLMENT'::text,original.id,recovery.id,factor.id,recovery.revision,recovery.credential_generation,recovery.created_at,recovery.expires_at)
         OR (child.password_attempt_id,child.password_attempt_sequence,child.account_version,child.principal_version)
@@ -1854,6 +2290,9 @@ BEGIN
             IS DISTINCT FROM (recovery.id,recovery.request_id,recovery.request_digest,recovery.revision,recovery.credential_generation,recovery.created_at,recovery.expires_at)
         OR factor.enrollment_session_id IS NOT NULL OR factor.installation_id<>old_factor.installation_id THEN
         RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='recovery lineage differs';
+    END IF;
+    IF batch.regeneration_id IS NOT NULL THEN
+        PERFORM iam.assert_recovery_regeneration(tenant,batch.regeneration_id);
     END IF;
     IF original.next_step='TOTP' THEN
         IF recovery.previous_revision<>batch.mfa_revision OR old_factor.revoked_at<>recovery.created_at THEN
@@ -1934,6 +2373,18 @@ GRANT EXECUTE ON FUNCTION iam.read_recovery_attempt(text,text,text,text,bigint),
 -- Readiness and migration verification share this concrete authentication
 -- contract. Custody alone cannot prove challenge isolation, one-time effects,
 -- or the meaning and immutability of a Session's authentication facts.
+REVOKE ALL ON FUNCTION iam.step_up_snapshot(text,text),iam.lock_step_up(text,text,text,text),
+    iam.start_step_up(text,text,text,text,text,text,bigint),iam.read_step_up_by_request(text,text,text,text),
+    iam.read_step_up_for_verification(text,text,text,text),iam.prove_step_up(text,text,text,text,text,text,text,bigint,text,bigint,bigint),
+    iam.recovery_code_regeneration_snapshot(text,text),iam.read_recovery_code_regeneration(text,text,text,text),
+    iam.regenerate_recovery_codes(text,text,text,text,text,bigint,text,text,jsonb,text,jsonb),
+    iam.guard_step_up_transition(),iam.assert_recovery_regeneration(text,text),iam.verify_recovery_regeneration()
+    FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery,matrix_iam_backup_custody,matrix_iam_notification_worker;
+GRANT EXECUTE ON FUNCTION iam.start_step_up(text,text,text,text,text,text,bigint),iam.read_step_up_by_request(text,text,text,text),
+    iam.read_step_up_for_verification(text,text,text,text),iam.prove_step_up(text,text,text,text,text,text,text,bigint,text,bigint,bigint),
+    iam.read_recovery_code_regeneration(text,text,text,text),iam.regenerate_recovery_codes(text,text,text,text,text,bigint,text,text,jsonb,text,jsonb)
+    TO matrix_iam_api;
+
 CREATE OR REPLACE FUNCTION iam.totp_authentication_contract_ready()
 RETURNS boolean LANGUAGE plpgsql STABLE SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE expected record; column_spec record; entry pg_proc%ROWTYPE; relation_id oid;
@@ -1947,8 +2398,14 @@ BEGIN
         ('totp_attempts','tenant_id,user_id,attempt_id,sequence,purpose,reference_id,source_session_id,credential_generation,mfa_revision,state,window_started_at,used_attempts,reserved_at,expires_at,completed_at',
             'text,text,text,bigint,text,text,text,bigint,bigint,text,timestamptz,integer,timestamptz,timestamptz,timestamptz',
             'source_session_id,completed_at','tenant_id,user_id,attempt_id,reference_id,source_session_id',true),
-        ('mfa_recovery_batches','tenant_id,user_id,id,factor_id,mfa_revision,event_id,created_at,revoked_at,revocation_recovery_id',
-            'text,text,text,text,bigint,text,timestamptz,timestamptz,text','revoked_at,revocation_recovery_id','tenant_id,user_id,id,factor_id,event_id,revocation_recovery_id',true),
+        ('mfa_recovery_batches','tenant_id,user_id,id,factor_id,mfa_revision,event_id,created_at,revoked_at,revocation_recovery_id,regeneration_id,revocation_regeneration_id',
+            'text,text,text,text,bigint,text,timestamptz,timestamptz,text,text,text','revoked_at,revocation_recovery_id,regeneration_id,revocation_regeneration_id','tenant_id,user_id,id,factor_id,event_id,revocation_recovery_id,regeneration_id,revocation_regeneration_id',true),
+        ('step_ups','tenant_id,user_id,id,request_id,operation,source_session_id,credential_generation,mfa_revision,factor_id,batch_id,account_version,principal_version,state,created_at,expires_at,proved_at,consumed_at,verification_request_id,verification_digest,password_attempt_id,password_attempt_sequence,totp_attempt_id,totp_attempt_sequence,verified_step',
+            'text,text,text,text,text,text,bigint,bigint,text,text,bigint,bigint,text,timestamptz,timestamptz,timestamptz,timestamptz,text,text,text,bigint,text,bigint,bigint',
+            'proved_at,consumed_at,verification_request_id,verification_digest,password_attempt_id,password_attempt_sequence,totp_attempt_id,totp_attempt_sequence,verified_step',
+            'tenant_id,user_id,id,request_id,source_session_id,factor_id,batch_id,verification_request_id,password_attempt_id,totp_attempt_id',true),
+        ('recovery_code_regenerations','tenant_id,user_id,id,request_id,step_up_id,old_batch_id,new_batch_id,event_id,request_digest,notification_id,created_at',
+            'text,text,text,text,text,text,text,text,text,text,timestamptz','','tenant_id,user_id,id,request_id,step_up_id,old_batch_id,new_batch_id,event_id,notification_id',true),
         ('mfa_recovery_codes','tenant_id,batch_id,id,verification_digest,consumed_at,recovery_id',
             'text,text,text,text,timestamptz,text','consumed_at,recovery_id','tenant_id,batch_id,id,recovery_id',true),
         ('totp_authenticators','enrollment_session_id,enrollment_request_id,enrollment_digest,enrollment_revision,credential_generation,expires_at,enrollment_outcome,completed_at,bound_revision,bound_event_id,revoked_at,recovery_id',
@@ -2016,6 +2473,28 @@ BEGIN
         ('mfa_recovery_batches','u','tenant_id,event_id',NULL,NULL,false),
         ('mfa_recovery_batches','f','tenant_id,user_id,factor_id','iam.totp_authenticators','tenant_id,user_id,id',false),
         ('mfa_recovery_batches','f','tenant_id,event_id','iam.audit_outbox','tenant_id,event_id',true),
+        ('mfa_recovery_batches','f','tenant_id,regeneration_id','iam.recovery_code_regenerations','tenant_id,id',true),
+        ('mfa_recovery_batches','f','tenant_id,revocation_regeneration_id','iam.recovery_code_regenerations','tenant_id,id',true),
+        ('step_ups','p','tenant_id,id',NULL,NULL,false),
+        ('step_ups','u','tenant_id,user_id,request_id',NULL,NULL,false),
+        ('step_ups','u','tenant_id,user_id,password_attempt_id,password_attempt_sequence',NULL,NULL,false),
+        ('step_ups','u','tenant_id,user_id,totp_attempt_id,totp_attempt_sequence',NULL,NULL,false),
+        ('step_ups','f','tenant_id,user_id','iam.principals','tenant_id,id',false),
+        ('step_ups','f','tenant_id,source_session_id','iam.sessions','tenant_id,id',false),
+        ('step_ups','f','tenant_id,user_id,factor_id','iam.totp_authenticators','tenant_id,user_id,id',false),
+        ('step_ups','f','tenant_id,batch_id','iam.mfa_recovery_batches','tenant_id,id',false),
+        ('recovery_code_regenerations','p','tenant_id,id',NULL,NULL,false),
+        ('recovery_code_regenerations','u','tenant_id,user_id,request_id',NULL,NULL,false),
+        ('recovery_code_regenerations','u','tenant_id,step_up_id',NULL,NULL,false),
+        ('recovery_code_regenerations','u','tenant_id,old_batch_id',NULL,NULL,false),
+        ('recovery_code_regenerations','u','tenant_id,new_batch_id',NULL,NULL,false),
+        ('recovery_code_regenerations','u','tenant_id,event_id',NULL,NULL,false),
+        ('recovery_code_regenerations','u','tenant_id,notification_id',NULL,NULL,false),
+        ('recovery_code_regenerations','f','tenant_id,user_id','iam.principals','tenant_id,id',false),
+        ('recovery_code_regenerations','f','tenant_id,step_up_id','iam.step_ups','tenant_id,id',false),
+        ('recovery_code_regenerations','f','tenant_id,old_batch_id','iam.mfa_recovery_batches','tenant_id,id',false),
+        ('recovery_code_regenerations','f','tenant_id,new_batch_id','iam.mfa_recovery_batches','tenant_id,id',true),
+        ('recovery_code_regenerations','f','tenant_id,event_id','iam.audit_outbox','tenant_id,event_id',true),
         ('mfa_recovery_codes','p','tenant_id,batch_id,id',NULL,NULL,false),
         ('mfa_recovery_codes','f','tenant_id,batch_id','iam.mfa_recovery_batches','tenant_id,id',false),
         ('totp_authenticators','f','tenant_id,enrollment_session_id','iam.sessions','tenant_id,id',false),
@@ -2061,6 +2540,8 @@ BEGIN
         ('authentication_challenges','authentication_challenges_id_check,authentication_challenges_lookup_digest_check,authentication_challenges_verification_digest_check,authentication_challenges_credential_generation_check,authentication_challenges_password_attempt_sequence_check,authentication_challenges_account_version_check,authentication_challenges_principal_version_check,authentication_challenges_mfa_revision_check,authentication_challenges_request_id_check,authentication_challenges_request_digest_check,authentication_challenges_next_step_check,authentication_challenges_verified_step_check,authentication_challenges_state_check,authentication_challenges_attempts_check,authentication_challenges_secrets,authentication_challenges_lifetime,authentication_challenges_phase,authentication_challenges_completion'),
         ('totp_attempts','totp_attempts_sequence_check,totp_attempts_purpose_check,totp_attempts_credential_generation_check,totp_attempts_mfa_revision_check,totp_attempts_state_check,totp_attempts_used_attempts_check,totp_attempts_source,totp_attempts_lease,totp_attempts_completion'),
         ('mfa_recovery_batches','mfa_recovery_batches_mfa_revision_check,recovery_revocation_shape'),
+        ('step_ups','step_ups_id_check,step_ups_request_id_check,step_ups_operation_check,step_ups_credential_generation_check,step_ups_mfa_revision_check,step_ups_account_version_check,step_ups_principal_version_check,step_ups_state_check,step_up_lifetime,step_up_proof'),
+        ('recovery_code_regenerations','recovery_code_regenerations_id_check,recovery_code_regenerations_request_digest_check,regeneration_distinct_batches'),
         ('mfa_recovery_codes','mfa_recovery_codes_verification_digest_check,recovery_consumption_shape'),
         ('totp_authenticators','totp_enrollment_lineage'),
         ('sessions','session_authentication_fact')
@@ -2077,7 +2558,8 @@ BEGIN
         ('totp_authenticators','totp_unrecognized_lineage','id',false,'((enrollment_session_id IS NULL) AND (recovery_id IS NULL))'),
         ('authenticator_recoveries','authenticator_one_recovery','tenant_id,user_id',true,'(state = ''STARTED''::text)'),
         ('authentication_challenges','authentication_challenges_user','tenant_id,user_id,expires_at',false,'(state = ''PENDING''::text)'),
-        ('mfa_recovery_batches','mfa_one_recovery_batch','tenant_id,user_id',true,'(revoked_at IS NULL)')
+        ('mfa_recovery_batches','mfa_one_recovery_batch','tenant_id,user_id',true,'(revoked_at IS NULL)'),
+        ('step_ups','step_up_pending','tenant_id,user_id,expires_at',false,'(state = ANY (ARRAY[''PENDING''::text, ''PROVED''::text]))')
     ) e(relation_name,name,columns,unique_key,predicate) LOOP
         IF NOT EXISTS(SELECT 1 FROM pg_index i JOIN pg_class index_class ON index_class.oid=i.indexrelid
             JOIN pg_am method ON method.oid=index_class.relam
@@ -2090,9 +2572,11 @@ BEGIN
     END LOOP;
     FOR expected IN SELECT * FROM (
         SELECT relation_name,'cannot_delete'::text AS name,'iam.reject_policy_history_change()'::text AS signature,11 AS event_type,false AS deferred
-            FROM unnest(ARRAY['user_mfa_states','authentication_challenges','totp_attempts','mfa_recovery_batches','mfa_recovery_codes','authenticator_recoveries']) r(relation_name)
+            FROM unnest(ARRAY['user_mfa_states','authentication_challenges','totp_attempts','mfa_recovery_batches','mfa_recovery_codes','authenticator_recoveries','step_ups','recovery_code_regenerations']) r(relation_name)
         UNION ALL SELECT relation_name,'cannot_truncate','iam.reject_policy_history_change()',34,false
-            FROM unnest(ARRAY['user_mfa_states','authentication_challenges','totp_attempts','mfa_recovery_batches','mfa_recovery_codes','authenticator_recoveries']) r(relation_name)
+            FROM unnest(ARRAY['user_mfa_states','authentication_challenges','totp_attempts','mfa_recovery_batches','mfa_recovery_codes','authenticator_recoveries','step_ups','recovery_code_regenerations']) r(relation_name)
+        UNION ALL SELECT relation_name,'verify_recovery_regeneration','iam.verify_recovery_regeneration()',21,true
+            FROM unnest(ARRAY['recovery_code_regenerations','step_ups','mfa_recovery_batches','mfa_recovery_codes','audit_outbox','security_notifications']) r(relation_name)
         UNION ALL SELECT relation_name,'verify_authenticator_recovery','iam.verify_authenticator_recovery()',21,true
             FROM unnest(ARRAY['authenticator_recoveries','mfa_recovery_batches','mfa_recovery_codes','totp_authenticators','authentication_challenges','user_mfa_states','audit_outbox','security_notifications']) r(relation_name)
         UNION ALL SELECT * FROM (VALUES
@@ -2102,6 +2586,8 @@ BEGIN
             ('mfa_recovery_batches','cannot_update','iam.guard_recovery_material()',19,false),
             ('mfa_recovery_codes','cannot_update','iam.guard_recovery_material()',19,false),
             ('authenticator_recoveries','cannot_update','iam.guard_authenticator_recovery()',19,false),
+            ('step_ups','cannot_update','iam.guard_step_up_transition()',23,false),
+            ('recovery_code_regenerations','cannot_update','iam.reject_policy_history_change()',19,false),
             ('sessions','authentication_fact_is_immutable','iam.guard_session_authentication()',19,false),
             ('authentication_challenges','cannot_update','iam.guard_authentication_challenge()',19,false),
             ('totp_authenticators','verify_totp_binding','iam.verify_totp_binding()',21,true),
@@ -2119,6 +2605,18 @@ BEGIN
     END LOOP;
 
     FOR expected IN SELECT * FROM (VALUES
+        ('iam.step_up_snapshot(text,text)',false,'jsonb','s','tenant,proof_id'),
+        ('iam.lock_step_up(text,text,text,text)',false,'iam.step_ups','v','tenant,subject_id,caller_id,proof_id'),
+        ('iam.start_step_up(text,text,text,text,text,text,bigint)',true,'jsonb','v','tenant,subject_id,caller_id,proof_id,command_id,submitted_operation,expected_revision'),
+        ('iam.read_step_up_by_request(text,text,text,text)',true,'jsonb','v','tenant,subject_id,caller_id,command_id'),
+        ('iam.read_step_up_for_verification(text,text,text,text)',true,'jsonb','v','tenant,subject_id,caller_id,proof_id'),
+        ('iam.prove_step_up(text,text,text,text,text,text,text,bigint,text,bigint,bigint)',true,'jsonb','v','tenant,subject_id,caller_id,proof_id,verification_request_id,verification_digest,password_attempt_id,password_attempt_sequence,totp_attempt_id,totp_attempt_sequence,verified_step'),
+        ('iam.recovery_code_regeneration_snapshot(text,text)',false,'jsonb','s','tenant,regeneration'),
+        ('iam.read_recovery_code_regeneration(text,text,text,text)',true,'jsonb','v','tenant,subject_id,caller_id,command_id'),
+        ('iam.regenerate_recovery_codes(text,text,text,text,text,bigint,text,text,jsonb,text,jsonb)',true,'jsonb','v','tenant,subject_id,caller_id,proof_id,command_id,expected_revision,regeneration_id,batch_id,recovery_codes,notification_id,audit_event'),
+        ('iam.guard_step_up_transition()',false,'trigger','v',''),
+        ('iam.assert_recovery_regeneration(text,text)',false,'void','v','tenant,regeneration'),
+        ('iam.verify_recovery_regeneration()',false,'trigger','v',''),
         ('iam.lock_recovery_batch(text,text)',false,'iam.mfa_recovery_batches','v','tenant,subject_id'),
         ('iam.lock_recovery_login(text,text,text)',false,'iam.authentication_challenges','v','tenant,subject_id,challenge_id'),
         ('iam.lock_recovery_challenge(text,text,text)',false,'iam.totp_authenticators','v','tenant,subject_id,challenge_id'),

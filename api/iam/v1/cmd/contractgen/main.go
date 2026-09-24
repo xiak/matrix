@@ -162,6 +162,11 @@ func buildPaths() object {
 		},
 		"/v1/auth/totp/enrollments/by-request/{requestId}": object{"get": readOperation("getTOTPEnrollmentByRequest", "Find original same-USER metadata after a lost response; NOT_FOUND is not evidence of rollback", "TOTPEnrollment", nil, []any{openapi31.PathIDParameter("requestId")})},
 		"/v1/auth/totp/enrollments/{enrollmentId}:confirm": object{"post": mutationOperation("confirmTOTPEnrollment", "Commit binding, OTP consumption, recovery batch, notice and session revocation; return codes once then reauthenticate", "ConfirmTOTPEnrollmentRequest", "ConfirmTOTPEnrollmentResponse", "200", nil, []any{openapi31.PathIDParameter("enrollmentId")})},
+		"/v1/auth/step-up":                                             object{"post": mutationOperation("startStepUp", "Bind a purpose-limited operation proof to the current nonforced PASSWORD_TOTP Session and original command; no new credential", "StartStepUpRequest", "StepUp", "200", nil, nil)},
+		"/v1/auth/step-up/by-request/{requestId}":                      object{"get": readOperation("getStepUpByRequest", "Read original proof metadata with the same current Session; not an authorization or a rollback guarantee", "StepUp", nil, []any{openapi31.PathIDParameter("requestId")})},
+		"/v1/auth/step-up/{stepUpId}:verify":                           object{"post": mutationOperation("verifyStepUp", "Reauthenticate password and unused TOTP under shared budgets; keep the original absolute expiry and Session facts; repeated proof submission conflicts", "VerifyStepUpRequest", "StepUp", "200", nil, []any{openapi31.PathIDParameter("stepUpId")})},
+		"/v1/auth/recovery-codes:regenerate":                           object{"post": mutationOperation("regenerateRecoveryCodes", "Consume the exact proved command and replace only its recovery-code batch; APPLIED discloses codes once, EQUAL_REPLAY returns metadata only", "RegenerateRecoveryCodesRequest", "RegenerateRecoveryCodesResponse", "200", nil, nil)},
+		"/v1/auth/recovery-codes/regenerations/by-request/{requestId}": object{"get": readOperation("getRecoveryCodeRegenerationByRequest", "Read original same-USER completion using a current normal Session; never replay recovery codes", "RecoveryCodeRegeneration", nil, []any{openapi31.PathIDParameter("requestId")})},
 		"/v1/auth/me":                object{"get": readOperation("getCurrentIdentity", "Get the current account and identity", "CurrentIdentity", nil, nil)},
 		"/v1/authorization-profiles": object{"get": readOperation("listAuthorizationProfiles", "Read complete current product declarations under current account policy-list permission; metadata is not a permit or registration capability. Maximum complete response 64 KiB.", "AuthorizationProfileList", nil, nil)},
 		"/v1/policies": object{
@@ -291,7 +296,7 @@ func mutationOperation(
 ) object {
 	responses := openapi31.ProblemResponses("400", "401", "403", "409", "413", "415", "422", "500", "503")
 	responses[status] = openapi31.JSONResponse("Command completed.", responseSchema)
-	if operationID == "login" || operationID == "changePassword" || operationID == "startTOTPEnrollment" || operationID == "changeChallengePassword" {
+	if operationID == "login" || operationID == "changePassword" || operationID == "startTOTPEnrollment" || operationID == "changeChallengePassword" || operationID == "verifyStepUp" {
 		responses["429"] = object{
 			"description": "This IAM instance's bounded password-work capacity is occupied; this discloses no user-specific attempt budget.",
 			"headers":     object{"Retry-After": object{"schema": object{"type": "string", "const": "1"}}},
@@ -300,6 +305,9 @@ func mutationOperation(
 	}
 	if operationID == "createAccessKey" {
 		responses["200"] = openapi31.JSONResponse("Original nonsecret completion; no secret is reissued.", responseSchema)
+	}
+	if operationID == "verifyStepUp" || operationID == "regenerateRecoveryCodes" {
+		responses["404"] = openapi31.ProblemResponses("404")["404"]
 	}
 	operation := object{
 		"operationId": operationID,
@@ -326,8 +334,11 @@ func readOperation(
 		responses["404"] = object{"$ref": "#/components/responses/ProblemResponse", "description": "No committed issuance found for this source user and request. This does not authorize a new intent."}
 	}
 	switch operationID {
-	case "getAuthenticatorState", "getTOTPEnrollment", "getTOTPEnrollmentByRequest", "cancelTOTPEnrollment":
+	case "getAuthenticatorState", "getTOTPEnrollment", "getTOTPEnrollmentByRequest", "cancelTOTPEnrollment", "getStepUpByRequest", "getRecoveryCodeRegenerationByRequest":
 		responses["400"] = object{"$ref": "#/components/responses/ProblemResponse", "description": "Invalid path, query or unexpected body; no identity selector is accepted."}
+	}
+	if operationID == "getStepUpByRequest" || operationID == "getRecoveryCodeRegenerationByRequest" {
+		responses["404"] = object{"$ref": "#/components/responses/ProblemResponse", "description": "No original same-USER metadata observed; not evidence that an uncertain command rolled back, and not permission to create a replacement intent."}
 	}
 	switch operationID {
 	case "getTOTPEnrollment", "getTOTPEnrollmentByRequest", "cancelTOTPEnrollment":

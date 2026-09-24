@@ -61,15 +61,15 @@ func (value MailSubmission) Validate() error {
 type SecurityMailKind string
 
 const (
-	MailAddressVerification     SecurityMailKind = "ADDRESS_VERIFICATION"
-	MailContactVerified         SecurityMailKind = "CONTACT_VERIFIED"
-	MailAuthenticatorBound      SecurityMailKind = "AUTHENTICATOR_BOUND"
-	MailAuthenticatorReplaced   SecurityMailKind = "AUTHENTICATOR_REPLACED"
-	MailAuthenticatorRemoved    SecurityMailKind = "AUTHENTICATOR_REMOVED"
-	MailRecoveryStarted         SecurityMailKind = "RECOVERY_STARTED"
-	MailAuthenticatorRecovered  SecurityMailKind = "AUTHENTICATOR_RECOVERED"
-	MailRecoveryCodesChanged    SecurityMailKind = "RECOVERY_CODES_CHANGED"
-	MailSecuritySettingsChanged SecurityMailKind = "SECURITY_SETTINGS_CHANGED"
+	MailAddressVerification      SecurityMailKind = "ADDRESS_VERIFICATION"
+	MailContactVerified          SecurityMailKind = "CONTACT_VERIFIED"
+	MailAuthenticatorBound       SecurityMailKind = "AUTHENTICATOR_BOUND"
+	MailAuthenticatorReplaced    SecurityMailKind = "AUTHENTICATOR_REPLACED"
+	MailAuthenticatorRemoved     SecurityMailKind = "AUTHENTICATOR_REMOVED"
+	MailRecoveryStarted          SecurityMailKind = "RECOVERY_STARTED"
+	MailAuthenticatorRecovered   SecurityMailKind = "AUTHENTICATOR_RECOVERED"
+	MailRecoveryCodesRegenerated SecurityMailKind = "RECOVERY_CODES_REGENERATED"
+	MailSecuritySettingsChanged  SecurityMailKind = "SECURITY_SETTINGS_CHANGED"
 )
 
 // SecurityMail is a purpose-limited delivery projection, not a recipient
@@ -109,7 +109,7 @@ func (message SecurityMail) Validate() error {
 	}
 	switch message.Kind {
 	case MailContactVerified, MailAuthenticatorBound, MailAuthenticatorReplaced, MailAuthenticatorRemoved,
-		MailRecoveryStarted, MailAuthenticatorRecovered, MailRecoveryCodesChanged, MailSecuritySettingsChanged:
+		MailRecoveryStarted, MailAuthenticatorRecovered, MailRecoveryCodesRegenerated, MailSecuritySettingsChanged:
 		return nil
 	default:
 		return ErrSecurityMail

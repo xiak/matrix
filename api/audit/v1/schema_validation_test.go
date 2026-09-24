@@ -349,7 +349,7 @@ func TestAuditTargetTenantIsRequiredOnlyForPrimaryRecovery(t *testing.T) {
 	}
 }
 
-func TestLocalCredentialRecoveryIsTheOnlyClosedPlatformSystemFact(t *testing.T) {
+func TestLocalCredentialRecoveryPlatformSystemFactIsClosed(t *testing.T) {
 	schema := compileAuditOpenAPISchema(t, loadAuditOpenAPI(t), "Event")
 	valid := func() map[string]any {
 		event := loadAuditSchemaExample(t, "examples/event-paas.json")
@@ -411,6 +411,63 @@ func TestLocalCredentialRecoveryIsTheOnlyClosedPlatformSystemFact(t *testing.T) 
 			decoded, err := decode(candidate)
 			if err == nil && ValidateEventForSource(SourceIAM, decoded) == nil {
 				t.Fatal("Go contract accepted a broadened local recovery fact")
+			}
+		})
+	}
+}
+
+func TestAuthenticationRecoveryPlatformSystemFactsAreClosed(t *testing.T) {
+	schema := compileAuditOpenAPISchema(t, loadAuditOpenAPI(t), "Event")
+	for _, action := range []Action{
+		ActionIAMAuthenticationRecoveryClosed,
+		ActionIAMAuthenticationRecoveryReconciled,
+		ActionIAMAuthenticationRecoveryReopened,
+	} {
+		t.Run(string(action), func(t *testing.T) {
+			valid := func() map[string]any {
+				event := loadAuditSchemaExample(t, "examples/event-paas.json")
+				delete(event, "tenantId")
+				delete(event, "iamDecisionId")
+				delete(event, "operationId")
+				event["installationId"] = "installation-original"
+				event["action"], event["result"] = string(action), string(ResultSucceeded)
+				event["actor"] = map[string]any{"type": string(ActorSystem), "id": "iam-authentication-recovery"}
+				event["target"] = map[string]any{"kind": string(TargetInstallation), "id": "installation-original"}
+				return event
+			}
+			decode := func(document map[string]any) (Event, error) {
+				encoded, err := json.Marshal(document)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var event Event
+				err = DecodeRequest(bytes.NewReader(encoded), &event)
+				return event, err
+			}
+			base := valid()
+			event, err := decode(base)
+			if err != nil || ValidateEventForSource(SourceIAM, event) != nil || schema.Validate(base) != nil {
+				t.Fatal("valid authentication recovery fact was rejected")
+			}
+			for name, mutate := range map[string]func(map[string]any){
+				"user actor":     func(value map[string]any) { value["actor"].(map[string]any)["type"] = string(ActorUser) },
+				"another system": func(value map[string]any) { value["actor"].(map[string]any)["id"] = "iam-local-recovery" },
+				"tenant scope": func(value map[string]any) {
+					delete(value, "installationId")
+					value["tenantId"] = "tenant-original"
+				},
+				"another target":    func(value map[string]any) { value["target"].(map[string]any)["id"] = "installation-other" },
+				"target namespace":  func(value map[string]any) { value["target"].(map[string]any)["tenantId"] = "tenant-original" },
+				"invented decision": func(value map[string]any) { value["iamDecisionId"] = "decision-forged" },
+			} {
+				t.Run(name, func(t *testing.T) {
+					candidate := valid()
+					mutate(candidate)
+					decoded, decodeErr := decode(candidate)
+					if schema.Validate(candidate) == nil && decodeErr == nil && ValidateEventForSource(SourceIAM, decoded) == nil {
+						t.Fatal("authentication recovery fact accepted a broadened shape")
+					}
+				})
 			}
 		})
 	}

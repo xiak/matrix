@@ -197,6 +197,116 @@ func TestPasswordWorkHasNoQueueAndPrivateAttemptsCannotSerialize(t *testing.T) {
 	}
 }
 
+func TestStepUpStopsAtUnknownAdmissionOrChangedCaller(t *testing.T) {
+	// This proves the staged use-case boundary, not SQL durability or MFA
+	// eligibility. Real consumption, budget and lock races remain PG18 gates.
+	for _, scenario := range []struct {
+		name, after, mutation string
+		wrongPassword         bool
+		denyOTP               bool
+		want                  error
+		otpReservations       int
+		passwordRejections    int
+	}{
+		{name: "wrong-password", wrongPassword: true, want: ErrUnauthenticated, passwordRejections: 1},
+		{name: "password-rejection-unknown", wrongPassword: true, after: "rejection", mutation: "unknown", want: ErrUnavailable, passwordRejections: 1},
+		{name: "password-reservation-unknown", after: "password", mutation: "unknown", want: ErrUnavailable},
+		{name: "revoked-after-password", after: "password", mutation: "revoke", want: ErrUnauthenticated},
+		{name: "generation-changed-after-password", after: "password", mutation: "generation", want: ErrUnauthenticated},
+		{name: "otp-reservation-unknown", after: "otp", mutation: "unknown", want: ErrUnavailable, otpReservations: 1},
+		{name: "revoked-after-otp", after: "otp", mutation: "revoke", want: ErrUnauthenticated, otpReservations: 1},
+		{name: "generation-changed-after-otp", after: "otp", mutation: "generation", want: ErrUnauthenticated, otpReservations: 1},
+		{name: "otp-budget-denied", denyOTP: true, want: ErrUnauthenticated, otpReservations: 1, passwordRejections: 1},
+		{name: "otp-denial-commit-unknown", denyOTP: true, after: "rejection", mutation: "unknown", want: ErrUnavailable, otpReservations: 1, passwordRejections: 1},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			tx := newCoreTransaction()
+			repository := &coreRepository{transaction: tx}
+			service, err := newCoreAuthority(repository, Config{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			bootstrap := coreBootstrap(t)
+			if _, err := service.Bootstrap(t.Context(), bootstrap); err != nil {
+				t.Fatal(err)
+			}
+			login, err := service.Login(t.Context(), iamv1.LoginRequest{LoginName: "admin", Password: bootstrap.Administrator.Password, RequestID: "step-up-login"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			password := coreSecret(t, "Step-Up-Current-Password-92!")
+			if _, err := service.ChangePassword(t.Context(), login.Credential, iamv1.ChangePasswordRequest{
+				CurrentPassword: bootstrap.Administrator.Password, NewPassword: password, RequestID: "step-up-initial-change"}); err != nil {
+				t.Fatal(err)
+			}
+			tx.stepUpForVerification = iamv1.StepUp{APIVersion: iamv1.APIVersion, Kind: "StepUp", ID: "original-step-up",
+				RequestID: "original-sensitive-command", Operation: "RECOVERY_CODES_REGENERATE", ExpectedFactorRevision: 2,
+				State: "PENDING", CreatedAt: tx.now, ExpiresAt: tx.now.Add(120 * time.Second)}
+			tx.denyTOTPReservation = scenario.denyOTP
+			beforeAttempts, beforeSessions, beforeDecisions := tx.attemptSequence, len(tx.sessions), len(tx.authorizations)
+			tx.rejectedAttempts = nil
+			injected := false
+			repository.afterTransaction = func(callbackErr error) error {
+				if callbackErr != nil || injected {
+					return callbackErr
+				}
+				ready := scenario.after == "password" && tx.attemptSequence > beforeAttempts ||
+					scenario.after == "otp" && len(tx.totpReservations) > 0 ||
+					scenario.after == "rejection" && len(tx.rejectedAttempts) > 0
+				if !ready {
+					return nil
+				}
+				injected = true
+				if scenario.mutation == "unknown" {
+					return ErrUnavailable
+				}
+				for digest, binding := range tx.sessions {
+					if binding.Subject.Session.ID != login.Session.ID {
+						continue
+					}
+					if scenario.mutation == "revoke" {
+						binding.Subject.Session.Status = iamv1.SessionRevoked
+					} else {
+						binding.CredentialGeneration++
+					}
+					tx.sessions[digest] = binding
+				}
+				return nil
+			}
+			if scenario.wrongPassword {
+				password = coreSecret(t, "Step-Up-Wrong-Password-38!")
+			}
+			result, err := service.VerifyStepUp(t.Context(), login.Credential, tx.stepUpForVerification.ID, iamv1.VerifyStepUpRequest{
+				RequestID: "original-proof-attempt", Password: password, Code: coreSecret(t, "123456")})
+			if !errors.Is(err, scenario.want) || result != (iamv1.StepUp{}) {
+				t.Fatal("uncertain or stale proof returned authority", err)
+			}
+			if scenario.after != "" && !injected {
+				t.Fatal("test never reached its actual admission boundary")
+			}
+			if tx.attemptSequence != beforeAttempts+1 || len(tx.rejectedAttempts) != scenario.passwordRejections ||
+				len(tx.totpReservations) != scenario.otpReservations || tx.totpAttemptReads != 0 ||
+				len(tx.sessions) != beforeSessions || len(tx.authorizations) != beforeDecisions || tx.stepUpForVerification.State != "PENDING" {
+				t.Fatal("failure retried a reservation, read a seed, proved an operation or issued authority")
+			}
+			for _, attempt := range tx.totpReservations {
+				if attempt.AccountID != login.Session.AccountID || attempt.UserID != login.Session.PrincipalID ||
+					attempt.SessionID != login.Session.ID || attempt.ReferenceID != tx.stepUpForVerification.ID || attempt.Purpose != "STEP_UP" {
+					t.Fatal("OTP reservation lost the original Session or operation")
+				}
+			}
+			// Even exceptional exits must return the bounded expensive-work slot.
+			for range 2 {
+				if err := service.acquirePasswordWork(t.Context()); err != nil {
+					t.Fatal("failed proof leaked password-work capacity", err)
+				}
+			}
+			service.releasePasswordWork()
+			service.releasePasswordWork()
+		})
+	}
+}
+
 func TestOwnLoginSessionWorkflowBindsTheActualCallerAndRejectsBadStorage(t *testing.T) {
 	tx := newCoreTransaction()
 	service, err := newCoreAuthority(&coreRepository{transaction: tx}, Config{CursorKey: bytes.Repeat([]byte{0x31}, 32)})
@@ -1279,6 +1389,20 @@ func (repository *coreRepository) WithinTransaction(
 	ctx context.Context,
 	callback func(context.Context, Transaction) error,
 ) error {
+	return repository.run(ctx, callback)
+}
+
+func (repository *coreRepository) WithinLocalCredentialRecoveryTransaction(
+	ctx context.Context,
+	callback func(context.Context, Transaction) error,
+) error {
+	return repository.run(ctx, callback)
+}
+
+func (repository *coreRepository) run(
+	ctx context.Context,
+	callback func(context.Context, Transaction) error,
+) error {
 	repository.inTransaction = true
 	err := callback(ctx, repository.transaction)
 	repository.inTransaction = false
@@ -1379,6 +1503,28 @@ type coreTransaction struct {
 	accessKeyCustodyErr     error
 	totpCustody             *TOTPCustody
 	totpCustodyErr          error
+	stepUpForVerification   iamv1.StepUp
+	totpReservations        []TOTPAttempt
+	denyTOTPReservation     bool
+	totpAttemptReads        int
+}
+
+func (transaction *coreTransaction) ReadStepUpForVerification(_ context.Context, caller iamv1.Session, id string) (iamv1.StepUp, error) {
+	if id != transaction.stepUpForVerification.ID || caller.PrincipalID != transaction.principal.ID {
+		return iamv1.StepUp{}, ErrStepUpNotFound
+	}
+	return transaction.stepUpForVerification, nil
+}
+
+func (transaction *coreTransaction) ReserveTOTPAttempt(_ context.Context, attempt TOTPAttempt) (TOTPAttempt, bool, error) {
+	transaction.totpReservations = append(transaction.totpReservations, attempt)
+	attempt.Sequence = uint64(len(transaction.totpReservations))
+	return attempt, !transaction.denyTOTPReservation, nil
+}
+
+func (transaction *coreTransaction) ReadTOTPAttempt(context.Context, TOTPAttempt) (TOTPVerification, error) {
+	transaction.totpAttemptReads++
+	return TOTPVerification{}, ErrUnavailable
 }
 
 func (transaction *coreTransaction) ReadLoginAuthenticationState(context.Context, iamv1.AccountID, iamv1.PrincipalID) (LoginAuthenticationState, error) {
@@ -1661,6 +1807,7 @@ func (transaction *coreTransaction) ReservePasswordAttempt(_ context.Context, re
 	transaction.attemptSequence++
 	attempt := PasswordAttempt{ID: request.ID, Sequence: transaction.attemptSequence, AccountID: selected.AccountID, PrincipalID: selected.ID,
 		SessionID: request.SessionID, PasswordHash: transaction.passwords[selected.ID], CredentialGeneration: 1,
+		Purpose: request.Purpose, IntentDigest: request.IntentDigest,
 		MustChangePassword: selected.MustChangePassword, ExpiresAt: transaction.now.Add(30 * time.Second)}
 	transaction.passwordAttempts[selected.ID] = attempt
 	return attempt, true, nil

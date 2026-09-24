@@ -1,6 +1,6 @@
 # FEAT-IAM-009：登录保护与安全治理
 
-- 状态：S1本人会话目录/逐个撤销已验收；S1b一键结束其他登录会话的后端切片也已验收，累计固定`7cf857bba48eb5d7da487162c43e8f52534db133`通过本地真库、保留数据、独立进程、全仓检查及五项独立CI。一般事务分组及失败证据归011，既有Role管理门禁的准备复用归006。S3a登录/改密共享密码尝试已实施，本地回归及固定92e3073的五项独立CI通过，未分配发布revision。S2首次TOTP绑定、登录挑战及强制改密已固定f5cec0e1；在线恢复码重绑后端及其本地数据库/进程/真实邮件证据归下述S2b，当前源码IAM38/Audit22，尚无独立CI验收。完整S2/S3/S4、UI与009发布均未完成；尚未实现的详细设计路由不是可用API，离线恢复及材料/通知的安装发布前置仍由其真实owner另验。
+- 状态：S1本人会话目录/逐个撤销已验收；S1b一键结束其他登录会话的后端切片也已验收，累计固定`7cf857bba48eb5d7da487162c43e8f52534db133`通过本地真库、保留数据、独立进程、全仓检查及五项独立CI。一般事务分组及失败证据归011，既有Role管理门禁的准备复用归006。S3a登录/改密共享密码尝试已实施，本地回归及固定92e3073的五项独立CI通过，未分配发布revision。S2首次TOTP绑定、登录挑战及强制改密已固定f5cec0e1；在线恢复码重绑后端及其本地数据库/进程/真实邮件证据归下述S2b，该固定源码为IAM38/Audit22，尚无独立CI验收；后继step-up与固定恢复隔离的工作树组合为IAM40/Audit24，仍待累计运行及发布验收。完整S2/S3/S4、UI与009发布均未完成；尚未实现的详细设计路由不是可用API，离线恢复及材料/通知的安装发布前置仍由其真实owner另验。
 - 依赖：003、005、007。
 - Owner：IAM 身份/凭据/会话治理，Audit evidence。
 
@@ -430,11 +430,11 @@ LoginResponse仍只允许LOGIN挑战；不能因为通用Challenge可以描述RE
 
 #### S2b后继：目的限定step-up与本人恢复码重发
 
-本纵向目标补足一次性十码回包丢失后、用户仍持有有效认证器的安全重发路径；不是管理员恢复、丢失全部材料的旁路或完整S3设置。现有`api/iam/v1`已实现以下严格类型/codec及生成OpenAPI组件；真实路由、用例、SQL和事实尚未接通，不能当作可运行HTTP。当前源码仍IAM38/Audit22，只有实际新SQL/函数与封闭事实接通时才核对后继版本，不预分配发布profile/revision。
+本纵向目标补足一次性十码回包丢失后、用户仍持有有效认证器的安全重发路径；不是管理员恢复、丢失全部材料的旁路或完整S3设置。以下五个HTTP入口、用例、SQL及封闭事实已在工作树接通，仍未固定或验收。结合已冻结的离线恢复隔离后，当前源码为IAM40/Audit24；不能继承前置纯契约、安装分支或旧IAM38/Audit22的验收，也不预分配发布profile/revision。
 
 StepUp始终由本人非forced、当前有效的PASSWORD_TOTP登录Session持有。原Account/USER、Session、credential generation、factorId/revision及当时有效恢复批次从IAM推导，不能由URL/body选择；ROLE、AccessKey、SERVICE和未登录挑战不能持有。此处不再另发行挑战秘密：公开ID不是能力，每个写请求仍须原有效bearer与锁内证明。原Session认证事实不被再次认证改写，也没有“最近验证过MFA即可任意操作”的缓存。
 
-| 拟实施入口 | 封闭契约与效果 |
+| 入口 | 封闭契约与效果 |
 | --- | --- |
 | `POST /v1/auth/step-up` | `{requestId,operation,expectedFactorRevision}`；首个operation仅`RECOVERY_CODES_REGENERATE`。requestId就是后继敏感命令的原意图，绑定真实USER/Session及准确输入；等值返回原StepUp，变体409。不返回新凭据、剩余额度、内部摘要或可选目标 |
 | `GET /v1/auth/step-up/by-request/{requestId}` | 原有效Session读取该原意图非秘密StepUp；NOT_FOUND不证明提交回滚。不是跨用户列表或通用receipt服务 |
@@ -442,7 +442,7 @@ StepUp始终由本人非forced、当前有效的PASSWORD_TOTP登录Session持有
 | `POST /v1/auth/recovery-codes:regenerate` | `{requestId,stepUpId,expectedFactorRevision}`加原bearer；requestId/预期修订必须等于StepUp绑定的原意图。成功同事务消费匹配PROVED、终止准确旧批次、保存新十条单向验证值及不可变完成/事实/通知；APPLIED仅一次返回十码，EQUAL_REPLAY只返回原完成元数据 |
 | `GET /v1/auth/recovery-codes/regenerations/by-request/{requestId}` | 当前有效本人Session读取原`RecoveryCodeRegeneration`；可以在正常重新登录后查询原完成，不要求旧Session继续有效，但不能重新取得十码或借查询消费证明 |
 
-公开`StepUp`只含id、原requestId、operation、expectedFactorRevision、`PENDING/PROVED/CONSUMED/EXPIRED`及createdAt/expiresAt/provedAt/consumedAt。创建时固定120秒绝对期限，验证成功不续期；PROVED/CONSUMED时间须在原期限内，消费不得早于证明。状态描述历史阶段，不承诺此刻仍有权限；请求仍检查当前身份、原版本、实际操作与期限。每USER最多三条未到期PENDING/PROVED，创建新意图不清空跨副本共享尝试预算。已证明后的读取或等值认证结果不签发新证明；旧证明到期、logout/reset、密码代际、USER/Account停用、因子或原恢复批次变化后不能用于另一命令。
+公开`StepUp`只含id、原requestId、operation、expectedFactorRevision、`PENDING/PROVED/CONSUMED/EXPIRED`及createdAt/expiresAt/provedAt/consumedAt。创建时固定120秒绝对期限，验证成功不续期；PROVED/CONSUMED时间须在原期限内，消费不得早于证明。状态描述历史阶段，不承诺此刻仍有权限；请求仍检查当前身份、原版本、实际操作与期限。每USER最多三条未到期PENDING/PROVED，创建新意图不清空跨副本共享尝试预算。已证明后的重复verify提交返回409；回包未知时，通过原命令requestId读取非秘密状态，不重放密码或OTP、不另签证明。旧证明到期、logout/reset、密码代际、USER/Account停用、因子或原恢复批次变化后不能用于另一命令。
 
 首次目标没有任意payload：固定操作+原requestId+预期factorRevision是公开输入，真实Session/USER/因子/旧批次和凭据代际是内部绑定。后续其他敏感命令须按准确字段扩展闭合联合，不能改成caller attributes、任意JSON承诺或通用Action字符串。结构错误/错目的不消费另一合法证明；同一证明并发只有一次执行。坏密码/码的持久失败预算遵循原短事务规则，末端成功事实失败必须回滚效果但不能把已提交保留当作免费尝试。
 
@@ -450,9 +450,33 @@ StepUp始终由本人非forced、当前有效的PASSWORD_TOTP登录Session持有
 
 验收沿现有owner：严格字段/秘密显式编码、LoginResponse拒绝StepUp；两个真实副本共享密码和OTP消费，跨Session/主体/目的/意图/旧批次/修订攻击；创建/证明/消费期限在锁等待后重新检查；证明与logout/change/reset/停用/恢复双向交错；同证明双提交、两个证明竞争同旧批次、成功事实/通知失败无部分换码；开始/证明/换码提交前后真实断TCP与重启，只读核对、不重发秘密。换码后用一条真实新码完成原受限恢复，旧十码始终拒绝；旧绑定/恢复记录经等值迁移保持，伪造重发来源不能取得当前资格。真实SMTP原地址实收与操作者之后停用的历史Audit投递另沿原门禁。安装离线CLOSED/reconcile/reopen仍由installation独占，新增批次来源必须通过固定对象协调后集成，不在本片修改其接口或宣称备份防回滚已完成。
 
-本片本地纯契约证据：原`contract_test.go`/`schema_validation_test.go`证明封闭操作与字段、UTC微秒和原120秒期限、状态/时间顺序、已绑定修订范围、秘密显式编码、APPLIED十码唯一性、EQUAL_REPLAY禁止秘密字段及LoginResponse不能接受StepUp。Go1.26.7/GOMAXPROCS2下API与全仓默认race/architecture、vet、模块校验、122个tracked API文件再生成集合/哈希稳定及Linux amd64构建通过；单worker的`FuzzStepUpContractRoundTrip`运行10秒、176823次通过。外部环境默认SKIP不算运行证据，本片未改变数据库schema/readiness、Audit action、通知、安装profile或UI，也未运行新的PG/SMTP/浏览器门禁。
+前置纯契约证据：原`contract_test.go`/`schema_validation_test.go`证明封闭操作与字段、UTC微秒和原120秒期限、状态/时间顺序、已绑定修订范围、秘密显式编码、APPLIED十码唯一性、EQUAL_REPLAY禁止秘密字段及LoginResponse不能接受StepUp。Go1.26.7/GOMAXPROCS2下API与全仓默认race/architecture、vet、模块校验、122个tracked API文件再生成集合/哈希稳定及Linux amd64构建通过；单worker的`FuzzStepUpContractRoundTrip`运行10秒、176823次通过。外部环境默认SKIP不算运行证据，该纯契约固定不含数据库schema/readiness、Audit action、通知、安装profile或UI变化，也不是后继运行时组合的验收。
 
 固定`303093bb945da43eb597f56b52059009580d0da1`已推送；[Verification35532968349](https://github.com/xiak/matrix/actions/runs/35532968349)按精确SHA核实completed/failure，六项均runner_id=0、steps=0，付款/spending-limit annotation阻止启动。独立CI未执行，不能继承本地结果或记作验收通过；该外部限制不改变下一步原子实现的安全边界。
+
+运行时数据仍由原`000012_totp`与通知owner持有：`step_ups`保存原Session的用途限定证明，`recovery_code_regenerations`保存不可变原意图/新旧批次/事实/通知关系；原恢复批次只追加准确重生成来源和终止原因，不更换其复合主键或重写绑定事实。原子末端验证新十码、消费的密码/OTP尝试、原Session认证事实及本人通知；对原始发行与后续重生成使用各自闭合历史来源，旧的临时`RECOVERY_CODES_CHANGED`占位名称已被实际`RECOVERY_CODES_REGENERATED`替换，没有兼容别名。readiness与迁移校验检查表、约束、索引、ALWAYS/deferred保护及确切函数/ACL，数值相同不代替这些检查。
+
+本地前置真库证据（离线隔离接入前）：自有PostgreSQL18.6、受限运行登录和两个独立HTTP handler的`TestIAMStepUpPostgres` race通过332.33s（包335.870s）。56类真实schema/权限破坏均失败关闭；八类重生成场景包括原意图重放、跨Session、共享密码/OTP预算、logout/改密/reset/停复用后的旧证明拒绝、同证明并发只有一次十码响应、末端通知明确P0001故障无部分变化、新码继续完成原受限恢复，以及实际USER锁等待超过原120秒（121.34s）后的过期拒绝。使用生产窗口、真实数据库时间和原算法成本，不修改时钟/计数制造成功；这不等于独立进程、提交后断TCP、SMTP、浏览器或接入离线隔离后的累计验收。
+
+离线隔离只选择性采用已确认的固定对象，来源选择归原adoption owner。保留其`000014`、专用本地角色、CLOSED→reconcile→reopen和永久批次栅栏，并保留本分支已有Session完整形状校验；在线增量占用其后继IAM40/Audit24，不修改ServiceIdentity、lookup_service、七列claim或旧canonical。普通认证事务在OPEN共享锁下运行；离线关闭以同一状态锁串行化，不能在关闭后借在线换码逃出隔离。恢复前的Session/证明不得被新会话接走，被永久隔离的旧批次不能经迁移重放或新step-up重获恢复资格。原密码恢复的精确历史读取保持原独立事务，不能因全局隔离获得新的恢复能力。
+
+当前40/24组合的聚焦race通过API/私有恢复codec、IAM用例、HTTP、目的限定入口与迁移进程配置检查。沿原integration owner采用的双库`TestIAMAuthenticationRecoveryPostgres`包含真实PASSWORD_TOTP登录及恢复前PROVED，在新独立库最后复验通过86.74s（包90.279s）：CLOSED拒绝在线重生成；reopen后旧会话及新会话均不能消费原证明，新证明也不能使用永久隔离的原批次；实际schema重放后仍拒绝，且证明/批次/成功事实/通知无部分变化。两个库是独立准备的源/恢复权威，未执行签名安装器或真实备份搬移，不能据此称安装恢复已验收。
+
+当前40/24组合在新的独立PostgreSQL18.6库重跑`TestIAMStepUpPostgres`，race通过395.18s（包398.640s）；原56类schema/权限损坏及九类在线场景全部通过。新增两条实际PROVED竞争同一旧批次用时58.61s，恰有一个APPLIED十码响应、一个401，只有一条完成/事实/通知和一个存活新批次，失败证明未被消费；实际锁等待超过原120秒后的到期拒绝用时121.23s。原同证明双提交、末端失败回滚、新码恢复及重放保持；没有缩短生产窗口、放宽预算或跳过原场景。真实邮件分支单独SKIP，不计入上述通过范围。
+
+后继进程夹具已修正并实际复验：原登录竞争与新增重生成共用USER会叠加共享尝试额度，现将后者改为单独通过实际绑定及密码/TOTP登录的USER，保留原竞争/强制改密路径、真实预算及原六分钟期限，不增加重试到通过或计数回填。2026-09-24在本任务独立Windows PostgreSQL18.6目录及随机loopback端口，`TestIndependentIAMAuditAndPaaSProcesses` race通过143.01s（包146.381s）：实际受限runtime登录、两个IAM与Audit/PaaS/dispatcher、创建/证明/换码各自提交后丢失TCP响应、重启后原意图查询、显式新意图替换丢失的十码，以及操作者停用后的原事实投递/重放/完整链均通过。旧401运行仍是失败记录，不用后继通过反推当时未采集的数据库状态。原联系人码为合成托管夹具，这不是SMTP或浏览器证据。
+
+该本机数据库用Windows Job限制2个逻辑CPU、1GiB总内存和24个进程；实际读取确认16连接、64MiB shared_buffers、4MiB work_mem及关闭parallel workers，Go1.26.7/GOMAXPROCS2/GOMEMLIMIT512MiB、race-p1串行。未安装全局服务或启动/重启Docker、共享服务及远端。原用例测试另以十个失败分支证明：密码/OTP保留或拒绝提交不确定时不继续读种子/签证明，不重新保留免费尝试；两个阶段之间撤销Session或改变generation关闭旧身份；异常退出归还昂贵计算槽。这仅证明用例控制流，真实持久预算和锁竞争仍由PG门禁负责。
+
+同轮实际固定`f5cec0e1` IAM37 executable/schema产生已绑定因子、消费步骤、原十码、PASSWORD_TOTP会话及待完成挑战，随后当前IAM40双迁移/bootstrap/重启保留数据，`TestIAMRetainedMFAProcessUpgrade` race通过43.21s（包46.723s）。原码继续完成受限恢复及新因子登录，完成后再次迁移/重启仍保留准确消费、批次终态和旧会话/挑战拒绝。首次检查因`to_jsonb(整行)`把新添空列误当原批次变化而失败；已改为原归属、因子/事件来源和生命周期的明确比较，并独立断言不补造step-up、重生成或其来源字段，生产迁移未因此放宽。此片只证明选定真实前驱的数据/程序边界，不要求逐版回放所有未发布schema，也不构成跨release profile许可。
+
+独立通知进程经真实Postfix投递原重生成邮件的分支已加入原测试owner，仍待实跑。当前Docker引擎不可连接；无Postfix时显式SKIP，不把队列当实收，不继承此前其他邮件类型的验收。
+
+同一组合另在三个独立空白数据库完成Audit累计race：双authority受限登录/完整攻击面5.64s、固定旧tenant链保留升级0.35s（包9.134s）、Audit HTTP隔离与并发1.27s（包3.844s）。首次运行在初始化readiness检查发现两处旧IAM39断言与实际IAM40不符；只更新准确版本预期，在新库保留原初始化前/后状态、实际函数/权限及不可变记录门禁后通过，未降低生产校验。测试终止且确认无客户端后已正常停止本任务本机PG；先前清理被工具策略拒绝的临时数据/私有文件仍按owner-only权限保留，未绕过重试或操作其他任务资源。
+
+2026-09-24最终全仓默认race（含architecture）及vet通过；模块校验、122个API文件集合及生成字节一致、Linux amd64构建、gofmt与diff检查通过。新增step-up真实门禁实测约六分半，放入现有CI矩阵的独立20分钟lane；四个数据库lane仍max-parallel=1，原storage/runtime各20分钟、自然窗口30分钟及全部单项期限不变，没有把新增工作挤入旧门禁预算。YAML及14段Bash语法检查通过，编译列出的17个IAM真库测试分别归一般存储6、Role1、runtime8、step-up1、自然窗口1，未遗漏或重复；这些检查不等于独立runner执行。默认外部环境SKIP不计验收，真实PG/进程证据仅以上述明确实跑为准，SMTP、浏览器及独立CI仍缺失。本片未固定推送，未修改UI、installation/profile、PaaS或既有canonical拥有者。
+
+安装发布前置仍未完成：旧preparation35/18+r13没有本次purpose executable/SQL，不是新40/24组合可在数据库恢复后才尝试的目标。若产品继续支持恢复到exact signed immediate predecessor，必须先有具备完整恢复ABI、且未验收MFA创建仍关闭的新preparation A，再证明B→A的真实受支持路径；目前没有这样的已验收A/B。此处不分配release profile/revision、不开放跨profile旁路，也不以本地双库事务代替签名备份恢复或任意整机快照防回滚。
 
 #### 事务、锁序与失败结果
 

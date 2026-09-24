@@ -180,7 +180,7 @@ func TestSecurityMailClosedContentsAndAddress(t *testing.T) {
 	mail := SecurityMail{NotificationID: "notice-1", Recipient: "User@matrix.test", Kind: MailAuthenticatorBound,
 		OccurredAt: time.Date(2026, 9, 20, 0, 0, 0, 0, time.UTC)}
 	for _, kind := range []SecurityMailKind{MailAuthenticatorBound, MailAuthenticatorReplaced, MailAuthenticatorRemoved,
-		MailRecoveryStarted, MailAuthenticatorRecovered, MailRecoveryCodesChanged, MailSecuritySettingsChanged} {
+		MailRecoveryStarted, MailAuthenticatorRecovered, MailRecoveryCodesRegenerated, MailSecuritySettingsChanged} {
 		mail.Kind = kind
 		if err := mail.Validate(); err != nil {
 			t.Fatalf("closed security notice: %v", err)

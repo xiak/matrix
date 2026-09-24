@@ -43,6 +43,10 @@ BEGIN
             END IF;
         END LOOP;
     END LOOP;
+    IF has_function_privilege('matrix_iam_credential_recovery','iam.assert_authentication_open()','EXECUTE')
+        OR has_function_privilege('public','iam.assert_authentication_open()','EXECUTE') THEN
+        RAISE EXCEPTION 'IAM local recovery authentication fence is unavailable';
+    END IF;
     IF EXISTS(SELECT 1 FROM pg_catalog.pg_proc AS procedure JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid=procedure.pronamespace
         WHERE namespace.nspname='iam' AND has_function_privilege('matrix_iam_credential_recovery',procedure.oid,'EXECUTE')
         AND procedure.oid NOT IN ('iam.inspect_local_credential_recovery(jsonb,text,text)'::regprocedure,
