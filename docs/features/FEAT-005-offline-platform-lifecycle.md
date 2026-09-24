@@ -281,23 +281,23 @@ fresh externally disconnected signed preparation-to-enabling upgrade,
 rollback-refusal, backup/recovery, crash-resume, restart and cleanup run remain
 required. No Docker engine or remote host was started for the current evidence.
 
-Fixed integration source `7d002ea2` closes a release packaging gap: the
+Fixed integration source `e62593c1` closes a release packaging gap: the
 enabling topology now includes the dedicated IAM notification dispatcher, a
 purpose-only database login, installation-owned email verification keyring,
 and an installation-scoped SMTP channel. Current-release install and upgrade
 require `--security-mail-configuration <protected-file>`; its canonical input
 is bound to the sealed installation and a digest-only journal commitment.
-Completed replay rejects changed configuration. The credential and keyring
-remain outside bundle metadata and command output. The acceptance driver now
+Completed replay rejects changed configuration; installed verification also
+checks the private channel and keyring against the journal commitment, so a
+well-formed channel with a different password fails. Credentials and keys
+remain outside bundle metadata and command output. The acceptance driver
 receives an actual authenticated TLS SMTP message, consumes its verification
 code through IAM, binds TOTP, and reauthenticates after factor and backup
 transitions. Its listener and exact private input file are removed on exit.
-The source passed affected Go package tests, the architecture gate, focused
-vet and a self-contained TLS SMTP fixture test. The full Go run initially
-found only an unapproved test dependency; the fixture was changed to use Go
-standard-library TOTP and the affected plus architecture gates then passed.
-No signed runtime or Docker-based release acceptance is claimed for this
-source. The complete Phase 3 extension remains open.
+This source passed the full low-concurrency Go suite, architecture gate,
+focused vet, SMTP protocol and TOTP vector tests. No signed runtime or
+Docker-based release acceptance is claimed. The complete Phase 3 extension
+remains open.
 
 ## Incremental acceptance
 
