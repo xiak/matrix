@@ -417,6 +417,10 @@ describe("policy creation entry and directory contract", () => {
     await user.type(screen.getByRole("textbox", { name: "资源 ID 或前缀" }), "app-demo");
     await user.click(screen.getByRole("button", { name: "审阅策略" }));
     expect(screen.getByRole("heading", { name: "审阅新策略" })).toBeTruthy();
+    const summary = screen.getByRole("region", { name: "声明摘要" });
+    expect(within(summary).getByText("paas.application.read", { selector: "code" })).toBeTruthy();
+    expect(within(summary).getByText("app-demo", { selector: "code" })).toBeTruthy();
+    expect(screen.getByText("查看完整 JSON").closest("details")?.open).toBe(false);
     await user.click(screen.getByRole("button", { name: "返回编辑" }));
     expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "策略名称" }));
     expect((screen.getByRole("textbox", { name: "资源 ID 或前缀" }) as HTMLInputElement).value).toBe("app-demo");
@@ -429,6 +433,25 @@ describe("policy creation entry and directory contract", () => {
     expect(repository.execute).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "返回策略目录" }));
     expect(screen.getByRole("table", { name: "策略" })).toBeTruthy();
+  });
+  it("reviews one visual statement at a time when a policy has multiple statements", async () => {
+    const { user } = await open("policies");
+    await user.click(screen.getByRole("button", { name: "体验新版策略编辑" }));
+    await user.type(screen.getByRole("textbox", { name: "策略名称" }), "Two statements");
+    await user.click(screen.getByRole("tab", { name: "可视化编辑" }));
+    await user.click(await screen.findByRole("radio", { name: /paas.application.read/ }));
+    await user.type(screen.getByRole("textbox", { name: "资源 ID 或前缀" }), "app-first");
+    await user.click(screen.getByRole("button", { name: "添加声明" }));
+    await user.click(screen.getByRole("radio", { name: /paas.application.read/ }));
+    await user.type(screen.getByRole("textbox", { name: "资源 ID 或前缀" }), "app-second");
+    await user.click(screen.getByRole("button", { name: "审阅策略" }));
+    const summary = screen.getByRole("region", { name: "声明摘要" });
+    expect(within(summary).getByText("共 2 条声明")).toBeTruthy();
+    expect(within(summary).getByText("app-first", { selector: "code" })).toBeTruthy();
+    expect(within(summary).queryByText("app-second", { selector: "code" })).toBeNull();
+    await select(user, "选择要核对的声明", "声明 2 · statement-2");
+    expect(within(summary).getByText("app-second", { selector: "code" })).toBeTruthy();
+    expect(within(summary).queryByText("app-first", { selector: "code" })).toBeNull();
   });
   it("matches CAM directory columns, omits preset metadata in custom view and restores chooser focus", async () => {
     const { user, repository } = await open("policies");

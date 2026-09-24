@@ -1253,8 +1253,16 @@ describe("account access", () => {
     await user.click(screen.getByRole("button", { name: "审阅策略" }));
     expect(screen.getByText(/可视化声明还有未完成/)).toBeTruthy();
     await user.type(screen.getByRole("textbox", { name: "资源 ID 或前缀" }), "app-prod");
+    await user.click(screen.getByRole("button", { name: "添加条件" }));
+    await user.type(screen.getByRole("textbox", { name: "条件值" }), "tenant-a");
     await user.click(screen.getByRole("button", { name: "审阅策略" }));
     expect(screen.getByRole("heading", { name: "审阅新策略" })).toBeTruthy();
+    const summary = screen.getByRole("region", { name: "声明摘要" });
+    expect(within(summary).getByText("paas.application.read", { selector: "code" })).toBeTruthy();
+    expect(within(summary).getByText("app-prod", { selector: "code" })).toBeTruthy();
+    expect(within(summary).getByText("当前账号 ID", { exact: false })).toBeTruthy();
+    expect(within(summary).getByText("tenant-a", { selector: "code" })).toBeTruthy();
+    expect(screen.getByText("查看完整 JSON").closest("details")?.open).toBe(false);
     await user.click(screen.getByRole("button", { name: "返回编辑" }));
     expect((screen.getByRole("textbox", { name: "策略名称" }) as HTMLInputElement).value).toBe("Application reader");
     expect(document.activeElement).toBe(screen.getByRole("textbox", { name: "策略名称" }));
@@ -1267,7 +1275,8 @@ describe("account access", () => {
     const submitted = createPolicy.mock.calls[0]![2];
     expect(submitted.displayName).toBe("Application reader");
     expect(submitted.document).toEqual({ languageVersion: "1", scope: "TENANT", statements: [{ sid: "statement-1", effect: "ALLOW",
-      actions: ["paas.application.read"], resources: [{ kind: "APPLICATION", match: "EXACT", id: "app-prod" }] }] });
+      actions: ["paas.application.read"], resources: [{ kind: "APPLICATION", match: "EXACT", id: "app-prod" }],
+      conditions: [{ key: "iam.account-id", operator: "STRING_EQUALS", values: ["tenant-a"] }] }] });
     expect(submitted.requestId).toMatch(/^ui-policy-create-/);
     expect(await screen.findByText(/策略 customer.new 已创建/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "查看策略" }));
@@ -1282,6 +1291,8 @@ describe("account access", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "策略名称" }), { target: { value: "Uncertain policy" } });
     fireEvent.change(screen.getByRole("textbox", { name: "策略声明 JSON" }), { target: { value: JSON.stringify(tenantPolicyDetail.version.document) } });
     await user.click(screen.getByRole("button", { name: "审阅策略" }));
+    expect(screen.queryByRole("region", { name: "声明摘要" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "策略声明 JSON" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "确认创建" }));
     expect(await screen.findByRole("heading", { name: "策略创建结果未确认" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "查看策略目录" }));
