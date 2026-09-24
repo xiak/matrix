@@ -15,10 +15,12 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/pquerna/otp/hotp"
 
 	installationv1 "github.com/xiak/matrix/api/adapter/installation/v1"
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
+	"github.com/xiak/matrix/app/service/iam/internal/authority"
 	iampostgres "github.com/xiak/matrix/app/service/iam/internal/data/postgres"
 	"github.com/xiak/matrix/app/service/iam/internal/usecase/authenticationrecovery"
 	"github.com/xiak/matrix/app/service/iam/internal/usecase/identityaccess"
@@ -83,11 +85,17 @@ func TestIAMAuthenticationRecoveryPostgres(t *testing.T) {
 		sourceStatus.ContentDigest != restoredStatus.ContentDigest {
 		t.Fatal("source and restored bootstrap identities differ")
 	}
+	if err := sourceAPI.RegisterEmailVerificationKeyset(ctx); err != nil {
+		t.Fatal("register source email verification custody", err)
+	}
+	if err := restoredAPI.RegisterEmailVerificationKeyset(ctx); err != nil {
+		t.Fatal("register restored email verification custody", err)
+	}
 	sourceCredential, _ := prepareAuthenticationRecoveryIdentity(t, ctx, sourceAPI, sourceAdmin, document, false)
 	restoredCredential, restoredSession := prepareAuthenticationRecoveryIdentity(t, ctx, restoredAPI, restoredAdmin, document, true)
 	before := readAuthenticationRecoverySecurityState(t, ctx, restoredAdmin, document, restoredSession)
-	if before.activeSessions == 0 || before.accessKeys != 1 || before.retainedFactors != 0 ||
-		before.passwordReserved != 1 {
+	if before.activeSessions == 0 || before.accessKeys != 1 || before.recoveryBatches != 1 || before.factorStep < 0 ||
+		before.passwordReserved != 1 || before.totpReserved != 1 || before.challengePending != 1 {
 		t.Fatal("restored pre-close replay fixture is incomplete")
 	}
 
@@ -147,21 +155,6 @@ func TestIAMAuthenticationRecoveryPostgres(t *testing.T) {
 	if _, err := restoredRecovery.Reopen(ctx, changedClosure); !errors.Is(err, authenticationrecovery.ErrConflict) {
 		t.Fatalf("reopen accepted a changed closure: %v", err)
 	}
-	insertPreparationRecoveryFactor(t, ctx, restoredAdmin, document)
-	withFactor := readAuthenticationRecoverySecurityState(t, ctx, restoredAdmin, document, restoredSession)
-	if withFactor.retainedFactors != 1 {
-		t.Fatal("preparation recovery factor fixture was not retained")
-	}
-	if _, err := restoredRecovery.Reopen(ctx, closure); !errors.Is(err, authenticationrecovery.ErrConflict) {
-		t.Fatalf("preparation authority reopened retained MFA state: %v", err)
-	}
-	afterRejectedFactor := readAuthenticationRecoverySecurityState(t, ctx, restoredAdmin, document, restoredSession)
-	if afterRejectedFactor.credentialGeneration != before.credentialGeneration ||
-		afterRejectedFactor.completions != 0 || afterRejectedFactor.accessKeyFences != 0 ||
-		afterRejectedFactor.activeSessions != before.activeSessions {
-		t.Fatalf("retained MFA rejection partially changed authentication state: before=%+v after=%+v", before, afterRejectedFactor)
-	}
-	removePreparationRecoveryFactor(t, ctx, restoredAdmin, document)
 	completion := reopenAuthenticationConcurrently(t, ctx, restoredRecovery, closure)
 	if installationv1.ValidateAuthenticationRecoveryCompletionForClosure(completion, closure) != nil {
 		t.Fatal("restored reopen returned an invalid completion")
@@ -188,10 +181,11 @@ func TestIAMAuthenticationRecoveryPostgres(t *testing.T) {
 
 	after := readAuthenticationRecoverySecurityState(t, ctx, restoredAdmin, document, restoredSession)
 	if after.credentialGeneration != before.credentialGeneration+1 || after.activeSessions != 1 ||
-		after.restoredSessionStatus != "REVOKED" || after.retainedFactors != 0 ||
-		after.accessKeyFences != before.accessKeys ||
+		after.restoredSessionStatus != "REVOKED" || after.factorStep < completion.CompletedAt.Unix()/30 ||
+		after.codeFences != before.recoveryBatches || after.accessKeyFences != before.accessKeys ||
 		after.closures != 1 || after.reconciliations != 1 || after.completions != 1 ||
-		after.passwordReserved != 0 || after.passwordAbandoned != 1 {
+		after.passwordReserved != 0 || after.totpReserved != 0 || after.challengePending != 0 ||
+		after.passwordAbandoned != 1 || after.totpAbandoned != 1 || after.challengeCancelled != 1 {
 		t.Fatalf("reopen replay fencing differs: before=%+v after=%+v", before, after)
 	}
 	assertAuthenticationRecoveryAuditFacts(t, ctx, sourceAdmin, restoredAdmin)
@@ -254,10 +248,12 @@ func authenticationRecoveryAPI(t *testing.T, ctx context.Context, dsn string, do
 		t.Fatal(err)
 	}
 	totp, accessKeys := iamHTTPTOTPKeyring(t, document), iamHTTPAccessKeyWrapping(t, document)
+	email := authenticationRecoveryEmailKeyring(t, document)
 	service, err := identityaccess.NewAuthority(repository, identityaccess.Config{
-		CursorKey:         bytes.Repeat([]byte{0x39}, 32),
-		TOTPKeyring:       &totp,
-		AccessKeyWrapping: &accessKeys,
+		CursorKey:                bytes.Repeat([]byte{0x39}, 32),
+		TOTPKeyring:              &totp,
+		AccessKeyWrapping:        &accessKeys,
+		EmailVerificationKeyring: &email,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -375,13 +371,114 @@ func prepareAuthenticationRecoveryIdentity(t *testing.T, ctx context.Context, se
 		if err != nil || created.Outcome != "APPLIED" || !created.Secret.Present() {
 			t.Fatalf("create recovery fixture AccessKey: %v", err)
 		}
-		seedAuthenticationRecoveryPendingPassword(t, ctx, database, document)
+		enrollAuthenticationRecoveryTOTP(t, ctx, service, database, document, keyLogin.Credential)
+		seedAuthenticationRecoveryPendingWork(t, ctx, service, database, document, keyUser.ID)
 	}
 	return login.Credential, login.Session.ID
 }
 
-func seedAuthenticationRecoveryPendingPassword(t *testing.T, ctx context.Context, database *pgx.Conn, document iamv1.BootstrapDocument) {
+func authenticationRecoveryEmailKeyring(t *testing.T, document iamv1.BootstrapDocument) iamv1.EmailVerificationKeyring {
 	t.Helper()
+	digest, err := iamv1.BootstrapDigest(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return iamv1.EmailVerificationKeyring{
+		APIVersion:     iamv1.APIVersion,
+		Kind:           "EmailVerificationKeyring",
+		Purpose:        iamv1.EmailVerificationWrappingPurpose,
+		Scope:          iamv1.SecurityMailInstallationScope{InstallationID: document.InstallationID, BootstrapDigest: digest},
+		KeysetRevision: 1,
+		ActiveKeyID:    "auth-recovery-email",
+		Keys: []iamv1.EmailVerificationWrappingKey{{
+			KeyID:         "auth-recovery-email",
+			FormatVersion: 1,
+			KeyMaterial:   iamHTTPSecret(t, base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x63}, 32))),
+		}},
+	}
+}
+
+func enrollAuthenticationRecoveryTOTP(t *testing.T, ctx context.Context, service *identityaccess.Authority, database *pgx.Conn, document iamv1.BootstrapDocument, credential iamv1.Secret) {
+	t.Helper()
+	password := iamHTTPSecret(t, changedDeveloperPassword)
+	pending, err := service.StartNotificationVerification(ctx, credential, iamv1.StartNotificationContactVerificationRequest{
+		Email:     "authentication-recovery@matrix.test",
+		Password:  password,
+		RequestID: "auth-recovery-email-start",
+	})
+	if err != nil {
+		t.Fatal("start recovery fixture email verification", err)
+	}
+	binding := iamv1.EmailVerificationBinding{AccountID: pending.AccountID, UserID: pending.UserID, VerificationID: pending.ID}
+	sealed := authority.SealedEmailVerificationCode{FormatVersion: 1}
+	if err := database.QueryRow(ctx, `SELECT installation_id,bootstrap_digest,email,credential_generation,contact_revision,issued_at,expires_at,key_id,nonce,ciphertext
+      FROM iam.notification_contact_verifications WHERE tenant_id=$1 AND id=$2`, pending.AccountID, pending.ID).Scan(
+		&binding.InstallationID, &binding.BootstrapDigest, &binding.Recipient, &binding.CredentialGeneration,
+		&binding.ContactRevision, &binding.IssuedAt, &binding.ExpiresAt, &sealed.KeyID, &sealed.Nonce, &sealed.Ciphertext); err != nil {
+		t.Fatal("read recovery fixture email challenge", err)
+	}
+	binding.IssuedAt, binding.ExpiresAt = binding.IssuedAt.UTC(), binding.ExpiresAt.UTC()
+	protector, err := authority.NewEmailVerificationProtector(authenticationRecoveryEmailKeyring(t, document))
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := protector.Open(binding, sealed)
+	if err != nil {
+		t.Fatal("open recovery fixture email code", err)
+	}
+	if _, err := service.ConfirmNotificationContact(ctx, credential, pending.ID, iamv1.ConfirmNotificationContactVerificationRequest{
+		Code: code, RequestID: "auth-recovery-email-confirm",
+	}); err != nil {
+		t.Fatal("confirm recovery fixture email", err)
+	}
+	state, err := service.AuthenticatorState(ctx, credential)
+	if err != nil || state.EnrollmentState != "NEVER_BOUND" {
+		t.Fatalf("read recovery fixture authenticator state: %v", err)
+	}
+	started, err := service.StartTOTPEnrollment(ctx, credential, iamv1.StartTOTPEnrollmentRequest{
+		RequestID: "auth-recovery-totp-start", Password: password, ExpectedFactorRevision: state.FactorRevision,
+	})
+	if err != nil || started.Provisioning == nil || !started.Provisioning.Seed.Present() {
+		t.Fatalf("start recovery fixture TOTP enrollment: %v", err)
+	}
+	var now time.Time
+	if err := database.QueryRow(ctx, "SELECT clock_timestamp()").Scan(&now); err != nil {
+		t.Fatal(err)
+	}
+	if remainder := now.Unix() % 30; remainder >= 27 {
+		timer := time.NewTimer(time.Duration(31-remainder) * time.Second)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			t.Fatal(ctx.Err())
+		case <-timer.C:
+		}
+		if err := database.QueryRow(ctx, "SELECT clock_timestamp()").Scan(&now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	totpCode, err := hotp.GenerateCode(string(started.Provisioning.Seed.CopyBytes()), uint64(now.Unix()/30))
+	if err != nil {
+		t.Fatal(err)
+	}
+	confirmed, err := service.ConfirmTOTPEnrollment(ctx, credential, started.Enrollment.ID, iamv1.ConfirmTOTPEnrollmentRequest{
+		RequestID: "auth-recovery-totp-confirm", Code: iamHTTPSecret(t, totpCode),
+	})
+	if err != nil || confirmed.Enrollment.State != "CONFIRMED" || len(confirmed.RecoveryCodes) != 10 {
+		t.Fatalf("confirm recovery fixture TOTP enrollment: %v", err)
+	}
+}
+
+func seedAuthenticationRecoveryPendingWork(t *testing.T, ctx context.Context, service *identityaccess.Authority, database *pgx.Conn, document iamv1.BootstrapDocument, user iamv1.PrincipalID) {
+	t.Helper()
+	challenge, err := service.Login(ctx, iamv1.LoginRequest{
+		LoginName: "auth-recovery-key-user@" + string(document.Organization.ID),
+		Password:  iamHTTPSecret(t, changedDeveloperPassword),
+		RequestID: "auth-recovery-pending-challenge",
+	})
+	if err != nil || challenge.Outcome != iamv1.LoginChallengeRequired || challenge.Challenge == nil || !challenge.ChallengeCredential.Present() {
+		t.Fatalf("create recovery fixture authentication challenge: %v", err)
+	}
 	config := database.Config().Copy()
 	config.User, config.Password = iamHTTPTestRole, iamHTTPTestPassword
 	config.RuntimeParams["application_name"] = "matrix-authentication-recovery-pending-work-test"
@@ -401,6 +498,10 @@ func seedAuthenticationRecoveryPendingPassword(t *testing.T, ctx context.Context
 	if _, err := tx.Exec(ctx, `SELECT iam.reserve_password_attempt($1,NULL,NULL,NULL,'auth-recovery-pending-password','LOGIN',NULL)`,
 		"auth-recovery-key-user@"+string(document.Organization.ID)); err != nil {
 		t.Fatal("reserve recovery password attempt", err)
+	}
+	if _, err := tx.Exec(ctx, `SELECT iam.reserve_totp_attempt($1,$2,NULL,$3,'LOGIN','auth-recovery-pending-totp')`,
+		document.Organization.ID, user, challenge.Challenge.ID); err != nil {
+		t.Fatal("reserve recovery TOTP attempt", err)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		t.Fatal(err)
@@ -522,71 +623,23 @@ func assertAuthenticationAuthorityClosed(t *testing.T, ctx context.Context, serv
 	}
 }
 
-func insertPreparationRecoveryFactor(t *testing.T, ctx context.Context, database *pgx.Conn, document iamv1.BootstrapDocument) {
-	t.Helper()
-	tx, err := database.Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = tx.Rollback(context.Background()) }()
-	if _, err := tx.Exec(ctx, "SET LOCAL ROLE matrix_iam_owner"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tx.Exec(ctx, "SELECT set_config('matrix.iam_tenant_id',$1,true)", document.Organization.ID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tx.Exec(ctx, `INSERT INTO iam.totp_authenticators(
-      id,tenant_id,user_id,installation_id,key_id,format_version,nonce,ciphertext,state,last_consumed_step,created_at)
-      VALUES('auth-recovery-retained-factor',$1,$2,$3,'totp-http',1,$4,$5,'REVOKED',-1,transaction_timestamp())`,
-		document.Organization.ID, document.Administrator.ID, document.InstallationID, bytes.Repeat([]byte{0x11}, 12), bytes.Repeat([]byte{0x22}, 36)); err != nil {
-		t.Fatal("insert retained preparation MFA fixture", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func removePreparationRecoveryFactor(t *testing.T, ctx context.Context, database *pgx.Conn, document iamv1.BootstrapDocument) {
-	t.Helper()
-	tx, err := database.Begin(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = tx.Rollback(context.Background()) }()
-	if _, err := tx.Exec(ctx, "ALTER TABLE iam.totp_authenticators DISABLE TRIGGER cannot_delete"); err != nil {
-		t.Fatal("disable immutable fixture trigger", err)
-	}
-	if _, err := tx.Exec(ctx, "SET LOCAL ROLE matrix_iam_owner"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tx.Exec(ctx, "SELECT set_config('matrix.iam_tenant_id',$1,true)", document.Organization.ID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tx.Exec(ctx, "DELETE FROM iam.totp_authenticators WHERE tenant_id=$1 AND id='auth-recovery-retained-factor'", document.Organization.ID); err != nil {
-		t.Fatal("remove retained preparation MFA fixture", err)
-	}
-	if _, err := tx.Exec(ctx, "RESET ROLE"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tx.Exec(ctx, "ALTER TABLE iam.totp_authenticators ENABLE ALWAYS TRIGGER cannot_delete"); err != nil {
-		t.Fatal("restore immutable fixture trigger", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		t.Fatal(err)
-	}
-}
-
 type authenticationRecoverySecurityState struct {
 	credentialGeneration  int64
+	factorStep            int64
 	activeSessions        int
 	accessKeys            int
-	retainedFactors       int
+	recoveryBatches       int
+	codeFences            int
 	accessKeyFences       int
 	closures              int
 	reconciliations       int
 	completions           int
 	passwordReserved      int
 	passwordAbandoned     int
+	totpReserved          int
+	totpAbandoned         int
+	challengePending      int
+	challengeCancelled    int
 	restoredSessionStatus string
 }
 
@@ -595,20 +648,27 @@ func readAuthenticationRecoverySecurityState(t *testing.T, ctx context.Context, 
 	var result authenticationRecoverySecurityState
 	err := database.QueryRow(ctx, `SELECT
       (SELECT credential_version FROM iam.user_credentials WHERE tenant_id=$1 AND principal_id=$2),
+      COALESCE((SELECT max(last_consumed_step) FROM iam.totp_authenticators WHERE tenant_id=$1 AND state='ACTIVE'),-1),
       (SELECT count(*) FROM iam.sessions WHERE tenant_id=$1 AND status='ACTIVE'),
       (SELECT count(*) FROM iam.access_keys WHERE tenant_id=$1),
-	  (SELECT count(*) FROM iam.totp_authenticators),
+      (SELECT count(*) FROM iam.mfa_recovery_batches WHERE tenant_id=$1),
+      (SELECT count(*) FROM iam.authentication_recovery_code_fences),
       (SELECT count(*) FROM iam.authentication_recovery_access_key_fences),
       (SELECT count(*) FROM iam.authentication_recovery_closures),
       (SELECT count(*) FROM iam.authentication_recovery_reconciliations),
       (SELECT count(*) FROM iam.authentication_recovery_completions),
 	  (SELECT count(*) FROM iam.password_attempts WHERE state='RESERVED'),
 	  (SELECT count(*) FROM iam.password_attempts WHERE state='ABANDONED'),
+      (SELECT count(*) FROM iam.totp_attempts WHERE state='RESERVED'),
+      (SELECT count(*) FROM iam.totp_attempts WHERE state='ABANDONED'),
+      (SELECT count(*) FROM iam.authentication_challenges WHERE state='PENDING'),
+      (SELECT count(*) FROM iam.authentication_challenges WHERE state='CANCELLED'),
       (SELECT status FROM iam.sessions WHERE tenant_id=$1 AND id=$3)`,
 		document.Organization.ID, document.Administrator.ID, session).Scan(
-		&result.credentialGeneration, &result.activeSessions, &result.accessKeys, &result.retainedFactors,
-		&result.accessKeyFences, &result.closures,
+		&result.credentialGeneration, &result.factorStep, &result.activeSessions, &result.accessKeys,
+		&result.recoveryBatches, &result.codeFences, &result.accessKeyFences, &result.closures,
 		&result.reconciliations, &result.completions, &result.passwordReserved, &result.passwordAbandoned,
+		&result.totpReserved, &result.totpAbandoned, &result.challengePending, &result.challengeCancelled,
 		&result.restoredSessionStatus)
 	if err != nil {
 		t.Fatal("read authentication recovery security state", err)
@@ -693,6 +753,7 @@ func assertAuthenticationRecoveryHistoryImmutable(t *testing.T, ctx context.Cont
 		"authentication_recovery_closures",
 		"authentication_recovery_reconciliations",
 		"authentication_recovery_completions",
+		"authentication_recovery_code_fences",
 		"authentication_recovery_access_key_fences",
 	} {
 		for _, attack := range []string{

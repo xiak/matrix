@@ -55,22 +55,22 @@ func VerifyInstalledWithLocalRecovery(ctx context.Context, adminDSN, apiDSN, wor
 // restore. It never performs a recovery effect during migration.
 func ApplyWithAuthenticationRecovery(
 	ctx context.Context,
-	adminDSN, apiDSN, workerDSN, recoveryDSN, custodyDSN, authenticationRecoveryDSN string,
+	adminDSN, apiDSN, workerDSN, recoveryDSN, custodyDSN, notificationDSN, authenticationRecoveryDSN string,
 ) error {
 	return postgresmigration.Apply(ctx, adminDSN, iammigrations.Source(),
-		authenticationRecoveryLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN, authenticationRecoveryDSN))
+		authenticationRecoveryLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN, notificationDSN, authenticationRecoveryDSN))
 }
 
 func VerifyInstalledWithAuthenticationRecovery(
 	ctx context.Context,
-	adminDSN, apiDSN, workerDSN, recoveryDSN, custodyDSN, authenticationRecoveryDSN string,
+	adminDSN, apiDSN, workerDSN, recoveryDSN, custodyDSN, notificationDSN, authenticationRecoveryDSN string,
 ) error {
 	return postgresmigration.VerifyInstalled(ctx, adminDSN, iammigrations.Source(),
-		authenticationRecoveryLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN, authenticationRecoveryDSN))
+		authenticationRecoveryLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN, notificationDSN, authenticationRecoveryDSN))
 }
 
-func authenticationRecoveryLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN, authenticationRecoveryDSN string) []postgresmigration.Login {
-	logins := localRecoveryLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN)
+func authenticationRecoveryLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN, notificationDSN, authenticationRecoveryDSN string) []postgresmigration.Login {
+	logins := notificationDeliveryLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN, notificationDSN)
 	return append(append(logins[:1:1], postgresmigration.Login{
 		Name: "matrix_iam_authentication_recovery_login", Group: "matrix_iam_authentication_recovery", DSN: authenticationRecoveryDSN,
 	}), logins[1:]...)
@@ -91,34 +91,6 @@ func notificationDeliveryLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN, noti
 	logins := localRecoveryLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN)
 	// Maintain the existing sorted login inventory, adding one closed purpose.
 	return append(append(logins[:3:3], postgresmigration.Login{Name: "matrix_iam_notification_worker_login", Group: "matrix_iam_notification_worker", DSN: notificationDSN}), logins[3])
-}
-
-// ApplyWithAuthenticationRecoveryAndNotificationDelivery provisions both
-// independent purpose-only capabilities without adding either capability to
-// an existing runtime, custody, or credential-recovery login.
-func ApplyWithAuthenticationRecoveryAndNotificationDelivery(
-	ctx context.Context,
-	adminDSN, apiDSN, workerDSN, recoveryDSN, custodyDSN, authenticationRecoveryDSN, notificationDSN string,
-) error {
-	return postgresmigration.Apply(ctx, adminDSN, iammigrations.Source(),
-		authenticationRecoveryAndNotificationLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN, authenticationRecoveryDSN, notificationDSN))
-}
-
-func VerifyInstalledWithAuthenticationRecoveryAndNotificationDelivery(
-	ctx context.Context,
-	adminDSN, apiDSN, workerDSN, recoveryDSN, custodyDSN, authenticationRecoveryDSN, notificationDSN string,
-) error {
-	return postgresmigration.VerifyInstalled(ctx, adminDSN, iammigrations.Source(),
-		authenticationRecoveryAndNotificationLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN, authenticationRecoveryDSN, notificationDSN))
-}
-
-func authenticationRecoveryAndNotificationLogins(
-	apiDSN, workerDSN, recoveryDSN, custodyDSN, authenticationRecoveryDSN, notificationDSN string,
-) []postgresmigration.Login {
-	logins := authenticationRecoveryLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN, authenticationRecoveryDSN)
-	return append(append(logins[:4:4], postgresmigration.Login{
-		Name: "matrix_iam_notification_worker_login", Group: "matrix_iam_notification_worker", DSN: notificationDSN,
-	}), logins[4:]...)
 }
 
 func localRecoveryLogins(apiDSN, workerDSN, recoveryDSN, custodyDSN string) []postgresmigration.Login {

@@ -65,10 +65,18 @@ CREATE TABLE IF NOT EXISTS iam.authentication_recovery_state (
 INSERT INTO iam.authentication_recovery_state(singleton,epoch,state,active_command_id,updated_at)
 VALUES(true,0,'OPEN',NULL,transaction_timestamp()) ON CONFLICT(singleton) DO NOTHING;
 
--- AccessKeys from a restored snapshot may have escaped before recovery. Fence
--- their identities permanently. This preparation authority cannot create or
--- consume MFA factors/recovery codes; reopen therefore rejects any retained
--- authenticator instead of pretending it can fence enabling-release state.
+-- Existing recovery codes and AccessKeys came from the restored snapshot and
+-- may have escaped before recovery. Fence their identities permanently. New
+-- material created after reopen is absent and remains usable.
+CREATE TABLE IF NOT EXISTS iam.authentication_recovery_code_fences (
+    tenant_id text COLLATE "C" NOT NULL,
+    batch_id text COLLATE "C" NOT NULL,
+    command_id text COLLATE "C" NOT NULL REFERENCES iam.authentication_recovery_completions(command_id),
+    closure_digest text COLLATE "C" NOT NULL CHECK(closure_digest ~ '^sha256:[0-9a-f]{64}$'),
+    fenced_at timestamptz(6) NOT NULL,
+    PRIMARY KEY(tenant_id,batch_id),
+    FOREIGN KEY(tenant_id,batch_id) REFERENCES iam.mfa_recovery_batches(tenant_id,id)
+);
 CREATE TABLE IF NOT EXISTS iam.authentication_recovery_access_key_fences (
     access_key_id text COLLATE "C" PRIMARY KEY REFERENCES iam.access_keys(id),
     command_id text COLLATE "C" NOT NULL REFERENCES iam.authentication_recovery_completions(command_id),
@@ -85,7 +93,7 @@ DO $protect_authentication_recovery_history$
 DECLARE relation_name text;
 BEGIN
     FOREACH relation_name IN ARRAY ARRAY['authentication_recovery_closures','authentication_recovery_reconciliations',
-        'authentication_recovery_completions','authentication_recovery_access_key_fences'] LOOP
+        'authentication_recovery_completions','authentication_recovery_code_fences','authentication_recovery_access_key_fences'] LOOP
         EXECUTE format('DROP TRIGGER IF EXISTS authentication_recovery_history_is_immutable ON iam.%I',relation_name);
         EXECUTE format('CREATE TRIGGER authentication_recovery_history_is_immutable BEFORE UPDATE OR DELETE ON iam.%I '
           'FOR EACH ROW EXECUTE FUNCTION iam.reject_authentication_recovery_history_change()',relation_name);
@@ -330,7 +338,7 @@ RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_te
 DECLARE receipt iam.bootstrap_receipts%ROWTYPE; current_state iam.authentication_recovery_state%ROWTYPE;
     stored iam.authentication_recovery_closures%ROWTYPE; reconciled iam.authentication_recovery_reconciliations%ROWTYPE;
     completed iam.authentication_recovery_completions%ROWTYPE; completion jsonb;
-    effective_now timestamptz(6):=transaction_timestamp(); tenant record;
+    effective_now timestamptz(6):=transaction_timestamp(); current_step bigint; tenant record;
 BEGIN
     PERFORM set_config('matrix.iam_authentication_recovery','trusted',true);
     IF jsonb_typeof(closure) IS DISTINCT FROM 'object' OR closure->>'state'<>'CLOSED'
@@ -358,9 +366,6 @@ BEGIN
       OR current_state.active_command_id<>closure->>'commandId' OR effective_now<=stored.closed_at THEN
         RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='authentication recovery reopen conflicts';
     END IF;
-    IF EXISTS(SELECT 1 FROM iam.totp_authenticators) THEN
-        RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='preparation recovery cannot reopen retained MFA state';
-    END IF;
     PERFORM set_config('matrix.iam_tenant_id',receipt.organization_id,true);
     PERFORM iam.assert_authentication_recovery_event(reopened_event,'iam.authentication-recovery.reopened',receipt.installation_id,
       closure->>'commandId',closure_digest,effective_now);
@@ -374,6 +379,7 @@ BEGIN
       VALUES(closure->>'commandId',receipt.installation_id,receipt.organization_id,closure_digest,completion,
         reopened_event->>'eventId',reopened_event,effective_now);
 
+    current_step:=floor(extract(epoch FROM effective_now)/30)::bigint;
     FOR tenant IN SELECT root.account_id FROM iam.account_roots root ORDER BY root.account_id COLLATE "C" LOOP
         PERFORM set_config('matrix.iam_tenant_id',tenant.account_id,true);
         IF EXISTS(SELECT 1 FROM iam.user_credentials c WHERE c.tenant_id=tenant.account_id
@@ -388,6 +394,15 @@ BEGIN
           WHERE tenant_id=tenant.account_id AND revoked_at IS NULL;
         UPDATE iam.password_attempts SET state='ABANDONED',completed_at=effective_now
           WHERE tenant_id=tenant.account_id AND state='RESERVED';
+        UPDATE iam.totp_attempts SET state='ABANDONED',completed_at=effective_now
+          WHERE tenant_id=tenant.account_id AND state='RESERVED';
+        UPDATE iam.authentication_challenges SET state='CANCELLED',completed_at=effective_now
+          WHERE tenant_id=tenant.account_id AND state='PENDING';
+        UPDATE iam.totp_authenticators SET last_consumed_step=greatest(last_consumed_step,current_step)
+          WHERE tenant_id=tenant.account_id AND state='ACTIVE' AND last_consumed_step<current_step;
+        INSERT INTO iam.authentication_recovery_code_fences(tenant_id,batch_id,command_id,closure_digest,fenced_at)
+          SELECT tenant_id,id,closure->>'commandId',closure_digest,effective_now FROM iam.mfa_recovery_batches
+          WHERE tenant_id=tenant.account_id ON CONFLICT(tenant_id,batch_id) DO NOTHING;
         INSERT INTO iam.authentication_recovery_access_key_fences(access_key_id,command_id,closure_digest,fenced_at)
           SELECT id,closure->>'commandId',closure_digest,effective_now FROM iam.access_keys
           WHERE tenant_id=tenant.account_id ON CONFLICT(access_key_id) DO NOTHING;
@@ -420,9 +435,10 @@ BEGIN
         AND pg_has_role('matrix_iam_authentication_recovery',r.oid,'MEMBER'))
       AND (SELECT count(*) FROM pg_catalog.pg_trigger t WHERE t.tgrelid IN (
         'iam.authentication_recovery_closures'::regclass,'iam.authentication_recovery_reconciliations'::regclass,
-        'iam.authentication_recovery_completions'::regclass,'iam.authentication_recovery_access_key_fences'::regclass)
+        'iam.authentication_recovery_completions'::regclass,'iam.authentication_recovery_code_fences'::regclass,
+        'iam.authentication_recovery_access_key_fences'::regclass)
         AND t.tgname IN ('authentication_recovery_history_is_immutable','authentication_recovery_history_cannot_truncate')
-        AND t.tgenabled='A' AND NOT t.tgisinternal)=8
+        AND t.tgenabled='A' AND NOT t.tgisinternal)=10
       AND (SELECT count(*) FROM pg_catalog.pg_trigger t WHERE t.tgrelid='iam.authentication_recovery_state'::regclass
         AND t.tgname IN ('authentication_recovery_state_transition','authentication_recovery_state_cannot_truncate')
         AND t.tgenabled='A' AND NOT t.tgisinternal)=2
@@ -438,15 +454,15 @@ REVOKE ALL ON ALL SEQUENCES IN SCHEMA iam FROM matrix_iam_authentication_recover
 REVOKE ALL ON ALL FUNCTIONS IN SCHEMA iam FROM matrix_iam_authentication_recovery;
 REVOKE ALL ON iam.authentication_recovery_state,iam.authentication_recovery_closures,
   iam.authentication_recovery_reconciliations,iam.authentication_recovery_completions,
-  iam.authentication_recovery_access_key_fences
-  FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery,matrix_iam_backup_custody,
+  iam.authentication_recovery_code_fences,iam.authentication_recovery_access_key_fences
+  FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery,matrix_iam_backup_custody,matrix_iam_notification_worker,
     matrix_iam_authentication_recovery;
 REVOKE ALL ON FUNCTION iam.reject_authentication_recovery_history_change(),iam.guard_authentication_recovery_state(),
   iam.assert_authentication_recovery_event(jsonb,text,text,text,text,timestamptz),
   iam.authentication_recovery_contract_ready(),iam.assert_authentication_open(),
   iam.close_authentication_recovery(jsonb,text,jsonb),iam.reconcile_authentication_recovery(jsonb,text,jsonb,jsonb),
   iam.reopen_authentication_recovery(jsonb,text,jsonb),iam.current_tenant_id()
-  FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery,matrix_iam_backup_custody,
+  FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery,matrix_iam_backup_custody,matrix_iam_notification_worker,
     matrix_iam_authentication_recovery;
 GRANT USAGE ON SCHEMA iam TO matrix_iam_authentication_recovery;
 GRANT EXECUTE ON FUNCTION iam.close_authentication_recovery(jsonb,text,jsonb),

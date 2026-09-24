@@ -82,7 +82,7 @@ $matrix_iam_recovery_memberships$;
 DO $matrix_iam_authentication_recovery_memberships$
 DECLARE other_role text;
 BEGIN
-	FOREACH other_role IN ARRAY ARRAY['matrix_iam_api','matrix_iam_worker','matrix_iam_credential_recovery','matrix_iam_backup_custody'] LOOP
+	FOREACH other_role IN ARRAY ARRAY['matrix_iam_api','matrix_iam_worker','matrix_iam_credential_recovery','matrix_iam_backup_custody','matrix_iam_notification_worker'] LOOP
 		IF pg_has_role(other_role,'matrix_iam_authentication_recovery','MEMBER')
 			OR pg_has_role('matrix_iam_authentication_recovery',other_role,'MEMBER') THEN
 			RAISE EXCEPTION 'IAM authentication recovery cannot share another authority';
@@ -105,7 +105,7 @@ END $matrix_iam_custody_memberships$;
 DO $matrix_iam_notification_memberships$
 DECLARE other_role text;
 BEGIN
-    FOREACH other_role IN ARRAY ARRAY['matrix_iam_api','matrix_iam_worker','matrix_iam_credential_recovery','matrix_iam_backup_custody'] LOOP
+    FOREACH other_role IN ARRAY ARRAY['matrix_iam_api','matrix_iam_worker','matrix_iam_credential_recovery','matrix_iam_authentication_recovery','matrix_iam_backup_custody'] LOOP
         IF pg_has_role(other_role,'matrix_iam_notification_worker','MEMBER')
             OR pg_has_role('matrix_iam_notification_worker',other_role,'MEMBER') THEN
             RAISE EXCEPTION 'IAM notification delivery cannot share other authority';

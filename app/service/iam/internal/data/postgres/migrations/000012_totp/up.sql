@@ -978,6 +978,7 @@ CREATE OR REPLACE FUNCTION iam.lookup_authentication_challenge(submitted_lookup 
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE result jsonb; prior_scope text;
 BEGIN
+    PERFORM iam.assert_authentication_open();
     IF COALESCE(submitted_lookup,'') !~ '^sha256:[0-9a-f]{64}$' THEN
         RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='authentication lookup is invalid';
     END IF;
@@ -998,6 +999,8 @@ BEGIN
     state:=iam.lock_mfa_user(tenant,subject_id);
     SELECT * INTO batch FROM iam.mfa_recovery_batches b WHERE b.tenant_id=tenant AND b.user_id=subject_id AND b.revoked_at IS NULL FOR UPDATE;
     IF NOT FOUND OR batch.revocation_recovery_id IS NOT NULL
+        OR EXISTS(SELECT 1 FROM iam.authentication_recovery_code_fences fence
+            WHERE fence.tenant_id=batch.tenant_id AND fence.batch_id=batch.id)
         OR (SELECT count(*) FROM iam.mfa_recovery_codes c WHERE c.tenant_id=tenant AND c.batch_id=batch.id)<>10 THEN
         RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='recovery context is unavailable';
     END IF;
