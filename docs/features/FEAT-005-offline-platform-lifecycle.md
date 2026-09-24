@@ -364,6 +364,26 @@ keyring rotation or a historical N-1 release profile.
 completed successfully for the exact source, with Go, UI,
 authority-process and node-process jobs all passing.
 
+On test source `c6a9563d624fb3c3d2c3771d9d004c44916313a5`, the same signed
+A/B pair passed another fresh disconnected lifecycle in 486.82 seconds and
+the post-engine-restart gate in 14.63 seconds. After the real B backup was
+restored, the public installation-scoped Audit API returned exactly the
+closed, reconciled and reopened IAM recovery facts for the original command:
+SYSTEM actor, installation target, request/correlation identity, no tenant or
+IAM decision. The platform integrity endpoint verified their complete chain.
+This adds signed cross-service evidence to the earlier PostgreSQL outbox
+checks; it does not substitute for the remaining acceptance reconciliation.
+The labeled local test container, its two volumes and the transient test
+binary were deleted afterward.
+[Verification 36024686653](https://github.com/xiak/matrix/actions/runs/36024686653)
+completed successfully for the exact test source; Go, UI, authority-process
+and node-process jobs all passed.
+
+The signed disconnected gate still has no `mx upgrade` negative with a
+separately signed skipped or mismatched predecessor candidate. Release-pair
+and backend tests reject those inputs, but they are not a real signed
+pre-effect upgrade attempt; this part of acceptance item 1 remains open.
+
 ## Incremental acceptance
 
 ### Gate A: release and CLI contract
