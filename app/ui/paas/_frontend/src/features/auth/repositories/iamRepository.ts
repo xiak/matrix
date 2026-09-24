@@ -147,7 +147,7 @@ export interface AccountRepository {
   executeUserBatch?(credential: string, command: UserBatchCommand): Promise<{ workspace: AccessWorkspace }>;
   workspace?: {
     read(credential: string): Promise<AccessWorkspace>;
-    execute(credential: string, command: AccessWorkspaceCommand): Promise<{ workspace: AccessWorkspace; issuedKey?: { id: string; secret: string } }>;
+    execute(credential: string, command: AccessWorkspaceCommand): Promise<{ workspace: AccessWorkspace; issuedKey?: { id: string; secret: string }; recoveryCodes?: string[] }>;
   };
   currentIdentity(credential: string): Promise<AccountIdentity>;
   listUsers(credential: string, after?: string): Promise<DirectoryPage<UserAccess>>;

@@ -54,7 +54,12 @@ export type PersonalMfaPreviewState = {
   factorState: "never-bound" | "bound" | "removed";
   reauthenticationRequired: boolean;
   recoveryState: "idle" | "rebind-required";
+  /** Non-secret, preview-only intent; provisioning material stays in the current view. */
+  pendingReplacement?: { requestId: string; expiresAt: string; accountRuleVersion: number };
+  demoCode?: "624810" | "731942";
 };
+export function previewTotpCode(state: PersonalMfaPreviewState): "624810" | "731942" { return state.demoCode ?? "624810"; }
+export function nextPreviewTotpCode(state: PersonalMfaPreviewState): "624810" | "731942" { return previewTotpCode(state) === "624810" ? "731942" : "624810"; }
 export type AccessEvent = { id: string; action: Exclude<AccessWorkspaceCommand["kind"], "remember-account-rule-change-unknown"> | "sign-in" | "batch-users"; target: string; at: string };
 export type PreviewUserProfile = {
   consoleAccess: boolean; programmaticAccess: boolean; passwordResetRequired: boolean;
@@ -108,6 +113,10 @@ export type AccessWorkspaceCommand =
   | { kind: "set-key-status"; id: string; ownerState: AccessKeyOwnerState; status: AccessKey["status"]; resourceVersion: number; requestId: string }
   | { kind: "delete-key"; id: string; resourceVersion: number; requestId: string }
   | { kind: "confirm-personal-mfa" }
+  | { kind: "begin-personal-mfa-replacement"; requestId: string; proofStartedAt: string }
+  | { kind: "cancel-personal-mfa-replacement"; requestId: string }
+  | { kind: "confirm-personal-mfa-replacement"; requestId: string }
+  | { kind: "regenerate-personal-recovery-codes" }
   | { kind: "remove-personal-mfa" }
   | { kind: "begin-personal-mfa-recovery" }
   | { kind: "complete-personal-mfa-reauthentication" }
@@ -165,7 +174,7 @@ export function withoutUserAccess(source: AccessWorkspace, principalIds: readonl
 }
 
 // Pure, deterministic preview transitions. Adapters supply identity, IDs and time.
-export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: AccessWorkspaceCommand, context: { id: string; at: string; userIds: string[]; primaryPrincipalId: string; resolvedKeyId?: string }): AccessWorkspace {
+export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: AccessWorkspaceCommand, context: { id: string; at: string; userIds: string[]; primaryPrincipalId: string; resolvedKeyId?: string; sameReplacementSession?: boolean }): AccessWorkspace {
   const state = command.kind === "delete-user" ? withoutUserAccess(source, [command.principalId], context.at) : structuredClone(source);
   const invalid = (): never => { throw new AccessWorkspaceError("invalid"); };
   // RootIdentity is the account's protected ownership relation, not a User.
@@ -443,15 +452,37 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
       if (state.pendingKeyCreation?.status === "COMMITTED_SECRET_LOST" && state.pendingKeyCreation.keyId === id) state.pendingKeyCreation = null;
       break;
     case "confirm-personal-mfa":
-      if (state.personalMfa.reauthenticationRequired && state.personalMfa.recoveryState !== "rebind-required") invalid();
+      if (state.personalMfa.factorState === "bound" || state.personalMfa.pendingReplacement || (state.personalMfa.reauthenticationRequired && state.personalMfa.recoveryState !== "rebind-required")) invalid();
       state.personalMfa = { factorState: "bound", reauthenticationRequired: true, recoveryState: "idle" };
       target = context.primaryPrincipalId; break;
+    case "begin-personal-mfa-replacement": {
+      if (state.personalMfa.factorState !== "bound" || state.personalMfa.reauthenticationRequired || state.personalMfa.recoveryState !== "idle" || state.personalMfa.pendingReplacement || state.pendingAccountRuleChange || !command.requestId.trim()) invalid();
+      const proofStartedAt = Date.parse(command.proofStartedAt);
+      const startedAt = Date.parse(context.at);
+      if (!Number.isFinite(proofStartedAt) || !Number.isFinite(startedAt) || proofStartedAt > startedAt || startedAt - proofStartedAt >= 120_000) invalid();
+      const expiresAt = new Date(proofStartedAt + 120_000).toISOString();
+      state.personalMfa.pendingReplacement = { requestId: command.requestId, expiresAt, accountRuleVersion: state.settings.accountRuleVersion };
+      target = context.primaryPrincipalId; break;
+    }
+    case "cancel-personal-mfa-replacement":
+      if (state.personalMfa.pendingReplacement?.requestId !== command.requestId) invalid();
+      delete state.personalMfa.pendingReplacement;
+      target = context.primaryPrincipalId; break;
+    case "confirm-personal-mfa-replacement": {
+      const pending = state.personalMfa.pendingReplacement;
+      if (!pending || pending.requestId !== command.requestId || !context.sameReplacementSession || new Date(context.at).getTime() >= new Date(pending.expiresAt).getTime() || pending.accountRuleVersion !== state.settings.accountRuleVersion || state.personalMfa.factorState !== "bound" || state.personalMfa.reauthenticationRequired || state.personalMfa.recoveryState !== "idle" || state.pendingAccountRuleChange) invalid();
+      state.personalMfa = { factorState: "bound", reauthenticationRequired: true, recoveryState: "idle", demoCode: nextPreviewTotpCode(state.personalMfa) };
+      target = context.primaryPrincipalId; break;
+    }
+    case "regenerate-personal-recovery-codes":
+      if (state.personalMfa.factorState !== "bound" || state.personalMfa.reauthenticationRequired || state.personalMfa.recoveryState !== "idle" || state.personalMfa.pendingReplacement || state.pendingAccountRuleChange) invalid();
+      target = context.primaryPrincipalId; break;
     case "remove-personal-mfa":
-      if (state.personalMfa.factorState !== "bound" || state.personalMfa.reauthenticationRequired || state.personalMfa.recoveryState !== "idle") invalid();
+      if (state.personalMfa.factorState !== "bound" || state.personalMfa.reauthenticationRequired || state.personalMfa.recoveryState !== "idle" || state.personalMfa.pendingReplacement) invalid();
       state.personalMfa = { factorState: "removed", reauthenticationRequired: true, recoveryState: "idle" };
       target = context.primaryPrincipalId; break;
     case "begin-personal-mfa-recovery":
-      if (state.personalMfa.factorState !== "bound" || state.personalMfa.recoveryState !== "idle") invalid();
+      if (state.personalMfa.factorState !== "bound" || state.personalMfa.recoveryState !== "idle" || state.personalMfa.pendingReplacement) invalid();
       state.personalMfa = { factorState: "removed", reauthenticationRequired: true, recoveryState: "rebind-required" };
       target = context.primaryPrincipalId; break;
     case "complete-personal-mfa-reauthentication":
@@ -490,7 +521,7 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
       target = enterprise.name; break;
     }
     case "save-account-rule": {
-      if (state.personalMfa.factorState !== "bound" || state.personalMfa.reauthenticationRequired || state.personalMfa.recoveryState !== "idle" || state.pendingAccountRuleChange || !command.requestId.trim() || !Number.isSafeInteger(command.expectedRuleVersion) || command.expectedRuleVersion < 1 || command.expectedRuleVersion !== state.settings.accountRuleVersion || typeof command.expectedLoginProtection !== "boolean" || typeof command.loginProtection !== "boolean" || command.expectedLoginProtection !== state.settings.loginProtection || command.loginProtection === state.settings.loginProtection) invalid();
+      if (state.personalMfa.factorState !== "bound" || state.personalMfa.reauthenticationRequired || state.personalMfa.recoveryState !== "idle" || state.personalMfa.pendingReplacement || state.pendingAccountRuleChange || !command.requestId.trim() || !Number.isSafeInteger(command.expectedRuleVersion) || command.expectedRuleVersion < 1 || command.expectedRuleVersion !== state.settings.accountRuleVersion || typeof command.expectedLoginProtection !== "boolean" || typeof command.loginProtection !== "boolean" || command.expectedLoginProtection !== state.settings.loginProtection || command.loginProtection === state.settings.loginProtection) invalid();
       if (command.responseMode === "response-lost") {
         state.pendingAccountRuleChange = { requestId: command.requestId, baselineRuleVersion: command.expectedRuleVersion, baselineLoginProtection: command.expectedLoginProtection, requestedLoginProtection: command.loginProtection, status: "UNKNOWN" };
         state.personalMfa = { ...state.personalMfa, reauthenticationRequired: true };
@@ -502,7 +533,7 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
       target = source.accountId; break;
     }
     case "remember-account-rule-change-unknown": {
-      if (state.personalMfa.factorState !== "bound" || state.personalMfa.reauthenticationRequired || state.personalMfa.recoveryState !== "idle" || state.pendingAccountRuleChange || !command.requestId.trim() || !Number.isSafeInteger(command.expectedRuleVersion) || command.expectedRuleVersion < 1 || command.expectedRuleVersion !== state.settings.accountRuleVersion || typeof command.expectedLoginProtection !== "boolean" || typeof command.loginProtection !== "boolean" || command.expectedLoginProtection !== state.settings.loginProtection || command.loginProtection === state.settings.loginProtection) invalid();
+      if (state.personalMfa.factorState !== "bound" || state.personalMfa.reauthenticationRequired || state.personalMfa.recoveryState !== "idle" || state.personalMfa.pendingReplacement || state.pendingAccountRuleChange || !command.requestId.trim() || !Number.isSafeInteger(command.expectedRuleVersion) || command.expectedRuleVersion < 1 || command.expectedRuleVersion !== state.settings.accountRuleVersion || typeof command.expectedLoginProtection !== "boolean" || typeof command.loginProtection !== "boolean" || command.expectedLoginProtection !== state.settings.loginProtection || command.loginProtection === state.settings.loginProtection) invalid();
       state.pendingAccountRuleChange = { requestId: command.requestId, baselineRuleVersion: command.expectedRuleVersion, baselineLoginProtection: command.expectedLoginProtection, requestedLoginProtection: command.loginProtection, status: "UNKNOWN" };
       state.personalMfa = { ...state.personalMfa, reauthenticationRequired: true };
       recordEvent = false;

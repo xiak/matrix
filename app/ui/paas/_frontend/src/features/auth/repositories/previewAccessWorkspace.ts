@@ -6,6 +6,7 @@ import { policyActions, policyServices, type PolicyService } from "../domain/pre
 import type { AccountRepository } from "./iamRepository";
 
 const at = "2026-09-08T09:00:00Z";
+const initialRecoveryCodes = ["MTRX-RECOVER-01", "MTRX-RECOVER-02"];
 const document = (action: string[]): PolicyDocument => ({ version: "1", statement: [{ effect: "allow", action, resource: ["*"] }] });
 
 export function initialAccessWorkspace(accountId: string): AccessWorkspace {
@@ -81,16 +82,19 @@ export function initialAccessWorkspace(accountId: string): AccessWorkspace {
   };
 }
 
-export function createPreviewAccessWorkspace(accountId: string, userIds: () => string[], primaryPrincipalId: string): NonNullable<AccountRepository["workspace"]> & { reset(): void; snapshot(): AccessWorkspace; transact<T extends { workspace: AccessWorkspace }>(transition: (source: AccessWorkspace) => T): T } {
+export function createPreviewAccessWorkspace(accountId: string, userIds: () => string[], primaryPrincipalId: string): NonNullable<AccountRepository["workspace"]> & { reset(): void; snapshot(): AccessWorkspace; recoveryCodes(): string[]; transact<T extends { workspace: AccessWorkspace }>(transition: (source: AccessWorkspace) => T): T } {
   let state = initialAccessWorkspace(accountId);
+  let replacementCredential: string | null = null;
+  let activeRecoveryCodes = [...initialRecoveryCodes];
   const keyCreationResults = new Map<string, string>();
   const keyCreationRequest = (ownerId: string, requestId: string) => `${ownerId}\u0000${requestId}`;
   return {
     transact(transition) { const result = transition(structuredClone(state)); if (result.workspace.accountId !== accountId || result.workspace.mode !== "preview") throw new Error("INVALID_PREVIEW_WORKSPACE"); state = structuredClone(result.workspace); return result; },
-    reset() { state = initialAccessWorkspace(accountId); keyCreationResults.clear(); },
+    reset() { state = initialAccessWorkspace(accountId); replacementCredential = null; activeRecoveryCodes = [...initialRecoveryCodes]; keyCreationResults.clear(); },
     snapshot() { return structuredClone(state); },
+    recoveryCodes() { return [...activeRecoveryCodes]; },
     async read() { return structuredClone(state); },
-    async execute(_credential, command) {
+    async execute(credential, command) {
       const creationRequest = command.kind === "create-key" ? keyCreationRequest(command.ownerId, command.requestId) : null;
       if (creationRequest && keyCreationResults.has(creationRequest)) return { workspace: structuredClone(state) };
       if (command.kind === "inspect-key-creation" && command.resultMode === "not-found") throw new AccessWorkspaceError("keyResultNotFound");
@@ -98,10 +102,17 @@ export function createPreviewAccessWorkspace(accountId: string, userIds: () => s
       const id = crypto.randomUUID();
       const resolvedKeyId = command.kind === "inspect-key-creation" ? keyCreationResults.get(keyCreationRequest(command.ownerId, command.requestId)) : undefined;
       if (command.kind === "inspect-key-creation" && !resolvedKeyId) throw new AccessWorkspaceError("keyResultNotFound");
-      state = applyAccessWorkspaceCommand(state, command, { id, at: new Date().toISOString(), userIds: userIds(), primaryPrincipalId, resolvedKeyId });
+      state = applyAccessWorkspaceCommand(state, command, { id, at: new Date().toISOString(), userIds: userIds(), primaryPrincipalId, resolvedKeyId, sameReplacementSession: Boolean(replacementCredential && credential === replacementCredential) });
+      if (command.kind === "begin-personal-mfa-replacement") replacementCredential = credential;
+      if (command.kind === "cancel-personal-mfa-replacement" || command.kind === "confirm-personal-mfa-replacement") replacementCredential = null;
+      if (command.kind === "confirm-personal-mfa" || command.kind === "confirm-personal-mfa-replacement" || command.kind === "regenerate-personal-recovery-codes") {
+        const batch = crypto.randomUUID().slice(0, 8).toUpperCase();
+        activeRecoveryCodes = Array.from({ length: 10 }, (_, index) => `MTRX-NEW-${batch}-${String(index + 1).padStart(2, "0")}`);
+      }
       if (creationRequest) keyCreationResults.set(creationRequest, "MOCK-" + id);
       return {
         workspace: structuredClone(state),
+        ...(["confirm-personal-mfa", "confirm-personal-mfa-replacement", "regenerate-personal-recovery-codes"].includes(command.kind) ? { recoveryCodes: [...activeRecoveryCodes] } : {}),
         ...(command.kind === "create-key" && command.responseMode === "success"
           ? { issuedKey: { id: "MOCK-" + id, secret: "MOCK_NOT_A_CREDENTIAL_" + crypto.randomUUID() } }
           : {})

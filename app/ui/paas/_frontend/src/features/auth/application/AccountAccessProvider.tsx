@@ -197,7 +197,7 @@ type AccountAccess = {
   userDirectoryView: { read(): UserDirectoryView; remember(value: UserDirectoryView): void };
   workspace: AccessWorkspace | null;
   workspaceError: WorkspaceExecutionError | null;
-  executeWorkspace(command: AccessWorkspaceCommand, onError?: (error: WorkspaceExecutionError) => void): Promise<{ issuedKey?: { id: string; secret: string } } | null>;
+  executeWorkspace(command: AccessWorkspaceCommand, onError?: (error: WorkspaceExecutionError) => void): Promise<{ issuedKey?: { id: string; secret: string }; recoveryCodes?: string[] } | null>;
   clearWorkspaceError(): void;
   clearFeedback(): void;
   groups: GroupAccessClient | null;
@@ -902,7 +902,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         if (!(command.kind === "save-account-rule" && command.responseMode === "response-lost")) {
           setSuccess("completed");
         }
-        return { issuedKey: result.issuedKey };
+        return { issuedKey: result.issuedKey, recoveryCodes: result.recoveryCodes };
       } catch (failure) {
         const code = failure instanceof AccessWorkspaceError ? failure.code : accountError(failure);
         if (command.kind === "save-account-rule" && code === "unavailable") {

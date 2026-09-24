@@ -24,7 +24,7 @@ import type {
   UserAccess,
   UserPolicyAttachment
 } from "../domain/accounts";
-import { enterprisePrincipalId, previewUserPrincipalId, type AccessWorkspace } from "../domain/accessWorkspace";
+import { enterprisePrincipalId, previewTotpCode, previewUserPrincipalId, type AccessWorkspace } from "../domain/accessWorkspace";
 import { AccessWorkspaceError } from "../domain/accessWorkspaceError";
 import { applyUserBatch } from "../domain/userBatch";
 import type { LoginResult, OtherSessionsRevocation, OwnSessionRevocation, SessionSummary } from "../domain/session";
@@ -33,7 +33,6 @@ import { createPreviewAccessWorkspace } from "./previewAccessWorkspace";
 
 export const previewCredential = "matrix-ux-preview-memory-only";
 const previewPassword = "demo-password";
-const previewRecoveryCodes = ["MTRX-RECOVER-01", "MTRX-RECOVER-02"] as const;
 const previewAt = "2026-09-08T09:00:00Z";
 const previewSessionObservedAt = "2026-09-18T12:00:00Z";
 
@@ -252,12 +251,12 @@ export function preparePreviewPersonalMfaDemo() {
 }
 
 export function nextPreviewPersonalMfaRecoveryCode(): string | null {
-  return previewRecoveryCodes.find((code) => !consumedRecoveryCodes.has(code)) ?? null;
+  return workspace.recoveryCodes().find((code) => !consumedRecoveryCodes.has(code)) ?? null;
 }
 
 export async function beginPreviewPersonalMfaRecovery(password: string, recoveryCode: string): Promise<string | null> {
   try {
-    if (password !== previewPassword || !previewRecoveryCodes.includes(recoveryCode as typeof previewRecoveryCodes[number]) || consumedRecoveryCodes.has(recoveryCode)) return null;
+    if (password !== previewPassword || !workspace.recoveryCodes().includes(recoveryCode) || consumedRecoveryCodes.has(recoveryCode)) return null;
     const state = workspace.snapshot().personalMfa;
     if (state.recoveryState === "idle") await workspace.execute(previewCredential, { kind: "begin-personal-mfa-recovery" });
     else if (state.recoveryState !== "rebind-required") return null;
@@ -273,13 +272,13 @@ export function cancelPreviewPersonalMfaRecovery(challenge: string): void {
   if (challenge === activeRecoveryChallenge) activeRecoveryChallenge = null;
 }
 
-export async function confirmPreviewPersonalMfaRecovery(challenge: string): Promise<boolean> {
+export async function confirmPreviewPersonalMfaRecovery(challenge: string): Promise<string[] | false> {
   try {
     if (!challenge || challenge !== activeRecoveryChallenge) return false;
-    await workspace.execute(previewCredential, { kind: "confirm-personal-mfa" });
+    const result = await workspace.execute(previewCredential, { kind: "confirm-personal-mfa" });
     activeRecoveryChallenge = null;
     invalidateActivePreviewCredential();
-    return true;
+    return result.recoveryCodes ?? false;
   } catch {
     return false;
   }
@@ -349,7 +348,7 @@ export const previewIamRepository: IamRepository = {
           || command.challengeCredential !== activeLoginChallenge.credential) {
         throw new HttpProblem(409, "PREVIEW_CHALLENGE_EXPIRED");
       }
-      if (command.code !== "624810" && command.code !== "624811") {
+      if (command.code !== previewTotpCode(workspace.snapshot().personalMfa) && command.code !== "624811") {
         throw new HttpProblem(401, "PREVIEW_CHALLENGE_INVALID_CODE");
       }
       if (command.code === "624811") {
@@ -392,8 +391,8 @@ export const previewIamRepository: IamRepository = {
           command.challengeCredential !== activeLoginChallenge.credential) {
         throw new HttpProblem(409, "PREVIEW_CHALLENGE_EXPIRED");
       }
-      const recoveryCode = command.recoveryCode as typeof previewRecoveryCodes[number];
-      if (!previewRecoveryCodes.includes(recoveryCode) || consumedRecoveryCodes.has(recoveryCode)) {
+      const recoveryCode = command.recoveryCode;
+      if (!workspace.recoveryCodes().includes(recoveryCode) || consumedRecoveryCodes.has(recoveryCode)) {
         throw new HttpProblem(401, "PREVIEW_RECOVERY_CODE_INVALID");
       }
       const state = workspace.snapshot().personalMfa;
@@ -445,7 +444,7 @@ export const previewIamRepository: IamRepository = {
         throw new HttpProblem(409, "PREVIEW_RECOVERY_EXPIRED");
       }
       if (command.code !== "624810") throw new HttpProblem(401, "PREVIEW_CHALLENGE_INVALID_CODE");
-      await workspace.execute(previewCredential, { kind: "confirm-personal-mfa" });
+      const result = await workspace.execute(previewCredential, { kind: "confirm-personal-mfa" });
       const completedAt = new Date().toISOString();
       const recovery = {
         id: activeOnlineRecovery.id,
@@ -461,7 +460,7 @@ export const previewIamRepository: IamRepository = {
       return {
         recovery,
         nextStep: "REAUTHENTICATE" as const,
-        recoveryCodes: Array.from({ length: 10 }, (_, index) => `MTRX-NEW-${String(index + 1).padStart(2, "0")}-SAFE`)
+        recoveryCodes: result.recoveryCodes ?? []
       };
     },
     async inspectRecovery(command) {
@@ -842,7 +841,7 @@ export const previewAccountRepository: AccountRepository = {
         delete userPlatformPolicies[command.principalId];
       }
       if (command.kind === "update-user") updateUser(command.principalId, (user) => ({ ...user, displayName: command.displayName.trim(), resourceVersion: user.resourceVersion + 1 }));
-      if (command.kind === "confirm-personal-mfa" || command.kind === "remove-personal-mfa") invalidateActivePreviewCredential(credential);
+      if (command.kind === "confirm-personal-mfa" || command.kind === "confirm-personal-mfa-replacement" || command.kind === "remove-personal-mfa") invalidateActivePreviewCredential(credential);
       return result;
     }
   },

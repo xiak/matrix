@@ -6,15 +6,15 @@ import { useTranslations } from "next-intl";
 import { Alert, Badge, Button, Card, FormField, Input, PasswordInput, Typography } from "@ui/xiak";
 import styles from "./MfaPreviewExperience.module.css";
 
-const demonstrationCode = "624810";
 const demonstrationPassword = "demo-password";
 
 export type SecurityStepUpAction = "bind" | "replace" | "remove" | "regenerate" | "securitySettings";
 
-export function SecurityStepUpPreview({ action, onCancel, onVerified }: {
+export function SecurityStepUpPreview({ action, onCancel, onVerified, demonstrationCode = "624810" }: {
   action: SecurityStepUpAction;
+  demonstrationCode?: string;
   onCancel(): void;
-  onVerified(): boolean | void | Promise<boolean | void>;
+  onVerified(proofStartedAt: string): boolean | void | Promise<boolean | void>;
 }) {
   const t = useTranslations("MfaPreview");
   const auth = useTranslations("Auth");
@@ -24,6 +24,7 @@ export function SecurityStepUpPreview({ action, onCancel, onVerified }: {
   const [busy, setBusy] = useState(false);
   const id = useId();
   const heading = useRef<HTMLHeadingElement>(null);
+  const proofStartedAt = useRef(new Date().toISOString());
   const requiresExistingFactor = action !== "bind";
 
   useEffect(() => { heading.current?.focus(); }, []);
@@ -37,8 +38,8 @@ export function SecurityStepUpPreview({ action, onCancel, onVerified }: {
     }
     setBusy(true);
     try {
-      const completed = await onVerified();
-      if (completed === false) setBusy(false);
+      const completed = await onVerified(proofStartedAt.current);
+      if (completed === false) { setError(true); setBusy(false); }
     } catch (failure) {
       setBusy(false);
       throw failure;

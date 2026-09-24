@@ -7,6 +7,8 @@ import { ArrowLeft, ArrowRight, CheckCircle2, LoaderCircle, ShieldCheck } from "
 import { Alert, Button, FormField, Input, PasswordInput } from "@ui/xiak";
 import { uxPreviewEnabled } from "@/infrastructure/runtime/uxPreviewMode";
 import { useSession } from "../application/SessionProvider";
+import { previewTotpCode } from "../domain/accessWorkspace";
+import { previewPersonalMfaSnapshot } from "../repositories/previewIamRepository";
 import styles from "./LoginRenderer.module.css";
 
 export function AuthenticationChallengeForm({ returnTo }: { returnTo: string }) {
@@ -93,7 +95,7 @@ export function AuthenticationChallengeForm({ returnTo }: { returnTo: string }) 
         <Input autoComplete="one-time-code" controlSize="large" disabled={busy} id={inputId} inputMode="numeric" maxLength={6}
           onChange={(event) => { setCode(event.target.value.replace(/\D/g, "")); session.clearError(); }} pattern="[0-9]{6}" required value={code} />
       </FormField>
-      {uxPreviewEnabled ? <p className={styles.previewChallengeHint}>{t("previewChallengeHint")}</p> : null}
+      {uxPreviewEnabled ? <p className={styles.previewChallengeHint}>{t("previewChallengeHint", { code: previewTotpCode(previewPersonalMfaSnapshot()) })}</p> : null}
       {session.error ? <Alert status="danger">{t(`errors.${session.error}`)}</Alert> : null}
       <Button block disabled={busy || code.length !== 6} size="large" type="submit">
         {busy ? <LoaderCircle aria-hidden="true" className={styles.spinner} /> : null}
