@@ -479,6 +479,23 @@ path; positive recovery requires its own verified policy. The earlier MFA
 custody/closure ABI lacks this proof, so a schema/profile increment alone
 cannot authorize the new signed recovery path.
 
+The integrated recovery gate must prove these cases with real PostgreSQL and
+the signed installation path, not only pure contract tests:
+
+1. A backup at T0 followed by a stronger Account requirement, factor
+   replacement or authorization revocation at T1 is rejected before journal,
+   provider, database, credential or closure effects. Missing legacy state
+   commitment has the same pre-effect refusal.
+2. A matching committed backup restores the intended data while preserving
+   current authentication qualification, OTP replay bounds, Audit history and
+   the explicit closed/reconciled/reopened chain; old Sessions do not return.
+3. A lost close result replays the exact original receipt and snapshot. Missing,
+   changed, truncated, oversized or incomplete protected snapshot material
+   cannot advance restore or reopen, including after process interruption.
+4. Capacity and transaction-time limits fail before a partial backup or a
+   successful close is published; tests cover the accepted boundary and its
+   first rejected successor without silently omitting Account or USER rows.
+
 On that exact composition, a fresh task-owned offline run must use the
 host-local one-time registration command on two independent test hosts while
 exercising the platform-credential and MFA recovery paths, real workloads,
