@@ -441,7 +441,10 @@ The existing full offline gate now selects the current host-local enrollment
 path only for an explicit private control-plane fixture and an adjacent signed
 current node release pair; it preserves the legacy predecessor path only for
 its original fixture. Focused and package-wide race tests prove selection and
-wrong-pair rejection. This is test entry coverage, not a two-host runtime pass.
+wrong-pair rejection. The independent [Verification run 36037002499](https://github.com/xiak/matrix/actions/runs/36037002499)
+completed successfully for exact `10a754f10b95c0b130b61fee0234826d7c1a52f6`
+across go, UI, node-process and authority-process. This is test entry and
+diagnostic coverage, not a two-host runtime pass.
 
 Mutable Account security settings and factor replacement add a recovery fence.
 Each new protected backup must seal a separate, non-secret authentication and
