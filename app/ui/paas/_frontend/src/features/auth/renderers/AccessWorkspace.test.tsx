@@ -14,7 +14,7 @@ import type { PolicyDocument } from "../domain/policyDocument";
 import { AccountAccessRenderer } from "./AccountAccessRenderer";
 import { GroupDirectory } from "./GroupAccessWorkspace";
 import { AccessReports } from "./AccessReports";
-import { buildAccessReport, buildAccessSecuritySnapshot } from "../scenes/accessReport";
+import { buildAccessActivityObservations, buildAccessReport, buildAccessSecuritySnapshot } from "../scenes/accessReport";
 import { buildAccountAccessScene } from "../scenes/accountAccessScene";
 import { previewAccountRepository, previewCredential, previewIamRepository, resetPreviewEnvironment } from "../repositories/previewIamRepository";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
@@ -2662,12 +2662,19 @@ describe("CAM-style access workspace", () => {
   it("allowlists report fields instead of exporting a raw account snapshot", async () => {
     const extension = createPreviewAccessWorkspace("org-xiak", () => users.map((entry) => entry.user.id), identity.account.rootIdentity.principalId);
     const workspace = await extension.read("preview");
-    const report = buildAccessReport("security", workspace, buildAccountAccessScene(identity, { items: users, nextAfter: null }, null, { accountId: "org-xiak", scope: "TENANT", installationId: null, items: [] }, { accountId: "org-xiak", scope: "INSTALLATION", installationId: "preview", items: [] }), "2026-09-09T00:00:00Z");
+    const scene = buildAccountAccessScene(identity, { items: users, nextAfter: null }, null, { accountId: "org-xiak", scope: "TENANT", installationId: null, items: [] }, { accountId: "org-xiak", scope: "INSTALLATION", installationId: "preview", items: [] });
+    const report = buildAccessReport("security", workspace, scene, "2026-09-09T00:00:00Z");
     expect(report.mode).toBe("MOCK");
     expect(report.coverage.authenticatorEnrollment).toBe("UNOBSERVED");
     expect(report.checks?.find((check) => check.id === "mfaEvidence")?.state).toBe("unknown");
     expect(report.checks?.find((check) => check.id === "mfaEvidence")?.evidence).toBe("unobserved");
-    expect(report.coverage.activityEvidence).toBe("UNOBSERVED");
+    expect(report.coverage).toMatchObject({ activityWindow: "UNAVAILABLE", collectionStart: null, sourceWatermarks: { successfulLogin: null, accessKeyUse: null, roleUse: null, businessOutcome: null } });
+    expect(report.activity).toMatchObject({ accountId: "org-xiak", observedAt: "2026-09-09T00:00:00Z" });
+    expect(report.activity?.observations.find((item) => item.id === "successfulLogin")).toMatchObject({ state: "unknown", occurredAt: null, source: null });
+    expect(report.activity?.observations.find((item) => item.id === "accessKeyUse")).toMatchObject({ state: "unknown", occurredAt: null });
+    const otherUserSession = { id: "another-session", organizationId: "org-xiak", principalId: "principal-other", status: "ACTIVE" as const, issuedAt: "2026-09-09T02:00:00Z", expiresAt: "2026-09-09T03:00:00Z" };
+    const foreignReport = buildAccessReport("security", workspace, scene, "2026-09-09T00:00:00Z", otherUserSession);
+    expect(foreignReport.activity?.observations.find((item) => item.id === "successfulLogin")).toMatchObject({ state: "unknown", occurredAt: null, source: null });
     expect(JSON.stringify(report)).not.toContain("EntityDescriptor");
     expect(JSON.stringify(report)).not.toContain("preview-only");
     expect(report.users).toHaveLength(2);
@@ -2701,17 +2708,39 @@ describe("CAM-style access workspace", () => {
     expect(partialWithoutVisibleFindings.checks.find((check) => check.id === "directGrants")).toMatchObject({ state: "unknown", count: 0, evidence: "incomplete" });
     expect(partialWithoutVisibleFindings.checks.find((check) => check.id === "pendingPasswords")).toMatchObject({ state: "unknown", count: 0, evidence: "incomplete" });
   });
+  it("does not turn key metadata, missing events or role sessions into usage evidence", async () => {
+    const extension = createPreviewAccessWorkspace("org-xiak", () => users.map((entry) => entry.user.id), identity.account.rootIdentity.principalId);
+    const workspace = await extension.read("preview");
+    const observed = buildAccessActivityObservations(workspace);
+    expect(observed.find((item) => item.id === "successfulLogin")).toMatchObject({ state: "unknown", occurredAt: null, source: null });
+    expect(observed.filter((item) => item.id !== "successfulLogin")).toEqual([
+      { id: "accessKeyUse", state: "unknown", occurredAt: null, source: null },
+      { id: "roleUse", state: "unknown", occurredAt: null, source: null },
+      { id: "businessOutcome", state: "unknown", occurredAt: null, source: null }
+    ]);
+    const currentSession = { id: "preview-session", organizationId: "org-xiak", principalId: identity.user.id, status: "ACTIVE" as const, issuedAt: "2026-09-09T02:00:00Z", expiresAt: "2026-09-09T03:00:00Z" };
+    expect(buildAccessActivityObservations(workspace, currentSession).find((item) => item.id === "successfulLogin")).toMatchObject({ state: "observed", occurredAt: currentSession.issuedAt, source: "CURRENT_PREVIEW_SESSION" });
+    expect(buildAccessActivityObservations(workspace, { ...currentSession, organizationId: "other-account" }).find((item) => item.id === "successfulLogin")).toMatchObject({ state: "unknown", occurredAt: null });
+    const withoutLogin = structuredClone(workspace);
+    withoutLogin.events = [];
+    expect(buildAccessActivityObservations(withoutLogin).find((item) => item.id === "successfulLogin")).toMatchObject({ state: "unknown", occurredAt: null });
+    withoutLogin.keys = [];
+    expect(buildAccessActivityObservations(withoutLogin).find((item) => item.id === "accessKeyUse")).toMatchObject({ state: "notApplicable", occurredAt: null });
+  });
   it("presents security evidence before report exports and links checks to their owning pages", async () => {
     const extension = createPreviewAccessWorkspace("org-xiak", () => users.map((entry) => entry.user.id), identity.account.rootIdentity.principalId);
     const workspace = await extension.read("preview");
     const scene = buildAccountAccessScene(identity, { items: users, nextAfter: null }, null, { accountId: "org-xiak", scope: "TENANT", installationId: null, items: [] }, { accountId: "org-xiak", scope: "INSTALLATION", installationId: "preview", items: [] });
     const onNavigate = vi.fn();
     const user = userEvent.setup();
-    render(<LocaleProvider><AccessReports workspace={workspace} scene={scene} onNavigate={onNavigate} /></LocaleProvider>);
+    render(<LocaleProvider><AccessReports workspace={workspace} scene={scene} currentSession={{ id: "preview-session", organizationId: "org-xiak", principalId: identity.user.id, status: "ACTIVE", issuedAt: "2026-09-09T02:00:00Z", expiresAt: "2026-09-09T03:00:00Z" }} onNavigate={onNavigate} /></LocaleProvider>);
     const card = screen.getByRole("heading", { name: "身份安全概览" }).closest("article")!;
     expect(within(card).getByLabelText("身份安全检查状态")).toBeTruthy();
     expect(within(card).getByLabelText("身份安全证据覆盖")).toBeTruthy();
     expect(within(card).getByText("MFA 绑定证据")).toBeTruthy();
+    expect(within(card).getByLabelText("活动观测")).toBeTruthy();
+    expect(within(card).getByText("访问密钥使用")).toBeTruthy();
+    expect(within(card).getByText(/没有签名请求的使用证据/)).toBeTruthy();
     expect(within(card).getAllByText("状态未知").length).toBeGreaterThanOrEqual(1);
     expect(within(card).getAllByText("证据: 未观测").length).toBeGreaterThanOrEqual(1);
     expect(within(card).getByRole("button", { name: "导出报告" })).toBeTruthy();

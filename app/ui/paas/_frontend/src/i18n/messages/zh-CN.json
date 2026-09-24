@@ -2809,6 +2809,40 @@
       "unobserved": "未观测",
       "notApplicable": "不适用"
     },
+    "activityEvidenceTitle": "活动观测",
+    "activityEvidenceHint": "使用证据与当前状态分开：启用的密钥或角色不等于实际使用。",
+    "activityCoverageHint": "范围：{accountId} 的本地 MOCK。未提供完整采集窗口、采集起点或来源水位；不能据此断言闲置、从未使用或业务成功。",
+    "activityStates": {
+      "observed": "有示例记录",
+      "unknown": "未知",
+      "notApplicable": "当前不适用"
+    },
+    "activityObservations": {
+      "successfulLogin": {
+        "title": "当前登录会话",
+        "observed": "当前模拟会话签发于 {time}；不代表其他用户的最近登录或业务访问。",
+        "unknown": "操作事件不能代替会话签发事实；不能推断从未登录。",
+        "notApplicable": "当前范围没有控制台登录身份。"
+      },
+      "accessKeyUse": {
+        "title": "访问密钥使用",
+        "observed": "模拟签名请求有记录；不等于业务执行成功。",
+        "unknown": "仅有密钥状态与创建时间，没有签名请求的使用证据。",
+        "notApplicable": "当前模拟清单没有密钥；不是历史无使用结论。"
+      },
+      "roleUse": {
+        "title": "角色活动",
+        "observed": "模拟角色承担和请求均有记录；不延长原登录会话。",
+        "unknown": "角色或角色会话状态不能代替承担与业务请求的活动证据。",
+        "notApplicable": "当前范围没有角色。"
+      },
+      "businessOutcome": {
+        "title": "业务执行结果",
+        "observed": "模拟产品事务结果有记录；与授权决定分开显示。",
+        "unknown": "尚无产品事务事实；IAM 允许或操作受理不代表业务成功。",
+        "notApplicable": "当前范围没有对应业务结果对象。"
+      }
+    },
     "securityChecks": {
       "activeKeys": {
         "title": "长期访问密钥",

@@ -1,13 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import { useTranslations } from "next-intl";
+import { useFormatter, useTranslations } from "next-intl";
 import { ArrowRight } from "lucide-react";
 import { ActionMenu, Alert, Badge, Button, Card, Typography } from "@ui/xiak";
 import type { AccountAccessView } from "../domain/accounts";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
+import type { SessionSummary } from "../domain/session";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
-import { buildAccessReport, buildAccessSecuritySnapshot, type AccessSecurityCheckState } from "../scenes/accessReport";
+import { buildAccessActivityObservations, buildAccessReport, buildAccessSecuritySnapshot, type AccessSecurityCheckState } from "../scenes/accessReport";
 import styles from "./AccountAccessRenderer.module.css";
 
 const badgeStatus: Record<AccessSecurityCheckState, "warning" | "success" | "neutral" | "info"> = {
@@ -17,18 +18,22 @@ const badgeStatus: Record<AccessSecurityCheckState, "warning" | "success" | "neu
   unknown: "info"
 };
 
-export function AccessReports({ workspace, scene, onNavigate }: {
+export function AccessReports({ workspace, scene, currentSession = null, onNavigate }: {
   workspace: AccessWorkspace;
   scene: AccountAccessScene;
+  currentSession?: SessionSummary | null;
   onNavigate(view: AccountAccessView): void;
 }) {
   const t = useTranslations("IamWorkspace");
+  const format = useFormatter();
   const [failed, setFailed] = useState(false);
   const snapshot = buildAccessSecuritySnapshot(workspace, scene.directoryComplete);
+  const scopedSession = currentSession?.principalId === scene.currentUserId ? currentSession : null;
+  const activity = buildAccessActivityObservations(workspace, scopedSession);
 
   function download(kind: "credentials" | "security") {
     try {
-      const report = buildAccessReport(kind, workspace, scene, new Date().toISOString());
+      const report = buildAccessReport(kind, workspace, scene, new Date().toISOString(), scopedSession);
       const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: "application/json" }));
       const link = document.createElement("a");
       link.href = url;
@@ -82,6 +87,21 @@ export function AccessReports({ workspace, scene, onNavigate }: {
           </li>;
         })}
       </ul>
+      <div className={styles.securityEvidenceHeading}>
+        <strong>{t("activityEvidenceTitle")}</strong>
+        <span>{t("activityEvidenceHint")}</span>
+      </div>
+      <dl className={styles.activityEvidence} aria-label={t("activityEvidenceTitle")}>
+        {activity.map((observation) => <div key={observation.id}>
+          <dt>{t(`activityObservations.${observation.id}.title`)}</dt>
+          <dd><Badge status={observation.state === "observed" ? "info" : "neutral"}>{t(`activityStates.${observation.state}`)}</Badge>
+            <span>{t(`activityObservations.${observation.id}.${observation.state}`, {
+              time: observation.occurredAt ? format.dateTime(new Date(observation.occurredAt), { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : ""
+            })}</span>
+          </dd>
+        </div>)}
+      </dl>
+      <p className={styles.note}>{t("activityCoverageHint", { accountId: workspace.accountId })}</p>
       {failed ? <Alert status="danger">{t("errors.unavailable")}</Alert> : null}
     </Card.Body>
     <Card.Footer>

@@ -2809,6 +2809,40 @@
       "unobserved": "Unobserved",
       "notApplicable": "Not applicable"
     },
+    "activityEvidenceTitle": "Activity observations",
+    "activityEvidenceHint": "Usage evidence is separate from current state: an enabled key or role is not proof of use.",
+    "activityCoverageHint": "Scope: local MOCK data for {accountId}. No complete collection window, collection start or source watermark is available; this cannot establish idleness, never-used status or business success.",
+    "activityStates": {
+      "observed": "Sample record",
+      "unknown": "Unknown",
+      "notApplicable": "Not applicable now"
+    },
+    "activityObservations": {
+      "successfulLogin": {
+        "title": "Current login session",
+        "observed": "The current preview session was issued at {time}; this says nothing about other users' last sign-in or business access.",
+        "unknown": "An operation event cannot substitute for session-issuance evidence; this does not mean never signed in.",
+        "notApplicable": "No console sign-in identity is in scope."
+      },
+      "accessKeyUse": {
+        "title": "Access key use",
+        "observed": "A sample signed request is recorded; this does not prove business success.",
+        "unknown": "Only key status and creation time are available, not signed-request usage evidence.",
+        "notApplicable": "The current sample inventory has no key; this is not a historical never-used conclusion."
+      },
+      "roleUse": {
+        "title": "Role activity",
+        "observed": "Sample role assumption and request records are available; they do not extend the original login session.",
+        "unknown": "Role or role-session state cannot substitute for assumption and business-request activity evidence.",
+        "notApplicable": "No role is in scope now."
+      },
+      "businessOutcome": {
+        "title": "Business outcome",
+        "observed": "A sample product transaction outcome is recorded separately from the authorization decision.",
+        "unknown": "No product transaction facts are available; IAM Allow or operation acceptance is not business success.",
+        "notApplicable": "No business outcome object is in scope."
+      }
+    },
     "securityChecks": {
       "activeKeys": {
         "title": "Long-lived access keys",

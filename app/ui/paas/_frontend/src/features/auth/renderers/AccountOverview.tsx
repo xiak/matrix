@@ -8,6 +8,7 @@ import { Alert, Badge, Button, Card, Statistic, Table, Typography } from "@ui/xi
 import type { AccountAccessView } from "../domain/accounts";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
 import { useAccountAccess } from "../application/AccountAccessProvider";
+import { useSession } from "../application/SessionProvider";
 import { WorkspaceCollection, WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
 import { AccessReports } from "./AccessReports";
 import { UserBoundarySummary } from "./PermissionBoundary";
@@ -56,6 +57,7 @@ export function AccountOverview({ scene, onNavigate }: { scene: AccountAccessSce
   const format = useFormatter();
   const w = useTranslations("IamWorkspace");
   const access = useAccountAccess();
+  const session = useSession();
   const workspace = access.workspace;
   const [showEvents, setShowEvents] = useState(false);
   const pending = scene.users.filter((user) => user.state === "passwordChangeRequired").length;
@@ -90,7 +92,7 @@ if (showEvents && workspace) return <WorkspaceDetail title={w("sensitiveOperatio
           </div> : null}
           {!scene.directoryComplete ? <Alert status="info">{t("partialSummary")}</Alert> : null}
           {workspace ? <Card><Card.Header><Typography.Title as="h2" level={3}>{w("sensitiveOperations")}</Typography.Title><Button variant="ghost" size="small" onClick={() => setShowEvents(true)}>{w("viewAllEvents")}<ArrowRight aria-hidden="true" /></Button></Card.Header><Table className={styles.compactTable} aria-label={w("sensitiveOperations")}><thead><tr><th scope="col">{w("event")}</th><th scope="col">{w("target")}</th><th scope="col">{w("time")}</th></tr></thead><tbody>{workspace.events.slice(0, 5).map((event) => <tr key={event.id}><td>{w(`events.${event.action}`)}</td><td>{event.target}</td><td><WorkspaceTime value={event.at} /></td></tr>)}</tbody></Table></Card> : null}
-          {workspace ? <AccessReports workspace={workspace} scene={scene} onNavigate={onNavigate} /> : null}
+          {workspace ? <AccessReports workspace={workspace} scene={scene} currentSession={session.current?.session} onNavigate={onNavigate} /> : null}
         </> : <Alert>{t("ownAccountHint")}</Alert>}
         <Card>
           <Card.Header><Typography.Title as="h2" level={3}>{t("permissionPrinciples")}</Typography.Title><Button asChild size="small" variant="ghost"><Link href={workspace ? "/console/access/roles/" : "/console/access/policies/"} onNavigate={open(workspace ? "roles" : "policies")}>{t(workspace ? "viewRoles" : "viewPolicies")}<ArrowRight aria-hidden="true" /></Link></Button></Card.Header>

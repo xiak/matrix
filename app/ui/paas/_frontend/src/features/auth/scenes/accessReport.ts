@@ -1,5 +1,6 @@
 import type { AccessWorkspace } from "../domain/accessWorkspace";
 import type { AccountAccessView } from "../domain/accounts";
+import type { SessionSummary } from "../domain/session";
 import type { AccountAccessScene } from "./accountAccessScene";
 
 export type AccessSecurityCheckState = "review" | "configured" | "notApplicable" | "unknown";
@@ -11,6 +12,27 @@ export type AccessSecurityCheck = {
   count: number | null;
   target: Extract<AccountAccessView, "keys" | "settings" | "users" | "groups"> | null;
 };
+
+export type AccessActivityObservation = {
+  id: "successfulLogin" | "accessKeyUse" | "roleUse" | "businessOutcome";
+  state: "observed" | "unknown" | "notApplicable";
+  occurredAt: string | null;
+  source: "CURRENT_PREVIEW_SESSION" | null;
+};
+
+// This is a preview of evidence *shape*, not an activity/idle judgment. Only
+// the current issued Session proves a sample login; generic operation events,
+// metadata and absent events cannot establish a collection window or watermark.
+export function buildAccessActivityObservations(workspace: AccessWorkspace, currentSession: SessionSummary | null = null): AccessActivityObservation[] {
+  const issuedAt = currentSession?.organizationId === workspace.accountId && currentSession.status === "ACTIVE" && Number.isFinite(Date.parse(currentSession.issuedAt))
+    ? currentSession.issuedAt : null;
+  return [
+    { id: "successfulLogin", state: issuedAt ? "observed" : "unknown", occurredAt: issuedAt, source: issuedAt ? "CURRENT_PREVIEW_SESSION" : null },
+    { id: "accessKeyUse", state: workspace.keys.length ? "unknown" : "notApplicable", occurredAt: null, source: null },
+    { id: "roleUse", state: "unknown", occurredAt: null, source: null },
+    { id: "businessOutcome", state: "unknown", occurredAt: null, source: null }
+  ];
+}
 
 // Preview diagnostics deliberately distinguish an absent control from missing
 // evidence. They are recommendations over local synthetic data, never a PDP
@@ -91,7 +113,7 @@ export function buildAccessSecuritySnapshot(workspace: AccessWorkspace, director
 }
 
 // Allowlist report fields: neither credentials nor metadata may enter a report.
-export function buildAccessReport(kind: "credentials" | "security", workspace: AccessWorkspace, scene: AccountAccessScene, generatedAt: string) {
+export function buildAccessReport(kind: "credentials" | "security", workspace: AccessWorkspace, scene: AccountAccessScene, generatedAt: string, currentSession: SessionSummary | null = null) {
   const snapshot = buildAccessSecuritySnapshot(workspace, scene.directoryComplete);
   return {
     mode: "MOCK", kind, accountId: workspace.accountId, generatedAt,
@@ -99,7 +121,9 @@ export function buildAccessReport(kind: "credentials" | "security", workspace: A
       directory: scene.directoryComplete ? "COMPLETE" : "PARTIAL",
       authenticatorEnrollment: "UNOBSERVED",
       accessKeyInventory: "MOCK_OBSERVED",
-      activityEvidence: "UNOBSERVED"
+      activityWindow: "UNAVAILABLE",
+      collectionStart: null,
+      sourceWatermarks: { successfulLogin: null, accessKeyUse: null, roleUse: null, businessOutcome: null }
     },
     users: scene.users.map((user) => {
       const profile = workspace.userProfiles[user.id];
@@ -120,6 +144,7 @@ export function buildAccessReport(kind: "credentials" | "security", workspace: A
       counts: { groups: workspace.groups.length, policies: workspace.policies.length, roles: workspace.roles.length, providers: workspace.providers.length },
       evidenceCounts: snapshot.evidenceCounts,
       checks: snapshot.checks.map(({ id, state, evidence, count }) => ({ id, state, evidence, count })),
+      activity: { observedAt: generatedAt, accountId: workspace.accountId, observations: buildAccessActivityObservations(workspace, currentSession?.principalId === scene.currentUserId ? currentSession : null) },
       events: workspace.events.map(({ action, target, at }) => ({ action, target, at }))
     } : {})
   };
