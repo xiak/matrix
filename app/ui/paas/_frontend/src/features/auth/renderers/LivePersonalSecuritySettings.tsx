@@ -7,6 +7,7 @@ import { Alert, Badge, Button, Card, FormField, Input, PasswordInput, Skeleton, 
 import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
 import { usePersonalSecurity } from "../application/PersonalSecurityProvider";
 import type { AuthenticatorState, NotificationContact, NotificationContactVerification, TOTPEnrollmentStart } from "../domain/personalSecurity";
+import { LiveRecoveryCodeRegeneration } from "./LiveRecoveryCodeRegeneration";
 import styles from "./MfaPreviewExperience.module.css";
 
 type LoadState = "loading" | "ready" | "error";
@@ -201,7 +202,7 @@ export function LivePersonalSecuritySettings() {
               <div className={styles.flowActions}><Button disabled={busy} onClick={() => void inspectEnrollmentIntent()} type="button" variant="secondary"><RefreshCcw aria-hidden="true" />{busy ? t("factor.inspecting") : t("factor.inspect")}</Button></div>
             </div> : null}
             {factor.enrollmentState === "NEVER_BOUND" && verified && !client.totpEnrollmentIntent ? <form className={styles.form} onSubmit={(event) => void startEnrollment(event)}><Alert>{t("factor.firstOnly")}</Alert><FormField id={passwordId} label={t("currentPassword")}><PasswordInput autoComplete="current-password" capsLockLabel={auth("capsLock")} hideLabel={auth("hidePassword")} id={passwordId} onChange={(event) => { setFactorPassword(event.target.value); enrollmentRequest.current = requestToken("ui-totp-enroll-"); }} required showLabel={auth("showPassword")} value={factorPassword} /></FormField><div className={styles.flowActions}><Button disabled={busy || !factorPassword} type="submit"><KeyRound aria-hidden="true" />{busy ? t("saving") : t("factor.start")}</Button></div></form> : null}
-            {factor.enrollmentState === "BOUND" ? <Alert status="success">{t("factor.boundReadOnly")}</Alert> : null}
+            {factor.enrollmentState === "BOUND" ? <LiveRecoveryCodeRegeneration factor={factor} /> : null}
             {factor.enrollmentState === "RECOVERY_REQUIRED" ? <Alert status="warning">{t("factor.recoveryUnavailable")}</Alert> : null}
           </> : null}
           {loadState === "ready" && enrollment ? <form className={styles.form} onSubmit={(event) => void confirmEnrollment(event)}>

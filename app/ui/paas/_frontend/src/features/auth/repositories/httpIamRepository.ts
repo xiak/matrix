@@ -42,7 +42,7 @@ import type {
   SessionSummary
 } from "../domain/session";
 import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDirectory, AccessKeyStatus, AccessKeyStatusChange, ManagedAccessKey } from "../domain/accessKeys";
-import type { AuthenticatorState, NotificationContact, NotificationContactVerification, NotificationDeliveryObservation, TOTPEnrollment, TOTPEnrollmentConfirmation, TOTPEnrollmentStart } from "../domain/personalSecurity";
+import type { AuthenticatorState, NotificationContact, NotificationContactVerification, NotificationDeliveryObservation, RecoveryCodeRegeneration, RecoveryCodeRegenerationResponse, SecurityStepUp, TOTPEnrollment, TOTPEnrollmentConfirmation, TOTPEnrollmentStart } from "../domain/personalSecurity";
 import type { ChangePasswordCommand, AccountRepository, IamRepository, LoginCommand } from "./iamRepository";
 import type { LiveRoleSession, Role, RoleAccess, RoleCapability, RoleCapabilityAction, RoleDirectory, RoleListing, RolePolicyAttachment, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionLifecycle, RoleSessionListing, RoleSessionRevocation, RoleTrustDocument, RoleTrustVersion } from "../domain/roles";
 
@@ -597,6 +597,77 @@ function parseTOTPEnrollmentConfirmation(value: unknown, enrollmentId: string): 
       wire.recoveryCodes.some((code) => typeof code !== "string" || !code || code.length > 16384) ||
       new Set(wire.recoveryCodes).size !== wire.recoveryCodes.length) throw new Error("INVALID_IAM_RESPONSE");
   return { enrollment, nextStep: "REAUTHENTICATE", recoveryCodes: wire.recoveryCodes as string[] };
+}
+
+function boundedFactorRevision(value: unknown): number {
+  const revision = accountVersion(value);
+  if (revision <= 1 || revision > 9_007_199_254_740_990) throw new Error("INVALID_IAM_RESPONSE");
+  return revision;
+}
+
+function parseSecurityStepUp(value: unknown): SecurityStepUp {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "id", "requestId", "operation", "expectedFactorRevision", "state", "createdAt", "expiresAt"], ["provedAt", "consumedAt"]);
+  requireAccountKind(wire, "StepUp");
+  if (wire.operation !== "RECOVERY_CODES_REGENERATE" ||
+      wire.state !== "PENDING" && wire.state !== "PROVED" && wire.state !== "CONSUMED" && wire.state !== "EXPIRED") {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  const createdAt = accountTimestamp(wire.createdAt);
+  const expiresAt = accountTimestamp(wire.expiresAt);
+  if (timestampMicros(expiresAt) - timestampMicros(createdAt) !== 120n * 1_000_000n) throw new Error("INVALID_IAM_RESPONSE");
+  const provedAt = wire.provedAt === undefined ? null : accountTimestamp(wire.provedAt);
+  const consumedAt = wire.consumedAt === undefined ? null : accountTimestamp(wire.consumedAt);
+  if (provedAt !== null && (timestampOrder(provedAt) < timestampOrder(createdAt) || timestampOrder(provedAt) >= timestampOrder(expiresAt)) ||
+      consumedAt !== null && (provedAt === null || timestampOrder(consumedAt) < timestampOrder(provedAt) || timestampOrder(consumedAt) >= timestampOrder(expiresAt)) ||
+      wire.state === "PENDING" && (provedAt !== null || consumedAt !== null) ||
+      wire.state === "PROVED" && (provedAt === null || consumedAt !== null) ||
+      wire.state === "CONSUMED" && (provedAt === null || consumedAt === null) ||
+      wire.state === "EXPIRED" && consumedAt !== null) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  return {
+    id: accountIdentifier(wire.id),
+    requestId: accountIdentifier(wire.requestId),
+    operation: "RECOVERY_CODES_REGENERATE",
+    expectedFactorRevision: boundedFactorRevision(wire.expectedFactorRevision),
+    state: wire.state,
+    createdAt,
+    expiresAt,
+    provedAt,
+    consumedAt
+  };
+}
+
+function parseRecoveryCodeRegeneration(value: unknown): RecoveryCodeRegeneration {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "id", "requestId", "factorId", "factorRevision", "createdAt"]);
+  requireAccountKind(wire, "RecoveryCodeRegeneration");
+  return {
+    id: accountIdentifier(wire.id),
+    requestId: accountIdentifier(wire.requestId),
+    factorId: accountIdentifier(wire.factorId),
+    factorRevision: boundedFactorRevision(wire.factorRevision),
+    createdAt: accountTimestamp(wire.createdAt)
+  };
+}
+
+function parseRecoveryCodeRegenerationResponse(value: unknown): RecoveryCodeRegenerationResponse {
+  const wire = accountRecord(value);
+  if (wire.outcome === "APPLIED") {
+    exactKeys(wire, ["outcome", "regeneration", "recoveryCodes"]);
+    if (!Array.isArray(wire.recoveryCodes) || wire.recoveryCodes.length !== 10 ||
+        wire.recoveryCodes.some((code) => typeof code !== "string" || !code || code.length > 16384) ||
+        new Set(wire.recoveryCodes).size !== wire.recoveryCodes.length) throw new Error("INVALID_IAM_RESPONSE");
+    return {
+      outcome: "APPLIED",
+      regeneration: parseRecoveryCodeRegeneration(wire.regeneration),
+      recoveryCodes: wire.recoveryCodes as string[]
+    };
+  }
+  if (wire.outcome !== "EQUAL_REPLAY") throw new Error("INVALID_IAM_RESPONSE");
+  exactKeys(wire, ["outcome", "regeneration"]);
+  return { outcome: "EQUAL_REPLAY", regeneration: parseRecoveryCodeRegeneration(wire.regeneration) };
 }
 
 function parseGroupAccess(value: unknown, accountId: string): GroupAccess {
@@ -2024,6 +2095,70 @@ export const httpIamRepository: IamRepository = {
           body: JSON.stringify({ requestId: accountIdentifier(command.requestId), code })
         }
       ), target);
+    },
+    recoveryCodes: {
+      async startStepUp(credential, command) {
+        const requestId = accountIdentifier(command.requestId);
+        const expectedFactorRevision = boundedFactorRevision(command.expectedFactorRevision);
+        const result = parseSecurityStepUp(await requestJSON<unknown>("/api/iam/v1/auth/step-up", {
+          method: "POST",
+          headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
+          body: JSON.stringify({ requestId, operation: "RECOVERY_CODES_REGENERATE", expectedFactorRevision })
+        }));
+        if (result.requestId !== requestId || result.expectedFactorRevision !== expectedFactorRevision || result.state !== "PENDING") {
+          throw new Error("INVALID_IAM_RESPONSE");
+        }
+        return result;
+      },
+      async stepUpByRequest(credential, requestId) {
+        const target = accountIdentifier(requestId);
+        const result = parseSecurityStepUp(await requestJSON<unknown>(
+          `/api/iam/v1/auth/step-up/by-request/${encodeURIComponent(target)}`,
+          { headers: accountHeaders(credential) }
+        ));
+        if (result.requestId !== target) throw new Error("INVALID_IAM_RESPONSE");
+        return result;
+      },
+      async verifyStepUp(credential, stepUpId, command) {
+        const target = accountIdentifier(stepUpId);
+        const result = parseSecurityStepUp(await requestJSON<unknown>(
+          `/api/iam/v1/auth/step-up/${encodeURIComponent(target)}:verify`,
+          {
+            method: "POST",
+            headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
+            body: JSON.stringify({
+              requestId: accountIdentifier(command.requestId),
+              password: accountText(command.password),
+              code: accountText(command.code)
+            })
+          }
+        ));
+        if (result.id !== target || result.state !== "PROVED" && result.state !== "EXPIRED") throw new Error("INVALID_IAM_RESPONSE");
+        return result;
+      },
+      async regenerate(credential, command) {
+        const requestId = accountIdentifier(command.requestId);
+        const stepUpId = accountIdentifier(command.stepUpId);
+        const expectedFactorRevision = boundedFactorRevision(command.expectedFactorRevision);
+        const result = parseRecoveryCodeRegenerationResponse(await requestJSON<unknown>("/api/iam/v1/auth/recovery-codes:regenerate", {
+          method: "POST",
+          headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
+          body: JSON.stringify({ requestId, stepUpId, expectedFactorRevision })
+        }));
+        if (result.regeneration.requestId !== requestId || result.regeneration.factorRevision !== expectedFactorRevision) {
+          throw new Error("INVALID_IAM_RESPONSE");
+        }
+        return result;
+      },
+      async regenerationByRequest(credential, requestId) {
+        const target = accountIdentifier(requestId);
+        const result = parseRecoveryCodeRegeneration(await requestJSON<unknown>(
+          `/api/iam/v1/auth/recovery-codes/regenerations/by-request/${encodeURIComponent(target)}`,
+          { headers: accountHeaders(credential) }
+        ));
+        if (result.requestId !== target) throw new Error("INVALID_IAM_RESPONSE");
+        return result;
+      }
     }
   },
   sessions: {

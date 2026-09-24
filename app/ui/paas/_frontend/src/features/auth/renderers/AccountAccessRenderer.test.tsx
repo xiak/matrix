@@ -6,12 +6,13 @@ import { UnsavedChangesProvider, useLeaveConfirmation } from "@ui/xiak";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { SessionProvider, useSession } from "../application/SessionProvider";
-import { AccountAccessProvider, useAccountAccess, useAccountCapabilities, type RoleSessionRevokeIntent } from "../application/AccountAccessProvider";
+import { AccountAccessProvider, useAccountAccess, useAccountCapabilities, type RoleAccessClient, type RoleSessionRevokeIntent } from "../application/AccountAccessProvider";
 import type { Account, AccountAccess, AccountAccessView, AccountIdentity, AccountPolicy, ActionCapability, AuthorizationProfileDirectory, CapabilityRestriction, IamAction, PolicyDirectory, User, UserAccess, UserPolicyAttachment, UserPermissionBoundary } from "../domain/accounts";
 import type { AuthenticatorState, NotificationContact } from "../domain/personalSecurity";
 import type { AccountRepository, IamRepository } from "../repositories/iamRepository";
 import type { RoleAccess, RoleCapabilityAction, RoleDirectory } from "../domain/roles";
 import { AccountAccessRenderer } from "./AccountAccessRenderer";
+import { LiveRoleCreationWizard } from "./LiveRoleCreationWizard";
 import { LoginRenderer } from "./LoginRenderer";
 import { buildAccountAccessScene } from "../scenes/accountAccessScene";
 
@@ -785,6 +786,156 @@ describe("account access", () => {
     expect(screen.getByRole("button", { name: "查询原绑定意图" })).toBeTruthy();
   });
 
+  it("regenerates recovery codes through a purpose-limited live step-up and clears one-time material", async () => {
+    const verified = { accountId: account.id, userId: rootUser.id, state: "VERIFIED" as const, resourceVersion: 1, email: "admin@example.com", verifiedAt: timestamp, pendingVerificationId: null };
+    let operationRequestId = "";
+    const recoveryCodes = Array.from({ length: 10 }, (_, index) => `ROTATED-RECOVERY-${index}`);
+    const recovery = {
+      startStepUp: vi.fn().mockImplementation(async (_credential: string, command: { requestId: string; expectedFactorRevision: number }) => {
+        operationRequestId = command.requestId;
+        return { id: "step-up-one", requestId: command.requestId, operation: "RECOVERY_CODES_REGENERATE" as const, expectedFactorRevision: 2, state: "PENDING" as const, createdAt: timestamp, expiresAt: "2026-09-11T08:02:00Z", provedAt: null, consumedAt: null };
+      }),
+      stepUpByRequest: vi.fn(),
+      verifyStepUp: vi.fn().mockImplementation(async () => ({ id: "step-up-one", requestId: operationRequestId, operation: "RECOVERY_CODES_REGENERATE" as const, expectedFactorRevision: 2, state: "PROVED" as const, createdAt: timestamp, expiresAt: "2026-09-11T08:02:00Z", provedAt: "2026-09-11T08:00:30Z", consumedAt: null })),
+      regenerate: vi.fn().mockImplementation(async () => ({ outcome: "APPLIED" as const, regeneration: { id: "regeneration-one", requestId: operationRequestId, factorId: "factor-one", factorRevision: 2, createdAt: "2026-09-11T08:00:40Z" }, recoveryCodes })),
+      regenerationByRequest: vi.fn()
+    };
+    const security = {
+      notificationContact: vi.fn().mockResolvedValue(verified),
+      authenticatorState: vi.fn().mockResolvedValue({ enrollmentState: "BOUND" as const, factorRevision: 2, factorId: "factor-one" }),
+      startNotificationVerification: vi.fn(), notificationVerification: vi.fn(), confirmNotificationVerification: vi.fn(),
+      startTOTPEnrollment: vi.fn(), totpEnrollment: vi.fn(), totpEnrollmentByRequest: vi.fn(), cancelTOTPEnrollment: vi.fn(), confirmTOTPEnrollment: vi.fn(),
+      recoveryCodes: recovery
+    };
+    const { user, view } = await openAccess(accounts(), iam({ personalSecurity: security }), "settings");
+    await screen.findByText("admin@example.com");
+    await user.click(screen.getByRole("button", { name: "重新生成恢复码" }));
+    await user.type(screen.getByLabelText("当前密码"), "Private-Password-49!");
+    await user.type(screen.getByLabelText("6 位动态验证码"), "123456");
+    await user.click(screen.getByRole("button", { name: "验证本次操作" }));
+    expect(await screen.findByRole("button", { name: "生成新的 10 条恢复码" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "生成新的 10 条恢复码" }));
+    const list = await screen.findByRole("list", { name: "新恢复码" });
+    expect(within(list).getByText("ROTATED-RECOVERY-9")).toBeTruthy();
+    expect(screen.queryByLabelText("当前密码")).toBeNull();
+    expect(screen.queryByLabelText("6 位动态验证码")).toBeNull();
+    expect(view.container.innerHTML).not.toContain("Private-Password-49!");
+    expect(view.container.innerHTML).not.toContain(credential);
+    expect(recovery.startStepUp).toHaveBeenCalledWith(credential, { requestId: operationRequestId, expectedFactorRevision: 2 });
+    expect(recovery.regenerate).toHaveBeenCalledWith(credential, { requestId: operationRequestId, stepUpId: "step-up-one", expectedFactorRevision: 2 });
+    await user.click(screen.getByRole("checkbox", { name: "我已安全保存全部新恢复码" }));
+    await user.click(screen.getByRole("button", { name: "完成并清除页面材料" }));
+    expect(screen.queryByText("ROTATED-RECOVERY-9")).toBeNull();
+    expect(screen.getByRole("button", { name: "重新生成恢复码" })).toBeTruthy();
+    expect(localStorage.length + sessionStorage.length).toBe(0);
+  });
+
+  it("retries an unknown step-up creation only with the frozen request", async () => {
+    const verified = { accountId: account.id, userId: rootUser.id, state: "VERIFIED" as const, resourceVersion: 1, email: "admin@example.com", verifiedAt: timestamp, pendingVerificationId: null };
+    const requestIds: string[] = [];
+    const recovery = {
+      startStepUp: vi.fn().mockImplementation(async (_credential: string, command: { requestId: string }) => {
+        requestIds.push(command.requestId);
+        if (requestIds.length === 1) throw new Error("connection lost after step-up creation");
+        return { id: "step-up-retried", requestId: command.requestId, operation: "RECOVERY_CODES_REGENERATE" as const, expectedFactorRevision: 2, state: "PENDING" as const, createdAt: timestamp, expiresAt: "2026-09-11T08:02:00Z", provedAt: null, consumedAt: null };
+      }),
+      stepUpByRequest: vi.fn(), verifyStepUp: vi.fn(), regenerate: vi.fn(), regenerationByRequest: vi.fn()
+    };
+    const security = {
+      notificationContact: vi.fn().mockResolvedValue(verified),
+      authenticatorState: vi.fn().mockResolvedValue({ enrollmentState: "BOUND" as const, factorRevision: 2, factorId: "factor-one" }),
+      startNotificationVerification: vi.fn(), notificationVerification: vi.fn(), confirmNotificationVerification: vi.fn(),
+      startTOTPEnrollment: vi.fn(), totpEnrollment: vi.fn(), totpEnrollmentByRequest: vi.fn(), cancelTOTPEnrollment: vi.fn(), confirmTOTPEnrollment: vi.fn(),
+      recoveryCodes: recovery
+    };
+    const { user } = await openAccess(accounts(), iam({ personalSecurity: security }), "settings");
+    await screen.findByText("admin@example.com");
+    await user.click(screen.getByRole("button", { name: "重新生成恢复码" }));
+    expect(await screen.findByText("用途限定验证的创建结果未知。不要创建第二个意图；请查询原 requestId，或用完全相同的请求重试。")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "重新生成恢复码" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "按原请求重试" }));
+    expect(await screen.findByLabelText("当前密码")).toBeTruthy();
+    expect(requestIds).toHaveLength(2);
+    expect(requestIds[1]).toBe(requestIds[0]);
+  });
+
+  it("does not interpret a rejected step-up password or OTP as proof that the login bearer expired", async () => {
+    const verified = { accountId: account.id, userId: rootUser.id, state: "VERIFIED" as const, resourceVersion: 1, email: "admin@example.com", verifiedAt: timestamp, pendingVerificationId: null };
+    let operationRequestId = "";
+    const recovery = {
+      startStepUp: vi.fn().mockImplementation(async (_credential: string, command: { requestId: string }) => {
+        operationRequestId = command.requestId;
+        return { id: "step-up-rejected", requestId: command.requestId, operation: "RECOVERY_CODES_REGENERATE" as const, expectedFactorRevision: 2, state: "PENDING" as const, createdAt: timestamp, expiresAt: "2026-09-11T08:02:00Z", provedAt: null, consumedAt: null };
+      }),
+      stepUpByRequest: vi.fn(),
+      verifyStepUp: vi.fn().mockRejectedValue(new HttpProblem(401, "iam.authentication.failed")),
+      regenerate: vi.fn(), regenerationByRequest: vi.fn()
+    };
+    const security = {
+      notificationContact: vi.fn().mockResolvedValue(verified),
+      authenticatorState: vi.fn().mockResolvedValue({ enrollmentState: "BOUND" as const, factorRevision: 2, factorId: "factor-one" }),
+      startNotificationVerification: vi.fn(), notificationVerification: vi.fn(), confirmNotificationVerification: vi.fn(),
+      startTOTPEnrollment: vi.fn(), totpEnrollment: vi.fn(), totpEnrollmentByRequest: vi.fn(), cancelTOTPEnrollment: vi.fn(), confirmTOTPEnrollment: vi.fn(), recoveryCodes: recovery
+    };
+    const { user } = await openAccess(accounts(), iam({ personalSecurity: security }), "settings");
+    await screen.findByText("admin@example.com");
+    await user.click(screen.getByRole("button", { name: "重新生成恢复码" }));
+    await user.type(screen.getByLabelText("当前密码"), "Wrong-Password-49!");
+    await user.type(screen.getByLabelText("6 位动态验证码"), "123456");
+    await user.click(screen.getByRole("button", { name: "验证本次操作" }));
+    expect(await screen.findByText(/密码或动态验证码未通过/)).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "安全通知与身份验证器" })).toBeTruthy();
+    expect(screen.getByTestId("nav-settings").getAttribute("aria-current")).toBe("page");
+    expect(screen.queryByRole("button", { name: "登录控制台" })).toBeNull();
+    expect(screen.getByText(operationRequestId)).toBeTruthy();
+  });
+
+  it("never replays proof secrets or a regeneration after an unknown outcome", async () => {
+    const verified = { accountId: account.id, userId: rootUser.id, state: "VERIFIED" as const, resourceVersion: 1, email: "admin@example.com", verifiedAt: timestamp, pendingVerificationId: null };
+    let operationRequestId = "";
+    const pending = () => ({ id: "step-up-unknown", requestId: operationRequestId, operation: "RECOVERY_CODES_REGENERATE" as const, expectedFactorRevision: 2, state: "PENDING" as const, createdAt: timestamp, expiresAt: "2026-09-11T08:02:00Z", provedAt: null, consumedAt: null });
+    const proved = () => ({ ...pending(), state: "PROVED" as const, provedAt: "2026-09-11T08:00:30Z" });
+    const recovery = {
+      startStepUp: vi.fn().mockImplementation(async (_credential: string, command: { requestId: string }) => { operationRequestId = command.requestId; return pending(); }),
+      stepUpByRequest: vi.fn().mockImplementation(async () => proved()),
+      verifyStepUp: vi.fn().mockRejectedValue(new Error("connection lost after proof submission")),
+      regenerate: vi.fn().mockRejectedValue(new Error("connection lost after regeneration submission")),
+      regenerationByRequest: vi.fn().mockImplementation(async () => ({ id: "regeneration-unknown", requestId: operationRequestId, factorId: "factor-one", factorRevision: 2, createdAt: "2026-09-11T08:00:40Z" }))
+    };
+    const security = {
+      notificationContact: vi.fn().mockResolvedValue(verified),
+      authenticatorState: vi.fn().mockResolvedValue({ enrollmentState: "BOUND" as const, factorRevision: 2, factorId: "factor-one" }),
+      startNotificationVerification: vi.fn(), notificationVerification: vi.fn(), confirmNotificationVerification: vi.fn(),
+      startTOTPEnrollment: vi.fn(), totpEnrollment: vi.fn(), totpEnrollmentByRequest: vi.fn(), cancelTOTPEnrollment: vi.fn(), confirmTOTPEnrollment: vi.fn(),
+      recoveryCodes: recovery
+    };
+    const { user, view } = await openAccess(accounts(), iam({ personalSecurity: security }), "settings");
+    await screen.findByText("admin@example.com");
+    await user.click(screen.getByRole("button", { name: "重新生成恢复码" }));
+    await user.type(screen.getByLabelText("当前密码"), "Private-Password-49!");
+    await user.type(screen.getByLabelText("6 位动态验证码"), "123456");
+    await user.click(screen.getByRole("button", { name: "验证本次操作" }));
+    expect(await screen.findByText(/结果未知时只能读取原安全验证状态/)).toBeTruthy();
+    expect(screen.queryByLabelText("当前密码")).toBeNull();
+    expect(screen.queryByLabelText("6 位动态验证码")).toBeNull();
+    expect(view.container.innerHTML).not.toContain("Private-Password-49!");
+    await user.click(screen.getByRole("button", { name: "查询原安全验证" }));
+    expect(await screen.findByRole("button", { name: "生成新的 10 条恢复码" })).toBeTruthy();
+    expect(recovery.verifyStepUp).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole("button", { name: "生成新的 10 条恢复码" }));
+    expect(await screen.findByText("重新生成结果未知。不要再次提交或创建第二个意图；请只查询原 requestId。")).toBeTruthy();
+    await user.click(screen.getByTestId("nav-users"));
+    await screen.findByRole("table", { name: "租户用户列表" });
+    await user.click(screen.getByTestId("nav-settings"));
+    expect(await screen.findByText(operationRequestId)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "查询原重新生成结果" }));
+    expect(await screen.findByText(/一次性恢复码材料已不在当前页面/)).toBeTruthy();
+    expect(screen.queryByRole("list", { name: "新恢复码" })).toBeNull();
+    expect(recovery.regenerate).toHaveBeenCalledTimes(1);
+    expect(recovery.regenerationByRequest).toHaveBeenCalledWith(credential, operationRequestId);
+  });
+
   it("allows an unprivileged user to inspect its own settings without querying admin directories", async () => {
     const reader: AccountIdentity = { ...identity, user: child.user, identityKind: "USER", permissionBoundary: { accountId: account.id, userId: child.user.id, resourceVersion: child.user.resourceVersion, policy: null }, policySources: [], capabilities: currentCapabilities(false) };
     const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue(reader), listUsers: vi.fn().mockRejectedValue(new HttpProblem(403, "FORBIDDEN")) });
@@ -899,6 +1050,51 @@ describe("account access", () => {
     expect(await screen.findByRole("heading", { name: "角色已创建" })).toBeTruthy();
     expect(create).toHaveBeenCalledTimes(2);
     expect(create.mock.calls[1]?.[2]).toEqual(original);
+  });
+
+  it("discards a late role creation result when the Session-scoped client changes", async () => {
+    const roleIdentity: AccountIdentity = { ...identity, capabilities: [
+      ...identity.capabilities,
+      capability("iam.role.list", "ACCOUNT", account.id),
+      capability("iam.role.create", "ACCOUNT", account.id)
+    ] };
+    const scene = buildAccountAccessScene(roleIdentity, { items: [child], nextAfter: null }, null, directory(false), directory(true));
+    let resolveCreate!: (value: typeof managedRole) => void;
+    const create = vi.fn(() => new Promise<typeof managedRole>((resolve) => { resolveCreate = resolve; }));
+    const roleClient = (operation: RoleAccessClient["create"]): RoleAccessClient => ({
+      accountId: account.id,
+      canCreate: true,
+      createRestrictionReason: null,
+      list: vi.fn().mockResolvedValue(managedRoleDirectory),
+      read: vi.fn().mockResolvedValue(managedRoleAccess),
+      create: operation,
+      listSessions: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, observedAt: timestamp, items: [], nextAfter: null }),
+      readSession: vi.fn().mockRejectedValue(new Error("unused session read")),
+      revokeSession: vi.fn().mockRejectedValue(new Error("unused session revoke"))
+    });
+    const firstClient = roleClient(create);
+    const secondClient = roleClient(vi.fn().mockResolvedValue(managedRole));
+    const user = userEvent.setup();
+    const onDone = vi.fn();
+    const wizard = (client: RoleAccessClient) => <LocaleProvider><UnsavedChangesProvider>
+      <LiveRoleCreationWizard client={client} scene={scene} onBack={vi.fn()} onDone={onDone} />
+    </UnsavedChangesProvider></LocaleProvider>;
+    const view = render(wizard(firstClient));
+
+    await user.click(screen.getByRole("checkbox", { name: "developer" }));
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.type(screen.getByLabelText("名称", { exact: true }), "OldSessionRole");
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.click(screen.getByRole("button", { name: "新建角色" }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(1));
+
+    view.rerender(wizard(secondClient));
+    await waitFor(() => expect((screen.getByRole("checkbox", { name: "developer" }) as HTMLInputElement).checked).toBe(false));
+    await act(async () => { resolveCreate({ ...managedRole, id: "late-old-session-role", name: "OldSessionRole" }); });
+
+    expect(screen.queryByRole("heading", { name: "角色已创建" })).toBeNull();
+    expect(screen.queryByText("late-old-session-role")).toBeNull();
+    expect(onDone).not.toHaveBeenCalled();
   });
 
   it("retains one uncertain role-session revoke across the real keyed directory navigation boundary", async () => {

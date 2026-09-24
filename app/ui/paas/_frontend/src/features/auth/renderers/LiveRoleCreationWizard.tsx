@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { useTranslations } from "next-intl";
 import { ShieldCheck } from "lucide-react";
 import { Alert, Badge, Button, ContentPage, FormField, Input, TextArea, Wizard } from "@ui/xiak";
@@ -39,6 +39,8 @@ export function LiveRoleCreationWizard({ client, scene, onBack, onDone }: {
   const form = useRef<HTMLFormElement>(null);
   const submitting = useRef(false);
   const requestId = useRef(crypto.randomUUID());
+  const latestClient = useRef(client);
+  const mountedClient = useRef(client);
   const [step, setStep] = useState(0);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -61,6 +63,28 @@ export function LiveRoleCreationWizard({ client, scene, onBack, onDone }: {
   });
   const trustedUsers = scene.users.map((user) => ({ id: user.id, name: user.loginName, description: user.name }));
   const trustedDirectory = new Set(trustedUsers.map((user) => user.id));
+
+  useLayoutEffect(() => {
+    latestClient.current = client;
+    if (mountedClient.current === client) return;
+    // A role creation intent belongs to the login Session that created the
+    // client. Never carry local draft, unknown outcome, or one-time success
+    // state into another Session, even when the Account and USER are equal.
+    mountedClient.current = client;
+    submitting.current = false;
+    requestId.current = crypto.randomUUID();
+    setStep(0);
+    setName("");
+    setDescription("");
+    setTrustedUserIds([]);
+    setTags([]);
+    setSessionMinutes(60);
+    setValidationError(null);
+    setLiveError(null);
+    setBusy(false);
+    setCreatedId(null);
+    setUncertain(null);
+  }, [client]);
 
   useEffect(() => {
     if (!validationError) return;
@@ -120,20 +144,25 @@ export function LiveRoleCreationWizard({ client, scene, onBack, onDone }: {
       return;
     }
     const intent = uncertain ?? command();
+    const sourceClient = client;
     submitting.current = true;
     setBusy(true);
     setLiveError(null);
     try {
-      const role = await client.create(intent);
+      const role = await sourceClient.create(intent);
+      if (latestClient.current !== sourceClient) return;
       setUncertain(null);
       setCreatedId(role.id);
     } catch (failure) {
+      if (latestClient.current !== sourceClient) return;
       const code = accountError(failure);
       if (code === "unavailable") setUncertain(intent);
       setLiveError(a(`errors.${code}`));
     } finally {
-      submitting.current = false;
-      setBusy(false);
+      if (latestClient.current === sourceClient) {
+        submitting.current = false;
+        setBusy(false);
+      }
     }
   }
 

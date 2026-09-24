@@ -26,7 +26,7 @@ import type {
 } from "../domain/accounts";
 import type { AccessWorkspace, AccessWorkspaceCommand } from "../domain/accessWorkspace";
 import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDirectory, AccessKeyStatus, AccessKeyStatusChange } from "../domain/accessKeys";
-import type { AuthenticatorState, NotificationContact, NotificationContactVerification, TOTPEnrollment, TOTPEnrollmentConfirmation, TOTPEnrollmentStart } from "../domain/personalSecurity";
+import type { AuthenticatorState, NotificationContact, NotificationContactVerification, RecoveryCodeRegeneration, RecoveryCodeRegenerationResponse, SecurityStepUp, TOTPEnrollment, TOTPEnrollmentConfirmation, TOTPEnrollmentStart } from "../domain/personalSecurity";
 import type { UserBatchCommand } from "../domain/userBatch";
 import type { CreateRoleCommand, Role, RoleAccess, RoleDirectory, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionRevocation } from "../domain/roles";
 
@@ -80,6 +80,13 @@ export interface IamRepository {
     totpEnrollmentByRequest(credential: string, requestId: string): Promise<TOTPEnrollment>;
     cancelTOTPEnrollment(credential: string, enrollmentId: string): Promise<TOTPEnrollment>;
     confirmTOTPEnrollment(credential: string, enrollmentId: string, command: { requestId: string; code: string }): Promise<TOTPEnrollmentConfirmation>;
+    recoveryCodes?: {
+      startStepUp(credential: string, command: { requestId: string; expectedFactorRevision: number }): Promise<SecurityStepUp>;
+      stepUpByRequest(credential: string, requestId: string): Promise<SecurityStepUp>;
+      verifyStepUp(credential: string, stepUpId: string, command: { requestId: string; password: string; code: string }): Promise<SecurityStepUp>;
+      regenerate(credential: string, command: { requestId: string; stepUpId: string; expectedFactorRevision: number }): Promise<RecoveryCodeRegenerationResponse>;
+      regenerationByRequest(credential: string, requestId: string): Promise<RecoveryCodeRegeneration>;
+    };
   };
 }
 

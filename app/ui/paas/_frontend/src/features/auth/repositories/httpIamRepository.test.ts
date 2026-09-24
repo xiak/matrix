@@ -418,6 +418,82 @@ describe("IAM HTTP personal-security boundary", () => {
     expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/authenticators");
   });
 
+  it("binds recovery-code regeneration to one purpose-limited proof and original request", async () => {
+    const requestId = "regenerate-codes-1";
+    const stepUp = {
+      apiVersion, kind: "StepUp", id: "step-up-1", requestId,
+      operation: "RECOVERY_CODES_REGENERATE", expectedFactorRevision: 2, state: "PENDING",
+      createdAt: timestamp, expiresAt: "2026-09-11T08:02:00Z"
+    };
+    let fetcher = reply(stepUp);
+    await expect(httpIamRepository.personalSecurity!.recoveryCodes!.startStepUp("bearer", {
+      requestId, expectedFactorRevision: 2
+    })).resolves.toMatchObject({ id: "step-up-1", state: "PENDING" });
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/step-up");
+    expect(requestBody(fetcher)).toEqual({ requestId, operation: "RECOVERY_CODES_REGENERATE", expectedFactorRevision: 2 });
+
+    fetcher = reply(stepUp);
+    await httpIamRepository.personalSecurity!.recoveryCodes!.stepUpByRequest("bearer", requestId);
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/auth/step-up/by-request/${requestId}`);
+
+    const proved = { ...stepUp, state: "PROVED", provedAt: "2026-09-11T08:00:30Z" };
+    fetcher = reply(proved);
+    await httpIamRepository.personalSecurity!.recoveryCodes!.verifyStepUp("bearer", "step-up-1", {
+      requestId: "verify-step-up-1", password: "private-password", code: "123456"
+    });
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/step-up/step-up-1:verify");
+    expect(requestBody(fetcher)).toEqual({ requestId: "verify-step-up-1", password: "private-password", code: "123456" });
+
+    const regeneration = {
+      apiVersion, kind: "RecoveryCodeRegeneration", id: "regeneration-1", requestId,
+      factorId: "factor-1", factorRevision: 2, createdAt: "2026-09-11T08:00:40Z"
+    };
+    const recoveryCodes = Array.from({ length: 10 }, (_, index) => `NEW-RECOVERY-${index}`);
+    fetcher = reply({ outcome: "APPLIED", regeneration, recoveryCodes });
+    await expect(httpIamRepository.personalSecurity!.recoveryCodes!.regenerate("bearer", {
+      requestId, stepUpId: "step-up-1", expectedFactorRevision: 2
+    })).resolves.toMatchObject({ outcome: "APPLIED", recoveryCodes });
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/recovery-codes:regenerate");
+    expect(requestBody(fetcher)).toEqual({ requestId, stepUpId: "step-up-1", expectedFactorRevision: 2 });
+
+    fetcher = reply(regeneration);
+    await httpIamRepository.personalSecurity!.recoveryCodes!.regenerationByRequest("bearer", requestId);
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/auth/recovery-codes/regenerations/by-request/${requestId}`);
+  });
+
+  it("rejects malformed step-up states and any replayed recovery-code secret", async () => {
+    const requestId = "regenerate-codes-1";
+    const stepUp = {
+      apiVersion, kind: "StepUp", id: "step-up-1", requestId,
+      operation: "RECOVERY_CODES_REGENERATE", expectedFactorRevision: 2, state: "PENDING",
+      createdAt: timestamp, expiresAt: "2026-09-11T08:02:00Z"
+    };
+    for (const body of [
+      { ...stepUp, expiresAt: "2026-09-11T08:01:59Z" },
+      { ...stepUp, state: "PROVED" },
+      { ...stepUp, operation: "LOGIN" },
+      { ...stepUp, expectedFactorRevision: 1 },
+      { ...stepUp, state: "CONSUMED", provedAt: "2026-09-11T08:00:30Z" }
+    ]) {
+      reply(body);
+      await expect(httpIamRepository.personalSecurity!.recoveryCodes!.stepUpByRequest("bearer", requestId)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+
+    const regeneration = {
+      apiVersion, kind: "RecoveryCodeRegeneration", id: "regeneration-1", requestId,
+      factorId: "factor-1", factorRevision: 2, createdAt: "2026-09-11T08:00:40Z"
+    };
+    reply({ outcome: "EQUAL_REPLAY", regeneration, recoveryCodes: [] });
+    await expect(httpIamRepository.personalSecurity!.recoveryCodes!.regenerate("bearer", {
+      requestId, stepUpId: "step-up-1", expectedFactorRevision: 2
+    })).rejects.toThrow("INVALID_IAM_RESPONSE");
+
+    reply({ outcome: "APPLIED", regeneration, recoveryCodes: Array(10).fill("DUPLICATE") });
+    await expect(httpIamRepository.personalSecurity!.recoveryCodes!.regenerate("bearer", {
+      requestId, stepUpId: "step-up-1", expectedFactorRevision: 2
+    })).rejects.toThrow("INVALID_IAM_RESPONSE");
+  });
+
   it("accepts provisioning only on the first applied enrollment response", async () => {
     const fetcher = reply({ outcome: "APPLIED", enrollment: pendingEnrollment, provisioning: { seed: "SECRETBASE32", uri: "otpauth://totp/Matrix:alex?secret=SECRETBASE32" } });
     const applied = await httpIamRepository.personalSecurity!.startTOTPEnrollment("bearer", {
@@ -472,7 +548,11 @@ describe("IAM HTTP personal-security boundary", () => {
       () => httpIamRepository.personalSecurity!.startNotificationVerification("bearer", { email: "admin@example.com", password: "", requestId: "contact-one" }),
       () => httpIamRepository.personalSecurity!.confirmNotificationVerification("bearer", "verification-one", { code: "123", requestId: "confirm-one" }),
       () => httpIamRepository.personalSecurity!.startTOTPEnrollment("bearer", { requestId: "enroll-one", password: "private", expectedFactorRevision: Number.MAX_SAFE_INTEGER }),
-      () => httpIamRepository.personalSecurity!.confirmTOTPEnrollment("bearer", "enrollment-one", { requestId: "confirm-one", code: "" })
+      () => httpIamRepository.personalSecurity!.confirmTOTPEnrollment("bearer", "enrollment-one", { requestId: "confirm-one", code: "" }),
+      () => httpIamRepository.personalSecurity!.recoveryCodes!.startStepUp("bearer", { requestId: "regenerate-one", expectedFactorRevision: 1 }),
+      () => httpIamRepository.personalSecurity!.recoveryCodes!.verifyStepUp("bearer", "step-up-one", { requestId: "verify-one", password: "", code: "123456" }),
+      () => httpIamRepository.personalSecurity!.recoveryCodes!.verifyStepUp("bearer", "step-up-one", { requestId: "verify-one", password: "private", code: "" }),
+      () => httpIamRepository.personalSecurity!.recoveryCodes!.regenerate("bearer", { requestId: "regenerate-one", stepUpId: "step-up-one", expectedFactorRevision: 1 })
     ]) {
       const fetcher = reply({});
       await expect(action()).rejects.toThrow("INVALID_IAM_RESPONSE");

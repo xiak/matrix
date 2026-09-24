@@ -78,3 +78,54 @@ export type EnrollmentRecoveryMaterial = {
   enrollmentId: string;
   recoveryCodes: string[];
 };
+
+export type SecurityStepUpState = "PENDING" | "PROVED" | "CONSUMED" | "EXPIRED";
+
+export type SecurityStepUp = {
+  id: string;
+  requestId: string;
+  operation: "RECOVERY_CODES_REGENERATE";
+  expectedFactorRevision: number;
+  state: SecurityStepUpState;
+  createdAt: string;
+  expiresAt: string;
+  provedAt: string | null;
+  consumedAt: string | null;
+};
+
+export type RecoveryCodeRegeneration = {
+  id: string;
+  requestId: string;
+  factorId: string;
+  factorRevision: number;
+  createdAt: string;
+};
+
+export type RecoveryCodeRegenerationResponse =
+  | {
+      outcome: "APPLIED";
+      regeneration: RecoveryCodeRegeneration;
+      recoveryCodes: string[];
+    }
+  | {
+      outcome: "EQUAL_REPLAY";
+      regeneration: RecoveryCodeRegeneration;
+    };
+
+export type RecoveryCodeRegenerationIntentState =
+  | "STEP_UP_UNKNOWN"
+  | "PENDING"
+  | "VERIFICATION_UNKNOWN"
+  | "PROVED"
+  | "REGENERATION_UNKNOWN"
+  | "COMPLETED"
+  | "EXPIRED";
+
+export type RecoveryCodeRegenerationIntent = {
+  requestId: string;
+  factorId: string;
+  expectedFactorRevision: number;
+  state: RecoveryCodeRegenerationIntentState;
+  stepUp: SecurityStepUp | null;
+  regeneration: RecoveryCodeRegeneration | null;
+};

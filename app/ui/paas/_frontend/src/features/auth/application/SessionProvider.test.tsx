@@ -29,6 +29,7 @@ function Probe() {
       <span data-testid="error">{session.error ?? "none"}</span>
       <span data-testid="recovery">{session.enrollmentRecovery?.recoveryCodes.join("|") ?? "none"}</span>
       <span data-testid="authenticator-recovery">{session.authenticatorRecovery?.state ?? "none"}</span>
+      <span data-testid="code-regeneration">{security?.recoveryCodeRegenerationIntent?.state ?? "none"}</span>
       <button onClick={() => void session.login("admin", "password")} type="button">login</button>
       <button onClick={() => void session.login("bravo", "password")} type="button">login-b</button>
       <button
@@ -47,6 +48,10 @@ function Probe() {
       <button onClick={session.acknowledgeReauthentication} type="button">acknowledge</button>
       <button onClick={session.acknowledgeEnrollmentRecovery} type="button">acknowledge-recovery</button>
       {security ? <button onClick={() => void security.confirmTOTPEnrollment("enrollment-one", { requestId: "confirm-one", code: "123456" })} type="button">confirm-enrollment</button> : null}
+      {security ? <button onClick={() => void security.startRecoveryCodeRegeneration({ requestId: "regenerate-one", factorId: "factor-one", expectedFactorRevision: 2 })} type="button">start-code-regeneration</button> : null}
+      {security ? <button onClick={() => void security.verifyRecoveryCodeStepUp({ requestId: "verify-one", password: "password", code: "123456" })} type="button">verify-code-regeneration</button> : null}
+      {security ? <button onClick={() => void security.regenerateRecoveryCodes().catch(() => undefined)} type="button">regenerate-codes</button> : null}
+      {security ? <button onClick={() => void security.inspectRecoveryCodeRegeneration()} type="button">inspect-code-regeneration</button> : null}
       <button onClick={session.cancelAuthenticationChallenge} type="button">cancel-challenge</button>
       <button onClick={() => session.expire(secretCredential)} type="button">expire</button>
     </div>
@@ -138,6 +143,52 @@ describe("SessionProvider", () => {
     await act(async () => fireEvent.click(screen.getByText("expire")));
     expect(screen.getByTestId("phase").textContent).toBe("authenticated");
     expect(screen.getByTestId("principal").textContent).toBe("admin");
+  });
+
+  it("queries an unknown recovery-code regeneration with the fresh Session of the same USER", async () => {
+    const iam = repository();
+    let loginCount = 0;
+    iam.login = vi.fn(async () => {
+      loginCount += 1;
+      return {
+        outcome: "AUTHENTICATED" as const,
+        credential: `${secretCredential}-${loginCount}`,
+        mustChangePassword: false,
+        session: {
+          id: `session-${loginCount}`,
+          organizationId: "organization-test",
+          principalId: "principal-test",
+          status: "ACTIVE" as const,
+          issuedAt: "2026-08-26T12:00:00Z",
+          expiresAt: "2099-08-26T20:00:00Z"
+        }
+      };
+    });
+    iam.personalSecurity = {
+      notificationContact: vi.fn(), startNotificationVerification: vi.fn(), notificationVerification: vi.fn(), confirmNotificationVerification: vi.fn(), authenticatorState: vi.fn(), startTOTPEnrollment: vi.fn(), totpEnrollment: vi.fn(), totpEnrollmentByRequest: vi.fn(), cancelTOTPEnrollment: vi.fn(), confirmTOTPEnrollment: vi.fn(),
+      recoveryCodes: {
+        startStepUp: vi.fn().mockResolvedValue({ id: "step-up-one", requestId: "regenerate-one", operation: "RECOVERY_CODES_REGENERATE", expectedFactorRevision: 2, state: "PENDING", createdAt: "2026-09-21T01:00:00Z", expiresAt: "2026-09-21T01:02:00Z", provedAt: null, consumedAt: null }),
+        stepUpByRequest: vi.fn(),
+        verifyStepUp: vi.fn().mockResolvedValue({ id: "step-up-one", requestId: "regenerate-one", operation: "RECOVERY_CODES_REGENERATE", expectedFactorRevision: 2, state: "PROVED", createdAt: "2026-09-21T01:00:00Z", expiresAt: "2026-09-21T01:02:00Z", provedAt: "2026-09-21T01:00:30Z", consumedAt: null }),
+        regenerate: vi.fn().mockRejectedValue(new Error("connection lost after command")),
+        regenerationByRequest: vi.fn().mockResolvedValue({ id: "regeneration-one", requestId: "regenerate-one", factorId: "factor-one", factorRevision: 2, createdAt: "2026-09-21T01:00:40Z" })
+      }
+    };
+    const screen = render(<SessionProvider repository={iam}><Probe /></SessionProvider>);
+
+    await act(async () => fireEvent.click(screen.getByText("login")));
+    await act(async () => fireEvent.click(screen.getByText("start-code-regeneration")));
+    await act(async () => fireEvent.click(screen.getByText("verify-code-regeneration")));
+    await act(async () => fireEvent.click(screen.getByText("regenerate-codes")));
+    expect(screen.getByTestId("code-regeneration").textContent).toBe("REGENERATION_UNKNOWN");
+
+    await act(async () => fireEvent.click(screen.getByText("login")));
+    await waitFor(() => expect(screen.getByTestId("code-regeneration").textContent).toBe("REGENERATION_UNKNOWN"));
+    await act(async () => fireEvent.click(screen.getByText("inspect-code-regeneration")));
+
+    expect(iam.personalSecurity.recoveryCodes!.regenerationByRequest).toHaveBeenCalledWith(`${secretCredential}-2`, "regenerate-one");
+    expect(screen.getByTestId("code-regeneration").textContent).toBe("COMPLETED");
+    expect(screen.container.textContent).not.toContain(secretCredential);
   });
   it("keeps the bearer only in provider memory", async () => {
     const screen = render(<SessionProvider repository={repository()}><Probe /></SessionProvider>);
