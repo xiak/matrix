@@ -200,6 +200,37 @@ func TestIAMAuthenticationRecoveryPostgres(t *testing.T) {
 	if _, err := sourceRecovery.Reopen(ctx, closure); !errors.Is(err, authenticationrecovery.ErrConflict) {
 		t.Fatalf("source authority reopened without restored reconciliation: %v", err)
 	}
+
+	// The installation gate authenticates the source closure. Here the SQL
+	// boundary starts at an older restored epoch and must accept a later
+	// closure only through the RESTORED reconciliation path. A normal source
+	// close must still be adjacent.
+	jumpIntent := authenticationRecoveryIntent(document.InstallationID)
+	jumpIntent.Epoch = 3
+	jumpIntent.CommandID = "cmd-" + strings.Repeat("a", 32)
+	if _, err := restoredRecovery.Close(ctx, jumpIntent); !errors.Is(err, authenticationrecovery.ErrConflict) {
+		t.Fatalf("ordinary close skipped recovery epochs: %v", err)
+	}
+	jumpClosure := closure
+	jumpClosure.Epoch = jumpIntent.Epoch
+	jumpClosure.CommandID = jumpIntent.CommandID
+	if _, err := restoredRecovery.Reconcile(ctx, jumpClosure); err != nil {
+		t.Fatalf("older restored snapshot rejected a later authenticated closure: %v", err)
+	}
+	var jumpEpoch int64
+	var jumpState string
+	if err := restoredAdmin.QueryRow(ctx, `SELECT epoch,state FROM iam.authentication_recovery_state WHERE singleton`).Scan(&jumpEpoch, &jumpState); err != nil || jumpEpoch != 3 || jumpState != "CLOSED" {
+		t.Fatalf("restored epoch jump did not close authority: epoch=%d state=%s err=%v", jumpEpoch, jumpState, err)
+	}
+	if _, err := restoredRecovery.Reopen(ctx, jumpClosure); err != nil {
+		t.Fatalf("restored epoch jump did not reopen authority: %v", err)
+	}
+	staleClosure := jumpClosure
+	staleClosure.Epoch = 2
+	staleClosure.CommandID = "cmd-" + strings.Repeat("b", 32)
+	if _, err := restoredRecovery.Reconcile(ctx, staleClosure); !errors.Is(err, authenticationrecovery.ErrConflict) {
+		t.Fatalf("restored authority accepted stale recovery epoch: %v", err)
+	}
 }
 
 func openAuthenticationRecoveryDatabase(t *testing.T, ctx context.Context, dsn, prefix string) (*pgx.Conn, *pgx.ConnConfig) {
@@ -398,7 +429,7 @@ func seedAuthenticationRecoveryPendingPassword(t *testing.T, ctx context.Context
 	if _, err := tx.Exec(ctx, "SELECT set_config('matrix.iam_tenant_id',$1,true)", document.Organization.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.Exec(ctx, `SELECT iam.reserve_password_attempt($1,NULL,NULL,NULL,'auth-recovery-pending-password','LOGIN',NULL)`,
+	if _, err := tx.Exec(ctx, `SELECT iam.reserve_password_attempt($1,NULL,NULL,NULL,'auth-recovery-pending-password')`,
 		"auth-recovery-key-user@"+string(document.Organization.ID)); err != nil {
 		t.Fatal("reserve recovery password attempt", err)
 	}

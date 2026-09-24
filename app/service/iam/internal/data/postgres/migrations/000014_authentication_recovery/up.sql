@@ -105,7 +105,12 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='authentication recovery state is protected';
     END IF;
     IF OLD.state='OPEN' THEN
-        IF NEW.state<>'CLOSED' OR NEW.epoch<>OLD.epoch+1 OR NEW.active_command_id IS NULL THEN
+        IF NEW.state<>'CLOSED' OR NEW.active_command_id IS NULL OR
+          (NEW.epoch<>OLD.epoch+1 AND NOT EXISTS(
+            SELECT 1 FROM iam.authentication_recovery_closures c
+            JOIN iam.authentication_recovery_reconciliations r ON r.command_id=c.command_id
+            WHERE c.command_id=NEW.active_command_id AND c.epoch=NEW.epoch
+              AND c.origin='RESTORED' AND NEW.epoch>OLD.epoch)) THEN
             RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='authentication recovery close transition is invalid';
         END IF;
     ELSIF OLD.state='CLOSED' THEN
@@ -301,7 +306,11 @@ BEGIN
         RETURN stored.closure_document;
     END IF;
     SELECT * INTO current_state FROM iam.authentication_recovery_state WHERE singleton FOR UPDATE;
-    IF NOT FOUND OR current_state.state<>'OPEN' OR numeric_epoch<>current_state.epoch+1
+    -- A retained backup may predate several completed recovery epochs. The
+    -- installation authenticates the external closure before this restored
+    -- authority records it; the trigger permits the jump only with the
+    -- matching immutable RESTORED closure and reconciliation in this transaction.
+    IF NOT FOUND OR current_state.state<>'OPEN' OR numeric_epoch<=current_state.epoch
       OR EXISTS(SELECT 1 FROM iam.authentication_recovery_closures c WHERE c.epoch=numeric_epoch) THEN
         RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='authentication recovery reconciliation conflicts';
     END IF;
@@ -331,6 +340,7 @@ DECLARE receipt iam.bootstrap_receipts%ROWTYPE; current_state iam.authentication
     stored iam.authentication_recovery_closures%ROWTYPE; reconciled iam.authentication_recovery_reconciliations%ROWTYPE;
     completed iam.authentication_recovery_completions%ROWTYPE; completion jsonb;
     effective_now timestamptz(6):=transaction_timestamp(); tenant record;
+    prior_custody_scope text; has_authenticators boolean;
 BEGIN
     PERFORM set_config('matrix.iam_authentication_recovery','trusted',true);
     IF jsonb_typeof(closure) IS DISTINCT FROM 'object' OR closure->>'state'<>'CLOSED'
@@ -358,7 +368,13 @@ BEGIN
       OR current_state.active_command_id<>closure->>'commandId' OR effective_now<=stored.closed_at THEN
         RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='authentication recovery reopen conflicts';
     END IF;
-    IF EXISTS(SELECT 1 FROM iam.totp_authenticators) THEN
+    -- Preparation cannot fence retained MFA, including another tenant's.
+    -- The table is FORCE RLS; inspect across tenants only for this check.
+    prior_custody_scope:=current_setting('matrix.iam_totp_custody',true);
+    PERFORM set_config('matrix.iam_totp_custody','trusted',true);
+    SELECT EXISTS(SELECT 1 FROM iam.totp_authenticators) INTO has_authenticators;
+    PERFORM set_config('matrix.iam_totp_custody',COALESCE(prior_custody_scope,''),true);
+    IF has_authenticators THEN
         RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='preparation recovery cannot reopen retained MFA state';
     END IF;
     PERFORM set_config('matrix.iam_tenant_id',receipt.organization_id,true);
