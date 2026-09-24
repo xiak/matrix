@@ -31,6 +31,7 @@ import (
 	"reflect"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -263,7 +264,7 @@ func writeProcessEnrollmentAuthority(
 }
 
 func TestRuntimeDSNBindsLeastPrivilegeLogin(t *testing.T) {
-	admin, err := pgx.ParseConfig("postgres://migration:admin-password@127.0.0.1:55432/matrix_authority_process_unit?sslmode=disable&user=postgres&password=query-admin")
+	admin, err := pgx.ParseConfig("postgres://migration:admin-password@127.0.0.1:5432/ignored-path?sslmode=disable&user=postgres&password=query-admin&host=127.0.0.1&port=55432&dbname=matrix_authority_process_unit")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,6 +281,17 @@ func TestRuntimeDSNBindsLeastPrivilegeLogin(t *testing.T) {
 	direct, err := pgx.ParseConfig(localRecoveryMigrationDSN(t, runtimeDSN(t, admin, paasAPILogin, password)))
 	if err != nil || direct.User != actual.ConnConfig.User || direct.Password != actual.ConnConfig.Password || direct.Host != admin.Host || direct.Port != admin.Port || direct.Database != admin.Database || direct.RuntimeParams["pool_max_conns"] != "" {
 		t.Fatal("migration DSN changed its restricted identity or retained a pool-only server parameter")
+	}
+	// A restored database uses a copied pgx config with a different target.
+	// ConnString still names the source, so target fields must be serialized
+	// deliberately too, rather than just replacing the login in the old URL.
+	restored := admin.Copy()
+	restored.Host, restored.Port, restored.Database = "::1", 5548, "matrix_authority_process_restored"
+	retargeted, err := pgxpool.ParseConfig(runtimeDSN(t, restored, paasAPILogin, "restored-password"))
+	if err != nil || retargeted.ConnConfig.Host != restored.Host || retargeted.ConnConfig.Port != restored.Port ||
+		retargeted.ConnConfig.Database != restored.Database || retargeted.ConnConfig.User != paasAPILogin ||
+		retargeted.ConnConfig.Password != "restored-password" {
+		t.Fatal("copied runtime DSN still points at the source database")
 	}
 }
 
@@ -5009,9 +5021,12 @@ func runtimeDSN(t *testing.T, admin *pgx.ConnConfig, user string, password strin
 		t.Fatal("authority process gate requires an explicit PostgreSQL URL")
 	}
 	value.User = url.UserPassword(user, password)
+	value.Host = net.JoinHostPort(admin.Host, strconv.Itoa(int(admin.Port)))
+	value.Path, value.RawPath = "/"+admin.Database, ""
 	query := value.Query()
-	query.Del("user")
-	query.Del("password")
+	for _, selector := range []string{"user", "password", "host", "hostaddr", "port", "dbname", "database"} {
+		query.Del(selector)
+	}
 	query.Set("application_name", "matrix-authority-process:"+user)
 	query.Set("pool_max_conns", "2")
 	value.RawQuery = query.Encode()
