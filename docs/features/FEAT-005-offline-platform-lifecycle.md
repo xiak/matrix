@@ -379,10 +379,25 @@ binary were deleted afterward.
 completed successfully for the exact test source; Go, UI, authority-process
 and node-process jobs all passed.
 
-The signed disconnected gate still has no `mx upgrade` negative with a
-separately signed skipped or mismatched predecessor candidate. Release-pair
-and backend tests reject those inputs, but they are not a real signed
-pre-effect upgrade attempt; this part of acceptance item 1 remains open.
+The same signed A/B pair passed a further disconnected lifecycle on test
+source `201779db220b2150f1940c0441cfce261cd7ae7c` in 516.49 seconds and
+the local-engine restart gate in 15.02 seconds. Two additional validly signed
+successor packages kept B's source/profile/topology but declared either a
+skipped v0.2 predecessor (`matrix-v0.2.0-000000000000`, manifest SHA-256
+`3e2f1c51892de7659764c0dd7f269a7b11dbbcfed9edd6f5cf7bcecc3706aee0`)
+or a different v0.3 predecessor (`matrix-v0.3.0-111111111111`, manifest
+SHA-256 `c5f04a39368cd6eec65b84b4936dfdf0760bfdcdfdeb642f43784775ad6e1b0b`).
+On a populated A installation, the real B `mx upgrade` rejected each package
+with `UPGRADE_PREDECESSOR_MISMATCH`. The sealed journal, backup and release
+directories, and Docker container/image/volume/network inventories were
+unchanged; A's workload remained usable. The genuine signed B then upgraded
+successfully and the rest of the MFA, recovery, Audit and application gates
+passed. Only the task-owned local DIND container was restarted. Its container,
+two volumes, transient binary and temporary source worktree were deleted.
+The signatures are task-local test signatures, not a production trust root.
+[Verification 36028868894](https://github.com/xiak/matrix/actions/runs/36028868894)
+completed successfully for the exact test source; Go, UI, authority-process
+and node-process jobs all passed.
 
 ## Incremental acceptance
 
