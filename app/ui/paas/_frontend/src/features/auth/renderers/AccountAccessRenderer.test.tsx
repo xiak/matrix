@@ -1148,6 +1148,90 @@ describe("account access", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it("loads the live permission catalog only for visual authoring and publishes the reviewed exact declaration", async () => {
+    const fixture = livePolicyVersions();
+    const catalog = profileDirectory();
+    catalog.items[0]!.profile.actions.push({ action: "paas.application.list", resourceKind: "APPLICATION", scope: "TENANT",
+      resourceShapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_LIST" }] });
+    const listAuthorizationProfiles = vi.fn().mockResolvedValue(catalog);
+    const { user } = await openAccess(accounts({ ...fixture.repository, listAuthorizationProfiles }), iam(), "policies");
+    await user.click(await screen.findByRole("button", { name: "LogBoundary" }));
+    await user.click(await screen.findByRole("tab", { name: "策略版本" }));
+    await screen.findByRole("table", { name: "策略版本目录" });
+    await user.click(screen.getByRole("button", { name: "发布新版本" }));
+    expect(listAuthorizationProfiles).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("tab", { name: "可视化编辑" }));
+    expect(await screen.findByRole("radio", { name: /paas.application.read/ })).toBeTruthy();
+    expect(listAuthorizationProfiles).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("combobox", { name: "授权效果" }));
+    await user.click(screen.getByRole("option", { name: "拒绝" }));
+    await user.click(screen.getByRole("combobox", { name: "资源选择器 1" }));
+    await user.click(screen.getByRole("option", { name: "精确 ID" }));
+    await user.click(screen.getByRole("button", { name: "审阅变更" }));
+    expect(screen.getByText(/可视化草稿还有未完成/)).toBeTruthy();
+    expect(fixture.createPolicyVersion).not.toHaveBeenCalled();
+    await user.type(screen.getByRole("textbox", { name: "资源 ID 或前缀" }), "app-prod");
+    expect(screen.getByRole("radio", { name: /paas.application.list/ })).toHaveProperty("disabled", true);
+    await user.click(screen.getByRole("button", { name: "审阅变更" }));
+    expect(screen.getByRole("heading", { name: "审阅待发布版本" })).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "确认发布新版本" }));
+    await waitFor(() => expect(fixture.createPolicyVersion).toHaveBeenCalledTimes(1));
+    const submitted = fixture.createPolicyVersion.mock.calls[0]![3].document;
+    expect(submitted).toEqual({ languageVersion: "1", scope: "TENANT", statements: [{ sid: "read-applications", effect: "DENY",
+      actions: ["paas.application.read"], resources: [{ kind: "APPLICATION", match: "EXACT", id: "app-prod" }] }] });
+    expect(fixture.setDefaultPolicyVersion).not.toHaveBeenCalled();
+  });
+
+  it("keeps JSON available when the live catalog is forbidden", async () => {
+    const fixture = livePolicyVersions();
+    const listAuthorizationProfiles = vi.fn().mockRejectedValue(new HttpProblem(403, "IAM_FORBIDDEN"));
+    const { user } = await openAccess(accounts({ ...fixture.repository, listAuthorizationProfiles }), iam(), "policies");
+    await user.click(await screen.findByRole("button", { name: "LogBoundary" }));
+    await user.click(await screen.findByRole("tab", { name: "策略版本" }));
+    await screen.findByRole("table", { name: "策略版本目录" });
+    await user.click(screen.getByRole("button", { name: "发布新版本" }));
+    await user.click(screen.getByRole("tab", { name: "可视化编辑" }));
+    expect(await screen.findByText(/无权读取权限能力目录/)).toBeTruthy();
+    await user.click(screen.getByRole("tab", { name: "JSON 编辑" }));
+    expect((screen.getByRole("textbox", { name: "待发布声明 JSON" }) as HTMLTextAreaElement).value).toContain("read-applications");
+    expect(fixture.createPolicyVersion).not.toHaveBeenCalled();
+  });
+
+  it("renders only the current action page when the product catalog grows past a thousand actions", async () => {
+    const fixture = livePolicyVersions();
+    const catalog = profileDirectory();
+    const base = catalog.items[0]!.profile.actions[0]!;
+    catalog.items[0]!.profile.actions.push(...Array.from({ length: 1200 }, (_, index) => ({ ...base, action: `paas.application.read-${String(index).padStart(4, "0")}` })));
+    const { user } = await openAccess(accounts({ ...fixture.repository, listAuthorizationProfiles: vi.fn().mockResolvedValue(catalog) }), iam(), "policies");
+    await user.click(await screen.findByRole("button", { name: "LogBoundary" }));
+    await user.click(await screen.findByRole("tab", { name: "策略版本" }));
+    await screen.findByRole("table", { name: "策略版本目录" });
+    await user.click(screen.getByRole("button", { name: "发布新版本" }));
+    await user.click(screen.getByRole("tab", { name: "可视化编辑" }));
+    const actionRegion = await screen.findByRole("region", { name: "产品操作" });
+    expect(within(actionRegion).getAllByRole("radio")).toHaveLength(10);
+    await user.type(within(actionRegion).getByRole("searchbox", { name: "搜索当前产品操作" }), "read-1199");
+    expect(within(actionRegion).getAllByRole("radio")).toHaveLength(1);
+    expect(within(actionRegion).getByRole("radio", { name: /paas.application.read-1199/ })).toBeTruthy();
+  });
+
+  it("never drops unknown JSON fields while attempting to switch to the visual editor", async () => {
+    const fixture = livePolicyVersions();
+    const { user } = await openAccess(fixture.repository, iam(), "policies");
+    await user.click(await screen.findByRole("button", { name: "LogBoundary" }));
+    await user.click(await screen.findByRole("tab", { name: "策略版本" }));
+    await screen.findByRole("table", { name: "策略版本目录" });
+    await user.click(screen.getByRole("button", { name: "发布新版本" }));
+    const original = JSON.stringify({ ...tenantPolicyDetail.version.document, futureField: "keep-me" }, null, 2);
+    fireEvent.change(screen.getByRole("textbox", { name: "待发布声明 JSON" }), { target: { value: original } });
+    await user.click(screen.getByRole("tab", { name: "可视化编辑" }));
+    expect(await screen.findByText(/无法无损呈现的字段或结构/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "返回 JSON 编辑" }));
+    expect((screen.getByRole("textbox", { name: "待发布声明 JSON" }) as HTMLTextAreaElement).value).toBe(original);
+    expect(fixture.createPolicyVersion).not.toHaveBeenCalled();
+  });
+
   it("replays the exact unpublished document after an unknown publish response", async () => {
     const fixture = livePolicyVersions();
     fixture.createPolicyVersion.mockRejectedValueOnce(new HttpProblem(503, "IAM_UNAVAILABLE"));

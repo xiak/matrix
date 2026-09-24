@@ -1335,7 +1335,11 @@ describe("CAM-style access workspace", () => {
   });
   it("bounds user policy selection by page and capacity while preserving independent group selections without writes", async () => {
     const { user, repository } = await open("create-user", { seed: async (extension) => {
-      for (let index = 0; index < 42; index++) await extension.execute("preview", { kind: "save-policy", name: "Batch" + String(index).padStart(2, "0"), description: "", document: { version: "1", statement: [{ effect: "allow", action: ["logs:search"], resource: ["*"] }] } });
+      extension.transact((source) => ({ workspace: { ...source, policies: [...source.policies, ...Array.from({ length: 42 }, (_, index) => ({
+        id: `policy-batch-${index}`, name: "Batch" + String(index).padStart(2, "0"), description: "", kind: "custom" as const, tags: [],
+        versions: [{ id: 1, document: { version: "1" as const, statement: [{ effect: "allow" as const, action: ["logs:search"], resource: ["*"] }] }, createdAt: "2026-09-01T00:00:00Z" }],
+        defaultVersion: 1, lastVersion: 1, createdAt: "2026-09-01T00:00:00Z", updatedAt: "2026-09-01T00:00:00Z"
+      }))] } }));
     } });
     await user.click(await screen.findByRole("button", { name: "下一步" }));
     await user.type(screen.getByLabelText("子用户名"), "bulk.draft");
@@ -1349,7 +1353,7 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByRole("checkbox", { name: "选择本页全部" })).toHaveProperty("disabled", true);
     expect(screen.getByText(/本页还有 20 项未选，剩余可选 10 项/)).toBeTruthy();
     const rows = within(screen.getByRole("table", { name: "可选策略" })).getAllByRole("checkbox").slice(1);
-    for (const row of rows.slice(0, 10)) await user.click(row);
+    for (const row of rows.slice(0, 10)) fireEvent.click(row);
     expect(screen.getByText("直接策略 30/30 · 用户组 0/30", { exact: false })).toBeTruthy();
     expect(rows[10]).toHaveProperty("disabled", true);
     expect(rows[0]).toHaveProperty("disabled", false);
@@ -1731,13 +1735,12 @@ describe("CAM-style access workspace", () => {
     const { user, extension, repository } = await open("create-policy");
     await logActions(user, ["logs:search"]);
     await select(user, "资源授权范围", "指定资源");
-    await user.clear(screen.getByLabelText("资源 ID 或前缀 1"));
-    await user.paste("production/*");
+    fireEvent.change(screen.getByLabelText("资源 ID 或前缀 1"), { target: { value: "production/*" } });
     await user.click(screen.getByRole("checkbox", { name: "限制来源 IP" }));
-    await user.click(screen.getByLabelText("来源 IP 范围（CIDR）")); await user.paste("192.0.2.0/24\n2001:db8::/32");
+    fireEvent.change(screen.getByLabelText("来源 IP 范围（CIDR）"), { target: { value: "192.0.2.0/24\n2001:db8::/32" } });
     await user.click(screen.getByRole("checkbox", { name: "按资源标签限制" }));
-    await user.click(screen.getByLabelText("标签键 1")); await user.paste("environment");
-    await user.click(screen.getByLabelText("标签值 1")); await user.paste("production");
+    fireEvent.change(screen.getByLabelText("标签键 1"), { target: { value: "environment" } });
+    fireEvent.change(screen.getByLabelText("标签值 1"), { target: { value: "production" } });
     await user.click(screen.getByRole("checkbox", { name: "设置生效时间下限" }));
     await user.click(screen.getByRole("checkbox", { name: "设置生效时间上限" }));
     fireEvent.change(screen.getByLabelText("不早于（UTC，含边界）"), { target: { value: "2026-09-09T00:00" } });

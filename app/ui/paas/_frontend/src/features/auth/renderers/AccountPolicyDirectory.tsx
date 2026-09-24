@@ -4,11 +4,13 @@ import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { ActionMenu, Alert, Badge, Button, Card, ContentPage, EmptyState, FormField, Table, TablePagination, TableSkeleton, TableToolbar, Tabs, TextArea } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
-import { useAccountAccess, type AccountPolicyReadClient, type AccountPolicyReadLoad, type AccountPolicyVersionDirectoryLoad, type PolicyVersionMutationClient, type PolicyVersionMutationResult } from "../application/AccountAccessProvider";
-import type { AccountPolicy, AccountPolicyDetail, AccountPolicyDocument, AccountPolicyVersion } from "../domain/accounts";
+import { useAccountAccess, type AccountPolicyReadClient, type AccountPolicyReadLoad, type AccountPolicyVersionDirectoryLoad, type AuthorizationProfileLoad, type PolicyVersionMutationClient, type PolicyVersionMutationResult } from "../application/AccountAccessProvider";
+import type { AccountPolicy, AccountPolicyDetail, AccountPolicyDocument, AccountPolicyVersion, AuthorizationProfileDirectory } from "../domain/accounts";
+import { visualDraftFromJSON, visualDraftHasIncompleteFields } from "../domain/accountPolicyVisualAuthoring";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
 import { WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
 import { AccountAuthorizationProfileCatalog } from "./AccountAuthorizationProfileCatalog";
+import { AccountPolicyVisualEditor } from "./AccountPolicyVisualEditor";
 import { useAccessDraft } from "./useAccessDraft";
 import styles from "./AccountAccessRenderer.module.css";
 
@@ -134,6 +136,7 @@ function PolicyVersionPublisher({ policy, defaultVersion, mutation, onPublished,
   onPublished(detail: AccountPolicyDetail): void; onConflict(): void; onClose(): void;
 }) {
   const t = useTranslations("AccountPolicyDirectory");
+  const access = useAccountAccess();
   const id = useId();
   const heading = useRef<HTMLHeadingElement>(null);
   const [initialText] = useState(() => JSON.stringify(defaultVersion.document, null, 2));
@@ -141,13 +144,42 @@ function PolicyVersionPublisher({ policy, defaultVersion, mutation, onPublished,
   const [review, setReview] = useState<{ document: AccountPolicyDocument; resourceVersion: number; defaultVersionId: string } | null>(null);
   const reviewing = Boolean(review);
   const [error, setError] = useState<string | null>(null);
+  const [visualError, setVisualError] = useState<string | null>(null);
+  const [editorMode, setEditorMode] = useState<"json" | "visual">("json");
+  const [catalog, setCatalog] = useState<{ status: "idle" | "loading" } | AuthorizationProfileLoad>({ status: "idle" });
+  const [visualDocument, setVisualDocument] = useState<AccountPolicyDocument | null>(null);
+  const catalogRequest = useRef(0);
   const [busy, setBusy] = useState(false);
   const requestLeave = useAccessDraft({ dirty: text !== initialText, busy, title: t("publishCancelTitle"),
     description: t("publishCancelHint"), form: heading });
   useLayoutEffect(() => { heading.current?.focus({ preventScroll: true }); }, [reviewing]);
+  useEffect(() => () => { catalogRequest.current += 1; }, []);
+  const setVisualFromCatalog = (directory: AuthorizationProfileDirectory) => {
+    const result = visualDraftFromJSON(text, directory);
+    if (result.status !== "ready") { setVisualError(t(`visualErrors.${result.status}`)); return; }
+    setVisualError(null); setVisualDocument(result.document); setEditorMode("visual");
+  };
+  const openVisual = () => {
+    setError(null); setVisualError(null);
+    if (catalog.status === "ready") { setVisualFromCatalog(catalog.directory); return; }
+    if (!access.authorizationProfiles) { setVisualError(t("visualCatalogUnavailable")); return; }
+    setEditorMode("visual"); setCatalog({ status: "loading" });
+    const current = ++catalogRequest.current;
+    void access.authorizationProfiles.load().then((result) => {
+      if (current !== catalogRequest.current) return;
+      setCatalog(result);
+      if (result.status === "ready") setVisualFromCatalog(result.directory);
+    });
+  };
   const openReview = () => {
     setError(null);
     if (new TextEncoder().encode(text).length > 64 * 1024) { setError(t("publishTooLarge")); return; }
+    if (editorMode === "visual") {
+      const visual = catalog.status === "ready" ? visualDraftFromJSON(text, catalog.directory) : null;
+      if (!visual || visual.status !== "ready" || visualDraftHasIncompleteFields(visual.document)) {
+        setError(t("visualDraftIncomplete")); return;
+      }
+    }
     let parsed: unknown;
     try { parsed = JSON.parse(text); } catch { setError(t("publishJsonInvalid")); return; }
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) ||
@@ -187,9 +219,23 @@ function PolicyVersionPublisher({ policy, defaultVersion, mutation, onPublished,
         <section className={styles.policyRawDocument}><h4>{t("currentDocument", { version: defaultVersion.versionId })}</h4><pre tabIndex={0}>{JSON.stringify(defaultVersion.document, null, 2)}</pre></section>
         <section className={styles.policyRawDocument}><h4>{t("proposedDocument")}</h4><pre tabIndex={0}>{JSON.stringify(review.document, null, 2)}</pre></section>
       </div>
-    </> : <FormField id={id + "-document"} label={t("proposedDocument")} hint={t("publishEditorHint")}>
-      <TextArea id={id + "-document"} className={styles.policyVersionEditor} rows={16} maxLength={65536} spellCheck={false} value={text} invalid={Boolean(error)} onChange={(event) => { setText(event.target.value); setError(null); }} />
-    </FormField>}
+    </> : <>
+      <Tabs.Root value={editorMode} onValueChange={(next) => { if (next === "json") { catalogRequest.current += 1; setEditorMode("json"); setVisualError(null); } else if (next === "visual") openVisual(); }}>
+        <Tabs.List aria-label={t("editorModes")}><Tabs.Trigger value="json">{t("jsonMode")}</Tabs.Trigger><Tabs.Trigger value="visual">{t("visualMode")}</Tabs.Trigger></Tabs.List>
+        <Tabs.Content value="visual">{catalog.status === "ready" && visualDocument ?
+          <AccountPolicyVisualEditor document={visualDocument} directory={catalog.directory} onChange={(document) => {
+            setVisualDocument(document); setText(JSON.stringify(document, null, 2)); setError(null);
+          }} /> : catalog.status === "loading" ? <p className={styles.note} role="status">{t("visualLoading")}</p> :
+            <div className={styles.policyVisualFailure}><Alert status="warning">{visualError ?? (catalog.status === "idle" || catalog.status === "ready" ? t("visualCatalogUnavailable") : t(`visualCatalogErrors.${catalog.status}`))}</Alert>
+              {visualError ? <Button variant="secondary" onClick={() => { setEditorMode("json"); setVisualError(null); }}>{t("returnToJson")}</Button> :
+                catalog.status !== "expired" ? <Button variant="secondary" onClick={openVisual}>{t("retryCatalog")}</Button> : null}</div>}</Tabs.Content>
+        <Tabs.Content value="json"><FormField id={id + "-document"} label={t("proposedDocument")} hint={t("publishEditorHint")}>
+          <TextArea id={id + "-document"} className={styles.policyVersionEditor} rows={16} maxLength={65536} spellCheck={false} value={text} invalid={Boolean(error)}
+            onChange={(event) => { setText(event.target.value); setError(null); }} />
+        </FormField></Tabs.Content>
+      </Tabs.Root>
+      {visualError && editorMode === "json" ? <Alert status="warning">{visualError}</Alert> : null}
+    </>}
     {error ? <Alert status="danger">{error}</Alert> : null}
     <div className={styles.actions}>
       {review ? <><Button disabled={busy || Boolean(error)} onClick={() => void publish()}>{t("confirmPublish")}</Button>
