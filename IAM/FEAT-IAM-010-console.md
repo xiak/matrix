@@ -239,6 +239,7 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 - 发布意图在发出前冻结完整 JSON 与 requestId；网络、5xx 或无效成功体保持同一 Account/Session 的 UNKNOWN 写锁，等价重试复用原完整文档，重试 409 和当前状态读取仍不证明原结果。首次明确 400/401/403/404/409/413/415/422 按分类反馈，403 留在审阅区；成功后仅把新版本加入当前目录并显示默认版本仍旧不变，不触发整页重载。内存锁不跨浏览器刷新/重新登录；缺少后端 by-request 结果查询时仍不能作为可发布的未知结果闭环。
 - 定向适配器和组件用例覆盖成功响应及错误绑定、发布不自动切默认、无效 JSON、422 拒绝、UNKNOWN 等价重试及草稿离开保护；原显式 MOCK 策略作者流程完全保留。未用真实 IAM 进程做发布写入浏览器验收，也未用 MOCK 浏览器替代该门禁。共享构建和回归门禁归 [FEAT-007](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence) 所有。
 - 2026-09-24，LIVE 策略新版本的目录驱动可视化作者、无损 JSON 回退及同步嵌入资源固定在已推送的 [`4426f9a5`](https://github.com/xiak/matrix/commit/4426f9a5)。只在选择可视化页签时请求当前完整目录；筛选 `TENANT` 精确 Action 并按产品/资源类型分组，每次只挂载当前声明和当前 Action 页。集合型 Action 的 `EXACT collection` 为字面目标，不能由资源 ID 反推请求模式；`PREFIX_IN_AUTHORITY` 只对声明支持的实例 Action 可选，`ANY_IN_AUTHORITY` 明示限定在当前权威域内。目录不可用时 JSON 编辑仍可用；不能无损映射的版本原文不被表单覆盖。定向用例覆盖懒目录读取、403 局部失败、审阅后精确提交、不自动切默认、1200 个以上 Action 的 10 项挂载页，以及未知 JSON 字段不丢失。DEV 390px 仅检查保留的 MOCK 创建策略页无溢出或覆盖；尚未对这片 LIVE 可视化作者做真实 IAM 浏览器验收。
+- [`edc1ed9c`](https://github.com/xiak/matrix/commit/edc1ed9c) 将同一声明扩展到契约允许的最多 128 个兼容精确 Action。可视化按产品/资源类型及集合形状守住转换边界；不兼容前缀或条件不会被某个 Action 的能力代替，多选资源和条件始终共同作用于本声明的全部 Action。当前页最多挂载 10 项，可切“仅看已选”；测试覆盖多 Action JSON 无损往返、重复/越界/集合与实例混选拒绝、用户多选后原样提交及目录千项分页。Action 家族和跨资源类型组合仍只走 JSON；未用 MOCK 浏览器结果冒充 LIVE 实际 IAM 发布验收。
 
 ### LIVE 自定义策略新建的开发验收证据
 
