@@ -1161,7 +1161,7 @@ describe("account access", () => {
     await user.click(screen.getByRole("button", { name: "发布新版本" }));
     expect(listAuthorizationProfiles).not.toHaveBeenCalled();
     await user.click(screen.getByRole("tab", { name: "可视化编辑" }));
-    expect(await screen.findByRole("radio", { name: /paas.application.read/ })).toBeTruthy();
+    expect(await screen.findByRole("checkbox", { name: /paas.application.read/ })).toBeTruthy();
     expect(listAuthorizationProfiles).toHaveBeenCalledTimes(1);
     await user.click(screen.getByRole("combobox", { name: "授权效果" }));
     await user.click(screen.getByRole("option", { name: "拒绝" }));
@@ -1171,7 +1171,10 @@ describe("account access", () => {
     expect(screen.getByText(/可视化草稿还有未完成/)).toBeTruthy();
     expect(fixture.createPolicyVersion).not.toHaveBeenCalled();
     await user.type(screen.getByRole("textbox", { name: "资源 ID 或前缀" }), "app-prod");
-    expect(screen.getByRole("radio", { name: /paas.application.list/ })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("checkbox", { name: /paas.application.list/ })).toHaveProperty("disabled", true);
+    await user.click(screen.getByRole("button", { name: "仅看已选" }));
+    expect(screen.queryByRole("checkbox", { name: /paas.application.list/ })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "显示全部操作" }));
     await user.click(screen.getByRole("button", { name: "审阅变更" }));
     expect(screen.getByRole("heading", { name: "审阅待发布版本" })).toBeTruthy();
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -1181,6 +1184,31 @@ describe("account access", () => {
     expect(submitted).toEqual({ languageVersion: "1", scope: "TENANT", statements: [{ sid: "read-applications", effect: "DENY",
       actions: ["paas.application.read"], resources: [{ kind: "APPLICATION", match: "EXACT", id: "app-prod" }] }] });
     expect(fixture.setDefaultPolicyVersion).not.toHaveBeenCalled();
+  });
+
+  it("selects compatible Actions together while keeping resource and condition limits shared", async () => {
+    const fixture = livePolicyVersions();
+    const catalog = profileDirectory();
+    catalog.items[0]!.profile.actions.push({ action: "paas.application.inspect", resourceKind: "APPLICATION", scope: "TENANT",
+      resourceShapes: [{ mode: "INSTANCE", prefixAllowed: true }] });
+    const { user } = await openAccess(accounts({ ...fixture.repository, listAuthorizationProfiles: vi.fn().mockResolvedValue(catalog) }), iam(), "policies");
+    await user.click(await screen.findByRole("button", { name: "LogBoundary" }));
+    await user.click(await screen.findByRole("tab", { name: "策略版本" }));
+    await screen.findByRole("table", { name: "策略版本目录" });
+    await user.click(screen.getByRole("button", { name: "发布新版本" }));
+    await user.click(screen.getByRole("tab", { name: "可视化编辑" }));
+    const read = await screen.findByRole("checkbox", { name: /paas.application.read/ });
+    expect(read).toHaveProperty("disabled", true);
+    await user.click(screen.getByRole("checkbox", { name: /paas.application.inspect/ }));
+    expect(read).toHaveProperty("disabled", false);
+    expect(screen.getByText(/已选 2 \/ 128 个操作/)).toBeTruthy();
+    expect(screen.getByText("所选操作没有共同支持的策略条件。")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "审阅变更" }));
+    expect(screen.getByRole("heading", { name: "审阅待发布版本" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "确认发布新版本" }));
+    await waitFor(() => expect(fixture.createPolicyVersion).toHaveBeenCalledTimes(1));
+    expect(fixture.createPolicyVersion.mock.calls[0]![3].document.statements[0]!.actions)
+      .toEqual(["paas.application.inspect", "paas.application.read"]);
   });
 
   it("creates a live custom policy from an explicitly selected catalog Action without attaching it", async () => {
@@ -1273,10 +1301,10 @@ describe("account access", () => {
     await user.click(screen.getByRole("button", { name: "发布新版本" }));
     await user.click(screen.getByRole("tab", { name: "可视化编辑" }));
     const actionRegion = await screen.findByRole("region", { name: "产品操作" });
-    expect(within(actionRegion).getAllByRole("radio")).toHaveLength(10);
+    expect(within(actionRegion).getAllByRole("checkbox")).toHaveLength(10);
     await user.type(within(actionRegion).getByRole("searchbox", { name: "搜索当前产品操作" }), "read-1199");
-    expect(within(actionRegion).getAllByRole("radio")).toHaveLength(1);
-    expect(within(actionRegion).getByRole("radio", { name: /paas.application.read-1199/ })).toBeTruthy();
+    expect(within(actionRegion).getAllByRole("checkbox")).toHaveLength(1);
+    expect(within(actionRegion).getByRole("checkbox", { name: /paas.application.read-1199/ })).toBeTruthy();
   });
 
   it("never drops unknown JSON fields while attempting to switch to the visual editor", async () => {

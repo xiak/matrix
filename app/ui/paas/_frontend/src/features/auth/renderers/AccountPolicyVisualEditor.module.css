@@ -9,6 +9,8 @@
 .sectionHeading strong { flex: none; color: var(--xiak-color-text-base); font-size: var(--xiak-font-size-small); }
 .selectedAction { margin: 0; color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); overflow-wrap: anywhere; }
 .selectedAction code { color: var(--xiak-color-text-strong); font-family: var(--xiak-font-mono); }
+.actionFilters { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: var(--xiak-spacing-default); }
+.actionFilters > :first-child { flex: 1 1 240px; min-width: 0; }
 .actionList { display: grid; min-width: 0; gap: var(--xiak-spacing-narrow); }
 .actionList label { min-width: 0; border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-small); padding: var(--xiak-spacing-tight) var(--xiak-spacing-default); }
 .actionList code { min-width: 0; overflow-wrap: anywhere; font-family: var(--xiak-font-mono); font-size: var(--xiak-font-size-small); }

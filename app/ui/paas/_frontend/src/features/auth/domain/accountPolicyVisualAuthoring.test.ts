@@ -36,6 +36,16 @@ describe("lossless catalog-backed policy visual authoring", () => {
     expect(visualDraftFromJSON(JSON.stringify({ ...document, statements: [{ ...statement, actions: ["paas.application.list"], resources: [{ kind: "APPLICATION", match: "EXACT", id: "collection" }], conditions: undefined }] }), catalog).status).toBe("ready");
     expect(visualDraftFromJSON(JSON.stringify({ ...document, statements: [{ ...statement, conditions: [{ key: "unknown", operator: "STRING_EQUALS", values: ["tenant-a"] }] }] }), catalog).status).toBe("catalogMismatch");
   });
+  it("round-trips compatible multi-Action statements without merging incompatible catalog shapes", () => {
+    const instanceActions = { ...document, statements: [{ ...document.statements[0], actions: ["paas.application.read", "paas.application.delete"],
+      resources: [{ kind: "APPLICATION", match: "EXACT", id: "app-prod" }], conditions: undefined }] };
+    expect(visualDraftFromJSON(JSON.stringify(instanceActions), catalog)).toEqual({ status: "ready", document: instanceActions });
+    const collectionActions = { ...instanceActions, statements: [{ ...instanceActions.statements[0],
+      actions: ["paas.application.list", "paas.application.read"] }] };
+    expect(visualDraftFromJSON(JSON.stringify(collectionActions), catalog).status).toBe("catalogMismatch");
+    expect(visualDraftFromJSON(JSON.stringify({ ...instanceActions, statements: [{ ...instanceActions.statements[0],
+      actions: Array.from({ length: 129 }, (_, index) => `paas.application.read-${index}`) }] }), catalog).status).toBe("shapeInvalid");
+  });
   it("blocks incomplete visible fields before review while leaving IAM as final validator", () => {
     const supported = visualDraftFromJSON(JSON.stringify(document), catalog);
     expect(supported.status).toBe("ready");

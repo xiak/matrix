@@ -2,7 +2,7 @@
 
 import { useId, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Alert, Button, FormField, Input, Radio, SearchInput, Select, TablePagination, TextArea } from "@ui/xiak";
+import { Alert, Button, Checkbox, FormField, Input, Radio, SearchInput, Select, TablePagination, TextArea } from "@ui/xiak";
 import type { AccountPolicyDocument, AuthorizationProfileAction, AuthorizationProfileDirectory } from "../domain/accounts";
 import { visualActionGroups, type VisualActionGroup } from "../domain/accountPolicyVisualAuthoring";
 import styles from "./AccountPolicyVisualEditor.module.css";
@@ -14,37 +14,57 @@ const conditionKeys = ["iam.account-id", "iam.principal-id", "iam.current-time"]
 const conditionLabelKey = { "iam.account-id": "accountId", "iam.principal-id": "principalId", "iam.current-time": "currentTime" } as const;
 const stringOperators = ["STRING_EQUALS", "STRING_NOT_EQUALS"] as const;
 const timeOperators = ["DATE_GREATER_THAN_EQUALS", "DATE_LESS_THAN"] as const;
+const maxStatementActions = 128;
+const emptySelectedActions: string[] = [];
+const collectionOnly = (action: AuthorizationProfileAction) => action.resourceShapes.every((shape) => shape.mode === "COLLECTION");
 
-function canUseAction(action: AuthorizationProfileAction, statement: Statement): boolean {
+function canUseAction(action: AuthorizationProfileAction, statement: Statement, selected: AuthorizationProfileAction[]): boolean {
+  if (selected.length && collectionOnly(action) !== collectionOnly(selected[0]!)) return false;
   if (statement.resources.some((resource) => resource.match === "PREFIX_IN_AUTHORITY") &&
       !action.resourceShapes.some((shape) => shape.mode === "INSTANCE" && shape.prefixAllowed)) return false;
-  if (action.resourceShapes.every((shape) => shape.mode === "COLLECTION") &&
+  if (collectionOnly(action) &&
       statement.resources.some((resource) => resource.match === "EXACT" && resource.id !== "collection")) return false;
   return !(statement.conditions ?? []).some((condition) => !(action.conditions ?? []).some((item) => item.key === condition.key));
 }
 
-function ActionChoices({ group, selectedAction, compatible, onSelect }: {
-  group: VisualActionGroup; selectedAction?: string; compatible?: (action: AuthorizationProfileAction) => boolean;
-  onSelect(action: AuthorizationProfileAction): void;
+function ActionChoices({ group, selectedActions = emptySelectedActions, multiple = false, compatible, onSelect }: {
+  group: VisualActionGroup; selectedActions?: string[]; multiple?: boolean; compatible?: (action: AuthorizationProfileAction) => boolean;
+  onSelect(action: AuthorizationProfileAction, selected: boolean): void;
 }) {
   const t = useTranslations("PolicyVisualAuthoring");
   const id = useId();
   const [query, setQuery] = useState("");
+  const [selectedOnly, setSelectedOnly] = useState(false);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
-  const filtered = useMemo(() => group.actions.filter((action) => action.action.toLowerCase().includes(query.normalize("NFKC").trim().toLowerCase())), [group.actions, query]);
+  const selectedSet = useMemo(() => new Set(selectedActions), [selectedActions]);
+  const normalizedQuery = query.normalize("NFKC").trim().toLowerCase();
+  const filtered = useMemo(() => group.actions.filter((action) =>
+    (!multiple || !selectedOnly || selectedSet.has(action.action)) &&
+    action.action.toLowerCase().includes(normalizedQuery)),
+  [group.actions, multiple, normalizedQuery, selectedOnly, selectedSet]);
   const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const currentPage = Math.min(page, pages);
   return <>
-    <SearchInput aria-label={t("searchActions")} placeholder={t("searchActions")} value={query} onChange={(event) => { setQuery(event.target.value); setPage(1); }}
-      clearAction={query ? { label: t("clearSearch"), onClear: () => { setQuery(""); setPage(1); } } : undefined} />
+    <div className={styles.actionFilters}>
+      <SearchInput aria-label={t("searchActions")} placeholder={t("searchActions")} value={query} onChange={(event) => { setQuery(event.target.value); setPage(1); }}
+        clearAction={query ? { label: t("clearSearch"), onClear: () => { setQuery(""); setPage(1); } } : undefined} />
+      {multiple ? <Button variant="ghost" aria-pressed={selectedOnly} onClick={() => { setSelectedOnly(!selectedOnly); setPage(1); }}>
+        {t(selectedOnly ? "showAllActions" : "showSelectedActions")}
+      </Button> : null}
+    </div>
     <div className={styles.actionList}>{filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize).map((action) => {
       const enabled = compatible?.(action) ?? true;
+      const checked = selectedSet.has(action.action);
+      const maxed = multiple && !checked && selectedActions.length >= maxStatementActions;
+      const last = multiple && checked && selectedActions.length === 1;
       const target = action.resourceShapes.map((shape) => t(`targets.${shape.mode === "INSTANCE" ? "INSTANCE" : shape.collectionUsage ?? "COLLECTION"}`)).join(" · ");
-      return <Radio key={action.action} name={id + "-action"} checked={selectedAction === action.action} disabled={!enabled}
-        title={!enabled ? t("incompatibleAction") : undefined} onChange={() => onSelect(action)}>
-        <span className={styles.actionChoice}><code>{action.action}</code><small>{target}</small></span>
-      </Radio>;
+      const title = !enabled ? t("incompatibleAction") : maxed ? t("maxActions") : last ? t("lastAction") : undefined;
+      const label = <span className={styles.actionChoice}><code>{action.action}</code><small>{target}</small></span>;
+      return multiple ? <Checkbox key={action.action} checked={checked} disabled={!enabled || maxed || last} title={title}
+        onChange={(event) => onSelect(action, event.target.checked)}>{label}</Checkbox> :
+        <Radio key={action.action} name={id + "-action"} checked={checked} disabled={!enabled} title={title}
+          onChange={() => onSelect(action, true)}>{label}</Radio>;
     })}{!filtered.length ? <p className={styles.note}>{t("noActions")}</p> : null}</div>
     <TablePagination page={currentPage} pages={pages} pageSize={pageSize} onPageChange={setPage}
       onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} labels={{ summary: t("page", { page: currentPage, pages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} />
@@ -57,7 +77,7 @@ function StatementFields({ statement, group, onChange }: {
   const t = useTranslations("PolicyVisualAuthoring");
   const id = useId();
   const selected = group.actions.filter((action) => statement.actions.includes(action.action));
-  const collectionOnly = selected.length === 1 && selected[0]!.resourceShapes.every((shape) => shape.mode === "COLLECTION");
+  const allCollectionOnly = selected.length > 0 && selected.every(collectionOnly);
   const prefixAllowed = selected.every((action) => action.resourceShapes.some((shape) => shape.mode === "INSTANCE" && shape.prefixAllowed));
   const availableConditions = conditionKeys.filter((key) => selected.every((action) => (action.conditions ?? []).some((condition) => condition.key === key)));
   const nextCondition = availableConditions.flatMap((key) => (key === "iam.current-time" ? timeOperators : stringOperators)
@@ -76,9 +96,14 @@ function StatementFields({ statement, group, onChange }: {
     </div>
     <section className={styles.groupSection} aria-label={t("actions")}>
       <div className={styles.sectionHeading}><div><h4>{t("actions")}</h4><p>{t("actionGroup", { product: group.product, kind: group.resourceKind })}</p></div></div>
-      <p className={styles.selectedAction}>{t("selectedAction")}: <code>{statement.actions[0]}</code></p>
-      <ActionChoices group={group} selectedAction={statement.actions[0]} compatible={(action) => canUseAction(action, statement)}
-        onSelect={(action) => onChange({ ...statement, actions: [action.action] })} />
+      <p className={styles.selectedAction}>{t("selectedActions", { count: selected.length, max: maxStatementActions })} · {t("compatibleActionsHint")}</p>
+      <ActionChoices group={group} selectedActions={statement.actions} multiple compatible={(action) => canUseAction(action, statement, selected)}
+        onSelect={(action, checked) => {
+          if (checked && selected.length >= maxStatementActions || !checked && selected.length <= 1) return;
+          const next = new Set(statement.actions);
+          if (checked) next.add(action.action); else next.delete(action.action);
+          onChange({ ...statement, actions: group.actions.filter((candidate) => next.has(candidate.action)).map((candidate) => candidate.action) });
+        }} />
     </section>
     <section className={styles.groupSection} aria-label={t("resources")}>
       <div className={styles.sectionHeading}><div><h4>{t("resources")}</h4><p>{t("resourceHint", { kind: group.resourceKind })}</p></div></div>
@@ -89,15 +114,15 @@ function StatementFields({ statement, group, onChange }: {
             { value: "EXACT", label: t("matches.EXACT") },
             { value: "PREFIX_IN_AUTHORITY", label: t("matches.PREFIX_IN_AUTHORITY"), disabled: !prefixAllowed }
           ]} onValueChange={(value) => updateResource(index, value === "ANY_IN_AUTHORITY" ? { kind: group.resourceKind, match: value } :
-            { kind: group.resourceKind, match: value as Resource["match"], id: resource.id ?? (collectionOnly ? "collection" : "") })} />
+            { kind: group.resourceKind, match: value as Resource["match"], id: resource.id ?? (allCollectionOnly ? "collection" : "") })} />
         </FormField>
-        {resource.match !== "ANY_IN_AUTHORITY" ? <FormField id={id + "-resource-id-" + index} label={t("resourceId")} hint={t(collectionOnly ? "collectionIdHint" : "resourceIdHint")}>
-          <Input id={id + "-resource-id-" + index} maxLength={128} value={resource.id ?? ""} disabled={collectionOnly && resource.match === "EXACT"}
+        {resource.match !== "ANY_IN_AUTHORITY" ? <FormField id={id + "-resource-id-" + index} label={t("resourceId")} hint={t(allCollectionOnly ? "collectionIdHint" : "resourceIdHint")}>
+          <Input id={id + "-resource-id-" + index} maxLength={128} value={resource.id ?? ""} disabled={allCollectionOnly && resource.match === "EXACT"}
             onChange={(event) => updateResource(index, { ...resource, id: event.target.value })} />
         </FormField> : null}
         <Button variant="ghost" disabled={statement.resources.length === 1} onClick={() => onChange({ ...statement, resources: statement.resources.filter((_, at) => at !== index) })}>{t("removeResource")}</Button>
       </div>)}
-      <Button variant="secondary" disabled={collectionOnly || statement.resources.length >= 64 || statement.resources.some((resource) => resource.match === "ANY_IN_AUTHORITY")}
+      <Button variant="secondary" disabled={allCollectionOnly || statement.resources.length >= 64 || statement.resources.some((resource) => resource.match === "ANY_IN_AUTHORITY")}
         onClick={() => onChange({ ...statement, resources: [...statement.resources, { kind: group.resourceKind, match: "EXACT", id: "" }] })}>{t("addResource")}</Button>
       {statement.resources.some((resource) => resource.match === "ANY_IN_AUTHORITY") ? <p className={styles.note}>{t("anyResourceHint")}</p> : null}
     </section>

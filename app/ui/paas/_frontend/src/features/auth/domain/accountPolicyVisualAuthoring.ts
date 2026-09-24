@@ -81,13 +81,17 @@ export function visualDraftFromJSON(text: string, directory: AuthorizationProfil
   for (const statement of parsed.statements) {
     if (!record(statement) || !keysAre(statement, ["sid", "effect", "actions", "resources"], ["conditions"]) ||
         typeof statement.sid !== "string" || !["ALLOW", "DENY"].includes(String(statement.effect)) ||
-        !Array.isArray(statement.actions) || !statement.actions.length || !statement.actions.every((action) => typeof action === "string") ||
+        !Array.isArray(statement.actions) || !statement.actions.length || statement.actions.length > 128 ||
+        !statement.actions.every((action) => typeof action === "string") ||
         !Array.isArray(statement.resources) || !statement.resources.length || statement.resources.length > 64) return { status: "shapeInvalid" };
-    if (statement.actions.length !== 1) return { status: "catalogMismatch" };
     const actionNames = statement.actions as string[];
+    if (new Set(actionNames).size !== actionNames.length) return { status: "catalogMismatch" };
     const group = groups.find((candidate) => candidate.actions.some((action) => action.action === actionNames[0]));
     if (!group) return { status: "catalogMismatch" };
     const selected = group.actions.filter((action) => actionNames.includes(action.action));
+    if (selected.length !== actionNames.length || selected.some((action) =>
+      action.resourceShapes.every((shape) => shape.mode === "COLLECTION") !==
+        selected[0]!.resourceShapes.every((shape) => shape.mode === "COLLECTION"))) return { status: "catalogMismatch" };
     if (statement.resources.some((resource: unknown) => !record(resource) ||
         !keysAre(resource, ["kind", "match"], ["id"]) || resource.kind !== group.resourceKind ||
         !["EXACT", "PREFIX_IN_AUTHORITY", "ANY_IN_AUTHORITY"].includes(String(resource.match)) ||
