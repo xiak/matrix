@@ -45,11 +45,11 @@
 
 ### 当前开发窗口的验证
 
-2026-09-24按用户要求在原authorityprocess owner收敛，先保存本地真库验证并推送的`09fac913`回滚点。固定`aefe4f786242d7d6816f253b6389d5c94c314a75`删除9个过时IAM升级入口及仅供它们使用的旧RoleBinding wire、schema分支和夹具；CI从7条IAM前驱路径收敛为1条，同时移除6个额外数据库及对应DSN配置。保留原受限身份、当前IAM/Audit/PaaS业务、Purpose/OTP/恢复、并发、秘密检查及所有原期限/成本，不删失败安全断言、不放宽版本/profile判断。精确源码的[Verification35972120363](https://github.com/xiak/matrix/actions/runs/35972120363)已触发，当前尚未取得最终独立通过结论。
+2026-09-24按用户要求在原authorityprocess owner收敛，先保存本地真库验证并推送的`09fac913`回滚点。固定`aefe4f786242d7d6816f253b6389d5c94c314a75`删除9个过时IAM升级入口及仅供它们使用的旧RoleBinding wire、schema分支和夹具；CI从7条IAM前驱路径收敛为1条，同时移除6个额外数据库及对应DSN配置。保留原受限身份、当前IAM/Audit/PaaS业务、Purpose/OTP/恢复、并发、秘密检查及所有原期限/成本，不删失败安全断言、不放宽版本/profile判断。精确源码的[Verification35972120363](https://github.com/xiak/matrix/actions/runs/35972120363)已由GitHub API核实completed/success，go、authority-process、authority-storage、authority-runtime、authority-step-up、authority-recovery-window和node-process七项全部通过；本测试窗口清理已验证，不代表后续S2c或整个IAM目标已验收。
 
 唯一`TestIAMRetainedPredecessorProcessUpgrade`在限额的原生PG18.6、Go1.26.7/GOMAXPROCS2/GOMEMLIMIT512MiB、串行race-p1下通过37.13s（包40.525s）。实际前驱程序创建双Account/同名User、已撤附件、正常/撤销/NULL代际Session、本人完成、待验证邮件和原MFA/恢复历史；当前版本在真实末端DDL故障时完整回滚，再双次迁移、重放、重启及原恢复完成，旧凭据/完成不复活。测试依据非事务sequence确认注入故障确已到达，不读取或透传迁移器已刻意抹除的底层错误。
 
-原旧策略升级外壳中的产品声明行为移到上述当前权威阶段：构建仅改变产品声明的后继程序，实际证明新动作注册不扩大已编译策略、仅发布新版本不切默认、显式切换后才允许、旧声明/决定/producer proof保持、不兼容Deny不能因资源不匹配被忽略，以及重启/撤权有效。这不是另一个假想schema升级或生产新增PaaS接口。YAML及14段Bash语法校验通过，常规前驱仅一个环境入口，原四lane的串行/失败收集设置保持；精简后独立CI仍需按最终固定SHA核实。
+原旧策略升级外壳中的产品声明行为移到上述当前权威阶段：构建仅改变产品声明的后继程序，实际证明新动作注册不扩大已编译策略、仅发布新版本不切默认、显式切换后才允许、旧声明/决定/producer proof保持、不兼容Deny不能因资源不匹配被忽略，以及重启/撤权有效。这不是另一个假想schema升级或生产新增PaaS接口。YAML及14段Bash语法校验通过，常规前驱仅一个环境入口，原四lane的串行/失败收集设置保持；独立CI按上述精确固定SHA核实，不继承其他分支结果。
 
 同一最终测试源在另一独立空白PG18.6数据库运行`TestIndependentIAMAuditAndPaaSProcesses`，143.49s（包146.678s）通过：实际受限runtime登录、IAM双副本和PaaS/Audit/dispatcher、双账号资源/Operation/outbox，绑定/强制改密/恢复/step-up提交后真正丢TCP回包、重启与原意图核对，跨副本OTP仅成功一次，停用USER后的原历史投递/重放均保持。SMTP没有在本轮实际投递，不能用联系地址/通知夹具代替；亦未重跑签名发布或浏览器。PG使用Windows Job硬限2逻辑CPU/1GiB/24进程、16连接、64MiB shared_buffers、4MiB work_mem和零并行worker，重型门禁串行；确认零其他客户端后正常停止，只保留数据，没有清理其他任务或重启共享/远端服务。
 

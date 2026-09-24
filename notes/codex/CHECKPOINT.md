@@ -12,8 +12,10 @@
   **aefe4f786242d7d6816f253b6389d5c94c314a75**.
   Test-only reduction; no production API/SQL/schema/profile, installation
   or UI change. Actual source IAM42/Audit24/PaaS2, not a release profile.
-- Exact https://github.com/xiak/matrix/actions/runs/35972120363 is pending.
-  Verify precise SHA and every gate before calling CI accepted. Default
+- Exact https://github.com/xiak/matrix/actions/runs/35972120363 was checked
+  through GitHub API: precise aefe4f78 SHA and all seven jobs completed/success
+  (go, authority-process/storage/runtime/step-up/recovery-window, node-process).
+  The test cleanup is verified, not the next S2c or whole IAM goal. Default
   skipped external tests are not real-runtime evidence.
 - Verified/pushed rollback point09fac9135af99da3273d31c2f9b3e26d6aacfdc5
   corrected two Audit integration schema assertions and separated original
