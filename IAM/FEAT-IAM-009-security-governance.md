@@ -518,6 +518,8 @@ S2c首次设置的公共契约复用`AuthenticationChallenge`，purpose为独立
 
 用途运行时的最终源码已通过全仓默认race/architecture、vet、模块校验、Linux/amd64全包构建、122个API文件重生成字节一致及格式/diff检查；默认外部门禁SKIP不替代上述实际运行。7组错误用途用有效challenge凭据分别证明在尝试预算和因子材料读取之前拒绝，缺失用途属于权威不可用而非可推断默认。独立PG在确认无其他客户端后正常停止，保留数据未删除；没有共享Docker/系统服务或远端重启。固定源独立CI仍须另外核实，不能因本地通过完成整片S2c。
 
+该用途运行时已固定推送`339d37474f2cfbee11479a497514d8dcb4d38b0f`；[Verification35967101589](https://github.com/xiak/matrix/actions/runs/35967101589)已按精确SHA核实实际启动runner，node-process成功，其余门禁仍在运行或串行排队。此前付款限制导致的零执行失败不能替代本次状态；本次尚无完整独立CI通过结论，不宣称S2c或发布已验收。
+
 固定`0a237aae`的纯契约基础片已在Go1.26.7、GOMAXPROCS=2/GOMEMLIMIT=512MiB下完成全仓默认race、vet、模块校验、Linux/amd64构建与122个API生成文件字节一致检查；最终受影响API/生成器、identityaccess/nethttp及architecture再次race通过。原测试owner覆盖25组challenge用途/阶段组合、四种请求的缺失/null/重复/身份与第二载体注入、PASSWORD_CHANGE不得暴露后继状态、非首因子/晚于绑定的地址验证时间/挑战期限不匹配拒绝；现有LOGIN发行器拒绝ENROLLMENT/RECOVERY和未经TOTP的PASSWORD_CHANGE返回。单worker、15秒请求fuzz完成72241次执行无失败。该固定片没有启动数据库/SMTP/浏览器，默认外部门禁SKIP不计真实运行；其源码为IAM41/Audit24/PaaS2，不分配发布profile，独立CI与完整S2c仍未验收。
 
 该纯契约/发行器防错片固定并推送于`0a237aae5c904e0e32e5766544e31c1cfed5a02a`。GitHub API核实[Verification35961451647](https://github.com/xiak/matrix/actions/runs/35961451647)精确SHA及completed/failure，七项均runner_id=0/steps=0；go annotation仍为付款/支出限制导致未启动。它是已本地验证的固定候选，不是独立CI通过，不继承此前数据库、邮件或UI证据。

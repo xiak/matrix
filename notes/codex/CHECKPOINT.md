@@ -8,16 +8,18 @@
   IAM/012 for mail, then owners. Adoption belongs to
   docs/adoption/FEAT-006-platform-authorities.md.
 - Latest implemented/pushed fixed candidate:
-  **0a237aae5c904e0e32e5766544e31c1cfed5a02a**, parent6e105658.
-  This is restricted first-enrollment contracts/issuer defense, not the
-  ENROLLMENT HTTP/SQL runtime or settings write. Runtime read baseline below
-  remains **018fbd7505ae16d59dcfe857df7fbbe870bf1a13**.
-  Source IAM41/Audit24/PaaS2. No release profile allocated or changed.
-- Exact https://github.com/xiak/matrix/actions/runs/35961451647 is
-  completed/failure; seven jobs runner_id=0/steps=0. go annotation explicitly
-  says payment/spending limit prevented execution. Independent CI NOT passed.
-  Prior018/35959220825, d570/35955820844 and b7/35953732463 had the same zero-execution
-  outcome. Do not alter billing or repeatedly rerun unchanged blockage.
+  **339d37474f2cfbee11479a497514d8dcb4d38b0f**, parentcfbc5a1d.
+  This adds actual immutable challenge purposes and runtime guards to the
+  existing LOGIN/RECOVERY ceremonies. First ENROLLMENT issuance/HTTP/SQL and
+  Account settings writes are NOT implemented. Public contract preparation
+  is0a237aae; settings read baseline is018fbd75.
+  Source IAM42/Audit24/PaaS2. No release profile allocated or changed.
+- Exact https://github.com/xiak/matrix/actions/runs/35967101589 is live:
+  GitHub API verified339d3747, actual runners and node-process success;
+  go/storage were running, remaining serial lanes pending. Do not call
+  independent CI passed until the whole precise run and its gates finish.
+  Earlier0a/35961451647 was zero-execution failure for payment/spending limit;
+  that historical blockage does not describe the new actually running run.
 
 ## Current settings read
 
@@ -96,6 +98,55 @@ challenge issuance/initial password/contact/binding with shared budgets and
 locked authority, then settings CAS/proof/Session-Role barrier and supported
 restore evidence. Do not treat contract presence as capability or goal done.
 
+## Immutable challenge runtime at339d3747
+
+000012 retains purpose in the original row: LOGIN for password-proved login
+and its verified password-change successor, RECOVERY for a consumed original
+saved code's rebinding successor. ENROLLMENT is not yet issued by SQL.
+Purpose is immutable, nonnull, without a default; private lookup JSON must
+include it. Use cases reject a different purpose before attempt reservations
+or seed reads; final locks and deferred Session/recovery proofs recheck it.
+The private snapshot is not an API/worker permission. Old binaries cannot
+consume the changed strict lookup JSON by guessing schema compatibility.
+
+Actual pre-purpose rows are classified only by their closed original
+lineage. Run original deferred completion constraints under each actual
+Account RLS context before ALTER; never disable those proofs. A damaged
+current authority missing purpose fails equal migration, not reclassification.
+No ServiceIdentity/lookup_service/claim/Session output/canonical changes.
+
+Local final production evidence, Go1.26.7/2/512MiB, real race-p1 serial on
+owned native PG18.6 with Job hard2CPU/1GiB/24processes,16connections,
+64MiB shared_buffers/4MiB work_mem/no parallel workers:
+
+- TOTP binding/recovery/password plus schema/ACL attacks106.06s. Missing,
+  nullable/default purpose, missing relation constraint and API snapshot
+  grant are not READY; migration failure rollback preserves original READY.
+- Actual fixedf5cec0e1 IAM37 LOGIN→42 passed38.19s.
+- Actual fixed0a237aae IAM41→42 passed41.90s: TWO Accounts, same username,
+  each original HTTP bound/consumed saved code before migration; new binary
+  finishes original pending recovery. Original receipt/canonical/factors/
+  attempt history/credentials preserved through replay and restart.
+- Independent IAM pair/Audit/PaaS/dispatchers135.70s/package139.319 passed,
+  real runtime identities, committed TCP-loss/restart/replay and disabled
+  USER historical proofs. Final secret scan passed after evidence-backed
+  correction: an actual six-digit code coincided with a requestDigest's
+  SHA256 substring in the preserved failed DB. Scan decoded JSON; only a
+  contract-valid Audit requestDigest treats six-digit coincidences as such.
+  18 negative/default cases retain actual/escaped/numeric/nested/key leaks,
+  invalid digests, other fields, literal LIKE characters and malformed JSON.
+- Full default race/architecture, vet, modules, Linuxamd64 all packages,
+  122-file repeat generation and gofmt/diff passed. Seven purpose negatives
+  use real valid fixture challenge credentials; missing authority fails closed.
+- SMTP explicitly SKIP; no browser or signed release acceptance. PG was
+  stopped normally only after zero other clients; launcher terminal0.
+  All local handles terminal; no shared/remote restart or data deletion.
+
+Next actual target remains restricted first enrollment/password/contact/
+factor completion, Account settings CAS/proof and monotonic Session/Role
+qualification, with supported-restore nonrollback requirement evidence.
+Do not substitute this foundation slice for the full S2c or IAM goal.
+
 ## Existing runtime / remaining work
 
 Fixedb7a70bfa9e53f0a5f16619c60523c84613cb7b0b supplies five Session-held
@@ -123,8 +174,8 @@ and synthetic process contact fixtures cannot substitute.
 ## Coordination
 
 Installation task01a04149-5dbb-7300-9e4c-31d9e85c8ada owns protected keys,
-signed consumer/journal/profile/actual restore. It received018fbd75 and exact
-local/CI boundaries. IAM41 is not permission to change its release profile;
+signed consumer/journal/profile/actual restore. It received339d3747 and exact
+local/CI boundaries. IAM42 is not permission to change its release profile;
 no new recovery codec/window allocated. Never read its WIP.
 S2c concrete requirement sent: capture complete current Account settings and
 qualification before destructive restore, commit outside DB rollback, refuse
@@ -151,6 +202,15 @@ directory/policy/version/attachment boundaries; SSO/IdP remains012 Deferred,
 no invented LIVE routes. Give fixed0a as contract-only, not runtime permission.
 Prior Role f0455570c3f5ae9f18bd266dffd5eb386e473c4e and navigation intent
 c5ec1f945cdcd7af61941aafed8da4d7e68f839c received scoped reviews only.
+
+Latest UI owner reports policy read-only detail2c3dc421 and version directory/
+exact read a4f2a0b7 (docs a86dc4cf); not imported or independently tested here.
+It is proceeding with005 version writes, without an ActionCapability guess.
+Confirmed unchanged backend contract: original requestId/resourceVersion/body
+on equal retry;409 after an unknown result is not success/failure proof.
+Current default/content/404 is only current state, not proof of that intent.
+New intent requires explicit fresh review; current TENANT/CUSTOMER/ACTIVE
+only establishes applicability, not authority. Root label never means Allow.
 
 Local Git identity Xiak <Jellal@aliyun.com>. Markdown only. No extra agents/
 tasks, foreign worktree writes, remote1.3/.160/.161 or withdrawn GitLab/1.5,
