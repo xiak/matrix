@@ -461,6 +461,9 @@ An earlier backup format without this commitment is not an empty matching
 state: the integrated successor refuses its automatic identity restore before
 effects. Historical decoding remains available for verification, but a
 separate explicit migration/recovery path would need its own proof.
+The predecessor may remain an admitted in-place upgrade source without being
+an admitted automatic recovery source; the release recovery-profile function
+must not infer restore permission from upgrade compatibility.
 
 The close transaction reprojects the complete durable authentication and
 authorization state, including Account status/root ownership/settings,
