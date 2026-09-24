@@ -56,7 +56,9 @@ Role、身份提供商、联合身份和企业账号均为详情优先的管理�
 
 `EQUAL_REPLAY` 永不包含 provisioning；页面不显示验证码确认框，只允许取消仍处于 `PENDING` 的原流程，或在终态后使用新 requestId 重新开始。若首次 `APPLIED` 的秘密已从本地内存丢失，客户端不能尝试恢复或猜测密钥，必须取消/等待过期后重新发起。新 TOTP 确认成功就是绑定提交点；IAM 返回的十条唯一恢复码只在 SessionProvider 内存中一次显示，确认已保存后清除，并要求正常重新登录，不能把恢复材料的确认误作绑定提交。
 
-替换与合法移除仍没有本客户端可消费的固定公开契约，`BOUND` 因此只显示权威状态及明确不可用说明。受限自助恢复只从已验证密码产生的 `LOGIN/TOTP` 或有准确恢复历史的 `LOGIN/RECOVER` 挑战进入，使用一条旧恢复码换取独立 `RECOVERY/ENROLLMENT` 挑战和一次性 provisioning；它不创建 Session、不改变密码，也不授予管理员代替本人重置因子的能力。任何真实失败不得进入 MOCK。
+已绑定因子的恢复码再生成消费固定来源 `b7a70bfa9e53f0a5f16619c60523c84613cb7b0b`。页面先用原 regeneration requestId、当前 factor revision 创建仅限 `RECOVERY_CODES_REGENERATE` 的两分钟 step-up，再以独立 verify requestId 提交当前密码和新 TOTP；证明不会延长有效期，也不授予额外 IAM 权限。只有首次 `APPLIED` 可以在当前 React 内存显示恰好十条非空且唯一的新码；`EQUAL_REPLAY` 和两个 by-request 查询永不返回秘密。开始、验证或重新生成结果未知时，客户端冻结原意图，验证未知只读 step-up，重新生成未知只读 regeneration，绝不自动重放密码、OTP 或写命令。相同 Account/User 正常重新登录后可以用新 Session 查询原非秘密结果；旧 step-up 证明不能跨 Session 继续使用。`NOT_FOUND` 不证明回滚，也不允许自动创建新意图。
+
+替换与合法移除仍没有本客户端可消费的固定公开契约，`BOUND` 因此只开放上述恢复码再生成，不开放因子换绑或移除。受限自助恢复只从已验证密码产生的 `LOGIN/TOTP` 或有准确恢复历史的 `LOGIN/RECOVER` 挑战进入，使用一条旧恢复码换取独立 `RECOVERY/ENROLLMENT` 挑战和一次性 provisioning；它不创建 Session、不改变密码，也不授予管理员代替本人重置因子的能力。任何真实失败不得进入 MOCK。
 
 恢复开始一旦提交就消费旧码、终止旧因子与旧会话，关闭页面不能撤销。开始回包未知时，客户端只在内存保留原 loginName/requestId，清除 challenge secret 与 provisioning；用户必须重新以密码取得新的 LOGIN 挑战并显式查询原 requestId。`NOT_FOUND` 不证明回滚，查询不会重发秘密或自动消费另一条码；原 `STARTED` 的一次性材料已经丢失时，页面必须明确说明并由用户选择使用另一条旧码创建新意图。确认回包未知不查询或重放十条新码，只允许使用刚绑定的新因子正常登录验证结果。所有密码、旧码、新 seed、URI、OTP、challenge credential 和新恢复码均只留当前 React 内存，不进入 URL、日志或浏览器持久存储。
 
@@ -147,7 +149,7 @@ Secret 只在创建结果明确为 `APPLIED` 时展示一次，并在确认离�
 
 真实 PolicyVersion 正文、服务器编译快照和默认版本变更需要独立接入及浏览器验收；当前目录元数据和边界引用不能替代它。只读权限能力目录客户端已经接入固定契约，但仍需与固定 IAM 真实进程执行独立浏览器验收；产品声明管理不是租户策略功能。在真实作者契约和发布验证完成前，不开放可成功提交的真实可视化作者表单。
 
-Role 管理 list/read/create 与管理员 RoleSession list/read/revoke 的固定 LIVE 客户端已经完成，但仍需真实 IAM 进程浏览器联调；Role update/status/delete、trust 与 policy attachment 变更、权限边界、可承担角色发现、AssumeRole、当前 Role 身份、签发结果 by-request 恢复和 Role logout 仍待各自固定契约接入。SSO 与登录安全专项同样按各自固定后端契约推进。访问密钥 LIVE 客户端已固定到 IAM-007 的每用户管理契约，但仍需真实 IAM 进程的浏览器联调；产品 Profile 尚不接受 AccessKey，不能据此宣称云产品 API 已可使用长期密钥。本片不宣称全部错误页面或完整访问管理已验收，也不改变保留 MOCK 验收入口的安排。
+Role 管理 list/read/create 与管理员 RoleSession list/read/revoke 的固定 LIVE 客户端已经完成，但仍需真实 IAM 进程浏览器联调；Role update/status/delete、trust 与 policy attachment 变更、权限边界、可承担角色发现、AssumeRole、当前 Role 身份、签发结果 by-request 恢复和 Role logout 仍待各自固定契约接入。恢复码再生成的固定 LIVE 客户端已经完成，但仍需固定 IAM 进程验证 step-up、一次性秘密交付和重新登录查询闭环；账号安全规则仍是隔离 MOCK，不能从纯设计契约推导 LIVE 写入。SSO 与其余登录安全专项按各自固定后端契约推进。访问密钥 LIVE 客户端已固定到 IAM-007 的每用户管理契约，但仍需真实 IAM 进程的浏览器联调；产品 Profile 尚不接受 AccessKey，不能据此宣称云产品 API 已可使用长期密钥。本片不宣称全部错误页面或完整访问管理已验收，也不改变保留 MOCK 验收入口的安排。
 
 ## 验收
 
@@ -257,7 +259,7 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 ### Role 管理与管理员会话 LIVE 客户端的开发验收证据
 
 2026-09-24，LIVE 前端适配与同步嵌入资源固定在已推送的
-[`f0455570324f31f07feb715097edb3c307a96c72`](https://github.com/xiak/matrix/commit/f0455570324f31f07feb715097edb3c307a96c72)，
+[`f0455570c3f5ae9f18bd266dffd5eb386e473c4e`](https://github.com/xiak/matrix/commit/f0455570c3f5ae9f18bd266dffd5eb386e473c4e)，
 契约来源为 IAM-006 固定提交 `62a18a48168e87a4158b95eba41427b445ed10d1` 与严格响应修正 `0567c8b2699521b137db0f8b69f17630c59f04fb`。既有 Role/trust/session 与成员承担 MOCK 继续通过上两节记录的独立入口保留。
 
 - 非体验环境通过独立 Role Provider 严格消费 `GET /v1/roles` 与 `GET /v1/roles/{roleId}`。客户端不发送 Account selector，逐项核对当前 Account、Role 归属、资源版本、状态、时间、标签、列表顺序、opaque cursor、trust 当前版本/摘要和 policy attachment；未知字段、越界数量、错误绑定或非法顺序均失败关闭，真实失败不回退 MOCK。
@@ -303,17 +305,20 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 
 ### 本人 MFA 生命周期的开发验收证据
 
-2026-09-21，首次 TOTP 固定客户端与同步嵌入资源同样固定在
+2026-09-24，首次 TOTP 固定客户端与同步嵌入资源固定在
 [`80225dce692921aaaeda12e96b58a464f931da30`](https://github.com/xiak/matrix/commit/80225dce692921aaaeda12e96b58a464f931da30)；
 既有恢复/换绑隔离体验仍由 `dabe85d1e64bf20fdcfbe579791694dd9a257e40` 保留，首次绑定未知结果加固固定在
-[`d7d6333d`](https://github.com/xiak/matrix/commit/d7d6333d135a65648269443789799d1fccf0b638)。
+[`d7d6333d`](https://github.com/xiak/matrix/commit/d7d6333d135a65648269443789799d1fccf0b638)，恢复码再生成 LIVE 客户端与同步嵌入资源固定在
+[`a2ff4f6ff1fc56fa9a43ab56499962e03ac05733`](https://github.com/xiak/matrix/commit/a2ff4f6ff1fc56fa9a43ab56499962e03ac05733)。
 
 - LIVE 首次绑定只有在已验证通知地址与 `NEVER_BOUND` 状态下开放，以当前密码、稳定 requestId 和 factor revision 发起。严格适配器验证五分钟生命周期、所有 ID/revision 关联及状态完成时间；首次 `APPLIED` 才接受 provisioning，`EQUAL_REPLAY` 携带 secret/URI 会失败关闭。
 - UI 不调用外部二维码服务，只在首次 `APPLIED` 的当前内存流程显示手动 seed/URI 和六位确认框。等值重放不显示秘密或确认框，只允许取消仍待处理的原流程；终态才允许使用新 requestId 重新开始。组件用例锁定该边界。
 - 开始请求在网络、5xx 或协议结果未知前，Provider 已按当前 credential、Account、User 登记原 requestId；内容页卸载/重新挂载仍保持写锁，只保存这组非秘密归属，不保存密码、seed、URI 或 OTP。页面先按原 requestId 查询：查到 `PENDING` 只允许精确取消该 enrollment，`NOT_FOUND` 或查询不可用继续保持 UNKNOWN，不能据此开放第二次开始。查询后的 `CONFIRMED` 只要求使用新因子正常登录，不能恢复秘密或再次确认。
 - 确认成功只接受十条非空且唯一的恢复码与 `REAUTHENTICATE`。Provider 立即清除旧 credential/current/challenge，仅在内存一次显示恢复材料；用户确认已保存后清除材料并返回重新登录，不写 URL、DOM 持久态或浏览器存储。
-- 设置页中的替换与移除仍只读；登录受限自助恢复已按独立 S2b 候选接入严格客户端。页面不会把恢复开始解释成可取消 enrollment，也不会从 LIVE 失败回退隔离 MOCK。
-- 完整前端 42 个测试文件、657 条用例和三条静态归一化用例通过；类型、lint、架构、228 组主题对比、40 页生产导出、222 个嵌入文件等价、`go test -p 2 ./...` 与 `go vet -p 2 ./...` 通过。首次绑定未知结果由组件状态机用例验收；尚未以真实 IAM 进程执行首次 secret 交付、TOTP 确认、会话终止和恢复码抄录的浏览器闭环。
+- `BOUND` 设置页通过固定五路由开放恢复码再生成，仍不开放因子替换或移除。严格适配器验证两分钟 step-up、operation/revision/request 关联、状态时间、regeneration 归属及一次性十码；`EQUAL_REPLAY` 携带秘密、重复码、额外字段或错配 revision 均失败关闭。验证端的通用 401 不被擅自解释为 bearer 过期；后续 bearer-only 读取才是 Session 是否仍有效的权威观察。
+- Provider 在写入前登记原意图。开始未知只允许等价重试或查询，验证未知只查询原 step-up，重新生成未知只查询原 regeneration；页面不会重放密码、OTP 或生成命令。同一 User 以新 Session 登录仍可查询原非秘密 regeneration，旧 Session 的 step-up 不能继续。首次 `APPLIED` 的十码只在当前组件内存显示，确认后从 DOM 清除；by-request 完成只说明材料已丢失并要求新意图。
+- Role 创建同时补强 Session 归属：客户端改变时立即清除草稿、未知结果和成功态，并忽略旧 client 的迟到回包。行为用例证明旧会话结果不能进入新会话视图。
+- 完整前端 42 个测试文件、682 条用例和三条静态归一化用例通过；类型、lint、架构、228 组主题对比、40 页生产导出、223 个嵌入文件等价、`go test ./...` 与 `go vet ./...` 通过。恢复码固定后端独立 CI 因 runner 未分配而没有执行，不能写成后端 CI 通过；尚未以真实 IAM 进程执行 step-up、一次性十码交付、重新登录查询或首次绑定的浏览器闭环。
 
 ### 登录挑战固定契约的开发验收证据
 

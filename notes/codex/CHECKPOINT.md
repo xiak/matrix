@@ -6,7 +6,7 @@
 - Updated: 2026-09-24
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `f0455570324f31f07feb715097edb3c307a96c72`
+- Pushed UI source: `a2ff4f6ff1fc56fa9a43ab56499962e03ac05733`
 
 ## Authoritative route
 
@@ -31,15 +31,13 @@ FEAT owners. Integrate fixed backend contracts while preserving this branch's
 UI, full static host/export and independent MOCK entry; do not replace them
 with another branch's renderer or inherit that branch's UI acceptance.
 
-The current milestone strictly consumes fixed Role list/read/create and
-administrator RoleSession list/read/revoke contracts while keeping member
-assumption in its separate self-service surface. LIVE Role creation establishes
-only metadata and the first same-Account USER trust version; policy attachment,
-permission boundary and credential issuance remain separate. Unknown creation
-retains the original requestId and frozen payload for equivalent retry. The
-complete 674-case frontend run, static/export/embed and Go gates passed, and the
-independent MOCK Role surface remains inspectable. Detailed contract behavior
-and evidence remain only in the linked FEAT owners.
+The current milestone strictly consumes the fixed purpose-limited recovery-code
+regeneration contract while preserving the independent MOCK security surface.
+Step-up proof remains Session-bound, unknown writes retain their original
+request identity for read-only recovery, and only the first applied response can
+show one-time codes in memory. The complete 682-case frontend run,
+static/export/embed and Go gates passed. Detailed contract behavior, evidence
+and real-process limitations remain only in the linked FEAT owners.
 
 ## Continuation
 
@@ -53,9 +51,9 @@ environment. Real browser acceptance cannot be replaced by MOCK or API-only
 checks. Do not duplicate the donor application or move installer-owned secrets
 into the UI.
 
-Next integration must select one fixed boundary from the owning FEAT: remaining
-Role mutations/trust/attachment/boundary work or the IAM-009 security workflow.
-Do not infer either wire contract from the MOCK UI or combine them in one slice.
+Next integration must select one fixed boundary from the owning FEAT. Do not
+infer account-security, remaining Role or SSO wire contracts from the MOCK UI or
+from another task's unpushed work.
 
 Replace this file only at another committed-and-pushed milestone. Do not append
 command logs, chat transcripts, secrets, raw provider payloads, or machine-local
