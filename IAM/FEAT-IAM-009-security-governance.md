@@ -508,6 +508,8 @@ S2c首次设置的公共契约复用`AuthenticationChallenge`，purpose为独立
 
 该基础片已在Go1.26.7、GOMAXPROCS=2/GOMEMLIMIT=512MiB下完成全仓默认race、vet、模块校验、Linux/amd64构建与122个API生成文件字节一致检查；最终受影响API/生成器、identityaccess/nethttp及architecture再次race通过。原测试owner覆盖25组challenge用途/阶段组合、四种请求的缺失/null/重复/身份与第二载体注入、PASSWORD_CHANGE不得暴露后继状态、非首因子/晚于绑定的地址验证时间/挑战期限不匹配拒绝；现有LOGIN发行器拒绝ENROLLMENT/RECOVERY和未经TOTP的PASSWORD_CHANGE返回。单worker、15秒请求fuzz完成72241次执行无失败。此片没有启动数据库/SMTP/浏览器，默认外部门禁SKIP不计真实运行；源码仍IAM41/Audit24/PaaS2，不分配发布profile，独立CI与完整S2c仍未验收。
 
+该纯契约/发行器防错片固定并推送于`0a237aae5c904e0e32e5766544e31c1cfed5a02a`。GitHub API核实[Verification35961451647](https://github.com/xiak/matrix/actions/runs/35961451647)精确SHA及completed/failure，七项均runner_id=0/steps=0；go annotation仍为付款/支出限制导致未启动。它是已本地验证的固定候选，不是独立CI通过，不继承此前数据库、邮件或UI证据。
+
 种子、provisioning URI/二维码和恢复码均属秘密，只经受保护连接的专用一次性响应传输，普通JSON、HTTP请求URL/query、审计、日志、support和浏览器持久缓存不得保存。provisioning URI内的种子参数仅是一次性内容，不能导航到第三方或发送给外部二维码服务。复制/打印是用户对恢复材料的显式操作，不自动下载到共享目录。创建回包未知只查询原非秘密完成；不重新展示种子或恢复码。无法继续持有原待绑定凭据时，明确废弃该待绑定意图后重新开始，不能悄悄创建替代秘密。
 
 TOTP验证需要可用种子，不能仅存单向摘要；数据库应存目的、安装、Account/USER、因子身份和格式绑定的认证密文，只有IAM认证路径可解封。007的AccessKey私有keyring和envelope是单用途契约，不能把TOTP伪装成AccessKey以复用材料；密码hash、cursor key及离线恢复authority同样不是种子封装密钥。可复用受保护读取、秘密脱敏及标准密码学原语，具体独立材料/私有codec与安装、备份、readiness的衔接须另行冻结；没有真实托管证据不开放启用配置。

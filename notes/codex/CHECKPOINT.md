@@ -8,12 +8,15 @@
   IAM/012 for mail, then owners. Adoption belongs to
   docs/adoption/FEAT-006-platform-authorities.md.
 - Latest implemented/pushed fixed candidate:
-  **018fbd7505ae16d59dcfe857df7fbbe870bf1a13**, parent7265f480.
+  **0a237aae5c904e0e32e5766544e31c1cfed5a02a**, parent6e105658.
+  This is restricted first-enrollment contracts/issuer defense, not the
+  ENROLLMENT HTTP/SQL runtime or settings write. Runtime read baseline below
+  remains **018fbd7505ae16d59dcfe857df7fbbe870bf1a13**.
   Source IAM41/Audit24/PaaS2. No release profile allocated or changed.
-- Exact https://github.com/xiak/matrix/actions/runs/35959220825 is
+- Exact https://github.com/xiak/matrix/actions/runs/35961451647 is
   completed/failure; seven jobs runner_id=0/steps=0. go annotation explicitly
   says payment/spending limit prevented execution. Independent CI NOT passed.
-  Prior d570/35955820844 and b7/35953732463 had the same zero-execution
+  Prior018/35959220825, d570/35955820844 and b7/35953732463 had the same zero-execution
   outcome. Do not alter billing or repeatedly rerun unchanged blockage.
 
 ## Current settings read
@@ -68,6 +71,31 @@ No shared or remote restart. Never retry policy-denied temp cleanup.
  122-file repeat generation and gofmt/diff passed. External default skips
   are not real-runtime evidence. No UI/browser or SMTP acceptance imported.
 
+## Restricted first-enrollment preparation at0a237aae
+
+AuthenticationChallenge now has the distinct ENROLLMENT purpose with only
+PASSWORD_CHANGE or ENROLLMENT steps; LoginResponse can describe it but still
+never includes Session/bearer/mustChangePassword in that branch. Existing
+LOGIN issuer explicitly rejects another purpose or initial PASSWORD_CHANGE.
+
+Four strict requests use challengeCredential only: inspect, start TOTP,
+start first notification-contact verification, confirm first contact.
+EnrollmentChallengeState exposes no later state before required password
+change; pending factor requires revision1/VERIFIED contact before creation
+and the challenge's exact original expiry. TOTPEnrollment permits positive
+remaining duration up to5minutes; original normal-Session SQL still requires
+exact5minutes. No new HTTP/SQL, action, StepUp operation or recovery ABI.
+Current contract owners: api/iam/v1 types/encoding/validation/security_mail,
+contractgen and original tests; 009 and012 own requirements, adoption updated.
+
+Local full default race/vet/modules/Linux build/generation passed; final
+affected API/usecase/HTTP/architecture race passed after last validation
+change. Single-worker15s request fuzz72241 executions passed. No PG, SMTP or
+browser started; all test handles terminal. Next implement real restricted
+challenge issuance/initial password/contact/binding with shared budgets and
+locked authority, then settings CAS/proof/Session-Role barrier and supported
+restore evidence. Do not treat contract presence as capability or goal done.
+
 ## Existing runtime / remaining work
 
 Fixedb7a70bfa9e53f0a5f16619c60523c84613cb7b0b supplies five Session-held
@@ -98,6 +126,12 @@ Installation task01a04149-5dbb-7300-9e4c-31d9e85c8ada owns protected keys,
 signed consumer/journal/profile/actual restore. It received018fbd75 and exact
 local/CI boundaries. IAM41 is not permission to change its release profile;
 no new recovery codec/window allocated. Never read its WIP.
+S2c concrete requirement sent: capture complete current Account settings and
+qualification before destructive restore, commit outside DB rollback, refuse
+missing/unknown state instead of restoring oldfalse. Bounded snapshot/closure
+ABI and installation persistence still need joint freeze. Installation owner
+identified missing SMTP worker/email keyring/channel in its enabling bundle;
+it owns that correction without weakening verified-contact prerequisites.
 
 UI task01a07b21-9a0d-7fd0-b090-7827ce18262e, feat/cloud-console-ux,
 exclusively owns UI. It received018fbd75 as fixed source for GET/read/403
@@ -106,9 +140,15 @@ only; settings write remains separate MOCK. No capability guessed from role.
 Bounded fixeda2ff4f6ff1fc56fa9a43ab56499962e03ac05733 review matched b7's
 five routes/120s/generic verify401/EQUAL metadata. Found unguarded delayed
 renderer setCodes across Session changes. UI owner acknowledged and supplied
-fixed3b9544020c347eff88a44a30aeb9b1bdb9a0afff (docs a5eece91), reporting
-Session/generation/intent checks and retained-promise A/B tests. That fix is
-NOT yet independently reviewed here; no UI/browser acceptance claimed.
+fixed3b9544020c347eff88a44a30aeb9b1bdb9a0afff (docs a5eece91). Bounded
+fixed-source review now confirms provider Session/generation return guard,
+renderer remount/intent check and retained-promise A/B tests; no tests or
+browser acceptance inherited. Fixedc62e794970442e39bfe13222bd3f8aaca175d2c7
+adds LIVE read-only settings: reviewed exact Account/explicitbool/shape,
+local403, no404/mock fallback, generation-bound401 and late-client guard.
+Not imported and not browser-accepted here. It received cumulative018 product
+directory/policy/version/attachment boundaries; SSO/IdP remains012 Deferred,
+no invented LIVE routes. Give fixed0a as contract-only, not runtime permission.
 Prior Role f0455570c3f5ae9f18bd266dffd5eb386e473c4e and navigation intent
 c5ec1f945cdcd7af61941aafed8da4d7e68f839c received scoped reviews only.
 
