@@ -908,6 +908,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         if (command.kind === "save-account-rule" && code === "unavailable") {
           const unknownIntent: PendingAccountRuleChange = {
             requestId: command.requestId,
+            baselineRuleVersion: command.expectedRuleVersion,
             baselineLoginProtection: command.expectedLoginProtection,
             requestedLoginProtection: command.loginProtection,
             status: "UNKNOWN" as const
@@ -916,6 +917,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
             const recovered = await repository.workspace.execute(credential, {
               kind: "remember-account-rule-change-unknown",
               requestId: command.requestId,
+              expectedRuleVersion: command.expectedRuleVersion,
               expectedLoginProtection: command.expectedLoginProtection,
               loginProtection: command.loginProtection
             });

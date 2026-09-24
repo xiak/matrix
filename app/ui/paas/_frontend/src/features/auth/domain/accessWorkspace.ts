@@ -39,6 +39,7 @@ export type PendingAccessKeyCreation =
 /** Preview recovery state only; it does not define a future IAM wire contract. */
 export type PendingAccountRuleChange = {
   requestId: string;
+  baselineRuleVersion: number;
   baselineLoginProtection: boolean;
   requestedLoginProtection: boolean;
   status: "UNKNOWN" | "UNRECOVERABLE";
@@ -47,7 +48,7 @@ export type EnterpriseMember = { id: string; name: string; department: string };
 export type EnterpriseAccount = { id: string; name: string; corporationId: string; visibleMemberIds: string[]; importedMemberIds: string[]; createdAt: string };
 export function enterprisePrincipalId(accountId: string, memberId: string): string { return "principal-wecom-" + accountId + "-" + memberId; }
 export type AccessSettings = {
-  loginProtection: boolean; userSsoEnabled: boolean; userSsoProviderId: string;
+  loginProtection: boolean; accountRuleVersion: number; userSsoEnabled: boolean; userSsoProviderId: string;
 };
 export type PersonalMfaPreviewState = {
   factorState: "never-bound" | "bound" | "removed";
@@ -117,9 +118,9 @@ export type AccessWorkspaceCommand =
   | { kind: "save-enterprise"; id?: string; name: string; corporationId: string; visibleMemberIds: string[] }
   | { kind: "delete-enterprise"; id: string }
   | { kind: "import-enterprise-members"; id: string; memberIds: string[] }
-  | { kind: "save-account-rule"; requestId: string; expectedLoginProtection: boolean; loginProtection: boolean; responseMode: "success" | "response-lost" }
+  | { kind: "save-account-rule"; requestId: string; expectedRuleVersion: number; expectedLoginProtection: boolean; loginProtection: boolean; responseMode: "success" | "response-lost" }
   /** Preview client journal only; this is not a future IAM mutation contract. */
-  | { kind: "remember-account-rule-change-unknown"; requestId: string; expectedLoginProtection: boolean; loginProtection: boolean }
+  | { kind: "remember-account-rule-change-unknown"; requestId: string; expectedRuleVersion: number; expectedLoginProtection: boolean; loginProtection: boolean }
   | { kind: "inspect-account-rule-change"; requestId: string; resultMode: "found-applied" | "found-rejected" | "not-found" | "unavailable" }
   | { kind: "save-sso-settings"; userSsoEnabled: boolean; userSsoProviderId: string };
 
@@ -489,14 +490,17 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
       target = enterprise.name; break;
     }
     case "save-account-rule": {
-      if (state.personalMfa.factorState !== "bound" || state.personalMfa.reauthenticationRequired || state.personalMfa.recoveryState !== "idle" || state.pendingAccountRuleChange || !command.requestId.trim() || typeof command.expectedLoginProtection !== "boolean" || typeof command.loginProtection !== "boolean" || command.expectedLoginProtection !== state.settings.loginProtection) invalid();
-      if (command.responseMode === "response-lost") state.pendingAccountRuleChange = { requestId: command.requestId, baselineLoginProtection: command.expectedLoginProtection, requestedLoginProtection: command.loginProtection, status: "UNKNOWN" };
-      else state.settings = { ...state.settings, loginProtection: command.loginProtection };
+      if (state.personalMfa.factorState !== "bound" || state.personalMfa.reauthenticationRequired || state.personalMfa.recoveryState !== "idle" || state.pendingAccountRuleChange || !command.requestId.trim() || !Number.isSafeInteger(command.expectedRuleVersion) || command.expectedRuleVersion < 1 || command.expectedRuleVersion !== state.settings.accountRuleVersion || typeof command.expectedLoginProtection !== "boolean" || typeof command.loginProtection !== "boolean" || command.expectedLoginProtection !== state.settings.loginProtection) invalid();
+      if (command.responseMode === "response-lost") state.pendingAccountRuleChange = { requestId: command.requestId, baselineRuleVersion: command.expectedRuleVersion, baselineLoginProtection: command.expectedLoginProtection, requestedLoginProtection: command.loginProtection, status: "UNKNOWN" };
+      else {
+        state.settings = { ...state.settings, loginProtection: command.loginProtection, accountRuleVersion: command.expectedRuleVersion + 1 };
+        state.personalMfa = { ...state.personalMfa, reauthenticationRequired: true };
+      }
       target = source.accountId; break;
     }
     case "remember-account-rule-change-unknown": {
-      if (state.pendingAccountRuleChange || !command.requestId.trim() || typeof command.expectedLoginProtection !== "boolean" || typeof command.loginProtection !== "boolean" || command.expectedLoginProtection !== state.settings.loginProtection) invalid();
-      state.pendingAccountRuleChange = { requestId: command.requestId, baselineLoginProtection: command.expectedLoginProtection, requestedLoginProtection: command.loginProtection, status: "UNKNOWN" };
+      if (state.pendingAccountRuleChange || !command.requestId.trim() || !Number.isSafeInteger(command.expectedRuleVersion) || command.expectedRuleVersion < 1 || command.expectedRuleVersion !== state.settings.accountRuleVersion || typeof command.expectedLoginProtection !== "boolean" || typeof command.loginProtection !== "boolean" || command.expectedLoginProtection !== state.settings.loginProtection) invalid();
+      state.pendingAccountRuleChange = { requestId: command.requestId, baselineRuleVersion: command.expectedRuleVersion, baselineLoginProtection: command.expectedLoginProtection, requestedLoginProtection: command.loginProtection, status: "UNKNOWN" };
       recordEvent = false;
       target = source.accountId; break;
     }
@@ -507,7 +511,10 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
       if (pending.status === "UNRECOVERABLE") throw new AccessWorkspaceError("accountRuleResultUnavailable");
       if (command.resultMode === "not-found") throw new AccessWorkspaceError("accountRuleResultNotFound");
       if (command.resultMode === "unavailable") throw new AccessWorkspaceError("accountRuleResultUnavailable");
-      if (command.resultMode === "found-applied") state.settings = { ...state.settings, loginProtection: pending.requestedLoginProtection };
+      if (command.resultMode === "found-applied") {
+        state.settings = { ...state.settings, loginProtection: pending.requestedLoginProtection, accountRuleVersion: pending.baselineRuleVersion + 1 };
+        state.personalMfa = { ...state.personalMfa, reauthenticationRequired: true };
+      }
       state.pendingAccountRuleChange = null;
       target = source.accountId; break;
     }

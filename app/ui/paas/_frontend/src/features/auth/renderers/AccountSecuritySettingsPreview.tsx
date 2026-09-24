@@ -24,6 +24,7 @@ export function AccountSecuritySettingsPreview({ workspace }: { workspace: Acces
   const [scenario, setScenario] = useState<SaveScenario>("success");
   const [inspection, setInspection] = useState<InspectionScenario>("found-applied");
   const [requestId, setRequestId] = useState(() => `mock-account-rule-${crypto.randomUUID()}`);
+  const [reviewBaseline, setReviewBaseline] = useState<{ version: number; required: boolean } | null>(null);
   const [localPending, setLocalPending] = useState<PendingAccountRuleChange | null>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
@@ -51,6 +52,7 @@ export function AccountSecuritySettingsPreview({ workspace }: { workspace: Acces
 
   const review = () => {
     setFeedback(null);
+    setReviewBaseline({ version: workspace.settings.accountRuleVersion, required: workspace.settings.loginProtection });
     focus.current = "flow";
     setStage("review");
   };
@@ -59,7 +61,8 @@ export function AccountSecuritySettingsPreview({ workspace }: { workspace: Acces
     setStage("edit");
   };
   const save = async () => {
-    const intent: PendingAccountRuleChange = { requestId, baselineLoginProtection: workspace.settings.loginProtection, requestedLoginProtection: required, status: "UNKNOWN" };
+    if (!reviewBaseline) return false;
+    const intent: PendingAccountRuleChange = { requestId, baselineRuleVersion: reviewBaseline.version, baselineLoginProtection: reviewBaseline.required, requestedLoginProtection: required, status: "UNKNOWN" };
     if (scenario === "conflict") {
       access.clearWorkspaceError();
       focus.current = "flow";
@@ -73,7 +76,7 @@ export function AccountSecuritySettingsPreview({ workspace }: { workspace: Acces
       return false;
     }
     const saved = await access.executeWorkspace(
-      { kind: "save-account-rule", requestId, expectedLoginProtection: workspace.settings.loginProtection, loginProtection: required, responseMode: scenario === "response-lost" ? "response-lost" : "success" },
+      { kind: "save-account-rule", requestId, expectedRuleVersion: reviewBaseline.version, expectedLoginProtection: reviewBaseline.required, loginProtection: required, responseMode: scenario === "response-lost" ? "response-lost" : "success" },
       (error) => {
         focus.current = "flow";
         if (error === "conflict") {
@@ -123,7 +126,8 @@ export function AccountSecuritySettingsPreview({ workspace }: { workspace: Acces
       <Card.Header><div><h3 className={styles.flowTitle} ref={flowHeading} tabIndex={-1}>{t("accountReviewTitle")}</h3><Typography.Text tone="muted">{t("accountReviewHint")}</Typography.Text></div><Badge status="warning">MOCK</Badge></Card.Header>
       <Card.Body className={styles.flowBody}>
         <dl className={styles.facts}>
-          <div><dt>{t("accountChange")}</dt><dd>{t(workspace.settings.loginProtection ? "required" : "optional")} → {t(required ? "required" : "optional")}</dd></div>
+          <div><dt>{t("accountChange")}</dt><dd>{t(reviewBaseline?.required ? "required" : "optional")} → {t(required ? "required" : "optional")}</dd></div>
+          <div><dt>{t("accountReadVersion")}</dt><dd>{reviewBaseline?.version}</dd></div>
           <div><dt>{t("accountTarget")}</dt><dd><code>{workspace.accountId}</code></dd></div>
           <div><dt>{t("accountScope")}</dt><dd>{t("accountScopeValue")}</dd></div>
           <div><dt>{t("protectedIdentities")}</dt><dd>{t("protectedIdentitiesValue")}</dd></div>
@@ -140,6 +144,7 @@ export function AccountSecuritySettingsPreview({ workspace }: { workspace: Acces
       <Card.Body className={styles.flowBody}>
         <dl className={styles.facts}>
           <div><dt>{t("accountTarget")}</dt><dd><code>{workspace.accountId}</code></dd></div>
+          <div><dt>{t("accountReadVersion")}</dt><dd>{reviewBaseline?.version}</dd></div>
           <div><dt>{t("attemptedChange")}</dt><dd>{t(workspace.settings.loginProtection ? "required" : "optional")} → {t(required ? "required" : "optional")}</dd></div>
           <div><dt>{t("verificationState")}</dt><dd>{t("verificationDiscarded")}</dd></div>
         </dl>
@@ -164,6 +169,7 @@ export function AccountSecuritySettingsPreview({ workspace }: { workspace: Acces
       <Card.Body className={styles.flowBody}>
         <dl className={styles.facts}>
           <div><dt>{t("accountTarget")}</dt><dd><code>{workspace.accountId}</code></dd></div>
+          <div><dt>{t("accountReadVersion")}</dt><dd>{pending?.baselineRuleVersion ?? reviewBaseline?.version}</dd></div>
           <div><dt>{t("attemptedChange")}</dt><dd>{t((pending?.baselineLoginProtection ?? workspace.settings.loginProtection) ? "required" : "optional")} → {t((pending?.requestedLoginProtection ?? required) ? "required" : "optional")}</dd></div>
           <div><dt>{t("originalIntent")}</dt><dd><code>{pending?.requestId ?? requestId}</code></dd></div>
           <div><dt>{t("verificationState")}</dt><dd>{t("verificationDiscarded")}</dd></div>
@@ -178,6 +184,7 @@ export function AccountSecuritySettingsPreview({ workspace }: { workspace: Acces
       {stage === "summary" ? <div className={styles.policyForm}>
         <dl className={styles.facts}>
           <div><dt>{t("currentRule")}</dt><dd>{t(workspace.settings.loginProtection ? "required" : "optional")}</dd></div>
+          <div><dt>{t("accountReadVersion")}</dt><dd>{workspace.settings.accountRuleVersion}</dd></div>
           <div><dt>{t("accountScope")}</dt><dd>{t("accountScopeValue")}</dd></div>
           <div><dt>{t("protectedIdentities")}</dt><dd>{t("protectedIdentitiesValue")}</dd></div>
         </dl>
