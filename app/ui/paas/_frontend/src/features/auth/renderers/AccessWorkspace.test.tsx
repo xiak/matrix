@@ -432,9 +432,10 @@ describe("policy creation entry and directory contract", () => {
   });
   it("matches CAM directory columns, omits preset metadata in custom view and restores chooser focus", async () => {
     const { user, repository } = await open("policies");
-    const headings = () => within(screen.getByRole("table", { name: "策略" })).getAllByRole("columnheader").map((cell) => cell.textContent).filter(Boolean);
+    const headings = () => within(screen.getByRole("table", { name: "策略" })).getAllByRole("columnheader").slice(1).map((cell) => cell.textContent).filter(Boolean);
     const table = screen.getByRole("table", { name: "策略" });
     expect(table.getAttribute("data-mobile-layout")).toBe("stack");
+    expect(within(table).getByRole("checkbox", { name: "选择本页策略" }).closest("th")?.textContent).toBe("选择本页策略");
     expect(headings()).toEqual(["策略名", "所属产品", "权限级别", "描述", "上次修改时间"]);
     const customRow = within(table).getByRole("button", { name: "AssumeLogReviewRole" }).closest("tr")!;
     expect(customRow.cells[2]?.getAttribute("data-mobile-empty")).toBe("true");

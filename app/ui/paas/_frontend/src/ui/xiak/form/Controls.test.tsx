@@ -16,6 +16,16 @@ describe("shared themed controls", () => {
     await user.keyboard(" ");
     expect(select).toHaveBeenCalledWith(true);
   });
+  it("keeps the page-selection label in the opt-in stacked table header", async () => {
+    const user = userEvent.setup(), select = vi.fn();
+    render(<Table aria-label="Policies" mobileLayout="stack"><thead><tr><TableSelectionCell header label="Select page policies" checked={false} onChange={select} /><th scope="col">Policy</th></tr></thead><tbody><tr><td /><td>Reader</td></tr></tbody></Table>);
+    const table = screen.getByRole("table", { name: "Policies" });
+    expect(table.getAttribute("data-mobile-layout")).toBe("stack");
+    const checkbox = within(table).getByRole("checkbox", { name: "Select page policies" });
+    expect(checkbox.parentElement?.textContent).toBe("Select page policies");
+    await user.click(checkbox.parentElement!);
+    expect(select).toHaveBeenCalledWith(true);
+  });
   it("pages a controlled collection and preserves the caller's size change contract", async () => {
     const user = userEvent.setup(), size = vi.fn();
     function Pages() {

@@ -33,6 +33,7 @@
 .table th.selectionCell { padding-block: var(--xiak-spacing-narrow); }
 .selectionCell > label { display: flex; justify-content: center; min-height: var(--xiak-control-height-small); gap: 0; }
 .selectionCell > label > span:empty { display: none; }
+.mobileSelectionLabel { display: none; }
 .table tr[data-selected="true"] { background: var(--xiak-color-accent-haze); }
 .table tr[data-selected="true"]:hover, .table tr[data-selected="true"]:focus-within { background: var(--xiak-color-accent-haze-hover); }
 .table [data-numeric] { text-align: end; font-variant-numeric: tabular-nums; }
@@ -69,6 +70,48 @@
     overflow: hidden;
     clip-path: inset(50%);
   }
+
+  .table[data-mobile-layout="stack"] thead:has(.selectionCell) {
+    position: static;
+    display: block;
+    width: 100%;
+    height: auto;
+    overflow: visible;
+    clip-path: none;
+  }
+
+  .table[data-mobile-layout="stack"] thead:has(.selectionCell) tr {
+    display: flex;
+    align-items: center;
+    padding-inline: var(--xiak-spacing-default);
+  }
+
+  .table[data-mobile-layout="stack"] thead:has(.selectionCell) th.selectionCell {
+    display: block;
+    width: auto;
+    height: auto;
+    border-bottom: 0;
+    padding: 0;
+  }
+
+  .table[data-mobile-layout="stack"] thead:has(.selectionCell) th:not(.selectionCell) {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    padding: 0;
+    border: 0;
+  }
+
+  .table[data-mobile-layout="stack"] thead .selectionCell > label {
+    align-items: center;
+    justify-content: flex-start;
+    gap: var(--xiak-spacing-tight);
+    min-height: var(--xiak-control-height);
+  }
+
+  .table[data-mobile-layout="stack"] thead .mobileSelectionLabel { display: inline; }
 
   .table[data-mobile-layout="stack"] tr {
     display: grid;
