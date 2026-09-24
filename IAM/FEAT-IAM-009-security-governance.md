@@ -1,6 +1,6 @@
 # FEAT-IAM-009：登录保护与安全治理
 
-- 状态：S1本人会话目录/逐个撤销已验收；S1b一键结束其他登录会话的后端切片也已验收，累计固定`7cf857bba48eb5d7da487162c43e8f52534db133`通过本地真库、保留数据、独立进程、全仓检查及五项独立CI。一般事务分组及失败证据归011，既有Role管理门禁的准备复用归006。S3a登录/改密共享密码尝试已实施，本地回归及固定92e3073的五项独立CI通过，未分配发布revision。S2首次TOTP绑定、登录挑战及强制改密已固定f5cec0e1；在线恢复码重绑后端及其本地数据库/进程/真实邮件证据归下述S2b，该固定源码为IAM38/Audit22，尚无独立CI验收；后继step-up与固定恢复隔离的工作树组合为IAM40/Audit24，仍待累计运行及发布验收。完整S2/S3/S4、UI与009发布均未完成；尚未实现的详细设计路由不是可用API，离线恢复及材料/通知的安装发布前置仍由其真实owner另验。
+- 状态：S1本人会话目录/逐个撤销已验收；S1b一键结束其他登录会话的后端切片也已验收，累计固定`7cf857bba48eb5d7da487162c43e8f52534db133`通过本地真库、保留数据、独立进程、全仓检查及五项独立CI。一般事务分组及失败证据归011，既有Role管理门禁的准备复用归006。S3a登录/改密共享密码尝试已实施，本地回归及固定92e3073的五项独立CI通过，未分配发布revision。S2首次TOTP绑定、登录挑战及强制改密已固定f5cec0e1；在线恢复码重绑后端及其本地数据库/进程/真实邮件证据归下述S2b，该固定源码为IAM38/Audit22，尚无独立CI验收；后继step-up与固定恢复隔离的组合已固定推送b7a70bfa，源码IAM40/Audit24，本地真库/保留数据/独立进程与全仓检查通过，新增邮件、UI、独立CI及发布仍未验收。完整S2/S3/S4、UI与009发布均未完成；尚未实现的详细设计路由不是可用API，离线恢复及材料/通知的安装发布前置仍由其真实owner另验。
 - 依赖：003、005、007。
 - Owner：IAM 身份/凭据/会话治理，Audit evidence。
 
@@ -430,7 +430,7 @@ LoginResponse仍只允许LOGIN挑战；不能因为通用Challenge可以描述RE
 
 #### S2b后继：目的限定step-up与本人恢复码重发
 
-本纵向目标补足一次性十码回包丢失后、用户仍持有有效认证器的安全重发路径；不是管理员恢复、丢失全部材料的旁路或完整S3设置。以下五个HTTP入口、用例、SQL及封闭事实已在工作树接通，仍未固定或验收。结合已冻结的离线恢复隔离后，当前源码为IAM40/Audit24；不能继承前置纯契约、安装分支或旧IAM38/Audit22的验收，也不预分配发布profile/revision。
+本纵向目标补足一次性十码回包丢失后、用户仍持有有效认证器的安全重发路径；不是管理员恢复、丢失全部材料的旁路或完整S3设置。以下五个HTTP入口、用例、SQL及封闭事实已固定推送`b7a70bfa9e53f0a5f16619c60523c84613cb7b0b`，具备下述本地证据，但整片尚未验收。结合已冻结的离线恢复隔离后，当前源码为IAM40/Audit24；不能继承前置纯契约、安装分支或旧IAM38/Audit22的验收，也不预分配发布profile/revision。
 
 StepUp始终由本人非forced、当前有效的PASSWORD_TOTP登录Session持有。原Account/USER、Session、credential generation、factorId/revision及当时有效恢复批次从IAM推导，不能由URL/body选择；ROLE、AccessKey、SERVICE和未登录挑战不能持有。此处不再另发行挑战秘密：公开ID不是能力，每个写请求仍须原有效bearer与锁内证明。原Session认证事实不被再次认证改写，也没有“最近验证过MFA即可任意操作”的缓存。
 
@@ -474,7 +474,9 @@ StepUp始终由本人非forced、当前有效的PASSWORD_TOTP登录Session持有
 
 同一组合另在三个独立空白数据库完成Audit累计race：双authority受限登录/完整攻击面5.64s、固定旧tenant链保留升级0.35s（包9.134s）、Audit HTTP隔离与并发1.27s（包3.844s）。首次运行在初始化readiness检查发现两处旧IAM39断言与实际IAM40不符；只更新准确版本预期，在新库保留原初始化前/后状态、实际函数/权限及不可变记录门禁后通过，未降低生产校验。测试终止且确认无客户端后已正常停止本任务本机PG；先前清理被工具策略拒绝的临时数据/私有文件仍按owner-only权限保留，未绕过重试或操作其他任务资源。
 
-2026-09-24最终全仓默认race（含architecture）及vet通过；模块校验、122个API文件集合及生成字节一致、Linux amd64构建、gofmt与diff检查通过。新增step-up真实门禁实测约六分半，放入现有CI矩阵的独立20分钟lane；四个数据库lane仍max-parallel=1，原storage/runtime各20分钟、自然窗口30分钟及全部单项期限不变，没有把新增工作挤入旧门禁预算。YAML及14段Bash语法检查通过，编译列出的17个IAM真库测试分别归一般存储6、Role1、runtime8、step-up1、自然窗口1，未遗漏或重复；这些检查不等于独立runner执行。默认外部环境SKIP不计验收，真实PG/进程证据仅以上述明确实跑为准，SMTP、浏览器及独立CI仍缺失。本片未固定推送，未修改UI、installation/profile、PaaS或既有canonical拥有者。
+2026-09-24最终全仓默认race（含architecture）及vet通过；模块校验、122个API文件集合及生成字节一致、Linux amd64构建、gofmt与diff检查通过。新增step-up真实门禁实测约六分半，放入现有CI矩阵的独立20分钟lane；四个数据库lane仍max-parallel=1，原storage/runtime各20分钟、自然窗口30分钟及全部单项期限不变，没有把新增工作挤入旧门禁预算。YAML及14段Bash语法检查通过，编译列出的17个IAM真库测试分别归一般存储6、Role1、runtime8、step-up1、自然窗口1，未遗漏或重复；这些检查不等于独立runner执行。默认外部环境SKIP不计验收，真实PG/进程证据仅以上述明确实跑为准，SMTP、浏览器及独立CI仍缺失。本片未修改UI、installation/profile、PaaS或既有canonical拥有者。
+
+固定b7a70bfa的[Verification35953732463](https://github.com/xiak/matrix/actions/runs/35953732463)已经GitHub API核实精确SHA及completed/failure：七项均runner_id=0、steps=0，go的annotation明确账户付款或spending limit阻止启动，未执行测试。不能记作通过或代码回归，不修改billing、不反复重跑不变的外部阻塞。安装与UX/UI只接收固定对象及上述证据边界，不继承验收或发布profile。
 
 安装发布前置仍未完成：旧preparation35/18+r13没有本次purpose executable/SQL，不是新40/24组合可在数据库恢复后才尝试的目标。若产品继续支持恢复到exact signed immediate predecessor，必须先有具备完整恢复ABI、且未验收MFA创建仍关闭的新preparation A，再证明B→A的真实受支持路径；目前没有这样的已验收A/B。此处不分配release profile/revision、不开放跨profile旁路，也不以本地双库事务代替签名备份恢复或任意整机快照防回滚。
 

@@ -3,160 +3,174 @@
 > Non-authoritative portable memory. Validate Git and the owning FEAT.
 
 - Repository https://github.com/xiak/matrix.git, branch feat/iam. Write only
-  this task's independent worktree. Updated 2026-09-21.
+  this task's independent worktree. Updated 2026-09-24.
 - Full IAM goal remains ACTIVE/incomplete. Read AGENTS, IAM/009 for MFA or
   IAM/012 for mail, then owning code/tests. Fixed adoption belongs to
   docs/adoption/FEAT-006-platform-authorities.md, not this checkpoint.
-- Latest fixed/pushed increment:
-  **303093bb945da43eb597f56b52059009580d0da1**. StepUp/regeneration pure
-  contract, original API tests/generator, FEAT009 and adoption only. It does
-  NOT add routes, use cases, SQL, Audit actions, notifications or UI.
-- Latest implemented runtime remains **48e56cbb1d3490ee8cee8314a41cfc26d1f24b2e**,
-  pure-codec parent c13f6d11. Source IAM38/Audit22/PaaS2; release profile/
-  revision unchanged/unallocated. No cross-release acceptance inferred.
-- Exact https://github.com/xiak/matrix/actions/runs/35532968349 completed/
-  failure: all six jobs runner_id=0/steps=0; payment/spending-limit annotation
-  prevented execution. Independent CI is NOT accepted. Previous80's
-  35531111030, 48's
-  35528886088, f5's35520219893 and c13's35521839561 also did not execute.
-  Do not alter billing, weaken tests or repeatedly rerun unchanged blockage.
-  Earlier5e185e95's actual Audit runtime-probe failure remains separate;
-  subsequent local passes do not rewrite it. FEAT owners retain its evidence.
+- Latest implemented and pushed fixed candidate:
+  **b7a70bfa9e53f0a5f16619c60523c84613cb7b0b**, parent81a0dc53.
+  Session-held step-up/recovery-code regeneration plus fixed offline
+  authentication-recovery fence integration. Source IAM40/Audit24/PaaS2;
+  installation/release profile/revision unchanged and not allocated.
+- Exact https://github.com/xiak/matrix/actions/runs/35953732463 is
+  completed/failure. All seven jobs runner_id=0/steps=0; the go annotation
+  explicitly says account payment/spending limit prevented execution.
+  Independent CI is NOT accepted. Do not change billing or repeatedly
+  rerun the unchanged blockage. Older zero-execution runs remain separate
+  from 5e185e95's actual Audit runtime-probe failure.
+- This fixed candidate is not a signed release or complete MFA acceptance.
+  New regeneration SMTP, real UI/browser, independent CI and release
+  recovery remain open, as do remaining009 S2/S3/S4 requirements.
 
-## Current pure step-up contract and next runtime slice
+## Current runtime contract
 
-303093bb defines Session-held nonsecret StepUp, not a new challenge credential
-or bearer. Only RECOVERY_CODES_REGENERATE is declared. Original120s absolute
-expiry, PENDING/PROVED/CONSUMED/EXPIRED with strict timestamp presence/order;
-no extension on proof. Requests accept no user/account/session/factor/batch
-selector. APPLIED has ten unique saved codes once; EQUAL_REPLAY has metadata
-only, not even a null/empty code field. Normal JSON rejects secret carriers;
-explicit codecs own private wire serialization. Login cannot accept StepUp.
+The five routes are now implemented, not merely the prior303 pure types:
+POST /v1/auth/step-up, GET /v1/auth/step-up/by-request/{requestId},
+POST /v1/auth/step-up/{id}:verify,
+POST /v1/auth/recovery-codes:regenerate and
+GET /v1/auth/recovery-codes/regenerations/by-request/{requestId}.
 
-API/full-repository race and architecture, vet, modules,122 tracked API files'
-regeneration set/hashes, Linux amd64 build all passed. Fuzz10s/oneworker,
-176823 executions passed. Full handle31283 and fuzz handle51908 are terminal
-exit0; no new PG/SMTP/browser fixture was created. Local passes are not CI.
+Only RECOVERY_CODES_REGENERATE is supported. A StepUp is held by the
+original current nonforced PASSWORD_TOTP USER Session; it is not a new
+bearer, login challenge, PDP Allow or cached generic permit. It binds
+actual Account/USER/Session/generation, factor/revision, old batch, original
+intent and Account/USER versions. PENDING/PROVED/CONSUMED retain the original
+120-second absolute deadline; reading or proving does not extend it.
+At most three live proofs; shared durable password/OTP budgets remain.
 
-Next: implement the existing009 S2b operation across IAM HTTP/usecase/SQL,
-closed Audit fact and security notice, then actual PG/process/SMTP gates.
-The locked proof binds original current nonforced PASSWORD_TOTP Session,
-USER/Account, generation, factor/revision and old batch. Reauthentication
-uses existing shared durable password/OTP budgets, not another quota/store.
-Regeneration leaves factor revision/password/Session facts/roles unchanged.
-Existing lock_recovery_batch requires batch.event_id=factor.bound_event_id;
-new closed completion provenance and batch termination must preserve old
-binding/recovery evidence, not delete that guard or forge a recovery intent.
-Expected IAM39/Audit23 are only a proposal until actual shapes are verified;
-no release revision/profile is allocated. Installation received this scope
-and fixed303 and was asked to flag offline batch/terminal-shape dependencies.
-It still exclusively owns CLOSED/reconcile/reopen and installation files.
+Unknown creation/verification is queried by original request ID, without
+replaying password/OTP or inferring rollback from NOT_FOUND. APPLIED returns
+ten codes once; EQUAL_REPLAY and completion lookup contain only metadata.
+Another login Session cannot consume the old proof, but a normally
+reauthenticated same USER can read the old regeneration completion.
 
-## Prior retained runtime and CI increment
+Regeneration atomically consumes the exact proof, terminates the exact old
+batch, commits new one-way verifiers/completion/outbox/notification.
+Factor revision, password, Session facts and roles remain unchanged.
+Only iam.recovery-codes.regenerated and RECOVERY_CODES_REGENERATED mail
+were added for this online mutation; original binding event remains.
 
-Fixed **80a6e6d18288df7f5d89ffee40722ee9aa614ee7**:
+New step_up files stay under existing HTTP/usecase/PostgreSQL owners.
+000012 owns proof24cols/completion11cols plus precise constraints/RLS/ACL.
+ServiceIdentity, lookup_service5, claim7, lookup_session24, revoke_session6,
+record9/contract4/evidence5, mailclaim18 and old canonical bytes stay intact.
+Standard OTP math remains pquerna/otp1.5.0; no second HMAC/OTP algorithm.
 
-Existing integration owner now separates TestIAMTOTPRecoveryExhaustionPostgres
-from the original TestIAMTOTPEnrollmentPostgres via one shared fixture.
-No production budgets, clock, password cost or positive consumption rows
-are changed. Actual PG18.6, API role, two Authority handlers in one process:
+## Fixed recovery integration and ownership
 
-- Ten original saved codes consumed through HTTP handlers over three shared
-  windows, crossing two real ten-minute intervals. Race passed1229.25s,
-  exhaustion subcase1202.09s/package1232.773s. Exhaustion still permits exact
-  metadata lookup, but used code401 grants no new intent/Session/completion.
-  The current tenth ceremony can finish; old ten consumed/new ten unconsumed,
-  nine SUPERSEDED/one COMPLETED, ten start facts/one completion/eleven notices,
-  and normal password+new-factor login all proved. Not an SMTP/browser gate.
-- A second fresh DB reran original enrollment/recovery:66.03s/package69.540s,
-  original3m context,41 schema damage cases, all non-mail recovery cases and
-  actual USER lock expiry31.34s. Two SMTP subcases explicitly SKIP; do not
-  inherit prior real mailbox results as this run's evidence.
-- Both used exact Go source blob67fa7c06dd7caf9b2a2e29d61f00764ea658e32c.
-  Go1.26.7/GOMAXPROCS2/GOMEMLIMIT512MiB, race-p1 runtime; PG1CPU/1GiB/Pids192,
-  max_connections16. Full default race/architecture, vet, modules, gofmt and
-  diff checks passed afterward. Default external SKIPs are not runtime proof.
-- Original storage/runtime CI lanes remain20m. New recovery-window lane30m,
-  Go27m/context25m for natural-time gate only. All three lanes max-parallel1;
-  aggregate closes on any failure/cancel/skip. YAML and13 Bash blocks checked;
-  actual compiled15 tests assigned once:general5/Role1/runtime8/window1.
-- Both real test handles and full checks terminated successfully. After no
-  DB clients remained, exact owned temporary PG container and empty network
-  removed; task labels show zero containers/networks/volumes. No live fixture
-  or test session remains from this milestone. No shared or remote changes.
-  Earlier policy-denied temporary-directory cleanup is NOT retried/bypassed.
+ADAPT donor a4cbd18598099751eb1bd3eac896e191db474524 only: private
+installation codec, dedicated local executable/role/use case,000014
+CLOSED/reconcile/reopen and immutable fences. Existing
+iam.login_session_contract_ready() remains; donor-base removal was rejected.
+No installation CLI/profile/PaaS/UI source or foreign acceptance imported.
 
-## Fixed online recovery contract and prior evidence
+Ordinary identity transactions hold OPEN shared authority; CLOSED excludes
+new authentication mutations. Exact historical local-password recovery
+receipts retain their purpose-limited transaction path. Reopen generation
+and immutable fences prevent old Session/proof/batch revival. The new
+process is not a generic online recovery/grant/backup endpoint.
 
-48e56cbb's three strict no-bearer routes are in IAM/009 S2b recovery:
-:recover, :confirm-recovery and :recovery-result under auth/challenges/{id}.
-Current LOGIN proof plus an original saved code starts irreversible recovery;
-old factor/sessions/challenges end, original LOGIN deadline is retained.
-Confirmation issues new ten codes once and REAUTHENTICATE, not a Session.
-Unknown replies never replay secrets/refund codes; current password proof can
-inspect original nonsecret metadata. No password/forced/role/contact change.
-LOGIN/RECOVER requires exact original recovery lineage, not a loose state flag.
+Installation task01a04149-5dbb-7300-9e4c-31d9e85c8ada owns signed
+consumer, journal, keys/mounts, release/profile and actual restore. It has
+received fixedb7 plus exact local evidence/gaps. Its consumer05b23417 is
+not imported. Old preparation35/18+r13 cannot serve as a target lacking
+the purpose executable/SQL. A new preparation A and enabling B require
+actual signed B-to-A restore and exact ABI/profile evidence. Proposed
+numbers are not allocated here; do not import installation PaaS6/profile.
 
-IAM38 narrow read/start/confirm/inspect functions are5/17/10/4 args,jsonb.
-USER-self tenant facts recovery-started/recovered and original-recipient
-RECOVERY_STARTED/AUTHENTICATOR_RECOVERED mail. Preserve ServiceIdentity,
-lookup_service5, Audit claim7, lookup_session24, revoke_session6, oldcanonical,
-record9/contract4/evidence5 and private mailclaim18. No new hash/dispatcher.
+## Current local evidence at fixedb7
 
-FEAT009/012 retain prior local evidence: real Postfix recovery and disabled
-USER historical delivery; independent IAM pair/Audit/PaaS/two dispatchers
-with actual post-commit TCP loss, three restarts and complete history chain;
-actual fixedf5 IAM37 executable retained MFA→38 including completed recovery
-followed by double migration/bootstrap/restart without resurrection; selected
-IAM32/36 predecessors. Those remain scoped source/database evidence, not
-full release/profile/UI acceptance or a requirement to replay every schema.
+Go1.26.7/GOMAXPROCS2/GOMEMLIMIT512MiB; real gates serial race-p1.
+Owned Windows portable PG18.6 had Windows Job hard2logicalCPU/1GiB/24
+processes,16connections/64MiB shared_buffers/4MiB work_mem/no parallel workers.
+It was normally stopped after zero-client verification. No Docker/shared
+or remote service restart. Do not retry any policy-denied temp cleanup.
 
-Next backend work remains009 S2 step-up runtime, restricted first forced enrollment,
-S3 settings/expiry and S4 governance; full UI and release gates remain open.
-Standard OTP math uses pquerna/otp1.5.0; MATRIX owns custody, replay/budgets
-and transaction policy, not another HMAC/OTP implementation.
+- TestIAMStepUpPostgres395.18s/package398.640:56 real schema/permission
+  damage cases,9online scenarios. Two independent PROVED on same old batch
+  race58.61s:one APPLIED10codes,one401,one completion/fact/notice/livebatch;
+  losing proof not consumed. Original120s lock-expiry121.23s, sameproof
+  duplicate, budgets, anotherSession,logout/change/reset/disable/enable,
+  terminal rollback and real new-code recovery all retained.
+  historical-regeneration-mail explicitly SKIP, not SMTP evidence.
+- TestIndependentIAMAuditAndPaaSProcesses143.01s/package146.381:
+  actual restricted logins,twoIAM/Audit/PaaS/dispatchers,create/prove/
+  regenerate each actual commit then lost TCP response, restarts, original
+  metadata and explicit replacement, disabled USER history/replay/chain.
+  New step-up USER is independently created/bound/logged in to avoid
+  sharing the original login-race USER's real budget; no window changes.
+  Synthetic contact-code custody fixture is NOT SMTP/browser evidence.
+- Actual fixedf5cec0e132ad18900d9a5a5629eae04fda4817f1 IAM37 executable
+  retained MFA to40:43.21s/package46.723. Double migrations/bootstrap/
+  restarts preserve original factor,consumption,batch,Session/challenge,
+  receipt/canonical/proof; original savedcode still completes recovery.
+  Completed state then survives another replay/restart without revival.
+  Whole-row JSON snapshot wrongly counted new NULL provenance as mutation;
+  replaced with explicit original facts and separate no-invented-authority
+  assertions, not a production relaxation or release compatibility claim.
+- TestIAMAuthenticationRecoveryPostgres86.74s/package90.279:two separately
+  prepared source/restored DBs,current PROVED beforeclose,CLOSED denial,
+  old/newSession cannot consume prior proof afterreopen,newproof cannot
+  use fenced batch,migration no revival. NOT actual pg_dump or signed CLI.
+- Final Audit storage5.64s,oldtenant chain0.35s/package9.134;HTTP isolation/
+  concurrency1.27s/package3.844. Initial stale IAM39 readiness expectations
+  failed; two exact expected numbers corrected to40 and fresh DBs passed,
+  all original shape/privilege/immutable-history assertions retained.
+- TestStepUpStopsAtUnknownAdmissionOrChangedCaller10cases6.80s:
+  uncertain password/OTP reservation or rejection commit,stage-to-stage
+  Session revoke/generation change,denial/no extra seed/proof/free attempt
+  and workslot release. Control-flow evidence only; PG proves durability.
+- Final full default race/architecture and vet passed, including terminal
+  full-session5899. Modules verified,122API tracked file set/hash stable
+  aftergeneration,all packages Linuxamd64 build,gofmt,diff passed.
+  Latest Audit edit also realrace/vet passed; default externalSKIPs not
+  substituted for any runtime result.
+- CI YAML and14Bash blocks parse. Four DB lanes remain max-parallel1;
+  storage/runtime/step-up each20m, natural-window30m.17 compiled IAM
+  fixtures mapped once:general6,Role1,runtime8,step-up1,window1.
+  Moving new6.5min gate avoids spending an existing lane's deadline;
+  original test deadlines, production windows/costs remain unchanged.
 
-## Shared ownership and fixed UI review
+Prior fixed48e56cbb online recovery and80a6e6d1 ten-code natural-window
+exhaustion remain scoped evidence in009. Prior real Postfix recovery mail
+does not prove the new regeneration template/delivery. Actual pg_dump
+custody proof remains with its original gate, not the doubleDB substitute.
 
-Installation01a04149-5dbb-7300-9e4c-31d9e85c8ada exclusively owns offline
-close-before-restore/reconcile/one-time-reopen, including
-api/adapter/installation/v1.AuthenticationRecoveryClosure and installation/
-release/profile/CLI/journal. It has fixed48 and exact shapes/evidence/gaps.
-Do not edit those or import its PaaS6, WIP, host files, profile or acceptance.
+## Next delivery work
 
-UX/UI01a07b21-9a0d-7fd0-b090-7827ce18262e owns ALL UI on its own branch.
-Fixed3c9a49fb251ceb80331b611b76843233ad1dafd1 added the recovery client.
-Read-only review found precommit confirm loss could loop after LOGIN/RECOVER,
-pending A recovery could affect B login, and first-enrollment unknown intent
-was lost on content remount without by-request lookup. UX then fixed these in
-**d7d6333d135a65648269443789799d1fccf0b638**, doc689305d8. Read-only review of
-that fixed diff and its five added tests confirms the intended branches:
-fresh LOGIN/RECOVER inspects original nonsecret result; loginName isolation;
-Session-owned enrollment intent survives content remount and requires exact
-query/cancel before restart, while404 remains unknown. No seed/code replay.
-UX reports657 frontend tests and539px MOCK; those are NOT executed or accepted
-as real UI/browser gates here. No UI was imported. Do not read WIP or build a
-parallel UI. Other Role/IdP MOCK/LIVE reports also remain candidates.
+Read009/012 owners first. Complete the existing step-up historical mail
+branch with a dedicated bounded actual Postfix and worker; Docker was
+unavailable at last probe, do not start/restart shared services or use a
+personal mailbox. No fake SMTP can close that gate.
 
-UX asked about a product-declaration publishing workspace. Replied from fixed
-80a6e6d1/001/008: immutable AuthorizationProfile and exact revision/digest plus
-GET /v1/authorization-profiles under iam.policy.list exist. There is NO fixed
-online Profile draft/validate/publish workflow or management permission name.
-Keep proposal MOCK-only; pure Go validation is not a trusted publication,
-platform/admin/service identity is not publishing authority, and a catalog
-is neither permission nor proof a product PEP is implemented. No new API was
-promised merely to serve a MOCK design. Online registration remains001/008.
+Do not stop overall goal at this candidate. Remaining009 includes forced
+first enrollment,legal factor replacement/removal,security-settings CAS/
+two approved tenant actions and Session/Role barrier,S3 rules/expiry,
+S4 governance; exact FEAT scope and cross-owner prerequisites remain
+authoritative. New shared surface must be aligned, not silently expanded.
+UI/real browser and signed release recovery remain separate owner gates.
 
-UX then fixed **5114dda3f03615532e179f463db041439dfc47bf**, docs2ad6b016:
-preview-only internal onboarding review, existing catalog metadata, no writer
-or live entry, final publish always disabled. Read-only fixed diff review
-confirmed these boundaries. Sent one missing checklist item: per-Action
-subjectTypes/userAuthenticationMethods and sealed absence ceilings; USER
-does not automatically mean ACCESS_KEY or ROLE. No UI source was imported
-or browser/test results inherited. UX also received303 as design-only types,
-explicitly not a signal to enable live routes before the atomic runtime gate.
+## UI coordination
 
-Only fixed-object exchange. Git identity Xiak <Jellal@aliyun.com> locally.
-No extra agents/tasks, foreign worktree writes, remote1.3/.160/.161 or withdrawn
-GitLab/1.5 work, global settings, Docker/WSL/system restart or prune. Unique
-bounded fixtures, Markdown only; no personal mailboxes.
+All UI task01a07b21-9a0d-7fd0-b090-7827ce18262e, branch
+feat/cloud-console-ux. Fixed objects only; never read/copy its WIP.
+It received b7 and will treat it as development integration, not release
+permission; current priority is its existing IAM006 Role LIVE slice,
+then009 step-up client. Do not replace or parallel-implement UI here.
+
+Fixedc5ec1f945cdcd7af61941aafed8da4d7e68f839c read-only focused review
+passed navigation intent P1:AccountAccessProvider survives keyed view
+remount and owns the revocation intent; Session identity binds visibility,
+async update checks original request ID. No local UI import/build/browser
+claim. Nonblocking test strengthening requested:capture the actual A
+callback/promise, create B's own intent before A settles, prove it unchanged.
+
+Earlier fixedd7d6333d's recovery unknown-result/loginName isolation and
+enrollment intent ownership reviewed; product-onboarding5114dda3 remains
+MOCK/preview only. No online Profile publishing API promised from catalog
+metadata. Consumer evidence never transfers into this branch's acceptance.
+
+Git local identity Xiak <Jellal@aliyun.com>. Markdown only. No extra agents/
+tasks,foreign worktree writes,remote1.3/.160/.161 or withdrawn GitLab/1.5,
+global settings,sharedDocker/WSL/system restart or prune. Unique bounded
+fixtures; no personal mailboxes; no cleanup-policy bypass.
