@@ -6,7 +6,7 @@
 - Updated: 2026-09-24
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `a2366dda` (documentation: `9481f436`)
+- Pushed UI source: `49bc9722`
 
 ## Authoritative route
 
@@ -33,12 +33,13 @@ with another branch's renderer or inherit that branch's UI acceptance.
 
 The current milestone preserves the purpose-limited recovery-code client,
 strict LIVE read-only Account MFA settings and independent MOCK security surface.
-The MOCK Account-rule response-lost path requires normal TOTP re-login before
-original-request inspection. The Account overview now separates preview Session
-issuance from unknown Key, Role and business-use evidence, and the allowlisted
-MOCK report retains collection gaps. Real settings update and S4 report APIs
-remain unavailable in LIVE. The complete shared gates passed. Detailed contract
-behavior, evidence and real-process limitations remain only in the FEAT owners.
+It adds isolated MOCK active authenticator replacement with a fixed proof
+deadline, old-factor preservation until confirmation and real preview-code
+rotation. The Account-rule response-lost path still requires normal TOTP
+re-login before original-request inspection. LIVE authenticator replacement,
+settings update and S4 report APIs remain unavailable. The complete shared
+gates passed. Detailed contract behavior, evidence and real-process limitations
+remain only in the FEAT owners.
 
 ## Continuation
 
