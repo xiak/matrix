@@ -541,6 +541,14 @@ and [Verification 36053002247](https://github.com/xiak/matrix/actions/runs/36053
 passed for `397d5952`; this is test-resource safety evidence, not the final
 combined signed release gate.
 
+The authority-process fixture at `d078d456` serializes the actual copied
+PostgreSQL host, port and database into each restricted runtime DSN, removing
+query selectors that could silently route a restore test back to its source.
+[Verification 36055308970](https://github.com/xiak/matrix/actions/runs/36055308970)
+passed Go, UI, authority-process and node-process for that exact source. This
+fixes test targeting; only the forthcoming populated v5 restore can prove the
+new recovery behavior.
+
 ## Incremental acceptance
 
 ### Gate A: release and CLI contract

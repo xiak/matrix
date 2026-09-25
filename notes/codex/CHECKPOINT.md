@@ -5,9 +5,11 @@
 - Updated: 2026-09-25
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/phase3-mfa-enabling`
-- Pushed milestone: `397d5952` (native one-time join cleanup survives a
-  canceled gate, reports remote failure and passed Linux race plus independent
-  [Verification 36053002247](https://github.com/xiak/matrix/actions/runs/36053002247))
+- Pushed milestone: `d078d456` (real database-target runtime DSN fixture,
+  independently verified by
+  [Verification 36055308970](https://github.com/xiak/matrix/actions/runs/36055308970))
+- Native one-time join cleanup: `397d5952`, independently verified by
+  [Verification 36053002247](https://github.com/xiak/matrix/actions/runs/36053002247).
 - Earlier bounded authentication-recovery snapshot consumer: `8028738c`,
   independently verified by
   [Verification 36049571005](https://github.com/xiak/matrix/actions/runs/36049571005).
