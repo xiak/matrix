@@ -42,7 +42,7 @@ export type GroupPolicyRecord = {
 export type GroupDetailRecord = GroupDirectoryRecord & {
   members: GroupMemberRecord[];
   policies: GroupPolicyRecord[];
-  membersAvailability?: "ready" | "loading" | "forbidden" | "error";
+  membersAvailability?: "ready" | "loading" | "refreshing" | "forbidden" | "error";
   membersError?: string;
 };
 
@@ -183,9 +183,10 @@ export function GroupDetail({ group, controls, onBack, onOpenMember, onOpenPolic
         {group.membersAvailability === "loading" ? <TableSkeleton label={g("loadingMembers")} rows={3} header={false} />
           : group.membersAvailability === "forbidden" ? <EmptyState title={g("membersUnavailable")} description={g("membersUnavailableHint")} />
           : group.membersAvailability === "error" ? <EmptyState title={g("membersLoadFailed")} description={group.membersError ?? g("membersLoadFailedHint")} action={<GroupActionButton control={controls.retryMembers} variant="secondary">{g("retry")}</GroupActionButton>} />
-          : group.members.length
-          ? <GroupMemberTable members={group.members} onOpen={onOpenMember} />
-          : <EmptyState title={g("noMembers")} description={g("noMembersHint")} />}
+          : <>{group.membersAvailability === "refreshing" ? <Alert status="info">{g("refreshingMembers")}</Alert> : null}
+            {group.members.length
+              ? <GroupMemberTable members={group.members} onOpen={onOpenMember} />
+              : <EmptyState title={g("noMembers")} description={g("noMembersHint")} />}</>}
         <GroupActionButton control={controls.loadMoreMembers} variant="secondary">{g("loadMoreMembers")}</GroupActionButton>
       </Tabs.Content>
       <Tabs.Content className={styles.stack} value="policies">

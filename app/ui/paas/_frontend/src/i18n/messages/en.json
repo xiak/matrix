@@ -2310,6 +2310,7 @@
     "loadingGroups": "Loading groups…",
     "loadingGroup": "Loading group details…",
     "loadingMembers": "Loading member relationships…",
+    "refreshingMembers": "Refreshing member relationships; changes are unavailable until this finishes.",
     "directoryUnavailable": "Groups are unavailable",
     "membersUnavailable": "Member relationships are unavailable",
     "membersUnavailableHint": "Your current identity cannot list this group's membership relationships.",

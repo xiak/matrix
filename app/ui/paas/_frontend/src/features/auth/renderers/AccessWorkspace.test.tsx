@@ -12,7 +12,7 @@ import { createPreviewAccessWorkspace } from "../repositories/previewAccessWorks
 import { PolicyDocumentViewer } from "./PolicyDocumentViewer";
 import type { PolicyDocument } from "../domain/policyDocument";
 import { AccountAccessRenderer } from "./AccountAccessRenderer";
-import { GroupDirectory } from "./GroupAccessWorkspace";
+import { GroupDetail, GroupDirectory } from "./GroupAccessWorkspace";
 import { AccessReports } from "./AccessReports";
 import { buildAccessActivityObservations, buildAccessReport, buildAccessSecuritySnapshot } from "../scenes/accessReport";
 import { buildAccountAccessScene } from "../scenes/accountAccessScene";
@@ -1504,6 +1504,21 @@ describe("CAM-style access workspace", () => {
     expect(within(table).getByRole("columnheader", { name: "直接关联策略" })).toBeTruthy();
     expect(within(table).getByText("2 项直接关联")).toBeTruthy();
   });
+  it("keeps already loaded group members visible during refresh but not after a failed authoritative read", () => {
+    const detail = {
+      id: "group-refetch", name: "RefetchTeam", description: "", createdAt: "2026-09-11T08:00:00Z", directPolicyCount: 0,
+      members: [{ id: "membership-lin", userId: "principal-lin", name: "lin", identityType: "child" as const }], policies: []
+    };
+    const renderDetail = (availability: "refreshing" | "error") => <LocaleProvider><GroupDetail
+      group={{ ...detail, membersAvailability: availability }} controls={{}} onBack={vi.fn()} onOpenMember={vi.fn()} onOpenPolicy={vi.fn()}
+    /></LocaleProvider>;
+    const { rerender } = render(renderDetail("refreshing"));
+    expect(screen.getByText("正在更新成员关系；更新完成前暂不可修改。")).toBeTruthy();
+    expect(within(screen.getByRole("table", { name: "成员" })).getByRole("button", { name: "lin" })).toBeTruthy();
+    rerender(renderDetail("error"));
+    expect(screen.queryByRole("table", { name: "成员" })).toBeNull();
+    expect(screen.getByText("成员关系暂时无法载入")).toBeTruthy();
+  });
   it("reveals the live group object before its membership relationship page finishes", async () => {
     const liveGroup: GroupAccess = {
       group: { id: "group-progressive", accountId: account.id, name: "ProgressiveTeam", description: "Group facts load independently", resourceVersion: 1, createdAt: "2026-09-11T08:00:00Z", updatedAt: "2026-09-11T08:00:00Z" },
@@ -1557,6 +1572,34 @@ describe("CAM-style access workspace", () => {
     expect(getGroup).toHaveBeenCalledTimes(1);
     expect(listGroupMemberships).toHaveBeenCalledTimes(2);
   });
+  it("does not keep stale group controls or members after an authoritative group refresh fails", async () => {
+    const liveGroup: GroupAccess = {
+      group: { id: "group-stale", accountId: account.id, name: "StaleTeam", description: "Before update", resourceVersion: 1, createdAt: "2026-09-11T08:00:00Z", updatedAt: "2026-09-11T08:00:00Z" },
+      policyAttachments: [], capabilities: [
+        capability("iam.group.read", "GROUP", "group-stale"),
+        capability("iam.group.update", "GROUP", "group-stale"),
+        capability("iam.group-membership.list", "GROUP", "group-stale")
+      ]
+    };
+    const getGroup = vi.fn().mockResolvedValueOnce(liveGroup).mockRejectedValueOnce(new Error("authoritative read failed"));
+    const { user } = await open("groups", { live: true, repository: {
+      listGroups: vi.fn().mockResolvedValue({ items: [liveGroup], nextAfter: null }),
+      getGroup,
+      listGroupMemberships: vi.fn().mockResolvedValue({ accountId: account.id, groupId: liveGroup.group.id, items: [{
+        membership: { id: "membership-lin", accountId: account.id, groupId: liveGroup.group.id, userId: "principal-lin", createdBy: rootUser.id, resourceVersion: 1, createdAt: "2026-09-11T08:00:00Z", updatedAt: "2026-09-11T08:00:00Z" },
+        capabilities: []
+      }], nextAfter: null }),
+      updateGroup: vi.fn().mockResolvedValue({ ...liveGroup.group, resourceVersion: 2 })
+    } });
+    await user.click(within(await screen.findByRole("table", { name: "用户组" })).getByRole("button", { name: "StaleTeam" }));
+    expect(within(await screen.findByRole("table", { name: "成员" })).getByRole("button", { name: "lin" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "编辑" }));
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(getGroup).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText("对象不可用")).toBeTruthy();
+    expect(screen.queryByRole("table", { name: "成员" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "编辑" })).toBeNull();
+  });
   it("uses the fixed live group contract without inventing totals and retries one unchanged relation intent", async () => {
     const liveGroup: GroupAccess = {
       group: { id: "group-live", accountId: account.id, name: "LiveOperators", description: "Backend-owned group", resourceVersion: 4, createdAt: "2026-09-11T08:00:00Z", updatedAt: "2026-09-11T08:00:00Z" },
@@ -1576,9 +1619,10 @@ describe("CAM-style access workspace", () => {
     });
     const lin = membership("membership-lin", "principal-lin");
     const chen = membership("membership-chen", "principal-chen");
+    let resolveRefresh!: (page: { accountId: string; groupId: string; items: GroupMembershipAccess[]; nextAfter: null }) => void;
     const listMemberships = vi.fn()
       .mockResolvedValueOnce({ accountId: account.id, groupId: liveGroup.group.id, items: [lin], nextAfter: null })
-      .mockResolvedValueOnce({ accountId: account.id, groupId: liveGroup.group.id, items: [lin, chen], nextAfter: null });
+      .mockImplementationOnce(() => new Promise<{ accountId: string; groupId: string; items: GroupMembershipAccess[]; nextAfter: null }>((resolve) => { resolveRefresh = resolve; }));
     const createMembership = vi.fn()
       .mockRejectedValueOnce(new Error("unknown outcome"))
       .mockResolvedValueOnce(chen.membership);
@@ -1608,6 +1652,12 @@ describe("CAM-style access workspace", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(createMembership).toHaveBeenCalledTimes(2);
     expect(createMembership.mock.calls[1]?.[3]?.requestId).toBe(retained);
+    expect(screen.getByText("正在更新成员关系；更新完成前暂不可修改。")).toBeTruthy();
+    expect(within(screen.getByRole("table", { name: "成员" })).getByRole("button", { name: "lin" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "移除成员" }).hasAttribute("disabled")).toBe(true);
+    await act(async () => { resolveRefresh({ accountId: account.id, groupId: liveGroup.group.id, items: [lin, chen], nextAfter: null }); });
+    expect(within(screen.getByRole("table", { name: "成员" })).getByRole("button", { name: "chen" })).toBeTruthy();
+    expect(screen.queryByText("正在更新成员关系；更新完成前暂不可修改。")).toBeNull();
     expect(screen.getByRole("tab", { name: "成员" })).toBeTruthy();
     expect(screen.queryByRole("tab", { name: "成员 (2)" })).toBeNull();
   });

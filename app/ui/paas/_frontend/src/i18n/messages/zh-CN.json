@@ -2310,6 +2310,7 @@
     "loadingGroups": "正在读取用户组…",
     "loadingGroup": "正在读取用户组详情…",
     "loadingMembers": "正在读取成员关系…",
+    "refreshingMembers": "正在更新成员关系；更新完成前暂不可修改。",
     "directoryUnavailable": "暂时无法读取用户组",
     "membersUnavailable": "无法读取成员关系",
     "membersUnavailableHint": "当前身份没有列出该用户组成员关系的权限。",

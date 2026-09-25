@@ -250,8 +250,8 @@ function LiveGroupWorkspace({ client, entityId, scene, onOpen }: {
   const [access, setAccess] = useState<GroupAccess | null>(null);
   const [memberships, setMemberships] = useState<GroupMembershipAccess[]>([]);
   const [nextAfter, setNextAfter] = useState<string | null>(null);
-  const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
-  const [membersPhase, setMembersPhase] = useState<"loading" | "ready" | "forbidden" | "error">("loading");
+  const [phase, setPhase] = useState<"loading" | "refreshing" | "ready" | "error">("loading");
+  const [membersPhase, setMembersPhase] = useState<"loading" | "refreshing" | "ready" | "forbidden" | "error">("loading");
   const [membersError, setMembersError] = useState<string | null>(null);
   const [pageError, setPageError] = useState<string | null>(null);
   const [change, setChange] = useState<GroupChange | null>(null);
@@ -259,21 +259,25 @@ function LiveGroupWorkspace({ client, entityId, scene, onOpen }: {
   const [deleting, setDeleting] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
 
-  const applyFailure = useCallback((failure: unknown, initial: boolean) => {
+  const applyFailure = useCallback((failure: unknown) => {
     setPageError(a(`errors.${accountError(failure)}`));
-    if (initial) setPhase("error");
+    setPhase("error");
   }, [a]);
 
-  const loadMemberships = useCallback(async (currentAccess: GroupAccess) => {
+  const loadMemberships = useCallback(async (currentAccess: GroupAccess, refresh = false) => {
     const version = ++membershipRequestVersion.current;
-    setMemberships([]);
-    setNextAfter(null);
+    if (!refresh) {
+      setMemberships([]);
+      setNextAfter(null);
+    }
     setMembersError(null);
     if (groupCapability(currentAccess, "iam.group-membership.list")?.available !== true) {
+      setMemberships([]);
+      setNextAfter(null);
       setMembersPhase("forbidden");
       return;
     }
-    setMembersPhase("loading");
+    setMembersPhase(refresh ? "refreshing" : "loading");
     try {
       const page = await client.listMemberships(entityId);
       if (version !== membershipRequestVersion.current) return;
@@ -290,16 +294,17 @@ function LiveGroupWorkspace({ client, entityId, scene, onOpen }: {
   const load = useCallback(async (initial = false) => {
     const version = ++requestVersion.current;
     membershipRequestVersion.current += 1;
+    setPhase(initial ? "loading" : "refreshing");
     try {
       const nextAccess = await client.get(entityId);
       if (version !== requestVersion.current) return;
       setPageError(null);
       setAccess(nextAccess);
       setPhase("ready");
-      void loadMemberships(nextAccess);
+      void loadMemberships(nextAccess, !initial);
     } catch (failure) {
       if (version !== requestVersion.current) return;
-      applyFailure(failure, initial);
+      applyFailure(failure);
     }
   }, [applyFailure, client, entityId, loadMemberships]);
 
@@ -313,7 +318,7 @@ function LiveGroupWorkspace({ client, entityId, scene, onOpen }: {
       setPhase("ready");
       void loadMemberships(nextAccess);
     }, (failure: unknown) => {
-      if (version === requestVersion.current) applyFailure(failure, true);
+      if (version === requestVersion.current) applyFailure(failure);
     });
     return () => {
       requestVersion.current += 1;
@@ -365,8 +370,9 @@ function LiveGroupWorkspace({ client, entityId, scene, onOpen }: {
   const listMembers = groupCapability(access, "iam.group-membership.list");
   const addMember = groupCapability(access, "iam.group-membership.create");
   const addPolicy = groupCapability(access, "iam.group-policy-attachment.create");
-  const removableMembers = memberships.some((entry) => findActionCapability(entry.capabilities, "iam.group-membership.remove", "GROUP_MEMBERSHIP", entry.membership.id)?.available === true);
+  const removableMembers = membersPhase === "ready" && memberships.some((entry) => findActionCapability(entry.capabilities, "iam.group-membership.remove", "GROUP_MEMBERSHIP", entry.membership.id)?.available === true);
   const removablePolicies = access.policyAttachments.some((attachment) => findActionCapability(access.capabilities, "iam.group-policy-attachment.revoke", "POLICY_ATTACHMENT", attachment.id)?.available === true);
+  const refreshingGroup = phase === "refreshing";
   const stale = () => { setEditing(false); setDeleting(false); setChange(null); setPageError(a("errors.conflict")); void load(); };
 
   return <>
@@ -374,14 +380,14 @@ function LiveGroupWorkspace({ client, entityId, scene, onOpen }: {
     <GroupDetail
       group={record}
       controls={{
-        edit: { disabled: edit?.available !== true, reason: edit?.restrictionReason ?? undefined, onInvoke: () => setEditing(true) },
-        delete: { disabled: remove?.available !== true, reason: remove?.restrictionReason ?? undefined, onInvoke: () => setDeleting(true) },
-        addMember: { disabled: membersPhase !== "ready" || addMember?.available !== true || !scene.users.some((user) => !memberships.some((entry) => entry.membership.userId === user.id)), reason: membersPhase === "loading" ? t("loadingMembers") : membersPhase === "error" ? t("membersLoadFailed") : listMembers?.restrictionReason ?? addMember?.restrictionReason ?? undefined, onInvoke: () => setChange({ kind: "members", mode: "add" }) },
-        removeMember: { disabled: !removableMembers, reason: membersPhase === "loading" ? t("loadingMembers") : membersPhase === "error" ? t("membersLoadFailed") : listMembers?.restrictionReason ?? undefined, onInvoke: () => setChange({ kind: "members", mode: "remove" }) },
-        addPolicy: { disabled: addPolicy?.available !== true || !scene.policies.some((policy) => policy.scopeKind === "tenant" && policy.available && !access.policyAttachments.some((attachment) => attachment.policyId === policy.id)), reason: addPolicy?.restrictionReason ?? undefined, onInvoke: () => setChange({ kind: "policies", mode: "add" }) },
-        removePolicy: { disabled: !removablePolicies, onInvoke: () => setChange({ kind: "policies", mode: "remove" }) },
-        retryMembers: membersPhase === "error" ? { onInvoke: () => { void loadMemberships(access); } } : undefined,
-        loadMoreMembers: membersPhase === "ready" && nextAfter ? { disabled: loadingMore, onInvoke: async () => {
+        edit: { disabled: refreshingGroup || edit?.available !== true, reason: refreshingGroup ? t("loadingGroup") : edit?.restrictionReason ?? undefined, onInvoke: () => setEditing(true) },
+        delete: { disabled: refreshingGroup || remove?.available !== true, reason: refreshingGroup ? t("loadingGroup") : remove?.restrictionReason ?? undefined, onInvoke: () => setDeleting(true) },
+        addMember: { disabled: refreshingGroup || membersPhase !== "ready" || addMember?.available !== true || !scene.users.some((user) => !memberships.some((entry) => entry.membership.userId === user.id)), reason: refreshingGroup ? t("loadingGroup") : membersPhase === "loading" || membersPhase === "refreshing" ? t("loadingMembers") : membersPhase === "error" ? t("membersLoadFailed") : listMembers?.restrictionReason ?? addMember?.restrictionReason ?? undefined, onInvoke: () => setChange({ kind: "members", mode: "add" }) },
+        removeMember: { disabled: refreshingGroup || !removableMembers, reason: refreshingGroup ? t("loadingGroup") : membersPhase === "loading" || membersPhase === "refreshing" ? t("loadingMembers") : membersPhase === "error" ? t("membersLoadFailed") : listMembers?.restrictionReason ?? undefined, onInvoke: () => setChange({ kind: "members", mode: "remove" }) },
+        addPolicy: { disabled: refreshingGroup || addPolicy?.available !== true || !scene.policies.some((policy) => policy.scopeKind === "tenant" && policy.available && !access.policyAttachments.some((attachment) => attachment.policyId === policy.id)), reason: refreshingGroup ? t("loadingGroup") : addPolicy?.restrictionReason ?? undefined, onInvoke: () => setChange({ kind: "policies", mode: "add" }) },
+        removePolicy: { disabled: refreshingGroup || !removablePolicies, reason: refreshingGroup ? t("loadingGroup") : undefined, onInvoke: () => setChange({ kind: "policies", mode: "remove" }) },
+        retryMembers: !refreshingGroup && membersPhase === "error" ? { onInvoke: () => { void loadMemberships(access); } } : undefined,
+        loadMoreMembers: !refreshingGroup && membersPhase === "ready" && nextAfter ? { disabled: loadingMore, onInvoke: async () => {
           if (!nextAfter || loadingMore) return;
           const version = membershipRequestVersion.current;
           setLoadingMore(true);
@@ -435,7 +441,7 @@ export function AccountLiveGroups({ client, entityId, scene, onCreate, onOpen }:
     return () => { current = false; };
   }, [a, client, entityId]);
 
-  if (entityId) return <LiveGroupWorkspace client={client} entityId={entityId} scene={scene} onOpen={onOpen} />;
+  if (entityId) return <LiveGroupWorkspace key={entityId} client={client} entityId={entityId} scene={scene} onOpen={onOpen} />;
   if (phase === "loading") return <PageSkeleton label={t("loadingGroups")} layout="access" />;
   if (phase === "error") return <EmptyState title={t("directoryUnavailable")} description={error ?? undefined} action={<Button variant="secondary" onClick={() => { setPhase("loading"); client.list().then((page) => { setGroups(page.items); setNextAfter(page.nextAfter); setPhase("ready"); setError(null); }, (failure: unknown) => { setError(a(`errors.${accountError(failure)}`)); setPhase("error"); }); }}>{t("retry")}</Button>} />;
 
