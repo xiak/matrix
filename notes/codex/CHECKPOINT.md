@@ -2,12 +2,16 @@
 
 > Non-authoritative portable memory. Validate against Git and the owning FEAT.
 
-- Updated: 2026-09-25
+- Updated: 2026-09-27
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/phase3-mfa-enabling`
-- Pushed milestone: `d078d456` (real database-target runtime DSN fixture,
+- Pushed milestone: `47c4e573` (three-release bridge retains the product's
+  cross-profile rollback refusal rather than requiring an unsupported direct
+  rollback, independently verified by
+  [Verification 36312625241](https://github.com/xiak/matrix/actions/runs/36312625241)).
+- Real database-target runtime DSN fixture: `d078d456`,
   independently verified by
-  [Verification 36055308970](https://github.com/xiak/matrix/actions/runs/36055308970))
+  [Verification 36055308970](https://github.com/xiak/matrix/actions/runs/36055308970).
 - Native one-time join cleanup: `397d5952`, independently verified by
   [Verification 36053002247](https://github.com/xiak/matrix/actions/runs/36053002247).
 - Earlier bounded authentication-recovery snapshot consumer: `8028738c`,
