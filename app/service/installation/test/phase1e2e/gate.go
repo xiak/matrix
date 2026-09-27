@@ -554,6 +554,21 @@ func releaseAUpgradeArguments(config options, candidate release.VerifiedBundle) 
 	}
 }
 
+// The authenticated release role, not response-shape inference, chooses the
+// login protocol. A known factor never falls back to password-only login.
+func (value *gate) loginReleaseA(ctx context.Context, password, seed []byte, requestID string) ([]byte, error) {
+	if value.releases.a.Manifest.Database == release.CurrentDatabaseProfile() {
+		if len(seed) != 0 {
+			return value.edge.loginWithTOTP(ctx, password, seed, requestID)
+		}
+		return value.edge.loginAuthenticated(ctx, password, requestID)
+	}
+	if matchesCanonicalManifest(value.releases.a.Manifest, acceptedPreparationManifestDigest) && len(seed) == 0 {
+		return value.edge.login(ctx, password, requestID)
+	}
+	return nil, fail("release-a-login-profile")
+}
+
 func (value *gate) beforeRestart(ctx context.Context) (gateErr error) {
 	defer value.edge.close()
 	defer func() {
@@ -612,7 +627,7 @@ func (value *gate) beforeRestart(ctx context.Context) (gateErr error) {
 		return err
 	}
 	defer clear(newPassword)
-	firstSession, err := value.edge.login(ctx, initialPassword, "phase1-login-initial")
+	firstSession, err := value.loginReleaseA(ctx, initialPassword, nil, "phase1-login-initial")
 	if err != nil {
 		return fail("iam-login-initial")
 	}
@@ -624,7 +639,7 @@ func (value *gate) beforeRestart(ctx context.Context) (gateErr error) {
 	if err := value.edge.logout(ctx, firstSession); err != nil {
 		return fail("iam-logout-initial")
 	}
-	bearer, err := value.edge.login(ctx, newPassword, "phase1-login-current")
+	bearer, err := value.loginReleaseA(ctx, newPassword, nil, "phase1-login-current")
 	if err != nil {
 		return fail("iam-login-current")
 	}
@@ -675,6 +690,20 @@ func (value *gate) beforeRestart(ctx context.Context) (gateErr error) {
 		return err
 	}
 
+	// The historical preparation/enabling pair has no delivered-mail enrollment
+	// boundary until its successor. The current same-profile lifecycle must
+	// instead establish that real qualification before its positive backup.
+	mfaInBackupBaseline := value.releases.a.Manifest.Database == release.CurrentDatabaseProfile() &&
+		value.releases.a.Manifest.Database == value.releases.b.Manifest.Database
+	var seed []byte
+	if mfaInBackupBaseline {
+		seed, bearer, err = value.bindFirstAuthenticator(ctx, bearer, newPassword)
+		if err != nil {
+			return err
+		}
+		emit("mfa-first-enrollment-before-protected-backup")
+	}
+
 	wantInitialAudit := map[auditv1.Action]string{
 		auditv1.ActionIAMBootstrapApplied:              "",
 		auditv1.ActionIAMSessionIssued:                 "",
@@ -686,6 +715,10 @@ func (value *gate) beforeRestart(ctx context.Context) (gateErr error) {
 		auditv1.ActionPaaSApplicationRevisionCreated:   string(applicationRevisionID),
 		auditv1.ActionPaaSDeploymentCreated:            string(deploymentID),
 		auditv1.ActionPaaSDeploymentUpdated:            string(deploymentID),
+	}
+	if mfaInBackupBaseline {
+		wantInitialAudit[auditv1.ActionIAMNotificationContactVerified] = "principal-admin"
+		wantInitialAudit[auditv1.ActionIAMAuthenticatorBound] = "principal-admin"
 	}
 	recordsBeforeBackup, err := value.edge.waitAuditActions(ctx, bearer, wantInitialAudit)
 	if err != nil {
@@ -718,7 +751,7 @@ func (value *gate) beforeRestart(ctx context.Context) (gateErr error) {
 		return fail("protected-backup")
 	}
 	emit("protected-backup")
-	bearer, err = value.edge.login(ctx, newPassword, "phase1-after-predecessor-backup-login")
+	bearer, err = value.loginReleaseA(ctx, newPassword, seed, "phase1-after-predecessor-backup-login")
 	if err != nil {
 		return fail("predecessor-backup-reauthentication")
 	}
@@ -804,7 +837,7 @@ func (value *gate) beforeRestart(ctx context.Context) (gateErr error) {
 		if err := value.edge.unauthorizedMe(ctx, bearer); err != nil {
 			return fail("cross-profile-recovery-old-session-denial")
 		}
-		bearer, err = value.edge.login(ctx, newPassword, "phase1-after-failed-upgrade-recovery-login")
+		bearer, err = value.loginReleaseA(ctx, newPassword, nil, "phase1-after-failed-upgrade-recovery-login")
 		if err != nil {
 			return fail("cross-profile-recovery-password-reauthentication")
 		}
@@ -875,12 +908,13 @@ func (value *gate) beforeRestart(ctx context.Context) (gateErr error) {
 		return fail("post-upgrade-audit-association")
 	}
 	emit("release-b-upgrade-preservation")
-	seed, boundBearer, err := value.bindFirstAuthenticator(ctx, bearer, newPassword)
-	if err != nil {
-		return err
+	if !mfaInBackupBaseline {
+		seed, bearer, err = value.bindFirstAuthenticator(ctx, bearer, newPassword)
+		if err != nil {
+			return err
+		}
+		emit("mfa-first-enrollment-through-delivered-mail")
 	}
-	bearer = boundBearer
-	emit("mfa-first-enrollment-through-delivered-mail")
 	var successorBackup mxResult
 	if value.releases.a.Manifest.Database != value.releases.b.Manifest.Database {
 		if err := value.edge.logoutWithID(ctx, bearer, "phase1-successor-backup-logout"); err != nil {
@@ -1098,9 +1132,20 @@ func (value *gate) beforeRestart(ctx context.Context) (gateErr error) {
 	if err := value.edge.unauthorizedMe(ctx, bearer); err != nil {
 		return fail("predecessor-backup-old-session-denial")
 	}
-	bearer, err = value.edge.login(ctx, newPassword, "phase1-after-predecessor-recovery-login")
+	var restoredSeed []byte
+	if mfaInBackupBaseline {
+		value.edge.lastTOTPStep = max(value.edge.lastTOTPStep, time.Now().Unix()/30)
+		restoredSeed = seed
+	}
+	bearer, err = value.loginReleaseA(ctx, newPassword, restoredSeed, "phase1-after-predecessor-recovery-login")
 	if err != nil {
-		return fail("predecessor-backup-password-reauthentication")
+		return fail("predecessor-backup-reauthentication")
+	}
+	if mfaInBackupBaseline {
+		factor, factorErr := value.edge.authenticatorState(ctx, bearer)
+		if factorErr != nil || factor.EnrollmentState != "BOUND" {
+			return fail("predecessor-backup-factor-preservation")
+		}
 	}
 	value.sensitive = append(value.sensitive, bearer)
 	value.edge.addForbidden(bearer)
@@ -1309,11 +1354,11 @@ func (value *gate) recoverOriginalPlatformCredentials(ctx context.Context, oldBe
 		loginWire{LoginName: "admin", Password: string(finalPassword), RequestID: "recovery-old-password"}, nil, http.StatusUnauthorized); err != nil {
 		return nil, fail("credential-recovery-old-password-denial")
 	}
-	current, err := value.edge.login(ctx, temporaryPassword, "recovery-current-temporary-session")
+	current, err := value.loginReleaseA(ctx, temporaryPassword, nil, "recovery-current-temporary-session")
 	if err != nil {
 		return nil, fail("credential-recovery-temporary-login")
 	}
-	other, err := value.edge.login(ctx, temporaryPassword, "recovery-other-temporary-session")
+	other, err := value.loginReleaseA(ctx, temporaryPassword, nil, "recovery-other-temporary-session")
 	if err != nil {
 		clear(current)
 		return nil, fail("credential-recovery-other-temporary-login")

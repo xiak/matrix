@@ -180,6 +180,16 @@ func decodePreparationLoginResponse(content []byte) ([]byte, error) {
 	return result.Credential.CopyBytes(), nil
 }
 
+func decodeAuthenticatedLoginResponse(content []byte) ([]byte, error) {
+	var result iamv1.LoginResponse
+	if decodeOne(content, &result) != nil || iamv1.ValidateLoginResponse(result) != nil ||
+		result.Outcome != iamv1.LoginAuthenticated || result.Session.PrincipalID != "principal-admin" ||
+		result.Session.AccountID != "organization-default" {
+		return nil, errors.New("authenticated IAM login response failed")
+	}
+	return result.Credential.CopyBytes(), nil
+}
+
 type changePasswordWire struct {
 	CurrentPassword string `json:"currentPassword"`
 	NewPassword     string `json:"newPassword"`
@@ -197,6 +207,16 @@ func (client *edgeClient) login(ctx context.Context, password []byte, requestID 
 	}
 	defer clear(response.body)
 	return decodePreparationLoginResponse(response.body)
+}
+
+func (client *edgeClient) loginAuthenticated(ctx context.Context, password []byte, requestID string) ([]byte, error) {
+	response, err := client.json(ctx, http.MethodPost, "/api/iam/v1/auth/login", nil,
+		loginWire{LoginName: "admin", Password: string(password), RequestID: requestID}, nil, http.StatusOK)
+	if err != nil {
+		return nil, err
+	}
+	defer clear(response.body)
+	return decodeAuthenticatedLoginResponse(response.body)
 }
 
 func (client *edgeClient) changePassword(

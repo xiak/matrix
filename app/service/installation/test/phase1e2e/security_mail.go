@@ -537,14 +537,8 @@ func (client *edgeClient) loginWithTOTP(ctx context.Context, password, seed []by
 		return nil, err
 	}
 	defer clear(response.body)
-	var authenticated iamv1.LoginResponse
-	if decodeOne(response.body, &authenticated) != nil || iamv1.ValidateLoginResponse(authenticated) != nil ||
-		authenticated.Outcome != iamv1.LoginAuthenticated || authenticated.Session.PrincipalID != "principal-admin" ||
-		authenticated.Session.AccountID != "organization-default" {
-		return nil, fail("mfa-login-completion")
-	}
-	result := authenticated.Credential.CopyBytes()
-	if len(result) == 0 {
+	result, err := decodeAuthenticatedLoginResponse(response.body)
+	if err != nil {
 		return nil, fail("mfa-login-completion")
 	}
 	return result, nil

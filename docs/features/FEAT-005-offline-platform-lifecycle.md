@@ -504,6 +504,15 @@ replacing a factor after that backup deliberately belongs to the pre-effect
 conflict gate, not the positive restore path. Both migration and same-profile
 lifecycle evidence remain mandatory on the final composition.
 
+The current same-profile driver now establishes the verified contact and first
+factor before its baseline backup, includes their exact USER facts in the
+baseline Audit check, and requires challenged TOTP login after restoring that
+factor. The authenticated release role selects the preparation or current
+login wire contract; a current response cannot fall back to the preparation
+shape, and a known factor cannot accept a password-only Session. HTTP fixture
+regressions cover those refusals and the legitimate challenged completion.
+These driver checks do not prove the final signed v5 recovery execution.
+
 The existing acceptance driver has one additional preparation input for this
 bounded history: the exact accepted preparation/enabling manifests are
 authenticated before effects, their original signed executables establish

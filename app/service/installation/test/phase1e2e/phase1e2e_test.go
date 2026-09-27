@@ -213,6 +213,143 @@ func TestPreparationLoginResponseRejectsTheEnablingWireShape(t *testing.T) {
 	}
 }
 
+func TestCurrentAuthenticatedLoginResponseKeepsProtocolsAndIdentitiesDisjoint(t *testing.T) {
+	issued := time.Now().UTC().Truncate(time.Microsecond)
+	secret, err := iamv1.NewSecret("fixture-current-credential-0123456789")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := iamv1.LoginResponse{Outcome: iamv1.LoginAuthenticated, Credential: secret,
+		Session: iamv1.Session{APIVersion: iamv1.APIVersion, Kind: "Session", ID: "session-current",
+			AccountID: "organization-default", PrincipalID: "principal-admin", Status: iamv1.SessionActive,
+			IssuedAt: issued, ExpiresAt: issued.Add(time.Hour)}}
+	encoded, err := iamv1.EncodeLoginResponse(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential, err := decodeAuthenticatedLoginResponse(encoded)
+	if err != nil || !slices.Equal(credential, secret.CopyBytes()) {
+		t.Fatal("current authenticated response was rejected")
+	}
+	clear(credential)
+	for _, scenario := range []struct {
+		name   string
+		mutate func(string) string
+	}{
+		{"preparation", func(s string) string { return strings.Replace(s, `"outcome":"AUTHENTICATED",`, "", 1) }},
+		{"other user", func(s string) string { return strings.Replace(s, "principal-admin", "principal-other", 1) }},
+		{"other account", func(s string) string { return strings.Replace(s, "organization-default", "organization-other", 1) }},
+		{"mixed challenge", func(s string) string { return strings.Replace(s, `"outcome":`, `"challenge":null,"outcome":`, 1) }},
+		{"missing forced-change state", func(s string) string { return strings.Replace(s, `,"mustChangePassword":false`, "", 1) }},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			if credential, err := decodeAuthenticatedLoginResponse([]byte(scenario.mutate(string(encoded)))); err == nil {
+				clear(credential)
+				t.Fatal("another protocol or identity became an authenticated current login")
+			}
+		})
+	}
+	challenged, err := iamv1.EncodeLoginResponse(iamv1.LoginResponse{Outcome: iamv1.LoginChallengeRequired,
+		Challenge: &iamv1.AuthenticationChallenge{APIVersion: iamv1.APIVersion, Kind: "AuthenticationChallenge",
+			ID: "challenge-current", Purpose: "LOGIN", NextStep: "TOTP", ExpiresAt: issued.Add(2 * time.Minute)},
+		ChallengeCredential: secret})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := decodeAuthenticatedLoginResponse(challenged); err == nil {
+		t.Fatal("a restricted challenge became a Session")
+	}
+}
+
+func TestCurrentReleaseBaselineLoginNeverDropsAKnownFactor(t *testing.T) {
+	for _, scenario := range []string{"password", "bound factor", "bound factor bypass", "unknown profile"} {
+		t.Run(scenario, func(t *testing.T) {
+			issued := time.Now().UTC().Truncate(time.Microsecond)
+			secret, err := iamv1.NewSecret("fixture-current-credential-0123456789")
+			if err != nil {
+				t.Fatal(err)
+			}
+			challengeSecret, err := iamv1.NewSecret("fixture-challenge-credential-0123456789")
+			if err != nil {
+				t.Fatal(err)
+			}
+			authenticated, err := iamv1.EncodeLoginResponse(iamv1.LoginResponse{Outcome: iamv1.LoginAuthenticated,
+				Credential: secret, Session: iamv1.Session{APIVersion: iamv1.APIVersion, Kind: "Session", ID: "session-current",
+					AccountID: "organization-default", PrincipalID: "principal-admin", Status: iamv1.SessionActive,
+					IssuedAt: issued, ExpiresAt: issued.Add(time.Hour)}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			challenge, err := iamv1.EncodeLoginResponse(iamv1.LoginResponse{Outcome: iamv1.LoginChallengeRequired,
+				Challenge: &iamv1.AuthenticationChallenge{APIVersion: iamv1.APIVersion, Kind: "AuthenticationChallenge",
+					ID: "challenge-current", Purpose: "LOGIN", NextStep: "TOTP", ExpiresAt: issued.Add(2 * time.Minute)},
+				ChallengeCredential: challengeSecret})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var requests atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				defer request.Body.Close()
+				requests.Add(1)
+				response.Header().Set("Content-Type", "application/json")
+				if request.Method != http.MethodPost || request.Header.Get("Authorization") != "" {
+					http.Error(response, "invalid authentication", http.StatusBadRequest)
+					return
+				}
+				switch request.URL.Path {
+				case "/api/iam/v1/auth/login":
+					var body loginWire
+					if json.NewDecoder(request.Body).Decode(&body) != nil || body.LoginName != "admin" ||
+						body.Password != "fixture-password" || body.RequestID != "baseline-login" {
+						http.Error(response, "invalid login", http.StatusBadRequest)
+						return
+					}
+					if scenario == "bound factor" {
+						_, _ = response.Write(challenge)
+					} else {
+						_, _ = response.Write(authenticated)
+					}
+				case "/api/iam/v1/auth/challenges/challenge-current:verify":
+					var body iamv1.VerifyAuthenticationChallengeRequest
+					if scenario != "bound factor" || json.NewDecoder(request.Body).Decode(&body) != nil ||
+						body.RequestID != "baseline-login-verify" || !slices.Equal(body.ChallengeCredential.CopyBytes(), challengeSecret.CopyBytes()) ||
+						len(body.Code.CopyBytes()) != 6 {
+						http.Error(response, "invalid proof", http.StatusBadRequest)
+						return
+					}
+					_, _ = response.Write(authenticated)
+				default:
+					http.Error(response, "unrelated route", http.StatusBadRequest)
+				}
+			}))
+			defer server.Close()
+			pair := releasePair{a: release.VerifiedBundle{Manifest: release.Manifest{Database: release.CurrentDatabaseProfile()}}}
+			if scenario == "unknown profile" {
+				pair.a.Manifest.Database.ContractRevision++
+			}
+			value := newGate(options{edge: server.URL}, pair)
+			defer value.edge.close()
+			var seed []byte
+			if strings.HasPrefix(scenario, "bound factor") {
+				seed = []byte("GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ")
+			}
+			credential, err := value.loginReleaseA(context.Background(), []byte("fixture-password"), seed, "baseline-login")
+			defer clear(credential)
+			wantRequests := int32(1)
+			if scenario == "bound factor" {
+				wantRequests = 2
+			} else if scenario == "unknown profile" {
+				wantRequests = 0
+			}
+			wantSuccess := scenario == "password" || scenario == "bound factor"
+			if (err == nil) != wantSuccess || requests.Load() != wantRequests ||
+				(wantSuccess && !slices.Equal(credential, secret.CopyBytes())) {
+				t.Fatal("release qualification or known factor was silently downgraded")
+			}
+		})
+	}
+}
+
 func TestAcceptanceDockerCommandsStayOnTheLocalEngine(t *testing.T) {
 	arguments := dockerAcceptanceArguments("container", "ls", "--all")
 	if !slices.Equal(arguments, []string{"--host", "unix:///var/run/docker.sock", "container", "ls", "--all"}) {
