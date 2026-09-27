@@ -5,9 +5,11 @@
 - Updated: 2026-09-27
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/phase3-mfa-enabling`
-- Pushed milestone: `ba037e30` (pins the exact accepted historical preparation
-  fixture without widening product profile admission, independently verified by
-  [Verification 36314399263](https://github.com/xiak/matrix/actions/runs/36314399263)).
+- Pushed milestone: `ef88d8d6` (separates the retained-data historical migration
+  from the current same-profile failure/rollback/recovery fixture, independently
+  verified by [Verification 36315956026](https://github.com/xiak/matrix/actions/runs/36315956026)).
+- The exact historical preparation commitments remain verified at `ba037e30`
+  by [Verification 36314399263](https://github.com/xiak/matrix/actions/runs/36314399263).
 - The bridge's cross-profile rollback refusal remains verified at `47c4e573`
   by [Verification 36312625241](https://github.com/xiak/matrix/actions/runs/36312625241).
 - Real database-target runtime DSN fixture: `d078d456`,

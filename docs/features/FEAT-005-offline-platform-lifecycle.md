@@ -513,8 +513,13 @@ with the current identical profile. An unaccepted historical commitment,
 orphan preparation input, changed topology or cross-profile lifecycle pair
 fails admission. The ordinary two/three-release fault fixture also rejects a
 migration-only edge before effects rather than demanding an inadmissible
-legacy restore. This fixture adds no product migration or recovery permission;
-its full signed execution remains an integrated release gate.
+legacy restore. Exact source `ef88d8d6561ff52d8a1ec0f7c4366dd440134705`
+passed package race, architecture and vet checks; admission also verified the
+real historical signed packages with metadata-only current-profile successors.
+[Verification 36315956026](https://github.com/xiak/matrix/actions/runs/36315956026)
+passed Go, UI, authority-process and node-process for that source. This fixture
+adds no product migration or recovery permission; its full signed execution
+remains an integrated release gate.
 
 The close transaction reprojects the complete durable authentication and
 authorization state, including Account status/root ownership/settings,
