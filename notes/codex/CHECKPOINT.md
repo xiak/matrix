@@ -5,25 +5,30 @@
 - Repository https://github.com/xiak/matrix.git, branch feat/iam; exclusive
   independent worktree only. Milestone 2026-09-27. Full goal ACTIVE/incomplete.
 - Latest committed and pushed source:
-  **2b46f12a4752675dabe9ebd8df75c19175df7ebf**.
+  **fa27b0fbf54e94e21da38d32763dcaf89f370538**.
   Production remains **1584de22e156ea47a4db6056e91a9340b4f364f9**'s existing
   snapshot-consuming authentication recovery slice, IAM45/Audit26, above
-  fixed 29668fa/dce/e24. 2b46 only corrects the original Audit dual-schema
-  test's two exact IAM readiness expectations from44 to45 and records the
-  owner-specific integration closure/evidence. No installation release
+  fixed 29668fa/dce/e24. Above 2b46's exact schema45 readiness test correction,
+  fa27 fixes the original RoleSession test's first-page assumption and extends
+  the existing three-database recovery gate with last-slot OTP concurrency
+  and real reset/change of a generation-bound exhausted password. Only tests
+  and their original FEAT owners changed. No installation release
   profile, CLI, PaaS, UI, ServiceIdentity or Audit canonical change is included.
-- Exact successor Verification **36316892387**:
-  https://github.com/xiak/matrix/actions/runs/36316892387
-  GitHub API confirmed exact 2b46 SHA; last observed pending, NOT accepted CI.
+- Exact successor Verification **36318553704**:
+  https://github.com/xiak/matrix/actions/runs/36318553704
+  GitHub API confirmed exact fa27 SHA; last observed pending, NOT accepted CI.
   Read fresh status/jobs/logs before claiming success. Source pushes cancel an
   in-progress branch run; do not cancel this gate with an incidental source
   push. Checkpoint-only pushes do not trigger Verification.
-- Original 1584 Verification36316212546 has an actual authority-storage
-  failure, not merely an overall queued state. Its log stopped on the stale
-  schema44 expectation before IAM storage fixtures ran. Go/node succeeded,
-  but unfinished lanes are not acceptance. The corrective push supersedes
-  this known-failed candidate; inspect actual old status before calling its
-  cancellation complete. Do not backfill its result from the successor.
+- Original 1584 Verification36316212546 failed on stale schema44 readiness.
+  Corrective 2b46 Verification36316892387 also has an actual storage failure:
+  job108613232634 reached role_management, whose deleted-role assertion
+  wrongly required the one remaining Session to appear in the first scanned
+  page despite over100 random-ID history records. Original bounded SQL/API
+  allows empty items plus a cursor. fa27 consumes both real pages and checks
+  exact target/capability and unchanged revision. Go/node succeeded on 2b46;
+  runtime was still live and other lanes queued at the fa27 push. Inspect
+  actual old status before declaring cancellation; no failed run is backfilled.
 - Last independently verified source remains
   **29668fa330b2233b43ebd48ed37738623377f9de**, Verification36044565312 all nine
   jobs success. Its parent dce is pure snapshot/envelope codec; the prior
@@ -60,6 +65,22 @@ database; three other clean databases passed complete dual-schema authority
 architecture and vet/diff passed. This is a test-only correction, not a new
 production recovery behavior or a substitute for full independent CI.
 
+fa27's local PG18.6 race-p1 evidence: full role_management43.50s/package46.999s,
+including all24 existing lock/security interleavings; full3DB RR dump/restore
+80.01s/package83.475s. Two Authority pools/distinct LOGIN challenges are
+observed behind the real USER lock, compete for source OTP budget4->5, and
+issue exactly one Session/fact. Original valid-code replay2->3 still fails.
+Second restore/Up/new Authorities retain windows/sequences. Real admin reset
+and forced change advance generation while the old password floor is still
+unexpired and immutable; old completion replay does not revoke the new Session.
+Challenge creation can consume the MFA USER's older password window: the test
+waits its real natural end before isolating OTP exhaustion, independently
+checking the other USER's later live password window. No clock/counter reset
+or deadline increase. New assertion initially expected successful login used1;
+actual existing issue_session resets to0, now correctly tested. IAM default
+race and architecture plus same-scope vet/diff passed. No full-goal or signed
+release acceptance is implied.
+
 ## Contract and acceptance boundaries
 
 The same RR backup lease now requires authenticationStateDigest independently
@@ -85,7 +106,8 @@ authorize cross-profile upgrade, rollback or recovery.
 
 Installation task 01a04149-5dbb-7300-9e4c-31d9e85c8ada owns signed consumers,
 profile/journal/keys/backup and actual restore, with its PaaS6/host/terminal
-and security-mail owners. It received 2b46 as a candidate with CI pending.
+and security-mail owners. It was told 2b46 failed and fa27 is the successor
+candidate; send exact CI success only after all jobs actually pass.
 The fixed owner-specific dependency/ADAPT closure from its integrated b7
 IAM40 baseline is now in docs/adoption/FEAT-006-platform-authorities.md,
 section Fixed IAM40-to-snapshot integration dependency closure. Target
@@ -97,7 +119,10 @@ Do not import its WIP, profile or acceptance status into this branch.
 
 UX task 01a07b21-9a0d-7fd0-b090-7827ce18262e owns feat/cloud-console-ux and all
 UI work. Only exchange fixed contracts; no replacement UI, foreign environment
-changes or inherited browser acceptance. No new UI contract is in 1584.
+changes or inherited browser acceptance. No new UI contract is in 1584/fa27.
+Installation found its old auth consumer only accepts LOGIN/TOTP/PASSWORD_CHANGE,
+not existing ENROLLMENT. The fixed pure-auth-ceremony dependency request was
+forwarded to UX; IAM does not implement another frontend or consume foreign WIP.
 
 ## Execution boundaries
 
@@ -106,11 +131,14 @@ Git identity exactly Xiak <Jellal@aliyun.com>, repository-local only.
 Go GOMAXPROCS2/GOMEMLIMIT512MiB; default-p2, real heavy gates race-p1 serial.
 Own native PG uses Windows Job2logicalCPU/1GiB/24processes,
 16connections/64MiB shared_buffers/4MiB work_mem/no parallel workers.
-1584's milestone removed only its15 synthetic databases. The2b46 correction
-used four new owned databases, removed exactly those after zero clients,
-and normally stopped its exclusive PG. Launcher confirmed terminal exit0;
+fa27's milestone removed exactly13 owned synthetic databases (four3DB recovery
+attempts and one role-management database) after zero clients, and normally
+stopped its exclusive PG. Launcher confirmed terminal exit0;
 there are no live local tests or PG handles. Earlier retained data was not
 deleted. Inspect actual handles/ownership before any new runtime work.
+Also removed one old stopped, unmounted, exactly feat-iam/task-labelled
+stepup PostgreSQL container and its empty same-owner network after read-only
+ownership checks. No volume or foreign resource was removed.
 
 No new agents/tasks, foreign WIP, remote1.3/160/161 or withdrawn1.5/GitLab,
 global cleanup/config, shared Docker/WSL changes or remote restarts.
