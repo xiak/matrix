@@ -8609,6 +8609,80 @@ func TestIAMTOTPBackupSnapshotPostgres(t *testing.T) {
 		installationv1.ValidateTOTPBackupSnapshotLease(firstLease) != nil {
 		t.Fatal("initial snapshot did not prove exact empty scope")
 	}
+	readQualification := func() string {
+		t.Helper()
+		snapshot := open()
+		digest := snapshot.Lease().AuthenticationStateDigest
+		if err := snapshot.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return digest
+	}
+	root, err := workflow.Login(ctx, iamv1.LoginRequest{LoginName: document.Administrator.LoginName,
+		Password: document.Administrator.Password, RequestID: "backup-qualification-root-login"})
+	if err != nil {
+		t.Fatal("login for current qualification gate", err)
+	}
+	if readQualification() != firstLease.AuthenticationStateDigest {
+		t.Fatal("login Session and successful password attempt changed qualification")
+	}
+	if _, err := workflow.ChangePassword(ctx, root.Credential, iamv1.ChangePasswordRequest{
+		CurrentPassword: document.Administrator.Password, NewPassword: iamHTTPSecret(t, changedAdminPassword),
+		RequestID: "backup-qualification-password"}); err != nil {
+		t.Fatal(err)
+	}
+	passwordQualification := readQualification()
+	if passwordQualification == firstLease.AuthenticationStateDigest {
+		t.Fatal("password generation and forced-change transition were absent from qualification")
+	}
+	if _, err := newReplica().Login(ctx, iamv1.LoginRequest{LoginName: document.Administrator.LoginName,
+		Password: iamHTTPSecret(t, "Wrong-Backup-Password-357!"), RequestID: "backup-qualification-failure"}); !errors.Is(err, identityaccess.ErrUnauthenticated) {
+		t.Fatal("wrong password was not rejected", err)
+	}
+	if readQualification() != passwordQualification {
+		t.Fatal("charged failure budget changed persistent qualification")
+	}
+	member, err := workflow.CreateUser(ctx, root.Credential, iamv1.CreateUserRequest{LoginName: "backup-member",
+		DisplayName: "Backup member", InitialPassword: iamHTTPSecret(t, "Backup-Member-Password-391!"), RequestID: "backup-member-create"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	memberQualification := readQualification()
+	if memberQualification == passwordQualification {
+		t.Fatal("new USER was omitted from qualification")
+	}
+	disabled, err := workflow.SetUserStatus(ctx, root.Credential, member.ID, iamv1.SetUserStatusRequest{
+		Status: iamv1.PrincipalDisabled, ResourceVersion: member.ResourceVersion, RequestID: "backup-member-disable"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	disabledQualification := readQualification()
+	if disabledQualification == memberQualification {
+		t.Fatal("disabled USER was omitted from qualification")
+	}
+	if _, err := workflow.DeleteUser(ctx, root.Credential, member.ID, iamv1.DeleteUserRequest{
+		ResourceVersion: disabled.ResourceVersion, RequestID: "backup-member-delete"}); err != nil {
+		t.Fatal(err)
+	}
+	deletedQualification := readQualification()
+	if deletedQualification == disabledQualification {
+		t.Fatal("deleted USER tombstone was omitted from qualification")
+	}
+	if _, err := workflow.CreateAccount(ctx, root.Credential, iamv1.CreateAccountRequest{ID: "backup-other-account",
+		DisplayName: "Backup other account", RootLoginName: "backup-other-root", RootDisplayName: "Backup other root",
+		InitialPassword: iamHTTPSecret(t, "Backup-Other-Password-297!"), RequestID: "backup-account-create"}); err != nil {
+		t.Fatal(err)
+	}
+	accountQualification := readQualification()
+	if accountQualification == deletedQualification {
+		t.Fatal("non-home Account or its root was omitted from qualification")
+	}
+	if _, err := workflow.Logout(ctx, root.Credential, iamv1.LogoutRequest{RequestID: "backup-qualification-logout"}); err != nil {
+		t.Fatal(err)
+	}
+	if readQualification() != accountQualification {
+		t.Fatal("Session revocation changed persistent qualification")
+	}
 	keyring.KeysetRevision = 2
 	keyring.Keys = append(keyring.Keys, iamv1.TOTPWrappingKey{KeyID: "totp-next", FormatVersion: 1,
 		KeyMaterial: iamHTTPSecret(t, base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x75}, 32)))})
@@ -8657,10 +8731,32 @@ func TestIAMTOTPBackupSnapshotPostgres(t *testing.T) {
 		 (SELECT count(*) FROM iam.totp_authenticators)`).Scan(&revision, &factors); err != nil || revision != wantRevision || factors != wantFactors {
 			t.Fatal("custody and imported database view diverged", revision, factors, err)
 		}
+		// Re-import using the actual purpose-only reader as well. It cannot
+		// substitute a current view for the exported dump's qualification.
+		qualifiedReader, err := pgx.ConnectConfig(ctx, backupConfig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer qualifiedReader.Close(context.Background())
+		qualifiedTX, err := qualifiedReader.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer qualifiedTX.Rollback(context.Background())
+		if _, err := qualifiedTX.Exec(ctx, "SET TRANSACTION SNAPSHOT '"+lease.SnapshotID+"'"); err != nil {
+			t.Fatal(err)
+		}
+		var digest string
+		if err := qualifiedTX.QueryRow(ctx, "SELECT iam.read_totp_backup_custody()->>'authenticationStateDigest'").Scan(&digest); err != nil || digest != lease.AuthenticationStateDigest {
+			t.Fatal("qualification and imported dump view diverged", err)
+		}
 	}
 	importView(firstLease, 1, 0)
 	second := open()
 	secondLease := second.Lease()
+	if secondLease.AuthenticationStateDigest != accountQualification {
+		t.Fatal("pending ciphertext or wrapping registration changed authentication qualification")
+	}
 	if secondLease.Custody.KeysetRevision != 2 || len(secondLease.Custody.RequiredKeys) != 2 {
 		t.Fatal("fresh snapshot lost retained references")
 	}
@@ -8689,6 +8785,7 @@ func TestIAMTOTPBackupSnapshotPostgres(t *testing.T) {
 		t.Fatal("administrator DSN substituted for dedicated login", err)
 	}
 	for _, attack := range []string{"SELECT * FROM iam.totp_authenticators", "SELECT iam.register_totp_keyset('{}')",
+		"SELECT * FROM iam.accounts", "SELECT iam.authentication_security_projection()",
 		"SELECT * FROM iam.readiness()", "SET ROLE matrix_iam_api", "SELECT iam.read_totp_backup_custody()"} {
 		connection, err := pgx.ConnectConfig(ctx, backupConfig)
 		if err != nil {
@@ -8710,6 +8807,15 @@ func TestIAMTOTPBackupSnapshotPostgres(t *testing.T) {
 	if _, err := admin.Exec(ctx, "REVOKE EXECUTE ON FUNCTION iam.read_totp_backup_custody() FROM matrix_iam_api"); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := admin.Exec(ctx, "GRANT EXECUTE ON FUNCTION iam.authentication_security_projection() TO matrix_iam_api"); err != nil {
+		t.Fatal(err)
+	}
+	if snapshot, err := iampostgres.OpenTOTPBackupSnapshot(ctx, backupConfig); err == nil || snapshot != nil {
+		t.Fatal("exposed internal authority projection did not fail readiness closed")
+	}
+	if _, err := admin.Exec(ctx, "REVOKE EXECUTE ON FUNCTION iam.authentication_security_projection() FROM matrix_iam_api"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := admin.Exec(ctx, "GRANT SELECT ON iam.totp_wrapping_registry TO matrix_iam_backup_custody_login"); err != nil {
 		t.Fatal(err)
 	}
@@ -8723,6 +8829,9 @@ func TestIAMTOTPBackupSnapshotPostgres(t *testing.T) {
 	replayed := open()
 	if !reflect.DeepEqual(replayed.Lease().Custody, secondLease.Custody) || replayed.Lease().CustodyDigest != secondLease.CustodyDigest {
 		t.Fatal("migration changed same-snapshot material requirements")
+	}
+	if replayed.Lease().AuthenticationStateDigest != accountQualification {
+		t.Fatal("migration changed retained qualification")
 	}
 	if err := replayed.Close(); err != nil {
 		t.Fatal(err)

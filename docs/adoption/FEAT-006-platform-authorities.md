@@ -868,9 +868,12 @@ The current-security recovery target in IAM/009 `REUSE`s fixed
 `e24dbdae6b4ea420365a4527a0bd89b16e0d720f`'s purpose-limited
 close/reconcile/reopen entrypoint, dedicated database role, exclusive recovery
 barrier, immutable completion/outbox and original material custody. Its
-Closure and restoration admission are `ADAPT` candidates for a complete
-pre-restore current-authority commitment sealed outside database rollback;
-the exact cross-owner ABI is not yet frozen. `REJECT` treating the existing
+Closure and restoration admission are `ADAPT` for a complete pre-restore
+current-authority commitment sealed outside database rollback. `REUSE` fixed
+`dce2456adb8503c9c86d31bb2a3f63f35719ffa0`'s bounded snapshot/envelope and sole
+canonical codec; `ADAPT` the backup lease and existing private SQL consumer
+to require that evidence. This adoption does not inherit runtime acceptance
+from the pure contract commit. `REJECT` treating the existing
 two independently bootstrapped database fixture as a real older backup,
 treating a wrapping-key requirement set or advanced OTP step as evidence that
 an old factor is still authorized, and recreating current qualification from

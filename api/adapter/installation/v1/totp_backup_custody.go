@@ -87,6 +87,9 @@ type TOTPBackupSnapshotLease struct {
 	SnapshotID    string            `json:"snapshotId"`
 	Custody       TOTPBackupCustody `json:"custody"`
 	CustodyDigest string            `json:"custodyDigest"`
+	// AuthenticationStateDigest commits current identity and authorization
+	// from this same exported database snapshot, independently of key custody.
+	AuthenticationStateDigest string `json:"authenticationStateDigest"`
 }
 
 func ValidateTOTPBackupCustody(value TOTPBackupCustody) error {
@@ -143,7 +146,8 @@ func ValidateTOTPBackupSnapshotLease(value TOTPBackupSnapshotLease) error {
 		len(value.SnapshotID) == 0 || len(value.SnapshotID) > maximumPostgresSnapshotIDLength ||
 		!postgresSnapshotIDPattern.MatchString(value.SnapshotID) ||
 		ValidateTOTPBackupCustody(value.Custody) != nil ||
-		iamv1.ValidateDigest("custodyDigest", value.CustodyDigest) != nil {
+		iamv1.ValidateDigest("custodyDigest", value.CustodyDigest) != nil ||
+		iamv1.ValidateDigest("authenticationStateDigest", value.AuthenticationStateDigest) != nil {
 		return ErrInvalidTOTPBackupSnapshotLease
 	}
 	digest, err := TOTPBackupCustodyDigest(value.Custody)

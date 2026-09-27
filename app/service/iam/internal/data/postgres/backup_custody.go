@@ -11,6 +11,7 @@ import (
 
 	installationv1 "github.com/xiak/matrix/api/adapter/installation/v1"
 	"github.com/xiak/matrix/api/contractjson"
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 )
 
 var (
@@ -81,11 +82,16 @@ func OpenTOTPBackupSnapshot(ctx context.Context, config *pgx.ConnConfig) (*TOTPB
 	if err := value.tx.QueryRow(ctx, "SELECT iam.read_totp_backup_custody()").Scan(&encoded); err != nil {
 		return fail(err)
 	}
-	var custody installationv1.TOTPBackupCustody
-	if contractjson.DecodeObjectBytes(encoded, installationv1.MaximumTOTPBackupCustodyBytes, &custody) != nil ||
-		installationv1.ValidateTOTPBackupCustody(custody) != nil {
+	var evidence struct {
+		Custody                   installationv1.TOTPBackupCustody `json:"custody"`
+		AuthenticationStateDigest string                           `json:"authenticationStateDigest"`
+	}
+	if contractjson.DecodeObjectBytes(encoded, installationv1.MaximumTOTPBackupCustodyBytes, &evidence) != nil ||
+		installationv1.ValidateTOTPBackupCustody(evidence.Custody) != nil ||
+		iamv1.ValidateDigest("authenticationStateDigest", evidence.AuthenticationStateDigest) != nil {
 		return fail(nil)
 	}
+	custody := evidence.Custody
 	digest, err := installationv1.TOTPBackupCustodyDigest(custody)
 	if err != nil {
 		return fail(err)
@@ -96,7 +102,8 @@ func OpenTOTPBackupSnapshot(ctx context.Context, config *pgx.ConnConfig) (*TOTPB
 	}
 	value.lease = installationv1.TOTPBackupSnapshotLease{APIVersion: installationv1.TOTPBackupCustodyAPIVersion,
 		Kind: installationv1.TOTPBackupSnapshotLeaseKind, Purpose: installationv1.TOTPBackupCustodyPurpose,
-		SnapshotID: snapshotID, Custody: custody, CustodyDigest: digest}
+		SnapshotID: snapshotID, Custody: custody, CustodyDigest: digest,
+		AuthenticationStateDigest: evidence.AuthenticationStateDigest}
 	if installationv1.ValidateTOTPBackupSnapshotLease(value.lease) != nil {
 		return fail(nil)
 	}

@@ -61,12 +61,13 @@ const (
 )
 
 // The signed purpose-only IAM executable accepts exactly one command. close
-// consumes the intent file and returns a closure; reconcile consumes that
-// closure after database restore and returns the same closure; reopen consumes
-// it again and returns a completion. Only exit zero carries a verified JSON
-// result. Interruption, timeout, damaged output or any unlisted exit remains
-// unknown and must be resolved by replaying the same sealed command, never by
-// constructing another epoch or recovery intent.
+// consumes the intent file and returns a closure/security-snapshot envelope.
+// reconcile consumes both original files after restore and returns the same
+// closure; reopen consumes both again and returns a snapshot-bound completion.
+// Only exit zero carries a verified JSON result. Interruption, timeout,
+// damaged output or any unlisted exit remains unknown and must be resolved by
+// replaying the same sealed command, never by constructing another epoch or
+// recovery intent. Snapshot-free encodings preserve history, not execution.
 
 var (
 	ErrInvalidAuthenticationRecoveryClosure          = errors.New("IAM authentication recovery closure is invalid")

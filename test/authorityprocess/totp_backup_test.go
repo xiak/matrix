@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -22,6 +23,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	installationv1 "github.com/xiak/matrix/api/adapter/installation/v1"
+	auditv1 "github.com/xiak/matrix/api/audit/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	iammigration "github.com/xiak/matrix/app/service/iam/migration"
 )
@@ -51,6 +53,7 @@ func TestIAMTOTPBackupProcesses(t *testing.T) {
 	temporary, root := t.TempDir(), repositoryRoot(t)
 	iamBinary := buildAuthorityBinary(t, ctx, root, temporary, "iam-for-backup", "./app/service/iam/cmd/matrix-iam")
 	backupBinary := buildAuthorityBinary(t, ctx, root, temporary, "iam-backup-custody", "./app/service/iam/cmd/matrix-iam-backup-custody")
+	recoveryBinary := buildAuthorityBinary(t, ctx, root, temporary, "iam-authentication-recovery", "./app/service/iam/cmd/matrix-iam-authentication-recovery")
 	migrator := buildAuthorityBinary(t, ctx, root, temporary, "iam-backup-migrate", "./app/service/iam/cmd/matrix-iam-migrate")
 	const apiLogin = "matrix_iam_api_login"
 	var migrationEnvironment []string
@@ -87,17 +90,16 @@ func TestIAMTOTPBackupProcesses(t *testing.T) {
 	iamDSN := writeProtectedFile(t, temporary, "api-dsn", []byte(runtimeDSN(t, config, apiLogin, processDBPassword)))
 	backupDSN := writeProtectedFile(t, temporary, "backup-dsn", []byte(runtimeDSN(t, config, "matrix_iam_backup_custody_login", processDBPassword)))
 	address := freeAddress(t)
-	network := startChild(t, root, iamBinary, []string{
+	iamEnvironment := []string{
 		"MATRIX_IAM_DATABASE_DSN_FILE=" + iamDSN, "MATRIX_IAM_BOOTSTRAP_FILE=" + bootstrapFile,
 		"MATRIX_IAM_LISTEN_ADDRESS=" + address,
 		"MATRIX_IAM_CURSOR_KEY_FILE=" + writeProtectedFile(t, temporary, "cursor", []byte(strings.Repeat("35", 32))),
 		"MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE=" + writeProcessAccessKeyWrapping(t, temporary, bootstrap),
 		"MATRIX_IAM_TOTP_KEYRING_FILE=" + writeProcessTOTPKeyring(t, temporary, bootstrap),
-	})
+	}
+	network := startChild(t, root, iamBinary, iamEnvironment)
 	defer network.stop()
 	waitHTTPStatus(t, ctx, network, "http://"+address+"/ready", http.StatusOK)
-	network.stop()
-	assertProcessOutputsSanitized(t, []*childProcess{network}, processDBPassword, initialAdminPassword)
 	version := runTOTPPostgresTool(t, ctx, config, "pg_dump", nil, "--version")
 	if !strings.Contains(string(version), "(PostgreSQL) 18.") {
 		t.Fatal("backup gate requires PostgreSQL 18 client")
@@ -113,6 +115,10 @@ func TestIAMTOTPBackupProcesses(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	var priorQualification string
+	var oldQualification, restoredBearer string
+	var recoveryDump []byte
+	var recoveryLease installationv1.TOTPBackupSnapshotLease
 	for phase := 0; phase < 2; phase++ {
 		child, lease := startTOTPBackupProcess(t, ctx, root, backupBinary, backupDSN)
 		if len(lease.Custody.RequiredKeys) != phase || lease.Custody.KeysetRevision != 1 || lease.Custody.InstallationID != bootstrap.InstallationID {
@@ -124,17 +130,37 @@ func TestIAMTOTPBackupProcesses(t *testing.T) {
 			t.Fatal("helper did not hold an actual restricted snapshot", err)
 		}
 		if phase == 0 {
+			oldQualification = lease.AuthenticationStateDigest
+			// Commit a real password generation change after the exporter has
+			// sampled its authority. The dump must retain the earlier credential
+			// and its exact qualification digest, not the current source state.
+			primary := loginIAM(t, "http://"+address, "admin", initialAdminPassword, "backup-process-login")
+			restoredBearer = primary.Credential
+			changePasswordIAM(t, "http://"+address, primary.Credential, initialAdminPassword, changedAdminPassword, "backup-process-password")
+			network.stop()
+			assertProcessOutputsSanitized(t, []*childProcess{network}, processDBPassword, initialAdminPassword, changedAdminPassword)
+			// Keep a genuine, independently exported source for the recovery
+			// workflow before adding unknown-provenance retention fixtures.
+			// Those must remain backed up, but must not start a healthy IAM.
+			clean, cleanLease := startTOTPBackupProcess(t, ctx, root, backupBinary, backupDSN)
+			recoveryLease = cleanLease
+			recoveryDump = runTOTPPostgresTool(t, ctx, config, "pg_dump", nil, "--format=custom", "--schema=iam", "--snapshot="+cleanLease.SnapshotID)
+			if exit := clean.finish(t, installationv1.TOTPBackupCustodyReleaseFrame); exit != installationv1.TOTPBackupCustodyExitSuccess {
+				t.Fatal("clean recovery source snapshot failed to release", exit)
+			}
 			insertRetained("backup-process-revoked", "REVOKED")
 		} else {
+			if lease.AuthenticationStateDigest == priorQualification {
+				t.Fatal("fresh helper did not observe committed credential qualification")
+			}
 			insertRetained("backup-process-pending", "PENDING")
 		}
-		dump := runTOTPPostgresTool(t, ctx, config, "pg_dump", nil, "--format=custom", "--no-owner", "--no-privileges",
-			"--section=pre-data", "--section=data", "--table=iam.totp_wrapping_registry", "--table=iam.totp_keysets",
-			"--table=iam.totp_authenticators", "--snapshot="+lease.SnapshotID)
+		priorQualification = lease.AuthenticationStateDigest
+		dump := runTOTPPostgresTool(t, ctx, config, "pg_dump", nil, "--format=custom", "--schema=iam", "--snapshot="+lease.SnapshotID)
 		if len(dump) == 0 || len(dump) > 2<<20 {
 			t.Fatal("invalid bounded snapshot dump")
 		}
-		proveTOTPImportedDump(t, ctx, admin, config, dump, lease, phase)
+		proveTOTPImportedDump(t, ctx, admin, config, dump, lease, phase, root, backupBinary, temporary)
 		if exit := child.finish(t, installationv1.TOTPBackupCustodyReleaseFrame); exit != installationv1.TOTPBackupCustodyExitSuccess {
 			t.Fatal("normal helper rollback/close failed", exit)
 		}
@@ -217,7 +243,378 @@ func TestIAMTOTPBackupProcesses(t *testing.T) {
 	if err := iammigration.Verify(ctx, admin); err != nil {
 		t.Fatal(err)
 	}
-	t.Log("actual dedicated helper, live snapshot pg_dump/import, retained references, strict release/EOF, rejected roles and failed closure passed; not signed backup/reopen acceptance")
+	unknownHistory := startChild(t, root, iamBinary, iamEnvironment)
+	defer unknownHistory.stop()
+	var startupExit *exec.ExitError
+	if err := unknownHistory.wait(10 * time.Second); !errors.As(err, &startupExit) || startupExit.ExitCode() != 1 ||
+		strings.TrimSpace(unknownHistory.stderr.String()) != "matrix IAM process failed" {
+		t.Fatal("unknown retained MFA provenance was accepted by a restarted authority")
+	}
+	assertProcessOutputsSanitized(t, []*childProcess{unknownHistory}, processDBPassword, initialAdminPassword, changedAdminPassword, restoredBearer)
+	// The opaque backup-retention fixtures have no valid enrollment source.
+	// Restore the earlier genuine source instead of deleting or legitimizing
+	// them to make a running authority accept unknown MFA history.
+	databaseHash := sha256.Sum256([]byte(config.Database + "-clean-recovery-source"))
+	sourceName := "matrix_iam_auth_dump_" + hex.EncodeToString(databaseHash[:10])
+	if _, err := admin.Exec(ctx, "CREATE DATABASE "+pgx.Identifier{sourceName}.Sanitize()); err != nil {
+		t.Fatal("create clean recovery source", err)
+	}
+	defer func() {
+		cleanup, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stop()
+		if _, err := admin.Exec(cleanup, "DROP DATABASE "+pgx.Identifier{sourceName}.Sanitize()); err != nil {
+			t.Error("remove own clean recovery source", err)
+		}
+	}()
+	cleanConfig := config.Copy()
+	cleanConfig.Database = sourceName
+	cleanSource, err := pgx.ConnectConfig(ctx, cleanConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cleanSource.Close(context.Background())
+	runTOTPPostgresTool(t, ctx, cleanConfig, "pg_restore", recoveryDump, "--exit-on-error")
+	cleanEnvironment := append([]string(nil), iamEnvironment...)
+	cleanEnvironment[0] = "MATRIX_IAM_DATABASE_DSN_FILE=" + writeProtectedFile(t, temporary, "clean-api-dsn", []byte(runtimeDSN(t, cleanConfig, apiLogin, processDBPassword)))
+	proveAuthenticationRecoveryProcesses(t, ctx, root, temporary, iamBinary, recoveryBinary, cleanSource, cleanConfig,
+		cleanEnvironment, "http://"+address, recoveryDump, recoveryLease, oldQualification, restoredBearer, bootstrap)
+	t.Log("actual backup and recovery binaries, retained full dump, strict files/roles, lost output and original replay passed; not signed installation or real MFA enrollment acceptance")
+}
+
+func proveAuthenticationRecoveryProcesses(t *testing.T, ctx context.Context, root, temporary, iamBinary, recoveryBinary string,
+	source *pgx.Conn, config *pgx.ConnConfig, iamEnvironment []string, sourceEndpoint string, dump []byte,
+	lease installationv1.TOTPBackupSnapshotLease, oldQualification, restoredBearer string, bootstrap iamv1.BootstrapDocument) {
+	t.Helper()
+	const recoveryLogin = "matrix_iam_authentication_recovery_login"
+	backupDigest := sha256.Sum256(dump)
+	// Release identities are fixture commitments, not signed release admission.
+	intent := installationv1.AuthenticationRecoveryIntent{
+		APIVersion: installationv1.AuthenticationRecoveryAPIVersion, Kind: installationv1.AuthenticationRecoveryIntentKind,
+		Purpose: installationv1.AuthenticationRecoveryPurpose, InstallationID: bootstrap.InstallationID, Epoch: 1,
+		CommandID: "cmd-" + strings.Repeat("1", 32), BackupID: "backup-" + strings.Repeat("2", 32),
+		BackupDigest:    "sha256:" + hex.EncodeToString(backupDigest[:]),
+		SourceReleaseID: "matrix-v0.0.0-recovery-source-0123456789ab", SourceReleaseDigest: "sha256:" + strings.Repeat("3", 64),
+		TargetReleaseID: "matrix-v0.0.0-recovery-target-0123456789ab", TargetReleaseDigest: "sha256:" + strings.Repeat("4", 64),
+		TOTPCustodyDigest: lease.CustodyDigest, AuthenticationStateDigest: lease.AuthenticationStateDigest,
+	}
+	encodeIntent := func(value installationv1.AuthenticationRecoveryIntent) string {
+		t.Helper()
+		encoded, err := installationv1.EncodeAuthenticationRecoveryIntent(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return writeProtectedFile(t, temporary, "recovery-intent-"+value.AuthenticationStateDigest[7:]+".json", encoded)
+	}
+	recoveryDSN := writeProtectedFile(t, temporary, "source-authentication-recovery-dsn", []byte(runtimeDSN(t, config, recoveryLogin, processDBPassword)))
+	closeEnvironment := []string{installationv1.AuthenticationRecoveryDatabaseDSNFileEnvironment + "=" + recoveryDSN,
+		installationv1.AuthenticationRecoveryIntentFileEnvironment + "=" + encodeIntent(intent)}
+	assertOpenWithoutRecovery := func(database *pgx.Conn) {
+		t.Helper()
+		var unchanged bool
+		if err := database.QueryRow(ctx, `SELECT state='OPEN' AND epoch=0
+		 AND NOT EXISTS(SELECT 1 FROM iam.authentication_recovery_closures)
+		 AND NOT EXISTS(SELECT 1 FROM iam.authentication_recovery_completions)
+		 AND NOT EXISTS(SELECT 1 FROM iam.audit_outbox WHERE event_document->>'action' LIKE 'iam.authentication-recovery.%')
+		 FROM iam.authentication_recovery_state WHERE singleton`).Scan(&unchanged); err != nil || !unchanged {
+			t.Fatal("rejected recovery process changed authority, receipt or successful outbox", err)
+		}
+	}
+	for _, login := range []string{"matrix_iam_api_login", "matrix_iam_worker_login", "matrix_iam_backup_custody_login"} {
+		environment := append([]string(nil), closeEnvironment...)
+		environment[0] = installationv1.AuthenticationRecoveryDatabaseDSNFileEnvironment + "=" +
+			writeProtectedFile(t, temporary, "recovery-wrong-"+login, []byte(runtimeDSN(t, config, login, processDBPassword)))
+		invokeAuthenticationRecoveryProcess(t, ctx, root, recoveryBinary, "close", environment, installationv1.AuthenticationRecoveryExitForbidden)
+	}
+	stale := intent
+	stale.AuthenticationStateDigest = oldQualification
+	staleEnvironment := append([]string(nil), closeEnvironment...)
+	staleEnvironment[1] = installationv1.AuthenticationRecoveryIntentFileEnvironment + "=" + encodeIntent(stale)
+	invokeAuthenticationRecoveryProcess(t, ctx, root, recoveryBinary, "close", staleEnvironment, installationv1.AuthenticationRecoveryExitConflict)
+	assertOpenWithoutRecovery(source)
+	network := startChild(t, root, iamBinary, iamEnvironment)
+	defer network.stop()
+	waitHTTPStatus(t, ctx, network, sourceEndpoint+"/ready", http.StatusOK)
+	if response := performJSON(t, http.MethodGet, sourceEndpoint+"/v1/auth/me", restoredBearer, nil); response.Status != http.StatusOK {
+		t.Fatal("pre-close real retained Session is not valid", response.Status)
+	}
+	// Close the consumer's read end before execution. The real binary must
+	// commit before its stdout write fails; installation would see UNKNOWN.
+	func() {
+		blocker, err := pgx.ConnectConfig(ctx, config)
+		if err != nil {
+			t.Fatal("connect private recovery lock holder", err)
+		}
+		defer blocker.Close(context.Background())
+		transaction, err := blocker.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer transaction.Rollback(context.Background())
+		if _, err := transaction.Exec(ctx, "SELECT 1 FROM iam.authentication_recovery_state WHERE singleton FOR UPDATE"); err != nil {
+			t.Fatal(err)
+		}
+		loseAuthenticationRecoveryOutput(t, ctx, root, recoveryBinary, "close", closeEnvironment, func() {
+			waiting, stop := context.WithTimeout(ctx, 4*time.Second)
+			defer stop()
+			ticker := time.NewTicker(10 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				// The observer remains in autocommit: the lock-holder's cached
+				// statistics snapshot is not evidence of a new process login.
+				var blocked int
+				if err := source.QueryRow(waiting, `WITH RECURSIVE waits(pid,blocker) AS (
+				 SELECT pid,unnest(pg_blocking_pids(pid)) FROM pg_stat_activity
+				 WHERE datname=current_database() AND usename=$1 AND application_name='matrix-iam-authentication-recovery'
+				 UNION SELECT pid,unnest(pg_blocking_pids(blocker)) FROM waits)
+				 SELECT count(DISTINCT pid) FROM waits WHERE blocker=$2`, recoveryLogin, blocker.PgConn().PID()).Scan(&blocked); err != nil {
+					t.Fatal("observe actual private recovery process login and lock dependency", err)
+				}
+				if blocked == 1 {
+					break
+				}
+				select {
+				case <-ticker.C:
+				case <-waiting.Done():
+					t.Fatal("private recovery process did not reach the held lock within its production timeout")
+				}
+			}
+			if err := transaction.Commit(ctx); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}()
+	var closed bool
+	if err := source.QueryRow(ctx, `SELECT state='CLOSED' AND epoch=1 AND active_command_id=$1
+	 AND (SELECT count(*) FROM iam.authentication_recovery_closures)=1
+	 AND EXISTS(SELECT 1 FROM iam.authentication_recovery_closures WHERE command_id=$1
+	   AND origin='SOURCE' AND security_snapshot_document IS NOT NULL)
+	 AND NOT EXISTS(SELECT 1 FROM iam.authentication_recovery_completions)
+	 AND (SELECT count(*) FROM iam.audit_outbox WHERE event_document->>'action' LIKE 'iam.authentication-recovery.%')=1
+	 FROM iam.authentication_recovery_state WHERE singleton`, intent.CommandID).Scan(&closed); err != nil || !closed {
+		t.Fatal("lost close output was not preceded by the actual committed snapshot and closed fact", err)
+	}
+	encodedEnvelope := invokeAuthenticationRecoveryProcess(t, ctx, root, recoveryBinary, "close", closeEnvironment, 0)
+	envelope, err := installationv1.DecodeAuthenticationRecoveryClosureEnvelope(bytes.NewReader(encodedEnvelope))
+	if err != nil || installationv1.ValidateAuthenticationRecoveryClosureEnvelopeForIntent(envelope, intent, lease.Custody.BootstrapDigest) != nil {
+		t.Fatal("restarted close process did not return its original committed envelope", err)
+	}
+	if replay := invokeAuthenticationRecoveryProcess(t, ctx, root, recoveryBinary, "close", closeEnvironment, 0); !bytes.Equal(replay, encodedEnvelope) {
+		t.Fatal("new close process sampled another snapshot or changed receipt bytes")
+	}
+	waitHTTPStatus(t, ctx, network, sourceEndpoint+"/ready", http.StatusServiceUnavailable)
+	if response := performJSON(t, http.MethodGet, sourceEndpoint+"/v1/auth/me", restoredBearer, nil); response.Status != http.StatusUnauthorized {
+		t.Fatal("live API bypassed committed private close", response.Status)
+	}
+	network.stop()
+	assertProcessOutputsSanitized(t, []*childProcess{network}, processDBPassword, initialAdminPassword, changedAdminPassword, restoredBearer)
+	closureBytes, err := installationv1.EncodeAuthenticationRecoveryClosure(envelope.Closure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshotBytes, err := installationv1.EncodeAuthenticationRecoverySecuritySnapshot(envelope.SecuritySnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closureFile := writeProtectedFile(t, temporary, "recovery-closure.json", closureBytes)
+	snapshotFile := writeProtectedFile(t, temporary, "recovery-snapshot.json", snapshotBytes)
+	closedEnvironment := []string{installationv1.AuthenticationRecoveryDatabaseDSNFileEnvironment + "=" + recoveryDSN,
+		installationv1.AuthenticationRecoveryClosureFileEnvironment + "=" + closureFile,
+		installationv1.AuthenticationRecoverySecuritySnapshotFileEnvironment + "=" + snapshotFile}
+	invokeAuthenticationRecoveryProcess(t, ctx, root, recoveryBinary, "reopen", closedEnvironment, installationv1.AuthenticationRecoveryExitConflict)
+
+	databaseHash := sha256.Sum256([]byte(config.Database + "-authentication-recovery"))
+	name := "matrix_iam_auth_dump_" + hex.EncodeToString(databaseHash[:10])
+	if _, err := source.Exec(ctx, "CREATE DATABASE "+pgx.Identifier{name}.Sanitize()); err != nil {
+		t.Fatal("create private recovery target", err)
+	}
+	defer func() {
+		cleanup, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		defer stop()
+		if _, err := source.Exec(cleanup, "DROP DATABASE "+pgx.Identifier{name}.Sanitize()); err != nil {
+			t.Error("remove private recovery target", err)
+		}
+	}()
+	targetConfig := config.Copy()
+	targetConfig.Database = name
+	target, err := pgx.ConnectConfig(ctx, targetConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close(context.Background())
+	runTOTPPostgresTool(t, ctx, targetConfig, "pg_restore", dump, "--exit-on-error")
+	var originalGeneration int64
+	if err := target.QueryRow(ctx, "SELECT credential_version FROM iam.user_credentials WHERE tenant_id=$1 AND principal_id=$2",
+		bootstrap.Organization.ID, bootstrap.Administrator.ID).Scan(&originalGeneration); err != nil {
+		t.Fatal(err)
+	}
+	restoredEnvironment := append([]string(nil), closedEnvironment...)
+	restoredEnvironment[0] = installationv1.AuthenticationRecoveryDatabaseDSNFileEnvironment + "=" +
+		writeProtectedFile(t, temporary, "target-authentication-recovery-dsn", []byte(runtimeDSN(t, targetConfig, recoveryLogin, processDBPassword)))
+	invokeAuthenticationRecoveryProcess(t, ctx, root, recoveryBinary, "reconcile", restoredEnvironment[:2], installationv1.AuthenticationRecoveryExitInvalid)
+	badSnapshot := envelope.SecuritySnapshot
+	badSnapshot.AuthenticationStateDigest = "sha256:" + strings.Repeat("f", 64)
+	badBytes, err := installationv1.EncodeAuthenticationRecoverySecuritySnapshot(badSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	badEnvironment := append([]string(nil), restoredEnvironment...)
+	badEnvironment[2] = installationv1.AuthenticationRecoverySecuritySnapshotFileEnvironment + "=" + writeProtectedFile(t, temporary, "recovery-bad-snapshot.json", badBytes)
+	invokeAuthenticationRecoveryProcess(t, ctx, root, recoveryBinary, "reconcile", badEnvironment, installationv1.AuthenticationRecoveryExitInvalid)
+	assertOpenWithoutRecovery(target)
+	for range 2 {
+		if reconciled := invokeAuthenticationRecoveryProcess(t, ctx, root, recoveryBinary, "reconcile", restoredEnvironment, 0); !bytes.Equal(reconciled, closureBytes) {
+			t.Fatal("independent reconcile changed original closure")
+		}
+	}
+	loseAuthenticationRecoveryOutput(t, ctx, root, recoveryBinary, "reopen", restoredEnvironment, nil)
+	// Inspect before any replay can hide a failure to commit the first command.
+	var once bool
+	if err := target.QueryRow(ctx, `SELECT state='OPEN' AND epoch=1
+	 AND (SELECT count(*) FROM iam.authentication_recovery_closures)=1
+	 AND (SELECT count(*) FROM iam.authentication_recovery_reconciliations)=1
+	 AND (SELECT count(*) FROM iam.authentication_recovery_completions)=1
+	 AND (SELECT count(*) FROM iam.audit_outbox WHERE event_document->>'action' LIKE 'iam.authentication-recovery.%')=3
+	 AND (SELECT credential_version FROM iam.user_credentials WHERE tenant_id=$1 AND principal_id=$2)=$3+1
+	 FROM iam.authentication_recovery_state WHERE singleton`, bootstrap.Organization.ID, bootstrap.Administrator.ID, originalGeneration).Scan(&once); err != nil || !once {
+		t.Fatal("lost reopen output was not preceded by exactly one committed credential fence and completion", err)
+	}
+	completionBytes := invokeAuthenticationRecoveryProcess(t, ctx, root, recoveryBinary, "reopen", restoredEnvironment, 0)
+	completion, err := installationv1.DecodeAuthenticationRecoveryCompletion(bytes.NewReader(completionBytes))
+	if err != nil || installationv1.ValidateAuthenticationRecoveryCompletionForClosure(completion, envelope.Closure) != nil {
+		t.Fatal("original reopen completion unavailable", err)
+	}
+	targetAddress := freeAddress(t)
+	targetEnvironment := append([]string(nil), iamEnvironment...)
+	for index, entry := range targetEnvironment {
+		if strings.HasPrefix(entry, "MATRIX_IAM_DATABASE_DSN_FILE=") {
+			targetEnvironment[index] = "MATRIX_IAM_DATABASE_DSN_FILE=" + writeProtectedFile(t, temporary, "target-api-dsn", []byte(runtimeDSN(t, targetConfig, "matrix_iam_api_login", processDBPassword)))
+		}
+		if strings.HasPrefix(entry, "MATRIX_IAM_LISTEN_ADDRESS=") {
+			targetEnvironment[index] = "MATRIX_IAM_LISTEN_ADDRESS=" + targetAddress
+		}
+	}
+	endpoint := "http://" + targetAddress
+	var newBearer string
+	for round := 0; round < 2; round++ {
+		restarted := startChild(t, root, iamBinary, targetEnvironment)
+		defer restarted.stop()
+		waitHTTPStatus(t, ctx, restarted, endpoint+"/ready", http.StatusOK)
+		if response := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", restoredBearer, nil); response.Status != http.StatusUnauthorized {
+			t.Fatal("restart revived pre-recovery Session", response.Status)
+		}
+		if response := performJSON(t, http.MethodPost, endpoint+"/v1/auth/login", "", map[string]string{"loginName": "admin", "password": initialAdminPassword, "requestId": fmt.Sprintf("recovery-old-password-%d", round)}); response.Status != http.StatusUnauthorized {
+			t.Fatal("bootstrap replay revived old password", response.Status)
+		}
+		if round == 0 {
+			newBearer = loginIAM(t, endpoint, "admin", changedAdminPassword, "recovery-fresh-login").Credential
+		}
+		if replay := invokeAuthenticationRecoveryProcess(t, ctx, root, recoveryBinary, "reopen", restoredEnvironment, 0); !bytes.Equal(replay, completionBytes) {
+			t.Fatal("restarted private process changed historical completion")
+		}
+		if response := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", newBearer, nil); response.Status != http.StatusOK {
+			t.Fatal("completion replay revoked new post-recovery Session", response.Status)
+		}
+		rows, err := target.Query(ctx, "SELECT event_document FROM iam.audit_outbox WHERE event_document->>'action' LIKE 'iam.authentication-recovery.%' ORDER BY event_id")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var events []auditv1.Event
+		for rows.Next() {
+			var raw []byte
+			var event auditv1.Event
+			if err := rows.Scan(&raw); err != nil {
+				rows.Close()
+				t.Fatal(err)
+			}
+			if json.Unmarshal(raw, &event) != nil {
+				rows.Close()
+				t.Fatal("invalid stored recovery fact")
+			}
+			events = append(events, event)
+		}
+		rows.Close()
+		if rows.Err() != nil || len(events) != 3 {
+			t.Fatal("incomplete recovery fact set", rows.Err())
+		}
+		for _, event := range events {
+			response := performJSON(t, http.MethodPost, endpoint+"/v1/audit-producer:resolve", iamServiceCredential, iamv1.ResolveAuditProducerRequest{Event: event})
+			var proof iamv1.AuditProducerAuthorization
+			_, digest, err := auditv1.CanonicalizeEvent(auditv1.SourceIAM, event)
+			if err != nil || response.Status != http.StatusOK || json.Unmarshal(response.Body, &proof) != nil || iamv1.ValidateAuditProducerAuthorization(proof) != nil ||
+				proof.Producer.Purpose != iamv1.ServiceIAM || proof.InstallationID != bootstrap.InstallationID || proof.TenantID != "" || proof.ContentDigest != digest {
+				t.Fatal("committed recovery fact lost HTTP producer proof", response.Status)
+			}
+		}
+		restarted.stop()
+		assertProcessOutputsSanitized(t, []*childProcess{restarted}, processDBPassword, initialAdminPassword, changedAdminPassword, restoredBearer, newBearer)
+	}
+	if err := iammigration.Verify(ctx, target); err != nil {
+		t.Fatal("restored process schema did not verify", err)
+	}
+}
+
+func invokeAuthenticationRecoveryProcess(t *testing.T, ctx context.Context, root, binary, mode string, environment []string, want int) []byte {
+	t.Helper()
+	child := startChild(t, root, binary, environment, mode)
+	defer child.stop()
+	err := child.wait(50 * time.Second)
+	code := 0
+	if err != nil {
+		var exit *exec.ExitError
+		if !errors.As(err, &exit) {
+			t.Fatal("authentication recovery process did not finish")
+		}
+		code = exit.ExitCode()
+	}
+	codes := map[int]string{0: "", 2: installationv1.AuthenticationRecoveryErrorInvalid, 3: installationv1.AuthenticationRecoveryErrorForbidden, 4: installationv1.AuthenticationRecoveryErrorConflict, 6: installationv1.AuthenticationRecoveryErrorUnavailable}
+	expected, known := codes[code]
+	if !known || code != want || strings.TrimSpace(child.stderr.String()) != expected || (code != 0 && child.stdout.Len() != 0) || int64(child.stdout.Len()) > installationv1.MaximumAuthenticationRecoveryEnvelopeBytes {
+		t.Fatalf("authentication recovery %s violated its closed output/exit contract: exit=%d want=%d", mode, code, want)
+	}
+	if ctx.Err() != nil {
+		t.Fatal("authentication recovery process gate context expired")
+	}
+	return append([]byte(nil), child.stdout.Bytes()...)
+}
+
+func loseAuthenticationRecoveryOutput(t *testing.T, ctx context.Context, root, binary, mode string, environment []string, observe func()) {
+	t.Helper()
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Close()
+	command := exec.CommandContext(ctx, binary, mode)
+	command.Dir = root
+	command.Env = append(append(os.Environ(), environment...), "GOMAXPROCS=2", "GOMEMLIMIT=512MiB")
+	command.Stdout = writer
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	if err := command.Start(); err != nil {
+		t.Fatal("start private recovery with disconnected output", err)
+	}
+	waited := false
+	defer func() {
+		if !waited {
+			_ = command.Process.Kill()
+			_ = command.Wait()
+		}
+	}()
+	if observe != nil {
+		observe()
+	}
+	err = command.Wait()
+	waited = true
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || ctx.Err() != nil {
+		t.Fatal("broken response pipe did not produce an unknown process outcome")
+	}
+	if message := strings.TrimSpace(stderr.String()); message != "" && message != installationv1.AuthenticationRecoveryErrorUnavailable {
+		t.Fatal("lost recovery output exposed non-sanitized error")
+	}
 }
 
 type totpSnapshotProcess struct {
@@ -357,7 +754,7 @@ func runTOTPPostgresTool(t *testing.T, ctx context.Context, config *pgx.ConnConf
 	return output
 }
 
-func proveTOTPImportedDump(t *testing.T, ctx context.Context, admin *pgx.Conn, config *pgx.ConnConfig, dump []byte, lease installationv1.TOTPBackupSnapshotLease, wantFactors int) {
+func proveTOTPImportedDump(t *testing.T, ctx context.Context, admin *pgx.Conn, config *pgx.ConnConfig, dump []byte, lease installationv1.TOTPBackupSnapshotLease, wantFactors int, root, backupBinary, temporary string) {
 	t.Helper()
 	digest := sha256.Sum256([]byte(config.Database + fmt.Sprint(wantFactors)))
 	name := "matrix_iam_totp_dump_" + hex.EncodeToString(digest[:10])
@@ -378,10 +775,7 @@ func proveTOTPImportedDump(t *testing.T, ctx context.Context, admin *pgx.Conn, c
 		t.Fatal(err)
 	}
 	defer connection.Close(context.Background())
-	if _, err := connection.Exec(ctx, "CREATE SCHEMA iam"); err != nil {
-		t.Fatal(err)
-	}
-	runTOTPPostgresTool(t, ctx, target, "pg_restore", dump, "--exit-on-error", "--no-owner", "--no-privileges")
+	runTOTPPostgresTool(t, ctx, target, "pg_restore", dump, "--exit-on-error")
 	var factors, revision int
 	if err := connection.QueryRow(ctx, `SELECT (SELECT count(*) FROM iam.totp_authenticators),(SELECT max(revision) FROM iam.totp_keysets)`).Scan(&factors, &revision); err != nil || factors != wantFactors || uint64(revision) != lease.Custody.KeysetRevision {
 		t.Fatal("pg_dump did not import the leased snapshot", err)
@@ -404,5 +798,21 @@ func proveTOTPImportedDump(t *testing.T, ctx context.Context, admin *pgx.Conn, c
 	rows.Close()
 	if rows.Err() != nil || index != len(lease.Custody.RequiredKeys) {
 		t.Fatal("dump requirement summary is incomplete")
+	}
+	// The restored full IAM schema must retain actual owners, RLS and grants.
+	// Re-run the real helper through its private login, not administrative SQL.
+	restoredDSN := writeProtectedFile(t, temporary, name+"-backup-dsn", []byte(runtimeDSN(t, target, "matrix_iam_backup_custody_login", processDBPassword)))
+	child, restoredLease := startTOTPBackupProcess(t, ctx, root, backupBinary, restoredDSN)
+	var restoredExporter int
+	if err := connection.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE datname=current_database()
+	 AND usename='matrix_iam_backup_custody_login' AND application_name='matrix-iam-backup-custody'
+	 AND state='idle in transaction'`).Scan(&restoredExporter); err != nil || restoredExporter != 1 {
+		t.Fatal("restored helper did not hold the target database snapshot", err)
+	}
+	if restoredLease.AuthenticationStateDigest != lease.AuthenticationStateDigest || restoredLease.CustodyDigest != lease.CustodyDigest {
+		t.Fatal("full restored dump diverged from leased authentication or material proof")
+	}
+	if exit := child.finish(t, installationv1.TOTPBackupCustodyReleaseFrame); exit != installationv1.TOTPBackupCustodyExitSuccess {
+		t.Fatal("restored helper failed to release its snapshot", exit)
 	}
 }

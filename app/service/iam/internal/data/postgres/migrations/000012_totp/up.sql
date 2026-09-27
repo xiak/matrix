@@ -181,7 +181,7 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='TOTP backup custody context is forbidden';
     END IF;
     IF NOT iam.totp_custody_contract_ready() OR NOT iam.totp_backup_custody_contract_ready()
-        OR (SELECT schema_version FROM iam.readiness())<>44 THEN
+        OR NOT EXISTS(SELECT 1 FROM iam.readiness() WHERE ready AND schema_version=45) THEN
         RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='TOTP backup custody shape is unavailable';
     END IF;
     registration:=iam.totp_keyset_snapshot();
@@ -200,10 +200,11 @@ BEGIN
         FROM iam.totp_wrapping_registry k WHERE EXISTS(SELECT 1 FROM iam.totp_authenticators f
             WHERE (f.installation_id,f.key_id)=(k.installation_id,k.key_id));
     PERFORM set_config('matrix.iam_totp_custody',COALESCE(prior_custody_scope,''),true);
-    RETURN jsonb_build_object('apiVersion','installation.matrix.xiak.com/v1','kind','IAMTOTPBackupCustody',
+    RETURN jsonb_build_object('custody',jsonb_build_object('apiVersion','installation.matrix.xiak.com/v1','kind','IAMTOTPBackupCustody',
         'purpose','IAM_TOTP_BACKUP_CUSTODY','installationId',registration#>>'{scope,installationId}',
         'bootstrapDigest',registration#>>'{scope,bootstrapDigest}','keysetRevision',registration->'keysetRevision',
-        'requiredKeys',required_keys);
+        'requiredKeys',required_keys),
+        'authenticationStateDigest',iam.authentication_security_projection()->>'authenticationStateDigest');
 END $function$;
 
 REVOKE ALL ON iam.totp_wrapping_registry,iam.totp_keysets,iam.totp_authenticators
@@ -1603,7 +1604,7 @@ END $function$;
 
 CREATE OR REPLACE FUNCTION iam.reserve_totp_attempt(tenant text,subject_id text,caller_id text,reference_id text,purpose text,attempt_id text)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
-DECLARE factor iam.totp_authenticators%ROWTYPE; previous iam.totp_attempts%ROWTYPE;
+DECLARE factor iam.totp_authenticators%ROWTYPE; previous iam.totp_attempts%ROWTYPE; recovery_floor record; next_sequence bigint;
     generation bigint; revision bigint; effective_now timestamptz(6); window_start timestamptz(6); used integer;
 BEGIN
     IF COALESCE(attempt_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
@@ -1613,9 +1614,14 @@ BEGIN
     SELECT c.credential_version INTO generation FROM iam.user_credentials c WHERE c.tenant_id=tenant AND c.principal_id=subject_id;
     SELECT m.revision INTO revision FROM iam.user_mfa_states m WHERE m.tenant_id=tenant AND m.user_id=subject_id;
     SELECT * INTO previous FROM iam.totp_attempts a WHERE a.tenant_id=tenant AND a.user_id=subject_id FOR UPDATE;
+    SELECT * INTO recovery_floor FROM iam.authentication_recovery_attempt_floors f WHERE f.tenant_id=tenant AND f.user_id=subject_id;
     effective_now:=clock_timestamp();
     IF previous.state='RESERVED' AND previous.expires_at>effective_now THEN RETURN NULL; END IF;
     IF previous.attempt_id=reserve_totp_attempt.attempt_id THEN RETURN NULL; END IF;
+    IF recovery_floor.totp_sequence>=COALESCE(previous.sequence,0) THEN
+        previous.window_started_at:=recovery_floor.totp_window_started_at;
+        previous.used_attempts:=recovery_floor.totp_used_attempts;
+    END IF;
     IF previous.window_started_at+interval '10 minutes'>effective_now THEN
         IF previous.used_attempts>=5 THEN RETURN NULL; END IF;
         window_start:=previous.window_started_at; used:=previous.used_attempts+1;
@@ -1626,15 +1632,16 @@ BEGIN
         IF (SELECT c.attempts FROM iam.authentication_challenges c WHERE c.tenant_id=tenant AND c.id=reference_id)>=5 THEN RETURN NULL; END IF;
         UPDATE iam.authentication_challenges c SET attempts=attempts+1 WHERE c.tenant_id=tenant AND c.id=reference_id;
     END IF;
+    next_sequence:=greatest(COALESCE(previous.sequence,0),COALESCE(recovery_floor.totp_sequence,0))+1;
     INSERT INTO iam.totp_attempts AS a(tenant_id,user_id,attempt_id,sequence,purpose,reference_id,source_session_id,
         credential_generation,mfa_revision,state,window_started_at,used_attempts,reserved_at,expires_at)
-        VALUES(tenant,subject_id,attempt_id,COALESCE(previous.sequence,0)+1,purpose,reference_id,caller_id,
+        VALUES(tenant,subject_id,attempt_id,next_sequence,purpose,reference_id,caller_id,
             generation,revision,'RESERVED',window_start,used,effective_now,effective_now+interval '30 seconds')
         ON CONFLICT(tenant_id,user_id) DO UPDATE SET attempt_id=EXCLUDED.attempt_id,sequence=EXCLUDED.sequence,purpose=EXCLUDED.purpose,
             reference_id=EXCLUDED.reference_id,source_session_id=EXCLUDED.source_session_id,credential_generation=EXCLUDED.credential_generation,
             mfa_revision=EXCLUDED.mfa_revision,state='RESERVED',window_started_at=EXCLUDED.window_started_at,used_attempts=EXCLUDED.used_attempts,
             reserved_at=EXCLUDED.reserved_at,expires_at=EXCLUDED.expires_at,completed_at=NULL;
-    RETURN jsonb_build_object('id',attempt_id,'sequence',COALESCE(previous.sequence,0)+1);
+    RETURN jsonb_build_object('id',attempt_id,'sequence',next_sequence);
 END $function$;
 
 CREATE OR REPLACE FUNCTION iam.lock_mfa_attempt(tenant text,subject_id text,caller_id text,reference_id text,purpose text,attempt_id text,attempt_sequence bigint)

@@ -14,6 +14,9 @@ func TestTOTPBackupSnapshotLeaseHasOneCanonicalNonSecretForm(t *testing.T) {
 	value := totpBackupSnapshotLeaseFixture(t)
 	want := `{"apiVersion":"installation.matrix.xiak.com/v1","kind":"IAMTOTPBackupSnapshotLease","purpose":"IAM_TOTP_BACKUP_CUSTODY","snapshotId":"00000003-0000001B-1","custody":{"apiVersion":"installation.matrix.xiak.com/v1","kind":"IAMTOTPBackupCustody","purpose":"IAM_TOTP_BACKUP_CUSTODY","installationId":"mxi-0123456789abcdef0123456789abcdef","bootstrapDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","keysetRevision":2,"requiredKeys":[{"keyId":"totp-wrapping-v1","formatVersion":1,"commitment":"sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},{"keyId":"totp-wrapping-v2","formatVersion":1,"commitment":"sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"}]},"custodyDigest":"sha256:3fb262321b4b154d5e348be95553c5ffd3990a3964769cea130c0b9f90b0e108"}`
 
+	// The custody's persistent bytes remain unchanged; the ephemeral lease
+	// independently binds the identity/authorization snapshot used by backup.
+	want = strings.TrimSuffix(want, "}") + `,"authenticationStateDigest":"sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"}`
 	encoded, err := EncodeTOTPBackupSnapshotLease(value)
 	if err != nil || string(encoded) != want {
 		t.Fatalf("encode TOTP backup lease = %q / %v", encoded, err)
@@ -200,6 +203,8 @@ func TestTOTPBackupSnapshotLeaseRejectsExpiredShapeOrChangedCustody(t *testing.T
 		"invalid digest": func(v *TOTPBackupSnapshotLease) {
 			v.CustodyDigest = "sha256:" + strings.Repeat("f", 64)
 		},
+		"missing authority digest":   func(v *TOTPBackupSnapshotLease) { v.AuthenticationStateDigest = "" },
+		"malformed authority digest": func(v *TOTPBackupSnapshotLease) { v.AuthenticationStateDigest = "sha256:bad" },
 	}
 	for name, change := range changes {
 		t.Run(name, func(t *testing.T) {
@@ -222,7 +227,8 @@ func TestTOTPBackupSnapshotLeaseRejectsAmbiguousJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	variants := map[string]string{
-		"unknown": strings.Replace(string(canonical), `"snapshotId":`, `"extra":true,"snapshotId":`, 1),
+		"old lease without authority": strings.Replace(string(canonical), `,"authenticationStateDigest":"sha256:`+strings.Repeat("d", 64)+`"`, "", 1),
+		"unknown":                     strings.Replace(string(canonical), `"snapshotId":`, `"extra":true,"snapshotId":`, 1),
 		"duplicate": strings.Replace(
 			string(canonical), `"snapshotId":"00000003-0000001B-1"`,
 			`"snapshotId":"00000003-0000001B-1","snapshotId":"00000003-0000001B-1"`, 1,
@@ -289,6 +295,6 @@ func totpBackupSnapshotLeaseFixture(t testing.TB) TOTPBackupSnapshotLease {
 	return TOTPBackupSnapshotLease{
 		APIVersion: TOTPBackupCustodyAPIVersion, Kind: TOTPBackupSnapshotLeaseKind,
 		Purpose: TOTPBackupCustodyPurpose, SnapshotID: "00000003-0000001B-1",
-		Custody: custody, CustodyDigest: digest,
+		Custody: custody, CustodyDigest: digest, AuthenticationStateDigest: "sha256:" + strings.Repeat("d", 64),
 	}
 }

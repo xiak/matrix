@@ -106,9 +106,9 @@ func TestRuntimeDSNBindsLeastPrivilegeLogin(t *testing.T) {
 func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	const variable = "MATRIX_IAM_PREDECESSOR_POSTGRES_TEST_DSN"
 	const databasePrefix = "matrix_iam_upgrade_predecessor_"
-	const source = "a97a8a0c422d8e9d2c8cadb85f74c61c815318c6"
-	const sourceSchema uint64 = 43
-	const currentSchema uint64 = 44
+	const source = "e24dbdae6b4ea420365a4527a0bd89b16e0d720f"
+	const sourceSchema uint64 = 44
+	const currentSchema uint64 = 45
 	dsn := os.Getenv(variable)
 	if dsn == "" {
 		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", variable)
@@ -124,7 +124,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	if err != nil {
 		t.Fatal("connect retained own-session database")
 	}
-	defer admin.Close(context.Background())
+	defer func() { _ = admin.Close(context.Background()) }()
 	assertPostgres18(t, ctx, admin)
 	assertCleanSchemas(t, ctx, admin)
 	root, temporary := repositoryRoot(t), t.TempDir()
@@ -165,7 +165,9 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 			t.Fatalf("actual IAM%d migrator failed", sourceSchema)
 		}
 	}
-	bootstrap, err := iamv1.EncodeBootstrapDocument(processBootstrap(t))
+	bootstrapDocument := processBootstrap(t)
+	bootstrapDocument.InstallationID = "mxi-44504450445044504450445044504450"
+	bootstrap, err := iamv1.EncodeBootstrapDocument(bootstrapDocument)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,14 +179,14 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	environment := []string{"MATRIX_IAM_DATABASE_DSN_FILE=" + writeProtectedFile(t, temporary, "iam-api-dsn", []byte(apiDSN)),
 		"MATRIX_IAM_BOOTSTRAP_FILE=" + bootstrapPath, "MATRIX_IAM_LISTEN_ADDRESS=" + address,
 		"MATRIX_IAM_CURSOR_KEY_FILE=" + writeProtectedFile(t, temporary, "iam-cursor-key", []byte(strings.Repeat("37", 32))),
-		"MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE=" + writeProcessAccessKeyWrapping(t, temporary, processBootstrap(t))}
+		"MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE=" + writeProcessAccessKeyWrapping(t, temporary, bootstrapDocument)}
 	{
-		digest, err := iamv1.BootstrapDigest(processBootstrap(t))
+		digest, err := iamv1.BootstrapDigest(bootstrapDocument)
 		if err != nil {
 			t.Fatal(err)
 		}
 		mail := iamv1.EmailVerificationKeyring{APIVersion: iamv1.APIVersion, Kind: "EmailVerificationKeyring", Purpose: iamv1.EmailVerificationWrappingPurpose,
-			Scope:          iamv1.SecurityMailInstallationScope{InstallationID: processBootstrap(t).InstallationID, BootstrapDigest: digest},
+			Scope:          iamv1.SecurityMailInstallationScope{InstallationID: bootstrapDocument.InstallationID, BootstrapDigest: digest},
 			KeysetRevision: 1, ActiveKeyID: "process-mail", Keys: []iamv1.EmailVerificationWrappingKey{{KeyID: "process-mail", FormatVersion: 1,
 				KeyMaterial: processSecret(t, base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x63}, 32)))}}}
 		encoded, err := iamv1.EncodeEmailVerificationKeyring(mail)
@@ -197,7 +199,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	start := func(binary string, version uint64) *childProcess {
 		t.Helper()
 		currentEnvironment := append([]string(nil), environment...)
-		currentEnvironment = append(currentEnvironment, "MATRIX_IAM_TOTP_KEYRING_FILE="+writeProcessTOTPKeyring(t, temporary, processBootstrap(t)))
+		currentEnvironment = append(currentEnvironment, "MATRIX_IAM_TOTP_KEYRING_FILE="+writeProcessTOTPKeyring(t, temporary, bootstrapDocument))
 		child := startChild(t, root, binary, currentEnvironment)
 		children = append(children, child)
 		waitHTTPStatus(t, ctx, child, endpoint+"/ready", http.StatusOK)
@@ -245,6 +247,19 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	for _, session := range []loginResult{primary, a, b, ended, unknown, forcedA, forcedB, selfEnded} {
 		sensitive = append(sensitive, session.Credential)
 	}
+	// Quiescent copies retain the exact predecessor rows and schema without
+	// modifying this live-session fixture or manufacturing legacy receipts.
+	// Complete this before MFA callbacks capture the long-lived observer.
+	old.stop()
+	if err := admin.Close(ctx); err != nil {
+		t.Fatal("close predecessor observer before isolated database copies")
+	}
+	provePredecessorAuthenticationRecovery(t, ctx, root, baseline, temporary, config, bootstrapDocument.InstallationID)
+	admin, err = pgx.ConnectConfig(ctx, config)
+	if err != nil {
+		t.Fatal("reconnect predecessor observer")
+	}
+	old = start(oldBinary, sourceSchema)
 	var mailState func() []byte
 	var oldVerification iamv1.NotificationContactVerification
 	{
@@ -307,9 +322,9 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		 'users',(SELECT jsonb_agg(jsonb_build_array(tenant_id,id,status,must_change_password,resource_version) ORDER BY tenant_id,id) FROM iam.principals),
 		 'attachments',(SELECT jsonb_agg(jsonb_build_array(tenant_id,id,target_id,policy_id,authority_scope,installation_id,resource_version,revoked_at) ORDER BY tenant_id,id) FROM iam.policy_attachments),
 		 'selfCompletions',(SELECT jsonb_agg(to_jsonb(r) ORDER BY tenant_id,user_id,request_id) FROM iam.session_self_revocations r),
-		 'factors',(SELECT jsonb_agg(to_jsonb(f)-ARRAY['replacement_step_up_id','replacement_contact_revision'] ORDER BY tenant_id,id) FROM iam.totp_authenticators f),
+		 'factors',(SELECT jsonb_agg(to_jsonb(f) ORDER BY tenant_id,id) FROM iam.totp_authenticators f),
 		 'mfaStates',(SELECT jsonb_agg(to_jsonb(m) ORDER BY tenant_id,user_id) FROM iam.user_mfa_states m),
-		 'batches',(SELECT jsonb_agg(to_jsonb(b)-'revocation_replacement_factor_id' ORDER BY tenant_id,id) FROM iam.mfa_recovery_batches b),
+		 'batches',(SELECT jsonb_agg(to_jsonb(b) ORDER BY tenant_id,id) FROM iam.mfa_recovery_batches b),
 		 'codes',(SELECT jsonb_agg(to_jsonb(c) ORDER BY tenant_id,id) FROM iam.mfa_recovery_codes c),
 		 'recoveries',(SELECT jsonb_agg(to_jsonb(r) ORDER BY tenant_id,id) FROM iam.authenticator_recoveries r),
 		 'challenges',(SELECT jsonb_agg(to_jsonb(c) ORDER BY tenant_id,id) FROM iam.authentication_challenges c),
@@ -346,7 +361,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	 CREATE FUNCTION public.iam_predecessor_fault() RETURNS event_trigger LANGUAGE plpgsql SECURITY DEFINER
 	 SET search_path=pg_catalog,pg_temp AS $body$ BEGIN
 	 IF EXISTS(SELECT 1 FROM pg_event_trigger_ddl_commands() WHERE schema_name='iam' AND object_type='function'
-	 AND object_identity LIKE 'iam.verify_totp_replacement(%') THEN
+	 AND object_identity LIKE 'iam.reopen_authentication_recovery(%') THEN
 	 PERFORM nextval('public.iam_predecessor_fault_seen');
 	 RAISE EXCEPTION USING ERRCODE='P0017',MESSAGE='injected predecessor cutover failure'; END IF; END $body$;
 	 CREATE EVENT TRIGGER iam_predecessor_fault ON ddl_command_end EXECUTE FUNCTION public.iam_predecessor_fault()`); err != nil {
@@ -362,9 +377,12 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	}
 	if err := admin.QueryRow(ctx, `SELECT (SELECT is_called FROM public.iam_predecessor_fault_seen)
 	 AND (SELECT schema_version=$1 FROM iam.readiness())
-	 AND NOT EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid='iam.totp_authenticators'::regclass
-	 AND attname IN ('replacement_step_up_id','replacement_contact_revision') AND NOT attisdropped)
-	 AND to_regprocedure('iam.start_totp_replacement(text,text,text,text,text,bigint,text,text,text,text,bytea,bytea)') IS NULL`, sourceSchema).Scan(&untouched); err != nil || !untouched ||
+	 AND NOT EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid='iam.authentication_recovery_closures'::regclass
+	 AND attname='security_snapshot_document' AND NOT attisdropped)
+	 AND to_regclass('iam.authentication_recovery_attempt_floors') IS NULL
+	 AND to_regprocedure('iam.prepare_authentication_recovery_close(jsonb,text)') IS NULL
+	 AND to_regprocedure('iam.reopen_authentication_recovery(jsonb,text,jsonb)') IS NOT NULL
+	 AND to_regprocedure('iam.reopen_authentication_recovery(jsonb,text,jsonb,jsonb)') IS NULL`, sourceSchema).Scan(&untouched); err != nil || !untouched ||
 		!bytes.Equal(originalState, identityState()) || !bytes.Equal(originalMail, mailState()) {
 		t.Fatal("failed cutover partially changed retained authority")
 	}
@@ -382,7 +400,14 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		}
 	}
 	var shape bool
-	if err := admin.QueryRow(ctx, `SELECT schema_version=44 AND iam.account_security_settings_contract_ready() AND iam.login_session_contract_ready() AND iam.password_attempt_contract_ready()
+	if err := admin.QueryRow(ctx, `SELECT schema_version=45 AND iam.account_security_settings_contract_ready() AND iam.login_session_contract_ready() AND iam.password_attempt_contract_ready()
+	 AND iam.authentication_recovery_contract_ready()
+	 AND to_regprocedure('iam.close_authentication_recovery(jsonb,text,jsonb)') IS NULL
+	 AND to_regprocedure('iam.close_authentication_recovery(jsonb,text,jsonb,jsonb,text)') IS NOT NULL
+	 AND to_regprocedure('iam.reconcile_authentication_recovery(jsonb,text,jsonb,jsonb)') IS NULL
+	 AND to_regprocedure('iam.reconcile_authentication_recovery(jsonb,text,jsonb,jsonb,jsonb)') IS NOT NULL
+	 AND to_regprocedure('iam.reopen_authentication_recovery(jsonb,text,jsonb)') IS NULL
+	 AND to_regprocedure('iam.reopen_authentication_recovery(jsonb,text,jsonb,jsonb)') IS NOT NULL
 	 AND iam.totp_authentication_contract_ready()
 	 AND to_regprocedure('iam.start_totp_replacement(text,text,text,text,text,bigint,text,text,text,text,bytea,bytea)') IS NOT NULL
 	 AND NOT EXISTS(SELECT 1 FROM iam.totp_authenticators WHERE replacement_step_up_id IS NOT NULL OR replacement_contact_revision IS NOT NULL)
@@ -591,6 +616,162 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	t.Logf("actual IAM%d -> IAM%d migrator/runtime retained original Session/Challenge qualification; factor replacement/recovery, forced bulk reduction, shared attempts, exact replay, original receipt/canonical/proof and restart; no release compatibility claim", sourceSchema, currentSchema)
 }
 
+func provePredecessorAuthenticationRecovery(t *testing.T, ctx context.Context, root, baseline, temporary string, config *pgx.ConnConfig, installationID string) {
+	t.Helper()
+	if !strings.HasPrefix(config.Database, "matrix_iam_upgrade_predecessor_") {
+		t.Fatal("historical recovery requires the owned predecessor database")
+	}
+	controlConfig := config.Copy()
+	controlConfig.Database = "postgres"
+	control, err := pgx.ConnectConfig(ctx, controlConfig)
+	if err != nil {
+		t.Fatal("connect private predecessor database controller")
+	}
+	defer control.Close(context.Background())
+	suffix := sha256.Sum256([]byte(config.Database))
+	var databases []*pgx.Conn
+	var configs []*pgx.ConnConfig
+	for _, scope := range []string{"source", "target"} {
+		name := "matrix_iam_old_recovery_" + scope + "_" + hex.EncodeToString(suffix[:10])
+		if _, err := control.Exec(ctx, "CREATE DATABASE "+pgx.Identifier{name}.Sanitize()+" TEMPLATE "+pgx.Identifier{config.Database}.Sanitize()); err != nil {
+			t.Fatal("copy quiescent predecessor database", err)
+		}
+		defer func() {
+			cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if _, err := control.Exec(cleanup, "DROP DATABASE "+pgx.Identifier{name}.Sanitize()); err != nil {
+				t.Error("remove owned predecessor recovery copy", err)
+			}
+		}()
+		copyConfig := config.Copy()
+		copyConfig.Database = name
+		database, err := pgx.ConnectConfig(ctx, copyConfig)
+		if err != nil {
+			t.Fatal("connect predecessor recovery copy")
+		}
+		defer database.Close(context.Background())
+		databases, configs = append(databases, database), append(configs, copyConfig)
+	}
+	oldBinary := buildAuthorityBinary(t, ctx, baseline, temporary, "predecessor-private-recovery", "./app/service/iam/cmd/matrix-iam-authentication-recovery")
+	currentBinary := buildAuthorityBinary(t, ctx, root, temporary, "current-private-recovery", "./app/service/iam/cmd/matrix-iam-authentication-recovery")
+	// This is retained executable/receipt evidence, not a signed backup or
+	// cross-profile release admission. The release commitments are fixtures.
+	intent := installationv1.AuthenticationRecoveryIntent{
+		APIVersion: installationv1.AuthenticationRecoveryAPIVersion, Kind: installationv1.AuthenticationRecoveryIntentKind,
+		Purpose: installationv1.AuthenticationRecoveryPurpose, InstallationID: installationID, Epoch: 1,
+		CommandID: "cmd-" + strings.Repeat("7", 32), BackupID: "backup-" + strings.Repeat("8", 32),
+		BackupDigest: "sha256:" + strings.Repeat("9", 64), TOTPCustodyDigest: "sha256:" + strings.Repeat("a", 64),
+		SourceReleaseID: "matrix-v0.0.0-retained-source-0123456789ab", SourceReleaseDigest: "sha256:" + strings.Repeat("b", 64),
+		TargetReleaseID: "matrix-v0.0.0-retained-target-0123456789ab", TargetReleaseDigest: "sha256:" + strings.Repeat("c", 64),
+	}
+	encodedIntent, err := installationv1.EncodeAuthenticationRecoveryIntent(intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intentFile := installationv1.AuthenticationRecoveryIntentFileEnvironment + "=" + writeProtectedFile(t, temporary, "predecessor-recovery-intent", encodedIntent)
+	dsnFiles := make([]string, len(configs))
+	for index, copyConfig := range configs {
+		dsnFiles[index] = installationv1.AuthenticationRecoveryDatabaseDSNFileEnvironment + "=" + writeProtectedFile(t, temporary,
+			fmt.Sprintf("predecessor-recovery-dsn-%d", index), []byte(runtimeDSN(t, copyConfig, "matrix_iam_authentication_recovery_login", processDBPassword)))
+	}
+	closureBytes := invokeAuthenticationRecoveryProcess(t, ctx, baseline, oldBinary, "close", []string{dsnFiles[0], intentFile}, 0)
+	closure, err := installationv1.DecodeAuthenticationRecoveryClosure(bytes.NewReader(closureBytes))
+	if err != nil || closure.SecuritySnapshotDigest != "" || closure.CommandID != intent.CommandID {
+		t.Fatal("predecessor did not issue its own snapshot-free closure")
+	}
+	closureDigest, err := installationv1.AuthenticationRecoveryClosureDigest(closure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closureFile := installationv1.AuthenticationRecoveryClosureFileEnvironment + "=" + writeProtectedFile(t, temporary, "predecessor-recovery-closure", closureBytes)
+	if result := invokeAuthenticationRecoveryProcess(t, ctx, baseline, oldBinary, "reconcile", []string{dsnFiles[1], closureFile}, 0); !bytes.Equal(result, closureBytes) {
+		t.Fatal("predecessor reconciliation changed its source closure")
+	}
+	completionBytes := invokeAuthenticationRecoveryProcess(t, ctx, baseline, oldBinary, "reopen", []string{dsnFiles[1], closureFile}, 0)
+	completion, err := installationv1.DecodeAuthenticationRecoveryCompletion(bytes.NewReader(completionBytes))
+	if err != nil || completion.SecuritySnapshotDigest != "" || completion.ClosureDigest != closureDigest {
+		t.Fatal("predecessor did not commit its original completion")
+	}
+	history := func(database *pgx.Conn) []byte {
+		t.Helper()
+		var encoded []byte
+		if err := database.QueryRow(ctx, `SELECT jsonb_build_object(
+		 'state',(SELECT to_jsonb(s) FROM iam.authentication_recovery_state s),
+		 'closures',(SELECT jsonb_agg(to_jsonb(c)-'security_snapshot_document' ORDER BY command_id) FROM iam.authentication_recovery_closures c),
+		 'reconciliations',(SELECT jsonb_agg(to_jsonb(r) ORDER BY command_id) FROM iam.authentication_recovery_reconciliations r),
+		 'completions',(SELECT jsonb_agg(to_jsonb(c) ORDER BY command_id) FROM iam.authentication_recovery_completions c),
+		 'credentials',(SELECT jsonb_agg(to_jsonb(c) ORDER BY tenant_id,principal_id) FROM iam.user_credentials c),
+		 'sessions',(SELECT jsonb_agg(to_jsonb(s) ORDER BY tenant_id,id) FROM iam.sessions s),
+		 'factors',(SELECT jsonb_agg(to_jsonb(f) ORDER BY tenant_id,id) FROM iam.totp_authenticators f),
+		 'facts',(SELECT jsonb_agg(event_document ORDER BY event_id) FROM iam.audit_outbox))`).Scan(&encoded); err != nil {
+			t.Fatal("read original private recovery history")
+		}
+		return encoded
+	}
+	for index, database := range databases {
+		original := history(database)
+		defer clear(original)
+		if index == 0 {
+			// A still-CLOSED predecessor is not an admissible migration source:
+			// the verifier must not turn an interrupted recovery into READY.
+			if err := iammigration.Up(ctx, database); err == nil {
+				t.Fatal("migration admitted a predecessor's unfinished closed recovery")
+			}
+			if _, err := database.Exec(ctx, "ROLLBACK"); err != nil {
+				t.Fatal("finish rejected closed-source migration")
+			}
+			var closed bool
+			if err := database.QueryRow(ctx, `SELECT schema_version=44 AND NOT ready
+			 AND NOT EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid='iam.authentication_recovery_closures'::regclass
+			 AND attname='security_snapshot_document' AND NOT attisdropped)
+			 AND to_regclass('iam.authentication_recovery_attempt_floors') IS NULL
+			 AND to_regprocedure('iam.reopen_authentication_recovery(jsonb,text,jsonb)') IS NOT NULL
+			 AND to_regprocedure('iam.reopen_authentication_recovery(jsonb,text,jsonb,jsonb)') IS NULL
+			 FROM iam.readiness()`).Scan(&closed); err != nil || !closed || !bytes.Equal(original, history(database)) {
+				t.Fatal("failed closed-source migration changed authority or historical receipt", err)
+			}
+			continue
+		}
+		for range 2 {
+			if err := iammigration.Up(ctx, database); err != nil {
+				t.Fatal("upgrade actual predecessor recovery history", err)
+			}
+			if err := iammigration.Verify(ctx, database); err != nil {
+				t.Fatal("verify actual predecessor recovery history", err)
+			}
+		}
+		var unchanged bool
+		if err := database.QueryRow(ctx, `SELECT
+		 (SELECT count(*)=1 AND bool_and(security_snapshot_document IS NULL AND NOT closure_document ? 'securitySnapshotDigest') FROM iam.authentication_recovery_closures)
+		 AND NOT EXISTS(SELECT 1 FROM iam.authentication_recovery_attempt_floors)
+		 AND (SELECT schema_version=45 FROM iam.readiness())
+		 AND (SELECT state=$1 AND epoch=1 FROM iam.authentication_recovery_state)`, []string{"CLOSED", "OPEN"}[index]).Scan(&unchanged); err != nil || !unchanged || !bytes.Equal(original, history(database)) {
+			t.Fatal("migration altered historical receipts or invented recovery qualification", err)
+		}
+		invokeAuthenticationRecoveryProcess(t, ctx, root, currentBinary, "close", []string{dsnFiles[index], intentFile}, installationv1.AuthenticationRecoveryExitInvalid)
+		for _, mode := range []string{"reconcile", "reopen"} {
+			invokeAuthenticationRecoveryProcess(t, ctx, root, currentBinary, mode, []string{dsnFiles[index], closureFile}, installationv1.AuthenticationRecoveryExitInvalid)
+		}
+		// The original binary cannot execute its removed SQL ABI either. This
+		// negative check is not an assertion of N-1 runtime compatibility.
+		invokeAuthenticationRecoveryProcess(t, ctx, baseline, oldBinary, "reopen", []string{dsnFiles[index], closureFile}, installationv1.AuthenticationRecoveryExitUnavailable)
+		privateConfig := configs[index].Copy()
+		privateConfig.User, privateConfig.Password = "matrix_iam_authentication_recovery_login", processDBPassword
+		privateConfig.RuntimeParams["default_transaction_isolation"] = "serializable"
+		private, err := pgx.ConnectConfig(ctx, privateConfig)
+		if err != nil {
+			t.Fatal("connect exact retained recovery role")
+		}
+		_, rejected := private.Exec(ctx, "SELECT iam.reopen_authentication_recovery($1::jsonb,$2,'{}'::jsonb,NULL)", string(closureBytes), closureDigest)
+		_ = private.Close(ctx)
+		var databaseError *pgconn.PgError
+		if !errors.As(rejected, &databaseError) || databaseError.Code != "22023" || !bytes.Equal(original, history(database)) {
+			t.Fatal("historical closure became a current SQL permit or partially changed state")
+		}
+	}
+	t.Log("actual predecessor private executable produced SOURCE/RESTORED receipts; CLOSED migration refused atomically; OPEN double migration preserved history and NULL proof, new FILE/SQL and removed old ABI refused execution without effects")
+}
+
 // A fixed predecessor executable, not fixture DML or today's implementation,
 // creates every positive factor, saved code, challenge and MFA Session here.
 func prepareRetainedMFAProcesses(t *testing.T, ctx context.Context, admin *pgx.Conn, endpoint, root string, sensitive *[]string, recoveryHistory bool) (func(), func() func()) {
@@ -629,15 +810,10 @@ func prepareRetainedMFAProcesses(t *testing.T, ctx context.Context, admin *pgx.C
 	*sensitive = append(*sensitive, contactCode)
 	call(http.MethodPost, "/v1/auth/notification-contact/verifications/"+contact.ID+":confirm", first.Credential,
 		map[string]string{"requestId": "retained-mfa-contact-confirm", "code": contactCode}, http.StatusOK, nil)
-	// Only these two responses come from the pinned IAM43 executable, which
-	// predates enrollment.purpose. Do not relax today's public decoder or
-	// backfill a claimed purpose into the predecessor's actual response.
-	type predecessorEnrollmentStart iamv1.StartTOTPEnrollmentResponse
-	type predecessorEnrollmentConfirmation iamv1.ConfirmTOTPEnrollmentResponse
-	var enrollment predecessorEnrollmentStart
+	var enrollment iamv1.StartTOTPEnrollmentResponse
 	call(http.MethodPost, "/v1/auth/totp/enrollments", first.Credential,
 		map[string]any{"requestId": "retained-mfa-enroll", "password": password, "expectedFactorRevision": 1}, http.StatusOK, &enrollment)
-	if enrollment.Outcome != "APPLIED" || enrollment.Provisioning == nil || enrollment.Enrollment.Purpose != "" ||
+	if enrollment.Outcome != "APPLIED" || enrollment.Provisioning == nil || enrollment.Enrollment.Purpose != "INITIAL" ||
 		enrollment.Enrollment.State != "PENDING" || enrollment.Enrollment.RequestID != "retained-mfa-enroll" ||
 		!enrollment.Provisioning.Seed.Present() || !enrollment.Provisioning.URI.Present() {
 		t.Fatal("old executable did not issue original provisioning")
@@ -646,11 +822,11 @@ func prepareRetainedMFAProcesses(t *testing.T, ctx context.Context, admin *pgx.C
 	secret(enrollment.Provisioning.URI)
 	code, step := processTOTPCode(t, ctx, admin, seed, -1, true)
 	*sensitive = append(*sensitive, code)
-	var bound predecessorEnrollmentConfirmation
+	var bound iamv1.ConfirmTOTPEnrollmentResponse
 	call(http.MethodPost, "/v1/auth/totp/enrollments/"+enrollment.Enrollment.ID+":confirm", first.Credential,
 		map[string]string{"requestId": "retained-mfa-bound", "code": code}, http.StatusOK, &bound)
 	if len(bound.RecoveryCodes) != 10 || bound.NextStep != "REAUTHENTICATE" || bound.Enrollment.State != "CONFIRMED" ||
-		bound.Enrollment.Purpose != "" || bound.Enrollment.ID != enrollment.Enrollment.ID {
+		bound.Enrollment.Purpose != "INITIAL" || bound.Enrollment.ID != enrollment.Enrollment.ID {
 		t.Fatal("old executable did not issue its original recovery batch")
 	}
 	for _, value := range bound.RecoveryCodes {
@@ -668,13 +844,13 @@ func prepareRetainedMFAProcesses(t *testing.T, ctx context.Context, admin *pgx.C
 	}
 	snapshot := func() []byte {
 		t.Helper()
-		// Only the newly introduced replacement links are excluded from the
-		// byte comparison. Original qualification, purpose and history stay.
+		// The single predecessor already owns replacement lineage. Preserve
+		// every original field rather than retaining an older shape exception.
 		var state []byte
 		if err := admin.QueryRow(ctx, `SELECT jsonb_build_object(
 			'state',(SELECT to_jsonb(m) FROM iam.user_mfa_states m WHERE tenant_id=$1 AND user_id=$2),
-			'factors',(SELECT jsonb_agg(to_jsonb(f)-ARRAY['replacement_step_up_id','replacement_contact_revision'] ORDER BY id) FROM iam.totp_authenticators f WHERE tenant_id=$1 AND user_id=$2),
-			'batches',(SELECT jsonb_agg(to_jsonb(b)-'revocation_replacement_factor_id' ORDER BY id) FROM iam.mfa_recovery_batches b WHERE tenant_id=$1 AND user_id=$2),
+			'factors',(SELECT jsonb_agg(to_jsonb(f) ORDER BY id) FROM iam.totp_authenticators f WHERE tenant_id=$1 AND user_id=$2),
+			'batches',(SELECT jsonb_agg(to_jsonb(b) ORDER BY id) FROM iam.mfa_recovery_batches b WHERE tenant_id=$1 AND user_id=$2),
 			'codes',(SELECT jsonb_agg(to_jsonb(c) ORDER BY c.id) FROM iam.mfa_recovery_codes c
 				JOIN iam.mfa_recovery_batches b ON (b.tenant_id,b.id)=(c.tenant_id,c.batch_id) WHERE b.tenant_id=$1 AND b.user_id=$2),
 			'challenges',(SELECT jsonb_agg(to_jsonb(c) ORDER BY id) FROM iam.authentication_challenges c WHERE tenant_id=$1 AND user_id=$2),
@@ -790,7 +966,7 @@ func prepareRetainedMFAProcesses(t *testing.T, ctx context.Context, admin *pgx.C
 					map[string]string{"requestId": "retained-mfa-obsolete-login", "challengeCredential": secret(pending.ChallengeCredential), "code": "111111"}, http.StatusUnauthorized, nil)
 				_, event := findIAMEvent(t, ctx, admin, auditv1.ActionIAMAuthenticatorReplaced, string(user.ID))
 				call(http.MethodPost, "/v1/audit-producer:resolve", iamServiceCredential, iamv1.ResolveAuditProducerRequest{Event: event}, http.StatusOK, nil)
-				t.Log("actual IAM43 factor/batch/Session supported a new IAM44 replacement; schema/bootstrap/restart retained consumed proof, terminal old factor/batch/challenge and immutable completion")
+				t.Log("actual predecessor factor/batch/Session supported a current replacement; schema/bootstrap/restart retained consumed proof, terminal old factor/batch/challenge and immutable completion")
 			}
 		}
 	}
@@ -835,7 +1011,7 @@ func prepareRetainedMFAProcesses(t *testing.T, ctx context.Context, admin *pgx.C
 	recoverOriginal := func() func() {
 		t.Helper()
 		call(http.MethodGet, "/v1/auth/me", oldBearer, nil, http.StatusUnauthorized, nil)
-		// IAM43 proved the original recovery's current settings qualification.
+		// The predecessor proved the original recovery's current settings qualification.
 		// Continue that exact bounded intent, without consuming another code or
 		// granting a new deadline merely because the executable changed.
 		started := originalRecovery
@@ -861,7 +1037,7 @@ func prepareRetainedMFAProcesses(t *testing.T, ctx context.Context, admin *pgx.C
 		newBearer := secret(result.Credential)
 		completedState := snapshot()
 		t.Cleanup(func() { clear(completedState) })
-		t.Log("actual IAM43 recovery retained its original qualification/deadline through IAM44; original pending intent completed and normal new-factor login succeeded without consuming another saved code")
+		t.Log("actual predecessor recovery retained its original qualification/deadline; original pending intent completed and normal new-factor login succeeded without consuming another saved code")
 		return func() {
 			t.Helper()
 			after := snapshot()
@@ -884,7 +1060,7 @@ func prepareRetainedMFAProcesses(t *testing.T, ctx context.Context, admin *pgx.C
 			call(http.MethodGet, "/v1/auth/me", newBearer, nil, http.StatusOK, nil)
 			call(http.MethodPost, "/v1/auth/challenges/"+pending.Challenge.ID+":recover", "",
 				map[string]string{"requestId": "retained-mfa-recover", "challengeCredential": secret(pending.ChallengeCredential), "recoveryCode": secret(bound.RecoveryCodes[0])}, http.StatusUnauthorized, nil)
-			t.Log("actual IAM44 migration/verify/bootstrap/restart after recovery preserved exact completion, consumed code and terminated batch; old MFA bearer/source challenge remained rejected")
+			t.Log("current migration/verify/bootstrap/restart after recovery preserved exact completion, consumed code and terminated batch; old MFA bearer/source challenge remained rejected")
 		}
 	}
 	return assertRetained, recoverOriginal
@@ -1456,7 +1632,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	// Exercise the exact source services together without weakening install
 	// admission: the workflow separately proves the published installer rejects
 	// this unmatched database shape before effects.
-	sourceProfile := installationrelease.AuthoritySchemas{IAM: 44, Audit: 26, PaaS: 2}
+	sourceProfile := installationrelease.AuthoritySchemas{IAM: 45, Audit: 26, PaaS: 2}
 	publishedProfile := installationrelease.CurrentDatabaseProfile()
 	if publishedProfile.Authorities == sourceProfile {
 		t.Fatal("unreleased authority source shape was published without a final profile gate")
