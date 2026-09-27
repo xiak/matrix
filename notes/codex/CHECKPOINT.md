@@ -5,7 +5,10 @@
 - Updated: 2026-09-27
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/phase3-mfa-enabling`
-- Pushed milestone: `ef88d8d6` (separates the retained-data historical migration
+- Pushed milestone: `302a1120` (pins the release-specific login wire contract
+  and establishes legitimate MFA before the current same-profile backup,
+  independently verified by [Verification 36318140174](https://github.com/xiak/matrix/actions/runs/36318140174)).
+- Retained migration fixture: `ef88d8d6` (separates the retained-data historical migration
   from the current same-profile failure/rollback/recovery fixture, independently
   verified by [Verification 36315956026](https://github.com/xiak/matrix/actions/runs/36315956026)).
 - The exact historical preparation commitments remain verified at `ba037e30`
@@ -47,5 +50,11 @@ records no uncommitted or machine-local test state. The final signed fixture
 must prove predecessor migration and the successor's same-profile lifecycle,
 with legitimate MFA qualification established before its positive v5 backup;
 an unsupported old-backup restore cannot be used to continue a failure test.
+The pre-migration backup still invokes the authenticated predecessor's old
+IAM image: consume only its exact historical lease protocol, never substitute
+a missing current state proof or infer old-backup recovery permission. The
+final console also needs the UX-owned LIVE first ENROLLMENT ceremony; DEV and
+saved-code recovery flows do not satisfy that dependency. Consume only fixed,
+verified IAM and UX sources, without replacing their trees or acceptance state.
 
 Replace this checkpoint only at another committed-and-pushed milestone.

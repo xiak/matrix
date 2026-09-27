@@ -494,6 +494,14 @@ The predecessor may remain an admitted in-place upgrade source without being
 an admitted automatic recovery source; the release recovery-profile function
 must not infer restore permission from upgrade compatibility.
 
+The migration's pre-effect backup invokes the authenticated installed IAM
+image, before the candidate schema is applied. Its private lease must be
+decoded against that exact source profile: a published predecessor without an
+authentication-state commitment may produce only its historical v4 backup.
+The current producer must still supply the full same-snapshot commitment;
+historical lease consumption neither invents that proof nor permits current
+automatic recovery from the historical backup.
+
 The signed gate proves retained-data predecessor migration separately from
 the successor's same-profile failure-injected upgrade, data-preserving rollback
 and protected recovery. It must not inject an irreversible cross-profile
@@ -512,6 +520,18 @@ login wire contract; a current response cannot fall back to the preparation
 shape, and a known factor cannot accept a password-only Session. HTTP fixture
 regressions cover those refusals and the legitimate challenged completion.
 These driver checks do not prove the final signed v5 recovery execution.
+Exact source `302a11202a55f4a93458cbdcea99a8b525680ca8` passed full Go tests,
+installation/architecture race and vet checks, followed by Go, UI,
+authority-process and node-process in
+[Verification 36318140174](https://github.com/xiak/matrix/actions/runs/36318140174).
+
+The final browser release must consume a verified LIVE first-enrollment
+ceremony from the [console owner](FEAT-007-control-plane-console.md).
+A DEV preview, a saved-code recovery ceremony, or a LOGIN-only decoder cannot
+stand in for that consumer when the installed IAM contract returns a restricted
+ENROLLMENT challenge. Its authenticated Session may exist only after the
+published ceremony and fresh login; UI and signed lifecycle evidence remain
+separate final gates.
 
 The existing acceptance driver has one additional preparation input for this
 bounded history: the exact accepted preparation/enabling manifests are
