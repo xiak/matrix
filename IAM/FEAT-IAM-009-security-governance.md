@@ -298,9 +298,11 @@ LOGIN挑战 + 有效恢复码
 
 恢复开始和完成各是一个原子步骤：开始时消费一条码、推进因子修订、撤销旧登录及派生资格并签发新RECOVERY挑战；完成时绑定新因子、作废原批次剩余码、生成新批次并结束恢复挑战。开始后丢失回包不能退还已用码；持有另一条未使用原批次码并再次验证密码，可以开启新的受限恢复意图，同时终止旧恢复挑战。所有码都丢失时不能降级为普通reset，进入下述另行确认的身份恢复边界。
 
-#### 拟定HTTP契约
+#### 当前HTTP契约
 
-S2b正在原owner实施，尚无完整MFA验收。LoginResponse严格区分AUTHENTICATED与CHALLENGE_REQUIRED：前者必须完整包含Session、credential和mustChangePassword（即使false也不能省略），后者只有challenge及独立持有秘密，连null/false形式的Session分支字段也拒绝。登录响应只允许LOGIN目的的TOTP、已验证PASSWORD_CHANGE或有确切恢复历史的RECOVER阶段；下述在线恢复入口另行发行RECOVERY/ENROLLMENT，不因通用Challenge类型支持该目的而允许密码登录直接发行恢复能力。首次强制设置和STEP_UP仍须随其真实实现开放，不接受任意purpose/nextStep字符串。契约、示例、生成器与密码登录producer一起替换；既有客户端不能靠缺省outcome猜测认证成功。本人首次绑定、已绑定USER登录、强制改密及受限在线恢复已接通；首次强制设置、离线恢复及完整启用条件尚未接齐，不能发布当前未完成的schema/API组合。
+LoginResponse严格区分AUTHENTICATED与CHALLENGE_REQUIRED：前者必须完整包含Session、credential和mustChangePassword（即使false也不能省略），后者只有challenge及独立持有秘密，连null/false形式的Session分支字段也拒绝。当前密码登录可返回两种封闭用途：`LOGIN`仅允许`TOTP|PASSWORD_CHANGE|RECOVER`，`ENROLLMENT`仅允许`PASSWORD_CHANGE|ENROLLMENT`。前者由已绑定因子或准确恢复历史决定；后者只用于当前账号要求下、已证明NEVER_BOUND且不属受保护范围的首次强制绑定。`RECOVERY`目的只能由消费有效保存码的独立恢复入口取得，不因同名nextStep为ENROLLMENT就与首次绑定互认。Challenge从来不是Session或普通业务bearer；客户端不能靠缺省outcome、purpose或nextStep猜测认证成功。本人主动绑定、登录/强制改密、保存码恢复、step-up和首次强制绑定已有固定后端，完整MFA发布、LIVE UI与签名安装仍须分别验收。
+
+首次强制绑定消费者可从已验证固定`e24dbdae6b4ea420365a4527a0bd89b16e0d720f`读取`api/iam/v1`的类型、`ValidateLoginResponse/ValidateAuthenticationChallenge`及OpenAPI，配合本节和[绑定、替换与秘密托管](#绑定替换与秘密托管)的实际路由。其[Verification36033828072](https://github.com/xiak/matrix/actions/runs/36033828072)精确SHA及九项job在2026-09-27再次核实全部success；该后端证据不等于前端已完成。e24至候选fa27的公开IAM类型、handler及认证用例没有变化（用例目录仅readiness版本变化），无需等待私有备份恢复切片才设计合法认证联合响应；不得因此继承IAM45恢复、UI或发布验收。
 
 当前工作树的`TestIAMTOTPEnrollmentPostgres`已在独立PG18（1CPU/1GiB/Pids192、16连接）、Go1.26.7/GOMAXPROCS2/512MiB、串行race下最终24.83s通过，包含实际邮件分支：真实受限API登录、从测试Maildir取码并完成现有通知地址确认后，经HTTP读取NEVER_BOUND、创建绑定、核对一次性provisioning、按原requestId读取及元数据重放、取消PENDING。正式绑定使用HTTP发行的种子；保留受限SQL的在途OTP攻击及最终outbox明确注入失败后的整笔回滚检查，再经实际HTTP确认，同事务提交因子、十条单向恢复码、安全通知与两个旧Session撤销。十条返回码各精确匹配一个带安装/USER/批次/码引用的持久验证值，旧会话重发确认被拒；原密码发行函数不能绕过MFA。
 
@@ -390,7 +392,7 @@ IAM37基线只发行恢复材料，批次与码的更新、删除、截断全部
 | `POST /v1/auth/challenges/{id}:confirm-recovery` | 复用验证码请求形状`requestId/challengeCredential/code`，但只接受RECOVERY/ENROLLMENT；正确新TOTP原子完成新绑定、新恢复批次、旧批次终止及通知，只返回完成元数据、新十码和`REAUTHENTICATE` |
 | `POST /v1/auth/challenges/{id}:recovery-result` | 只收当前LOGIN挑战持有凭据及原恢复`requestId`，读取同USER的原非秘密元数据；NOT_FOUND不证明提交回滚、不消费新码、不自动开启意图 |
 
-LoginResponse仍只允许LOGIN挑战；不能因为通用Challenge可以描述RECOVERY，就让密码登录直接发行重绑能力。RECOVERY挑战、PENDING因子及恢复仪式均不得晚于原LOGIN挑战期限，读取或重试不续期。开始回包未知时，以新密码验证得到的LOGIN挑战查原元数据；新种子或挑战秘密丢失时，明确使用另一条原批次码开启新意图，并永久终止旧未完成恢复及PENDING因子。完成回包未知不重发新恢复码；持有新因子可以正常重登，重发码仍须独立强认证流程。
+保存码恢复从`LOGIN`挑战进入，密码登录本身不能直接发行`RECOVERY`重绑能力；当前另有的首次强制`ENROLLMENT`挑战不是这条恢复路径。RECOVERY挑战、PENDING因子及恢复仪式均不得晚于原LOGIN挑战期限，读取或重试不续期。开始回包未知时，以新密码验证得到的LOGIN挑战查原元数据；新种子或挑战秘密丢失时，明确使用另一条原批次码开启新意图，并永久终止旧未完成恢复及PENDING因子。完成回包未知不重发新恢复码；持有新因子可以正常重登，重发码仍须独立强认证流程。
 
 候选恢复码在共享USER尝试预算已提交后比较；非空畸形码也计次，错误challenge秘密不能借公开ID扣他人预算。仅检查同USER唯一有效批次固定十条不可变验证值，按原码ID做用途绑定比较，不因首个匹配提前退出；被消费码永不重新允许。并发同码只一次成功，不同码也不能越过已经消费的原LOGIN挑战。新挑战、新意图、副本、重启及因子修订推进不能返还预算。
 
@@ -498,7 +500,7 @@ step-up通过只证明本次再次认证，不等于PDP Allow，也不提升整�
 
 首次强制设置的ENROLLMENT挑战只在已证明NEVER_BOUND/合法REMOVED、当前密码及修订仍有效且不存在待替换的可信地址时，允许012的首次通知地址验证子步骤；尚需初始改密时必须先改密并重新取得挑战。此子步骤不取得Session、普通资料修改或更换既有安全接收地址的权限。验证码只证明当前意图中地址的持有，不清除因子要求；地址确认后仍须完成真实TOTP绑定并正常重登。LOST/RECOVERY_REQUIRED、未知/损坏因子或旧库恢复不能通过这个首次设置分支接管接收地址。
 
-S2c首次设置的公共契约复用`AuthenticationChallenge`，purpose为独立的`ENROLLMENT`，nextStep仅`PASSWORD_CHANGE|ENROLLMENT`；不把它伪装成已完成MFA的LOGIN挑战或RECOVERY。Login的CHALLENGE_REQUIRED分支可以描述该用途，但仍不携带Session、普通credential或mustChangePassword字段。运行时发行必须先在原密码预算及Account→USER→凭据→因子锁内证明当前账号要求、非受保护主体和准确NEVER_BOUND历史；首片不虚构尚无合法解绑事务的REMOVED资格。现有LOGIN发行器明确拒绝数据库返回另一purpose，不因公共类型增加枚举就提前发行新能力。
+S2c首次设置的公共契约复用`AuthenticationChallenge`，purpose为独立的`ENROLLMENT`，nextStep仅`PASSWORD_CHANGE|ENROLLMENT`；不把它伪装成已完成MFA的LOGIN挑战或RECOVERY。Login的CHALLENGE_REQUIRED分支支持该用途，但仍不携带Session、普通credential或mustChangePassword字段。运行时发行先在原密码预算及Account→USER→凭据→因子锁内证明当前账号要求、非受保护主体和准确NEVER_BOUND历史；首片不虚构尚无合法解绑事务的REMOVED资格。发行结果须匹配上述锁内读取的真实状态、用途与阶段，caller不能选择purpose，数据库返回与当前资格不符的用途也不能因公共枚举存在而被接受。
 
 目的限定的首次设置操作使用challengeCredential请求体，不使用Authorization bearer，且与普通Session接口互斥。`InspectEnrollmentChallengeRequest`仅含challengeCredential；`EnrollmentChallengeState`在PASSWORD_CHANGE阶段只返回challenge，在ENROLLMENT阶段还必须返回本人NotificationContact，可含当前PENDING TOTPEnrollment；后者沿同一challenge绝对期限，不重新获得五分钟。`StartChallengeTOTPEnrollmentRequest`仅含requestId/challengeCredential，不接受密码、factorRevision、Account/USER、算法、恢复码或Session selector；预期因子修订取锁内权威。发起响应复用原StartTOTPEnrollmentResponse的一次性provisioning边界，确认复用VerifyAuthenticationChallengeRequest及ConfirmTOTPEnrollmentResponse，成功只返回REAUTHENTICATE和一次性恢复码。
 
@@ -727,6 +729,15 @@ installation先以现有受保护write-once流程写入快照，回读核对完�
 
 可预见的旧备份不兼容必须在破坏性恢复前拒绝：现有RR exported-snapshot helper应同时读取上述权威投影摘要，pg_dump仍导入同一snapshot。新增`authenticationStateDigest`作为lease和安装受保护backup manifest的独立字段，不改变仅描述包装密钥需求的TOTPBackupCustody字节或复用其摘要。安装拟发行manifest v5并沿RecoverySource/Intent封存；旧v4缺少此证明，仅保留历史读取，不补造摘要，不取得当前自动recover资格。close将候选备份的摘要与当前同一事务投影比较，不等时不保存closure、不推进epoch或写成功事实；匹配后仍须封存完整重放快照并在实际恢复后复核。Session、OTP消费步及通知投递lease等应由既定fence/预算处理的瞬时状态不进入该资格摘要，避免一次普通登录使备份无意义地失配。该首片支持安全资格匹配的实际备份；资格已经变化的旧备份需要后继可信状态携带/重建路径，不能将此首片标成该完整恢复能力。
 
+资格变化后的全域恢复是后继独立设计，不是上述相等准入的宽松模式。现有私有投影只有资格摘要及重放下限；它没有可重建的新密码验证材料、因子密文、联系人与策略正文。不能反解摘要、按旧库补字段，或只恢复主账号后开放其他旧主体。后继方案必须明确以下闭包后才能冻结执行契约，不在本次IAM45消费者集成中追加接口或分配版本：
+
+- 安装owner证明当前权威来源、原close/意图和受保护封存均在本次回退范围外；当前源不可用且没有等价可信证明时不能从目标旧库补证。备份真实性只说明T0材料来自哪里，不说明T1资格仍有效。
+- IAM负责完整当前Account/USER/服务身份、凭据及MFA谱系、Policy/附件/Group/Role/边界与通知地址的资格处理。选择保留当前IAM权威数据或目的限定携带/重建时，都必须保留真实不可变来源和完整集合；当前snapshot不能悄悄成为含密码验证材料或种子的公开导出格式，原秘密托管目的不能混用。
+- IAM决定、outbox、原恢复receipt与Audit链是关联的历史闭包。只搬当前主体行而还原T0决定/投递状态可能丢失T1事实或断开证明；不能补造USER授权决定、重写旧canonical/哈希或把已投递事实当作可以丢弃。最新链/未完成投递如何跨业务数据回退保持，需Audit与installation各自owner共同证明，不在IAM单独宣称解决。
+- 所有旧Session/Role、challenge/StepUp、恢复码/Key仍按准确恢复意图结束资格，源端已消费预算不返还；合法当前用户能够通过选定的当前认证或受控重建路径重新访问。仅有拒绝旧状态、让所有人永久锁死或救回一个primary，都不构成这条正向恢复的完成证据。
+
+此后继方向不改变当前已冻结的同资格恢复ABI、完整profile准入或旧helper的消费边界。当前固定消费者仍先验同资格正向生命周期；全域恢复未实现的状态继续保留在本FEAT，不凭该局部交付缩小009的完整目标。
+
 安全投影须覆盖下表中的当前权威；选择摘要时仍须在唯一SQL投影中列出组成字段、稳定排序和完整集合检查。不得只用某个局部generation替代其他来源，也不以“整库hash”夹带秘密和无关投递状态。此表是字段冻结的检查依据，不是已经发布的JSON类型：
 
 | 当前权威及源码owner | 恢复比较或不可逆处理 |
@@ -914,7 +925,7 @@ S2c运行时的首个有界交付是配置读取：`GET /v1/account/security-set
 
 固定只读阶段不注册update、不开放写入/设置proof，也不声明强制要求已执行。其真实验收覆盖两Account、授权/撤权、Deny/Boundary、无授权平台身份、USER以外载体、selector、受限DB登录、历史decision重用拒绝、原审计关联、迁移重放和重启。当前后继S2c写入候选与证据归上文，不继承只读阶段的验收。设置写入须与首次受限ENROLLMENT、登录资格修订及受支持恢复的非回退证据一起交付；受支持旧备份的配置值不能独自充当当前安全要求，此衔接仍需installation owner共同冻结，不靠默认false或仅可回滚数据库版本来证明。
 
-设置可变后的恢复前置必须证明关闭认证时的完整当前Account安全要求，而不是备份内较早的配置。破坏性恢复前需将这些准确Account归属、`security_settings_version`及`requiredForUsers`的承诺保存在数据库备份回退范围外；恢复库有遗漏、未知Account或无法核对当前要求时保持CLOSED，不自动取旧false、不借当前可登录身份补证。目的限定有界快照的完整性/封存/原意图续跑由IAM与installation共同冻结，当前closure/custody ABI本身不含这项证明；本基础片未擅自扩展它或把相同源码schema当成发布兼容。
+设置可变后的恢复前置必须证明关闭认证时的完整当前Account安全要求，而不是备份内较早的配置。破坏性恢复前需将这些准确Account归属、`security_settings_version`及`requiredForUsers`的承诺保存在数据库备份回退范围外；恢复库有遗漏、未知Account或无法核对当前要求时保持CLOSED，不自动取旧false、不借当前可登录身份补证。当前IAM45候选已把这些要求纳入独立authenticationStateDigest及有界security snapshot，原TOTP custody仍只证明包装材料，不能替代当前资格。准确消费及验收边界统一归[受支持备份恢复与防回滚边界](#受支持备份恢复与防回滚边界)：只证明资格相同的恢复，不证明设置已经变化的旧备份可恢复，更不以相同schema或局部源码门禁代替签名发布兼容。
 
 2026-09-24只读增量的本地证据使用独立Windows PostgreSQL18.6，Windows Job硬限2逻辑CPU/1GiB/24进程，16连接、64MiB shared_buffers、4MiB work_mem、无parallel worker；Go1.26.7、GOMAXPROCS=2/GOMEMLIMIT=512MiB，真实门禁串行`-race -p 1`。数据库最终在零其他客户端连接时正常停止，未操作共享或远端服务。
 
