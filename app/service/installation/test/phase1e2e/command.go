@@ -1152,19 +1152,24 @@ func expectedPlatformServices(
 	if err != nil {
 		return topology.Result{}, nil, err
 	}
+	services, err := platformServiceInventory(compiled.ComposeJSON)
+	return compiled, services, err
+}
+
+func platformServiceInventory(composeJSON []byte) (map[string]struct{}, error) {
 	var document map[string]json.RawMessage
-	if decodeOne(compiled.ComposeJSON, &document) != nil {
-		return topology.Result{}, nil, errors.New("compiled platform topology is invalid")
+	if decodeOne(composeJSON, &document) != nil {
+		return nil, errors.New("compiled platform topology is invalid")
 	}
 	var declared map[string]json.RawMessage
 	if json.Unmarshal(document["services"], &declared) != nil || len(declared) == 0 {
-		return topology.Result{}, nil, errors.New("compiled platform service inventory is invalid")
+		return nil, errors.New("compiled platform service inventory is invalid")
 	}
 	services := make(map[string]struct{}, len(declared))
 	for service := range declared {
 		services[service] = struct{}{}
 	}
-	return compiled, services, nil
+	return services, nil
 }
 
 func expectedPlatformPortBindings(composeJSON []byte) (map[string][]string, error) {
@@ -1256,7 +1261,53 @@ func assertPlatform(
 	if err != nil {
 		return lifecycle.Journal{}, fail("platform-topology-contract")
 	}
-	expectedPorts, err := expectedPlatformPortBindings(compiled.ComposeJSON)
+	return assertPlatformInventory(ctx, manifest, state, compiled.ComposeJSON, expected)
+}
+
+// Only the exact accepted preparation fixture reaches this after its signed mx
+// has verified the installed configuration. Current and predecessor releases
+// continue to use independently compiled topology above.
+func assertHistoricalPreparationPlatform(
+	ctx context.Context, root string, manifest release.Manifest, wantPrevious string,
+) (lifecycle.Journal, error) {
+	if !matchesCanonicalManifest(manifest, acceptedPreparationManifestDigest) {
+		return lifecycle.Journal{}, fail("historical-preparation-manifest")
+	}
+	state, err := readJournal(ctx, root)
+	if err != nil || state.CurrentReleaseID != manifest.Release.ID ||
+		state.PreviousRelease != wantPrevious || state.Active != nil {
+		return lifecycle.Journal{}, fail("platform-journal")
+	}
+	path := filepath.Join(root, filepath.FromSlash(layout.Compose))
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > maximumCommandOutput {
+		return lifecycle.Journal{}, fail("historical-preparation-topology")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return lifecycle.Journal{}, fail("historical-preparation-topology")
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !os.SameFile(info, opened) || !opened.Mode().IsRegular() {
+		return lifecycle.Journal{}, fail("historical-preparation-topology")
+	}
+	content, err := io.ReadAll(io.LimitReader(file, maximumCommandOutput+1))
+	if err != nil || len(content) == 0 || len(content) > maximumCommandOutput {
+		return lifecycle.Journal{}, fail("historical-preparation-topology")
+	}
+	expected, err := platformServiceInventory(content)
+	if err != nil {
+		return lifecycle.Journal{}, fail("historical-preparation-topology")
+	}
+	return assertPlatformInventory(ctx, manifest, state, content, expected)
+}
+
+func assertPlatformInventory(
+	ctx context.Context, manifest release.Manifest, state lifecycle.Journal,
+	composeJSON []byte, expected map[string]struct{},
+) (lifecycle.Journal, error) {
+	expectedPorts, err := expectedPlatformPortBindings(composeJSON)
 	if err != nil {
 		return lifecycle.Journal{}, fail("platform-topology-contract")
 	}

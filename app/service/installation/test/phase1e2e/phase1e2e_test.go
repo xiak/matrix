@@ -2,8 +2,10 @@ package phase1e2e
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -865,6 +867,36 @@ func TestReleaseLifecycleArgumentsRespectThePublishedPredecessorCLI(t *testing.T
 	missingMail.securityMailConfiguration = ""
 	if _, err := releaseInstallArguments(missingMail, current); err == nil {
 		t.Fatal("current release received install arguments without security mail custody")
+	}
+}
+
+func TestHistoricalFixtureCommitmentBindsCanonicalContentNotCallerMetadata(t *testing.T) {
+	manifest := releasetest.Manifest()
+	encoded, err := release.EncodeCanonical(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(encoded)
+	commitment := "sha256:" + hex.EncodeToString(digest[:])
+	if !matchesCanonicalManifest(manifest, commitment) {
+		t.Fatal("exact canonical manifest commitment was rejected")
+	}
+	changed := manifest
+	changed.Release.BuildID = "different-valid-build"
+	if _, err := release.EncodeCanonical(changed); err != nil {
+		t.Fatal("changed fixture must remain a valid manifest", err)
+	}
+	if matchesCanonicalManifest(changed, commitment) ||
+		matchesCanonicalManifest(manifest, acceptedPreparationManifestDigest) {
+		t.Fatal("changed or unaccepted historical fixture was admitted")
+	}
+	base := release.VerifiedBundle{Manifest: manifest, ManifestSHA256: acceptedPreparationManifestDigest}
+	bridge := release.VerifiedBundle{Manifest: manifest, ManifestSHA256: acceptedEnablingManifestDigest}
+	if acceptedHistoricalPreparationBridge(base, bridge) {
+		t.Fatal("caller-supplied digest metadata admitted a different fixture")
+	}
+	if _, err := assertHistoricalPreparationPlatform(context.Background(), t.TempDir(), manifest, ""); err == nil {
+		t.Fatal("unaccepted manifest reached historical inventory observation")
 	}
 }
 

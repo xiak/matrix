@@ -457,6 +457,18 @@ with Go, UI, authority-process and node-process success. This is fixture
 preparation, not evidence that the final historical A/B-to-successor signed
 chain or its recovery path has run.
 
+The historical first edge is confined to the already accepted task-local
+preparation/enabling manifest commitments
+`sha256:edb1697ceaa9acb57ee0e4a4e2295495d28ed10dd793a6789636dd343b232122`
+and `sha256:10ef07abf7dbb3a7481696d361a104fe99e6db4a491c06b93d0a5019b8ff7cab`.
+The fixture recomputes canonical manifest content rather than trusting a
+caller-supplied digest field. The original signed preparation executable owns
+its status and topology verification; only after that verification does the
+fixture compare Docker inventory and ports with its installed configuration.
+Current/predecessor inventory still uses the current topology compiler. This
+test boundary does not add a product upgrade/recovery profile or permit an
+arbitrary historical release. Its real historical-path validation remains open.
+
 Mutable Account security settings and factor replacement add a recovery fence.
 Each new protected backup must seal a separate, non-secret authentication and
 authorization state digest from the same PostgreSQL snapshot as `pg_dump`;

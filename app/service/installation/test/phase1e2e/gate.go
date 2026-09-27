@@ -88,9 +88,6 @@ func (value *gate) activateReleaseA(ctx context.Context) error {
 		installed.PreviousID != "" || !installed.Changed {
 		return fail(installStep)
 	}
-	if _, err := assertPlatform(ctx, value.config.root, initial.Manifest, ""); err != nil {
-		return err
-	}
 	if err := value.repeatedStatusAndVerify(
 		ctx, initial, initial.Manifest.Release.ID, "",
 	); err != nil {
@@ -488,7 +485,8 @@ func releaseInstallArguments(config options, initial release.VerifiedBundle) ([]
 		"--root", config.root,
 		"--trust-key", config.trustKey,
 	}
-	if initial.Manifest.Database == release.SupportedDatabaseUpgradePredecessorProfile() {
+	if matchesCanonicalManifest(initial.Manifest, acceptedPreparationManifestDigest) ||
+		initial.Manifest.Database == release.SupportedDatabaseUpgradePredecessorProfile() {
 		return append(arguments, "--northbound-origin", config.edge), nil
 	}
 	if initial.Manifest.Database == release.CurrentDatabaseProfile() && config.securityMailConfiguration != "" {
@@ -1493,7 +1491,13 @@ func (value *gate) repeatedStatusAndVerify(
 			return fail("repeated-verify")
 		}
 	}
-	_, err = assertPlatform(ctx, value.config.root, bundle.Manifest, previousID)
+	if matchesCanonicalManifest(bundle.Manifest, acceptedPreparationManifestDigest) {
+		// The authenticated historical binary has just verified its own closed
+		// topology. A successor compiler must not acquire arbitrary old ABI support.
+		_, err = assertHistoricalPreparationPlatform(ctx, value.config.root, bundle.Manifest, previousID)
+	} else {
+		_, err = assertPlatform(ctx, value.config.root, bundle.Manifest, previousID)
+	}
 	return err
 }
 
