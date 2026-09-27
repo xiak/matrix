@@ -74,24 +74,30 @@ func (value *gate) activateReleaseA(ctx context.Context) error {
 	if value.releases.base != nil {
 		installStep = "release-base-install"
 	}
-	installArguments, err := releaseInstallArguments(value.config, initial)
-	if err != nil {
-		return fail(installStep)
-	}
-	installed, err := runMX(
-		ctx, initial, "install", installArguments, value.pathLeakage(),
-	)
-	if err != nil {
-		return err
-	}
-	if installed.ReleaseID != initial.Manifest.Release.ID ||
-		installed.PreviousID != "" || !installed.Changed {
-		return fail(installStep)
-	}
-	if err := value.repeatedStatusAndVerify(
-		ctx, initial, initial.Manifest.Release.ID, "",
-	); err != nil {
-		return err
+	if value.releases.preparation != nil {
+		if err := value.activateHistoricalPreparation(ctx); err != nil {
+			return err
+		}
+	} else {
+		installArguments, err := releaseInstallArguments(value.config, initial)
+		if err != nil {
+			return fail(installStep)
+		}
+		installed, err := runMX(
+			ctx, initial, "install", installArguments, value.pathLeakage(),
+		)
+		if err != nil {
+			return err
+		}
+		if installed.ReleaseID != initial.Manifest.Release.ID ||
+			installed.PreviousID != "" || !installed.Changed {
+			return fail(installStep)
+		}
+		if err := value.repeatedStatusAndVerify(
+			ctx, initial, initial.Manifest.Release.ID, "",
+		); err != nil {
+			return err
+		}
 	}
 	if value.releases.base == nil {
 		emit("release-a-install")
@@ -174,6 +180,41 @@ func (value *gate) activateReleaseA(ctx context.Context) error {
 	}
 	emit("release-a-bridge-reactivation")
 	emit("release-a-status-verify")
+	return nil
+}
+
+func (value *gate) activateHistoricalPreparation(ctx context.Context) error {
+	if value.releases.preparation == nil || value.releases.base == nil ||
+		validatePreparationLifecycleSequence(*value.releases.preparation, *value.releases.base, value.releases.a, value.releases.b) != nil {
+		return fail("release-preparation-sequence-contract")
+	}
+	preparation, base := *value.releases.preparation, *value.releases.base
+	arguments, err := releaseInstallArguments(value.config, preparation)
+	if err != nil {
+		return fail("release-preparation-install-arguments")
+	}
+	installed, err := runMX(ctx, preparation, "install", arguments, value.pathLeakage())
+	if err != nil {
+		return err
+	}
+	if installed.ReleaseID != preparation.Manifest.Release.ID || installed.PreviousID != "" || !installed.Changed {
+		return fail("release-preparation-install")
+	}
+	if err := value.repeatedStatusAndVerify(ctx, preparation, preparation.Manifest.Release.ID, ""); err != nil {
+		return err
+	}
+	emit("release-preparation-install-status-verify")
+	upgraded, err := runMX(ctx, base, "upgrade", releaseAUpgradeArguments(value.config, base), value.pathLeakage())
+	if err != nil {
+		return err
+	}
+	if upgraded.ReleaseID != base.Manifest.Release.ID || upgraded.PreviousID != preparation.Manifest.Release.ID || !upgraded.Changed {
+		return fail("release-preparation-enabling-upgrade")
+	}
+	if err := value.repeatedStatusAndVerify(ctx, base, base.Manifest.Release.ID, preparation.Manifest.Release.ID); err != nil {
+		return err
+	}
+	emit("release-preparation-enabling-upgrade")
 	return nil
 }
 
@@ -1423,6 +1464,9 @@ func (value *gate) pathLeakage() [][]byte {
 	}
 	if value.config.releaseBase != "" {
 		result = append(result, []byte(value.config.releaseBase))
+	}
+	if value.config.releasePreparation != "" {
+		result = append(result, []byte(value.config.releasePreparation))
 	}
 	if value.config.skippedRelease != "" {
 		result = append(result, []byte(value.config.skippedRelease), []byte(value.config.mismatchedRelease))

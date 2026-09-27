@@ -504,6 +504,18 @@ replacing a factor after that backup deliberately belongs to the pre-effect
 conflict gate, not the positive restore path. Both migration and same-profile
 lifecycle evidence remain mandatory on the final composition.
 
+The existing acceptance driver has one additional preparation input for this
+bounded history: the exact accepted preparation/enabling manifests are
+authenticated before effects, their original signed executables establish
+the enabling installation, and its admitted successor performs the retained
+migration. The ordinary lifecycle pair then requires two adjacent releases
+with the current identical profile. An unaccepted historical commitment,
+orphan preparation input, changed topology or cross-profile lifecycle pair
+fails admission. The ordinary two/three-release fault fixture also rejects a
+migration-only edge before effects rather than demanding an inadmissible
+legacy restore. This fixture adds no product migration or recovery permission;
+its full signed execution remains an integrated release gate.
+
 The close transaction reprojects the complete durable authentication and
 authorization state, including Account status/root ownership/settings,
 USER qualification and credential/factor lineage, role/policy authority and

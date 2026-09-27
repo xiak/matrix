@@ -20,6 +20,7 @@ const (
 
 type options struct {
 	root                      string
+	releasePreparation        string
 	releaseBase               string
 	releaseA                  string
 	releaseB                  string
@@ -37,11 +38,12 @@ type options struct {
 }
 
 type releasePair struct {
-	base       *release.VerifiedBundle
-	a          release.VerifiedBundle
-	b          release.VerifiedBundle
-	skipped    *release.VerifiedBundle
-	mismatched *release.VerifiedBundle
+	preparation *release.VerifiedBundle
+	base        *release.VerifiedBundle
+	a           release.VerifiedBundle
+	b           release.VerifiedBundle
+	skipped     *release.VerifiedBundle
+	mismatched  *release.VerifiedBundle
 }
 
 type safeError struct {
@@ -61,7 +63,7 @@ func validateReleasePair(a, b release.VerifiedBundle) error {
 	if a.Manifest.Release.PreviousID != "" || a.Manifest.Release.PreviousVersion != "" {
 		return fail("release-pair-contract")
 	}
-	return validateReleaseTransition(a, b)
+	return validateLifecycleReleaseTransition(a, b)
 }
 
 func validateReleaseSequence(base, bridge, successor release.VerifiedBundle) error {
@@ -72,7 +74,42 @@ func validateReleaseSequence(base, bridge, successor release.VerifiedBundle) err
 		!acceptedHistoricalPreparationBridge(base, bridge) {
 		return err
 	}
-	return validateReleaseTransition(bridge, successor)
+	return validateLifecycleReleaseTransition(bridge, successor)
+}
+
+// The accepted preparation/enabling pair is historical evidence, not an
+// additional product predecessor. After that fixed edge, the migration must
+// reach the current profile before injecting a reversible lifecycle failure.
+func validatePreparationLifecycleSequence(preparation, base, a, b release.VerifiedBundle) error {
+	if preparation.Manifest.Release.PreviousID != "" || preparation.Manifest.Release.PreviousVersion != "" ||
+		!acceptedHistoricalPreparationBridge(preparation, base) ||
+		base.Manifest.Release.PreviousID != preparation.Manifest.Release.ID ||
+		base.Manifest.Release.PreviousVersion != preparation.Manifest.Release.Version {
+		return fail("release-preparation-sequence-contract")
+	}
+	if err := validateReleaseTransition(base, a); err != nil {
+		return err
+	}
+	return validatePostMigrationLifecyclePair(a, b)
+}
+
+func validatePostMigrationLifecyclePair(a, b release.VerifiedBundle) error {
+	if a.Manifest.Database != b.Manifest.Database || b.Manifest.Database != release.CurrentDatabaseProfile() {
+		return fail("post-migration-lifecycle-profile")
+	}
+	return validateLifecycleReleaseTransition(a, b)
+}
+
+func validateLifecycleReleaseTransition(a, b release.VerifiedBundle) error {
+	if err := validateReleaseTransition(a, b); err != nil {
+		return err
+	}
+	// The existing lifecycle deliberately injects failure and restores the
+	// predecessor backup. A migration-only edge cannot safely use that fixture.
+	if release.ValidateDatabaseRecoveryPath(a.Manifest.Database, b.Manifest.Database) != nil {
+		return fail("release-lifecycle-recovery-profile")
+	}
+	return nil
 }
 
 func matchesCanonicalManifest(manifest release.Manifest, commitment string) bool {

@@ -694,7 +694,8 @@ func TestReleasePairRequiresCompatibleImmediatePredecessor(t *testing.T) {
 		{name: "actual different-source predecessor and workload", accept: true, mutate: func(_, b *release.Manifest) {
 			b.Release.SourceCommit = strings.Repeat("b", 40)
 		}},
-		{name: "exact retained-data profile with published topology", accept: true, mutate: func(a, _ *release.Manifest) {
+		{name: "retained-data profile follows separate recovery admission", accept: release.ValidateDatabaseRecoveryPath(
+			release.SupportedDatabaseUpgradePredecessorProfile(), release.CurrentDatabaseProfile()) == nil, mutate: func(a, _ *release.Manifest) {
 			a.Database = release.SupportedDatabaseUpgradePredecessorProfile()
 			a.TopologyDigest = topology.SupportedPredecessorContractDigest()
 		}},
@@ -895,6 +896,15 @@ func TestHistoricalFixtureCommitmentBindsCanonicalContentNotCallerMetadata(t *te
 	if acceptedHistoricalPreparationBridge(base, bridge) {
 		t.Fatal("caller-supplied digest metadata admitted a different fixture")
 	}
+	if validatePreparationLifecycleSequence(base, bridge, bridge, bridge) == nil {
+		t.Fatal("caller-supplied commitments admitted an unaccepted preparation sequence")
+	}
+	value := newGate(options{root: t.TempDir()}, releasePair{preparation: &base, base: &bridge})
+	defer value.edge.close()
+	if err := value.activateHistoricalPreparation(context.Background()); err == nil ||
+		err.Error() != "phase1 gate failed at release-preparation-sequence-contract" {
+		t.Fatal("invalid historical sequence reached installation effects", err)
+	}
 	if _, err := assertHistoricalPreparationPlatform(context.Background(), t.TempDir(), manifest, ""); err == nil {
 		t.Fatal("unaccepted manifest reached historical inventory observation")
 	}
@@ -906,7 +916,8 @@ func TestReleaseSequenceRequiresTwoCompatibleImmediateTransitions(t *testing.T) 
 		mutate func(base, bridge, successor *release.Manifest)
 		accept bool
 	}{
-		{name: "base through bridge to successor", accept: true},
+		{name: "base through bridge to successor", accept: release.ValidateDatabaseRecoveryPath(
+			release.SupportedDatabaseUpgradePredecessorProfile(), release.CurrentDatabaseProfile()) == nil},
 		{name: "cross-profile bridge through same-profile successor", accept: true, mutate: func(_, bridge, _ *release.Manifest) {
 			bridge.Database = release.CurrentDatabaseProfile()
 			bridge.TopologyDigest = topology.ContractDigest()
@@ -970,6 +981,84 @@ func TestReleaseSequenceRequiresTwoCompatibleImmediateTransitions(t *testing.T) 
 				t.Fatalf("release sequence accepted=%t, want %t", err == nil, scenario.accept)
 			}
 		})
+	}
+}
+
+func TestPostMigrationLifecycleRequiresAdjacentEqualCurrentProfiles(t *testing.T) {
+	for _, scenario := range []struct {
+		name   string
+		mutate func(a, b *release.Manifest)
+		accept bool
+	}{
+		{name: "current pair after retained-data migration", accept: true},
+		{name: "profile still needs migration", mutate: func(a, _ *release.Manifest) {
+			a.Database = release.SupportedDatabaseUpgradePredecessorProfile()
+			a.TopologyDigest = topology.SupportedPredecessorContractDigest()
+		}},
+		{name: "both profiles are predecessor", mutate: func(a, b *release.Manifest) {
+			a.Database, b.Database = release.SupportedDatabaseUpgradePredecessorProfile(), release.SupportedDatabaseUpgradePredecessorProfile()
+			a.TopologyDigest, b.TopologyDigest = topology.SupportedPredecessorContractDigest(), topology.SupportedPredecessorContractDigest()
+		}},
+		{name: "successor changes profile", mutate: func(_, b *release.Manifest) { b.Database.ContractRevision++ }},
+		{name: "successor skips current release", mutate: func(_, b *release.Manifest) { b.Release.PreviousID = "other-release" }},
+		{name: "predecessor version mismatch", mutate: func(_, b *release.Manifest) { b.Release.PreviousVersion = "v0.0.1" }},
+		{name: "successor has no predecessor", mutate: func(_, b *release.Manifest) { b.Release.PreviousID, b.Release.PreviousVersion = "", "" }},
+		{name: "topology mismatch", mutate: func(_, b *release.Manifest) { b.TopologyDigest = "sha256:" + strings.Repeat("4", 64) }},
+		{name: "node release instead of platform", mutate: func(_, b *release.Manifest) { b.Kind = release.NodeManifestKind }},
+		{name: "missing workload inventory", mutate: func(a, _ *release.Manifest) { a.Images = nil }},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			a := release.VerifiedBundle{Manifest: releasetest.Manifest()}
+			a.Manifest.Release.PreviousID, a.Manifest.Release.PreviousVersion = "migration-source", "v0.0.1"
+			b := a
+			b.Manifest.Release.ID, b.Manifest.Release.Version = "lifecycle-successor", "v0.2.0"
+			b.Manifest.Release.PreviousID, b.Manifest.Release.PreviousVersion = a.Manifest.Release.ID, a.Manifest.Release.Version
+			if scenario.mutate != nil {
+				scenario.mutate(&a.Manifest, &b.Manifest)
+			}
+			if err := validatePostMigrationLifecyclePair(a, b); (err == nil) != scenario.accept {
+				t.Fatalf("post-migration pair accepted=%t, want %t: %v", err == nil, scenario.accept, err)
+			}
+		})
+	}
+}
+
+func TestAuthenticatedHistoricalPreparationLifecycleAdmission(t *testing.T) {
+	preparationPath := os.Getenv("MATRIX_PHASE1_RELEASE_PREPARATION")
+	if preparationPath == "" {
+		t.Skip("requires the exact accepted task-local signed preparation/enabling fixtures")
+	}
+	trust, err := os.ReadFile(os.Getenv("MATRIX_PHASE1_TRUST_KEY"))
+	if err != nil {
+		t.Fatal("historical fixture trust unavailable")
+	}
+	defer clear(trust)
+	preparation, err := release.VerifyDirectory(preparationPath, trust)
+	if err != nil {
+		t.Fatal("historical preparation authentication failed")
+	}
+	base, err := release.VerifyDirectory(os.Getenv("MATRIX_PHASE1_RELEASE_BASE"), trust)
+	if err != nil {
+		t.Fatal("historical enabling authentication failed")
+	}
+	// Only the historical edge uses real accepted packages here. These two
+	// metadata-only successors test admission, never installed runtime behavior.
+	a := release.VerifiedBundle{Manifest: releasetest.Manifest()}
+	a.Manifest.Release.ID, a.Manifest.Release.Version = "metadata-migration-successor", "v0.5.0"
+	a.Manifest.Release.PreviousID, a.Manifest.Release.PreviousVersion = base.Manifest.Release.ID, base.Manifest.Release.Version
+	b := a
+	b.Manifest.Release.ID, b.Manifest.Release.Version = "metadata-lifecycle-successor", "v0.6.0"
+	b.Manifest.Release.PreviousID, b.Manifest.Release.PreviousVersion = a.Manifest.Release.ID, a.Manifest.Release.Version
+	if err := validatePreparationLifecycleSequence(preparation, base, a, b); err != nil {
+		t.Fatal("authenticated historical edge could not reach the current same-profile lifecycle", err)
+	}
+	if validatePreparationLifecycleSequence(base, preparation, a, b) == nil {
+		t.Fatal("reversed historical packages were admitted")
+	}
+	changed := preparation
+	changed.Manifest.Release.BuildID = "other-valid-build"
+	if validatePreparationLifecycleSequence(changed, base, a, b) == nil {
+		t.Fatal("changed historical content was admitted")
 	}
 }
 
@@ -1048,6 +1137,8 @@ func TestSpecializedAcceptancePhasesOwnOnlyTheirRequiredInputs(t *testing.T) {
 		name, phase string
 		password    bool
 		native      bool
+		preparation bool
+		base        bool
 		accept      bool
 	}{
 		{name: "browser acceptance with local runtime", phase: "browser", password: true, accept: true},
@@ -1056,11 +1147,15 @@ func TestSpecializedAcceptancePhasesOwnOnlyTheirRequiredInputs(t *testing.T) {
 		{name: "multi-host lifecycle without native runtime", phase: "multi-host"},
 		{name: "ordinary lifecycle cannot expose an operator credential", phase: "run", password: true},
 		{name: "existing native browser acceptance", phase: "run", password: true, native: true, accept: true},
+		{name: "preparation plus retained migration source", phase: "run", preparation: true, base: true, accept: true},
+		{name: "preparation without migration source", phase: "run", preparation: true},
+		{name: "preparation cannot be rerun on restart", phase: "after-restart", preparation: true, base: true},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			t.Setenv("MATRIX_PHASE1_E2E_PHASE", scenario.phase)
 			t.Setenv("MATRIX_PHASE1_ROOT", filepath.Join(directory, "installation"))
 			t.Setenv("MATRIX_PHASE1_RELEASE_BASE", "")
+			t.Setenv("MATRIX_PHASE1_RELEASE_PREPARATION", "")
 			t.Setenv("MATRIX_PHASE1_RELEASE_A", filepath.Join(directory, "release-a"))
 			t.Setenv("MATRIX_PHASE1_RELEASE_B", filepath.Join(directory, "release-b"))
 			t.Setenv("MATRIX_PHASE1_SKIPPED_RELEASE", "")
@@ -1075,6 +1170,12 @@ func TestSpecializedAcceptancePhasesOwnOnlyTheirRequiredInputs(t *testing.T) {
 			if scenario.native {
 				t.Setenv("MATRIX_PHASE1_NATIVE_NODES", nodes)
 				t.Setenv("MATRIX_PHASE1_NATIVE_DEPLOYMENT_RUNTIME", "1")
+			}
+			if scenario.base {
+				t.Setenv("MATRIX_PHASE1_RELEASE_BASE", filepath.Join(directory, "release-base"))
+			}
+			if scenario.preparation {
+				t.Setenv("MATRIX_PHASE1_RELEASE_PREPARATION", filepath.Join(directory, "release-preparation"))
 			}
 			config, err := optionsFromEnvironment()
 			if (err == nil) != scenario.accept {
@@ -1095,6 +1196,7 @@ func optionsFromEnvironment() (options, error) {
 	}
 	config := options{
 		root:                    os.Getenv("MATRIX_PHASE1_ROOT"),
+		releasePreparation:      os.Getenv("MATRIX_PHASE1_RELEASE_PREPARATION"),
 		releaseBase:             os.Getenv("MATRIX_PHASE1_RELEASE_BASE"),
 		releaseA:                os.Getenv("MATRIX_PHASE1_RELEASE_A"),
 		releaseB:                os.Getenv("MATRIX_PHASE1_RELEASE_B"),
@@ -1120,6 +1222,10 @@ func optionsFromEnvironment() (options, error) {
 	}
 	if config.releaseBase != "" && (!filepath.IsAbs(config.releaseBase) ||
 		filepath.Clean(config.releaseBase) != config.releaseBase) {
+		return options{}, fail("command-input")
+	}
+	if config.releasePreparation != "" && (config.releaseBase == "" || config.afterStart ||
+		!filepath.IsAbs(config.releasePreparation) || filepath.Clean(config.releasePreparation) != config.releasePreparation) {
 		return options{}, fail("command-input")
 	}
 	if (config.skippedRelease == "") != (config.mismatchedRelease == "") ||
@@ -1182,8 +1288,19 @@ func runGate(ctx context.Context, config options) error {
 		if err != nil {
 			return fail("release-base-authentication")
 		}
-		if err := validateReleaseSequence(base, a, b); err != nil {
-			return err
+		if config.releasePreparation == "" {
+			if err := validateReleaseSequence(base, a, b); err != nil {
+				return err
+			}
+		} else {
+			preparation, err := release.VerifyDirectory(config.releasePreparation, trust)
+			if err != nil {
+				return fail("release-preparation-authentication")
+			}
+			if err := validatePreparationLifecycleSequence(preparation, base, a, b); err != nil {
+				return err
+			}
+			releases.preparation = &preparation
 		}
 		releases.base = &base
 	}
