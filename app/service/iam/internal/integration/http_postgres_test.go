@@ -16128,8 +16128,24 @@ func proveRoleSessionManagement(t *testing.T, ctx context.Context, handler http.
 	call(http.MethodPost, sessionPath(disabledRoleSession.Session.ID)+":revoke", managerBearer,
 		iamv1.RevokeRoleSessionRequest{RequestID: "admin-revoke-disabled-role"}, http.StatusOK, nil)
 	call(http.MethodDelete, path, root, iamv1.DeleteRoleRequest{ResourceVersion: role.ResourceVersion, RequestID: "delete-managed-role"}, http.StatusOK, nil)
-	call(http.MethodGet, path+"/sessions", managerBearer, nil, http.StatusOK, &page)
-	if len(page.Items) != 1 || page.Items[0].Session.ID != second.Session.ID || !page.Items[0].RevokeCapability.Available || readRevision() != beforeRoleChange+1 {
+	// The scan budget applies before the lifecycle filter. Random session IDs
+	// can put the sole unrevoked record beyond the first hundred candidates;
+	// an empty page with a cursor is not evidence that deletion hid it.
+	var remaining []iamv1.RoleSessionListing
+	after := ""
+	for pageNumber := 0; pageNumber < 2; pageNumber++ {
+		query := path + "/sessions"
+		if after != "" {
+			query += "?after=" + after
+		}
+		call(http.MethodGet, query, managerBearer, nil, http.StatusOK, &page)
+		remaining = append(remaining, page.Items...)
+		if (pageNumber == 0 && page.NextAfter == "") || (pageNumber == 1 && page.NextAfter != "") || readRevision() != beforeRoleChange+1 {
+			t.Fatal("deleted role directory lost its bounded continuation or changed revision")
+		}
+		after = page.NextAfter
+	}
+	if len(remaining) != 1 || remaining[0].Session.ID != second.Session.ID || !remaining[0].RevokeCapability.Available {
 		t.Fatal("deleted role hid its manageable session or changed directory revision")
 	}
 	beforeInvalidSource := readRevision()
