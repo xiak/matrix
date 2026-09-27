@@ -177,9 +177,10 @@ operator bundle compatible with the installation profile; the selected backup
 alone determines the authenticated target release. A historical target binary
 does not own the restore algorithm. Phase 1 recovery may target the current
 release or its exact signed immediate predecessor. A cross-profile recovery is
-admitted only for the explicitly supported predecessor-to-current upgrade
-profile pair; it never admits a skipped or arbitrary downgrade, while direct
-rollback remains equal-profile only. Backups remain installation-owned,
+admitted only for the separately verified predecessor-to-current recovery
+profile pair; upgrade admission alone is insufficient. It never admits a
+skipped or arbitrary downgrade, while direct rollback remains equal-profile
+only. Backups remain installation-owned,
 restrictive, sealed, and excluded from support evidence.
 
 `verify` rechecks journal seals, current bundle content, loaded image identity,
@@ -467,7 +468,12 @@ its status and topology verification; only after that verification does the
 fixture compare Docker inventory and ports with its installed configuration.
 Current/predecessor inventory still uses the current topology compiler. This
 test boundary does not add a product upgrade/recovery profile or permit an
-arbitrary historical release. Its real historical-path validation remains open.
+arbitrary historical release. Exact test source
+`ba037e30c33a6a9c2e0c336afd0eee80d32c637a` passed Linux package race tests,
+installation unit/vet and architecture checks, and
+[Verification 36314399263](https://github.com/xiak/matrix/actions/runs/36314399263)
+with Go, UI, authority-process and node-process success. Its real
+historical-path validation remains open.
 
 Mutable Account security settings and factor replacement add a recovery fence.
 Each new protected backup must seal a separate, non-secret authentication and
@@ -487,6 +493,16 @@ separate explicit migration/recovery path would need its own proof.
 The predecessor may remain an admitted in-place upgrade source without being
 an admitted automatic recovery source; the release recovery-profile function
 must not infer restore permission from upgrade compatibility.
+
+The signed gate proves retained-data predecessor migration separately from
+the successor's same-profile failure-injected upgrade, data-preserving rollback
+and protected recovery. It must not inject an irreversible cross-profile
+failure and then require an unsupported legacy identity restore to continue.
+The recoverable v5 baseline already contains the legitimate MFA enrollment,
+verified contact and durable authorization qualification; enrolling or
+replacing a factor after that backup deliberately belongs to the pre-effect
+conflict gate, not the positive restore path. Both migration and same-profile
+lifecycle evidence remain mandatory on the final composition.
 
 The close transaction reprojects the complete durable authentication and
 authorization state, including Account status/root ownership/settings,

@@ -5,10 +5,11 @@
 - Updated: 2026-09-27
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/phase3-mfa-enabling`
-- Pushed milestone: `47c4e573` (three-release bridge retains the product's
-  cross-profile rollback refusal rather than requiring an unsupported direct
-  rollback, independently verified by
-  [Verification 36312625241](https://github.com/xiak/matrix/actions/runs/36312625241)).
+- Pushed milestone: `ba037e30` (pins the exact accepted historical preparation
+  fixture without widening product profile admission, independently verified by
+  [Verification 36314399263](https://github.com/xiak/matrix/actions/runs/36314399263)).
+- The bridge's cross-profile rollback refusal remains verified at `47c4e573`
+  by [Verification 36312625241](https://github.com/xiak/matrix/actions/runs/36312625241).
 - Real database-target runtime DSN fixture: `d078d456`,
   independently verified by
   [Verification 36055308970](https://github.com/xiak/matrix/actions/runs/36055308970).
@@ -40,6 +41,9 @@ IAM 40/Audit 24/PaaS 6 with contract revision 15. Do not enable backup v5,
 recover from an old backup automatically, or claim the signed multi-host gate
 until a fixed IAM producer/restore source is selectively integrated and the
 exact combined profile, signed runtime and browser gates pass. This checkpoint
-records no uncommitted or machine-local test state.
+records no uncommitted or machine-local test state. The final signed fixture
+must prove predecessor migration and the successor's same-profile lifecycle,
+with legitimate MFA qualification established before its positive v5 backup;
+an unsupported old-backup restore cannot be used to continue a failure test.
 
 Replace this checkpoint only at another committed-and-pushed milestone.
