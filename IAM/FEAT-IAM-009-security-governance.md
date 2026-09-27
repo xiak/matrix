@@ -782,6 +782,8 @@ close仍使用原SERIALIZABLE事务和认证状态独占屏障，不降成READ C
 
 同一最终候选源码在上述Go1.26.3限制下通过全仓`go test -race -count=1 -p 2 ./...`（含architecture）、`go vet -p 2 ./...`、模块校验及Linux amd64/CGO关闭的全仓构建。`go generate ./api/...`前后四份OpenAPI文件集合及SHA256逐项一致，gofmt/diff检查通过；默认外部DSN缺失的SKIP不充当真库、浏览器或签名安装证据。CI继续沿原lane串行运行，单一IAM前驱替换而非叠加；清除已删除旧fixture仍“opt-in”的过时说明，不增加兼容版本矩阵或扩大时间预算。
 
+固定生产候选`1584de22e156ea47a4db6056e91a9340b4f364f9`的[Verification36316212546](https://github.com/xiak/matrix/actions/runs/36316212546)没有通过独立验收：实际storage日志在原双schema测试的未初始化readiness断言中失败，数据库准确返回`ready=false/schema=45`，测试仍要求44；其后IAM storage门禁尚未执行。整体queued不表示该失败仍在等待，也不能用Go/node成功覆盖它。本地新库先重现同一失败，再仅把原测试初始化前后的精确期望同步45；另一组新库完整通过原双schema权限/不可变记录5.31s、旧tenant记录升级0.44s、Audit HTTP并发/重放/失败事务1.27s，race包8.561s/3.989s。生产SQL、就绪条件、场景与预算均未改变；后继固定修正仍须独立CI，不回填1584的失败或继承签名安装验收。
+
 原子事务门禁修正了未完成迁移文本和simple-protocol测试中的JSON参数表达；锁等待按实际传递依赖而非直接队列位置判断，关闭后的认证错误保持原401语义。没有放宽生产锁、密码算法或超时。用例另证明六类错误准备结果不能到达seal，序列化commit冲突重新采样而不复用失败结果，重试耗尽/未知commit不返回候选快照，错误返回校验不能发生在commit之后。该阶段同一源码的私有installation契约、IAM各包默认race、architecture、IAM vet及diff通过，默认DSN缺失的SKIP不算真实运行。上述局部证据不代表完整授权变化/预算矩阵、密集资格恢复容量、当前源码独立CI或签名恢复已通过。
 
 本版选定的保守准入是：没有上述证明的MFA备份恢复组合不开放。用户已授权原受保护主账号的目的限定MFA恢复及隔离增量，但当前恢复资格来源仍须证明，不能凭本地root权限、旧备份或旧receipt恢复历史权限。备份外的一把长期恢复密钥证明能力来源，不自动证明T1的Account/User仍启用、平台附件未撤销或因子/设置仍是T0版本；恢复T0后从旧库取expected再签新请求不能填补该缺口。仅救回primary而不能安全处理普通USER及密码/AccessKey/Role/授权附件/接收地址的回退，也不能将平台改回OPEN。

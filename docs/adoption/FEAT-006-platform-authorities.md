@@ -879,6 +879,40 @@ treating a wrapping-key requirement set or advanced OTP step as evidence that
 an old factor is still authorized, and recreating current qualification from
 the restored database. No installation/profile or consumer state is imported.
 
+### Fixed IAM40-to-snapshot integration dependency closure
+
+The target installation's fixed
+`e0de5b6b70cd16dc7b589e9dcb5fa3ecc87fd3e6` adoption record identifies its
+integrated step-up baseline as `b7a70bfa9e53f0a5f16619c60523c84613cb7b0b`
+(IAM40/Audit24). The comparison below uses that exact donor baseline, not a
+diff that replaces the target tree. Target fixed
+`ef88d8d6561ff52d8a1ec0f7c4366dd440134705` is `REFERENCE` for its separate
+consumer boundary only; no target source or acceptance is imported here.
+
+| Fixed donor delta, in dependency order | Decision and existing owners |
+| --- | --- |
+| `d570673ba87c113f7474fdab79b5e22a83c2b323` then `018fbd7505ae16d59dcfe857df7fbbe870bf1a13` | `ADAPT` Account security-settings types/strict codec, IAM Profile6 read action and its historical archive, existing Account read use case/adapter and migration000003. Retain the target's PaaS/Audit profiles; these commits do not replace those catalogs. |
+| `0a237aae5c904e0e32e5766544e31c1cfed5a02a` then `339d37474f2cfbee11479a497514d8dcb4d38b0f` | `ADAPT` explicit challenge purpose, restricted ENROLLMENT contracts and LOGIN/RECOVERY persistence/read projections in migration000012. All exact-purpose checks and private lookup shapes move with their producers/consumers; do not retain purpose inference or an old overload. |
+| `847fc85307f8f50992a04f67b71caecf7581683d` then `fea7a772a3af5a31b3b790f79689a1843bcf70d7` | `ADAPT` Profile7 settings update, current-setting/session qualification, initial enrollment/contact workflow and exact settings proof/completion/notice. Owners are IAM accounts/authentication/enrollment/notification/step-up HTTP, use cases and PostgreSQL adapters, migrations000001/000003/000012/000013, and Audit settings fact/SQL. Session qualification is required; the separate account-session directory/UI is not a dependency. Preserve the target installation's security-mail transport and channel custody. |
+| `e24dbdae6b4ea420365a4527a0bd89b16e0d720f` | `ADAPT` exact TOTP_REPLACE proof, original deadline, replacement enrollment/batch lineage and cancellation by legitimate saved-code recovery, plus the self-only replacement Audit fact. Original private purpose recovery remains closed while this state changes. Preserve the target's terminal action/result/proof catalog and AccessKey client rather than replacing shared API/Audit files. |
+| `dce2456adb8503c9c86d31bb2a3f63f35719ffa0` and `29668fa330b2233b43ebd48ed37738623377f9de` | `REUSE` the sole bounded snapshot/envelope codec and database-target DSN correction already separately adopted by the target; avoid duplicate encoders or repeated application. They alone do not implement snapshot production or recovery. |
+| `1584de22e156ea47a4db6056e91a9340b4f364f9` | `ADAPT` candidate snapshot producer/atomic consumer only after its corrected independent gate is verified: installation-adapter lease proof; IAM backup/recovery CLI, use case and PostgreSQL adapters; migrations000014 projection/floors/private ABI,000001 budget and restorable Profile/Decision constraints,000012 OTP floor, exact verify/readiness consumers. Reconcile5/reopen4 must consume the same original snapshot; prepare2/close5 belong to one transaction. This fixed object is not independently accepted; current evidence belongs to IAM/009. |
+
+`234a401212e4c14a739766fcbb38c17cfa162c88` and
+`a97a8a0c422d8e9d2c8cadb85f74c61c815318c6` are `REFERENCE` for real settings,
+session and qualification interleavings, together with the owning tests in
+the listed feature commits. Target tests must preserve their actual host,
+PaaS6, AccessKey/Role and terminal scenarios. The IAM44 development
+predecessor is not a substitute for the target's fixed signed enabling
+IAM40-to-current path. `REJECT` importing obsolete upgrade fixtures, donor
+workflow layout, release profile, UI, checkpoint or foreign FEAT status.
+Regenerate contracts from the combined catalogs instead of copying donor
+OpenAPI over target-only actions. `ServiceIdentity`, `lookup_service`, the
+seven-column Audit claim and the sole Audit canonical encoder are not changed
+by this dependency closure. Full release profile/topology and signed
+consumer admission stay with installation; equal schema numbers are not
+compatibility evidence.
+
 The same-snapshot backup target remains in IAM/009. It `REUSE`s fixed
 `d479e1c57b6458852dd029227d32f3d56df6c5ad`'s sole
 `api/adapter/installation/v1` custody/lease contract and its same-source
