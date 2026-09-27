@@ -123,6 +123,32 @@ func (value *gate) activateReleaseA(ctx context.Context) error {
 		return err
 	}
 	emit("release-a-bridge-upgrade")
+	if initial.Manifest.Database != value.releases.a.Manifest.Database {
+		before, err := readJournal(ctx, value.config.root)
+		if err != nil {
+			return fail("release-a-bridge-rollback-journal")
+		}
+		command, stdout, stderr, err := startMX(ctx, value.releases.a, "rollback",
+			[]string{"--root", value.config.root})
+		if err != nil {
+			return fail("release-a-bridge-rollback-start")
+		}
+		if err := validateExpectedMXFailure(command.Wait(), stdout, stderr, "rollback", value.pathLeakage(),
+			3, "PRECONDITION_FAILED", "ROLLBACK_REQUIRES_AUTHENTICATED_RECOVERY"); err != nil {
+			return err
+		}
+		after, err := readJournal(ctx, value.config.root)
+		if err != nil || !reflect.DeepEqual(before, after) {
+			return fail("release-a-bridge-rollback-changed-journal")
+		}
+		if _, err := assertPlatform(ctx, value.config.root, value.releases.a.Manifest,
+			initial.Manifest.Release.ID); err != nil {
+			return err
+		}
+		emit("release-a-bridge-cross-profile-rollback-rejected")
+		emit("release-a-status-verify")
+		return nil
+	}
 
 	rolledBack, err := runMX(
 		ctx, value.releases.a, "rollback", []string{"--root", value.config.root}, value.pathLeakage(),

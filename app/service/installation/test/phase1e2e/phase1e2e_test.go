@@ -875,6 +875,17 @@ func TestReleaseSequenceRequiresTwoCompatibleImmediateTransitions(t *testing.T) 
 		accept bool
 	}{
 		{name: "base through bridge to successor", accept: true},
+		{name: "cross-profile bridge through same-profile successor", accept: true, mutate: func(_, bridge, _ *release.Manifest) {
+			bridge.Database = release.CurrentDatabaseProfile()
+			bridge.TopologyDigest = topology.ContractDigest()
+		}},
+		{name: "unpublished bridge profile", mutate: func(_, bridge, _ *release.Manifest) {
+			bridge.Database.Authorities.IAM++
+		}},
+		{name: "reverse bridge profile", mutate: func(base, _, _ *release.Manifest) {
+			base.Database = release.CurrentDatabaseProfile()
+			base.TopologyDigest = topology.ContractDigest()
+		}},
 		{name: "base is not root", mutate: func(base, _, _ *release.Manifest) {
 			base.Release.PreviousID, base.Release.PreviousVersion = "older", "v0.0.1"
 		}},

@@ -446,6 +446,14 @@ completed successfully for exact `10a754f10b95c0b130b61fee0234826d7c1a52f6`
 across go, UI, node-process and authority-process. This is test entry and
 diagnostic coverage, not a two-host runtime pass.
 
+The three-release fixture also preserves the product's direct-rollback
+boundary at its first bridge. Different database profiles require a normalized
+rollback refusal, an unchanged sealed journal and a still-healthy bridge;
+only an equal-profile bridge performs rollback and reactivation. Sequence
+tests reject unpublished and reverse profile transitions. This is fixture
+preparation, not evidence that the final historical A/B-to-successor signed
+chain or its recovery path has run.
+
 Mutable Account security settings and factor replacement add a recovery fence.
 Each new protected backup must seal a separate, non-secret authentication and
 authorization state digest from the same PostgreSQL snapshot as `pg_dump`;
