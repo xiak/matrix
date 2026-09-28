@@ -1,5 +1,6 @@
 import type { AccessRole, AccessRoleSession, AccessWorkspace } from "./accessWorkspace";
 import { AccessWorkspaceError } from "./accessWorkspaceError";
+import type { RoleTrustDocument } from "./roles";
 
 // Known synthetic workloads, not an assertion accepted from an arbitrary string.
 export const roleServicePrincipals = ["devops.matrix.internal"] as const;
@@ -21,9 +22,12 @@ export function validateRoleTrust(workspace: AccessWorkspace, trust: RoleTrust, 
     default: invalid();
   }
 }
-export function roleTrustDocument(role: RoleTrust) {
-  const principal = role.principalType === "account" ? { tenant: role.principal, userIds: role.trustedUserIds } : role.principalType === "service" ? { service: role.principal } : { providerId: role.principal };
-  return { version: "1", statement: [{ effect: "allow", action: "iam:assumeRole", principal }] };
+export function roleTrustPreview(role: RoleTrust) {
+  if (role.principalType !== "account") return { mockOnly: true, principalType: role.principalType, principalId: role.principal };
+  return {
+    languageVersion: "1",
+    statements: [{ sid: "trusted-users", effect: "ALLOW", principals: role.trustedUserIds.map((id) => ({ type: "USER", id })) }]
+  } satisfies RoleTrustDocument;
 }
 export function roleSessionStatus(workspace: AccessWorkspace, session: AccessRoleSession, userIds: readonly string[], now: string): "active" | "expired" | "revoked" | "unavailable" {
   if (session.revokedAt) return "revoked";

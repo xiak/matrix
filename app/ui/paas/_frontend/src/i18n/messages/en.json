@@ -2473,7 +2473,7 @@
       "review": "Review trust, grants and restrictions before creating the role."
     },
     "trustHints": {
-      "account": "Only explicitly selected users in this preview tenant can be trusted. They also need an iam:assumeRole grant for this role. Cross-account and wildcard trust are not supported.",
+      "account": "Only explicitly selected users in this preview account can be trusted. Trust controls admission; in live IAM, users also need a separate iam.role.assume grant for this role. Cross-account and wildcard trust are not supported.",
       "service": "Choose a registered synthetic workload. This simulates a service identity; it does not verify a real workload or create a service-linked role.",
       "provider": "Choose an enabled synthetic identity provider. Session simulation also requires an enabled federation mapping to this role. No SAML/OIDC assertion is verified."
     },
@@ -2500,7 +2500,7 @@
     "duplicate": "A role with this name already exists.",
     "invalidMetadata": "Check tags and session duration. Use unique tag keys and a duration of 15–720 minutes.",
     "tags": "Role tags",
-    "reviewHint": "Creating trust does not grant callers permission to assume the role. Account users still need an explicit grant for iam:assumeRole.",
+    "reviewHint": "Creating trust does not grant callers permission to assume the role. In live IAM, same-account users still need a separate iam.role.assume grant; service and provider examples are MOCK-only.",
     "cancelTitle": "Discard role draft?",
     "cancelHint": "The unsaved trust, policies and role details will be discarded. Nothing has been created.",
     "liveCancelHint": "The unsubmitted trusted users and role details will be discarded. Nothing will be created.",
@@ -2536,8 +2536,9 @@
     "effectiveVersion": "Effective version",
     "sessions": "Temporary sessions",
     "sessionSettings": "Session settings",
-    "trustDocument": "Trust document (Matrix MOCK)",
-    "requiredAction": "An account user also needs the following action/resource grant. The trust document above is not this grant.",
+    "trustDocument": "Same-account USER trust document preview",
+    "syntheticTrust": "MOCK-only trusted principal preview",
+    "requiredAction": "The document above is a shape preview; it is not written to live IAM. A live caller needs a separate grant for this action and target role ID:",
     "deleteImpact": "Deleting the role makes its preview sessions unavailable. Policies and users are preserved. Remove federation references before deleting.",
     "backToSessions": "Back to session directory",
     "sessionDirectoryHint": "This is the administrator MOCK directory for role sessions. It supports exact source-user, session-ID and lifecycle filters plus one-session revocation. Lifecycle only records IAM's unrevoked, expired or revoked observation; it does not prove current business authority. Use Role access in the account menu to assume a role.",

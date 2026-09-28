@@ -1143,7 +1143,7 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: "View role" }));
     expect(screen.getByLabelText("Entity destination").textContent).toBe(created.id);
     await user.click(screen.getByRole("tab", { name: "Trust relationship" }));
-    expect(screen.getByRole("region", { name: "Trust document (Matrix MOCK)" }).textContent).toContain("principal-lin");
+    expect(JSON.parse(screen.getByRole("region", { name: "Same-account USER trust document preview" }).textContent!)).toEqual({ languageVersion: "1", statements: [{ sid: "trusted-users", effect: "ALLOW", principals: [{ type: "USER", id: "principal-lin" }] }] });
   });
   it("reviews exact trust additions/removals, validates before review, and retains the review on failure without changing other role fields", async () => {
     const { user, repository, extension } = await open("roles", { seed: async (extension) => {
@@ -1170,8 +1170,8 @@ describe("CAM-style access workspace", () => {
     await user.click(panel.getByText("查看完整信任文档对比"));
     const prior = JSON.parse(panel.getByRole("region", { name: "变更前 · 信任文档" }).textContent!);
     const proposed = JSON.parse(panel.getByRole("region", { name: "变更后 · 信任文档" }).textContent!);
-    expect(prior.statement[0].principal).toEqual({ tenant: "org-xiak", userIds: ["principal-lin"] });
-    expect(proposed.statement[0].principal).toEqual({ tenant: "org-xiak", userIds: ["principal-chen"] });
+    expect(prior).toEqual({ languageVersion: "1", statements: [{ sid: "trusted-users", effect: "ALLOW", principals: [{ type: "USER", id: "principal-lin" }] }] });
+    expect(proposed).toEqual({ languageVersion: "1", statements: [{ sid: "trusted-users", effect: "ALLOW", principals: [{ type: "USER", id: "principal-chen" }] }] });
     await user.click(panel.getByRole("button", { name: "取消" }));
     expect(await extension.read("preview")).toEqual(before);
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "修改信任关系" }));
@@ -1326,6 +1326,7 @@ describe("CAM-style access workspace", () => {
     } });
     const before = await extension.read("preview"), provider = before.providers.find((entry) => entry.name === "NextSSO")!;
     await user.click(await screen.findByRole("tab", { name: "信任关系" }));
+    expect(JSON.parse(screen.getByRole("region", { name: "仅 MOCK 的信任对象预览" }).textContent!)).toEqual({ mockOnly: true, principalType: "provider", principalId: "idp-example" });
     await user.click(screen.getByRole("button", { name: "修改信任关系" }));
     expect(screen.queryByRole("dialog")).toBeNull();
     const workflow = screen.getByRole("group", { name: "修改信任关系" }), panel = within(workflow);
@@ -1333,6 +1334,8 @@ describe("CAM-style access workspace", () => {
     await user.click(panel.getByRole("button", { name: "审阅变更" }));
     expect(panel.getByRole("article", { name: "变更前" }).textContent).toContain("EnterpriseSSO");
     expect(panel.getByRole("article", { name: "变更后" }).textContent).toContain(provider.id);
+    await user.click(panel.getByText("查看完整信任文档对比"));
+    expect(JSON.parse(panel.getByRole("region", { name: "变更后 · 信任文档" }).textContent!)).toEqual({ mockOnly: true, principalType: "provider", principalId: provider.id });
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
     await user.click(panel.getByRole("button", { name: "保存" }));
     await waitFor(() => expect(panel.getByRole("alert").textContent).toContain("仍被引用"));
