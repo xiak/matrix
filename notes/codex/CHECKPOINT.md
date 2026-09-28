@@ -6,7 +6,7 @@
 - Updated: 2026-09-28
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `ae014ea3`
+- Pushed UI source: `d600a7cf`
 
 ## Authoritative route
 
@@ -37,7 +37,11 @@ tab-scoped, non-secret User reset unknown-outcome reminders and an isolated
 password-rule design preview that separates proposed, draft, actual and
 historical-result provenance. A compact IAM route audit also corrected the
 MOCK policy-detail summary's narrow-screen description flow; exact behavior
-and test evidence are owned only by FEAT-007.
+and test evidence are owned only by FEAT-007. The isolated MOCK password-age
+preview now distinguishes expiry disabled/unknown, expiry enabled/unknown,
+IAM-confirmed expired and IAM-confirmed current without synthesizing a
+challenge, session or completion. Its contract exclusions belong to
+FEAT-IAM-010 and verification to FEAT-007.
 First-login MFA enrollment remains staged against
 IAM's fixed contract. Real IAM process browser, installation and release
 acceptance are not established. Detailed behavior and evidence remain only in
