@@ -695,7 +695,7 @@ LOGIN竞争局部证据：2026-09-25原integration owner的`TestIAMTOTPReplaceme
 
 #### S2本人主动解绑与可证明的重新绑定
 
-本节是未实现的后继详细设计，不注册API、不提前分配schema/release revision，不改变当前IAM45消费者。最小闭环是普通USER以当前密码和原有效TOTP明确移除自己的因子，全部旧登录资格结束，正常密码重登；之后主动重新绑定，或在账号要求收紧后通过受限ENROLLMENT重新绑定。不能以只增加REMOVED枚举、删除因子行或解除账号要求替代此闭环。
+本节已实现原`api/iam/v1`拥有者中的纯请求/完成/结果契约及生成的OpenAPI数据定义；运行时仍是未实现的后继详细设计。没有注册解绑路由、开放`TOTP_REMOVE`证明或`REMOVED`状态，不提前分配数据库schema/release revision，不改变当前IAM45消费者。最小闭环是普通USER以当前密码和原有效TOTP明确移除自己的因子，全部旧登录资格结束，正常密码重登；之后主动重新绑定，或在账号要求收紧后通过受限ENROLLMENT重新绑定。不能以只增加REMOVED枚举、删除因子行或解除账号要求替代此闭环。
 
 解绑是本人认证器管理，不是租户管理员的他人重置权限，也不新增可授予的Policy动作。仅当前ACTIVE Account/USER、无forced-change的PASSWORD_TOTP Session可发起；需要本人仍持有原因子、当前密码、可信联系人和未被恢复fence关闭的当前恢复批次。Account必须当前不强制MFA。安全底线拟限定原RootIdentity及存在未撤销平台权限附件的USER不能自助移除最后因子；检查原绑定而非只看当前有效权限，并与平台附件变更在原principal锁序中串行化。受保护身份继续使用更换/已获准的恢复路径，不新增在线降级或借用安装本地能力。此保护边界须与安装owner对齐后实施，不影响其正在验证的IAM45组合。
 
@@ -706,6 +706,8 @@ LOGIN竞争局部证据：2026-09-25原integration owner的`TestIAMTOTPReplaceme
 | 拟`GET /v1/auth/totp/removals/by-request/{requestId}` | 当前有效同USER正常登录后，只读原非秘密完成；无Account/User/原Session selector。完成投影`AuthenticatorRemoval{apiVersion,kind,id,requestId,factorId,factorRevision,removedAt}`，factorRevision为原子移除后的修订。NOT_FOUND不证明旧请求未提交，不签发新执行资格 |
 | 同意图重放 | 当前认证先验证；完成已存在且原输入精确相等时返回`EQUAL_REPLAY`及原removal，不再次检查原因子今天是否ACTIVE，也不消费新证明、退出新Session或返回新的REAUTHENTICATE指令。原已撤销bearer仍401；重新绑定后读取旧完成也不触碰新因子 |
 | 重新绑定 | 复用本人绑定和ENROLLMENT入口、一次provisioning及确认流程。只接受有真实完成来源的REMOVED，不改回NEVER_BOUND；新factor、新批次和新修订必须与原解绑完成关联。沿现有INITIAL/REPLACEMENT准备用途，不把INITIAL投影当成USER从未绑定的证明；历史身份状态和来源另由锁内权威判断 |
+
+纯契约局部证据（2026-09-28）：原contract/schema测试覆盖`RemoveTOTPRequest`、`AuthenticatorRemoval`、`RemoveTOTPResponse`的严格字段、重复/大小写别名/未知成员/秘密与身份selector拒绝、解码失败不修改目标、可精确表达且允许递增的输入修订和递增后完成修订、规范时间，以及首次`APPLIED`必须重新登录但`EQUAL_REPLAY`连空或null的`nextStep`也不得出现。OpenAPI与解码器对原完成类型和重放分支一致；它不是当前因子状态或登录授权。新增同拥有者的有界round-trip fuzz以2 worker执行30秒、446750次通过。API/IAM相关默认race、architecture及vet通过；无DSN的SKIP不是真库证据。该片不宣称解绑事务、永久来源约束、跨服务事实/通知、SMTP或UI可用，安装私有snapshot/closure及七列claim未变。
 
 原`000012_totp`承载此生命周期。当前StepUp能证明认证及一次消费，但不能独自证明哪个因子已经合法解绑；需要本目的不可变`authenticator_removals`完成关联，绑定同Account/USER、requestId、StepUp、旧factor/batch、结果revision/time与唯一Audit事实。它不是第二主体、通用receipt或另一个认证器目录。USER的REMOVED状态必须通过复合FK和deferred语义约束指向该完成；原批次的终止来源也指向同一完成。proof消费、状态、因子、批次、会话、完成、outbox和通知缺任何一项均不能提交。重放/升级不得补造来源；有旧因子而缺完成、错USER或状态未知时关闭认证，不能推断合法REMOVED。只在首次确认的新生USER或已证明的真实来源上保留NEVER_BOUND。
 

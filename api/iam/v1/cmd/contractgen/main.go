@@ -534,6 +534,9 @@ func structContracts() map[string]reflect.Type {
 		"TOTPProvisioning":                              openapi31.StructType[iamv1.TOTPProvisioning](),
 		"StartTOTPEnrollmentRequest":                    openapi31.StructType[iamv1.StartTOTPEnrollmentRequest](),
 		"StartTOTPReplacementRequest":                   openapi31.StructType[iamv1.StartTOTPReplacementRequest](),
+		"RemoveTOTPRequest":                             openapi31.StructType[iamv1.RemoveTOTPRequest](),
+		"AuthenticatorRemoval":                          openapi31.StructType[iamv1.AuthenticatorRemoval](),
+		"RemoveTOTPResponse":                            openapi31.StructType[iamv1.RemoveTOTPResponse](),
 		"StartTOTPEnrollmentResponse":                   openapi31.StructType[iamv1.StartTOTPEnrollmentResponse](),
 		"ConfirmTOTPEnrollmentRequest":                  openapi31.StructType[iamv1.ConfirmTOTPEnrollmentRequest](),
 		"ConfirmTOTPEnrollmentResponse":                 openapi31.StructType[iamv1.ConfirmTOTPEnrollmentResponse](),
@@ -651,8 +654,11 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 		return object{"type": "integer", "minimum": 1, "maximum": uint64(9007199254740990)}
 	}
 	if jsonName == "factorRevision" || jsonName == "expectedFactorRevision" {
-		if owner == "StartTOTPReplacementRequest" {
+		if owner == "StartTOTPReplacementRequest" || owner == "RemoveTOTPRequest" {
 			return object{"type": "integer", "minimum": 2, "maximum": uint64(9007199254740990)}
+		}
+		if owner == "AuthenticatorRemoval" {
+			return object{"type": "integer", "minimum": 3, "maximum": uint64(9007199254740991)}
 		}
 		if owner == "StepUp" || owner == "StartStepUpRequest" || owner == "RegenerateRecoveryCodesRequest" || owner == "RecoveryCodeRegeneration" {
 			return object{"type": "integer", "minimum": 2, "maximum": uint64(9007199254740991)}
@@ -681,8 +687,11 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 	if owner == "StepUp" && jsonName == "state" {
 		return object{"enum": []string{"PENDING", "PROVED", "CONSUMED", "EXPIRED"}}
 	}
-	if (owner == "StartTOTPEnrollmentResponse" || owner == "RegenerateRecoveryCodesResponse" || owner == "UpdateAccountSecuritySettingsResponse") && jsonName == "outcome" {
+	if (owner == "StartTOTPEnrollmentResponse" || owner == "RegenerateRecoveryCodesResponse" || owner == "UpdateAccountSecuritySettingsResponse" || owner == "RemoveTOTPResponse") && jsonName == "outcome" {
 		return object{"enum": []string{"APPLIED", "EQUAL_REPLAY"}}
+	}
+	if owner == "RemoveTOTPResponse" && jsonName == "nextStep" {
+		return object{"const": "REAUTHENTICATE"}
 	}
 	if owner == "ConfirmTOTPEnrollmentResponse" || owner == "ConfirmAuthenticatorRecoveryResponse" || owner == "RegenerateRecoveryCodesResponse" {
 		if jsonName == "nextStep" {
@@ -1045,6 +1054,13 @@ func applySemanticOverlays(schemas object) {
 		object{"properties": object{"state": object{"const": "EXPIRED"}, "provedAt": object{"type": "string"}, "consumedAt": false}},
 	}
 	schemas["RecoveryCodeRegeneration"].(object)["description"] = "Immutable non-secret observation of an original same-user recovery-code regeneration. It neither returns saved codes nor renews step-up authority."
+	schemas["RemoveTOTPRequest"].(object)["description"] = "Removal intent bound to the caller's current login Session and original same-purpose proof. Data contract only; no removal route is enabled yet."
+	schemas["AuthenticatorRemoval"].(object)["description"] = "Immutable non-secret completion, not current factor state or authentication authority. factorRevision is the resulting revision after removal."
+	schemas["RemoveTOTPResponse"].(object)["description"] = "Only first application ends old login eligibility. Historical observation must not instruct a client to end a newer Session."
+	schemas["RemoveTOTPResponse"].(object)["oneOf"] = []any{
+		object{"required": []string{"nextStep"}, "properties": object{"outcome": object{"const": "APPLIED"}}},
+		object{"properties": object{"outcome": object{"const": "EQUAL_REPLAY"}, "nextStep": false}},
+	}
 	schemas["RegenerateRecoveryCodesResponse"].(object)["oneOf"] = []any{
 		object{"required": []string{"recoveryCodes"}, "properties": object{"outcome": object{"const": "APPLIED"}, "recoveryCodes": object{"type": "array"}}},
 		object{"properties": object{"outcome": object{"const": "EQUAL_REPLAY"}, "recoveryCodes": false}},
@@ -1303,7 +1319,8 @@ func applySemanticOverlays(schemas object) {
 	kinds := map[string]string{
 		"AccountSecuritySettings": "AccountSecuritySettings", "AccountSecuritySettingsChange": "AccountSecuritySettingsChange",
 		"NotificationContact": "NotificationContact", "NotificationContactVerification": "NotificationContactVerification",
-		"AccessKey": "AccessKey", "AccessKeyList": "AccessKeyList", "AccessKeyDeletion": "AccessKeyDeletion",
+		"AuthenticatorRemoval": "AuthenticatorRemoval",
+		"AccessKey":            "AccessKey", "AccessKeyList": "AccessKeyList", "AccessKeyDeletion": "AccessKeyDeletion",
 		"CurrentRoleIdentity": "CurrentRoleIdentity", "AssumableRoleList": "AssumableRoleList",
 		"RoleSession":     "RoleSession",
 		"RoleSessionList": "RoleSessionList", "RoleSessionAccess": "RoleSessionAccess",

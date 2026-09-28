@@ -287,6 +287,68 @@ func TestStepUpSchemasKeepOperationProofSeparateFromLoginAndSecretReplay(t *test
 	}
 }
 
+func TestAuthenticatorRemovalSchemasMatchClosedCompletionContracts(t *testing.T) {
+	api := loadIAMOpenAPI(t)
+	names := []string{"RemoveTOTPRequest", "AuthenticatorRemoval", "RemoveTOTPResponse", "RemoveTOTPResponse"}
+	for index, sample := range authenticatorRemovalContractSamples() {
+		t.Run(sample.name, func(t *testing.T) {
+			schema := compileIAMOpenAPISchema(t, api, names[index])
+			var fields map[string]any
+			if json.Unmarshal([]byte(sample.wire), &fields) != nil {
+				t.Fatal("invalid synthetic fixture")
+			}
+			check := func(want bool) {
+				t.Helper()
+				encoded, err := json.Marshal(fields)
+				if err != nil || (schema.Validate(fields) == nil) != want || (DecodeRequest(bytes.NewReader(encoded), sample.newValue()) == nil) != want {
+					t.Fatal("removal schema and decoder disagree on completion boundary")
+				}
+			}
+			check(true)
+			for _, extra := range []string{"accountId", "userId", "sessionId", "credential", "recoveryCodes", "provisioning", "challengeCredential"} {
+				fields[extra] = nil
+				check(false)
+				delete(fields, extra)
+			}
+			for field, original := range fields {
+				fields[field] = nil
+				check(false)
+				delete(fields, field)
+				check(false)
+				fields[field] = original
+			}
+			switch sample.name {
+			case "request":
+				for _, version := range []uint64{1, 2, 9007199254740990, 9007199254740991} {
+					fields["expectedFactorRevision"] = version
+					check(version >= 2 && version <= 9007199254740990)
+				}
+			case "completion":
+				for _, field := range []string{"apiVersion", "kind"} {
+					original := fields[field]
+					fields[field] = "foreign"
+					check(false)
+					fields[field] = original
+				}
+				for _, version := range []uint64{2, 3, 9007199254740991, 9007199254740992} {
+					fields["factorRevision"] = version
+					check(version >= 3 && version <= 9007199254740991)
+				}
+			case "applied":
+				fields["outcome"] = "EQUAL_REPLAY"
+				check(false)
+				delete(fields, "nextStep")
+				check(true)
+			case "replay":
+				for _, next := range []any{nil, "", "REAUTHENTICATE", "AUTHENTICATED"} {
+					fields["nextStep"] = next
+					check(false)
+				}
+			}
+		})
+	}
+}
+
 func TestAuthenticatorRecoverySchemasSeparateLoginProofFromRebinding(t *testing.T) {
 	api := loadIAMOpenAPI(t)
 	recovery := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AuthenticatorRecovery","id":"recovery-a","requestId":"request-a","state":"STARTED","createdAt":"2026-09-20T12:01:00Z","expiresAt":"2026-09-20T12:05:00Z"}`

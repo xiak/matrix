@@ -464,6 +464,31 @@ func ValidateStartTOTPReplacementRequest(value StartTOTPReplacementRequest) erro
 	return errors.Join(ValidateID("requestId", value.RequestID), ValidateID("stepUpId", value.StepUpID))
 }
 
+func ValidateRemoveTOTPRequest(value RemoveTOTPRequest) error {
+	if value.ExpectedFactorRevision < 2 || value.ExpectedFactorRevision > 9007199254740990 {
+		return errors.New("removable bound factor revision is required")
+	}
+	return errors.Join(ValidateID("requestId", value.RequestID), ValidateID("stepUpId", value.StepUpID))
+}
+
+func ValidateAuthenticatorRemoval(value AuthenticatorRemoval) error {
+	if value.APIVersion != APIVersion || value.Kind != "AuthenticatorRemoval" || value.FactorRevision < 3 {
+		return errors.New("authenticator removal is invalid")
+	}
+	return errors.Join(ValidateID("id", value.ID), ValidateID("requestId", value.RequestID), ValidateID("factorId", value.FactorID),
+		validatePositiveVersion(value.FactorRevision), validateTime("removedAt", value.RemovedAt))
+}
+
+func ValidateRemoveTOTPResponse(value RemoveTOTPResponse) error {
+	if err := ValidateAuthenticatorRemoval(value.Removal); err != nil {
+		return err
+	}
+	if value.Outcome == "APPLIED" && value.NextStep == "REAUTHENTICATE" || value.Outcome == "EQUAL_REPLAY" && value.NextStep == "" {
+		return nil
+	}
+	return errors.New("authenticator removal outcome is invalid")
+}
+
 func ValidateStartTOTPEnrollmentResponse(value StartTOTPEnrollmentResponse) error {
 	if err := ValidateTOTPEnrollment(value.Enrollment); err != nil {
 		return err

@@ -651,6 +651,174 @@ func FuzzStepUpContractRoundTrip(f *testing.F) {
 	})
 }
 
+func authenticatorRemovalContractSamples() []struct {
+	name, wire string
+	newValue   func() any
+} {
+	completion := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AuthenticatorRemoval","id":"removal-a","requestId":"remove-a","factorId":"factor-a","factorRevision":3,"removedAt":"2026-09-28T02:00:00Z"}`
+	return []struct {
+		name, wire string
+		newValue   func() any
+	}{
+		{"request", `{"requestId":"remove-a","stepUpId":"proof-a","expectedFactorRevision":2}`, func() any { return new(RemoveTOTPRequest) }},
+		{"completion", completion, func() any { return new(AuthenticatorRemoval) }},
+		{"applied", `{"outcome":"APPLIED","removal":` + completion + `,"nextStep":"REAUTHENTICATE"}`, func() any { return new(RemoveTOTPResponse) }},
+		{"replay", `{"outcome":"EQUAL_REPLAY","removal":` + completion + `}`, func() any { return new(RemoveTOTPResponse) }},
+	}
+}
+
+func TestAuthenticatorRemovalContractsAreClosedAndNonSecret(t *testing.T) {
+	for _, sample := range authenticatorRemovalContractSamples() {
+		t.Run(sample.name, func(t *testing.T) {
+			value := sample.newValue()
+			if err := DecodeRequest(strings.NewReader(sample.wire), value); err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := json.Marshal(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded := sample.newValue()
+			if DecodeRequest(bytes.NewReader(encoded), decoded) != nil || !reflect.DeepEqual(value, decoded) {
+				t.Fatal("non-secret removal contract changed under round trip")
+			}
+			for _, member := range []string{
+				`"accountId":"other"`, `"userId":"other"`, `"sessionId":"other"`, `"batchId":"other"`,
+				`"password":"secret"`, `"code":"123456"`, `"recoveryCodes":[]`, `"provisioning":{}`, `"credential":"secret"`,
+				`"challengeCredential":"secret"`, `"securitySettings":null`, `"state":"REMOVED"`, `"attributes":{}`,
+			} {
+				body := strings.TrimSuffix(sample.wire, "}") + "," + member + "}"
+				if DecodeRequest(strings.NewReader(body), decoded) == nil || !reflect.DeepEqual(value, decoded) {
+					t.Fatalf("accepted an extra member or changed destination on failure: %s", member)
+				}
+			}
+			// Test each declared field, not just the outer request identifier.
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(encoded, &fields); err != nil {
+				t.Fatal(err)
+			}
+			for name, field := range fields {
+				for _, key := range []string{name, strings.ToUpper(name[:1]) + name[1:]} {
+					body := strings.TrimSuffix(string(encoded), "}") + fmt.Sprintf(",%q:%s}", key, field)
+					if DecodeRequest(strings.NewReader(body), decoded) == nil || !reflect.DeepEqual(value, decoded) {
+						t.Fatalf("accepted duplicate/case alias or changed destination: %s", key)
+					}
+				}
+				body := strings.Replace(string(encoded), fmt.Sprintf("%q:%s", name, field), fmt.Sprintf("%q:null", name), 1)
+				if DecodeRequest(strings.NewReader(body), decoded) == nil || !reflect.DeepEqual(value, decoded) {
+					t.Fatalf("accepted null or changed destination: %s", name)
+				}
+			}
+			for _, body := range []string{"null", "[]", "{}", sample.wire + "{}", strings.Repeat(" ", int(MaxRequestBytes)) + sample.wire} {
+				if DecodeRequest(strings.NewReader(body), sample.newValue()) == nil {
+					t.Fatal("accepted incomplete, trailing or oversized document")
+				}
+			}
+			if DecodeRequest(bytes.NewReader(encoded), new(LoginResponse)) == nil || DecodeRequest(bytes.NewReader(encoded), new(StepUp)) == nil ||
+				DecodeRequest(bytes.NewReader(encoded), new(AuthenticationChallenge)) == nil {
+				t.Fatal("removal metadata decoded as authentication authority")
+			}
+		})
+	}
+}
+
+func TestAuthenticatorRemovalRevisionAndCompletionSemantics(t *testing.T) {
+	request := RemoveTOTPRequest{RequestID: "remove-a", StepUpID: "proof-a", ExpectedFactorRevision: 2}
+	for _, revision := range []uint64{2, 9007199254740990} {
+		request.ExpectedFactorRevision = revision
+		if ValidateRemoveTOTPRequest(request) != nil {
+			t.Fatal("safe advanceable bound revision rejected")
+		}
+	}
+	for _, revision := range []uint64{0, 1, 9007199254740991, 9007199254740992, ^uint64(0)} {
+		request.ExpectedFactorRevision = revision
+		if ValidateRemoveTOTPRequest(request) == nil {
+			t.Fatal("unbound or overflowing input revision accepted")
+		}
+	}
+	for _, body := range []string{
+		`{"requestId":"remove-a","stepUpId":"proof-a","expectedFactorRevision":2.5}`,
+		`{"requestId":"remove-a","stepUpId":"proof-a","expectedFactorRevision":"2"}`,
+		`{"requestId":"remove-a","stepUpId":"proof-a","expectedFactorRevision":-1}`,
+		`{"requestId":"remove-a","request\u0049d":"other","stepUpId":"proof-a","expectedFactorRevision":2}`,
+	} {
+		if json.Unmarshal([]byte(body), new(RemoveTOTPRequest)) == nil {
+			t.Fatal("ambiguous or noninteger input accepted")
+		}
+	}
+	completion := AuthenticatorRemoval{APIVersion: APIVersion, Kind: "AuthenticatorRemoval", ID: "removal-a", RequestID: "remove-a",
+		FactorID: "factor-a", FactorRevision: 3, RemovedAt: time.Date(2026, 9, 28, 2, 0, 0, 0, time.UTC)}
+	for name, mutate := range map[string]func(*AuthenticatorRemoval){
+		"foreign api":         func(v *AuthenticatorRemoval) { v.APIVersion = "other/v1" },
+		"foreign kind":        func(v *AuthenticatorRemoval) { v.Kind = "AuthenticatorRecovery" },
+		"missing id":          func(v *AuthenticatorRemoval) { v.ID = "" },
+		"missing request":     func(v *AuthenticatorRemoval) { v.RequestID = "" },
+		"missing factor":      func(v *AuthenticatorRemoval) { v.FactorID = "" },
+		"initial revision":    func(v *AuthenticatorRemoval) { v.FactorRevision = 1 },
+		"unadvanced revision": func(v *AuthenticatorRemoval) { v.FactorRevision = 2 },
+		"unsafe revision":     func(v *AuthenticatorRemoval) { v.FactorRevision = 9007199254740992 },
+		"missing instant":     func(v *AuthenticatorRemoval) { v.RemovedAt = time.Time{} },
+		"non UTC":             func(v *AuthenticatorRemoval) { v.RemovedAt = v.RemovedAt.In(time.FixedZone("other", 3600)) },
+		"submicrosecond":      func(v *AuthenticatorRemoval) { v.RemovedAt = v.RemovedAt.Add(time.Nanosecond) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			altered := completion
+			mutate(&altered)
+			encoded, err := json.Marshal(altered)
+			if err != nil || ValidateAuthenticatorRemoval(altered) == nil || json.Unmarshal(encoded, new(AuthenticatorRemoval)) == nil {
+				t.Fatal("invalid removal completion accepted")
+			}
+		})
+	}
+	completion.FactorRevision = 9007199254740991
+	if ValidateAuthenticatorRemoval(completion) != nil {
+		t.Fatal("last exactly representable completed revision rejected")
+	}
+	for _, sample := range []struct {
+		outcome, next string
+		valid         bool
+	}{
+		{"APPLIED", "REAUTHENTICATE", true}, {"EQUAL_REPLAY", "", true},
+		{"APPLIED", "", false}, {"EQUAL_REPLAY", "REAUTHENTICATE", false},
+		{"APPLIED", "AUTHENTICATED", false}, {"UNKNOWN", "", false},
+	} {
+		value := RemoveTOTPResponse{Outcome: sample.outcome, Removal: completion, NextStep: sample.next}
+		encoded, err := json.Marshal(value)
+		if err != nil || (ValidateRemoveTOTPResponse(value) == nil) != sample.valid || (json.Unmarshal(encoded, new(RemoveTOTPResponse)) == nil) != sample.valid {
+			t.Fatal("removal response confused first application with historical observation")
+		}
+	}
+	replay := authenticatorRemovalContractSamples()[3].wire
+	for _, extra := range []string{`"nextStep":null`, `"nextStep":""`, `"nextStep":"REAUTHENTICATE"`, `"session":{}`} {
+		if json.Unmarshal([]byte(strings.TrimSuffix(replay, "}")+","+extra+"}"), new(RemoveTOTPResponse)) == nil {
+			t.Fatal("completion replay carried a new authentication instruction")
+		}
+	}
+}
+
+func FuzzAuthenticatorRemovalContractRoundTrip(f *testing.F) {
+	samples := authenticatorRemovalContractSamples()
+	for index, sample := range samples {
+		f.Add(uint8(index), sample.wire)
+	}
+	f.Add(uint8(3), `{"outcome":"EQUAL_REPLAY","nextStep":null}`)
+	f.Fuzz(func(t *testing.T, kind uint8, source string) {
+		factory := samples[int(kind)%len(samples)].newValue
+		value := factory()
+		if DecodeRequest(strings.NewReader(source), value) != nil {
+			return
+		}
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal("accepted non-secret removal contract is not serializable")
+		}
+		decoded := factory()
+		if DecodeRequest(bytes.NewReader(encoded), decoded) != nil || !reflect.DeepEqual(value, decoded) {
+			t.Fatal("accepted removal contract changed under round trip")
+		}
+	})
+}
+
 func TestAuthenticatorRecoveryWireNeverBecomesLoginOrSecretReplay(t *testing.T) {
 	secret := func(value string) Secret {
 		t.Helper()

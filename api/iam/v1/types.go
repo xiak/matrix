@@ -303,6 +303,35 @@ type StartTOTPReplacementRequest struct {
 	ExpectedFactorRevision uint64 `json:"expectedFactorRevision"`
 }
 
+// The caller is selected only by its current login Session. These identifiers
+// bind one removal intent; neither is authentication or execution authority.
+type RemoveTOTPRequest struct {
+	RequestID              string `json:"requestId"`
+	StepUpID               string `json:"stepUpId"`
+	ExpectedFactorRevision uint64 `json:"expectedFactorRevision"`
+}
+
+// AuthenticatorRemoval observes an immutable completion, not today's factor
+// state. FactorRevision is the revision after removal. No secret or reusable
+// proof is disclosed, including when observed after a later enrollment.
+type AuthenticatorRemoval struct {
+	APIVersion     string    `json:"apiVersion"`
+	Kind           string    `json:"kind"`
+	ID             string    `json:"id"`
+	RequestID      string    `json:"requestId"`
+	FactorID       string    `json:"factorId"`
+	FactorRevision uint64    `json:"factorRevision"`
+	RemovedAt      time.Time `json:"removedAt"`
+}
+
+// Only APPLIED requires a fresh login. EQUAL_REPLAY observes the original
+// completion and must not instruct the client to end a newer Session.
+type RemoveTOTPResponse struct {
+	Outcome  string               `json:"outcome"`
+	Removal  AuthenticatorRemoval `json:"removal"`
+	NextStep string               `json:"nextStep,omitempty"`
+}
+
 type TOTPProvisioning struct {
 	Seed Secret `json:"seed"`
 	URI  Secret `json:"uri"`

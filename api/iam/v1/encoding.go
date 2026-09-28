@@ -574,6 +574,44 @@ func (value *StartTOTPReplacementRequest) UnmarshalJSON(source []byte) error {
 	return nil
 }
 
+func (value *RemoveTOTPRequest) UnmarshalJSON(source []byte) error {
+	type wire RemoveTOTPRequest
+	var decoded wire
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil || ValidateRemoveTOTPRequest(RemoveTOTPRequest(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = RemoveTOTPRequest(decoded)
+	return nil
+}
+
+func (value *AuthenticatorRemoval) UnmarshalJSON(source []byte) error {
+	type wire AuthenticatorRemoval
+	var decoded wire
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil || ValidateAuthenticatorRemoval(AuthenticatorRemoval(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = AuthenticatorRemoval(decoded)
+	return nil
+}
+
+func (value *RemoveTOTPResponse) UnmarshalJSON(source []byte) error {
+	type wire RemoveTOTPResponse
+	var decoded wire
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil || ValidateRemoveTOTPResponse(RemoveTOTPResponse(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(source, &fields) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	// Even null or an empty instruction is not part of a historical read.
+	if _, present := fields["nextStep"]; present != (decoded.Outcome == "APPLIED") {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = RemoveTOTPResponse(decoded)
+	return nil
+}
+
 func (value *RegenerateRecoveryCodesRequest) UnmarshalJSON(source []byte) error {
 	type wire RegenerateRecoveryCodesRequest
 	var decoded wire

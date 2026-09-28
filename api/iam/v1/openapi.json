@@ -1236,6 +1236,45 @@
         ],
         "type": "object"
       },
+      "AuthenticatorRemoval": {
+        "additionalProperties": false,
+        "description": "Immutable non-secret completion, not current factor state or authentication authority. factorRevision is the resulting revision after removal.",
+        "properties": {
+          "apiVersion": {
+            "const": "iam.matrix.xiak.com/v1"
+          },
+          "factorId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "factorRevision": {
+            "maximum": 9007199254740991,
+            "minimum": 3,
+            "type": "integer"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "kind": {
+            "const": "AuthenticatorRemoval"
+          },
+          "removedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "factorId",
+          "factorRevision",
+          "id",
+          "kind",
+          "removedAt",
+          "requestId"
+        ],
+        "type": "object"
+      },
       "AuthenticatorState": {
         "additionalProperties": false,
         "oneOf": [
@@ -20917,6 +20956,72 @@
         "required": [
           "requestId",
           "resourceVersion"
+        ],
+        "type": "object"
+      },
+      "RemoveTOTPRequest": {
+        "additionalProperties": false,
+        "description": "Removal intent bound to the caller's current login Session and original same-purpose proof. Data contract only; no removal route is enabled yet.",
+        "properties": {
+          "expectedFactorRevision": {
+            "maximum": 9007199254740990,
+            "minimum": 2,
+            "type": "integer"
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "stepUpId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "expectedFactorRevision",
+          "requestId",
+          "stepUpId"
+        ],
+        "type": "object"
+      },
+      "RemoveTOTPResponse": {
+        "additionalProperties": false,
+        "description": "Only first application ends old login eligibility. Historical observation must not instruct a client to end a newer Session.",
+        "oneOf": [
+          {
+            "properties": {
+              "outcome": {
+                "const": "APPLIED"
+              }
+            },
+            "required": [
+              "nextStep"
+            ]
+          },
+          {
+            "properties": {
+              "nextStep": false,
+              "outcome": {
+                "const": "EQUAL_REPLAY"
+              }
+            }
+          }
+        ],
+        "properties": {
+          "nextStep": {
+            "const": "REAUTHENTICATE"
+          },
+          "outcome": {
+            "enum": [
+              "APPLIED",
+              "EQUAL_REPLAY"
+            ]
+          },
+          "removal": {
+            "$ref": "#/components/schemas/AuthenticatorRemoval"
+          }
+        },
+        "required": [
+          "outcome",
+          "removal"
         ],
         "type": "object"
       },
