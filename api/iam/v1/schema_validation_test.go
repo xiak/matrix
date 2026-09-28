@@ -14,6 +14,117 @@ import (
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 )
 
+func TestPasswordRequirementsSchemasAndCodecExposeOnlyEffectiveRules(t *testing.T) {
+	api := loadIAMOpenAPI(t)
+	schema := compileIAMOpenAPISchema(t, api, "PasswordRequirements")
+	valid := PasswordRequirements{APIVersion: APIVersion, Kind: "PasswordRequirements",
+		Password:      AccountPasswordSettings{MinimumLength: 15, HistoryCount: 1},
+		MaximumLength: 128, MaximumUTF8Bytes: 512, SettingsVersion: 1, Source: "PROTECTED_IDENTITY"}
+	check := func(value PasswordRequirements, accepted bool) {
+		t.Helper()
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var decoded PasswordRequirements
+		var document any
+		if json.Unmarshal(encoded, &document) != nil {
+			t.Fatal("invalid fixture")
+		}
+		if (json.Unmarshal(encoded, &decoded) == nil) != accepted || (schema.Validate(document) == nil) != accepted ||
+			(ValidatePasswordRequirements(value) == nil) != accepted {
+			t.Fatalf("requirements disagree: kind=%s source=%s max=%d/%d version=%d rules=%+v codec=%v schema=%v validator=%v", value.Kind, value.Source, value.MaximumLength, value.MaximumUTF8Bytes, value.SettingsVersion, value.Password, json.Unmarshal(encoded, &decoded), schema.Validate(document), ValidatePasswordRequirements(value))
+		}
+	}
+	check(valid, true)
+	ordinary := valid
+	ordinary.Source, ordinary.Password.MinimumLength, ordinary.Password.HistoryCount = "ACCOUNT", 24, 24
+	ordinary.Password.RequireSymbol = true
+	check(ordinary, true)
+	for _, alter := range []func(*PasswordRequirements){
+		func(v *PasswordRequirements) { v.Kind = "AccountSecuritySettings" },
+		func(v *PasswordRequirements) { v.Source = "ROOT" },
+		func(v *PasswordRequirements) { v.MaximumLength = 256 },
+		func(v *PasswordRequirements) { v.MaximumUTF8Bytes = 1024 },
+		func(v *PasswordRequirements) { v.SettingsVersion = 0 },
+		func(v *PasswordRequirements) { v.SettingsVersion = 9007199254740992 },
+		func(v *PasswordRequirements) { v.Password.MinimumLength = 16 },
+		func(v *PasswordRequirements) { v.Password.RequireDigit = true },
+		func(v *PasswordRequirements) { v.Password.HistoryCount = 0 },
+	} {
+		bad := valid
+		alter(&bad)
+		check(bad, false)
+	}
+	encoded, _ := json.Marshal(valid)
+	var fields map[string]any
+	if json.Unmarshal(encoded, &fields) != nil {
+		t.Fatal("invalid fixture")
+	}
+	assertInvalid := func() {
+		t.Helper()
+		wire, err := json.Marshal(fields)
+		var decoded PasswordRequirements
+		if err != nil || json.Unmarshal(wire, &decoded) == nil || schema.Validate(fields) == nil {
+			t.Fatal("partial or overbroad requirements accepted")
+		}
+	}
+	for key, value := range fields {
+		delete(fields, key)
+		assertInvalid()
+		fields[key] = nil
+		assertInvalid()
+		fields[key] = value
+	}
+	password := fields["password"].(map[string]any)
+	for key, value := range password {
+		delete(password, key)
+		assertInvalid()
+		password[key] = value
+	}
+	for _, key := range []string{"accountId", "userId", "credentialGeneration", "passwordHash", "passwordHistory", "passwordChangedAt"} {
+		fields[key] = "unexpected"
+		assertInvalid()
+		delete(fields, key)
+	}
+
+	requestSchema := compileIAMOpenAPISchema(t, api, "ChallengePasswordRequirementsRequest")
+	secret, err := NewSecret("synthetic-password-challenge-material")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := ChallengePasswordRequirementsRequest{ChallengeCredential: secret}
+	wire, err := EncodeChallengePasswordRequirementsRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(wire)
+	var decoded ChallengePasswordRequirementsRequest
+	var document map[string]any
+	if DecodeRequest(bytes.NewReader(wire), &decoded) != nil || decoded.ChallengeCredential.reveal() != secret.reveal() ||
+		json.Unmarshal(wire, &document) != nil || requestSchema.Validate(document) != nil {
+		t.Fatal("explicit challenge credential roundtrip failed")
+	}
+	for _, key := range []string{"userId", "accountId", "password", "credential", "purpose", "requestId", "settingsVersion"} {
+		document[key] = "unexpected"
+		bad, _ := json.Marshal(document)
+		if DecodeRequest(bytes.NewReader(bad), &decoded) == nil || requestSchema.Validate(document) == nil {
+			t.Fatal("challenge rules query accepts a selector or second carrier")
+		}
+		clear(bad)
+		delete(document, key)
+	}
+	for _, bad := range []string{`{}`, `{"challengeCredential":null}`, `{"challengeCredential":""}`, `{"challengeCredential":"one","challengeCredential":"two"}`} {
+		if DecodeRequest(strings.NewReader(bad), &decoded) == nil {
+			t.Fatal("ambiguous challenge query accepted")
+		}
+	}
+	ordinaryJSON, ordinaryError := json.Marshal(request)
+	if !errors.Is(ordinaryError, ErrSecretSerialization) || bytes.Contains(ordinaryJSON, []byte("synthetic-password-challenge-material")) || strings.Contains(fmt.Sprintf("%+v", request), "synthetic-password-challenge-material") {
+		t.Fatal("challenge secret leaked through ordinary formatting")
+	}
+}
+
 func TestEnrollmentChallengeSchemasSeparatePurposeAndSecretCarrier(t *testing.T) {
 	api := loadIAMOpenAPI(t)
 	for _, sample := range enrollmentChallengeRequestSamples() {
@@ -188,11 +299,84 @@ func TestAccountSecuritySettingsSchemasRejectMissingConfigurationAndAuthoritySel
 	}
 }
 
+func TestPasswordSettingsHistoryCannotBecomeCurrentAuthority(t *testing.T) {
+	api := loadIAMOpenAPI(t)
+	password := `{"minimumLength":15,"requireLowercase":false,"requireUppercase":false,"requireDigit":false,"requireSymbol":false,"historyCount":1}`
+	oldSettings := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccountSecuritySettings","accountId":"account-a","resourceVersion":2,"mfa":{"requiredForUsers":true},"updatedAt":"2026-09-24T12:00:00Z"}`
+	oldIntent := `{"expectedResourceVersion":1,"mfa":{"requiredForUsers":true}}`
+	currentSettings := strings.Replace(oldSettings, `,"updatedAt":`, `,"password":`+password+`,"updatedAt":`, 1)
+	currentIntent := strings.TrimSuffix(oldIntent, "}") + `,"password":` + password + `}`
+	oldChange := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccountSecuritySettingsChange","requestId":"change-a","expectedResourceVersion":1,"settings":` + oldSettings + `,"callerSessionEnded":true}`
+	currentChange := strings.Replace(oldChange, oldSettings, currentSettings, 1)
+	oldProof := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"StepUp","id":"proof-a","requestId":"change-a","operation":"SECURITY_SETTINGS_UPDATE","expectedFactorRevision":2,"securitySettings":` + oldIntent + `,"state":"CONSUMED","createdAt":"2026-09-24T11:59:00Z","expiresAt":"2026-09-24T12:01:00Z","provedAt":"2026-09-24T11:59:30Z","consumedAt":"2026-09-24T12:00:00Z"}`
+	newValue := map[string]func() any{
+		"AccountSecuritySettings":               func() any { return new(AccountSecuritySettings) },
+		"SecuritySettingsUpdateIntent":          func() any { return new(SecuritySettingsUpdateIntent) },
+		"AccountSecuritySettingsChange":         func() any { return new(AccountSecuritySettingsChange) },
+		"UpdateAccountSecuritySettingsResponse": func() any { return new(UpdateAccountSecuritySettingsResponse) },
+		"StepUp":                                func() any { return new(StepUp) },
+	}
+	for index, sample := range []struct {
+		kind, wire string
+		valid      bool
+	}{
+		{"AccountSecuritySettings", oldSettings, false},
+		{"AccountSecuritySettings", currentSettings, true},
+		{"SecuritySettingsUpdateIntent", oldIntent, false},
+		{"SecuritySettingsUpdateIntent", currentIntent, true},
+		{"AccountSecuritySettingsChange", oldChange, true},
+		{"AccountSecuritySettingsChange", currentChange, true},
+		{"AccountSecuritySettingsChange", strings.Replace(currentChange, password, "null", 1), false},
+		{"AccountSecuritySettingsChange", strings.Replace(currentChange, `"historyCount":1`, `"historyCount":25`, 1), false},
+		{"UpdateAccountSecuritySettingsResponse", `{"outcome":"APPLIED","change":` + oldChange + `}`, false},
+		{"UpdateAccountSecuritySettingsResponse", `{"outcome":"EQUAL_REPLAY","change":` + oldChange + `}`, true},
+		{"UpdateAccountSecuritySettingsResponse", `{"outcome":"APPLIED","change":` + currentChange + `}`, true},
+		{"StepUp", oldProof, true},
+		{"StepUp", strings.Replace(oldProof, oldIntent, currentIntent, 1), true},
+		{"StepUp", strings.Replace(oldProof, oldIntent, strings.TrimSuffix(oldIntent, "}")+`,"password":null}`, 1), false},
+		{"StepUp", strings.Replace(strings.Replace(oldProof, `,"consumedAt":"2026-09-24T12:00:00Z"`, "", 1), "CONSUMED", "PROVED", 1), false},
+		{"StepUp", strings.Replace(strings.Replace(oldProof, `,"provedAt":"2026-09-24T11:59:30Z","consumedAt":"2026-09-24T12:00:00Z"`, "", 1), "CONSUMED", "PENDING", 1), false},
+		{"StepUp", strings.Replace(strings.Replace(oldProof, `,"consumedAt":"2026-09-24T12:00:00Z"`, "", 1), "CONSUMED", "EXPIRED", 1), false},
+	} {
+		t.Run(fmt.Sprintf("%s/%d", sample.kind, index), func(t *testing.T) {
+			schema := compileIAMOpenAPISchema(t, api, sample.kind)
+			var raw any
+			if json.Unmarshal([]byte(sample.wire), &raw) != nil {
+				t.Fatal("invalid synthetic fixture")
+			}
+			if (schema.Validate(raw) == nil) != sample.valid {
+				t.Fatal("schema confused current settings and immutable history")
+			}
+			value := newValue[sample.kind]()
+			before, _ := json.Marshal(value)
+			err := json.Unmarshal([]byte(sample.wire), value)
+			if (err == nil) != sample.valid {
+				t.Fatal("codec confused current settings and immutable history")
+			}
+			encoded, _ := json.Marshal(value)
+			if !sample.valid && !bytes.Equal(before, encoded) {
+				t.Fatal("rejected history partially changed destination")
+			}
+			if sample.valid && string(encoded) != sample.wire {
+				t.Fatal("completion gained defaults or lost its original fields")
+			}
+		})
+	}
+	var old AccountSecuritySettingsChange
+	if json.Unmarshal([]byte(oldChange), &old) != nil || old.Settings.Password != nil || ValidateAccountSecuritySettings(old.Settings) == nil {
+		t.Fatal("historical settings passed current configuration validation")
+	}
+	var proof StepUp
+	if json.Unmarshal([]byte(oldProof), &proof) != nil || proof.SecuritySettings == nil || ValidateSecuritySettingsUpdateIntent(*proof.SecuritySettings) == nil {
+		t.Fatal("consumed legacy intent became a new command")
+	}
+}
+
 func TestStepUpSchemasKeepOperationProofSeparateFromLoginAndSecretReplay(t *testing.T) {
 	api := loadIAMOpenAPI(t)
 	step := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"StepUp","id":"proof-a","requestId":"regenerate-a","operation":"RECOVERY_CODES_REGENERATE","expectedFactorRevision":2,"state":"PENDING","createdAt":"2026-09-21T12:00:00Z","expiresAt":"2026-09-21T12:02:00Z"}`
 	start := `{"requestId":"regenerate-a","operation":"RECOVERY_CODES_REGENERATE","expectedFactorRevision":2}`
-	settingsIntent := `{"expectedResourceVersion":1,"mfa":{"requiredForUsers":true}}`
+	settingsIntent := `{"expectedResourceVersion":1,"mfa":{"requiredForUsers":true},"password":{"minimumLength":15,"requireLowercase":false,"requireUppercase":false,"requireDigit":false,"requireSymbol":false,"historyCount":1}}`
 	settingsStep := strings.TrimSuffix(strings.Replace(step, "RECOVERY_CODES_REGENERATE", "SECURITY_SETTINGS_UPDATE", 1), "}") + `,"securitySettings":` + settingsIntent + `}`
 	settingsStart := strings.TrimSuffix(strings.Replace(start, "RECOVERY_CODES_REGENERATE", "SECURITY_SETTINGS_UPDATE", 1), "}") + `,"securitySettings":` + settingsIntent + `}`
 	removeStep := strings.Replace(step, "RECOVERY_CODES_REGENERATE", "TOTP_REMOVE", 1)

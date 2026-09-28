@@ -117,6 +117,8 @@ type Workflow interface {
 	RevokeOwnSession(context.Context, iamv1.Secret, iamv1.SessionID, iamv1.RevokeSessionRequest) (iamv1.RevokeOwnSessionResponse, error)
 	RevokeOtherSessions(context.Context, iamv1.Secret, iamv1.RevokeSessionRequest) (iamv1.RevokeOtherSessionsResponse, error)
 	ChangePassword(context.Context, iamv1.Secret, iamv1.ChangePasswordRequest) (iamv1.ChangePasswordResponse, error)
+	PasswordRequirements(context.Context, iamv1.Secret) (iamv1.PasswordRequirements, error)
+	ChallengePasswordRequirements(context.Context, string, iamv1.ChallengePasswordRequirementsRequest) (iamv1.PasswordRequirements, error)
 	NotificationContact(context.Context, iamv1.Secret) (iamv1.NotificationContact, error)
 	NotificationVerification(context.Context, iamv1.Secret, string) (iamv1.NotificationContactVerification, error)
 	StartNotificationVerification(context.Context, iamv1.Secret, iamv1.StartNotificationContactVerificationRequest) (iamv1.NotificationContactVerification, error)
@@ -203,6 +205,7 @@ func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 	routes.HandleFunc("/v1/auth/sessions:revoke-others", value.revokeOtherSessions)
 	routes.HandleFunc("/v1/auth/sessions/", value.revokeOwnSession)
 	routes.HandleFunc("/v1/auth/password", value.changePassword)
+	routes.HandleFunc("/v1/auth/password-requirements", value.passwordRequirements)
 	routes.HandleFunc("/v1/auth/notification-contact", value.notificationContact)
 	routes.HandleFunc("/v1/auth/notification-contact/verifications", value.startNotificationVerification)
 	routes.HandleFunc("/v1/auth/notification-contact/verifications/", value.notificationVerification)
@@ -538,6 +541,27 @@ func (value *handler) authenticationChallenge(response http.ResponseWriter, requ
 		writeProblem(response, requestID(request), http.StatusBadRequest, "iam.header.unsupported", "IAM header unsupported")
 		return
 	}
+	if strings.HasSuffix(request.URL.Path, "/password-requirements") {
+		id, ok := commandPathID(response, request, "/v1/auth/challenges/", "/password-requirements", "challengeId")
+		if !ok {
+			return
+		}
+		body, ok := decodeJSON[iamv1.ChallengePasswordRequirementsRequest](value, response, request)
+		if !ok {
+			return
+		}
+		result, err := value.workflow.ChallengePasswordRequirements(request.Context(), id, body)
+		if err != nil {
+			value.writeError(response, request, err)
+			return
+		}
+		if iamv1.ValidatePasswordRequirements(result) != nil {
+			value.writeError(response, request, identityaccess.ErrUnavailable)
+			return
+		}
+		writeJSON(response, http.StatusOK, result)
+		return
+	}
 	if strings.Contains(strings.TrimPrefix(request.URL.Path, "/v1/auth/challenges/"), "/") {
 		value.enrollmentNotificationVerification(response, request)
 		return
@@ -610,6 +634,30 @@ func (value *handler) logout(response http.ResponseWriter, request *http.Request
 	result, err := value.workflow.Logout(request.Context(), credential, body)
 	if err != nil {
 		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (value *handler) passwordRequirements(response http.ResponseWriter, request *http.Request) {
+	if !value.requireMethod(response, request, http.MethodGet) || !rejectQueryAndBody(response, request) {
+		return
+	}
+	if len(request.Header.Values("Matrix-Subject-Credential")) != 0 {
+		writeProblem(response, requestID(request), http.StatusBadRequest, "iam.header.unsupported", "IAM header unsupported")
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.PasswordRequirements(request.Context(), credential)
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	if iamv1.ValidatePasswordRequirements(result) != nil {
+		value.writeError(response, request, identityaccess.ErrUnavailable)
 		return
 	}
 	writeJSON(response, http.StatusOK, result)

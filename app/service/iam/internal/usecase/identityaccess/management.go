@@ -27,6 +27,38 @@ type revokeDigestInput struct {
 	RequestID string `json:"requestId"`
 }
 
+func (service *Authority) PasswordRequirements(ctx context.Context, credential iamv1.Secret) (iamv1.PasswordRequirements, error) {
+	var result iamv1.PasswordRequirements
+	err := service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
+		now, err := transactionTime(ctx, tx)
+		if err != nil {
+			return err
+		}
+		subject, err := service.authenticateSession(ctx, tx, credential, now)
+		if err != nil {
+			return err
+		}
+		if subject.Subject.Principal.Type != iamv1.PrincipalUser {
+			return ErrUnauthenticated
+		}
+		// Forced-change Sessions may read their rules, but no subject selector
+		// or permission is inferred from this observation. SQL rechecks the
+		// exact Session after the common Account -> USER lock barrier.
+		result, err = tx.ReadPasswordRequirements(ctx, subject.Subject.Session)
+		if err != nil {
+			return err
+		}
+		if iamv1.ValidatePasswordRequirements(result) != nil {
+			return ErrUnavailable
+		}
+		return nil
+	})
+	if err != nil {
+		return iamv1.PasswordRequirements{}, err
+	}
+	return result, nil
+}
+
 func (service *Authority) Logout(
 	ctx context.Context,
 	credential iamv1.Secret,
@@ -125,7 +157,7 @@ func (service *Authority) ChangePassword(
 	if err := service.verifyReservedPassword(ctx, request.CurrentPassword, attempt, admitted); err != nil {
 		return iamv1.ChangePasswordResponse{}, err
 	}
-	if err := service.validatePasswordReplacement(ctx, request.NewPassword, attempt.PasswordHash, attempt.PasswordHistory, attempt.HistoryDigest); err != nil {
+	if err := service.validatePasswordReplacement(ctx, request.NewPassword, attempt.PasswordSettings, attempt.PasswordHash, attempt.PasswordHistory, attempt.HistoryDigest); err != nil {
 		if errors.Is(err, ErrInvalidArgument) {
 			// Keep the already committed debit, but end this rejected change so
 			// the user can submit a different new password within that budget.
@@ -179,16 +211,17 @@ func (service *Authority) ChangePassword(
 			return err
 		}
 		response, err = transaction.ChangePassword(transactionContext, PasswordMutation{
-			AttemptID:             attempt.ID,
-			AttemptSequence:       attempt.Sequence,
-			AccountID:             subject.Subject.Organization.ID,
-			PrincipalID:           subject.Subject.Principal.ID,
-			SessionID:             subject.Subject.Session.ID,
-			RevokeOtherSessions:   revokeOthers,
-			ExpectedPasswordHash:  attempt.PasswordHash,
-			ExpectedHistoryDigest: attempt.HistoryDigest,
-			NewPasswordHash:       replacement,
-			AuditEvent:            event,
+			AttemptID:               attempt.ID,
+			AttemptSequence:         attempt.Sequence,
+			AccountID:               subject.Subject.Organization.ID,
+			PrincipalID:             subject.Subject.Principal.ID,
+			SessionID:               subject.Subject.Session.ID,
+			RevokeOtherSessions:     revokeOthers,
+			ExpectedPasswordHash:    attempt.PasswordHash,
+			ExpectedHistoryDigest:   attempt.HistoryDigest,
+			ExpectedSettingsVersion: attempt.SettingsVersion,
+			NewPasswordHash:         replacement,
+			AuditEvent:              event,
 		})
 		return err
 	})
@@ -204,12 +237,12 @@ func (service *Authority) ChangePassword(
 // Only authenticated, purpose-limited preparation supplies these verifiers.
 // The caller holds a bounded work slot, not a database transaction. The final
 // write must compare the same history commitment as well as credential state.
-func (service *Authority) validatePasswordReplacement(ctx context.Context, password iamv1.Secret, current authority.PasswordHash,
+func (service *Authority) validatePasswordReplacement(ctx context.Context, password iamv1.Secret, settings iamv1.AccountPasswordSettings, current authority.PasswordHash,
 	history []authority.PasswordHash, commitment string) error {
-	if history == nil || iamv1.ValidateDigest("historyDigest", commitment) != nil {
+	if history == nil || iamv1.ValidateDigest("historyDigest", commitment) != nil || iamv1.ValidateAccountPasswordSettings(settings) != nil {
 		return ErrUnavailable
 	}
-	if err := service.passwords.ValidateReplacement(ctx, password, authority.DefaultPasswordSettings(), current, history); err != nil {
+	if err := service.passwords.ValidateReplacement(ctx, password, settings, current, history); err != nil {
 		if errors.Is(err, authority.ErrWeakPassword) {
 			return ErrInvalidArgument
 		}
@@ -233,6 +266,34 @@ func (service *Authority) CreateUser(
 	if err != nil {
 		return iamv1.User{}, err
 	}
+	if err := service.acquirePasswordWork(ctx); err != nil {
+		return iamv1.User{}, err
+	}
+	defer service.releasePasswordWork()
+	var originalSession iamv1.Session
+	var settingsVersion uint64
+	settings, err := withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMUserCreate,
+		iamv1.AuthorizationResourceInstance, "", iamv1.ResourceReference{Kind: iamv1.ResourceAccount}, request.RequestID,
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, _ time.Time) (iamv1.AccountPasswordSettings, error) {
+			originalSession = subject.Subject.Session
+			result, version, err := tx.ReadUserCreationPasswordSettings(ctx, AccountRead{
+				AccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID})
+			settingsVersion = version
+			return result, err
+		})
+	if err != nil {
+		return iamv1.User{}, err
+	}
+	if settingsVersion == 0 || settingsVersion > 9007199254740991 || iamv1.ValidateAccountPasswordSettings(settings) != nil {
+		return iamv1.User{}, ErrUnavailable
+	}
+	if authority.ValidatePasswordWithSettings(request.InitialPassword, settings) != nil {
+		return iamv1.User{}, ErrInvalidArgument
+	}
+	passwordHash, err := service.passwords.Hash(request.InitialPassword)
+	if err != nil {
+		return iamv1.User{}, ErrUnavailable
+	}
 	var created iamv1.User
 	denied := false
 	err = service.withinTransaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
@@ -244,6 +305,10 @@ func (service *Authority) CreateUser(
 		subject, err := service.authenticateSession(transactionContext, transaction, credential, now)
 		if err != nil {
 			return err
+		}
+		if subject.Subject.Session.ID != originalSession.ID || subject.Subject.Organization.ID != originalSession.AccountID ||
+			subject.Subject.Principal.ID != originalSession.PrincipalID {
+			return ErrForbidden
 		}
 		decision, err := service.managementDecision(
 			transactionContext,
@@ -261,10 +326,6 @@ func (service *Authority) CreateUser(
 		if !decision.Allowed {
 			denied = true
 			return nil
-		}
-		passwordHash, err := service.passwords.Hash(request.InitialPassword)
-		if err != nil {
-			return ErrUnavailable
 		}
 		principalID, err := service.config.NewID("principal")
 		if err != nil {
@@ -297,11 +358,12 @@ func (service *Authority) CreateUser(
 			return err
 		}
 		created, err = transaction.CreateUser(transactionContext, UserMutation{
-			User:             proposed,
-			PasswordHash:     passwordHash,
-			ActorPrincipalID: subject.Subject.Principal.ID,
-			DecisionID:       decision.ID,
-			AuditEvent:       event,
+			User:                    proposed,
+			PasswordHash:            passwordHash,
+			ExpectedSettingsVersion: settingsVersion,
+			ActorPrincipalID:        subject.Subject.Principal.ID,
+			DecisionID:              decision.ID,
+			AuditEvent:              event,
 		})
 		return err
 	})

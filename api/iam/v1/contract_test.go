@@ -308,7 +308,8 @@ func securitySettingsContractSamples() []struct {
 	newValue   func() any
 } {
 	mfa := `{"requiredForUsers":false}`
-	settings := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccountSecuritySettings","accountId":"account-a","resourceVersion":2,"mfa":` + mfa + `,"updatedAt":"2026-09-24T12:00:00Z"}`
+	password := `{"minimumLength":15,"requireLowercase":false,"requireUppercase":false,"requireDigit":false,"requireSymbol":false,"historyCount":1}`
+	settings := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccountSecuritySettings","accountId":"account-a","resourceVersion":2,"mfa":` + mfa + `,"password":` + password + `,"updatedAt":"2026-09-24T12:00:00Z"}`
 	change := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccountSecuritySettingsChange","requestId":"change-a","expectedResourceVersion":1,"settings":` + settings + `,"callerSessionEnded":true}`
 	return []struct {
 		kind, wire string
@@ -316,8 +317,8 @@ func securitySettingsContractSamples() []struct {
 	}{
 		{"AccountMFASettings", mfa, func() any { return new(AccountMFASettings) }},
 		{"AccountSecuritySettings", settings, func() any { return new(AccountSecuritySettings) }},
-		{"SecuritySettingsUpdateIntent", `{"expectedResourceVersion":1,"mfa":` + mfa + `}`, func() any { return new(SecuritySettingsUpdateIntent) }},
-		{"UpdateAccountSecuritySettingsRequest", `{"requestId":"change-a","stepUpId":"proof-a","expectedResourceVersion":1,"mfa":` + mfa + `}`, func() any { return new(UpdateAccountSecuritySettingsRequest) }},
+		{"SecuritySettingsUpdateIntent", `{"expectedResourceVersion":1,"mfa":` + mfa + `,"password":` + password + `}`, func() any { return new(SecuritySettingsUpdateIntent) }},
+		{"UpdateAccountSecuritySettingsRequest", `{"requestId":"change-a","stepUpId":"proof-a","expectedResourceVersion":1,"mfa":` + mfa + `,"password":` + password + `}`, func() any { return new(UpdateAccountSecuritySettingsRequest) }},
 		{"AccountSecuritySettingsChange", change, func() any { return new(AccountSecuritySettingsChange) }},
 		{"UpdateAccountSecuritySettingsResponse", `{"outcome":"APPLIED","change":` + change + `}`, func() any { return new(UpdateAccountSecuritySettingsResponse) }},
 	}
@@ -430,7 +431,7 @@ func TestAccountSecuritySettingsRejectAmbiguityWithoutChangingPriorValue(t *test
 }
 
 func TestSettingsStepUpBindsExactIntentWithoutExpandingOtherOperations(t *testing.T) {
-	intent := `{"expectedResourceVersion":1,"mfa":{"requiredForUsers":false}}`
+	intent := `{"expectedResourceVersion":1,"mfa":{"requiredForUsers":false},"password":{"minimumLength":15,"requireLowercase":false,"requireUppercase":false,"requireDigit":false,"requireSymbol":false,"historyCount":1}}`
 	start := `{"requestId":"settings-a","operation":"SECURITY_SETTINGS_UPDATE","expectedFactorRevision":2,"securitySettings":` + intent + `}`
 	for _, wire := range []string{start, strings.Replace(start, "false", "true", 1)} {
 		var value StartStepUpRequest

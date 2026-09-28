@@ -258,7 +258,7 @@ RETURNS jsonb LANGUAGE plpgsql VOLATILE SET search_path=pg_catalog,pg_temp AS $f
 DECLARE receipt iam.bootstrap_receipts%ROWTYPE; account record; entry record;
     prior_tenant text:=current_setting('matrix.iam_tenant_id',true);
     prior_snapshot text:=current_setting('matrix.iam_authentication_snapshot',true);
-    authority_digest bytea:=sha256(convert_to('matrix.iam.authentication-state.v3','UTF8'));
+    authority_digest bytea:=sha256(convert_to('matrix.iam.authentication-state.v4','UTF8'));
     accounts jsonb:='[]'::jsonb; users jsonb; result jsonb; items integer:=0; account_count integer; user_count integer;
 BEGIN
     IF current_user<>'matrix_iam_owner' OR NOT (
@@ -363,7 +363,7 @@ BEGIN
         END IF;
         FOR entry IN
           SELECT * FROM (SELECT 1 ordinal,a.id key,''::text subkey,jsonb_build_array('account',a.id,a.status,a.resource_version,
-            a.security_settings_version,a.mfa_required_for_users,account.principal_id,account.login_name) document
+            a.security_settings_version,a.mfa_required_for_users,a.password_settings,account.principal_id,account.login_name) document
             FROM iam.accounts a WHERE a.id=account.account_id
           UNION ALL SELECT 2,a.alias,'',jsonb_build_array('alias',a.tenant_id,a.alias,a.active)
             FROM iam.account_aliases a WHERE a.tenant_id=account.account_id

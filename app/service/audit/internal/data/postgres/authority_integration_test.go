@@ -1654,8 +1654,10 @@ func reserveIAMPasswordAttempt(t *testing.T, ctx context.Context, iamAPI *pgx.Co
 	var expires time.Time
 	var history []string
 	var historyDigest *string
+	var settings []byte
+	var settingsVersion *uint64
 	if err := iamAPI.QueryRow(ctx, "SELECT * FROM iam.reserve_password_attempt($1,$2,$3,$4,$5,$6,NULL)", login, tenant, principal, session, attemptID, purpose).
-		Scan(&actualTenant, &actualPrincipal, &hash, &mustChange, &generation, &sequence, &expires, &history, &historyDigest); err != nil {
+		Scan(&actualTenant, &actualPrincipal, &hash, &mustChange, &generation, &sequence, &expires, &history, &historyDigest, &settings, &settingsVersion); err != nil {
 		t.Fatal("reserve IAM storage fixture password attempt", err)
 	}
 	if actualTenant != string(fixture.TenantID) || actualPrincipal != fixture.Administrator || hash != fixture.PasswordHash ||
@@ -1663,12 +1665,14 @@ func reserveIAMPasswordAttempt(t *testing.T, ctx context.Context, iamAPI *pgx.Co
 		t.Fatal("password reservation changed the real bootstrap subject")
 	}
 	if sessionID == "" {
-		if history != nil || historyDigest != nil {
+		if history != nil || historyDigest != nil || settings != nil || settingsVersion != nil {
 			t.Fatal("login received private password history")
 		}
 		return sequence, ""
 	}
-	if history == nil || len(history) > 24 || historyDigest == nil || iamv1.ValidateDigest("historyDigest", *historyDigest) != nil {
+	var rules iamv1.AccountPasswordSettings
+	if history == nil || len(history) > 24 || historyDigest == nil || iamv1.ValidateDigest("historyDigest", *historyDigest) != nil ||
+		settingsVersion == nil || *settingsVersion != 1 || json.Unmarshal(settings, &rules) != nil || rules.MinimumLength != 15 || rules.HistoryCount != 1 {
 		t.Fatal("password change lost its actual history qualification")
 	}
 	return sequence, *historyDigest
@@ -1987,10 +1991,10 @@ func assertIAMAuthorizationCatalog(
 	passwordEvent := authorityAuditEvent("event-catalog-password", fixture.TenantID, fixture.Administrator, auditv1.ActionIAMUserPasswordChanged)
 	passwordEvent.Actor = sessionEvent.Actor
 	passwordEvent.OccurredAt = passwordTime.UTC()
-	if _, err := passwordTransaction.Exec(ctx, "SELECT * FROM iam.change_password($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10)",
+	if _, err := passwordTransaction.Exec(ctx, "SELECT * FROM iam.change_password($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11)",
 		string(fixture.TenantID), fixture.Administrator, fixture.PasswordHash,
 		strings.TrimSuffix(fixture.PasswordHash, strings.Repeat("A", 43))+strings.Repeat("B", 42)+"A", authorityJSON(t, passwordEvent), "session-catalog", true,
-		"catalog-password-attempt", passwordSequence, historyDigest); err != nil {
+		"catalog-password-attempt", passwordSequence, historyDigest, 1); err != nil {
 		_ = passwordTransaction.Rollback(ctx)
 		t.Fatalf("prepare current platform authority through the password mutation: %v", err)
 	}

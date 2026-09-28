@@ -22,6 +22,10 @@ type SecuritySettingsMutation struct {
 	AuditEvent auditv1.Event
 }
 
+func samePasswordSettings(left, right *iamv1.AccountPasswordSettings) bool {
+	return left == nil && right == nil || left != nil && right != nil && *left == *right
+}
+
 func (service *Authority) CurrentIdentity(ctx context.Context, credential iamv1.Secret) (iamv1.CurrentIdentity, error) {
 	var result iamv1.CurrentIdentity
 	err := service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
@@ -409,7 +413,7 @@ func (service *Authority) UpdateAccountSecuritySettings(ctx context.Context, cre
 		}
 		if iamv1.ValidateUpdateAccountSecuritySettingsResponse(result) != nil || result.Change.RequestID != request.RequestID ||
 			result.Change.ExpectedResourceVersion != request.ExpectedResourceVersion || result.Change.Settings.AccountID != subject.Subject.Organization.ID ||
-			result.Change.Settings.MFA != request.MFA || result.Change.Settings.UpdatedAt.After(now) ||
+			result.Change.Settings.MFA != request.MFA || !samePasswordSettings(result.Change.Settings.Password, &request.Password) || result.Change.Settings.UpdatedAt.After(now) ||
 			(result.Outcome == "APPLIED" && !result.Change.Settings.UpdatedAt.Equal(now)) {
 			return ErrUnavailable
 		}
@@ -1007,7 +1011,7 @@ func (service *Authority) RecoverRootCredentials(ctx context.Context, credential
 	if iamv1.ValidateRootIdentity(root) != nil {
 		return iamv1.Account{}, ErrUnavailable
 	}
-	if err := service.validatePasswordReplacement(ctx, request.InitialPassword, original.PasswordHash, original.PasswordHistory, original.HistoryDigest); err != nil {
+	if err := service.validatePasswordReplacement(ctx, request.InitialPassword, authority.DefaultPasswordSettings(), original.PasswordHash, original.PasswordHistory, original.HistoryDigest); err != nil {
 		return iamv1.Account{}, err
 	}
 	hash, err := service.passwords.Hash(request.InitialPassword)
@@ -1171,7 +1175,7 @@ func (service *Authority) ResetUserPassword(ctx context.Context, credential iamv
 	if err != nil {
 		return iamv1.User{}, err
 	}
-	if err := service.validatePasswordReplacement(ctx, request.InitialPassword, original.PasswordHash, original.PasswordHistory, original.HistoryDigest); err != nil {
+	if err := service.validatePasswordReplacement(ctx, request.InitialPassword, original.PasswordSettings, original.PasswordHash, original.PasswordHistory, original.HistoryDigest); err != nil {
 		return iamv1.User{}, err
 	}
 	hash, err := service.passwords.Hash(request.InitialPassword)

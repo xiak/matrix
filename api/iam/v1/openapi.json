@@ -614,6 +614,42 @@
         ],
         "type": "object"
       },
+      "AccountPasswordSettings": {
+        "additionalProperties": false,
+        "properties": {
+          "historyCount": {
+            "maximum": 24,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "minimumLength": {
+            "maximum": 128,
+            "minimum": 15,
+            "type": "integer"
+          },
+          "requireDigit": {
+            "type": "boolean"
+          },
+          "requireLowercase": {
+            "type": "boolean"
+          },
+          "requireSymbol": {
+            "type": "boolean"
+          },
+          "requireUppercase": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "historyCount",
+          "minimumLength",
+          "requireDigit",
+          "requireLowercase",
+          "requireSymbol",
+          "requireUppercase"
+        ],
+        "type": "object"
+      },
       "AccountSecuritySettings": {
         "additionalProperties": false,
         "description": "Non-secret current-account configuration returned only under a current instance-scoped read decision. Neither factor state nor Session authentication facts.",
@@ -630,6 +666,9 @@
           "mfa": {
             "$ref": "#/components/schemas/AccountMFASettings"
           },
+          "password": {
+            "$ref": "#/components/schemas/AccountPasswordSettings"
+          },
           "resourceVersion": {
             "maximum": 9007199254740991,
             "minimum": 1,
@@ -645,7 +684,8 @@
           "kind",
           "mfa",
           "resourceVersion",
-          "updatedAt"
+          "updatedAt",
+          "password"
         ],
         "type": "object"
       },
@@ -672,7 +712,42 @@
             "$ref": "#/components/schemas/ID"
           },
           "settings": {
-            "$ref": "#/components/schemas/AccountSecuritySettings"
+            "additionalProperties": false,
+            "description": "Original settings at completion. A missing password segment records an actual pre-password completion; never current configuration, a default or a new write.",
+            "properties": {
+              "accountId": {
+                "$ref": "#/components/schemas/ID"
+              },
+              "apiVersion": {
+                "const": "iam.matrix.xiak.com/v1"
+              },
+              "kind": {
+                "const": "AccountSecuritySettings"
+              },
+              "mfa": {
+                "$ref": "#/components/schemas/AccountMFASettings"
+              },
+              "password": {
+                "$ref": "#/components/schemas/AccountPasswordSettings"
+              },
+              "resourceVersion": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "updatedAt": {
+                "$ref": "#/components/schemas/Timestamp"
+              }
+            },
+            "required": [
+              "accountId",
+              "apiVersion",
+              "kind",
+              "mfa",
+              "resourceVersion",
+              "updatedAt"
+            ],
+            "type": "object"
           }
         },
         "required": [
@@ -12324,6 +12399,20 @@
         ],
         "type": "object"
       },
+      "ChallengePasswordRequirementsRequest": {
+        "additionalProperties": false,
+        "description": "Only the original live LOGIN or ENROLLMENT PASSWORD_CHANGE challenge credential. No Session, password or identity selector.",
+        "properties": {
+          "challengeCredential": {
+            "$ref": "#/components/schemas/Secret",
+            "writeOnly": true
+          }
+        },
+        "required": [
+          "challengeCredential"
+        ],
+        "type": "object"
+      },
       "ChangePasswordRequest": {
         "additionalProperties": false,
         "properties": {
@@ -14271,6 +14360,91 @@
           "attempts",
           "state",
           "updatedAt"
+        ],
+        "type": "object"
+      },
+      "PasswordRequirements": {
+        "additionalProperties": false,
+        "description": "Current self-only password rules, measured in Unicode code points and UTF-8 bytes. An observation, never a write permit; final replacement rechecks current qualification and settings.",
+        "oneOf": [
+          {
+            "properties": {
+              "source": {
+                "const": "ACCOUNT"
+              }
+            }
+          },
+          {
+            "properties": {
+              "password": {
+                "properties": {
+                  "historyCount": {
+                    "const": 1
+                  },
+                  "minimumLength": {
+                    "const": 15
+                  },
+                  "requireDigit": {
+                    "const": false
+                  },
+                  "requireLowercase": {
+                    "const": false
+                  },
+                  "requireSymbol": {
+                    "const": false
+                  },
+                  "requireUppercase": {
+                    "const": false
+                  }
+                }
+              },
+              "source": {
+                "const": "PROTECTED_IDENTITY"
+              }
+            }
+          }
+        ],
+        "properties": {
+          "apiVersion": {
+            "const": "iam.matrix.xiak.com/v1",
+            "type": "string"
+          },
+          "kind": {
+            "const": "PasswordRequirements",
+            "type": "string"
+          },
+          "maximumLength": {
+            "const": 128,
+            "type": "integer"
+          },
+          "maximumUTF8Bytes": {
+            "const": 512,
+            "type": "integer"
+          },
+          "password": {
+            "$ref": "#/components/schemas/AccountPasswordSettings"
+          },
+          "settingsVersion": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "source": {
+            "enum": [
+              "ACCOUNT",
+              "PROTECTED_IDENTITY"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "maximumLength",
+          "maximumUTF8Bytes",
+          "password",
+          "settingsVersion",
+          "source"
         ],
         "type": "object"
       },
@@ -22081,11 +22255,15 @@
           },
           "mfa": {
             "$ref": "#/components/schemas/AccountMFASettings"
+          },
+          "password": {
+            "$ref": "#/components/schemas/AccountPasswordSettings"
           }
         },
         "required": [
           "expectedResourceVersion",
-          "mfa"
+          "mfa",
+          "password"
         ],
         "type": "object"
       },
@@ -22872,6 +23050,24 @@
                 "required": [
                   "securitySettings"
                 ]
+              },
+              {
+                "properties": {
+                  "operation": {
+                    "const": "SECURITY_SETTINGS_UPDATE"
+                  },
+                  "securitySettings": {
+                    "properties": {
+                      "password": false
+                    }
+                  },
+                  "state": {
+                    "const": "CONSUMED"
+                  }
+                },
+                "required": [
+                  "securitySettings"
+                ]
               }
             ]
           }
@@ -22969,7 +23165,25 @@
             "$ref": "#/components/schemas/ID"
           },
           "securitySettings": {
-            "$ref": "#/components/schemas/SecuritySettingsUpdateIntent"
+            "additionalProperties": false,
+            "properties": {
+              "expectedResourceVersion": {
+                "maximum": 9007199254740990,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "mfa": {
+                "$ref": "#/components/schemas/AccountMFASettings"
+              },
+              "password": {
+                "$ref": "#/components/schemas/AccountPasswordSettings"
+              }
+            },
+            "required": [
+              "expectedResourceVersion",
+              "mfa"
+            ],
+            "type": "object"
           },
           "state": {
             "enum": [
@@ -23250,7 +23464,7 @@
       },
       "UpdateAccountSecuritySettingsRequest": {
         "additionalProperties": false,
-        "description": "Replace the supported MFA configuration at one expected version using a proof held by the actual current Session and current instance permission. No identity selector, arbitrary patch or caller-controlled Session retention.",
+        "description": "Replace the complete MFA and password configuration at one expected version using a proof held by the actual current Session and current instance permission. No identity selector, arbitrary patch or caller-controlled Session retention.",
         "properties": {
           "expectedResourceVersion": {
             "maximum": 9007199254740990,
@@ -23259,6 +23473,9 @@
           },
           "mfa": {
             "$ref": "#/components/schemas/AccountMFASettings"
+          },
+          "password": {
+            "$ref": "#/components/schemas/AccountPasswordSettings"
           },
           "requestId": {
             "$ref": "#/components/schemas/ID"
@@ -23270,6 +23487,7 @@
         "required": [
           "expectedResourceVersion",
           "mfa",
+          "password",
           "requestId",
           "stepUpId"
         ],
@@ -23278,6 +23496,31 @@
       "UpdateAccountSecuritySettingsResponse": {
         "additionalProperties": false,
         "description": "APPLIED and EQUAL_REPLAY carry the same original non-secret completion, not fresh authorization, current Session state or a credential.",
+        "oneOf": [
+          {
+            "properties": {
+              "change": {
+                "properties": {
+                  "settings": {
+                    "required": [
+                      "password"
+                    ]
+                  }
+                }
+              },
+              "outcome": {
+                "const": "APPLIED"
+              }
+            }
+          },
+          {
+            "properties": {
+              "outcome": {
+                "const": "EQUAL_REPLAY"
+              }
+            }
+          }
+        ],
         "properties": {
           "change": {
             "$ref": "#/components/schemas/AccountSecuritySettingsChange"
@@ -24508,6 +24751,75 @@
         "summary": "Consume the original contact-possession code within its initial-enrollment challenge; no session or MFA bypass"
       }
     },
+    "/v1/auth/challenges/{challengeId}/password-requirements": {
+      "post": {
+        "operationId": "challengePasswordRequirements",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "challengeId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChallengePasswordRequirementsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasswordRequirements"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [],
+        "summary": "Observe only this live LOGIN or ENROLLMENT PASSWORD_CHANGE challenge's effective password rules; never a write permit"
+      }
+    },
     "/v1/auth/challenges/{challengeId}:confirm-enrollment": {
       "post": {
         "operationId": "confirmChallengeTOTPEnrollment",
@@ -25522,6 +25834,40 @@
           }
         },
         "summary": "Change the current user password"
+      }
+    },
+    "/v1/auth/password-requirements": {
+      "get": {
+        "operationId": "passwordRequirements",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasswordRequirements"
+                }
+              }
+            },
+            "description": "Current authority state."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse",
+            "description": "Invalid path, query or unexpected body; no identity selector is accepted."
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Observe the actual login session user's effective new-password rules, including forced-change sessions; no identity selector or write permit"
       }
     },
     "/v1/auth/recovery-codes/regenerations/by-request/{requestId}": {

@@ -150,6 +150,34 @@ func (service *Authority) authenticateChallenge(ctx context.Context, tx Transact
 	return stored, nil
 }
 
+func (service *Authority) ChallengePasswordRequirements(ctx context.Context, id string, request iamv1.ChallengePasswordRequirementsRequest) (iamv1.PasswordRequirements, error) {
+	if iamv1.ValidateID("challengeId", id) != nil || iamv1.ValidateChallengePasswordRequirementsRequest(request) != nil {
+		return iamv1.PasswordRequirements{}, ErrInvalidArgument
+	}
+	var result iamv1.PasswordRequirements
+	err := service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
+		identity, err := service.authenticateChallenge(ctx, tx, id, request.ChallengeCredential)
+		if err != nil {
+			return err
+		}
+		if (identity.Purpose != "LOGIN" && identity.Purpose != "ENROLLMENT") || identity.NextStep != "PASSWORD_CHANGE" {
+			return ErrUnauthenticated
+		}
+		result, err = tx.ReadChallengePasswordRequirements(ctx, identity)
+		if err != nil {
+			return err
+		}
+		if iamv1.ValidatePasswordRequirements(result) != nil {
+			return ErrUnavailable
+		}
+		return nil
+	})
+	if err != nil {
+		return iamv1.PasswordRequirements{}, err
+	}
+	return result, nil
+}
+
 func (service *Authority) VerifyAuthenticationChallenge(ctx context.Context, id string, request iamv1.VerifyAuthenticationChallengeRequest) (iamv1.LoginResponse, error) {
 	if iamv1.ValidateID("challengeId", id) != nil || iamv1.ValidateVerifyAuthenticationChallengeRequest(request) != nil {
 		return iamv1.LoginResponse{}, ErrInvalidArgument
@@ -303,7 +331,7 @@ func (service *Authority) ChangeChallengePassword(ctx context.Context, id string
 	// SQL proves the original LOGIN or ENROLLMENT ceremony; history comparison
 	// does not upgrade it or manufacture an MFA fact. Neither expensive operation
 	// holds a connection or a principal lock.
-	if err := service.validatePasswordReplacement(ctx, request.NewPassword, original.PasswordHash, original.PasswordHistory, original.HistoryDigest); err != nil {
+	if err := service.validatePasswordReplacement(ctx, request.NewPassword, original.PasswordSettings, original.PasswordHash, original.PasswordHistory, original.HistoryDigest); err != nil {
 		return iamv1.ChallengePasswordChangeResponse{}, err
 	}
 	replacement, err := service.passwords.Hash(request.NewPassword)

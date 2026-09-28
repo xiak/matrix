@@ -614,31 +614,72 @@ func ValidateAccountPasswordSettings(value AccountPasswordSettings) error {
 	return nil
 }
 
+func ValidatePasswordRequirements(value PasswordRequirements) error {
+	if value.APIVersion != APIVersion || value.Kind != "PasswordRequirements" ||
+		value.MaximumLength != 128 || value.MaximumUTF8Bytes != 512 ||
+		(value.Source != "ACCOUNT" && value.Source != "PROTECTED_IDENTITY") {
+		return errors.New("password requirements are invalid")
+	}
+	if value.Source == "PROTECTED_IDENTITY" && value.Password != (AccountPasswordSettings{MinimumLength: 15, HistoryCount: 1}) {
+		return errors.New("protected password requirements are invalid")
+	}
+	return errors.Join(ValidateAccountPasswordSettings(value.Password), validatePositiveVersion(value.SettingsVersion))
+}
+
+func ValidateChallengePasswordRequirementsRequest(value ChallengePasswordRequirementsRequest) error {
+	if !value.ChallengeCredential.Present() {
+		return ErrInvalidSecret
+	}
+	return nil
+}
+
 func ValidateAccountSecuritySettings(value AccountSecuritySettings) error {
+	return validateAccountSecuritySettings(value, false)
+}
+
+func validateAccountSecuritySettings(value AccountSecuritySettings, historical bool) error {
 	if value.APIVersion != APIVersion || value.Kind != "AccountSecuritySettings" {
 		return errors.New("account security settings type metadata is invalid")
+	}
+	if value.Password == nil {
+		if !historical {
+			return errors.New("current password settings are missing")
+		}
+	} else if err := ValidateAccountPasswordSettings(*value.Password); err != nil {
+		return err
 	}
 	return errors.Join(ValidateID("accountId", string(value.AccountID)), validatePositiveVersion(value.ResourceVersion), validateTime("updatedAt", value.UpdatedAt))
 }
 
 func ValidateSecuritySettingsUpdateIntent(value SecuritySettingsUpdateIntent) error {
+	return validateSecuritySettingsUpdateIntent(value, false)
+}
+
+func validateSecuritySettingsUpdateIntent(value SecuritySettingsUpdateIntent, historical bool) error {
 	// A successful command increments the expected revision; both must remain
 	// exact safe integers for every public consumer.
 	if value.ExpectedResourceVersion == 0 || value.ExpectedResourceVersion >= 9007199254740991 {
 		return errors.New("security settings expected version is invalid")
+	}
+	if value.Password == nil {
+		if !historical {
+			return errors.New("password settings intent is missing")
+		}
+	} else if err := ValidateAccountPasswordSettings(*value.Password); err != nil {
+		return err
 	}
 	return nil
 }
 
 func ValidateUpdateAccountSecuritySettingsRequest(value UpdateAccountSecuritySettingsRequest) error {
 	return errors.Join(ValidateID("requestId", value.RequestID), ValidateID("stepUpId", value.StepUpID),
-		ValidateSecuritySettingsUpdateIntent(SecuritySettingsUpdateIntent{ExpectedResourceVersion: value.ExpectedResourceVersion, MFA: value.MFA}))
+		ValidateSecuritySettingsUpdateIntent(SecuritySettingsUpdateIntent{ExpectedResourceVersion: value.ExpectedResourceVersion, MFA: value.MFA, Password: &value.Password}))
 }
 
 func ValidateAccountSecuritySettingsChange(value AccountSecuritySettingsChange) error {
 	if value.APIVersion != APIVersion || value.Kind != "AccountSecuritySettingsChange" ||
-		ValidateAccountSecuritySettings(value.Settings) != nil ||
-		ValidateSecuritySettingsUpdateIntent(SecuritySettingsUpdateIntent{ExpectedResourceVersion: value.ExpectedResourceVersion, MFA: value.Settings.MFA}) != nil ||
+		validateAccountSecuritySettings(value.Settings, true) != nil ||
+		validateSecuritySettingsUpdateIntent(SecuritySettingsUpdateIntent{ExpectedResourceVersion: value.ExpectedResourceVersion, MFA: value.Settings.MFA, Password: value.Settings.Password}, true) != nil ||
 		value.Settings.ResourceVersion != value.ExpectedResourceVersion+1 ||
 		!value.CallerSessionEnded {
 		return errors.New("account security settings change is invalid")
@@ -650,12 +691,15 @@ func ValidateUpdateAccountSecuritySettingsResponse(value UpdateAccountSecuritySe
 	if value.Outcome != "APPLIED" && value.Outcome != "EQUAL_REPLAY" {
 		return errors.New("account security settings outcome is invalid")
 	}
+	if value.Outcome == "APPLIED" && value.Change.Settings.Password == nil {
+		return errors.New("new settings completion is missing password settings")
+	}
 	return ValidateAccountSecuritySettingsChange(value.Change)
 }
 
 func ValidateStepUp(value StepUp) error {
 	if value.APIVersion != APIVersion || value.Kind != "StepUp" ||
-		validateStepUpOperation(value.Operation, value.SecuritySettings) != nil || value.ExpectedFactorRevision < 2 || validatePositiveVersion(value.ExpectedFactorRevision) != nil ||
+		validateStepUpOperationHistory(value.Operation, value.SecuritySettings, value.State == "CONSUMED") != nil || value.ExpectedFactorRevision < 2 || validatePositiveVersion(value.ExpectedFactorRevision) != nil ||
 		ValidateID("stepUp.id", value.ID) != nil || ValidateID("stepUp.requestId", value.RequestID) != nil ||
 		validateTime("createdAt", value.CreatedAt) != nil || validateTime("expiresAt", value.ExpiresAt) != nil ||
 		value.ExpiresAt.Sub(value.CreatedAt) != 2*time.Minute {
@@ -705,6 +749,10 @@ func ValidateStartStepUpRequest(value StartStepUpRequest) error {
 }
 
 func validateStepUpOperation(operation StepUpOperation, settings *SecuritySettingsUpdateIntent) error {
+	return validateStepUpOperationHistory(operation, settings, false)
+}
+
+func validateStepUpOperationHistory(operation StepUpOperation, settings *SecuritySettingsUpdateIntent, historical bool) error {
 	switch operation {
 	case StepUpRegenerateRecoveryCodes, StepUpReplaceTOTP, StepUpRemoveTOTP:
 		if settings == nil {
@@ -712,7 +760,7 @@ func validateStepUpOperation(operation StepUpOperation, settings *SecuritySettin
 		}
 	case StepUpUpdateSecuritySettings:
 		if settings != nil {
-			return ValidateSecuritySettingsUpdateIntent(*settings)
+			return validateSecuritySettingsUpdateIntent(*settings, historical)
 		}
 	}
 	return errors.New("step-up operation intent is invalid")

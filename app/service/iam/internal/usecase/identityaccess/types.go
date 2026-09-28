@@ -95,10 +95,12 @@ type Transaction interface {
 	CompleteLoginChallenge(context.Context, LoginChallengeCompletion) (iamv1.Session, error)
 	BeginPasswordChallenge(context.Context, PasswordChallengeCreation) (iamv1.AuthenticationChallenge, error)
 	ReadPasswordChallenge(context.Context, AuthenticationChallengeCredential) (PasswordReplacementMaterial, error)
+	ReadChallengePasswordRequirements(context.Context, AuthenticationChallengeCredential) (iamv1.PasswordRequirements, error)
 	ChangeChallengePassword(context.Context, ChallengePasswordMutation) (iamv1.ChallengePasswordChangeResponse, error)
 	IssueSession(context.Context, SessionMutation) (iamv1.Session, error)
 	LookupSession(context.Context, string) (SessionCredential, bool, error)
 	ListOwnSessions(context.Context, OwnSessionRead) ([]iamv1.Session, error)
+	ReadPasswordRequirements(context.Context, iamv1.Session) (iamv1.PasswordRequirements, error)
 	LookupRoleSession(context.Context, string) (RoleSessionCredential, bool, error)
 	LookupRoleSessionForExit(context.Context, string) (RoleSessionExitCredential, bool, error)
 	ExitRoleSession(context.Context, string, auditv1.Event) (iamv1.RoleSession, error)
@@ -114,6 +116,7 @@ type Transaction interface {
 	RevokeSession(context.Context, SessionRevocationMutation) (iamv1.Revocation, bool, error)
 	RevokeOtherSessions(context.Context, OtherSessionRevocationMutation) (iamv1.RevokeOtherSessionsResponse, error)
 	CreateUser(context.Context, UserMutation) (iamv1.User, error)
+	ReadUserCreationPasswordSettings(context.Context, AccountRead) (iamv1.AccountPasswordSettings, uint64, error)
 	LookupPolicy(context.Context, iamv1.AccountID, iamv1.PolicyID) (iamv1.Policy, bool, error)
 	LookupPolicyAttachment(context.Context, iamv1.AccountID, iamv1.PolicyAttachmentID) (iamv1.PolicyAttachment, bool, error)
 	CreatePolicyAttachment(context.Context, PolicyAttachmentMutation) (iamv1.PolicyAttachment, error)
@@ -486,6 +489,8 @@ type PasswordReplacementMaterial struct {
 	CredentialGeneration uint64
 	PasswordHistory      []authority.PasswordHash
 	HistoryDigest        string
+	PasswordSettings     iamv1.AccountPasswordSettings
+	SettingsVersion      uint64
 }
 
 func (PasswordReplacementMaterial) String() string { return "[REDACTED]" }
@@ -626,6 +631,8 @@ type PasswordAttempt struct {
 	CredentialGeneration uint64
 	PasswordHistory      []authority.PasswordHash
 	HistoryDigest        string
+	PasswordSettings     iamv1.AccountPasswordSettings
+	SettingsVersion      uint64
 	MustChangePassword   bool
 	ExpiresAt            time.Time
 	Purpose              PasswordAttemptPurpose
@@ -732,16 +739,17 @@ type UserBoundaryMutation struct {
 }
 
 type PasswordMutation struct {
-	AttemptID             string
-	AttemptSequence       uint64
-	AccountID             iamv1.AccountID
-	PrincipalID           iamv1.PrincipalID
-	SessionID             iamv1.SessionID
-	RevokeOtherSessions   bool
-	ExpectedPasswordHash  authority.PasswordHash
-	ExpectedHistoryDigest string
-	NewPasswordHash       authority.PasswordHash
-	AuditEvent            auditv1.Event
+	AttemptID               string
+	AttemptSequence         uint64
+	AccountID               iamv1.AccountID
+	PrincipalID             iamv1.PrincipalID
+	SessionID               iamv1.SessionID
+	RevokeOtherSessions     bool
+	ExpectedPasswordHash    authority.PasswordHash
+	ExpectedHistoryDigest   string
+	ExpectedSettingsVersion uint64
+	NewPasswordHash         authority.PasswordHash
+	AuditEvent              auditv1.Event
 }
 
 type SessionRevocationMutation struct {
@@ -761,11 +769,12 @@ type OtherSessionRevocationMutation struct {
 }
 
 type UserMutation struct {
-	User             iamv1.User
-	PasswordHash     authority.PasswordHash
-	ActorPrincipalID iamv1.PrincipalID
-	DecisionID       iamv1.DecisionID
-	AuditEvent       auditv1.Event
+	User                    iamv1.User
+	PasswordHash            authority.PasswordHash
+	ExpectedSettingsVersion uint64
+	ActorPrincipalID        iamv1.PrincipalID
+	DecisionID              iamv1.DecisionID
+	AuditEvent              auditv1.Event
 }
 
 type PolicyCreation struct {

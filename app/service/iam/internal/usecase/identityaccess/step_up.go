@@ -159,7 +159,8 @@ func (service *Authority) StartStepUp(ctx context.Context, credential iamv1.Secr
 		return iamv1.StepUp{}, ErrUnavailable
 	}
 	if (result.SecuritySettings == nil) != (request.SecuritySettings == nil) ||
-		(result.SecuritySettings != nil && *result.SecuritySettings != *request.SecuritySettings) {
+		(result.SecuritySettings != nil && (result.SecuritySettings.ExpectedResourceVersion != request.SecuritySettings.ExpectedResourceVersion ||
+			result.SecuritySettings.MFA != request.SecuritySettings.MFA || !samePasswordSettings(result.SecuritySettings.Password, request.SecuritySettings.Password))) {
 		return iamv1.StepUp{}, ErrUnavailable
 	}
 	return result, nil

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"maps"
 	"os"
 	"reflect"
 	"slices"
@@ -150,6 +151,9 @@ func buildPaths() object {
 		"/v1/auth/challenges/{challengeId}:password": object{"post": mutationOperation(
 			"changeChallengePassword", "Consume the exact forced-change stage: TOTP-proved LOGIN or password-proved initial ENROLLMENT; revoke all old sessions and challenges, then require a fresh login", "ChallengePasswordChangeRequest", "ChallengePasswordChangeResponse", "200", []any{}, []any{openapi31.PathIDParameter("challengeId")},
 		)},
+		"/v1/auth/challenges/{challengeId}/password-requirements": object{"post": mutationOperation(
+			"challengePasswordRequirements", "Observe only this live LOGIN or ENROLLMENT PASSWORD_CHANGE challenge's effective password rules; never a write permit", "ChallengePasswordRequirementsRequest", "PasswordRequirements", "200", []any{}, []any{openapi31.PathIDParameter("challengeId")},
+		)},
 		"/v1/auth/challenges/{challengeId}:recover": object{"post": mutationOperation(
 			"startAuthenticatorRecovery", "Consume one original recovery code under a current password-authenticated LOGIN challenge; revoke the lost factor and old sessions, issue only one-time rebinding material", "StartAuthenticatorRecoveryRequest", "StartAuthenticatorRecoveryResponse", "200", []any{}, []any{openapi31.PathIDParameter("challengeId")},
 		)},
@@ -257,6 +261,7 @@ func buildPaths() object {
 		"/v1/auth/password": object{"post": mutationOperation(
 			"changePassword", "Change the current user password", "ChangePasswordRequest", "ChangePasswordResponse", "200", nil, nil,
 		)},
+		"/v1/auth/password-requirements": object{"get": readOperation("passwordRequirements", "Observe the actual login session user's effective new-password rules, including forced-change sessions; no identity selector or write permit", "PasswordRequirements", nil, nil)},
 		"/v1/users": object{"get": readOperation("listUsers", "List manageable users and their bounded direct policy attachments in the current account", "UserList", nil, accountPageParameters()), "post": mutationOperation(
 			"createUser", "Create an account user", "CreateUserRequest", "User", "201", nil, nil,
 		)},
@@ -364,7 +369,7 @@ func readOperation(
 		responses["404"] = object{"$ref": "#/components/responses/ProblemResponse", "description": "No committed issuance found for this source user and request. This does not authorize a new intent."}
 	}
 	switch operationID {
-	case "getAuthenticatorState", "getTOTPEnrollment", "getTOTPEnrollmentByRequest", "cancelTOTPEnrollment", "getStepUpByRequest", "getRecoveryCodeRegenerationByRequest", "getAuthenticatorRemovalByRequest":
+	case "getAuthenticatorState", "getTOTPEnrollment", "getTOTPEnrollmentByRequest", "cancelTOTPEnrollment", "getStepUpByRequest", "getRecoveryCodeRegenerationByRequest", "getAuthenticatorRemovalByRequest", "passwordRequirements":
 		responses["400"] = object{"$ref": "#/components/responses/ProblemResponse", "description": "Invalid path, query or unexpected body; no identity selector is accepted."}
 	}
 	if operationID == "getStepUpByRequest" || operationID == "getRecoveryCodeRegenerationByRequest" || operationID == "getAuthenticatorRemovalByRequest" {
@@ -527,6 +532,9 @@ func structContracts() map[string]reflect.Type {
 		"StartChallengeTOTPEnrollmentRequest":           openapi31.StructType[iamv1.StartChallengeTOTPEnrollmentRequest](),
 		"AccountMFASettings":                            openapi31.StructType[iamv1.AccountMFASettings](),
 		"AccountSecuritySettings":                       openapi31.StructType[iamv1.AccountSecuritySettings](),
+		"AccountPasswordSettings":                       openapi31.StructType[iamv1.AccountPasswordSettings](),
+		"PasswordRequirements":                          openapi31.StructType[iamv1.PasswordRequirements](),
+		"ChallengePasswordRequirementsRequest":          openapi31.StructType[iamv1.ChallengePasswordRequirementsRequest](),
 		"SecuritySettingsUpdateIntent":                  openapi31.StructType[iamv1.SecuritySettingsUpdateIntent](),
 		"UpdateAccountSecuritySettingsRequest":          openapi31.StructType[iamv1.UpdateAccountSecuritySettingsRequest](),
 		"AccountSecuritySettingsChange":                 openapi31.StructType[iamv1.AccountSecuritySettingsChange](),
@@ -652,6 +660,30 @@ func structContracts() map[string]reflect.Type {
 }
 
 func fieldOverlay(owner string, field reflect.StructField, jsonName string, base object) object {
+	if owner == "PasswordRequirements" {
+		switch jsonName {
+		case "apiVersion":
+			return object{"type": "string", "const": iamv1.APIVersion}
+		case "kind":
+			return object{"type": "string", "const": "PasswordRequirements"}
+		case "maximumLength":
+			return object{"type": "integer", "const": 128}
+		case "maximumUTF8Bytes":
+			return object{"type": "integer", "const": 512}
+		case "settingsVersion":
+			return object{"type": "integer", "minimum": 1, "maximum": uint64(9007199254740991)}
+		case "source":
+			return object{"type": "string", "enum": []string{"ACCOUNT", "PROTECTED_IDENTITY"}}
+		}
+	}
+	if owner == "AccountPasswordSettings" {
+		switch jsonName {
+		case "minimumLength":
+			return object{"type": "integer", "minimum": 15, "maximum": 128}
+		case "historyCount":
+			return object{"type": "integer", "minimum": 0, "maximum": 24}
+		}
+	}
 	if jsonName == "expectedResourceVersion" && (owner == "SecuritySettingsUpdateIntent" || owner == "UpdateAccountSecuritySettingsRequest" || owner == "AccountSecuritySettingsChange") {
 		return object{"type": "integer", "minimum": 1, "maximum": uint64(9007199254740990)}
 	}
@@ -1034,21 +1066,53 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 }
 
 func applySemanticOverlays(schemas object) {
+	schemas["PasswordRequirements"].(object)["description"] = "Current self-only password rules, measured in Unicode code points and UTF-8 bytes. An observation, never a write permit; final replacement rechecks current qualification and settings."
+	schemas["PasswordRequirements"].(object)["oneOf"] = []any{
+		object{"properties": object{"source": object{"const": "ACCOUNT"}}},
+		object{"properties": object{"source": object{"const": "PROTECTED_IDENTITY"}, "password": object{"properties": object{
+			"minimumLength": object{"const": 15}, "historyCount": object{"const": 1},
+			"requireLowercase": object{"const": false}, "requireUppercase": object{"const": false},
+			"requireDigit": object{"const": false}, "requireSymbol": object{"const": false},
+		}}}},
+	}
+	schemas["ChallengePasswordRequirementsRequest"].(object)["description"] = "Only the original live LOGIN or ENROLLMENT PASSWORD_CHANGE challenge credential. No Session, password or identity selector."
+	// The same value has one historical read boundary, not a second settings
+	// model. Never turn missing historical rules into current default values.
+	historicalSettings := maps.Clone(schemas["AccountSecuritySettings"].(object))
+	historicalIntent := maps.Clone(schemas["SecuritySettingsUpdateIntent"].(object))
+	for _, name := range []string{"AccountSecuritySettings", "SecuritySettingsUpdateIntent"} {
+		schema := schemas[name].(object)
+		schema["required"] = append(slices.Clone(schema["required"].([]string)), "password")
+	}
 	schemas["AccountMFASettings"].(object)["description"] = "Explicit ordinary USER MFA requirement, not factor state, Session authentication facts or an exception for protected identities. Missing or null is invalid, never an inferred false."
 	schemas["AccountSecuritySettings"].(object)["description"] = "Non-secret current-account configuration returned only under a current instance-scoped read decision. Neither factor state nor Session authentication facts."
 	schemas["SecuritySettingsUpdateIntent"].(object)["description"] = "Exact non-secret settings value and expected version for a Session-held SECURITY_SETTINGS_UPDATE proof. Not a selector or permit; cannot be attached to other operations."
-	schemas["UpdateAccountSecuritySettingsRequest"].(object)["description"] = "Replace the supported MFA configuration at one expected version using a proof held by the actual current Session and current instance permission. No identity selector, arbitrary patch or caller-controlled Session retention."
+	schemas["UpdateAccountSecuritySettingsRequest"].(object)["description"] = "Replace the complete MFA and password configuration at one expected version using a proof held by the actual current Session and current instance permission. No identity selector, arbitrary patch or caller-controlled Session retention."
 	schemas["AccountSecuritySettingsChange"].(object)["description"] = "Immutable historical completion. Runtime validation additionally requires settings.resourceVersion == expectedResourceVersion + 1. settings.updatedAt is the original completion time, not observation time; requestId is not lookup authority."
 	schemas["AccountSecuritySettingsChange"].(object)["properties"].(object)["callerSessionEnded"] = object{"const": true, "description": "Every settings change invalidates its original calling Session, including weakening the requirement. Never an instruction to end a later reader's current Session."}
+	historicalSettings["description"] = "Original settings at completion. A missing password segment records an actual pre-password completion; never current configuration, a default or a new write."
+	schemas["AccountSecuritySettingsChange"].(object)["properties"].(object)["settings"] = historicalSettings
 	schemas["UpdateAccountSecuritySettingsResponse"].(object)["description"] = "APPLIED and EQUAL_REPLAY carry the same original non-secret completion, not fresh authorization, current Session state or a credential."
+	schemas["UpdateAccountSecuritySettingsResponse"].(object)["oneOf"] = []any{
+		object{"properties": object{"outcome": object{"const": "APPLIED"}, "change": object{"properties": object{"settings": object{"required": []string{"password"}}}}}},
+		object{"properties": object{"outcome": object{"const": "EQUAL_REPLAY"}}},
+	}
 	schemas["StepUp"].(object)["description"] = "Non-secret metadata bound to one operation and its original effective login Session. It is not a bearer, unlogged challenge or authorization permit. Runtime validation enforces the original 120-second lifetime and proof/consumption ordering; proving never extends expiry."
 	for _, name := range []string{"StepUp", "StartStepUpRequest"} {
-		schemas[name].(object)["allOf"] = []any{object{"oneOf": []any{
+		operations := []any{
 			object{"properties": object{"operation": object{"const": string(iamv1.StepUpRegenerateRecoveryCodes)}, "securitySettings": false}},
 			object{"properties": object{"operation": object{"const": string(iamv1.StepUpReplaceTOTP)}, "securitySettings": false, "expectedFactorRevision": object{"maximum": uint64(9007199254740990)}}},
 			object{"properties": object{"operation": object{"const": string(iamv1.StepUpRemoveTOTP)}, "securitySettings": false, "expectedFactorRevision": object{"maximum": uint64(9007199254740990)}}},
 			object{"required": []string{"securitySettings"}, "properties": object{"operation": object{"const": string(iamv1.StepUpUpdateSecuritySettings)}, "securitySettings": openapi31.Ref("SecuritySettingsUpdateIntent")}},
-		}}}
+		}
+		if name == "StepUp" {
+			schemas[name].(object)["properties"].(object)["securitySettings"] = historicalIntent
+			operations = append(operations, object{"required": []string{"securitySettings"}, "properties": object{
+				"operation": object{"const": string(iamv1.StepUpUpdateSecuritySettings)}, "state": object{"const": "CONSUMED"},
+				"securitySettings": object{"properties": object{"password": false}},
+			}})
+		}
+		schemas[name].(object)["allOf"] = []any{object{"oneOf": operations}}
 	}
 	schemas["StepUp"].(object)["oneOf"] = []any{
 		object{"properties": object{"state": object{"const": "PENDING"}, "provedAt": false, "consumedAt": false}},

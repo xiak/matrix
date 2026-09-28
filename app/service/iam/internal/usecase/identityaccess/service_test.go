@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -454,6 +455,63 @@ func TestPasswordChangeRejectsRecentHistoryAndAStalePreparedHead(t *testing.T) {
 	}
 }
 
+func TestUserCreationUsesAccountRulesOutsideTheTransaction(t *testing.T) {
+	tx := newCoreTransaction()
+	repository := &coreRepository{transaction: tx}
+	service, err := newCoreAuthority(repository, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := coreBootstrap(t)
+	if _, err := service.Bootstrap(t.Context(), document); err != nil {
+		t.Fatal(err)
+	}
+	login, err := service.Login(t.Context(), iamv1.LoginRequest{LoginName: "admin", Password: document.Administrator.Password, RequestID: "creation-rules-login"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.ChangePassword(t.Context(), login.Credential, iamv1.ChangePasswordRequest{CurrentPassword: document.Administrator.Password,
+		NewPassword: coreSecret(t, "Creation-Actor-Password-74!"), RequestID: "creation-rules-password"}); err != nil {
+		t.Fatal(err)
+	}
+	rules := iamv1.AccountPasswordSettings{MinimumLength: 28, RequireDigit: true, HistoryCount: 24}
+	prepared := false
+	tx.userCreationSettings = func(read AccountRead) (iamv1.AccountPasswordSettings, uint64, error) {
+		prepared = true
+		return rules, 7, nil
+	}
+	service.passwords = authority.NewPasswordHasher(passwordEntropyProbe{t, repository})
+	request := iamv1.CreateUserRequest{LoginName: "rules.target", DisplayName: "Rules target", RequestID: "rules-create",
+		InitialPassword: coreSecret(t, "short but baseline valid 7")}
+	before := len(tx.users)
+	if _, err := service.CreateUser(t.Context(), login.Credential, request); !errors.Is(err, ErrInvalidArgument) || len(tx.users) != before {
+		t.Fatal("creation ignored the current Account length rule", err)
+	}
+	request.InitialPassword = coreSecret(t, "a sufficiently long passphrase without digits")
+	if _, err := service.CreateUser(t.Context(), login.Credential, request); !errors.Is(err, ErrInvalidArgument) || len(tx.users) != before {
+		t.Fatal("creation ignored explicit Account composition", err)
+	}
+	request.InitialPassword = coreSecret(t, "a sufficiently long passphrase with 7")
+	repository.afterTransaction = func(err error) error { return ErrUnavailable }
+	if _, err := service.CreateUser(t.Context(), login.Credential, request); !errors.Is(err, ErrUnavailable) || len(tx.users) != before {
+		t.Fatal("unknown preparation produced a user", err)
+	}
+	repository.afterTransaction = func(err error) error {
+		if prepared && err == nil {
+			tx.profileErr = ErrUnavailable
+		}
+		return err
+	}
+	if _, err := service.CreateUser(t.Context(), login.Credential, request); !errors.Is(err, ErrUnavailable) || len(tx.users) != before {
+		t.Fatal("creation reused an earlier authorization after preparation", err)
+	}
+	repository.afterTransaction, tx.profileErr = nil, nil
+	created, err := service.CreateUser(t.Context(), login.Credential, request)
+	if err != nil || created.LoginName != request.LoginName || tx.userCreationMutation == nil || tx.userCreationMutation.ExpectedSettingsVersion != 7 {
+		t.Fatal("creation lost its exact rule version", err)
+	}
+}
+
 func TestAdministratorPasswordResetPreparesOutsideLocksAndRechecksAuthority(t *testing.T) {
 	tx := newCoreTransaction()
 	repository := &coreRepository{transaction: tx}
@@ -483,7 +541,8 @@ func TestAdministratorPasswordResetPreparesOutsideLocksAndRechecksAuthority(t *t
 		t.Fatal(err)
 	}
 	material := PasswordReplacementMaterial{PasswordHash: tx.passwords[user.ID], CredentialGeneration: 2,
-		PasswordHistory: []authority.PasswordHash{historyHash}, HistoryDigest: "sha256:" + strings.Repeat("b", 64)}
+		PasswordHistory: []authority.PasswordHash{historyHash}, HistoryDigest: "sha256:" + strings.Repeat("b", 64),
+		PasswordSettings: authority.DefaultPasswordSettings(), SettingsVersion: 1}
 	prepared, writes := false, 0
 	tx.passwordResetRead = func(read AccountRead, target iamv1.PrincipalID, version uint64) (PasswordReplacementMaterial, error) {
 		if read.AccountID != user.AccountID || read.ActorPrincipalID != tx.principal.ID || target != user.ID || version != user.ResourceVersion || read.DecisionID == "" {
@@ -830,7 +889,7 @@ func TestTOTPReplacementStartKeepsOriginalCallerProofAndOneTimeMaterial(t *testi
 func TestStartStepUpRejectsChangedSettingsIntent(t *testing.T) {
 	// The storage port must return the exact non-secret intent, not merely a
 	// syntactically valid proof. Real MFA eligibility remains a PostgreSQL gate.
-	for _, changed := range []string{"none", "missing", "version", "value", "operation"} {
+	for _, changed := range []string{"none", "missing", "version", "value", "password", "missing password", "operation"} {
 		t.Run(changed, func(t *testing.T) {
 			tx := newCoreTransaction()
 			service, err := newCoreAuthority(&coreRepository{transaction: tx}, Config{})
@@ -849,9 +908,12 @@ func TestStartStepUpRejectsChangedSettingsIntent(t *testing.T) {
 				NewPassword: coreSecret(t, "Settings-Proof-Current-Password-92!"), RequestID: "settings-proof-initial-password"}); err != nil {
 				t.Fatal(err)
 			}
-			intent := iamv1.SecuritySettingsUpdateIntent{ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}}
+			passwordSettings := authority.DefaultPasswordSettings()
+			intent := iamv1.SecuritySettingsUpdateIntent{ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}, Password: &passwordSettings}
 			request := iamv1.StartStepUpRequest{RequestID: "settings-original", Operation: iamv1.StepUpUpdateSecuritySettings, ExpectedFactorRevision: 2, SecuritySettings: &intent}
 			returnedIntent := intent
+			returnedPassword := passwordSettings
+			returnedIntent.Password = &returnedPassword
 			tx.stepUpStartResult = iamv1.StepUp{APIVersion: iamv1.APIVersion, Kind: "StepUp", ID: "settings-proof", RequestID: request.RequestID,
 				Operation: request.Operation, ExpectedFactorRevision: request.ExpectedFactorRevision, SecuritySettings: &returnedIntent,
 				State: "PENDING", CreatedAt: tx.now, ExpiresAt: tx.now.Add(120 * time.Second)}
@@ -862,12 +924,16 @@ func TestStartStepUpRejectsChangedSettingsIntent(t *testing.T) {
 				returnedIntent.ExpectedResourceVersion++
 			case "value":
 				returnedIntent.MFA.RequiredForUsers = false
+			case "password":
+				returnedPassword.HistoryCount = 24
+			case "missing password":
+				returnedIntent.Password = nil
 			case "operation":
 				tx.stepUpStartResult.Operation, tx.stepUpStartResult.SecuritySettings = iamv1.StepUpRegenerateRecoveryCodes, nil
 			}
 			result, err := service.StartStepUp(t.Context(), login.Credential, request)
 			if changed == "none" {
-				if err != nil || result.SecuritySettings == nil || *result.SecuritySettings != intent {
+				if err != nil || !reflect.DeepEqual(result.SecuritySettings, &intent) {
 					t.Fatal("exact settings proof rejected", err)
 				}
 			} else if !errors.Is(err, ErrUnavailable) || result != (iamv1.StepUp{}) {
@@ -984,6 +1050,95 @@ func TestStepUpStopsAtUnknownAdmissionOrChangedCaller(t *testing.T) {
 			service.releasePasswordWork()
 			service.releasePasswordWork()
 		})
+	}
+}
+
+func TestPasswordRequirementsUseOnlyTheAuthenticatedSelfOrPasswordChallenge(t *testing.T) {
+	tx := newCoreTransaction()
+	service, err := newCoreAuthority(&coreRepository{transaction: tx}, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootstrap := coreBootstrap(t)
+	if _, err := service.Bootstrap(t.Context(), bootstrap); err != nil {
+		t.Fatal(err)
+	}
+	login, err := service.Login(t.Context(), iamv1.LoginRequest{LoginName: "admin", Password: bootstrap.Administrator.Password, RequestID: "requirements-login"})
+	if err != nil || !login.MustChangePassword {
+		t.Fatal("forced Session fixture", err)
+	}
+	tx.attachments = map[iamv1.PolicyAttachmentID]iamv1.PolicyAttachment{}
+	valid := iamv1.PasswordRequirements{APIVersion: iamv1.APIVersion, Kind: "PasswordRequirements",
+		Password: iamv1.AccountPasswordSettings{MinimumLength: 15, HistoryCount: 1}, MaximumLength: 128, MaximumUTF8Bytes: 512, SettingsVersion: 3, Source: "PROTECTED_IDENTITY"}
+	tx.passwordRequirements = valid
+	got, err := service.PasswordRequirements(t.Context(), login.Credential)
+	if err != nil || got != valid || tx.passwordRequirementsSession != login.Session || len(tx.authorizations) != 0 {
+		t.Fatal("self observation requires an invented permission or changes identity", err)
+	}
+	for _, purpose := range []authority.CredentialType{authority.CredentialService, authority.CredentialRoleSession, authority.CredentialAuthenticationChallenge} {
+		wrong, err := service.credentials.Issue(purpose, "requirements-wrong-carrier")
+		if err != nil {
+			t.Fatal(err)
+		}
+		before := tx.passwordRequirementsReads
+		if _, err := service.PasswordRequirements(t.Context(), wrong.Credential); !errors.Is(err, ErrUnauthenticated) || tx.passwordRequirementsReads != before {
+			t.Fatal("non-Session reached self rules", err)
+		}
+	}
+	issued, err := service.credentials.Issue(authority.CredentialAuthenticationChallenge, "requirements-challenge")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx.challengeLookupDigest = issued.LookupDigest
+	request := iamv1.ChallengePasswordRequirementsRequest{ChallengeCredential: issued.Credential}
+	for _, purpose := range []string{"LOGIN", "ENROLLMENT", "RECOVERY"} {
+		for _, step := range []string{"TOTP", "ENROLLMENT", "PASSWORD_CHANGE"} {
+			tx.challengeCredential = AuthenticationChallengeCredential{AccountID: tx.organization.ID, UserID: tx.principal.ID,
+				ID: "requirements-challenge", Purpose: purpose, NextStep: step, VerificationDigest: issued.VerificationDigest}
+			before := tx.passwordRequirementsReads
+			got, err := service.ChallengePasswordRequirements(t.Context(), "requirements-challenge", request)
+			if step == "PASSWORD_CHANGE" && purpose != "RECOVERY" {
+				if err != nil || got != valid || tx.passwordRequirementsChallenge != tx.challengeCredential {
+					t.Fatal("exact password ceremony rejected", err)
+				}
+			} else if !errors.Is(err, ErrUnauthenticated) || got != (iamv1.PasswordRequirements{}) || tx.passwordRequirementsReads != before {
+				t.Fatal("wrong ceremony reached rules", err)
+			}
+		}
+	}
+	tx.challengeCredential.Purpose, tx.challengeCredential.NextStep = "LOGIN", "PASSWORD_CHANGE"
+	for _, wrong := range []iamv1.ChallengePasswordRequirementsRequest{{ChallengeCredential: login.Credential}, {ChallengeCredential: coreSecret(t, "unknown-capability")}} {
+		before := tx.passwordRequirementsReads
+		if _, err := service.ChallengePasswordRequirements(t.Context(), "requirements-challenge", wrong); !errors.Is(err, ErrUnauthenticated) || tx.passwordRequirementsReads != before {
+			t.Fatal("wrong credential reached challenge rules", err)
+		}
+	}
+	if _, err := service.ChallengePasswordRequirements(t.Context(), "another-challenge", request); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatal("path substituted ceremony", err)
+	}
+	for _, read := range []func() (iamv1.PasswordRequirements, error){
+		func() (iamv1.PasswordRequirements, error) {
+			return service.PasswordRequirements(t.Context(), login.Credential)
+		},
+		func() (iamv1.PasswordRequirements, error) {
+			return service.ChallengePasswordRequirements(t.Context(), "requirements-challenge", request)
+		},
+	} {
+		for _, failure := range []error{ErrUnauthenticated, ErrUnavailable} {
+			tx.passwordRequirements, tx.passwordRequirementsError = valid, failure
+			if result, err := read(); !errors.Is(err, failure) || result != (iamv1.PasswordRequirements{}) {
+				t.Fatal("failed locked observation escaped", err)
+			}
+		}
+		tx.passwordRequirementsError = nil
+		tx.passwordRequirements = valid
+		tx.passwordRequirements.Source = "UNKNOWN"
+		if result, err := read(); !errors.Is(err, ErrUnavailable) || result != (iamv1.PasswordRequirements{}) {
+			t.Fatal("invalid storage projected", err)
+		}
+	}
+	if len(tx.authorizations) != 0 || len(tx.totpReservations) != 0 || len(tx.sessions) != 1 || len(tx.passwordAttempts) != 0 {
+		t.Fatalf("read effects: authorizations=%d totpReservations=%d sessions=%d attempts=%d", len(tx.authorizations), len(tx.totpReservations), len(tx.sessions), len(tx.passwordAttempts))
 	}
 }
 
@@ -1214,7 +1369,7 @@ func TestAccountSecuritySettingsCannotBypassCurrentSessionAndExplicitAuthority(t
 		t.Fatal("settings denial did not bind the current real Account and audit decision")
 	}
 	update := iamv1.UpdateAccountSecuritySettingsRequest{RequestID: "settings-denied-write", StepUpID: "not-a-permit",
-		ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}}
+		ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}, Password: authority.DefaultPasswordSettings()}
 	if _, err := service.UpdateAccountSecuritySettings(t.Context(), login.Credential, update); !errors.Is(err, ErrForbidden) {
 		t.Fatal("settings proof ID substituted for current write permission", err)
 	}
@@ -2366,63 +2521,80 @@ func TestRecoveryCodeMatchUsesCompleteOriginalBatchAndScope(t *testing.T) {
 
 type coreTransaction struct {
 	Transaction
-	loginChallenge           iamv1.AuthenticationChallenge
-	enrollmentInspection     EnrollmentChallengeInspection
-	loginAuthenticationState *LoginAuthenticationState
-	enrollmentReads          int
-	challengeCredential      AuthenticationChallengeCredential
-	challengeLookupDigest    string
-	now                      time.Time
-	status                   iamv1.BootstrapStatus
-	contentDigest            string
-	organization             iamv1.Organization
-	principal                iamv1.Principal
-	services                 map[string]ServiceCredential
-	sessions                 map[string]SessionCredential
-	roleSessions             map[string]RoleSessionCredential
-	roleExitCredentials      map[string]RoleSessionExitCredential
-	roleExitEvents           []auditv1.Event
-	authorizations           []AuthorizationMutation
-	passwords                map[iamv1.PrincipalID]authority.PasswordHash
-	passwordHistories        map[iamv1.PrincipalID][]authority.PasswordHash
-	passwordAttempts         map[iamv1.PrincipalID]PasswordAttempt
-	attemptSequence          uint64
-	rejectedAttempts         []string
-	users                    map[iamv1.PrincipalID]iamv1.Principal
-	attachments              map[iamv1.PolicyAttachmentID]iamv1.PolicyAttachment
-	attachmentSession        iamv1.SessionID
-	revocationSession        iamv1.SessionID
-	sessionRevocation        *SessionRevocationMutation
-	otherSessionRevocation   *OtherSessionRevocationMutation
-	otherSessionResult       iamv1.RevokeOtherSessionsResponse
-	otherSessionError        error
-	ownSessionItems          *[]iamv1.Session
-	localRecoveryInspection  iamv1.LocalCredentialRecoveryInspection
-	localRecoveryResult      iamv1.LocalCredentialRecoveryResult
-	localRecoveryMutation    *LocalCredentialRecoveryMutation
-	localRecoveryMaterial    PasswordReplacementMaterial
-	localRecoveryPrepared    iamv1.LocalCredentialRecoveryInspection
-	onLocalRecoveryPrepare   func()
-	profileErr               error
-	accessKeyCustody         *AccessKeyCustody
-	accessKeyCustodyErr      error
-	totpCustody              *TOTPCustody
-	totpCustodyErr           error
-	stepUpForVerification    iamv1.StepUp
-	stepUpStartResult        iamv1.StepUp
-	emailKeyset              *authority.EmailVerificationKeyset
-	replacementStart         func(TOTPReplacementStart) (TOTPEnrollmentStartResult, error)
-	removalEffect            func(AuthenticatorRemovalMutation) (iamv1.RemoveTOTPResponse, error)
-	replacementCalls         int
-	totpReservations         []TOTPAttempt
-	denyTOTPReservation      bool
-	totpAttemptReads         int
-	settingsLockError        error
-	settingsMutationCalled   bool
-	passwordResetRead        func(AccountRead, iamv1.PrincipalID, uint64) (PasswordReplacementMaterial, error)
-	userChange               func(UserChange) (iamv1.User, error)
-	rootPasswordRead         func(AccountRead, iamv1.AccountID, uint64) (iamv1.RootIdentity, PasswordReplacementMaterial, error)
-	rootCredentialRecovery   func(RootCredentialRecovery) (iamv1.Account, error)
+	passwordRequirements          iamv1.PasswordRequirements
+	passwordRequirementsError     error
+	passwordRequirementsReads     int
+	passwordRequirementsSession   iamv1.Session
+	passwordRequirementsChallenge AuthenticationChallengeCredential
+	loginChallenge                iamv1.AuthenticationChallenge
+	enrollmentInspection          EnrollmentChallengeInspection
+	loginAuthenticationState      *LoginAuthenticationState
+	enrollmentReads               int
+	challengeCredential           AuthenticationChallengeCredential
+	challengeLookupDigest         string
+	now                           time.Time
+	status                        iamv1.BootstrapStatus
+	contentDigest                 string
+	organization                  iamv1.Organization
+	principal                     iamv1.Principal
+	services                      map[string]ServiceCredential
+	sessions                      map[string]SessionCredential
+	roleSessions                  map[string]RoleSessionCredential
+	roleExitCredentials           map[string]RoleSessionExitCredential
+	roleExitEvents                []auditv1.Event
+	authorizations                []AuthorizationMutation
+	passwords                     map[iamv1.PrincipalID]authority.PasswordHash
+	passwordHistories             map[iamv1.PrincipalID][]authority.PasswordHash
+	passwordAttempts              map[iamv1.PrincipalID]PasswordAttempt
+	attemptSequence               uint64
+	rejectedAttempts              []string
+	users                         map[iamv1.PrincipalID]iamv1.Principal
+	attachments                   map[iamv1.PolicyAttachmentID]iamv1.PolicyAttachment
+	attachmentSession             iamv1.SessionID
+	revocationSession             iamv1.SessionID
+	sessionRevocation             *SessionRevocationMutation
+	otherSessionRevocation        *OtherSessionRevocationMutation
+	otherSessionResult            iamv1.RevokeOtherSessionsResponse
+	otherSessionError             error
+	ownSessionItems               *[]iamv1.Session
+	localRecoveryInspection       iamv1.LocalCredentialRecoveryInspection
+	localRecoveryResult           iamv1.LocalCredentialRecoveryResult
+	localRecoveryMutation         *LocalCredentialRecoveryMutation
+	localRecoveryMaterial         PasswordReplacementMaterial
+	localRecoveryPrepared         iamv1.LocalCredentialRecoveryInspection
+	onLocalRecoveryPrepare        func()
+	profileErr                    error
+	accessKeyCustody              *AccessKeyCustody
+	accessKeyCustodyErr           error
+	totpCustody                   *TOTPCustody
+	totpCustodyErr                error
+	stepUpForVerification         iamv1.StepUp
+	stepUpStartResult             iamv1.StepUp
+	emailKeyset                   *authority.EmailVerificationKeyset
+	replacementStart              func(TOTPReplacementStart) (TOTPEnrollmentStartResult, error)
+	removalEffect                 func(AuthenticatorRemovalMutation) (iamv1.RemoveTOTPResponse, error)
+	replacementCalls              int
+	totpReservations              []TOTPAttempt
+	denyTOTPReservation           bool
+	totpAttemptReads              int
+	settingsLockError             error
+	settingsMutationCalled        bool
+	passwordResetRead             func(AccountRead, iamv1.PrincipalID, uint64) (PasswordReplacementMaterial, error)
+	userCreationSettings          func(AccountRead) (iamv1.AccountPasswordSettings, uint64, error)
+	userCreationMutation          *UserMutation
+	userChange                    func(UserChange) (iamv1.User, error)
+	rootPasswordRead              func(AccountRead, iamv1.AccountID, uint64) (iamv1.RootIdentity, PasswordReplacementMaterial, error)
+	rootCredentialRecovery        func(RootCredentialRecovery) (iamv1.Account, error)
+}
+
+func (transaction *coreTransaction) ReadUserCreationPasswordSettings(_ context.Context, read AccountRead) (iamv1.AccountPasswordSettings, uint64, error) {
+	if read.AccountID != transaction.organization.ID || read.ActorPrincipalID != transaction.principal.ID || read.DecisionID == "" {
+		return iamv1.AccountPasswordSettings{}, 0, ErrForbidden
+	}
+	if transaction.userCreationSettings != nil {
+		return transaction.userCreationSettings(read)
+	}
+	return authority.DefaultPasswordSettings(), 1, nil
 }
 
 func (transaction *coreTransaction) ReadPasswordReset(_ context.Context, read AccountRead, user iamv1.PrincipalID, version uint64) (PasswordReplacementMaterial, error) {
@@ -2455,6 +2627,18 @@ func (transaction *coreTransaction) UpdateAccountSecuritySettings(context.Contex
 
 func (tx *coreTransaction) CreateLoginChallenge(context.Context, LoginChallengeCreation) (iamv1.AuthenticationChallenge, error) {
 	return tx.loginChallenge, nil
+}
+
+func (tx *coreTransaction) ReadPasswordRequirements(_ context.Context, session iamv1.Session) (iamv1.PasswordRequirements, error) {
+	tx.passwordRequirementsReads++
+	tx.passwordRequirementsSession = session
+	return tx.passwordRequirements, tx.passwordRequirementsError
+}
+
+func (tx *coreTransaction) ReadChallengePasswordRequirements(_ context.Context, identity AuthenticationChallengeCredential) (iamv1.PasswordRequirements, error) {
+	tx.passwordRequirementsReads++
+	tx.passwordRequirementsChallenge = identity
+	return tx.passwordRequirements, tx.passwordRequirementsError
 }
 
 func (tx *coreTransaction) LookupAuthenticationChallenge(_ context.Context, digest string) (AuthenticationChallengeCredential, bool, error) {
@@ -2809,6 +2993,8 @@ func (transaction *coreTransaction) ReservePasswordAttempt(_ context.Context, re
 	if request.Purpose == PasswordAttemptChange {
 		attempt.PasswordHistory = append([]authority.PasswordHash{}, transaction.passwordHistories[selected.ID]...)
 		attempt.HistoryDigest = transaction.passwordHistoryCommitment(selected.ID)
+		attempt.PasswordSettings = authority.DefaultPasswordSettings()
+		attempt.SettingsVersion = 1
 	}
 	transaction.passwordAttempts[selected.ID] = attempt
 	return attempt, true, nil
@@ -3031,6 +3217,7 @@ func (transaction *coreTransaction) CreateUser(
 	_ context.Context,
 	mutation UserMutation,
 ) (iamv1.User, error) {
+	transaction.userCreationMutation = &mutation
 	for _, existing := range transaction.users {
 		if existing.LoginName == mutation.User.LoginName {
 			return iamv1.User{}, ErrConflict

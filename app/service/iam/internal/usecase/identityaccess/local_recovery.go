@@ -80,7 +80,7 @@ func (service *Authority) RecoverLocalCredentials(ctx context.Context, local iam
 	if inspection.State != "NOT_FOUND" || material.CredentialGeneration != request.Expected.CredentialGeneration {
 		return iamv1.LocalCredentialRecoveryResult{}, ErrUnavailable
 	}
-	if err := service.validatePasswordReplacement(ctx, request.NewPassword, material.PasswordHash, material.PasswordHistory, material.HistoryDigest); err != nil {
+	if err := service.validatePasswordReplacement(ctx, request.NewPassword, authority.DefaultPasswordSettings(), material.PasswordHash, material.PasswordHistory, material.HistoryDigest); err != nil {
 		return iamv1.LocalCredentialRecoveryResult{}, err
 	}
 	passwordHash, err := service.passwords.Hash(request.NewPassword)

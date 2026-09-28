@@ -2111,7 +2111,7 @@ BEGIN
                SELECT 1 FROM iam.audit_outbox AS outbox
                 WHERE outbox.status = 'DEAD_LETTER' OR outbox.attempts >= 100
            ),
-           47::bigint,
+           48::bigint,
            transaction_timestamp();
 END
 $function$;
@@ -2190,7 +2190,8 @@ CREATE OR REPLACE FUNCTION iam.reserve_password_attempt(
     submitted_session_id text, submitted_attempt_id text, submitted_purpose text, submitted_intent_digest text
 )
 RETURNS TABLE (tenant_id text, principal_id text, password_hash text, must_change_password boolean,
-    credential_generation bigint, attempt_sequence bigint, expires_at timestamptz, password_history text[], history_digest text)
+    credential_generation bigint, attempt_sequence bigint, expires_at timestamptz, password_history text[], history_digest text,
+    password_settings jsonb, settings_version bigint)
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE
     account_id text; user_id text; account_version bigint;
@@ -2285,7 +2286,9 @@ BEGIN
         credential.credential_version,next_sequence,effective_now+interval '30 seconds',
         CASE WHEN submitted_purpose='PASSWORD_CHANGE' THEN ARRAY(SELECT e.value->>'hash'
             FROM jsonb_array_elements(credential.password_history) WITH ORDINALITY e(value,ordinality) ORDER BY e.ordinality) END,
-        CASE WHEN submitted_purpose='PASSWORD_CHANGE' THEN 'sha256:'||encode(credential.password_history_digest,'hex') END;
+        CASE WHEN submitted_purpose='PASSWORD_CHANGE' THEN 'sha256:'||encode(credential.password_history_digest,'hex') END,
+        CASE WHEN submitted_purpose='PASSWORD_CHANGE' THEN iam.user_password_settings(account_id,user_id) END,
+        CASE WHEN submitted_purpose='PASSWORD_CHANGE' THEN (SELECT a.security_settings_version FROM iam.accounts a WHERE a.id=account_id) END;
 END
 $function$;
 
@@ -2427,14 +2430,14 @@ RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $funct
             AND p.prosecdef AND p.proretset AND p.prorettype='record'::regtype AND p.proowner='matrix_iam_owner'::regrole
             AND p.proallargtypes=ARRAY['text'::regtype,'text'::regtype,'text'::regtype,'text'::regtype,'text'::regtype,'text'::regtype,'text'::regtype,
                 'text'::regtype,'text'::regtype,'text'::regtype,'boolean'::regtype,'bigint'::regtype,'bigint'::regtype,'timestamptz'::regtype,
-                'text[]'::regtype,'text'::regtype]::oid[]
+                'text[]'::regtype,'text'::regtype,'jsonb'::regtype,'bigint'::regtype]::oid[]
             AND p.proargnames=ARRAY['submitted_login_name','submitted_tenant_id','submitted_principal_id','submitted_session_id','submitted_attempt_id','submitted_purpose','submitted_intent_digest',
-                'tenant_id','principal_id','password_hash','must_change_password','credential_generation','attempt_sequence','expires_at','password_history','history_digest'])
+                'tenant_id','principal_id','password_hash','must_change_password','credential_generation','attempt_sequence','expires_at','password_history','history_digest','password_settings','settings_version'])
         AND (SELECT count(*) FROM pg_catalog.pg_proc p WHERE p.oid IN (
                 to_regprocedure('iam.reserve_password_attempt(text,text,text,text,text,text,text)'),
                 to_regprocedure('iam.reject_password_attempt(text,text,text,bigint)'),
                 to_regprocedure('iam.issue_session(text,text,text,text,text,integer,jsonb,text,bigint)'),
-                to_regprocedure('iam.change_password(text,text,text,text,jsonb,text,boolean,text,bigint,text)'))
+                to_regprocedure('iam.change_password(text,text,text,text,jsonb,text,boolean,text,bigint,text,bigint)'))
             AND p.prosecdef AND p.proowner='matrix_iam_owner'::regrole
             AND has_function_privilege('matrix_iam_api',p.oid,'EXECUTE')
             AND NOT has_function_privilege('matrix_iam_worker',p.oid,'EXECUTE')
@@ -2452,7 +2455,8 @@ RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $funct
         AND to_regprocedure('iam.consume_password_attempt(text,text,text,text,bigint)') IS NULL
         AND to_regprocedure('iam.issue_session(text,text,text,text,text,integer,jsonb)') IS NULL
         AND to_regprocedure('iam.change_password(text,text,text,text,jsonb,text,boolean)') IS NULL
-        AND to_regprocedure('iam.change_password(text,text,text,text,jsonb,text,boolean,text,bigint)') IS NULL,false)
+        AND to_regprocedure('iam.change_password(text,text,text,text,jsonb,text,boolean,text,bigint)') IS NULL
+        AND to_regprocedure('iam.change_password(text,text,text,text,jsonb,text,boolean,text,bigint,text)') IS NULL,false)
 $function$;
 
 CREATE OR REPLACE FUNCTION iam.current_policy_snapshot(tenant text, principal text)
@@ -3074,6 +3078,7 @@ DROP FUNCTION IF EXISTS iam.lookup_password(text,text);
 DROP FUNCTION IF EXISTS iam.change_password(text,text,text,text,jsonb);
 DROP FUNCTION IF EXISTS iam.change_password(text,text,text,text,jsonb,text,boolean);
 DROP FUNCTION IF EXISTS iam.change_password(text,text,text,text,jsonb,text,boolean,text,bigint);
+DROP FUNCTION IF EXISTS iam.change_password(text,text,text,text,jsonb,text,boolean,text,bigint,text);
 CREATE OR REPLACE FUNCTION iam.change_password(
     submitted_tenant_id text,
     submitted_principal_id text,
@@ -3084,7 +3089,8 @@ CREATE OR REPLACE FUNCTION iam.change_password(
     submitted_revoke_other_sessions boolean,
     submitted_attempt_id text,
     submitted_attempt_sequence bigint,
-    submitted_history_digest text
+    submitted_history_digest text,
+    submitted_settings_version bigint
 )
 RETURNS TABLE (changed_at timestamptz, bootstrap_file_retirable boolean)
 LANGUAGE plpgsql
@@ -3108,7 +3114,8 @@ BEGIN
        OR submitted_expected_password_hash = submitted_new_password_hash
        OR COALESCE(submitted_session_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR submitted_revoke_other_sessions IS NULL
-       OR COALESCE(submitted_history_digest,'') !~ '^sha256:[0-9a-f]{64}$' THEN
+       OR COALESCE(submitted_history_digest,'') !~ '^sha256:[0-9a-f]{64}$'
+       OR submitted_settings_version IS NULL OR submitted_settings_version NOT BETWEEN 1 AND 9007199254740991 THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'password mutation is invalid';
     END IF;
     PERFORM set_config('matrix.iam_tenant_id', submitted_tenant_id, true);
@@ -3116,6 +3123,9 @@ BEGIN
     -- and actual bearer Session as reset/recovery/logout and platform grants.
     previous_version:=iam.consume_password_attempt(submitted_tenant_id,submitted_principal_id,submitted_session_id,
         submitted_attempt_id,submitted_attempt_sequence,'PASSWORD_CHANGE',NULL);
+    IF submitted_settings_version IS DISTINCT FROM (SELECT a.security_settings_version FROM iam.accounts a WHERE a.id=submitted_tenant_id) THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='password settings changed concurrently';
+    END IF;
     SELECT * INTO subject FROM iam.principals AS principal
      WHERE principal.tenant_id = submitted_tenant_id AND principal.id = submitted_principal_id
        AND principal.principal_type = 'USER' AND principal.status = 'ACTIVE';
@@ -3552,6 +3562,7 @@ BEGIN
     RETURN true;
 END $function$;
 
+DROP FUNCTION IF EXISTS iam.create_user(text,text,text,text,text,text,text,jsonb);
 CREATE OR REPLACE FUNCTION iam.create_user(
     submitted_tenant_id text,
     submitted_principal_id text,
@@ -3560,7 +3571,8 @@ CREATE OR REPLACE FUNCTION iam.create_user(
     submitted_password_hash text,
     submitted_actor_principal_id text,
     submitted_decision_id text,
-    submitted_audit_event jsonb
+    submitted_audit_event jsonb,
+    submitted_settings_version bigint
 )
 RETURNS TABLE (created_at timestamptz, updated_at timestamptz)
 LANGUAGE plpgsql
@@ -3577,13 +3589,18 @@ BEGIN
        OR submitted_login_name COLLATE "C" !~ '^[a-z][a-z0-9._-]{2,63}$'
        OR length(submitted_display_name) NOT BETWEEN 1 AND 128
        OR btrim(submitted_display_name) <> submitted_display_name
-       OR submitted_password_hash NOT LIKE '$matrix-iam-v1$argon2id$v=19$%' THEN
+       OR submitted_password_hash NOT LIKE '$matrix-iam-v1$argon2id$v=19$%'
+       OR submitted_settings_version IS NULL OR submitted_settings_version NOT BETWEEN 1 AND 9007199254740991 THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'user mutation is invalid';
     END IF;
     PERFORM iam.assert_allowed_decision(
         submitted_tenant_id, submitted_actor_principal_id,
         submitted_decision_id, 'iam.user.create', 'ACCOUNT', submitted_tenant_id
     ,'INSTANCE',NULL);
+    PERFORM 1 FROM iam.accounts a WHERE a.id=submitted_tenant_id AND a.status='ACTIVE' FOR SHARE;
+    IF NOT FOUND OR submitted_settings_version IS DISTINCT FROM (SELECT a.security_settings_version FROM iam.accounts a WHERE a.id=submitted_tenant_id) THEN
+        RAISE EXCEPTION USING ERRCODE='P0002',MESSAGE='password settings changed concurrently';
+    END IF;
     PERFORM iam.assert_audit_event(
         submitted_audit_event, submitted_tenant_id,
         'iam.user.created', 'USER', submitted_principal_id, 'SUCCEEDED'
@@ -4102,13 +4119,13 @@ GRANT EXECUTE ON FUNCTION iam.record_authorization(
     text, text, jsonb, jsonb, jsonb, jsonb, integer, jsonb, jsonb
 ) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.change_password(
-    text, text, text, text, jsonb, text, boolean, text, bigint, text
+    text, text, text, text, jsonb, text, boolean, text, bigint, text, bigint
 ) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.revoke_session(
     text, text, text, text, jsonb, text
 ) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.create_user(
-    text, text, text, text, text, text, text, jsonb
+    text, text, text, text, text, text, text, jsonb, bigint
 ) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.create_policy_attachment(
     text, text, text, text, text, bigint, text, text, jsonb, text

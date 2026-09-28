@@ -128,13 +128,13 @@ BEGIN
             'EXECUTE'
        )
        OR NOT has_function_privilege(
-            'matrix_iam_api', 'iam.change_password(text,text,text,text,jsonb,text,boolean,text,bigint,text)', 'EXECUTE'
+            'matrix_iam_api', 'iam.change_password(text,text,text,text,jsonb,text,boolean,text,bigint,text,bigint)', 'EXECUTE'
        )
        OR NOT has_function_privilege(
             'matrix_iam_api', 'iam.revoke_session(text,text,text,text,jsonb,text)', 'EXECUTE'
        )
        OR NOT has_function_privilege(
-            'matrix_iam_api', 'iam.create_user(text,text,text,text,text,text,text,jsonb)', 'EXECUTE'
+            'matrix_iam_api', 'iam.create_user(text,text,text,text,text,text,text,jsonb,bigint)', 'EXECUTE'
        )
        OR NOT has_function_privilege(
             'matrix_iam_api', 'iam.create_policy_attachment(text,text,text,text,text,bigint,text,text,jsonb,text)', 'EXECUTE'
@@ -171,7 +171,7 @@ BEGIN
        )
        OR has_function_privilege(
             'matrix_iam_worker',
-            'iam.change_password(text,text,text,text,jsonb,text,boolean,text,bigint,text)',
+            'iam.change_password(text,text,text,text,jsonb,text,boolean,text,bigint,text,bigint)',
             'EXECUTE'
        )
        OR has_function_privilege(
@@ -294,7 +294,7 @@ DECLARE
     seed jsonb;
     entry regprocedure;
 BEGIN
-    IF (SELECT schema_version FROM iam.readiness())<>47 OR NOT iam.authorization_decision_contract_ready()
+    IF (SELECT schema_version FROM iam.readiness())<>48 OR NOT iam.authorization_decision_contract_ready()
         OR NOT iam.login_session_contract_ready()
         OR NOT iam.policy_attachment_contract_ready() THEN
         RAISE EXCEPTION 'IAM profile registry schema is invalid';

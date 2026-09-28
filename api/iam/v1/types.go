@@ -219,9 +219,6 @@ type StartChallengeTOTPEnrollmentRequest struct {
 	ChallengeCredential Secret `json:"challengeCredential"`
 }
 
-// AccountMFASettings governs ordinary USER login requirements, not whether
-// a particular USER has a factor or a Session actually authenticated with it.
-// Protected root/installation identities have their own non-tenant boundary.
 // AccountPasswordSettings governs new passwords, not the stored-secret
 // verifier, an authorization Policy or a selectable hashing profile.
 type AccountPasswordSettings struct {
@@ -233,6 +230,27 @@ type AccountPasswordSettings struct {
 	HistoryCount     int  `json:"historyCount"`
 }
 
+// PasswordRequirements describes this authenticated USER's current rules.
+// It is an observation, not a permit or another user's security settings.
+type PasswordRequirements struct {
+	APIVersion       string                  `json:"apiVersion"`
+	Kind             string                  `json:"kind"`
+	Password         AccountPasswordSettings `json:"password"`
+	MaximumLength    int                     `json:"maximumLength"`
+	MaximumUTF8Bytes int                     `json:"maximumUTF8Bytes"`
+	SettingsVersion  uint64                  `json:"settingsVersion"`
+	Source           string                  `json:"source"`
+}
+
+// Only the original live LOGIN/ENROLLMENT PASSWORD_CHANGE capability is
+// accepted. The path ID alone never authenticates or selects a USER.
+type ChallengePasswordRequirementsRequest struct {
+	ChallengeCredential Secret `json:"challengeCredential"`
+}
+
+// AccountMFASettings governs ordinary USER login requirements, not whether
+// a particular USER has a factor or a Session actually authenticated with it.
+// Protected root/installation identities have their own non-tenant boundary.
 type AccountMFASettings struct {
 	RequiredForUsers bool `json:"requiredForUsers"`
 }
@@ -243,7 +261,10 @@ type AccountSecuritySettings struct {
 	AccountID       AccountID          `json:"accountId"`
 	ResourceVersion uint64             `json:"resourceVersion"`
 	MFA             AccountMFASettings `json:"mfa"`
-	UpdatedAt       time.Time          `json:"updatedAt"`
+	// Missing only in immutable completions from before password settings.
+	// Current settings must always contain the complete explicit value.
+	Password  *AccountPasswordSettings `json:"password,omitempty"`
+	UpdatedAt time.Time                `json:"updatedAt"`
 }
 
 // SecuritySettingsUpdateIntent is the exact nonsecret target of a settings
@@ -251,13 +272,16 @@ type AccountSecuritySettings struct {
 type SecuritySettingsUpdateIntent struct {
 	ExpectedResourceVersion uint64             `json:"expectedResourceVersion"`
 	MFA                     AccountMFASettings `json:"mfa"`
+	// Only a retained CONSUMED proof may lack the original password segment.
+	Password *AccountPasswordSettings `json:"password,omitempty"`
 }
 
 type UpdateAccountSecuritySettingsRequest struct {
-	RequestID               string             `json:"requestId"`
-	StepUpID                string             `json:"stepUpId"`
-	ExpectedResourceVersion uint64             `json:"expectedResourceVersion"`
-	MFA                     AccountMFASettings `json:"mfa"`
+	RequestID               string                  `json:"requestId"`
+	StepUpID                string                  `json:"stepUpId"`
+	ExpectedResourceVersion uint64                  `json:"expectedResourceVersion"`
+	MFA                     AccountMFASettings      `json:"mfa"`
+	Password                AccountPasswordSettings `json:"password"`
 }
 
 // This is an immutable historical completion. CallerSessionEnded describes
