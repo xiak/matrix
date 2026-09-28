@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useTranslations } from "next-intl";
 import { ArrowRight, ShieldCheck } from "lucide-react";
-import { Alert, Badge, Button, ContentPage, Wizard } from "@ui/xiak";
+import { Alert, Button, ContentPage, Wizard } from "@ui/xiak";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
 import { includesPermissionManagement } from "../domain/policyDocument";
@@ -14,16 +14,18 @@ import styles from "./AccountAccessRenderer.module.css";
 
 type AssociationKind = "groups" | "policies";
 
-function AssociationChangeList({ label, status, ids, names }: {
+function AssociationChangeList({ label, ids, items }: {
   label: string;
-  status: "success" | "warning" | "neutral";
   ids: readonly string[];
-  names: ReadonlyMap<string, string>;
+  items: ReadonlyMap<string, { name: string; metadata: string }>;
 }) {
   if (!ids.length) return null;
   return <section className={styles.identitySection} aria-label={`${label} · ${ids.length}`}>
     <h3>{label} · {ids.length}</h3>
-    <ul className={styles.bindingList}>{ids.map((id) => <li key={id}><span>{names.get(id) ?? id}</span><Badge status={status}>{label}</Badge></li>)}</ul>
+    <ul className={styles.bindingList}>{ids.map((id) => <li key={id} className={styles.associationChangeItem}>
+      <strong>{items.get(id)?.name ?? id}</strong>
+      <small>{items.get(id)?.metadata ?? id}</small>
+    </li>)}</ul>
   </section>;
 }
 
@@ -41,7 +43,11 @@ export function UserAssociationWorkflow({ user, workspace, kind, onBack }: {
   const access = useAccountAccess();
   const clearWorkspaceError = access.clearWorkspaceError;
   const options = kind === "groups" ? workspace.groups : workspace.policies;
-  const names = new Map(options.map((option) => [option.id, option.name]));
+  const reviewItems = useMemo(() => new Map<string, { name: string; metadata: string }>(kind === "groups"
+    ? workspace.groups.map((group) => [group.id, { name: group.name, metadata: group.id }])
+    : workspace.policies.map((policy) => [policy.id, { name: policy.name,
+      metadata: `${policy.id} · ${t(policy.kind === "system" ? "system" : "custom")} · ${t("defaultVersion")} v${policy.defaultVersion}` }])),
+  [kind, t, workspace.groups, workspace.policies]);
   const [initial] = useState(() => kind === "groups"
     ? workspace.groups.filter((group) => group.memberIds.includes(user.id)).map((group) => group.id)
     : workspace.userPolicies[user.id] ?? []);
@@ -122,16 +128,16 @@ export function UserAssociationWorkflow({ user, workspace, kind, onBack }: {
     >
       {complete ? <Alert status="success">{savedHint}</Alert> : <div className={styles.stack}>
         <dl className={styles.facts}>
-          <div><dt>{t("userAssociationTarget")}</dt><dd>{user.loginName}</dd></div>
+          <div><dt>{t("userAssociationTarget")}</dt><dd>{user.loginName}<small className={styles.associationTargetId}>{user.id}</small></dd></div>
+          <div><dt>{t("userAssociationAccount")}</dt><dd>{workspace.accountId}</dd></div>
           <div><dt>{t("type")}</dt><dd>{t(kind === "groups" ? "userGroups" : "directPolicies")}</dd></div>
         </dl>
         {step === 0
           ? <><Alert status="info">{selectionHint}</Alert><WorkspaceSelection label={t(kind)} options={options} value={selection} onChange={setSelection} /></>
           : <section className={styles.stack} aria-label={p("reviewAssociations")}>
-            <p className={styles.note}>{t("userAssociationReviewHint")}</p>
-            <AssociationChangeList label={p("added")} status="success" ids={added} names={names} />
-            <AssociationChangeList label={p("removed")} status="warning" ids={removed} names={names} />
-            <AssociationChangeList label={p("unchanged")} status="neutral" ids={unchanged} names={names} />
+            <AssociationChangeList label={p("added")} ids={added} items={reviewItems} />
+            <AssociationChangeList label={p("removed")} ids={removed} items={reviewItems} />
+            <AssociationChangeList label={p("unchanged")} ids={unchanged} items={reviewItems} />
             {!changed ? <p className={styles.note}>{p("noChanges")}</p> : null}
           </section>}
         {includesHighPrivilege ? <Alert status="warning">{t("highPrivilege")}</Alert> : null}

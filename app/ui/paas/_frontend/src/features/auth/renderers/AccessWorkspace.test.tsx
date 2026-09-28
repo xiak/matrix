@@ -1341,6 +1341,12 @@ describe("CAM-style access workspace", () => {
     await user.click(within(workflow).getByRole("checkbox", { name: option }));
     await user.click(within(workflow).getByRole("button", { name: "下一步：审阅" }));
     expect(within(workflow).getByRole("region", { name: `${change} · 1` }).textContent).toContain(option);
+    expect(within(workflow).getByText("principal-lin")).toBeTruthy();
+    expect(within(workflow).getByText("org-xiak")).toBeTruthy();
+    if (kind === "policies") {
+      expect(within(workflow).getByRole("region", { name: `${change} · 1` }).textContent).toContain("policy-read · 预设策略 · 默认版本 v1");
+      expect(within(workflow).getAllByText("保存前核对新增、移除和保持的关系。其他授权来源不会因本次变更自动消失。")).toHaveLength(1);
+    }
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
     vi.mocked(repository.workspace!.execute).mockRejectedValueOnce(new Error("offline"));
     await user.click(within(workflow).getByRole("button", { name: "确认关联" }));

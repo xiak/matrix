@@ -3006,6 +3006,7 @@
     "manageUserGroups": "管理所属用户组",
     "manageUserPolicies": "管理直接关联策略",
     "userAssociationTarget": "目标用户",
+    "userAssociationAccount": "当前账号",
     "userGroupAssociationHint": "加入用户组会继承组内策略；移出用户组不会移除仍然存在的直接策略关联。",
     "userPolicyAssociationHint": "这里只管理该用户的直接策略关联。团队常规权限优先通过用户组，直接关联用于明确的例外。",
     "userAssociationReviewHint": "保存前核对新增、移除和保持的关系。其他授权来源不会因本次变更自动消失。",

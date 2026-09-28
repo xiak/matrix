@@ -71,6 +71,10 @@
 
 .detailWorkspace { display: grid; gap: var(--xiak-spacing-comfortable); min-width: 0; padding: var(--xiak-panel-padding); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); background: var(--xiak-color-bg-panel); }
 .associationWorkflow { min-width: 0; }
+.associationTargetId { display: block; margin-top: var(--xiak-spacing-narrow); color: var(--xiak-color-text-muted); font: var(--xiak-font-size-small)/1.5 var(--xiak-font-mono); }
+.bindingList li.associationChangeItem { display: grid; justify-content: stretch; gap: var(--xiak-spacing-micro); }
+.associationChangeItem strong { min-width: 0; color: var(--xiak-color-text-strong); font-weight: var(--xiak-font-weight-medium); overflow-wrap: anywhere; }
+.associationChangeItem small { color: var(--xiak-color-text-muted); line-height: 1.5; overflow-wrap: anywhere; }
 .detailWorkspace > .facts { padding-block: var(--xiak-spacing-tight); }
 
 .facts dt {

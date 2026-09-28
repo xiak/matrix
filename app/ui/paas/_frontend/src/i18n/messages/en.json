@@ -3006,6 +3006,7 @@
     "manageUserGroups": "Manage group memberships",
     "manageUserPolicies": "Manage direct policy associations",
     "userAssociationTarget": "Target user",
+    "userAssociationAccount": "Current account",
     "userGroupAssociationHint": "Joining a group inherits its policies. Leaving a group does not remove direct policy associations that still exist.",
     "userPolicyAssociationHint": "This manages direct policy associations only. Prefer groups for routine team access and reserve direct associations for explicit exceptions.",
     "userAssociationReviewHint": "Review added, removed and retained relationships before saving. Other authorization sources do not disappear automatically.",
