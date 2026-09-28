@@ -65,7 +65,7 @@
 
 当前主动解绑候选增加独立`authority-removal`与`authority-removal-security`源码lanes，十个专属数据库入口均来自原TOTP/设置测试owner，顺序运行当前解绑、可证明重绑及安全竞争，不添加开发历史版本矩阵。两项分别上限15分钟，保持原数据库限额、`max-parallel=1`和全lane失败关闭汇总。固定18bdcd9a的[Verification36382998585](https://github.com/xiak/matrix/actions/runs/36382998585)中，removal成功，但removal-security将六个fixture共用一个Go进程，在600.087s触发默认10分钟总超时；此时最后的Account fixture仅运行12秒，不能称其通过或据此断言死锁。后继改为原Authority/Sessions/Mutations和Factors/Recovery/Account两组串行调用，每组保持默认10分钟、各fixture原3/5分钟及job15分钟不变；六个精确入口和DSN无增删/重复，不放宽密码成本或真实OTP时间。独立更换lane的失败及修正归[009](FEAT-IAM-009-security-governance.md)；后继独立CI尚待验证，不继承420或本地通过状态。
 
-后继工作流本地解析及19段Bash语法通过；相对于原固定分组，六个精确测试名均只选中一次，DSN集合、资源、串行矩阵与job期限保持一致。语法和选择集合证明不代替修正后的独立运行结果。
+后继工作流本地解析及19段Bash语法通过；相对于原固定分组，六个精确测试名均只选中一次，DSN集合、资源、串行矩阵与job期限保持一致。旧18的CI最终failure，其中recovery-window于2026-09-28 07:18:50 UTC completed/success；此前三项失败不回填。修复固定在已推送ba17e702，累计HEAD3178b649f6e61c59786f6d0b14828ff3196876f3的[Verification36391053858](https://github.com/xiak/matrix/actions/runs/36391053858)已核对精确SHA及queued状态，尚未独立验收。语法和选择集合证明不代替修正后的独立运行结果。
 
 ### 运行验收要求
 
