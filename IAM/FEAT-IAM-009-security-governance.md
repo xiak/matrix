@@ -1057,6 +1057,10 @@ INSTALLATION USER附件的真实新增与撤销在现有Account→稳定USER锁�
 
 ##### S3b：新密码规则、真实历史与写入契约
 
+当前候选`0fa1ff82`的独立CI还在`TestIAMSecuritySettingsRacesPostgres/verify-settings-first-false`准备绑定因子时出现认证拒绝，不能归并成storage超时或标为通过。该fixture用数据库当前计数的前一时间片生成绑定码；若提交跨过下一个30秒边界，原码已经超出生产允许范围。修正仅在生成前观察真实数据库时间：距边界不足5秒时先等待下一窗口，不重试已拒绝命令、不改时钟、OTP窗口、尝试预算或原fixture期限。
+
+最终测试Go blob`6269f631bfff69a4fcff4c850c57dabb78dc5d33`在本任务独立PG18.4（1CPU/768MiB/PIDs192、无宿主端口）、Go1.26.5 runner（2CPU/1536MiB/PIDs256、GOMAXPROCS2/512MiB、串行race-p1）通过原四组：设置竞争108.39s、设置放宽106.67s、换绑与设置146.73s、解绑与设置17.18s，每组仍为原3分钟context。原十项设置竞争及其他双向场景、实际锁等待、失败无部分效果和重放检查保留；在原verify-first场景中，真实ENROLLMENT尝试已保留后持有至原码过期，返回认证拒绝且预算为REJECTED/已用1次、因子仍PENDING/未消费、无该请求成功事实，随后新的有效绑定继续原竞争。该场景同时断言测试取码器确实等过边界，不以mock时间或正向DML制造资格。独立CI、LIVE及签名组合仍未验收；CI串行分组归011，不把本地四组通过替代累计候选验收。
+
 本片已推送候选`2468b28c3606aa377fcf47dd3129991cb0495bb9`（IAM48/Audit27）；[Verification36428925813](https://github.com/xiak/matrix/actions/runs/36428925813)已核对精确SHA及最终failure，authority-storage/runtime/removal失败；恢复窗口于15:05:26UTC成功，汇总仍正确失败，不能接受该候选。Audit双schema门禁仍断言IAM47；原备份专用入口也要求47，合法IAM48快照被拒绝。runtime的`TestIAMTOTPBackupSnapshotPostgres`及removal的`remove-transaction`、`remove-required`日志均精确命中该备份核对；不能将这些失败解释为新的解绑权限问题。
 
 修复已固定推送`4c6cf48e4ac195abb71d1490dfd6e414f7c01912`，仅校正两处测试断言和原备份函数的版本，不移除readiness、函数形状或专用角色检查，不增加schema/profile编号。原门禁在新PG18.6数据库串行race-p1由失败转为通过：双authority存储5.89s、真实备份快照10.42s；实际备份/恢复程序及pg_dump/restore门禁25.77s通过，包含受限登录、完整快照、丢失回包和原意图重放。同一生产修复的固定`0fa1ff82`干净导出在另两个专属PG18.4数据库串行race-p1通过原解绑用例：`TestIAMTOTPRemovalPostgres/authenticator_recovery/remove-transaction`为29.57s、`TestIAMTOTPRemovalRequiredEnrollmentPostgres/authenticator_recovery/remove-required`为56.89s（包87.531s），保持原fixture期限和生产密码成本；历史解绑邮件因未配置Postfix而SKIP，不计邮箱投递证据。前一组合命令中缺DSN的Audit保留数据升级同样不计通过。

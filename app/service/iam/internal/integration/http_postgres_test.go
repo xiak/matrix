@@ -3805,20 +3805,127 @@ func proveIAMSecuritySettingsRaces(t *testing.T, ctx context.Context, database *
 				}
 				codeAt := func(seed iamv1.Secret, advance int64) iamv1.Secret {
 					t.Helper()
-					var step int64
-					if err := database.QueryRow(ctx, "SELECT floor(extract(epoch FROM clock_timestamp())/30)::bigint").Scan(&step); err != nil {
-						t.Fatal(err)
+					var now time.Time
+					for {
+						if err := database.QueryRow(ctx, "SELECT clock_timestamp()").Scan(&now); err != nil {
+							t.Fatal(err)
+						}
+						remaining := time.Unix((now.Unix()/30+1)*30, 0).Sub(now)
+						if advance != -1 || remaining >= 5*time.Second {
+							break
+						}
+						// A previous-step code expires at the very next boundary.
+						// Wait before generating it, never retry a rejected write or
+						// widen the production window/attempt/fixture deadlines.
+						timer := time.NewTimer(remaining + 10*time.Millisecond)
+						select {
+						case <-timer.C:
+						case <-ctx.Done():
+							timer.Stop()
+							t.Fatal("fresh enrollment code window did not arrive")
+						}
 					}
 					material := seed.CopyBytes()
 					defer clear(material)
-					value, err := hotp.GenerateCode(string(material), uint64(step+advance))
+					value, err := hotp.GenerateCode(string(material), uint64(now.Unix()/30+advance))
 					if err != nil {
 						t.Fatal(err)
 					}
 					return iamHTTPSecret(t, value)
 				}
+				var bindingCode iamv1.Secret
+				if mutation == "verify" && !settingsFirst {
+					// Reproduce the old fixture's previous-step boundary with real
+					// time and the real reservation, not a shifted clock or SQL
+					// credential mutation. Rejection must persist its spent attempt.
+					var now time.Time
+					for {
+						if err := database.QueryRow(ctx, "SELECT clock_timestamp()").Scan(&now); err != nil {
+							t.Fatal(err)
+						}
+						remaining := time.Unix((now.Unix()/30+1)*30, 0).Sub(now)
+						if remaining >= 3*time.Second && remaining <= 5*time.Second {
+							break
+						}
+						delay := remaining - 5*time.Second
+						if delay <= 0 {
+							delay += 30 * time.Second
+						}
+						timer := time.NewTimer(delay)
+						select {
+						case <-timer.C:
+						case <-ctx.Done():
+							timer.Stop()
+							t.Fatal("bounded boundary reservation window did not arrive")
+						}
+					}
+					boundary := time.Unix((now.Unix()/30+1)*30, 0).UTC()
+					material := enrollment.Provisioning.Seed.CopyBytes()
+					value, err := hotp.GenerateCode(string(material), uint64(now.Unix()/30-1))
+					clear(material)
+					if err != nil {
+						t.Fatal(err)
+					}
+					stale := iamHTTPSecret(t, value)
+					if _, err := authority.VerifyTOTP(enrollment.Provisioning.Seed, stale, boundary, -1); !errors.Is(err, authority.ErrTOTPRejected) {
+						t.Fatal("boundary fixture code unexpectedly collides with a future step")
+					}
+					reached, release := make(chan struct{}), make(chan struct{})
+					defer func() {
+						select {
+						case <-release:
+						default:
+							close(release)
+						}
+					}()
+					delayed, err := identityaccess.NewAuthority(authenticationReadBarrier{Repository: repo, reached: reached, release: release, totpPurpose: "ENROLLMENT"}, config)
+					if err != nil {
+						t.Fatal(err)
+					}
+					done := make(chan error, 1)
+					go func() {
+						_, err := delayed.ConfirmTOTPEnrollment(ctx, access.Credential, enrollment.Enrollment.ID,
+							iamv1.ConfirmTOTPEnrollmentRequest{RequestID: "race-expired-enroll-confirm", Code: stale})
+						done <- err
+					}()
+					select {
+					case <-reached:
+					case err := <-done:
+						t.Fatal("boundary confirmation did not reserve its actual attempt", err)
+					case <-ctx.Done():
+						t.Fatal("boundary reservation did not arrive")
+					}
+					if err := database.QueryRow(ctx, "SELECT clock_timestamp()").Scan(&now); err != nil || !now.Before(boundary) {
+						t.Fatal("boundary fixture did not reserve before the code expired", err)
+					}
+					bindingCode = codeAt(enrollment.Provisioning.Seed, -1)
+					if err := database.QueryRow(ctx, "SELECT clock_timestamp()").Scan(&now); err != nil || now.Before(boundary) {
+						t.Fatal("fixture reused a nearly expired previous-step code", err)
+					}
+					close(release)
+					select {
+					case err := <-done:
+						if !errors.Is(err, identityaccess.ErrUnauthenticated) {
+							t.Fatal("previous-step code survived its actual boundary", err)
+						}
+					case <-ctx.Done():
+						t.Fatal("expired confirmation did not finish")
+					}
+					var rejected bool
+					if err := database.QueryRow(ctx, `SELECT a.state='REJECTED' AND a.used_attempts=1
+						AND f.state='PENDING' AND f.last_consumed_step=-1
+						AND NOT EXISTS(SELECT 1 FROM iam.audit_outbox o WHERE o.tenant_id=a.tenant_id
+						  AND o.event_document->>'requestId'='race-expired-enroll-confirm')
+						FROM iam.totp_attempts a JOIN iam.totp_authenticators f ON f.tenant_id=a.tenant_id AND f.id=a.reference_id
+						WHERE a.tenant_id=$1 AND a.user_id=$2`, account.ID, access.Session.PrincipalID).Scan(&rejected); err != nil || !rejected {
+						t.Fatal("expired code bound a factor, refunded its attempt, or emitted success", err)
+					}
+				}
+				if !bindingCode.Present() {
+					bindingCode = codeAt(enrollment.Provisioning.Seed, -1)
+				}
 				bound, err := first.ConfirmTOTPEnrollment(ctx, access.Credential, enrollment.Enrollment.ID,
-					iamv1.ConfirmTOTPEnrollmentRequest{RequestID: "race-enroll-confirm", Code: codeAt(enrollment.Provisioning.Seed, -1)})
+					iamv1.ConfirmTOTPEnrollmentRequest{RequestID: "race-enroll-confirm", Code: bindingCode})
 				if err != nil || len(bound.RecoveryCodes) != 10 {
 					t.Fatal("bind actual race authenticator", err)
 				}
