@@ -897,6 +897,19 @@ old positive receipts, rewriting an old snapshot, or treating retained
 completion lookup as new recovery authority. This source experiment does
 not grant signed cross-profile installation compatibility.
 
+The Account-settings verification race extension `REUSE`s fixed
+`18bdcd9aada6c03fbab7d701884306f12dba4ed2`'s existing integration owner,
+real Account/USER enrollment, purpose-bound settings proof and observed
+database blocking barrier. `ADAPT` adds the two true-to-false/login-verification
+orders in the same owner and shares its ordinary-USER preparation with
+the existing factor cases. The new real-window entry retains a three-minute
+deadline without enlarging the original eight-case fixture. `REJECT` direct
+positive settings DML, expired
+challenge rejection as a substitute for version rejection, or treating
+lowering an Account requirement as removal of a USER's active factor.
+No new schema, historical test matrix, framework or runtime acceptance is
+inherited from the donor candidate.
+
 The current-security recovery target in IAM/009 `REUSE`s fixed
 `e24dbdae6b4ea420365a4527a0bd89b16e0d720f`'s purpose-limited
 close/reconcile/reopen entrypoint, dedicated database role, exclusive recovery

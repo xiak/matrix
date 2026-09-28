@@ -3730,7 +3730,6 @@ func TestIAMSecuritySettingsPostgres(t *testing.T) {
 func proveIAMSecuritySettingsRaces(t *testing.T, ctx context.Context, database *pgx.Conn, repo *iampostgres.Repository, first *identityaccess.Authority, root iamv1.Secret, config identityaccess.Config, mode string) {
 	t.Helper()
 	replacementsOnly, removalsOnly := mode == "replacement-settings", mode == "removal-settings"
-	separateFactorUser := replacementsOnly || removalsOnly
 	second, err := identityaccess.NewAuthority(repo, config)
 	if err != nil {
 		t.Fatal(err)
@@ -3751,8 +3750,13 @@ func proveIAMSecuritySettingsRaces(t *testing.T, ctx context.Context, database *
 		mutations = []string{"replace-tighten", "replace-loosen"}
 	} else if removalsOnly {
 		mutations = []string{"remove-tighten"}
+	} else if mode == "settings-loosening" {
+		mutations = []string{"verify-loosen"}
 	}
 	for _, mutation := range mutations {
+		verificationMutation := mutation == "verify" || mutation == "verify-loosen"
+		separateFactorUser := replacementsOnly || removalsOnly || verificationMutation
+		loosening := strings.HasSuffix(mutation, "-loosen")
 		for _, settingsFirst := range []bool{false, true} {
 			name := fmt.Sprintf("%s-settings-first-%t", mutation, settingsFirst)
 			t.Run(name, func(t *testing.T) {
@@ -3878,7 +3882,7 @@ func proveIAMSecuritySettingsRaces(t *testing.T, ctx context.Context, database *
 					peerEnrollment, err = first.StartTOTPEnrollment(ctx, peerAccess.Credential, iamv1.StartTOTPEnrollmentRequest{
 						Password: current, ExpectedFactorRevision: 1, RequestID: "race-peer-enroll"})
 					if err != nil || peerEnrollment.Provisioning == nil {
-						t.Fatal("prepare replacement peer factor", err)
+						t.Fatal("prepare ordinary peer factor", err)
 					}
 					if _, err := first.ConfirmTOTPEnrollment(ctx, peerAccess.Credential, peerEnrollment.Enrollment.ID,
 						iamv1.ConfirmTOTPEnrollmentRequest{RequestID: "race-peer-confirm", Code: codeAt(peerEnrollment.Provisioning.Seed, -1)}); err != nil {
@@ -3908,7 +3912,7 @@ func proveIAMSecuritySettingsRaces(t *testing.T, ctx context.Context, database *
 					}
 				}
 				expectedSettings, required := int64(1), true
-				if mutation == "replace-loosen" {
+				if loosening {
 					// Establish the stronger setting through its real protected
 					// command, never by writing a positive authority row directly.
 					initialProof, err := first.StartStepUp(ctx, session.Credential, iamv1.StartStepUpRequest{RequestID: "race-initialize-settings",
@@ -3943,7 +3947,7 @@ func proveIAMSecuritySettingsRaces(t *testing.T, ctx context.Context, database *
 					expectedSettings, required = 2, false
 				}
 				proofCode := codeAt(enrollment.Provisioning.Seed, 1)
-				if mutation == "replace-loosen" {
+				if loosening {
 					proofCode = freshCode(enrollment.Enrollment.ID, enrollment.Provisioning.Seed)
 				}
 				proof, err := first.StartStepUp(ctx, session.Credential, iamv1.StartStepUpRequest{RequestID: "race-settings",
@@ -4036,40 +4040,10 @@ func proveIAMSecuritySettingsRaces(t *testing.T, ctx context.Context, database *
 					if err != nil {
 						t.Fatal(err)
 					}
-				case "verify":
+				case "verify", "verify-loosen":
 					// An ordinary USER must obey the changed Account requirement;
 					// this is not the protected root's enrollment exemption.
-					peer, err := first.CreateUser(ctx, session.Credential, iamv1.CreateUserRequest{LoginName: "settings-peer", DisplayName: "Settings peer",
-						InitialPassword: initial, RequestID: "race-peer-create"})
-					if err != nil {
-						t.Fatal(err)
-					}
-					realm := peer.LoginName + "@" + string(peer.AccountID)
-					peerAccess, err := first.Login(ctx, iamv1.LoginRequest{LoginName: realm, Password: initial, RequestID: "race-peer-initial-login"})
-					if err != nil {
-						t.Fatal(err)
-					}
-					if _, err := first.ChangePassword(ctx, peerAccess.Credential, iamv1.ChangePasswordRequest{CurrentPassword: initial, NewPassword: current, RequestID: "race-peer-password"}); err != nil {
-						t.Fatal(err)
-					}
-					peerContact, err := first.StartNotificationVerification(ctx, peerAccess.Credential,
-						iamv1.StartNotificationContactVerificationRequest{Email: "peer-" + name + "@matrix.test", Password: current, RequestID: "race-peer-contact"})
-					if err != nil {
-						t.Fatal(err)
-					}
-					if _, err := first.ConfirmNotificationContact(ctx, peerAccess.Credential, peerContact.ID, iamv1.ConfirmNotificationContactVerificationRequest{
-						Code: iamNotificationStorageCode(t, ctx, database, protector, peerContact), RequestID: "race-peer-contact-confirm"}); err != nil {
-						t.Fatal(err)
-					}
-					peerEnrollment, err := first.StartTOTPEnrollment(ctx, peerAccess.Credential,
-						iamv1.StartTOTPEnrollmentRequest{Password: current, ExpectedFactorRevision: 1, RequestID: "race-peer-enroll"})
-					if err != nil || peerEnrollment.Provisioning == nil {
-						t.Fatal("prepare peer factor", err)
-					}
-					if _, err := first.ConfirmTOTPEnrollment(ctx, peerAccess.Credential, peerEnrollment.Enrollment.ID,
-						iamv1.ConfirmTOTPEnrollmentRequest{RequestID: "race-peer-confirm", Code: codeAt(peerEnrollment.Provisioning.Seed, -1)}); err != nil {
-						t.Fatal(err)
-					}
+					realm := factorPeer.LoginName + "@" + string(factorPeer.AccountID)
 					peerFactor = peerEnrollment.Enrollment.ID
 					if err := database.QueryRow(ctx, `SELECT last_consumed_step FROM iam.totp_authenticators WHERE tenant_id=$1 AND id=$2`, account.ID, peerFactor).Scan(&priorStep); err != nil {
 						t.Fatal(err)
@@ -4128,7 +4102,7 @@ func proveIAMSecuritySettingsRaces(t *testing.T, ctx context.Context, database *
 					}
 				}
 				wantTrailing := http.StatusUnauthorized
-				if (mutation == "verify" || separateFactorUser) && !settingsFirst {
+				if separateFactorUser && !settingsFirst {
 					wantTrailing = http.StatusOK
 				}
 				if results[0].Code != http.StatusOK || results[1].Code != wantTrailing {
@@ -4142,11 +4116,11 @@ func proveIAMSecuritySettingsRaces(t *testing.T, ctx context.Context, database *
 					wantGeneration++
 				} else if mutation == "recovery" {
 					consumedCodes, wantRevision, wantEnrollment = 1, 3, "RECOVERY_REQUIRED"
-				} else if mutation == "verify" || separateFactorUser {
+				} else if separateFactorUser {
 					settingsCount, proofState = 1, "CONSUMED"
 				}
 				var issued iamv1.LoginResponse
-				if mutation == "verify" && !settingsFirst {
+				if verificationMutation && !settingsFirst {
 					if iamv1.DecodeRequest(results[0].Body, &issued) != nil || issued.Outcome != iamv1.LoginAuthenticated || !issued.Credential.Present() {
 						t.Fatal("verification-first did not actually issue a Session")
 					}
@@ -4212,13 +4186,17 @@ func proveIAMSecuritySettingsRaces(t *testing.T, ctx context.Context, database *
 							t.Fatal("settings/removal race revived the old peer Session", result.Code)
 						}
 					}
-					if mutation == "verify" {
+					if verificationMutation {
 						if err := database.QueryRow(ctx, `SELECT
 							(SELECT CASE WHEN $3 THEN state='PENDING' AND session_id IS NULL ELSE state='CONSUMED' AND session_id=$4 END
+								AND security_settings_version=$7 AND expires_at>clock_timestamp()
 								FROM iam.authentication_challenges WHERE tenant_id=$1 AND id=$2)
 							AND (SELECT CASE WHEN $3 THEN last_consumed_step=$6 ELSE last_consumed_step>$6 END
-								FROM iam.totp_authenticators WHERE tenant_id=$1 AND id=$5)`, account.ID, verification.Challenge.ID,
-							settingsFirst, string(issued.Session.ID), peerFactor, priorStep).Scan(&intact); err != nil || !intact {
+								FROM iam.totp_authenticators WHERE tenant_id=$1 AND id=$5)
+							AND (SELECT count(*)=CASE WHEN $3 THEN 0 ELSE 1 END FROM iam.sessions
+								WHERE tenant_id=$1 AND principal_id=$8 AND security_settings_version=$7 AND authentication_method='PASSWORD_TOTP'
+								AND mfa_revision=2)`, account.ID, verification.Challenge.ID,
+							settingsFirst, string(issued.Session.ID), peerFactor, priorStep, expectedSettings, factorPeer.ID).Scan(&intact); err != nil || !intact {
 							t.Fatal("settings race consumed a rejected challenge or changed original verification evidence", err)
 						}
 						if issued.Credential.Present() {
@@ -4250,7 +4228,7 @@ func proveIAMSecuritySettingsRaces(t *testing.T, ctx context.Context, database *
 				if result := invoke(1, http.MethodPut, settings.path, session.Credential, settings.body); result.Code != http.StatusUnauthorized {
 					t.Fatal("replay revived old Session or credential-bound proof", result.Code)
 				}
-				if settingsFirst || mutation == "verify" || separateFactorUser {
+				if settingsFirst || separateFactorUser {
 					if result := invoke(1, other.method, other.path, other.bearer, other.body); result.Code != http.StatusUnauthorized {
 						t.Fatal("replay revived old mutation qualification", result.Code)
 					}
@@ -4259,6 +4237,55 @@ func proveIAMSecuritySettingsRaces(t *testing.T, ctx context.Context, database *
 					t.Fatal("replay changed caller qualification", result.Code)
 				}
 				assertState()
+				if verificationMutation && loosening {
+					// Lowering the Account requirement cannot remove this USER's
+					// actual factor. Prove a fresh positive login under version 3,
+					// not just rejection of every old credential.
+					fresh, err := second.Login(ctx, iamv1.LoginRequest{
+						LoginName: factorPeer.LoginName + "@" + string(account.ID), Password: current, RequestID: "race-current-login"})
+					if err != nil || fresh.Challenge == nil || fresh.Credential.Present() || fresh.Challenge.NextStep != "TOTP" {
+						t.Fatal("loosening bypassed the current bound factor", err)
+					}
+					body, err := iamv1.EncodeVerifyAuthenticationChallengeRequest(iamv1.VerifyAuthenticationChallengeRequest{
+						RequestID: "race-current-verify", ChallengeCredential: fresh.ChallengeCredential,
+						Code: freshCode(peerFactor, peerEnrollment.Provisioning.Seed)})
+					if err != nil {
+						t.Fatal(err)
+					}
+					response := invoke(1, http.MethodPost, "/v1/auth/challenges/"+fresh.Challenge.ID+":verify", iamv1.Secret{}, body)
+					clear(body)
+					var currentLogin iamv1.LoginResponse
+					if response.Code != http.StatusOK || iamv1.DecodeRequest(response.Body, &currentLogin) != nil || !currentLogin.Credential.Present() {
+						t.Fatal("current MFA login failed after loosening", response.Code)
+					}
+					clear(response.Body.Bytes())
+					var intact bool
+					if err := database.QueryRow(ctx, `SELECT
+						(SELECT principal_id=$2 AND security_settings_version=3 AND authentication_method='PASSWORD_TOTP' AND mfa_revision=2
+						 FROM iam.sessions WHERE tenant_id=$1 AND id=$3)
+						AND (SELECT enrollment_state='BOUND' AND revision=2 AND factor_id=$4 FROM iam.user_mfa_states WHERE tenant_id=$1 AND user_id=$2)
+						AND (SELECT state='ACTIVE' FROM iam.totp_authenticators WHERE tenant_id=$1 AND id=$4)
+						AND (SELECT count(*)=1 FROM iam.mfa_recovery_batches WHERE tenant_id=$1 AND user_id=$2 AND factor_id=$4 AND revoked_at IS NULL)
+						AND (SELECT count(*)=2 FROM iam.account_security_settings_changes WHERE tenant_id=$1)
+						AND (SELECT count(*)=2 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.security-settings.updated')
+						AND (SELECT count(*)=2 FROM iam.security_notifications WHERE tenant_id=$1 AND kind='SECURITY_SETTINGS_CHANGED')`,
+						account.ID, factorPeer.ID, currentLogin.Session.ID, peerFactor).Scan(&intact); err != nil || !intact {
+						t.Fatal("fresh login changed retained factor or Account history", err)
+					}
+					for index := range handlers {
+						if result := invoke(index, http.MethodGet, "/v1/auth/me", currentLogin.Credential, nil); result.Code != http.StatusOK {
+							t.Fatal("current MFA qualification unavailable across authorities", result.Code)
+						}
+						if result := invoke(index, other.method, other.path, other.bearer, other.body); result.Code != http.StatusUnauthorized {
+							t.Fatal("fresh authentication revived the old challenge", result.Code)
+						}
+						if issued.Credential.Present() {
+							if result := invoke(index, http.MethodGet, "/v1/auth/me", issued.Credential, nil); result.Code != http.StatusUnauthorized {
+								t.Fatal("fresh authentication upgraded the old Session", result.Code)
+							}
+						}
+					}
+				}
 			})
 		}
 	}
@@ -4266,6 +4293,10 @@ func proveIAMSecuritySettingsRaces(t *testing.T, ctx context.Context, database *
 
 func TestIAMSecuritySettingsRacesPostgres(t *testing.T) {
 	testIAMTOTPEnrollmentPostgres(t, "settings-races")
+}
+
+func TestIAMSecuritySettingsLooseningPostgres(t *testing.T) {
+	testIAMTOTPEnrollmentPostgres(t, "settings-loosening")
 }
 
 func TestIAMTOTPRemovalSettingsPostgres(t *testing.T) {
@@ -4327,6 +4358,11 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 		environment, prefix, lifetime = "MATRIX_IAM_TOTP_REPLACEMENT_MUTATIONS_POSTGRES_TEST_DSN", "matrix_iam_totp_replacement_mutations_", 5*time.Minute
 	} else if mode == "settings-races" {
 		environment, prefix, lifetime = "MATRIX_IAM_SECURITY_SETTINGS_RACES_POSTGRES_TEST_DSN", "matrix_iam_settings_races_", 3*time.Minute
+	} else if mode == "settings-loosening" {
+		// Each order crosses real OTP windows to establish the stronger
+		// setting and earn new login/proof under it. Do not consume the
+		// original eight-race fixture's budget or extend its deadline.
+		environment, prefix, lifetime = "MATRIX_IAM_SECURITY_SETTINGS_LOOSENING_POSTGRES_TEST_DSN", "matrix_iam_settings_loosening_", 3*time.Minute
 	}
 	dsn := os.Getenv(environment)
 	if dsn == "" {
@@ -4396,7 +4432,7 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 	if _, err := service.ChangePassword(ctx, login.Credential, iamv1.ChangePasswordRequest{CurrentPassword: document.Administrator.Password, NewPassword: password, RequestID: "mfa-password"}); err != nil {
 		t.Fatal(err)
 	}
-	if mode == "settings-races" || mode == "replacement-settings" || mode == "removal-settings" {
+	if mode == "settings-races" || mode == "settings-loosening" || mode == "replacement-settings" || mode == "removal-settings" {
 		proveIAMSecuritySettingsRaces(t, ctx, admin, repo, service, login.Credential,
 			identityaccess.Config{CursorKey: bytes.Repeat([]byte{0x39}, 32), AccessKeyWrapping: &wrapping, TOTPKeyring: &totp, EmailVerificationKeyring: &mail}, mode)
 		if totpFailureTrace.deadlock.Load() != 0 {
