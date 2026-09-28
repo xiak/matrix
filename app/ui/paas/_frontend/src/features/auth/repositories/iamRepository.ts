@@ -2,6 +2,7 @@ import type { LoginResult } from "../domain/session";
 import type { Account, AccountCommand, AccountIdentity, AccountUser, DirectoryPage } from "../domain/accounts";
 import type {
   AuthenticatorState,
+  EnrollmentChallengeState,
   NotificationContact,
   NotificationContactVerification,
   TOTPEnrollment,
@@ -40,6 +41,11 @@ export interface IamRepository {
       nextStep: "REAUTHENTICATE";
       changedAt: string;
     }>;
+    inspectFirstEnrollment?(command: { challengeId: string; challengeCredential: string }): Promise<EnrollmentChallengeState>;
+    startFirstContact?(command: { challengeId: string; challengeCredential: string; email: string; requestId: string }): Promise<NotificationContactVerification>;
+    confirmFirstContact?(command: { challengeId: string; challengeCredential: string; verificationId: string; code: string; requestId: string }): Promise<NotificationContactVerification>;
+    startFirstTOTP?(command: { challengeId: string; challengeCredential: string; requestId: string }): Promise<TOTPEnrollmentStart>;
+    confirmFirstTOTP?(command: { challengeId: string; challengeCredential: string; enrollmentId: string; code: string; requestId: string }): Promise<TOTPEnrollmentConfirmation>;
   };
   changePassword(
     credential: string,

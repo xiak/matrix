@@ -1,3 +1,5 @@
+import type { EnrollmentAuthenticationChallenge } from "./session";
+
 export type NotificationContact =
   | {
       accountId: string;
@@ -45,6 +47,7 @@ export type AuthenticatorState =
 export type TOTPEnrollment = {
   id: string;
   requestId: string;
+  purpose?: "INITIAL";
   factorRevision: number;
   state: "PENDING" | "CONFIRMED" | "CANCELLED" | "EXPIRED";
   createdAt: string;
@@ -72,4 +75,20 @@ export type TOTPEnrollmentConfirmation = {
 export type EnrollmentRecoveryMaterial = {
   enrollmentId: string;
   recoveryCodes: string[];
+};
+
+export type EnrollmentChallengeState = {
+  challenge: EnrollmentAuthenticationChallenge;
+  notificationContact?: NotificationContact;
+  enrollment?: TOTPEnrollment & { purpose: "INITIAL"; state: "PENDING"; factorRevision: 1 };
+};
+
+export type FirstEnrollmentProgress = {
+  status: "INSPECTING" | "CONTACT_REQUIRED" | "CONTACT_PENDING" | "TOTP_READY" | "TOTP_PENDING"
+    | "MATERIAL_LOST" | "OUTCOME_UNKNOWN" | "UNAVAILABLE";
+  busy: boolean;
+  state: EnrollmentChallengeState | null;
+  verification: NotificationContactVerification | null;
+  provisioning: { seed: string; uri: string } | null;
+  enrollmentId: string | null;
 };

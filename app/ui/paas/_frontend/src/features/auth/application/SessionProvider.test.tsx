@@ -4,6 +4,7 @@ import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import type { IamRepository } from "../repositories/iamRepository";
 import { SessionProvider, useSession, useSessionCredential } from "./SessionProvider";
 import { usePersonalSecurity } from "./PersonalSecurityProvider";
+import { FirstEnrollmentForm } from "../renderers/FirstEnrollmentForm";
 
 const secretCredential = "must-not-enter-browser-storage-or-dom";
 const challengeCredential = "must-not-become-a-session-bearer";
@@ -21,6 +22,12 @@ function challenged(nextStep: "TOTP" | "PASSWORD_CHANGE" = "TOTP", credential = 
   };
 }
 
+function firstEnrollment(nextStep: "ENROLLMENT" | "PASSWORD_CHANGE" = "ENROLLMENT") {
+  return { outcome: "CHALLENGE_REQUIRED" as const,
+    challenge: { id: "challenge-first", purpose: "ENROLLMENT" as const, nextStep, expiresAt: "2099-08-26T20:00:00Z" },
+    challengeCredential };
+}
+
 function Probe() {
   const session = useSession();
   const personalSecurity = usePersonalSecurity();
@@ -33,9 +40,14 @@ function Probe() {
       <span data-testid="has-credential">{String(hasCredential)}</span>
       <span data-testid="has-challenge">{String(session.challenge !== null)}</span>
       <span data-testid="recovery-count">{session.enrollmentRecovery?.recoveryCodes.length ?? 0}</span>
+      <span data-testid="first-enrollment">{session.firstEnrollment?.status ?? "none"}</span>
       <button onClick={() => void session.login("admin", "password")} type="button">login</button>
       <button onClick={() => void session.verifyAuthenticationChallenge("123456")} type="button">verify</button>
       <button onClick={() => void session.changeChallengePassword("Changed-Admin-Password-73!")} type="button">challenge-password</button>
+      <button onClick={() => void session.startFirstEnrollmentContact("first@example.test")} type="button">first-contact</button>
+      <button onClick={() => void session.confirmFirstEnrollmentContact("12345678")} type="button">confirm-contact</button>
+      <button onClick={() => void session.startFirstEnrollmentFactor()} type="button">first-factor</button>
+      <button onClick={() => void session.confirmFirstEnrollmentFactor("123456")} type="button">confirm-factor</button>
       <button onClick={session.cancelAuthenticationChallenge} type="button">cancel-challenge</button>
       <button onClick={session.acknowledgeReauthentication} type="button">acknowledge</button>
       <button onClick={session.acknowledgeEnrollmentRecovery} type="button">acknowledge-recovery</button>
@@ -108,6 +120,95 @@ afterEach(() => {
 });
 
 describe("SessionProvider", () => {
+  it("completes first enrollment without issuing a session until fresh login", async () => {
+    const source = repository();
+    source.login = vi.fn().mockResolvedValue(firstEnrollment());
+    const contact = { accountId: "account-one", userId: "user-one", state: "NONE" as const, resourceVersion: 0 as const,
+      pendingVerificationId: null };
+    const verifiedContact = { ...contact, state: "VERIFIED" as const, resourceVersion: 1, email: "first@example.test",
+      verifiedAt: "2026-08-26T12:02:00.000000Z" };
+    const verification = { id: "verification-one", accountId: "account-one", userId: "user-one", email: "first@example.test",
+      requestId: "first-contact", state: "PENDING" as const, issuedAt: "2026-08-26T12:00:00Z",
+      expiresAt: "2026-08-26T12:10:00Z", completedAt: null,
+      delivery: { state: "PENDING" as const, attempts: 0, lastOutcome: null, lastSmtpCode: null, updatedAt: "2026-08-26T12:00:00Z" } };
+    const enrollment = { id: "enrollment-one", requestId: "first-factor", purpose: "INITIAL" as const,
+      factorRevision: 1, state: "PENDING" as const, createdAt: "2026-08-26T12:03:00Z",
+      expiresAt: "2026-08-26T12:08:00Z", completedAt: null };
+    source.authenticationChallenges!.inspectFirstEnrollment = vi.fn().mockResolvedValueOnce({
+      challenge: firstEnrollment().challenge, notificationContact: contact
+    }).mockResolvedValueOnce({ challenge: firstEnrollment().challenge, notificationContact: verifiedContact });
+    source.authenticationChallenges!.startFirstContact = vi.fn().mockResolvedValue(verification);
+    source.authenticationChallenges!.confirmFirstContact = vi.fn().mockResolvedValue({ ...verification, state: "VERIFIED", completedAt: "2026-08-26T12:02:00Z" });
+    source.authenticationChallenges!.startFirstTOTP = vi.fn().mockResolvedValue({ outcome: "APPLIED", enrollment,
+      provisioning: { seed: "one-time-seed", uri: "otpauth://totp/Matrix:test?secret=one-time-seed" } });
+    const recoveryCodes = Array.from({ length: 10 }, (_, index) => `private-code-${index}`);
+    source.authenticationChallenges!.confirmFirstTOTP = vi.fn().mockResolvedValue({
+      enrollment: { ...enrollment, state: "CONFIRMED", completedAt: "2026-08-26T12:04:00Z" },
+      nextStep: "REAUTHENTICATE", recoveryCodes
+    });
+    const screen = render(<SessionProvider repository={source}><Probe /><FirstEnrollmentForm /></SessionProvider>);
+    await act(async () => fireEvent.click(screen.getByText("login")));
+    await waitFor(() => expect(screen.getByTestId("first-enrollment").textContent).toBe("CONTACT_REQUIRED"));
+    expect(screen.getByRole("heading", { name: "首次设置身份验证器" })).toBeTruthy();
+    expect(screen.getByLabelText("通知邮箱")).toBeTruthy();
+    expect(screen.getByTestId("has-credential").textContent).toBe("false");
+    await act(async () => fireEvent.click(screen.getByText("first-contact")));
+    expect(screen.getByTestId("first-enrollment").textContent).toBe("CONTACT_PENDING");
+    await act(async () => fireEvent.click(screen.getByText("confirm-contact")));
+    expect(screen.getByTestId("first-enrollment").textContent).toBe("TOTP_READY");
+    await act(async () => fireEvent.click(screen.getByText("first-factor")));
+    expect(screen.getByTestId("first-enrollment").textContent).toBe("TOTP_PENDING");
+    expect(screen.getByLabelText("身份验证器密钥").textContent).toBe("one-time-seed");
+    await act(async () => fireEvent.click(screen.getByText("confirm-factor")));
+    expect(screen.getByTestId("phase").textContent).toBe("recovery-codes-required");
+    expect(screen.getByTestId("has-credential").textContent).toBe("false");
+    expect(screen.getByTestId("recovery-count").textContent).toBe("10");
+    expect(screen.container.textContent).not.toContain(challengeCredential);
+    expect(screen.container.textContent).not.toContain("one-time-seed");
+    expect(screen.container.textContent).not.toContain(recoveryCodes[0]);
+    expect(localStorage.length + sessionStorage.length).toBe(0);
+    await act(async () => fireEvent.click(screen.getByText("acknowledge-recovery")));
+    expect(screen.getByTestId("phase").textContent).toBe("reauthentication-required");
+  });
+
+  it("fails closed when the first-factor secret was already issued or its result is unknown", async () => {
+    const source = repository();
+    source.login = vi.fn().mockResolvedValue(firstEnrollment());
+    source.authenticationChallenges!.inspectFirstEnrollment = vi.fn().mockResolvedValue({
+      challenge: firstEnrollment().challenge,
+      notificationContact: { accountId: "account-one", userId: "user-one", state: "VERIFIED", resourceVersion: 1,
+        email: "first@example.test", verifiedAt: "2026-08-26T12:02:00Z", pendingVerificationId: null }
+    });
+    source.authenticationChallenges!.startFirstTOTP = vi.fn().mockResolvedValue({ outcome: "EQUAL_REPLAY",
+      enrollment: { id: "enrollment-one", requestId: "first-factor", purpose: "INITIAL", factorRevision: 1,
+        state: "PENDING", createdAt: "2026-08-26T12:03:00Z", expiresAt: "2026-08-26T12:08:00Z", completedAt: null } });
+    const screen = render(<SessionProvider repository={source}><Probe /></SessionProvider>);
+    await act(async () => fireEvent.click(screen.getByText("login")));
+    await waitFor(() => expect(screen.getByTestId("first-enrollment").textContent).toBe("TOTP_READY"));
+    await act(async () => fireEvent.click(screen.getByText("first-factor")));
+    expect(screen.getByTestId("first-enrollment").textContent).toBe("MATERIAL_LOST");
+    expect(screen.getByTestId("has-credential").textContent).toBe("false");
+    expect(screen.getByTestId("recovery-count").textContent).toBe("0");
+  });
+
+  it("forces initial password replacement under the enrollment challenge before any factor setup", async () => {
+    const source = repository();
+    source.login = vi.fn().mockResolvedValue(firstEnrollment("PASSWORD_CHANGE"));
+    source.authenticationChallenges!.inspectFirstEnrollment = vi.fn();
+    source.authenticationChallenges!.changePassword = vi.fn().mockResolvedValue({
+      nextStep: "REAUTHENTICATE", changedAt: "2026-08-26T12:01:00Z"
+    });
+    const screen = render(<SessionProvider repository={source}><Probe /></SessionProvider>);
+    await act(async () => fireEvent.click(screen.getByText("login")));
+    expect(screen.getByTestId("phase").textContent).toBe("challenge-password-required");
+    expect(screen.getByTestId("has-credential").textContent).toBe("false");
+    expect(source.authenticationChallenges!.inspectFirstEnrollment).not.toHaveBeenCalled();
+    await act(async () => fireEvent.click(screen.getByText("challenge-password")));
+    expect(screen.getByTestId("phase").textContent).toBe("reauthentication-required");
+    expect(screen.getByTestId("has-challenge").textContent).toBe("false");
+    expect(screen.getByTestId("has-credential").textContent).toBe("false");
+  });
+
   it("keeps the bearer only in provider memory", async () => {
     const screen = render(<SessionProvider repository={repository()}><Probe /></SessionProvider>);
     await act(async () => fireEvent.click(screen.getByText("login")));

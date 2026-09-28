@@ -21,7 +21,7 @@ export function AuthenticationChallengeForm() {
         <CheckCircle2 aria-hidden="true" />
         <Typography.Title as="h2" level={2}>请重新登录</Typography.Title>
         <Typography.Text tone="muted">
-          密码可能已经更新，所有旧会话与登录挑战均不再可信。请回到登录页，用新密码重新认证。
+          密码或身份验证器可能已经更新，旧会话与登录挑战均不再可信。请回到登录页重新认证。
         </Typography.Text>
       </div>
       {session.error ? <p className={styles.error} role="alert">{session.error}</p> : null}
@@ -72,7 +72,9 @@ export function AuthenticationChallengeForm() {
       </Typography.Title>
       <Typography.Text tone="muted">
         {changingPassword
-          ? "密码与 TOTP 已验证。完成改密后仍需重新登录，不会直接获得会话。"
+          ? request.challenge.purpose === "ENROLLMENT"
+            ? "初始密码已验证。完成改密后需用新密码重新登录，再继续首次安全设置。"
+            : "密码与 TOTP 已验证。完成改密后仍需重新登录，不会直接获得会话。"
           : `此步骤不会创建会话；挑战预计在 ${expiresAt} 失效。`}
       </Typography.Text>
     </div>

@@ -96,6 +96,24 @@
   gap: var(--xiak-spacing-roomy);
 }
 
+.enrollment {
+  display: grid;
+  min-width: 0;
+  gap: var(--xiak-spacing-roomy);
+}
+
+.enrollmentSeed {
+  display: block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  border: var(--xiak-border-subtle);
+  border-radius: var(--xiak-radius-control);
+  padding: var(--xiak-spacing-default);
+  background: var(--xiak-color-bg-page);
+  font-size: var(--xiak-font-size-small);
+  line-height: 1.6;
+}
+
 .loginModes {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

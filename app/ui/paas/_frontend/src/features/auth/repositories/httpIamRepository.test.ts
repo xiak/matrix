@@ -81,6 +81,84 @@ describe("IAM HTTP account boundary", () => {
     expect(requestBody(fetcher)).toEqual({ requestId: expect.any(String), challengeCredential: "rotated-challenge-secret", newPassword: "Changed-Password-73!" });
   });
 
+  it("uses only a restricted challenge credential for first contact and TOTP enrollment", async () => {
+    const challenge = { apiVersion, kind: "AuthenticationChallenge", id: "challenge-first", purpose: "ENROLLMENT",
+      nextStep: "ENROLLMENT", expiresAt: "2026-08-27T01:05:00Z" };
+    const contact = { apiVersion, kind: "NotificationContact", accountId: "account-acme", userId: "principal-alex",
+      state: "NONE", resourceVersion: 0 };
+    let fetcher = reply({ outcome: "CHALLENGE_REQUIRED", challenge, challengeCredential: "first-only-secret" });
+    const login = await httpIamRepository.login({ loginName: "alex@acme", password: "Initial-Password-49!" });
+    expect(login).toEqual({ outcome: "CHALLENGE_REQUIRED", challenge: { id: challenge.id, purpose: "ENROLLMENT",
+      nextStep: "ENROLLMENT", expiresAt: challenge.expiresAt }, challengeCredential: "first-only-secret" });
+    expect(JSON.stringify(login)).not.toContain("session");
+
+    fetcher = reply({ challenge, notificationContact: contact });
+    const state = await httpIamRepository.authenticationChallenges!.inspectFirstEnrollment!({
+      challengeId: challenge.id, challengeCredential: "first-only-secret" });
+    expect(state.notificationContact?.state).toBe("NONE");
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/challenges/challenge-first:enrollment-state");
+    expect(requestBody(fetcher)).toEqual({ challengeCredential: "first-only-secret" });
+    expect(JSON.stringify(firstRequest(fetcher)[1])).not.toContain("Bearer");
+
+    const verification = { apiVersion, kind: "NotificationContactVerification", id: "verification-one",
+      accountId: "account-acme", userId: "principal-alex", requestId: "contact-one", email: "first@example.test",
+      state: "PENDING", issuedAt: "2026-08-27T01:00:00.000000Z", expiresAt: "2026-08-27T01:10:00.000000Z",
+      delivery: { state: "PENDING", attempts: 0, updatedAt: "2026-08-27T01:00:00.000000Z" } };
+    fetcher = reply(verification);
+    await httpIamRepository.authenticationChallenges!.startFirstContact!({ challengeId: challenge.id,
+      challengeCredential: "first-only-secret", email: verification.email, requestId: verification.requestId });
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/challenges/challenge-first/notification-contact/verifications");
+    expect(requestBody(fetcher)).toEqual({ challengeCredential: "first-only-secret", email: verification.email,
+      requestId: verification.requestId });
+
+    fetcher = reply({ ...verification, state: "VERIFIED", completedAt: "2026-08-27T01:01:00.000000Z" });
+    await httpIamRepository.authenticationChallenges!.confirmFirstContact!({ challengeId: challenge.id,
+      challengeCredential: "first-only-secret", verificationId: verification.id, code: "12345678", requestId: "confirm-one" });
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/challenges/challenge-first/notification-contact/verifications/verification-one:confirm");
+    expect(requestBody(fetcher)).toEqual({ challengeCredential: "first-only-secret", code: "12345678", requestId: "confirm-one" });
+
+    const enrollment = { apiVersion, kind: "TOTPEnrollment", id: "enrollment-one", requestId: "factor-one",
+      purpose: "INITIAL", factorRevision: 1, state: "PENDING", createdAt: "2026-08-27T01:01:00.000000Z",
+      expiresAt: "2026-08-27T01:05:00.000000Z" };
+    fetcher = reply({ outcome: "APPLIED", enrollment, provisioning: { seed: "one-time-seed", uri: "otpauth://totp/Matrix:test?secret=one-time-seed" } });
+    const started = await httpIamRepository.authenticationChallenges!.startFirstTOTP!({ challengeId: challenge.id,
+      challengeCredential: "first-only-secret", requestId: enrollment.requestId });
+    expect(started.outcome).toBe("APPLIED");
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/challenges/challenge-first:enroll");
+    expect(requestBody(fetcher)).toEqual({ challengeCredential: "first-only-secret", requestId: enrollment.requestId });
+
+    const recoveryCodes = Array.from({ length: 10 }, (_, index) => `private-recovery-${index}`);
+    fetcher = reply({ enrollment: { ...enrollment, state: "CONFIRMED", completedAt: "2026-08-27T01:02:00.000000Z" },
+      nextStep: "REAUTHENTICATE", recoveryCodes });
+    const confirmed = await httpIamRepository.authenticationChallenges!.confirmFirstTOTP!({ challengeId: challenge.id,
+      challengeCredential: "first-only-secret", enrollmentId: enrollment.id, code: "123456", requestId: "factor-confirm-one" });
+    expect(confirmed.recoveryCodes).toEqual(recoveryCodes);
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/challenges/challenge-first:confirm-enrollment");
+    expect(requestBody(fetcher)).toEqual({ challengeCredential: "first-only-secret", code: "123456", requestId: "factor-confirm-one" });
+  });
+
+  it("rejects ambiguous first-enrollment state and replayed provisioning material", async () => {
+    const challenge = { apiVersion, kind: "AuthenticationChallenge", id: "challenge-first", purpose: "ENROLLMENT",
+      nextStep: "ENROLLMENT", expiresAt: "2026-08-27T01:05:00Z" };
+    for (const state of [
+      { challenge, notificationContact: { apiVersion, kind: "NotificationContact", accountId: "account-acme", userId: "principal-alex",
+        state: "NONE", resourceVersion: 0 }, enrollment: { apiVersion, kind: "TOTPEnrollment", id: "factor-one", requestId: "factor-one",
+          purpose: "INITIAL", factorRevision: 1, state: "PENDING", createdAt: "2026-08-27T01:01:00.000000Z", expiresAt: "2026-08-27T01:05:00.000000Z" } },
+      { challenge: { ...challenge, purpose: "RECOVERY" }, notificationContact: { apiVersion, kind: "NotificationContact",
+        accountId: "account-acme", userId: "principal-alex", state: "NONE", resourceVersion: 0 } }
+    ]) {
+      reply(state);
+      await expect(httpIamRepository.authenticationChallenges!.inspectFirstEnrollment!({ challengeId: challenge.id,
+        challengeCredential: "first-only-secret" })).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+    reply({ outcome: "EQUAL_REPLAY", enrollment: { apiVersion, kind: "TOTPEnrollment", id: "factor-one",
+      requestId: "factor-one", purpose: "INITIAL", factorRevision: 1, state: "PENDING",
+      createdAt: "2026-08-27T01:01:00.000000Z", expiresAt: "2026-08-27T01:05:00.000000Z" },
+      provisioning: { seed: "leaked", uri: "leaked" } });
+    await expect(httpIamRepository.authenticationChallenges!.startFirstTOTP!({ challengeId: challenge.id,
+      challengeCredential: "first-only-secret", requestId: "factor-one" })).rejects.toThrow("INVALID_IAM_RESPONSE");
+  });
+
   it("rejects mixed, recovery-purpose or otherwise ambiguous login results", async () => {
     const challenge = { apiVersion, kind: "AuthenticationChallenge", id: "challenge-a", purpose: "LOGIN",
       nextStep: "TOTP", expiresAt: "2099-08-27T00:01:00Z" };

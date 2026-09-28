@@ -12,12 +12,21 @@ export type AuthenticatedSession = {
   session: SessionSummary;
 };
 
-export type AuthenticationChallenge = {
+export type LoginAuthenticationChallenge = {
   id: string;
   purpose: "LOGIN";
   nextStep: "TOTP" | "PASSWORD_CHANGE";
   expiresAt: string;
 };
+
+export type EnrollmentAuthenticationChallenge = {
+  id: string;
+  purpose: "ENROLLMENT";
+  nextStep: "PASSWORD_CHANGE" | "ENROLLMENT";
+  expiresAt: string;
+};
+
+export type AuthenticationChallenge = LoginAuthenticationChallenge | EnrollmentAuthenticationChallenge;
 
 export type PendingAuthenticationChallenge = {
   loginName: string;
@@ -47,6 +56,7 @@ export type SessionPhase =
   | "authenticating"
   | "challenge-required"
   | "verifying-challenge"
+  | "enrollment-required"
   | "challenge-password-required"
   | "changing-challenge-password"
   | "reauthentication-required"

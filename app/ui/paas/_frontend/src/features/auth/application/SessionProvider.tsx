@@ -10,14 +10,14 @@ import {
   useState,
   type ReactNode
 } from "react";
-import { HttpProblem } from "@/infrastructure/http/jsonRequest";
+import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
 import type {
   AuthenticatedSession,
   LoginOutcome,
   PendingAuthenticationChallenge,
   SessionPhase
 } from "../domain/session";
-import type { EnrollmentRecoveryMaterial } from "../domain/personalSecurity";
+import type { EnrollmentRecoveryMaterial, FirstEnrollmentProgress } from "../domain/personalSecurity";
 import { httpIamRepository } from "../repositories/httpIamRepository";
 import type { IamRepository } from "../repositories/iamRepository";
 import { PersonalSecurityProvider } from "./PersonalSecurityProvider";
@@ -27,11 +27,16 @@ type SessionContextValue = {
   current: AuthenticatedSession | null;
   challenge: PendingAuthenticationChallenge | null;
   enrollmentRecovery: EnrollmentRecoveryMaterial | null;
+  firstEnrollment: FirstEnrollmentProgress | null;
   error: string | null;
   clearError(): void;
   login(loginName: string, password: string): Promise<LoginOutcome | null>;
   verifyAuthenticationChallenge(code: string): Promise<LoginOutcome | null>;
   changeChallengePassword(newPassword: string): Promise<boolean>;
+  startFirstEnrollmentContact(email: string): Promise<boolean>;
+  confirmFirstEnrollmentContact(code: string): Promise<boolean>;
+  startFirstEnrollmentFactor(): Promise<boolean>;
+  confirmFirstEnrollmentFactor(code: string): Promise<boolean>;
   cancelAuthenticationChallenge(): void;
   acknowledgeReauthentication(): void;
   acknowledgeEnrollmentRecovery(): void;
@@ -98,11 +103,13 @@ export function SessionProvider({
   const [current, setCurrent] = useState<AuthenticatedSession | null>(null);
   const [challenge, setChallenge] = useState<PendingAuthenticationChallenge | null>(null);
   const [enrollmentRecovery, setEnrollmentRecovery] = useState<EnrollmentRecoveryMaterial | null>(null);
+  const [firstEnrollment, setFirstEnrollment] = useState<FirstEnrollmentProgress | null>(null);
   const [credential, setCredential] = useState<string | null>(null);
   const credentialRef = useRef<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const transition = useRef(0);
   const challengeRef = useRef<PendingAuthenticationChallenge | null>(null);
+  const firstEnrollmentOperation = useRef<number | null>(null);
   const clearError = useCallback(() => { setError(null); }, []);
 
   const replaceChallenge = useCallback((next: PendingAuthenticationChallenge | null) => {
@@ -112,11 +119,13 @@ export function SessionProvider({
 
   const forget = useCallback(() => {
     transition.current++;
+    firstEnrollmentOperation.current = null;
     credentialRef.current = null;
     setCredential(null);
     setCurrent(null);
     replaceChallenge(null);
     setEnrollmentRecovery(null);
+    setFirstEnrollment(null);
     setError(null);
     setPhase("anonymous");
   }, [replaceChallenge]);
@@ -130,11 +139,13 @@ export function SessionProvider({
   const requireReauthentication = useCallback((expectedCredential: string, message: string) => {
     if (credentialRef.current !== expectedCredential) return false;
     transition.current++;
+    firstEnrollmentOperation.current = null;
     credentialRef.current = null;
     setCredential(null);
     setCurrent(null);
     replaceChallenge(null);
     setEnrollmentRecovery(null);
+    setFirstEnrollment(null);
     setError(message);
     setPhase("reauthentication-required");
     return true;
@@ -151,7 +162,9 @@ export function SessionProvider({
     const timer = window.setTimeout(() => {
       if (challengeRef.current !== challenge) return;
       transition.current++;
+      firstEnrollmentOperation.current = null;
       replaceChallenge(null);
+      setFirstEnrollment(null);
       setError("登录验证已过期，请重新登录");
       setPhase("anonymous");
     }, delay);
@@ -170,11 +183,13 @@ export function SessionProvider({
 
   const login = useCallback(async (loginName: string, password: string) => {
     const attempt = ++transition.current;
+    firstEnrollmentOperation.current = null;
     credentialRef.current = null;
     setCredential(null);
     setCurrent(null);
     replaceChallenge(null);
     setEnrollmentRecovery(null);
+    setFirstEnrollment(null);
     setPhase("authenticating");
     setError(null);
     try {
@@ -185,6 +200,12 @@ export function SessionProvider({
         setCredential(null);
         setCurrent(null);
         replaceChallenge({ loginName, challenge: result.challenge, challengeCredential: result.challengeCredential });
+        if (result.challenge.purpose === "ENROLLMENT" && result.challenge.nextStep === "ENROLLMENT") {
+          setFirstEnrollment({ status: repository.authenticationChallenges?.inspectFirstEnrollment ? "INSPECTING" : "UNAVAILABLE",
+            busy: false, state: null, verification: null, provisioning: null, enrollmentId: null });
+          setPhase("enrollment-required");
+          return "challenge-required";
+        }
         setPhase(result.challenge.nextStep === "PASSWORD_CHANGE" ? "challenge-password-required" : "challenge-required");
         return "challenge-required";
       }
@@ -207,8 +228,33 @@ export function SessionProvider({
     }
   }, [replaceChallenge, repository]);
 
+  useEffect(() => {
+    if (!challenge || challenge.challenge.purpose !== "ENROLLMENT" || challenge.challenge.nextStep !== "ENROLLMENT" ||
+        phase !== "enrollment-required" || firstEnrollment?.status !== "INSPECTING") return;
+    const inspect = repository.authenticationChallenges?.inspectFirstEnrollment;
+    if (!inspect) return;
+    const requested = challenge;
+    const attempt = transition.current;
+    void inspect({ challengeId: challenge.challenge.id, challengeCredential: challenge.challengeCredential })
+      .then((state) => {
+        if (transition.current !== attempt || challengeRef.current !== requested) return;
+        if (state.challenge.nextStep !== "ENROLLMENT" || state.challenge.expiresAt !== requested.challenge.expiresAt ||
+            !state.notificationContact) throw new Error("INVALID_IAM_RESPONSE");
+        setFirstEnrollment({
+          status: state.enrollment ? "MATERIAL_LOST" : state.notificationContact.state === "VERIFIED" ? "TOTP_READY" :
+            state.notificationContact.pendingVerificationId ? "OUTCOME_UNKNOWN" : "CONTACT_REQUIRED",
+          busy: false, state, verification: null, provisioning: null, enrollmentId: state.enrollment?.id ?? null
+        });
+      })
+      .catch(() => {
+        if (transition.current !== attempt || challengeRef.current !== requested) return;
+        setFirstEnrollment((value) => value?.status === "INSPECTING" ? { ...value, status: "UNAVAILABLE" } : value);
+        setError("无法确认首次安全设置状态，请重新登录");
+      });
+  }, [challenge, firstEnrollment?.status, phase, repository]);
+
   const verifyAuthenticationChallenge = useCallback(async (code: string) => {
-    if (!challenge || challenge.challenge.nextStep !== "TOTP" ||
+    if (!challenge || challenge.challenge.purpose !== "LOGIN" || challenge.challenge.nextStep !== "TOTP" ||
         (phase !== "challenge-required" && phase !== "verifying-challenge") ||
         !repository.authenticationChallenges) return null;
     const requested = challenge;
@@ -223,12 +269,13 @@ export function SessionProvider({
       });
       if (attempt !== transition.current || challengeRef.current !== requested) return null;
       if (result.outcome === "CHALLENGE_REQUIRED") {
-        if (result.challenge.nextStep !== "PASSWORD_CHANGE") throw new Error("INVALID_IAM_RESPONSE");
+        if (result.challenge.purpose !== "LOGIN" || result.challenge.nextStep !== "PASSWORD_CHANGE") throw new Error("INVALID_IAM_RESPONSE");
         replaceChallenge({ loginName: challenge.loginName, challenge: result.challenge, challengeCredential: result.challengeCredential });
         setPhase("challenge-password-required");
         return "password-change-required";
       }
       replaceChallenge(null);
+      setFirstEnrollment(null);
       credentialRef.current = result.credential;
       setCredential(result.credential);
       setCurrent({ loginName: challenge.loginName, session: result.session });
@@ -285,9 +332,139 @@ export function SessionProvider({
     }
   }, [challenge, phase, replaceChallenge, repository]);
 
+  const startFirstEnrollmentContact = useCallback(async (email: string) => {
+    const start = repository.authenticationChallenges?.startFirstContact;
+    const contact = firstEnrollment?.state?.notificationContact;
+    if (!challenge || challenge.challenge.purpose !== "ENROLLMENT" || challenge.challenge.nextStep !== "ENROLLMENT" ||
+        phase !== "enrollment-required" || firstEnrollment?.status !== "CONTACT_REQUIRED" || contact?.state !== "NONE" ||
+        !start || firstEnrollmentOperation.current !== null) return false;
+    const attempt = ++transition.current;
+    firstEnrollmentOperation.current = attempt;
+    const requested = challenge;
+    setFirstEnrollment({ ...firstEnrollment, busy: true });
+    setError(null);
+    try {
+      const verification = await start({ challengeId: requested.challenge.id, challengeCredential: requested.challengeCredential,
+        email, requestId: requestToken("ui-first-contact-") });
+      if (attempt !== transition.current || challengeRef.current !== requested) return false;
+      if (verification.accountId !== contact.accountId || verification.userId !== contact.userId) throw new Error("INVALID_IAM_RESPONSE");
+      setFirstEnrollment({ ...firstEnrollment, status: "CONTACT_PENDING", busy: false, verification });
+      return true;
+    } catch (failure) {
+      if (attempt !== transition.current || challengeRef.current !== requested) return false;
+      const invalid = failure instanceof HttpProblem && (failure.status === 400 || failure.status === 422);
+      const forbidden = failure instanceof HttpProblem && [401, 403, 409].includes(failure.status);
+      setFirstEnrollment({ ...firstEnrollment, status: invalid ? "CONTACT_REQUIRED" : forbidden ? "UNAVAILABLE" : "OUTCOME_UNKNOWN", busy: false });
+      setError(invalid ? "邮箱地址格式不正确" : forbidden ? "首次安全设置已失效，请重新登录" : "发送结果不确定，请重新登录后核对；不要重复提交");
+      return false;
+    } finally { if (firstEnrollmentOperation.current === attempt) firstEnrollmentOperation.current = null; }
+  }, [challenge, firstEnrollment, phase, repository]);
+
+  const confirmFirstEnrollmentContact = useCallback(async (code: string) => {
+    const confirm = repository.authenticationChallenges?.confirmFirstContact;
+    const inspect = repository.authenticationChallenges?.inspectFirstEnrollment;
+    const verification = firstEnrollment?.verification;
+    if (!challenge || challenge.challenge.purpose !== "ENROLLMENT" || challenge.challenge.nextStep !== "ENROLLMENT" ||
+        phase !== "enrollment-required" || firstEnrollment?.status !== "CONTACT_PENDING" || !verification || !confirm || !inspect ||
+        firstEnrollmentOperation.current !== null || !/^[0-9]{8}$/.test(code)) return false;
+    const attempt = ++transition.current;
+    firstEnrollmentOperation.current = attempt;
+    const requested = challenge;
+    setFirstEnrollment({ ...firstEnrollment, busy: true });
+    setError(null);
+    try {
+      const confirmed = await confirm({ challengeId: requested.challenge.id, challengeCredential: requested.challengeCredential,
+        verificationId: verification.id, code, requestId: requestToken("ui-first-contact-confirm-") });
+      if (confirmed.id !== verification.id || confirmed.accountId !== verification.accountId || confirmed.userId !== verification.userId ||
+          confirmed.email !== verification.email || confirmed.state !== "VERIFIED") throw new Error("INVALID_IAM_RESPONSE");
+      const state = await inspect({ challengeId: requested.challenge.id, challengeCredential: requested.challengeCredential });
+      if (attempt !== transition.current || challengeRef.current !== requested) return false;
+      if (state.challenge.nextStep !== "ENROLLMENT" || state.challenge.expiresAt !== requested.challenge.expiresAt ||
+          state.notificationContact?.state !== "VERIFIED" || state.enrollment ||
+          state.notificationContact.accountId !== verification.accountId || state.notificationContact.userId !== verification.userId ||
+          state.notificationContact.email !== verification.email) throw new Error("INVALID_IAM_RESPONSE");
+      setFirstEnrollment({ ...firstEnrollment, status: "TOTP_READY", busy: false, state, verification: null });
+      return true;
+    } catch (failure) {
+      if (attempt !== transition.current || challengeRef.current !== requested) return false;
+      const invalid = failure instanceof HttpProblem && (failure.status === 401 || failure.status === 422);
+      const forbidden = failure instanceof HttpProblem && (failure.status === 403 || failure.status === 409);
+      setFirstEnrollment({ ...firstEnrollment, status: invalid ? "CONTACT_PENDING" : forbidden ? "UNAVAILABLE" : "OUTCOME_UNKNOWN", busy: false });
+      setError(invalid ? "邮箱验证码不正确，请重试" : forbidden ? "首次安全设置已失效，请重新登录" : "验证结果不确定，请重新登录后核对");
+      return false;
+    } finally { if (firstEnrollmentOperation.current === attempt) firstEnrollmentOperation.current = null; }
+  }, [challenge, firstEnrollment, phase, repository]);
+
+  const startFirstEnrollmentFactor = useCallback(async () => {
+    const start = repository.authenticationChallenges?.startFirstTOTP;
+    if (!challenge || challenge.challenge.purpose !== "ENROLLMENT" || challenge.challenge.nextStep !== "ENROLLMENT" ||
+        phase !== "enrollment-required" || firstEnrollment?.status !== "TOTP_READY" ||
+        firstEnrollment.state?.notificationContact?.state !== "VERIFIED" || !start || firstEnrollmentOperation.current !== null) return false;
+    const attempt = ++transition.current;
+    firstEnrollmentOperation.current = attempt;
+    const requested = challenge;
+    setFirstEnrollment({ ...firstEnrollment, busy: true });
+    setError(null);
+    try {
+      const result = await start({ challengeId: requested.challenge.id, challengeCredential: requested.challengeCredential,
+        requestId: requestToken("ui-first-factor-") });
+      if (attempt !== transition.current || challengeRef.current !== requested) return false;
+      if (result.outcome === "EQUAL_REPLAY") {
+        setFirstEnrollment({ ...firstEnrollment, status: "MATERIAL_LOST", busy: false, enrollmentId: result.enrollment.id });
+        return false;
+      }
+      if (Date.parse(result.enrollment.expiresAt) > Date.parse(requested.challenge.expiresAt) || result.enrollment.state !== "PENDING") {
+        throw new Error("INVALID_IAM_RESPONSE");
+      }
+      setFirstEnrollment({ ...firstEnrollment, status: "TOTP_PENDING", busy: false, provisioning: result.provisioning,
+        enrollmentId: result.enrollment.id });
+      return true;
+    } catch (failure) {
+      if (attempt !== transition.current || challengeRef.current !== requested) return false;
+      const forbidden = failure instanceof HttpProblem && [401, 403, 409].includes(failure.status);
+      setFirstEnrollment({ ...firstEnrollment, status: forbidden ? "UNAVAILABLE" : "OUTCOME_UNKNOWN", busy: false });
+      setError(forbidden ? "首次安全设置已失效，请重新登录" : "身份验证器创建结果不确定，请重新登录后核对");
+      return false;
+    } finally { if (firstEnrollmentOperation.current === attempt) firstEnrollmentOperation.current = null; }
+  }, [challenge, firstEnrollment, phase, repository]);
+
+  const confirmFirstEnrollmentFactor = useCallback(async (code: string) => {
+    const confirm = repository.authenticationChallenges?.confirmFirstTOTP;
+    if (!challenge || challenge.challenge.purpose !== "ENROLLMENT" || challenge.challenge.nextStep !== "ENROLLMENT" ||
+        phase !== "enrollment-required" || firstEnrollment?.status !== "TOTP_PENDING" ||
+        !firstEnrollment.provisioning || !firstEnrollment.enrollmentId || !confirm ||
+        firstEnrollmentOperation.current !== null || !/^[0-9]{6}$/.test(code)) return false;
+    const attempt = ++transition.current;
+    firstEnrollmentOperation.current = attempt;
+    const requested = challenge;
+    setFirstEnrollment({ ...firstEnrollment, busy: true });
+    setError(null);
+    try {
+      const result = await confirm({ challengeId: requested.challenge.id, challengeCredential: requested.challengeCredential,
+        enrollmentId: firstEnrollment.enrollmentId, code, requestId: requestToken("ui-first-factor-confirm-") });
+      if (attempt !== transition.current || challengeRef.current !== requested) return false;
+      if (result.enrollment.id !== firstEnrollment.enrollmentId || result.recoveryCodes.length !== 10 ||
+          new Set(result.recoveryCodes).size !== 10) throw new Error("INVALID_IAM_RESPONSE");
+      replaceChallenge(null);
+      setFirstEnrollment(null);
+      setEnrollmentRecovery({ enrollmentId: result.enrollment.id, recoveryCodes: [...result.recoveryCodes] });
+      setPhase("recovery-codes-required");
+      return true;
+    } catch (failure) {
+      if (attempt !== transition.current || challengeRef.current !== requested) return false;
+      const invalid = failure instanceof HttpProblem && failure.status === 401;
+      const forbidden = failure instanceof HttpProblem && (failure.status === 403 || failure.status === 409);
+      setFirstEnrollment({ ...firstEnrollment, status: invalid ? "TOTP_PENDING" : forbidden ? "UNAVAILABLE" : "OUTCOME_UNKNOWN", busy: false });
+      setError(invalid ? "动态验证码不正确，请重试" : forbidden ? "首次安全设置已失效，请重新登录" : "绑定结果不确定，请重新登录后核对");
+      return false;
+    } finally { if (firstEnrollmentOperation.current === attempt) firstEnrollmentOperation.current = null; }
+  }, [challenge, firstEnrollment, phase, replaceChallenge, repository]);
+
   const cancelAuthenticationChallenge = useCallback(() => {
     transition.current++;
+    firstEnrollmentOperation.current = null;
     replaceChallenge(null);
+    setFirstEnrollment(null);
     setError(null);
     setPhase("anonymous");
   }, [replaceChallenge]);
@@ -390,18 +567,23 @@ export function SessionProvider({
     current,
     challenge,
     enrollmentRecovery,
+    firstEnrollment,
     error,
     clearError,
     login,
     verifyAuthenticationChallenge,
     changeChallengePassword,
+    startFirstEnrollmentContact,
+    confirmFirstEnrollmentContact,
+    startFirstEnrollmentFactor,
+    confirmFirstEnrollmentFactor,
     cancelAuthenticationChallenge,
     acknowledgeReauthentication,
     acknowledgeEnrollmentRecovery,
     changePassword,
     logout,
     expire
-  }), [acknowledgeEnrollmentRecovery, acknowledgeReauthentication, cancelAuthenticationChallenge, challenge, changeChallengePassword, changePassword, clearError, current, enrollmentRecovery, error, expire, login, logout, phase, verifyAuthenticationChallenge]);
+  }), [acknowledgeEnrollmentRecovery, acknowledgeReauthentication, cancelAuthenticationChallenge, challenge, changeChallengePassword, changePassword, clearError, confirmFirstEnrollmentContact, confirmFirstEnrollmentFactor, current, enrollmentRecovery, error, expire, firstEnrollment, login, logout, phase, startFirstEnrollmentContact, startFirstEnrollmentFactor, verifyAuthenticationChallenge]);
   const credentialValue = useMemo(() => ({ credential }), [credential]);
 
   return (

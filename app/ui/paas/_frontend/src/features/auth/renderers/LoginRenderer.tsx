@@ -7,6 +7,7 @@ import { App, Button, Input, Typography } from "@ui/xiak";
 import { useSession } from "../application/SessionProvider";
 import { AuthenticationChallengeForm } from "./AuthenticationChallengeForm";
 import { EnrollmentRecoveryCodes } from "./EnrollmentRecoveryCodes";
+import { FirstEnrollmentForm } from "./FirstEnrollmentForm";
 import styles from "./LoginRenderer.module.css";
 
 export function LoginRenderer() {
@@ -95,6 +96,8 @@ export function LoginRenderer() {
               <div className={styles.mobileMark} aria-hidden="true"><Boxes /></div>
               {recoveryCodesScene ? (
                 <EnrollmentRecoveryCodes />
+              ) : session.phase === "enrollment-required" ? (
+                <FirstEnrollmentForm />
               ) : challengeScene ? (
                 <AuthenticationChallengeForm />
               ) : firstLoginSession ? (

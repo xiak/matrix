@@ -334,6 +334,18 @@ pairs, 16 test files with 163 tests, and two 2-worker exports with an identical
 semantics; this evidence proves only the console consumer. Installed-browser
 and signed-release acceptance for the combined Phase 3 source remain open.
 
+The current Phase 3 release branch now also consumes the restricted initial
+ENROLLMENT challenge. Its login form verifies notification contact before
+one-time TOTP provisioning, shows ten recovery codes only after confirmed
+binding, and requires a fresh login; no challenge credential becomes a Session
+bearer. A replayed or uncertain provision remains closed rather than
+re-disclosing a seed. Local gates passed 168 frontend tests, type/lint,
+architecture and style checks, two deterministic 2-worker static exports with
+73 matching embedded files, all Go tests/vet, and a restricted PostgreSQL 18
+retained-data IAM40-to-IAM45 process upgrade. The test container and its
+anonymous volume were removed. This is not the installed LIVE browser or
+combined signed A/B acceptance, which remain open.
+
 - Gate A implementation replaces the Phase 1 page with the complete donor-
   shaped App Router -> route -> provider -> repository -> scene -> renderer ->
   public-component chain, seven static routes, memory-only IAM sessions,
