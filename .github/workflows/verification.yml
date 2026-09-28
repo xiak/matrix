@@ -64,7 +64,7 @@ jobs:
   authority-process:
     runs-on: ubuntu-24.04
     # Retained-data and real-process race gates run serially against a 1-CPU PG.
-    timeout-minutes: 15
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres@sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a
@@ -92,7 +92,7 @@ jobs:
           POSTGRES_CONTAINER_ID: ${{ job.services.postgres.id }}
         run: |
           for database in matrix_authority_ci matrix_audit_upgrade_ci matrix_audit_http_ci \
-              matrix_iam_http_ci matrix_iam_recovery_ci matrix_iam_upgrade_ci matrix_iam_upgrade_sessions_ci \
+              matrix_iam_http_ci matrix_iam_directory_ci matrix_iam_recovery_ci matrix_iam_upgrade_ci matrix_iam_upgrade_sessions_ci \
               matrix_iam_upgrade_local_recovery_ci matrix_iam_upgrade_pre_platform_ci \
               matrix_iam_password_attempts_ci matrix_iam_totp_custody_ci matrix_iam_totp_backup_ci matrix_iam_notification_ci matrix_iam_totp_enrollment_ci \
               matrix_iam_upgrade_enabling_ci \
@@ -115,6 +115,7 @@ jobs:
           MATRIX_AUDIT_UPGRADE_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports[5432] }}/matrix_audit_upgrade_ci?sslmode=disable
           MATRIX_AUDIT_HTTP_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports[5432] }}/matrix_audit_http_ci?sslmode=disable
           MATRIX_IAM_HTTP_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports[5432] }}/matrix_iam_http_ci?sslmode=disable
+          MATRIX_IAM_DIRECTORY_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports[5432] }}/matrix_iam_directory_ci?sslmode=disable
           MATRIX_IAM_RECOVERY_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports[5432] }}/matrix_iam_recovery_ci?sslmode=disable
           MATRIX_IAM_UPGRADE_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports[5432] }}/matrix_iam_upgrade_ci?sslmode=disable
           MATRIX_IAM_PRE_PLATFORM_UPGRADE_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports[5432] }}/matrix_iam_upgrade_pre_platform_ci?sslmode=disable
