@@ -30,8 +30,9 @@ export function AuthenticationChallengeForm({ returnTo }: { returnTo: string }) 
     return <div className={styles.challengeCompletion}>
       <CheckCircle2 aria-hidden="true" />
       <div className={styles.cardHeading}>
-        <h1 ref={heading} tabIndex={-1}>{t("challengePasswordChanged")}</h1>
-        <p>{t("challengeReauthenticateHint")}</p>
+        <h1 ref={heading} tabIndex={-1}>{t(session.reauthenticationReason === "FACTOR" ? "enrollmentCompleted" : "challengePasswordChanged")}</h1>
+        <p>{t(session.reauthenticationReason === "ENROLLMENT_PASSWORD" ? "enrollmentPasswordReauthenticateHint" :
+          session.reauthenticationReason === "FACTOR" ? "enrollmentReauthenticateHint" : "challengeReauthenticateHint")}</p>
       </div>
       <Button block onClick={session.acknowledgeReauthentication} size="large">
         {t("returnToSignIn")}<ArrowRight aria-hidden="true" />
@@ -68,8 +69,8 @@ export function AuthenticationChallengeForm({ returnTo }: { returnTo: string }) 
   return <>
     <div className={styles.cardHeading}>
       <span className={styles.challengeIcon}><ShieldCheck aria-hidden="true" /></span>
-      <h1 ref={heading} tabIndex={-1}>{t(changingPassword ? "challengePasswordTitle" : "challengeTitle")}</h1>
-      <p>{t(changingPassword ? "challengePasswordHint" : "challengeHint", { time: expiresAt })}</p>
+      <h1 ref={heading} tabIndex={-1}>{t(changingPassword && challenge.challenge.purpose === "ENROLLMENT" ? "enrollmentPasswordTitle" : changingPassword ? "challengePasswordTitle" : "challengeTitle")}</h1>
+      <p>{t(changingPassword && challenge.challenge.purpose === "ENROLLMENT" ? "enrollmentPasswordHint" : changingPassword ? "challengePasswordHint" : "challengeHint", { time: expiresAt })}</p>
     </div>
     <div className={styles.challengeIdentity}>
       <span>{t("signingInAs")}</span>

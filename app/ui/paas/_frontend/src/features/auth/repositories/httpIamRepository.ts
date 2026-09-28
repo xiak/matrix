@@ -50,7 +50,7 @@ import type {
   SessionSummary
 } from "../domain/session";
 import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDirectory, AccessKeyStatus, AccessKeyStatusChange, ManagedAccessKey } from "../domain/accessKeys";
-import type { AuthenticatorState, NotificationContact, NotificationContactVerification, NotificationDeliveryObservation, RecoveryCodeRegeneration, RecoveryCodeRegenerationResponse, SecurityStepUp, TOTPEnrollment, TOTPEnrollmentConfirmation, TOTPEnrollmentStart } from "../domain/personalSecurity";
+import type { AuthenticatorState, EnrollmentChallengeState, NotificationContact, NotificationContactVerification, NotificationDeliveryObservation, RecoveryCodeRegeneration, RecoveryCodeRegenerationResponse, SecurityStepUp, TOTPEnrollment, TOTPEnrollmentConfirmation, TOTPEnrollmentStart } from "../domain/personalSecurity";
 import type { ChangePasswordCommand, AccountRepository, IamRepository, LoginCommand } from "./iamRepository";
 import type { LiveRoleSession, Role, RoleAccess, RoleCapability, RoleCapabilityAction, RoleDirectory, RoleListing, RolePolicyAttachment, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionLifecycle, RoleSessionListing, RoleSessionRevocation, RoleTrustDocument, RoleTrustVersion } from "../domain/roles";
 
@@ -556,9 +556,9 @@ function parseAuthenticatorState(value: unknown): AuthenticatorState {
   };
 }
 
-function parseTOTPEnrollment(value: unknown, expectedPurpose: "LEGACY_INITIAL" | "REPLACEMENT" = "LEGACY_INITIAL"): TOTPEnrollment {
+function parseTOTPEnrollment(value: unknown, expectedPurpose: "LEGACY_INITIAL" | "CHALLENGE_INITIAL" | "REPLACEMENT" = "LEGACY_INITIAL"): TOTPEnrollment {
   const wire = accountRecord(value);
-  exactKeys(wire, ["apiVersion", "kind", "id", "requestId", ...(expectedPurpose === "REPLACEMENT" ? ["purpose"] : []), "factorRevision", "state", "createdAt", "expiresAt"], ["completedAt"]);
+  exactKeys(wire, ["apiVersion", "kind", "id", "requestId", ...(expectedPurpose === "LEGACY_INITIAL" ? [] : ["purpose"]), "factorRevision", "state", "createdAt", "expiresAt"], ["completedAt"]);
   requireAccountKind(wire, "TOTPEnrollment");
   if (wire.state !== "PENDING" && wire.state !== "CONFIRMED" && wire.state !== "CANCELLED" && wire.state !== "EXPIRED") throw new Error("INVALID_IAM_RESPONSE");
   const createdAt = accountTimestamp(wire.createdAt);
@@ -567,6 +567,7 @@ function parseTOTPEnrollment(value: unknown, expectedPurpose: "LEGACY_INITIAL" |
   const factorRevision = accountVersion(wire.factorRevision);
   if (factorRevision > 9_007_199_254_740_990 ||
       expectedPurpose === "LEGACY_INITIAL" && lifetime !== 5n * 60n * 1_000_000n ||
+      expectedPurpose === "CHALLENGE_INITIAL" && (wire.purpose !== "INITIAL" || factorRevision !== 1 || lifetime <= 0n || lifetime > 5n * 60n * 1_000_000n) ||
       expectedPurpose === "REPLACEMENT" && (wire.purpose !== "REPLACEMENT" || factorRevision < 2 || lifetime <= 0n || lifetime > 120n * 1_000_000n)) throw new Error("INVALID_IAM_RESPONSE");
   const completedAt = wire.completedAt === undefined ? null : accountTimestamp(wire.completedAt);
   if (wire.state === "PENDING") {
@@ -576,7 +577,7 @@ function parseTOTPEnrollment(value: unknown, expectedPurpose: "LEGACY_INITIAL" |
   return {
     id: accountIdentifier(wire.id),
     requestId: accountIdentifier(wire.requestId),
-    ...(expectedPurpose === "REPLACEMENT" ? { purpose: "REPLACEMENT" as const } : {}),
+    ...(expectedPurpose === "REPLACEMENT" ? { purpose: "REPLACEMENT" as const } : expectedPurpose === "CHALLENGE_INITIAL" ? { purpose: "INITIAL" as const } : {}),
     factorRevision,
     state: wire.state,
     createdAt,
@@ -585,7 +586,7 @@ function parseTOTPEnrollment(value: unknown, expectedPurpose: "LEGACY_INITIAL" |
   };
 }
 
-function parseTOTPEnrollmentStart(value: unknown, expectedPurpose: "LEGACY_INITIAL" | "REPLACEMENT" = "LEGACY_INITIAL"): TOTPEnrollmentStart {
+function parseTOTPEnrollmentStart(value: unknown, expectedPurpose: "LEGACY_INITIAL" | "CHALLENGE_INITIAL" | "REPLACEMENT" = "LEGACY_INITIAL"): TOTPEnrollmentStart {
   const wire = accountRecord(value);
   if (wire.outcome === "APPLIED") {
     exactKeys(wire, ["outcome", "enrollment", "provisioning"]);
@@ -601,10 +602,10 @@ function parseTOTPEnrollmentStart(value: unknown, expectedPurpose: "LEGACY_INITI
   return { outcome: "EQUAL_REPLAY", enrollment: parseTOTPEnrollment(wire.enrollment, expectedPurpose) };
 }
 
-function parseTOTPEnrollmentConfirmation(value: unknown, enrollmentId: string): TOTPEnrollmentConfirmation {
+function parseTOTPEnrollmentConfirmation(value: unknown, enrollmentId: string, expectedPurpose: "LEGACY_INITIAL" | "CHALLENGE_INITIAL" = "LEGACY_INITIAL"): TOTPEnrollmentConfirmation {
   const wire = accountRecord(value);
   exactKeys(wire, ["enrollment", "nextStep", "recoveryCodes"]);
-  const enrollment = parseTOTPEnrollment(wire.enrollment);
+  const enrollment = parseTOTPEnrollment(wire.enrollment, expectedPurpose);
   if (enrollment.id !== enrollmentId || enrollment.state !== "CONFIRMED" || wire.nextStep !== "REAUTHENTICATE" ||
       !Array.isArray(wire.recoveryCodes) || wire.recoveryCodes.length !== 10 ||
       wire.recoveryCodes.some((code) => typeof code !== "string" || !code || code.length > 16384) ||
@@ -2171,7 +2172,29 @@ function parseAuthenticationChallenge(value: unknown): AuthenticationChallenge {
   if (wire.purpose === "RECOVERY" && wire.nextStep === "ENROLLMENT") {
     return { ...base, purpose: "RECOVERY", nextStep: "ENROLLMENT" };
   }
+  if (wire.purpose === "ENROLLMENT" && (wire.nextStep === "PASSWORD_CHANGE" || wire.nextStep === "ENROLLMENT")) {
+    return { ...base, purpose: "ENROLLMENT", nextStep: wire.nextStep };
+  }
   throw new Error("INVALID_IAM_RESPONSE");
+}
+
+function parseEnrollmentChallengeState(value: unknown, challengeId: string): EnrollmentChallengeState {
+  const wire = accountRecord(value);
+  const challenge = parseAuthenticationChallenge(wire.challenge);
+  if (challenge.id !== challengeId || challenge.purpose !== "ENROLLMENT") throw new Error("INVALID_IAM_RESPONSE");
+  if (challenge.nextStep === "PASSWORD_CHANGE") {
+    exactKeys(wire, ["challenge"]);
+    return { challenge };
+  }
+  exactKeys(wire, ["challenge", "notificationContact"], ["enrollment"]);
+  const notificationContact = parseNotificationContact(wire.notificationContact);
+  const enrollment = wire.enrollment === undefined ? undefined : parseTOTPEnrollment(wire.enrollment, "CHALLENGE_INITIAL");
+  if (enrollment && (enrollment.state !== "PENDING" || enrollment.factorRevision !== 1 ||
+      timestampOrder(enrollment.expiresAt) > timestampOrder(challenge.expiresAt) || notificationContact.state !== "VERIFIED" ||
+      timestampOrder(notificationContact.verifiedAt) > timestampOrder(enrollment.createdAt))) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  return { challenge, notificationContact, ...(enrollment ? { enrollment: { ...enrollment, purpose: "INITIAL", state: "PENDING", factorRevision: 1 } } : {}) };
 }
 
 function parseAuthenticatorRecovery(value: unknown, expectedRequestId?: string): AuthenticatorRecovery {
@@ -2279,7 +2302,7 @@ function parseLogin(value: unknown): LoginResult {
     exactKeys(wire, ["outcome", "challenge", "challengeCredential"]);
     if (typeof wire.challengeCredential !== "string" || !wire.challengeCredential) throw new Error("INVALID_IAM_RESPONSE");
     const challenge = parseAuthenticationChallenge(wire.challenge);
-    if (challenge.purpose !== "LOGIN") throw new Error("INVALID_IAM_RESPONSE");
+    if (challenge.purpose !== "LOGIN" && challenge.purpose !== "ENROLLMENT") throw new Error("INVALID_IAM_RESPONSE");
     return {
       outcome: "CHALLENGE_REQUIRED",
       challenge,
@@ -2297,7 +2320,7 @@ export const httpIamRepository: IamRepository = {
       body: JSON.stringify({ loginName: command.loginName, password: command.password, requestId: requestToken("ui-login-") })
     });
     const result = parseLogin(wire);
-    if (result.outcome === "CHALLENGE_REQUIRED" && result.challenge.nextStep === "PASSWORD_CHANGE") {
+    if (result.outcome === "CHALLENGE_REQUIRED" && result.challenge.purpose === "LOGIN" && result.challenge.nextStep === "PASSWORD_CHANGE") {
       throw new Error("INVALID_IAM_RESPONSE");
     }
     return result;
@@ -2332,6 +2355,59 @@ export const httpIamRepository: IamRepository = {
       exactKeys(wire, ["nextStep", "changedAt"]);
       if (wire.nextStep !== "REAUTHENTICATE") throw new Error("INVALID_IAM_RESPONSE");
       return { nextStep: "REAUTHENTICATE", changedAt: accountTimestamp(wire.changedAt) };
+    },
+    async inspectFirstEnrollment(command) {
+      const challengeId = accountIdentifier(command.challengeId);
+      const wire = await requestJSON<unknown>(`/api/iam/v1/auth/challenges/${encodeURIComponent(challengeId)}:enrollment-state`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ challengeCredential: responseSecret(command.challengeCredential) })
+      });
+      return parseEnrollmentChallengeState(wire, challengeId);
+    },
+    async startFirstContact(command) {
+      const wire = await requestJSON<unknown>(`/api/iam/v1/auth/challenges/${encodeURIComponent(accountIdentifier(command.challengeId))}/notification-contact/verifications`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: command.email, requestId: accountIdentifier(command.requestId),
+          challengeCredential: responseSecret(command.challengeCredential) })
+      });
+      const verification = parseNotificationVerification(wire);
+      if (verification.requestId !== command.requestId || verification.email !== command.email || verification.state !== "PENDING") {
+        throw new Error("INVALID_IAM_RESPONSE");
+      }
+      return verification;
+    },
+    async confirmFirstContact(command) {
+      const wire = await requestJSON<unknown>(`/api/iam/v1/auth/challenges/${encodeURIComponent(accountIdentifier(command.challengeId))}/notification-contact/verifications/${encodeURIComponent(accountIdentifier(command.verificationId))}:confirm`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: command.code, requestId: accountIdentifier(command.requestId),
+          challengeCredential: responseSecret(command.challengeCredential) })
+      });
+      const verification = parseNotificationVerification(wire);
+      if (verification.id !== command.verificationId || verification.state !== "VERIFIED") throw new Error("INVALID_IAM_RESPONSE");
+      return verification;
+    },
+    async startFirstTOTP(command) {
+      const wire = await requestJSON<unknown>(`/api/iam/v1/auth/challenges/${encodeURIComponent(accountIdentifier(command.challengeId))}:enroll`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ requestId: accountIdentifier(command.requestId),
+          challengeCredential: responseSecret(command.challengeCredential) })
+      });
+      const result = parseTOTPEnrollmentStart(wire, "CHALLENGE_INITIAL");
+      if (result.enrollment.requestId !== command.requestId) throw new Error("INVALID_IAM_RESPONSE");
+      return result;
+    },
+    async confirmFirstTOTP(command) {
+      const wire = await requestJSON<unknown>(`/api/iam/v1/auth/challenges/${encodeURIComponent(accountIdentifier(command.challengeId))}:confirm-enrollment`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ requestId: accountIdentifier(command.requestId), code: command.code,
+          challengeCredential: responseSecret(command.challengeCredential) })
+      });
+      return parseTOTPEnrollmentConfirmation(wire, command.enrollmentId, "CHALLENGE_INITIAL");
     },
     async startRecovery(command) {
       const requestId = accountIdentifier(command.requestId);

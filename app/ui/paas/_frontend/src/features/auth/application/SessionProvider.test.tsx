@@ -3,7 +3,7 @@ import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import type { LoginResult } from "../domain/session";
-import type { RecoveryCodeRegenerationResponse } from "../domain/personalSecurity";
+import type { EnrollmentChallengeState, RecoveryCodeRegenerationResponse } from "../domain/personalSecurity";
 import type { IamRepository, StartAuthenticatorRecoveryCommand } from "../repositories/iamRepository";
 import { SessionProvider, useSession } from "./SessionProvider";
 import { usePersonalSecurity } from "./PersonalSecurityProvider";
@@ -31,6 +31,7 @@ function Probe() {
       <span data-testid="challenge">{session.challenge?.challenge.nextStep ?? "none"}</span>
       <span data-testid="error">{session.error ?? "none"}</span>
       <span data-testid="recovery">{session.enrollmentRecovery?.recoveryCodes.join("|") ?? "none"}</span>
+      <span data-testid="first-enrollment">{session.firstEnrollment?.status ?? "none"}</span>
       <span data-testid="authenticator-recovery">{session.authenticatorRecovery?.state ?? "none"}</span>
       <span data-testid="code-regeneration">{security?.recoveryCodeRegenerationIntent?.state ?? "none"}</span>
       <span data-testid="returned-codes">{returnedCodes.join("|") || "none"}</span>
@@ -107,6 +108,25 @@ afterEach(() => {
 });
 
 describe("SessionProvider", () => {
+  it("discards a late first-enrollment observation after its challenge is cancelled", async () => {
+    const challenge = { id: "first-challenge", purpose: "ENROLLMENT" as const, nextStep: "ENROLLMENT" as const,
+      expiresAt: "2099-09-01T00:05:00Z" };
+    const inspection = deferred<EnrollmentChallengeState>();
+    const iam = repository();
+    iam.login = vi.fn().mockResolvedValue({ outcome: "CHALLENGE_REQUIRED", challenge,
+      challengeCredential: "only-restricted-credential" });
+    iam.authenticationChallenges = { verify: vi.fn(), changePassword: vi.fn(), inspectFirstEnrollment: vi.fn(() => inspection.promise) };
+    const view = render(<SessionProvider repository={iam}><Probe /></SessionProvider>);
+    await act(async () => fireEvent.click(view.getByText("login")));
+    await waitFor(() => expect(iam.authenticationChallenges!.inspectFirstEnrollment).toHaveBeenCalledOnce());
+    expect(view.getByTestId("first-enrollment").textContent).toBe("INSPECTING");
+    fireEvent.click(view.getByText("cancel-challenge"));
+    await act(async () => inspection.resolve({ challenge, notificationContact: { accountId: "account-one", userId: "user-one",
+      state: "NONE", resourceVersion: 0, pendingVerificationId: null } }));
+    expect(view.getByTestId("phase").textContent).toBe("anonymous");
+    expect(view.getByTestId("first-enrollment").textContent).toBe("none");
+    expect(view.container.textContent).not.toContain("only-restricted-credential");
+  });
   it("does not let a late 401 from an earlier login expire a new Session that reused the bearer", async () => {
     let originalRevision = 0;
     const EpochProbe = () => {

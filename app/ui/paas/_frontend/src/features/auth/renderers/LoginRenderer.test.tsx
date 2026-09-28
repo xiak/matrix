@@ -76,6 +76,141 @@ describe("branded sign-in flows", () => {
     expect(localStorage.length + sessionStorage.length).toBe(0);
     expect(document.body.textContent).not.toContain("memory-only-token");
   });
+  it("keeps a real first-enrollment challenge sessionless until one-time codes are acknowledged", async () => {
+    const expiresAt = "2099-09-01T00:05:00Z";
+    const challenge = { id: "enrollment-one", purpose: "ENROLLMENT" as const, nextStep: "ENROLLMENT" as const, expiresAt };
+    const codes = Array.from({ length: 10 }, (_, index) => `REAL-RECOVERY-${index}`);
+    const iam = repository();
+    iam.login = vi.fn().mockResolvedValue({ outcome: "CHALLENGE_REQUIRED", challenge, challengeCredential: "private-enrollment-credential" });
+    const contact = { accountId: "account-one", userId: "user-one", state: "VERIFIED" as const,
+      resourceVersion: 1, email: "user@example.invalid", verifiedAt: "2099-09-01T00:00:00Z", pendingVerificationId: null };
+    const enrollment = { id: "factor-one", requestId: "ui-first-factor-1", purpose: "INITIAL" as const, factorRevision: 1,
+      state: "PENDING" as const, createdAt: "2099-09-01T00:01:00Z", expiresAt: "2099-09-01T00:04:00Z", completedAt: null };
+    iam.authenticationChallenges = {
+      verify: vi.fn(), changePassword: vi.fn(),
+      inspectFirstEnrollment: vi.fn().mockResolvedValue({ challenge, notificationContact: contact }),
+      startFirstTOTP: vi.fn().mockImplementation(async (command: { requestId: string }) => ({ outcome: "APPLIED",
+        enrollment: { ...enrollment, requestId: command.requestId }, provisioning: { seed: "REAL-SECRET-ONCE", uri: "otpauth://totp/Matrix:user" } })),
+      confirmFirstTOTP: vi.fn().mockImplementation(async () => ({ nextStep: "REAUTHENTICATE",
+        enrollment: { ...enrollment, requestId: "ui-first-factor-1", state: "CONFIRMED", completedAt: "2099-09-01T00:03:00Z" }, recoveryCodes: codes }))
+    };
+    const { user } = open(iam);
+    await user.type(screen.getByLabelText("密码", { exact: true }), "Initial-Password-49!");
+    await user.click(screen.getByRole("button", { name: "登录控制台" }));
+    expect(await screen.findByRole("heading", { name: "首次设置身份验证器" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "开始绑定身份验证器" })).toBeTruthy();
+    expect(navigation.replace).not.toHaveBeenCalled();
+    expect(document.body.textContent).not.toContain("private-enrollment-credential");
+    await user.click(screen.getByRole("button", { name: "开始绑定身份验证器" }));
+    expect(await screen.findByText("REAL-SECRET-ONCE")).toBeTruthy();
+    await user.type(screen.getByLabelText("身份验证器 6 位动态验证码"), "123456");
+    await user.click(screen.getByRole("button", { name: "确认绑定" }));
+    expect(await screen.findByRole("heading", { name: "保存一次性恢复码" })).toBeTruthy();
+    expect(screen.getAllByText(/^REAL-RECOVERY-/)).toHaveLength(10);
+    expect(document.body.textContent).not.toContain("REAL-SECRET-ONCE");
+    expect(navigation.replace).not.toHaveBeenCalled();
+    expect(localStorage.length + sessionStorage.length).toBe(0);
+    await user.click(screen.getByRole("checkbox", { name: /安全保存/ }));
+    await user.click(screen.getByRole("button", { name: /重新登录/ }));
+    expect(await screen.findByRole("heading", { name: "身份验证器已绑定" })).toBeTruthy();
+    expect(document.body.textContent).not.toContain("REAL-RECOVERY-0");
+    expect(navigation.replace).not.toHaveBeenCalled();
+  });
+  it("does not show a secret or create a Session when enrollment state reports material already pending", async () => {
+    const challenge = { id: "enrollment-lost", purpose: "ENROLLMENT" as const, nextStep: "ENROLLMENT" as const,
+      expiresAt: "2099-09-01T00:05:00Z" };
+    const iam = repository();
+    iam.login = vi.fn().mockResolvedValue({ outcome: "CHALLENGE_REQUIRED", challenge, challengeCredential: "private-lost-credential" });
+    iam.authenticationChallenges = { verify: vi.fn(), changePassword: vi.fn(),
+      inspectFirstEnrollment: vi.fn().mockResolvedValue({ challenge,
+        notificationContact: { accountId: "account-one", userId: "user-one", state: "VERIFIED", resourceVersion: 1,
+          email: "user@example.invalid", verifiedAt: "2099-09-01T00:00:00Z", pendingVerificationId: null },
+        enrollment: { id: "pending-one", requestId: "original-start", purpose: "INITIAL", factorRevision: 1,
+          state: "PENDING", createdAt: "2099-09-01T00:01:00Z", expiresAt: challenge.expiresAt, completedAt: null } }) };
+    const { user } = open(iam);
+    await user.type(screen.getByLabelText("密码", { exact: true }), "Initial-Password-49!");
+    await user.click(screen.getByRole("button", { name: "登录控制台" }));
+    expect(await screen.findByText(/一次性密钥已丢失/)).toBeTruthy();
+    expect(screen.queryByText("REAL-SECRET-ONCE")).toBeNull();
+    expect(navigation.replace).not.toHaveBeenCalled();
+    expect(document.body.textContent).not.toContain("private-lost-credential");
+  });
+  it("verifies a first notification address before enabling factor enrollment", async () => {
+    const challenge = { id: "enrollment-contact", purpose: "ENROLLMENT" as const, nextStep: "ENROLLMENT" as const,
+      expiresAt: "2099-09-01T00:05:00Z" };
+    const none = { accountId: "account-one", userId: "user-one", state: "NONE" as const, resourceVersion: 0 as const,
+      pendingVerificationId: null };
+    const verified = { accountId: "account-one", userId: "user-one", state: "VERIFIED" as const,
+      resourceVersion: 1, email: "user@example.com", verifiedAt: "2099-09-01T00:00:00Z", pendingVerificationId: null };
+    const iam = repository();
+    iam.login = vi.fn().mockResolvedValue({ outcome: "CHALLENGE_REQUIRED", challenge, challengeCredential: "private-contact-credential" });
+    iam.authenticationChallenges = { verify: vi.fn(), changePassword: vi.fn(),
+      inspectFirstEnrollment: vi.fn().mockResolvedValueOnce({ challenge, notificationContact: none })
+        .mockResolvedValueOnce({ challenge, notificationContact: verified }),
+      startFirstContact: vi.fn().mockImplementation(async (command: { email: string; requestId: string }) => ({
+        id: "verification-one", accountId: none.accountId, userId: none.userId, email: command.email,
+        requestId: command.requestId, state: "PENDING", issuedAt: "2099-09-01T00:00:00Z",
+        expiresAt: "2099-09-01T00:05:00Z", completedAt: null,
+        delivery: { state: "PENDING", attempts: 0, lastOutcome: null, lastSmtpCode: null, updatedAt: "2099-09-01T00:00:00Z" }
+      })),
+      confirmFirstContact: vi.fn().mockResolvedValue({ id: "verification-one", accountId: none.accountId,
+        userId: none.userId, email: "user@example.com", state: "VERIFIED" }),
+      startFirstTOTP: vi.fn()
+    };
+    const { user } = open(iam);
+    await user.type(screen.getByLabelText("密码", { exact: true }), "Initial-Password-49!");
+    await user.click(screen.getByRole("button", { name: "登录控制台" }));
+    expect(await screen.findByLabelText("安全通知邮箱")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "开始绑定身份验证器" })).toBeNull();
+    await user.type(screen.getByLabelText("安全通知邮箱"), "user@example.com");
+    await user.click(screen.getByRole("button", { name: "发送地址验证码" }));
+    expect(await screen.findByLabelText("邮箱 8 位验证码")).toBeTruthy();
+    expect(iam.authenticationChallenges.startFirstTOTP).not.toHaveBeenCalled();
+    await user.type(screen.getByLabelText("邮箱 8 位验证码"), "00123456");
+    await user.click(screen.getByRole("button", { name: "验证邮箱" }));
+    expect(await screen.findByRole("button", { name: "开始绑定身份验证器" })).toBeTruthy();
+    expect(iam.authenticationChallenges.confirmFirstContact).toHaveBeenCalledWith(expect.objectContaining({
+      challengeId: "enrollment-contact", challengeCredential: "private-contact-credential", code: "00123456"
+    }));
+    expect(navigation.replace).not.toHaveBeenCalled();
+    expect(localStorage.length + sessionStorage.length).toBe(0);
+  });
+  it("requires a fresh enrollment challenge after restricted initial password change", async () => {
+    const expiresAt = "2099-09-01T00:05:00Z";
+    const passwordChallenge = { id: "initial-password", purpose: "ENROLLMENT" as const,
+      nextStep: "PASSWORD_CHANGE" as const, expiresAt };
+    const enrollmentChallenge = { id: "initial-factor", purpose: "ENROLLMENT" as const,
+      nextStep: "ENROLLMENT" as const, expiresAt };
+    const iam = repository();
+    iam.login = vi.fn().mockResolvedValueOnce({ outcome: "CHALLENGE_REQUIRED", challenge: passwordChallenge,
+      challengeCredential: "old-restricted-credential" })
+      .mockResolvedValueOnce({ outcome: "CHALLENGE_REQUIRED", challenge: enrollmentChallenge,
+        challengeCredential: "new-restricted-credential" });
+    iam.authenticationChallenges = {
+      verify: vi.fn(), changePassword: vi.fn().mockResolvedValue({ nextStep: "REAUTHENTICATE", changedAt: "2099-09-01T00:01:00Z" }),
+      inspectFirstEnrollment: vi.fn().mockResolvedValue({ challenge: enrollmentChallenge,
+        notificationContact: { accountId: "account-one", userId: "user-one", state: "VERIFIED", resourceVersion: 1,
+          email: "user@example.invalid", verifiedAt: "2099-09-01T00:00:00Z", pendingVerificationId: null } })
+    };
+    const { user } = open(iam);
+    await user.type(screen.getByLabelText("密码", { exact: true }), "Initial-Password-49!");
+    await user.click(screen.getByRole("button", { name: "登录控制台" }));
+    expect(await screen.findByRole("heading", { name: "首次设置前，请更新初始密码" })).toBeTruthy();
+    expect(iam.authenticationChallenges.inspectFirstEnrollment).not.toHaveBeenCalled();
+    await user.type(screen.getByLabelText("新密码", { exact: true }), "Replacement-Password-49!");
+    await user.type(screen.getByLabelText("确认新密码"), "Replacement-Password-49!");
+    await user.click(screen.getByRole("button", { name: "更新密码" }));
+    expect(await screen.findByText(/旧挑战不能沿用/)).toBeTruthy();
+    expect(navigation.replace).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "返回登录" }));
+    await user.type(screen.getByLabelText("密码", { exact: true }), "Replacement-Password-49!");
+    await user.click(screen.getByRole("button", { name: "登录控制台" }));
+    expect(await screen.findByRole("button", { name: "开始绑定身份验证器" })).toBeTruthy();
+    expect(iam.authenticationChallenges.inspectFirstEnrollment).toHaveBeenCalledWith({
+      challengeId: "initial-factor", challengeCredential: "new-restricted-credential"
+    });
+    expect(navigation.replace).not.toHaveBeenCalled();
+  });
   it("keeps the MFA preview sessionless until the challenge is complete", async () => {
     const { user } = open(previewIamRepository);
     await user.click(screen.getByRole("button", { name: "体验 MFA 登录挑战" }));

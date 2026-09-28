@@ -19,7 +19,7 @@ import type {
   LoginOutcome,
   SessionPhase
 } from "../domain/session";
-import type { EnrollmentRecoveryMaterial } from "../domain/personalSecurity";
+import type { EnrollmentRecoveryMaterial, FirstEnrollmentProgress } from "../domain/personalSecurity";
 import { httpIamRepository } from "../repositories/httpIamRepository";
 import type { IamRepository } from "../repositories/iamRepository";
 import { OwnSessionsProvider } from "./OwnSessionsProvider";
@@ -28,7 +28,8 @@ import { PersonalSecurityProvider } from "./PersonalSecurityProvider";
 export type SessionErrorCode = "invalidCredentials" | "tooManyAttempts" | "loginUnavailable"
   | "invalidVerificationCode" | "challengeExpired" | "challengeUnavailable"
   | "invalidRecoveryCode" | "recoveryExpired" | "recoveryUnavailable" | "recoveryOutcomeUnknown" | "recoveryNotFound"
-  | "invalidCurrentPassword" | "passwordPolicy" | "passwordConflict" | "passwordUnavailable" | "logoutUnavailable";
+  | "invalidCurrentPassword" | "passwordPolicy" | "passwordConflict" | "passwordUnavailable" | "logoutUnavailable"
+  | "enrollmentUnavailable" | "enrollmentContactInvalid" | "enrollmentFactorInvalid" | "enrollmentOutcomeUnknown";
 
 type SessionContextValue = {
   phase: SessionPhase;
@@ -37,6 +38,8 @@ type SessionContextValue = {
   challenge: PendingAuthenticationChallenge | null;
   authenticatorRecovery: PendingAuthenticatorRecovery | null;
   enrollmentRecovery: EnrollmentRecoveryMaterial | null;
+  firstEnrollment: FirstEnrollmentProgress | null;
+  reauthenticationReason: "PASSWORD" | "ENROLLMENT_PASSWORD" | "FACTOR" | null;
   error: SessionErrorCode | null;
   clearError(): void;
   login(loginName: string, password: string): Promise<LoginOutcome | null>;
@@ -48,6 +51,10 @@ type SessionContextValue = {
   restartAuthenticatorRecovery(): boolean;
   leaveAuthenticatorRecovery(): void;
   changeChallengePassword(newPassword: string): Promise<boolean>;
+  startFirstEnrollmentContact(email: string): Promise<boolean>;
+  confirmFirstEnrollmentContact(code: string): Promise<boolean>;
+  startFirstEnrollmentFactor(): Promise<boolean>;
+  confirmFirstEnrollmentFactor(code: string): Promise<boolean>;
   cancelAuthenticationChallenge(): void;
   acknowledgeReauthentication(): void;
   acknowledgeEnrollmentRecovery(): void;
@@ -122,12 +129,15 @@ export function SessionProvider({
   const [challenge, setChallenge] = useState<PendingAuthenticationChallenge | null>(null);
   const [authenticatorRecovery, setAuthenticatorRecovery] = useState<PendingAuthenticatorRecovery | null>(null);
   const [enrollmentRecovery, setEnrollmentRecovery] = useState<EnrollmentRecoveryMaterial | null>(null);
+  const [firstEnrollment, setFirstEnrollment] = useState<FirstEnrollmentProgress | null>(null);
+  const [reauthenticationReason, setReauthenticationReason] = useState<"PASSWORD" | "ENROLLMENT_PASSWORD" | "FACTOR" | null>(null);
   const [credential, setCredential] = useState<string | null>(null);
   const [sessionRevision, setSessionRevision] = useState(0);
   const credentialRef = useRef<string | null>(null);
   const challengeRef = useRef<PendingAuthenticationChallenge | null>(null);
   const authenticatorRecoveryRef = useRef<PendingAuthenticatorRecovery | null>(null);
   const authenticationRevisionRef = useRef(0);
+  const firstEnrollmentOperationRef = useRef<number | null>(null);
   const [error, setError] = useState<SessionErrorCode | null>(null);
   const clearError = useCallback(() => { setError(null); }, []);
 
@@ -143,12 +153,15 @@ export function SessionProvider({
 
   const forget = useCallback(() => {
     authenticationRevisionRef.current += 1;
+    firstEnrollmentOperationRef.current = null;
     credentialRef.current = null;
     setCredential(null);
     setCurrent(null);
     replaceChallenge(null);
     replaceAuthenticatorRecovery(null);
     setEnrollmentRecovery(null);
+    setFirstEnrollment(null);
+    setReauthenticationReason(null);
     setError(null);
     setPhase("anonymous");
   }, [replaceAuthenticatorRecovery, replaceChallenge]);
@@ -160,7 +173,9 @@ export function SessionProvider({
     const timer = window.setTimeout(() => {
       if (challengeRef.current !== challenge) return;
       authenticationRevisionRef.current += 1;
+      firstEnrollmentOperationRef.current = null;
       replaceChallenge(null);
+      setFirstEnrollment(null);
       if (challenge.challenge.purpose === "RECOVERY") {
         const active = authenticatorRecoveryRef.current;
         if (active) replaceAuthenticatorRecovery({
@@ -197,8 +212,11 @@ export function SessionProvider({
 
   const login = useCallback(async (loginName: string, password: string) => {
     const authenticationRevision = ++authenticationRevisionRef.current;
+    firstEnrollmentOperationRef.current = null;
     replaceChallenge(null);
     setEnrollmentRecovery(null);
+    setFirstEnrollment(null);
+    setReauthenticationReason(null);
     setPhase("authenticating");
     setError(null);
     try {
@@ -209,6 +227,16 @@ export function SessionProvider({
         setCredential(null);
         setCurrent(null);
         replaceChallenge({ loginName, challenge: result.challenge, challengeCredential: result.challengeCredential });
+        if (result.challenge.purpose === "ENROLLMENT") {
+          if (result.challenge.nextStep === "PASSWORD_CHANGE") {
+            setPhase("challenge-password-required");
+          } else {
+            setFirstEnrollment({ status: repository.authenticationChallenges?.inspectFirstEnrollment ? "INSPECTING" : "UNAVAILABLE",
+              busy: false, state: null, verification: null, provisioning: null, enrollmentId: null });
+            setPhase("enrollment-required");
+          }
+          return "challenge-required";
+        }
         const pendingRecovery = authenticatorRecoveryRef.current;
         const unresolvedRecovery = pendingRecovery?.loginName === loginName ? pendingRecovery : null;
         setPhase(result.challenge.nextStep === "PASSWORD_CHANGE"
@@ -241,6 +269,33 @@ export function SessionProvider({
       return null;
     }
   }, [replaceAuthenticatorRecovery, replaceChallenge, repository]);
+
+  useEffect(() => {
+    if (!challenge || challenge.challenge.purpose !== "ENROLLMENT" || challenge.challenge.nextStep !== "ENROLLMENT" ||
+        phase !== "enrollment-required" || firstEnrollment?.status !== "INSPECTING") return;
+    const requestChallenge = challenge;
+    const authenticationRevision = authenticationRevisionRef.current;
+    const inspect = repository.authenticationChallenges?.inspectFirstEnrollment;
+    if (!inspect) return;
+    // The challenge id is only a reference. The credential remains in memory
+    // and is transmitted only in this restricted request body.
+    void inspect({ challengeId: challenge.challenge.id, challengeCredential: challenge.challengeCredential })
+      .then((state) => {
+        if (authenticationRevisionRef.current !== authenticationRevision || challengeRef.current !== requestChallenge) return;
+        if (state.challenge.nextStep !== "ENROLLMENT" || state.challenge.expiresAt !== challenge.challenge.expiresAt ||
+            !state.notificationContact) throw new Error("INVALID_IAM_RESPONSE");
+        setFirstEnrollment({
+          status: state.enrollment ? "MATERIAL_LOST" : state.notificationContact.state === "VERIFIED" ? "TOTP_READY" :
+            state.notificationContact.pendingVerificationId ? "OUTCOME_UNKNOWN" : "CONTACT_REQUIRED",
+          busy: false, state, verification: null, provisioning: null, enrollmentId: state.enrollment?.id ?? null
+        });
+      })
+      .catch(() => {
+        if (authenticationRevisionRef.current !== authenticationRevision || challengeRef.current !== requestChallenge) return;
+        setFirstEnrollment((value) => value?.status === "INSPECTING" ? { ...value, status: "UNAVAILABLE" } : value);
+        setError("enrollmentUnavailable");
+      });
+  }, [challenge, firstEnrollment?.status, phase, repository]);
 
   const verifyAuthenticationChallenge = useCallback(async (code: string) => {
     if (!challenge || challenge.challenge.purpose !== "LOGIN" || challenge.challenge.nextStep !== "TOTP" ||
@@ -484,7 +539,8 @@ export function SessionProvider({
   }, [replaceAuthenticatorRecovery, replaceChallenge]);
 
   const changeChallengePassword = useCallback(async (newPassword: string) => {
-    if (!challenge || challenge.challenge.purpose !== "LOGIN" || challenge.challenge.nextStep !== "PASSWORD_CHANGE" ||
+    if (!challenge || (challenge.challenge.purpose !== "LOGIN" && challenge.challenge.purpose !== "ENROLLMENT") ||
+        challenge.challenge.nextStep !== "PASSWORD_CHANGE" ||
         (phase !== "challenge-password-required" && phase !== "changing-challenge-password") ||
         !repository.authenticationChallenges) return false;
     const requestChallenge = challenge;
@@ -502,6 +558,8 @@ export function SessionProvider({
       credentialRef.current = null;
       setCredential(null);
       setCurrent(null);
+      setFirstEnrollment(null);
+      setReauthenticationReason(requestChallenge.challenge.purpose === "ENROLLMENT" ? "ENROLLMENT_PASSWORD" : "PASSWORD");
       setPhase("reauthentication-required");
       return true;
     } catch (changeError) {
@@ -512,9 +570,139 @@ export function SessionProvider({
     }
   }, [challenge, phase, replaceChallenge, repository]);
 
+  const startFirstEnrollmentContact = useCallback(async (email: string) => {
+    const start = repository.authenticationChallenges?.startFirstContact;
+    if (!challenge || challenge.challenge.purpose !== "ENROLLMENT" || challenge.challenge.nextStep !== "ENROLLMENT" ||
+        phase !== "enrollment-required" || firstEnrollment?.status !== "CONTACT_REQUIRED" ||
+        firstEnrollment.state?.notificationContact?.state !== "NONE" || !start || firstEnrollmentOperationRef.current !== null) return false;
+    const revision = ++authenticationRevisionRef.current;
+    firstEnrollmentOperationRef.current = revision;
+    const source = challenge;
+    const requestId = `ui-first-contact-${crypto.randomUUID()}`;
+    setFirstEnrollment({ ...firstEnrollment, busy: true });
+    setError(null);
+    try {
+      const verification = await start({ challengeId: challenge.challenge.id, challengeCredential: challenge.challengeCredential, email, requestId });
+      if (authenticationRevisionRef.current !== revision || challengeRef.current !== source) return false;
+      if (verification.accountId !== firstEnrollment.state.notificationContact.accountId ||
+          verification.userId !== firstEnrollment.state.notificationContact.userId) throw new Error("INVALID_IAM_RESPONSE");
+      setFirstEnrollment({ ...firstEnrollment, status: "CONTACT_PENDING", busy: false, verification });
+      return true;
+    } catch (failure) {
+      if (authenticationRevisionRef.current !== revision || challengeRef.current !== source) return false;
+      const invalidInput = failure instanceof HttpProblem && (failure.status === 400 || failure.status === 422);
+      const noLongerEligible = failure instanceof HttpProblem && [401, 403, 409].includes(failure.status);
+      setFirstEnrollment({ ...firstEnrollment, status: invalidInput ? "CONTACT_REQUIRED" : noLongerEligible ? "UNAVAILABLE" : "OUTCOME_UNKNOWN", busy: false });
+      setError(invalidInput ? "enrollmentContactInvalid" : noLongerEligible ? "enrollmentUnavailable" : "enrollmentOutcomeUnknown");
+      return false;
+    } finally { if (firstEnrollmentOperationRef.current === revision) firstEnrollmentOperationRef.current = null; }
+  }, [challenge, firstEnrollment, phase, repository]);
+
+  const confirmFirstEnrollmentContact = useCallback(async (code: string) => {
+    const confirm = repository.authenticationChallenges?.confirmFirstContact;
+    const inspect = repository.authenticationChallenges?.inspectFirstEnrollment;
+    if (!challenge || challenge.challenge.purpose !== "ENROLLMENT" || challenge.challenge.nextStep !== "ENROLLMENT" ||
+        phase !== "enrollment-required" || firstEnrollment?.status !== "CONTACT_PENDING" || !firstEnrollment.verification ||
+        !confirm || !inspect || firstEnrollmentOperationRef.current !== null || !/^[0-9]{8}$/.test(code)) return false;
+    const revision = ++authenticationRevisionRef.current;
+    firstEnrollmentOperationRef.current = revision;
+    const source = challenge;
+    setFirstEnrollment({ ...firstEnrollment, busy: true });
+    setError(null);
+    try {
+      const confirmed = await confirm({ challengeId: challenge.challenge.id, challengeCredential: challenge.challengeCredential,
+        verificationId: firstEnrollment.verification.id, code, requestId: `ui-first-contact-confirm-${crypto.randomUUID()}` });
+      if (confirmed.id !== firstEnrollment.verification.id || confirmed.accountId !== firstEnrollment.verification.accountId ||
+          confirmed.userId !== firstEnrollment.verification.userId || confirmed.email !== firstEnrollment.verification.email ||
+          confirmed.state !== "VERIFIED") throw new Error("INVALID_IAM_RESPONSE");
+      const state = await inspect({ challengeId: challenge.challenge.id, challengeCredential: challenge.challengeCredential });
+      if (authenticationRevisionRef.current !== revision || challengeRef.current !== source) return false;
+      if (state.challenge.nextStep !== "ENROLLMENT" || state.challenge.expiresAt !== challenge.challenge.expiresAt ||
+          state.notificationContact?.state !== "VERIFIED" || state.enrollment ||
+          state.notificationContact.accountId !== firstEnrollment.verification.accountId ||
+          state.notificationContact.userId !== firstEnrollment.verification.userId ||
+          state.notificationContact.email !== firstEnrollment.verification.email) throw new Error("INVALID_IAM_RESPONSE");
+      setFirstEnrollment({ ...firstEnrollment, status: "TOTP_READY", busy: false, state, verification: null });
+      return true;
+    } catch (failure) {
+      if (authenticationRevisionRef.current !== revision || challengeRef.current !== source) return false;
+      const retryableCode = failure instanceof HttpProblem && (failure.status === 401 || failure.status === 422);
+      const noLongerEligible = failure instanceof HttpProblem && (failure.status === 403 || failure.status === 409);
+      setFirstEnrollment({ ...firstEnrollment, status: retryableCode ? "CONTACT_PENDING" : noLongerEligible ? "UNAVAILABLE" : "OUTCOME_UNKNOWN", busy: false });
+      setError(retryableCode ? "enrollmentContactInvalid" : noLongerEligible ? "enrollmentUnavailable" : "enrollmentOutcomeUnknown");
+      return false;
+    } finally { if (firstEnrollmentOperationRef.current === revision) firstEnrollmentOperationRef.current = null; }
+  }, [challenge, firstEnrollment, phase, repository]);
+
+  const startFirstEnrollmentFactor = useCallback(async () => {
+    const start = repository.authenticationChallenges?.startFirstTOTP;
+    if (!challenge || challenge.challenge.purpose !== "ENROLLMENT" || challenge.challenge.nextStep !== "ENROLLMENT" ||
+        phase !== "enrollment-required" || firstEnrollment?.status !== "TOTP_READY" ||
+        firstEnrollment.state?.notificationContact?.state !== "VERIFIED" || !start || firstEnrollmentOperationRef.current !== null) return false;
+    const revision = ++authenticationRevisionRef.current;
+    firstEnrollmentOperationRef.current = revision;
+    const source = challenge;
+    setFirstEnrollment({ ...firstEnrollment, busy: true });
+    setError(null);
+    try {
+      const result = await start({ challengeId: challenge.challenge.id, challengeCredential: challenge.challengeCredential,
+        requestId: `ui-first-factor-${crypto.randomUUID()}` });
+      if (authenticationRevisionRef.current !== revision || challengeRef.current !== source) return false;
+      if (result.outcome === "EQUAL_REPLAY") {
+        setFirstEnrollment({ ...firstEnrollment, status: "MATERIAL_LOST", busy: false, enrollmentId: result.enrollment.id });
+        return false;
+      }
+      if (Date.parse(result.enrollment.expiresAt) > Date.parse(challenge.challenge.expiresAt) || result.enrollment.state !== "PENDING") throw new Error("INVALID_IAM_RESPONSE");
+      setFirstEnrollment({ ...firstEnrollment, status: "TOTP_PENDING", busy: false, provisioning: result.provisioning,
+        enrollmentId: result.enrollment.id });
+      return true;
+    } catch (failure) {
+      if (authenticationRevisionRef.current !== revision || challengeRef.current !== source) return false;
+      const noLongerEligible = failure instanceof HttpProblem && [401, 403, 409].includes(failure.status);
+      setFirstEnrollment({ ...firstEnrollment, status: noLongerEligible ? "UNAVAILABLE" : "OUTCOME_UNKNOWN", busy: false });
+      setError(noLongerEligible ? "enrollmentUnavailable" : "enrollmentOutcomeUnknown");
+      return false;
+    } finally { if (firstEnrollmentOperationRef.current === revision) firstEnrollmentOperationRef.current = null; }
+  }, [challenge, firstEnrollment, phase, repository]);
+
+  const confirmFirstEnrollmentFactor = useCallback(async (code: string) => {
+    const confirm = repository.authenticationChallenges?.confirmFirstTOTP;
+    if (!challenge || challenge.challenge.purpose !== "ENROLLMENT" || challenge.challenge.nextStep !== "ENROLLMENT" ||
+        phase !== "enrollment-required" || firstEnrollment?.status !== "TOTP_PENDING" ||
+        !firstEnrollment.provisioning || !firstEnrollment.enrollmentId || !confirm ||
+        firstEnrollmentOperationRef.current !== null || !/^[0-9]{6}$/.test(code)) return false;
+    const revision = ++authenticationRevisionRef.current;
+    firstEnrollmentOperationRef.current = revision;
+    const source = challenge;
+    setFirstEnrollment({ ...firstEnrollment, busy: true });
+    setError(null);
+    try {
+      const result = await confirm({ challengeId: challenge.challenge.id, challengeCredential: challenge.challengeCredential,
+        enrollmentId: firstEnrollment.enrollmentId, code, requestId: `ui-first-factor-confirm-${crypto.randomUUID()}` });
+      if (authenticationRevisionRef.current !== revision || challengeRef.current !== source) return false;
+      if (result.enrollment.id !== firstEnrollment.enrollmentId || result.recoveryCodes.length !== 10 ||
+          new Set(result.recoveryCodes).size !== 10) throw new Error("INVALID_IAM_RESPONSE");
+      replaceChallenge(null);
+      setFirstEnrollment(null);
+      setEnrollmentRecovery({ enrollmentId: result.enrollment.id, recoveryCodes: [...result.recoveryCodes] });
+      setReauthenticationReason("FACTOR");
+      setPhase("recovery-codes-required");
+      return true;
+    } catch (failure) {
+      if (authenticationRevisionRef.current !== revision || challengeRef.current !== source) return false;
+      const retryableCode = failure instanceof HttpProblem && failure.status === 401;
+      const noLongerEligible = failure instanceof HttpProblem && (failure.status === 403 || failure.status === 409);
+      setFirstEnrollment({ ...firstEnrollment, status: retryableCode ? "TOTP_PENDING" : noLongerEligible ? "UNAVAILABLE" : "OUTCOME_UNKNOWN", busy: false });
+      setError(retryableCode ? "enrollmentFactorInvalid" : noLongerEligible ? "enrollmentUnavailable" : "enrollmentOutcomeUnknown");
+      return false;
+    } finally { if (firstEnrollmentOperationRef.current === revision) firstEnrollmentOperationRef.current = null; }
+  }, [challenge, firstEnrollment, phase, replaceChallenge, repository]);
+
   const cancelAuthenticationChallenge = useCallback(() => {
     authenticationRevisionRef.current += 1;
+    firstEnrollmentOperationRef.current = null;
     replaceChallenge(null);
+    setFirstEnrollment(null);
     setError(null);
     setPhase("anonymous");
   }, [replaceChallenge]);
@@ -599,6 +787,8 @@ export function SessionProvider({
     challenge,
     authenticatorRecovery,
     enrollmentRecovery,
+    firstEnrollment,
+    reauthenticationReason,
     error,
     clearError,
     login,
@@ -610,13 +800,17 @@ export function SessionProvider({
     restartAuthenticatorRecovery,
     leaveAuthenticatorRecovery,
     changeChallengePassword,
+    startFirstEnrollmentContact,
+    confirmFirstEnrollmentContact,
+    startFirstEnrollmentFactor,
+    confirmFirstEnrollmentFactor,
     cancelAuthenticationChallenge,
     acknowledgeReauthentication,
     acknowledgeEnrollmentRecovery,
     changePassword,
     logout,
     expire
-  }), [acknowledgeEnrollmentRecovery, acknowledgeReauthentication, authenticatorRecovery, cancelAuthenticationChallenge, challenge, changeChallengePassword, changePassword, clearError, confirmAuthenticatorRecovery, current, enrollmentRecovery, enterAuthenticatorRecovery, error, expire, inspectAuthenticatorRecovery, leaveAuthenticatorRecovery, login, logout, phase, sessionRevision, restartAuthenticatorRecovery, startAuthenticatorRecovery, verifyAuthenticationChallenge]);
+  }), [acknowledgeEnrollmentRecovery, acknowledgeReauthentication, authenticatorRecovery, cancelAuthenticationChallenge, challenge, changeChallengePassword, changePassword, clearError, confirmAuthenticatorRecovery, confirmFirstEnrollmentContact, confirmFirstEnrollmentFactor, current, enrollmentRecovery, firstEnrollment, reauthenticationReason, enterAuthenticatorRecovery, error, expire, inspectAuthenticatorRecovery, leaveAuthenticatorRecovery, login, logout, phase, sessionRevision, restartAuthenticatorRecovery, startAuthenticatorRecovery, startFirstEnrollmentContact, startFirstEnrollmentFactor, verifyAuthenticationChallenge]);
   const credentialValue = useMemo(() => ({ credential }), [credential]);
 
   return (

@@ -54,7 +54,14 @@ export type RecoveryAuthenticationChallenge = {
   expiresAt: string;
 };
 
-export type AuthenticationChallenge = LoginAuthenticationChallenge | RecoveryAuthenticationChallenge;
+export type EnrollmentAuthenticationChallenge = {
+  id: string;
+  purpose: "ENROLLMENT";
+  nextStep: "PASSWORD_CHANGE" | "ENROLLMENT";
+  expiresAt: string;
+};
+
+export type AuthenticationChallenge = LoginAuthenticationChallenge | RecoveryAuthenticationChallenge | EnrollmentAuthenticationChallenge;
 
 export type PendingAuthenticationChallenge = {
   loginName: string;
@@ -121,6 +128,7 @@ export type SessionPhase =
   | "authenticating"
   | "challenge-required"
   | "verifying-challenge"
+  | "enrollment-required"
   | "recovery-code-required"
   | "starting-recovery"
   | "recovery-enrollment-required"

@@ -1,4 +1,5 @@
 import type { SecuritySettingsUpdateIntent } from "./accounts";
+import type { EnrollmentAuthenticationChallenge } from "./session";
 
 export type NotificationContact =
   | {
@@ -47,7 +48,7 @@ export type AuthenticatorState =
 export type TOTPEnrollment = {
   id: string;
   requestId: string;
-  /** Present only on the fixed replacement wire; the currently integrated initial wire predates it. */
+  /** Present on challenge-initial and replacement wires; legacy Session-initial responses omit it. */
   purpose?: "INITIAL" | "REPLACEMENT";
   factorRevision: number;
   state: "PENDING" | "CONFIRMED" | "CANCELLED" | "EXPIRED";
@@ -76,6 +77,24 @@ export type TOTPEnrollmentConfirmation = {
   enrollment: TOTPEnrollment;
   nextStep: "REAUTHENTICATE";
   recoveryCodes: string[];
+};
+
+// A restricted pre-Session ceremony. Its credential remains in SessionProvider
+// memory and cannot be used as a normal authenticated bearer.
+export type EnrollmentChallengeState = {
+  challenge: EnrollmentAuthenticationChallenge;
+  notificationContact?: NotificationContact;
+  enrollment?: TOTPEnrollment & { purpose: "INITIAL"; state: "PENDING"; factorRevision: 1 };
+};
+
+export type FirstEnrollmentProgress = {
+  status: "INSPECTING" | "CONTACT_REQUIRED" | "CONTACT_PENDING" | "TOTP_READY" | "TOTP_PENDING"
+    | "MATERIAL_LOST" | "OUTCOME_UNKNOWN" | "UNAVAILABLE";
+  busy: boolean;
+  state: EnrollmentChallengeState | null;
+  verification: NotificationContactVerification | null;
+  provisioning: { seed: string; uri: string } | null;
+  enrollmentId: string | null;
 };
 
 export type EnrollmentRecoveryMaterial = {

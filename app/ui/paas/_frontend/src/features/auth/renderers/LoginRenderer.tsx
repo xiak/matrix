@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { ChartNoAxesCombined, Database, Gauge, GitBranch, Layers3, MapPin, ShieldCheck } from "lucide-react";
 import { App, Brand } from "@ui/xiak";
@@ -13,10 +13,12 @@ import { PasswordChangeForm } from "./PasswordChangeForm";
 import { EnrollmentRecoveryCodes } from "./EnrollmentRecoveryCodes";
 import { AuthenticatorRecoveryForm, isAuthenticatorRecoveryPhase } from "./AuthenticatorRecoveryForm";
 import { PreviewMandatoryEnrollment } from "./PreviewMandatoryEnrollment";
+import { FirstEnrollmentForm } from "./FirstEnrollmentForm";
 import styles from "./LoginRenderer.module.css";
 
 export function LoginRenderer({ returnTo = "/console/" }: { returnTo?: string }) {
   const [previewEnrollmentOpen, setPreviewEnrollmentOpen] = useState(false);
+  const pageRef = useRef<HTMLDivElement>(null);
   const session = useSession();
   const t = useTranslations("Auth");
   const firstLogin = Boolean(session.current && session.phase !== "authenticated");
@@ -24,8 +26,14 @@ export function LoginRenderer({ returnTo = "/console/" }: { returnTo?: string })
     || session.phase === "challenge-password-required" || session.phase === "changing-challenge-password"
     || session.phase === "reauthentication-required";
   const recovering = isAuthenticatorRecoveryPhase(session.phase);
+  const challengeId = session.challenge?.challenge.id;
+  useLayoutEffect(() => {
+    // The login shell owns its scroll layer. Opening a taller ceremony must
+    // not inherit the scrolled position of the shorter sign-in card.
+    if (previewEnrollmentOpen || challengeId) pageRef.current?.parentElement?.scrollTo?.(0, 0);
+  }, [challengeId, previewEnrollmentOpen]);
   return <App.Frame><App.Background /><App.Layers><App.Layer>
-    <div className={styles.page}>
+    <div className={styles.page} ref={pageRef}>
       <header className={styles.header}>
         <Brand className={styles.mobileBrand} />
         <span className={styles.platformLabel}>{t("platform")}</span>
@@ -53,6 +61,7 @@ export function LoginRenderer({ returnTo = "/console/" }: { returnTo?: string })
             ? <PreviewMandatoryEnrollment onClose={() => setPreviewEnrollmentOpen(false)} />
             : session.phase === "recovery-codes-required" ? <EnrollmentRecoveryCodes />
             : recovering ? <AuthenticatorRecoveryForm />
+            : session.phase === "enrollment-required" ? <FirstEnrollmentForm />
             : challenged ? <AuthenticationChallengeForm returnTo={returnTo} />
             : firstLogin ? <PasswordChangeForm returnTo={returnTo} />
               : <AccountLoginForm returnTo={returnTo} onPreviewEnrollment={() => setPreviewEnrollmentOpen(true)} />}

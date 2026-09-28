@@ -920,6 +920,77 @@ describe("IAM HTTP account boundary", () => {
     expect(firstRequest(fetcher)[1].headers).not.toMatchObject({ Authorization: expect.any(String) });
   });
 
+  it("keeps first enrollment on restricted challenge routes without a Session or bearer", async () => {
+    const expiresAt = "2026-09-11T08:05:00Z";
+    const challenge = { apiVersion, kind: "AuthenticationChallenge", id: "first-one", purpose: "ENROLLMENT", nextStep: "ENROLLMENT", expiresAt };
+    const challengeCredential = "first-enrollment-secret";
+    let fetcher = reply({ outcome: "CHALLENGE_REQUIRED", challenge, challengeCredential });
+    await expect(httpIamRepository.login({ loginName: "alex@acme", password: "initial-password" })).resolves.toMatchObject({
+      outcome: "CHALLENGE_REQUIRED", challenge: { purpose: "ENROLLMENT", nextStep: "ENROLLMENT" }
+    });
+    expect(firstRequest(fetcher)[1].headers).not.toMatchObject({ Authorization: expect.any(String) });
+
+    fetcher = reply({ challenge, notificationContact });
+    await expect(httpIamRepository.authenticationChallenges!.inspectFirstEnrollment!({ challengeId: challenge.id, challengeCredential }))
+      .resolves.toMatchObject({ challenge: { purpose: "ENROLLMENT" }, notificationContact: { state: "NONE" } });
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/auth/challenges/${challenge.id}:enrollment-state`);
+    expect(requestBody(fetcher)).toEqual({ challengeCredential });
+    expect(firstRequest(fetcher)[1].headers).not.toMatchObject({ Authorization: expect.any(String) });
+
+    fetcher = reply({ ...notificationVerification, requestId: "first-contact-1", email: "alex@example.com" });
+    await httpIamRepository.authenticationChallenges!.startFirstContact!({ challengeId: challenge.id, challengeCredential,
+      email: "alex@example.com", requestId: "first-contact-1" });
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/auth/challenges/${challenge.id}/notification-contact/verifications`);
+    expect(requestBody(fetcher)).toEqual({ challengeCredential, email: "alex@example.com", requestId: "first-contact-1" });
+    expect(firstRequest(fetcher)[1].headers).not.toMatchObject({ Authorization: expect.any(String) });
+
+    const enrollment = { ...pendingEnrollment, requestId: "first-factor-1", purpose: "INITIAL", createdAt: "2026-09-11T08:01:00Z",
+      expiresAt: "2026-09-11T08:04:00Z" };
+    fetcher = reply({ outcome: "APPLIED", enrollment, provisioning: { seed: "ONLY-ONCE", uri: "otpauth://totp/Matrix:alex?secret=ONLY-ONCE" } });
+    await expect(httpIamRepository.authenticationChallenges!.startFirstTOTP!({ challengeId: challenge.id, challengeCredential,
+      requestId: "first-factor-1" })).resolves.toMatchObject({ outcome: "APPLIED", provisioning: { seed: "ONLY-ONCE" } });
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/auth/challenges/${challenge.id}:enroll`);
+    expect(requestBody(fetcher)).toEqual({ challengeCredential, requestId: "first-factor-1" });
+    expect(firstRequest(fetcher)[1].headers).not.toMatchObject({ Authorization: expect.any(String) });
+
+    fetcher = reply({ challenge, notificationContact: { ...notificationContact, state: "VERIFIED", resourceVersion: 1,
+      email: "alex@example.com", verifiedAt: timestamp }, enrollment });
+    await expect(httpIamRepository.authenticationChallenges!.inspectFirstEnrollment!({ challengeId: challenge.id, challengeCredential }))
+      .resolves.toMatchObject({ enrollment: { id: enrollment.id, expiresAt: enrollment.expiresAt } });
+
+    fetcher = reply({ outcome: "EQUAL_REPLAY", enrollment });
+    const replay = await httpIamRepository.authenticationChallenges!.startFirstTOTP!({ challengeId: challenge.id, challengeCredential,
+      requestId: "first-factor-1" });
+    expect(replay).toEqual({ outcome: "EQUAL_REPLAY", enrollment: expect.any(Object) });
+    expect(firstRequest(fetcher)[1].headers).not.toMatchObject({ Authorization: expect.any(String) });
+    expect(JSON.stringify(replay)).not.toContain("ONLY-ONCE");
+
+    const recoveryCodes = Array.from({ length: 10 }, (_, index) => `FIRST-RECOVERY-${index}`);
+    fetcher = reply({ enrollment: { ...enrollment, state: "CONFIRMED", completedAt: "2026-09-11T08:03:00Z" },
+      nextStep: "REAUTHENTICATE", recoveryCodes });
+    await expect(httpIamRepository.authenticationChallenges!.confirmFirstTOTP!({ challengeId: challenge.id, challengeCredential,
+      enrollmentId: enrollment.id, code: "123456", requestId: "first-confirm-1" })).resolves.toMatchObject({ recoveryCodes });
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/auth/challenges/${challenge.id}:confirm-enrollment`);
+    expect(requestBody(fetcher)).toEqual({ challengeCredential, requestId: "first-confirm-1", code: "123456" });
+    expect(firstRequest(fetcher)[1].headers).not.toMatchObject({ Authorization: expect.any(String) });
+  });
+
+  it("rejects crossed first-enrollment phase, target or extra session data", async () => {
+    const challenge = { apiVersion, kind: "AuthenticationChallenge", id: "first-one", purpose: "ENROLLMENT", nextStep: "ENROLLMENT",
+      expiresAt: "2026-09-11T08:05:00Z" };
+    for (const response of [
+      { challenge: { ...challenge, id: "other" }, notificationContact },
+      { challenge: { ...challenge, purpose: "LOGIN" }, notificationContact },
+      { challenge, notificationContact: null },
+      { challenge, notificationContact, session: { id: "forbidden" } },
+      { challenge: { ...challenge, nextStep: "PASSWORD_CHANGE" }, notificationContact }
+    ]) {
+      reply(response);
+      await expect(httpIamRepository.authenticationChallenges!.inspectFirstEnrollment!({ challengeId: "first-one",
+        challengeCredential: "secret" })).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+  });
+
   it("uses sealed recovery routes without a bearer and validates the complete one-time ceremony", async () => {
     const requestId = "recovery-request-one";
     const createdAt = "2026-09-21T01:00:00Z";

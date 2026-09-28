@@ -33,7 +33,7 @@ import type {
 } from "../domain/accounts";
 import type { AccessWorkspace, AccessWorkspaceCommand } from "../domain/accessWorkspace";
 import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDirectory, AccessKeyStatus, AccessKeyStatusChange } from "../domain/accessKeys";
-import type { AuthenticatorState, NotificationContact, NotificationContactVerification, RecoveryCodeRegeneration, RecoveryCodeRegenerationResponse, SecurityStepUp, TOTPEnrollment, TOTPEnrollmentConfirmation, TOTPEnrollmentStart } from "../domain/personalSecurity";
+import type { AuthenticatorState, EnrollmentChallengeState, NotificationContact, NotificationContactVerification, RecoveryCodeRegeneration, RecoveryCodeRegenerationResponse, SecurityStepUp, TOTPEnrollment, TOTPEnrollmentConfirmation, TOTPEnrollmentStart } from "../domain/personalSecurity";
 import type { UserBatchCommand } from "../domain/userBatch";
 import type { CreateRoleCommand, Role, RoleAccess, RoleDirectory, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionRevocation } from "../domain/roles";
 
@@ -65,6 +65,11 @@ export interface IamRepository {
   authenticationChallenges?: {
     verify(command: VerifyAuthenticationChallengeCommand): Promise<LoginResult>;
     changePassword(command: ChangeChallengePasswordCommand): Promise<{ nextStep: "REAUTHENTICATE"; changedAt: string }>;
+    inspectFirstEnrollment?(command: { challengeId: string; challengeCredential: string }): Promise<EnrollmentChallengeState>;
+    startFirstContact?(command: { challengeId: string; challengeCredential: string; email: string; requestId: string }): Promise<NotificationContactVerification>;
+    confirmFirstContact?(command: { challengeId: string; challengeCredential: string; verificationId: string; code: string; requestId: string }): Promise<NotificationContactVerification>;
+    startFirstTOTP?(command: { challengeId: string; challengeCredential: string; requestId: string }): Promise<TOTPEnrollmentStart>;
+    confirmFirstTOTP?(command: { challengeId: string; challengeCredential: string; enrollmentId: string; code: string; requestId: string }): Promise<TOTPEnrollmentConfirmation>;
     startRecovery?(command: StartAuthenticatorRecoveryCommand): Promise<AuthenticatorRecoveryStart>;
     confirmRecovery?(command: ConfirmAuthenticatorRecoveryCommand): Promise<AuthenticatorRecoveryConfirmation>;
     inspectRecovery?(command: InspectAuthenticatorRecoveryCommand): Promise<AuthenticatorRecovery>;
