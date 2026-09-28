@@ -2018,6 +2018,22 @@ hosts retained their original boot identities and no test containers or
 services remain. The signed input bundles are retained only for the corrected
 fresh rerun.
 
+The terminal permission correction now inserts new content-bound versions for
+`system.account-administrator` and `system.paas-developer` and advances only
+the exact, untouched IAM40/IAM45 release defaults after all IAM DDL in the
+same transaction. It does not rewrite older versions, decisions, attachments,
+or a deliberately selected different default; the published schema/profile
+remains 45/26/6+r16 because no function or wire shape changes. On a disposable
+local PostgreSQL 18 instance, the fresh IAM HTTP gate admitted the
+administrator/developer terminal actions and denied the viewer; the storage
+gate retained the viewer denial, immutable policy history and replay rules.
+The actual fixed IAM40 executable produced a denied terminal decision before
+the retained-data upgrade; the new executable admitted a fresh qualified
+administrator and developer, denied the viewer, and preserved the original
+denial and policy versions. These focused gates pass, but no corrected signed
+bundle or two-host gate has passed yet, so interactive host access is still
+not accepted.
+
 ## Adoption
 
 - [FEAT-008 fixed-source review](../adoption/FEAT-008-linux-host-management.md)

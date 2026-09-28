@@ -255,6 +255,24 @@ var removedBuiltinRoleNames = []string{
 	"INSTALLATION_VERIFIER",
 }
 
+func assertTerminalPolicyHTTP(t *testing.T, handler http.Handler, paasCredential, bearer string, action iamv1.Action, requestID string, allowed bool) {
+	t.Helper()
+	mode, usage := iamv1.AuthorizationResourceInstance, iamv1.AuthorizationCollectionUsage("")
+	resource := iamv1.ResourceReference{Kind: iamv1.ResourceTerminalSession, ID: "terminal-session-test"}
+	if action == iamv1.ActionPaaSTerminalSessionCreate {
+		mode, usage, resource.ID = iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate, "collection"
+	}
+	request := profileBoundIAMRequest(t, iamv1.AuthorizationRequest{Action: action, Resource: resource,
+		RequestID: requestID, CorrelationID: requestID}, mode, usage)
+	response := performIAMRequestWithSubject(handler, mustIAMJSON(t, request), paasCredential, bearer)
+	var decision iamv1.AuthorizationDecision
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &decision) != nil ||
+		iamv1.CheckAuthorizationDecisionForRequest(decision, request) != nil || decision.Allowed != allowed ||
+		(allowed && (decision.TenantID == "" || decision.InstallationID != "")) {
+		t.Fatalf("terminal policy action=%s allowed=%t status=%d want=%t", action, decision.Allowed, response.Code, allowed)
+	}
+}
+
 func proveDirectPolicyAttachments(t *testing.T, ctx context.Context, handler http.Handler, admin *pgx.Conn, primary string) {
 	t.Helper()
 	post := func(path, credential string, body any, want int) *httptest.ResponseRecorder {
@@ -329,6 +347,9 @@ func proveDirectPolicyAttachments(t *testing.T, ctx context.Context, handler htt
 		t.Fatal("create replay changed attachment identity")
 	}
 	authorize(true)
+	for _, action := range []iamv1.Action{iamv1.ActionPaaSTerminalSessionCreate, iamv1.ActionPaaSTerminalSessionClose} {
+		assertTerminalPolicyHTTP(t, handler, paasCredential, bearer, action, "fresh-viewer-"+string(action), false)
+	}
 	variant := request
 	variant.PolicyID = iamv1.SystemPolicyPaaSDeveloper
 	post("/v1/policy-attachments", primary, variant, http.StatusConflict)
@@ -16746,6 +16767,16 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 	if err := json.Unmarshal(developerAuthorize.Body.Bytes(), &decision); err != nil ||
 		!decision.Allowed || decision.Subject == nil || decision.Subject.ID != string(developer.ID) {
 		t.Fatalf("developer allowed decision=%#v err=%v", decision, err)
+	}
+	for _, entry := range []struct {
+		name, bearer string
+	}{
+		{"account-administrator", loginWire.Credential},
+		{"paas-developer", developerWire.Credential},
+	} {
+		for _, action := range []iamv1.Action{iamv1.ActionPaaSTerminalSessionCreate, iamv1.ActionPaaSTerminalSessionClose} {
+			assertTerminalPolicyHTTP(t, handler, paasCredential, entry.bearer, action, "fresh-"+entry.name+"-"+string(action), true)
+		}
 	}
 	t.Run("tenant accounts and subusers", func(t *testing.T) {
 		proveTenantAccounts(t, ctx, handler, admin, loginWire.Credential, transactionFailures)

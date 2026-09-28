@@ -492,6 +492,33 @@ func TestIAMRetainedEnablingProcessUpgrade(t *testing.T) {
 	}
 	otherPrimary := loginIAM(t, endpoint, "retained.primary", initialReaderPassword, "enabling-second-root")
 	sensitive = append(sensitive, otherPrimary.Credential)
+	terminalUsers := make(map[iamv1.PolicyID]iamv1.User)
+	for _, entry := range []struct {
+		login  string
+		policy iamv1.PolicyID
+	}{
+		{"retained.terminal.developer", iamv1.SystemPolicyPaaSDeveloper},
+		{"retained.terminal.viewer", iamv1.SystemPolicyPaaSViewer},
+	} {
+		user := createIAMUser(t, endpoint, primary.Credential, entry.login, entry.login, initialReaderPassword, entry.login+"-create")
+		first := loginIAM(t, endpoint, entry.login+"@organization-process", initialReaderPassword, entry.login+"-first")
+		changePasswordIAM(t, endpoint, first.Credential, initialReaderPassword, changedReaderPassword, entry.login+"-password")
+		grant := performJSON(t, http.MethodPost, endpoint+"/v1/policy-attachments", primary.Credential,
+			iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(user.ID)},
+				PolicyID: entry.policy, PolicyResourceVersion: 1, RequestID: entry.login + "-grant"})
+		if grant.Status != http.StatusOK {
+			t.Fatalf("retained terminal policy grant %s: status=%d", entry.policy, grant.Status)
+		}
+		qualified := loginIAM(t, endpoint, entry.login+"@organization-process", changedReaderPassword, entry.login+"-qualified")
+		sensitive = append(sensitive, first.Credential, qualified.Credential)
+		assertTenantTerminalAuthorization(t, endpoint, qualified.Credential, entry.login+"-before-upgrade", false)
+		terminalUsers[entry.policy] = user
+	}
+	oldTerminalDecision := assertTenantTerminalAuthorization(t, endpoint, primary.Credential, "retained-terminal-before-upgrade", false)
+	var oldAdminDefault string
+	if err := admin.QueryRow(ctx, `SELECT default_version_id FROM iam.policies WHERE id='system.account-administrator'`).Scan(&oldAdminDefault); err != nil || oldAdminDefault != "version-4aec64d8b8e4561bb57acc584972a460918f20533996382156fb62531c75c27f" {
+		t.Fatal("authenticated predecessor did not retain its exact system administrator policy")
+	}
 	for _, identity := range []loginResult{a, b, otherPrimary} {
 		if response := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", identity.Credential, nil); response.Status != http.StatusOK {
 			t.Fatal("enabling predecessor did not authenticate its retained Session", response.Status)
@@ -558,6 +585,41 @@ func TestIAMRetainedEnablingProcessUpgrade(t *testing.T) {
 	 AND (m.user_id IS NULL OR m.enrollment_state<>'NEVER_BOUND' OR m.revision<>1 OR m.factor_id IS NOT NULL))
 	 AND NOT EXISTS(SELECT 1 FROM iam.authentication_challenges) AND NOT EXISTS(SELECT 1 FROM iam.mfa_recovery_batches)`).Scan(&shape); err != nil || !shape {
 		t.Fatal("enabling data gained invented factor, challenge or recovery evidence", err)
+	}
+	freshPrimary := loginIAM(t, endpoint, "admin", changedAdminPassword, "retained-terminal-current-root")
+	sensitive = append(sensitive, freshPrimary.Credential)
+	newTerminalDecision := assertTenantTerminalAuthorization(t, endpoint, freshPrimary.Credential, "retained-terminal-after-upgrade", true)
+	for _, entry := range []struct {
+		policy  iamv1.PolicyID
+		allowed bool
+	}{
+		{iamv1.SystemPolicyPaaSDeveloper, true},
+		{iamv1.SystemPolicyPaaSViewer, false},
+	} {
+		user := terminalUsers[entry.policy]
+		qualified := loginIAM(t, endpoint, user.LoginName+"@organization-process", changedReaderPassword, string(entry.policy)+"-after-upgrade")
+		sensitive = append(sensitive, qualified.Credential)
+		assertTenantTerminalAuthorization(t, endpoint, qualified.Credential, string(entry.policy)+"-after-upgrade-decision", entry.allowed)
+	}
+	var newAdminDefault string
+	var newAdminVersion, oldAdminVersion, oldDecisionRetained bool
+	if err := admin.QueryRow(ctx, `SELECT p.default_version_id,p.resource_version=2,
+	 EXISTS(SELECT 1 FROM iam.policy_versions v WHERE v.policy_id=p.id AND v.id=$1),
+	 EXISTS(SELECT 1 FROM iam.authorization_decisions d WHERE d.id=$2 AND NOT d.allowed)
+	 FROM iam.policies p WHERE p.id='system.account-administrator'`, oldAdminDefault, oldTerminalDecision.ID).
+		Scan(&newAdminDefault, &newAdminVersion, &oldAdminVersion, &oldDecisionRetained); err != nil ||
+		newAdminDefault == oldAdminDefault || !newAdminVersion || !oldAdminVersion || !oldDecisionRetained ||
+		newTerminalDecision.ID == oldTerminalDecision.ID {
+		t.Fatal("retained system policy default did not advance without rewriting its predecessor or decision", err)
+	}
+	var newDeveloperDefault string
+	var developerAdvanced, oldDeveloperVersion bool
+	if err := admin.QueryRow(ctx, `SELECT p.default_version_id,p.resource_version=2,
+	 EXISTS(SELECT 1 FROM iam.policy_versions v WHERE v.policy_id=p.id AND v.id='version-1769e401e54332adbc3258557bc11f11904a0c79ca00d2e419d152fe6242b42e')
+	 FROM iam.policies p WHERE p.id='system.paas-developer'`).Scan(&newDeveloperDefault, &developerAdvanced, &oldDeveloperVersion); err != nil ||
+		newDeveloperDefault == "version-1769e401e54332adbc3258557bc11f11904a0c79ca00d2e419d152fe6242b42e" ||
+		!developerAdvanced || !oldDeveloperVersion {
+		t.Fatal("retained developer policy default did not advance without rewriting its predecessor", err)
 	}
 	for _, identity := range []struct {
 		name  string
@@ -2160,6 +2222,41 @@ func assertIAMWeakLoginRejected(t *testing.T, endpoint string) {
 		bytes.Contains(response.Body, []byte(weakPassword)) {
 		t.Fatalf("weak IAM login status=%d body=%s", response.Status, response.Body)
 	}
+}
+
+func assertTenantTerminalAuthorization(t *testing.T, endpoint, credential, requestID string, allowed bool) iamv1.AuthorizationDecision {
+	t.Helper()
+	request, err := iamv1.NewAuthorizationRequest(iamv1.ActionPaaSTerminalSessionCreate,
+		iamv1.ResourceReference{Kind: iamv1.ResourceTerminalSession, ID: "collection"},
+		iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate, requestID, requestID)
+	if err != nil {
+		t.Fatal("construct terminal policy request", err)
+	}
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpRequest, err := http.NewRequestWithContext(t.Context(), http.MethodPost, endpoint+"/v1/authorize", bytes.NewReader(encoded))
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpRequest.Header.Set("Content-Type", "application/json")
+	httpRequest.Header.Set("Authorization", "Bearer "+paasServiceCredential)
+	httpRequest.Header.Set("Matrix-Subject-Credential", credential)
+	response, err := processHTTPClient().Do(httpRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	var decision iamv1.AuthorizationDecision
+	decodeErr := iamv1.DecodeRequest(response.Body, &decision)
+	checkErr := iamv1.CheckAuthorizationDecisionForRequest(decision, request)
+	if response.StatusCode != http.StatusOK || decodeErr != nil || checkErr != nil || decision.Allowed != allowed ||
+		(allowed && (decision.TenantID != "organization-process" || decision.InstallationID != "")) {
+		t.Fatalf("retained terminal policy decision status=%d allowed=%t tenant=%s installation=%s decode=%v check=%v request=%s",
+			response.StatusCode, decision.Allowed, decision.TenantID, decision.InstallationID, decodeErr, checkErr, requestID)
+	}
+	return decision
 }
 
 func assertPlatformAuthorization(

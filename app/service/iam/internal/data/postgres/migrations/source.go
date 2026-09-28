@@ -57,7 +57,7 @@ var (
 )
 
 func Source() postgresmigration.Source {
-	policySQL, err := systemPolicySQL()
+	policySQL, policyDefaultSQL, err := systemPolicySQL()
 	if err != nil {
 		// A corrupt code-owned policy must stop bootstrap/apply, never omit a seed.
 		return postgresmigration.Source{Context: "iam"}
@@ -74,7 +74,7 @@ func Source() postgresmigration.Source {
 		Context: "iam", BootstrapSQL: bootstrapSQL,
 		// IAM owns one commit boundary across schema, retained-state changes and
 		// its final invariant verification. A late failure exposes none of them.
-		UpSQL:         "BEGIN;\n" + policyCutoverPreflight + "\n" + authoritySQL + "\n" + tenantAccountsUpSQL + "\n" + localRecoveryUpSQL + "\n" + policySQL + "\n" + groupsUpSQL + "\n" + rolesUpSQL + "\n" + accessKeysUpSQL + "\n" + totpUpSQL + "\n" + securityMailUpSQL + "\n" + authenticationRecoveryUpSQL + "\n" + verification + "\nCOMMIT;",
+		UpSQL:         "BEGIN;\n" + policyCutoverPreflight + "\n" + authoritySQL + "\n" + tenantAccountsUpSQL + "\n" + localRecoveryUpSQL + "\n" + policySQL + "\n" + groupsUpSQL + "\n" + rolesUpSQL + "\n" + accessKeysUpSQL + "\n" + totpUpSQL + "\n" + securityMailUpSQL + "\n" + authenticationRecoveryUpSQL + "\n" + policyDefaultSQL + "\n" + verification + "\nCOMMIT;",
 		VerifySQL:     verification,
 		ExecutionRole: "matrix_iam_migrator",
 	}
@@ -187,22 +187,27 @@ BEGIN
     END IF;
 END $policy_preflight$;`
 
-func systemPolicySQL() (string, error) {
+func systemPolicySQL() (string, string, error) {
 	type seed struct {
-		LegacyRole        string                   `json:"legacyRole"`
-		PolicyID          iamv1.PolicyID           `json:"policyId"`
-		DisplayName       string                   `json:"displayName"`
-		VersionID         iamv1.PolicyVersionID    `json:"versionId"`
-		Scope             iamv1.AuthorityScope     `json:"scope"`
-		Document          json.RawMessage          `json:"document"`
-		CanonicalDocument string                   `json:"canonicalDocument"`
-		ContentDigest     string                   `json:"contentDigest"`
-		Compilation       *iamv1.PolicyCompilation `json:"compilation"`
+		LegacyRole                string                   `json:"legacyRole"`
+		PreviousDefaultVersionIDs []string                 `json:"previousDefaultVersionIds,omitempty"`
+		PolicyID                  iamv1.PolicyID           `json:"policyId"`
+		DisplayName               string                   `json:"displayName"`
+		VersionID                 iamv1.PolicyVersionID    `json:"versionId"`
+		Scope                     iamv1.AuthorityScope     `json:"scope"`
+		Document                  json.RawMessage          `json:"document"`
+		CanonicalDocument         string                   `json:"canonicalDocument"`
+		ContentDigest             string                   `json:"contentDigest"`
+		Compilation               *iamv1.PolicyCompilation `json:"compilation"`
 	}
 	seeds := []seed{
-		{LegacyRole: "ORGANIZATION_ADMIN", PolicyID: iamv1.SystemPolicyAccountAdministrator, DisplayName: "AccountAdministrator"},
+		{LegacyRole: "ORGANIZATION_ADMIN", PolicyID: iamv1.SystemPolicyAccountAdministrator, DisplayName: "AccountAdministrator",
+			PreviousDefaultVersionIDs: []string{
+				"version-4aec64d8b8e4561bb57acc584972a460918f20533996382156fb62531c75c27f",
+				"version-418cff1d516e8f715b71f7043ed129e6f36b57a9928998f61998f2f0e9f34604"}},
 		{LegacyRole: "PLATFORM_OPERATOR", PolicyID: iamv1.SystemPolicyPlatformOperator, DisplayName: "PlatformOperator"},
-		{LegacyRole: "PAAS_DEVELOPER", PolicyID: iamv1.SystemPolicyPaaSDeveloper, DisplayName: "PaaSDeveloper"},
+		{LegacyRole: "PAAS_DEVELOPER", PolicyID: iamv1.SystemPolicyPaaSDeveloper, DisplayName: "PaaSDeveloper",
+			PreviousDefaultVersionIDs: []string{"version-1769e401e54332adbc3258557bc11f11904a0c79ca00d2e419d152fe6242b42e"}},
 		{LegacyRole: "PAAS_VIEWER", PolicyID: iamv1.SystemPolicyPaaSViewer, DisplayName: "PaaSViewer"},
 		{LegacyRole: "AUDIT_READER", PolicyID: iamv1.SystemPolicyAuditReader, DisplayName: "AuditReader"},
 		{LegacyRole: "INSTALLATION_VERIFIER", PolicyID: iamv1.SystemPolicyInstallationVerifier, DisplayName: "InstallationVerifier"},
@@ -210,25 +215,47 @@ func systemPolicySQL() (string, error) {
 	for index := range seeds {
 		version, err := authority.SystemPolicyVersion(seeds[index].PolicyID)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		canonical, digest, err := iamv1.CanonicalizePolicyCompilation(version.Document, *version.Compilation, iamv1.AllAuthorizationProfiles())
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
 		seeds[index].VersionID, seeds[index].Scope = version.ID, version.Document.Scope
 		var content struct {
 			Document json.RawMessage `json:"document"`
 		}
 		if err := json.Unmarshal([]byte(canonical), &content); err != nil {
-			return "", err
+			return "", "", err
 		}
 		seeds[index].Document, seeds[index].CanonicalDocument, seeds[index].ContentDigest = content.Document, canonical, digest
 		seeds[index].Compilation = version.Compilation
 	}
 	encoded, err := json.Marshal(seeds)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	return strings.Replace(policyUpSQL, "__POLICY_SEED_DOCUMENT__", "'"+strings.ReplaceAll(string(encoded), "'", "''")+"'::jsonb", 1), nil
+	seedLiteral := "'" + strings.ReplaceAll(string(encoded), "'", "''") + "'::jsonb"
+	return strings.Replace(policyUpSQL, "__POLICY_SEED_DOCUMENT__", seedLiteral, 1),
+		strings.Replace(policyDefaultAdvanceSQL, "__POLICY_SEED_DOCUMENT__", seedLiteral, 1), nil
 }
+
+// Run after all IAM DDL. The policy metadata change has deferred trigger
+// effects, so advancing a default inside the earlier cutover block would
+// prevent a later ALTER TABLE on a retained installation.
+const policyDefaultAdvanceSQL = `SET LOCAL ROLE matrix_iam_owner;
+DO $policy_default_advance$
+DECLARE seed jsonb;
+BEGIN
+    FOR seed IN SELECT value FROM jsonb_array_elements(__POLICY_SEED_DOCUMENT__) LOOP
+        IF seed ? 'previousDefaultVersionIds' THEN
+            UPDATE iam.policies AS policy
+               SET default_version_id=seed->>'versionId',resource_version=policy.resource_version+1,
+                   updated_at=transaction_timestamp()
+             WHERE policy.id=seed->>'policyId' AND policy.management='SYSTEM' AND policy.status='ACTIVE'
+               AND policy.resource_version=1 AND EXISTS(
+                   SELECT 1 FROM jsonb_array_elements_text(seed->'previousDefaultVersionIds') AS previous(id)
+                    WHERE previous.id=policy.default_version_id);
+        END IF;
+    END LOOP;
+END $policy_default_advance$;`

@@ -1484,6 +1484,72 @@ func TestAttachedPolicyEvaluationRequiresCurrentOwnedRelationships(t *testing.T)
 	}
 }
 
+func TestTerminalSystemPolicyOwnership(t *testing.T) {
+	now := authorityTestTime()
+	subject := iamv1.Subject{Type: iamv1.SubjectUser, ID: "user-a"}
+	for _, action := range []iamv1.Action{iamv1.ActionPaaSTerminalSessionCreate, iamv1.ActionPaaSTerminalSessionClose} {
+		for _, entry := range []struct {
+			policy  iamv1.PolicyID
+			allowed bool
+		}{
+			{iamv1.SystemPolicyAccountAdministrator, true},
+			{iamv1.SystemPolicyPaaSDeveloper, true},
+			{iamv1.SystemPolicyPaaSViewer, false},
+		} {
+			result, evidence, err := EvaluateAttachedPolicies(now, "account-a", "installation-a", subject,
+				authorityPolicies(now, "account-a", subject, "installation-a", entry.policy),
+				policyEvaluationRequestForTest(t, action, iamv1.ResourceReference{Kind: iamv1.ResourceTerminalSession, ID: "session-a"}))
+			if err != nil || result.Allowed != entry.allowed || (entry.allowed && len(evidence) != 1) || (!entry.allowed && len(evidence) != 0) {
+				t.Fatalf("policy=%s action=%s allowed=%t evidence=%d error=%v", entry.policy, action, result.Allowed, len(evidence), err)
+			}
+		}
+	}
+}
+
+func TestTerminalPolicyPredecessorVersionsAreExact(t *testing.T) {
+	// The migrator may advance only these previously published defaults. Their
+	// digests include the then-current IAM profile selection, not just Actions.
+	for _, entry := range []struct {
+		policy      iamv1.PolicyID
+		iamRevision uint64
+		versionID   iamv1.PolicyVersionID
+	}{
+		{iamv1.SystemPolicyAccountAdministrator, 5, "version-4aec64d8b8e4561bb57acc584972a460918f20533996382156fb62531c75c27f"},
+		{iamv1.SystemPolicyAccountAdministrator, 7, "version-418cff1d516e8f715b71f7043ed129e6f36b57a9928998f61998f2f0e9f34604"},
+		{iamv1.SystemPolicyPaaSDeveloper, 5, "version-1769e401e54332adbc3258557bc11f11904a0c79ca00d2e419d152fe6242b42e"},
+		{iamv1.SystemPolicyPaaSDeveloper, 7, "version-1769e401e54332adbc3258557bc11f11904a0c79ca00d2e419d152fe6242b42e"},
+	} {
+		version, err := SystemPolicyVersion(entry.policy)
+		if err != nil {
+			t.Fatal(err)
+		}
+		version.Document.Statements[0].Actions = slices.DeleteFunc(version.Document.Statements[0].Actions, func(action iamv1.Action) bool {
+			return action == iamv1.ActionPaaSTerminalSessionCreate || action == iamv1.ActionPaaSTerminalSessionClose
+		})
+		version.Document.Statements[0].Resources = slices.DeleteFunc(version.Document.Statements[0].Resources, func(resource iamv1.PolicyResourceSelector) bool {
+			return resource.Kind == iamv1.ResourceTerminalSession
+		})
+		profiles := iamv1.AllAuthorizationProfiles()
+		for _, historical := range iamv1.HistoricalAuthorizationProfiles() {
+			if historical.Product == iamv1.ProductIAM && historical.Revision == entry.iamRevision {
+				for index := range profiles {
+					if profiles[index].Product == iamv1.ProductIAM {
+						profiles[index] = historical
+					}
+				}
+			}
+		}
+		compilation, err := iamv1.CompilePolicyDocument(version.Document, profiles)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, digest, err := iamv1.CanonicalizePolicyCompilation(version.Document, compilation, profiles)
+		if err != nil || iamv1.PolicyVersionID("version-"+digest[len("sha256:"):]) != entry.versionID {
+			t.Fatalf("published predecessor changed: %s IAM%d: %v %s", entry.policy, entry.iamRevision, err, digest)
+		}
+	}
+}
+
 func TestSystemPoliciesPublishIndependentContentBoundVersions(t *testing.T) {
 	for _, id := range []iamv1.PolicyID{iamv1.SystemPolicyAccountAdministrator, iamv1.SystemPolicyPlatformOperator,
 		iamv1.SystemPolicyPaaSDeveloper, iamv1.SystemPolicyPaaSViewer, iamv1.SystemPolicyAuditReader, iamv1.SystemPolicyInstallationVerifier} {
@@ -2004,10 +2070,12 @@ func TestLegacySystemInterpretationDoesNotAdmitUnprovedCustomerVersions(t *testi
 	}
 	for index := range legacyDocument.Statements {
 		legacyDocument.Statements[index].Actions = slices.DeleteFunc(slices.Clone(legacyDocument.Statements[index].Actions), func(action iamv1.Action) bool {
-			return strings.HasPrefix(string(action), "iam.") && !oldActions[action]
+			return (strings.HasPrefix(string(action), "iam.") && !oldActions[action]) ||
+				action == iamv1.ActionPaaSTerminalSessionCreate || action == iamv1.ActionPaaSTerminalSessionClose
 		})
 		legacyDocument.Statements[index].Resources = slices.DeleteFunc(slices.Clone(legacyDocument.Statements[index].Resources), func(resource iamv1.PolicyResourceSelector) bool {
-			return resource.Kind == iamv1.ResourceRole || resource.Kind == iamv1.ResourceRoleSession
+			return resource.Kind == iamv1.ResourceRole || resource.Kind == iamv1.ResourceRoleSession ||
+				resource.Kind == iamv1.ResourceTerminalSession
 		})
 	}
 	_, digest, err := iamv1.CanonicalizePolicyDocument(legacyDocument)
