@@ -5,34 +5,32 @@
 - Updated: 2026-09-28
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/phase3-mfa-enabling`
-- Pushed milestone: `461ea242`.
-  Its functional predecessor `b020d4a56c1b1cfb8fb9930d09e20fb0f7604c73`
-  passed [Verification 36389282316](https://github.com/xiak/matrix/actions/runs/36389282316)
-  in all four jobs. The current signed profile is IAM 45 / Audit 26 /
-  PaaS 6, revision 16. The signed initial `495fc04e` to successor `b020d4a5`
-  browser-ready offline gate passed the real local Docker 27.5.1 runtime;
-  FEAT-005 owns its exact evidence and limits. This is not final
-  combined-release acceptance.
-- Historical host self-enrollment acceptance belongs to fixed
-  `be3c4a96b4381426c01cd6315eaa3713c2855982`; the current composition
-  still needs its own live-browser and source-preserving two-host gates.
+- Fixed runtime source: `d3339f5b582dd5fe134d6098b352c938dc7d4ac2`,
+  [Verification](https://github.com/xiak/matrix/actions/runs/36407253372) successful
+  in all four jobs.
+- Fixed corrected gate driver: `72a09e09ec7c66c514c02ef3fe8e3d09399d59b2`,
+  [Verification](https://github.com/xiak/matrix/actions/runs/36412101868) successful
+  in all four jobs. It changes only the native runtime CPU assertion.
 
 ## Resume route
 
-1. [FEAT-005](../../docs/features/FEAT-005-offline-platform-lifecycle.md)
-   owns the signed release and recovery gates.
-2. [FEAT-007](../../docs/features/FEAT-007-control-plane-console.md)
-   owns the IAM directory consumer and LIVE restricted first-enrollment browser gate.
-3. [FEAT-008](../../docs/features/FEAT-008-linux-host-management.md)
-   owns one-time host admission and its exact-source two-host runtime gate.
+1. [FEAT-008](../../docs/features/FEAT-008-linux-host-management.md) owns the
+   accepted current-composition signed two-host runtime result. Its A-to-B gate
+   passed with actual `172.30.1.160` and `.161` enrollment, workloads,
+   terminal, drain and removal. The task-local signing key is not a published
+   production trust root.
+2. [FEAT-005](../../docs/features/FEAT-005-offline-platform-lifecycle.md)
+   owns the remaining full integrated release/recovery requirements; the
+   two-host result does not close them.
+3. [FEAT-007](../../docs/features/FEAT-007-control-plane-console.md) owns the
+   separate LIVE browser journey; do not infer it from the process gate.
 4. [FEAT-006](../../docs/features/FEAT-006-platform-authorities.md)
-   owns the separately integrated IAM/Audit authority boundary.
+   owns the IAM/Audit boundary. Later IAM work in another branch is not part
+   of this fixed release composition.
 
-The signed two-host attempt on the current composition reached real platform
-install and original-primary recovery but could not prove host identity through
-a NAT-forwarded control plane: both nodes appeared as one gateway peer.
-FEAT-008 records the evidence and the required source-preserving topology;
-the later bounded port/bridge probe is not a replacement gate. Do not weaken
-observed-peer admission or claim this attempt as a pass. The LIVE IAM browser
-also remains open; its current directory/API mismatch is in FEAT-007.
-Preserve Phase 2 and remote machines, and clean isolated tests.
+The host gate used a source-preserving task-only `/32` alias. Both remote test
+hosts were returned to zero containers and zero running Matrix test units;
+temporary routes, node roots, private test key and gate images were removed.
+Neither remote machine, its Docker daemon, Phase 2, nor `172.30.1.3` was
+restarted or modified. Do not reuse the gate's transient resources as product
+installation state.

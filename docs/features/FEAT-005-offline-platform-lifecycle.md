@@ -684,8 +684,10 @@ first TOTP binding before protected backup, Audit integrity, failed-candidate
 automatic rollback and B upgrade with preserved application state. It ended
 with `browser-successor-ready` and PASS. The outer test container was removed;
 no task-owned Docker volume, image or container remains. This is a signed
-offline runtime gate, not the LIVE browser first-enrollment ceremony, the
-complete rollback/recovery gate or the source-preserving two-host gate.
+offline runtime gate, not the LIVE browser first-enrollment ceremony or the
+complete rollback/recovery gate. The later source-preserving signed two-host
+result is owned by [FEAT-008](FEAT-008-linux-host-management.md); it does not
+by itself close this feature's remaining release and recovery requirements.
 
 ## Incremental acceptance
 

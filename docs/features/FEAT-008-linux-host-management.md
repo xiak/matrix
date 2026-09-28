@@ -1960,79 +1960,54 @@ session storage to remain empty. The real browser session also returned to
 login on a fresh document navigation, confirming its page-memory boundary.
 All transferred one-time join files were removed after successful import.
 
-The later combined-release candidate `b020d4a56c1b1cfb8fb9930d09e20fb0f7604c73`
-has not inherited this exact-source acceptance. A separately signed initial
-platform/node pair from `495fc04e41310e28ff9801a9511fb83b1d64188f` and
-successor pair from `b020d4a5` passed platform install, verification, IAM
-authority, two application generations and original-primary recovery in an
-isolated offline Docker 27.5.1 engine. The two-host run then stopped at the
-first enrolled connection: Docker/SSH forwarding made the observed node peer
-`172.29.252.1`, while the real node was `172.30.1.160`. Both test VMs reached
-the control plane, but a successful TCP probe did not preserve their source
-addresses; a separate Docker Desktop probe likewise showed one gateway for
-both. The observed-peer endpoint binding must not be weakened to pass this
-fixture. This composition requires a source-preserving, independent private
-control-plane address and a fresh signed two-host run before acceptance.
-The attempt's task-only remote container, volumes, network, transient node
-services and directories were removed; both VMs retained their original boot
-and Docker Engine identities with zero remaining containers.
+The current combined signed two-host gate passed in 507.08 seconds. Its initial
+platform/node source was `495fc04e41310e28ff9801a9511fb83b1d64188f`;
+the successor platform bundle used `d3339f5b582dd5fe134d6098b352c938dc7d4ac2`
+and the compatible node successor used
+`8b22da18f60932d7664006c467aa21e1f12badc5`. Both platform bundles
+authenticated IAM 45 / Audit 26 / PaaS 6 + contract revision 16 and the same
+topology. The corrected gate driver was built from the pushed test-only
+`72a09e09ec7c66c514c02ef3fe8e3d09399d59b2`; it did not alter either
+signed runtime. The task-local signer is not a production trust-root
+publication. The isolated Docker 27.5.1 engine started without inner Matrix
+images or containers. Both `172.30.1.160` and `172.30.1.161` were independent
+real Linux/Docker hosts; neither host nor its Docker daemon was restarted.
 
-A subsequent bounded peer-address probe on those same disposable VMs showed
-that a normal Docker-published port on `172.30.1.160` retained distinct
-`172.30.1.160` and `172.30.1.161` client addresses. Direct routing to a
-task-only Docker bridge container retained `.160` locally but timed out from
-`.161` through the host forwarding path. The exact temporary `/32` routes,
-container and bridge were removed after that negative probe; default routes,
-firewall rules, Docker daemons and machine boots were unchanged. Thus the
-published-port probe identifies a possible source-preserving ingress, but
-does not prove a fresh isolated Docker engine or the signed two-host lifecycle
-can use it. The combined-source two-host gate remains open.
+The gate passed initial-install rejection for the successor, release A
+install/status/verify, IAM authorization, two application generations, original
+platform-primary credential recovery, both one-time host enrollments and
+independent identities, reader-free observation and isolated outage recovery,
+first MFA enrollment, Audit integrity, protected backup, failed-candidate
+automatic rollback, release B upgrade with retained state, two real container
+terminal sessions with input/output/resize and ticket-replay rejection, terminal
+Audit, live drain/removal blocking/reactivation, safe tombstone removal and
+placement on the remaining host. It ended with
+`signed-multi-host-lifecycle-complete` and PASS. The terminal regression was
+fixed by adding `paas.terminal-session.create/close` to new immutable
+administrator/developer policy versions; the untouched old default alone is
+advanced after all IAM DDL. Historical policy versions and denied decisions
+remain unchanged, viewers remain denied, and no schema/profile or observed-peer
+identity rule was relaxed. The fixed IAM40 retained-data upgrade and fresh IAM
+HTTP/storage gates passed separately. Both
+[runtime CI](https://github.com/xiak/matrix/actions/runs/36407253372) and
+[corrected gate-driver CI](https://github.com/xiak/matrix/actions/runs/36412101868)
+completed successfully in all four jobs.
 
-A task-only private `/32` control-plane alias on `172.30.1.160`, routed from
-`172.30.1.161`, was then tested through two Docker publication layers. A
-bounded inner container in a fresh Docker 27.5.1 DIND engine observed the
-distinct original `.160` and `.161` client addresses, not one bridge gateway.
-The test container, alias and exact host route were removed after the probe;
-both hosts retained their boot and Docker Engine identities. This proves the
-test topology's address-preserving path, not the signed lifecycle.
-
-The next signed current-composition exercise used initial platform/node
-source `495fc04e41310e28ff9801a9511fb83b1d64188f` and successor
-`8b22da18f60932d7664006c467aa21e1f12badc5`, with matching
-IAM 45 / Audit 26 / PaaS 6 + contract revision 16 and topology. Its isolated
-engine began with zero inner images and containers. Platform A installation,
-IAM authority, two application generations, original-primary credential
-recovery, both hosts' one-time enrollment and independent identities, offline
-background recovery, first MFA binding, Audit integrity, protected backup,
-automatic failed-upgrade rollback and B upgrade preservation passed. The
-464.35-second run then stopped at the first post-upgrade terminal creation:
-APISIX returned HTTP 403 and the immutable IAM decision for
-`paas.terminal-session.create` was `DENIED` with no policy evidence. The
-current source's `system.account-administrator` and `system.paas-developer`
-policy builders omit the two terminal actions, contrary to the explicit
-interactive-access target above. This is a current-composition permission
-regression, not a source-address failure, and the complete signed two-host
-gate remains open. The task-owned engine, node/collector/startup services,
-workload container, images, runtime roots and `/32` route were removed; both
-hosts retained their original boot identities and no test containers or
-services remain. The signed input bundles are retained only for the corrected
-fresh rerun.
-
-The terminal permission correction now inserts new content-bound versions for
-`system.account-administrator` and `system.paas-developer` and advances only
-the exact, untouched IAM40/IAM45 release defaults after all IAM DDL in the
-same transaction. It does not rewrite older versions, decisions, attachments,
-or a deliberately selected different default; the published schema/profile
-remains 45/26/6+r16 because no function or wire shape changes. On a disposable
-local PostgreSQL 18 instance, the fresh IAM HTTP gate admitted the
-administrator/developer terminal actions and denied the viewer; the storage
-gate retained the viewer denial, immutable policy history and replay rules.
-The actual fixed IAM40 executable produced a denied terminal decision before
-the retained-data upgrade; the new executable admitted a fresh qualified
-administrator and developer, denied the viewer, and preserved the original
-denial and policy versions. These focused gates pass, but no corrected signed
-bundle or two-host gate has passed yet, so interactive host access is still
-not accepted.
+Two failed fixture runs established the narrow corrections before that pass.
+The same-host connection to the temporary control-plane `/32` initially chose
+the alias itself as its source; the isolated fixture then selected
+`172.30.1.160` as the local route's preferred source, preserving both hosts'
+real peer addresses without changing product admission. Later, the test's
+resource validator assumed a 100m CPU limit for its deliberate 3900m placement
+filler on a four-CPU host. The gate owner now validates the requested limit and
+has positive/negative regression assertions. Neither failure is recorded as a
+product pass. After the successful run, both hosts had zero containers and zero
+running Matrix test units; the dedicated engine, task-only images, node roots,
+temporary SSH private key and `/32` routes were removed. Their original
+default routes and Docker daemons remained intact. This accepts the current
+composition's signed two-host host/runtime gate; FEAT-005 owns any remaining
+full release and recovery acceptance, and FEAT-007 owns the separate LIVE
+browser ceremony.
 
 ## Adoption
 
