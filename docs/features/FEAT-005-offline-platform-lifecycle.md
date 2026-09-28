@@ -671,23 +671,36 @@ passed Go, UI, authority-process and node-process for that exact source. This
 fixes test targeting; only the forthcoming populated v5 restore can prove the
 new recovery behavior.
 
-The combined `495fc04e41310e28ff9801a9511fb83b1d64188f` initial release
-and `b020d4a56c1b1cfb8fb9930d09e20fb0f7604c73` successor also passed a
-fresh task-local Docker 27.5.1 offline browser-ready lifecycle in 330.72
-seconds. Both authenticated bundles used IAM 45 / Audit 26 / PaaS 6, contract
-revision 16 and the same supported topology; B named A as its immediate
-predecessor. The isolated 2-CPU/4-GiB engine began with zero inner images and
-containers and no external route. The real gate passed signed-successor
-initial-install rejection, A install/status/verify, IAM through APISIX, two
-application generations, original-primary credential recovery, delivered-mail
-first TOTP binding before protected backup, Audit integrity, failed-candidate
-automatic rollback and B upgrade with preserved application state. It ended
-with `browser-successor-ready` and PASS. The outer test container was removed;
-no task-owned Docker volume, image or container remains. This is a signed
-offline runtime gate, not the LIVE browser first-enrollment ceremony or the
-complete rollback/recovery gate. The later source-preserving signed two-host
-result is owned by [FEAT-008](FEAT-008-linux-host-management.md); it does not
-by itself close this feature's remaining release and recovery requirements.
+The current signed same-profile lifecycle used the real adjacent release
+chain `495fc04e41310e28ff9801a9511fb83b1d64188f` ->
+`d3339f5b582dd5fe134d6098b352c938dc7d4ac2` ->
+`6b47736b603fa018901fcc683d4df6fe260896fc`. All three bundles declared
+IAM 45 / Audit 26 / PaaS 6, contract revision 16 and the same supported
+topology. A fresh external-network-disabled Docker 27.5.1 engine, limited to
+2 CPU and 4 GiB, passed the complete 624.99-second offline gate: signed
+successor initial-install refusal, base install/verify, bridge upgrade and
+rollback, two application generations, original-primary credential recovery,
+delivered-mail first TOTP enrollment, Audit integrity, v5 protected backup,
+two validly signed wrong-predecessor refusals before effects, failed-candidate
+automatic rollback, successor upgrade with data retention, explicit rollback,
+selected-backup recovery, application rollback/stop and bounded support.
+The negative candidates hard-linked the verified successor's real payloads
+inside the disposable engine; only their predecessor metadata was re-signed
+with the task-local key. Test source `bbcc28f21666ffe84aacb131331794cb1d52e0ff`
+passed all four independent jobs in
+[Verification 36420261718](https://github.com/xiak/matrix/actions/runs/36420261718).
+
+After restarting only that task-owned engine, the final installed pointer was
+the restored bridge (`d3339f5b`). An initial read-only restart assertion
+mistakenly expected the successor and failed `repeated-status`; product status
+still reported READY with the bridge ID. Supplying the actually installed
+signed bridge passed post-restart status/verify and complete offline lifecycle
+in 16.40 seconds. The engine and network were removed, and Docker's 27
+pre-existing volumes were unchanged. This proves the current same-profile
+signed recovery path, not the stronger-policy/factor mismatch and replay-window
+matrix above, a historical cross-profile restore, the combined two-host
+release gate, or publication of a production signing root. The separate LIVE
+browser evidence is owned by [FEAT-007](FEAT-007-control-plane-console.md).
 
 ## Incremental acceptance
 
