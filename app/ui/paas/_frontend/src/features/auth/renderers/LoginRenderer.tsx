@@ -24,6 +24,7 @@ export function LoginRenderer({ returnTo = "/console/" }: { returnTo?: string })
   const firstLogin = Boolean(session.current && session.phase !== "authenticated");
   const challenged = session.phase === "challenge-required" || session.phase === "verifying-challenge"
     || session.phase === "challenge-password-required" || session.phase === "changing-challenge-password"
+    || session.phase === "challenge-password-outcome-unknown"
     || session.phase === "reauthentication-required";
   const recovering = isAuthenticatorRecoveryPhase(session.phase);
   const challengeId = session.challenge?.challenge.id;

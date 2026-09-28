@@ -212,6 +212,8 @@
     "changeChallengePassword": "更新密码",
     "changingChallengePassword": "正在更新密码…",
     "challengePasswordChanged": "密码已更新",
+    "challengePasswordUnknownTitle": "无法确认密码是否已更新",
+    "challengePasswordUnknownHint": "请求可能已经生效。请勿重复提交此挑战；返回登录后先用新密码验证。若无法登录，再使用原密码重新开始。",
     "challengeReauthenticateHint": "安全变更已完成。请使用新密码和新的动态验证码重新登录。",
     "enrollmentPasswordTitle": "首次设置前，请更新初始密码",
     "enrollmentPasswordHint": "当前只有受限改密挑战，没有登录会话。更新后须用新密码重新登录，取得新的首次绑定挑战。",

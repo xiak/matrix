@@ -212,6 +212,8 @@
     "changeChallengePassword": "Update password",
     "changingChallengePassword": "Updating password…",
     "challengePasswordChanged": "Password updated",
+    "challengePasswordUnknownTitle": "Password change could not be confirmed",
+    "challengePasswordUnknownHint": "The request may have succeeded. Do not submit this challenge again. Return to sign-in and try your new password first. If sign-in fails, start again with your previous password.",
     "challengeReauthenticateHint": "The security change is complete. Sign in again with your new password and a fresh authenticator code.",
     "enrollmentPasswordTitle": "Update your initial password first",
     "enrollmentPasswordHint": "This is only a restricted password-change challenge, not a login session. Sign in again with the new password to obtain a fresh first-enrollment challenge.",

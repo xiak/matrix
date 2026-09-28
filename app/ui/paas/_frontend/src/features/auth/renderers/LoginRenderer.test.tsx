@@ -338,6 +338,30 @@ describe("branded sign-in flows", () => {
     expect(screen.getByRole("heading", { name: "登录控制台" })).toBeTruthy();
     expect(localStorage.length + sessionStorage.length).toBe(0);
   });
+  it("shows an unconfirmed password change without offering the old challenge again", async () => {
+    const iam = repository();
+    iam.login = vi.fn().mockResolvedValue({ outcome: "CHALLENGE_REQUIRED", challenge: {
+      id: "challenge-password", purpose: "LOGIN", nextStep: "PASSWORD_CHANGE", expiresAt: "2099-09-20T01:07:03Z"
+    }, challengeCredential: "private-password-challenge" });
+    const changePassword = vi.fn().mockRejectedValue(new Error("private network failure"));
+    iam.authenticationChallenges = { verify: vi.fn(), changePassword };
+    const { user } = open(iam);
+    await user.click(screen.getByRole("button", { name: "体验 MFA 登录挑战" }));
+    expect(await screen.findByRole("heading", { name: "验证完成，请更新密码" })).toBeTruthy();
+    await user.type(screen.getByLabelText("新密码", { exact: true }), "Replacement-Password-49!");
+    await user.type(screen.getByLabelText("确认新密码"), "Replacement-Password-49!");
+    await user.click(screen.getByRole("button", { name: "更新密码" }));
+    expect(await screen.findByRole("heading", { name: "无法确认密码是否已更新" })).toBe(document.activeElement);
+    expect(screen.getByRole("alert").textContent).toContain("请勿重复提交此挑战");
+    expect(screen.queryByRole("button", { name: "更新密码" })).toBeNull();
+    expect(document.body.textContent).not.toContain("private-password-challenge");
+    expect(document.body.textContent).not.toContain("private network failure");
+    expect(changePassword).toHaveBeenCalledTimes(1);
+    expect(navigation.replace).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "返回登录" }));
+    expect(screen.getByRole("heading", { name: "登录控制台" })).toBeTruthy();
+    expect(localStorage.length + sessionStorage.length).toBe(0);
+  });
   it("translates an existing authentication error immediately and retains the account draft", async () => {
     const iam = repository();
     vi.mocked(iam.login).mockRejectedValue(new HttpProblem(401, "private-upstream-details"));

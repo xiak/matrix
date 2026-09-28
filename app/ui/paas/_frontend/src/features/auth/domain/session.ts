@@ -139,6 +139,7 @@ export type SessionPhase =
   | "recovery-confirm-unknown"
   | "challenge-password-required"
   | "changing-challenge-password"
+  | "challenge-password-outcome-unknown"
   | "recovery-codes-required"
   | "reauthentication-required"
   | "password-change-required"

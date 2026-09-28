@@ -403,6 +403,62 @@ describe("SessionProvider", () => {
     expect(screen.getByTestId("phase").textContent).toBe("anonymous");
   });
 
+  it("does not resend an old password challenge when its result is unknown", async () => {
+    const iam = repository();
+    iam.login = vi.fn().mockResolvedValue({ outcome: "CHALLENGE_REQUIRED", challenge: {
+      id: "challenge-password", purpose: "LOGIN", nextStep: "PASSWORD_CHANGE", expiresAt: "2099-09-20T01:07:03Z"
+    }, challengeCredential: "password-secret" });
+    const changePassword = vi.fn().mockRejectedValue(new Error("response lost after submit"));
+    iam.authenticationChallenges = { verify: vi.fn(), changePassword };
+    const screen = render(<SessionProvider repository={iam}><Probe /></SessionProvider>);
+    await act(async () => fireEvent.click(screen.getByText("login")));
+    await act(async () => fireEvent.click(screen.getByText("challenge-change")));
+    expect(screen.getByTestId("phase").textContent).toBe("challenge-password-outcome-unknown");
+    expect(screen.getByTestId("challenge").textContent).toBe("none");
+    expect(screen.getByTestId("principal").textContent).toBe("none");
+    expect(screen.container.textContent).not.toContain("password-secret");
+    await act(async () => fireEvent.click(screen.getByText("challenge-change")));
+    expect(changePassword).toHaveBeenCalledTimes(1);
+    await act(async () => fireEvent.click(screen.getByText("cancel-challenge")));
+    expect(screen.getByTestId("phase").textContent).toBe("anonymous");
+  });
+
+  it("keeps only an explicit password-policy rejection editable in the current challenge", async () => {
+    const iam = repository();
+    iam.login = vi.fn().mockResolvedValue({ outcome: "CHALLENGE_REQUIRED", challenge: {
+      id: "challenge-password", purpose: "LOGIN", nextStep: "PASSWORD_CHANGE", expiresAt: "2099-09-20T01:07:03Z"
+    }, challengeCredential: "password-secret" });
+    const changePassword = vi.fn().mockRejectedValueOnce(new HttpProblem(422, "private-policy-details"))
+      .mockResolvedValueOnce({ nextStep: "REAUTHENTICATE", changedAt: "2026-09-20T01:03:00Z" });
+    iam.authenticationChallenges = { verify: vi.fn(), changePassword };
+    const screen = render(<SessionProvider repository={iam}><Probe /></SessionProvider>);
+    await act(async () => fireEvent.click(screen.getByText("login")));
+    await act(async () => fireEvent.click(screen.getByText("challenge-change")));
+    expect(screen.getByTestId("phase").textContent).toBe("challenge-password-required");
+    expect(screen.getByTestId("challenge").textContent).toBe("PASSWORD_CHANGE");
+    expect(screen.getByTestId("error").textContent).toBe("passwordPolicy");
+    await act(async () => fireEvent.click(screen.getByText("challenge-change")));
+    expect(changePassword).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId("phase").textContent).toBe("reauthentication-required");
+  });
+
+  it("discards a definitively expired password challenge instead of offering another submit", async () => {
+    const iam = repository();
+    iam.login = vi.fn().mockResolvedValue({ outcome: "CHALLENGE_REQUIRED", challenge: {
+      id: "challenge-password", purpose: "LOGIN", nextStep: "PASSWORD_CHANGE", expiresAt: "2099-09-20T01:07:03Z"
+    }, challengeCredential: "password-secret" });
+    const changePassword = vi.fn().mockRejectedValue(new HttpProblem(409, "private-expiry-details"));
+    iam.authenticationChallenges = { verify: vi.fn(), changePassword };
+    const screen = render(<SessionProvider repository={iam}><Probe /></SessionProvider>);
+    await act(async () => fireEvent.click(screen.getByText("login")));
+    await act(async () => fireEvent.click(screen.getByText("challenge-change")));
+    expect(screen.getByTestId("phase").textContent).toBe("anonymous");
+    expect(screen.getByTestId("challenge").textContent).toBe("none");
+    expect(screen.getByTestId("error").textContent).toBe("challengeExpired");
+    await act(async () => fireEvent.click(screen.getByText("challenge-change")));
+    expect(changePassword).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps authenticator recovery sessionless through irreversible start, rebind, and one-time codes", async () => {
     const iam = repository();
     iam.login = vi.fn().mockResolvedValue({

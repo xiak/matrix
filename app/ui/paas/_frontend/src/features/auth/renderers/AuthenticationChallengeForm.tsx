@@ -25,8 +25,20 @@ export function AuthenticationChallengeForm({ returnTo }: { returnTo: string }) 
   const [invalidProductBounds, setInvalidProductBounds] = useState(false);
   const challenge = session.challenge;
   const heading = useRef<HTMLHeadingElement>(null);
-  const focusStage = session.phase === "reauthentication-required" ? "complete" : session.phase === "challenge-password-required" || session.phase === "changing-challenge-password" ? "password" : challenge ? "code" : "none";
+  const focusStage = session.phase === "reauthentication-required" ? "complete" : session.phase === "challenge-password-outcome-unknown" ? "unknown" : session.phase === "challenge-password-required" || session.phase === "changing-challenge-password" ? "password" : challenge ? "code" : "none";
   useLayoutEffect(() => { heading.current?.focus({ preventScroll: true }); }, [focusStage, challenge?.challenge.id]);
+
+  if (session.phase === "challenge-password-outcome-unknown") {
+    return <div className={styles.challengeCompletion}>
+      <div className={styles.cardHeading}>
+        <h1 ref={heading} tabIndex={-1}>{t("challengePasswordUnknownTitle")}</h1>
+      </div>
+      <Alert role="alert" status="warning">{t("challengePasswordUnknownHint")}</Alert>
+      <Button block onClick={session.cancelAuthenticationChallenge} size="large">
+        {t("returnToSignIn")}<ArrowRight aria-hidden="true" />
+      </Button>
+    </div>;
+  }
 
   if (session.phase === "reauthentication-required") {
     return <div className={styles.challengeCompletion}>

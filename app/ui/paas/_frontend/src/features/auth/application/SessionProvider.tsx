@@ -564,8 +564,21 @@ export function SessionProvider({
       return true;
     } catch (changeError) {
       if (authenticationRevisionRef.current !== authenticationRevision || challengeRef.current !== requestChallenge) return false;
-      setError(challengePasswordError(changeError));
-      setPhase("challenge-password-required");
+      const knownError = challengePasswordError(changeError);
+      if (knownError === "passwordPolicy") {
+        setError(knownError);
+        setPhase("challenge-password-required");
+      } else if (knownError === "challengeExpired") {
+        replaceChallenge(null);
+        setError(knownError);
+        setPhase("anonymous");
+      } else {
+        // A missing or malformed response cannot prove the write did not commit.
+        // The old challenge must never offer another password command.
+        replaceChallenge(null);
+        setError(null);
+        setPhase("challenge-password-outcome-unknown");
+      }
       return false;
     }
   }, [challenge, phase, replaceChallenge, repository]);
