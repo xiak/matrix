@@ -3,10 +3,10 @@
 > Non-authoritative portable memory. Validate it against Git and the owning
 > FEAT before continuing.
 
-- Updated: 2026-09-25
+- Updated: 2026-09-28
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `e6ec141b`
+- Pushed UI source: `09367bc5`
 
 ## Authoritative route
 
@@ -32,12 +32,11 @@ UI, full static host/export and independent MOCK entry; do not replace them
 with another branch's renderer or inherit that branch's UI acceptance.
 
 The current milestone keeps the independent MOCK preview, fixed-contract LIVE
-paths and synchronized static Go host. It gives catalog-driven visual policy
-creation and LIVE version publishing the same compact statement-by-statement
-review while preserving lossless JSON review/comparison, and keeps MOCK member
-RoleSession timing accurate across issue, expiry and background-tab return.
-No LIVE contract was added. The shared development gates passed; detailed
-behavior, evidence and open real-process gates remain only in the FEAT owners.
+paths and synchronized static Go host. It stages restricted first-login MFA
+enrollment against IAM's fixed `e24dbdae` challenge contract without opening a
+Session before reauthentication. Development gates passed; the real IAM process
+browser ceremony is not accepted. Detailed behavior and evidence remain only
+in the FEAT owner.
 
 ## Continuation
 
@@ -52,8 +51,8 @@ checks. Do not duplicate the donor application or move installer-owned secrets
 into the UI.
 
 Next integration must select one fixed boundary from the owning FEAT. Do not
-infer account-security update, remaining Role or SSO wire contracts from the
-MOCK UI or from another task's unpushed work.
+infer newer self-removal, replacement, remaining Role or SSO wire contracts
+from the MOCK UI or from another task's unpushed work.
 
 Replace this file only at another committed-and-pushed milestone. Do not append
 command logs, chat transcripts, secrets, raw provider payloads, or machine-local
