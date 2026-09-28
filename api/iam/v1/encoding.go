@@ -46,6 +46,17 @@ func DecodeRequest(reader io.Reader, destination any) error {
 	return contractjson.DecodeObject(reader, MaxRequestBytes, destination)
 }
 
+func (value *UserPasswordResetCompletion) UnmarshalJSON(source []byte) error {
+	type wire UserPasswordResetCompletion
+	var decoded wire
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil ||
+		ValidateUserPasswordResetCompletion(UserPasswordResetCompletion(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = UserPasswordResetCompletion(decoded)
+	return nil
+}
+
 func (value *PasswordRequirements) UnmarshalJSON(source []byte) error {
 	type wire PasswordRequirements
 	var decoded wire

@@ -1244,6 +1244,22 @@ func ValidateResetUserPasswordRequest(value ResetUserPasswordRequest) error {
 	return errors.Join(validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
 }
 
+func ValidateUserPasswordResetCompletion(value UserPasswordResetCompletion) error {
+	if value.APIVersion != APIVersion || value.Kind != "UserPasswordResetCompletion" {
+		return errors.New("user password reset completion metadata is invalid")
+	}
+	if value.ActorPrincipalID == value.UserID {
+		return errors.New("administrator reset cannot target its own actor")
+	}
+	if validatePositiveVersion(value.ExpectedResourceVersion) != nil || validatePositiveVersion(value.ResultingResourceVersion) != nil ||
+		value.ResultingResourceVersion != value.ExpectedResourceVersion+1 {
+		return errors.New("user password reset completion versions are invalid")
+	}
+	return errors.Join(ValidateID("accountId", string(value.AccountID)), ValidateID("actorPrincipalId", string(value.ActorPrincipalID)),
+		ValidateID("userId", string(value.UserID)), ValidateID("requestId", value.RequestID),
+		ValidateID("eventId", value.EventID), validateTime("occurredAt", value.OccurredAt))
+}
+
 func ValidateRootIdentity(value RootIdentity) error {
 	return errors.Join(ValidateID("rootIdentity.principalId", string(value.PrincipalID)),
 		validateLoginName(value.LoginName))

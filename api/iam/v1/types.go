@@ -863,6 +863,22 @@ type ResetUserPasswordRequest struct {
 	RequestID       string `json:"requestId"`
 }
 
+// UserPasswordResetCompletion identifies one committed administrator reset.
+// It is neither a password-input commitment nor proof of current password
+// validity, user eligibility, Audit delivery or permission to repeat the reset.
+type UserPasswordResetCompletion struct {
+	APIVersion               string      `json:"apiVersion"`
+	Kind                     string      `json:"kind"`
+	AccountID                AccountID   `json:"accountId"`
+	ActorPrincipalID         PrincipalID `json:"actorPrincipalId"`
+	UserID                   PrincipalID `json:"userId"`
+	RequestID                string      `json:"requestId"`
+	ExpectedResourceVersion  uint64      `json:"expectedResourceVersion"`
+	ResultingResourceVersion uint64      `json:"resultingResourceVersion"`
+	EventID                  string      `json:"eventId"`
+	OccurredAt               time.Time   `json:"occurredAt"`
+}
+
 type RevokeSessionRequest struct {
 	RequestID string `json:"requestId"`
 }

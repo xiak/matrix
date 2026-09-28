@@ -14,6 +14,68 @@ import (
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 )
 
+func TestUserPasswordResetCompletionSchemaAndStrictCodec(t *testing.T) {
+	schema := compileIAMOpenAPISchema(t, loadIAMOpenAPI(t), "UserPasswordResetCompletion")
+	valid := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"UserPasswordResetCompletion","accountId":"account-one","actorPrincipalId":"administrator-one","userId":"user-one","requestId":"reset-one","expectedResourceVersion":4,"resultingResourceVersion":5,"eventId":"event-one","occurredAt":"2026-09-28T00:00:00.123456Z"}`
+	check := func(wire string, want bool) {
+		t.Helper()
+		var result UserPasswordResetCompletion
+		instance, err := jsonschema.UnmarshalJSON(strings.NewReader(wire))
+		if err != nil || (schema.Validate(instance) == nil) != want || (DecodeRequest(strings.NewReader(wire), &result) == nil) != want {
+			t.Fatal("reset completion schema or codec disagrees with the closed contract")
+		}
+	}
+	check(valid, true)
+	check(strings.ReplaceAll(strings.ReplaceAll(valid, `"expectedResourceVersion":4`, `"expectedResourceVersion":9007199254740990`),
+		`"resultingResourceVersion":5`, `"resultingResourceVersion":9007199254740991`), true)
+	var fields map[string]json.RawMessage
+	if json.Unmarshal([]byte(valid), &fields) != nil {
+		t.Fatal("invalid fixture")
+	}
+	for name, original := range fields {
+		delete(fields, name)
+		encoded, _ := json.Marshal(fields)
+		check(string(encoded), false)
+		fields[name] = json.RawMessage("null")
+		encoded, _ = json.Marshal(fields)
+		check(string(encoded), false)
+		fields[name] = original
+	}
+	for _, fragment := range []string{
+		`"password":"not-a-credential",`, `"passwordHash":"not-a-verifier",`, `"inputCommitment":"not-a-proof",`,
+		`"credentialGeneration":5,`, `"sessionId":"session-one",`, `"outcome":"EQUAL_REPLAY",`, `"permit":true,`,
+	} {
+		check("{"+fragment+valid[1:], false)
+	}
+	for _, variant := range []string{
+		strings.Replace(valid, `"UserPasswordResetCompletion"`, `"User"`, 1),
+		strings.Replace(valid, `"expectedResourceVersion":4`, `"expectedResourceVersion":0`, 1),
+		strings.Replace(valid, `"expectedResourceVersion":4`, `"expectedResourceVersion":9007199254740991`, 1),
+		strings.Replace(valid, `"resultingResourceVersion":5`, `"resultingResourceVersion":1`, 1),
+		strings.Replace(valid, `"resultingResourceVersion":5`, `"resultingResourceVersion":9007199254740992`, 1),
+		strings.Replace(valid, `"event-one"`, `"event/other"`, 1),
+	} {
+		check(variant, false)
+	}
+	// JSON Schema cannot compare two arbitrary field values or preserve duplicate
+	// keys. The authoritative codec must also enforce those independent rules.
+	for _, variant := range []string{
+		strings.Replace(valid, `"administrator-one"`, `"user-one"`, 1),
+		strings.Replace(valid, `"resultingResourceVersion":5`, `"resultingResourceVersion":6`, 1),
+		strings.Replace(valid, `"requestId":`, `"RequestId":`, 1),
+		strings.Replace(valid, `"requestId":`, `"requestId":"reset-one","requestId":`, 1),
+		strings.Replace(valid, `"requestId":`, `"requestId":"reset-other","requestId":`, 1),
+		strings.Replace(valid, `.123456Z`, `.1234567Z`, 1),
+		valid + `{}`, `null`, `[]`,
+		strings.Replace(valid, `"event-one"`, `"`+strings.Repeat("x", int(MaxRequestBytes))+`"`, 1),
+	} {
+		var result UserPasswordResetCompletion
+		if DecodeRequest(strings.NewReader(variant), &result) == nil {
+			t.Fatal("reset completion codec accepted ambiguous or unbound data")
+		}
+	}
+}
+
 func TestPasswordRequirementsSchemasAndCodecExposeOnlyEffectiveRules(t *testing.T) {
 	api := loadIAMOpenAPI(t)
 	schema := compileIAMOpenAPISchema(t, api, "PasswordRequirements")

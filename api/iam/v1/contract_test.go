@@ -1579,6 +1579,71 @@ func TestOwnLoginSessionContractsBindARealObservation(t *testing.T) {
 	}
 }
 
+func TestUserPasswordResetCompletionBindsOneOriginalNonSecretResult(t *testing.T) {
+	valid := UserPasswordResetCompletion{APIVersion: APIVersion, Kind: "UserPasswordResetCompletion",
+		AccountID: "account-one", ActorPrincipalID: "administrator-one", UserID: "user-one", RequestID: "reset-one",
+		ExpectedResourceVersion: 4, ResultingResourceVersion: 5, EventID: "event-one",
+		OccurredAt: time.Date(2026, 9, 28, 0, 0, 0, 123456000, time.UTC)}
+	for _, expected := range []uint64{1, 4, 9007199254740990} {
+		value := valid
+		value.ExpectedResourceVersion, value.ResultingResourceVersion = expected, expected+1
+		if err := ValidateUserPasswordResetCompletion(value); err != nil {
+			t.Fatal(err)
+		}
+		encoded, err := json.Marshal(value)
+		var decoded UserPasswordResetCompletion
+		if err != nil || DecodeRequest(bytes.NewReader(encoded), &decoded) != nil || decoded != value {
+			t.Fatal("reset completion did not preserve its original metadata")
+		}
+	}
+	for _, test := range []struct {
+		name   string
+		change func(*UserPasswordResetCompletion)
+	}{
+		{"api version", func(v *UserPasswordResetCompletion) { v.APIVersion = "other/v1" }},
+		{"purpose", func(v *UserPasswordResetCompletion) { v.Kind = "User" }},
+		{"account", func(v *UserPasswordResetCompletion) { v.AccountID = "" }},
+		{"actor", func(v *UserPasswordResetCompletion) { v.ActorPrincipalID = "" }},
+		{"target", func(v *UserPasswordResetCompletion) { v.UserID = "" }},
+		{"self reset", func(v *UserPasswordResetCompletion) { v.ActorPrincipalID = v.UserID }},
+		{"request", func(v *UserPasswordResetCompletion) { v.RequestID = "" }},
+		{"event", func(v *UserPasswordResetCompletion) { v.EventID = "" }},
+		{"bad event", func(v *UserPasswordResetCompletion) { v.EventID = "event/other" }},
+		{"zero expected", func(v *UserPasswordResetCompletion) { v.ExpectedResourceVersion, v.ResultingResourceVersion = 0, 1 }},
+		{"unchanged version", func(v *UserPasswordResetCompletion) { v.ResultingResourceVersion = v.ExpectedResourceVersion }},
+		{"skipped version", func(v *UserPasswordResetCompletion) { v.ResultingResourceVersion++ }},
+		{"unsafe version", func(v *UserPasswordResetCompletion) {
+			v.ExpectedResourceVersion, v.ResultingResourceVersion = 9007199254740991, 9007199254740992
+		}},
+		{"wrapped version", func(v *UserPasswordResetCompletion) {
+			v.ExpectedResourceVersion, v.ResultingResourceVersion = ^uint64(0), 0
+		}},
+		{"missing time", func(v *UserPasswordResetCompletion) { v.OccurredAt = time.Time{} }},
+		{"non UTC", func(v *UserPasswordResetCompletion) { v.OccurredAt = v.OccurredAt.In(time.FixedZone("other", 3600)) }},
+		{"submicrosecond", func(v *UserPasswordResetCompletion) { v.OccurredAt = v.OccurredAt.Add(time.Nanosecond) }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			value := valid
+			test.change(&value)
+			if ValidateUserPasswordResetCompletion(value) == nil {
+				t.Fatal("invalid reset completion accepted")
+			}
+			encoded, err := json.Marshal(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded := valid
+			if DecodeRequest(bytes.NewReader(encoded), &decoded) == nil || decoded != valid {
+				t.Fatal("invalid completion decoded or partially replaced the previous result")
+			}
+		})
+	}
+	var missing *UserPasswordResetCompletion
+	if missing.UnmarshalJSON([]byte(`{}`)) == nil {
+		t.Fatal("nil completion destination accepted")
+	}
+}
+
 func TestOtherSessionRevocationIsAClosedCompletionIncludingZeroTargets(t *testing.T) {
 	valid := RevokeOtherSessionsResponse{APIVersion: APIVersion, Kind: "OtherSessionsRevocation", Outcome: "APPLIED",
 		AccountID: "account-one", UserID: "user-one", CurrentSessionID: "session-one", RequestID: "request-one",

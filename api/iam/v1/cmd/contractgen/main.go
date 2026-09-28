@@ -645,6 +645,7 @@ func structContracts() map[string]reflect.Type {
 		"SetAccountStatusRequest":                       openapi31.StructType[iamv1.SetAccountStatusRequest](),
 		"RecoverRootCredentialsRequest":                 openapi31.StructType[iamv1.RecoverRootCredentialsRequest](),
 		"ResetUserPasswordRequest":                      openapi31.StructType[iamv1.ResetUserPasswordRequest](),
+		"UserPasswordResetCompletion":                   openapi31.StructType[iamv1.UserPasswordResetCompletion](),
 		"RevokeSessionRequest":                          openapi31.StructType[iamv1.RevokeSessionRequest](),
 		"Revocation":                                    openapi31.StructType[iamv1.Revocation](),
 		"AuthorizationRequest":                          openapi31.StructType[iamv1.AuthorizationRequest](),
@@ -660,6 +661,14 @@ func structContracts() map[string]reflect.Type {
 }
 
 func fieldOverlay(owner string, field reflect.StructField, jsonName string, base object) object {
+	if owner == "UserPasswordResetCompletion" {
+		switch jsonName {
+		case "expectedResourceVersion":
+			return object{"type": "integer", "minimum": 1, "maximum": uint64(9007199254740990)}
+		case "resultingResourceVersion":
+			return object{"type": "integer", "minimum": 2, "maximum": uint64(9007199254740991)}
+		}
+	}
 	if owner == "PasswordRequirements" {
 		switch jsonName {
 		case "apiVersion":
@@ -1066,6 +1075,7 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 }
 
 func applySemanticOverlays(schemas object) {
+	schemas["UserPasswordResetCompletion"].(object)["description"] = "Non-secret confirmation of one committed administrator reset, not password-input equality, current credential validity, Audit delivery or replay authority. Runtime validation requires a distinct actor and target, resultingResourceVersion = expectedResourceVersion + 1, and the original UTC microsecond fact time. Lookup must bind current Account/actor authorization and the exact original target/request/version; schema validation alone proves neither provenance nor completion."
 	schemas["PasswordRequirements"].(object)["description"] = "Current self-only password rules, measured in Unicode code points and UTF-8 bytes. An observation, never a write permit; final replacement rechecks current qualification and settings."
 	schemas["PasswordRequirements"].(object)["oneOf"] = []any{
 		object{"properties": object{"source": object{"const": "ACCOUNT"}}},
@@ -1386,7 +1396,8 @@ func applySemanticOverlays(schemas object) {
 	}
 	kinds := map[string]string{
 		"AccountSecuritySettings": "AccountSecuritySettings", "AccountSecuritySettingsChange": "AccountSecuritySettingsChange",
-		"NotificationContact": "NotificationContact", "NotificationContactVerification": "NotificationContactVerification",
+		"UserPasswordResetCompletion": "UserPasswordResetCompletion",
+		"NotificationContact":         "NotificationContact", "NotificationContactVerification": "NotificationContactVerification",
 		"AuthenticatorRemoval": "AuthenticatorRemoval",
 		"AccessKey":            "AccessKey", "AccessKeyList": "AccessKeyList", "AccessKeyDeletion": "AccessKeyDeletion",
 		"CurrentRoleIdentity": "CurrentRoleIdentity", "AssumableRoleList": "AssumableRoleList",

@@ -23841,6 +23841,59 @@
         ],
         "type": "object"
       },
+      "UserPasswordResetCompletion": {
+        "additionalProperties": false,
+        "description": "Non-secret confirmation of one committed administrator reset, not password-input equality, current credential validity, Audit delivery or replay authority. Runtime validation requires a distinct actor and target, resultingResourceVersion = expectedResourceVersion + 1, and the original UTC microsecond fact time. Lookup must bind current Account/actor authorization and the exact original target/request/version; schema validation alone proves neither provenance nor completion.",
+        "properties": {
+          "accountId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "actorPrincipalId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "apiVersion": {
+            "const": "iam.matrix.xiak.com/v1"
+          },
+          "eventId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "expectedResourceVersion": {
+            "maximum": 9007199254740990,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "kind": {
+            "const": "UserPasswordResetCompletion"
+          },
+          "occurredAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "resultingResourceVersion": {
+            "maximum": 9007199254740991,
+            "minimum": 2,
+            "type": "integer"
+          },
+          "userId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "accountId",
+          "actorPrincipalId",
+          "apiVersion",
+          "eventId",
+          "expectedResourceVersion",
+          "kind",
+          "occurredAt",
+          "requestId",
+          "resultingResourceVersion",
+          "userId"
+        ],
+        "type": "object"
+      },
       "UserPermissionBoundary": {
         "additionalProperties": false,
         "properties": {

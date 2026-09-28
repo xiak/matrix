@@ -1148,6 +1148,33 @@ S3b正在实施，尚未完整验收。最小可验收结果是：管理员按�
 
 验收复用现有authority/usecase/API、IAM PG18与authorityprocess owners：每个写入口有真实正负向；两个Account同名USER与两个IAM副本验证当前规则/历史；0/1/24、Unicode/空格/512字节、无历史及旧hash准确验证；改密与reset/recover/规则修改/受保护附件授撤的相反提交次序，证明旧计算无部分效果。真实恢复提升generation但不使密码变年轻、等值Bootstrap/receipt不追加历史、末端失败/重启和历史审计保留均要单独断言。单前驱必须真实产生至少两次MFA设置完成及一个未完成设置证明：迁移后原完成/CONSUMED证明/原Audit字节保持，当前初始化不跳版本，旧未完成证明拒绝，新完整证明可以从原末版本完成密码规则变化，接续谱系无缺口；仅原合法Session仍有效不等于旧证明仍可写入。缺列/错误默认/历史篡改、同版本重放及末端DDL失败不得部分初始化或修复旧资格。保留数据只滚动一个真实固定前驱，不枚举全部未发布schema；锁不变量覆盖采用代表性竞争边界，不为每个字段复制整套重型进程/升级矩阵。词表与有限资源容量、LIVE UI、签名恢复分别沿其owner验收，不能以这份设计或纯单测替代。
 
+##### S3b 后继：管理员重置的原完成确认
+
+本节为上述UNKNOWN缺口的有界实现目标。`UserPasswordResetCompletion`纯载体、严格codec及生成schema已实现；**查询路由和原子存储尚未实现、未开放API、未分配schema/revision**。IAM负责事务、严格契约及原进程门禁，UX负责消费和浏览器；安装owner的000015及其注册/readiness窗口保持独占，必须在固定对象对齐后再排SQL变更。本片不提前开展密码到期或新离线恢复能力。
+
+**源事实不能被过度解释。** 固定0fa的`ResetUserPassword`对目标、原resourceVersion及requestId生成脱敏摘要；`change_user`在锁内检查实际版本、写密码并追加原事实，但没有单独保存摘要所表示的expected版本。摘要也不包含密码字节。因此不从目标当前状态、409、版本加一或仅匹配outbox摘要推导“原完整密码输入已成功”；不把该摘要补充为公开的廉价密码校验器。
+
+最小新增状态是现有用户密码重置事务内的不可变完成关系，而非通用命令服务或另一密码存储：保存由当前权威推导的Account/actor、实际目标USER、原requestId、锁内使用的expected版本、真正更新后的结果版本及原成功eventId。完成关系与密码/generation、forced-change、会话撤销及outbox同事务提交；原version冲突、规则/资格变化或末端事实失败不留下任何部分完成。关系必须外键绑定原目标、actor及不可变成功事实，数据库校验事实的scope/action/actor/target/requestId/result一致。API/worker/恢复登录均不能直接增删改该关系；仅原受控reset函数写入，读取也使用目的限定函数。旧数据不由当前状态或历史摘要批量回填完成；无可信完成关系只能保持未确认。
+
+原POST请求/响应及受保护身份限制保持：仍按当前规则准备、锁外比较/hash和锁内最终资格核对，不改成`EQUAL_REPLAY`，也不返还原密码。已使用的同Account/actor/requestId不可改目标、改版本或重新执行；重复POST仍明确冲突，当前资格失效则先拒绝。不同输入竞争同一原版本最多一个成功；不声明服务能通过完成确认判断两个密码输入是否等值。调用者必须保持每次原意图不可变，不能将同一requestId用于另一口令。原主账号恢复和本人改密不自动加入这一关系或取得此读取路径。
+
+拟定查询为`GET /v1/users/{userId}/password-resets/{resetRequestId}?resourceVersion=<原expected>`。仅一个合法版本参数、无body、无Account/actor/session选择器；从当前有效LOGIN_SESSION推导Account及actor，重新按准确目标检查现有`iam.user.reset-password`，不要求额外目录读取权限，也不开放给Role/Key/Service或临时强制改密载体。只读该actor原目标/请求/expected的精确关系；重新登录后仍须是相同actor且当前有权，知道requestId不是查询凭据。该路径不得调用新reset或当前可变密码准备，不要求目标仍保持提交时版本或密码。
+
+| 查询结果 | 业务含义及消费者边界 |
+| --- | --- |
+| 200：精确历史确认 | 只含apiVersion/kind、Account、actor、目标、原requestId、expected/resulting版本、eventId及原事实occurredAt；这些字段全部取自已验证完成关系/原事实，不回传密码、hash、generation、Session或私有证明。它证明原请求身份的重置已提交，不代表临时密码现在有效、目标当前可登录或Audit已完成投递 |
+| 404：没有精确关系 | 不证明未提交、没有在途事务或历史操作从未发生；保留UNKNOWN，不生成新requestId/新版本自动重试。查到别人的完成、错误目标或原版本也不能泄露其元数据 |
+| 401/403 | 当前身份或权限不再成立；结束该身份的本地敏感材料，不以历史成功获得持续查询权 |
+| 503、传输/协议未知 | 不变成未执行或成功，保留未确认；未知结果的原POST不自动重发。只读查询可以由用户再次显式发起，不引入无限轮询或重试 |
+
+纯载体的准确字段是`apiVersion`、`kind=UserPasswordResetCompletion`、`accountId`、`actorPrincipalId`、`userId`、`requestId`、`expectedResourceVersion`、`resultingResourceVersion`、`eventId`、`occurredAt`，全部必填；不存在pending/outcome/重放permit或密码输入承诺字段。expected为1至9007199254740990，resulting严格等于expected+1且仍在JSON安全整数范围，actor与目标USER不同，原事实时间为UTC微秒。JSON Schema只证明闭合字段、类型和各自范围，跨字段关系与严格重复键/大小写/字节预算由唯一Go codec校验；任何解析失败不部分覆盖调用者已有结果。结构有效仍不证明数据库提交、来源或当前查询权限，不能绕过后继锁内证明。
+
+纯契约在Go/GOMAXPROCS2、GOMEMLIMIT512MiB下通过IAM/Audit API全包race-p2、architecture及同范围vet，生成OpenAPI重跑字节稳定。覆盖最小/最大版本、缺项/null/未知秘密或许可字段、错误purpose、重复/变体键、self-reset、版本跳跃/溢出、非UTC/超微秒时间、超限/尾随输入与失败不部分写入。未在OpenAPI添加不存在的GET路由；该纯片不改服务接口、SQL、Audit字节、schema/profile，也没有数据库、浏览器或完整闭环验收结论。
+
+查询只追加现有授权决定/相关审计，不再次产生`iam.user.password-reset`成功事实；Audit暂不可投递不应抹除IAM已提交完成。目标随后自行改密、被再次reset、停用或删除时，原完成仍是历史记录，不能被当前状态替换、撤销或重新执行。受支持恢复后的历史缺失保持UNKNOWN；本关系不声称抵抗整机回滚、恢复密码资格或授予跨profile恢复许可。原公开Audit/canonical、ServiceIdentity/lookup_service、claim7和离线FILE均不改变。
+
+验收沿原accounts/usecase/API/SQL/HTTP及authorityprocess拥有者，不新增重型测试框架或全历史升级矩阵：实际POST已提交后丢TCP回包，由另一IAM副本查询且重启后仍相同；提交前终止与正在提交期间的未观察结果不误报成功；错误Account/actor/目标/requestId/version与撤权、Session失效、Role/Key/Service攻击拒绝；同版本并发reset及已使用ID变体只有确定赢家；末端outbox/完成关系失败完整回滚；后续改密/停用/删除不改变原完成或恢复旧凭据；运行角色不能伪造、篡改或删除完成，错误scope/action/目标绑定关闭readiness/查询。最后在真实浏览器中证明UNKNOWN只核对原意图、不泄露秘密、不自动再次reset。当前API或纯契约测试通过均不能替代这些验收。
+
 #### 认证尝试的持久预算
 
 ##### S3a：登录与改密共享密码尝试
