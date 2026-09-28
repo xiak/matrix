@@ -698,7 +698,7 @@ passed Go, UI, authority-process and node-process for that exact source. This
 fixes test targeting; only the forthcoming populated v5 restore can prove the
 new recovery behavior.
 
-The current signed same-profile lifecycle used the real adjacent release
+The retained signed same-profile lifecycle used the real adjacent release
 chain `495fc04e41310e28ff9801a9511fb83b1d64188f` ->
 `d3339f5b582dd5fe134d6098b352c938dc7d4ac2` ->
 `6b47736b603fa018901fcc683d4df6fe260896fc`. All three bundles declared
@@ -749,6 +749,31 @@ package/test artifacts were removed; shared Docker build cache was not
 globally pruned. This is evidence for the exact revision
 16 inspection and signed lifecycle, not for a future IAM/Audit profile or the
 combined two-host release gate.
+
+The adjacent cross-profile upgrade from signed `1602fad3925b` (IAM 45 /
+Audit 26 / PaaS 6, revision 16) to signed `648aac4ec956` (IAM 49 / Audit 27 /
+PaaS 6, revision 17) passed a separate disconnected, task-owned Docker 27.5.1
+engine capped at 2 CPU and 4 GiB. The test-key-signed base, successor and
+same-profile follow-on manifests have SHA-256 digests
+`2e91ed45819e7cdc12c7a11f5e051e7c997e16f52bd5539d1fa1d2be6344f216`,
+`ab00c4af4a12704465f0ab01e3cf43e4a44bfebc30f79f8b225d4759b1630032`
+and `353e668a12a0a1c4682ae9fe619be398ed9ec75b2331832ae5d5e92fa693f353`.
+The 543.09-second gate proved base install/verify, the exact retained-data
+upgrade and cross-profile automatic-rollback refusal, original-primary
+credential recovery without service restart, first MFA enrollment, Audit
+integrity, two workload generations, a protected backup, two validly signed
+wrong-predecessor rejections before effects, injected-failure automatic
+rollback, same-profile upgrade/explicit rollback/selected-backup recovery,
+application rollback/stop, revoked-authorization recovery rejection and
+bounded support. Its runner is fixed at `487fcfe1`; it uses separate
+intermediate and final passwords so the recovery proof respects password
+history. Restarting only that task-owned engine passed status/verify and
+complete offline lifecycle in 16.53 seconds. The engine and its two labeled
+volumes were removed; no remote machine was restarted. This does not grant
+cross-profile restore permission, publish a production signing root, or
+replace the independent two-host and browser gates. The local package
+directory remains because recursive deletion was blocked by execution policy;
+its task-owned files must be removed when that policy permits.
 
 ## Incremental acceptance
 
