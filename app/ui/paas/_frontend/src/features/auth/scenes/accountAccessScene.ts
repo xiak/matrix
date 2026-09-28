@@ -1,46 +1,48 @@
-import type { Account, AccountIdentity, AccountUser, DirectoryPage, IdentityRole } from "../domain/accounts";
+import { can, type AccountAccess, type AccountIdentity, type DirectoryPage, type Policy, type UserAccess } from "../domain/accounts";
 
-export const roleLabels: Record<IdentityRole, string> = {
-  PLATFORM_OPERATOR: "平台运营者",
-  ORGANIZATION_ADMIN: "租户管理员", PAAS_DEVELOPER: "服务开发者", PAAS_VIEWER: "只读用户", AUDIT_READER: "审计只读"
-};
-
-export const roleDescriptions: Record<IdentityRole, string> = {
-  PLATFORM_OPERATOR: "管理安装级平台资源和租户开通、停复用、原主账号恢复；不隐含租户数据读取或成员管理权限。",
-  ORGANIZATION_ADMIN: "管理本租户的用户、授权、别名、PaaS 资源与审计记录；不能开通新租户或访问其他租户资源。",
-  PAAS_DEVELOPER: "查看本租户的 PaaS 资源，激活配额、创建服务实例，以及管理应用部署；不能管理账号或授权。",
-  PAAS_VIEWER: "只读查看本租户的 PaaS 资源、配额与运行状态；不能创建或修改资源。",
-  AUDIT_READER: "读取和校验本租户的审计记录；不会同时获得 PaaS 资源或用户管理权限。"
-};
-
-export function buildAccountAccessScene(identity: AccountIdentity, users: DirectoryPage<AccountUser> | null, accounts: DirectoryPage<Account> | null) {
+export function buildAccountAccessScene(identity: AccountIdentity, users: DirectoryPage<UserAccess> | null,
+  accounts: DirectoryPage<AccountAccess> | null, policies: Policy[]) {
   const account = identity.account;
+  const policyNames = new Map(policies.map((policy) => [policy.id, policy.displayName]));
+  const user = identity.user;
   return {
-    accountId: account.organization.id,
-    accountName: account.organization.displayName,
-    accountVersion: account.organization.resourceVersion,
+    accountId: account.id,
+    accountName: account.displayName,
+    accountVersion: account.resourceVersion,
     loginAlias: account.loginAlias,
-    primaryLoginName: account.primaryLoginName,
-    identityLabel: identity.principal.displayName,
-    isPrimary: identity.principal.id === account.primaryPrincipalId,
-    roles: identity.roles.map((role) => roleLabels[role]),
-    canManage: !identity.principal.mustChangePassword && identity.roles.includes("ORGANIZATION_ADMIN"),
-    canCreateOrganizations: identity.canCreateOrganizations,
-    users: users?.items.filter(({ principal }) => principal.id !== account.primaryPrincipalId).map(({ principal, roleBindings }) => ({
-      id: principal.id, name: principal.displayName, loginName: principal.loginName,
-      qualifiedName: `${principal.loginName}@${account.loginAlias ?? account.organization.id}`,
-      credentialProtection: roleBindings.some((binding) => binding.role === "PLATFORM_OPERATOR") ? "platform" : principal.id === identity.principal.id ? "self" : null,
-      enabled: principal.status === "ACTIVE", resourceVersion: principal.resourceVersion,
-      statusLabel: principal.status === "DISABLED" ? "已禁用" : principal.mustChangePassword ? "待修改初始密码" : "正常",
-      bindings: roleBindings.map((binding) => ({ ...binding, label: roleLabels[binding.role] }))
+    primaryLoginName: account.rootIdentity.loginName,
+    identityLabel: user.displayName,
+    isPrimary: identity.identityKind === "ROOT_IDENTITY",
+    authorityLabels: identity.policySources.map(({ attachment }) => policyNames.get(attachment.policyId) ?? attachment.policyId),
+    canListUsers: can(identity.capabilities, "iam.user.list", "ACCOUNT", account.id),
+    canCreateUsers: can(identity.capabilities, "iam.user.create", "ACCOUNT", account.id),
+    canSetAlias: can(identity.capabilities, "iam.account.alias-set", "ACCOUNT", account.id),
+    canListAccounts: can(identity.capabilities, "iam.account.read", "ACCOUNT", "collection"),
+    canCreateAccounts: can(identity.capabilities, "iam.account.create", "ACCOUNT", "collection"),
+    users: users?.items.map(({ user: member, policyAttachments, capabilities }) => ({
+      id: member.id, name: member.displayName, loginName: member.loginName,
+      qualifiedName: `${member.loginName}@${account.loginAlias ?? account.id}`,
+      enabled: member.status === "ACTIVE", resourceVersion: member.resourceVersion,
+      statusLabel: member.status === "DISABLED" ? "已禁用" : member.mustChangePassword ? "待修改初始密码" : "正常",
+      canSetStatus: can(capabilities, "iam.user.set-status", "USER", member.id),
+      canResetPassword: can(capabilities, "iam.user.reset-password", "USER", member.id),
+      canAttachPolicy: can(capabilities, "iam.policy-attachment.create", "USER", member.id),
+      attachments: policyAttachments.map((attachment) => ({
+        ...attachment, label: policyNames.get(attachment.policyId) ?? attachment.policyId,
+        canRevoke: can(capabilities, attachment.scope === "INSTALLATION" ? "iam.platform-policy-attachment.revoke" :
+          "iam.policy-attachment.revoke", "POLICY_ATTACHMENT", attachment.id)
+      }))
     })) ?? [],
     nextUserPage: users?.nextAfter ?? null,
-    accounts: accounts?.items.map((entry) => ({
-      id: entry.organization.id, name: entry.organization.displayName, loginAlias: entry.loginAlias,
-      primaryLoginName: entry.primaryLoginName, primaryPrincipalId: entry.primaryPrincipalId,
-      enabled: entry.organization.status === "ACTIVE", resourceVersion: entry.organization.resourceVersion
+    accounts: accounts?.items.map(({ account: entry, capabilities }) => ({
+      id: entry.id, name: entry.displayName, loginAlias: entry.loginAlias,
+      primaryLoginName: entry.rootIdentity.loginName, primaryPrincipalId: entry.rootIdentity.principalId,
+      enabled: entry.status === "ACTIVE", resourceVersion: entry.resourceVersion,
+      canSetStatus: can(capabilities, "iam.account.set-status", "ACCOUNT", entry.id),
+      canRecoverRoot: can(capabilities, "iam.account.recover-root-credentials", "ACCOUNT", entry.id)
     })) ?? [],
-    nextAccountPage: accounts?.nextAfter ?? null
+    nextAccountPage: accounts?.nextAfter ?? null,
+    policies
   };
 }
 

@@ -1,5 +1,5 @@
 import { requestJSON, requestToken } from "@/infrastructure/http/jsonRequest";
-import { userRoles, type Account, type AccountIdentity, type AccountPrincipal, type AccountUser, type DirectoryPage, type IdentityRole, type UserRole, type UserRoleBinding } from "../domain/accounts";
+import type { Account, AccountAccess, AccountIdentity, AccountUser, ActionCapability, DirectoryPage, Policy, PolicyAttachment, UserAccess } from "../domain/accounts";
 import type {
   AuthenticatorState,
   EnrollmentChallengeState,
@@ -51,50 +51,79 @@ function accountStatus(value: unknown): "ACTIVE" | "DISABLED" {
   return value;
 }
 
-function parseIdentityRole(value: unknown): IdentityRole {
-  if (value !== "PLATFORM_OPERATOR" && !userRoles.includes(value as UserRole)) throw new Error("INVALID_IAM_RESPONSE");
-  return value as IdentityRole;
-}
-
 function requireAccountKind(wire: Record<string, unknown>, kind: string) {
   if (wire.apiVersion !== "iam.matrix.xiak.com/v1" || wire.kind !== kind) throw new Error("INVALID_IAM_RESPONSE");
 }
 
 function parseAccount(value: unknown): Account {
   const wire = accountRecord(value);
-  const organization = accountRecord(wire.organization);
-  requireAccountKind(organization, "Organization");
+  requireAccountKind(wire, "Account");
+  const rootIdentity = accountRecord(wire.rootIdentity);
   if (wire.loginAlias !== null && (typeof wire.loginAlias !== "string" || !/^[a-z][a-z0-9-]{1,61}[a-z0-9]$/.test(wire.loginAlias))) throw new Error("INVALID_IAM_RESPONSE");
   return {
-    organization: { id: accountText(organization.id), displayName: accountText(organization.displayName), status: accountStatus(organization.status), resourceVersion: accountVersion(organization.resourceVersion) },
-    primaryPrincipalId: accountText(wire.primaryPrincipalId), primaryLoginName: accountText(wire.primaryLoginName), loginAlias: wire.loginAlias
+    id: accountIdentifier(wire.id), displayName: accountText(wire.displayName), status: accountStatus(wire.status),
+    rootIdentity: { principalId: accountIdentifier(rootIdentity.principalId), loginName: accountText(rootIdentity.loginName) },
+    loginAlias: wire.loginAlias, resourceVersion: accountVersion(wire.resourceVersion)
   };
 }
 
-function parseAccountPrincipal(value: unknown): AccountPrincipal {
+function parseAccountUser(value: unknown): AccountUser {
   const wire = accountRecord(value);
-  requireAccountKind(wire, "Principal");
-  if (wire.type !== "USER" || (wire.mustChangePassword !== undefined && typeof wire.mustChangePassword !== "boolean")) throw new Error("INVALID_IAM_RESPONSE");
-  return { id: accountText(wire.id), organizationId: accountText(wire.organizationId), loginName: accountText(wire.loginName),
+  requireAccountKind(wire, "User");
+  if (wire.mustChangePassword !== undefined && typeof wire.mustChangePassword !== "boolean") throw new Error("INVALID_IAM_RESPONSE");
+  return { id: accountIdentifier(wire.id), accountId: accountIdentifier(wire.accountId), loginName: accountText(wire.loginName),
     displayName: accountText(wire.displayName), status: accountStatus(wire.status), mustChangePassword: wire.mustChangePassword === true, resourceVersion: accountVersion(wire.resourceVersion) };
 }
 
-function parseRoleBinding(value: unknown): UserRoleBinding {
+function parseCapability(value: unknown): ActionCapability {
   const wire = accountRecord(value);
-  requireAccountKind(wire, "RoleBinding");
-  return { id: accountText(wire.id), principalId: accountText(wire.principalId), organizationId: accountText(wire.organizationId), role: parseIdentityRole(wire.role) };
+  const resource = accountRecord(wire.resource);
+  if (typeof wire.available !== "boolean" || !accountText(wire.action).startsWith("iam.")) throw new Error("INVALID_IAM_RESPONSE");
+  return { action: wire.action as string, resource: { kind: accountText(resource.kind), id: accountIdentifier(resource.id) }, available: wire.available };
+}
+
+function parseCapabilities(value: unknown): ActionCapability[] {
+  if (!Array.isArray(value)) throw new Error("INVALID_IAM_RESPONSE");
+  const capabilities = value.map(parseCapability);
+  if (new Set(capabilities.map(({ action, resource }) => `${action}:${resource.kind}:${resource.id}`)).size !== capabilities.length) throw new Error("INVALID_IAM_RESPONSE");
+  return capabilities;
+}
+
+function parseAttachment(value: unknown): PolicyAttachment {
+  const wire = accountRecord(value);
+  const target = accountRecord(wire.target);
+  requireAccountKind(wire, "PolicyAttachment");
+  if (target.kind !== "USER" && target.kind !== "GROUP" && target.kind !== "ROLE" ||
+      (wire.scope !== "TENANT" && wire.scope !== "INSTALLATION") || wire.revokedAt != null) throw new Error("INVALID_IAM_RESPONSE");
+  return { id: accountIdentifier(wire.id), accountId: accountIdentifier(wire.accountId),
+    target: { kind: target.kind, id: accountIdentifier(target.id) }, policyId: accountIdentifier(wire.policyId),
+    scope: wire.scope, resourceVersion: accountVersion(wire.resourceVersion) };
 }
 
 function parseAccountIdentity(value: unknown): AccountIdentity {
   const wire = accountRecord(value);
   requireAccountKind(wire, "CurrentIdentity");
-  if (!Array.isArray(wire.roles) || typeof wire.canCreateOrganizations !== "boolean") throw new Error("INVALID_IAM_RESPONSE");
+  if (!Array.isArray(wire.policySources) || (wire.identityKind !== "ROOT_IDENTITY" && wire.identityKind !== "USER")) throw new Error("INVALID_IAM_RESPONSE");
   const account = parseAccount(wire.account);
-  const principal = parseAccountPrincipal(wire.principal);
-  const roles = wire.roles.map(parseIdentityRole);
-  if (account.organization.id !== principal.organizationId || new Set(roles).size !== roles.length ||
-      (wire.canCreateOrganizations && (principal.mustChangePassword || !roles.includes("PLATFORM_OPERATOR")))) throw new Error("INVALID_IAM_RESPONSE");
-  return { account, principal, roles, canCreateOrganizations: wire.canCreateOrganizations };
+  const user = parseAccountUser(wire.user);
+  const sources = wire.policySources.map((value) => {
+    const source = accountRecord(value);
+    const attachment = parseAttachment(source.attachment);
+    if (source.kind === "DIRECT") {
+      if (attachment.target.kind !== "USER" || attachment.target.id !== user.id || source.membership != null) throw new Error("INVALID_IAM_RESPONSE");
+    } else if (source.kind === "GROUP") {
+      const membership = accountRecord(source.membership);
+      if (attachment.scope !== "TENANT" || attachment.target.kind !== "GROUP" ||
+          membership.accountId !== account.id || membership.userId !== user.id || membership.groupId !== attachment.target.id) {
+        throw new Error("INVALID_IAM_RESPONSE");
+      }
+    } else throw new Error("INVALID_IAM_RESPONSE");
+    return { attachment };
+  });
+  if (account.id !== user.accountId || (wire.identityKind === "ROOT_IDENTITY") !== (account.rootIdentity.principalId === user.id) ||
+      sources.some(({ attachment }) => attachment.accountId !== account.id) ||
+      new Set(sources.map(({ attachment }) => attachment.id)).size !== sources.length) throw new Error("INVALID_IAM_RESPONSE");
+  return { account, user, identityKind: wire.identityKind, policySources: sources, capabilities: parseCapabilities(wire.capabilities) };
 }
 
 function accountPage<T>(value: unknown, kind: string, parse: (item: unknown) => T): DirectoryPage<T> {
@@ -106,66 +135,97 @@ function accountPage<T>(value: unknown, kind: string, parse: (item: unknown) => 
 
 function accountHeaders(credential: string): HeadersInit { return { Authorization: `Bearer ${credential}` }; }
 
+function parseUserAccess(value: unknown): UserAccess {
+  const wire = accountRecord(value);
+  const user = parseAccountUser(wire.user);
+  if (!Array.isArray(wire.policyAttachments) || wire.policyAttachments.length > 256) throw new Error("INVALID_IAM_RESPONSE");
+  const policyAttachments = wire.policyAttachments.map(parseAttachment);
+  if (policyAttachments.some((attachment) => attachment.accountId !== user.accountId || attachment.target.kind !== "USER" ||
+      attachment.target.id !== user.id) || new Set(policyAttachments.map((attachment) => attachment.policyId)).size !== policyAttachments.length) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  return { user, policyAttachments, capabilities: parseCapabilities(wire.capabilities) };
+}
+
+function parseAccountAccess(value: unknown): AccountAccess {
+  const wire = accountRecord(value);
+  return { account: parseAccount(wire.account), capabilities: parseCapabilities(wire.capabilities) };
+}
+
+function parsePolicy(value: unknown): Policy {
+  const wire = accountRecord(value);
+  requireAccountKind(wire, "Policy");
+  if (wire.scope !== "TENANT" || wire.status !== "ACTIVE" ||
+      (wire.management !== "SYSTEM" && wire.management !== "CUSTOMER")) throw new Error("INVALID_IAM_RESPONSE");
+  return { id: accountIdentifier(wire.id), displayName: accountText(wire.displayName), management: wire.management,
+    scope: "TENANT", resourceVersion: accountVersion(wire.resourceVersion) };
+}
+
 export const httpAccountRepository: AccountRepository = {
   async currentIdentity(credential) {
     return parseAccountIdentity(await requestJSON<unknown>("/api/iam/v1/auth/me", { headers: accountHeaders(credential) }));
   },
   async listUsers(credential, after) {
-    return accountPage<AccountUser>(await requestJSON<unknown>(`/api/iam/v1/principals${after ? `?after=${encodeURIComponent(after)}` : ""}`, { headers: accountHeaders(credential) }), "PrincipalList", (value) => {
-      const wire = accountRecord(value);
-      if (!Array.isArray(wire.roleBindings)) throw new Error("INVALID_IAM_RESPONSE");
-      const principal = parseAccountPrincipal(wire.principal);
-      const roleBindings = wire.roleBindings.map(parseRoleBinding);
-      if (roleBindings.some((binding) => binding.principalId !== principal.id || binding.organizationId !== principal.organizationId) ||
-          new Set(roleBindings.map((binding) => binding.role)).size !== roleBindings.length) throw new Error("INVALID_IAM_RESPONSE");
-      return { principal, roleBindings };
-    });
+    return accountPage<UserAccess>(await requestJSON<unknown>(`/api/iam/v1/users${after ? `?after=${encodeURIComponent(after)}` : ""}`, {
+      headers: accountHeaders(credential) }), "UserList", parseUserAccess);
   },
   async listAccounts(credential, after) {
-    return accountPage(await requestJSON<unknown>(`/api/iam/v1/organizations${after ? `?after=${encodeURIComponent(after)}` : ""}`, { headers: accountHeaders(credential) }), "OrganizationAccountList", parseAccount);
+    return accountPage<AccountAccess>(await requestJSON<unknown>(`/api/iam/v1/accounts${after ? `?after=${encodeURIComponent(after)}` : ""}`, {
+      headers: accountHeaders(credential) }), "AccountList", parseAccountAccess);
+  },
+  async listPolicies(credential) {
+    const wire = accountRecord(await requestJSON<unknown>("/api/iam/v1/policies", { headers: accountHeaders(credential) }));
+    requireAccountKind(wire, "PolicyList");
+    if (wire.scope !== "TENANT" || !Array.isArray(wire.items) || wire.items.length > 256) throw new Error("INVALID_IAM_RESPONSE");
+    const accountId = accountIdentifier(wire.accountId);
+    const items: unknown[] = wire.items;
+    const policies = items.map(parsePolicy);
+    if (policies.some((policy, index) => (index > 0 && policies[index - 1]!.id >= policy.id) ||
+        (accountRecord(items[index]).accountId && accountRecord(items[index]).accountId !== accountId))) throw new Error("INVALID_IAM_RESPONSE");
+    return policies;
   },
   async execute(credential, command) {
     const requestId = requestToken("ui-account-");
     let path: string;
     let body: object;
     switch (command.kind) {
-      case "create-user": path = "/api/iam/v1/principals"; body = { loginName: command.loginName, displayName: command.displayName, initialPassword: command.initialPassword, initialRole: command.initialRole }; break;
-      case "create-organization": path = "/api/iam/v1/organizations"; body = { id: command.id, displayName: command.displayName, administratorLoginName: command.administratorLoginName, administratorDisplayName: command.administratorDisplayName, initialPassword: command.initialPassword }; break;
-      case "set-organization-status": path = `/api/iam/v1/organizations/${encodeURIComponent(command.organizationId)}:set-status`; body = { status: command.status, resourceVersion: command.resourceVersion }; break;
-      case "recover-primary": path = `/api/iam/v1/organizations/${encodeURIComponent(command.organizationId)}:recover-administrator`; body = { principalId: command.principalId, initialPassword: command.initialPassword, resourceVersion: command.resourceVersion }; break;
-      case "set-alias": path = "/api/iam/v1/organization:alias"; body = { alias: command.alias, resourceVersion: command.resourceVersion }; break;
-      case "set-status": path = `/api/iam/v1/principals/${encodeURIComponent(command.principalId)}:set-status`; body = { status: command.status, resourceVersion: command.resourceVersion }; break;
-      case "reset-password": path = `/api/iam/v1/principals/${encodeURIComponent(command.principalId)}:reset-password`; body = { initialPassword: command.initialPassword, resourceVersion: command.resourceVersion }; break;
-      case "grant-role": path = "/api/iam/v1/role-bindings"; body = { principalId: command.principalId, role: command.role }; break;
-      case "revoke-role": path = `/api/iam/v1/role-bindings/${encodeURIComponent(command.bindingId)}:revoke`; body = {}; break;
+      case "create-user": path = "/api/iam/v1/users"; body = { loginName: command.loginName, displayName: command.displayName, initialPassword: command.initialPassword }; break;
+      case "create-account": path = "/api/iam/v1/accounts"; body = { id: command.id, displayName: command.displayName, rootLoginName: command.rootLoginName, rootDisplayName: command.rootDisplayName, initialPassword: command.initialPassword }; break;
+      case "set-account-status": path = `/api/iam/v1/accounts/${encodeURIComponent(command.accountId)}:set-status`; body = { status: command.status, resourceVersion: command.resourceVersion }; break;
+      case "recover-root": path = `/api/iam/v1/accounts/${encodeURIComponent(command.accountId)}:recover-root-credentials`; body = { initialPassword: command.initialPassword, resourceVersion: command.resourceVersion }; break;
+      case "set-alias": path = "/api/iam/v1/account:alias"; body = { alias: command.alias, resourceVersion: command.resourceVersion }; break;
+      case "set-user-status": path = `/api/iam/v1/users/${encodeURIComponent(command.userId)}:set-status`; body = { status: command.status, resourceVersion: command.resourceVersion }; break;
+      case "reset-password": path = `/api/iam/v1/users/${encodeURIComponent(command.userId)}:reset-password`; body = { initialPassword: command.initialPassword, resourceVersion: command.resourceVersion }; break;
+      case "attach-policy": path = "/api/iam/v1/policy-attachments"; body = { target: { kind: "USER", id: command.userId }, policyId: command.policyId, policyResourceVersion: command.policyResourceVersion }; break;
+      case "revoke-policy": path = `/api/iam/v1/policy-attachments/${encodeURIComponent(command.attachmentId)}:revoke`; body = { resourceVersion: command.resourceVersion }; break;
     }
     const result = await requestJSON<unknown>(path, { method: "POST", headers: { ...accountHeaders(credential), "Content-Type": "application/json" }, body: JSON.stringify({ ...body, requestId }) });
-    if (command.kind === "create-organization" || command.kind === "set-alias" || command.kind === "set-organization-status" || command.kind === "recover-primary") {
+    if (command.kind === "create-account" || command.kind === "set-alias" || command.kind === "set-account-status" || command.kind === "recover-root") {
       const account = parseAccount(result);
-      if (command.kind === "create-organization" && (account.organization.id !== command.id || account.primaryLoginName !== command.administratorLoginName)) throw new Error("INVALID_IAM_RESPONSE");
-      if (command.kind === "set-alias" && (account.loginAlias !== command.alias || account.organization.resourceVersion <= command.resourceVersion)) throw new Error("INVALID_IAM_RESPONSE");
-      if ((command.kind === "set-organization-status" || command.kind === "recover-primary") &&
-          (account.organization.id !== command.organizationId || account.organization.resourceVersion <= command.resourceVersion)) throw new Error("INVALID_IAM_RESPONSE");
-      if (command.kind === "set-organization-status" && account.organization.status !== command.status) throw new Error("INVALID_IAM_RESPONSE");
-      if (command.kind === "recover-primary" && account.primaryPrincipalId !== command.principalId) throw new Error("INVALID_IAM_RESPONSE");
+      if (command.kind === "create-account" && (account.id !== command.id || account.rootIdentity.loginName !== command.rootLoginName)) throw new Error("INVALID_IAM_RESPONSE");
+      if (command.kind === "set-alias" && (account.loginAlias !== command.alias || account.resourceVersion <= command.resourceVersion)) throw new Error("INVALID_IAM_RESPONSE");
+      if ((command.kind === "set-account-status" || command.kind === "recover-root") &&
+          (account.id !== command.accountId || account.resourceVersion <= command.resourceVersion)) throw new Error("INVALID_IAM_RESPONSE");
+      if (command.kind === "set-account-status" && account.status !== command.status) throw new Error("INVALID_IAM_RESPONSE");
       return;
     }
-    if (command.kind === "grant-role") {
-      const binding = parseRoleBinding(result);
-      if (binding.principalId !== command.principalId || binding.role !== command.role) throw new Error("INVALID_IAM_RESPONSE");
+    if (command.kind === "attach-policy") {
+      const attachment = parseAttachment(result);
+      if (attachment.target.kind !== "USER" || attachment.target.id !== command.userId || attachment.policyId !== command.policyId ||
+          attachment.scope !== "TENANT") throw new Error("INVALID_IAM_RESPONSE");
       return;
     }
-    if (command.kind === "revoke-role") {
+    if (command.kind === "revoke-policy") {
       const wire = accountRecord(result);
       requireAccountKind(wire, "Revocation");
-      if (wire.id !== command.bindingId) throw new Error("INVALID_IAM_RESPONSE");
+      if (wire.id !== command.attachmentId) throw new Error("INVALID_IAM_RESPONSE");
       return;
     }
-    const principal = parseAccountPrincipal(result);
-    if (command.kind === "create-user" && principal.loginName !== command.loginName) throw new Error("INVALID_IAM_RESPONSE");
-    if (command.kind !== "create-user" && (principal.id !== command.principalId || principal.resourceVersion <= command.resourceVersion)) throw new Error("INVALID_IAM_RESPONSE");
-    if (command.kind === "set-status" && principal.status !== command.status) throw new Error("INVALID_IAM_RESPONSE");
-    if ((command.kind === "create-user" || command.kind === "reset-password") && !principal.mustChangePassword) throw new Error("INVALID_IAM_RESPONSE");
+    const user = parseAccountUser(result);
+    if (command.kind === "create-user" && user.loginName !== command.loginName) throw new Error("INVALID_IAM_RESPONSE");
+    if (command.kind !== "create-user" && (user.id !== command.userId || user.resourceVersion <= command.resourceVersion)) throw new Error("INVALID_IAM_RESPONSE");
+    if (command.kind === "set-user-status" && user.status !== command.status) throw new Error("INVALID_IAM_RESPONSE");
+    if ((command.kind === "create-user" || command.kind === "reset-password") && !user.mustChangePassword) throw new Error("INVALID_IAM_RESPONSE");
   }
 };
 

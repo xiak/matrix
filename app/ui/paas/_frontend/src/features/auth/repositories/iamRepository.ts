@@ -1,5 +1,5 @@
 import type { LoginResult } from "../domain/session";
-import type { Account, AccountCommand, AccountIdentity, AccountUser, DirectoryPage } from "../domain/accounts";
+import type { AccountAccess, AccountCommand, AccountIdentity, DirectoryPage, Policy, UserAccess } from "../domain/accounts";
 import type {
   AuthenticatorState,
   EnrollmentChallengeState,
@@ -85,7 +85,8 @@ export interface IamRepository {
 
 export interface AccountRepository {
   currentIdentity(credential: string): Promise<AccountIdentity>;
-  listUsers(credential: string, after?: string): Promise<DirectoryPage<AccountUser>>;
-  listAccounts(credential: string, after?: string): Promise<DirectoryPage<Account>>;
+  listUsers(credential: string, after?: string): Promise<DirectoryPage<UserAccess>>;
+  listAccounts(credential: string, after?: string): Promise<DirectoryPage<AccountAccess>>;
+  listPolicies(credential: string): Promise<Policy[]>;
   execute(credential: string, command: AccountCommand): Promise<void>;
 }

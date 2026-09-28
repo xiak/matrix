@@ -3,7 +3,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { useSession, useSessionCredential } from "./SessionProvider";
-import type { AccountCommand } from "../domain/accounts";
+import { can, type AccountCommand } from "../domain/accounts";
 import type { AccountRepository } from "../repositories/iamRepository";
 import { httpAccountRepository } from "../repositories/httpIamRepository";
 import { buildAccountAccessScene, type AccountAccessScene } from "../scenes/accountAccessScene";
@@ -51,14 +51,17 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     let active = true;
     async function read() {
       const identity = await repository.currentIdentity(credential!);
-      if (identity.account.organization.id !== tenantId || identity.principal.id !== principalId) throw new Error("INVALID_IAM_IDENTITY");
-      const canManage = identity.roles.includes("ORGANIZATION_ADMIN") && !identity.principal.mustChangePassword;
-      const [users, accounts] = await Promise.all([
-        canManage ? repository.listUsers(credential!, page.users || undefined) : null,
-        identity.canCreateOrganizations ? repository.listAccounts(credential!, page.accounts || undefined) : null
+      if (identity.account.id !== tenantId || identity.user.id !== principalId) throw new Error("INVALID_IAM_IDENTITY");
+      const canListUsers = can(identity.capabilities, "iam.user.list", "ACCOUNT", tenantId);
+      const canListAccounts = can(identity.capabilities, "iam.account.read", "ACCOUNT", "collection");
+      const canListPolicies = can(identity.capabilities, "iam.policy.list", "ACCOUNT", tenantId);
+      const [users, accounts, policies] = await Promise.all([
+        canListUsers ? repository.listUsers(credential!, page.users || undefined) : null,
+        canListAccounts ? repository.listAccounts(credential!, page.accounts || undefined) : null,
+        canListPolicies ? repository.listPolicies(credential!) : []
       ]);
-      if (users?.items.some((entry) => entry.principal.organizationId !== tenantId)) throw new Error("INVALID_IAM_TENANT");
-      return buildAccountAccessScene(identity, users, accounts);
+      if (users?.items.some((entry) => entry.user.accountId !== tenantId)) throw new Error("INVALID_IAM_TENANT");
+      return buildAccountAccessScene(identity, users, accounts, policies);
     }
     read().then((loaded) => { if (active) { setScene(loaded); setError(null); } },
       (failure: unknown) => { if (active) { setScene(null); setSuccess(null); setError(accountError(failure)); } })

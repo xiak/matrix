@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { SessionProvider, useSession } from "../application/SessionProvider";
-import type { Account, AccountIdentity, AccountPrincipal, AccountUser } from "../domain/accounts";
+import type { Account, AccountIdentity, AccountUser, ActionCapability, Policy, UserAccess } from "../domain/accounts";
 import type { AuthenticatorState, NotificationContact } from "../domain/personalSecurity";
 import type { AccountRepository, IamRepository } from "../repositories/iamRepository";
 import { AccountAccessRenderer } from "./AccountAccessRenderer";
@@ -12,14 +12,31 @@ import { LoginRenderer } from "./LoginRenderer";
 const navigation = vi.hoisted(() => ({ replace: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => navigation }));
 const credential = "account-test-only-memory-credential";
-const principal: AccountPrincipal = { id: "primary-a", organizationId: "tenant-a", loginName: "admin", displayName: "Account owner", status: "ACTIVE", resourceVersion: 2, mustChangePassword: false };
+const capability = (action: string, kind: string, id: string, available = true): ActionCapability => ({ action, resource: { kind, id }, available });
+const principal: AccountUser = { id: "primary-a", accountId: "tenant-a", loginName: "admin", displayName: "Account owner", status: "ACTIVE", resourceVersion: 2, mustChangePassword: false };
+const adminCapabilities = [capability("iam.user.list", "ACCOUNT", "tenant-a"), capability("iam.user.create", "ACCOUNT", "tenant-a"),
+  capability("iam.policy.list", "ACCOUNT", "tenant-a"), capability("iam.account.alias-set", "ACCOUNT", "tenant-a"),
+  capability("iam.account.read", "ACCOUNT", "collection"), capability("iam.account.create", "ACCOUNT", "collection")];
 const identity: AccountIdentity = {
-  account: { organization: { id: "tenant-a", displayName: "Team A", status: "ACTIVE", resourceVersion: 1 }, primaryPrincipalId: "primary-a", primaryLoginName: "admin", loginAlias: null },
-  principal, roles: ["ORGANIZATION_ADMIN", "PLATFORM_OPERATOR"], canCreateOrganizations: true
+  account: { id: "tenant-a", displayName: "Team A", status: "ACTIVE", resourceVersion: 1, rootIdentity: { principalId: "primary-a", loginName: "admin" }, loginAlias: null },
+  user: principal, identityKind: "ROOT_IDENTITY", policySources: [], capabilities: adminCapabilities
 };
-const child: AccountUser = { principal: { ...principal, id: "child-a", loginName: "developer", displayName: "Developer A" }, roleBindings: [{ id: "binding-child", organizationId: "tenant-a", principalId: "child-a", role: "PAAS_VIEWER" }] };
-const customer: Account = { organization: { id: "tenant-b", displayName: "Team B", status: "ACTIVE", resourceVersion: 4 }, primaryPrincipalId: "primary-b", primaryLoginName: "owner-b", loginAlias: null };
-const platformIdentity: AccountIdentity = { ...identity, principal: child.principal, roles: ["PLATFORM_OPERATOR"] };
+const childUser: AccountUser = { ...principal, id: "child-a", loginName: "developer", displayName: "Developer A" };
+const binding = { id: "binding-child", accountId: "tenant-a", target: { kind: "USER" as const, id: "child-a" },
+  policyId: "policy-viewer", scope: "TENANT" as const, resourceVersion: 3 };
+const child: UserAccess = { user: childUser, policyAttachments: [binding], capabilities: [
+  capability("iam.user.set-status", "USER", "child-a"), capability("iam.user.reset-password", "USER", "child-a"),
+  capability("iam.policy-attachment.create", "USER", "child-a"), capability("iam.policy-attachment.revoke", "POLICY_ATTACHMENT", "binding-child")
+] };
+const viewerPolicy: Policy = { id: "policy-viewer", displayName: "只读策略", management: "SYSTEM", scope: "TENANT", resourceVersion: 4 };
+const developerPolicy: Policy = { id: "policy-developer", displayName: "开发者策略", management: "SYSTEM", scope: "TENANT", resourceVersion: 5 };
+const customer: Account = { id: "tenant-b", displayName: "Team B", status: "ACTIVE", resourceVersion: 4,
+  rootIdentity: { principalId: "primary-b", loginName: "owner-b" }, loginAlias: null };
+const customerAccess = { account: customer, capabilities: [capability("iam.account.set-status", "ACCOUNT", "tenant-b"),
+  capability("iam.account.recover-root-credentials", "ACCOUNT", "tenant-b")] };
+const platformIdentity: AccountIdentity = { ...identity, user: childUser, identityKind: "USER", capabilities: [
+  capability("iam.account.read", "ACCOUNT", "collection"), capability("iam.account.create", "ACCOUNT", "collection")
+] };
 
 function authenticated(id = "primary-a") {
   return { outcome: "AUTHENTICATED" as const, credential, mustChangePassword: false, session: {
@@ -65,8 +82,9 @@ function iam(overrides: Partial<IamRepository> = {}, id = "primary-a"): IamRepos
 function accounts(overrides: Partial<AccountRepository> = {}): AccountRepository {
   return {
     currentIdentity: vi.fn().mockResolvedValue(structuredClone(identity)),
-    listUsers: vi.fn().mockResolvedValue({ items: [{ principal, roleBindings: [] }, child], nextAfter: null }),
-    listAccounts: vi.fn().mockResolvedValue({ items: [identity.account], nextAfter: null }),
+    listUsers: vi.fn().mockResolvedValue({ items: [child], nextAfter: null }),
+    listAccounts: vi.fn().mockResolvedValue({ items: [customerAccess], nextAfter: null }),
+    listPolicies: vi.fn().mockResolvedValue([viewerPolicy, developerPolicy]),
     execute: vi.fn().mockResolvedValue(undefined), ...overrides
   };
 }
@@ -97,7 +115,7 @@ describe("qualified login", () => {
       } }),
       changePassword: vi.fn().mockImplementation(() => new Promise<void>((resolve) => { complete = resolve; }))
     });
-    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue({ ...identity, principal: child.principal, roles: [], canCreateOrganizations: false }) });
+    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue({ ...identity, user: childUser, identityKind: "USER", capabilities: [] }) });
     const user = userEvent.setup();
     render(<SessionProvider repository={source}><AuthenticatedAccess repository={repository} /></SessionProvider>);
     await user.click(screen.getByRole("button", { name: "IAM 子账号" }));
@@ -221,7 +239,7 @@ describe("account access", () => {
   it.each([true, false])("offers a default-on ordinary password session choice, including for a child (%s)", async (revokeOtherSessions) => {
     let complete!: () => void;
     const passwordRepository = iam({ changePassword: vi.fn().mockImplementation(() => new Promise<void>((resolve) => { complete = resolve; })) }, "child-a");
-    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue({ ...identity, principal: child.principal, roles: [], canCreateOrganizations: false }) });
+    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue({ ...identity, user: childUser, identityKind: "USER", capabilities: [] }) });
     const { user, view } = await openAccess(repository, passwordRepository);
     await user.click(await screen.findByRole("button", { name: "用户设置" }));
     const option = screen.getByRole("checkbox", { name: "同时退出其他登录会话（推荐）" }) as HTMLInputElement;
@@ -271,9 +289,9 @@ describe("account access", () => {
     await user.type(screen.getByLabelText(/^子用户名/), "new.developer");
     await user.type(screen.getByLabelText("用户显示名称"), "New Developer");
     await user.type(screen.getByLabelText(/^初始密码/), "New-Child-Test-Password-49!");
-    expect((screen.getByLabelText(/^初始权限/) as HTMLSelectElement).value).toBe("");
+    expect(screen.queryByLabelText(/^初始权限/)).toBeNull();
     await user.click(within(screen.getByRole("form", { name: "创建子用户" })).getByRole("button", { name: "创建用户" }));
-    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "create-user", loginName: "new.developer", displayName: "New Developer", initialPassword: "New-Child-Test-Password-49!", initialRole: undefined }));
+    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "create-user", loginName: "new.developer", displayName: "New Developer", initialPassword: "New-Child-Test-Password-49!" }));
     expect(view.container.textContent).not.toContain(credential);
     expect(view.container.innerHTML).not.toContain("New-Child-Test-Password-49!");
   });
@@ -291,10 +309,10 @@ describe("account access", () => {
   });
 
   it("allows an unprivileged user to inspect its own settings without querying admin directories", async () => {
-    const reader: AccountIdentity = { ...identity, principal: child.principal, roles: [], canCreateOrganizations: false };
+    const reader: AccountIdentity = { ...identity, user: childUser, identityKind: "USER", capabilities: [] };
     const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue(reader) });
     await openAccess(repository, iam({}, "child-a"));
-    await screen.findByText("尚未授予业务权限");
+    await screen.findByText("无直接策略");
     expect(repository.listUsers).not.toHaveBeenCalled();
     expect(repository.listAccounts).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: "租户管理" })).toBeNull();
@@ -302,34 +320,34 @@ describe("account access", () => {
     expect(screen.getByText("username@tenant-a")).toBeTruthy();
   });
 
-  it("requires an explicit role choice for every grant", async () => {
+  it("requires an explicit current policy choice and revision for every attachment", async () => {
     const { user, repository } = await openAccess();
     await user.click(await screen.findByRole("button", { name: "管理 developer" }));
-    expect((screen.getByRole("button", { name: "授予角色" }) as HTMLButtonElement).disabled).toBe(true);
-    await user.selectOptions(screen.getByLabelText("授予角色"), "PAAS_DEVELOPER");
-    await user.click(screen.getByRole("button", { name: "授予角色" }));
-    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "grant-role", principalId: "child-a", role: "PAAS_DEVELOPER" }));
-    await waitFor(() => expect((screen.getByLabelText("授予角色") as HTMLSelectElement).value).toBe(""));
-    expect((screen.getByRole("button", { name: "授予角色" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "附加策略" }) as HTMLButtonElement).disabled).toBe(true);
+    await user.selectOptions(screen.getByLabelText("附加策略"), "policy-developer");
+    await user.click(screen.getByRole("button", { name: "附加策略" }));
+    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "attach-policy", userId: "child-a", policyId: "policy-developer", policyResourceVersion: 5 }));
+    await waitFor(() => expect((screen.getByLabelText("附加策略") as HTMLSelectElement).value).toBe(""));
+    expect((screen.getByRole("button", { name: "附加策略" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("requires confirmation for revocation and disabling and clears a submitted reset password", async () => {
     const { user, repository } = await openAccess();
     await user.click(await screen.findByRole("button", { name: "管理 developer" }));
-    await user.click(screen.getByRole("button", { name: "撤销只读用户" }));
+    await user.click(screen.getByRole("button", { name: "撤销只读策略" }));
     expect(repository.execute).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "确认撤销" }));
-    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "revoke-role", bindingId: "binding-child" }));
+    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "revoke-policy", attachmentId: "binding-child", resourceVersion: 3 }));
     await waitFor(() => expect((screen.getByRole("button", { name: "禁用用户" }) as HTMLButtonElement).disabled).toBe(false));
     await user.click(screen.getByRole("button", { name: "禁用用户" }));
     expect(repository.execute).toHaveBeenCalledTimes(1);
     await user.click(screen.getByRole("button", { name: "确认禁用" }));
-    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "set-status", principalId: "child-a", status: "DISABLED", resourceVersion: 2 }));
+    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "set-user-status", userId: "child-a", status: "DISABLED", resourceVersion: 2 }));
     await waitFor(() => expect((screen.getByRole("button", { name: "重置密码" }) as HTMLButtonElement).disabled).toBe(false));
     await user.click(screen.getByRole("button", { name: "重置密码" }));
     await user.type(screen.getByLabelText(/^初始密码/), "Reset-Only-Test-Password-74!");
     await user.click(screen.getByRole("button", { name: "确认重置密码" }));
-    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "reset-password", principalId: "child-a", initialPassword: "Reset-Only-Test-Password-74!", resourceVersion: 2 }));
+    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "reset-password", userId: "child-a", initialPassword: "Reset-Only-Test-Password-74!", resourceVersion: 2 }));
     expect(screen.queryByDisplayValue("Reset-Only-Test-Password-74!")).toBeNull();
   });
 
@@ -350,32 +368,32 @@ describe("account access", () => {
     await user.type(screen.getByLabelText(/^初始密码/), "Primary-Test-Password-49!");
     await user.click(screen.getByRole("button", { name: "确认开通" }));
     await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, {
-      kind: "create-organization", id: "tenant-b", displayName: "Team B",
-      administratorLoginName: "owner-b", administratorDisplayName: "Owner B", initialPassword: "Primary-Test-Password-49!"
+      kind: "create-account", id: "tenant-b", displayName: "Team B",
+      rootLoginName: "owner-b", rootDisplayName: "Owner B", initialPassword: "Primary-Test-Password-49!"
     }));
     expect(screen.queryByDisplayValue("Primary-Test-Password-49!")).toBeNull();
   });
 
-  it("confirms tenant suspension and resumes with the refreshed organization version", async () => {
-    const suspended: Account = { ...customer, organization: { ...customer.organization, status: "DISABLED", resourceVersion: 5 } };
+  it("confirms tenant suspension and resumes with the refreshed account version", async () => {
+    const suspended: Account = { ...customer, status: "DISABLED", resourceVersion: 5 };
     const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue(platformIdentity),
-      listAccounts: vi.fn().mockResolvedValueOnce({ items: [customer], nextAfter: null }).mockResolvedValue({ items: [suspended], nextAfter: null }) });
+      listAccounts: vi.fn().mockResolvedValueOnce({ items: [customerAccess], nextAfter: null }).mockResolvedValue({ items: [{ ...customerAccess, account: suspended }], nextAfter: null }) });
     const { user } = await openAccess(repository, iam({}, "child-a"));
     await user.click(await screen.findByRole("button", { name: "管理租户 tenant-b" }));
     await user.click(screen.getByRole("button", { name: "停用租户" }));
     expect(repository.execute).not.toHaveBeenCalled();
     expect(screen.getByText(/不删除数据、不停止已有工作负载/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "确认停用租户" }));
-    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "set-organization-status", organizationId: "tenant-b", status: "DISABLED", resourceVersion: 4 }));
+    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "set-account-status", accountId: "tenant-b", status: "DISABLED", resourceVersion: 4 }));
     await user.click(await screen.findByRole("button", { name: "恢复租户访问" }));
     expect(repository.execute).toHaveBeenCalledTimes(1);
     await user.click(screen.getByRole("button", { name: "确认恢复访问" }));
-    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "set-organization-status", organizationId: "tenant-b", status: "ACTIVE", resourceVersion: 5 }));
+    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "set-account-status", accountId: "tenant-b", status: "ACTIVE", resourceVersion: 5 }));
   });
 
   it("recovers only the original primary of a suspended tenant and clears secrets even on a conflict", async () => {
     const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue(platformIdentity),
-      listAccounts: vi.fn().mockResolvedValue({ items: [{ ...customer, organization: { ...customer.organization, status: "DISABLED" } }], nextAfter: null }),
+      listAccounts: vi.fn().mockResolvedValue({ items: [{ ...customerAccess, account: { ...customer, status: "DISABLED" } }], nextAfter: null }),
       execute: vi.fn().mockRejectedValue(new HttpProblem(409, "PRIVATE conflict")) });
     const { user, view } = await openAccess(repository, iam({}, "child-a"));
     await user.click(await screen.findByRole("button", { name: "管理租户 tenant-b" }));
@@ -386,7 +404,7 @@ describe("account access", () => {
     expect(repository.execute).not.toHaveBeenCalled();
     await user.type(screen.getByLabelText(/^初始密码/), "Recovery-Only-Password-74!");
     await user.click(screen.getByRole("button", { name: "确认恢复原主账号" }));
-    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "recover-primary", organizationId: "tenant-b", principalId: "primary-b", initialPassword: "Recovery-Only-Password-74!", resourceVersion: 4 }));
+    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "recover-root", accountId: "tenant-b", initialPassword: "Recovery-Only-Password-74!", resourceVersion: 4 }));
     expect((await screen.findByRole("alert")).textContent).toContain("资源已变化");
     expect(screen.queryByText("操作已完成。")).toBeNull();
     expect(screen.queryByDisplayValue("Recovery-Only-Password-74!")).toBeNull();
@@ -394,18 +412,18 @@ describe("account access", () => {
     expect(localStorage.length + sessionStorage.length).toBe(0);
   });
 
-  it("does not offer credential changes for a disabled platform-bound user", async () => {
-    const protectedChild = { ...child, principal: { ...child.principal, status: "DISABLED" as const },
-      roleBindings: [...child.roleBindings, { id: "platform-child", organizationId: "tenant-a", principalId: "child-a", role: "PLATFORM_OPERATOR" as const }] };
+  it("does not offer credential changes when target capabilities deny them", async () => {
+    const protectedChild = { ...child, user: { ...child.user, status: "DISABLED" as const },
+      capabilities: [capability("iam.user.set-status", "USER", "child-a", false),
+        capability("iam.user.reset-password", "USER", "child-a", false),
+        capability("iam.policy-attachment.revoke", "POLICY_ATTACHMENT", "binding-child")] };
     const repository = accounts({ listUsers: vi.fn().mockResolvedValue({ items: [protectedChild], nextAfter: null }) });
     const { user } = await openAccess(repository);
     await user.click(await screen.findByRole("button", { name: "管理 developer" }));
-    expect(screen.getByText(/即使已禁用/)).toBeTruthy();
+    expect(screen.getByText(/当前身份不能更改此用户/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "启用用户" })).toBeNull();
     expect(screen.queryByRole("button", { name: "重置密码" })).toBeNull();
-    expect(screen.queryByRole("button", { name: "撤销平台运营者" })).toBeNull();
-    expect(screen.queryByRole("option", { name: "平台运营者" })).toBeNull();
-    expect(screen.getByRole("button", { name: "撤销只读用户" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "撤销只读策略" })).toBeTruthy();
   });
 
   it("requires a verified notification contact before beginning TOTP enrollment", async () => {
@@ -567,7 +585,7 @@ describe("account access", () => {
 
   it("clears protected content when a lifecycle command discovers a revoked session", async () => {
     const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue(platformIdentity),
-      listAccounts: vi.fn().mockResolvedValue({ items: [customer], nextAfter: null }),
+      listAccounts: vi.fn().mockResolvedValue({ items: [customerAccess], nextAfter: null }),
       execute: vi.fn().mockRejectedValue(new HttpProblem(401, "PRIVATE revoked")) });
     const { user } = await openAccess(repository, iam({}, "child-a"));
     await user.click(await screen.findByRole("button", { name: "管理租户 tenant-b" }));
@@ -581,7 +599,7 @@ describe("account access", () => {
 
   it.each([401, 503])("clears stale success after a subsequent account refresh fails with %i", async (status) => {
     const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue(platformIdentity),
-      listAccounts: vi.fn().mockResolvedValue({ items: [customer], nextAfter: null }) });
+      listAccounts: vi.fn().mockResolvedValue({ items: [customerAccess], nextAfter: null }) });
     const { user } = await openAccess(repository, iam({}, "child-a"));
     await user.click(await screen.findByRole("button", { name: "管理租户 tenant-b" }));
     await user.click(screen.getByRole("button", { name: "停用租户" }));
@@ -596,11 +614,11 @@ describe("account access", () => {
     expect(screen.queryByRole("button", { name: "开通租户" })).toBeNull();
   });
 
-  it.each(["identity", "directory", "principal"])("fails closed on a mismatched %s instead of showing another subject", async (mismatch) => {
+  it.each(["identity", "directory", "user"])("fails closed on a mismatched %s instead of showing another subject", async (mismatch) => {
     const other = structuredClone(identity);
-    if (mismatch === "identity") other.account.organization.id = "tenant-b";
-    if (mismatch === "principal") other.principal.id = "other-principal";
-    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue(other), ...(mismatch === "directory" ? { listUsers: vi.fn().mockResolvedValue({ items: [{ ...child, principal: { ...child.principal, organizationId: "tenant-b", displayName: "PRIVATE OTHER USER" } }], nextAfter: null }) } : {}) });
+    if (mismatch === "identity") other.account.id = "tenant-b";
+    if (mismatch === "user") other.user.id = "other-principal";
+    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue(other), ...(mismatch === "directory" ? { listUsers: vi.fn().mockResolvedValue({ items: [{ ...child, user: { ...child.user, accountId: "tenant-b", displayName: "PRIVATE OTHER USER" } }], nextAfter: null }) } : {}) });
     await openAccess(repository);
     expect((await screen.findByRole("alert")).textContent).toContain("暂时不可用");
     expect(screen.queryByText("PRIVATE OTHER USER")).toBeNull();
