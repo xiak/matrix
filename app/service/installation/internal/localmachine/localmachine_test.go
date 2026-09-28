@@ -2768,7 +2768,7 @@ func TestRecoverBackupRestoresSelectedSnapshotAndConvergesTarget(t *testing.T) {
 		BackupID:     source.BackupID,
 		BackupDigest: source.BackupDigest,
 	}
-	recovery.AuthenticationIntent = testAuthenticationRecoveryIntent(recovery, source.TOTPCustodyDigest, 1)
+	recovery.AuthenticationIntent = testAuthenticationRecoveryIntent(recovery, source, 1)
 	for _, phase := range []lifecycle.Phase{
 		lifecycle.PhaseRecovering, lifecycle.PhaseStarting, lifecycle.PhaseVerifying,
 	} {
@@ -3050,7 +3050,7 @@ func authenticationRecoveryEffectFixture(t *testing.T) (*Effects, *platformStart
 	recovery := platformcommand.RecoveryPlan{
 		Current: plan, Target: plan, BackupID: source.BackupID, BackupDigest: source.BackupDigest,
 	}
-	recovery.AuthenticationIntent = testAuthenticationRecoveryIntent(recovery, source.TOTPCustodyDigest, 1)
+	recovery.AuthenticationIntent = testAuthenticationRecoveryIntent(recovery, source, 1)
 	return effects, runtimeBoundary, recovery
 }
 
@@ -3079,7 +3079,7 @@ func TestPublishedBackupSealRemainsDecodableButDoesNotGrantRuntimeCompatibility(
 	if err := json.Unmarshal(content, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	manifest.APIVersion, manifest.SchemaVersion, manifest.Database, manifest.AccessKeyWrapping, manifest.TOTPBackupCustody = legacyBackupAPIVersion, 1, release.DatabaseProfile{}, nil, nil
+	manifest.APIVersion, manifest.SchemaVersion, manifest.Database, manifest.AccessKeyWrapping, manifest.TOTPBackupCustody, manifest.AuthenticationStateDigest = legacyBackupAPIVersion, 1, release.DatabaseProfile{}, nil, nil, ""
 	key, err := loadBackupSealKey(plan.Root, nil, false)
 	if err != nil {
 		t.Fatal(err)
@@ -3114,7 +3114,7 @@ func TestPublishedBackupSealRemainsDecodableButDoesNotGrantRuntimeCompatibility(
 	}
 	if _, err := effects.InspectBackup(
 		context.Background(), request.InstalledPlan, request.BackupID,
-	); !errors.Is(err, platformcommand.ErrEffectVerification) {
+	); !errors.Is(err, platformcommand.ErrEffectPrecondition) {
 		t.Fatalf("legacy backup implied unsupported runtime compatibility: %v", err)
 	}
 	if err := effects.CreateBackup(context.Background(), request); !errors.Is(err, platformcommand.ErrEffectVerification) {
@@ -3133,12 +3133,12 @@ func TestPublishedBackupSealRemainsDecodableButDoesNotGrantRuntimeCompatibility(
 	if err := os.WriteFile(backupPath, substituted, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := effects.InspectBackup(context.Background(), request.InstalledPlan, request.BackupID); !errors.Is(err, platformcommand.ErrEffectVerification) {
+	if _, err := effects.InspectBackup(context.Background(), request.InstalledPlan, request.BackupID); !errors.Is(err, platformcommand.ErrEffectPrecondition) {
 		t.Fatalf("validly sealed different profile masked the backup release: %v", err)
 	}
 }
 
-func TestRecoveryAuthenticatesSupportedCrossProfileImmediatePredecessor(t *testing.T) {
+func TestRecoveryRejectsAutomaticCrossProfileImmediatePredecessor(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("local-machine recovery effects target Linux")
 	}
@@ -3192,20 +3192,14 @@ func TestRecoveryAuthenticatesSupportedCrossProfileImmediatePredecessor(t *testi
 		Current: pair.Target, Target: target,
 		BackupID: source.BackupID, BackupDigest: source.BackupDigest,
 	}
-	recovery.AuthenticationIntent = testAuthenticationRecoveryIntent(recovery, source.TOTPCustodyDigest, 1)
-	current, recoveredTarget, manifest, err := authenticateRecoveryPlan(recovery)
-	if err != nil {
-		t.Fatalf("authenticate supported cross-profile recovery: %v", err)
-	}
-	defer clear(current.TrustBytes)
-	defer clear(recoveredTarget.TrustBytes)
-	if current.Bundle.Manifest.Database != release.CurrentDatabaseProfile() ||
-		recoveredTarget.Bundle.Manifest.Database != release.SupportedDatabaseUpgradePredecessorProfile() ||
-		current.Bundle.Manifest.Release.PreviousID != recoveredTarget.Bundle.Manifest.Release.ID ||
-		current.Bundle.Manifest.Release.PreviousVersion != recoveredTarget.Bundle.Manifest.Release.Version ||
-		manifest.ReleaseID != recoveredTarget.Bundle.Manifest.Release.ID ||
-		manifest.ReleaseDigest != recoveredTarget.Bundle.ManifestSHA256 {
-		t.Fatal("cross-profile recovery did not retain its exact signed predecessor and backup identity")
+	recovery.AuthenticationIntent = testAuthenticationRecoveryIntent(recovery, source, 1)
+	beforeEvents := append([]string(nil), runtimeBoundary.recoveryEvents...)
+	current, recoveredTarget, _, err := authenticateRecoveryPlan(recovery)
+	clear(current.TrustBytes)
+	clear(recoveredTarget.TrustBytes)
+	if !errors.Is(err, platformcommand.ErrEffectPrecondition) ||
+		runtimeBoundary.recoveryRestores != 0 || !slices.Equal(runtimeBoundary.recoveryEvents, beforeEvents) {
+		t.Fatalf("v4 predecessor backup reached automatic restore: err=%v events=%v", err, runtimeBoundary.recoveryEvents)
 	}
 }
 
@@ -3266,7 +3260,7 @@ func TestRecoveryRejectsUnsupportedProfileTransitionAtEveryEffectBoundary(t *tes
 			}()
 			recovery := platformcommand.RecoveryPlan{Current: pair.Target, Target: target,
 				BackupID: source.BackupID, BackupDigest: source.BackupDigest}
-			recovery.AuthenticationIntent = testAuthenticationRecoveryIntent(recovery, source.TOTPCustodyDigest, 1)
+			recovery.AuthenticationIntent = testAuthenticationRecoveryIntent(recovery, source, 1)
 			composeBefore, removalsBefore, restoresBefore := runtimeBoundary.composeCalls, runtimeBoundary.providerRemovals, runtimeBoundary.recoveryRestores
 			migrationsBefore, verificationsBefore := len(runtimeBoundary.migrationRuns), verifier.calls
 			for _, phase := range []lifecycle.Phase{lifecycle.PhaseRecovering, lifecycle.PhaseStarting, lifecycle.PhaseVerifying} {
@@ -3842,23 +3836,24 @@ func installedPlanFrom(plan platformcommand.InstallPlan) platformcommand.Install
 
 func testAuthenticationRecoveryIntent(
 	plan platformcommand.RecoveryPlan,
-	custodyDigest string,
+	source platformcommand.RecoverySource,
 	epoch uint64,
 ) installationv1.AuthenticationRecoveryIntent {
 	return installationv1.AuthenticationRecoveryIntent{
-		APIVersion:          installationv1.AuthenticationRecoveryAPIVersion,
-		Kind:                installationv1.AuthenticationRecoveryIntentKind,
-		Purpose:             installationv1.AuthenticationRecoveryPurpose,
-		InstallationID:      plan.Current.InstallationID,
-		Epoch:               epoch,
-		CommandID:           plan.Current.CorrelationID,
-		BackupID:            plan.BackupID,
-		BackupDigest:        plan.BackupDigest,
-		SourceReleaseID:     plan.Current.Bundle.Manifest.Release.ID,
-		SourceReleaseDigest: plan.Current.Bundle.ManifestSHA256,
-		TargetReleaseID:     plan.Target.Bundle.Manifest.Release.ID,
-		TargetReleaseDigest: plan.Target.Bundle.ManifestSHA256,
-		TOTPCustodyDigest:   custodyDigest,
+		APIVersion:                installationv1.AuthenticationRecoveryAPIVersion,
+		Kind:                      installationv1.AuthenticationRecoveryIntentKind,
+		Purpose:                   installationv1.AuthenticationRecoveryPurpose,
+		InstallationID:            plan.Current.InstallationID,
+		Epoch:                     epoch,
+		CommandID:                 plan.Current.CorrelationID,
+		BackupID:                  plan.BackupID,
+		BackupDigest:              plan.BackupDigest,
+		SourceReleaseID:           plan.Current.Bundle.Manifest.Release.ID,
+		SourceReleaseDigest:       plan.Current.Bundle.ManifestSHA256,
+		TargetReleaseID:           plan.Target.Bundle.Manifest.Release.ID,
+		TargetReleaseDigest:       plan.Target.Bundle.ManifestSHA256,
+		TOTPCustodyDigest:         source.TOTPCustodyDigest,
+		AuthenticationStateDigest: source.AuthenticationStateDigest,
 	}
 }
 
