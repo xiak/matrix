@@ -193,7 +193,7 @@ CI实际记录Go1.26.5、GOMAXPROCS2、CPU quota/period=200000/100000、memory.m
 
 只使用本工作区、任务标签和唯一命名的数据库/容器/网络/卷/端口。Go 默认 GOMAXPROCS=2、-p 2；PG/引擎 CPU/内存/PID 限额；重型门禁串行。不得重启任何远端机器或共享服务，不使用其他 Phase 的运行实例。未运行命令不进入 runbook。
 
-容量增量候选将原容量步骤从runtime移至独立`authority-capacity`，并在同一15分钟job内串行执行原工作集与完整历史工作集，各自空白数据库、独立Go进程和原6分钟fixture；不复制原工作集或延长它的期限。原因是固定3178的实际runtime已用1105秒，不能将新增工作塞进剩余95秒再放大原20分钟预算。工作树现有十个数据库lane，实际选择由原`.github/workflows/verification.yml`拥有：storage/runtime/step-up/replacement各20分钟，roles/capacity/replacement-qualification/removal/removal-security各15分钟，recovery-window为30分钟。全部`max-parallel=1`，各有独立受限PG；此新分片尚未独立CI验收。
+容量增量固定候选`082c172e91882389e7218a3b39afa57d40575f14`将原容量步骤从runtime移至独立`authority-capacity`，并在同一15分钟job内串行执行原工作集与完整历史工作集，各自空白数据库、独立Go进程和原6分钟fixture；不复制原工作集或延长它的期限。原runtime已接近20分钟总预算；未包含该分组的固定0fa/[Verification36441090890](https://github.com/xiak/matrix/actions/runs/36441090890)，其runtime最终在2026-09-28T15:46:45Z为cancelled，GitHub annotation明确超过20分钟作业上限。该job的本人会话/锁后到期包517.207s及保留数据/实际进程包304.564s已分别成功，最后独立容器容量阶段从15:42:41Z执行到15:46:41Z被总预算截断，不能记为容量通过，也不是已经证实的业务拒绝或死锁。候选十个数据库lane的实际选择由原`.github/workflows/verification.yml`拥有：storage/runtime/step-up/replacement各20分钟，roles/capacity/replacement-qualification/removal/removal-security各15分钟，recovery-window为30分钟。全部`max-parallel=1`，各有独立受限PG；新分片仍待精确固定源的独立CI，不以原job中通过的包覆盖cancelled。
 
 耗尽门禁需要不可压缩的两个真实十分钟窗口，保持27分钟Go进程和25分钟上下文；不修改生产时钟、预算、密码成本或已有fixture期限。`authority-process`仍只是2分钟汇总，全部数据库lane成功才成功，失败、取消或跳过均不能放行。Go和node-process保持独立。
 
