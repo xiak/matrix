@@ -22,3 +22,12 @@ sources:
     paths:
       - docs/paas
     mode: redesign-for-independent-product
+  passwordBlocklistReview:
+    repository: https://github.com/danielmiessler/SecLists.git
+    commit: c5a05259b61cc60dee828ad1bf92c288c7e97ea0
+    paths:
+      - LICENSE
+      - Passwords/Common-Credentials/README.md
+      - Passwords/Common-Credentials/10k-most-common.txt
+      - Passwords/Common-Credentials/100k-most-used-passwords-NCSC.txt
+    mode: reference-only-no-runtime-dependency
