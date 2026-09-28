@@ -120,3 +120,46 @@ func (value *handler) recoveryCodeRegenerationByRequest(response http.ResponseWr
 	}
 	writeJSON(response, http.StatusOK, result)
 }
+
+func (value *handler) removeTOTP(response http.ResponseWriter, request *http.Request) {
+	if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	body, ok := decodeJSON[iamv1.RemoveTOTPRequest](value, response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.RemoveTOTP(request.Context(), credential, body)
+	if err == nil {
+		err = iamv1.ValidateRemoveTOTPResponse(result)
+	}
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (value *handler) authenticatorRemovalByRequest(response http.ResponseWriter, request *http.Request) {
+	id, ok := commandPathID(response, request, "/v1/auth/totp/removals/by-request/", "", "requestId")
+	if !ok || !value.requireMethod(response, request, http.MethodGet) || !rejectQueryAndBody(response, request) {
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.AuthenticatorRemovalByRequest(request.Context(), credential, id)
+	if err == nil {
+		err = iamv1.ValidateAuthenticatorRemoval(result)
+	}
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}

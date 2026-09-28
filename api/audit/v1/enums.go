@@ -43,6 +43,7 @@ const (
 	ActionIAMNotificationContactVerified            Action = "iam.notification-contact.verified"
 	ActionIAMAuthenticatorBound                     Action = "iam.authenticator.bound"
 	ActionIAMAuthenticatorReplaced                  Action = "iam.authenticator.replaced"
+	ActionIAMAuthenticatorRemoved                   Action = "iam.authenticator.removed"
 	ActionIAMAuthenticatorRecoveryStarted           Action = "iam.authenticator.recovery-started"
 	ActionIAMAuthenticatorRecovered                 Action = "iam.authenticator.recovered"
 	ActionIAMRecoveryCodesRegenerated               Action = "iam.recovery-codes.regenerated"
@@ -91,6 +92,7 @@ const (
 	ActionIAMBootstrapApplied                        Action = "iam.bootstrap.applied"
 	ActionIAMSessionIssued                           Action = "iam.session.issued"
 	ActionIAMSessionRevoked                          Action = "iam.session.revoked"
+	ActionIAMOtherSessionsRevoked                    Action = "iam.session.others-revoked"
 	ActionIAMPasswordChanged                         Action = "iam.password.changed"
 	ActionIAMPrincipalCreated                        Action = "iam.principal.created"
 	ActionIAMRoleBindingPut                          Action = "iam.role-binding.put"
@@ -240,6 +242,7 @@ var allActions = []Action{
 	ActionIAMNotificationContactVerified,
 	ActionIAMAuthenticatorBound,
 	ActionIAMAuthenticatorReplaced,
+	ActionIAMAuthenticatorRemoved,
 	ActionIAMAuthenticatorRecoveryStarted,
 	ActionIAMAuthenticatorRecovered,
 	ActionIAMRecoveryCodesRegenerated,
@@ -285,6 +288,7 @@ var allActions = []Action{
 	ActionIAMBootstrapApplied,
 	ActionIAMSessionIssued,
 	ActionIAMSessionRevoked,
+	ActionIAMOtherSessionsRevoked,
 	ActionIAMPasswordChanged,
 	ActionIAMPrincipalCreated,
 	ActionIAMRoleBindingPut,
@@ -366,6 +370,7 @@ var actionContracts = map[Action]ActionContract{
 	ActionIAMNotificationContactVerified:            {Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, UserActorRequired: true},
 	ActionIAMAuthenticatorBound:                     {Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, UserActorRequired: true},
 	ActionIAMAuthenticatorReplaced:                  {Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, UserActorRequired: true},
+	ActionIAMAuthenticatorRemoved:                   {Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, UserActorRequired: true},
 	ActionIAMAuthenticatorRecoveryStarted:           {Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, UserActorRequired: true},
 	ActionIAMAuthenticatorRecovered:                 {Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, UserActorRequired: true},
 	ActionIAMRecoveryCodesRegenerated:               {Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, UserActorRequired: true},
@@ -466,6 +471,9 @@ var actionContracts = map[Action]ActionContract{
 	},
 	ActionIAMSessionRevoked: {
 		Source: SourceIAM, Target: TargetSession, Results: []Result{ResultSucceeded}, IAMDecisionPermitted: true,
+	},
+	ActionIAMOtherSessionsRevoked: {
+		Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, UserActorRequired: true,
 	},
 	ActionIAMPasswordChanged: {
 		Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded},

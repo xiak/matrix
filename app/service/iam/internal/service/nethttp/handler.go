@@ -110,8 +110,15 @@ type Workflow interface {
 	VerifyStepUp(context.Context, iamv1.Secret, string, iamv1.VerifyStepUpRequest) (iamv1.StepUp, error)
 	RegenerateRecoveryCodes(context.Context, iamv1.Secret, iamv1.RegenerateRecoveryCodesRequest) (iamv1.RegenerateRecoveryCodesResponse, error)
 	RecoveryCodeRegenerationByRequest(context.Context, iamv1.Secret, string) (iamv1.RecoveryCodeRegeneration, error)
+	RemoveTOTP(context.Context, iamv1.Secret, iamv1.RemoveTOTPRequest) (iamv1.RemoveTOTPResponse, error)
+	AuthenticatorRemovalByRequest(context.Context, iamv1.Secret, string) (iamv1.AuthenticatorRemoval, error)
 	Logout(context.Context, iamv1.Secret, iamv1.LogoutRequest) (iamv1.LogoutResponse, error)
+	ListOwnSessions(context.Context, iamv1.Secret, string) (iamv1.SessionList, error)
+	RevokeOwnSession(context.Context, iamv1.Secret, iamv1.SessionID, iamv1.RevokeSessionRequest) (iamv1.RevokeOwnSessionResponse, error)
+	RevokeOtherSessions(context.Context, iamv1.Secret, iamv1.RevokeSessionRequest) (iamv1.RevokeOtherSessionsResponse, error)
 	ChangePassword(context.Context, iamv1.Secret, iamv1.ChangePasswordRequest) (iamv1.ChangePasswordResponse, error)
+	PasswordRequirements(context.Context, iamv1.Secret) (iamv1.PasswordRequirements, error)
+	ChallengePasswordRequirements(context.Context, string, iamv1.ChallengePasswordRequirementsRequest) (iamv1.PasswordRequirements, error)
 	NotificationContact(context.Context, iamv1.Secret) (iamv1.NotificationContact, error)
 	NotificationVerification(context.Context, iamv1.Secret, string) (iamv1.NotificationContactVerification, error)
 	StartNotificationVerification(context.Context, iamv1.Secret, iamv1.StartNotificationContactVerificationRequest) (iamv1.NotificationContactVerification, error)
@@ -181,10 +188,9 @@ func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 	routes.HandleFunc("/v1/auth/step-up/", value.verifyStepUp)
 	routes.HandleFunc("/v1/auth/recovery-codes:regenerate", value.regenerateRecoveryCodes)
 	routes.HandleFunc("/v1/auth/recovery-codes/regenerations/by-request/", value.recoveryCodeRegenerationByRequest)
+	routes.HandleFunc("/v1/auth/totp:remove", value.removeTOTP)
+	routes.HandleFunc("/v1/auth/totp/removals/by-request/", value.authenticatorRemovalByRequest)
 	routes.HandleFunc("/v1/auth/me", value.currentIdentity)
-	routes.HandleFunc("/v1/auth/notification-contact", value.notificationContact)
-	routes.HandleFunc("/v1/auth/notification-contact/verifications", value.startNotificationVerification)
-	routes.HandleFunc("/v1/auth/notification-contact/verifications/", value.notificationVerification)
 	routes.HandleFunc("/v1/policies", value.policies)
 	routes.HandleFunc("/v1/authorization-profiles", value.authorizationProfiles)
 	routes.HandleFunc("/v1/policies/", value.policy)
@@ -195,7 +201,14 @@ func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 	routes.HandleFunc("/v1/account/security-settings", value.accountSecuritySettings)
 	routes.HandleFunc("/v1/account/security-settings/changes/", value.securitySettingsChange)
 	routes.HandleFunc("/v1/auth/logout", value.logout)
+	routes.HandleFunc("/v1/auth/sessions", value.listOwnSessions)
+	routes.HandleFunc("/v1/auth/sessions:revoke-others", value.revokeOtherSessions)
+	routes.HandleFunc("/v1/auth/sessions/", value.revokeOwnSession)
 	routes.HandleFunc("/v1/auth/password", value.changePassword)
+	routes.HandleFunc("/v1/auth/password-requirements", value.passwordRequirements)
+	routes.HandleFunc("/v1/auth/notification-contact", value.notificationContact)
+	routes.HandleFunc("/v1/auth/notification-contact/verifications", value.startNotificationVerification)
+	routes.HandleFunc("/v1/auth/notification-contact/verifications/", value.notificationVerification)
 	routes.HandleFunc("/v1/authorize", value.authorize)
 	routes.HandleFunc("/v1/authorize:access-key", value.authorizeAccessKey)
 	routes.HandleFunc("/v1/installation:verify", value.verifyInstallation)
@@ -522,10 +535,31 @@ func (value *handler) authenticationChallenge(response http.ResponseWriter, requ
 	if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
 		return
 	}
-	// The challenge credential alone authenticates this ceremony. Reject both
-	// unrelated authority carriers before dispatching to a challenge purpose.
+	// This ceremony authenticates its own secret; neither a bearer nor the
+	// internal subject carrier may select another identity.
 	if len(request.Header.Values("Authorization")) != 0 || len(request.Header.Values("Matrix-Subject-Credential")) != 0 {
 		writeProblem(response, requestID(request), http.StatusBadRequest, "iam.header.unsupported", "IAM header unsupported")
+		return
+	}
+	if strings.HasSuffix(request.URL.Path, "/password-requirements") {
+		id, ok := commandPathID(response, request, "/v1/auth/challenges/", "/password-requirements", "challengeId")
+		if !ok {
+			return
+		}
+		body, ok := decodeJSON[iamv1.ChallengePasswordRequirementsRequest](value, response, request)
+		if !ok {
+			return
+		}
+		result, err := value.workflow.ChallengePasswordRequirements(request.Context(), id, body)
+		if err != nil {
+			value.writeError(response, request, err)
+			return
+		}
+		if iamv1.ValidatePasswordRequirements(result) != nil {
+			value.writeError(response, request, identityaccess.ErrUnavailable)
+			return
+		}
+		writeJSON(response, http.StatusOK, result)
 		return
 	}
 	if strings.Contains(strings.TrimPrefix(request.URL.Path, "/v1/auth/challenges/"), "/") {
@@ -600,6 +634,30 @@ func (value *handler) logout(response http.ResponseWriter, request *http.Request
 	result, err := value.workflow.Logout(request.Context(), credential, body)
 	if err != nil {
 		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (value *handler) passwordRequirements(response http.ResponseWriter, request *http.Request) {
+	if !value.requireMethod(response, request, http.MethodGet) || !rejectQueryAndBody(response, request) {
+		return
+	}
+	if len(request.Header.Values("Matrix-Subject-Credential")) != 0 {
+		writeProblem(response, requestID(request), http.StatusBadRequest, "iam.header.unsupported", "IAM header unsupported")
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.PasswordRequirements(request.Context(), credential)
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	if iamv1.ValidatePasswordRequirements(result) != nil {
+		value.writeError(response, request, identityaccess.ErrUnavailable)
 		return
 	}
 	writeJSON(response, http.StatusOK, result)
@@ -722,6 +780,67 @@ func (value *handler) revokePolicyAttachment(response http.ResponseWriter, reque
 	result, err := value.workflow.RevokePolicyAttachment(
 		request.Context(), credential, iamv1.PolicyAttachmentID(id), body,
 	)
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (value *handler) listOwnSessions(response http.ResponseWriter, request *http.Request) {
+	if !value.requireMethod(response, request, http.MethodGet) {
+		return
+	}
+	after, ok := directoryPage(response, request, iamv1.ValidatePageCursor)
+	if !ok {
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.ListOwnSessions(request.Context(), credential, after)
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (value *handler) revokeOtherSessions(response http.ResponseWriter, request *http.Request) {
+	if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	body, ok := decodeJSON[iamv1.RevokeSessionRequest](value, response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.RevokeOtherSessions(request.Context(), credential, body)
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (value *handler) revokeOwnSession(response http.ResponseWriter, request *http.Request) {
+	id, ok := commandPathID(response, request, "/v1/auth/sessions/", ":revoke", "sessionId")
+	if !ok || !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	body, ok := decodeJSON[iamv1.RevokeSessionRequest](value, response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.RevokeOwnSession(request.Context(), credential, iamv1.SessionID(id), body)
 	if err != nil {
 		value.writeError(response, request, err)
 		return
@@ -1352,6 +1471,8 @@ func (value *handler) writeError(response http.ResponseWriter, request *http.Req
 		writeProblem(response, requestID, http.StatusNotFound, "iam.step-up.not-found", "Operation proof not found")
 	case errors.Is(err, identityaccess.ErrRecoveryCodeRegenerationNotFound):
 		writeProblem(response, requestID, http.StatusNotFound, "iam.recovery-code-regeneration.not-found", "Recovery code regeneration not found")
+	case errors.Is(err, identityaccess.ErrAuthenticatorRemovalNotFound):
+		writeProblem(response, requestID, http.StatusNotFound, "iam.authenticator-removal.not-found", "Authenticator removal not found")
 	case errors.Is(err, identityaccess.ErrSecuritySettingsChangeNotFound):
 		writeProblem(response, requestID, http.StatusNotFound, "iam.security-settings-change.not-found", "Security settings change not found")
 	case errors.Is(err, identityaccess.ErrVerificationRejected):

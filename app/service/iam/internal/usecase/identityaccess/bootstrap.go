@@ -20,6 +20,32 @@ func (service *Authority) Bootstrap(
 	if err != nil {
 		return iamv1.BootstrapStatus{}, ErrUnavailable
 	}
+	// The immutable receipt commits to the complete original private document.
+	// A completed installation does not re-admit or rewrite its password under
+	// today's rules. First application still goes through ApplyBootstrap's
+	// atomic receipt/conflict check after hashing outside this transaction.
+	var status iamv1.BootstrapStatus
+	err = service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
+		var err error
+		status, err = tx.BootstrapStatus(ctx)
+		if err != nil {
+			return err
+		}
+		if iamv1.ValidateBootstrapStatus(status) != nil {
+			return ErrUnavailable
+		}
+		if status.State == iamv1.BootstrapReady && (status.InstallationID != document.InstallationID ||
+			status.AccountID != document.Organization.ID || status.ContentDigest != contentDigest) {
+			return ErrConflict
+		}
+		return nil
+	})
+	if err != nil {
+		return iamv1.BootstrapStatus{}, err
+	}
+	if status.State == iamv1.BootstrapReady {
+		return status, nil
+	}
 	passwordHash, err := service.passwords.Hash(document.Administrator.Password)
 	if err != nil {
 		if err == authority.ErrWeakPassword {
@@ -65,7 +91,6 @@ func (service *Authority) Bootstrap(
 		},
 		Services: services,
 	}
-	var status iamv1.BootstrapStatus
 	err = service.withinTransaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
 		now, err := transactionTime(transactionContext, transaction)
 		if err != nil {

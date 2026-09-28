@@ -617,6 +617,133 @@ CREATE TABLE IF NOT EXISTS iam.user_credentials (
 ALTER TABLE iam.user_credentials ADD COLUMN IF NOT EXISTS credential_version bigint NOT NULL DEFAULT 1
     CHECK (credential_version > 0);
 
+-- Bounded verifier history stays with its existing credential owner. The
+-- commitment detects damaged retained state; it is not a password fingerprint,
+-- a proof that Go compared plaintext, or a second public canonical encoder.
+CREATE OR REPLACE FUNCTION iam.password_history_digest(history jsonb)
+RETURNS bytea LANGUAGE sql IMMUTABLE SET search_path=pg_catalog,pg_temp AS $function$
+    SELECT sha256(convert_to('matrix.iam.password-history.v1'||history::text,'UTF8'))
+$function$;
+
+CREATE OR REPLACE FUNCTION iam.valid_password_history(history jsonb,commitment bytea,generation bigint,password_time timestamptz)
+RETURNS boolean LANGUAGE plpgsql IMMUTABLE SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE entry jsonb; previous_generation bigint:=generation; recorded_generation bigint; recorded_time timestamptz;
+BEGIN
+    IF history IS NULL OR jsonb_typeof(history) IS DISTINCT FROM 'array' OR commitment IS NULL
+        OR generation IS NULL OR generation<1 OR (password_time IS NOT NULL AND NOT isfinite(password_time)) THEN RETURN false; END IF;
+    IF jsonb_array_length(history)>24 OR octet_length(history::text)>24576
+        OR commitment IS DISTINCT FROM iam.password_history_digest(history) THEN RETURN false; END IF;
+    FOR entry IN SELECT value FROM jsonb_array_elements(history) LOOP
+        IF jsonb_typeof(entry) IS DISTINCT FROM 'object' THEN RETURN false; END IF;
+        IF NOT entry ?& ARRAY['generation','hash','changedAt'] OR (entry-ARRAY['generation','hash','changedAt'])<>'{}'::jsonb
+            OR jsonb_typeof(entry->'generation') IS DISTINCT FROM 'number'
+            OR COALESCE(entry->>'generation','') !~ '^[1-9][0-9]{0,18}$'
+            OR jsonb_typeof(entry->'hash') IS DISTINCT FROM 'string'
+            OR COALESCE(entry->>'hash','') !~ '^\$matrix-iam-v1\$argon2id\$v=19\$m=65536,t=3,p=1\$[A-Za-z0-9+/]{22}\$[A-Za-z0-9+/]{43}$'
+            OR jsonb_typeof(entry->'changedAt') NOT IN ('null','string') THEN RETURN false; END IF;
+        recorded_generation:=(entry->>'generation')::bigint;
+        IF recorded_generation>=previous_generation THEN RETURN false; END IF;
+        previous_generation:=recorded_generation;
+        IF entry->'changedAt'<>'null'::jsonb THEN
+            recorded_time:=(entry->>'changedAt')::timestamptz;
+            IF NOT isfinite(recorded_time) OR entry->>'changedAt' IS DISTINCT FROM
+                to_char(recorded_time AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') THEN RETURN false; END IF;
+        END IF;
+    END LOOP;
+    RETURN true;
+EXCEPTION WHEN invalid_text_representation OR numeric_value_out_of_range OR invalid_datetime_format OR datetime_field_overflow THEN
+    RETURN false;
+END $function$;
+
+-- A retained verifier has known bytes, but its actual password age and older
+-- passwords cannot be inferred from a generation or generic changed_at.
+DO $password_history_initialization$
+DECLARE present integer;
+BEGIN
+    SELECT count(*) INTO present FROM pg_catalog.pg_attribute WHERE attrelid='iam.user_credentials'::regclass
+        AND attname IN ('password_history','password_history_digest','password_changed_at') AND NOT attisdropped;
+    IF present=0 THEN
+        IF to_regprocedure('iam.guard_password_history()') IS NOT NULL THEN
+            RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='IAM password history authority is missing';
+        END IF;
+        ALTER TABLE iam.user_credentials ADD COLUMN password_history jsonb NOT NULL DEFAULT '[]'::jsonb;
+        ALTER TABLE iam.user_credentials ADD COLUMN password_history_digest bytea NOT NULL DEFAULT iam.password_history_digest('[]'::jsonb);
+        ALTER TABLE iam.user_credentials ADD COLUMN password_changed_at timestamptz(6);
+    ELSIF present<>3 THEN
+        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='IAM password history authority is incomplete';
+    END IF;
+END $password_history_initialization$;
+ALTER TABLE iam.user_credentials DROP CONSTRAINT IF EXISTS user_password_history_valid;
+ALTER TABLE iam.user_credentials ADD CONSTRAINT user_password_history_valid CHECK(
+    iam.valid_password_history(password_history,password_history_digest,credential_version,password_changed_at));
+
+CREATE OR REPLACE FUNCTION iam.guard_password_history()
+RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
+BEGIN
+    IF TG_OP='INSERT' THEN
+        IF NEW.password_history IS DISTINCT FROM '[]'::jsonb
+            OR NEW.password_history_digest IS DISTINCT FROM iam.password_history_digest('[]'::jsonb)
+            OR NEW.password_changed_at IS NOT NULL OR NOT isfinite(NEW.changed_at) THEN
+            RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='IAM initial password history is invalid';
+        END IF;
+        NEW.password_changed_at:=NEW.changed_at;
+        RETURN NEW;
+    END IF;
+    IF NOT iam.valid_password_history(OLD.password_history,OLD.password_history_digest,OLD.credential_version,OLD.password_changed_at)
+        OR NEW.password_history IS DISTINCT FROM OLD.password_history
+        OR NEW.password_history_digest IS DISTINCT FROM OLD.password_history_digest
+        OR NEW.password_changed_at IS DISTINCT FROM OLD.password_changed_at THEN
+        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='IAM password history mutation is invalid';
+    END IF;
+    IF NEW.password_hash IS DISTINCT FROM OLD.password_hash THEN
+        IF NEW.credential_version<>OLD.credential_version+1 OR NOT isfinite(NEW.changed_at) THEN
+            RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='IAM password write generation is invalid';
+        END IF;
+        SELECT jsonb_agg(item.value ORDER BY item.ordinality) INTO NEW.password_history
+        FROM jsonb_array_elements(jsonb_build_array(jsonb_build_object('generation',OLD.credential_version,
+            'hash',OLD.password_hash,'changedAt',CASE WHEN OLD.password_changed_at IS NULL THEN NULL ELSE
+                to_char(OLD.password_changed_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') END))||OLD.password_history)
+            WITH ORDINALITY item(value,ordinality) WHERE item.ordinality<=24;
+        NEW.password_history_digest:=iam.password_history_digest(NEW.password_history);
+        NEW.password_changed_at:=NEW.changed_at;
+    END IF;
+    -- A same-hash authentication recovery fence keeps both history and age.
+    RETURN NEW;
+END $function$;
+DROP TRIGGER IF EXISTS guard_password_history ON iam.user_credentials;
+CREATE TRIGGER guard_password_history BEFORE INSERT OR UPDATE ON iam.user_credentials
+    FOR EACH ROW EXECUTE FUNCTION iam.guard_password_history();
+ALTER TABLE iam.user_credentials ENABLE ALWAYS TRIGGER guard_password_history;
+REVOKE ALL ON FUNCTION iam.password_history_digest(jsonb),iam.valid_password_history(jsonb,bytea,bigint,timestamptz),
+    iam.guard_password_history() FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_notification_worker,
+    matrix_iam_credential_recovery,matrix_iam_authentication_recovery,matrix_iam_backup_custody;
+
+CREATE OR REPLACE FUNCTION iam.password_history_contract_ready()
+RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $function$
+    SELECT (SELECT count(*)=3 FROM pg_catalog.pg_attribute a JOIN (VALUES
+        ('password_history','jsonb'::regtype,true),('password_history_digest','bytea'::regtype,true),
+        ('password_changed_at','timestamptz'::regtype,false)) expected(name,kind,required)
+        ON a.attname=expected.name AND a.atttypid=expected.kind AND a.attnotnull=expected.required
+        WHERE a.attrelid='iam.user_credentials'::regclass AND NOT a.attisdropped)
+      AND EXISTS(SELECT 1 FROM pg_catalog.pg_constraint c WHERE c.conrelid='iam.user_credentials'::regclass
+        AND c.conname='user_password_history_valid' AND c.contype='c' AND c.convalidated)
+      AND EXISTS(SELECT 1 FROM pg_catalog.pg_trigger t WHERE t.tgrelid='iam.user_credentials'::regclass
+        AND t.tgname='guard_password_history' AND t.tgenabled='A' AND NOT t.tgisinternal
+        AND t.tgtype=23 AND t.tgfoid=to_regprocedure('iam.guard_password_history()'))
+      AND (SELECT count(*)=3 FROM pg_catalog.pg_proc p JOIN (VALUES
+        ('iam.password_history_digest(jsonb)','bytea'::regtype,'i','history'),
+        ('iam.valid_password_history(jsonb,bytea,bigint,timestamptz)','boolean'::regtype,'i','history,commitment,generation,password_time'),
+        ('iam.guard_password_history()','trigger'::regtype,'v','')) expected(signature,kind,volatility,names)
+        ON p.oid=to_regprocedure(expected.signature) AND p.prorettype=expected.kind
+        AND p.provolatile::text=expected.volatility AND COALESCE(array_to_string(p.proargnames,','),'')=expected.names
+        WHERE p.proowner='matrix_iam_owner'::regrole AND NOT p.prosecdef AND NOT p.proretset
+          AND p.proconfig=ARRAY['search_path=pg_catalog, pg_temp']
+          AND NOT EXISTS(SELECT 1 FROM aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) acl
+            WHERE acl.grantee<>p.proowner AND acl.privilege_type='EXECUTE'))
+$function$;
+REVOKE ALL ON FUNCTION iam.password_history_contract_ready() FROM PUBLIC,matrix_iam_api,matrix_iam_worker,
+    matrix_iam_notification_worker,matrix_iam_credential_recovery,matrix_iam_authentication_recovery,matrix_iam_backup_custody;
+
 CREATE TABLE IF NOT EXISTS iam.login_index (
     login_name text COLLATE "C" PRIMARY KEY,
     tenant_id text COLLATE "C" NOT NULL,
@@ -1023,6 +1150,253 @@ CREATE TABLE IF NOT EXISTS iam.audit_outbox (
     )
 );
 
+-- Exact self-revocation completion is a historical relation, not a permit.
+-- A new intent cannot claim a session ended by logout, a reset, or an admin.
+CREATE UNIQUE INDEX IF NOT EXISTS sessions_owner_reference_uq ON iam.sessions(tenant_id,principal_id,id);
+CREATE TABLE IF NOT EXISTS iam.session_self_revocations (
+    tenant_id text COLLATE "C" NOT NULL,
+    user_id text COLLATE "C" NOT NULL,
+    request_id text COLLATE "C" NOT NULL,
+    actor_session_id text COLLATE "C" NOT NULL,
+    target_session_id text COLLATE "C" NOT NULL,
+    input_digest text COLLATE "C" NOT NULL,
+    resource_version bigint NOT NULL,
+    revoked_at timestamptz(6) NOT NULL,
+    event_id text COLLATE "C" NOT NULL,
+    CONSTRAINT session_self_revocations_pk PRIMARY KEY(tenant_id,user_id,request_id),
+    CONSTRAINT session_self_revocations_target_uq UNIQUE(tenant_id,target_session_id),
+    CONSTRAINT session_self_revocations_event_uq UNIQUE(tenant_id,event_id),
+    CONSTRAINT session_self_revocations_actor_fk FOREIGN KEY(tenant_id,user_id,actor_session_id)
+        REFERENCES iam.sessions(tenant_id,principal_id,id),
+    CONSTRAINT session_self_revocations_target_fk FOREIGN KEY(tenant_id,user_id,target_session_id)
+        REFERENCES iam.sessions(tenant_id,principal_id,id),
+    CONSTRAINT session_self_revocations_event_fk FOREIGN KEY(tenant_id,event_id)
+        REFERENCES iam.audit_outbox(tenant_id,event_id),
+    CONSTRAINT session_self_revocations_values_valid CHECK (
+        request_id ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND actor_session_id<>target_session_id
+        AND input_digest ~ '^sha256:[0-9a-f]{64}$'
+        AND resource_version BETWEEN 2 AND 9007199254740991
+        AND isfinite(revoked_at)
+    )
+);
+ALTER TABLE iam.session_self_revocations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE iam.session_self_revocations FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON iam.session_self_revocations;
+CREATE POLICY tenant_isolation ON iam.session_self_revocations
+    USING(tenant_id=iam.current_tenant_id()) WITH CHECK(tenant_id=iam.current_tenant_id());
+DROP TRIGGER IF EXISTS self_revocations_are_immutable ON iam.session_self_revocations;
+CREATE TRIGGER self_revocations_are_immutable BEFORE UPDATE OR DELETE ON iam.session_self_revocations
+    FOR EACH ROW EXECUTE FUNCTION iam.reject_policy_history_change();
+ALTER TABLE iam.session_self_revocations ENABLE ALWAYS TRIGGER self_revocations_are_immutable;
+DROP TRIGGER IF EXISTS self_revocations_cannot_truncate ON iam.session_self_revocations;
+CREATE TRIGGER self_revocations_cannot_truncate BEFORE TRUNCATE ON iam.session_self_revocations
+    FOR EACH STATEMENT EXECUTE FUNCTION iam.reject_policy_history_change();
+ALTER TABLE iam.session_self_revocations ENABLE ALWAYS TRIGGER self_revocations_cannot_truncate;
+
+CREATE OR REPLACE FUNCTION iam.self_session_revocation_digest(actor_session text,target_session text,request_id text)
+RETURNS text LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=pg_catalog,pg_temp AS $function$
+    SELECT 'sha256:'||encode(sha256(convert_to('matrix.iam.request.v1','UTF8')||decode('00','hex')||
+        convert_to('revoke-own-session','UTF8')||decode('00','hex')||convert_to(
+        '{"actorSessionId":'||to_json(actor_session)::text||',"sessionId":'||to_json(target_session)::text||
+        ',"requestId":'||to_json(request_id)::text||'}','UTF8')),'hex')
+$function$;
+
+CREATE OR REPLACE FUNCTION iam.guard_self_session_completion()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE receipt iam.session_self_revocations%ROWTYPE; target iam.sessions%ROWTYPE; event jsonb;
+    bound_tenant text; bound_target text; bound_event text; bound_request text; bound_user text;
+BEGIN
+    IF TG_TABLE_NAME='session_self_revocations' THEN
+        bound_tenant:=NEW.tenant_id; bound_request:=NEW.request_id; bound_user:=NEW.user_id;
+    ELSIF TG_TABLE_NAME='sessions' THEN
+        bound_tenant:=OLD.tenant_id; bound_target:=OLD.id;
+    ELSE
+        bound_tenant:=OLD.tenant_id; bound_event:=OLD.event_id;
+    END IF;
+    PERFORM set_config('matrix.iam_tenant_id',bound_tenant,true);
+    FOR receipt IN SELECT r.* FROM iam.session_self_revocations r WHERE r.tenant_id=bound_tenant AND
+        ((TG_TABLE_NAME='session_self_revocations' AND r.user_id=bound_user AND r.request_id=bound_request)
+         OR (TG_TABLE_NAME='sessions' AND r.target_session_id=bound_target)
+         OR (TG_TABLE_NAME='audit_outbox' AND r.event_id=bound_event))
+    LOOP
+        SELECT s.* INTO target FROM iam.sessions s WHERE s.tenant_id=receipt.tenant_id AND s.id=receipt.target_session_id;
+        IF NOT FOUND OR target.principal_id IS DISTINCT FROM receipt.user_id OR target.status IS DISTINCT FROM 'REVOKED'
+            OR target.resource_version IS DISTINCT FROM receipt.resource_version OR target.revoked_at IS DISTINCT FROM receipt.revoked_at THEN
+            RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='self session completion target differs';
+        END IF;
+        SELECT o.event_document INTO event FROM iam.audit_outbox o WHERE o.tenant_id=receipt.tenant_id AND o.event_id=receipt.event_id;
+        IF NOT FOUND OR event->>'apiVersion' IS DISTINCT FROM 'audit.matrix.xiak.com/v1' OR event->>'kind' IS DISTINCT FROM 'AuditEvent'
+            OR event->>'eventId' IS DISTINCT FROM receipt.event_id OR event->>'tenantId' IS DISTINCT FROM receipt.tenant_id
+            OR event->>'action' IS DISTINCT FROM 'iam.session.revoked' OR event->>'result' IS DISTINCT FROM 'SUCCEEDED'
+            OR event->'actor' IS DISTINCT FROM jsonb_build_object('type','USER','id',receipt.user_id)
+            OR event->'target' IS DISTINCT FROM jsonb_build_object('kind','SESSION','id',receipt.target_session_id)
+            OR event->>'requestId' IS DISTINCT FROM receipt.request_id OR event->>'correlationId' IS DISTINCT FROM receipt.request_id
+            OR event->>'requestDigest' IS DISTINCT FROM receipt.input_digest
+            OR (event->>'occurredAt')::timestamptz IS DISTINCT FROM receipt.revoked_at
+            OR (event-ARRAY['apiVersion','kind','eventId','tenantId','actor','action','target','result','requestId','correlationId','requestDigest','occurredAt'])<>'{}'::jsonb
+            OR receipt.input_digest IS DISTINCT FROM iam.self_session_revocation_digest(receipt.actor_session_id,receipt.target_session_id,receipt.request_id) THEN
+            RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='self session completion evidence differs';
+        END IF;
+    END LOOP;
+    RETURN NULL;
+END $function$;
+DROP TRIGGER IF EXISTS self_revocations_match_evidence ON iam.session_self_revocations;
+CREATE CONSTRAINT TRIGGER self_revocations_match_evidence AFTER INSERT ON iam.session_self_revocations
+    DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION iam.guard_self_session_completion();
+ALTER TABLE iam.session_self_revocations ENABLE ALWAYS TRIGGER self_revocations_match_evidence;
+DROP TRIGGER IF EXISTS sessions_match_self_completion ON iam.sessions;
+CREATE CONSTRAINT TRIGGER sessions_match_self_completion AFTER UPDATE OR DELETE ON iam.sessions
+    DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION iam.guard_self_session_completion();
+ALTER TABLE iam.sessions ENABLE ALWAYS TRIGGER sessions_match_self_completion;
+DROP TRIGGER IF EXISTS outbox_matches_self_completion ON iam.audit_outbox;
+CREATE CONSTRAINT TRIGGER outbox_matches_self_completion AFTER UPDATE ON iam.audit_outbox
+    DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION iam.guard_self_session_completion();
+ALTER TABLE iam.audit_outbox ENABLE ALWAYS TRIGGER outbox_matches_self_completion;
+
+-- One immutable completion owns the whole set, including the empty set.
+-- Target rows are inserted before that completion; history cannot grow later.
+CREATE TABLE IF NOT EXISTS iam.session_other_revocations (
+    tenant_id text COLLATE "C" NOT NULL,
+    user_id text COLLATE "C" NOT NULL,
+    request_id text COLLATE "C" NOT NULL,
+    actor_session_id text COLLATE "C" NOT NULL,
+    input_digest text COLLATE "C" NOT NULL,
+    completed_at timestamptz(6) NOT NULL,
+    revoked_count bigint NOT NULL,
+    event_id text COLLATE "C" NOT NULL,
+    CONSTRAINT session_other_revocations_pk PRIMARY KEY(tenant_id,user_id,request_id),
+    CONSTRAINT session_other_revocations_event_uq UNIQUE(tenant_id,event_id),
+    CONSTRAINT session_other_revocations_actor_fk FOREIGN KEY(tenant_id,user_id,actor_session_id)
+        REFERENCES iam.sessions(tenant_id,principal_id,id),
+    CONSTRAINT session_other_revocations_event_fk FOREIGN KEY(tenant_id,event_id)
+        REFERENCES iam.audit_outbox(tenant_id,event_id),
+    CONSTRAINT session_other_revocations_values_valid CHECK (
+        request_id ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND input_digest ~ '^sha256:[0-9a-f]{64}$'
+        AND revoked_count BETWEEN 0 AND 9007199254740991 AND isfinite(completed_at)
+    )
+);
+CREATE TABLE IF NOT EXISTS iam.session_other_revocation_targets (
+    tenant_id text COLLATE "C" NOT NULL,
+    user_id text COLLATE "C" NOT NULL,
+    request_id text COLLATE "C" NOT NULL,
+    session_id text COLLATE "C" NOT NULL,
+    resource_version bigint NOT NULL,
+    CONSTRAINT session_other_targets_pk PRIMARY KEY(tenant_id,session_id),
+    CONSTRAINT session_other_targets_completion_fk FOREIGN KEY(tenant_id,user_id,request_id)
+        REFERENCES iam.session_other_revocations(tenant_id,user_id,request_id) DEFERRABLE INITIALLY DEFERRED,
+    CONSTRAINT session_other_targets_session_fk FOREIGN KEY(tenant_id,user_id,session_id)
+        REFERENCES iam.sessions(tenant_id,principal_id,id),
+    CONSTRAINT session_other_targets_version_valid CHECK (resource_version BETWEEN 2 AND 9007199254740991)
+);
+CREATE INDEX IF NOT EXISTS session_other_targets_completion ON iam.session_other_revocation_targets(tenant_id,user_id,request_id);
+DO $other_session_protection$
+DECLARE relation_name text;
+BEGIN
+    FOREACH relation_name IN ARRAY ARRAY['session_other_revocations','session_other_revocation_targets'] LOOP
+        EXECUTE format('ALTER TABLE iam.%I ENABLE ROW LEVEL SECURITY',relation_name);
+        EXECUTE format('ALTER TABLE iam.%I FORCE ROW LEVEL SECURITY',relation_name);
+        EXECUTE format('DROP POLICY IF EXISTS tenant_isolation ON iam.%I',relation_name);
+        EXECUTE format('CREATE POLICY tenant_isolation ON iam.%I USING(tenant_id=iam.current_tenant_id()) WITH CHECK(tenant_id=iam.current_tenant_id())',relation_name);
+        EXECUTE format('DROP TRIGGER IF EXISTS other_session_history_immutable ON iam.%I',relation_name);
+        EXECUTE format('CREATE TRIGGER other_session_history_immutable BEFORE UPDATE OR DELETE ON iam.%I FOR EACH ROW EXECUTE FUNCTION iam.reject_policy_history_change()',relation_name);
+        EXECUTE format('ALTER TABLE iam.%I ENABLE ALWAYS TRIGGER other_session_history_immutable',relation_name);
+        EXECUTE format('DROP TRIGGER IF EXISTS other_session_history_no_truncate ON iam.%I',relation_name);
+        EXECUTE format('CREATE TRIGGER other_session_history_no_truncate BEFORE TRUNCATE ON iam.%I FOR EACH STATEMENT EXECUTE FUNCTION iam.reject_policy_history_change()',relation_name);
+        EXECUTE format('ALTER TABLE iam.%I ENABLE ALWAYS TRIGGER other_session_history_no_truncate',relation_name);
+    END LOOP;
+END $other_session_protection$;
+
+CREATE OR REPLACE FUNCTION iam.other_session_revocation_digest(actor_session text,request_id text)
+RETURNS text LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE SET search_path=pg_catalog,pg_temp AS $function$
+    SELECT 'sha256:'||encode(sha256(convert_to('matrix.iam.request.v1','UTF8')||decode('00','hex')||
+        convert_to('revoke-other-sessions','UTF8')||decode('00','hex')||convert_to(
+        '{"actorSessionId":'||to_json(actor_session)::text||',"requestId":'||to_json(request_id)::text||'}','UTF8')),'hex')
+$function$;
+
+CREATE OR REPLACE FUNCTION iam.guard_other_session_target()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE evidence iam.session_other_revocation_targets%ROWTYPE; receipt iam.session_other_revocations%ROWTYPE;
+    target iam.sessions%ROWTYPE;
+BEGIN
+    IF TG_TABLE_NAME='sessions' THEN
+        PERFORM set_config('matrix.iam_tenant_id',OLD.tenant_id,true);
+        SELECT r.* INTO evidence FROM iam.session_other_revocation_targets r WHERE r.tenant_id=OLD.tenant_id AND r.session_id=OLD.id;
+        IF NOT FOUND THEN RETURN NULL; END IF;
+    ELSE
+        evidence:=NEW;
+        PERFORM set_config('matrix.iam_tenant_id',evidence.tenant_id,true);
+    END IF;
+    SELECT r.* INTO receipt FROM iam.session_other_revocations r
+        WHERE r.tenant_id=evidence.tenant_id AND r.user_id=evidence.user_id AND r.request_id=evidence.request_id;
+    IF TG_WHEN='BEFORE' THEN
+        IF FOUND THEN RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='other session completion is sealed'; END IF;
+        RETURN NEW;
+    END IF;
+    IF NOT FOUND OR receipt.actor_session_id=evidence.session_id THEN
+        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='other session target owner differs';
+    END IF;
+    SELECT s.* INTO target FROM iam.sessions s WHERE s.tenant_id=evidence.tenant_id AND s.id=evidence.session_id;
+    IF NOT FOUND OR target.principal_id IS DISTINCT FROM evidence.user_id OR target.status IS DISTINCT FROM 'REVOKED'
+        OR target.resource_version IS DISTINCT FROM evidence.resource_version OR target.revoked_at IS DISTINCT FROM receipt.completed_at THEN
+        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='other session target completion differs';
+    END IF;
+    RETURN NULL;
+END $function$;
+DROP TRIGGER IF EXISTS other_session_target_before_seal ON iam.session_other_revocation_targets;
+CREATE TRIGGER other_session_target_before_seal BEFORE INSERT ON iam.session_other_revocation_targets
+    FOR EACH ROW EXECUTE FUNCTION iam.guard_other_session_target();
+ALTER TABLE iam.session_other_revocation_targets ENABLE ALWAYS TRIGGER other_session_target_before_seal;
+DROP TRIGGER IF EXISTS other_session_target_matches_state ON iam.session_other_revocation_targets;
+CREATE CONSTRAINT TRIGGER other_session_target_matches_state AFTER INSERT ON iam.session_other_revocation_targets
+    DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION iam.guard_other_session_target();
+ALTER TABLE iam.session_other_revocation_targets ENABLE ALWAYS TRIGGER other_session_target_matches_state;
+DROP TRIGGER IF EXISTS sessions_match_other_completion ON iam.sessions;
+CREATE CONSTRAINT TRIGGER sessions_match_other_completion AFTER UPDATE OR DELETE ON iam.sessions
+    DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION iam.guard_other_session_target();
+ALTER TABLE iam.sessions ENABLE ALWAYS TRIGGER sessions_match_other_completion;
+
+CREATE OR REPLACE FUNCTION iam.guard_other_session_completion()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE receipt iam.session_other_revocations%ROWTYPE; event jsonb;
+BEGIN
+    IF TG_TABLE_NAME='audit_outbox' THEN
+        PERFORM set_config('matrix.iam_tenant_id',OLD.tenant_id,true);
+        SELECT r.* INTO receipt FROM iam.session_other_revocations r WHERE r.tenant_id=OLD.tenant_id AND r.event_id=OLD.event_id;
+        IF NOT FOUND THEN RETURN NULL; END IF;
+    ELSE
+        receipt:=NEW;
+        PERFORM set_config('matrix.iam_tenant_id',receipt.tenant_id,true);
+    END IF;
+    IF receipt.revoked_count IS DISTINCT FROM (SELECT count(*) FROM iam.session_other_revocation_targets t
+        WHERE t.tenant_id=receipt.tenant_id AND t.user_id=receipt.user_id AND t.request_id=receipt.request_id) THEN
+        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='other session completion count differs';
+    END IF;
+    SELECT o.event_document INTO event FROM iam.audit_outbox o WHERE o.tenant_id=receipt.tenant_id AND o.event_id=receipt.event_id;
+    IF NOT FOUND OR event->>'apiVersion' IS DISTINCT FROM 'audit.matrix.xiak.com/v1' OR event->>'kind' IS DISTINCT FROM 'AuditEvent'
+        OR event->>'eventId' IS DISTINCT FROM receipt.event_id OR event->>'tenantId' IS DISTINCT FROM receipt.tenant_id
+        OR event->>'action' IS DISTINCT FROM 'iam.session.others-revoked' OR event->>'result' IS DISTINCT FROM 'SUCCEEDED'
+        OR event->'actor' IS DISTINCT FROM jsonb_build_object('type','USER','id',receipt.user_id)
+        OR event->'target' IS DISTINCT FROM jsonb_build_object('kind','PRINCIPAL','id',receipt.user_id)
+        OR event->>'requestId' IS DISTINCT FROM receipt.request_id OR event->>'correlationId' IS DISTINCT FROM receipt.request_id
+        OR event->>'requestDigest' IS DISTINCT FROM receipt.input_digest
+        OR (event->>'occurredAt')::timestamptz IS DISTINCT FROM receipt.completed_at
+        OR (event-ARRAY['apiVersion','kind','eventId','tenantId','actor','action','target','result','requestId','correlationId','requestDigest','occurredAt'])<>'{}'::jsonb
+        OR receipt.input_digest IS DISTINCT FROM iam.other_session_revocation_digest(receipt.actor_session_id,receipt.request_id) THEN
+        RAISE EXCEPTION USING ERRCODE='23514', MESSAGE='other session completion evidence differs';
+    END IF;
+    RETURN NULL;
+END $function$;
+DROP TRIGGER IF EXISTS other_session_completion_matches_evidence ON iam.session_other_revocations;
+CREATE CONSTRAINT TRIGGER other_session_completion_matches_evidence AFTER INSERT ON iam.session_other_revocations
+    DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION iam.guard_other_session_completion();
+ALTER TABLE iam.session_other_revocations ENABLE ALWAYS TRIGGER other_session_completion_matches_evidence;
+DROP TRIGGER IF EXISTS outbox_matches_other_session_completion ON iam.audit_outbox;
+CREATE CONSTRAINT TRIGGER outbox_matches_other_session_completion AFTER UPDATE ON iam.audit_outbox
+    DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION iam.guard_other_session_completion();
+ALTER TABLE iam.audit_outbox ENABLE ALWAYS TRIGGER outbox_matches_other_session_completion;
+
 ALTER TABLE iam.accounts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE iam.accounts FORCE ROW LEVEL SECURITY;
 ALTER TABLE iam.principals ENABLE ROW LEVEL SECURITY;
@@ -1220,7 +1594,7 @@ BEGIN
             'iam.bootstrap.applied', 'iam.session.issued',
             'iam.password.changed', 'iam.user.password-changed', 'iam.installation-primary.credentials-recovered',
             'iam.role-session.revoked','iam.role-session.exited',
-            'iam.notification-contact.verification-started','iam.notification-contact.verified','iam.authenticator.bound','iam.authenticator.replaced',
+            'iam.notification-contact.verification-started','iam.notification-contact.verified','iam.authenticator.bound','iam.authenticator.replaced','iam.authenticator.removed',
             'iam.authenticator.recovery-started','iam.authenticator.recovered','iam.recovery-codes.regenerated'
         ) AND submitted_event ? 'iamDecisionId')
         OR (expected_action IN (
@@ -1610,6 +1984,7 @@ BEGIN
            AND iam.policy_attachment_contract_ready()
            AND iam.role_contract_ready()
            AND iam.access_key_contract_ready()
+           AND iam.login_session_contract_ready()
            AND iam.account_security_settings_contract_ready()
            AND to_regprocedure('iam.create_group(text,text,text,text,text,text,jsonb)') IS NOT NULL
            AND (SELECT count(*) FROM pg_catalog.pg_proc AS policy_entry
@@ -1644,8 +2019,7 @@ BEGIN
            AND iam.policy_version_contract_ready()
            AND EXISTS(SELECT 1 FROM pg_catalog.pg_proc AS lookup
                 WHERE lookup.oid=to_regprocedure('iam.lookup_session(text)')
-                  AND cardinality(lookup.proallargtypes)=25
-                  AND lookup.proargnames[23:25]=ARRAY['policies','boundary','credential_generation']
+                  AND cardinality(lookup.proallargtypes)=25 AND lookup.proargnames[23:25]=ARRAY['policies','boundary','credential_generation']
                   AND lookup.proallargtypes[23:25]=ARRAY['jsonb'::regtype::oid,'jsonb'::regtype::oid,'bigint'::regtype::oid])
            AND EXISTS(SELECT 1 FROM pg_catalog.pg_attribute AS evidence
                 WHERE evidence.attrelid='iam.authorization_decisions'::regclass AND evidence.attname='policy_evidence'
@@ -1672,8 +2046,7 @@ BEGIN
                   AND protection.tgname IN ('authorization_decisions_are_immutable','authorization_decisions_cannot_be_truncated')
                   AND NOT protection.tgisinternal AND protection.tgenabled='A')=2
             AND to_regprocedure('iam.set_account_status(text,text,text,text,text,bigint,jsonb)') IS NOT NULL
-            AND to_regprocedure('iam.recover_root_credentials(text,text,text,text,text,bigint,text,text,jsonb)') IS NOT NULL
-            AND to_regprocedure('iam.read_account_root(text,text,text,text)') IS NOT NULL
+            AND iam.root_password_recovery_contract_ready()
             AND to_regprocedure('iam.read_user(text,text,text,text)') IS NOT NULL
             AND to_regprocedure('iam.update_user(text,text,text,text,text,bigint,jsonb)') IS NOT NULL
             AND to_regprocedure('iam.delete_user(text,text,text,text,bigint,jsonb)') IS NOT NULL
@@ -1684,18 +2057,15 @@ BEGIN
             AND to_regprocedure('iam.set_organization_status(text,text,text,text,text,bigint,jsonb)') IS NULL
             AND to_regprocedure('iam.recover_organization_administrator(text,text,text,text,text,bigint,text,text,jsonb)') IS NULL
            AND iam.password_attempt_contract_ready()
+           AND iam.password_history_contract_ready()
+           AND iam.user_password_reset_contract_ready()
            AND iam.totp_custody_contract_ready()
            AND iam.totp_backup_custody_contract_ready()
            AND iam.totp_authentication_contract_ready()
            AND iam.notification_contract_ready()
            AND iam.authentication_recovery_contract_ready()
            AND to_regprocedure('iam.change_password(text,text,text,text,jsonb)') IS NULL
-           AND (SELECT count(*) FROM pg_catalog.pg_proc AS recovery
-                WHERE recovery.oid IN (
-                    to_regprocedure('iam.inspect_local_credential_recovery(jsonb,text,text)'),
-                    to_regprocedure('iam.recover_local_credentials(jsonb,jsonb,text,text,text,jsonb)'))
-                  AND recovery.prorettype='jsonb'::regtype AND NOT recovery.proretset
-                  AND recovery.prosecdef AND recovery.proowner='matrix_iam_owner'::regrole) = 2
+           AND iam.local_credential_recovery_contract_ready()
            AND EXISTS (SELECT 1 FROM pg_catalog.pg_class AS receipt
                 WHERE receipt.oid=to_regclass('iam.local_credential_recoveries')
                   AND receipt.relrowsecurity AND receipt.relforcerowsecurity
@@ -1741,7 +2111,7 @@ BEGIN
                SELECT 1 FROM iam.audit_outbox AS outbox
                 WHERE outbox.status = 'DEAD_LETTER' OR outbox.attempts >= 100
            ),
-           45::bigint,
+           49::bigint,
            transaction_timestamp();
 END
 $function$;
@@ -1814,12 +2184,14 @@ $function$;
 -- reserves durable work before returning it. The two input shapes are closed:
 -- login realm, or a currently authenticated same-user Session for recheck.
 DROP FUNCTION IF EXISTS iam.reserve_password_attempt(text,text,text,text,text);
+DROP FUNCTION IF EXISTS iam.reserve_password_attempt(text,text,text,text,text,text,text);
 CREATE OR REPLACE FUNCTION iam.reserve_password_attempt(
     submitted_login_name text, submitted_tenant_id text, submitted_principal_id text,
     submitted_session_id text, submitted_attempt_id text, submitted_purpose text, submitted_intent_digest text
 )
 RETURNS TABLE (tenant_id text, principal_id text, password_hash text, must_change_password boolean,
-    credential_generation bigint, attempt_sequence bigint, expires_at timestamptz)
+    credential_generation bigint, attempt_sequence bigint, expires_at timestamptz, password_history text[], history_digest text,
+    password_settings jsonb, settings_version bigint)
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE
     account_id text; user_id text; account_version bigint;
@@ -1860,6 +2232,10 @@ BEGIN
     IF submitted_purpose IN ('NOTIFICATION_CONTACT_VERIFY','TOTP_ENROLLMENT','STEP_UP') AND subject.must_change_password THEN RETURN; END IF;
     SELECT * INTO credential FROM iam.user_credentials c WHERE c.tenant_id=account_id AND c.principal_id=user_id FOR UPDATE;
     IF NOT FOUND THEN RETURN; END IF;
+    IF submitted_purpose='PASSWORD_CHANGE' AND NOT iam.valid_password_history(credential.password_history,
+        credential.password_history_digest,credential.credential_version,credential.password_changed_at) THEN
+        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='password history is unavailable';
+    END IF;
     IF submitted_session_id IS NOT NULL THEN
         SELECT * INTO caller FROM iam.sessions s WHERE s.tenant_id=account_id AND s.principal_id=user_id
             AND s.id=submitted_session_id FOR UPDATE;
@@ -1907,7 +2283,12 @@ BEGIN
         attempt_id=EXCLUDED.attempt_id,purpose=EXCLUDED.purpose,intent_digest=EXCLUDED.intent_digest,session_id=EXCLUDED.session_id,state='RESERVED',
         reserved_at=EXCLUDED.reserved_at,expires_at=EXCLUDED.expires_at,completed_at=NULL;
     RETURN QUERY SELECT account_id,user_id,credential.password_hash,subject.must_change_password,
-        credential.credential_version,next_sequence,effective_now+interval '30 seconds';
+        credential.credential_version,next_sequence,effective_now+interval '30 seconds',
+        CASE WHEN submitted_purpose='PASSWORD_CHANGE' THEN ARRAY(SELECT e.value->>'hash'
+            FROM jsonb_array_elements(credential.password_history) WITH ORDINALITY e(value,ordinality) ORDER BY e.ordinality) END,
+        CASE WHEN submitted_purpose='PASSWORD_CHANGE' THEN 'sha256:'||encode(credential.password_history_digest,'hex') END,
+        CASE WHEN submitted_purpose='PASSWORD_CHANGE' THEN iam.user_password_settings(account_id,user_id) END,
+        CASE WHEN submitted_purpose='PASSWORD_CHANGE' THEN (SELECT a.security_settings_version FROM iam.accounts a WHERE a.id=account_id) END;
 END
 $function$;
 
@@ -2006,7 +2387,7 @@ BEGIN
     effective_expires_at := effective_now + make_interval(secs => submitted_lifetime_seconds);
     PERFORM set_config('matrix.iam_tenant_id', submitted_tenant_id, true);
     authentication_state:=iam.login_authentication_state(submitted_tenant_id,submitted_principal_id);
-    IF authentication_state->>'state' IS DISTINCT FROM 'NEVER_BOUND'
+    IF COALESCE(authentication_state->>'state','') NOT IN ('NEVER_BOUND','REMOVED')
         OR authentication_state->'enrollmentRequired' IS DISTINCT FROM 'false'::jsonb THEN
         RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='further authentication is required';
     END IF;
@@ -2048,14 +2429,15 @@ RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $funct
         AND EXISTS (SELECT 1 FROM pg_catalog.pg_proc p WHERE p.oid=to_regprocedure('iam.reserve_password_attempt(text,text,text,text,text,text,text)')
             AND p.prosecdef AND p.proretset AND p.prorettype='record'::regtype AND p.proowner='matrix_iam_owner'::regrole
             AND p.proallargtypes=ARRAY['text'::regtype,'text'::regtype,'text'::regtype,'text'::regtype,'text'::regtype,'text'::regtype,'text'::regtype,
-                'text'::regtype,'text'::regtype,'text'::regtype,'boolean'::regtype,'bigint'::regtype,'bigint'::regtype,'timestamptz'::regtype]::oid[]
+                'text'::regtype,'text'::regtype,'text'::regtype,'boolean'::regtype,'bigint'::regtype,'bigint'::regtype,'timestamptz'::regtype,
+                'text[]'::regtype,'text'::regtype,'jsonb'::regtype,'bigint'::regtype]::oid[]
             AND p.proargnames=ARRAY['submitted_login_name','submitted_tenant_id','submitted_principal_id','submitted_session_id','submitted_attempt_id','submitted_purpose','submitted_intent_digest',
-                'tenant_id','principal_id','password_hash','must_change_password','credential_generation','attempt_sequence','expires_at'])
+                'tenant_id','principal_id','password_hash','must_change_password','credential_generation','attempt_sequence','expires_at','password_history','history_digest','password_settings','settings_version'])
         AND (SELECT count(*) FROM pg_catalog.pg_proc p WHERE p.oid IN (
                 to_regprocedure('iam.reserve_password_attempt(text,text,text,text,text,text,text)'),
                 to_regprocedure('iam.reject_password_attempt(text,text,text,bigint)'),
                 to_regprocedure('iam.issue_session(text,text,text,text,text,integer,jsonb,text,bigint)'),
-                to_regprocedure('iam.change_password(text,text,text,text,jsonb,text,boolean,text,bigint)'))
+                to_regprocedure('iam.change_password(text,text,text,text,jsonb,text,boolean,text,bigint,text,bigint)'))
             AND p.prosecdef AND p.proowner='matrix_iam_owner'::regrole
             AND has_function_privilege('matrix_iam_api',p.oid,'EXECUTE')
             AND NOT has_function_privilege('matrix_iam_worker',p.oid,'EXECUTE')
@@ -2072,7 +2454,9 @@ RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $funct
         AND to_regprocedure('iam.reserve_password_attempt(text,text,text,text,text)') IS NULL
         AND to_regprocedure('iam.consume_password_attempt(text,text,text,text,bigint)') IS NULL
         AND to_regprocedure('iam.issue_session(text,text,text,text,text,integer,jsonb)') IS NULL
-        AND to_regprocedure('iam.change_password(text,text,text,text,jsonb,text,boolean)') IS NULL,false)
+        AND to_regprocedure('iam.change_password(text,text,text,text,jsonb,text,boolean)') IS NULL
+        AND to_regprocedure('iam.change_password(text,text,text,text,jsonb,text,boolean,text,bigint)') IS NULL
+        AND to_regprocedure('iam.change_password(text,text,text,text,jsonb,text,boolean,text,bigint,text)') IS NULL,false)
 $function$;
 
 CREATE OR REPLACE FUNCTION iam.current_policy_snapshot(tenant text, principal text)
@@ -2185,6 +2569,32 @@ BEGIN
        AND principal.status = 'ACTIVE';
 END
 $function$;
+
+CREATE OR REPLACE FUNCTION iam.list_own_sessions(tenant text,user_id text,current_session text,after_id text)
+RETURNS TABLE(id text,status text,issued_at timestamptz,expires_at timestamptz)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE generation bigint;
+BEGIN
+    IF COALESCE(tenant,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        OR COALESCE(user_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        OR COALESCE(current_session,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        OR after_id IS NULL OR (after_id<>'' AND after_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$') THEN
+        RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='own session query is invalid';
+    END IF;
+    PERFORM set_config('matrix.iam_tenant_id',tenant,true);
+    SELECT c.credential_version INTO generation FROM iam.accounts a
+      JOIN iam.principals p ON p.tenant_id=a.id AND p.id=user_id AND p.principal_type='USER' AND p.status='ACTIVE' AND p.deleted_at IS NULL
+      JOIN iam.user_credentials c ON c.tenant_id=p.tenant_id AND c.principal_id=p.id
+      JOIN iam.sessions s ON s.tenant_id=p.tenant_id AND s.principal_id=p.id AND s.id=current_session
+        AND s.status='ACTIVE' AND s.revoked_at IS NULL AND s.expires_at>transaction_timestamp() AND s.credential_version=c.credential_version
+      WHERE a.id=tenant AND a.status='ACTIVE' AND iam.session_mfa_eligible(tenant,user_id,current_session);
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='own session caller is unavailable'; END IF;
+    RETURN QUERY SELECT s.id,s.status,s.issued_at,s.expires_at FROM iam.sessions s
+      WHERE s.tenant_id=tenant AND s.principal_id=user_id AND s.status='ACTIVE' AND s.revoked_at IS NULL
+        AND s.credential_version=generation AND s.expires_at>transaction_timestamp() AND s.id>after_id COLLATE "C"
+        AND iam.session_mfa_eligible(tenant,user_id,s.id)
+      ORDER BY s.id COLLATE "C" LIMIT 101;
+END $function$;
 
 DROP FUNCTION IF EXISTS iam.lookup_service(text);
 CREATE FUNCTION iam.lookup_service(submitted_lookup_digest text)
@@ -2667,6 +3077,8 @@ DROP FUNCTION IF EXISTS iam.lookup_password(text,text);
 
 DROP FUNCTION IF EXISTS iam.change_password(text,text,text,text,jsonb);
 DROP FUNCTION IF EXISTS iam.change_password(text,text,text,text,jsonb,text,boolean);
+DROP FUNCTION IF EXISTS iam.change_password(text,text,text,text,jsonb,text,boolean,text,bigint);
+DROP FUNCTION IF EXISTS iam.change_password(text,text,text,text,jsonb,text,boolean,text,bigint,text);
 CREATE OR REPLACE FUNCTION iam.change_password(
     submitted_tenant_id text,
     submitted_principal_id text,
@@ -2676,7 +3088,9 @@ CREATE OR REPLACE FUNCTION iam.change_password(
     submitted_session_id text,
     submitted_revoke_other_sessions boolean,
     submitted_attempt_id text,
-    submitted_attempt_sequence bigint
+    submitted_attempt_sequence bigint,
+    submitted_history_digest text,
+    submitted_settings_version bigint
 )
 RETURNS TABLE (changed_at timestamptz, bootstrap_file_retirable boolean)
 LANGUAGE plpgsql
@@ -2699,7 +3113,9 @@ BEGIN
        OR submitted_new_password_hash NOT LIKE '$matrix-iam-v1$argon2id$v=19$%'
        OR submitted_expected_password_hash = submitted_new_password_hash
        OR COALESCE(submitted_session_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-       OR submitted_revoke_other_sessions IS NULL THEN
+       OR submitted_revoke_other_sessions IS NULL
+       OR COALESCE(submitted_history_digest,'') !~ '^sha256:[0-9a-f]{64}$'
+       OR submitted_settings_version IS NULL OR submitted_settings_version NOT BETWEEN 1 AND 9007199254740991 THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'password mutation is invalid';
     END IF;
     PERFORM set_config('matrix.iam_tenant_id', submitted_tenant_id, true);
@@ -2707,12 +3123,18 @@ BEGIN
     -- and actual bearer Session as reset/recovery/logout and platform grants.
     previous_version:=iam.consume_password_attempt(submitted_tenant_id,submitted_principal_id,submitted_session_id,
         submitted_attempt_id,submitted_attempt_sequence,'PASSWORD_CHANGE',NULL);
+    IF submitted_settings_version IS DISTINCT FROM (SELECT a.security_settings_version FROM iam.accounts a WHERE a.id=submitted_tenant_id) THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='password settings changed concurrently';
+    END IF;
     SELECT * INTO subject FROM iam.principals AS principal
      WHERE principal.tenant_id = submitted_tenant_id AND principal.id = submitted_principal_id
        AND principal.principal_type = 'USER' AND principal.status = 'ACTIVE';
     PERFORM 1 FROM iam.user_credentials AS credential
      WHERE credential.tenant_id = submitted_tenant_id AND credential.principal_id = submitted_principal_id
-       AND credential.password_hash = submitted_expected_password_hash;
+       AND credential.password_hash = submitted_expected_password_hash
+       AND submitted_history_digest='sha256:'||encode(credential.password_history_digest,'hex')
+       AND iam.valid_password_history(credential.password_history,credential.password_history_digest,
+           credential.credential_version,credential.password_changed_at);
     IF NOT FOUND THEN
         RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'password changed concurrently';
     END IF;
@@ -2777,12 +3199,14 @@ BEGIN
 END
 $function$;
 
+DROP FUNCTION IF EXISTS iam.revoke_session(text,text,text,text,jsonb);
 CREATE OR REPLACE FUNCTION iam.revoke_session(
     submitted_tenant_id text,
     submitted_session_id text,
     submitted_actor_principal_id text,
     submitted_decision_id text,
-    submitted_audit_event jsonb
+    submitted_audit_event jsonb,
+    submitted_actor_session_id text
 )
 RETURNS TABLE (resource_version bigint, revoked_at timestamptz, applied boolean)
 LANGUAGE plpgsql
@@ -2792,12 +3216,19 @@ AS $function$
 DECLARE
     effective_now timestamptz(6) := transaction_timestamp();
     stored iam.sessions%ROWTYPE;
+    validation_now timestamptz(6);
+    actor_generation bigint;
+    own_other boolean;
+    original iam.session_self_revocations%ROWTYPE;
+    input_digest text;
 BEGIN
-    IF submitted_tenant_id COLLATE "C"
+    IF COALESCE(submitted_tenant_id,'') COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-       OR submitted_session_id COLLATE "C"
+       OR COALESCE(submitted_session_id,'') COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-       OR submitted_actor_principal_id COLLATE "C"
+       OR COALESCE(submitted_actor_principal_id,'') COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR COALESCE(submitted_actor_session_id,'') COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR (submitted_decision_id IS NOT NULL AND submitted_decision_id COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$') THEN
@@ -2816,13 +3247,30 @@ BEGIN
     IF NOT FOUND THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='session is unavailable';
     END IF;
+    -- Do not upgrade a decision's FK KEY SHARE to FOR UPDATE. Both identities
+    -- are immutable references; NO KEY UPDATE serializes all credential/status
+    -- writers without deadlocking two administrators' earlier decision FKs.
     PERFORM 1 FROM iam.principals AS principal
-     WHERE principal.tenant_id=submitted_tenant_id AND principal.id=stored.principal_id FOR UPDATE;
+     WHERE principal.tenant_id=submitted_tenant_id AND principal.id IN(stored.principal_id,submitted_actor_principal_id)
+     ORDER BY principal.id COLLATE "C" FOR NO KEY UPDATE;
+    PERFORM 1 FROM iam.user_credentials c WHERE c.tenant_id=submitted_tenant_id
+      AND c.principal_id IN(stored.principal_id,submitted_actor_principal_id) ORDER BY c.principal_id COLLATE "C" FOR SHARE;
+    PERFORM 1 FROM iam.sessions s WHERE s.tenant_id=submitted_tenant_id AND s.id IN(submitted_session_id,submitted_actor_session_id)
+      ORDER BY s.id COLLATE "C" FOR UPDATE;
+    -- A valid caller can expire while waiting for a credential/session writer.
+    -- Keep the original fact timestamp, but recheck eligibility at the locks.
+    validation_now:=clock_timestamp();
+    SELECT c.credential_version INTO actor_generation FROM iam.principals p
+      JOIN iam.user_credentials c ON c.tenant_id=p.tenant_id AND c.principal_id=p.id
+      JOIN iam.sessions s ON s.tenant_id=p.tenant_id AND s.principal_id=p.id AND s.id=submitted_actor_session_id
+        AND s.status='ACTIVE' AND s.revoked_at IS NULL AND s.expires_at>validation_now AND s.credential_version=c.credential_version
+      WHERE p.tenant_id=submitted_tenant_id AND p.id=submitted_actor_principal_id AND p.principal_type='USER'
+        AND p.status='ACTIVE' AND p.deleted_at IS NULL AND (submitted_decision_id IS NULL OR NOT p.must_change_password);
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='session caller is unavailable'; END IF;
     SELECT * INTO stored
       FROM iam.sessions AS session
      WHERE session.tenant_id = submitted_tenant_id
-       AND session.id = submitted_session_id
-     FOR UPDATE;
+       AND session.id = submitted_session_id;
     IF NOT FOUND THEN
         RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'session is unavailable';
     END IF;
@@ -2840,17 +3288,35 @@ BEGIN
             RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'session decision correlation is invalid';
         END IF;
     END IF;
+    PERFORM iam.assert_audit_event(submitted_audit_event,submitted_tenant_id,
+        'iam.session.revoked','SESSION',submitted_session_id,'SUCCEEDED');
+    PERFORM iam.assert_user_audit_actor(submitted_tenant_id,submitted_actor_principal_id,submitted_audit_event);
+    own_other:=submitted_decision_id IS NULL AND submitted_actor_session_id<>submitted_session_id;
+    IF own_other THEN
+        input_digest:=iam.self_session_revocation_digest(submitted_actor_session_id,submitted_session_id,submitted_audit_event->>'requestId');
+        IF submitted_audit_event->>'requestDigest' IS DISTINCT FROM input_digest
+            OR submitted_audit_event->>'correlationId' IS DISTINCT FROM submitted_audit_event->>'requestId' THEN
+            RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='self session intent is invalid';
+        END IF;
+        SELECT r.* INTO original FROM iam.session_self_revocations r WHERE r.tenant_id=submitted_tenant_id
+            AND r.user_id=submitted_actor_principal_id AND r.request_id=submitted_audit_event->>'requestId';
+        IF FOUND THEN
+            IF original.actor_session_id<>submitted_actor_session_id OR original.target_session_id<>submitted_session_id
+                OR original.input_digest<>input_digest THEN
+                RAISE EXCEPTION USING ERRCODE='P0002', MESSAGE='self session intent conflicts';
+            END IF;
+            RETURN QUERY SELECT original.resource_version,original.revoked_at,false;
+            RETURN;
+        END IF;
+        IF stored.status<>'ACTIVE' OR stored.revoked_at IS NOT NULL OR stored.expires_at<=validation_now
+            OR stored.credential_version IS DISTINCT FROM actor_generation THEN
+            RAISE EXCEPTION USING ERRCODE='P0002', MESSAGE='self session target is no longer available';
+        END IF;
+    END IF;
     IF stored.status = 'REVOKED' THEN
         RETURN QUERY SELECT stored.resource_version, stored.revoked_at, false;
         RETURN;
     END IF;
-    PERFORM iam.assert_audit_event(
-        submitted_audit_event, submitted_tenant_id,
-        'iam.session.revoked', 'SESSION', submitted_session_id, 'SUCCEEDED'
-    );
-    PERFORM iam.assert_user_audit_actor(
-        submitted_tenant_id, submitted_actor_principal_id, submitted_audit_event
-    );
     UPDATE iam.sessions AS session
        SET status = 'REVOKED',
            resource_version = session.resource_version + 1,
@@ -2864,10 +3330,239 @@ BEGIN
         submitted_tenant_id, submitted_audit_event->>'eventId',
         submitted_audit_event, effective_now, effective_now, effective_now
     );
+    IF own_other THEN
+        INSERT INTO iam.session_self_revocations(tenant_id,user_id,request_id,actor_session_id,target_session_id,input_digest,resource_version,revoked_at,event_id)
+        VALUES(submitted_tenant_id,submitted_actor_principal_id,submitted_audit_event->>'requestId',submitted_actor_session_id,
+            submitted_session_id,input_digest,stored.resource_version+1,effective_now,submitted_audit_event->>'eventId');
+    END IF;
     RETURN QUERY SELECT stored.resource_version + 1, effective_now, true;
 END
 $function$;
 
+CREATE OR REPLACE FUNCTION iam.revoke_other_sessions(
+    submitted_tenant_id text,submitted_user_id text,submitted_actor_session_id text,submitted_audit_event jsonb
+)
+RETURNS TABLE(revoked_count bigint,completed_at timestamptz,applied boolean)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE effective_now timestamptz(6):=transaction_timestamp(); validation_now timestamptz(6);
+    actor_generation bigint; input_digest text; affected bigint; original iam.session_other_revocations%ROWTYPE;
+BEGIN
+    IF COALESCE(submitted_tenant_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        OR COALESCE(submitted_user_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        OR COALESCE(submitted_actor_session_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
+        RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='other session revocation is invalid';
+    END IF;
+    PERFORM set_config('matrix.iam_tenant_id',submitted_tenant_id,true);
+    PERFORM 1 FROM iam.accounts a WHERE a.id=submitted_tenant_id AND a.status='ACTIVE' FOR SHARE;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='session account is unavailable'; END IF;
+    PERFORM 1 FROM iam.principals p WHERE p.tenant_id=submitted_tenant_id AND p.id=submitted_user_id
+        AND p.principal_type='USER' AND p.status='ACTIVE' AND p.deleted_at IS NULL FOR NO KEY UPDATE;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='session user is unavailable'; END IF;
+    SELECT c.credential_version INTO actor_generation FROM iam.user_credentials c
+        WHERE c.tenant_id=submitted_tenant_id AND c.principal_id=submitted_user_id FOR SHARE;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='session credentials are unavailable'; END IF;
+    PERFORM 1 FROM iam.sessions s WHERE s.tenant_id=submitted_tenant_id AND s.principal_id=submitted_user_id AND s.status='ACTIVE'
+        ORDER BY s.id COLLATE "C" FOR UPDATE;
+    validation_now:=clock_timestamp();
+    IF NOT EXISTS(SELECT 1 FROM iam.sessions s WHERE s.tenant_id=submitted_tenant_id AND s.principal_id=submitted_user_id
+        AND s.id=submitted_actor_session_id AND s.status='ACTIVE' AND s.revoked_at IS NULL AND s.expires_at>validation_now
+        AND s.credential_version=actor_generation) THEN
+        RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='session caller is unavailable';
+    END IF;
+    PERFORM iam.assert_audit_event(submitted_audit_event,submitted_tenant_id,
+        'iam.session.others-revoked','PRINCIPAL',submitted_user_id,'SUCCEEDED');
+    PERFORM iam.assert_user_audit_actor(submitted_tenant_id,submitted_user_id,submitted_audit_event);
+    input_digest:=iam.other_session_revocation_digest(submitted_actor_session_id,submitted_audit_event->>'requestId');
+    IF submitted_audit_event->>'requestDigest' IS DISTINCT FROM input_digest
+        OR submitted_audit_event->>'correlationId' IS DISTINCT FROM submitted_audit_event->>'requestId'
+        OR (submitted_audit_event-ARRAY['apiVersion','kind','eventId','tenantId','actor','action','target','result','requestId','correlationId','requestDigest','occurredAt'])<>'{}'::jsonb
+        OR submitted_audit_event->'actor' IS DISTINCT FROM jsonb_build_object('type','USER','id',submitted_user_id)
+        OR submitted_audit_event->'target' IS DISTINCT FROM jsonb_build_object('kind','PRINCIPAL','id',submitted_user_id) THEN
+        RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='other session intent is invalid';
+    END IF;
+    SELECT r.* INTO original FROM iam.session_other_revocations r WHERE r.tenant_id=submitted_tenant_id
+        AND r.user_id=submitted_user_id AND r.request_id=submitted_audit_event->>'requestId';
+    IF FOUND THEN
+        IF original.actor_session_id<>submitted_actor_session_id OR original.input_digest<>input_digest THEN
+            RAISE EXCEPTION USING ERRCODE='P0002', MESSAGE='other session intent conflicts';
+        END IF;
+        RETURN QUERY SELECT original.revoked_count,original.completed_at,false;
+        RETURN;
+    END IF;
+    WITH ended AS (
+        UPDATE iam.sessions s SET status='REVOKED',resource_version=s.resource_version+1,revoked_at=effective_now
+        WHERE s.tenant_id=submitted_tenant_id AND s.principal_id=submitted_user_id AND s.id<>submitted_actor_session_id
+            AND s.status='ACTIVE' AND s.revoked_at IS NULL AND s.expires_at>validation_now AND s.credential_version=actor_generation
+        RETURNING s.id,s.resource_version
+    ) INSERT INTO iam.session_other_revocation_targets(tenant_id,user_id,request_id,session_id,resource_version)
+        SELECT submitted_tenant_id,submitted_user_id,submitted_audit_event->>'requestId',e.id,e.resource_version FROM ended e;
+    GET DIAGNOSTICS affected=ROW_COUNT;
+    INSERT INTO iam.audit_outbox(tenant_id,event_id,event_document,next_attempt_at,created_at,updated_at)
+        VALUES(submitted_tenant_id,submitted_audit_event->>'eventId',submitted_audit_event,effective_now,effective_now,effective_now);
+    INSERT INTO iam.session_other_revocations(tenant_id,user_id,request_id,actor_session_id,input_digest,completed_at,revoked_count,event_id)
+        VALUES(submitted_tenant_id,submitted_user_id,submitted_audit_event->>'requestId',submitted_actor_session_id,input_digest,
+            effective_now,affected,submitted_audit_event->>'eventId');
+    RETURN QUERY SELECT affected,effective_now,true;
+END $function$;
+
+CREATE OR REPLACE FUNCTION iam.login_session_contract_ready()
+RETURNS boolean LANGUAGE plpgsql STABLE SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE expected record; entry pg_proc%ROWTYPE;
+BEGIN
+    FOR expected IN SELECT * FROM (VALUES('session_other_revocations',8),('session_other_revocation_targets',5)) e(relation_name,column_count) LOOP
+        IF NOT EXISTS(SELECT 1 FROM pg_class c WHERE c.oid=to_regclass('iam.'||expected.relation_name) AND c.relkind='r'
+            AND c.relowner='matrix_iam_owner'::regrole AND c.relrowsecurity AND c.relforcerowsecurity)
+            OR (SELECT count(*) FROM pg_attribute a WHERE a.attrelid=to_regclass('iam.'||expected.relation_name) AND a.attnum>0 AND NOT a.attisdropped)<>expected.column_count
+            OR (SELECT count(*) FROM pg_policies WHERE schemaname='iam' AND tablename=expected.relation_name)<>1
+            OR NOT EXISTS(SELECT 1 FROM pg_policies WHERE schemaname='iam' AND tablename=expected.relation_name
+                AND policyname='tenant_isolation' AND cmd='ALL' AND roles=ARRAY['public']::name[]
+                AND qual='(tenant_id = iam.current_tenant_id())' AND with_check=qual)
+            OR EXISTS(SELECT 1 FROM (VALUES('matrix_iam_api'),('matrix_iam_worker'),('matrix_iam_credential_recovery'),('public')) r(name)
+                WHERE has_table_privilege(r.name,'iam.'||expected.relation_name,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+                    OR has_any_column_privilege(r.name,'iam.'||expected.relation_name,'SELECT,INSERT,UPDATE,REFERENCES')) THEN RETURN false; END IF;
+    END LOOP;
+    FOR expected IN SELECT * FROM (VALUES
+        ('session_other_revocations','tenant_id','text'::regtype),('session_other_revocations','user_id','text'::regtype),
+        ('session_other_revocations','request_id','text'::regtype),('session_other_revocations','actor_session_id','text'::regtype),
+        ('session_other_revocations','input_digest','text'::regtype),('session_other_revocations','completed_at','timestamptz'::regtype),
+        ('session_other_revocations','revoked_count','bigint'::regtype),('session_other_revocations','event_id','text'::regtype),
+        ('session_other_revocation_targets','tenant_id','text'::regtype),('session_other_revocation_targets','user_id','text'::regtype),
+        ('session_other_revocation_targets','request_id','text'::regtype),('session_other_revocation_targets','session_id','text'::regtype),
+        ('session_other_revocation_targets','resource_version','bigint'::regtype)
+    ) e(relation_name,name,data_type) LOOP
+        IF NOT EXISTS(SELECT 1 FROM pg_attribute a WHERE a.attrelid=to_regclass('iam.'||expected.relation_name)
+            AND a.attname=expected.name AND a.atttypid=expected.data_type AND a.attnotnull AND NOT a.attisdropped
+            AND (expected.data_type<>'text'::regtype OR a.attcollation='"C"'::regcollation)) THEN RETURN false; END IF;
+    END LOOP;
+    FOR expected IN SELECT * FROM (VALUES
+        ('session_other_revocations','session_other_revocations_pk','p',ARRAY['tenant_id','user_id','request_id'],NULL::text,NULL::text[],false),
+        ('session_other_revocations','session_other_revocations_event_uq','u',ARRAY['tenant_id','event_id'],NULL,NULL::text[],false),
+        ('session_other_revocations','session_other_revocations_actor_fk','f',ARRAY['tenant_id','user_id','actor_session_id'],'iam.sessions',ARRAY['tenant_id','principal_id','id'],false),
+        ('session_other_revocations','session_other_revocations_event_fk','f',ARRAY['tenant_id','event_id'],'iam.audit_outbox',ARRAY['tenant_id','event_id'],false),
+        ('session_other_revocation_targets','session_other_targets_pk','p',ARRAY['tenant_id','session_id'],NULL,NULL::text[],false),
+        ('session_other_revocation_targets','session_other_targets_completion_fk','f',ARRAY['tenant_id','user_id','request_id'],'iam.session_other_revocations',ARRAY['tenant_id','user_id','request_id'],true),
+        ('session_other_revocation_targets','session_other_targets_session_fk','f',ARRAY['tenant_id','user_id','session_id'],'iam.sessions',ARRAY['tenant_id','principal_id','id'],false)
+    ) e(relation_name,name,kind,columns,reference_table,reference_columns,deferred) LOOP
+        IF NOT EXISTS(SELECT 1 FROM pg_constraint c WHERE c.conrelid=to_regclass('iam.'||expected.relation_name)
+            AND c.conname=expected.name AND c.contype::text=expected.kind AND c.convalidated AND c.condeferrable=expected.deferred AND c.condeferred=expected.deferred
+            AND ARRAY(SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY k(number,position)
+                JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.number ORDER BY k.position)=expected.columns
+            AND (expected.kind<>'f' OR (c.confrelid=to_regclass(expected.reference_table) AND c.confupdtype='a' AND c.confdeltype='a'
+                AND ARRAY(SELECT a.attname::text FROM unnest(c.confkey) WITH ORDINALITY k(number,position)
+                    JOIN pg_attribute a ON a.attrelid=c.confrelid AND a.attnum=k.number ORDER BY k.position)=expected.reference_columns))) THEN RETURN false; END IF;
+    END LOOP;
+    IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='iam.session_other_revocations'::regclass
+        AND conname='session_other_revocations_values_valid' AND contype='c' AND convalidated)
+        OR NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='iam.session_other_revocation_targets'::regclass
+        AND conname='session_other_targets_version_valid' AND contype='c' AND convalidated) THEN RETURN false; END IF;
+    IF to_regprocedure('iam.revoke_session(text,text,text,text,jsonb)') IS NOT NULL THEN RETURN false; END IF;
+    IF NOT EXISTS(SELECT 1 FROM pg_class c WHERE c.oid=to_regclass('iam.session_self_revocations') AND c.relkind='r'
+        AND c.relowner='matrix_iam_owner'::regrole AND c.relrowsecurity AND c.relforcerowsecurity) THEN RETURN false; END IF;
+    IF (SELECT count(*) FROM pg_policies WHERE schemaname='iam' AND tablename='session_self_revocations')<>1 OR
+       NOT EXISTS(SELECT 1 FROM pg_policies WHERE schemaname='iam' AND tablename='session_self_revocations'
+        AND policyname='tenant_isolation' AND cmd='ALL' AND roles=ARRAY['public']::name[]
+        AND qual='(tenant_id = iam.current_tenant_id())' AND with_check=qual) THEN RETURN false; END IF;
+    IF EXISTS(SELECT 1 FROM (VALUES('matrix_iam_api'),('matrix_iam_worker'),('matrix_iam_credential_recovery'),('public')) r(name)
+        WHERE has_table_privilege(r.name,'iam.session_self_revocations','SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')
+          OR has_any_column_privilege(r.name,'iam.session_self_revocations','SELECT,INSERT,UPDATE,REFERENCES')) THEN RETURN false; END IF;
+    FOR expected IN SELECT * FROM (VALUES
+        ('tenant_id','text'::regtype),('user_id','text'::regtype),('request_id','text'::regtype),
+        ('actor_session_id','text'::regtype),('target_session_id','text'::regtype),('input_digest','text'::regtype),
+        ('resource_version','bigint'::regtype),('revoked_at','timestamptz'::regtype),('event_id','text'::regtype)
+    ) e(name,data_type) LOOP
+        IF NOT EXISTS(SELECT 1 FROM pg_attribute a WHERE a.attrelid='iam.session_self_revocations'::regclass
+            AND a.attname=expected.name AND a.atttypid=expected.data_type AND a.attnotnull AND NOT a.attisdropped
+            AND (expected.data_type<>'text'::regtype OR a.attcollation='"C"'::regcollation)) THEN RETURN false; END IF;
+    END LOOP;
+    FOR expected IN SELECT * FROM (VALUES
+        ('session_self_revocations_pk','p',ARRAY['tenant_id','user_id','request_id'],NULL::text,NULL::text[]),
+        ('session_self_revocations_target_uq','u',ARRAY['tenant_id','target_session_id'],NULL::text,NULL::text[]),
+        ('session_self_revocations_event_uq','u',ARRAY['tenant_id','event_id'],NULL::text,NULL::text[]),
+        ('session_self_revocations_actor_fk','f',ARRAY['tenant_id','user_id','actor_session_id'],'iam.sessions',ARRAY['tenant_id','principal_id','id']),
+        ('session_self_revocations_target_fk','f',ARRAY['tenant_id','user_id','target_session_id'],'iam.sessions',ARRAY['tenant_id','principal_id','id']),
+        ('session_self_revocations_event_fk','f',ARRAY['tenant_id','event_id'],'iam.audit_outbox',ARRAY['tenant_id','event_id'])
+    ) e(name,kind,columns,reference_table,reference_columns) LOOP
+        IF NOT EXISTS(SELECT 1 FROM pg_constraint c WHERE c.conrelid='iam.session_self_revocations'::regclass
+            AND c.conname=expected.name AND c.contype::text=expected.kind AND c.convalidated AND NOT c.condeferrable
+            AND ARRAY(SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY k(number,position)
+                JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.number ORDER BY k.position)=expected.columns
+            AND (expected.kind<>'f' OR (c.confrelid=to_regclass(expected.reference_table) AND c.confupdtype='a' AND c.confdeltype='a'
+                AND ARRAY(SELECT a.attname::text FROM unnest(c.confkey) WITH ORDINALITY k(number,position)
+                    JOIN pg_attribute a ON a.attrelid=c.confrelid AND a.attnum=k.number ORDER BY k.position)=expected.reference_columns))) THEN RETURN false; END IF;
+    END LOOP;
+    IF NOT EXISTS(SELECT 1 FROM pg_constraint c WHERE c.conrelid='iam.session_self_revocations'::regclass
+        AND c.conname='session_self_revocations_values_valid' AND c.contype='c' AND c.convalidated) THEN RETURN false; END IF;
+    FOR expected IN SELECT * FROM (VALUES
+        ('session_other_revocations','other_session_history_immutable','iam.reject_policy_history_change()',27,false),
+        ('session_other_revocations','other_session_history_no_truncate','iam.reject_policy_history_change()',34,false),
+        ('session_other_revocation_targets','other_session_history_immutable','iam.reject_policy_history_change()',27,false),
+        ('session_other_revocation_targets','other_session_history_no_truncate','iam.reject_policy_history_change()',34,false),
+        ('session_other_revocations','other_session_completion_matches_evidence','iam.guard_other_session_completion()',5,true),
+        ('audit_outbox','outbox_matches_other_session_completion','iam.guard_other_session_completion()',17,true),
+        ('session_other_revocation_targets','other_session_target_before_seal','iam.guard_other_session_target()',7,false),
+        ('session_other_revocation_targets','other_session_target_matches_state','iam.guard_other_session_target()',5,true),
+        ('sessions','sessions_match_other_completion','iam.guard_other_session_target()',25,true),
+        ('session_self_revocations','self_revocations_are_immutable','iam.reject_policy_history_change()',27,false),
+        ('session_self_revocations','self_revocations_cannot_truncate','iam.reject_policy_history_change()',34,false),
+        ('session_self_revocations','self_revocations_match_evidence','iam.guard_self_session_completion()',5,true),
+        ('sessions','sessions_match_self_completion','iam.guard_self_session_completion()',25,true),
+        ('audit_outbox','outbox_matches_self_completion','iam.guard_self_session_completion()',17,true)
+    ) e(table_name,name,signature,event_type,deferred) LOOP
+        IF NOT EXISTS(SELECT 1 FROM pg_trigger t WHERE t.tgrelid=to_regclass('iam.'||expected.table_name) AND t.tgname=expected.name
+            AND NOT t.tgisinternal AND t.tgenabled='A' AND t.tgfoid=to_regprocedure(expected.signature) AND t.tgtype=expected.event_type
+            AND t.tgdeferrable=expected.deferred AND t.tginitdeferred=expected.deferred AND t.tgqual IS NULL) THEN RETURN false; END IF;
+    END LOOP;
+    FOR expected IN SELECT * FROM (VALUES
+        ('iam.revoke_other_sessions(text,text,text,jsonb)',true,ARRAY['submitted_tenant_id','submitted_user_id','submitted_actor_session_id',
+            'submitted_audit_event','revoked_count','completed_at','applied']),
+        ('iam.list_own_sessions(text,text,text,text)',true,ARRAY['tenant','user_id','current_session','after_id','id','status','issued_at','expires_at']),
+        ('iam.revoke_session(text,text,text,text,jsonb,text)',true,ARRAY['submitted_tenant_id','submitted_session_id','submitted_actor_principal_id',
+            'submitted_decision_id','submitted_audit_event','submitted_actor_session_id','resource_version','revoked_at','applied']),
+        ('iam.lookup_session(text)',true,ARRAY['submitted_lookup_digest','organization_id','organization_display_name','organization_status',
+            'organization_resource_version','organization_created_at','organization_updated_at','principal_id','principal_type','principal_login_name',
+            'principal_display_name','principal_status','principal_must_change_password','principal_resource_version','principal_created_at','principal_updated_at',
+            'session_id','session_status','session_issued_at','session_expires_at','session_revoked_at','verification_digest','policies','boundary','credential_generation'])
+    ) e(signature,api_callable,names) LOOP
+        SELECT p.* INTO entry FROM pg_proc p WHERE p.oid=to_regprocedure(expected.signature);
+        IF NOT FOUND THEN RETURN false; END IF;
+        IF entry.proowner<>'matrix_iam_owner'::regrole OR NOT entry.prosecdef OR NOT entry.proretset OR entry.prorettype<>'record'::regtype
+            OR entry.proargnames IS DISTINCT FROM expected.names OR entry.pronargdefaults<>0 OR entry.provariadic<>0 OR entry.proisstrict
+            OR entry.provolatile<>'v' OR entry.proparallel<>'u' OR entry.proconfig IS DISTINCT FROM ARRAY['search_path=pg_catalog, pg_temp']
+            OR NOT has_function_privilege('matrix_iam_api',entry.oid,'EXECUTE')
+            OR has_function_privilege('matrix_iam_worker',entry.oid,'EXECUTE') OR has_function_privilege('matrix_iam_credential_recovery',entry.oid,'EXECUTE')
+            OR has_function_privilege('public',entry.oid,'EXECUTE') THEN RETURN false; END IF;
+    END LOOP;
+    IF NOT EXISTS(SELECT 1 FROM pg_proc p WHERE p.oid=to_regprocedure('iam.revoke_other_sessions(text,text,text,jsonb)')
+        AND p.proallargtypes=ARRAY['text'::regtype::oid,'text'::regtype::oid,'text'::regtype::oid,'jsonb'::regtype::oid,
+            'bigint'::regtype::oid,'timestamptz'::regtype::oid,'boolean'::regtype::oid]
+        AND p.proargmodes=ARRAY['i','i','i','i','t','t','t']::"char"[])
+       OR NOT EXISTS(SELECT 1 FROM pg_proc p WHERE p.oid=to_regprocedure('iam.list_own_sessions(text,text,text,text)')
+        AND p.proallargtypes=ARRAY['text'::regtype::oid,'text'::regtype::oid,'text'::regtype::oid,'text'::regtype::oid,
+            'text'::regtype::oid,'text'::regtype::oid,'timestamptz'::regtype::oid,'timestamptz'::regtype::oid]
+        AND p.proargmodes=ARRAY['i','i','i','i','t','t','t','t']::"char"[])
+       OR NOT EXISTS(SELECT 1 FROM pg_proc p WHERE p.oid=to_regprocedure('iam.revoke_session(text,text,text,text,jsonb,text)')
+        AND p.proallargtypes=ARRAY['text'::regtype::oid,'text'::regtype::oid,'text'::regtype::oid,'text'::regtype::oid,
+            'jsonb'::regtype::oid,'text'::regtype::oid,'bigint'::regtype::oid,'timestamptz'::regtype::oid,'boolean'::regtype::oid]
+        AND p.proargmodes=ARRAY['i','i','i','i','i','i','t','t','t']::"char"[]) THEN RETURN false; END IF;
+    FOR expected IN SELECT * FROM (VALUES
+        ('iam.guard_other_session_target()',true,'trigger'::regtype),
+        ('iam.guard_other_session_completion()',true,'trigger'::regtype),
+        ('iam.other_session_revocation_digest(text,text)',false,'text'::regtype),
+        ('iam.guard_self_session_completion()',true,'trigger'::regtype),
+        ('iam.self_session_revocation_digest(text,text,text)',false,'text'::regtype),
+        ('iam.login_session_contract_ready()',false,'boolean'::regtype)
+    ) e(signature,defining,result_type) LOOP
+        SELECT p.* INTO entry FROM pg_proc p WHERE p.oid=to_regprocedure(expected.signature);
+        IF NOT FOUND THEN RETURN false; END IF;
+        IF entry.proowner<>'matrix_iam_owner'::regrole OR entry.prosecdef<>expected.defining OR entry.proretset OR entry.prorettype<>expected.result_type
+            OR entry.proconfig IS DISTINCT FROM ARRAY['search_path=pg_catalog, pg_temp']
+            OR has_function_privilege('matrix_iam_api',entry.oid,'EXECUTE') OR has_function_privilege('matrix_iam_worker',entry.oid,'EXECUTE')
+            OR has_function_privilege('matrix_iam_credential_recovery',entry.oid,'EXECUTE') OR has_function_privilege('public',entry.oid,'EXECUTE') THEN RETURN false; END IF;
+    END LOOP;
+    RETURN true;
+END $function$;
+
+DROP FUNCTION IF EXISTS iam.create_user(text,text,text,text,text,text,text,jsonb);
 CREATE OR REPLACE FUNCTION iam.create_user(
     submitted_tenant_id text,
     submitted_principal_id text,
@@ -2876,7 +3571,8 @@ CREATE OR REPLACE FUNCTION iam.create_user(
     submitted_password_hash text,
     submitted_actor_principal_id text,
     submitted_decision_id text,
-    submitted_audit_event jsonb
+    submitted_audit_event jsonb,
+    submitted_settings_version bigint
 )
 RETURNS TABLE (created_at timestamptz, updated_at timestamptz)
 LANGUAGE plpgsql
@@ -2893,13 +3589,18 @@ BEGIN
        OR submitted_login_name COLLATE "C" !~ '^[a-z][a-z0-9._-]{2,63}$'
        OR length(submitted_display_name) NOT BETWEEN 1 AND 128
        OR btrim(submitted_display_name) <> submitted_display_name
-       OR submitted_password_hash NOT LIKE '$matrix-iam-v1$argon2id$v=19$%' THEN
+       OR submitted_password_hash NOT LIKE '$matrix-iam-v1$argon2id$v=19$%'
+       OR submitted_settings_version IS NULL OR submitted_settings_version NOT BETWEEN 1 AND 9007199254740991 THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'user mutation is invalid';
     END IF;
     PERFORM iam.assert_allowed_decision(
         submitted_tenant_id, submitted_actor_principal_id,
         submitted_decision_id, 'iam.user.create', 'ACCOUNT', submitted_tenant_id
     ,'INSTANCE',NULL);
+    PERFORM 1 FROM iam.accounts a WHERE a.id=submitted_tenant_id AND a.status='ACTIVE' FOR SHARE;
+    IF NOT FOUND OR submitted_settings_version IS DISTINCT FROM (SELECT a.security_settings_version FROM iam.accounts a WHERE a.id=submitted_tenant_id) THEN
+        RAISE EXCEPTION USING ERRCODE='P0002',MESSAGE='password settings changed concurrently';
+    END IF;
     PERFORM iam.assert_audit_event(
         submitted_audit_event, submitted_tenant_id,
         'iam.user.created', 'USER', submitted_principal_id, 'SUCCEEDED'
@@ -3410,19 +4111,21 @@ GRANT EXECUTE ON FUNCTION iam.issue_session(
     text, text, text, text, text, integer, jsonb, text, bigint
 ) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.lookup_session(text) TO matrix_iam_api;
+GRANT EXECUTE ON FUNCTION iam.list_own_sessions(text,text,text,text) TO matrix_iam_api;
+GRANT EXECUTE ON FUNCTION iam.revoke_other_sessions(text,text,text,jsonb) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.lookup_service(text) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.lookup_service_policies(text, text) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.record_authorization(
     text, text, jsonb, jsonb, jsonb, jsonb, integer, jsonb, jsonb
 ) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.change_password(
-    text, text, text, text, jsonb, text, boolean, text, bigint
+    text, text, text, text, jsonb, text, boolean, text, bigint, text, bigint
 ) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.revoke_session(
-    text, text, text, text, jsonb
+    text, text, text, text, jsonb, text
 ) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.create_user(
-    text, text, text, text, text, text, text, jsonb
+    text, text, text, text, text, text, text, jsonb, bigint
 ) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.create_policy_attachment(
     text, text, text, text, text, bigint, text, text, jsonb, text

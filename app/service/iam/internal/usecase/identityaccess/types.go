@@ -85,6 +85,8 @@ type Transaction interface {
 	ProveStepUp(context.Context, StepUpVerification) (iamv1.StepUp, error)
 	RegenerateRecoveryCodes(context.Context, RecoveryCodeRegenerationMutation) (RecoveryCodeRegenerationResult, error)
 	ReadRecoveryCodeRegeneration(context.Context, iamv1.Session, string) (iamv1.RecoveryCodeRegeneration, error)
+	RemoveTOTP(context.Context, AuthenticatorRemovalMutation) (iamv1.RemoveTOTPResponse, error)
+	ReadAuthenticatorRemoval(context.Context, iamv1.Session, string) (iamv1.AuthenticatorRemoval, error)
 	CreateLoginChallenge(context.Context, LoginChallengeCreation) (iamv1.AuthenticationChallenge, error)
 	LookupAuthenticationChallenge(context.Context, string) (AuthenticationChallengeCredential, bool, error)
 	ReserveTOTPAttempt(context.Context, TOTPAttempt) (TOTPAttempt, bool, error)
@@ -92,10 +94,13 @@ type Transaction interface {
 	RejectTOTPAttempt(context.Context, TOTPAttempt) error
 	CompleteLoginChallenge(context.Context, LoginChallengeCompletion) (iamv1.Session, error)
 	BeginPasswordChallenge(context.Context, PasswordChallengeCreation) (iamv1.AuthenticationChallenge, error)
-	ReadPasswordChallenge(context.Context, AuthenticationChallengeCredential) (ChallengePasswordMaterial, error)
+	ReadPasswordChallenge(context.Context, AuthenticationChallengeCredential) (PasswordReplacementMaterial, error)
+	ReadChallengePasswordRequirements(context.Context, AuthenticationChallengeCredential) (iamv1.PasswordRequirements, error)
 	ChangeChallengePassword(context.Context, ChallengePasswordMutation) (iamv1.ChallengePasswordChangeResponse, error)
 	IssueSession(context.Context, SessionMutation) (iamv1.Session, error)
 	LookupSession(context.Context, string) (SessionCredential, bool, error)
+	ListOwnSessions(context.Context, OwnSessionRead) ([]iamv1.Session, error)
+	ReadPasswordRequirements(context.Context, iamv1.Session) (iamv1.PasswordRequirements, error)
 	LookupRoleSession(context.Context, string) (RoleSessionCredential, bool, error)
 	LookupRoleSessionForExit(context.Context, string) (RoleSessionExitCredential, bool, error)
 	ExitRoleSession(context.Context, string, auditv1.Event) (iamv1.RoleSession, error)
@@ -109,7 +114,9 @@ type Transaction interface {
 	RecordAuthorization(context.Context, AuthorizationMutation) error
 	ChangePassword(context.Context, PasswordMutation) (iamv1.ChangePasswordResponse, error)
 	RevokeSession(context.Context, SessionRevocationMutation) (iamv1.Revocation, bool, error)
+	RevokeOtherSessions(context.Context, OtherSessionRevocationMutation) (iamv1.RevokeOtherSessionsResponse, error)
 	CreateUser(context.Context, UserMutation) (iamv1.User, error)
+	ReadUserCreationPasswordSettings(context.Context, AccountRead) (iamv1.AccountPasswordSettings, uint64, error)
 	LookupPolicy(context.Context, iamv1.AccountID, iamv1.PolicyID) (iamv1.Policy, bool, error)
 	LookupPolicyAttachment(context.Context, iamv1.AccountID, iamv1.PolicyAttachmentID) (iamv1.PolicyAttachment, bool, error)
 	CreatePolicyAttachment(context.Context, PolicyAttachmentMutation) (iamv1.PolicyAttachment, error)
@@ -164,16 +171,18 @@ type Transaction interface {
 	DeletePolicy(context.Context, PolicyDeletion) (iamv1.Policy, error)
 	ListAccounts(context.Context, AccountRead) (AccountManagementPage, error)
 	ReadAccountAsPlatform(context.Context, AccountRead, iamv1.AccountID) (AccountManagementSnapshot, error)
-	ReadAccountRoot(context.Context, AccountRead, iamv1.AccountID) (iamv1.RootIdentity, error)
+	ReadRootPasswordRecovery(context.Context, AccountRead, iamv1.AccountID, uint64) (iamv1.RootIdentity, PasswordReplacementMaterial, error)
 	CreateAccount(context.Context, AccountMutation) (iamv1.Account, error)
 	SetAccountStatus(context.Context, AccountStatusMutation) (iamv1.Account, error)
 	RecoverRootCredentials(context.Context, RootCredentialRecovery) (iamv1.Account, error)
 	InspectLocalCredentialRecovery(context.Context, iamv1.LocalCredentialRecoveryScope, *iamv1.LocalCredentialRecoveryReceiptQuery) (iamv1.LocalCredentialRecoveryInspection, error)
+	PrepareLocalCredentialRecovery(context.Context, iamv1.LocalCredentialRecoveryScope, iamv1.LocalCredentialRecoveryExpected, iamv1.LocalCredentialRecoveryReceiptQuery) (iamv1.LocalCredentialRecoveryInspection, PasswordReplacementMaterial, error)
 	RecoverLocalCredentials(context.Context, LocalCredentialRecoveryMutation) (iamv1.LocalCredentialRecoveryResult, error)
 	SetAccountAlias(context.Context, AccountAliasMutation) (iamv1.Account, error)
 	UpdateUser(context.Context, UserProfileMutation) (iamv1.User, error)
 	DeleteUser(context.Context, UserDeletionMutation) (iamv1.UserDeletion, error)
 	ChangeUser(context.Context, UserChange) (iamv1.User, error)
+	ReadPasswordReset(context.Context, AccountRead, iamv1.PrincipalID, uint64) (PasswordReplacementMaterial, error)
 	Readiness(context.Context) (ReadinessSnapshot, error)
 }
 
@@ -456,6 +465,7 @@ type RootCredentialRecovery struct {
 	PrincipalID      iamv1.PrincipalID
 	ResourceVersion  uint64
 	PasswordHash     authority.PasswordHash
+	ExpectedPassword PasswordReplacementMaterial
 	AttachmentID     iamv1.PolicyAttachmentID
 	AuditEvent       auditv1.Event
 }
@@ -463,13 +473,31 @@ type RootCredentialRecovery struct {
 // The local entry authenticates this mutation with installation-private
 // authority, never a USER decision or an existing service credential.
 type LocalCredentialRecoveryMutation struct {
-	Scope           iamv1.LocalCredentialRecoveryScope
-	Expected        iamv1.LocalCredentialRecoveryExpected
-	CommandID       string
-	InputCommitment string
-	PasswordHash    authority.PasswordHash
-	AuditEvent      auditv1.Event
+	Scope            iamv1.LocalCredentialRecoveryScope
+	Expected         iamv1.LocalCredentialRecoveryExpected
+	CommandID        string
+	InputCommitment  string
+	PasswordHash     authority.PasswordHash
+	ExpectedPassword PasswordReplacementMaterial
+	AuditEvent       auditv1.Event
 }
+
+// Private, purpose-authorized preparation. Never an HTTP response or a permit:
+// a final write must recheck current authority and these exact credential values.
+type PasswordReplacementMaterial struct {
+	PasswordHash         authority.PasswordHash
+	CredentialGeneration uint64
+	PasswordHistory      []authority.PasswordHash
+	HistoryDigest        string
+	PasswordSettings     iamv1.AccountPasswordSettings
+	SettingsVersion      uint64
+}
+
+func (PasswordReplacementMaterial) String() string { return "[REDACTED]" }
+func (PasswordReplacementMaterial) GoString() string {
+	return "identityaccess.PasswordReplacementMaterial{[REDACTED]}"
+}
+func (PasswordReplacementMaterial) MarshalJSON() ([]byte, error) { return nil, ErrUnavailable }
 
 type UserChange struct {
 	AccountID        iamv1.AccountID
@@ -479,6 +507,7 @@ type UserChange struct {
 	ResourceVersion  uint64
 	Status           *iamv1.PrincipalStatus
 	PasswordHash     *authority.PasswordHash
+	ExpectedPassword *PasswordReplacementMaterial
 	AuditEvent       auditv1.Event
 }
 
@@ -600,6 +629,10 @@ type PasswordAttempt struct {
 	SessionID            iamv1.SessionID
 	PasswordHash         authority.PasswordHash
 	CredentialGeneration uint64
+	PasswordHistory      []authority.PasswordHash
+	HistoryDigest        string
+	PasswordSettings     iamv1.AccountPasswordSettings
+	SettingsVersion      uint64
 	MustChangePassword   bool
 	ExpiresAt            time.Time
 	Purpose              PasswordAttemptPurpose
@@ -624,6 +657,13 @@ type SessionCredential struct {
 	Subject              authority.SubjectContext
 	VerificationDigest   string
 	CredentialGeneration uint64
+}
+
+type OwnSessionRead struct {
+	AccountID        iamv1.AccountID
+	UserID           iamv1.PrincipalID
+	CurrentSessionID iamv1.SessionID
+	After            string
 }
 
 type RoleSessionCredential struct {
@@ -699,31 +739,42 @@ type UserBoundaryMutation struct {
 }
 
 type PasswordMutation struct {
-	AttemptID            string
-	AttemptSequence      uint64
-	AccountID            iamv1.AccountID
-	PrincipalID          iamv1.PrincipalID
-	SessionID            iamv1.SessionID
-	RevokeOtherSessions  bool
-	ExpectedPasswordHash authority.PasswordHash
-	NewPasswordHash      authority.PasswordHash
-	AuditEvent           auditv1.Event
+	AttemptID               string
+	AttemptSequence         uint64
+	AccountID               iamv1.AccountID
+	PrincipalID             iamv1.PrincipalID
+	SessionID               iamv1.SessionID
+	RevokeOtherSessions     bool
+	ExpectedPasswordHash    authority.PasswordHash
+	ExpectedHistoryDigest   string
+	ExpectedSettingsVersion uint64
+	NewPasswordHash         authority.PasswordHash
+	AuditEvent              auditv1.Event
 }
 
 type SessionRevocationMutation struct {
 	AccountID        iamv1.AccountID
 	SessionID        iamv1.SessionID
 	ActorPrincipalID iamv1.PrincipalID
+	ActorSessionID   iamv1.SessionID
 	DecisionID       iamv1.DecisionID
 	AuditEvent       auditv1.Event
 }
 
+type OtherSessionRevocationMutation struct {
+	AccountID      iamv1.AccountID
+	UserID         iamv1.PrincipalID
+	ActorSessionID iamv1.SessionID
+	AuditEvent     auditv1.Event
+}
+
 type UserMutation struct {
-	User             iamv1.User
-	PasswordHash     authority.PasswordHash
-	ActorPrincipalID iamv1.PrincipalID
-	DecisionID       iamv1.DecisionID
-	AuditEvent       auditv1.Event
+	User                    iamv1.User
+	PasswordHash            authority.PasswordHash
+	ExpectedSettingsVersion uint64
+	ActorPrincipalID        iamv1.PrincipalID
+	DecisionID              iamv1.DecisionID
+	AuditEvent              auditv1.Event
 }
 
 type PolicyCreation struct {

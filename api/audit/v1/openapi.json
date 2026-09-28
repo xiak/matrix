@@ -33,6 +33,7 @@
           "iam.notification-contact.verified",
           "iam.authenticator.bound",
           "iam.authenticator.replaced",
+          "iam.authenticator.removed",
           "iam.authenticator.recovery-started",
           "iam.authenticator.recovered",
           "iam.recovery-codes.regenerated",
@@ -78,6 +79,7 @@
           "iam.bootstrap.applied",
           "iam.session.issued",
           "iam.session.revoked",
+          "iam.session.others-revoked",
           "iam.password.changed",
           "iam.principal.created",
           "iam.role-binding.put",
@@ -636,6 +638,32 @@
                   "properties": {
                     "action": {
                       "const": "iam.authenticator.replaced"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "IAM"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.authenticator.removed"
                     }
                   },
                   "required": [
@@ -1806,6 +1834,32 @@
                   "properties": {
                     "action": {
                       "const": "iam.session.revoked"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "IAM"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.session.others-revoked"
                     }
                   },
                   "required": [
@@ -3632,6 +3686,52 @@
               "properties": {
                 "action": {
                   "const": "iam.authenticator.replaced"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actor": {
+                  "properties": {
+                    "accessKeyId": false,
+                    "type": {
+                      "const": "USER"
+                    }
+                  }
+                },
+                "iamDecisionId": false,
+                "installationId": false,
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "PRINCIPAL"
+                    },
+                    "tenantId": false
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "tenantId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.authenticator.removed"
                 }
               },
               "required": [
@@ -5769,6 +5869,52 @@
                   "properties": {
                     "kind": {
                       "const": "SESSION"
+                    },
+                    "tenantId": false
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "tenantId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.session.others-revoked"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actor": {
+                  "properties": {
+                    "accessKeyId": false,
+                    "type": {
+                      "const": "USER"
+                    }
+                  }
+                },
+                "iamDecisionId": false,
+                "installationId": false,
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "PRINCIPAL"
                     },
                     "tenantId": false
                   },

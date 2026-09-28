@@ -559,6 +559,17 @@ automatic first authorization from absent role data is rejected. A future
 published predecessor would require a distinct signed, version-scoped
 transition owned by [FEAT-008](FEAT-008-linux-host-management.md).
 
+The current IAM 49 / Audit 27 / PaaS 6, revision 17 integration candidate
+adapts fixed `9df4512` into this branch's existing host, terminal and
+self-session boundaries. Local full Go/vet, focused race, stable contract
+generation and PostgreSQL 18 IAM/Audit HTTP, retained-executable and
+independent-process gates passed; the terminal policy assertions were retained
+in the consuming IAM HTTP test. The bounded local database container and its
+ephemeral data were removed. This does not accept the signed revision 16 to 17
+upgrade, rollback, recovery or final two-host release gate. The donor's
+independent capacity CI lane failed during module-cache setup before tests,
+so its result is not treated as an all-green authority gate.
+
 - Gate A was accepted on 2026-08-26. Strict generated Go/OpenAPI contracts,
   current-credential-only service identity, fixed Argon2id and
   opaque-credential behavior, closed RBAC decisions, bootstrap and Audit replay

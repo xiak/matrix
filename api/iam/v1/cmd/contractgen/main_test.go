@@ -34,6 +34,34 @@ func TestPasswordOverloadOnlyDocumentsTheBoundedAuthenticationEntrypoints(t *tes
 	}
 }
 
+func TestPasswordRequirementsPublishOnlySelfAndOriginalChallenge(t *testing.T) {
+	paths := buildPaths()
+	own := paths["/v1/auth/password-requirements"].(object)
+	if len(own) != 1 || own["get"] == nil {
+		t.Fatal("self rules have another method")
+	}
+	get := own["get"].(object)
+	if get["requestBody"] != nil || get["parameters"] != nil || get["security"] != nil || get["responses"].(object)["400"] == nil {
+		t.Fatal("self requirements changed login-Session authority or accepted selectors")
+	}
+	challenge := paths["/v1/auth/challenges/{challengeId}/password-requirements"].(object)
+	if len(challenge) != 1 || challenge["post"] == nil {
+		t.Fatal("challenge secret became a GET parameter")
+	}
+	post := challenge["post"].(object)
+	if security, ok := post["security"].([]any); !ok || len(security) != 0 {
+		t.Fatal("challenge inherited bearer authentication")
+	}
+	parameters := post["parameters"].([]any)
+	if len(parameters) != 1 || parameters[0].(object)["name"] != "challengeId" || parameters[0].(object)["in"] != "path" {
+		t.Fatal("challenge rules accept an authority selector")
+	}
+	request := post["requestBody"].(object)["content"].(object)["application/json"].(object)["schema"].(object)
+	if request["$ref"] != "#/components/schemas/ChallengePasswordRequirementsRequest" {
+		t.Fatal("challenge rules use another secret carrier")
+	}
+}
+
 func TestSecuritySettingsPublishesExactMutationAndOwnCompletion(t *testing.T) {
 	document := buildDocument()
 	found := 0

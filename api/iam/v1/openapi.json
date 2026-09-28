@@ -614,6 +614,42 @@
         ],
         "type": "object"
       },
+      "AccountPasswordSettings": {
+        "additionalProperties": false,
+        "properties": {
+          "historyCount": {
+            "maximum": 24,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "minimumLength": {
+            "maximum": 128,
+            "minimum": 15,
+            "type": "integer"
+          },
+          "requireDigit": {
+            "type": "boolean"
+          },
+          "requireLowercase": {
+            "type": "boolean"
+          },
+          "requireSymbol": {
+            "type": "boolean"
+          },
+          "requireUppercase": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "historyCount",
+          "minimumLength",
+          "requireDigit",
+          "requireLowercase",
+          "requireSymbol",
+          "requireUppercase"
+        ],
+        "type": "object"
+      },
       "AccountSecuritySettings": {
         "additionalProperties": false,
         "description": "Non-secret current-account configuration returned only under a current instance-scoped read decision. Neither factor state nor Session authentication facts.",
@@ -630,6 +666,9 @@
           "mfa": {
             "$ref": "#/components/schemas/AccountMFASettings"
           },
+          "password": {
+            "$ref": "#/components/schemas/AccountPasswordSettings"
+          },
           "resourceVersion": {
             "maximum": 9007199254740991,
             "minimum": 1,
@@ -645,7 +684,8 @@
           "kind",
           "mfa",
           "resourceVersion",
-          "updatedAt"
+          "updatedAt",
+          "password"
         ],
         "type": "object"
       },
@@ -672,7 +712,42 @@
             "$ref": "#/components/schemas/ID"
           },
           "settings": {
-            "$ref": "#/components/schemas/AccountSecuritySettings"
+            "additionalProperties": false,
+            "description": "Original settings at completion. A missing password segment records an actual pre-password completion; never current configuration, a default or a new write.",
+            "properties": {
+              "accountId": {
+                "$ref": "#/components/schemas/ID"
+              },
+              "apiVersion": {
+                "const": "iam.matrix.xiak.com/v1"
+              },
+              "kind": {
+                "const": "AccountSecuritySettings"
+              },
+              "mfa": {
+                "$ref": "#/components/schemas/AccountMFASettings"
+              },
+              "password": {
+                "$ref": "#/components/schemas/AccountPasswordSettings"
+              },
+              "resourceVersion": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "updatedAt": {
+                "$ref": "#/components/schemas/Timestamp"
+              }
+            },
+            "required": [
+              "accountId",
+              "apiVersion",
+              "kind",
+              "mfa",
+              "resourceVersion",
+              "updatedAt"
+            ],
+            "type": "object"
           }
         },
         "required": [
@@ -1238,6 +1313,45 @@
         ],
         "type": "object"
       },
+      "AuthenticatorRemoval": {
+        "additionalProperties": false,
+        "description": "Immutable non-secret completion, not current factor state or authentication authority. factorRevision is the resulting revision after removal.",
+        "properties": {
+          "apiVersion": {
+            "const": "iam.matrix.xiak.com/v1"
+          },
+          "factorId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "factorRevision": {
+            "maximum": 9007199254740991,
+            "minimum": 3,
+            "type": "integer"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "kind": {
+            "const": "AuthenticatorRemoval"
+          },
+          "removedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "factorId",
+          "factorRevision",
+          "id",
+          "kind",
+          "removedAt",
+          "requestId"
+        ],
+        "type": "object"
+      },
       "AuthenticatorState": {
         "additionalProperties": false,
         "oneOf": [
@@ -1271,6 +1385,17 @@
                 "const": "RECOVERY_REQUIRED"
               }
             }
+          },
+          {
+            "properties": {
+              "enrollmentState": {
+                "const": "REMOVED"
+              },
+              "factorId": false,
+              "factorRevision": {
+                "minimum": 3
+              }
+            }
           }
         ],
         "properties": {
@@ -1281,7 +1406,8 @@
             "enum": [
               "NEVER_BOUND",
               "BOUND",
-              "RECOVERY_REQUIRED"
+              "RECOVERY_REQUIRED",
+              "REMOVED"
             ]
           },
           "factorId": {
@@ -12555,6 +12681,20 @@
         ],
         "type": "object"
       },
+      "ChallengePasswordRequirementsRequest": {
+        "additionalProperties": false,
+        "description": "Only the original live LOGIN or ENROLLMENT PASSWORD_CHANGE challenge credential. No Session, password or identity selector.",
+        "properties": {
+          "challengeCredential": {
+            "$ref": "#/components/schemas/Secret",
+            "writeOnly": true
+          }
+        },
+        "required": [
+          "challengeCredential"
+        ],
+        "type": "object"
+      },
       "ChangePasswordRequest": {
         "additionalProperties": false,
         "properties": {
@@ -13348,7 +13488,14 @@
               "enrollment": {
                 "properties": {
                   "factorRevision": {
-                    "const": 1
+                    "oneOf": [
+                      {
+                        "const": 1
+                      },
+                      {
+                        "minimum": 3
+                      }
+                    ]
                   },
                   "purpose": {
                     "const": "INITIAL"
@@ -14495,6 +14642,91 @@
           "attempts",
           "state",
           "updatedAt"
+        ],
+        "type": "object"
+      },
+      "PasswordRequirements": {
+        "additionalProperties": false,
+        "description": "Current self-only password rules, measured in Unicode code points and UTF-8 bytes. An observation, never a write permit; final replacement rechecks current qualification and settings.",
+        "oneOf": [
+          {
+            "properties": {
+              "source": {
+                "const": "ACCOUNT"
+              }
+            }
+          },
+          {
+            "properties": {
+              "password": {
+                "properties": {
+                  "historyCount": {
+                    "const": 1
+                  },
+                  "minimumLength": {
+                    "const": 15
+                  },
+                  "requireDigit": {
+                    "const": false
+                  },
+                  "requireLowercase": {
+                    "const": false
+                  },
+                  "requireSymbol": {
+                    "const": false
+                  },
+                  "requireUppercase": {
+                    "const": false
+                  }
+                }
+              },
+              "source": {
+                "const": "PROTECTED_IDENTITY"
+              }
+            }
+          }
+        ],
+        "properties": {
+          "apiVersion": {
+            "const": "iam.matrix.xiak.com/v1",
+            "type": "string"
+          },
+          "kind": {
+            "const": "PasswordRequirements",
+            "type": "string"
+          },
+          "maximumLength": {
+            "const": 128,
+            "type": "integer"
+          },
+          "maximumUTF8Bytes": {
+            "const": 512,
+            "type": "integer"
+          },
+          "password": {
+            "$ref": "#/components/schemas/AccountPasswordSettings"
+          },
+          "settingsVersion": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "source": {
+            "enum": [
+              "ACCOUNT",
+              "PROTECTED_IDENTITY"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "maximumLength",
+          "maximumUTF8Bytes",
+          "password",
+          "settingsVersion",
+          "source"
         ],
         "type": "object"
       },
@@ -21324,6 +21556,72 @@
         ],
         "type": "object"
       },
+      "RemoveTOTPRequest": {
+        "additionalProperties": false,
+        "description": "Removal intent bound to the caller's current login Session and original same-purpose proof. Data contract only; no removal route is enabled yet.",
+        "properties": {
+          "expectedFactorRevision": {
+            "maximum": 9007199254740990,
+            "minimum": 2,
+            "type": "integer"
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "stepUpId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "expectedFactorRevision",
+          "requestId",
+          "stepUpId"
+        ],
+        "type": "object"
+      },
+      "RemoveTOTPResponse": {
+        "additionalProperties": false,
+        "description": "Only first application ends old login eligibility. Historical observation must not instruct a client to end a newer Session.",
+        "oneOf": [
+          {
+            "properties": {
+              "outcome": {
+                "const": "APPLIED"
+              }
+            },
+            "required": [
+              "nextStep"
+            ]
+          },
+          {
+            "properties": {
+              "nextStep": false,
+              "outcome": {
+                "const": "EQUAL_REPLAY"
+              }
+            }
+          }
+        ],
+        "properties": {
+          "nextStep": {
+            "const": "REAUTHENTICATE"
+          },
+          "outcome": {
+            "enum": [
+              "APPLIED",
+              "EQUAL_REPLAY"
+            ]
+          },
+          "removal": {
+            "$ref": "#/components/schemas/AuthenticatorRemoval"
+          }
+        },
+        "required": [
+          "outcome",
+          "removal"
+        ],
+        "type": "object"
+      },
       "RemoveUserPermissionBoundaryRequest": {
         "additionalProperties": false,
         "properties": {
@@ -21454,6 +21752,76 @@
           "kind",
           "resourceVersion",
           "revokedAt"
+        ],
+        "type": "object"
+      },
+      "RevokeOtherSessionsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "accountId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "apiVersion": {
+            "type": "string"
+          },
+          "completedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "currentSessionId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "kind": {
+            "const": "OtherSessionsRevocation"
+          },
+          "outcome": {
+            "enum": [
+              "APPLIED",
+              "EQUAL_REPLAY"
+            ],
+            "type": "string"
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "revokedCount": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "userId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "accountId",
+          "apiVersion",
+          "completedAt",
+          "currentSessionId",
+          "kind",
+          "outcome",
+          "requestId",
+          "revokedCount",
+          "userId"
+        ],
+        "type": "object"
+      },
+      "RevokeOwnSessionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "outcome": {
+            "enum": [
+              "APPLIED",
+              "EQUAL_REPLAY"
+            ],
+            "type": "string"
+          },
+          "revocation": {
+            "$ref": "#/components/schemas/Revocation"
+          }
+        },
+        "required": [
+          "outcome",
+          "revocation"
         ],
         "type": "object"
       },
@@ -22291,11 +22659,15 @@
           },
           "mfa": {
             "$ref": "#/components/schemas/AccountMFASettings"
+          },
+          "password": {
+            "$ref": "#/components/schemas/AccountPasswordSettings"
           }
         },
         "required": [
           "expectedResourceVersion",
-          "mfa"
+          "mfa",
+          "password"
         ],
         "type": "object"
       },
@@ -22413,6 +22785,67 @@
             "$ref": "#/components/schemas/ID"
           }
         ]
+      },
+      "SessionList": {
+        "additionalProperties": false,
+        "properties": {
+          "accountId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "apiVersion": {
+            "type": "string"
+          },
+          "currentSessionId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "items": {
+            "items": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Session"
+                },
+                {
+                  "properties": {
+                    "revokedAt": false,
+                    "status": {
+                      "const": "ACTIVE"
+                    }
+                  }
+                }
+              ]
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "nextCursor": {
+            "maxLength": 384,
+            "minLength": 5,
+            "not": {
+              "pattern": "[^A-Za-z0-9._-]"
+            },
+            "pattern": "^ic1\\.[A-Za-z0-9_-]+$",
+            "type": "string"
+          },
+          "observedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "userId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "accountId",
+          "apiVersion",
+          "currentSessionId",
+          "items",
+          "kind",
+          "observedAt",
+          "userId"
+        ],
+        "type": "object"
       },
       "SessionStatus": {
         "enum": [
@@ -22823,6 +23256,17 @@
               },
               {
                 "properties": {
+                  "expectedFactorRevision": {
+                    "maximum": 9007199254740990
+                  },
+                  "operation": {
+                    "const": "TOTP_REMOVE"
+                  },
+                  "securitySettings": false
+                }
+              },
+              {
+                "properties": {
                   "operation": {
                     "const": "SECURITY_SETTINGS_UPDATE"
                   },
@@ -22847,7 +23291,8 @@
             "enum": [
               "RECOVERY_CODES_REGENERATE",
               "SECURITY_SETTINGS_UPDATE",
-              "TOTP_REPLACE"
+              "TOTP_REPLACE",
+              "TOTP_REMOVE"
             ]
           },
           "requestId": {
@@ -22988,11 +23433,40 @@
               },
               {
                 "properties": {
+                  "expectedFactorRevision": {
+                    "maximum": 9007199254740990
+                  },
+                  "operation": {
+                    "const": "TOTP_REMOVE"
+                  },
+                  "securitySettings": false
+                }
+              },
+              {
+                "properties": {
                   "operation": {
                     "const": "SECURITY_SETTINGS_UPDATE"
                   },
                   "securitySettings": {
                     "$ref": "#/components/schemas/SecuritySettingsUpdateIntent"
+                  }
+                },
+                "required": [
+                  "securitySettings"
+                ]
+              },
+              {
+                "properties": {
+                  "operation": {
+                    "const": "SECURITY_SETTINGS_UPDATE"
+                  },
+                  "securitySettings": {
+                    "properties": {
+                      "password": false
+                    }
+                  },
+                  "state": {
+                    "const": "CONSUMED"
                   }
                 },
                 "required": [
@@ -23084,7 +23558,8 @@
             "enum": [
               "RECOVERY_CODES_REGENERATE",
               "SECURITY_SETTINGS_UPDATE",
-              "TOTP_REPLACE"
+              "TOTP_REPLACE",
+              "TOTP_REMOVE"
             ]
           },
           "provedAt": {
@@ -23094,7 +23569,25 @@
             "$ref": "#/components/schemas/ID"
           },
           "securitySettings": {
-            "$ref": "#/components/schemas/SecuritySettingsUpdateIntent"
+            "additionalProperties": false,
+            "properties": {
+              "expectedResourceVersion": {
+                "maximum": 9007199254740990,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "mfa": {
+                "$ref": "#/components/schemas/AccountMFASettings"
+              },
+              "password": {
+                "$ref": "#/components/schemas/AccountPasswordSettings"
+              }
+            },
+            "required": [
+              "expectedResourceVersion",
+              "mfa"
+            ],
+            "type": "object"
           },
           "state": {
             "enum": [
@@ -23375,7 +23868,7 @@
       },
       "UpdateAccountSecuritySettingsRequest": {
         "additionalProperties": false,
-        "description": "Replace the supported MFA configuration at one expected version using a proof held by the actual current Session and current instance permission. No identity selector, arbitrary patch or caller-controlled Session retention.",
+        "description": "Replace the complete MFA and password configuration at one expected version using a proof held by the actual current Session and current instance permission. No identity selector, arbitrary patch or caller-controlled Session retention.",
         "properties": {
           "expectedResourceVersion": {
             "maximum": 9007199254740990,
@@ -23384,6 +23877,9 @@
           },
           "mfa": {
             "$ref": "#/components/schemas/AccountMFASettings"
+          },
+          "password": {
+            "$ref": "#/components/schemas/AccountPasswordSettings"
           },
           "requestId": {
             "$ref": "#/components/schemas/ID"
@@ -23395,6 +23891,7 @@
         "required": [
           "expectedResourceVersion",
           "mfa",
+          "password",
           "requestId",
           "stepUpId"
         ],
@@ -23403,6 +23900,31 @@
       "UpdateAccountSecuritySettingsResponse": {
         "additionalProperties": false,
         "description": "APPLIED and EQUAL_REPLAY carry the same original non-secret completion, not fresh authorization, current Session state or a credential.",
+        "oneOf": [
+          {
+            "properties": {
+              "change": {
+                "properties": {
+                  "settings": {
+                    "required": [
+                      "password"
+                    ]
+                  }
+                }
+              },
+              "outcome": {
+                "const": "APPLIED"
+              }
+            }
+          },
+          {
+            "properties": {
+              "outcome": {
+                "const": "EQUAL_REPLAY"
+              }
+            }
+          }
+        ],
         "properties": {
           "change": {
             "$ref": "#/components/schemas/AccountSecuritySettingsChange"
@@ -23720,6 +24242,59 @@
           "apiVersion",
           "items",
           "kind"
+        ],
+        "type": "object"
+      },
+      "UserPasswordResetCompletion": {
+        "additionalProperties": false,
+        "description": "Non-secret confirmation of one committed administrator reset, not password-input equality, current credential validity, Audit delivery or replay authority. Runtime validation requires a distinct actor and target, resultingResourceVersion = expectedResourceVersion + 1, and the original UTC microsecond fact time. Lookup must bind current Account/actor authorization and the exact original target/request/version; schema validation alone proves neither provenance nor completion.",
+        "properties": {
+          "accountId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "actorPrincipalId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "apiVersion": {
+            "const": "iam.matrix.xiak.com/v1"
+          },
+          "eventId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "expectedResourceVersion": {
+            "maximum": 9007199254740990,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "kind": {
+            "const": "UserPasswordResetCompletion"
+          },
+          "occurredAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "resultingResourceVersion": {
+            "maximum": 9007199254740991,
+            "minimum": 2,
+            "type": "integer"
+          },
+          "userId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "accountId",
+          "actorPrincipalId",
+          "apiVersion",
+          "eventId",
+          "expectedResourceVersion",
+          "kind",
+          "occurredAt",
+          "requestId",
+          "resultingResourceVersion",
+          "userId"
         ],
         "type": "object"
       },
@@ -24631,6 +25206,75 @@
         },
         "security": [],
         "summary": "Consume the original contact-possession code within its initial-enrollment challenge; no session or MFA bypass"
+      }
+    },
+    "/v1/auth/challenges/{challengeId}/password-requirements": {
+      "post": {
+        "operationId": "challengePasswordRequirements",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "challengeId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChallengePasswordRequirementsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasswordRequirements"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [],
+        "summary": "Observe only this live LOGIN or ENROLLMENT PASSWORD_CHANGE challenge's effective password rules; never a write permit"
       }
     },
     "/v1/auth/challenges/{challengeId}:confirm-enrollment": {
@@ -25649,6 +26293,40 @@
         "summary": "Change the current user password"
       }
     },
+    "/v1/auth/password-requirements": {
+      "get": {
+        "operationId": "passwordRequirements",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PasswordRequirements"
+                }
+              }
+            },
+            "description": "Current authority state."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse",
+            "description": "Invalid path, query or unexpected body; no identity selector is accepted."
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Observe the actual login session user's effective new-password rules, including forced-change sessions; no identity selector or write permit"
+      }
+    },
     "/v1/auth/recovery-codes/regenerations/by-request/{requestId}": {
       "get": {
         "operationId": "getRecoveryCodeRegenerationByRequest",
@@ -25956,6 +26634,176 @@
           }
         },
         "summary": "Revoke the source user's original issuance without requiring current assume authority"
+      }
+    },
+    "/v1/auth/sessions": {
+      "get": {
+        "operationId": "listOwnSessions",
+        "parameters": [
+          {
+            "description": "Pass nextCursor unchanged. Bound to this actual login session, credential generation and installation; no account/user/current-session selectors.",
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "maxLength": 384,
+              "minLength": 5,
+              "not": {
+                "pattern": "[^A-Za-z0-9._-]"
+              },
+              "pattern": "^ic1\\.[A-Za-z0-9_-]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionList"
+                }
+              }
+            },
+            "description": "Current authority state."
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Observe only the current user's valid login sessions; not devices or online activity"
+      }
+    },
+    "/v1/auth/sessions/{sessionId}:revoke": {
+      "post": {
+        "operationId": "revokeOwnSession",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sessionId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeSessionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevokeOwnSessionResponse"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "End another login session of the current user; the current session must use logout"
+      }
+    },
+    "/v1/auth/sessions:revoke-others": {
+      "post": {
+        "operationId": "revokeOtherSessions",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeSessionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RevokeOtherSessionsResponse"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Atomically end the current user's other login sessions; exact replay preserves later logins"
       }
     },
     "/v1/auth/step-up": {
@@ -26502,6 +27350,112 @@
           }
         },
         "summary": "Consume the original same-Session TOTP_REPLACE proof and prepare a new pending factor within its original deadline; keep the old factor and batch until confirmation; provisioning is returned once"
+      }
+    },
+    "/v1/auth/totp/removals/by-request/{requestId}": {
+      "get": {
+        "operationId": "getAuthenticatorRemovalByRequest",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "requestId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthenticatorRemoval"
+                }
+              }
+            },
+            "description": "Current authority state."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse",
+            "description": "Invalid path, query or unexpected body; no identity selector is accepted."
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse",
+            "description": "No original same-USER metadata observed; not evidence that an uncertain command rolled back, and not permission to create a replacement intent."
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Read the original same-USER removal using a current valid login Session; never repeat removal effects"
+      }
+    },
+    "/v1/auth/totp:remove": {
+      "post": {
+        "operationId": "removeTOTP",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RemoveTOTPRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RemoveTOTPResponse"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Consume the exact same-Session TOTP_REMOVE proof; APPLIED terminates old login Sessions, EQUAL_REPLAY only observes the original completion"
       }
     },
     "/v1/authorization-profiles": {

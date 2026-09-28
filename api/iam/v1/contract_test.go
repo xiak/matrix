@@ -214,12 +214,102 @@ func FuzzEnrollmentChallengeRequests(f *testing.F) {
 	})
 }
 
+func TestAccountPasswordSettingsRequireCompleteBoundedValues(t *testing.T) {
+	wire := `{"minimumLength":15,"requireLowercase":false,"requireUppercase":false,"requireDigit":false,"requireSymbol":false,"historyCount":1}`
+	for _, input := range []string{
+		wire,
+		strings.ReplaceAll(wire, "false", "true"),
+		strings.Replace(wire, `"historyCount":1`, `"historyCount":0`, 1),
+		strings.Replace(strings.Replace(wire, `"minimumLength":15`, `"minimumLength":128`, 1), `"historyCount":1`, `"historyCount":24`, 1),
+	} {
+		var value AccountPasswordSettings
+		if err := DecodeRequest(strings.NewReader(input), &value); err != nil || ValidateAccountPasswordSettings(value) != nil {
+			t.Fatal("complete bounded password settings rejected", err)
+		}
+		encoded, err := json.Marshal(value)
+		var roundTrip AccountPasswordSettings
+		if err != nil || DecodeRequest(bytes.NewReader(encoded), &roundTrip) != nil || roundTrip != value {
+			t.Fatal("explicit password settings changed under round trip", err)
+		}
+	}
+	malformed := []string{`null`, `[]`, `{}`, wire + `{}`, strings.TrimSuffix(wire, "}") + `,"accountId":"other"}`}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal([]byte(wire), &fields) != nil {
+		t.Fatal("invalid fixture")
+	}
+	for _, name := range []string{"minimumLength", "requireLowercase", "requireUppercase", "requireDigit", "requireSymbol", "historyCount"} {
+		original := fields[name]
+		for _, replacement := range []json.RawMessage{nil, json.RawMessage(`null`), json.RawMessage(`"false"`), json.RawMessage(`[]`)} {
+			if replacement == nil {
+				delete(fields, name)
+			} else {
+				fields[name] = replacement
+			}
+			input, err := json.Marshal(fields)
+			if err != nil {
+				t.Fatal(err)
+			}
+			malformed = append(malformed, string(input))
+		}
+		fields[name] = original
+		malformed = append(malformed,
+			strings.TrimSuffix(wire, "}")+`,"`+name+`":`+string(original)+`}`,
+			strings.Replace(wire, `"`+name+`":`, `"`+strings.ToUpper(name)+`":`, 1))
+	}
+	for _, length := range []string{"0", "14", "129", "15.5", "-1", "18446744073709551616"} {
+		malformed = append(malformed, strings.Replace(wire, `"minimumLength":15`, `"minimumLength":`+length, 1))
+	}
+	for _, count := range []string{"-1", "25", "1.5", "18446744073709551616"} {
+		malformed = append(malformed, strings.Replace(wire, `"historyCount":1`, `"historyCount":`+count, 1))
+	}
+	malformed = append(malformed, strings.TrimSuffix(wire, "}")+`,"require\u0053ymbol":false}`)
+	for index, input := range malformed {
+		var value AccountPasswordSettings
+		if json.Unmarshal([]byte(wire), &value) != nil {
+			t.Fatal("invalid baseline fixture")
+		}
+		before := value
+		if err := json.Unmarshal([]byte(input), &value); err == nil || value != before {
+			t.Fatalf("malformed password settings %d accepted or partially changed destination", index)
+		}
+	}
+	for _, value := range []AccountPasswordSettings{
+		{}, {MinimumLength: 14}, {MinimumLength: 129}, {MinimumLength: 15, HistoryCount: -1}, {MinimumLength: 15, HistoryCount: 25},
+	} {
+		if ValidateAccountPasswordSettings(value) == nil {
+			t.Fatal("invalid in-process settings bypassed bounds")
+		}
+	}
+}
+
+func FuzzAccountPasswordSettingsRoundTrip(f *testing.F) {
+	f.Add(`{"minimumLength":15,"requireLowercase":false,"requireUppercase":false,"requireDigit":false,"requireSymbol":false,"historyCount":1}`)
+	f.Add(`{"minimumLength":128,"requireLowercase":true,"requireUppercase":true,"requireDigit":true,"requireSymbol":true,"historyCount":24}`)
+	f.Add(`{"minimumLength":15,"historyCount":0}`)
+	f.Add(`null`)
+	f.Fuzz(func(t *testing.T, input string) {
+		var value AccountPasswordSettings
+		if DecodeRequest(strings.NewReader(input), &value) != nil {
+			return
+		}
+		if ValidateAccountPasswordSettings(value) != nil {
+			t.Fatal("decoded password settings violate product bounds")
+		}
+		encoded, err := json.Marshal(value)
+		var roundTrip AccountPasswordSettings
+		if err != nil || DecodeRequest(bytes.NewReader(encoded), &roundTrip) != nil || roundTrip != value {
+			t.Fatal("password settings changed under round trip")
+		}
+	})
+}
+
 func securitySettingsContractSamples() []struct {
 	kind, wire string
 	newValue   func() any
 } {
 	mfa := `{"requiredForUsers":false}`
-	settings := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccountSecuritySettings","accountId":"account-a","resourceVersion":2,"mfa":` + mfa + `,"updatedAt":"2026-09-24T12:00:00Z"}`
+	password := `{"minimumLength":15,"requireLowercase":false,"requireUppercase":false,"requireDigit":false,"requireSymbol":false,"historyCount":1}`
+	settings := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccountSecuritySettings","accountId":"account-a","resourceVersion":2,"mfa":` + mfa + `,"password":` + password + `,"updatedAt":"2026-09-24T12:00:00Z"}`
 	change := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccountSecuritySettingsChange","requestId":"change-a","expectedResourceVersion":1,"settings":` + settings + `,"callerSessionEnded":true}`
 	return []struct {
 		kind, wire string
@@ -227,8 +317,8 @@ func securitySettingsContractSamples() []struct {
 	}{
 		{"AccountMFASettings", mfa, func() any { return new(AccountMFASettings) }},
 		{"AccountSecuritySettings", settings, func() any { return new(AccountSecuritySettings) }},
-		{"SecuritySettingsUpdateIntent", `{"expectedResourceVersion":1,"mfa":` + mfa + `}`, func() any { return new(SecuritySettingsUpdateIntent) }},
-		{"UpdateAccountSecuritySettingsRequest", `{"requestId":"change-a","stepUpId":"proof-a","expectedResourceVersion":1,"mfa":` + mfa + `}`, func() any { return new(UpdateAccountSecuritySettingsRequest) }},
+		{"SecuritySettingsUpdateIntent", `{"expectedResourceVersion":1,"mfa":` + mfa + `,"password":` + password + `}`, func() any { return new(SecuritySettingsUpdateIntent) }},
+		{"UpdateAccountSecuritySettingsRequest", `{"requestId":"change-a","stepUpId":"proof-a","expectedResourceVersion":1,"mfa":` + mfa + `,"password":` + password + `}`, func() any { return new(UpdateAccountSecuritySettingsRequest) }},
 		{"AccountSecuritySettingsChange", change, func() any { return new(AccountSecuritySettingsChange) }},
 		{"UpdateAccountSecuritySettingsResponse", `{"outcome":"APPLIED","change":` + change + `}`, func() any { return new(UpdateAccountSecuritySettingsResponse) }},
 	}
@@ -341,7 +431,7 @@ func TestAccountSecuritySettingsRejectAmbiguityWithoutChangingPriorValue(t *test
 }
 
 func TestSettingsStepUpBindsExactIntentWithoutExpandingOtherOperations(t *testing.T) {
-	intent := `{"expectedResourceVersion":1,"mfa":{"requiredForUsers":false}}`
+	intent := `{"expectedResourceVersion":1,"mfa":{"requiredForUsers":false},"password":{"minimumLength":15,"requireLowercase":false,"requireUppercase":false,"requireDigit":false,"requireSymbol":false,"historyCount":1}}`
 	start := `{"requestId":"settings-a","operation":"SECURITY_SETTINGS_UPDATE","expectedFactorRevision":2,"securitySettings":` + intent + `}`
 	for _, wire := range []string{start, strings.Replace(start, "false", "true", 1)} {
 		var value StartStepUpRequest
@@ -604,6 +694,8 @@ func TestRecoveryCodeRegenerationReplaysOnlyNonSecretCompletion(t *testing.T) {
 }
 
 func FuzzStepUpContractRoundTrip(f *testing.F) {
+	f.Add(uint8(0), `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"StepUp","id":"proof-a","requestId":"remove-a","operation":"TOTP_REMOVE","expectedFactorRevision":2,"state":"PENDING","createdAt":"2026-09-21T12:00:00Z","expiresAt":"2026-09-21T12:02:00Z"}`)
+	f.Add(uint8(1), `{"requestId":"remove-a","operation":"TOTP_REMOVE","expectedFactorRevision":2}`)
 	f.Add(uint8(0), `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"StepUp","id":"proof-a","requestId":"regenerate-a","operation":"RECOVERY_CODES_REGENERATE","expectedFactorRevision":2,"state":"PENDING","createdAt":"2026-09-21T12:00:00Z","expiresAt":"2026-09-21T12:02:00Z"}`)
 	f.Add(uint8(1), `{"requestId":"regenerate-a","operation":"RECOVERY_CODES_REGENERATE","expectedFactorRevision":2}`)
 	f.Add(uint8(0), `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"StepUp","id":"proof-a","requestId":"settings-a","operation":"SECURITY_SETTINGS_UPDATE","expectedFactorRevision":2,"securitySettings":{"expectedResourceVersion":1,"mfa":{"requiredForUsers":false}},"state":"PENDING","createdAt":"2026-09-21T12:00:00Z","expiresAt":"2026-09-21T12:02:00Z"}`)
@@ -647,6 +739,174 @@ func FuzzStepUpContractRoundTrip(f *testing.F) {
 		decoded := factory()
 		if DecodeRequest(bytes.NewReader(encoded), decoded) != nil || !reflect.DeepEqual(value, decoded) {
 			t.Fatal("accepted contract changed under round trip")
+		}
+	})
+}
+
+func authenticatorRemovalContractSamples() []struct {
+	name, wire string
+	newValue   func() any
+} {
+	completion := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AuthenticatorRemoval","id":"removal-a","requestId":"remove-a","factorId":"factor-a","factorRevision":3,"removedAt":"2026-09-28T02:00:00Z"}`
+	return []struct {
+		name, wire string
+		newValue   func() any
+	}{
+		{"request", `{"requestId":"remove-a","stepUpId":"proof-a","expectedFactorRevision":2}`, func() any { return new(RemoveTOTPRequest) }},
+		{"completion", completion, func() any { return new(AuthenticatorRemoval) }},
+		{"applied", `{"outcome":"APPLIED","removal":` + completion + `,"nextStep":"REAUTHENTICATE"}`, func() any { return new(RemoveTOTPResponse) }},
+		{"replay", `{"outcome":"EQUAL_REPLAY","removal":` + completion + `}`, func() any { return new(RemoveTOTPResponse) }},
+	}
+}
+
+func TestAuthenticatorRemovalContractsAreClosedAndNonSecret(t *testing.T) {
+	for _, sample := range authenticatorRemovalContractSamples() {
+		t.Run(sample.name, func(t *testing.T) {
+			value := sample.newValue()
+			if err := DecodeRequest(strings.NewReader(sample.wire), value); err != nil {
+				t.Fatal(err)
+			}
+			encoded, err := json.Marshal(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded := sample.newValue()
+			if DecodeRequest(bytes.NewReader(encoded), decoded) != nil || !reflect.DeepEqual(value, decoded) {
+				t.Fatal("non-secret removal contract changed under round trip")
+			}
+			for _, member := range []string{
+				`"accountId":"other"`, `"userId":"other"`, `"sessionId":"other"`, `"batchId":"other"`,
+				`"password":"secret"`, `"code":"123456"`, `"recoveryCodes":[]`, `"provisioning":{}`, `"credential":"secret"`,
+				`"challengeCredential":"secret"`, `"securitySettings":null`, `"state":"REMOVED"`, `"attributes":{}`,
+			} {
+				body := strings.TrimSuffix(sample.wire, "}") + "," + member + "}"
+				if DecodeRequest(strings.NewReader(body), decoded) == nil || !reflect.DeepEqual(value, decoded) {
+					t.Fatalf("accepted an extra member or changed destination on failure: %s", member)
+				}
+			}
+			// Test each declared field, not just the outer request identifier.
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(encoded, &fields); err != nil {
+				t.Fatal(err)
+			}
+			for name, field := range fields {
+				for _, key := range []string{name, strings.ToUpper(name[:1]) + name[1:]} {
+					body := strings.TrimSuffix(string(encoded), "}") + fmt.Sprintf(",%q:%s}", key, field)
+					if DecodeRequest(strings.NewReader(body), decoded) == nil || !reflect.DeepEqual(value, decoded) {
+						t.Fatalf("accepted duplicate/case alias or changed destination: %s", key)
+					}
+				}
+				body := strings.Replace(string(encoded), fmt.Sprintf("%q:%s", name, field), fmt.Sprintf("%q:null", name), 1)
+				if DecodeRequest(strings.NewReader(body), decoded) == nil || !reflect.DeepEqual(value, decoded) {
+					t.Fatalf("accepted null or changed destination: %s", name)
+				}
+			}
+			for _, body := range []string{"null", "[]", "{}", sample.wire + "{}", strings.Repeat(" ", int(MaxRequestBytes)) + sample.wire} {
+				if DecodeRequest(strings.NewReader(body), sample.newValue()) == nil {
+					t.Fatal("accepted incomplete, trailing or oversized document")
+				}
+			}
+			if DecodeRequest(bytes.NewReader(encoded), new(LoginResponse)) == nil || DecodeRequest(bytes.NewReader(encoded), new(StepUp)) == nil ||
+				DecodeRequest(bytes.NewReader(encoded), new(AuthenticationChallenge)) == nil {
+				t.Fatal("removal metadata decoded as authentication authority")
+			}
+		})
+	}
+}
+
+func TestAuthenticatorRemovalRevisionAndCompletionSemantics(t *testing.T) {
+	request := RemoveTOTPRequest{RequestID: "remove-a", StepUpID: "proof-a", ExpectedFactorRevision: 2}
+	for _, revision := range []uint64{2, 9007199254740990} {
+		request.ExpectedFactorRevision = revision
+		if ValidateRemoveTOTPRequest(request) != nil {
+			t.Fatal("safe advanceable bound revision rejected")
+		}
+	}
+	for _, revision := range []uint64{0, 1, 9007199254740991, 9007199254740992, ^uint64(0)} {
+		request.ExpectedFactorRevision = revision
+		if ValidateRemoveTOTPRequest(request) == nil {
+			t.Fatal("unbound or overflowing input revision accepted")
+		}
+	}
+	for _, body := range []string{
+		`{"requestId":"remove-a","stepUpId":"proof-a","expectedFactorRevision":2.5}`,
+		`{"requestId":"remove-a","stepUpId":"proof-a","expectedFactorRevision":"2"}`,
+		`{"requestId":"remove-a","stepUpId":"proof-a","expectedFactorRevision":-1}`,
+		`{"requestId":"remove-a","request\u0049d":"other","stepUpId":"proof-a","expectedFactorRevision":2}`,
+	} {
+		if json.Unmarshal([]byte(body), new(RemoveTOTPRequest)) == nil {
+			t.Fatal("ambiguous or noninteger input accepted")
+		}
+	}
+	completion := AuthenticatorRemoval{APIVersion: APIVersion, Kind: "AuthenticatorRemoval", ID: "removal-a", RequestID: "remove-a",
+		FactorID: "factor-a", FactorRevision: 3, RemovedAt: time.Date(2026, 9, 28, 2, 0, 0, 0, time.UTC)}
+	for name, mutate := range map[string]func(*AuthenticatorRemoval){
+		"foreign api":         func(v *AuthenticatorRemoval) { v.APIVersion = "other/v1" },
+		"foreign kind":        func(v *AuthenticatorRemoval) { v.Kind = "AuthenticatorRecovery" },
+		"missing id":          func(v *AuthenticatorRemoval) { v.ID = "" },
+		"missing request":     func(v *AuthenticatorRemoval) { v.RequestID = "" },
+		"missing factor":      func(v *AuthenticatorRemoval) { v.FactorID = "" },
+		"initial revision":    func(v *AuthenticatorRemoval) { v.FactorRevision = 1 },
+		"unadvanced revision": func(v *AuthenticatorRemoval) { v.FactorRevision = 2 },
+		"unsafe revision":     func(v *AuthenticatorRemoval) { v.FactorRevision = 9007199254740992 },
+		"missing instant":     func(v *AuthenticatorRemoval) { v.RemovedAt = time.Time{} },
+		"non UTC":             func(v *AuthenticatorRemoval) { v.RemovedAt = v.RemovedAt.In(time.FixedZone("other", 3600)) },
+		"submicrosecond":      func(v *AuthenticatorRemoval) { v.RemovedAt = v.RemovedAt.Add(time.Nanosecond) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			altered := completion
+			mutate(&altered)
+			encoded, err := json.Marshal(altered)
+			if err != nil || ValidateAuthenticatorRemoval(altered) == nil || json.Unmarshal(encoded, new(AuthenticatorRemoval)) == nil {
+				t.Fatal("invalid removal completion accepted")
+			}
+		})
+	}
+	completion.FactorRevision = 9007199254740991
+	if ValidateAuthenticatorRemoval(completion) != nil {
+		t.Fatal("last exactly representable completed revision rejected")
+	}
+	for _, sample := range []struct {
+		outcome, next string
+		valid         bool
+	}{
+		{"APPLIED", "REAUTHENTICATE", true}, {"EQUAL_REPLAY", "", true},
+		{"APPLIED", "", false}, {"EQUAL_REPLAY", "REAUTHENTICATE", false},
+		{"APPLIED", "AUTHENTICATED", false}, {"UNKNOWN", "", false},
+	} {
+		value := RemoveTOTPResponse{Outcome: sample.outcome, Removal: completion, NextStep: sample.next}
+		encoded, err := json.Marshal(value)
+		if err != nil || (ValidateRemoveTOTPResponse(value) == nil) != sample.valid || (json.Unmarshal(encoded, new(RemoveTOTPResponse)) == nil) != sample.valid {
+			t.Fatal("removal response confused first application with historical observation")
+		}
+	}
+	replay := authenticatorRemovalContractSamples()[3].wire
+	for _, extra := range []string{`"nextStep":null`, `"nextStep":""`, `"nextStep":"REAUTHENTICATE"`, `"session":{}`} {
+		if json.Unmarshal([]byte(strings.TrimSuffix(replay, "}")+","+extra+"}"), new(RemoveTOTPResponse)) == nil {
+			t.Fatal("completion replay carried a new authentication instruction")
+		}
+	}
+}
+
+func FuzzAuthenticatorRemovalContractRoundTrip(f *testing.F) {
+	samples := authenticatorRemovalContractSamples()
+	for index, sample := range samples {
+		f.Add(uint8(index), sample.wire)
+	}
+	f.Add(uint8(3), `{"outcome":"EQUAL_REPLAY","nextStep":null}`)
+	f.Fuzz(func(t *testing.T, kind uint8, source string) {
+		factory := samples[int(kind)%len(samples)].newValue
+		value := factory()
+		if DecodeRequest(strings.NewReader(source), value) != nil {
+			return
+		}
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal("accepted non-secret removal contract is not serializable")
+		}
+		decoded := factory()
+		if DecodeRequest(bytes.NewReader(encoded), decoded) != nil || !reflect.DeepEqual(value, decoded) {
+			t.Fatal("accepted removal contract changed under round trip")
 		}
 	})
 }
@@ -1272,6 +1532,148 @@ func FuzzSecurityMailSMTPChannelCanonicalPrivateFile(f *testing.F) {
 			t.Fatal("accepted SMTP channel is not canonical")
 		}
 	})
+}
+
+func TestOwnLoginSessionContractsBindARealObservation(t *testing.T) {
+	now := time.Date(2026, 9, 17, 8, 0, 0, 0, time.UTC)
+	valid := SessionList{APIVersion: APIVersion, Kind: "SessionList", AccountID: "account-one", UserID: "user-one",
+		CurrentSessionID: "session-current", ObservedAt: now, Items: []Session{{APIVersion: APIVersion, Kind: "Session",
+			ID: "session-other", AccountID: "account-one", PrincipalID: "user-one", Status: SessionActive,
+			IssuedAt: now.Add(-time.Minute), ExpiresAt: now.Add(time.Hour)}}}
+	if err := ValidateSessionList(valid); err != nil {
+		t.Fatal(err)
+	}
+	for name, mutate := range map[string]func(*SessionList){
+		"null items":                func(v *SessionList) { v.Items = nil },
+		"wrong account":             func(v *SessionList) { v.Items[0].AccountID = "account-two" },
+		"wrong user":                func(v *SessionList) { v.Items[0].PrincipalID = "user-two" },
+		"duplicate":                 func(v *SessionList) { v.Items = append(v.Items, v.Items[0]) },
+		"expired":                   func(v *SessionList) { v.Items[0].ExpiresAt = now },
+		"future issuance":           func(v *SessionList) { v.Items[0].IssuedAt = now.Add(time.Minute) },
+		"revoked":                   func(v *SessionList) { v.Items[0].Status = SessionRevoked; v.Items[0].RevokedAt = &now },
+		"invalid current reference": func(v *SessionList) { v.CurrentSessionID = "" },
+		"short continued page":      func(v *SessionList) { v.NextCursor = "ic1.AAAA" },
+		"oversized":                 func(v *SessionList) { v.Items = make([]Session, DirectoryPageSize+1) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := valid
+			value.Items = append([]Session(nil), valid.Items...)
+			mutate(&value)
+			if ValidateSessionList(value) == nil {
+				t.Fatal("invalid session observation accepted")
+			}
+		})
+	}
+	empty := valid
+	empty.Items = []Session{}
+	if err := ValidateSessionList(empty); err != nil {
+		t.Fatal(err)
+	}
+	result := RevokeOwnSessionResponse{Outcome: "APPLIED", Revocation: Revocation{APIVersion: APIVersion, Kind: "Revocation",
+		ID: "session-other", ResourceVersion: 2, RevokedAt: now}}
+	for _, outcome := range []string{"APPLIED", "EQUAL_REPLAY", "", "ALREADY_REVOKED"} {
+		result.Outcome = outcome
+		if (ValidateRevokeOwnSessionResponse(result) == nil) != (outcome == "APPLIED" || outcome == "EQUAL_REPLAY") {
+			t.Fatalf("unexpected revocation outcome validation for %q", outcome)
+		}
+	}
+}
+
+func TestUserPasswordResetCompletionBindsOneOriginalNonSecretResult(t *testing.T) {
+	valid := UserPasswordResetCompletion{APIVersion: APIVersion, Kind: "UserPasswordResetCompletion",
+		AccountID: "account-one", ActorPrincipalID: "administrator-one", UserID: "user-one", RequestID: "reset-one",
+		ExpectedResourceVersion: 4, ResultingResourceVersion: 5, EventID: "event-one",
+		OccurredAt: time.Date(2026, 9, 28, 0, 0, 0, 123456000, time.UTC)}
+	for _, expected := range []uint64{1, 4, 9007199254740990} {
+		value := valid
+		value.ExpectedResourceVersion, value.ResultingResourceVersion = expected, expected+1
+		if err := ValidateUserPasswordResetCompletion(value); err != nil {
+			t.Fatal(err)
+		}
+		encoded, err := json.Marshal(value)
+		var decoded UserPasswordResetCompletion
+		if err != nil || DecodeRequest(bytes.NewReader(encoded), &decoded) != nil || decoded != value {
+			t.Fatal("reset completion did not preserve its original metadata")
+		}
+	}
+	for _, test := range []struct {
+		name   string
+		change func(*UserPasswordResetCompletion)
+	}{
+		{"api version", func(v *UserPasswordResetCompletion) { v.APIVersion = "other/v1" }},
+		{"purpose", func(v *UserPasswordResetCompletion) { v.Kind = "User" }},
+		{"account", func(v *UserPasswordResetCompletion) { v.AccountID = "" }},
+		{"actor", func(v *UserPasswordResetCompletion) { v.ActorPrincipalID = "" }},
+		{"target", func(v *UserPasswordResetCompletion) { v.UserID = "" }},
+		{"self reset", func(v *UserPasswordResetCompletion) { v.ActorPrincipalID = v.UserID }},
+		{"request", func(v *UserPasswordResetCompletion) { v.RequestID = "" }},
+		{"event", func(v *UserPasswordResetCompletion) { v.EventID = "" }},
+		{"bad event", func(v *UserPasswordResetCompletion) { v.EventID = "event/other" }},
+		{"zero expected", func(v *UserPasswordResetCompletion) { v.ExpectedResourceVersion, v.ResultingResourceVersion = 0, 1 }},
+		{"unchanged version", func(v *UserPasswordResetCompletion) { v.ResultingResourceVersion = v.ExpectedResourceVersion }},
+		{"skipped version", func(v *UserPasswordResetCompletion) { v.ResultingResourceVersion++ }},
+		{"unsafe version", func(v *UserPasswordResetCompletion) {
+			v.ExpectedResourceVersion, v.ResultingResourceVersion = 9007199254740991, 9007199254740992
+		}},
+		{"wrapped version", func(v *UserPasswordResetCompletion) {
+			v.ExpectedResourceVersion, v.ResultingResourceVersion = ^uint64(0), 0
+		}},
+		{"missing time", func(v *UserPasswordResetCompletion) { v.OccurredAt = time.Time{} }},
+		{"non UTC", func(v *UserPasswordResetCompletion) { v.OccurredAt = v.OccurredAt.In(time.FixedZone("other", 3600)) }},
+		{"submicrosecond", func(v *UserPasswordResetCompletion) { v.OccurredAt = v.OccurredAt.Add(time.Nanosecond) }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			value := valid
+			test.change(&value)
+			if ValidateUserPasswordResetCompletion(value) == nil {
+				t.Fatal("invalid reset completion accepted")
+			}
+			encoded, err := json.Marshal(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded := valid
+			if DecodeRequest(bytes.NewReader(encoded), &decoded) == nil || decoded != valid {
+				t.Fatal("invalid completion decoded or partially replaced the previous result")
+			}
+		})
+	}
+	var missing *UserPasswordResetCompletion
+	if missing.UnmarshalJSON([]byte(`{}`)) == nil {
+		t.Fatal("nil completion destination accepted")
+	}
+}
+
+func TestOtherSessionRevocationIsAClosedCompletionIncludingZeroTargets(t *testing.T) {
+	valid := RevokeOtherSessionsResponse{APIVersion: APIVersion, Kind: "OtherSessionsRevocation", Outcome: "APPLIED",
+		AccountID: "account-one", UserID: "user-one", CurrentSessionID: "session-one", RequestID: "request-one",
+		CompletedAt: time.Date(2026, 9, 18, 0, 0, 0, 0, time.UTC)}
+	for _, count := range []uint64{0, 1, 101, 9007199254740991} {
+		for _, outcome := range []string{"APPLIED", "EQUAL_REPLAY"} {
+			value := valid
+			value.RevokedCount, value.Outcome = count, outcome
+			if err := ValidateRevokeOtherSessionsResponse(value); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	for _, mutate := range []func(*RevokeOtherSessionsResponse){
+		func(v *RevokeOtherSessionsResponse) { v.APIVersion = "other/v1" },
+		func(v *RevokeOtherSessionsResponse) { v.Kind = "Revocation" },
+		func(v *RevokeOtherSessionsResponse) { v.Outcome = "ALREADY_REVOKED" },
+		func(v *RevokeOtherSessionsResponse) { v.AccountID = "" },
+		func(v *RevokeOtherSessionsResponse) { v.UserID = "" },
+		func(v *RevokeOtherSessionsResponse) { v.CurrentSessionID = "" },
+		func(v *RevokeOtherSessionsResponse) { v.RequestID = "" },
+		func(v *RevokeOtherSessionsResponse) { v.CompletedAt = time.Time{} },
+		func(v *RevokeOtherSessionsResponse) { v.RevokedCount = 9007199254740992 },
+	} {
+		value := valid
+		mutate(&value)
+		if ValidateRevokeOtherSessionsResponse(value) == nil {
+			t.Fatal("invalid other-session completion accepted")
+		}
+	}
 }
 
 func TestAccessKeySubjectLineageRequiresItsOwnDeclaredCarrier(t *testing.T) {

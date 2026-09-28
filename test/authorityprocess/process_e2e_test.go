@@ -566,14 +566,14 @@ func TestIAMRetainedEnablingProcessUpgrade(t *testing.T) {
 		}
 	}
 	var shape bool
-	if err := admin.QueryRow(ctx, `SELECT schema_version=45 AND iam.authentication_recovery_contract_ready()
+	if err := admin.QueryRow(ctx, `SELECT schema_version=49 AND iam.authentication_recovery_contract_ready()
 	 AND iam.password_attempt_contract_ready() AND iam.totp_authentication_contract_ready()
 	 AND (SELECT cardinality(proallargtypes)=25 AND proargnames[25]='credential_generation'
 	      FROM pg_proc WHERE oid='iam.lookup_session(text)'::regprocedure)
 	 FROM iam.readiness()`).Scan(&shape); err != nil || !shape {
 		t.Fatal("retained database did not install the enabling authentication ABI", err)
 	}
-	current := start(currentBinary, 45)
+	current := start(currentBinary, 49)
 	if !bytes.Equal(originalState, identityState()) {
 		t.Fatal("migration or equal bootstrap changed original identity/credential state")
 	}
@@ -641,7 +641,7 @@ func TestIAMRetainedEnablingProcessUpgrade(t *testing.T) {
 			t.Fatal("current migration replay failed")
 		}
 	}
-	current = start(currentBinary, 45)
+	current = start(currentBinary, 49)
 	if !bytes.Equal(completedState, identityState()) {
 		t.Fatal("migration replay or restart changed retained enabling identity state")
 	}
@@ -672,7 +672,7 @@ func TestIAMRetainedEnablingProcessUpgrade(t *testing.T) {
 		}
 	}
 	current.stop()
-	t.Log("actual signed IAM40 -> IAM45 migrator/runtime retained Accounts and canonical facts, rejected unproven old Sessions and admitted a fresh qualified Session")
+	t.Log("actual signed IAM40 -> IAM49 migrator/runtime retained Accounts and canonical facts, rejected unproven old Sessions and admitted a fresh qualified Session")
 }
 
 type retainedIAMBaseline struct {
@@ -1271,8 +1271,8 @@ func runAuthorityProcesses(t *testing.T, dsnVariable string, nodeFixture func(*t
 	waitHTTPStatus(t, ctx, paasProcess, paasEndpoint+"/ready", http.StatusOK)
 	// Exercise the exact source services together and require the release owner
 	// to publish this complete authority shape, not an intermediate tuple.
-	profile := installationrelease.AuthoritySchemas{IAM: 45, Audit: 26, PaaS: 6}
-	if current := installationrelease.CurrentDatabaseProfile(); current.Authorities != profile || current.ContractRevision != 16 ||
+	profile := installationrelease.AuthoritySchemas{IAM: 49, Audit: 27, PaaS: 6}
+	if current := installationrelease.CurrentDatabaseProfile(); current.Authorities != profile || current.ContractRevision != 17 ||
 		current.Compatibility != "identical-authority-profile" {
 		t.Fatalf("combined runtime=%#v does not match the published release profile=%#v", profile, current)
 	}
@@ -1630,7 +1630,7 @@ func runAuthorityProcesses(t *testing.T, dsnVariable string, nodeFixture func(*t
 	if response := performJSON(t, http.MethodGet, iamEndpoint+"/v1/auth/me", adminLogin.Credential, nil); response.Status != http.StatusUnauthorized {
 		t.Fatal("bootstrap platform revoke preserved a privileged Session")
 	}
-	adminLogin = loginIAM(t, iamEndpoint, "admin", changedAdminPassword, "request-platform-admin-after-revoke-login")
+	adminLogin = loginIAM(t, iamEndpoint, "admin", localRecoveryChangedPassword, "request-platform-admin-after-revoke-login")
 	sensitive = append(sensitive, adminLogin.Credential)
 	platformDecisions = append(platformDecisions,
 		assertPlatformAuthorization(t, iamEndpoint, adminLogin.Credential, "principal-admin", "request-platform-admin-revoked", false),
@@ -2426,7 +2426,11 @@ func changePasswordIAM(
 		RequestID       string `json:"requestId"`
 	}{CurrentPassword: current, NewPassword: next, RequestID: requestID})
 	if response.Status != http.StatusOK {
-		t.Fatalf("IAM password change status=%d", response.Status)
+		var problem struct {
+			Code string `json:"code"`
+		}
+		_ = json.Unmarshal(response.Body, &problem)
+		t.Fatalf("IAM password change request=%s status=%d code=%s", requestID, response.Status, problem.Code)
 	}
 }
 
@@ -3606,6 +3610,7 @@ func proveTenantAccountProcesses(
 		}
 	}
 	const recoveryPassword = "Primary-Process-Recovered-Password-68!"
+	const recoveredChangedPassword = "Primary-After-Recovery-Unique-91!"
 	current := readAccount(crossTenantID)
 	recovery := performJSON(t, http.MethodPost, endpoint+"/v1/accounts/"+crossTenantID+":recover-root-credentials", bearer, map[string]any{
 		"initialPassword": recoveryPassword, "resourceVersion": current.ResourceVersion, "requestId": "request-process-primary-recovery"})
@@ -3625,9 +3630,9 @@ func proveTenantAccountProcesses(
 		t.Fatal("primary recovery retained old password")
 	}
 	primary = loginIAM(t, endpoint, "customer.primary", recoveryPassword, "request-recovered-primary-login")
-	sensitive = append(sensitive, recoveryPassword, primary.Credential)
+	sensitive = append(sensitive, recoveryPassword, recoveredChangedPassword, primary.Credential)
 	createPaaSApplication(t, paasEndpoint, primary.Credential, "application-before-recovery-change", "before-recovery-change", "create-before-recovery-change", http.StatusForbidden)
-	changePasswordIAM(t, endpoint, primary.Credential, recoveryPassword, changed, "request-recovered-primary-password")
+	changePasswordIAM(t, endpoint, primary.Credential, recoveryPassword, recoveredChangedPassword, "request-recovered-primary-password")
 	getPaaSApplication(t, paasEndpoint, primary.Credential, "application-customer-only", http.StatusOK)
 	getPaaSApplication(t, paasEndpoint, bearer, "application-customer-only", http.StatusNotFound)
 	childLogin = loginIAM(t, endpoint, "account.user@process-company", changed, "request-resumed-child-login")

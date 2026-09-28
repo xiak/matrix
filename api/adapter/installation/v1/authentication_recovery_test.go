@@ -72,9 +72,17 @@ func TestAuthenticationRecoveryInspectionBindsOneNewIntentWithoutExposingSnapsho
 		t.Fatal("inspection did not bind its exact sealed intent")
 	}
 	for name, mutate := range map[string]func(*AuthenticationRecoveryInspection){
-		"state":     func(v *AuthenticationRecoveryInspection) { v.State = "COMPLETED" },
-		"command":   func(v *AuthenticationRecoveryInspection) { v.CommandID = "cmd-other" },
-		"epoch":     func(v *AuthenticationRecoveryInspection) { v.Epoch++ },
+		"version":      func(v *AuthenticationRecoveryInspection) { v.APIVersion = "installation.matrix.xiak.com/v2" },
+		"kind":         func(v *AuthenticationRecoveryInspection) { v.Kind = AuthenticationRecoveryClosureKind },
+		"purpose":      func(v *AuthenticationRecoveryInspection) { v.Purpose = "IAM_CREDENTIAL_RECOVERY" },
+		"state":        func(v *AuthenticationRecoveryInspection) { v.State = "COMPLETED" },
+		"installation": func(v *AuthenticationRecoveryInspection) { v.InstallationID = "mxi-" + strings.Repeat("9", 32) },
+		"command":      func(v *AuthenticationRecoveryInspection) { v.CommandID = "cmd-" + strings.Repeat("9", 32) },
+		"epoch":        func(v *AuthenticationRecoveryInspection) { v.Epoch++ },
+		"zero-epoch":   func(v *AuthenticationRecoveryInspection) { v.Epoch = 0 },
+		"epoch-overflow": func(v *AuthenticationRecoveryInspection) {
+			v.Epoch = maximumAuthenticationRecoveryEpoch + 1
+		},
 		"bootstrap": func(v *AuthenticationRecoveryInspection) { v.BootstrapDigest = "sha256:" + strings.Repeat("7", 64) },
 		"intent": func(v *AuthenticationRecoveryInspection) {
 			v.RecoveryIntentDigest = "sha256:" + strings.Repeat("8", 64)

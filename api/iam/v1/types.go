@@ -72,6 +72,19 @@ type Session struct {
 	RevokedAt   *time.Time    `json:"revokedAt,omitempty"`
 }
 
+// SessionList observes the authenticated user's live login sessions. A session
+// reference is not a bearer, a physical device, or proof of online activity.
+type SessionList struct {
+	APIVersion       string      `json:"apiVersion"`
+	Kind             string      `json:"kind"`
+	AccountID        AccountID   `json:"accountId"`
+	UserID           PrincipalID `json:"userId"`
+	CurrentSessionID SessionID   `json:"currentSessionId"`
+	ObservedAt       time.Time   `json:"observedAt"`
+	Items            []Session   `json:"items"`
+	NextCursor       string      `json:"nextCursor,omitempty"`
+}
+
 type InitialOrganization struct {
 	ID          AccountID `json:"id"`
 	DisplayName string    `json:"displayName"`
@@ -206,6 +219,35 @@ type StartChallengeTOTPEnrollmentRequest struct {
 	ChallengeCredential Secret `json:"challengeCredential"`
 }
 
+// AccountPasswordSettings governs new passwords, not the stored-secret
+// verifier, an authorization Policy or a selectable hashing profile.
+type AccountPasswordSettings struct {
+	MinimumLength    int  `json:"minimumLength"`
+	RequireLowercase bool `json:"requireLowercase"`
+	RequireUppercase bool `json:"requireUppercase"`
+	RequireDigit     bool `json:"requireDigit"`
+	RequireSymbol    bool `json:"requireSymbol"`
+	HistoryCount     int  `json:"historyCount"`
+}
+
+// PasswordRequirements describes this authenticated USER's current rules.
+// It is an observation, not a permit or another user's security settings.
+type PasswordRequirements struct {
+	APIVersion       string                  `json:"apiVersion"`
+	Kind             string                  `json:"kind"`
+	Password         AccountPasswordSettings `json:"password"`
+	MaximumLength    int                     `json:"maximumLength"`
+	MaximumUTF8Bytes int                     `json:"maximumUTF8Bytes"`
+	SettingsVersion  uint64                  `json:"settingsVersion"`
+	Source           string                  `json:"source"`
+}
+
+// Only the original live LOGIN/ENROLLMENT PASSWORD_CHANGE capability is
+// accepted. The path ID alone never authenticates or selects a USER.
+type ChallengePasswordRequirementsRequest struct {
+	ChallengeCredential Secret `json:"challengeCredential"`
+}
+
 // AccountMFASettings governs ordinary USER login requirements, not whether
 // a particular USER has a factor or a Session actually authenticated with it.
 // Protected root/installation identities have their own non-tenant boundary.
@@ -219,7 +261,10 @@ type AccountSecuritySettings struct {
 	AccountID       AccountID          `json:"accountId"`
 	ResourceVersion uint64             `json:"resourceVersion"`
 	MFA             AccountMFASettings `json:"mfa"`
-	UpdatedAt       time.Time          `json:"updatedAt"`
+	// Missing only in immutable completions from before password settings.
+	// Current settings must always contain the complete explicit value.
+	Password  *AccountPasswordSettings `json:"password,omitempty"`
+	UpdatedAt time.Time                `json:"updatedAt"`
 }
 
 // SecuritySettingsUpdateIntent is the exact nonsecret target of a settings
@@ -227,13 +272,16 @@ type AccountSecuritySettings struct {
 type SecuritySettingsUpdateIntent struct {
 	ExpectedResourceVersion uint64             `json:"expectedResourceVersion"`
 	MFA                     AccountMFASettings `json:"mfa"`
+	// Only a retained CONSUMED proof may lack the original password segment.
+	Password *AccountPasswordSettings `json:"password,omitempty"`
 }
 
 type UpdateAccountSecuritySettingsRequest struct {
-	RequestID               string             `json:"requestId"`
-	StepUpID                string             `json:"stepUpId"`
-	ExpectedResourceVersion uint64             `json:"expectedResourceVersion"`
-	MFA                     AccountMFASettings `json:"mfa"`
+	RequestID               string                  `json:"requestId"`
+	StepUpID                string                  `json:"stepUpId"`
+	ExpectedResourceVersion uint64                  `json:"expectedResourceVersion"`
+	MFA                     AccountMFASettings      `json:"mfa"`
+	Password                AccountPasswordSettings `json:"password"`
 }
 
 // This is an immutable historical completion. CallerSessionEnded describes
@@ -288,6 +336,35 @@ type StartTOTPReplacementRequest struct {
 	RequestID              string `json:"requestId"`
 	StepUpID               string `json:"stepUpId"`
 	ExpectedFactorRevision uint64 `json:"expectedFactorRevision"`
+}
+
+// The caller is selected only by its current login Session. These identifiers
+// bind one removal intent; neither is authentication or execution authority.
+type RemoveTOTPRequest struct {
+	RequestID              string `json:"requestId"`
+	StepUpID               string `json:"stepUpId"`
+	ExpectedFactorRevision uint64 `json:"expectedFactorRevision"`
+}
+
+// AuthenticatorRemoval observes an immutable completion, not today's factor
+// state. FactorRevision is the revision after removal. No secret or reusable
+// proof is disclosed, including when observed after a later enrollment.
+type AuthenticatorRemoval struct {
+	APIVersion     string    `json:"apiVersion"`
+	Kind           string    `json:"kind"`
+	ID             string    `json:"id"`
+	RequestID      string    `json:"requestId"`
+	FactorID       string    `json:"factorId"`
+	FactorRevision uint64    `json:"factorRevision"`
+	RemovedAt      time.Time `json:"removedAt"`
+}
+
+// Only APPLIED requires a fresh login. EQUAL_REPLAY observes the original
+// completion and must not instruct the client to end a newer Session.
+type RemoveTOTPResponse struct {
+	Outcome  string               `json:"outcome"`
+	Removal  AuthenticatorRemoval `json:"removal"`
+	NextStep string               `json:"nextStep,omitempty"`
 }
 
 type TOTPProvisioning struct {
@@ -360,6 +437,7 @@ const (
 	StepUpRegenerateRecoveryCodes StepUpOperation = "RECOVERY_CODES_REGENERATE"
 	StepUpUpdateSecuritySettings  StepUpOperation = "SECURITY_SETTINGS_UPDATE"
 	StepUpReplaceTOTP             StepUpOperation = "TOTP_REPLACE"
+	StepUpRemoveTOTP              StepUpOperation = "TOTP_REMOVE"
 )
 
 // StepUp is non-secret metadata for one operation bound to its original login
@@ -785,8 +863,43 @@ type ResetUserPasswordRequest struct {
 	RequestID       string `json:"requestId"`
 }
 
+// UserPasswordResetCompletion identifies one committed administrator reset.
+// It is neither a password-input commitment nor proof of current password
+// validity, user eligibility, Audit delivery or permission to repeat the reset.
+type UserPasswordResetCompletion struct {
+	APIVersion               string      `json:"apiVersion"`
+	Kind                     string      `json:"kind"`
+	AccountID                AccountID   `json:"accountId"`
+	ActorPrincipalID         PrincipalID `json:"actorPrincipalId"`
+	UserID                   PrincipalID `json:"userId"`
+	RequestID                string      `json:"requestId"`
+	ExpectedResourceVersion  uint64      `json:"expectedResourceVersion"`
+	ResultingResourceVersion uint64      `json:"resultingResourceVersion"`
+	EventID                  string      `json:"eventId"`
+	OccurredAt               time.Time   `json:"occurredAt"`
+}
+
 type RevokeSessionRequest struct {
 	RequestID string `json:"requestId"`
+}
+
+type RevokeOwnSessionResponse struct {
+	Outcome    string     `json:"outcome"`
+	Revocation Revocation `json:"revocation"`
+}
+
+// RevokeOtherSessionsResponse describes one completed self-reduction intent,
+// including an empty set. It never grants permission to repeat its effects.
+type RevokeOtherSessionsResponse struct {
+	APIVersion       string      `json:"apiVersion"`
+	Kind             string      `json:"kind"`
+	Outcome          string      `json:"outcome"`
+	AccountID        AccountID   `json:"accountId"`
+	UserID           PrincipalID `json:"userId"`
+	CurrentSessionID SessionID   `json:"currentSessionId"`
+	RequestID        string      `json:"requestId"`
+	RevokedCount     uint64      `json:"revokedCount"`
+	CompletedAt      time.Time   `json:"completedAt"`
 }
 
 type Revocation struct {

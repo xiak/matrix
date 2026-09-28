@@ -23,6 +23,7 @@ import (
 )
 
 const localRecoveryProcessLogin = "matrix_iam_credential_recovery_login"
+const localRecoveryChangedPassword = "Local-After-Recovery-Unique-58!"
 
 type legacyBuiltinRole string
 
@@ -103,7 +104,7 @@ func TestIAMRetainedLocalRecoveryProcessUpgrade(t *testing.T) {
 		for _, child := range children {
 			child.stop()
 		}
-		assertProcessOutputsSanitized(t, children, initialAdminPassword, changedAdminPassword, initialReaderPassword, changedReaderPassword)
+		assertProcessOutputsSanitized(t, children, initialAdminPassword, changedAdminPassword, localRecoveryChangedPassword, initialReaderPassword, changedReaderPassword)
 	}()
 	start := func(binary string) *childProcess {
 		currentEnvironment := append([]string(nil), environment...)
@@ -247,7 +248,7 @@ func TestIAMRetainedLocalRecoveryProcessUpgrade(t *testing.T) {
 		}
 		if attempt == 0 {
 			temporary := loginIAM(t, endpoint, "admin", recoveredPassword, "retained-recovery-login")
-			changePasswordIAM(t, endpoint, temporary.Credential, recoveredPassword, changedAdminPassword, "retained-recovery-forced-change")
+			changePasswordIAM(t, endpoint, temporary.Credential, recoveredPassword, localRecoveryChangedPassword, "retained-recovery-forced-change")
 		}
 		var replay iamv1.LocalCredentialRecoveryResult
 		output := invokeLocalRecoveryProcess(t, ctx, root, recoveryBinary, "apply", localEnv, 0, nil)
@@ -399,7 +400,7 @@ func proveLocalCredentialRecoveryProcesses(t *testing.T, ctx context.Context, ad
 		recovered = loginIAM(t, iamEndpoint, "admin", password, "local-process-temporary-login")
 		createPaaSApplication(t, paasEndpoint, recovered.Credential, "local-recovery-forced-denied", "local-recovery-forced-denied", "local-recovery-forced-denied", http.StatusForbidden)
 		assertPlatformAuthorization(t, iamEndpoint, recovered.Credential, "principal-admin", "local-recovery-forced-platform-denied", false)
-		changePasswordIAM(t, iamEndpoint, recovered.Credential, password, changedAdminPassword, "local-process-forced-change")
+		changePasswordIAM(t, iamEndpoint, recovered.Credential, password, localRecoveryChangedPassword, "local-process-forced-change")
 		assertPlatformAuthorization(t, iamEndpoint, recovered.Credential, "principal-admin", "local-recovery-normal-platform-allowed", true)
 	})
 	// Treat the apply reply as lost: only the sealed command/commitment query
@@ -493,7 +494,7 @@ func proveLocalCredentialRecoveryProcesses(t *testing.T, ctx context.Context, ad
 			t.Fatal("old replay replaced a later password")
 		}
 	}
-	secrets := []string{password, string(local.CapabilityKey.CopyBytes()), string(request.Capability.CopyBytes()), string(altered.Capability.CopyBytes()), recovered.Credential}
+	secrets := []string{password, localRecoveryChangedPassword, string(local.CapabilityKey.CopyBytes()), string(request.Capability.CopyBytes()), string(altered.Capability.CopyBytes()), recovered.Credential}
 	return recovered, verifyHistorical, secrets
 }
 

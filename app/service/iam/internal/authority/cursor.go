@@ -43,8 +43,13 @@ type DirectoryQuery struct {
 	Resource       iamv1.ResourceReference
 	// Self discovery is not a management action. These private revisions come
 	// from the authenticated database snapshot, never from caller selectors.
-	AssumableRoles *RoleDiscoveryRevision     `json:",omitempty"`
-	RoleSessions   *RoleSessionDirectoryQuery `json:",omitempty"`
+	AssumableRoles *RoleDiscoveryRevision         `json:",omitempty"`
+	RoleSessions   *RoleSessionDirectoryQuery     `json:",omitempty"`
+	LoginSessions  *LoginSessionDirectoryRevision `json:",omitempty"`
+}
+
+type LoginSessionDirectoryRevision struct {
+	CredentialGeneration uint64 `json:"credentialGeneration"`
 }
 
 // Private snapshot and closed filters protect continuation; they grant no
@@ -202,7 +207,7 @@ func (codec CursorCodec) tag(payload []byte) []byte {
 
 func (codec CursorCodec) binding(subject SubjectContext, query DirectoryQuery, now time.Time) ([]byte, error) {
 	if validateSubjectContext(subject, now) != nil || subject.Principal.Type != iamv1.PrincipalUser ||
-		subject.Principal.MustChangePassword || iamv1.ValidateID("installationId", query.InstallationID) != nil ||
+		(subject.Principal.MustChangePassword && query.LoginSessions == nil) || iamv1.ValidateID("installationId", query.InstallationID) != nil ||
 		(subject.InstallationID != "" && subject.InstallationID != query.InstallationID) {
 		return nil, ErrInvalidCursor
 	}
@@ -210,7 +215,10 @@ func (codec CursorCodec) binding(subject SubjectContext, query DirectoryQuery, n
 	var mode iamv1.AuthorizationResourceMode
 	var usage iamv1.AuthorizationCollectionUsage
 	pageSize := iamv1.DirectoryPageSize
-	if query.AssumableRoles != nil {
+	if query.LoginSessions != nil {
+		validQuery = query.AssumableRoles == nil && query.RoleSessions == nil && query.Action == "" && query.Resource == (iamv1.ResourceReference{}) &&
+			query.LoginSessions.CredentialGeneration > 0 && query.LoginSessions.CredentialGeneration <= 9007199254740991
+	} else if query.AssumableRoles != nil {
 		revision := query.AssumableRoles
 		validQuery = query.RoleSessions == nil && query.Action == "" && query.Resource == (iamv1.ResourceReference{}) &&
 			revision.CredentialGeneration > 0 && revision.CredentialGeneration <= 9007199254740991 &&
@@ -240,7 +248,7 @@ func (codec CursorCodec) binding(subject SubjectContext, query DirectoryQuery, n
 	if !validQuery {
 		return nil, ErrInvalidCursor
 	}
-	if query.AssumableRoles == nil {
+	if query.AssumableRoles == nil && query.LoginSessions == nil {
 		request, err := iamv1.NewAuthorizationRequest(query.Action, query.Resource, mode, usage, "cursor-authorization", "cursor-authorization")
 		if err != nil {
 			return nil, ErrInvalidCursor

@@ -111,6 +111,7 @@ BEGIN
        OR NOT has_function_privilege('matrix_iam_api', 'iam.readiness()', 'EXECUTE')
        OR has_function_privilege('matrix_iam_api', 'iam.lookup_login(text)', 'EXECUTE')
        OR NOT iam.password_attempt_contract_ready()
+       OR NOT iam.password_history_contract_ready()
        OR NOT has_function_privilege(
             'matrix_iam_api',
             'iam.issue_session(text,text,text,text,text,integer,jsonb,text,bigint)',
@@ -127,13 +128,13 @@ BEGIN
             'EXECUTE'
        )
        OR NOT has_function_privilege(
-            'matrix_iam_api', 'iam.change_password(text,text,text,text,jsonb,text,boolean,text,bigint)', 'EXECUTE'
+            'matrix_iam_api', 'iam.change_password(text,text,text,text,jsonb,text,boolean,text,bigint,text,bigint)', 'EXECUTE'
        )
        OR NOT has_function_privilege(
-            'matrix_iam_api', 'iam.revoke_session(text,text,text,text,jsonb)', 'EXECUTE'
+            'matrix_iam_api', 'iam.revoke_session(text,text,text,text,jsonb,text)', 'EXECUTE'
        )
        OR NOT has_function_privilege(
-            'matrix_iam_api', 'iam.create_user(text,text,text,text,text,text,text,jsonb)', 'EXECUTE'
+            'matrix_iam_api', 'iam.create_user(text,text,text,text,text,text,text,jsonb,bigint)', 'EXECUTE'
        )
        OR NOT has_function_privilege(
             'matrix_iam_api', 'iam.create_policy_attachment(text,text,text,text,text,bigint,text,text,jsonb,text)', 'EXECUTE'
@@ -170,7 +171,7 @@ BEGIN
        )
        OR has_function_privilege(
             'matrix_iam_worker',
-            'iam.change_password(text,text,text,text,jsonb,text,boolean,text,bigint)',
+            'iam.change_password(text,text,text,text,jsonb,text,boolean,text,bigint,text,bigint)',
             'EXECUTE'
        )
        OR has_function_privilege(
@@ -293,7 +294,8 @@ DECLARE
     seed jsonb;
     entry regprocedure;
 BEGIN
-    IF (SELECT schema_version FROM iam.readiness())<>45 OR NOT iam.authorization_decision_contract_ready()
+    IF (SELECT schema_version FROM iam.readiness())<>49 OR NOT iam.authorization_decision_contract_ready()
+        OR NOT iam.login_session_contract_ready()
         OR NOT iam.policy_attachment_contract_ready() THEN
         RAISE EXCEPTION 'IAM profile registry schema is invalid';
     END IF;

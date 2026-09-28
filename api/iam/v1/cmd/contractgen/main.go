@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"maps"
 	"os"
 	"reflect"
 	"slices"
@@ -150,6 +151,9 @@ func buildPaths() object {
 		"/v1/auth/challenges/{challengeId}:password": object{"post": mutationOperation(
 			"changeChallengePassword", "Consume the exact forced-change stage: TOTP-proved LOGIN or password-proved initial ENROLLMENT; revoke all old sessions and challenges, then require a fresh login", "ChallengePasswordChangeRequest", "ChallengePasswordChangeResponse", "200", []any{}, []any{openapi31.PathIDParameter("challengeId")},
 		)},
+		"/v1/auth/challenges/{challengeId}/password-requirements": object{"post": mutationOperation(
+			"challengePasswordRequirements", "Observe only this live LOGIN or ENROLLMENT PASSWORD_CHANGE challenge's effective password rules; never a write permit", "ChallengePasswordRequirementsRequest", "PasswordRequirements", "200", []any{}, []any{openapi31.PathIDParameter("challengeId")},
+		)},
 		"/v1/auth/challenges/{challengeId}:recover": object{"post": mutationOperation(
 			"startAuthenticatorRecovery", "Consume one original recovery code under a current password-authenticated LOGIN challenge; revoke the lost factor and old sessions, issue only one-time rebinding material", "StartAuthenticatorRecoveryRequest", "StartAuthenticatorRecoveryResponse", "200", []any{}, []any{openapi31.PathIDParameter("challengeId")},
 		)},
@@ -188,6 +192,8 @@ func buildPaths() object {
 		"/v1/auth/step-up/{stepUpId}:verify":                           object{"post": mutationOperation("verifyStepUp", "Reauthenticate password and unused TOTP under shared budgets; keep the original absolute expiry and Session facts; repeated proof submission conflicts", "VerifyStepUpRequest", "StepUp", "200", nil, []any{openapi31.PathIDParameter("stepUpId")})},
 		"/v1/auth/recovery-codes:regenerate":                           object{"post": mutationOperation("regenerateRecoveryCodes", "Consume the exact proved command and replace only its recovery-code batch; APPLIED discloses codes once, EQUAL_REPLAY returns metadata only", "RegenerateRecoveryCodesRequest", "RegenerateRecoveryCodesResponse", "200", nil, nil)},
 		"/v1/auth/recovery-codes/regenerations/by-request/{requestId}": object{"get": readOperation("getRecoveryCodeRegenerationByRequest", "Read original same-USER completion using a current normal Session; never replay recovery codes", "RecoveryCodeRegeneration", nil, []any{openapi31.PathIDParameter("requestId")})},
+		"/v1/auth/totp:remove":                                         object{"post": mutationOperation("removeTOTP", "Consume the exact same-Session TOTP_REMOVE proof; APPLIED terminates old login Sessions, EQUAL_REPLAY only observes the original completion", "RemoveTOTPRequest", "RemoveTOTPResponse", "200", nil, nil)},
+		"/v1/auth/totp/removals/by-request/{requestId}":                object{"get": readOperation("getAuthenticatorRemovalByRequest", "Read the original same-USER removal using a current valid login Session; never repeat removal effects", "AuthenticatorRemoval", nil, []any{openapi31.PathIDParameter("requestId")})},
 		"/v1/auth/me":                object{"get": readOperation("getCurrentIdentity", "Get the current account and identity", "CurrentIdentity", nil, nil)},
 		"/v1/authorization-profiles": object{"get": readOperation("listAuthorizationProfiles", "Read complete current product declarations under current account policy-list permission; metadata is not a permit or registration capability. Maximum complete response 64 KiB.", "AuthorizationProfileList", nil, nil)},
 		"/v1/policies": object{
@@ -247,9 +253,15 @@ func buildPaths() object {
 		"/v1/auth/logout": object{"post": mutationOperation(
 			"logout", "Revoke the current session", "LogoutRequest", "LogoutResponse", "200", nil, nil,
 		)},
+		"/v1/auth/sessions": object{"get": readOperation("listOwnSessions", "Observe only the current user's valid login sessions; not devices or online activity", "SessionList", nil,
+			[]any{object{"name": "after", "in": "query", "required": false, "schema": pageCursorSchema(), "description": "Pass nextCursor unchanged. Bound to this actual login session, credential generation and installation; no account/user/current-session selectors."}})},
+		"/v1/auth/sessions/{sessionId}:revoke": object{"post": mutationOperation("revokeOwnSession", "End another login session of the current user; the current session must use logout", "RevokeSessionRequest", "RevokeOwnSessionResponse", "200", nil,
+			[]any{openapi31.PathIDParameter("sessionId")})},
+		"/v1/auth/sessions:revoke-others": object{"post": mutationOperation("revokeOtherSessions", "Atomically end the current user's other login sessions; exact replay preserves later logins", "RevokeSessionRequest", "RevokeOtherSessionsResponse", "200", nil, nil)},
 		"/v1/auth/password": object{"post": mutationOperation(
 			"changePassword", "Change the current user password", "ChangePasswordRequest", "ChangePasswordResponse", "200", nil, nil,
 		)},
+		"/v1/auth/password-requirements": object{"get": readOperation("passwordRequirements", "Observe the actual login session user's effective new-password rules, including forced-change sessions; no identity selector or write permit", "PasswordRequirements", nil, nil)},
 		"/v1/users": object{"get": readOperation("listUsers", "List manageable users and their bounded direct policy attachments in the current account", "UserList", nil, accountPageParameters()), "post": mutationOperation(
 			"createUser", "Create an account user", "CreateUserRequest", "User", "201", nil, nil,
 		)},
@@ -357,10 +369,10 @@ func readOperation(
 		responses["404"] = object{"$ref": "#/components/responses/ProblemResponse", "description": "No committed issuance found for this source user and request. This does not authorize a new intent."}
 	}
 	switch operationID {
-	case "getAuthenticatorState", "getTOTPEnrollment", "getTOTPEnrollmentByRequest", "cancelTOTPEnrollment", "getStepUpByRequest", "getRecoveryCodeRegenerationByRequest":
+	case "getAuthenticatorState", "getTOTPEnrollment", "getTOTPEnrollmentByRequest", "cancelTOTPEnrollment", "getStepUpByRequest", "getRecoveryCodeRegenerationByRequest", "getAuthenticatorRemovalByRequest", "passwordRequirements":
 		responses["400"] = object{"$ref": "#/components/responses/ProblemResponse", "description": "Invalid path, query or unexpected body; no identity selector is accepted."}
 	}
-	if operationID == "getStepUpByRequest" || operationID == "getRecoveryCodeRegenerationByRequest" {
+	if operationID == "getStepUpByRequest" || operationID == "getRecoveryCodeRegenerationByRequest" || operationID == "getAuthenticatorRemovalByRequest" {
 		responses["404"] = object{"$ref": "#/components/responses/ProblemResponse", "description": "No original same-USER metadata observed; not evidence that an uncertain command rolled back, and not permission to create a replacement intent."}
 	}
 	switch operationID {
@@ -498,6 +510,9 @@ func structContracts() map[string]reflect.Type {
 		"CreatePolicyAttachmentRequest":                 openapi31.StructType[iamv1.CreatePolicyAttachmentRequest](),
 		"RevokePolicyAttachmentRequest":                 openapi31.StructType[iamv1.RevokePolicyAttachmentRequest](),
 		"Session":                                       openapi31.StructType[iamv1.Session](),
+		"SessionList":                                   openapi31.StructType[iamv1.SessionList](),
+		"RevokeOwnSessionResponse":                      openapi31.StructType[iamv1.RevokeOwnSessionResponse](),
+		"RevokeOtherSessionsResponse":                   openapi31.StructType[iamv1.RevokeOtherSessionsResponse](),
 		"InitialOrganization":                           openapi31.StructType[iamv1.InitialOrganization](),
 		"InitialAdministrator":                          openapi31.StructType[iamv1.InitialAdministrator](),
 		"BootstrapServiceCredential":                    openapi31.StructType[iamv1.BootstrapServiceCredential](),
@@ -517,6 +532,9 @@ func structContracts() map[string]reflect.Type {
 		"StartChallengeTOTPEnrollmentRequest":           openapi31.StructType[iamv1.StartChallengeTOTPEnrollmentRequest](),
 		"AccountMFASettings":                            openapi31.StructType[iamv1.AccountMFASettings](),
 		"AccountSecuritySettings":                       openapi31.StructType[iamv1.AccountSecuritySettings](),
+		"AccountPasswordSettings":                       openapi31.StructType[iamv1.AccountPasswordSettings](),
+		"PasswordRequirements":                          openapi31.StructType[iamv1.PasswordRequirements](),
+		"ChallengePasswordRequirementsRequest":          openapi31.StructType[iamv1.ChallengePasswordRequirementsRequest](),
 		"SecuritySettingsUpdateIntent":                  openapi31.StructType[iamv1.SecuritySettingsUpdateIntent](),
 		"UpdateAccountSecuritySettingsRequest":          openapi31.StructType[iamv1.UpdateAccountSecuritySettingsRequest](),
 		"AccountSecuritySettingsChange":                 openapi31.StructType[iamv1.AccountSecuritySettingsChange](),
@@ -526,6 +544,9 @@ func structContracts() map[string]reflect.Type {
 		"TOTPProvisioning":                              openapi31.StructType[iamv1.TOTPProvisioning](),
 		"StartTOTPEnrollmentRequest":                    openapi31.StructType[iamv1.StartTOTPEnrollmentRequest](),
 		"StartTOTPReplacementRequest":                   openapi31.StructType[iamv1.StartTOTPReplacementRequest](),
+		"RemoveTOTPRequest":                             openapi31.StructType[iamv1.RemoveTOTPRequest](),
+		"AuthenticatorRemoval":                          openapi31.StructType[iamv1.AuthenticatorRemoval](),
+		"RemoveTOTPResponse":                            openapi31.StructType[iamv1.RemoveTOTPResponse](),
 		"StartTOTPEnrollmentResponse":                   openapi31.StructType[iamv1.StartTOTPEnrollmentResponse](),
 		"ConfirmTOTPEnrollmentRequest":                  openapi31.StructType[iamv1.ConfirmTOTPEnrollmentRequest](),
 		"ConfirmTOTPEnrollmentResponse":                 openapi31.StructType[iamv1.ConfirmTOTPEnrollmentResponse](),
@@ -624,6 +645,7 @@ func structContracts() map[string]reflect.Type {
 		"SetAccountStatusRequest":                       openapi31.StructType[iamv1.SetAccountStatusRequest](),
 		"RecoverRootCredentialsRequest":                 openapi31.StructType[iamv1.RecoverRootCredentialsRequest](),
 		"ResetUserPasswordRequest":                      openapi31.StructType[iamv1.ResetUserPasswordRequest](),
+		"UserPasswordResetCompletion":                   openapi31.StructType[iamv1.UserPasswordResetCompletion](),
 		"RevokeSessionRequest":                          openapi31.StructType[iamv1.RevokeSessionRequest](),
 		"Revocation":                                    openapi31.StructType[iamv1.Revocation](),
 		"AuthorizationRequest":                          openapi31.StructType[iamv1.AuthorizationRequest](),
@@ -639,12 +661,47 @@ func structContracts() map[string]reflect.Type {
 }
 
 func fieldOverlay(owner string, field reflect.StructField, jsonName string, base object) object {
+	if owner == "UserPasswordResetCompletion" {
+		switch jsonName {
+		case "expectedResourceVersion":
+			return object{"type": "integer", "minimum": 1, "maximum": uint64(9007199254740990)}
+		case "resultingResourceVersion":
+			return object{"type": "integer", "minimum": 2, "maximum": uint64(9007199254740991)}
+		}
+	}
+	if owner == "PasswordRequirements" {
+		switch jsonName {
+		case "apiVersion":
+			return object{"type": "string", "const": iamv1.APIVersion}
+		case "kind":
+			return object{"type": "string", "const": "PasswordRequirements"}
+		case "maximumLength":
+			return object{"type": "integer", "const": 128}
+		case "maximumUTF8Bytes":
+			return object{"type": "integer", "const": 512}
+		case "settingsVersion":
+			return object{"type": "integer", "minimum": 1, "maximum": uint64(9007199254740991)}
+		case "source":
+			return object{"type": "string", "enum": []string{"ACCOUNT", "PROTECTED_IDENTITY"}}
+		}
+	}
+	if owner == "AccountPasswordSettings" {
+		switch jsonName {
+		case "minimumLength":
+			return object{"type": "integer", "minimum": 15, "maximum": 128}
+		case "historyCount":
+			return object{"type": "integer", "minimum": 0, "maximum": 24}
+		}
+	}
 	if jsonName == "expectedResourceVersion" && (owner == "SecuritySettingsUpdateIntent" || owner == "UpdateAccountSecuritySettingsRequest" || owner == "AccountSecuritySettingsChange") {
 		return object{"type": "integer", "minimum": 1, "maximum": uint64(9007199254740990)}
 	}
 	if jsonName == "factorRevision" || jsonName == "expectedFactorRevision" {
-		if owner == "StartTOTPReplacementRequest" {
+		if owner == "StartTOTPReplacementRequest" || owner == "RemoveTOTPRequest" {
 			return object{"type": "integer", "minimum": 2, "maximum": uint64(9007199254740990)}
+		}
+		if owner == "AuthenticatorRemoval" {
+			return object{"type": "integer", "minimum": 3, "maximum": uint64(9007199254740991)}
 		}
 		if owner == "StepUp" || owner == "StartStepUpRequest" || owner == "RegenerateRecoveryCodesRequest" || owner == "RecoveryCodeRegeneration" {
 			return object{"type": "integer", "minimum": 2, "maximum": uint64(9007199254740991)}
@@ -656,7 +713,7 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 		return object{"type": "integer", "minimum": 1, "maximum": maximum}
 	}
 	if owner == "AuthenticatorState" && jsonName == "enrollmentState" {
-		return object{"enum": []string{"NEVER_BOUND", "BOUND", "RECOVERY_REQUIRED"}}
+		return object{"enum": []string{"NEVER_BOUND", "BOUND", "RECOVERY_REQUIRED", "REMOVED"}}
 	}
 	if owner == "TOTPEnrollment" && jsonName == "state" {
 		return object{"enum": []string{"PENDING", "CONFIRMED", "CANCELLED", "EXPIRED"}}
@@ -668,13 +725,16 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 		return object{"enum": []string{"STARTED", "COMPLETED", "SUPERSEDED", "EXPIRED"}}
 	}
 	if (owner == "StepUp" || owner == "StartStepUpRequest") && jsonName == "operation" {
-		return object{"enum": []string{string(iamv1.StepUpRegenerateRecoveryCodes), string(iamv1.StepUpUpdateSecuritySettings), string(iamv1.StepUpReplaceTOTP)}}
+		return object{"enum": []string{string(iamv1.StepUpRegenerateRecoveryCodes), string(iamv1.StepUpUpdateSecuritySettings), string(iamv1.StepUpReplaceTOTP), string(iamv1.StepUpRemoveTOTP)}}
 	}
 	if owner == "StepUp" && jsonName == "state" {
 		return object{"enum": []string{"PENDING", "PROVED", "CONSUMED", "EXPIRED"}}
 	}
-	if (owner == "StartTOTPEnrollmentResponse" || owner == "RegenerateRecoveryCodesResponse" || owner == "UpdateAccountSecuritySettingsResponse") && jsonName == "outcome" {
+	if (owner == "StartTOTPEnrollmentResponse" || owner == "RegenerateRecoveryCodesResponse" || owner == "UpdateAccountSecuritySettingsResponse" || owner == "RemoveTOTPResponse") && jsonName == "outcome" {
 		return object{"enum": []string{"APPLIED", "EQUAL_REPLAY"}}
+	}
+	if owner == "RemoveTOTPResponse" && jsonName == "nextStep" {
+		return object{"const": "REAUTHENTICATE"}
 	}
 	if owner == "ConfirmTOTPEnrollmentResponse" || owner == "ConfirmAuthenticatorRecoveryResponse" || owner == "RegenerateRecoveryCodesResponse" {
 		if jsonName == "nextStep" {
@@ -935,7 +995,7 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 	if jsonName == "loginAlias" {
 		base = object{"anyOf": []any{object{"type": "null"}, object{"type": "string", "pattern": `^[a-z][a-z0-9-]{1,61}[a-z0-9]$`, "minLength": 3, "maxLength": 63}}}
 	}
-	if jsonName == "nextAfter" {
+	if jsonName == "nextAfter" || (owner == "SessionList" && jsonName == "nextCursor") {
 		base = pageCursorSchema()
 		if owner == "AssumableRoleList" {
 			base = roleDiscoveryCursorSchema()
@@ -946,6 +1006,23 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 	}
 	if (owner == "UserList" || owner == "AccountList" || owner == "GroupList" || owner == "GroupMembershipList") && jsonName == "items" {
 		base["maxItems"] = 100
+	}
+	if owner == "SessionList" && jsonName == "items" {
+		base["maxItems"] = iamv1.DirectoryPageSize
+		base["items"] = object{"allOf": []any{openapi31.Ref("Session"), object{"properties": object{
+			"status": object{"const": string(iamv1.SessionActive)}, "revokedAt": false,
+		}}}}
+	}
+	if (owner == "RevokeOwnSessionResponse" || owner == "RevokeOtherSessionsResponse") && jsonName == "outcome" {
+		base = object{"type": "string", "enum": []string{"APPLIED", "EQUAL_REPLAY"}}
+	}
+	if owner == "RevokeOtherSessionsResponse" {
+		if jsonName == "kind" {
+			base = object{"const": "OtherSessionsRevocation"}
+		}
+		if jsonName == "revokedCount" {
+			base = object{"type": "integer", "minimum": 0, "maximum": uint64(9007199254740991)}
+		}
 	}
 	if owner == "PolicyList" && jsonName == "items" {
 		base["maxItems"] = iamv1.MaxPolicyListItems
@@ -998,20 +1075,54 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 }
 
 func applySemanticOverlays(schemas object) {
+	schemas["UserPasswordResetCompletion"].(object)["description"] = "Non-secret confirmation of one committed administrator reset, not password-input equality, current credential validity, Audit delivery or replay authority. Runtime validation requires a distinct actor and target, resultingResourceVersion = expectedResourceVersion + 1, and the original UTC microsecond fact time. Lookup must bind current Account/actor authorization and the exact original target/request/version; schema validation alone proves neither provenance nor completion."
+	schemas["PasswordRequirements"].(object)["description"] = "Current self-only password rules, measured in Unicode code points and UTF-8 bytes. An observation, never a write permit; final replacement rechecks current qualification and settings."
+	schemas["PasswordRequirements"].(object)["oneOf"] = []any{
+		object{"properties": object{"source": object{"const": "ACCOUNT"}}},
+		object{"properties": object{"source": object{"const": "PROTECTED_IDENTITY"}, "password": object{"properties": object{
+			"minimumLength": object{"const": 15}, "historyCount": object{"const": 1},
+			"requireLowercase": object{"const": false}, "requireUppercase": object{"const": false},
+			"requireDigit": object{"const": false}, "requireSymbol": object{"const": false},
+		}}}},
+	}
+	schemas["ChallengePasswordRequirementsRequest"].(object)["description"] = "Only the original live LOGIN or ENROLLMENT PASSWORD_CHANGE challenge credential. No Session, password or identity selector."
+	// The same value has one historical read boundary, not a second settings
+	// model. Never turn missing historical rules into current default values.
+	historicalSettings := maps.Clone(schemas["AccountSecuritySettings"].(object))
+	historicalIntent := maps.Clone(schemas["SecuritySettingsUpdateIntent"].(object))
+	for _, name := range []string{"AccountSecuritySettings", "SecuritySettingsUpdateIntent"} {
+		schema := schemas[name].(object)
+		schema["required"] = append(slices.Clone(schema["required"].([]string)), "password")
+	}
 	schemas["AccountMFASettings"].(object)["description"] = "Explicit ordinary USER MFA requirement, not factor state, Session authentication facts or an exception for protected identities. Missing or null is invalid, never an inferred false."
 	schemas["AccountSecuritySettings"].(object)["description"] = "Non-secret current-account configuration returned only under a current instance-scoped read decision. Neither factor state nor Session authentication facts."
 	schemas["SecuritySettingsUpdateIntent"].(object)["description"] = "Exact non-secret settings value and expected version for a Session-held SECURITY_SETTINGS_UPDATE proof. Not a selector or permit; cannot be attached to other operations."
-	schemas["UpdateAccountSecuritySettingsRequest"].(object)["description"] = "Replace the supported MFA configuration at one expected version using a proof held by the actual current Session and current instance permission. No identity selector, arbitrary patch or caller-controlled Session retention."
+	schemas["UpdateAccountSecuritySettingsRequest"].(object)["description"] = "Replace the complete MFA and password configuration at one expected version using a proof held by the actual current Session and current instance permission. No identity selector, arbitrary patch or caller-controlled Session retention."
 	schemas["AccountSecuritySettingsChange"].(object)["description"] = "Immutable historical completion. Runtime validation additionally requires settings.resourceVersion == expectedResourceVersion + 1. settings.updatedAt is the original completion time, not observation time; requestId is not lookup authority."
 	schemas["AccountSecuritySettingsChange"].(object)["properties"].(object)["callerSessionEnded"] = object{"const": true, "description": "Every settings change invalidates its original calling Session, including weakening the requirement. Never an instruction to end a later reader's current Session."}
+	historicalSettings["description"] = "Original settings at completion. A missing password segment records an actual pre-password completion; never current configuration, a default or a new write."
+	schemas["AccountSecuritySettingsChange"].(object)["properties"].(object)["settings"] = historicalSettings
 	schemas["UpdateAccountSecuritySettingsResponse"].(object)["description"] = "APPLIED and EQUAL_REPLAY carry the same original non-secret completion, not fresh authorization, current Session state or a credential."
+	schemas["UpdateAccountSecuritySettingsResponse"].(object)["oneOf"] = []any{
+		object{"properties": object{"outcome": object{"const": "APPLIED"}, "change": object{"properties": object{"settings": object{"required": []string{"password"}}}}}},
+		object{"properties": object{"outcome": object{"const": "EQUAL_REPLAY"}}},
+	}
 	schemas["StepUp"].(object)["description"] = "Non-secret metadata bound to one operation and its original effective login Session. It is not a bearer, unlogged challenge or authorization permit. Runtime validation enforces the original 120-second lifetime and proof/consumption ordering; proving never extends expiry."
 	for _, name := range []string{"StepUp", "StartStepUpRequest"} {
-		schemas[name].(object)["allOf"] = []any{object{"oneOf": []any{
+		operations := []any{
 			object{"properties": object{"operation": object{"const": string(iamv1.StepUpRegenerateRecoveryCodes)}, "securitySettings": false}},
 			object{"properties": object{"operation": object{"const": string(iamv1.StepUpReplaceTOTP)}, "securitySettings": false, "expectedFactorRevision": object{"maximum": uint64(9007199254740990)}}},
+			object{"properties": object{"operation": object{"const": string(iamv1.StepUpRemoveTOTP)}, "securitySettings": false, "expectedFactorRevision": object{"maximum": uint64(9007199254740990)}}},
 			object{"required": []string{"securitySettings"}, "properties": object{"operation": object{"const": string(iamv1.StepUpUpdateSecuritySettings)}, "securitySettings": openapi31.Ref("SecuritySettingsUpdateIntent")}},
-		}}}
+		}
+		if name == "StepUp" {
+			schemas[name].(object)["properties"].(object)["securitySettings"] = historicalIntent
+			operations = append(operations, object{"required": []string{"securitySettings"}, "properties": object{
+				"operation": object{"const": string(iamv1.StepUpUpdateSecuritySettings)}, "state": object{"const": "CONSUMED"},
+				"securitySettings": object{"properties": object{"password": false}},
+			}})
+		}
+		schemas[name].(object)["allOf"] = []any{object{"oneOf": operations}}
 	}
 	schemas["StepUp"].(object)["oneOf"] = []any{
 		object{"properties": object{"state": object{"const": "PENDING"}, "provedAt": false, "consumedAt": false}},
@@ -1020,6 +1131,13 @@ func applySemanticOverlays(schemas object) {
 		object{"properties": object{"state": object{"const": "EXPIRED"}, "provedAt": object{"type": "string"}, "consumedAt": false}},
 	}
 	schemas["RecoveryCodeRegeneration"].(object)["description"] = "Immutable non-secret observation of an original same-user recovery-code regeneration. It neither returns saved codes nor renews step-up authority."
+	schemas["RemoveTOTPRequest"].(object)["description"] = "Removal intent bound to the caller's current login Session and original same-purpose proof. Data contract only; no removal route is enabled yet."
+	schemas["AuthenticatorRemoval"].(object)["description"] = "Immutable non-secret completion, not current factor state or authentication authority. factorRevision is the resulting revision after removal."
+	schemas["RemoveTOTPResponse"].(object)["description"] = "Only first application ends old login eligibility. Historical observation must not instruct a client to end a newer Session."
+	schemas["RemoveTOTPResponse"].(object)["oneOf"] = []any{
+		object{"required": []string{"nextStep"}, "properties": object{"outcome": object{"const": "APPLIED"}}},
+		object{"properties": object{"outcome": object{"const": "EQUAL_REPLAY"}, "nextStep": false}},
+	}
 	schemas["RegenerateRecoveryCodesResponse"].(object)["oneOf"] = []any{
 		object{"required": []string{"recoveryCodes"}, "properties": object{"outcome": object{"const": "APPLIED"}, "recoveryCodes": object{"type": "array"}}},
 		object{"properties": object{"outcome": object{"const": "EQUAL_REPLAY"}, "recoveryCodes": false}},
@@ -1040,7 +1158,7 @@ func applySemanticOverlays(schemas object) {
 		object{"required": []string{"notificationContact", "enrollment"}, "properties": object{
 			"challenge":           object{"properties": object{"nextStep": object{"const": "ENROLLMENT"}}},
 			"notificationContact": object{"type": "object", "properties": object{"state": object{"const": "VERIFIED"}}},
-			"enrollment":          object{"type": "object", "properties": object{"purpose": object{"const": "INITIAL"}, "state": object{"const": "PENDING"}, "factorRevision": object{"const": 1}}},
+			"enrollment":          object{"type": "object", "properties": object{"purpose": object{"const": "INITIAL"}, "state": object{"const": "PENDING"}, "factorRevision": object{"oneOf": []any{object{"const": 1}, object{"minimum": 3}}}}},
 		}},
 	}
 	for _, name := range []string{"InspectEnrollmentChallengeRequest", "StartChallengeTOTPEnrollmentRequest", "StartChallengeNotificationContactVerificationRequest", "ConfirmChallengeNotificationContactVerificationRequest"} {
@@ -1074,11 +1192,13 @@ func applySemanticOverlays(schemas object) {
 		object{"properties": object{"enrollmentState": object{"const": "NEVER_BOUND"}, "factorRevision": object{"const": 1}, "factorId": false}},
 		object{"required": []string{"factorId"}, "properties": object{"enrollmentState": object{"const": "BOUND"}, "factorRevision": object{"minimum": 2}}},
 		object{"properties": object{"enrollmentState": object{"const": "RECOVERY_REQUIRED"}}},
+		object{"properties": object{"enrollmentState": object{"const": "REMOVED"}, "factorRevision": object{"minimum": 3}, "factorId": false}},
 	}
 	schemas["LoginResponse"].(object)["description"] = "Disjoint authentication result. A challenge is not a Session, bearer or authorization. Credential-bearing results require explicit encoding and no-store handling."
 	schemas["LoginResponse"].(object)["oneOf"] = []any{
 		object{"required": []string{"session", "credential", "mustChangePassword"}, "properties": object{
-			"outcome": object{"const": string(iamv1.LoginAuthenticated)}, "session": object{"type": "object", "properties": object{"status": object{"const": "ACTIVE"}, "revokedAt": false}},
+			"outcome":            object{"const": string(iamv1.LoginAuthenticated)},
+			"session":            object{"type": "object", "properties": object{"status": object{"const": "ACTIVE"}, "revokedAt": false}},
 			"mustChangePassword": object{"type": "boolean"}, "challenge": false, "challengeCredential": false,
 		}},
 		object{"required": []string{"challenge", "challengeCredential"}, "properties": object{
@@ -1276,8 +1396,10 @@ func applySemanticOverlays(schemas object) {
 	}
 	kinds := map[string]string{
 		"AccountSecuritySettings": "AccountSecuritySettings", "AccountSecuritySettingsChange": "AccountSecuritySettingsChange",
-		"NotificationContact": "NotificationContact", "NotificationContactVerification": "NotificationContactVerification",
-		"AccessKey": "AccessKey", "AccessKeyList": "AccessKeyList", "AccessKeyDeletion": "AccessKeyDeletion",
+		"UserPasswordResetCompletion": "UserPasswordResetCompletion",
+		"NotificationContact":         "NotificationContact", "NotificationContactVerification": "NotificationContactVerification",
+		"AuthenticatorRemoval": "AuthenticatorRemoval",
+		"AccessKey":            "AccessKey", "AccessKeyList": "AccessKeyList", "AccessKeyDeletion": "AccessKeyDeletion",
 		"CurrentRoleIdentity": "CurrentRoleIdentity", "AssumableRoleList": "AssumableRoleList",
 		"RoleSession":     "RoleSession",
 		"RoleSessionList": "RoleSessionList", "RoleSessionAccess": "RoleSessionAccess",

@@ -66,20 +66,9 @@ type PasswordChallengeCreation struct {
 	ID, LookupDigest, VerificationDigest, RequestID, RequestDigest string
 }
 
-type ChallengePasswordMaterial struct {
-	PasswordHash         authority.PasswordHash
-	CredentialGeneration uint64
-}
-
-func (ChallengePasswordMaterial) String() string { return "[REDACTED]" }
-func (ChallengePasswordMaterial) GoString() string {
-	return "identityaccess.ChallengePasswordMaterial{[REDACTED]}"
-}
-func (ChallengePasswordMaterial) MarshalJSON() ([]byte, error) { return nil, ErrUnavailable }
-
 type ChallengePasswordMutation struct {
 	Identity    AuthenticationChallengeCredential
-	Expected    ChallengePasswordMaterial
+	Expected    PasswordReplacementMaterial
 	Replacement authority.PasswordHash
 	AuditEvent  auditv1.Event
 }
@@ -102,8 +91,8 @@ func (service *Authority) createLoginChallenge(ctx context.Context, tx Transacti
 			return iamv1.LoginResponse{}, ErrUnavailable
 		}
 		step = "RECOVER"
-	case "NEVER_BOUND":
-		if state.Revision != 1 || state.FactorID != "" || !state.EnrollmentRequired {
+	case "NEVER_BOUND", "REMOVED":
+		if state.FactorID != "" || !state.EnrollmentRequired || (state.State == "NEVER_BOUND" && state.Revision != 1) || (state.State == "REMOVED" && state.Revision < 3) {
 			return iamv1.LoginResponse{}, ErrUnavailable
 		}
 		purpose, step = "ENROLLMENT", "ENROLLMENT"
@@ -159,6 +148,34 @@ func (service *Authority) authenticateChallenge(ctx context.Context, tx Transact
 		return AuthenticationChallengeCredential{}, ErrUnauthenticated
 	}
 	return stored, nil
+}
+
+func (service *Authority) ChallengePasswordRequirements(ctx context.Context, id string, request iamv1.ChallengePasswordRequirementsRequest) (iamv1.PasswordRequirements, error) {
+	if iamv1.ValidateID("challengeId", id) != nil || iamv1.ValidateChallengePasswordRequirementsRequest(request) != nil {
+		return iamv1.PasswordRequirements{}, ErrInvalidArgument
+	}
+	var result iamv1.PasswordRequirements
+	err := service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
+		identity, err := service.authenticateChallenge(ctx, tx, id, request.ChallengeCredential)
+		if err != nil {
+			return err
+		}
+		if (identity.Purpose != "LOGIN" && identity.Purpose != "ENROLLMENT") || identity.NextStep != "PASSWORD_CHANGE" {
+			return ErrUnauthenticated
+		}
+		result, err = tx.ReadChallengePasswordRequirements(ctx, identity)
+		if err != nil {
+			return err
+		}
+		if iamv1.ValidatePasswordRequirements(result) != nil {
+			return ErrUnavailable
+		}
+		return nil
+	})
+	if err != nil {
+		return iamv1.PasswordRequirements{}, err
+	}
+	return result, nil
 }
 
 func (service *Authority) VerifyAuthenticationChallenge(ctx context.Context, id string, request iamv1.VerifyAuthenticationChallengeRequest) (iamv1.LoginResponse, error) {
@@ -295,7 +312,7 @@ func (service *Authority) ChangeChallengePassword(ctx context.Context, id string
 	}
 	defer service.releasePasswordWork()
 	var identity AuthenticationChallengeCredential
-	var original ChallengePasswordMaterial
+	var original PasswordReplacementMaterial
 	err := service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
 		var err error
 		identity, err = service.authenticateChallenge(ctx, tx, id, request.ChallengeCredential)
@@ -311,16 +328,11 @@ func (service *Authority) ChangeChallengePassword(ctx context.Context, id string
 	if err != nil {
 		return iamv1.ChallengePasswordChangeResponse{}, err
 	}
-	// SQL verifies the exact original ceremony: completed TOTP for LOGIN,
-	// password-proved first setup for ENROLLMENT. This comparison only rejects
-	// a no-op replacement; it does not assert that both factors were proved.
-	// Neither expensive operation holds a connection or a principal lock.
-	same, err := service.passwords.Verify(request.NewPassword, original.PasswordHash)
-	if err != nil {
-		return iamv1.ChallengePasswordChangeResponse{}, ErrUnavailable
-	}
-	if same {
-		return iamv1.ChallengePasswordChangeResponse{}, ErrInvalidArgument
+	// SQL proves the original LOGIN or ENROLLMENT ceremony; history comparison
+	// does not upgrade it or manufacture an MFA fact. Neither expensive operation
+	// holds a connection or a principal lock.
+	if err := service.validatePasswordReplacement(ctx, request.NewPassword, original.PasswordSettings, original.PasswordHash, original.PasswordHistory, original.HistoryDigest); err != nil {
+		return iamv1.ChallengePasswordChangeResponse{}, err
 	}
 	replacement, err := service.passwords.Hash(request.NewPassword)
 	if err != nil {

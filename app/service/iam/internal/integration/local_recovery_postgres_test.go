@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
+	iamauthority "github.com/xiak/matrix/app/service/iam/internal/authority"
 	iampostgres "github.com/xiak/matrix/app/service/iam/internal/data/postgres"
 	iamhttp "github.com/xiak/matrix/app/service/iam/internal/service/nethttp"
 	"github.com/xiak/matrix/app/service/iam/internal/usecase/identityaccess"
@@ -74,10 +76,34 @@ func TestIAMLocalCredentialRecoveryPostgres(t *testing.T) {
 		Scope: iamv1.LocalCredentialRecoveryScope{InstallationID: document.InstallationID, BootstrapDigest: status.ContentDigest, AccountID: document.Organization.ID, PrincipalID: document.Administrator.ID}, CapabilityKey: capabilityKey}
 	initial := localRecoveryLogin(t, handler, "admin", adminPassword, true)
 	primary := localRecoveryChangePassword(t, handler, initial, adminPassword, changedAdminPassword)
+	currentPassword := changedAdminPassword
+	continuations := 0
+	continueWithFreshPassword := func(t *testing.T, bearer, previous string) string {
+		t.Helper()
+		continuations++
+		next := fmt.Sprintf("Recovery-Continued-Password-%03d!", continuations)
+		bearer = localRecoveryChangePassword(t, handler, bearer, previous, next)
+		currentPassword = next
+		return bearer
+	}
 	_ = localRecoveryLogin(t, handler, "admin", changedAdminPassword, false)
 	request := localRecoveryRequest(t, ctx, local, authority, "local-recovery-first", "Recovered-Primary-Password-43!")
 	before := readLocalRecoveryState(t, ctx, database, authority.Scope)
 	assertLocalRecoveryClosedSQLFact(t, ctx, database, authority, request, before.passwordHash)
+	for _, reused := range []string{changedAdminPassword, adminPassword} {
+		r := request
+		r.NewPassword = iamHTTPSecret(t, reused)
+		r, err = iamv1.SignLocalCredentialRecoveryRequest(authority, r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := local.RecoverLocalCredentials(ctx, authority, r); !errors.Is(err, identityaccess.ErrInvalidArgument) {
+			t.Fatalf("local recovery accepted current/recent password: %v", err)
+		}
+		if before != readLocalRecoveryState(t, ctx, database, authority.Scope) {
+			t.Fatal("local recovery history rejection changed security state")
+		}
+	}
 	if _, err := api.InspectLocalCredentialRecovery(ctx, authority, nil); !errors.Is(err, identityaccess.ErrForbidden) {
 		t.Fatalf("API identity acquired local inspection: %v", err)
 	}
@@ -180,6 +206,34 @@ func TestIAMLocalCredentialRecoveryPostgres(t *testing.T) {
 			}
 		})
 	}
+	t.Run("final outbox failure rolls back recovery", func(t *testing.T) {
+		if _, err := database.Exec(ctx, `CREATE SEQUENCE public.matrix_local_recovery_failure_seen;
+            GRANT USAGE ON SEQUENCE public.matrix_local_recovery_failure_seen TO matrix_iam_owner;
+            CREATE FUNCTION public.matrix_local_recovery_failure() RETURNS trigger LANGUAGE plpgsql AS $test$
+            BEGIN PERFORM nextval('public.matrix_local_recovery_failure_seen');
+              RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='isolated local recovery outbox failure'; END $test$;
+            CREATE TRIGGER matrix_local_recovery_failure AFTER INSERT ON iam.audit_outbox
+            FOR EACH ROW WHEN (NEW.event_document->>'action'='iam.installation-primary.credentials-recovered')
+            EXECUTE FUNCTION public.matrix_local_recovery_failure()`); err != nil {
+			t.Fatal(err)
+		}
+		defer func() {
+			if _, err := database.Exec(ctx, `DROP TRIGGER matrix_local_recovery_failure ON iam.audit_outbox;
+                DROP FUNCTION public.matrix_local_recovery_failure(); DROP SEQUENCE public.matrix_local_recovery_failure_seen`); err != nil {
+				t.Fatal(err)
+			}
+		}()
+		if _, err := local.RecoverLocalCredentials(ctx, authority, request); !errors.Is(err, identityaccess.ErrUnavailable) {
+			t.Fatal("outbox failure did not close local recovery", err)
+		}
+		var reached bool
+		if err := database.QueryRow(ctx, "SELECT is_called FROM public.matrix_local_recovery_failure_seen").Scan(&reached); err != nil || !reached {
+			t.Fatal("local recovery never reached the injected final failure")
+		}
+		if before != readLocalRecoveryState(t, ctx, database, authority.Scope) {
+			t.Fatal("failed recovery partially changed security state")
+		}
+	})
 	result, err := local.RecoverLocalCredentials(ctx, authority, request)
 	if err != nil || result.State != "APPLIED" || result.PreviousCredentialGeneration != before.generation || result.CredentialGeneration != before.generation+1 {
 		t.Fatalf("local recovery failed: %v", err)
@@ -231,7 +285,15 @@ func TestIAMLocalCredentialRecoveryPostgres(t *testing.T) {
 	temporary := localRecoveryLogin(t, handler, "admin", "Recovered-Primary-Password-43!", true)
 	otherTemporary := localRecoveryLogin(t, handler, "admin", "Recovered-Primary-Password-43!", true)
 	assertPlatformDecisionHTTP(t, handler, temporary, paasCredential, false)
-	primary = localRecoveryChangePassword(t, handler, temporary, "Recovered-Primary-Password-43!", changedAdminPassword)
+	retiredState := readLocalRecoveryState(t, ctx, database, authority.Scope)
+	retiredInput, _ := json.Marshal(map[string]string{"currentPassword": "Recovered-Primary-Password-43!", "newPassword": currentPassword, "requestId": "reject-retired-recovery-password"})
+	if response := performIAMRequest(handler, http.MethodPost, "/v1/auth/password", temporary, retiredInput); response.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("recent password reuse after recovery status=%d", response.Code)
+	}
+	if retiredState != readLocalRecoveryState(t, ctx, database, authority.Scope) {
+		t.Fatal("rejected recent password reuse changed security state")
+	}
+	primary = continueWithFreshPassword(t, temporary, "Recovered-Primary-Password-43!")
 	assertPlatformDecisionHTTP(t, handler, primary, paasCredential, true)
 	if response := performIAMRequest(handler, http.MethodGet, "/v1/auth/me", otherTemporary, nil); response.Code != http.StatusUnauthorized {
 		t.Fatal("forced change promoted another recovery-password session")
@@ -241,6 +303,71 @@ func TestIAMLocalCredentialRecoveryPostgres(t *testing.T) {
 	if stable != readLocalRecoveryState(t, ctx, database, authority.Scope) {
 		t.Fatal("historical recovery replay overwrote a later password")
 	}
+	for _, phase := range []string{"prepare", "final"} {
+		t.Run("exact completion before "+phase, func(t *testing.T) {
+			replacement := "Completed-During-Recovery-" + phase + "-97!"
+			r := localRecoveryRequest(t, ctx, local, authority, "complete-before-"+phase, replacement)
+			prefix := "SELECT iam.recover_local_credentials("
+			if phase == "prepare" {
+				prefix = "SELECT * FROM iam.prepare_local_credential_recovery("
+			}
+			gate := &localRecoveryPhaseGate{prefix: prefix, reached: make(chan struct{}), release: make(chan struct{})}
+			defer gate.resume()
+			tracing := localRecoveryWorkflow(t, ctx, dsn, localRecoveryTestRole, gate)
+			type outcome struct {
+				result iamv1.LocalCredentialRecoveryResult
+				err    error
+			}
+			finished := make(chan outcome, 1)
+			go func() {
+				result, err := tracing.RecoverLocalCredentials(ctx, authority, r)
+				finished <- outcome{result, err}
+			}()
+			select {
+			case <-gate.reached:
+			case <-ctx.Done():
+				t.Fatal("recovery did not reach its phase barrier")
+			}
+			original, err := local.RecoverLocalCredentials(ctx, authority, r)
+			if err != nil || original.State != "APPLIED" {
+				t.Fatal("complete peer recovery", err)
+			}
+			primary = continueWithFreshPassword(t, localRecoveryLogin(t, handler, "admin", replacement, true), replacement)
+			afterChange := readLocalRecoveryState(t, ctx, database, authority.Scope)
+			gate.resume()
+			replayed := <-finished
+			want := original
+			want.State = "EQUAL_REPLAY"
+			if replayed.err != nil || replayed.result != want {
+				t.Fatal("racing exact completion lost original receipt", replayed.err)
+			}
+			if afterChange != readLocalRecoveryState(t, ctx, database, authority.Scope) {
+				t.Fatal("racing receipt replay overwrote later security state")
+			}
+		})
+	}
+	t.Run("prepared recovery cannot overwrite subsequent password change", func(t *testing.T) {
+		r := localRecoveryRequest(t, ctx, local, authority, "stale-prepared-recovery", "Stale-Prepared-Recovery-Password-98!")
+		gate := &localRecoveryPhaseGate{reached: make(chan struct{}), release: make(chan struct{})}
+		defer gate.resume()
+		tracing := localRecoveryWorkflow(t, ctx, dsn, localRecoveryTestRole, gate)
+		finished := make(chan error, 1)
+		go func() { _, err := tracing.RecoverLocalCredentials(ctx, authority, r); finished <- err }()
+		select {
+		case <-gate.reached:
+		case <-ctx.Done():
+			t.Fatal("recovery did not prepare its password")
+		}
+		primary = continueWithFreshPassword(t, primary, currentPassword)
+		afterChange := readLocalRecoveryState(t, ctx, database, authority.Scope)
+		gate.resume()
+		if err := <-finished; !errors.Is(err, identityaccess.ErrConflict) {
+			t.Fatal("stale preparation overwrote new credential", err)
+		}
+		if afterChange != readLocalRecoveryState(t, ctx, database, authority.Scope) {
+			t.Fatal("stale preparation partially changed security state")
+		}
+	})
 
 	// A separate normally provisioned platform USER can race revocation without
 	// relying on the recovered primary's now-revoked bearer.
@@ -269,7 +396,7 @@ func TestIAMLocalCredentialRecoveryPostgres(t *testing.T) {
 	}
 	for _, action := range []string{"reset", "recover", "grant", "login"} {
 		t.Run(action+" races local recovery", func(t *testing.T) {
-			const replacement = "Recovery-Parallel-Protected-Password-88!"
+			replacement := "Recovery-Parallel-Protected-Password-" + action + "-88!"
 			r := localRecoveryRequest(t, ctx, local, authority, "recovery-versus-"+action, replacement)
 			prior := readLocalRecoveryState(t, ctx, database, authority.Scope)
 			path, credential := "", operatorSession
@@ -286,7 +413,7 @@ func TestIAMLocalCredentialRecoveryPostgres(t *testing.T) {
 				body = iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(authority.Scope.PrincipalID)}, PolicyID: iamv1.SystemPolicyPlatformOperator, PolicyResourceVersion: 1, RequestID: "platform-grant-versus-local"}
 			case "login":
 				path, credential = "/v1/auth/login", ""
-				body = map[string]any{"loginName": "admin", "password": changedAdminPassword, "requestId": "old-login-versus-local"}
+				body = map[string]any{"loginName": "admin", "password": currentPassword, "requestId": "old-login-versus-local"}
 			}
 			encoded, err := json.Marshal(body)
 			if err != nil {
@@ -338,7 +465,7 @@ func TestIAMLocalCredentialRecoveryPostgres(t *testing.T) {
 			if next.generation != prior.generation+1 || next.activeSessions != 0 || next.bindings != prior.bindings || next.facts != prior.facts+1 || next.receipts != prior.receipts+1 || next.services != prior.services {
 				t.Fatal("racing operation altered local recovery's closed effects")
 			}
-			primary = localRecoveryChangePassword(t, handler, localRecoveryLogin(t, handler, "admin", replacement, true), replacement, changedAdminPassword)
+			primary = continueWithFreshPassword(t, localRecoveryLogin(t, handler, "admin", replacement, true), replacement)
 		})
 	}
 
@@ -348,7 +475,8 @@ func TestIAMLocalCredentialRecoveryPostgres(t *testing.T) {
 			name = "duplicate concurrent intent"
 		}
 		t.Run(name, func(t *testing.T) {
-			first := localRecoveryRequest(t, ctx, local, authority, fmt.Sprintf("parallel-recovery-%t-a", sameIntent), "Parallel-Recovered-Password-83!")
+			replacement := fmt.Sprintf("Parallel-Recovered-Password-%t-83!", sameIntent)
+			first := localRecoveryRequest(t, ctx, local, authority, fmt.Sprintf("parallel-recovery-%t-a", sameIntent), replacement)
 			second := first
 			if !sameIntent {
 				second.CommandID = fmt.Sprintf("parallel-recovery-%t-b", sameIntent)
@@ -393,7 +521,7 @@ func TestIAMLocalCredentialRecoveryPostgres(t *testing.T) {
 			if next.generation != prior.generation+1 || next.activeSessions != 0 || next.facts != prior.facts+1 || next.receipts != prior.receipts+1 || next.bindings != prior.bindings {
 				t.Fatal("parallel recovery broke single-application invariants")
 			}
-			primary = localRecoveryChangePassword(t, handler, localRecoveryLogin(t, handler, "admin", "Parallel-Recovered-Password-83!", true), "Parallel-Recovered-Password-83!", changedAdminPassword)
+			primary = continueWithFreshPassword(t, localRecoveryLogin(t, handler, "admin", replacement, true), replacement)
 		})
 	}
 	t.Run("password change races recovery", func(t *testing.T) {
@@ -405,7 +533,7 @@ func TestIAMLocalCredentialRecoveryPostgres(t *testing.T) {
 		go func() { <-start; _, err := local.RecoverLocalCredentials(ctx, authority, r); recoveryErr <- err }()
 		go func() {
 			<-start
-			response := performIAMRequest(handler, http.MethodPost, "/v1/auth/password", primary, []byte(`{"currentPassword":"`+changedAdminPassword+`","newPassword":"Racing-Daily-Password-85!","requestId":"daily-versus-recovery"}`))
+			response := performIAMRequest(handler, http.MethodPost, "/v1/auth/password", primary, []byte(`{"currentPassword":"`+currentPassword+`","newPassword":"Racing-Daily-Password-85!","requestId":"daily-versus-recovery"}`))
 			passwordStatus <- response.Code
 		}()
 		close(start)
@@ -418,12 +546,12 @@ func TestIAMLocalCredentialRecoveryPostgres(t *testing.T) {
 			if changeStatus == http.StatusOK || next.activeSessions != 0 {
 				t.Fatal("old password change survived local recovery")
 			}
-			primary = localRecoveryChangePassword(t, handler, localRecoveryLogin(t, handler, "admin", "Racing-Recovered-Password-84!", true), "Racing-Recovered-Password-84!", changedAdminPassword)
+			primary = continueWithFreshPassword(t, localRecoveryLogin(t, handler, "admin", "Racing-Recovered-Password-84!", true), "Racing-Recovered-Password-84!")
 		} else {
 			if !errors.Is(recoverErr, identityaccess.ErrConflict) || changeStatus != http.StatusOK {
 				t.Fatalf("change/recovery did not serialize: recovery=%v status=%d", recoverErr, changeStatus)
 			}
-			primary = localRecoveryChangePassword(t, handler, primary, "Racing-Daily-Password-85!", changedAdminPassword)
+			primary = continueWithFreshPassword(t, primary, "Racing-Daily-Password-85!")
 		}
 	})
 	t.Run("logout races recovery", func(t *testing.T) {
@@ -447,7 +575,7 @@ func TestIAMLocalCredentialRecoveryPostgres(t *testing.T) {
 		if readLocalRecoveryState(t, ctx, database, authority.Scope).activeSessions != 0 {
 			t.Fatal("logout/recovery retained a session")
 		}
-		primary = localRecoveryChangePassword(t, handler, localRecoveryLogin(t, handler, "admin", "Logout-Recovered-Password-86!", true), "Logout-Recovered-Password-86!", changedAdminPassword)
+		primary = continueWithFreshPassword(t, localRecoveryLogin(t, handler, "admin", "Logout-Recovered-Password-86!", true), "Logout-Recovered-Password-86!")
 	})
 
 	observer, err := pgx.ConnectConfig(ctx, config)
@@ -457,7 +585,8 @@ func TestIAMLocalCredentialRecoveryPostgres(t *testing.T) {
 	defer observer.Close(context.Background())
 	for _, recoveryFirst := range []bool{true, false} {
 		t.Run(fmt.Sprintf("revoke race recovery-first=%t", recoveryFirst), func(t *testing.T) {
-			r := localRecoveryRequest(t, ctx, local, authority, fmt.Sprintf("recovery-versus-revoke-%t", recoveryFirst), "Revoked-Recovered-Password-87!")
+			replacement := fmt.Sprintf("Revoked-Recovered-Password-%t-87!", recoveryFirst)
+			r := localRecoveryRequest(t, ctx, local, authority, fmt.Sprintf("recovery-versus-revoke-%t", recoveryFirst), replacement)
 			uncommitted := r
 			uncommitted.CommandID = fmt.Sprintf("issued-before-terminal-revoke-%t", recoveryFirst)
 			uncommitted, err = iamv1.SignLocalCredentialRecoveryRequest(authority, uncommitted)
@@ -466,10 +595,22 @@ func TestIAMLocalCredentialRecoveryPostgres(t *testing.T) {
 			}
 			prior := readLocalRecoveryState(t, ctx, database, authority.Scope)
 			// Hold only a fixture row lock, never write credentials or bindings.
-			// Recovery-first queues on the organization before online revocation.
+			// Recovery-first queues its final write (not its short preparation)
+			// on the organization before online revocation.
 			// Revoke-first holds its scope while waiting on the attachment,
 			// so recovery must wait for that same scope.
 			// Both paths still execute the real transactions and HTTP authority.
+			gate := &localRecoveryPhaseGate{reached: make(chan struct{}), release: make(chan struct{})}
+			defer gate.resume()
+			tracing := localRecoveryWorkflow(t, ctx, dsn, localRecoveryTestRole, gate)
+			recoverErr := make(chan error, 1)
+			recover := func() { _, err := tracing.RecoverLocalCredentials(ctx, authority, r); recoverErr <- err }
+			go recover()
+			select {
+			case <-gate.reached:
+			case <-ctx.Done():
+				t.Fatal("recovery did not prepare its final write")
+			}
 			blocker, err := database.Begin(ctx)
 			if err != nil {
 				t.Fatal(err)
@@ -484,21 +625,19 @@ func TestIAMLocalCredentialRecoveryPostgres(t *testing.T) {
 			if _, err := blocker.Exec(ctx, lockQuery, authority.Scope.AccountID, lockTarget); err != nil {
 				t.Fatal(err)
 			}
-			recoverErr := make(chan error, 1)
 			revocation := make(chan int, 1)
-			recover := func() { _, err := local.RecoverLocalCredentials(ctx, authority, r); recoverErr <- err }
 			revoke := func() {
 				revocation <- performIAMRequest(handler, http.MethodPost, "/v1/policy-attachments/"+string(r.Expected.PlatformBindingID)+":revoke", operatorSession, []byte(fmt.Sprintf(`{"resourceVersion":%d,"requestId":"revoke-versus-recovery-%t"}`, r.Expected.PlatformBindingResourceVersion, recoveryFirst))).Code
 			}
 			if recoveryFirst {
-				go recover()
+				gate.resume()
 				waitForLocalRecoveryLock(t, ctx, observer, localRecoveryTestRole)
 				go revoke()
 				waitForLocalRecoveryLock(t, ctx, observer, iamHTTPTestRole)
 			} else {
 				go revoke()
 				waitForLocalRecoveryLock(t, ctx, observer, iamHTTPTestRole)
-				go recover()
+				gate.resume()
 				waitForLocalRecoveryLock(t, ctx, observer, localRecoveryTestRole)
 			}
 			if err := blocker.Rollback(ctx); err != nil {
@@ -538,7 +677,7 @@ func TestIAMLocalCredentialRecoveryPostgres(t *testing.T) {
 			if recoveryFirst {
 				// Reset the next race only through normal forced password change and
 				// explicit grant by the separate still-authorized platform operator.
-				primary = localRecoveryChangePassword(t, handler, localRecoveryLogin(t, handler, "admin", "Revoked-Recovered-Password-87!", true), "Revoked-Recovered-Password-87!", changedAdminPassword)
+				primary = continueWithFreshPassword(t, localRecoveryLogin(t, handler, "admin", replacement, true), replacement)
 				body, _ := json.Marshal(iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(authority.Scope.PrincipalID)}, PolicyID: iamv1.SystemPolicyPlatformOperator, PolicyResourceVersion: 1, RequestID: "explicit-regrant-for-next-recovery-race"})
 				if response := performIAMRequest(handler, http.MethodPost, "/v1/policy-attachments", operatorSession, body); response.Code != http.StatusOK {
 					t.Fatal("explicit authorized platform grant failed")
@@ -552,6 +691,31 @@ func TestIAMLocalCredentialRecoveryPostgres(t *testing.T) {
 		t.Fatal("local receipt leaked private recovery material")
 	}
 }
+
+// Pause at the preparation or final-write boundary; every statement still runs
+// against PostgreSQL. No query arguments or secrets leave the connection.
+type localRecoveryPhaseGate struct {
+	prefix           string
+	reached, release chan struct{}
+	arrive, finish   sync.Once
+}
+
+func (gate *localRecoveryPhaseGate) resume() { gate.finish.Do(func() { close(gate.release) }) }
+func (gate *localRecoveryPhaseGate) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	prefix := gate.prefix
+	if prefix == "" {
+		prefix = "SELECT iam.recover_local_credentials("
+	}
+	if strings.HasPrefix(data.SQL, prefix) {
+		gate.arrive.Do(func() { close(gate.reached) })
+		select {
+		case <-gate.release:
+		case <-ctx.Done():
+		}
+	}
+	return ctx
+}
+func (*localRecoveryPhaseGate) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
 func waitForLocalRecoveryLock(t *testing.T, ctx context.Context, observer *pgx.Conn, user string) {
 	t.Helper()
@@ -585,24 +749,46 @@ func assertLocalRecoveryClosedSQLFact(t *testing.T, ctx context.Context, databas
 	if err != nil {
 		t.Fatal(err)
 	}
+	newPasswordHash, err := iamauthority.NewPasswordHasher(nil).Hash(request.NewPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepare, err := database.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := prepare.Exec(ctx, "SET LOCAL ROLE matrix_iam_credential_recovery"); err != nil {
+		t.Fatal(err)
+	}
+	var preparedHash, historyDigest string
+	if err := prepare.QueryRow(ctx, "SELECT password_hash,history_digest FROM iam.prepare_local_credential_recovery($1::jsonb,$2::jsonb,$3,$4)",
+		string(scope), string(expected), request.CommandID, commitment).Scan(&preparedHash, &historyDigest); err != nil {
+		t.Fatal("prepare private recovery fact", err)
+	}
+	if err := prepare.Rollback(ctx); err != nil || preparedHash != passwordHash {
+		t.Fatal("recovery preparation substituted the current verifier")
+	}
 	for name, mutate := range map[string]func(*auditv1.Event){
-		"actor":              func(e *auditv1.Event) { e.Actor.Type = auditv1.ActorUser },
-		"system id":          func(e *auditv1.Event) { e.Actor.ID = "installation-verifier" },
-		"action":             func(e *auditv1.Event) { e.Action = auditv1.ActionIAMTenantAdministratorRecovered },
-		"namespace":          func(e *auditv1.Event) { e.Target.TenantID = "another-tenant" },
-		"principal":          func(e *auditv1.Event) { e.Target.ID = "service-iam" },
-		"installation":       func(e *auditv1.Event) { e.InstallationID = "another-installation" },
-		"decision":           func(e *auditv1.Event) { e.IAMDecisionID = "fabricated-decision" },
-		"operation":          func(e *auditv1.Event) { e.OperationID = "fabricated-operation" },
-		"request":            func(e *auditv1.Event) { e.RequestID = "another-command" },
-		"revoked attachment": nil,
+		"valid fact rollback":  nil,
+		"wrong current hash":   nil,
+		"wrong history digest": nil,
+		"actor":                func(e *auditv1.Event) { e.Actor.Type = auditv1.ActorUser },
+		"system id":            func(e *auditv1.Event) { e.Actor.ID = "installation-verifier" },
+		"action":               func(e *auditv1.Event) { e.Action = auditv1.ActionIAMTenantAdministratorRecovered },
+		"namespace":            func(e *auditv1.Event) { e.Target.TenantID = "another-tenant" },
+		"principal":            func(e *auditv1.Event) { e.Target.ID = "service-iam" },
+		"installation":         func(e *auditv1.Event) { e.InstallationID = "another-installation" },
+		"decision":             func(e *auditv1.Event) { e.IAMDecisionID = "fabricated-decision" },
+		"operation":            func(e *auditv1.Event) { e.OperationID = "fabricated-operation" },
+		"request":              func(e *auditv1.Event) { e.RequestID = "another-command" },
+		"revoked attachment":   nil,
 	} {
 		t.Run("database fact "+name, func(t *testing.T) {
 			tx, err := database.Begin(ctx)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if mutate == nil {
+			if name == "revoked attachment" {
 				if _, err := tx.Exec(ctx, "UPDATE iam.policy_attachments SET revoked_at=transaction_timestamp(),updated_at=transaction_timestamp(),resource_version=resource_version+1 WHERE tenant_id=$1 AND id=$2", request.Scope.AccountID, request.Expected.PlatformBindingID); err != nil {
 					t.Fatal(err)
 				}
@@ -622,11 +808,30 @@ func assertLocalRecoveryClosedSQLFact(t *testing.T, ctx context.Context, databas
 				mutate(&event)
 			}
 			encoded, _ := json.Marshal(event)
-			_, attackErr := tx.Exec(ctx, "SELECT iam.recover_local_credentials($1::jsonb,$2::jsonb,$3,$4,$5,$6::jsonb)", string(scope), string(expected), request.CommandID, commitment, passwordHash, string(encoded))
+			currentHash, currentDigest := preparedHash, historyDigest
+			if name == "wrong current hash" {
+				currentHash = preparedHash[:len(preparedHash)-1] + "!"
+			}
+			if name == "wrong history digest" {
+				currentDigest = "sha256:" + strings.Repeat("f", 64)
+			}
+			_, attackErr := tx.Exec(ctx, "SELECT iam.recover_local_credentials($1::jsonb,$2::jsonb,$3,$4,$5,$6::jsonb,$7,$8)", string(scope), string(expected), request.CommandID, commitment, string(newPasswordHash), string(encoded), currentHash, currentDigest)
 			_ = tx.Rollback(ctx)
+			if name == "valid fact rollback" {
+				if attackErr != nil {
+					t.Fatal("valid history-bound recovery fact was rejected", attackErr)
+				}
+				return
+			}
 			var pgErr *pgconn.PgError
 			if !errors.As(attackErr, &pgErr) {
 				t.Fatal("local SQL recovery did not reject an unauthorized security fact")
+			}
+			if name == "wrong current hash" || name == "wrong history digest" {
+				if pgErr.Code != "23505" {
+					t.Fatalf("stale password preparation rejected at wrong boundary: %s", pgErr.Code)
+				}
+				return
 			}
 			if pgErr.Code != "22023" && pgErr.Code != "42501" {
 				t.Fatalf("local SQL rejection did not exercise the security boundary: code=%s", pgErr.Code)
@@ -742,6 +947,7 @@ func localRecoveryChangePassword(t *testing.T, handler http.Handler, bearer, pre
 type localRecoveryState struct {
 	generation, organizationVersion, principalVersion, activeSessions, facts, receipts uint64
 	passwordHash, bindings, sessions, services, organizationStatus, principalStatus    string
+	passwordHistory, passwordHistoryDigest, passwordAge                                string
 	mustChange, owner                                                                  bool
 }
 
@@ -755,11 +961,13 @@ func readLocalRecoveryState(t *testing.T, ctx context.Context, database *pgx.Con
         (SELECT COALESCE(jsonb_agg(jsonb_build_array(id,status,resource_version,credential_version,revoked_at) ORDER BY id),'[]'::jsonb)::text FROM iam.sessions s WHERE s.tenant_id=p.tenant_id AND s.principal_id=p.id),
         (SELECT COALESCE(jsonb_agg(jsonb_build_array(id,policy_id,authority_scope,installation_id,resource_version,revoked_at) ORDER BY id),'[]'::jsonb)::text FROM iam.policy_attachments b WHERE b.tenant_id=p.tenant_id AND b.target_id=p.id),
         (SELECT count(*) FROM iam.audit_outbox WHERE event_document->>'action'=$3),
-        (SELECT count(*) FROM iam.local_credential_recoveries)
+        (SELECT count(*) FROM iam.local_credential_recoveries),
+        c.password_history::text,encode(c.password_history_digest,'hex'),COALESCE(c.password_changed_at::text,'UNKNOWN')
         FROM iam.principals p JOIN iam.user_credentials c ON c.tenant_id=p.tenant_id AND c.principal_id=p.id
         JOIN iam.accounts o ON o.id=p.tenant_id WHERE p.tenant_id=$1 AND p.id=$2`, scope.AccountID, scope.PrincipalID, auditv1.ActionIAMInstallationPrimaryCredentialsRecovered).
 		Scan(&result.generation, &result.passwordHash, &result.principalVersion, &result.mustChange, &result.principalStatus, &result.organizationStatus, &result.organizationVersion, &result.owner, &result.services,
-			&result.activeSessions, &result.sessions, &result.bindings, &result.facts, &result.receipts)
+			&result.activeSessions, &result.sessions, &result.bindings, &result.facts, &result.receipts,
+			&result.passwordHistory, &result.passwordHistoryDigest, &result.passwordAge)
 	if err != nil {
 		t.Fatal("read local recovery security invariants")
 	}
@@ -782,6 +990,8 @@ func assertLocalRecoveryDatabaseBoundary(t *testing.T, ctx context.Context, data
 		attacks := []string{"SELECT * FROM iam.local_credential_recoveries", "SELECT * FROM iam.user_credentials", "UPDATE iam.principals SET must_change_password=false", "SET ROLE matrix_iam_owner", "SET ROLE matrix_iam_migrator"}
 		if user == localRecoveryTestRole {
 			attacks = append(attacks, "SET ROLE matrix_iam_api", "SET ROLE matrix_iam_worker", "SELECT * FROM iam.lookup_login('admin')", "SELECT * FROM iam.bootstrap_status()", "SELECT * FROM iam.claim_audit_event('recovery-attacker',30)")
+		} else {
+			attacks = append(attacks, "SELECT * FROM iam.prepare_local_credential_recovery('{}','{}','probe','probe')")
 		}
 		for _, attack := range attacks {
 			_, err := connection.Exec(ctx, attack)
@@ -794,7 +1004,12 @@ func assertLocalRecoveryDatabaseBoundary(t *testing.T, ctx context.Context, data
 	}
 	for _, damage := range []string{
 		"ALTER FUNCTION iam.inspect_local_credential_recovery(jsonb,text,text) SECURITY INVOKER",
-		"ALTER FUNCTION iam.recover_local_credentials(jsonb,jsonb,text,text,text,jsonb) SECURITY INVOKER",
+		"ALTER FUNCTION iam.recover_local_credentials(jsonb,jsonb,text,text,text,jsonb,text,text) SECURITY INVOKER",
+		"ALTER FUNCTION iam.prepare_local_credential_recovery(jsonb,jsonb,text,text) SECURITY INVOKER",
+		"GRANT EXECUTE ON FUNCTION iam.prepare_local_credential_recovery(jsonb,jsonb,text,text) TO matrix_iam_api",
+		"GRANT EXECUTE ON FUNCTION iam.prepare_local_credential_recovery(jsonb,jsonb,text,text) TO matrix_iam_worker",
+		"GRANT EXECUTE ON FUNCTION iam.prepare_local_credential_recovery(jsonb,jsonb,text,text) TO matrix_iam_authentication_recovery",
+		"REVOKE EXECUTE ON FUNCTION iam.prepare_local_credential_recovery(jsonb,jsonb,text,text) FROM matrix_iam_credential_recovery",
 		"ALTER TABLE iam.local_credential_recoveries NO FORCE ROW LEVEL SECURITY",
 		"ALTER TABLE iam.local_credential_recoveries DISABLE TRIGGER local_recovery_receipts_are_immutable",
 	} {

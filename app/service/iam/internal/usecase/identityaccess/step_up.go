@@ -12,6 +12,7 @@ import (
 var (
 	ErrStepUpNotFound                   = errors.New("operation proof was not found")
 	ErrRecoveryCodeRegenerationNotFound = errors.New("recovery code regeneration was not found")
+	ErrAuthenticatorRemovalNotFound     = errors.New("authenticator removal was not found")
 )
 
 // This workflow owns an operation proof under an existing login Session. It
@@ -42,6 +43,95 @@ type RecoveryCodeRegenerationResult struct {
 	Regeneration iamv1.RecoveryCodeRegeneration
 }
 
+type AuthenticatorRemovalMutation struct {
+	Session            iamv1.Session
+	Request            iamv1.RemoveTOTPRequest
+	ID, NotificationID string
+	AuditEvent         auditv1.Event
+}
+
+func (service *Authority) RemoveTOTP(ctx context.Context, credential iamv1.Secret, request iamv1.RemoveTOTPRequest) (iamv1.RemoveTOTPResponse, error) {
+	if iamv1.ValidateRemoveTOTPRequest(request) != nil {
+		return iamv1.RemoveTOTPResponse{}, ErrInvalidArgument
+	}
+	var id, eventID, noticeID string
+	for prefix, destination := range map[string]*string{"authenticator-removal": &id, "event": &eventID, "notification": &noticeID} {
+		value, err := service.config.NewID(prefix)
+		if err != nil {
+			return iamv1.RemoveTOTPResponse{}, ErrUnavailable
+		}
+		*destination = value
+	}
+	digest, err := digestSanitized("totp-remove", request)
+	if err != nil {
+		return iamv1.RemoveTOTPResponse{}, err
+	}
+	var result iamv1.RemoveTOTPResponse
+	err = service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
+		result = iamv1.RemoveTOTPResponse{}
+		subject, err := service.totpSession(ctx, tx, credential)
+		if err != nil {
+			return err
+		}
+		if err := service.checkTOTPCustody(ctx, tx); err != nil {
+			return err
+		}
+		if err := service.checkEmailVerificationCustody(ctx, tx); err != nil {
+			return err
+		}
+		now, err := transactionTime(ctx, tx)
+		if err != nil {
+			return err
+		}
+		caller := subject.Subject.Session
+		event, err := newAuditEvent(eventID, caller.AccountID, "", auditv1.ActorReference{Type: auditv1.ActorUser, ID: auditv1.ActorID(caller.PrincipalID)},
+			auditv1.ActionIAMAuthenticatorRemoved, auditv1.TargetReference{Kind: auditv1.TargetPrincipal, ID: string(caller.PrincipalID)},
+			auditv1.ResultSucceeded, "", digest, request.RequestID, request.RequestID, now)
+		if err != nil {
+			return err
+		}
+		// SQL authenticates the current Session before reading the completion.
+		// Only a new intent consumes a same-Session TOTP_REMOVE proof; replay
+		// must never revoke the freshly authenticated observer's Session.
+		result, err = tx.RemoveTOTP(ctx, AuthenticatorRemovalMutation{Session: caller, Request: request,
+			ID: id, NotificationID: noticeID, AuditEvent: event})
+		if err != nil {
+			return err
+		}
+		if iamv1.ValidateRemoveTOTPResponse(result) != nil || result.Removal.RequestID != request.RequestID ||
+			result.Removal.FactorRevision != request.ExpectedFactorRevision+1 || (result.Outcome == "APPLIED" && result.Removal.ID != id) {
+			return ErrUnavailable
+		}
+		return nil
+	})
+	if err != nil {
+		return iamv1.RemoveTOTPResponse{}, err
+	}
+	return result, nil
+}
+
+func (service *Authority) AuthenticatorRemovalByRequest(ctx context.Context, credential iamv1.Secret, requestID string) (iamv1.AuthenticatorRemoval, error) {
+	if iamv1.ValidateID("requestId", requestID) != nil {
+		return iamv1.AuthenticatorRemoval{}, ErrInvalidArgument
+	}
+	var result iamv1.AuthenticatorRemoval
+	err := service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
+		subject, err := service.totpSession(ctx, tx, credential)
+		if err != nil {
+			return err
+		}
+		result, err = tx.ReadAuthenticatorRemoval(ctx, subject.Subject.Session, requestID)
+		return err
+	})
+	if err != nil {
+		return iamv1.AuthenticatorRemoval{}, err
+	}
+	if iamv1.ValidateAuthenticatorRemoval(result) != nil || result.RequestID != requestID {
+		return iamv1.AuthenticatorRemoval{}, ErrUnavailable
+	}
+	return result, nil
+}
+
 func (service *Authority) StartStepUp(ctx context.Context, credential iamv1.Secret, request iamv1.StartStepUpRequest) (iamv1.StepUp, error) {
 	if iamv1.ValidateStartStepUpRequest(request) != nil {
 		return iamv1.StepUp{}, ErrInvalidArgument
@@ -69,7 +159,8 @@ func (service *Authority) StartStepUp(ctx context.Context, credential iamv1.Secr
 		return iamv1.StepUp{}, ErrUnavailable
 	}
 	if (result.SecuritySettings == nil) != (request.SecuritySettings == nil) ||
-		(result.SecuritySettings != nil && *result.SecuritySettings != *request.SecuritySettings) {
+		(result.SecuritySettings != nil && (result.SecuritySettings.ExpectedResourceVersion != request.SecuritySettings.ExpectedResourceVersion ||
+			result.SecuritySettings.MFA != request.SecuritySettings.MFA || !samePasswordSettings(result.SecuritySettings.Password, request.SecuritySettings.Password))) {
 		return iamv1.StepUp{}, ErrUnavailable
 	}
 	return result, nil

@@ -370,10 +370,10 @@ func ValidateEnrollmentChallengeState(value EnrollmentChallengeState) error {
 		return errors.New("enrollment contact observation is required")
 	}
 	if value.Enrollment != nil && (ValidateTOTPEnrollment(*value.Enrollment) != nil ||
-		value.Enrollment.Purpose != "INITIAL" || value.Enrollment.State != "PENDING" || value.Enrollment.FactorRevision != 1 ||
+		value.Enrollment.Purpose != "INITIAL" || value.Enrollment.State != "PENDING" || value.Enrollment.FactorRevision == 2 ||
 		!value.Enrollment.ExpiresAt.Equal(value.Challenge.ExpiresAt) || value.NotificationContact.State != "VERIFIED" ||
 		value.NotificationContact.VerifiedAt.After(value.Enrollment.CreatedAt)) {
-		return errors.New("enrollment must retain its original challenge deadline and first-binding prerequisites")
+		return errors.New("enrollment must retain its original challenge deadline and binding prerequisites")
 	}
 	return nil
 }
@@ -404,6 +404,10 @@ func ValidateAuthenticatorState(value AuthenticatorState) error {
 	case "BOUND":
 		if value.FactorRevision <= 1 || ValidateID("factorId", value.FactorID) != nil {
 			return errors.New("bound authenticator is invalid")
+		}
+	case "REMOVED":
+		if value.FactorRevision < 3 || value.FactorID != "" {
+			return errors.New("removed authenticator state is invalid")
 		}
 	case "RECOVERY_REQUIRED":
 		if value.FactorID != "" && ValidateID("factorId", value.FactorID) != nil {
@@ -462,6 +466,31 @@ func ValidateStartTOTPReplacementRequest(value StartTOTPReplacementRequest) erro
 		return errors.New("replaceable bound factor revision is required")
 	}
 	return errors.Join(ValidateID("requestId", value.RequestID), ValidateID("stepUpId", value.StepUpID))
+}
+
+func ValidateRemoveTOTPRequest(value RemoveTOTPRequest) error {
+	if value.ExpectedFactorRevision < 2 || value.ExpectedFactorRevision > 9007199254740990 {
+		return errors.New("removable bound factor revision is required")
+	}
+	return errors.Join(ValidateID("requestId", value.RequestID), ValidateID("stepUpId", value.StepUpID))
+}
+
+func ValidateAuthenticatorRemoval(value AuthenticatorRemoval) error {
+	if value.APIVersion != APIVersion || value.Kind != "AuthenticatorRemoval" || value.FactorRevision < 3 {
+		return errors.New("authenticator removal is invalid")
+	}
+	return errors.Join(ValidateID("id", value.ID), ValidateID("requestId", value.RequestID), ValidateID("factorId", value.FactorID),
+		validatePositiveVersion(value.FactorRevision), validateTime("removedAt", value.RemovedAt))
+}
+
+func ValidateRemoveTOTPResponse(value RemoveTOTPResponse) error {
+	if err := ValidateAuthenticatorRemoval(value.Removal); err != nil {
+		return err
+	}
+	if value.Outcome == "APPLIED" && value.NextStep == "REAUTHENTICATE" || value.Outcome == "EQUAL_REPLAY" && value.NextStep == "" {
+		return nil
+	}
+	return errors.New("authenticator removal outcome is invalid")
 }
 
 func ValidateStartTOTPEnrollmentResponse(value StartTOTPEnrollmentResponse) error {
@@ -578,31 +607,79 @@ func ValidateConfirmAuthenticatorRecoveryResponse(value ConfirmAuthenticatorReco
 	return validateRecoveryCodes(value.RecoveryCodes)
 }
 
+func ValidateAccountPasswordSettings(value AccountPasswordSettings) error {
+	if value.MinimumLength < 15 || value.MinimumLength > 128 || value.HistoryCount < 0 || value.HistoryCount > 24 {
+		return errors.New("account password settings are invalid")
+	}
+	return nil
+}
+
+func ValidatePasswordRequirements(value PasswordRequirements) error {
+	if value.APIVersion != APIVersion || value.Kind != "PasswordRequirements" ||
+		value.MaximumLength != 128 || value.MaximumUTF8Bytes != 512 ||
+		(value.Source != "ACCOUNT" && value.Source != "PROTECTED_IDENTITY") {
+		return errors.New("password requirements are invalid")
+	}
+	if value.Source == "PROTECTED_IDENTITY" && value.Password != (AccountPasswordSettings{MinimumLength: 15, HistoryCount: 1}) {
+		return errors.New("protected password requirements are invalid")
+	}
+	return errors.Join(ValidateAccountPasswordSettings(value.Password), validatePositiveVersion(value.SettingsVersion))
+}
+
+func ValidateChallengePasswordRequirementsRequest(value ChallengePasswordRequirementsRequest) error {
+	if !value.ChallengeCredential.Present() {
+		return ErrInvalidSecret
+	}
+	return nil
+}
+
 func ValidateAccountSecuritySettings(value AccountSecuritySettings) error {
+	return validateAccountSecuritySettings(value, false)
+}
+
+func validateAccountSecuritySettings(value AccountSecuritySettings, historical bool) error {
 	if value.APIVersion != APIVersion || value.Kind != "AccountSecuritySettings" {
 		return errors.New("account security settings type metadata is invalid")
+	}
+	if value.Password == nil {
+		if !historical {
+			return errors.New("current password settings are missing")
+		}
+	} else if err := ValidateAccountPasswordSettings(*value.Password); err != nil {
+		return err
 	}
 	return errors.Join(ValidateID("accountId", string(value.AccountID)), validatePositiveVersion(value.ResourceVersion), validateTime("updatedAt", value.UpdatedAt))
 }
 
 func ValidateSecuritySettingsUpdateIntent(value SecuritySettingsUpdateIntent) error {
+	return validateSecuritySettingsUpdateIntent(value, false)
+}
+
+func validateSecuritySettingsUpdateIntent(value SecuritySettingsUpdateIntent, historical bool) error {
 	// A successful command increments the expected revision; both must remain
 	// exact safe integers for every public consumer.
 	if value.ExpectedResourceVersion == 0 || value.ExpectedResourceVersion >= 9007199254740991 {
 		return errors.New("security settings expected version is invalid")
+	}
+	if value.Password == nil {
+		if !historical {
+			return errors.New("password settings intent is missing")
+		}
+	} else if err := ValidateAccountPasswordSettings(*value.Password); err != nil {
+		return err
 	}
 	return nil
 }
 
 func ValidateUpdateAccountSecuritySettingsRequest(value UpdateAccountSecuritySettingsRequest) error {
 	return errors.Join(ValidateID("requestId", value.RequestID), ValidateID("stepUpId", value.StepUpID),
-		ValidateSecuritySettingsUpdateIntent(SecuritySettingsUpdateIntent{ExpectedResourceVersion: value.ExpectedResourceVersion, MFA: value.MFA}))
+		ValidateSecuritySettingsUpdateIntent(SecuritySettingsUpdateIntent{ExpectedResourceVersion: value.ExpectedResourceVersion, MFA: value.MFA, Password: &value.Password}))
 }
 
 func ValidateAccountSecuritySettingsChange(value AccountSecuritySettingsChange) error {
 	if value.APIVersion != APIVersion || value.Kind != "AccountSecuritySettingsChange" ||
-		ValidateAccountSecuritySettings(value.Settings) != nil ||
-		ValidateSecuritySettingsUpdateIntent(SecuritySettingsUpdateIntent{ExpectedResourceVersion: value.ExpectedResourceVersion, MFA: value.Settings.MFA}) != nil ||
+		validateAccountSecuritySettings(value.Settings, true) != nil ||
+		validateSecuritySettingsUpdateIntent(SecuritySettingsUpdateIntent{ExpectedResourceVersion: value.ExpectedResourceVersion, MFA: value.Settings.MFA, Password: value.Settings.Password}, true) != nil ||
 		value.Settings.ResourceVersion != value.ExpectedResourceVersion+1 ||
 		!value.CallerSessionEnded {
 		return errors.New("account security settings change is invalid")
@@ -614,18 +691,21 @@ func ValidateUpdateAccountSecuritySettingsResponse(value UpdateAccountSecuritySe
 	if value.Outcome != "APPLIED" && value.Outcome != "EQUAL_REPLAY" {
 		return errors.New("account security settings outcome is invalid")
 	}
+	if value.Outcome == "APPLIED" && value.Change.Settings.Password == nil {
+		return errors.New("new settings completion is missing password settings")
+	}
 	return ValidateAccountSecuritySettingsChange(value.Change)
 }
 
 func ValidateStepUp(value StepUp) error {
 	if value.APIVersion != APIVersion || value.Kind != "StepUp" ||
-		validateStepUpOperation(value.Operation, value.SecuritySettings) != nil || value.ExpectedFactorRevision < 2 || validatePositiveVersion(value.ExpectedFactorRevision) != nil ||
+		validateStepUpOperationHistory(value.Operation, value.SecuritySettings, value.State == "CONSUMED") != nil || value.ExpectedFactorRevision < 2 || validatePositiveVersion(value.ExpectedFactorRevision) != nil ||
 		ValidateID("stepUp.id", value.ID) != nil || ValidateID("stepUp.requestId", value.RequestID) != nil ||
 		validateTime("createdAt", value.CreatedAt) != nil || validateTime("expiresAt", value.ExpiresAt) != nil ||
 		value.ExpiresAt.Sub(value.CreatedAt) != 2*time.Minute {
 		return errors.New("step-up is invalid")
 	}
-	if value.Operation == StepUpReplaceTOTP && value.ExpectedFactorRevision > 9007199254740990 {
+	if (value.Operation == StepUpReplaceTOTP || value.Operation == StepUpRemoveTOTP) && value.ExpectedFactorRevision > 9007199254740990 {
 		return errors.New("factor revision cannot be advanced")
 	}
 	if value.ProvedAt != nil && (validateTime("provedAt", *value.ProvedAt) != nil || value.ProvedAt.Before(value.CreatedAt) || !value.ProvedAt.Before(value.ExpiresAt)) {
@@ -662,21 +742,25 @@ func ValidateStartStepUpRequest(value StartStepUpRequest) error {
 	if validateStepUpOperation(value.Operation, value.SecuritySettings) != nil || value.ExpectedFactorRevision < 2 || validatePositiveVersion(value.ExpectedFactorRevision) != nil {
 		return errors.New("step-up operation is invalid")
 	}
-	if value.Operation == StepUpReplaceTOTP && value.ExpectedFactorRevision > 9007199254740990 {
+	if (value.Operation == StepUpReplaceTOTP || value.Operation == StepUpRemoveTOTP) && value.ExpectedFactorRevision > 9007199254740990 {
 		return errors.New("factor revision cannot be advanced")
 	}
 	return ValidateID("requestId", value.RequestID)
 }
 
 func validateStepUpOperation(operation StepUpOperation, settings *SecuritySettingsUpdateIntent) error {
+	return validateStepUpOperationHistory(operation, settings, false)
+}
+
+func validateStepUpOperationHistory(operation StepUpOperation, settings *SecuritySettingsUpdateIntent, historical bool) error {
 	switch operation {
-	case StepUpRegenerateRecoveryCodes, StepUpReplaceTOTP:
+	case StepUpRegenerateRecoveryCodes, StepUpReplaceTOTP, StepUpRemoveTOTP:
 		if settings == nil {
 			return nil
 		}
 	case StepUpUpdateSecuritySettings:
 		if settings != nil {
-			return ValidateSecuritySettingsUpdateIntent(*settings)
+			return validateSecuritySettingsUpdateIntent(*settings, historical)
 		}
 	}
 	return errors.New("step-up operation intent is invalid")
@@ -970,6 +1054,43 @@ func ValidateSession(value Session) error {
 	return errors.Join(problems...)
 }
 
+func ValidateSessionList(value SessionList) error {
+	if value.APIVersion != APIVersion || value.Kind != "SessionList" || value.Items == nil || len(value.Items) > DirectoryPageSize ||
+		ValidateID("accountId", string(value.AccountID)) != nil || ValidateID("userId", string(value.UserID)) != nil ||
+		ValidateID("currentSessionId", string(value.CurrentSessionID)) != nil || validateTime("observedAt", value.ObservedAt) != nil {
+		return errors.New("session list is invalid")
+	}
+	var previous SessionID
+	for _, item := range value.Items {
+		if ValidateSession(item) != nil || item.AccountID != value.AccountID || item.PrincipalID != value.UserID ||
+			item.ID <= previous || item.Status != SessionActive || item.IssuedAt.After(value.ObservedAt) || !value.ObservedAt.Before(item.ExpiresAt) {
+			return errors.New("session observation is invalid")
+		}
+		previous = item.ID
+	}
+	if value.NextCursor != "" && (len(value.Items) != DirectoryPageSize || ValidatePageCursor(value.NextCursor) != nil) {
+		return errors.New("session continuation is invalid")
+	}
+	return nil
+}
+
+func ValidateRevokeOwnSessionResponse(value RevokeOwnSessionResponse) error {
+	if value.Outcome != "APPLIED" && value.Outcome != "EQUAL_REPLAY" {
+		return errors.New("session revocation outcome is invalid")
+	}
+	return ValidateRevocation(value.Revocation)
+}
+
+func ValidateRevokeOtherSessionsResponse(value RevokeOtherSessionsResponse) error {
+	if value.APIVersion != APIVersion || value.Kind != "OtherSessionsRevocation" ||
+		(value.Outcome != "APPLIED" && value.Outcome != "EQUAL_REPLAY") || value.RevokedCount > 9007199254740991 {
+		return errors.New("other session revocation is invalid")
+	}
+	return errors.Join(ValidateID("accountId", string(value.AccountID)), ValidateID("userId", string(value.UserID)),
+		ValidateID("currentSessionId", string(value.CurrentSessionID)), ValidateID("requestId", value.RequestID),
+		validateTime("completedAt", value.CompletedAt))
+}
+
 func ValidateReadiness(value Readiness) error {
 	var problems []error
 	if value.APIVersion != APIVersion || value.Kind != "Readiness" {
@@ -1121,6 +1242,22 @@ func ValidateResetUserPasswordRequest(value ResetUserPasswordRequest) error {
 		return ErrInvalidSecret
 	}
 	return errors.Join(validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
+}
+
+func ValidateUserPasswordResetCompletion(value UserPasswordResetCompletion) error {
+	if value.APIVersion != APIVersion || value.Kind != "UserPasswordResetCompletion" {
+		return errors.New("user password reset completion metadata is invalid")
+	}
+	if value.ActorPrincipalID == value.UserID {
+		return errors.New("administrator reset cannot target its own actor")
+	}
+	if validatePositiveVersion(value.ExpectedResourceVersion) != nil || validatePositiveVersion(value.ResultingResourceVersion) != nil ||
+		value.ResultingResourceVersion != value.ExpectedResourceVersion+1 {
+		return errors.New("user password reset completion versions are invalid")
+	}
+	return errors.Join(ValidateID("accountId", string(value.AccountID)), ValidateID("actorPrincipalId", string(value.ActorPrincipalID)),
+		ValidateID("userId", string(value.UserID)), ValidateID("requestId", value.RequestID),
+		ValidateID("eventId", value.EventID), validateTime("occurredAt", value.OccurredAt))
 }
 
 func ValidateRootIdentity(value RootIdentity) error {

@@ -87,8 +87,8 @@ type AuthoritySchemas struct {
 func CurrentDatabaseProfile() DatabaseProfile {
 	return DatabaseProfile{
 		Compatibility:    "identical-authority-profile",
-		Authorities:      AuthoritySchemas{IAM: 45, Audit: 26, PaaS: 6},
-		ContractRevision: 16,
+		Authorities:      AuthoritySchemas{IAM: 49, Audit: 27, PaaS: 6},
+		ContractRevision: 17,
 	}
 }
 
@@ -98,14 +98,14 @@ func CurrentDatabaseProfile() DatabaseProfile {
 func SupportedDatabaseUpgradePredecessorProfile() DatabaseProfile {
 	return DatabaseProfile{
 		Compatibility:    "identical-authority-profile",
-		Authorities:      AuthoritySchemas{IAM: 40, Audit: 24, PaaS: 6},
-		ContractRevision: 15,
+		Authorities:      AuthoritySchemas{IAM: 45, Audit: 26, PaaS: 6},
+		ContractRevision: 16,
 	}
 }
 
-// The predecessor's v4 backup has no current authentication-state proof.
-// It can be upgraded in place, but cannot be restored through this release's
-// v5 recovery fence. Recovery is supported only within the exact v5 profile.
+// The exact predecessor can be upgraded in place, but its backup cannot cross
+// this release's authentication and authority profile. Recovery is supported
+// only within the exact current profile.
 func SupportedDatabaseRecoveryPredecessorProfile() (DatabaseProfile, bool) {
 	return DatabaseProfile{}, false
 }

@@ -75,10 +75,13 @@ func TestIAMAuthenticationRecoveryClosePostgres(t *testing.T) {
 		RootLoginName: "close-root-b", RootDisplayName: "Close root B", InitialPassword: iamHTTPSecret(t, "Close-Other-Password-639!"), RequestID: "close-account-create"}); err != nil {
 		t.Fatal(err)
 	}
-	readLease := func() installationv1.TOTPBackupSnapshotLease {
+	readLeaseAt := func(zone string) installationv1.TOTPBackupSnapshotLease {
 		t.Helper()
 		backup := config.Copy()
 		backup.User, backup.Password = "matrix_iam_backup_custody_login", "matrix-authority-process-test-only"
+		if zone != "" {
+			backup.RuntimeParams["timezone"] = zone
+		}
 		snapshot, err := iampostgres.OpenTOTPBackupSnapshot(ctx, backup)
 		if err != nil {
 			t.Fatal(err)
@@ -89,6 +92,15 @@ func TestIAMAuthenticationRecoveryClosePostgres(t *testing.T) {
 		}
 		return lease
 	}
+	readLease := func() installationv1.TOTPBackupSnapshotLease { return readLeaseAt("") }
+	t.Run("password-age-timezone", func(t *testing.T) {
+		// Both reads use the restricted production snapshot path after a real
+		// password change. Connection formatting cannot change qualification.
+		utc, local := readLeaseAt("UTC"), readLeaseAt("Asia/Shanghai")
+		if utc.AuthenticationStateDigest != local.AuthenticationStateDigest || utc.CustodyDigest != local.CustodyDigest {
+			t.Fatal("the same password age/history changed qualification with connection timezone")
+		}
+	})
 	assertNoClose := func() {
 		t.Helper()
 		var state string
@@ -99,8 +111,12 @@ func TestIAMAuthenticationRecoveryClosePostgres(t *testing.T) {
 			t.Fatal("rejected/uncommitted close changed authority state", err)
 		}
 	}
-	waitBlocked := func(t *testing.T, role string, leader int32) {
+	waitBlocked := func(t *testing.T, role string, leader int32, peer ...uint32) {
 		t.Helper()
+		var peerPID uint32
+		if len(peer) != 0 {
+			peerPID = peer[0]
+		}
 		waiting, stop := context.WithTimeout(ctx, 5*time.Second)
 		defer stop()
 		ticker := time.NewTicker(10 * time.Millisecond)
@@ -110,9 +126,9 @@ func TestIAMAuthenticationRecoveryClosePostgres(t *testing.T) {
 			// PostgreSQL may queue another row-lock waiter between this peer
 			// and the leader. Follow the actual dependency, not queue order.
 			if err := database.QueryRow(waiting, `WITH RECURSIVE waits(pid,blocker) AS (
-			 SELECT pid,unnest(pg_blocking_pids(pid)) FROM pg_stat_activity WHERE datname=current_database() AND usename=$1
+			 SELECT pid,unnest(pg_blocking_pids(pid)) FROM pg_stat_activity WHERE datname=current_database() AND usename=$1 AND ($3::bigint=0 OR pid=$3)
 			 UNION SELECT pid,unnest(pg_blocking_pids(blocker)) FROM waits)
-			 SELECT EXISTS(SELECT 1 FROM waits WHERE blocker=$2)`, role, leader).Scan(&blocked); err != nil {
+			 SELECT EXISTS(SELECT 1 FROM waits WHERE blocker=$2)`, role, leader, peerPID).Scan(&blocked); err != nil {
 				t.Fatal("observe actual authentication barrier dependency", err)
 			}
 			if blocked {
@@ -126,6 +142,21 @@ func TestIAMAuthenticationRecoveryClosePostgres(t *testing.T) {
 		}
 	}
 	workflow, _ := authenticationRecoveryWorkflow(t, ctx, dsn)
+	assertStaleQualification := func(t *testing.T, before installationv1.TOTPBackupSnapshotLease) {
+		t.Helper()
+		if after := readLease(); after.AuthenticationStateDigest == before.AuthenticationStateDigest {
+			t.Fatal("current qualification change was absent from backup proof")
+		}
+		stale := authenticationRecoveryIntent(document.InstallationID)
+		stale.AuthenticationStateDigest, stale.TOTPCustodyDigest = before.AuthenticationStateDigest, before.CustodyDigest
+		if _, err := workflow.Inspect(ctx, stale); !errors.Is(err, authenticationrecovery.ErrConflict) {
+			t.Fatal("prior qualification backup was treated as new recovery eligibility", err)
+		}
+		if _, err := workflow.Close(ctx, stale); !errors.Is(err, authenticationrecovery.ErrConflict) {
+			t.Fatal("prior qualification backup was allowed to close source authentication", err)
+		}
+		assertNoClose()
+	}
 	// Distinct current authorization sources must invalidate a previously
 	// qualified backup, not merely password or USER generation changes.
 	// All mutations below use the real authority; no projection rows are
@@ -214,22 +245,115 @@ func TestIAMAuthenticationRecoveryClosePostgres(t *testing.T) {
 			if err := change.apply(); err != nil {
 				t.Fatal("real authority change failed", err)
 			}
-			after := readLease()
-			if after.AuthenticationStateDigest == before.AuthenticationStateDigest {
-				t.Fatal("current authorization change was absent from backup qualification")
-			}
-			stale := authenticationRecoveryIntent(document.InstallationID)
-			stale.AuthenticationStateDigest, stale.TOTPCustodyDigest = before.AuthenticationStateDigest, before.CustodyDigest
-			if _, err := workflow.Inspect(ctx, stale); !errors.Is(err, authenticationrecovery.ErrConflict) {
-				t.Fatal("prior authorization backup was treated as new recovery eligibility", err)
-			}
-			if _, err := workflow.Close(ctx, stale); !errors.Is(err, authenticationrecovery.ErrConflict) {
-				t.Fatal("prior authorization backup was allowed to close source authentication", err)
-			}
-			assertNoClose()
+			assertStaleQualification(t, before)
 		}) {
 			t.FailNow()
 		}
+	}
+	if !t.Run("qualification-contact-and-factor", func(t *testing.T) {
+		if err := api.RegisterEmailVerificationKeyset(ctx); err != nil {
+			t.Fatal("register actual notification verification custody", err)
+		}
+		initialPassword := iamHTTPSecret(t, "Close-Factor-Password-673!")
+		user, err := api.CreateUser(ctx, login.Credential, iamv1.CreateUserRequest{LoginName: "close-factor-user",
+			DisplayName: "Close factor user", InitialPassword: initialPassword, RequestID: "close-factor-user"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		userLogin, err := api.Login(ctx, iamv1.LoginRequest{LoginName: user.LoginName + "@" + string(user.AccountID),
+			Password: initialPassword, RequestID: "close-factor-login"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		password := iamHTTPSecret(t, changedDeveloperPassword)
+		if _, err := api.ChangePassword(ctx, userLogin.Credential, iamv1.ChangePasswordRequest{CurrentPassword: initialPassword,
+			NewPassword: password, RequestID: "close-factor-password"}); err != nil {
+			t.Fatal(err)
+		}
+		beforeContact := readLease()
+		verification, err := api.StartNotificationVerification(ctx, userLogin.Credential, iamv1.StartNotificationContactVerificationRequest{
+			Email: "close-factor@matrix.test", Password: password, RequestID: "close-factor-contact-start"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if readLease().AuthenticationStateDigest != beforeContact.AuthenticationStateDigest {
+			t.Fatal("unverified contact changed effective backup qualification")
+		}
+		protector, err := authority.NewEmailVerificationProtector(authenticationRecoveryEmailKeyring(t, document))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := api.ConfirmNotificationContact(ctx, userLogin.Credential, verification.ID, iamv1.ConfirmNotificationContactVerificationRequest{
+			Code: iamNotificationStorageCode(t, ctx, database, protector, verification), RequestID: "close-factor-contact-confirm"}); err != nil {
+			t.Fatal(err)
+		}
+		assertStaleQualification(t, beforeContact)
+
+		beforeBinding := readLease()
+		state, err := api.AuthenticatorState(ctx, userLogin.Credential)
+		if err != nil || state.EnrollmentState != "NEVER_BOUND" {
+			t.Fatal("factor fixture is not an actual first enrollment", err)
+		}
+		enrollment, err := api.StartTOTPEnrollment(ctx, userLogin.Credential, iamv1.StartTOTPEnrollmentRequest{
+			Password: password, ExpectedFactorRevision: state.FactorRevision, RequestID: "close-factor-enroll"})
+		if err != nil || enrollment.Provisioning == nil {
+			t.Fatal("start real factor enrollment", err)
+		}
+		if readLease().AuthenticationStateDigest != beforeBinding.AuthenticationStateDigest {
+			t.Fatal("pending enrollment changed effective backup qualification")
+		}
+		factor := authenticationRecoveryMFAFixture{seed: enrollment.Provisioning.Seed, factorID: enrollment.Enrollment.ID, loginName: user.LoginName}
+		bound, err := api.ConfirmTOTPEnrollment(ctx, userLogin.Credential, enrollment.Enrollment.ID, iamv1.ConfirmTOTPEnrollmentRequest{
+			RequestID: "close-factor-confirm", Code: authenticationRecoveryFreshTOTP(t, ctx, database, user.AccountID, factor, 0)})
+		if err != nil || bound.Enrollment.State != "CONFIRMED" {
+			t.Fatal("confirm real factor enrollment", err)
+		}
+		assertStaleQualification(t, beforeBinding)
+
+		beforeReplacement := readLease()
+		current := authenticationRecoveryMFALogin(t, ctx, api, database, document, factor, "close-factor", 0)
+		if readLease().AuthenticationStateDigest != beforeReplacement.AuthenticationStateDigest {
+			t.Fatal("normal MFA login or OTP consumption invalidated backup qualification")
+		}
+		state, err = api.AuthenticatorState(ctx, current.Credential)
+		if err != nil || state.EnrollmentState != "BOUND" {
+			t.Fatal(err)
+		}
+		proof, err := api.StartStepUp(ctx, current.Credential, iamv1.StartStepUpRequest{RequestID: "close-factor-replace",
+			Operation: iamv1.StepUpReplaceTOTP, ExpectedFactorRevision: state.FactorRevision})
+		if err != nil {
+			t.Fatal(err)
+		}
+		proof, err = api.VerifyStepUp(ctx, current.Credential, proof.ID, iamv1.VerifyStepUpRequest{RequestID: "close-factor-replace-proof",
+			Password: password, Code: authenticationRecoveryFreshTOTP(t, ctx, database, user.AccountID, factor, 0)})
+		if err != nil || proof.State != "PROVED" {
+			t.Fatal("prove real replacement intent", err)
+		}
+		replacement, err := api.StartTOTPReplacement(ctx, current.Credential, iamv1.StartTOTPReplacementRequest{
+			RequestID: proof.RequestID, StepUpID: proof.ID, ExpectedFactorRevision: proof.ExpectedFactorRevision})
+		if err != nil || replacement.Provisioning == nil {
+			t.Fatal("prepare real factor replacement", err)
+		}
+		if readLease().AuthenticationStateDigest != beforeReplacement.AuthenticationStateDigest {
+			t.Fatal("step-up or pending replacement invalidated unchanged effective qualification")
+		}
+		nextFactor := authenticationRecoveryMFAFixture{seed: replacement.Provisioning.Seed, factorID: replacement.Enrollment.ID, loginName: user.LoginName}
+		replaced, err := api.ConfirmTOTPEnrollment(ctx, current.Credential, replacement.Enrollment.ID, iamv1.ConfirmTOTPEnrollmentRequest{
+			RequestID: "close-factor-replaced", Code: authenticationRecoveryFreshTOTP(t, ctx, database, user.AccountID, nextFactor, 0)})
+		if err != nil || replaced.Enrollment.State != "CONFIRMED" {
+			t.Fatal("commit real factor replacement", err)
+		}
+		assertStaleQualification(t, beforeReplacement)
+		var lineage bool
+		if err := database.QueryRow(ctx, `SELECT
+		 (SELECT state='REVOKED' AND revoked_at IS NOT NULL FROM iam.totp_authenticators WHERE tenant_id=$1 AND id=$2)
+		 AND (SELECT enrollment_state='BOUND' AND factor_id=$3 FROM iam.user_mfa_states WHERE tenant_id=$1 AND user_id=$4)
+		 AND (SELECT count(*)=1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.authenticator.replaced'
+		   AND event_document#>>'{actor,id}'=$4)`, user.AccountID, factor.factorID, nextFactor.factorID, user.ID).Scan(&lineage); err != nil || !lineage {
+			t.Fatal("replacement rejection lost actual factor lineage or immutable success fact", err)
+		}
+	}) {
+		t.FailNow()
 	}
 	lease := readLease()
 	intent := authenticationRecoveryIntent(document.InstallationID)
@@ -410,6 +534,11 @@ func TestIAMAuthenticationRecoveryClosePostgres(t *testing.T) {
 	intent.CommandID = "cmd-" + strings.Repeat("d", 32)
 	intent.AuthenticationStateDigest, intent.TOTPCustodyDigest = lease.AuthenticationStateDigest, lease.CustodyDigest
 	for _, damage := range []string{
+		"ALTER FUNCTION iam.inspect_new_authentication_recovery(jsonb,text) SECURITY INVOKER",
+		"ALTER FUNCTION iam.inspect_new_authentication_recovery(jsonb,text) STABLE",
+		"ALTER FUNCTION iam.inspect_new_authentication_recovery(jsonb,text) SET search_path=public",
+		"REVOKE EXECUTE ON FUNCTION iam.inspect_new_authentication_recovery(jsonb,text) FROM matrix_iam_authentication_recovery",
+		"GRANT EXECUTE ON FUNCTION iam.inspect_new_authentication_recovery(jsonb,text) TO matrix_iam_api",
 		"ALTER TABLE iam.authentication_recovery_closures DROP COLUMN security_snapshot_document CASCADE",
 		"ALTER TABLE iam.authentication_recovery_closures ALTER COLUMN security_snapshot_document SET DEFAULT '{}'::jsonb",
 		"ALTER TABLE iam.authentication_recovery_closures DROP CONSTRAINT authentication_recovery_snapshot_shape",
@@ -534,10 +663,39 @@ func TestIAMAuthenticationRecoveryClosePostgres(t *testing.T) {
 		}
 		observe, release := holdIAMRequest(t, ctx, database, intent.CommandID, true, auditv1.ActionIAMAuthenticationRecoveryClosed)
 		defer release()
+		// A new inspection holds the same live qualification barrier, but
+		// commits no closure. The later close must independently acquire it.
+		inspectionTx, err := private.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable, AccessMode: pgx.ReadWrite})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer inspectionTx.Rollback(context.Background())
+		var inspected []byte
+		if err := inspectionTx.QueryRow(ctx, "SELECT iam.inspect_new_authentication_recovery($1::jsonb,$2)",
+			string(encodedIntent), intentDigest).Scan(&inspected); err != nil {
+			t.Fatal("leading inspection rejected current qualification", err)
+		}
 		var wait sync.WaitGroup
 		wait.Add(1)
 		go func() { defer wait.Done(); results[0], failures[0] = workflow.Close(ctx, intent) }()
+		waitBlocked(t, authenticationRecoveryTestRole, int32(private.PgConn().PID()))
+		assertNoClose()
+		if err := inspectionTx.Commit(ctx); err != nil {
+			t.Fatal("leading inspection did not commit without effects", err)
+		}
 		leader := observe()
+		lateInspection := make(chan error, 1)
+		go func() {
+			tx, err := private.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable, AccessMode: pgx.ReadWrite})
+			if err == nil {
+				var output []byte
+				err = tx.QueryRow(ctx, "SELECT iam.inspect_new_authentication_recovery($1::jsonb,$2)",
+					string(encodedIntent), intentDigest).Scan(&output)
+				_ = tx.Rollback(context.Background())
+			}
+			lateInspection <- err
+		}()
+		waitBlocked(t, authenticationRecoveryTestRole, leader, private.PgConn().PID())
 		request := iamv1.ChangePasswordRequest{CurrentPassword: iamHTTPSecret(t, "Close-New-Root-Password-497!"),
 			NewPassword: iamHTTPSecret(t, "Close-Rejected-Password-719!"), RequestID: "close-late-password"}
 		writer := make(chan error, 1)
@@ -548,6 +706,10 @@ func TestIAMAuthenticationRecoveryClosePostgres(t *testing.T) {
 		waitBlocked(t, authenticationRecoveryTestRole, leader)
 		release()
 		wait.Wait()
+		var retryableInspection *pgconn.PgError
+		if err := <-lateInspection; !errors.As(err, &retryableInspection) || retryableInspection.Code != "40001" {
+			t.Fatal("in-flight inspection escaped the committed close barrier", err)
+		}
 		if err := <-writer; !errors.Is(err, identityaccess.ErrUnauthenticated) {
 			t.Fatal("late password change escaped CLOSED authority", err)
 		}
@@ -636,6 +798,10 @@ func TestIAMAuthenticationRecoveryCapacityPostgres(t *testing.T) {
 			if _, err := bootstrapIAMWithTOTP(t, ctx, api, document); err != nil {
 				t.Fatal(err)
 			}
+			businessUsers := 0
+			if !item.manyAccounts && !item.overflow {
+				businessUsers = prepareAuthenticationRecoveryCapacityBusiness(t, ctx, api, database, document)
+			}
 			closeAPI()
 			backupConfig := config.Copy()
 			backupConfig.User, backupConfig.Password = "matrix_iam_backup_custody_login", "matrix-authority-process-test-only"
@@ -675,7 +841,7 @@ func TestIAMAuthenticationRecoveryCapacityPostgres(t *testing.T) {
 					t.Fatal("create bounded multi-account projection fixture", err)
 				}
 			} else {
-				users := installationv1.MaximumAuthenticationRecoverySnapshotItems - 2
+				users := installationv1.MaximumAuthenticationRecoverySnapshotItems - 2 - businessUsers
 				if item.overflow {
 					users++
 				}
@@ -703,6 +869,19 @@ func TestIAMAuthenticationRecoveryCapacityPostgres(t *testing.T) {
 			if expectedItems != wantItems {
 				t.Fatal("capacity fixture does not reach the exact transport boundary")
 			}
+			// Actual users have changed their first password; synthetic rows
+			// have not. Preserve each subject's own generation, not a uniform
+			// fixture assumption that would mask a reset during restore.
+			generations := func(connection *pgx.Conn, advancement int64) string {
+				t.Helper()
+				var document string
+				if err := connection.QueryRow(ctx, `SELECT jsonb_agg(jsonb_build_array(tenant_id,principal_id,credential_version-$1)
+				 ORDER BY tenant_id COLLATE "C",principal_id COLLATE "C")::text FROM iam.user_credentials`, advancement).Scan(&document); err != nil {
+					t.Fatal("read complete credential generations", err)
+				}
+				return document
+			}
+			originalGenerations := generations(database, 0)
 			bounded, boundedCancel := context.WithTimeout(ctx, 45*time.Second)
 			defer boundedCancel()
 			start := time.Now()
@@ -781,10 +960,8 @@ func TestIAMAuthenticationRecoveryCapacityPostgres(t *testing.T) {
 			}
 			defer target.Close(context.Background())
 			runAuthenticationRecoveryPostgresTool(t, ctx, targetConfig, "pg_restore", dump, "--exit-on-error")
-			var original bool
-			if err := target.QueryRow(ctx, `SELECT count(*)=$1 AND bool_and(credential_version=1) FROM iam.user_credentials`,
-				items-len(decoded.Accounts)).Scan(&original); err != nil || !original {
-				t.Fatal("capacity restore did not retain all original credentials", err)
+			if generations(target, 0) != originalGenerations {
+				t.Fatal("capacity restore did not retain every original credential generation")
 			}
 			// Copy the parsed configuration, not ConnString(): pgx retains the
 			// original DSN string even when its Database field has changed.
@@ -814,9 +991,12 @@ func TestIAMAuthenticationRecoveryCapacityPostgres(t *testing.T) {
 			if replay, err := recovery.Reopen(ctx, envelope.Closure, decoded); err != nil || replay != completion {
 				t.Fatal("capacity completion replay changed its original result", err)
 			}
+			if generations(target, 1) != originalGenerations {
+				t.Fatal("capacity reopen or replay did not advance each original generation exactly once")
+			}
 			var complete bool
 			if err := target.QueryRow(ctx, `SELECT state='OPEN' AND epoch=1
-			 AND (SELECT count(*)=$1 AND bool_and(credential_version=2) FROM iam.user_credentials)
+			 AND (SELECT count(*) FROM iam.user_credentials)=$1
 			 AND (SELECT count(*) FROM iam.authentication_recovery_attempt_floors)=$1
 			 AND (SELECT count(*) FROM iam.authentication_recovery_completions)=1
 			 AND (SELECT count(*) FROM iam.audit_outbox WHERE event_document->>'action' LIKE 'iam.authentication-recovery.%')=3
@@ -826,10 +1006,106 @@ func TestIAMAuthenticationRecoveryCapacityPostgres(t *testing.T) {
 			if err := iammigration.Verify(ctx, target); err != nil {
 				t.Fatal("complete capacity restore failed its current schema verifier", err)
 			}
-			t.Logf("complete accounts=%d items=%d canonicalBytes=%d backup=%s close=%s reconcile=%s reopen=%s; sparse retained-state gate, not API provisioning throughput",
-				len(decoded.Accounts), items, len(encoded), backupDuration, closeDuration, reconcileDuration, reopenDuration)
+			if businessUsers > 0 {
+				if err := target.QueryRow(ctx, `SELECT
+				 (SELECT count(*)=$1 FROM iam.user_mfa_states WHERE enrollment_state='BOUND')
+				 AND (SELECT count(*)=$1 FROM iam.totp_authenticators WHERE state='ACTIVE')
+				 AND (SELECT count(*)=$1 FROM iam.mfa_recovery_batches WHERE revoked_at IS NULL)
+				 AND (SELECT count(*)=$1 FROM iam.authentication_recovery_code_fences)
+				 AND NOT EXISTS(SELECT 1 FROM iam.sessions WHERE revoked_at IS NULL)
+				 AND (SELECT count(*)=$1 FROM iam.notification_contacts)
+				 AND (SELECT count(*)=8 FROM iam.groups WHERE deleted_at IS NULL)
+				 AND (SELECT count(*)=$1*8 FROM iam.group_memberships WHERE removed_at IS NULL)
+				 AND (SELECT count(*)=8 FROM iam.policies WHERE owner_tenant_id IS NOT NULL)
+				 AND (SELECT count(*)=16 FROM iam.policy_versions v JOIN iam.policies p ON p.id=v.policy_id WHERE p.owner_tenant_id IS NOT NULL)
+				 AND (SELECT count(*)=$1 FROM iam.user_permission_boundaries WHERE revoked_at IS NULL)`, businessUsers).Scan(&complete); err != nil || !complete {
+					t.Fatal("restored bounded business fixture lost current MFA or policy qualifications", err)
+				}
+			}
+			t.Logf("complete accounts=%d items=%d realMFAUsers=%d canonicalBytes=%d backup=%s close=%s reconcile=%s reopen=%s; mixed/sparse retained-state gate, not API provisioning throughput or full-MFA maximum capacity",
+				len(decoded.Accounts), items, businessUsers, len(encoded), backupDuration, closeDuration, reconcileDuration, reopenDuration)
 		})
 	}
+}
+
+// This corpus adds real credential, contact, factor and policy provenance to
+// the transport-bound fixture. The remaining thousands of users stay explicitly
+// synthetic; copying encrypted MFA rows would not prove a valid dense workload.
+func prepareAuthenticationRecoveryCapacityBusiness(t *testing.T, ctx context.Context, api *identityaccess.Authority, database *pgx.Conn, document iamv1.BootstrapDocument) int {
+	const users = 16
+	t.Helper()
+	if err := api.RegisterEmailVerificationKeyset(ctx); err != nil {
+		t.Fatal("register capacity email custody", err)
+	}
+	admin, _, _ := prepareAuthenticationRecoveryIdentity(t, ctx, api, database, document, false)
+	groups := make([]iamv1.Group, 8)
+	var boundary iamv1.Policy
+	for index := range groups {
+		prefix := fmt.Sprintf("recovery-capacity-group-%d", index)
+		policyDocument := iamv1.PolicyDocument{LanguageVersion: "1", Scope: iamv1.AuthorityScopeTenant,
+			Statements: []iamv1.PolicyStatement{{SID: prefix, Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMAccessKeyList},
+				Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceUser, Match: iamv1.PolicyResourceAnyInAuthority}}}}}
+		policy, err := api.CreatePolicy(ctx, admin, iamv1.CreatePolicyRequest{DisplayName: prefix,
+			Document: policyDocument, RequestID: prefix + "-policy"})
+		if err != nil {
+			t.Fatal("create real capacity policy", err)
+		}
+		// Preserve a real non-default revision as well as the selected Allow.
+		policyDocument.Statements[0].Effect = iamv1.PolicyDeny
+		version, err := api.CreatePolicyVersion(ctx, admin, policy.Policy.ID, iamv1.CreatePolicyVersionRequest{
+			Document: policyDocument, ResourceVersion: policy.Policy.ResourceVersion, RequestID: prefix + "-version"})
+		if err != nil {
+			t.Fatal("create real capacity policy history", err)
+		}
+		boundary = version.Policy
+		groups[index], err = api.CreateGroup(ctx, admin, iamv1.CreateGroupRequest{Name: prefix, RequestID: prefix + "-create"})
+		if err != nil {
+			t.Fatal("create real capacity group", err)
+		}
+		if _, err := api.CreatePolicyAttachment(ctx, admin, iamv1.CreatePolicyAttachmentRequest{
+			Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(groups[index].ID)},
+			PolicyID: boundary.ID, PolicyResourceVersion: boundary.ResourceVersion, RequestID: prefix + "-attach"}); err != nil {
+			t.Fatal("attach real capacity group policy", err)
+		}
+	}
+	for index := 0; index < users; index++ {
+		prefix := fmt.Sprintf("recovery-capacity-member-%02d", index)
+		user, err := api.CreateUser(ctx, admin, iamv1.CreateUserRequest{LoginName: prefix, DisplayName: prefix,
+			InitialPassword: iamHTTPSecret(t, initialDeveloperPassword), RequestID: prefix + "-create"})
+		if err != nil {
+			t.Fatal("create real capacity user", err)
+		}
+		login, err := api.Login(ctx, iamv1.LoginRequest{LoginName: prefix + "@" + string(document.Organization.ID),
+			Password: iamHTTPSecret(t, initialDeveloperPassword), RequestID: prefix + "-login"})
+		if err != nil || !login.MustChangePassword {
+			t.Fatal("login real initial capacity credential", err)
+		}
+		if _, err := api.ChangePassword(ctx, login.Credential, iamv1.ChangePasswordRequest{
+			CurrentPassword: iamHTTPSecret(t, initialDeveloperPassword), NewPassword: iamHTTPSecret(t, changedDeveloperPassword),
+			RequestID: prefix + "-password"}); err != nil {
+			t.Fatal("change real capacity credential", err)
+		}
+		for index, group := range groups {
+			if _, err := api.CreateGroupMembership(ctx, admin, group.ID, iamv1.CreateGroupMembershipRequest{
+				UserID: user.ID, RequestID: fmt.Sprintf("%s-join-%d", prefix, index)}); err != nil {
+				t.Fatal("join real capacity group", err)
+			}
+		}
+		current, err := api.GetUserPermissionBoundary(ctx, admin, user.ID, prefix+"-boundary-read")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := api.SetUserPermissionBoundary(ctx, admin, user.ID, iamv1.SetUserPermissionBoundaryRequest{
+			PolicyID: boundary.ID, PolicyResourceVersion: boundary.ResourceVersion, ResourceVersion: current.ResourceVersion,
+			RequestID: prefix + "-boundary"}); err != nil {
+			t.Fatal("set real capacity user boundary", err)
+		}
+		if _, err := api.ListAccessKeys(ctx, login.Credential, user.ID, prefix+"-authorized-list"); err != nil {
+			t.Fatal("capacity source user could not use actual group/boundary authorization", err)
+		}
+		enrollAuthenticationRecoveryTOTP(t, ctx, api, database, document, login.Credential, user.LoginName)
+	}
+	return users
 }
 
 func TestIAMAuthenticationRecoveryPostgres(t *testing.T) {
@@ -909,6 +1185,74 @@ func TestIAMAuthenticationRecoveryPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal("create recovery attempt subject", err)
 	}
+	// Carry a real completed removal through the same RR dump and two
+	// restores. An absent active factor alone must never earn this state.
+	removedUser, err := sourceAPI.CreateUser(ctx, sourceCredential, iamv1.CreateUserRequest{
+		LoginName: "auth-recovery-removed-user", DisplayName: "Recovery removed factor lineage",
+		InitialPassword: iamHTTPSecret(t, initialDeveloperPassword), RequestID: "auth-recovery-removed-user-create",
+	})
+	if err != nil {
+		t.Fatal("create actual removal recovery subject", err)
+	}
+	removedLogin, err := sourceAPI.Login(ctx, iamv1.LoginRequest{LoginName: removedUser.LoginName + "@" + string(removedUser.AccountID),
+		Password: iamHTTPSecret(t, initialDeveloperPassword), RequestID: "auth-recovery-removed-initial-login"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sourceAPI.ChangePassword(ctx, removedLogin.Credential, iamv1.ChangePasswordRequest{
+		CurrentPassword: iamHTTPSecret(t, initialDeveloperPassword), NewPassword: iamHTTPSecret(t, changedDeveloperPassword),
+		RequestID: "auth-recovery-removed-password"}); err != nil {
+		t.Fatal(err)
+	}
+	removedFactor := enrollAuthenticationRecoveryTOTP(t, ctx, sourceAPI, sourceAdmin, document, removedLogin.Credential, removedUser.LoginName)
+	removedLogin = authenticationRecoveryMFALogin(t, ctx, sourceAPI, sourceAdmin, document, removedFactor, "removed-user", 0)
+	removeProof, err := sourceAPI.StartStepUp(ctx, removedLogin.Credential, iamv1.StartStepUpRequest{
+		RequestID: "auth-recovery-remove", Operation: iamv1.StepUpRemoveTOTP, ExpectedFactorRevision: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	removeProof, err = sourceAPI.VerifyStepUp(ctx, removedLogin.Credential, removeProof.ID, iamv1.VerifyStepUpRequest{
+		RequestID: "auth-recovery-remove-proof", Password: iamHTTPSecret(t, changedDeveloperPassword),
+		Code: authenticationRecoveryFreshTOTP(t, ctx, sourceAdmin, removedUser.AccountID, removedFactor, 0)})
+	if err != nil || removeProof.State != "PROVED" {
+		t.Fatal("prove actual pre-backup removal", err)
+	}
+	removeRequest := iamv1.RemoveTOTPRequest{RequestID: removeProof.RequestID, StepUpID: removeProof.ID, ExpectedFactorRevision: 2}
+	removal, err := sourceAPI.RemoveTOTP(ctx, removedLogin.Credential, removeRequest)
+	if err != nil || removal.Outcome != "APPLIED" || removal.Removal.FactorRevision != 3 {
+		t.Fatal("commit actual pre-backup removal", err)
+	}
+	assertRestoredRemoval := func(service *identityaccess.Authority, database *pgx.Conn, phase string) {
+		t.Helper()
+		if _, err := service.CurrentIdentity(ctx, removedLogin.Credential); !errors.Is(err, identityaccess.ErrUnauthenticated) {
+			t.Fatal("restore revived the removal source Session", err)
+		}
+		fresh, err := service.Login(ctx, iamv1.LoginRequest{LoginName: removedUser.LoginName + "@" + string(removedUser.AccountID),
+			Password: iamHTTPSecret(t, changedDeveloperPassword), RequestID: "auth-recovery-removed-login-" + phase})
+		if err != nil || fresh.Outcome != iamv1.LoginAuthenticated {
+			t.Fatal("restored legal REMOVED user could not authenticate normally", err)
+		}
+		state, err := service.AuthenticatorState(ctx, fresh.Credential)
+		if err != nil || state.EnrollmentState != "REMOVED" || state.FactorRevision != 3 || state.FactorID != "" {
+			t.Fatal("restore inferred another enrollment qualification", err)
+		}
+		replay, err := service.RemoveTOTP(ctx, fresh.Credential, removeRequest)
+		if err != nil || replay.Outcome != "EQUAL_REPLAY" || replay.Removal != removal.Removal || replay.NextStep != "" {
+			t.Fatal("restore changed removal completion or re-executed it", err)
+		}
+		var preserved bool
+		if err := database.QueryRow(ctx, `SELECT
+		 (SELECT count(*)=1 FROM iam.authenticator_removals WHERE tenant_id=$1 AND user_id=$2)
+		 AND (SELECT state='REVOKED' AND revoked_at=$4 FROM iam.totp_authenticators WHERE tenant_id=$1 AND id=$3)
+		 AND NOT EXISTS(SELECT 1 FROM iam.mfa_recovery_batches WHERE tenant_id=$1 AND user_id=$2 AND revoked_at IS NULL)
+		 AND (SELECT authentication_method='PASSWORD' AND mfa_revision=3 AND status='ACTIVE' FROM iam.sessions WHERE tenant_id=$1 AND id=$5)`,
+			removedUser.AccountID, removedUser.ID, removedFactor.factorID, removal.Removal.RemovedAt, fresh.Session.ID).Scan(&preserved); err != nil || !preserved {
+			t.Fatal("restore revived factor/batch or mislabelled a password Session", err)
+		}
+		if _, err := service.Logout(ctx, fresh.Credential, iamv1.LogoutRequest{RequestID: "auth-recovery-removed-logout-" + phase}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	backupConfig := sourceConfig.Copy()
 	backupConfig.User, backupConfig.Password = "matrix_iam_backup_custody_login", "matrix-authority-process-test-only"
 	exported, err := iampostgres.OpenTOTPBackupSnapshot(ctx, backupConfig)
@@ -936,7 +1280,7 @@ func TestIAMAuthenticationRecoveryPostgres(t *testing.T) {
 	restoredAPI, closeRestoredAPI := authenticationRecoveryAPI(t, ctx, restoredDSN, document)
 	restoredCredential := sourceCredential
 	before := readAuthenticationRecoverySecurityState(t, ctx, restoredAdmin, document, restoredSession)
-	if before.activeSessions == 0 || before.accessKeys != 1 || before.recoveryBatches != 2 || before.factorStep < 0 ||
+	if before.activeSessions == 0 || before.accessKeys != 1 || before.recoveryBatches != 3 || before.factorStep < 0 ||
 		before.passwordReserved != 1 || before.totpReserved != 1 || before.challengePending != 1 {
 		t.Fatal("restored pre-close replay fixture is incomplete")
 	}
@@ -1077,12 +1421,26 @@ func TestIAMAuthenticationRecoveryPostgres(t *testing.T) {
 	if _, err := restoredAdmin.Exec(ctx, "DROP TRIGGER test_recovery_floor_fault ON iam.authentication_recovery_attempt_floors; DROP FUNCTION iam.test_reject_recovery_floor()"); err != nil {
 		t.Fatal(err)
 	}
+	passwordState := func() string {
+		t.Helper()
+		var result string
+		if err := restoredAdmin.QueryRow(ctx, `SELECT jsonb_agg(jsonb_build_array(tenant_id,principal_id,
+			password_hash,password_changed_at,password_history,encode(password_history_digest,'hex')) ORDER BY tenant_id,principal_id)::text
+			FROM iam.user_credentials`).Scan(&result); err != nil {
+			t.Fatal("read bounded password-state evidence")
+		}
+		return result // Private verifier evidence is never printed or put in a receipt.
+	}
+	originalPasswords := passwordState()
 	completion := reopenAuthenticationConcurrently(t, ctx, restoredRecovery, closure, snapshot)
 	if installationv1.ValidateAuthenticationRecoveryCompletionForClosure(completion, closure) != nil {
 		t.Fatal("restored reopen returned an invalid completion")
 	}
 	if replay, err := restoredRecovery.Reopen(ctx, closure, snapshot); err != nil || replay != completion {
 		t.Fatalf("equal reopen replay changed its completion: %v", err)
+	}
+	if passwordState() != originalPasswords {
+		t.Fatal("authentication generation fence or exact replay invented a password change, age or history")
 	}
 	if err := iammigration.Verify(ctx, restoredAdmin); err != nil {
 		t.Fatal("reopened IAM schema did not verify", err)
@@ -1116,13 +1474,19 @@ func TestIAMAuthenticationRecoveryPostgres(t *testing.T) {
 	}
 	assertAuthenticationRecoveryAuditFacts(t, ctx, sourceAdmin, restoredAdmin)
 	assertAuthenticationRecoveryHistoryImmutable(t, ctx, restoredAdmin)
+	assertRestoredRemoval(restoredAPI, restoredAdmin, "first")
+	otpPeer, closeOTPPeer := authenticationRecoveryAPI(t, ctx, restoredDSN, document)
 	assertAuthenticationRecoveryOTPReplay(t, ctx, restoredAPI, restoredAdmin, document, replayMFA, snapshot)
-	assertAuthenticationRecoveryStepUpFenced(t, ctx, restoredAPI, restoredAdmin, document, restoredMFA)
+	assertAuthenticationRecoveryStepUpFenced(t, ctx, []*identityaccess.Authority{restoredAPI, otpPeer}, restoredAdmin, document, restoredMFA, snapshot)
+	closeOTPPeer()
 	// Finished authorities must release their real connection/process budgets
 	// before the next restore, not linger until the outer test cleanup.
 	closeRestoredAPI()
 	assertAuthenticationRecoveryRepeated(t, ctx, restoredRecovery, closeRestoredRecovery, restoredAdmin, repeatedAdmin, repeatedConfig, repeatedDSN,
 		document, budgetUser, restoredMFA, intent, completion, snapshot, nextLease, nextDump)
+	repeatedAPI, closeRepeatedAPI := authenticationRecoveryAPI(t, ctx, repeatedDSN, document)
+	assertRestoredRemoval(repeatedAPI, repeatedAdmin, "repeated")
+	closeRepeatedAPI()
 }
 
 func assertAuthenticationRecoveryFloorCarry(t *testing.T, ctx context.Context, config *pgx.ConnConfig, database *pgx.Conn,
@@ -1208,7 +1572,7 @@ func assertAuthenticationRecoveryRepeated(t *testing.T, ctx context.Context, sou
 		t.Fatal("second source close rejected unchanged qualification after real password/OTP consumption", err)
 	}
 	closeSource()
-	var password, otp *installationv1.AuthenticationRecoveryAttemptWindow
+	var password, otp, mfaPassword *installationv1.AuthenticationRecoveryAttemptWindow
 	var consumedStep int64
 	for _, account := range envelope.SecuritySnapshot.Accounts {
 		for _, user := range account.Users {
@@ -1217,6 +1581,7 @@ func assertAuthenticationRecoveryRepeated(t *testing.T, ctx context.Context, sou
 			}
 			if user.FactorID == mfa.factorID {
 				otp, consumedStep = user.TOTPAttempts, user.LastConsumedStep
+				mfaPassword = user.PasswordAttempts
 			}
 		}
 	}
@@ -1248,6 +1613,33 @@ func assertAuthenticationRecoveryRepeated(t *testing.T, ctx context.Context, sou
 	 clock_timestamp()<$3::timestamptz+interval '60 seconds' FROM iam.totp_authenticators f WHERE f.id=$1`,
 		mfa.factorID, consumedStep, password.WindowStartedAt).Scan(&sourceFloorApplied, &originalPasswordWindow); err != nil || !sourceFloorApplied || !originalPasswordWindow {
 		t.Fatal("second restore missed original password window or did not preserve source future OTP step", err)
+	}
+	// Two real password-authenticated challenges above can exhaust this MFA
+	// USER's older password window. Observe its natural end before isolating
+	// the still-live ten-minute OTP budget; never interpret a password refusal
+	// as an OTP refusal or reset a counter to prepare this scenario. The other
+	// USER's later password window is independently checked below.
+	if mfaPassword != nil && mfaPassword.UsedAttempts == 5 {
+		for {
+			var now time.Time
+			if err := database.QueryRow(ctx, "SELECT clock_timestamp()").Scan(&now); err != nil {
+				t.Fatal(err)
+			}
+			remaining := mfaPassword.WindowStartedAt.Add(time.Minute).Sub(now)
+			if remaining <= 0 {
+				break
+			}
+			if remaining > time.Minute {
+				t.Fatal("restored MFA password budget has a future window")
+			}
+			timer := time.NewTimer(remaining)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				t.Fatal(ctx.Err())
+			case <-timer.C:
+			}
+		}
 	}
 	for index := 0; index < 2; index++ {
 		peer, closePeer := authenticationRecoveryAPI(t, ctx, dsn, document)
@@ -1295,10 +1687,75 @@ func assertAuthenticationRecoveryRepeated(t *testing.T, ctx context.Context, sou
 		}
 		closePeer()
 	}
+	// A restore's mechanical generation advance must not refund a guessing
+	// budget. A genuinely reset password is a different credential, however:
+	// its still-unexpired old floor must remain history, not lock it out.
+	current, closeCurrent := authenticationRecoveryAPI(t, ctx, dsn, document)
+	defer closeCurrent()
+	root, err := current.Login(ctx, iamv1.LoginRequest{LoginName: document.Administrator.LoginName,
+		Password: iamHTTPSecret(t, changedAdminPassword), RequestID: "repeated-reset-root-login"})
+	if err != nil || root.Outcome != iamv1.LoginAuthenticated || !root.Credential.Present() {
+		t.Fatal("authenticate current administrator for real credential replacement", err)
+	}
+	user, err := current.GetUser(ctx, root.Credential, budgetUser.ID, "repeated-reset-read-user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var floorBefore string
+	var floorGeneration uint64
+	if err := database.QueryRow(ctx, `SELECT row_to_json(f)::text,password_generation FROM iam.authentication_recovery_attempt_floors f
+	 WHERE tenant_id=$1 AND user_id=$2`, document.Organization.ID, budgetUser.ID).Scan(&floorBefore, &floorGeneration); err != nil {
+		t.Fatal("read immutable exhausted-password floor before genuine reset", err)
+	}
+	replacement := iamHTTPSecret(t, "Recovery-Reset-New-Password-936!")
+	if _, err := current.ResetUserPassword(ctx, root.Credential, budgetUser.ID, iamv1.ResetUserPasswordRequest{
+		InitialPassword: replacement, ResourceVersion: user.User.ResourceVersion, RequestID: "repeated-genuine-reset",
+	}); err != nil {
+		t.Fatal("current administrator could not reset a genuinely exhausted credential", err)
+	}
+	fresh, err := current.Login(ctx, iamv1.LoginRequest{LoginName: budgetUser.LoginName + "@" + string(document.Organization.ID),
+		Password: replacement, RequestID: "repeated-genuine-reset-login"})
+	if err != nil || !fresh.MustChangePassword || !fresh.Credential.Present() {
+		t.Fatal("old-generation restore floor blocked the genuinely new password", err)
+	}
+	var newCredential bool
+	if err := database.QueryRow(ctx, `SELECT c.credential_version=$3+1 AND a.credential_version=c.credential_version
+	 AND a.state='SUCCEEDED' AND a.used_attempts=0 AND a.attempt_sequence=$4+1
+	 AND clock_timestamp()<$5::timestamptz+interval '60 seconds'
+	 FROM iam.user_credentials c JOIN iam.password_attempts a ON a.tenant_id=c.tenant_id AND a.principal_id=c.principal_id
+	 WHERE c.tenant_id=$1 AND c.principal_id=$2`, document.Organization.ID, budgetUser.ID, floorGeneration,
+		password.Sequence, password.WindowStartedAt).Scan(&newCredential); err != nil || !newCredential {
+		t.Fatal("reset login did not use a new generation within the still-exhausted original window", err)
+	}
+	if _, err := current.ChangePassword(ctx, fresh.Credential, iamv1.ChangePasswordRequest{CurrentPassword: replacement,
+		NewPassword: iamHTTPSecret(t, "Recovery-Changed-New-Password-973!"), RequestID: "repeated-genuine-forced-change"}); err != nil {
+		t.Fatal("old restore floor blocked legitimate forced password change", err)
+	}
+	if replay, err := workflow.Reopen(ctx, envelope.Closure, envelope.SecuritySnapshot); err != nil || replay != completion {
+		t.Fatal("old recovery completion changed after legitimate credential replacement", err)
+	}
+	if identity, err := current.CurrentIdentity(ctx, fresh.Credential); err != nil || identity.User.MustChangePassword {
+		t.Fatal("old completion revoked or re-forced the legitimately retained current Session", err)
+	}
+	var floorAfter string
+	if err := database.QueryRow(ctx, `SELECT row_to_json(f)::text FROM iam.authentication_recovery_attempt_floors f
+	 WHERE tenant_id=$1 AND user_id=$2`, document.Organization.ID, budgetUser.ID).Scan(&floorAfter); err != nil || floorAfter != floorBefore {
+		t.Fatal("genuine reset/change rewrote the sealed old-generation floor", err)
+	}
+	if err := database.QueryRow(ctx, `SELECT c.credential_version=$3+2 AND s.credential_version=c.credential_version AND s.status='ACTIVE'
+	 AND a.state='SUCCEEDED' AND a.used_attempts=0 AND a.attempt_sequence=$4+2
+	 AND (SELECT count(*) FROM iam.authentication_recovery_completions)=2
+	 FROM iam.user_credentials c JOIN iam.password_attempts a ON a.tenant_id=c.tenant_id AND a.principal_id=c.principal_id
+	 JOIN iam.sessions s ON s.tenant_id=c.tenant_id AND s.principal_id=c.principal_id AND s.id=$5
+	 WHERE c.tenant_id=$1 AND c.principal_id=$2`, document.Organization.ID, budgetUser.ID, floorGeneration, password.Sequence,
+		fresh.Session.ID).Scan(&newCredential); err != nil || !newCredential {
+		t.Fatal("genuine change or old completion replay broke generation/sequence/session invariants", err)
+	}
+	closeCurrent()
 	if err := iammigration.Verify(ctx, database); err != nil {
 		t.Fatal("second recovery schema/retained evidence did not verify", err)
 	}
-	t.Log("two actual RR dumps/restores preserve source debits/future OTP step, original completion and generation-bound floors across schema replay and two authorities")
+	t.Log("two actual RR dumps/restores preserve source debits/future OTP step across schema replay/two authorities; genuine reset/change advances credentials without rewriting the floor or replaying completion")
 }
 
 func firstSnapshotClosure(t *testing.T, ctx context.Context, database *pgx.Conn, commandID string) installationv1.AuthenticationRecoveryClosure {
@@ -1359,27 +1816,7 @@ func assertAuthenticationRecoveryPasswordBudget(t *testing.T, ctx context.Contex
 			results <- err
 		}()
 	}
-	waiting, stop := context.WithTimeout(ctx, 5*time.Second)
-	defer stop()
-	ticker := time.NewTicker(10 * time.Millisecond)
-	defer ticker.Stop()
-	for {
-		var blocked int
-		if err := observer.QueryRow(waiting, `WITH RECURSIVE waits(pid,blocker) AS (
-		 SELECT pid,unnest(pg_blocking_pids(pid)) FROM pg_stat_activity WHERE datname=current_database() AND usename=$1
-		 UNION SELECT pid,unnest(pg_blocking_pids(blocker)) FROM waits)
-		 SELECT count(DISTINCT pid) FROM waits WHERE blocker=$2`, iamHTTPTestRole, blockerPID).Scan(&blocked); err != nil {
-			t.Fatal("observe both password reservations behind the real USER lock", err)
-		}
-		if blocked == len(peers) {
-			break
-		}
-		select {
-		case <-ticker.C:
-		case <-waiting.Done():
-			t.Fatal("both password peers did not reach the lock within the production window")
-		}
-	}
+	assertAuthenticationRecoveryUserWaiters(t, ctx, observer, blockerPID, len(peers))
 	if err := blocker.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -1407,6 +1844,31 @@ func assertAuthenticationRecoveryPasswordBudget(t *testing.T, ctx context.Contex
 		}
 		if used != 5 || sequence != original.Sequence+1 || !window.Equal(original.WindowStartedAt) {
 			t.Fatalf("restore refunded password attempts or reset the original window: used=%d sequence=%d", used, sequence)
+		}
+	}
+}
+
+func assertAuthenticationRecoveryUserWaiters(t *testing.T, ctx context.Context, observer *pgx.Conn, blockerPID int32, count int) {
+	t.Helper()
+	waiting, stop := context.WithTimeout(ctx, 5*time.Second)
+	defer stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		var blocked int
+		if err := observer.QueryRow(waiting, `WITH RECURSIVE waits(pid,blocker) AS (
+		 SELECT pid,unnest(pg_blocking_pids(pid)) FROM pg_stat_activity WHERE datname=current_database() AND usename=$1
+		 UNION SELECT pid,unnest(pg_blocking_pids(blocker)) FROM waits)
+		 SELECT count(DISTINCT pid) FROM waits WHERE blocker=$2`, iamHTTPTestRole, blockerPID).Scan(&blocked); err != nil {
+			t.Fatal("observe authentication reservations behind the real USER lock", err)
+		}
+		if blocked == count {
+			return
+		}
+		select {
+		case <-ticker.C:
+		case <-waiting.Done():
+			t.Fatal("both authentication peers did not reach the real USER lock")
 		}
 	}
 }
@@ -1795,13 +2257,24 @@ func prepareAuthenticationRecoveryIdentity(t *testing.T, ctx context.Context, se
 		if err != nil {
 			t.Fatal("create recovery fixture AccessKey policy", err)
 		}
+		group, err := service.CreateGroup(ctx, login.Credential, iamv1.CreateGroupRequest{
+			Name: "Authentication recovery business users", RequestID: "auth-recovery-key-group",
+		})
+		if err != nil {
+			t.Fatal("create recovery fixture authorization group", err)
+		}
+		if _, err := service.CreateGroupMembership(ctx, login.Credential, group.ID, iamv1.CreateGroupMembershipRequest{
+			UserID: keyUser.ID, RequestID: "auth-recovery-key-membership",
+		}); err != nil {
+			t.Fatal("join recovery fixture authorization group", err)
+		}
 		if _, err := service.CreatePolicyAttachment(ctx, login.Credential, iamv1.CreatePolicyAttachmentRequest{
-			Target:                iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(keyUser.ID)},
+			Target:                iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(group.ID)},
 			PolicyID:              policy.Policy.ID,
 			PolicyResourceVersion: policy.Policy.ResourceVersion,
 			RequestID:             "auth-recovery-key-policy-attachment",
 		}); err != nil {
-			t.Fatal("attach recovery fixture AccessKey policy", err)
+			t.Fatal("attach recovery fixture group policy", err)
 		}
 		keyLogin, err = service.Login(ctx, iamv1.LoginRequest{
 			LoginName: "auth-recovery-key-user@" + string(document.Organization.ID),
@@ -1821,6 +2294,28 @@ func prepareAuthenticationRecoveryIdentity(t *testing.T, ctx context.Context, se
 		})
 		if err != nil || created.Outcome != "APPLIED" || !created.Secret.Present() {
 			t.Fatalf("create recovery fixture AccessKey: %v", err)
+		}
+		// The group still allows create. This narrower current boundary must
+		// continue to deny it after recovery, while preserving list access.
+		limited, err := service.CreatePolicy(ctx, login.Credential, iamv1.CreatePolicyRequest{
+			DisplayName: "Recovery business read ceiling", RequestID: "auth-recovery-key-boundary-policy",
+			Document: iamv1.PolicyDocument{LanguageVersion: "1", Scope: iamv1.AuthorityScopeTenant,
+				Statements: []iamv1.PolicyStatement{{SID: "list-only", Effect: iamv1.PolicyAllow,
+					Actions:   []iamv1.Action{iamv1.ActionIAMAccessKeyList},
+					Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceUser, Match: iamv1.PolicyResourceAnyInAuthority}}}}},
+		})
+		if err != nil {
+			t.Fatal("create narrower recovery fixture boundary", err)
+		}
+		boundary, err := service.GetUserPermissionBoundary(ctx, login.Credential, keyUser.ID, "auth-recovery-key-boundary-read")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := service.SetUserPermissionBoundary(ctx, login.Credential, keyUser.ID, iamv1.SetUserPermissionBoundaryRequest{
+			PolicyID: limited.Policy.ID, PolicyResourceVersion: limited.Policy.ResourceVersion,
+			ResourceVersion: boundary.ResourceVersion, RequestID: "auth-recovery-key-boundary",
+		}); err != nil {
+			t.Fatal("set recovery fixture user boundary", err)
 		}
 		mfa = enrollAuthenticationRecoveryTOTP(t, ctx, service, database, document, keyLogin.Credential, keyUser.LoginName)
 		mfa.login = authenticationRecoveryMFALogin(t, ctx, service, database, document, mfa, "before-close", 0)
@@ -1872,7 +2367,7 @@ func enrollAuthenticationRecoveryTOTP(t *testing.T, ctx context.Context, service
 	t.Helper()
 	password := iamHTTPSecret(t, changedDeveloperPassword)
 	pending, err := service.StartNotificationVerification(ctx, credential, iamv1.StartNotificationContactVerificationRequest{
-		Email:     "authentication-recovery@matrix.test",
+		Email:     loginName + "@matrix.test",
 		Password:  password,
 		RequestID: loginName + "-email-start",
 	})
@@ -1998,12 +2493,145 @@ func authenticationRecoveryMFALogin(t *testing.T, ctx context.Context, service *
 	return login
 }
 
-func assertAuthenticationRecoveryStepUpFenced(t *testing.T, ctx context.Context, service *identityaccess.Authority, database *pgx.Conn, document iamv1.BootstrapDocument, mfa authenticationRecoveryMFAFixture) {
+func authenticationRecoveryConcurrentMFALogin(t *testing.T, ctx context.Context, peers []*identityaccess.Authority, database *pgx.Conn,
+	document iamv1.BootstrapDocument, mfa authenticationRecoveryMFAFixture, snapshot installationv1.AuthenticationRecoverySecuritySnapshot) iamv1.LoginResponse {
 	t.Helper()
+	if len(peers) != 2 {
+		t.Fatal("restored OTP last-slot race requires two authorities")
+	}
+	var subject installationv1.AuthenticationRecoveryUserReplay
+	for _, account := range snapshot.Accounts {
+		for _, user := range account.Users {
+			if account.AccountID == string(document.Organization.ID) && user.FactorID == mfa.factorID {
+				subject = user
+			}
+		}
+	}
+	if subject.TOTPAttempts == nil || subject.TOTPAttempts.UsedAttempts != 4 {
+		t.Fatal("original sealed snapshot must leave exactly one real OTP attempt")
+	}
+	challenges := make([]iamv1.LoginResponse, len(peers))
+	for index, peer := range peers {
+		challenge, err := peer.Login(ctx, iamv1.LoginRequest{LoginName: mfa.loginName + "@" + string(document.Organization.ID),
+			Password: iamHTTPSecret(t, changedDeveloperPassword), RequestID: fmt.Sprintf("auth-recovery-last-slot-challenge-%d", index)})
+		if err != nil || challenge.Outcome != iamv1.LoginChallengeRequired || challenge.Challenge == nil {
+			t.Fatal("create real challenge for restored final OTP slot", err)
+		}
+		challenges[index] = challenge
+	}
+	if challenges[0].Challenge.ID == challenges[1].Challenge.ID {
+		t.Fatal("OTP peers unexpectedly share a challenge")
+	}
+	code := authenticationRecoveryFreshTOTP(t, ctx, database, document.Organization.ID, mfa, 1)
+	observer, err := pgx.ConnectConfig(ctx, database.Config())
+	if err != nil {
+		t.Fatal("connect OTP lock observer", err)
+	}
+	defer observer.Close(context.Background())
+	blocker, err := database.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocker.Rollback(context.Background())
+	if _, err := blocker.Exec(ctx, "SELECT 1 FROM iam.principals WHERE tenant_id=$1 AND id=$2 FOR UPDATE", document.Organization.ID, subject.UserID); err != nil {
+		t.Fatal(err)
+	}
+	var blockerPID int32
+	if err := blocker.QueryRow(ctx, "SELECT pg_backend_pid()").Scan(&blockerPID); err != nil {
+		t.Fatal(err)
+	}
+	type result struct {
+		response iamv1.LoginResponse
+		err      error
+	}
+	results := make(chan result, len(peers))
+	for index, peer := range peers {
+		go func() {
+			challenge := challenges[index]
+			response, err := peer.VerifyAuthenticationChallenge(ctx, challenge.Challenge.ID, iamv1.VerifyAuthenticationChallengeRequest{
+				RequestID: fmt.Sprintf("auth-recovery-last-slot-verify-%d", index), ChallengeCredential: challenge.ChallengeCredential, Code: code,
+			})
+			results <- result{response, err}
+		}()
+	}
+	assertAuthenticationRecoveryUserWaiters(t, ctx, observer, blockerPID, len(peers))
+	if err := blocker.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var login iamv1.LoginResponse
+	successes, refusals := 0, 0
+	for range peers {
+		result := <-results
+		if result.err == nil && result.response.Outcome == iamv1.LoginAuthenticated && result.response.Credential.Present() {
+			login = result.response
+			successes++
+		} else if errors.Is(result.err, identityaccess.ErrUnauthenticated) && !result.response.Credential.Present() {
+			refusals++
+		} else {
+			t.Fatal("unexpected restored OTP competition result", result.err)
+		}
+	}
+	if successes != 1 || refusals != 1 {
+		t.Fatalf("last restored OTP slot issued %d Sessions and rejected %d requests", successes, refusals)
+	}
+	var final bool
+	if err := database.QueryRow(ctx, `SELECT a.state='SUCCEEDED' AND a.used_attempts=5 AND a.sequence=$3+1
+	 AND a.window_started_at=$4 AND clock_timestamp()<$4::timestamptz+interval '10 minutes'
+	 AND f.last_consumed_step>$5
+	 AND (SELECT count(*)=2 AND sum(attempts)=1 AND count(*) FILTER (WHERE state='CONSUMED')=1
+	   AND count(*) FILTER (WHERE state='PENDING')=1 FROM iam.authentication_challenges WHERE tenant_id=$1 AND id IN ($6,$7))
+	 AND (SELECT count(*)=1 AND bool_and(id=$8) FROM iam.sessions WHERE tenant_id=$1 AND principal_id=$2 AND status='ACTIVE')
+	 AND (SELECT count(*)=1 FROM iam.audit_outbox WHERE event_document->>'action'='iam.session.issued'
+	   AND event_document->'target'->>'id'=$8)
+	 FROM iam.totp_attempts a JOIN iam.totp_authenticators f ON f.tenant_id=a.tenant_id AND f.user_id=a.user_id AND f.id=$9
+	 WHERE a.tenant_id=$1 AND a.user_id=$2`, document.Organization.ID, subject.UserID, subject.TOTPAttempts.Sequence,
+		subject.TOTPAttempts.WindowStartedAt, subject.LastConsumedStep, challenges[0].Challenge.ID, challenges[1].Challenge.ID,
+		login.Session.ID, mfa.factorID).Scan(&final); err != nil || !final {
+		t.Fatal("concurrent OTP login did not preserve source budget, exact Session/fact or challenge accounting", err)
+	}
+	for index, peer := range peers {
+		if _, err := peer.CurrentIdentity(ctx, login.Credential); err != nil {
+			t.Fatal("winning MFA Session is not valid on both authorities", err)
+		}
+		directory, err := peer.ListAccessKeys(ctx, login.Credential, iamv1.PrincipalID(subject.UserID), fmt.Sprintf("reopened-business-key-list-%d", index))
+		if err != nil || directory.AccountID != document.Organization.ID || string(directory.UserID) != subject.UserID || len(directory.Items) != 1 {
+			t.Fatal("restored group/boundary permissions did not allow the original business resource", err)
+		}
+		if result, err := peer.CreateAccessKey(ctx, login.Credential, iamv1.PrincipalID(subject.UserID), iamv1.CreateAccessKeyRequest{
+			UserResourceVersion: directory.UserResourceVersion, RequestID: fmt.Sprintf("reopened-business-boundary-denied-%d", index),
+		}); !errors.Is(err, identityaccess.ErrForbidden) || result.Secret.Present() || result.Outcome != "" {
+			t.Fatal("restored narrower boundary did not constrain the group's create permission", err)
+		}
+		var originalKeyStillFenced bool
+		if err := database.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM iam.authentication_recovery_access_key_fences f
+		 JOIN iam.access_keys k ON k.id=f.access_key_id WHERE k.tenant_id=$1 AND k.user_id=$2 AND f.access_key_id=$3 AND f.command_id=$4)`,
+			document.Organization.ID, subject.UserID, directory.Items[0].Key.ID, snapshot.CommandID).Scan(&originalKeyStillFenced); err != nil || !originalKeyStillFenced {
+			t.Fatal("business resource access lost the original AccessKey recovery fence", err)
+		}
+		if _, err := peer.GetUser(ctx, login.Credential, document.Administrator.ID, fmt.Sprintf("reopened-business-user-denied-%d", index)); !errors.Is(err, identityaccess.ErrForbidden) {
+			t.Fatal("ordinary recovered user acquired ungranted user-management permission", err)
+		}
+		if _, err := peer.ListAccounts(ctx, login.Credential, "", fmt.Sprintf("reopened-business-platform-denied-%d", index)); !errors.Is(err, identityaccess.ErrForbidden) {
+			t.Fatal("ordinary recovered user acquired platform account-directory permission", err)
+		}
+	}
+	var noExtraKey bool
+	if err := database.QueryRow(ctx, `SELECT (SELECT count(*) FROM iam.access_keys)=1
+	 AND (SELECT count(*) FROM iam.audit_outbox WHERE event_document->>'action'='iam.access-key.created')=1`).Scan(&noExtraKey); err != nil || !noExtraKey {
+		t.Fatal("denied post-recovery boundary operation created a partial Key or success fact", err)
+	}
+	t.Log("two current challenges blocked on the restored USER; source OTP budget4→5 admitted exactly one MFA Session/fact; both authorities allow group list but enforce the narrower create boundary, deny user/platform management and preserve the Key fence")
+	return login
+}
+
+func assertAuthenticationRecoveryStepUpFenced(t *testing.T, ctx context.Context, peers []*identityaccess.Authority, database *pgx.Conn,
+	document iamv1.BootstrapDocument, mfa authenticationRecoveryMFAFixture, snapshot installationv1.AuthenticationRecoverySecuritySnapshot) {
+	t.Helper()
+	service := peers[0]
 	if _, err := service.RegenerateRecoveryCodes(ctx, mfa.login.Credential, authenticationRecoveryRegenerationRequest(mfa)); !errors.Is(err, identityaccess.ErrUnauthenticated) {
 		t.Fatalf("pre-restore proved operation survived its revoked Session: %v", err)
 	}
-	login := authenticationRecoveryMFALogin(t, ctx, service, database, document, mfa, "after-reopen", 1)
+	login := authenticationRecoveryConcurrentMFALogin(t, ctx, peers, database, document, mfa, snapshot)
 	if _, err := service.RegenerateRecoveryCodes(ctx, login.Credential, authenticationRecoveryRegenerationRequest(mfa)); !errors.Is(err, identityaccess.ErrUnauthenticated) {
 		t.Fatalf("new Session consumed a pre-restore proof: %v", err)
 	}

@@ -267,13 +267,17 @@ func (value *transaction) ReservePasswordAttempt(ctx context.Context, request id
 	}
 	result := identityaccess.PasswordAttempt{ID: request.ID, SessionID: request.SessionID, Purpose: request.Purpose, IntentDigest: request.IntentDigest}
 	var stored string
+	var history []string
+	var historyDigest *string
+	var settings []byte
+	var settingsVersion *uint64
 	var intent any
 	if request.IntentDigest != "" {
 		intent = request.IntentDigest
 	}
 	err := value.tx.QueryRow(ctx, "SELECT * FROM iam.reserve_password_attempt($1,$2,$3,$4,$5,$6,$7)",
 		login, tenant, user, session, request.ID, request.Purpose, intent).Scan(&result.AccountID, &result.PrincipalID, &stored,
-		&result.MustChangePassword, &result.CredentialGeneration, &result.Sequence, &result.ExpiresAt)
+		&result.MustChangePassword, &result.CredentialGeneration, &result.Sequence, &result.ExpiresAt, &history, &historyDigest, &settings, &settingsVersion)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return identityaccess.PasswordAttempt{}, false, nil
 	}
@@ -284,7 +288,35 @@ func (value *transaction) ReservePasswordAttempt(ctx context.Context, request id
 		return identityaccess.PasswordAttempt{}, false, identityaccess.ErrUnavailable
 	}
 	result.PasswordHash, result.ExpiresAt = authority.PasswordHash(stored), result.ExpiresAt.UTC()
+	if request.Purpose == identityaccess.PasswordAttemptChange {
+		if historyDigest == nil || settingsVersion == nil || *settingsVersion == 0 || *settingsVersion > 9007199254740991 ||
+			json.Unmarshal(settings, &result.PasswordSettings) != nil {
+			return identityaccess.PasswordAttempt{}, false, identityaccess.ErrUnavailable
+		}
+		result.PasswordHistory, err = passwordHistoryMaterial(history, *historyDigest)
+		if err != nil {
+			return identityaccess.PasswordAttempt{}, false, err
+		}
+		result.HistoryDigest = *historyDigest
+		result.SettingsVersion = *settingsVersion
+	} else if history != nil || historyDigest != nil || settings != nil || settingsVersion != nil {
+		return identityaccess.PasswordAttempt{}, false, identityaccess.ErrUnavailable
+	}
 	return result, true, nil
+}
+
+func passwordHistoryMaterial(hashes []string, commitment string) ([]authority.PasswordHash, error) {
+	if hashes == nil || len(hashes) > 24 || iamv1.ValidateDigest("historyDigest", commitment) != nil {
+		return nil, identityaccess.ErrUnavailable
+	}
+	history := make([]authority.PasswordHash, len(hashes))
+	for i, hash := range hashes {
+		if len(hash) > 512 || !strings.HasPrefix(hash, "$matrix-iam-v1$argon2id$v=19$") {
+			return nil, identityaccess.ErrUnavailable
+		}
+		history[i] = authority.PasswordHash(hash)
+	}
+	return history, nil
 }
 
 func (value *transaction) RejectPasswordAttempt(ctx context.Context, attempt identityaccess.PasswordAttempt) error {
@@ -460,6 +492,34 @@ func (value *transaction) LookupSession(
 		VerificationDigest:   verificationDigest,
 		CredentialGeneration: credentialGeneration,
 	}, true, nil
+}
+
+func (value *transaction) ListOwnSessions(ctx context.Context, read identityaccess.OwnSessionRead) ([]iamv1.Session, error) {
+	if iamv1.ValidateID("accountId", string(read.AccountID)) != nil || iamv1.ValidateID("userId", string(read.UserID)) != nil ||
+		iamv1.ValidateID("currentSessionId", string(read.CurrentSessionID)) != nil || (read.After != "" && iamv1.ValidateID("after", read.After) != nil) {
+		return nil, identityaccess.ErrInvalidArgument
+	}
+	rows, err := value.tx.Query(ctx, "SELECT * FROM iam.list_own_sessions($1,$2,$3,$4)", string(read.AccountID), string(read.UserID), string(read.CurrentSessionID), read.After)
+	if err != nil {
+		return nil, mapSubjectDatabaseError("list own IAM sessions", err)
+	}
+	defer rows.Close()
+	items := make([]iamv1.Session, 0, iamv1.DirectoryPageSize+1)
+	for rows.Next() {
+		item := iamv1.Session{APIVersion: iamv1.APIVersion, Kind: "Session", AccountID: read.AccountID, PrincipalID: read.UserID}
+		if err := rows.Scan(&item.ID, &item.Status, &item.IssuedAt, &item.ExpiresAt); err != nil {
+			return nil, mapDatabaseError("decode own IAM session", err)
+		}
+		item.IssuedAt, item.ExpiresAt = item.IssuedAt.UTC(), item.ExpiresAt.UTC()
+		if iamv1.ValidateSession(item) != nil || len(items) >= iamv1.DirectoryPageSize+1 {
+			return nil, identityaccess.ErrUnavailable
+		}
+		items = append(items, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, mapSubjectDatabaseError("list own IAM sessions", err)
+	}
+	return items, nil
 }
 
 // The same boundary decoder protects USER authentication carriers; a key must
@@ -772,6 +832,8 @@ func (value *transaction) ChangePassword(
 		iamv1.ValidateID("principalId", string(mutation.PrincipalID)) != nil ||
 		iamv1.ValidateID("sessionId", string(mutation.SessionID)) != nil ||
 		mutation.ExpectedPasswordHash == "" || mutation.NewPasswordHash == "" ||
+		iamv1.ValidateDigest("historyDigest", mutation.ExpectedHistoryDigest) != nil ||
+		mutation.ExpectedSettingsVersion == 0 || mutation.ExpectedSettingsVersion > 9007199254740991 ||
 		iamv1.ValidateID("attemptId", mutation.AttemptID) != nil || mutation.AttemptSequence == 0 ||
 		auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil {
 		return iamv1.ChangePasswordResponse{}, identityaccess.ErrInvalidArgument
@@ -783,7 +845,7 @@ func (value *transaction) ChangePassword(
 	var response iamv1.ChangePasswordResponse
 	err = value.tx.QueryRow(
 		ctx,
-		"SELECT * FROM iam.change_password($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9)",
+		"SELECT * FROM iam.change_password($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10, $11)",
 		string(mutation.AccountID),
 		string(mutation.PrincipalID),
 		string(mutation.ExpectedPasswordHash),
@@ -793,6 +855,8 @@ func (value *transaction) ChangePassword(
 		mutation.RevokeOtherSessions,
 		mutation.AttemptID,
 		mutation.AttemptSequence,
+		mutation.ExpectedHistoryDigest,
+		mutation.ExpectedSettingsVersion,
 	).Scan(&response.ChangedAt, &response.BootstrapFileRetirable)
 	clear(event)
 	if err != nil {
@@ -806,6 +870,37 @@ func (value *transaction) ChangePassword(
 	return response, nil
 }
 
+func (value *transaction) RevokeOtherSessions(ctx context.Context, mutation identityaccess.OtherSessionRevocationMutation) (iamv1.RevokeOtherSessionsResponse, error) {
+	if iamv1.ValidateID("accountId", string(mutation.AccountID)) != nil || iamv1.ValidateID("userId", string(mutation.UserID)) != nil ||
+		iamv1.ValidateID("actorSessionId", string(mutation.ActorSessionID)) != nil ||
+		auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil ||
+		mutation.AuditEvent.Action != auditv1.ActionIAMOtherSessionsRevoked || mutation.AuditEvent.TenantID != auditv1.TenantID(mutation.AccountID) ||
+		mutation.AuditEvent.Actor.ID != auditv1.ActorID(mutation.UserID) {
+		return iamv1.RevokeOtherSessionsResponse{}, identityaccess.ErrInvalidArgument
+	}
+	event, err := json.Marshal(mutation.AuditEvent)
+	if err != nil {
+		return iamv1.RevokeOtherSessionsResponse{}, identityaccess.ErrUnavailable
+	}
+	defer clear(event)
+	result := iamv1.RevokeOtherSessionsResponse{APIVersion: iamv1.APIVersion, Kind: "OtherSessionsRevocation",
+		AccountID: mutation.AccountID, UserID: mutation.UserID, CurrentSessionID: mutation.ActorSessionID, RequestID: mutation.AuditEvent.RequestID}
+	var applied bool
+	if err := value.tx.QueryRow(ctx, "SELECT * FROM iam.revoke_other_sessions($1,$2,$3,$4::jsonb)",
+		mutation.AccountID, mutation.UserID, mutation.ActorSessionID, event).Scan(&result.RevokedCount, &result.CompletedAt, &applied); err != nil {
+		return iamv1.RevokeOtherSessionsResponse{}, mapAuthorizationDatabaseError("revoke other IAM sessions", err)
+	}
+	result.CompletedAt = result.CompletedAt.UTC()
+	result.Outcome = "EQUAL_REPLAY"
+	if applied {
+		result.Outcome = "APPLIED"
+	}
+	if iamv1.ValidateRevokeOtherSessionsResponse(result) != nil {
+		return iamv1.RevokeOtherSessionsResponse{}, identityaccess.ErrUnavailable
+	}
+	return result, nil
+}
+
 func (value *transaction) RevokeSession(
 	ctx context.Context,
 	mutation identityaccess.SessionRevocationMutation,
@@ -813,6 +908,7 @@ func (value *transaction) RevokeSession(
 	if iamv1.ValidateID("organizationId", string(mutation.AccountID)) != nil ||
 		iamv1.ValidateID("sessionId", string(mutation.SessionID)) != nil ||
 		iamv1.ValidateID("actorPrincipalId", string(mutation.ActorPrincipalID)) != nil ||
+		iamv1.ValidateID("actorSessionId", string(mutation.ActorSessionID)) != nil ||
 		auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil {
 		return iamv1.Revocation{}, false, identityaccess.ErrInvalidArgument
 	}
@@ -832,12 +928,13 @@ func (value *transaction) RevokeSession(
 	var applied bool
 	err = value.tx.QueryRow(
 		ctx,
-		"SELECT * FROM iam.revoke_session($1, $2, $3, $4, $5::jsonb)",
+		"SELECT * FROM iam.revoke_session($1, $2, $3, $4, $5::jsonb, $6)",
 		string(mutation.AccountID),
 		string(mutation.SessionID),
 		string(mutation.ActorPrincipalID),
 		decisionID,
 		event,
+		string(mutation.ActorSessionID),
 	).Scan(&version, &revokedAt, &applied)
 	clear(event)
 	if err != nil {
@@ -856,6 +953,21 @@ func (value *transaction) RevokeSession(
 	return result, applied, nil
 }
 
+func (value *transaction) ReadUserCreationPasswordSettings(ctx context.Context, read identityaccess.AccountRead) (iamv1.AccountPasswordSettings, uint64, error) {
+	var encoded []byte
+	var version uint64
+	err := value.tx.QueryRow(ctx, "SELECT * FROM iam.read_user_creation_password_settings($1,$2,$3)",
+		read.AccountID, read.ActorPrincipalID, read.DecisionID).Scan(&encoded, &version)
+	if err != nil {
+		return iamv1.AccountPasswordSettings{}, 0, mapAuthorizationDatabaseError("read user creation password settings", err)
+	}
+	var settings iamv1.AccountPasswordSettings
+	if version == 0 || version > 9007199254740991 || json.Unmarshal(encoded, &settings) != nil {
+		return iamv1.AccountPasswordSettings{}, 0, identityaccess.ErrUnavailable
+	}
+	return settings, version, nil
+}
+
 func (value *transaction) CreateUser(
 	ctx context.Context,
 	mutation identityaccess.UserMutation,
@@ -863,7 +975,7 @@ func (value *transaction) CreateUser(
 	if iamv1.ValidateUser(mutation.User) != nil ||
 		iamv1.ValidateID("actorPrincipalId", string(mutation.ActorPrincipalID)) != nil ||
 		iamv1.ValidateID("decisionId", string(mutation.DecisionID)) != nil ||
-		mutation.PasswordHash == "" ||
+		mutation.PasswordHash == "" || mutation.ExpectedSettingsVersion == 0 || mutation.ExpectedSettingsVersion > 9007199254740991 ||
 		auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil {
 		return iamv1.User{}, identityaccess.ErrInvalidArgument
 	}
@@ -874,7 +986,7 @@ func (value *transaction) CreateUser(
 	var createdAt, updatedAt time.Time
 	err = value.tx.QueryRow(
 		ctx,
-		"SELECT * FROM iam.create_user($1, $2, $3, $4, $5, $6, $7, $8::jsonb)",
+		"SELECT * FROM iam.create_user($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9)",
 		string(mutation.User.AccountID),
 		string(mutation.User.ID),
 		mutation.User.LoginName,
@@ -883,6 +995,7 @@ func (value *transaction) CreateUser(
 		string(mutation.ActorPrincipalID),
 		string(mutation.DecisionID),
 		event,
+		mutation.ExpectedSettingsVersion,
 	).Scan(&createdAt, &updatedAt)
 	clear(event)
 	if err != nil {

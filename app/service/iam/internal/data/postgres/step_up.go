@@ -16,13 +16,22 @@ func (value *transaction) StartStepUp(ctx context.Context, mutation identityacce
 	s, r := mutation.Session, mutation.Request
 	var expectedSettingsVersion *uint64
 	var requiredForUsers *bool
+	var passwordSettings []byte
 	if r.SecuritySettings != nil {
+		if iamv1.ValidateSecuritySettingsUpdateIntent(*r.SecuritySettings) != nil {
+			return iamv1.StepUp{}, identityaccess.ErrInvalidArgument
+		}
 		expectedSettingsVersion = &r.SecuritySettings.ExpectedResourceVersion
 		requiredForUsers = &r.SecuritySettings.MFA.RequiredForUsers
+		var err error
+		passwordSettings, err = json.Marshal(r.SecuritySettings.Password)
+		if err != nil {
+			return iamv1.StepUp{}, identityaccess.ErrUnavailable
+		}
 	}
 	var encoded []byte
-	err := value.tx.QueryRow(ctx, "SELECT iam.start_step_up($1,$2,$3,$4,$5,$6,$7,$8,$9)", s.AccountID, s.PrincipalID, s.ID,
-		mutation.ID, r.RequestID, r.Operation, r.ExpectedFactorRevision, expectedSettingsVersion, requiredForUsers).Scan(&encoded)
+	err := value.tx.QueryRow(ctx, "SELECT iam.start_step_up($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)", s.AccountID, s.PrincipalID, s.ID,
+		mutation.ID, r.RequestID, r.Operation, r.ExpectedFactorRevision, expectedSettingsVersion, requiredForUsers, passwordSettings).Scan(&encoded)
 	if err != nil {
 		return iamv1.StepUp{}, mapStepUpError("start operation proof", err)
 	}
@@ -119,6 +128,49 @@ func (value *transaction) ReadRecoveryCodeRegeneration(ctx context.Context, call
 	var result iamv1.RecoveryCodeRegeneration
 	if contractjson.DecodeObjectBytes(encoded, 2048, &result) != nil {
 		return iamv1.RecoveryCodeRegeneration{}, identityaccess.ErrUnavailable
+	}
+	return result, nil
+}
+
+func (value *transaction) RemoveTOTP(ctx context.Context, mutation identityaccess.AuthenticatorRemovalMutation) (iamv1.RemoveTOTPResponse, error) {
+	s, r := mutation.Session, mutation.Request
+	if iamv1.ValidateRemoveTOTPRequest(r) != nil || mutation.AuditEvent.Action != auditv1.ActionIAMAuthenticatorRemoved ||
+		auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil ||
+		string(mutation.AuditEvent.TenantID) != string(s.AccountID) || string(mutation.AuditEvent.Actor.ID) != string(s.PrincipalID) ||
+		mutation.AuditEvent.Target.ID != string(s.PrincipalID) || mutation.AuditEvent.RequestID != r.RequestID {
+		return iamv1.RemoveTOTPResponse{}, identityaccess.ErrInvalidArgument
+	}
+	event, err := json.Marshal(mutation.AuditEvent)
+	if err != nil {
+		return iamv1.RemoveTOTPResponse{}, identityaccess.ErrUnavailable
+	}
+	defer clear(event)
+	var encoded []byte
+	err = value.tx.QueryRow(ctx, "SELECT iam.remove_totp_authenticator($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)",
+		s.AccountID, s.PrincipalID, s.ID, r.StepUpID, r.RequestID, r.ExpectedFactorRevision, mutation.ID, mutation.NotificationID, event).Scan(&encoded)
+	if err != nil {
+		return iamv1.RemoveTOTPResponse{}, mapStepUpError("remove authenticator", err)
+	}
+	var result iamv1.RemoveTOTPResponse
+	if contractjson.DecodeObjectBytes(encoded, 2048, &result) != nil {
+		return iamv1.RemoveTOTPResponse{}, identityaccess.ErrUnavailable
+	}
+	return result, nil
+}
+
+func (value *transaction) ReadAuthenticatorRemoval(ctx context.Context, caller iamv1.Session, requestID string) (iamv1.AuthenticatorRemoval, error) {
+	var encoded []byte
+	err := value.tx.QueryRow(ctx, "SELECT iam.read_authenticator_removal($1,$2,$3,$4)", caller.AccountID, caller.PrincipalID, caller.ID, requestID).Scan(&encoded)
+	if err != nil {
+		var failure *pgconn.PgError
+		if errors.As(err, &failure) && failure.Code == "P0002" {
+			return iamv1.AuthenticatorRemoval{}, identityaccess.ErrAuthenticatorRemovalNotFound
+		}
+		return iamv1.AuthenticatorRemoval{}, mapStepUpError("read authenticator removal", err)
+	}
+	var result iamv1.AuthenticatorRemoval
+	if contractjson.DecodeObjectBytes(encoded, 2048, &result) != nil {
+		return iamv1.AuthenticatorRemoval{}, identityaccess.ErrUnavailable
 	}
 	return result, nil
 }

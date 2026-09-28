@@ -318,6 +318,92 @@ func TestIAMHTTPPolicyDirectoriesDeriveScopeOnlyFromRoute(t *testing.T) {
 	}
 }
 
+func TestIAMHTTPPasswordRequirementsKeepOneIdentityCarrier(t *testing.T) {
+	const own = "/v1/auth/password-requirements"
+	const challenge = "/v1/auth/challenges/challenge-one/password-requirements"
+	const body = `{"challengeCredential":"synthetic-challenge-secret"}`
+	for _, sample := range []struct {
+		name, method, path, body, bearer, subject string
+		status                                    int
+	}{
+		{"self", http.MethodGet, own, "", "Bearer self-secret", "", 200},
+		{"challenge", http.MethodPost, challenge, body, "", "", 200},
+		{"unauthenticated", http.MethodGet, own, "", "", "", 401},
+		{"self-query", http.MethodGet, own + "?userId=another", "", "Bearer self-secret", "", 400},
+		{"self-body", http.MethodGet, own, `{}`, "Bearer self-secret", "", 400},
+		{"self-method", http.MethodPost, own, "", "Bearer self-secret", "", 405},
+		{"self-second-carrier", http.MethodGet, own, "", "Bearer self-secret", "other-secret", 400},
+		{"challenge-bearer", http.MethodPost, challenge, body, "Bearer self-secret", "", 400},
+		{"challenge-subject", http.MethodPost, challenge, body, "", "other-secret", 400},
+		{"challenge-query", http.MethodPost, challenge + "?accountId=another", body, "", "", 400},
+		{"challenge-selector", http.MethodPost, challenge, `{"challengeCredential":"secret","userId":"another"}`, "", "", 400},
+		{"challenge-missing", http.MethodPost, challenge, `{}`, "", "", 400},
+		{"challenge-null", http.MethodPost, challenge, `{"challengeCredential":null}`, "", "", 400},
+		{"challenge-duplicate", http.MethodPost, challenge, `{"challengeCredential":"one","challengeCredential":"two"}`, "", "", 400},
+		{"challenge-method", http.MethodGet, challenge, body, "", "", 405},
+		{"challenge-nested", http.MethodPost, "/v1/auth/challenges/one/two/password-requirements", body, "", "", 404},
+	} {
+		t.Run(sample.name, func(t *testing.T) {
+			workflow := newHTTPWorkflow(t)
+			workflow.passwordRequirements = iamv1.PasswordRequirements{APIVersion: iamv1.APIVersion, Kind: "PasswordRequirements",
+				Password: iamv1.AccountPasswordSettings{MinimumLength: 24, HistoryCount: 3}, MaximumLength: 128, MaximumUTF8Bytes: 512, SettingsVersion: 2, Source: "ACCOUNT"}
+			request := httptest.NewRequest(sample.method, sample.path, strings.NewReader(sample.body))
+			request.Header.Set("Content-Type", "application/json")
+			if sample.bearer != "" {
+				request.Header.Set("Authorization", sample.bearer)
+			}
+			if sample.subject != "" {
+				request.Header.Set("Matrix-Subject-Credential", sample.subject)
+			}
+			response := httptest.NewRecorder()
+			newTestHandler(t, workflow).ServeHTTP(response, request)
+			if response.Code != sample.status || response.Header().Get("Cache-Control") != "no-store" {
+				t.Fatalf("status=%d want=%d", response.Code, sample.status)
+			}
+			if sample.status != 200 {
+				if workflow.passwordRequirementsCalls != 0 {
+					t.Fatal("ambiguous input reached workflow")
+				}
+				return
+			}
+			var got iamv1.PasswordRequirements
+			if json.Unmarshal(response.Body.Bytes(), &got) != nil || got != workflow.passwordRequirements || workflow.passwordRequirementsCalls != 1 {
+				t.Fatal("effective requirements not preserved")
+			}
+			if sample.path == own && !bytes.Equal(workflow.passwordRequirementsBearer.CopyBytes(), []byte("self-secret")) {
+				t.Fatal("actual bearer lost")
+			}
+			if sample.path == challenge && (workflow.verifiedChallengeID != "challenge-one" || !bytes.Equal(workflow.enrollmentCredential.CopyBytes(), []byte("synthetic-challenge-secret"))) {
+				t.Fatal("original challenge identity lost")
+			}
+		})
+	}
+	for _, path := range []string{own, challenge} {
+		for _, failure := range []error{nil, identityaccess.ErrUnauthenticated, identityaccess.ErrUnavailable} {
+			workflow := newHTTPWorkflow(t)
+			workflow.passwordRequirementsError = failure // nil still has an invalid result.
+			method, input := http.MethodGet, ""
+			if path == challenge {
+				method, input = http.MethodPost, body
+			}
+			request := httptest.NewRequest(method, path, strings.NewReader(input))
+			request.Header.Set("Content-Type", "application/json")
+			if path == own {
+				request.Header.Set("Authorization", "Bearer self-secret")
+			}
+			response := httptest.NewRecorder()
+			newTestHandler(t, workflow).ServeHTTP(response, request)
+			wanted := http.StatusServiceUnavailable
+			if failure == identityaccess.ErrUnauthenticated {
+				wanted = http.StatusUnauthorized
+			}
+			if response.Code != wanted || strings.Contains(response.Body.String(), "maximumLength") {
+				t.Fatal("failed observation disclosed rules")
+			}
+		}
+	}
+}
+
 func TestIAMHTTPChallengePasswordRejectsAmbiguousCarriers(t *testing.T) {
 	const route = "/v1/auth/challenges/challenge-one:password"
 	const valid = `{"requestId":"change-one","challengeCredential":"synthetic-challenge-secret","newPassword":"Synthetic-New-Password-827!"}`
@@ -706,6 +792,7 @@ func TestIAMHTTPStepUpUsesOnlySessionAndClosedOperation(t *testing.T) {
 		{"start", "/v1/auth/step-up", `{"requestId":"regenerate-one","operation":"RECOVERY_CODES_REGENERATE","expectedFactorRevision":2}`},
 		{"verify", "/v1/auth/step-up/proof-one:verify", `{"requestId":"verify-one","password":"synthetic-password","code":"malformed-candidate"}`},
 		{"regenerate", "/v1/auth/recovery-codes:regenerate", `{"requestId":"regenerate-one","stepUpId":"proof-one","expectedFactorRevision":2}`},
+		{"remove", "/v1/auth/totp:remove", `{"requestId":"remove-one","stepUpId":"proof-one","expectedFactorRevision":2}`},
 	} {
 		t.Run(command.name, func(t *testing.T) {
 			for _, sample := range []struct {
@@ -747,7 +834,7 @@ func TestIAMHTTPStepUpUsesOnlySessionAndClosedOperation(t *testing.T) {
 			}
 		})
 	}
-	for _, route := range []string{"/v1/auth/step-up/by-request/regenerate-one", "/v1/auth/recovery-codes/regenerations/by-request/regenerate-one"} {
+	for _, route := range []string{"/v1/auth/step-up/by-request/regenerate-one", "/v1/auth/recovery-codes/regenerations/by-request/regenerate-one", "/v1/auth/totp/removals/by-request/remove-one"} {
 		for _, sample := range []struct {
 			method, suffix, body string
 			status               int
@@ -760,6 +847,9 @@ func TestIAMHTTPStepUpUsesOnlySessionAndClosedOperation(t *testing.T) {
 			if strings.Contains(route, "regenerations") {
 				workflow.stepErr = identityaccess.ErrRecoveryCodeRegenerationNotFound
 			}
+			if strings.Contains(route, "removals") {
+				workflow.stepErr = identityaccess.ErrAuthenticatorRemovalNotFound
+			}
 			request := httptest.NewRequest(sample.method, route+sample.suffix, strings.NewReader(sample.body))
 			request.Header.Set("Authorization", "Bearer synthetic-session")
 			response := httptest.NewRecorder()
@@ -767,6 +857,32 @@ func TestIAMHTTPStepUpUsesOnlySessionAndClosedOperation(t *testing.T) {
 			if response.Code != sample.status || (workflow.stepCalls == 1) != (sample.method == "GET" && sample.suffix == "" && sample.body == "") {
 				t.Fatal("read-only original metadata boundary differs", response.Code, workflow.stepCalls)
 			}
+		}
+	}
+}
+
+func TestIAMHTTPRemovalReplayCannotRequestAnotherAuthenticationTransition(t *testing.T) {
+	for _, sample := range []struct {
+		outcome, next string
+		status        int
+	}{
+		{"APPLIED", "REAUTHENTICATE", 200}, {"EQUAL_REPLAY", "", 200},
+		{"APPLIED", "", 503}, {"EQUAL_REPLAY", "REAUTHENTICATE", 503},
+	} {
+		workflow := newHTTPWorkflow(t)
+		workflow.removalResult = iamv1.RemoveTOTPResponse{Outcome: sample.outcome, NextStep: sample.next,
+			Removal: iamv1.AuthenticatorRemoval{APIVersion: iamv1.APIVersion, Kind: "AuthenticatorRemoval", ID: "removal-one",
+				RequestID: "remove-one", FactorID: "factor-one", FactorRevision: 3, RemovedAt: time.Date(2026, 9, 28, 1, 0, 0, 0, time.UTC)}}
+		request := httptest.NewRequest("POST", "/v1/auth/totp:remove", strings.NewReader(`{"requestId":"remove-one","stepUpId":"proof-one","expectedFactorRevision":2}`))
+		request.Header.Set("Authorization", "Bearer synthetic-session")
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		newTestHandler(t, workflow).ServeHTTP(response, request)
+		if response.Code != sample.status || response.Header().Get("Cache-Control") != "no-store" {
+			t.Fatal("removal result failed open", response.Code)
+		}
+		if sample.outcome == "EQUAL_REPLAY" && strings.Contains(response.Body.String(), "nextStep") {
+			t.Fatal("replay instructed another credential transition")
 		}
 	}
 }
@@ -960,6 +1076,58 @@ func TestIAMHTTPStrictDecodingAndRedactedProblems(t *testing.T) {
 	}
 }
 
+func TestIAMOwnSessionRoutesRejectSelectorsBeforeWorkflow(t *testing.T) {
+	workflow := newHTTPWorkflow(t)
+	handler := newTestHandler(t, workflow)
+	for _, test := range []struct {
+		method, target, body string
+		bearer               bool
+		status               int
+	}{
+		{http.MethodGet, "/v1/auth/sessions", "", true, http.StatusOK},
+		{http.MethodGet, "/v1/auth/sessions", "", false, http.StatusUnauthorized},
+		{http.MethodGet, "/v1/auth/sessions?userId=foreign", "", true, http.StatusBadRequest},
+		{http.MethodGet, "/v1/auth/sessions?accountId=foreign", "", true, http.StatusBadRequest},
+		{http.MethodGet, "/v1/auth/sessions?currentSessionId=other", "", true, http.StatusBadRequest},
+		{http.MethodGet, "/v1/auth/sessions?after=ic1.one&after=ic1.two", "", true, http.StatusBadRequest},
+		{http.MethodGet, "/v1/auth/sessions?after=session-id", "", true, http.StatusBadRequest},
+		{http.MethodGet, "/v1/auth/sessions", `{}`, true, http.StatusBadRequest},
+		{http.MethodPost, "/v1/auth/sessions", `{}`, true, http.StatusMethodNotAllowed},
+		{http.MethodPost, "/v1/auth/sessions/other:revoke", `{"requestId":"revoke-own"}`, true, http.StatusOK},
+		{http.MethodPost, "/v1/auth/sessions/other:revoke", `{"requestId":"revoke-own"}`, false, http.StatusUnauthorized},
+		{http.MethodPost, "/v1/auth/sessions/other:revoke?userId=foreign", `{"requestId":"revoke-own"}`, true, http.StatusBadRequest},
+		{http.MethodPost, "/v1/auth/sessions/other:revoke", `{"requestId":"revoke-own","currentSessionId":"foreign"}`, true, http.StatusBadRequest},
+		{http.MethodPost, "/v1/auth/sessions/other:revoke", `{"requestId":"revoke-own","accountId":"foreign"}`, true, http.StatusBadRequest},
+		{http.MethodPost, "/v1/auth/sessions/other:revoke", `{"requestId":"one","requestId":"two"}`, true, http.StatusBadRequest},
+		{http.MethodPost, "/v1/auth/sessions/nested/other:revoke", `{"requestId":"revoke-own"}`, true, http.StatusNotFound},
+		{http.MethodPost, "/v1/auth/sessions:revoke-others", `{"requestId":"revoke-others"}`, true, http.StatusOK},
+		{http.MethodPost, "/v1/auth/sessions:revoke-others", `{"requestId":"revoke-others"}`, false, http.StatusUnauthorized},
+		{http.MethodGet, "/v1/auth/sessions:revoke-others", "", true, http.StatusMethodNotAllowed},
+		{http.MethodPost, "/v1/auth/sessions:revoke-others?userId=foreign", `{"requestId":"revoke-others"}`, true, http.StatusBadRequest},
+		{http.MethodPost, "/v1/auth/sessions:revoke-others", `{"requestId":"revoke-others","currentSessionId":"foreign"}`, true, http.StatusBadRequest},
+		{http.MethodPost, "/v1/auth/sessions:revoke-others", `{"requestId":"revoke-others","accountId":"foreign"}`, true, http.StatusBadRequest},
+		{http.MethodPost, "/v1/auth/sessions:revoke-others", `{"requestId":"revoke-others","sessionIds":[]}`, true, http.StatusBadRequest},
+		{http.MethodPost, "/v1/auth/sessions:revoke-others", `{"requestId":"one","requestId":"two"}`, true, http.StatusBadRequest},
+	} {
+		before := workflow.ownSessionCalls
+		request := httptest.NewRequest(test.method, test.target, strings.NewReader(test.body))
+		if test.bearer {
+			request.Header.Set("Authorization", "Bearer actual-login-credential")
+		}
+		if test.body != "" {
+			request.Header.Set("Content-Type", "application/json")
+		}
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != test.status || (response.Code != http.StatusOK && workflow.ownSessionCalls != before) {
+			t.Fatalf("%s %s status=%d want=%d or rejected input reached workflow", test.method, test.target, response.Code, test.status)
+		}
+		if response.Code == http.StatusOK && (response.Header().Get("Cache-Control") != "no-store" || strings.Contains(response.Body.String(), "actual-login-credential")) {
+			t.Fatal("own session response exposed or cached authentication material")
+		}
+	}
+}
+
 func TestIAMHTTPManagementCommandsRequireCurrentSession(t *testing.T) {
 	workflow := newHTTPWorkflow(t)
 	handler := newTestHandler(t, workflow)
@@ -1087,7 +1255,7 @@ func TestIAMSecuritySettingsReadRejectsSelectorsAndAmbiguousWrites(t *testing.T)
 
 func TestIAMSecuritySettingsWriteAndCompletion(t *testing.T) {
 	const path = "/v1/account/security-settings"
-	const body = `{"requestId":"settings-command","stepUpId":"settings-proof","expectedResourceVersion":1,"mfa":{"requiredForUsers":false}}`
+	const body = `{"requestId":"settings-command","stepUpId":"settings-proof","expectedResourceVersion":1,"mfa":{"requiredForUsers":false},"password":{"minimumLength":15,"requireLowercase":false,"requireUppercase":false,"requireDigit":false,"requireSymbol":false,"historyCount":1}}`
 	for _, endpoint := range []struct{ method, path, body string }{
 		{http.MethodPut, path, body}, {http.MethodGet, path + "/changes/settings-command", ""},
 	} {
@@ -1104,7 +1272,7 @@ func TestIAMSecuritySettingsWriteAndCompletion(t *testing.T) {
 			workflow.settingsChange = iamv1.AccountSecuritySettingsChange{APIVersion: iamv1.APIVersion, Kind: "AccountSecuritySettingsChange",
 				RequestID: "settings-command", ExpectedResourceVersion: 1, CallerSessionEnded: true,
 				Settings: iamv1.AccountSecuritySettings{APIVersion: iamv1.APIVersion, Kind: "AccountSecuritySettings", AccountID: "account-catalog",
-					ResourceVersion: 2, MFA: iamv1.AccountMFASettings{RequiredForUsers: false}, UpdatedAt: time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC)}}
+					ResourceVersion: 2, MFA: iamv1.AccountMFASettings{RequiredForUsers: false}, Password: &iamv1.AccountPasswordSettings{MinimumLength: 15, HistoryCount: 1}, UpdatedAt: time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC)}}
 			request := httptest.NewRequest(endpoint.method, endpoint.path, strings.NewReader(endpoint.body))
 			request.Header.Set("Content-Type", "application/json")
 			request.Header.Set("Authorization", "Bearer current")
@@ -1268,8 +1436,13 @@ func TestIAMHTTPUserDetailUpdateAndDeleteAreBoundToTheRoute(t *testing.T) {
 }
 
 type httpWorkflow struct {
+	passwordRequirements       iamv1.PasswordRequirements
+	passwordRequirementsCalls  int
+	passwordRequirementsError  error
+	passwordRequirementsBearer iamv1.Secret
 	Workflow
 	policyCalls              int
+	ownSessionCalls          int
 	policyPlatform           bool
 	policyCredential         iamv1.Secret
 	profileErr               error
@@ -1298,6 +1471,7 @@ type httpWorkflow struct {
 	stepCredential           iamv1.Secret
 	stepResult               iamv1.StepUp
 	regenerationResult       iamv1.RegenerateRecoveryCodesResponse
+	removalResult            iamv1.RemoveTOTPResponse
 	stepErr                  error
 	getUserCalls             int
 	updateUserCalls          int
@@ -1332,7 +1506,7 @@ func (value *httpWorkflow) AccountSecuritySettings(_ context.Context, credential
 	value.settingsCalls++
 	value.settingsCredential = credential
 	return iamv1.AccountSecuritySettings{APIVersion: iamv1.APIVersion, Kind: "AccountSecuritySettings", AccountID: "account-catalog",
-		ResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: false}, UpdatedAt: time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC)}, value.settingsErr
+		ResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: false}, Password: &iamv1.AccountPasswordSettings{MinimumLength: 15, HistoryCount: 1}, UpdatedAt: time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC)}, value.settingsErr
 }
 
 func (value *httpWorkflow) ListAuthorizationProfiles(_ context.Context, credential iamv1.Secret, _ string) (iamv1.AuthorizationProfileList, error) {
@@ -1635,32 +1809,37 @@ func (workflow *httpWorkflow) RecoveryCodeRegenerationByRequest(_ context.Contex
 	workflow.stepCredential = credential
 	return workflow.regenerationResult.Regeneration, workflow.stepErr
 }
+func (workflow *httpWorkflow) RemoveTOTP(_ context.Context, credential iamv1.Secret, _ iamv1.RemoveTOTPRequest) (iamv1.RemoveTOTPResponse, error) {
+	workflow.stepCalls++
+	workflow.stepCredential = credential
+	return workflow.removalResult, workflow.stepErr
+}
+func (workflow *httpWorkflow) AuthenticatorRemovalByRequest(_ context.Context, credential iamv1.Secret, _ string) (iamv1.AuthenticatorRemoval, error) {
+	workflow.stepCalls++
+	workflow.stepCredential = credential
+	return workflow.removalResult.Removal, workflow.stepErr
+}
 func (workflow *httpWorkflow) StartTOTPEnrollment(context.Context, iamv1.Secret, iamv1.StartTOTPEnrollmentRequest) (iamv1.StartTOTPEnrollmentResponse, error) {
 	workflow.totpCalls++
 	return iamv1.StartTOTPEnrollmentResponse{}, identityaccess.ErrUnavailable
 }
-
 func (workflow *httpWorkflow) StartTOTPReplacement(_ context.Context, credential iamv1.Secret, body iamv1.StartTOTPReplacementRequest) (iamv1.StartTOTPEnrollmentResponse, error) {
 	workflow.totpCalls++
 	workflow.stepCredential, workflow.enrollmentRequestID = credential, body.RequestID
 	return workflow.enrollmentStart, workflow.enrollmentErr
 }
-
 func (workflow *httpWorkflow) TOTPEnrollment(context.Context, iamv1.Secret, string) (iamv1.TOTPEnrollment, error) {
 	workflow.totpCalls++
 	return iamv1.TOTPEnrollment{}, identityaccess.ErrUnavailable
 }
-
 func (workflow *httpWorkflow) TOTPEnrollmentByRequest(context.Context, iamv1.Secret, string) (iamv1.TOTPEnrollment, error) {
 	workflow.totpCalls++
 	return iamv1.TOTPEnrollment{}, identityaccess.ErrUnavailable
 }
-
 func (workflow *httpWorkflow) CancelTOTPEnrollment(context.Context, iamv1.Secret, string) (iamv1.TOTPEnrollment, error) {
 	workflow.totpCalls++
 	return iamv1.TOTPEnrollment{}, identityaccess.ErrUnavailable
 }
-
 func (workflow *httpWorkflow) ConfirmTOTPEnrollment(context.Context, iamv1.Secret, string, iamv1.ConfirmTOTPEnrollmentRequest) (iamv1.ConfirmTOTPEnrollmentResponse, error) {
 	workflow.totpCalls++
 	return iamv1.ConfirmTOTPEnrollmentResponse{}, identityaccess.ErrUnavailable
@@ -1782,6 +1961,39 @@ func (workflow *httpWorkflow) RevokePolicyAttachment(
 		APIVersion: iamv1.APIVersion, Kind: "Revocation", ID: string(id),
 		ResourceVersion: 2, RevokedAt: workflow.login.Session.IssuedAt,
 	}, nil
+}
+
+func (workflow *httpWorkflow) PasswordRequirements(_ context.Context, credential iamv1.Secret) (iamv1.PasswordRequirements, error) {
+	workflow.passwordRequirementsCalls++
+	workflow.passwordRequirementsBearer = credential
+	return workflow.passwordRequirements, workflow.passwordRequirementsError
+}
+
+func (workflow *httpWorkflow) ChallengePasswordRequirements(_ context.Context, id string, request iamv1.ChallengePasswordRequirementsRequest) (iamv1.PasswordRequirements, error) {
+	workflow.passwordRequirementsCalls++
+	workflow.verifiedChallengeID, workflow.enrollmentCredential = id, request.ChallengeCredential
+	return workflow.passwordRequirements, workflow.passwordRequirementsError
+}
+
+func (workflow *httpWorkflow) ListOwnSessions(_ context.Context, _ iamv1.Secret, _ string) (iamv1.SessionList, error) {
+	workflow.ownSessionCalls++
+	session := workflow.login.Session
+	return iamv1.SessionList{APIVersion: iamv1.APIVersion, Kind: "SessionList", AccountID: session.AccountID,
+		UserID: session.PrincipalID, CurrentSessionID: session.ID, ObservedAt: session.IssuedAt, Items: []iamv1.Session{session}}, nil
+}
+
+func (workflow *httpWorkflow) RevokeOwnSession(ctx context.Context, credential iamv1.Secret, id iamv1.SessionID, request iamv1.RevokeSessionRequest) (iamv1.RevokeOwnSessionResponse, error) {
+	workflow.ownSessionCalls++
+	revocation, err := workflow.RevokeSession(ctx, credential, id, request)
+	return iamv1.RevokeOwnSessionResponse{Outcome: "APPLIED", Revocation: revocation}, err
+}
+
+func (workflow *httpWorkflow) RevokeOtherSessions(_ context.Context, _ iamv1.Secret, request iamv1.RevokeSessionRequest) (iamv1.RevokeOtherSessionsResponse, error) {
+	workflow.ownSessionCalls++
+	session := workflow.login.Session
+	return iamv1.RevokeOtherSessionsResponse{APIVersion: iamv1.APIVersion, Kind: "OtherSessionsRevocation", Outcome: "APPLIED",
+		AccountID: session.AccountID, UserID: session.PrincipalID, CurrentSessionID: session.ID, RequestID: request.RequestID,
+		CompletedAt: session.IssuedAt}, nil
 }
 
 func (workflow *httpWorkflow) RevokeSession(

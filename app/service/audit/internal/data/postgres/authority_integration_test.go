@@ -449,7 +449,7 @@ func assertAuditContractCatalog(
 				invalid = append(invalid, candidate)
 			}
 		}
-		if action == auditv1.ActionIAMNotificationContactVerificationStarted || action == auditv1.ActionIAMNotificationContactVerified || action == auditv1.ActionIAMAuthenticatorBound || action == auditv1.ActionIAMAuthenticatorReplaced || action == auditv1.ActionIAMAuthenticatorRecoveryStarted || action == auditv1.ActionIAMAuthenticatorRecovered || action == auditv1.ActionIAMRecoveryCodesRegenerated {
+		if action == auditv1.ActionIAMOtherSessionsRevoked || action == auditv1.ActionIAMNotificationContactVerificationStarted || action == auditv1.ActionIAMNotificationContactVerified || action == auditv1.ActionIAMAuthenticatorBound || action == auditv1.ActionIAMAuthenticatorReplaced || action == auditv1.ActionIAMAuthenticatorRemoved || action == auditv1.ActionIAMAuthenticatorRecoveryStarted || action == auditv1.ActionIAMAuthenticatorRecovered || action == auditv1.ActionIAMRecoveryCodesRegenerated {
 			candidate := event
 			candidate.Target.ID = "another-users-principal"
 			invalid = append(invalid, candidate)
@@ -1090,12 +1090,12 @@ func assertIAMLookupBoundaries(
 	); err != nil {
 		t.Fatalf("read IAM readiness: %v", err)
 	}
-	if !ready || schemaVersion != 45 || checkedAt.IsZero() {
+	if !ready || schemaVersion != 49 || checkedAt.IsZero() {
 		t.Fatalf("IAM readiness ready=%t schema=%d checked=%s", ready, schemaVersion, checkedAt)
 	}
 	_, err := iamAPI.Exec(ctx, "SELECT * FROM iam.lookup_login($1)", fixture.LoginName)
 	assertAuthorityPostgresCode(t, err, "42501")
-	sequence := reserveIAMPasswordAttempt(t, ctx, iamAPI, fixture, "lookup-boundary-attempt", "")
+	sequence, _ := reserveIAMPasswordAttempt(t, ctx, iamAPI, fixture, "lookup-boundary-attempt", "")
 	if _, err := iamAPI.Exec(ctx, "SELECT iam.reject_password_attempt($1,$2,$3,$4)", fixture.TenantID, fixture.Administrator, "lookup-boundary-attempt", sequence); err != nil {
 		t.Fatal("complete the bounded lookup fixture", err)
 	}
@@ -1150,7 +1150,7 @@ func assertIAMUninitialized(t *testing.T, ctx context.Context, iamAPI *pgx.Conn)
 	); err != nil {
 		t.Fatalf("read uninitialized IAM readiness: %v", err)
 	}
-	if ready || schemaVersion != 45 || checkedAt.IsZero() {
+	if ready || schemaVersion != 49 || checkedAt.IsZero() {
 		t.Fatalf("uninitialized IAM readiness ready=%t schema=%d checked=%s", ready, schemaVersion, checkedAt)
 	}
 }
@@ -1636,7 +1636,7 @@ func assertAuditImmutability(
 // This storage fixture exercises the actual restricted SQL contract. It is
 // not a second password verifier or an end-to-end authentication claim; the
 // IAM HTTP/process gates own that proof. Reservation commits before mutation.
-func reserveIAMPasswordAttempt(t *testing.T, ctx context.Context, iamAPI *pgx.Conn, fixture iamBootstrapFixture, attemptID, sessionID string) uint64 {
+func reserveIAMPasswordAttempt(t *testing.T, ctx context.Context, iamAPI *pgx.Conn, fixture iamBootstrapFixture, attemptID, sessionID string) (uint64, string) {
 	t.Helper()
 	var login, tenant, principal, session any = fixture.LoginName, nil, nil, nil
 	purpose := "LOGIN"
@@ -1648,15 +1648,30 @@ func reserveIAMPasswordAttempt(t *testing.T, ctx context.Context, iamAPI *pgx.Co
 	var mustChange bool
 	var generation, sequence uint64
 	var expires time.Time
+	var history []string
+	var historyDigest *string
+	var settings []byte
+	var settingsVersion *uint64
 	if err := iamAPI.QueryRow(ctx, "SELECT * FROM iam.reserve_password_attempt($1,$2,$3,$4,$5,$6,NULL)", login, tenant, principal, session, attemptID, purpose).
-		Scan(&actualTenant, &actualPrincipal, &hash, &mustChange, &generation, &sequence, &expires); err != nil {
+		Scan(&actualTenant, &actualPrincipal, &hash, &mustChange, &generation, &sequence, &expires, &history, &historyDigest, &settings, &settingsVersion); err != nil {
 		t.Fatal("reserve IAM storage fixture password attempt", err)
 	}
 	if actualTenant != string(fixture.TenantID) || actualPrincipal != fixture.Administrator || hash != fixture.PasswordHash ||
 		!mustChange || generation == 0 || sequence == 0 || expires.IsZero() {
 		t.Fatal("password reservation changed the real bootstrap subject")
 	}
-	return sequence
+	if sessionID == "" {
+		if history != nil || historyDigest != nil || settings != nil || settingsVersion != nil {
+			t.Fatal("login received private password history")
+		}
+		return sequence, ""
+	}
+	var rules iamv1.AccountPasswordSettings
+	if history == nil || len(history) > 24 || historyDigest == nil || iamv1.ValidateDigest("historyDigest", *historyDigest) != nil ||
+		settingsVersion == nil || *settingsVersion != 1 || json.Unmarshal(settings, &rules) != nil || rules.MinimumLength != 15 || rules.HistoryCount != 1 {
+		t.Fatal("password change lost its actual history qualification")
+	}
+	return sequence, *historyDigest
 }
 
 func assertIAMSessionDatabaseTime(
@@ -1669,7 +1684,7 @@ func assertIAMSessionDatabaseTime(
 	t.Helper()
 	issue := func(sessionID, seed string) (string, string, time.Time, time.Time) {
 		attemptID := "attempt-session-" + seed
-		sequence := reserveIAMPasswordAttempt(t, ctx, iamAPI, fixture, attemptID, "")
+		sequence, _ := reserveIAMPasswordAttempt(t, ctx, iamAPI, fixture, attemptID, "")
 		lookupDigest := authorityDigest("session-lookup-" + seed)
 		verificationDigest := authorityDigest("session-verification-" + seed)
 		event := authorityAuditEvent(
@@ -1738,7 +1753,7 @@ func assertIAMSessionDatabaseTime(
 		auditv1.ActionIAMSessionIssued,
 	)
 	staleTimeEvent.Actor = auditv1.ActorReference{Type: auditv1.ActorUser, ID: auditv1.ActorID(fixture.Administrator)}
-	staleSequence := reserveIAMPasswordAttempt(t, ctx, iamAPI, fixture, "stale-time-attempt", "")
+	staleSequence, _ := reserveIAMPasswordAttempt(t, ctx, iamAPI, fixture, "stale-time-attempt", "")
 	var ignoredIssuedAt, ignoredExpiresAt time.Time
 	err := iamAPI.QueryRow(
 		ctx,
@@ -1937,7 +1952,7 @@ func assertIAMAuthorizationCatalog(
 	fixture iamBootstrapFixture,
 ) {
 	t.Helper()
-	loginSequence := reserveIAMPasswordAttempt(t, ctx, iamAPI, fixture, "catalog-login-attempt", "")
+	loginSequence, _ := reserveIAMPasswordAttempt(t, ctx, iamAPI, fixture, "catalog-login-attempt", "")
 	sessionTransaction, err := iamAPI.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -1959,7 +1974,7 @@ func assertIAMAuthorizationCatalog(
 	if err := sessionTransaction.Commit(ctx); err != nil {
 		t.Fatal(err)
 	}
-	passwordSequence := reserveIAMPasswordAttempt(t, ctx, iamAPI, fixture, "catalog-password-attempt", "session-catalog")
+	passwordSequence, historyDigest := reserveIAMPasswordAttempt(t, ctx, iamAPI, fixture, "catalog-password-attempt", "session-catalog")
 	passwordTransaction, err := iamAPI.Begin(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -1972,10 +1987,10 @@ func assertIAMAuthorizationCatalog(
 	passwordEvent := authorityAuditEvent("event-catalog-password", fixture.TenantID, fixture.Administrator, auditv1.ActionIAMUserPasswordChanged)
 	passwordEvent.Actor = sessionEvent.Actor
 	passwordEvent.OccurredAt = passwordTime.UTC()
-	if _, err := passwordTransaction.Exec(ctx, "SELECT * FROM iam.change_password($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9)",
+	if _, err := passwordTransaction.Exec(ctx, "SELECT * FROM iam.change_password($1,$2,$3,$4,$5::jsonb,$6,$7,$8,$9,$10,$11)",
 		string(fixture.TenantID), fixture.Administrator, fixture.PasswordHash,
 		strings.TrimSuffix(fixture.PasswordHash, strings.Repeat("A", 43))+strings.Repeat("B", 42)+"A", authorityJSON(t, passwordEvent), "session-catalog", true,
-		"catalog-password-attempt", passwordSequence); err != nil {
+		"catalog-password-attempt", passwordSequence, historyDigest, 1); err != nil {
 		_ = passwordTransaction.Rollback(ctx)
 		t.Fatalf("prepare current platform authority through the password mutation: %v", err)
 	}
@@ -2379,7 +2394,7 @@ func authorityAuditEvent(
 	if contract.UserActorRequired {
 		event.Actor.Type = auditv1.ActorUser
 	}
-	if action == auditv1.ActionIAMNotificationContactVerificationStarted || action == auditv1.ActionIAMNotificationContactVerified || action == auditv1.ActionIAMAuthenticatorBound || action == auditv1.ActionIAMAuthenticatorReplaced || action == auditv1.ActionIAMAuthenticatorRecoveryStarted || action == auditv1.ActionIAMAuthenticatorRecovered || action == auditv1.ActionIAMRecoveryCodesRegenerated {
+	if action == auditv1.ActionIAMOtherSessionsRevoked || action == auditv1.ActionIAMNotificationContactVerificationStarted || action == auditv1.ActionIAMNotificationContactVerified || action == auditv1.ActionIAMAuthenticatorBound || action == auditv1.ActionIAMAuthenticatorReplaced || action == auditv1.ActionIAMAuthenticatorRemoved || action == auditv1.ActionIAMAuthenticatorRecoveryStarted || action == auditv1.ActionIAMAuthenticatorRecovered || action == auditv1.ActionIAMRecoveryCodesRegenerated {
 		event.Target.ID = string(event.Actor.ID)
 	}
 	if contract.RoleActorRequired {
