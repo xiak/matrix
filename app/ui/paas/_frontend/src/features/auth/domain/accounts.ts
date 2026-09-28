@@ -342,6 +342,25 @@ export type UserAccess = { user: User; policyAttachments: UserPolicyAttachment[]
 export type AccountAccess = { account: Account; capabilities: ActionCapability[] };
 export type DirectoryPage<T> = { items: T[]; nextAfter: string | null };
 
+export type PasswordResetRequestIdentity = Readonly<{
+  accountId: string;
+  actorId: string;
+  userId: string;
+  resourceVersion: number;
+  requestId: string;
+}>;
+
+export type UserPasswordResetCompletion = Readonly<{
+  accountId: string;
+  actorPrincipalId: string;
+  userId: string;
+  requestId: string;
+  expectedResourceVersion: number;
+  resultingResourceVersion: number;
+  eventId: string;
+  occurredAt: string;
+}>;
+
 export type AccountCommand =
   | { kind: "create-user"; loginName: string; displayName: string; initialPassword: string }
   | { kind: "create-account"; id: string; displayName: string; rootLoginName: string; rootDisplayName: string; initialPassword: string }

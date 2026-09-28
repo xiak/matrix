@@ -103,6 +103,7 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
   const scene = access.scene;
   const workspace = access.workspace;
   const unknownReset = access.passwordResetUnknown;
+  const resetLookup = access.passwordResetLookup;
   const clearFeedback = access.clearFeedback;
   const workflow = view === "create-user" || view === "create-policy" || view === "policy-language" || view === "create-group" || view === "create-role";
   useEffect(() => { clearFeedback(); }, [view, clearFeedback]);
@@ -119,12 +120,16 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
     (previewOnly && capabilities.hasPreviewWorkspace && !scene.canListUsers)
   );
   return <section aria-label={t("title")} aria-busy={access.loading || access.busy} className={styles.stack}>
-    {unknownReset ? <Alert status="warning"><div className={styles.confirmation}>
-      <strong>{t("resetUnknownTitle")}</strong>
+    {unknownReset ? <Alert status={resetLookup?.status === "confirmed" ? "success" : "warning"}><div className={styles.confirmation}>
+      <strong>{t(resetLookup?.status === "confirmed" ? "resetConfirmedTitle" : "resetUnknownTitle")}</strong>
       <p>{t("resetUnknownTarget", { user: unknownReset.userQualifiedName, version: unknownReset.resourceVersion })}</p>
-      <p>{t("resetUnknownHint")}</p>
+      <p>{resetLookup?.status === "confirmed" ? t("resetConfirmedHint", { version: resetLookup.completion.resultingResourceVersion, time: resetLookup.completion.occurredAt }) : t("resetUnknownHint")}</p>
+      {resetLookup && resetLookup.status !== "confirmed" ? <p role="status">{t(`resetLookup.${resetLookup.status}`)}</p> : null}
       <p>{t("resetUnknownRequestId")} <code className={styles.resetRequestId}>{unknownReset.requestId}</code></p>
-      <div><Button disabled={access.busy} onClick={() => access.acknowledgeUnknownPasswordReset(unknownReset.requestId)} variant="secondary">{t("acknowledgeResetUnknown")}</Button></div>
+      <div className={styles.actions}>
+        {resetLookup?.status !== "confirmed" ? <Button disabled={access.busy || access.loading} onClick={() => void access.lookupUnknownPasswordReset(unknownReset.requestId)} variant="secondary">{t("queryOriginalReset")}</Button> : null}
+        {resetLookup?.status === "confirmed" ? <Button disabled={access.busy} onClick={() => access.acknowledgeUnknownPasswordReset(unknownReset.requestId)} variant="ghost">{t("dismissConfirmedReset")}</Button> : null}
+      </div>
     </div></Alert> : null}
     {access.error && !workflow ? <Alert status="danger">{t(`errors.${access.error}`)}</Alert> : null}
     {access.success && !workflow && view !== "policies" ? <Alert status="success">{t(access.success)}</Alert> : null}

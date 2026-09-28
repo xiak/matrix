@@ -119,6 +119,7 @@ function accounts(overrides: Partial<AccountRepository> = {}): AccountRepository
     listPolicies: vi.fn().mockImplementation(async (_credential: string, platform: boolean) => directory(platform)),
     listAuthorizationProfiles: vi.fn().mockResolvedValue(profileDirectory()),
     listAccounts: vi.fn().mockResolvedValue({ items: [accountAccess(identity.account)], nextAfter: null }),
+    readPasswordResetCompletion: vi.fn().mockRejectedValue(new HttpProblem(404, "RESET_RESULT_UNOBSERVED")),
     execute: vi.fn().mockResolvedValue(undefined),
     revokePolicyAttachment: vi.fn().mockResolvedValue({ id: "attachment-child-a-system.paas-viewer", resourceVersion: 2, revokedAt: "2026-08-27T00:00:00Z" }),
     ...overrides
@@ -2056,7 +2057,12 @@ describe("account access", () => {
     const execute = vi.fn(async (_credential: string, command: { kind: string; requestId?: string }) => {
       if (command.kind === "reset-password") throw new Error("connection lost after dispatch");
     });
-    const { user } = await openAccess(accounts({ execute }));
+    const readPasswordResetCompletion = vi.fn(async (_credential: string, request: { accountId: string; actorId: string; userId: string; requestId: string; resourceVersion: number }) => ({
+      accountId: request.accountId, actorPrincipalId: request.actorId, userId: request.userId,
+      requestId: request.requestId, expectedResourceVersion: request.resourceVersion,
+      resultingResourceVersion: request.resourceVersion + 1, eventId: "event-original", occurredAt: timestamp
+    }));
+    const { user } = await openAccess(accounts({ execute, readPasswordResetCompletion }));
     await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
     await user.click(screen.getByRole("button", { name: "重置密码" }));
     await user.type(screen.getByLabelText(/^初始密码/), "Reset-Only-Test-Password-74!");
@@ -2080,7 +2086,11 @@ describe("account access", () => {
     await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
     expect((screen.getByRole("button", { name: "重置密码" }) as HTMLButtonElement).disabled).toBe(true);
     expect(execute).toHaveBeenCalledTimes(1);
-    await user.click(screen.getByRole("button", { name: "了解风险，允许新操作" }));
+    expect(screen.queryByRole("button", { name: "完成审阅" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "查询原请求结果" }));
+    expect(await screen.findByText("原重置请求已确认提交")).toBeTruthy();
+    expect(readPasswordResetCompletion).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "完成审阅" }));
     expect(screen.queryByText("重置密码结果尚未确认")).toBeNull();
     expect((screen.getByRole("button", { name: "重置密码" }) as HTMLButtonElement).disabled).toBe(false);
     expect(execute).toHaveBeenCalledTimes(1);
@@ -2105,7 +2115,7 @@ describe("account access", () => {
 
     const resumed = await openAccess(repository);
     expect(await screen.findByText("重置密码结果尚未确认")).toBeTruthy();
-    expect(screen.getByText(/本地提醒丢失也不代表请求已解决/)).toBeTruthy();
+    expect(screen.getByText(/本地提醒丢失也不能证明结果/)).toBeTruthy();
     expect(execute).toHaveBeenCalledTimes(1);
     resumed.view.unmount();
 

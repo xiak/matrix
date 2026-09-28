@@ -876,6 +876,11 @@ export const previewAccountRepository: AccountRepository = {
     if (!access) throw new HttpProblem(403, "PREVIEW_USER_UNAVAILABLE");
     return structuredClone(access);
   },
+  async readPasswordResetCompletion(credential) {
+    requirePreviewCredential(credential);
+    // The isolated workspace has no trusted reset-completion journal.
+    throw new HttpProblem(404, "PREVIEW_RESET_RESULT_UNOBSERVED");
+  },
   async listPolicies(credential, platform) {
     requirePreviewCredential(credential);
     return structuredClone(platform ? platformPolicyDirectory() : tenantPolicyDirectory(await workspace.read(credential)));

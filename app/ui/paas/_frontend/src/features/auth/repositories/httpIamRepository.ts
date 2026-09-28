@@ -34,6 +34,8 @@ import type {
   PolicyManagement,
   PolicyScope,
   PolicyStatus,
+  PasswordResetRequestIdentity,
+  UserPasswordResetCompletion,
   User,
   UserAccess,
   UserPolicyAttachment,
@@ -87,6 +89,24 @@ function accountTimestamp(value: unknown): string {
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/.test(result) || Number.isNaN(Date.parse(result)) ||
       new Date(result).toISOString().slice(0, 19) !== result.slice(0, 19)) throw new Error("INVALID_IAM_RESPONSE");
   return result;
+}
+
+function parsePasswordResetCompletion(value: unknown, request: PasswordResetRequestIdentity): UserPasswordResetCompletion {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "accountId", "actorPrincipalId", "userId", "requestId", "expectedResourceVersion", "resultingResourceVersion", "eventId", "occurredAt"]);
+  requireAccountKind(wire, "UserPasswordResetCompletion");
+  const completion: UserPasswordResetCompletion = {
+    accountId: accountIdentifier(wire.accountId), actorPrincipalId: accountIdentifier(wire.actorPrincipalId),
+    userId: accountIdentifier(wire.userId), requestId: accountIdentifier(wire.requestId),
+    expectedResourceVersion: accountVersion(wire.expectedResourceVersion),
+    resultingResourceVersion: accountVersion(wire.resultingResourceVersion),
+    eventId: accountIdentifier(wire.eventId), occurredAt: accountTimestamp(wire.occurredAt)
+  };
+  if (completion.accountId !== request.accountId || completion.actorPrincipalId !== request.actorId ||
+      completion.userId !== request.userId || completion.requestId !== request.requestId ||
+      completion.expectedResourceVersion !== request.resourceVersion ||
+      completion.resultingResourceVersion !== request.resourceVersion + 1) throw new Error("INVALID_IAM_RESPONSE");
+  return completion;
 }
 
 function timestampOrder(value: string): string {
@@ -1896,6 +1916,16 @@ export const httpAccountRepository: AccountRepository = {
     const access = parseUserAccess(await requestJSON<unknown>(`/api/iam/v1/users/${encodeURIComponent(userId)}`, { headers: accountHeaders(credential) }));
     if (access.user.id !== userId) throw new Error("INVALID_IAM_RESPONSE");
     return access;
+  },
+  async readPasswordResetCompletion(credential, request) {
+    const userId = accountIdentifier(request.userId);
+    const requestId = accountIdentifier(request.requestId);
+    const version = accountVersion(request.resourceVersion);
+    if (version > Number.MAX_SAFE_INTEGER - 1) throw new Error("INVALID_IAM_REQUEST");
+    return parsePasswordResetCompletion(await requestJSON<unknown>(
+      `/api/iam/v1/users/${encodeURIComponent(userId)}/password-resets/${encodeURIComponent(requestId)}?resourceVersion=${version}`,
+      { headers: accountHeaders(credential) }
+    ), request);
   },
   async listPolicies(credential, platform) {
     return parsePolicyDirectory(await requestJSON<unknown>(platform ? "/api/iam/v1/platform-policies" : "/api/iam/v1/policies", { headers: accountHeaders(credential) }), platform ? "INSTALLATION" : "TENANT");

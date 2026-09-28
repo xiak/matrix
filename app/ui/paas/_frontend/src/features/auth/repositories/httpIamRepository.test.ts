@@ -1681,6 +1681,28 @@ describe("IAM HTTP account boundary", () => {
       requestId: "ui-user-reset-original" });
   });
 
+  it("looks up only the original reset tuple and rejects unbound or secret-bearing confirmations", async () => {
+    const request = { accountId: account.id, actorId: "root-acme", userId: user.id, requestId: "ui-user-reset-original", resourceVersion: 2 };
+    const completion = { apiVersion, kind: "UserPasswordResetCompletion", accountId: account.id,
+      actorPrincipalId: request.actorId, userId: user.id, requestId: request.requestId,
+      expectedResourceVersion: 2, resultingResourceVersion: 3, eventId: "event-reset-original", occurredAt: timestamp };
+    const fetcher = reply(completion);
+    expect(await httpAccountRepository.readPasswordResetCompletion("bearer", request)).toEqual({
+      accountId: account.id, actorPrincipalId: request.actorId, userId: user.id, requestId: request.requestId,
+      expectedResourceVersion: 2, resultingResourceVersion: 3, eventId: "event-reset-original", occurredAt: timestamp
+    });
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/users/user-alex/password-resets/ui-user-reset-original?resourceVersion=2");
+    expect(firstRequest(fetcher)[1]).not.toHaveProperty("body");
+    for (const wrong of [
+      { actorPrincipalId: "different-actor" }, { accountId: "other-account" }, { userId: "other-user" },
+      { requestId: "other-request" }, { expectedResourceVersion: 3 }, { resultingResourceVersion: 4 },
+      { password: "MUST_NOT_BE_ACCEPTED" }
+    ]) {
+      reply({ ...completion, ...wrong });
+      await expect(httpAccountRepository.readPasswordResetCompletion("bearer", request)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+  });
+
   it("uses exact policy identity and revisions for attach and revoke", async () => {
     let fetcher = reply(tenantAttachment);
     await httpAccountRepository.execute("bearer", { kind: "create-policy-attachment", userId: user.id,

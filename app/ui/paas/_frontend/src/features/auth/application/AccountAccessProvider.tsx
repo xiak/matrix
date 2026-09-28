@@ -20,6 +20,8 @@ import type {
   GroupMembershipPage,
   GroupPolicyAttachment,
   PolicyAttachmentRevocation,
+  PasswordResetRequestIdentity,
+  UserPasswordResetCompletion,
   UserPermissionBoundary
 } from "../domain/accounts";
 import { type AccessWorkspace, type AccessWorkspaceCommand, type PendingAccountRuleChange } from "../domain/accessWorkspace";
@@ -206,14 +208,12 @@ export const defaultPolicyDirectoryView: PolicyDirectoryView = { query: "", kind
 export type UserDirectoryView = { query: string; state: string; role: string };
 const defaultUserDirectoryView: UserDirectoryView = { query: "", state: "all", role: "all" };
 
-export type PasswordResetUnknown = Readonly<{
-  accountId: string;
-  actorId: string;
-  userId: string;
+export type PasswordResetUnknown = PasswordResetRequestIdentity & Readonly<{
   userQualifiedName: string;
-  resourceVersion: number;
-  requestId: string;
 }>;
+export type PasswordResetLookup =
+  | { requestId: string; status: "confirmed"; completion: UserPasswordResetCompletion }
+  | { requestId: string; status: "unresolved" | "denied" | "unavailable" };
 
 const passwordResetUnknownStoragePrefix = "matrix-iam-user-reset-unknown:v1:";
 function passwordResetUnknownStorageKey(accountId: string, actorId: string): string {
@@ -231,7 +231,7 @@ function readPasswordResetUnknown(accountId: string, actorId: string): PasswordR
     if (record.accountId !== accountId || record.actorId !== actorId ||
       typeof record.userId !== "string" || !record.userId || record.userId.length > 256 ||
       typeof record.userQualifiedName !== "string" || !record.userQualifiedName || record.userQualifiedName.length > 512 ||
-      typeof record.resourceVersion !== "number" || !Number.isSafeInteger(record.resourceVersion) || record.resourceVersion < 0 ||
+      typeof record.resourceVersion !== "number" || !Number.isSafeInteger(record.resourceVersion) || record.resourceVersion < 1 || record.resourceVersion > Number.MAX_SAFE_INTEGER - 1 ||
       typeof record.requestId !== "string" || !/^ui-user-reset-[0-9a-f]{32}$/.test(record.requestId)) return null;
     return record as PasswordResetUnknown;
   } catch { return null; }
@@ -281,7 +281,9 @@ type AccountAccess = {
   accountsPage(after: string): void;
   loadUser(userId: string): Promise<AccountUserScene>;
   passwordResetUnknown: PasswordResetUnknown | null;
+  passwordResetLookup: PasswordResetLookup | null;
   resetUserPassword(user: AccountUserScene, initialPassword: string): Promise<"applied" | "rejected" | "unknown">;
+  lookupUnknownPasswordReset(requestId: string): Promise<void>;
   acknowledgeUnknownPasswordReset(requestId: string): boolean;
   execute(command: Exclude<AccountCommand, { kind: "reset-password" }>): Promise<boolean>;
 };
@@ -360,11 +362,15 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   const passwordResetUnknownRef = useRef<{ session: typeof viewSession; intent: PasswordResetUnknown } | null>(null);
   const [storedPasswordResetUnknown, setStoredPasswordResetUnknown] = useState<typeof passwordResetUnknownRef.current>(null);
   const passwordResetUnknown = storedPasswordResetUnknown?.session === viewSession ? storedPasswordResetUnknown.intent : null;
+  const [storedPasswordResetLookup, setStoredPasswordResetLookup] = useState<{ session: typeof viewSession; result: PasswordResetLookup } | null>(null);
+  const passwordResetLookup = storedPasswordResetLookup?.session === viewSession && storedPasswordResetLookup.result.requestId === passwordResetUnknown?.requestId
+    ? storedPasswordResetLookup.result : null;
   useEffect(() => {
     const stored = passwordResetUnknownRef.current;
     if (!stored || stored.session === viewSession) return;
     passwordResetUnknownRef.current = null;
     setStoredPasswordResetUnknown(null);
+    setStoredPasswordResetLookup(null);
   }, [viewSession]);
   const rememberUserPolicyChange = useCallback((expectedRequestId: string | null, next: UserPolicyChangeIntent | null): boolean => {
     if (currentViewSession.current !== viewSession) return false;
@@ -1126,6 +1132,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     accountsPage(after) { void loadAccountsPage(after); },
     loadUser,
     passwordResetUnknown,
+    passwordResetLookup,
     async resetUserPassword(user, initialPassword) {
       if (!active || !credential || !tenantId || !principalId || loading || mutationPending.current) return "rejected";
       if (passwordResetUnknownRef.current?.session === viewSession) return "unknown";
@@ -1155,16 +1162,38 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         } };
         passwordResetUnknownRef.current = stored;
         setStoredPasswordResetUnknown(stored);
+        setStoredPasswordResetLookup(null);
         if (!repository.workspace) storePasswordResetUnknown(stored.intent);
         return "unknown";
       } finally { mutationPending.current = false; setBusy(false); }
     },
+    async lookupUnknownPasswordReset(requestId) {
+      const stored = passwordResetUnknownRef.current;
+      if (!active || !credential || !tenantId || !principalId || loading || mutationPending.current ||
+          stored?.session !== viewSession || stored.intent.requestId !== requestId ||
+          stored.intent.accountId !== tenantId || stored.intent.actorId !== principalId ||
+          verifiedIdentitySession.current !== viewSession) return;
+      mutationPending.current = true;
+      setBusy(true);
+      try {
+        const completion = await repository.readPasswordResetCompletion(credential, stored.intent);
+        if (currentViewSession.current !== viewSession || passwordResetUnknownRef.current !== stored) return;
+        setStoredPasswordResetLookup({ session: viewSession, result: { requestId, status: "confirmed", completion } });
+      } catch (failure) {
+        if (currentViewSession.current !== viewSession || passwordResetUnknownRef.current !== stored) return;
+        const status = failure instanceof HttpProblem && failure.status === 404 ? "unresolved"
+          : failure instanceof HttpProblem && [401, 403].includes(failure.status) ? "denied" : "unavailable";
+        setStoredPasswordResetLookup({ session: viewSession, result: { requestId, status } });
+      } finally { mutationPending.current = false; setBusy(false); }
+    },
     acknowledgeUnknownPasswordReset(requestId) {
       const stored = passwordResetUnknownRef.current;
-      if (stored?.session !== viewSession || stored.intent.requestId !== requestId || mutationPending.current) return false;
+      if (stored?.session !== viewSession || stored.intent.requestId !== requestId || mutationPending.current ||
+          passwordResetLookup?.requestId !== requestId || passwordResetLookup.status !== "confirmed") return false;
       if (!repository.workspace) clearPasswordResetUnknown(stored.intent);
       passwordResetUnknownRef.current = null;
       setStoredPasswordResetUnknown(null);
+      setStoredPasswordResetLookup(null);
       return true;
     },
     async execute(command) {
@@ -1181,7 +1210,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       } catch (failure) { setError(accountError(failure)); return false; }
       finally { mutationPending.current = false; setBusy(false); }
     }
-  }), [active, busy, credential, error, loading, repository, scene, success, tenantId, principalId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, permissionBoundaries, authorizationProfiles, policyRead, policyCreate, policyVersionMutation, accountSecuritySettings, accessKeys, roles, roleSessionRevokeIntent, changeRoleSessionRevokeIntent, userPolicyChangeIntent, passwordResetUnknown, beginUserPolicyAttachment, beginUserPolicyRevocation, submitUserPolicyChange, endUserPolicyChange, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
+  }), [active, busy, credential, error, loading, repository, scene, success, tenantId, principalId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, permissionBoundaries, authorizationProfiles, policyRead, policyCreate, policyVersionMutation, accountSecuritySettings, accessKeys, roles, roleSessionRevokeIntent, changeRoleSessionRevokeIntent, userPolicyChangeIntent, passwordResetUnknown, passwordResetLookup, beginUserPolicyAttachment, beginUserPolicyRevocation, submitUserPolicyChange, endUserPolicyChange, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
 
   return <AccountCapabilitiesContext.Provider value={capabilities}>
     <AccountAccessContext.Provider value={value}>{children}</AccountAccessContext.Provider>

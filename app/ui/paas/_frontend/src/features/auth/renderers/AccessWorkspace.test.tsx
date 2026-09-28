@@ -104,7 +104,8 @@ async function open(initialView: AccountAccessView, options?: { live?: boolean; 
     revokePolicyAttachment: vi.fn().mockRejectedValue(new Error("unused group contract")),
     execute: vi.fn().mockResolvedValue(undefined),
     workspace: options?.live ? undefined : { read: vi.fn(extension.read), execute: vi.fn(extension.execute) },
-    ...options?.repository
+    ...options?.repository,
+    readPasswordResetCompletion: options?.repository?.readPasswordResetCompletion ?? vi.fn(async () => { throw new HttpProblem(404, "PREVIEW_RESET_RESULT_UNOBSERVED"); })
   };
   const user = userEvent.setup();
   render(<LocaleProvider><SessionProvider repository={login}><UnsavedChangesProvider><Harness initialView={initialView} initialEntityId={options?.entityId} repository={repository} /></UnsavedChangesProvider></SessionProvider></LocaleProvider>);
@@ -148,6 +149,65 @@ describe("selection-driven user directory", () => {
     expect(await screen.findByText("重置密码结果尚未确认")).toBeTruthy();
     expect(execute).toHaveBeenCalledTimes(1);
     expect(sessionStorage.length).toBe(0);
+  });
+
+  it("queries the original uncertain reset without replaying the password mutation", async () => {
+    const execute = vi.fn(async (_credential: string, command: { kind: string }) => {
+      if (command.kind === "reset-password") throw new Error("preview response lost");
+    });
+    const readPasswordResetCompletion = vi.fn()
+      .mockRejectedValueOnce(new HttpProblem(404, "RESET_NOT_OBSERVED"))
+      .mockImplementation(async (_credential: string, request: { accountId: string; actorId: string; userId: string; requestId: string; resourceVersion: number }) => ({
+        accountId: request.accountId, actorPrincipalId: request.actorId, userId: request.userId,
+        requestId: request.requestId, expectedResourceVersion: request.resourceVersion,
+        resultingResourceVersion: request.resourceVersion + 1, eventId: "event-original", occurredAt: "2026-09-11T08:00:00Z"
+      }));
+    const { user } = await open("users", { repository: { execute, readPasswordResetCompletion } });
+    await user.click(await screen.findByRole("button", { name: "查看用户 lin" }));
+    await user.click(screen.getByRole("tab", { name: "安全设置" }));
+    await user.click(screen.getByRole("button", { name: "管理" }));
+    await user.click(screen.getByRole("button", { name: "重置密码" }));
+    await user.type(screen.getByLabelText(/^初始密码/), "Preview-Only-Test-Password-74!");
+    await user.click(screen.getByRole("button", { name: "审阅重置" }));
+    await user.click(screen.getByRole("button", { name: "确认重置密码" }));
+    await screen.findByText("重置密码结果尚未确认");
+    await user.click(screen.getByRole("button", { name: "查询原请求结果" }));
+    expect(await screen.findByText(/未查到原请求的提交记录/)).toBeTruthy();
+    expect(screen.getByText("重置密码结果尚未确认")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "完成审阅" })).toBeNull();
+    expect(execute).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "查询原请求结果" }));
+    expect(await screen.findByText("原重置请求已确认提交")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "完成审阅" })).toBeTruthy();
+    expect(readPasswordResetCompletion).toHaveBeenCalledTimes(2);
+    expect(readPasswordResetCompletion.mock.calls[0]?.[1]).toEqual(readPasswordResetCompletion.mock.calls[1]?.[1]);
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(sessionStorage.length).toBe(0);
+  });
+
+  it("keeps a reset unresolved when result lookup is forbidden or unavailable", async () => {
+    const execute = vi.fn(async (_credential: string, command: { kind: string }) => {
+      if (command.kind === "reset-password") throw new Error("preview response lost");
+    });
+    const readPasswordResetCompletion = vi.fn()
+      .mockRejectedValueOnce(new HttpProblem(403, "FORBIDDEN"))
+      .mockRejectedValueOnce(new HttpProblem(503, "IAM_UNAVAILABLE"));
+    const { user } = await open("users", { repository: { execute, readPasswordResetCompletion } });
+    await user.click(await screen.findByRole("button", { name: "查看用户 lin" }));
+    await user.click(screen.getByRole("tab", { name: "安全设置" }));
+    await user.click(screen.getByRole("button", { name: "管理" }));
+    await user.click(screen.getByRole("button", { name: "重置密码" }));
+    await user.type(screen.getByLabelText(/^初始密码/), "Preview-Only-Test-Password-74!");
+    await user.click(screen.getByRole("button", { name: "审阅重置" }));
+    await user.click(screen.getByRole("button", { name: "确认重置密码" }));
+    await screen.findByText("重置密码结果尚未确认");
+    await user.click(screen.getByRole("button", { name: "查询原请求结果" }));
+    expect(await screen.findByText(/当前会话无权查询或已失效/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "查询原请求结果" }));
+    expect(await screen.findByText(/查询失败或响应无法验证/)).toBeTruthy();
+    expect(screen.getByText("重置密码结果尚未确认")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "完成审阅" })).toBeNull();
+    expect(execute).toHaveBeenCalledTimes(1);
   });
 
   async function openBatch() {

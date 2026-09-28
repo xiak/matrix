@@ -28,6 +28,8 @@ import type {
   PolicyAttachmentRevocation,
   PolicyDirectory,
   AuthorizationProfileDirectory,
+  PasswordResetRequestIdentity,
+  UserPasswordResetCompletion,
   UserAccess,
   UserPermissionBoundary
 } from "../domain/accounts";
@@ -175,6 +177,7 @@ export interface AccountRepository {
   currentIdentity(credential: string): Promise<AccountIdentity>;
   listUsers(credential: string, after?: string): Promise<DirectoryPage<UserAccess>>;
   getUser(credential: string, userId: string): Promise<UserAccess>;
+  readPasswordResetCompletion(credential: string, request: PasswordResetRequestIdentity): Promise<UserPasswordResetCompletion>;
   listPolicies(credential: string, platform: boolean): Promise<PolicyDirectory>;
   // TENANT default-version read only. A list permission is not a read grant;
   // the server independently authorizes the exact Policy target.
