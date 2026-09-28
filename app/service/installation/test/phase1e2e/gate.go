@@ -133,7 +133,10 @@ func (value *gate) activateReleaseA(ctx context.Context) error {
 	upgrade := func(step string) error {
 		result, err := runMX(ctx, value.releases.a, "upgrade",
 			releaseAUpgradeArguments(value.config, value.releases.a), value.pathLeakage())
-		if err != nil || result.ReleaseID != value.releases.a.Manifest.Release.ID ||
+		if err != nil {
+			return err
+		}
+		if result.ReleaseID != value.releases.a.Manifest.Release.ID ||
 			result.PreviousID != initial.Manifest.Release.ID || !result.Changed {
 			return fail(step)
 		}
@@ -559,11 +562,11 @@ func releaseInstallArguments(config options, initial release.VerifiedBundle) ([]
 		"--root", config.root,
 		"--trust-key", config.trustKey,
 	}
-	if matchesCanonicalManifest(initial.Manifest, acceptedPreparationManifestDigest) ||
-		initial.Manifest.Database == release.SupportedDatabaseUpgradePredecessorProfile() {
+	if matchesCanonicalManifest(initial.Manifest, acceptedPreparationManifestDigest) {
 		return append(arguments, "--northbound-origin", config.edge), nil
 	}
-	if initial.Manifest.Database == release.CurrentDatabaseProfile() && config.securityMailConfiguration != "" {
+	if (initial.Manifest.Database == release.SupportedDatabaseUpgradePredecessorProfile() ||
+		initial.Manifest.Database == release.CurrentDatabaseProfile()) && config.securityMailConfiguration != "" {
 		return append(arguments, "--northbound-origin", config.edge,
 			"--security-mail-configuration", config.securityMailConfiguration), nil
 	}

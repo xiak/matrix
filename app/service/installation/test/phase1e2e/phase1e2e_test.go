@@ -957,11 +957,10 @@ func TestReleaseLifecycleArgumentsRespectThePublishedPredecessorCLI(t *testing.T
 		t.Fatalf("published predecessor install arguments: %v", err)
 	}
 	index := slices.Index(arguments, "--northbound-origin")
-	if index < 0 || index+1 >= len(arguments) || arguments[index+1] != defaultEdgeEndpoint {
+	mail := slices.Index(arguments, "--security-mail-configuration")
+	if index < 0 || index+1 >= len(arguments) || arguments[index+1] != defaultEdgeEndpoint ||
+		mail < 0 || mail+1 >= len(arguments) || arguments[mail+1] != base.securityMailConfiguration {
 		t.Fatalf("published predecessor install arguments=%q", arguments)
-	}
-	if slices.Contains(arguments, "--security-mail-configuration") {
-		t.Fatalf("published predecessor received a flag its CLI does not own: %q", arguments)
 	}
 
 	current := predecessor
@@ -972,7 +971,7 @@ func TestReleaseLifecycleArgumentsRespectThePublishedPredecessorCLI(t *testing.T
 		t.Fatalf("current install arguments: %v", err)
 	}
 	index = slices.Index(arguments, "--northbound-origin")
-	mail := slices.Index(arguments, "--security-mail-configuration")
+	mail = slices.Index(arguments, "--security-mail-configuration")
 	if index < 0 || index+1 >= len(arguments) || arguments[index+1] != defaultEdgeEndpoint ||
 		mail < 0 || mail+1 >= len(arguments) || arguments[mail+1] != base.securityMailConfiguration {
 		t.Fatalf("current install arguments=%q", arguments)
@@ -994,7 +993,9 @@ func TestReleaseLifecycleArgumentsRespectThePublishedPredecessorCLI(t *testing.T
 	changed.edge = "https://matrix.example.test:443"
 	arguments, err = releaseInstallArguments(changed, predecessor)
 	index = slices.Index(arguments, "--northbound-origin")
-	if err != nil || index < 0 || index+1 >= len(arguments) || arguments[index+1] != changed.edge {
+	mail = slices.Index(arguments, "--security-mail-configuration")
+	if err != nil || index < 0 || index+1 >= len(arguments) || arguments[index+1] != changed.edge ||
+		mail < 0 || mail+1 >= len(arguments) || arguments[mail+1] != changed.securityMailConfiguration {
 		t.Fatalf("published predecessor rejected its explicit origin: arguments=%q err=%v", arguments, err)
 	}
 	unknown := predecessor
@@ -1006,6 +1007,9 @@ func TestReleaseLifecycleArgumentsRespectThePublishedPredecessorCLI(t *testing.T
 	missingMail.securityMailConfiguration = ""
 	if _, err := releaseInstallArguments(missingMail, current); err == nil {
 		t.Fatal("current release received install arguments without security mail custody")
+	}
+	if _, err := releaseInstallArguments(missingMail, predecessor); err == nil {
+		t.Fatal("published predecessor received install arguments without security mail custody")
 	}
 }
 
