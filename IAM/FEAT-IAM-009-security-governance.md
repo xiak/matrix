@@ -1057,7 +1057,7 @@ INSTALLATION USER附件的真实新增与撤销在现有Account→稳定USER锁�
 
 ##### S3b：新密码规则、真实历史与写入契约
 
-S3b正在实施，尚未完整验收。最小可验收结果是：管理员按原step-up修改同Account规则，普通USER的创建、本人普通/强制改密及管理员reset都执行当前规则和真实历史；原root及installation恢复执行不可由租户放宽或锁死的固定底线。不是只给页面增加设置字段。到期和idle随各自真实执行片加入，S3b不提前接受尚未执行的`maxAgeDays`/Session占位配置。当前存储准备采用源码IAM47/Audit27，不分配或修改installation拥有的发布profile/revision。
+S3b正在实施，尚未完整验收。最小可验收结果是：管理员按原step-up修改同Account规则，普通USER的创建、本人普通/强制改密及管理员reset都执行当前规则和真实历史；原root及installation恢复执行不可由租户放宽或锁死的固定底线。不是只给页面增加设置字段。到期和idle随各自真实执行片加入，S3b不提前接受尚未执行的`maxAgeDays`/Session占位配置。当前累计候选`2f4ef24d97dfdbdc6a8940032dbb114216d21c33`已推送，源码IAM47/Audit27；[Verification 36406606774](https://github.com/xiak/matrix/actions/runs/36406606774)已核对精确SHA、queued，尚非独立CI成功。不分配或修改installation拥有的发布profile/revision。
 
 原契约owner已有`AccountPasswordSettings`值/严格codec，原密码owner已有规则和有界历史比较；现有Hash复用其固定默认底线，不保留第二套密码字符校验。历史比较校验当前及全部已保留hash的格式、串行比较当前和选定窗口，不因命中某一位置提前成功/返回；超出24条或损坏记录失败关闭，取消停止后续昂贵工作。0表示不检查额外历史，不允许当前密码；缺少真实历史不补造。它是可信IAM进程的校验结果，最终事务仍须核对原资格和history head。
 
