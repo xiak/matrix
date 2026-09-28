@@ -46,6 +46,9 @@
   .policyFacts > div:first-child { grid-column: 1 / -1; }
 }
 @container policy-overview (max-width: 380px) {
+  .policyLead { display: block; }
+  .policyLead > :first-child { display: inline-flex; vertical-align: baseline; margin: 0 var(--xiak-spacing-default) 0 0; }
+  .policyDescription { display: inline; }
   .policyFacts { grid-template-columns: minmax(0, 1fr); }
   .policyFacts > div:first-child { grid-column: auto; }
 }
