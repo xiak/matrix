@@ -103,6 +103,20 @@ const previewAuthorizationProfiles: AuthorizationProfileEntry[] = [
             { key: "iam.current-time", valueType: "TIME", source: "IAM_TRANSACTION_TIME" },
             { key: "iam.principal-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" }
           ] },
+        { action: "paas.deployment.read", resourceKind: "DEPLOYMENT", scope: "TENANT",
+          resourceShapes: [{ mode: "INSTANCE", prefixAllowed: false }],
+          conditions: [
+            { key: "iam.account-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" },
+            { key: "iam.current-time", valueType: "TIME", source: "IAM_TRANSACTION_TIME" },
+            { key: "iam.principal-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" }
+          ] },
+        { action: "paas.operation.read", resourceKind: "OPERATION", scope: "TENANT",
+          resourceShapes: [{ mode: "INSTANCE", prefixAllowed: false }],
+          conditions: [
+            { key: "iam.account-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" },
+            { key: "iam.current-time", valueType: "TIME", source: "IAM_TRANSACTION_TIME" },
+            { key: "iam.principal-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" }
+          ] },
         { action: "paas.execution-target.register", resourceKind: "EXECUTION_TARGET", scope: "INSTALLATION",
           resourceShapes: [{ mode: "INSTANCE", prefixAllowed: false }], resultResourceKind: "EXECUTION_TARGET" }
       ]

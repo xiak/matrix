@@ -44,6 +44,22 @@ describe("preview adapter for the fixed group contract", () => {
   });
 });
 
+describe("isolated authorization catalog preview", () => {
+  it("offers the service-review sample's exact PaaS read actions without inventing prefix support", async () => {
+    const directory = await previewAccountRepository.listAuthorizationProfiles(previewCredential);
+    const paas = directory.items.find((entry) => entry.profile.product === "paas")?.profile;
+    expect(paas).toBeTruthy();
+    expect(paas?.actions.filter((action) => action.action.endsWith(".read")).map((action) => ({
+      action: action.action, kind: action.resourceKind, scope: action.scope, shapes: action.resourceShapes
+    }))).toEqual([
+      { action: "paas.application.read", kind: "APPLICATION", scope: "TENANT", shapes: [{ mode: "INSTANCE", prefixAllowed: true }] },
+      { action: "paas.deployment.read", kind: "DEPLOYMENT", scope: "TENANT", shapes: [{ mode: "INSTANCE", prefixAllowed: false }] },
+      { action: "paas.operation.read", kind: "OPERATION", scope: "TENANT", shapes: [{ mode: "INSTANCE", prefixAllowed: false }] }
+    ]);
+    expect(paas?.actions.some((action) => action.action.includes(":"))).toBe(false);
+  });
+});
+
 describe("atomic user directory batches", () => {
   async function fixture() {
     resetPreviewEnvironment();

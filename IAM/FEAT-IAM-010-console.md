@@ -294,7 +294,9 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 
 ### 服务授权 MOCK 的开发验收证据
 
-角色目录的“服务授权”只提供内容区内的只读 MOCK 审阅。原型模板不再引用租户可编辑的 `MatrixDeliveryAccess`：权限示例仅使用 IAM 已声明的 PaaS 精确只读 Action，按 `APPLICATION`、`DEPLOYMENT`、`OPERATION` 的精确示例 ID 展示。服务主体、资源 ID、模板修订及角色名不是受信登记或发布结果；界面不提供可提交的策略内容摘要或客户同意记录。普通 `PipelineDeploymentRole` 与本流程分开，租户策略的更新或删除不会更改示例模板。
+角色目录的“服务授权”只提供内容区内的只读 MOCK 审阅。原型模板不再引用租户可编辑的 `MatrixDeliveryAccess`：权限示例仅使用 IAM 已声明的 PaaS 精确只读 Action，按 `APPLICATION`、`DEPLOYMENT`、`OPERATION` 的精确示例 ID 展示。隔离 MOCK 权限能力目录展示同一组 `paas.application.read`、`paas.deployment.read`、`paas.operation.read`：后两者仅支持租户范围的精确实例，不能被预览扩展成前缀或集合授权。服务主体、资源 ID、模板修订及角色名不是受信登记或发布结果；界面不提供可提交的策略内容摘要或客户同意记录。普通 `PipelineDeploymentRole` 与本流程分开，租户策略的更新或删除不会更改示例模板。
+
+目录一致性回归锁定上述三个 Action、资源类型、范围及资源形状；DEV MOCK 浏览器核对了 PaaS 详情的五条声明与只读边界，`390px` 下文档／正文宽度均为 `390px`、无对话框或横向溢出。完整前端 45 文件／802 用例、类型与架构检查、228 对主题样式检查、41 页静态导出、228 个嵌入文件一致性及 Go UI 测试／vet 已通过。这些是隔离 MOCK 验收，不替代真实 IAM 注册表或服务授权联调。
 
 目录可见性、产品安装和 callingService 身份都不构成客户授权。未来 PassRole／承担角色需共同绑定操作者、目标 Account/Role、实际工作负载与单一用途；模板升版不能自动扩权，服务应使用短期会话。关联资源清理、授权撤销和既有会话失效语义仍待 FEAT-IAM-008 固定。当前没有已发布的 `ServiceRoleTemplate` 租户授权、撤销或承担角色 northbound contract 与对应 LIVE Action，因此最终“授权服务”禁用；页面不创建角色、凭据或授权成功状态。前端实现及验收证据由 [FEAT-007](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence) 维护。
 
