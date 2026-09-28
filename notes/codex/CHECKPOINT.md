@@ -21,8 +21,9 @@
    terminal, drain and removal. The task-local signing key is not a published
    production trust root.
 2. [FEAT-005](../../docs/features/FEAT-005-offline-platform-lifecycle.md)
-   owns the remaining full integrated release/recovery requirements; the
-   two-host result does not close them.
+   owns the now-verified signed current-profile recovery lifecycle and the
+   remaining integrated two-host/recovery requirements; neither the local
+   recovery gate nor the earlier two-host gate alone closes them.
 3. [FEAT-007](../../docs/features/FEAT-007-control-plane-console.md) owns the
    signed LIVE browser evidence and its remaining user-facing gates; do not
    infer full console acceptance from login and directory reads.
