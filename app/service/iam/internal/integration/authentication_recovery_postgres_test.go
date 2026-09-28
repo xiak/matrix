@@ -111,8 +111,12 @@ func TestIAMAuthenticationRecoveryClosePostgres(t *testing.T) {
 			t.Fatal("rejected/uncommitted close changed authority state", err)
 		}
 	}
-	waitBlocked := func(t *testing.T, role string, leader int32) {
+	waitBlocked := func(t *testing.T, role string, leader int32, peer ...uint32) {
 		t.Helper()
+		var peerPID uint32
+		if len(peer) != 0 {
+			peerPID = peer[0]
+		}
 		waiting, stop := context.WithTimeout(ctx, 5*time.Second)
 		defer stop()
 		ticker := time.NewTicker(10 * time.Millisecond)
@@ -122,9 +126,9 @@ func TestIAMAuthenticationRecoveryClosePostgres(t *testing.T) {
 			// PostgreSQL may queue another row-lock waiter between this peer
 			// and the leader. Follow the actual dependency, not queue order.
 			if err := database.QueryRow(waiting, `WITH RECURSIVE waits(pid,blocker) AS (
-			 SELECT pid,unnest(pg_blocking_pids(pid)) FROM pg_stat_activity WHERE datname=current_database() AND usename=$1
+			 SELECT pid,unnest(pg_blocking_pids(pid)) FROM pg_stat_activity WHERE datname=current_database() AND usename=$1 AND ($3::bigint=0 OR pid=$3)
 			 UNION SELECT pid,unnest(pg_blocking_pids(blocker)) FROM waits)
-			 SELECT EXISTS(SELECT 1 FROM waits WHERE blocker=$2)`, role, leader).Scan(&blocked); err != nil {
+			 SELECT EXISTS(SELECT 1 FROM waits WHERE blocker=$2)`, role, leader, peerPID).Scan(&blocked); err != nil {
 				t.Fatal("observe actual authentication barrier dependency", err)
 			}
 			if blocked {
@@ -145,6 +149,9 @@ func TestIAMAuthenticationRecoveryClosePostgres(t *testing.T) {
 		}
 		stale := authenticationRecoveryIntent(document.InstallationID)
 		stale.AuthenticationStateDigest, stale.TOTPCustodyDigest = before.AuthenticationStateDigest, before.CustodyDigest
+		if _, err := workflow.Inspect(ctx, stale); !errors.Is(err, authenticationrecovery.ErrConflict) {
+			t.Fatal("prior qualification backup was treated as new recovery eligibility", err)
+		}
 		if _, err := workflow.Close(ctx, stale); !errors.Is(err, authenticationrecovery.ErrConflict) {
 			t.Fatal("prior qualification backup was allowed to close source authentication", err)
 		}
@@ -351,6 +358,143 @@ func TestIAMAuthenticationRecoveryClosePostgres(t *testing.T) {
 	lease := readLease()
 	intent := authenticationRecoveryIntent(document.InstallationID)
 	intent.AuthenticationStateDigest, intent.TOTPCustodyDigest = lease.AuthenticationStateDigest, lease.CustodyDigest
+	inspection, err := workflow.Inspect(ctx, intent)
+	if err != nil || installationv1.ValidateAuthenticationRecoveryInspectionForIntent(inspection, intent, status.ContentDigest) != nil {
+		t.Fatal("current new recovery intent was not eligible", err)
+	}
+	encodedInspectIntent, err := installationv1.EncodeAuthenticationRecoveryIntent(intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inspectDigest, err := installationv1.AuthenticationRecoveryIntentDigest(intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inspectConfig := config.Copy()
+	inspectConfig.User, inspectConfig.Password = authenticationRecoveryTestRole, iamHTTPTestPassword
+	inspectConnection, err := pgx.ConnectConfig(ctx, inspectConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var deniedInspection []byte
+	readCommittedErr := inspectConnection.QueryRow(ctx,
+		"SELECT iam.inspect_new_authentication_recovery($1::jsonb,$2)", string(encodedInspectIntent), inspectDigest).
+		Scan(&deniedInspection)
+	var contextError *pgconn.PgError
+	if !errors.As(readCommittedErr, &contextError) || contextError.Code != "42501" {
+		_ = inspectConnection.Close(context.Background())
+		t.Fatal("new recovery inspection accepted a default isolation transaction", readCommittedErr)
+	}
+	readOnlyTx, err := inspectConnection.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		_ = inspectConnection.Close(context.Background())
+		t.Fatal(err)
+	}
+	readOnlyErr := readOnlyTx.QueryRow(ctx,
+		"SELECT iam.inspect_new_authentication_recovery($1::jsonb,$2)", string(encodedInspectIntent), inspectDigest).
+		Scan(&deniedInspection)
+	_ = readOnlyTx.Rollback(ctx)
+	var readOnlyDatabaseError *pgconn.PgError
+	if !errors.As(readOnlyErr, &readOnlyDatabaseError) || readOnlyDatabaseError.Code != "42501" {
+		_ = inspectConnection.Close(context.Background())
+		t.Fatal("new recovery inspection accepted a read-only transaction", readOnlyErr)
+	}
+	foreignIntent := intent
+	foreignIntent.InstallationID = "mxi-" + strings.Repeat("d", 32)
+	encodedForeign, err := installationv1.EncodeAuthenticationRecoveryIntent(foreignIntent)
+	if err != nil {
+		_ = inspectConnection.Close(context.Background())
+		t.Fatal(err)
+	}
+	foreignDigest, err := installationv1.AuthenticationRecoveryIntentDigest(foreignIntent)
+	if err != nil {
+		_ = inspectConnection.Close(context.Background())
+		t.Fatal(err)
+	}
+	foreignTx, err := inspectConnection.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable, AccessMode: pgx.ReadWrite})
+	if err != nil {
+		_ = inspectConnection.Close(context.Background())
+		t.Fatal(err)
+	}
+	foreignErr := foreignTx.QueryRow(ctx,
+		"SELECT iam.inspect_new_authentication_recovery($1::jsonb,$2)", string(encodedForeign), foreignDigest).
+		Scan(&deniedInspection)
+	_ = foreignTx.Rollback(ctx)
+	var foreignDatabaseError *pgconn.PgError
+	if !errors.As(foreignErr, &foreignDatabaseError) || foreignDatabaseError.Code != "42501" {
+		_ = inspectConnection.Close(context.Background())
+		t.Fatal("new recovery inspection accepted another installation", foreignErr)
+	}
+	inspectTx, err := inspectConnection.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable, AccessMode: pgx.ReadWrite})
+	if err != nil {
+		_ = inspectConnection.Close(context.Background())
+		t.Fatal(err)
+	}
+	var boundedInspection []byte
+	if err := inspectTx.QueryRow(ctx, "SELECT iam.inspect_new_authentication_recovery($1::jsonb,$2)",
+		string(encodedInspectIntent), inspectDigest).Scan(&boundedInspection); err != nil {
+		_ = inspectTx.Rollback(ctx)
+		_ = inspectConnection.Close(context.Background())
+		t.Fatal("purpose-only SQL inspection failed", err)
+	}
+	if err := inspectTx.Rollback(ctx); err != nil {
+		_ = inspectConnection.Close(context.Background())
+		t.Fatal(err)
+	}
+	if err := inspectConnection.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var inspectionFields map[string]json.RawMessage
+	if err := json.Unmarshal(boundedInspection, &inspectionFields); err != nil {
+		t.Fatal(err)
+	}
+	allowedFields := map[string]bool{
+		"apiVersion": true, "kind": true, "purpose": true, "state": true, "installationId": true,
+		"bootstrapDigest": true, "epoch": true, "commandId": true, "recoveryIntentDigest": true,
+		"authenticationStateDigest": true,
+	}
+	if len(inspectionFields) != len(allowedFields) {
+		t.Fatal("purpose-only SQL inspection exposed a private or incomplete projection")
+	}
+	for field := range inspectionFields {
+		if !allowedFields[field] {
+			t.Fatal("purpose-only SQL inspection exposed a private field", field)
+		}
+	}
+	var directInspection installationv1.AuthenticationRecoveryInspection
+	if err := json.Unmarshal(boundedInspection, &directInspection); err != nil ||
+		installationv1.ValidateAuthenticationRecoveryInspectionForIntent(directInspection, intent, status.ContentDigest) != nil {
+		t.Fatal("purpose-only SQL inspection returned a different intent", err)
+	}
+	var apiCanInspect, workerCanInspect, credentialRecoveryCanInspect, backupCustodyCanInspect, notificationCanInspect bool
+	if err := database.QueryRow(ctx, `SELECT
+	    has_function_privilege('matrix_iam_api','iam.inspect_new_authentication_recovery(jsonb,text)','EXECUTE'),
+	    has_function_privilege('matrix_iam_worker','iam.inspect_new_authentication_recovery(jsonb,text)','EXECUTE'),
+	    has_function_privilege('matrix_iam_credential_recovery','iam.inspect_new_authentication_recovery(jsonb,text)','EXECUTE'),
+	    has_function_privilege('matrix_iam_backup_custody','iam.inspect_new_authentication_recovery(jsonb,text)','EXECUTE'),
+	    has_function_privilege('matrix_iam_notification_worker','iam.inspect_new_authentication_recovery(jsonb,text)','EXECUTE')`).
+		Scan(&apiCanInspect, &workerCanInspect, &credentialRecoveryCanInspect, &backupCustodyCanInspect, &notificationCanInspect); err != nil ||
+		apiCanInspect || workerCanInspect || credentialRecoveryCanInspect || backupCustodyCanInspect || notificationCanInspect {
+		t.Fatal("another IAM runtime purpose gained recovery inspection", err)
+	}
+	if err := iammigration.Verify(ctx, database); err != nil {
+		t.Fatal("untampered inspection migration did not verify", err)
+	}
+	t.Run("wrong purpose grant fails migration verification", func(t *testing.T) {
+		transaction, err := database.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer transaction.Rollback(context.Background())
+		if _, err := transaction.Exec(ctx, `GRANT EXECUTE ON FUNCTION iam.inspect_new_authentication_recovery(jsonb,text)
+			TO matrix_iam_worker`); err != nil {
+			t.Fatal(err)
+		}
+		if err := iammigration.Verify(ctx, transaction); err == nil {
+			t.Fatal("migration accepted recovery inspection granted to the worker")
+		}
+	})
+	assertNoClose()
 	if !t.Run("writer-before-close", func(t *testing.T) {
 		observe, release := holdIAMRequest(t, ctx, database, "close-new-password", true, auditv1.ActionIAMUserPasswordChanged)
 		defer release()
@@ -390,6 +534,11 @@ func TestIAMAuthenticationRecoveryClosePostgres(t *testing.T) {
 	intent.CommandID = "cmd-" + strings.Repeat("d", 32)
 	intent.AuthenticationStateDigest, intent.TOTPCustodyDigest = lease.AuthenticationStateDigest, lease.CustodyDigest
 	for _, damage := range []string{
+		"ALTER FUNCTION iam.inspect_new_authentication_recovery(jsonb,text) SECURITY INVOKER",
+		"ALTER FUNCTION iam.inspect_new_authentication_recovery(jsonb,text) STABLE",
+		"ALTER FUNCTION iam.inspect_new_authentication_recovery(jsonb,text) SET search_path=public",
+		"REVOKE EXECUTE ON FUNCTION iam.inspect_new_authentication_recovery(jsonb,text) FROM matrix_iam_authentication_recovery",
+		"GRANT EXECUTE ON FUNCTION iam.inspect_new_authentication_recovery(jsonb,text) TO matrix_iam_api",
 		"ALTER TABLE iam.authentication_recovery_closures DROP COLUMN security_snapshot_document CASCADE",
 		"ALTER TABLE iam.authentication_recovery_closures ALTER COLUMN security_snapshot_document SET DEFAULT '{}'::jsonb",
 		"ALTER TABLE iam.authentication_recovery_closures DROP CONSTRAINT authentication_recovery_snapshot_shape",
@@ -514,10 +663,39 @@ func TestIAMAuthenticationRecoveryClosePostgres(t *testing.T) {
 		}
 		observe, release := holdIAMRequest(t, ctx, database, intent.CommandID, true, auditv1.ActionIAMAuthenticationRecoveryClosed)
 		defer release()
+		// A new inspection holds the same live qualification barrier, but
+		// commits no closure. The later close must independently acquire it.
+		inspectionTx, err := private.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable, AccessMode: pgx.ReadWrite})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer inspectionTx.Rollback(context.Background())
+		var inspected []byte
+		if err := inspectionTx.QueryRow(ctx, "SELECT iam.inspect_new_authentication_recovery($1::jsonb,$2)",
+			string(encodedIntent), intentDigest).Scan(&inspected); err != nil {
+			t.Fatal("leading inspection rejected current qualification", err)
+		}
 		var wait sync.WaitGroup
 		wait.Add(1)
 		go func() { defer wait.Done(); results[0], failures[0] = workflow.Close(ctx, intent) }()
+		waitBlocked(t, authenticationRecoveryTestRole, int32(private.PgConn().PID()))
+		assertNoClose()
+		if err := inspectionTx.Commit(ctx); err != nil {
+			t.Fatal("leading inspection did not commit without effects", err)
+		}
 		leader := observe()
+		lateInspection := make(chan error, 1)
+		go func() {
+			tx, err := private.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable, AccessMode: pgx.ReadWrite})
+			if err == nil {
+				var output []byte
+				err = tx.QueryRow(ctx, "SELECT iam.inspect_new_authentication_recovery($1::jsonb,$2)",
+					string(encodedIntent), intentDigest).Scan(&output)
+				_ = tx.Rollback(context.Background())
+			}
+			lateInspection <- err
+		}()
+		waitBlocked(t, authenticationRecoveryTestRole, leader, private.PgConn().PID())
 		request := iamv1.ChangePasswordRequest{CurrentPassword: iamHTTPSecret(t, "Close-New-Root-Password-497!"),
 			NewPassword: iamHTTPSecret(t, "Close-Rejected-Password-719!"), RequestID: "close-late-password"}
 		writer := make(chan error, 1)
@@ -528,6 +706,10 @@ func TestIAMAuthenticationRecoveryClosePostgres(t *testing.T) {
 		waitBlocked(t, authenticationRecoveryTestRole, leader)
 		release()
 		wait.Wait()
+		var retryableInspection *pgconn.PgError
+		if err := <-lateInspection; !errors.As(err, &retryableInspection) || retryableInspection.Code != "40001" {
+			t.Fatal("in-flight inspection escaped the committed close barrier", err)
+		}
 		if err := <-writer; !errors.Is(err, identityaccess.ErrUnauthenticated) {
 			t.Fatal("late password change escaped CLOSED authority", err)
 		}
@@ -542,6 +724,9 @@ func TestIAMAuthenticationRecoveryClosePostgres(t *testing.T) {
 	}
 	if failures[0] != nil || failures[1] != nil {
 		t.Fatal("concurrent close failed", failures[0], failures[1])
+	}
+	if _, err := workflow.Inspect(ctx, intent); !errors.Is(err, authenticationrecovery.ErrConflict) {
+		t.Fatal("completed close receipt was replayed as new eligibility", err)
 	}
 	first, err := installationv1.EncodeAuthenticationRecoveryClosureEnvelope(results[0])
 	if err != nil {
@@ -2760,7 +2945,7 @@ func assertAuthenticationRecoveryDatabaseBoundary(t *testing.T, ctx context.Cont
         WHERE n.nspname='iam' AND c.relkind IN ('r','p','v','m','S')
           AND has_table_privilege($1,c.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'))`, authenticationRecoveryTestRole).
 		Scan(&executableFunctions, &tableCapabilities)
-	if err != nil || executableFunctions != 4 || tableCapabilities != 0 {
+	if err != nil || executableFunctions != 5 || tableCapabilities != 0 {
 		t.Fatalf("authentication recovery login capabilities functions=%d tables=%d: %v", executableFunctions, tableCapabilities, err)
 	}
 }

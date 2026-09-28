@@ -670,6 +670,18 @@ purpose-limited one-time recovery without acquiring another identity or
 platform permission. Runtime status and acceptance belong solely to IAM/009;
 these source decisions do not themselves confer an implementation capability.
 
+The new-intent recovery inspection slice is `ADAPT` from fixed Matrix
+`e579eef16c5e833337bd8055a0a838b7aa1614f3` (contract `0e55fe0628447a4ab90d93911c9bab37e129b49d`,
+implementation `25e28b40f951554664ae2356713e054a2d8bb659`). Reuse its private
+inspection value and new-command-only SQL/adapter/workflow/entrypoint tests,
+adapting the exact readiness shape to this branch's current password and
+authentication qualification. `REJECT` importing the donor's installation,
+release profile, checkpoint, FEAT status or separate CI job: this branch's
+existing serial recovery gate owns execution. Its successful fixed CI is
+source provenance, not acceptance of the combined IAM49/Audit27 source.
+The projection is current eligibility only, never a private snapshot,
+historical-receipt shortcut or authority to skip close's final qualification.
+
 | Fixed source / slice | Decision | Rationale |
 | --- | --- | --- |
 | Matrix `644fff09446fc8ffb003cc53cf2fb55d4f58828a`, `authentication.go`, `credential.go`, password and transaction/outbox owners | `REUSE` password verification, redacted secrets, purpose-separated random credentials and transactions; `ADAPT` an explicit incomplete-authentication boundary | Password success currently issues a Session, and no TOTP/challenge authority exists. Do not put a pre-authentication challenge in the Session table, treat a factor-bound flag as completed MFA, or add a second IAM/STS service or generic store. |

@@ -42,10 +42,43 @@ type Repository interface {
 
 type Transaction interface {
 	TransactionTime(context.Context) (time.Time, error)
+	InspectNewAuthentication(context.Context, installationv1.AuthenticationRecoveryIntent, string) (installationv1.AuthenticationRecoveryInspection, error)
 	PrepareAuthenticationClose(context.Context, installationv1.AuthenticationRecoveryIntent, string) (installationv1.AuthenticationRecoverySecuritySnapshot, error)
 	CloseAuthentication(context.Context, CloseMutation) (installationv1.AuthenticationRecoveryClosure, error)
 	ReconcileAuthentication(context.Context, ReconcileMutation) (installationv1.AuthenticationRecoveryClosure, error)
 	ReopenAuthentication(context.Context, ReopenMutation) (installationv1.AuthenticationRecoveryCompletion, error)
+}
+
+// Inspect accepts only a new, not-yet-closed command. The repository owns the
+// new-only proof in the same serializable transaction as the live projection.
+// Its result is intentionally smaller than the private replay snapshot and
+// cannot authorize a later close or restoration without revalidation.
+func (service *Service) Inspect(ctx context.Context, intent installationv1.AuthenticationRecoveryIntent) (installationv1.AuthenticationRecoveryInspection, error) {
+	if installationv1.ValidateCurrentAuthenticationRecoveryIntent(intent) != nil {
+		return installationv1.AuthenticationRecoveryInspection{}, ErrInvalidArgument
+	}
+	digest, err := installationv1.AuthenticationRecoveryIntentDigest(intent)
+	if err != nil {
+		return installationv1.AuthenticationRecoveryInspection{}, ErrInvalidArgument
+	}
+	var result installationv1.AuthenticationRecoveryInspection
+	err = service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
+		inspection, err := tx.InspectNewAuthentication(ctx, intent, digest)
+		if err != nil {
+			return err
+		}
+		if installationv1.ValidateAuthenticationRecoveryInspectionForIntent(
+			inspection, intent, inspection.BootstrapDigest,
+		) != nil {
+			return ErrUnavailable
+		}
+		result = inspection
+		return nil
+	})
+	if err != nil {
+		return installationv1.AuthenticationRecoveryInspection{}, err
+	}
+	return result, nil
 }
 
 type CloseMutation struct {

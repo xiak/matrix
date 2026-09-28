@@ -27,7 +27,9 @@ const (
 	AuthenticationRecoveryIntentKind                   = "IAMAuthenticationRecoveryIntent"
 	AuthenticationRecoverySecuritySnapshotKind         = "IAMAuthenticationRecoverySecuritySnapshot"
 	AuthenticationRecoveryClosureEnvelopeKind          = "IAMAuthenticationRecoveryClosureEnvelope"
+	AuthenticationRecoveryInspectionKind               = "IAMAuthenticationRecoveryInspection"
 	AuthenticationRecoveryPurpose                      = "IAM_AUTHENTICATION_BACKUP_RECOVERY"
+	AuthenticationRecoveryStateEligible                = "ELIGIBLE"
 	AuthenticationRecoveryStateClosed                  = "CLOSED"
 	AuthenticationRecoveryStateReopened                = "REOPENED"
 	MaximumAuthenticationRecoveryBytes                 = int64(4096)
@@ -38,6 +40,7 @@ const (
 	MaximumAuthenticationRecoverySnapshotItems = 3000
 	maximumAuthenticationRecoveryEpoch         = uint64(math.MaxInt64)
 
+	AuthenticationRecoveryInspectCommand   = "inspect"
 	AuthenticationRecoveryCloseCommand     = "close"
 	AuthenticationRecoveryReconcileCommand = "reconcile"
 	AuthenticationRecoveryReopenCommand    = "reopen"
@@ -60,8 +63,11 @@ const (
 	AuthenticationRecoveryErrorUnavailable = "IAM_AUTHENTICATION_RECOVERY_UNAVAILABLE"
 )
 
-// The signed purpose-only IAM executable accepts exactly one command. close
-// consumes the intent file and returns a closure/security-snapshot envelope.
+// The signed purpose-only IAM executable accepts exactly one command. inspect
+// reports only the current eligibility of a new, uncommitted recovery intent;
+// it never returns a private snapshot or a permit reusable by close. Unknown
+// inspection grants no eligibility and creates no recovery journal or receipt.
+// close consumes the intent file and returns a closure/security-snapshot envelope.
 // reconcile consumes both original files after restore and returns the same
 // closure; reopen consumes both again and returns a snapshot-bound completion.
 // Only exit zero carries a verified JSON result. Interruption, timeout,
@@ -71,6 +77,7 @@ const (
 
 var (
 	ErrInvalidAuthenticationRecoveryClosure          = errors.New("IAM authentication recovery closure is invalid")
+	ErrInvalidAuthenticationRecoveryInspection       = errors.New("IAM authentication recovery inspection is invalid")
 	ErrInvalidAuthenticationRecoveryCompletion       = errors.New("IAM authentication recovery completion is invalid")
 	ErrInvalidAuthenticationRecoveryIntent           = errors.New("IAM authentication recovery intent is invalid")
 	ErrInvalidAuthenticationRecoverySecuritySnapshot = errors.New("IAM authentication recovery security snapshot is invalid")
@@ -105,6 +112,85 @@ type AuthenticationRecoveryIntent struct {
 	// Omission preserves historical intent bytes only. New snapshot-aware
 	// execution requires ValidateCurrentAuthenticationRecoveryIntent.
 	AuthenticationStateDigest string `json:"authenticationStateDigest,omitempty"`
+}
+
+// AuthenticationRecoveryInspection is the bounded, non-secret result of the
+// purpose-only new-intent preflight. IAM must reject an existing command ID
+// before constructing it. It does not replace close's transactional replay and
+// live-state checks, nor does it authorize restoring a database backup.
+type AuthenticationRecoveryInspection struct {
+	APIVersion                string `json:"apiVersion"`
+	Kind                      string `json:"kind"`
+	Purpose                   string `json:"purpose"`
+	State                     string `json:"state"`
+	InstallationID            string `json:"installationId"`
+	BootstrapDigest           string `json:"bootstrapDigest"`
+	Epoch                     uint64 `json:"epoch"`
+	CommandID                 string `json:"commandId"`
+	RecoveryIntentDigest      string `json:"recoveryIntentDigest"`
+	AuthenticationStateDigest string `json:"authenticationStateDigest"`
+}
+
+func ValidateAuthenticationRecoveryInspection(value AuthenticationRecoveryInspection) error {
+	if value.APIVersion != AuthenticationRecoveryAPIVersion ||
+		value.Kind != AuthenticationRecoveryInspectionKind ||
+		value.Purpose != AuthenticationRecoveryPurpose ||
+		value.State != AuthenticationRecoveryStateEligible ||
+		!installationIDPattern.MatchString(value.InstallationID) ||
+		!validDigest(value.BootstrapDigest) ||
+		value.Epoch == 0 || value.Epoch > maximumAuthenticationRecoveryEpoch ||
+		!commandIDPattern.MatchString(value.CommandID) ||
+		!validDigest(value.RecoveryIntentDigest) ||
+		!validDigest(value.AuthenticationStateDigest) {
+		return ErrInvalidAuthenticationRecoveryInspection
+	}
+	return nil
+}
+
+func ValidateAuthenticationRecoveryInspectionForIntent(
+	value AuthenticationRecoveryInspection, intent AuthenticationRecoveryIntent, bootstrapDigest string,
+) error {
+	digest, err := AuthenticationRecoveryIntentDigest(intent)
+	if err != nil || ValidateCurrentAuthenticationRecoveryIntent(intent) != nil ||
+		ValidateAuthenticationRecoveryInspection(value) != nil ||
+		!validDigest(bootstrapDigest) || value.InstallationID != intent.InstallationID ||
+		value.BootstrapDigest != bootstrapDigest || value.Epoch != intent.Epoch ||
+		value.CommandID != intent.CommandID || value.RecoveryIntentDigest != digest ||
+		value.AuthenticationStateDigest != intent.AuthenticationStateDigest {
+		return ErrInvalidAuthenticationRecoveryInspection
+	}
+	return nil
+}
+
+func EncodeAuthenticationRecoveryInspection(value AuthenticationRecoveryInspection) ([]byte, error) {
+	if ValidateAuthenticationRecoveryInspection(value) != nil {
+		return nil, ErrInvalidAuthenticationRecoveryInspection
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil || len(encoded) == 0 || int64(len(encoded)) > MaximumAuthenticationRecoveryBytes {
+		return nil, ErrInvalidAuthenticationRecoveryInspection
+	}
+	return encoded, nil
+}
+
+func DecodeAuthenticationRecoveryInspection(reader io.Reader) (AuthenticationRecoveryInspection, error) {
+	if reader == nil {
+		return AuthenticationRecoveryInspection{}, ErrInvalidAuthenticationRecoveryInspection
+	}
+	encoded, err := io.ReadAll(io.LimitReader(reader, MaximumAuthenticationRecoveryBytes+1))
+	if err != nil || len(encoded) == 0 || int64(len(encoded)) > MaximumAuthenticationRecoveryBytes {
+		return AuthenticationRecoveryInspection{}, ErrInvalidAuthenticationRecoveryInspection
+	}
+	var value AuthenticationRecoveryInspection
+	if contractjson.DecodeObjectBytes(encoded, MaximumAuthenticationRecoveryBytes, &value) != nil ||
+		ValidateAuthenticationRecoveryInspection(value) != nil {
+		return AuthenticationRecoveryInspection{}, ErrInvalidAuthenticationRecoveryInspection
+	}
+	canonical, err := EncodeAuthenticationRecoveryInspection(value)
+	if err != nil || !bytes.Equal(encoded, canonical) {
+		return AuthenticationRecoveryInspection{}, ErrInvalidAuthenticationRecoveryInspection
+	}
+	return value, nil
 }
 
 // AuthenticationRecoveryClosure is a non-secret, one-way isolation record.

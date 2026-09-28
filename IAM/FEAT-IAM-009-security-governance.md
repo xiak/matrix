@@ -758,6 +758,18 @@ IAM46/Audit27版本/readiness与校验对齐后，新的独立PG18数据库上`T
 
 #### 受支持备份恢复与防回滚边界
 
+**新意图效果前检查切片。** 选择性适配安装owner已验证固定`e579eef16c5e833337bd8055a0a838b7aa1614f3`的私有inspect契约及IAM实现，在本分支当前密码规则/资格投影上重新验证；不导入其安装程序、发布profile、FEAT或验收状态。当前工作树已实现源码IAM49/Audit27及准确的五函数恢复角色形状，独立CI与签名组合仍待验收；本分支已发布profile保持4/3/1+r4。后继在线reset-completion独立预留IAM50，不与本片混合验收。
+
+专用`matrix-iam-authentication-recovery inspect`仅接受原受保护intent文件，用原authentication-recovery DB角色在Serializable事务内核对当前完整资格及未使用commandId；返回与原安装、bootstrap、epoch、意图摘要和当前认证状态摘要精确绑定的非秘密ELIGIBLE结果。它不返回私有快照、不关闭认证、不写closure/receipt，不是close的可缓存许可；close仍独立锁内重验。已完成或正在关闭的同commandId不能利用历史prepare的重放分支取得新资格；旧备份资格不同仍拒绝。当前API、worker、通知、密码恢复和backup角色均无此执行权。原close/reconcile/reopen及历史snapshot/canonical不变，不新增在线路由。须在原恢复门禁证明准确函数/ACL/readiness、两个事务次序、inspect后资格变化被close拒绝、只读/错误安装/历史command拒绝、无效果及真实程序的封闭文件/stdout边界；保持单前驱，不增加所有开发schema排列。
+
+本分支组合的局部运行证据：独立PG18.4（1CPU/768MiB/PIDs192、24连接，随机本机回环端口）及Go1.26.3/GOMAXPROCS2/GOMEMLIMIT512MiB下，原关闭门禁串行race-p1通过55.39s（包58.918s），保留原3分钟期限。真实策略发布/默认版本、附件、组成员、边界、角色信任、联系地址与因子变化均拒绝旧备份inspect及close；准确inspect返回十个封闭非秘密字段，错误事务/安装/目的权限被拒。实际锁依赖证明inspect先持锁时close等待，检查无效果提交后close自行校验；close先持锁时在途inspect发生序列化冲突，重试已提交command返回CONFLICT。检查后的真实改密使原close拒绝，五项新增函数形状/权限破坏均使readiness关闭。原末端故障回滚、完整snapshot及准确并发close保持。
+
+原`TestIAMTOTPBackupProcesses`在第二个新库串行race-p1通过20.42s（包23.844s），仍为原4分钟期限：真实迁移程序apply两次/verify、专用恢复程序inspect成功、API/worker/backup登录拒绝、旧资格/完成command拒绝及无效果断言均执行。原完整RR dump/restore、close/reopen提交后stdout丢失、原完成字节重放、运行进程关闭及重启后旧Session拒绝保持。该证据不覆盖安装journal/签名profile、资格变化后的旧备份正向恢复、LIVE UI或整体009验收，不能继承donor分支的r16安装结果。
+
+同一受限环境的另外两个新库通过原单前驱与双authority门禁：实际固定`42035189eb823e388509f54525889c1a18c6b79d`的IAM45程序→当前IAM49保留数据升级95.13s（包98.417s），原真实MFA恢复/解绑/重绑、密码设置与历史、资格和消费下限、SOURCE/RESTORED完成、两次迁移/重启及原bootstrap/Audit canonical/proof保留；CLOSED迁移与旧快照首次恢复继续拒绝。双authority真实PG权限/不可变记录/当前readiness检查6.25s（包8.929s）通过。只使用原唯一前驱入口，不增加逐个开发schema路径，不声明任意N-1或跨发布profile兼容。
+
+同一最终源码全仓`go test -race -count=1 -p 2 ./...`、`go vet -p 2 ./...`、模块验证及Linux amd64构建通过；默认无外部DSN的SKIP不计真实验收。实际PG门禁均终态成功后确认零客户端，正常停止并清理本轮唯一临时PG及空网络；只有可重建测试数据，未操作其他任务或远端资源。独立CI与最终签名消费者组合仍待各自固定验证。
+
 本节只覆盖产品提供的受控备份/恢复，不声称抵抗root将数据库、所有磁盘、密钥和封存历史一起回滚。密钥用途隔离保护秘密，事务保护同一次提交；二者都不使数据库外的时间自动单调。将T1已消费/撤销的状态恢复到T0，会重新出现历史有效行；数据库内新增generation、消费表或与数据库一同备份的Audit均不能独立阻止。PostgreSQL的[PITR说明](https://www.postgresql.org/docs/18/continuous-archiving.html)只证明可恢复到选定时点，不提供认证资格不回退的保证。
 
 安全要求是：受支持恢复重新开放访问前，恢复可信的最新安全状态，或作废所有无法确认的认证资格并通过经过证明的受限路径重建。受影响入口包括登录、挑战、已有Session、派生Role及其他可能绕过该限制的发行/管理入口，不只关闭UI。历史资源、Operation和Audit不因此删除；已接受工作负载和历史outbox沿原产品边界处理。

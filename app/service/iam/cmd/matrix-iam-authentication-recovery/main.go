@@ -65,13 +65,14 @@ func run(ctx context.Context, arguments []string, output io.Writer, getenv func(
 		return authenticationrecovery.ErrInvalidArgument
 	}
 	mode := arguments[0]
-	if mode != installationv1.AuthenticationRecoveryCloseCommand &&
+	if mode != installationv1.AuthenticationRecoveryInspectCommand &&
+		mode != installationv1.AuthenticationRecoveryCloseCommand &&
 		mode != installationv1.AuthenticationRecoveryReconcileCommand &&
 		mode != installationv1.AuthenticationRecoveryReopenCommand {
 		return authenticationrecovery.ErrInvalidArgument
 	}
 	command := &cobra.Command{
-		Use:           "matrix-iam-authentication-recovery close|reconcile|reopen",
+		Use:           "matrix-iam-authentication-recovery inspect|close|reconcile|reopen",
 		SilenceErrors: true, SilenceUsage: true, DisableFlagParsing: true,
 		Args: cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, values []string) error {
@@ -90,7 +91,7 @@ func execute(ctx context.Context, mode string, output io.Writer, getenv func(str
 	intentPath := getenv(installationv1.AuthenticationRecoveryIntentFileEnvironment)
 	closurePath := getenv(installationv1.AuthenticationRecoveryClosureFileEnvironment)
 	snapshotPath := getenv(installationv1.AuthenticationRecoverySecuritySnapshotFileEnvironment)
-	if mode == installationv1.AuthenticationRecoveryCloseCommand {
+	if mode == installationv1.AuthenticationRecoveryInspectCommand || mode == installationv1.AuthenticationRecoveryCloseCommand {
 		if intentPath == "" || closurePath != "" || snapshotPath != "" {
 			return authenticationrecovery.ErrInvalidArgument
 		}
@@ -102,7 +103,7 @@ func execute(ctx context.Context, mode string, output io.Writer, getenv func(str
 	var closure installationv1.AuthenticationRecoveryClosure
 	var snapshot installationv1.AuthenticationRecoverySecuritySnapshot
 	path := closurePath
-	if mode == installationv1.AuthenticationRecoveryCloseCommand {
+	if mode == installationv1.AuthenticationRecoveryInspectCommand || mode == installationv1.AuthenticationRecoveryCloseCommand {
 		path = intentPath
 	}
 	encoded, err := processconfig.ReadFile(path, installationv1.MaximumAuthenticationRecoveryBytes, true)
@@ -110,7 +111,7 @@ func execute(ctx context.Context, mode string, output io.Writer, getenv func(str
 		return authenticationrecovery.ErrInvalidArgument
 	}
 	defer clear(encoded)
-	if mode == installationv1.AuthenticationRecoveryCloseCommand {
+	if mode == installationv1.AuthenticationRecoveryInspectCommand || mode == installationv1.AuthenticationRecoveryCloseCommand {
 		intent, err = installationv1.DecodeAuthenticationRecoveryIntent(bytes.NewReader(encoded))
 	} else {
 		closure, err = installationv1.DecodeAuthenticationRecoveryClosure(bytes.NewReader(encoded))
@@ -118,7 +119,7 @@ func execute(ctx context.Context, mode string, output io.Writer, getenv func(str
 	if err != nil {
 		return authenticationrecovery.ErrInvalidArgument
 	}
-	if mode == installationv1.AuthenticationRecoveryCloseCommand {
+	if mode == installationv1.AuthenticationRecoveryInspectCommand || mode == installationv1.AuthenticationRecoveryCloseCommand {
 		if installationv1.ValidateCurrentAuthenticationRecoveryIntent(intent) != nil {
 			return authenticationrecovery.ErrInvalidArgument
 		}
@@ -166,6 +167,12 @@ func execute(ctx context.Context, mode string, output io.Writer, getenv func(str
 	}
 	var result []byte
 	switch mode {
+	case installationv1.AuthenticationRecoveryInspectCommand:
+		value, runErr := workflow.Inspect(ctx, intent)
+		if runErr != nil {
+			return runErr
+		}
+		result, err = installationv1.EncodeAuthenticationRecoveryInspection(value)
 	case installationv1.AuthenticationRecoveryCloseCommand:
 		value, runErr := workflow.Close(ctx, intent)
 		if runErr != nil {
@@ -212,11 +219,14 @@ func verifyRecoveryLogin(ctx context.Context, pool *pgxpool.Pool) error {
             AND c.relkind IN ('r','p','v','m','f')
             AND has_table_privilege(session_user,c.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'))
         AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_proc p WHERE p.pronamespace='iam'::regnamespace
-            AND p.oid NOT IN (to_regprocedure('iam.prepare_authentication_recovery_close(jsonb,text)'),
+            AND p.oid NOT IN (to_regprocedure('iam.inspect_new_authentication_recovery(jsonb,text)'),
+                to_regprocedure('iam.prepare_authentication_recovery_close(jsonb,text)'),
                 to_regprocedure('iam.close_authentication_recovery(jsonb,text,jsonb,jsonb,text)'),
                 to_regprocedure('iam.reconcile_authentication_recovery(jsonb,text,jsonb,jsonb,jsonb)'),
                 to_regprocedure('iam.reopen_authentication_recovery(jsonb,text,jsonb,jsonb)'))
             AND has_function_privilege(session_user,p.oid,'EXECUTE'))
+        AND to_regprocedure('iam.inspect_new_authentication_recovery(jsonb,text)') IS NOT NULL
+        AND has_function_privilege(session_user,'iam.inspect_new_authentication_recovery(jsonb,text)','EXECUTE')
         FROM pg_catalog.pg_roles AS own WHERE own.rolname=session_user`).Scan(&sessionUser, &currentUser, &restricted)
 	if err != nil {
 		return authenticationrecovery.ErrUnavailable

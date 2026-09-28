@@ -18,6 +18,7 @@ func TestAuthenticationRecoveryProcessHasOnlyFixedModesAndStableFailures(t *test
 	for _, arguments := range [][]string{
 		nil,
 		{"recover"},
+		{"inspect", "other"},
 		{"close", "other"},
 		{"reconcile", "--tenant", "other"},
 		{"--help"},
@@ -82,24 +83,28 @@ func TestAuthenticationRecoveryRejectsAmbiguousProtectedInputBeforeDatabaseAcces
 	clear(encoded)
 
 	var output bytes.Buffer
-	err = run(context.Background(), []string{installationv1.AuthenticationRecoveryCloseCommand}, &output, func(name string) string {
-		switch name {
-		case installationv1.AuthenticationRecoveryIntentFileEnvironment:
-			return path
-		case installationv1.AuthenticationRecoveryClosureFileEnvironment, installationv1.AuthenticationRecoverySecuritySnapshotFileEnvironment:
-			return ""
-		default:
-			t.Fatal("ambiguous protected input reached database configuration")
-			return ""
+	for _, mode := range []string{installationv1.AuthenticationRecoveryInspectCommand, installationv1.AuthenticationRecoveryCloseCommand} {
+		output.Reset()
+		err = run(context.Background(), []string{mode}, &output, func(name string) string {
+			switch name {
+			case installationv1.AuthenticationRecoveryIntentFileEnvironment:
+				return path
+			case installationv1.AuthenticationRecoveryClosureFileEnvironment, installationv1.AuthenticationRecoverySecuritySnapshotFileEnvironment:
+				return ""
+			default:
+				t.Fatal("ambiguous protected input reached database configuration")
+				return ""
+			}
+		})
+		if !errors.Is(err, authenticationrecovery.ErrInvalidArgument) || output.Len() != 0 {
+			t.Fatalf("ambiguous protected input for %s: %v", mode, err)
 		}
-	})
-	if !errors.Is(err, authenticationrecovery.ErrInvalidArgument) || output.Len() != 0 {
-		t.Fatalf("ambiguous protected input result: %v", err)
 	}
 }
 
 func TestAuthenticationRecoveryRejectsConflictingProtectedFiles(t *testing.T) {
 	for _, mode := range []string{
+		installationv1.AuthenticationRecoveryInspectCommand,
 		installationv1.AuthenticationRecoveryCloseCommand,
 		installationv1.AuthenticationRecoveryReconcileCommand,
 		installationv1.AuthenticationRecoveryReopenCommand,

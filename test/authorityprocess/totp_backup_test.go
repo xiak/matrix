@@ -323,13 +323,24 @@ func proveAuthenticationRecoveryProcesses(t *testing.T, ctx context.Context, roo
 		environment := append([]string(nil), closeEnvironment...)
 		environment[0] = installationv1.AuthenticationRecoveryDatabaseDSNFileEnvironment + "=" +
 			writeProtectedFile(t, temporary, "recovery-wrong-"+login, []byte(runtimeDSN(t, config, login, processDBPassword)))
+		invokeAuthenticationRecoveryProcess(t, ctx, root, recoveryBinary, "inspect", environment, installationv1.AuthenticationRecoveryExitForbidden)
 		invokeAuthenticationRecoveryProcess(t, ctx, root, recoveryBinary, "close", environment, installationv1.AuthenticationRecoveryExitForbidden)
 	}
 	stale := intent
 	stale.AuthenticationStateDigest = oldQualification
 	staleEnvironment := append([]string(nil), closeEnvironment...)
 	staleEnvironment[1] = installationv1.AuthenticationRecoveryIntentFileEnvironment + "=" + encodeIntent(stale)
+	invokeAuthenticationRecoveryProcess(t, ctx, root, recoveryBinary, "inspect", staleEnvironment, installationv1.AuthenticationRecoveryExitConflict)
 	invokeAuthenticationRecoveryProcess(t, ctx, root, recoveryBinary, "close", staleEnvironment, installationv1.AuthenticationRecoveryExitConflict)
+	inspectionBytes := invokeAuthenticationRecoveryProcess(t, ctx, root, recoveryBinary, "inspect", closeEnvironment, 0)
+	inspection, err := installationv1.DecodeAuthenticationRecoveryInspection(bytes.NewReader(inspectionBytes))
+	var bootstrapDigest string
+	if err := source.QueryRow(ctx, "SELECT content_digest FROM iam.bootstrap_receipts WHERE singleton").Scan(&bootstrapDigest); err != nil {
+		t.Fatal("read sealed recovery installation", err)
+	}
+	if err != nil || installationv1.ValidateAuthenticationRecoveryInspectionForIntent(inspection, intent, bootstrapDigest) != nil {
+		t.Fatal("independent inspection did not return the exact bounded eligibility", err)
+	}
 	assertOpenWithoutRecovery(source)
 	network := startChild(t, root, iamBinary, iamEnvironment)
 	defer network.stop()
@@ -401,6 +412,7 @@ func proveAuthenticationRecoveryProcesses(t *testing.T, ctx context.Context, roo
 	if replay := invokeAuthenticationRecoveryProcess(t, ctx, root, recoveryBinary, "close", closeEnvironment, 0); !bytes.Equal(replay, encodedEnvelope) {
 		t.Fatal("new close process sampled another snapshot or changed receipt bytes")
 	}
+	invokeAuthenticationRecoveryProcess(t, ctx, root, recoveryBinary, "inspect", closeEnvironment, installationv1.AuthenticationRecoveryExitConflict)
 	waitHTTPStatus(t, ctx, network, sourceEndpoint+"/ready", http.StatusServiceUnavailable)
 	if response := performJSON(t, http.MethodGet, sourceEndpoint+"/v1/auth/me", restoredBearer, nil); response.Status != http.StatusUnauthorized {
 		t.Fatal("live API bypassed committed private close", response.Status)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -45,10 +46,70 @@ func (repository *recoveryTestRepository) WithinAuthenticationRecoveryTransactio
 
 type recoveryTestTransaction struct {
 	now       time.Time
+	inspect   func(installationv1.AuthenticationRecoveryIntent, string) (installationv1.AuthenticationRecoveryInspection, error)
 	prepare   func(installationv1.AuthenticationRecoveryIntent, string) (installationv1.AuthenticationRecoverySecuritySnapshot, error)
 	close     func(CloseMutation) (installationv1.AuthenticationRecoveryClosure, error)
 	reconcile func(ReconcileMutation) (installationv1.AuthenticationRecoveryClosure, error)
 	reopen    func(ReopenMutation) (installationv1.AuthenticationRecoveryCompletion, error)
+}
+
+func (transaction *recoveryTestTransaction) InspectNewAuthentication(_ context.Context, intent installationv1.AuthenticationRecoveryIntent, digest string) (installationv1.AuthenticationRecoveryInspection, error) {
+	if transaction.inspect == nil {
+		return installationv1.AuthenticationRecoveryInspection{}, ErrUnavailable
+	}
+	return transaction.inspect(intent, digest)
+}
+
+func TestAuthenticationRecoveryInspectDoesNotReadCompletedCommandOrClose(t *testing.T) {
+	intent := validRecoveryIntent()
+	now := time.Date(2026, 9, 21, 4, 5, 6, 789000, time.UTC)
+	transaction := &recoveryTestTransaction{now: now}
+	transaction.prepare = func(installationv1.AuthenticationRecoveryIntent, string) (installationv1.AuthenticationRecoverySecuritySnapshot, error) {
+		t.Fatal("inspection used the replay-capable close preparation")
+		return installationv1.AuthenticationRecoverySecuritySnapshot{}, ErrUnavailable
+	}
+	transaction.inspect = func(actual installationv1.AuthenticationRecoveryIntent, digest string) (installationv1.AuthenticationRecoveryInspection, error) {
+		if actual != intent {
+			t.Fatal("inspection changed the sealed intent")
+		}
+		snapshot := snapshotFor(actual, digest, now)
+		return installationv1.AuthenticationRecoveryInspection{
+			APIVersion:                installationv1.AuthenticationRecoveryAPIVersion,
+			Kind:                      installationv1.AuthenticationRecoveryInspectionKind,
+			Purpose:                   installationv1.AuthenticationRecoveryPurpose,
+			State:                     installationv1.AuthenticationRecoveryStateEligible,
+			InstallationID:            snapshot.InstallationID,
+			BootstrapDigest:           snapshot.BootstrapDigest,
+			Epoch:                     snapshot.Epoch,
+			CommandID:                 snapshot.CommandID,
+			RecoveryIntentDigest:      snapshot.RecoveryIntentDigest,
+			AuthenticationStateDigest: snapshot.AuthenticationStateDigest,
+		}, nil
+	}
+	service := newRecoveryTestService(t, transaction)
+	result, err := service.Inspect(t.Context(), intent)
+	if err != nil || result.State != installationv1.AuthenticationRecoveryStateEligible ||
+		result.CommandID != intent.CommandID || result.AuthenticationStateDigest != intent.AuthenticationStateDigest ||
+		installationv1.ValidateAuthenticationRecoveryInspectionForIntent(result, intent, result.BootstrapDigest) != nil {
+		t.Fatalf("new recovery inspection = %#v / %v", result, err)
+	}
+	transaction.inspect = func(installationv1.AuthenticationRecoveryIntent, string) (installationv1.AuthenticationRecoveryInspection, error) {
+		tampered := result
+		tampered.CommandID = "cmd-" + strings.Repeat("f", 32)
+		return tampered, nil
+	}
+	if _, err := service.Inspect(t.Context(), intent); !errors.Is(err, ErrUnavailable) {
+		t.Fatal("inspection accepted a different command identity")
+	}
+	transaction.inspect = func(installationv1.AuthenticationRecoveryIntent, string) (installationv1.AuthenticationRecoveryInspection, error) {
+		return installationv1.AuthenticationRecoveryInspection{}, ErrConflict
+	}
+	if _, err := service.Inspect(t.Context(), intent); !errors.Is(err, ErrConflict) {
+		t.Fatal("existing command receipt was treated as new eligibility")
+	}
+	if repository := service.repository.(*recoveryTestRepository); repository.commits != 1 {
+		t.Fatal("conflicted inspection committed a success transaction")
+	}
 }
 
 func (transaction *recoveryTestTransaction) TransactionTime(context.Context) (time.Time, error) {
