@@ -90,8 +90,8 @@ func startTOTPBackupCustody(
 		)
 	}
 	// Select the private wire from the authenticated installed release before
-	// launching its helper. The signed IAM40 predecessor emitted six fields;
-	// IAM45 must emit the seventh qualification digest. Never retry the other
+	// launching its helper. The signed IAM45 predecessor and current IAM49
+	// release both require the qualification digest. Never retry a historical
 	// decoder after a malformed or missing field.
 	decodeLease, supported := totpBackupLeaseDecoder(installation.bundle.Manifest.Database)
 	if !supported {
@@ -243,7 +243,7 @@ func startTOTPBackupCustody(
 func totpBackupLeaseDecoder(profile release.DatabaseProfile) (func(io.Reader) (installationv1.TOTPBackupSnapshotLease, error), bool) {
 	switch profile {
 	case release.SupportedDatabaseUpgradePredecessorProfile():
-		return installationv1.DecodeHistoricalTOTPBackupSnapshotLease, true
+		return installationv1.DecodeTOTPBackupSnapshotLease, true
 	case release.CurrentDatabaseProfile():
 		return installationv1.DecodeTOTPBackupSnapshotLease, true
 	default:

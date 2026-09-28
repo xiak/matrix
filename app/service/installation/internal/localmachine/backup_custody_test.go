@@ -56,7 +56,7 @@ func TestBackupLeaseDecoderIsSelectedByTheAuthenticatedExactProfile(t *testing.T
 		valid, wrong []byte
 		wantDigest   string
 	}{
-		{release.SupportedDatabaseUpgradePredecessorProfile(), historical, current, ""},
+		{release.SupportedDatabaseUpgradePredecessorProfile(), current, historical, lease.AuthenticationStateDigest},
 		{release.CurrentDatabaseProfile(), current, historical, lease.AuthenticationStateDigest},
 	} {
 		decode, supported := totpBackupLeaseDecoder(test.profile)
