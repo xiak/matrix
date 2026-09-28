@@ -3790,14 +3790,14 @@
       "unknown": "不能靠刷新配置或版本号判断原请求是否提交；保留原请求标识，待 IAM 提供结果查询后再处理，不自动发起新请求。"
     },
     "backToEdit": "返回编辑",
-    "effectiveTitle": "有效密码要求 · 场景预览",
+    "effectiveTitle": "新密码要求如何适用 · 场景模拟",
     "identityScenario": "身份与改密场景",
-    "identityBoundary": "示例身份，不查询真实用户或账户配置。",
+    "identityBoundary": "仅为示例身份；未读取真实用户、当前账户配置或本人实际要求。",
     "identities": { "ordinary": "普通子用户", "forced": "首次登录强制改密", "challenge": "受限 PASSWORD_CHANGE", "protected": "受保护身份" },
-    "effectiveSource": "规则来源",
+    "effectiveSource": "演示规则来源",
     "fixedProductFloor": "平台固定产品底线",
-    "sampleAccountRule": "拟定的账户默认值",
-    "draftAccountRule": "本页样例草稿",
+    "sampleAccountRule": "拟定样例 · 非当前配置",
+    "draftAccountRule": "本页草稿 · 未保存",
     "invalidPreview": "草稿值尚未通过范围检查，下方仍显示拟定默认值；修正输入后再预览草稿。",
     "effectiveMinimum": "至少 {count} 个码点；最多 128 个码点 / 512 UTF-8 字节",
     "effectiveHistory": "当前密码 + 最近 {count} 次已知历史",
@@ -3807,6 +3807,9 @@
       "challenge": "PASSWORD_CHANGE 是受限挑战，不是正常业务会话；失败不应凭空生成会话。",
       "protected": "主身份及仍持有安装级权限附件的用户使用固定产品底线；租户规则不能放宽或锁死这些身份。"
     },
-    "effectiveBoundary": "这不是密码强度证明或前端放行判断。真实规则、历史、身份保护和结果由 IAM 在写入时重新核对。"
+    "effectiveBoundary": "这不是本人实际要求、密码强度证明或前端放行判断。真实规则、历史、身份保护和结果由 IAM 在写入时重新核对。",
+    "historicalResultTitle": "历史完成结果如何呈现",
+    "historicalResultMissing": "原历史结果若未返回密码规则内容，应显示“未提供”，不能用当前配置或本页草稿补齐，也不能据此重建旧命令。",
+    "historicalSessionBoundary": "历史结果中的“原调用会话已结束”只描述当时发起变更的会话；不会因此退出后来重新登录的会话。"
   }
 }

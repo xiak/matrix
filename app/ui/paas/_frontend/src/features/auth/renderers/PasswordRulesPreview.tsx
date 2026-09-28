@@ -36,8 +36,8 @@ export function PasswordRulesPreview({ accountId }: { accountId: string }) {
   const history = Number(draft.historyCount);
   const valid = Number.isInteger(minimum) && minimum >= 15 && minimum <= 128 &&
     Number.isInteger(history) && history >= 0 && history <= 24;
-  const draftEffective = phase !== "summary" && identity !== "protected" && valid;
-  const effectiveRule = draftEffective ? draft : sampleRule;
+  const scenarioUsesDraft = phase !== "summary" && identity !== "protected" && valid;
+  const scenarioRule = scenarioUsesDraft ? draft : sampleRule;
 
   useLayoutEffect(() => {
     if (phase !== "summary") heading.current?.focus({ preventScroll: true });
@@ -107,14 +107,19 @@ export function PasswordRulesPreview({ accountId }: { accountId: string }) {
       <Card.Body className={styles.policyForm}>
         <FormField id={`${id}-identity`} label={t("identityScenario")} hint={t("identityBoundary")}><Select id={`${id}-identity`} value={identity} options={(["ordinary", "forced", "challenge", "protected"] as const).map((value) => ({ value, label: t(`identities.${value}`) }))} onValueChange={(value) => setIdentity(value as IdentityScenario)} /></FormField>
         <dl className={styles.facts}>
-          <div><dt>{t("effectiveSource")}</dt><dd>{t(identity === "protected" ? "fixedProductFloor" : draftEffective ? "draftAccountRule" : "sampleAccountRule")}</dd></div>
-          <div><dt>{t("editMinimumLength")}</dt><dd>{t("effectiveMinimum", { count: effectiveRule.minimumLength })}</dd></div>
-          <div><dt>{t("characterRules")}</dt><dd>{characterRules.filter((field) => effectiveRule[field]).map((field) => t(field)).join(t("listSeparator")) || t("noneRequired")}</dd></div>
-          <div><dt>{t("editHistoryCount")}</dt><dd>{t("effectiveHistory", { count: effectiveRule.historyCount })}</dd></div>
+          <div><dt>{t("effectiveSource")}</dt><dd>{t(identity === "protected" ? "fixedProductFloor" : scenarioUsesDraft ? "draftAccountRule" : "sampleAccountRule")}</dd></div>
+          <div><dt>{t("editMinimumLength")}</dt><dd>{t("effectiveMinimum", { count: scenarioRule.minimumLength })}</dd></div>
+          <div><dt>{t("characterRules")}</dt><dd>{characterRules.filter((field) => scenarioRule[field]).map((field) => t(field)).join(t("listSeparator")) || t("noneRequired")}</dd></div>
+          <div><dt>{t("editHistoryCount")}</dt><dd>{t("effectiveHistory", { count: scenarioRule.historyCount })}</dd></div>
         </dl>
         {!valid && phase === "edit" && identity !== "protected" ? <Alert status="warning">{t("invalidPreview")}</Alert> : null}
         <Alert>{t(`identityHints.${identity}`)}</Alert>
         <Typography.Text tone="muted">{t("effectiveBoundary")}</Typography.Text>
+        <details className={styles.scenarioDetails}>
+          <summary>{t("historicalResultTitle")}</summary>
+          <Typography.Text tone="muted">{t("historicalResultMissing")}</Typography.Text>
+          <Typography.Text tone="muted">{t("historicalSessionBoundary")}</Typography.Text>
+        </details>
       </Card.Body>
     </Card>
   </section>;

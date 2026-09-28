@@ -3790,14 +3790,14 @@
       "unknown": "A refresh or version number cannot prove whether the original request committed. Preserve the original request ID for a future IAM result lookup; do not automatically submit a new request."
     },
     "backToEdit": "Back to editing",
-    "effectiveTitle": "Effective password requirements · scenario preview",
+    "effectiveTitle": "How new-password requirements apply · scenario preview",
     "identityScenario": "Identity and change scenario",
-    "identityBoundary": "Sample identity; no real user or account settings are queried.",
+    "identityBoundary": "Sample identity only; no real user, current account configuration, or personal requirements are read.",
     "identities": { "ordinary": "Ordinary user", "forced": "First-login forced change", "challenge": "Restricted PASSWORD_CHANGE", "protected": "Protected identity" },
-    "effectiveSource": "Rule source",
+    "effectiveSource": "Rule used in this scenario",
     "fixedProductFloor": "Fixed product floor",
-    "sampleAccountRule": "Proposed account defaults",
-    "draftAccountRule": "This page's sample draft",
+    "sampleAccountRule": "Proposed sample · not current configuration",
+    "draftAccountRule": "This page's draft · not saved",
     "invalidPreview": "The draft is outside the allowed range, so proposed defaults remain visible until the input is corrected.",
     "effectiveMinimum": "At least {count} code points; at most 128 code points / 512 UTF-8 bytes",
     "effectiveHistory": "Current password + {count} known earlier passwords",
@@ -3807,6 +3807,9 @@
       "challenge": "PASSWORD_CHANGE is a restricted challenge, not a normal business session; rejection must not invent a session.",
       "protected": "The primary identity and users with an active installation attachment use the fixed product floor. Tenant rules cannot relax or lock out these identities."
     },
-    "effectiveBoundary": "This is neither a password-strength proof nor a frontend permit. IAM rechecks the real rule, history, identity protection, and outcome at write time."
+    "effectiveBoundary": "This is not the person's actual requirement, a password-strength proof, or a frontend permit. IAM rechecks the real rule, history, identity protection, and outcome at write time.",
+    "historicalResultTitle": "How to present a historical completion",
+    "historicalResultMissing": "If the original historical result omits password-rule details, show “not provided.” Do not fill them from current configuration or this draft, or reconstruct the old command from them.",
+    "historicalSessionBoundary": "An “original caller session ended” result describes only the session that submitted the change; it must not sign out a later, newly authenticated session."
   }
 }

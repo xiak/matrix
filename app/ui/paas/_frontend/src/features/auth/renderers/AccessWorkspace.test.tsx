@@ -2460,6 +2460,7 @@ describe("CAM-style access workspace", () => {
     await user.type(minimum, "14");
     expect((screen.getByRole("button", { name: "审阅样例变更" }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText(/草稿值尚未通过范围检查/)).toBeTruthy();
+    expect(screen.getByText(/未读取真实用户、当前账户配置或本人实际要求/)).toBeTruthy();
     await user.clear(minimum);
     await user.type(minimum, "20");
     await user.click(screen.getByRole("checkbox", { name: "要求十进制数字" }));
@@ -2468,7 +2469,7 @@ describe("CAM-style access workspace", () => {
     await user.type(history, "0");
     await select(user, "身份与改密场景", "首次登录强制改密");
     expect(screen.getByText(/首次登录只能走受限的强制改密流程/)).toBeTruthy();
-    expect(screen.getByText("本页样例草稿")).toBeTruthy();
+    expect(screen.getByText("本页草稿 · 未保存")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "审阅样例变更" }));
     expect(screen.getByRole("heading", { name: "审阅样例变更" })).toBe(document.activeElement);
     expect(screen.getByText(/真实修改还需要当前版本/)).toBeTruthy();
@@ -2478,6 +2479,12 @@ describe("CAM-style access workspace", () => {
     await select(user, "身份与改密场景", "受保护身份");
     expect(screen.getByText("平台固定产品底线")).toBeTruthy();
     expect(screen.getByText(/租户规则不能放宽或锁死这些身份/)).toBeTruthy();
+    const historyBoundary = screen.getByText("历史完成结果如何呈现").closest("details")!;
+    await user.click(screen.getByText("历史完成结果如何呈现"));
+    expect(historyBoundary.open).toBe(true);
+    expect(screen.getByText(/未返回密码规则内容.*不能用当前配置或本页草稿补齐/)).toBeTruthy();
+    expect(screen.getByText(/不会因此退出后来重新登录的会话/)).toBeTruthy();
+    expect(screen.getByText(/这不是本人实际要求、密码强度证明或前端放行判断/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "结束预览" }));
     expect(screen.queryByRole("button", { name: /保存密码规则/ })).toBeNull();
     expect((await extension.read("preview")).settings).toEqual(before.settings);
