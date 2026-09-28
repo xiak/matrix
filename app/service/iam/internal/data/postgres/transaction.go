@@ -267,13 +267,15 @@ func (value *transaction) ReservePasswordAttempt(ctx context.Context, request id
 	}
 	result := identityaccess.PasswordAttempt{ID: request.ID, SessionID: request.SessionID, Purpose: request.Purpose, IntentDigest: request.IntentDigest}
 	var stored string
+	var history []string
+	var historyDigest *string
 	var intent any
 	if request.IntentDigest != "" {
 		intent = request.IntentDigest
 	}
 	err := value.tx.QueryRow(ctx, "SELECT * FROM iam.reserve_password_attempt($1,$2,$3,$4,$5,$6,$7)",
 		login, tenant, user, session, request.ID, request.Purpose, intent).Scan(&result.AccountID, &result.PrincipalID, &stored,
-		&result.MustChangePassword, &result.CredentialGeneration, &result.Sequence, &result.ExpiresAt)
+		&result.MustChangePassword, &result.CredentialGeneration, &result.Sequence, &result.ExpiresAt, &history, &historyDigest)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return identityaccess.PasswordAttempt{}, false, nil
 	}
@@ -284,7 +286,33 @@ func (value *transaction) ReservePasswordAttempt(ctx context.Context, request id
 		return identityaccess.PasswordAttempt{}, false, identityaccess.ErrUnavailable
 	}
 	result.PasswordHash, result.ExpiresAt = authority.PasswordHash(stored), result.ExpiresAt.UTC()
+	if request.Purpose == identityaccess.PasswordAttemptChange {
+		if historyDigest == nil {
+			return identityaccess.PasswordAttempt{}, false, identityaccess.ErrUnavailable
+		}
+		result.PasswordHistory, err = passwordHistoryMaterial(history, *historyDigest)
+		if err != nil {
+			return identityaccess.PasswordAttempt{}, false, err
+		}
+		result.HistoryDigest = *historyDigest
+	} else if history != nil || historyDigest != nil {
+		return identityaccess.PasswordAttempt{}, false, identityaccess.ErrUnavailable
+	}
 	return result, true, nil
+}
+
+func passwordHistoryMaterial(hashes []string, commitment string) ([]authority.PasswordHash, error) {
+	if hashes == nil || len(hashes) > 24 || iamv1.ValidateDigest("historyDigest", commitment) != nil {
+		return nil, identityaccess.ErrUnavailable
+	}
+	history := make([]authority.PasswordHash, len(hashes))
+	for i, hash := range hashes {
+		if len(hash) > 512 || !strings.HasPrefix(hash, "$matrix-iam-v1$argon2id$v=19$") {
+			return nil, identityaccess.ErrUnavailable
+		}
+		history[i] = authority.PasswordHash(hash)
+	}
+	return history, nil
 }
 
 func (value *transaction) RejectPasswordAttempt(ctx context.Context, attempt identityaccess.PasswordAttempt) error {
@@ -800,6 +828,7 @@ func (value *transaction) ChangePassword(
 		iamv1.ValidateID("principalId", string(mutation.PrincipalID)) != nil ||
 		iamv1.ValidateID("sessionId", string(mutation.SessionID)) != nil ||
 		mutation.ExpectedPasswordHash == "" || mutation.NewPasswordHash == "" ||
+		iamv1.ValidateDigest("historyDigest", mutation.ExpectedHistoryDigest) != nil ||
 		iamv1.ValidateID("attemptId", mutation.AttemptID) != nil || mutation.AttemptSequence == 0 ||
 		auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil {
 		return iamv1.ChangePasswordResponse{}, identityaccess.ErrInvalidArgument
@@ -811,7 +840,7 @@ func (value *transaction) ChangePassword(
 	var response iamv1.ChangePasswordResponse
 	err = value.tx.QueryRow(
 		ctx,
-		"SELECT * FROM iam.change_password($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9)",
+		"SELECT * FROM iam.change_password($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10)",
 		string(mutation.AccountID),
 		string(mutation.PrincipalID),
 		string(mutation.ExpectedPasswordHash),
@@ -821,6 +850,7 @@ func (value *transaction) ChangePassword(
 		mutation.RevokeOtherSessions,
 		mutation.AttemptID,
 		mutation.AttemptSequence,
+		mutation.ExpectedHistoryDigest,
 	).Scan(&response.ChangedAt, &response.BootstrapFileRetirable)
 	clear(event)
 	if err != nil {

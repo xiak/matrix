@@ -128,7 +128,7 @@ BEGIN
             'EXECUTE'
        )
        OR NOT has_function_privilege(
-            'matrix_iam_api', 'iam.change_password(text,text,text,text,jsonb,text,boolean,text,bigint)', 'EXECUTE'
+            'matrix_iam_api', 'iam.change_password(text,text,text,text,jsonb,text,boolean,text,bigint,text)', 'EXECUTE'
        )
        OR NOT has_function_privilege(
             'matrix_iam_api', 'iam.revoke_session(text,text,text,text,jsonb,text)', 'EXECUTE'
@@ -171,7 +171,7 @@ BEGIN
        )
        OR has_function_privilege(
             'matrix_iam_worker',
-            'iam.change_password(text,text,text,text,jsonb,text,boolean,text,bigint)',
+            'iam.change_password(text,text,text,text,jsonb,text,boolean,text,bigint,text)',
             'EXECUTE'
        )
        OR has_function_privilege(

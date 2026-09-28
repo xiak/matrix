@@ -2432,27 +2432,36 @@ BEGIN
     RETURN challenge;
 END $function$;
 
+DROP FUNCTION IF EXISTS iam.read_password_challenge(text,text,text);
 CREATE OR REPLACE FUNCTION iam.read_password_challenge(tenant text,subject_id text,challenge_id text)
-RETURNS TABLE(password_hash text,credential_generation bigint)
+RETURNS TABLE(password_hash text,credential_generation bigint,password_history text[],history_digest text)
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
 BEGIN
     PERFORM iam.lock_password_challenge(tenant,subject_id,challenge_id);
-    RETURN QUERY SELECT c.password_hash,c.credential_version FROM iam.user_credentials c WHERE c.tenant_id=tenant AND c.principal_id=subject_id;
+    RETURN QUERY SELECT c.password_hash,c.credential_version,
+        ARRAY(SELECT e.value->>'hash' FROM jsonb_array_elements(c.password_history) WITH ORDINALITY e(value,ordinality) ORDER BY e.ordinality),
+        'sha256:'||encode(c.password_history_digest,'hex')
+        FROM iam.user_credentials c WHERE c.tenant_id=tenant AND c.principal_id=subject_id
+          AND iam.valid_password_history(c.password_history,c.password_history_digest,c.credential_version,c.password_changed_at);
 END $function$;
 
+DROP FUNCTION IF EXISTS iam.change_challenge_password(text,text,text,bigint,text,text,jsonb);
 CREATE OR REPLACE FUNCTION iam.change_challenge_password(tenant text,subject_id text,challenge_id text,
-    expected_generation bigint,expected_password_hash text,new_password_hash text,audit_event jsonb)
+    expected_generation bigint,expected_password_hash text,new_password_hash text,audit_event jsonb,expected_history_digest text)
 RETURNS timestamptz LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE challenge iam.authentication_challenges%ROWTYPE; effective_now timestamptz(6):=transaction_timestamp();
 BEGIN
     IF expected_generation IS NULL OR expected_generation NOT BETWEEN 1 AND 9007199254740990
         OR COALESCE(expected_password_hash,'') NOT LIKE '$matrix-iam-v1$argon2id$v=19$%'
-        OR COALESCE(new_password_hash,'') NOT LIKE '$matrix-iam-v1$argon2id$v=19$%' OR expected_password_hash=new_password_hash THEN
+        OR COALESCE(new_password_hash,'') NOT LIKE '$matrix-iam-v1$argon2id$v=19$%' OR expected_password_hash=new_password_hash
+        OR COALESCE(expected_history_digest,'') !~ '^sha256:[0-9a-f]{64}$' THEN
         RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='password mutation is invalid';
     END IF;
     challenge:=iam.lock_password_challenge(tenant,subject_id,challenge_id);
     IF challenge.credential_generation<>expected_generation OR NOT EXISTS(SELECT 1 FROM iam.user_credentials c
-        WHERE c.tenant_id=tenant AND c.principal_id=subject_id AND c.password_hash=expected_password_hash) THEN
+        WHERE c.tenant_id=tenant AND c.principal_id=subject_id AND c.password_hash=expected_password_hash
+          AND expected_history_digest='sha256:'||encode(c.password_history_digest,'hex')
+          AND iam.valid_password_history(c.password_history,c.password_history_digest,c.credential_version,c.password_changed_at)) THEN
         RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='password challenge is unavailable';
     END IF;
     PERFORM iam.assert_audit_event(audit_event,tenant,'iam.user.password-changed','USER',subject_id,'SUCCEEDED');
@@ -2474,10 +2483,10 @@ BEGIN
 END $function$;
 REVOKE ALL ON FUNCTION iam.begin_password_challenge(text,text,text,text,bigint,bigint,text,text,text,text,text),
     iam.lock_password_challenge(text,text,text),iam.read_password_challenge(text,text,text),
-    iam.change_challenge_password(text,text,text,bigint,text,text,jsonb)
+    iam.change_challenge_password(text,text,text,bigint,text,text,jsonb,text)
     FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery,matrix_iam_backup_custody,matrix_iam_notification_worker;
 GRANT EXECUTE ON FUNCTION iam.begin_password_challenge(text,text,text,text,bigint,bigint,text,text,text,text,text),
-    iam.read_password_challenge(text,text,text),iam.change_challenge_password(text,text,text,bigint,text,text,jsonb) TO matrix_iam_api;
+    iam.read_password_challenge(text,text,text),iam.change_challenge_password(text,text,text,bigint,text,text,jsonb,text) TO matrix_iam_api;
 
 REVOKE ALL ON FUNCTION iam.consume_totp_attempt(text,text,text,text,text,text,bigint,bigint),
     iam.confirm_totp_enrollment(text,text,text,text,text,text,bigint,bigint,text,jsonb,text,jsonb),
@@ -3263,6 +3272,7 @@ CREATE OR REPLACE FUNCTION iam.totp_authentication_contract_ready()
 RETURNS boolean LANGUAGE plpgsql STABLE SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE expected record; column_spec record; entry pg_proc%ROWTYPE; relation_id oid;
 BEGIN
+    IF to_regprocedure('iam.change_challenge_password(text,text,text,bigint,text,text,jsonb)') IS NOT NULL THEN RETURN false; END IF;
     FOR expected IN SELECT * FROM (VALUES
         ('user_mfa_states','tenant_id,user_id,revision,enrollment_state,factor_id,recovery_id,removal_id','text,text,bigint,text,text,text,text','factor_id,recovery_id,removal_id','tenant_id,user_id,factor_id,recovery_id,removal_id',true),
         ('authentication_challenges','tenant_id,id,user_id,lookup_digest,verification_digest,credential_generation,password_attempt_id,password_attempt_sequence,account_version,principal_version,mfa_revision,factor_id,request_id,request_digest,next_step,source_challenge_id,password_challenge_id,verified_step,password_changed_event_id,password_change_request_id,state,created_at,expires_at,attempts,completed_at,session_id,issuance_event_id,recovery_id,purpose,security_settings_version,enrollment_event_id',
@@ -3566,8 +3576,8 @@ BEGIN
         ('iam.confirm_totp_enrollment(text,text,text,text,text,text,bigint,bigint,text,jsonb,text,jsonb)',true,'jsonb','v','tenant,subject_id,caller_id,reference_id,purpose,attempt_id,attempt_sequence,verified_step,batch_id,recovery_codes,notification_id,audit_event'),
         ('iam.complete_login_challenge(text,text,text,text,bigint,bigint,text,text,text,integer,jsonb)',true,'TABLE(issued_at timestamp with time zone, expires_at timestamp with time zone)','v','tenant,subject_id,challenge_id,attempt_id,attempt_sequence,verified_step,session_id,lookup_digest,verification_digest,lifetime_seconds,audit_event,issued_at,expires_at'),
         ('iam.begin_password_challenge(text,text,text,text,bigint,bigint,text,text,text,text,text)',true,'jsonb','v','tenant,subject_id,challenge_id,attempt_id,attempt_sequence,verified_step,password_challenge_id,lookup_digest,verification_digest,request_id,request_digest'),
-        ('iam.read_password_challenge(text,text,text)',true,'TABLE(password_hash text, credential_generation bigint)','v','tenant,subject_id,challenge_id,password_hash,credential_generation'),
-        ('iam.change_challenge_password(text,text,text,bigint,text,text,jsonb)',true,'timestamp with time zone','v','tenant,subject_id,challenge_id,expected_generation,expected_password_hash,new_password_hash,audit_event'),
+        ('iam.read_password_challenge(text,text,text)',true,'TABLE(password_hash text, credential_generation bigint, password_history text[], history_digest text)','v','tenant,subject_id,challenge_id,password_hash,credential_generation,password_history,history_digest'),
+        ('iam.change_challenge_password(text,text,text,bigint,text,text,jsonb,text)',true,'timestamp with time zone','v','tenant,subject_id,challenge_id,expected_generation,expected_password_hash,new_password_hash,audit_event,expected_history_digest'),
         ('iam.initialize_user_mfa_state()',false,'trigger','v',''),
         ('iam.lock_mfa_user(text,text)',false,'iam.user_mfa_states','v','tenant,subject_id'),
         ('iam.session_mfa_eligible(text,text,text)',false,'boolean','s','tenant,subject_id,session_id'),

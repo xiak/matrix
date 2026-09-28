@@ -159,14 +159,19 @@ func (value *transaction) ReadPasswordChallenge(ctx context.Context, identity id
 		return identityaccess.ChallengePasswordMaterial{}, identityaccess.ErrUnauthenticated
 	}
 	var result identityaccess.ChallengePasswordMaterial
-	err := value.tx.QueryRow(ctx, "SELECT password_hash,credential_generation FROM iam.read_password_challenge($1,$2,$3)",
-		identity.AccountID, identity.UserID, identity.ID).Scan(&result.PasswordHash, &result.CredentialGeneration)
+	var history []string
+	err := value.tx.QueryRow(ctx, "SELECT password_hash,credential_generation,password_history,history_digest FROM iam.read_password_challenge($1,$2,$3)",
+		identity.AccountID, identity.UserID, identity.ID).Scan(&result.PasswordHash, &result.CredentialGeneration, &history, &result.HistoryDigest)
 	if err != nil {
 		return identityaccess.ChallengePasswordMaterial{}, mapSubjectDatabaseError("read password challenge", err)
 	}
 	if result.CredentialGeneration == 0 || result.CredentialGeneration >= 9007199254740991 || len(result.PasswordHash) > 512 ||
 		!strings.HasPrefix(string(result.PasswordHash), "$matrix-iam-v1$argon2id$v=19$") {
 		return identityaccess.ChallengePasswordMaterial{}, identityaccess.ErrUnavailable
+	}
+	result.PasswordHistory, err = passwordHistoryMaterial(history, result.HistoryDigest)
+	if err != nil {
+		return identityaccess.ChallengePasswordMaterial{}, err
 	}
 	return result, nil
 }
@@ -176,6 +181,7 @@ func (value *transaction) ChangeChallengePassword(ctx context.Context, mutation 
 	if (identity.Purpose != "LOGIN" && identity.Purpose != "ENROLLMENT") || identity.NextStep != "PASSWORD_CHANGE" || mutation.AuditEvent.Action != auditv1.ActionIAMUserPasswordChanged ||
 		string(mutation.AuditEvent.TenantID) != string(identity.AccountID) || string(mutation.AuditEvent.Actor.ID) != string(identity.UserID) ||
 		mutation.AuditEvent.Target.Kind != auditv1.TargetUser || mutation.AuditEvent.Target.ID != string(identity.UserID) ||
+		iamv1.ValidateDigest("historyDigest", mutation.Expected.HistoryDigest) != nil ||
 		auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil {
 		return iamv1.ChallengePasswordChangeResponse{}, identityaccess.ErrInvalidArgument
 	}
@@ -185,9 +191,9 @@ func (value *transaction) ChangeChallengePassword(ctx context.Context, mutation 
 	}
 	defer clear(event)
 	result := iamv1.ChallengePasswordChangeResponse{NextStep: "REAUTHENTICATE"}
-	err = value.tx.QueryRow(ctx, "SELECT iam.change_challenge_password($1,$2,$3,$4,$5,$6,$7::jsonb)",
+	err = value.tx.QueryRow(ctx, "SELECT iam.change_challenge_password($1,$2,$3,$4,$5,$6,$7::jsonb,$8)",
 		identity.AccountID, identity.UserID, identity.ID, mutation.Expected.CredentialGeneration,
-		string(mutation.Expected.PasswordHash), string(mutation.Replacement), event).Scan(&result.ChangedAt)
+		string(mutation.Expected.PasswordHash), string(mutation.Replacement), event, mutation.Expected.HistoryDigest).Scan(&result.ChangedAt)
 	if err != nil {
 		return iamv1.ChallengePasswordChangeResponse{}, mapSubjectDatabaseError("change challenge password", err)
 	}

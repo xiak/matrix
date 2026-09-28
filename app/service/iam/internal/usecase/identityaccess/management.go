@@ -125,6 +125,18 @@ func (service *Authority) ChangePassword(
 	if err := service.verifyReservedPassword(ctx, request.CurrentPassword, attempt, admitted); err != nil {
 		return iamv1.ChangePasswordResponse{}, err
 	}
+	if err := service.validatePasswordReplacement(ctx, request.NewPassword, attempt.PasswordHash, attempt.PasswordHistory, attempt.HistoryDigest); err != nil {
+		if errors.Is(err, ErrInvalidArgument) {
+			// Keep the already committed debit, but end this rejected change so
+			// the user can submit a different new password within that budget.
+			if rejected := service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
+				return tx.RejectPasswordAttempt(ctx, attempt)
+			}); rejected != nil {
+				return iamv1.ChangePasswordResponse{}, rejected
+			}
+		}
+		return iamv1.ChangePasswordResponse{}, err
+	}
 	replacement, err := service.passwords.Hash(request.NewPassword)
 	if err != nil {
 		if errors.Is(err, authority.ErrWeakPassword) {
@@ -167,15 +179,16 @@ func (service *Authority) ChangePassword(
 			return err
 		}
 		response, err = transaction.ChangePassword(transactionContext, PasswordMutation{
-			AttemptID:            attempt.ID,
-			AttemptSequence:      attempt.Sequence,
-			AccountID:            subject.Subject.Organization.ID,
-			PrincipalID:          subject.Subject.Principal.ID,
-			SessionID:            subject.Subject.Session.ID,
-			RevokeOtherSessions:  revokeOthers,
-			ExpectedPasswordHash: attempt.PasswordHash,
-			NewPasswordHash:      replacement,
-			AuditEvent:           event,
+			AttemptID:             attempt.ID,
+			AttemptSequence:       attempt.Sequence,
+			AccountID:             subject.Subject.Organization.ID,
+			PrincipalID:           subject.Subject.Principal.ID,
+			SessionID:             subject.Subject.Session.ID,
+			RevokeOtherSessions:   revokeOthers,
+			ExpectedPasswordHash:  attempt.PasswordHash,
+			ExpectedHistoryDigest: attempt.HistoryDigest,
+			NewPasswordHash:       replacement,
+			AuditEvent:            event,
 		})
 		return err
 	})
@@ -186,6 +199,23 @@ func (service *Authority) ChangePassword(
 		return iamv1.ChangePasswordResponse{}, ErrUnavailable
 	}
 	return response, nil
+}
+
+// Only authenticated, purpose-limited preparation supplies these verifiers.
+// The caller holds a bounded work slot, not a database transaction. The final
+// write must compare the same history commitment as well as credential state.
+func (service *Authority) validatePasswordReplacement(ctx context.Context, password iamv1.Secret, current authority.PasswordHash,
+	history []authority.PasswordHash, commitment string) error {
+	if history == nil || iamv1.ValidateDigest("historyDigest", commitment) != nil {
+		return ErrUnavailable
+	}
+	if err := service.passwords.ValidateReplacement(ctx, password, authority.DefaultPasswordSettings(), current, history); err != nil {
+		if errors.Is(err, authority.ErrWeakPassword) {
+			return ErrInvalidArgument
+		}
+		return ErrUnavailable
+	}
+	return nil
 }
 
 func (service *Authority) CreateUser(

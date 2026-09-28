@@ -604,6 +604,8 @@ type PasswordAttempt struct {
 	SessionID            iamv1.SessionID
 	PasswordHash         authority.PasswordHash
 	CredentialGeneration uint64
+	PasswordHistory      []authority.PasswordHash
+	HistoryDigest        string
 	MustChangePassword   bool
 	ExpiresAt            time.Time
 	Purpose              PasswordAttemptPurpose
@@ -710,15 +712,16 @@ type UserBoundaryMutation struct {
 }
 
 type PasswordMutation struct {
-	AttemptID            string
-	AttemptSequence      uint64
-	AccountID            iamv1.AccountID
-	PrincipalID          iamv1.PrincipalID
-	SessionID            iamv1.SessionID
-	RevokeOtherSessions  bool
-	ExpectedPasswordHash authority.PasswordHash
-	NewPasswordHash      authority.PasswordHash
-	AuditEvent           auditv1.Event
+	AttemptID             string
+	AttemptSequence       uint64
+	AccountID             iamv1.AccountID
+	PrincipalID           iamv1.PrincipalID
+	SessionID             iamv1.SessionID
+	RevokeOtherSessions   bool
+	ExpectedPasswordHash  authority.PasswordHash
+	ExpectedHistoryDigest string
+	NewPasswordHash       authority.PasswordHash
+	AuditEvent            auditv1.Event
 }
 
 type SessionRevocationMutation struct {

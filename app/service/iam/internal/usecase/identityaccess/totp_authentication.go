@@ -69,6 +69,8 @@ type PasswordChallengeCreation struct {
 type ChallengePasswordMaterial struct {
 	PasswordHash         authority.PasswordHash
 	CredentialGeneration uint64
+	PasswordHistory      []authority.PasswordHash
+	HistoryDigest        string
 }
 
 func (ChallengePasswordMaterial) String() string { return "[REDACTED]" }
@@ -311,16 +313,11 @@ func (service *Authority) ChangeChallengePassword(ctx context.Context, id string
 	if err != nil {
 		return iamv1.ChallengePasswordChangeResponse{}, err
 	}
-	// SQL verifies the exact original ceremony: completed TOTP for LOGIN,
-	// password-proved first setup for ENROLLMENT. This comparison only rejects
-	// a no-op replacement; it does not assert that both factors were proved.
-	// Neither expensive operation holds a connection or a principal lock.
-	same, err := service.passwords.Verify(request.NewPassword, original.PasswordHash)
-	if err != nil {
-		return iamv1.ChallengePasswordChangeResponse{}, ErrUnavailable
-	}
-	if same {
-		return iamv1.ChallengePasswordChangeResponse{}, ErrInvalidArgument
+	// SQL proves the original LOGIN or ENROLLMENT ceremony; history comparison
+	// does not upgrade it or manufacture an MFA fact. Neither expensive operation
+	// holds a connection or a principal lock.
+	if err := service.validatePasswordReplacement(ctx, request.NewPassword, original.PasswordHash, original.PasswordHistory, original.HistoryDigest); err != nil {
+		return iamv1.ChallengePasswordChangeResponse{}, err
 	}
 	replacement, err := service.passwords.Hash(request.NewPassword)
 	if err != nil {

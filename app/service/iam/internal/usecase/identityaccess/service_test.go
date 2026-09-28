@@ -3,6 +3,7 @@ package identityaccess
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -389,6 +390,66 @@ func TestPasswordWorkHasNoQueueAndPrivateAttemptsCannotSerialize(t *testing.T) {
 	attempt := PasswordAttempt{PasswordHash: authority.PasswordHash("private-verifier")}
 	if encoded, err := json.Marshal(attempt); err == nil || strings.Contains(string(encoded), "private-verifier") || strings.Contains(fmt.Sprintf("%+v %#v", attempt, attempt), "private-verifier") {
 		t.Fatal("private attempt exposed the verifier")
+	}
+}
+
+func TestPasswordChangeRejectsRecentHistoryAndAStalePreparedHead(t *testing.T) {
+	tx := newCoreTransaction()
+	repository := &coreRepository{transaction: tx}
+	service, err := newCoreAuthority(repository, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := coreBootstrap(t)
+	if _, err := service.Bootstrap(t.Context(), document); err != nil {
+		t.Fatal(err)
+	}
+	login, err := service.Login(t.Context(), iamv1.LoginRequest{LoginName: "admin", Password: document.Administrator.Password, RequestID: "history-login"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.passwords = authority.NewPasswordHasher(passwordEntropyProbe{t, repository})
+	current := document.Administrator.Password
+	sequence := 0
+	change := func(next iamv1.Secret) error {
+		sequence++
+		_, err := service.ChangePassword(t.Context(), login.Credential, iamv1.ChangePasswordRequest{
+			CurrentPassword: current, NewPassword: next, RequestID: fmt.Sprintf("history-change-%d", sequence)})
+		if err == nil {
+			current = next
+		}
+		return err
+	}
+	if err := change(coreSecret(t, "History-First-Replacement-93!")); err != nil {
+		t.Fatal(err)
+	}
+	beforeHash, beforeVersion := tx.passwords[tx.principal.ID], tx.principal.ResourceVersion
+	if err := change(document.Administrator.Password); !errors.Is(err, ErrInvalidArgument) ||
+		tx.passwords[tx.principal.ID] != beforeHash || tx.principal.ResourceVersion != beforeVersion ||
+		len(tx.passwordHistories[tx.principal.ID]) != 1 || len(tx.rejectedAttempts) != 1 {
+		t.Fatal("recent password reuse was accepted, mutated state or left its reservation live", err)
+	}
+	if err := change(coreSecret(t, "History-Second-Replacement-94!")); err != nil {
+		t.Fatal("rejected replacement prevented a new bounded attempt", err)
+	}
+	// Default one means one retired password, not every retained verifier.
+	if err := change(document.Administrator.Password); err != nil {
+		t.Fatal("history outside the selected window became an extra rule", err)
+	}
+	beforeHash, beforeVersion = tx.passwords[tx.principal.ID], tx.principal.ResourceVersion
+	prepared := false
+	repository.afterTransaction = func(err error) error {
+		if !prepared && err == nil {
+			prepared = true
+			// A corrupt/stale read is not a new authorization. The final
+			// comparison must reject it even if the current hash is unchanged.
+			tx.passwordHistories[tx.principal.ID] = []authority.PasswordHash{dummyPasswordHash}
+		}
+		return err
+	}
+	if err := change(coreSecret(t, "History-Final-Replacement-95!")); !errors.Is(err, ErrUnauthenticated) ||
+		tx.passwords[tx.principal.ID] != beforeHash || tx.principal.ResourceVersion != beforeVersion {
+		t.Fatal("stale prepared history changed a credential", err)
 	}
 }
 
@@ -2088,6 +2149,7 @@ type coreTransaction struct {
 	roleExitEvents           []auditv1.Event
 	authorizations           []AuthorizationMutation
 	passwords                map[iamv1.PrincipalID]authority.PasswordHash
+	passwordHistories        map[iamv1.PrincipalID][]authority.PasswordHash
 	passwordAttempts         map[iamv1.PrincipalID]PasswordAttempt
 	attemptSequence          uint64
 	rejectedAttempts         []string
@@ -2475,8 +2537,21 @@ func (transaction *coreTransaction) ReservePasswordAttempt(_ context.Context, re
 		SessionID: request.SessionID, PasswordHash: transaction.passwords[selected.ID], CredentialGeneration: 1,
 		Purpose: request.Purpose, IntentDigest: request.IntentDigest,
 		MustChangePassword: selected.MustChangePassword, ExpiresAt: transaction.now.Add(30 * time.Second)}
+	if request.Purpose == PasswordAttemptChange {
+		attempt.PasswordHistory = append([]authority.PasswordHash{}, transaction.passwordHistories[selected.ID]...)
+		attempt.HistoryDigest = transaction.passwordHistoryCommitment(selected.ID)
+	}
 	transaction.passwordAttempts[selected.ID] = attempt
 	return attempt, true, nil
+}
+
+// The fake models an opaque changing head, not PostgreSQL's private encoding.
+// Real history validity, scope and final CAS are tested through the SQL owner.
+func (transaction *coreTransaction) passwordHistoryCommitment(user iamv1.PrincipalID) string {
+	material := append([]authority.PasswordHash{transaction.passwords[user]}, transaction.passwordHistories[user]...)
+	encoded, _ := json.Marshal(material)
+	defer clear(encoded)
+	return fmt.Sprintf("sha256:%x", sha256.Sum256(encoded))
 }
 
 func (transaction *coreTransaction) RejectPasswordAttempt(_ context.Context, attempt PasswordAttempt) error {
@@ -2623,10 +2698,16 @@ func (transaction *coreTransaction) ChangePassword(
 		!transaction.now.Before(attempt.ExpiresAt) {
 		return iamv1.ChangePasswordResponse{}, ErrUnauthenticated
 	}
-	if transaction.passwords[mutation.PrincipalID] != mutation.ExpectedPasswordHash {
+	if transaction.passwords[mutation.PrincipalID] != mutation.ExpectedPasswordHash ||
+		transaction.passwordHistoryCommitment(mutation.PrincipalID) != mutation.ExpectedHistoryDigest {
 		return iamv1.ChangePasswordResponse{}, ErrUnauthenticated
 	}
 	delete(transaction.passwordAttempts, mutation.PrincipalID)
+	if transaction.passwordHistories == nil {
+		transaction.passwordHistories = make(map[iamv1.PrincipalID][]authority.PasswordHash)
+	}
+	history := append([]authority.PasswordHash{transaction.passwords[mutation.PrincipalID]}, transaction.passwordHistories[mutation.PrincipalID]...)
+	transaction.passwordHistories[mutation.PrincipalID] = history[:min(24, len(history))]
 	transaction.passwords[mutation.PrincipalID] = mutation.NewPasswordHash
 	principal := transaction.users[mutation.PrincipalID]
 	for lookup, binding := range transaction.sessions {

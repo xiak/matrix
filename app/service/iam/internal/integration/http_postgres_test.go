@@ -4615,9 +4615,14 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 		} else {
 			tenantInput, userInput, sessionInput, digest = account, user, caller, intent
 		}
+		var history []string
+		var commitment *string
 		if err := api.QueryRow(ctx, `SELECT * FROM iam.reserve_password_attempt($1,$2,$3,$4,$5,$6,$7)`, realm, tenantInput, userInput, sessionInput, id, purpose, digest).
-			Scan(&tenant, &principal, &hash, &forced, &generation, &sequence, &expiry); err != nil {
+			Scan(&tenant, &principal, &hash, &forced, &generation, &sequence, &expiry, &history, &commitment); err != nil {
 			t.Fatal("reserve password", err)
+		}
+		if purpose != "PASSWORD_CHANGE" && (history != nil || commitment != nil) {
+			t.Fatal("a non-change password purpose obtained verifier history")
 		}
 		if valid, err := authority.NewPasswordHasher(nil).Verify(password, authority.PasswordHash(hash)); err != nil || !valid {
 			t.Fatal("actual password did not verify")
@@ -5215,7 +5220,7 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 			stateBytes := func() string {
 				t.Helper()
 				var result string
-				if err := admin.QueryRow(ctx, `SELECT jsonb_build_object('password',c.password_hash,'generation',c.credential_version,'forced',p.must_change_password,'version',p.resource_version,
+				if err := admin.QueryRow(ctx, `SELECT jsonb_build_object('credential',to_jsonb(c),'forced',p.must_change_password,'version',p.resource_version,
 				'sessions',(SELECT count(*) FROM iam.sessions s WHERE s.tenant_id=c.tenant_id AND s.principal_id=c.principal_id AND s.status='ACTIVE'),
 				'challenges',(SELECT jsonb_agg(to_jsonb(a) ORDER BY a.id) FROM iam.authentication_challenges a WHERE a.tenant_id=c.tenant_id AND a.user_id=c.principal_id),
 				'facts',(SELECT count(*) FROM iam.audit_outbox o WHERE o.tenant_id=c.tenant_id AND o.event_document#>>'{actor,id}'=c.principal_id))::text
@@ -5313,6 +5318,14 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 			clear(samePassword)
 			if stateBytes() != before {
 				t.Fatal("unchanged password mutated state")
+			}
+			// The actual administrator reset retired current as the nearest
+			// verifier. Completing TOTP does not waive password history.
+			recentPassword := passwordBody(stage.ChallengeCredential, current, "forced-recent-password")
+			callMFA(secondHandler, http.MethodPost, "/v1/auth/challenges/"+stage.Challenge.ID+":password", iamv1.Secret{}, recentPassword, http.StatusUnprocessableEntity, nil)
+			clear(recentPassword)
+			if stateBytes() != before {
+				t.Fatal("recent password reused or challenge partially consumed")
 			}
 			// The error is injected at the final outbox write, after password and
 			// session updates, so every earlier effect must roll back together.
@@ -5426,7 +5439,7 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 			{"table_read", "GRANT SELECT ON iam.authentication_challenges TO matrix_iam_api"},
 			{"column_read", "GRANT SELECT (verification_digest) ON iam.mfa_recovery_codes TO matrix_iam_notification_worker"},
 			{"private_function", "GRANT EXECUTE ON FUNCTION iam.lock_password_challenge(text,text,text) TO matrix_iam_api"},
-			{"worker_execute", "GRANT EXECUTE ON FUNCTION iam.change_challenge_password(text,text,text,bigint,text,text,jsonb) TO matrix_iam_worker"},
+			{"worker_execute", "GRANT EXECUTE ON FUNCTION iam.change_challenge_password(text,text,text,bigint,text,text,jsonb,text) TO matrix_iam_worker"},
 			{"api_grant_option", "GRANT EXECUTE ON FUNCTION iam.read_password_challenge(text,text,text) TO matrix_iam_api WITH GRANT OPTION"},
 			{"function_owner", "ALTER FUNCTION iam.reserve_totp_attempt(text,text,text,text,text,text) OWNER TO matrix_iam_migrator"},
 			{"security_invoker", "ALTER FUNCTION iam.read_password_challenge(text,text,text) SECURITY INVOKER"},
@@ -10049,8 +10062,13 @@ func TestIAMPasswordAttemptsPostgres(t *testing.T) {
 	reserve := func(connection *pgx.Conn, user iamv1.User, id string) (identityaccess.PasswordAttempt, bool, error) {
 		var attempt identityaccess.PasswordAttempt
 		var hash string
+		var history []string
+		var commitment *string
 		err := connection.QueryRow(ctx, "SELECT * FROM iam.reserve_password_attempt($1,NULL,NULL,NULL,$2,'LOGIN',NULL)", user.LoginName+"@"+string(user.AccountID), id).
-			Scan(&attempt.AccountID, &attempt.PrincipalID, &hash, &attempt.MustChangePassword, &attempt.CredentialGeneration, &attempt.Sequence, &attempt.ExpiresAt)
+			Scan(&attempt.AccountID, &attempt.PrincipalID, &hash, &attempt.MustChangePassword, &attempt.CredentialGeneration, &attempt.Sequence, &attempt.ExpiresAt, &history, &commitment)
+		if history != nil || commitment != nil {
+			t.Fatal("login reservation exposed retired verifiers")
+		}
 		attempt.ID, attempt.PasswordHash = id, authority.PasswordHash(hash)
 		return attempt, !errors.Is(err, pgx.ErrNoRows), err
 	}
@@ -10134,12 +10152,20 @@ func TestIAMPasswordAttemptsPostgres(t *testing.T) {
 		t.Fatal(err)
 	}
 	refuseSession(consumedID, consumedSequence)
+	replacementHash, err := authority.NewPasswordHasher(nil).Hash(iamHTTPSecret(t, "Attempt-History-Replacement-697!"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	changeAttempt := identityaccess.PasswordAttempt{ID: "change-purpose-only"}
 	var privateHash string
+	var privateHistory []string
 	if err := api.QueryRow(ctx, "SELECT * FROM iam.reserve_password_attempt(NULL,$1,$2,$3,$4,'PASSWORD_CHANGE',NULL)", user.AccountID, user.ID, recovered.Session.ID, changeAttempt.ID).
 		Scan(&changeAttempt.AccountID, &changeAttempt.PrincipalID, &privateHash, &changeAttempt.MustChangePassword,
-			&changeAttempt.CredentialGeneration, &changeAttempt.Sequence, &changeAttempt.ExpiresAt); err != nil {
+			&changeAttempt.CredentialGeneration, &changeAttempt.Sequence, &changeAttempt.ExpiresAt, &privateHistory, &changeAttempt.HistoryDigest); err != nil {
 		t.Fatal("reserve actual caller password recheck", err)
+	}
+	if privateHistory == nil || iamv1.ValidateDigest("historyDigest", changeAttempt.HistoryDigest) != nil {
+		t.Fatal("change reservation lost its bounded history qualification")
 	}
 	refuseSession(changeAttempt.ID, changeAttempt.Sequence)
 	if err := database.QueryRow(ctx, "SELECT state='RESERVED' AND purpose='PASSWORD_CHANGE' AND attempt_sequence=$3 FROM iam.password_attempts WHERE tenant_id=$1 AND principal_id=$2",
@@ -10149,6 +10175,63 @@ func TestIAMPasswordAttemptsPostgres(t *testing.T) {
 	if err := database.QueryRow(ctx, "SELECT (SELECT count(*) FROM iam.sessions WHERE id=$1)+(SELECT count(*) FROM iam.audit_outbox WHERE event_id=$2)", event.Target.ID, event.EventID).
 		Scan(&countAfter); err != nil || countAfter != 0 {
 		t.Fatal("attempt replay/substitution left a Session or success fact", err)
+	}
+	// Use a real reserved caller and a valid event/hash. The mismatched history
+	// head must reject independently of a malformed event or stale Session;
+	// even reservation consumption must roll back. Never print the snapshot.
+	passwordEvent := event
+	passwordEvent.EventID, passwordEvent.RequestID, passwordEvent.CorrelationID = "attempt-history-event", "attempt-history", "attempt-history"
+	passwordEvent.Action = auditv1.ActionIAMUserPasswordChanged
+	passwordEvent.Target = auditv1.TargetReference{Kind: auditv1.TargetUser, ID: string(user.ID)}
+	if auditv1.ValidateEventForSource(auditv1.SourceIAM, passwordEvent) != nil {
+		t.Fatal("history-head attack requires a valid password fact")
+	}
+	passwordState := func() string {
+		t.Helper()
+		var state string
+		if err := database.QueryRow(ctx, `SELECT jsonb_build_object('principal',to_jsonb(p),'credential',to_jsonb(c),'attempt',to_jsonb(a),
+		 'sessions',(SELECT jsonb_agg(to_jsonb(s) ORDER BY s.id) FROM iam.sessions s WHERE s.tenant_id=p.tenant_id AND s.principal_id=p.id),
+		 'facts',(SELECT jsonb_agg(o.event_document ORDER BY o.event_id) FROM iam.audit_outbox o WHERE o.tenant_id=p.tenant_id AND o.event_document#>>'{actor,id}'=p.id))::text
+		 FROM iam.principals p JOIN iam.user_credentials c ON (c.tenant_id,c.principal_id)=(p.tenant_id,p.id)
+		 JOIN iam.password_attempts a ON (a.tenant_id,a.principal_id)=(p.tenant_id,p.id) WHERE p.tenant_id=$1 AND p.id=$2`, user.AccountID, user.ID).Scan(&state); err != nil {
+			t.Fatal(err)
+		}
+		return state
+	}
+	beforeHistory := passwordState()
+	wrongHead := "sha256:" + strings.Repeat("0", 64)
+	if wrongHead == changeAttempt.HistoryDigest {
+		wrongHead = "sha256:" + strings.Repeat("1", 64)
+	}
+	for _, head := range []string{wrongHead, changeAttempt.HistoryDigest} {
+		tx, err := api.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var occurredAt time.Time
+		if err := tx.QueryRow(ctx, "SELECT transaction_timestamp()").Scan(&occurredAt); err != nil {
+			_ = tx.Rollback(ctx)
+			t.Fatal(err)
+		}
+		passwordEvent.OccurredAt = occurredAt.UTC()
+		_, mutationErr := tx.Exec(ctx, "SELECT * FROM iam.change_password($1,$2,$3,$4,$5::jsonb,$6,true,$7,$8,$9)",
+			user.AccountID, user.ID, privateHash, string(replacementHash), string(mustIAMJSON(t, passwordEvent)), recovered.Session.ID,
+			changeAttempt.ID, changeAttempt.Sequence, head)
+		if mutationErr == nil {
+			_, mutationErr = tx.Exec(ctx, "SET CONSTRAINTS ALL IMMEDIATE")
+		}
+		_ = tx.Rollback(ctx)
+		if head == wrongHead {
+			var pgerr *pgconn.PgError
+			if !errors.As(mutationErr, &pgerr) || pgerr.Code != "42501" {
+				t.Fatal("password write accepted a mismatched prepared history head", mutationErr)
+			}
+		} else if mutationErr != nil {
+			t.Fatal("valid history-head control could not complete its original mutation", mutationErr)
+		}
+		if passwordState() != beforeHistory {
+			t.Fatal("history-head check or rolled-back control left partial security effects")
+		}
 	}
 	// Finish the real reserved recheck normally; its debit is not refunded.
 	if _, err := api.Exec(ctx, "SELECT iam.reject_password_attempt($1,$2,$3,$4)", user.AccountID, user.ID, changeAttempt.ID, changeAttempt.Sequence); err != nil {
@@ -21590,7 +21673,7 @@ func provePasswordSessionPolicy(t *testing.T, ctx context.Context, handler http.
 			t.Fatal("password change did not preserve and advance the verified current session")
 		}
 		if err := database.QueryRow(ctx, "SELECT credential_version FROM iam.user_credentials WHERE tenant_id=$1 AND principal_id=$2", subject.AccountID, subject.ID).Scan(&currentVersion); err != nil || currentVersion != previousVersion+1 {
-			t.Fatal("password change did not advance the per-user credential generation exactly once")
+			t.Fatalf("password generation after change=%d want=%d err=%v", currentVersion, previousVersion+1, err)
 		}
 		var accurate bool
 		if err := database.QueryRow(ctx, `SELECT iam.valid_password_history(c.password_history,c.password_history_digest,c.credential_version,c.password_changed_at)
@@ -21626,7 +21709,7 @@ func provePasswordSessionPolicy(t *testing.T, ctx context.Context, handler http.
 
 	// Compare only persisted security state and success facts, not incidental
 	// request order. Never print the credential/hash-containing comparison value.
-	securityState := func() string {
+	securityStateOf := func(subject iamv1.User) string {
 		t.Helper()
 		var state string
 		if err := database.QueryRow(ctx, `SELECT jsonb_build_object(
@@ -21634,16 +21717,18 @@ func provePasswordSessionPolicy(t *testing.T, ctx context.Context, handler http.
 			'sessions',(SELECT jsonb_agg(to_jsonb(s) ORDER BY s.id) FROM iam.sessions AS s WHERE s.tenant_id=p.tenant_id AND s.principal_id=p.id),
 			'successes',(SELECT jsonb_agg(e.event_document ORDER BY e.event_id) FROM iam.audit_outbox AS e WHERE e.tenant_id=p.tenant_id AND e.event_document->>'action'='iam.user.password-changed' AND e.event_document#>>'{target,id}'=p.id)
 			)::text FROM iam.principals AS p JOIN iam.user_credentials AS c ON c.tenant_id=p.tenant_id AND c.principal_id=p.id
-			WHERE p.tenant_id=$1 AND p.id=$2`, principal.AccountID, principal.ID).Scan(&state); err != nil {
+			WHERE p.tenant_id=$1 AND p.id=$2`, subject.AccountID, subject.ID).Scan(&state); err != nil {
 			t.Fatal(err)
 		}
 		return state
 	}
+	securityState := func() string { return securityStateOf(principal) }
 	for _, attack := range []struct {
 		body   map[string]any
 		status int
 	}{
 		{map[string]any{"currentPassword": initial, "newPassword": retained}, http.StatusUnauthorized},
+		{map[string]any{"currentPassword": changed, "newPassword": initial}, http.StatusUnprocessableEntity},
 		{map[string]any{"currentPassword": changed, "newPassword": "weak"}, http.StatusUnprocessableEntity},
 		{map[string]any{"currentPassword": changed, "newPassword": "Old-Secret-49!"}, http.StatusUnprocessableEntity},
 		{map[string]any{"currentPassword": changed, "newPassword": "PASSWORDPASSWORD"}, http.StatusUnprocessableEntity},
@@ -21714,7 +21799,13 @@ func provePasswordSessionPolicy(t *testing.T, ctx context.Context, handler http.
 	invalid(primary)
 	invalid(oldPrimary)
 	recovered, recoveredOther := login(account.RootIdentity.LoginName, reset), login(account.RootIdentity.LoginName, reset)
-	change(recovered, reset, changed, &keep)
+	rootUser := identity(recovered).User
+	beforeRoot := securityStateOf(rootUser)
+	request(http.MethodPost, "/v1/auth/password", recovered, map[string]any{"currentPassword": reset, "newPassword": changed}, http.StatusUnprocessableEntity)
+	if securityStateOf(rootUser) != beforeRoot {
+		t.Fatal("protected root reused its pre-recovery password or partially changed security state")
+	}
+	change(recovered, reset, "Session-Policy-Recovered-Password-29!", &keep)
 	invalid(recoveredOther)
 	applyIAMSchema(t, ctx, database)
 	applyIAMSchema(t, ctx, database)
@@ -21736,6 +21827,19 @@ func provePasswordSessionPolicy(t *testing.T, ctx context.Context, handler http.
 		AND password_changed_at IS NOT NULL FROM iam.user_credentials WHERE tenant_id=$1 AND principal_id=$2`, principal.AccountID, principal.ID).Scan(&complete); err != nil || !complete {
 		t.Fatal("real password history did not retain the bounded window")
 	}
+	beforeHistoryRejection := securityState()
+	request(http.MethodPost, "/v1/auth/password", afterPlatform,
+		map[string]any{"currentPassword": password, "newPassword": "Bounded-History-Password-24!"}, http.StatusUnprocessableEntity)
+	if securityState() != beforeHistoryRejection {
+		t.Fatal("recent history rejection changed credential, sessions or success facts")
+	}
+	if err := database.QueryRow(ctx, `SELECT a.state='REJECTED' AND a.used_attempts=1 AND a.credential_version=c.credential_version
+	 FROM iam.password_attempts a JOIN iam.user_credentials c ON c.tenant_id=a.tenant_id AND c.principal_id=a.principal_id
+	 WHERE c.tenant_id=$1 AND c.principal_id=$2`, principal.AccountID, principal.ID).Scan(&complete); err != nil || !complete {
+		t.Fatal("history rejection refunded its debit or left a live reservation")
+	}
+	// Check exactly the current default window, not all 24 retained hashes.
+	change(afterPlatform, password, "Bounded-History-Password-23!", &keep)
 	for _, mutation := range []string{
 		`password_history='[]'::jsonb`,
 		`password_history='[]'::jsonb,password_history_digest=iam.password_history_digest('[]'::jsonb)`,
@@ -22789,7 +22893,8 @@ func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Ha
 	const tenantID = "organization-lifecycle"
 	const initial = "Lifecycle-Initial-Password-38!"
 	const changed = "Lifecycle-Changed-Password-49!"
-	const recovered = "Lifecycle-Recovered-Password-57!"
+	recovered := "Lifecycle-Recovered-Password-57!"
+	const primaryReplacement = "Lifecycle-After-Recovery-Password-61!"
 	request := func(method, path, bearer string, body any, expected int) *httptest.ResponseRecorder {
 		t.Helper()
 		var encoded []byte
@@ -22821,6 +22926,7 @@ func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Ha
 		return wire.Credential
 	}
 	changePassword := func(bearer, previous, next string) {
+		t.Helper()
 		request(http.MethodPost, "/v1/auth/password", bearer, map[string]any{"currentPassword": previous, "newPassword": next, "requestId": "request-lifecycle-password"}, http.StatusOK)
 	}
 	createMember := func(bearer, name string, policy iamv1.PolicyID) iamv1.User {
@@ -22909,7 +23015,7 @@ func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Ha
 		var state string
 		err := database.QueryRow(ctx, `SELECT jsonb_build_object(
 			'organizations',(SELECT jsonb_agg(jsonb_build_array(o.id,o.status,o.resource_version) ORDER BY o.id) FROM iam.accounts AS o),
-			'principals',(SELECT jsonb_agg(jsonb_build_array(p.tenant_id,p.id,p.status,p.must_change_password,p.resource_version,c.password_hash) ORDER BY p.tenant_id,p.id) FROM iam.principals AS p LEFT JOIN iam.user_credentials AS c ON c.tenant_id=p.tenant_id AND c.principal_id=p.id),
+			'principals',(SELECT jsonb_agg(jsonb_build_array(p.tenant_id,p.id,p.status,p.must_change_password,p.resource_version,to_jsonb(c)) ORDER BY p.tenant_id,p.id) FROM iam.principals AS p LEFT JOIN iam.user_credentials AS c ON c.tenant_id=p.tenant_id AND c.principal_id=p.id),
 			'sessions',(SELECT jsonb_agg(jsonb_build_array(s.tenant_id,s.id,s.status,s.resource_version,s.revoked_at) ORDER BY s.tenant_id,s.id) FROM iam.sessions AS s),
 			'bindings',(SELECT jsonb_agg(jsonb_build_array(b.tenant_id,b.id,b.target_id,b.policy_id,b.resource_version,b.revoked_at) ORDER BY b.tenant_id,b.id) FROM iam.policy_attachments AS b),
 			'successes',(SELECT jsonb_agg(jsonb_build_array(e.event_id,e.event_document) ORDER BY e.event_id) FROM iam.audit_outbox AS e WHERE e.event_document->>'result'='SUCCEEDED')
@@ -23000,7 +23106,11 @@ func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Ha
 		t.Fatal("primary recovery gained platform access or skipped required password change")
 	}
 	request(http.MethodGet, "/v1/users", primary, nil, http.StatusForbidden)
-	changePassword(primary, recovered, changed)
+	unchanged(func() {
+		request(http.MethodPost, "/v1/auth/password", primary,
+			map[string]any{"currentPassword": recovered, "newPassword": changed, "requestId": "request-lifecycle-history-rejected"}, http.StatusUnprocessableEntity)
+	})
+	changePassword(primary, recovered, primaryReplacement)
 	// A delegated administrator is revocable; the primary is not replaced by it.
 	delegate := createMember(primary, "daily.admin", iamv1.SystemPolicyAccountAdministrator)
 	delegateSession := login("daily.admin@"+tenantID, initial, http.StatusOK)
@@ -23021,7 +23131,7 @@ func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Ha
 	unchanged(func() {
 		request(http.MethodPost, "/v1/policy-attachments/primary-admin-binding:revoke", primary, map[string]any{"resourceVersion": 1, "requestId": "request-primary-handoff-attack"}, http.StatusForbidden)
 	})
-	knownPassword := changed
+	knownPassword := primaryReplacement
 	for _, next := range []iamv1.AccountStatus{iamv1.AccountDisabled, iamv1.AccountActive} {
 		fresh := readAccount(tenantID)
 		if fresh.Status == next {
@@ -23036,6 +23146,7 @@ func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Ha
 		if err := database.QueryRow(ctx, "SELECT password_hash FROM iam.user_credentials WHERE tenant_id=$1 AND principal_id=$2", tenantID, primaryID).Scan(&oldHash); err != nil {
 			t.Fatal(err)
 		}
+		recovered = "Lifecycle-Recovery-" + string(next) + "-Password-72!"
 		recoveryJSON, _ := json.Marshal(map[string]any{"initialPassword": recovered, "resourceVersion": fresh.ResourceVersion, "requestId": "request-race-recover-" + string(next)})
 		statusJSON, _ := json.Marshal(map[string]any{"status": next, "resourceVersion": fresh.ResourceVersion, "requestId": "request-race-status-" + string(next)})
 		start := make(chan struct{})
@@ -23092,8 +23203,8 @@ func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Ha
 		}
 		primary = login("lifecycle.primary", knownPassword, http.StatusOK)
 		if recoveryWon {
-			changePassword(primary, recovered, changed)
-			knownPassword = changed
+			knownPassword = "Lifecycle-After-" + string(next) + "-Password-83!"
+			changePassword(primary, recovered, knownPassword)
 		}
 	}
 	oldPrimary := primary
@@ -23103,6 +23214,7 @@ func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Ha
 	}
 	login("lifecycle.primary", knownPassword, http.StatusUnauthorized)
 	login("shared.user@"+tenantID, changed, http.StatusUnauthorized)
+	recovered = "Lifecycle-Paused-Recovery-Password-94!"
 	recoverPrimary(tenantID, readAccount(tenantID).ResourceVersion, http.StatusOK)
 	if readAccount(tenantID).Status != iamv1.AccountDisabled {
 		t.Fatal("recovery implicitly resumed tenant")
@@ -23117,7 +23229,7 @@ func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Ha
 	request(http.MethodGet, "/v1/auth/me", memberSession, nil, http.StatusUnauthorized)
 	login("lifecycle.primary", knownPassword, http.StatusUnauthorized)
 	primary = login("lifecycle.primary", recovered, http.StatusOK)
-	changePassword(primary, recovered, changed)
+	changePassword(primary, recovered, "Lifecycle-Final-Replacement-Password-95!")
 	status(tenantID, iamv1.AccountDisabled, readAccount(tenantID).ResourceVersion, http.StatusOK)
 	rows, err := database.Query(ctx, "SELECT event_document FROM iam.audit_outbox WHERE event_document->>'action'=ANY($1::text[])", []string{"iam.account.created", "iam.account.disabled", "iam.account.enabled", "iam.account-root.credentials-recovered"})
 	if err != nil {
