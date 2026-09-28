@@ -20720,6 +20720,152 @@ func proveRoleDecisionEvidence(t *testing.T, ctx context.Context, database *pgx.
 	}
 }
 
+// Pagination earns all of its users and Accounts through the real HTTP writes.
+// Its 200 password hashes must not consume the unrelated lifecycle/race
+// fixture's deadline. This replaces those rows in that fixture, not its
+// assertions or the production page limit, password cost or request budgets.
+func TestIAMDirectoryPaginationPostgres(t *testing.T) {
+	const environment = "MATRIX_IAM_DIRECTORY_POSTGRES_TEST_DSN"
+	dsn := os.Getenv(environment)
+	if dsn == "" {
+		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", environment)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+	defer cancel()
+	config, err := pgx.ParseConfig(dsn)
+	if err != nil || !strings.HasPrefix(config.Database, "matrix_iam_directory_") {
+		t.Fatal("directory pagination needs its own database")
+	}
+	config.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+	database, err := pgx.ConnectConfig(ctx, config)
+	if err != nil {
+		t.Fatal("connect directory pagination database", err)
+	}
+	defer database.Close(context.Background())
+	assertIAMPostgres18(t, ctx, database)
+	assertCleanIAMSchema(t, ctx, database)
+	applyIAMSchema(t, ctx, database)
+	createIAMHTTPRole(t, ctx, database)
+	workflow := localRecoveryWorkflow(t, ctx, dsn, iamHTTPTestRole, nil)
+	if _, err := bootstrapIAMWithTOTP(t, ctx, workflow, iamHTTPBootstrap(t)); err != nil {
+		t.Fatal("bootstrap directory pagination", err)
+	}
+	endpoint, err := iamhttp.NewHandler(workflow, iamhttp.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requestContext, stop := context.WithCancel(request.Context())
+		defer stop()
+		cancelWithFixture := context.AfterFunc(ctx, stop)
+		defer cancelWithFixture()
+		endpoint.ServeHTTP(response, request.WithContext(requestContext))
+	})
+	request := func(method, path, bearer string, body any, expected int) *httptest.ResponseRecorder {
+		t.Helper()
+		var encoded []byte
+		if body != nil {
+			encoded = mustIAMJSON(t, body)
+		}
+		response := performIAMRequest(handler, method, path, bearer, encoded)
+		if response.Code != expected || response.Header().Get("Cache-Control") != "no-store" {
+			t.Fatalf("directory %s %s: status=%d want=%d", method, path, response.Code, expected)
+		}
+		return response
+	}
+	root := localRecoveryLogin(t, handler, "admin", adminPassword, true)
+	root = localRecoveryChangePassword(t, handler, root, adminPassword, changedAdminPassword)
+	const tenantB = "organization-customer-b"
+	const childPassword = "Account-Child-Initial-Password-74!"
+	request(http.MethodPost, "/v1/accounts", root, map[string]any{
+		"id": tenantB, "displayName": "Directory B", "rootLoginName": "directory.root",
+		"rootDisplayName": "Directory root", "initialPassword": initialDeveloperPassword, "requestId": "directory-account-create",
+	}, http.StatusCreated)
+	primaryB := localRecoveryLogin(t, handler, "directory.root", initialDeveloperPassword, true)
+	primaryB = localRecoveryChangePassword(t, handler, primaryB, initialDeveloperPassword, changedDeveloperPassword)
+	var userCursor string
+	{
+		beforePaging := request(http.MethodGet, "/v1/users", primaryB, nil, http.StatusOK)
+		var existingUsers iamv1.UserList
+		if json.Unmarshal(beforePaging.Body.Bytes(), &existingUsers) != nil || iamv1.ValidateUserList(existingUsers) != nil || existingUsers.NextAfter != "" {
+			t.Fatal("unable to establish the directory before pagination")
+		}
+		expectedUsers := map[iamv1.PrincipalID]bool{}
+		for _, entry := range existingUsers.Items {
+			expectedUsers[entry.User.ID] = true
+		}
+		for i := 0; i < 101; i++ {
+			response := request(http.MethodPost, "/v1/users", primaryB, map[string]any{
+				"loginName": fmt.Sprintf("page.user.%03d", i), "displayName": "Directory user",
+				"initialPassword": childPassword, "requestId": fmt.Sprintf("page-user-create-%03d", i),
+			}, http.StatusCreated)
+			var created iamv1.User
+			if json.Unmarshal(response.Body.Bytes(), &created) != nil || iamv1.ValidateUser(created) != nil || created.AccountID != tenantB || expectedUsers[created.ID] {
+				t.Fatal("directory creation did not produce a distinct account-bound user")
+			}
+			expectedUsers[created.ID] = true
+		}
+		pageOne := request(http.MethodGet, "/v1/users", primaryB, nil, http.StatusOK)
+		var first, second iamv1.UserList
+		if json.Unmarshal(pageOne.Body.Bytes(), &first) != nil || iamv1.ValidateUserList(first) != nil || len(first.Items) != 100 || first.NextAfter == "" {
+			t.Fatal("principal page is not bounded")
+		}
+		pageTwo := request(http.MethodGet, "/v1/users?after="+first.NextAfter, primaryB, nil, http.StatusOK)
+		if json.Unmarshal(pageTwo.Body.Bytes(), &second) != nil || iamv1.ValidateUserList(second) != nil || len(second.Items) > 100 || second.NextAfter != "" {
+			t.Fatal("principal continuation is incomplete")
+		}
+		seen := map[iamv1.PrincipalID]bool{}
+		for _, entry := range append(first.Items, second.Items...) {
+			if seen[entry.User.ID] || entry.User.AccountID != tenantB || !expectedUsers[entry.User.ID] {
+				t.Fatal("directory cursor duplicated or crossed tenants")
+			}
+			seen[entry.User.ID] = true
+		}
+		if len(seen) != len(expectedUsers) {
+			t.Fatal("directory lost users across pages")
+		}
+		userCursor = first.NextAfter
+		request(http.MethodGet, "/v1/users?after="+userCursor, root, nil, http.StatusUnprocessableEntity)
+	}
+	{
+		// The platform query has a distinct cursor purpose. Never synthesize
+		// account/root rows or weaken the password hash to fill these pages.
+		for index := 0; index < 99; index++ {
+			request(http.MethodPost, "/v1/accounts", root, map[string]any{
+				"id": fmt.Sprintf("cursor-account-%03d", index), "displayName": "Cursor account",
+				"rootLoginName": fmt.Sprintf("cursor.root.%03d", index), "rootDisplayName": "Cursor root",
+				"initialPassword": childPassword, "requestId": fmt.Sprintf("cursor-account-create-%03d", index),
+			}, http.StatusCreated)
+		}
+		var first, second iamv1.AccountList
+		firstResponse := request(http.MethodGet, "/v1/accounts", root, nil, http.StatusOK)
+		if json.Unmarshal(firstResponse.Body.Bytes(), &first) != nil || iamv1.ValidateAccountList(first) != nil || len(first.Items) != 100 || first.NextAfter == "" {
+			t.Fatal("account directory did not issue a bounded signed continuation")
+		}
+		secondResponse := request(http.MethodGet, "/v1/accounts?after="+first.NextAfter, root, nil, http.StatusOK)
+		if json.Unmarshal(secondResponse.Body.Bytes(), &second) != nil || iamv1.ValidateAccountList(second) != nil || len(second.Items) != 1 || second.NextAfter != "" || second.Items[0].Account.ID <= first.Items[99].Account.ID {
+			t.Fatal("account signed directory did not yield 100+1 distinct accounts")
+		}
+		request(http.MethodGet, "/v1/users?after="+first.NextAfter, root, nil, http.StatusUnprocessableEntity)
+		request(http.MethodGet, "/v1/accounts?after="+first.NextAfter, primaryB, nil, http.StatusForbidden)
+		request(http.MethodGet, "/v1/accounts?after="+userCursor, root, nil, http.StatusUnprocessableEntity)
+	}
+	assertIAMSecretsAbsent(t, ctx, database, adminPassword, changedAdminPassword,
+		initialDeveloperPassword, changedDeveloperPassword, childPassword, root, primaryB)
+	var decisionsHaveAudit bool
+	if err := database.QueryRow(ctx, `SELECT NOT EXISTS (
+		SELECT 1 FROM iam.authorization_decisions d WHERE
+		(SELECT count(*) FROM iam.audit_outbox e WHERE e.tenant_id=d.tenant_id
+		AND e.event_document->>'action'='iam.authorization.decided'
+		AND e.event_document->>'iamDecisionId'=d.id
+		AND e.event_document#>>'{actor,id}'=d.principal_id
+		AND e.event_document->>'requestId'=d.request_id
+		AND e.event_document->>'result'=CASE WHEN d.allowed THEN 'ALLOWED' ELSE 'DENIED' END)<>1
+		)`).Scan(&decisionsHaveAudit); err != nil || !decisionsHaveAudit {
+		t.Fatal("directory decision lost its exact audit fact", err)
+	}
+}
+
 func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 	dsn := os.Getenv(iamHTTPPostgresDSN)
 	if dsn == "" {
@@ -23434,38 +23580,6 @@ func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler
 		t.Fatal("migration replay did not preserve account state")
 	}
 	login("shared.user@customer-b", childChangedB, http.StatusOK)
-	beforePaging := request(http.MethodGet, "/v1/users", primaryB, nil, http.StatusOK)
-	var existingUsers iamv1.UserList
-	if json.Unmarshal(beforePaging.Body.Bytes(), &existingUsers) != nil || existingUsers.NextAfter != "" {
-		t.Fatal("unable to establish the directory before pagination")
-	}
-	expectedUsers := map[iamv1.PrincipalID]bool{}
-	for _, entry := range existingUsers.Items {
-		expectedUsers[entry.User.ID] = true
-	}
-	for i := 0; i < 101; i++ {
-		created := createUser(primaryB, fmt.Sprintf("page.user.%03d", i), "", http.StatusCreated)
-		expectedUsers[created.ID] = true
-	}
-	pageOne := request(http.MethodGet, "/v1/users", primaryB, nil, http.StatusOK)
-	var first, second iamv1.UserList
-	if json.Unmarshal(pageOne.Body.Bytes(), &first) != nil || len(first.Items) != 100 || first.NextAfter == "" {
-		t.Fatal("principal page is not bounded")
-	}
-	pageTwo := request(http.MethodGet, "/v1/users?after="+first.NextAfter, primaryB, nil, http.StatusOK)
-	if json.Unmarshal(pageTwo.Body.Bytes(), &second) != nil || len(second.Items) > 100 || second.NextAfter != "" {
-		t.Fatal("principal continuation is incomplete")
-	}
-	seen := map[iamv1.PrincipalID]bool{}
-	for _, entry := range append(first.Items, second.Items...) {
-		if seen[entry.User.ID] || entry.User.AccountID != tenantB || !expectedUsers[entry.User.ID] {
-			t.Fatal("directory cursor duplicated or crossed tenants")
-		}
-		seen[entry.User.ID] = true
-	}
-	if len(seen) != len(expectedUsers) {
-		t.Fatal("directory lost users across pages")
-	}
 	accountPage := request(http.MethodGet, "/v1/accounts", root, nil, http.StatusOK)
 	var accounts iamv1.AccountList
 	if json.Unmarshal(accountPage.Body.Bytes(), &accounts) != nil || iamv1.ValidateAccountList(accounts) != nil || len(accounts.Items) != 2 {
@@ -23486,27 +23600,6 @@ func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler
 			t.Fatal("ordinary account lifecycle was unavailable to its authorized platform actor")
 		}
 	}
-	// Account directories use the same signed protocol but a distinct platform
-	// query. Exercise the real onboarding transaction, not synthesized rows.
-	for index := 0; index < 99; index++ {
-		request(http.MethodPost, "/v1/accounts", root, map[string]any{
-			"id": fmt.Sprintf("cursor-account-%03d", index), "displayName": "Cursor account",
-			"rootLoginName": fmt.Sprintf("cursor.root.%03d", index), "rootDisplayName": "Cursor root",
-			"initialPassword": childPassword, "requestId": fmt.Sprintf("cursor-account-create-%03d", index),
-		}, http.StatusCreated)
-	}
-	var accountFirst, accountSecond iamv1.AccountList
-	firstResponse := request(http.MethodGet, "/v1/accounts", root, nil, http.StatusOK)
-	if json.Unmarshal(firstResponse.Body.Bytes(), &accountFirst) != nil || iamv1.ValidateAccountList(accountFirst) != nil || len(accountFirst.Items) != 100 || accountFirst.NextAfter == "" {
-		t.Fatal("account directory did not issue a bounded signed continuation")
-	}
-	secondResponse := request(http.MethodGet, "/v1/accounts?after="+accountFirst.NextAfter, root, nil, http.StatusOK)
-	if json.Unmarshal(secondResponse.Body.Bytes(), &accountSecond) != nil || iamv1.ValidateAccountList(accountSecond) != nil || len(accountSecond.Items) != 1 || accountSecond.NextAfter != "" || accountSecond.Items[0].Account.ID <= accountFirst.Items[99].Account.ID {
-		t.Fatal("account signed directory did not yield 100+1 distinct accounts")
-	}
-	request(http.MethodGet, "/v1/users?after="+accountFirst.NextAfter, root, nil, http.StatusUnprocessableEntity)
-	request(http.MethodGet, "/v1/accounts?after="+accountFirst.NextAfter, primaryB, nil, http.StatusForbidden)
-	request(http.MethodGet, "/v1/users?after="+first.NextAfter, root, nil, http.StatusUnprocessableEntity)
 	// Two account administrators cannot acquire the same alias concurrently.
 	for round := 0; round < 8; round++ {
 		startAliasRace := make(chan struct{})

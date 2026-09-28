@@ -59,6 +59,14 @@
 
 ### 当前CI任务分配
 
+固定`21b3de3a`的[Verification36462106282](https://github.com/xiak/matrix/actions/runs/36462106282)中，storage的HTTP纵向用例在184.76s失败，平台grant/reset/status的尾部检查及后继bootstrap重放已超过原三分钟context；不能将前段通过算作完整验收。相同固定生产/测试源码在本任务独立PG18.4（1CPU/768MiB/PIDs192/max_connections24）及Go1.26.5 runner（2CPU/1536MiB/PIDs256、GOMAXPROCS2/512MiB）实际复现201.84s失败：账号场景128.56s、密码Session规则41.60s通过，后尾密码/平台竞争耗尽原context。没有证据将此解释为新的授权错误，也不能放宽期限忽略它。
+
+当前修正将原101个用户和99个账号的HTTP分页准备及全部分页/跨账号/跨目录cursor断言移到同一integration文件的`TestIAMDirectoryPaginationPostgres`，使用独立空库；原纵向用例保留身份、生命周期、全部密码与平台竞争、等值重放和outbox检查。两部分串行执行，均有三分钟context；这是独立行为夹具的分离，不是把一次事务或认证期限续长。新增入口复用原受限运行身份和真实bootstrap/登录/改密，所有分页对象仍经真实HTTP创建，不复制原200条准备、不伪造hash或授权行。原storage lane二十分钟、PG/runner限额、密码成本、分页上限和生产期限均不变；CI的编译枚举必须实际选择新入口且有配套DSN，不能以默认SKIP通过。
+
+相同固定生产源码加测试Go blob`dc7d27b1dbee3a3b491590a26f7c38e6961c63e2`，在同限额PG18.4/Go1.26.5的两个新空库串行race-p1复验：独立分页83.92s（包85.005s），原HTTP纵向139.98s（包141.094s）全部通过。原change/reset/recover/logout/旧密码登录五组竞争、平台grant与reset/status/历史停用三组、原bootstrap/schema重放和outbox物理owner/链均实际到达并通过；不是删掉超时尾部或缩短密码历史。专属编译缓存被复用，不能将差异声称为生产性能优化；该修正仍待精确固定源独立CI，不能回填21b3失败。
+
+工作流选择核对另发现十个解绑fixture虽然已在两个专门lane运行，却仍被storage枚举后因缺DSN而SKIP。修正只将这十个准确名称排除出storage，专门lane的实际命令和场景不变，不使用会吞掉未来新测试的宽泛前缀。原编译清单的40个顶层IAM fixture与全部选择器联合核对，每个恰有一个实际执行位置；storage为9项，新增分页具备独立DSN。YAML及19段Bash语法校验、API/IAM integration/architecture默认race和对应vet通过；缺外部环境的默认SKIP不计真实证据。确认零其他数据库客户端后正常停止本轮PG，已删除三个自有容器、两个源码/编译缓存卷和空网络；合成数据不保留，没有操作其他任务或远端资源。
+
 容量lane不能依赖`setup-go`恰好命中完整模块缓存。固定`9df45126`的[Verification36455507556](https://github.com/xiak/matrix/actions/runs/36455507556)中，`authority-capacity`在测试package准备阶段因`/modules/cache/download`只读且缺依赖而失败；没有容量样本，不能解释为容量通过或IAM业务断言失败。当前workflow在挂载前显式执行`go mod download`和`go mod verify`，测量容器仍只读使用该缓存，保留原镜像、限额、两个测试入口及全部期限。2026-09-29在本任务独立空缓存、固定Go1.26.5镜像中实际复现只读失败；按同一下载/校验顺序准备后，断网且GOPROXY关闭的容器成功加载authorityprocess的完整测试依赖并通过模块校验。YAML及19段Bash语法检查通过。这仅验证冷缓存准备修正，不替代完整容量运行或后继独立CI，也不回填原失败。
 
 数据库门禁按既有测试owner串行分片，不按开发schema叠加兼容矩阵。固定`fa27b0fbf54e94e21da38d32763dcaf89f370538`的[Verification36318553704](https://github.com/xiak/matrix/actions/runs/36318553704)不能标为通过：storage测试步骤19分25秒内全部success，但整项任务含准备/清理超过20分钟；GitHub明确注记`The job has exceeded the maximum execution time of 20m0s`，storage最终cancelled，汇总检查failure。其余Go、node、runtime、step-up、replacement、replacement-qualification、recovery-window七项success不代替该缺口。

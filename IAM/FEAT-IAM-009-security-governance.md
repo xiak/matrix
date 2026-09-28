@@ -1197,6 +1197,8 @@ S3b正在实施，尚未完整验收。最小可验收结果是：管理员按�
 
 最终全仓默认race-p2（含architecture）、vet-p2、模块校验、122个API文件生成集合/哈希一致及Linux amd64构建通过；默认外部DSN缺失的SKIP不计真实运行证据。核对零其他客户端后正常停止并移除本轮唯一专属PG、两个合成数据/模块缓存卷和空网络，未操作其他任务或远端服务。容量CI冷缓存修正的失败边界与复验证据归011，不用本地通过覆盖独立CI。
 
+固定`21b3de3a`的独立CI已出现storage失败，不能把上述本地证据提升为累计候选验收。原HTTP夹具的超时复现、分页边界分离及真实复验归[011当前CI任务分配](FEAT-IAM-011-acceptance.md#当前ci任务分配)；生产重置契约和本片源码schema未因此改变。
+
 查询只追加现有授权决定/相关审计，不再次产生`iam.user.password-reset`成功事实；Audit暂不可投递不应抹除IAM已提交完成。目标随后自行改密、被再次reset、停用或删除时，原完成仍是历史记录，不能被当前状态替换、撤销或重新执行。受支持恢复后的历史缺失保持UNKNOWN；本关系不声称抵抗整机回滚、恢复密码资格或授予跨profile恢复许可。原公开Audit/canonical、ServiceIdentity/lookup_service、claim7和离线FILE均不改变。
 
 验收沿原accounts/usecase/API/SQL/HTTP及authorityprocess拥有者，不新增重型测试框架或全历史升级矩阵：实际POST已提交后丢TCP回包，由另一IAM副本查询且重启后仍相同；提交前终止与正在提交期间的未观察结果不误报成功；错误Account/actor/目标/requestId/version与撤权、Session失效、Role/Key/Service攻击拒绝；同版本并发reset及已使用ID变体只有确定赢家；末端outbox/完成关系失败完整回滚；后续改密/停用/删除不改变原完成或恢复旧凭据；运行角色不能伪造、篡改或删除完成，错误scope/action/目标绑定关闭readiness/查询。最后在真实浏览器中证明UNKNOWN只核对原意图、不泄露秘密、不自动再次reset。当前API或纯契约测试通过均不能替代这些验收。
