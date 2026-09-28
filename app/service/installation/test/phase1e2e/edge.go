@@ -222,12 +222,13 @@ func (client *edgeClient) loginAuthenticated(ctx context.Context, password []byt
 func (client *edgeClient) changePassword(
 	ctx context.Context,
 	bearer, current, next []byte,
+	requestID string,
 ) error {
 	response, err := client.json(
 		ctx, http.MethodPost, "/api/iam/v1/auth/password", bearer,
 		changePasswordWire{
 			CurrentPassword: string(current), NewPassword: string(next),
-			RequestID: "phase1-change-password",
+			RequestID: requestID,
 		},
 		nil, http.StatusOK,
 	)

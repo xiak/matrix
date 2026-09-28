@@ -663,19 +663,25 @@ func (value *gate) beforeRestart(ctx context.Context) (gateErr error) {
 		return err
 	}
 	defer clear(newPassword)
+	intermediatePassword, err := randomPassword(rand.Reader)
+	if err != nil || bytes.Equal(intermediatePassword, newPassword) {
+		clear(intermediatePassword)
+		return fail("iam-intermediate-password")
+	}
+	defer clear(intermediatePassword)
 	firstSession, err := value.loginReleaseA(ctx, initialPassword, nil, "phase1-login-initial")
 	if err != nil {
 		return fail("iam-login-initial")
 	}
 	defer clear(firstSession)
-	value.edge.addForbidden(initialPassword, newPassword, firstSession)
-	if err := value.edge.changePassword(ctx, firstSession, initialPassword, newPassword); err != nil {
+	value.edge.addForbidden(initialPassword, intermediatePassword, newPassword, firstSession)
+	if err := value.edge.changePassword(ctx, firstSession, initialPassword, intermediatePassword, "phase1-initial-change-password"); err != nil {
 		return fail("iam-change-password")
 	}
 	if err := value.edge.logout(ctx, firstSession); err != nil {
 		return fail("iam-logout-initial")
 	}
-	bearer, err := value.loginReleaseA(ctx, newPassword, nil, "phase1-login-current")
+	bearer, err := value.loginReleaseA(ctx, intermediatePassword, nil, "phase1-login-current")
 	if err != nil {
 		return fail("iam-login-current")
 	}
@@ -689,7 +695,7 @@ func (value *gate) beforeRestart(ctx context.Context) (gateErr error) {
 	}
 	defer clear(secret)
 	value.edge.addForbidden(secret)
-	value.sensitive = append(value.sensitive, initialPassword, newPassword, firstSession, bearer, secret)
+	value.sensitive = append(value.sensitive, initialPassword, intermediatePassword, newPassword, firstSession, bearer, secret)
 	application, err := value.createApplication(ctx, bearer)
 	if err != nil {
 		return err
@@ -711,7 +717,7 @@ func (value *gate) beforeRestart(ctx context.Context) (gateErr error) {
 	}
 	emit("application-generation-two")
 
-	bearer, err = value.recoverOriginalPlatformCredentials(ctx, bearer, newPassword)
+	bearer, err = value.recoverOriginalPlatformCredentials(ctx, bearer, intermediatePassword, newPassword)
 	if err != nil {
 		return err
 	}
@@ -1427,7 +1433,7 @@ func (value *gate) assertPostUpgradeApplication(
 	return nil
 }
 
-func (value *gate) recoverOriginalPlatformCredentials(ctx context.Context, oldBearer, finalPassword []byte) ([]byte, error) {
+func (value *gate) recoverOriginalPlatformCredentials(ctx context.Context, oldBearer, oldPassword, finalPassword []byte) ([]byte, error) {
 	before, err := readJournal(ctx, value.config.root)
 	if err != nil || before.Active != nil {
 		return nil, fail("credential-recovery-initial-journal")
@@ -1502,7 +1508,7 @@ func (value *gate) recoverOriginalPlatformCredentials(ctx context.Context, oldBe
 		return nil, fail("credential-recovery-private-input")
 	}
 	recovered, err := value.interruptCredentialRecovery(ctx, inputPath, commandID, before.InstallationID,
-		value.forbidden(temporaryPassword, finalPassword, oldBearer))
+		value.forbidden(temporaryPassword, oldPassword, finalPassword, oldBearer))
 	if err != nil {
 		return nil, err
 	}
@@ -1513,7 +1519,7 @@ func (value *gate) recoverOriginalPlatformCredentials(ctx context.Context, oldBe
 		return nil, fail("credential-recovery-old-session-denial")
 	}
 	if _, err := value.edge.json(ctx, http.MethodPost, "/api/iam/v1/auth/login", nil,
-		loginWire{LoginName: "admin", Password: string(finalPassword), RequestID: "recovery-old-password"}, nil, http.StatusUnauthorized); err != nil {
+		loginWire{LoginName: "admin", Password: string(oldPassword), RequestID: "recovery-old-password"}, nil, http.StatusUnauthorized); err != nil {
 		return nil, fail("credential-recovery-old-password-denial")
 	}
 	current, err := value.loginReleaseA(ctx, temporaryPassword, nil, "recovery-current-temporary-session")
@@ -1530,7 +1536,7 @@ func (value *gate) recoverOriginalPlatformCredentials(ctx context.Context, oldBe
 	if _, err := value.edge.json(ctx, http.MethodGet, "/api/iam/v1/accounts", current, nil, nil, http.StatusForbidden); err != nil {
 		return nil, fail("credential-recovery-forced-change-only")
 	}
-	if err := value.edge.changePassword(ctx, current, temporaryPassword, finalPassword); err != nil {
+	if err := value.edge.changePassword(ctx, current, temporaryPassword, finalPassword, "phase1-recovered-change-password"); err != nil {
 		return nil, fail("credential-recovery-normal-password-change")
 	}
 	if _, err := value.edge.json(ctx, http.MethodGet, "/api/iam/v1/auth/me", other, nil, nil, http.StatusUnauthorized); err != nil {
