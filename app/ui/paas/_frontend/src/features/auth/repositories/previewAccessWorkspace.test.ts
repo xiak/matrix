@@ -201,7 +201,11 @@ describe("access workspace preview invariants", () => {
     const attachment = promoted.policyAttachments.find((entry) => entry.policyId === policy.id)!;
     expect(attachment).toBeDefined();
     expect((await previewAccountRepository.currentIdentity(previewCredential)).account.rootIdentity.principalId).toBe(principalId);
-    await previewAccountRepository.execute(previewCredential, { kind: "revoke-policy-attachment", attachmentId: attachment.id, resourceVersion: attachment.resourceVersion });
+    const revocation = await previewAccountRepository.revokePolicyAttachment(previewCredential, attachment.id, { resourceVersion: attachment.resourceVersion, requestId: "lin-revocation" });
+    expect(await previewAccountRepository.revokePolicyAttachment(previewCredential, attachment.id,
+      { resourceVersion: attachment.resourceVersion, requestId: "lin-revocation" })).toEqual(revocation);
+    await expect(previewAccountRepository.revokePolicyAttachment(previewCredential, attachment.id,
+      { resourceVersion: attachment.resourceVersion + 1, requestId: "lin-revocation" })).rejects.toMatchObject({ status: 409 });
     expect((await previewAccountRepository.listUsers(previewCredential)).items.find((entry) => entry.user.id === "principal-lin")?.policyAttachments.some((entry) => entry.policyId === policy.id)).toBe(false);
     resetPreviewEnvironment();
   });

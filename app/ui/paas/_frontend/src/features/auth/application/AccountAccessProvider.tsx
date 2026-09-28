@@ -185,19 +185,21 @@ export type RoleSessionRevokeIntent = {
   observation?: RoleSessionListing;
 };
 
-export type UserPolicyAttachmentIntent = {
+type UserPolicyChangeBase = {
   accountId: string;
   userId: string;
   userQualifiedName: string;
   policyId: string;
   policyDisplayName: string;
   policyScope: "INSTALLATION" | "TENANT";
-  defaultVersionId: string;
-  policyResourceVersion: number;
   requestId: string;
   phase: "review" | "submitting" | "unknown" | "conflict" | "rejected";
   error: AccountError | null;
 };
+export type UserPolicyChangeIntent = UserPolicyChangeBase & (
+  | { kind: "attach"; defaultVersionId: string; policyResourceVersion: number }
+  | { kind: "revoke"; attachmentId: string; attachmentResourceVersion: number }
+);
 
 export type PolicyDirectoryView = { query: string; kind: string; service: string; category: string; sort: string; page: number; pageSize: number };
 export const defaultPolicyDirectoryView: PolicyDirectoryView = { query: "", kind: "all", service: "all", category: "all", sort: "name", page: 1, pageSize: 10 };
@@ -225,10 +227,11 @@ type AccountAccess = {
   roles: RoleAccessClient | null;
   roleSessionRevokeIntent: RoleSessionRevokeIntent | null;
   changeRoleSessionRevokeIntent(expectedRequestId: string | null, next: RoleSessionRevokeIntent | null): void;
-  userPolicyAttachmentIntent: UserPolicyAttachmentIntent | null;
+  userPolicyChangeIntent: UserPolicyChangeIntent | null;
   beginUserPolicyAttachment(user: AccountUserScene, policyId: string): boolean;
-  submitUserPolicyAttachment(requestId: string): Promise<boolean>;
-  endUserPolicyAttachment(requestId: string): boolean;
+  beginUserPolicyRevocation(user: AccountUserScene, attachmentId: string): boolean;
+  submitUserPolicyChange(requestId: string): Promise<boolean>;
+  endUserPolicyChange(requestId: string): boolean;
   scene: AccountAccessScene | null;
   loading: boolean;
   busy: boolean;
@@ -272,9 +275,6 @@ function accountCommandAvailable(scene: AccountAccessScene, command: AccountComm
     const account = scene.accounts.find((item) => item.id === command.accountId);
     return command.kind === "set-account-status" ? account?.canSetStatus === true : account?.canRecoverRoot === true;
   }
-  if (command.kind === "revoke-policy-attachment") {
-    return scene.users.some((user) => user.attachments.some((attachment) => attachment.id === command.attachmentId && attachment.canRevoke));
-  }
   const user = scene.users.find((item) => item.id === command.userId);
   if (!user) return false;
   if (command.kind === "update-user") return user.canUpdate;
@@ -311,24 +311,27 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   useLayoutEffect(() => { currentViewSession.current = viewSession; }, [viewSession]);
   const [storedRoleSessionRevokeIntent, setStoredRoleSessionRevokeIntent] = useState<{ session: typeof viewSession; intent: RoleSessionRevokeIntent } | null>(null);
   const roleSessionRevokeIntent = storedRoleSessionRevokeIntent?.session === viewSession ? storedRoleSessionRevokeIntent.intent : null;
-  const userPolicyAttachmentRef = useRef<{ session: typeof viewSession; intent: UserPolicyAttachmentIntent } | null>(null);
-  const [storedUserPolicyAttachment, setStoredUserPolicyAttachment] = useState<typeof userPolicyAttachmentRef.current>(null);
-  const userPolicyAttachmentIntent = storedUserPolicyAttachment?.session === viewSession ? storedUserPolicyAttachment.intent : null;
-  const rememberUserPolicyAttachment = useCallback((expectedRequestId: string | null, next: UserPolicyAttachmentIntent | null): boolean => {
+  const userPolicyChangeRef = useRef<{ session: typeof viewSession; intent: UserPolicyChangeIntent } | null>(null);
+  const [storedUserPolicyChange, setStoredUserPolicyChange] = useState<typeof userPolicyChangeRef.current>(null);
+  const userPolicyChangeIntent = storedUserPolicyChange?.session === viewSession ? storedUserPolicyChange.intent : null;
+  const rememberUserPolicyChange = useCallback((expectedRequestId: string | null, next: UserPolicyChangeIntent | null): boolean => {
     if (currentViewSession.current !== viewSession) return false;
-    const stored = userPolicyAttachmentRef.current;
+    const stored = userPolicyChangeRef.current;
     const current = stored?.session === viewSession ? stored.intent : null;
     if (expectedRequestId === null) {
       if (current || !next || next.accountId !== tenantId) return false;
     } else if (!current || current.requestId !== expectedRequestId || next && (
-      next.requestId !== current.requestId || next.accountId !== current.accountId || next.userId !== current.userId ||
+      next.requestId !== current.requestId || next.accountId !== current.accountId || next.kind !== current.kind || next.userId !== current.userId ||
       next.userQualifiedName !== current.userQualifiedName || next.policyId !== current.policyId ||
-      next.policyDisplayName !== current.policyDisplayName || next.policyResourceVersion !== current.policyResourceVersion ||
-      next.defaultVersionId !== current.defaultVersionId || next.policyScope !== current.policyScope
+      next.policyDisplayName !== current.policyDisplayName || next.policyScope !== current.policyScope ||
+      (next.kind === "attach" && current.kind === "attach" ?
+        next.policyResourceVersion !== current.policyResourceVersion || next.defaultVersionId !== current.defaultVersionId :
+        next.kind === "revoke" && current.kind === "revoke" ?
+          next.attachmentId !== current.attachmentId || next.attachmentResourceVersion !== current.attachmentResourceVersion : true)
     )) return false;
     const updated = next ? { session: viewSession, intent: next } : null;
-    userPolicyAttachmentRef.current = updated;
-    setStoredUserPolicyAttachment(updated);
+    userPolicyChangeRef.current = updated;
+    setStoredUserPolicyChange(updated);
     return true;
   }, [tenantId, viewSession]);
   const policyCreateRef = useRef<{ session: typeof viewSession; intent: PolicyCreateIntent } | null>(null);
@@ -890,53 +893,67 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     const policy = scene.policies.find((item) => item.id === policyId);
     if (user.accountId !== tenantId || user.id === scene.accountOwner.id || !policy || policy.status !== "ACTIVE" ||
       !(policy.scope === "INSTALLATION" ? user.canAttachPlatformPolicy : user.canAttachTenantPolicy)) return false;
-    return rememberUserPolicyAttachment(null, {
-      accountId: tenantId, userId: user.id, userQualifiedName: user.qualifiedName,
+    return rememberUserPolicyChange(null, {
+      kind: "attach", accountId: tenantId, userId: user.id, userQualifiedName: user.qualifiedName,
       policyId, policyDisplayName: policy.displayName, policyScope: policy.scope,
       defaultVersionId: policy.defaultVersionId, policyResourceVersion: policy.resourceVersion,
       requestId: requestToken("ui-user-attachment-"), phase: "review", error: null
     });
-  }, [active, credential, loading, rememberUserPolicyAttachment, scene, tenantId]);
+  }, [active, credential, loading, rememberUserPolicyChange, scene, tenantId]);
 
-  const submitUserPolicyAttachment = useCallback(async (requestId: string): Promise<boolean> => {
-    const stored = userPolicyAttachmentRef.current;
+  const beginUserPolicyRevocation = useCallback((user: AccountUserScene, attachmentId: string): boolean => {
+    if (!active || !credential || !scene || loading || mutationPending.current || !tenantId || user.accountId !== tenantId) return false;
+    const attachment = user.attachments.find((item) => item.id === attachmentId);
+    if (!attachment || !attachment.canRevoke || attachment.accountId !== tenantId || attachment.target.id !== user.id) return false;
+    return rememberUserPolicyChange(null, {
+      kind: "revoke", accountId: tenantId, userId: user.id, userQualifiedName: user.qualifiedName,
+      policyId: attachment.policyId, policyDisplayName: attachment.label, policyScope: attachment.scope,
+      attachmentId: attachment.id, attachmentResourceVersion: attachment.resourceVersion,
+      requestId: requestToken("ui-user-revocation-"), phase: "review", error: null
+    });
+  }, [active, credential, loading, rememberUserPolicyChange, scene, tenantId]);
+
+  const submitUserPolicyChange = useCallback(async (requestId: string): Promise<boolean> => {
+    const stored = userPolicyChangeRef.current;
     const intent = stored?.session === viewSession && stored.intent.requestId === requestId ? stored.intent : null;
     if (!active || !credential || !scene || !intent || intent.accountId !== tenantId || loading || mutationPending.current ||
       (intent.phase !== "review" && intent.phase !== "unknown")) return false;
-    const command: Extract<AccountCommand, { kind: "create-policy-attachment" }> = {
-      kind: "create-policy-attachment", userId: intent.userId, policyId: intent.policyId,
-      policyResourceVersion: intent.policyResourceVersion, requestId: intent.requestId
-    };
     // First submission must still match the selected directory revision. UNKNOWN
     // recovery replays the frozen command even if a later directory read changed.
-    if (intent.phase === "review" && !scene.policies.some((policy) => policy.id === intent.policyId &&
+    if (intent.kind === "attach" && intent.phase === "review" && !scene.policies.some((policy) => policy.id === intent.policyId &&
       policy.status === "ACTIVE" && policy.resourceVersion === intent.policyResourceVersion)) {
-      rememberUserPolicyAttachment(requestId, { ...intent, phase: "conflict", error: "conflict" });
+      rememberUserPolicyChange(requestId, { ...intent, phase: "conflict", error: "conflict" });
       return false;
     }
-    if (!rememberUserPolicyAttachment(requestId, { ...intent, phase: "submitting", error: null })) return false;
+    if (!rememberUserPolicyChange(requestId, { ...intent, phase: "submitting", error: null })) return false;
     mutationPending.current = true;
     setBusy(true); setError(null); setSuccess(null);
     try {
-      await repository.execute(credential, command);
+      if (intent.kind === "attach") await repository.execute(credential, {
+        kind: "create-policy-attachment", userId: intent.userId, policyId: intent.policyId,
+        policyResourceVersion: intent.policyResourceVersion, requestId: intent.requestId
+      });
+      else await repository.revokePolicyAttachment(credential, intent.attachmentId, {
+        resourceVersion: intent.attachmentResourceVersion, requestId: intent.requestId
+      });
       if (currentViewSession.current !== viewSession) return false;
-      rememberUserPolicyAttachment(requestId, null);
+      rememberUserPolicyChange(requestId, null);
       setSuccess("completed"); setLoading(true); setRevision((current) => current + 1);
       return true;
     } catch (failure) {
       if (currentViewSession.current !== viewSession) return false;
       const reason = accountError(failure);
-      rememberUserPolicyAttachment(requestId, {
+      rememberUserPolicyChange(requestId, {
         ...intent, phase: reason === "unavailable" ? "unknown" : reason === "conflict" ? "conflict" : "rejected", error: reason
       });
       return false;
     } finally { mutationPending.current = false; setBusy(false); }
-  }, [active, credential, loading, rememberUserPolicyAttachment, repository, scene, tenantId, viewSession]);
+  }, [active, credential, loading, rememberUserPolicyChange, repository, scene, tenantId, viewSession]);
 
-  const endUserPolicyAttachment = useCallback((requestId: string): boolean => {
-    const stored = userPolicyAttachmentRef.current;
+  const endUserPolicyChange = useCallback((requestId: string): boolean => {
+    const stored = userPolicyChangeRef.current;
     const intent = stored?.session === viewSession && stored.intent.requestId === requestId ? stored.intent : null;
-    if (!intent || intent.phase === "submitting" || !rememberUserPolicyAttachment(requestId, null)) return false;
+    if (!intent || intent.phase === "submitting" || !rememberUserPolicyChange(requestId, null)) return false;
     if (intent.phase !== "review") {
       directoryRequest.current.users += 1;
       directoryRequest.current.accounts += 1;
@@ -944,7 +961,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       setRevision((current) => current + 1);
     }
     return true;
-  }, [rememberUserPolicyAttachment, viewSession]);
+  }, [rememberUserPolicyChange, viewSession]);
 
   const value = useMemo<AccountAccess>(() => ({
     supportsUserBatch: Boolean(repository.executeUserBatch),
@@ -986,8 +1003,8 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     roles,
     roleSessionRevokeIntent: roleSessionRevokeIntent?.accountId === tenantId ? roleSessionRevokeIntent : null,
     changeRoleSessionRevokeIntent,
-    userPolicyAttachmentIntent: userPolicyAttachmentIntent?.accountId === tenantId ? userPolicyAttachmentIntent : null,
-    beginUserPolicyAttachment, submitUserPolicyAttachment, endUserPolicyAttachment,
+    userPolicyChangeIntent: userPolicyChangeIntent?.accountId === tenantId ? userPolicyChangeIntent : null,
+    beginUserPolicyAttachment, beginUserPolicyRevocation, submitUserPolicyChange, endUserPolicyChange,
     workspace, workspaceError,
     clearWorkspaceError, clearFeedback,
     async executeWorkspace(command, onError) {
@@ -1058,7 +1075,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       } catch (failure) { setError(accountError(failure)); return false; }
       finally { mutationPending.current = false; setBusy(false); }
     }
-  }), [active, busy, credential, error, loading, repository, scene, success, tenantId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, permissionBoundaries, authorizationProfiles, policyRead, policyCreate, policyVersionMutation, accountSecuritySettings, accessKeys, roles, roleSessionRevokeIntent, changeRoleSessionRevokeIntent, userPolicyAttachmentIntent, beginUserPolicyAttachment, submitUserPolicyAttachment, endUserPolicyAttachment, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
+  }), [active, busy, credential, error, loading, repository, scene, success, tenantId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, permissionBoundaries, authorizationProfiles, policyRead, policyCreate, policyVersionMutation, accountSecuritySettings, accessKeys, roles, roleSessionRevokeIntent, changeRoleSessionRevokeIntent, userPolicyChangeIntent, beginUserPolicyAttachment, beginUserPolicyRevocation, submitUserPolicyChange, endUserPolicyChange, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
 
   return <AccountCapabilitiesContext.Provider value={capabilities}>
     <AccountAccessContext.Provider value={value}>{children}</AccountAccessContext.Provider>

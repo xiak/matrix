@@ -72,19 +72,19 @@ export function UserAccessManagement({ user, onDeleted, profileActions = false, 
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [resettingPassword, setResettingPassword] = useState(false);
-  const [revokeId, setRevokeId] = useState<string | null>(null);
   const [selectedPolicy, setSelectedPolicy] = useState<{ id: string; resourceVersion: number } | null>(null);
-  const attachmentIntent = access.userPolicyAttachmentIntent;
-  const reviewingPolicy = attachmentIntent?.userId === user.id;
-  const otherUserIntent = attachmentIntent && !reviewingPolicy ? attachmentIntent : null;
+  const relationIntent = access.userPolicyChangeIntent;
+  const reviewingPolicy = relationIntent?.userId === user.id;
+  const otherUserIntent = relationIntent && !reviewingPolicy ? relationIntent : null;
   const reviewHeading = useRef<HTMLHeadingElement>(null);
   const reviewTrigger = useRef<HTMLButtonElement>(null);
-  const returnToSelection = useRef(false);
+  const returnToTrigger = useRef(false);
+  const lastTrigger = useRef<HTMLButtonElement | null>(null);
   const policies = access.scene?.policies ?? [];
   const attached = new Set(user.attachments.map((attachment) => attachment.policyId));
   const availablePolicies = policies.filter((policy) => policy.status === "ACTIVE" && !attached.has(policy.id));
   const disabled = access.busy || access.loading;
-  const relationDisabled = disabled || Boolean(attachmentIntent);
+  const relationDisabled = disabled || Boolean(relationIntent);
   const attachablePolicies = availablePolicies.filter((policy) => policy.scope === "INSTALLATION" ? user.canAttachPlatformPolicy : user.canAttachTenantPolicy);
   const platformAttachmentBlocked = !user.canAttachPlatformPolicy && availablePolicies.some((policy) => policy.scope === "INSTALLATION");
   const tenantAttachmentBlocked = !user.canAttachTenantPolicy && availablePolicies.some((policy) => policy.scope === "TENANT");
@@ -93,9 +93,9 @@ export function UserAccessManagement({ user, onDeleted, profileActions = false, 
   const restriction = (reason: CapabilityRestriction | null) => t(`restrictions.${reason ?? "AUTHORITY_REQUIRED"}`);
   useLayoutEffect(() => {
     if (reviewingPolicy) reviewHeading.current?.focus({ preventScroll: true });
-    else if (returnToSelection.current) {
-      returnToSelection.current = false;
-      reviewTrigger.current?.focus({ preventScroll: true });
+    else if (returnToTrigger.current) {
+      returnToTrigger.current = false;
+      (lastTrigger.current?.isConnected ? lastTrigger.current : reviewTrigger.current)?.focus({ preventScroll: true });
     }
   }, [reviewingPolicy]);
 
@@ -133,41 +133,41 @@ export function UserAccessManagement({ user, onDeleted, profileActions = false, 
       <ul className={styles.bindingList}>
         {user.attachments.map((attachment) => <li key={attachment.id}>
           <div><strong>{attachment.label}</strong><small>{attachment.policyId} · {t(attachment.scope === "INSTALLATION" ? "installationScope" : "tenantScope")}{attachment.policyStatus === "RETIRED" ? ` · ${t("retiredPolicy")}` : ""}</small></div>
-          {revokeId === attachment.id ? <div className={styles.actions}>
-            <span>{t("revokePrompt")}</span><Button disabled={relationDisabled} onClick={async () => { if (await access.execute({ kind: "revoke-policy-attachment", attachmentId: attachment.id, resourceVersion: attachment.resourceVersion })) setRevokeId(null); }} size="small" variant="danger">{t("confirmRevoke")}</Button>
-            <Button disabled={relationDisabled} onClick={() => setRevokeId(null)} size="small" variant="ghost">{t("cancel")}</Button>
-          </div> : <Button aria-label={t("revokePolicy", { name: attachment.label })} disabled={relationDisabled || !attachment.canRevoke} title={!attachment.canRevoke ? restriction(attachment.revokeRestrictionReason) : undefined} onClick={() => setRevokeId(attachment.id)} size="small" variant="ghost">{t("revoke")}</Button>}
+          <Button aria-label={t("revokePolicy", { name: attachment.label })} disabled={relationDisabled || !attachment.canRevoke} title={!attachment.canRevoke ? restriction(attachment.revokeRestrictionReason) : undefined} onClick={(event) => {
+            if (access.beginUserPolicyRevocation(user, attachment.id)) lastTrigger.current = event.currentTarget;
+          }} size="small" variant="ghost">{t("revoke")}</Button>
         </li>)}
       </ul>
       {user.attachments.length === 0 ? <p className={styles.note}>{t("noPolicyAttachmentsHint")}</p> : null}
       {policyChanged ? <Alert status="warning">{t("policyRevisionChanged")} <Button size="small" variant="ghost" onClick={() => setSelectedPolicy(null)}>{t("reselectPolicy")}</Button></Alert> : null}
       {otherUserIntent ? <Alert status="warning">{t(otherUserIntent.phase === "review" ? "attachmentOtherUserReview" : "attachmentOtherUserPending", { user: otherUserIntent.userQualifiedName })}</Alert> : null}
-      {reviewingPolicy && attachmentIntent ? <section aria-label={t("attachmentReviewTitle")} className={styles.policyAttachmentReview}>
-        <h3 ref={reviewHeading} tabIndex={-1} className={styles.stepTitle}>{t("attachmentReviewTitle")}</h3>
+      {reviewingPolicy && relationIntent ? <section aria-label={t(relationIntent.kind === "attach" ? "attachmentReviewTitle" : "revocationReviewTitle")} className={styles.policyAttachmentReview}>
+        <h3 ref={reviewHeading} tabIndex={-1} className={styles.stepTitle}>{t(relationIntent.kind === "attach" ? "attachmentReviewTitle" : "revocationReviewTitle")}</h3>
         <dl className={styles.facts}>
-          <div><dt>{t("attachmentTarget")}</dt><dd>{attachmentIntent.userQualifiedName}<small>{attachmentIntent.userId}</small></dd></div>
-          <div><dt>{t("attachmentPolicy")}</dt><dd>{attachmentIntent.policyDisplayName}<small>{attachmentIntent.policyId}</small></dd></div>
-          <div><dt>{t("attachmentScope")}</dt><dd>{t(attachmentIntent.policyScope === "INSTALLATION" ? "installationScope" : "tenantScope")}</dd></div>
-          <div><dt>{t("attachmentVersion")}</dt><dd>{attachmentIntent.defaultVersionId} · {t("attachmentRevision", { revision: attachmentIntent.policyResourceVersion })}</dd></div>
+          <div><dt>{t("attachmentTarget")}</dt><dd>{relationIntent.userQualifiedName}<small>{relationIntent.userId}</small></dd></div>
+          <div><dt>{t("attachmentPolicy")}</dt><dd>{relationIntent.policyDisplayName}<small>{relationIntent.policyId}</small></dd></div>
+          <div><dt>{t("attachmentScope")}</dt><dd>{t(relationIntent.policyScope === "INSTALLATION" ? "installationScope" : "tenantScope")}</dd></div>
+          {relationIntent.kind === "attach" ? <div><dt>{t("attachmentVersion")}</dt><dd>{relationIntent.defaultVersionId} · {t("attachmentRevision", { revision: relationIntent.policyResourceVersion })}</dd></div>
+            : <div><dt>{t("revocationAttachment")}</dt><dd><Typography.Code>{relationIntent.attachmentId}</Typography.Code> · {t("attachmentRevision", { revision: relationIntent.attachmentResourceVersion })}</dd></div>}
         </dl>
-        <Alert status="warning">{t(attachmentIntent.policyScope === "INSTALLATION" ? "platformAttachmentReviewHint" : "tenantAttachmentReviewHint")}</Alert>
-        {attachmentIntent.phase === "unknown" ? <Alert status="warning">{t("attachmentUnknownResult", { requestId: attachmentIntent.requestId })}</Alert> : null}
-        {attachmentIntent.phase === "conflict" || attachmentIntent.phase === "rejected" ? <Alert status="danger">{t("attachmentRetryNeedsReview", { requestId: attachmentIntent.requestId })}{attachmentIntent.error ? ` ${t(`errors.${attachmentIntent.error}`)}` : ""}</Alert> : null}
+        <Alert status="warning">{t(relationIntent.kind === "revoke" ? "revocationReviewHint" : relationIntent.policyScope === "INSTALLATION" ? "platformAttachmentReviewHint" : "tenantAttachmentReviewHint")}</Alert>
+        {relationIntent.phase === "unknown" ? <Alert status="warning">{t(relationIntent.kind === "revoke" ? "revocationUnknownResult" : "attachmentUnknownResult", { requestId: relationIntent.requestId })}</Alert> : null}
+        {relationIntent.phase === "conflict" || relationIntent.phase === "rejected" ? <Alert status="danger">{t("attachmentRetryNeedsReview", { requestId: relationIntent.requestId })}{relationIntent.error ? ` ${t(`errors.${relationIntent.error}`)}` : ""}</Alert> : null}
         <div className={styles.actions}>
-          <Button disabled={disabled || (attachmentIntent.phase !== "review" && attachmentIntent.phase !== "unknown")} onClick={async () => {
-            if (await access.submitUserPolicyAttachment(attachmentIntent.requestId)) {
+          <Button disabled={disabled || (relationIntent.phase !== "review" && relationIntent.phase !== "unknown")} onClick={async () => {
+            if (await access.submitUserPolicyChange(relationIntent.requestId)) {
               setSelectedPolicy(null);
             }
-          }}>{t(attachmentIntent.phase === "unknown" ? "retryOriginalAttachment" : "confirmAttachPolicy")}</Button>
+          }} variant={relationIntent.kind === "revoke" ? "danger" : "primary"}>{t(relationIntent.phase === "unknown" ? "retryOriginalAttachment" : relationIntent.kind === "revoke" ? "confirmRevoke" : "confirmAttachPolicy")}</Button>
           <Button disabled={disabled} onClick={() => {
-            returnToSelection.current = attachmentIntent.phase === "review";
-            if (access.endUserPolicyAttachment(attachmentIntent.requestId) && attachmentIntent.phase !== "review") setSelectedPolicy(null);
-          }} variant="secondary">{t(attachmentIntent.phase === "review" ? "changeAttachmentSelection" : "endAttachmentIntent")}</Button>
+            returnToTrigger.current = relationIntent.phase === "review";
+            if (access.endUserPolicyChange(relationIntent.requestId) && relationIntent.phase !== "review") setSelectedPolicy(null);
+          }} variant="secondary">{t(relationIntent.phase === "review" ? relationIntent.kind === "attach" ? "changeAttachmentSelection" : "cancel" : "endAttachmentIntent")}</Button>
         </div>
       </section> : attachablePolicies.length > 0 ? <form className={styles.inlineForm} onSubmit={(event) => {
         event.preventDefault();
-        if (selectedPolicy && !policyChanged && !attachmentIntent) {
-          setRevokeId(null);
+        if (selectedPolicy && !policyChanged && !relationIntent) {
+          lastTrigger.current = reviewTrigger.current;
           access.beginUserPolicyAttachment(user, selectedPolicy.id);
         }
       }}>

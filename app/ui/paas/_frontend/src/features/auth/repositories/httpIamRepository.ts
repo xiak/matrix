@@ -2091,7 +2091,6 @@ export const httpAccountRepository: AccountRepository = {
       case "set-status": path = `/api/iam/v1/users/${encodeURIComponent(command.userId)}:set-status`; body = { status: command.status, resourceVersion: command.resourceVersion }; break;
       case "reset-password": path = `/api/iam/v1/users/${encodeURIComponent(command.userId)}:reset-password`; body = { initialPassword: command.initialPassword, resourceVersion: command.resourceVersion }; break;
       case "create-policy-attachment": path = "/api/iam/v1/policy-attachments"; body = { target: { kind: "USER", id: command.userId }, policyId: command.policyId, policyResourceVersion: command.policyResourceVersion }; break;
-      case "revoke-policy-attachment": path = `/api/iam/v1/policy-attachments/${encodeURIComponent(command.attachmentId)}:revoke`; body = { resourceVersion: command.resourceVersion }; break;
     }
     const result = await requestJSON<unknown>(path, { method: "POST", headers: { ...accountHeaders(credential), "Content-Type": "application/json" }, body: JSON.stringify({ ...body, requestId }) });
     if (command.kind === "create-account" || command.kind === "set-alias" || command.kind === "set-account-status" || command.kind === "recover-root-credentials") {
@@ -2105,14 +2104,6 @@ export const httpAccountRepository: AccountRepository = {
     if (command.kind === "create-policy-attachment") {
       const attachment = parsePolicyAttachment(result);
       if (attachment.target.id !== command.userId || attachment.policyId !== command.policyId) throw new Error("INVALID_IAM_RESPONSE");
-      return;
-    }
-    if (command.kind === "revoke-policy-attachment") {
-      const wire = accountRecord(result);
-      exactKeys(wire, ["apiVersion", "kind", "id", "resourceVersion", "revokedAt"]);
-      requireAccountKind(wire, "Revocation");
-      if (wire.id !== command.attachmentId || accountVersion(wire.resourceVersion) <= command.resourceVersion) throw new Error("INVALID_IAM_RESPONSE");
-      accountTimestamp(wire.revokedAt);
       return;
     }
     if (command.kind === "delete-user") {

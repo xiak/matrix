@@ -149,6 +149,7 @@ let userPlatformPolicies: Record<string, string[]> = {};
 const previewGroupVersions = new Map<string, { resourceVersion: number; updatedAt: string }>();
 const previewMemberships = new Map<string, GroupMembership>();
 const previewGroupAttachments = new Map<string, GroupPolicyAttachment>();
+const previewAttachmentRevocations = new Map<string, { attachmentId: string; expectedVersion: number; result: PolicyAttachmentRevocation }>();
 const initialPreviewSessions: SessionSummary[] = [
   {
     id: "session-ux-preview",
@@ -298,6 +299,7 @@ export function resetPreviewEnvironment(): void {
   accounts = initial.accounts;
   userPlatformPolicies = initial.userPlatformPolicies;
   clearPreviewGroupContractState();
+  previewAttachmentRevocations.clear();
   resetPreviewOwnSessions();
 }
 
@@ -1010,6 +1012,11 @@ export const previewAccountRepository: AccountRepository = {
   async revokePolicyAttachment(credential, attachmentId, command) {
     requirePreviewCredential(credential);
     requireRequestId(command.requestId);
+    const replay = previewAttachmentRevocations.get(command.requestId);
+    if (replay) {
+      if (replay.attachmentId !== attachmentId || replay.expectedVersion !== command.resourceVersion) throw new HttpProblem(409, "PREVIEW_REQUEST_CONFLICT");
+      return structuredClone(replay.result);
+    }
     const source = await workspace.read(credential);
     for (const group of source.groups) {
       const match = group.policyIds
@@ -1021,6 +1028,7 @@ export const previewAccountRepository: AccountRepository = {
       await workspace.execute(credential, { kind: "change-group-policies", id: group.id, added: [], removed: [match.policyId] });
       previewGroupAttachments.delete(groupAttachmentKey(group.id, match.policyId));
       const result: PolicyAttachmentRevocation = { id: attachmentId, resourceVersion: command.resourceVersion + 1, revokedAt };
+      previewAttachmentRevocations.set(command.requestId, { attachmentId, expectedVersion: command.resourceVersion, result });
       return result;
     }
     const userMatch = users.flatMap((user) => [
@@ -1029,8 +1037,14 @@ export const previewAccountRepository: AccountRepository = {
     ]).find((attachment) => attachment.id === attachmentId);
     if (!userMatch) throw new HttpProblem(404, "PREVIEW_ATTACHMENT_NOT_FOUND");
     if (userMatch.resourceVersion !== command.resourceVersion) throw new HttpProblem(409, "PREVIEW_ATTACHMENT_CHANGED");
-    await previewAccountRepository.execute(credential, { kind: "revoke-policy-attachment", attachmentId, resourceVersion: command.resourceVersion });
-    return { id: attachmentId, resourceVersion: command.resourceVersion + 1, revokedAt: new Date().toISOString() };
+    if (userMatch.scope === "INSTALLATION") userPlatformPolicies = {
+      ...userPlatformPolicies, [userMatch.target.id]: (userPlatformPolicies[userMatch.target.id] ?? []).filter((policyId) => policyId !== userMatch.policyId)
+    };
+    else await workspace.execute(credential, { kind: "set-user-policies", principalId: userMatch.target.id,
+      policyIds: (source.userPolicies[userMatch.target.id] ?? []).filter((policyId) => policyId !== userMatch.policyId) });
+    const result: PolicyAttachmentRevocation = { id: attachmentId, resourceVersion: command.resourceVersion + 1, revokedAt: new Date().toISOString() };
+    previewAttachmentRevocations.set(command.requestId, { attachmentId, expectedVersion: command.resourceVersion, result });
+    return result;
   },
   async execute(credential, command: AccountCommand) {
     requirePreviewCredential(credential);
@@ -1114,12 +1128,5 @@ export const previewAccountRepository: AccountRepository = {
       else userPlatformPolicies = { ...userPlatformPolicies, [command.userId]: [...selected, command.policyId] };
       return;
     }
-    const match = users.flatMap((user) => [
-      ...(snapshot.userPolicies[user.id] ?? []).map((policyId) => ({ user, policyId, attachment: policyAttachment(user.id, policyId) })),
-      ...(userPlatformPolicies[user.id] ?? []).map((policyId) => ({ user, policyId, attachment: policyAttachment(user.id, policyId, "INSTALLATION") }))
-    ]).find((entry) => entry.attachment.id === command.attachmentId);
-    if (!match || match.attachment.resourceVersion !== command.resourceVersion) throw new HttpProblem(409, "PREVIEW_ATTACHMENT_CHANGED");
-    if (match.attachment.scope === "INSTALLATION") userPlatformPolicies = { ...userPlatformPolicies, [match.user.id]: (userPlatformPolicies[match.user.id] ?? []).filter((policyId) => policyId !== match.policyId) };
-    else await workspace.execute(credential, { kind: "set-user-policies", principalId: match.user.id, policyIds: (snapshot.userPolicies[match.user.id] ?? []).filter((policyId) => policyId !== match.policyId) });
   }
 };

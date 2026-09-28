@@ -119,7 +119,9 @@ function accounts(overrides: Partial<AccountRepository> = {}): AccountRepository
     listPolicies: vi.fn().mockImplementation(async (_credential: string, platform: boolean) => directory(platform)),
     listAuthorizationProfiles: vi.fn().mockResolvedValue(profileDirectory()),
     listAccounts: vi.fn().mockResolvedValue({ items: [accountAccess(identity.account)], nextAfter: null }),
-    execute: vi.fn().mockResolvedValue(undefined), ...overrides
+    execute: vi.fn().mockResolvedValue(undefined),
+    revokePolicyAttachment: vi.fn().mockResolvedValue({ id: "attachment-child-a-system.paas-viewer", resourceVersion: 2, revokedAt: "2026-08-27T00:00:00Z" }),
+    ...overrides
   } as AccountRepository;
 }
 
@@ -243,10 +245,10 @@ function AccountIntentProbe() {
     <button onClick={() => access.changeRoleSessionRevokeIntent(null, accountSwitchIntent)}>remember-revoke</button>
     <button onClick={() => access.changeRoleSessionRevokeIntent(accountSwitchIntent.requestId, { ...accountSwitchIntent, phase: "checking" })}>late-old-update</button>
     <button onClick={() => { const target = access.scene?.users[0]; if (target) access.beginUserPolicyAttachment(target, platformPolicy.id); }}>begin-attachment</button>
-    <button onClick={() => { if (access.userPolicyAttachmentIntent) void access.submitUserPolicyAttachment(access.userPolicyAttachmentIntent.requestId); }}>submit-attachment</button>
+    <button onClick={() => { if (access.userPolicyChangeIntent) void access.submitUserPolicyChange(access.userPolicyChangeIntent.requestId); }}>submit-attachment</button>
     <output aria-label="active-account">{access.scene?.accountId ?? "none"}</output>
     <output aria-label="pending-revoke">{access.roleSessionRevokeIntent?.requestId ?? "none"}</output>
-    <output aria-label="pending-attachment">{access.userPolicyAttachmentIntent?.requestId ?? "none"}</output>
+    <output aria-label="pending-attachment">{access.userPolicyChangeIntent?.requestId ?? "none"}</output>
     <output aria-label="attachment-success">{access.success ?? "none"}</output>
   </>;
 }
@@ -2004,7 +2006,7 @@ describe("account access", () => {
     await screen.findByRole("button", { name: "原请求重试" });
     await user.click(screen.getByRole("button", { name: "返回列表" }));
     await user.click(await screen.findByRole("button", { name: "查看用户 operator" }));
-    expect(screen.getByText(/developer@tenant-a 的策略关联请求仍待处理/)).toBeTruthy();
+    expect(screen.getByText(/developer@tenant-a 的策略关系请求仍待处理/)).toBeTruthy();
     expect((screen.getByRole("button", { name: "审阅关联" }) as HTMLButtonElement).disabled).toBe(true);
     expect(execute).toHaveBeenCalledTimes(1);
   });
@@ -2014,11 +2016,21 @@ describe("account access", () => {
     await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
     await user.click(screen.getByRole("button", { name: "撤销策略 ReadOnlyAccess" }));
     expect(repository.execute).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "确认撤销" }));
-    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "revoke-policy-attachment", attachmentId: "attachment-child-a-system.paas-viewer", resourceVersion: 1 }));
+    expect(repository.revokePolicyAttachment).not.toHaveBeenCalled();
+    let review = screen.getByRole("region", { name: "确认撤销直接关联" });
+    expect(within(review).getByText(/attachment-child-a-system.paas-viewer/)).toBeTruthy();
+    expect(within(review).getByText(/修订 1/)).toBeTruthy();
+    expect(within(review).getByRole("heading", { name: "确认撤销直接关联" })).toBe(document.activeElement);
+    await user.click(within(review).getByRole("button", { name: "取消" }));
+    expect(screen.getByRole("button", { name: "撤销策略 ReadOnlyAccess" })).toBe(document.activeElement);
+    expect(repository.revokePolicyAttachment).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "撤销策略 ReadOnlyAccess" }));
+    review = screen.getByRole("region", { name: "确认撤销直接关联" });
+    await user.click(within(review).getByRole("button", { name: "确认撤销" }));
+    await waitFor(() => expect(repository.revokePolicyAttachment).toHaveBeenCalledWith(credential, "attachment-child-a-system.paas-viewer", { resourceVersion: 1, requestId: expect.stringMatching(/^ui-user-revocation-/) }));
     await waitFor(() => expect((screen.getByRole("button", { name: "禁用用户" }) as HTMLButtonElement).disabled).toBe(false));
     await user.click(screen.getByRole("button", { name: "禁用用户" }));
-    expect(repository.execute).toHaveBeenCalledTimes(1);
+    expect(repository.execute).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "确认禁用" }));
     await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "set-status", userId: "child-a", status: "DISABLED", resourceVersion: 2 }));
     await waitFor(() => expect((screen.getByRole("button", { name: "重置密码" }) as HTMLButtonElement).disabled).toBe(false));
@@ -2027,6 +2039,51 @@ describe("account access", () => {
     await user.click(screen.getByRole("button", { name: "确认重置密码" }));
     await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "reset-password", userId: "child-a", initialPassword: "Reset-Only-Test-Password-74!", resourceVersion: 2 }));
     expect(screen.queryByDisplayValue("Reset-Only-Test-Password-74!")).toBeNull();
+  });
+
+  it("keeps an uncertain direct revocation across IAM routes and retries only its frozen request", async () => {
+    const revokePolicyAttachment = vi.fn().mockRejectedValueOnce(new Error("connection lost after commit"))
+      .mockResolvedValue({ id: "attachment-child-a-system.paas-viewer", resourceVersion: 2, revokedAt: "2026-08-27T00:00:00Z" });
+    const { user, repository } = await openAccess(accounts({ revokePolicyAttachment }));
+    await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await user.click(screen.getByRole("button", { name: "撤销策略 ReadOnlyAccess" }));
+    const review = screen.getByRole("region", { name: "确认撤销直接关联" });
+    expect(within(review).getByText(/仅撤销该子用户的这条直接关联/)).toBeTruthy();
+    expect((screen.getByRole("button", { name: "撤销策略 ReadOnlyAccess" }) as HTMLButtonElement).disabled).toBe(true);
+    await user.click(within(review).getByRole("button", { name: "确认撤销" }));
+    await screen.findByRole("button", { name: "原请求重试" });
+    const original = revokePolicyAttachment.mock.calls[0]!;
+    expect(original).toEqual([credential, "attachment-child-a-system.paas-viewer", {
+      resourceVersion: 1, requestId: expect.stringMatching(/^ui-user-revocation-/)
+    }]);
+    expect(screen.getByText(/当前关系目录不能证明这次请求是否完成/)).toBeTruthy();
+
+    await user.click(screen.getByTestId("nav-policies"));
+    expect(screen.queryByRole("region", { name: "确认撤销直接关联" })).toBeNull();
+    await user.click(screen.getByTestId("nav-users"));
+    await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    const recovered = screen.getByRole("region", { name: "确认撤销直接关联" });
+    expect(within(recovered).getByText((content) => content.includes(original[2].requestId))).toBeTruthy();
+    expect(revokePolicyAttachment).toHaveBeenCalledTimes(1);
+    await user.click(within(recovered).getByRole("button", { name: "原请求重试" }));
+    await waitFor(() => expect(revokePolicyAttachment).toHaveBeenCalledTimes(2));
+    expect(revokePolicyAttachment.mock.calls[1]).toEqual(original);
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
+
+  it("closes a conflicting direct revocation intent without claiming the attachment was removed", async () => {
+    const revokePolicyAttachment = vi.fn().mockRejectedValue(new HttpProblem(409, "IAM_CONFLICT"));
+    const { user } = await openAccess(accounts({ revokePolicyAttachment }));
+    await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await user.click(screen.getByRole("button", { name: "撤销策略 ReadOnlyAccess" }));
+    await user.click(screen.getByRole("button", { name: "确认撤销" }));
+    const review = screen.getByRole("region", { name: "确认撤销直接关联" });
+    await within(review).findByText(/未完成可信确认/);
+    expect(within(review).queryByRole("button", { name: "原请求重试" })).toBeNull();
+    expect((within(review).getByRole("button", { name: "确认撤销" }) as HTMLButtonElement).disabled).toBe(true);
+    await user.click(within(review).getByRole("button", { name: "结束原意图并重新读取" }));
+    await waitFor(() => expect(screen.queryByRole("region", { name: "确认撤销直接关联" })).toBeNull());
+    expect(revokePolicyAttachment).toHaveBeenCalledTimes(1);
   });
 
   it.each(["identity", "directory", "principal", "root-directory"])("fails closed on a mismatched %s instead of showing another subject", async (mismatch) => {
