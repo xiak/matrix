@@ -370,13 +370,14 @@ func (value *gate) rejectIncompatibleTOTPBackupKey(ctx context.Context, backupID
 }
 
 type rejectedUpgradeBoundary struct {
-	journal    lifecycle.Journal
-	backups    []string
-	releases   []string
-	containers []string
-	images     []string
-	volumes    []string
-	networks   []string
+	journal       lifecycle.Journal
+	backups       []string
+	releases      []string
+	recoveryState []string
+	containers    []string
+	images        []string
+	volumes       []string
+	networks      []string
 }
 
 func directoryEntryNames(path string) ([]string, error) {
@@ -405,6 +406,14 @@ func (value *gate) captureRejectedUpgradeBoundary(ctx context.Context) (rejected
 	result.releases, err = directoryEntryNames(filepath.Join(value.config.root, "releases"))
 	if err != nil {
 		return rejectedUpgradeBoundary{}, err
+	}
+	stateRoot := filepath.Join(value.config.root, "state", "iam-authentication-recovery")
+	if entries, readErr := os.ReadDir(stateRoot); readErr == nil {
+		for _, entry := range entries {
+			result.recoveryState = append(result.recoveryState, entry.Name())
+		}
+	} else if !errors.Is(readErr, os.ErrNotExist) {
+		return rejectedUpgradeBoundary{}, readErr
 	}
 	for _, inventory := range []struct {
 		arguments []string
