@@ -606,4 +606,12 @@ describe("account access", () => {
     expect(screen.queryByText("PRIVATE OTHER USER")).toBeNull();
     expect(screen.queryByRole("button", { name: "创建用户" })).toBeNull();
   });
+
+  it("keeps personal security available when the separate directory read fails", async () => {
+    const repository = accounts({ currentIdentity: vi.fn().mockRejectedValue(new Error("directory contract unavailable")) });
+    await openAccess(repository);
+    expect((await screen.findByRole("alert")).textContent).toContain("暂时不可用");
+    expect(screen.getByRole("heading", { name: "账号安全" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "创建用户" })).toBeNull();
+  });
 });

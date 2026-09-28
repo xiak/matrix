@@ -346,6 +346,19 @@ retained-data IAM40-to-IAM45 process upgrade. The test container and its
 anonymous volume were removed. This is not the installed LIVE browser or
 combined signed A/B acceptance, which remain open.
 
+A live browser against the task-local signed `495fc04e` installation exposed
+an integration mismatch: the installed IAM responds on `/v1/users` and
+`/v1/accounts`, while this console's account directory still requests the
+superseded `/v1/principals` and `/v1/organizations` endpoints, which returned
+404. The default root account also authenticated normally without a required
+MFA policy, so that login is not evidence of the restricted first-enrollment
+challenge. The personal-security panel now remains independently reachable
+when a directory read fails, without showing stale directory data or granting
+directory actions; its focused 30-test regression and the bounded 169-test
+frontend suite passed, along with type/lint/architecture/contrast and a
+deterministic 73-file embedded export. The directory contract adaptation and
+an installed LIVE restricted-enrollment browser gate remain open.
+
 - Gate A implementation replaces the Phase 1 page with the complete donor-
   shaped App Router -> route -> provider -> repository -> scene -> renderer ->
   public-component chain, seven static routes, memory-only IAM sessions,

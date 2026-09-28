@@ -493,6 +493,25 @@ passed Go, UI, authority-process and node-process independently. CI does not
 contain the task-local signed packages, so its green status is not the signed
 runtime result.
 
+The historical-catalog consumer fix at
+`495fc04e41310e28ff9801a9511fb83b1d64188f` admits only the authenticated
+immediate predecessor's sealed catalog while keeping actual upgrade,
+rollback and recovery admission on the full release profile. Its exact
+[Verification run](https://github.com/xiak/matrix/actions/runs/36381916069)
+passed Go, UI, authority-process and node-process. Task-local signed A/B/C/D
+packages then passed a fresh external-network-disabled 160 test-engine run:
+the A→B→C retained migration and C→D equal-profile lifecycle, original-primary
+credential recovery, delivered-mail first MFA binding, two application
+generations, Audit, protected backup, failed-candidate rollback, explicit
+rollback and selected-backup recovery completed in 799.36 seconds. Only the
+task-owned Docker-in-Docker container was restarted; the 23.57-second
+after-restart gate passed, with the remote host boot ID unchanged. A separate
+536.23-second signed browser-ready run reached D with its predecessor C.
+Both disposable engines and their data were removed. These facts close this
+exact signed offline lifecycle, not the distinct live browser ceremony or
+combined two-host admission; the signer remains task-local, not a published
+production trust root.
+
 Mutable Account security settings and factor replacement add a recovery fence.
 Each new protected backup must seal a separate, non-secret authentication and
 authorization state digest from the same PostgreSQL snapshot as `pg_dump`;

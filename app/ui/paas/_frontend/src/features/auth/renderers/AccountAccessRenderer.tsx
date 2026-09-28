@@ -341,7 +341,10 @@ function AccountAccessContent() {
         <div><small>当前登录用户</small><strong>{scene.identityLabel}<Badge status="info">{scene.isPrimary ? "主账号" : "IAM 子用户"}</Badge></strong><small>{scene.roles.join(" · ") || "尚未授予业务权限"}</small></div>
       </div>
       {tab === "users" ? <UserDirectory scene={scene} /> : tab === "tenants" ? <TenantDirectory scene={scene} /> : tab === "permissions" ? <PermissionCatalog /> : <UserSettings key={scene.accountVersion} scene={scene} />}
-    </> : null}
+    </> : !access.loading && tab === "settings" ? <div className={styles.stack}>
+      <PasswordSettings />
+      <PersonalSecuritySettings />
+    </div> : null}
   </section>;
 }
 
