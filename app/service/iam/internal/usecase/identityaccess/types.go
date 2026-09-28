@@ -168,7 +168,7 @@ type Transaction interface {
 	DeletePolicy(context.Context, PolicyDeletion) (iamv1.Policy, error)
 	ListAccounts(context.Context, AccountRead) (AccountManagementPage, error)
 	ReadAccountAsPlatform(context.Context, AccountRead, iamv1.AccountID) (AccountManagementSnapshot, error)
-	ReadAccountRoot(context.Context, AccountRead, iamv1.AccountID) (iamv1.RootIdentity, error)
+	ReadRootPasswordRecovery(context.Context, AccountRead, iamv1.AccountID, uint64) (iamv1.RootIdentity, PasswordReplacementMaterial, error)
 	CreateAccount(context.Context, AccountMutation) (iamv1.Account, error)
 	SetAccountStatus(context.Context, AccountStatusMutation) (iamv1.Account, error)
 	RecoverRootCredentials(context.Context, RootCredentialRecovery) (iamv1.Account, error)
@@ -461,6 +461,7 @@ type RootCredentialRecovery struct {
 	PrincipalID      iamv1.PrincipalID
 	ResourceVersion  uint64
 	PasswordHash     authority.PasswordHash
+	ExpectedPassword PasswordReplacementMaterial
 	AttachmentID     iamv1.PolicyAttachmentID
 	AuditEvent       auditv1.Event
 }

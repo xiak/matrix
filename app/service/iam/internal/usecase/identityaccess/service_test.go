@@ -537,6 +537,84 @@ func TestAdministratorPasswordResetPreparesOutsideLocksAndRechecksAuthority(t *t
 	}
 }
 
+func TestRootPasswordRecoveryPreservesPreparedIdentityAndCurrentAuthority(t *testing.T) {
+	tx := newCoreTransaction()
+	repository := &coreRepository{transaction: tx}
+	service, err := newCoreAuthority(repository, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := coreBootstrap(t)
+	if _, err := service.Bootstrap(t.Context(), document); err != nil {
+		t.Fatal(err)
+	}
+	login, err := service.Login(t.Context(), iamv1.LoginRequest{LoginName: "admin", Password: document.Administrator.Password, RequestID: "root-recover-login"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.ChangePassword(t.Context(), login.Credential, iamv1.ChangePasswordRequest{CurrentPassword: document.Administrator.Password,
+		NewPassword: coreSecret(t, "Root-Recovery-Actor-Password-73!"), RequestID: "root-recover-actor-change"}); err != nil {
+		t.Fatal(err)
+	}
+	current, recent := coreSecret(t, "Root-Recovery-Current-85!"), coreSecret(t, "Root-Recovery-History-86!")
+	currentHash, err := service.passwords.Hash(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	historyHash, err := service.passwords.Hash(recent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	material := PasswordReplacementMaterial{PasswordHash: currentHash, CredentialGeneration: 3,
+		PasswordHistory: []authority.PasswordHash{historyHash}, HistoryDigest: "sha256:" + strings.Repeat("c", 64)}
+	root := iamv1.RootIdentity{PrincipalID: "root-target", LoginName: "root.target"}
+	target := iamv1.AccountID("root-recovery-target")
+	prepared, writes := false, 0
+	tx.rootPasswordRead = func(read AccountRead, account iamv1.AccountID, version uint64) (iamv1.RootIdentity, PasswordReplacementMaterial, error) {
+		if read.AccountID != tx.organization.ID || read.ActorPrincipalID != tx.principal.ID || account != target || version != 7 || read.DecisionID == "" {
+			t.Fatal("root preparation did not retain the actor/target authority boundary")
+		}
+		prepared = true
+		return root, material, nil
+	}
+	tx.rootCredentialRecovery = func(mutation RootCredentialRecovery) (iamv1.Account, error) {
+		if !prepared || mutation.ActorAccountID != tx.organization.ID || mutation.AccountID != target || mutation.PrincipalID != root.PrincipalID ||
+			mutation.ExpectedPassword.PasswordHash != material.PasswordHash || mutation.ExpectedPassword.CredentialGeneration != material.CredentialGeneration ||
+			mutation.ExpectedPassword.HistoryDigest != material.HistoryDigest || !slices.Equal(mutation.ExpectedPassword.PasswordHistory, material.PasswordHistory) ||
+			mutation.AuditEvent.Target.TenantID != auditv1.TenantID(target) || mutation.AuditEvent.Target.ID != string(root.PrincipalID) {
+			t.Fatal("root finalization lost exact target/preparation")
+		}
+		writes++
+		return iamv1.Account{ID: target, RootIdentity: root}, nil
+	}
+	service.passwords = authority.NewPasswordHasher(passwordEntropyProbe{t, repository})
+	request := iamv1.RecoverRootCredentialsRequest{InitialPassword: current, ResourceVersion: 7, RequestID: "root-recover-intent"}
+	for _, secret := range []iamv1.Secret{current, recent} {
+		request.InitialPassword = secret
+		if _, err := service.RecoverRootCredentials(t.Context(), login.Credential, target, request); !errors.Is(err, ErrInvalidArgument) || writes != 0 {
+			t.Fatal("root recovery bypassed current/recent history", err)
+		}
+	}
+	request.InitialPassword = coreSecret(t, "Root-Recovery-Replacement-87!")
+	repository.afterTransaction = func(error) error { return ErrUnavailable }
+	if _, err := service.RecoverRootCredentials(t.Context(), login.Credential, target, request); !errors.Is(err, ErrUnavailable) || writes != 0 {
+		t.Fatal("unknown preparation admitted root recovery", err)
+	}
+	repository.afterTransaction = func(err error) error {
+		if prepared && err == nil {
+			tx.profileErr = ErrUnavailable
+		}
+		return err
+	}
+	if _, err := service.RecoverRootCredentials(t.Context(), login.Credential, target, request); !errors.Is(err, ErrUnavailable) || writes != 0 {
+		t.Fatal("root recovery reused old authority", err)
+	}
+	repository.afterTransaction, tx.profileErr = nil, nil
+	if _, err := service.RecoverRootCredentials(t.Context(), login.Credential, target, request); err != nil || writes != 1 {
+		t.Fatal("valid root recovery preparation failed", err)
+	}
+}
+
 func TestTOTPRemovalWorkflowKeepsCallerAndDoesNotExposeUncertainCompletion(t *testing.T) {
 	tx := newCoreTransaction()
 	repository := &coreRepository{transaction: tx}
@@ -2267,6 +2345,8 @@ type coreTransaction struct {
 	settingsMutationCalled   bool
 	passwordResetRead        func(AccountRead, iamv1.PrincipalID, uint64) (PasswordReplacementMaterial, error)
 	userChange               func(UserChange) (iamv1.User, error)
+	rootPasswordRead         func(AccountRead, iamv1.AccountID, uint64) (iamv1.RootIdentity, PasswordReplacementMaterial, error)
+	rootCredentialRecovery   func(RootCredentialRecovery) (iamv1.Account, error)
 }
 
 func (transaction *coreTransaction) ReadPasswordReset(_ context.Context, read AccountRead, user iamv1.PrincipalID, version uint64) (PasswordReplacementMaterial, error) {
@@ -2275,6 +2355,14 @@ func (transaction *coreTransaction) ReadPasswordReset(_ context.Context, read Ac
 
 func (transaction *coreTransaction) ChangeUser(_ context.Context, mutation UserChange) (iamv1.User, error) {
 	return transaction.userChange(mutation)
+}
+
+func (transaction *coreTransaction) ReadRootPasswordRecovery(_ context.Context, read AccountRead, account iamv1.AccountID, version uint64) (iamv1.RootIdentity, PasswordReplacementMaterial, error) {
+	return transaction.rootPasswordRead(read, account, version)
+}
+
+func (transaction *coreTransaction) RecoverRootCredentials(_ context.Context, mutation RootCredentialRecovery) (iamv1.Account, error) {
+	return transaction.rootCredentialRecovery(mutation)
 }
 
 func (transaction *coreTransaction) LockAccountSecuritySettings(_ context.Context, caller iamv1.Session) error {

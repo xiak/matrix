@@ -985,17 +985,40 @@ func (service *Authority) RecoverRootCredentials(ctx context.Context, credential
 	if err != nil {
 		return iamv1.Account{}, err
 	}
-	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMAccountRootCredentialsRecover, iamv1.AuthorizationResourceInstance, "",
-		iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: string(id)}, request.RequestID,
+	if err := service.acquirePasswordWork(ctx); err != nil {
+		return iamv1.Account{}, err
+	}
+	defer service.releasePasswordWork()
+	target := iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: string(id)}
+	var root iamv1.RootIdentity
+	var originalSession iamv1.Session
+	original, err := withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMAccountRootCredentialsRecover, iamv1.AuthorizationResourceInstance, "", target, request.RequestID,
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, _ time.Time) (PasswordReplacementMaterial, error) {
+			originalSession = subject.Subject.Session
+			var material PasswordReplacementMaterial
+			var err error
+			root, material, err = tx.ReadRootPasswordRecovery(ctx, AccountRead{AccountID: subject.Subject.Organization.ID,
+				ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID}, id, request.ResourceVersion)
+			return material, err
+		})
+	if err != nil {
+		return iamv1.Account{}, err
+	}
+	if iamv1.ValidateRootIdentity(root) != nil {
+		return iamv1.Account{}, ErrUnavailable
+	}
+	if err := service.validatePasswordReplacement(ctx, request.InitialPassword, original.PasswordHash, original.PasswordHistory, original.HistoryDigest); err != nil {
+		return iamv1.Account{}, err
+	}
+	hash, err := service.passwords.Hash(request.InitialPassword)
+	if err != nil {
+		return iamv1.Account{}, ErrUnavailable
+	}
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMAccountRootCredentialsRecover, iamv1.AuthorizationResourceInstance, "", target, request.RequestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.Account, error) {
-			root, err := tx.ReadAccountRoot(ctx, AccountRead{AccountID: subject.Subject.Organization.ID,
-				ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID}, id)
-			if err != nil {
-				return iamv1.Account{}, err
-			}
-			hash, err := service.passwords.Hash(request.InitialPassword)
-			if err != nil {
-				return iamv1.Account{}, ErrUnavailable
+			if subject.Subject.Session.ID != originalSession.ID || subject.Subject.Organization.ID != originalSession.AccountID ||
+				subject.Subject.Principal.ID != originalSession.PrincipalID {
+				return iamv1.Account{}, ErrForbidden
 			}
 			attachmentID, err := service.config.NewID("attachment")
 			if err != nil {
@@ -1009,7 +1032,7 @@ func (service *Authority) RecoverRootCredentials(ctx context.Context, credential
 			return tx.RecoverRootCredentials(ctx, RootCredentialRecovery{
 				ActorAccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID,
 				DecisionID: decision.ID, AccountID: id, PrincipalID: root.PrincipalID,
-				ResourceVersion: request.ResourceVersion, PasswordHash: hash, AttachmentID: iamv1.PolicyAttachmentID(attachmentID), AuditEvent: event,
+				ResourceVersion: request.ResourceVersion, PasswordHash: hash, ExpectedPassword: original, AttachmentID: iamv1.PolicyAttachmentID(attachmentID), AuditEvent: event,
 			})
 		})
 }

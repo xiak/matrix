@@ -830,16 +830,46 @@ BEGIN
 END
 $function$;
 
-CREATE OR REPLACE FUNCTION iam.read_account_root(tenant text, actor text, decision text, target_tenant text)
-RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $function$
-DECLARE result jsonb;
+-- Recovery retains its original Account -> primary USER ordering. This helper
+-- cannot be executed by a runtime role or used to grant recovery authority.
+CREATE OR REPLACE FUNCTION iam.lock_recoverable_root(target_tenant text, expected_version bigint)
+RETURNS text LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE stored_version bigint; selected_primary text;
+BEGIN
+    IF expected_version IS NULL OR expected_version < 1 THEN
+        RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='root recovery version is invalid';
+    END IF;
+    PERFORM set_config('matrix.iam_tenant_id',target_tenant,true);
+    SELECT account.resource_version INTO stored_version FROM iam.accounts AS account WHERE account.id=target_tenant FOR UPDATE;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='account is unavailable'; END IF;
+    IF stored_version <> expected_version THEN RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='account version conflicts'; END IF;
+    SELECT root.principal_id INTO selected_primary FROM iam.account_roots AS root JOIN iam.principals AS principal
+        ON principal.tenant_id=root.account_id AND principal.id=root.principal_id
+        WHERE root.account_id=target_tenant AND principal.principal_type='USER' AND principal.deleted_at IS NULL FOR UPDATE OF principal;
+    IF NOT FOUND OR EXISTS(SELECT 1 FROM iam.policy_attachments AS binding WHERE binding.tenant_id=target_tenant
+        AND binding.target_id=selected_primary AND binding.target_kind='USER' AND binding.authority_scope='INSTALLATION' AND binding.revoked_at IS NULL) THEN
+        RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='root credential recovery is forbidden';
+    END IF;
+    RETURN selected_primary;
+END
+$function$;
+
+DROP FUNCTION IF EXISTS iam.read_account_root(text,text,text,text);
+CREATE OR REPLACE FUNCTION iam.read_root_password_recovery(tenant text, actor text, decision text, target_tenant text, expected_version bigint)
+RETURNS TABLE(principal_id text,login_name text,password_hash text,credential_generation bigint,password_history text[],history_digest text)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE selected_primary text; credential iam.user_credentials%ROWTYPE;
 BEGIN
     PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.account.recover-root-credentials','ACCOUNT',target_tenant,'INSTANCE',NULL);
-    PERFORM set_config('matrix.iam_tenant_id',target_tenant,true);
-    SELECT jsonb_build_object('principalId',root.principal_id,'loginName',root.login_name)
-      INTO result FROM iam.account_roots AS root WHERE root.account_id=target_tenant;
-    IF result IS NULL THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='account root is unavailable'; END IF;
-    RETURN result;
+    selected_primary:=iam.lock_recoverable_root(target_tenant,expected_version);
+    SELECT * INTO credential FROM iam.user_credentials c WHERE c.tenant_id=target_tenant AND c.principal_id=selected_primary FOR UPDATE;
+    IF NOT FOUND OR NOT iam.valid_password_history(credential.password_history,credential.password_history_digest,
+        credential.credential_version,credential.password_changed_at) THEN
+        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='password history is unavailable';
+    END IF;
+    RETURN QUERY SELECT selected_primary,root.login_name,credential.password_hash,credential.credential_version,
+        ARRAY(SELECT e.value->>'hash' FROM jsonb_array_elements(credential.password_history) WITH ORDINALITY e(value,ordinality) ORDER BY e.ordinality),
+        'sha256:'||encode(credential.password_history_digest,'hex') FROM iam.account_roots root WHERE root.account_id=target_tenant;
 END
 $function$;
 
@@ -929,37 +959,39 @@ BEGIN
 END
 $function$;
 
+DROP FUNCTION IF EXISTS iam.recover_root_credentials(text,text,text,text,text,bigint,text,text,jsonb);
 CREATE OR REPLACE FUNCTION iam.recover_root_credentials(tenant text, actor text, decision text,
-    target_tenant text, primary_id text, expected_version bigint, new_password_hash text, new_binding_id text, event jsonb)
+    target_tenant text, primary_id text, expected_version bigint, new_password_hash text, new_binding_id text, event jsonb,
+    expected_generation bigint, expected_password_hash text, expected_history_digest text)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $function$
-DECLARE stored_version bigint;
+DECLARE credential iam.user_credentials%ROWTYPE;
 BEGIN
     PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.account.recover-root-credentials','ACCOUNT',target_tenant,'INSTANCE',NULL);
     IF expected_version IS NULL OR expected_version < 1 OR new_password_hash IS NULL
         OR new_password_hash NOT LIKE '$matrix-iam-v1$argon2id$v=19$%'
         OR event#>>'{target,tenantId}' IS DISTINCT FROM target_tenant
-        OR COALESCE(new_binding_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
+        OR COALESCE(new_binding_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        OR expected_generation IS NULL OR expected_generation NOT BETWEEN 1 AND 9007199254740990
+        OR COALESCE(expected_password_hash,'') NOT LIKE '$matrix-iam-v1$argon2id$v=19$%'
+        OR COALESCE(expected_history_digest,'') !~ '^sha256:[0-9a-f]{64}$' OR expected_password_hash=new_password_hash THEN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='root credential recovery is invalid';
     END IF;
-    PERFORM set_config('matrix.iam_tenant_id',target_tenant,true);
-    SELECT account.resource_version INTO stored_version FROM iam.accounts AS account WHERE account.id=target_tenant FOR UPDATE;
-    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='account is unavailable'; END IF;
-    IF stored_version <> expected_version THEN RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='account version conflicts'; END IF;
-    -- Serialize all credential takeover checks with platform grants on this USER.
-    PERFORM 1 FROM iam.account_roots AS root JOIN iam.principals AS principal
-        ON principal.tenant_id=root.account_id AND principal.id=root.principal_id
-        WHERE root.account_id=target_tenant AND root.principal_id=primary_id
-          AND principal.principal_type='USER' FOR UPDATE OF principal;
-    IF NOT FOUND OR EXISTS(SELECT 1 FROM iam.policy_attachments AS binding WHERE binding.tenant_id=target_tenant
-        AND binding.target_id=primary_id AND binding.target_kind='USER' AND binding.authority_scope='INSTALLATION' AND binding.revoked_at IS NULL) THEN
+    IF iam.lock_recoverable_root(target_tenant,expected_version) IS DISTINCT FROM primary_id THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='root credential recovery is forbidden';
+    END IF;
+    SELECT * INTO credential FROM iam.user_credentials c WHERE c.tenant_id=target_tenant AND c.principal_id=primary_id FOR UPDATE;
+    IF NOT FOUND OR credential.credential_version<>expected_generation OR credential.password_hash<>expected_password_hash
+        OR expected_history_digest<>'sha256:'||encode(credential.password_history_digest,'hex')
+        OR NOT iam.valid_password_history(credential.password_history,credential.password_history_digest,
+            credential.credential_version,credential.password_changed_at) THEN
+        RAISE EXCEPTION USING ERRCODE='P0002',MESSAGE='root password changed concurrently';
     END IF;
     UPDATE iam.principals AS principal SET status='ACTIVE',must_change_password=true,
         resource_version=principal.resource_version+1,updated_at=transaction_timestamp()
     WHERE principal.tenant_id=target_tenant AND principal.id=primary_id;
-    UPDATE iam.user_credentials AS credential SET password_hash=new_password_hash,changed_at=transaction_timestamp(),
-        credential_version=credential.credential_version+1
-    WHERE credential.tenant_id=target_tenant AND credential.principal_id=primary_id;
+    UPDATE iam.user_credentials AS c SET password_hash=new_password_hash,changed_at=transaction_timestamp(),
+        credential_version=c.credential_version+1
+    WHERE c.tenant_id=target_tenant AND c.principal_id=primary_id;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='primary credential is unavailable'; END IF;
     UPDATE iam.sessions AS session SET status='REVOKED',revoked_at=transaction_timestamp(),resource_version=session.resource_version+1
     WHERE session.tenant_id=target_tenant AND session.principal_id=primary_id AND session.status='ACTIVE';
@@ -1231,8 +1263,8 @@ REVOKE ALL ON FUNCTION iam.account_snapshot(text), iam.account_management_snapsh
     iam.user_access_snapshot(text,text),
     iam.append_account_event(text,text,text,text,text,text,jsonb) FROM PUBLIC, matrix_iam_api, matrix_iam_worker;
 REVOKE ALL ON FUNCTION iam.read_account(text,text), iam.read_account_as_platform(text,text,text,text),
-    iam.read_account_root(text,text,text,text), iam.set_account_status(text,text,text,text,text,bigint,jsonb),
-    iam.recover_root_credentials(text,text,text,text,text,bigint,text,text,jsonb),
+    iam.read_root_password_recovery(text,text,text,text,bigint), iam.set_account_status(text,text,text,text,text,bigint,jsonb),
+    iam.recover_root_credentials(text,text,text,text,text,bigint,text,text,jsonb,bigint,text,text),
     iam.read_audit_evidence(text,text,text,text,jsonb),
     iam.list_users(text,text,text,text), iam.list_accounts(text,text,text,text),
     iam.create_account(text,text,text,text,text,text,text,text,text,jsonb),
@@ -1242,8 +1274,8 @@ REVOKE ALL ON FUNCTION iam.read_account(text,text), iam.read_account_as_platform
     iam.delete_user(text,text,text,text,bigint,jsonb),
     iam.change_user(text,text,text,text,bigint,text,text,jsonb,bigint,text,text) FROM PUBLIC, matrix_iam_worker;
 GRANT EXECUTE ON FUNCTION iam.read_account(text,text), iam.read_account_as_platform(text,text,text,text),
-    iam.read_account_root(text,text,text,text), iam.set_account_status(text,text,text,text,text,bigint,jsonb),
-    iam.recover_root_credentials(text,text,text,text,text,bigint,text,text,jsonb),
+    iam.read_root_password_recovery(text,text,text,text,bigint), iam.set_account_status(text,text,text,text,text,bigint,jsonb),
+    iam.recover_root_credentials(text,text,text,text,text,bigint,text,text,jsonb,bigint,text,text),
     iam.read_audit_evidence(text,text,text,text,jsonb),
     iam.list_users(text,text,text,text), iam.list_accounts(text,text,text,text),
     iam.create_account(text,text,text,text,text,text,text,text,text,jsonb),
@@ -1281,4 +1313,32 @@ RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $funct
               AND acl.grantee<>p.proowner))
 $function$;
 REVOKE ALL ON FUNCTION iam.user_password_reset_contract_ready() FROM PUBLIC,matrix_iam_api,matrix_iam_worker,
+    matrix_iam_notification_worker,matrix_iam_credential_recovery,matrix_iam_authentication_recovery,matrix_iam_backup_custody;
+
+REVOKE ALL ON FUNCTION iam.lock_recoverable_root(text,bigint) FROM PUBLIC,matrix_iam_api,matrix_iam_worker,
+    matrix_iam_notification_worker,matrix_iam_credential_recovery,matrix_iam_authentication_recovery,matrix_iam_backup_custody;
+CREATE OR REPLACE FUNCTION iam.root_password_recovery_contract_ready()
+RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $function$
+    SELECT to_regprocedure('iam.read_account_root(text,text,text,text)') IS NULL
+      AND to_regprocedure('iam.recover_root_credentials(text,text,text,text,text,bigint,text,text,jsonb)') IS NULL
+      AND (SELECT count(*)=3 FROM pg_catalog.pg_proc p JOIN (VALUES
+        ('iam.lock_recoverable_root(text,bigint)',false,'text',false,'target_tenant,expected_version'),
+        ('iam.read_root_password_recovery(text,text,text,text,bigint)',true,
+         'TABLE(principal_id text, login_name text, password_hash text, credential_generation bigint, password_history text[], history_digest text)',true,
+         'tenant,actor,decision,target_tenant,expected_version,principal_id,login_name,password_hash,credential_generation,password_history,history_digest'),
+        ('iam.recover_root_credentials(text,text,text,text,text,bigint,text,text,jsonb,bigint,text,text)',true,'jsonb',false,
+         'tenant,actor,decision,target_tenant,primary_id,expected_version,new_password_hash,new_binding_id,event,expected_generation,expected_password_hash,expected_history_digest'))
+        expected(signature,definer,result_type,returns_set,names)
+        ON p.oid=to_regprocedure(expected.signature) AND p.prosecdef=expected.definer
+          AND pg_get_function_result(p.oid)=expected.result_type AND p.proretset=expected.returns_set
+          AND array_to_string(p.proargnames,',')=expected.names
+        WHERE p.proowner='matrix_iam_owner'::regrole AND p.provolatile='v' AND NOT p.proisstrict
+          AND p.proconfig=ARRAY['search_path=pg_catalog, pg_temp']
+          AND has_function_privilege('matrix_iam_api',p.oid,'EXECUTE')=expected.definer
+          AND NOT EXISTS(SELECT 1 FROM aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) acl
+            WHERE acl.privilege_type='EXECUTE' AND (acl.is_grantable OR
+              acl.grantee NOT IN (p.proowner,CASE WHEN expected.definer THEN 'matrix_iam_api'::regrole ELSE p.proowner END))
+              AND acl.grantee<>p.proowner))
+$function$;
+REVOKE ALL ON FUNCTION iam.root_password_recovery_contract_ready() FROM PUBLIC,matrix_iam_api,matrix_iam_worker,
     matrix_iam_notification_worker,matrix_iam_credential_recovery,matrix_iam_authentication_recovery,matrix_iam_backup_custody;

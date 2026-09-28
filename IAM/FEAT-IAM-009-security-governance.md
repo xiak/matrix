@@ -1,6 +1,6 @@
 # FEAT-IAM-009：登录保护与安全治理
 
-- 状态：S1本人会话管理、S3a共享密码尝试及S2分项已有各自固定实现和真实证据，最近独立通过的后端为42035189（IAM45/Audit26）。主动解绑/重绑18bdcd9a（IAM46/Audit27）的独立CI最终failure，恢复窗口成功不抵消三项失败。后继ba17e702已推送新密码底线及测试修复，连同设置放宽竞争/谱系设计的固定HEAD3178b649之Verification36391053858已核对精确SHA、queued，尚非独立验收；本地证据见所属段落。S3账号可配置密码规则/历史/到期、Session idle、S4、资格变化的旧备份恢复及009完整发布仍未完成。以下设计不等于可用API；LIVE UI、签名安装及通知/恢复组合由对应owner另验，不继承局部源码状态。
+- 状态：S1本人会话管理、S3a共享密码尝试及S2分项已有各自固定实现和真实证据，最近独立通过的累计后端为3178b649（IAM46/Audit27，底线实现ba17e702）；Verification36391053858已核对精确SHA、completed/success，12项含恢复窗口及最终进程门禁均成功。原主动解绑/重绑18bdcd9a的独立CI failure不回填；后继修复与本地证据见所属段落。S3账号可配置密码规则/历史/到期、Session idle、S4、资格变化的旧备份恢复及009完整发布仍未完成。以下设计不等于可用API；LIVE UI、签名安装及通知/恢复组合由对应owner另验，不继承局部源码状态。
 - 依赖：003、005、007。
 - Owner：IAM 身份/凭据/会话治理，Audit evidence。
 
@@ -1063,13 +1063,17 @@ S3b正在实施，尚未完整验收。最小可验收结果是：管理员按�
 
 存储沿原`user_credentials`增加有界`password_history`、其内部完整性承诺及独立`password_changed_at`，不新建历史服务或公开hash查询。ALWAYS行触发器只在真实hash替换且generation准确加一时退役原verifier并保留最新24条；同hash的恢复fence保留历史和密码年龄。旧数据初始化为空历史/NULL年龄，不能由通用changed_at推测或用迁移时间补填；列集不完整时拒绝迁移。直接改历史、重算摘要后清空历史、改年龄或无代际推进替换hash均拒绝。唯一私有认证资格投影v3纳入年龄及历史承诺，年龄用时区无关的epoch值；公开snapshot/FILE、Audit canonical、ServiceIdentity/lookup_service和七列claim不变。
 
-普通Session改密及原LOGIN/ENROLLMENT的PASSWORD_CHANGE阶段已接入固定产品规则的历史防复用：当前密码及最近一个退役密码均拒绝；其余已保留记录仍先验证格式，但不暗中扩大当前默认窗口。有权准备的短事务返回真实有界历史及内部承诺，原两槽内串行比较与hash不持有数据库事务，最终写入锁内复核原Session/仪式、代际、current hash及history head。普通改密因新口令复用而拒绝时提交原尝试REJECTED，不退还已扣预算；挑战拒绝不消费原PASSWORD_CHANGE仪式，也不制造普通Session。LOGIN、邮件验证及其他密码尝试不返回历史材料。原无history参数的两个写函数删除，readiness核对新结果形状/执行权限，Audit存储测试消费者使用原准备结果，不直读表补造承诺。账号可配置规则、security-settings/requirements HTTP以及CreateUser/root/local recovery的全入口执行仍未完成；当前增量不是完整S3b验收，也不开放占位配置。
+普通Session改密及原LOGIN/ENROLLMENT的PASSWORD_CHANGE阶段已接入固定产品规则的历史防复用：当前密码及最近一个退役密码均拒绝；其余已保留记录仍先验证格式，但不暗中扩大当前默认窗口。有权准备的短事务返回真实有界历史及内部承诺，原两槽内串行比较与hash不持有数据库事务，最终写入锁内复核原Session/仪式、代际、current hash及history head。普通改密因新口令复用而拒绝时提交原尝试REJECTED，不退还已扣预算；挑战拒绝不消费原PASSWORD_CHANGE仪式，也不制造普通Session。LOGIN、邮件验证及其他密码尝试不返回历史材料。原无history参数的两个写函数删除，readiness核对新结果形状/执行权限，Audit存储测试消费者使用原准备结果，不直读表补造承诺。账号可配置规则、security-settings/requirements HTTP以及CreateUser/local recovery的全入口执行仍未完成；当前增量不是完整S3b验收，也不开放占位配置。
 
 该本人改密增量在同一专属限额PG18.6下串行race-p1实跑：完整HTTP145.75s、密码尝试66.31s、TOTP92.82s、安全设置107.96s、Audit双schema/受限角色6.67s通过。普通路径验证24条保留与实际默认1条检查，复用拒绝无部分效果且不退预算；LOGIN强制改密及首次ENROLLMENT改密使用各自真实仪式，保留两副本一胜者、reset/停用竞争与末端outbox回滚。直接SQL错误history head拒绝，与相同资格的准确head可执行后回滚的正向对照并列；Audit事实时间来自该次数据库事务。完整HTTP保留原3分钟预算与密码成本，修正原恢复fixture复用近期密码后重新通过，不以放宽生产校验适配旧测试。API/IAM/Audit默认race、architecture、vet及Linux amd64构建通过；SMTP分支SKIP不计真实投递。新私有函数形状的单前驱/独立进程与独立CI仍待S3b里程碑复验，以上不替代全入口、UI或发布验收。
 
 管理员reset沿原入口接入相同固定底线/历史比较，公开请求不变。准备事务以真实当前`iam.user.reset-password`决定取得目标同Account、版本相同、非本人/原root/未撤销安装附件的USER材料；与最终写入共用原Account→USER锁序。事务提交后才在有界槽内比较/hash，最终重新认证原Session并执行当前PDP，锁内同时比较目标版本、credential generation、current hash与history head；准备的历史允许决定不充当最终写许可。状态管理不取得密码材料，也不能附带密码expected值。原8参数`change_user`删除，仅API可调用封闭`read_password_reset`与11参数最终写入；内部材料沿原类型重命名复用且不可JSON/普通格式化输出，不新增公开历史查询。受保护身份、停用、forced及原会话撤销语义不变。
 
 管理员reset增量的同限额真库完整HTTP114.76s通过，包含当前/最近历史拒绝、准确材料成功对照、分别篡改generation/current hash/history head的原子冲突、准备提交后真实本人改密使旧reset失效，以及最终outbox故障不留凭据/历史/会话副作用。worker/离线凭据角色误得历史读取权，或API误得私有身份锁执行权，均使readiness关闭；撤销误授后恢复。原平台附件grant/reset/status竞争、双账号隔离、生命周期和物理owner审计保持。TOTP真库90.83s通过原强制改密/reset/停用竞争、恢复码/失败预算及真实30秒锁等待过期；等值迁移不补造缺失目的或MFA资格，SMTP缺失分支仍SKIP。identityaccess整包race45.479s、architecture2.250s、聚焦vet及IAM Linux amd64构建通过；单测只证明事务外Hash、准备提交未知拒绝和当前授权重检，不代替SQL资格证明。本片仍未执行Account可配置规则，源码IAM47/Audit27与发布profile边界不变。
+
+在线原root恢复也已接入固定底线/真实历史，公开恢复请求不变。原当前平台决定先在Account→原USER→credential锁序下核对原root、Account版本和未撤销安装附件保护，目的限定的准备仅返回该root的真实历史材料；比较/hash在原两槽内且无数据库事务。最终重新认证原Session/当前PDP并在同一锁序重验原root、Account版本、credential generation、current hash与history head。即使本人改密没有推进Account版本，旧恢复计算仍冲突且不改凭据/会话/附件/成功事实。删除旧`read_account_root`及九参数写入口，替换为仅API可用的五参数准备和十二参数最终写入；私有锁函数不向运行角色开放，readiness核对准确形状和执行权。既有在线恢复可重新启用原root及修复其账号管理员关系的语义不扩张：不启用暂停Account、不授平台附件、不复活旧撤销附件、不替换原root，也不改变MFA；它不等于权限更窄的安装离线恢复。
+
+本root增量在相同专属PG18.6限额下，完整HTTP串行race-p1最终163.86s通过（原3分钟预算和密码成本不变）：原root恢复21.36s，含当前/最近历史拒绝、分别篡改原root/generation/current hash/history head、准备后真实本人改密、末端outbox失败原子性、原恢复/停复用竞争及平台保护。新增worker/离线角色误得root历史读取、API误得私有锁执行的readiness负向与撤销后正向对照通过。第一次回归暴露SQL记录与表别名歧义，修正别名；后继回归暴露新增并发改密改变最近历史而旧fixture仍检查更早密码，改用实际最近退役密码后通过，没有放宽生产历史窗口。identityaccess整包race59.661s、architecture6.839s、聚焦vet及IAM Linux amd64构建通过。上述是本地源代码证据，独立CI、完整S3b与签名发布仍未验收。
 
 本地Go1.26.3/GOMAXPROCS2/512MiB的API、authority、identityaccess整包race最终分别30.824s/25.561s/39.912s通过；新增测试使用实际固定Argon2id产生24条不同历史，验证0/1/24窗口、当前拒绝、Unicode类别、损坏/取消及不修改原verifier。严格codec的有界双worker fuzz执行114283次通过，architecture/race、聚焦vet、API生成无额外差异及IAM Linux amd64构建通过。原API/IAM全子包及authorityprocess默认race均通过，但其中外部DSN缺失的SKIP不计真库证据。计算与契约准备不等于SQL/HTTP历史防复用、容量或完整S3b验收。
 
@@ -1101,7 +1105,8 @@ S3b正在实施，尚未完整验收。最小可验收结果是：管理员按�
 | CreateUser | 同Account当前有效规则，无更早历史；实际PDP、规则版本、目标不存在及原outbox在最终事务重检 |
 | ChangePassword与ChallengePasswordChange | 分别验证原Session/原受限仪式，再检查新口令与真实历史；既有日常保留当前会话选项、forced强撤其他和挑战完成语义保持 |
 | ResetUserPassword | 当前目标真实规则/历史，原受保护身份拒绝不变；管理员临时密码也不能免检查，仍强制改密并撤销旧资格 |
-| RecoverRootCredentials、RecoverLocalCredentials | 原目的与身份资格不扩权，使用固定产品底线/真实历史；不启用身份/租户、不授予附件、不改变MFA；本地能力及精确receipt保持原owner |
+| RecoverRootCredentials | 保持003既有原root恢复语义及当前平台授权，使用固定产品底线/真实历史；可修复原root日常管理但不复活旧撤销附件、不转让root、不授平台、不启用暂停Account、不改变MFA |
+| RecoverLocalCredentials | 原安装目的与资格不扩权，使用固定产品底线/真实历史；不启用身份/Account、不授予附件、不改变MFA；本地能力及精确receipt保持原owner |
 
 昂贵验证统一由原`authority/password.go`的严格Argon2id verifier及有界工作槽执行；哈希算法、盐长度、内存/迭代不成为Account配置。校验当前hash与最多24个旧hash串行执行；规则失败、历史匹配或成本预算不足不写凭据、历史、会话或成功事实，不向调用者透露匹配了第几个旧密码。失败预算按真实认证步骤持久消费，不因新口令不合格退还旧密码/OTP猜测额度。现有两槽仅证明单副本资源上限，集群公平/最大历史成本仍须011实测，不能在本片声称已完成HA/高并发容量。
 

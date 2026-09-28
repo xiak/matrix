@@ -2046,8 +2046,7 @@ BEGIN
                   AND protection.tgname IN ('authorization_decisions_are_immutable','authorization_decisions_cannot_be_truncated')
                   AND NOT protection.tgisinternal AND protection.tgenabled='A')=2
             AND to_regprocedure('iam.set_account_status(text,text,text,text,text,bigint,jsonb)') IS NOT NULL
-            AND to_regprocedure('iam.recover_root_credentials(text,text,text,text,text,bigint,text,text,jsonb)') IS NOT NULL
-            AND to_regprocedure('iam.read_account_root(text,text,text,text)') IS NOT NULL
+            AND iam.root_password_recovery_contract_ready()
             AND to_regprocedure('iam.read_user(text,text,text,text)') IS NOT NULL
             AND to_regprocedure('iam.update_user(text,text,text,text,text,bigint,jsonb)') IS NOT NULL
             AND to_regprocedure('iam.delete_user(text,text,text,text,bigint,jsonb)') IS NOT NULL

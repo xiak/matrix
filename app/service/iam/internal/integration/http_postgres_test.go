@@ -9224,25 +9224,33 @@ func (transaction authenticationReadTransaction) ReadPasswordReset(ctx context.C
 	return material, err
 }
 
+func (transaction authenticationReadTransaction) ReadRootPasswordRecovery(ctx context.Context, read identityaccess.AccountRead, account iamv1.AccountID, version uint64) (iamv1.RootIdentity, identityaccess.PasswordReplacementMaterial, error) {
+	root, material, err := transaction.Transaction.ReadRootPasswordRecovery(ctx, read, account, version)
+	if err == nil && transaction.passwordPurpose == "ROOT_RECOVERY" {
+		*transaction.read = true
+	}
+	return root, material, err
+}
+
 // Corrupt only a prepared final write, never its source database rows. The real
 // runtime role/function must reject it with an otherwise current decision.
-type passwordResetMutationRepository struct {
+type passwordMutationRepository struct {
 	identityaccess.Repository
 	field string
 }
 
-func (repository passwordResetMutationRepository) WithinTransaction(ctx context.Context, callback func(context.Context, identityaccess.Transaction) error) error {
+func (repository passwordMutationRepository) WithinTransaction(ctx context.Context, callback func(context.Context, identityaccess.Transaction) error) error {
 	return repository.Repository.WithinTransaction(ctx, func(ctx context.Context, tx identityaccess.Transaction) error {
-		return callback(ctx, passwordResetMutationTransaction{tx, repository.field})
+		return callback(ctx, passwordMutationTransaction{tx, repository.field})
 	})
 }
 
-type passwordResetMutationTransaction struct {
+type passwordMutationTransaction struct {
 	identityaccess.Transaction
 	field string
 }
 
-func (transaction passwordResetMutationTransaction) ChangeUser(ctx context.Context, change identityaccess.UserChange) (iamv1.User, error) {
+func (transaction passwordMutationTransaction) ChangeUser(ctx context.Context, change identityaccess.UserChange) (iamv1.User, error) {
 	expected := *change.ExpectedPassword
 	switch transaction.field {
 	case "generation":
@@ -9254,6 +9262,20 @@ func (transaction passwordResetMutationTransaction) ChangeUser(ctx context.Conte
 	}
 	change.ExpectedPassword = &expected
 	return transaction.Transaction.ChangeUser(ctx, change)
+}
+
+func (transaction passwordMutationTransaction) RecoverRootCredentials(ctx context.Context, change identityaccess.RootCredentialRecovery) (iamv1.Account, error) {
+	switch transaction.field {
+	case "generation":
+		change.ExpectedPassword.CredentialGeneration++
+	case "current":
+		change.ExpectedPassword.PasswordHash = change.ExpectedPassword.PasswordHistory[0]
+	case "history":
+		change.ExpectedPassword.HistoryDigest = "sha256:" + strings.Repeat("0", 64)
+	case "primary":
+		change.PrincipalID = "not-the-original-primary"
+	}
+	return transaction.Transaction.RecoverRootCredentials(ctx, change)
 }
 
 func (transaction authenticationReadTransaction) ReserveTOTPAttempt(ctx context.Context, request identityaccess.TOTPAttempt) (identityaccess.TOTPAttempt, bool, error) {
@@ -20475,7 +20497,7 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 		t.Fatalf("developer allowed decision=%#v err=%v", decision, err)
 	}
 	t.Run("tenant accounts and subusers", func(t *testing.T) {
-		proveTenantAccounts(t, ctx, handler, admin, loginWire.Credential, transactionFailures)
+		proveTenantAccounts(t, ctx, handler, admin, loginWire.Credential, transactionFailures, repository)
 	})
 	t.Run("password session policy", func(t *testing.T) {
 		provePasswordSessionPolicy(t, ctx, handler, admin, loginWire.Credential, repository)
@@ -21797,16 +21819,19 @@ func provePasswordSessionPolicy(t *testing.T, ctx context.Context, handler http.
 	// Reset must revoke old sessions before issuing any replacement-password
 	// sessions, and false cannot preserve another such temporary session.
 	beforeReset := identity(current)
-	for _, role := range []string{"matrix_iam_worker", "matrix_iam_credential_recovery", "matrix_iam_api"} {
-		entry := "iam.read_password_reset(text,text,text,text,bigint)"
-		if role == "matrix_iam_api" {
-			entry = "iam.lock_managed_user(text,text,text,bigint)"
-		}
-		if _, err := database.Exec(ctx, "GRANT EXECUTE ON FUNCTION "+entry+" TO "+role); err != nil {
+	for _, exposure := range []struct{ entry, role string }{
+		{"iam.read_password_reset(text,text,text,text,bigint)", "matrix_iam_worker"},
+		{"iam.read_password_reset(text,text,text,text,bigint)", "matrix_iam_credential_recovery"},
+		{"iam.lock_managed_user(text,text,text,bigint)", "matrix_iam_api"},
+		{"iam.read_root_password_recovery(text,text,text,text,bigint)", "matrix_iam_worker"},
+		{"iam.read_root_password_recovery(text,text,text,text,bigint)", "matrix_iam_credential_recovery"},
+		{"iam.lock_recoverable_root(text,bigint)", "matrix_iam_api"},
+	} {
+		if _, err := database.Exec(ctx, "GRANT EXECUTE ON FUNCTION "+exposure.entry+" TO "+exposure.role); err != nil {
 			t.Fatal(err)
 		}
 		request(http.MethodGet, "/ready", "", nil, http.StatusServiceUnavailable)
-		if _, err := database.Exec(ctx, "REVOKE ALL ON FUNCTION "+entry+" FROM "+role); err != nil {
+		if _, err := database.Exec(ctx, "REVOKE ALL ON FUNCTION "+exposure.entry+" FROM "+exposure.role); err != nil {
 			t.Fatal(err)
 		}
 		request(http.MethodGet, "/ready", "", nil, http.StatusOK)
@@ -21820,7 +21845,7 @@ func provePasswordSessionPolicy(t *testing.T, ctx context.Context, handler http.
 		}
 	}
 	for _, field := range []string{"generation", "current", "history"} {
-		workflow, err := newIAMAuthorityWithTOTP(t, passwordResetMutationRepository{repository, field}, identityaccess.Config{})
+		workflow, err := newIAMAuthorityWithTOTP(t, passwordMutationRepository{repository, field}, identityaccess.Config{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -22243,7 +22268,7 @@ func proveIAMOutboxClaims(t *testing.T, ctx context.Context, admin *pgx.Conn, co
 	}
 }
 
-func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler, admin *pgx.Conn, root string, failures *iamTransactionFailureTrace) {
+func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler, admin *pgx.Conn, root string, failures *iamTransactionFailureTrace, repository identityaccess.Repository) {
 	t.Helper()
 	const tenantA = "organization-http-integration"
 	const tenantB = "organization-customer-b"
@@ -22728,7 +22753,7 @@ func proveTenantAccounts(t *testing.T, ctx context.Context, handler http.Handler
 	})
 	assertIAMSecretsAbsent(t, ctx, admin, primaryBPassword, primaryBChanged, childPassword, childChangedA, childChangedB, resetPassword, primaryB, childSessionA, childSessionB, activeOne, activeTwo, resetSession)
 	t.Run("platform tenant lifecycle and original primary recovery", func(t *testing.T) {
-		proveTenantLifecycleHTTP(t, ctx, handler, admin, root, primaryB)
+		proveTenantLifecycleHTTP(t, ctx, handler, admin, root, primaryB, repository)
 	})
 }
 
@@ -23019,7 +23044,7 @@ func proveUserProfileAndDeletion(t *testing.T, ctx context.Context, handler http
 	assertIAMSecretsAbsent(t, ctx, database, initialPassword, changedPassword, bearer, protectedBearer)
 }
 
-func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, root, otherPrimary string) {
+func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, root, otherPrimary string, repository identityaccess.Repository) {
 	t.Helper()
 	const home = "organization-http-integration"
 	const tenantID = "organization-lifecycle"
@@ -23204,6 +23229,84 @@ func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Ha
 	}
 	request(http.MethodGet, "/v1/auth/me", primary, nil, http.StatusOK)
 	request(http.MethodGet, "/v1/auth/me", memberSession, nil, http.StatusOK)
+	for _, reused := range []string{changed, initial} {
+		unchanged(func() {
+			request(http.MethodPost, "/v1/accounts/"+tenantID+":recover-root-credentials", operator,
+				map[string]any{"initialPassword": reused, "resourceVersion": 1, "requestId": "root-history-rejected"}, http.StatusUnprocessableEntity)
+		})
+	}
+	for _, field := range []string{"generation", "current", "history", "primary"} {
+		workflow, err := newIAMAuthorityWithTOTP(t, passwordMutationRepository{repository, field}, identityaccess.Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		candidate, err := iamhttp.NewHandler(workflow, iamhttp.Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		unchanged(func() {
+			body := mustIAMJSON(t, map[string]any{"initialPassword": recovered, "resourceVersion": 1, "requestId": "root-wrong-" + field})
+			response := performIAMRequest(candidate, http.MethodPost, "/v1/accounts/"+tenantID+":recover-root-credentials", operator, body)
+			expected := http.StatusConflict
+			if field == "primary" {
+				expected = http.StatusForbidden
+			}
+			if response.Code != expected {
+				t.Fatalf("root recovery ignored prepared %s: %d", field, response.Code)
+			}
+		})
+	}
+	// A root can change its own password without advancing Account.version.
+	// That must invalidate an earlier recovery computation nonetheless.
+	reached, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	defer unblock()
+	prepared, err := newIAMAuthorityWithTOTP(t, authenticationReadBarrier{Repository: repository, reached: reached,
+		release: release, passwordPurpose: "ROOT_RECOVERY"}, identityaccess.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	preparedHandler, err := iamhttp.NewHandler(prepared, iamhttp.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	preparedResult := make(chan int, 1)
+	preparedBody := mustIAMJSON(t, map[string]any{"initialPassword": recovered, "resourceVersion": 1, "requestId": "root-prepared-before-change"})
+	go func() {
+		preparedResult <- performIAMRequest(preparedHandler, http.MethodPost, "/v1/accounts/"+tenantID+":recover-root-credentials", operator, preparedBody).Code
+	}()
+	select {
+	case <-reached:
+	case status := <-preparedResult:
+		t.Fatalf("root recovery never reached committed preparation: %d", status)
+	case <-ctx.Done():
+		t.Fatal("root recovery preparation timed out")
+	}
+	const peerPassword = "Root-Recovery-Peer-Password-73!"
+	changePassword(primary, changed, peerPassword)
+	if readAccount(tenantID).ResourceVersion != 1 {
+		t.Fatal("password preparation race did not keep Account version unchanged")
+	}
+	afterPeer := securityState()
+	unblock()
+	select {
+	case status := <-preparedResult:
+		if status != http.StatusConflict || securityState() != afterPeer {
+			t.Fatalf("root recovery reused a stale password computation: %d", status)
+		}
+	case <-ctx.Done():
+		t.Fatal("stale root recovery did not finish")
+	}
+	if _, err := database.Exec(ctx, `CREATE FUNCTION public.reject_root_history_fact() RETURNS trigger LANGUAGE plpgsql AS $body$ BEGIN
+	 IF NEW.event_document->>'action'='iam.account-root.credentials-recovered' THEN RAISE EXCEPTION 'synthetic root recovery fact failure'; END IF; RETURN NEW; END $body$;
+	 CREATE TRIGGER reject_root_history_fact BEFORE INSERT ON iam.audit_outbox FOR EACH ROW EXECUTE FUNCTION public.reject_root_history_fact()`); err != nil {
+		t.Fatal(err)
+	}
+	unchanged(func() { recoverPrimary(tenantID, 1, http.StatusServiceUnavailable) })
+	if _, err := database.Exec(ctx, `DROP TRIGGER reject_root_history_fact ON iam.audit_outbox; DROP FUNCTION public.reject_root_history_fact()`); err != nil {
+		t.Fatal(err)
+	}
 	// Seed a legacy damaged primary only as an adversarial fixture. Recovery
 	// itself must go through HTTP and must not resurrect the old revoked binding.
 	if _, err := database.Exec(ctx, `WITH revoked AS (
@@ -23240,7 +23343,7 @@ func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Ha
 	request(http.MethodGet, "/v1/users", primary, nil, http.StatusForbidden)
 	unchanged(func() {
 		request(http.MethodPost, "/v1/auth/password", primary,
-			map[string]any{"currentPassword": recovered, "newPassword": changed, "requestId": "request-lifecycle-history-rejected"}, http.StatusUnprocessableEntity)
+			map[string]any{"currentPassword": recovered, "newPassword": peerPassword, "requestId": "request-lifecycle-history-rejected"}, http.StatusUnprocessableEntity)
 	})
 	changePassword(primary, recovered, primaryReplacement)
 	// A delegated administrator is revocable; the primary is not replaced by it.
