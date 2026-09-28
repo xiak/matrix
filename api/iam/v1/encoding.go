@@ -995,6 +995,7 @@ func (value *LoginResponse) UnmarshalJSON(source []byte) error {
 		MustChangePassword  *bool                    `json:"mustChangePassword,omitempty"`
 		Challenge           *AuthenticationChallenge `json:"challenge,omitempty"`
 		ChallengeCredential Secret                   `json:"challengeCredential,omitempty"`
+		PasswordResetReason *PasswordResetReason     `json:"passwordResetReason,omitempty"`
 	}
 	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &wire) != nil {
 		return contractjson.ErrInvalidDocument
@@ -1017,6 +1018,13 @@ func (value *LoginResponse) UnmarshalJSON(source []byte) error {
 		if len(fields) != 3 || wire.Session != nil || wire.MustChangePassword != nil {
 			return contractjson.ErrInvalidDocument
 		}
+	case LoginAdminResetRequired:
+		// Even null, false or empty credential fields are forbidden: this is a
+		// terminal instruction, not a restricted authentication capability.
+		if len(fields) != 2 || wire.PasswordResetReason == nil {
+			return contractjson.ErrInvalidDocument
+		}
+		result.PasswordResetReason = *wire.PasswordResetReason
 	default:
 		return contractjson.ErrInvalidDocument
 	}
@@ -1027,10 +1035,21 @@ func (value *LoginResponse) UnmarshalJSON(source []byte) error {
 	return nil
 }
 
-// EncodeLoginResponse explicitly emits only the selected one-time credential.
+// EncodeLoginResponse emits only the selected branch. A reset requirement has
+// no credential, including an empty or null credential placeholder.
 func EncodeLoginResponse(response LoginResponse) ([]byte, error) {
 	if err := ValidateLoginResponse(response); err != nil {
 		return nil, err
+	}
+	if response.Outcome == LoginAdminResetRequired {
+		encoded, err := json.Marshal(struct {
+			Outcome             LoginOutcome        `json:"outcome"`
+			PasswordResetReason PasswordResetReason `json:"passwordResetReason"`
+		}{response.Outcome, response.PasswordResetReason})
+		if err != nil {
+			return nil, ErrEncodingFailed
+		}
+		return encoded, nil
 	}
 	if response.Outcome == LoginChallengeRequired {
 		encoded, err := json.Marshal(struct {

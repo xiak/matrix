@@ -13691,7 +13691,8 @@
       "LoginOutcome": {
         "enum": [
           "AUTHENTICATED",
-          "CHALLENGE_REQUIRED"
+          "CHALLENGE_REQUIRED",
+          "ADMIN_RESET_REQUIRED"
         ],
         "type": "string"
       },
@@ -13721,7 +13722,7 @@
       },
       "LoginResponse": {
         "additionalProperties": false,
-        "description": "Disjoint authentication result. A challenge is not a Session, bearer or authorization. Credential-bearing results require explicit encoding and no-store handling.",
+        "description": "Disjoint authentication result. A challenge is not a Session, bearer or authorization. ADMIN_RESET_REQUIRED is a terminal instruction with only a reason, no identity, credential or recovery permit. Runtime expiry enforcement is required before that branch can be issued. Results require explicit encoding and no-store handling.",
         "oneOf": [
           {
             "properties": {
@@ -13733,6 +13734,7 @@
               "outcome": {
                 "const": "AUTHENTICATED"
               },
+              "passwordResetReason": false,
               "session": {
                 "properties": {
                   "revokedAt": false,
@@ -13767,11 +13769,27 @@
               "outcome": {
                 "const": "CHALLENGE_REQUIRED"
               },
+              "passwordResetReason": false,
               "session": false
             },
             "required": [
               "challenge",
               "challengeCredential"
+            ]
+          },
+          {
+            "properties": {
+              "challenge": false,
+              "challengeCredential": false,
+              "credential": false,
+              "mustChangePassword": false,
+              "outcome": {
+                "const": "ADMIN_RESET_REQUIRED"
+              },
+              "session": false
+            },
+            "required": [
+              "passwordResetReason"
             ]
           }
         ],
@@ -13792,6 +13810,9 @@
           },
           "outcome": {
             "$ref": "#/components/schemas/LoginOutcome"
+          },
+          "passwordResetReason": {
+            "$ref": "#/components/schemas/PasswordResetReason"
           },
           "session": {
             "$ref": "#/components/schemas/Session"
@@ -14447,6 +14468,13 @@
           "source"
         ],
         "type": "object"
+      },
+      "PasswordResetReason": {
+        "enum": [
+          "EXPIRED",
+          "AGE_UNKNOWN"
+        ],
+        "type": "string"
       },
       "Policy": {
         "additionalProperties": false,

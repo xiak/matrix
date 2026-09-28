@@ -182,8 +182,18 @@ type ChallengePasswordChangeResponse struct {
 type LoginOutcome string
 
 const (
-	LoginAuthenticated     LoginOutcome = "AUTHENTICATED"
-	LoginChallengeRequired LoginOutcome = "CHALLENGE_REQUIRED"
+	LoginAuthenticated      LoginOutcome = "AUTHENTICATED"
+	LoginChallengeRequired  LoginOutcome = "CHALLENGE_REQUIRED"
+	LoginAdminResetRequired LoginOutcome = "ADMIN_RESET_REQUIRED"
+)
+
+// Unknown age is not evidence that a password has actually expired. Neither
+// reason grants a Session or the authority to reset a password.
+type PasswordResetReason string
+
+const (
+	PasswordResetExpired    PasswordResetReason = "EXPIRED"
+	PasswordResetAgeUnknown PasswordResetReason = "AGE_UNKNOWN"
 )
 
 // AuthenticationChallenge describes the next restricted authentication step,
@@ -500,7 +510,8 @@ type RegenerateRecoveryCodesResponse struct {
 }
 
 // LoginResponse is a disjoint result. Only AUTHENTICATED contains a Session;
-// CHALLENGE_REQUIRED contains no login bearer or password-change entitlement.
+// CHALLENGE_REQUIRED contains only its purpose-limited challenge capability.
+// ADMIN_RESET_REQUIRED contains only a reason, never an authentication capability.
 // Ordinary JSON marshaling is forbidden; use EncodeLoginResponse.
 type LoginResponse struct {
 	Outcome             LoginOutcome             `json:"outcome"`
@@ -509,6 +520,7 @@ type LoginResponse struct {
 	MustChangePassword  bool                     `json:"mustChangePassword,omitempty"`
 	Challenge           *AuthenticationChallenge `json:"challenge,omitempty"`
 	ChallengeCredential Secret                   `json:"challengeCredential,omitempty"`
+	PasswordResetReason PasswordResetReason      `json:"passwordResetReason,omitempty"`
 }
 
 type LogoutRequest struct {

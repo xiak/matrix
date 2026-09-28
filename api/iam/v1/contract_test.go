@@ -7119,6 +7119,76 @@ func TestIAMLoginResponsePublishesPasswordChangeRequirement(t *testing.T) {
 	}
 }
 
+func TestLoginAdministratorResetResultIsTerminal(t *testing.T) {
+	valid := LoginResponse{Outcome: LoginAdminResetRequired, PasswordResetReason: PasswordResetExpired}
+	secret, err := NewSecret("Example-Only-Terminal-Attack-83!")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mutate := range []func(*LoginResponse){
+		func(r *LoginResponse) { r.PasswordResetReason = "" },
+		func(r *LoginResponse) { r.PasswordResetReason = "expired" },
+		func(r *LoginResponse) { r.PasswordResetReason = "ACCOUNT_DISABLED" },
+		func(r *LoginResponse) { r.Session.ID = "forged-session" },
+		func(r *LoginResponse) { r.Credential = secret },
+		func(r *LoginResponse) { r.Challenge = &AuthenticationChallenge{} },
+		func(r *LoginResponse) { r.ChallengeCredential = secret },
+		func(r *LoginResponse) { r.MustChangePassword = true },
+	} {
+		invalid := valid
+		mutate(&invalid)
+		encoded, err := EncodeLoginResponse(invalid)
+		if ValidateLoginResponse(invalid) == nil || err == nil || len(encoded) != 0 {
+			t.Fatal("terminal reset result emitted authority or an unrecognized reason")
+		}
+	}
+	const wire = `{"outcome":"ADMIN_RESET_REQUIRED","passwordResetReason":"EXPIRED"}`
+	for _, malformed := range []string{
+		`null`, `{}`, wire + `{}`,
+		strings.Replace(wire, `"outcome":`, `"Outcome":`, 1),
+		strings.Replace(wire, `"passwordResetReason":`, `"passwordresetreason":`, 1),
+		strings.Replace(wire, `"passwordResetReason":`, `"passwordResetReason":"AGE_UNKNOWN","passwordResetReason":`, 1),
+		strings.Replace(wire, `"outcome":`, `"outcome":"AUTHENTICATED","outcome":`, 1),
+		strings.Replace(wire, `"outcome":`, `"recoveryPermission":true,"outcome":`, 1),
+		strings.Replace(wire, `"outcome":`, `"notificationContact":null,"outcome":`, 1),
+		strings.Repeat(" ", int(MaxRequestBytes)) + wire,
+	} {
+		previous := valid
+		if previous.UnmarshalJSON([]byte(malformed)) == nil || !reflect.DeepEqual(previous, valid) {
+			t.Fatal("invalid terminal document was accepted or partially changed the caller's result")
+		}
+	}
+}
+
+func FuzzLoginResponseRoundTrip(f *testing.F) {
+	authenticated, err := os.ReadFile("examples/login-response.json")
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add(authenticated)
+	f.Add([]byte(`{"outcome":"ADMIN_RESET_REQUIRED","passwordResetReason":"EXPIRED"}`))
+	f.Add([]byte(`{"outcome":"ADMIN_RESET_REQUIRED","passwordResetReason":"AGE_UNKNOWN"}`))
+	f.Add([]byte(`{"outcome":"CHALLENGE_REQUIRED","challenge":{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AuthenticationChallenge","id":"challenge-example","purpose":"LOGIN","nextStep":"TOTP","expiresAt":"2026-09-20T01:07:03Z"},"challengeCredential":"example-only-challenge-secret"}`))
+	f.Fuzz(func(t *testing.T, encoded []byte) {
+		var result LoginResponse
+		if result.UnmarshalJSON(encoded) != nil {
+			return
+		}
+		if ValidateLoginResponse(result) != nil {
+			t.Fatal("decoded login branch bypassed validation")
+		}
+		canonical, err := EncodeLoginResponse(result)
+		defer clear(canonical)
+		var decoded LoginResponse
+		if err != nil || decoded.UnmarshalJSON(canonical) != nil || !reflect.DeepEqual(result, decoded) {
+			t.Fatal("explicit encoding changed login branch or authority")
+		}
+		if ordinary, err := json.Marshal(result); !errors.Is(err, ErrSecretSerialization) || len(ordinary) != 0 {
+			t.Fatal("login result bypassed the explicit encoder")
+		}
+	})
+}
+
 func TestIAMOpenAPIPasswordResetCompletionIsReadOnlyAndExact(t *testing.T) {
 	document := loadIAMOpenAPI(t)
 	paths := mustIAMObject(t, document["paths"], "paths")

@@ -294,17 +294,24 @@ func ValidateLoginResponse(value LoginResponse) error {
 	switch value.Outcome {
 	case LoginAuthenticated:
 		if value.Challenge != nil || value.ChallengeCredential.Present() || !value.Credential.Present() ||
-			value.Session.Status != SessionActive || value.Session.RevokedAt != nil {
+			value.Session.Status != SessionActive || value.Session.RevokedAt != nil || value.PasswordResetReason != "" {
 			return errors.New("authenticated login result is invalid")
 		}
 		return ValidateSession(value.Session)
 	case LoginChallengeRequired:
 		if value.Challenge == nil || !value.ChallengeCredential.Present() || value.Credential.Present() ||
-			value.Session != (Session{}) || value.MustChangePassword ||
+			value.Session != (Session{}) || value.MustChangePassword || value.PasswordResetReason != "" ||
 			(value.Challenge.Purpose != "LOGIN" && value.Challenge.Purpose != "ENROLLMENT") {
 			return errors.New("challenged login result is invalid")
 		}
 		return ValidateAuthenticationChallenge(*value.Challenge)
+	case LoginAdminResetRequired:
+		if value.Session != (Session{}) || value.Credential.Present() || value.MustChangePassword ||
+			value.Challenge != nil || value.ChallengeCredential.Present() ||
+			(value.PasswordResetReason != PasswordResetExpired && value.PasswordResetReason != PasswordResetAgeUnknown) {
+			return errors.New("administrator password reset result is invalid")
+		}
+		return nil
 	default:
 		return errors.New("login outcome is invalid")
 	}

@@ -1108,6 +1108,7 @@ func TestLoginResultKeepsChallengeSeparateFromSession(t *testing.T) {
 		t.Fatal("invalid session fixture")
 	}
 	challenge := `{"outcome":"CHALLENGE_REQUIRED","challenge":{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AuthenticationChallenge","id":"challenge-example","purpose":"LOGIN","nextStep":"TOTP","expiresAt":"2026-09-20T01:07:03Z"},"challengeCredential":"example-only-challenge-secret"}`
+	resetRequired := `{"outcome":"ADMIN_RESET_REQUIRED","passwordResetReason":"EXPIRED"}`
 	schema := compileIAMOpenAPISchema(t, loadIAMOpenAPI(t), "LoginResponse")
 	for _, sample := range []struct {
 		name, wire string
@@ -1116,6 +1117,21 @@ func TestLoginResultKeepsChallengeSeparateFromSession(t *testing.T) {
 		{"authenticated", string(authenticated), true},
 		{"authenticated-no-password-change", strings.Replace(string(authenticated), `"mustChangePassword":true`, `"mustChangePassword":false`, 1), true},
 		{"challenge", challenge, true},
+		{"administrator-reset-expired", resetRequired, true},
+		{"administrator-reset-unknown-age", strings.Replace(resetRequired, "EXPIRED", "AGE_UNKNOWN", 1), true},
+		{"administrator-reset-missing-reason", `{"outcome":"ADMIN_RESET_REQUIRED"}`, false},
+		{"administrator-reset-null-reason", strings.Replace(resetRequired, `"EXPIRED"`, "null", 1), false},
+		{"administrator-reset-unknown-reason", strings.Replace(resetRequired, "EXPIRED", "DISABLED", 1), false},
+		{"administrator-reset-with-session", strings.Replace(resetRequired, `"outcome":`, `"session":`+string(session)+`,"outcome":`, 1), false},
+		{"administrator-reset-with-null-session", strings.Replace(resetRequired, `"outcome":`, `"session":null,"outcome":`, 1), false},
+		{"administrator-reset-with-secret", strings.Replace(resetRequired, `"outcome":`, `"credential":"synthetic","outcome":`, 1), false},
+		{"administrator-reset-with-empty-secret", strings.Replace(resetRequired, `"outcome":`, `"credential":"","outcome":`, 1), false},
+		{"administrator-reset-with-challenge", strings.Replace(resetRequired, `"outcome":`, `"challenge":null,"outcome":`, 1), false},
+		{"administrator-reset-with-challenge-secret", strings.Replace(resetRequired, `"outcome":`, `"challengeCredential":"synthetic","outcome":`, 1), false},
+		{"administrator-reset-with-change-permit", strings.Replace(resetRequired, `"outcome":`, `"mustChangePassword":false,"outcome":`, 1), false},
+		{"administrator-reset-with-identity", strings.Replace(resetRequired, `"outcome":`, `"accountId":"another-account","outcome":`, 1), false},
+		{"authenticated-with-reset-reason", strings.Replace(string(authenticated), `"outcome":`, `"passwordResetReason":"EXPIRED","outcome":`, 1), false},
+		{"challenge-with-reset-reason", strings.Replace(challenge, `"outcome":`, `"passwordResetReason":"EXPIRED","outcome":`, 1), false},
 		{"legacy-ambiguous-result", strings.Replace(string(authenticated), `"outcome":"AUTHENTICATED",`, "", 1), false},
 		{"challenge-is-not-session", strings.Replace(challenge, `"challengeCredential":`, `"mustChangePassword":false,"challengeCredential":`, 1), false},
 		{"challenge-with-session", strings.Replace(challenge, `"challengeCredential":`, `"session":`+string(session)+`,"challengeCredential":`, 1), false},

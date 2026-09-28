@@ -466,11 +466,12 @@ func enumSchemas() map[string][]string {
 			string(iamv1.ResourceAuditChain), string(iamv1.ResourceInstallation),
 			string(iamv1.ResourceExecutionPool), string(iamv1.ResourceExecutionTarget), string(iamv1.ResourceNodeEnrollment),
 		},
-		"DecisionReason": {string(iamv1.DecisionAllowed), string(iamv1.DecisionDenied)},
-		"BootstrapState": {string(iamv1.BootstrapUninitialized), string(iamv1.BootstrapReady)},
-		"ServicePurpose": openapi31.StringValues(iamv1.AllServicePurposes()),
-		"ReadinessState": {string(iamv1.ReadinessReady), string(iamv1.ReadinessNotReady)},
-		"LoginOutcome":   {string(iamv1.LoginAuthenticated), string(iamv1.LoginChallengeRequired)},
+		"DecisionReason":      {string(iamv1.DecisionAllowed), string(iamv1.DecisionDenied)},
+		"BootstrapState":      {string(iamv1.BootstrapUninitialized), string(iamv1.BootstrapReady)},
+		"ServicePurpose":      openapi31.StringValues(iamv1.AllServicePurposes()),
+		"ReadinessState":      {string(iamv1.ReadinessReady), string(iamv1.ReadinessNotReady)},
+		"LoginOutcome":        {string(iamv1.LoginAuthenticated), string(iamv1.LoginChallengeRequired), string(iamv1.LoginAdminResetRequired)},
+		"PasswordResetReason": {string(iamv1.PasswordResetExpired), string(iamv1.PasswordResetAgeUnknown)},
 	}
 }
 
@@ -1197,16 +1198,20 @@ func applySemanticOverlays(schemas object) {
 		object{"properties": object{"enrollmentState": object{"const": "RECOVERY_REQUIRED"}}},
 		object{"properties": object{"enrollmentState": object{"const": "REMOVED"}, "factorRevision": object{"minimum": 3}, "factorId": false}},
 	}
-	schemas["LoginResponse"].(object)["description"] = "Disjoint authentication result. A challenge is not a Session, bearer or authorization. Credential-bearing results require explicit encoding and no-store handling."
+	schemas["LoginResponse"].(object)["description"] = "Disjoint authentication result. A challenge is not a Session, bearer or authorization. ADMIN_RESET_REQUIRED is a terminal instruction with only a reason, no identity, credential or recovery permit. Runtime expiry enforcement is required before that branch can be issued. Results require explicit encoding and no-store handling."
 	schemas["LoginResponse"].(object)["oneOf"] = []any{
 		object{"required": []string{"session", "credential", "mustChangePassword"}, "properties": object{
 			"outcome":            object{"const": string(iamv1.LoginAuthenticated)},
 			"session":            object{"type": "object", "properties": object{"status": object{"const": "ACTIVE"}, "revokedAt": false}},
-			"mustChangePassword": object{"type": "boolean"}, "challenge": false, "challengeCredential": false,
+			"mustChangePassword": object{"type": "boolean"}, "challenge": false, "challengeCredential": false, "passwordResetReason": false,
 		}},
 		object{"required": []string{"challenge", "challengeCredential"}, "properties": object{
 			"outcome": object{"const": string(iamv1.LoginChallengeRequired)}, "challenge": object{"type": "object", "properties": object{"purpose": object{"enum": []string{"LOGIN", "ENROLLMENT"}}}},
-			"session": false, "credential": false, "mustChangePassword": false,
+			"session": false, "credential": false, "mustChangePassword": false, "passwordResetReason": false,
+		}},
+		object{"required": []string{"passwordResetReason"}, "properties": object{
+			"outcome": object{"const": string(iamv1.LoginAdminResetRequired)},
+			"session": false, "credential": false, "mustChangePassword": false, "challenge": false, "challengeCredential": false,
 		}},
 	}
 	schemas["NotificationContact"].(object)["oneOf"] = []any{
