@@ -14,6 +14,7 @@ import (
 )
 
 var ErrSecuritySettingsChangeNotFound = errors.New("security settings change was not found")
+var ErrUserPasswordResetCompletionNotFound = errors.New("user password reset completion was not found")
 
 type SecuritySettingsMutation struct {
 	Session    iamv1.Session
@@ -1194,6 +1195,30 @@ func (service *Authority) ResetUserPassword(ctx context.Context, credential iamv
 			}
 			return tx.ChangeUser(ctx, UserChange{AccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID, PrincipalID: id,
 				DecisionID: decision.ID, ResourceVersion: request.ResourceVersion, PasswordHash: &hash, ExpectedPassword: &original, AuditEvent: event})
+		})
+}
+
+// A historical completion is not a password verifier or a permit to repeat the
+// reset. Only the original actor with current authority may observe it.
+func (service *Authority) UserPasswordResetCompletion(ctx context.Context, credential iamv1.Secret, user iamv1.PrincipalID, resetRequestID string, expectedVersion uint64, requestID string) (iamv1.UserPasswordResetCompletion, error) {
+	if iamv1.ValidateID("userId", string(user)) != nil || iamv1.ValidateID("resetRequestId", resetRequestID) != nil ||
+		iamv1.ValidateID("requestId", requestID) != nil || expectedVersion == 0 || expectedVersion >= 9007199254740991 {
+		return iamv1.UserPasswordResetCompletion{}, ErrInvalidArgument
+	}
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMUserPasswordReset, iamv1.AuthorizationResourceInstance, "",
+		iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: string(user)}, requestID,
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.UserPasswordResetCompletion, error) {
+			result, err := tx.ReadUserPasswordResetCompletion(ctx, AccountRead{AccountID: subject.Subject.Organization.ID,
+				ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID}, user, resetRequestID, expectedVersion)
+			if err != nil {
+				return iamv1.UserPasswordResetCompletion{}, err
+			}
+			if iamv1.ValidateUserPasswordResetCompletion(result) != nil || result.AccountID != subject.Subject.Organization.ID ||
+				result.ActorPrincipalID != subject.Subject.Principal.ID || result.UserID != user || result.RequestID != resetRequestID ||
+				result.ExpectedResourceVersion != expectedVersion || result.OccurredAt.After(now) {
+				return iamv1.UserPasswordResetCompletion{}, ErrUnavailable
+			}
+			return result, nil
 		})
 }
 

@@ -30066,6 +30066,79 @@
         "summary": "Explicitly disable or enable one key at its exact version"
       }
     },
+    "/v1/users/{userId}/password-resets/{resetRequestId}": {
+      "get": {
+        "operationId": "getUserPasswordResetCompletion",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "userId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "resetRequestId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Original expected version, canonical positive decimal. No other query fields or body are accepted.",
+            "in": "query",
+            "name": "resourceVersion",
+            "required": true,
+            "schema": {
+              "maximum": 9007199254740990,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserPasswordResetCompletion"
+                }
+              }
+            },
+            "description": "Current authority state."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse",
+            "description": "Invalid path, query or unexpected body; no identity selector is accepted."
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse",
+            "description": "No original same-USER metadata observed; not evidence that an uncertain command rolled back, and not permission to create a replacement intent."
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Observe only the original actor's committed reset under current reset-password authority; no password, replay permit or assertion of present credential validity"
+      }
+    },
     "/v1/users/{userId}/permission-boundary": {
       "delete": {
         "operationId": "removeUserPermissionBoundary",

@@ -1168,7 +1168,7 @@ S3b正在实施，尚未完整验收。最小可验收结果是：管理员按�
 
 ##### S3b 后继：管理员重置的原完成确认
 
-本节为上述UNKNOWN缺口的有界实现目标。`UserPasswordResetCompletion`纯载体、严格codec及生成schema已实现；**查询路由和原子存储尚未实现、未开放API、未分配schema/revision**。IAM负责事务、严格契约及原进程门禁，UX负责消费和浏览器；安装owner的000015及其注册/readiness窗口保持独占，必须在固定对象对齐后再排SQL变更。本片不提前开展密码到期或新离线恢复能力。
+本节为上述UNKNOWN缺口的有界实现。`UserPasswordResetCompletion`纯载体、严格codec、查询路由及原子完成关系已实现，源码IAM50/Audit27，具备下述本地证据；**独立CI、LIVE UI及签名发布验收未完成**。IAM负责事务、严格契约及原进程门禁，UX负责消费和浏览器；000015沿用IAM49的无副作用检查边界，不与本片共用一个验收结论。发布revision另由安装owner冻结，CurrentDatabaseProfile仍为4/3/1+r4；本片不提前开展密码到期或新离线恢复能力。
 
 **源事实不能被过度解释。** 固定0fa的`ResetUserPassword`对目标、原resourceVersion及requestId生成脱敏摘要；`change_user`在锁内检查实际版本、写密码并追加原事实，但没有单独保存摘要所表示的expected版本。摘要也不包含密码字节。因此不从目标当前状态、409、版本加一或仅匹配outbox摘要推导“原完整密码输入已成功”；不把该摘要补充为公开的廉价密码校验器。
 
@@ -1176,7 +1176,7 @@ S3b正在实施，尚未完整验收。最小可验收结果是：管理员按�
 
 原POST请求/响应及受保护身份限制保持：仍按当前规则准备、锁外比较/hash和锁内最终资格核对，不改成`EQUAL_REPLAY`，也不返还原密码。已使用的同Account/actor/requestId不可改目标、改版本或重新执行；重复POST仍明确冲突，当前资格失效则先拒绝。不同输入竞争同一原版本最多一个成功；不声明服务能通过完成确认判断两个密码输入是否等值。调用者必须保持每次原意图不可变，不能将同一requestId用于另一口令。原主账号恢复和本人改密不自动加入这一关系或取得此读取路径。
 
-拟定查询为`GET /v1/users/{userId}/password-resets/{resetRequestId}?resourceVersion=<原expected>`。仅一个合法版本参数、无body、无Account/actor/session选择器；从当前有效LOGIN_SESSION推导Account及actor，重新按准确目标检查现有`iam.user.reset-password`，不要求额外目录读取权限，也不开放给Role/Key/Service或临时强制改密载体。只读该actor原目标/请求/expected的精确关系；重新登录后仍须是相同actor且当前有权，知道requestId不是查询凭据。该路径不得调用新reset或当前可变密码准备，不要求目标仍保持提交时版本或密码。
+查询为`GET /v1/users/{userId}/password-resets/{resetRequestId}?resourceVersion=<原expected>`。仅一个合法版本参数、无body、无Account/actor/session选择器；从当前有效LOGIN_SESSION推导Account及actor，重新按准确目标检查现有`iam.user.reset-password`，不要求额外目录读取权限，也不开放给Role/Key/Service或临时强制改密载体。只读该actor原目标/请求/expected的精确关系；重新登录后仍须是相同actor且当前有权，知道requestId不是查询凭据。该路径不调用新reset或当前可变密码准备，不要求目标仍保持提交时版本或密码。
 
 | 查询结果 | 业务含义及消费者边界 |
 | --- | --- |
@@ -1187,7 +1187,15 @@ S3b正在实施，尚未完整验收。最小可验收结果是：管理员按�
 
 纯载体的准确字段是`apiVersion`、`kind=UserPasswordResetCompletion`、`accountId`、`actorPrincipalId`、`userId`、`requestId`、`expectedResourceVersion`、`resultingResourceVersion`、`eventId`、`occurredAt`，全部必填；不存在pending/outcome/重放permit或密码输入承诺字段。expected为1至9007199254740990，resulting严格等于expected+1且仍在JSON安全整数范围，actor与目标USER不同，原事实时间为UTC微秒。JSON Schema只证明闭合字段、类型和各自范围，跨字段关系与严格重复键/大小写/字节预算由唯一Go codec校验；任何解析失败不部分覆盖调用者已有结果。结构有效仍不证明数据库提交、来源或当前查询权限，不能绕过后继锁内证明。
 
-纯契约在Go/GOMAXPROCS2、GOMEMLIMIT512MiB下通过IAM/Audit API全包race-p2、architecture及同范围vet，生成OpenAPI重跑字节稳定。覆盖最小/最大版本、缺项/null/未知秘密或许可字段、错误purpose、重复/变体键、self-reset、版本跳跃/溢出、非UTC/超微秒时间、超限/尾随输入与失败不部分写入。未在OpenAPI添加不存在的GET路由；该纯片不改服务接口、SQL、Audit字节、schema/profile，也没有数据库、浏览器或完整闭环验收结论。
+原纯载体门禁覆盖最小/最大版本、缺项/null/未知秘密或许可字段、错误purpose、重复/变体键、self-reset、版本跳跃/溢出、非UTC/超微秒时间、超限/尾随输入与失败不部分写入。当前OpenAPI已声明实际GET及400/401/403/404/503封闭结果；HTTP拒绝重复/变体参数、非规范版本、额外selector/body及错配结果。用例在当前事务内复核原Account/actor/目标/request/version与原事实时间，事务结果不确定不返回部分完成；不读取目标当前密码或调用准备/重置。API、HTTP、用例和architecture的聚焦race已通过，默认外部DSN缺失的SKIP不是运行证据。
+
+现有000003拥有`user_password_reset_completions`：实际锁内expected/resulting版本、原actor/目标/请求和原成功事实的八列关系，强制租户RLS、准确外键和不可变/禁止truncate约束。完成关系与成功事实双向提交校验；历史核对保留原脱敏metadata digest字节，它不包含密码、不构成密码等值证明。仅`read_user_password_reset_completion`向API角色开放，准备/最终写入沿原owner；readiness核对实际列、函数、ACL及触发器形状，损坏时查询也失败关闭。新成功事实必须有同事务完成关系，旧outbox投递更新不触发补造；旧成功事实只能拒绝已用requestId的新执行，不能被迁移成新完成回执。公开Audit/canonical、claim7及离线FILE均未改变。
+
+2026-09-29本任务独立PG18.4（1CPU/768MiB/PIDs192/max_connections24）、Go1.26.3/GOMAXPROCS2/GOMEMLIMIT512MiB、串行race-p1：完整`TestIAMHTTPPostgresVerticalSlice`143.22s（包146.775s）通过，保留原三分钟期限、密码成本及全租户/平台保护门禁。原password-session owner增加真实在途查询404、同版本两个reset实际锁竞争一胜一冲突、末端outbox及完成关系失败无部分状态、跨Account/actor与服务凭据拒绝、仅有准确reset权但无目录权的原actor可读及撤权后403、同actor重新登录、后续改密/重置/停用/删除后原结果保持；旧会话不复活。最终补充已用requestId不能改目标重做、事实错误scope/actor/target/action/decision/request/digest及额外permit字段拒绝后，在另一空白库聚焦复验31.28s（包34.773s）通过。真实运行角色不能直接SELECT/INSERT/UPDATE/DELETE/TRUNCATE关系；owner强制RLS、原metadata/时间篡改、列级授权及触发器/函数权限损坏门禁保持。
+
+最终`TestIndependentIAMAuditAndPaaSProcesses`155.30s（包158.534s）通过：真实管理员reset提交后主动中断TCP回包，由另一IAM副本读取准确原完成；随后强制改密、进程重启和目标停用仍读到相同历史。实际RoleSession、AccessKey和服务凭据不能使用该GET，保留原双租户资源、运行登录身份、MFA/恢复/设置未知完成及历史Audit投递门禁。唯一固定`42035189`/IAM45的真实前驱程序产生旧reset，当前IAM50双次迁移/等值bootstrap/重启门禁118.49s通过：原事实、receipt/canonical保持，旧reset查询404、不补造完成，同一旧requestId不能用新版本再次执行。没有增加历史schema矩阵或声明跨release/profile兼容。双权威实际存储门禁另在空白库7.45s通过，IAM50/Audit27及原最小权限、不可变Audit保持。以上不继承安装分支验收，也不是SMTP或浏览器证据。
+
+最终全仓默认race-p2（含architecture）、vet-p2、模块校验、122个API文件生成集合/哈希一致及Linux amd64构建通过；默认外部DSN缺失的SKIP不计真实运行证据。核对零其他客户端后正常停止并移除本轮唯一专属PG、两个合成数据/模块缓存卷和空网络，未操作其他任务或远端服务。容量CI冷缓存修正的失败边界与复验证据归011，不用本地通过覆盖独立CI。
 
 查询只追加现有授权决定/相关审计，不再次产生`iam.user.password-reset`成功事实；Audit暂不可投递不应抹除IAM已提交完成。目标随后自行改密、被再次reset、停用或删除时，原完成仍是历史记录，不能被当前状态替换、撤销或重新执行。受支持恢复后的历史缺失保持UNKNOWN；本关系不声称抵抗整机回滚、恢复密码资格或授予跨profile恢复许可。原公开Audit/canonical、ServiceIdentity/lookup_service、claim7和离线FILE均不改变。
 

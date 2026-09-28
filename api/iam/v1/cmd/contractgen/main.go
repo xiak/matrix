@@ -224,6 +224,9 @@ func buildPaths() object {
 		"/v1/accounts/{accountId}:recover-root-credentials": object{"post": mutationOperation("recoverRootCredentials", "Recover the account's immutable root identity without transferring ownership", "RecoverRootCredentialsRequest", "Account", "200", nil, []any{openapi31.PathIDParameter("accountId")})},
 		"/v1/account:alias":                                 object{"post": mutationOperation("setAccountAlias", "Set the current account login alias", "SetAccountAliasRequest", "Account", "200", nil, nil)},
 		"/v1/users/{userId}":                                object{"get": readOperation("getUser", "Read one manageable account user and target capabilities", "UserAccess", nil, []any{openapi31.PathIDParameter("userId")})},
+		"/v1/users/{userId}/password-resets/{resetRequestId}": object{"get": readOperation("getUserPasswordResetCompletion", "Observe only the original actor's committed reset under current reset-password authority; no password, replay permit or assertion of present credential validity", "UserPasswordResetCompletion", nil,
+			[]any{openapi31.PathIDParameter("userId"), openapi31.PathIDParameter("resetRequestId"), object{"name": "resourceVersion", "in": "query", "required": true,
+				"schema": object{"type": "integer", "minimum": 1, "maximum": 9007199254740990}, "description": "Original expected version, canonical positive decimal. No other query fields or body are accepted."}})},
 		"/v1/users/{userId}/access-keys": object{
 			"get":  readOperation("listAccessKeys", "Read the complete, at most two undeleted keys of one user", "AccessKeyList", nil, []any{openapi31.PathIDParameter("userId")}),
 			"post": mutationOperation("createAccessKey", "Create one user key; only the first successful response carries its secret", "CreateAccessKeyRequest", "CreateAccessKeyResponse", "201", nil, []any{openapi31.PathIDParameter("userId")}),
@@ -369,10 +372,10 @@ func readOperation(
 		responses["404"] = object{"$ref": "#/components/responses/ProblemResponse", "description": "No committed issuance found for this source user and request. This does not authorize a new intent."}
 	}
 	switch operationID {
-	case "getAuthenticatorState", "getTOTPEnrollment", "getTOTPEnrollmentByRequest", "cancelTOTPEnrollment", "getStepUpByRequest", "getRecoveryCodeRegenerationByRequest", "getAuthenticatorRemovalByRequest", "passwordRequirements":
+	case "getAuthenticatorState", "getTOTPEnrollment", "getTOTPEnrollmentByRequest", "cancelTOTPEnrollment", "getStepUpByRequest", "getRecoveryCodeRegenerationByRequest", "getAuthenticatorRemovalByRequest", "passwordRequirements", "getUserPasswordResetCompletion":
 		responses["400"] = object{"$ref": "#/components/responses/ProblemResponse", "description": "Invalid path, query or unexpected body; no identity selector is accepted."}
 	}
-	if operationID == "getStepUpByRequest" || operationID == "getRecoveryCodeRegenerationByRequest" || operationID == "getAuthenticatorRemovalByRequest" {
+	if operationID == "getStepUpByRequest" || operationID == "getRecoveryCodeRegenerationByRequest" || operationID == "getAuthenticatorRemovalByRequest" || operationID == "getUserPasswordResetCompletion" {
 		responses["404"] = object{"$ref": "#/components/responses/ProblemResponse", "description": "No original same-USER metadata observed; not evidence that an uncertain command rolled back, and not permission to create a replacement intent."}
 	}
 	switch operationID {

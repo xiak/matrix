@@ -108,7 +108,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	const databasePrefix = "matrix_iam_upgrade_predecessor_"
 	const source = "42035189eb823e388509f54525889c1a18c6b79d"
 	const sourceSchema uint64 = 45
-	const currentSchema uint64 = 49
+	const currentSchema uint64 = 50
 	// Actual predecessor admission accepted these 14-byte passwords. The new
 	// executable must replay the sealed bootstrap and verify existing secrets
 	// without admitting them for a new password write.
@@ -220,6 +220,13 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	old := start(oldBinary, sourceSchema)
 	primary := loginIAM(t, endpoint, "admin", initialAdminPassword, "own-upgrade-root-login")
 	changePasswordIAM(t, endpoint, primary.Credential, initialAdminPassword, changedAdminPassword, "own-upgrade-root-password")
+	legacyResetUser := createIAMUser(t, endpoint, primary.Credential, "retained.reset", "Retained reset", initialReaderPassword, "retained-reset-user")
+	legacyReset := performJSON(t, http.MethodPost, endpoint+"/v1/users/"+string(legacyResetUser.ID)+":reset-password", primary.Credential,
+		map[string]any{"initialPassword": "Retained-Reset-Password-83!", "resourceVersion": legacyResetUser.ResourceVersion, "requestId": "retained-reset-command"})
+	var legacyResetResult iamv1.User
+	if legacyReset.Status != http.StatusOK || json.Unmarshal(legacyReset.Body, &legacyResetResult) != nil || legacyResetResult.ResourceVersion != legacyResetUser.ResourceVersion+1 {
+		t.Fatal("actual predecessor did not produce a real reset fact")
+	}
 	member := createIAMUser(t, endpoint, primary.Credential, "retained.sessions", "Retained sessions", initialReaderPassword, "own-upgrade-user")
 	oldGrant := createIAMPolicyAttachment(t, endpoint, primary.Credential, member.ID, iamv1.SystemPolicyPaaSViewer, "retained-old-viewer")
 	revokeIAMPolicyAttachment(t, endpoint, primary.Credential, oldGrant.ID, oldGrant.ResourceVersion, "retained-old-viewer-revoke")
@@ -415,7 +422,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		}
 	}
 	var shape bool
-	if err := admin.QueryRow(ctx, `SELECT schema_version=49 AND iam.password_history_contract_ready() AND iam.account_security_settings_contract_ready() AND iam.login_session_contract_ready() AND iam.password_attempt_contract_ready()
+	if err := admin.QueryRow(ctx, `SELECT schema_version=50 AND iam.password_history_contract_ready() AND iam.account_security_settings_contract_ready() AND iam.login_session_contract_ready() AND iam.password_attempt_contract_ready()
 	 AND iam.authentication_recovery_contract_ready()
 	 AND to_regprocedure('iam.close_authentication_recovery(jsonb,text,jsonb)') IS NULL
 	 AND NOT EXISTS(SELECT 1 FROM iam.user_credentials c WHERE c.password_history<>'[]'::jsonb
@@ -450,6 +457,19 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	current := start(currentBinary, currentSchema)
 	if !bytes.Equal(originalState, identityState()) {
 		t.Fatal("migration or equal bootstrap changed original identity/credential state")
+	}
+	legacyResetPath := fmt.Sprintf("/v1/users/%s/password-resets/retained-reset-command?resourceVersion=%d", legacyResetUser.ID, legacyResetUser.ResourceVersion)
+	if response := performJSON(t, http.MethodGet, endpoint+legacyResetPath, primary.Credential, nil); response.Status != http.StatusNotFound {
+		t.Fatal("migration invented a reset completion from an old outbox fact")
+	}
+	legacyRetry := performJSON(t, http.MethodPost, endpoint+"/v1/users/"+string(legacyResetUser.ID)+":reset-password", primary.Credential,
+		map[string]any{"initialPassword": "Retained-Reset-Another-Password-94!", "resourceVersion": legacyResetResult.ResourceVersion, "requestId": "retained-reset-command"})
+	if legacyRetry.Status != http.StatusConflict || !bytes.Equal(originalState, identityState()) {
+		t.Fatal("old reset intent was reused at a newer target version")
+	}
+	var inventedReset bool
+	if err := admin.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM iam.user_password_reset_completions)").Scan(&inventedReset); err != nil || inventedReset {
+		t.Fatal("legacy reset was backfilled or retried into a new completion", err)
 	}
 	if err := admin.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM iam.authorization_profiles WHERE product='iam' AND revision=$1
 	 AND canonical_document=$2 AND content_digest=$3)
@@ -811,7 +831,7 @@ func provePredecessorAuthenticationRecovery(t *testing.T, ctx context.Context, r
 		}
 		var unchanged bool
 		if err := database.QueryRow(ctx, `SELECT
-		 (SELECT schema_version=49 AND ready FROM iam.readiness())
+		 (SELECT schema_version=50 AND ready FROM iam.readiness())
 		 AND NOT EXISTS(SELECT 1 FROM iam.authenticator_removals)
 		 AND NOT EXISTS(SELECT 1 FROM iam.user_credentials c WHERE c.password_history<>'[]'::jsonb
 		 OR c.password_changed_at IS NOT NULL OR NOT iam.valid_password_history(c.password_history,c.password_history_digest,c.credential_version,c.password_changed_at))
@@ -2026,7 +2046,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	// Exercise the exact source services together without weakening install
 	// admission: the workflow separately proves the published installer rejects
 	// this unmatched database shape before effects.
-	sourceProfile := installationrelease.AuthoritySchemas{IAM: 49, Audit: 27, PaaS: 2}
+	sourceProfile := installationrelease.AuthoritySchemas{IAM: 50, Audit: 27, PaaS: 2}
 	publishedProfile := installationrelease.CurrentDatabaseProfile()
 	if publishedProfile.Authorities == sourceProfile {
 		t.Fatal("unreleased authority source shape was published without a final profile gate")
@@ -5325,6 +5345,7 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 	secret := a.key.Secret.CopyBytes()
 	call(endpoint, http.MethodGet, a.path, string(secret), nil, http.StatusUnauthorized, nil)
 	call(endpoint, http.MethodGet, "/v1/account/security-settings", string(secret), nil, http.StatusUnauthorized, nil)
+	call(endpoint, http.MethodGet, "/v1/users/"+string(a.target.ID)+"/password-resets/key-cannot-query?resourceVersion=1", string(secret), nil, http.StatusUnauthorized, nil)
 	clear(secret)
 	// Exercise the actual internal RPC in both IAM executables, without
 	// pretending a fixture is a product PEP or enabling a source Profile.
@@ -6095,8 +6116,22 @@ func proveTOTPProcesses(t *testing.T, ctx context.Context, admin *pgx.Conn, endp
 		// into a Session. The real password completion also loses its TCP reply.
 		var access iamv1.UserAccess
 		call(endpoint, http.MethodGet, "/v1/users/"+string(user.ID), root, nil, http.StatusOK, &access)
-		call(endpoint, http.MethodPost, "/v1/users/"+string(user.ID)+":reset-password", root,
-			map[string]any{"initialPassword": reset, "resourceVersion": access.User.ResourceVersion, "requestId": "process-mfa-reset"}, http.StatusOK, nil)
+		resetIntent := map[string]any{"initialPassword": reset, "resourceVersion": access.User.ResourceVersion, "requestId": "process-mfa-reset"}
+		resetResult := loseIAMCompletion(t, ctx, http.MethodPost, endpoint, "/v1/users/"+string(user.ID)+":reset-password", root, resetIntent)
+		clear(resetResult.Body)
+		resetCompletionPath := fmt.Sprintf("/v1/users/%s/password-resets/process-mfa-reset?resourceVersion=%d", user.ID, access.User.ResourceVersion)
+		var resetCompletion iamv1.UserPasswordResetCompletion
+		call(replica, http.MethodGet, resetCompletionPath, root, nil, http.StatusOK, &resetCompletion)
+		if iamv1.ValidateUserPasswordResetCompletion(resetCompletion) != nil || resetCompletion.UserID != user.ID ||
+			resetCompletion.AccountID != user.AccountID || resetCompletion.RequestID != "process-mfa-reset" ||
+			resetCompletion.ExpectedResourceVersion != access.User.ResourceVersion {
+			t.Fatal("lost reset reply was not confirmed by exact historical metadata on the peer")
+		}
+		_, resetFact := findIAMEvent(t, ctx, admin, auditv1.ActionIAMUserPasswordReset, string(user.ID))
+		if string(resetFact.EventID) != resetCompletion.EventID || resetFact.Actor.ID != auditv1.ActorID(resetCompletion.ActorPrincipalID) ||
+			!resetFact.OccurredAt.Equal(resetCompletion.OccurredAt) || resetFact.RequestID != resetCompletion.RequestID {
+			t.Fatal("reset completion does not bind its original outbox fact")
+		}
 		call(replica, http.MethodGet, "/v1/auth/me", bearer, nil, http.StatusUnauthorized, nil)
 		// Neither the consumed winner nor the unfinished losing challenge can
 		// survive reset. These rejections must precede any new OTP reservation.
@@ -6121,6 +6156,11 @@ func proveTOTPProcesses(t *testing.T, ctx context.Context, admin *pgx.Conn, endp
 		}
 		clear(result.Body)
 		restartIAM()
+		var afterResetRestart iamv1.UserPasswordResetCompletion
+		call(endpoint, http.MethodGet, resetCompletionPath, root, nil, http.StatusOK, &afterResetRestart)
+		if afterResetRestart != resetCompletion {
+			t.Fatal("restart or later forced password change rewrote original reset completion")
+		}
 		call(endpoint, http.MethodPost, "/v1/auth/challenges/"+passwordPhase.Challenge.ID+":password", "", passwordIntent, http.StatusUnauthorized, nil)
 		call(replica, http.MethodPost, "/v1/auth/login", "", map[string]string{"loginName": realm, "password": reset, "requestId": "process-mfa-old-password"}, http.StatusUnauthorized, nil)
 		newChallenge := challenge(endpoint, final, "process-mfa-final-login")
@@ -6140,6 +6180,10 @@ func proveTOTPProcesses(t *testing.T, ctx context.Context, admin *pgx.Conn, endp
 		call(replica, http.MethodGet, "/v1/auth/me", bearer, nil, http.StatusUnauthorized, nil)
 		getPaaSApplication(t, paasEndpoint, bearer, "application-process", http.StatusUnauthorized)
 		queryAudit(t, auditEndpoint, bearer, auditv1.QueryRecordsRequest{PageSize: 1}, http.StatusUnauthorized)
+		call(replica, http.MethodGet, resetCompletionPath, root, nil, http.StatusOK, &afterResetRestart)
+		if afterResetRestart != resetCompletion {
+			t.Fatal("disabled target hid or rewrote original reset completion")
+		}
 		_, boundEvent = findIAMEvent(t, ctx, admin, auditv1.ActionIAMAuthenticatorBound, string(user.ID))
 		assertAuditEventCount(t, ctx, admin, string(boundEvent.EventID), 0)
 	})
@@ -6161,7 +6205,7 @@ func proveTOTPProcesses(t *testing.T, ctx context.Context, admin *pgx.Conn, endp
 	if verification := verifyAudit(t, auditEndpoint, root); verification.State != auditv1.VerificationVerified || !verification.Complete {
 		t.Fatal("MFA facts broke original tenant chain")
 	}
-	t.Log("actual IAM replicas/PaaS/Audit: binding and forced-password commits survived lost TCP replies/restart; one cross-process OTP success; disabled USER history delivered once")
+	t.Log("actual IAM replicas/PaaS/Audit: binding, administrator reset and forced-password commits survived lost TCP replies/restart; exact reset completion remained after later change/disable; one cross-process OTP success; disabled USER history delivered once")
 	sensitive = append(sensitive, proveTOTPRecoveryProcesses(t, ctx, admin, endpoint, replica, auditEndpoint, paasEndpoint, root, restartIAM, withDispatcherStopped)...)
 	sensitive = append(sensitive, proveRecoveryCodeRegenerationProcesses(t, ctx, admin, endpoint, replica, auditEndpoint, root, restartIAM, withDispatcherStopped)...)
 	for _, operation := range []iamv1.StepUpOperation{iamv1.StepUpReplaceTOTP, iamv1.StepUpRemoveTOTP} {
@@ -7738,6 +7782,7 @@ func proveRoleManagementProcesses(t *testing.T, ctx context.Context, admin *pgx.
 		}
 		call(http.MethodGet, replicaEndpoint, "/v1/auth/me", roleCredential, nil, http.StatusUnauthorized, nil)
 		call(http.MethodGet, replicaEndpoint, "/v1/account/security-settings", roleCredential, nil, http.StatusUnauthorized, nil)
+		call(http.MethodGet, replicaEndpoint, "/v1/users/"+string(member.Session.PrincipalID)+"/password-resets/role-cannot-query?resourceVersion=1", roleCredential, nil, http.StatusUnauthorized, nil)
 		call(http.MethodPost, replicaEndpoint, "/v1/auth/sessions:revoke-others", roleCredential,
 			iamv1.RevokeSessionRequest{RequestID: "process-role-cannot-end-user-logins"}, http.StatusUnauthorized, nil)
 		call(http.MethodGet, iamEndpoint, "/v1/auth/sessions", member.Credential, nil, http.StatusOK, nil)

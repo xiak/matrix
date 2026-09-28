@@ -7119,6 +7119,47 @@ func TestIAMLoginResponsePublishesPasswordChangeRequirement(t *testing.T) {
 	}
 }
 
+func TestIAMOpenAPIPasswordResetCompletionIsReadOnlyAndExact(t *testing.T) {
+	document := loadIAMOpenAPI(t)
+	paths := mustIAMObject(t, document["paths"], "paths")
+	path := mustIAMObject(t, paths["/v1/users/{userId}/password-resets/{resetRequestId}"], "reset completion path")
+	if len(path) != 1 || path["get"] == nil {
+		t.Fatal("reset completion exposed a mutation")
+	}
+	operation := mustIAMObject(t, path["get"], "reset completion operation")
+	if operation["requestBody"] != nil {
+		t.Fatal("reset completion accepts a body")
+	}
+	parameters, ok := operation["parameters"].([]any)
+	if !ok || len(parameters) != 3 {
+		t.Fatal("reset completion reference is not closed")
+	}
+	expected := map[string]string{"userId": "path", "resetRequestId": "path", "resourceVersion": "query"}
+	for _, raw := range parameters {
+		parameter := mustIAMObject(t, raw, "reset completion parameter")
+		name, ok := parameter["name"].(string)
+		if !ok || expected[name] == "" || parameter["in"] != expected[name] || parameter["required"] != true {
+			t.Fatal("reset completion accepts a selector or optional original identity")
+		}
+		delete(expected, name)
+		if name == "resourceVersion" {
+			schema := mustIAMObject(t, parameter["schema"], "original version")
+			if schema["type"] != "integer" || schema["minimum"] != float64(1) || schema["maximum"] != float64(9007199254740990) {
+				t.Fatal("reset completion loses safe original version bounds")
+			}
+		}
+	}
+	responses := mustIAMObject(t, operation["responses"], "reset completion outcomes")
+	for _, code := range []string{"200", "400", "401", "403", "404", "503"} {
+		if responses[code] == nil {
+			t.Fatal("reset completion omitted a closed outcome", code)
+		}
+	}
+	if responses["201"] != nil || responses["409"] != nil {
+		t.Fatal("read-only completion implies a write/replay outcome")
+	}
+}
+
 func TestIAMOpenAPICredentialBoundaries(t *testing.T) {
 	document := loadIAMOpenAPI(t)
 	for _, privateType := range []string{"AccessKeyWrappingKeyring", "AccessKeyWrappingKey", "AccessKeyWrappingScope", "AccessKeyCredential", "AccessKeyAuthorizationEvidence", "AccessKeySignatureParameters", "TOTPKeyring", "TOTPWrappingKey", "TOTPWrappingScope", "SecurityMailSMTPChannel", "SecurityMailInstallationScope", "EmailVerificationBinding", "EmailVerificationKeyring", "EmailVerificationWrappingKey"} {

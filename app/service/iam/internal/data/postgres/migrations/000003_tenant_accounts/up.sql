@@ -1294,6 +1294,133 @@ BEGIN
 END
 $function$;
 
+-- Only new administrator resets create a completion. Historical outbox rows
+-- are not backfilled: their original expected version was not separately kept.
+CREATE INDEX IF NOT EXISTS user_password_reset_intent_history ON iam.audit_outbox
+    (tenant_id,(event_document#>>'{actor,id}'),(event_document->>'requestId'))
+    WHERE event_document->>'action'='iam.user.password-reset' AND event_document->>'result'='SUCCEEDED';
+CREATE TABLE IF NOT EXISTS iam.user_password_reset_completions (
+    tenant_id text COLLATE "C" NOT NULL,
+    actor_principal_id text COLLATE "C" NOT NULL,
+    user_id text COLLATE "C" NOT NULL,
+    request_id text COLLATE "C" NOT NULL,
+    expected_version bigint NOT NULL,
+    resulting_version bigint NOT NULL,
+    event_id text COLLATE "C" NOT NULL,
+    occurred_at timestamptz(6) NOT NULL,
+    CONSTRAINT user_password_reset_completions_pk PRIMARY KEY(tenant_id,actor_principal_id,request_id),
+    CONSTRAINT user_password_reset_completions_event_uq UNIQUE(tenant_id,event_id),
+    CONSTRAINT user_password_reset_completions_actor_fk FOREIGN KEY(tenant_id,actor_principal_id) REFERENCES iam.principals(tenant_id,id),
+    CONSTRAINT user_password_reset_completions_user_fk FOREIGN KEY(tenant_id,user_id) REFERENCES iam.principals(tenant_id,id),
+    CONSTRAINT user_password_reset_completions_event_fk FOREIGN KEY(tenant_id,event_id) REFERENCES iam.audit_outbox(tenant_id,event_id),
+    CONSTRAINT user_password_reset_completions_values CHECK(
+        actor_principal_id<>user_id AND request_id ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND expected_version BETWEEN 1 AND 9007199254740990
+        AND resulting_version=expected_version+1 AND isfinite(occurred_at))
+);
+ALTER TABLE iam.user_password_reset_completions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE iam.user_password_reset_completions FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON iam.user_password_reset_completions;
+CREATE POLICY tenant_isolation ON iam.user_password_reset_completions
+    USING(tenant_id=iam.current_tenant_id()) WITH CHECK(tenant_id=iam.current_tenant_id());
+DROP TRIGGER IF EXISTS password_reset_completions_immutable ON iam.user_password_reset_completions;
+CREATE TRIGGER password_reset_completions_immutable BEFORE UPDATE OR DELETE ON iam.user_password_reset_completions
+    FOR EACH ROW EXECUTE FUNCTION iam.reject_policy_history_change();
+ALTER TABLE iam.user_password_reset_completions ENABLE ALWAYS TRIGGER password_reset_completions_immutable;
+DROP TRIGGER IF EXISTS password_reset_completions_no_truncate ON iam.user_password_reset_completions;
+CREATE TRIGGER password_reset_completions_no_truncate BEFORE TRUNCATE ON iam.user_password_reset_completions
+    FOR EACH STATEMENT EXECUTE FUNCTION iam.reject_policy_history_change();
+ALTER TABLE iam.user_password_reset_completions ENABLE ALWAYS TRIGGER password_reset_completions_no_truncate;
+REVOKE ALL ON iam.user_password_reset_completions FROM PUBLIC,matrix_iam_api,matrix_iam_worker,
+    matrix_iam_notification_worker,matrix_iam_credential_recovery,matrix_iam_authentication_recovery,matrix_iam_backup_custody;
+
+CREATE OR REPLACE FUNCTION iam.assert_user_password_reset_completion(tenant text,actor text,command_id text)
+RETURNS void LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE receipt iam.user_password_reset_completions%ROWTYPE; fact jsonb;
+BEGIN
+    SELECT * INTO receipt FROM iam.user_password_reset_completions c
+        WHERE c.tenant_id=tenant AND c.actor_principal_id=actor AND c.request_id=command_id;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='password reset completion is missing'; END IF;
+    SELECT o.event_document INTO fact FROM iam.audit_outbox o WHERE o.tenant_id=tenant AND o.event_id=receipt.event_id;
+    IF fact IS NULL OR fact->>'apiVersion' IS DISTINCT FROM 'audit.matrix.xiak.com/v1' OR fact->>'kind' IS DISTINCT FROM 'AuditEvent'
+        OR fact->>'eventId' IS DISTINCT FROM receipt.event_id OR fact->>'tenantId' IS DISTINCT FROM tenant
+        OR fact->>'action' IS DISTINCT FROM 'iam.user.password-reset' OR fact->>'result' IS DISTINCT FROM 'SUCCEEDED'
+        OR fact->'actor' IS DISTINCT FROM jsonb_build_object('type','USER','id',actor)
+        OR fact->'target' IS DISTINCT FROM jsonb_build_object('kind','USER','id',receipt.user_id)
+        OR fact->>'requestId' IS DISTINCT FROM command_id OR fact->>'correlationId' IS DISTINCT FROM command_id
+        -- This binds only the original public reset metadata, not password
+        -- equality. Preserve the existing Go digestSanitized wire bytes.
+        OR fact->>'requestDigest' IS DISTINCT FROM 'sha256:'||encode(sha256(
+            convert_to('matrix.iam.request.v1','UTF8')||decode('00','hex')||convert_to('principal-password-reset','UTF8')||decode('00','hex')||
+            convert_to('{"ID":'||to_json(receipt.user_id)::text||',"ResourceVersion":'||receipt.expected_version::text||
+                ',"RequestID":'||to_json(command_id)::text||'}','UTF8')),'hex')
+        OR (fact->>'occurredAt')::timestamptz IS DISTINCT FROM receipt.occurred_at
+        OR fact ?| ARRAY['installationId','operationId']
+        OR (fact-ARRAY['apiVersion','kind','eventId','tenantId','actor','iamDecisionId','action','target','result',
+            'requestDigest','requestId','correlationId','occurredAt','traceparent'])<>'{}'::jsonb
+        OR NOT EXISTS(SELECT 1 FROM iam.principals p WHERE p.tenant_id=tenant AND p.id=actor AND p.principal_type='USER')
+        OR NOT EXISTS(SELECT 1 FROM iam.principals p WHERE p.tenant_id=tenant AND p.id=receipt.user_id AND p.principal_type='USER')
+        OR NOT EXISTS(SELECT 1 FROM iam.authorization_decisions d WHERE d.tenant_id=tenant AND d.id=fact->>'iamDecisionId'
+            AND d.principal_id=actor AND d.subject_type='USER' AND d.contract_version=4 AND d.access_key_id IS NULL AND d.allowed
+            AND d.action_name='iam.user.reset-password' AND d.target_kind='USER' AND d.target_id=receipt.user_id
+            AND d.resource_mode='INSTANCE' AND d.collection_usage IS NULL
+            AND d.request_id=command_id AND d.decided_at=receipt.occurred_at) THEN
+        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='password reset completion evidence differs';
+    END IF;
+END $function$;
+
+CREATE OR REPLACE FUNCTION iam.verify_user_password_reset_completion()
+RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE tenant text; actor text; command_id text;
+BEGIN
+    IF TG_TABLE_NAME='user_password_reset_completions' THEN
+        tenant:=NEW.tenant_id; actor:=NEW.actor_principal_id; command_id:=NEW.request_id;
+    ELSE
+        IF NEW.event_document->>'action' IS DISTINCT FROM 'iam.user.password-reset' THEN RETURN NULL; END IF;
+        tenant:=NEW.tenant_id; actor:=NEW.event_document#>>'{actor,id}'; command_id:=NEW.event_document->>'requestId';
+    END IF;
+    PERFORM set_config('matrix.iam_tenant_id',tenant,true);
+    PERFORM iam.assert_user_password_reset_completion(tenant,actor,command_id);
+    RETURN NULL;
+END $function$;
+DROP TRIGGER IF EXISTS verify_password_reset_completion ON iam.user_password_reset_completions;
+CREATE CONSTRAINT TRIGGER verify_password_reset_completion AFTER INSERT ON iam.user_password_reset_completions
+    DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION iam.verify_user_password_reset_completion();
+ALTER TABLE iam.user_password_reset_completions ENABLE ALWAYS TRIGGER verify_password_reset_completion;
+-- Existing pre-cutover facts remain replayable; delivery updates never create
+-- a completion retroactively. A new success fact must commit its relation.
+DROP TRIGGER IF EXISTS verify_password_reset_completion ON iam.audit_outbox;
+CREATE CONSTRAINT TRIGGER verify_password_reset_completion AFTER INSERT ON iam.audit_outbox
+    DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION iam.verify_user_password_reset_completion();
+ALTER TABLE iam.audit_outbox ENABLE ALWAYS TRIGGER verify_password_reset_completion;
+
+CREATE OR REPLACE FUNCTION iam.read_user_password_reset_completion(tenant text,actor text,decision text,user_id text,command_id text,expected_version bigint)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE receipt iam.user_password_reset_completions%ROWTYPE;
+BEGIN
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.user.reset-password','USER',user_id,'INSTANCE',NULL);
+    IF NOT iam.user_password_reset_contract_ready() THEN
+        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='password reset contract is unavailable';
+    END IF;
+    IF command_id IS NULL OR command_id !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        OR expected_version IS NULL OR expected_version NOT BETWEEN 1 AND 9007199254740990 THEN
+        RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='password reset reference is invalid';
+    END IF;
+    SELECT * INTO receipt FROM iam.user_password_reset_completions c WHERE c.tenant_id=tenant
+        AND c.actor_principal_id=actor AND c.user_id=read_user_password_reset_completion.user_id
+        AND c.request_id=command_id AND c.expected_version=read_user_password_reset_completion.expected_version;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='P0002',MESSAGE='password reset completion is not found'; END IF;
+    PERFORM iam.assert_user_password_reset_completion(tenant,actor,command_id);
+    RETURN jsonb_build_object('apiVersion','iam.matrix.xiak.com/v1','kind','UserPasswordResetCompletion',
+        'accountId',receipt.tenant_id,'actorPrincipalId',receipt.actor_principal_id,'userId',receipt.user_id,'requestId',receipt.request_id,
+        'expectedResourceVersion',receipt.expected_version,'resultingResourceVersion',receipt.resulting_version,
+        'eventId',receipt.event_id,'occurredAt',to_char(receipt.occurred_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'));
+END $function$;
+REVOKE ALL ON FUNCTION iam.assert_user_password_reset_completion(text,text,text),iam.verify_user_password_reset_completion(),
+    iam.read_user_password_reset_completion(text,text,text,text,text,bigint) FROM PUBLIC,matrix_iam_api,matrix_iam_worker,
+    matrix_iam_notification_worker,matrix_iam_credential_recovery,matrix_iam_authentication_recovery,matrix_iam_backup_custody;
+GRANT EXECUTE ON FUNCTION iam.read_user_password_reset_completion(text,text,text,text,text,bigint) TO matrix_iam_api;
+
 -- Status changes and password preparation/finalization share the same protected
 -- identity check and Account -> USER lock order as platform attachment changes.
 CREATE OR REPLACE FUNCTION iam.lock_managed_user(tenant text, actor text, user_id text, expected_version bigint)
@@ -1369,6 +1496,16 @@ BEGIN
     PERFORM iam.assert_allowed_decision(tenant,actor,decision,action,'USER',user_id,'INSTANCE',NULL);
     PERFORM iam.lock_managed_user(tenant,actor,user_id,expected_version);
     IF new_password_hash IS NOT NULL THEN
+        IF NOT iam.user_password_reset_contract_ready() THEN
+            RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='password reset contract is unavailable';
+        END IF;
+        IF EXISTS(SELECT 1 FROM iam.user_password_reset_completions c WHERE c.tenant_id=tenant
+            AND c.actor_principal_id=actor AND c.request_id=event->>'requestId')
+            OR EXISTS(SELECT 1 FROM iam.audit_outbox o WHERE o.tenant_id=tenant
+                AND o.event_document->>'action'='iam.user.password-reset' AND o.event_document->>'result'='SUCCEEDED'
+                AND o.event_document#>>'{actor,id}'=actor AND o.event_document->>'requestId'=event->>'requestId') THEN
+            RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='password reset intent was already used';
+        END IF;
         IF expected_settings_version IS DISTINCT FROM (SELECT a.security_settings_version FROM iam.accounts a WHERE a.id=tenant) THEN
             RAISE EXCEPTION USING ERRCODE='P0002',MESSAGE='password settings changed concurrently';
         END IF;
@@ -1395,6 +1532,11 @@ BEGIN
     UPDATE iam.sessions AS s SET status='REVOKED',revoked_at=transaction_timestamp(),resource_version=s.resource_version+1
     WHERE s.tenant_id=tenant AND s.principal_id=user_id AND s.status='ACTIVE';
     PERFORM iam.append_account_event(tenant,actor,decision,event_action,'USER',user_id,event);
+    IF new_password_hash IS NOT NULL THEN
+        INSERT INTO iam.user_password_reset_completions(tenant_id,actor_principal_id,user_id,request_id,
+            expected_version,resulting_version,event_id,occurred_at)
+        VALUES(tenant,actor,user_id,event->>'requestId',expected_version,expected_version+1,event->>'eventId',transaction_timestamp());
+    END IF;
     RETURN iam.user_snapshot(tenant,user_id);
 END
 $function$;
@@ -1439,11 +1581,74 @@ REVOKE ALL ON FUNCTION iam.lock_managed_user(text,text,text,bigint),iam.read_pas
         matrix_iam_credential_recovery,matrix_iam_authentication_recovery,matrix_iam_backup_custody;
 GRANT EXECUTE ON FUNCTION iam.read_password_reset(text,text,text,text,bigint) TO matrix_iam_api;
 
+CREATE OR REPLACE FUNCTION iam.user_password_reset_completion_contract_ready()
+RETURNS boolean LANGUAGE plpgsql STABLE SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE relation_oid oid:=to_regclass('iam.user_password_reset_completions'); expected record;
+BEGIN
+    IF relation_oid IS NULL OR NOT EXISTS(SELECT 1 FROM pg_class c WHERE c.oid=relation_oid AND c.relkind='r'
+        AND c.relowner='matrix_iam_owner'::regrole AND c.relrowsecurity AND c.relforcerowsecurity)
+        OR (SELECT count(*) FROM pg_policy p WHERE p.polrelid=relation_oid)<>1
+        OR NOT EXISTS(SELECT 1 FROM pg_policy p WHERE p.polrelid=relation_oid AND p.polname='tenant_isolation'
+            AND p.polcmd='*' AND p.polpermissive AND p.polroles=ARRAY[0::oid] AND p.polqual IS NOT NULL AND p.polwithcheck IS NOT NULL)
+        OR (SELECT count(*) FROM pg_attribute a WHERE a.attrelid=relation_oid AND a.attnum>0 AND NOT a.attisdropped)<>8
+        OR EXISTS(SELECT 1 FROM pg_class c, LATERAL aclexplode(COALESCE(c.relacl,acldefault('r',c.relowner))) acl
+            WHERE c.oid=relation_oid AND acl.grantee<>c.relowner)
+        OR EXISTS(SELECT 1 FROM pg_attribute a, LATERAL aclexplode(a.attacl) acl
+            WHERE a.attrelid=relation_oid AND acl.grantee<>'matrix_iam_owner'::regrole) THEN RETURN false; END IF;
+    FOR expected IN SELECT * FROM (VALUES
+        ('tenant_id','text',-1),('actor_principal_id','text',-1),('user_id','text',-1),('request_id','text',-1),
+        ('expected_version','bigint',-1),('resulting_version','bigint',-1),('event_id','text',-1),('occurred_at','timestamptz',6)
+    ) e(name,kind,precision) LOOP
+        IF NOT EXISTS(SELECT 1 FROM pg_attribute a WHERE a.attrelid=relation_oid AND a.attname=expected.name
+            AND a.atttypid=expected.kind::regtype AND a.atttypmod=expected.precision AND a.attnotnull AND NOT a.attisdropped)
+            THEN RETURN false; END IF;
+    END LOOP;
+    FOR expected IN SELECT * FROM (VALUES
+        ('p','tenant_id,actor_principal_id,request_id',NULL,NULL),('u','tenant_id,event_id',NULL,NULL),
+        ('f','tenant_id,actor_principal_id','iam.principals','tenant_id,id'),
+        ('f','tenant_id,user_id','iam.principals','tenant_id,id'),
+        ('f','tenant_id,event_id','iam.audit_outbox','tenant_id,event_id')
+    ) e(kind,columns,reference_table,reference_columns) LOOP
+        IF NOT EXISTS(SELECT 1 FROM pg_constraint c WHERE c.conrelid=relation_oid AND c.contype::text=expected.kind
+            AND c.convalidated AND c.conenforced AND NOT c.condeferrable AND NOT c.condeferred
+            AND ARRAY(SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY k(number,position)
+                JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.number ORDER BY k.position)=string_to_array(expected.columns,',')
+            AND (expected.kind<>'f' OR (c.confrelid=to_regclass(expected.reference_table) AND c.confupdtype='a' AND c.confdeltype='a' AND c.confmatchtype='s'
+                AND ARRAY(SELECT a.attname::text FROM unnest(c.confkey) WITH ORDINALITY k(number,position)
+                    JOIN pg_attribute a ON a.attrelid=c.confrelid AND a.attnum=k.number ORDER BY k.position)=string_to_array(expected.reference_columns,',')))) THEN RETURN false; END IF;
+    END LOOP;
+    IF NOT EXISTS(SELECT 1 FROM pg_constraint c WHERE c.conrelid=relation_oid AND c.conname='user_password_reset_completions_values'
+        AND c.contype='c' AND c.convalidated AND c.conenforced) THEN RETURN false; END IF;
+    FOR expected IN SELECT * FROM (VALUES
+        ('iam.user_password_reset_completions','password_reset_completions_immutable',27,'iam.reject_policy_history_change()',false),
+        ('iam.user_password_reset_completions','password_reset_completions_no_truncate',34,'iam.reject_policy_history_change()',false),
+        ('iam.user_password_reset_completions','verify_password_reset_completion',5,'iam.verify_user_password_reset_completion()',true),
+        ('iam.audit_outbox','verify_password_reset_completion',5,'iam.verify_user_password_reset_completion()',true)
+    ) e(relation,name,kind,signature,deferred) LOOP
+        IF NOT EXISTS(SELECT 1 FROM pg_trigger t WHERE t.tgrelid=to_regclass(expected.relation) AND t.tgname=expected.name
+            AND t.tgenabled='A' AND NOT t.tgisinternal AND t.tgtype=expected.kind AND t.tgnargs=0 AND t.tgqual IS NULL
+            AND t.tgfoid=to_regprocedure(expected.signature) AND t.tgdeferrable=expected.deferred AND t.tginitdeferred=expected.deferred)
+            THEN RETURN false; END IF;
+    END LOOP;
+    RETURN (SELECT count(*)=2 FROM pg_proc p JOIN (VALUES
+        ('iam.assert_user_password_reset_completion(text,text,text)','void','tenant,actor,command_id'),
+        ('iam.verify_user_password_reset_completion()','trigger','')
+    ) definition(signature,result_type,names) ON p.oid=to_regprocedure(definition.signature)
+        AND p.prorettype=definition.result_type::regtype AND COALESCE(array_to_string(p.proargnames,','),'')=definition.names
+        WHERE p.proowner='matrix_iam_owner'::regrole AND NOT p.prosecdef AND NOT p.proretset AND NOT p.proisstrict
+            AND p.provolatile='v' AND p.proparallel='u' AND p.proconfig=ARRAY['search_path=pg_catalog, pg_temp']
+            AND NOT EXISTS(SELECT 1 FROM aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) acl WHERE acl.grantee<>p.proowner));
+END $function$;
+REVOKE ALL ON FUNCTION iam.user_password_reset_completion_contract_ready() FROM PUBLIC,matrix_iam_api,matrix_iam_worker,
+    matrix_iam_notification_worker,matrix_iam_credential_recovery,matrix_iam_authentication_recovery,matrix_iam_backup_custody;
+
 CREATE OR REPLACE FUNCTION iam.user_password_reset_contract_ready()
 RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $function$
     SELECT to_regprocedure('iam.change_user(text,text,text,text,bigint,text,text,jsonb)') IS NULL
       AND to_regprocedure('iam.change_user(text,text,text,text,bigint,text,text,jsonb,bigint,text,text)') IS NULL
-      AND (SELECT count(*)=3 FROM pg_catalog.pg_proc p JOIN (VALUES
+      AND iam.user_password_reset_completion_contract_ready()
+      AND (SELECT count(*)=4 FROM pg_catalog.pg_proc p JOIN (VALUES
+        ('iam.read_user_password_reset_completion(text,text,text,text,text,bigint)',true,'jsonb',false,'tenant,actor,decision,user_id,command_id,expected_version'),
         ('iam.lock_managed_user(text,text,text,bigint)',false,'void',false,'tenant,actor,user_id,expected_version'),
         ('iam.read_password_reset(text,text,text,text,bigint)',true,
          'TABLE(password_hash text, credential_generation bigint, password_history text[], history_digest text, password_settings jsonb, settings_version bigint)',true,

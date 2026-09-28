@@ -597,6 +597,97 @@ func TestAdministratorPasswordResetPreparesOutsideLocksAndRechecksAuthority(t *t
 	}
 }
 
+func TestPasswordResetCompletionUsesCurrentActorAndOnlyOriginalHistory(t *testing.T) {
+	tx := newCoreTransaction()
+	repository := &coreRepository{transaction: tx}
+	service, err := newCoreAuthority(repository, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := coreBootstrap(t)
+	if _, err := service.Bootstrap(t.Context(), document); err != nil {
+		t.Fatal(err)
+	}
+	login, err := service.Login(t.Context(), iamv1.LoginRequest{LoginName: "admin", Password: document.Administrator.Password, RequestID: "reset-history-login"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.ChangePassword(t.Context(), login.Credential, iamv1.ChangePasswordRequest{CurrentPassword: document.Administrator.Password,
+		NewPassword: coreSecret(t, "Reset-History-Actor-Password-73!"), RequestID: "reset-history-change"}); err != nil {
+		t.Fatal(err)
+	}
+	// No target USER or password material exists in this fake. Historical
+	// lookup must not consult a mutable target or call either reset phase.
+	original := iamv1.UserPasswordResetCompletion{APIVersion: iamv1.APIVersion, Kind: "UserPasswordResetCompletion",
+		AccountID: tx.organization.ID, ActorPrincipalID: tx.principal.ID, UserID: "reset-history-target", RequestID: "reset-original",
+		ExpectedResourceVersion: 4, ResultingResourceVersion: 5, EventID: "reset-original-event", OccurredAt: tx.now.Add(-time.Minute)}
+	reads := 0
+	result, readErr := original, error(nil)
+	tx.passwordResetCompletionRead = func(read AccountRead, target iamv1.PrincipalID, command string, version uint64) (iamv1.UserPasswordResetCompletion, error) {
+		reads++
+		if !repository.inTransaction || read.AccountID != original.AccountID || read.ActorPrincipalID != original.ActorPrincipalID ||
+			read.DecisionID == "" || target != original.UserID || command != original.RequestID || version != 4 {
+			t.Fatal("completion lookup lost its credential-derived exact scope")
+		}
+		decision := tx.authorizations[len(tx.authorizations)-1].Decision
+		if !decision.Allowed || decision.Action != iamv1.ActionIAMUserPasswordReset || decision.Resource.Kind != iamv1.ResourceUser || decision.Resource.ID != string(target) {
+			t.Fatal("completion lookup reused unrelated authority")
+		}
+		return result, readErr
+	}
+	query := func() (iamv1.UserPasswordResetCompletion, error) {
+		return service.UserPasswordResetCompletion(t.Context(), login.Credential, original.UserID, original.RequestID, 4, "read-original")
+	}
+	if got, err := query(); err != nil || got != original {
+		t.Fatal("exact historical completion failed", err)
+	}
+	for _, mutate := range []func(*iamv1.UserPasswordResetCompletion){
+		func(v *iamv1.UserPasswordResetCompletion) { v.AccountID = "other-account" },
+		func(v *iamv1.UserPasswordResetCompletion) { v.ActorPrincipalID = "other-actor" },
+		func(v *iamv1.UserPasswordResetCompletion) { v.UserID = "other-target" },
+		func(v *iamv1.UserPasswordResetCompletion) { v.RequestID = "other-command" },
+		func(v *iamv1.UserPasswordResetCompletion) {
+			v.ExpectedResourceVersion, v.ResultingResourceVersion = 5, 6
+		},
+		func(v *iamv1.UserPasswordResetCompletion) { v.OccurredAt = tx.now.Add(time.Second) },
+	} {
+		result = original
+		mutate(&result)
+		if got, err := query(); !errors.Is(err, ErrUnavailable) || got != (iamv1.UserPasswordResetCompletion{}) {
+			t.Fatal("unbound history escaped", err)
+		}
+	}
+	result, readErr = original, ErrUserPasswordResetCompletionNotFound
+	if got, err := query(); !errors.Is(err, ErrUserPasswordResetCompletionNotFound) || got != (iamv1.UserPasswordResetCompletion{}) {
+		t.Fatal("missing history was invented", err)
+	}
+	readErr = nil
+	repository.afterTransaction = func(error) error { return ErrUnavailable }
+	if got, err := query(); !errors.Is(err, ErrUnavailable) || got != (iamv1.UserPasswordResetCompletion{}) {
+		t.Fatal("unknown transaction exposed a completion", err)
+	}
+	repository.afterTransaction = nil
+	before := reads
+	tx.profileErr = ErrUnavailable
+	if _, err := query(); !errors.Is(err, ErrUnavailable) || reads != before {
+		t.Fatal("unavailable current authority read history", err)
+	}
+	tx.profileErr = nil
+	principal := tx.users[tx.principal.ID]
+	principal.MustChangePassword = true
+	tx.users[principal.ID] = principal
+	if _, err := query(); !errors.Is(err, ErrForbidden) || reads != before {
+		t.Fatal("temporary session read reset history", err)
+	}
+	for digest, binding := range tx.sessions {
+		binding.Subject.Session.Status = iamv1.SessionRevoked
+		tx.sessions[digest] = binding
+	}
+	if _, err := query(); !errors.Is(err, ErrUnauthenticated) || reads != before {
+		t.Fatal("revoked session read reset history", err)
+	}
+}
+
 func TestRootPasswordRecoveryPreservesPreparedIdentityAndCurrentAuthority(t *testing.T) {
 	tx := newCoreTransaction()
 	repository := &coreRepository{transaction: tx}
@@ -2580,6 +2671,7 @@ type coreTransaction struct {
 	settingsLockError             error
 	settingsMutationCalled        bool
 	passwordResetRead             func(AccountRead, iamv1.PrincipalID, uint64) (PasswordReplacementMaterial, error)
+	passwordResetCompletionRead   func(AccountRead, iamv1.PrincipalID, string, uint64) (iamv1.UserPasswordResetCompletion, error)
 	userCreationSettings          func(AccountRead) (iamv1.AccountPasswordSettings, uint64, error)
 	userCreationMutation          *UserMutation
 	userChange                    func(UserChange) (iamv1.User, error)
@@ -2599,6 +2691,10 @@ func (transaction *coreTransaction) ReadUserCreationPasswordSettings(_ context.C
 
 func (transaction *coreTransaction) ReadPasswordReset(_ context.Context, read AccountRead, user iamv1.PrincipalID, version uint64) (PasswordReplacementMaterial, error) {
 	return transaction.passwordResetRead(read, user, version)
+}
+
+func (transaction *coreTransaction) ReadUserPasswordResetCompletion(_ context.Context, read AccountRead, user iamv1.PrincipalID, request string, version uint64) (iamv1.UserPasswordResetCompletion, error) {
+	return transaction.passwordResetCompletionRead(read, user, request, version)
 }
 
 func (transaction *coreTransaction) ChangeUser(_ context.Context, mutation UserChange) (iamv1.User, error) {

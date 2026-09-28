@@ -22310,6 +22310,7 @@ func provePasswordSessionPolicy(t *testing.T, ctx context.Context, handler http.
 		var state string
 		if err := database.QueryRow(ctx, `SELECT jsonb_build_object(
 			'principal',to_jsonb(p),'credential',to_jsonb(c),
+			'resetCompletions',(SELECT jsonb_agg(to_jsonb(r) ORDER BY r.event_id) FROM iam.user_password_reset_completions r WHERE r.tenant_id=p.tenant_id AND r.user_id=p.id),
 			'sessions',(SELECT jsonb_agg(to_jsonb(s) ORDER BY s.id) FROM iam.sessions AS s WHERE s.tenant_id=p.tenant_id AND s.principal_id=p.id),
 			'successes',(SELECT jsonb_agg(e.event_document ORDER BY e.event_id) FROM iam.audit_outbox AS e WHERE e.tenant_id=p.tenant_id AND e.event_document->>'action' IN ('iam.user.password-changed','iam.user.password-reset') AND e.event_document#>>'{target,id}'=p.id)
 			)::text FROM iam.principals AS p JOIN iam.user_credentials AS c ON c.tenant_id=p.tenant_id AND c.principal_id=p.id
@@ -22360,6 +22361,9 @@ func provePasswordSessionPolicy(t *testing.T, ctx context.Context, handler http.
 		{"iam.read_root_password_recovery(text,text,text,text,bigint)", "matrix_iam_worker"},
 		{"iam.read_root_password_recovery(text,text,text,text,bigint)", "matrix_iam_credential_recovery"},
 		{"iam.lock_recoverable_root(text,bigint)", "matrix_iam_api"},
+		{"iam.read_user_password_reset_completion(text,text,text,text,text,bigint)", "matrix_iam_worker"},
+		{"iam.read_user_password_reset_completion(text,text,text,text,text,bigint)", "matrix_iam_credential_recovery"},
+		{"iam.assert_user_password_reset_completion(text,text,text)", "matrix_iam_api"},
 	} {
 		if _, err := database.Exec(ctx, "GRANT EXECUTE ON FUNCTION "+exposure.entry+" TO "+exposure.role); err != nil {
 			t.Fatal(err)
@@ -22400,12 +22404,28 @@ func provePasswordSessionPolicy(t *testing.T, ctx context.Context, handler http.
 		t.Fatal(err)
 	}
 	beforeFailure := securityState()
+	failedReset := map[string]any{"initialPassword": reset, "resourceVersion": beforeReset.User.ResourceVersion}
 	request(http.MethodPost, "/v1/users/"+string(principal.ID)+":reset-password", operator,
-		map[string]any{"initialPassword": reset, "resourceVersion": beforeReset.User.ResourceVersion}, http.StatusServiceUnavailable)
+		failedReset, http.StatusServiceUnavailable)
 	if securityState() != beforeFailure {
 		t.Fatal("failed final reset outbox retained password/history/session effects")
 	}
+	request(http.MethodGet, fmt.Sprintf("/v1/users/%s/password-resets/%s?resourceVersion=%d", principal.ID, failedReset["requestId"], beforeReset.User.ResourceVersion), operator, nil, http.StatusNotFound)
 	if _, err := database.Exec(ctx, `DROP TRIGGER reject_history_reset_fact ON iam.audit_outbox; DROP FUNCTION public.reject_history_reset_fact()`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(ctx, `CREATE FUNCTION public.reject_reset_completion() RETURNS trigger LANGUAGE plpgsql AS $body$ BEGIN
+	 RAISE EXCEPTION 'synthetic completion failure'; END $body$;
+	 CREATE TRIGGER reject_reset_completion BEFORE INSERT ON iam.user_password_reset_completions FOR EACH ROW EXECUTE FUNCTION public.reject_reset_completion()`); err != nil {
+		t.Fatal(err)
+	}
+	beforeCompletionFailure := securityState()
+	failedCompletion := map[string]any{"initialPassword": reset, "resourceVersion": beforeReset.User.ResourceVersion}
+	request(http.MethodPost, "/v1/users/"+string(principal.ID)+":reset-password", operator, failedCompletion, http.StatusServiceUnavailable)
+	if securityState() != beforeCompletionFailure {
+		t.Fatal("failed completion retained credential, sessions or its already-inserted success fact")
+	}
+	if _, err := database.Exec(ctx, `DROP TRIGGER reject_reset_completion ON iam.user_password_reset_completions; DROP FUNCTION public.reject_reset_completion()`); err != nil {
 		t.Fatal(err)
 	}
 	// The old preparation is no permit after a concurrent real password change.
@@ -22448,11 +22468,88 @@ func provePasswordSessionPolicy(t *testing.T, ctx context.Context, handler http.
 		t.Fatal("stale password reset did not finish")
 	}
 	beforeReset = identity(current)
-	request(http.MethodPost, "/v1/users/"+string(principal.ID)+":reset-password", operator,
-		map[string]any{"initialPassword": reset, "resourceVersion": beforeReset.User.ResourceVersion}, http.StatusOK)
+	originalReset := map[string]any{"initialPassword": reset, "resourceVersion": beforeReset.User.ResourceVersion, "requestId": "reset-completion-original"}
+	t.Run("reset_completion_visibility_and_race", func(t *testing.T) {
+		waitBlocked, release := holdIAMRequest(t, ctx, database, "reset-completion-original", true, auditv1.ActionIAMUserPasswordReset)
+		first, second := make(chan int, 1), make(chan int, 1)
+		firstBody := mustIAMJSON(t, originalReset)
+		secondBody := mustIAMJSON(t, map[string]any{"initialPassword": "Reset-Completion-Race-Password-82!", "resourceVersion": beforeReset.User.ResourceVersion, "requestId": "reset-completion-loser"})
+		go func() {
+			first <- performIAMRequest(handler, http.MethodPost, "/v1/users/"+string(principal.ID)+":reset-password", operator, firstBody).Code
+		}()
+		firstPID := waitBlocked()
+		// A real write is in flight with its original locks. A missing result
+		// is UNKNOWN, not evidence permitting another automatic reset.
+		request(http.MethodGet, fmt.Sprintf("/v1/users/%s/password-resets/reset-completion-original?resourceVersion=%d", principal.ID, beforeReset.User.ResourceVersion), operator, nil, http.StatusNotFound)
+		go func() {
+			second <- performIAMRequest(handler, http.MethodPost, "/v1/users/"+string(principal.ID)+":reset-password", operator, secondBody).Code
+		}()
+		wait, stop := context.WithTimeout(ctx, 5*time.Second)
+		defer stop()
+		ticker := time.NewTicker(10 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			var blocked bool
+			if err := database.QueryRow(wait, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database()
+			 AND usename=$1 AND $2=ANY(pg_blocking_pids(pid)))`, iamHTTPTestRole, firstPID).Scan(&blocked); err != nil {
+				t.Fatal("observe reset competitor", err)
+			}
+			if blocked {
+				break
+			}
+			select {
+			case <-ticker.C:
+			case <-wait.Done():
+				t.Fatal("reset competitor did not reach actual write locks")
+			}
+		}
+		release()
+		for _, outcome := range []struct {
+			result <-chan int
+			want   int
+		}{{first, http.StatusOK}, {second, http.StatusConflict}} {
+			select {
+			case status := <-outcome.result:
+				if status != outcome.want {
+					t.Fatalf("reset race status=%d want=%d", status, outcome.want)
+				}
+			case <-ctx.Done():
+				t.Fatal("reset race did not finish")
+			}
+		}
+		request(http.MethodGet, fmt.Sprintf("/v1/users/%s/password-resets/reset-completion-loser?resourceVersion=%d", principal.ID, beforeReset.User.ResourceVersion), operator, nil, http.StatusNotFound)
+	})
+	completionPath := fmt.Sprintf("/v1/users/%s/password-resets/%s?resourceVersion=%d", principal.ID, originalReset["requestId"], beforeReset.User.ResourceVersion)
+	var originalCompletion iamv1.UserPasswordResetCompletion
+	completionResponse := request(http.MethodGet, completionPath, operator, nil, http.StatusOK)
+	if json.Unmarshal(completionResponse.Body.Bytes(), &originalCompletion) != nil || iamv1.ValidateUserPasswordResetCompletion(originalCompletion) != nil ||
+		originalCompletion.UserID != principal.ID || originalCompletion.AccountID != principal.AccountID ||
+		originalCompletion.ActorPrincipalID != identity(operator).User.ID || originalCompletion.ExpectedResourceVersion != beforeReset.User.ResourceVersion ||
+		originalCompletion.RequestID != originalReset["requestId"] {
+		t.Fatal("reset completion did not preserve original committed metadata")
+	}
+	provePasswordResetCompletionStorage(t, ctx, database, handler, operator, originalCompletion)
+	request(http.MethodGet, completionPath, paasCredential, nil, http.StatusUnauthorized)
+	request(http.MethodGet, completionPath, verifierCredential, nil, http.StatusUnauthorized)
+	request(http.MethodGet, completionPath, current, nil, http.StatusUnauthorized)
+	request(http.MethodGet, fmt.Sprintf("/v1/users/%s/password-resets/%s?resourceVersion=%d", principal.ID, originalReset["requestId"], beforeReset.User.ResourceVersion+1), operator, nil, http.StatusNotFound)
+	request(http.MethodGet, fmt.Sprintf("/v1/users/%s/password-resets/not-observed?resourceVersion=%d", principal.ID, beforeReset.User.ResourceVersion), operator, nil, http.StatusNotFound)
 	invalid(current)
 	resetCurrent, resetOther := login(name, reset), login(name, reset)
+	request(http.MethodGet, completionPath, resetCurrent, nil, http.StatusForbidden)
 	change(resetCurrent, reset, retained, &keep)
+	// Even a later known version and a new valid password cannot reuse the
+	// original command. This is a conflict, not a write replay endpoint.
+	reusedBody := mustIAMJSON(t, map[string]any{"initialPassword": "New-Intent-Required-Password-91!", "resourceVersion": identity(resetCurrent).User.ResourceVersion,
+		"requestId": originalReset["requestId"]})
+	beforeReuse := securityState()
+	if got := performIAMRequest(handler, http.MethodPost, "/v1/users/"+string(principal.ID)+":reset-password", operator, reusedBody); got.Code != http.StatusConflict || securityState() != beforeReuse {
+		t.Fatal("used reset command changed state instead of conflicting")
+	}
+	var afterChange iamv1.UserPasswordResetCompletion
+	if json.Unmarshal(request(http.MethodGet, completionPath, operator, nil, http.StatusOK).Body.Bytes(), &afterChange) != nil || afterChange != originalCompletion {
+		t.Fatal("later password change replaced original completion")
+	}
 	invalid(resetOther)
 	invalid(temporary)
 	invalid(loggedOut)
@@ -22497,6 +22594,14 @@ func provePasswordSessionPolicy(t *testing.T, ctx context.Context, handler http.
 		t.Fatal("protected root reused its pre-recovery password or partially changed security state")
 	}
 	change(recovered, reset, "Session-Policy-Recovered-Password-29!", &keep)
+	request(http.MethodGet, completionPath, recovered, nil, http.StatusNotFound)
+	reauthenticatedOperator := login("admin", changedAdminPassword)
+	var afterRelogin iamv1.UserPasswordResetCompletion
+	if json.Unmarshal(request(http.MethodGet, completionPath, reauthenticatedOperator, nil, http.StatusOK).Body.Bytes(), &afterRelogin) != nil || afterRelogin != originalCompletion {
+		t.Fatal("same actor's normal new login could not confirm its original reset")
+	}
+	request(http.MethodPost, "/v1/auth/logout", reauthenticatedOperator, map[string]any{}, http.StatusOK)
+	request(http.MethodGet, completionPath, reauthenticatedOperator, nil, http.StatusUnauthorized)
 	invalid(recoveredOther)
 	applyIAMSchema(t, ctx, database)
 	applyIAMSchema(t, ctx, database)
@@ -22551,6 +22656,194 @@ func provePasswordSessionPolicy(t *testing.T, ctx context.Context, handler http.
 		}
 	}
 	assertIAMSecretsAbsent(t, ctx, database, initial, changed, retained, replaced, reset)
+	// User deletion tombstones the target; it cannot destroy or reclassify a
+	// successful historical reset and does not restore any old session.
+	latestTarget := identity(afterPlatform).User
+	const delegateInitial, delegatePassword = "Reset-Delegate-Initial-Password-83!", "Reset-Delegate-Normal-Password-94!"
+	var delegate iamv1.User
+	if json.Unmarshal(request(http.MethodPost, "/v1/users", operator, map[string]any{"loginName": "reset.delegate", "displayName": "Reset delegate", "initialPassword": delegateInitial}, http.StatusCreated).Body.Bytes(), &delegate) != nil {
+		t.Fatal("decode reset delegate")
+	}
+	delegateRealm := delegate.LoginName + "@" + string(delegate.AccountID)
+	delegateBearer := login(delegateRealm, delegateInitial)
+	change(delegateBearer, delegateInitial, delegatePassword, nil)
+	beforeRetarget := securityStateOf(delegate)
+	retargeted := performIAMRequest(handler, http.MethodPost, "/v1/users/"+string(delegate.ID)+":reset-password", operator,
+		mustIAMJSON(t, map[string]any{"initialPassword": "Reset-Retarget-Attack-Password-65!", "resourceVersion": identity(delegateBearer).User.ResourceVersion, "requestId": originalReset["requestId"]}))
+	if retargeted.Code != http.StatusConflict || securityStateOf(delegate) != beforeRetarget {
+		t.Fatal("used reset command could retarget another USER")
+	}
+	request(http.MethodGet, fmt.Sprintf("/v1/users/%s/password-resets/%s?resourceVersion=%d", delegate.ID, originalReset["requestId"], beforeReset.User.ResourceVersion), operator, nil, http.StatusNotFound)
+	var resetPolicy iamv1.PolicyDetail
+	policyDocument := iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+		Statements: []iamv1.PolicyStatement{{SID: "exactReset", Effect: "ALLOW", Actions: []iamv1.Action{iamv1.ActionIAMUserPasswordReset},
+			Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceUser, Match: iamv1.PolicyResourceExact, ID: string(principal.ID)}}}}}
+	if json.Unmarshal(request(http.MethodPost, "/v1/policies", operator, map[string]any{"displayName": "Reset only", "document": policyDocument}, http.StatusCreated).Body.Bytes(), &resetPolicy) != nil {
+		t.Fatal("decode reset policy")
+	}
+	var resetGrant iamv1.PolicyAttachment
+	if json.Unmarshal(request(http.MethodPost, "/v1/policy-attachments", operator, map[string]any{"target": iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(delegate.ID)}, "policyId": resetPolicy.Policy.ID, "policyResourceVersion": resetPolicy.Policy.ResourceVersion}, http.StatusOK).Body.Bytes(), &resetGrant) != nil {
+		t.Fatal("decode reset grant")
+	}
+	delegateBearer = login(delegateRealm, delegatePassword)
+	request(http.MethodGet, completionPath, delegateBearer, nil, http.StatusNotFound)
+	request(http.MethodGet, "/v1/users", delegateBearer, nil, http.StatusForbidden)
+	delegatedReset := map[string]any{"initialPassword": "Reset-Delegate-Target-Password-65!", "resourceVersion": latestTarget.ResourceVersion}
+	var resetTarget iamv1.User
+	if json.Unmarshal(request(http.MethodPost, "/v1/users/"+string(principal.ID)+":reset-password", delegateBearer, delegatedReset, http.StatusOK).Body.Bytes(), &resetTarget) != nil {
+		t.Fatal("decode delegated reset")
+	}
+	delegatedPath := fmt.Sprintf("/v1/users/%s/password-resets/%s?resourceVersion=%d", principal.ID, delegatedReset["requestId"], latestTarget.ResourceVersion)
+	request(http.MethodGet, delegatedPath, delegateBearer, nil, http.StatusOK)
+	request(http.MethodGet, delegatedPath, operator, nil, http.StatusNotFound)
+	request(http.MethodPost, "/v1/policy-attachments/"+string(resetGrant.ID)+":revoke", operator, map[string]any{"resourceVersion": resetGrant.ResourceVersion}, http.StatusOK)
+	request(http.MethodGet, delegatedPath, delegateBearer, nil, http.StatusForbidden)
+	delegateBearer = login(delegateRealm, delegatePassword)
+	request(http.MethodGet, delegatedPath, delegateBearer, nil, http.StatusForbidden)
+	request(http.MethodPost, "/v1/users/"+string(principal.ID)+":set-status", operator,
+		map[string]any{"status": "DISABLED", "resourceVersion": resetTarget.ResourceVersion}, http.StatusOK)
+	request(http.MethodPost, "/v1/users/"+string(principal.ID)+":delete", operator,
+		map[string]any{"resourceVersion": resetTarget.ResourceVersion + 1}, http.StatusOK)
+	var afterDeletion iamv1.UserPasswordResetCompletion
+	if json.Unmarshal(request(http.MethodGet, completionPath, operator, nil, http.StatusOK).Body.Bytes(), &afterDeletion) != nil || afterDeletion != originalCompletion {
+		t.Fatal("deleted target lost its historical password reset completion")
+	}
+	invalid(afterPlatform)
+}
+
+func provePasswordResetCompletionStorage(t *testing.T, ctx context.Context, database *pgx.Conn, handler http.Handler, operator string, completion iamv1.UserPasswordResetCompletion) {
+	t.Helper()
+	// Runtime roles get only the purpose-limited reader, never receipt-table
+	// access, including TRUNCATE and per-column grants.
+	for _, role := range []string{"matrix_iam_api", "matrix_iam_worker", "matrix_iam_credential_recovery", "matrix_iam_authentication_recovery", "matrix_iam_notification_worker", "matrix_iam_backup_custody"} {
+		for _, statement := range []string{"SELECT * FROM iam.user_password_reset_completions", "INSERT INTO iam.user_password_reset_completions DEFAULT VALUES", "UPDATE iam.user_password_reset_completions SET request_id=request_id", "DELETE FROM iam.user_password_reset_completions", "TRUNCATE iam.user_password_reset_completions"} {
+			tx, err := database.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tx.Exec(ctx, "SET LOCAL ROLE "+role); err != nil {
+				_ = tx.Rollback(ctx)
+				t.Fatal(err)
+			}
+			_, err = tx.Exec(ctx, statement)
+			_ = tx.Rollback(ctx)
+			var failure *pgconn.PgError
+			if !errors.As(err, &failure) || failure.Code != "42501" {
+				t.Fatalf("reset completion table exposed to %s", role)
+			}
+		}
+	}
+	for _, scope := range []struct {
+		tenant string
+		want   int
+	}{{string(completion.AccountID), 1}, {"wrong-completion-account", 0}} {
+		tx, err := database.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, "SET LOCAL ROLE matrix_iam_owner"); err != nil {
+			_ = tx.Rollback(ctx)
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, "SELECT set_config('matrix.iam_tenant_id',$1,true)", scope.tenant); err != nil {
+			_ = tx.Rollback(ctx)
+			t.Fatal(err)
+		}
+		var count int
+		err = tx.QueryRow(ctx, "SELECT count(*) FROM iam.user_password_reset_completions WHERE event_id=$1", completion.EventID).Scan(&count)
+		_ = tx.Rollback(ctx)
+		if err != nil || count != scope.want {
+			t.Fatal("reset completion forced tenant isolation failed", err)
+		}
+	}
+	for _, statement := range []string{
+		"UPDATE iam.user_password_reset_completions SET resulting_version=resulting_version",
+		"DELETE FROM iam.user_password_reset_completions", "TRUNCATE iam.user_password_reset_completions",
+	} {
+		tx, err := database.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = tx.Exec(ctx, statement)
+		_ = tx.Rollback(ctx)
+		if err == nil {
+			t.Fatal("immutable reset completion accepted mutation")
+		}
+	}
+	for _, corruption := range []string{
+		"expected_version=expected_version+1,resulting_version=resulting_version+1",
+		"occurred_at=occurred_at-interval '1 microsecond'",
+	} {
+		tx, err := database.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, "ALTER TABLE iam.user_password_reset_completions DISABLE TRIGGER password_reset_completions_immutable"); err != nil {
+			_ = tx.Rollback(ctx)
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, "UPDATE iam.user_password_reset_completions SET "+corruption+" WHERE event_id=$1", completion.EventID); err != nil {
+			_ = tx.Rollback(ctx)
+			t.Fatal(err)
+		}
+		_, err = tx.Exec(ctx, "SELECT iam.assert_user_password_reset_completion($1,$2,$3)", completion.AccountID, completion.ActorPrincipalID, completion.RequestID)
+		_ = tx.Rollback(ctx)
+		var failure *pgconn.PgError
+		if !errors.As(err, &failure) || failure.Code != "23514" {
+			t.Fatal("corrupt reset completion retained evidence")
+		}
+	}
+	// Corrupt only this transaction's historical fact, never commit it. A
+	// structurally valid receipt must not conceal a different source fact.
+	for _, patch := range []string{
+		`{"tenantId":"another-reset-account"}`,
+		`{"actor":{"type":"USER","id":"another-reset-actor"}}`,
+		`{"target":{"kind":"USER","id":"another-reset-target"}}`,
+		`{"action":"iam.user.password-changed"}`,
+		`{"result":"DENIED"}`,
+		`{"requestId":"another-reset-intent"}`,
+		`{"iamDecisionId":"another-reset-decision"}`,
+		`{"requestDigest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}`,
+		`{"installationId":"another-reset-scope"}`,
+		`{"permit":true}`,
+	} {
+		tx, err := database.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, "UPDATE iam.audit_outbox SET event_document=event_document||$1::jsonb WHERE event_id=$2", patch, completion.EventID); err != nil {
+			_ = tx.Rollback(ctx)
+			t.Fatal(err)
+		}
+		_, err = tx.Exec(ctx, "SELECT iam.assert_user_password_reset_completion($1,$2,$3)", completion.AccountID, completion.ActorPrincipalID, completion.RequestID)
+		_ = tx.Rollback(ctx)
+		var failure *pgconn.PgError
+		if !errors.As(err, &failure) || failure.Code != "23514" {
+			t.Fatal("reset completion accepted a different historical fact")
+		}
+	}
+	// Shape/privilege failures are checked through the actual API below.
+	for _, damage := range []struct{ apply, repair string }{
+		{"ALTER TABLE iam.user_password_reset_completions NO FORCE ROW LEVEL SECURITY", "ALTER TABLE iam.user_password_reset_completions FORCE ROW LEVEL SECURITY"},
+		{"ALTER TABLE iam.user_password_reset_completions DISABLE TRIGGER password_reset_completions_immutable", "ALTER TABLE iam.user_password_reset_completions ENABLE ALWAYS TRIGGER password_reset_completions_immutable"},
+		{"ALTER TABLE iam.audit_outbox DISABLE TRIGGER verify_password_reset_completion", "ALTER TABLE iam.audit_outbox ENABLE ALWAYS TRIGGER verify_password_reset_completion"},
+		{"GRANT SELECT (request_id) ON iam.user_password_reset_completions TO matrix_iam_api", "REVOKE SELECT (request_id) ON iam.user_password_reset_completions FROM matrix_iam_api"},
+	} {
+		if _, err := database.Exec(ctx, damage.apply); err != nil {
+			t.Fatal(err)
+		}
+		ready := performIAMRequest(handler, http.MethodGet, "/ready", "", nil)
+		query := performIAMRequest(handler, http.MethodGet, fmt.Sprintf("/v1/users/%s/password-resets/%s?resourceVersion=%d", completion.UserID, completion.RequestID, completion.ExpectedResourceVersion), operator, nil)
+		if _, err := database.Exec(ctx, damage.repair); err != nil {
+			t.Fatal(err)
+		}
+		if ready.Code != http.StatusServiceUnavailable || query.Code != http.StatusServiceUnavailable {
+			t.Fatal("damaged completion contract did not close readiness and query")
+		}
+		if performIAMRequest(handler, http.MethodGet, "/ready", "", nil).Code != http.StatusOK {
+			t.Fatal("restored completion contract did not recover readiness")
+		}
+	}
 }
 
 func provePasswordSessionRaces(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, operator string) {

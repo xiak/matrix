@@ -1253,6 +1253,85 @@ func TestIAMSecuritySettingsReadRejectsSelectorsAndAmbiguousWrites(t *testing.T)
 	}
 }
 
+func TestIAMUserPasswordResetCompletionBoundary(t *testing.T) {
+	const path = "/v1/users/reset-target/password-resets/reset-command"
+	valid := iamv1.UserPasswordResetCompletion{APIVersion: iamv1.APIVersion, Kind: "UserPasswordResetCompletion",
+		AccountID: "account-catalog", ActorPrincipalID: "reset-actor", UserID: "reset-target", RequestID: "reset-command",
+		ExpectedResourceVersion: 7, ResultingResourceVersion: 8, EventID: "reset-event", OccurredAt: time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC)}
+	for _, attack := range []struct {
+		method, path, body string
+		status             int
+	}{
+		{http.MethodGet, path, "", http.StatusBadRequest},
+		{http.MethodGet, path + "?resourceVersion=7&resourceVersion=7", "", http.StatusBadRequest},
+		{http.MethodGet, path + "?resourceVersion=7&accountId=other", "", http.StatusBadRequest},
+		{http.MethodGet, path + "?resourceVersion=7", `{}`, http.StatusBadRequest},
+		{http.MethodGet, path + "?ResourceVersion=7", "", http.StatusBadRequest},
+		{http.MethodGet, path + "?resourceVersion=07", "", http.StatusBadRequest},
+		{http.MethodGet, path + "?resourceVersion=0", "", http.StatusBadRequest},
+		{http.MethodGet, path + "?resourceVersion=9007199254740991", "", http.StatusBadRequest},
+		{http.MethodGet, path + "?resourceVersion=7;actor=other", "", http.StatusBadRequest},
+		{http.MethodGet, path + "?resourceVersion=7&bad=%zz", "", http.StatusBadRequest},
+		{http.MethodGet, path + "/extra?resourceVersion=7", "", http.StatusNotFound},
+		{http.MethodPost, path + "?resourceVersion=7", "", http.StatusMethodNotAllowed},
+	} {
+		t.Run(attack.method+attack.path+attack.body, func(t *testing.T) {
+			workflow := newHTTPWorkflow(t)
+			request := httptest.NewRequest(attack.method, attack.path, strings.NewReader(attack.body))
+			request.Header.Set("Authorization", "Bearer current")
+			response := httptest.NewRecorder()
+			newTestHandler(t, workflow).ServeHTTP(response, request)
+			if response.Code != attack.status || workflow.resetCompletionCalls != 0 {
+				t.Fatalf("invalid completion query reached workflow: status=%d calls=%d", response.Code, workflow.resetCompletionCalls)
+			}
+		})
+	}
+	for _, outcome := range []struct {
+		err    error
+		status int
+	}{
+		{nil, http.StatusOK}, {identityaccess.ErrUserPasswordResetCompletionNotFound, http.StatusNotFound},
+		{identityaccess.ErrUnauthenticated, http.StatusUnauthorized}, {identityaccess.ErrForbidden, http.StatusForbidden},
+		{identityaccess.ErrUnavailable, http.StatusServiceUnavailable},
+	} {
+		workflow := newHTTPWorkflow(t)
+		workflow.resetCompletion, workflow.resetCompletionError = valid, outcome.err
+		request := httptest.NewRequest(http.MethodGet, path+"?resourceVersion=7", nil)
+		request.Header.Set("Authorization", "Bearer current")
+		request.Header.Set("X-Tenant-ID", "forged-account")
+		response := httptest.NewRecorder()
+		newTestHandler(t, workflow).ServeHTTP(response, request)
+		if response.Code != outcome.status || workflow.resetCompletionCalls != 1 {
+			t.Fatalf("completion outcome was misrepresented: %d", response.Code)
+		}
+		if outcome.err == nil {
+			var got iamv1.UserPasswordResetCompletion
+			if json.Unmarshal(response.Body.Bytes(), &got) != nil || got != valid {
+				t.Fatal("original completion changed or accepted a tenant selector")
+			}
+		}
+	}
+	for _, mutate := range []func(*iamv1.UserPasswordResetCompletion){
+		func(v *iamv1.UserPasswordResetCompletion) { v.UserID = "wrong-target" },
+		func(v *iamv1.UserPasswordResetCompletion) { v.RequestID = "wrong-command" },
+		func(v *iamv1.UserPasswordResetCompletion) {
+			v.ExpectedResourceVersion, v.ResultingResourceVersion = 8, 9
+		},
+		func(v *iamv1.UserPasswordResetCompletion) { v.EventID = "" },
+	} {
+		workflow := newHTTPWorkflow(t)
+		workflow.resetCompletion = valid
+		mutate(&workflow.resetCompletion)
+		request := httptest.NewRequest(http.MethodGet, path+"?resourceVersion=7", nil)
+		request.Header.Set("Authorization", "Bearer current")
+		response := httptest.NewRecorder()
+		newTestHandler(t, workflow).ServeHTTP(response, request)
+		if response.Code != http.StatusServiceUnavailable {
+			t.Fatal("unbound completion exposed")
+		}
+	}
+}
+
 func TestIAMSecuritySettingsWriteAndCompletion(t *testing.T) {
 	const path = "/v1/account/security-settings"
 	const body = `{"requestId":"settings-command","stepUpId":"settings-proof","expectedResourceVersion":1,"mfa":{"requiredForUsers":false},"password":{"minimumLength":15,"requireLowercase":false,"requireUppercase":false,"requireDigit":false,"requireSymbol":false,"historyCount":1}}`
@@ -1436,6 +1515,9 @@ func TestIAMHTTPUserDetailUpdateAndDeleteAreBoundToTheRoute(t *testing.T) {
 }
 
 type httpWorkflow struct {
+	resetCompletion            iamv1.UserPasswordResetCompletion
+	resetCompletionCalls       int
+	resetCompletionError       error
 	passwordRequirements       iamv1.PasswordRequirements
 	passwordRequirementsCalls  int
 	passwordRequirementsError  error
@@ -1488,6 +1570,14 @@ type httpWorkflow struct {
 	settingsRequest          iamv1.UpdateAccountSecuritySettingsRequest
 	settingsChange           iamv1.AccountSecuritySettingsChange
 	settingsCommand          string
+}
+
+func (value *httpWorkflow) UserPasswordResetCompletion(_ context.Context, credential iamv1.Secret, user iamv1.PrincipalID, command string, version uint64, _ string) (iamv1.UserPasswordResetCompletion, error) {
+	value.resetCompletionCalls++
+	if string(credential.CopyBytes()) != "current" || user != "reset-target" || command != "reset-command" || version != 7 {
+		return iamv1.UserPasswordResetCompletion{}, identityaccess.ErrUnavailable
+	}
+	return value.resetCompletion, value.resetCompletionError
 }
 
 func (value *httpWorkflow) UpdateAccountSecuritySettings(_ context.Context, credential iamv1.Secret, request iamv1.UpdateAccountSecuritySettingsRequest) (iamv1.UpdateAccountSecuritySettingsResponse, error) {

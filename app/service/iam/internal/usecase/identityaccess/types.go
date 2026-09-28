@@ -183,6 +183,7 @@ type Transaction interface {
 	DeleteUser(context.Context, UserDeletionMutation) (iamv1.UserDeletion, error)
 	ChangeUser(context.Context, UserChange) (iamv1.User, error)
 	ReadPasswordReset(context.Context, AccountRead, iamv1.PrincipalID, uint64) (PasswordReplacementMaterial, error)
+	ReadUserPasswordResetCompletion(context.Context, AccountRead, iamv1.PrincipalID, string, uint64) (iamv1.UserPasswordResetCompletion, error)
 	Readiness(context.Context) (ReadinessSnapshot, error)
 }
 
