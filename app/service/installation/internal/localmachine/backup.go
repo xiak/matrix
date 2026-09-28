@@ -954,12 +954,12 @@ func verifyBackupAccessKeyWrapping(
 }
 
 func backupAPIVersionForDatabaseProfile(profile release.DatabaseProfile) (string, bool) {
-	// The signed IAM40 predecessor owns v4; the current IAM45 authority
-	// commits full authentication qualification in v5. This relationship
-	// selects a wire format, never grants cross-profile restore permission.
+	// The signed IAM45 predecessor and current IAM49 authority both commit
+	// full authentication qualification in v5. This selects a backup wire
+	// format, never grants cross-profile restore permission.
 	switch profile {
 	case release.SupportedDatabaseUpgradePredecessorProfile():
-		return backupAPIVersion, true
+		return authenticationStateBackupAPIVersion, true
 	case release.CurrentDatabaseProfile():
 		return authenticationStateBackupAPIVersion, true
 	default:

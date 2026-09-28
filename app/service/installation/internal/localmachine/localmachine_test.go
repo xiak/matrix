@@ -1613,7 +1613,7 @@ func TestBackupBindsAdmittedProfilesToAccessKeyWrappingWithoutArchivingIt(t *tes
 	}
 	predecessorBinding, predecessorVersion, err := backupAccessKeyWrappingForRelease(predecessor)
 	if err != nil || predecessorBinding == nil || !validSHA256(predecessorBinding.Commitment) ||
-		predecessorVersion != backupAPIVersion {
+		predecessorVersion != authenticationStateBackupAPIVersion {
 		t.Fatalf("predecessor backup wrapping contract = %#v / %q / %v", predecessorBinding, predecessorVersion, err)
 	}
 }
@@ -3328,7 +3328,7 @@ func TestRecoveryRejectsAutomaticCrossProfileImmediatePredecessor(t *testing.T) 
 	}
 	var predecessorBackup backupManifest
 	if json.Unmarshal(manifestContent, &predecessorBackup) != nil ||
-		predecessorBackup.APIVersion != backupAPIVersion ||
+		predecessorBackup.APIVersion != authenticationStateBackupAPIVersion ||
 		predecessorBackup.AccessKeyWrapping == nil || predecessorBackup.TOTPBackupCustody == nil {
 		t.Fatalf("supported predecessor backup lost its custody contract: %#v", predecessorBackup)
 	}
@@ -3347,7 +3347,7 @@ func TestRecoveryRejectsAutomaticCrossProfileImmediatePredecessor(t *testing.T) 
 	clear(recoveredTarget.TrustBytes)
 	if !errors.Is(err, platformcommand.ErrEffectPrecondition) ||
 		runtimeBoundary.recoveryRestores != 0 || !slices.Equal(runtimeBoundary.recoveryEvents, beforeEvents) {
-		t.Fatalf("v4 predecessor backup reached automatic restore: err=%v events=%v", err, runtimeBoundary.recoveryEvents)
+		t.Fatalf("cross-profile predecessor backup reached automatic restore: err=%v events=%v", err, runtimeBoundary.recoveryEvents)
 	}
 }
 
