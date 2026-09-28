@@ -5,81 +5,85 @@
 ## Pushed milestone
 
 - Repository https://github.com/xiak/matrix.git, branch feat/iam, independent
-  worktree. Milestone 2026-09-28. Full goal ACTIVE/incomplete.
-- Latest pushed source **0fa1ff828086b316f6b6034994e74d39d11c4bc0**.
-  Exact Verification **36441090890** was confirmed queued, not successful:
-  https://github.com/xiak/matrix/actions/runs/36441090890
-- Parent **4c6cf48e4ac195abb71d1490dfd6e414f7c01912** corrects IAM000012
-  backup custody's stale schema47 guard to48, Audit test assertions and
-  owning FEAT evidence. It preserves function/role/readiness checks and all
-  schema/profile numbers. 0fa moves final capacity outbox comparison after
-  the last Audit chain query and drains those newly committed facts.
-- Base **2468b28c3606aa377fcf47dd3129991cb0495bb9**, source IAM48/Audit27,
-  is the Account password rules/effective requirements candidate.
-  Verification36428925813 ended failure: storage/runtime/removal failed at
-  stale version checks; recovery-window succeeded at15:05:26UTC and aggregate
-  correctly failed. No old failure is retroactively accepted.
+  worktree. Milestone 2026-09-29. Full goal ACTIVE/incomplete.
+- Latest pushed source **9df4512616ac2648fa6e993b260d5ef7c6670606**,
+  source IAM49/Audit27. Exact Verification **36455507556** was confirmed
+  queued, not successful:
+  https://github.com/xiak/matrix/actions/runs/36455507556
+- It selectively adapts fixed installation source
+  **e579eef16c5e833337bd8055a0a838b7aa1614f3**'s purpose-only new-intent
+  recovery inspection into this branch's password/history qualification.
+  It imports no installation/profile/checkpoint or donor acceptance.
+- Pushed ancestors include **0844f211**'s real OTP-boundary fixture correction,
+  **edbb7e7d**'s full attachment-matrix preparation reuse,
+  **082c172e**'s full24-history capacity/serial CI lane and **20b736a2**'s pure
+  UserPasswordResetCompletion type. No reset-completion GET or SQL exists.
+- Previous **0fa1ff82 / 36441090890** ended failure. Storage and step-up
+  failed; runtime hit its20-minute job deadline. The remaining recovery-window
+  job really completed/success before the new candidate was pushed. Failures
+  are not retroactively accepted by local corrections or other green jobs.
 - Latest independently accepted cumulative source remains
   **3178b649f6e61c59786f6d0b14828ff3196876f3**, IAM46/Audit27,
   Verification36391053858 completed/success, all12 jobs.
 
 ## Reading route and remaining outcome
 
-Read AGENTS, IAM/FEAT-IAM-009-security-governance.md S3b/current evidence,
-then owning code/tests. 011 owns capacity/CI and the single real predecessor;
-the original FEAT-006 adoption record owns fixed source decisions.
+Read AGENTS, IAM/FEAT-IAM-009-security-governance.md recovery inspection and
+S3b/reset-completion, then the owning code/tests. 011 owns capacity/CI and
+the single real predecessor; the original FEAT-006 adoption record owns
+fixed source decisions.
 
-Confirm 0fa's exact CI before handing its guard correction to consumers as
-accepted. Separately close full24-history cost and independent Account
-interference in the existing process owner. Login-only capacity and a guard
-fix do not complete S3b performance/fairness. Continue the full remaining
-FEAT scope: password age, idle sessions, reports, business credential
-integration, UI, signed installation and capacity/HA requirements.
-Unknown online reset completion and changed-qualification backup recovery
-remain real gaps, not permission for a new-intent retry or permanent denial
-as a substitute for the required recovery path.
+Confirm 9df's exact CI before handing the combined candidate over as accepted.
+Next bounded implementation is the original administrator-reset completion
+query, reserved source IAM50/Audit27, not password expiry or another recovery
+capability. Continue all remaining FEAT scope: password expiry, idle sessions,
+reports, service-role/ABAC and actual business credential integration, UX,
+signed installation and capacity/HA. The full goal is not only UI or testing.
 
 ## Fixed contracts and local evidence
 
-Current Account settings/new StepUp/PUT require complete mfa+password:
-minimum15–128 code points, four explicit composition flags, history0–24,
-fixed512-byte bound. Current password is always rejected; root/unrevoked
-INSTALLATION USER keeps the product floor. Preparation releases locks
-before fixed-cost comparison/hash; final write rechecks current identity,
-settings, credential and history. Historical completions are not backfilled
-and old unfinished proofs do not become permits. Effective requirements
-use actual login-session or original PASSWORD_CHANGE challenge, no selector.
+The private authentication-recovery executable's inspect uses the original
+protected intent FILE and dedicated login. Serializable current qualification
+and a NEW command produce a closed nonsecret ELIGIBLE tuple, no snapshot,
+closure, receipt or recovery effects. Old commands/qualification are rejected.
+Close always revalidates; the response is not a reusable permit. The exact
+recovery role has five executable functions, checked by schema/readiness and
+actual login.
 
-Private authentication projectionv4 includes rules/history/actual age.
-Public FILE/snapshot, ServiceIdentity/lookup_service/claim7/canonical stay
-unchanged. Published CurrentDatabaseProfile remains **4/3/1+r4**, not source
-schema numbers; no cross-profile release permission is implied.
+Private snapshot projectionv4, original FILE/snapshot contracts,
+ServiceIdentity/lookup_service/claim7/Audit canonical remain unchanged.
+Published CurrentDatabaseProfile remains **4/3/1+r4**, not source schema.
+No cross-profile release permission is implied.
 
-Guard correction passed owned PG18.6 serial race-p1: dual-authority
-storage5.89s, actual backup snapshot10.42s, executable dump/restore25.77s.
-Default IAM/Audit/architecture/process race and vet plus IAM Linux build
-passed; external SKIP is not runtime evidence. Fixed0fa's original capacity
-workload passed118.15s on owned PG18.4:2300 requests with zero unexpected
-failures,400 issued credentials verified across replicas,1400 exact decisions,
-2413 IAM outbox facts matched to2413 Audit records after final queries.
-These local results do not replace pending independent CI or full release.
+Actual local PG18.4 serial race-p1 passed recovery-close55.39s, real backup/
+recovery binaries20.42s, fixed42035189 IAM45->49 retained executable upgrade
+95.13s and dual-authority storage6.25s. Original deadlines, old receipt/hash,
+complete retained dump, no-effect admission, lock orders, lost stdout and
+replay checks remain. PG was1CPU/768MiB/PIDs192; native Go1.26.3 used
+GOMAXPROCS2/GOMEMLIMIT512MiB.
+
+Fixed9df clean archive then passed full IAM replicas/PaaS/Audit/dispatchers
+158.10s (package159.144) on a separate internal network, PG18.4 and
+Go1.26.5 runner2CPU/1536MiB/PIDs256, original6-minute fixture. Full repository
+race-p2, vet, module verification, stable API regeneration and Linux amd64
+build passed. Default external SKIPs are not runtime evidence. All owned
+runtime objects/cache/network were cleaned; no local gate is still running.
 
 ## Coordination and boundaries
 
 Installation thread **01a04149-5dbb-7300-9e4c-31d9e85c8ada** owns signed
-consumer/profile/journal/materials/backup runtime and exclusively new000015
-recovery inspection with necessary readiness registration. Reported fixed
-**25e28b40f951554664ae2356713e054a2d8bb659** has CI36440819157 pending,
-not imported. New-intent inspect must reject existing commands and prove
-current full qualification; a SOURCE receipt is not new eligibility.
-It awaits separately verified guard/history sources. Do not read its WIP
-or label an unverified combined profile.
+consumer/profile/journal/materials/backup runtime. It released the fixed000015
+window for this ADAPT and plans its own49/27/PaaS6+r17 combination. It reported
+fixed1602fad3 / CI36452546082 success and real signed r16 inspection; that
+45/26/PaaS6 evidence does not accept our combination. It received the full9df
+SHA and pending CI. Keep000015's no-effects boundary unchanged.
 
 UX thread **01a07b21-9a0d-7fd0-b090-7827ce18262e**, branch
-feat/cloud-console-ux, owns all UI/browser work. Reported fixedefd1bce5
-separates challenged-password UNKNOWN and prevents blind resubmission;
-that evidence is not this branch's LIVE acceptance. S3b LIVE awaits exact
-verified source and real browser gates. Do not replace its MOCK service.
+feat/cloud-console-ux, owns all UI/browser work. Reported ed198f24 is a
+read-only MOCK service-authorization preview, not LIVE ServiceRoleTemplate
+or consent. Fixed3178 confirms deployment.read/operation.read are TENANT/
+INSTANCE, no PREFIX; exact preview IDs do not register resources. UX awaits
+implemented reset-completion GET, not merely20b's pure type.
 
 Markdown/existing owners only. No new agents/tasks, foreign WIP, remote
 1.3/160/161/withdrawn1.5, shared Docker/WSL/global changes or remote restarts.

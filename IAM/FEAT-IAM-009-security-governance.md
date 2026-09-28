@@ -770,6 +770,8 @@ IAM46/Audit27版本/readiness与校验对齐后，新的独立PG18数据库上`T
 
 同一最终源码全仓`go test -race -count=1 -p 2 ./...`、`go vet -p 2 ./...`、模块验证及Linux amd64构建通过；默认无外部DSN的SKIP不计真实验收。实际PG门禁均终态成功后确认零客户端，正常停止并清理本轮唯一临时PG及空网络；只有可重建测试数据，未操作其他任务或远端资源。独立CI与最终签名消费者组合仍待各自固定验证。
 
+固定`9df4512616ac2648fa6e993b260d5ef7c6670606`的干净archive随后在另一独立内部网络、PG18.4（1CPU/768MiB/PIDs192）与Go1.26.5 runner（2CPU/1536MiB/PIDs256，包含测试及全部子进程）通过原完整独立进程门禁158.10s（包159.144s）。实际两个IAM、PaaS、Audit和dispatcher证明当前49/27源码readiness、受限数据库登录、双账号资源/配置/Operation/outbox、跨副本当前撤权及完整历史链；原MFA绑定/恢复/再认证/换绑/解绑和安全设置的提交后TCP丢失、重启及原完成重放均保留，原6分钟fixture未扩大。冷runner第一次因login shell清除了Go路径在测试启动前退出127，改用镜像原PATH的非login shell后才取得上述真实结果，未改变源码或门禁。API再生成无差异；两容器、编译cache及空网络均已按唯一标签清理。该固定源已推送，[Verification36455507556](https://github.com/xiak/matrix/actions/runs/36455507556)已核实精确SHA、queued，未验收独立CI或签名新组合；旧0fa的36441090890已终态failure，恢复码真实窗口success不覆盖其其他失败/取消。
+
 本节只覆盖产品提供的受控备份/恢复，不声称抵抗root将数据库、所有磁盘、密钥和封存历史一起回滚。密钥用途隔离保护秘密，事务保护同一次提交；二者都不使数据库外的时间自动单调。将T1已消费/撤销的状态恢复到T0，会重新出现历史有效行；数据库内新增generation、消费表或与数据库一同备份的Audit均不能独立阻止。PostgreSQL的[PITR说明](https://www.postgresql.org/docs/18/continuous-archiving.html)只证明可恢复到选定时点，不提供认证资格不回退的保证。
 
 安全要求是：受支持恢复重新开放访问前，恢复可信的最新安全状态，或作废所有无法确认的认证资格并通过经过证明的受限路径重建。受影响入口包括登录、挑战、已有Session、派生Role及其他可能绕过该限制的发行/管理入口，不只关闭UI。历史资源、Operation和Audit不因此删除；已接受工作负载和历史outbox沿原产品边界处理。
