@@ -4,6 +4,7 @@ import type {
   AccountAccess,
   AccountIdentity,
   AccountSecuritySettings,
+  AccountPasswordSettings,
   AccountSecuritySettingsChange,
   AccountSecuritySettingsUpdate,
   SecuritySettingsUpdateIntent,
@@ -1628,15 +1629,30 @@ function accountPage<T>(value: unknown, kind: string, parse: (item: unknown) => 
 
 function accountHeaders(credential: string): HeadersInit { return { Authorization: `Bearer ${credential}` }; }
 
+function parseAccountPasswordSettings(value: unknown): AccountPasswordSettings {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["minimumLength", "requireLowercase", "requireUppercase", "requireDigit", "requireSymbol", "historyCount"]);
+  if (!Number.isSafeInteger(wire.minimumLength) || (wire.minimumLength as number) < 15 || (wire.minimumLength as number) > 128 ||
+      !Number.isSafeInteger(wire.historyCount) || (wire.historyCount as number) < 0 || (wire.historyCount as number) > 24 ||
+      typeof wire.requireLowercase !== "boolean" || typeof wire.requireUppercase !== "boolean" ||
+      typeof wire.requireDigit !== "boolean" || typeof wire.requireSymbol !== "boolean") throw new Error("INVALID_IAM_RESPONSE");
+  return {
+    minimumLength: wire.minimumLength as number, historyCount: wire.historyCount as number,
+    requireLowercase: wire.requireLowercase, requireUppercase: wire.requireUppercase,
+    requireDigit: wire.requireDigit, requireSymbol: wire.requireSymbol
+  };
+}
+
 function parseAccountSecuritySettings(value: unknown, expectedAccountId: string): AccountSecuritySettings {
   const wire = accountRecord(value);
-  exactKeys(wire, ["apiVersion", "kind", "accountId", "resourceVersion", "mfa", "updatedAt"]);
+  exactKeys(wire, ["apiVersion", "kind", "accountId", "resourceVersion", "mfa", "updatedAt"], ["password"]);
   requireAccountKind(wire, "AccountSecuritySettings");
   const accountId = accountIdentifier(wire.accountId);
   const mfa = accountRecord(wire.mfa);
   exactKeys(mfa, ["requiredForUsers"]);
   if (accountId !== accountIdentifier(expectedAccountId) || typeof mfa.requiredForUsers !== "boolean") throw new Error("INVALID_IAM_RESPONSE");
-  return { accountId, resourceVersion: accountVersion(wire.resourceVersion), mfa: { requiredForUsers: mfa.requiredForUsers }, updatedAt: accountTimestamp(wire.updatedAt) };
+  return { accountId, resourceVersion: accountVersion(wire.resourceVersion), mfa: { requiredForUsers: mfa.requiredForUsers },
+    password: wire.password === undefined ? null : parseAccountPasswordSettings(wire.password), updatedAt: accountTimestamp(wire.updatedAt) };
 }
 
 function parseAccountSecuritySettingsChange(value: unknown, accountId: string, requestId: string, intent: SecuritySettingsUpdateIntent): AccountSecuritySettingsChange {
@@ -1644,6 +1660,9 @@ function parseAccountSecuritySettingsChange(value: unknown, accountId: string, r
   exactKeys(wire, ["apiVersion", "kind", "requestId", "expectedResourceVersion", "settings", "callerSessionEnded"]);
   requireAccountKind(wire, "AccountSecuritySettingsChange");
   const settings = parseAccountSecuritySettings(wire.settings, accountId);
+  // This unmounted legacy write client freezes only MFA. It must not accept a
+  // newer combined-settings completion that it never bound into its intent.
+  if (settings.password !== null) throw new Error("INVALID_IAM_RESPONSE");
   if (accountIdentifier(wire.requestId) !== requestId || accountVersion(wire.expectedResourceVersion) !== intent.expectedResourceVersion ||
       settings.resourceVersion !== intent.expectedResourceVersion + 1 || settings.mfa.requiredForUsers !== intent.mfa.requiredForUsers ||
       wire.callerSessionEnded !== true) throw new Error("INVALID_IAM_RESPONSE");

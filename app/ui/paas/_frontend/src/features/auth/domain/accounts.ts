@@ -83,7 +83,19 @@ export type AccountSecuritySettings = {
   accountId: string;
   resourceVersion: number;
   mfa: { requiredForUsers: boolean };
+  // Null is confined to the pre-password-settings IAM runtime and retained
+  // historical completions. Never substitute the MOCK sample as account data.
+  password: AccountPasswordSettings | null;
   updatedAt: string;
+};
+
+export type AccountPasswordSettings = {
+  minimumLength: number;
+  requireLowercase: boolean;
+  requireUppercase: boolean;
+  requireDigit: boolean;
+  requireSymbol: boolean;
+  historyCount: number;
 };
 
 export type SecuritySettingsUpdateIntent = {

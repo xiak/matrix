@@ -19,6 +19,8 @@
 .facts > div { display: grid; grid-template-columns: minmax(100px, .7fr) minmax(0, 1.3fr); gap: 16px; border-bottom: var(--xiak-border-subtle); padding-bottom: 12px; }
 .facts dt { color: var(--xiak-color-text-muted); }
 .facts dd { margin: 0; color: var(--xiak-color-text-strong); font-weight: var(--xiak-font-weight-medium); overflow-wrap: anywhere; }
+.livePasswordRule { display: grid; gap: var(--xiak-spacing-comfortable); border-top: var(--xiak-border-subtle); padding-top: var(--xiak-spacing-comfortable); }
+.livePasswordRule h4 { margin: 0; color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-body); font-weight: var(--xiak-font-weight-semibold); }
 .actions, .flowActions, .loginLinks { display: flex; flex-wrap: wrap; align-items: center; gap: var(--xiak-spacing-tight); }
 .flowActions { justify-content: flex-end; }
 .policyForm > p { margin: -8px 0 0 28px; color: var(--xiak-color-text-muted); line-height: 1.7; }

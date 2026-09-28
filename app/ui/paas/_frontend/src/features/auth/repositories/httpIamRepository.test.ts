@@ -1487,7 +1487,7 @@ describe("IAM HTTP account boundary", () => {
       resourceVersion: 4, mfa: { requiredForUsers: false }, updatedAt: timestamp };
     const fetcher = reply(settings);
     await expect(httpAccountRepository.accountSecuritySettings!.read("bearer", account.id)).resolves.toEqual({
-      accountId: account.id, resourceVersion: 4, mfa: { requiredForUsers: false }, updatedAt: timestamp
+      accountId: account.id, resourceVersion: 4, mfa: { requiredForUsers: false }, password: null, updatedAt: timestamp
     });
     expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/account/security-settings");
     expect(firstRequest(fetcher)[1]).toMatchObject({ cache: "no-store", headers: { Authorization: "Bearer bearer" } });
@@ -1507,6 +1507,28 @@ describe("IAM HTTP account boundary", () => {
       reply(invalid);
       await expect(httpAccountRepository.accountSecuritySettings!.read("bearer", account.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
     }
+  });
+
+  it("reads complete account password rules without inventing defaults or trusting malformed rules", async () => {
+    const password = { minimumLength: 21, requireLowercase: true, requireUppercase: false,
+      requireDigit: true, requireSymbol: false, historyCount: 3 };
+    const settings = { apiVersion, kind: "AccountSecuritySettings", accountId: account.id,
+      resourceVersion: 7, mfa: { requiredForUsers: true }, password, updatedAt: timestamp };
+    reply(settings);
+    await expect(httpAccountRepository.accountSecuritySettings!.read("bearer", account.id)).resolves.toEqual({
+      accountId: account.id, resourceVersion: 7, mfa: { requiredForUsers: true }, password, updatedAt: timestamp
+    });
+    for (const invalid of [
+      { ...password, minimumLength: 14 }, { ...password, minimumLength: 129 },
+      { ...password, minimumLength: "21" }, { ...password, historyCount: -1 },
+      { ...password, historyCount: 25 }, { ...password, requireDigit: undefined },
+      { ...password, requireSymbol: "false" }, { ...password, unrecognized: true }
+    ]) {
+      reply({ ...settings, password: invalid });
+      await expect(httpAccountRepository.accountSecuritySettings!.read("bearer", account.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+    reply({ ...settings, password: null });
+    await expect(httpAccountRepository.accountSecuritySettings!.read("bearer", account.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
   });
 
   it("binds account MFA updates to one exact operation proof and original request", async () => {
@@ -1574,6 +1596,8 @@ describe("IAM HTTP account boundary", () => {
       { ...change, settings: { ...settings, accountId: "other-account" } },
       { ...change, settings: { ...settings, resourceVersion: 6 } },
       { ...change, settings: { ...settings, mfa: { requiredForUsers: false } } },
+      { ...change, settings: { ...settings, password: { minimumLength: 15, requireLowercase: false,
+        requireUppercase: false, requireDigit: false, requireSymbol: false, historyCount: 1 } } },
       { ...change, extra: true }
     ]) {
       reply({ outcome: "APPLIED", change: invalid });

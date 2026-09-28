@@ -474,6 +474,8 @@
     "accountReadVersion": "规则版本",
     "accountReadUpdated": "更新时间",
     "accountReadBoundary": "这里只展示当前账号的真实规则，不提供编辑。此值不能证明任何人已绑定验证器，也不能证明当前会话完成了 MFA。",
+    "liveAccountTitle": "账号安全规则",
+    "liveAccountHint": "只读查看当前账号的登录 MFA 要求与密码规则；二者不等于本人已完成认证。",
     "accountReadRetry": "重新读取",
     "required": "已要求",
     "optional": "用户可选",
@@ -3741,6 +3743,9 @@
   "PasswordRulesPreview": {
     "eyebrow": "账户安全",
     "title": "密码规则",
+    "liveTitle": "新密码规则",
+    "liveUnavailable": "当前 IAM 运行时尚未返回密码规则；这里不会使用 MOCK 样例填充真实状态。",
+    "liveBoundary": "这是当前账号的规则，不一定是受保护身份或本人在改密时的有效要求；IAM 会在写入时重新核验规则与历史。",
     "hint": "账户级密码校验的目标体验；与登录方式、资源授权分别管理。",
     "badge": "设计预览 · MOCK",
     "summaryTitle": "拟定默认规则",

@@ -474,6 +474,8 @@
     "accountReadVersion": "Rule version",
     "accountReadUpdated": "Updated",
     "accountReadBoundary": "This is only the current account's live rule. Editing is not available. The value proves neither personal authenticator enrollment nor MFA completion by this Session.",
+    "liveAccountTitle": "Account security rules",
+    "liveAccountHint": "Read-only account MFA and password rules; neither proves this identity has completed authentication.",
     "accountReadRetry": "Read again",
     "required": "Required",
     "optional": "User optional",
@@ -3741,6 +3743,9 @@
   "PasswordRulesPreview": {
     "eyebrow": "Account security",
     "title": "Password rules",
+    "liveTitle": "New-password rule",
+    "liveUnavailable": "This IAM runtime has not returned password settings. MOCK sample values will not be shown as live account data.",
+    "liveBoundary": "This account rule may not be the effective requirement for a protected identity or the current user. IAM rechecks the rule and password history when writing.",
     "hint": "The proposed account-level password experience, separate from sign-in methods and resource grants.",
     "badge": "Design preview · MOCK",
     "summaryTitle": "Proposed defaults",

@@ -11,6 +11,7 @@ type ViewState = { client: AccountSecuritySettingsClient | null; result: Account
 
 export function LiveAccountSecuritySettings({ client }: { client: AccountSecuritySettingsClient | null }) {
   const t = useTranslations("MfaPreview");
+  const password = useTranslations("PasswordRulesPreview");
   const format = useFormatter();
   const [retry, setRetry] = useState(0);
   const [view, setView] = useState<ViewState>({ client, result: { status: "loading" } });
@@ -29,10 +30,13 @@ export function LiveAccountSecuritySettings({ client }: { client: AccountSecurit
   const result = view.client === client ? view.result : { status: "loading" as const };
   const retryRead = () => { setView({ client, result: { status: "loading" } }); setRetry((value) => value + 1); };
   const canRetry = result.status === "routeUnavailable" || result.status === "unavailable";
+  const passwordRules = result.status === "ready" ? result.settings.password : null;
+  const requiredClasses = passwordRules ? (["requireLowercase", "requireUppercase", "requireDigit", "requireSymbol"] as const)
+    .filter((field) => passwordRules[field]).map((field) => password(field)).join(password("listSeparator")) : "";
 
   return <section aria-labelledby="live-account-security" className={styles.section}>
     <div className={styles.sectionHeading}>
-      <div><p>{t("accountEyebrow")}</p><h2 id="live-account-security">{t("accountTitle")}</h2><span>{t("accountHint")}</span></div>
+      <div><p>{t("accountEyebrow")}</p><h2 id="live-account-security">{t("liveAccountTitle")}</h2><span>{t("liveAccountHint")}</span></div>
       <Badge status="success">LIVE</Badge>
     </div>
     <Card>
@@ -49,6 +53,17 @@ export function LiveAccountSecuritySettings({ client }: { client: AccountSecurit
             <div><dt>{t("accountReadUpdated")}</dt><dd><time dateTime={result.settings.updatedAt}>{format.dateTime(new Date(result.settings.updatedAt), { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</time></dd></div>
           </dl>
           <Alert>{t("accountReadBoundary")}</Alert>
+          <div className={styles.livePasswordRule}>
+            <h4>{password("liveTitle")}</h4>
+            {passwordRules ? <>
+              <dl className={styles.facts}>
+                <div><dt>{password("editMinimumLength")}</dt><dd>{password("effectiveMinimum", { count: passwordRules.minimumLength })}</dd></div>
+                <div><dt>{password("characterRules")}</dt><dd>{requiredClasses || password("noneRequired")}</dd></div>
+                <div><dt>{password("editHistoryCount")}</dt><dd>{password("effectiveHistory", { count: passwordRules.historyCount })}</dd></div>
+              </dl>
+              <Typography.Text tone="muted">{password("liveBoundary")}</Typography.Text>
+            </> : <Alert status="warning">{password("liveUnavailable")}</Alert>}
+          </div>
         </> : null}
         {result.status === "forbidden" ? <Alert status="warning">{t("accountReadDenied")}</Alert> : null}
         {canRetry ? <Alert status="danger">{t(result.status === "routeUnavailable" ? "accountReadRouteUnavailable" : "accountReadUnavailable")} <Button onClick={retryRead} size="small" variant="ghost"><RefreshCcw aria-hidden="true" />{t("accountReadRetry")}</Button></Alert> : null}
