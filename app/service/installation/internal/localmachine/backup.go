@@ -367,8 +367,9 @@ func createBackup(
 	}
 	var custodyProcess *backupCustodyProcess
 	var totpCustody *backupTOTPBackupCustody
+	authenticationStateDigest := ""
 	snapshotID := ""
-	if backupVersion == backupAPIVersion {
+	if backupVersion == backupAPIVersion || backupVersion == authenticationStateBackupAPIVersion {
 		process, lease, err := startTOTPBackupCustody(
 			ctx, runtimeBoundary, streaming, plan, installation, backupID,
 		)
@@ -380,6 +381,12 @@ func createBackup(
 		snapshotID = lease.SnapshotID
 		totpCustody = &backupTOTPBackupCustody{
 			Custody: lease.Custody, CustodyDigest: lease.CustodyDigest,
+		}
+		if backupVersion == authenticationStateBackupAPIVersion {
+			if !validSHA256(lease.AuthenticationStateDigest) {
+				return errors.Join(platformcommand.ErrEffectVerification, errors.New("backup authentication qualification is missing"))
+			}
+			authenticationStateDigest = lease.AuthenticationStateDigest
 		}
 	}
 	dumpRelative := filepath.Join(partialRelative, databaseDumpFilename)
@@ -393,7 +400,7 @@ func createBackup(
 	}
 	if custodyProcess != nil {
 		if err := verifyBackupTOTPBackupCustody(plan.Root, plan.InstallationID, backupManifest{
-			APIVersion: backupAPIVersion, TOTPBackupCustody: totpCustody,
+			APIVersion: backupVersion, TOTPBackupCustody: totpCustody, AuthenticationStateDigest: authenticationStateDigest,
 		}); err != nil {
 			return errors.Join(platformcommand.ErrEffectVerification, err)
 		}
@@ -419,13 +426,14 @@ func createBackup(
 	manifest := backupManifest{
 		APIVersion: backupVersion, Kind: backupKind,
 		BackupID: backupID, InstallationID: plan.InstallationID,
-		ReleaseID:         plan.Bundle.Manifest.Release.ID,
-		ReleaseDigest:     plan.Bundle.ManifestSHA256,
-		Database:          plan.Bundle.Manifest.Database,
-		CreatedAt:         createdAt,
-		Artifacts:         []backupArtifact{dumpArtifact, secretsArtifact},
-		AccessKeyWrapping: accessKeyWrapping,
-		TOTPBackupCustody: totpCustody,
+		ReleaseID:                 plan.Bundle.Manifest.Release.ID,
+		ReleaseDigest:             plan.Bundle.ManifestSHA256,
+		Database:                  plan.Bundle.Manifest.Database,
+		CreatedAt:                 createdAt,
+		Artifacts:                 []backupArtifact{dumpArtifact, secretsArtifact},
+		AccessKeyWrapping:         accessKeyWrapping,
+		TOTPBackupCustody:         totpCustody,
+		AuthenticationStateDigest: authenticationStateDigest,
 	}
 	content, err := sealBackupManifest(manifest, key)
 	if err != nil {
@@ -946,13 +954,14 @@ func verifyBackupAccessKeyWrapping(
 }
 
 func backupAPIVersionForDatabaseProfile(profile release.DatabaseProfile) (string, bool) {
-	// The exact supported predecessor already owns the v4 TOTP custody
-	// contract. "Predecessor" is a release relationship, not permission to
-	// downgrade the authenticated backup format. Both admitted restore profiles
-	// require the same custody proof; v3 remains decoder-only.
+	// The signed IAM40 predecessor owns v4; the current IAM45 authority
+	// commits full authentication qualification in v5. This relationship
+	// selects a wire format, never grants cross-profile restore permission.
 	switch profile {
-	case release.SupportedDatabaseUpgradePredecessorProfile(), release.CurrentDatabaseProfile():
+	case release.SupportedDatabaseUpgradePredecessorProfile():
 		return backupAPIVersion, true
+	case release.CurrentDatabaseProfile():
+		return authenticationStateBackupAPIVersion, true
 	default:
 		return "", false
 	}

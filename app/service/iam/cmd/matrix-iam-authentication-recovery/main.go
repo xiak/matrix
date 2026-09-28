@@ -89,16 +89,18 @@ func execute(ctx context.Context, mode string, output io.Writer, getenv func(str
 	defer cancel()
 	intentPath := getenv(installationv1.AuthenticationRecoveryIntentFileEnvironment)
 	closurePath := getenv(installationv1.AuthenticationRecoveryClosureFileEnvironment)
+	snapshotPath := getenv(installationv1.AuthenticationRecoverySecuritySnapshotFileEnvironment)
 	if mode == installationv1.AuthenticationRecoveryCloseCommand {
-		if intentPath == "" || closurePath != "" {
+		if intentPath == "" || closurePath != "" || snapshotPath != "" {
 			return authenticationrecovery.ErrInvalidArgument
 		}
-	} else if closurePath == "" || intentPath != "" {
+	} else if closurePath == "" || snapshotPath == "" || intentPath != "" {
 		return authenticationrecovery.ErrInvalidArgument
 	}
 
 	var intent installationv1.AuthenticationRecoveryIntent
 	var closure installationv1.AuthenticationRecoveryClosure
+	var snapshot installationv1.AuthenticationRecoverySecuritySnapshot
 	path := closurePath
 	if mode == installationv1.AuthenticationRecoveryCloseCommand {
 		path = intentPath
@@ -115,6 +117,21 @@ func execute(ctx context.Context, mode string, output io.Writer, getenv func(str
 	}
 	if err != nil {
 		return authenticationrecovery.ErrInvalidArgument
+	}
+	if mode == installationv1.AuthenticationRecoveryCloseCommand {
+		if installationv1.ValidateCurrentAuthenticationRecoveryIntent(intent) != nil {
+			return authenticationrecovery.ErrInvalidArgument
+		}
+	} else {
+		encodedSnapshot, readErr := processconfig.ReadFile(snapshotPath, installationv1.MaximumAuthenticationRecoverySecuritySnapshotBytes, true)
+		if readErr != nil {
+			return authenticationrecovery.ErrInvalidArgument
+		}
+		defer clear(encodedSnapshot)
+		snapshot, err = installationv1.DecodeAuthenticationRecoverySecuritySnapshot(bytes.NewReader(encodedSnapshot))
+		if err != nil || installationv1.ValidateAuthenticationRecoverySecuritySnapshotForClosure(snapshot, closure) != nil {
+			return authenticationrecovery.ErrInvalidArgument
+		}
 	}
 
 	dsn, err := processconfig.ReadText(getenv(installationv1.AuthenticationRecoveryDatabaseDSNFileEnvironment), 16*1024, true)
@@ -154,15 +171,15 @@ func execute(ctx context.Context, mode string, output io.Writer, getenv func(str
 		if runErr != nil {
 			return runErr
 		}
-		result, err = installationv1.EncodeAuthenticationRecoveryClosure(value)
+		result, err = installationv1.EncodeAuthenticationRecoveryClosureEnvelope(value)
 	case installationv1.AuthenticationRecoveryReconcileCommand:
-		value, runErr := workflow.Reconcile(ctx, closure)
+		value, runErr := workflow.Reconcile(ctx, closure, snapshot)
 		if runErr != nil {
 			return runErr
 		}
 		result, err = installationv1.EncodeAuthenticationRecoveryClosure(value)
 	case installationv1.AuthenticationRecoveryReopenCommand:
-		value, runErr := workflow.Reopen(ctx, closure)
+		value, runErr := workflow.Reopen(ctx, closure, snapshot)
 		if runErr != nil {
 			return runErr
 		}
@@ -195,9 +212,10 @@ func verifyRecoveryLogin(ctx context.Context, pool *pgxpool.Pool) error {
             AND c.relkind IN ('r','p','v','m','f')
             AND has_table_privilege(session_user,c.oid,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'))
         AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_proc p WHERE p.pronamespace='iam'::regnamespace
-            AND p.oid NOT IN (to_regprocedure('iam.close_authentication_recovery(jsonb,text,jsonb)'),
-                to_regprocedure('iam.reconcile_authentication_recovery(jsonb,text,jsonb,jsonb)'),
-                to_regprocedure('iam.reopen_authentication_recovery(jsonb,text,jsonb)'))
+            AND p.oid NOT IN (to_regprocedure('iam.prepare_authentication_recovery_close(jsonb,text)'),
+                to_regprocedure('iam.close_authentication_recovery(jsonb,text,jsonb,jsonb,text)'),
+                to_regprocedure('iam.reconcile_authentication_recovery(jsonb,text,jsonb,jsonb,jsonb)'),
+                to_regprocedure('iam.reopen_authentication_recovery(jsonb,text,jsonb,jsonb)'))
             AND has_function_privilege(session_user,p.oid,'EXECUTE'))
         FROM pg_catalog.pg_roles AS own WHERE own.rolname=session_user`).Scan(&sessionUser, &currentUser, &restricted)
 	if err != nil {

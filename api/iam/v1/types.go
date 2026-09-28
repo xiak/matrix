@@ -152,8 +152,9 @@ type VerifyAuthenticationChallengeRequest struct {
 	Code                Secret `json:"code"`
 }
 
-// ChallengePasswordChangeRequest consumes only a password-change challenge
-// reached through the actual password and TOTP ceremony, never a Session.
+// ChallengePasswordChangeRequest consumes only a PASSWORD_CHANGE challenge:
+// LOGIN has already proved TOTP; ENROLLMENT has proved the initial password
+// under a required first-factor setup. Neither ceremony is a Session.
 type ChallengePasswordChangeRequest struct {
 	RequestID           string `json:"requestId"`
 	ChallengeCredential Secret `json:"challengeCredential"`
@@ -174,7 +175,8 @@ const (
 
 // AuthenticationChallenge describes the next restricted authentication step,
 // never an identity or permission. LOGIN may require TOTP then a separately
-// credentialed PASSWORD_CHANGE; enrollment, recovery and step-up are not LOGIN.
+// credentialed PASSWORD_CHANGE. ENROLLMENT permits only first-factor setup
+// (after any required password change), not login, recovery or step-up authority.
 type AuthenticationChallenge struct {
 	APIVersion string    `json:"apiVersion"`
 	Kind       string    `json:"kind"`
@@ -182,6 +184,73 @@ type AuthenticationChallenge struct {
 	Purpose    string    `json:"purpose"`
 	NextStep   string    `json:"nextStep"`
 	ExpiresAt  time.Time `json:"expiresAt"`
+}
+
+// EnrollmentChallengeState is an observation held by one restricted
+// ENROLLMENT credential. A required password change exposes no contact or
+// factor state. It never contains a Session, provisioning or another secret.
+type EnrollmentChallengeState struct {
+	Challenge           AuthenticationChallenge `json:"challenge"`
+	NotificationContact *NotificationContact    `json:"notificationContact,omitempty"`
+	Enrollment          *TOTPEnrollment         `json:"enrollment,omitempty"`
+}
+
+type InspectEnrollmentChallengeRequest struct {
+	ChallengeCredential Secret `json:"challengeCredential"`
+}
+
+// The factor revision and USER are taken from locked challenge authority,
+// not supplied by the client. This is not the normal Session enrollment API.
+type StartChallengeTOTPEnrollmentRequest struct {
+	RequestID           string `json:"requestId"`
+	ChallengeCredential Secret `json:"challengeCredential"`
+}
+
+// AccountMFASettings governs ordinary USER login requirements, not whether
+// a particular USER has a factor or a Session actually authenticated with it.
+// Protected root/installation identities have their own non-tenant boundary.
+type AccountMFASettings struct {
+	RequiredForUsers bool `json:"requiredForUsers"`
+}
+
+type AccountSecuritySettings struct {
+	APIVersion      string             `json:"apiVersion"`
+	Kind            string             `json:"kind"`
+	AccountID       AccountID          `json:"accountId"`
+	ResourceVersion uint64             `json:"resourceVersion"`
+	MFA             AccountMFASettings `json:"mfa"`
+	UpdatedAt       time.Time          `json:"updatedAt"`
+}
+
+// SecuritySettingsUpdateIntent is the exact nonsecret target of a settings
+// operation-bound proof. It is not a policy, identity selector or permit.
+type SecuritySettingsUpdateIntent struct {
+	ExpectedResourceVersion uint64             `json:"expectedResourceVersion"`
+	MFA                     AccountMFASettings `json:"mfa"`
+}
+
+type UpdateAccountSecuritySettingsRequest struct {
+	RequestID               string             `json:"requestId"`
+	StepUpID                string             `json:"stepUpId"`
+	ExpectedResourceVersion uint64             `json:"expectedResourceVersion"`
+	MFA                     AccountMFASettings `json:"mfa"`
+}
+
+// This is an immutable historical completion. CallerSessionEnded describes
+// the original calling Session, never the Session reading this result now.
+// RequestID is its sole command reference; it does not grant lookup access.
+type AccountSecuritySettingsChange struct {
+	APIVersion              string                  `json:"apiVersion"`
+	Kind                    string                  `json:"kind"`
+	RequestID               string                  `json:"requestId"`
+	ExpectedResourceVersion uint64                  `json:"expectedResourceVersion"`
+	Settings                AccountSecuritySettings `json:"settings"`
+	CallerSessionEnded      bool                    `json:"callerSessionEnded"`
+}
+
+type UpdateAccountSecuritySettingsResponse struct {
+	Outcome string                        `json:"outcome"`
+	Change  AccountSecuritySettingsChange `json:"change"`
 }
 
 // AuthenticatorState is a projection of the authenticated USER, not a
@@ -199,6 +268,7 @@ type TOTPEnrollment struct {
 	Kind           string     `json:"kind"`
 	ID             string     `json:"id"`
 	RequestID      string     `json:"requestId"`
+	Purpose        string     `json:"purpose"`
 	FactorRevision uint64     `json:"factorRevision"`
 	State          string     `json:"state"`
 	CreatedAt      time.Time  `json:"createdAt"`
@@ -209,6 +279,14 @@ type TOTPEnrollment struct {
 type StartTOTPEnrollmentRequest struct {
 	RequestID              string `json:"requestId"`
 	Password               Secret `json:"password"`
+	ExpectedFactorRevision uint64 `json:"expectedFactorRevision"`
+}
+
+// Replacement is held by the original effective login Session and an exact
+// TOTP_REPLACE proof. Neither ID can select another identity or act as a bearer.
+type StartTOTPReplacementRequest struct {
+	RequestID              string `json:"requestId"`
+	StepUpID               string `json:"stepUpId"`
 	ExpectedFactorRevision uint64 `json:"expectedFactorRevision"`
 }
 
@@ -278,29 +356,35 @@ type ConfirmAuthenticatorRecoveryResponse struct {
 
 type StepUpOperation string
 
-const StepUpRegenerateRecoveryCodes StepUpOperation = "RECOVERY_CODES_REGENERATE"
+const (
+	StepUpRegenerateRecoveryCodes StepUpOperation = "RECOVERY_CODES_REGENERATE"
+	StepUpUpdateSecuritySettings  StepUpOperation = "SECURITY_SETTINGS_UPDATE"
+	StepUpReplaceTOTP             StepUpOperation = "TOTP_REPLACE"
+)
 
 // StepUp is non-secret metadata for one operation bound to its original login
 // Session. Neither its ID nor PROVED state is a bearer or a permission decision.
 type StepUp struct {
-	APIVersion             string          `json:"apiVersion"`
-	Kind                   string          `json:"kind"`
-	ID                     string          `json:"id"`
-	RequestID              string          `json:"requestId"`
-	Operation              StepUpOperation `json:"operation"`
-	ExpectedFactorRevision uint64          `json:"expectedFactorRevision"`
-	State                  string          `json:"state"`
-	CreatedAt              time.Time       `json:"createdAt"`
-	ExpiresAt              time.Time       `json:"expiresAt"`
-	ProvedAt               *time.Time      `json:"provedAt,omitempty"`
-	ConsumedAt             *time.Time      `json:"consumedAt,omitempty"`
+	APIVersion             string                        `json:"apiVersion"`
+	Kind                   string                        `json:"kind"`
+	ID                     string                        `json:"id"`
+	RequestID              string                        `json:"requestId"`
+	Operation              StepUpOperation               `json:"operation"`
+	ExpectedFactorRevision uint64                        `json:"expectedFactorRevision"`
+	SecuritySettings       *SecuritySettingsUpdateIntent `json:"securitySettings,omitempty"`
+	State                  string                        `json:"state"`
+	CreatedAt              time.Time                     `json:"createdAt"`
+	ExpiresAt              time.Time                     `json:"expiresAt"`
+	ProvedAt               *time.Time                    `json:"provedAt,omitempty"`
+	ConsumedAt             *time.Time                    `json:"consumedAt,omitempty"`
 }
 
 // RequestID is the intended sensitive command's identity, not a target selector.
 type StartStepUpRequest struct {
-	RequestID              string          `json:"requestId"`
-	Operation              StepUpOperation `json:"operation"`
-	ExpectedFactorRevision uint64          `json:"expectedFactorRevision"`
+	RequestID              string                        `json:"requestId"`
+	Operation              StepUpOperation               `json:"operation"`
+	ExpectedFactorRevision uint64                        `json:"expectedFactorRevision"`
+	SecuritySettings       *SecuritySettingsUpdateIntent `json:"securitySettings,omitempty"`
 }
 
 // The original login bearer is still required; this request cannot authenticate

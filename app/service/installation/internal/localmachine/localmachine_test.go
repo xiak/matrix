@@ -1574,7 +1574,7 @@ func TestBackupBindsAdmittedProfilesToAccessKeyWrappingWithoutArchivingIt(t *tes
 		t.Fatal(err)
 	}
 	binding, version, err := backupAccessKeyWrappingForRelease(plan)
-	if err != nil || version != backupAPIVersion || binding == nil ||
+	if err != nil || version != authenticationStateBackupAPIVersion || binding == nil ||
 		binding.WrappingKeyID != "access-key-wrapping-v1" || !validSHA256(binding.Commitment) {
 		t.Fatalf("backup wrapping commitment = %#v / %q / %v", binding, version, err)
 	}
@@ -2620,6 +2620,8 @@ func TestCreateBackupSealsDatabaseAndWorkloadSecretsAndReplays(t *testing.T) {
 		manifest.InstallationID != plan.InstallationID ||
 		manifest.ReleaseDigest != plan.Bundle.ManifestSHA256 ||
 		len(manifest.Artifacts) != 2 || manifest.Seal == nil || manifest.Seal.Value == "" ||
+		manifest.APIVersion != authenticationStateBackupAPIVersion ||
+		manifest.AuthenticationStateDigest != runtimeBoundary.backupLease.AuthenticationStateDigest ||
 		validateBackupTOTPBackupCustody(manifest.TOTPBackupCustody) != nil ||
 		manifest.TOTPBackupCustody.CustodyDigest != runtimeBoundary.backupLease.CustodyDigest {
 		t.Fatalf("sealed backup manifest = %#v", manifest)
@@ -2631,6 +2633,7 @@ func TestCreateBackupSealsDatabaseAndWorkloadSecretsAndReplays(t *testing.T) {
 		source.BackupID != request.BackupID || !validSHA256(source.BackupDigest) ||
 		source.ReleaseID != plan.Bundle.Manifest.Release.ID ||
 		source.ReleaseDigest != plan.Bundle.ManifestSHA256 ||
+		source.AuthenticationStateDigest != runtimeBoundary.backupLease.AuthenticationStateDigest ||
 		source.Database != plan.Bundle.Manifest.Database {
 		t.Fatalf("authenticated recovery source = %#v / %v", source, err)
 	}
@@ -4004,6 +4007,7 @@ type platformStartRuntime struct {
 	backupCustodyReleases     int
 	backupCustodyAborts       int
 	backupLease               installationv1.TOTPBackupSnapshotLease
+	backupLeaseHistorical     bool
 	backupLeaseError          error
 	backupCustodyMode         string
 	backupSnapshotRequired    bool
@@ -4084,7 +4088,8 @@ func newPlatformStartRuntime(
 		expectation: expectation, images: images,
 		databaseDump: []byte("matrix-postgresql-custom-backup-fixture"),
 		backupLease:  lease, backupLeaseError: leaseErr,
-		backupSnapshotRequired: backupVersion == backupAPIVersion,
+		backupLeaseHistorical:  backupVersion == backupAPIVersion,
+		backupSnapshotRequired: backupVersion == backupAPIVersion || backupVersion == authenticationStateBackupAPIVersion,
 	}
 }
 
@@ -4122,6 +4127,7 @@ func platformTestTOTPBackupLease(plan platformcommand.InstallPlan) (installation
 		Purpose:    installationv1.TOTPBackupCustodyPurpose,
 		SnapshotID: "00000003-0000001B-1",
 		Custody:    custody, CustodyDigest: digest,
+		AuthenticationStateDigest: "sha256:" + strings.Repeat("c", 64),
 	}, nil
 }
 
@@ -4806,7 +4812,21 @@ func (runtimeBoundary *platformStartRuntime) RunTo(
 			!strings.Contains(joined, "dst="+totpBackupCustodyDSNTarget+",readonly") {
 			return false, errors.New("TOTP backup custody invocation is invalid")
 		}
-		encoded, err := installationv1.EncodeTOTPBackupSnapshotLease(runtimeBoundary.backupLease)
+		var encoded []byte
+		var err error
+		if runtimeBoundary.backupLeaseHistorical {
+			lease := runtimeBoundary.backupLease
+			encoded, err = json.Marshal(struct {
+				APIVersion    string                           `json:"apiVersion"`
+				Kind          string                           `json:"kind"`
+				Purpose       string                           `json:"purpose"`
+				SnapshotID    string                           `json:"snapshotId"`
+				Custody       installationv1.TOTPBackupCustody `json:"custody"`
+				CustodyDigest string                           `json:"custodyDigest"`
+			}{lease.APIVersion, lease.Kind, lease.Purpose, lease.SnapshotID, lease.Custody, lease.CustodyDigest})
+		} else {
+			encoded, err = installationv1.EncodeTOTPBackupSnapshotLease(runtimeBoundary.backupLease)
+		}
 		if err != nil {
 			return true, err
 		}

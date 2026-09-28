@@ -25,6 +25,9 @@ type Workflow interface {
 	SetAccessKeyStatus(context.Context, iamv1.Secret, iamv1.PrincipalID, iamv1.AccessKeyID, iamv1.SetAccessKeyStatusRequest) (iamv1.SetAccessKeyStatusResponse, error)
 	DeleteAccessKey(context.Context, iamv1.Secret, iamv1.PrincipalID, iamv1.AccessKeyID, iamv1.DeleteAccessKeyRequest) (iamv1.DeleteAccessKeyResponse, error)
 	CurrentIdentity(context.Context, iamv1.Secret) (iamv1.CurrentIdentity, error)
+	AccountSecuritySettings(context.Context, iamv1.Secret, string) (iamv1.AccountSecuritySettings, error)
+	UpdateAccountSecuritySettings(context.Context, iamv1.Secret, iamv1.UpdateAccountSecuritySettingsRequest) (iamv1.UpdateAccountSecuritySettingsResponse, error)
+	SecuritySettingsChange(context.Context, iamv1.Secret, string, string) (iamv1.AccountSecuritySettingsChange, error)
 	ListUsers(context.Context, iamv1.Secret, string, string) (iamv1.UserList, error)
 	GetUser(context.Context, iamv1.Secret, iamv1.PrincipalID, string) (iamv1.UserAccess, error)
 	GetUserPermissionBoundary(context.Context, iamv1.Secret, iamv1.PrincipalID, string) (iamv1.UserPermissionBoundary, error)
@@ -90,8 +93,14 @@ type Workflow interface {
 	StartAuthenticatorRecovery(context.Context, string, iamv1.StartAuthenticatorRecoveryRequest) (iamv1.StartAuthenticatorRecoveryResponse, error)
 	ConfirmAuthenticatorRecovery(context.Context, string, iamv1.VerifyAuthenticationChallengeRequest) (iamv1.ConfirmAuthenticatorRecoveryResponse, error)
 	InspectAuthenticatorRecovery(context.Context, string, iamv1.InspectAuthenticatorRecoveryRequest) (iamv1.AuthenticatorRecovery, error)
+	InspectEnrollmentChallenge(context.Context, string, iamv1.InspectEnrollmentChallengeRequest) (iamv1.EnrollmentChallengeState, error)
+	StartChallengeTOTPEnrollment(context.Context, string, iamv1.StartChallengeTOTPEnrollmentRequest) (iamv1.StartTOTPEnrollmentResponse, error)
+	ConfirmChallengeTOTPEnrollment(context.Context, string, iamv1.VerifyAuthenticationChallengeRequest) (iamv1.ConfirmTOTPEnrollmentResponse, error)
+	StartChallengeNotificationVerification(context.Context, string, iamv1.StartChallengeNotificationContactVerificationRequest) (iamv1.NotificationContactVerification, error)
+	ConfirmChallengeNotificationContact(context.Context, string, string, iamv1.ConfirmChallengeNotificationContactVerificationRequest) (iamv1.NotificationContactVerification, error)
 	AuthenticatorState(context.Context, iamv1.Secret) (iamv1.AuthenticatorState, error)
 	StartTOTPEnrollment(context.Context, iamv1.Secret, iamv1.StartTOTPEnrollmentRequest) (iamv1.StartTOTPEnrollmentResponse, error)
+	StartTOTPReplacement(context.Context, iamv1.Secret, iamv1.StartTOTPReplacementRequest) (iamv1.StartTOTPEnrollmentResponse, error)
 	TOTPEnrollment(context.Context, iamv1.Secret, string) (iamv1.TOTPEnrollment, error)
 	TOTPEnrollmentByRequest(context.Context, iamv1.Secret, string) (iamv1.TOTPEnrollment, error)
 	CancelTOTPEnrollment(context.Context, iamv1.Secret, string) (iamv1.TOTPEnrollment, error)
@@ -164,6 +173,7 @@ func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 	routes.HandleFunc("/v1/auth/challenges/", value.authenticationChallenge)
 	routes.HandleFunc("/v1/auth/authenticators", value.authenticatorState)
 	routes.HandleFunc("/v1/auth/totp/enrollments", value.startTOTPEnrollment)
+	routes.HandleFunc("/v1/auth/totp/enrollments:replace", value.startTOTPReplacement)
 	routes.HandleFunc("/v1/auth/totp/enrollments/by-request/", value.totpEnrollmentByRequest)
 	routes.HandleFunc("/v1/auth/totp/enrollments/", value.totpEnrollment)
 	routes.HandleFunc("/v1/auth/step-up", value.startStepUp)
@@ -182,6 +192,8 @@ func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 	routes.HandleFunc("/v1/accounts", value.accounts)
 	routes.HandleFunc("/v1/accounts/", value.account)
 	routes.HandleFunc("/v1/account:alias", value.setAccountAlias)
+	routes.HandleFunc("/v1/account/security-settings", value.accountSecuritySettings)
+	routes.HandleFunc("/v1/account/security-settings/changes/", value.securitySettingsChange)
 	routes.HandleFunc("/v1/auth/logout", value.logout)
 	routes.HandleFunc("/v1/auth/password", value.changePassword)
 	routes.HandleFunc("/v1/authorize", value.authorize)
@@ -510,8 +522,18 @@ func (value *handler) authenticationChallenge(response http.ResponseWriter, requ
 	if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
 		return
 	}
+	// The challenge credential alone authenticates this ceremony. Reject both
+	// unrelated authority carriers before dispatching to a challenge purpose.
+	if len(request.Header.Values("Authorization")) != 0 || len(request.Header.Values("Matrix-Subject-Credential")) != 0 {
+		writeProblem(response, requestID(request), http.StatusBadRequest, "iam.header.unsupported", "IAM header unsupported")
+		return
+	}
+	if strings.Contains(strings.TrimPrefix(request.URL.Path, "/v1/auth/challenges/"), "/") {
+		value.enrollmentNotificationVerification(response, request)
+		return
+	}
 	suffix := ":verify"
-	for _, candidate := range []string{":password", ":recover", ":confirm-recovery", ":recovery-result"} {
+	for _, candidate := range []string{":password", ":recover", ":confirm-recovery", ":recovery-result", ":enrollment-state", ":enroll", ":confirm-enrollment"} {
 		if strings.HasSuffix(request.URL.Path, candidate) {
 			suffix = candidate
 			break
@@ -521,10 +543,8 @@ func (value *handler) authenticationChallenge(response http.ResponseWriter, requ
 	if !ok {
 		return
 	}
-	// This ceremony authenticates its own secret; a bearer cannot select a
-	// second identity, and a challenge cannot enter the generic authenticator.
-	if len(request.Header.Values("Authorization")) != 0 {
-		writeProblem(response, requestID(request), http.StatusBadRequest, "iam.header.unsupported", "IAM header unsupported")
+	if suffix == ":enrollment-state" || suffix == ":enroll" || suffix == ":confirm-enrollment" {
+		value.challengeTOTPEnrollment(response, request, id, suffix)
 		return
 	}
 	if suffix == ":password" {
@@ -853,6 +873,70 @@ func directoryPage(response http.ResponseWriter, request *http.Request, validate
 		return "", false
 	}
 	return values[0], true
+}
+
+func (value *handler) accountSecuritySettings(response http.ResponseWriter, request *http.Request) {
+	if request.Method != http.MethodGet && request.Method != http.MethodPut {
+		response.Header().Set("Allow", "GET, PUT")
+		writeProblem(response, requestID(request), http.StatusMethodNotAllowed, "iam.method.invalid", "IAM method not allowed")
+		return
+	}
+	if request.Method == http.MethodPut {
+		if !rejectQuery(response, request) {
+			return
+		}
+		credential, ok := bearerCredential(response, request)
+		if !ok {
+			return
+		}
+		body, ok := decodeJSON[iamv1.UpdateAccountSecuritySettingsRequest](value, response, request)
+		if !ok {
+			return
+		}
+		result, err := value.workflow.UpdateAccountSecuritySettings(request.Context(), credential, body)
+		if err == nil {
+			err = iamv1.ValidateUpdateAccountSecuritySettingsResponse(result)
+		}
+		if err != nil {
+			value.writeError(response, request, err)
+			return
+		}
+		writeJSON(response, http.StatusOK, result)
+		return
+	}
+	if !value.requireMethod(response, request, http.MethodGet) || !rejectQueryAndBody(response, request) {
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.AccountSecuritySettings(request.Context(), credential, requestID(request))
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (value *handler) securitySettingsChange(response http.ResponseWriter, request *http.Request) {
+	id, ok := commandPathID(response, request, "/v1/account/security-settings/changes/", "", "requestId")
+	if !ok || !value.requireMethod(response, request, http.MethodGet) || !rejectQueryAndBody(response, request) {
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.SecuritySettingsChange(request.Context(), credential, id, requestID(request))
+	if err == nil {
+		err = iamv1.ValidateAccountSecuritySettingsChange(result)
+	}
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
 }
 
 func (value *handler) listUsers(response http.ResponseWriter, request *http.Request) {
@@ -1268,6 +1352,8 @@ func (value *handler) writeError(response http.ResponseWriter, request *http.Req
 		writeProblem(response, requestID, http.StatusNotFound, "iam.step-up.not-found", "Operation proof not found")
 	case errors.Is(err, identityaccess.ErrRecoveryCodeRegenerationNotFound):
 		writeProblem(response, requestID, http.StatusNotFound, "iam.recovery-code-regeneration.not-found", "Recovery code regeneration not found")
+	case errors.Is(err, identityaccess.ErrSecuritySettingsChangeNotFound):
+		writeProblem(response, requestID, http.StatusNotFound, "iam.security-settings-change.not-found", "Security settings change not found")
 	case errors.Is(err, identityaccess.ErrVerificationRejected):
 		writeProblem(response, requestID, http.StatusUnprocessableEntity, "iam.verification.rejected", "IAM verification rejected")
 	case errors.Is(err, identityaccess.ErrOverloaded):

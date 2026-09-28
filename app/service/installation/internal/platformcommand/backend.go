@@ -1129,6 +1129,7 @@ func (backend *Backend) recover(
 	if source.InstallationID != state.InstallationID || source.BackupID != request.BackupID ||
 		source.ReleaseID == "" || source.ReleaseDigest == "" || source.BackupDigest == "" ||
 		iamv1.ValidateDigest("TOTP custody digest", source.TOTPCustodyDigest) != nil ||
+		(source.Database == release.CurrentDatabaseProfile() && source.AuthenticationStateDigest == "") ||
 		(source.AuthenticationStateDigest != "" && iamv1.ValidateDigest("authentication state digest", source.AuthenticationStateDigest) != nil) ||
 		release.ValidateDatabaseProfile(source.Database) != nil {
 		return cli.Result{}, fault(cli.FaultVerification, "RECOVERY_SOURCE_INVALID")

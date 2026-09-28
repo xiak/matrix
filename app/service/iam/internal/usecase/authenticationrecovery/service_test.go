@@ -3,6 +3,7 @@ package authenticationrecovery
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -11,9 +12,12 @@ import (
 )
 
 type recoveryTestRepository struct {
-	transaction *recoveryTestTransaction
-	failures    int
-	attempts    int
+	transaction    *recoveryTestTransaction
+	failures       int
+	attempts       int
+	commits        int
+	commitFailures int
+	commitError    error
 }
 
 func (repository *recoveryTestRepository) WithinAuthenticationRecoveryTransaction(
@@ -25,11 +29,23 @@ func (repository *recoveryTestRepository) WithinAuthenticationRecoveryTransactio
 		repository.failures--
 		return ErrRetryableTransaction
 	}
-	return callback(ctx, repository.transaction)
+	if err := callback(ctx, repository.transaction); err != nil {
+		return err
+	}
+	if repository.commitFailures > 0 {
+		repository.commitFailures--
+		return ErrRetryableTransaction
+	}
+	if repository.commitError != nil {
+		return repository.commitError
+	}
+	repository.commits++
+	return nil
 }
 
 type recoveryTestTransaction struct {
 	now       time.Time
+	prepare   func(installationv1.AuthenticationRecoveryIntent, string) (installationv1.AuthenticationRecoverySecuritySnapshot, error)
 	close     func(CloseMutation) (installationv1.AuthenticationRecoveryClosure, error)
 	reconcile func(ReconcileMutation) (installationv1.AuthenticationRecoveryClosure, error)
 	reopen    func(ReopenMutation) (installationv1.AuthenticationRecoveryCompletion, error)
@@ -37,6 +53,13 @@ type recoveryTestTransaction struct {
 
 func (transaction *recoveryTestTransaction) TransactionTime(context.Context) (time.Time, error) {
 	return transaction.now, nil
+}
+
+func (transaction *recoveryTestTransaction) PrepareAuthenticationClose(_ context.Context, intent installationv1.AuthenticationRecoveryIntent, digest string) (installationv1.AuthenticationRecoverySecuritySnapshot, error) {
+	if transaction.prepare != nil {
+		return transaction.prepare(intent, digest)
+	}
+	return snapshotFor(intent, digest, transaction.now), nil
 }
 
 func (transaction *recoveryTestTransaction) CloseAuthentication(
@@ -92,7 +115,7 @@ func TestAuthenticationRecoveryCloseBindsExactIntentAndAuditFact(t *testing.T) {
 		t.Fatal(err)
 	}
 	digest, _ := installationv1.AuthenticationRecoveryIntentDigest(intent)
-	if closure != closureFor(intent, digest, now) {
+	if closure.Closure != closureFor(intent, digest, now) || installationv1.ValidateAuthenticationRecoveryClosureEnvelope(closure) != nil {
 		t.Fatal("close returned another closure")
 	}
 }
@@ -106,7 +129,7 @@ func TestAuthenticationRecoveryReconcileReplaysExactClosedFact(t *testing.T) {
 	reconciledAt := closedAt.Add(time.Minute)
 	transaction := &recoveryTestTransaction{now: reconciledAt}
 	transaction.reconcile = func(mutation ReconcileMutation) (installationv1.AuthenticationRecoveryClosure, error) {
-		if mutation.Closure != closure || mutation.ClosureDigest != closureDigest {
+		if mutation.Closure != closure || mutation.ClosureDigest != closureDigest || !reflect.DeepEqual(mutation.SecuritySnapshot, snapshotFor(intent, intentDigest, closedAt)) {
 			t.Fatal("reconcile mutation differs from the exact closure")
 		}
 		assertRecoveryEvent(t, mutation.ClosedEvent, intent.InstallationID, intent.CommandID,
@@ -117,7 +140,7 @@ func TestAuthenticationRecoveryReconcileReplaysExactClosedFact(t *testing.T) {
 	}
 	service := newRecoveryTestService(t, transaction)
 
-	result, err := service.Reconcile(t.Context(), closure)
+	result, err := service.Reconcile(t.Context(), closure, snapshotFor(intent, intentDigest, closedAt))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,26 +158,27 @@ func TestAuthenticationRecoveryReopenBindsCompletionAndFencingFact(t *testing.T)
 	completedAt := closedAt.Add(2 * time.Minute)
 	transaction := &recoveryTestTransaction{now: completedAt}
 	transaction.reopen = func(mutation ReopenMutation) (installationv1.AuthenticationRecoveryCompletion, error) {
-		if mutation.Closure != closure || mutation.ClosureDigest != closureDigest {
+		if mutation.Closure != closure || mutation.ClosureDigest != closureDigest || !reflect.DeepEqual(mutation.SecuritySnapshot, snapshotFor(intent, intentDigest, closedAt)) {
 			t.Fatal("reopen mutation differs from the exact closure")
 		}
 		assertRecoveryEvent(t, mutation.ReopenedEvent, intent.InstallationID, intent.CommandID,
 			closureDigest, auditv1.ActionIAMAuthenticationRecoveryReopened, completedAt)
 		return installationv1.AuthenticationRecoveryCompletion{
-			APIVersion:     installationv1.AuthenticationRecoveryAPIVersion,
-			Kind:           installationv1.AuthenticationRecoveryCompletionKind,
-			Purpose:        installationv1.AuthenticationRecoveryPurpose,
-			InstallationID: intent.InstallationID,
-			Epoch:          intent.Epoch,
-			State:          installationv1.AuthenticationRecoveryStateReopened,
-			CommandID:      intent.CommandID,
-			ClosureDigest:  closureDigest,
-			CompletedAt:    completedAt,
+			APIVersion:             installationv1.AuthenticationRecoveryAPIVersion,
+			Kind:                   installationv1.AuthenticationRecoveryCompletionKind,
+			Purpose:                installationv1.AuthenticationRecoveryPurpose,
+			InstallationID:         intent.InstallationID,
+			Epoch:                  intent.Epoch,
+			State:                  installationv1.AuthenticationRecoveryStateReopened,
+			CommandID:              intent.CommandID,
+			ClosureDigest:          closureDigest,
+			CompletedAt:            completedAt,
+			SecuritySnapshotDigest: closure.SecuritySnapshotDigest,
 		}, nil
 	}
 	service := newRecoveryTestService(t, transaction)
 
-	completion, err := service.Reopen(t.Context(), closure)
+	completion, err := service.Reopen(t.Context(), closure, snapshotFor(intent, intentDigest, closedAt))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,25 +217,76 @@ func TestAuthenticationRecoveryRejectsInvalidInputAndForgedResults(t *testing.T)
 		forged.Epoch++
 		return forged, nil
 	}
-	if _, err := service.Reconcile(t.Context(), closure); !errors.Is(err, ErrUnavailable) {
+	if _, err := service.Reconcile(t.Context(), closure, snapshotFor(intent, intentDigest, now)); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("forged reconcile result error = %v", err)
 	}
 
 	repository.transaction.reopen = func(mutation ReopenMutation) (installationv1.AuthenticationRecoveryCompletion, error) {
 		return installationv1.AuthenticationRecoveryCompletion{
-			APIVersion:     installationv1.AuthenticationRecoveryAPIVersion,
-			Kind:           installationv1.AuthenticationRecoveryCompletionKind,
-			Purpose:        installationv1.AuthenticationRecoveryPurpose,
-			InstallationID: intent.InstallationID,
-			Epoch:          intent.Epoch,
-			State:          installationv1.AuthenticationRecoveryStateReopened,
-			CommandID:      intent.CommandID,
-			ClosureDigest:  mutation.ClosureDigest,
-			CompletedAt:    closure.ClosedAt,
+			APIVersion:             installationv1.AuthenticationRecoveryAPIVersion,
+			Kind:                   installationv1.AuthenticationRecoveryCompletionKind,
+			Purpose:                installationv1.AuthenticationRecoveryPurpose,
+			InstallationID:         intent.InstallationID,
+			Epoch:                  intent.Epoch,
+			State:                  installationv1.AuthenticationRecoveryStateReopened,
+			CommandID:              intent.CommandID,
+			ClosureDigest:          mutation.ClosureDigest,
+			CompletedAt:            closure.ClosedAt,
+			SecuritySnapshotDigest: closure.SecuritySnapshotDigest,
 		}, nil
 	}
-	if _, err := service.Reopen(t.Context(), closure); !errors.Is(err, ErrUnavailable) {
+	if _, err := service.Reopen(t.Context(), closure, snapshotFor(intent, intentDigest, now)); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("forged reopen result error = %v", err)
+	}
+	if repository.commits != 0 {
+		t.Fatal("forged recovery result was committed before validation")
+	}
+}
+
+func TestAuthenticationRecoveryRequiresOriginalSnapshotBeforeTransaction(t *testing.T) {
+	intent := validRecoveryIntent()
+	digest, _ := installationv1.AuthenticationRecoveryIntentDigest(intent)
+	now := time.Date(2026, 9, 25, 4, 5, 6, 0, time.UTC)
+	closure := closureFor(intent, digest, now)
+	for _, attack := range []struct {
+		name   string
+		change func(*installationv1.AuthenticationRecoverySecuritySnapshot)
+	}{
+		{"missing", func(s *installationv1.AuthenticationRecoverySecuritySnapshot) {
+			*s = installationv1.AuthenticationRecoverySecuritySnapshot{}
+		}},
+		{"installation", func(s *installationv1.AuthenticationRecoverySecuritySnapshot) {
+			s.InstallationID = "mxi-ffffffffffffffffffffffffffffffff"
+		}},
+		{"bootstrap", func(s *installationv1.AuthenticationRecoverySecuritySnapshot) {
+			s.BootstrapDigest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+		}},
+		{"epoch", func(s *installationv1.AuthenticationRecoverySecuritySnapshot) { s.Epoch++ }},
+		{"qualification", func(s *installationv1.AuthenticationRecoverySecuritySnapshot) {
+			s.AuthenticationStateDigest = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+		}},
+		{"subjects", func(s *installationv1.AuthenticationRecoverySecuritySnapshot) {
+			s.Accounts[0].Users[0].UserID = "another-user"
+		}},
+	} {
+		t.Run(attack.name, func(t *testing.T) {
+			snapshot := snapshotFor(intent, digest, now)
+			attack.change(&snapshot)
+			repository := &recoveryTestRepository{transaction: &recoveryTestTransaction{now: now}}
+			service, err := NewService(repository, Config{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result, err := service.Reconcile(t.Context(), closure, snapshot); !errors.Is(err, ErrInvalidArgument) || result != (installationv1.AuthenticationRecoveryClosure{}) {
+				t.Fatalf("unbound reconcile snapshot accepted: %v", err)
+			}
+			if result, err := service.Reopen(t.Context(), closure, snapshot); !errors.Is(err, ErrInvalidArgument) || result != (installationv1.AuthenticationRecoveryCompletion{}) {
+				t.Fatalf("unbound reopen snapshot accepted: %v", err)
+			}
+			if repository.attempts != 0 {
+				t.Fatal("unbound snapshot opened a database transaction")
+			}
+		})
 	}
 }
 
@@ -239,6 +314,93 @@ func TestAuthenticationRecoveryRetriesOnlySerializableFailures(t *testing.T) {
 	}
 }
 
+func TestAuthenticationRecoveryCloseRejectsInvalidPreparedSnapshotBeforeSeal(t *testing.T) {
+	for _, variant := range []struct {
+		name   string
+		change func(*installationv1.AuthenticationRecoverySecuritySnapshot)
+	}{
+		{"missing-accounts", func(s *installationv1.AuthenticationRecoverySecuritySnapshot) { s.Accounts = nil }},
+		{"different-installation", func(s *installationv1.AuthenticationRecoverySecuritySnapshot) {
+			s.InstallationID = "mxi-ffffffffffffffffffffffffffffffff"
+		}},
+		{"different-command", func(s *installationv1.AuthenticationRecoverySecuritySnapshot) {
+			s.CommandID = "cmd-ffffffffffffffffffffffffffffffff"
+		}},
+		{"different-epoch", func(s *installationv1.AuthenticationRecoverySecuritySnapshot) { s.Epoch++ }},
+		{"different-qualification", func(s *installationv1.AuthenticationRecoverySecuritySnapshot) {
+			s.AuthenticationStateDigest = s.BootstrapDigest
+		}},
+		{"different-intent", func(s *installationv1.AuthenticationRecoverySecuritySnapshot) {
+			s.RecoveryIntentDigest = s.BootstrapDigest
+		}},
+	} {
+		t.Run(variant.name, func(t *testing.T) {
+			intent := validRecoveryIntent()
+			tx := &recoveryTestTransaction{now: time.Date(2026, 9, 25, 1, 2, 3, 0, time.UTC)}
+			tx.prepare = func(input installationv1.AuthenticationRecoveryIntent, digest string) (installationv1.AuthenticationRecoverySecuritySnapshot, error) {
+				snapshot := snapshotFor(input, digest, tx.now)
+				variant.change(&snapshot)
+				return snapshot, nil
+			}
+			tx.close = func(CloseMutation) (installationv1.AuthenticationRecoveryClosure, error) {
+				t.Fatal("invalid prepared snapshot reached seal")
+				return installationv1.AuthenticationRecoveryClosure{}, nil
+			}
+			repository := &recoveryTestRepository{transaction: tx}
+			service, err := NewService(repository, Config{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := service.Close(t.Context(), intent)
+			if !errors.Is(err, ErrUnavailable) || result.Closure.CommandID != "" || result.SecuritySnapshot.Accounts != nil || repository.commits != 0 {
+				t.Fatal("invalid prepared state escaped rollback", err)
+			}
+		})
+	}
+}
+
+func TestAuthenticationRecoveryCloseResamplesAfterCommitConflict(t *testing.T) {
+	intent := validRecoveryIntent()
+	now := time.Date(2026, 9, 25, 1, 2, 3, 0, time.UTC)
+	tx := &recoveryTestTransaction{now: now}
+	repository := &recoveryTestRepository{transaction: tx, commitFailures: 1}
+	var sealed []installationv1.AuthenticationRecoverySecuritySnapshot
+	tx.prepare = func(input installationv1.AuthenticationRecoveryIntent, digest string) (installationv1.AuthenticationRecoverySecuritySnapshot, error) {
+		if input != intent {
+			t.Fatal("retry changed original intent")
+		}
+		return snapshotFor(input, digest, now.Add(time.Duration(repository.attempts)*time.Second)), nil
+	}
+	tx.close = func(mutation CloseMutation) (installationv1.AuthenticationRecoveryClosure, error) {
+		sealed = append(sealed, mutation.SecuritySnapshot)
+		digest, err := installationv1.AuthenticationRecoverySecuritySnapshotDigest(mutation.SecuritySnapshot)
+		if err != nil || digest != mutation.SecuritySnapshotDigest || mutation.ClosedEvent.OccurredAt != mutation.SecuritySnapshot.ClosedAt {
+			t.Fatal("seal did not bind this attempt's exact snapshot", err)
+		}
+		return closureFor(intent, mutation.IntentDigest, mutation.SecuritySnapshot.ClosedAt), nil
+	}
+	service, err := NewService(repository, Config{MaxTransactionAttempts: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.Close(t.Context(), intent)
+	if err != nil || repository.commits != 1 || len(sealed) != 2 || sealed[0].ClosedAt == sealed[1].ClosedAt || result.SecuritySnapshot.ClosedAt != sealed[1].ClosedAt {
+		t.Fatal("commit retry exposed or reused an uncommitted snapshot", err)
+	}
+	// Exhausted serialization conflicts must not expose the candidate
+	// envelope or automatically change the original command.
+	repository.commitFailures, repository.commits, repository.attempts = 2, 0, 0
+	result, err = service.Close(t.Context(), intent)
+	if !errors.Is(err, ErrRetryableTransaction) || repository.commits != 0 || result.Closure.CommandID != "" || result.SecuritySnapshot.Accounts != nil {
+		t.Fatal("exhausted commits leaked the candidate snapshot", err)
+	}
+	repository.commitFailures, repository.attempts, repository.commitError = 0, 0, ErrUnavailable
+	result, err = service.Close(t.Context(), intent)
+	if !errors.Is(err, ErrUnavailable) || repository.attempts != 1 || repository.commits != 0 || result.Closure.CommandID != "" || result.SecuritySnapshot.Accounts != nil {
+		t.Fatal("unknown commit was retried or exposed a candidate result", err)
+	}
+}
+
 func newRecoveryTestService(t *testing.T, transaction *recoveryTestTransaction) *Service {
 	t.Helper()
 	service, err := NewService(&recoveryTestRepository{transaction: transaction}, Config{})
@@ -250,19 +412,20 @@ func newRecoveryTestService(t *testing.T, transaction *recoveryTestTransaction) 
 
 func validRecoveryIntent() installationv1.AuthenticationRecoveryIntent {
 	return installationv1.AuthenticationRecoveryIntent{
-		APIVersion:          installationv1.AuthenticationRecoveryAPIVersion,
-		Kind:                installationv1.AuthenticationRecoveryIntentKind,
-		Purpose:             installationv1.AuthenticationRecoveryPurpose,
-		InstallationID:      "mxi-0123456789abcdef0123456789abcdef",
-		Epoch:               7,
-		CommandID:           "cmd-11111111111111111111111111111111",
-		BackupID:            "backup-22222222222222222222222222222222",
-		BackupDigest:        "sha256:3333333333333333333333333333333333333333333333333333333333333333",
-		SourceReleaseID:     "matrix-v0.0.38-444444444444",
-		SourceReleaseDigest: "sha256:5555555555555555555555555555555555555555555555555555555555555555",
-		TargetReleaseID:     "matrix-v0.0.39-666666666666",
-		TargetReleaseDigest: "sha256:7777777777777777777777777777777777777777777777777777777777777777",
-		TOTPCustodyDigest:   "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+		APIVersion:                installationv1.AuthenticationRecoveryAPIVersion,
+		Kind:                      installationv1.AuthenticationRecoveryIntentKind,
+		Purpose:                   installationv1.AuthenticationRecoveryPurpose,
+		InstallationID:            "mxi-0123456789abcdef0123456789abcdef",
+		Epoch:                     7,
+		CommandID:                 "cmd-11111111111111111111111111111111",
+		BackupID:                  "backup-22222222222222222222222222222222",
+		BackupDigest:              "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+		SourceReleaseID:           "matrix-v0.0.38-444444444444",
+		SourceReleaseDigest:       "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+		TargetReleaseID:           "matrix-v0.0.39-666666666666",
+		TargetReleaseDigest:       "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+		TOTPCustodyDigest:         "sha256:8888888888888888888888888888888888888888888888888888888888888888",
+		AuthenticationStateDigest: "sha256:9999999999999999999999999999999999999999999999999999999999999999",
 	}
 }
 
@@ -271,19 +434,35 @@ func closureFor(
 	intentDigest string,
 	closedAt time.Time,
 ) installationv1.AuthenticationRecoveryClosure {
+	snapshotDigest, err := installationv1.AuthenticationRecoverySecuritySnapshotDigest(snapshotFor(intent, intentDigest, closedAt))
+	if err != nil {
+		panic(err)
+	}
 	return installationv1.AuthenticationRecoveryClosure{
-		APIVersion:           installationv1.AuthenticationRecoveryAPIVersion,
-		Kind:                 installationv1.AuthenticationRecoveryClosureKind,
-		Purpose:              installationv1.AuthenticationRecoveryPurpose,
-		InstallationID:       intent.InstallationID,
-		Epoch:                intent.Epoch,
-		State:                installationv1.AuthenticationRecoveryStateClosed,
-		CommandID:            intent.CommandID,
-		BackupID:             intent.BackupID,
-		BackupDigest:         intent.BackupDigest,
-		RecoveryIntentDigest: intentDigest,
-		TOTPCustodyDigest:    intent.TOTPCustodyDigest,
-		ClosedAt:             closedAt,
+		APIVersion:             installationv1.AuthenticationRecoveryAPIVersion,
+		Kind:                   installationv1.AuthenticationRecoveryClosureKind,
+		Purpose:                installationv1.AuthenticationRecoveryPurpose,
+		InstallationID:         intent.InstallationID,
+		Epoch:                  intent.Epoch,
+		State:                  installationv1.AuthenticationRecoveryStateClosed,
+		CommandID:              intent.CommandID,
+		BackupID:               intent.BackupID,
+		BackupDigest:           intent.BackupDigest,
+		RecoveryIntentDigest:   intentDigest,
+		TOTPCustodyDigest:      intent.TOTPCustodyDigest,
+		ClosedAt:               closedAt,
+		SecuritySnapshotDigest: snapshotDigest,
+	}
+}
+
+func snapshotFor(intent installationv1.AuthenticationRecoveryIntent, digest string, now time.Time) installationv1.AuthenticationRecoverySecuritySnapshot {
+	return installationv1.AuthenticationRecoverySecuritySnapshot{
+		APIVersion: installationv1.AuthenticationRecoveryAPIVersion, Kind: installationv1.AuthenticationRecoverySecuritySnapshotKind,
+		Purpose: installationv1.AuthenticationRecoveryPurpose, InstallationID: intent.InstallationID,
+		BootstrapDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		Epoch:           intent.Epoch, CommandID: intent.CommandID, RecoveryIntentDigest: digest, ClosedAt: now,
+		AuthenticationStateDigest: intent.AuthenticationStateDigest,
+		Accounts:                  []installationv1.AuthenticationRecoveryAccountReplay{{AccountID: "recovery-account", Users: []installationv1.AuthenticationRecoveryUserReplay{{UserID: "original-root", LastConsumedStep: -1}}}},
 	}
 }
 

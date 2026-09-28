@@ -15,6 +15,7 @@ import (
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
 	"github.com/xiak/matrix/app/service/installation/internal/platformcommand"
+	"github.com/xiak/matrix/app/service/installation/release"
 )
 
 const (
@@ -86,6 +87,17 @@ func startTOTPBackupCustody(
 		return nil, installationv1.TOTPBackupSnapshotLease{}, errors.Join(
 			platformcommand.ErrEffectUnavailable,
 			errors.New("TOTP backup custody is unavailable"),
+		)
+	}
+	// Select the private wire from the authenticated installed release before
+	// launching its helper. The signed IAM40 predecessor emitted six fields;
+	// IAM45 must emit the seventh qualification digest. Never retry the other
+	// decoder after a malformed or missing field.
+	decodeLease, supported := totpBackupLeaseDecoder(installation.bundle.Manifest.Database)
+	if !supported {
+		return nil, installationv1.TOTPBackupSnapshotLease{}, errors.Join(
+			platformcommand.ErrEffectVerification,
+			errors.New("TOTP backup custody release profile is unsupported"),
 		)
 	}
 	imageID := ""
@@ -207,7 +219,7 @@ func startTOTPBackupCustody(
 			errors.New("TOTP backup custody process emitted an invalid lease frame"),
 		)
 	}
-	lease, err := installationv1.DecodeTOTPBackupSnapshotLease(bytes.NewReader(line[:len(line)-1]))
+	lease, err := decodeLease(bytes.NewReader(line[:len(line)-1]))
 	if err != nil {
 		process.abort()
 		return nil, installationv1.TOTPBackupSnapshotLease{}, errors.Join(
@@ -226,6 +238,17 @@ func startTOTPBackupCustody(
 	}
 	process.lease = append([]byte(nil), line...)
 	return process, lease, nil
+}
+
+func totpBackupLeaseDecoder(profile release.DatabaseProfile) (func(io.Reader) (installationv1.TOTPBackupSnapshotLease, error), bool) {
+	switch profile {
+	case release.SupportedDatabaseUpgradePredecessorProfile():
+		return installationv1.DecodeHistoricalTOTPBackupSnapshotLease, true
+	case release.CurrentDatabaseProfile():
+		return installationv1.DecodeTOTPBackupSnapshotLease, true
+	default:
+		return nil, false
+	}
 }
 
 func (process *backupCustodyProcess) release() error {

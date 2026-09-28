@@ -601,6 +601,90 @@
         ],
         "type": "object"
       },
+      "AccountMFASettings": {
+        "additionalProperties": false,
+        "description": "Explicit ordinary USER MFA requirement, not factor state, Session authentication facts or an exception for protected identities. Missing or null is invalid, never an inferred false.",
+        "properties": {
+          "requiredForUsers": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "requiredForUsers"
+        ],
+        "type": "object"
+      },
+      "AccountSecuritySettings": {
+        "additionalProperties": false,
+        "description": "Non-secret current-account configuration returned only under a current instance-scoped read decision. Neither factor state nor Session authentication facts.",
+        "properties": {
+          "accountId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "apiVersion": {
+            "const": "iam.matrix.xiak.com/v1"
+          },
+          "kind": {
+            "const": "AccountSecuritySettings"
+          },
+          "mfa": {
+            "$ref": "#/components/schemas/AccountMFASettings"
+          },
+          "resourceVersion": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "accountId",
+          "apiVersion",
+          "kind",
+          "mfa",
+          "resourceVersion",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
+      "AccountSecuritySettingsChange": {
+        "additionalProperties": false,
+        "description": "Immutable historical completion. Runtime validation additionally requires settings.resourceVersion == expectedResourceVersion + 1. settings.updatedAt is the original completion time, not observation time; requestId is not lookup authority.",
+        "properties": {
+          "apiVersion": {
+            "const": "iam.matrix.xiak.com/v1"
+          },
+          "callerSessionEnded": {
+            "const": true,
+            "description": "Every settings change invalidates its original calling Session, including weakening the requirement. Never an instruction to end a later reader's current Session."
+          },
+          "expectedResourceVersion": {
+            "maximum": 9007199254740990,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "kind": {
+            "const": "AccountSecuritySettingsChange"
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "settings": {
+            "$ref": "#/components/schemas/AccountSecuritySettings"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "callerSessionEnded",
+          "expectedResourceVersion",
+          "kind",
+          "requestId",
+          "settings"
+        ],
+        "type": "object"
+      },
       "AccountStatus": {
         "enum": [
           "ACTIVE",
@@ -670,6 +754,8 @@
           "iam.access-key.read",
           "iam.access-key.set-status",
           "iam.access-key.delete",
+          "iam.security-settings.read",
+          "iam.security-settings.update",
           "paas.execution-pool.create",
           "paas.execution-pool.read",
           "paas.execution-target.register",
@@ -1026,6 +1112,19 @@
                 "const": "RECOVERY"
               }
             }
+          },
+          {
+            "properties": {
+              "nextStep": {
+                "enum": [
+                  "PASSWORD_CHANGE",
+                  "ENROLLMENT"
+                ]
+              },
+              "purpose": {
+                "const": "ENROLLMENT"
+              }
+            }
           }
         ],
         "properties": {
@@ -1052,7 +1151,8 @@
           "purpose": {
             "enum": [
               "LOGIN",
-              "RECOVERY"
+              "RECOVERY",
+              "ENROLLMENT"
             ]
           }
         },
@@ -1374,9 +1474,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -1448,9 +1548,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -1501,9 +1601,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -1554,9 +1654,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -1607,9 +1707,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -1660,9 +1760,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -1713,9 +1813,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -1766,9 +1866,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -1819,9 +1919,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -1872,9 +1972,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -1925,9 +2025,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -1978,9 +2078,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -2031,9 +2131,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -2084,9 +2184,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -2137,9 +2237,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -2190,9 +2290,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -2243,9 +2343,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -2296,9 +2396,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -2349,9 +2449,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -2402,9 +2502,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -2455,9 +2555,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -2508,9 +2608,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -2561,9 +2661,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -2614,9 +2714,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -2667,9 +2767,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -2720,9 +2820,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -2773,9 +2873,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -2826,9 +2926,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -2879,9 +2979,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -2932,9 +3032,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -2985,9 +3085,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -3038,9 +3138,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -3091,9 +3191,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -3144,9 +3244,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -3197,9 +3297,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -3250,9 +3350,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -3303,9 +3403,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -3356,9 +3456,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -3409,9 +3509,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -3462,9 +3562,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -3515,9 +3615,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -3568,9 +3668,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -3621,9 +3721,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -3674,9 +3774,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -3727,9 +3827,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -3780,9 +3880,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -3833,9 +3933,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -3886,9 +3986,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -3939,9 +4039,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -3992,9 +4092,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -4045,9 +4145,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -4098,9 +4198,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -4151,9 +4251,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -4204,9 +4304,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -4257,9 +4357,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -4310,9 +4410,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -4363,9 +4463,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -4416,9 +4516,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -4469,9 +4569,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -4522,15 +4622,121 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "ACCESS_KEY"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "accessKeyId": false,
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.security-settings.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "product": "iam",
+                    "revision": 7
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ACCOUNT"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "accessKeyId": false,
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.security-settings.update"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "product": "iam",
+                    "revision": 7
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ACCOUNT"
                     }
                   }
                 },
@@ -7381,9 +7587,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -7445,9 +7651,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -7488,9 +7694,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -7531,9 +7737,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -7574,9 +7780,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -7617,9 +7823,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -7660,9 +7866,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -7703,9 +7909,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -7746,9 +7952,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -7789,9 +7995,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -7832,9 +8038,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -7875,9 +8081,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -7918,9 +8124,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -7961,9 +8167,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8004,9 +8210,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8047,9 +8253,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8090,9 +8296,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8133,9 +8339,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8176,9 +8382,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8219,9 +8425,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8262,9 +8468,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8305,9 +8511,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8348,9 +8554,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8391,9 +8597,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8434,9 +8640,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8477,9 +8683,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8520,9 +8726,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8563,9 +8769,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8606,9 +8812,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8649,9 +8855,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8692,9 +8898,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8735,9 +8941,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8778,9 +8984,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8821,9 +9027,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8864,9 +9070,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8907,9 +9113,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8950,9 +9156,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -8993,9 +9199,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9036,9 +9242,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9079,9 +9285,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9122,9 +9328,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9165,9 +9371,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9208,9 +9414,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9251,9 +9457,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9294,9 +9500,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9337,9 +9543,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9380,9 +9586,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9423,9 +9629,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9466,9 +9672,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9509,9 +9715,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9552,9 +9758,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9595,9 +9801,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9638,9 +9844,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9681,9 +9887,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9724,9 +9930,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9767,9 +9973,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9810,9 +10016,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9853,9 +10059,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9896,9 +10102,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
@@ -9939,15 +10145,101 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c24487f242699b3df3102bf858a6adb4d39674ccb73ca1b42bebfc4d5f26b22b",
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
                     "product": "iam",
-                    "revision": 5
+                    "revision": 7
                   }
                 },
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "ACCESS_KEY"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.security-settings.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "product": "iam",
+                    "revision": 7
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ACCOUNT"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.security-settings.update"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "product": "iam",
+                    "revision": 7
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ACCOUNT"
                     }
                   }
                 }
@@ -12353,6 +12645,32 @@
         ],
         "type": "object"
       },
+      "ConfirmChallengeNotificationContactVerificationRequest": {
+        "additionalProperties": false,
+        "description": "Only the current ENROLLMENT challenge credential; never a login Session or caller identity selector.",
+        "properties": {
+          "challengeCredential": {
+            "$ref": "#/components/schemas/Secret",
+            "writeOnly": true
+          },
+          "code": {
+            "maxLength": 8,
+            "minLength": 8,
+            "pattern": "^[0-9]{8}$",
+            "type": "string",
+            "writeOnly": true
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "challengeCredential",
+          "code",
+          "requestId"
+        ],
+        "type": "object"
+      },
       "ConfirmNotificationContactVerificationRequest": {
         "additionalProperties": false,
         "properties": {
@@ -12983,6 +13301,106 @@
         ],
         "type": "object"
       },
+      "EnrollmentChallengeState": {
+        "additionalProperties": false,
+        "description": "Purpose-limited first-enrollment observation, not an identity or permission. Runtime validation additionally requires a pending first factor to retain its challenge's exact absolute expiry. PASSWORD_CHANGE cannot expose later contact or factor state.",
+        "oneOf": [
+          {
+            "properties": {
+              "challenge": {
+                "properties": {
+                  "nextStep": {
+                    "const": "PASSWORD_CHANGE"
+                  }
+                }
+              },
+              "enrollment": false,
+              "notificationContact": false
+            }
+          },
+          {
+            "properties": {
+              "challenge": {
+                "properties": {
+                  "nextStep": {
+                    "const": "ENROLLMENT"
+                  }
+                }
+              },
+              "enrollment": false,
+              "notificationContact": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "notificationContact"
+            ]
+          },
+          {
+            "properties": {
+              "challenge": {
+                "properties": {
+                  "nextStep": {
+                    "const": "ENROLLMENT"
+                  }
+                }
+              },
+              "enrollment": {
+                "properties": {
+                  "factorRevision": {
+                    "const": 1
+                  },
+                  "purpose": {
+                    "const": "INITIAL"
+                  },
+                  "state": {
+                    "const": "PENDING"
+                  }
+                },
+                "type": "object"
+              },
+              "notificationContact": {
+                "properties": {
+                  "state": {
+                    "const": "VERIFIED"
+                  }
+                },
+                "type": "object"
+              }
+            },
+            "required": [
+              "notificationContact",
+              "enrollment"
+            ]
+          }
+        ],
+        "properties": {
+          "challenge": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AuthenticationChallenge"
+              },
+              {
+                "properties": {
+                  "purpose": {
+                    "const": "ENROLLMENT"
+                  }
+                }
+              }
+            ]
+          },
+          "enrollment": {
+            "$ref": "#/components/schemas/TOTPEnrollment"
+          },
+          "notificationContact": {
+            "$ref": "#/components/schemas/NotificationContact"
+          }
+        },
+        "required": [
+          "challenge"
+        ],
+        "type": "object"
+      },
       "Event": {
         "$ref": "../../audit/v1/openapi.json#/components/schemas/Event"
       },
@@ -13391,6 +13809,20 @@
         ],
         "type": "object"
       },
+      "InspectEnrollmentChallengeRequest": {
+        "additionalProperties": false,
+        "description": "Only the current ENROLLMENT challenge credential; never a login Session or caller identity selector.",
+        "properties": {
+          "challengeCredential": {
+            "$ref": "#/components/schemas/Secret",
+            "writeOnly": true
+          }
+        },
+        "required": [
+          "challengeCredential"
+        ],
+        "type": "object"
+      },
       "LoginOutcome": {
         "enum": [
           "AUTHENTICATED",
@@ -13457,7 +13889,10 @@
               "challenge": {
                 "properties": {
                   "purpose": {
-                    "const": "LOGIN"
+                    "enum": [
+                      "LOGIN",
+                      "ENROLLMENT"
+                    ]
                   }
                 },
                 "type": "object"
@@ -14526,6 +14961,9 @@
                             "iam.role.read",
                             "iam.role.set-status",
                             "iam.role.update",
+                            "iam.security-settings.*",
+                            "iam.security-settings.read",
+                            "iam.security-settings.update",
                             "iam.session.*",
                             "iam.session.revoke",
                             "iam.user.*",
@@ -15069,6 +15507,9 @@
                         "iam.role.*",
                         "iam.role.create",
                         "iam.role.list",
+                        "iam.security-settings.*",
+                        "iam.security-settings.read",
+                        "iam.security-settings.update",
                         "iam.user.*",
                         "iam.user.create",
                         "iam.user.list"
@@ -15112,6 +15553,9 @@
                       "iam.role.*",
                       "iam.role.create",
                       "iam.role.list",
+                      "iam.security-settings.*",
+                      "iam.security-settings.read",
+                      "iam.security-settings.update",
                       "iam.user.*",
                       "iam.user.create",
                       "iam.user.list"
@@ -17501,6 +17945,60 @@
                 "actions": {
                   "contains": {
                     "enum": [
+                      "iam.security-settings.read",
+                      "iam.security-settings.*"
+                    ]
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "ACCOUNT"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "enum": [
+                      "iam.security-settings.update",
+                      "iam.security-settings.*"
+                    ]
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "ACCOUNT"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "enum": [
                       "paas.execution-pool.create"
                     ]
                   }
@@ -19849,6 +20347,8 @@
                 "iam.access-key.read",
                 "iam.access-key.set-status",
                 "iam.access-key.delete",
+                "iam.security-settings.read",
+                "iam.security-settings.update",
                 "paas.execution-pool.create",
                 "paas.execution-pool.read",
                 "paas.execution-target.register",
@@ -19901,6 +20401,7 @@
                 "iam.role-session.*",
                 "iam.role-trust.*",
                 "iam.role.*",
+                "iam.security-settings.*",
                 "iam.session.*",
                 "iam.user.*",
                 "managedservice.offering.*",
@@ -21779,6 +22280,25 @@
         "type": "string",
         "x-matrix-sensitive": true
       },
+      "SecuritySettingsUpdateIntent": {
+        "additionalProperties": false,
+        "description": "Exact non-secret settings value and expected version for a Session-held SECURITY_SETTINGS_UPDATE proof. Not a selector or permit; cannot be attached to other operations.",
+        "properties": {
+          "expectedResourceVersion": {
+            "maximum": 9007199254740990,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "mfa": {
+            "$ref": "#/components/schemas/AccountMFASettings"
+          }
+        },
+        "required": [
+          "expectedResourceVersion",
+          "mfa"
+        ],
+        "type": "object"
+      },
       "ServiceIdentity": {
         "additionalProperties": false,
         "properties": {
@@ -22210,6 +22730,49 @@
         ],
         "type": "object"
       },
+      "StartChallengeNotificationContactVerificationRequest": {
+        "additionalProperties": false,
+        "description": "Only the current ENROLLMENT challenge credential; never a login Session or caller identity selector.",
+        "properties": {
+          "challengeCredential": {
+            "$ref": "#/components/schemas/Secret",
+            "writeOnly": true
+          },
+          "email": {
+            "description": "One ASCII dot-atom address and canonical lower-case DNS domain. No display name, address list, literal IP, SMTPUTF8 or normalization of local-part case. Authoritative syntax validation applies.",
+            "maxLength": 254,
+            "minLength": 3,
+            "type": "string"
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "challengeCredential",
+          "email",
+          "requestId"
+        ],
+        "type": "object"
+      },
+      "StartChallengeTOTPEnrollmentRequest": {
+        "additionalProperties": false,
+        "description": "Only the current ENROLLMENT challenge credential; never a login Session or caller identity selector.",
+        "properties": {
+          "challengeCredential": {
+            "$ref": "#/components/schemas/Secret",
+            "writeOnly": true
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "challengeCredential",
+          "requestId"
+        ],
+        "type": "object"
+      },
       "StartNotificationContactVerificationRequest": {
         "additionalProperties": false,
         "properties": {
@@ -22236,6 +22799,44 @@
       },
       "StartStepUpRequest": {
         "additionalProperties": false,
+        "allOf": [
+          {
+            "oneOf": [
+              {
+                "properties": {
+                  "operation": {
+                    "const": "RECOVERY_CODES_REGENERATE"
+                  },
+                  "securitySettings": false
+                }
+              },
+              {
+                "properties": {
+                  "expectedFactorRevision": {
+                    "maximum": 9007199254740990
+                  },
+                  "operation": {
+                    "const": "TOTP_REPLACE"
+                  },
+                  "securitySettings": false
+                }
+              },
+              {
+                "properties": {
+                  "operation": {
+                    "const": "SECURITY_SETTINGS_UPDATE"
+                  },
+                  "securitySettings": {
+                    "$ref": "#/components/schemas/SecuritySettingsUpdateIntent"
+                  }
+                },
+                "required": [
+                  "securitySettings"
+                ]
+              }
+            ]
+          }
+        ],
         "properties": {
           "expectedFactorRevision": {
             "maximum": 9007199254740991,
@@ -22243,10 +22844,17 @@
             "type": "integer"
           },
           "operation": {
-            "const": "RECOVERY_CODES_REGENERATE"
+            "enum": [
+              "RECOVERY_CODES_REGENERATE",
+              "SECURITY_SETTINGS_UPDATE",
+              "TOTP_REPLACE"
+            ]
           },
           "requestId": {
             "$ref": "#/components/schemas/ID"
+          },
+          "securitySettings": {
+            "$ref": "#/components/schemas/SecuritySettingsUpdateIntent"
           }
         },
         "required": [
@@ -22331,8 +22939,69 @@
         ],
         "type": "object"
       },
+      "StartTOTPReplacementRequest": {
+        "additionalProperties": false,
+        "description": "The original command and bound factor revision must match a TOTP_REPLACE proof held by the current PASSWORD_TOTP Session. No subject, account, seed, password, Session selector or transferable proof credential.",
+        "properties": {
+          "expectedFactorRevision": {
+            "maximum": 9007199254740990,
+            "minimum": 2,
+            "type": "integer"
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "stepUpId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "expectedFactorRevision",
+          "requestId",
+          "stepUpId"
+        ],
+        "type": "object"
+      },
       "StepUp": {
         "additionalProperties": false,
+        "allOf": [
+          {
+            "oneOf": [
+              {
+                "properties": {
+                  "operation": {
+                    "const": "RECOVERY_CODES_REGENERATE"
+                  },
+                  "securitySettings": false
+                }
+              },
+              {
+                "properties": {
+                  "expectedFactorRevision": {
+                    "maximum": 9007199254740990
+                  },
+                  "operation": {
+                    "const": "TOTP_REPLACE"
+                  },
+                  "securitySettings": false
+                }
+              },
+              {
+                "properties": {
+                  "operation": {
+                    "const": "SECURITY_SETTINGS_UPDATE"
+                  },
+                  "securitySettings": {
+                    "$ref": "#/components/schemas/SecuritySettingsUpdateIntent"
+                  }
+                },
+                "required": [
+                  "securitySettings"
+                ]
+              }
+            ]
+          }
+        ],
         "description": "Non-secret metadata bound to one operation and its original effective login Session. It is not a bearer, unlogged challenge or authorization permit. Runtime validation enforces the original 120-second lifetime and proof/consumption ordering; proving never extends expiry.",
         "oneOf": [
           {
@@ -22412,13 +23081,20 @@
             "type": "string"
           },
           "operation": {
-            "const": "RECOVERY_CODES_REGENERATE"
+            "enum": [
+              "RECOVERY_CODES_REGENERATE",
+              "SECURITY_SETTINGS_UPDATE",
+              "TOTP_REPLACE"
+            ]
           },
           "provedAt": {
             "$ref": "#/components/schemas/Timestamp"
           },
           "requestId": {
             "$ref": "#/components/schemas/ID"
+          },
+          "securitySettings": {
+            "$ref": "#/components/schemas/SecuritySettingsUpdateIntent"
           },
           "state": {
             "enum": [
@@ -22504,6 +23180,30 @@
       },
       "TOTPEnrollment": {
         "additionalProperties": false,
+        "allOf": [
+          {
+            "oneOf": [
+              {
+                "properties": {
+                  "purpose": {
+                    "const": "INITIAL"
+                  }
+                }
+              },
+              {
+                "properties": {
+                  "factorRevision": {
+                    "minimum": 2
+                  },
+                  "purpose": {
+                    "const": "REPLACEMENT"
+                  }
+                }
+              }
+            ]
+          }
+        ],
+        "description": "Non-secret observation of initial binding or same-Session replacement. Replacement retains the original operation proof's absolute deadline (at most two minutes); the old factor and batch remain effective until confirmation. Metadata is never authentication authority.",
         "oneOf": [
           {
             "properties": {
@@ -22555,6 +23255,12 @@
           "kind": {
             "type": "string"
           },
+          "purpose": {
+            "enum": [
+              "INITIAL",
+              "REPLACEMENT"
+            ]
+          },
           "requestId": {
             "$ref": "#/components/schemas/ID"
           },
@@ -22574,6 +23280,7 @@
           "factorRevision",
           "id",
           "kind",
+          "purpose",
           "requestId",
           "state"
         ],
@@ -22663,6 +23370,53 @@
         "required": [
           "id",
           "type"
+        ],
+        "type": "object"
+      },
+      "UpdateAccountSecuritySettingsRequest": {
+        "additionalProperties": false,
+        "description": "Replace the supported MFA configuration at one expected version using a proof held by the actual current Session and current instance permission. No identity selector, arbitrary patch or caller-controlled Session retention.",
+        "properties": {
+          "expectedResourceVersion": {
+            "maximum": 9007199254740990,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "mfa": {
+            "$ref": "#/components/schemas/AccountMFASettings"
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "stepUpId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "expectedResourceVersion",
+          "mfa",
+          "requestId",
+          "stepUpId"
+        ],
+        "type": "object"
+      },
+      "UpdateAccountSecuritySettingsResponse": {
+        "additionalProperties": false,
+        "description": "APPLIED and EQUAL_REPLAY carry the same original non-secret completion, not fresh authorization, current Session state or a credential.",
+        "properties": {
+          "change": {
+            "$ref": "#/components/schemas/AccountSecuritySettingsChange"
+          },
+          "outcome": {
+            "enum": [
+              "APPLIED",
+              "EQUAL_REPLAY"
+            ]
+          }
+        },
+        "required": [
+          "change",
+          "outcome"
         ],
         "type": "object"
       },
@@ -23109,6 +23863,132 @@
         },
         "security": [],
         "summary": "Get IAM readiness"
+      }
+    },
+    "/v1/account/security-settings": {
+      "get": {
+        "operationId": "readAccountSecuritySettings",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountSecuritySettings"
+                }
+              }
+            },
+            "description": "Current authority state."
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Read authenticated Account security settings using the current instance permission"
+      },
+      "put": {
+        "operationId": "updateAccountSecuritySettings",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAccountSecuritySettingsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UpdateAccountSecuritySettingsResponse"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Consume the exact settings StepUp and current permission; atomically update configuration, completion and Audit; all existing Sessions must reauthenticate"
+      }
+    },
+    "/v1/account/security-settings/changes/{requestId}": {
+      "get": {
+        "operationId": "getSecuritySettingsChange",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "requestId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountSecuritySettingsChange"
+                }
+              }
+            },
+            "description": "Current authority state."
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Read an original same-USER completion under current Account read permission after normal login; never reexecute an unknown command"
       }
     },
     "/v1/account:alias": {
@@ -23586,6 +24466,242 @@
         "summary": "Read this actual login USER's persisted factor state; no inferred settings or permissions"
       }
     },
+    "/v1/auth/challenges/{challengeId}/notification-contact/verifications": {
+      "post": {
+        "operationId": "startChallengeNotificationVerification",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "challengeId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartChallengeNotificationContactVerificationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationContactVerification"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [],
+        "summary": "Verify only the first contact during initial ENROLLMENT; cannot replace a verified address or extend the challenge"
+      }
+    },
+    "/v1/auth/challenges/{challengeId}/notification-contact/verifications/{verificationId}:confirm": {
+      "post": {
+        "operationId": "confirmChallengeNotificationContact",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "challengeId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "verificationId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfirmChallengeNotificationContactVerificationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotificationContactVerification"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The authenticated contact verification cannot reserve another attempt within its bounded shared budget.",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "const": "1",
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [],
+        "summary": "Consume the original contact-possession code within its initial-enrollment challenge; no session or MFA bypass"
+      }
+    },
+    "/v1/auth/challenges/{challengeId}:confirm-enrollment": {
+      "post": {
+        "operationId": "confirmChallengeTOTPEnrollment",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "challengeId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyAuthenticationChallengeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfirmTOTPEnrollmentResponse"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [],
+        "summary": "Consume the original first-enrollment challenge and fresh OTP atomically; return recovery codes once, never a session"
+      }
+    },
     "/v1/auth/challenges/{challengeId}:confirm-recovery": {
       "post": {
         "operationId": "confirmAuthenticatorRecovery",
@@ -23653,6 +24769,144 @@
         },
         "security": [],
         "summary": "Consume only a RECOVERY/ENROLLMENT challenge and new-factor TOTP; replace the entire recovery-code batch and require a fresh login"
+      }
+    },
+    "/v1/auth/challenges/{challengeId}:enroll": {
+      "post": {
+        "operationId": "startChallengeTOTPEnrollment",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "challengeId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartChallengeTOTPEnrollmentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartTOTPEnrollmentResponse"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [],
+        "summary": "Begin the first TOTP factor with a current ENROLLMENT challenge and original verified contact; only APPLIED discloses provisioning"
+      }
+    },
+    "/v1/auth/challenges/{challengeId}:enrollment-state": {
+      "post": {
+        "operationId": "inspectEnrollmentChallenge",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "challengeId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InspectEnrollmentChallengeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnrollmentChallengeState"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [],
+        "summary": "Read only the current initial-enrollment stage; PASSWORD_CHANGE exposes neither contact nor factor"
       }
     },
     "/v1/auth/challenges/{challengeId}:password": {
@@ -23739,7 +24993,7 @@
           }
         },
         "security": [],
-        "summary": "Consume only a password-and-TOTP authenticated forced-change challenge; revoke all old sessions and challenges, then require a fresh login"
+        "summary": "Consume the exact forced-change stage: TOTP-proved LOGIN or password-proved initial ENROLLMENT; revoke all old sessions and challenges, then require a fresh login"
       }
     },
     "/v1/auth/challenges/{challengeId}:recover": {
@@ -24293,6 +25547,24 @@
           },
           "422": {
             "$ref": "#/components/responses/ProblemResponse"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "The authenticated contact verification cannot reserve another attempt within its bounded shared budget.",
+            "headers": {
+              "Retry-After": {
+                "schema": {
+                  "const": "1",
+                  "type": "string"
+                }
+              }
+            }
           },
           "500": {
             "$ref": "#/components/responses/ProblemResponse"
@@ -25175,6 +26447,61 @@
           }
         },
         "summary": "Commit binding, OTP consumption, recovery batch, notice and session revocation; return codes once then reauthenticate"
+      }
+    },
+    "/v1/auth/totp/enrollments:replace": {
+      "post": {
+        "operationId": "startTOTPReplacement",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartTOTPReplacementRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartTOTPEnrollmentResponse"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Consume the original same-Session TOTP_REPLACE proof and prepare a new pending factor within its original deadline; keep the old factor and batch until confirmation; provisioning is returned once"
       }
     },
     "/v1/authorization-profiles": {

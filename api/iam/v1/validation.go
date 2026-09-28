@@ -78,6 +78,22 @@ func ValidateConfirmNotificationContactVerificationRequest(value ConfirmNotifica
 	return nil
 }
 
+func ValidateStartChallengeNotificationContactVerificationRequest(value StartChallengeNotificationContactVerificationRequest) error {
+	if !value.ChallengeCredential.Present() || ValidateSecurityMailAddress(value.Email) != nil || ValidateID("requestId", value.RequestID) != nil {
+		return errors.New("enrollment contact verification request is invalid")
+	}
+	return nil
+}
+
+func ValidateConfirmChallengeNotificationContactVerificationRequest(value ConfirmChallengeNotificationContactVerificationRequest) error {
+	if !value.ChallengeCredential.Present() {
+		return ErrInvalidSecret
+	}
+	return ValidateConfirmNotificationContactVerificationRequest(ConfirmNotificationContactVerificationRequest{
+		Code: value.Code, RequestID: value.RequestID,
+	})
+}
+
 func ValidateNotificationDeliveryObservation(value NotificationDeliveryObservation) error {
 	if value.Attempts > 5 || validateTime("updatedAt", value.UpdatedAt) != nil {
 		return errors.New("notification delivery observation is invalid")
@@ -133,7 +149,7 @@ func ValidateNotificationContactVerification(value NotificationContactVerificati
 		ValidateID("id", value.ID) != nil || ValidateID("accountId", string(value.AccountID)) != nil ||
 		ValidateID("userId", string(value.UserID)) != nil || ValidateID("requestId", value.RequestID) != nil ||
 		ValidateSecurityMailAddress(value.Email) != nil || validateTime("issuedAt", value.IssuedAt) != nil ||
-		validateTime("expiresAt", value.ExpiresAt) != nil || value.ExpiresAt.Sub(value.IssuedAt) != 10*time.Minute ||
+		validateTime("expiresAt", value.ExpiresAt) != nil || !value.ExpiresAt.After(value.IssuedAt) || value.ExpiresAt.Sub(value.IssuedAt) > 10*time.Minute ||
 		ValidateNotificationDeliveryObservation(value.Delivery) != nil || value.Delivery.UpdatedAt.Before(value.IssuedAt) {
 		return errors.New("notification contact verification is invalid")
 	}
@@ -284,7 +300,8 @@ func ValidateLoginResponse(value LoginResponse) error {
 		return ValidateSession(value.Session)
 	case LoginChallengeRequired:
 		if value.Challenge == nil || !value.ChallengeCredential.Present() || value.Credential.Present() ||
-			value.Session != (Session{}) || value.MustChangePassword || value.Challenge.Purpose != "LOGIN" {
+			value.Session != (Session{}) || value.MustChangePassword ||
+			(value.Challenge.Purpose != "LOGIN" && value.Challenge.Purpose != "ENROLLMENT") {
 			return errors.New("challenged login result is invalid")
 		}
 		return ValidateAuthenticationChallenge(*value.Challenge)
@@ -315,10 +332,50 @@ func ValidateAuthenticationChallenge(value AuthenticationChallenge) error {
 		if value.NextStep != "ENROLLMENT" {
 			return errors.New("recovery challenge stage is invalid")
 		}
+	case "ENROLLMENT":
+		if value.NextStep != "PASSWORD_CHANGE" && value.NextStep != "ENROLLMENT" {
+			return errors.New("enrollment challenge stage is invalid")
+		}
 	default:
 		return errors.New("authentication challenge purpose is invalid")
 	}
 	return errors.Join(ValidateID("challenge.id", value.ID), validateTime("challenge.expiresAt", value.ExpiresAt))
+}
+
+func ValidateInspectEnrollmentChallengeRequest(value InspectEnrollmentChallengeRequest) error {
+	if !value.ChallengeCredential.Present() {
+		return ErrInvalidSecret
+	}
+	return nil
+}
+
+func ValidateStartChallengeTOTPEnrollmentRequest(value StartChallengeTOTPEnrollmentRequest) error {
+	if !value.ChallengeCredential.Present() {
+		return ErrInvalidSecret
+	}
+	return ValidateID("requestId", value.RequestID)
+}
+
+func ValidateEnrollmentChallengeState(value EnrollmentChallengeState) error {
+	if ValidateAuthenticationChallenge(value.Challenge) != nil || value.Challenge.Purpose != "ENROLLMENT" {
+		return errors.New("enrollment challenge observation is invalid")
+	}
+	if value.Challenge.NextStep == "PASSWORD_CHANGE" {
+		if value.NotificationContact != nil || value.Enrollment != nil {
+			return errors.New("password change challenge exposes enrollment state")
+		}
+		return nil
+	}
+	if value.NotificationContact == nil || ValidateNotificationContact(*value.NotificationContact) != nil {
+		return errors.New("enrollment contact observation is required")
+	}
+	if value.Enrollment != nil && (ValidateTOTPEnrollment(*value.Enrollment) != nil ||
+		value.Enrollment.Purpose != "INITIAL" || value.Enrollment.State != "PENDING" || value.Enrollment.FactorRevision != 1 ||
+		!value.Enrollment.ExpiresAt.Equal(value.Challenge.ExpiresAt) || value.NotificationContact.State != "VERIFIED" ||
+		value.NotificationContact.VerifiedAt.After(value.Enrollment.CreatedAt)) {
+		return errors.New("enrollment must retain its original challenge deadline and first-binding prerequisites")
+	}
+	return nil
 }
 
 func ValidateChallengePasswordChangeRequest(value ChallengePasswordChangeRequest) error {
@@ -362,8 +419,17 @@ func ValidateTOTPEnrollment(value TOTPEnrollment) error {
 	if value.APIVersion != APIVersion || value.Kind != "TOTPEnrollment" || value.FactorRevision == 0 || value.FactorRevision > 9007199254740990 ||
 		ValidateID("id", value.ID) != nil || ValidateID("requestId", value.RequestID) != nil ||
 		validateTime("createdAt", value.CreatedAt) != nil || validateTime("expiresAt", value.ExpiresAt) != nil ||
-		value.ExpiresAt.Sub(value.CreatedAt) != 5*time.Minute {
+		!value.ExpiresAt.After(value.CreatedAt) || value.ExpiresAt.Sub(value.CreatedAt) > 5*time.Minute {
 		return errors.New("TOTP enrollment is invalid")
+	}
+	switch value.Purpose {
+	case "INITIAL":
+	case "REPLACEMENT":
+		if value.FactorRevision < 2 || value.ExpiresAt.Sub(value.CreatedAt) > 2*time.Minute {
+			return errors.New("replacement must retain a bound revision and original proof deadline")
+		}
+	default:
+		return errors.New("TOTP enrollment purpose is invalid")
 	}
 	switch value.State {
 	case "PENDING":
@@ -389,6 +455,13 @@ func ValidateStartTOTPEnrollmentRequest(value StartTOTPEnrollmentRequest) error 
 		return errors.New("factor revision is invalid")
 	}
 	return ValidateID("requestId", value.RequestID)
+}
+
+func ValidateStartTOTPReplacementRequest(value StartTOTPReplacementRequest) error {
+	if value.ExpectedFactorRevision < 2 || value.ExpectedFactorRevision > 9007199254740990 {
+		return errors.New("replaceable bound factor revision is required")
+	}
+	return errors.Join(ValidateID("requestId", value.RequestID), ValidateID("stepUpId", value.StepUpID))
 }
 
 func ValidateStartTOTPEnrollmentResponse(value StartTOTPEnrollmentResponse) error {
@@ -505,13 +578,55 @@ func ValidateConfirmAuthenticatorRecoveryResponse(value ConfirmAuthenticatorReco
 	return validateRecoveryCodes(value.RecoveryCodes)
 }
 
+func ValidateAccountSecuritySettings(value AccountSecuritySettings) error {
+	if value.APIVersion != APIVersion || value.Kind != "AccountSecuritySettings" {
+		return errors.New("account security settings type metadata is invalid")
+	}
+	return errors.Join(ValidateID("accountId", string(value.AccountID)), validatePositiveVersion(value.ResourceVersion), validateTime("updatedAt", value.UpdatedAt))
+}
+
+func ValidateSecuritySettingsUpdateIntent(value SecuritySettingsUpdateIntent) error {
+	// A successful command increments the expected revision; both must remain
+	// exact safe integers for every public consumer.
+	if value.ExpectedResourceVersion == 0 || value.ExpectedResourceVersion >= 9007199254740991 {
+		return errors.New("security settings expected version is invalid")
+	}
+	return nil
+}
+
+func ValidateUpdateAccountSecuritySettingsRequest(value UpdateAccountSecuritySettingsRequest) error {
+	return errors.Join(ValidateID("requestId", value.RequestID), ValidateID("stepUpId", value.StepUpID),
+		ValidateSecuritySettingsUpdateIntent(SecuritySettingsUpdateIntent{ExpectedResourceVersion: value.ExpectedResourceVersion, MFA: value.MFA}))
+}
+
+func ValidateAccountSecuritySettingsChange(value AccountSecuritySettingsChange) error {
+	if value.APIVersion != APIVersion || value.Kind != "AccountSecuritySettingsChange" ||
+		ValidateAccountSecuritySettings(value.Settings) != nil ||
+		ValidateSecuritySettingsUpdateIntent(SecuritySettingsUpdateIntent{ExpectedResourceVersion: value.ExpectedResourceVersion, MFA: value.Settings.MFA}) != nil ||
+		value.Settings.ResourceVersion != value.ExpectedResourceVersion+1 ||
+		!value.CallerSessionEnded {
+		return errors.New("account security settings change is invalid")
+	}
+	return ValidateID("requestId", value.RequestID)
+}
+
+func ValidateUpdateAccountSecuritySettingsResponse(value UpdateAccountSecuritySettingsResponse) error {
+	if value.Outcome != "APPLIED" && value.Outcome != "EQUAL_REPLAY" {
+		return errors.New("account security settings outcome is invalid")
+	}
+	return ValidateAccountSecuritySettingsChange(value.Change)
+}
+
 func ValidateStepUp(value StepUp) error {
 	if value.APIVersion != APIVersion || value.Kind != "StepUp" ||
-		value.Operation != StepUpRegenerateRecoveryCodes || value.ExpectedFactorRevision < 2 || validatePositiveVersion(value.ExpectedFactorRevision) != nil ||
+		validateStepUpOperation(value.Operation, value.SecuritySettings) != nil || value.ExpectedFactorRevision < 2 || validatePositiveVersion(value.ExpectedFactorRevision) != nil ||
 		ValidateID("stepUp.id", value.ID) != nil || ValidateID("stepUp.requestId", value.RequestID) != nil ||
 		validateTime("createdAt", value.CreatedAt) != nil || validateTime("expiresAt", value.ExpiresAt) != nil ||
 		value.ExpiresAt.Sub(value.CreatedAt) != 2*time.Minute {
 		return errors.New("step-up is invalid")
+	}
+	if value.Operation == StepUpReplaceTOTP && value.ExpectedFactorRevision > 9007199254740990 {
+		return errors.New("factor revision cannot be advanced")
 	}
 	if value.ProvedAt != nil && (validateTime("provedAt", *value.ProvedAt) != nil || value.ProvedAt.Before(value.CreatedAt) || !value.ProvedAt.Before(value.ExpiresAt)) {
 		return errors.New("step-up proof time is invalid")
@@ -544,10 +659,27 @@ func ValidateStepUp(value StepUp) error {
 }
 
 func ValidateStartStepUpRequest(value StartStepUpRequest) error {
-	if value.Operation != StepUpRegenerateRecoveryCodes || value.ExpectedFactorRevision < 2 || validatePositiveVersion(value.ExpectedFactorRevision) != nil {
+	if validateStepUpOperation(value.Operation, value.SecuritySettings) != nil || value.ExpectedFactorRevision < 2 || validatePositiveVersion(value.ExpectedFactorRevision) != nil {
 		return errors.New("step-up operation is invalid")
 	}
+	if value.Operation == StepUpReplaceTOTP && value.ExpectedFactorRevision > 9007199254740990 {
+		return errors.New("factor revision cannot be advanced")
+	}
 	return ValidateID("requestId", value.RequestID)
+}
+
+func validateStepUpOperation(operation StepUpOperation, settings *SecuritySettingsUpdateIntent) error {
+	switch operation {
+	case StepUpRegenerateRecoveryCodes, StepUpReplaceTOTP:
+		if settings == nil {
+			return nil
+		}
+	case StepUpUpdateSecuritySettings:
+		if settings != nil {
+			return ValidateSecuritySettingsUpdateIntent(*settings)
+		}
+	}
+	return errors.New("step-up operation intent is invalid")
 }
 
 func ValidateVerifyStepUpRequest(value VerifyStepUpRequest) error {

@@ -68,11 +68,15 @@ func (service *Authority) Login(
 		}
 		switch state.State {
 		case "BOUND", "RECOVERY_REQUIRED":
-			response, err = service.createLoginChallenge(transactionContext, transaction, attempt, request.RequestID, requestDigest)
+			response, err = service.createLoginChallenge(transactionContext, transaction, attempt, state, request.RequestID, requestDigest)
 			return err
 		case "NEVER_BOUND":
 			if state.Revision != 1 || state.FactorID != "" {
 				return ErrUnavailable
+			}
+			if state.EnrollmentRequired {
+				response, err = service.createLoginChallenge(transactionContext, transaction, attempt, state, request.RequestID, requestDigest)
+				return err
 			}
 		default:
 			// Unknown history is never a password-only fallback. The SQL

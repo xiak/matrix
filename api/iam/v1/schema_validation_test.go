@@ -14,10 +14,186 @@ import (
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 )
 
+func TestEnrollmentChallengeSchemasSeparatePurposeAndSecretCarrier(t *testing.T) {
+	api := loadIAMOpenAPI(t)
+	for _, sample := range enrollmentChallengeRequestSamples() {
+		t.Run(sample.kind, func(t *testing.T) {
+			schema := compileIAMOpenAPISchema(t, api, sample.kind)
+			var fields map[string]any
+			if json.Unmarshal([]byte(sample.wire), &fields) != nil || schema.Validate(fields) != nil {
+				t.Fatal("explicit restricted request not represented by schema")
+			}
+			for _, field := range []string{"userId", "accountId", "tenantId", "credential", "session", "password", "purpose", "nextStep", "expectedFactorRevision", "smtpHost"} {
+				fields[field] = nil
+				if schema.Validate(fields) == nil {
+					t.Fatal("schema permits an authority selector or second carrier")
+				}
+				delete(fields, field)
+			}
+			for field, original := range fields {
+				fields[field] = nil
+				if schema.Validate(fields) == nil {
+					t.Fatal("schema permits null required authentication input")
+				}
+				delete(fields, field)
+				if schema.Validate(fields) == nil {
+					t.Fatal("schema permits missing authentication input")
+				}
+				fields[field] = original
+			}
+		})
+	}
+	challengeSchema := compileIAMOpenAPISchema(t, api, "AuthenticationChallenge")
+	loginSchema := compileIAMOpenAPISchema(t, api, "LoginResponse")
+	for _, purpose := range []string{"LOGIN", "RECOVERY", "ENROLLMENT", "STEP_UP", "SESSION"} {
+		for _, step := range []string{"TOTP", "PASSWORD_CHANGE", "RECOVER", "ENROLLMENT", "AUTHENTICATED"} {
+			challenge := AuthenticationChallenge{APIVersion: APIVersion, Kind: "AuthenticationChallenge", ID: "challenge-one", Purpose: purpose, NextStep: step,
+				ExpiresAt: time.Date(2026, 9, 24, 12, 5, 0, 0, time.UTC)}
+			encoded, _ := json.Marshal(challenge)
+			var raw any
+			_ = json.Unmarshal(encoded, &raw)
+			want := purpose == "LOGIN" && (step == "TOTP" || step == "PASSWORD_CHANGE" || step == "RECOVER") ||
+				purpose == "RECOVERY" && step == "ENROLLMENT" || purpose == "ENROLLMENT" && (step == "PASSWORD_CHANGE" || step == "ENROLLMENT")
+			if (challengeSchema.Validate(raw) == nil) != want || (ValidateAuthenticationChallenge(challenge) == nil) != want {
+				t.Fatalf("purpose/stage %s/%s differs", purpose, step)
+			}
+			wire := `{"outcome":"CHALLENGE_REQUIRED","challenge":` + string(encoded) + `,"challengeCredential":"synthetic-only-secret"}`
+			_ = json.Unmarshal([]byte(wire), &raw)
+			var response LoginResponse
+			wantLogin := want && purpose != "RECOVERY"
+			if (loginSchema.Validate(raw) == nil) != wantLogin || (DecodeRequest(strings.NewReader(wire), &response) == nil) != wantLogin {
+				t.Fatalf("login admitted wrong challenge purpose/stage %s/%s", purpose, step)
+			}
+			if wantLogin {
+				transport, err := EncodeLoginResponse(response)
+				defer clear(transport)
+				if err != nil || DecodeRequest(bytes.NewReader(transport), &response) != nil {
+					t.Fatal("explicit challenge transport failed")
+				}
+				for _, extra := range []string{`"session":null`, `"credential":null`, `"mustChangePassword":false`, `"mustChangePassword":true`} {
+					attack := strings.TrimSuffix(wire, "}") + `,` + extra + `}`
+					_ = json.Unmarshal([]byte(attack), &raw)
+					if loginSchema.Validate(raw) == nil || DecodeRequest(strings.NewReader(attack), &response) == nil {
+						t.Fatal("enrollment leaked a partial login authority")
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestEnrollmentChallengeStateSchemaKeepsPasswordStageAndFirstFactorDistinct(t *testing.T) {
+	schema := compileIAMOpenAPISchema(t, loadIAMOpenAPI(t), "EnrollmentChallengeState")
+	challenge := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AuthenticationChallenge","id":"challenge-first","purpose":"ENROLLMENT","nextStep":"ENROLLMENT","expiresAt":"2026-09-24T12:05:00Z"}`
+	contact := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"NotificationContact","accountId":"account-a","userId":"user-a","state":"NONE","resourceVersion":0}`
+	verified := strings.Replace(contact, `"state":"NONE","resourceVersion":0`, `"state":"VERIFIED","resourceVersion":1,"email":"first@example.invalid","verifiedAt":"2026-09-24T12:04:00Z"`, 1)
+	factor := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"TOTPEnrollment","id":"factor-first","requestId":"first-bind","purpose":"INITIAL","factorRevision":1,"state":"PENDING","createdAt":"2026-09-24T12:04:30Z","expiresAt":"2026-09-24T12:05:00Z"}`
+	for _, sample := range []struct {
+		wire  string
+		valid bool
+	}{
+		{`{"challenge":` + challenge + `,"notificationContact":` + contact + `}`, true},
+		{`{"challenge":` + challenge + `,"notificationContact":` + verified + `}`, true},
+		{`{"challenge":` + challenge + `,"notificationContact":` + verified + `,"enrollment":` + factor + `}`, true},
+		{`{"challenge":` + challenge + `,"notificationContact":` + contact + `,"enrollment":` + factor + `}`, false},
+		{`{"challenge":` + challenge + `,"notificationContact":` + verified + `,"enrollment":` + strings.Replace(factor, `"factorRevision":1`, `"factorRevision":2`, 1) + `}`, false},
+		{`{"challenge":` + challenge + `}`, false},
+		{`{"challenge":` + challenge + `,"notificationContact":null}`, false},
+		{`{"challenge":` + challenge + `,"notificationContact":` + verified + `,"enrollment":null}`, false},
+		{`{"challenge":` + strings.Replace(challenge, `"purpose":"ENROLLMENT"`, `"purpose":"RECOVERY"`, 1) + `,"notificationContact":` + contact + `}`, false},
+		{`{"challenge":` + strings.Replace(challenge, `"nextStep":"ENROLLMENT"`, `"nextStep":"PASSWORD_CHANGE"`, 1) + `}`, true},
+		{`{"challenge":` + strings.Replace(challenge, `"nextStep":"ENROLLMENT"`, `"nextStep":"PASSWORD_CHANGE"`, 1) + `,"notificationContact":` + contact + `}`, false},
+	} {
+		var raw any
+		if json.Unmarshal([]byte(sample.wire), &raw) != nil {
+			t.Fatal("bad observation fixture")
+		}
+		var observation EnrollmentChallengeState
+		if (schema.Validate(raw) == nil) != sample.valid || (DecodeRequest(strings.NewReader(sample.wire), &observation) == nil) != sample.valid {
+			t.Fatalf("observation contract differs, expected valid=%v", sample.valid)
+		}
+	}
+}
+
+func TestAccountSecuritySettingsSchemasRejectMissingConfigurationAndAuthoritySelectors(t *testing.T) {
+	api := loadIAMOpenAPI(t)
+	for _, sample := range securitySettingsContractSamples() {
+		t.Run(sample.kind, func(t *testing.T) {
+			schema := compileIAMOpenAPISchema(t, api, sample.kind)
+			cases := []struct {
+				wire  string
+				valid bool
+			}{
+				{sample.wire, true},
+				{strings.ReplaceAll(sample.wire, "false", "true"), true},
+				{strings.Replace(sample.wire, `"requiredForUsers":false`, `"requiredForUsers":true`, 1), true},
+				{strings.Replace(sample.wire, "APPLIED", "EQUAL_REPLAY", 1), true},
+				{strings.ReplaceAll(strings.ReplaceAll(sample.wire, `"expectedResourceVersion":1`, `"expectedResourceVersion":9007199254740990`), `"resourceVersion":2`, `"resourceVersion":9007199254740991`), true},
+				{strings.Replace(sample.wire, `"requiredForUsers":false`, "", 1), false},
+				{strings.Replace(sample.wire, `"requiredForUsers":false`, `"requiredForUsers":null`, 1), false},
+				{strings.Replace(sample.wire, `"requiredForUsers":false`, `"requiredForUsers":"false"`, 1), false},
+				{strings.TrimSuffix(sample.wire, "}") + `,"credential":"not-authority"}`, false},
+			}
+			if sample.kind != "AccountMFASettings" {
+				cases = append(cases, struct {
+					wire  string
+					valid bool
+				}{strings.Replace(sample.wire, `"mfa":{"requiredForUsers":false}`, `"mfa":null`, 1), false})
+			}
+			if strings.Contains(sample.wire, `"expectedResourceVersion"`) {
+				for _, version := range []string{"0", "9007199254740991", "null"} {
+					cases = append(cases, struct {
+						wire  string
+						valid bool
+					}{strings.Replace(sample.wire, `"expectedResourceVersion":1`, `"expectedResourceVersion":`+version, 1), false})
+				}
+			}
+			if strings.Contains(sample.wire, `"callerSessionEnded"`) {
+				for _, changed := range []string{
+					strings.Replace(sample.wire, `,"callerSessionEnded":true`, "", 1),
+					strings.Replace(sample.wire, `"callerSessionEnded":true`, `"callerSessionEnded":null`, 1),
+					strings.Replace(sample.wire, `"callerSessionEnded":true`, `"callerSessionEnded":false`, 1),
+				} {
+					cases = append(cases, struct {
+						wire  string
+						valid bool
+					}{changed, false})
+				}
+			}
+			if strings.Contains(sample.wire, `"apiVersion"`) {
+				for _, changed := range []string{
+					strings.Replace(sample.wire, APIVersion, "other/v1", 1),
+					strings.Replace(sample.wire, `"kind":"AccountSecuritySettings`, `"kind":"Session`, 1),
+				} {
+					cases = append(cases, struct {
+						wire  string
+						valid bool
+					}{changed, false})
+				}
+			}
+			for index, sampleCase := range cases {
+				raw, err := jsonschema.UnmarshalJSON(strings.NewReader(sampleCase.wire))
+				if err != nil {
+					t.Fatal("invalid synthetic JSON")
+				}
+				if (schema.Validate(raw) == nil) != sampleCase.valid {
+					t.Fatalf("schema accepted different behavior for case %d", index)
+				}
+				if (json.Unmarshal([]byte(sampleCase.wire), sample.newValue()) == nil) != sampleCase.valid {
+					t.Fatalf("typed contract accepted different behavior for case %d", index)
+				}
+			}
+		})
+	}
+}
+
 func TestStepUpSchemasKeepOperationProofSeparateFromLoginAndSecretReplay(t *testing.T) {
 	api := loadIAMOpenAPI(t)
 	step := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"StepUp","id":"proof-a","requestId":"regenerate-a","operation":"RECOVERY_CODES_REGENERATE","expectedFactorRevision":2,"state":"PENDING","createdAt":"2026-09-21T12:00:00Z","expiresAt":"2026-09-21T12:02:00Z"}`
 	start := `{"requestId":"regenerate-a","operation":"RECOVERY_CODES_REGENERATE","expectedFactorRevision":2}`
+	settingsIntent := `{"expectedResourceVersion":1,"mfa":{"requiredForUsers":true}}`
+	settingsStep := strings.TrimSuffix(strings.Replace(step, "RECOVERY_CODES_REGENERATE", "SECURITY_SETTINGS_UPDATE", 1), "}") + `,"securitySettings":` + settingsIntent + `}`
+	settingsStart := strings.TrimSuffix(strings.Replace(start, "RECOVERY_CODES_REGENERATE", "SECURITY_SETTINGS_UPDATE", 1), "}") + `,"securitySettings":` + settingsIntent + `}`
 	verify := `{"requestId":"verify-a","password":"synthetic-password","code":"malformed-nonempty-candidate"}`
 	command := `{"requestId":"regenerate-a","stepUpId":"proof-a","expectedFactorRevision":2}`
 	result := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"RecoveryCodeRegeneration","id":"regeneration-a","requestId":"regenerate-a","factorId":"factor-a","factorRevision":2,"createdAt":"2026-09-21T12:01:00Z"}`
@@ -43,6 +219,14 @@ func TestStepUpSchemasKeepOperationProofSeparateFromLoginAndSecretReplay(t *test
 		valid      bool
 	}{
 		{"StepUp", step, true},
+		{"StepUp", settingsStep, true},
+		{"StepUp", strings.Replace(settingsStep, "true", "false", 1), true},
+		{"StepUp", strings.Replace(settingsStep, settingsIntent, "null", 1), false},
+		{"StepUp", strings.Replace(step, "RECOVERY_CODES_REGENERATE", "SECURITY_SETTINGS_UPDATE", 1), false},
+		{"StepUp", strings.Replace(settingsStep, "SECURITY_SETTINGS_UPDATE", "RECOVERY_CODES_REGENERATE", 1), false},
+		{"StepUp", strings.TrimSuffix(step, "}") + `,"securitySettings":null}`, false},
+		{"StepUp", strings.Replace(settingsStep, "PENDING", "PROVED", 1), false},
+		{"StepUp", strings.TrimSuffix(strings.Replace(settingsStep, "PENDING", "PROVED", 1), "}") + `,"provedAt":"2026-09-21T12:00:30Z"}`, true},
 		{"StepUp", proved, true},
 		{"StepUp", consumed, true},
 		{"StepUp", strings.Replace(step, "PENDING", "EXPIRED", 1), true},
@@ -56,6 +240,14 @@ func TestStepUpSchemasKeepOperationProofSeparateFromLoginAndSecretReplay(t *test
 		{"StepUp", strings.Replace(step, `"expectedFactorRevision":2`, `"expectedFactorRevision":1`, 1), false},
 		{"StepUp", strings.Replace(step, `"expectedFactorRevision":2`, `"expectedFactorRevision":9007199254740991`, 1), true},
 		{"StartStepUpRequest", start, true},
+		{"StartStepUpRequest", settingsStart, true},
+		{"StartStepUpRequest", strings.Replace(settingsStart, "true", "false", 1), true},
+		{"StartStepUpRequest", strings.Replace(settingsStart, settingsIntent, "null", 1), false},
+		{"StartStepUpRequest", strings.Replace(settingsStart, settingsIntent, `{}`, 1), false},
+		{"StartStepUpRequest", strings.Replace(settingsStart, `"requiredForUsers":true`, `"requiredForUsers":null`, 1), false},
+		{"StartStepUpRequest", strings.Replace(settingsStart, `"expectedResourceVersion":1`, `"expectedResourceVersion":9007199254740991`, 1), false},
+		{"StartStepUpRequest", strings.Replace(settingsStart, "SECURITY_SETTINGS_UPDATE", "RECOVERY_CODES_REGENERATE", 1), false},
+		{"StartStepUpRequest", strings.TrimSuffix(start, "}") + `,"securitySettings":null}`, false},
 		{"StartStepUpRequest", strings.Replace(start, ":2}", ":1}", 1), false},
 		{"StartStepUpRequest", strings.TrimSuffix(start, "}") + `,"input":{}}`, false},
 		{"VerifyStepUpRequest", verify, true},
@@ -287,6 +479,99 @@ func TestChallengePasswordChangeCannotIssueOrRetainASession(t *testing.T) {
 	}
 }
 
+func TestTOTPReplacementRequestHasOneExactProofAndNoAuthoritySelectors(t *testing.T) {
+	api := loadIAMOpenAPI(t)
+	schema := compileIAMOpenAPISchema(t, api, "StartTOTPReplacementRequest")
+	valid := `{"requestId":"replace-one","stepUpId":"proof-one","expectedFactorRevision":2}`
+	for _, sample := range []struct {
+		name, wire string
+		valid      bool
+	}{
+		{"exact", valid, true},
+		{"last-advanceable", strings.Replace(valid, `:2}`, `:9007199254740990}`, 1), true},
+		{"unbound", strings.Replace(valid, `:2}`, `:1}`, 1), false},
+		{"cannot-advance", strings.Replace(valid, `:2}`, `:9007199254740991}`, 1), false},
+		{"missing-proof", strings.Replace(valid, `"stepUpId":"proof-one",`, "", 1), false},
+		{"null-proof", strings.Replace(valid, `"proof-one"`, `null`, 1), false},
+		{"other-account", strings.TrimSuffix(valid, "}") + `,"accountId":"other"}`, false},
+		{"other-user", strings.TrimSuffix(valid, "}") + `,"userId":"other"}`, false},
+		{"caller-session", strings.TrimSuffix(valid, "}") + `,"sessionId":"other"}`, false},
+		{"wrong-carrier", strings.TrimSuffix(valid, "}") + `,"challengeCredential":"other"}`, false},
+		{"password-not-proof", strings.TrimSuffix(valid, "}") + `,"password":"secret"}`, false},
+		{"settings-not-replacement", strings.TrimSuffix(valid, "}") + `,"securitySettings":{"expectedResourceVersion":1,"mfa":{"requiredForUsers":false}}}`, false},
+	} {
+		t.Run(sample.name, func(t *testing.T) {
+			var raw any
+			if json.Unmarshal([]byte(sample.wire), &raw) != nil || (schema.Validate(raw) == nil) != sample.valid {
+				t.Fatal("replacement schema accepted an ambiguous or unadvanceable intent")
+			}
+			original := StartTOTPReplacementRequest{RequestID: "unchanged", StepUpID: "original", ExpectedFactorRevision: 7}
+			decoded := original
+			if (json.Unmarshal([]byte(sample.wire), &decoded) == nil) != sample.valid || (!sample.valid && decoded != original) {
+				t.Fatal("replacement decoder accepted bad input or partially changed the destination")
+			}
+		})
+	}
+	for _, duplicate := range []string{`"requestId":"replace-one"`, `"stepUpId":"proof-one"`, `"expectedFactorRevision":2`} {
+		var decoded StartTOTPReplacementRequest
+		if DecodeRequest(strings.NewReader(strings.TrimSuffix(valid, "}")+","+duplicate+"}"), &decoded) == nil {
+			t.Fatal("duplicate replacement field was accepted")
+		}
+	}
+	stepSchema := compileIAMOpenAPISchema(t, api, "StartStepUpRequest")
+	for _, sample := range []struct {
+		wire string
+		ok   bool
+	}{
+		{`{"requestId":"replace-one","operation":"TOTP_REPLACE","expectedFactorRevision":2}`, true},
+		{`{"requestId":"replace-one","operation":"TOTP_REPLACE","expectedFactorRevision":9007199254740991}`, false},
+		{`{"requestId":"replace-one","operation":"TOTP_REPLACE","expectedFactorRevision":2,"securitySettings":null}`, false},
+		{`{"requestId":"replace-one","operation":"TOTP_REPLACE","expectedFactorRevision":2,"securitySettings":{"expectedResourceVersion":1,"mfa":{"requiredForUsers":false}}}`, false},
+	} {
+		var raw any
+		var decoded StartStepUpRequest
+		if json.Unmarshal([]byte(sample.wire), &raw) != nil || (stepSchema.Validate(raw) == nil) != sample.ok ||
+			(DecodeRequest(strings.NewReader(sample.wire), &decoded) == nil) != sample.ok {
+			t.Fatal("replacement operation accepted another purpose or overflowed revision")
+		}
+	}
+}
+
+func TestTOTPEnrollmentPurposeSeparatesReplacementFromInitialBinding(t *testing.T) {
+	api := loadIAMOpenAPI(t)
+	schema := compileIAMOpenAPISchema(t, api, "TOTPEnrollment")
+	replacement := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"TOTPEnrollment","id":"factor-new","requestId":"replace-one","purpose":"REPLACEMENT","factorRevision":2,"state":"PENDING","createdAt":"2026-09-24T12:00:30Z","expiresAt":"2026-09-24T12:02:00Z"}`
+	for _, sample := range []struct {
+		name, wire string
+		valid      bool
+	}{
+		{"replacement", replacement, true},
+		{"initial", strings.Replace(strings.Replace(replacement, "REPLACEMENT", "INITIAL", 1), `"factorRevision":2`, `"factorRevision":1`, 1), true},
+		{"missing-purpose", strings.Replace(replacement, `"purpose":"REPLACEMENT",`, "", 1), false},
+		{"null-purpose", strings.Replace(replacement, `"REPLACEMENT"`, `null`, 1), false},
+		{"recovery-is-not-replacement", strings.Replace(replacement, "REPLACEMENT", "RECOVERY", 1), false},
+		{"unbound-replacement", strings.Replace(replacement, `"factorRevision":2`, `"factorRevision":1`, 1), false},
+		{"revision-overflow", strings.Replace(replacement, `"factorRevision":2`, `"factorRevision":9007199254740991`, 1), false},
+		{"no-private-proof", strings.TrimSuffix(replacement, "}") + `,"stepUpId":"proof-one"}`, false},
+		{"no-caller-session", strings.TrimSuffix(replacement, "}") + `,"sessionId":"session-one"}`, false},
+		{"no-credential", strings.TrimSuffix(replacement, "}") + `,"credential":"not-authority"}`, false},
+	} {
+		t.Run(sample.name, func(t *testing.T) {
+			var raw any
+			if json.Unmarshal([]byte(sample.wire), &raw) != nil {
+				t.Fatal("invalid enrollment fixture")
+			}
+			if (schema.Validate(raw) == nil) != sample.valid {
+				t.Fatal("enrollment schema accepted the wrong ceremony purpose")
+			}
+			var value TOTPEnrollment
+			if (DecodeRequest(strings.NewReader(sample.wire), &value) == nil && ValidateTOTPEnrollment(value) == nil) != sample.valid {
+				t.Fatal("enrollment codec accepted the wrong ceremony purpose")
+			}
+		})
+	}
+}
+
 func TestTOTPEnrollmentContractsKeepOneTimeMaterialOutOfReplay(t *testing.T) {
 	api := loadIAMOpenAPI(t)
 	paths := mustIAMObject(t, api["paths"], "paths")
@@ -311,7 +596,7 @@ func TestTOTPEnrollmentContractsKeepOneTimeMaterialOutOfReplay(t *testing.T) {
 			}
 		}
 	}
-	enrollment := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"TOTPEnrollment","id":"factor-one","requestId":"enroll-one","factorRevision":1,"state":"PENDING","createdAt":"2026-09-20T01:00:00Z","expiresAt":"2026-09-20T01:05:00Z"}`
+	enrollment := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"TOTPEnrollment","id":"factor-one","requestId":"enroll-one","purpose":"INITIAL","factorRevision":1,"state":"PENDING","createdAt":"2026-09-20T01:00:00Z","expiresAt":"2026-09-20T01:05:00Z"}`
 	applied := `{"outcome":"APPLIED","enrollment":` + enrollment + `,"provisioning":{"seed":"synthetic-seed-only","uri":"synthetic-uri-only"}}`
 	replay := `{"outcome":"EQUAL_REPLAY","enrollment":` + enrollment + `}`
 	schema := compileIAMOpenAPISchema(t, api, "StartTOTPEnrollmentResponse")

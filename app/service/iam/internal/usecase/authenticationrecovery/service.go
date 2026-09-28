@@ -42,28 +42,33 @@ type Repository interface {
 
 type Transaction interface {
 	TransactionTime(context.Context) (time.Time, error)
+	PrepareAuthenticationClose(context.Context, installationv1.AuthenticationRecoveryIntent, string) (installationv1.AuthenticationRecoverySecuritySnapshot, error)
 	CloseAuthentication(context.Context, CloseMutation) (installationv1.AuthenticationRecoveryClosure, error)
 	ReconcileAuthentication(context.Context, ReconcileMutation) (installationv1.AuthenticationRecoveryClosure, error)
 	ReopenAuthentication(context.Context, ReopenMutation) (installationv1.AuthenticationRecoveryCompletion, error)
 }
 
 type CloseMutation struct {
-	Intent       installationv1.AuthenticationRecoveryIntent
-	IntentDigest string
-	ClosedEvent  auditv1.Event
+	Intent                 installationv1.AuthenticationRecoveryIntent
+	IntentDigest           string
+	ClosedEvent            auditv1.Event
+	SecuritySnapshot       installationv1.AuthenticationRecoverySecuritySnapshot
+	SecuritySnapshotDigest string
 }
 
 type ReconcileMutation struct {
-	Closure         installationv1.AuthenticationRecoveryClosure
-	ClosureDigest   string
-	ClosedEvent     auditv1.Event
-	ReconciledEvent auditv1.Event
+	Closure          installationv1.AuthenticationRecoveryClosure
+	ClosureDigest    string
+	ClosedEvent      auditv1.Event
+	ReconciledEvent  auditv1.Event
+	SecuritySnapshot installationv1.AuthenticationRecoverySecuritySnapshot
 }
 
 type ReopenMutation struct {
-	Closure       installationv1.AuthenticationRecoveryClosure
-	ClosureDigest string
-	ReopenedEvent auditv1.Event
+	Closure          installationv1.AuthenticationRecoveryClosure
+	ClosureDigest    string
+	ReopenedEvent    auditv1.Event
+	SecuritySnapshot installationv1.AuthenticationRecoverySecuritySnapshot
 }
 
 type Service struct {
@@ -84,41 +89,63 @@ func NewService(repository Repository, config Config) (*Service, error) {
 	return &Service{repository: repository, maxTransactionAttempts: config.MaxTransactionAttempts}, nil
 }
 
-func (service *Service) Close(ctx context.Context, intent installationv1.AuthenticationRecoveryIntent) (installationv1.AuthenticationRecoveryClosure, error) {
-	if installationv1.ValidateAuthenticationRecoveryIntent(intent) != nil {
-		return installationv1.AuthenticationRecoveryClosure{}, ErrInvalidArgument
+func (service *Service) Close(ctx context.Context, intent installationv1.AuthenticationRecoveryIntent) (installationv1.AuthenticationRecoveryClosureEnvelope, error) {
+	if installationv1.ValidateCurrentAuthenticationRecoveryIntent(intent) != nil {
+		return installationv1.AuthenticationRecoveryClosureEnvelope{}, ErrInvalidArgument
 	}
 	digest, err := installationv1.AuthenticationRecoveryIntentDigest(intent)
 	if err != nil {
-		return installationv1.AuthenticationRecoveryClosure{}, ErrInvalidArgument
+		return installationv1.AuthenticationRecoveryClosureEnvelope{}, ErrInvalidArgument
 	}
-	var result installationv1.AuthenticationRecoveryClosure
+	var result installationv1.AuthenticationRecoveryClosureEnvelope
 	err = service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
-		now, err := transactionTime(ctx, tx)
+		// The SQL barrier, source qualification, unique Go encoding and seal
+		// all belong to this transaction. No prepared result escapes a failed
+		// commit; a serializable retry samples again with the original intent.
+		snapshot, err := tx.PrepareAuthenticationClose(ctx, intent, digest)
 		if err != nil {
 			return err
+		}
+		if installationv1.ValidateAuthenticationRecoverySecuritySnapshot(snapshot) != nil ||
+			snapshot.InstallationID != intent.InstallationID || snapshot.CommandID != intent.CommandID ||
+			snapshot.Epoch != intent.Epoch || snapshot.RecoveryIntentDigest != digest ||
+			snapshot.AuthenticationStateDigest != intent.AuthenticationStateDigest {
+			return ErrUnavailable
+		}
+		snapshotDigest, err := installationv1.AuthenticationRecoverySecuritySnapshotDigest(snapshot)
+		if err != nil {
+			return ErrUnavailable
 		}
 		event, err := newEvent(intent.InstallationID, intent.CommandID, digest,
-			auditv1.ActionIAMAuthenticationRecoveryClosed, now)
+			auditv1.ActionIAMAuthenticationRecoveryClosed, snapshot.ClosedAt)
 		if err != nil {
 			return err
 		}
-		result, err = tx.CloseAuthentication(ctx, CloseMutation{
+		closure, err := tx.CloseAuthentication(ctx, CloseMutation{
 			Intent: intent, IntentDigest: digest, ClosedEvent: event,
+			SecuritySnapshot: snapshot, SecuritySnapshotDigest: snapshotDigest,
 		})
-		return err
+		if err != nil {
+			return err
+		}
+		result = installationv1.AuthenticationRecoveryClosureEnvelope{
+			APIVersion: installationv1.AuthenticationRecoveryAPIVersion, Kind: installationv1.AuthenticationRecoveryClosureEnvelopeKind,
+			Purpose: installationv1.AuthenticationRecoveryPurpose, Closure: closure, SecuritySnapshot: snapshot,
+		}
+		if installationv1.ValidateAuthenticationRecoveryClosureEnvelope(result) != nil ||
+			installationv1.ValidateAuthenticationRecoveryClosureForIntent(closure, intent) != nil {
+			return ErrUnavailable
+		}
+		return nil
 	})
 	if err != nil {
-		return installationv1.AuthenticationRecoveryClosure{}, err
-	}
-	if installationv1.ValidateAuthenticationRecoveryClosureForIntent(result, intent) != nil {
-		return installationv1.AuthenticationRecoveryClosure{}, ErrUnavailable
+		return installationv1.AuthenticationRecoveryClosureEnvelope{}, err
 	}
 	return result, nil
 }
 
-func (service *Service) Reconcile(ctx context.Context, closure installationv1.AuthenticationRecoveryClosure) (installationv1.AuthenticationRecoveryClosure, error) {
-	if installationv1.ValidateAuthenticationRecoveryClosure(closure) != nil {
+func (service *Service) Reconcile(ctx context.Context, closure installationv1.AuthenticationRecoveryClosure, snapshot installationv1.AuthenticationRecoverySecuritySnapshot) (installationv1.AuthenticationRecoveryClosure, error) {
+	if installationv1.ValidateAuthenticationRecoverySecuritySnapshotForClosure(snapshot, closure) != nil {
 		return installationv1.AuthenticationRecoveryClosure{}, ErrInvalidArgument
 	}
 	digest, err := installationv1.AuthenticationRecoveryClosureDigest(closure)
@@ -142,21 +169,21 @@ func (service *Service) Reconcile(ctx context.Context, closure installationv1.Au
 			return err
 		}
 		result, err = tx.ReconcileAuthentication(ctx, ReconcileMutation{
-			Closure: closure, ClosureDigest: digest, ClosedEvent: closed, ReconciledEvent: reconciled,
+			Closure: closure, ClosureDigest: digest, ClosedEvent: closed, ReconciledEvent: reconciled, SecuritySnapshot: snapshot,
 		})
+		if err == nil && result != closure {
+			return ErrUnavailable
+		}
 		return err
 	})
 	if err != nil {
 		return installationv1.AuthenticationRecoveryClosure{}, err
 	}
-	if result != closure {
-		return installationv1.AuthenticationRecoveryClosure{}, ErrUnavailable
-	}
 	return result, nil
 }
 
-func (service *Service) Reopen(ctx context.Context, closure installationv1.AuthenticationRecoveryClosure) (installationv1.AuthenticationRecoveryCompletion, error) {
-	if installationv1.ValidateAuthenticationRecoveryClosure(closure) != nil {
+func (service *Service) Reopen(ctx context.Context, closure installationv1.AuthenticationRecoveryClosure, snapshot installationv1.AuthenticationRecoverySecuritySnapshot) (installationv1.AuthenticationRecoveryCompletion, error) {
+	if installationv1.ValidateAuthenticationRecoverySecuritySnapshotForClosure(snapshot, closure) != nil {
 		return installationv1.AuthenticationRecoveryCompletion{}, ErrInvalidArgument
 	}
 	digest, err := installationv1.AuthenticationRecoveryClosureDigest(closure)
@@ -175,15 +202,15 @@ func (service *Service) Reopen(ctx context.Context, closure installationv1.Authe
 			return err
 		}
 		result, err = tx.ReopenAuthentication(ctx, ReopenMutation{
-			Closure: closure, ClosureDigest: digest, ReopenedEvent: event,
+			Closure: closure, ClosureDigest: digest, ReopenedEvent: event, SecuritySnapshot: snapshot,
 		})
+		if err == nil && installationv1.ValidateAuthenticationRecoveryCompletionForClosure(result, closure) != nil {
+			return ErrUnavailable
+		}
 		return err
 	})
 	if err != nil {
 		return installationv1.AuthenticationRecoveryCompletion{}, err
-	}
-	if installationv1.ValidateAuthenticationRecoveryCompletionForClosure(result, closure) != nil {
-		return installationv1.AuthenticationRecoveryCompletion{}, ErrUnavailable
 	}
 	return result, nil
 }

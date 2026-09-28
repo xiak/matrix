@@ -68,6 +68,10 @@ func (service *Authority) StartStepUp(ctx context.Context, credential iamv1.Secr
 	if iamv1.ValidateStepUp(result) != nil || result.RequestID != request.RequestID || result.Operation != request.Operation || result.ExpectedFactorRevision != request.ExpectedFactorRevision {
 		return iamv1.StepUp{}, ErrUnavailable
 	}
+	if (result.SecuritySettings == nil) != (request.SecuritySettings == nil) ||
+		(result.SecuritySettings != nil && *result.SecuritySettings != *request.SecuritySettings) {
+		return iamv1.StepUp{}, ErrUnavailable
+	}
 	return result, nil
 }
 

@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	installationv1 "github.com/xiak/matrix/api/adapter/installation/v1"
+	"github.com/xiak/matrix/api/contractjson"
 	"github.com/xiak/matrix/app/service/iam/internal/usecase/authenticationrecovery"
 )
 
@@ -45,6 +46,23 @@ func (repository *Repository) WithinAuthenticationRecoveryTransaction(
 	return nil
 }
 
+func (value *transaction) PrepareAuthenticationClose(ctx context.Context, intent installationv1.AuthenticationRecoveryIntent, digest string) (installationv1.AuthenticationRecoverySecuritySnapshot, error) {
+	encodedIntent, err := installationv1.EncodeAuthenticationRecoveryIntent(intent)
+	if err != nil {
+		return installationv1.AuthenticationRecoverySecuritySnapshot{}, authenticationrecovery.ErrInvalidArgument
+	}
+	var encoded []byte
+	if err := value.tx.QueryRow(ctx, "SELECT iam.prepare_authentication_recovery_close($1::jsonb,$2)", encodedIntent, digest).Scan(&encoded); err != nil {
+		return installationv1.AuthenticationRecoverySecuritySnapshot{}, mapAuthenticationRecoveryDatabaseError("prepare IAM authentication close", err)
+	}
+	var snapshot installationv1.AuthenticationRecoverySecuritySnapshot
+	if contractjson.DecodeObjectBytes(encoded, installationv1.MaximumAuthenticationRecoverySecuritySnapshotBytes, &snapshot) != nil ||
+		installationv1.ValidateAuthenticationRecoverySecuritySnapshot(snapshot) != nil {
+		return installationv1.AuthenticationRecoverySecuritySnapshot{}, authenticationrecovery.ErrUnavailable
+	}
+	return snapshot, nil
+}
+
 func (value *transaction) CloseAuthentication(ctx context.Context, mutation authenticationrecovery.CloseMutation) (installationv1.AuthenticationRecoveryClosure, error) {
 	intent, err := json.Marshal(mutation.Intent)
 	if err != nil {
@@ -54,9 +72,13 @@ func (value *transaction) CloseAuthentication(ctx context.Context, mutation auth
 	if err != nil {
 		return installationv1.AuthenticationRecoveryClosure{}, authenticationrecovery.ErrUnavailable
 	}
+	snapshot, err := installationv1.EncodeAuthenticationRecoverySecuritySnapshot(mutation.SecuritySnapshot)
+	if err != nil {
+		return installationv1.AuthenticationRecoveryClosure{}, authenticationrecovery.ErrUnavailable
+	}
 	var encoded []byte
-	if err := value.tx.QueryRow(ctx, "SELECT iam.close_authentication_recovery($1::jsonb,$2,$3::jsonb)",
-		intent, mutation.IntentDigest, event).Scan(&encoded); err != nil {
+	if err := value.tx.QueryRow(ctx, "SELECT iam.close_authentication_recovery($1::jsonb,$2,$3::jsonb,$4::jsonb,$5)",
+		intent, mutation.IntentDigest, event, snapshot, mutation.SecuritySnapshotDigest).Scan(&encoded); err != nil {
 		return installationv1.AuthenticationRecoveryClosure{}, mapAuthenticationRecoveryDatabaseError("close IAM authentication", err)
 	}
 	return decodeAuthenticationRecoveryClosure(encoded)
@@ -75,9 +97,13 @@ func (value *transaction) ReconcileAuthentication(ctx context.Context, mutation 
 	if err != nil {
 		return installationv1.AuthenticationRecoveryClosure{}, authenticationrecovery.ErrUnavailable
 	}
+	snapshot, err := installationv1.EncodeAuthenticationRecoverySecuritySnapshot(mutation.SecuritySnapshot)
+	if err != nil {
+		return installationv1.AuthenticationRecoveryClosure{}, authenticationrecovery.ErrUnavailable
+	}
 	var encoded []byte
-	if err := value.tx.QueryRow(ctx, "SELECT iam.reconcile_authentication_recovery($1::jsonb,$2,$3::jsonb,$4::jsonb)",
-		closure, mutation.ClosureDigest, closedEvent, reconciledEvent).Scan(&encoded); err != nil {
+	if err := value.tx.QueryRow(ctx, "SELECT iam.reconcile_authentication_recovery($1::jsonb,$2,$3::jsonb,$4::jsonb,$5::jsonb)",
+		closure, mutation.ClosureDigest, closedEvent, reconciledEvent, snapshot).Scan(&encoded); err != nil {
 		return installationv1.AuthenticationRecoveryClosure{}, mapAuthenticationRecoveryDatabaseError("reconcile IAM authentication", err)
 	}
 	return decodeAuthenticationRecoveryClosure(encoded)
@@ -92,9 +118,13 @@ func (value *transaction) ReopenAuthentication(ctx context.Context, mutation aut
 	if err != nil {
 		return installationv1.AuthenticationRecoveryCompletion{}, authenticationrecovery.ErrUnavailable
 	}
+	snapshot, err := installationv1.EncodeAuthenticationRecoverySecuritySnapshot(mutation.SecuritySnapshot)
+	if err != nil {
+		return installationv1.AuthenticationRecoveryCompletion{}, authenticationrecovery.ErrUnavailable
+	}
 	var encoded []byte
-	if err := value.tx.QueryRow(ctx, "SELECT iam.reopen_authentication_recovery($1::jsonb,$2,$3::jsonb)",
-		closure, mutation.ClosureDigest, event).Scan(&encoded); err != nil {
+	if err := value.tx.QueryRow(ctx, "SELECT iam.reopen_authentication_recovery($1::jsonb,$2,$3::jsonb,$4::jsonb)",
+		closure, mutation.ClosureDigest, event, snapshot).Scan(&encoded); err != nil {
 		return installationv1.AuthenticationRecoveryCompletion{}, mapAuthenticationRecoveryDatabaseError("reopen IAM authentication", err)
 	}
 	var result installationv1.AuthenticationRecoveryCompletion

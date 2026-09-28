@@ -301,18 +301,17 @@ func TestDatabaseUpgradePathIsExactAndNotNumeric(t *testing.T) {
 	}
 }
 
-func TestEnablingRecoveryAdmitsOnlyItsExactPreparationPredecessor(t *testing.T) {
+func TestAuthenticationStateRecoveryRequiresTheExactCurrentProfile(t *testing.T) {
 	current := CurrentDatabaseProfile()
 	upgradePredecessor := SupportedDatabaseUpgradePredecessorProfile()
-	recoveryPredecessor, supported := SupportedDatabaseRecoveryPredecessorProfile()
-	if !supported || recoveryPredecessor != upgradePredecessor {
-		t.Fatal("enabling release did not publish its exact preparation predecessor")
+	if recoveryPredecessor, supported := SupportedDatabaseRecoveryPredecessorProfile(); supported || recoveryPredecessor != (DatabaseProfile{}) {
+		t.Fatal("v4 predecessor was admitted to v5 authentication-state recovery")
 	}
 	if err := ValidateDatabaseRecoveryPath(current, current); err != nil {
 		t.Fatalf("same-profile recovery rejected: %v", err)
 	}
-	if err := ValidateDatabaseRecoveryPath(upgradePredecessor, current); err != nil {
-		t.Fatalf("exact preparation recovery rejected: %v", err)
+	if err := ValidateDatabaseRecoveryPath(upgradePredecessor, current); err == nil {
+		t.Fatal("v4 predecessor was admitted to v5 recovery")
 	}
 	invalid := current
 	invalid.ContractRevision++

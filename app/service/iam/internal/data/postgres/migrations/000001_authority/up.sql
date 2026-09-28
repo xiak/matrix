@@ -953,8 +953,26 @@ ALTER TABLE iam.authorization_decisions ADD CONSTRAINT authorization_decision_co
         AND (CASE WHEN resource_mode='INSTANCE' THEN collection_usage IS NULL AND NOT document ? 'collectionUsage'
              WHEN resource_mode='COLLECTION' THEN collection_usage IS NOT NULL AND document->>'collectionUsage'=collection_usage
              ELSE false END)
-        AND iam.authorization_decision_profile_matches(document)
       ELSE false END),false));
+-- A CHECK must depend only on its own row. Looking up the archive from a
+-- CHECK makes valid populated pg_restore fail before profile data is loaded.
+-- The archive is immutable: an exact insertion check plus a real FK preserves
+-- its relationship without making COPY depend on table load order.
+ALTER TABLE iam.authorization_decisions DROP CONSTRAINT IF EXISTS authorization_decisions_profile_fk;
+ALTER TABLE iam.authorization_decisions ADD CONSTRAINT authorization_decisions_profile_fk
+    FOREIGN KEY(profile_product,profile_revision) REFERENCES iam.authorization_profiles(product,revision);
+CREATE OR REPLACE FUNCTION iam.guard_authorization_decision_profile()
+RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
+BEGIN
+    IF NEW.contract_version IN (2,3,4) AND NOT iam.authorization_decision_profile_matches(NEW.document) THEN
+        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='authorization decision archived profile conflicts';
+    END IF;
+    RETURN NEW;
+END $function$;
+DROP TRIGGER IF EXISTS authorization_decision_profile_is_bound ON iam.authorization_decisions;
+CREATE TRIGGER authorization_decision_profile_is_bound BEFORE INSERT ON iam.authorization_decisions
+    FOR EACH ROW EXECUTE FUNCTION iam.guard_authorization_decision_profile();
+ALTER TABLE iam.authorization_decisions ENABLE ALWAYS TRIGGER authorization_decision_profile_is_bound;
 ALTER TABLE iam.authorization_decisions DROP CONSTRAINT IF EXISTS authorization_boundary_evidence_valid;
 ALTER TABLE iam.authorization_decisions ADD CONSTRAINT authorization_boundary_evidence_valid CHECK (
     boundary_evidence IS NULL OR jsonb_typeof(boundary_evidence)='object'
@@ -1202,12 +1220,12 @@ BEGIN
             'iam.bootstrap.applied', 'iam.session.issued',
             'iam.password.changed', 'iam.user.password-changed', 'iam.installation-primary.credentials-recovered',
             'iam.role-session.revoked','iam.role-session.exited',
-            'iam.notification-contact.verification-started','iam.notification-contact.verified','iam.authenticator.bound',
+            'iam.notification-contact.verification-started','iam.notification-contact.verified','iam.authenticator.bound','iam.authenticator.replaced',
             'iam.authenticator.recovery-started','iam.authenticator.recovered','iam.recovery-codes.regenerated'
         ) AND submitted_event ? 'iamDecisionId')
         OR (expected_action IN (
             'iam.account.created', 'iam.account.disabled', 'iam.account.enabled',
-            'iam.account-root.credentials-recovered', 'iam.account.alias-set',
+            'iam.account-root.credentials-recovered', 'iam.account.alias-set','iam.security-settings.updated',
             'iam.user.created', 'iam.user.updated', 'iam.user.deleted',
             'iam.user.permission-boundary.set','iam.user.permission-boundary.removed',
             'iam.policy.created','iam.policy.updated','iam.policy.deleted','iam.policy-version.created','iam.policy-version.deleted','iam.policy.default-version-set','iam.group.created','iam.group.updated','iam.group.deleted',
@@ -1472,6 +1490,21 @@ RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $funct
                 WHERE a.attnum IS NULL OR a.atttypid<>expected.type_oid OR a.attnotnull<>expected.required OR a.atthasdef)
            AND EXISTS(SELECT 1 FROM pg_catalog.pg_constraint c WHERE c.conrelid='iam.authorization_decisions'::regclass
                 AND c.conname='authorization_decision_contract_valid' AND c.contype='c' AND c.convalidated)
+           AND EXISTS(SELECT 1 FROM pg_catalog.pg_constraint c WHERE c.conrelid='iam.authorization_decisions'::regclass
+                AND c.conname='authorization_decisions_profile_fk' AND c.contype='f'
+                AND c.confrelid='iam.authorization_profiles'::regclass AND c.convalidated AND NOT c.condeferrable
+                AND c.confupdtype='a' AND c.confdeltype='a' AND c.confmatchtype='s'
+                AND ARRAY(SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY k(number,position)
+                  JOIN pg_catalog.pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.number ORDER BY k.position)=ARRAY['profile_product','profile_revision']
+                AND ARRAY(SELECT a.attname::text FROM unnest(c.confkey) WITH ORDINALITY k(number,position)
+                  JOIN pg_catalog.pg_attribute a ON a.attrelid=c.confrelid AND a.attnum=k.number ORDER BY k.position)=ARRAY['product','revision'])
+           AND EXISTS(SELECT 1 FROM pg_catalog.pg_trigger t WHERE t.tgrelid='iam.authorization_decisions'::regclass
+                AND t.tgname='authorization_decision_profile_is_bound' AND t.tgtype=7 AND t.tgenabled='A' AND NOT t.tgisinternal
+                AND t.tgfoid=to_regprocedure('iam.guard_authorization_decision_profile()'))
+           AND EXISTS(SELECT 1 FROM pg_catalog.pg_proc p WHERE p.oid=to_regprocedure('iam.guard_authorization_decision_profile()')
+                AND p.proowner='matrix_iam_owner'::regrole AND NOT p.prosecdef AND p.pronargs=0
+                AND p.prorettype='trigger'::regtype AND p.proconfig=ARRAY['search_path=pg_catalog, pg_temp']
+                AND NOT EXISTS(SELECT 1 FROM aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) permission WHERE permission.grantee<>p.proowner))
            AND NOT EXISTS(SELECT 1 FROM (VALUES
                 ('authorization_decisions_principal_fk','iam.principals',ARRAY['tenant_id','principal_id']),
                 ('authorization_decisions_source_principal_fk','iam.principals',ARRAY['tenant_id','source_principal_id']),
@@ -1577,6 +1610,7 @@ BEGIN
            AND iam.policy_attachment_contract_ready()
            AND iam.role_contract_ready()
            AND iam.access_key_contract_ready()
+           AND iam.account_security_settings_contract_ready()
            AND to_regprocedure('iam.create_group(text,text,text,text,text,text,jsonb)') IS NOT NULL
            AND (SELECT count(*) FROM pg_catalog.pg_proc AS policy_entry
                 WHERE policy_entry.oid IN (to_regprocedure('iam.read_policy(text,text,text,text)'),
@@ -1707,7 +1741,7 @@ BEGIN
                SELECT 1 FROM iam.audit_outbox AS outbox
                 WHERE outbox.status = 'DEAD_LETTER' OR outbox.attempts >= 100
            ),
-           40::bigint,
+           45::bigint,
            transaction_timestamp();
 END
 $function$;
@@ -1790,7 +1824,7 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $functio
 DECLARE
     account_id text; user_id text; account_version bigint;
     subject iam.principals%ROWTYPE; credential iam.user_credentials%ROWTYPE;
-    caller iam.sessions%ROWTYPE; budget iam.password_attempts%ROWTYPE;
+    caller iam.sessions%ROWTYPE; budget iam.password_attempts%ROWTYPE; recovery_floor record;
     effective_now timestamptz(6); next_sequence bigint; used integer; window_start timestamptz;
 BEGIN
     IF COALESCE(submitted_attempt_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
@@ -1834,6 +1868,7 @@ BEGIN
             OR NOT iam.session_mfa_eligible(account_id,user_id,submitted_session_id) THEN RETURN; END IF;
     END IF;
     SELECT * INTO budget FROM iam.password_attempts b WHERE b.tenant_id=account_id AND b.principal_id=user_id FOR UPDATE;
+    SELECT * INTO recovery_floor FROM iam.authentication_recovery_attempt_floors f WHERE f.tenant_id=account_id AND f.user_id=subject.id;
     effective_now:=clock_timestamp();
     IF submitted_session_id IS NOT NULL AND caller.expires_at<=effective_now THEN RETURN; END IF;
     IF budget.credential_version=credential.credential_version THEN
@@ -1844,14 +1879,22 @@ BEGIN
             UPDATE iam.password_attempts b SET state='ABANDONED',completed_at=effective_now
                 WHERE b.tenant_id=account_id AND b.principal_id=user_id;
         END IF;
-        IF budget.window_started_at+interval '60 seconds'>effective_now THEN
+        IF budget.window_started_at+interval '60 seconds'>effective_now
+          AND NOT COALESCE(recovery_floor.password_generation=credential.credential_version
+            AND recovery_floor.password_sequence>=budget.attempt_sequence,false) THEN
             IF budget.used_attempts>=5 THEN RETURN; END IF;
             used:=budget.used_attempts; window_start:=budget.window_started_at;
         END IF;
     END IF;
+    IF recovery_floor.password_generation=credential.credential_version
+      AND recovery_floor.password_sequence>=COALESCE(budget.attempt_sequence,0)
+      AND recovery_floor.password_window_started_at+interval '60 seconds'>effective_now THEN
+        IF recovery_floor.password_used_attempts>=5 THEN RETURN; END IF;
+        used:=recovery_floor.password_used_attempts; window_start:=recovery_floor.password_window_started_at;
+    END IF;
     IF budget.attempt_id=submitted_attempt_id THEN RETURN; END IF;
     used:=COALESCE(used,0)+1; window_start:=COALESCE(window_start,effective_now);
-    next_sequence:=COALESCE(budget.attempt_sequence,0)+1;
+    next_sequence:=greatest(COALESCE(budget.attempt_sequence,0),COALESCE(recovery_floor.password_sequence,0))+1;
     INSERT INTO iam.password_attempts AS b (tenant_id,principal_id,credential_version,account_version,principal_version,
         window_started_at,used_attempts,attempt_sequence,attempt_id,purpose,intent_digest,session_id,state,reserved_at,expires_at)
     VALUES (account_id,user_id,credential.credential_version,account_version,subject.resource_version,
@@ -1963,7 +2006,8 @@ BEGIN
     effective_expires_at := effective_now + make_interval(secs => submitted_lifetime_seconds);
     PERFORM set_config('matrix.iam_tenant_id', submitted_tenant_id, true);
     authentication_state:=iam.login_authentication_state(submitted_tenant_id,submitted_principal_id);
-    IF authentication_state->>'state' IS DISTINCT FROM 'NEVER_BOUND' THEN
+    IF authentication_state->>'state' IS DISTINCT FROM 'NEVER_BOUND'
+        OR authentication_state->'enrollmentRequired' IS DISTINCT FROM 'false'::jsonb THEN
         RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='further authentication is required';
     END IF;
     password_version:=iam.consume_password_attempt(submitted_tenant_id,submitted_principal_id,NULL,submitted_attempt_id,submitted_attempt_sequence,'LOGIN',NULL);

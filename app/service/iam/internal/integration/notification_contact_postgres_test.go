@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -780,7 +781,11 @@ func TestIAMNotificationContactPostgres(t *testing.T) {
 		for _, attack := range []string{
 			"GRANT SELECT ON iam.notification_contacts TO matrix_iam_api",
 			"GRANT EXECUTE ON FUNCTION iam.claim_security_notification(text) TO matrix_iam_api",
-			"GRANT EXECUTE ON FUNCTION iam.lock_notification_subject(text,text,text) TO matrix_iam_notification_worker",
+			"GRANT EXECUTE ON FUNCTION iam.lock_notification_subject(text,text,text,text) TO matrix_iam_notification_worker",
+			"GRANT EXECUTE ON FUNCTION iam.notification_contact_snapshot(text,text,text,text,bigint) TO matrix_iam_api",
+			"ALTER TABLE iam.notification_contact_verifications DROP CONSTRAINT notification_verification_origin",
+			"ALTER TABLE iam.notification_contact_verifications DROP CONSTRAINT notification_verification_completion",
+			"ALTER TABLE iam.notification_contact_verifications DROP CONSTRAINT contact_initial_enrollment",
 			"ALTER FUNCTION iam.claim_security_notification(text) SECURITY INVOKER",
 			"ALTER TABLE iam.security_notifications DISABLE TRIGGER notification_delivery_link",
 			"ALTER TABLE iam.notification_contacts DISABLE TRIGGER cannot_update",
@@ -903,6 +908,25 @@ func iamNotificationPostfix(t *testing.T, scope iamv1.SecurityMailInstallationSc
 				if !regexp.MustCompile(`^/home/receiver/Maildir/(new|cur)/[a-zA-Z0-9_.,:=+-]+$`).MatchString(path) {
 					t.Fatal("unexpected fixture mailbox path")
 				}
+			}
+			// Filter the bounded mailbox in one container call. One Docker
+			// process per unrelated message can exhaust the observation deadline.
+			var matching []byte
+			if len(files) > 0 {
+				ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+				arguments := append([]string{"--context", dockerContext, "exec", container, "grep", "-l", "-F", "--", "Notification reference: " + reference}, files...)
+				var err error
+				matching, err = exec.CommandContext(ctx, "docker", arguments...).Output()
+				cancel()
+				var status *exec.ExitError
+				if (err != nil && (!errors.As(err, &status) || status.ExitCode() != 1)) || len(matching) > 65536 {
+					t.Fatal("dedicated SMTP mailbox lookup failed")
+				}
+			}
+			for _, path := range strings.Fields(string(matching)) {
+				if !slices.Contains(files, path) {
+					t.Fatal("mailbox match escaped the observed file set")
+				}
 				encoded := localDocker("exec", container, "head", "-c", "16385", "--", path)
 				if len(encoded) > 16384 || bytes.Contains(encoded, []byte("smtp-test-password")) {
 					t.Fatal("unsafe mailbox content")
@@ -917,12 +941,15 @@ func iamNotificationPostfix(t *testing.T, scope iamv1.SecurityMailInstallationSc
 				}
 				if !referenceLine.Match(body) {
 					clear(body)
+					clear(encoded)
 					continue
 				}
 				if message.Header.Get("To") != "receiver@matrix.test" || message.Header.Get("From") != "sender@matrix.test" || message.Header.Get("Received") == "" || message.Header.Get("Message-ID") == "" {
 					t.Fatal("actual recipient or submission identity differs")
 				}
-				return body, message.Header.Get("Message-ID")
+				clear(body)
+				// Retain headers for caller leak checks as well as the body.
+				return encoded, message.Header.Get("Message-ID")
 			}
 			time.Sleep(100 * time.Millisecond)
 		}

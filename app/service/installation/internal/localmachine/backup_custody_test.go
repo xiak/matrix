@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -18,6 +19,64 @@ import (
 	"github.com/xiak/matrix/app/service/installation/internal/platformcommand"
 	"github.com/xiak/matrix/app/service/installation/release"
 )
+
+func TestBackupLeaseDecoderIsSelectedByTheAuthenticatedExactProfile(t *testing.T) {
+	custody := installationv1.TOTPBackupCustody{
+		APIVersion: installationv1.TOTPBackupCustodyAPIVersion, Kind: installationv1.TOTPBackupCustodyKind,
+		Purpose: installationv1.TOTPBackupCustodyPurpose, InstallationID: "mxi-0123456789abcdef0123456789abcdef",
+		BootstrapDigest: "sha256:" + strings.Repeat("a", 64), KeysetRevision: 1,
+		RequiredKeys: []installationv1.TOTPBackupRequiredKey{},
+	}
+	digest, err := installationv1.TOTPBackupCustodyDigest(custody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease := installationv1.TOTPBackupSnapshotLease{
+		APIVersion: installationv1.TOTPBackupCustodyAPIVersion, Kind: installationv1.TOTPBackupSnapshotLeaseKind,
+		Purpose: installationv1.TOTPBackupCustodyPurpose, SnapshotID: "00000003-0000001B-1",
+		Custody: custody, CustodyDigest: digest, AuthenticationStateDigest: "sha256:" + strings.Repeat("b", 64),
+	}
+	current, err := installationv1.EncodeTOTPBackupSnapshotLease(lease)
+	if err != nil {
+		t.Fatal(err)
+	}
+	historical, err := json.Marshal(struct {
+		APIVersion    string                           `json:"apiVersion"`
+		Kind          string                           `json:"kind"`
+		Purpose       string                           `json:"purpose"`
+		SnapshotID    string                           `json:"snapshotId"`
+		Custody       installationv1.TOTPBackupCustody `json:"custody"`
+		CustodyDigest string                           `json:"custodyDigest"`
+	}{lease.APIVersion, lease.Kind, lease.Purpose, lease.SnapshotID, lease.Custody, lease.CustodyDigest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		profile      release.DatabaseProfile
+		valid, wrong []byte
+		wantDigest   string
+	}{
+		{release.SupportedDatabaseUpgradePredecessorProfile(), historical, current, ""},
+		{release.CurrentDatabaseProfile(), current, historical, lease.AuthenticationStateDigest},
+	} {
+		decode, supported := totpBackupLeaseDecoder(test.profile)
+		if !supported || decode == nil {
+			t.Fatal("authenticated profile lost its exact private lease decoder")
+		}
+		got, err := decode(bytes.NewReader(test.valid))
+		if err != nil || got.AuthenticationStateDigest != test.wantDigest || got.CustodyDigest != digest {
+			t.Fatal("selected decoder changed or manufactured qualification", err)
+		}
+		if _, err := decode(bytes.NewReader(test.wrong)); err == nil {
+			t.Fatal("selected decoder fell back to another profile's wire")
+		}
+	}
+	other := release.CurrentDatabaseProfile()
+	other.ContractRevision++
+	if decode, supported := totpBackupLeaseDecoder(other); supported || decode != nil {
+		t.Fatal("unpublished profile selected a private lease wire")
+	}
+}
 
 func TestBackupCustodyLeaseOutputCannotBlockAtItsMaximum(t *testing.T) {
 	output := newBoundedLeaseOutput()

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	installationv1 "github.com/xiak/matrix/api/adapter/installation/v1"
 	"github.com/xiak/matrix/app/service/iam/internal/usecase/authenticationrecovery"
@@ -85,7 +86,7 @@ func TestAuthenticationRecoveryRejectsAmbiguousProtectedInputBeforeDatabaseAcces
 		switch name {
 		case installationv1.AuthenticationRecoveryIntentFileEnvironment:
 			return path
-		case installationv1.AuthenticationRecoveryClosureFileEnvironment:
+		case installationv1.AuthenticationRecoveryClosureFileEnvironment, installationv1.AuthenticationRecoverySecuritySnapshotFileEnvironment:
 			return ""
 		default:
 			t.Fatal("ambiguous protected input reached database configuration")
@@ -107,7 +108,7 @@ func TestAuthenticationRecoveryRejectsConflictingProtectedFiles(t *testing.T) {
 		err := run(context.Background(), []string{mode}, &output, func(name string) string {
 			switch name {
 			case installationv1.AuthenticationRecoveryIntentFileEnvironment,
-				installationv1.AuthenticationRecoveryClosureFileEnvironment:
+				installationv1.AuthenticationRecoveryClosureFileEnvironment, installationv1.AuthenticationRecoverySecuritySnapshotFileEnvironment:
 				return "both-present"
 			default:
 				t.Fatal("conflicting protected files reached database configuration")
@@ -116,6 +117,90 @@ func TestAuthenticationRecoveryRejectsConflictingProtectedFiles(t *testing.T) {
 		})
 		if !errors.Is(err, authenticationrecovery.ErrInvalidArgument) || output.Len() != 0 {
 			t.Fatalf("conflicting files for %s: %v", mode, err)
+		}
+	}
+}
+
+func TestAuthenticationRecoveryRequiresMatchingSnapshotFileBeforeDatabaseAccess(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("a", 64)
+	closedAt := time.Date(2026, 9, 25, 4, 5, 6, 0, time.UTC)
+	snapshot := installationv1.AuthenticationRecoverySecuritySnapshot{
+		APIVersion: installationv1.AuthenticationRecoveryAPIVersion, Kind: installationv1.AuthenticationRecoverySecuritySnapshotKind,
+		Purpose: installationv1.AuthenticationRecoveryPurpose, InstallationID: "mxi-0123456789abcdef0123456789abcdef",
+		BootstrapDigest: digest, Epoch: 1, CommandID: "cmd-0123456789abcdef0123456789abcdef",
+		RecoveryIntentDigest: digest, ClosedAt: closedAt, AuthenticationStateDigest: digest,
+		Accounts: []installationv1.AuthenticationRecoveryAccountReplay{{AccountID: "account", Users: []installationv1.AuthenticationRecoveryUserReplay{{UserID: "root", LastConsumedStep: -1}}}},
+	}
+	snapshotDigest, err := installationv1.AuthenticationRecoverySecuritySnapshotDigest(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	closure := installationv1.AuthenticationRecoveryClosure{
+		APIVersion: installationv1.AuthenticationRecoveryAPIVersion, Kind: installationv1.AuthenticationRecoveryClosureKind,
+		Purpose: installationv1.AuthenticationRecoveryPurpose, InstallationID: snapshot.InstallationID, Epoch: snapshot.Epoch,
+		State: installationv1.AuthenticationRecoveryStateClosed, CommandID: snapshot.CommandID,
+		BackupID: "backup-0123456789abcdef0123456789abcdef", BackupDigest: digest,
+		RecoveryIntentDigest: digest, TOTPCustodyDigest: digest, ClosedAt: closedAt, SecuritySnapshotDigest: snapshotDigest,
+	}
+	closureBytes, err := installationv1.EncodeAuthenticationRecoveryClosure(closure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshotBytes, err := installationv1.EncodeAuthenticationRecoverySecuritySnapshot(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{installationv1.AuthenticationRecoveryReconcileCommand, installationv1.AuthenticationRecoveryReopenCommand} {
+		for _, attack := range []string{"valid", "missing-path", "missing-file", "oversized", "truncated", "noncanonical", "unbound"} {
+			t.Run(mode+"/"+attack, func(t *testing.T) {
+				directory := t.TempDir()
+				closurePath, snapshotPath := filepath.Join(directory, "closure.json"), filepath.Join(directory, "snapshot.json")
+				if err := os.WriteFile(closurePath, closureBytes, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				candidate := append([]byte(nil), snapshotBytes...)
+				switch attack {
+				case "missing-path":
+					snapshotPath = ""
+				case "oversized":
+					candidate = bytes.Repeat([]byte(" "), int(installationv1.MaximumAuthenticationRecoverySecuritySnapshotBytes)+1)
+				case "truncated":
+					candidate = candidate[:len(candidate)-1]
+				case "noncanonical":
+					candidate = append(candidate, '\n')
+				case "unbound":
+					candidate = bytes.ReplaceAll(candidate, []byte(`"userId":"root"`), []byte(`"userId":"other"`))
+				}
+				if attack != "missing-file" && snapshotPath != "" {
+					if err := os.WriteFile(snapshotPath, candidate, 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				var output bytes.Buffer
+				reachedDatabaseConfig := false
+				err := run(t.Context(), []string{mode}, &output, func(name string) string {
+					switch name {
+					case installationv1.AuthenticationRecoveryIntentFileEnvironment:
+						return ""
+					case installationv1.AuthenticationRecoveryClosureFileEnvironment:
+						return closurePath
+					case installationv1.AuthenticationRecoverySecuritySnapshotFileEnvironment:
+						return snapshotPath
+					case installationv1.AuthenticationRecoveryDatabaseDSNFileEnvironment:
+						reachedDatabaseConfig = true
+						return "" // Positive FILE control; never open a real database.
+					default:
+						t.Fatal("invalid recovery snapshot reached database configuration")
+						return ""
+					}
+				})
+				if !errors.Is(err, authenticationrecovery.ErrInvalidArgument) || output.Len() != 0 {
+					t.Fatalf("snapshot rejection differs: %v", err)
+				}
+				if reachedDatabaseConfig != (attack == "valid") {
+					t.Fatal("protected FILE validation did not isolate invalid snapshots before database configuration")
+				}
+			})
 		}
 	}
 }

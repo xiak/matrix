@@ -866,7 +866,7 @@ func TestPublishedScalarManifestDoesNotImplyRuntimeTopologyCompatibility(t *test
 	}
 }
 
-func TestExactPreparationPairAllowsUpgradeButRollbackRequiresAuthenticatedRecovery(t *testing.T) {
+func TestExactPredecessorUpgradeRejectsRollbackAndV4Recovery(t *testing.T) {
 	const origin = "https://matrix.example.com:443"
 	current := release.CurrentDatabaseProfile()
 	predecessor := release.SupportedDatabaseUpgradePredecessorProfile()
@@ -910,27 +910,12 @@ func TestExactPreparationPairAllowsUpgradeButRollbackRequiresAuthenticatedRecove
 		ReleaseDigest:     fixtures[0].ManifestDigest,
 		Database:          fixtures[0].Manifest.Database,
 	}
-	recovered, err := backend.Run(context.Background(), cli.Request{
+	_, err = backend.Run(context.Background(), cli.Request{
 		Action: lifecycle.ActionRecover, Root: root, BackupID: backupID,
 	})
-	if err != nil || recovered.ReleaseID != fixtures[0].Manifest.Release.ID ||
-		recovered.PreviousID != "" || !recovered.Changed ||
-		effects.recoveryCalls[lifecycle.PhaseRecovering] != 1 ||
-		effects.recoveryCalls[lifecycle.PhaseStarting] != 1 ||
-		effects.recoveryCalls[lifecycle.PhaseVerifying] != 1 {
-		t.Fatalf("authenticated cross-profile recovery = %#v / %v / effects=%#v", recovered, err, effects)
-	}
-	completed := readJournal(t, root)
-	encoded, err := json.Marshal(completed)
-	if err != nil || completed.NorthboundOrigin != origin || completed.Last == nil ||
-		completed.Last.Command.NorthboundOrigin != origin ||
-		completed.SecurityMailDigest != "" || completed.Last.Command.SecurityMailDigest != "" ||
-		effects.recoveryPlan.Current.SecurityMail.Digest != state.SecurityMailDigest ||
-		effects.recoveryPlan.Target.SecurityMail.Digest != "" ||
-		strings.Contains(string(encoded), `"securityMailDigest"`) ||
-		!strings.Contains(string(encoded), `"northboundOrigin":"`+origin+`"`) ||
-		effects.recoveryPlan.Target.NorthboundOrigin != origin {
-		t.Fatal("exact predecessor recovery lost its published northbound origin")
+	assertFault(t, err, cli.FaultPrecondition, "RECOVERY_TARGET_UNSUPPORTED")
+	if !reflect.DeepEqual(state, readJournal(t, root)) || len(effects.recoveryCalls) != 0 {
+		t.Fatal("v4 predecessor recovery altered current authority or reached effects")
 	}
 }
 
@@ -964,13 +949,14 @@ func TestRecoveryRejectsSkippedSignedTargetBeforePersistingIntent(t *testing.T) 
 	before := readJournal(t, root)
 	backupID := "backup-" + strings.Repeat("e", 32)
 	effects.recoverySource = RecoverySource{
-		InstallationID:    before.InstallationID,
-		BackupID:          backupID,
-		BackupDigest:      "sha256:" + strings.Repeat("f", 64),
-		TOTPCustodyDigest: "sha256:" + strings.Repeat("9", 64),
-		ReleaseID:         fixtures[0].Manifest.Release.ID,
-		ReleaseDigest:     fixtures[0].ManifestDigest,
-		Database:          fixtures[0].Manifest.Database,
+		InstallationID:            before.InstallationID,
+		BackupID:                  backupID,
+		BackupDigest:              "sha256:" + strings.Repeat("f", 64),
+		TOTPCustodyDigest:         "sha256:" + strings.Repeat("9", 64),
+		AuthenticationStateDigest: "sha256:" + strings.Repeat("a", 64),
+		ReleaseID:                 fixtures[0].Manifest.Release.ID,
+		ReleaseDigest:             fixtures[0].ManifestDigest,
+		Database:                  fixtures[0].Manifest.Database,
 	}
 	_, err = backend.Run(context.Background(), cli.Request{
 		Action: lifecycle.ActionRecover, Root: root, BackupID: backupID,
@@ -1099,8 +1085,14 @@ func TestRecoveryBindsSelectedBackupAndResumesUnknownOutcome(t *testing.T) {
 		Action: lifecycle.ActionRecover, Root: root, BackupID: backupID,
 	}
 	beforeRecovery := readJournal(t, root)
-	effects.recoverySource.AuthenticationStateDigest = "sha256:invalid"
+	effects.recoverySource.AuthenticationStateDigest = ""
 	_, err := backend.Run(context.Background(), request)
+	assertFault(t, err, cli.FaultVerification, "RECOVERY_SOURCE_INVALID")
+	if after := readJournal(t, root); !reflect.DeepEqual(after, beforeRecovery) {
+		t.Fatal("missing authentication state digest wrote a recovery journal")
+	}
+	effects.recoverySource.AuthenticationStateDigest = "sha256:invalid"
+	_, err = backend.Run(context.Background(), request)
 	assertFault(t, err, cli.FaultVerification, "RECOVERY_SOURCE_INVALID")
 	if after := readJournal(t, root); !reflect.DeepEqual(after, beforeRecovery) {
 		t.Fatal("invalid authentication state digest wrote a recovery journal")
@@ -1193,13 +1185,14 @@ func TestRecoveryOfCurrentReleaseDropsRetainedPredecessorFromEffectPlan(t *testi
 	installed := readJournal(t, root)
 	backupID := "backup-" + strings.Repeat("a", 32)
 	effects.recoverySource = RecoverySource{
-		InstallationID:    installed.InstallationID,
-		BackupID:          backupID,
-		BackupDigest:      "sha256:" + strings.Repeat("b", 64),
-		TOTPCustodyDigest: "sha256:" + strings.Repeat("9", 64),
-		ReleaseID:         fixtures[1].Manifest.Release.ID,
-		ReleaseDigest:     fixtures[1].ManifestDigest,
-		Database:          fixtures[1].Manifest.Database,
+		InstallationID:            installed.InstallationID,
+		BackupID:                  backupID,
+		BackupDigest:              "sha256:" + strings.Repeat("b", 64),
+		TOTPCustodyDigest:         "sha256:" + strings.Repeat("9", 64),
+		AuthenticationStateDigest: "sha256:" + strings.Repeat("a", 64),
+		ReleaseID:                 fixtures[1].Manifest.Release.ID,
+		ReleaseDigest:             fixtures[1].ManifestDigest,
+		Database:                  fixtures[1].Manifest.Database,
 	}
 
 	result, err := backend.Run(context.Background(), cli.Request{
@@ -1244,13 +1237,14 @@ func TestRecoveryRejectsUntrustedSourceBeforePersistingIntent(t *testing.T) {
 	}
 
 	effects.recoverySource = RecoverySource{
-		InstallationID:    before.InstallationID,
-		BackupID:          backupID,
-		BackupDigest:      "sha256:" + strings.Repeat("c", 64),
-		TOTPCustodyDigest: "sha256:" + strings.Repeat("9", 64),
-		ReleaseID:         "matrix-v0.9.9-ffffffffffff",
-		ReleaseDigest:     "sha256:" + strings.Repeat("f", 64),
-		Database:          fixture.Manifest.Database,
+		InstallationID:            before.InstallationID,
+		BackupID:                  backupID,
+		BackupDigest:              "sha256:" + strings.Repeat("c", 64),
+		TOTPCustodyDigest:         "sha256:" + strings.Repeat("9", 64),
+		AuthenticationStateDigest: "sha256:" + strings.Repeat("a", 64),
+		ReleaseID:                 "matrix-v0.9.9-ffffffffffff",
+		ReleaseDigest:             "sha256:" + strings.Repeat("f", 64),
+		Database:                  fixture.Manifest.Database,
 	}
 	_, err = backend.Run(context.Background(), cli.Request{
 		Action: lifecycle.ActionRecover, Root: root, BackupID: backupID,
@@ -1300,13 +1294,14 @@ func TestRecoveryDefinitiveFailureRequiresManualIntervention(t *testing.T) {
 	before := readJournal(t, root)
 	backupID := "backup-" + strings.Repeat("b", 32)
 	effects.recoverySource = RecoverySource{
-		InstallationID:    before.InstallationID,
-		BackupID:          backupID,
-		BackupDigest:      "sha256:" + strings.Repeat("d", 64),
-		TOTPCustodyDigest: "sha256:" + strings.Repeat("9", 64),
-		ReleaseID:         fixture.Manifest.Release.ID,
-		ReleaseDigest:     fixture.ManifestDigest,
-		Database:          fixture.Manifest.Database,
+		InstallationID:            before.InstallationID,
+		BackupID:                  backupID,
+		BackupDigest:              "sha256:" + strings.Repeat("d", 64),
+		TOTPCustodyDigest:         "sha256:" + strings.Repeat("9", 64),
+		AuthenticationStateDigest: "sha256:" + strings.Repeat("a", 64),
+		ReleaseID:                 fixture.Manifest.Release.ID,
+		ReleaseDigest:             fixture.ManifestDigest,
+		Database:                  fixture.Manifest.Database,
 	}
 
 	_, err := backend.Run(context.Background(), cli.Request{

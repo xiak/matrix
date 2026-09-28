@@ -182,6 +182,8 @@ const (
 	ActionIAMAccountRootCredentialsRecover Action = "iam.account.recover-root-credentials"
 	ActionIAMAccountAliasSet               Action = "iam.account.alias-set"
 	ActionIAMUserList                      Action = "iam.user.list"
+	ActionIAMSecuritySettingsRead          Action = "iam.security-settings.read"
+	ActionIAMSecuritySettingsUpdate        Action = "iam.security-settings.update"
 	ActionIAMPolicyList                    Action = "iam.policy.list"
 	ActionIAMPolicyCreate                  Action = "iam.policy.create"
 	ActionIAMPolicyRead                    Action = "iam.policy.read"
@@ -428,7 +430,7 @@ func AllServicePurposes() []ServicePurpose {
 // ActionDefinition and contract enum order are derived projections, not a second
 // editable source. Product revision changes must accompany changed declarations.
 var authorizationProfiles = [...]AuthorizationProfile{
-	iamAccessKeyManagementProfile(),
+	iamSecuritySettingsProfile(),
 	paasAccessKeyProfile(),
 	declaredProductProfile(ProductManagedService, ServicePaaS, 1,
 		declaredProfileAction(ActionManagedServiceOfferingRead, ResourceServiceOffering, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}, {Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
@@ -495,6 +497,8 @@ func HistoricalAuthorizationProfiles() []AuthorizationProfile {
 		iamRoleManagementProfile(),
 		iamRoleSessionProfile(),
 		iamRoleSessionManagementProfile(),
+		iamAccessKeyManagementProfile(),
+		iamSecuritySettingsReadProfile(),
 		cloneAuthorizationProfile(paasProfileRevisionOne),
 		roleBusinessProfile(paasProfileRevisionOne),
 		cloneAuthorizationProfile(auditProfileRevisionOne),
@@ -659,6 +663,26 @@ func iamAccessKeyManagementProfile() AuthorizationProfile {
 	for index := range profile.Actions {
 		profile.Actions[index].SubjectTypes = []SubjectType{SubjectUser}
 	}
+	return profile
+}
+
+func iamSecuritySettingsReadProfile() AuthorizationProfile {
+	profile := iamAccessKeyManagementProfile()
+	profile.Revision = 6
+	read := declaredProfileAction(ActionIAMSecuritySettingsRead, ResourceAccount, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}})
+	read.SubjectTypes = []SubjectType{SubjectUser}
+	read.UserAuthenticationMethods = []UserAuthenticationMethod{UserAuthenticationLoginSession}
+	profile.Actions = append(profile.Actions, read)
+	return profile
+}
+
+func iamSecuritySettingsProfile() AuthorizationProfile {
+	profile := iamSecuritySettingsReadProfile()
+	profile.Revision = 7
+	update := declaredProfileAction(ActionIAMSecuritySettingsUpdate, ResourceAccount, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}})
+	update.SubjectTypes = []SubjectType{SubjectUser}
+	update.UserAuthenticationMethods = []UserAuthenticationMethod{UserAuthenticationLoginSession}
+	profile.Actions = append(profile.Actions, update)
 	return profile
 }
 

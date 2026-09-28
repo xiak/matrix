@@ -26,6 +26,380 @@ import (
 	"github.com/xiak/matrix/api/contractjson"
 )
 
+func enrollmentChallengeRequestSamples() []struct {
+	kind, wire string
+	newValue   func() any
+	encode     func(any) ([]byte, error)
+} {
+	return []struct {
+		kind, wire string
+		newValue   func() any
+		encode     func(any) ([]byte, error)
+	}{
+		{"InspectEnrollmentChallengeRequest", `{"challengeCredential":"synthetic-enrollment-secret"}`,
+			func() any { return new(InspectEnrollmentChallengeRequest) },
+			func(v any) ([]byte, error) {
+				return EncodeInspectEnrollmentChallengeRequest(*v.(*InspectEnrollmentChallengeRequest))
+			}},
+		{"StartChallengeTOTPEnrollmentRequest", `{"requestId":"first-factor","challengeCredential":"synthetic-enrollment-secret"}`,
+			func() any { return new(StartChallengeTOTPEnrollmentRequest) },
+			func(v any) ([]byte, error) {
+				return EncodeStartChallengeTOTPEnrollmentRequest(*v.(*StartChallengeTOTPEnrollmentRequest))
+			}},
+		{"StartChallengeNotificationContactVerificationRequest", `{"email":"first@example.invalid","requestId":"first-address","challengeCredential":"synthetic-enrollment-secret"}`,
+			func() any { return new(StartChallengeNotificationContactVerificationRequest) },
+			func(v any) ([]byte, error) {
+				return EncodeStartChallengeNotificationContactVerificationRequest(*v.(*StartChallengeNotificationContactVerificationRequest))
+			}},
+		{"ConfirmChallengeNotificationContactVerificationRequest", `{"code":"00123456","requestId":"confirm-address","challengeCredential":"synthetic-enrollment-secret"}`,
+			func() any { return new(ConfirmChallengeNotificationContactVerificationRequest) },
+			func(v any) ([]byte, error) {
+				return EncodeConfirmChallengeNotificationContactVerificationRequest(*v.(*ConfirmChallengeNotificationContactVerificationRequest))
+			}},
+	}
+}
+
+func TestEnrollmentChallengeRequestsKeepOneSecretCarrierAndNoAuthoritySelectors(t *testing.T) {
+	for _, sample := range enrollmentChallengeRequestSamples() {
+		t.Run(sample.kind, func(t *testing.T) {
+			value := sample.newValue()
+			if err := DecodeRequest(strings.NewReader(sample.wire), value); err != nil {
+				t.Fatal("valid purpose-limited input rejected", err)
+			}
+			if encoded, err := json.Marshal(value); err == nil || len(encoded) != 0 {
+				t.Fatal("ordinary JSON exposed authentication material")
+			}
+			formatted := fmt.Sprintf("%v %+v %#v", value, value, value)
+			for _, private := range []string{"synthetic-enrollment-secret", "00123456", "first@example.invalid"} {
+				if strings.Contains(formatted, private) {
+					t.Fatal("formatted request disclosed private input")
+				}
+			}
+			encoded, err := sample.encode(value)
+			defer clear(encoded)
+			if err != nil || DecodeRequest(bytes.NewReader(encoded), sample.newValue()) != nil {
+				t.Fatal("explicit one-time transport failed", err)
+			}
+			// Neither a client selector nor a second credential can enlarge the
+			// purpose. Reject null placeholders as well as non-empty values.
+			for _, field := range []string{"accountId", "tenantId", "userId", "principalId", "session", "sessionId", "credential", "password", "purpose", "nextStep", "expectedFactorRevision", "requiredForUsers", "recoveryCode", "smtpHost"} {
+				for _, extra := range []string{`null`, `"other"`} {
+					attack := strings.TrimSuffix(sample.wire, "}") + `,"` + field + `":` + extra + `}`
+					if DecodeRequest(strings.NewReader(attack), sample.newValue()) == nil || json.Unmarshal([]byte(attack), sample.newValue()) == nil {
+						t.Fatalf("accepted %s selector or another carrier", field)
+					}
+				}
+			}
+			var fields map[string]json.RawMessage
+			if json.Unmarshal([]byte(sample.wire), &fields) != nil {
+				t.Fatal("bad fixture")
+			}
+			for field, original := range fields {
+				duplicate := strings.TrimSuffix(sample.wire, "}") + `,"` + field + `":` + string(original) + `}`
+				if DecodeRequest(strings.NewReader(duplicate), sample.newValue()) == nil {
+					t.Fatal("duplicate credential/intent field accepted")
+				}
+				for _, replacement := range []json.RawMessage{json.RawMessage(`null`), json.RawMessage(`""`), json.RawMessage(`true`)} {
+					fields[field] = replacement
+					attack, _ := json.Marshal(fields)
+					if DecodeRequest(bytes.NewReader(attack), sample.newValue()) == nil {
+						t.Fatalf("invalid %s accepted", field)
+					}
+				}
+				delete(fields, field)
+				attack, _ := json.Marshal(fields)
+				if DecodeRequest(bytes.NewReader(attack), sample.newValue()) == nil {
+					t.Fatalf("missing %s accepted", field)
+				}
+				fields[field] = original
+			}
+		})
+	}
+}
+
+func TestEnrollmentChallengeObservationCannotAdvancePasswordStageOrExtendBinding(t *testing.T) {
+	expires := time.Date(2026, 9, 24, 12, 5, 0, 0, time.UTC)
+	challenge := AuthenticationChallenge{APIVersion: APIVersion, Kind: "AuthenticationChallenge", ID: "first-challenge", Purpose: "ENROLLMENT", NextStep: "ENROLLMENT", ExpiresAt: expires}
+	contact := NotificationContact{APIVersion: APIVersion, Kind: "NotificationContact", AccountID: "account-a", UserID: "user-a", State: "NONE"}
+	value := EnrollmentChallengeState{Challenge: challenge, NotificationContact: &contact}
+	if ValidateEnrollmentChallengeState(value) != nil {
+		t.Fatal("first address state rejected")
+	}
+	verifiedAt := expires.Add(-time.Minute)
+	contact.State, contact.ResourceVersion, contact.Email, contact.VerifiedAt = "VERIFIED", 1, "first@example.invalid", &verifiedAt
+	value.Enrollment = &TOTPEnrollment{APIVersion: APIVersion, Kind: "TOTPEnrollment", ID: "first-factor", RequestID: "first-intent", Purpose: "INITIAL",
+		FactorRevision: 1, State: "PENDING", CreatedAt: expires.Add(-45 * time.Second), ExpiresAt: expires}
+	if ValidateEnrollmentChallengeState(value) != nil {
+		t.Fatal("remaining absolute challenge window rejected")
+	}
+	for _, change := range []func(*EnrollmentChallengeState){
+		func(v *EnrollmentChallengeState) { v.Challenge.Purpose = "LOGIN" },
+		func(v *EnrollmentChallengeState) { v.Challenge.Purpose = "RECOVERY" },
+		func(v *EnrollmentChallengeState) { v.Challenge.NextStep = "PASSWORD_CHANGE" },
+		func(v *EnrollmentChallengeState) { v.NotificationContact = nil },
+		func(v *EnrollmentChallengeState) { v.NotificationContact.State = "NONE" },
+		func(v *EnrollmentChallengeState) {
+			late := v.Enrollment.CreatedAt.Add(time.Microsecond)
+			v.NotificationContact.VerifiedAt = &late
+		},
+		func(v *EnrollmentChallengeState) { v.Enrollment.FactorRevision = 2 },
+		func(v *EnrollmentChallengeState) { v.Enrollment.Purpose = "REPLACEMENT" },
+		func(v *EnrollmentChallengeState) { v.Enrollment.ExpiresAt = v.Enrollment.ExpiresAt.Add(time.Second) },
+		func(v *EnrollmentChallengeState) { v.Enrollment.ExpiresAt = v.Enrollment.ExpiresAt.Add(-time.Second) },
+		func(v *EnrollmentChallengeState) { v.Enrollment.CreatedAt = v.Enrollment.ExpiresAt },
+		func(v *EnrollmentChallengeState) {
+			v.Enrollment.CreatedAt = v.Enrollment.ExpiresAt.Add(-5*time.Minute - time.Microsecond)
+		},
+		func(v *EnrollmentChallengeState) {
+			v.Enrollment.State = "CONFIRMED"
+			v.Enrollment.CompletedAt = &verifiedAt
+		},
+	} {
+		candidate, copiedContact, copiedEnrollment := value, *value.NotificationContact, *value.Enrollment
+		candidate.NotificationContact, candidate.Enrollment = &copiedContact, &copiedEnrollment
+		change(&candidate)
+		if ValidateEnrollmentChallengeState(candidate) == nil {
+			t.Fatal("observation supplied invalid state or authentication authority")
+		}
+	}
+	password := EnrollmentChallengeState{Challenge: challenge}
+	password.Challenge.NextStep = "PASSWORD_CHANGE"
+	if ValidateEnrollmentChallengeState(password) != nil {
+		t.Fatal("purpose-only password stage rejected")
+	}
+	for _, input := range []EnrollmentChallengeState{value, password} {
+		encoded, err := json.Marshal(input)
+		var decoded EnrollmentChallengeState
+		if err != nil || DecodeRequest(bytes.NewReader(encoded), &decoded) != nil {
+			t.Fatal("valid observation did not round trip")
+		}
+		for _, extra := range []string{`"credential":null`, `"challengeCredential":"secret"`, `"session":null`, `"provisioning":null`, `"recoveryCodes":[]`} {
+			if DecodeRequest(strings.NewReader(strings.TrimSuffix(string(encoded), "}")+`,`+extra+`}`), &decoded) == nil {
+				t.Fatal("inspection exposed secret or login authority")
+			}
+		}
+	}
+	encoded, _ := json.Marshal(password)
+	for _, field := range []string{"notificationContact", "enrollment"} {
+		var decoded EnrollmentChallengeState
+		if DecodeRequest(strings.NewReader(strings.TrimSuffix(string(encoded), "}")+`,"`+field+`":null}`), &decoded) == nil {
+			t.Fatal("password stage accepted a later-state placeholder")
+		}
+	}
+}
+
+func FuzzEnrollmentChallengeRequests(f *testing.F) {
+	samples := enrollmentChallengeRequestSamples()
+	for index, sample := range samples {
+		f.Add(uint8(index), sample.wire)
+	}
+	f.Add(uint8(0), `{"challengeCredential":"one","challengeCredential":"two"}`)
+	f.Fuzz(func(t *testing.T, index uint8, input string) {
+		if len(input) > int(MaxRequestBytes) {
+			return
+		}
+		sample := samples[int(index)%len(samples)]
+		value := sample.newValue()
+		if DecodeRequest(strings.NewReader(input), value) != nil {
+			return
+		}
+		if encoded, err := json.Marshal(value); err == nil || len(encoded) != 0 {
+			t.Fatal("decoded secret could escape ordinary JSON")
+		}
+		encoded, err := sample.encode(value)
+		defer clear(encoded)
+		if err != nil || DecodeRequest(bytes.NewReader(encoded), sample.newValue()) != nil {
+			t.Fatal("accepted input could not use its closed encoder")
+		}
+	})
+}
+
+func securitySettingsContractSamples() []struct {
+	kind, wire string
+	newValue   func() any
+} {
+	mfa := `{"requiredForUsers":false}`
+	settings := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccountSecuritySettings","accountId":"account-a","resourceVersion":2,"mfa":` + mfa + `,"updatedAt":"2026-09-24T12:00:00Z"}`
+	change := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccountSecuritySettingsChange","requestId":"change-a","expectedResourceVersion":1,"settings":` + settings + `,"callerSessionEnded":true}`
+	return []struct {
+		kind, wire string
+		newValue   func() any
+	}{
+		{"AccountMFASettings", mfa, func() any { return new(AccountMFASettings) }},
+		{"AccountSecuritySettings", settings, func() any { return new(AccountSecuritySettings) }},
+		{"SecuritySettingsUpdateIntent", `{"expectedResourceVersion":1,"mfa":` + mfa + `}`, func() any { return new(SecuritySettingsUpdateIntent) }},
+		{"UpdateAccountSecuritySettingsRequest", `{"requestId":"change-a","stepUpId":"proof-a","expectedResourceVersion":1,"mfa":` + mfa + `}`, func() any { return new(UpdateAccountSecuritySettingsRequest) }},
+		{"AccountSecuritySettingsChange", change, func() any { return new(AccountSecuritySettingsChange) }},
+		{"UpdateAccountSecuritySettingsResponse", `{"outcome":"APPLIED","change":` + change + `}`, func() any { return new(UpdateAccountSecuritySettingsResponse) }},
+	}
+}
+
+func TestAccountSecuritySettingsContractsPreserveExplicitValuesAndHistory(t *testing.T) {
+	for _, sample := range securitySettingsContractSamples() {
+		t.Run(sample.kind, func(t *testing.T) {
+			for _, wire := range []string{
+				sample.wire,
+				strings.ReplaceAll(sample.wire, "false", "true"),
+				strings.Replace(sample.wire, `"requiredForUsers":false`, `"requiredForUsers":true`, 1),
+				strings.Replace(sample.wire, "APPLIED", "EQUAL_REPLAY", 1),
+				strings.ReplaceAll(strings.ReplaceAll(sample.wire, `"expectedResourceVersion":1`, `"expectedResourceVersion":9007199254740990`), `"resourceVersion":2`, `"resourceVersion":9007199254740991`),
+			} {
+				value := sample.newValue()
+				if err := DecodeRequest(strings.NewReader(wire), value); err != nil {
+					t.Fatalf("explicit supported configuration rejected: %v", err)
+				}
+				encoded, err := json.Marshal(value)
+				if err != nil {
+					t.Fatal("non-secret settings contract is not serializable")
+				}
+				decoded := sample.newValue()
+				if DecodeRequest(bytes.NewReader(encoded), decoded) != nil || !reflect.DeepEqual(value, decoded) {
+					t.Fatal("explicit configuration or historical result changed under round trip")
+				}
+				var login LoginResponse
+				if DecodeRequest(bytes.NewReader(encoded), &login) == nil {
+					t.Fatal("settings metadata became login authority")
+				}
+			}
+		})
+	}
+}
+
+func TestAccountSecuritySettingsRejectAmbiguityWithoutChangingPriorValue(t *testing.T) {
+	for _, sample := range securitySettingsContractSamples() {
+		t.Run(sample.kind, func(t *testing.T) {
+			malformed := []string{
+				`null`, `[]`, `{}`, sample.wire + `{}`,
+				strings.Replace(sample.wire, `"requiredForUsers":false`, `"requiredForUsers":`+strings.Repeat(" ", int(MaxRequestBytes))+`false`, 1),
+				strings.TrimSuffix(sample.wire, "}") + `,"unknown":true}`,
+			}
+			for _, replacement := range []string{
+				``, `"requiredForUsers":null`, `"requiredForUsers":"false"`, `"requiredForUsers":0`,
+				`"requiredForUsers":[]`, `"RequiredForUsers":false`,
+				`"requiredForUsers":false,"requiredForUsers":true`,
+				`"requiredForUsers":false,"requiredFor\u0055sers":true`,
+				`"requiredForUsers":false,"allowRootException":true`,
+			} {
+				malformed = append(malformed, strings.Replace(sample.wire, `"requiredForUsers":false`, replacement, 1))
+			}
+			if sample.kind != "AccountMFASettings" {
+				malformed = append(malformed,
+					strings.Replace(sample.wire, `,"mfa":{"requiredForUsers":false}`, "", 1),
+					strings.Replace(sample.wire, `"mfa":{"requiredForUsers":false}`, `"mfa":null`, 1),
+					strings.Replace(sample.wire, `"mfa":`, `"MFA":`, 1),
+				)
+			}
+			if strings.Contains(sample.wire, `"expectedResourceVersion"`) {
+				for _, version := range []string{"0", "-1", "1.5", `"1"`, "null", "9007199254740991", "18446744073709551616"} {
+					malformed = append(malformed, strings.Replace(sample.wire, `"expectedResourceVersion":1`, `"expectedResourceVersion":`+version, 1))
+				}
+				malformed = append(malformed, strings.Replace(sample.wire, `"expectedResourceVersion":1,`, "", 1))
+			}
+			if strings.Contains(sample.wire, `"apiVersion"`) {
+				malformed = append(malformed,
+					strings.Replace(sample.wire, APIVersion, "other/v1", 1),
+					strings.Replace(sample.wire, `"kind":"AccountSecuritySettings`, `"kind":"Other`, 1),
+					strings.Replace(sample.wire, `"account-a"`, `""`, 1),
+					strings.Replace(sample.wire, `"resourceVersion":2`, `"resourceVersion":0`, 1),
+					strings.Replace(sample.wire, `"2026-09-24T12:00:00Z"`, `null`, 1),
+					strings.Replace(sample.wire, `"2026-09-24T12:00:00Z"`, `"2026-09-24T13:00:00+01:00"`, 1),
+					strings.Replace(sample.wire, `"2026-09-24T12:00:00Z"`, `"2026-09-24T12:00:00.0000001Z"`, 1),
+				)
+			}
+			if strings.Contains(sample.wire, `"callerSessionEnded"`) {
+				malformed = append(malformed,
+					strings.Replace(sample.wire, `,"callerSessionEnded":true`, "", 1),
+					strings.Replace(sample.wire, `"callerSessionEnded":true`, `"callerSessionEnded":null`, 1),
+					strings.Replace(sample.wire, `"callerSessionEnded":true`, `"callerSessionEnded":false`, 1),
+					strings.Replace(sample.wire, `"resourceVersion":2`, `"resourceVersion":3`, 1),
+				)
+			}
+			if sample.kind == "UpdateAccountSecuritySettingsResponse" {
+				malformed = append(malformed, strings.Replace(sample.wire, "APPLIED", "UNKNOWN", 1))
+			}
+			if sample.kind == "SecuritySettingsUpdateIntent" || sample.kind == "UpdateAccountSecuritySettingsRequest" {
+				for _, selector := range []string{"accountId", "tenantId", "userId", "sessionId", "installationId", "action", "attributes", "password", "code", "challengeCredential", "stepUpProof", "revokeOtherSessions"} {
+					malformed = append(malformed, strings.TrimSuffix(sample.wire, "}")+`,"`+selector+`":"untrusted-value"}`)
+				}
+			}
+			for index, wire := range malformed {
+				value := sample.newValue()
+				if json.Unmarshal([]byte(sample.wire), value) != nil {
+					t.Fatal("invalid baseline fixture")
+				}
+				before, _ := json.Marshal(value)
+				if err := json.Unmarshal([]byte(wire), value); err == nil {
+					t.Fatalf("invalid contract %d accepted", index)
+				}
+				after, _ := json.Marshal(value)
+				if !bytes.Equal(before, after) {
+					t.Fatalf("failed decode %d changed prior configuration/completion", index)
+				}
+			}
+		})
+	}
+}
+
+func TestSettingsStepUpBindsExactIntentWithoutExpandingOtherOperations(t *testing.T) {
+	intent := `{"expectedResourceVersion":1,"mfa":{"requiredForUsers":false}}`
+	start := `{"requestId":"settings-a","operation":"SECURITY_SETTINGS_UPDATE","expectedFactorRevision":2,"securitySettings":` + intent + `}`
+	for _, wire := range []string{start, strings.Replace(start, "false", "true", 1)} {
+		var value StartStepUpRequest
+		if DecodeRequest(strings.NewReader(wire), &value) != nil {
+			t.Fatal("exact settings intent rejected")
+		}
+		encoded, err := json.Marshal(value)
+		if err != nil || string(encoded) != wire {
+			t.Fatal("settings proof lost exact intended values")
+		}
+	}
+	for _, wire := range []string{
+		`{"requestId":"settings-a","operation":"SECURITY_SETTINGS_UPDATE","expectedResourceVersion":1,"mfa":{"requiredForUsers":true}}`,
+		`{"requestId":"settings-a","operation":"SECURITY_SETTINGS_UPDATE","expectedFactorRevision":2}`,
+		`{"requestId":"settings-a","operation":"RECOVERY_CODES_REGENERATE","expectedFactorRevision":2,"intent":{"expectedResourceVersion":1,"mfa":{"requiredForUsers":true}}}`,
+		strings.Replace(start, "SECURITY_SETTINGS_UPDATE", "RECOVERY_CODES_REGENERATE", 1),
+		strings.Replace(start, "SECURITY_SETTINGS_UPDATE", "iam.security-settings.update", 1),
+		strings.Replace(start, intent, "null", 1),
+		strings.Replace(start, intent, `{}`, 1),
+		strings.Replace(start, `"requiredForUsers":false`, `"requiredForUsers":null`, 1),
+		strings.Replace(start, `"requiredForUsers":false`, `"requiredForUsers":false,"requiredForUsers":true`, 1),
+		strings.Replace(start, `"expectedResourceVersion":1`, `"expectedResourceVersion":9007199254740991`, 1),
+		strings.Replace(start, `"securitySettings":`, `"SecuritySettings":`, 1),
+		strings.TrimSuffix(start, "}") + `,"accountId":"other"}`,
+		strings.Replace(start, `"mfa":`, `"accountId":"other","mfa":`, 1),
+		`{"requestId":"codes-a","operation":"RECOVERY_CODES_REGENERATE","expectedFactorRevision":2,"securitySettings":null}`,
+	} {
+		var value StartStepUpRequest
+		if DecodeRequest(strings.NewReader(wire), &value) == nil {
+			t.Fatal("proof accepted missing, ambiguous or foreign operation intent")
+		}
+	}
+}
+
+func FuzzAccountSecuritySettingsContractRoundTrip(f *testing.F) {
+	samples := securitySettingsContractSamples()
+	for index, sample := range samples {
+		f.Add(uint8(index), sample.wire)
+	}
+	f.Add(uint8(0), `{"requiredForUsers":null}`)
+	f.Add(uint8(2), `{"expectedResourceVersion":9007199254740991,"mfa":{"requiredForUsers":true}}`)
+	f.Fuzz(func(t *testing.T, kind uint8, source string) {
+		factory := samples[int(kind)%len(samples)].newValue
+		value := factory()
+		if DecodeRequest(strings.NewReader(source), value) != nil {
+			return
+		}
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal("accepted non-secret contract is not serializable")
+		}
+		decoded := factory()
+		if DecodeRequest(bytes.NewReader(encoded), decoded) != nil || !reflect.DeepEqual(value, decoded) {
+			t.Fatal("accepted settings contract changed under round trip")
+		}
+	})
+}
+
 func TestStepUpMetadataIsBoundedAndNeverLoginAuthority(t *testing.T) {
 	created := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
 	proved, consumed := created.Add(time.Second), created.Add(2*time.Second)
@@ -232,6 +606,8 @@ func TestRecoveryCodeRegenerationReplaysOnlyNonSecretCompletion(t *testing.T) {
 func FuzzStepUpContractRoundTrip(f *testing.F) {
 	f.Add(uint8(0), `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"StepUp","id":"proof-a","requestId":"regenerate-a","operation":"RECOVERY_CODES_REGENERATE","expectedFactorRevision":2,"state":"PENDING","createdAt":"2026-09-21T12:00:00Z","expiresAt":"2026-09-21T12:02:00Z"}`)
 	f.Add(uint8(1), `{"requestId":"regenerate-a","operation":"RECOVERY_CODES_REGENERATE","expectedFactorRevision":2}`)
+	f.Add(uint8(0), `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"StepUp","id":"proof-a","requestId":"settings-a","operation":"SECURITY_SETTINGS_UPDATE","expectedFactorRevision":2,"securitySettings":{"expectedResourceVersion":1,"mfa":{"requiredForUsers":false}},"state":"PENDING","createdAt":"2026-09-21T12:00:00Z","expiresAt":"2026-09-21T12:02:00Z"}`)
+	f.Add(uint8(1), `{"requestId":"settings-a","operation":"SECURITY_SETTINGS_UPDATE","expectedFactorRevision":2,"securitySettings":{"expectedResourceVersion":1,"mfa":{"requiredForUsers":true}}}`)
 	f.Add(uint8(2), `{"requestId":"verify-a","password":"synthetic-password","code":"nonempty-attempt"}`)
 	f.Add(uint8(3), `{"requestId":"regenerate-a","stepUpId":"proof-a","expectedFactorRevision":2}`)
 	f.Add(uint8(4), `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"RecoveryCodeRegeneration","id":"regeneration-a","requestId":"regenerate-a","factorId":"factor-a","factorRevision":2,"createdAt":"2026-09-21T12:01:00Z"}`)
@@ -438,8 +814,17 @@ func TestNotificationContactAndVerificationAreClosedCurrentUserContracts(t *test
 	if err := ValidateNotificationContactVerification(verification); err != nil {
 		t.Fatal(err)
 	}
+	for _, lifetime := range []time.Duration{time.Microsecond, 3 * time.Minute, 5 * time.Minute, 10 * time.Minute} {
+		shortened := verification
+		shortened.ExpiresAt = shortened.IssuedAt.Add(lifetime)
+		if err := ValidateNotificationContactVerification(shortened); err != nil {
+			t.Fatalf("valid bounded verification lifetime %s: %v", lifetime, err)
+		}
+	}
 	for _, change := range []func(*NotificationContactVerification){
 		func(v *NotificationContactVerification) { v.ExpiresAt = v.ExpiresAt.Add(time.Second) },
+		func(v *NotificationContactVerification) { v.ExpiresAt = v.IssuedAt },
+		func(v *NotificationContactVerification) { v.ExpiresAt = v.IssuedAt.Add(-time.Microsecond) },
 		func(v *NotificationContactVerification) { v.CompletedAt = &now },
 		func(v *NotificationContactVerification) { v.State = "VERIFIED" },
 		func(v *NotificationContactVerification) { v.Delivery.UpdatedAt = now.Add(-time.Microsecond) },
@@ -1284,9 +1669,59 @@ func FuzzAccessKeySignatureWire(f *testing.F) {
 	})
 }
 
+func TestSecuritySettingsRequireCurrentUserSessionAndExactAccount(t *testing.T) {
+	profile, ok := LookupAuthorizationProfile(ProductIAM)
+	if !ok || profile.Revision != 7 {
+		t.Fatal("security settings must publish a distinct profile revision")
+	}
+	_, digest, err := CanonicalizeAuthorizationProfile(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := AuthorizationProfileReference{Product: profile.Product, Revision: profile.Revision, ContentDigest: digest}
+	for _, action := range []Action{ActionIAMSecuritySettingsRead, ActionIAMSecuritySettingsUpdate} {
+		definition, ok := LookupActionDefinition(action)
+		if !ok || definition.ResourceKind != ResourceAccount || definition.AuthorityScope != AuthorityScopeTenant || definition.CallingService != ServiceIAM {
+			t.Fatal("settings read acquired a different authority boundary")
+		}
+		for _, subject := range []SubjectType{SubjectUser, SubjectRole, SubjectServiceAccount} {
+			if allowed := CheckAuthorizationProfileSubject(profile, ref, action, subject) == nil; allowed != (subject == SubjectUser) {
+				t.Fatal("settings read widened its subject types")
+			}
+		}
+		for _, method := range []UserAuthenticationMethod{UserAuthenticationLoginSession, UserAuthenticationAccessKey} {
+			if allowed := CheckAuthorizationProfileUserAuthentication(profile, ref, action, method) == nil; allowed != (method == UserAuthenticationLoginSession) {
+				t.Fatal("settings read widened its authentication methods")
+			}
+		}
+		resource := ResourceReference{Kind: ResourceAccount, ID: "account-a"}
+		if _, err := NewAuthorizationRequest(action, resource, AuthorizationResourceInstance, "", "settings-read", "settings-read"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := NewAuthorizationRequest(action, resource, AuthorizationResourceCollection, AuthorizationCollectionList, "settings-read", "settings-read"); err == nil {
+			t.Fatal("settings read admitted an unbound collection")
+		}
+		foundPrevious := false
+		for _, old := range HistoricalAuthorizationProfiles() {
+			if old.Product != ProductIAM {
+				continue
+			}
+			foundPrevious = foundPrevious || old.Revision == 5
+			for _, declaration := range old.Actions {
+				if declaration.Action == action && (action != ActionIAMSecuritySettingsRead || old.Revision < 6) {
+					t.Fatal("an immutable prior profile gained settings authority")
+				}
+			}
+		}
+		if !foundPrevious {
+			t.Fatal("the previous profile must remain available to historical evidence")
+		}
+	}
+}
+
 func TestAccessKeyManagementUsesAnExplicitNewUserOnlyProfile(t *testing.T) {
 	profile, found := LookupAuthorizationProfile(ProductIAM)
-	if !found || profile.Revision != 5 {
+	if !found || profile.Revision != 7 {
 		t.Fatal("missing source-owned access key management declaration")
 	}
 	_, digest, err := CanonicalizeAuthorizationProfile(profile)
@@ -1315,7 +1750,7 @@ func TestAccessKeyManagementUsesAnExplicitNewUserOnlyProfile(t *testing.T) {
 			t.Fatal("key management widened the USER boundary")
 		}
 		for _, historical := range HistoricalAuthorizationProfiles() {
-			if historical.Product != ProductIAM {
+			if historical.Product != ProductIAM || historical.Revision >= 5 {
 				continue
 			}
 			for _, declaration := range historical.Actions {
@@ -3197,6 +3632,7 @@ func TestAuthorizationProfileUserAuthenticationIsExplicitAndCommitted(t *testing
 	for _, source := range AllAuthorizationProfiles() {
 		for _, declared := range source.Actions {
 			wantAccessKey := false
+			wantLoginOnly := source.Product == ProductIAM && (declared.Action == ActionIAMSecuritySettingsRead || declared.Action == ActionIAMSecuritySettingsUpdate)
 			switch source.Product {
 			case ProductPaaS:
 				switch declared.Action {
@@ -3212,9 +3648,10 @@ func TestAuthorizationProfileUserAuthenticationIsExplicitAndCommitted(t *testing
 			case ProductAudit:
 				wantAccessKey = declared.Action == ActionAuditRecordRead || declared.Action == ActionAuditIntegrityVerify
 			}
-			if wantAccessKey != (declared.UserAuthenticationMethods != nil) ||
-				wantAccessKey && !slices.Equal(declared.UserAuthenticationMethods,
-					[]UserAuthenticationMethod{UserAuthenticationLoginSession, UserAuthenticationAccessKey}) {
+			if wantLoginOnly && !slices.Equal(declared.UserAuthenticationMethods, []UserAuthenticationMethod{UserAuthenticationLoginSession}) ||
+				!wantLoginOnly && (wantAccessKey != (declared.UserAuthenticationMethods != nil) ||
+					wantAccessKey && !slices.Equal(declared.UserAuthenticationMethods,
+						[]UserAuthenticationMethod{UserAuthenticationLoginSession, UserAuthenticationAccessKey})) {
 				t.Fatal("current product authentication admission is not the closed PEP set", source.Product, declared.Action)
 			}
 		}

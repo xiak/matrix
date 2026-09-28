@@ -293,7 +293,7 @@ DECLARE
     seed jsonb;
     entry regprocedure;
 BEGIN
-    IF (SELECT schema_version FROM iam.readiness())<>40 OR NOT iam.authorization_decision_contract_ready()
+    IF (SELECT schema_version FROM iam.readiness())<>45 OR NOT iam.authorization_decision_contract_ready()
         OR NOT iam.policy_attachment_contract_ready() THEN
         RAISE EXCEPTION 'IAM profile registry schema is invalid';
     END IF;
@@ -371,3 +371,21 @@ BEGIN
     END LOOP;
 END
 $matrix_profile_verify$;
+
+-- Operational verification runs after all data is present. Do not move this
+-- history scan into HTTP readiness or reinterpret decisions using current
+-- heads. It detects corrupted retained rows even if an earlier restore did
+-- not have the insertion trigger installed while loading its COPY data.
+SET LOCAL ROLE matrix_iam_owner;
+DO $matrix_decision_archive_verify$
+DECLARE account record; previous_tenant text:=current_setting('matrix.iam_tenant_id',true);
+BEGIN
+    FOR account IN SELECT account_id FROM iam.account_roots ORDER BY account_id COLLATE "C" LOOP
+        PERFORM set_config('matrix.iam_tenant_id',account.account_id,true);
+        IF EXISTS(SELECT 1 FROM iam.authorization_decisions d WHERE d.tenant_id=account.account_id
+          AND d.contract_version IN (2,3,4) AND NOT iam.authorization_decision_profile_matches(d.document)) THEN
+            RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='IAM retained decision archived profile conflicts';
+        END IF;
+    END LOOP;
+    PERFORM set_config('matrix.iam_tenant_id',COALESCE(previous_tenant,''),true);
+END $matrix_decision_archive_verify$;

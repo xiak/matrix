@@ -30,6 +30,7 @@ const (
 	ActionIAMAccountEnabled                         Action = "iam.account.enabled"
 	ActionIAMAccountRootCredentialsRecovered        Action = "iam.account-root.credentials-recovered"
 	ActionIAMAccountAliasUpdated                    Action = "iam.account.alias-set"
+	ActionIAMSecuritySettingsUpdated                Action = "iam.security-settings.updated"
 	ActionIAMUserCreated                            Action = "iam.user.created"
 	ActionIAMUserUpdated                            Action = "iam.user.updated"
 	ActionIAMUserDeleted                            Action = "iam.user.deleted"
@@ -41,6 +42,7 @@ const (
 	ActionIAMNotificationContactVerificationStarted Action = "iam.notification-contact.verification-started"
 	ActionIAMNotificationContactVerified            Action = "iam.notification-contact.verified"
 	ActionIAMAuthenticatorBound                     Action = "iam.authenticator.bound"
+	ActionIAMAuthenticatorReplaced                  Action = "iam.authenticator.replaced"
 	ActionIAMAuthenticatorRecoveryStarted           Action = "iam.authenticator.recovery-started"
 	ActionIAMAuthenticatorRecovered                 Action = "iam.authenticator.recovered"
 	ActionIAMRecoveryCodesRegenerated               Action = "iam.recovery-codes.regenerated"
@@ -225,6 +227,7 @@ var allActions = []Action{
 	ActionIAMAccountEnabled,
 	ActionIAMAccountRootCredentialsRecovered,
 	ActionIAMAccountAliasUpdated,
+	ActionIAMSecuritySettingsUpdated,
 	ActionIAMUserCreated,
 	ActionIAMUserUpdated,
 	ActionIAMUserDeleted,
@@ -236,6 +239,7 @@ var allActions = []Action{
 	ActionIAMNotificationContactVerificationStarted,
 	ActionIAMNotificationContactVerified,
 	ActionIAMAuthenticatorBound,
+	ActionIAMAuthenticatorReplaced,
 	ActionIAMAuthenticatorRecoveryStarted,
 	ActionIAMAuthenticatorRecovered,
 	ActionIAMRecoveryCodesRegenerated,
@@ -331,6 +335,9 @@ var actionContracts = map[Action]ActionContract{
 	ActionIAMAccountAliasUpdated: {
 		Source: SourceIAM, Target: TargetAccount, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
 	},
+	ActionIAMSecuritySettingsUpdated: {
+		Source: SourceIAM, Target: TargetAccount, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
+	},
 	ActionIAMUserCreated: {
 		Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
 	},
@@ -358,6 +365,7 @@ var actionContracts = map[Action]ActionContract{
 	ActionIAMNotificationContactVerificationStarted: {Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, UserActorRequired: true},
 	ActionIAMNotificationContactVerified:            {Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, UserActorRequired: true},
 	ActionIAMAuthenticatorBound:                     {Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, UserActorRequired: true},
+	ActionIAMAuthenticatorReplaced:                  {Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, UserActorRequired: true},
 	ActionIAMAuthenticatorRecoveryStarted:           {Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, UserActorRequired: true},
 	ActionIAMAuthenticatorRecovered:                 {Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, UserActorRequired: true},
 	ActionIAMRecoveryCodesRegenerated:               {Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, UserActorRequired: true},

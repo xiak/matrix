@@ -45,6 +45,113 @@ func DecodeRequest(reader io.Reader, destination any) error {
 	return contractjson.DecodeObject(reader, MaxRequestBytes, destination)
 }
 
+func (value *InspectEnrollmentChallengeRequest) UnmarshalJSON(source []byte) error {
+	type wire InspectEnrollmentChallengeRequest
+	var decoded wire
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil ||
+		ValidateInspectEnrollmentChallengeRequest(InspectEnrollmentChallengeRequest(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = InspectEnrollmentChallengeRequest(decoded)
+	return nil
+}
+
+func EncodeInspectEnrollmentChallengeRequest(value InspectEnrollmentChallengeRequest) ([]byte, error) {
+	if err := ValidateInspectEnrollmentChallengeRequest(value); err != nil {
+		return nil, err
+	}
+	return json.Marshal(struct {
+		ChallengeCredential string `json:"challengeCredential"`
+	}{value.ChallengeCredential.reveal()})
+}
+
+func (value *StartChallengeTOTPEnrollmentRequest) UnmarshalJSON(source []byte) error {
+	type wire StartChallengeTOTPEnrollmentRequest
+	var decoded wire
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil ||
+		ValidateStartChallengeTOTPEnrollmentRequest(StartChallengeTOTPEnrollmentRequest(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = StartChallengeTOTPEnrollmentRequest(decoded)
+	return nil
+}
+
+func EncodeStartChallengeTOTPEnrollmentRequest(value StartChallengeTOTPEnrollmentRequest) ([]byte, error) {
+	if err := ValidateStartChallengeTOTPEnrollmentRequest(value); err != nil {
+		return nil, err
+	}
+	return json.Marshal(struct {
+		RequestID           string `json:"requestId"`
+		ChallengeCredential string `json:"challengeCredential"`
+	}{value.RequestID, value.ChallengeCredential.reveal()})
+}
+
+func (value *EnrollmentChallengeState) UnmarshalJSON(source []byte) error {
+	type wire EnrollmentChallengeState
+	var decoded wire
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil ||
+		ValidateEnrollmentChallengeState(EnrollmentChallengeState(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	// Optional means absent, not explicit null. The password stage must not
+	// carry even empty placeholders for subsequent authentication authority.
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(source, &fields) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	for _, field := range []string{"notificationContact", "enrollment"} {
+		if raw, present := fields[field]; present && bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return contractjson.ErrInvalidDocument
+		}
+	}
+	*value = EnrollmentChallengeState(decoded)
+	return nil
+}
+
+func (value *StartChallengeNotificationContactVerificationRequest) UnmarshalJSON(source []byte) error {
+	type wire StartChallengeNotificationContactVerificationRequest
+	var decoded wire
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil ||
+		ValidateStartChallengeNotificationContactVerificationRequest(StartChallengeNotificationContactVerificationRequest(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = StartChallengeNotificationContactVerificationRequest(decoded)
+	return nil
+}
+
+func EncodeStartChallengeNotificationContactVerificationRequest(value StartChallengeNotificationContactVerificationRequest) ([]byte, error) {
+	if err := ValidateStartChallengeNotificationContactVerificationRequest(value); err != nil {
+		return nil, err
+	}
+	return json.Marshal(struct {
+		Email               string `json:"email"`
+		RequestID           string `json:"requestId"`
+		ChallengeCredential string `json:"challengeCredential"`
+	}{value.Email, value.RequestID, value.ChallengeCredential.reveal()})
+}
+
+func (value *ConfirmChallengeNotificationContactVerificationRequest) UnmarshalJSON(source []byte) error {
+	type wire ConfirmChallengeNotificationContactVerificationRequest
+	var decoded wire
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil ||
+		ValidateConfirmChallengeNotificationContactVerificationRequest(ConfirmChallengeNotificationContactVerificationRequest(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = ConfirmChallengeNotificationContactVerificationRequest(decoded)
+	return nil
+}
+
+func EncodeConfirmChallengeNotificationContactVerificationRequest(value ConfirmChallengeNotificationContactVerificationRequest) ([]byte, error) {
+	if err := ValidateConfirmChallengeNotificationContactVerificationRequest(value); err != nil {
+		return nil, err
+	}
+	return json.Marshal(struct {
+		Code                string `json:"code"`
+		RequestID           string `json:"requestId"`
+		ChallengeCredential string `json:"challengeCredential"`
+	}{value.Code.reveal(), value.RequestID, value.ChallengeCredential.reveal()})
+}
+
 func (value *VerifyAuthenticationChallengeRequest) UnmarshalJSON(source []byte) error {
 	type wire VerifyAuthenticationChallengeRequest
 	var decoded wire
@@ -325,6 +432,80 @@ func EncodeConfirmAuthenticatorRecoveryResponse(value ConfirmAuthenticatorRecove
 	}{value.Recovery, value.NextStep, codes})
 }
 
+func (value *AccountMFASettings) UnmarshalJSON(source []byte) error {
+	var decoded struct {
+		RequiredForUsers *bool `json:"requiredForUsers"`
+	}
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil || decoded.RequiredForUsers == nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = AccountMFASettings{RequiredForUsers: *decoded.RequiredForUsers}
+	return nil
+}
+
+func (value *AccountSecuritySettings) UnmarshalJSON(source []byte) error {
+	type wire AccountSecuritySettings
+	var decoded wire
+	var fields map[string]json.RawMessage
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil ||
+		ValidateAccountSecuritySettings(AccountSecuritySettings(decoded)) != nil || json.Unmarshal(source, &fields) != nil || fields["mfa"] == nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = AccountSecuritySettings(decoded)
+	return nil
+}
+
+func (value *SecuritySettingsUpdateIntent) UnmarshalJSON(source []byte) error {
+	type wire SecuritySettingsUpdateIntent
+	var decoded wire
+	var fields map[string]json.RawMessage
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil ||
+		ValidateSecuritySettingsUpdateIntent(SecuritySettingsUpdateIntent(decoded)) != nil || json.Unmarshal(source, &fields) != nil || fields["mfa"] == nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = SecuritySettingsUpdateIntent(decoded)
+	return nil
+}
+
+func (value *UpdateAccountSecuritySettingsRequest) UnmarshalJSON(source []byte) error {
+	type wire UpdateAccountSecuritySettingsRequest
+	var decoded wire
+	var fields map[string]json.RawMessage
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil ||
+		ValidateUpdateAccountSecuritySettingsRequest(UpdateAccountSecuritySettingsRequest(decoded)) != nil || json.Unmarshal(source, &fields) != nil || fields["mfa"] == nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = UpdateAccountSecuritySettingsRequest(decoded)
+	return nil
+}
+
+func (value *AccountSecuritySettingsChange) UnmarshalJSON(source []byte) error {
+	type wire AccountSecuritySettingsChange
+	var decoded wire
+	var fields map[string]json.RawMessage
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil ||
+		ValidateAccountSecuritySettingsChange(AccountSecuritySettingsChange(decoded)) != nil || json.Unmarshal(source, &fields) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	ended, present := fields["callerSessionEnded"]
+	if !present || bytes.Equal(bytes.TrimSpace(ended), []byte("null")) {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = AccountSecuritySettingsChange(decoded)
+	return nil
+}
+
+func (value *UpdateAccountSecuritySettingsResponse) UnmarshalJSON(source []byte) error {
+	type wire UpdateAccountSecuritySettingsResponse
+	var decoded wire
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil ||
+		ValidateUpdateAccountSecuritySettingsResponse(UpdateAccountSecuritySettingsResponse(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = UpdateAccountSecuritySettingsResponse(decoded)
+	return nil
+}
+
 func (value *StepUp) UnmarshalJSON(source []byte) error {
 	type wire StepUp
 	var decoded wire
@@ -337,7 +518,8 @@ func (value *StepUp) UnmarshalJSON(source []byte) error {
 	}
 	_, proved := fields["provedAt"]
 	_, consumed := fields["consumedAt"]
-	if proved != (decoded.ProvedAt != nil) || consumed != (decoded.ConsumedAt != nil) {
+	_, settings := fields["securitySettings"]
+	if proved != (decoded.ProvedAt != nil) || consumed != (decoded.ConsumedAt != nil) || settings != (decoded.SecuritySettings != nil) {
 		return contractjson.ErrInvalidDocument
 	}
 	*value = StepUp(decoded)
@@ -348,6 +530,13 @@ func (value *StartStepUpRequest) UnmarshalJSON(source []byte) error {
 	type wire StartStepUpRequest
 	var decoded wire
 	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil || ValidateStartStepUpRequest(StartStepUpRequest(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(source, &fields) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	if _, present := fields["securitySettings"]; present != (decoded.SecuritySettings != nil) {
 		return contractjson.ErrInvalidDocument
 	}
 	*value = StartStepUpRequest(decoded)
@@ -373,6 +562,16 @@ func EncodeVerifyStepUpRequest(value VerifyStepUpRequest) ([]byte, error) {
 		Password  string `json:"password"`
 		Code      string `json:"code"`
 	}{value.RequestID, value.Password.reveal(), value.Code.reveal()})
+}
+
+func (value *StartTOTPReplacementRequest) UnmarshalJSON(source []byte) error {
+	type wire StartTOTPReplacementRequest
+	var decoded wire
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil || ValidateStartTOTPReplacementRequest(StartTOTPReplacementRequest(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = StartTOTPReplacementRequest(decoded)
+	return nil
 }
 
 func (value *RegenerateRecoveryCodesRequest) UnmarshalJSON(source []byte) error {

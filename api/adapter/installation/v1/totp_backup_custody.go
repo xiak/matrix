@@ -87,6 +87,22 @@ type TOTPBackupSnapshotLease struct {
 	SnapshotID    string            `json:"snapshotId"`
 	Custody       TOTPBackupCustody `json:"custody"`
 	CustodyDigest string            `json:"custodyDigest"`
+	// AuthenticationStateDigest commits current identity and authorization
+	// from this same exported database snapshot, independently of key custody.
+	AuthenticationStateDigest string `json:"authenticationStateDigest"`
+}
+
+// historicalTOTPBackupSnapshotLease is the exact private response of the
+// authenticated IAM40/Audit24/PaaS6+r15 predecessor. It is decoder-only:
+// current producers must commit AuthenticationStateDigest and v5 consumers
+// must not treat a historical lease as current authentication evidence.
+type historicalTOTPBackupSnapshotLease struct {
+	APIVersion    string            `json:"apiVersion"`
+	Kind          string            `json:"kind"`
+	Purpose       string            `json:"purpose"`
+	SnapshotID    string            `json:"snapshotId"`
+	Custody       TOTPBackupCustody `json:"custody"`
+	CustodyDigest string            `json:"custodyDigest"`
 }
 
 func ValidateTOTPBackupCustody(value TOTPBackupCustody) error {
@@ -137,6 +153,14 @@ func TOTPBackupCustodyDigest(value TOTPBackupCustody) (string, error) {
 }
 
 func ValidateTOTPBackupSnapshotLease(value TOTPBackupSnapshotLease) error {
+	if validateTOTPBackupSnapshotLeaseBase(value) != nil ||
+		iamv1.ValidateDigest("authenticationStateDigest", value.AuthenticationStateDigest) != nil {
+		return ErrInvalidTOTPBackupSnapshotLease
+	}
+	return nil
+}
+
+func validateTOTPBackupSnapshotLeaseBase(value TOTPBackupSnapshotLease) error {
 	if value.APIVersion != TOTPBackupCustodyAPIVersion ||
 		value.Kind != TOTPBackupSnapshotLeaseKind ||
 		value.Purpose != TOTPBackupCustodyPurpose ||
@@ -185,4 +209,34 @@ func DecodeTOTPBackupSnapshotLease(reader io.Reader) (TOTPBackupSnapshotLease, e
 		return TOTPBackupSnapshotLease{}, ErrInvalidTOTPBackupSnapshotLease
 	}
 	return value, nil
+}
+
+// DecodeHistoricalTOTPBackupSnapshotLease accepts only the canonical six-field
+// lease emitted by the exact signed predecessor. Installation must choose this
+// decoder from that authenticated release profile before starting the helper;
+// it cannot be used as a fallback when the current seven-field lease is bad.
+func DecodeHistoricalTOTPBackupSnapshotLease(reader io.Reader) (TOTPBackupSnapshotLease, error) {
+	if reader == nil {
+		return TOTPBackupSnapshotLease{}, ErrInvalidTOTPBackupSnapshotLease
+	}
+	encoded, err := io.ReadAll(io.LimitReader(reader, MaximumTOTPBackupCustodyBytes+1))
+	if err != nil || len(encoded) == 0 || int64(len(encoded)) > MaximumTOTPBackupCustodyBytes {
+		return TOTPBackupSnapshotLease{}, ErrInvalidTOTPBackupSnapshotLease
+	}
+	var historical historicalTOTPBackupSnapshotLease
+	if contractjson.DecodeObjectBytes(encoded, MaximumTOTPBackupCustodyBytes, &historical) != nil {
+		return TOTPBackupSnapshotLease{}, ErrInvalidTOTPBackupSnapshotLease
+	}
+	canonical, err := json.Marshal(historical)
+	if err != nil || !bytes.Equal(encoded, canonical) {
+		return TOTPBackupSnapshotLease{}, ErrInvalidTOTPBackupSnapshotLease
+	}
+	lease := TOTPBackupSnapshotLease{
+		APIVersion: historical.APIVersion, Kind: historical.Kind, Purpose: historical.Purpose,
+		SnapshotID: historical.SnapshotID, Custody: historical.Custody, CustodyDigest: historical.CustodyDigest,
+	}
+	if validateTOTPBackupSnapshotLeaseBase(lease) != nil {
+		return TOTPBackupSnapshotLease{}, ErrInvalidTOTPBackupSnapshotLease
+	}
+	return lease, nil
 }
