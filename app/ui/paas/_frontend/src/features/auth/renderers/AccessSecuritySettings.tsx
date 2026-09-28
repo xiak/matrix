@@ -16,7 +16,7 @@ export function AccessSecuritySettings({ workspace }: { workspace: AccessWorkspa
     <Alert>{t("mockBoundary")}</Alert>
     <MfaSecurityPreview workspace={workspace} />
     <AccountSecuritySettingsPreview workspace={workspace} />
-    <PasswordRulesPreview />
+    <PasswordRulesPreview accountId={workspace.accountId} />
   </div>;
 }
 

@@ -802,29 +802,32 @@ group inheritance and effective-access explanation remain explicit preview
 workspaces until their own fixed live contracts are accepted; no live
 platform-role projection or role-name inference remains.
 
-The MOCK user-settings page also presents a read-only password-rule design
-preview. It labels proposed defaults as neither loaded nor effective account
-settings, separates ordinary users from identities protected by the IAM
-product floor, and offers no save action. The actual account policy and
-password-change requirements must come from IAM-009's accepted, versioned
-contract; the frontend does not synthesize that response from these preview
-values. This keeps the preview inspectable while IAM's password-governance
-write and recovery gates are still in progress. Tencent CAM's
+The MOCK user-settings page presents an isolated password-rule design flow.
+It labels proposed defaults as neither loaded nor effective account settings;
+the operator can edit only an in-memory sample, review it, inspect denial,
+stale-version and unknown-result designs, and compare ordinary, forced-change,
+restricted-challenge and protected-identity effective-rule scenarios. It does
+not send or save a password setting, claim a successful change, or derive an
+IAM permit. Protected identities retain the fixed product floor regardless of
+the sample Account draft. The actual account policy and password-change
+requirements must come from IAM-009's accepted, versioned contract; the
+frontend does not synthesize that response from preview values. Tencent CAM's
 [password-rule page](https://cloud.tencent.com/document/product/598/36249)
 and AWS IAM's [account password policy](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_passwords_account-policy.html)
 inform the information hierarchy, not Matrix's field limits or enforcement
 semantics. The preview does not invent password expiry or lockout controls.
 The policy author's statement rows are keyed and memoized with stable draft
 commands, so editing one statement does not render every unchanged sibling.
-At the development runtime the password preview was checked at desktop and
-390px width with no page-level horizontal overflow; one-click MOCK entry
-remains usable. All 784 frontend tests pass with one worker, and type, lint,
-architecture, 228 contrast pairs, static export, 228-file Go embed equality,
-Go UI-host tests and vet pass. Three long policy interactions exceeded the
-five-second test harness under a separate two-worker run, while their isolated
-rerun passed; no timeout was increased and this does not claim a measured
-browser latency improvement. This remains frontend/preview evidence, not an
-IAM password-governance backend acceptance.
+At the development runtime the revised preview was inspected in the 4317
+one-click MOCK at desktop and a 390px mobile viewport; its document width was
+390px with no page-level horizontal overflow. The 155-case workspace suite
+passed with a 20-second test ceiling, including sample-only editing, invalid
+bounds, review, protected identity and unconfirmed-outcome copy; the final
+targeted regression passed after text refinement. Type, lint, architecture,
+228 contrast pairs, 41-page static export, 228-file Go embed equality, three
+normalization cases, Go UI-host tests and vet passed. The other frontend files
+were not rerun after this isolated MOCK addition. This remains preview
+evidence, not IAM password-governance backend acceptance.
 
 The existing `auth` workspace domain/repository remains the owner of preview
 invariants and state. Page composites remain in its renderers; shared

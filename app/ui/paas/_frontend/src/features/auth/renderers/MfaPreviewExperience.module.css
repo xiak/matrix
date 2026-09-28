@@ -22,6 +22,9 @@
 .actions, .flowActions, .loginLinks { display: flex; flex-wrap: wrap; align-items: center; gap: var(--xiak-spacing-tight); }
 .flowActions { justify-content: flex-end; }
 .policyForm > p { margin: -8px 0 0 28px; color: var(--xiak-color-text-muted); line-height: 1.7; }
+.ruleFields { display: grid; min-width: 0; gap: var(--xiak-spacing-default); margin: 0; border: 0; padding: 0; }
+.ruleFields legend { margin-bottom: var(--xiak-spacing-default); color: var(--xiak-color-text-strong); font-weight: var(--xiak-font-weight-medium); }
+.ruleNumber { max-width: 180px; }
 .flowCard { max-width: 920px; }
 .flowTitle { margin: 0 0 4px; color: var(--xiak-color-text-strong); font-size: 16px; line-height: 1.45; }
 .steps { display: grid; grid-template-columns: repeat(4, 1fr); margin: 0; padding: 0; list-style: none; }
