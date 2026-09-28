@@ -25,10 +25,11 @@ func (value *transaction) ReadLoginAuthenticationState(ctx context.Context, acco
 		EnrollmentRequired *bool  `json:"enrollmentRequired"`
 	}
 	if contractjson.DecodeObjectBytes(encoded, 1024, &state) != nil || state.EnrollmentRequired == nil || state.Revision == 0 || state.Revision > 9007199254740991 ||
-		(state.State != "NEVER_BOUND" && state.State != "BOUND" && state.State != "RECOVERY_REQUIRED") ||
+		(state.State != "NEVER_BOUND" && state.State != "REMOVED" && state.State != "BOUND" && state.State != "RECOVERY_REQUIRED") ||
 		(state.State == "NEVER_BOUND" && (state.Revision != 1 || state.FactorID != "")) ||
+		(state.State == "REMOVED" && (state.Revision < 3 || state.FactorID != "")) ||
 		(state.State == "BOUND" && (state.Revision <= 1 || iamv1.ValidateID("factorId", state.FactorID) != nil)) ||
-		(state.State != "NEVER_BOUND" && *state.EnrollmentRequired) {
+		(state.State != "NEVER_BOUND" && state.State != "REMOVED" && *state.EnrollmentRequired) {
 		return identityaccess.LoginAuthenticationState{}, identityaccess.ErrUnavailable
 	}
 	return identityaccess.LoginAuthenticationState{State: state.State, Revision: state.Revision, FactorID: state.FactorID,

@@ -258,7 +258,7 @@ RETURNS jsonb LANGUAGE plpgsql VOLATILE SET search_path=pg_catalog,pg_temp AS $f
 DECLARE receipt iam.bootstrap_receipts%ROWTYPE; account record; entry record;
     prior_tenant text:=current_setting('matrix.iam_tenant_id',true);
     prior_snapshot text:=current_setting('matrix.iam_authentication_snapshot',true);
-    authority_digest bytea:=sha256(convert_to('matrix.iam.authentication-state.v1','UTF8'));
+    authority_digest bytea:=sha256(convert_to('matrix.iam.authentication-state.v2','UTF8'));
     accounts jsonb:='[]'::jsonb; users jsonb; result jsonb; items integer:=0; account_count integer; user_count integer;
 BEGIN
     IF current_user<>'matrix_iam_owner' OR NOT (
@@ -318,6 +318,14 @@ BEGIN
                       AND b.factor_id=f.id AND b.mfa_revision=m.revision AND b.revoked_at IS NULL))))) THEN
             RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='authentication snapshot user qualification is unavailable';
         END IF;
+        -- REMOVED is a proved historical transition, never an inference from
+        -- an absent active factor. Validate every permanent completion even
+        -- after rebinding; pending ceremonies and mutable delivery leases do
+        -- not enter the qualification digest.
+        FOR entry IN SELECT r.id FROM iam.authenticator_removals r
+          WHERE r.tenant_id=account.account_id ORDER BY r.id COLLATE "C" LOOP
+            PERFORM iam.assert_authenticator_removal(account.account_id,entry.id);
+        END LOOP;
         SELECT COALESCE(jsonb_agg(jsonb_build_object('userId',p.id,'factorId',COALESCE(m.factor_id,''),
             'lastConsumedStep',CASE WHEN m.factor_id IS NULL THEN -1 ELSE f.last_consumed_step END,
             'passwordAttempts',CASE WHEN replay.password_window IS NULL THEN NULL ELSE jsonb_build_object(
@@ -363,13 +371,13 @@ BEGIN
             CASE WHEN c.password_hash IS NULL THEN NULL ELSE encode(sha256(convert_to(c.password_hash,'UTF8')),'hex') END)
             FROM iam.principals p LEFT JOIN iam.user_credentials c ON c.tenant_id=p.tenant_id AND c.principal_id=p.id
             WHERE p.tenant_id=account.account_id
-          UNION ALL SELECT 4,m.user_id,'',jsonb_build_array('mfa',m.tenant_id,m.user_id,m.revision,m.enrollment_state,m.factor_id,m.recovery_id)
+          UNION ALL SELECT 4,m.user_id,'',jsonb_build_array('mfa',m.tenant_id,m.user_id,m.revision,m.enrollment_state,m.factor_id,m.recovery_id,m.removal_id)
             FROM iam.user_mfa_states m WHERE m.tenant_id=account.account_id
           UNION ALL SELECT 5,f.id,'',jsonb_build_array('active-factor',f.tenant_id,f.user_id,f.id,f.installation_id,f.key_id,
-            f.format_version,encode(sha256(f.nonce||f.ciphertext),'hex'))
+            f.format_version,encode(sha256(f.nonce||f.ciphertext),'hex'),f.enrollment_revision,f.removal_id)
             FROM iam.totp_authenticators f WHERE f.tenant_id=account.account_id AND f.state='ACTIVE'
           UNION ALL SELECT 6,b.id,'',jsonb_build_array('recovery-batch',b.tenant_id,b.user_id,b.id,b.factor_id,b.mfa_revision,b.event_id,
-            b.revoked_at IS NOT NULL,b.revocation_recovery_id,b.regeneration_id,b.revocation_regeneration_id,b.revocation_replacement_factor_id)
+            b.revoked_at IS NOT NULL,b.revocation_recovery_id,b.regeneration_id,b.revocation_regeneration_id,b.revocation_replacement_factor_id,b.revocation_removal_id)
             FROM iam.mfa_recovery_batches b WHERE b.tenant_id=account.account_id
           UNION ALL SELECT 7,c.user_id,'',jsonb_build_array('contact',c.tenant_id,c.user_id,c.email,c.resource_version,c.verification_id)
             FROM iam.notification_contacts c WHERE c.tenant_id=account.account_id
@@ -399,7 +407,17 @@ BEGIN
           UNION ALL SELECT 18,c.principal_id,'',jsonb_build_array('service-credential',c.tenant_id,c.principal_id,c.purpose,
             c.lookup_digest,c.verification_digest,c.revoked_at IS NOT NULL) FROM iam.service_credentials c WHERE c.tenant_id=account.account_id
           UNION ALL SELECT 19,r.command_id,'',jsonb_build_array('local-recovery',r.tenant_id,r.installation_id,r.primary_principal_id,
-            r.bootstrap_digest,r.command_id,r.input_commitment,r.completed_result) FROM iam.local_credential_recoveries r WHERE r.tenant_id=account.account_id) projection
+            r.bootstrap_digest,r.command_id,r.input_commitment,r.completed_result) FROM iam.local_credential_recoveries r WHERE r.tenant_id=account.account_id
+          UNION ALL SELECT 20,r.id,'',jsonb_build_array('authenticator-removal',r.tenant_id,r.user_id,r.id,r.request_id,
+            r.step_up_id,r.factor_id,r.batch_id,r.previous_revision,r.revision,r.event_id,r.request_digest,r.notification_id,
+            extract(epoch FROM r.created_at),p.source_session_id,p.credential_generation,p.principal_version,
+            extract(epoch FROM p.proved_at),p.verified_step)
+            FROM iam.authenticator_removals r JOIN iam.step_ups p ON p.tenant_id=r.tenant_id AND p.id=r.step_up_id
+            WHERE r.tenant_id=account.account_id
+          UNION ALL SELECT 21,f.id,'',jsonb_build_array('confirmed-rebinding',f.tenant_id,f.user_id,f.id,f.removal_id,
+            f.enrollment_revision,f.bound_revision,f.bound_event_id,extract(epoch FROM f.completed_at))
+            FROM iam.totp_authenticators f WHERE f.tenant_id=account.account_id AND f.removal_id IS NOT NULL
+              AND f.enrollment_outcome='CONFIRMED') projection
           ORDER BY ordinal,key COLLATE "C",subkey COLLATE "C"
         LOOP
             authority_digest:=sha256(authority_digest||convert_to(entry.document::text,'UTF8'));

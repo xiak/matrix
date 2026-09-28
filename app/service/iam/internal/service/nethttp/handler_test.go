@@ -706,6 +706,7 @@ func TestIAMHTTPStepUpUsesOnlySessionAndClosedOperation(t *testing.T) {
 		{"start", "/v1/auth/step-up", `{"requestId":"regenerate-one","operation":"RECOVERY_CODES_REGENERATE","expectedFactorRevision":2}`},
 		{"verify", "/v1/auth/step-up/proof-one:verify", `{"requestId":"verify-one","password":"synthetic-password","code":"malformed-candidate"}`},
 		{"regenerate", "/v1/auth/recovery-codes:regenerate", `{"requestId":"regenerate-one","stepUpId":"proof-one","expectedFactorRevision":2}`},
+		{"remove", "/v1/auth/totp:remove", `{"requestId":"remove-one","stepUpId":"proof-one","expectedFactorRevision":2}`},
 	} {
 		t.Run(command.name, func(t *testing.T) {
 			for _, sample := range []struct {
@@ -747,7 +748,7 @@ func TestIAMHTTPStepUpUsesOnlySessionAndClosedOperation(t *testing.T) {
 			}
 		})
 	}
-	for _, route := range []string{"/v1/auth/step-up/by-request/regenerate-one", "/v1/auth/recovery-codes/regenerations/by-request/regenerate-one"} {
+	for _, route := range []string{"/v1/auth/step-up/by-request/regenerate-one", "/v1/auth/recovery-codes/regenerations/by-request/regenerate-one", "/v1/auth/totp/removals/by-request/remove-one"} {
 		for _, sample := range []struct {
 			method, suffix, body string
 			status               int
@@ -760,6 +761,9 @@ func TestIAMHTTPStepUpUsesOnlySessionAndClosedOperation(t *testing.T) {
 			if strings.Contains(route, "regenerations") {
 				workflow.stepErr = identityaccess.ErrRecoveryCodeRegenerationNotFound
 			}
+			if strings.Contains(route, "removals") {
+				workflow.stepErr = identityaccess.ErrAuthenticatorRemovalNotFound
+			}
 			request := httptest.NewRequest(sample.method, route+sample.suffix, strings.NewReader(sample.body))
 			request.Header.Set("Authorization", "Bearer synthetic-session")
 			response := httptest.NewRecorder()
@@ -767,6 +771,32 @@ func TestIAMHTTPStepUpUsesOnlySessionAndClosedOperation(t *testing.T) {
 			if response.Code != sample.status || (workflow.stepCalls == 1) != (sample.method == "GET" && sample.suffix == "" && sample.body == "") {
 				t.Fatal("read-only original metadata boundary differs", response.Code, workflow.stepCalls)
 			}
+		}
+	}
+}
+
+func TestIAMHTTPRemovalReplayCannotRequestAnotherAuthenticationTransition(t *testing.T) {
+	for _, sample := range []struct {
+		outcome, next string
+		status        int
+	}{
+		{"APPLIED", "REAUTHENTICATE", 200}, {"EQUAL_REPLAY", "", 200},
+		{"APPLIED", "", 503}, {"EQUAL_REPLAY", "REAUTHENTICATE", 503},
+	} {
+		workflow := newHTTPWorkflow(t)
+		workflow.removalResult = iamv1.RemoveTOTPResponse{Outcome: sample.outcome, NextStep: sample.next,
+			Removal: iamv1.AuthenticatorRemoval{APIVersion: iamv1.APIVersion, Kind: "AuthenticatorRemoval", ID: "removal-one",
+				RequestID: "remove-one", FactorID: "factor-one", FactorRevision: 3, RemovedAt: time.Date(2026, 9, 28, 1, 0, 0, 0, time.UTC)}}
+		request := httptest.NewRequest("POST", "/v1/auth/totp:remove", strings.NewReader(`{"requestId":"remove-one","stepUpId":"proof-one","expectedFactorRevision":2}`))
+		request.Header.Set("Authorization", "Bearer synthetic-session")
+		request.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		newTestHandler(t, workflow).ServeHTTP(response, request)
+		if response.Code != sample.status || response.Header().Get("Cache-Control") != "no-store" {
+			t.Fatal("removal result failed open", response.Code)
+		}
+		if sample.outcome == "EQUAL_REPLAY" && strings.Contains(response.Body.String(), "nextStep") {
+			t.Fatal("replay instructed another credential transition")
 		}
 	}
 }
@@ -1351,6 +1381,7 @@ type httpWorkflow struct {
 	stepCredential           iamv1.Secret
 	stepResult               iamv1.StepUp
 	regenerationResult       iamv1.RegenerateRecoveryCodesResponse
+	removalResult            iamv1.RemoveTOTPResponse
 	stepErr                  error
 	getUserCalls             int
 	updateUserCalls          int
@@ -1687,6 +1718,16 @@ func (workflow *httpWorkflow) RecoveryCodeRegenerationByRequest(_ context.Contex
 	workflow.stepCalls++
 	workflow.stepCredential = credential
 	return workflow.regenerationResult.Regeneration, workflow.stepErr
+}
+func (workflow *httpWorkflow) RemoveTOTP(_ context.Context, credential iamv1.Secret, _ iamv1.RemoveTOTPRequest) (iamv1.RemoveTOTPResponse, error) {
+	workflow.stepCalls++
+	workflow.stepCredential = credential
+	return workflow.removalResult, workflow.stepErr
+}
+func (workflow *httpWorkflow) AuthenticatorRemovalByRequest(_ context.Context, credential iamv1.Secret, _ string) (iamv1.AuthenticatorRemoval, error) {
+	workflow.stepCalls++
+	workflow.stepCredential = credential
+	return workflow.removalResult.Removal, workflow.stepErr
 }
 func (workflow *httpWorkflow) StartTOTPEnrollment(context.Context, iamv1.Secret, iamv1.StartTOTPEnrollmentRequest) (iamv1.StartTOTPEnrollmentResponse, error) {
 	workflow.totpCalls++

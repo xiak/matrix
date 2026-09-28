@@ -402,6 +402,7 @@ const (
 	StepUpRegenerateRecoveryCodes StepUpOperation = "RECOVERY_CODES_REGENERATE"
 	StepUpUpdateSecuritySettings  StepUpOperation = "SECURITY_SETTINGS_UPDATE"
 	StepUpReplaceTOTP             StepUpOperation = "TOTP_REPLACE"
+	StepUpRemoveTOTP              StepUpOperation = "TOTP_REMOVE"
 )
 
 // StepUp is non-secret metadata for one operation bound to its original login

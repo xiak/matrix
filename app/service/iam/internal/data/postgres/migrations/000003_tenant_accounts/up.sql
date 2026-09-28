@@ -620,6 +620,7 @@ DECLARE
     proof_tenant text;
     sealed_installation text;
     verifier_id text;
+    removal_id text;
 BEGIN
     PERFORM set_config('matrix.iam_tenant_id',origin_tenant,true);
     SELECT receipt.installation_id INTO sealed_installation FROM iam.bootstrap_receipts AS receipt
@@ -644,6 +645,17 @@ BEGIN
     WHERE credential.tenant_id=origin_tenant AND credential.purpose='INSTALLATION_VERIFIER';
     PERFORM set_config('matrix.iam_tenant_id',proof_tenant,true);
     IF producer_purpose='IAM' THEN
+        -- Select by the committed fact's action, not a caller-selected bypass.
+        -- History must retain the exact completed removal even after its USER
+        -- or source Session is revoked. Never reauthorize today's actor here.
+        SELECT r.id INTO removal_id FROM iam.audit_outbox o
+          LEFT JOIN iam.authenticator_removals r ON r.tenant_id=o.tenant_id AND r.event_id=o.event_id
+          WHERE o.tenant_id=proof_tenant AND o.event_id=event->>'eventId'
+            AND o.event_document->>'action'='iam.authenticator.removed';
+        IF FOUND THEN
+            IF removal_id IS NULL THEN RETURN; END IF;
+            PERFORM iam.assert_authenticator_removal(proof_tenant,removal_id);
+        END IF;
         RETURN QUERY SELECT sealed_installation, outbox.event_document, NULL::jsonb, verifier_id, NULL::integer
         FROM iam.audit_outbox AS outbox WHERE outbox.tenant_id=proof_tenant AND outbox.event_id=event->>'eventId'
           AND (NOT outbox.event_document->'actor' ? 'accessKeyId' OR

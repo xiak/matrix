@@ -55,6 +55,7 @@ type TOTPReplacementStart struct {
 type EnrollmentChallengeInspection struct {
 	State                iamv1.EnrollmentChallengeState `json:"state"`
 	CredentialGeneration uint64                         `json:"credentialGeneration"`
+	FactorRevision       uint64                         `json:"factorRevision"`
 }
 
 func (service *Authority) InspectEnrollmentChallenge(ctx context.Context, id string, request iamv1.InspectEnrollmentChallengeRequest) (iamv1.EnrollmentChallengeState, error) {
@@ -85,6 +86,8 @@ func readEnrollmentChallenge(ctx context.Context, tx Transaction, identity Authe
 		return EnrollmentChallengeInspection{}, err
 	}
 	if result.CredentialGeneration == 0 || result.CredentialGeneration > 9007199254740991 ||
+		result.FactorRevision == 0 || result.FactorRevision == 2 || result.FactorRevision > 9007199254740990 ||
+		(result.State.Enrollment != nil && result.State.Enrollment.FactorRevision != result.FactorRevision) ||
 		iamv1.ValidateEnrollmentChallengeState(result.State) != nil || result.State.Challenge.ID != identity.ID ||
 		result.State.Challenge.Purpose != identity.Purpose || result.State.Challenge.NextStep != identity.NextStep ||
 		(result.State.NotificationContact != nil && (result.State.NotificationContact.AccountID != identity.AccountID ||
@@ -393,7 +396,7 @@ func (service *Authority) StartChallengeTOTPEnrollment(ctx context.Context, id s
 	}
 	defer clear(change.Sealed.Nonce)
 	defer clear(change.Sealed.Ciphertext)
-	change.Challenge, change.RequestID, change.ExpectedRevision = identity, request.RequestID, 1
+	change.Challenge, change.RequestID, change.ExpectedRevision = identity, request.RequestID, inspection.FactorRevision
 	change.IntentDigest, err = digestSanitized("initial-totp-enrollment", struct{ ChallengeID, RequestID string }{id, request.RequestID})
 	if err != nil {
 		return iamv1.StartTOTPEnrollmentResponse{}, err
@@ -404,7 +407,7 @@ func (service *Authority) StartChallengeTOTPEnrollment(ctx context.Context, id s
 		if err != nil {
 			return err
 		}
-		if current != identity || observed.CredentialGeneration != inspection.CredentialGeneration || !observed.State.Challenge.ExpiresAt.Equal(inspection.State.Challenge.ExpiresAt) {
+		if current != identity || observed.CredentialGeneration != inspection.CredentialGeneration || observed.FactorRevision != inspection.FactorRevision || !observed.State.Challenge.ExpiresAt.Equal(inspection.State.Challenge.ExpiresAt) {
 			return ErrUnauthenticated
 		}
 		result, err = tx.StartTOTPEnrollment(ctx, change)

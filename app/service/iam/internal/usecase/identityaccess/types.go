@@ -85,6 +85,8 @@ type Transaction interface {
 	ProveStepUp(context.Context, StepUpVerification) (iamv1.StepUp, error)
 	RegenerateRecoveryCodes(context.Context, RecoveryCodeRegenerationMutation) (RecoveryCodeRegenerationResult, error)
 	ReadRecoveryCodeRegeneration(context.Context, iamv1.Session, string) (iamv1.RecoveryCodeRegeneration, error)
+	RemoveTOTP(context.Context, AuthenticatorRemovalMutation) (iamv1.RemoveTOTPResponse, error)
+	ReadAuthenticatorRemoval(context.Context, iamv1.Session, string) (iamv1.AuthenticatorRemoval, error)
 	CreateLoginChallenge(context.Context, LoginChallengeCreation) (iamv1.AuthenticationChallenge, error)
 	LookupAuthenticationChallenge(context.Context, string) (AuthenticationChallengeCredential, bool, error)
 	ReserveTOTPAttempt(context.Context, TOTPAttempt) (TOTPAttempt, bool, error)

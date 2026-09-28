@@ -6,7 +6,7 @@ import (
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 )
 
-const SchemaVersion uint64 = 26
+const SchemaVersion uint64 = 27
 
 func (service *Service) Readiness(ctx context.Context) (auditv1.Readiness, error) {
 	var snapshot ReadinessSnapshot

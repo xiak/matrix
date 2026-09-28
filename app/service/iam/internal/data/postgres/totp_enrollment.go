@@ -61,11 +61,12 @@ func (value *transaction) ReadEnrollmentChallenge(ctx context.Context, identity 
 			Enrollment          *iamv1.TOTPEnrollment         `json:"enrollment,omitempty"`
 		} `json:"state"`
 		CredentialGeneration uint64 `json:"credentialGeneration"`
+		FactorRevision       uint64 `json:"factorRevision"`
 	}
 	if contractjson.DecodeObjectBytes(encoded, 8192, &stored) != nil {
 		return identityaccess.EnrollmentChallengeInspection{}, identityaccess.ErrUnavailable
 	}
-	result := identityaccess.EnrollmentChallengeInspection{CredentialGeneration: stored.CredentialGeneration,
+	result := identityaccess.EnrollmentChallengeInspection{CredentialGeneration: stored.CredentialGeneration, FactorRevision: stored.FactorRevision,
 		State: iamv1.EnrollmentChallengeState{Challenge: stored.State.Challenge,
 			NotificationContact: stored.State.NotificationContact, Enrollment: stored.State.Enrollment}}
 	result.State.Challenge.ExpiresAt = result.State.Challenge.ExpiresAt.UTC()
@@ -81,6 +82,8 @@ func (value *transaction) ReadEnrollmentChallenge(ctx context.Context, identity 
 		}
 	}
 	if result.CredentialGeneration == 0 || result.CredentialGeneration > 9007199254740991 ||
+		result.FactorRevision == 0 || result.FactorRevision == 2 || result.FactorRevision > 9007199254740990 ||
+		(result.State.Enrollment != nil && result.State.Enrollment.FactorRevision != result.FactorRevision) ||
 		iamv1.ValidateEnrollmentChallengeState(result.State) != nil || result.State.Challenge.ID != identity.ID ||
 		result.State.Challenge.Purpose != identity.Purpose || result.State.Challenge.NextStep != identity.NextStep ||
 		(result.State.NotificationContact != nil && (result.State.NotificationContact.AccountID != identity.AccountID || result.State.NotificationContact.UserID != identity.UserID)) {
@@ -101,7 +104,8 @@ func (value *transaction) StartTOTPEnrollment(ctx context.Context, mutation iden
 		}
 		attemptID, attemptSequence = mutation.Attempt.ID, mutation.Attempt.Sequence
 	} else {
-		if mutation.Challenge.Purpose != "ENROLLMENT" || mutation.Challenge.NextStep != "ENROLLMENT" || mutation.ExpectedRevision != 1 ||
+		if mutation.Challenge.Purpose != "ENROLLMENT" || mutation.Challenge.NextStep != "ENROLLMENT" ||
+			mutation.ExpectedRevision == 0 || mutation.ExpectedRevision == 2 || mutation.ExpectedRevision > 9007199254740990 ||
 			mutation.Attempt.ID != "" || mutation.Attempt.Sequence != 0 || mutation.Attempt.Purpose != "" || caller != "" || account != "" || user != "" {
 			return identityaccess.TOTPEnrollmentStartResult{}, identityaccess.ErrInvalidArgument
 		}

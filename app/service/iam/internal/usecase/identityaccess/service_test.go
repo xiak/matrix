@@ -91,7 +91,7 @@ func TestEnrollmentInspectionRequiresExactCeremonyAndPrivateSubject(t *testing.T
 		t.Run(step, func(t *testing.T) {
 			tx.challengeCredential = AuthenticationChallengeCredential{AccountID: tx.organization.ID, UserID: tx.principal.ID,
 				ID: "first-enrollment", Purpose: "ENROLLMENT", NextStep: step, VerificationDigest: issued.VerificationDigest}
-			original := EnrollmentChallengeInspection{CredentialGeneration: 1, State: iamv1.EnrollmentChallengeState{
+			original := EnrollmentChallengeInspection{CredentialGeneration: 1, FactorRevision: 1, State: iamv1.EnrollmentChallengeState{
 				Challenge: iamv1.AuthenticationChallenge{APIVersion: iamv1.APIVersion, Kind: "AuthenticationChallenge", ID: "first-enrollment",
 					Purpose: "ENROLLMENT", NextStep: step, ExpiresAt: tx.now.Add(5 * time.Minute)}}}
 			contact := iamv1.NotificationContact{APIVersion: iamv1.APIVersion, Kind: "NotificationContact", AccountID: tx.organization.ID,
@@ -389,6 +389,80 @@ func TestPasswordWorkHasNoQueueAndPrivateAttemptsCannotSerialize(t *testing.T) {
 	attempt := PasswordAttempt{PasswordHash: authority.PasswordHash("private-verifier")}
 	if encoded, err := json.Marshal(attempt); err == nil || strings.Contains(string(encoded), "private-verifier") || strings.Contains(fmt.Sprintf("%+v %#v", attempt, attempt), "private-verifier") {
 		t.Fatal("private attempt exposed the verifier")
+	}
+}
+
+func TestTOTPRemovalWorkflowKeepsCallerAndDoesNotExposeUncertainCompletion(t *testing.T) {
+	tx := newCoreTransaction()
+	repository := &coreRepository{transaction: tx}
+	mail := iamv1.EmailVerificationKeyring{APIVersion: iamv1.APIVersion, Kind: "EmailVerificationKeyring", Purpose: iamv1.EmailVerificationWrappingPurpose,
+		Scope:          iamv1.SecurityMailInstallationScope{InstallationID: coreTOTPKeyring().Scope.InstallationID, BootstrapDigest: coreTOTPKeyring().Scope.BootstrapDigest},
+		KeysetRevision: 1, ActiveKeyID: "mail-test", Keys: []iamv1.EmailVerificationWrappingKey{{KeyID: "mail-test", FormatVersion: 1,
+			KeyMaterial: coreSecret(t, base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x37}, 32)))}}}
+	service, err := newCoreAuthority(repository, Config{EmailVerificationKeyring: &mail})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registration := service.email.Registration()
+	tx.emailKeyset = &registration
+	bootstrap := coreBootstrap(t)
+	if _, err := service.Bootstrap(t.Context(), bootstrap); err != nil {
+		t.Fatal(err)
+	}
+	login, err := service.Login(t.Context(), iamv1.LoginRequest{LoginName: "admin", Password: bootstrap.Administrator.Password, RequestID: "remove-login"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.ChangePassword(t.Context(), login.Credential, iamv1.ChangePasswordRequest{CurrentPassword: bootstrap.Administrator.Password,
+		NewPassword: coreSecret(t, "Removal-Current-Password-92!"), RequestID: "remove-initial-password"}); err != nil {
+		t.Fatal(err)
+	}
+	request := iamv1.RemoveTOTPRequest{RequestID: "remove-original", StepUpID: "remove-proof", ExpectedFactorRevision: 2}
+	// This fake proves workflow/port checks, not database eligibility. Protected
+	// identities, proof consumption and rollback are exercised with real PG.
+	for _, scenario := range []string{"applied", "replay", "wrong-request", "wrong-revision", "wrong-id", "replay-transition", "storage-denied", "unknown-commit"} {
+		t.Run(scenario, func(t *testing.T) {
+			repository.afterTransaction = nil
+			tx.removalEffect = func(mutation AuthenticatorRemovalMutation) (iamv1.RemoveTOTPResponse, error) {
+				if !repository.inTransaction || mutation.Session.ID != login.Session.ID || mutation.Request != request ||
+					mutation.AuditEvent.Action != auditv1.ActionIAMAuthenticatorRemoved || mutation.AuditEvent.Actor.Type != auditv1.ActorUser ||
+					string(mutation.AuditEvent.Actor.ID) != string(login.Session.PrincipalID) || mutation.AuditEvent.Target.ID != string(login.Session.PrincipalID) ||
+					string(mutation.AuditEvent.TenantID) != string(login.Session.AccountID) || mutation.AuditEvent.RequestID != request.RequestID {
+					t.Fatal("removal changed the actual authenticated subject or command")
+				}
+				result := iamv1.RemoveTOTPResponse{Outcome: "APPLIED", NextStep: "REAUTHENTICATE", Removal: iamv1.AuthenticatorRemoval{
+					APIVersion: iamv1.APIVersion, Kind: "AuthenticatorRemoval", ID: mutation.ID, RequestID: request.RequestID,
+					FactorID: "factor-original", FactorRevision: 3, RemovedAt: tx.now}}
+				switch scenario {
+				case "replay":
+					result.Outcome, result.NextStep, result.Removal.ID = "EQUAL_REPLAY", "", "old-completion"
+				case "wrong-request":
+					result.Removal.RequestID = "other-command"
+				case "wrong-revision":
+					result.Removal.FactorRevision = 4
+				case "wrong-id":
+					result.Removal.ID = "other-completion"
+				case "replay-transition":
+					result.Outcome = "EQUAL_REPLAY"
+				case "storage-denied":
+					return result, ErrUnauthenticated
+				}
+				return result, nil
+			}
+			if scenario == "unknown-commit" {
+				repository.afterTransaction = func(error) error { return ErrUnavailable }
+			}
+			result, err := service.RemoveTOTP(t.Context(), login.Credential, request)
+			want := error(ErrUnavailable)
+			if scenario == "applied" || scenario == "replay" {
+				want = nil
+			} else if scenario == "storage-denied" {
+				want = ErrUnauthenticated
+			}
+			if !errors.Is(err, want) || (want != nil && result != (iamv1.RemoveTOTPResponse{})) || (want == nil && iamv1.ValidateRemoveTOTPResponse(result) != nil) {
+				t.Fatal("untrusted or uncertain removal was disclosed", err)
+			}
+		})
 	}
 }
 
@@ -1957,6 +2031,7 @@ type coreTransaction struct {
 	stepUpStartResult        iamv1.StepUp
 	emailKeyset              *authority.EmailVerificationKeyset
 	replacementStart         func(TOTPReplacementStart) (TOTPEnrollmentStartResult, error)
+	removalEffect            func(AuthenticatorRemovalMutation) (iamv1.RemoveTOTPResponse, error)
 	replacementCalls         int
 	totpReservations         []TOTPAttempt
 	denyTOTPReservation      bool
@@ -2009,6 +2084,10 @@ func (transaction *coreTransaction) StartTOTPReplacement(_ context.Context, muta
 		return TOTPEnrollmentStartResult{}, ErrUnavailable
 	}
 	return transaction.replacementStart(mutation)
+}
+
+func (transaction *coreTransaction) RemoveTOTP(_ context.Context, mutation AuthenticatorRemovalMutation) (iamv1.RemoveTOTPResponse, error) {
+	return transaction.removalEffect(mutation)
 }
 
 func (transaction *coreTransaction) ReserveTOTPAttempt(_ context.Context, attempt TOTPAttempt) (TOTPAttempt, bool, error) {

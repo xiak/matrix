@@ -604,6 +604,8 @@ func TestRecoveryCodeRegenerationReplaysOnlyNonSecretCompletion(t *testing.T) {
 }
 
 func FuzzStepUpContractRoundTrip(f *testing.F) {
+	f.Add(uint8(0), `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"StepUp","id":"proof-a","requestId":"remove-a","operation":"TOTP_REMOVE","expectedFactorRevision":2,"state":"PENDING","createdAt":"2026-09-21T12:00:00Z","expiresAt":"2026-09-21T12:02:00Z"}`)
+	f.Add(uint8(1), `{"requestId":"remove-a","operation":"TOTP_REMOVE","expectedFactorRevision":2}`)
 	f.Add(uint8(0), `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"StepUp","id":"proof-a","requestId":"regenerate-a","operation":"RECOVERY_CODES_REGENERATE","expectedFactorRevision":2,"state":"PENDING","createdAt":"2026-09-21T12:00:00Z","expiresAt":"2026-09-21T12:02:00Z"}`)
 	f.Add(uint8(1), `{"requestId":"regenerate-a","operation":"RECOVERY_CODES_REGENERATE","expectedFactorRevision":2}`)
 	f.Add(uint8(0), `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"StepUp","id":"proof-a","requestId":"settings-a","operation":"SECURITY_SETTINGS_UPDATE","expectedFactorRevision":2,"securitySettings":{"expectedResourceVersion":1,"mfa":{"requiredForUsers":false}},"state":"PENDING","createdAt":"2026-09-21T12:00:00Z","expiresAt":"2026-09-21T12:02:00Z"}`)

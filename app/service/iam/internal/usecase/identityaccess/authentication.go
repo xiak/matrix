@@ -70,8 +70,8 @@ func (service *Authority) Login(
 		case "BOUND", "RECOVERY_REQUIRED":
 			response, err = service.createLoginChallenge(transactionContext, transaction, attempt, state, request.RequestID, requestDigest)
 			return err
-		case "NEVER_BOUND":
-			if state.Revision != 1 || state.FactorID != "" {
+		case "NEVER_BOUND", "REMOVED":
+			if state.FactorID != "" || (state.State == "NEVER_BOUND" && state.Revision != 1) || (state.State == "REMOVED" && state.Revision < 3) {
 				return ErrUnavailable
 			}
 			if state.EnrollmentRequired {

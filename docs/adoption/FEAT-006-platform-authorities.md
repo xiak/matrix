@@ -886,6 +886,17 @@ an account setting as protected-credential recovery authority is `REJECT`.
 This is a design-source review, not implementation, a new schema allocation,
 an installation edit window or signed compatibility evidence.
 
+For the removal slice's single retained predecessor, `REFERENCE` fixed
+`42035189eb823e388509f54525889c1a18c6b79d` (IAM45): its actual backup-custody
+and authentication-recovery executables produce the original qualification,
+snapshot, closure and completion. `REUSE` their existing private file codecs,
+dedicated roles and exact completed replay; `ADAPT` the existing one-window
+process gate to the new removal provenance and qualification projection.
+`REJECT` keeping the superseded IAM44 snapshot-free fixture, manufacturing
+old positive receipts, rewriting an old snapshot, or treating retained
+completion lookup as new recovery authority. This source experiment does
+not grant signed cross-profile installation compatibility.
+
 The current-security recovery target in IAM/009 `REUSE`s fixed
 `e24dbdae6b4ea420365a4527a0bd89b16e0d720f`'s purpose-limited
 close/reconcile/reopen entrypoint, dedicated database role, exclusive recovery

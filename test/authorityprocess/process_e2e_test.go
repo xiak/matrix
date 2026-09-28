@@ -106,9 +106,9 @@ func TestRuntimeDSNBindsLeastPrivilegeLogin(t *testing.T) {
 func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	const variable = "MATRIX_IAM_PREDECESSOR_POSTGRES_TEST_DSN"
 	const databasePrefix = "matrix_iam_upgrade_predecessor_"
-	const source = "e24dbdae6b4ea420365a4527a0bd89b16e0d720f"
-	const sourceSchema uint64 = 44
-	const currentSchema uint64 = 45
+	const source = "42035189eb823e388509f54525889c1a18c6b79d"
+	const sourceSchema uint64 = 45
+	const currentSchema uint64 = 46
 	dsn := os.Getenv(variable)
 	if dsn == "" {
 		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", variable)
@@ -322,9 +322,9 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		 'users',(SELECT jsonb_agg(jsonb_build_array(tenant_id,id,status,must_change_password,resource_version) ORDER BY tenant_id,id) FROM iam.principals),
 		 'attachments',(SELECT jsonb_agg(jsonb_build_array(tenant_id,id,target_id,policy_id,authority_scope,installation_id,resource_version,revoked_at) ORDER BY tenant_id,id) FROM iam.policy_attachments),
 		 'selfCompletions',(SELECT jsonb_agg(to_jsonb(r) ORDER BY tenant_id,user_id,request_id) FROM iam.session_self_revocations r),
-		 'factors',(SELECT jsonb_agg(to_jsonb(f) ORDER BY tenant_id,id) FROM iam.totp_authenticators f),
-		 'mfaStates',(SELECT jsonb_agg(to_jsonb(m) ORDER BY tenant_id,user_id) FROM iam.user_mfa_states m),
-		 'batches',(SELECT jsonb_agg(to_jsonb(b) ORDER BY tenant_id,id) FROM iam.mfa_recovery_batches b),
+		 'factors',(SELECT jsonb_agg(to_jsonb(f)-'removal_id' ORDER BY tenant_id,id) FROM iam.totp_authenticators f),
+		 'mfaStates',(SELECT jsonb_agg(to_jsonb(m)-'removal_id' ORDER BY tenant_id,user_id) FROM iam.user_mfa_states m),
+		 'batches',(SELECT jsonb_agg(to_jsonb(b)-'revocation_removal_id' ORDER BY tenant_id,id) FROM iam.mfa_recovery_batches b),
 		 'codes',(SELECT jsonb_agg(to_jsonb(c) ORDER BY tenant_id,id) FROM iam.mfa_recovery_codes c),
 		 'recoveries',(SELECT jsonb_agg(to_jsonb(r) ORDER BY tenant_id,id) FROM iam.authenticator_recoveries r),
 		 'challenges',(SELECT jsonb_agg(to_jsonb(c) ORDER BY tenant_id,id) FROM iam.authentication_challenges c),
@@ -377,12 +377,13 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	}
 	if err := admin.QueryRow(ctx, `SELECT (SELECT is_called FROM public.iam_predecessor_fault_seen)
 	 AND (SELECT schema_version=$1 FROM iam.readiness())
-	 AND NOT EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid='iam.authentication_recovery_closures'::regclass
-	 AND attname='security_snapshot_document' AND NOT attisdropped)
-	 AND to_regclass('iam.authentication_recovery_attempt_floors') IS NULL
-	 AND to_regprocedure('iam.prepare_authentication_recovery_close(jsonb,text)') IS NULL
-	 AND to_regprocedure('iam.reopen_authentication_recovery(jsonb,text,jsonb)') IS NOT NULL
-	 AND to_regprocedure('iam.reopen_authentication_recovery(jsonb,text,jsonb,jsonb)') IS NULL`, sourceSchema).Scan(&untouched); err != nil || !untouched ||
+	 AND to_regclass('iam.authenticator_removals') IS NULL
+	 AND NOT EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid='iam.user_mfa_states'::regclass
+	 AND attname='removal_id' AND NOT attisdropped)
+	 AND to_regprocedure('iam.remove_totp_authenticator(text,text,text,text,text,bigint,text,text,jsonb)') IS NULL
+	 AND iam.authentication_recovery_contract_ready()
+	 AND to_regprocedure('iam.prepare_authentication_recovery_close(jsonb,text)') IS NOT NULL
+	 AND to_regprocedure('iam.reopen_authentication_recovery(jsonb,text,jsonb,jsonb)') IS NOT NULL`, sourceSchema).Scan(&untouched); err != nil || !untouched ||
 		!bytes.Equal(originalState, identityState()) || !bytes.Equal(originalMail, mailState()) {
 		t.Fatal("failed cutover partially changed retained authority")
 	}
@@ -400,7 +401,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		}
 	}
 	var shape bool
-	if err := admin.QueryRow(ctx, `SELECT schema_version=45 AND iam.account_security_settings_contract_ready() AND iam.login_session_contract_ready() AND iam.password_attempt_contract_ready()
+	if err := admin.QueryRow(ctx, `SELECT schema_version=46 AND iam.account_security_settings_contract_ready() AND iam.login_session_contract_ready() AND iam.password_attempt_contract_ready()
 	 AND iam.authentication_recovery_contract_ready()
 	 AND to_regprocedure('iam.close_authentication_recovery(jsonb,text,jsonb)') IS NULL
 	 AND to_regprocedure('iam.close_authentication_recovery(jsonb,text,jsonb,jsonb,text)') IS NOT NULL
@@ -409,6 +410,12 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	 AND to_regprocedure('iam.reopen_authentication_recovery(jsonb,text,jsonb)') IS NULL
 	 AND to_regprocedure('iam.reopen_authentication_recovery(jsonb,text,jsonb,jsonb)') IS NOT NULL
 	 AND iam.totp_authentication_contract_ready()
+	 AND to_regprocedure('iam.remove_totp_authenticator(text,text,text,text,text,bigint,text,text,jsonb)') IS NOT NULL
+	 AND to_regprocedure('iam.read_authenticator_removal(text,text,text,text)') IS NOT NULL
+	 AND NOT EXISTS(SELECT 1 FROM iam.authenticator_removals)
+	 AND NOT EXISTS(SELECT 1 FROM iam.user_mfa_states WHERE removal_id IS NOT NULL OR enrollment_state='REMOVED')
+	 AND NOT EXISTS(SELECT 1 FROM iam.totp_authenticators WHERE removal_id IS NOT NULL)
+	 AND NOT EXISTS(SELECT 1 FROM iam.mfa_recovery_batches WHERE revocation_removal_id IS NOT NULL)
 	 AND to_regprocedure('iam.start_totp_replacement(text,text,text,text,text,bigint,text,text,text,text,bytea,bytea)') IS NOT NULL
 	 AND NOT EXISTS(SELECT 1 FROM iam.totp_authenticators WHERE replacement_step_up_id IS NOT NULL OR replacement_contact_revision IS NOT NULL)
 	 AND NOT EXISTS(SELECT 1 FROM iam.mfa_recovery_batches WHERE revocation_replacement_factor_id IS NOT NULL)
@@ -613,7 +620,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	proveFrozenFamilyProfileAdvance(t, ctx, admin, root, temporary, endpoint, primary.Credential, a.Credential,
 		migrationEnvironment, func(binary string) *childProcess { return start(binary, currentSchema) }, current, profileFact)
 	current.stop()
-	t.Logf("actual IAM%d -> IAM%d migrator/runtime retained original Session/Challenge qualification; factor replacement/recovery, forced bulk reduction, shared attempts, exact replay, original receipt/canonical/proof and restart; no release compatibility claim", sourceSchema, currentSchema)
+	t.Logf("actual IAM%d -> IAM%d migrator/runtime retained original Session/Challenge qualification; factor removal/rebind/recovery, forced bulk reduction, shared attempts, exact replay, original receipt/canonical/proof and restart; no release compatibility claim", sourceSchema, currentSchema)
 }
 
 func provePredecessorAuthenticationRecovery(t *testing.T, ctx context.Context, root, baseline, temporary string, config *pgx.ConnConfig, installationID string) {
@@ -631,7 +638,7 @@ func provePredecessorAuthenticationRecovery(t *testing.T, ctx context.Context, r
 	suffix := sha256.Sum256([]byte(config.Database))
 	var databases []*pgx.Conn
 	var configs []*pgx.ConnConfig
-	for _, scope := range []string{"source", "target"} {
+	for _, scope := range []string{"source", "target", "unreconciled"} {
 		name := "matrix_iam_old_recovery_" + scope + "_" + hex.EncodeToString(suffix[:10])
 		if _, err := control.Exec(ctx, "CREATE DATABASE "+pgx.Identifier{name}.Sanitize()+" TEMPLATE "+pgx.Identifier{config.Database}.Sanitize()); err != nil {
 			t.Fatal("copy quiescent predecessor database", err)
@@ -654,14 +661,22 @@ func provePredecessorAuthenticationRecovery(t *testing.T, ctx context.Context, r
 	}
 	oldBinary := buildAuthorityBinary(t, ctx, baseline, temporary, "predecessor-private-recovery", "./app/service/iam/cmd/matrix-iam-authentication-recovery")
 	currentBinary := buildAuthorityBinary(t, ctx, root, temporary, "current-private-recovery", "./app/service/iam/cmd/matrix-iam-authentication-recovery")
+	backupBinary := buildAuthorityBinary(t, ctx, baseline, temporary, "predecessor-backup-custody", "./app/service/iam/cmd/matrix-iam-backup-custody")
+	backupDSN := writeProtectedFile(t, temporary, "predecessor-backup-dsn", []byte(runtimeDSN(t, configs[0], "matrix_iam_backup_custody_login", processDBPassword)))
+	backupProcess, lease := startTOTPBackupProcess(t, ctx, baseline, backupBinary, backupDSN)
+	if lease.Custody.InstallationID != installationID || lease.AuthenticationStateDigest == "" ||
+		backupProcess.finish(t, installationv1.TOTPBackupCustodyReleaseFrame) != installationv1.TOTPBackupCustodyExitSuccess {
+		t.Fatal("actual predecessor did not issue its original bounded security qualification")
+	}
 	// This is retained executable/receipt evidence, not a signed backup or
 	// cross-profile release admission. The release commitments are fixtures.
 	intent := installationv1.AuthenticationRecoveryIntent{
 		APIVersion: installationv1.AuthenticationRecoveryAPIVersion, Kind: installationv1.AuthenticationRecoveryIntentKind,
 		Purpose: installationv1.AuthenticationRecoveryPurpose, InstallationID: installationID, Epoch: 1,
 		CommandID: "cmd-" + strings.Repeat("7", 32), BackupID: "backup-" + strings.Repeat("8", 32),
-		BackupDigest: "sha256:" + strings.Repeat("9", 64), TOTPCustodyDigest: "sha256:" + strings.Repeat("a", 64),
-		SourceReleaseID: "matrix-v0.0.0-retained-source-0123456789ab", SourceReleaseDigest: "sha256:" + strings.Repeat("b", 64),
+		BackupDigest: "sha256:" + strings.Repeat("9", 64), TOTPCustodyDigest: lease.CustodyDigest,
+		AuthenticationStateDigest: lease.AuthenticationStateDigest,
+		SourceReleaseID:           "matrix-v0.0.0-retained-source-0123456789ab", SourceReleaseDigest: "sha256:" + strings.Repeat("b", 64),
 		TargetReleaseID: "matrix-v0.0.0-retained-target-0123456789ab", TargetReleaseDigest: "sha256:" + strings.Repeat("c", 64),
 	}
 	encodedIntent, err := installationv1.EncodeAuthenticationRecoveryIntent(intent)
@@ -674,22 +689,32 @@ func provePredecessorAuthenticationRecovery(t *testing.T, ctx context.Context, r
 		dsnFiles[index] = installationv1.AuthenticationRecoveryDatabaseDSNFileEnvironment + "=" + writeProtectedFile(t, temporary,
 			fmt.Sprintf("predecessor-recovery-dsn-%d", index), []byte(runtimeDSN(t, copyConfig, "matrix_iam_authentication_recovery_login", processDBPassword)))
 	}
-	closureBytes := invokeAuthenticationRecoveryProcess(t, ctx, baseline, oldBinary, "close", []string{dsnFiles[0], intentFile}, 0)
-	closure, err := installationv1.DecodeAuthenticationRecoveryClosure(bytes.NewReader(closureBytes))
-	if err != nil || closure.SecuritySnapshotDigest != "" || closure.CommandID != intent.CommandID {
-		t.Fatal("predecessor did not issue its own snapshot-free closure")
+	envelopeBytes := invokeAuthenticationRecoveryProcess(t, ctx, baseline, oldBinary, "close", []string{dsnFiles[0], intentFile}, 0)
+	envelope, err := installationv1.DecodeAuthenticationRecoveryClosureEnvelope(bytes.NewReader(envelopeBytes))
+	if err != nil || installationv1.ValidateAuthenticationRecoveryClosureEnvelopeForIntent(envelope, intent, lease.Custody.BootstrapDigest) != nil {
+		t.Fatal("predecessor did not issue its original snapshot and closure")
+	}
+	closure := envelope.Closure
+	closureBytes, err := installationv1.EncodeAuthenticationRecoveryClosure(closure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshotBytes, err := installationv1.EncodeAuthenticationRecoverySecuritySnapshot(envelope.SecuritySnapshot)
+	if err != nil {
+		t.Fatal(err)
 	}
 	closureDigest, err := installationv1.AuthenticationRecoveryClosureDigest(closure)
 	if err != nil {
 		t.Fatal(err)
 	}
 	closureFile := installationv1.AuthenticationRecoveryClosureFileEnvironment + "=" + writeProtectedFile(t, temporary, "predecessor-recovery-closure", closureBytes)
-	if result := invokeAuthenticationRecoveryProcess(t, ctx, baseline, oldBinary, "reconcile", []string{dsnFiles[1], closureFile}, 0); !bytes.Equal(result, closureBytes) {
+	snapshotFile := installationv1.AuthenticationRecoverySecuritySnapshotFileEnvironment + "=" + writeProtectedFile(t, temporary, "predecessor-recovery-snapshot", snapshotBytes)
+	if result := invokeAuthenticationRecoveryProcess(t, ctx, baseline, oldBinary, "reconcile", []string{dsnFiles[1], closureFile, snapshotFile}, 0); !bytes.Equal(result, closureBytes) {
 		t.Fatal("predecessor reconciliation changed its source closure")
 	}
-	completionBytes := invokeAuthenticationRecoveryProcess(t, ctx, baseline, oldBinary, "reopen", []string{dsnFiles[1], closureFile}, 0)
+	completionBytes := invokeAuthenticationRecoveryProcess(t, ctx, baseline, oldBinary, "reopen", []string{dsnFiles[1], closureFile, snapshotFile}, 0)
 	completion, err := installationv1.DecodeAuthenticationRecoveryCompletion(bytes.NewReader(completionBytes))
-	if err != nil || completion.SecuritySnapshotDigest != "" || completion.ClosureDigest != closureDigest {
+	if err != nil || completion.SecuritySnapshotDigest != closure.SecuritySnapshotDigest || completion.ClosureDigest != closureDigest {
 		t.Fatal("predecessor did not commit its original completion")
 	}
 	history := func(database *pgx.Conn) []byte {
@@ -697,12 +722,13 @@ func provePredecessorAuthenticationRecovery(t *testing.T, ctx context.Context, r
 		var encoded []byte
 		if err := database.QueryRow(ctx, `SELECT jsonb_build_object(
 		 'state',(SELECT to_jsonb(s) FROM iam.authentication_recovery_state s),
-		 'closures',(SELECT jsonb_agg(to_jsonb(c)-'security_snapshot_document' ORDER BY command_id) FROM iam.authentication_recovery_closures c),
+		 'closures',(SELECT jsonb_agg(to_jsonb(c) ORDER BY command_id) FROM iam.authentication_recovery_closures c),
 		 'reconciliations',(SELECT jsonb_agg(to_jsonb(r) ORDER BY command_id) FROM iam.authentication_recovery_reconciliations r),
 		 'completions',(SELECT jsonb_agg(to_jsonb(c) ORDER BY command_id) FROM iam.authentication_recovery_completions c),
+		 'floors',(SELECT jsonb_agg(to_jsonb(f) ORDER BY tenant_id,user_id) FROM iam.authentication_recovery_attempt_floors f),
 		 'credentials',(SELECT jsonb_agg(to_jsonb(c) ORDER BY tenant_id,principal_id) FROM iam.user_credentials c),
 		 'sessions',(SELECT jsonb_agg(to_jsonb(s) ORDER BY tenant_id,id) FROM iam.sessions s),
-		 'factors',(SELECT jsonb_agg(to_jsonb(f) ORDER BY tenant_id,id) FROM iam.totp_authenticators f),
+		 'factors',(SELECT jsonb_agg(to_jsonb(f)-'removal_id' ORDER BY tenant_id,id) FROM iam.totp_authenticators f),
 		 'facts',(SELECT jsonb_agg(event_document ORDER BY event_id) FROM iam.audit_outbox))`).Scan(&encoded); err != nil {
 			t.Fatal("read original private recovery history")
 		}
@@ -721,12 +747,11 @@ func provePredecessorAuthenticationRecovery(t *testing.T, ctx context.Context, r
 				t.Fatal("finish rejected closed-source migration")
 			}
 			var closed bool
-			if err := database.QueryRow(ctx, `SELECT schema_version=44 AND NOT ready
-			 AND NOT EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid='iam.authentication_recovery_closures'::regclass
-			 AND attname='security_snapshot_document' AND NOT attisdropped)
-			 AND to_regclass('iam.authentication_recovery_attempt_floors') IS NULL
-			 AND to_regprocedure('iam.reopen_authentication_recovery(jsonb,text,jsonb)') IS NOT NULL
-			 AND to_regprocedure('iam.reopen_authentication_recovery(jsonb,text,jsonb,jsonb)') IS NULL
+			if err := database.QueryRow(ctx, `SELECT schema_version=45 AND NOT ready
+			 AND to_regclass('iam.authenticator_removals') IS NULL
+			 AND EXISTS(SELECT 1 FROM iam.authentication_recovery_closures WHERE security_snapshot_document IS NOT NULL)
+			 AND to_regclass('iam.authentication_recovery_attempt_floors') IS NOT NULL
+			 AND to_regprocedure('iam.reopen_authentication_recovery(jsonb,text,jsonb,jsonb)') IS NOT NULL
 			 FROM iam.readiness()`).Scan(&closed); err != nil || !closed || !bytes.Equal(original, history(database)) {
 				t.Fatal("failed closed-source migration changed authority or historical receipt", err)
 			}
@@ -742,34 +767,35 @@ func provePredecessorAuthenticationRecovery(t *testing.T, ctx context.Context, r
 		}
 		var unchanged bool
 		if err := database.QueryRow(ctx, `SELECT
-		 (SELECT count(*)=1 AND bool_and(security_snapshot_document IS NULL AND NOT closure_document ? 'securitySnapshotDigest') FROM iam.authentication_recovery_closures)
-		 AND NOT EXISTS(SELECT 1 FROM iam.authentication_recovery_attempt_floors)
-		 AND (SELECT schema_version=45 FROM iam.readiness())
-		 AND (SELECT state=$1 AND epoch=1 FROM iam.authentication_recovery_state)`, []string{"CLOSED", "OPEN"}[index]).Scan(&unchanged); err != nil || !unchanged || !bytes.Equal(original, history(database)) {
+		 (SELECT schema_version=46 AND ready FROM iam.readiness())
+		 AND NOT EXISTS(SELECT 1 FROM iam.authenticator_removals)
+		 AND (SELECT state='OPEN' AND epoch=$1 FROM iam.authentication_recovery_state)`, 2-index).Scan(&unchanged); err != nil || !unchanged || !bytes.Equal(original, history(database)) {
 			t.Fatal("migration altered historical receipts or invented recovery qualification", err)
 		}
-		invokeAuthenticationRecoveryProcess(t, ctx, root, currentBinary, "close", []string{dsnFiles[index], intentFile}, installationv1.AuthenticationRecoveryExitInvalid)
+		invokeAuthenticationRecoveryProcess(t, ctx, root, currentBinary, "close", []string{dsnFiles[index], intentFile}, installationv1.AuthenticationRecoveryExitConflict)
 		for _, mode := range []string{"reconcile", "reopen"} {
-			invokeAuthenticationRecoveryProcess(t, ctx, root, currentBinary, mode, []string{dsnFiles[index], closureFile}, installationv1.AuthenticationRecoveryExitInvalid)
-		}
-		// The original binary cannot execute its removed SQL ABI either. This
-		// negative check is not an assertion of N-1 runtime compatibility.
-		invokeAuthenticationRecoveryProcess(t, ctx, baseline, oldBinary, "reopen", []string{dsnFiles[index], closureFile}, installationv1.AuthenticationRecoveryExitUnavailable)
-		privateConfig := configs[index].Copy()
-		privateConfig.User, privateConfig.Password = "matrix_iam_authentication_recovery_login", processDBPassword
-		privateConfig.RuntimeParams["default_transaction_isolation"] = "serializable"
-		private, err := pgx.ConnectConfig(ctx, privateConfig)
-		if err != nil {
-			t.Fatal("connect exact retained recovery role")
-		}
-		_, rejected := private.Exec(ctx, "SELECT iam.reopen_authentication_recovery($1::jsonb,$2,'{}'::jsonb,NULL)", string(closureBytes), closureDigest)
-		_ = private.Close(ctx)
-		var databaseError *pgconn.PgError
-		if !errors.As(rejected, &databaseError) || databaseError.Code != "22023" || !bytes.Equal(original, history(database)) {
-			t.Fatal("historical closure became a current SQL permit or partially changed state")
+			environment := []string{dsnFiles[index], closureFile, snapshotFile}
+			if index == 1 {
+				// An exact already-completed receipt is historical evidence,
+				// not permission to re-run credential/fence changes.
+				want := closureBytes
+				if mode == "reopen" {
+					want = completionBytes
+				}
+				if replay := invokeAuthenticationRecoveryProcess(t, ctx, root, currentBinary, mode, environment, 0); !bytes.Equal(replay, want) {
+					t.Fatal("migration changed original snapshot-bound completion bytes")
+				}
+			} else {
+				// The same authentic old snapshot cannot authorize first-time
+				// restoration under the new qualification projection.
+				invokeAuthenticationRecoveryProcess(t, ctx, root, currentBinary, mode, environment, installationv1.AuthenticationRecoveryExitConflict)
+			}
+			if !bytes.Equal(original, history(database)) {
+				t.Fatal("old snapshot replay changed current security state or history")
+			}
 		}
 	}
-	t.Log("actual predecessor private executable produced SOURCE/RESTORED receipts; CLOSED migration refused atomically; OPEN double migration preserved history and NULL proof, new FILE/SQL and removed old ABI refused execution without effects")
+	t.Log("actual IAM45 backup/recovery executables produced snapshot-bound SOURCE/RESTORED receipts; CLOSED migration refused atomically; OPEN double migration and exact completed replay preserved full history/floors; authentic old snapshot could not authorize new close/reconcile/reopen under IAM46")
 }
 
 // A fixed predecessor executable, not fixture DML or today's implementation,
@@ -844,13 +870,13 @@ func prepareRetainedMFAProcesses(t *testing.T, ctx context.Context, admin *pgx.C
 	}
 	snapshot := func() []byte {
 		t.Helper()
-		// The single predecessor already owns replacement lineage. Preserve
-		// every original field rather than retaining an older shape exception.
+		// Preserve all original fields. The newly added removal columns are
+		// checked independently for absent, then exact, immutable provenance.
 		var state []byte
 		if err := admin.QueryRow(ctx, `SELECT jsonb_build_object(
-			'state',(SELECT to_jsonb(m) FROM iam.user_mfa_states m WHERE tenant_id=$1 AND user_id=$2),
-			'factors',(SELECT jsonb_agg(to_jsonb(f) ORDER BY id) FROM iam.totp_authenticators f WHERE tenant_id=$1 AND user_id=$2),
-			'batches',(SELECT jsonb_agg(to_jsonb(b) ORDER BY id) FROM iam.mfa_recovery_batches b WHERE tenant_id=$1 AND user_id=$2),
+			'state',(SELECT to_jsonb(m)-'removal_id' FROM iam.user_mfa_states m WHERE tenant_id=$1 AND user_id=$2),
+			'factors',(SELECT jsonb_agg(to_jsonb(f)-'removal_id' ORDER BY id) FROM iam.totp_authenticators f WHERE tenant_id=$1 AND user_id=$2),
+			'batches',(SELECT jsonb_agg(to_jsonb(b)-'revocation_removal_id' ORDER BY id) FROM iam.mfa_recovery_batches b WHERE tenant_id=$1 AND user_id=$2),
 			'codes',(SELECT jsonb_agg(to_jsonb(c) ORDER BY c.id) FROM iam.mfa_recovery_codes c
 				JOIN iam.mfa_recovery_batches b ON (b.tenant_id,b.id)=(c.tenant_id,c.batch_id) WHERE b.tenant_id=$1 AND b.user_id=$2),
 			'challenges',(SELECT jsonb_agg(to_jsonb(c) ORDER BY id) FROM iam.authentication_challenges c WHERE tenant_id=$1 AND user_id=$2),
@@ -898,42 +924,56 @@ func prepareRetainedMFAProcesses(t *testing.T, ctx context.Context, admin *pgx.C
 		}
 		return assertRetained, func() func() {
 			// This proof is made against a genuine predecessor factor, batch
-			// and Session. No migration/DML creates replacement authority.
-			const request = "retained-mfa-replacement"
+			// and Session. No migration/DML creates removal authority.
+			const request = "retained-mfa-removal"
 			var proof iamv1.StepUp
 			call(http.MethodPost, "/v1/auth/step-up", oldBearer,
-				iamv1.StartStepUpRequest{RequestID: request, Operation: iamv1.StepUpReplaceTOTP, ExpectedFactorRevision: 2}, http.StatusOK, &proof)
+				iamv1.StartStepUpRequest{RequestID: request, Operation: iamv1.StepUpRemoveTOTP, ExpectedFactorRevision: 2}, http.StatusOK, &proof)
 			code, _ := processTOTPCode(t, ctx, admin, seed, consumedStep, false)
 			*sensitive = append(*sensitive, code)
 			call(http.MethodPost, "/v1/auth/step-up/"+proof.ID+":verify", oldBearer,
-				map[string]string{"requestId": "retained-mfa-replacement-proof", "password": password, "code": code}, http.StatusOK, &proof)
+				map[string]string{"requestId": "retained-mfa-removal-proof", "password": password, "code": code}, http.StatusOK, &proof)
+			removalIntent := iamv1.RemoveTOTPRequest{RequestID: request, StepUpID: proof.ID, ExpectedFactorRevision: 2}
+			var removed iamv1.RemoveTOTPResponse
+			call(http.MethodPost, "/v1/auth/totp:remove", oldBearer, removalIntent, http.StatusOK, &removed)
+			if removed.Outcome != "APPLIED" || removed.NextStep != "REAUTHENTICATE" || removed.Removal.FactorID != enrollment.Enrollment.ID || removed.Removal.FactorRevision != 3 {
+				t.Fatal("migrated factor did not support a new exact removal intent")
+			}
+			call(http.MethodGet, "/v1/auth/me", oldBearer, nil, http.StatusUnauthorized, nil)
+			passwordLogin := loginIAM(t, endpoint, realm, password, "retained-mfa-password-login")
+			*sensitive = append(*sensitive, passwordLogin.Credential)
+			var passwordOnly bool
+			if err := admin.QueryRow(ctx, `SELECT status='ACTIVE' AND authentication_method='PASSWORD' AND mfa_revision=3
+			 FROM iam.sessions WHERE tenant_id=$1 AND principal_id=$2 AND id=$3`, user.AccountID, user.ID, passwordLogin.Session.ID).Scan(&passwordOnly); err != nil || !passwordOnly {
+				t.Fatal("removal did not issue a genuine password-only login")
+			}
 			var prepared iamv1.StartTOTPEnrollmentResponse
-			call(http.MethodPost, "/v1/auth/totp/enrollments:replace", oldBearer,
-				iamv1.StartTOTPReplacementRequest{RequestID: request, StepUpID: proof.ID, ExpectedFactorRevision: 2}, http.StatusOK, &prepared)
-			if prepared.Outcome != "APPLIED" || prepared.Provisioning == nil || prepared.Enrollment.Purpose != "REPLACEMENT" || !prepared.Enrollment.ExpiresAt.Equal(proof.ExpiresAt) {
-				t.Fatal("migrated factor did not support a new exact replacement intent")
+			call(http.MethodPost, "/v1/auth/totp/enrollments", passwordLogin.Credential,
+				map[string]any{"requestId": "retained-mfa-rebind", "password": password, "expectedFactorRevision": 3}, http.StatusOK, &prepared)
+			if prepared.Outcome != "APPLIED" || prepared.Provisioning == nil || prepared.Enrollment.Purpose != "INITIAL" {
+				t.Fatal("genuine retained removal could not start normal new-factor enrollment")
 			}
 			newSeed := secret(prepared.Provisioning.Seed)
 			secret(prepared.Provisioning.URI)
 			code, newStep := processTOTPCode(t, ctx, admin, newSeed, -1, true)
 			*sensitive = append(*sensitive, code)
-			var replaced iamv1.ConfirmTOTPEnrollmentResponse
-			call(http.MethodPost, "/v1/auth/totp/enrollments/"+prepared.Enrollment.ID+":confirm", oldBearer,
-				map[string]string{"requestId": "retained-mfa-replacement-confirm", "code": code}, http.StatusOK, &replaced)
-			if replaced.Enrollment.State != "CONFIRMED" || len(replaced.RecoveryCodes) != 10 || replaced.NextStep != "REAUTHENTICATE" {
-				t.Fatal("migrated factor replacement did not complete atomically")
+			var rebound iamv1.ConfirmTOTPEnrollmentResponse
+			call(http.MethodPost, "/v1/auth/totp/enrollments/"+prepared.Enrollment.ID+":confirm", passwordLogin.Credential,
+				map[string]string{"requestId": "retained-mfa-rebind-confirm", "code": code}, http.StatusOK, &rebound)
+			if rebound.Enrollment.State != "CONFIRMED" || len(rebound.RecoveryCodes) != 10 || rebound.NextStep != "REAUTHENTICATE" {
+				t.Fatal("retained factor removal/rebind did not complete atomically")
 			}
-			for _, material := range replaced.RecoveryCodes {
+			for _, material := range rebound.RecoveryCodes {
 				secret(material)
 			}
-			fresh := login("retained-mfa-replacement-login")
+			fresh := login("retained-mfa-rebind-login")
 			code, _ = processTOTPCode(t, ctx, admin, newSeed, newStep, false)
 			*sensitive = append(*sensitive, code)
 			var result iamv1.LoginResponse
 			call(http.MethodPost, "/v1/auth/challenges/"+fresh.Challenge.ID+":verify", "",
-				map[string]string{"requestId": "retained-mfa-replacement-login-proof", "challengeCredential": secret(fresh.ChallengeCredential), "code": code}, http.StatusOK, &result)
+				map[string]string{"requestId": "retained-mfa-rebind-login-proof", "challengeCredential": secret(fresh.ChallengeCredential), "code": code}, http.StatusOK, &result)
 			if result.Outcome != iamv1.LoginAuthenticated || !result.Credential.Present() {
-				t.Fatal("replacement of a retained factor did not permit normal new-factor login")
+				t.Fatal("removal/rebind of a retained factor did not permit normal new-factor login")
 			}
 			bearer := secret(result.Credential)
 			completed := snapshot()
@@ -942,31 +982,39 @@ func prepareRetainedMFAProcesses(t *testing.T, ctx context.Context, admin *pgx.C
 				after := snapshot()
 				defer clear(after)
 				if !bytes.Equal(completed, after) {
-					t.Fatal("schema/bootstrap/restart changed replacement history or revived old qualification")
+					t.Fatal("schema/bootstrap/restart changed factor history or revived old qualification")
 				}
 				var retained bool
 				if err := admin.QueryRow(ctx, `SELECT
 				 (SELECT state='REVOKED' FROM iam.totp_authenticators WHERE tenant_id=$1 AND user_id=$2 AND id=$3)
-				 AND (SELECT state='ACTIVE' AND bound_revision=3 AND replacement_step_up_id=$5 FROM iam.totp_authenticators WHERE tenant_id=$1 AND user_id=$2 AND id=$4)
-				 AND (SELECT count(*)=1 FROM iam.mfa_recovery_batches WHERE tenant_id=$1 AND user_id=$2 AND factor_id=$3 AND revoked_at IS NOT NULL AND revocation_replacement_factor_id=$4)
+				 AND (SELECT state='ACTIVE' AND bound_revision=4 AND removal_id=$7 FROM iam.totp_authenticators WHERE tenant_id=$1 AND user_id=$2 AND id=$4)
+				 AND (SELECT count(*)=1 FROM iam.mfa_recovery_batches WHERE tenant_id=$1 AND user_id=$2 AND factor_id=$3 AND revoked_at IS NOT NULL AND revocation_removal_id=$7)
 				 AND (SELECT count(*)=1 FROM iam.mfa_recovery_batches WHERE tenant_id=$1 AND user_id=$2 AND factor_id=$4 AND revoked_at IS NULL)
 				 AND (SELECT state='CONSUMED' FROM iam.step_ups WHERE tenant_id=$1 AND user_id=$2 AND id=$5)
-				 AND (SELECT state<>'PENDING' FROM iam.authentication_challenges WHERE tenant_id=$1 AND user_id=$2 AND id=$6)`,
-					user.AccountID, user.ID, enrollment.Enrollment.ID, prepared.Enrollment.ID, proof.ID, pending.Challenge.ID).Scan(&retained); err != nil || !retained {
-					t.Fatal("replay lost original replacement proof/factor/batch/challenge lineage", err)
+				 AND (SELECT state<>'PENDING' FROM iam.authentication_challenges WHERE tenant_id=$1 AND user_id=$2 AND id=$6)
+				 AND (SELECT enrollment_state='BOUND' AND factor_id=$4 AND revision=4 AND removal_id IS NULL FROM iam.user_mfa_states WHERE tenant_id=$1 AND user_id=$2)
+				 AND (SELECT count(*)=1 FROM iam.authenticator_removals WHERE tenant_id=$1 AND user_id=$2 AND id=$7 AND step_up_id=$5 AND factor_id=$3 AND revision=3)`,
+					user.AccountID, user.ID, enrollment.Enrollment.ID, prepared.Enrollment.ID, proof.ID, pending.Challenge.ID, removed.Removal.ID).Scan(&retained); err != nil || !retained {
+					t.Fatal("replay lost original removal proof/factor/batch/challenge lineage", err)
 				}
 				call(http.MethodGet, "/v1/auth/me", oldBearer, nil, http.StatusUnauthorized, nil)
+				call(http.MethodGet, "/v1/auth/me", passwordLogin.Credential, nil, http.StatusUnauthorized, nil)
 				call(http.MethodGet, "/v1/auth/me", bearer, nil, http.StatusOK, nil)
-				var metadata iamv1.TOTPEnrollment
-				call(http.MethodGet, "/v1/auth/totp/enrollments/by-request/"+request, bearer, nil, http.StatusOK, &metadata)
-				if !reflect.DeepEqual(metadata, replaced.Enrollment) {
-					t.Fatal("restart changed the retained replacement completion")
+				var metadata iamv1.AuthenticatorRemoval
+				call(http.MethodGet, "/v1/auth/totp/removals/by-request/"+request, bearer, nil, http.StatusOK, &metadata)
+				if !reflect.DeepEqual(metadata, removed.Removal) {
+					t.Fatal("restart changed the retained removal completion")
+				}
+				var replay iamv1.RemoveTOTPResponse
+				call(http.MethodPost, "/v1/auth/totp:remove", bearer, removalIntent, http.StatusOK, &replay)
+				if replay.Outcome != "EQUAL_REPLAY" || replay.NextStep != "" || !reflect.DeepEqual(replay.Removal, removed.Removal) || !bytes.Equal(completed, snapshot()) {
+					t.Fatal("original removal replay changed the new factor or Session")
 				}
 				call(http.MethodPost, "/v1/auth/challenges/"+pending.Challenge.ID+":verify", "",
 					map[string]string{"requestId": "retained-mfa-obsolete-login", "challengeCredential": secret(pending.ChallengeCredential), "code": "111111"}, http.StatusUnauthorized, nil)
-				_, event := findIAMEvent(t, ctx, admin, auditv1.ActionIAMAuthenticatorReplaced, string(user.ID))
+				_, event := findIAMEvent(t, ctx, admin, auditv1.ActionIAMAuthenticatorRemoved, string(user.ID))
 				call(http.MethodPost, "/v1/audit-producer:resolve", iamServiceCredential, iamv1.ResolveAuditProducerRequest{Event: event}, http.StatusOK, nil)
-				t.Log("actual predecessor factor/batch/Session supported a current replacement; schema/bootstrap/restart retained consumed proof, terminal old factor/batch/challenge and immutable completion")
+				t.Log("actual predecessor factor/batch/Session supported current removal/rebind; schema/bootstrap/restart and exact completed replay retained terminal old qualification, new factor and immutable removal")
 			}
 		}
 	}
@@ -1632,7 +1680,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	// Exercise the exact source services together without weakening install
 	// admission: the workflow separately proves the published installer rejects
 	// this unmatched database shape before effects.
-	sourceProfile := installationrelease.AuthoritySchemas{IAM: 45, Audit: 26, PaaS: 2}
+	sourceProfile := installationrelease.AuthoritySchemas{IAM: 46, Audit: 27, PaaS: 2}
 	publishedProfile := installationrelease.CurrentDatabaseProfile()
 	if publishedProfile.Authorities == sourceProfile {
 		t.Fatal("unreleased authority source shape was published without a final profile gate")
@@ -5307,17 +5355,26 @@ func proveTOTPProcesses(t *testing.T, ctx context.Context, admin *pgx.Conn, endp
 	t.Log("actual IAM replicas/PaaS/Audit: binding and forced-password commits survived lost TCP replies/restart; one cross-process OTP success; disabled USER history delivered once")
 	sensitive = append(sensitive, proveTOTPRecoveryProcesses(t, ctx, admin, endpoint, replica, auditEndpoint, paasEndpoint, root, restartIAM, withDispatcherStopped)...)
 	sensitive = append(sensitive, proveRecoveryCodeRegenerationProcesses(t, ctx, admin, endpoint, replica, auditEndpoint, root, restartIAM, withDispatcherStopped)...)
-	return append(sensitive, proveTOTPReplacementProcesses(t, ctx, admin, endpoint, replica, auditEndpoint, paasEndpoint, root, restartIAM, withDispatcherStopped)...)
+	for _, operation := range []iamv1.StepUpOperation{iamv1.StepUpReplaceTOTP, iamv1.StepUpRemoveTOTP} {
+		sensitive = append(sensitive, proveTOTPFactorMutationProcesses(t, ctx, admin, endpoint, replica, auditEndpoint, paasEndpoint, root, restartIAM, withDispatcherStopped, operation)...)
+	}
+	return sensitive
 }
 
 // A new ordinary USER retains the real five-attempt budget: initial binding,
-// login, old-factor proof, replacement confirmation and new-factor login.
-// The lost confirmation body is evidence only, never a source for client retry.
-func proveTOTPReplacementProcesses(t *testing.T, ctx context.Context, admin *pgx.Conn, endpoint, replica, auditEndpoint, paasEndpoint, root string,
-	restartIAM func(), withDispatcherStopped func(func())) []string {
+// login, old-factor proof, replacement/rebinding confirmation and new-factor
+// login. The lost body is evidence only, never a source for client retry.
+func proveTOTPFactorMutationProcesses(t *testing.T, ctx context.Context, admin *pgx.Conn, endpoint, replica, auditEndpoint, paasEndpoint, root string,
+	restartIAM func(), withDispatcherStopped func(func()), operation iamv1.StepUpOperation) []string {
 	t.Helper()
 	const initial, password = "Replacement-Process-Initial-Password-53!", "Replacement-Process-Current-Password-91!"
-	const command, confirmation = "process-totp-replace", "process-totp-replace-confirm"
+	const confirmation = "process-totp-replace-confirm"
+	name, command := "replacement", "process-totp-replace"
+	if operation == iamv1.StepUpRemoveTOTP {
+		name, command = "removal", "process-totp-remove"
+	} else if operation != iamv1.StepUpReplaceTOTP {
+		t.Fatal("unsupported process factor mutation")
+	}
 	sensitive := []string{initial, password}
 	secret := func(value iamv1.Secret) string {
 		material := value.CopyBytes()
@@ -5329,7 +5386,7 @@ func proveTOTPReplacementProcesses(t *testing.T, ctx context.Context, admin *pgx
 		t.Helper()
 		response := performJSON(t, method, at+path, bearer, body)
 		if response.Status != want {
-			t.Fatalf("replacement process %s %s status=%d want=%d", method, path, response.Status, want)
+			t.Fatalf("%s process %s %s status=%d want=%d", name, method, path, response.Status, want)
 		}
 		if result != nil && iamv1.DecodeRequest(bytes.NewReader(response.Body), result) != nil {
 			t.Fatal("invalid replacement process response")
@@ -5342,9 +5399,9 @@ func proveTOTPReplacementProcesses(t *testing.T, ctx context.Context, admin *pgx
 		sensitive = append(sensitive, code)
 		return code, step
 	}
-	user := createIAMUser(t, endpoint, root, "replacement.process", "Process factor replacement", initial, "process-replacement-user")
+	user := createIAMUser(t, endpoint, root, name+".process", "Process factor "+name, initial, "process-"+name+"-user")
 	for _, policy := range []iamv1.PolicyID{iamv1.SystemPolicyPaaSDeveloper, iamv1.SystemPolicyAuditReader} {
-		createIAMPolicyAttachment(t, endpoint, root, user.ID, policy, "process-replacement-"+string(policy))
+		createIAMPolicyAttachment(t, endpoint, root, user.ID, policy, "process-"+name+"-"+string(policy))
 	}
 	realm := user.LoginName + "@" + string(user.AccountID)
 	first := loginIAM(t, endpoint, realm, initial, "process-replacement-first-login")
@@ -5394,14 +5451,185 @@ func proveTOTPReplacementProcesses(t *testing.T, ctx context.Context, admin *pgx
 	bearer, step := login(oldSeed, step, "process-replacement-login")
 	getPaaSApplication(t, paasEndpoint, bearer, "application-process", http.StatusOK)
 	queryAudit(t, auditEndpoint, bearer, auditv1.QueryRecordsRequest{PageSize: 1}, http.StatusOK)
+	var roleBearer string
+	if operation == iamv1.StepUpRemoveTOTP {
+		// Earn an actual derived capability before the removal proof. A new
+		// password login or factor binding must never revive this old source.
+		var role iamv1.Role
+		call(endpoint, http.MethodPost, "/v1/roles", root, iamv1.CreateRoleRequest{
+			Name: "Removal source qualification", Tags: []iamv1.RoleTag{}, RequestID: "process-removal-role",
+			TrustPolicy: iamv1.TrustPolicyDocument{LanguageVersion: "1", Statements: []iamv1.TrustPolicyStatement{{SID: "source", Effect: iamv1.PolicyAllow,
+				Principals: []iamv1.TrustPrincipal{{Type: iamv1.PrincipalUser, ID: user.ID}}}}}}, http.StatusCreated, &role)
+		rolePath := "/v1/roles/" + string(role.ID)
+		call(endpoint, http.MethodPost, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{
+			Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetRole, ID: string(role.ID)}, PolicyID: iamv1.SystemPolicyPaaSViewer,
+			PolicyResourceVersion: 1, RequestID: "process-removal-role-permission"}, http.StatusOK, nil)
+		var boundary iamv1.RolePermissionBoundary
+		call(endpoint, http.MethodPut, rolePath+"/permission-boundary", root, iamv1.SetRolePermissionBoundaryRequest{
+			PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1, ResourceVersion: role.ResourceVersion,
+			RequestID: "process-removal-role-boundary"}, http.StatusOK, &boundary)
+		var assumePolicy iamv1.PolicyDetail
+		call(endpoint, http.MethodPost, "/v1/policies", root, iamv1.CreatePolicyRequest{
+			DisplayName: "Assume removal source role", RequestID: "process-removal-assume-policy",
+			Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+				Statements: []iamv1.PolicyStatement{{SID: "assume", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMRoleAssume},
+					Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceRole, Match: iamv1.PolicyResourceExact, ID: string(role.ID)}}}}}}, http.StatusCreated, &assumePolicy)
+		createIAMPolicyAttachment(t, endpoint, root, user.ID, assumePolicy.Policy.ID, "process-removal-assume-grant")
+		var assumed iamv1.AssumeRoleResponse
+		call(replica, http.MethodPost, rolePath+":assume", bearer,
+			iamv1.AssumeRoleRequest{ResourceVersion: boundary.ResourceVersion, RequestID: "process-removal-role-session"}, http.StatusOK, &assumed)
+		if iamv1.ValidateAssumeRoleResponse(assumed) != nil || assumed.Outcome != "APPLIED" {
+			t.Fatal("removal source RoleSession was not issued")
+		}
+		roleBearer = secret(assumed.Credential)
+		getPaaSApplication(t, paasEndpoint, roleBearer, "application-process", http.StatusOK)
+	}
 	var proof iamv1.StepUp
 	call(endpoint, http.MethodPost, "/v1/auth/step-up", bearer,
-		iamv1.StartStepUpRequest{RequestID: command, Operation: iamv1.StepUpReplaceTOTP, ExpectedFactorRevision: 2}, http.StatusOK, &proof)
+		iamv1.StartStepUpRequest{RequestID: command, Operation: operation, ExpectedFactorRevision: 2}, http.StatusOK, &proof)
 	code, _ = codeFor(oldSeed, step, false)
 	call(replica, http.MethodPost, "/v1/auth/step-up/"+proof.ID+":verify", bearer,
 		map[string]string{"requestId": "process-replacement-prove", "password": password, "code": code}, http.StatusOK, &proof)
 	if proof.State != "PROVED" {
 		t.Fatal("replacement lacks a fresh old-factor operation proof")
+	}
+	if operation == iamv1.StepUpRemoveTOTP {
+		intent := iamv1.RemoveTOTPRequest{RequestID: command, StepUpID: proof.ID, ExpectedFactorRevision: 2}
+		path := "/v1/auth/totp/removals/by-request/" + command
+		var removedEvent auditv1.Event
+		withDispatcherStopped(func() {
+			lost := loseIAMCompletion(t, ctx, http.MethodPost, replica, "/v1/auth/totp:remove", bearer, intent)
+			var completed iamv1.RemoveTOTPResponse
+			if iamv1.DecodeRequest(bytes.NewReader(lost.Body), &completed) != nil || iamv1.ValidateRemoveTOTPResponse(completed) != nil ||
+				completed.Outcome != "APPLIED" || completed.NextStep != "REAUTHENTICATE" || completed.Removal.FactorID != oldFactor || completed.Removal.FactorRevision != 3 {
+				t.Fatal("lost TCP reply did not follow one actual factor removal")
+			}
+			clear(lost.Body)
+			var intact bool
+			if err := admin.QueryRow(ctx, `SELECT
+				(SELECT enrollment_state='REMOVED' AND revision=3 AND factor_id IS NULL AND removal_id=$3 FROM iam.user_mfa_states WHERE tenant_id=$1 AND user_id=$2)
+				AND (SELECT count(*)=1 FROM iam.authenticator_removals WHERE tenant_id=$1 AND user_id=$2 AND id=$3 AND step_up_id=$4 AND factor_id=$5)
+				AND (SELECT state='CONSUMED' FROM iam.step_ups WHERE tenant_id=$1 AND user_id=$2 AND id=$4)
+				AND (SELECT state='REVOKED' FROM iam.totp_authenticators WHERE tenant_id=$1 AND id=$5)
+				AND (SELECT count(*)=1 FROM iam.mfa_recovery_batches WHERE tenant_id=$1 AND user_id=$2 AND factor_id=$5 AND revoked_at IS NOT NULL AND revocation_removal_id=$3)
+				AND NOT EXISTS(SELECT 1 FROM iam.sessions WHERE tenant_id=$1 AND principal_id=$2 AND revoked_at IS NULL)
+				AND NOT EXISTS(SELECT 1 FROM iam.authentication_challenges WHERE tenant_id=$1 AND user_id=$2 AND state='PENDING')
+				AND (SELECT count(*)=1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.authenticator.removed' AND event_document#>>'{actor,id}'=$2)
+				AND (SELECT count(*)=1 FROM iam.security_notifications WHERE tenant_id=$1 AND user_id=$2 AND kind='AUTHENTICATOR_REMOVED')`,
+				user.AccountID, user.ID, completed.Removal.ID, proof.ID, oldFactor).Scan(&intact); err != nil || !intact {
+				t.Fatal("lost removal lacked its atomic factor, batch, proof, Session or fact closure", err)
+			}
+			restartIAM()
+			for _, at := range []string{endpoint, replica} {
+				call(at, http.MethodGet, "/v1/auth/me", bearer, nil, http.StatusUnauthorized, nil)
+				call(at, http.MethodPost, "/v1/auth/totp:remove", bearer, intent, http.StatusUnauthorized, nil)
+			}
+			getPaaSApplication(t, paasEndpoint, bearer, "application-process", http.StatusUnauthorized)
+			getPaaSApplication(t, paasEndpoint, roleBearer, "application-process", http.StatusUnauthorized)
+			queryAudit(t, auditEndpoint, bearer, auditv1.QueryRecordsRequest{PageSize: 1}, http.StatusUnauthorized)
+			var authenticated iamv1.LoginResponse
+			call(endpoint, http.MethodPost, "/v1/auth/login", "", map[string]string{
+				"loginName": realm, "password": password, "requestId": "process-removal-new-login"}, http.StatusOK, &authenticated)
+			if iamv1.ValidateLoginResponse(authenticated) != nil || authenticated.Outcome != iamv1.LoginAuthenticated || authenticated.MustChangePassword {
+				t.Fatal("removed USER could not normally authenticate with the unchanged password")
+			}
+			current := secret(authenticated.Credential)
+			if err := admin.QueryRow(ctx, `SELECT authentication_method='PASSWORD' AND mfa_revision=3 AND credential_version=2 AND status='ACTIVE'
+				FROM iam.sessions WHERE tenant_id=$1 AND principal_id=$2 AND id=$3`, user.AccountID, user.ID, authenticated.Session.ID).Scan(&intact); err != nil || !intact {
+				t.Fatal("new removal Session inherited an old MFA ceremony", err)
+			}
+			var metadata iamv1.AuthenticatorRemoval
+			readback := call(replica, http.MethodGet, path, current, nil, http.StatusOK, &metadata)
+			if metadata != completed.Removal || bytes.Contains(readback.Body, []byte("recoveryCodes")) || bytes.Contains(readback.Body, []byte("provisioning")) {
+				t.Fatal("new login did not recover exactly the nonsecret original removal")
+			}
+			var replay iamv1.RemoveTOTPResponse
+			call(endpoint, http.MethodPost, "/v1/auth/totp:remove", current, intent, http.StatusOK, &replay)
+			if iamv1.ValidateRemoveTOTPResponse(replay) != nil || replay.Outcome != "EQUAL_REPLAY" || replay.Removal != metadata || replay.NextStep != "" {
+				t.Fatal("removal replay re-executed the original logout or changed completion")
+			}
+			changed := intent
+			changed.StepUpID += "-different"
+			call(replica, http.MethodPost, "/v1/auth/totp:remove", current, changed, http.StatusConflict, nil)
+			call(endpoint, http.MethodGet, "/v1/auth/me", current, nil, http.StatusOK, nil)
+			getPaaSApplication(t, paasEndpoint, current, "application-process", http.StatusOK)
+			getPaaSApplication(t, paasEndpoint, roleBearer, "application-process", http.StatusUnauthorized)
+			queryAudit(t, auditEndpoint, current, auditv1.QueryRecordsRequest{PageSize: 1}, http.StatusOK)
+			var rebound iamv1.StartTOTPEnrollmentResponse
+			call(replica, http.MethodPost, "/v1/auth/totp/enrollments", current, map[string]any{
+				"requestId": "process-removal-rebind", "password": password, "expectedFactorRevision": 3}, http.StatusOK, &rebound)
+			if rebound.Provisioning == nil || rebound.Enrollment.ID == oldFactor || rebound.Enrollment.FactorRevision != 3 {
+				t.Fatal("process rebind did not issue an independent factor from removal history")
+			}
+			newSeed, newFactor := secret(rebound.Provisioning.Seed), rebound.Enrollment.ID
+			secret(rebound.Provisioning.URI)
+			code, newStep := codeFor(newSeed, -1, true)
+			var confirmed iamv1.ConfirmTOTPEnrollmentResponse
+			call(endpoint, http.MethodPost, "/v1/auth/totp/enrollments/"+newFactor+":confirm", current,
+				map[string]string{"requestId": "process-removal-rebind-confirm", "code": code}, http.StatusOK, &confirmed)
+			if confirmed.NextStep != "REAUTHENTICATE" || len(confirmed.RecoveryCodes) != 10 {
+				t.Fatal("rebind did not end the PASSWORD Session and create new recovery material")
+			}
+			for _, material := range confirmed.RecoveryCodes {
+				secret(material)
+			}
+			call(replica, http.MethodGet, "/v1/auth/me", current, nil, http.StatusUnauthorized, nil)
+			current, _ = login(newSeed, newStep, "process-removal-rebound-login")
+			restartIAM()
+			call(replica, http.MethodPost, "/v1/auth/totp:remove", current, intent, http.StatusOK, &replay)
+			call(endpoint, http.MethodGet, path, current, nil, http.StatusOK, &metadata)
+			if replay.Outcome != "EQUAL_REPLAY" || replay.NextStep != "" || replay.Removal != completed.Removal || metadata != completed.Removal {
+				t.Fatal("restart or rebound identity changed original removal completion")
+			}
+			if err := admin.QueryRow(ctx, `SELECT
+				(SELECT enrollment_state='BOUND' AND revision=4 AND factor_id=$3 AND removal_id IS NULL FROM iam.user_mfa_states WHERE tenant_id=$1 AND user_id=$2)
+				AND (SELECT state='ACTIVE' AND removal_id=$4 AND enrollment_revision=3 AND bound_revision=4 FROM iam.totp_authenticators WHERE tenant_id=$1 AND id=$3)
+				AND (SELECT state='REVOKED' FROM iam.totp_authenticators WHERE tenant_id=$1 AND id=$5)
+				AND (SELECT count(*)=1 FROM iam.authenticator_removals WHERE tenant_id=$1 AND user_id=$2)
+				AND (SELECT count(*)=1 FROM iam.mfa_recovery_batches WHERE tenant_id=$1 AND user_id=$2 AND factor_id=$3 AND revoked_at IS NULL)
+				AND (SELECT count(*)=1 FROM iam.sessions WHERE tenant_id=$1 AND principal_id=$2 AND status='ACTIVE' AND revoked_at IS NULL AND authentication_method='PASSWORD_TOTP' AND mfa_revision=4)
+				AND (SELECT count(*)=1 FROM iam.security_notifications WHERE tenant_id=$1 AND user_id=$2 AND kind='AUTHENTICATOR_REMOVED')`,
+				user.AccountID, user.ID, newFactor, completed.Removal.ID, oldFactor).Scan(&intact); err != nil || !intact {
+				t.Fatal("historical replay lost rebind lineage or revoked the new MFA Session", err)
+			}
+			getPaaSApplication(t, paasEndpoint, current, "application-process", http.StatusOK)
+			getPaaSApplication(t, paasEndpoint, roleBearer, "application-process", http.StatusUnauthorized)
+			_, removedEvent = findIAMEvent(t, ctx, admin, auditv1.ActionIAMAuthenticatorRemoved, string(user.ID))
+			if auditv1.ValidateEventForSource(auditv1.SourceIAM, removedEvent) != nil || removedEvent.RequestID != command {
+				t.Fatal("removal lost the original USER security fact")
+			}
+			assertAuditEventCount(t, ctx, admin, string(removedEvent.EventID), 0)
+			var access iamv1.UserAccess
+			call(endpoint, http.MethodGet, "/v1/users/"+string(user.ID), root, nil, http.StatusOK, &access)
+			call(endpoint, http.MethodPost, "/v1/users/"+string(user.ID)+":set-status", root,
+				iamv1.SetUserStatusRequest{Status: iamv1.PrincipalDisabled, ResourceVersion: access.User.ResourceVersion, RequestID: "process-removal-disable"}, http.StatusOK, nil)
+			call(replica, http.MethodGet, path, current, nil, http.StatusUnauthorized, nil)
+			getPaaSApplication(t, paasEndpoint, current, "application-process", http.StatusUnauthorized)
+			queryAudit(t, auditEndpoint, current, auditv1.QueryRecordsRequest{PageSize: 1}, http.StatusUnauthorized)
+		})
+		waitAllIAMOutboxDelivered(t, ctx, admin)
+		page := queryAudit(t, auditEndpoint, root, auditv1.QueryRecordsRequest{PageSize: 100, Action: auditv1.ActionIAMAuthenticatorRemoved}, http.StatusOK)
+		if len(page.Records) != 1 || page.Records[0].Event != removedEvent || page.Records[0].Source != auditv1.SourceIAM {
+			t.Fatal("disabled USER removal history was lost or duplicated")
+		}
+		for range 2 {
+			var duplicate auditv1.IngestionResult
+			call(auditEndpoint, http.MethodPost, "/v1/events", iamServiceCredential, removedEvent, http.StatusOK, &duplicate)
+			if duplicate.Outcome != auditv1.IngestionDuplicate || duplicate.Record != page.Records[0] {
+				t.Fatal("removal replay changed the original Audit bytes or chain position")
+			}
+		}
+		forged := removedEvent
+		forged.RequestID += "-forged"
+		call(auditEndpoint, http.MethodPost, "/v1/events", iamServiceCredential, forged, http.StatusForbidden, nil)
+		forged = removedEvent
+		forged.TenantID = "account-process-security-settings"
+		call(auditEndpoint, http.MethodPost, "/v1/events", iamServiceCredential, forged, http.StatusForbidden, nil)
+		if verification := verifyAudit(t, auditEndpoint, root); verification.State != auditv1.VerificationVerified || !verification.Complete {
+			t.Fatal("removal broke the original tenant Audit chain")
+		}
+		t.Log("actual IAM replicas/PaaS/Audit: committed removal survived TCP loss/restart; new PASSWORD login recovered original completion; rebind and new MFA Session survived historical replay; disabled USER history delivered once (not SMTP)")
+		return sensitive
 	}
 	intent := iamv1.StartTOTPReplacementRequest{RequestID: command, StepUpID: proof.ID, ExpectedFactorRevision: 2}
 	var prepared iamv1.StartTOTPEnrollmentResponse

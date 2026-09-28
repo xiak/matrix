@@ -35,7 +35,7 @@
 
 未发布迁移可以在风险替换前保存已验证并推送的 Git 回滚点后合并、改写或删除，不在工作树保留废弃实现作为兼容层。默认门禁是最终结构的空库安装、等值重放、带真实数据的重启/恢复、迁移失败无部分效果，以及当前版本的 RLS、受限身份、撤权和 Audit/outbox 不变量。它们不能因免除开发历史兼容而取消。
 
-开发期升级门禁采用滚动的单前驱窗口：当前版本加一个明确固定的必要前驱，不按每项FEAT累积各自的旧binary/schema路径。窗口前移时在同一切片删除被替代的入口、夹具、环境变量和条件分支，不以常规SKIP、别名或可选旧版本列表保留测试仓库。本次恢复快照切片将唯一前驱前移到已验证固定`e24dbdae6b4ea420365a4527a0bd89b16e0d720f`的IAM44→候选IAM45，仍使用原单一入口，不保留IAM43并行路径；工作树的本地真实门禁已通过，精确SHA独立CI与发布组合须另验，运行证据归[009](FEAT-IAM-009-security-governance.md)。最小目标是保留该前驱实际发行的认证资格、OTP消费、正常更换及恢复谱系，并证明新恢复函数/列/权限按确切形状替换。迁移末端失败须完整保留旧函数和原数据、不留下新snapshot列或floor表。仍CLOSED的旧恢复现场不得通过迁移获得READY；已完成并OPEN的旧receipt缺少snapshot时仅保留不可变历史，不能从当前库补造证明或执行新恢复。当前更换仍须能基于真实旧因子完成；不得沿用IAM41缺失设置修订时的全部失效预期，亦不得填造未知资格。有资格的原MFA恢复意图仍受原期限/当前身份限制，完成后旧因子/Session及保存码不得复活。这是开发数据保留实验，不是已验收发布基线。相邻源码编号不是兼容证明，N+1也不是每轮必须构造另一个假想schema。
+开发期升级门禁采用滚动的单前驱窗口：当前版本加一个明确固定的必要前驱，不按每项FEAT累积各自的旧binary/schema路径。窗口前移时在同一切片删除被替代的入口、夹具、环境变量和条件分支，不以常规SKIP、别名或可选旧版本列表保留测试仓库。本次主动解绑切片将唯一前驱前移到已验证固定`42035189eb823e388509f54525889c1a18c6b79d`的IAM45→候选IAM46，仍使用原单一入口，删除IAM44无快照恢复及旧ABI分支；精确SHA独立CI与发布组合须另验，运行证据归[009](FEAT-IAM-009-security-governance.md)。最小目标是保留该前驱真实认证资格、OTP消费、快照/floor及恢复谱系，并证明新解绑函数/列/权限按确切形状落地。迁移末端失败须完整保留旧函数和原数据、不留下解绑表/来源列或执行入口。仍CLOSED的旧恢复现场不得通过迁移获得READY；已完成并OPEN的旧快照及receipt保留原字节和下限，精确重放只返回原完成，不重复改密或撤销。真实旧快照不能在新资格投影下授权首次close/reconcile/reopen，不将保留历史等同于跨profile备份恢复许可。当前解绑和重新绑定须能基于真实旧因子完成；有资格的原MFA恢复意图仍受原期限/当前身份限制，完成后旧因子/Session及保存码不得复活。这是开发数据保留实验，不是已验收发布基线。相邻源码编号不是兼容证明，N+1也不是每轮必须构造另一个假想schema。
 
 只有明确要求保留某个现存安装的数据，或存在无法同次替换的真实消费者时，才增加例外并记录准确固定起点、现实消费者、不能原子迁移的原因和退出条件；不能用曾经做过一次实验代替这些证据。已发布Audit记录的编码/哈希和安装器的效果前拒绝，仍是当前必须保持的合同，不与未发布IAM中间版本测试混同。旧binary实验的历史运行证据保留在Git及其原交付记录，不作为后续默认完整矩阵。联调消费者在各自工作区使用固定提交原子对齐，不擅自清空对方环境。
 
@@ -61,7 +61,9 @@
 
 数据库门禁按既有测试owner串行分片，不按开发schema叠加兼容矩阵。固定`fa27b0fbf54e94e21da38d32763dcaf89f370538`的[Verification36318553704](https://github.com/xiak/matrix/actions/runs/36318553704)不能标为通过：storage测试步骤19分25秒内全部success，但整项任务含准备/清理超过20分钟；GitHub明确注记`The job has exceeded the maximum execution time of 20m0s`，storage最终cancelled，汇总检查failure。其余Go、node、runtime、step-up、replacement、replacement-qualification、recovery-window七项success不代替该缺口。
 
-现将原`TestIAMRoleAndManagementReferencesPostgres`及其七个独立数据库/DSN从storage一次性移至`authority-roles`，不复制测试。该入口在上述CI实测344.607秒，独立任务上限15分钟；storage仍20分钟，原每fixture两分钟及所有锁等待/密码成本不变。数据库lane继续`max-parallel=1`、PG1CPU/768MiB/PIDs192，其他原任务限额不变；汇总检查仍要求全部lane成功，取消、跳过或失败均关闭。数据库总集合和场景不增加，只有执行分组调整；本地YAML解析、17段Bash语法及调整前后DSN集合/无重复检查通过。新分配的精确源码CI尚待核实，不能回填旧超时为通过。
+固定`42035189eb823e388509f54525889c1a18c6b79d`将原`TestIAMRoleAndManagementReferencesPostgres`及其七个独立数据库/DSN从storage一次性移至`authority-roles`，不复制测试。该入口在上述CI实测344.607秒，独立任务上限15分钟；storage仍20分钟，原每fixture两分钟及所有锁等待/密码成本不变。数据库lane继续`max-parallel=1`、PG1CPU/768MiB/PIDs192，其他原任务限额不变；汇总检查仍要求全部lane成功，取消、跳过或失败均关闭。该固定切片的数据库总集合和场景不增加，只有执行分组调整；本地YAML解析、17段Bash语法及调整前后DSN集合/无重复检查通过。[Verification36367216408](https://github.com/xiak/matrix/actions/runs/36367216408)已于2026-09-28重新通过GitHub API核实精确SHA、九个执行job及汇总全部completed/success，不能回填旧超时为通过。
+
+当前主动解绑候选增加独立`authority-removal`与`authority-removal-security`源码lanes，十个专属数据库入口均来自原TOTP/设置测试owner，顺序运行当前解绑、可证明重绑及安全竞争，不添加开发历史版本矩阵。两项分别上限15分钟，保持原数据库限额、`max-parallel=1`和全lane失败关闭汇总；YAML与19段Bash语法已通过本地校验。其功能证据及剩余门禁只归[009](FEAT-IAM-009-security-governance.md)，尚无固定SHA独立CI结果，不继承420的通过状态。
 
 ### 运行验收要求
 

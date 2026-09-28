@@ -1308,6 +1308,17 @@
                 "const": "RECOVERY_REQUIRED"
               }
             }
+          },
+          {
+            "properties": {
+              "enrollmentState": {
+                "const": "REMOVED"
+              },
+              "factorId": false,
+              "factorRevision": {
+                "minimum": 3
+              }
+            }
           }
         ],
         "properties": {
@@ -1318,7 +1329,8 @@
             "enum": [
               "NEVER_BOUND",
               "BOUND",
-              "RECOVERY_REQUIRED"
+              "RECOVERY_REQUIRED",
+              "REMOVED"
             ]
           },
           "factorId": {
@@ -13105,7 +13117,14 @@
               "enrollment": {
                 "properties": {
                   "factorRevision": {
-                    "const": 1
+                    "oneOf": [
+                      {
+                        "const": 1
+                      },
+                      {
+                        "minimum": 3
+                      }
+                    ]
                   },
                   "purpose": {
                     "const": "INITIAL"
@@ -22655,6 +22674,17 @@
               },
               {
                 "properties": {
+                  "expectedFactorRevision": {
+                    "maximum": 9007199254740990
+                  },
+                  "operation": {
+                    "const": "TOTP_REMOVE"
+                  },
+                  "securitySettings": false
+                }
+              },
+              {
+                "properties": {
                   "operation": {
                     "const": "SECURITY_SETTINGS_UPDATE"
                   },
@@ -22679,7 +22709,8 @@
             "enum": [
               "RECOVERY_CODES_REGENERATE",
               "SECURITY_SETTINGS_UPDATE",
-              "TOTP_REPLACE"
+              "TOTP_REPLACE",
+              "TOTP_REMOVE"
             ]
           },
           "requestId": {
@@ -22820,6 +22851,17 @@
               },
               {
                 "properties": {
+                  "expectedFactorRevision": {
+                    "maximum": 9007199254740990
+                  },
+                  "operation": {
+                    "const": "TOTP_REMOVE"
+                  },
+                  "securitySettings": false
+                }
+              },
+              {
+                "properties": {
                   "operation": {
                     "const": "SECURITY_SETTINGS_UPDATE"
                   },
@@ -22916,7 +22958,8 @@
             "enum": [
               "RECOVERY_CODES_REGENERATE",
               "SECURITY_SETTINGS_UPDATE",
-              "TOTP_REPLACE"
+              "TOTP_REPLACE",
+              "TOTP_REMOVE"
             ]
           },
           "provedAt": {
@@ -26504,6 +26547,112 @@
           }
         },
         "summary": "Consume the original same-Session TOTP_REPLACE proof and prepare a new pending factor within its original deadline; keep the old factor and batch until confirmation; provisioning is returned once"
+      }
+    },
+    "/v1/auth/totp/removals/by-request/{requestId}": {
+      "get": {
+        "operationId": "getAuthenticatorRemovalByRequest",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "requestId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthenticatorRemoval"
+                }
+              }
+            },
+            "description": "Current authority state."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse",
+            "description": "Invalid path, query or unexpected body; no identity selector is accepted."
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse",
+            "description": "No original same-USER metadata observed; not evidence that an uncertain command rolled back, and not permission to create a replacement intent."
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Read the original same-USER removal using a current valid login Session; never repeat removal effects"
+      }
+    },
+    "/v1/auth/totp:remove": {
+      "post": {
+        "operationId": "removeTOTP",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RemoveTOTPRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RemoveTOTPResponse"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Consume the exact same-Session TOTP_REMOVE proof; APPLIED terminates old login Sessions, EQUAL_REPLAY only observes the original completion"
       }
     },
     "/v1/authorization-profiles": {

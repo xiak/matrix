@@ -97,6 +97,7 @@ func TestEnrollmentChallengeStateSchemaKeepsPasswordStageAndFirstFactorDistinct(
 		{`{"challenge":` + challenge + `,"notificationContact":` + verified + `,"enrollment":` + factor + `}`, true},
 		{`{"challenge":` + challenge + `,"notificationContact":` + contact + `,"enrollment":` + factor + `}`, false},
 		{`{"challenge":` + challenge + `,"notificationContact":` + verified + `,"enrollment":` + strings.Replace(factor, `"factorRevision":1`, `"factorRevision":2`, 1) + `}`, false},
+		{`{"challenge":` + challenge + `,"notificationContact":` + verified + `,"enrollment":` + strings.Replace(factor, `"factorRevision":1`, `"factorRevision":3`, 1) + `}`, true},
 		{`{"challenge":` + challenge + `}`, false},
 		{`{"challenge":` + challenge + `,"notificationContact":null}`, false},
 		{`{"challenge":` + challenge + `,"notificationContact":` + verified + `,"enrollment":null}`, false},
@@ -194,6 +195,8 @@ func TestStepUpSchemasKeepOperationProofSeparateFromLoginAndSecretReplay(t *test
 	settingsIntent := `{"expectedResourceVersion":1,"mfa":{"requiredForUsers":true}}`
 	settingsStep := strings.TrimSuffix(strings.Replace(step, "RECOVERY_CODES_REGENERATE", "SECURITY_SETTINGS_UPDATE", 1), "}") + `,"securitySettings":` + settingsIntent + `}`
 	settingsStart := strings.TrimSuffix(strings.Replace(start, "RECOVERY_CODES_REGENERATE", "SECURITY_SETTINGS_UPDATE", 1), "}") + `,"securitySettings":` + settingsIntent + `}`
+	removeStep := strings.Replace(step, "RECOVERY_CODES_REGENERATE", "TOTP_REMOVE", 1)
+	removeStart := strings.Replace(start, "RECOVERY_CODES_REGENERATE", "TOTP_REMOVE", 1)
 	verify := `{"requestId":"verify-a","password":"synthetic-password","code":"malformed-nonempty-candidate"}`
 	command := `{"requestId":"regenerate-a","stepUpId":"proof-a","expectedFactorRevision":2}`
 	result := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"RecoveryCodeRegeneration","id":"regeneration-a","requestId":"regenerate-a","factorId":"factor-a","factorRevision":2,"createdAt":"2026-09-21T12:01:00Z"}`
@@ -219,6 +222,11 @@ func TestStepUpSchemasKeepOperationProofSeparateFromLoginAndSecretReplay(t *test
 		valid      bool
 	}{
 		{"StepUp", step, true},
+		{"StepUp", removeStep, true},
+		{"StepUp", strings.Replace(removeStep, `"expectedFactorRevision":2`, `"expectedFactorRevision":9007199254740990`, 1), true},
+		{"StepUp", strings.Replace(removeStep, `"expectedFactorRevision":2`, `"expectedFactorRevision":9007199254740991`, 1), false},
+		{"StepUp", strings.TrimSuffix(removeStep, "}") + `,"securitySettings":null}`, false},
+		{"StepUp", strings.Replace(settingsStep, "SECURITY_SETTINGS_UPDATE", "TOTP_REMOVE", 1), false},
 		{"StepUp", settingsStep, true},
 		{"StepUp", strings.Replace(settingsStep, "true", "false", 1), true},
 		{"StepUp", strings.Replace(settingsStep, settingsIntent, "null", 1), false},
@@ -240,6 +248,11 @@ func TestStepUpSchemasKeepOperationProofSeparateFromLoginAndSecretReplay(t *test
 		{"StepUp", strings.Replace(step, `"expectedFactorRevision":2`, `"expectedFactorRevision":1`, 1), false},
 		{"StepUp", strings.Replace(step, `"expectedFactorRevision":2`, `"expectedFactorRevision":9007199254740991`, 1), true},
 		{"StartStepUpRequest", start, true},
+		{"StartStepUpRequest", removeStart, true},
+		{"StartStepUpRequest", strings.Replace(removeStart, ":2}", ":9007199254740990}", 1), true},
+		{"StartStepUpRequest", strings.Replace(removeStart, ":2}", ":9007199254740991}", 1), false},
+		{"StartStepUpRequest", strings.TrimSuffix(removeStart, "}") + `,"securitySettings":null}`, false},
+		{"StartStepUpRequest", strings.Replace(settingsStart, "SECURITY_SETTINGS_UPDATE", "TOTP_REMOVE", 1), false},
 		{"StartStepUpRequest", settingsStart, true},
 		{"StartStepUpRequest", strings.Replace(settingsStart, "true", "false", 1), true},
 		{"StartStepUpRequest", strings.Replace(settingsStart, settingsIntent, "null", 1), false},
@@ -346,6 +359,35 @@ func TestAuthenticatorRemovalSchemasMatchClosedCompletionContracts(t *testing.T)
 				}
 			}
 		})
+	}
+}
+
+func TestRemovedAuthenticatorStateIsNotNeverBoundOrAnActiveFactor(t *testing.T) {
+	schema := compileIAMOpenAPISchema(t, loadIAMOpenAPI(t), "AuthenticatorState")
+	for _, sample := range []struct {
+		state    string
+		revision uint64
+		factor   string
+		valid    bool
+	}{
+		{"REMOVED", 3, "", true}, {"REMOVED", 9007199254740991, "", true},
+		{"REMOVED", 1, "", false}, {"REMOVED", 2, "", false}, {"REMOVED", 3, "old-factor", false},
+		{"NEVER_BOUND", 3, "", false}, {"BOUND", 3, "", false},
+	} {
+		value := AuthenticatorState{APIVersion: APIVersion, Kind: "AuthenticatorState", EnrollmentState: sample.state, FactorRevision: sample.revision, FactorID: sample.factor}
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var raw any
+		if json.Unmarshal(encoded, &raw) != nil {
+			t.Fatal("invalid synthetic state")
+		}
+		var decoded AuthenticatorState
+		valid := DecodeRequest(bytes.NewReader(encoded), &decoded) == nil && ValidateAuthenticatorState(decoded) == nil
+		if (schema.Validate(raw) == nil) != sample.valid || valid != sample.valid {
+			t.Fatalf("state %s revision %d: schema and validated decoder differ", sample.state, sample.revision)
+		}
 	}
 }
 

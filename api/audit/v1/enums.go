@@ -43,6 +43,7 @@ const (
 	ActionIAMNotificationContactVerified            Action = "iam.notification-contact.verified"
 	ActionIAMAuthenticatorBound                     Action = "iam.authenticator.bound"
 	ActionIAMAuthenticatorReplaced                  Action = "iam.authenticator.replaced"
+	ActionIAMAuthenticatorRemoved                   Action = "iam.authenticator.removed"
 	ActionIAMAuthenticatorRecoveryStarted           Action = "iam.authenticator.recovery-started"
 	ActionIAMAuthenticatorRecovered                 Action = "iam.authenticator.recovered"
 	ActionIAMRecoveryCodesRegenerated               Action = "iam.recovery-codes.regenerated"
@@ -230,6 +231,7 @@ var allActions = []Action{
 	ActionIAMNotificationContactVerified,
 	ActionIAMAuthenticatorBound,
 	ActionIAMAuthenticatorReplaced,
+	ActionIAMAuthenticatorRemoved,
 	ActionIAMAuthenticatorRecoveryStarted,
 	ActionIAMAuthenticatorRecovered,
 	ActionIAMRecoveryCodesRegenerated,
@@ -354,6 +356,7 @@ var actionContracts = map[Action]ActionContract{
 	ActionIAMNotificationContactVerified:            {Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, UserActorRequired: true},
 	ActionIAMAuthenticatorBound:                     {Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, UserActorRequired: true},
 	ActionIAMAuthenticatorReplaced:                  {Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, UserActorRequired: true},
+	ActionIAMAuthenticatorRemoved:                   {Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, UserActorRequired: true},
 	ActionIAMAuthenticatorRecoveryStarted:           {Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, UserActorRequired: true},
 	ActionIAMAuthenticatorRecovered:                 {Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, UserActorRequired: true},
 	ActionIAMRecoveryCodesRegenerated:               {Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, UserActorRequired: true},

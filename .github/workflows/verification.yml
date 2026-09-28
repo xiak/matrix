@@ -65,6 +65,10 @@ jobs:
             minutes: 20
           - lane: authority-replacement-qualification
             minutes: 15
+          - lane: authority-removal
+            minutes: 15
+          - lane: authority-removal-security
+            minutes: 15
           - lane: authority-recovery-window
             minutes: 30
     timeout-minutes: ${{ matrix.minutes }}
@@ -127,6 +131,14 @@ jobs:
               ;;
             authority-replacement-qualification)
               databases=(matrix_iam_totp_replacement_login_ci matrix_iam_totp_replacement_expiry_ci matrix_iam_totp_replacement_qualifications_ci)
+              ;;
+            authority-removal)
+              databases=(matrix_iam_totp_removal_ci matrix_iam_totp_removal_required_ci matrix_iam_totp_removal_settings_ci
+                matrix_iam_totp_removal_expiry_ci)
+              ;;
+            authority-removal-security)
+              databases=(matrix_iam_totp_removal_authority_ci matrix_iam_totp_removal_sessions_ci matrix_iam_totp_removal_mutations_ci
+                matrix_iam_totp_removal_factors_ci matrix_iam_totp_removal_recovery_ci matrix_iam_totp_removal_account_ci)
               ;;
             *) exit 1 ;;
           esac
@@ -266,6 +278,30 @@ jobs:
             -run '^TestIAMTOTPReplacementExpiryPostgres$'
           time go test -race -p 1 -count=1 ./app/service/iam/internal/integration \
             -run '^TestIAMTOTPReplacementQualificationsPostgres$'
+
+      - name: Voluntary removal, proved re-enrollment and original proof deadline
+        if: matrix.lane == 'authority-removal'
+        env:
+          MATRIX_IAM_TOTP_REMOVAL_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_removal_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_TOTP_REMOVAL_REQUIRED_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_removal_required_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_TOTP_REMOVAL_SETTINGS_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_removal_settings_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_TOTP_REMOVAL_EXPIRY_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_removal_expiry_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+        run: |
+          time go test -race -p 1 -count=1 ./app/service/iam/internal/integration \
+            -run '^TestIAMTOTPRemoval(Postgres|RequiredEnrollmentPostgres|SettingsPostgres|ExpiryPostgres)$'
+
+      - name: Voluntary removal and ordered authority, credential and factor mutations
+        if: matrix.lane == 'authority-removal-security'
+        env:
+          MATRIX_IAM_TOTP_REMOVAL_AUTHORITY_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_removal_authority_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_TOTP_REMOVAL_SESSIONS_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_removal_sessions_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_TOTP_REMOVAL_MUTATIONS_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_removal_mutations_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_TOTP_REMOVAL_FACTORS_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_removal_factors_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_TOTP_REMOVAL_RECOVERY_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_removal_recovery_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_TOTP_REMOVAL_ACCOUNT_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_removal_account_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+        run: |
+          time go test -race -p 1 -count=1 ./app/service/iam/internal/integration \
+            -run '^TestIAMTOTPRemoval(Authority|Sessions|Mutations|Factors|Recovery|Account)Postgres$'
 
       - name: Saved-code exhaustion across actual authentication windows
         if: matrix.lane == 'authority-recovery-window'

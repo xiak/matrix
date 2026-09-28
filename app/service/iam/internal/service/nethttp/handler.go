@@ -110,6 +110,8 @@ type Workflow interface {
 	VerifyStepUp(context.Context, iamv1.Secret, string, iamv1.VerifyStepUpRequest) (iamv1.StepUp, error)
 	RegenerateRecoveryCodes(context.Context, iamv1.Secret, iamv1.RegenerateRecoveryCodesRequest) (iamv1.RegenerateRecoveryCodesResponse, error)
 	RecoveryCodeRegenerationByRequest(context.Context, iamv1.Secret, string) (iamv1.RecoveryCodeRegeneration, error)
+	RemoveTOTP(context.Context, iamv1.Secret, iamv1.RemoveTOTPRequest) (iamv1.RemoveTOTPResponse, error)
+	AuthenticatorRemovalByRequest(context.Context, iamv1.Secret, string) (iamv1.AuthenticatorRemoval, error)
 	Logout(context.Context, iamv1.Secret, iamv1.LogoutRequest) (iamv1.LogoutResponse, error)
 	ListOwnSessions(context.Context, iamv1.Secret, string) (iamv1.SessionList, error)
 	RevokeOwnSession(context.Context, iamv1.Secret, iamv1.SessionID, iamv1.RevokeSessionRequest) (iamv1.RevokeOwnSessionResponse, error)
@@ -184,6 +186,8 @@ func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 	routes.HandleFunc("/v1/auth/step-up/", value.verifyStepUp)
 	routes.HandleFunc("/v1/auth/recovery-codes:regenerate", value.regenerateRecoveryCodes)
 	routes.HandleFunc("/v1/auth/recovery-codes/regenerations/by-request/", value.recoveryCodeRegenerationByRequest)
+	routes.HandleFunc("/v1/auth/totp:remove", value.removeTOTP)
+	routes.HandleFunc("/v1/auth/totp/removals/by-request/", value.authenticatorRemovalByRequest)
 	routes.HandleFunc("/v1/auth/me", value.currentIdentity)
 	routes.HandleFunc("/v1/policies", value.policies)
 	routes.HandleFunc("/v1/authorization-profiles", value.authorizationProfiles)
@@ -1419,6 +1423,8 @@ func (value *handler) writeError(response http.ResponseWriter, request *http.Req
 		writeProblem(response, requestID, http.StatusNotFound, "iam.step-up.not-found", "Operation proof not found")
 	case errors.Is(err, identityaccess.ErrRecoveryCodeRegenerationNotFound):
 		writeProblem(response, requestID, http.StatusNotFound, "iam.recovery-code-regeneration.not-found", "Recovery code regeneration not found")
+	case errors.Is(err, identityaccess.ErrAuthenticatorRemovalNotFound):
+		writeProblem(response, requestID, http.StatusNotFound, "iam.authenticator-removal.not-found", "Authenticator removal not found")
 	case errors.Is(err, identityaccess.ErrSecuritySettingsChangeNotFound):
 		writeProblem(response, requestID, http.StatusNotFound, "iam.security-settings-change.not-found", "Security settings change not found")
 	case errors.Is(err, identityaccess.ErrVerificationRejected):

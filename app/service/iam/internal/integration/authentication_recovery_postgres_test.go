@@ -988,6 +988,74 @@ func TestIAMAuthenticationRecoveryPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal("create recovery attempt subject", err)
 	}
+	// Carry a real completed removal through the same RR dump and two
+	// restores. An absent active factor alone must never earn this state.
+	removedUser, err := sourceAPI.CreateUser(ctx, sourceCredential, iamv1.CreateUserRequest{
+		LoginName: "auth-recovery-removed-user", DisplayName: "Recovery removed factor lineage",
+		InitialPassword: iamHTTPSecret(t, initialDeveloperPassword), RequestID: "auth-recovery-removed-user-create",
+	})
+	if err != nil {
+		t.Fatal("create actual removal recovery subject", err)
+	}
+	removedLogin, err := sourceAPI.Login(ctx, iamv1.LoginRequest{LoginName: removedUser.LoginName + "@" + string(removedUser.AccountID),
+		Password: iamHTTPSecret(t, initialDeveloperPassword), RequestID: "auth-recovery-removed-initial-login"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sourceAPI.ChangePassword(ctx, removedLogin.Credential, iamv1.ChangePasswordRequest{
+		CurrentPassword: iamHTTPSecret(t, initialDeveloperPassword), NewPassword: iamHTTPSecret(t, changedDeveloperPassword),
+		RequestID: "auth-recovery-removed-password"}); err != nil {
+		t.Fatal(err)
+	}
+	removedFactor := enrollAuthenticationRecoveryTOTP(t, ctx, sourceAPI, sourceAdmin, document, removedLogin.Credential, removedUser.LoginName)
+	removedLogin = authenticationRecoveryMFALogin(t, ctx, sourceAPI, sourceAdmin, document, removedFactor, "removed-user", 0)
+	removeProof, err := sourceAPI.StartStepUp(ctx, removedLogin.Credential, iamv1.StartStepUpRequest{
+		RequestID: "auth-recovery-remove", Operation: iamv1.StepUpRemoveTOTP, ExpectedFactorRevision: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	removeProof, err = sourceAPI.VerifyStepUp(ctx, removedLogin.Credential, removeProof.ID, iamv1.VerifyStepUpRequest{
+		RequestID: "auth-recovery-remove-proof", Password: iamHTTPSecret(t, changedDeveloperPassword),
+		Code: authenticationRecoveryFreshTOTP(t, ctx, sourceAdmin, removedUser.AccountID, removedFactor, 0)})
+	if err != nil || removeProof.State != "PROVED" {
+		t.Fatal("prove actual pre-backup removal", err)
+	}
+	removeRequest := iamv1.RemoveTOTPRequest{RequestID: removeProof.RequestID, StepUpID: removeProof.ID, ExpectedFactorRevision: 2}
+	removal, err := sourceAPI.RemoveTOTP(ctx, removedLogin.Credential, removeRequest)
+	if err != nil || removal.Outcome != "APPLIED" || removal.Removal.FactorRevision != 3 {
+		t.Fatal("commit actual pre-backup removal", err)
+	}
+	assertRestoredRemoval := func(service *identityaccess.Authority, database *pgx.Conn, phase string) {
+		t.Helper()
+		if _, err := service.CurrentIdentity(ctx, removedLogin.Credential); !errors.Is(err, identityaccess.ErrUnauthenticated) {
+			t.Fatal("restore revived the removal source Session", err)
+		}
+		fresh, err := service.Login(ctx, iamv1.LoginRequest{LoginName: removedUser.LoginName + "@" + string(removedUser.AccountID),
+			Password: iamHTTPSecret(t, changedDeveloperPassword), RequestID: "auth-recovery-removed-login-" + phase})
+		if err != nil || fresh.Outcome != iamv1.LoginAuthenticated {
+			t.Fatal("restored legal REMOVED user could not authenticate normally", err)
+		}
+		state, err := service.AuthenticatorState(ctx, fresh.Credential)
+		if err != nil || state.EnrollmentState != "REMOVED" || state.FactorRevision != 3 || state.FactorID != "" {
+			t.Fatal("restore inferred another enrollment qualification", err)
+		}
+		replay, err := service.RemoveTOTP(ctx, fresh.Credential, removeRequest)
+		if err != nil || replay.Outcome != "EQUAL_REPLAY" || replay.Removal != removal.Removal || replay.NextStep != "" {
+			t.Fatal("restore changed removal completion or re-executed it", err)
+		}
+		var preserved bool
+		if err := database.QueryRow(ctx, `SELECT
+		 (SELECT count(*)=1 FROM iam.authenticator_removals WHERE tenant_id=$1 AND user_id=$2)
+		 AND (SELECT state='REVOKED' AND revoked_at=$4 FROM iam.totp_authenticators WHERE tenant_id=$1 AND id=$3)
+		 AND NOT EXISTS(SELECT 1 FROM iam.mfa_recovery_batches WHERE tenant_id=$1 AND user_id=$2 AND revoked_at IS NULL)
+		 AND (SELECT authentication_method='PASSWORD' AND mfa_revision=3 AND status='ACTIVE' FROM iam.sessions WHERE tenant_id=$1 AND id=$5)`,
+			removedUser.AccountID, removedUser.ID, removedFactor.factorID, removal.Removal.RemovedAt, fresh.Session.ID).Scan(&preserved); err != nil || !preserved {
+			t.Fatal("restore revived factor/batch or mislabelled a password Session", err)
+		}
+		if _, err := service.Logout(ctx, fresh.Credential, iamv1.LogoutRequest{RequestID: "auth-recovery-removed-logout-" + phase}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	backupConfig := sourceConfig.Copy()
 	backupConfig.User, backupConfig.Password = "matrix_iam_backup_custody_login", "matrix-authority-process-test-only"
 	exported, err := iampostgres.OpenTOTPBackupSnapshot(ctx, backupConfig)
@@ -1015,7 +1083,7 @@ func TestIAMAuthenticationRecoveryPostgres(t *testing.T) {
 	restoredAPI, closeRestoredAPI := authenticationRecoveryAPI(t, ctx, restoredDSN, document)
 	restoredCredential := sourceCredential
 	before := readAuthenticationRecoverySecurityState(t, ctx, restoredAdmin, document, restoredSession)
-	if before.activeSessions == 0 || before.accessKeys != 1 || before.recoveryBatches != 2 || before.factorStep < 0 ||
+	if before.activeSessions == 0 || before.accessKeys != 1 || before.recoveryBatches != 3 || before.factorStep < 0 ||
 		before.passwordReserved != 1 || before.totpReserved != 1 || before.challengePending != 1 {
 		t.Fatal("restored pre-close replay fixture is incomplete")
 	}
@@ -1195,6 +1263,7 @@ func TestIAMAuthenticationRecoveryPostgres(t *testing.T) {
 	}
 	assertAuthenticationRecoveryAuditFacts(t, ctx, sourceAdmin, restoredAdmin)
 	assertAuthenticationRecoveryHistoryImmutable(t, ctx, restoredAdmin)
+	assertRestoredRemoval(restoredAPI, restoredAdmin, "first")
 	otpPeer, closeOTPPeer := authenticationRecoveryAPI(t, ctx, restoredDSN, document)
 	assertAuthenticationRecoveryOTPReplay(t, ctx, restoredAPI, restoredAdmin, document, replayMFA, snapshot)
 	assertAuthenticationRecoveryStepUpFenced(t, ctx, []*identityaccess.Authority{restoredAPI, otpPeer}, restoredAdmin, document, restoredMFA, snapshot)
@@ -1204,6 +1273,9 @@ func TestIAMAuthenticationRecoveryPostgres(t *testing.T) {
 	closeRestoredAPI()
 	assertAuthenticationRecoveryRepeated(t, ctx, restoredRecovery, closeRestoredRecovery, restoredAdmin, repeatedAdmin, repeatedConfig, repeatedDSN,
 		document, budgetUser, restoredMFA, intent, completion, snapshot, nextLease, nextDump)
+	repeatedAPI, closeRepeatedAPI := authenticationRecoveryAPI(t, ctx, repeatedDSN, document)
+	assertRestoredRemoval(repeatedAPI, repeatedAdmin, "repeated")
+	closeRepeatedAPI()
 }
 
 func assertAuthenticationRecoveryFloorCarry(t *testing.T, ctx context.Context, config *pgx.ConnConfig, database *pgx.Conn,

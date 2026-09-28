@@ -3,7 +3,7 @@ BEGIN
     IF NOT iam.account_security_settings_contract_ready() THEN
         RAISE EXCEPTION 'IAM security settings contract is unavailable';
     END IF;
-    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 45::bigint THEN
+    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 46::bigint THEN
         RAISE EXCEPTION 'IAM account/proof schema version is incompatible';
     END IF;
     IF NOT EXISTS (

@@ -188,6 +188,8 @@ func buildPaths() object {
 		"/v1/auth/step-up/{stepUpId}:verify":                           object{"post": mutationOperation("verifyStepUp", "Reauthenticate password and unused TOTP under shared budgets; keep the original absolute expiry and Session facts; repeated proof submission conflicts", "VerifyStepUpRequest", "StepUp", "200", nil, []any{openapi31.PathIDParameter("stepUpId")})},
 		"/v1/auth/recovery-codes:regenerate":                           object{"post": mutationOperation("regenerateRecoveryCodes", "Consume the exact proved command and replace only its recovery-code batch; APPLIED discloses codes once, EQUAL_REPLAY returns metadata only", "RegenerateRecoveryCodesRequest", "RegenerateRecoveryCodesResponse", "200", nil, nil)},
 		"/v1/auth/recovery-codes/regenerations/by-request/{requestId}": object{"get": readOperation("getRecoveryCodeRegenerationByRequest", "Read original same-USER completion using a current normal Session; never replay recovery codes", "RecoveryCodeRegeneration", nil, []any{openapi31.PathIDParameter("requestId")})},
+		"/v1/auth/totp:remove":                                         object{"post": mutationOperation("removeTOTP", "Consume the exact same-Session TOTP_REMOVE proof; APPLIED terminates old login Sessions, EQUAL_REPLAY only observes the original completion", "RemoveTOTPRequest", "RemoveTOTPResponse", "200", nil, nil)},
+		"/v1/auth/totp/removals/by-request/{requestId}":                object{"get": readOperation("getAuthenticatorRemovalByRequest", "Read the original same-USER removal using a current valid login Session; never repeat removal effects", "AuthenticatorRemoval", nil, []any{openapi31.PathIDParameter("requestId")})},
 		"/v1/auth/me":                object{"get": readOperation("getCurrentIdentity", "Get the current account and identity", "CurrentIdentity", nil, nil)},
 		"/v1/authorization-profiles": object{"get": readOperation("listAuthorizationProfiles", "Read complete current product declarations under current account policy-list permission; metadata is not a permit or registration capability. Maximum complete response 64 KiB.", "AuthorizationProfileList", nil, nil)},
 		"/v1/policies": object{
@@ -362,10 +364,10 @@ func readOperation(
 		responses["404"] = object{"$ref": "#/components/responses/ProblemResponse", "description": "No committed issuance found for this source user and request. This does not authorize a new intent."}
 	}
 	switch operationID {
-	case "getAuthenticatorState", "getTOTPEnrollment", "getTOTPEnrollmentByRequest", "cancelTOTPEnrollment", "getStepUpByRequest", "getRecoveryCodeRegenerationByRequest":
+	case "getAuthenticatorState", "getTOTPEnrollment", "getTOTPEnrollmentByRequest", "cancelTOTPEnrollment", "getStepUpByRequest", "getRecoveryCodeRegenerationByRequest", "getAuthenticatorRemovalByRequest":
 		responses["400"] = object{"$ref": "#/components/responses/ProblemResponse", "description": "Invalid path, query or unexpected body; no identity selector is accepted."}
 	}
-	if operationID == "getStepUpByRequest" || operationID == "getRecoveryCodeRegenerationByRequest" {
+	if operationID == "getStepUpByRequest" || operationID == "getRecoveryCodeRegenerationByRequest" || operationID == "getAuthenticatorRemovalByRequest" {
 		responses["404"] = object{"$ref": "#/components/responses/ProblemResponse", "description": "No original same-USER metadata observed; not evidence that an uncertain command rolled back, and not permission to create a replacement intent."}
 	}
 	switch operationID {
@@ -670,7 +672,7 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 		return object{"type": "integer", "minimum": 1, "maximum": maximum}
 	}
 	if owner == "AuthenticatorState" && jsonName == "enrollmentState" {
-		return object{"enum": []string{"NEVER_BOUND", "BOUND", "RECOVERY_REQUIRED"}}
+		return object{"enum": []string{"NEVER_BOUND", "BOUND", "RECOVERY_REQUIRED", "REMOVED"}}
 	}
 	if owner == "TOTPEnrollment" && jsonName == "state" {
 		return object{"enum": []string{"PENDING", "CONFIRMED", "CANCELLED", "EXPIRED"}}
@@ -682,7 +684,7 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 		return object{"enum": []string{"STARTED", "COMPLETED", "SUPERSEDED", "EXPIRED"}}
 	}
 	if (owner == "StepUp" || owner == "StartStepUpRequest") && jsonName == "operation" {
-		return object{"enum": []string{string(iamv1.StepUpRegenerateRecoveryCodes), string(iamv1.StepUpUpdateSecuritySettings), string(iamv1.StepUpReplaceTOTP)}}
+		return object{"enum": []string{string(iamv1.StepUpRegenerateRecoveryCodes), string(iamv1.StepUpUpdateSecuritySettings), string(iamv1.StepUpReplaceTOTP), string(iamv1.StepUpRemoveTOTP)}}
 	}
 	if owner == "StepUp" && jsonName == "state" {
 		return object{"enum": []string{"PENDING", "PROVED", "CONSUMED", "EXPIRED"}}
@@ -1044,6 +1046,7 @@ func applySemanticOverlays(schemas object) {
 		schemas[name].(object)["allOf"] = []any{object{"oneOf": []any{
 			object{"properties": object{"operation": object{"const": string(iamv1.StepUpRegenerateRecoveryCodes)}, "securitySettings": false}},
 			object{"properties": object{"operation": object{"const": string(iamv1.StepUpReplaceTOTP)}, "securitySettings": false, "expectedFactorRevision": object{"maximum": uint64(9007199254740990)}}},
+			object{"properties": object{"operation": object{"const": string(iamv1.StepUpRemoveTOTP)}, "securitySettings": false, "expectedFactorRevision": object{"maximum": uint64(9007199254740990)}}},
 			object{"required": []string{"securitySettings"}, "properties": object{"operation": object{"const": string(iamv1.StepUpUpdateSecuritySettings)}, "securitySettings": openapi31.Ref("SecuritySettingsUpdateIntent")}},
 		}}}
 	}
@@ -1081,7 +1084,7 @@ func applySemanticOverlays(schemas object) {
 		object{"required": []string{"notificationContact", "enrollment"}, "properties": object{
 			"challenge":           object{"properties": object{"nextStep": object{"const": "ENROLLMENT"}}},
 			"notificationContact": object{"type": "object", "properties": object{"state": object{"const": "VERIFIED"}}},
-			"enrollment":          object{"type": "object", "properties": object{"purpose": object{"const": "INITIAL"}, "state": object{"const": "PENDING"}, "factorRevision": object{"const": 1}}},
+			"enrollment":          object{"type": "object", "properties": object{"purpose": object{"const": "INITIAL"}, "state": object{"const": "PENDING"}, "factorRevision": object{"oneOf": []any{object{"const": 1}, object{"minimum": 3}}}}},
 		}},
 	}
 	for _, name := range []string{"InspectEnrollmentChallengeRequest", "StartChallengeTOTPEnrollmentRequest", "StartChallengeNotificationContactVerificationRequest", "ConfirmChallengeNotificationContactVerificationRequest"} {
@@ -1115,6 +1118,7 @@ func applySemanticOverlays(schemas object) {
 		object{"properties": object{"enrollmentState": object{"const": "NEVER_BOUND"}, "factorRevision": object{"const": 1}, "factorId": false}},
 		object{"required": []string{"factorId"}, "properties": object{"enrollmentState": object{"const": "BOUND"}, "factorRevision": object{"minimum": 2}}},
 		object{"properties": object{"enrollmentState": object{"const": "RECOVERY_REQUIRED"}}},
+		object{"properties": object{"enrollmentState": object{"const": "REMOVED"}, "factorRevision": object{"minimum": 3}, "factorId": false}},
 	}
 	schemas["LoginResponse"].(object)["description"] = "Disjoint authentication result. A challenge is not a Session, bearer or authorization. Credential-bearing results require explicit encoding and no-store handling."
 	schemas["LoginResponse"].(object)["oneOf"] = []any{

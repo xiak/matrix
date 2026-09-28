@@ -102,8 +102,8 @@ func (service *Authority) createLoginChallenge(ctx context.Context, tx Transacti
 			return iamv1.LoginResponse{}, ErrUnavailable
 		}
 		step = "RECOVER"
-	case "NEVER_BOUND":
-		if state.Revision != 1 || state.FactorID != "" || !state.EnrollmentRequired {
+	case "NEVER_BOUND", "REMOVED":
+		if state.FactorID != "" || !state.EnrollmentRequired || (state.State == "NEVER_BOUND" && state.Revision != 1) || (state.State == "REMOVED" && state.Revision < 3) {
 			return iamv1.LoginResponse{}, ErrUnavailable
 		}
 		purpose, step = "ENROLLMENT", "ENROLLMENT"
