@@ -306,6 +306,7 @@ type Effects interface {
 	RollbackUpgrade(context.Context, UpgradePlan) error
 	ApplyRollbackPhase(context.Context, RollbackPlan, lifecycle.Phase) error
 	InspectBackup(context.Context, InstalledPlan, string) (RecoverySource, error)
+	PreflightRecovery(context.Context, RecoveryPlan) error
 	ApplyRecoveryPhase(context.Context, RecoveryPlan, lifecycle.Phase) error
 	PrepareCredentialRecovery(context.Context, InstalledPlan, string, *lifecycle.Execution) (CredentialRecoveryPlan, error)
 	ApplyCredentialRecoveryPhase(context.Context, CredentialRecoveryPlan, lifecycle.Phase) error
@@ -1209,11 +1210,6 @@ func (backend *Backend) recover(
 	if started.Replay == lifecycle.ReplayCompleted {
 		return completedResult(started.Journal, started.Execution, false)
 	}
-	if started.Replay == lifecycle.ReplayNone {
-		if err := session.Write(started.Journal); err != nil {
-			return cli.Result{}, stateWriteFault(err)
-		}
-	}
 	currentPlan := InstallPlan{
 		Root: session.Root(), InstallationID: started.Journal.InstallationID,
 		CorrelationID: commandID,
@@ -1239,6 +1235,23 @@ func (backend *Backend) recover(
 		Current: currentPlan, Target: targetPlan,
 		BackupID: source.BackupID, BackupDigest: source.BackupDigest,
 		AuthenticationIntent: intent,
+	}
+	if started.Replay == lifecycle.ReplayNone {
+		if err := backend.effects.PreflightRecovery(ctx, plan); err != nil {
+			if ctx.Err() != nil {
+				return cli.Result{}, fault(cli.FaultInterrupted, "COMMAND_INTERRUPTED")
+			}
+			if errors.Is(err, ErrEffectOutcomeUnknown) {
+				return cli.Result{}, fault(cli.FaultUnavailable, "EFFECT_OUTCOME_UNKNOWN")
+			}
+			return cli.Result{}, effectFault(lifecycle.PhasePreflight,
+				BindRecoveryFailure(RecoveryFailureAuthenticationClose, err))
+		}
+	}
+	if started.Replay == lifecycle.ReplayNone {
+		if err := session.Write(started.Journal); err != nil {
+			return cli.Result{}, stateWriteFault(err)
+		}
 	}
 	return backend.driveReleaseChange(
 		ctx, session, lifecycle.ActionRecover,

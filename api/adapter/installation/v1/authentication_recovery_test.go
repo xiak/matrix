@@ -72,12 +72,16 @@ func TestAuthenticationRecoveryInspectionBindsOneNewIntentWithoutExposingSnapsho
 		t.Fatal("inspection did not bind its exact sealed intent")
 	}
 	for name, mutate := range map[string]func(*AuthenticationRecoveryInspection){
-		"state": func(v *AuthenticationRecoveryInspection) { v.State = "COMPLETED" },
-		"command": func(v *AuthenticationRecoveryInspection) { v.CommandID = "cmd-other" },
-		"epoch": func(v *AuthenticationRecoveryInspection) { v.Epoch++ },
+		"state":     func(v *AuthenticationRecoveryInspection) { v.State = "COMPLETED" },
+		"command":   func(v *AuthenticationRecoveryInspection) { v.CommandID = "cmd-other" },
+		"epoch":     func(v *AuthenticationRecoveryInspection) { v.Epoch++ },
 		"bootstrap": func(v *AuthenticationRecoveryInspection) { v.BootstrapDigest = "sha256:" + strings.Repeat("7", 64) },
-		"intent": func(v *AuthenticationRecoveryInspection) { v.RecoveryIntentDigest = "sha256:" + strings.Repeat("8", 64) },
-		"authentication": func(v *AuthenticationRecoveryInspection) { v.AuthenticationStateDigest = "sha256:" + strings.Repeat("9", 64) },
+		"intent": func(v *AuthenticationRecoveryInspection) {
+			v.RecoveryIntentDigest = "sha256:" + strings.Repeat("8", 64)
+		},
+		"authentication": func(v *AuthenticationRecoveryInspection) {
+			v.AuthenticationStateDigest = "sha256:" + strings.Repeat("9", 64)
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			candidate := inspection
@@ -88,14 +92,13 @@ func TestAuthenticationRecoveryInspectionBindsOneNewIntentWithoutExposingSnapsho
 		})
 	}
 	for name, input := range map[string]string{
-		"unknown": string(encoded[:len(encoded)-1]) + `,"permit":true}`,
-		"duplicate": strings.Replace(string(encoded), `"state":"ELIGIBLE"`, `"state":"ELIGIBLE","state":"ELIGIBLE"`, 1),
+		"unknown":    string(encoded[:len(encoded)-1]) + `,"permit":true}`,
+		"duplicate":  strings.Replace(string(encoded), `"state":"ELIGIBLE"`, `"state":"ELIGIBLE","state":"ELIGIBLE"`, 1),
 		"whitespace": " " + string(encoded),
-		"trailing": string(encoded) + `{}`,
+		"trailing":   string(encoded) + `{}`,
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := DecodeAuthenticationRecoveryInspection(strings.NewReader(input));
-				!errors.Is(err, ErrInvalidAuthenticationRecoveryInspection) {
+			if _, err := DecodeAuthenticationRecoveryInspection(strings.NewReader(input)); !errors.Is(err, ErrInvalidAuthenticationRecoveryInspection) {
 				t.Fatal("ambiguous inspection was accepted")
 			}
 		})

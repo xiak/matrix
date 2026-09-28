@@ -2900,6 +2900,97 @@ func TestAuthenticationRecoveryFailureBoundariesRemainFailClosed(t *testing.T) {
 	})
 }
 
+func TestAuthenticationRecoveryPreflightUsesPurposeOnlyInspectionAndRemovesScratch(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine authentication recovery effects target Linux")
+	}
+	effects, runtimeBoundary, recovery := authenticationRecoveryEffectFixture(t)
+	starts, removals, events := runtimeBoundary.authenticationStarts, runtimeBoundary.authenticationRemovals, len(runtimeBoundary.recoveryEvents)
+	relative := filepath.FromSlash(layout.IAMAuthenticationRecoveryPreflightIntent(recovery.AuthenticationIntent.CommandID))
+	assertClean := func() {
+		t.Helper()
+		if _, err := os.Lstat(filepath.Join(recovery.Current.Root, relative)); !errors.Is(err, os.ErrNotExist) ||
+			runtimeBoundary.authenticationPresent || runtimeBoundary.recoveryRestores != 0 {
+			t.Fatal("preflight retained input/container or reached restore")
+		}
+		if _, exists, err := readAuthenticationRecoveryClosure(recovery.Current.Root, recovery.AuthenticationIntent.CommandID); err != nil || exists {
+			t.Fatal("preflight published an authentication closure")
+		}
+	}
+	if err := effects.PreflightRecovery(t.Context(), recovery); err != nil {
+		t.Fatalf("new recovery inspection failed: %v", err)
+	}
+	assertClean()
+	if runtimeBoundary.authenticationStarts != starts+1 || runtimeBoundary.authenticationRemovals != removals+1 ||
+		!slices.Equal(runtimeBoundary.recoveryEvents[events:], []string{"authentication-inspect"}) {
+		t.Fatal("preflight did not use exactly one bounded purpose-only inspect")
+	}
+	runtimeBoundary.authenticationExitCodes = map[string]int{
+		installationv1.AuthenticationRecoveryInspectCommand: installationv1.AuthenticationRecoveryExitConflict,
+	}
+	if err := effects.PreflightRecovery(t.Context(), recovery); !errors.Is(err, platformcommand.ErrEffectConflict) {
+		t.Fatalf("known qualification conflict was not rejected: %v", err)
+	}
+	assertClean()
+	if runtimeBoundary.authenticationStarts != starts+2 || runtimeBoundary.authenticationRemovals != removals+2 {
+		t.Fatal("rejected preflight left a purpose-only container")
+	}
+	runtimeBoundary.authenticationExitCodes = nil
+	runtimeBoundary.authenticationLoseResult = true
+	if err := effects.PreflightRecovery(t.Context(), recovery); !errors.Is(err, platformcommand.ErrEffectOutcomeUnknown) {
+		t.Fatalf("lost inspection result was treated as eligibility: %v", err)
+	}
+	assertClean()
+	if runtimeBoundary.authenticationStarts != starts+3 || runtimeBoundary.authenticationRemovals != removals+3 {
+		t.Fatal("unknown inspection result left a purpose-only container")
+	}
+	runtimeBoundary.authenticationHangInspect = true
+	if err := effects.PreflightRecovery(t.Context(), recovery); !errors.Is(err, platformcommand.ErrEffectOutcomeUnknown) {
+		t.Fatalf("running inspection was treated as eligibility: %v", err)
+	}
+	assertClean()
+	if runtimeBoundary.authenticationStarts != starts+4 || runtimeBoundary.authenticationRemovals != removals+4 {
+		t.Fatal("timed-out inspection left a running purpose-only container")
+	}
+	runtimeBoundary.authenticationPresent = true
+	runtimeBoundary.authenticationContainer.Config.Labels["com.xiak.matrix.command"] = "cmd-" + strings.Repeat("f", 32)
+	if err := effects.PreflightRecovery(t.Context(), recovery); !errors.Is(err, platformcommand.ErrEffectConflict) {
+		t.Fatalf("foreign same-name container was treated as owned inspection: %v", err)
+	}
+	if !runtimeBoundary.authenticationPresent || runtimeBoundary.authenticationRemovals != removals+4 {
+		t.Fatal("foreign same-name container was force-removed")
+	}
+	t.Run("interrupted exact scratch is retried and removed", func(t *testing.T) {
+		effects, runtimeBoundary, recovery := authenticationRecoveryEffectFixture(t)
+		relative := filepath.FromSlash(layout.IAMAuthenticationRecoveryPreflightIntent(recovery.AuthenticationIntent.CommandID))
+		encoded, err := installationv1.EncodeAuthenticationRecoveryIntent(recovery.AuthenticationIntent)
+		if err != nil || writeManagedOnce(recovery.Current.Root, relative, encoded) != nil {
+			t.Fatal("prepare exact interrupted preflight scratch", err)
+		}
+		if err := effects.PreflightRecovery(t.Context(), recovery); err != nil {
+			t.Fatalf("retry interrupted preflight: %v", err)
+		}
+		if _, err := os.Lstat(filepath.Join(recovery.Current.Root, relative)); !errors.Is(err, os.ErrNotExist) ||
+			runtimeBoundary.authenticationPresent || runtimeBoundary.authenticationStarts != 1 ||
+			runtimeBoundary.authenticationRemovals != 1 {
+			t.Fatal("retry did not remove its exact scratch and purpose-only container")
+		}
+	})
+	t.Run("wrong intent inspection cannot start recovery", func(t *testing.T) {
+		effects, runtimeBoundary, recovery := authenticationRecoveryEffectFixture(t)
+		runtimeBoundary.authenticationWrongInspectionDigest = true
+		if err := effects.PreflightRecovery(t.Context(), recovery); !errors.Is(err, platformcommand.ErrEffectOutcomeUnknown) {
+			t.Fatalf("mismatched inspection was treated as eligibility: %v", err)
+		}
+		relative := filepath.FromSlash(layout.IAMAuthenticationRecoveryPreflightIntent(recovery.AuthenticationIntent.CommandID))
+		if _, err := os.Lstat(filepath.Join(recovery.Current.Root, relative)); !errors.Is(err, os.ErrNotExist) ||
+			runtimeBoundary.authenticationPresent || runtimeBoundary.authenticationStarts != 1 ||
+			runtimeBoundary.authenticationRemovals != 1 || runtimeBoundary.recoveryRestores != 0 {
+			t.Fatal("mismatched inspection retained scratch/container or reached restore")
+		}
+	})
+}
+
 func TestAuthenticationRecoverySealsAndRequiresExactSecuritySnapshot(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("local-machine authentication recovery effects target Linux")
@@ -4040,44 +4131,46 @@ type migrationRuntime struct {
 }
 
 type platformStartRuntime struct {
-	expectation               platformComposeExpectation
-	images                    map[string]bool
-	started                   bool
-	resourceDriftService      string
-	userDriftService          string
-	portDriftService          string
-	configHashDriftService    string
-	unhealthyService          string
-	failObservationAfterStart bool
-	composeCalls              int
-	observationsBeforeStart   int
-	composeArguments          []string
-	migrationRuns             [][]string
-	databaseDump              []byte
-	backupStreams             int
-	backupCustodyRuns         int
-	backupCustodyReleases     int
-	backupCustodyAborts       int
-	backupLease               installationv1.TOTPBackupSnapshotLease
-	backupLeaseHistorical     bool
-	backupLeaseError          error
-	backupCustodyMode         string
-	backupSnapshotRequired    bool
-	restoreChecks             int
-	recoveryRestores          int
-	postgresOnly              bool
-	networkCreated            bool
-	removedContainers         map[string]bool
-	removedNetworks           map[string]bool
-	providerRemovals          int
-	probe                     *recoveryProbeRuntime
-	authenticationContainer   platformContainerInspection
-	authenticationPresent     bool
-	authenticationStarts      int
-	authenticationRemovals    int
-	authenticationExitCodes   map[string]int
-	authenticationLoseResult  bool
-	recoveryEvents            []string
+	expectation                         platformComposeExpectation
+	images                              map[string]bool
+	started                             bool
+	resourceDriftService                string
+	userDriftService                    string
+	portDriftService                    string
+	configHashDriftService              string
+	unhealthyService                    string
+	failObservationAfterStart           bool
+	composeCalls                        int
+	observationsBeforeStart             int
+	composeArguments                    []string
+	migrationRuns                       [][]string
+	databaseDump                        []byte
+	backupStreams                       int
+	backupCustodyRuns                   int
+	backupCustodyReleases               int
+	backupCustodyAborts                 int
+	backupLease                         installationv1.TOTPBackupSnapshotLease
+	backupLeaseHistorical               bool
+	backupLeaseError                    error
+	backupCustodyMode                   string
+	backupSnapshotRequired              bool
+	restoreChecks                       int
+	recoveryRestores                    int
+	postgresOnly                        bool
+	networkCreated                      bool
+	removedContainers                   map[string]bool
+	removedNetworks                     map[string]bool
+	providerRemovals                    int
+	probe                               *recoveryProbeRuntime
+	authenticationContainer             platformContainerInspection
+	authenticationPresent               bool
+	authenticationStarts                int
+	authenticationRemovals              int
+	authenticationExitCodes             map[string]int
+	authenticationLoseResult            bool
+	authenticationHangInspect           bool
+	authenticationWrongInspectionDigest bool
+	recoveryEvents                      []string
 }
 
 type platformCleanupRuntime struct {
@@ -4590,8 +4683,33 @@ func (runtimeBoundary *platformStartRuntime) runAuthenticationRecovery(arguments
 			if err != nil {
 				return nil, true, err
 			}
+			if mode == installationv1.AuthenticationRecoveryInspectCommand && runtimeBoundary.authenticationWrongInspectionDigest {
+				runtimeBoundary.authenticationWrongInspectionDigest = false
+				var inspection installationv1.AuthenticationRecoveryInspection
+				if err := json.Unmarshal(output, &inspection); err != nil {
+					return nil, true, err
+				}
+				originalDigest := inspection.AuthenticationStateDigest
+				inspection.AuthenticationStateDigest = "sha256:" + strings.Repeat("0", 64)
+				if inspection.AuthenticationStateDigest == originalDigest {
+					inspection.AuthenticationStateDigest = "sha256:" + strings.Repeat("f", 64)
+				}
+				output, err = installationv1.EncodeAuthenticationRecoveryInspection(inspection)
+				if err != nil {
+					return nil, true, err
+				}
+			}
 		}
 		runtimeBoundary.authenticationStarts++
+		if mode == installationv1.AuthenticationRecoveryInspectCommand && runtimeBoundary.authenticationHangInspect {
+			runtimeBoundary.authenticationHangInspect = false
+			runtimeBoundary.authenticationContainer.State = platformContainerState{Status: "running", Running: true}
+			name := runtimeBoundary.expectation.Name + "_control"
+			endpoint := runtimeBoundary.authenticationContainer.NetworkSettings.Networks[name]
+			endpoint.NetworkID = runtimeBoundary.authenticationContainer.HostConfig.NetworkMode
+			runtimeBoundary.authenticationContainer.NetworkSettings.Networks[name] = endpoint
+			return nil, true, errors.New("authentication inspection timed out while running")
+		}
 		runtimeBoundary.authenticationContainer.State = platformContainerState{Status: "exited", ExitCode: code}
 		runtimeBoundary.recoveryEvents = append(runtimeBoundary.recoveryEvents, "authentication-"+mode)
 		if runtimeBoundary.authenticationLoseResult {
@@ -4604,6 +4722,12 @@ func (runtimeBoundary *platformStartRuntime) runAuthenticationRecovery(arguments
 		identity := arguments[len(arguments)-1]
 		if !runtimeBoundary.authenticationPresent || identity != runtimeBoundary.authenticationContainer.ID {
 			return nil, false, nil
+		}
+		if slices.Equal(arguments, []string{"container", "rm", "--force", identity}) &&
+			runtimeBoundary.authenticationContainer.Config.Cmd[0] == installationv1.AuthenticationRecoveryInspectCommand {
+			runtimeBoundary.authenticationPresent = false
+			runtimeBoundary.authenticationRemovals++
+			return nil, true, nil
 		}
 		if !slices.Equal(arguments, []string{"container", "rm", identity}) ||
 			runtimeBoundary.authenticationContainer.State.Running ||
@@ -4637,7 +4761,8 @@ func authenticationRecoveryTestContainer(project string, arguments []string) (pl
 		return platformContainerInspection{}, errors.New("authentication recovery test isolation is incomplete")
 	}
 	mode := arguments[len(arguments)-1]
-	if mode != installationv1.AuthenticationRecoveryCloseCommand &&
+	if mode != installationv1.AuthenticationRecoveryInspectCommand &&
+		mode != installationv1.AuthenticationRecoveryCloseCommand &&
 		mode != installationv1.AuthenticationRecoveryReconcileCommand &&
 		mode != installationv1.AuthenticationRecoveryReopenCommand {
 		return platformContainerInspection{}, errors.New("authentication recovery test mode is invalid")
@@ -4724,6 +4849,32 @@ func authenticationRecoveryTestOutput(container platformContainerInspection) ([]
 	}
 	defer clear(content)
 	switch container.Config.Cmd[0] {
+	case installationv1.AuthenticationRecoveryInspectCommand:
+		if snapshotPath != "" {
+			return nil, errors.New("authentication inspection mounted a replay snapshot")
+		}
+		intent, err := installationv1.DecodeAuthenticationRecoveryIntent(bytes.NewReader(content))
+		if err != nil || installationv1.ValidateCurrentAuthenticationRecoveryIntent(intent) != nil {
+			return nil, errors.New("authentication inspection intent is invalid")
+		}
+		digest, err := installationv1.AuthenticationRecoveryIntentDigest(intent)
+		if err != nil {
+			return nil, err
+		}
+		root := filepath.Dir(filepath.Dir(filepath.Dir(inputPath)))
+		installationID, bootstrapDigest, err := sealedIAMBootstrapScope(root, intent.InstallationID)
+		if err != nil || installationID != intent.InstallationID {
+			return nil, errors.New("authentication inspection scope differs")
+		}
+		return installationv1.EncodeAuthenticationRecoveryInspection(installationv1.AuthenticationRecoveryInspection{
+			APIVersion:     installationv1.AuthenticationRecoveryAPIVersion,
+			Kind:           installationv1.AuthenticationRecoveryInspectionKind,
+			Purpose:        installationv1.AuthenticationRecoveryPurpose,
+			State:          installationv1.AuthenticationRecoveryStateEligible,
+			InstallationID: intent.InstallationID, BootstrapDigest: bootstrapDigest,
+			Epoch: intent.Epoch, CommandID: intent.CommandID, RecoveryIntentDigest: digest,
+			AuthenticationStateDigest: intent.AuthenticationStateDigest,
+		})
 	case installationv1.AuthenticationRecoveryCloseCommand:
 		if snapshotPath != "" {
 			return nil, errors.New("authentication close mounted a replay snapshot before commit")

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -17,6 +18,64 @@ import (
 )
 
 const authenticationRecoveryEntrypoint = "/matrix/bin/matrix-iam-authentication-recovery"
+
+func (effects *Effects) PreflightRecovery(ctx context.Context, plan platformcommand.RecoveryPlan) (returnErr error) {
+	intent := plan.AuthenticationIntent
+	if effects == nil || effects.runtime == nil || ctx == nil {
+		return platformcommand.ErrEffectUnavailable
+	}
+	if installationv1.ValidateCurrentAuthenticationRecoveryIntent(intent) != nil ||
+		intent.CommandID != plan.Current.CorrelationID || intent.InstallationID != plan.Current.InstallationID ||
+		intent.SourceReleaseID != plan.Current.Bundle.Manifest.Release.ID ||
+		intent.SourceReleaseDigest != plan.Current.Bundle.ManifestSHA256 ||
+		intent.TargetReleaseID != plan.Target.Bundle.Manifest.Release.ID ||
+		intent.TargetReleaseDigest != plan.Target.Bundle.ManifestSHA256 ||
+		validateAuthenticationRecoveryAnchor(plan.Current.Root, intent, false) != nil {
+		return platformcommand.ErrEffectConflict
+	}
+	encoded, err := installationv1.EncodeAuthenticationRecoveryIntent(intent)
+	if err != nil {
+		return platformcommand.ErrEffectVerification
+	}
+	defer clear(encoded)
+	relative := filepath.FromSlash(layout.IAMAuthenticationRecoveryPreflightIntent(intent.CommandID))
+	path, err := managedPath(plan.Current.Root, relative)
+	if err != nil {
+		return platformcommand.ErrEffectVerification
+	}
+	if err := writeManagedOnce(plan.Current.Root, relative, encoded); err != nil {
+		return errors.Join(platformcommand.ErrEffectConflict, err)
+	}
+	defer func() {
+		if err := os.Remove(path); err != nil || syncManagedDirectory(filepath.Dir(path)) != nil {
+			returnErr = platformcommand.ErrEffectOutcomeUnknown
+		}
+		// The directory is task-owned and may also contain earlier recovery
+		// receipts. Remove it only when the preflight file was its sole child.
+		if err := os.Remove(filepath.Dir(path)); err == nil {
+			if syncManagedDirectory(filepath.Dir(filepath.Dir(path))) != nil {
+				returnErr = platformcommand.ErrEffectOutcomeUnknown
+			}
+		}
+	}()
+	digest, err := installationv1.AuthenticationRecoveryIntentDigest(intent)
+	if err != nil {
+		return platformcommand.ErrEffectVerification
+	}
+	output, err := effects.runAuthenticationRecoveryEntry(ctx, plan.Current, intent.CommandID, digest,
+		relative, installationv1.AuthenticationRecoveryInspectCommand, "")
+	if err != nil {
+		return err
+	}
+	inspection, err := installationv1.DecodeAuthenticationRecoveryInspection(bytes.NewReader(output))
+	clear(output)
+	installationID, bootstrapDigest, scopeErr := sealedIAMBootstrapScope(plan.Current.Root, intent.InstallationID)
+	if err != nil || scopeErr != nil || installationID != intent.InstallationID ||
+		installationv1.ValidateAuthenticationRecoveryInspectionForIntent(inspection, intent, bootstrapDigest) != nil {
+		return platformcommand.ErrEffectOutcomeUnknown
+	}
+	return nil
+}
 
 func (effects *Effects) closeAuthenticationRecovery(ctx context.Context, plan platformcommand.RecoveryPlan) error {
 	intent := plan.AuthenticationIntent
@@ -372,6 +431,16 @@ func (effects *Effects) runAuthenticationRecoveryEntry(
 	}
 	output, err := invokeAuthenticationRecoveryEntry(ctx, effects.runtime, arguments, expected)
 	if err != nil {
+		if mode == installationv1.AuthenticationRecoveryInspectCommand &&
+			errors.Is(err, platformcommand.ErrEffectOutcomeUnknown) {
+			// Inspect has no durable receipt or recovery journal. A timed-out
+			// purpose-only process cannot be left to block a later new intent.
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			defer cancel()
+			if cleanupAuthenticationRecoveryInspection(cleanupCtx, effects.runtime, expected) != nil {
+				return nil, platformcommand.ErrEffectOutcomeUnknown
+			}
+		}
 		return nil, err
 	}
 	if int64(len(output)) > installationv1.MaximumAuthenticationRecoveryEnvelopeBytes {
@@ -379,6 +448,32 @@ func (effects *Effects) runAuthenticationRecoveryEntry(
 		return nil, platformcommand.ErrEffectOutcomeUnknown
 	}
 	return output, nil
+}
+
+func cleanupAuthenticationRecoveryInspection(
+	ctx context.Context, runtimeBoundary dockerRuntime, expected purposeOnlyIAMContainerExpectation,
+) error {
+	if expected.mode != installationv1.AuthenticationRecoveryInspectCommand {
+		return platformcommand.ErrEffectVerification
+	}
+	current, exists, err := findPurposeOnlyIAMContainer(ctx, runtimeBoundary, expected)
+	if err != nil {
+		return platformcommand.ErrEffectOutcomeUnknown
+	}
+	if !exists {
+		return nil
+	}
+	// Only an exact inspected inspect container may be force-removed. Its SQL
+	// transaction has no durable writes; close/reconcile/reopen never take this
+	// path and retain their original replay handling.
+	if _, _, err := runtimeBoundary.Run(ctx, nil, "container", "rm", "--force", current.ID); err != nil {
+		return platformcommand.ErrEffectOutcomeUnknown
+	}
+	_, exists, err = findPurposeOnlyIAMContainer(ctx, runtimeBoundary, expected)
+	if err != nil || exists {
+		return platformcommand.ErrEffectOutcomeUnknown
+	}
+	return nil
 }
 
 func invokeAuthenticationRecoveryEntry(
@@ -466,14 +561,15 @@ func (effects *Effects) authenticationRecoveryContainer(
 	snapshotRelative string,
 ) ([]string, purposeOnlyIAMContainerExpectation, error) {
 	var expected purposeOnlyIAMContainerExpectation
-	if mode != installationv1.AuthenticationRecoveryCloseCommand &&
+	if mode != installationv1.AuthenticationRecoveryInspectCommand &&
+		mode != installationv1.AuthenticationRecoveryCloseCommand &&
 		mode != installationv1.AuthenticationRecoveryReconcileCommand &&
 		mode != installationv1.AuthenticationRecoveryReopenCommand {
 		return nil, expected, platformcommand.ErrEffectVerification
 	}
 	if lifecycle.ValidateCommandID(commandID) != nil || plan.CorrelationID != commandID ||
 		!validSHA256(inputDigest) || inputRelative == "" ||
-		(mode == installationv1.AuthenticationRecoveryCloseCommand && snapshotRelative != "") {
+		((mode == installationv1.AuthenticationRecoveryInspectCommand || mode == installationv1.AuthenticationRecoveryCloseCommand) && snapshotRelative != "") {
 		return nil, expected, platformcommand.ErrEffectVerification
 	}
 	configuration, err := verifiedInstallationConfiguration(plan)
@@ -563,7 +659,7 @@ func (effects *Effects) authenticationRecoveryContainer(
 }
 
 func authenticationRecoveryInputEnvironment(mode string) string {
-	if mode == installationv1.AuthenticationRecoveryCloseCommand {
+	if mode == installationv1.AuthenticationRecoveryInspectCommand || mode == installationv1.AuthenticationRecoveryCloseCommand {
 		return installationv1.AuthenticationRecoveryIntentFileEnvironment
 	}
 	return installationv1.AuthenticationRecoveryClosureFileEnvironment

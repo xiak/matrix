@@ -1136,6 +1136,9 @@ func TestRecoveryBindsSelectedBackupAndResumesUnknownOutcome(t *testing.T) {
 		result.BackupID != backupID || result.CorrelationID != commandID {
 		t.Fatalf("resumed recovery result = %#v / %v", result, err)
 	}
+	if effects.recoveryPreflightCalls != 1 {
+		t.Fatal("active recovery replay repeated new-intent preflight")
+	}
 	for _, phase := range []lifecycle.Phase{
 		lifecycle.PhaseRecovering, lifecycle.PhaseStarting, lifecycle.PhaseVerifying,
 	} {
@@ -1342,6 +1345,49 @@ func TestRecoveryInspectionFailureHasSafeSourceCodeBeforeJournalMutation(t *test
 	if !reflect.DeepEqual(before, readJournal(t, root)) || effects.recoveryInspectCalls != 1 ||
 		len(effects.recoveryCalls) != 0 {
 		t.Fatal("failed backup inspection changed the journal or reached recovery effects")
+	}
+}
+
+func TestRecoveryKnownAuthenticationMismatchRejectsBeforeJournalMutation(t *testing.T) {
+	fixture := writeReleaseFixture(t)
+	effects := &installEffects{
+		recoveryPreflightErr: ErrEffectConflict,
+	}
+	backend := newTestBackend(t, effects)
+	root := filepath.Join(t.TempDir(), "matrix")
+	if _, err := backend.Run(context.Background(), installRequest(root, fixture)); err != nil {
+		t.Fatalf("install recovery fixture: %v", err)
+	}
+	materializeInstalledRelease(t, root, fixture)
+	before := readJournal(t, root)
+	backupID := "backup-" + strings.Repeat("b", 32)
+	effects.recoverySource = RecoverySource{
+		InstallationID:            before.InstallationID,
+		BackupID:                  backupID,
+		BackupDigest:              "sha256:" + strings.Repeat("d", 64),
+		TOTPCustodyDigest:         "sha256:" + strings.Repeat("9", 64),
+		AuthenticationStateDigest: "sha256:" + strings.Repeat("a", 64),
+		ReleaseID:                 fixture.Manifest.Release.ID,
+		ReleaseDigest:             fixture.ManifestDigest,
+		Database:                  fixture.Manifest.Database,
+	}
+
+	_, err := backend.Run(context.Background(), cli.Request{
+		Action: lifecycle.ActionRecover, Root: root, BackupID: backupID,
+	})
+	if err == nil {
+		t.Fatal("known authentication mismatch was accepted")
+	}
+	if !reflect.DeepEqual(before, readJournal(t, root)) || effects.recoveryPreflightCalls != 1 || len(effects.recoveryCalls) != 0 {
+		t.Fatal("known authentication mismatch changed journal or reached recovery effects")
+	}
+	effects.recoveryPreflightErr = ErrEffectOutcomeUnknown
+	_, err = backend.Run(context.Background(), cli.Request{
+		Action: lifecycle.ActionRecover, Root: root, BackupID: backupID,
+	})
+	assertFault(t, err, cli.FaultUnavailable, "EFFECT_OUTCOME_UNKNOWN")
+	if !reflect.DeepEqual(before, readJournal(t, root)) || effects.recoveryPreflightCalls != 2 || len(effects.recoveryCalls) != 0 {
+		t.Fatal("unknown authentication inspection changed journal or reached recovery effects")
 	}
 }
 
@@ -1690,6 +1736,8 @@ type installEffects struct {
 	explicitRollbackFailed    bool
 	recoveryInspectCalls      int
 	recoveryInspectErr        error
+	recoveryPreflightCalls    int
+	recoveryPreflightErr      error
 	recoverySource            RecoverySource
 	recoveryCalls             map[lifecycle.Phase]int
 	recoveryPlan              RecoveryPlan
@@ -1876,6 +1924,15 @@ func (effects *installEffects) InspectBackup(
 		return RecoverySource{}, effects.recoveryInspectErr
 	}
 	return effects.recoverySource, nil
+}
+
+func (effects *installEffects) PreflightRecovery(_ context.Context, plan RecoveryPlan) error {
+	effects.recoveryPreflightCalls++
+	if plan.AuthenticationIntent.CommandID == "" || plan.Current.CorrelationID != plan.AuthenticationIntent.CommandID ||
+		plan.Current.Bundle.Manifest.Release.ID == "" || plan.Target.Bundle.Manifest.Release.ID == "" {
+		return errors.New("recovery preflight plan is incomplete")
+	}
+	return effects.recoveryPreflightErr
 }
 
 func (effects *installEffects) ApplyRecoveryPhase(

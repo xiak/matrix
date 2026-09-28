@@ -632,9 +632,17 @@ new-intent IAM inspection before writing its recovery journal. Inspection
 rejects an existing IAM command receipt and compares the current complete
 authentication-state commitment with the selected backup; it returns only a
 bounded `ELIGIBLE` identity/digest binding, never the private replay snapshot
-or a reusable close permit. IAM close repeats qualification inside its own
-serializable transaction. This preflight is not yet a signed-runtime result;
+or a reusable close permit, including at the restricted SQL entry. IAM API,
+worker, credential-recovery, backup-custody and notification-worker identities
+cannot execute that entry. IAM close repeats
+qualification inside its own
+serializable transaction. An unknown inspection result cannot start a journal;
+only close and later phases have a durable command to replay. This preflight
+is not yet a signed-runtime result;
 the existing release still fails the T0-backup/T1-revocation no-journal gate.
+An interrupted inspection may remove only its exact verified purpose-only
+container; a foreign same-name container must remain untouched and refuse
+the operation.
 
 1. A backup at T0 followed by a stronger Account requirement, factor
    replacement or authorization revocation at T1 is rejected before journal,

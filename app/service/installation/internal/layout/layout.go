@@ -89,6 +89,10 @@ func IAMAuthenticationRecoveryIntent(commandID string) string {
 	return "state/iam-authentication-recovery/" + commandID + ".intent.json"
 }
 
+func IAMAuthenticationRecoveryPreflightIntent(commandID string) string {
+	return "state/iam-authentication-recovery/" + commandID + ".preflight.json"
+}
+
 func IAMAuthenticationRecoveryClosure(commandID string) string {
 	return "state/iam-authentication-recovery/" + commandID + ".closure.json"
 }

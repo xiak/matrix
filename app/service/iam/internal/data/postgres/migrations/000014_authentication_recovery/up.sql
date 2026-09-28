@@ -890,6 +890,7 @@ BEGIN
       AND to_regprocedure('iam.reconcile_authentication_recovery(jsonb,text,jsonb,jsonb)') IS NULL
       AND to_regprocedure('iam.reopen_authentication_recovery(jsonb,text,jsonb)') IS NULL
       AND (SELECT count(*) FROM pg_catalog.pg_proc p WHERE p.oid IN (
+        to_regprocedure('iam.inspect_new_authentication_recovery(jsonb,text)'),
         to_regprocedure('iam.prepare_authentication_recovery_close(jsonb,text)'),
         to_regprocedure('iam.close_authentication_recovery(jsonb,text,jsonb,jsonb,text)'),
         to_regprocedure('iam.reconcile_authentication_recovery(jsonb,text,jsonb,jsonb,jsonb)'),
@@ -897,9 +898,9 @@ BEGIN
         AND p.prosecdef AND p.proowner='matrix_iam_owner'::regrole AND p.prorettype='jsonb'::regtype AND NOT p.proretset
         AND p.provolatile='v' AND p.pronargdefaults=0 AND p.proconfig=ARRAY['search_path=pg_catalog, pg_temp']
         AND NOT EXISTS(SELECT 1 FROM aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) permission
-          WHERE permission.grantee NOT IN (p.proowner,'matrix_iam_authentication_recovery'::regrole::oid)))=4
+          WHERE permission.grantee NOT IN (p.proowner,'matrix_iam_authentication_recovery'::regrole::oid)))=5
       AND (SELECT count(*) FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
-        WHERE n.nspname='iam' AND has_function_privilege('matrix_iam_authentication_recovery',p.oid,'EXECUTE'))=4
+        WHERE n.nspname='iam' AND has_function_privilege('matrix_iam_authentication_recovery',p.oid,'EXECUTE'))=5
       AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_roles r WHERE r.rolname<>'matrix_iam_authentication_recovery'
         AND pg_has_role('matrix_iam_authentication_recovery',r.oid,'MEMBER'))
       AND (SELECT count(*) FROM pg_catalog.pg_trigger t WHERE t.tgrelid IN (

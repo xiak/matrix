@@ -63,6 +63,23 @@ func (value *transaction) PrepareAuthenticationClose(ctx context.Context, intent
 	return snapshot, nil
 }
 
+func (value *transaction) InspectNewAuthentication(ctx context.Context, intent installationv1.AuthenticationRecoveryIntent, digest string) (installationv1.AuthenticationRecoveryInspection, error) {
+	encodedIntent, err := installationv1.EncodeAuthenticationRecoveryIntent(intent)
+	if err != nil {
+		return installationv1.AuthenticationRecoveryInspection{}, authenticationrecovery.ErrInvalidArgument
+	}
+	var encoded []byte
+	if err := value.tx.QueryRow(ctx, "SELECT iam.inspect_new_authentication_recovery($1::jsonb,$2)", encodedIntent, digest).Scan(&encoded); err != nil {
+		return installationv1.AuthenticationRecoveryInspection{}, mapAuthenticationRecoveryDatabaseError("inspect new IAM authentication recovery", err)
+	}
+	var inspection installationv1.AuthenticationRecoveryInspection
+	if contractjson.DecodeObjectBytes(encoded, installationv1.MaximumAuthenticationRecoveryBytes, &inspection) != nil ||
+		installationv1.ValidateAuthenticationRecoveryInspection(inspection) != nil {
+		return installationv1.AuthenticationRecoveryInspection{}, authenticationrecovery.ErrUnavailable
+	}
+	return inspection, nil
+}
+
 func (value *transaction) CloseAuthentication(ctx context.Context, mutation authenticationrecovery.CloseMutation) (installationv1.AuthenticationRecoveryClosure, error) {
 	intent, err := json.Marshal(mutation.Intent)
 	if err != nil {

@@ -1240,6 +1240,11 @@ func (value *gate) beforeRestart(ctx context.Context) (gateErr error) {
 	if _, err := value.edge.verifyAuditChain(ctx, bearer); err != nil {
 		return fail("final-audit-integrity")
 	}
+	if mfaInBackupBaseline {
+		if err := value.rejectRevokedAuthorizationRecovery(ctx, bearer, value.forbidden(secret, newPassword, bearer)); err != nil {
+			return err
+		}
+	}
 	if err := value.edge.logout(ctx, bearer); err != nil {
 		return fail("iam-logout-current")
 	}
@@ -1260,6 +1265,94 @@ func (value *gate) beforeRestart(ctx context.Context) (gateErr error) {
 		return err
 	}
 	emit("restart-required")
+	return nil
+}
+
+func (value *gate) rejectRevokedAuthorizationRecovery(ctx context.Context, bearer []byte, forbidden [][]byte) error {
+	// The selected backup contains this live grant. Its later revocation must
+	// make the backup's sealed authentication/authorization projection stale.
+	created, err := value.edge.json(ctx, http.MethodPost, "/api/iam/v1/policy-attachments", bearer,
+		iamv1.CreatePolicyAttachmentRequest{
+			Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: "principal-admin"},
+			PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1,
+			RequestID: "phase1-recovery-t0-viewer-attachment",
+		}, nil, http.StatusOK)
+	if err != nil {
+		return fail("recovery-authorization-t0-grant")
+	}
+	attachment, decodeErr := iamv1.DecodePolicyAttachment(bytes.NewReader(created.body))
+	clear(created.body)
+	if decodeErr != nil || attachment.Target.ID != "principal-admin" || attachment.RevokedAt != nil {
+		return fail("recovery-authorization-t0-grant")
+	}
+	if _, err := value.edge.waitAuditActions(ctx, bearer, map[auditv1.Action]string{
+		auditv1.ActionIAMPolicyAttachmentCreated: string(attachment.ID),
+	}); err != nil {
+		return fail("recovery-authorization-t0-audit")
+	}
+	backup, err := runMX(ctx, value.releases.a, "backup", []string{"--root", value.config.root}, forbidden)
+	if err != nil || backup.BackupID == "" || !backup.Changed {
+		return fail("recovery-authorization-t0-backup")
+	}
+	revoked, err := value.edge.json(ctx, http.MethodPost,
+		"/api/iam/v1/policy-attachments/"+string(attachment.ID)+":revoke", bearer,
+		iamv1.RevokePolicyAttachmentRequest{
+			ResourceVersion: attachment.ResourceVersion,
+			RequestID:       "phase1-recovery-t1-viewer-revocation",
+		}, nil, http.StatusOK)
+	clear(revoked.body)
+	if err != nil {
+		return fail("recovery-authorization-t1-revoke")
+	}
+	if _, err := value.edge.waitAuditActions(ctx, bearer, map[auditv1.Action]string{
+		auditv1.ActionIAMPolicyAttachmentRevoked: string(attachment.ID),
+	}); err != nil {
+		return fail("recovery-authorization-t1-audit")
+	}
+	before, err := value.captureRejectedUpgradeBoundary(ctx)
+	if err != nil {
+		return fail("recovery-authorization-t1-boundary")
+	}
+	command, stdout, stderr, err := startMX(ctx, value.releases.b, "recover", []string{
+		"--root", value.config.root, "--backup", backup.BackupID,
+	})
+	if err != nil || validateExpectedMXFailure(command.Wait(), stdout, stderr, "recover", forbidden,
+		4, "CONFLICT", "OWNERSHIP_CONFLICT") != nil {
+		return fail("recovery-revoked-authorization-denial")
+	}
+	after, err := value.captureRejectedUpgradeBoundary(ctx)
+	if err != nil || !reflect.DeepEqual(before, after) {
+		return fail("recovery-revoked-authorization-effects")
+	}
+	directoryResponse, err := value.edge.json(ctx, http.MethodGet, "/api/iam/v1/users", bearer, nil, nil, http.StatusOK)
+	if err != nil {
+		return fail("recovery-revoked-authorization-retained")
+	}
+	var directory iamv1.UserList
+	decodeErr = decodeOne(directoryResponse.body, &directory)
+	clear(directoryResponse.body)
+	if decodeErr != nil || iamv1.ValidateUserList(directory) != nil {
+		return fail("recovery-revoked-authorization-retained")
+	}
+	primaryFound := false
+	for _, entry := range directory.Items {
+		if entry.User.ID != "principal-admin" {
+			continue
+		}
+		primaryFound = true
+		for _, current := range entry.PolicyAttachments {
+			if current.ID == attachment.ID {
+				return fail("recovery-revoked-authorization-retained")
+			}
+		}
+	}
+	if !primaryFound {
+		return fail("recovery-revoked-authorization-retained")
+	}
+	if err := value.repeatedStatusAndVerify(ctx, value.releases.a, value.releases.a.Manifest.Release.ID, ""); err != nil {
+		return err
+	}
+	emit("revoked-authorization-recovery-rejected-before-effects")
 	return nil
 }
 
