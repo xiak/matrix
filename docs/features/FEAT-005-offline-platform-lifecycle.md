@@ -771,9 +771,7 @@ history. Restarting only that task-owned engine passed status/verify and
 complete offline lifecycle in 16.53 seconds. The engine and its two labeled
 volumes were removed; no remote machine was restarted. This does not grant
 cross-profile restore permission, publish a production signing root, or
-replace the independent two-host and browser gates. The local package
-directory remains because recursive deletion was blocked by execution policy;
-its task-owned files must be removed when that policy permits.
+replace the independent two-host and browser gates.
 
 ## Incremental acceptance
 
