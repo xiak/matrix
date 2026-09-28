@@ -422,6 +422,9 @@ revision, content digest and execution target. An equal unconsumed replay may
 rotate only its one-time ticket; a consumed, expired or changed replay cannot
 create another connection. Creating a replacement terminates the prior live
 session for that user and instance before the new one can become active.
+The release gate must verify these three effective policy decisions against
+real IAM on a fresh release and after its supported retained-data upgrade;
+immutable historical policy versions and decisions must not be rewritten.
 
 The northbound connection is same-origin WebSocket
 `/v1/terminal-sessions/{terminalSessionId}/connect` with subprotocol
