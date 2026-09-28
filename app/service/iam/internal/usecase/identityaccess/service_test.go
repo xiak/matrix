@@ -1228,6 +1228,44 @@ func TestLocalRecoveryWorkflowBindsOnePrivateIntentToOneSanitizedFact(t *testing
 	if _, err := service.InspectLocalCredentialRecovery(context.Background(), local, nil); !errors.Is(err, ErrUnavailable) {
 		t.Fatal("inspection returned another tenant's authority")
 	}
+	t.Run("historical input is not a new password write", func(t *testing.T) {
+		old := request
+		old.CommandID, old.NewPassword = "historical-local", secret("Old-Secret-49!")
+		old, err = iamv1.SignLocalCredentialRecoveryRequest(local, old)
+		if err != nil {
+			t.Fatal(err)
+		}
+		oldCommitment, err := iamv1.VerifyLocalCredentialRecoveryRequest(local, old)
+		if err != nil {
+			t.Fatal(err)
+		}
+		historical := completed
+		historical.CommandID, historical.InputCommitment = old.CommandID, oldCommitment
+		transaction.localRecoveryInspection = iamv1.LocalCredentialRecoveryInspection{APIVersion: iamv1.APIVersion,
+			Kind: "LocalCredentialRecoveryInspection", Scope: local.Scope, State: "COMPLETED", CommandID: old.CommandID,
+			InputCommitment: oldCommitment, Expected: &old.Expected, Result: &historical}
+		transaction.localRecoveryMutation = nil
+		service.passwords = authority.NewPasswordHasher(bytes.NewReader(nil))
+		replayed, err := service.RecoverLocalCredentials(t.Context(), local, old)
+		want := historical
+		want.State = "EQUAL_REPLAY"
+		if err != nil || replayed != want || transaction.localRecoveryMutation != nil {
+			t.Fatal("historical completion rehashed or rewrote the password", err)
+		}
+		changed := old
+		changed.Expected.CredentialGeneration++
+		changed, err = iamv1.SignLocalCredentialRecoveryRequest(local, changed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := service.RecoverLocalCredentials(t.Context(), local, changed); err == nil || transaction.localRecoveryMutation != nil {
+			t.Fatal("replay accepted altered expected authority")
+		}
+		transaction.localRecoveryInspection = iamv1.LocalCredentialRecoveryInspection{}
+		if _, err := service.RecoverLocalCredentials(t.Context(), local, old); !errors.Is(err, ErrInvalidArgument) || transaction.localRecoveryMutation != nil {
+			t.Fatal("NOT_FOUND admitted a new weak password", err)
+		}
+	})
 }
 
 func TestAuditProofClosedHistoricalMappings(t *testing.T) {
@@ -1617,6 +1655,49 @@ func TestPasswordChangeRetainsCurrentAndHonorsEffectiveSessionPolicy(t *testing.
 				}
 			}
 		})
+	}
+}
+
+func TestBootstrapReplayUsesSealedInputWithoutReadmittingItsPassword(t *testing.T) {
+	repository := &coreRepository{transaction: newCoreTransaction()}
+	service, err := newCoreAuthority(repository, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := coreBootstrap(t)
+	if _, err := service.Bootstrap(t.Context(), document); err != nil {
+		t.Fatal(err)
+	}
+	// This unit fixture describes a real predecessor-shaped sealed document;
+	// retained-binary PostgreSQL coverage owns proof of its actual creation.
+	document.Administrator.Password = coreSecret(t, "Old-Secret-49!")
+	digest, err := iamv1.BootstrapDigest(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tx := repository.transaction
+	tx.status.ContentDigest, tx.contentDigest = digest, digest
+	original, hash := tx.status, tx.passwords[document.Administrator.ID]
+	service.passwords = authority.NewPasswordHasher(bytes.NewReader(nil))
+	result, err := service.Bootstrap(t.Context(), document)
+	if err != nil || result != original || tx.passwords[document.Administrator.ID] != hash {
+		t.Fatal("exact sealed replay re-admitted or replaced its old password", err)
+	}
+	variant := document
+	variant.Administrator.DisplayName = "Different initial owner"
+	if _, err := service.Bootstrap(t.Context(), variant); !errors.Is(err, ErrConflict) {
+		t.Fatal("different bootstrap input acquired the historical replay path", err)
+	}
+	if tx.status != original || tx.passwords[document.Administrator.ID] != hash {
+		t.Fatal("conflicting bootstrap changed existing authority")
+	}
+	fresh := &coreRepository{transaction: newCoreTransaction()}
+	service, err = newCoreAuthority(fresh, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Bootstrap(t.Context(), document); !errors.Is(err, ErrInvalidArgument) || fresh.transaction.contentDigest != "" {
+		t.Fatal("missing receipt allowed a new weak bootstrap", err)
 	}
 }
 
@@ -2258,7 +2339,11 @@ func (transaction *coreTransaction) ExitRoleSession(_ context.Context, digest st
 	return result, nil
 }
 
-func (transaction *coreTransaction) InspectLocalCredentialRecovery(context.Context, iamv1.LocalCredentialRecoveryScope, *iamv1.LocalCredentialRecoveryReceiptQuery) (iamv1.LocalCredentialRecoveryInspection, error) {
+func (transaction *coreTransaction) InspectLocalCredentialRecovery(_ context.Context, scope iamv1.LocalCredentialRecoveryScope, query *iamv1.LocalCredentialRecoveryReceiptQuery) (iamv1.LocalCredentialRecoveryInspection, error) {
+	if transaction.localRecoveryInspection.State == "" && query != nil {
+		return iamv1.LocalCredentialRecoveryInspection{APIVersion: iamv1.APIVersion, Kind: "LocalCredentialRecoveryInspection",
+			Scope: scope, State: "NOT_FOUND", CommandID: query.CommandID, InputCommitment: query.InputCommitment}, nil
+	}
 	return transaction.localRecoveryInspection, nil
 }
 

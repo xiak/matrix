@@ -63,7 +63,9 @@
 
 固定`42035189eb823e388509f54525889c1a18c6b79d`将原`TestIAMRoleAndManagementReferencesPostgres`及其七个独立数据库/DSN从storage一次性移至`authority-roles`，不复制测试。该入口在上述CI实测344.607秒，独立任务上限15分钟；storage仍20分钟，原每fixture两分钟及所有锁等待/密码成本不变。数据库lane继续`max-parallel=1`、PG1CPU/768MiB/PIDs192，其他原任务限额不变；汇总检查仍要求全部lane成功，取消、跳过或失败均关闭。该固定切片的数据库总集合和场景不增加，只有执行分组调整；本地YAML解析、17段Bash语法及调整前后DSN集合/无重复检查通过。[Verification36367216408](https://github.com/xiak/matrix/actions/runs/36367216408)已于2026-09-28重新通过GitHub API核实精确SHA、九个执行job及汇总全部completed/success，不能回填旧超时为通过。
 
-当前主动解绑候选增加独立`authority-removal`与`authority-removal-security`源码lanes，十个专属数据库入口均来自原TOTP/设置测试owner，顺序运行当前解绑、可证明重绑及安全竞争，不添加开发历史版本矩阵。两项分别上限15分钟，保持原数据库限额、`max-parallel=1`和全lane失败关闭汇总；YAML与19段Bash语法已通过本地校验。其功能证据及剩余门禁只归[009](FEAT-IAM-009-security-governance.md)，尚无固定SHA独立CI结果，不继承420的通过状态。
+当前主动解绑候选增加独立`authority-removal`与`authority-removal-security`源码lanes，十个专属数据库入口均来自原TOTP/设置测试owner，顺序运行当前解绑、可证明重绑及安全竞争，不添加开发历史版本矩阵。两项分别上限15分钟，保持原数据库限额、`max-parallel=1`和全lane失败关闭汇总。固定18bdcd9a的[Verification36382998585](https://github.com/xiak/matrix/actions/runs/36382998585)中，removal成功，但removal-security将六个fixture共用一个Go进程，在600.087s触发默认10分钟总超时；此时最后的Account fixture仅运行12秒，不能称其通过或据此断言死锁。后继改为原Authority/Sessions/Mutations和Factors/Recovery/Account两组串行调用，每组保持默认10分钟、各fixture原3/5分钟及job15分钟不变；六个精确入口和DSN无增删/重复，不放宽密码成本或真实OTP时间。独立更换lane的失败及修正归[009](FEAT-IAM-009-security-governance.md)；后继独立CI尚待验证，不继承420或本地通过状态。
+
+后继工作流本地解析及19段Bash语法通过；相对于原固定分组，六个精确测试名均只选中一次，DSN集合、资源、串行矩阵与job期限保持一致。语法和选择集合证明不代替修正后的独立运行结果。
 
 ### 运行验收要求
 

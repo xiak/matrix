@@ -30,4 +30,4 @@ sources:
       - Passwords/Common-Credentials/README.md
       - Passwords/Common-Credentials/10k-most-common.txt
       - Passwords/Common-Credentials/100k-most-used-passwords-NCSC.txt
-    mode: reference-only-no-runtime-dependency
+    mode: adapt-bounded-offline-data-no-repository-runtime-dependency

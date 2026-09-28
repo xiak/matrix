@@ -109,6 +109,11 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	const source = "42035189eb823e388509f54525889c1a18c6b79d"
 	const sourceSchema uint64 = 45
 	const currentSchema uint64 = 46
+	// Actual predecessor admission accepted these 14-byte passwords. The new
+	// executable must replay the sealed bootstrap and verify existing secrets
+	// without admitting them for a new password write.
+	const initialAdminPassword = "Old-Secret-49!"
+	const initialReaderPassword = "Old-Member-49!"
 	dsn := os.Getenv(variable)
 	if dsn == "" {
 		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", variable)
@@ -167,6 +172,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	}
 	bootstrapDocument := processBootstrap(t)
 	bootstrapDocument.InstallationID = "mxi-44504450445044504450445044504450"
+	bootstrapDocument.Administrator.Password = processSecret(t, initialAdminPassword)
 	bootstrap, err := iamv1.EncodeBootstrapDocument(bootstrapDocument)
 	if err != nil {
 		t.Fatal(err)

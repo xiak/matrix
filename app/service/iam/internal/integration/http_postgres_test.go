@@ -5851,6 +5851,18 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 							}
 						}
 					}
+				} else if strings.HasPrefix(recoveryCase, "replace-") {
+					// Replacement replay must reject an actual different intent,
+					// not an empty ID rejected by the request decoder. One pending
+					// competitor leaves capacity for the mutation race under test.
+					other := request
+					other.RequestID = "replace-other-intent"
+					callMFA(firstHandler, http.MethodPost, "/v1/auth/step-up", currentSession.Credential,
+						mustIAMJSON(t, other), http.StatusOK, &competingProof)
+					if competingProof.ID == "" || competingProof.ID == proof.ID || competingProof.State != "PENDING" ||
+						competingProof.Operation != request.Operation || competingProof.RequestID != other.RequestID {
+						t.Fatal("replacement competitor did not retain its independent issued intent")
+					}
 				}
 				command := iamv1.RegenerateRecoveryCodesRequest{RequestID: request.RequestID, StepUpID: proof.ID, ExpectedFactorRevision: 2}
 				commandBytes, err := json.Marshal(command)
@@ -21518,8 +21530,8 @@ func proveRoleWriterSecurityRaces(t *testing.T, ctx context.Context, handler htt
 
 func provePasswordSessionPolicy(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, operator string) {
 	t.Helper()
-	const initial = "Session-Policy-Initial-Password-49!"
-	const changed = "Session-Policy-Changed-Password-73!"
+	const initial = "  session policy initial phrase  "
+	changed := strings.Repeat("界", 60) + " changed phrase"
 	const retained = "Session-Policy-Retained-Password-84!"
 	const replaced = "Session-Policy-Replaced-Password-95!"
 	const reset = "Session-Policy-Reset-Password-68!"
@@ -21620,6 +21632,9 @@ func provePasswordSessionPolicy(t *testing.T, ctx context.Context, handler http.
 	}{
 		{map[string]any{"currentPassword": initial, "newPassword": retained}, http.StatusUnauthorized},
 		{map[string]any{"currentPassword": changed, "newPassword": "weak"}, http.StatusUnprocessableEntity},
+		{map[string]any{"currentPassword": changed, "newPassword": "Old-Secret-49!"}, http.StatusUnprocessableEntity},
+		{map[string]any{"currentPassword": changed, "newPassword": "PASSWORDPASSWORD"}, http.StatusUnprocessableEntity},
+		{map[string]any{"currentPassword": changed, "newPassword": strings.Repeat("界", 129)}, http.StatusUnprocessableEntity},
 		{map[string]any{"currentPassword": changed, "newPassword": retained, "sessionId": identity(other).User.ID}, http.StatusBadRequest},
 		{map[string]any{"currentPassword": changed, "newPassword": retained, "revokeOtherSessions": "false"}, http.StatusBadRequest},
 		{map[string]any{"currentPassword": changed, "newPassword": retained, "revokeOtherSessions": nil}, http.StatusBadRequest},

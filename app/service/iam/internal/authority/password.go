@@ -2,7 +2,9 @@ package authority
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
+	_ "embed"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -16,20 +18,50 @@ import (
 )
 
 var (
-	ErrWeakPassword        = errors.New("password does not satisfy the fixed policy")
+	ErrWeakPassword        = errors.New("password does not satisfy the password requirements")
 	ErrInvalidPasswordHash = errors.New("stored password hash is invalid")
 	ErrPasswordHashing     = errors.New("password hashing failed")
 )
 
 const (
-	passwordMemoryKiB    = 64 * 1024
-	passwordIterations   = 3
-	passwordParallelism  = 1
-	passwordSaltBytes    = 16
-	passwordKeyBytes     = 32
-	minimumPasswordBytes = 14
-	maximumPasswordBytes = 128
+	passwordMemoryKiB         = 64 * 1024
+	passwordIterations        = 3
+	passwordParallelism       = 1
+	passwordSaltBytes         = 16
+	passwordKeyBytes          = 32
+	minimumPasswordCodePoints = 15
+	maximumPasswordCodePoints = 128
+	maximumPasswordBytes      = 512
 )
+
+// This bounded offline asset carries its original MIT notice and fixed-source
+// attribution. It contains only entries not already rejected by the length
+// floor. It is not an online breach query or a complete compromised corpus.
+//
+//go:embed password_blocklist.txt
+var commonPasswordDocument string
+
+var commonPasswords = mustLoadCommonPasswords()
+
+func mustLoadCommonPasswords() []string {
+	values, err := parseCommonPasswords(commonPasswordDocument)
+	if err != nil {
+		// A missing/modified build asset must never silently disable admission.
+		panic("invalid embedded IAM password blocklist")
+	}
+	return values
+}
+
+func parseCommonPasswords(document string) ([]string, error) {
+	if fmt.Sprintf("%x", sha256.Sum256([]byte(document))) != "76031dba001805005624a4ef1ab5479a81d4b405fa87921cdca50cc676f3d699" {
+		return nil, errors.New("embedded password blocklist is invalid")
+	}
+	_, entries, present := strings.Cut(document, "\n# Passwords\n")
+	if !present || !strings.HasSuffix(entries, "\n") {
+		return nil, errors.New("embedded password blocklist is invalid")
+	}
+	return strings.Split(strings.TrimSuffix(entries, "\n"), "\n"), nil
+}
 
 type PasswordHash string
 
@@ -80,9 +112,10 @@ func (hasher *PasswordHasher) Hash(password iamv1.Secret) (PasswordHash, error) 
 	return PasswordHash(encoded), nil
 }
 
-// ValidatePassword applies the fixed Phase 1 password policy without hashing.
+// ValidatePassword applies the new-password product baseline without hashing.
 // Use cases call it before authentication so malformed input is rejected
-// cheaply, then hash only after the caller has authenticated.
+// cheaply, then hash only after the caller has authenticated. Stored-secret
+// verification deliberately does not apply today's admission rules.
 func ValidatePassword(password iamv1.Secret) error {
 	plaintext := password.CopyBytes()
 	defer clear(plaintext)
@@ -140,32 +173,24 @@ func parsePasswordHash(stored PasswordHash) ([]byte, []byte, error) {
 }
 
 func validatePasswordPolicy(password []byte) error {
-	if len(password) < minimumPasswordBytes || len(password) > maximumPasswordBytes || !utf8.Valid(password) {
+	if len(password) > maximumPasswordBytes || !utf8.Valid(password) {
 		return ErrWeakPassword
 	}
-	categories := 0
-	hasLower, hasUpper, hasDigit, hasSymbol := false, false, false, false
+	length := utf8.RuneCount(password)
+	if length < minimumPasswordCodePoints || length > maximumPasswordCodePoints {
+		return ErrWeakPassword
+	}
 	for _, character := range string(password) {
-		switch {
-		case unicode.IsControl(character), unicode.IsSpace(character):
+		if unicode.IsControl(character) {
 			return ErrWeakPassword
-		case unicode.IsLower(character):
-			hasLower = true
-		case unicode.IsUpper(character):
-			hasUpper = true
-		case unicode.IsDigit(character):
-			hasDigit = true
-		default:
-			hasSymbol = true
 		}
 	}
-	for _, present := range []bool{hasLower, hasUpper, hasDigit, hasSymbol} {
-		if present {
-			categories++
+	for _, blocked := range commonPasswords {
+		// Compare the complete candidate, never a substring. Folding is only
+		// for blocklist admission; hashing and Verify preserve the exact bytes.
+		if strings.EqualFold(string(password), blocked) {
+			return ErrWeakPassword
 		}
-	}
-	if categories < 3 {
-		return ErrWeakPassword
 	}
 	return nil
 }

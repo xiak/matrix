@@ -305,8 +305,12 @@ jobs:
           MATRIX_IAM_TOTP_REMOVAL_RECOVERY_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_removal_recovery_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
           MATRIX_IAM_TOTP_REMOVAL_ACCOUNT_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_totp_removal_account_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
         run: |
+          # Keep both existing groups serial with unchanged fixture and job
+          # deadlines; six real-window fixtures cannot share one Go 10m timer.
           time go test -race -p 1 -count=1 ./app/service/iam/internal/integration \
-            -run '^TestIAMTOTPRemoval(Authority|Sessions|Mutations|Factors|Recovery|Account)Postgres$'
+            -run '^TestIAMTOTPRemoval(Authority|Sessions|Mutations)Postgres$'
+          time go test -race -p 1 -count=1 ./app/service/iam/internal/integration \
+            -run '^TestIAMTOTPRemoval(Factors|Recovery|Account)Postgres$'
 
       - name: Saved-code exhaustion across actual authentication windows
         if: matrix.lane == 'authority-recovery-window'

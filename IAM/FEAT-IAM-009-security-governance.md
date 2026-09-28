@@ -1,6 +1,6 @@
 # FEAT-IAM-009：登录保护与安全治理
 
-- 状态：S1本人会话管理、S3a共享密码尝试及S2分项已有各自固定实现和真实证据，最近独立通过的后端为42035189（IAM45/Audit26）。主动解绑/重绑18bdcd9a（IAM46/Audit27）的本地门禁已过、独立CI尚未终态，设置放宽竞争有后继本地证据。S3账号密码规则/历史/到期、Session idle、S4、资格变化的旧备份恢复及009完整发布仍未完成。以下设计不等于可用API；LIVE UI、签名安装及通知/恢复组合由对应owner另验，不继承局部源码状态。
+- 状态：S1本人会话管理、S3a共享密码尝试及S2分项已有各自固定实现和真实证据，最近独立通过的后端为42035189（IAM45/Audit26）。主动解绑/重绑18bdcd9a（IAM46/Audit27）的本地门禁已过，但独立CI的更换场景已失败，不能列为独立验收；设置放宽竞争及新密码底线有后继本地证据。S3账号可配置密码规则/历史/到期、Session idle、S4、资格变化的旧备份恢复及009完整发布仍未完成。以下设计不等于可用API；LIVE UI、签名安装及通知/恢复组合由对应owner另验，不继承局部源码状态。
 - 依赖：003、005、007。
 - Owner：IAM 身份/凭据/会话治理，Audit evidence。
 
@@ -754,6 +754,8 @@ IAM46/Audit27版本/readiness与校验对齐后，新的独立PG18数据库上`T
 
 当前新增源码门禁接入原Verification的独立串行`authority-removal`与`authority-removal-security` lanes；十个专属数据库入口、YAML及19段Bash语法已校验，两项各15分钟，PG限额与失败关闭汇总不变。最终源码全仓`go test -race -count=1 -p 2 ./...`（含architecture）、`go vet -p 2 ./...`、模块校验、全部API生成稳定性、Linux amd64构建及diff/gofmt检查通过。使用实际Go1.26.3/GOMAXPROCS2/GOMEMLIMIT512MiB；默认外部门禁SKIP不计真库证据，真库范围仅按上述实际执行结果。固定SHA独立CI、LIVE UI及签名发布仍待完成；不能据此开放资格已经改变的旧备份正向恢复。实收门禁确认队列为空后仅正常删除本轮自有Postfix容器及其空网络，合成邮箱与临时密钥可由原夹具重建；未停止其他任务、共享引擎或远端服务。
 
+固定18bdcd9a的[Verification36382998585](https://github.com/xiak/matrix/actions/runs/36382998585)已确认两条replacement lane失败：容量夹具收窄后没有给更换场景发行竞争证明，空stepUpId得到400而非预期的409，不能算完成了跨意图攻击。后继只补一个实际HTTP发行、同目的且不同requestId/ID的PENDING证明，保留原409、原来源不可改写及容量上限，不把畸形输入当成已验证竞争。新的三个本任务PG18数据库串行race复验`TestIAMTOTPReplacementPostgres`、`TestIAMTOTPReplacementSecurityPostgres`、`TestIAMTOTPReplacementLoginPostgres`合包523.310s通过，包含准备/确认/末端回滚、旧因子及旧码拒绝、logout/改密/LOGIN的双向锁序；其中security240.62s、LOGIN149.77s，原各项期限未变。没有重跑SMTP，不能冒充邮件实收。另一个removal-security累计包超时及调用分组修正归[011](FEAT-IAM-011-acceptance.md#当前ci任务分配)，上述失败不回填为通过；修正后精确SHA的独立CI、LIVE UI和签名发布仍待完成。
+
 #### 受支持备份恢复与防回滚边界
 
 本节只覆盖产品提供的受控备份/恢复，不声称抵抗root将数据库、所有磁盘、密钥和封存历史一起回滚。密钥用途隔离保护秘密，事务保护同一次提交；二者都不使数据库外的时间自动单调。将T1已消费/撤销的状态恢复到T0，会重新出现历史有效行；数据库内新增generation、消费表或与数据库一同备份的Audit均不能独立阻止。PostgreSQL的[PITR说明](https://www.postgresql.org/docs/18/continuous-archiving.html)只证明可恢复到选定时点，不提供认证资格不回退的保证。
@@ -1037,7 +1039,7 @@ INSTALLATION USER附件的真实新增与撤销在现有Account→稳定USER锁�
 
 #### 密码设置与历史
 
-拟定新默认值以长口令和可用的密码管理器为基础：最短15个Unicode码点，允许至多128个码点并有512 UTF-8字节硬上限；允许普通空格，不截断、trim或自动变换大小写。复杂度组合可作为显式账号要求，但不默认把字符种类当作强度证明；定期到期默认关闭，仅明确配置时按数据库时间执行。账号规则不得降低底线或选择哈希算法/盐长度/内存成本。上述为Matrix的待验证产品值，不回填为当前行为，也不宣称符合某一认证等级。[NIST密码验证要求](https://pages.nist.gov/800-63-4/sp800-63b.html#passwordver)强调长度、常见/泄露密码拦截和尝试限制，明确不采用额外字符组合规则或例行周期轮换；本产品为企业显式要求保留这两类配置，不把它们说成NIST要求。外部产品的参数不直接成为本系统默认值。
+当前新密码底线以长口令和可用的密码管理器为基础：最短15个Unicode码点，允许至多128个码点并有512 UTF-8字节硬上限；允许普通空格，不截断、trim或自动变换大小写，拒绝控制字符。原默认三类字符要求已移除；哈希成本及严格保存格式不变。复杂度组合的账号配置和真实历史仍按下述S3b实施；到期配置尚未开放，不把未执行的选项写入API。账号规则不得降低底线或选择哈希算法/盐长度/内存成本，也不宣称符合某一认证等级。[NIST密码验证要求](https://pages.nist.gov/800-63-4/sp800-63b.html#passwordver)强调长度、常见/泄露密码拦截和尝试限制，明确不采用额外字符组合规则或例行周期轮换；本产品为企业显式要求保留这两类配置的需求，不把它们说成NIST要求。外部产品的参数不直接成为本系统默认值。
 
 长度按码点而非字节/视觉字形计算，新口令规范化若改变验证字节必须有独立明确格式；本片不对旧hash隐式加入NFC或宽松匹配。已有密码仍按原格式验证完整秘密，不能先用新设置规则拒绝旧密码而使用户无法正常改密。长度/字符规则默认约束后续创建、改密、reset及相应受支持恢复写入；修改规则不证明所有存量密码已经合规，也不自动生成批量改密事实。到期只依据可证明的真实改密时间；当前`changed_at`还会被认证恢复fence更新，不能直接作为密码年龄，具体边界见下文。
 
@@ -1045,7 +1047,13 @@ INSTALLATION USER附件的真实新增与撤销在现有Account→稳定USER锁�
 
 历史校验按固定上限串行使用原慢hash，有独立高成本工作预算；不能用并行24次散列放大内存，也不能在预算不足时跳过比较而接受密码。若把昂贵计算放在数据库写事务外，写入事务必须重新核对账号规则修订、USER状态、原credential generation和历史head，任一变化均不得使用旧验证结果。不得跨多个SQL事务保存半个新密码/半份历史；只有原子成功才轮换历史、推进generation、执行现有会话撤销规则和写outbox。
 
-常见/泄露密码拦截必须有固定、可离线提供、经过授权且版本/摘要可核对的数据源和有界比较，不能把待设置密码发送给第三方或在日志记录匹配明文。词表格式/来源、变更回退和容量门禁尚未选定；没有它不能声称已完成弱密码拦截。恢复码、OTP和AccessKey秘密不是用户口令，不受此词表或复杂度设置控制。
+常见密码底线使用固定来源的有界离线词表，选择与MIT许可/摘要归既有[adoption](../docs/adoption/FEAT-006-platform-authorities.md#password-and-authentication-budget-target-review)。唯一嵌入资源归原authority owner，不新增词表服务或运行时网络依赖；缺失资源不能构建，摘要不符拒绝启动。只比较完整待设置口令及其大小写变体，不因子串出现而拒绝长口令；用于散列及原密码核验的字节始终不变。该有限词表不证明完整泄露检测、持续更新或所有语言覆盖，后续来源变更必须重新固定审查/测试，不能以动态下载悄悄替换规则。待设置秘密不外发，也不记录匹配明文。恢复码、OTP和AccessKey秘密不是用户口令，不受此词表或复杂度设置控制。
+
+底线沿现有Hash/Validate入口覆盖新建、普通/强制改密及受支持reset/recovery，不给首次bootstrap或新恢复意图保留弱规则。无副作用重放另按原封存来源处理：Bootstrap在短事务内核对完整digest/installation/Account，精确READY直接返回原receipt；本地恢复先认证私有请求MAC，再查询原commandId+inputCommitment完成，并核对原expected，精确完成不重新散列或执行恢复。首次/NOT_FOUND仍走当前底线及原最终事务；变体、未知返回或读取失败关闭。没有增加在线恢复权、修改SQL/schema、私有FILE或发布profile。
+
+2026-09-28本任务专属PG18.6（2逻辑CPU/1GiB/24进程/16连接）、Go1.26.3/GOMAXPROCS2/512MiB、串行race-p1验证：原`TestIAMHTTPPostgresVerticalSlice`145.65s通过，实际创建/登录/改密保留首尾空格及超过128字节的Unicode口令，14码点、常见密码大小写变体和129码点写入均无部分安全效果；原会话策略、改密/reset/recover/logout/旧密码登录和平台授予竞争保持。原`TestIAMLocalCredentialRecoveryPostgres`37.19s通过新事务及原receipt、撤权/改密/登录等竞争。唯一`TestIAMRetainedPredecessorProcessUpgrade`108.97s通过：固定420/IAM45真实程序以旧14字节口令封存bootstrap并创建成员，当前IAM46双迁移/重启、原bootstrap精确重放、旧秘密认证和受控改密保持，原MFA/恢复/审计与来源门禁不变。未增加历史升级矩阵；旧短口令本地恢复receipt的专门分支目前由用例测试证明，不冒充已用旧程序制造该receipt。原authority及usecase的race与architecture通过，覆盖码点/UTF-8/空格保真、原hash验证、词表损坏、首次弱输入拒绝及历史完成无新写入。独立CI、UI表单消费、签名安装与容量仍须各自验证，不能将本底线称为完整S3b。
+
+最终相同源码另用新专属PG18.6数据库运行原`TestIndependentIAMAuditAndPaaSProcesses`195.41s（包198.984s）通过：实际受限runtime登录、双IAM/PaaS/Audit/dispatcher保留双账号、改密/恢复、各MFA仪式的提交后断TCP及重启、撤权和历史审计投递。它不包含SMTP实收、LIVE UI或签名安装。全仓`go test -race -count=1 -p 2 ./...`、architecture、`go vet -p 2 ./...`、模块校验、API生成一致性、Linux amd64构建和diff/gofmt均通过；默认外部门禁SKIP不计真库证据。原Argon2id成本、权限/恢复范围、源码IAM46/Audit27及既有发布profile未变，规则配置/历史/到期仍待下片实现。
 
 ##### S3b：新密码规则、真实历史与写入契约
 

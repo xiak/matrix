@@ -41,6 +41,24 @@ func (service *Authority) RecoverLocalCredentials(ctx context.Context, local iam
 	if service == nil || service.passwords == nil || service.repository == nil {
 		return iamv1.LocalCredentialRecoveryResult{}, ErrUnavailable
 	}
+	// Authenticate the private intent first, then reconcile its immutable
+	// completion. Old admitted input must not acquire a new write or fail an
+	// exact historical replay merely because password rules changed later.
+	inspection, err := service.InspectLocalCredentialRecovery(ctx, local, &iamv1.LocalCredentialRecoveryReceiptQuery{
+		APIVersion: iamv1.APIVersion, Kind: "LocalCredentialRecoveryReceiptQuery",
+		CommandID: request.CommandID, InputCommitment: commitment,
+	})
+	if err != nil {
+		return iamv1.LocalCredentialRecoveryResult{}, err
+	}
+	if inspection.State == "COMPLETED" {
+		if inspection.Expected == nil || *inspection.Expected != request.Expected || inspection.Result == nil {
+			return iamv1.LocalCredentialRecoveryResult{}, ErrUnavailable
+		}
+		result := *inspection.Result
+		result.State = "EQUAL_REPLAY"
+		return result, nil
+	}
 	passwordHash, err := service.passwords.Hash(request.NewPassword)
 	if err != nil {
 		if errors.Is(err, authority.ErrWeakPassword) {
