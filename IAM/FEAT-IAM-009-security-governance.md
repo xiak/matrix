@@ -693,6 +693,41 @@ LOGIN竞争局部证据：2026-09-25原integration owner的`TestIAMTOTPReplaceme
 
 同一完整运行的`replace-rollback`真实错误新OTP返回401后第四次共享尝试持久REJECTED，schema重放不退款；另一个Authority的有效新OTP取得第五次reservation，通知末端故障回滚全部安全效果，reservation仍RESERVED/已计费，跨副本即时重试拒绝。此前这两个新增场景的聚焦包76.442s通过，但不包含后补跨Account攻击，最终240.193s才覆盖完整最终断言。原USER场景曾在七项security矩阵通过285.419s，现已移动到独立qualifications门禁，未复制；security保留原六项。最终PG按精确PID/执行文件/数据目录、零其他客户端核对后正常停止，launcher退出0、监听消失并保留数据，SMTP也已仅清理自有临时资源。独立CI、LIVE UI、签名组合及主动解绑仍未由这些本地测试取得验收。
 
+#### S2本人主动解绑与可证明的重新绑定
+
+本节是未实现的后继详细设计，不注册API、不提前分配schema/release revision，不改变当前IAM45消费者。最小闭环是普通USER以当前密码和原有效TOTP明确移除自己的因子，全部旧登录资格结束，正常密码重登；之后主动重新绑定，或在账号要求收紧后通过受限ENROLLMENT重新绑定。不能以只增加REMOVED枚举、删除因子行或解除账号要求替代此闭环。
+
+解绑是本人认证器管理，不是租户管理员的他人重置权限，也不新增可授予的Policy动作。仅当前ACTIVE Account/USER、无forced-change的PASSWORD_TOTP Session可发起；需要本人仍持有原因子、当前密码、可信联系人和未被恢复fence关闭的当前恢复批次。Account必须当前不强制MFA。安全底线拟限定原RootIdentity及存在未撤销平台权限附件的USER不能自助移除最后因子；检查原绑定而非只看当前有效权限，并与平台附件变更在原principal锁序中串行化。受保护身份继续使用更换/已获准的恢复路径，不新增在线降级或借用安装本地能力。此保护边界须与安装owner对齐后实施，不影响其正在验证的IAM45组合。
+
+| 入口/对象 | 详细契约与不变量 |
+| --- | --- |
+| 原StepUp发起/验证 | 增加封闭目的`TOTP_REMOVE`，请求仍为原requestId/expectedFactorRevision；拒绝securitySettings、身份selector及其他目的字段。证明绑定当前本人Session、密码代际、原factor/batch和主体版本，原120秒绝对期限不变；重新验证密码与原TOTP，沿现有共享预算消费，不追加第二个猜码器 |
+| 拟`POST /v1/auth/totp:remove` | 严格`{requestId,stepUpId,expectedFactorRevision}`；只接受当前登录bearer，不接受challenge/Role/Key/SERVICE或并列认证载体。实际USER和Account来自bearer，requestId必须匹配同Session、同目的的原PROVED意图。第一次结果为`APPLIED`、非秘密removal和`nextStep=REAUTHENTICATE`，无新Session、种子或恢复码 |
+| 拟`GET /v1/auth/totp/removals/by-request/{requestId}` | 当前有效同USER正常登录后，只读原非秘密完成；无Account/User/原Session selector。完成投影`AuthenticatorRemoval{apiVersion,kind,id,requestId,factorId,factorRevision,removedAt}`，factorRevision为原子移除后的修订。NOT_FOUND不证明旧请求未提交，不签发新执行资格 |
+| 同意图重放 | 当前认证先验证；完成已存在且原输入精确相等时返回`EQUAL_REPLAY`及原removal，不再次检查原因子今天是否ACTIVE，也不消费新证明、退出新Session或返回新的REAUTHENTICATE指令。原已撤销bearer仍401；重新绑定后读取旧完成也不触碰新因子 |
+| 重新绑定 | 复用本人绑定和ENROLLMENT入口、一次provisioning及确认流程。只接受有真实完成来源的REMOVED，不改回NEVER_BOUND；新factor、新批次和新修订必须与原解绑完成关联。沿现有INITIAL/REPLACEMENT准备用途，不把INITIAL投影当成USER从未绑定的证明；历史身份状态和来源另由锁内权威判断 |
+
+原`000012_totp`承载此生命周期。当前StepUp能证明认证及一次消费，但不能独自证明哪个因子已经合法解绑；需要本目的不可变`authenticator_removals`完成关联，绑定同Account/USER、requestId、StepUp、旧factor/batch、结果revision/time与唯一Audit事实。它不是第二主体、通用receipt或另一个认证器目录。USER的REMOVED状态必须通过复合FK和deferred语义约束指向该完成；原批次的终止来源也指向同一完成。proof消费、状态、因子、批次、会话、完成、outbox和通知缺任何一项均不能提交。重放/升级不得补造来源；有旧因子而缺完成、错USER或状态未知时关闭认证，不能推断合法REMOVED。只在首次确认的新生USER或已证明的真实来源上保留NEVER_BOUND。
+
+完成读取先验证今天真实有效的同USER LOGIN_SESSION，再核对原requestId和准确输入；允许正常重新登录所得的PASSWORD会话读取本人旧完成，但不能借该分支执行未完成的新解绑。新意图才要求当前PASSWORD_TOTP、未过期同Session证明及完整执行资格。相同requestId更换stepUpId或expectedFactorRevision必须冲突，即使原完成仍存在；旧证明绑定的其他请求同样不可执行。源码必须将历史只读分支与新的安全效果分开，不先要求原因子仍ACTIVE而使真实丢回包永远无法确认，也不先读到完成就绕过今天的账号/主体/Session停用检查。
+
+写事务沿现有Account/安全设置→USER→credential/MFA→稳定factor/batch→Session/StepUp锁序。锁后用数据库当前时间重查证明期限和完整资格；当前设置的读取锁与设置更新排他锁互斥，不能事务外预查false后越过收紧。账号false→true→false也不能使原Session/证明重新有效。成功时旧factor永久REVOKED、原批次不可逆终止、factorRevision恰好+1且不得溢出、MFA状态REMOVED；所有旧登录Session和未完成挑战失效，派生Role依原来源Session关闭。待确认的正常更换在同事务取消并保留原消耗历史，未完成proof不因取消而退回可用。密码/hash/generation、身份及Policy/Group/Role/Key/业务资源不因解绑改变。
+
+登录和Session判断必须显式识别有合法来源的REMOVED：未强制时新Session只有真实PASSWORD认证事实，不能继承原PASSWORD_TOTP；账号当前强制时只能发行ENROLLMENT，无普通Session。既有MFA Session在解绑后永久无效，旧密码Session也不能因状态变宽复活。重新绑定仍重新验证当前密码，完成后旧密码Session终止，正常密码+新TOTP登录。原factor永不改为ACTIVE，旧批次永不恢复，旧解绑完成不会在后来的改密/绑定/停复用后重做。
+
+新增单一tenant事实`iam.authenticator.removed`，真实USER actor与同USER PRINCIPAL target，无伪造的业务Decision；producer proof必须读取上述准确已提交完成和原StepUp/factor/batch关联，不因用户后来停用或Session失效丢掉历史事实。旧canonical/hash、ServiceIdentity/lookup_service/claim保持。009要求同事务写一条`AUTHENTICATOR_REMOVED`通知，012沿原封闭模板、可信联系人修订、受限worker与历史投递承担交付；模板已经存在不等于SQL领取/dispatcher已接通。解绑请求没有收件地址，SMTP临时失联不复活已移除因子，必要通知意图写入失败则整笔回滚。
+
+恢复的资格投影必须包括REMOVED的完整来源及后续绑定关系：旧BOUND备份不能因没有当前ACTIVE因子而通过资格相等检查。原snapshot只携带重放下限，不承载密码/种子；同资格恢复仍保留完成并结束旧Session、码及Key能力。资格变化后的旧备份仍归独立全域恢复方案，不能为本片放宽IAM45的匹配准入或伪造旧解绑记录。
+
+验收复用原TOTP/StepUp/security-settings integration及authorityprocess，不新增并行测试框架或历史版本矩阵：
+
+- 普通USER在两个实际IAM上完成解绑、旧Session/Role/因子/批次拒绝、新PASSWORD登录、主动新绑定及新PASSWORD_TOTP登录；账号收紧后的REMOVED只能进入原受限首次设置路径。缺失/伪造完成、错归属、旧记录重放和schema重放均不能获得REMOVED资格。
+- Group/Policy只授管理权限不能移除他人因子；RootIdentity/未撤销平台附件、强制MFA、forced-change、错误目的/版本、过期或另一Session的proof均无效果。无需配置全权IAM策略即可执行本人合法流程，但SELF不因此扩大为跨用户授权。
+- 使用实际数据库等待关系控制解绑与设置收紧、授予平台附件、正常替换/保存码恢复/批次重发、logout、change/reset及User/Account停用的双方先提交；依据真实资格判定结果，不能固定假定所有组合都只有一个成功。等待期间证明自然到期也必须拒绝，无序列化重试掩盖过期判断。
+- 审计/通知末端失败全部回滚；提交后断TCP，正常重新登录只读原完成，原意图精确重放不结束新Session。后续重新绑定后再重放解绑仍保留新因子；清理过期挑战不能清掉永久完成来源。
+- 真实SMTP收到原已验证地址的唯一事件关联邮件，明确渠道受理与实收；受限登录、SQL/RLS/约束破坏、日志/响应秘密检查及独立进程通过。UX只在固定公共契约和后端证据后接入，无“强制MFA也可关闭”或管理员代解绑的伪入口。
+- 后继源码迁移仅保留实际最近受影响固定前驱，验证真实BOUND/待操作/撤销历史及新函数形状；在实现冻结时分配schema并与安装owner核对完整profile，未发布中间版本不累积N-1测试链。本设计没有启动任何迁移或发布准入。
+
 #### 受支持备份恢复与防回滚边界
 
 本节只覆盖产品提供的受控备份/恢复，不声称抵抗root将数据库、所有磁盘、密钥和封存历史一起回滚。密钥用途隔离保护秘密，事务保护同一次提交；二者都不使数据库外的时间自动单调。将T1已消费/撤销的状态恢复到T0，会重新出现历史有效行；数据库内新增generation、消费表或与数据库一同备份的Audit均不能独立阻止。PostgreSQL的[PITR说明](https://www.postgresql.org/docs/18/continuous-archiving.html)只证明可恢复到选定时点，不提供认证资格不回退的保证。

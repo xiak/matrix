@@ -864,6 +864,28 @@ early revocation, direct factor DML, a transferable permit or administrator
 reset of another USER's factor is `REJECT`. No foreign worktree, inherited
 CI result, new seed codec or parallel enrollment framework is adopted.
 
+The voluntary authenticator removal target in IAM/009 `REUSE`s fixed Matrix
+`e24dbdae6b4ea420365a4527a0bd89b16e0d720f`'s same-Session StepUp, shared
+password/OTP attempts, current Account/USER locks, original factor/batch
+identity and transaction/outbox ownership. `ADAPT` is limited to the new
+closed removal purpose, its immutable completion and proven REMOVED-to-new-
+enrollment lineage. The fixed `guard_step_up_transition` already requires an
+operation-specific persisted consumer; a consumed flag alone is not a legal
+removal receipt. Its `requires_initial_enrollment` and
+`session_mfa_eligible` are `ADAPT` for genuine REMOVED history, not by treating
+missing factors as NEVER_BOUND or upgrading old Session authentication facts.
+
+The same fixed source's `AUTHENTICATOR_REMOVED` mail kind and SMTP template
+are `REUSE`; its notification dispatcher does not accept that kind yet, so
+the template is only `REFERENCE` for end-to-end availability. The existing
+fact-bound notification and producer-proof owners require a corresponding
+closed consumer, not a generic USER event or a fabricated PDP decision.
+Reusing lost-factor recovery as voluntary downgrade, deleting history,
+reviving an old factor/batch, allowing caller-selected identities, or treating
+an account setting as protected-credential recovery authority is `REJECT`.
+This is a design-source review, not implementation, a new schema allocation,
+an installation edit window or signed compatibility evidence.
+
 The current-security recovery target in IAM/009 `REUSE`s fixed
 `e24dbdae6b4ea420365a4527a0bd89b16e0d720f`'s purpose-limited
 close/reconcile/reopen entrypoint, dedicated database role, exclusive recovery
