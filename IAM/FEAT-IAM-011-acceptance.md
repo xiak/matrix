@@ -59,6 +59,8 @@
 
 ### 当前CI任务分配
 
+容量lane不能依赖`setup-go`恰好命中完整模块缓存。固定`9df45126`的[Verification36455507556](https://github.com/xiak/matrix/actions/runs/36455507556)中，`authority-capacity`在测试package准备阶段因`/modules/cache/download`只读且缺依赖而失败；没有容量样本，不能解释为容量通过或IAM业务断言失败。当前workflow在挂载前显式执行`go mod download`和`go mod verify`，测量容器仍只读使用该缓存，保留原镜像、限额、两个测试入口及全部期限。2026-09-29在本任务独立空缓存、固定Go1.26.5镜像中实际复现只读失败；按同一下载/校验顺序准备后，断网且GOPROXY关闭的容器成功加载authorityprocess的完整测试依赖并通过模块校验。YAML及19段Bash语法检查通过。这仅验证冷缓存准备修正，不替代完整容量运行或后继独立CI，也不回填原失败。
+
 数据库门禁按既有测试owner串行分片，不按开发schema叠加兼容矩阵。固定`fa27b0fbf54e94e21da38d32763dcaf89f370538`的[Verification36318553704](https://github.com/xiak/matrix/actions/runs/36318553704)不能标为通过：storage测试步骤19分25秒内全部success，但整项任务含准备/清理超过20分钟；GitHub明确注记`The job has exceeded the maximum execution time of 20m0s`，storage最终cancelled，汇总检查failure。其余Go、node、runtime、step-up、replacement、replacement-qualification、recovery-window七项success不代替该缺口。
 
 固定`42035189eb823e388509f54525889c1a18c6b79d`将原`TestIAMRoleAndManagementReferencesPostgres`及其七个独立数据库/DSN从storage一次性移至`authority-roles`，不复制测试。该入口在上述CI实测344.607秒，独立任务上限15分钟；storage仍20分钟，原每fixture两分钟及所有锁等待/密码成本不变。数据库lane继续`max-parallel=1`、PG1CPU/768MiB/PIDs192，其他原任务限额不变；汇总检查仍要求全部lane成功，取消、跳过或失败均关闭。该固定切片的数据库总集合和场景不增加，只有执行分组调整；本地YAML解析、17段Bash语法及调整前后DSN集合/无重复检查通过。[Verification36367216408](https://github.com/xiak/matrix/actions/runs/36367216408)已于2026-09-28重新通过GitHub API核实精确SHA、九个执行job及汇总全部completed/success，不能回填旧超时为通过。
