@@ -6,7 +6,7 @@
 - Updated: 2026-09-28
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `09367bc5`
+- Pushed UI source: `8115e39d`
 
 ## Authoritative route
 
@@ -32,11 +32,11 @@ UI, full static host/export and independent MOCK entry; do not replace them
 with another branch's renderer or inherit that branch's UI acceptance.
 
 The current milestone keeps the independent MOCK preview, fixed-contract LIVE
-paths and synchronized static Go host. It stages restricted first-login MFA
-enrollment against IAM's fixed `e24dbdae` challenge contract without opening a
-Session before reauthentication. Development gates passed; the real IAM process
-browser ceremony is not accepted. Detailed behavior and evidence remain only
-in the FEAT owner.
+paths and synchronized static Go host. First-login MFA enrollment remains
+staged against IAM's fixed `e24dbdae` contract, and direct User policy
+attachment now has a review boundary with a stable request intent. Development
+gates passed; real IAM process browser and full relationship recovery are not
+accepted. Detailed behavior and evidence remain only in the FEAT owner.
 
 ## Continuation
 
