@@ -208,7 +208,8 @@
 }
 .policyStatementTable { min-width: 820px; }
 .policyVersionTable code { white-space: normal; overflow-wrap: anywhere; }
-.policyVersionRecovery, .policyVersionReview { display: grid; min-width: 0; gap: var(--xiak-spacing-default); padding: var(--xiak-spacing-comfortable); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); background: var(--xiak-color-bg-panel); }
+.policyVersionRecovery, .policyVersionReview, .policyAttachmentReview { display: grid; min-width: 0; gap: var(--xiak-spacing-default); padding: var(--xiak-spacing-comfortable); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); background: var(--xiak-color-bg-panel); }
+.policyAttachmentReview .facts dd small { display: block; margin-top: var(--xiak-spacing-narrow); color: var(--xiak-color-text-muted); }
 .policyVersionRecovery { margin-bottom: var(--xiak-spacing-comfortable); }
 .policyVersionRecovery p, .policyVersionReview p { margin: 0; overflow-wrap: anywhere; }
 .policyVersionAcknowledge { display: flex; flex-wrap: wrap; align-items: center; gap: var(--xiak-spacing-default); padding-top: var(--xiak-spacing-default); border-top: var(--xiak-border-subtle); }

@@ -548,7 +548,7 @@ describe("account access", () => {
     const region = screen.getByRole("region", { name: "Identity and access" });
     expect(region.textContent).not.toMatch(/\p{Script=Han}/u);
     expect(within(region).getByRole("button", { name: "Revoke policy ReadOnlyAccess" })).toBeTruthy();
-    expect((within(region).getByRole("button", { name: "Attach policy" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((within(region).getByRole("button", { name: "Review attachment" }) as HTMLButtonElement).disabled).toBe(true);
     await user.click(within(region).getByRole("button", { name: "Reset password" }));
     expect(document.activeElement).toBe(within(region).getByLabelText("Initial password"));
     expect(region.textContent).not.toMatch(/\p{Script=Han}/u);
@@ -1848,16 +1848,71 @@ describe("account access", () => {
     expect(screen.queryByText("ReadOnlyAccess")).toBeNull();
   });
 
-  it("requires an explicit current policy revision for every direct attachment", async () => {
+  it("reviews the exact user, scope and current policy revision before a direct attachment", async () => {
     const { user, repository } = await openAccess();
     await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
-    expect((screen.getByRole("button", { name: "关联策略" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "审阅关联" }) as HTMLButtonElement).disabled).toBe(true);
     await user.click(screen.getByRole("combobox", { name: "关联策略" }));
     await user.click(screen.getByRole("option", { name: /PlatformAdministrator/ }));
-    await user.click(screen.getByRole("button", { name: "关联策略" }));
-    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "create-policy-attachment", userId: "child-a", policyId: "system.platform-admin", policyResourceVersion: 2 }));
+    await user.click(screen.getByRole("button", { name: "审阅关联" }));
+    expect(repository.execute).not.toHaveBeenCalled();
+    const review = screen.getByRole("region", { name: "确认直接关联策略" });
+    expect(within(review).getByText("system.platform-admin")).toBeTruthy();
+    expect(within(review).getByText("平台安装")).toBeTruthy();
+    expect(within(review).getByText("version-1 · 修订 2")).toBeTruthy();
+    expect(within(review).getByText(/仅具有对应平台授权能力/)).toBeTruthy();
+    expect(within(review).getByRole("heading", { name: "确认直接关联策略" })).toBe(document.activeElement);
+    expect((screen.getByRole("button", { name: "撤销策略 ReadOnlyAccess" }) as HTMLButtonElement).disabled).toBe(true);
+    await user.click(within(review).getByRole("button", { name: "返回选择" }));
+    expect(screen.getByRole("button", { name: "审阅关联" })).toBe(document.activeElement);
+    expect((screen.getByRole("button", { name: "撤销策略 ReadOnlyAccess" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(repository.execute).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "审阅关联" }));
+    await user.click(screen.getByRole("button", { name: "确认关联" }));
+    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "create-policy-attachment", userId: "child-a", policyId: "system.platform-admin", policyResourceVersion: 2, requestId: expect.any(String) }));
     await waitFor(() => expect(screen.getByRole("combobox", { name: "关联策略" }).textContent).toBe("选择可关联策略"));
-    expect((screen.getByRole("button", { name: "关联策略" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "审阅关联" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("keeps platform grants unavailable without the exact platform capability while tenant grants remain reviewable", async () => {
+    const restricted: UserAccess = { ...child, capabilities: child.capabilities.map((item) => item.action === "iam.platform-policy-attachment.create"
+      ? { ...item, available: false, restrictionReason: "AUTHORITY_REQUIRED" as const } : item) };
+    const tenantCandidate: AccountPolicy = { ...tenantPolicy, id: "customer.team-read", management: "CUSTOMER",
+      accountId: account.id, displayName: "TeamReadOnly", resourceVersion: 4 };
+    const repository = accounts({
+      listUsers: vi.fn().mockResolvedValue({ items: [restricted], nextAfter: null }),
+      getUser: vi.fn().mockResolvedValue(structuredClone(restricted)),
+      listPolicies: vi.fn(async (_credential: string, platform: boolean) => platform ? directory(true) :
+        { ...directory(false), items: [tenantPolicy, tenantCandidate] })
+    });
+    const { user } = await openAccess(repository);
+    await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    expect(screen.getByText(/平台安装策略不可关联/).textContent).toContain("当前身份没有执行此操作所需的权限");
+    await user.click(screen.getByRole("combobox", { name: "关联策略" }));
+    expect(screen.queryByRole("option", { name: /PlatformAdministrator/ })).toBeNull();
+    await user.click(screen.getByRole("option", { name: /TeamReadOnly/ }));
+    await user.click(screen.getByRole("button", { name: "审阅关联" }));
+    const review = screen.getByRole("region", { name: "确认直接关联策略" });
+    expect(within(review).getByText("当前租户")).toBeTruthy();
+    expect(within(review).getByText(/用户组继承、权限边界与显式拒绝/)).toBeTruthy();
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
+
+  it("retries an uncertain direct attachment with the exact reviewed request and payload", async () => {
+    const execute = vi.fn().mockRejectedValueOnce(new Error("connection lost after commit")).mockResolvedValue(undefined);
+    const { user } = await openAccess(accounts({ execute }));
+    await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await user.click(screen.getByRole("combobox", { name: "关联策略" }));
+    await user.click(screen.getByRole("option", { name: /PlatformAdministrator/ }));
+    await user.click(screen.getByRole("button", { name: "审阅关联" }));
+    await user.click(screen.getByRole("button", { name: "确认关联" }));
+    const retry = await screen.findByRole("button", { name: "原请求重试" });
+    expect(screen.getByText(/当前关系目录不能证明这次请求已完成/)).toBeTruthy();
+    expect(execute).toHaveBeenCalledTimes(1);
+    await user.click(retry);
+    await waitFor(() => expect(execute).toHaveBeenCalledTimes(2));
+    expect(execute.mock.calls[1]?.[1]).toEqual(execute.mock.calls[0]?.[1]);
+    expect(execute.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ requestId: expect.any(String) }));
   });
 
   it("requires confirmation for revocation and disabling and clears a submitted reset password", async () => {

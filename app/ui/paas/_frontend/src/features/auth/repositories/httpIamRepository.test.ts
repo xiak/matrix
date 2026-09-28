@@ -1651,10 +1651,10 @@ describe("IAM HTTP account boundary", () => {
   it("uses exact policy identity and revisions for attach and revoke", async () => {
     let fetcher = reply(tenantAttachment);
     await httpAccountRepository.execute("bearer", { kind: "create-policy-attachment", userId: user.id,
-      policyId: tenantAttachment.policyId, policyResourceVersion: 3 });
+      policyId: tenantAttachment.policyId, policyResourceVersion: 3, requestId: "attachment-intent-one" });
     expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/policy-attachments");
     expect(requestBody(fetcher)).toEqual({ target: { kind: "USER", id: user.id }, policyId: tenantAttachment.policyId,
-      policyResourceVersion: 3, requestId: expect.any(String) });
+      policyResourceVersion: 3, requestId: "attachment-intent-one" });
 
     fetcher = reply({ apiVersion, kind: "Revocation", id: tenantAttachment.id, resourceVersion: 2, revokedAt: timestamp });
     await httpAccountRepository.execute("bearer", { kind: "revoke-policy-attachment", attachmentId: tenantAttachment.id, resourceVersion: 1 });
@@ -1665,7 +1665,7 @@ describe("IAM HTTP account boundary", () => {
   it("rejects successful-looking responses for a different mutation target", async () => {
     reply({ ...tenantAttachment, target: { kind: "USER", id: "another-user" } });
     await expect(httpAccountRepository.execute("bearer", { kind: "create-policy-attachment", userId: user.id,
-      policyId: tenantAttachment.policyId, policyResourceVersion: 3 })).rejects.toThrow("INVALID_IAM_RESPONSE");
+      policyId: tenantAttachment.policyId, policyResourceVersion: 3, requestId: "attachment-intent-two" })).rejects.toThrow("INVALID_IAM_RESPONSE");
     reply({ apiVersion, kind: "Revocation", id: "another-attachment", resourceVersion: 2, revokedAt: timestamp });
     await expect(httpAccountRepository.execute("bearer", { kind: "revoke-policy-attachment", attachmentId: tenantAttachment.id,
       resourceVersion: 1 })).rejects.toThrow("INVALID_IAM_RESPONSE");

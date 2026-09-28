@@ -264,7 +264,8 @@ function accountCommandAvailable(scene: AccountAccessScene, command: AccountComm
   if (command.kind === "set-status") return user.canSetStatus;
   if (command.kind === "reset-password") return user.canResetPassword;
   const policy = scene.policies.find((item) => item.id === command.policyId);
-  return policy?.scope === "INSTALLATION" ? user.canAttachPlatformPolicy : user.canAttachTenantPolicy;
+  if (!policy || policy.status !== "ACTIVE" || policy.resourceVersion !== command.policyResourceVersion) return false;
+  return policy.scope === "INSTALLATION" ? user.canAttachPlatformPolicy : user.canAttachTenantPolicy;
 }
 
 export function AccountAccessProvider({ children, repository = httpAccountRepository, active = true }: { children: ReactNode; repository?: AccountRepository; active?: boolean }) {

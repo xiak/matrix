@@ -2077,7 +2077,7 @@ export const httpAccountRepository: AccountRepository = {
     return result;
   },
   async execute(credential, command) {
-    const requestId = requestToken("ui-account-");
+    const requestId = command.kind === "create-policy-attachment" ? command.requestId : requestToken("ui-account-");
     let path: string;
     let body: object;
     switch (command.kind) {

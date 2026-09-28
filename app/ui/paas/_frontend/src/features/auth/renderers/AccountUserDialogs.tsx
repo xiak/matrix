@@ -1,11 +1,12 @@
 "use client";
 
-import { useId, useState, type FormEvent } from "react";
+import { useId, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { useTranslations } from "next-intl";
 import { KeyRound, ShieldCheck, UserRound } from "lucide-react";
 import { Alert, Dialog, FormField, Badge, Button, Input, PasswordInput, Select, Typography } from "@ui/xiak";
+import { requestToken } from "@/infrastructure/http/jsonRequest";
 import { useAccountAccess } from "../application/AccountAccessProvider";
-import type { CapabilityRestriction } from "../domain/accounts";
+import type { AccountCommand, CapabilityRestriction } from "../domain/accounts";
 import type { AccountUserScene } from "../scenes/accountAccessScene";
 import styles from "./AccountAccessRenderer.module.css";
 
@@ -74,14 +75,30 @@ export function UserAccessManagement({ user, onDeleted, profileActions = false, 
   const [resettingPassword, setResettingPassword] = useState(false);
   const [revokeId, setRevokeId] = useState<string | null>(null);
   const [selectedPolicy, setSelectedPolicy] = useState<{ id: string; resourceVersion: number } | null>(null);
+  const [reviewingPolicy, setReviewingPolicy] = useState(false);
+  const [attachmentIntent, setAttachmentIntent] = useState<Extract<AccountCommand, { kind: "create-policy-attachment" }> | null>(null);
+  const [attachmentAttempted, setAttachmentAttempted] = useState(false);
+  const reviewHeading = useRef<HTMLHeadingElement>(null);
+  const reviewTrigger = useRef<HTMLButtonElement>(null);
+  const returnToSelection = useRef(false);
   const policies = access.scene?.policies ?? [];
   const attached = new Set(user.attachments.map((attachment) => attachment.policyId));
   const availablePolicies = policies.filter((policy) => policy.status === "ACTIVE" && !attached.has(policy.id));
-  const currentPolicy = selectedPolicy ? policies.find((policy) => policy.id === selectedPolicy.id) : undefined;
-  const policyChanged = Boolean(selectedPolicy && (!currentPolicy || currentPolicy.resourceVersion !== selectedPolicy.resourceVersion));
   const disabled = access.busy || access.loading;
+  const relationDisabled = disabled || reviewingPolicy;
   const attachablePolicies = availablePolicies.filter((policy) => policy.scope === "INSTALLATION" ? user.canAttachPlatformPolicy : user.canAttachTenantPolicy);
+  const platformAttachmentBlocked = !user.canAttachPlatformPolicy && availablePolicies.some((policy) => policy.scope === "INSTALLATION");
+  const tenantAttachmentBlocked = !user.canAttachTenantPolicy && availablePolicies.some((policy) => policy.scope === "TENANT");
+  const currentPolicy = selectedPolicy ? attachablePolicies.find((policy) => policy.id === selectedPolicy.id) : undefined;
+  const policyChanged = Boolean(selectedPolicy && (!currentPolicy || currentPolicy.resourceVersion !== selectedPolicy.resourceVersion));
   const restriction = (reason: CapabilityRestriction | null) => t(`restrictions.${reason ?? "AUTHORITY_REQUIRED"}`);
+  useLayoutEffect(() => {
+    if (reviewingPolicy) reviewHeading.current?.focus({ preventScroll: true });
+    else if (returnToSelection.current) {
+      returnToSelection.current = false;
+      reviewTrigger.current?.focus({ preventScroll: true });
+    }
+  }, [reviewingPolicy]);
 
   async function resetPassword(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -118,20 +135,53 @@ export function UserAccessManagement({ user, onDeleted, profileActions = false, 
         {user.attachments.map((attachment) => <li key={attachment.id}>
           <div><strong>{attachment.label}</strong><small>{attachment.policyId} · {t(attachment.scope === "INSTALLATION" ? "installationScope" : "tenantScope")}{attachment.policyStatus === "RETIRED" ? ` · ${t("retiredPolicy")}` : ""}</small></div>
           {revokeId === attachment.id ? <div className={styles.actions}>
-            <span>{t("revokePrompt")}</span><Button disabled={disabled} onClick={async () => { if (await access.execute({ kind: "revoke-policy-attachment", attachmentId: attachment.id, resourceVersion: attachment.resourceVersion })) setRevokeId(null); }} size="small" variant="danger">{t("confirmRevoke")}</Button>
-            <Button disabled={disabled} onClick={() => setRevokeId(null)} size="small" variant="ghost">{t("cancel")}</Button>
-          </div> : <Button aria-label={t("revokePolicy", { name: attachment.label })} disabled={disabled || !attachment.canRevoke} title={!attachment.canRevoke ? restriction(attachment.revokeRestrictionReason) : undefined} onClick={() => setRevokeId(attachment.id)} size="small" variant="ghost">{t("revoke")}</Button>}
+            <span>{t("revokePrompt")}</span><Button disabled={relationDisabled} onClick={async () => { if (await access.execute({ kind: "revoke-policy-attachment", attachmentId: attachment.id, resourceVersion: attachment.resourceVersion })) setRevokeId(null); }} size="small" variant="danger">{t("confirmRevoke")}</Button>
+            <Button disabled={relationDisabled} onClick={() => setRevokeId(null)} size="small" variant="ghost">{t("cancel")}</Button>
+          </div> : <Button aria-label={t("revokePolicy", { name: attachment.label })} disabled={relationDisabled || !attachment.canRevoke} title={!attachment.canRevoke ? restriction(attachment.revokeRestrictionReason) : undefined} onClick={() => setRevokeId(attachment.id)} size="small" variant="ghost">{t("revoke")}</Button>}
         </li>)}
       </ul>
       {user.attachments.length === 0 ? <p className={styles.note}>{t("noPolicyAttachmentsHint")}</p> : null}
       {policyChanged ? <Alert status="warning">{t("policyRevisionChanged")} <Button size="small" variant="ghost" onClick={() => setSelectedPolicy(null)}>{t("reselectPolicy")}</Button></Alert> : null}
-      {attachablePolicies.length > 0 ? <form className={styles.inlineForm} onSubmit={async (event) => {
+      {reviewingPolicy ? <section aria-label={t("attachmentReviewTitle")} className={styles.policyAttachmentReview}>
+        <h3 ref={reviewHeading} tabIndex={-1} className={styles.stepTitle}>{t("attachmentReviewTitle")}</h3>
+        <dl className={styles.facts}>
+          <div><dt>{t("attachmentTarget")}</dt><dd>{user.qualifiedName}<small>{user.id}</small></dd></div>
+          <div><dt>{t("attachmentPolicy")}</dt><dd>{currentPolicy?.displayName ?? selectedPolicy?.id}<small>{selectedPolicy?.id}</small></dd></div>
+          <div><dt>{t("attachmentScope")}</dt><dd>{currentPolicy ? t(currentPolicy.scope === "INSTALLATION" ? "installationScope" : "tenantScope") : "—"}</dd></div>
+          <div><dt>{t("attachmentVersion")}</dt><dd>{currentPolicy?.defaultVersionId ?? "—"} · {t("attachmentRevision", { revision: selectedPolicy?.resourceVersion ?? 0 })}</dd></div>
+        </dl>
+        <Alert status="warning">{t(currentPolicy?.scope === "INSTALLATION" ? "platformAttachmentReviewHint" : "tenantAttachmentReviewHint")}</Alert>
+        {attachmentAttempted ? <Alert status="warning">{t(access.error === "unavailable" ? "attachmentUnknownResult" : "attachmentRetryNeedsReview", { requestId: attachmentIntent?.requestId ?? "—" })}</Alert> : null}
+        <div className={styles.actions}>
+          <Button disabled={disabled || !attachmentIntent || policyChanged || attachmentAttempted && access.error !== "unavailable"} onClick={async () => {
+            if (attachmentIntent && !policyChanged && await access.execute(attachmentIntent)) {
+              setSelectedPolicy(null);
+              setReviewingPolicy(false);
+              setAttachmentIntent(null);
+              setAttachmentAttempted(false);
+            } else setAttachmentAttempted(true);
+          }}>{t(attachmentAttempted ? "retryOriginalAttachment" : "confirmAttachPolicy")}</Button>
+          <Button disabled={disabled} onClick={() => {
+            returnToSelection.current = !attachmentAttempted;
+            setReviewingPolicy(false); setAttachmentIntent(null); setAttachmentAttempted(false);
+            if (attachmentAttempted) { setSelectedPolicy(null); access.reload(); }
+          }} variant="secondary">{t(attachmentAttempted ? "endAttachmentIntent" : "changeAttachmentSelection")}</Button>
+        </div>
+      </section> : attachablePolicies.length > 0 ? <form className={styles.inlineForm} onSubmit={(event) => {
         event.preventDefault();
-        if (selectedPolicy && !policyChanged && await access.execute({ kind: "create-policy-attachment", userId: user.id, policyId: selectedPolicy.id, policyResourceVersion: selectedPolicy.resourceVersion })) setSelectedPolicy(null);
+        if (selectedPolicy && !policyChanged) {
+          setRevokeId(null);
+          setAttachmentIntent({ kind: "create-policy-attachment", userId: user.id, policyId: selectedPolicy.id,
+            policyResourceVersion: selectedPolicy.resourceVersion, requestId: requestToken("ui-user-attachment-") });
+          setAttachmentAttempted(false);
+          setReviewingPolicy(true);
+        }
       }}>
-        <FormField label={t("attachPolicy")}><Select disabled={disabled} onValueChange={(policyId) => { const policy = policies.find((item) => item.id === policyId); setSelectedPolicy(policy ? { id: policy.id, resourceVersion: policy.resourceVersion } : null); }} required value={selectedPolicy?.id ?? ""} placeholder={t("choosePolicy")} options={attachablePolicies.map((policy) => ({ value: policy.id, label: `${policy.displayName} · ${t(policy.scope === "INSTALLATION" ? "installationScope" : "tenantScope")}` }))} /></FormField>
-        <Button disabled={disabled || !selectedPolicy || policyChanged} type="submit" variant="secondary">{t("attachPolicy")}</Button>
-      </form> : <p className={styles.note}>{availablePolicies.length ? restriction(user.tenantAttachmentRestrictionReason ?? user.platformAttachmentRestrictionReason) : access.scene?.canViewPolicies ? t("allPoliciesAttached") : t("policyDirectoryUnavailable")}</p>}
+        <FormField label={t("attachPolicy")}><Select disabled={disabled} onValueChange={(policyId) => { const policy = attachablePolicies.find((item) => item.id === policyId); setSelectedPolicy(policy ? { id: policy.id, resourceVersion: policy.resourceVersion } : null); }} required value={selectedPolicy?.id ?? ""} placeholder={t("choosePolicy")} options={attachablePolicies.map((policy) => ({ value: policy.id, label: `${policy.displayName} · ${t(policy.scope === "INSTALLATION" ? "installationScope" : "tenantScope")}` }))} /></FormField>
+        <Button ref={reviewTrigger} disabled={disabled || !selectedPolicy || policyChanged} type="submit" variant="secondary">{t("reviewAttachPolicy")}</Button>
+      </form> : <p className={styles.note}>{availablePolicies.length ? t("noAttachablePolicies") : access.scene?.canViewPolicies ? t("allPoliciesAttached") : t("policyDirectoryUnavailable")}</p>}
+      {platformAttachmentBlocked ? <p className={styles.note}>{t("platformAttachmentUnavailable", { reason: restriction(user.platformAttachmentRestrictionReason) })}</p> : null}
+      {tenantAttachmentBlocked ? <p className={styles.note}>{t("tenantAttachmentUnavailable", { reason: restriction(user.tenantAttachmentRestrictionReason) })}</p> : null}
       <div className={styles.sectionHeading}><KeyRound aria-hidden="true" /><strong>{t("loginSecurity")}</strong></div>
       <div className={styles.actions}>
           <Button disabled={disabled || !user.canSetStatus} title={!user.canSetStatus ? restriction(user.statusRestrictionReason) : undefined} onClick={() => { setConfirmStatus(true); setConfirmDelete(false); setResettingPassword(false); setPassword(""); }} variant="secondary">{user.enabled ? t("disableUser") : t("enableUser")}</Button>

@@ -178,7 +178,7 @@ describe("access workspace preview invariants", () => {
     const accountCommands: AccountCommand[] = [
       { kind: "set-status", userId: principalId, status: "DISABLED", resourceVersion: 5 },
       { kind: "reset-password", userId: principalId, initialPassword: "Mock-password-only-49!", resourceVersion: 5 },
-      { kind: "create-policy-attachment", userId: principalId, policyId: "policy-read", policyResourceVersion: 1 }
+      { kind: "create-policy-attachment", userId: principalId, policyId: "policy-read", policyResourceVersion: 1, requestId: "root-attachment" }
     ];
     for (const command of accountCommands) await expect(previewAccountRepository.execute(previewCredential, command)).rejects.toMatchObject({ status: 403 });
     const workspaceCommands: AccessWorkspaceCommand[] = [
@@ -196,7 +196,7 @@ describe("access workspace preview invariants", () => {
     expect(await previewAccountRepository.listUsers(previewCredential)).toEqual(beforeUsers);
     expect(await extension.read(previewCredential)).toEqual(beforeWorkspace);
     const policy = (await previewAccountRepository.listPolicies(previewCredential, false)).items.find((entry) => entry.id === "policy-read")!;
-    await previewAccountRepository.execute(previewCredential, { kind: "create-policy-attachment", userId: "principal-lin", policyId: policy.id, policyResourceVersion: policy.resourceVersion });
+    await previewAccountRepository.execute(previewCredential, { kind: "create-policy-attachment", userId: "principal-lin", policyId: policy.id, policyResourceVersion: policy.resourceVersion, requestId: "lin-attachment" });
     const promoted = (await previewAccountRepository.listUsers(previewCredential)).items.find((entry) => entry.user.id === "principal-lin")!;
     const attachment = promoted.policyAttachments.find((entry) => entry.policyId === policy.id)!;
     expect(attachment).toBeDefined();
