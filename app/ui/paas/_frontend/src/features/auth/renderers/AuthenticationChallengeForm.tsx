@@ -8,6 +8,7 @@ import { Alert, Button, FormField, Input, PasswordInput } from "@ui/xiak";
 import { uxPreviewEnabled } from "@/infrastructure/runtime/uxPreviewMode";
 import { useSession } from "../application/SessionProvider";
 import { previewTotpCode } from "../domain/accessWorkspace";
+import { withinNewPasswordProductBounds } from "../domain/passwordEntry";
 import { previewPersonalMfaSnapshot } from "../repositories/previewIamRepository";
 import styles from "./LoginRenderer.module.css";
 
@@ -21,6 +22,7 @@ export function AuthenticationChallengeForm({ returnTo }: { returnTo: string }) 
   const [newPassword, setNewPassword] = useState("");
   const [confirmedPassword, setConfirmedPassword] = useState("");
   const [mismatch, setMismatch] = useState(false);
+  const [invalidProductBounds, setInvalidProductBounds] = useState(false);
   const challenge = session.challenge;
   const heading = useRef<HTMLHeadingElement>(null);
   const focusStage = session.phase === "reauthentication-required" ? "complete" : session.phase === "challenge-password-required" || session.phase === "changing-challenge-password" ? "password" : challenge ? "code" : "none";
@@ -56,6 +58,7 @@ export function AuthenticationChallengeForm({ returnTo }: { returnTo: string }) 
   async function savePassword(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (busy) return;
+    if (!withinNewPasswordProductBounds(newPassword)) { setInvalidProductBounds(true); return; }
     if (newPassword !== confirmedPassword) {
       setMismatch(true);
       return;
@@ -80,15 +83,16 @@ export function AuthenticationChallengeForm({ returnTo }: { returnTo: string }) 
     {changingPassword ? <form aria-busy={busy} className={styles.form} onSubmit={savePassword}>
       <FormField id={`${inputId}-new`} label={t("newPassword")} hint={t("passwordPolicy")}>
         <PasswordInput autoComplete="new-password" capsLockLabel={t("capsLock")} disabled={busy} hideLabel={t("hidePassword")}
-          id={`${inputId}-new`} maxLength={128} onChange={(event) => { setNewPassword(event.target.value); setMismatch(false); }}
+          id={`${inputId}-new`} onChange={(event) => { setNewPassword(event.target.value); setMismatch(false); setInvalidProductBounds(false); }}
           required showLabel={t("showPassword")} value={newPassword} />
       </FormField>
       <FormField id={`${inputId}-confirm`} label={t("confirmPassword")}>
         <PasswordInput autoComplete="new-password" capsLockLabel={t("capsLock")} disabled={busy} hideLabel={t("hidePassword")}
-          id={`${inputId}-confirm`} maxLength={128} onChange={(event) => { setConfirmedPassword(event.target.value); setMismatch(false); }}
+          id={`${inputId}-confirm`} onChange={(event) => { setConfirmedPassword(event.target.value); setMismatch(false); }}
           required showLabel={t("showPassword")} value={confirmedPassword} />
       </FormField>
       {mismatch ? <Alert status="danger">{t("errors.passwordMismatch")}</Alert> : null}
+      {invalidProductBounds ? <Alert status="danger">{t("errors.passwordPolicy")}</Alert> : null}
       {session.error ? <Alert status="danger">{t(`errors.${session.error}`)}</Alert> : null}
       <Button block disabled={busy || !newPassword || !confirmedPassword} size="large" type="submit">
         {busy ? <LoaderCircle aria-hidden="true" className={styles.spinner} /> : null}

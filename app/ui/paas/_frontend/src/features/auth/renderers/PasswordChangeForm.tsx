@@ -6,6 +6,7 @@ import { useTranslations } from "next-intl";
 import { ArrowRight, LoaderCircle } from "lucide-react";
 import { Button, FormField, Alert, PasswordInput } from "@ui/xiak";
 import { useSession } from "../application/SessionProvider";
+import { withinNewPasswordProductBounds } from "../domain/passwordEntry";
 import styles from "./LoginRenderer.module.css";
 
 export function PasswordChangeForm({ returnTo }: { returnTo: string }) {
@@ -16,13 +17,15 @@ export function PasswordChangeForm({ returnTo }: { returnTo: string }) {
   const [newPassword, setNewPassword] = useState("");
   const [confirmedPassword, setConfirmedPassword] = useState("");
   const [mismatch, setMismatch] = useState(false);
+  const [invalidProductBounds, setInvalidProductBounds] = useState(false);
   const busy = session.phase === "changing-password" || session.phase === "revoking";
-  const error = mismatch ? "passwordMismatch" : session.error;
+  const error = invalidProductBounds ? "passwordPolicy" : mismatch ? "passwordMismatch" : session.error;
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (busy) return;
     setMismatch(false);
+    if (!withinNewPasswordProductBounds(newPassword)) { setInvalidProductBounds(true); return; }
     if (newPassword !== confirmedPassword) { setMismatch(true); return; }
     const accepted = await session.changePassword(currentPassword, newPassword);
     setCurrentPassword("");
@@ -41,18 +44,18 @@ export function PasswordChangeForm({ returnTo }: { returnTo: string }) {
     <form aria-busy={busy} className={styles.form} id="password-change-form" onSubmit={submit}>
       <FormField id="current-password" label={t("currentPassword")}>
         <PasswordInput controlSize="large" autoComplete="current-password" capsLockLabel={t("capsLock")} disabled={busy}
-          hideLabel={t("hidePassword")} id="current-password" maxLength={128} name="currentPassword"
+          hideLabel={t("hidePassword")} id="current-password" name="currentPassword"
           onChange={(event) => setCurrentPassword(event.target.value)} required showLabel={t("showPassword")} value={currentPassword} />
       </FormField>
       <FormField id="new-password" label={t("newPassword")} hint={t("passwordPolicy")}>
         <PasswordInput controlSize="large" aria-describedby="new-password-hint" autoComplete="new-password" capsLockLabel={t("capsLock")}
-          disabled={busy} hideLabel={t("hidePassword")} id="new-password" maxLength={128} minLength={14}
-          name="newPassword" onChange={(event) => { setNewPassword(event.target.value); setMismatch(false); }}
+          disabled={busy} hideLabel={t("hidePassword")} id="new-password"
+          name="newPassword" onChange={(event) => { setNewPassword(event.target.value); setMismatch(false); setInvalidProductBounds(false); }}
           required showLabel={t("showPassword")} value={newPassword} />
       </FormField>
       <FormField id="confirm-password" label={t("confirmPassword")}>
         <PasswordInput controlSize="large" autoComplete="new-password" capsLockLabel={t("capsLock")} disabled={busy}
-          hideLabel={t("hidePassword")} id="confirm-password" invalid={mismatch} maxLength={128} minLength={14}
+          hideLabel={t("hidePassword")} id="confirm-password" invalid={mismatch}
           name="confirmedPassword" onChange={(event) => { setConfirmedPassword(event.target.value); setMismatch(false); }}
           required showLabel={t("showPassword")} value={confirmedPassword} />
       </FormField>

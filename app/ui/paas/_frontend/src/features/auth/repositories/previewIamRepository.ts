@@ -26,6 +26,7 @@ import type {
 } from "../domain/accounts";
 import { enterprisePrincipalId, previewTotpCode, previewUserPrincipalId, type AccessWorkspace } from "../domain/accessWorkspace";
 import { AccessWorkspaceError } from "../domain/accessWorkspaceError";
+import { withinNewPasswordProductBounds } from "../domain/passwordEntry";
 import { applyUserBatch } from "../domain/userBatch";
 import type { LoginResult, OtherSessionsRevocation, OwnSessionRevocation, SessionSummary } from "../domain/session";
 import type { AccountRepository, IamRepository } from "./iamRepository";
@@ -381,7 +382,7 @@ export const previewIamRepository: IamRepository = {
           || command.challengeCredential !== activeLoginChallenge.credential) {
         throw new HttpProblem(409, "PREVIEW_CHALLENGE_EXPIRED");
       }
-      if (command.newPassword.length < 12) throw new HttpProblem(422, "PREVIEW_PASSWORD_POLICY");
+      if (!withinNewPasswordProductBounds(command.newPassword)) throw new HttpProblem(422, "PREVIEW_PASSWORD_POLICY");
       activeLoginChallenge = null;
       activePreviewCredential = null;
       return { nextStep: "REAUTHENTICATE", changedAt: new Date().toISOString() };
@@ -1051,7 +1052,7 @@ export const previewAccountRepository: AccountRepository = {
     if ((command.kind === "update-user" || command.kind === "delete-user" || command.kind === "set-status" || command.kind === "reset-password" || command.kind === "create-policy-attachment") && command.userId === account.rootIdentity.principalId) throw new HttpProblem(403, "ROOT_IDENTITY_PROTECTED");
     if (command.kind === "create-user") {
       if (users.some((user) => user.loginName === command.loginName) || account.rootIdentity.loginName === command.loginName) throw new HttpProblem(409, "PREVIEW_NAME_CONFLICT");
-      if (!/^[a-z][a-z0-9._-]{2,63}$/.test(command.loginName) || !command.displayName.trim() || command.initialPassword.length < 14) throw new HttpProblem(422, "PREVIEW_INVALID_USER");
+      if (!/^[a-z][a-z0-9._-]{2,63}$/.test(command.loginName) || !command.displayName.trim() || !withinNewPasswordProductBounds(command.initialPassword)) throw new HttpProblem(422, "PREVIEW_INVALID_USER");
       users = [...users, {
         id: `principal-${command.loginName}`, accountId: account.id, loginName: command.loginName,
         displayName: command.displayName, status: "ACTIVE", mustChangePassword: true, resourceVersion: 1
@@ -1077,7 +1078,7 @@ export const previewAccountRepository: AccountRepository = {
     }
     if (command.kind === "recover-root-credentials") {
       const existing = accounts.find((entry) => entry.id === command.accountId);
-      if (!existing || existing.resourceVersion !== command.resourceVersion || command.initialPassword.length < 14) throw new HttpProblem(409, "PREVIEW_RECOVERY_CONFLICT");
+      if (!existing || existing.resourceVersion !== command.resourceVersion || !withinNewPasswordProductBounds(command.initialPassword)) throw new HttpProblem(409, "PREVIEW_RECOVERY_CONFLICT");
       if (existing.id === account.id) throw new HttpProblem(403, "INSTALLATION_AUTHORITY_PROTECTED");
       const next = { ...existing, resourceVersion: existing.resourceVersion + 1 };
       accounts = accounts.map((entry) => entry.id === command.accountId ? next : entry);

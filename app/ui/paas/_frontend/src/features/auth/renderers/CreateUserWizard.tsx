@@ -6,6 +6,7 @@ import { ArrowRight, Check, CheckCircle2, Code2, ShieldCheck, UserRound } from "
 import { ContentPage, Alert, Badge, Button, Checkbox, FormField, Input, PasswordInput, Radio, RadioGroup, TagEditor, Wizard } from "@ui/xiak";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import type { PreviewUserProfile } from "../domain/accessWorkspace";
+import { withinNewPasswordProductBounds } from "../domain/passwordEntry";
 import { UserPermissionSelector, type UserPermissions } from "./UserPermissionSelector";
 import { useAccessDraft } from "./useAccessDraft";
 import styles from "./CreateUserWizard.module.css";
@@ -52,7 +53,7 @@ export function CreateUserWizard({ onBack }: { onBack(): void }) {
     else if (login.trim() === scene!.rootLoginName || scene!.users.some((user) => user.loginName === login.trim())) result.login = "duplicateLogin";
     if (!name.trim()) result.name = "requiredName";
     if (preview && !profile.consoleAccess && !profile.programmaticAccess) result.access = "requiredAccess";
-    if ((!preview || (profile.consoleAccess && passwordMode === "custom")) && (password.length < 14 || password.length > 128)) result.password = "passwordHint";
+    if ((!preview || (profile.consoleAccess && passwordMode === "custom")) && !withinNewPasswordProductBounds(password)) result.password = "passwordHint";
     return result;
   }
   function validateTags(): Errors {
@@ -101,7 +102,7 @@ export function CreateUserWizard({ onBack }: { onBack(): void }) {
                 <Checkbox aria-label={t("programmaticAccess")} checked={profile.programmaticAccess} onChange={(event) => updateProfile({ programmaticAccess: event.target.checked })}>{t("programmaticAccess")}</Checkbox>
               </div>{errors.access ? <p className={styles.error} id={`${id}-access-error`} role="alert">{errorText("access")}</p> : null}{profile.programmaticAccess ? <p className={styles.muted}>{t("keyHint")}</p> : null}</div> : null}
               {!preview || profile.consoleAccess ? <div className={styles.formSection}><h3>{a("loginSecurity")}</h3>{preview ? <RadioGroup label={a("initialPassword")} options={[{ value: "auto", label: t("autoPassword") }, { value: "custom", label: t("customPassword") }]} value={passwordMode} onValueChange={(mode) => { setPasswordMode(mode); setPassword(""); }} /> : null}
-                {!preview || passwordMode === "custom" ? <div className={styles.passwordField}><FormField id={`${id}-password`} label={a("initialPassword")} hint={a("passwordHint")} error={errorText("password")}><PasswordInput id={`${id}-password`} aria-required="true" aria-invalid={Boolean(errors.password)} aria-describedby={[`${id}-password-hint`, errorFor("password")].filter(Boolean).join(" ")} value={password} onChange={(event) => setPassword(event.target.value)} maxLength={128} autoComplete="new-password" showLabel={auth("showPassword")} hideLabel={auth("hidePassword")} capsLockLabel={auth("capsLock")} /></FormField></div> : null}
+                {!preview || passwordMode === "custom" ? <div className={styles.passwordField}><FormField id={`${id}-password`} label={a("initialPassword")} hint={a("passwordHint")} error={errorText("password")}><PasswordInput id={`${id}-password`} aria-required="true" aria-invalid={Boolean(errors.password)} aria-describedby={[`${id}-password-hint`, errorFor("password")].filter(Boolean).join(" ")} value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="new-password" showLabel={auth("showPassword")} hideLabel={auth("hidePassword")} capsLockLabel={auth("capsLock")} /></FormField></div> : null}
                 {preview ? <div className={styles.securityOptions}><Checkbox checked={profile.passwordResetRequired} onChange={(event) => updateProfile({ passwordResetRequired: event.target.checked })}>{t("forceReset")}</Checkbox><Checkbox checked={profile.loginProtection} onChange={(event) => updateProfile({ loginProtection: event.target.checked })}>{t("loginProtection")}</Checkbox><p className={styles.muted}>{t("mockSecurity")}</p></div> : <p className={styles.muted}>{a("firstLoginHint")}</p>}
               </div> : null}
             </div> : null}

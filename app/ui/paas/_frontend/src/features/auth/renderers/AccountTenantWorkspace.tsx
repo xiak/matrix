@@ -6,6 +6,7 @@ import { Alert, Badge, Button, FormField, PasswordInput } from "@ui/xiak";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import type { CapabilityRestriction } from "../domain/accounts";
 import type { AccountTenantScene } from "../scenes/accountAccessScene";
+import { withinNewPasswordProductBounds } from "../domain/passwordEntry";
 import { WorkspaceDetail } from "./AccessWorkspaceUi";
 import { AccountIdentifier } from "./AccountOverview";
 import styles from "./AccountAccessRenderer.module.css";
@@ -27,6 +28,7 @@ export function AccountTenantWorkspace({ account, onBack }: { account: AccountTe
 
   async function recover(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (disabled || !withinNewPasswordProductBounds(password)) return;
     const initialPassword = password;
     setPassword("");
     if (await access.execute({
@@ -86,10 +88,10 @@ export function AccountTenantWorkspace({ account, onBack }: { account: AccountTe
     {confirmation === "recovery" ? <form aria-label={t("recoverRoot")} className={styles.form} onSubmit={recover}>
       <p className={styles.note}>{t("recoverRootHint")}</p>
       <FormField id={passwordId} label={t("initialPassword")} hint={t("passwordHint")}>
-        <PasswordInput id={passwordId} autoComplete="new-password" minLength={14} maxLength={128} required value={password} onChange={(event) => setPassword(event.target.value)} showLabel={auth("showPassword")} hideLabel={auth("hidePassword")} capsLockLabel={auth("capsLock")} />
+        <PasswordInput id={passwordId} autoComplete="new-password" required value={password} onChange={(event) => setPassword(event.target.value)} showLabel={auth("showPassword")} hideLabel={auth("hidePassword")} capsLockLabel={auth("capsLock")} />
       </FormField>
       <div className={styles.actions}>
-        <Button disabled={disabled || password.length < 14} type="submit" variant="danger">{t("confirmRecoverRoot")}</Button>
+        <Button disabled={disabled || !withinNewPasswordProductBounds(password)} type="submit" variant="danger">{t("confirmRecoverRoot")}</Button>
         <Button disabled={disabled} onClick={cancel} variant="ghost">{t("cancel")}</Button>
       </div>
     </form> : null}

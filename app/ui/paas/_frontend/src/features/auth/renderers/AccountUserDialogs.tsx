@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl";
 import { KeyRound, ShieldCheck, UserRound } from "lucide-react";
 import { Alert, Dialog, FormField, Badge, Button, Input, PasswordInput, Select, Typography } from "@ui/xiak";
 import { useAccountAccess } from "../application/AccountAccessProvider";
+import { withinNewPasswordProductBounds } from "../domain/passwordEntry";
 import type { CapabilityRestriction } from "../domain/accounts";
 import type { AccountUserScene } from "../scenes/accountAccessScene";
 import styles from "./AccountAccessRenderer.module.css";
@@ -16,7 +17,7 @@ function PasswordField({ value, onChange, autoFocus = false }: { value: string; 
   const auth = useTranslations("Auth");
   const id = useId();
   return <FormField id={id} label={t("initialPassword")} hint={t("passwordHint")}>
-    <PasswordInput autoFocus={autoFocus} aria-describedby={`${id}-hint`} id={id} autoComplete="new-password" maxLength={128} minLength={14} onChange={(event) => onChange(event.target.value)} required value={value} showLabel={auth("showPassword")} hideLabel={auth("hidePassword")} capsLockLabel={auth("capsLock")} />
+    <PasswordInput autoFocus={autoFocus} aria-describedby={`${id}-hint`} id={id} autoComplete="new-password" onChange={(event) => onChange(event.target.value)} required value={value} showLabel={auth("showPassword")} hideLabel={auth("hidePassword")} capsLockLabel={auth("capsLock")} />
   </FormField>;
 }
 
@@ -29,6 +30,7 @@ export function CreateTenantDialog({ onClose }: { onClose(): void }) {
   const [displayName, setDisplayName] = useState("");
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (access.busy || access.loading || !withinNewPasswordProductBounds(password)) return;
     const fields = new FormData(event.currentTarget);
     const initialPassword = password;
     setPassword("");
@@ -40,7 +42,7 @@ export function CreateTenantDialog({ onClose }: { onClose(): void }) {
   }
   return <Dialog open title={t("createTenantTitle")} closeLabel={t("closeCreate")} onClose={onClose} busy={access.busy} footer={<>
     <Button disabled={access.busy} onClick={onClose} variant="secondary">{t("cancel")}</Button>
-    <Button disabled={access.busy || access.loading || !password} form={formId} type="submit">{t(access.busy ? "creating" : "confirmTenant")}</Button>
+    <Button disabled={access.busy || access.loading || !withinNewPasswordProductBounds(password)} form={formId} type="submit">{t(access.busy ? "creating" : "confirmTenant")}</Button>
   </>}>
     <form aria-label={t("createTenantTitle")} className={styles.form} id={formId} onSubmit={submit}>
       <FormField id={formId + "-id"} label={t("accountId")} hint={t("accountIdHint")}><Input aria-describedby={formId + "-id-hint"} id={formId + "-id"} autoComplete="off" maxLength={128} name="accountId" pattern={"[A-Za-z0-9][A-Za-z0-9._:\\-]{0,127}"} placeholder={t("accountIdPlaceholder")} required /></FormField>
@@ -72,11 +74,13 @@ export function UserAccessManagement({ user, onDeleted, profileActions = false, 
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [resettingPassword, setResettingPassword] = useState(false);
+  const [reviewingReset, setReviewingReset] = useState(false);
   const [selectedPolicy, setSelectedPolicy] = useState<{ id: string; resourceVersion: number } | null>(null);
   const relationIntent = access.userPolicyChangeIntent;
   const reviewingPolicy = relationIntent?.userId === user.id;
   const otherUserIntent = relationIntent && !reviewingPolicy ? relationIntent : null;
   const reviewHeading = useRef<HTMLHeadingElement>(null);
+  const resetReviewHeading = useRef<HTMLHeadingElement>(null);
   const reviewTrigger = useRef<HTMLButtonElement>(null);
   const returnToTrigger = useRef(false);
   const lastTrigger = useRef<HTMLButtonElement | null>(null);
@@ -98,12 +102,16 @@ export function UserAccessManagement({ user, onDeleted, profileActions = false, 
       (lastTrigger.current?.isConnected ? lastTrigger.current : reviewTrigger.current)?.focus({ preventScroll: true });
     }
   }, [reviewingPolicy]);
+  useLayoutEffect(() => {
+    if (resettingPassword && reviewingReset) resetReviewHeading.current?.focus({ preventScroll: true });
+  }, [resettingPassword, reviewingReset]);
 
-  async function resetPassword(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  async function resetPassword() {
     const initialPassword = password;
     setPassword("");
-    if (await access.execute({ kind: "reset-password", userId: user.id, resourceVersion: user.resourceVersion, initialPassword })) setResettingPassword(false);
+    setReviewingReset(false);
+    setResettingPassword(false);
+    await access.execute({ kind: "reset-password", userId: user.id, resourceVersion: user.resourceVersion, initialPassword });
   }
   return <div className={styles.detail}>
       <div className={styles.userSummary}><div><strong>{user.name}</strong><Typography.Text tone="muted">{user.qualifiedName}</Typography.Text></div><Badge status={user.enabled ? "success" : "neutral"}>{t(`states.${user.state}`)}</Badge></div>
@@ -179,7 +187,7 @@ export function UserAccessManagement({ user, onDeleted, profileActions = false, 
       <div className={styles.sectionHeading}><KeyRound aria-hidden="true" /><strong>{t("loginSecurity")}</strong></div>
       <div className={styles.actions}>
           <Button disabled={disabled || !user.canSetStatus} title={!user.canSetStatus ? restriction(user.statusRestrictionReason) : undefined} onClick={() => { setConfirmStatus(true); setConfirmDelete(false); setResettingPassword(false); setPassword(""); }} variant="secondary">{user.enabled ? t("disableUser") : t("enableUser")}</Button>
-          <Button disabled={disabled || !user.canResetPassword} title={!user.canResetPassword ? restriction(user.passwordRestrictionReason) : undefined} onClick={() => { setResettingPassword(true); setConfirmDelete(false); setConfirmStatus(false); }} variant="secondary">{t("resetPassword")}</Button>
+          <Button disabled={disabled || !user.canResetPassword} title={!user.canResetPassword ? restriction(user.passwordRestrictionReason) : undefined} onClick={() => { setResettingPassword(true); setReviewingReset(false); setConfirmDelete(false); setConfirmStatus(false); }} variant="secondary">{t("resetPassword")}</Button>
           {deleteAction ? <Button disabled={disabled || !user.canDelete} title={!user.canDelete ? restriction(user.deleteRestrictionReason) : undefined} onClick={() => { setConfirmDelete(true); setConfirmStatus(false); setResettingPassword(false); }} variant="danger">{t("deleteUser")}</Button> : null}
       </div>
       {!user.canSetStatus || !user.canResetPassword ? <p className={styles.note}>{restriction(user.statusRestrictionReason ?? user.passwordRestrictionReason)}</p> : null}
@@ -191,11 +199,25 @@ export function UserAccessManagement({ user, onDeleted, profileActions = false, 
             <Button disabled={disabled} onClick={() => setConfirmStatus(false)} variant="ghost">{t("cancel")}</Button>
           </div>
         </div></Alert> : null}
-        {resettingPassword ? <form className={styles.form} onSubmit={resetPassword}>
+        {resettingPassword && !reviewingReset ? <form className={styles.form} onSubmit={(event) => { event.preventDefault(); if (withinNewPasswordProductBounds(password) && !disabled) setReviewingReset(true); }}>
           <PasswordField autoFocus onChange={setPassword} value={password} />
           <p className={styles.note}>{t("resetHint")}</p>
-          <div className={styles.actions}><Button disabled={disabled || !password} type="submit">{t("confirmReset")}</Button><Button disabled={disabled} onClick={() => { setResettingPassword(false); setPassword(""); }} variant="ghost">{t("cancel")}</Button></div>
+          <div className={styles.actions}><Button disabled={disabled || !withinNewPasswordProductBounds(password)} type="submit">{t("reviewReset")}</Button><Button disabled={disabled} onClick={() => { setResettingPassword(false); setPassword(""); }} variant="ghost">{t("cancel")}</Button></div>
         </form> : null}
+        {resettingPassword && reviewingReset ? <section aria-label={t("resetReviewTitle")} className={styles.policyAttachmentReview}>
+          <h3 ref={resetReviewHeading} tabIndex={-1} className={styles.stepTitle}>{t("resetReviewTitle")}</h3>
+          <dl className={styles.facts}>
+            <div><dt>{t("attachmentTarget")}</dt><dd>{user.qualifiedName}<small>{user.id}</small></dd></div>
+            <div><dt>{t("ownership")}</dt><dd>{access.scene?.accountName}</dd></div>
+          </dl>
+          <Alert status="warning">{t("resetHint")}</Alert>
+          <p className={styles.note}>{t("resetReviewSecretHint")}</p>
+          <div className={styles.actions}>
+            <Button disabled={disabled || !user.canResetPassword} onClick={() => void resetPassword()}>{t("confirmReset")}</Button>
+            <Button disabled={disabled} onClick={() => setReviewingReset(false)} variant="secondary">{t("changeResetPassword")}</Button>
+            <Button disabled={disabled} onClick={() => { setResettingPassword(false); setReviewingReset(false); setPassword(""); }} variant="ghost">{t("cancel")}</Button>
+          </div>
+        </section> : null}
         {confirmDelete ? <Alert status="warning"><form className={styles.confirmation} onSubmit={async (event) => {
           event.preventDefault();
           if (deleteConfirmation !== user.loginName || !user.canDelete) return;
