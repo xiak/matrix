@@ -43,6 +43,8 @@
 .permissionStatement dl > div { min-width: 0; }
 .permissionStatement dt { margin-bottom: var(--xiak-spacing-narrow); color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
 .permissionStatement dd { margin: 0; overflow-wrap: anywhere; }
+.resourceList { display: grid; gap: var(--xiak-spacing-narrow); margin: 0; padding: 0; list-style: none; }
+.resourceList code { overflow-wrap: anywhere; white-space: normal; }
 .boundaries { display: grid; gap: var(--xiak-spacing-default); margin: 0; padding: 0; list-style: none; }
 .boundaries li { padding-inline-start: var(--xiak-spacing-default); border-inline-start: 3px solid var(--xiak-color-border-accent); }
 .boundaries strong { display: block; margin-bottom: var(--xiak-spacing-micro); color: var(--xiak-color-text-strong); }

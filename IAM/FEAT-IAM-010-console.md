@@ -294,15 +294,9 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 
 ### 服务授权 MOCK 的开发验收证据
 
-2026-09-24，前端实现固定在已推送的
-[`c5ec1f945cdcd7af61941aafed8da4d7e68f839c`](https://github.com/xiak/matrix/commit/c5ec1f945cdcd7af61941aafed8da4d7e68f839c)。
+角色目录的“服务授权”只提供内容区内的只读 MOCK 审阅。原型模板不再引用租户可编辑的 `MatrixDeliveryAccess`：权限示例仅使用 IAM 已声明的 PaaS 精确只读 Action，按 `APPLICATION`、`DEPLOYMENT`、`OPERATION` 的精确示例 ID 展示。服务主体、资源 ID、模板修订及角色名不是受信登记或发布结果；界面不提供可提交的策略内容摘要或客户同意记录。普通 `PipelineDeploymentRole` 与本流程分开，租户策略的更新或删除不会更改示例模板。
 
-- 角色目录新增独立“服务授权”入口；目录、模板详情与“服务身份和用途 → 不可变权限快照 → 客户同意和生命周期”三步审阅都替换当前内容区，不打开 Dialog。普通服务角色仍留在角色目录；即使共享 `devops.matrix.internal` 主体，也不会把 `PipelineDeploymentRole` 冒充为服务关联角色或既有客户同意。
-- 原型模板显式固定引用已有 `MatrixDeliveryAccess` v1 与 Action 模式，不跟随该策略后续默认版本。默认版本切到 v2 时仍审阅 v1，并明确提示策略详情导航当前展示的默认版本；固定 v1 缺失时显示不可用并禁止继续，绝不回退当前默认版本。产品接入、callingService、服务身份认证与客户同意保持独立；目录可见性和产品安装不授权。模板升版不得自动扩权，未来只应使用专用角色的短期会话。
-- 删除服务关联角色前需检查关联资源：有关联资源时拒绝删除或进入明确异步清理。客户授权撤销和既有短期会话何时失效是尚未固定的另一条契约，不以“等待资源清理”替代；模板标识、服务主体与角色名继续明确为 UX 示意值，而不是已登记后端类型。
-- 当前没有固定的 `ServiceRoleTemplate` 租户授权、撤销或承担角色 northbound contract，也没有对应 LIVE Action。页面不向 `AccessWorkspace` 添加模型、命令或持久化，不创建角色、不签发凭据、不产生成功状态；最终“授权服务”始终禁用。此片只提前验证 FEAT-IAM-008 设计边界下的 UX，不接受真实服务委派能力。
-- 模板详情和首步审阅同时显示准确目标 Account；PassRole 边界明确要求未来实现同时绑定操作者、目标 Account/Role、实际工作负载和单一 service purpose。当前页面没有工作负载证明，因此不会用 callingService 字符串或产品名称冒充可承担凭据。
-- 行为用例证明全程无 Dialog、无 repository/workspace 写调用、原 MOCK 状态逐字段不变，并覆盖进入、阶段切换、精确触发器焦点、固定版本与缺失版本拒绝。完整前端 42 个测试文件、671 条用例及三条静态归一化用例通过；类型、lint、架构、228 组主题对比、40 页生产导出、223 个嵌入文件等价、`go test ./...` 与 `go vet ./...` 通过。先前小屏与桌面验收继续有效；本次真实 DEV 复核确认目标 Account 与 PassRole/工作负载边界可见。开发热更新期间曾记录一次已消失的瞬时模块缺失日志，不把该历史日志描述为当前清洁日志证据。
+目录可见性、产品安装和 callingService 身份都不构成客户授权。未来 PassRole／承担角色需共同绑定操作者、目标 Account/Role、实际工作负载与单一用途；模板升版不能自动扩权，服务应使用短期会话。关联资源清理、授权撤销和既有会话失效语义仍待 FEAT-IAM-008 固定。当前没有已发布的 `ServiceRoleTemplate` 租户授权、撤销或承担角色 northbound contract 与对应 LIVE Action，因此最终“授权服务”禁用；页面不创建角色、凭据或授权成功状态。前端实现及验收证据由 [FEAT-007](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence) 维护。
 
 ### 策略版本 MOCK 的开发验收证据
 

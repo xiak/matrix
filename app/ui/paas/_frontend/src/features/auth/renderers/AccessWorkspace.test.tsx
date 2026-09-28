@@ -939,13 +939,14 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByRole("table", { name: "服务授权模板" })).toBeTruthy();
     expect(screen.getByText(/普通服务角色仍在角色列表中单独管理/)).toBeTruthy();
 
-    const template = screen.getByRole("button", { name: "Application delivery" });
+    const template = screen.getByRole("button", { name: "Application operations review" });
     await user.click(template);
     expect(screen.getByRole("heading", { level: 2, name: "服务授权模板" })).toBe(document.activeElement);
-    expect(screen.getAllByText("devops.matrix.internal").length).toBeGreaterThan(0);
-    expect(screen.getByText("MatrixServiceRoleForApplicationDelivery")).toBeTruthy();
+    expect(screen.getAllByText("preview.paas.service").length).toBeGreaterThan(0);
+    expect(screen.getByText("PreviewServiceRoleForApplicationOperationsRead")).toBeTruthy();
     expect(screen.getByText("目标账号").nextElementSibling?.textContent).toBe("org-xiak");
     expect(screen.getByText(/PipelineDeploymentRole 是普通工作负载角色/)).toBeTruthy();
+    expect(screen.getByText(/不引用租户可编辑策略/)).toBeTruthy();
 
     const review = screen.getByRole("button", { name: "审阅服务授权" });
     await user.click(review);
@@ -953,15 +954,16 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByRole("heading", { level: 3, name: "确认服务身份与单一用途" })).toBeTruthy();
     expect(screen.getByText(/必须同时校验操作者、目标账号与角色、实际工作负载和 service purpose/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "下一步" }));
-    expect(screen.getByText("MatrixDeliveryAccess · v1")).toBeTruthy();
+    expect(screen.getByText("PreviewPaaSOperationsRead · v1")).toBeTruthy();
     const statement = screen.getByRole("region", { name: "声明 1" });
-    expect(within(statement).getByText("paas:*")).toBeTruthy();
-    expect(within(statement).getByText("devops:*")).toBeTruthy();
-    expect(within(statement).getByText("当前账号内的全部适用资源")).toBeTruthy();
+    expect(within(statement).getByText("paas.application.read")).toBeTruthy();
+    expect(within(statement).getByText("APPLICATION")).toBeTruthy();
+    expect(within(statement).getByText("APPLICATION").parentElement?.textContent).toContain("精确 ID");
+    expect(within(statement).getByText("application-example")).toBeTruthy();
     expect(within(statement).getByText("无条件限制")).toBeTruthy();
-    expect(screen.getByText(/这些冒号式动作属于隔离 MOCK 的旧记法/)).toBeTruthy();
-    expect(screen.getByText(/固定策略版本不等于最小权限/)).toBeTruthy();
-    expect(screen.getByText(/跨产品代操作/)).toBeTruthy();
+    expect(within(screen.getByRole("region", { name: "声明 2" })).getByText("paas.deployment.read")).toBeTruthy();
+    expect(within(screen.getByRole("region", { name: "声明 3" })).getByText("paas.operation.read")).toBeTruthy();
+    expect(screen.getByText(/服务主体、资源 ID 和模板修订未在 IAM 发布/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "下一步" }));
     const authorize = screen.getByRole("button", { name: "授权服务（未接入）" }) as HTMLButtonElement;
     expect(authorize.disabled).toBe(true);
@@ -973,11 +975,11 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: "结束审阅" }));
     expect(screen.getByRole("button", { name: "审阅服务授权" })).toBe(document.activeElement);
     await user.click(screen.getByRole("button", { name: "返回服务授权" }));
-    expect(screen.getByRole("button", { name: "Application delivery" })).toBe(document.activeElement);
+    expect(screen.getByRole("button", { name: "Application operations review" })).toBe(document.activeElement);
     await user.click(screen.getByRole("button", { name: "返回角色列表" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "服务授权" })).toBe(document.activeElement));
   });
-  it("keeps service consent pinned to policy v1 when the policy default later moves to v2", async () => {
+  it("keeps the illustrative service template independent of tenant policy revisions", async () => {
     const { user } = await open("roles", { seed: async (extension) => {
       extension.transact((source) => ({ workspace: { ...source, policies: source.policies.map((policy) => policy.id !== "policy-delivery" ? policy : {
         ...policy,
@@ -987,57 +989,26 @@ describe("CAM-style access workspace", () => {
       }) } }));
     } });
     await user.click(await screen.findByRole("button", { name: "服务授权" }));
-    await user.click(screen.getByRole("button", { name: "Application delivery" }));
-    expect(screen.getByRole("button", { name: "打开策略详情（当前默认 v2）" })).toBeTruthy();
-    expect(screen.getByText(/本次服务授权仍固定审阅 v1/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Application operations review" }));
+    expect(screen.queryByRole("button", { name: /打开策略详情/ })).toBeNull();
+    expect(screen.getByText(/不引用租户可编辑策略/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "审阅服务授权" }));
     await user.click(screen.getByRole("button", { name: "下一步" }));
-    expect(screen.getByText("MatrixDeliveryAccess · v1")).toBeTruthy();
-    expect(screen.getByText("paas:*")).toBeTruthy();
+    expect(screen.getByText("PreviewPaaSOperationsRead · v1")).toBeTruthy();
+    expect(screen.getByText("paas.application.read")).toBeTruthy();
     expect(screen.queryByText("iam:*")).toBeNull();
   });
-  it("reviews each service policy statement with its own resources and conditions", async () => {
-    const resource = "matrix:paas:org-xiak:global:application/staging-release";
+  it("does not treat removal of an ordinary tenant policy as service-template revocation", async () => {
     const { user } = await open("roles", { seed: async (extension) => {
-      extension.transact((source) => ({ workspace: { ...source, policies: source.policies.map((policy) => policy.id !== "policy-delivery" ? policy : {
-        ...policy,
-        versions: [{ ...policy.versions[0]!, document: { version: "1" as const, statement: [
-          { effect: "allow" as const, action: ["paas:deploy"], resource: [resource], condition: { resourceTag: [{ key: "environment", value: "staging" }] } },
-          { effect: "deny" as const, action: ["devops:delete"], resource: ["*"] }
-        ] } }]
-      }) } }));
+      extension.transact((source) => ({ workspace: { ...source, policies: source.policies.filter((policy) => policy.id !== "policy-delivery") } }));
     } });
     await user.click(await screen.findByRole("button", { name: "服务授权" }));
-    await user.click(screen.getByRole("button", { name: "Application delivery" }));
+    expect(within(screen.getByRole("table", { name: "服务授权模板" })).getByText("PreviewPaaSOperationsRead")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Application operations review" }));
     await user.click(screen.getByRole("button", { name: "审阅服务授权" }));
     await user.click(screen.getByRole("button", { name: "下一步" }));
-    const allow = screen.getByRole("region", { name: "声明 1" });
-    expect(within(allow).getByText("paas:deploy")).toBeTruthy();
-    expect(within(allow).getByText(resource)).toBeTruthy();
-    expect(within(allow).getByText('environment = "staging"')).toBeTruthy();
-    expect(within(allow).queryByText("devops:delete")).toBeNull();
-    const deny = screen.getByRole("region", { name: "声明 2" });
-    expect(within(deny).getByText("拒绝")).toBeTruthy();
-    expect(within(deny).getByText("devops:delete")).toBeTruthy();
-    expect(within(deny).getByText("当前账号内的全部适用资源")).toBeTruthy();
-    expect(within(deny).queryByText('environment = "staging"')).toBeNull();
-  });
-  it("blocks service consent instead of falling back when its pinned policy version is missing", async () => {
-    const { user } = await open("roles", { seed: async (extension) => {
-      extension.transact((source) => ({ workspace: { ...source, policies: source.policies.map((policy) => policy.id !== "policy-delivery" ? policy : {
-        ...policy,
-        defaultVersion: 2,
-        lastVersion: 2,
-        versions: [{ id: 2, document: { version: "1" as const, statement: [{ effect: "allow" as const, action: ["iam:*"] , resource: ["*"] }] }, createdAt: "2026-09-10T09:00:00Z" }]
-      }) } }));
-    } });
-    await user.click(await screen.findByRole("button", { name: "服务授权" }));
-    const directory = screen.getByRole("table", { name: "服务授权模板" });
-    expect(within(directory).getByText("不可用")).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "Application delivery" }));
-    expect(screen.getByText(/找不到模板固定引用的策略 v1/)).toBeTruthy();
-    expect((screen.getByRole("button", { name: "审阅服务授权" }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.queryByRole("button", { name: /当前默认 v2/ })).toBeNull();
+    expect(screen.getByText("paas.application.read")).toBeTruthy();
+    expect(screen.queryByText("paas:*")).toBeNull();
   });
   it("keeps identity-provider and federation mutations in their detail pages", async () => {
     const { user } = await open("providers");
