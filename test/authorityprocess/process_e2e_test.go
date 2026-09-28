@@ -369,13 +369,11 @@ func TestIAMRetainedPrePlatformProcessUpgrade(t *testing.T) {
 	})
 }
 
-func TestIAMRetainedPreMFAProcessUpgrade(t *testing.T) {
-	testIAMRetainedSessionSource(t, "MATRIX_IAM_PRE_MFA_UPGRADE_POSTGRES_TEST_DSN", "matrix_iam_upgrade_pre_mfa_",
-		"9d8ff34fdc2e1c45a278357d45e2803b799eaa29", 36)
-}
-
-func testIAMRetainedSessionSource(t *testing.T, variable, databasePrefix, source string, sourceSchema uint64) {
-	t.Helper()
+func TestIAMRetainedEnablingProcessUpgrade(t *testing.T) {
+	const variable = "MATRIX_IAM_ENABLING_UPGRADE_POSTGRES_TEST_DSN"
+	const databasePrefix = "matrix_iam_upgrade_enabling_"
+	const source = "ec701f54f1cecf216a2225d74dc67cf5fa6bd316"
+	const sourceSchema uint64 = 40
 	dsn := os.Getenv(variable)
 	if dsn == "" {
 		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", variable)
@@ -384,21 +382,20 @@ func testIAMRetainedSessionSource(t *testing.T, variable, databasePrefix, source
 	defer cancel()
 	config, err := pgx.ParseConfig(dsn)
 	if err != nil || !strings.HasPrefix(config.Database, databasePrefix) {
-		t.Fatal("own-session predecessor requires its own disposable database")
+		t.Fatal("enabling predecessor requires its own disposable database")
 	}
 	config.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
 	admin, err := pgx.ConnectConfig(ctx, config)
 	if err != nil {
-		t.Fatal("connect retained own-session database")
+		t.Fatal("connect retained enabling database")
 	}
 	defer admin.Close(context.Background())
 	assertPostgres18(t, ctx, admin)
 	assertCleanSchemas(t, ctx, admin)
 	root, temporary := repositoryRoot(t), t.TempDir()
-	// Fixed accepted predecessors create the data through their own binaries:
-	// IAM32 predates TOTP custody, while exact preparation IAM36 has the
-	// recovery fence but neither first-contact verification nor MFA creation.
-	// This is not permission to cross any other signed release profile.
+	// The exact signed enabling predecessor creates retained data through its
+	// own IAM40 executable. This is not permission to skip its signed release
+	// profile or accept any other migration source.
 	baseline := extractFixedIAMSource(t, ctx, root, temporary, source)
 	oldMigrator := buildAuthorityBinary(t, ctx, baseline, temporary, "iam-session-predecessor-migrate", "./app/service/iam/cmd/matrix-iam-migrate")
 	oldBinary := buildAuthorityBinary(t, ctx, baseline, temporary, "iam-session-predecessor", "./app/service/iam/cmd/matrix-iam")
@@ -446,28 +443,24 @@ func testIAMRetainedSessionSource(t *testing.T, variable, databasePrefix, source
 		"MATRIX_IAM_BOOTSTRAP_FILE=" + bootstrapPath, "MATRIX_IAM_LISTEN_ADDRESS=" + address,
 		"MATRIX_IAM_CURSOR_KEY_FILE=" + retainedCursorPath,
 		"MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE=" + retainedAccessKeyPath}
-	if sourceSchema == 36 {
-		digest, err := iamv1.BootstrapDigest(processBootstrap(t))
-		if err != nil {
-			t.Fatal(err)
-		}
-		mail := iamv1.EmailVerificationKeyring{APIVersion: iamv1.APIVersion, Kind: "EmailVerificationKeyring", Purpose: iamv1.EmailVerificationWrappingPurpose,
-			Scope:          iamv1.SecurityMailInstallationScope{InstallationID: processBootstrap(t).InstallationID, BootstrapDigest: digest},
-			KeysetRevision: 1, ActiveKeyID: "retained-mail", Keys: []iamv1.EmailVerificationWrappingKey{{KeyID: "retained-mail", FormatVersion: 1,
-				KeyMaterial: processSecret(t, base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x65}, 32)))}}}
-		encoded, err := iamv1.EncodeEmailVerificationKeyring(mail)
-		if err != nil {
-			t.Fatal(err)
-		}
-		environment = append(environment, "MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE="+writeProtectedFile(t, temporary, "iam-email-keyring.json", encoded))
-		clear(encoded)
+	digest, err := iamv1.BootstrapDigest(processBootstrap(t))
+	if err != nil {
+		t.Fatal(err)
 	}
+	mail := iamv1.EmailVerificationKeyring{APIVersion: iamv1.APIVersion, Kind: "EmailVerificationKeyring", Purpose: iamv1.EmailVerificationWrappingPurpose,
+		Scope:          iamv1.SecurityMailInstallationScope{InstallationID: processBootstrap(t).InstallationID, BootstrapDigest: digest},
+		KeysetRevision: 1, ActiveKeyID: "retained-mail", Keys: []iamv1.EmailVerificationWrappingKey{{KeyID: "retained-mail", FormatVersion: 1,
+			KeyMaterial: processSecret(t, base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x65}, 32)))}}}
+	encoded, err := iamv1.EncodeEmailVerificationKeyring(mail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	environment = append(environment, "MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE="+writeProtectedFile(t, temporary, "iam-email-keyring.json", encoded))
+	clear(encoded)
 	start := func(binary string, version uint64) *childProcess {
 		t.Helper()
 		currentEnvironment := append([]string(nil), environment...)
-		if binary == currentBinary || sourceSchema == 36 {
-			currentEnvironment = append(currentEnvironment, "MATRIX_IAM_TOTP_KEYRING_FILE="+writeProcessTOTPKeyring(t, temporary, processBootstrap(t)))
-		}
+		currentEnvironment = append(currentEnvironment, "MATRIX_IAM_TOTP_KEYRING_FILE="+writeProcessTOTPKeyring(t, temporary, processBootstrap(t)))
 		child := startChild(t, root, binary, currentEnvironment)
 		children = append(children, child)
 		waitHTTPStatus(t, ctx, child, endpoint+"/ready", http.StatusOK)
@@ -490,21 +483,19 @@ func testIAMRetainedSessionSource(t *testing.T, variable, databasePrefix, source
 	for _, session := range []loginResult{primary, a, b} {
 		sensitive = append(sensitive, session.Credential)
 	}
-	var mailState func() []byte
-	var originalMail []byte
-	defer func() { clear(originalMail) }()
-	var oldVerification iamv1.NotificationContactVerification
-	var otherPrimary loginResult
-	if sourceSchema == 36 {
-		response := performJSON(t, http.MethodPost, endpoint+"/v1/accounts", primary.Credential, map[string]any{
-			"id": "retained-pre-mfa-account", "displayName": "Retained pre-MFA account", "rootLoginName": "retained.primary",
-			"rootDisplayName": "Retained root", "initialPassword": initialReaderPassword, "requestId": "pre-mfa-second-account",
-		})
-		if response.Status != http.StatusCreated {
-			t.Fatal("actual IAM36 did not create a second retained Account", response.Status)
+	response := performJSON(t, http.MethodPost, endpoint+"/v1/accounts", primary.Credential, map[string]any{
+		"id": "retained-enabling-account", "displayName": "Retained enabling account", "rootLoginName": "retained.primary",
+		"rootDisplayName": "Retained root", "initialPassword": initialReaderPassword, "requestId": "enabling-second-account",
+	})
+	if response.Status != http.StatusCreated {
+		t.Fatal("actual enabling predecessor did not create a second retained Account", response.Status)
+	}
+	otherPrimary := loginIAM(t, endpoint, "retained.primary", initialReaderPassword, "enabling-second-root")
+	sensitive = append(sensitive, otherPrimary.Credential)
+	for _, identity := range []loginResult{a, b, otherPrimary} {
+		if response := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", identity.Credential, nil); response.Status != http.StatusOK {
+			t.Fatal("enabling predecessor did not authenticate its retained Session", response.Status)
 		}
-		otherPrimary = loginIAM(t, endpoint, "retained.primary", initialReaderPassword, "pre-mfa-second-root")
-		sensitive = append(sensitive, otherPrimary.Credential)
 	}
 	identityState := func() []byte {
 		t.Helper()
@@ -514,7 +505,7 @@ func testIAMRetainedSessionSource(t *testing.T, variable, databasePrefix, source
 		 'credentials',(SELECT jsonb_agg(jsonb_build_array(tenant_id,principal_id,password_hash,credential_version,changed_at) ORDER BY tenant_id,principal_id) FROM iam.user_credentials),
 		 'users',(SELECT jsonb_agg(jsonb_build_array(tenant_id,id,status,must_change_password,resource_version) ORDER BY tenant_id,id) FROM iam.principals),
 		 'attachments',(SELECT jsonb_agg(jsonb_build_array(tenant_id,id,target_id,policy_id,authority_scope,installation_id,resource_version,revoked_at) ORDER BY tenant_id,id) FROM iam.policy_attachments),
-		 'sessions',(SELECT jsonb_agg(jsonb_build_array(tenant_id,id,principal_id,status,credential_version,issued_at,expires_at,revoked_at,resource_version) ORDER BY tenant_id,id) FROM iam.sessions))`).Scan(&state); err != nil {
+		 'sessions',(SELECT jsonb_agg(jsonb_build_array(tenant_id,id,principal_id,status,credential_version,issued_at,expires_at,revoked_at,resource_version,authentication_method,authenticated_at,mfa_revision) ORDER BY tenant_id,id) FROM iam.sessions))`).Scan(&state); err != nil {
 			t.Fatal("read retained session/credential invariants", err)
 		}
 		return state
@@ -543,86 +534,38 @@ func testIAMRetainedSessionSource(t *testing.T, variable, databasePrefix, source
 			child := startChild(t, root, currentMigrator, migrationEnvironment, action)
 			children = append(children, child)
 			if err := child.wait(30 * time.Second); err != nil {
-				t.Fatal("actual current migrator rejected retained own-session data")
+				t.Fatal("current migrator rejected retained enabling data")
 			}
 		}
 	}
 	var shape bool
-	if err := admin.QueryRow(ctx, `SELECT schema_version=40 AND iam.authentication_recovery_contract_ready()
+	if err := admin.QueryRow(ctx, `SELECT schema_version=45 AND iam.authentication_recovery_contract_ready()
 	 AND iam.password_attempt_contract_ready() AND iam.totp_authentication_contract_ready()
 	 AND (SELECT cardinality(proallargtypes)=25 AND proargnames[25]='credential_generation'
 	      FROM pg_proc WHERE oid='iam.lookup_session(text)'::regprocedure)
 	 FROM iam.readiness()`).Scan(&shape); err != nil || !shape {
 		t.Fatal("retained database did not install the enabling authentication ABI", err)
 	}
-	current := start(currentBinary, 40)
-	if sourceSchema == 36 {
-		mailState = func() []byte {
-			t.Helper()
-			var state []byte
-			if err := admin.QueryRow(ctx, `SELECT jsonb_build_object(
-			 'contacts',(SELECT jsonb_agg(to_jsonb(c) ORDER BY tenant_id,user_id) FROM iam.notification_contacts c),
-			 'verifications',(SELECT jsonb_agg(to_jsonb(v) ORDER BY tenant_id,id) FROM iam.notification_contact_verifications v),
-			 'notifications',(SELECT jsonb_agg(to_jsonb(n) ORDER BY tenant_id,id) FROM iam.security_notifications n))`).Scan(&state); err != nil {
-				t.Fatal("read post-upgrade notification invariants", err)
-			}
-			return state
-		}
-		var existingMail int
-		if err := admin.QueryRow(ctx, `SELECT (SELECT count(*) FROM iam.notification_contacts)
-			+(SELECT count(*) FROM iam.notification_contact_verifications)
-			+(SELECT count(*) FROM iam.security_notifications)`).Scan(&existingMail); err != nil || existingMail != 0 {
-			t.Fatal("migration invented first-contact material", err)
-		}
-		originalMail = mailState()
-	}
+	current := start(currentBinary, 45)
 	if !bytes.Equal(originalState, identityState()) {
 		t.Fatal("migration or equal bootstrap changed original identity/credential state")
+	}
+	if err := admin.QueryRow(ctx, "SELECT NOT EXISTS(SELECT 1 FROM iam.sessions WHERE security_settings_version IS NOT NULL)").Scan(&shape); err != nil || !shape {
+		t.Fatal("migration invented security-setting proof for predecessor Sessions", err)
 	}
 	if err := admin.QueryRow(ctx, `SELECT NOT EXISTS(SELECT 1 FROM iam.principals p LEFT JOIN iam.user_mfa_states m
 	 ON (m.tenant_id,m.user_id)=(p.tenant_id,p.id) WHERE p.principal_type='USER'
 	 AND (m.user_id IS NULL OR m.enrollment_state<>'NEVER_BOUND' OR m.revision<>1 OR m.factor_id IS NOT NULL))
-	 AND NOT EXISTS(SELECT 1 FROM iam.sessions WHERE authentication_method IS NOT NULL OR authenticated_at IS NOT NULL OR mfa_revision IS NOT NULL)
 	 AND NOT EXISTS(SELECT 1 FROM iam.authentication_challenges) AND NOT EXISTS(SELECT 1 FROM iam.mfa_recovery_batches)`).Scan(&shape); err != nil || !shape {
-		t.Fatal("pre-MFA data gained invented authentication or recovery evidence", err)
+		t.Fatal("enabling data gained invented factor, challenge or recovery evidence", err)
 	}
-	assertRetainedMail := func() {
-		t.Helper()
-		if mailState == nil {
-			return
-		}
-		if !bytes.Equal(originalMail, mailState()) {
-			t.Fatal("migration/restart rewrote pending notification or verification material")
-		}
-		if oldVerification.ID != "" {
-			response := performJSON(t, http.MethodGet, endpoint+"/v1/auth/notification-contact/verifications/"+oldVerification.ID, a.Credential, nil)
-			var currentVerification iamv1.NotificationContactVerification
-			if response.Status != http.StatusOK || json.Unmarshal(response.Body, &currentVerification) != nil || !reflect.DeepEqual(oldVerification, currentVerification) {
-				t.Fatal("post-upgrade first-contact intent was replaced or relabelled", response.Status)
-			}
-		}
-	}
-	assertRetainedMail()
-	if sourceSchema == 36 {
-		response := performJSON(t, http.MethodPost, endpoint+"/v1/auth/notification-contact/verifications", a.Credential,
-			map[string]any{"requestId": "post-upgrade-contact", "email": "retained@matrix.test", "password": changedReaderPassword})
-		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &oldVerification) != nil {
-			t.Fatal("current IAM did not create first-contact verification after upgrade", response.Status)
-		}
-		originalMail = mailState()
-	}
-	if sourceSchema == 36 {
-		for _, identity := range []loginResult{a, otherPrimary} {
-			response := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", identity.Credential, nil)
-			if response.Status != http.StatusOK {
-				t.Fatal("migration missed a retained Account under forced RLS", response.Status)
-			}
-		}
-	}
-	for _, identity := range []loginResult{a, b, otherPrimary} {
-		response := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", identity.Credential, nil)
-		if response.Status != http.StatusOK {
-			t.Fatal("migration rejected a retained pre-MFA Session", response.Status)
+	for _, identity := range []struct {
+		name  string
+		login loginResult
+	}{{"member-before-password-change", a}, {"member-after-password-change", b}, {"second-account-root", otherPrimary}} {
+		response := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", identity.login.Credential, nil)
+		if response.Status != http.StatusUnauthorized {
+			t.Fatalf("migration revived unproven %s Session: status=%d", identity.name, response.Status)
 		}
 	}
 	fresh := loginIAM(t, endpoint, realm, changedReaderPassword, "pre-mfa-current-login")
@@ -636,36 +579,38 @@ func testIAMRetainedSessionSource(t *testing.T, variable, databasePrefix, source
 			t.Fatal("current migration replay failed")
 		}
 	}
-	current = start(currentBinary, 40)
+	current = start(currentBinary, 45)
 	if !bytes.Equal(completedState, identityState()) {
-		t.Fatal("migration replay or restart changed retained pre-MFA identity state")
+		t.Fatal("migration replay or restart changed retained enabling identity state")
 	}
-	assertRetainedMail()
-	if err := admin.QueryRow(ctx, "SELECT NOT EXISTS(SELECT 1 FROM iam.principals p LEFT JOIN iam.user_mfa_states m ON (m.tenant_id,m.user_id)=(p.tenant_id,p.id) WHERE p.principal_type='USER' AND (m.user_id IS NULL OR m.enrollment_state<>'NEVER_BOUND' OR m.revision<>1 OR m.factor_id IS NOT NULL)) AND NOT EXISTS(SELECT 1 FROM iam.sessions WHERE id<>$1 AND (authentication_method IS NOT NULL OR authenticated_at IS NOT NULL OR mfa_revision IS NOT NULL)) AND NOT EXISTS(SELECT 1 FROM iam.authentication_challenges) AND NOT EXISTS(SELECT 1 FROM iam.mfa_recovery_batches)", fresh.Session.ID).Scan(&shape); err != nil || !shape {
+	if err := admin.QueryRow(ctx, "SELECT NOT EXISTS(SELECT 1 FROM iam.principals p LEFT JOIN iam.user_mfa_states m ON (m.tenant_id,m.user_id)=(p.tenant_id,p.id) WHERE p.principal_type='USER' AND (m.user_id IS NULL OR m.enrollment_state<>'NEVER_BOUND' OR m.revision<>1 OR m.factor_id IS NOT NULL)) AND NOT EXISTS(SELECT 1 FROM iam.authentication_challenges) AND NOT EXISTS(SELECT 1 FROM iam.mfa_recovery_batches)").Scan(&shape); err != nil || !shape {
 		t.Fatal("migration replay invented authentication or recovery evidence", err)
 	}
-	for _, identity := range []loginResult{a, b, otherPrimary, fresh} {
-		if response := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", identity.Credential, nil); response.Status != http.StatusOK {
-			t.Fatal("restart rejected a retained pre-MFA Session", response.Status)
+	if response := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", fresh.Credential, nil); response.Status != http.StatusOK {
+		t.Fatal("restart rejected a newly authenticated Session", response.Status)
+	}
+	for _, identity := range []loginResult{a, b, otherPrimary} {
+		if response := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", identity.Credential, nil); response.Status != http.StatusUnauthorized {
+			t.Fatal("migration replay revived an unproven predecessor Session", response.Status)
 		}
 	}
 	for _, event := range originalFacts {
 		var encoded []byte
 		var retained auditv1.Event
 		if err := admin.QueryRow(ctx, "SELECT event_document FROM iam.audit_outbox WHERE event_id=$1", event.EventID).Scan(&encoded); err != nil || json.Unmarshal(encoded, &retained) != nil {
-			t.Fatal("original pre-MFA fact disappeared")
+			t.Fatal("original enabling fact disappeared")
 		}
 		before, beforeDigest, err := auditv1.CanonicalizeEvent(auditv1.SourceIAM, event)
 		after, afterDigest, afterErr := auditv1.CanonicalizeEvent(auditv1.SourceIAM, retained)
 		if err != nil || afterErr != nil || before != after || beforeDigest != afterDigest {
-			t.Fatal("retained pre-MFA canonical bytes changed")
+			t.Fatal("retained enabling canonical bytes changed")
 		}
 		if response := performJSON(t, http.MethodPost, endpoint+"/v1/audit-producer:resolve", iamServiceCredential, iamv1.ResolveAuditProducerRequest{Event: retained}); response.Status != http.StatusOK {
-			t.Fatal("original pre-MFA fact lost its exact historical proof")
+			t.Fatal("original enabling fact lost its exact historical proof")
 		}
 	}
 	current.stop()
-	t.Log("actual IAM36 -> IAM40 migrator/runtime retained Accounts, Sessions and original canonical facts; post-upgrade notification survived replay/restart, and no factor, challenge or recovery authority was invented")
+	t.Log("actual signed IAM40 -> IAM45 migrator/runtime retained Accounts and canonical facts, rejected unproven old Sessions and admitted a fresh qualified Session")
 }
 
 type retainedIAMBaseline struct {
@@ -1264,10 +1209,10 @@ func runAuthorityProcesses(t *testing.T, dsnVariable string, nodeFixture func(*t
 	waitHTTPStatus(t, ctx, paasProcess, paasEndpoint+"/ready", http.StatusOK)
 	// Exercise the exact source services together and require the release owner
 	// to publish this complete authority shape, not an intermediate tuple.
-	profile := installationrelease.AuthoritySchemas{IAM: 40, Audit: 24, PaaS: 6}
-	if current := installationrelease.CurrentDatabaseProfile(); current.Authorities != profile || current.ContractRevision != 15 ||
+	profile := installationrelease.AuthoritySchemas{IAM: 45, Audit: 26, PaaS: 6}
+	if current := installationrelease.CurrentDatabaseProfile(); current.Authorities != profile || current.ContractRevision != 16 ||
 		current.Compatibility != "identical-authority-profile" {
-		t.Fatalf("MFA-enabling runtime=%#v does not match the published release profile=%#v", profile, current)
+		t.Fatalf("combined runtime=%#v does not match the published release profile=%#v", profile, current)
 	}
 	for _, authority := range []struct {
 		name, endpoint string
@@ -1398,12 +1343,22 @@ func runAuthorityProcesses(t *testing.T, dsnVariable string, nodeFixture func(*t
 	assertProcessHostAccess(t, paasEndpoint, developerLogin.Credential, http.StatusForbidden)
 	platformBinding := createIAMPolicyAttachment(t, iamEndpoint, adminLogin.Credential, developer.ID,
 		iamv1.SystemPolicyPlatformOperator, "request-bind-platform-operator")
+	if response := performJSON(t, http.MethodGet, iamEndpoint+"/v1/auth/me", developerLogin.Credential, nil); response.Status != http.StatusUnauthorized {
+		t.Fatal("platform grant preserved a pre-grant developer Session")
+	}
+	developerLogin = loginIAM(t, iamEndpoint, "paas.developer@organization-process", changedDeveloperPassword, "request-platform-developer-login")
+	sensitive = append(sensitive, developerLogin.Credential)
 	platformDecisions = append(platformDecisions,
 		assertPlatformAuthorization(t, iamEndpoint, developerLogin.Credential, string(developer.ID), "request-platform-developer-granted", true),
 	)
 	assertPlatformAuditAccess(t, auditEndpoint, developerLogin.Credential, http.StatusOK)
 	queryAudit(t, auditEndpoint, developerLogin.Credential, auditv1.QueryRecordsRequest{PageSize: 10}, http.StatusForbidden)
 	revokeIAMPolicyAttachment(t, iamEndpoint, adminLogin.Credential, platformBinding.ID, platformBinding.ResourceVersion, "request-revoke-platform-operator")
+	if response := performJSON(t, http.MethodGet, iamEndpoint+"/v1/auth/me", developerLogin.Credential, nil); response.Status != http.StatusUnauthorized {
+		t.Fatal("platform revoke preserved a pre-revoke privileged Session")
+	}
+	developerLogin = loginIAM(t, iamEndpoint, "paas.developer@organization-process", changedDeveloperPassword, "request-platform-developer-revoked-login")
+	sensitive = append(sensitive, developerLogin.Credential)
 	platformDecisions = append(platformDecisions,
 		assertPlatformAuthorization(t, iamEndpoint, developerLogin.Credential, string(developer.ID), "request-platform-developer-revoked", false),
 	)
@@ -1610,6 +1565,11 @@ func runAuthorityProcesses(t *testing.T, dsnVariable string, nodeFixture func(*t
 	sensitive = append(sensitive, recoverySecrets...)
 	revokeIAMPolicyAttachment(t, iamEndpoint, adminLogin.Credential, "bootstrap-platform-operator-binding", 1, "request-revoke-bootstrap-platform")
 	verifyHistoricalRecovery()
+	if response := performJSON(t, http.MethodGet, iamEndpoint+"/v1/auth/me", adminLogin.Credential, nil); response.Status != http.StatusUnauthorized {
+		t.Fatal("bootstrap platform revoke preserved a privileged Session")
+	}
+	adminLogin = loginIAM(t, iamEndpoint, "admin", changedAdminPassword, "request-platform-admin-after-revoke-login")
+	sensitive = append(sensitive, adminLogin.Credential)
 	platformDecisions = append(platformDecisions,
 		assertPlatformAuthorization(t, iamEndpoint, adminLogin.Credential, "principal-admin", "request-platform-admin-revoked", false),
 	)
@@ -3638,6 +3598,12 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 	platform := loginIAM(t, iamEndpoint, "resource.platform@organization-process", initialDeveloperPassword, "request-resource-platform-login")
 	changePasswordIAM(t, iamEndpoint, platform.Credential, initialDeveloperPassword, changedDeveloperPassword, "request-resource-platform-password")
 	createIAMPolicyAttachment(t, iamEndpoint, homeBearer, platformUser.ID, iamv1.SystemPolicyPlatformOperator, "request-resource-platform-role")
+	// A role elevation invalidates the pre-grant Session; a new Session must
+	// then prove the platform-only subject has no implicit tenant permissions.
+	if response := performJSON(t, http.MethodGet, iamEndpoint+"/v1/auth/me", platform.Credential, nil); response.Status != http.StatusUnauthorized {
+		t.Fatal("platform grant preserved a pre-grant Session")
+	}
+	platform = loginIAM(t, iamEndpoint, "resource.platform@organization-process", changedDeveloperPassword, "request-resource-platform-relogin")
 	tenants := []struct {
 		id, owner, member string
 		memberID          iamv1.PrincipalID

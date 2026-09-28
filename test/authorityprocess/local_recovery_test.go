@@ -76,7 +76,7 @@ func TestIAMRetainedLocalRecoveryProcessUpgrade(t *testing.T) {
 	}
 	createProcessLogin(t, ctx, admin, iamAPILogin, "matrix_iam_api")
 	oldBinary := buildAuthorityBinary(t, ctx, baseline, temporary, "matrix-iam-schema3", "./app/service/iam/cmd/matrix-iam")
-	currentBinary := buildAuthorityBinary(t, ctx, root, temporary, "matrix-iam-schema4", "./app/service/iam/cmd/matrix-iam")
+	currentBinary := buildAuthorityBinary(t, ctx, root, temporary, "matrix-iam-current", "./app/service/iam/cmd/matrix-iam")
 	recoveryBinary := buildAuthorityBinary(t, ctx, root, temporary, "matrix-iam-local-recovery", "./app/service/iam/cmd/matrix-iam-local-recovery")
 	bootstrap := processBootstrap(t)
 	encoded, err := iamv1.EncodeBootstrapDocument(bootstrap)
@@ -131,6 +131,10 @@ func TestIAMRetainedLocalRecoveryProcessUpgrade(t *testing.T) {
 	if err := admin.QueryRow(ctx, "SELECT credential_version FROM iam.user_credentials WHERE tenant_id='organization-process' AND principal_id='principal-admin'").Scan(&originalGeneration); err != nil {
 		t.Fatal(err)
 	}
+	var memberGeneration uint64
+	if err := admin.QueryRow(ctx, "SELECT credential_version FROM iam.user_credentials WHERE tenant_id='organization-process' AND principal_id=$1", member.ID).Scan(&memberGeneration); err != nil {
+		t.Fatal(err)
+	}
 	retained := map[string]string{}
 	rows, err := admin.Query(ctx, "SELECT event_id,event_document FROM iam.audit_outbox")
 	if err != nil {
@@ -161,7 +165,7 @@ func TestIAMRetainedLocalRecoveryProcessUpgrade(t *testing.T) {
 	unmigrated := startChild(t, root, currentBinary, unmigratedEnvironment)
 	children = append(children, unmigrated)
 	if err := unmigrated.wait(10 * time.Second); err == nil || errors.Is(err, errProcessWaitTimeout) {
-		t.Fatal("schema4 executable accepted the unmigrated schema3 database")
+		t.Fatal("current executable accepted the unmigrated schema3 database")
 	}
 	apiDSN := runtimeDSN(t, config, "matrix_iam_api_login", processDBPassword)
 	workerDSN := runtimeDSN(t, config, "matrix_iam_worker_login", processDBPassword)
@@ -169,22 +173,28 @@ func TestIAMRetainedLocalRecoveryProcessUpgrade(t *testing.T) {
 	custodyDSN := runtimeDSN(t, config, "matrix_iam_backup_custody_login", processDBPassword)
 	for range 2 {
 		if err := iammigration.ApplyWithLocalRecovery(ctx, dsn, localRecoveryMigrationDSN(t, apiDSN), localRecoveryMigrationDSN(t, workerDSN), localRecoveryMigrationDSN(t, recoveryDSN), localRecoveryMigrationDSN(t, custodyDSN)); err != nil {
-			t.Fatalf("provision schema4 purpose-only recovery login: %v", err)
+			t.Fatalf("provision current purpose-only recovery login: %v", err)
 		}
 		if err := iammigration.VerifyInstalledWithLocalRecovery(ctx, dsn, localRecoveryMigrationDSN(t, apiDSN), localRecoveryMigrationDSN(t, workerDSN), localRecoveryMigrationDSN(t, recoveryDSN), localRecoveryMigrationDSN(t, custodyDSN)); err != nil {
 			t.Fatalf("verify installed recovery login: %v", err)
 		}
 	}
-	environment[0] = "MATRIX_IAM_DATABASE_DSN_FILE=" + writeProtectedFile(t, temporary, "iam-schema4-dsn", []byte(apiDSN))
+	environment[0] = "MATRIX_IAM_DATABASE_DSN_FILE=" + writeProtectedFile(t, temporary, "iam-current-dsn", []byte(apiDSN))
 	current := start(currentBinary)
-	for _, credential := range []string{primary.Credential, memberSession.Credential} {
-		if result := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", credential, nil); result.Status != http.StatusOK {
-			t.Fatal("schema4 migration revoked proved schema3 credential generations")
+	var generationsPreserved bool
+	if err := admin.QueryRow(ctx, `SELECT
+		(SELECT credential_version=$1 FROM iam.user_credentials WHERE tenant_id='organization-process' AND principal_id='principal-admin')
+		AND (SELECT credential_version=$2 FROM iam.user_credentials WHERE tenant_id='organization-process' AND principal_id=$3)
+		AND NOT EXISTS (SELECT 1 FROM iam.sessions WHERE security_settings_version IS NOT NULL)`, originalGeneration, memberGeneration, member.ID).Scan(&generationsPreserved); err != nil || !generationsPreserved {
+		t.Fatal("migration changed retained credentials or invented old session security proof", err)
+	}
+	for _, credential := range []string{primary.Credential, memberSession.Credential, retired.Credential} {
+		if result := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", credential, nil); result.Status != http.StatusUnauthorized {
+			t.Fatal("migration authenticated a schema3 session without security-setting proof")
 		}
 	}
-	if result := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", retired.Credential, nil); result.Status != http.StatusUnauthorized {
-		t.Fatal("schema4 migration revived a revoked schema3 session")
-	}
+	currentPrimary := loginIAM(t, endpoint, "admin", changedAdminPassword, "retained-current-primary")
+	currentMember := loginIAM(t, endpoint, "retained.local.viewer@organization-process", changedReaderPassword, "retained-current-member")
 	local := localRecoveryProcessAuthority(t, bootstrap)
 	encoded, err = iamv1.EncodeLocalCredentialRecoveryAuthority(local)
 	if err != nil {
@@ -225,12 +235,12 @@ func TestIAMRetainedLocalRecoveryProcessUpgrade(t *testing.T) {
 			}
 			current = start(currentBinary)
 		}
-		for _, credential := range []string{primary.Credential, retired.Credential} {
+		for _, credential := range []string{primary.Credential, currentPrimary.Credential, retired.Credential} {
 			if result := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", credential, nil); result.Status != http.StatusUnauthorized {
-				t.Fatal("recovery/bootstrap/restart revived an old schema3 session")
+				t.Fatal("recovery/bootstrap/restart revived an old or recovered primary session")
 			}
 		}
-		memberIdentity := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", memberSession.Credential, nil)
+		memberIdentity := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", currentMember.Credential, nil)
 		var memberState iamv1.CurrentIdentity
 		if memberIdentity.Status != http.StatusOK || json.Unmarshal(memberIdentity.Body, &memberState) != nil || len(memberState.PolicySources) != 0 {
 			t.Fatal("primary recovery changed the retained member or repaired its revoked binding")
@@ -256,7 +266,7 @@ func TestIAMRetainedLocalRecoveryProcessUpgrade(t *testing.T) {
 		var raw []byte
 		var event auditv1.Event
 		if err := admin.QueryRow(ctx, "SELECT event_document FROM iam.audit_outbox WHERE event_id=$1", id).Scan(&raw); err != nil || json.Unmarshal(raw, &event) != nil {
-			t.Fatal("schema4 recovery lost an old IAM fact")
+			t.Fatal("recovery lost an old IAM fact")
 		}
 		event.OccurredAt = event.OccurredAt.UTC()
 		current, _, err := auditv1.CanonicalizeEvent(auditv1.SourceIAM, event)
