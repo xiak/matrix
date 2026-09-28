@@ -221,6 +221,17 @@ export type AuthorizationProfileAction = {
   userAuthenticationMethods?: AuthorizationUserAuthenticationMethod[];
 };
 
+// An omitted admission set retains IAM's sealed legacy ceiling; absence never
+// means that every subject or credential carrier is supported.
+export function admittedAuthorizationSubjects(action: AuthorizationProfileAction): AuthorizationSubjectType[] {
+  return action.subjectTypes ?? (action.scope === "INSTALLATION_PROBE" ? ["SERVICE_ACCOUNT"] : ["USER"]);
+}
+
+export function authorizationResourceShapeKind(shape: AuthorizationResourceShape): "INSTANCE" | "INSTANCE_PREFIX" | "COLLECTION_LIST" | "COLLECTION_CREATE" {
+  if (shape.mode === "COLLECTION") return shape.collectionUsage === "COLLECTION_CREATE" ? "COLLECTION_CREATE" : "COLLECTION_LIST";
+  return shape.prefixAllowed ? "INSTANCE_PREFIX" : "INSTANCE";
+}
+
 export type AuthorizationProfile = {
   product: string;
   revision: number;

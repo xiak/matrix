@@ -1754,6 +1754,8 @@
     "actionTable": "产品 {product} 的 Action 声明",
     "action": "Action",
     "resource": "资源",
+    "resourceTarget": "资源与授权目标",
+    "subjectCredential": "主体与凭据",
     "targets": "授权目标",
     "conditions": "可信条件",
     "resultResource": "成功结果：{resource}",
@@ -1801,7 +1803,7 @@
     },
     "declaration": {
       "title": "确认产品拥有的权限声明",
-      "lead": "这里复用目录中的真实 AuthorizationProfile 结构，只读展示待审阅的当前声明，不在浏览器中重新计算摘要。",
+      "lead": "这里复用 AuthorizationProfile 契约形状，只读展示隔离 MOCK 声明；数据不是受信登记结果，也不在浏览器中重新计算摘要。",
       "owner": "责任人：产品研发团队",
       "ownerHint": "产品团队定义 Action、资源类型、资源表达方式与可信条件，并保证真实业务接口按同一声明执行鉴权。登记几个名称并不等于完成产品接入。"
     },
@@ -1816,6 +1818,8 @@
         "enforcement": { "title": "真实 PEP 鉴权证据", "hint": "产品 API 必须执行对应 Action 检查，并覆盖资源归属、列表过滤和批量操作，避免只登记目录却绕过鉴权。" }
       },
       "snapshot": { "actions": "待审 Action", "resources": "资源类型", "conditions": "条件键" },
+      "reviewActionsTitle": "逐项核对权限声明",
+      "reviewActionsHint": "按当前声明原样列出 Action、资源目标、主体、凭据和可信条件；分页仅改变显示，不代表已通过 IAM 校验。",
       "notProof": "当前 IAM 只提供代码内纯校验与只读目录；本页的检查项不是在线校验结果、审批记录或发布凭证。"
     },
     "release": {

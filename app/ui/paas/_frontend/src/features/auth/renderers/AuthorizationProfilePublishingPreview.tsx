@@ -3,8 +3,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, FileCode2, LockKeyhole, ShieldCheck } from "lucide-react";
 import { useTranslations } from "next-intl";
-import { Alert, Badge, Button, Card, Steps } from "@ui/xiak";
+import { Alert, Badge, Button, Card, Steps, Table, TablePagination } from "@ui/xiak";
 import type { AuthorizationProfileEntry } from "../domain/accounts";
+import { AuthorizationActionTable } from "./AuthorizationActionTable";
 import styles from "./AuthorizationProfilePublishingPreview.module.css";
 
 const stageIds = ["declaration", "validation", "release"] as const;
@@ -14,7 +15,10 @@ export function AuthorizationProfilePublishingPreview({ entry, onClose }: {
   onClose(): void;
 }) {
   const t = useTranslations("AuthorizationProfilePublishingPreview");
+  const catalog = useTranslations("AuthorizationProfileCatalog");
   const [stage, setStage] = useState(0);
+  const [actionPage, setActionPage] = useState(1);
+  const [actionPageSize, setActionPageSize] = useState(10);
   const heading = useRef<HTMLHeadingElement>(null);
   const steps = useMemo(() => stageIds.map((id) => ({ id, label: t(`steps.${id}`) })), [t]);
   useEffect(() => { heading.current?.focus(); }, [stage]);
@@ -23,6 +27,9 @@ export function AuthorizationProfilePublishingPreview({ entry, onClose }: {
   const scopes = [...new Set(profile.actions.map((action) => action.scope))];
   const resources = [...new Set(profile.actions.map((action) => action.resourceKind))];
   const conditions = [...new Set(profile.actions.flatMap((action) => action.conditions?.map((condition) => condition.key) ?? []))];
+  const actionPages = Math.max(1, Math.ceil(profile.actions.length / actionPageSize));
+  const currentActionPage = Math.min(actionPage, actionPages);
+  const reviewActions = profile.actions.slice((currentActionPage - 1) * actionPageSize, currentActionPage * actionPageSize);
 
   return <section aria-labelledby="authorization-profile-publishing-title" className={styles.root}>
     <div className={styles.heading}>
@@ -66,6 +73,11 @@ export function AuthorizationProfilePublishingPreview({ entry, onClose }: {
           <div><span>{t("validation.snapshot.resources")}</span><strong>{resources.length}</strong></div>
           <div><span>{t("validation.snapshot.conditions")}</span><strong>{conditions.length}</strong></div>
         </div>
+        <section aria-label={t("validation.reviewActionsTitle")} className={styles.reviewActions}>
+          <div><h4>{t("validation.reviewActionsTitle")}</h4><p>{t("validation.reviewActionsHint")}</p></div>
+          <AuthorizationActionTable actions={reviewActions} label={t("validation.reviewActionsTitle")} />
+          <Table.Footer note={catalog("completeActions", { count: profile.actions.length })}><TablePagination page={currentActionPage} pages={actionPages} pageSize={actionPageSize} onPageChange={setActionPage} onPageSizeChange={(size) => { setActionPageSize(size); setActionPage(1); }} labels={{ summary: catalog("page", { page: currentActionPage, pages: actionPages }), pageSize: catalog("pageSize"), previous: catalog("previous"), next: catalog("next") }} /></Table.Footer>
+        </section>
         <Alert status="info">{t("validation.notProof")}</Alert>
       </Card.Body>
     </Card> : null}

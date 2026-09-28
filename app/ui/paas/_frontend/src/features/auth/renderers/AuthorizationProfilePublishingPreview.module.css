@@ -45,6 +45,9 @@
 .snapshot > div { display: grid; gap: var(--xiak-spacing-narrow); padding: var(--xiak-spacing-default); }
 .snapshot > div + div { border-inline-start: var(--xiak-border-subtle); }
 .snapshot strong { color: var(--xiak-color-text-strong); font-family: var(--xiak-font-numeric); font-size: var(--xiak-font-size-title); }
+.reviewActions { display: grid; min-width: 0; gap: var(--xiak-spacing-default); }
+.reviewActions h4 { margin: 0; color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-subtitle); }
+.reviewActions p { margin: var(--xiak-spacing-micro) 0 0; color: var(--xiak-color-text-muted); line-height: 1.65; }
 
 .releaseReference { display: grid; grid-template-columns: minmax(110px, .6fr) minmax(90px, .35fr) minmax(0, 2fr); border-block: var(--xiak-border-subtle); }
 .releaseReference > div { display: grid; min-width: 0; gap: var(--xiak-spacing-narrow); padding: var(--xiak-spacing-default); }

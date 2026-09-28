@@ -1754,6 +1754,8 @@
     "actionTable": "Action declarations for {product}",
     "action": "Action",
     "resource": "Resource",
+    "resourceTarget": "Resource and target",
+    "subjectCredential": "Subject and credential",
     "targets": "Authorization targets",
     "conditions": "Trusted conditions",
     "resultResource": "Successful result: {resource}",
@@ -1801,7 +1803,7 @@
     },
     "declaration": {
       "title": "Confirm the product-owned permission declaration",
-      "lead": "This view reuses the real AuthorizationProfile shape from the catalog. It displays the current declaration read-only and does not recompute its digest in the browser.",
+      "lead": "This view reuses the AuthorizationProfile contract shape for an isolated MOCK declaration. It is not a trusted registry result, and the browser does not recompute its digest.",
       "owner": "Owner: product engineering",
       "ownerHint": "The product team defines Actions, resource kinds, target shapes, and trusted conditions, then ensures real product APIs enforce the same declaration. Registering names alone does not complete product onboarding."
     },
@@ -1816,6 +1818,8 @@
         "enforcement": { "title": "Real PEP enforcement evidence", "hint": "Product APIs must check the matching Action and cover resource ownership, list filtering, and bulk operations instead of relying on catalog registration alone." }
       },
       "snapshot": { "actions": "Actions to review", "resources": "Resource kinds", "conditions": "Condition keys" },
+      "reviewActionsTitle": "Review each permission declaration",
+      "reviewActionsHint": "Show each declared Action, resource target, subject, credential, and trusted condition as written. Paging changes only what is displayed; it is not IAM validation.",
       "notProof": "IAM currently exposes code-level pure validation and a read-only directory only. These checklist items are not an online validation result, approval record, or release credential."
     },
     "release": {

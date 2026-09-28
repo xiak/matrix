@@ -528,6 +528,10 @@ describe("policy creation entry and directory contract", () => {
     expect(screen.getByRole("heading", { level: 3, name: "检查 IAM 契约与真实鉴权边界" })).toBeTruthy();
     expect(screen.getByText(/不是在线校验结果/)).toBeTruthy();
     expect(screen.getByText(/subjectTypes 与 userAuthenticationMethods/)).toBeTruthy();
+    const reviewActions = screen.getByRole("table", { name: "逐项核对权限声明" });
+    expect(within(reviewActions).getByText("paas.application.read")).toBeTruthy();
+    expect(within(reviewActions).getByText("实例（支持已声明前缀）")).toBeTruthy();
+    expect(within(reviewActions).getByText(/用户凭证: 登录会话/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "下一步" }));
     expect(screen.getByRole("heading", { level: 3, name: "审阅不可变发布引用与消费边界" })).toBeTruthy();
     const publish = screen.getByRole("button", { name: "发布修订（未接入）" }) as HTMLButtonElement;
@@ -538,6 +542,28 @@ describe("policy creation entry and directory contract", () => {
 
     await user.click(screen.getByRole("button", { name: "结束体验" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "体验产品接入审阅" })).toBe(document.activeElement));
+  });
+  it("pages action evidence instead of mounting an unbounded onboarding review", async () => {
+    const actions = Array.from({ length: 1202 }, (_, index) => ({
+      action: `paas.review-${String(index + 1).padStart(4, "0")}.read`, resourceKind: "APPLICATION", scope: "TENANT",
+      resourceShapes: [{ mode: "INSTANCE", prefixAllowed: false }]
+    }));
+    const { user } = await open("policies", { repository: { listAuthorizationProfiles: vi.fn().mockResolvedValue({
+      accountId: "org-xiak", items: [{ profile: { product: "paas", revision: 1, callingService: "PAAS", actions }, contentDigest: `sha256:${"a".repeat(64)}` }]
+    }) } });
+    await user.click(screen.getByRole("tab", { name: "权限能力目录" }));
+    await user.click(await screen.findByRole("button", { name: "paas" }));
+    await user.click(screen.getByRole("button", { name: "体验产品接入审阅" }));
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    const review = screen.getByRole("table", { name: "逐项核对权限声明" });
+    expect(within(review).getAllByRole("row")).toHaveLength(11);
+    expect(within(review).getByText("paas.review-0001.read")).toBeTruthy();
+    expect(within(review).queryByText("paas.review-0011.read")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "下一页" }));
+    expect(within(review).getAllByRole("row")).toHaveLength(11);
+    expect(within(review).getByText("paas.review-0011.read")).toBeTruthy();
+    expect(within(review).queryByText("paas.review-0001.read")).toBeNull();
+    expect(screen.getByText(/分页仅改变显示/)).toBeTruthy();
   });
   it.each([
     ["visual", "按策略生成器创建", "可视化编辑"],
