@@ -6,7 +6,7 @@
 - Updated: 2026-09-28
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `9aa0238f`
+- Pushed UI source: `44fed164`
 
 ## Authoritative route
 
@@ -32,15 +32,12 @@ UI, full static host/export and independent MOCK entry; do not replace them
 with another branch's renderer or inherit that branch's UI acceptance.
 
 The current milestone keeps the independent MOCK preview, fixed-contract LIVE
-paths and synchronized static Go host. Direct User policy attach and revoke
-retain one Account/Session-scoped intent. Across services, the shared table
-now has a compact mobile grid used by application resources, database
-instances and DevOps runs; the desktop table and IAM's existing stack remain
-unchanged. Focused, isolated-regression, build/embed and Go gates passed, with
-the full frontend run's existing short-timeout cases recorded in FEAT-007.
-First-login MFA enrollment remains staged against IAM's fixed `e24dbdae`
-contract. Real IAM process browser, installation and release acceptance are
-not established. Detailed behavior and evidence remain only in the FEAT owners.
+paths and synchronized static Go host. The latest pushed UI includes bounded
+User reset unknown-outcome handling; its exact behavior and test evidence are
+owned only by FEAT-007. First-login MFA enrollment remains staged against
+IAM's fixed contract. Real IAM process browser, installation and release
+acceptance are not established. Detailed behavior and evidence remain only in
+the FEAT owners.
 
 ## Continuation
 
