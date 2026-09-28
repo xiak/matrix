@@ -468,6 +468,7 @@
     "accountControlTitle": "MFA requirement at sign-in",
     "accountControlHint": "Account rules and personal authenticators are managed separately. This control does not prove that any person has connected a factor.",
     "accountReadLoading": "Reading the current account rule…",
+    "accountReadRefreshing": "Refreshing account rules; the verified read-only result below is still displayed.",
     "accountReadDenied": "This identity cannot read account security settings. An authorized administrator must grant the exact iam.security-settings.read permission.",
     "accountReadUnavailable": "The current account rule is temporarily unavailable. Preview data will never replace live state.",
     "accountReadRouteUnavailable": "This environment has not yet connected the read-only account security settings route. The separate MOCK still supports review of the editing flow.",

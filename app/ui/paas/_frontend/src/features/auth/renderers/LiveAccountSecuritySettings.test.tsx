@@ -56,6 +56,38 @@ describe("live account security settings", () => {
     expect(screen.getByText("用户可选")).toBeTruthy();
   });
 
+  it("retains verified read-only data during a same-session refresh, then replaces it with the new result", async () => {
+    const firstClient = client();
+    const nextRead = deferred<AccountSecuritySettingsLoad>();
+    const nextClient = { ...client(), load: vi.fn(() => nextRead.promise) };
+    const view = render(<LocaleProvider><LiveAccountSecuritySettings client={firstClient} /></LocaleProvider>);
+    expect(await screen.findByText("用户可选")).toBeTruthy();
+    view.rerender(<LocaleProvider><LiveAccountSecuritySettings client={nextClient} /></LocaleProvider>);
+    expect(screen.getByText("用户可选")).toBeTruthy();
+    expect(screen.getByText(/正在更新当前账号规则/)).toBeTruthy();
+    expect(screen.queryByText("正在读取当前账号规则…")).toBeNull();
+    expect(screen.getByText("用户可选").closest('[aria-busy="true"]')).toBeTruthy();
+    await act(async () => { nextRead.resolve({ status: "ready", settings: {
+      accountId: "account-one", resourceVersion: 5, mfa: { requiredForUsers: true }, password: null,
+      updatedAt: "2026-09-12T08:00:00Z"
+    } }); });
+    expect(screen.getByText("已要求")).toBeTruthy();
+    expect(screen.queryByText("用户可选")).toBeNull();
+    expect(screen.queryByText(/正在更新当前账号规则/)).toBeNull();
+    expect(nextClient.load).toHaveBeenCalledOnce();
+  });
+
+  it("removes retained data when a same-session refresh reports loss of read access", async () => {
+    const refresh = deferred<AccountSecuritySettingsLoad>();
+    const view = render(<LocaleProvider><LiveAccountSecuritySettings client={client()} /></LocaleProvider>);
+    expect(await screen.findByText("用户可选")).toBeTruthy();
+    view.rerender(<LocaleProvider><LiveAccountSecuritySettings client={{ ...client(), load: () => refresh.promise }} /></LocaleProvider>);
+    expect(screen.getByText("用户可选")).toBeTruthy();
+    await act(async () => { refresh.resolve({ status: "forbidden" }); });
+    expect(screen.getByText(/没有查看账号安全规则的权限/)).toBeTruthy();
+    expect(screen.queryByText("用户可选")).toBeNull();
+  });
+
   it("retries only the failed data region without replacing the page", async () => {
     const source = client();
     const read = vi.fn().mockResolvedValueOnce({ status: "unavailable" }).mockResolvedValueOnce({ status: "ready", settings: {

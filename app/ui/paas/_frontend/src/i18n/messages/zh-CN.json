@@ -468,6 +468,7 @@
     "accountControlTitle": "登录时的 MFA 要求",
     "accountControlHint": "账号级规则与个人验证器分开管理；本区不代表任何个人已经绑定因子。",
     "accountReadLoading": "正在读取当前账号规则…",
+    "accountReadRefreshing": "正在更新当前账号规则；以下为上次已验证的只读结果。",
     "accountReadDenied": "当前身份没有查看账号安全规则的权限。请由有权管理员关联精确的 iam.security-settings.read 权限。",
     "accountReadUnavailable": "暂时无法读取当前账号安全规则。不会用模拟数据代替真实状态。",
     "accountReadRouteUnavailable": "当前环境尚未接入账号安全规则的只读接口。模拟编辑流程仍可在独立 MOCK 中验收。",

@@ -27,7 +27,10 @@ export function LiveAccountSecuritySettings({ client }: { client: AccountSecurit
     return () => { current = false; };
   }, [client, retry]);
 
-  const result = view.client === client ? view.result : { status: "loading" as const };
+  const refreshing = view.result.status === "ready" && view.client !== client && Boolean(view.client && client &&
+    view.client.accountId === client.accountId && view.client.principalId === client.principalId &&
+    view.client.sessionId === client.sessionId);
+  const result = view.client === client || refreshing ? view.result : { status: "loading" as const };
   const retryRead = () => { setView({ client, result: { status: "loading" } }); setRetry((value) => value + 1); };
   const canRetry = result.status === "routeUnavailable" || result.status === "unavailable";
   const passwordRules = result.status === "ready" ? result.settings.password : null;
@@ -41,9 +44,10 @@ export function LiveAccountSecuritySettings({ client }: { client: AccountSecurit
     </div>
     <Card>
       <Card.Header><div className={styles.cardTitle}><span><ShieldCheck aria-hidden="true" /></span><div><Typography.Title as="h3" level={3}>{t("accountControlTitle")}</Typography.Title><Typography.Text tone="muted">{t("accountControlHint")}</Typography.Text></div></div></Card.Header>
-      <Card.Body className={styles.policyForm} aria-busy={result.status === "loading"}>
+      <Card.Body className={styles.policyForm} aria-busy={result.status === "loading" || refreshing}>
         {!client ? <Alert status="warning">{t("accountReadUnavailable")}</Alert> : null}
         {client && result.status === "loading" ? <Typography.Text role="status" tone="muted">{t("accountReadLoading")}</Typography.Text> : null}
+        {refreshing ? <Typography.Text role="status" tone="muted">{t("accountReadRefreshing")}</Typography.Text> : null}
         {result.status === "ready" ? <>
           <dl className={styles.facts}>
             <div><dt>{t("currentRule")}</dt><dd>{t(result.settings.mfa.requiredForUsers ? "required" : "optional")}</dd></div>
