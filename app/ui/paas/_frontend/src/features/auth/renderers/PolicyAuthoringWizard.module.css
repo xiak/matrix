@@ -45,5 +45,7 @@
   .resourceRow > button { justify-self: end; }
 }
 @container policy-authoring (max-width: 420px) {
+  .editorModeTabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 var(--xiak-spacing-default); overflow: visible; }
+  .editorModeTabs > button { justify-content: flex-start; min-width: 0; }
   .resourceRow { grid-template-columns: minmax(0, 1fr); }
 }

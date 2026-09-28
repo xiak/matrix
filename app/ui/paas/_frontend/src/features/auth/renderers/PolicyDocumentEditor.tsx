@@ -125,7 +125,7 @@ export function PolicyDocumentEditor({ text, onChange, policies, accountId, reso
     <Tabs.Root value={mode} onValueChange={(next) => {
       if (next !== "json" && mode === "json" && editorDraft) { replaceStatements(visualStatements(editorDraft)); nextId.current = editorDraft.statement.length; }
       changeMode(policyCreationMethod(next));
-    }}><Tabs.List aria-label={w("document")}><Tabs.Trigger value="visual" disabled={mode === "json" && !editorDraft}>{w("visual")}</Tabs.Trigger><Tabs.Trigger value="json">{w("json")}</Tabs.Trigger><Tabs.Trigger value="tags" disabled={mode === "json" && !editorDraft}>{p("tagMethod")}</Tabs.Trigger><Tabs.Trigger value="features" disabled={!featuresAvailable}>{t("featureMethod")}</Tabs.Trigger></Tabs.List>
+    }}><Tabs.List aria-label={w("document")} className={styles.editorModeTabs}><Tabs.Trigger value="visual" disabled={mode === "json" && !editorDraft}>{w("visual")}</Tabs.Trigger><Tabs.Trigger value="json">{w("json")}</Tabs.Trigger><Tabs.Trigger value="tags" disabled={mode === "json" && !editorDraft}>{p("tagMethod")}</Tabs.Trigger><Tabs.Trigger value="features" disabled={!featuresAvailable}>{t("featureMethod")}</Tabs.Trigger></Tabs.List>
       <Tabs.Content value={mode === "tags" ? "tags" : "visual"}><div className={styles.stack}>
         {mode === "tags" ? <Alert>{p("tagMethodHint")}</Alert> : null}
         {statements.map((statement, index) => <PolicyStatementRow accountId={accountId} resources={resources} tagMode={mode === "tags"} key={statement.id} statement={statement} index={index} total={statements.length} onChangeStatement={changeStatement} onRemoveStatement={removeStatement} onMoveStatement={moveStatement} />)}
