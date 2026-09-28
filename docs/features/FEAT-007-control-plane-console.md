@@ -2272,7 +2272,13 @@ and is not inherited as a new backend acceptance result.
   and English/Chinese controls. The 360px English table and page have no horizontal
   overflow after replacing decorative type badges with compact metadata text.
   A full reload removes stale development HMR CSS/old-prop errors; the repeated
-  selector journey creates no new browser warnings or errors. No real user or
+  selector journey creates no new browser warnings or errors. A later compact
+  browser check found the shared policy/association Transfer still imposed a
+  440px candidate table inside a 320px mobile viewport. The responsive table
+  now removes that minimum and moves type annotations beside the option name;
+  at 390px the user, group and role candidate tables each measure 320/320px
+  table/viewport width, while the create-user policy table measures 280/280px
+  at 360px with no document overflow. No real user or
   policy association was submitted on either console. Policy parsing is cached by document text;
   collapsed message details and their destination links are not mounted.
   Wizard tests cover explicit access methods, permission selection, preview

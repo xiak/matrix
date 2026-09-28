@@ -19,6 +19,7 @@
 .optionCopy { display: block; min-width: 0; cursor: pointer; }
 .optionCopy[data-disabled] { cursor: not-allowed; }
 .optionTitle { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--xiak-color-text-strong); font-weight: var(--xiak-font-weight-medium); }
+.mobileAnnotation { display: none; }
 .description { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: var(--xiak-font-size-small); color: var(--xiak-color-text-muted); margin-top: var(--xiak-spacing-narrow); line-height: 1.6; overflow-wrap: anywhere; }
 .selected { list-style: none; padding: 0; margin: 0; max-height: 360px; overflow-y: auto; scrollbar-gutter: stable; overscroll-behavior: contain; }
 .selected > li + li { border-top: var(--xiak-border-subtle); }
@@ -43,6 +44,9 @@
 @container xiak-transfer (max-width: 460px) {
   .search { flex-direction: column; }
   .search > :last-child:not(:first-child) { flex: auto; }
-  .available { --xiak-table-cell-padding-inline: var(--xiak-spacing-tight); --xiak-table-min-width: 440px; }
+  .available { --xiak-table-cell-padding-inline: var(--xiak-spacing-tight); }
+  .table .annotationCell { display: none; }
+  .optionTitle { overflow: visible; text-overflow: clip; white-space: normal; overflow-wrap: anywhere; }
+  .mobileAnnotation { display: inline-block; margin-inline-start: var(--xiak-spacing-tight); color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); font-weight: var(--xiak-font-weight-regular); }
 }
 }

@@ -64,7 +64,7 @@ export function Transfer({ options, selected, onSelect, onRemove, onClear, label
             const disabled = !checked && (item.disabled || slots === 0);
             return <tr key={item.id} data-selected={checked || undefined}>
               <TableSelectionCell id={inputId} label={item.label} checked={checked} disabled={disabled} onChange={(checked) => onSelect([item.id], checked)} />
-              <td><label className={styles.optionCopy} htmlFor={inputId} data-disabled={disabled || undefined}><span className={styles.optionTitle} title={item.label}>{item.label}{!labels.annotation ? item.annotation : null}</span>{item.description ? <span className={styles.description} title={item.description}>{item.description}</span> : null}</label></td>
+              <td><label className={styles.optionCopy} htmlFor={inputId} data-disabled={disabled || undefined}><span className={styles.optionTitle} title={item.label}>{item.label}{labels.annotation ? <span className={styles.mobileAnnotation}>{item.annotation ?? "—"}</span> : item.annotation}</span>{item.description ? <span className={styles.description} title={item.description}>{item.description}</span> : null}</label></td>
               {labels.annotation ? <td className={styles.annotationCell}>{item.annotation ?? "—"}</td> : null}
             </tr>;
           })}{!matches.length ? <tr><td className={styles.noResults} colSpan={labels.annotation ? 3 : 2}><span role="status">{options.length ? labels.noResults : labels.noOptions ?? labels.noResults}</span></td></tr> : null}</tbody>
