@@ -5,12 +5,19 @@
 - Updated: 2026-09-28
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/phase3-mfa-enabling`
-- Verified pushed milestone: `3d9016d81f831f682a8ca56707d23a4f2c9eafa0`.
-  [Verification 36374469333](https://github.com/xiak/matrix/actions/runs/36374469333)
+- Verified pushed milestone: `d8222e3e539d8c43be1866a3c959560f89c38dc5`.
+  [Verification 36376385492](https://github.com/xiak/matrix/actions/runs/36376385492)
   completed successfully for Go, UI, authority-process and node-process.
   The exact composition is IAM 45/Audit 26/PaaS 6, revision 16; its fixed
   signed enabling predecessor is `ec701f54f1cecf216a2225d74dc67cf5fa6bd316`
   at IAM 40/Audit 24/PaaS 6, revision 15.
+- The signed enabling package's topology includes the notification worker.
+  The current installer now admits that exact B40 profile/topology pair,
+  requires its notification-worker migration identity and rejects the older
+  preparation topology; authenticated local signed-package admission passed.
+- Earlier process-gate fix: `3d9016d81f831f682a8ca56707d23a4f2c9eafa0`,
+  [Verification 36374469333](https://github.com/xiak/matrix/actions/runs/36374469333)
+  passed the same four independent jobs.
 - Earlier preparation: `302a1120` pins the release-specific login wire contract
   and establishes legitimate MFA before the current same-profile backup;
   [Verification 36318140174](https://github.com/xiak/matrix/actions/runs/36318140174)

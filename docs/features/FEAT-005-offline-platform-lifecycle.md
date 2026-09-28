@@ -485,7 +485,13 @@ the enabling digest and requires its notification-worker migration identity;
 the older preparation topology stays confined to its authenticated original
 executable. The signed-package admission test verified this exact pair and
 rejected the preparation profile under the current compiler; it does not
-replace the complete signed runtime upgrade/recovery gate.
+replace the complete signed runtime upgrade/recovery gate. Exact source
+`d8222e3e539d8c43be1866a3c959560f89c38dc5` passed that local authenticated
+signed-package test, full Go/vet and focused race gates;
+[Verification 36376385492](https://github.com/xiak/matrix/actions/runs/36376385492)
+passed Go, UI, authority-process and node-process independently. CI does not
+contain the task-local signed packages, so its green status is not the signed
+runtime result.
 
 Mutable Account security settings and factor replacement add a recovery fence.
 Each new protected backup must seal a separate, non-secret authentication and
