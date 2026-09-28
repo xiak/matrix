@@ -6,7 +6,7 @@ import { useTranslations } from "next-intl";
 import { Alert, Badge, Button, EmptyState, Table, TablePagination, TableSkeleton, TableToolbar } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import { useAccountAccess, type AuthorizationProfileClient, type AuthorizationProfileLoad } from "../application/AccountAccessProvider";
-import type { AuthorizationProfileAction, AuthorizationProfileEntry, AuthorizationResourceShape } from "../domain/accounts";
+import type { AuthorizationProfileAction, AuthorizationProfileEntry, AuthorizationResourceShape, AuthorizationSubjectType } from "../domain/accounts";
 import { AuthorizationProfilePublishingPreview } from "./AuthorizationProfilePublishingPreview";
 import styles from "./AccountAccessRenderer.module.css";
 
@@ -83,7 +83,9 @@ function AuthorizationProfileCatalog({ client }: { client: AuthorizationProfileC
     if (!selected) return [];
     const words = actionQuery.normalize("NFKC").trim().toLowerCase().split(/\s+/).filter(Boolean);
     return selected.profile.actions.filter((action) => {
-      const value = [action.action, action.resourceKind, action.scope, action.resultResourceKind ?? "", ...(action.conditions ?? []).map((condition) => condition.key)].join(" ").toLowerCase();
+      const value = [action.action, action.resourceKind, action.scope, action.resultResourceKind ?? "", ...admittedSubjects(action),
+        ...(action.userAuthenticationMethods ?? (admittedSubjects(action).includes("USER") ? ["LOGIN_SESSION"] : [])),
+        ...(action.conditions ?? []).map((condition) => condition.key)].join(" ").toLowerCase();
       return words.every((word) => value.includes(word));
     });
   }, [actionQuery, selected]);
@@ -112,6 +114,7 @@ function AuthorizationProfileCatalog({ client }: { client: AuthorizationProfileC
       {client.preview ? <Button ref={publishingTrigger} variant="secondary" size="small" onClick={() => setPublishingPreview(true)}>{t("previewPublishing")}</Button> : null}
     </div>
     <p className={styles.note}>{t("detailHint")}</p>
+    <p className={styles.note}>{t("admissionHint")}</p>
     <dl className={styles.catalogFacts}>
       <div><dt>{t("revision")}</dt><dd>{selected.profile.revision}</dd></div>
       <div><dt>{t("callingService")}</dt><dd>{selected.profile.callingService}</dd></div>
@@ -123,12 +126,13 @@ function AuthorizationProfileCatalog({ client }: { client: AuthorizationProfileC
       search={{ label: t("searchActions"), placeholder: t("searchActionsPlaceholder"), value: actionQuery, onChange: (value) => { setActionQuery(value); setPage(1); } }}
       status={t("actionCount", { count: filteredActions.length })} />
     {visibleActions.length ? <Table aria-label={t("actionTable", { product: selected.profile.product })} mobileLayout="stack" className={styles.catalogActionTable}>
-      <thead><tr><th scope="col">{t("action")}</th><th scope="col">{t("scope")}</th><th scope="col">{t("resource")}</th><th scope="col">{t("targets")}</th><th scope="col">{t("conditions")}</th></tr></thead>
+      <thead><tr><th scope="col">{t("action")}</th><th scope="col">{t("scope")}</th><th scope="col">{t("resource")}</th><th scope="col">{t("targets")}</th><th scope="col">{t("admission")}</th><th scope="col">{t("conditions")}</th></tr></thead>
       <tbody>{visibleActions.map((action) => <tr key={action.action}>
         <td data-label={t("action")}><code>{action.action}</code></td>
         <td data-label={t("scope")}><Badge status={scopeStatus(action.scope)}>{t(`scopes.${action.scope}`)}</Badge></td>
         <td data-label={t("resource")}><strong>{action.resourceKind}</strong>{action.resultResourceKind ? <small>{t("resultResource", { resource: action.resultResourceKind })}</small> : null}</td>
         <td data-label={t("targets")}>{action.resourceShapes.map((shape) => <span className={styles.catalogShape} key={`${shape.mode}:${shape.collectionUsage ?? ""}`}>{t(shapeKey(shape))}</span>)}</td>
+        <td data-label={t("admission")}><CatalogAdmission action={action} /></td>
         <td data-label={t("conditions")}>{action.conditions?.length ? action.conditions.map((condition) => <span className={styles.catalogCondition} key={condition.key} title={`${condition.valueType} · ${condition.source}`}>{condition.key}</span>) : t("none")}</td>
       </tr>)}</tbody>
     </Table> : <EmptyState title={t("noActions")} description={t("noActionsHint")} action={<Button variant="secondary" onClick={resetActions}>{toolbarLabels.resetQuery}</Button>} />}
@@ -168,6 +172,25 @@ function AuthorizationProfileCatalog({ client }: { client: AuthorizationProfileC
     </Table> : <EmptyState title={t("noProducts")} description={t("noProductsHint")} action={<Button variant="secondary" onClick={() => { setQuery(""); setProductPage(1); }}>{toolbarLabels.resetQuery}</Button>} />}
     <Table.Footer note={t("completeProducts", { count: entries.length })}><TablePagination page={currentProductPage} pages={productPages} pageSize={productPageSize} onPageChange={setProductPage} onPageSizeChange={(size) => { setProductPageSize(size); setProductPage(1); }} labels={{ summary: t("page", { page: currentProductPage, pages: productPages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} /></Table.Footer></> : null}
   </section>;
+}
+
+// Display the sealed legacy ceiling without mutating the declaration or
+// treating product admission as a permission decision.
+function admittedSubjects(action: AuthorizationProfileAction): AuthorizationSubjectType[] {
+  return action.subjectTypes ?? (action.scope === "INSTALLATION_PROBE" ? ["SERVICE_ACCOUNT"] : ["USER"]);
+}
+
+function CatalogAdmission({ action }: { action: AuthorizationProfileAction }) {
+  const t = useTranslations("AuthorizationProfileCatalog");
+  const subjects = admittedSubjects(action);
+  return <>
+    <span>{subjects.map((subject) => t(`subjects.${subject}`)).join(" · ")}</span>
+    {action.subjectTypes === undefined ? <small>{t("legacySubjects")}</small> : null}
+    <small>{t("userCredentials")}: {subjects.includes("USER")
+      ? (action.userAuthenticationMethods ?? ["LOGIN_SESSION"]).map((method) => t(`credentials.${method}`)).join(" · ")
+      : t("notApplicable")}</small>
+    {subjects.includes("USER") && action.userAuthenticationMethods === undefined ? <small>{t("legacyCredentials")}</small> : null}
+  </>;
 }
 
 function CatalogNotice({ preview }: { preview: boolean }) {

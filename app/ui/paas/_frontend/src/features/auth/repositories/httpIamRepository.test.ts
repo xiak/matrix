@@ -1373,6 +1373,44 @@ describe("IAM HTTP account boundary", () => {
     } })) });
   });
 
+  it("preserves explicit subject and USER credential admission independently of legacy omission", async () => {
+    const entry = profileEntry();
+    const action = entry.profile.actions[0]!;
+    const actions = [
+      { ...action, subjectTypes: ["USER", "ROLE", "SERVICE_ACCOUNT"], userAuthenticationMethods: ["LOGIN_SESSION", "ACCESS_KEY"] },
+      { ...action, action: "paas.application.probe", scope: "INSTALLATION_PROBE", conditions: [],
+        subjectTypes: ["SERVICE_ACCOUNT"] },
+      { ...action, action: "paas.application.legacy" },
+      { ...action, action: "paas.application.key", userAuthenticationMethods: ["ACCESS_KEY"] }
+    ];
+    reply({ apiVersion, kind: "AuthorizationProfileList", accountId: account.id, items: [{ ...entry, profile: { ...entry.profile, actions } }] });
+    const result = await httpAccountRepository.listAuthorizationProfiles("bearer");
+    expect(result.items[0]!.profile.actions[0]).toMatchObject({ subjectTypes: ["USER", "ROLE", "SERVICE_ACCOUNT"], userAuthenticationMethods: ["LOGIN_SESSION", "ACCESS_KEY"] });
+    expect(result.items[0]!.profile.actions[1]).toMatchObject({ subjectTypes: ["SERVICE_ACCOUNT"] });
+    expect(result.items[0]!.profile.actions[1]).not.toHaveProperty("userAuthenticationMethods");
+    expect(result.items[0]!.profile.actions[2]).not.toHaveProperty("subjectTypes");
+    expect(result.items[0]!.profile.actions[2]).not.toHaveProperty("userAuthenticationMethods");
+    expect(result.items[0]!.profile.actions[3]).toMatchObject({ userAuthenticationMethods: ["ACCESS_KEY"] });
+  });
+
+  it("rejects malformed or incompatible subject and credential admission without ignoring fields", async () => {
+    const entry = profileEntry();
+    for (const fields of [
+      { subjectTypes: null }, { subjectTypes: [] }, { subjectTypes: "USER" },
+      { subjectTypes: ["USER", "USER"] }, { subjectTypes: ["ACCOUNT"] },
+      { userAuthenticationMethods: null }, { userAuthenticationMethods: [] }, { userAuthenticationMethods: "ACCESS_KEY" },
+      { userAuthenticationMethods: ["LOGIN_SESSION", "LOGIN_SESSION"] }, { userAuthenticationMethods: ["PASSWORD"] },
+      { subjectTypes: ["ROLE"], userAuthenticationMethods: ["LOGIN_SESSION"] },
+      { subjectTypes: ["SERVICE_ACCOUNT"], userAuthenticationMethods: ["ACCESS_KEY"] },
+      { scope: "INSTALLATION_PROBE", conditions: [], userAuthenticationMethods: ["LOGIN_SESSION"] },
+      { subjectTypes: ["USER"], unknownAdmission: true }
+    ]) {
+      reply({ apiVersion, kind: "AuthorizationProfileList", accountId: account.id, items: [{ ...entry,
+        profile: { ...entry.profile, actions: [{ ...entry.profile.actions[0], ...fields }] } }] });
+      await expect(httpAccountRepository.listAuthorizationProfiles("bearer")).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+  });
+
   it("reads only the authenticated account's security rule and rejects partial or cross-account data", async () => {
     const settings = { apiVersion, kind: "AccountSecuritySettings", accountId: account.id,
       resourceVersion: 4, mfa: { requiredForUsers: false }, updatedAt: timestamp };

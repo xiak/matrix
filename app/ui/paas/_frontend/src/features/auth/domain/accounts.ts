@@ -181,6 +181,8 @@ export type AuthorizationAuthorityScope = "TENANT" | "INSTALLATION" | "INSTALLAT
 export type AuthorizationResourceMode = "INSTANCE" | "COLLECTION";
 export type AuthorizationCollectionUsage = "COLLECTION_LIST" | "COLLECTION_CREATE";
 export type AuthorizationConditionKey = "iam.account-id" | "iam.current-time" | "iam.principal-id";
+export type AuthorizationSubjectType = "USER" | "SERVICE_ACCOUNT" | "ROLE";
+export type AuthorizationUserAuthenticationMethod = "LOGIN_SESSION" | "ACCESS_KEY";
 
 export type AuthorizationProfileCondition = {
   key: AuthorizationConditionKey;
@@ -201,6 +203,10 @@ export type AuthorizationProfileAction = {
   resourceShapes: AuthorizationResourceShape[];
   conditions?: AuthorizationProfileCondition[];
   resultResourceKind?: string;
+  // Missing sets retain the sealed legacy ceiling; they never mean all
+  // subjects or all USER credential carriers.
+  subjectTypes?: AuthorizationSubjectType[];
+  userAuthenticationMethods?: AuthorizationUserAuthenticationMethod[];
 };
 
 export type AuthorizationProfile = {

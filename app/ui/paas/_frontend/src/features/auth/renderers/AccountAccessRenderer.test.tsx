@@ -1156,6 +1156,13 @@ describe("account access", () => {
     expect(screen.getByText(/当前默认版本仍是 version-logs/)).toBeTruthy();
     expect(fixture.setDefaultPolicyVersion).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "版本 version-new 的操作" }));
+    await user.click(screen.getByRole("menuitem", { name: "切换默认版本" }));
+    await user.click(screen.getByRole("button", { name: "确认切换" }));
+    await waitFor(() => expect(fixture.setDefaultPolicyVersion).toHaveBeenCalledTimes(1));
+    await screen.findByRole("table", { name: "策略版本目录" });
+    expect(screen.queryByRole("heading", { name: "版本 version-new 已发布" })).toBeNull();
+    expect(screen.queryByText(/当前默认版本仍是 version-logs/)).toBeNull();
   });
 
   it("loads the live permission catalog only for visual authoring and publishes the reviewed exact declaration", async () => {
@@ -1541,6 +1548,31 @@ describe("account access", () => {
     expect(screen.getByRole("table", { name: "产品 paas 的 Action 声明" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "返回能力目录" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "paas" })).toBe(document.activeElement));
+  });
+
+  it("distinguishes declared subjects and credentials from the sealed legacy defaults", async () => {
+    const catalog = profileDirectory();
+    const entry = catalog.items[0]!;
+    const sample = entry.profile.actions[0]!;
+    entry.profile.actions = [
+      { ...sample, subjectTypes: ["USER", "ROLE"], userAuthenticationMethods: ["ACCESS_KEY"] },
+      { ...sample, action: "paas.application.legacy" },
+      { ...sample, action: "paas.application.probe", scope: "INSTALLATION_PROBE", conditions: [] }
+    ];
+    const { user } = await openAccess(accounts({ listAuthorizationProfiles: vi.fn().mockResolvedValue(catalog) }), iam(), "policies");
+    await user.click(await screen.findByRole("tab", { name: "权限能力目录" }));
+    await user.click(await screen.findByRole("button", { name: "paas" }));
+    const rows = within(screen.getByRole("table", { name: "产品 paas 的 Action 声明" })).getAllByRole("row");
+    expect(within(rows[1]!).getByText("用户 · 角色")).toBeTruthy();
+    expect(within(rows[1]!).getByText("用户凭证: 访问密钥")).toBeTruthy();
+    expect(within(rows[1]!).queryByText(/历史默认/)).toBeNull();
+    expect(within(rows[2]!).getByText("身份类型沿用历史默认")).toBeTruthy();
+    expect(within(rows[2]!).getByText("凭证沿用历史默认（仅登录会话）")).toBeTruthy();
+    expect(within(rows[3]!).getByText("服务身份")).toBeTruthy();
+    expect(within(rows[3]!).getByText("用户凭证: 不适用")).toBeTruthy();
+    expect(within(rows[3]!).queryByText(/仅登录会话/)).toBeNull();
+    await user.type(screen.getByRole("searchbox", { name: "搜索 Action" }), "ACCESS_KEY");
+    expect(within(screen.getByRole("table", { name: "产品 paas 的 Action 声明" })).getAllByRole("row")).toHaveLength(2);
   });
 
   it("keeps the catalog notice and search in place while its data region waits", async () => {

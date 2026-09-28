@@ -289,6 +289,7 @@ function AccountPolicyVersions({ policy, listVersions, readVersion, mutation, on
         expectedDefaultVersionId: snapshot.policy.defaultVersionId, resourceVersion: snapshot.policy.resourceVersion });
     } finally { setMutationBusy(false); }
     if (result.status === "applied") {
+      setPublished(null);
       setReview(null);
       setState({ status: "ready", directory: { policy: result.detail.policy,
         items: review.kind === "retire" ? snapshot.items.filter((item) => item.versionId !== review.versionId) : snapshot.items } });
@@ -328,7 +329,7 @@ function AccountPolicyVersions({ policy, listVersions, readVersion, mutation, on
   </div>;
   return <div ref={list} tabIndex={-1} className={styles.catalogNotice}>
     <p className={styles.note}>{t("versionDirectoryNotice")}</p>
-    {published ? <Alert status="success"><h3 ref={publishedHeading} tabIndex={-1} className={styles.stepTitle}>{t("publishSucceeded", { version: published.versionId })}</h3><p>{t("publishSucceededDetail", { version: published.defaultVersionId })}</p></Alert> : null}
+    {published && state.status === "ready" && state.directory.policy.defaultVersionId === published.defaultVersionId && state.directory.items.some((item) => item.versionId === published.versionId) ? <Alert status="success"><h3 ref={publishedHeading} tabIndex={-1} className={styles.stepTitle}>{t("publishSucceeded", { version: published.versionId })}</h3><p>{t("publishSucceededDetail", { version: published.defaultVersionId })}</p></Alert> : null}
     {mutationError ? <Alert status="danger">{mutationError}</Alert> : null}
     {state.status === "loading" ? <TableSkeleton label={t("loadingVersions")} rows={3} header={false} /> :
       state.status !== "ready" ? <div className={styles.catalogNotice}><Alert status={state.status === "forbidden" ? "warning" : "danger"}>{t(`versionErrors.${state.status}`)}</Alert>
@@ -344,8 +345,8 @@ function AccountPolicyVersions({ policy, listVersions, readVersion, mutation, on
             <td data-label={t("versionContract")}>{t("contractVersion", { version: item.contractVersion })}</td>
             <td data-label={t("digest")}><code>{item.contentDigest}</code></td>
             {mutation ? <td data-label={t("actions")}>{item.versionId !== state.directory.policy.defaultVersionId ? <ActionMenu iconOnly label={t("versionActions", { version: item.versionId })} actions={[
-              { id: "set-default", label: t("setDefault"), disabledReason: mutation.pending ? t("mutationBlocked") : undefined, onSelect: () => { reviewOpener.current = item.versionId; setMutationError(null); setReview({ kind: "set-default", versionId: item.versionId }); } },
-              { id: "retire", label: t("retireVersion"), danger: true, disabledReason: mutation.pending ? t("mutationBlocked") : undefined, onSelect: () => { reviewOpener.current = item.versionId; setMutationError(null); setReview({ kind: "retire", versionId: item.versionId }); } }
+              { id: "set-default", label: t("setDefault"), disabledReason: mutation.pending ? t("mutationBlocked") : undefined, onSelect: () => { reviewOpener.current = item.versionId; setPublished(null); setMutationError(null); setReview({ kind: "set-default", versionId: item.versionId }); } },
+              { id: "retire", label: t("retireVersion"), danger: true, disabledReason: mutation.pending ? t("mutationBlocked") : undefined, onSelect: () => { reviewOpener.current = item.versionId; setPublished(null); setMutationError(null); setReview({ kind: "retire", versionId: item.versionId }); } }
             ]} /> : <span aria-hidden="true">—</span>}</td> : null}
           </tr>)}</tbody>
         </Table>

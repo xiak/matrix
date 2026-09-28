@@ -1196,7 +1196,7 @@ function parseAuthorizationShape(value: unknown, scope: AuthorizationAuthoritySc
 
 function parseAuthorizationAction(value: unknown, product: string): AuthorizationProfileAction {
   const wire = accountRecord(value);
-  exactKeys(wire, ["action", "resourceKind", "scope", "resourceShapes"], ["conditions", "resultResourceKind"]);
+  exactKeys(wire, ["action", "resourceKind", "scope", "resourceShapes"], ["conditions", "resultResourceKind", "subjectTypes", "userAuthenticationMethods"]);
   const action = accountText(wire.action);
   const parts = action.split(".");
   if (!/^[a-z][a-z0-9_-]{0,63}(\.[a-z][a-z0-9_-]{0,63}){1,4}$/.test(action) || action.length > 128 || parts[0] !== product) {
@@ -1206,6 +1206,18 @@ function parseAuthorizationAction(value: unknown, product: string): Authorizatio
     throw new Error("INVALID_IAM_RESPONSE");
   }
   const scope = wire.scope as AuthorizationAuthorityScope;
+  const subjectTypes = wire.subjectTypes === undefined ? undefined : wire.subjectTypes;
+  if (subjectTypes !== undefined && (!Array.isArray(subjectTypes) || subjectTypes.length < 1 || subjectTypes.length > 3 ||
+      subjectTypes.some((subject) => subject !== "USER" && subject !== "SERVICE_ACCOUNT" && subject !== "ROLE") ||
+      new Set(subjectTypes).size !== subjectTypes.length)) throw new Error("INVALID_IAM_RESPONSE");
+  const userAuthenticationMethods = wire.userAuthenticationMethods === undefined ? undefined : wire.userAuthenticationMethods;
+  if (userAuthenticationMethods !== undefined && (!Array.isArray(userAuthenticationMethods) ||
+      userAuthenticationMethods.length < 1 || userAuthenticationMethods.length > 2 ||
+      userAuthenticationMethods.some((method) => method !== "LOGIN_SESSION" && method !== "ACCESS_KEY") ||
+      new Set(userAuthenticationMethods).size !== userAuthenticationMethods.length ||
+      (subjectTypes === undefined ? scope === "INSTALLATION_PROBE" : !subjectTypes.includes("USER")))) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
   if (!Array.isArray(wire.resourceShapes) || wire.resourceShapes.length < 1 || wire.resourceShapes.length > 3) {
     throw new Error("INVALID_IAM_RESPONSE");
   }
@@ -1231,7 +1243,9 @@ function parseAuthorizationAction(value: unknown, product: string): Authorizatio
     scope,
     resourceShapes,
     ...(conditions.length ? { conditions } : {}),
-    ...(resultResourceKind === undefined ? {} : { resultResourceKind })
+    ...(resultResourceKind === undefined ? {} : { resultResourceKind }),
+    ...(subjectTypes === undefined ? {} : { subjectTypes }),
+    ...(userAuthenticationMethods === undefined ? {} : { userAuthenticationMethods })
   };
 }
 
