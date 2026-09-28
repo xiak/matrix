@@ -46,7 +46,7 @@ function ResourceTable({ resources, scope, compact = false }: {
     return <EmptyState title={scopeMessages("emptyTitle")} description={scopeMessages("emptyHint")} />;
   }
   return (
-    <Table aria-label={t("resourceTable")}>
+    <Table aria-label={t("resourceTable")} mobileLayout="grid">
         <thead>
           <tr>
             <th scope="col">{t("resource")}</th><th scope="col">{t("product")}</th>{compact ? null : <th scope="col">{t("project")}</th>}<th scope="col">{t("region")}</th><th scope="col">{t("state")}</th><th scope="col">{t("updated")}</th>
@@ -56,11 +56,11 @@ function ResourceTable({ resources, scope, compact = false }: {
           {scoped.map((resource) => (
             <tr key={resource.id}>
               <td><Link className={styles.resourceLink} href={resource.href}>{resource.name}</Link><small>{resource.id} · {resourceKinds(resource.kind)}</small></td>
-              <td>{resource.productName}</td>
-              {compact ? null : <td>{resource.projectName}</td>}
-              <td>{resource.regionId === "all" ? t("globalRegion") : resource.regionName}</td>
-              <td><Badge status={resource.status}>{t(`resourceStates.${resource.state}`)}</Badge></td>
-              <td>{format.timestamp(resource.updatedAt)}</td>
+              <td data-label={t("product")}>{resource.productName}</td>
+              {compact ? null : <td data-label={t("project")}>{resource.projectName}</td>}
+              <td data-label={t("region")}>{resource.regionId === "all" ? t("globalRegion") : resource.regionName}</td>
+              <td data-label={t("state")}><Badge status={resource.status}>{t(`resourceStates.${resource.state}`)}</Badge></td>
+              <td data-label={t("updated")} data-mobile-span="full">{format.timestamp(resource.updatedAt)}</td>
             </tr>
           ))}
         </tbody>
@@ -266,13 +266,13 @@ function DevOps({ scene }: { scene: Extract<ConsoleContentScene, { kind: "devops
           <div><Typography.Title as="h2" level={3}>{t("recentPipelines")}</Typography.Title><Typography.Text tone="muted">{t("pipelinesHint")}</Typography.Text></div>
           <span className={styles.headerHint}>{t("mockSnapshot")}</span>
         </Card.Header>
-        <Table aria-label={t("pipelinesTable")}>
+        <Table aria-label={t("pipelinesTable")} mobileLayout="grid">
               <thead><tr><th scope="col">{t("pipeline")}</th><th scope="col">{t("code")}</th><th scope="col">{t("environment")}</th><th scope="col">{t("state")}</th><th scope="col">{t("duration")}</th><th scope="col">{t("triggered")}</th></tr></thead>
               <tbody>{scene.pipelines.map((pipeline) => (
                 <tr key={pipeline.id}>
                   <td><strong>{pipeline.name}</strong><small>{pipeline.repository}</small></td>
-                  <td><strong>{pipeline.branch}</strong><small>{pipeline.commit}</small></td>
-                  <td>{pipeline.environment}</td><td><Badge status={pipeline.status}>{t(`operationStates.${pipeline.state}`)}</Badge></td><td>{format.duration(pipeline.durationSeconds)}</td><td>{format.timestamp(pipeline.triggeredAt)}</td>
+                  <td data-label={t("code")}><strong>{pipeline.branch}</strong><small>{pipeline.commit}</small></td>
+                  <td data-label={t("environment")}>{pipeline.environment}</td><td data-label={t("state")}><Badge status={pipeline.status}>{t(`operationStates.${pipeline.state}`)}</Badge></td><td data-label={t("duration")}>{format.duration(pipeline.durationSeconds)}</td><td data-label={t("triggered")} data-mobile-span="full">{format.timestamp(pipeline.triggeredAt)}</td>
                 </tr>
               ))}</tbody>
             </Table>

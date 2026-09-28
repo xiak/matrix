@@ -47,7 +47,7 @@ function InstallationRows({ items }: { items: InstallationScene[] }) {
     );
   }
   return (
-    <Table aria-label={t("instancesTable")}>
+    <Table aria-label={t("instancesTable")} mobileLayout="grid">
         <thead>
           <tr><th scope="col">{t("instance")}</th><th scope="col">{t("region")}</th><th scope="col">{t("status")}</th><th scope="col">{t("endpoint")}</th><th scope="col">{t("observed")}</th></tr>
         </thead>
@@ -55,10 +55,10 @@ function InstallationRows({ items }: { items: InstallationScene[] }) {
           {items.map((item) => (
             <tr key={item.id}>
               <td><strong>{item.name}</strong><small>{item.engine}</small></td>
-              <td>{item.regionName}</td>
-              <td><Badge status={item.status}>{t(`installationPhases.${item.phase}`)}</Badge></td>
-              <td><Typography.Code>{item.endpoint ?? t("unassigned")}</Typography.Code></td>
-              <td>{format.timestamp(item.observedAt)}</td>
+              <td data-label={t("region")}>{item.regionName}</td>
+              <td data-label={t("status")}><Badge status={item.status}>{t(`installationPhases.${item.phase}`)}</Badge></td>
+              <td data-label={t("endpoint")} data-mobile-span="full"><Typography.Code>{item.endpoint ?? t("unassigned")}</Typography.Code></td>
+              <td data-label={t("observed")} data-mobile-span="full">{format.timestamp(item.observedAt)}</td>
             </tr>
           ))}
         </tbody>

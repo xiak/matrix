@@ -167,6 +167,29 @@ afterEach(() => {
 });
 
 describe("ConsoleShellRenderer", () => {
+  it.each([
+    { section: "applications", table: "统一资源列表" },
+    { section: "installations", table: "服务实例列表" },
+    { section: "devops", table: "流水线运行列表" }
+  ] as const)("keeps $section data readable as labelled records on compact tables", async ({ section, table }) => {
+    const installation = {
+      id: "pg-test", name: "订单主库", offeringId: "postgresql-18", engineVersion: "18",
+      quotaEntitlementId: "quota-primary", regionId: "local-primary", phase: "READY" as const,
+      endpoint: "pg-test.service.local:5432", credentialReference: null,
+      operation: { id: "operation-test", phase: "READY" as const, safeFailureCode: null, observedAt: "2026-08-26T12:00:00Z" },
+      createdAt: "2026-08-26T12:00:00Z"
+    };
+    await renderConsole({
+      section,
+      experience: previewExperienceSnapshot,
+      load: vi.fn().mockResolvedValue({ ...snapshot, installations: [installation] })
+    });
+    const dataTable = await screen.findByRole("table", { name: table });
+    expect(dataTable.getAttribute("data-mobile-layout")).toBe("grid");
+    expect(dataTable.querySelector("tbody td[data-label]")).not.toBeNull();
+    expect(dataTable.querySelector('tbody td[data-mobile-span="full"]')).not.toBeNull();
+  });
+
   it("opens a cached service destination immediately when its route suspends", async () => {
     let release!: () => void;
     const heldRoute = { href: "/console/logs/", ready: false, promise: new Promise<void>(resolve => { release = resolve; }) };

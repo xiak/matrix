@@ -5,7 +5,7 @@ import { Checkbox } from "../choice/Choice";
 
 // Native table semantics keep rich feature cells, column headers and links
 // accessible. The shared scroll boundary owns density, focus and overflow.
-function TableRoot({ children, className, mobileLayout = "scroll", viewportRef, ...props }: TableHTMLAttributes<HTMLTableElement> & { "aria-label": string; mobileLayout?: "scroll" | "stack"; viewportRef?: Ref<HTMLDivElement> }) {
+function TableRoot({ children, className, mobileLayout = "scroll", viewportRef, ...props }: TableHTMLAttributes<HTMLTableElement> & { "aria-label": string; mobileLayout?: "scroll" | "stack" | "grid"; viewportRef?: Ref<HTMLDivElement> }) {
   return <div aria-label={props["aria-label"]} className={styles.viewport} ref={viewportRef} role="region" tabIndex={0}>
     <table {...props} className={classNames(styles.table, className)} data-mobile-layout={mobileLayout}>{children}</table>
   </div>;
