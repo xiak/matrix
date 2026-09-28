@@ -1057,11 +1057,15 @@ INSTALLATION USER附件的真实新增与撤销在现有Account→稳定USER锁�
 
 ##### S3b：新密码规则、真实历史与写入契约
 
-这是下一纵向片的详细设计，尚未修改运行时API/SQL或分配schema/release revision。最小可验收结果是：管理员按原step-up修改同Account规则，普通USER的创建、本人普通/强制改密及管理员reset都执行当前规则和真实历史；原root及installation恢复执行不可由租户放宽或锁死的固定底线。不是只给页面增加设置字段。到期和idle随各自真实执行片加入，S3b不提前接受尚未执行的`maxAgeDays`/Session占位配置。
+S3b正在实施，尚未完整验收。最小可验收结果是：管理员按原step-up修改同Account规则，普通USER的创建、本人普通/强制改密及管理员reset都执行当前规则和真实历史；原root及installation恢复执行不可由租户放宽或锁死的固定底线。不是只给页面增加设置字段。到期和idle随各自真实执行片加入，S3b不提前接受尚未执行的`maxAgeDays`/Session占位配置。当前存储准备采用源码IAM47/Audit27，不分配或修改installation拥有的发布profile/revision。
 
-已实施的准备范围仅为原契约owner中的`AccountPasswordSettings`值/严格codec，以及原密码owner的规则和有界历史比较；现有Hash复用其固定默认底线，不保留第二套密码字符校验。未向当前security-settings读写或任何HTTP端点挂载密码配置，未添加历史存储、规则CAS或恢复投影，不能称S3b可用。历史比较校验当前及全部已保留hash的格式、串行比较当前和选定窗口，不因命中某一位置提前成功/返回；超出24条或损坏记录失败关闭，取消停止后续昂贵工作。0表示不检查额外历史，不允许当前密码；缺少真实历史不补造。它是可信IAM进程的校验结果，最终事务仍须核对原资格和history head。
+原契约owner已有`AccountPasswordSettings`值/严格codec，原密码owner已有规则和有界历史比较；现有Hash复用其固定默认底线，不保留第二套密码字符校验。历史比较校验当前及全部已保留hash的格式、串行比较当前和选定窗口，不因命中某一位置提前成功/返回；超出24条或损坏记录失败关闭，取消停止后续昂贵工作。0表示不检查额外历史，不允许当前密码；缺少真实历史不补造。它是可信IAM进程的校验结果，最终事务仍须核对原资格和history head。
 
-本地Go1.26.3/GOMAXPROCS2/512MiB的API、authority、identityaccess整包race分别30.525s/24.468s/33.731s通过；新增测试使用实际固定Argon2id产生24条不同历史，验证0/1/24窗口、当前拒绝、Unicode类别、损坏/取消及不修改原verifier。严格codec的有界双worker fuzz执行114283次通过，architecture/race、聚焦vet、API生成无额外差异及IAM Linux amd64构建通过。仅证明计算与契约准备，不是SQL/HTTP历史防复用、容量或完整S3b验收；未重复启动整套真实环境来冒充尚未接线的行为。
+存储准备沿原`user_credentials`增加有界`password_history`、其内部完整性承诺及独立`password_changed_at`，不新建历史服务或公开hash查询。ALWAYS行触发器只在真实hash替换且generation准确加一时退役原verifier并保留最新24条；同hash的恢复fence保留历史和密码年龄。旧数据初始化为空历史/NULL年龄，不能由通用changed_at推测或用迁移时间补填；列集不完整时拒绝迁移。直接改历史、重算摘要后清空历史、改年龄或无代际推进替换hash均拒绝。唯一私有认证资格投影v3纳入年龄及历史承诺，年龄用时区无关的epoch值；公开snapshot/FILE、Audit canonical、ServiceIdentity/lookup_service和七列claim不变。当前尚未将账号配置接入security-settings/requirements HTTP或全部密码写入口，也未完成规则与历史head的最终CAS，因此只有真实历史记账，不是已交付历史防复用。
+
+本地Go1.26.3/GOMAXPROCS2/512MiB的API、authority、identityaccess整包race最终分别30.824s/25.561s/39.912s通过；新增测试使用实际固定Argon2id产生24条不同历史，验证0/1/24窗口、当前拒绝、Unicode类别、损坏/取消及不修改原verifier。严格codec的有界双worker fuzz执行114283次通过，architecture/race、聚焦vet、API生成无额外差异及IAM Linux amd64构建通过。原API/IAM全子包及authorityprocess默认race均通过，但其中外部DSN缺失的SKIP不计真库证据。计算与契约准备不等于SQL/HTTP历史防复用、容量或完整S3b验收。
+
+存储准备沿既有真库owner在本任务PG18.6、2逻辑CPU/1GiB/24进程/16连接下串行race-p1验证：`TestIAMHTTPPostgresVerticalSlice`141.97s通过，26次真实HTTP改密验证24条窗口及历史/年龄独立篡改拒绝；`TestIAMAuthenticationRecoveryClosePostgres`62.35s通过，包括UTC/Asia-Shanghai同资格摘要、权限来源变更拒绝、并发屏障及末端写失败回滚；`TestIAMAuthenticationRecoveryPostgres`158.41s通过两次真实RR dump/restore，generation fence及精确重放不改变hash/年龄/历史，原OTP消费/共享预算/会话拒绝保持。时区用例先复现新投影错误，再由epoch编码修复通过，没有依赖统一宿主时区或放宽摘要比较。唯一固定420/IAM45前驱的`TestIAMRetainedPredecessorProcessUpgrade`最终66.43s通过：真实旧程序的原receipt/完成/canonical、CLOSED原子拒绝、OPEN双迁移/重启及原快照仅历史重放不变；初始化不补历史/年龄，升级后第一次真实改密只退役准确原hash并保留其UNKNOWN年龄。比较原有字段与新增字段各自的不变量，不再用跨schema整行相等代替该行为。上述为本地源码证据，不是独立CI、跨发布profile、签名恢复或S3b全入口防复用的验收。
 
 | `password`字段 | 有效范围与默认值 |
 | --- | --- |

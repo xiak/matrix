@@ -75,10 +75,13 @@ func TestIAMAuthenticationRecoveryClosePostgres(t *testing.T) {
 		RootLoginName: "close-root-b", RootDisplayName: "Close root B", InitialPassword: iamHTTPSecret(t, "Close-Other-Password-639!"), RequestID: "close-account-create"}); err != nil {
 		t.Fatal(err)
 	}
-	readLease := func() installationv1.TOTPBackupSnapshotLease {
+	readLeaseAt := func(zone string) installationv1.TOTPBackupSnapshotLease {
 		t.Helper()
 		backup := config.Copy()
 		backup.User, backup.Password = "matrix_iam_backup_custody_login", "matrix-authority-process-test-only"
+		if zone != "" {
+			backup.RuntimeParams["timezone"] = zone
+		}
 		snapshot, err := iampostgres.OpenTOTPBackupSnapshot(ctx, backup)
 		if err != nil {
 			t.Fatal(err)
@@ -89,6 +92,15 @@ func TestIAMAuthenticationRecoveryClosePostgres(t *testing.T) {
 		}
 		return lease
 	}
+	readLease := func() installationv1.TOTPBackupSnapshotLease { return readLeaseAt("") }
+	t.Run("password-age-timezone", func(t *testing.T) {
+		// Both reads use the restricted production snapshot path after a real
+		// password change. Connection formatting cannot change qualification.
+		utc, local := readLeaseAt("UTC"), readLeaseAt("Asia/Shanghai")
+		if utc.AuthenticationStateDigest != local.AuthenticationStateDigest || utc.CustodyDigest != local.CustodyDigest {
+			t.Fatal("the same password age/history changed qualification with connection timezone")
+		}
+	})
 	assertNoClose := func() {
 		t.Helper()
 		var state string
@@ -1224,12 +1236,26 @@ func TestIAMAuthenticationRecoveryPostgres(t *testing.T) {
 	if _, err := restoredAdmin.Exec(ctx, "DROP TRIGGER test_recovery_floor_fault ON iam.authentication_recovery_attempt_floors; DROP FUNCTION iam.test_reject_recovery_floor()"); err != nil {
 		t.Fatal(err)
 	}
+	passwordState := func() string {
+		t.Helper()
+		var result string
+		if err := restoredAdmin.QueryRow(ctx, `SELECT jsonb_agg(jsonb_build_array(tenant_id,principal_id,
+			password_hash,password_changed_at,password_history,encode(password_history_digest,'hex')) ORDER BY tenant_id,principal_id)::text
+			FROM iam.user_credentials`).Scan(&result); err != nil {
+			t.Fatal("read bounded password-state evidence")
+		}
+		return result // Private verifier evidence is never printed or put in a receipt.
+	}
+	originalPasswords := passwordState()
 	completion := reopenAuthenticationConcurrently(t, ctx, restoredRecovery, closure, snapshot)
 	if installationv1.ValidateAuthenticationRecoveryCompletionForClosure(completion, closure) != nil {
 		t.Fatal("restored reopen returned an invalid completion")
 	}
 	if replay, err := restoredRecovery.Reopen(ctx, closure, snapshot); err != nil || replay != completion {
 		t.Fatalf("equal reopen replay changed its completion: %v", err)
+	}
+	if passwordState() != originalPasswords {
+		t.Fatal("authentication generation fence or exact replay invented a password change, age or history")
 	}
 	if err := iammigration.Verify(ctx, restoredAdmin); err != nil {
 		t.Fatal("reopened IAM schema did not verify", err)

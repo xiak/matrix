@@ -258,7 +258,7 @@ RETURNS jsonb LANGUAGE plpgsql VOLATILE SET search_path=pg_catalog,pg_temp AS $f
 DECLARE receipt iam.bootstrap_receipts%ROWTYPE; account record; entry record;
     prior_tenant text:=current_setting('matrix.iam_tenant_id',true);
     prior_snapshot text:=current_setting('matrix.iam_authentication_snapshot',true);
-    authority_digest bytea:=sha256(convert_to('matrix.iam.authentication-state.v2','UTF8'));
+    authority_digest bytea:=sha256(convert_to('matrix.iam.authentication-state.v3','UTF8'));
     accounts jsonb:='[]'::jsonb; users jsonb; result jsonb; items integer:=0; account_count integer; user_count integer;
 BEGIN
     IF current_user<>'matrix_iam_owner' OR NOT (
@@ -313,6 +313,7 @@ BEGIN
             LEFT JOIN iam.totp_authenticators f ON f.tenant_id=m.tenant_id AND f.user_id=m.user_id AND f.id=m.factor_id
             WHERE p.tenant_id=account.account_id AND p.principal_type='USER'
               AND (m.user_id IS NULL OR (p.deleted_at IS NULL)<>(c.principal_id IS NOT NULL)
+                OR (c.principal_id IS NOT NULL AND NOT iam.valid_password_history(c.password_history,c.password_history_digest,c.credential_version,c.password_changed_at))
                 OR (m.enrollment_state='BOUND' AND (f.id IS NULL OR f.state<>'ACTIVE' OR NOT EXISTS(
                     SELECT 1 FROM iam.mfa_recovery_batches b WHERE b.tenant_id=p.tenant_id AND b.user_id=p.id
                       AND b.factor_id=f.id AND b.mfa_revision=m.revision AND b.revoked_at IS NULL))))) THEN
@@ -368,7 +369,8 @@ BEGIN
             FROM iam.account_aliases a WHERE a.tenant_id=account.account_id
           UNION ALL SELECT 3,p.id,'',jsonb_build_array('principal',p.tenant_id,p.id,p.principal_type,p.login_name,p.status,
             p.must_change_password,p.resource_version,p.deleted_at IS NOT NULL,c.credential_version,
-            CASE WHEN c.password_hash IS NULL THEN NULL ELSE encode(sha256(convert_to(c.password_hash,'UTF8')),'hex') END)
+            CASE WHEN c.password_hash IS NULL THEN NULL ELSE encode(sha256(convert_to(c.password_hash,'UTF8')),'hex') END,
+            extract(epoch FROM c.password_changed_at),encode(c.password_history_digest,'hex'))
             FROM iam.principals p LEFT JOIN iam.user_credentials c ON c.tenant_id=p.tenant_id AND c.principal_id=p.id
             WHERE p.tenant_id=account.account_id
           UNION ALL SELECT 4,m.user_id,'',jsonb_build_array('mfa',m.tenant_id,m.user_id,m.revision,m.enrollment_state,m.factor_id,m.recovery_id,m.removal_id)

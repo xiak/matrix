@@ -111,6 +111,7 @@ BEGIN
        OR NOT has_function_privilege('matrix_iam_api', 'iam.readiness()', 'EXECUTE')
        OR has_function_privilege('matrix_iam_api', 'iam.lookup_login(text)', 'EXECUTE')
        OR NOT iam.password_attempt_contract_ready()
+       OR NOT iam.password_history_contract_ready()
        OR NOT has_function_privilege(
             'matrix_iam_api',
             'iam.issue_session(text,text,text,text,text,integer,jsonb,text,bigint)',
@@ -293,7 +294,7 @@ DECLARE
     seed jsonb;
     entry regprocedure;
 BEGIN
-    IF (SELECT schema_version FROM iam.readiness())<>46 OR NOT iam.authorization_decision_contract_ready()
+    IF (SELECT schema_version FROM iam.readiness())<>47 OR NOT iam.authorization_decision_contract_ready()
         OR NOT iam.login_session_contract_ready()
         OR NOT iam.policy_attachment_contract_ready() THEN
         RAISE EXCEPTION 'IAM profile registry schema is invalid';

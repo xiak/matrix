@@ -21577,7 +21577,8 @@ func provePasswordSessionPolicy(t *testing.T, ctx context.Context, handler http.
 		t.Helper()
 		subject := identity(bearer).User
 		var previousVersion, currentVersion int64
-		if err := database.QueryRow(ctx, "SELECT credential_version FROM iam.user_credentials WHERE tenant_id=$1 AND principal_id=$2", subject.AccountID, subject.ID).Scan(&previousVersion); err != nil {
+		var original string
+		if err := database.QueryRow(ctx, "SELECT credential_version,to_jsonb(c)::text FROM iam.user_credentials c WHERE tenant_id=$1 AND principal_id=$2", subject.AccountID, subject.ID).Scan(&previousVersion, &original); err != nil {
 			t.Fatal(err)
 		}
 		body := map[string]any{"currentPassword": from, "newPassword": to}
@@ -21590,6 +21591,18 @@ func provePasswordSessionPolicy(t *testing.T, ctx context.Context, handler http.
 		}
 		if err := database.QueryRow(ctx, "SELECT credential_version FROM iam.user_credentials WHERE tenant_id=$1 AND principal_id=$2", subject.AccountID, subject.ID).Scan(&currentVersion); err != nil || currentVersion != previousVersion+1 {
 			t.Fatal("password change did not advance the per-user credential generation exactly once")
+		}
+		var accurate bool
+		if err := database.QueryRow(ctx, `SELECT iam.valid_password_history(c.password_history,c.password_history_digest,c.credential_version,c.password_changed_at)
+			AND c.password_changed_at=c.changed_at
+			AND jsonb_array_length(c.password_history)=least(24,jsonb_array_length($3::jsonb->'password_history')+1)
+			AND c.password_history->0->>'hash'=$3::jsonb->>'password_hash'
+			AND (c.password_history->0->>'generation')::bigint=($3::jsonb->>'credential_version')::bigint
+			AND (c.password_history->0->>'changedAt')::timestamptz IS NOT DISTINCT FROM ($3::jsonb->>'password_changed_at')::timestamptz
+			AND c.password_history-0=COALESCE((SELECT jsonb_agg(value ORDER BY ordinality)
+			  FROM jsonb_array_elements($3::jsonb->'password_history') WITH ORDINALITY WHERE ordinality<=23),'[]'::jsonb)
+			FROM iam.user_credentials c WHERE c.tenant_id=$1 AND c.principal_id=$2`, subject.AccountID, subject.ID, original).Scan(&accurate); err != nil || !accurate {
+			t.Fatal("actual password write lost its original verifier, known age or bounded history")
 		}
 	}
 	invalid := func(bearer string) {
@@ -21710,6 +21723,37 @@ func provePasswordSessionPolicy(t *testing.T, ctx context.Context, handler http.
 	}
 	identity(recovered)
 	identity(afterPlatform)
+	// Keep this in the existing HTTP owner: actual supported writes, not
+	// synthetic generation updates or fabricated migration history.
+	password := retained
+	for i := range 26 {
+		next := fmt.Sprintf("Bounded-History-Password-%02d!", i)
+		change(afterPlatform, password, next, &keep)
+		password = next
+	}
+	var complete bool
+	if err := database.QueryRow(ctx, `SELECT jsonb_array_length(password_history)=24
+		AND password_changed_at IS NOT NULL FROM iam.user_credentials WHERE tenant_id=$1 AND principal_id=$2`, principal.AccountID, principal.ID).Scan(&complete); err != nil || !complete {
+		t.Fatal("real password history did not retain the bounded window")
+	}
+	for _, mutation := range []string{
+		`password_history='[]'::jsonb`,
+		`password_history='[]'::jsonb,password_history_digest=iam.password_history_digest('[]'::jsonb)`,
+		`password_changed_at=NULL`,
+		`password_hash=password_history->0->>'hash'`,
+	} {
+		before := securityState()
+		tx, err := database.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, mutationError := tx.Exec(ctx, "UPDATE iam.user_credentials SET "+mutation+" WHERE tenant_id=$1 AND principal_id=$2", principal.AccountID, principal.ID)
+		_ = tx.Rollback(ctx)
+		var pgerr *pgconn.PgError
+		if !errors.As(mutationError, &pgerr) || pgerr.Code != "23514" || securityState() != before {
+			t.Fatal("password history or age could be rewritten independently of an actual password write")
+		}
+	}
 	assertIAMSecretsAbsent(t, ctx, database, initial, changed, retained, replaced, reset)
 }
 

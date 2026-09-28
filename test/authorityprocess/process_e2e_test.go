@@ -108,7 +108,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	const databasePrefix = "matrix_iam_upgrade_predecessor_"
 	const source = "42035189eb823e388509f54525889c1a18c6b79d"
 	const sourceSchema uint64 = 45
-	const currentSchema uint64 = 46
+	const currentSchema uint64 = 47
 	// Actual predecessor admission accepted these 14-byte passwords. The new
 	// executable must replay the sealed bootstrap and verify existing secrets
 	// without admitting them for a new password write.
@@ -384,6 +384,9 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	if err := admin.QueryRow(ctx, `SELECT (SELECT is_called FROM public.iam_predecessor_fault_seen)
 	 AND (SELECT schema_version=$1 FROM iam.readiness())
 	 AND to_regclass('iam.authenticator_removals') IS NULL
+	 AND NOT EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid='iam.user_credentials'::regclass
+	 AND attname IN ('password_history','password_history_digest','password_changed_at') AND NOT attisdropped)
+	 AND to_regprocedure('iam.guard_password_history()') IS NULL
 	 AND NOT EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid='iam.user_mfa_states'::regclass
 	 AND attname='removal_id' AND NOT attisdropped)
 	 AND to_regprocedure('iam.remove_totp_authenticator(text,text,text,text,text,bigint,text,text,jsonb)') IS NULL
@@ -407,9 +410,11 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		}
 	}
 	var shape bool
-	if err := admin.QueryRow(ctx, `SELECT schema_version=46 AND iam.account_security_settings_contract_ready() AND iam.login_session_contract_ready() AND iam.password_attempt_contract_ready()
+	if err := admin.QueryRow(ctx, `SELECT schema_version=47 AND iam.password_history_contract_ready() AND iam.account_security_settings_contract_ready() AND iam.login_session_contract_ready() AND iam.password_attempt_contract_ready()
 	 AND iam.authentication_recovery_contract_ready()
 	 AND to_regprocedure('iam.close_authentication_recovery(jsonb,text,jsonb)') IS NULL
+	 AND NOT EXISTS(SELECT 1 FROM iam.user_credentials c WHERE c.password_history<>'[]'::jsonb
+	 OR c.password_changed_at IS NOT NULL OR NOT iam.valid_password_history(c.password_history,c.password_history_digest,c.credential_version,c.password_changed_at))
 	 AND to_regprocedure('iam.close_authentication_recovery(jsonb,text,jsonb,jsonb,text)') IS NOT NULL
 	 AND to_regprocedure('iam.reconcile_authentication_recovery(jsonb,text,jsonb,jsonb)') IS NULL
 	 AND to_regprocedure('iam.reconcile_authentication_recovery(jsonb,text,jsonb,jsonb,jsonb)') IS NOT NULL
@@ -601,6 +606,28 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 			t.Fatal("original predecessor fact lost its exact historical proof")
 		}
 	}
+	// A real first write after cutover retires the known old verifier without
+	// inventing its age or earlier passwords. Keep the verifier only in private
+	// comparison state, never a failure message or public response.
+	var priorPassword []byte
+	if err := admin.QueryRow(ctx, `SELECT to_jsonb(c) FROM iam.user_credentials c WHERE tenant_id=$1 AND principal_id=$2`,
+		forcedUser.AccountID, forcedUser.ID).Scan(&priorPassword); err != nil {
+		t.Fatal("read retained password before its first current write")
+	}
+	defer clear(priorPassword)
+	const firstCurrentPassword = "Retained-New-Password-History-73!"
+	sensitive = append(sensitive, firstCurrentPassword)
+	changePasswordIAM(t, endpoint, forcedA.Credential, initialReaderPassword, firstCurrentPassword, "own-upgrade-first-password-history")
+	var truthfulHistory bool
+	if err := admin.QueryRow(ctx, `SELECT c.credential_version=($3::jsonb->>'credential_version')::bigint+1
+	 AND c.password_changed_at=c.changed_at AND c.password_changed_at IS NOT NULL
+	 AND jsonb_array_length(c.password_history)=1 AND c.password_history->0->'changedAt'='null'::jsonb
+	 AND c.password_history->0->>'hash'=$3::jsonb->>'password_hash'
+	 AND (c.password_history->0->>'generation')::bigint=($3::jsonb->>'credential_version')::bigint
+	 AND iam.valid_password_history(c.password_history,c.password_history_digest,c.credential_version,c.password_changed_at)
+	 FROM iam.user_credentials c WHERE tenant_id=$1 AND principal_id=$2`, forcedUser.AccountID, forcedUser.ID, string(priorPassword)).Scan(&truthfulHistory); err != nil || !truthfulHistory {
+		t.Fatal("first current write invented an old password age/history or lost its original verifier", err)
+	}
 	// Product catalog evolution is a current authorization invariant, not a
 	// reason to retain the document-only IAM21 upgrade fixture. Keep its real
 	// binary authorization check on the current authority after the cutover.
@@ -732,7 +759,7 @@ func provePredecessorAuthenticationRecovery(t *testing.T, ctx context.Context, r
 		 'reconciliations',(SELECT jsonb_agg(to_jsonb(r) ORDER BY command_id) FROM iam.authentication_recovery_reconciliations r),
 		 'completions',(SELECT jsonb_agg(to_jsonb(c) ORDER BY command_id) FROM iam.authentication_recovery_completions c),
 		 'floors',(SELECT jsonb_agg(to_jsonb(f) ORDER BY tenant_id,user_id) FROM iam.authentication_recovery_attempt_floors f),
-		 'credentials',(SELECT jsonb_agg(to_jsonb(c) ORDER BY tenant_id,principal_id) FROM iam.user_credentials c),
+		 'credentials',(SELECT jsonb_agg(jsonb_build_array(tenant_id,principal_id,password_hash,credential_version,changed_at) ORDER BY tenant_id,principal_id) FROM iam.user_credentials),
 		 'sessions',(SELECT jsonb_agg(to_jsonb(s) ORDER BY tenant_id,id) FROM iam.sessions s),
 		 'factors',(SELECT jsonb_agg(to_jsonb(f)-'removal_id' ORDER BY tenant_id,id) FROM iam.totp_authenticators f),
 		 'facts',(SELECT jsonb_agg(event_document ORDER BY event_id) FROM iam.audit_outbox))`).Scan(&encoded); err != nil {
@@ -773,11 +800,25 @@ func provePredecessorAuthenticationRecovery(t *testing.T, ctx context.Context, r
 		}
 		var unchanged bool
 		if err := database.QueryRow(ctx, `SELECT
-		 (SELECT schema_version=46 AND ready FROM iam.readiness())
+		 (SELECT schema_version=47 AND ready FROM iam.readiness())
 		 AND NOT EXISTS(SELECT 1 FROM iam.authenticator_removals)
+		 AND NOT EXISTS(SELECT 1 FROM iam.user_credentials c WHERE c.password_history<>'[]'::jsonb
+		 OR c.password_changed_at IS NOT NULL OR NOT iam.valid_password_history(c.password_history,c.password_history_digest,c.credential_version,c.password_changed_at))
 		 AND (SELECT state='OPEN' AND epoch=$1 FROM iam.authentication_recovery_state)`, 2-index).Scan(&unchanged); err != nil || !unchanged || !bytes.Equal(original, history(database)) {
 			t.Fatal("migration altered historical receipts or invented recovery qualification", err)
 		}
+		passwordState := func() []byte {
+			t.Helper()
+			var result []byte
+			if err := database.QueryRow(ctx, `SELECT jsonb_agg(jsonb_build_array(tenant_id,principal_id,
+			 password_history,password_history_digest,password_changed_at) ORDER BY tenant_id,principal_id)
+			 FROM iam.user_credentials`).Scan(&result); err != nil {
+				t.Fatal("read newly initialized password history")
+			}
+			return result
+		}
+		originalPasswords := passwordState()
+		defer clear(originalPasswords)
 		invokeAuthenticationRecoveryProcess(t, ctx, root, currentBinary, "close", []string{dsnFiles[index], intentFile}, installationv1.AuthenticationRecoveryExitConflict)
 		for _, mode := range []string{"reconcile", "reopen"} {
 			environment := []string{dsnFiles[index], closureFile, snapshotFile}
@@ -796,12 +837,12 @@ func provePredecessorAuthenticationRecovery(t *testing.T, ctx context.Context, r
 				// restoration under the new qualification projection.
 				invokeAuthenticationRecoveryProcess(t, ctx, root, currentBinary, mode, environment, installationv1.AuthenticationRecoveryExitConflict)
 			}
-			if !bytes.Equal(original, history(database)) {
+			if !bytes.Equal(original, history(database)) || !bytes.Equal(originalPasswords, passwordState()) {
 				t.Fatal("old snapshot replay changed current security state or history")
 			}
 		}
 	}
-	t.Log("actual IAM45 backup/recovery executables produced snapshot-bound SOURCE/RESTORED receipts; CLOSED migration refused atomically; OPEN double migration and exact completed replay preserved full history/floors; authentic old snapshot could not authorize new close/reconcile/reopen under IAM46")
+	t.Log("actual IAM45 backup/recovery executables produced snapshot-bound SOURCE/RESTORED receipts; CLOSED migration refused atomically; OPEN double migration and exact completed replay preserved full history/floors without inventing password history/age; authentic old snapshot could not authorize new close/reconcile/reopen under IAM47")
 }
 
 // A fixed predecessor executable, not fixture DML or today's implementation,
@@ -1686,7 +1727,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	// Exercise the exact source services together without weakening install
 	// admission: the workflow separately proves the published installer rejects
 	// this unmatched database shape before effects.
-	sourceProfile := installationrelease.AuthoritySchemas{IAM: 46, Audit: 27, PaaS: 2}
+	sourceProfile := installationrelease.AuthoritySchemas{IAM: 47, Audit: 27, PaaS: 2}
 	publishedProfile := installationrelease.CurrentDatabaseProfile()
 	if publishedProfile.Authorities == sourceProfile {
 		t.Fatal("unreleased authority source shape was published without a final profile gate")

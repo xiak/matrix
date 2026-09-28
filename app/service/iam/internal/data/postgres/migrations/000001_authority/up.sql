@@ -617,6 +617,133 @@ CREATE TABLE IF NOT EXISTS iam.user_credentials (
 ALTER TABLE iam.user_credentials ADD COLUMN IF NOT EXISTS credential_version bigint NOT NULL DEFAULT 1
     CHECK (credential_version > 0);
 
+-- Bounded verifier history stays with its existing credential owner. The
+-- commitment detects damaged retained state; it is not a password fingerprint,
+-- a proof that Go compared plaintext, or a second public canonical encoder.
+CREATE OR REPLACE FUNCTION iam.password_history_digest(history jsonb)
+RETURNS bytea LANGUAGE sql IMMUTABLE SET search_path=pg_catalog,pg_temp AS $function$
+    SELECT sha256(convert_to('matrix.iam.password-history.v1'||history::text,'UTF8'))
+$function$;
+
+CREATE OR REPLACE FUNCTION iam.valid_password_history(history jsonb,commitment bytea,generation bigint,password_time timestamptz)
+RETURNS boolean LANGUAGE plpgsql IMMUTABLE SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE entry jsonb; previous_generation bigint:=generation; recorded_generation bigint; recorded_time timestamptz;
+BEGIN
+    IF history IS NULL OR jsonb_typeof(history) IS DISTINCT FROM 'array' OR commitment IS NULL
+        OR generation IS NULL OR generation<1 OR (password_time IS NOT NULL AND NOT isfinite(password_time)) THEN RETURN false; END IF;
+    IF jsonb_array_length(history)>24 OR octet_length(history::text)>24576
+        OR commitment IS DISTINCT FROM iam.password_history_digest(history) THEN RETURN false; END IF;
+    FOR entry IN SELECT value FROM jsonb_array_elements(history) LOOP
+        IF jsonb_typeof(entry) IS DISTINCT FROM 'object' THEN RETURN false; END IF;
+        IF NOT entry ?& ARRAY['generation','hash','changedAt'] OR (entry-ARRAY['generation','hash','changedAt'])<>'{}'::jsonb
+            OR jsonb_typeof(entry->'generation') IS DISTINCT FROM 'number'
+            OR COALESCE(entry->>'generation','') !~ '^[1-9][0-9]{0,18}$'
+            OR jsonb_typeof(entry->'hash') IS DISTINCT FROM 'string'
+            OR COALESCE(entry->>'hash','') !~ '^\$matrix-iam-v1\$argon2id\$v=19\$m=65536,t=3,p=1\$[A-Za-z0-9+/]{22}\$[A-Za-z0-9+/]{43}$'
+            OR jsonb_typeof(entry->'changedAt') NOT IN ('null','string') THEN RETURN false; END IF;
+        recorded_generation:=(entry->>'generation')::bigint;
+        IF recorded_generation>=previous_generation THEN RETURN false; END IF;
+        previous_generation:=recorded_generation;
+        IF entry->'changedAt'<>'null'::jsonb THEN
+            recorded_time:=(entry->>'changedAt')::timestamptz;
+            IF NOT isfinite(recorded_time) OR entry->>'changedAt' IS DISTINCT FROM
+                to_char(recorded_time AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') THEN RETURN false; END IF;
+        END IF;
+    END LOOP;
+    RETURN true;
+EXCEPTION WHEN invalid_text_representation OR numeric_value_out_of_range OR invalid_datetime_format OR datetime_field_overflow THEN
+    RETURN false;
+END $function$;
+
+-- A retained verifier has known bytes, but its actual password age and older
+-- passwords cannot be inferred from a generation or generic changed_at.
+DO $password_history_initialization$
+DECLARE present integer;
+BEGIN
+    SELECT count(*) INTO present FROM pg_catalog.pg_attribute WHERE attrelid='iam.user_credentials'::regclass
+        AND attname IN ('password_history','password_history_digest','password_changed_at') AND NOT attisdropped;
+    IF present=0 THEN
+        IF to_regprocedure('iam.guard_password_history()') IS NOT NULL THEN
+            RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='IAM password history authority is missing';
+        END IF;
+        ALTER TABLE iam.user_credentials ADD COLUMN password_history jsonb NOT NULL DEFAULT '[]'::jsonb;
+        ALTER TABLE iam.user_credentials ADD COLUMN password_history_digest bytea NOT NULL DEFAULT iam.password_history_digest('[]'::jsonb);
+        ALTER TABLE iam.user_credentials ADD COLUMN password_changed_at timestamptz(6);
+    ELSIF present<>3 THEN
+        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='IAM password history authority is incomplete';
+    END IF;
+END $password_history_initialization$;
+ALTER TABLE iam.user_credentials DROP CONSTRAINT IF EXISTS user_password_history_valid;
+ALTER TABLE iam.user_credentials ADD CONSTRAINT user_password_history_valid CHECK(
+    iam.valid_password_history(password_history,password_history_digest,credential_version,password_changed_at));
+
+CREATE OR REPLACE FUNCTION iam.guard_password_history()
+RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
+BEGIN
+    IF TG_OP='INSERT' THEN
+        IF NEW.password_history IS DISTINCT FROM '[]'::jsonb
+            OR NEW.password_history_digest IS DISTINCT FROM iam.password_history_digest('[]'::jsonb)
+            OR NEW.password_changed_at IS NOT NULL OR NOT isfinite(NEW.changed_at) THEN
+            RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='IAM initial password history is invalid';
+        END IF;
+        NEW.password_changed_at:=NEW.changed_at;
+        RETURN NEW;
+    END IF;
+    IF NOT iam.valid_password_history(OLD.password_history,OLD.password_history_digest,OLD.credential_version,OLD.password_changed_at)
+        OR NEW.password_history IS DISTINCT FROM OLD.password_history
+        OR NEW.password_history_digest IS DISTINCT FROM OLD.password_history_digest
+        OR NEW.password_changed_at IS DISTINCT FROM OLD.password_changed_at THEN
+        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='IAM password history mutation is invalid';
+    END IF;
+    IF NEW.password_hash IS DISTINCT FROM OLD.password_hash THEN
+        IF NEW.credential_version<>OLD.credential_version+1 OR NOT isfinite(NEW.changed_at) THEN
+            RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='IAM password write generation is invalid';
+        END IF;
+        SELECT jsonb_agg(item.value ORDER BY item.ordinality) INTO NEW.password_history
+        FROM jsonb_array_elements(jsonb_build_array(jsonb_build_object('generation',OLD.credential_version,
+            'hash',OLD.password_hash,'changedAt',CASE WHEN OLD.password_changed_at IS NULL THEN NULL ELSE
+                to_char(OLD.password_changed_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') END))||OLD.password_history)
+            WITH ORDINALITY item(value,ordinality) WHERE item.ordinality<=24;
+        NEW.password_history_digest:=iam.password_history_digest(NEW.password_history);
+        NEW.password_changed_at:=NEW.changed_at;
+    END IF;
+    -- A same-hash authentication recovery fence keeps both history and age.
+    RETURN NEW;
+END $function$;
+DROP TRIGGER IF EXISTS guard_password_history ON iam.user_credentials;
+CREATE TRIGGER guard_password_history BEFORE INSERT OR UPDATE ON iam.user_credentials
+    FOR EACH ROW EXECUTE FUNCTION iam.guard_password_history();
+ALTER TABLE iam.user_credentials ENABLE ALWAYS TRIGGER guard_password_history;
+REVOKE ALL ON FUNCTION iam.password_history_digest(jsonb),iam.valid_password_history(jsonb,bytea,bigint,timestamptz),
+    iam.guard_password_history() FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_notification_worker,
+    matrix_iam_credential_recovery,matrix_iam_authentication_recovery,matrix_iam_backup_custody;
+
+CREATE OR REPLACE FUNCTION iam.password_history_contract_ready()
+RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $function$
+    SELECT (SELECT count(*)=3 FROM pg_catalog.pg_attribute a JOIN (VALUES
+        ('password_history','jsonb'::regtype,true),('password_history_digest','bytea'::regtype,true),
+        ('password_changed_at','timestamptz'::regtype,false)) expected(name,kind,required)
+        ON a.attname=expected.name AND a.atttypid=expected.kind AND a.attnotnull=expected.required
+        WHERE a.attrelid='iam.user_credentials'::regclass AND NOT a.attisdropped)
+      AND EXISTS(SELECT 1 FROM pg_catalog.pg_constraint c WHERE c.conrelid='iam.user_credentials'::regclass
+        AND c.conname='user_password_history_valid' AND c.contype='c' AND c.convalidated)
+      AND EXISTS(SELECT 1 FROM pg_catalog.pg_trigger t WHERE t.tgrelid='iam.user_credentials'::regclass
+        AND t.tgname='guard_password_history' AND t.tgenabled='A' AND NOT t.tgisinternal
+        AND t.tgtype=23 AND t.tgfoid=to_regprocedure('iam.guard_password_history()'))
+      AND (SELECT count(*)=3 FROM pg_catalog.pg_proc p JOIN (VALUES
+        ('iam.password_history_digest(jsonb)','bytea'::regtype,'i','history'),
+        ('iam.valid_password_history(jsonb,bytea,bigint,timestamptz)','boolean'::regtype,'i','history,commitment,generation,password_time'),
+        ('iam.guard_password_history()','trigger'::regtype,'v','')) expected(signature,kind,volatility,names)
+        ON p.oid=to_regprocedure(expected.signature) AND p.prorettype=expected.kind
+        AND p.provolatile::text=expected.volatility AND COALESCE(array_to_string(p.proargnames,','),'')=expected.names
+        WHERE p.proowner='matrix_iam_owner'::regrole AND NOT p.prosecdef AND NOT p.proretset
+          AND p.proconfig=ARRAY['search_path=pg_catalog, pg_temp']
+          AND NOT EXISTS(SELECT 1 FROM aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) acl
+            WHERE acl.grantee<>p.proowner AND acl.privilege_type='EXECUTE'))
+$function$;
+REVOKE ALL ON FUNCTION iam.password_history_contract_ready() FROM PUBLIC,matrix_iam_api,matrix_iam_worker,
+    matrix_iam_notification_worker,matrix_iam_credential_recovery,matrix_iam_authentication_recovery,matrix_iam_backup_custody;
+
 CREATE TABLE IF NOT EXISTS iam.login_index (
     login_name text COLLATE "C" PRIMARY KEY,
     tenant_id text COLLATE "C" NOT NULL,
@@ -1931,6 +2058,7 @@ BEGIN
             AND to_regprocedure('iam.set_organization_status(text,text,text,text,text,bigint,jsonb)') IS NULL
             AND to_regprocedure('iam.recover_organization_administrator(text,text,text,text,text,bigint,text,text,jsonb)') IS NULL
            AND iam.password_attempt_contract_ready()
+           AND iam.password_history_contract_ready()
            AND iam.totp_custody_contract_ready()
            AND iam.totp_backup_custody_contract_ready()
            AND iam.totp_authentication_contract_ready()
@@ -1988,7 +2116,7 @@ BEGIN
                SELECT 1 FROM iam.audit_outbox AS outbox
                 WHERE outbox.status = 'DEAD_LETTER' OR outbox.attempts >= 100
            ),
-           46::bigint,
+           47::bigint,
            transaction_timestamp();
 END
 $function$;
