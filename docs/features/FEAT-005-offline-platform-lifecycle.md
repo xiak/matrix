@@ -627,6 +627,15 @@ cannot authorize the new signed recovery path.
 The integrated recovery gate must prove these cases with real PostgreSQL and
 the signed installation path, not only pure contract tests:
 
+For a new recovery command, the installation must obtain a purpose-only,
+new-intent IAM inspection before writing its recovery journal. Inspection
+rejects an existing IAM command receipt and compares the current complete
+authentication-state commitment with the selected backup; it returns only a
+bounded `ELIGIBLE` identity/digest binding, never the private replay snapshot
+or a reusable close permit. IAM close repeats qualification inside its own
+serializable transaction. This preflight is not yet a signed-runtime result;
+the existing release still fails the T0-backup/T1-revocation no-journal gate.
+
 1. A backup at T0 followed by a stronger Account requirement, factor
    replacement or authorization revocation at T1 is rejected before journal,
    provider, database, credential or closure effects. Missing legacy state

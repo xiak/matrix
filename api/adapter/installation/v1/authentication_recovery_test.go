@@ -13,11 +13,12 @@ import (
 
 func TestAuthenticationRecoveryProcessBoundaryIsClosed(t *testing.T) {
 	commands := map[string]bool{
+		AuthenticationRecoveryInspectCommand:   true,
 		AuthenticationRecoveryCloseCommand:     true,
 		AuthenticationRecoveryReconcileCommand: true,
 		AuthenticationRecoveryReopenCommand:    true,
 	}
-	if len(commands) != 3 || !commands["close"] || !commands["reconcile"] || !commands["reopen"] {
+	if len(commands) != 4 || !commands["inspect"] || !commands["close"] || !commands["reconcile"] || !commands["reopen"] {
 		t.Fatal("authentication recovery commands are ambiguous")
 	}
 	environments := map[string]bool{
@@ -43,6 +44,61 @@ func TestAuthenticationRecoveryProcessBoundaryIsClosed(t *testing.T) {
 		AuthenticationRecoveryErrorConflict != "IAM_AUTHENTICATION_RECOVERY_CONFLICT" ||
 		AuthenticationRecoveryErrorUnavailable != "IAM_AUTHENTICATION_RECOVERY_UNAVAILABLE" {
 		t.Fatal("authentication recovery exit protocol is ambiguous")
+	}
+}
+
+func TestAuthenticationRecoveryInspectionBindsOneNewIntentWithoutExposingSnapshot(t *testing.T) {
+	intent := authenticationRecoveryIntentFixture()
+	intent.AuthenticationStateDigest = "sha256:" + strings.Repeat("d", 64)
+	digest, err := AuthenticationRecoveryIntentDigest(intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inspection := AuthenticationRecoveryInspection{
+		APIVersion: AuthenticationRecoveryAPIVersion, Kind: AuthenticationRecoveryInspectionKind,
+		Purpose: AuthenticationRecoveryPurpose, State: AuthenticationRecoveryStateEligible,
+		InstallationID: intent.InstallationID, BootstrapDigest: "sha256:" + strings.Repeat("6", 64),
+		Epoch: intent.Epoch, CommandID: intent.CommandID, RecoveryIntentDigest: digest,
+		AuthenticationStateDigest: intent.AuthenticationStateDigest,
+	}
+	encoded, err := EncodeAuthenticationRecoveryInspection(inspection)
+	if err != nil || bytes.Contains(encoded, []byte(`"accounts"`)) ||
+		bytes.Contains(encoded, []byte(`"securitySnapshot"`)) {
+		t.Fatal("inspection exposed private snapshot or failed encoding")
+	}
+	decoded, err := DecodeAuthenticationRecoveryInspection(bytes.NewReader(encoded))
+	if err != nil || !reflect.DeepEqual(decoded, inspection) ||
+		ValidateAuthenticationRecoveryInspectionForIntent(decoded, intent, inspection.BootstrapDigest) != nil {
+		t.Fatal("inspection did not bind its exact sealed intent")
+	}
+	for name, mutate := range map[string]func(*AuthenticationRecoveryInspection){
+		"state": func(v *AuthenticationRecoveryInspection) { v.State = "COMPLETED" },
+		"command": func(v *AuthenticationRecoveryInspection) { v.CommandID = "cmd-other" },
+		"epoch": func(v *AuthenticationRecoveryInspection) { v.Epoch++ },
+		"bootstrap": func(v *AuthenticationRecoveryInspection) { v.BootstrapDigest = "sha256:" + strings.Repeat("7", 64) },
+		"intent": func(v *AuthenticationRecoveryInspection) { v.RecoveryIntentDigest = "sha256:" + strings.Repeat("8", 64) },
+		"authentication": func(v *AuthenticationRecoveryInspection) { v.AuthenticationStateDigest = "sha256:" + strings.Repeat("9", 64) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := inspection
+			mutate(&candidate)
+			if ValidateAuthenticationRecoveryInspectionForIntent(candidate, intent, inspection.BootstrapDigest) == nil {
+				t.Fatal("changed inspection was accepted for original intent")
+			}
+		})
+	}
+	for name, input := range map[string]string{
+		"unknown": string(encoded[:len(encoded)-1]) + `,"permit":true}`,
+		"duplicate": strings.Replace(string(encoded), `"state":"ELIGIBLE"`, `"state":"ELIGIBLE","state":"ELIGIBLE"`, 1),
+		"whitespace": " " + string(encoded),
+		"trailing": string(encoded) + `{}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := DecodeAuthenticationRecoveryInspection(strings.NewReader(input));
+				!errors.Is(err, ErrInvalidAuthenticationRecoveryInspection) {
+				t.Fatal("ambiguous inspection was accepted")
+			}
+		})
 	}
 }
 
