@@ -1235,7 +1235,7 @@
     "changeResetPassword": "Change temporary password",
     "resetUnknownTitle": "Password reset outcome is unconfirmed",
     "resetUnknownTarget": "Target: {user} · original user revision {version}",
-    "resetUnknownHint": "The request may have taken effect. There is no result lookup for this request; a changed user record cannot prove whether it succeeded or failed. No automatic retry occurs. A new reset after acknowledging this record may overwrite an effective temporary password.",
+    "resetUnknownHint": "The request may have taken effect. There is no result lookup for this request; a changed user record cannot prove success or failure. No automatic retry occurs. Check the original request ID in audit records; losing this local reminder does not resolve the request. Another reset may overwrite an effective temporary password.",
     "resetUnknownRequestId": "Request ID:",
     "resetUnknownBlocked": "A reset outcome is unconfirmed. Review the risk before starting another request.",
     "acknowledgeResetUnknown": "Understand the risk; allow a new operation",

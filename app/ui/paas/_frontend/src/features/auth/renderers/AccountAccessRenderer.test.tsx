@@ -2063,12 +2063,17 @@ describe("account access", () => {
     await user.click(screen.getByRole("button", { name: "审阅重置" }));
     await user.click(screen.getByRole("button", { name: "确认重置密码" }));
     expect(await screen.findByText("重置密码结果尚未确认")).toBeTruthy();
-    expect(screen.getByText(/新密码可能覆盖已生效的临时密码/)).toBeTruthy();
+    expect(screen.getByText(/再次重置可能覆盖已生效的临时密码/)).toBeTruthy();
     expect((screen.getByRole("button", { name: "重置密码" }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.queryByDisplayValue("Reset-Only-Test-Password-74!")).toBeNull();
     expect(document.body.textContent).not.toContain("Reset-Only-Test-Password-74!");
     expect(execute.mock.calls[0]?.[1].requestId).toMatch(/^ui-user-reset-/);
     expect(execute).toHaveBeenCalledTimes(1);
+    expect(sessionStorage.length).toBe(1);
+    const stored = JSON.parse(sessionStorage.getItem(sessionStorage.key(0)!)!);
+    expect(stored).toMatchObject({ accountId: account.id, actorId: rootUser.id, userId: "child-a", resourceVersion: 2, requestId: execute.mock.calls[0]?.[1].requestId });
+    expect(JSON.stringify(stored)).not.toContain("Reset-Only-Test-Password-74!");
+    expect(JSON.stringify(stored)).not.toContain(credential);
     await user.click(screen.getByTestId("nav-overview"));
     expect(screen.getByText("重置密码结果尚未确认")).toBeTruthy();
     await user.click(screen.getByTestId("nav-users"));
@@ -2078,6 +2083,40 @@ describe("account access", () => {
     await user.click(screen.getByRole("button", { name: "了解风险，允许新操作" }));
     expect(screen.queryByText("重置密码结果尚未确认")).toBeNull();
     expect((screen.getByRole("button", { name: "重置密码" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(sessionStorage.length).toBe(0);
+  });
+
+  it("restores only a same-identity live reset reminder after reload and ignores malformed or foreign records", async () => {
+    const execute = vi.fn(async (_credential: string, command: { kind: string }) => {
+      if (command.kind === "reset-password") throw new Error("connection lost after dispatch");
+    });
+    const repository = accounts({ execute });
+    const first = await openAccess(repository);
+    await first.user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await first.user.click(screen.getByRole("button", { name: "重置密码" }));
+    await first.user.type(screen.getByLabelText(/^初始密码/), "Reset-Only-Test-Password-74!");
+    await first.user.click(screen.getByRole("button", { name: "审阅重置" }));
+    await first.user.click(screen.getByRole("button", { name: "确认重置密码" }));
+    expect(await screen.findByText("重置密码结果尚未确认")).toBeTruthy();
+    const key = sessionStorage.key(0)!;
+    const record = JSON.parse(sessionStorage.getItem(key)!);
+    first.view.unmount();
+
+    const resumed = await openAccess(repository);
+    expect(await screen.findByText("重置密码结果尚未确认")).toBeTruthy();
+    expect(screen.getByText(/本地提醒丢失也不代表请求已解决/)).toBeTruthy();
+    expect(execute).toHaveBeenCalledTimes(1);
+    resumed.view.unmount();
+
+    sessionStorage.setItem(key, JSON.stringify({ ...record, actorId: "different-actor" }));
+    const foreign = await openAccess(repository);
+    expect(screen.queryByText("重置密码结果尚未确认")).toBeNull();
+    foreign.view.unmount();
+
+    sessionStorage.setItem(key, "{not-json");
+    await openAccess(repository);
+    expect(screen.queryByText("重置密码结果尚未确认")).toBeNull();
     expect(execute).toHaveBeenCalledTimes(1);
   });
 

@@ -215,6 +215,36 @@ export type PasswordResetUnknown = Readonly<{
   requestId: string;
 }>;
 
+const passwordResetUnknownStoragePrefix = "matrix-iam-user-reset-unknown:v1:";
+function passwordResetUnknownStorageKey(accountId: string, actorId: string): string {
+  return passwordResetUnknownStoragePrefix + encodeURIComponent(accountId) + ":" + encodeURIComponent(actorId);
+}
+function readPasswordResetUnknown(accountId: string, actorId: string): PasswordResetUnknown | null {
+  try {
+    const raw = window.sessionStorage.getItem(passwordResetUnknownStorageKey(accountId, actorId));
+    if (!raw || raw.length > 2048) return null;
+    const value: unknown = JSON.parse(raw);
+    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    const record = value as Record<string, unknown>;
+    const fields = ["accountId", "actorId", "userId", "userQualifiedName", "resourceVersion", "requestId"];
+    if (Object.keys(record).length !== fields.length || fields.some((field) => !Object.hasOwn(record, field))) return null;
+    if (record.accountId !== accountId || record.actorId !== actorId ||
+      typeof record.userId !== "string" || !record.userId || record.userId.length > 256 ||
+      typeof record.userQualifiedName !== "string" || !record.userQualifiedName || record.userQualifiedName.length > 512 ||
+      typeof record.resourceVersion !== "number" || !Number.isSafeInteger(record.resourceVersion) || record.resourceVersion < 0 ||
+      typeof record.requestId !== "string" || !/^ui-user-reset-[0-9a-f]{32}$/.test(record.requestId)) return null;
+    return record as PasswordResetUnknown;
+  } catch { return null; }
+}
+function storePasswordResetUnknown(intent: PasswordResetUnknown): void {
+  try { window.sessionStorage.setItem(passwordResetUnknownStorageKey(intent.accountId, intent.actorId), JSON.stringify(intent)); }
+  catch { /* The visible in-memory warning remains; tab storage is only a best-effort reminder. */ }
+}
+function clearPasswordResetUnknown(intent: PasswordResetUnknown): void {
+  try { window.sessionStorage.removeItem(passwordResetUnknownStorageKey(intent.accountId, intent.actorId)); }
+  catch { /* A stale reminder is safer than treating storage loss as proof of completion. */ }
+}
+
 type AccountAccess = {
   supportsUserBatch: boolean;
   executeUserBatch(command: UserBatchCommand): Promise<boolean>;
@@ -320,6 +350,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   // Keeping it outside React state avoids rerendering the shell on each keystroke.
   const viewSession = useMemo(() => ({ credential, tenantId, principalId, sessionRevision }), [credential, tenantId, principalId, sessionRevision]);
   const currentViewSession = useRef(viewSession);
+  const verifiedIdentitySession = useRef<typeof viewSession | null>(null);
   useLayoutEffect(() => { currentViewSession.current = viewSession; }, [viewSession]);
   const [storedRoleSessionRevokeIntent, setStoredRoleSessionRevokeIntent] = useState<{ session: typeof viewSession; intent: RoleSessionRevokeIntent } | null>(null);
   const roleSessionRevokeIntent = storedRoleSessionRevokeIntent?.session === viewSession ? storedRoleSessionRevokeIntent.intent : null;
@@ -474,8 +505,20 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       if (extension && (extension.accountId !== tenantId || extension.mode !== "preview")) throw new Error("INVALID_IAM_TENANT");
       return { scene: buildAccountAccessScene(identity, users, accounts, tenantPolicies, platformPolicies), extension };
     }
-    read().then((loaded) => { if (mounted) { setScene(loaded.scene); setWorkspace(loaded.extension); setError(null); } },
-      (failure: unknown) => { if (mounted) { setScene(null); setWorkspace(null); setError(accountError(failure)); } })
+    read().then((loaded) => { if (mounted && currentViewSession.current === viewSession) {
+      verifiedIdentitySession.current = viewSession;
+      if (!repository.workspace && loaded.scene.accountId === tenantId && loaded.scene.currentUserId === principalId &&
+        passwordResetUnknownRef.current?.session !== viewSession) {
+        const intent = readPasswordResetUnknown(tenantId, principalId);
+        if (intent) {
+          const stored = { session: viewSession, intent };
+          passwordResetUnknownRef.current = stored;
+          setStoredPasswordResetUnknown(stored);
+        }
+      }
+      setScene(loaded.scene); setWorkspace(loaded.extension); setError(null);
+    } },
+      (failure: unknown) => { if (mounted && currentViewSession.current === viewSession) { verifiedIdentitySession.current = null; setScene(null); setWorkspace(null); setError(accountError(failure)); } })
       .finally(() => { if (mounted) setLoading(false); });
     return () => { mounted = false; };
   }, [active, credential, principalId, repository, revision, tenantId, viewSession]);
@@ -1091,7 +1134,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         kind: "reset-password", userId: user.id, resourceVersion: user.resourceVersion,
         initialPassword, requestId: requestToken("ui-user-reset-")
       };
-      if (!scene || scene.accountId !== tenantId || !accountCommandAvailable(scene, command)) { setError("forbidden"); return "rejected"; }
+      if (!scene || verifiedIdentitySession.current !== viewSession || scene.accountId !== tenantId || scene.currentUserId !== principalId || !accountCommandAvailable(scene, command)) { setError("forbidden"); return "rejected"; }
       mutationPending.current = true;
       setBusy(true); setError(null); setSuccess(null);
       try {
@@ -1112,12 +1155,14 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         } };
         passwordResetUnknownRef.current = stored;
         setStoredPasswordResetUnknown(stored);
+        if (!repository.workspace) storePasswordResetUnknown(stored.intent);
         return "unknown";
       } finally { mutationPending.current = false; setBusy(false); }
     },
     acknowledgeUnknownPasswordReset(requestId) {
       const stored = passwordResetUnknownRef.current;
       if (stored?.session !== viewSession || stored.intent.requestId !== requestId || mutationPending.current) return false;
+      if (!repository.workspace) clearPasswordResetUnknown(stored.intent);
       passwordResetUnknownRef.current = null;
       setStoredPasswordResetUnknown(null);
       return true;

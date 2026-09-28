@@ -133,6 +133,23 @@ async function expectRetainedFailure(dialog: HTMLElement) {
 afterEach(() => { cleanup(); localStorage.clear(); sessionStorage.clear(); resetPreviewEnvironment(); });
 
 describe("selection-driven user directory", () => {
+  it("keeps a MOCK password-reset uncertainty in memory without browser storage", async () => {
+    const execute = vi.fn(async (_credential: string, command: { kind: string }) => {
+      if (command.kind === "reset-password") throw new Error("preview response lost");
+    });
+    const { user } = await open("users", { repository: { execute } });
+    await user.click(await screen.findByRole("button", { name: "查看用户 lin" }));
+    await user.click(screen.getByRole("tab", { name: "安全设置" }));
+    await user.click(screen.getByRole("button", { name: "管理" }));
+    await user.click(screen.getByRole("button", { name: "重置密码" }));
+    await user.type(screen.getByLabelText(/^初始密码/), "Preview-Only-Test-Password-74!");
+    await user.click(screen.getByRole("button", { name: "审阅重置" }));
+    await user.click(screen.getByRole("button", { name: "确认重置密码" }));
+    expect(await screen.findByText("重置密码结果尚未确认")).toBeTruthy();
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(sessionStorage.length).toBe(0);
+  });
+
   async function openBatch() {
     resetPreviewEnvironment();
     const repository = { ...previewAccountRepository, listUsers: vi.fn(previewAccountRepository.listUsers), execute: vi.fn(previewAccountRepository.execute), executeUserBatch: vi.fn(previewAccountRepository.executeUserBatch!) };

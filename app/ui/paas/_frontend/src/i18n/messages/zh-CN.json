@@ -1235,7 +1235,7 @@
     "changeResetPassword": "修改初始密码",
     "resetUnknownTitle": "重置密码结果尚未确认",
     "resetUnknownTarget": "目标：{user} · 原用户版本 {version}",
-    "resetUnknownHint": "请求可能已经生效。当前没有按请求查询结果的接口；用户状态变化也不能证明这笔请求成功或失败。不会自动重试。确认已了解风险后若再次重置，新密码可能覆盖已生效的临时密码。",
+    "resetUnknownHint": "请求可能已经生效。当前没有按请求查询结果的接口；用户状态变化也不能证明这笔请求成功或失败。不会自动重试。请凭原请求 ID 人工核对审计；本地提醒丢失也不代表请求已解决。确认风险后再次重置可能覆盖已生效的临时密码。",
     "resetUnknownRequestId": "请求 ID：",
     "resetUnknownBlocked": "存在结果未确认的重置请求；请先审阅风险。",
     "acknowledgeResetUnknown": "了解风险，允许新操作",
