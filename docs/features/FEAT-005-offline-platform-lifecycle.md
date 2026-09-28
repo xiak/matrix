@@ -644,6 +644,16 @@ An interrupted inspection may remove only its exact verified purpose-only
 container; a foreign same-name container must remain untouched and refuse
 the operation.
 
+The fixed preflight source `e579eef16c5e833337bd8055a0a838b7aa1614f3`
+passed local full Go and focused race/vet gates plus separate real PostgreSQL
+18 qualification and three-database dump/restore tests. Its
+[Verification 36442536589](https://github.com/xiak/matrix/actions/runs/36442536589)
+completed successfully for the exact SHA across Go, UI, node-process,
+authority-process and the new bounded authentication-recovery job. That job
+uses four isolated databases and tests the purpose-only inspection, no-effect
+denial and retained-state replay. This proves the implementation and CI
+boundary, not the signed installation path or final release profile.
+
 1. A backup at T0 followed by a stronger Account requirement, factor
    replacement or authorization revocation at T1 is rejected before journal,
    provider, database, credential or closure effects. Missing legacy state
