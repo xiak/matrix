@@ -1957,6 +1957,23 @@ session storage to remain empty. The real browser session also returned to
 login on a fresh document navigation, confirming its page-memory boundary.
 All transferred one-time join files were removed after successful import.
 
+The later combined-release candidate `b020d4a56c1b1cfb8fb9930d09e20fb0f7604c73`
+has not inherited this exact-source acceptance. A separately signed initial
+platform/node pair from `495fc04e41310e28ff9801a9511fb83b1d64188f` and
+successor pair from `b020d4a5` passed platform install, verification, IAM
+authority, two application generations and original-primary recovery in an
+isolated offline Docker 27.5.1 engine. The two-host run then stopped at the
+first enrolled connection: Docker/SSH forwarding made the observed node peer
+`172.29.252.1`, while the real node was `172.30.1.160`. Both test VMs reached
+the control plane, but a successful TCP probe did not preserve their source
+addresses; a separate Docker Desktop probe likewise showed one gateway for
+both. The observed-peer endpoint binding must not be weakened to pass this
+fixture. This composition requires a source-preserving, independent private
+control-plane address and a fresh signed two-host run before acceptance.
+The attempt's task-only remote container, volumes, network, transient node
+services and directories were removed; both VMs retained their original boot
+and Docker Engine identities with zero remaining containers.
+
 ## Adoption
 
 - [FEAT-008 fixed-source review](../adoption/FEAT-008-linux-host-management.md)

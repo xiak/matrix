@@ -356,8 +356,11 @@ challenge. The personal-security panel now remains independently reachable
 when a directory read fails, without showing stale directory data or granting
 directory actions; its focused 30-test regression and the bounded 169-test
 frontend suite passed, along with type/lint/architecture/contrast and a
-deterministic 73-file embedded export. The directory contract adaptation and
-an installed LIVE restricted-enrollment browser gate remain open.
+deterministic 73-file embedded export. Pushed source
+`b020d4a56c1b1cfb8fb9930d09e20fb0f7604c73` passed all four jobs in
+[Verification 36389282316](https://github.com/xiak/matrix/actions/runs/36389282316).
+The directory contract adaptation and an installed LIVE restricted-enrollment
+browser gate remain open.
 
 - Gate A implementation replaces the Phase 1 page with the complete donor-
   shaped App Router -> route -> provider -> repository -> scene -> renderer ->
