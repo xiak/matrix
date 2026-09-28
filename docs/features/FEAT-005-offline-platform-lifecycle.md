@@ -770,8 +770,9 @@ intermediate and final passwords so the recovery proof respects password
 history. Restarting only that task-owned engine passed status/verify and
 complete offline lifecycle in 16.53 seconds. The engine and its two labeled
 volumes were removed; no remote machine was restarted. This does not grant
-cross-profile restore permission, publish a production signing root, or
-replace the independent two-host and browser gates.
+cross-profile restore permission or publish a production signing root. The
+independent cross-profile two-host gate is owned by FEAT-008; the installed
+LIVE browser ceremony remains separately open in FEAT-007.
 
 ## Incremental acceptance
 

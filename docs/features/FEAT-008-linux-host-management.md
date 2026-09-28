@@ -1960,7 +1960,8 @@ session storage to remain empty. The real browser session also returned to
 login on a fresh document navigation, confirming its page-memory boundary.
 All transferred one-time join files were removed after successful import.
 
-The current combined signed two-host gate passed in 507.08 seconds. Its initial
+The earlier same-profile combined signed two-host gate passed in 507.08
+seconds. Its initial
 platform/node source was `495fc04e41310e28ff9801a9511fb83b1d64188f`;
 the successor platform bundle used `d3339f5b582dd5fe134d6098b352c938dc7d4ac2`
 and the compatible node successor used
@@ -2004,10 +2005,35 @@ has positive/negative regression assertions. Neither failure is recorded as a
 product pass. After the successful run, both hosts had zero containers and zero
 running Matrix test units; the dedicated engine, task-only images, node roots,
 temporary SSH private key and `/32` routes were removed. Their original
-default routes and Docker daemons remained intact. This accepts the current
-composition's signed two-host host/runtime gate; FEAT-005 owns any remaining
-full release and recovery acceptance, and FEAT-007 owns the separate LIVE
+default routes and Docker daemons remained intact. This accepted the
+same-profile composition's signed two-host host/runtime gate; FEAT-005 owns
+any remaining full release and recovery acceptance, and FEAT-007 owns the LIVE
 browser ceremony.
+
+The current cross-profile signed two-host gate passed in 674.74 seconds from
+fixed runner `487fcfe1`. Its platform chain used `1602fad3925b` (IAM 45 /
+Audit 26 / PaaS 6, revision 16) followed by `648aac4ec956` (IAM 49 /
+Audit 27 / PaaS 6, revision 17) and a same-profile successor. Distinct
+current node bundles from those two fixed sources were signed with the same
+task-local key; their manifest SHA-256 values were
+`038b0fef7810dafaddfa95aba57419f5798f13e34275ca776c5b66e73f0fe4c0`
+and `7e21a99fa14c0466e00e3c4ceadbeec0ab63db4ce904d5e087b0ee8a45044325`.
+The gate retained both independent node enrollments across the exact platform
+upgrade, proved background observation, isolated outage, two application
+generations, first MFA enrollment, protected backup, Audit integrity, two
+real container terminal sessions with resize/replay denial, live drain,
+removal blocking/reactivation, safe tombstone removal and placement on the
+remaining host. It ended with `signed-multi-host-lifecycle-complete` and PASS.
+An initial fixture run stopped before node writes because its input JSON sat
+under a read-only release mount; moving that test input to the task-owned
+writable volume made the clean rerun pass without changing product code.
+All test node/collector units, node directories, isolated Docker container
+and volumes, and temporary address/routes were removed afterward; neither
+remote host nor its Docker daemon was restarted. The independent source gate
+at `951ef72d` passed Go, UI, authority-process, authentication-recovery and
+node-process in [Verification 36473359829](https://github.com/xiak/matrix/actions/runs/36473359829).
+This accepts the exact revision-16-to-17 two-host composition, not the LIVE
+browser ceremony or publication of a production signing root.
 
 ## Adoption
 
