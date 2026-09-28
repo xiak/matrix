@@ -729,6 +729,27 @@ matrix above, a historical cross-profile restore, the combined two-host
 release gate, or publication of a production signing root. The separate LIVE
 browser evidence is owned by [FEAT-007](FEAT-007-control-plane-console.md).
 
+The purpose-only, pre-journal authentication-recovery inspection in fixed
+runtime source `116f53f32070487b093a4fc8c0e6faafaca4cfb5` was exercised
+through a second task-local signed, same-profile A/B pair (IAM 45 / Audit 26 /
+PaaS 6, revision 16). The A and B manifest digests were respectively
+`sha256:3dd2cd99165ae052a7d41348020cd6cbdb7a860e856b2fcc77a404b79bdf641a`
+and `sha256:5c08b2fb5cd754696b34ee56618813daa96098001c2eed014a11a33d82a17b76`.
+Two additional validly signed wrong-predecessor candidates were rejected
+before effects. A fresh network-disabled Docker 27.5.1 engine limited to 2 CPU
+and 4 GiB passed the 442.30-second complete lifecycle and, after restarting
+only that task-owned engine, the 14.90-second retained-data gate. The new
+negative path backed up a live group-policy grant, revoked it, and proved that
+recovery returned `OWNERSHIP_CONFLICT` without changing the journal, provider
+inventory, recovery-state files or queryable group authorization. The gate
+driver at `31ac34bf` targets a group because the original account root is
+intentionally excluded from the manageable-user directory. The task-owned
+container, two volumes, temporary signing key and 1.94 GiB of local
+package/test artifacts were removed; shared Docker build cache was not
+globally pruned. This is evidence for the exact revision
+16 inspection and signed lifecycle, not for a future IAM/Audit profile or the
+combined two-host release gate.
+
 ## Incremental acceptance
 
 ### Gate A: release and CLI contract
