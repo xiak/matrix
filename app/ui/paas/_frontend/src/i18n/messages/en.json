@@ -3830,13 +3830,18 @@
     "historicalResultMissing": "If the original historical result omits password-rule details, show “not provided.” Do not fill them from current configuration or this draft, or reconstruct the old command from them.",
     "historicalSessionBoundary": "An “original caller session ended” result describes only the session that submitted the change; it must not sign out a later, newly authenticated session.",
     "ageTitle": "Password age and sign-in path · scenario preview",
-    "agePreviewBoundary": "This is an isolated MOCK interaction. It reads no current expiry setting, password-change time, or personal authentication state, and creates no challenge or login session.",
+    "agePreviewBoundary": "This is an isolated MOCK interaction. It reads no current expiry setting, password-change time, or personal authentication state, and creates no challenge, reset request, or login session. Only a restricted IAM outcome may start either path.",
     "ageScenario": "Select simulated server evidence",
     "ageScenarios": {
       "offUnknown": "Expiry off · age unknown",
       "onUnknown": "Expiry on · age unknown",
       "onExpired": "Expiry on · confirmed expired",
       "onCurrent": "Expiry on · confirmed current"
+    },
+    "expiryMode": "Simulated expiry handling",
+    "expiryModes": {
+      "CHANGE_PASSWORD": "Restricted password change",
+      "ADMIN_RESET": "Administrator reset"
     },
     "expirySetting": "Simulated expiry requirement",
     "expiryOn": "Enabled",
@@ -3854,13 +3859,25 @@
       "onExpired": "Only IAM-confirmed expiry may be called expired. After verifying the current password and required MFA, the path remains restricted to a password change.",
       "onCurrent": "Confirmed current age rules out only this reason for a change. It does not prove MFA, account state, or other sign-in requirements are satisfied."
     },
+    "resetAgeHints": {
+      "onUnknown": "Unknown age is not confirmed expiry. Show administrator-reset guidance only after IAM verifies the current password and required MFA and returns ADMIN_RESET_REQUIRED · AGE_UNKNOWN; the client cannot choose the path.",
+      "onExpired": "Show administrator-reset guidance only when IAM confirms expiry and returns ADMIN_RESET_REQUIRED · EXPIRED. This is neither a password-change challenge nor a signed-in session."
+    },
     "restrictedFlow": "Restricted password-change path",
+    "resetFlow": "Administrator-reset guidance",
     "ageSteps": {
       "verify": "Verify the current password and required MFA; no normal business session exists yet.",
       "challenge": "IAM returns a dedicated restricted PASSWORD_CHANGE challenge, not a client-inferred state.",
       "change": "Submit a new password. IAM rechecks current rules and history and ends old-stage proof and related sessions.",
       "reauthenticate": "Sign in again with the new password. The change result is not itself a login."
     },
-    "ageAuthorityBoundary": "This page computes no expiry date, stores no password, and does not claim IAM has implemented this path. Real eligibility, challenge stages, and outcomes require a fixed backend contract."
+    "resetSteps": {
+      "verify": "IAM verifies the current password and required MFA; no normal business session exists yet.",
+      "unknown": "IAM returns ADMIN_RESET_REQUIRED · AGE_UNKNOWN; unknown age is not presented as confirmed expiry.",
+      "expired": "IAM returns ADMIN_RESET_REQUIRED · EXPIRED; no expiry date is invented.",
+      "contact": "Contact an account administrator for a reset. This page offers no password-change form, identity recovery, or automatic resend.",
+      "reauthenticate": "After the administrator confirms the reset, sign in again with new credentials; this page issues no session automatically."
+    },
+    "ageAuthorityBoundary": "This page computes no expiry date, stores no password, and does not claim IAM has completed either path. Real eligibility, restricted outcomes, and login state require a fixed backend contract."
   }
 }

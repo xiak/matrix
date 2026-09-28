@@ -3830,13 +3830,18 @@
     "historicalResultMissing": "原历史结果若未返回密码规则内容，应显示“未提供”，不能用当前配置或本页草稿补齐，也不能据此重建旧命令。",
     "historicalSessionBoundary": "历史结果中的“原调用会话已结束”只描述当时发起变更的会话；不会因此退出后来重新登录的会话。",
     "ageTitle": "密码年龄与登录路径 · 场景模拟",
-    "agePreviewBoundary": "以下只是隔离 MOCK 交互，不读取当前账号到期设置、密码变更时间或本人认证状态，也不创建挑战或登录会话。",
+    "agePreviewBoundary": "以下只是隔离 MOCK 交互，不读取当前账号到期设置、密码变更时间或本人认证状态，也不创建挑战、重置请求或登录会话。两种处置均只能由 IAM 的受限结果触发。",
     "ageScenario": "选择模拟的服务端证据",
     "ageScenarios": {
       "offUnknown": "未启用到期 · 年龄未知",
       "onUnknown": "已启用到期 · 年龄未知",
       "onExpired": "已启用到期 · 已证实过期",
       "onCurrent": "已启用到期 · 已证实未到期"
+    },
+    "expiryMode": "模拟到期处置模式",
+    "expiryModes": {
+      "CHANGE_PASSWORD": "受限改密",
+      "ADMIN_RESET": "管理员重置"
     },
     "expirySetting": "模拟到期要求",
     "expiryOn": "已启用",
@@ -3854,13 +3859,25 @@
       "onExpired": "只有 IAM 已证实过期时才能称为过期；完成原密码和所需 MFA 核验后仍只进入受限改密。",
       "onCurrent": "已证实未到期只排除这一项改密原因，不证明 MFA、账号状态或其他登录条件已满足。"
     },
+    "resetAgeHints": {
+      "onUnknown": "年龄未知不是已过期。仅当 IAM 在原密码及所需 MFA 核验后返回 ADMIN_RESET_REQUIRED · AGE_UNKNOWN，才展示管理员重置指引；前端不能自行决定处置。",
+      "onExpired": "仅当 IAM 已证实过期并返回 ADMIN_RESET_REQUIRED · EXPIRED，才展示管理员重置指引；此结果不是改密挑战或已登录。"
+    },
     "restrictedFlow": "受限改密路径",
+    "resetFlow": "管理员重置指引",
     "ageSteps": {
       "verify": "核验原密码及当前要求的 MFA；此时尚无正常业务会话。",
       "challenge": "IAM 返回专用 PASSWORD_CHANGE 受限挑战，不接受客户端推断的状态。",
       "change": "提交新密码；IAM 重新检查当前规则与历史，并结束旧阶段证明和相关会话。",
       "reauthenticate": "完成后使用新密码重新登录；改密结果本身不是已登录。"
     },
-    "ageAuthorityBoundary": "本页不计算到期日、不保存密码，也不表示 IAM 已完成这条流程。真实资格、挑战阶段与结果必须由固定后端契约提供。"
+    "resetSteps": {
+      "verify": "IAM 核验原密码及当前要求的 MFA；此时尚无正常业务会话。",
+      "unknown": "IAM 返回 ADMIN_RESET_REQUIRED · AGE_UNKNOWN；不把年龄未知写成已过期。",
+      "expired": "IAM 返回 ADMIN_RESET_REQUIRED · EXPIRED；不展示虚构的到期日期。",
+      "contact": "联系账号管理员处理重置。本页不提供改密表单、身份恢复或自动重发入口。",
+      "reauthenticate": "管理员确认完成重置后，再使用新的凭据重新登录；这里不会自动签发会话。"
+    },
+    "ageAuthorityBoundary": "本页不计算到期日、不保存密码，也不表示 IAM 已完成任一处置。真实资格、受限结果与登录状态必须由固定后端契约提供。"
   }
 }

@@ -17,6 +17,7 @@ type RuleDraft = {
 type IdentityScenario = "ordinary" | "forced" | "challenge" | "protected";
 type ExceptionScenario = "denied" | "conflict" | "unknown";
 type AgeScenario = "offUnknown" | "onUnknown" | "onExpired" | "onCurrent";
+type ExpiryMode = "CHANGE_PASSWORD" | "ADMIN_RESET";
 
 const sampleRule: RuleDraft = {
   minimumLength: "15", historyCount: "1",
@@ -34,6 +35,7 @@ export function PasswordRulesPreview({ accountId }: { accountId: string }) {
   const [identity, setIdentity] = useState<IdentityScenario>("ordinary");
   const [exception, setException] = useState<ExceptionScenario>("conflict");
   const [ageScenario, setAgeScenario] = useState<AgeScenario>("onUnknown");
+  const [expiryMode, setExpiryMode] = useState<ExpiryMode>("CHANGE_PASSWORD");
   const minimum = Number(draft.minimumLength);
   const history = Number(draft.historyCount);
   const valid = Number.isInteger(minimum) && minimum >= 15 && minimum <= 128 &&
@@ -42,7 +44,7 @@ export function PasswordRulesPreview({ accountId }: { accountId: string }) {
   const scenarioRule = scenarioUsesDraft ? draft : sampleRule;
   const expiryEnabled = ageScenario !== "offUnknown";
   const ageUnknown = ageScenario === "offUnknown" || ageScenario === "onUnknown";
-  const restrictedChange = ageScenario === "onUnknown" || ageScenario === "onExpired";
+  const interventionRequired = ageScenario === "onUnknown" || ageScenario === "onExpired";
 
   useLayoutEffect(() => {
     if (phase !== "summary") heading.current?.focus({ preventScroll: true });
@@ -134,17 +136,27 @@ export function PasswordRulesPreview({ accountId }: { accountId: string }) {
         <FormField id={`${id}-age`} label={t("ageScenario")}><Select id={`${id}-age`} value={ageScenario}
           options={(["offUnknown", "onUnknown", "onExpired", "onCurrent"] as const).map((value) => ({ value, label: t(`ageScenarios.${value}`) }))}
           onValueChange={(value) => setAgeScenario(value as AgeScenario)} /></FormField>
+        <FormField id={`${id}-expiry-mode`} label={t("expiryMode")}><Select id={`${id}-expiry-mode`} value={expiryMode}
+          options={(["CHANGE_PASSWORD", "ADMIN_RESET"] as const).map((value) => ({ value, label: t(`expiryModes.${value}`) }))}
+          onValueChange={(value) => setExpiryMode(value as ExpiryMode)} /></FormField>
         <dl className={styles.facts}>
           <div><dt>{t("expirySetting")}</dt><dd>{t(expiryEnabled ? "expiryOn" : "expiryOff")}</dd></div>
           <div><dt>{t("ageEvidence")}</dt><dd>{t(ageUnknown ? "ageUnknown" : ageScenario === "onExpired" ? "ageExpired" : "ageCurrent")}</dd></div>
-          <div><dt>{t("sessionOutcome")}</dt><dd>{t(restrictedChange ? "restrictedOutcome" : "normalOutcome")}</dd></div>
+          <div><dt>{t("sessionOutcome")}</dt><dd>{t(interventionRequired ? "restrictedOutcome" : "normalOutcome")}</dd></div>
         </dl>
-        <Alert status={restrictedChange ? "warning" : "info"}>{t(`ageHints.${ageScenario}`)}</Alert>
-        {restrictedChange ? <ol className={styles.ageFlow} aria-label={t("restrictedFlow")}>
-          <li>{t("ageSteps.verify")}</li>
-          <li>{t("ageSteps.challenge")}</li>
-          <li>{t("ageSteps.change")}</li>
-          <li>{t("ageSteps.reauthenticate")}</li>
+        <Alert status={interventionRequired ? "warning" : "info"}>{t(interventionRequired && expiryMode === "ADMIN_RESET" ? `resetAgeHints.${ageScenario as "onUnknown" | "onExpired"}` : `ageHints.${ageScenario}`)}</Alert>
+        {interventionRequired ? <ol className={styles.ageFlow} aria-label={t(expiryMode === "ADMIN_RESET" ? "resetFlow" : "restrictedFlow")}>
+          {expiryMode === "ADMIN_RESET" ? <>
+            <li>{t("resetSteps.verify")}</li>
+            <li>{t(ageScenario === "onUnknown" ? "resetSteps.unknown" : "resetSteps.expired")}</li>
+            <li>{t("resetSteps.contact")}</li>
+            <li>{t("resetSteps.reauthenticate")}</li>
+          </> : <>
+            <li>{t("ageSteps.verify")}</li>
+            <li>{t("ageSteps.challenge")}</li>
+            <li>{t("ageSteps.change")}</li>
+            <li>{t("ageSteps.reauthenticate")}</li>
+          </>}
         </ol> : null}
         <Typography.Text tone="muted">{t("ageAuthorityBoundary")}</Typography.Text>
       </Card.Body>
