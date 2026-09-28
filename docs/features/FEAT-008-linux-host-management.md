@@ -1985,6 +1985,36 @@ published-port probe identifies a possible source-preserving ingress, but
 does not prove a fresh isolated Docker engine or the signed two-host lifecycle
 can use it. The combined-source two-host gate remains open.
 
+A task-only private `/32` control-plane alias on `172.30.1.160`, routed from
+`172.30.1.161`, was then tested through two Docker publication layers. A
+bounded inner container in a fresh Docker 27.5.1 DIND engine observed the
+distinct original `.160` and `.161` client addresses, not one bridge gateway.
+The test container, alias and exact host route were removed after the probe;
+both hosts retained their boot and Docker Engine identities. This proves the
+test topology's address-preserving path, not the signed lifecycle.
+
+The next signed current-composition exercise used initial platform/node
+source `495fc04e41310e28ff9801a9511fb83b1d64188f` and successor
+`8b22da18f60932d7664006c467aa21e1f12badc5`, with matching
+IAM 45 / Audit 26 / PaaS 6 + contract revision 16 and topology. Its isolated
+engine began with zero inner images and containers. Platform A installation,
+IAM authority, two application generations, original-primary credential
+recovery, both hosts' one-time enrollment and independent identities, offline
+background recovery, first MFA binding, Audit integrity, protected backup,
+automatic failed-upgrade rollback and B upgrade preservation passed. The
+464.35-second run then stopped at the first post-upgrade terminal creation:
+APISIX returned HTTP 403 and the immutable IAM decision for
+`paas.terminal-session.create` was `DENIED` with no policy evidence. The
+current source's `system.account-administrator` and `system.paas-developer`
+policy builders omit the two terminal actions, contrary to the explicit
+interactive-access target above. This is a current-composition permission
+regression, not a source-address failure, and the complete signed two-host
+gate remains open. The task-owned engine, node/collector/startup services,
+workload container, images, runtime roots and `/32` route were removed; both
+hosts retained their original boot identities and no test containers or
+services remain. The signed input bundles are retained only for the corrected
+fresh rerun.
+
 ## Adoption
 
 - [FEAT-008 fixed-source review](../adoption/FEAT-008-linux-host-management.md)
