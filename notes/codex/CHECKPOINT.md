@@ -2,12 +2,19 @@
 
 > Non-authoritative portable memory. Validate against Git and the owning FEAT.
 
-- Updated: 2026-09-27
+- Updated: 2026-09-28
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/phase3-mfa-enabling`
-- Pushed milestone: `302a1120` (pins the release-specific login wire contract
-  and establishes legitimate MFA before the current same-profile backup,
-  independently verified by [Verification 36318140174](https://github.com/xiak/matrix/actions/runs/36318140174)).
+- Verified pushed milestone: `3d9016d81f831f682a8ca56707d23a4f2c9eafa0`.
+  [Verification 36374469333](https://github.com/xiak/matrix/actions/runs/36374469333)
+  completed successfully for Go, UI, authority-process and node-process.
+  The exact composition is IAM 45/Audit 26/PaaS 6, revision 16; its fixed
+  signed enabling predecessor is `ec701f54f1cecf216a2225d74dc67cf5fa6bd316`
+  at IAM 40/Audit 24/PaaS 6, revision 15.
+- Earlier preparation: `302a1120` pins the release-specific login wire contract
+  and establishes legitimate MFA before the current same-profile backup;
+  [Verification 36318140174](https://github.com/xiak/matrix/actions/runs/36318140174)
+  verified that fixed source.
 - Retained migration fixture: `ef88d8d6` (separates the retained-data historical migration
   from the current same-profile failure/rollback/recovery fixture, independently
   verified by [Verification 36315956026](https://github.com/xiak/matrix/actions/runs/36315956026)).
@@ -32,7 +39,9 @@
    owns the signed MFA recovery requirement, evidence and bounded acceptance.
 2. [FEAT-008](../../docs/features/FEAT-008-linux-host-management.md)
    owns the accepted host self-enrollment target and evidence.
-3. [FEAT-006](../../docs/features/FEAT-006-platform-authorities.md)
+3. [FEAT-007](../../docs/features/FEAT-007-control-plane-console.md)
+   owns the LIVE first-enrollment browser ceremony.
+4. [FEAT-006](../../docs/features/FEAT-006-platform-authorities.md)
    owns the separate IAM/Audit multi-tenant authority extension; consume only
    its independently verified fixed commits, then rerun the combined release
    gates before claiming the whole Phase 3 goal.
@@ -41,20 +50,21 @@ Do not treat this checkpoint or the accepted task-local signer as a production
 release. Preserve Phase 2 and remote machines; remove isolated test resources
 after use.
 
-The combined release remains open: current published installation profile is
-IAM 40/Audit 24/PaaS 6 with contract revision 15. Do not enable backup v5,
-recover from an old backup automatically, or claim the signed multi-host gate
-until a fixed IAM producer/restore source is selectively integrated and the
-exact combined profile, signed runtime and browser gates pass. This checkpoint
-records no uncommitted or machine-local test state. The final signed fixture
-must prove predecessor migration and the successor's same-profile lifecycle,
-with legitimate MFA qualification established before its positive v5 backup;
-an unsupported old-backup restore cannot be used to continue a failure test.
-The pre-migration backup still invokes the authenticated predecessor's old
-IAM image: consume only its exact historical lease protocol, never substitute
-a missing current state proof or infer old-backup recovery permission. The
-final console also needs the UX-owned LIVE first ENROLLMENT ceremony; DEV and
-saved-code recovery flows do not satisfy that dependency. Consume only fixed,
-verified IAM and UX sources, without replacing their trees or acceptance state.
+The real PostgreSQL process gate now proves the fixed IAM 40 executable's
+retained-data upgrade to IAM 45: identities, credentials and original Audit
+facts remain intact, old Sessions without new security-settings proof fail
+closed, and fresh login and migration replay/restart work. The old IAM 3 local
+recovery gate retains credential lineage and Audit facts under that same
+fail-closed Session rule. Cross-service tests reauthenticate after platform
+role grant/revoke before testing the tenant boundary; a stale bearer cannot
+substitute for an authorized actor.
+
+The combined release remains open. Full-profile admission still governs any
+supported upgrade; this checkpoint grants no cross-profile rollback/recovery
+permission. The final signed lifecycle must prove positive v5 recovery and
+the two-host runtime with the real LIVE enrollment consumer. A DEV page,
+process-only gate or this CI result does not establish that acceptance.
+Preserve Phase 2 and remote machines; remove isolated test resources after
+use. This checkpoint records no uncommitted or machine-local state.
 
 Replace this checkpoint only at another committed-and-pushed milestone.
