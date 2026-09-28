@@ -47,6 +47,8 @@ API owning codec 规范化语句/动作/选择器的集合顺序，输出唯一 
 
 直接 USER 关联管理使用 `POST /v1/policy-attachments` 与 `POST /v1/policy-attachments/{id}:revoke`；不保留旧 RoleBinding 路由。创建关联 ID 由账号、操作者及 requestId 的域分离摘要稳定生成，策略 ID/目标/预期策略版本进入输入摘要。仅相同未撤销关联和原输入可重放返回；改变输入、已撤销关联或另一现存有效关联冲突，不因重试分配新 ID 而复权。撤销检查预期关联版本；完成后仅原版本加一、相同输入和操作者的事实可精确重放，其余陈旧版本冲突。两种写入都在当前授权事务内验证目标 USER 与策略 scope、封存 installation、策略/关联修订和原 primary 保护。
 
+创建的未知结果处理边界：固定`42035189eb823e388509f54525889c1a18c6b79d`已要求必填requestId，客户端须保留同一操作者的原requestId、目标、policyId与预期策略修订；未知回包只能明确重试原输入，不能每次执行都自动换意图。当前公开API没有按requestId查询历史关联完成的入口，也不承诺撤权、目标失效、策略退休或修订变化后仍可通过写命令读取旧结果；401/403/409不能证明原事务未提交。刷新User直接关联目录仅证明当前关系，不能把“现在不存在”解释成“原来没成功”，更不能据此自动重新授权。前端不复制私有ID生成算法。独立的非敏感历史完成核对及撤销后原意图确认仍是本FEAT待设计/验收的缺口；后续须与当前执行资格严格分离，不能借结果查询重新授予权限或绕过当前读取授权，不能以已有普通重放测试宣称提交后失联的完整恢复闭环已交付。
+
 新事实为 `iam.policy-attachment.created/revoked`（tenant chain）与 `iam.platform-policy-attachment.created/revoked`（installation chain），target 均为 POLICY_ATTACHMENT；必须有当前 USER 决定，不接受 SYSTEM、probe 或 target.tenantId 变体。平台关联 ID 的物理 owner 仍为调用身份的 home Account，不允许用跨账号 target ID 借平台权限修改其他租户。事实、关联和决定/outbox 同事务；公开命令不提供系统策略发布或服务主体授权旁路。
 
 用例负责系统策略装配、附件授予撤销、当前来源收集和决定持久化。写入按 scope → principal → policy → attachment 锁序；撤销与密码/状态保护使用相同 principal 锁。账号级普通变更对 organization 使用共享锁，不把不同成员的所有写入串成独占队列；租户生命周期与安装 primary 恢复需要独占 scope。凭据变更继续按 principal → credential → session 加锁，退出先读取不可变主体引用，再按 principal → session 重新锁定当前记录。API/worker/verifier 无越权 DML，查询走 RLS/受限函数。安装恢复用例要查询新的显式平台附件，保持封存 primary tuple 与原 receipt。
