@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"slices"
 	"strings"
 	"testing"
@@ -1399,6 +1400,12 @@ func TestLocalRecoveryWorkflowBindsOnePrivateIntentToOneSanitizedFact(t *testing
 	}
 	repository := &coreRepository{transaction: newCoreTransaction()}
 	transaction := repository.transaction
+	currentPassword, err := authority.NewPasswordHasher(nil).Hash(secret("Current-Local-Password-77!"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction.localRecoveryMaterial = PasswordReplacementMaterial{PasswordHash: currentPassword, CredentialGeneration: 3,
+		PasswordHistory: []authority.PasswordHash{}, HistoryDigest: "sha256:" + strings.Repeat("c", 64)}
 	completed := iamv1.LocalCredentialRecoveryResult{APIVersion: iamv1.APIVersion, Kind: "LocalCredentialRecoveryResult", State: "APPLIED", Scope: local.Scope,
 		CommandID: request.CommandID, InputCommitment: commitment, PreviousCredentialGeneration: 3, CredentialGeneration: 4, PrincipalResourceVersion: 3,
 		RevokedSessions: 2, AuditEventID: "event-local", CompletedAt: transaction.now}
@@ -1412,7 +1419,9 @@ func TestLocalRecoveryWorkflowBindsOnePrivateIntentToOneSanitizedFact(t *testing
 		t.Fatalf("local workflow rejected its exact result: %v", err)
 	}
 	mutation := *transaction.localRecoveryMutation
-	if mutation.Scope != local.Scope || mutation.Expected != request.Expected || mutation.InputCommitment != commitment || mutation.CommandID != request.CommandID {
+	if mutation.Scope != local.Scope || mutation.Expected != request.Expected || mutation.InputCommitment != commitment || mutation.CommandID != request.CommandID ||
+		mutation.ExpectedPassword.PasswordHash != currentPassword || mutation.ExpectedPassword.CredentialGeneration != 3 ||
+		mutation.ExpectedPassword.HistoryDigest != transaction.localRecoveryMaterial.HistoryDigest {
 		t.Fatal("local mutation substituted its authority or expected intent")
 	}
 	if matched, err := authority.NewPasswordHasher(nil).Verify(request.NewPassword, mutation.PasswordHash); err != nil || !matched {
@@ -1451,6 +1460,51 @@ func TestLocalRecoveryWorkflowBindsOnePrivateIntentToOneSanitizedFact(t *testing
 	if _, err := service.InspectLocalCredentialRecovery(context.Background(), local, nil); !errors.Is(err, ErrUnavailable) {
 		t.Fatal("inspection returned another tenant's authority")
 	}
+	t.Run("new input admission uses prepared history outside transaction", func(t *testing.T) {
+		transaction.localRecoveryInspection = iamv1.LocalCredentialRecoveryInspection{}
+		transaction.localRecoveryMutation = nil
+		transaction.localRecoveryResult = completed
+		entropy := &passwordEntropyProbe{testing: t, repository: repository}
+		service.passwords = authority.NewPasswordHasher(entropy)
+		recent := secret("Recent-Local-Password-78!")
+		hash, err := authority.NewPasswordHasher(nil).Hash(recent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		transaction.localRecoveryMaterial.PasswordHistory = []authority.PasswordHash{hash}
+		for _, password := range []iamv1.Secret{secret("Current-Local-Password-77!"), recent} {
+			reused := request
+			reused.NewPassword = password
+			reused, err = iamv1.SignLocalCredentialRecoveryRequest(local, reused)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := service.RecoverLocalCredentials(t.Context(), local, reused); !errors.Is(err, ErrInvalidArgument) || transaction.localRecoveryMutation != nil {
+				t.Fatal("new recovery admitted current/recent password", err)
+			}
+		}
+		if _, err := service.RecoverLocalCredentials(t.Context(), local, request); err != nil {
+			t.Fatal("fresh local recovery rejected", err)
+		}
+	})
+	t.Run("unknown preparation commit cannot reach hashing or final write", func(t *testing.T) {
+		transaction.localRecoveryInspection = iamv1.LocalCredentialRecoveryInspection{}
+		transaction.localRecoveryMutation = nil
+		var entropy bytes.Buffer
+		service.passwords = authority.NewPasswordHasher(io.TeeReader(passwordEntropyProbe{t, repository}, &entropy))
+		prepared := false
+		transaction.onLocalRecoveryPrepare = func() { prepared = true }
+		repository.afterTransaction = func(err error) error {
+			if prepared {
+				return ErrUnavailable
+			}
+			return err
+		}
+		defer func() { transaction.onLocalRecoveryPrepare = nil; repository.afterTransaction = nil }()
+		if _, err := service.RecoverLocalCredentials(t.Context(), local, request); !errors.Is(err, ErrUnavailable) || !prepared || entropy.Len() != 0 || transaction.localRecoveryMutation != nil {
+			t.Fatal("uncertain preparation reached recovery write", err)
+		}
+	})
 	t.Run("historical input is not a new password write", func(t *testing.T) {
 		old := request
 		old.CommandID, old.NewPassword = "historical-local", secret("Old-Secret-49!")
@@ -1469,7 +1523,15 @@ func TestLocalRecoveryWorkflowBindsOnePrivateIntentToOneSanitizedFact(t *testing
 			InputCommitment: oldCommitment, Expected: &old.Expected, Result: &historical}
 		transaction.localRecoveryMutation = nil
 		service.passwords = authority.NewPasswordHasher(bytes.NewReader(nil))
+		for range cap(service.passwordWork) {
+			if err := service.acquirePasswordWork(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+		}
 		replayed, err := service.RecoverLocalCredentials(t.Context(), local, old)
+		for range cap(service.passwordWork) {
+			service.releasePasswordWork()
+		}
 		want := historical
 		want.State = "EQUAL_REPLAY"
 		if err != nil || replayed != want || transaction.localRecoveryMutation != nil {
@@ -1485,6 +1547,17 @@ func TestLocalRecoveryWorkflowBindsOnePrivateIntentToOneSanitizedFact(t *testing
 			t.Fatal("replay accepted altered expected authority")
 		}
 		transaction.localRecoveryInspection = iamv1.LocalCredentialRecoveryInspection{}
+		transaction.onLocalRecoveryPrepare = func() {
+			transaction.localRecoveryPrepared = iamv1.LocalCredentialRecoveryInspection{APIVersion: iamv1.APIVersion,
+				Kind: "LocalCredentialRecoveryInspection", Scope: local.Scope, State: "COMPLETED", CommandID: old.CommandID,
+				InputCommitment: oldCommitment, Expected: &old.Expected, Result: &historical}
+		}
+		replayed, err = service.RecoverLocalCredentials(t.Context(), local, old)
+		if err != nil || replayed != want || transaction.localRecoveryMutation != nil {
+			t.Fatal("completion between inspection and preparation rehashed or rejected historical intent", err)
+		}
+		transaction.onLocalRecoveryPrepare = nil
+		transaction.localRecoveryPrepared = iamv1.LocalCredentialRecoveryInspection{}
 		if _, err := service.RecoverLocalCredentials(t.Context(), local, old); !errors.Is(err, ErrInvalidArgument) || transaction.localRecoveryMutation != nil {
 			t.Fatal("NOT_FOUND admitted a new weak password", err)
 		}
@@ -2327,6 +2400,9 @@ type coreTransaction struct {
 	localRecoveryInspection  iamv1.LocalCredentialRecoveryInspection
 	localRecoveryResult      iamv1.LocalCredentialRecoveryResult
 	localRecoveryMutation    *LocalCredentialRecoveryMutation
+	localRecoveryMaterial    PasswordReplacementMaterial
+	localRecoveryPrepared    iamv1.LocalCredentialRecoveryInspection
+	onLocalRecoveryPrepare   func()
 	profileErr               error
 	accessKeyCustody         *AccessKeyCustody
 	accessKeyCustodyErr      error
@@ -2589,6 +2665,17 @@ func (transaction *coreTransaction) InspectLocalCredentialRecovery(_ context.Con
 			Scope: scope, State: "NOT_FOUND", CommandID: query.CommandID, InputCommitment: query.InputCommitment}, nil
 	}
 	return transaction.localRecoveryInspection, nil
+}
+
+func (transaction *coreTransaction) PrepareLocalCredentialRecovery(ctx context.Context, scope iamv1.LocalCredentialRecoveryScope, _ iamv1.LocalCredentialRecoveryExpected, query iamv1.LocalCredentialRecoveryReceiptQuery) (iamv1.LocalCredentialRecoveryInspection, PasswordReplacementMaterial, error) {
+	if transaction.onLocalRecoveryPrepare != nil {
+		transaction.onLocalRecoveryPrepare()
+	}
+	if transaction.localRecoveryPrepared.State != "" {
+		return transaction.localRecoveryPrepared, PasswordReplacementMaterial{}, nil
+	}
+	inspection, err := transaction.InspectLocalCredentialRecovery(ctx, scope, &query)
+	return inspection, transaction.localRecoveryMaterial, err
 }
 
 func (transaction *coreTransaction) RecoverLocalCredentials(_ context.Context, mutation LocalCredentialRecoveryMutation) (iamv1.LocalCredentialRecoveryResult, error) {

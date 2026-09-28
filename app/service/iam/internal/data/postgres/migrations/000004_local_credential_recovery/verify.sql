@@ -1,6 +1,9 @@
 DO $verify_local_recovery$
 DECLARE function_name text; policy_id text;
 BEGIN
+    IF NOT iam.local_credential_recovery_contract_ready() THEN
+        RAISE EXCEPTION 'IAM local recovery password contract is unavailable';
+    END IF;
     IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_roles WHERE rolname='matrix_iam_credential_recovery'
         AND NOT rolcanlogin AND NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole AND NOT rolreplication AND NOT rolbypassrls) THEN
         RAISE EXCEPTION 'IAM local recovery role is unavailable or overprivileged';
@@ -31,7 +34,7 @@ BEGIN
     END IF;
     FOREACH function_name IN ARRAY ARRAY[
         'iam.inspect_local_credential_recovery(jsonb,text,text)',
-        'iam.recover_local_credentials(jsonb,jsonb,text,text,text,jsonb)'] LOOP
+        'iam.recover_local_credentials(jsonb,jsonb,text,text,text,jsonb,text,text)'] LOOP
         IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_proc WHERE oid=to_regprocedure(function_name)
             AND prorettype='jsonb'::regtype AND NOT proretset AND prosecdef AND proowner='matrix_iam_owner'::regrole)
             OR NOT has_function_privilege('matrix_iam_credential_recovery',function_name,'EXECUTE') THEN
@@ -50,7 +53,8 @@ BEGIN
     IF EXISTS(SELECT 1 FROM pg_catalog.pg_proc AS procedure JOIN pg_catalog.pg_namespace AS namespace ON namespace.oid=procedure.pronamespace
         WHERE namespace.nspname='iam' AND has_function_privilege('matrix_iam_credential_recovery',procedure.oid,'EXECUTE')
         AND procedure.oid NOT IN ('iam.inspect_local_credential_recovery(jsonb,text,text)'::regprocedure,
-            'iam.recover_local_credentials(jsonb,jsonb,text,text,text,jsonb)'::regprocedure)) THEN
+            'iam.prepare_local_credential_recovery(jsonb,jsonb,text,text)'::regprocedure,
+            'iam.recover_local_credentials(jsonb,jsonb,text,text,text,jsonb,text,text)'::regprocedure)) THEN
         RAISE EXCEPTION 'IAM local recovery role can invoke unrelated functions';
     END IF;
 END

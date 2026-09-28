@@ -44,20 +44,44 @@ func (service *Authority) RecoverLocalCredentials(ctx context.Context, local iam
 	// Authenticate the private intent first, then reconcile its immutable
 	// completion. Old admitted input must not acquire a new write or fail an
 	// exact historical replay merely because password rules changed later.
-	inspection, err := service.InspectLocalCredentialRecovery(ctx, local, &iamv1.LocalCredentialRecoveryReceiptQuery{
+	query := iamv1.LocalCredentialRecoveryReceiptQuery{
 		APIVersion: iamv1.APIVersion, Kind: "LocalCredentialRecoveryReceiptQuery",
 		CommandID: request.CommandID, InputCommitment: commitment,
-	})
+	}
+	inspection, err := service.InspectLocalCredentialRecovery(ctx, local, &query)
 	if err != nil {
 		return iamv1.LocalCredentialRecoveryResult{}, err
 	}
 	if inspection.State == "COMPLETED" {
-		if inspection.Expected == nil || *inspection.Expected != request.Expected || inspection.Result == nil {
-			return iamv1.LocalCredentialRecoveryResult{}, ErrUnavailable
-		}
-		result := *inspection.Result
-		result.State = "EQUAL_REPLAY"
-		return result, nil
+		return localCredentialRecoveryReplay(inspection, request, commitment)
+	}
+	if err := service.acquirePasswordWork(ctx); err != nil {
+		return iamv1.LocalCredentialRecoveryResult{}, err
+	}
+	defer service.releasePasswordWork()
+	var material PasswordReplacementMaterial
+	err = service.withinLocalCredentialRecoveryTransaction(ctx, func(ctx context.Context, tx Transaction) error {
+		var err error
+		inspection, material, err = tx.PrepareLocalCredentialRecovery(ctx, local.Scope, request.Expected, query)
+		return err
+	})
+	if err != nil {
+		return iamv1.LocalCredentialRecoveryResult{}, err
+	}
+	if iamv1.ValidateLocalCredentialRecoveryInspection(inspection) != nil || inspection.Scope != local.Scope ||
+		inspection.CommandID != request.CommandID || inspection.InputCommitment != commitment {
+		return iamv1.LocalCredentialRecoveryResult{}, ErrUnavailable
+	}
+	// Another caller can complete this exact intent after the first inspection.
+	// Its historical result still precedes current password admission.
+	if inspection.State == "COMPLETED" {
+		return localCredentialRecoveryReplay(inspection, request, commitment)
+	}
+	if inspection.State != "NOT_FOUND" || material.CredentialGeneration != request.Expected.CredentialGeneration {
+		return iamv1.LocalCredentialRecoveryResult{}, ErrUnavailable
+	}
+	if err := service.validatePasswordReplacement(ctx, request.NewPassword, material.PasswordHash, material.PasswordHistory, material.HistoryDigest); err != nil {
+		return iamv1.LocalCredentialRecoveryResult{}, err
 	}
 	passwordHash, err := service.passwords.Hash(request.NewPassword)
 	if err != nil {
@@ -81,7 +105,7 @@ func (service *Authority) RecoverLocalCredentials(ctx context.Context, local iam
 	}
 	mutation := LocalCredentialRecoveryMutation{
 		Scope: request.Scope, Expected: request.Expected, CommandID: request.CommandID,
-		InputCommitment: commitment, PasswordHash: passwordHash,
+		InputCommitment: commitment, PasswordHash: passwordHash, ExpectedPassword: material,
 	}
 	var result iamv1.LocalCredentialRecoveryResult
 	err = service.withinLocalCredentialRecoveryTransaction(ctx, func(ctx context.Context, transaction Transaction) error {
@@ -109,5 +133,20 @@ func (service *Authority) RecoverLocalCredentials(ctx context.Context, local iam
 		result.PrincipalResourceVersion != request.Expected.PrincipalResourceVersion+1 {
 		return iamv1.LocalCredentialRecoveryResult{}, ErrUnavailable
 	}
+	return result, nil
+}
+
+func localCredentialRecoveryReplay(inspection iamv1.LocalCredentialRecoveryInspection, request iamv1.LocalCredentialRecoveryRequest, commitment string) (iamv1.LocalCredentialRecoveryResult, error) {
+	if inspection.Expected == nil || *inspection.Expected != request.Expected || inspection.Result == nil {
+		return iamv1.LocalCredentialRecoveryResult{}, ErrUnavailable
+	}
+	result := *inspection.Result
+	if iamv1.ValidateLocalCredentialRecoveryResult(result) != nil || result.Scope != request.Scope ||
+		result.CommandID != request.CommandID || result.InputCommitment != commitment ||
+		result.PreviousCredentialGeneration != request.Expected.CredentialGeneration ||
+		result.PrincipalResourceVersion != request.Expected.PrincipalResourceVersion+1 {
+		return iamv1.LocalCredentialRecoveryResult{}, ErrUnavailable
+	}
+	result.State = "EQUAL_REPLAY"
 	return result, nil
 }

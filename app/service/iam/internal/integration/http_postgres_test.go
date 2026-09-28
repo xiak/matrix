@@ -11610,6 +11610,7 @@ func proveOwnSessionWriters(t *testing.T, ctx context.Context, handlers []http.H
 
 func proveOwnSessionLocalRecovery(t *testing.T, ctx context.Context, handlers []http.Handler, database *pgx.Conn, local *identityaccess.Authority, capability iamv1.LocalCredentialRecoveryAuthority, bulk bool) {
 	t.Helper()
+	currentPassword := changedAdminPassword
 	for _, selfFirst := range []bool{true, false} {
 		t.Run(fmt.Sprintf("platform_recovery_self-first-%t", selfFirst), func(t *testing.T) {
 			prefix := fmt.Sprintf("own-platform-recovery-%t", selfFirst)
@@ -11618,8 +11619,8 @@ func proveOwnSessionLocalRecovery(t *testing.T, ctx context.Context, handlers []
 				prefix = "bulk-" + prefix
 				selfAction, completionTable = auditv1.ActionIAMOtherSessionsRevoked, "iam.session_other_revocations"
 			}
-			caller := localRecoveryLogin(t, handlers[0], "admin", changedAdminPassword, false)
-			target := localRecoveryLogin(t, handlers[1], "admin", changedAdminPassword, false)
+			caller := localRecoveryLogin(t, handlers[0], "admin", currentPassword, false)
+			target := localRecoveryLogin(t, handlers[1], "admin", currentPassword, false)
 			var directory iamv1.SessionList
 			response := performIAMRequest(handlers[1], http.MethodGet, "/v1/auth/sessions", target, nil)
 			if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &directory) != nil {
@@ -11630,7 +11631,8 @@ func proveOwnSessionLocalRecovery(t *testing.T, ctx context.Context, handlers []
 				path = "/v1/auth/sessions:revoke-others"
 			}
 			body := mustIAMJSON(t, iamv1.RevokeSessionRequest{RequestID: prefix + "-self"})
-			request := localRecoveryRequest(t, ctx, local, capability, prefix+"-recover", "Session-Platform-Recovered-69!")
+			replacement := fmt.Sprintf("Session-Platform-Recovered-%t-69!", selfFirst)
+			request := localRecoveryRequest(t, ctx, local, capability, prefix+"-recover", replacement)
 			prior := readLocalRecoveryState(t, ctx, database, capability.Scope)
 			firstRequest, firstAction, waitingRole := prefix+"-self", selfAction, localRecoveryTestRole
 			if !selfFirst {
@@ -11711,8 +11713,9 @@ func proveOwnSessionLocalRecovery(t *testing.T, ctx context.Context, handlers []
 			}
 			// Prepare the other order only through the original primary's real
 			// forced password change; no credential, binding or session DML.
-			fresh := localRecoveryLogin(t, handlers[0], "admin", "Session-Platform-Recovered-69!", true)
-			localRecoveryChangePassword(t, handlers[0], fresh, "Session-Platform-Recovered-69!", changedAdminPassword)
+			fresh := localRecoveryLogin(t, handlers[0], "admin", replacement, true)
+			currentPassword = fmt.Sprintf("Session-Platform-Continued-%t-70!", selfFirst)
+			localRecoveryChangePassword(t, handlers[0], fresh, replacement, currentPassword)
 			assertLocalRecoveryReplay(t, ctx, local, capability, request, recovered.result)
 		})
 	}
@@ -15774,7 +15777,7 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 						iamv1.SetUserStatusRequest{ResourceVersion: target.ResourceVersion, Status: iamv1.PrincipalDisabled, RequestID: prefix + "-disable"}, http.StatusOK, &target)
 				case "forced-change":
 					call(handler, http.MethodPost, "/v1/users/"+string(target.ID)+":reset-password", root,
-						map[string]any{"resourceVersion": target.ResourceVersion, "initialPassword": initialDeveloperPassword, "requestId": prefix + "-reset"}, http.StatusOK, nil)
+						map[string]any{"resourceVersion": target.ResourceVersion, "initialPassword": "AccessKey-Reset-Password-103!", "requestId": prefix + "-reset"}, http.StatusOK, nil)
 				case "platform-attachment":
 					call(handler, http.MethodPost, "/v1/policy-attachments", root,
 						iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(target.ID)},
@@ -15819,7 +15822,7 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 				switch mutation {
 				case "user-reset":
 					mutationPath = "/v1/users/" + string(target.ID) + ":reset-password"
-					command = map[string]any{"resourceVersion": target.ResourceVersion, "initialPassword": initialDeveloperPassword, "requestId": prefix + "-mutation"}
+					command = map[string]any{"resourceVersion": target.ResourceVersion, "initialPassword": "AccessKey-Reset-Password-103!", "requestId": prefix + "-mutation"}
 				case "key-disable":
 					mutationPath, mutationBearer = keyPath+":set-status", managerBearer
 					command = iamv1.SetAccessKeyStatusRequest{AccessKeyResourceVersion: 1, Status: iamv1.AccessKeyDisabled, RequestID: prefix + "-mutation"}
@@ -15982,7 +15985,7 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 			iamv1.SetAccountStatusRequest{ResourceVersion: account.ResourceVersion, Status: iamv1.AccountActive, RequestID: "signing-account-resume"}, http.StatusOK, &account)
 		otherRoot = localRecoveryLogin(t, handler, "signing-other-root", changedDeveloperPassword, false)
 		call(handler, http.MethodPost, "/v1/users/"+string(target.ID)+":reset-password", otherRoot,
-			map[string]any{"resourceVersion": target.ResourceVersion, "initialPassword": initialDeveloperPassword, "requestId": "signing-other-reset"}, http.StatusOK, &target)
+			map[string]any{"resourceVersion": target.ResourceVersion, "initialPassword": "AccessKey-Reset-Password-103!", "requestId": "signing-other-reset"}, http.StatusOK, &target)
 		otherKey = lookupSigningKey(created.Key.ID, document.InstallationID, "paas", true)
 		if !otherKey.Subject.Principal.MustChangePassword {
 			t.Fatal("forced-change key was hidden before MAC verification")
@@ -16196,13 +16199,13 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 						selected, wantKey = actor, http.StatusUnauthorized
 					}
 					mutationPath = "/v1/users/" + string(selected.ID) + ":reset-password"
-					mutation = map[string]any{"resourceVersion": selected.ResourceVersion, "initialPassword": initialDeveloperPassword, "requestId": prefix + "-mutate"}
+					mutation = map[string]any{"resourceVersion": selected.ResourceVersion, "initialPassword": "AccessKey-Reset-Password-103!", "requestId": prefix + "-mutate"}
 				case "actor-logout":
 					mutationPath, mutationBearer, wantKey = "/v1/auth/logout", bearer, http.StatusUnauthorized
 					mutation = iamv1.LogoutRequest{RequestID: prefix + "-mutate"}
 				case "actor-change-password":
 					mutationPath, mutationBearer, wantKey = "/v1/auth/password", bearer, http.StatusCreated
-					mutation = map[string]any{"currentPassword": changedDeveloperPassword, "newPassword": initialDeveloperPassword,
+					mutation = map[string]any{"currentPassword": changedDeveloperPassword, "newPassword": "AccessKey-Changed-Password-104!",
 						"revokeOtherSessions": false, "requestId": prefix + "-mutate"}
 				case "attachment-revoke", "group-grant-revoke":
 					mutationPath = "/v1/policy-attachments/" + string(sourceGrant.ID) + ":revoke"

@@ -173,6 +173,7 @@ type Transaction interface {
 	SetAccountStatus(context.Context, AccountStatusMutation) (iamv1.Account, error)
 	RecoverRootCredentials(context.Context, RootCredentialRecovery) (iamv1.Account, error)
 	InspectLocalCredentialRecovery(context.Context, iamv1.LocalCredentialRecoveryScope, *iamv1.LocalCredentialRecoveryReceiptQuery) (iamv1.LocalCredentialRecoveryInspection, error)
+	PrepareLocalCredentialRecovery(context.Context, iamv1.LocalCredentialRecoveryScope, iamv1.LocalCredentialRecoveryExpected, iamv1.LocalCredentialRecoveryReceiptQuery) (iamv1.LocalCredentialRecoveryInspection, PasswordReplacementMaterial, error)
 	RecoverLocalCredentials(context.Context, LocalCredentialRecoveryMutation) (iamv1.LocalCredentialRecoveryResult, error)
 	SetAccountAlias(context.Context, AccountAliasMutation) (iamv1.Account, error)
 	UpdateUser(context.Context, UserProfileMutation) (iamv1.User, error)
@@ -469,12 +470,13 @@ type RootCredentialRecovery struct {
 // The local entry authenticates this mutation with installation-private
 // authority, never a USER decision or an existing service credential.
 type LocalCredentialRecoveryMutation struct {
-	Scope           iamv1.LocalCredentialRecoveryScope
-	Expected        iamv1.LocalCredentialRecoveryExpected
-	CommandID       string
-	InputCommitment string
-	PasswordHash    authority.PasswordHash
-	AuditEvent      auditv1.Event
+	Scope            iamv1.LocalCredentialRecoveryScope
+	Expected         iamv1.LocalCredentialRecoveryExpected
+	CommandID        string
+	InputCommitment  string
+	PasswordHash     authority.PasswordHash
+	ExpectedPassword PasswordReplacementMaterial
+	AuditEvent       auditv1.Event
 }
 
 // Private, purpose-authorized preparation. Never an HTTP response or a permit:

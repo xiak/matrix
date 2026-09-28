@@ -2065,12 +2065,7 @@ BEGIN
            AND iam.notification_contract_ready()
            AND iam.authentication_recovery_contract_ready()
            AND to_regprocedure('iam.change_password(text,text,text,text,jsonb)') IS NULL
-           AND (SELECT count(*) FROM pg_catalog.pg_proc AS recovery
-                WHERE recovery.oid IN (
-                    to_regprocedure('iam.inspect_local_credential_recovery(jsonb,text,text)'),
-                    to_regprocedure('iam.recover_local_credentials(jsonb,jsonb,text,text,text,jsonb)'))
-                  AND recovery.prorettype='jsonb'::regtype AND NOT recovery.proretset
-                  AND recovery.prosecdef AND recovery.proowner='matrix_iam_owner'::regrole) = 2
+           AND iam.local_credential_recovery_contract_ready()
            AND EXISTS (SELECT 1 FROM pg_catalog.pg_class AS receipt
                 WHERE receipt.oid=to_regclass('iam.local_credential_recoveries')
                   AND receipt.relrowsecurity AND receipt.relforcerowsecurity
