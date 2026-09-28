@@ -1743,6 +1743,7 @@ const (
 	authorityProcessFull authorityProcessMode = iota
 	authorityProcessBrowser
 	authorityProcessCapacity
+	authorityProcessPasswordCapacity
 )
 
 // An opt-in bounded observation, not a production SLO or an open-loop load
@@ -1753,6 +1754,14 @@ func TestIAMCapacityProcesses(t *testing.T) {
 	}
 	assertIAMCapacityLimits(t)
 	testIndependentAuthorityProcesses(t, authorityProcessCapacity)
+}
+
+func TestIAMPasswordHistoryCapacityProcesses(t *testing.T) {
+	if os.Getenv("MATRIX_IAM_PASSWORD_HISTORY_CAPACITY_POSTGRES_TEST_DSN") == "" {
+		t.Skip("set MATRIX_IAM_PASSWORD_HISTORY_CAPACITY_POSTGRES_TEST_DSN to a separate disposable PG18 database")
+	}
+	assertIAMCapacityLimits(t)
+	testIndependentAuthorityProcesses(t, authorityProcessPasswordCapacity)
 }
 
 // This opt-in fixture is for observed browser acceptance, not an unattended
@@ -1768,6 +1777,8 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	variable, prefix := authorityProcessDSN, "matrix_authority_process_"
 	if mode == authorityProcessCapacity {
 		variable, prefix = "MATRIX_IAM_CAPACITY_POSTGRES_TEST_DSN", "matrix_authority_process_capacity_"
+	} else if mode == authorityProcessPasswordCapacity {
+		variable, prefix = "MATRIX_IAM_PASSWORD_HISTORY_CAPACITY_POSTGRES_TEST_DSN", "matrix_authority_process_password_capacity_"
 	}
 	dsn := os.Getenv(variable)
 	if dsn == "" {
@@ -2111,6 +2122,10 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	assertRuntimeProcessLogins(t, ctx, admin, replicaLogin)
 	if mode == authorityProcessCapacity {
 		sensitive = append(sensitive, measureIAMCapacity(t, ctx, admin, iamEndpoint, replicaEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential)...)
+		return
+	}
+	if mode == authorityProcessPasswordCapacity {
+		sensitive = append(sensitive, measureIAMPasswordHistoryCapacity(t, ctx, admin, iamEndpoint, replicaEndpoint, auditEndpoint, adminLogin.Credential)...)
 		return
 	}
 	platformDecisions = append(platformDecisions,
@@ -3199,6 +3214,7 @@ type iamCapacityCall struct {
 	status   int
 	verify   func([]byte) (string, bool) // optional newly issued test secret, validity
 	interval time.Duration               // independent lane's planned start interval; zero is unpaced
+	confirm  bool                        // next mutation requires this response to be verified
 }
 
 type iamCapacitySchedule uint8
@@ -3216,6 +3232,307 @@ type iamCapacityResult struct {
 	completed time.Time
 	scheduled time.Time // absent for unpaced closed-loop requests
 	failed    bool
+	confirm   chan bool // optional bounded acknowledgment; never a retry or new authority
+}
+
+func makeIAMCapacityCall(t *testing.T, ctx context.Context, lane, method, server, path, bearer string,
+	body any, status int, verify func([]byte) (string, bool)) iamCapacityCall {
+	t.Helper()
+	var encoded []byte
+	if body != nil {
+		var err error
+		encoded, err = json.Marshal(body)
+		if err != nil {
+			t.Fatal("capacity request encoding failed")
+		}
+	}
+	request, err := http.NewRequestWithContext(ctx, method, server+path, bytes.NewReader(encoded))
+	if err != nil {
+		t.Fatal("capacity request construction failed")
+	}
+	if body != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	if bearer != "" {
+		request.Header.Set("Authorization", "Bearer "+bearer)
+	}
+	return iamCapacityCall{lane: lane, request: request, status: status, verify: verify}
+}
+
+func measureIAMPasswordHistoryCapacity(t *testing.T, ctx context.Context, database *pgx.Conn, endpoint, replica, auditEndpoint, platform string) []string {
+	t.Helper()
+	const initial, ownerPassword, peerPassword = "Capacity-History-Initial-63!", "Capacity-History-Owner-74!", "Capacity-History-Peer-85!"
+	passwordAt := func(index int) string { return fmt.Sprintf("Capacity-History-Actual-%03d-96!", index) }
+	type accountFixture struct {
+		id       iamv1.AccountID
+		rootName string
+		root     loginResult
+		user     iamv1.User
+		login    loginResult
+	}
+	secrets := []string{initial, ownerPassword, peerPassword}
+	accounts := make([]accountFixture, 2)
+	for index := range accounts {
+		account := &accounts[index]
+		account.id = iamv1.AccountID(fmt.Sprintf("account-history-capacity-%d", index))
+		account.rootName = fmt.Sprintf("history.capacity.root.%d", index)
+		response := performJSON(t, http.MethodPost, endpoint+"/v1/accounts", platform, map[string]any{
+			"id": account.id, "displayName": "Password history capacity", "rootLoginName": account.rootName,
+			"rootDisplayName": "Capacity owner", "initialPassword": initial, "requestId": "history-capacity-open-" + string(account.id)})
+		var created iamv1.Account
+		if response.Status != http.StatusCreated || iamv1.DecodeRequest(bytes.NewReader(response.Body), &created) != nil || created.ID != account.id {
+			t.Fatal("history capacity requires real independent accounts")
+		}
+		account.root = loginIAM(t, endpoint, account.rootName, initial, "history-capacity-owner-login")
+		changePasswordIAM(t, endpoint, account.root.Credential, initial, ownerPassword, "history-capacity-owner-password")
+		account.user = createIAMUser(t, endpoint, account.root.Credential, "capacity.member", "Measured ordinary user", initial, "history-capacity-member")
+		account.login = loginIAM(t, endpoint, "capacity.member@"+string(account.id), initial, "history-capacity-member-login")
+		password := peerPassword
+		if index == 0 {
+			password = passwordAt(0)
+		}
+		changePasswordIAM(t, endpoint, account.login.Credential, initial, password, "history-capacity-member-password")
+		secrets = append(secrets, account.root.Credential, account.login.Credential, password)
+	}
+	actor, peer := &accounts[0], &accounts[1]
+	for index := 1; index < 24; index++ {
+		password := passwordAt(index)
+		secrets = append(secrets, password)
+		changePasswordIAM(t, endpoint, actor.login.Credential, passwordAt(index-1), password, fmt.Sprintf("history-capacity-build-%d", index))
+	}
+	secrets = append(secrets, configureIAMCapacityHistory(t, ctx, database, endpoint, replica, actor.id, actor.root.Credential)...)
+	// Changing settings ends old qualification. Obtain fresh sessions through
+	// normal login, never rewrite their stored settings version for the load.
+	actor.root = loginIAM(t, endpoint, actor.rootName, ownerPassword, "history-capacity-owner-current")
+	actor.login = loginIAM(t, endpoint, "capacity.member@"+string(actor.id), passwordAt(23), "history-capacity-current")
+	secrets = append(secrets, actor.root.Credential, actor.login.Credential)
+	for _, server := range []string{endpoint, replica} {
+		response := performJSON(t, http.MethodGet, server+"/v1/auth/password-requirements", actor.login.Credential, nil)
+		var requirements iamv1.PasswordRequirements
+		if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &requirements) != nil ||
+			iamv1.ValidatePasswordRequirements(requirements) != nil || requirements.Source != "ACCOUNT" || requirements.SettingsVersion != 2 || requirements.Password.HistoryCount != 24 {
+			t.Fatal("history capacity does not exercise ordinary-user full history rules")
+		}
+	}
+	var generation int64
+	var fullHistory bool
+	if err := database.QueryRow(ctx, `SELECT credential_version,jsonb_array_length(password_history)=24
+		AND iam.valid_password_history(password_history,password_history_digest,credential_version,password_changed_at)
+		FROM iam.user_credentials WHERE tenant_id=$1 AND principal_id=$2`, actor.id, actor.user.ID).Scan(&generation, &fullHistory); err != nil || !fullHistory {
+		t.Fatal("history capacity setup did not create 24 actual verifiers")
+	}
+	// A single full-history control distinguishes the serial verifier cost from
+	// cross-account interference. Its original five-second deadline is unchanged.
+	secrets = append(secrets, passwordAt(24))
+	control := makeIAMCapacityCall(t, ctx, "full-history-control", http.MethodPost, endpoint, "/v1/auth/password", actor.login.Credential,
+		map[string]any{"currentPassword": passwordAt(23), "newPassword": passwordAt(24), "requestId": "history-capacity-single", "revokeOtherSessions": true},
+		http.StatusOK, func(body []byte) (string, bool) {
+			var response iamv1.ChangePasswordResponse
+			return "", iamv1.DecodeRequest(bytes.NewReader(body), &response) == nil && iamv1.ValidateChangePasswordResponse(response) == nil
+		})
+	controlTransport := http.DefaultTransport.(*http.Transport).Clone()
+	controlTransport.Proxy = nil
+	controlTransport.MaxConnsPerHost = 1
+	defer controlTransport.CloseIdleConnections()
+	controlClient := &http.Client{Transport: controlTransport, Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	controlResults, err := dispatchIAMCapacityCalls(ctx, controlClient, time.Now(), 1, iamCapacityIndependent, []iamCapacityCall{control})
+	if err != nil {
+		t.Fatal("history control schedule failed")
+	}
+	controlResult, received := <-controlResults
+	_, valid := control.verify(controlResult.body)
+	clear(controlResult.body)
+	t.Logf("IAM_HISTORY_CONTROL elapsedMS=%.3f status=%d transportFailure=%t valid=%t", float64(controlResult.completed.Sub(controlResult.started))/float64(time.Millisecond), controlResult.status, controlResult.failed, valid)
+	if !received || controlResult.failed || controlResult.status != http.StatusOK || !valid {
+		t.Fatal("single full-history password change exceeded or failed its unchanged HTTP budget; dependent workload not issued")
+	}
+	generation++
+	old := loginIAM(t, replica, "capacity.member@"+string(actor.id), passwordAt(24), "history-capacity-other-session")
+	secrets = append(secrets, old.Credential)
+	var issued []loginResult
+	seenSessions, seenCredentials := map[iamv1.SessionID]bool{}, map[string]bool{}
+	loginCall := func(stage string, index int) iamCapacityCall {
+		return makeIAMCapacityCall(t, ctx, "peer-login", http.MethodPost, endpoint, "/v1/auth/login", "", map[string]string{
+			"loginName": "capacity.member@" + string(peer.id), "password": peerPassword, "requestId": fmt.Sprintf("history-capacity-%s-peer-%d", stage, index)},
+			http.StatusOK, func(body []byte) (string, bool) {
+				var response iamv1.LoginResponse
+				if iamv1.DecodeRequest(bytes.NewReader(body), &response) != nil || iamv1.ValidateLoginResponse(response) != nil || response.Outcome != iamv1.LoginAuthenticated ||
+					response.MustChangePassword || response.Session.AccountID != peer.id || response.Session.PrincipalID != peer.user.ID || seenSessions[response.Session.ID] {
+					return "", false
+				}
+				material := response.Credential.CopyBytes()
+				defer clear(material)
+				credential := string(material)
+				if seenCredentials[credential] {
+					return credential, false
+				}
+				seenSessions[response.Session.ID], seenCredentials[credential] = true, true
+				issued = append(issued, loginResult{Session: response.Session, Credential: credential})
+				return credential, true
+			})
+	}
+	for _, pressured := range []bool{false, true} {
+		stage, concurrency := "history-login-control", 1
+		if pressured {
+			stage, concurrency = "history-change-interference", 2
+		}
+		var calls []iamCapacityCall
+		for index := range 100 {
+			if pressured {
+				current, next := passwordAt(24+index), passwordAt(25+index)
+				secrets = append(secrets, next)
+				change := makeIAMCapacityCall(t, ctx, "full-history-change", http.MethodPost, endpoint, "/v1/auth/password", actor.login.Credential,
+					map[string]any{"currentPassword": current, "newPassword": next, "requestId": fmt.Sprintf("history-capacity-change-%d", index), "revokeOtherSessions": true},
+					http.StatusOK, func(body []byte) (string, bool) {
+						var response iamv1.ChangePasswordResponse
+						return "", iamv1.DecodeRequest(bytes.NewReader(body), &response) == nil && iamv1.ValidateChangePasswordResponse(response) == nil && !response.BootstrapFileRetirable
+					})
+				// A lost/rejected result does not authorize the next precomputed
+				// password. Stop only this dependent lane and report it incomplete.
+				change.confirm = true
+				calls = append(calls, change)
+			}
+			calls = append(calls, loginCall(stage, index))
+		}
+		waitAllIAMOutboxDelivered(t, ctx, database)
+		secrets = append(secrets, runIAMCapacityStage(t, ctx, database, stage, concurrency, iamCapacityIndependent, calls)...)
+	}
+	if len(issued) != 200 {
+		t.Fatal("history capacity omitted a peer login outcome")
+	}
+	for _, session := range issued {
+		response := performJSON(t, http.MethodGet, replica+"/v1/auth/me", session.Credential, nil)
+		var identity iamv1.CurrentIdentity
+		if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &identity) != nil ||
+			iamv1.ValidateCurrentIdentity(identity) != nil || identity.Account.ID != peer.id || identity.User.ID != peer.user.ID || identity.User.MustChangePassword {
+			t.Fatal("history workload lost a peer session on the other IAM replica")
+		}
+	}
+	var exact bool
+	if err := database.QueryRow(ctx, `SELECT c.credential_version=$3+100 AND jsonb_array_length(c.password_history)=24
+		AND iam.valid_password_history(c.password_history,c.password_history_digest,c.credential_version,c.password_changed_at)
+		AND (SELECT count(*)=24 AND bool_and((h.value->>'generation')::bigint=c.credential_version-h.ordinality)
+		  FROM jsonb_array_elements(c.password_history) WITH ORDINALITY h(value,ordinality))
+		AND (SELECT count(*)=1 FROM iam.sessions s WHERE s.tenant_id=$1 AND s.principal_id=$2 AND s.status='ACTIVE')
+		AND EXISTS(SELECT 1 FROM iam.sessions s WHERE s.tenant_id=$1 AND s.id=$4 AND s.status='ACTIVE' AND s.credential_version=c.credential_version)
+		AND EXISTS(SELECT 1 FROM iam.sessions s WHERE s.tenant_id=$1 AND s.id=$5 AND s.status='REVOKED')
+		AND (SELECT count(*)=100 AND count(DISTINCT event_document->>'requestId')=100
+		  AND bool_and(event_document->'actor'->>'id'=$2 AND event_document->'target'->>'id'=$2 AND event_document->>'result'=$6)
+		  FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.user.password-changed'
+		  AND event_document->>'requestId' LIKE 'history-capacity-change-%')
+		FROM iam.user_credentials c WHERE tenant_id=$1 AND principal_id=$2`, actor.id, actor.user.ID, generation, actor.login.Session.ID, old.Session.ID, auditv1.ResultSucceeded).Scan(&exact); err != nil || !exact {
+		t.Fatal("measured full-history changes lost exact credential/session/history/fact effects")
+	}
+	response := performJSON(t, http.MethodGet, replica+"/v1/auth/me", old.Credential, nil)
+	if response.Status != http.StatusUnauthorized {
+		t.Fatal("full-history change preserved an explicitly revoked old session")
+	}
+	response = performJSON(t, http.MethodGet, replica+"/v1/auth/me", actor.login.Credential, nil)
+	var current iamv1.CurrentIdentity
+	if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &current) != nil || current.User.ID != actor.user.ID || current.Account.ID != actor.id {
+		t.Fatal("full-history change lost the actual retained current session")
+	}
+	waitAllIAMOutboxDelivered(t, ctx, database)
+	for _, account := range accounts {
+		verification := verifyAudit(t, auditEndpoint, account.root.Credential)
+		if verification.State != auditv1.VerificationVerified || !verification.Complete || verification.TenantID != auditv1.TenantID(account.id) {
+			t.Fatal("history capacity workload lost its actual audit chain")
+		}
+	}
+	waitAllIAMOutboxDelivered(t, ctx, database)
+	if err := database.QueryRow(ctx, `SELECT count(*)>0 AND count(record.event_id)=count(*)
+		AND bool_and(record.event_document=outbox.event_document)
+		FROM iam.audit_outbox outbox LEFT JOIN audit.records record ON record.source='IAM' AND record.event_id=outbox.event_id`).Scan(&exact); err != nil || !exact {
+		t.Fatal("history capacity workload lost a committed final audit fact")
+	}
+	assertRuntimeProcessLogins(t, ctx, database, iamAPILogin, "matrix_authority_process_iam_replica", iamWorkerLogin, auditRuntimeLogin, paasAPILogin, paasWorkerLogin)
+	assertAuthorityPlaintextAbsent(t, ctx, database, secrets...)
+	return secrets
+}
+
+// Only authenticated HTTP establishes the rule. Read-only access to the
+// synthetic envelope/clock is test observation, not a settings or MFA bypass.
+func configureIAMCapacityHistory(t *testing.T, ctx context.Context, database *pgx.Conn, endpoint, replica string, account iamv1.AccountID, owner string) []string {
+	t.Helper()
+	const initial, password = "Capacity-Settings-Initial-73!", "Capacity-Settings-Current-81!"
+	secrets := []string{initial, password}
+	secret := func(value iamv1.Secret) string {
+		material := value.CopyBytes()
+		defer clear(material)
+		secrets = append(secrets, string(material))
+		return string(material)
+	}
+	call := func(method, path, bearer string, body, result any, status int) {
+		t.Helper()
+		response := performJSON(t, method, endpoint+path, bearer, body)
+		if response.Status != status || (result != nil && iamv1.DecodeRequest(bytes.NewReader(response.Body), result) != nil) {
+			t.Fatalf("history settings setup %s %s status=%d want=%d", method, path, response.Status, status)
+		}
+	}
+	user := createIAMUser(t, endpoint, owner, "capacity.settings", "Capacity settings operator", initial, "history-capacity-operator")
+	var policy iamv1.PolicyDetail
+	call(http.MethodPost, "/v1/policies", owner, iamv1.CreatePolicyRequest{DisplayName: "Capacity settings only", RequestID: "history-capacity-policy",
+		Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+			Statements: []iamv1.PolicyStatement{{SID: "settings", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMSecuritySettingsUpdate},
+				Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceAccount, Match: iamv1.PolicyResourceExact, ID: string(account)}}}}}}, &policy, http.StatusCreated)
+	createIAMPolicyAttachment(t, endpoint, owner, user.ID, policy.Policy.ID, "history-capacity-settings-grant")
+	realm := "capacity.settings@" + string(account)
+	first := loginIAM(t, endpoint, realm, initial, "history-capacity-operator-login")
+	secrets = append(secrets, first.Credential)
+	changePasswordIAM(t, endpoint, first.Credential, initial, password, "history-capacity-operator-password")
+	var contact iamv1.NotificationContactVerification
+	call(http.MethodPost, "/v1/auth/notification-contact/verifications", first.Credential,
+		map[string]string{"email": "capacity@matrix.test", "password": password, "requestId": "history-capacity-contact"}, &contact, http.StatusOK)
+	contactCode := readProcessContactCode(t, ctx, database, contact)
+	secrets = append(secrets, contactCode)
+	call(http.MethodPost, "/v1/auth/notification-contact/verifications/"+contact.ID+":confirm", first.Credential,
+		map[string]string{"requestId": "history-capacity-contact-confirm", "code": contactCode}, nil, http.StatusOK)
+	var enrollment iamv1.StartTOTPEnrollmentResponse
+	call(http.MethodPost, "/v1/auth/totp/enrollments", first.Credential,
+		map[string]any{"requestId": "history-capacity-enroll", "password": password, "expectedFactorRevision": 1}, &enrollment, http.StatusOK)
+	if enrollment.Provisioning == nil {
+		t.Fatal("capacity settings operator did not receive a real factor")
+	}
+	seed := secret(enrollment.Provisioning.Seed)
+	secret(enrollment.Provisioning.URI)
+	secrets = append(secrets, url.QueryEscape(seed))
+	code, previous := processTOTPCode(t, ctx, database, seed, -1, true)
+	secrets = append(secrets, code)
+	var bound iamv1.ConfirmTOTPEnrollmentResponse
+	call(http.MethodPost, "/v1/auth/totp/enrollments/"+enrollment.Enrollment.ID+":confirm", first.Credential,
+		map[string]string{"requestId": "history-capacity-bind", "code": code}, &bound, http.StatusOK)
+	for _, recovery := range bound.RecoveryCodes {
+		secret(recovery)
+	}
+	var challenge, authenticated iamv1.LoginResponse
+	call(http.MethodPost, "/v1/auth/login", "", map[string]string{"loginName": realm, "password": password, "requestId": "history-capacity-qualified"}, &challenge, http.StatusOK)
+	if challenge.Outcome != iamv1.LoginChallengeRequired || challenge.Challenge == nil || challenge.Challenge.NextStep != "TOTP" {
+		t.Fatal("capacity operator bypassed real MFA login")
+	}
+	code, previous = processTOTPCode(t, ctx, database, seed, previous, false)
+	secrets = append(secrets, code)
+	call(http.MethodPost, "/v1/auth/challenges/"+challenge.Challenge.ID+":verify", "",
+		map[string]string{"requestId": "history-capacity-qualified-verify", "challengeCredential": secret(challenge.ChallengeCredential), "code": code}, &authenticated, http.StatusOK)
+	if authenticated.Outcome != iamv1.LoginAuthenticated {
+		t.Fatal("capacity settings operator lacks a real authenticated session")
+	}
+	caller := secret(authenticated.Credential)
+	rules := iamv1.AccountPasswordSettings{MinimumLength: 15, HistoryCount: 24}
+	var proof iamv1.StepUp
+	call(http.MethodPost, "/v1/auth/step-up", caller, iamv1.StartStepUpRequest{RequestID: "history-capacity-settings", Operation: iamv1.StepUpUpdateSecuritySettings, ExpectedFactorRevision: 2,
+		SecuritySettings: &iamv1.SecuritySettingsUpdateIntent{ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{}, Password: &rules}}, &proof, http.StatusOK)
+	code, _ = processTOTPCode(t, ctx, database, seed, previous, false)
+	secrets = append(secrets, code)
+	call(http.MethodPost, "/v1/auth/step-up/"+proof.ID+":verify", caller,
+		map[string]string{"requestId": "history-capacity-proof", "password": password, "code": code}, &proof, http.StatusOK)
+	response := performJSON(t, http.MethodPut, replica+"/v1/account/security-settings", caller, iamv1.UpdateAccountSecuritySettingsRequest{
+		RequestID: "history-capacity-settings", StepUpID: proof.ID, ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{}, Password: rules})
+	var applied iamv1.UpdateAccountSecuritySettingsResponse
+	if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &applied) != nil || applied.Outcome != "APPLIED" ||
+		applied.Change.Settings.Password == nil || *applied.Change.Settings.Password != rules || applied.Change.Settings.MFA.RequiredForUsers || applied.Change.Settings.ResourceVersion != 2 {
+		t.Fatal("capacity history rule was not changed by its real operation-bound proof")
+	}
+	return secrets
 }
 
 func measureIAMCapacity(t *testing.T, ctx context.Context, database *pgx.Conn, endpoint, replica, auditEndpoint, paasEndpoint, platformBearer string) []string {
@@ -3362,28 +3679,6 @@ func measureIAMCapacity(t *testing.T, ctx context.Context, database *pgx.Conn, e
 		getPaaSApplication(t, paasEndpoint, account.groupLogin.Credential, "capacity-beyond", http.StatusForbidden)
 	}
 	t.Log("IAM capacity workload: two measured accounts, four ordinary users, sixteen inherited groups/policies, two upper bounds and six persisted applications; management load adds one hundred empty groups")
-	makeCall := func(lane, method, server, path, bearer string, body any, status int, verify func([]byte) (string, bool)) iamCapacityCall {
-		t.Helper()
-		var encoded []byte
-		if body != nil {
-			var err error
-			encoded, err = json.Marshal(body)
-			if err != nil {
-				t.Fatal("capacity request encoding failed")
-			}
-		}
-		request, err := http.NewRequestWithContext(ctx, method, server+path, bytes.NewReader(encoded))
-		if err != nil {
-			t.Fatal("capacity request construction failed")
-		}
-		if body != nil {
-			request.Header.Set("Content-Type", "application/json")
-		}
-		if bearer != "" {
-			request.Header.Set("Authorization", "Bearer "+bearer)
-		}
-		return iamCapacityCall{lane: lane, request: request, status: status, verify: verify}
-	}
 	loginCall := func(account accountFixture, server, id string, incorrect bool) iamCapacityCall {
 		password, status, lane := changed, http.StatusOK, "login-"+string(account.id)
 		if incorrect {
@@ -3391,7 +3686,7 @@ func measureIAMCapacity(t *testing.T, ctx context.Context, database *pgx.Conn, e
 		} else {
 			plannedLogins++
 		}
-		return makeCall(lane, http.MethodPost, server, "/v1/auth/login", "", map[string]string{
+		return makeIAMCapacityCall(t, ctx, lane, http.MethodPost, server, "/v1/auth/login", "", map[string]string{
 			"loginName": "capacity.simple@" + string(account.id), "password": password, "requestId": id,
 		}, status, func(body []byte) (string, bool) {
 			if incorrect {
@@ -3429,7 +3724,7 @@ func measureIAMCapacity(t *testing.T, ctx context.Context, database *pgx.Conn, e
 		if err != nil {
 			t.Fatal("capacity authorization request is outside the product declaration")
 		}
-		call := makeCall(kind+"-"+string(account.id), http.MethodPost, server, "/v1/authorize", paasServiceCredential, request, http.StatusOK, func(body []byte) (string, bool) {
+		call := makeIAMCapacityCall(t, ctx, kind+"-"+string(account.id), http.MethodPost, server, "/v1/authorize", paasServiceCredential, request, http.StatusOK, func(body []byte) (string, bool) {
 			var decision iamv1.AuthorizationDecision
 			valid := json.Unmarshal(body, &decision) == nil && capacityDecisionMatches(decision, request, account.id, user.ID, allowed)
 			if valid {
@@ -3469,12 +3764,12 @@ func measureIAMCapacity(t *testing.T, ctx context.Context, database *pgx.Conn, e
 			id := fmt.Sprintf("capacity-%s-%d", kind, index)
 			switch {
 			case kind == "business-read":
-				calls = append(calls, makeCall(kind+"-"+string(account.id), http.MethodGet, paasEndpoint, "/v1/applications/capacity-selected", account.simpleLogin.Credential, nil, http.StatusOK, func(body []byte) (string, bool) {
+				calls = append(calls, makeIAMCapacityCall(t, ctx, kind+"-"+string(account.id), http.MethodGet, paasEndpoint, "/v1/applications/capacity-selected", account.simpleLogin.Credential, nil, http.StatusOK, func(body []byte) (string, bool) {
 					var application paasv1.Application
 					return "", json.Unmarshal(body, &application) == nil && paasv1.ValidateApplication(application) == nil && application.Metadata.ID == "capacity-selected" && application.Metadata.Scope.TenantID == paasv1.TenantID(account.id)
 				}))
 			case kind == "management-mix" && index%2 == 0:
-				calls = append(calls, makeCall("management-"+string(account.id), http.MethodPost, server, "/v1/groups", account.root, iamv1.CreateGroupRequest{Name: fmt.Sprintf("Capacity new group %d", index), RequestID: id}, http.StatusCreated, func(body []byte) (string, bool) {
+				calls = append(calls, makeIAMCapacityCall(t, ctx, "management-"+string(account.id), http.MethodPost, server, "/v1/groups", account.root, iamv1.CreateGroupRequest{Name: fmt.Sprintf("Capacity new group %d", index), RequestID: id}, http.StatusCreated, func(body []byte) (string, bool) {
 					var group iamv1.Group
 					return "", json.Unmarshal(body, &group) == nil && iamv1.ValidateGroup(group) == nil && group.AccountID == account.id && group.Name == fmt.Sprintf("Capacity new group %d", index)
 				}))
@@ -3714,7 +4009,7 @@ func dispatchIAMCapacityCalls(ctx context.Context, client *http.Client, started 
 	}
 	lanes := make(map[string][]int)
 	for index, call := range calls {
-		if call.request == nil || call.lane == "" || call.interval < 0 || call.interval > 100*time.Millisecond || (schedule == iamCapacityPaired && call.interval != 0) {
+		if call.request == nil || call.lane == "" || call.interval < 0 || call.interval > 100*time.Millisecond || (schedule == iamCapacityPaired && (call.interval != 0 || call.confirm)) {
 			return nil, errors.New("invalid capacity request schedule")
 		}
 		indexes := lanes[call.lane]
@@ -3743,6 +4038,9 @@ func dispatchIAMCapacityCalls(ctx context.Context, client *http.Client, started 
 			return false
 		}
 		result := iamCapacityResult{index: index, scheduled: scheduled, started: time.Now()}
+		if calls[index].confirm {
+			result.confirm = make(chan bool, 1)
+		}
 		response, err := client.Do(calls[index].request.Clone(ctx))
 		if err != nil {
 			result.failed = true
@@ -3755,6 +4053,14 @@ func dispatchIAMCapacityCalls(ctx context.Context, client *http.Client, started 
 		result.completed = time.Now()
 		select {
 		case results <- result:
+			if result.confirm != nil {
+				select {
+				case accepted := <-result.confirm:
+					return accepted
+				case <-ctx.Done():
+					return false
+				}
+			}
 			return true
 		case <-ctx.Done():
 			clear(result.body)
@@ -3792,6 +4098,98 @@ func dispatchIAMCapacityCalls(ctx context.Context, client *http.Client, started 
 }
 
 func TestIAMCapacityScheduling(t *testing.T) {
+	t.Run("dependent-mutation", func(t *testing.T) {
+		for _, outcome := range []string{"accepted", "rejected", "malformed", "unknown", "cancelled"} {
+			t.Run(outcome, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				var nextInvoked atomic.Int32
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.URL.Path == "/first" {
+						switch outcome {
+						case "rejected":
+							w.WriteHeader(http.StatusConflict)
+						case "malformed":
+							w.WriteHeader(http.StatusOK)
+						case "unknown":
+							connection, _, err := w.(http.Hijacker).Hijack()
+							if err != nil {
+								t.Error("test could not interrupt mutation response")
+								return
+							}
+							_ = connection.Close()
+						default:
+							w.WriteHeader(http.StatusOK)
+							_, _ = io.WriteString(w, "accepted")
+						}
+						return
+					}
+					if r.URL.Path == "/next" {
+						nextInvoked.Add(1)
+					}
+					w.WriteHeader(http.StatusNoContent)
+				}))
+				defer server.Close()
+				var calls []iamCapacityCall
+				for index, path := range []string{"first", "peer", "next", "peer"} {
+					request, err := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+"/"+path, nil)
+					if err != nil {
+						t.Fatal(err)
+					}
+					lane := "peer"
+					if index%2 == 0 {
+						lane = "mutation"
+					}
+					calls = append(calls, iamCapacityCall{lane: lane, request: request, confirm: index == 0})
+				}
+				results, err := dispatchIAMCapacityCalls(ctx, server.Client(), time.Now(), 2, iamCapacityIndependent, calls)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var first iamCapacityResult
+				var seen [4]bool
+				for !seen[0] || !seen[1] || !seen[3] {
+					select {
+					case result, ok := <-results:
+						if !ok || result.index == 2 || seen[result.index] {
+							t.Fatal("dependent work advanced before confirmation or lost its independent peer")
+						}
+						seen[result.index] = true
+						if result.index == 0 {
+							first = result
+						} else if result.failed || result.status != http.StatusNoContent {
+							t.Fatal("unrelated peer failed while mutation awaited confirmation")
+						}
+					case <-ctx.Done():
+						t.Fatal("dependent schedule or peer failed to make progress")
+					}
+				}
+				if nextInvoked.Load() != 0 || first.confirm == nil {
+					t.Fatal("next mutation was issued without a verified predecessor")
+				}
+				accepted := !first.failed && first.status == http.StatusOK && string(first.body) == "accepted"
+				clear(first.body)
+				if outcome == "cancelled" {
+					cancel()
+				} else {
+					first.confirm <- accepted
+				}
+				for result := range results {
+					if outcome != "accepted" || result.index != 2 || seen[2] || result.failed || result.status != http.StatusNoContent {
+						t.Fatal("failed or unknown mutation permitted dependent work")
+					}
+					seen[2] = true
+				}
+				var expectedInvocations int32
+				if outcome == "accepted" {
+					expectedInvocations = 1
+				}
+				if seen[2] != (outcome == "accepted") || nextInvoked.Load() != expectedInvocations {
+					t.Fatal("dependent schedule did not preserve the exact confirmed outcome")
+				}
+			})
+		}
+	})
 	for _, schedule := range []iamCapacitySchedule{iamCapacityPaired, iamCapacityIndependent} {
 		t.Run(fmt.Sprint(schedule), func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -3947,6 +4345,49 @@ func runIAMCapacityStage(t *testing.T, ctx context.Context, database *pgx.Conn, 
 	defer transport.CloseIdleConnections()
 	client := &http.Client{Transport: transport, Timeout: 5 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	lanes := make(map[string]*laneResult)
+	planned := make(map[string]int)
+	for _, call := range calls {
+		planned[call.lane]++
+	}
+	accounted := false
+	defer func() {
+		if accounted {
+			return
+		}
+		// A deadline must not erase observations that already arrived. Missing
+		// responses are UNKNOWN, not proof that a request did not execute or
+		// commit. Partial percentiles describe observed responses only.
+		names := make([]string, 0, len(planned))
+		for name := range planned {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, laneName := range names {
+			observation := map[string]any{
+				"stage": name, "lane": laneName, "completion": "INCOMPLETE",
+				"plannedSamples": planned[laneName], "observedSamples": 0,
+				"unobservedOutcomes": planned[laneName], "failures": 0,
+				"statusCounts": map[int]int{}, "errorCounts": map[string]int{},
+				"observedP50MS": nil, "observedP95MS": nil, "observedP99MS": nil, "observedMaxMS": nil,
+			}
+			if lane := lanes[laneName]; lane != nil {
+				observation["observedSamples"] = len(lane.latencies)
+				observation["unobservedOutcomes"] = planned[laneName] - len(lane.latencies)
+				observation["failures"], observation["statusCounts"], observation["errorCounts"] = lane.failures, lane.statuses, lane.errors
+				if len(lane.latencies) != 0 {
+					for metric, percentile := range map[string]int{"observedP50MS": 50, "observedP95MS": 95, "observedP99MS": 99, "observedMaxMS": 100} {
+						observation[metric] = float64(capacityPercentile(lane.latencies, percentile)) / float64(time.Millisecond)
+					}
+				}
+			}
+			encoded, err := json.Marshal(observation)
+			if err != nil {
+				t.Log("incomplete capacity observation encoding failed")
+				continue
+			}
+			t.Logf("IAM_CAPACITY_INCOMPLETE %s", encoded)
+		}
+	}()
 	var secrets []string
 	var samples, peakConnections, peakActive, peakLockWaiting, peakOutbox int
 	sample := func() {
@@ -4003,7 +4444,8 @@ func runIAMCapacityStage(t *testing.T, ctx context.Context, database *pgx.Conn, 
 			if secret != "" {
 				secrets = append(secrets, secret)
 			}
-			if result.failed || result.status != call.status || !valid {
+			accepted := !result.failed && result.status == call.status && valid
+			if !accepted {
 				lane.failures++
 				reason := "response-contract"
 				if result.failed {
@@ -4014,12 +4456,16 @@ func runIAMCapacityStage(t *testing.T, ctx context.Context, database *pgx.Conn, 
 				lane.errors[reason]++
 			}
 			clear(result.body)
+			if result.confirm != nil {
+				result.confirm <- accepted
+			}
 		case <-ticker.C:
 			sample()
 		case <-ctx.Done():
 			t.Fatal("capacity workload exceeded the original process-fixture deadline")
 		}
 	}
+	accounted = true
 	elapsed := time.Since(started)
 	sample()
 	cpuEnd := capacityCPU(t)
