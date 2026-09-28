@@ -2489,6 +2489,26 @@ describe("CAM-style access workspace", () => {
     expect(screen.queryByRole("button", { name: /保存密码规则/ })).toBeNull();
     expect((await extension.read("preview")).settings).toEqual(before.settings);
   }, 20000);
+  it("keeps unknown password age distinct from expiry and never mints a preview session", async () => {
+    const { user, extension } = await open("settings");
+    const before = await extension.read("preview");
+    expect(screen.getByRole("heading", { name: "密码年龄与登录路径 · 场景模拟" })).toBeTruthy();
+    expect(screen.getByText("未知；没有可证明的最近改密时间")).toBeTruthy();
+    expect(screen.getByText(/年龄未知不等于已过期.*前端不能自行切换仪式/)).toBeTruthy();
+    expect(screen.getByRole("list", { name: "受限改密路径" }).children).toHaveLength(4);
+    await select(user, "选择模拟的服务端证据", "未启用到期 · 年龄未知");
+    expect(screen.getByText(/年龄未知本身不锁死正常登录.*不能写成刚改密/)).toBeTruthy();
+    expect(screen.queryByRole("list", { name: "受限改密路径" })).toBeNull();
+    await select(user, "选择模拟的服务端证据", "已启用到期 · 已证实过期");
+    expect(screen.getByText("IAM 已证实过期；不展示虚构日期")).toBeTruthy();
+    expect(screen.getByText(/只有 IAM 已证实过期时才能称为过期/)).toBeTruthy();
+    expect(screen.getByRole("list", { name: "受限改密路径" })).toBeTruthy();
+    await select(user, "选择模拟的服务端证据", "已启用到期 · 已证实未到期");
+    expect(screen.getByText(/已证实未到期只排除这一项改密原因/)).toBeTruthy();
+    expect(screen.queryByRole("list", { name: "受限改密路径" })).toBeNull();
+    expect((await extension.read("preview")).settings).toEqual(before.settings);
+    expect(screen.queryByRole("button", { name: /确认改密|保存密码规则/ })).toBeNull();
+  }, 20000);
   it("models personal MFA, scoped step-up and the frozen account requirement without invented settings", async () => {
     const { user, extension } = await open("settings");
     expect(screen.getByRole("heading", { name: "身份验证方法" })).toBeTruthy();

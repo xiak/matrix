@@ -3810,6 +3810,39 @@
     "effectiveBoundary": "这不是本人实际要求、密码强度证明或前端放行判断。真实规则、历史、身份保护和结果由 IAM 在写入时重新核对。",
     "historicalResultTitle": "历史完成结果如何呈现",
     "historicalResultMissing": "原历史结果若未返回密码规则内容，应显示“未提供”，不能用当前配置或本页草稿补齐，也不能据此重建旧命令。",
-    "historicalSessionBoundary": "历史结果中的“原调用会话已结束”只描述当时发起变更的会话；不会因此退出后来重新登录的会话。"
+    "historicalSessionBoundary": "历史结果中的“原调用会话已结束”只描述当时发起变更的会话；不会因此退出后来重新登录的会话。",
+    "ageTitle": "密码年龄与登录路径 · 场景模拟",
+    "agePreviewBoundary": "以下只是隔离 MOCK 交互，不读取当前账号到期设置、密码变更时间或本人认证状态，也不创建挑战或登录会话。",
+    "ageScenario": "选择模拟的服务端证据",
+    "ageScenarios": {
+      "offUnknown": "未启用到期 · 年龄未知",
+      "onUnknown": "已启用到期 · 年龄未知",
+      "onExpired": "已启用到期 · 已证实过期",
+      "onCurrent": "已启用到期 · 已证实未到期"
+    },
+    "expirySetting": "模拟到期要求",
+    "expiryOn": "已启用",
+    "expiryOff": "未启用",
+    "ageEvidence": "密码年龄证据",
+    "ageUnknown": "未知；没有可证明的最近改密时间",
+    "ageExpired": "IAM 已证实过期；不展示虚构日期",
+    "ageCurrent": "IAM 已证实尚未到期；不展示虚构日期",
+    "sessionOutcome": "业务会话边界",
+    "restrictedOutcome": "不得先发行正常业务会话",
+    "normalOutcome": "仍须完成其他认证条件，才能由 IAM 决定是否发行会话",
+    "ageHints": {
+      "offUnknown": "未启用到期时，年龄未知本身不锁死正常登录；但未知仍是未知，不能写成刚改密。",
+      "onUnknown": "年龄未知不等于已过期。账号启用到期后，必须由 IAM 在原密码和所需 MFA 核验后返回受限改密结果，前端不能自行切换仪式。",
+      "onExpired": "只有 IAM 已证实过期时才能称为过期；完成原密码和所需 MFA 核验后仍只进入受限改密。",
+      "onCurrent": "已证实未到期只排除这一项改密原因，不证明 MFA、账号状态或其他登录条件已满足。"
+    },
+    "restrictedFlow": "受限改密路径",
+    "ageSteps": {
+      "verify": "核验原密码及当前要求的 MFA；此时尚无正常业务会话。",
+      "challenge": "IAM 返回专用 PASSWORD_CHANGE 受限挑战，不接受客户端推断的状态。",
+      "change": "提交新密码；IAM 重新检查当前规则与历史，并结束旧阶段证明和相关会话。",
+      "reauthenticate": "完成后使用新密码重新登录；改密结果本身不是已登录。"
+    },
+    "ageAuthorityBoundary": "本页不计算到期日、不保存密码，也不表示 IAM 已完成这条流程。真实资格、挑战阶段与结果必须由固定后端契约提供。"
   }
 }

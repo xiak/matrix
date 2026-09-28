@@ -3810,6 +3810,39 @@
     "effectiveBoundary": "This is not the person's actual requirement, a password-strength proof, or a frontend permit. IAM rechecks the real rule, history, identity protection, and outcome at write time.",
     "historicalResultTitle": "How to present a historical completion",
     "historicalResultMissing": "If the original historical result omits password-rule details, show “not provided.” Do not fill them from current configuration or this draft, or reconstruct the old command from them.",
-    "historicalSessionBoundary": "An “original caller session ended” result describes only the session that submitted the change; it must not sign out a later, newly authenticated session."
+    "historicalSessionBoundary": "An “original caller session ended” result describes only the session that submitted the change; it must not sign out a later, newly authenticated session.",
+    "ageTitle": "Password age and sign-in path · scenario preview",
+    "agePreviewBoundary": "This is an isolated MOCK interaction. It reads no current expiry setting, password-change time, or personal authentication state, and creates no challenge or login session.",
+    "ageScenario": "Select simulated server evidence",
+    "ageScenarios": {
+      "offUnknown": "Expiry off · age unknown",
+      "onUnknown": "Expiry on · age unknown",
+      "onExpired": "Expiry on · confirmed expired",
+      "onCurrent": "Expiry on · confirmed current"
+    },
+    "expirySetting": "Simulated expiry requirement",
+    "expiryOn": "Enabled",
+    "expiryOff": "Disabled",
+    "ageEvidence": "Password-age evidence",
+    "ageUnknown": "Unknown; no proven recent password-change time",
+    "ageExpired": "IAM confirmed expiry; no invented date is shown",
+    "ageCurrent": "IAM confirmed not expired; no invented date is shown",
+    "sessionOutcome": "Business-session boundary",
+    "restrictedOutcome": "No normal business session may be issued first",
+    "normalOutcome": "Other authentication requirements must still complete before IAM decides whether to issue a session",
+    "ageHints": {
+      "offUnknown": "With expiry disabled, unknown age alone does not block normal sign-in. Unknown still does not mean recently changed.",
+      "onUnknown": "Unknown age is not confirmed expiry. With expiry enabled, IAM must return a restricted change outcome after verifying the current password and required MFA; the client cannot switch ceremonies itself.",
+      "onExpired": "Only IAM-confirmed expiry may be called expired. After verifying the current password and required MFA, the path remains restricted to a password change.",
+      "onCurrent": "Confirmed current age rules out only this reason for a change. It does not prove MFA, account state, or other sign-in requirements are satisfied."
+    },
+    "restrictedFlow": "Restricted password-change path",
+    "ageSteps": {
+      "verify": "Verify the current password and required MFA; no normal business session exists yet.",
+      "challenge": "IAM returns a dedicated restricted PASSWORD_CHANGE challenge, not a client-inferred state.",
+      "change": "Submit a new password. IAM rechecks current rules and history and ends old-stage proof and related sessions.",
+      "reauthenticate": "Sign in again with the new password. The change result is not itself a login."
+    },
+    "ageAuthorityBoundary": "This page computes no expiry date, stores no password, and does not claim IAM has implemented this path. Real eligibility, challenge stages, and outcomes require a fixed backend contract."
   }
 }

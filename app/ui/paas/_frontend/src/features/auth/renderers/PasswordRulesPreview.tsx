@@ -16,6 +16,7 @@ type RuleDraft = {
 };
 type IdentityScenario = "ordinary" | "forced" | "challenge" | "protected";
 type ExceptionScenario = "denied" | "conflict" | "unknown";
+type AgeScenario = "offUnknown" | "onUnknown" | "onExpired" | "onCurrent";
 
 const sampleRule: RuleDraft = {
   minimumLength: "15", historyCount: "1",
@@ -32,12 +33,16 @@ export function PasswordRulesPreview({ accountId }: { accountId: string }) {
   const [draft, setDraft] = useState<RuleDraft>(sampleRule);
   const [identity, setIdentity] = useState<IdentityScenario>("ordinary");
   const [exception, setException] = useState<ExceptionScenario>("conflict");
+  const [ageScenario, setAgeScenario] = useState<AgeScenario>("onUnknown");
   const minimum = Number(draft.minimumLength);
   const history = Number(draft.historyCount);
   const valid = Number.isInteger(minimum) && minimum >= 15 && minimum <= 128 &&
     Number.isInteger(history) && history >= 0 && history <= 24;
   const scenarioUsesDraft = phase !== "summary" && identity !== "protected" && valid;
   const scenarioRule = scenarioUsesDraft ? draft : sampleRule;
+  const expiryEnabled = ageScenario !== "offUnknown";
+  const ageUnknown = ageScenario === "offUnknown" || ageScenario === "onUnknown";
+  const restrictedChange = ageScenario === "onUnknown" || ageScenario === "onExpired";
 
   useLayoutEffect(() => {
     if (phase !== "summary") heading.current?.focus({ preventScroll: true });
@@ -120,6 +125,28 @@ export function PasswordRulesPreview({ accountId }: { accountId: string }) {
           <Typography.Text tone="muted">{t("historicalResultMissing")}</Typography.Text>
           <Typography.Text tone="muted">{t("historicalSessionBoundary")}</Typography.Text>
         </details>
+      </Card.Body>
+    </Card>
+    <Card>
+      <Card.Header><Typography.Title as="h3" level={3}>{t("ageTitle")}</Typography.Title></Card.Header>
+      <Card.Body className={styles.policyForm}>
+        <Alert>{t("agePreviewBoundary")}</Alert>
+        <FormField id={`${id}-age`} label={t("ageScenario")}><Select id={`${id}-age`} value={ageScenario}
+          options={(["offUnknown", "onUnknown", "onExpired", "onCurrent"] as const).map((value) => ({ value, label: t(`ageScenarios.${value}`) }))}
+          onValueChange={(value) => setAgeScenario(value as AgeScenario)} /></FormField>
+        <dl className={styles.facts}>
+          <div><dt>{t("expirySetting")}</dt><dd>{t(expiryEnabled ? "expiryOn" : "expiryOff")}</dd></div>
+          <div><dt>{t("ageEvidence")}</dt><dd>{t(ageUnknown ? "ageUnknown" : ageScenario === "onExpired" ? "ageExpired" : "ageCurrent")}</dd></div>
+          <div><dt>{t("sessionOutcome")}</dt><dd>{t(restrictedChange ? "restrictedOutcome" : "normalOutcome")}</dd></div>
+        </dl>
+        <Alert status={restrictedChange ? "warning" : "info"}>{t(`ageHints.${ageScenario}`)}</Alert>
+        {restrictedChange ? <ol className={styles.ageFlow} aria-label={t("restrictedFlow")}>
+          <li>{t("ageSteps.verify")}</li>
+          <li>{t("ageSteps.challenge")}</li>
+          <li>{t("ageSteps.change")}</li>
+          <li>{t("ageSteps.reauthenticate")}</li>
+        </ol> : null}
+        <Typography.Text tone="muted">{t("ageAuthorityBoundary")}</Typography.Text>
       </Card.Body>
     </Card>
   </section>;
