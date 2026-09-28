@@ -39,7 +39,7 @@ func localRecoveryMigrationDSN(t *testing.T, dsn string) string {
 // The existing process owner exercises the separate local executable, not a
 // production debug endpoint or a substitute in-process recovery implementation.
 func proveLocalCredentialRecoveryProcesses(t *testing.T, ctx context.Context, admin *pgx.Conn, root, temporary, binary, iamEndpoint, auditEndpoint, paasEndpoint string,
-	bootstrap iamv1.BootstrapDocument, original loginResult, withAuditUnavailable func(func())) (loginResult, func(), []string) {
+	bootstrap iamv1.BootstrapDocument, original loginResult, replacementPassword string, withAuditUnavailable func(func())) (loginResult, func(), []string) {
 	t.Helper()
 	const password = "Local-Process-Recovered-Password-94!"
 	local := localRecoveryProcessAuthority(t, bootstrap)
@@ -145,7 +145,20 @@ func proveLocalCredentialRecoveryProcesses(t *testing.T, ctx context.Context, ad
 		recovered = loginIAM(t, iamEndpoint, "admin", password, "local-process-temporary-login")
 		createPaaSApplication(t, paasEndpoint, recovered.Credential, "local-recovery-forced-denied", "local-recovery-forced-denied", "local-recovery-forced-denied", http.StatusForbidden)
 		assertPlatformAuthorization(t, iamEndpoint, recovered.Credential, "principal-admin", "local-recovery-forced-platform-denied", false)
-		changePasswordIAM(t, iamEndpoint, recovered.Credential, password, changedAdminPassword, "local-process-forced-change")
+		refused := performJSON(t, http.MethodPost, iamEndpoint+"/v1/auth/password", recovered.Credential, map[string]any{
+			"currentPassword": password, "newPassword": changedAdminPassword, "requestId": "local-process-history-rejected"})
+		if refused.Status != http.StatusUnprocessableEntity {
+			t.Fatal("local recovery allowed forced change to restore the retired password")
+		}
+		var unchanged bool
+		if err := admin.QueryRow(ctx, `SELECT c.credential_version=$3 AND p.must_change_password
+		 AND NOT EXISTS(SELECT 1 FROM iam.audit_outbox e WHERE e.tenant_id=p.tenant_id
+		   AND e.event_document->>'action'='iam.user.password-changed' AND e.event_document->>'requestId'='local-process-history-rejected')
+		 FROM iam.principals p JOIN iam.user_credentials c ON c.tenant_id=p.tenant_id AND c.principal_id=p.id
+		 WHERE p.tenant_id=$1 AND p.id=$2`, local.Scope.AccountID, local.Scope.PrincipalID, applied.CredentialGeneration).Scan(&unchanged); err != nil || !unchanged {
+			t.Fatal("rejected local-recovery password reuse changed qualification or recorded success")
+		}
+		changePasswordIAM(t, iamEndpoint, recovered.Credential, password, replacementPassword, "local-process-forced-change")
 		assertPlatformAuthorization(t, iamEndpoint, recovered.Credential, "principal-admin", "local-recovery-normal-platform-allowed", true)
 	})
 	// Treat the apply reply as lost: only the sealed command/commitment query
@@ -239,7 +252,7 @@ func proveLocalCredentialRecoveryProcesses(t *testing.T, ctx context.Context, ad
 			t.Fatal("old replay replaced a later password")
 		}
 	}
-	secrets := []string{password, string(local.CapabilityKey.CopyBytes()), string(request.Capability.CopyBytes()), string(altered.Capability.CopyBytes()), recovered.Credential}
+	secrets := []string{password, replacementPassword, string(local.CapabilityKey.CopyBytes()), string(request.Capability.CopyBytes()), string(altered.Capability.CopyBytes()), recovered.Credential}
 	return recovered, verifyHistorical, secrets
 }
 

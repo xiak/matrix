@@ -2382,7 +2382,8 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	assertAuditAccessRecorded(t, ctx, admin, auditv1.ActionAuditIntegrityVerified, "principal-admin")
 	var verifyHistoricalRecovery func()
 	var recoverySecrets []string
-	adminLogin, verifyHistoricalRecovery, recoverySecrets = proveLocalCredentialRecoveryProcesses(t, ctx, admin, root, temporary, binaries.localRecovery, iamEndpoint, auditEndpoint, paasEndpoint, bootstrap, adminLogin,
+	const postLocalRecoveryPassword = "Local-Process-Post-Recovery-Password-96!"
+	adminLogin, verifyHistoricalRecovery, recoverySecrets = proveLocalCredentialRecoveryProcesses(t, ctx, admin, root, temporary, binaries.localRecovery, iamEndpoint, auditEndpoint, paasEndpoint, bootstrap, adminLogin, postLocalRecoveryPassword,
 		func(admit func()) {
 			auditProcess.stop()
 			admit()
@@ -2395,7 +2396,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	if response := performJSON(t, http.MethodGet, replicaEndpoint+"/v1/auth/me", adminLogin.Credential, nil); response.Status != http.StatusUnauthorized {
 		t.Fatal("platform protection revocation left the original Session usable")
 	}
-	adminLogin = loginIAM(t, iamEndpoint, "admin", changedAdminPassword, "request-admin-after-platform-revocation")
+	adminLogin = loginIAM(t, iamEndpoint, "admin", postLocalRecoveryPassword, "request-admin-after-platform-revocation")
 	sensitive = append(sensitive, adminLogin.Credential)
 	platformDecisions = append(platformDecisions,
 		assertPlatformAuthorization(t, iamEndpoint, adminLogin.Credential, "principal-admin", "request-platform-admin-revoked", false),
@@ -2690,7 +2691,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 			Password  string `json:"password"`
 			RequestID string `json:"requestId"`
 		}{
-			LoginName: "admin", Password: changedAdminPassword, RequestID: "process-stale-totp-login"})
+			LoginName: "admin", Password: postLocalRecoveryPassword, RequestID: "process-stale-totp-login"})
 		if response.Status != http.StatusServiceUnavailable {
 			t.Fatalf("stale TOTP process accepted direct login: %d", response.Status)
 		}
@@ -4366,7 +4367,7 @@ func changePasswordIAM(
 		RequestID       string `json:"requestId"`
 	}{CurrentPassword: current, NewPassword: next, RequestID: requestID})
 	if response.Status != http.StatusOK {
-		t.Fatalf("IAM password change status=%d", response.Status)
+		t.Fatalf("IAM password change request=%s status=%d", requestID, response.Status)
 	}
 }
 
@@ -5086,7 +5087,31 @@ func proveTenantAccountProcesses(
 	primary = loginIAM(t, endpoint, "customer.primary", recoveryPassword, "request-recovered-primary-login")
 	sensitive = append(sensitive, recoveryPassword, primary.Credential)
 	createPaaSApplication(t, paasEndpoint, primary.Credential, "application-before-recovery-change", "before-recovery-change", "create-before-recovery-change", http.StatusForbidden)
-	changePasswordIAM(t, endpoint, primary.Credential, recoveryPassword, changed, "request-recovered-primary-password")
+	// Recovery must not let a forced-change session restore the just-retired
+	// credential, even through another real IAM process after a restart.
+	recoverySecurityState := func() string {
+		t.Helper()
+		var state string
+		if err := admin.QueryRow(ctx, `SELECT jsonb_build_object(
+		 'principal',to_jsonb(p),'credential',to_jsonb(c),
+		 'sessions',(SELECT jsonb_agg(to_jsonb(s) ORDER BY s.id) FROM iam.sessions s WHERE s.tenant_id=p.tenant_id AND s.principal_id=p.id),
+		 'facts',(SELECT jsonb_agg(e.event_document ORDER BY e.event_id) FROM iam.audit_outbox e
+		   WHERE e.tenant_id=p.tenant_id AND e.event_document->>'action'='iam.user.password-changed' AND e.event_document#>>'{target,id}'=p.id))::text
+		 FROM iam.principals p JOIN iam.user_credentials c ON c.tenant_id=p.tenant_id AND c.principal_id=p.id
+		 WHERE p.tenant_id=$1 AND p.id=$2`, crossTenantID, account.RootIdentity.PrincipalID).Scan(&state); err != nil {
+			t.Fatal("read original-root credential invariants")
+		}
+		return state // The private comparison value is never logged.
+	}
+	beforeRejectedReuse := recoverySecurityState()
+	reused := performJSON(t, http.MethodPost, replicaEndpoint+"/v1/auth/password", primary.Credential, map[string]any{
+		"currentPassword": recoveryPassword, "newPassword": changed, "requestId": "request-recovered-primary-history-rejected"})
+	if reused.Status != http.StatusUnprocessableEntity || recoverySecurityState() != beforeRejectedReuse {
+		t.Fatal("recovered primary reused its retired password or changed credential/session/facts")
+	}
+	const replacementPassword = "Customer-Process-Post-Recovery-Password-79!"
+	sensitive = append(sensitive, replacementPassword)
+	changePasswordIAM(t, endpoint, primary.Credential, recoveryPassword, replacementPassword, "request-recovered-primary-password")
 	getPaaSApplication(t, paasEndpoint, primary.Credential, "application-customer-only", http.StatusOK)
 	getPaaSApplication(t, paasEndpoint, bearer, "application-customer-only", http.StatusNotFound)
 	childLogin = loginIAM(t, endpoint, "account.user@process-company", changed, "request-resumed-child-login")
