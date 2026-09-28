@@ -57,6 +57,14 @@
 
 ## 可用性与容量门禁
 
+### 当前CI任务分配
+
+数据库门禁按既有测试owner串行分片，不按开发schema叠加兼容矩阵。固定`fa27b0fbf54e94e21da38d32763dcaf89f370538`的[Verification36318553704](https://github.com/xiak/matrix/actions/runs/36318553704)不能标为通过：storage测试步骤19分25秒内全部success，但整项任务含准备/清理超过20分钟；GitHub明确注记`The job has exceeded the maximum execution time of 20m0s`，storage最终cancelled，汇总检查failure。其余Go、node、runtime、step-up、replacement、replacement-qualification、recovery-window七项success不代替该缺口。
+
+现将原`TestIAMRoleAndManagementReferencesPostgres`及其七个独立数据库/DSN从storage一次性移至`authority-roles`，不复制测试。该入口在上述CI实测344.607秒，独立任务上限15分钟；storage仍20分钟，原每fixture两分钟及所有锁等待/密码成本不变。数据库lane继续`max-parallel=1`、PG1CPU/768MiB/PIDs192，其他原任务限额不变；汇总检查仍要求全部lane成功，取消、跳过或失败均关闭。数据库总集合和场景不增加，只有执行分组调整；本地YAML解析、17段Bash语法及调整前后DSN集合/无重复检查通过。新分配的精确源码CI尚待核实，不能回填旧超时为通过。
+
+### 运行验收要求
+
 - 两个独立 IAM 进程使用同一受限权威库，交错登录/授权/撤销；撤权已确认后到另一进程的新请求必须拒绝。停掉本任务其中一个进程后，另一进程继续处理已有会话，不要求重新登录、不复活权限；只证明服务副本能力。
 - 在本任务限额环境分别测量密码认证、普通策略授权、复杂策略/组继承和混合管理流量，记录硬件/CPU/内存、数据与策略规模、并发、吞吐、P50/P95/P99、错误率、连接/队列/锁等待及 outbox 积压。纯函数 benchmark 不代替 HTTP+PG 容量结论。
 - 一个账号超载时，另一账号仍可取得受预算保护的服务；超额明确拒绝，不能无限排队、无限创建连接或多层放大重试。固定策略大小/语句/附件预算要有边界与攻击测试。

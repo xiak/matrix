@@ -767,7 +767,11 @@ close仍使用原SERIALIZABLE事务和认证状态独占屏障，不降成READ C
 
 原子关闭局部证据（本切片局部验证，独立CI待确认）：原用例事务内依次执行`prepare_authentication_recovery_close`、Go唯一snapshot编码/摘要和五参数`close_authentication_recovery`；准备只取得原屏障和采样，不写receipt/epoch/outbox，所有输出校验在commit前完成。已提交相同意图只返回原不可变快照，不从当前状态重采样；历史无快照行不补造证明。真实独立PG18.6的`TestIAMAuthenticationRecoveryClosePostgres`最终race-p1通过3.50s：两个真实Account、改密先提交与close先取得锁的两种依赖均经`pg_blocking_pids`实证；前者拒绝过期备份资格，后者拒绝晚到改密且凭据代际/成功事实不变。并发相同close返回完全相同canonical envelope。省略Account/USER、回退因子步或删除实际密码预算均在封存前拒绝；prepare rollback、outbox末端故障、快照列/默认值/约束/执行权限/SECURITY DEFINER、内部核对器越权及旧reopen签名复活的九项破坏分别验证无部分效果或readiness关闭，原closure不可变。
 
-2026-09-27同一关闭门禁新增六类当前授权来源的真实API变更并在新PG18.6通过6.69s（包10.219s）：Policy发布和默认版本切换、直接附件撤销、Group成员移除、USER权限边界设置、Role信任撤销。每项分别从真实RR helper取得变更前备份资格，正常提交当前管理事务，再证明资格摘要改变、旧资格close返回CONFLICT且认证仍OPEN/epoch0、closure及成功恢复事实为零。没有直接改投影字段，也未新增测试入口/数据库矩阵；原双向锁顺序、故障原子性与schema越权检查完整保留。这六项不替代尚未覆盖的因子更换/联系地址/设置变化恢复或它们的并发场景。
+当前关闭门禁覆盖六类授权来源的真实API变更：Policy发布和默认版本切换、直接附件撤销、Group成员移除、USER权限边界设置、Role信任撤销。每项分别从真实RR helper取得变更前备份资格，正常提交当前管理事务，再证明资格摘要改变、旧资格close返回CONFLICT且认证仍OPEN/epoch0、closure及成功恢复事实为零。没有直接改投影字段，也未新增测试入口/数据库矩阵；原双向锁顺序、故障原子性与schema越权检查完整保留。
+
+同一owner另外区分有效资格变化与瞬时认证状态：通过真实USER创建/强制改密、通知地址验证、首次TOTP绑定、MFA登录、TOTP_REPLACE专用step-up及确认更换建立完整来源。已验证地址、首次绑定和更换分别改变资格摘要并拒绝此前backup lease；待验证地址、PENDING绑定、成功登录/OTP消费、已证明step-up及待确认更换均不改变该摘要。更换后的原因子确已REVOKED、新因子成为当前BOUND来源，并保留唯一更换事实；拒绝旧备份不能撤销这些已提交状态。验证码只由测试已有私有解密观察器取得，不修改状态、不伪造验证或审计记录，也不声称完成SMTP投递。
+
+2026-09-28上述完整关闭门禁在独立PG18.6中串行race-p1通过70.87秒（包74.356秒），新增联系/因子场景64.36秒包含真实OTP时间步等待，原3分钟期限未扩大。环境为Go1.26.3/GOMAXPROCS2/GOMEMLIMIT512MiB、原PG的2逻辑CPU/1GiB/24进程/16连接限制。首轮因测试未执行正常启动所需邮件keyset注册而失败，补齐原注册调用后才取得该证据，没有放宽生产托管检查。IAM及architecture默认race-p2、同范围vet、gofmt/diff通过；默认外部SKIP不作为真库证据。仅本轮两个零客户端合成库被删除，自有PG正常停止、原保留库不变。它仍只证明同资格恢复的效果前拒绝及瞬时状态排除，不证明换因子之后的旧备份正向恢复、地址替换/安全设置的完整变化矩阵、全部并发或签名安装；后继固定源码独立CI待确认。
 
 保留数据恢复局部证据（本切片局部验证，独立CI待确认）：2026-09-27的`TestIAMAuthenticationRecoveryPostgres`在新的三个PG18.6数据库中串行race-p1通过78.53s（包82.142s）；同日关闭门禁通过5.04s。仍使用本任务原2CPU/1GiB/24process/16connection限额，阶段结束即释放不用的连接池。源库只bootstrap一次，通过实际API建立密码、Session、业务授权决定、AccessKey、两个USER的TOTP/恢复批次、已证明StepUp及在途尝试；专用RR lease的同一snapshot交给真实pg_dump，完整IAM含owner/ACL/RLS经pg_restore进入空目标，没有再次初始化或关闭约束。原bootstrap receipt、完整Profile archive及决定/私有证据逐项保持，跨表约束的恢复修复与负向历史校验归[001](FEAT-IAM-001-authorization-profile.md)。资格摘要、Account、USER、因子或完整集合被篡改，即使重新算出自洽快照摘要也在reconcile前拒绝，目标无closure/epoch/outbox部分效果。准确并发reconcile/reopen及原完成重放保持，旧Session、StepUp、恢复码与Key沿原fence失效，正常重新认证及带数据schema重放通过。
 

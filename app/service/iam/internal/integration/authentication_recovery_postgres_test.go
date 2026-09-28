@@ -126,6 +126,18 @@ func TestIAMAuthenticationRecoveryClosePostgres(t *testing.T) {
 		}
 	}
 	workflow, _ := authenticationRecoveryWorkflow(t, ctx, dsn)
+	assertStaleQualification := func(t *testing.T, before installationv1.TOTPBackupSnapshotLease) {
+		t.Helper()
+		if after := readLease(); after.AuthenticationStateDigest == before.AuthenticationStateDigest {
+			t.Fatal("current qualification change was absent from backup proof")
+		}
+		stale := authenticationRecoveryIntent(document.InstallationID)
+		stale.AuthenticationStateDigest, stale.TOTPCustodyDigest = before.AuthenticationStateDigest, before.CustodyDigest
+		if _, err := workflow.Close(ctx, stale); !errors.Is(err, authenticationrecovery.ErrConflict) {
+			t.Fatal("prior qualification backup was allowed to close source authentication", err)
+		}
+		assertNoClose()
+	}
 	// Distinct current authorization sources must invalidate a previously
 	// qualified backup, not merely password or USER generation changes.
 	// All mutations below use the real authority; no projection rows are
@@ -214,19 +226,115 @@ func TestIAMAuthenticationRecoveryClosePostgres(t *testing.T) {
 			if err := change.apply(); err != nil {
 				t.Fatal("real authority change failed", err)
 			}
-			after := readLease()
-			if after.AuthenticationStateDigest == before.AuthenticationStateDigest {
-				t.Fatal("current authorization change was absent from backup qualification")
-			}
-			stale := authenticationRecoveryIntent(document.InstallationID)
-			stale.AuthenticationStateDigest, stale.TOTPCustodyDigest = before.AuthenticationStateDigest, before.CustodyDigest
-			if _, err := workflow.Close(ctx, stale); !errors.Is(err, authenticationrecovery.ErrConflict) {
-				t.Fatal("prior authorization backup was allowed to close source authentication", err)
-			}
-			assertNoClose()
+			assertStaleQualification(t, before)
 		}) {
 			t.FailNow()
 		}
+	}
+	if !t.Run("qualification-contact-and-factor", func(t *testing.T) {
+		if err := api.RegisterEmailVerificationKeyset(ctx); err != nil {
+			t.Fatal("register actual notification verification custody", err)
+		}
+		initialPassword := iamHTTPSecret(t, "Close-Factor-Password-673!")
+		user, err := api.CreateUser(ctx, login.Credential, iamv1.CreateUserRequest{LoginName: "close-factor-user",
+			DisplayName: "Close factor user", InitialPassword: initialPassword, RequestID: "close-factor-user"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		userLogin, err := api.Login(ctx, iamv1.LoginRequest{LoginName: user.LoginName + "@" + string(user.AccountID),
+			Password: initialPassword, RequestID: "close-factor-login"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		password := iamHTTPSecret(t, changedDeveloperPassword)
+		if _, err := api.ChangePassword(ctx, userLogin.Credential, iamv1.ChangePasswordRequest{CurrentPassword: initialPassword,
+			NewPassword: password, RequestID: "close-factor-password"}); err != nil {
+			t.Fatal(err)
+		}
+		beforeContact := readLease()
+		verification, err := api.StartNotificationVerification(ctx, userLogin.Credential, iamv1.StartNotificationContactVerificationRequest{
+			Email: "close-factor@matrix.test", Password: password, RequestID: "close-factor-contact-start"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if readLease().AuthenticationStateDigest != beforeContact.AuthenticationStateDigest {
+			t.Fatal("unverified contact changed effective backup qualification")
+		}
+		protector, err := authority.NewEmailVerificationProtector(authenticationRecoveryEmailKeyring(t, document))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := api.ConfirmNotificationContact(ctx, userLogin.Credential, verification.ID, iamv1.ConfirmNotificationContactVerificationRequest{
+			Code: iamNotificationStorageCode(t, ctx, database, protector, verification), RequestID: "close-factor-contact-confirm"}); err != nil {
+			t.Fatal(err)
+		}
+		assertStaleQualification(t, beforeContact)
+
+		beforeBinding := readLease()
+		state, err := api.AuthenticatorState(ctx, userLogin.Credential)
+		if err != nil || state.EnrollmentState != "NEVER_BOUND" {
+			t.Fatal("factor fixture is not an actual first enrollment", err)
+		}
+		enrollment, err := api.StartTOTPEnrollment(ctx, userLogin.Credential, iamv1.StartTOTPEnrollmentRequest{
+			Password: password, ExpectedFactorRevision: state.FactorRevision, RequestID: "close-factor-enroll"})
+		if err != nil || enrollment.Provisioning == nil {
+			t.Fatal("start real factor enrollment", err)
+		}
+		if readLease().AuthenticationStateDigest != beforeBinding.AuthenticationStateDigest {
+			t.Fatal("pending enrollment changed effective backup qualification")
+		}
+		factor := authenticationRecoveryMFAFixture{seed: enrollment.Provisioning.Seed, factorID: enrollment.Enrollment.ID, loginName: user.LoginName}
+		bound, err := api.ConfirmTOTPEnrollment(ctx, userLogin.Credential, enrollment.Enrollment.ID, iamv1.ConfirmTOTPEnrollmentRequest{
+			RequestID: "close-factor-confirm", Code: authenticationRecoveryFreshTOTP(t, ctx, database, user.AccountID, factor, 0)})
+		if err != nil || bound.Enrollment.State != "CONFIRMED" {
+			t.Fatal("confirm real factor enrollment", err)
+		}
+		assertStaleQualification(t, beforeBinding)
+
+		beforeReplacement := readLease()
+		current := authenticationRecoveryMFALogin(t, ctx, api, database, document, factor, "close-factor", 0)
+		if readLease().AuthenticationStateDigest != beforeReplacement.AuthenticationStateDigest {
+			t.Fatal("normal MFA login or OTP consumption invalidated backup qualification")
+		}
+		state, err = api.AuthenticatorState(ctx, current.Credential)
+		if err != nil || state.EnrollmentState != "BOUND" {
+			t.Fatal(err)
+		}
+		proof, err := api.StartStepUp(ctx, current.Credential, iamv1.StartStepUpRequest{RequestID: "close-factor-replace",
+			Operation: iamv1.StepUpReplaceTOTP, ExpectedFactorRevision: state.FactorRevision})
+		if err != nil {
+			t.Fatal(err)
+		}
+		proof, err = api.VerifyStepUp(ctx, current.Credential, proof.ID, iamv1.VerifyStepUpRequest{RequestID: "close-factor-replace-proof",
+			Password: password, Code: authenticationRecoveryFreshTOTP(t, ctx, database, user.AccountID, factor, 0)})
+		if err != nil || proof.State != "PROVED" {
+			t.Fatal("prove real replacement intent", err)
+		}
+		replacement, err := api.StartTOTPReplacement(ctx, current.Credential, iamv1.StartTOTPReplacementRequest{
+			RequestID: proof.RequestID, StepUpID: proof.ID, ExpectedFactorRevision: proof.ExpectedFactorRevision})
+		if err != nil || replacement.Provisioning == nil {
+			t.Fatal("prepare real factor replacement", err)
+		}
+		if readLease().AuthenticationStateDigest != beforeReplacement.AuthenticationStateDigest {
+			t.Fatal("step-up or pending replacement invalidated unchanged effective qualification")
+		}
+		nextFactor := authenticationRecoveryMFAFixture{seed: replacement.Provisioning.Seed, factorID: replacement.Enrollment.ID, loginName: user.LoginName}
+		replaced, err := api.ConfirmTOTPEnrollment(ctx, current.Credential, replacement.Enrollment.ID, iamv1.ConfirmTOTPEnrollmentRequest{
+			RequestID: "close-factor-replaced", Code: authenticationRecoveryFreshTOTP(t, ctx, database, user.AccountID, nextFactor, 0)})
+		if err != nil || replaced.Enrollment.State != "CONFIRMED" {
+			t.Fatal("commit real factor replacement", err)
+		}
+		assertStaleQualification(t, beforeReplacement)
+		var lineage bool
+		if err := database.QueryRow(ctx, `SELECT
+		 (SELECT state='REVOKED' AND revoked_at IS NOT NULL FROM iam.totp_authenticators WHERE tenant_id=$1 AND id=$2)
+		 AND (SELECT enrollment_state='BOUND' AND factor_id=$3 FROM iam.user_mfa_states WHERE tenant_id=$1 AND user_id=$4)
+		 AND (SELECT count(*)=1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.authenticator.replaced'
+		   AND event_document#>>'{actor,id}'=$4)`, user.AccountID, factor.factorID, nextFactor.factorID, user.ID).Scan(&lineage); err != nil || !lineage {
+			t.Fatal("replacement rejection lost actual factor lineage or immutable success fact", err)
+		}
+	}) {
+		t.FailNow()
 	}
 	lease := readLease()
 	intent := authenticationRecoveryIntent(document.InstallationID)
