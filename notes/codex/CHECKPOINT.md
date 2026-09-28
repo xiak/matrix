@@ -6,7 +6,7 @@
 - Updated: 2026-09-28
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `9e734fbe`
+- Pushed UI source: `741eca88`
 
 ## Authoritative route
 
@@ -32,14 +32,14 @@ UI, full static host/export and independent MOCK entry; do not replace them
 with another branch's renderer or inherit that branch's UI acceptance.
 
 The current milestone keeps the independent MOCK preview, fixed-contract LIVE
-paths and synchronized static Go host. Direct User policy attachment review
-now retains its exact request intent across IAM navigation within the current
-Account/Session; another User cannot create a competing intent, and late old
-Session results cannot enter the new Session. Development gates passed.
-First-login MFA enrollment remains staged against IAM's fixed `e24dbdae`
-contract. Real IAM process browser, by-request historical attachment recovery
-and revoke recovery are not accepted. Detailed behavior and evidence remain
-only in the FEAT owner.
+paths and synchronized static Go host. Direct User policy attach and revoke
+share one Account/Session-scoped intent: exact request replay survives IAM
+navigation, competing changes are blocked, and old-Session results cannot
+enter the new Session. The obsolete generic revoke command was removed.
+Development gates passed. First-login MFA enrollment remains staged against
+IAM's fixed `e24dbdae` contract. Real IAM process browser and cross-session
+historical completion recovery are not accepted. Detailed behavior and
+evidence remain only in the FEAT owner.
 
 ## Continuation
 
