@@ -34,6 +34,7 @@ type options struct {
 	nativeNodes               string
 	nativeDeploymentRuntime   bool
 	browserPasswordFile       string
+	browserTOTPSeedFile       string
 	securityMailConfiguration string
 }
 

@@ -65,6 +65,25 @@ func newGate(config options, releases releasePair) *gate {
 	return value
 }
 
+func (value *gate) publishBrowserTOTPSeed(seed []byte) error {
+	if value.config.browserTOTPSeedFile == "" {
+		return nil
+	}
+	if len(seed) == 0 {
+		return fail("browser-totp-seed")
+	}
+	file, err := os.OpenFile(value.config.browserTOTPSeedFile, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return fail("browser-totp-seed")
+	}
+	_, writeErr := file.Write(seed)
+	closeErr := file.Close()
+	if writeErr != nil || closeErr != nil {
+		return fail("browser-totp-seed")
+	}
+	return nil
+}
+
 func (value *gate) activateReleaseA(ctx context.Context) error {
 	initial := value.releases.a
 	if value.releases.base != nil {
@@ -971,6 +990,9 @@ func (value *gate) beforeRestart(ctx context.Context) (gateErr error) {
 		return err
 	}
 	if value.config.browserReady {
+		if err := value.publishBrowserTOTPSeed(seed); err != nil {
+			return err
+		}
 		emit("browser-successor-ready")
 		return nil
 	}

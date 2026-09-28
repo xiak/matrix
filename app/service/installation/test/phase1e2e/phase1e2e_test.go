@@ -1,6 +1,7 @@
 package phase1e2e
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
@@ -1279,6 +1280,36 @@ func TestBrowserPasswordInputRequiresPrivateRegularBoundedContent(t *testing.T) 
 	}
 }
 
+func TestBrowserTOTPSeedIsPublishedOnlyToNewPrivateFixture(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("POSIX private-file contract")
+	}
+	path := filepath.Join(t.TempDir(), "browser-totp-seed.private")
+	value := newGate(options{browserTOTPSeedFile: path}, releasePair{})
+	if err := value.publishBrowserTOTPSeed(nil); err == nil {
+		t.Fatal("missing enrolled factor seed was published")
+	}
+	seed := []byte("JBSWY3DPEHPK3PXP")
+	if err := value.publishBrowserTOTPSeed(seed); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+		t.Fatal("browser factor fixture was not a private regular file")
+	}
+	content, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(content, seed) {
+		t.Fatal("browser factor fixture content changed")
+	}
+	if err := value.publishBrowserTOTPSeed([]byte("replacement")); err == nil {
+		t.Fatal("browser factor fixture was overwritten")
+	}
+	content, err = os.ReadFile(path)
+	if err != nil || !bytes.Equal(content, seed) {
+		t.Fatal("existing browser factor fixture changed")
+	}
+}
+
 func TestSpecializedAcceptancePhasesOwnOnlyTheirRequiredInputs(t *testing.T) {
 	directory := t.TempDir()
 	password := filepath.Join(directory, "browser-password.private")
@@ -1286,13 +1317,16 @@ func TestSpecializedAcceptancePhasesOwnOnlyTheirRequiredInputs(t *testing.T) {
 	for _, scenario := range []struct {
 		name, phase string
 		password    bool
+		seed        bool
 		native      bool
 		preparation bool
 		base        bool
 		accept      bool
 	}{
 		{name: "browser acceptance with local runtime", phase: "browser", password: true, accept: true},
+		{name: "browser acceptance with private factor fixture", phase: "browser", password: true, seed: true, accept: true},
 		{name: "browser acceptance without operator credential", phase: "browser"},
+		{name: "ordinary lifecycle cannot export a factor", phase: "run", seed: true},
 		{name: "multi-host lifecycle with native runtime", phase: "multi-host", native: true, accept: true},
 		{name: "multi-host lifecycle without native runtime", phase: "multi-host"},
 		{name: "ordinary lifecycle cannot expose an operator credential", phase: "run", password: true},
@@ -1314,8 +1348,12 @@ func TestSpecializedAcceptancePhasesOwnOnlyTheirRequiredInputs(t *testing.T) {
 			t.Setenv("MATRIX_PHASE1_NATIVE_NODES", "")
 			t.Setenv("MATRIX_PHASE1_NATIVE_DEPLOYMENT_RUNTIME", "")
 			t.Setenv("MATRIX_PHASE1_BROWSER_PASSWORD_FILE", "")
+			t.Setenv("MATRIX_PHASE1_BROWSER_TOTP_SEED_FILE", "")
 			if scenario.password {
 				t.Setenv("MATRIX_PHASE1_BROWSER_PASSWORD_FILE", password)
+			}
+			if scenario.seed {
+				t.Setenv("MATRIX_PHASE1_BROWSER_TOTP_SEED_FILE", filepath.Join(directory, "browser-totp-seed.private"))
 			}
 			if scenario.native {
 				t.Setenv("MATRIX_PHASE1_NATIVE_NODES", nodes)
@@ -1360,6 +1398,7 @@ func optionsFromEnvironment() (options, error) {
 		nativeNodes:             os.Getenv("MATRIX_PHASE1_NATIVE_NODES"),
 		nativeDeploymentRuntime: os.Getenv("MATRIX_PHASE1_NATIVE_DEPLOYMENT_RUNTIME") == "1",
 		browserPasswordFile:     os.Getenv("MATRIX_PHASE1_BROWSER_PASSWORD_FILE"),
+		browserTOTPSeedFile:     os.Getenv("MATRIX_PHASE1_BROWSER_TOTP_SEED_FILE"),
 	}
 	for _, path := range []string{config.root, config.releaseA, config.trustKey} {
 		if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) != path {
@@ -1403,6 +1442,9 @@ func optionsFromEnvironment() (options, error) {
 		return options{}, fail("command-input")
 	}
 	if config.browserPasswordFile != "" && ((!config.browserReady && !config.nativeDeploymentRuntime) || !filepath.IsAbs(config.browserPasswordFile) || filepath.Clean(config.browserPasswordFile) != config.browserPasswordFile) {
+		return options{}, fail("command-input")
+	}
+	if config.browserTOTPSeedFile != "" && (!config.browserReady || !filepath.IsAbs(config.browserTOTPSeedFile) || filepath.Clean(config.browserTOTPSeedFile) != config.browserTOTPSeedFile) {
 		return options{}, fail("command-input")
 	}
 	return config, nil

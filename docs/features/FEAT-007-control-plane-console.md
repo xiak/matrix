@@ -346,21 +346,23 @@ retained-data IAM40-to-IAM45 process upgrade. The test container and its
 anonymous volume were removed. This is not the installed LIVE browser or
 combined signed A/B acceptance, which remain open.
 
-A live browser against the task-local signed `495fc04e` installation exposed
-an integration mismatch: the installed IAM responds on `/v1/users` and
-`/v1/accounts`, while this console's account directory still requests the
-superseded `/v1/principals` and `/v1/organizations` endpoints, which returned
-404. The default root account also authenticated normally without a required
-MFA policy, so that login is not evidence of the restricted first-enrollment
-challenge. The personal-security panel now remains independently reachable
-when a directory read fails, without showing stale directory data or granting
-directory actions; its focused 30-test regression and the bounded 169-test
-frontend suite passed, along with type/lint/architecture/contrast and a
-deterministic 73-file embedded export. Pushed source
-`b020d4a56c1b1cfb8fb9930d09e20fb0f7604c73` passed all four jobs in
-[Verification 36389282316](https://github.com/xiak/matrix/actions/runs/36389282316).
-The directory contract adaptation and an installed LIVE restricted-enrollment
-browser gate remain open.
+The account directory now consumes the installed IAM `/v1/users`,
+`/v1/accounts`, policy attachment and actor-relative capability contracts;
+obsolete principal/organization routes and fixed tenant-role projections were
+removed. Source `6b47736b603fa018901fcc683d4df6fe260896fc` passed all four
+independent jobs in
+[Verification 36416198588](https://github.com/xiak/matrix/actions/runs/36416198588),
+including 168 frontend tests and deterministic 73-file embedded exports. A
+task-local, network-isolated signed preparation-to-bridge-to-current browser
+gate completed in 492.33 seconds, retaining recovery, first MFA enrollment,
+Audit integrity, protected backup and failed-upgrade rollback. Its current
+installed console completed real password-plus-TOTP login through APISIX,
+loaded the tenant user and policy directories, original-primary security
+state and platform tenant list, displayed the grant-free child-user form,
+then revoked the IAM session on logout. The test-only TOTP seed was exported
+once to a new mode-0600 fixture inside the disposable engine; it was never
+added to product APIs or the signed release. No browser-side user/policy
+mutation or keyboard-only/360-pixel acceptance is claimed by this gate.
 
 - Gate A implementation replaces the Phase 1 page with the complete donor-
   shaped App Router -> route -> provider -> repository -> scene -> renderer ->
@@ -371,10 +373,11 @@ browser gate remain open.
   frontend tests, including visible failed revocation, logout during failed
   or pending resource loads, keyboard workspace sizing, and native instance-ID
   validation. The installed `8700095` candidate previously proved anonymous
-  login, offline assets, and no horizontal overflow. The current source still
-  requires final installed-release browser verification of authentication,
-  route transitions, keyboard use, and 360-pixel layouts; source and component
-  checks do not substitute for that acceptance.
+  login, offline assets, and no horizontal overflow. The current signed
+  candidate now proves password-plus-TOTP authentication and the IAM access
+  route; keyboard-only use and 360-pixel layout still require installed
+  browser verification. Source and component checks do not substitute for
+  those remaining gates.
 - Gate B authority is complete for the admitted PostgreSQL slice: the closed
   managed-service Go/OpenAPI contract now includes collection and single-
   resource reads for offerings, regions, quota entitlements, service
