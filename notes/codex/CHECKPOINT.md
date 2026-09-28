@@ -5,12 +5,13 @@
 - Updated: 2026-09-28
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/phase3-mfa-enabling`
-- Fixed runtime source: `d3339f5b582dd5fe134d6098b352c938dc7d4ac2`,
-  [Verification](https://github.com/xiak/matrix/actions/runs/36407253372) successful
+- Fixed runtime source: `6b47736b603fa018901fcc683d4df6fe260896fc`,
+  [Verification](https://github.com/xiak/matrix/actions/runs/36416198588) successful
   in all four jobs.
-- Fixed corrected gate driver: `72a09e09ec7c66c514c02ef3fe8e3d09399d59b2`,
-  [Verification](https://github.com/xiak/matrix/actions/runs/36412101868) successful
-  in all four jobs. It changes only the native runtime CPU assertion.
+- Fixed signed-browser gate driver: `bbcc28f21666ffe84aacb131331794cb1d52e0ff`,
+  [Verification](https://github.com/xiak/matrix/actions/runs/36420261718) successful
+  in all four jobs. Its only code changes are in the existing installation
+  test harness; production release source remains `6b47736b`.
 
 ## Resume route
 
@@ -23,7 +24,8 @@
    owns the remaining full integrated release/recovery requirements; the
    two-host result does not close them.
 3. [FEAT-007](../../docs/features/FEAT-007-control-plane-console.md) owns the
-   separate LIVE browser journey; do not infer it from the process gate.
+   signed LIVE browser evidence and its remaining user-facing gates; do not
+   infer full console acceptance from login and directory reads.
 4. [FEAT-006](../../docs/features/FEAT-006-platform-authorities.md)
    owns the IAM/Audit boundary. Later IAM work in another branch is not part
    of this fixed release composition.
