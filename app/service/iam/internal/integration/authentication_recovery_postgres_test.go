@@ -601,6 +601,10 @@ func TestIAMAuthenticationRecoveryCapacityPostgres(t *testing.T) {
 			if _, err := bootstrapIAMWithTOTP(t, ctx, api, document); err != nil {
 				t.Fatal(err)
 			}
+			businessUsers := 0
+			if !item.manyAccounts && !item.overflow {
+				businessUsers = prepareAuthenticationRecoveryCapacityBusiness(t, ctx, api, database, document)
+			}
 			closeAPI()
 			backupConfig := config.Copy()
 			backupConfig.User, backupConfig.Password = "matrix_iam_backup_custody_login", "matrix-authority-process-test-only"
@@ -640,7 +644,7 @@ func TestIAMAuthenticationRecoveryCapacityPostgres(t *testing.T) {
 					t.Fatal("create bounded multi-account projection fixture", err)
 				}
 			} else {
-				users := installationv1.MaximumAuthenticationRecoverySnapshotItems - 2
+				users := installationv1.MaximumAuthenticationRecoverySnapshotItems - 2 - businessUsers
 				if item.overflow {
 					users++
 				}
@@ -668,6 +672,19 @@ func TestIAMAuthenticationRecoveryCapacityPostgres(t *testing.T) {
 			if expectedItems != wantItems {
 				t.Fatal("capacity fixture does not reach the exact transport boundary")
 			}
+			// Actual users have changed their first password; synthetic rows
+			// have not. Preserve each subject's own generation, not a uniform
+			// fixture assumption that would mask a reset during restore.
+			generations := func(connection *pgx.Conn, advancement int64) string {
+				t.Helper()
+				var document string
+				if err := connection.QueryRow(ctx, `SELECT jsonb_agg(jsonb_build_array(tenant_id,principal_id,credential_version-$1)
+				 ORDER BY tenant_id COLLATE "C",principal_id COLLATE "C")::text FROM iam.user_credentials`, advancement).Scan(&document); err != nil {
+					t.Fatal("read complete credential generations", err)
+				}
+				return document
+			}
+			originalGenerations := generations(database, 0)
 			bounded, boundedCancel := context.WithTimeout(ctx, 45*time.Second)
 			defer boundedCancel()
 			start := time.Now()
@@ -746,10 +763,8 @@ func TestIAMAuthenticationRecoveryCapacityPostgres(t *testing.T) {
 			}
 			defer target.Close(context.Background())
 			runAuthenticationRecoveryPostgresTool(t, ctx, targetConfig, "pg_restore", dump, "--exit-on-error")
-			var original bool
-			if err := target.QueryRow(ctx, `SELECT count(*)=$1 AND bool_and(credential_version=1) FROM iam.user_credentials`,
-				items-len(decoded.Accounts)).Scan(&original); err != nil || !original {
-				t.Fatal("capacity restore did not retain all original credentials", err)
+			if generations(target, 0) != originalGenerations {
+				t.Fatal("capacity restore did not retain every original credential generation")
 			}
 			// Copy the parsed configuration, not ConnString(): pgx retains the
 			// original DSN string even when its Database field has changed.
@@ -779,9 +794,12 @@ func TestIAMAuthenticationRecoveryCapacityPostgres(t *testing.T) {
 			if replay, err := recovery.Reopen(ctx, envelope.Closure, decoded); err != nil || replay != completion {
 				t.Fatal("capacity completion replay changed its original result", err)
 			}
+			if generations(target, 1) != originalGenerations {
+				t.Fatal("capacity reopen or replay did not advance each original generation exactly once")
+			}
 			var complete bool
 			if err := target.QueryRow(ctx, `SELECT state='OPEN' AND epoch=1
-			 AND (SELECT count(*)=$1 AND bool_and(credential_version=2) FROM iam.user_credentials)
+			 AND (SELECT count(*) FROM iam.user_credentials)=$1
 			 AND (SELECT count(*) FROM iam.authentication_recovery_attempt_floors)=$1
 			 AND (SELECT count(*) FROM iam.authentication_recovery_completions)=1
 			 AND (SELECT count(*) FROM iam.audit_outbox WHERE event_document->>'action' LIKE 'iam.authentication-recovery.%')=3
@@ -791,10 +809,106 @@ func TestIAMAuthenticationRecoveryCapacityPostgres(t *testing.T) {
 			if err := iammigration.Verify(ctx, target); err != nil {
 				t.Fatal("complete capacity restore failed its current schema verifier", err)
 			}
-			t.Logf("complete accounts=%d items=%d canonicalBytes=%d backup=%s close=%s reconcile=%s reopen=%s; sparse retained-state gate, not API provisioning throughput",
-				len(decoded.Accounts), items, len(encoded), backupDuration, closeDuration, reconcileDuration, reopenDuration)
+			if businessUsers > 0 {
+				if err := target.QueryRow(ctx, `SELECT
+				 (SELECT count(*)=$1 FROM iam.user_mfa_states WHERE enrollment_state='BOUND')
+				 AND (SELECT count(*)=$1 FROM iam.totp_authenticators WHERE state='ACTIVE')
+				 AND (SELECT count(*)=$1 FROM iam.mfa_recovery_batches WHERE revoked_at IS NULL)
+				 AND (SELECT count(*)=$1 FROM iam.authentication_recovery_code_fences)
+				 AND NOT EXISTS(SELECT 1 FROM iam.sessions WHERE revoked_at IS NULL)
+				 AND (SELECT count(*)=$1 FROM iam.notification_contacts)
+				 AND (SELECT count(*)=8 FROM iam.groups WHERE deleted_at IS NULL)
+				 AND (SELECT count(*)=$1*8 FROM iam.group_memberships WHERE removed_at IS NULL)
+				 AND (SELECT count(*)=8 FROM iam.policies WHERE owner_tenant_id IS NOT NULL)
+				 AND (SELECT count(*)=16 FROM iam.policy_versions v JOIN iam.policies p ON p.id=v.policy_id WHERE p.owner_tenant_id IS NOT NULL)
+				 AND (SELECT count(*)=$1 FROM iam.user_permission_boundaries WHERE revoked_at IS NULL)`, businessUsers).Scan(&complete); err != nil || !complete {
+					t.Fatal("restored bounded business fixture lost current MFA or policy qualifications", err)
+				}
+			}
+			t.Logf("complete accounts=%d items=%d realMFAUsers=%d canonicalBytes=%d backup=%s close=%s reconcile=%s reopen=%s; mixed/sparse retained-state gate, not API provisioning throughput or full-MFA maximum capacity",
+				len(decoded.Accounts), items, businessUsers, len(encoded), backupDuration, closeDuration, reconcileDuration, reopenDuration)
 		})
 	}
+}
+
+// This corpus adds real credential, contact, factor and policy provenance to
+// the transport-bound fixture. The remaining thousands of users stay explicitly
+// synthetic; copying encrypted MFA rows would not prove a valid dense workload.
+func prepareAuthenticationRecoveryCapacityBusiness(t *testing.T, ctx context.Context, api *identityaccess.Authority, database *pgx.Conn, document iamv1.BootstrapDocument) int {
+	const users = 16
+	t.Helper()
+	if err := api.RegisterEmailVerificationKeyset(ctx); err != nil {
+		t.Fatal("register capacity email custody", err)
+	}
+	admin, _, _ := prepareAuthenticationRecoveryIdentity(t, ctx, api, database, document, false)
+	groups := make([]iamv1.Group, 8)
+	var boundary iamv1.Policy
+	for index := range groups {
+		prefix := fmt.Sprintf("recovery-capacity-group-%d", index)
+		policyDocument := iamv1.PolicyDocument{LanguageVersion: "1", Scope: iamv1.AuthorityScopeTenant,
+			Statements: []iamv1.PolicyStatement{{SID: prefix, Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMAccessKeyList},
+				Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceUser, Match: iamv1.PolicyResourceAnyInAuthority}}}}}
+		policy, err := api.CreatePolicy(ctx, admin, iamv1.CreatePolicyRequest{DisplayName: prefix,
+			Document: policyDocument, RequestID: prefix + "-policy"})
+		if err != nil {
+			t.Fatal("create real capacity policy", err)
+		}
+		// Preserve a real non-default revision as well as the selected Allow.
+		policyDocument.Statements[0].Effect = iamv1.PolicyDeny
+		version, err := api.CreatePolicyVersion(ctx, admin, policy.Policy.ID, iamv1.CreatePolicyVersionRequest{
+			Document: policyDocument, ResourceVersion: policy.Policy.ResourceVersion, RequestID: prefix + "-version"})
+		if err != nil {
+			t.Fatal("create real capacity policy history", err)
+		}
+		boundary = version.Policy
+		groups[index], err = api.CreateGroup(ctx, admin, iamv1.CreateGroupRequest{Name: prefix, RequestID: prefix + "-create"})
+		if err != nil {
+			t.Fatal("create real capacity group", err)
+		}
+		if _, err := api.CreatePolicyAttachment(ctx, admin, iamv1.CreatePolicyAttachmentRequest{
+			Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(groups[index].ID)},
+			PolicyID: boundary.ID, PolicyResourceVersion: boundary.ResourceVersion, RequestID: prefix + "-attach"}); err != nil {
+			t.Fatal("attach real capacity group policy", err)
+		}
+	}
+	for index := 0; index < users; index++ {
+		prefix := fmt.Sprintf("recovery-capacity-member-%02d", index)
+		user, err := api.CreateUser(ctx, admin, iamv1.CreateUserRequest{LoginName: prefix, DisplayName: prefix,
+			InitialPassword: iamHTTPSecret(t, initialDeveloperPassword), RequestID: prefix + "-create"})
+		if err != nil {
+			t.Fatal("create real capacity user", err)
+		}
+		login, err := api.Login(ctx, iamv1.LoginRequest{LoginName: prefix + "@" + string(document.Organization.ID),
+			Password: iamHTTPSecret(t, initialDeveloperPassword), RequestID: prefix + "-login"})
+		if err != nil || !login.MustChangePassword {
+			t.Fatal("login real initial capacity credential", err)
+		}
+		if _, err := api.ChangePassword(ctx, login.Credential, iamv1.ChangePasswordRequest{
+			CurrentPassword: iamHTTPSecret(t, initialDeveloperPassword), NewPassword: iamHTTPSecret(t, changedDeveloperPassword),
+			RequestID: prefix + "-password"}); err != nil {
+			t.Fatal("change real capacity credential", err)
+		}
+		for index, group := range groups {
+			if _, err := api.CreateGroupMembership(ctx, admin, group.ID, iamv1.CreateGroupMembershipRequest{
+				UserID: user.ID, RequestID: fmt.Sprintf("%s-join-%d", prefix, index)}); err != nil {
+				t.Fatal("join real capacity group", err)
+			}
+		}
+		current, err := api.GetUserPermissionBoundary(ctx, admin, user.ID, prefix+"-boundary-read")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := api.SetUserPermissionBoundary(ctx, admin, user.ID, iamv1.SetUserPermissionBoundaryRequest{
+			PolicyID: boundary.ID, PolicyResourceVersion: boundary.ResourceVersion, ResourceVersion: current.ResourceVersion,
+			RequestID: prefix + "-boundary"}); err != nil {
+			t.Fatal("set real capacity user boundary", err)
+		}
+		if _, err := api.ListAccessKeys(ctx, login.Credential, user.ID, prefix+"-authorized-list"); err != nil {
+			t.Fatal("capacity source user could not use actual group/boundary authorization", err)
+		}
+		enrollAuthenticationRecoveryTOTP(t, ctx, api, database, document, login.Credential, user.LoginName)
+	}
+	return users
 }
 
 func TestIAMAuthenticationRecoveryPostgres(t *testing.T) {
@@ -1937,7 +2051,7 @@ func enrollAuthenticationRecoveryTOTP(t *testing.T, ctx context.Context, service
 	t.Helper()
 	password := iamHTTPSecret(t, changedDeveloperPassword)
 	pending, err := service.StartNotificationVerification(ctx, credential, iamv1.StartNotificationContactVerificationRequest{
-		Email:     "authentication-recovery@matrix.test",
+		Email:     loginName + "@matrix.test",
 		Password:  password,
 		RequestID: loginName + "-email-start",
 	})
