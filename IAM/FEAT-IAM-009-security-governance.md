@@ -708,11 +708,11 @@ LOGIN竞争局部证据：2026-09-25原integration owner的`TestIAMTOTPReplaceme
 | 无法确认时 | 不采信旧恢复码、因子、Session和challenge。作废/重新绑定方案必须有独立验证过的当前恢复资格，且不复活被撤销的权限。只有旧备份/旧凭据而无可信资格时保持关闭，不新建临时全权管理员 |
 | 再开放 | 原子安全状态及完成证据持久化、必要通知意图建立、所有副本确认后，installation才封存开放结果；丢失回包只续跑原意图，不重新清空状态或签发恢复能力 |
 
-当前固定`e24dbdae6b4ea420365a4527a0bd89b16e0d720f`沿用`api/adapter/installation/v1/authentication_recovery.go`及原`000014_authentication_recovery`的目的限定close/reconcile/reopen。close取得认证状态独占锁，普通事务的共享锁提供在途请求屏障；原安装/意图/backup/custody及epoch被封入精确Closure。reopen在同一事务推进凭据代际、撤销旧Session/RoleSession、结束在途尝试/挑战，为恢复码批次和AccessKey建立永久fence，并推进ACTIVE因子的消费步。这些是已有源码行为，不是“待新增epoch”的设计，也不是全部认证状态防回退的证明。
+当前源码恢复实现固定`1584de22e156ea47a4db6056e91a9340b4f364f9`，IAM45/Audit26，复用`api/adapter/installation/v1/authentication_recovery.go`及原`000014_authentication_recovery`的目的限定close/reconcile/reopen。close取得认证状态独占锁，普通事务的共享锁提供在途请求屏障；原安装/意图/backup/custody及epoch与完整当前资格摘要、逐USER重放下限共同封存。reconcile/reopen必须消费同一closure和snapshot，重检恢复库资格；reopen在同一事务推进凭据代际、撤销旧Session/RoleSession、结束在途尝试/挑战，为恢复码批次和AccessKey建立永久fence，并推进ACTIVE因子消费下限和凭据代际绑定的尝试floor。实现与局部门禁不等于独立CI或签名安装验收。
 
-该固定Closure只有安装和恢复意图相关字段，**不含恢复前最新Account安全设置、主体/授权资格或因子撤销谱系的完整证明**；备份custody只证明该快照所需包装材料。现有`TestIAMAuthenticationRecoveryPostgres`以两个独立初始化的数据库验证关闭/重放/再开放事务及受限角色，未制造真实T0备份之后的设置收紧、换因子或撤权；不能将它当作这些状态回退攻击已经通过。`TestIAMTOTPBackupSnapshotPostgres`证明同快照所需密钥集合，也不证明该快照在T1仍代表当前认证资格。新组合的签名恢复准入必须继续按上表关闭，不能因两个schema数字或材料摘要匹配而继承早期组合的验收。
+现有`TestIAMAuthenticationRecoveryPostgres`使用真实RR快照的全量dump/restore，覆盖三个独立数据库、两次还原及源端OTP/密码消费；`TestIAMAuthenticationRecoveryClosePostgres`通过实际资格变更证明旧备份在close效果前被拒。备份helper的资格摘要与TOTP custody摘要分别证明身份/授权状态和包装材料，不能互相替代。当前正向路径要求资格匹配，尚不支持从旧备份重建之后变更过的完整当前资格；这一缺口仍按下文的独立后继设计处理。固定前驱e24的无snapshot历史receipt只保留原字节读取，不能取得新执行资格；新组合也不能因schema数字或材料匹配而继承早期发布验收。
 
-下一恢复增量复用上述目的限定入口、专用数据库角色、封存意图和完成记录，不新建在线恢复/导出权限、通用receipt、第二套秘密托管或全局身份。设计要求如下；类型/交接边界见下文，完整SQL投影、函数形状及实际容量仍须IAM/installation共同验证：
+当前恢复切片复用上述目的限定入口、专用数据库角色、封存意图和完成记录，不新建在线恢复/导出权限、通用receipt、第二套秘密托管或全局身份。完整要求如下；实现与已执行证据见下文，剩余资格变化、容量和签名消费者仍须各owner共同验收：
 
 - 在第一次破坏性恢复之前，close已取得的同一权威屏障内建立完整当前安全状态承诺。结果与真实封存installation/bootstrap、原command/epoch、source/target release及准确backup绑定，由安装owner持久保存在本次数据库回退范围之外。只读预查或从目标旧库重新取expected均不能代替这个时间点的证明。
 - 完整性至少覆盖当前Account集合及真实root归属、启停状态、安全设置版本/requiredForUsers；USER的当前状态、凭据代际/强制改密、MFA状态/修订、当前因子/批次和可信通知联系修订。已撤销的Policy/附件/Role及受保护平台恢复资格也不能因只补MFA字段而默认继承。无需导出明文密码、种子、码或可离线猜测秘密；具体凭据验证材料如确需携带，必须走经批准的受保护格式，不能塞入普通Closure/Audit/support。
@@ -790,6 +790,8 @@ TOTP最后额度竞争增量继续归同一个三库门禁：在上述真实恢�
 上述单Account混合工作集完整canonical为668,152字节，backup投影2.483秒、close5.659秒、reconcile2.739秒、reopen1.328秒；1500个Account各一USER的稀疏工作集为565,896字节，分别3.524/7.240/3.369/5.071秒。前一次混合工作集close实测10.578秒，不能只取较快测量宣称峰值余量。每种fixture仍为2分钟、SQL15秒及私有命令45秒；PG18.6沿原2逻辑CPU/1GiB/24进程/16连接，Go1.26.3/GOMAXPROCS2/GOMEMLIMIT512MiB。完整owner/ACL/RLS恢复后逐主体比较原代际，不再假设所有凭据都是第1代；reopen及其精确重放后每主体恰好+1、一个floor、一次completion和三个恢复事实。16个有效因子、批次和当前策略/组关系均保留，但全部旧Session撤销、16个批次全部建立永久恢复fence；最终schema verify通过。3001项在真实backup和有效形状的close均失败关闭，后者仍OPEN/epoch0、无receipt或成功事实。还原目标沿原唯一命名派生并正常删除，未新增数据库/历史版本CI矩阵。这个混合工作集不证明3000个完整MFA用户、任意历史密度、峰值余量或生产业务配额，密集资格容量缺口仍保留。
 
 同一最终源码同时重跑原三库恢复门禁70.92秒，连容量入口包合计163.987秒通过；保留源OTP重放拒绝/持久扣额、双Authority最后额度竞争、第二次实际还原及真正改密后的旧完成重放断言。随后IAM各包和architecture默认race-p2、同范围vet及diff通过；默认SKIP不计真库证据。仅本轮12个可重建合成数据库在零客户端核对后正常删除，专属PG正常停止，原保留数据及其他任务环境不变。当前仅本地验证，尚无本增量的独立CI成功证据。
+
+普通成员业务恢复增量：原三库门禁将直接用户附件替换为真实Group附件，并在原Key创建后设立更窄的list-only USER边界；组仍允许list/create。2026-09-28新三库PG18.6、原限额及4分钟期限、串行race-p1通过90.35秒（包93.939秒）。双Authority竞争取得的唯一新MFA会话可在双方查询原Key，但create受USER边界拒绝，用户管理/平台目录同样拒绝；没有新Key、秘密或成功事实，原Key的精确command恢复fence保持。原两次实际还原、OTP/密码预算及完成重放检查均保留。最终integration/architecture默认race-p2与同范围vet/diff通过；两轮共6个可重建合成库经归属/零客户端核对后删除，专属PG正常停止。本片不增加数据库或历史版本CI矩阵，也不改变生产权限、SQL或IAM45的消费契约；独立CI仍待确认。
 
 新reconcile五参、reopen四参和私有FILE入口均实际消费原snapshot；unit/race证明快照缺失、超2MiB、截断、非canonical和错绑定在数据库配置前被拒，有效文件对照确实到达下一阶段，用例不为坏快照开启事务。该运行仍为同进程Authority加实际PG/备份工具，不是独立签名CLI/安装或LIVE UI；完整资格变化恢复、预算完整矩阵、密集资格恢复容量、当前源码独立CI仍未验收，因此不标整体恢复已完成。只操作本任务限额本机PG18.6及合成库，未操作其他任务环境或远端。
 
@@ -871,7 +873,7 @@ TOTP最后额度竞争增量继续归同一个三库门禁：在上述真实恢�
 | 导出后删项/变体、遗漏新Account、超界集合或错误安装 | 完整性和归属核对失败，任何新密码/绑定/完成及成功Audit事实均不得部分提交 |
 | close/封存/数据库恢复/reconcile/reopen各阶段中断 | 原意图与准确完成可续跑，不额外开放、清空状态或重复消费，两个真实IAM均受相同关闭结果约束 |
 
-验收须同时包含安全状态确可恢复的正向路径及不支持状态的明确拒绝；只有负向通过不标记完整恢复完成。纯契约字节测试、IAM真库事务、实际签名安装与浏览器分别记录，不继承其他分支的组合状态。
+验收须同时包含安全状态确可恢复的正向路径及不支持状态的明确拒绝；只有负向通过不标记完整恢复完成。普通成员的正向恢复沿原三库门禁验证：以真实Group附件和USER边界取得的业务权限，在全量还原及reopen后由新MFA会话重新行使；两个Authority都应允许原资源查询，但仍拒绝未授予的用户管理和平台目录权限。Group允许list/create、USER边界仅允许list，恢复后create仍须明确权限拒绝且无新Key/秘密/成功事实，不能使用与组完全相同的边界证明限制没有丢失。旧会话和旧Key的永久fence不因新会话正常访问而解除，不用主账号登录或关系行计数代替该业务证明。纯契约字节测试、IAM真库事务、实际签名安装与浏览器分别记录，不继承其他分支的组合状态。
 
 设置竞争的有界门禁沿原integration owner复用真实初始化：六个独立Account，各自正常改密、确认通知地址、绑定TOTP、登录并取得准确设置意图的PROVED证明。设置false→true分别与本人logout、保留当前Session的日常改密、保存恢复码开始重绑竞争，每项控制两种提交次序。在第一事务的原成功outbox写入处暂停，实际观察第二副本的数据库锁依赖后才释放，不以goroutine启动顺序代替串行化证据。先提交设置则旧Session/LOGIN挑战不能再操作；先提交logout/恢复则旧Session不能更新设置；先提交保留当前Session的改密也必须使旧凭据代际的StepUp失效。逐项核对版本、generation、因子/恢复码消费、证明消费及完成/Audit/通知原子结果，schema等值重放及新Authority不得复活败方资格。独立三分钟期限及原尝试预算不变，不改时钟或直写正向身份；通知地址代码的存储解封只证明事务，不冒充SMTP。局部真实证据归上文，六项不替代上表其余因子/设置放宽/reset/Role竞争。
 

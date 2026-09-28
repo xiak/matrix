@@ -1974,13 +1974,24 @@ func prepareAuthenticationRecoveryIdentity(t *testing.T, ctx context.Context, se
 		if err != nil {
 			t.Fatal("create recovery fixture AccessKey policy", err)
 		}
+		group, err := service.CreateGroup(ctx, login.Credential, iamv1.CreateGroupRequest{
+			Name: "Authentication recovery business users", RequestID: "auth-recovery-key-group",
+		})
+		if err != nil {
+			t.Fatal("create recovery fixture authorization group", err)
+		}
+		if _, err := service.CreateGroupMembership(ctx, login.Credential, group.ID, iamv1.CreateGroupMembershipRequest{
+			UserID: keyUser.ID, RequestID: "auth-recovery-key-membership",
+		}); err != nil {
+			t.Fatal("join recovery fixture authorization group", err)
+		}
 		if _, err := service.CreatePolicyAttachment(ctx, login.Credential, iamv1.CreatePolicyAttachmentRequest{
-			Target:                iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(keyUser.ID)},
+			Target:                iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(group.ID)},
 			PolicyID:              policy.Policy.ID,
 			PolicyResourceVersion: policy.Policy.ResourceVersion,
 			RequestID:             "auth-recovery-key-policy-attachment",
 		}); err != nil {
-			t.Fatal("attach recovery fixture AccessKey policy", err)
+			t.Fatal("attach recovery fixture group policy", err)
 		}
 		keyLogin, err = service.Login(ctx, iamv1.LoginRequest{
 			LoginName: "auth-recovery-key-user@" + string(document.Organization.ID),
@@ -2000,6 +2011,28 @@ func prepareAuthenticationRecoveryIdentity(t *testing.T, ctx context.Context, se
 		})
 		if err != nil || created.Outcome != "APPLIED" || !created.Secret.Present() {
 			t.Fatalf("create recovery fixture AccessKey: %v", err)
+		}
+		// The group still allows create. This narrower current boundary must
+		// continue to deny it after recovery, while preserving list access.
+		limited, err := service.CreatePolicy(ctx, login.Credential, iamv1.CreatePolicyRequest{
+			DisplayName: "Recovery business read ceiling", RequestID: "auth-recovery-key-boundary-policy",
+			Document: iamv1.PolicyDocument{LanguageVersion: "1", Scope: iamv1.AuthorityScopeTenant,
+				Statements: []iamv1.PolicyStatement{{SID: "list-only", Effect: iamv1.PolicyAllow,
+					Actions:   []iamv1.Action{iamv1.ActionIAMAccessKeyList},
+					Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceUser, Match: iamv1.PolicyResourceAnyInAuthority}}}}},
+		})
+		if err != nil {
+			t.Fatal("create narrower recovery fixture boundary", err)
+		}
+		boundary, err := service.GetUserPermissionBoundary(ctx, login.Credential, keyUser.ID, "auth-recovery-key-boundary-read")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := service.SetUserPermissionBoundary(ctx, login.Credential, keyUser.ID, iamv1.SetUserPermissionBoundaryRequest{
+			PolicyID: limited.Policy.ID, PolicyResourceVersion: limited.Policy.ResourceVersion,
+			ResourceVersion: boundary.ResourceVersion, RequestID: "auth-recovery-key-boundary",
+		}); err != nil {
+			t.Fatal("set recovery fixture user boundary", err)
 		}
 		mfa = enrollAuthenticationRecoveryTOTP(t, ctx, service, database, document, keyLogin.Credential, keyUser.LoginName)
 		mfa.login = authenticationRecoveryMFALogin(t, ctx, service, database, document, mfa, "before-close", 0)
@@ -2273,12 +2306,38 @@ func authenticationRecoveryConcurrentMFALogin(t *testing.T, ctx context.Context,
 		login.Session.ID, mfa.factorID).Scan(&final); err != nil || !final {
 		t.Fatal("concurrent OTP login did not preserve source budget, exact Session/fact or challenge accounting", err)
 	}
-	for _, peer := range peers {
+	for index, peer := range peers {
 		if _, err := peer.CurrentIdentity(ctx, login.Credential); err != nil {
 			t.Fatal("winning MFA Session is not valid on both authorities", err)
 		}
+		directory, err := peer.ListAccessKeys(ctx, login.Credential, iamv1.PrincipalID(subject.UserID), fmt.Sprintf("reopened-business-key-list-%d", index))
+		if err != nil || directory.AccountID != document.Organization.ID || string(directory.UserID) != subject.UserID || len(directory.Items) != 1 {
+			t.Fatal("restored group/boundary permissions did not allow the original business resource", err)
+		}
+		if result, err := peer.CreateAccessKey(ctx, login.Credential, iamv1.PrincipalID(subject.UserID), iamv1.CreateAccessKeyRequest{
+			UserResourceVersion: directory.UserResourceVersion, RequestID: fmt.Sprintf("reopened-business-boundary-denied-%d", index),
+		}); !errors.Is(err, identityaccess.ErrForbidden) || result.Secret.Present() || result.Outcome != "" {
+			t.Fatal("restored narrower boundary did not constrain the group's create permission", err)
+		}
+		var originalKeyStillFenced bool
+		if err := database.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM iam.authentication_recovery_access_key_fences f
+		 JOIN iam.access_keys k ON k.id=f.access_key_id WHERE k.tenant_id=$1 AND k.user_id=$2 AND f.access_key_id=$3 AND f.command_id=$4)`,
+			document.Organization.ID, subject.UserID, directory.Items[0].Key.ID, snapshot.CommandID).Scan(&originalKeyStillFenced); err != nil || !originalKeyStillFenced {
+			t.Fatal("business resource access lost the original AccessKey recovery fence", err)
+		}
+		if _, err := peer.GetUser(ctx, login.Credential, document.Administrator.ID, fmt.Sprintf("reopened-business-user-denied-%d", index)); !errors.Is(err, identityaccess.ErrForbidden) {
+			t.Fatal("ordinary recovered user acquired ungranted user-management permission", err)
+		}
+		if _, err := peer.ListAccounts(ctx, login.Credential, "", fmt.Sprintf("reopened-business-platform-denied-%d", index)); !errors.Is(err, identityaccess.ErrForbidden) {
+			t.Fatal("ordinary recovered user acquired platform account-directory permission", err)
+		}
 	}
-	t.Log("two current challenges blocked on the restored USER; source OTP budget4→5 admitted exactly one MFA Session/fact and retained the original window/sequence")
+	var noExtraKey bool
+	if err := database.QueryRow(ctx, `SELECT (SELECT count(*) FROM iam.access_keys)=1
+	 AND (SELECT count(*) FROM iam.audit_outbox WHERE event_document->>'action'='iam.access-key.created')=1`).Scan(&noExtraKey); err != nil || !noExtraKey {
+		t.Fatal("denied post-recovery boundary operation created a partial Key or success fact", err)
+	}
+	t.Log("two current challenges blocked on the restored USER; source OTP budget4→5 admitted exactly one MFA Session/fact; both authorities allow group list but enforce the narrower create boundary, deny user/platform management and preserve the Key fence")
 	return login
 }
 
