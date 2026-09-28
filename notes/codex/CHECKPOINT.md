@@ -5,11 +5,14 @@
 - Updated: 2026-09-28
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/phase3-mfa-enabling`
-- Pushed milestone: `facbc5437c74ba67cedd6e662cd2097baa278637`.
+- Pushed milestone: `461ea242`.
   Its functional predecessor `b020d4a56c1b1cfb8fb9930d09e20fb0f7604c73`
   passed [Verification 36389282316](https://github.com/xiak/matrix/actions/runs/36389282316)
   in all four jobs. The current signed profile is IAM 45 / Audit 26 /
-  PaaS 6, revision 16. This is not final combined-release acceptance.
+  PaaS 6, revision 16. The signed initial `495fc04e` to successor `b020d4a5`
+  browser-ready offline gate passed the real local Docker 27.5.1 runtime;
+  FEAT-005 owns its exact evidence and limits. This is not final
+  combined-release acceptance.
 - Historical host self-enrollment acceptance belongs to fixed
   `be3c4a96b4381426c01cd6315eaa3713c2855982`; the current composition
   still needs its own live-browser and source-preserving two-host gates.
@@ -28,7 +31,8 @@
 The signed two-host attempt on the current composition reached real platform
 install and original-primary recovery but could not prove host identity through
 a NAT-forwarded control plane: both nodes appeared as one gateway peer.
-FEAT-008 records the evidence and the required source-preserving topology.
-Do not weaken observed-peer admission or claim this attempt as a pass. The
-LIVE IAM browser also remains open; its current directory/API mismatch is in
-FEAT-007. Preserve Phase 2 and remote machines, and clean isolated tests.
+FEAT-008 records the evidence and the required source-preserving topology;
+the later bounded port/bridge probe is not a replacement gate. Do not weaken
+observed-peer admission or claim this attempt as a pass. The LIVE IAM browser
+also remains open; its current directory/API mismatch is in FEAT-007.
+Preserve Phase 2 and remote machines, and clean isolated tests.
