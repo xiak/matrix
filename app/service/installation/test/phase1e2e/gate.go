@@ -1280,9 +1280,23 @@ func (value *gate) beforeRestart(ctx context.Context) (gateErr error) {
 func (value *gate) rejectRevokedAuthorizationRecovery(ctx context.Context, bearer []byte, forbidden [][]byte) error {
 	// The selected backup contains this live grant. Its later revocation must
 	// make the backup's sealed authentication/authorization projection stale.
+	createdGroup, err := value.edge.json(ctx, http.MethodPost, "/api/iam/v1/groups", bearer,
+		iamv1.CreateGroupRequest{
+			Name: "phase1-recovery-probe", Description: "Recovery authorization probe",
+			RequestID: "phase1-recovery-t0-group",
+		}, nil, http.StatusCreated)
+	if err != nil {
+		return fail("recovery-authorization-t0-group")
+	}
+	var group iamv1.Group
+	decodeErr := decodeOne(createdGroup.body, &group)
+	clear(createdGroup.body)
+	if decodeErr != nil || iamv1.ValidateGroup(group) != nil || group.AccountID != "organization-default" {
+		return fail("recovery-authorization-t0-group")
+	}
 	created, err := value.edge.json(ctx, http.MethodPost, "/api/iam/v1/policy-attachments", bearer,
 		iamv1.CreatePolicyAttachmentRequest{
-			Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: "principal-admin"},
+			Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(group.ID)},
 			PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1,
 			RequestID: "phase1-recovery-t0-viewer-attachment",
 		}, nil, http.StatusOK)
@@ -1291,10 +1305,12 @@ func (value *gate) rejectRevokedAuthorizationRecovery(ctx context.Context, beare
 	}
 	attachment, decodeErr := iamv1.DecodePolicyAttachment(bytes.NewReader(created.body))
 	clear(created.body)
-	if decodeErr != nil || attachment.Target.ID != "principal-admin" || attachment.RevokedAt != nil {
+	if decodeErr != nil || attachment.Target.Kind != iamv1.PolicyTargetGroup ||
+		attachment.Target.ID != string(group.ID) || attachment.RevokedAt != nil {
 		return fail("recovery-authorization-t0-grant")
 	}
 	if _, err := value.edge.waitAuditActions(ctx, bearer, map[auditv1.Action]string{
+		auditv1.ActionIAMGroupCreated:            string(group.ID),
 		auditv1.ActionIAMPolicyAttachmentCreated: string(attachment.ID),
 	}); err != nil {
 		return fail("recovery-authorization-t0-audit")
@@ -1318,19 +1334,19 @@ func (value *gate) rejectRevokedAuthorizationRecovery(ctx context.Context, beare
 	}); err != nil {
 		return fail("recovery-authorization-t1-audit")
 	}
-	readDirectory := func() (iamv1.UserList, error) {
-		response, err := value.edge.json(ctx, http.MethodGet, "/api/iam/v1/users", bearer, nil, nil, http.StatusOK)
+	readDirectory := func() (iamv1.GroupList, error) {
+		response, err := value.edge.json(ctx, http.MethodGet, "/api/iam/v1/groups", bearer, nil, nil, http.StatusOK)
 		if err != nil {
-			return iamv1.UserList{}, err
+			return iamv1.GroupList{}, err
 		}
-		var directory iamv1.UserList
+		var directory iamv1.GroupList
 		decodeErr := decodeOne(response.body, &directory)
 		clear(response.body)
 		if decodeErr != nil {
-			return iamv1.UserList{}, decodeErr
+			return iamv1.GroupList{}, decodeErr
 		}
-		if err := iamv1.ValidateUserList(directory); err != nil {
-			return iamv1.UserList{}, err
+		if err := iamv1.ValidateGroupList(directory); err != nil {
+			return iamv1.GroupList{}, err
 		}
 		return directory, nil
 	}
@@ -1357,19 +1373,19 @@ func (value *gate) rejectRevokedAuthorizationRecovery(ctx context.Context, beare
 	if err != nil || !reflect.DeepEqual(beforeDirectory, directory) {
 		return fail("recovery-revoked-authorization-retained")
 	}
-	primaryFound := false
+	groupFound := false
 	for _, entry := range directory.Items {
-		if entry.User.ID != "principal-admin" {
+		if entry.Group.ID != group.ID {
 			continue
 		}
-		primaryFound = true
+		groupFound = true
 		for _, current := range entry.PolicyAttachments {
 			if current.ID == attachment.ID {
 				return fail("recovery-revoked-authorization-retained")
 			}
 		}
 	}
-	if !primaryFound {
+	if !groupFound {
 		return fail("recovery-revoked-authorization-retained")
 	}
 	if err := value.repeatedStatusAndVerify(ctx, value.releases.a, value.releases.a.Manifest.Release.ID, ""); err != nil {
