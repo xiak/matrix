@@ -3727,5 +3727,25 @@
     "identityType": "Identity type",
     "roleSession": "Preview role session",
     "boundaryResult": "Boundary {name}: {decision}. Grant policies must also allow the request."
+  },
+  "PasswordRulesPreview": {
+    "eyebrow": "Account security",
+    "title": "Password rules",
+    "hint": "The proposed account-level password experience, separate from sign-in methods and resource grants.",
+    "badge": "Design preview · MOCK",
+    "summaryTitle": "Proposed defaults",
+    "summaryHint": "A planned rule structure, not this account's current configuration.",
+    "previewBoundary": "This view neither reads nor saves IAM password rules and changes no sign-in credentials. Editing remains unavailable until the backend contract and security gates are accepted.",
+    "minimumLength": "Length",
+    "minimumLengthValue": "At least 15 code points; platform limit of 128 code points and 512 UTF-8 bytes",
+    "characterClasses": "Character classes",
+    "characterClassesValue": "Lowercase, uppercase, digits and symbols are separate options; none is required by the proposed default",
+    "reuse": "Reuse",
+    "reuseValue": "The current password can never be reused; the proposed default also checks 1 earlier password",
+    "accountScope": "Identity scope",
+    "accountScopeValue": "Ordinary users in this account, checked on password creation, reset or self-change",
+    "protectedScope": "Protected identities",
+    "protectedScopeValue": "The primary identity and users with a non-revoked installation attachment retain a separate product floor, so account rules cannot lock them out",
+    "changeBoundary": "A future rule change will not certify existing passwords or force every user to change immediately. Effect and conflict handling depend on IAM's fixed contract."
   }
 }

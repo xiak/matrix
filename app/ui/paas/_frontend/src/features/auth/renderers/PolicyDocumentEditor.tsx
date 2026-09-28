@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
 import { Alert, Button, Dialog, FormField, Select, Tabs, TextArea } from "@ui/xiak";
@@ -14,6 +14,19 @@ import { canEditPolicyFeatures, PolicyFeatureEditor } from "./PolicyFeatureEdito
 import styles from "./PolicyAuthoringWizard.module.css";
 
 const visualStatements = (document: PolicyDocument): StatementDraft[] => document.statement.map((entry, index) => ({ id: index, effect: entry.effect, service: statementService(entry.action), condition: entry.condition ? structuredClone(entry.condition) : undefined, actions: entry.action.join("\n"), resources: entry.resource.join("\n") }));
+const draftDocument = (statements: readonly StatementDraft[]): PolicyDocument => ({ version: "1", statement: statements.map((entry) => ({ effect: entry.effect, action: entry.actions.split(/\r?\n/).map((line) => line.trim()).filter(Boolean), resource: entry.resources.split(/\r?\n/).map((line) => line.trim()).filter(Boolean), ...(entry.condition ? { condition: entry.condition } : {}) })) });
+
+const PolicyStatementRow = memo(function PolicyStatementRow({ statement, index, total, accountId, resources, tagMode, onChangeStatement, onRemoveStatement, onMoveStatement }: {
+  statement: StatementDraft; index: number; total: number; accountId: string; resources: AccessWorkspace["testResources"]; tagMode: boolean;
+  onChangeStatement(id: number, value: StatementDraft): void;
+  onRemoveStatement(id: number): void;
+  onMoveStatement(id: number, direction: -1 | 1): void;
+}) {
+  const change = useCallback((value: StatementDraft) => onChangeStatement(statement.id, value), [onChangeStatement, statement.id]);
+  const remove = useCallback(() => onRemoveStatement(statement.id), [onRemoveStatement, statement.id]);
+  const move = useCallback((direction: -1 | 1) => onMoveStatement(statement.id, direction), [onMoveStatement, statement.id]);
+  return <PolicyStatementEditor accountId={accountId} resources={resources} tagMode={tagMode} value={statement} index={index} total={total} onChange={change} onRemove={remove} onMove={move} />;
+});
 
 const objectFields = (value: unknown, keys: readonly string[]): value is Record<string, unknown> =>
   Boolean(value && typeof value === "object" && !Array.isArray(value) && Object.keys(value).every((key) => keys.includes(key)));
@@ -65,23 +78,42 @@ export function PolicyDocumentEditor({ text, onChange, policies, accountId, reso
   const editorDraft = useMemo(() => readEditorDraft(text), [text]);
   const [mode, setMode] = useState<PolicyCreationMethod>(editorDraft ? initialMode : "json");
   const [statements, setStatements] = useState<StatementDraft[]>(() => editorDraft ? visualStatements(editorDraft) : []);
+  const statementsRef = useRef(statements);
+  const onChangeRef = useRef(onChange);
+  useLayoutEffect(() => { onChangeRef.current = onChange; }, [onChange]);
   const nextId = useRef(statements.length);
   const [templateId, setTemplateId] = useState("");
   const [replaceTemplate, setReplaceTemplate] = useState<AccessPolicy | null>(null);
   const template = policies.find((policy) => policy.id === templateId);
   function changeMode(next: PolicyCreationMethod) { setMode(next); onModeChange?.(next); }
-  const draftDocument = (next: StatementDraft[]): PolicyDocument => ({ version: "1", statement: next.map((entry) => ({ effect: entry.effect, action: entry.actions.split(/\r?\n/).map((line) => line.trim()).filter(Boolean), resource: entry.resources.split(/\r?\n/).map((line) => line.trim()).filter(Boolean), ...(entry.condition ? { condition: entry.condition } : {}) })) });
   const featureDocument = mode === "json" ? editorDraft : draftDocument(statements);
   const featuresAvailable = Boolean(featureDocument && canEditPolicyFeatures(featureDocument));
-  function update(next: StatementDraft[]) {
+  const replaceStatements = useCallback((next: StatementDraft[]) => {
+    statementsRef.current = next;
     setStatements(next);
-    onChange(JSON.stringify(draftDocument(next), null, 2));
-  }
+  }, []);
+  const update = useCallback((next: StatementDraft[]) => {
+    replaceStatements(next);
+    onChangeRef.current(JSON.stringify(draftDocument(next), null, 2));
+  }, [replaceStatements]);
+  const changeStatement = useCallback((id: number, value: StatementDraft) => {
+    update(statementsRef.current.map((entry) => entry.id === id ? value : entry));
+  }, [update]);
+  const removeStatement = useCallback((id: number) => {
+    update(statementsRef.current.filter((entry) => entry.id !== id));
+  }, [update]);
+  const moveStatement = useCallback((id: number, direction: -1 | 1) => {
+    const next = [...statementsRef.current];
+    const index = next.findIndex((entry) => entry.id === id);
+    if (index < 0 || index + direction < 0 || index + direction >= next.length) return;
+    [next[index], next[index + direction]] = [next[index + direction]!, next[index]!];
+    update(next);
+  }, [update]);
   function applyTemplate(policy: AccessPolicy) {
     const document = policy.versions.find((entry) => entry.id === policy.defaultVersion)!.document;
     const nextText = JSON.stringify(document, null, 2);
     onChange(nextText);
-    setStatements(visualStatements(document).map((entry) => ({ ...entry, id: nextId.current++ })));
+    replaceStatements(visualStatements(document).map((entry) => ({ ...entry, id: nextId.current++ })));
     changeMode(readEditorDraft(nextText) ? "visual" : "json");
     setReplaceTemplate(null);
   }
@@ -91,23 +123,19 @@ export function PolicyDocumentEditor({ text, onChange, policies, accountId, reso
       <Button variant="secondary" disabled={!template} onClick={() => { if (!template) return; if (hasDocumentChanges) setReplaceTemplate(template); else applyTemplate(template); }}>{t("applyTemplate")}</Button>
     </div>
     <Tabs.Root value={mode} onValueChange={(next) => {
-      if (next !== "json" && mode === "json" && editorDraft) { setStatements(visualStatements(editorDraft)); nextId.current = editorDraft.statement.length; }
+      if (next !== "json" && mode === "json" && editorDraft) { replaceStatements(visualStatements(editorDraft)); nextId.current = editorDraft.statement.length; }
       changeMode(policyCreationMethod(next));
     }}><Tabs.List aria-label={w("document")}><Tabs.Trigger value="visual" disabled={mode === "json" && !editorDraft}>{w("visual")}</Tabs.Trigger><Tabs.Trigger value="json">{w("json")}</Tabs.Trigger><Tabs.Trigger value="tags" disabled={mode === "json" && !editorDraft}>{p("tagMethod")}</Tabs.Trigger><Tabs.Trigger value="features" disabled={!featuresAvailable}>{t("featureMethod")}</Tabs.Trigger></Tabs.List>
       <Tabs.Content value={mode === "tags" ? "tags" : "visual"}><div className={styles.stack}>
         {mode === "tags" ? <Alert>{p("tagMethodHint")}</Alert> : null}
-        {statements.map((statement, index) => <PolicyStatementEditor accountId={accountId} resources={resources} tagMode={mode === "tags"} key={statement.id} value={statement} index={index} total={statements.length} onChange={(value) => update(statements.map((entry, at) => at === index ? value : entry))} onRemove={() => update(statements.filter((entry) => entry.id !== statement.id))} onMove={(direction) => {
-          const next = [...statements];
-          [next[index], next[index + direction]] = [next[index + direction]!, next[index]!];
-          update(next);
-        }} />)}
+        {statements.map((statement, index) => <PolicyStatementRow accountId={accountId} resources={resources} tagMode={mode === "tags"} key={statement.id} statement={statement} index={index} total={statements.length} onChangeStatement={changeStatement} onRemoveStatement={removeStatement} onMoveStatement={moveStatement} />)}
         <div><Button variant="secondary" disabled={statements.length >= 50} onClick={() => update([...statements, { id: nextId.current++, effect: "allow", service: "", actions: "", resources: "*" }])}><Plus aria-hidden="true" />{t("addStatement")}</Button></div>
       </div></Tabs.Content>
       <Tabs.Content value="json"><FormField id={id + "-json"} label={w("document")} hint={w("policyFormat")}><TextArea id={id + "-json"} className={styles.codeEditor} aria-describedby={id + "-json-hint"} invalid={Boolean(error)} rows={18} maxLength={65536} value={text} spellCheck={false} onChange={(event) => onChange(event.target.value)} /></FormField>
         {!editorDraft ? <p className={styles.note}>{t("visualUnavailable")}</p> : null}
       </Tabs.Content>
       <Tabs.Content value="features">{featureDocument && featuresAvailable ? <PolicyFeatureEditor document={featureDocument} onChange={(document) => {
-        setStatements(visualStatements(document).map((entry) => ({ ...entry, id: nextId.current++ })));
+        replaceStatements(visualStatements(document).map((entry) => ({ ...entry, id: nextId.current++ })));
         onChange(JSON.stringify(document, null, 2));
       }} /> : null}</Tabs.Content>
     </Tabs.Root>

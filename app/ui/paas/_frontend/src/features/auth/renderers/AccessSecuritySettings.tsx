@@ -6,6 +6,7 @@ import { useAccountAccess } from "../application/AccountAccessProvider";
 import { userSsoConfigurationIssue, type AccessWorkspace, type UserSsoConfiguration, type UserSsoConfigurationIssue } from "../domain/accessWorkspace";
 import { MfaSecurityPreview } from "./MfaPreviewExperience";
 import { AccountSecuritySettingsPreview } from "./AccountSecuritySettingsPreview";
+import { PasswordRulesPreview } from "./PasswordRulesPreview";
 import styles from "./AccountAccessRenderer.module.css";
 import securityStyles from "./MfaPreviewExperience.module.css";
 
@@ -15,6 +16,7 @@ export function AccessSecuritySettings({ workspace }: { workspace: AccessWorkspa
     <Alert>{t("mockBoundary")}</Alert>
     <MfaSecurityPreview workspace={workspace} />
     <AccountSecuritySettingsPreview workspace={workspace} />
+    <PasswordRulesPreview />
   </div>;
 }
 

@@ -2437,6 +2437,9 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByRole("heading", { name: "身份验证方法" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "多因素认证要求" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "登录时的 MFA 要求" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "密码规则" })).toBeTruthy();
+    expect(screen.getByText(/此处不读取或保存 IAM 密码规则/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /保存密码规则/ })).toBeNull();
     expect(screen.getByText("当前规则")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "编辑模拟规则" })).toBeNull();
     expect(screen.getByText(/操作者本人必须先绑定验证器/)).toBeTruthy();

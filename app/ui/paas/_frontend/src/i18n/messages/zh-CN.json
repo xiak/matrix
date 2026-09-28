@@ -3727,5 +3727,25 @@
     "identityType": "身份类型",
     "roleSession": "角色体验会话",
     "boundaryResult": "权限边界 {name}：{decision}。最终结果仍需授权策略同时允许。"
+  },
+  "PasswordRulesPreview": {
+    "eyebrow": "账户安全",
+    "title": "密码规则",
+    "hint": "账户级密码校验的目标体验；与登录方式、资源授权分别管理。",
+    "badge": "设计预览 · MOCK",
+    "summaryTitle": "拟定默认规则",
+    "summaryHint": "仅展示待接入的规则结构，不代表当前账户配置。",
+    "previewBoundary": "此处不读取或保存 IAM 密码规则，也不会改变任何人的登录凭证。后端契约与安全验收完成前不开放编辑。",
+    "minimumLength": "长度",
+    "minimumLengthValue": "最少 15 个码点；平台上限 128 个码点及 512 UTF-8 字节",
+    "characterClasses": "字符类型",
+    "characterClassesValue": "小写、大写、数字、符号分别可选；拟定默认均不强制",
+    "reuse": "重复使用",
+    "reuseValue": "当前密码始终不可复用；拟定默认再检查 1 次历史密码",
+    "accountScope": "适用身份",
+    "accountScopeValue": "本账户的普通子用户，在创建、重置或自行修改密码时校验",
+    "protectedScope": "受保护身份",
+    "protectedScopeValue": "主身份及持有未撤销安装级权限附件的用户采用独立产品底线，不由租户规则锁死",
+    "changeBoundary": "将来修改规则不会自动认定存量密码合规，也不会立即强制所有用户改密；生效和冲突处理以 IAM 固定契约为准。"
   }
 }
