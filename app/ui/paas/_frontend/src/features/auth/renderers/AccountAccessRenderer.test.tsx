@@ -242,8 +242,12 @@ function AccountIntentProbe() {
     <button onClick={() => void session.login("admin-b", "password-b")}>login-b</button>
     <button onClick={() => access.changeRoleSessionRevokeIntent(null, accountSwitchIntent)}>remember-revoke</button>
     <button onClick={() => access.changeRoleSessionRevokeIntent(accountSwitchIntent.requestId, { ...accountSwitchIntent, phase: "checking" })}>late-old-update</button>
+    <button onClick={() => { const target = access.scene?.users[0]; if (target) access.beginUserPolicyAttachment(target, platformPolicy.id); }}>begin-attachment</button>
+    <button onClick={() => { if (access.userPolicyAttachmentIntent) void access.submitUserPolicyAttachment(access.userPolicyAttachmentIntent.requestId); }}>submit-attachment</button>
     <output aria-label="active-account">{access.scene?.accountId ?? "none"}</output>
     <output aria-label="pending-revoke">{access.roleSessionRevokeIntent?.requestId ?? "none"}</output>
+    <output aria-label="pending-attachment">{access.userPolicyAttachmentIntent?.requestId ?? "none"}</output>
+    <output aria-label="attachment-success">{access.success ?? "none"}</output>
   </>;
 }
 
@@ -1837,6 +1841,50 @@ describe("account access", () => {
     expect(screen.getByLabelText("pending-revoke").textContent).toBe("none");
   });
 
+  it("does not deliver an old attachment result into a new account session", async () => {
+    const auth = iam({
+      login: vi.fn(async ({ loginName }) => {
+        const suffix = loginName.endsWith("-b") ? "b" : "a";
+        return { outcome: "AUTHENTICATED" as const, credential: `credential-tenant-${suffix}`, mustChangePassword: false,
+          session: { id: `session-${suffix}`, organizationId: `tenant-${suffix}`, principalId: `primary-${suffix}`, status: "ACTIVE" as const,
+            issuedAt: timestamp, expiresAt: "2099-08-27T00:00:00Z" } };
+      })
+    });
+    let finishOldRequest: (() => void) | undefined;
+    const execute = vi.fn(() => new Promise<void>((resolve) => { finishOldRequest = resolve; }));
+    const repository = accounts({
+      execute,
+      currentIdentity: vi.fn(async (activeCredential: string) => activeCredential.endsWith("-a") ? structuredClone(identity) : {
+        ...structuredClone(identity),
+        account: { ...account, id: "tenant-b", displayName: "Team B", rootIdentity: { principalId: "primary-b", loginName: "admin-b" } },
+        user: { ...rootUser, id: "primary-b", accountId: "tenant-b", loginName: "admin-b" },
+        permissionBoundary: { ...identity.permissionBoundary, accountId: "tenant-b", userId: "primary-b" },
+        capabilities: []
+      }),
+      listUsers: vi.fn(async (activeCredential: string) => ({ items: activeCredential.endsWith("-a") ? [child] : [], nextAfter: null })),
+      listPolicies: vi.fn(async (activeCredential: string, platform: boolean) => activeCredential.endsWith("-a") ? directory(platform) : {
+        accountId: "tenant-b", scope: platform ? "INSTALLATION" as const : "TENANT" as const,
+        installationId: platform ? "installation-test" : null, items: []
+      })
+    });
+    const user = userEvent.setup();
+    render(<LocaleProvider><SessionProvider repository={auth}><AccountAccessProvider repository={repository}><AccountIntentProbe /></AccountAccessProvider></SessionProvider></LocaleProvider>);
+
+    await user.click(screen.getByRole("button", { name: "login-a" }));
+    await waitFor(() => expect(screen.getByLabelText("active-account").textContent).toBe("tenant-a"));
+    await user.click(screen.getByRole("button", { name: "begin-attachment" }));
+    expect(screen.getByLabelText("pending-attachment").textContent).toMatch(/^ui-user-attachment-/);
+    await user.click(screen.getByRole("button", { name: "submit-attachment" }));
+    await waitFor(() => expect(execute).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole("button", { name: "logout" }));
+    await user.click(screen.getByRole("button", { name: "login-b" }));
+    await waitFor(() => expect(screen.getByLabelText("active-account").textContent).toBe("tenant-b"));
+    expect(screen.getByLabelText("pending-attachment").textContent).toBe("none");
+    await act(async () => { finishOldRequest?.(); });
+    expect(screen.getByLabelText("pending-attachment").textContent).toBe("none");
+    expect(screen.getByLabelText("attachment-success").textContent).toBe("none");
+  });
+
   it("fails the live scene without substituting MOCK data when a policy directory has a non-authorization error", async () => {
     const repository = accounts({ listPolicies: vi.fn(async (_credential: string, platform: boolean) => {
       if (platform) throw new HttpProblem(503, "UPSTREAM_UNAVAILABLE");
@@ -1913,6 +1961,52 @@ describe("account access", () => {
     await waitFor(() => expect(execute).toHaveBeenCalledTimes(2));
     expect(execute.mock.calls[1]?.[1]).toEqual(execute.mock.calls[0]?.[1]);
     expect(execute.mock.calls[0]?.[1]).toEqual(expect.objectContaining({ requestId: expect.any(String) }));
+  });
+
+  it("keeps an uncertain direct attachment across IAM routes without issuing a new request", async () => {
+    const execute = vi.fn().mockRejectedValueOnce(new Error("connection lost after commit")).mockResolvedValue(undefined);
+    const { user } = await openAccess(accounts({ execute }));
+    await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await user.click(screen.getByRole("combobox", { name: "关联策略" }));
+    await user.click(screen.getByRole("option", { name: /PlatformAdministrator/ }));
+    await user.click(screen.getByRole("button", { name: "审阅关联" }));
+    await user.click(screen.getByRole("button", { name: "确认关联" }));
+    await screen.findByRole("button", { name: "原请求重试" });
+    const originalCommand = execute.mock.calls[0]?.[1];
+
+    await user.click(screen.getByTestId("nav-policies"));
+    expect(screen.queryByRole("region", { name: "确认直接关联策略" })).toBeNull();
+    await user.click(screen.getByTestId("nav-users"));
+    await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    const review = screen.getByRole("region", { name: "确认直接关联策略" });
+    expect(within(review).getByText((content) => content.includes(originalCommand.requestId))).toBeTruthy();
+    expect((within(review).getByRole("button", { name: "原请求重试" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(execute).toHaveBeenCalledTimes(1);
+    await user.click(within(review).getByRole("button", { name: "原请求重试" }));
+    await waitFor(() => expect(execute).toHaveBeenCalledTimes(2));
+    expect(execute.mock.calls[1]?.[1]).toEqual(originalCommand);
+  });
+
+  it("does not start another user's attachment while the original result is unknown", async () => {
+    const otherUser: User = { ...childUser, id: "child-b", loginName: "operator", displayName: "Operator B" };
+    const other: UserAccess = { user: otherUser, policyAttachments: [], capabilities: userCapabilities(otherUser) };
+    const execute = vi.fn().mockRejectedValue(new Error("connection lost after commit"));
+    const { user } = await openAccess(accounts({
+      execute,
+      listUsers: vi.fn().mockResolvedValue({ items: [child, other], nextAfter: null }),
+      getUser: vi.fn(async (_credential: string, id: string) => structuredClone(id === childUser.id ? child : other))
+    }));
+    await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await user.click(screen.getByRole("combobox", { name: "关联策略" }));
+    await user.click(screen.getByRole("option", { name: /PlatformAdministrator/ }));
+    await user.click(screen.getByRole("button", { name: "审阅关联" }));
+    await user.click(screen.getByRole("button", { name: "确认关联" }));
+    await screen.findByRole("button", { name: "原请求重试" });
+    await user.click(screen.getByRole("button", { name: "返回列表" }));
+    await user.click(await screen.findByRole("button", { name: "查看用户 operator" }));
+    expect(screen.getByText(/developer@tenant-a 的策略关联请求仍待处理/)).toBeTruthy();
+    expect((screen.getByRole("button", { name: "审阅关联" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(execute).toHaveBeenCalledTimes(1);
   });
 
   it("requires confirmation for revocation and disabling and clears a submitted reset password", async () => {

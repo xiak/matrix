@@ -1182,6 +1182,8 @@
     "retryOriginalAttachment": "Retry original request",
     "endAttachmentIntent": "End intent and reread",
     "attachmentUnknownResult": "This attachment has no confirmed result (request {requestId}). The current relationship directory cannot prove this request completed. Do not create a new request; retry the unchanged request or explicitly end this intent and reread.",
+    "attachmentOtherUserPending": "The policy attachment request for {user} is still pending. Return to that user to complete the original request or explicitly end the intent before attaching a policy to another user.",
+    "attachmentOtherUserReview": "The policy attachment review for {user} is still open. Return to that user to complete or cancel the review before attaching a policy to another user.",
     "attachmentRetryNeedsReview": "Request {requestId} has no trusted completion. Reread the target and policy before deciding on a new intent; a conflict or denial does not prove the original request failed.",
     "choosePolicy": "Select an attachable policy",
     "noAttachablePolicies": "No visible policy can be attached by this identity. Check the scope restrictions below.",

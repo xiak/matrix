@@ -76,6 +76,7 @@ export function buildAccountUserScene(
   );
   return {
     accountType: "subuser" as const,
+    accountId: account.id,
     id: user.id,
     name: user.displayName,
     loginName: user.loginName,

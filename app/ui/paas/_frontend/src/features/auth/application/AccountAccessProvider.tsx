@@ -185,6 +185,20 @@ export type RoleSessionRevokeIntent = {
   observation?: RoleSessionListing;
 };
 
+export type UserPolicyAttachmentIntent = {
+  accountId: string;
+  userId: string;
+  userQualifiedName: string;
+  policyId: string;
+  policyDisplayName: string;
+  policyScope: "INSTALLATION" | "TENANT";
+  defaultVersionId: string;
+  policyResourceVersion: number;
+  requestId: string;
+  phase: "review" | "submitting" | "unknown" | "conflict" | "rejected";
+  error: AccountError | null;
+};
+
 export type PolicyDirectoryView = { query: string; kind: string; service: string; category: string; sort: string; page: number; pageSize: number };
 export const defaultPolicyDirectoryView: PolicyDirectoryView = { query: "", kind: "all", service: "all", category: "all", sort: "name", page: 1, pageSize: 10 };
 export type UserDirectoryView = { query: string; state: string; role: string };
@@ -211,6 +225,10 @@ type AccountAccess = {
   roles: RoleAccessClient | null;
   roleSessionRevokeIntent: RoleSessionRevokeIntent | null;
   changeRoleSessionRevokeIntent(expectedRequestId: string | null, next: RoleSessionRevokeIntent | null): void;
+  userPolicyAttachmentIntent: UserPolicyAttachmentIntent | null;
+  beginUserPolicyAttachment(user: AccountUserScene, policyId: string): boolean;
+  submitUserPolicyAttachment(requestId: string): Promise<boolean>;
+  endUserPolicyAttachment(requestId: string): boolean;
   scene: AccountAccessScene | null;
   loading: boolean;
   busy: boolean;
@@ -293,6 +311,26 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   useLayoutEffect(() => { currentViewSession.current = viewSession; }, [viewSession]);
   const [storedRoleSessionRevokeIntent, setStoredRoleSessionRevokeIntent] = useState<{ session: typeof viewSession; intent: RoleSessionRevokeIntent } | null>(null);
   const roleSessionRevokeIntent = storedRoleSessionRevokeIntent?.session === viewSession ? storedRoleSessionRevokeIntent.intent : null;
+  const userPolicyAttachmentRef = useRef<{ session: typeof viewSession; intent: UserPolicyAttachmentIntent } | null>(null);
+  const [storedUserPolicyAttachment, setStoredUserPolicyAttachment] = useState<typeof userPolicyAttachmentRef.current>(null);
+  const userPolicyAttachmentIntent = storedUserPolicyAttachment?.session === viewSession ? storedUserPolicyAttachment.intent : null;
+  const rememberUserPolicyAttachment = useCallback((expectedRequestId: string | null, next: UserPolicyAttachmentIntent | null): boolean => {
+    if (currentViewSession.current !== viewSession) return false;
+    const stored = userPolicyAttachmentRef.current;
+    const current = stored?.session === viewSession ? stored.intent : null;
+    if (expectedRequestId === null) {
+      if (current || !next || next.accountId !== tenantId) return false;
+    } else if (!current || current.requestId !== expectedRequestId || next && (
+      next.requestId !== current.requestId || next.accountId !== current.accountId || next.userId !== current.userId ||
+      next.userQualifiedName !== current.userQualifiedName || next.policyId !== current.policyId ||
+      next.policyDisplayName !== current.policyDisplayName || next.policyResourceVersion !== current.policyResourceVersion ||
+      next.defaultVersionId !== current.defaultVersionId || next.policyScope !== current.policyScope
+    )) return false;
+    const updated = next ? { session: viewSession, intent: next } : null;
+    userPolicyAttachmentRef.current = updated;
+    setStoredUserPolicyAttachment(updated);
+    return true;
+  }, [tenantId, viewSession]);
   const policyCreateRef = useRef<{ session: typeof viewSession; intent: PolicyCreateIntent } | null>(null);
   const [storedPolicyCreate, setStoredPolicyCreate] = useState<typeof policyCreateRef.current>(null);
   const policyCreateIntent = storedPolicyCreate?.session === viewSession ? storedPolicyCreate.intent : null;
@@ -847,6 +885,67 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     }
   }, [active, credential, loading, repository, scene]);
 
+  const beginUserPolicyAttachment = useCallback((user: AccountUserScene, policyId: string): boolean => {
+    if (!active || !credential || !scene || loading || mutationPending.current || !tenantId) return false;
+    const policy = scene.policies.find((item) => item.id === policyId);
+    if (user.accountId !== tenantId || user.id === scene.accountOwner.id || !policy || policy.status !== "ACTIVE" ||
+      !(policy.scope === "INSTALLATION" ? user.canAttachPlatformPolicy : user.canAttachTenantPolicy)) return false;
+    return rememberUserPolicyAttachment(null, {
+      accountId: tenantId, userId: user.id, userQualifiedName: user.qualifiedName,
+      policyId, policyDisplayName: policy.displayName, policyScope: policy.scope,
+      defaultVersionId: policy.defaultVersionId, policyResourceVersion: policy.resourceVersion,
+      requestId: requestToken("ui-user-attachment-"), phase: "review", error: null
+    });
+  }, [active, credential, loading, rememberUserPolicyAttachment, scene, tenantId]);
+
+  const submitUserPolicyAttachment = useCallback(async (requestId: string): Promise<boolean> => {
+    const stored = userPolicyAttachmentRef.current;
+    const intent = stored?.session === viewSession && stored.intent.requestId === requestId ? stored.intent : null;
+    if (!active || !credential || !scene || !intent || intent.accountId !== tenantId || loading || mutationPending.current ||
+      (intent.phase !== "review" && intent.phase !== "unknown")) return false;
+    const command: Extract<AccountCommand, { kind: "create-policy-attachment" }> = {
+      kind: "create-policy-attachment", userId: intent.userId, policyId: intent.policyId,
+      policyResourceVersion: intent.policyResourceVersion, requestId: intent.requestId
+    };
+    // First submission must still match the selected directory revision. UNKNOWN
+    // recovery replays the frozen command even if a later directory read changed.
+    if (intent.phase === "review" && !scene.policies.some((policy) => policy.id === intent.policyId &&
+      policy.status === "ACTIVE" && policy.resourceVersion === intent.policyResourceVersion)) {
+      rememberUserPolicyAttachment(requestId, { ...intent, phase: "conflict", error: "conflict" });
+      return false;
+    }
+    if (!rememberUserPolicyAttachment(requestId, { ...intent, phase: "submitting", error: null })) return false;
+    mutationPending.current = true;
+    setBusy(true); setError(null); setSuccess(null);
+    try {
+      await repository.execute(credential, command);
+      if (currentViewSession.current !== viewSession) return false;
+      rememberUserPolicyAttachment(requestId, null);
+      setSuccess("completed"); setLoading(true); setRevision((current) => current + 1);
+      return true;
+    } catch (failure) {
+      if (currentViewSession.current !== viewSession) return false;
+      const reason = accountError(failure);
+      rememberUserPolicyAttachment(requestId, {
+        ...intent, phase: reason === "unavailable" ? "unknown" : reason === "conflict" ? "conflict" : "rejected", error: reason
+      });
+      return false;
+    } finally { mutationPending.current = false; setBusy(false); }
+  }, [active, credential, loading, rememberUserPolicyAttachment, repository, scene, tenantId, viewSession]);
+
+  const endUserPolicyAttachment = useCallback((requestId: string): boolean => {
+    const stored = userPolicyAttachmentRef.current;
+    const intent = stored?.session === viewSession && stored.intent.requestId === requestId ? stored.intent : null;
+    if (!intent || intent.phase === "submitting" || !rememberUserPolicyAttachment(requestId, null)) return false;
+    if (intent.phase !== "review") {
+      directoryRequest.current.users += 1;
+      directoryRequest.current.accounts += 1;
+      setLoading(true);
+      setRevision((current) => current + 1);
+    }
+    return true;
+  }, [rememberUserPolicyAttachment, viewSession]);
+
   const value = useMemo<AccountAccess>(() => ({
     supportsUserBatch: Boolean(repository.executeUserBatch),
     async executeUserBatch(command) {
@@ -887,6 +986,8 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     roles,
     roleSessionRevokeIntent: roleSessionRevokeIntent?.accountId === tenantId ? roleSessionRevokeIntent : null,
     changeRoleSessionRevokeIntent,
+    userPolicyAttachmentIntent: userPolicyAttachmentIntent?.accountId === tenantId ? userPolicyAttachmentIntent : null,
+    beginUserPolicyAttachment, submitUserPolicyAttachment, endUserPolicyAttachment,
     workspace, workspaceError,
     clearWorkspaceError, clearFeedback,
     async executeWorkspace(command, onError) {
@@ -957,7 +1058,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       } catch (failure) { setError(accountError(failure)); return false; }
       finally { mutationPending.current = false; setBusy(false); }
     }
-  }), [active, busy, credential, error, loading, repository, scene, success, tenantId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, permissionBoundaries, authorizationProfiles, policyRead, policyCreate, policyVersionMutation, accountSecuritySettings, accessKeys, roles, roleSessionRevokeIntent, changeRoleSessionRevokeIntent, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
+  }), [active, busy, credential, error, loading, repository, scene, success, tenantId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, permissionBoundaries, authorizationProfiles, policyRead, policyCreate, policyVersionMutation, accountSecuritySettings, accessKeys, roles, roleSessionRevokeIntent, changeRoleSessionRevokeIntent, userPolicyAttachmentIntent, beginUserPolicyAttachment, submitUserPolicyAttachment, endUserPolicyAttachment, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
 
   return <AccountCapabilitiesContext.Provider value={capabilities}>
     <AccountAccessContext.Provider value={value}>{children}</AccountAccessContext.Provider>
