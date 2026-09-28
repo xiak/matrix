@@ -671,6 +671,22 @@ passed Go, UI, authority-process and node-process for that exact source. This
 fixes test targeting; only the forthcoming populated v5 restore can prove the
 new recovery behavior.
 
+The combined `495fc04e41310e28ff9801a9511fb83b1d64188f` initial release
+and `b020d4a56c1b1cfb8fb9930d09e20fb0f7604c73` successor also passed a
+fresh task-local Docker 27.5.1 offline browser-ready lifecycle in 330.72
+seconds. Both authenticated bundles used IAM 45 / Audit 26 / PaaS 6, contract
+revision 16 and the same supported topology; B named A as its immediate
+predecessor. The isolated 2-CPU/4-GiB engine began with zero inner images and
+containers and no external route. The real gate passed signed-successor
+initial-install rejection, A install/status/verify, IAM through APISIX, two
+application generations, original-primary credential recovery, delivered-mail
+first TOTP binding before protected backup, Audit integrity, failed-candidate
+automatic rollback and B upgrade with preserved application state. It ended
+with `browser-successor-ready` and PASS. The outer test container was removed;
+no task-owned Docker volume, image or container remains. This is a signed
+offline runtime gate, not the LIVE browser first-enrollment ceremony, the
+complete rollback/recovery gate or the source-preserving two-host gate.
+
 ## Incremental acceptance
 
 ### Gate A: release and CLI contract

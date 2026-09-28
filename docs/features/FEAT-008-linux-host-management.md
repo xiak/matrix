@@ -1974,6 +1974,17 @@ The attempt's task-only remote container, volumes, network, transient node
 services and directories were removed; both VMs retained their original boot
 and Docker Engine identities with zero remaining containers.
 
+A subsequent bounded peer-address probe on those same disposable VMs showed
+that a normal Docker-published port on `172.30.1.160` retained distinct
+`172.30.1.160` and `172.30.1.161` client addresses. Direct routing to a
+task-only Docker bridge container retained `.160` locally but timed out from
+`.161` through the host forwarding path. The exact temporary `/32` routes,
+container and bridge were removed after that negative probe; default routes,
+firewall rules, Docker daemons and machine boots were unchanged. Thus the
+published-port probe identifies a possible source-preserving ingress, but
+does not prove a fresh isolated Docker engine or the signed two-host lifecycle
+can use it. The combined-source two-host gate remains open.
+
 ## Adoption
 
 - [FEAT-008 fixed-source review](../adoption/FEAT-008-linux-host-management.md)
