@@ -1,6 +1,7 @@
 package authority
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -18,9 +19,11 @@ import (
 )
 
 var (
-	ErrWeakPassword        = errors.New("password does not satisfy the password requirements")
-	ErrInvalidPasswordHash = errors.New("stored password hash is invalid")
-	ErrPasswordHashing     = errors.New("password hashing failed")
+	ErrWeakPassword            = errors.New("password does not satisfy the password requirements")
+	ErrInvalidPasswordHash     = errors.New("stored password hash is invalid")
+	ErrInvalidPasswordSettings = errors.New("stored password settings are invalid")
+	ErrInvalidPasswordHistory  = errors.New("stored password history is invalid")
+	ErrPasswordHashing         = errors.New("password hashing failed")
 )
 
 const (
@@ -32,6 +35,7 @@ const (
 	minimumPasswordCodePoints = 15
 	maximumPasswordCodePoints = 128
 	maximumPasswordBytes      = 512
+	maximumPasswordHistory    = 24
 )
 
 // This bounded offline asset carries its original MIT notice and fixed-source
@@ -117,9 +121,76 @@ func (hasher *PasswordHasher) Hash(password iamv1.Secret) (PasswordHash, error) 
 // cheaply, then hash only after the caller has authenticated. Stored-secret
 // verification deliberately does not apply today's admission rules.
 func ValidatePassword(password iamv1.Secret) error {
+	return ValidatePasswordWithSettings(password, DefaultPasswordSettings())
+}
+
+// Defaults are explicit values for creation and the protected-identity floor,
+// never a fallback for missing or malformed persisted Account configuration.
+func DefaultPasswordSettings() iamv1.AccountPasswordSettings {
+	return iamv1.AccountPasswordSettings{MinimumLength: minimumPasswordCodePoints, HistoryCount: 1}
+}
+
+func ValidatePasswordWithSettings(password iamv1.Secret, settings iamv1.AccountPasswordSettings) error {
+	if iamv1.ValidateAccountPasswordSettings(settings) != nil {
+		return ErrInvalidPasswordSettings
+	}
 	plaintext := password.CopyBytes()
 	defer clear(plaintext)
-	return validatePasswordPolicy(plaintext)
+	return validatePasswordPolicy(plaintext, settings)
+}
+
+// ValidateReplacement compares actual stored verifiers, newest history first.
+// The caller owns admission/work slots and must finally recheck the locked
+// credential, settings and history head: this result is not a reusable permit.
+// A generation fence without a password write is not a historical password.
+func (hasher *PasswordHasher) ValidateReplacement(ctx context.Context, password iamv1.Secret,
+	settings iamv1.AccountPasswordSettings, current PasswordHash, history []PasswordHash) error {
+	if err := ValidatePasswordWithSettings(password, settings); err != nil {
+		return err
+	}
+	if len(history) > maximumPasswordHistory {
+		return ErrInvalidPasswordHistory
+	}
+	// Even retained entries outside today's selected window must be well-formed;
+	// weakening a rule must not silently conceal damaged authority state.
+	for index := -1; index < len(history); index++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		stored := current
+		if index >= 0 {
+			stored = history[index]
+		}
+		salt, key, err := parsePasswordHash(stored)
+		clear(salt)
+		clear(key)
+		if err != nil {
+			return err
+		}
+	}
+	matched := false
+	for index := -1; index < min(settings.HistoryCount, len(history)); index++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		stored := current
+		if index >= 0 {
+			stored = history[index]
+		}
+		equal, err := hasher.Verify(password, stored)
+		if err != nil {
+			return err
+		}
+		// Do not expose the matching position by returning after the first hit.
+		matched = matched || equal
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if matched {
+		return ErrWeakPassword
+	}
+	return nil
 }
 
 func (hasher *PasswordHasher) Verify(password iamv1.Secret, stored PasswordHash) (bool, error) {
@@ -172,18 +243,27 @@ func parsePasswordHash(stored PasswordHash) ([]byte, []byte, error) {
 	return salt, derived, nil
 }
 
-func validatePasswordPolicy(password []byte) error {
+func validatePasswordPolicy(password []byte, settings iamv1.AccountPasswordSettings) error {
 	if len(password) > maximumPasswordBytes || !utf8.Valid(password) {
 		return ErrWeakPassword
 	}
 	length := utf8.RuneCount(password)
-	if length < minimumPasswordCodePoints || length > maximumPasswordCodePoints {
+	if length < settings.MinimumLength || length > maximumPasswordCodePoints {
 		return ErrWeakPassword
 	}
+	var lower, upper, digit, symbol bool
 	for _, character := range string(password) {
 		if unicode.IsControl(character) {
 			return ErrWeakPassword
 		}
+		lower = lower || unicode.IsLower(character)
+		upper = upper || unicode.IsUpper(character)
+		digit = digit || unicode.IsDigit(character)
+		symbol = symbol || unicode.IsPunct(character) || unicode.IsSymbol(character)
+	}
+	if settings.RequireLowercase && !lower || settings.RequireUppercase && !upper ||
+		settings.RequireDigit && !digit || settings.RequireSymbol && !symbol {
+		return ErrWeakPassword
 	}
 	for _, blocked := range commonPasswords {
 		// Compare the complete candidate, never a substring. Folding is only

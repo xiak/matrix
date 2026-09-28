@@ -1059,10 +1059,14 @@ INSTALLATION USER附件的真实新增与撤销在现有Account→稳定USER锁�
 
 这是下一纵向片的详细设计，尚未修改运行时API/SQL或分配schema/release revision。最小可验收结果是：管理员按原step-up修改同Account规则，普通USER的创建、本人普通/强制改密及管理员reset都执行当前规则和真实历史；原root及installation恢复执行不可由租户放宽或锁死的固定底线。不是只给页面增加设置字段。到期和idle随各自真实执行片加入，S3b不提前接受尚未执行的`maxAgeDays`/Session占位配置。
 
+已实施的准备范围仅为原契约owner中的`AccountPasswordSettings`值/严格codec，以及原密码owner的规则和有界历史比较；现有Hash复用其固定默认底线，不保留第二套密码字符校验。未向当前security-settings读写或任何HTTP端点挂载密码配置，未添加历史存储、规则CAS或恢复投影，不能称S3b可用。历史比较校验当前及全部已保留hash的格式、串行比较当前和选定窗口，不因命中某一位置提前成功/返回；超出24条或损坏记录失败关闭，取消停止后续昂贵工作。0表示不检查额外历史，不允许当前密码；缺少真实历史不补造。它是可信IAM进程的校验结果，最终事务仍须核对原资格和history head。
+
+本地Go1.26.3/GOMAXPROCS2/512MiB的API、authority、identityaccess整包race分别30.525s/24.468s/33.731s通过；新增测试使用实际固定Argon2id产生24条不同历史，验证0/1/24窗口、当前拒绝、Unicode类别、损坏/取消及不修改原verifier。严格codec的有界双worker fuzz执行114283次通过，architecture/race、聚焦vet、API生成无额外差异及IAM Linux amd64构建通过。仅证明计算与契约准备，不是SQL/HTTP历史防复用、容量或完整S3b验收；未重复启动整套真实环境来冒充尚未接线的行为。
+
 | `password`字段 | 有效范围与默认值 |
 | --- | --- |
 | `minimumLength` | 整数15–128，默认15，单位为Unicode码点；最大128码点/512 UTF-8字节是固定产品边界，不由Account选择 |
-| `requireLowercase`、`requireUppercase`、`requireDigit`、`requireSymbol` | 四个显式boolean，默认均false；字母/数字按Unicode类别，symbol只指Unicode标点或符号，不把空格、组合附加符或无大小写字母冒充符号 |
+| `requireLowercase`、`requireUppercase`、`requireDigit`、`requireSymbol` | 四个显式boolean，默认均false；分别按Unicode小写、大写、十进制数字类别，titlecase不冒充uppercase，数字字母（例如罗马数字）不冒充decimal digit；symbol只指Unicode标点或符号，不把空格、组合附加符或无大小写字母冒充符号 |
 | `historyCount` | 整数0–24，默认1；指当前密码之外的最近已知历史，当前密码始终拒绝复用 |
 
 新口令允许普通空格且逐字节保留，拒绝控制字符；不trim、折叠空格、改大小写或对既有`matrix-iam-v1`验证隐式规范化。四类开关是显式企业要求，不能作为标准合规或密码强度证明。受保护USER的有效规则固定为上述默认值及统一词表，账号规则不能使其改密/恢复采用管理员设定的额外要求，也不能免除真实历史。是否受保护按当前原RootIdentity或任何未撤销INSTALLATION附件判断，仍与授撤共用Account→稳定USER锁序；不得使用“当前是否能登录/是否得到Allow”代替。

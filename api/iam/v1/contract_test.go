@@ -214,6 +214,95 @@ func FuzzEnrollmentChallengeRequests(f *testing.F) {
 	})
 }
 
+func TestAccountPasswordSettingsRequireCompleteBoundedValues(t *testing.T) {
+	wire := `{"minimumLength":15,"requireLowercase":false,"requireUppercase":false,"requireDigit":false,"requireSymbol":false,"historyCount":1}`
+	for _, input := range []string{
+		wire,
+		strings.ReplaceAll(wire, "false", "true"),
+		strings.Replace(wire, `"historyCount":1`, `"historyCount":0`, 1),
+		strings.Replace(strings.Replace(wire, `"minimumLength":15`, `"minimumLength":128`, 1), `"historyCount":1`, `"historyCount":24`, 1),
+	} {
+		var value AccountPasswordSettings
+		if err := DecodeRequest(strings.NewReader(input), &value); err != nil || ValidateAccountPasswordSettings(value) != nil {
+			t.Fatal("complete bounded password settings rejected", err)
+		}
+		encoded, err := json.Marshal(value)
+		var roundTrip AccountPasswordSettings
+		if err != nil || DecodeRequest(bytes.NewReader(encoded), &roundTrip) != nil || roundTrip != value {
+			t.Fatal("explicit password settings changed under round trip", err)
+		}
+	}
+	malformed := []string{`null`, `[]`, `{}`, wire + `{}`, strings.TrimSuffix(wire, "}") + `,"accountId":"other"}`}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal([]byte(wire), &fields) != nil {
+		t.Fatal("invalid fixture")
+	}
+	for _, name := range []string{"minimumLength", "requireLowercase", "requireUppercase", "requireDigit", "requireSymbol", "historyCount"} {
+		original := fields[name]
+		for _, replacement := range []json.RawMessage{nil, json.RawMessage(`null`), json.RawMessage(`"false"`), json.RawMessage(`[]`)} {
+			if replacement == nil {
+				delete(fields, name)
+			} else {
+				fields[name] = replacement
+			}
+			input, err := json.Marshal(fields)
+			if err != nil {
+				t.Fatal(err)
+			}
+			malformed = append(malformed, string(input))
+		}
+		fields[name] = original
+		malformed = append(malformed,
+			strings.TrimSuffix(wire, "}")+`,"`+name+`":`+string(original)+`}`,
+			strings.Replace(wire, `"`+name+`":`, `"`+strings.ToUpper(name)+`":`, 1))
+	}
+	for _, length := range []string{"0", "14", "129", "15.5", "-1", "18446744073709551616"} {
+		malformed = append(malformed, strings.Replace(wire, `"minimumLength":15`, `"minimumLength":`+length, 1))
+	}
+	for _, count := range []string{"-1", "25", "1.5", "18446744073709551616"} {
+		malformed = append(malformed, strings.Replace(wire, `"historyCount":1`, `"historyCount":`+count, 1))
+	}
+	malformed = append(malformed, strings.TrimSuffix(wire, "}")+`,"require\u0053ymbol":false}`)
+	for index, input := range malformed {
+		var value AccountPasswordSettings
+		if json.Unmarshal([]byte(wire), &value) != nil {
+			t.Fatal("invalid baseline fixture")
+		}
+		before := value
+		if err := json.Unmarshal([]byte(input), &value); err == nil || value != before {
+			t.Fatalf("malformed password settings %d accepted or partially changed destination", index)
+		}
+	}
+	for _, value := range []AccountPasswordSettings{
+		{}, {MinimumLength: 14}, {MinimumLength: 129}, {MinimumLength: 15, HistoryCount: -1}, {MinimumLength: 15, HistoryCount: 25},
+	} {
+		if ValidateAccountPasswordSettings(value) == nil {
+			t.Fatal("invalid in-process settings bypassed bounds")
+		}
+	}
+}
+
+func FuzzAccountPasswordSettingsRoundTrip(f *testing.F) {
+	f.Add(`{"minimumLength":15,"requireLowercase":false,"requireUppercase":false,"requireDigit":false,"requireSymbol":false,"historyCount":1}`)
+	f.Add(`{"minimumLength":128,"requireLowercase":true,"requireUppercase":true,"requireDigit":true,"requireSymbol":true,"historyCount":24}`)
+	f.Add(`{"minimumLength":15,"historyCount":0}`)
+	f.Add(`null`)
+	f.Fuzz(func(t *testing.T, input string) {
+		var value AccountPasswordSettings
+		if DecodeRequest(strings.NewReader(input), &value) != nil {
+			return
+		}
+		if ValidateAccountPasswordSettings(value) != nil {
+			t.Fatal("decoded password settings violate product bounds")
+		}
+		encoded, err := json.Marshal(value)
+		var roundTrip AccountPasswordSettings
+		if err != nil || DecodeRequest(bytes.NewReader(encoded), &roundTrip) != nil || roundTrip != value {
+			t.Fatal("password settings changed under round trip")
+		}
+	})
+}
+
 func securitySettingsContractSamples() []struct {
 	kind, wire string
 	newValue   func() any

@@ -222,6 +222,17 @@ type StartChallengeTOTPEnrollmentRequest struct {
 // AccountMFASettings governs ordinary USER login requirements, not whether
 // a particular USER has a factor or a Session actually authenticated with it.
 // Protected root/installation identities have their own non-tenant boundary.
+// AccountPasswordSettings governs new passwords, not the stored-secret
+// verifier, an authorization Policy or a selectable hashing profile.
+type AccountPasswordSettings struct {
+	MinimumLength    int  `json:"minimumLength"`
+	RequireLowercase bool `json:"requireLowercase"`
+	RequireUppercase bool `json:"requireUppercase"`
+	RequireDigit     bool `json:"requireDigit"`
+	RequireSymbol    bool `json:"requireSymbol"`
+	HistoryCount     int  `json:"historyCount"`
+}
+
 type AccountMFASettings struct {
 	RequiredForUsers bool `json:"requiredForUsers"`
 }

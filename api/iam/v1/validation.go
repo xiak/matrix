@@ -607,6 +607,13 @@ func ValidateConfirmAuthenticatorRecoveryResponse(value ConfirmAuthenticatorReco
 	return validateRecoveryCodes(value.RecoveryCodes)
 }
 
+func ValidateAccountPasswordSettings(value AccountPasswordSettings) error {
+	if value.MinimumLength < 15 || value.MinimumLength > 128 || value.HistoryCount < 0 || value.HistoryCount > 24 {
+		return errors.New("account password settings are invalid")
+	}
+	return nil
+}
+
 func ValidateAccountSecuritySettings(value AccountSecuritySettings) error {
 	if value.APIVersion != APIVersion || value.Kind != "AccountSecuritySettings" {
 		return errors.New("account security settings type metadata is invalid")

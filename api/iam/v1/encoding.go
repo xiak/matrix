@@ -432,6 +432,30 @@ func EncodeConfirmAuthenticatorRecoveryResponse(value ConfirmAuthenticatorRecove
 	}{value.Recovery, value.NextStep, codes})
 }
 
+func (value *AccountPasswordSettings) UnmarshalJSON(source []byte) error {
+	var decoded struct {
+		MinimumLength    *int  `json:"minimumLength"`
+		RequireLowercase *bool `json:"requireLowercase"`
+		RequireUppercase *bool `json:"requireUppercase"`
+		RequireDigit     *bool `json:"requireDigit"`
+		RequireSymbol    *bool `json:"requireSymbol"`
+		HistoryCount     *int  `json:"historyCount"`
+	}
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil ||
+		decoded.MinimumLength == nil || decoded.RequireLowercase == nil || decoded.RequireUppercase == nil ||
+		decoded.RequireDigit == nil || decoded.RequireSymbol == nil || decoded.HistoryCount == nil {
+		return contractjson.ErrInvalidDocument
+	}
+	result := AccountPasswordSettings{MinimumLength: *decoded.MinimumLength, RequireLowercase: *decoded.RequireLowercase,
+		RequireUppercase: *decoded.RequireUppercase, RequireDigit: *decoded.RequireDigit, RequireSymbol: *decoded.RequireSymbol,
+		HistoryCount: *decoded.HistoryCount}
+	if ValidateAccountPasswordSettings(result) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = result
+	return nil
+}
+
 func (value *AccountMFASettings) UnmarshalJSON(source []byte) error {
 	var decoded struct {
 		RequiredForUsers *bool `json:"requiredForUsers"`
