@@ -12096,8 +12096,8 @@ func TestIAMPolicyAttachmentSessionPostgres(t *testing.T) {
 	if dsn == "" {
 		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", environment)
 	}
-	// Keep the same two-minute session-flow budget. Its deliberately numerous
-	// security identities do not belong to the separate policy-retention fixture.
+	// Keep the same two-minute session-flow budget. Each security transition
+	// covers both attachment writes, separately from the policy-retention fixture.
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	config, err := pgx.ParseConfig(dsn)
@@ -12230,36 +12230,85 @@ func provePolicyAttachmentSessions(t *testing.T, ctx context.Context, handler ht
 			if targetKind == "platform" && (mutation == "reset" || mutation == "forced" || mutation == "disable") {
 				continue // Platform credential protection is a separate, retained gate.
 			}
+			// A create/revoke pair needs the same identity qualification, not two
+			// newly provisioned users. Restore qualification through the real APIs;
+			// each cell still blocks its own write, commits its own security change,
+			// and retains its original bearer for the final schema/bootstrap replay.
+			var actor iamv1.User
+			var grant iamv1.PolicyAttachment
+			var grantRequest iamv1.CreatePolicyAttachmentRequest
+			var actorName, currentPassword, currentBearer string
 			for _, operation := range []string{"create", "revoke"} {
 				t.Run(targetKind+"_"+operation+"_"+mutation, func(t *testing.T) {
 					caseID := targetKind + "-" + operation + "-" + mutation
 					requestID := "attachment-session-pending-" + caseID
-					var actor iamv1.User
-					call(t, "/v1/users", root, map[string]any{"loginName": "attachment-actor-" + caseID, "displayName": "Attachment actor",
-						"initialPassword": initialDeveloperPassword, "requestId": "attachment-actor-" + caseID}, http.StatusCreated, &actor)
-					actorName := actor.LoginName + "@" + string(actor.AccountID)
-					bearer := localRecoveryLogin(t, handler, actorName, initialDeveloperPassword, true)
-					localRecoveryChangePassword(t, handler, bearer, initialDeveloperPassword, changedDeveloperPassword)
-					var grant iamv1.PolicyAttachment
-					grantRequest := iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(actor.ID)},
-						PolicyID: iamv1.SystemPolicyAccountAdministrator, PolicyResourceVersion: 1, RequestID: "attachment-actor-grant-" + caseID}
-					call(t, "/v1/policy-attachments", root, grantRequest, http.StatusOK, &grant)
-					if targetKind == "platform" {
-						grantRequest.PolicyID = iamv1.SystemPolicyPlatformOperator
-						grantRequest.RequestID += "-platform"
+					var bearer string
+					if actor.ID == "" { // Also allow a revoke-only subtest selection.
+						call(t, "/v1/users", root, map[string]any{"loginName": "attachment-actor-" + caseID, "displayName": "Attachment actor",
+							"initialPassword": initialDeveloperPassword, "requestId": "attachment-actor-" + caseID}, http.StatusCreated, &actor)
+						actorName = actor.LoginName + "@" + string(actor.AccountID)
+						bearer = localRecoveryLogin(t, handler, actorName, initialDeveloperPassword, true)
+						currentPassword = changedDeveloperPassword
+						localRecoveryChangePassword(t, handler, bearer, initialDeveloperPassword, currentPassword)
+						grantRequest = iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(actor.ID)},
+							PolicyID: iamv1.SystemPolicyAccountAdministrator, PolicyResourceVersion: 1, RequestID: "attachment-actor-grant-" + caseID}
 						call(t, "/v1/policy-attachments", root, grantRequest, http.StatusOK, &grant)
-						if response := performIAMRequest(handler, http.MethodGet, "/v1/auth/me", bearer, nil); response.Code != http.StatusUnauthorized {
-							t.Fatal("platform protection grant preserved a pre-transition Session")
+						if targetKind == "platform" {
+							grantRequest.PolicyID = iamv1.SystemPolicyPlatformOperator
+							grantRequest.RequestID += "-platform"
+							call(t, "/v1/policy-attachments", root, grantRequest, http.StatusOK, &grant)
+							if response := performIAMRequest(handler, http.MethodGet, "/v1/auth/me", bearer, nil); response.Code != http.StatusUnauthorized {
+								t.Fatal("platform protection grant preserved a pre-transition Session")
+							}
+							bearer = localRecoveryLogin(t, handler, actorName, currentPassword, false)
 						}
-						bearer = localRecoveryLogin(t, handler, actorName, changedDeveloperPassword, false)
+					} else {
+						switch mutation {
+						case "disable":
+							response := performIAMRequest(handler, http.MethodGet, "/v1/users/"+string(actor.ID), root, nil)
+							var access iamv1.UserAccess
+							if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &access) != nil {
+								t.Fatal("read disabled actor security revision")
+							}
+							call(t, "/v1/users/"+string(actor.ID)+":set-status", root, iamv1.SetUserStatusRequest{Status: iamv1.PrincipalActive,
+								ResourceVersion: access.User.ResourceVersion, RequestID: "attachment-actor-enable-" + caseID}, http.StatusOK, nil)
+						case "reset":
+							temporary := localRecoveryLogin(t, handler, actorName, currentPassword, true)
+							nextPassword := "Attachment-Resume-Password-79!-" + caseID
+							localRecoveryChangePassword(t, handler, temporary, currentPassword, nextPassword)
+							currentPassword = nextPassword
+						case "revoke-authority":
+							if targetKind != "platform" { // The platform case already regranted and checked both old sessions.
+								grantRequest.RequestID += "-regrant"
+								call(t, "/v1/policy-attachments", root, grantRequest, http.StatusOK, &grant)
+							}
+						}
+						if mutation == "change-current" {
+							// Both transitions retain this same current Session. A new
+							// login would turn the first positive replay check into an
+							// intentionally revoked other Session in the second cell.
+							bearer = currentBearer
+						} else {
+							bearer = localRecoveryLogin(t, handler, actorName, currentPassword, false)
+						}
+						if mutation != "revoke-authority" || targetKind == "platform" {
+							previousStatus := http.StatusUnauthorized
+							if mutation == "change-false" || mutation == "change-current" {
+								previousStatus = http.StatusOK
+							}
+							if response := performIAMRequest(handler, http.MethodGet, "/v1/auth/me", currentBearer, nil); response.Code != previousStatus {
+								t.Fatal("restoring actor qualification changed the preceding Session outcome")
+							}
+						}
 					}
+					currentBearer = bearer
 					// Only cross-Session password changes and the platform
 					// revoke/regrant assertion consume a second Session. Do not
 					// repeat an unused password login for every matrix cell.
 					var otherBearer string
 					if mutation == "change-default" || mutation == "change-true" || mutation == "change-false" ||
 						(targetKind == "platform" && mutation == "revoke-authority") {
-						otherBearer = localRecoveryLogin(t, handler, actorName, changedDeveloperPassword, false)
+						otherBearer = localRecoveryLogin(t, handler, actorName, currentPassword, false)
 					}
 					request := iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(member.ID)},
 						PolicyID: iamv1.SystemPolicyAuditReader, PolicyResourceVersion: 1, RequestID: requestID}
@@ -12327,7 +12376,8 @@ func provePolicyAttachmentSessions(t *testing.T, ctx context.Context, handler ht
 					case "logout":
 						call(t, "/v1/auth/logout", bearer, map[string]any{"requestId": mutationID}, http.StatusOK, nil)
 					case "change-default", "change-true", "change-false", "change-current":
-						change := map[string]any{"currentPassword": changedDeveloperPassword, "newPassword": "Attachment-Changed-Password-62!", "requestId": mutationID}
+						nextPassword := "Attachment-Changed-Password-62!-" + caseID
+						change := map[string]any{"currentPassword": currentPassword, "newPassword": nextPassword, "requestId": mutationID}
 						if mutation == "change-true" {
 							change["revokeOtherSessions"] = true
 						} else if mutation == "change-false" {
@@ -12338,6 +12388,7 @@ func provePolicyAttachmentSessions(t *testing.T, ctx context.Context, handler ht
 							otherBearer, want = bearer, http.StatusOK
 						}
 						call(t, "/v1/auth/password", otherBearer, change, http.StatusOK, nil)
+						currentPassword = nextPassword
 					case "reset", "forced", "disable":
 						response := performIAMRequest(handler, http.MethodGet, "/v1/users/"+string(actor.ID), root, nil)
 						var access iamv1.UserAccess
@@ -12348,12 +12399,16 @@ func provePolicyAttachmentSessions(t *testing.T, ctx context.Context, handler ht
 							call(t, "/v1/users/"+string(actor.ID)+":set-status", root, iamv1.SetUserStatusRequest{Status: iamv1.PrincipalDisabled,
 								ResourceVersion: access.User.ResourceVersion, RequestID: mutationID}, http.StatusOK, nil)
 						} else {
+							resetPassword := "Attachment-Reset-Password-79!-" + caseID
 							call(t, "/v1/users/"+string(actor.ID)+":reset-password", root, map[string]any{
-								"initialPassword": "Attachment-Reset-Password-79!", "resourceVersion": access.User.ResourceVersion, "requestId": mutationID}, http.StatusOK, nil)
+								"initialPassword": resetPassword, "resourceVersion": access.User.ResourceVersion, "requestId": mutationID}, http.StatusOK, nil)
+							currentPassword = resetPassword
 							if mutation == "forced" {
-								temporary := localRecoveryLogin(t, handler, actorName, "Attachment-Reset-Password-79!", true)
-								call(t, "/v1/auth/password", temporary, map[string]any{"currentPassword": "Attachment-Reset-Password-79!",
-									"newPassword": "Attachment-Changed-Password-62!", "revokeOtherSessions": false, "requestId": mutationID + "-forced"}, http.StatusOK, nil)
+								temporary := localRecoveryLogin(t, handler, actorName, currentPassword, true)
+								nextPassword := "Attachment-Changed-Password-62!-" + caseID
+								call(t, "/v1/auth/password", temporary, map[string]any{"currentPassword": currentPassword,
+									"newPassword": nextPassword, "revokeOtherSessions": false, "requestId": mutationID + "-forced"}, http.StatusOK, nil)
+								currentPassword = nextPassword
 							}
 						}
 					case "revoke-authority":
@@ -12365,7 +12420,7 @@ func provePolicyAttachmentSessions(t *testing.T, ctx context.Context, handler ht
 							iamv1.RevokePolicyAttachmentRequest{ResourceVersion: grant.ResourceVersion, RequestID: mutationID}, http.StatusOK, nil)
 						if targetKind == "platform" {
 							grantRequest.RequestID += "-regrant"
-							call(t, "/v1/policy-attachments", root, grantRequest, http.StatusOK, nil)
+							call(t, "/v1/policy-attachments", root, grantRequest, http.StatusOK, &grant)
 							for _, old := range []string{bearer, otherBearer} {
 								if response := performIAMRequest(handler, http.MethodGet, "/v1/auth/me", old, nil); response.Code != http.StatusUnauthorized {
 									t.Fatal("regrant revived a Session ended by the protection transition")
