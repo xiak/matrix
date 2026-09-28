@@ -3537,14 +3537,6 @@ func measureIAMCapacity(t *testing.T, ctx context.Context, database *pgx.Conn, e
 	assertRuntimeProcessLogins(t, ctx, database, iamAPILogin, "matrix_authority_process_iam_replica", iamWorkerLogin, auditRuntimeLogin, paasAPILogin, paasWorkerLogin)
 	waitAllIAMOutboxDelivered(t, ctx, database)
 	waitAllPaaSOutboxDelivered(t, ctx, database)
-	var outboxCount, recordCount int
-	var sameFacts bool
-	if err := database.QueryRow(ctx, `SELECT (SELECT count(*) FROM iam.audit_outbox),count(record.event_id),
-		COALESCE(bool_and(record.event_document=outbox.event_document),false)
-		FROM iam.audit_outbox outbox LEFT JOIN audit.records record
-		ON record.source='IAM' AND record.event_id=outbox.event_id`).Scan(&outboxCount, &recordCount, &sameFacts); err != nil || outboxCount == 0 || recordCount != outboxCount || !sameFacts {
-		t.Fatal("capacity load lost, duplicated or rewrote a committed IAM audit fact")
-	}
 	encodedDecisions, err := json.Marshal(decisions)
 	if err != nil || plannedDecisions == 0 || len(decisions) != plannedDecisions {
 		t.Fatal("capacity observation lost a request-bound authorization result")
@@ -3565,6 +3557,17 @@ func measureIAMCapacity(t *testing.T, ctx context.Context, database *pgx.Conn, e
 		if verification.State != auditv1.VerificationVerified || !verification.Complete || verification.TenantID != auditv1.TenantID(account.id) {
 			t.Fatal("capacity load did not preserve its account audit chain")
 		}
+	}
+	// Chain verification itself commits an authorization fact. Include those
+	// final facts before stopping producers, not just the measured requests.
+	waitAllIAMOutboxDelivered(t, ctx, database)
+	var outboxCount, recordCount int
+	var sameFacts bool
+	if err := database.QueryRow(ctx, `SELECT (SELECT count(*) FROM iam.audit_outbox),count(record.event_id),
+		COALESCE(bool_and(record.event_document=outbox.event_document),false)
+		FROM iam.audit_outbox outbox LEFT JOIN audit.records record
+		ON record.source='IAM' AND record.event_id=outbox.event_id`).Scan(&outboxCount, &recordCount, &sameFacts); err != nil || outboxCount == 0 || recordCount != outboxCount || !sameFacts {
+		t.Fatal("capacity load lost, duplicated or rewrote a committed IAM audit fact")
 	}
 	return secrets
 }

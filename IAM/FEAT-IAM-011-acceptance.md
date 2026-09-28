@@ -63,9 +63,9 @@
 
 固定`42035189eb823e388509f54525889c1a18c6b79d`将原`TestIAMRoleAndManagementReferencesPostgres`及其七个独立数据库/DSN从storage一次性移至`authority-roles`，不复制测试。该入口在上述CI实测344.607秒，独立任务上限15分钟；storage仍20分钟，原每fixture两分钟及所有锁等待/密码成本不变。数据库lane继续`max-parallel=1`、PG1CPU/768MiB/PIDs192，其他原任务限额不变；汇总检查仍要求全部lane成功，取消、跳过或失败均关闭。该固定切片的数据库总集合和场景不增加，只有执行分组调整；本地YAML解析、17段Bash语法及调整前后DSN集合/无重复检查通过。[Verification36367216408](https://github.com/xiak/matrix/actions/runs/36367216408)已于2026-09-28重新通过GitHub API核实精确SHA、九个执行job及汇总全部completed/success，不能回填旧超时为通过。
 
-当前主动解绑候选增加独立`authority-removal`与`authority-removal-security`源码lanes，十个专属数据库入口均来自原TOTP/设置测试owner，顺序运行当前解绑、可证明重绑及安全竞争，不添加开发历史版本矩阵。两项分别上限15分钟，保持原数据库限额、`max-parallel=1`和全lane失败关闭汇总。固定18bdcd9a的[Verification36382998585](https://github.com/xiak/matrix/actions/runs/36382998585)中，removal成功，但removal-security将六个fixture共用一个Go进程，在600.087s触发默认10分钟总超时；此时最后的Account fixture仅运行12秒，不能称其通过或据此断言死锁。后继改为原Authority/Sessions/Mutations和Factors/Recovery/Account两组串行调用，每组保持默认10分钟、各fixture原3/5分钟及job15分钟不变；六个精确入口和DSN无增删/重复，不放宽密码成本或真实OTP时间。独立更换lane的失败及修正归[009](FEAT-IAM-009-security-governance.md)；后继独立CI尚待验证，不继承420或本地通过状态。
+主动解绑切片增加独立`authority-removal`与`authority-removal-security`源码lanes，十个专属数据库入口均来自原TOTP/设置测试owner，顺序运行当前解绑、可证明重绑及安全竞争，不添加开发历史版本矩阵。两项分别上限15分钟，保持原数据库限额、`max-parallel=1`和全lane失败关闭汇总。固定18bdcd9a的[Verification36382998585](https://github.com/xiak/matrix/actions/runs/36382998585)中，removal成功，但removal-security将六个fixture共用一个Go进程，在600.087s触发默认10分钟总超时；此时最后的Account fixture仅运行12秒，不能称其通过或据此断言死锁。后继改为原Authority/Sessions/Mutations和Factors/Recovery/Account两组串行调用，每组保持默认10分钟、各fixture原3/5分钟及job15分钟不变；六个精确入口和DSN无增删/重复，不放宽密码成本或真实OTP时间。独立更换lane的失败及修正归[009](FEAT-IAM-009-security-governance.md)；旧失败不因后继通过而回填。
 
-后继工作流本地解析及19段Bash语法通过；相对于原固定分组，六个精确测试名均只选中一次，DSN集合、资源、串行矩阵与job期限保持一致。旧18的CI最终failure，其中recovery-window于2026-09-28 07:18:50 UTC completed/success；此前三项失败不回填。修复固定在已推送ba17e702，累计HEAD3178b649f6e61c59786f6d0b14828ff3196876f3的[Verification36391053858](https://github.com/xiak/matrix/actions/runs/36391053858)已核对精确SHA及queued状态，尚未独立验收。语法和选择集合证明不代替修正后的独立运行结果。
+后继工作流本地解析及19段Bash语法通过；相对于原固定分组，六个精确测试名均只选中一次，DSN集合、资源、串行矩阵与job期限保持一致。旧18的CI最终failure，其中recovery-window于2026-09-28 07:18:50 UTC completed/success；此前三项失败不回填。修复固定在已推送ba17e702，累计固定3178b649f6e61c59786f6d0b14828ff3196876f3的[Verification36391053858](https://github.com/xiak/matrix/actions/runs/36391053858)已于2026-09-28核对精确SHA、completed/success及全部12项成功。该累计后端通过不包含后继密码规则候选的验收；后继失败与修复证据归009。
 
 ### 运行验收要求
 
@@ -113,7 +113,25 @@ B的独立窗口约9.913s，A约11.114s；不能用两边共有的阶段墙钟�
 
 CI容量通过155.24s（package156.272s），23条账号观测恰好覆盖12阶段、原2000加新增300次请求，失败0。B对照/干扰的P50/P95/P99分别11.45/76.01/121.29ms与17.85/38.02/54.21ms，发送滞后P99为72.41/2.81ms，从计划到完成P99为172.40/54.85ms；这些滞后和尾部样本均保留。A错误密码P50/P95/P99为98.15/110.77/137.44ms，B有100次、A有98次在对方窗口内开始；正常账号不再被测试客户端强制等待另一账号。不同运行及对照之间的差异不能解释为生产改善或公平预算。累计memory.peak原值1610813440字节、IAM连接/活动峰值4/2、outbox峰值122，未采到锁等待；不裁剪内存原值，不推算池/锁总等待、稳定内存余量或HA。只有声明的独立调度测量增量获得验收，完整AC-11仍未满足。
 
-#### 本地真实测量证据
+#### 密码历史上限的成本与干扰缺口
+
+009新增的密码历史0–24是当前真实规则，原容量工作集只覆盖密码登录，不能证明完整历史下的改密成本。最小补充目标沿本文件已有真实进程/独立发送/采样owner完成，不另建压测框架、不扩张开发历史升级矩阵。先通过真实HTTP改密建立24条不同历史，再由真实MFA及操作限定证明将Account历史规则设为24；不能直接插入hash、修改规则行或借受保护root的固定历史底线代替普通USER。
+
+测量使用两个独立Account：A在同一IAM实例顺序执行有不同requestId和新口令的实际成功改密，B在同一实例独立发送正常密码登录；对照先只运行B。每类保留至少100个请求以及全部超时、拒绝和错误样本，不以被失败预算快速拒绝的请求冒充24次历史比较。成功改密后须核对真实generation、24条历史上限、当前会话保留与旧会话处置、单一成功事实；B的每个新凭据仍须在另一IAM实例证明实际身份。密码/hash/凭据不进入观测结果，原outbox及链核对保留。
+
+沿用每请求5秒、fixture6分钟、总并发2、runner2CPU/1536MiB/PIDs256及独立PG限额。若完整历史请求超时，应记录产品在该预算内不满足要求，不能缩短历史、降低Argon2id成本、跳过样本或放大超时取得通过。此工作集可在同一进程fixture的独立容量入口运行，避免把互不相关的长工作集挤入同一计时器；它不是新的历史版本门禁。当前仅完成缺口和验收设计，尚无该完整历史工作集的运行证据，也不据此宣称账号公平预算已经实现。
+
+#### 当前密码规则源码的容量复验
+
+2026-09-28，固定`4c6cf48e4ac195abb71d1490dfd6e414f7c01912`的原容量门禁在全新PG18.4通过159.93s，12阶段/23条观测/2300请求均无非预期失败。结束后只读核对却发现1条`iam.authorization.decided`仍为RETRY：最后的链查询本身产生了新授权事实，原投递检查发生在该查询之前。原结果可证明测量中的业务响应及当时已核对的事实，不能证明退出时全部已提交事实已投递；不能把这条收尾缺口解释为产品丢失审计。
+
+原测试owner将全量事实逐一比对移至链查询之后，并再次等待IAM outbox完成；不新增重试、放宽超时或改生产API。相同固定生产源码加测试Go blob`9a34111770152ca9354996584457e9853d58b90f`在另一个空白数据库串行race-p1通过118.15s（包119.191s）。仍为12阶段/2300请求、失败0，400个新凭据逐个跨副本认证、1400份测量决定保留原请求归属；最终2413条IAM outbox与2413条Audit IAM记录逐一相符，进程退出后另行只读核对IAM/PaaS/managedservice未投递均0、其他数据库客户端0。
+
+两次均使用原固定Go1.26.5、GOMAXPROCS2/GOMEMLIMIT512MiB；runner2CPU/1536MiB/PIDs256，PG1CPU/768MiB/PIDs192、512MiB临时数据，禁止额外swap和宿主端口。第二次复用本轮专属编译缓存，不能把118.15s或较低内存解释为生产性能优化。其runner累计memory.peak为1026338816字节，连接/活动峰值4/2、outbox采样峰值131；未采到锁等待不代表无等待。B复杂授权对照/干扰的P99分别24.03/18.52ms，99个B样本在A错误密码窗口内开始；此结果不是容量SLO或公平预算。当前工作集仍未包含上述24条历史的改密成本。
+
+同一测试修改的默认authorityprocess及architecture race、authorityprocess vet与diff检查通过；无外部DSN的SKIP不算真实数据库验收。修复与该本地证据尚待固定提交的独立CI，不继承旧容量切片或其他分支的发布状态。
+
+#### 较早固定源的真实测量证据
 
 2026-09-18，以固定`3080922f6ae1871f1c351d5ee30f03551fc3c605`生产源码及当前测试文件Git blob`6c5490447d9cd8717685243a96c00e722688c532`构成干净导出，`TestIAMCapacityProcesses`通过98.00s（race测试客户端，生产进程为原构建方式）。运行环境是共享Docker Desktop Linux x86_64/WSL2，宿主引擎可见18逻辑CPU、16,562,409,472字节内存，不是专用硬件。独立runner实际cgroup为2CPU/1536MiB、禁止额外swap、PIDs256、Go1.26.5/GOMAXPROCS2；PostgreSQL18.6独立为1CPU/1GiB/PIDs128、512MiB临时数据卷，无宿主发布端口。资源限额未放宽，测量期间未并跑本任务其他Go门禁。
 
@@ -167,11 +185,11 @@ CI实际记录Go1.26.5、GOMAXPROCS2、CPU quota/period=200000/100000、memory.m
 
 只使用本工作区、任务标签和唯一命名的数据库/容器/网络/卷/端口。Go 默认 GOMAXPROCS=2、-p 2；PG/引擎 CPU/内存/PID 限额；重型门禁串行。不得重启任何远端机器或共享服务，不使用其他 Phase 的运行实例。未运行命令不进入 runbook。
 
-独立CI的数据库门禁为`authority-storage`、`authority-runtime`、`authority-step-up`各20分钟，以及仅承载[009十码耗尽](./FEAT-IAM-009-security-governance.md#s2b受限自助恢复增量)的`authority-recovery-window`；四个lane以`max-parallel=1`串行，各有独立受限PG实例。前两者分别验证Audit历史/HTTP、IAM一般事务及Role/STS/PaaS，以及已发布安装器效果前拒绝、本人Session与静默锁内到期、唯一开发前驱、真实独立进程及受限容量；step-up保留原操作限定证明和换码门禁。耗尽门禁需要不可压缩的两个真实十分钟窗口，单独分配30分钟作业、27分钟Go进程、25分钟上下文；不延长任何既有fixture/作业期限、不提高CPU/内存/并发或修改生产时钟/预算。它复用现有integration测试owner，不新建框架。`authority-process`仍只是2分钟汇总，四个lane全部成功才成功，失败、取消或跳过均不能放行。Go和node-process保持独立。
+独立CI当前有九个数据库lane，实际选择和分配由原`.github/workflows/verification.yml`拥有：storage/runtime/step-up/replacement各20分钟，roles/replacement-qualification/removal/removal-security各15分钟，recovery-window为30分钟。全部以`max-parallel=1`串行，各有独立受限PG实例；Role与新增安全场景不再混进旧storage/runtime分组。耗尽门禁需要不可压缩的两个真实十分钟窗口，保持27分钟Go进程和25分钟上下文；不修改生产时钟、预算、密码成本或已有fixture期限。`authority-process`仍只是2分钟汇总，全部数据库lane成功才成功，失败、取消或跳过均不能放行。Go和node-process保持独立。
 
 IAM的一般事务从实际编译测试目录枚举，除在runtime/自然窗口lane有准确入口的fixture及独立Role/STS外，每个顶层fixture以精确`-run`单独串行调用。枚举编译失败或没有任何一般事务测试均失败关闭；编译清单与三个选择入口联合核对，不能漏跑或把无DSN的SKIP当作该fixture验收。各自独立数据库及完整场景不变。除上述新增真实窗口门禁外，保持原Go单进程默认10分钟、IAM独立组矩阵120秒/策略聚合240秒，以及原锁等待、HTTP、进程预算和fixture规模；不增大并发、资源或重试，不弱化密码计算。真实会话到期可在同一矩阵执行其他独立案例期间自然流逝，但到期前正向控制、数据库时间、到期后拒绝、历史证据及后续账号停用顺序都必须验证，不改TTL或伪造时钟。锁内到期另用原owner下的静默数据库、生产最小TTL及120秒预算，要求原事务没有序列化重试掩盖时间检查；该数据库也串行运行，不借另一个矩阵的写入获得偶然正确的结果。
 
-本次本地核对实际编译的15项IAM integration测试：storage一般5项、独立Role1项、runtime8项、自然窗口1项，联合覆盖且互不重复；YAML的串行/期限/汇总准入断言与13段Bash语法检查通过。新自然窗口实际运行证据仅归[009](./FEAT-IAM-009-security-governance.md#s2b受限自助恢复增量)，不以工作流静态校验宣称独立CI通过。
+调整分组时，以当前实际编译清单和所有选择入口联合核对无漏跑、无重复；不保留已被替代的历史测试数量作为当前契约。各自然窗口的实际运行证据归009，不以工作流语法或选择集合检查宣称独立CI通过。
 
 固定`159bb302fed89161c4b60afeb4a6f41f9bd99820`的[Verification35318292984](https://github.com/xiak/matrix/actions/runs/35318292984)在IAM一般事务包600.109s时触发Go默认10分钟总计时器。此时平台恢复fixture仅运行22秒，尚未达到自身3分钟期限；Role/STS与PaaS数据库后续命令没有执行，不能记为通过。失败说明五个独立fixture仍共用一个包计时器，不证明恢复并发死锁，也不能据此降低密码成本或放宽单项/20分钟作业期限。该run最终为failure：Go、node和runtime lane成功，其中本人会话三项package213.561s、保留数据/独立进程package137.821s、容量129.82s通过；汇总检查仍正确拒绝，不用其他作业成功覆盖storage失败。
 
