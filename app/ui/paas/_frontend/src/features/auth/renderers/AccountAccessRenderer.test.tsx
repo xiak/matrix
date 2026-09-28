@@ -656,6 +656,19 @@ describe("account access", () => {
     expect(screen.getByText(/不根据用户状态推断访问方式/)).toBeTruthy();
   });
 
+  it("keeps access-method facts unknown while opening the user's real key inventory in context", async () => {
+    const list = vi.fn().mockResolvedValue({ accountId: account.id, userId: childUser.id, userResourceVersion: childUser.resourceVersion, capabilities: [], items: [] });
+    const repository = accounts({ accessKeys: { list, read: vi.fn(), create: vi.fn(), setStatus: vi.fn(), delete: vi.fn() } });
+    const { user } = await openAccess(repository);
+    await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+
+    expect(await screen.findByText(/控制台登录与编程访问的启用状态尚无独立契约/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "查看\/管理访问密钥" }));
+    expect(await screen.findByText("尚未创建访问密钥")).toBeTruthy();
+    expect(list).toHaveBeenCalledWith(credential, account.id, childUser.id);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
   it("updates only the display name through the live user revision", async () => {
     const repository = accounts();
     const { user } = await openAccess(repository);

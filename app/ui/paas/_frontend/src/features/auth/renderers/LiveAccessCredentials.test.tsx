@@ -44,6 +44,26 @@ function client(overrides: Partial<AccessKeyClient> = {}): AccessKeyClient {
 afterEach(cleanup);
 
 describe("LiveAccessCredentials", () => {
+  it("opens a known user's keys in context without a second user directory", async () => {
+    const api = client();
+    render(<LocaleProvider><LiveAccessCredentials client={api} scene={scene} scopedOwner={owner as unknown as AccountAccessScene["users"][number]} /></LocaleProvider>);
+
+    expect(screen.getByRole("heading", { name: "访问密钥" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "管理 alex 的访问密钥" })).toBeNull();
+    expect(await screen.findByRole("button", { name: key.id })).toBeTruthy();
+    expect(api.list).toHaveBeenCalledWith(owner.id);
+    expect(screen.queryByText("本页使用固定的访问密钥管理契约", { exact: false })).toBeNull();
+  });
+
+  it("keeps a scoped IAM denial local instead of showing mock keys", async () => {
+    const api = client({ list: vi.fn().mockRejectedValue(new HttpProblem(403, "AUTHORITY_REQUIRED")) });
+    render(<LocaleProvider><LiveAccessCredentials client={api} scene={scene} scopedOwner={owner as unknown as AccountAccessScene["users"][number]} /></LocaleProvider>);
+
+    expect(await screen.findByText("当前身份没有管理该用户访问密钥的权限。")).toBeTruthy();
+    expect(screen.queryByRole("table", { name: "访问密钥" })).toBeNull();
+    expect(screen.getByRole("button", { name: "新建访问密钥" }).hasAttribute("disabled")).toBe(true);
+  });
+
   it("loads only the selected user's directory and keeps fixed page content visible", async () => {
     const user = userEvent.setup();
     const api = client();

@@ -6,6 +6,7 @@ import { KeyRound, ShieldCheck, UserRound } from "lucide-react";
 import { Alert, Dialog, FormField, Badge, Button, Input, PasswordInput, Select, Typography } from "@ui/xiak";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import { withinNewPasswordProductBounds } from "../domain/passwordEntry";
+import { LiveAccessCredentials } from "./LiveAccessCredentials";
 import type { CapabilityRestriction } from "../domain/accounts";
 import type { AccountUserScene } from "../scenes/accountAccessScene";
 import styles from "./AccountAccessRenderer.module.css";
@@ -75,6 +76,7 @@ export function UserAccessManagement({ user, onDeleted, profileActions = false, 
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [resettingPassword, setResettingPassword] = useState(false);
   const [reviewingReset, setReviewingReset] = useState(false);
+  const [showKeys, setShowKeys] = useState(false);
   const [selectedPolicy, setSelectedPolicy] = useState<{ id: string; resourceVersion: number } | null>(null);
   const relationIntent = access.userPolicyChangeIntent;
   const reviewingPolicy = relationIntent?.userId === user.id;
@@ -134,7 +136,11 @@ export function UserAccessManagement({ user, onDeleted, profileActions = false, 
       </section> : null}
       {showLiveEvidenceBoundary ? <section className={styles.identitySection}>
         <div className={styles.sectionHeading}><KeyRound aria-hidden="true" /><strong>{t("accessMethodsAndCredentials")}</strong></div>
-        <p className={styles.note}>{t("liveCredentialContractHint")}</p>
+        <p className={styles.note}>{t(access.accessKeys ? "liveCredentialManagedHint" : "liveCredentialContractHint")}</p>
+        {access.accessKeys && access.scene ? <>
+          <div className={styles.actions}><Button onClick={() => setShowKeys((current) => !current)} variant="secondary">{t(showKeys ? "hideAccessKeys" : "manageAccessKeys")}</Button></div>
+          {showKeys ? <LiveAccessCredentials client={access.accessKeys} scene={access.scene} scopedOwner={user} /> : null}
+        </> : null}
       </section> : null}
       <div className={styles.sectionHeading}><ShieldCheck aria-hidden="true" /><strong>{t("directPolicyAttachments")}</strong></div>
       <p className={styles.note}>{t("policyAttachmentHint")}</p>

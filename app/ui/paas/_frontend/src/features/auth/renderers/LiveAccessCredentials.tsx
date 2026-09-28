@@ -135,17 +135,18 @@ function LiveKeyWorkflow({ flow, owner, directory, client, onChanged, onClose }:
   </Card>;
 }
 
-export function LiveAccessCredentials({ client, scene }: { client: AccessKeyClient; scene: AccountAccessScene }) {
+export function LiveAccessCredentials({ client, scene, scopedOwner }: { client: AccessKeyClient; scene: AccountAccessScene; scopedOwner?: AccountUserScene }) {
   const t = useTranslations("IamWorkspace");
   const restrictions = useTranslations("AccountAccess.restrictions");
-  const [ownerId, setOwnerId] = useState<string | null>(null);
+  const [ownerId, setOwnerId] = useState<string | null>(scopedOwner?.id ?? null);
   const [directory, setDirectory] = useState<AccessKeyDirectory | null>(null);
   const [selected, setSelected] = useState<AccessKeyAccess | null>(null);
   const [flow, setFlow] = useState<LiveKeyFlow | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(Boolean(scopedOwner));
   const [error, setError] = useState<LiveKeyError | null>(null);
   const requestRevision = useRef(0);
-  const owner = scene.users.find((user) => user.id === ownerId) ?? null;
+  const scopedOwnerId = scopedOwner?.id ?? null;
+  const owner = scopedOwner ?? scene.users.find((user) => user.id === ownerId) ?? null;
 
   const load = useCallback(async (userId: string, foreground = true) => {
     const request = ++requestRevision.current;
@@ -160,6 +161,16 @@ export function LiveAccessCredentials({ client, scene }: { client: AccessKeyClie
       if (request === requestRevision.current) { setDirectory(null); setSelected(null); setError(keyError(failure)); }
     } finally { if (request === requestRevision.current) setLoading(false); }
   }, [client]);
+
+  useEffect(() => {
+    if (!scopedOwnerId) return;
+    const request = ++requestRevision.current;
+    void client.list(scopedOwnerId).then(
+      (next) => { if (request === requestRevision.current) { setDirectory(next); setLoading(false); } },
+      (failure) => { if (request === requestRevision.current) { setError(keyError(failure)); setLoading(false); } }
+    );
+    return () => { requestRevision.current += 1; };
+  }, [client, scopedOwnerId]);
 
   const chooseOwner = (userId: string) => {
     requestRevision.current += 1;
@@ -190,8 +201,9 @@ export function LiveAccessCredentials({ client, scene }: { client: AccessKeyClie
   const createCapability = directory ? capability(directory, "iam.access-key.create") : null;
 
   return <section className={styles.root}>
-    <ContentPage.Heading title={`${owner.loginName} · ${t("keys")}`} scrollKey={`live-access-keys:${owner.id}`} back={{ label: t("back"), onClick: closeOwner }} actions={!flow && directory ? <ContentPage.Commands label={t("keys")} primary={{ id: "create-key", label: t("createKey"), disabled: !createCapability?.available, disabledReason: createCapability?.restrictionReason ? restrictions(createCapability.restrictionReason) : undefined, onSelect: startCreate }} /> : undefined} focus />
-    <Alert status="warning">{t("keyLiveProductBoundary")}</Alert>
+    {scopedOwner ? <div className={styles.embeddedHeading}><h3>{t("keys")}</h3><Button disabled={Boolean(flow) || !createCapability?.available} onClick={startCreate} size="small">{t("createKey")}</Button></div>
+      : <ContentPage.Heading title={`${owner.loginName} · ${t("keys")}`} scrollKey={`live-access-keys:${owner.id}`} back={{ label: t("back"), onClick: closeOwner }} actions={!flow && directory ? <ContentPage.Commands label={t("keys")} primary={{ id: "create-key", label: t("createKey"), disabled: !createCapability?.available, disabledReason: createCapability?.restrictionReason ? restrictions(createCapability.restrictionReason) : undefined, onSelect: startCreate }} /> : undefined} focus />}
+    {!scopedOwner ? <Alert status="warning">{t("keyLiveProductBoundary")}</Alert> : null}
     {error ? <Alert status="danger">{t(`keyLiveErrors.${error}`)} <Button onClick={() => void load(owner.id)} size="small" variant="ghost">{t("keyLiveRetry")}</Button></Alert> : null}
     {loading && !directory ? <Card><Card.Body><p className={styles.note} role="status">{t("keyLiveLoading")}</p></Card.Body></Card> : null}
     {flow && directory ? <LiveKeyWorkflow flow={flow} owner={owner} directory={directory} client={client} onChanged={() => load(owner.id, false)} onClose={() => setFlow(null)} /> : null}
