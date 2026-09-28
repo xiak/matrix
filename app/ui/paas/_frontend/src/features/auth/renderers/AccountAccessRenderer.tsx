@@ -102,6 +102,7 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
   const capabilities = useAccountCapabilities();
   const scene = access.scene;
   const workspace = access.workspace;
+  const unknownReset = access.passwordResetUnknown;
   const clearFeedback = access.clearFeedback;
   const workflow = view === "create-user" || view === "create-policy" || view === "policy-language" || view === "create-group" || view === "create-role";
   useEffect(() => { clearFeedback(); }, [view, clearFeedback]);
@@ -118,6 +119,13 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
     (previewOnly && capabilities.hasPreviewWorkspace && !scene.canListUsers)
   );
   return <section aria-label={t("title")} aria-busy={access.loading || access.busy} className={styles.stack}>
+    {unknownReset ? <Alert status="warning"><div className={styles.confirmation}>
+      <strong>{t("resetUnknownTitle")}</strong>
+      <p>{t("resetUnknownTarget", { user: unknownReset.userQualifiedName, version: unknownReset.resourceVersion })}</p>
+      <p>{t("resetUnknownHint")}</p>
+      <p>{t("resetUnknownRequestId")} <code className={styles.resetRequestId}>{unknownReset.requestId}</code></p>
+      <div><Button disabled={access.busy} onClick={() => access.acknowledgeUnknownPasswordReset(unknownReset.requestId)} variant="secondary">{t("acknowledgeResetUnknown")}</Button></div>
+    </div></Alert> : null}
     {access.error && !workflow ? <Alert status="danger">{t(`errors.${access.error}`)}</Alert> : null}
     {access.success && !workflow && view !== "policies" ? <Alert status="success">{t(access.success)}</Alert> : null}
     {access.workspaceError && !workflow && view !== "policies" ? <Alert status="danger">{w(`errors.${access.workspaceError}`)}</Alert> : null}

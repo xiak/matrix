@@ -1648,6 +1648,15 @@ describe("IAM HTTP account boundary", () => {
     }
   });
 
+  it("sends the reviewed reset request identity unchanged without creating a second token", async () => {
+    const fetcher = reply({ ...user, mustChangePassword: true, resourceVersion: 3 });
+    await httpAccountRepository.execute("bearer", { kind: "reset-password", userId: user.id,
+      initialPassword: "Reset-Only-Test-Password-74!", resourceVersion: 2, requestId: "ui-user-reset-original" });
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/users/user-alex:reset-password");
+    expect(requestBody(fetcher)).toEqual({ initialPassword: "Reset-Only-Test-Password-74!", resourceVersion: 2,
+      requestId: "ui-user-reset-original" });
+  });
+
   it("uses exact policy identity and revisions for attach and revoke", async () => {
     let fetcher = reply(tenantAttachment);
     await httpAccountRepository.execute("bearer", { kind: "create-policy-attachment", userId: user.id,

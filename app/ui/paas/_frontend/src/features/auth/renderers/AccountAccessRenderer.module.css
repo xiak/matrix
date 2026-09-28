@@ -126,6 +126,8 @@
   margin: 0;
 }
 
+.resetRequestId { min-width: 0; overflow-wrap: anywhere; }
+
 @media (max-width: 600px) {
   .actionHeader {
     flex-direction: column;

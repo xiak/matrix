@@ -328,5 +328,5 @@ export type AccountCommand =
   | { kind: "update-user"; userId: string; displayName: string; resourceVersion: number }
   | { kind: "delete-user"; userId: string; resourceVersion: number }
   | { kind: "set-status"; userId: string; status: "ACTIVE" | "DISABLED"; resourceVersion: number }
-  | { kind: "reset-password"; userId: string; initialPassword: string; resourceVersion: number }
+  | { kind: "reset-password"; userId: string; initialPassword: string; resourceVersion: number; requestId: string }
   | { kind: "create-policy-attachment"; userId: string; policyId: string; policyResourceVersion: number; requestId: string };

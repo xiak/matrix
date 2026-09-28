@@ -177,7 +177,7 @@ describe("access workspace preview invariants", () => {
     const beforeWorkspace = await extension.read(previewCredential);
     const accountCommands: AccountCommand[] = [
       { kind: "set-status", userId: principalId, status: "DISABLED", resourceVersion: 5 },
-      { kind: "reset-password", userId: principalId, initialPassword: "Mock-password-only-49!", resourceVersion: 5 },
+      { kind: "reset-password", userId: principalId, initialPassword: "Mock-password-only-49!", resourceVersion: 5, requestId: "root-reset" },
       { kind: "create-policy-attachment", userId: principalId, policyId: "policy-read", policyResourceVersion: 1, requestId: "root-attachment" }
     ];
     for (const command of accountCommands) await expect(previewAccountRepository.execute(previewCredential, command)).rejects.toMatchObject({ status: 403 });

@@ -2048,8 +2048,52 @@ describe("account access", () => {
     await user.click(screen.getByRole("button", { name: "审阅重置" }));
     resetReview = screen.getByRole("region", { name: "确认重置目标与影响" });
     await user.click(within(resetReview).getByRole("button", { name: "确认重置密码" }));
-    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "reset-password", userId: "child-a", initialPassword: "Reset-Only-Test-Password-74!", resourceVersion: 2 }));
+    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "reset-password", userId: "child-a", initialPassword: "Reset-Only-Test-Password-74!", resourceVersion: 2, requestId: expect.stringMatching(/^ui-user-reset-/) }));
     expect(screen.queryByDisplayValue("Reset-Only-Test-Password-74!")).toBeNull();
+  });
+
+  it("retains a non-secret unknown reset notice across IAM navigation and never auto-retries", async () => {
+    const execute = vi.fn(async (_credential: string, command: { kind: string; requestId?: string }) => {
+      if (command.kind === "reset-password") throw new Error("connection lost after dispatch");
+    });
+    const { user } = await openAccess(accounts({ execute }));
+    await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await user.click(screen.getByRole("button", { name: "重置密码" }));
+    await user.type(screen.getByLabelText(/^初始密码/), "Reset-Only-Test-Password-74!");
+    await user.click(screen.getByRole("button", { name: "审阅重置" }));
+    await user.click(screen.getByRole("button", { name: "确认重置密码" }));
+    expect(await screen.findByText("重置密码结果尚未确认")).toBeTruthy();
+    expect(screen.getByText(/新密码可能覆盖已生效的临时密码/)).toBeTruthy();
+    expect((screen.getByRole("button", { name: "重置密码" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByDisplayValue("Reset-Only-Test-Password-74!")).toBeNull();
+    expect(document.body.textContent).not.toContain("Reset-Only-Test-Password-74!");
+    expect(execute.mock.calls[0]?.[1].requestId).toMatch(/^ui-user-reset-/);
+    expect(execute).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByTestId("nav-overview"));
+    expect(screen.getByText("重置密码结果尚未确认")).toBeTruthy();
+    await user.click(screen.getByTestId("nav-users"));
+    await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    expect((screen.getByRole("button", { name: "重置密码" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(execute).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "了解风险，允许新操作" }));
+    expect(screen.queryByText("重置密码结果尚未确认")).toBeNull();
+    expect((screen.getByRole("button", { name: "重置密码" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("treats an explicit reset version conflict as rejected, not an unconfirmed outcome", async () => {
+    const execute = vi.fn(async (_credential: string, command: { kind: string }) => {
+      if (command.kind === "reset-password") throw new HttpProblem(409, "IAM_CONFLICT");
+    });
+    const { user } = await openAccess(accounts({ execute }));
+    await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await user.click(screen.getByRole("button", { name: "重置密码" }));
+    await user.type(screen.getByLabelText(/^初始密码/), "Reset-Only-Test-Password-74!");
+    await user.click(screen.getByRole("button", { name: "审阅重置" }));
+    await user.click(screen.getByRole("button", { name: "确认重置密码" }));
+    await waitFor(() => expect(screen.getAllByText(/资源已变化/).length).toBeGreaterThan(0));
+    expect(screen.queryByText("重置密码结果尚未确认")).toBeNull();
+    expect(execute).toHaveBeenCalledTimes(1);
   });
 
   it("keeps an uncertain direct revocation across IAM routes and retries only its frozen request", async () => {

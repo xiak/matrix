@@ -111,7 +111,7 @@ export function UserAccessManagement({ user, onDeleted, profileActions = false, 
     setPassword("");
     setReviewingReset(false);
     setResettingPassword(false);
-    await access.execute({ kind: "reset-password", userId: user.id, resourceVersion: user.resourceVersion, initialPassword });
+    await access.resetUserPassword(user, initialPassword);
   }
   return <div className={styles.detail}>
       <div className={styles.userSummary}><div><strong>{user.name}</strong><Typography.Text tone="muted">{user.qualifiedName}</Typography.Text></div><Badge status={user.enabled ? "success" : "neutral"}>{t(`states.${user.state}`)}</Badge></div>
@@ -187,7 +187,7 @@ export function UserAccessManagement({ user, onDeleted, profileActions = false, 
       <div className={styles.sectionHeading}><KeyRound aria-hidden="true" /><strong>{t("loginSecurity")}</strong></div>
       <div className={styles.actions}>
           <Button disabled={disabled || !user.canSetStatus} title={!user.canSetStatus ? restriction(user.statusRestrictionReason) : undefined} onClick={() => { setConfirmStatus(true); setConfirmDelete(false); setResettingPassword(false); setPassword(""); }} variant="secondary">{user.enabled ? t("disableUser") : t("enableUser")}</Button>
-          <Button disabled={disabled || !user.canResetPassword} title={!user.canResetPassword ? restriction(user.passwordRestrictionReason) : undefined} onClick={() => { setResettingPassword(true); setReviewingReset(false); setConfirmDelete(false); setConfirmStatus(false); }} variant="secondary">{t("resetPassword")}</Button>
+          <Button disabled={disabled || !user.canResetPassword || Boolean(access.passwordResetUnknown)} title={access.passwordResetUnknown ? t("resetUnknownBlocked") : !user.canResetPassword ? restriction(user.passwordRestrictionReason) : undefined} onClick={() => { setResettingPassword(true); setReviewingReset(false); setConfirmDelete(false); setConfirmStatus(false); }} variant="secondary">{t("resetPassword")}</Button>
           {deleteAction ? <Button disabled={disabled || !user.canDelete} title={!user.canDelete ? restriction(user.deleteRestrictionReason) : undefined} onClick={() => { setConfirmDelete(true); setConfirmStatus(false); setResettingPassword(false); }} variant="danger">{t("deleteUser")}</Button> : null}
       </div>
       {!user.canSetStatus || !user.canResetPassword ? <p className={styles.note}>{restriction(user.statusRestrictionReason ?? user.passwordRestrictionReason)}</p> : null}
@@ -213,7 +213,7 @@ export function UserAccessManagement({ user, onDeleted, profileActions = false, 
           <Alert status="warning">{t("resetHint")}</Alert>
           <p className={styles.note}>{t("resetReviewSecretHint")}</p>
           <div className={styles.actions}>
-            <Button disabled={disabled || !user.canResetPassword} onClick={() => void resetPassword()}>{t("confirmReset")}</Button>
+            <Button disabled={disabled || !user.canResetPassword || Boolean(access.passwordResetUnknown)} onClick={() => void resetPassword()}>{t("confirmReset")}</Button>
             <Button disabled={disabled} onClick={() => setReviewingReset(false)} variant="secondary">{t("changeResetPassword")}</Button>
             <Button disabled={disabled} onClick={() => { setResettingPassword(false); setReviewingReset(false); setPassword(""); }} variant="ghost">{t("cancel")}</Button>
           </div>
