@@ -1,6 +1,6 @@
 DO $verify_accounts$
 BEGIN
-    IF NOT iam.account_security_settings_contract_ready() THEN
+    IF NOT iam.account_security_settings_contract_ready() OR NOT iam.user_password_reset_contract_ready() THEN
         RAISE EXCEPTION 'IAM security settings contract is unavailable';
     END IF;
     IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 47::bigint THEN
@@ -65,7 +65,7 @@ BEGIN
         OR NOT has_function_privilege('matrix_iam_api','iam.set_account_status(text,text,text,text,text,bigint,jsonb)','EXECUTE')
         OR NOT has_function_privilege('matrix_iam_api','iam.recover_root_credentials(text,text,text,text,text,bigint,text,text,jsonb)','EXECUTE')
         OR NOT has_function_privilege('matrix_iam_api','iam.set_account_alias(text,text,text,text,bigint,jsonb)','EXECUTE')
-        OR NOT has_function_privilege('matrix_iam_api','iam.change_user(text,text,text,text,bigint,text,text,jsonb)','EXECUTE')
+        OR NOT has_function_privilege('matrix_iam_api','iam.change_user(text,text,text,text,bigint,text,text,jsonb,bigint,text,text)','EXECUTE')
         OR NOT has_function_privilege('matrix_iam_api','iam.read_user(text,text,text,text)','EXECUTE')
         OR NOT has_function_privilege('matrix_iam_api','iam.update_user(text,text,text,text,text,bigint,jsonb)','EXECUTE')
         OR NOT has_function_privilege('matrix_iam_api','iam.delete_user(text,text,text,text,bigint,jsonb)','EXECUTE')

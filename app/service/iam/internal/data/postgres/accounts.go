@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgconn"
 
@@ -647,23 +648,52 @@ func (value *transaction) DeleteUser(ctx context.Context, mutation identityacces
 	return result, nil
 }
 
+func (value *transaction) ReadPasswordReset(ctx context.Context, read identityaccess.AccountRead, user iamv1.PrincipalID, version uint64) (identityaccess.PasswordReplacementMaterial, error) {
+	var result identityaccess.PasswordReplacementMaterial
+	var history []string
+	err := value.tx.QueryRow(ctx, "SELECT * FROM iam.read_password_reset($1,$2,$3,$4,$5)",
+		read.AccountID, read.ActorPrincipalID, read.DecisionID, user, version).Scan(
+		&result.PasswordHash, &result.CredentialGeneration, &history, &result.HistoryDigest)
+	if err != nil {
+		return identityaccess.PasswordReplacementMaterial{}, mapAuthorizationDatabaseError("read password reset", err)
+	}
+	if result.CredentialGeneration == 0 || result.CredentialGeneration >= 9007199254740991 || len(result.PasswordHash) > 512 ||
+		!strings.HasPrefix(string(result.PasswordHash), "$matrix-iam-v1$argon2id$v=19$") {
+		return identityaccess.PasswordReplacementMaterial{}, identityaccess.ErrUnavailable
+	}
+	result.PasswordHistory, err = passwordHistoryMaterial(history, result.HistoryDigest)
+	if err != nil {
+		return identityaccess.PasswordReplacementMaterial{}, err
+	}
+	return result, nil
+}
+
 func (value *transaction) ChangeUser(ctx context.Context, mutation identityaccess.UserChange) (iamv1.User, error) {
+	if (mutation.Status == nil) == (mutation.PasswordHash == nil) || (mutation.PasswordHash == nil) != (mutation.ExpectedPassword == nil) {
+		return iamv1.User{}, identityaccess.ErrInvalidArgument
+	}
 	event, err := json.Marshal(mutation.AuditEvent)
 	if err != nil {
 		return iamv1.User{}, identityaccess.ErrUnavailable
 	}
 	defer clear(event)
 	var encoded []byte
-	var status, hash any
+	var status, hash, expectedGeneration, expectedHash, expectedHistory any
 	if mutation.Status != nil {
 		status = string(*mutation.Status)
 	}
 	if mutation.PasswordHash != nil {
 		hash = string(*mutation.PasswordHash)
+		expected := mutation.ExpectedPassword
+		if expected.CredentialGeneration == 0 || expected.CredentialGeneration >= 9007199254740991 ||
+			iamv1.ValidateDigest("historyDigest", expected.HistoryDigest) != nil {
+			return iamv1.User{}, identityaccess.ErrInvalidArgument
+		}
+		expectedGeneration, expectedHash, expectedHistory = expected.CredentialGeneration, string(expected.PasswordHash), expected.HistoryDigest
 	}
-	err = value.tx.QueryRow(ctx, `SELECT iam.change_user($1,$2,$3,$4,$5,$6,$7,$8::jsonb)`,
+	err = value.tx.QueryRow(ctx, `SELECT iam.change_user($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$11)`,
 		mutation.AccountID, mutation.ActorPrincipalID, mutation.DecisionID, mutation.PrincipalID,
-		mutation.ResourceVersion, status, hash, event).Scan(&encoded)
+		mutation.ResourceVersion, status, hash, event, expectedGeneration, expectedHash, expectedHistory).Scan(&encoded)
 	if err != nil {
 		return iamv1.User{}, mapAuthorizationDatabaseError("change IAM user", err)
 	}

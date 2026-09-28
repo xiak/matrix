@@ -1059,7 +1059,16 @@ func (service *Authority) SetUserStatus(ctx context.Context, credential iamv1.Se
 	if err != nil {
 		return iamv1.User{}, err
 	}
-	return service.changeUser(ctx, credential, id, request.ResourceVersion, &request.Status, iamv1.Secret{}, iamv1.ActionIAMUserSetStatus, auditv1.ActionIAMUserStatusSet, digest, request.RequestID)
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMUserSetStatus, iamv1.AuthorizationResourceInstance, "",
+		iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: string(id)}, request.RequestID,
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.User, error) {
+			event, err := service.newManagementEvent(subject, auditv1.ActionIAMUserStatusSet, auditv1.TargetUser, string(id), decision.ID, digest, request.RequestID, now)
+			if err != nil {
+				return iamv1.User{}, err
+			}
+			return tx.ChangeUser(ctx, UserChange{AccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID,
+				PrincipalID: id, DecisionID: decision.ID, ResourceVersion: request.ResourceVersion, Status: &request.Status, AuditEvent: event})
+		})
 }
 
 func (service *Authority) UpdateUser(ctx context.Context, credential iamv1.Secret, id iamv1.PrincipalID, request iamv1.UpdateUserRequest) (iamv1.User, error) {
@@ -1124,27 +1133,40 @@ func (service *Authority) ResetUserPassword(ctx context.Context, credential iamv
 	if err != nil {
 		return iamv1.User{}, err
 	}
-	return service.changeUser(ctx, credential, id, request.ResourceVersion, nil, request.InitialPassword, iamv1.ActionIAMUserPasswordReset, auditv1.ActionIAMUserPasswordReset, digest, request.RequestID)
-}
-
-func (service *Authority) changeUser(ctx context.Context, credential iamv1.Secret, id iamv1.PrincipalID, version uint64, status *iamv1.PrincipalStatus,
-	password iamv1.Secret, action iamv1.Action, auditAction auditv1.Action, digest, requestID string) (iamv1.User, error) {
-	return withAccountAuthorization(service, ctx, credential, action, iamv1.AuthorizationResourceInstance, "", iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: string(id)}, requestID,
+	if err := service.acquirePasswordWork(ctx); err != nil {
+		return iamv1.User{}, err
+	}
+	defer service.releasePasswordWork()
+	target := iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: string(id)}
+	var originalSession iamv1.Session
+	original, err := withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMUserPasswordReset, iamv1.AuthorizationResourceInstance, "", target, request.RequestID,
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, _ time.Time) (PasswordReplacementMaterial, error) {
+			originalSession = subject.Subject.Session
+			return tx.ReadPasswordReset(ctx, AccountRead{AccountID: subject.Subject.Organization.ID,
+				ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID}, id, request.ResourceVersion)
+		})
+	if err != nil {
+		return iamv1.User{}, err
+	}
+	if err := service.validatePasswordReplacement(ctx, request.InitialPassword, original.PasswordHash, original.PasswordHistory, original.HistoryDigest); err != nil {
+		return iamv1.User{}, err
+	}
+	hash, err := service.passwords.Hash(request.InitialPassword)
+	if err != nil {
+		return iamv1.User{}, ErrUnavailable
+	}
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMUserPasswordReset, iamv1.AuthorizationResourceInstance, "", target, request.RequestID,
 		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.User, error) {
-			event, err := service.newManagementEvent(subject, auditAction, auditv1.TargetUser, string(id), decision.ID, digest, requestID, now)
+			if subject.Subject.Session.ID != originalSession.ID || subject.Subject.Organization.ID != originalSession.AccountID ||
+				subject.Subject.Principal.ID != originalSession.PrincipalID {
+				return iamv1.User{}, ErrForbidden
+			}
+			event, err := service.newManagementEvent(subject, auditv1.ActionIAMUserPasswordReset, auditv1.TargetUser, string(id), decision.ID, digest, request.RequestID, now)
 			if err != nil {
 				return iamv1.User{}, err
 			}
-			mutation := UserChange{AccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID, PrincipalID: id,
-				DecisionID: decision.ID, ResourceVersion: version, Status: status, AuditEvent: event}
-			if password.Present() {
-				hash, err := service.passwords.Hash(password)
-				if err != nil {
-					return iamv1.User{}, ErrUnavailable
-				}
-				mutation.PasswordHash = &hash
-			}
-			return tx.ChangeUser(ctx, mutation)
+			return tx.ChangeUser(ctx, UserChange{AccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID, PrincipalID: id,
+				DecisionID: decision.ID, ResourceVersion: request.ResourceVersion, PasswordHash: &hash, ExpectedPassword: &original, AuditEvent: event})
 		})
 }
 

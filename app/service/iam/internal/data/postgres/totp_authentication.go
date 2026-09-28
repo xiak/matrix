@@ -154,24 +154,24 @@ func (value *transaction) BeginPasswordChallenge(ctx context.Context, mutation i
 	return result, nil
 }
 
-func (value *transaction) ReadPasswordChallenge(ctx context.Context, identity identityaccess.AuthenticationChallengeCredential) (identityaccess.ChallengePasswordMaterial, error) {
+func (value *transaction) ReadPasswordChallenge(ctx context.Context, identity identityaccess.AuthenticationChallengeCredential) (identityaccess.PasswordReplacementMaterial, error) {
 	if (identity.Purpose != "LOGIN" && identity.Purpose != "ENROLLMENT") || identity.NextStep != "PASSWORD_CHANGE" {
-		return identityaccess.ChallengePasswordMaterial{}, identityaccess.ErrUnauthenticated
+		return identityaccess.PasswordReplacementMaterial{}, identityaccess.ErrUnauthenticated
 	}
-	var result identityaccess.ChallengePasswordMaterial
+	var result identityaccess.PasswordReplacementMaterial
 	var history []string
 	err := value.tx.QueryRow(ctx, "SELECT password_hash,credential_generation,password_history,history_digest FROM iam.read_password_challenge($1,$2,$3)",
 		identity.AccountID, identity.UserID, identity.ID).Scan(&result.PasswordHash, &result.CredentialGeneration, &history, &result.HistoryDigest)
 	if err != nil {
-		return identityaccess.ChallengePasswordMaterial{}, mapSubjectDatabaseError("read password challenge", err)
+		return identityaccess.PasswordReplacementMaterial{}, mapSubjectDatabaseError("read password challenge", err)
 	}
 	if result.CredentialGeneration == 0 || result.CredentialGeneration >= 9007199254740991 || len(result.PasswordHash) > 512 ||
 		!strings.HasPrefix(string(result.PasswordHash), "$matrix-iam-v1$argon2id$v=19$") {
-		return identityaccess.ChallengePasswordMaterial{}, identityaccess.ErrUnavailable
+		return identityaccess.PasswordReplacementMaterial{}, identityaccess.ErrUnavailable
 	}
 	result.PasswordHistory, err = passwordHistoryMaterial(history, result.HistoryDigest)
 	if err != nil {
-		return identityaccess.ChallengePasswordMaterial{}, err
+		return identityaccess.PasswordReplacementMaterial{}, err
 	}
 	return result, nil
 }

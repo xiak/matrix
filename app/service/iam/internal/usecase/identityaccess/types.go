@@ -94,7 +94,7 @@ type Transaction interface {
 	RejectTOTPAttempt(context.Context, TOTPAttempt) error
 	CompleteLoginChallenge(context.Context, LoginChallengeCompletion) (iamv1.Session, error)
 	BeginPasswordChallenge(context.Context, PasswordChallengeCreation) (iamv1.AuthenticationChallenge, error)
-	ReadPasswordChallenge(context.Context, AuthenticationChallengeCredential) (ChallengePasswordMaterial, error)
+	ReadPasswordChallenge(context.Context, AuthenticationChallengeCredential) (PasswordReplacementMaterial, error)
 	ChangeChallengePassword(context.Context, ChallengePasswordMutation) (iamv1.ChallengePasswordChangeResponse, error)
 	IssueSession(context.Context, SessionMutation) (iamv1.Session, error)
 	LookupSession(context.Context, string) (SessionCredential, bool, error)
@@ -178,6 +178,7 @@ type Transaction interface {
 	UpdateUser(context.Context, UserProfileMutation) (iamv1.User, error)
 	DeleteUser(context.Context, UserDeletionMutation) (iamv1.UserDeletion, error)
 	ChangeUser(context.Context, UserChange) (iamv1.User, error)
+	ReadPasswordReset(context.Context, AccountRead, iamv1.PrincipalID, uint64) (PasswordReplacementMaterial, error)
 	Readiness(context.Context) (ReadinessSnapshot, error)
 }
 
@@ -475,6 +476,21 @@ type LocalCredentialRecoveryMutation struct {
 	AuditEvent      auditv1.Event
 }
 
+// Private, purpose-authorized preparation. Never an HTTP response or a permit:
+// a final write must recheck current authority and these exact credential values.
+type PasswordReplacementMaterial struct {
+	PasswordHash         authority.PasswordHash
+	CredentialGeneration uint64
+	PasswordHistory      []authority.PasswordHash
+	HistoryDigest        string
+}
+
+func (PasswordReplacementMaterial) String() string { return "[REDACTED]" }
+func (PasswordReplacementMaterial) GoString() string {
+	return "identityaccess.PasswordReplacementMaterial{[REDACTED]}"
+}
+func (PasswordReplacementMaterial) MarshalJSON() ([]byte, error) { return nil, ErrUnavailable }
+
 type UserChange struct {
 	AccountID        iamv1.AccountID
 	ActorPrincipalID iamv1.PrincipalID
@@ -483,6 +499,7 @@ type UserChange struct {
 	ResourceVersion  uint64
 	Status           *iamv1.PrincipalStatus
 	PasswordHash     *authority.PasswordHash
+	ExpectedPassword *PasswordReplacementMaterial
 	AuditEvent       auditv1.Event
 }
 

@@ -66,22 +66,9 @@ type PasswordChallengeCreation struct {
 	ID, LookupDigest, VerificationDigest, RequestID, RequestDigest string
 }
 
-type ChallengePasswordMaterial struct {
-	PasswordHash         authority.PasswordHash
-	CredentialGeneration uint64
-	PasswordHistory      []authority.PasswordHash
-	HistoryDigest        string
-}
-
-func (ChallengePasswordMaterial) String() string { return "[REDACTED]" }
-func (ChallengePasswordMaterial) GoString() string {
-	return "identityaccess.ChallengePasswordMaterial{[REDACTED]}"
-}
-func (ChallengePasswordMaterial) MarshalJSON() ([]byte, error) { return nil, ErrUnavailable }
-
 type ChallengePasswordMutation struct {
 	Identity    AuthenticationChallengeCredential
-	Expected    ChallengePasswordMaterial
+	Expected    PasswordReplacementMaterial
 	Replacement authority.PasswordHash
 	AuditEvent  auditv1.Event
 }
@@ -297,7 +284,7 @@ func (service *Authority) ChangeChallengePassword(ctx context.Context, id string
 	}
 	defer service.releasePasswordWork()
 	var identity AuthenticationChallengeCredential
-	var original ChallengePasswordMaterial
+	var original PasswordReplacementMaterial
 	err := service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
 		var err error
 		identity, err = service.authenticateChallenge(ctx, tx, id, request.ChallengeCredential)

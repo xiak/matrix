@@ -9208,12 +9208,52 @@ type authenticationReadTransaction struct {
 	passwordPurpose identityaccess.PasswordAttemptPurpose
 }
 
-func (transaction authenticationReadTransaction) ReadPasswordChallenge(ctx context.Context, identity identityaccess.AuthenticationChallengeCredential) (identityaccess.ChallengePasswordMaterial, error) {
+func (transaction authenticationReadTransaction) ReadPasswordChallenge(ctx context.Context, identity identityaccess.AuthenticationChallengeCredential) (identityaccess.PasswordReplacementMaterial, error) {
 	material, err := transaction.Transaction.ReadPasswordChallenge(ctx, identity)
 	if err == nil && transaction.totpPurpose == "" && transaction.passwordPurpose == "" {
 		*transaction.read = true
 	}
 	return material, err
+}
+
+func (transaction authenticationReadTransaction) ReadPasswordReset(ctx context.Context, read identityaccess.AccountRead, user iamv1.PrincipalID, version uint64) (identityaccess.PasswordReplacementMaterial, error) {
+	material, err := transaction.Transaction.ReadPasswordReset(ctx, read, user, version)
+	if err == nil && transaction.passwordPurpose == "PASSWORD_RESET" {
+		*transaction.read = true
+	}
+	return material, err
+}
+
+// Corrupt only a prepared final write, never its source database rows. The real
+// runtime role/function must reject it with an otherwise current decision.
+type passwordResetMutationRepository struct {
+	identityaccess.Repository
+	field string
+}
+
+func (repository passwordResetMutationRepository) WithinTransaction(ctx context.Context, callback func(context.Context, identityaccess.Transaction) error) error {
+	return repository.Repository.WithinTransaction(ctx, func(ctx context.Context, tx identityaccess.Transaction) error {
+		return callback(ctx, passwordResetMutationTransaction{tx, repository.field})
+	})
+}
+
+type passwordResetMutationTransaction struct {
+	identityaccess.Transaction
+	field string
+}
+
+func (transaction passwordResetMutationTransaction) ChangeUser(ctx context.Context, change identityaccess.UserChange) (iamv1.User, error) {
+	expected := *change.ExpectedPassword
+	switch transaction.field {
+	case "generation":
+		expected.CredentialGeneration++
+	case "current":
+		expected.PasswordHash = expected.PasswordHistory[0]
+	case "history":
+		expected.HistoryDigest = "sha256:" + strings.Repeat("0", 64)
+	}
+	change.ExpectedPassword = &expected
+	return transaction.Transaction.ChangeUser(ctx, change)
 }
 
 func (transaction authenticationReadTransaction) ReserveTOTPAttempt(ctx context.Context, request identityaccess.TOTPAttempt) (identityaccess.TOTPAttempt, bool, error) {
@@ -20438,7 +20478,7 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 		proveTenantAccounts(t, ctx, handler, admin, loginWire.Credential, transactionFailures)
 	})
 	t.Run("password session policy", func(t *testing.T) {
-		provePasswordSessionPolicy(t, ctx, handler, admin, loginWire.Credential)
+		provePasswordSessionPolicy(t, ctx, handler, admin, loginWire.Credential, repository)
 	})
 	t.Run("password session races", func(t *testing.T) {
 		provePasswordSessionRaces(t, ctx, handler, admin, loginWire.Credential)
@@ -21611,7 +21651,7 @@ func proveRoleWriterSecurityRaces(t *testing.T, ctx context.Context, handler htt
 	}
 }
 
-func provePasswordSessionPolicy(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, operator string) {
+func provePasswordSessionPolicy(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, operator string, repository identityaccess.Repository) {
 	t.Helper()
 	const initial = "  session policy initial phrase  "
 	changed := strings.Repeat("界", 60) + " changed phrase"
@@ -21715,7 +21755,7 @@ func provePasswordSessionPolicy(t *testing.T, ctx context.Context, handler http.
 		if err := database.QueryRow(ctx, `SELECT jsonb_build_object(
 			'principal',to_jsonb(p),'credential',to_jsonb(c),
 			'sessions',(SELECT jsonb_agg(to_jsonb(s) ORDER BY s.id) FROM iam.sessions AS s WHERE s.tenant_id=p.tenant_id AND s.principal_id=p.id),
-			'successes',(SELECT jsonb_agg(e.event_document ORDER BY e.event_id) FROM iam.audit_outbox AS e WHERE e.tenant_id=p.tenant_id AND e.event_document->>'action'='iam.user.password-changed' AND e.event_document#>>'{target,id}'=p.id)
+			'successes',(SELECT jsonb_agg(e.event_document ORDER BY e.event_id) FROM iam.audit_outbox AS e WHERE e.tenant_id=p.tenant_id AND e.event_document->>'action' IN ('iam.user.password-changed','iam.user.password-reset') AND e.event_document#>>'{target,id}'=p.id)
 			)::text FROM iam.principals AS p JOIN iam.user_credentials AS c ON c.tenant_id=p.tenant_id AND c.principal_id=p.id
 			WHERE p.tenant_id=$1 AND p.id=$2`, subject.AccountID, subject.ID).Scan(&state); err != nil {
 			t.Fatal(err)
@@ -21757,6 +21797,98 @@ func provePasswordSessionPolicy(t *testing.T, ctx context.Context, handler http.
 	// Reset must revoke old sessions before issuing any replacement-password
 	// sessions, and false cannot preserve another such temporary session.
 	beforeReset := identity(current)
+	for _, role := range []string{"matrix_iam_worker", "matrix_iam_credential_recovery", "matrix_iam_api"} {
+		entry := "iam.read_password_reset(text,text,text,text,bigint)"
+		if role == "matrix_iam_api" {
+			entry = "iam.lock_managed_user(text,text,text,bigint)"
+		}
+		if _, err := database.Exec(ctx, "GRANT EXECUTE ON FUNCTION "+entry+" TO "+role); err != nil {
+			t.Fatal(err)
+		}
+		request(http.MethodGet, "/ready", "", nil, http.StatusServiceUnavailable)
+		if _, err := database.Exec(ctx, "REVOKE ALL ON FUNCTION "+entry+" FROM "+role); err != nil {
+			t.Fatal(err)
+		}
+		request(http.MethodGet, "/ready", "", nil, http.StatusOK)
+	}
+	for _, reused := range []string{changed, replaced} {
+		before := securityState()
+		request(http.MethodPost, "/v1/users/"+string(principal.ID)+":reset-password", operator,
+			map[string]any{"initialPassword": reused, "resourceVersion": beforeReset.User.ResourceVersion}, http.StatusUnprocessableEntity)
+		if securityState() != before {
+			t.Fatal("administrator reset reused a current/recent password or changed security state")
+		}
+	}
+	for _, field := range []string{"generation", "current", "history"} {
+		workflow, err := newIAMAuthorityWithTOTP(t, passwordResetMutationRepository{repository, field}, identityaccess.Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		candidate, err := iamhttp.NewHandler(workflow, iamhttp.Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		body := mustIAMJSON(t, map[string]any{"initialPassword": reset, "resourceVersion": beforeReset.User.ResourceVersion, "requestId": "reset-wrong-" + field})
+		before := securityState()
+		response := performIAMRequest(candidate, http.MethodPost, "/v1/users/"+string(principal.ID)+":reset-password", operator, body)
+		if response.Code != http.StatusConflict || securityState() != before {
+			t.Fatalf("reset ignored prepared %s or partially changed security state: %d", field, response.Code)
+		}
+	}
+	if _, err := database.Exec(ctx, `CREATE FUNCTION public.reject_history_reset_fact() RETURNS trigger LANGUAGE plpgsql AS $body$ BEGIN
+	 IF NEW.event_document->>'action'='iam.user.password-reset' THEN RAISE EXCEPTION 'synthetic reset fact failure'; END IF; RETURN NEW; END $body$;
+	 CREATE TRIGGER reject_history_reset_fact BEFORE INSERT ON iam.audit_outbox FOR EACH ROW EXECUTE FUNCTION public.reject_history_reset_fact()`); err != nil {
+		t.Fatal(err)
+	}
+	beforeFailure := securityState()
+	request(http.MethodPost, "/v1/users/"+string(principal.ID)+":reset-password", operator,
+		map[string]any{"initialPassword": reset, "resourceVersion": beforeReset.User.ResourceVersion}, http.StatusServiceUnavailable)
+	if securityState() != beforeFailure {
+		t.Fatal("failed final reset outbox retained password/history/session effects")
+	}
+	if _, err := database.Exec(ctx, `DROP TRIGGER reject_history_reset_fact ON iam.audit_outbox; DROP FUNCTION public.reject_history_reset_fact()`); err != nil {
+		t.Fatal(err)
+	}
+	// The old preparation is no permit after a concurrent real password change.
+	// Pause only after its short transaction commits: the peer must not need a
+	// held USER lock or connection to make progress.
+	reached, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	unblock := func() { releaseOnce.Do(func() { close(release) }) }
+	defer unblock()
+	prepared, err := newIAMAuthorityWithTOTP(t, authenticationReadBarrier{Repository: repository, reached: reached,
+		release: release, passwordPurpose: "PASSWORD_RESET"}, identityaccess.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	preparedHandler, err := iamhttp.NewHandler(prepared, iamhttp.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resetBody := mustIAMJSON(t, map[string]any{"initialPassword": reset, "resourceVersion": beforeReset.User.ResourceVersion, "requestId": "history-reset-prepared"})
+	resetResult := make(chan int, 1)
+	go func() {
+		resetResult <- performIAMRequest(preparedHandler, http.MethodPost, "/v1/users/"+string(principal.ID)+":reset-password", operator, resetBody).Code
+	}()
+	select {
+	case <-reached:
+	case status := <-resetResult:
+		t.Fatalf("reset did not reach committed preparation: %d", status)
+	case <-ctx.Done():
+		t.Fatal("password reset preparation timed out")
+	}
+	change(current, changed, "Prepared-Reset-Peer-Password-72!", &keep)
+	afterPeer := securityState()
+	unblock()
+	select {
+	case status := <-resetResult:
+		if status != http.StatusConflict || securityState() != afterPeer {
+			t.Fatalf("stale password reset partially committed: %d", status)
+		}
+	case <-ctx.Done():
+		t.Fatal("stale password reset did not finish")
+	}
+	beforeReset = identity(current)
 	request(http.MethodPost, "/v1/users/"+string(principal.ID)+":reset-password", operator,
 		map[string]any{"initialPassword": reset, "resourceVersion": beforeReset.User.ResourceVersion}, http.StatusOK)
 	invalid(current)

@@ -453,6 +453,90 @@ func TestPasswordChangeRejectsRecentHistoryAndAStalePreparedHead(t *testing.T) {
 	}
 }
 
+func TestAdministratorPasswordResetPreparesOutsideLocksAndRechecksAuthority(t *testing.T) {
+	tx := newCoreTransaction()
+	repository := &coreRepository{transaction: tx}
+	service, err := newCoreAuthority(repository, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := coreBootstrap(t)
+	if _, err := service.Bootstrap(t.Context(), document); err != nil {
+		t.Fatal(err)
+	}
+	login, err := service.Login(t.Context(), iamv1.LoginRequest{LoginName: "admin", Password: document.Administrator.Password, RequestID: "reset-login"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.ChangePassword(t.Context(), login.Credential, iamv1.ChangePasswordRequest{CurrentPassword: document.Administrator.Password,
+		NewPassword: coreSecret(t, "Reset-Actor-Password-73!"), RequestID: "reset-actor-change"}); err != nil {
+		t.Fatal(err)
+	}
+	current, recent, replacement := coreSecret(t, "Reset-Target-Current-85!"), coreSecret(t, "Reset-Target-History-86!"), coreSecret(t, "Reset-Target-Replacement-87!")
+	user, err := service.CreateUser(t.Context(), login.Credential, iamv1.CreateUserRequest{LoginName: "reset.target", DisplayName: "Reset target", InitialPassword: current, RequestID: "reset-target-create"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	historyHash, err := service.passwords.Hash(recent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	material := PasswordReplacementMaterial{PasswordHash: tx.passwords[user.ID], CredentialGeneration: 2,
+		PasswordHistory: []authority.PasswordHash{historyHash}, HistoryDigest: "sha256:" + strings.Repeat("b", 64)}
+	prepared, writes := false, 0
+	tx.passwordResetRead = func(read AccountRead, target iamv1.PrincipalID, version uint64) (PasswordReplacementMaterial, error) {
+		if read.AccountID != user.AccountID || read.ActorPrincipalID != tx.principal.ID || target != user.ID || version != user.ResourceVersion || read.DecisionID == "" {
+			t.Fatal("password material read was not bound to the authorized original target")
+		}
+		prepared = true
+		return material, nil
+	}
+	tx.userChange = func(mutation UserChange) (iamv1.User, error) {
+		if !prepared || mutation.ExpectedPassword == nil || mutation.ExpectedPassword.PasswordHash != material.PasswordHash ||
+			mutation.ExpectedPassword.CredentialGeneration != material.CredentialGeneration || mutation.ExpectedPassword.HistoryDigest != material.HistoryDigest ||
+			!slices.Equal(mutation.ExpectedPassword.PasswordHistory, material.PasswordHistory) ||
+			mutation.AccountID != user.AccountID || mutation.PrincipalID != user.ID || mutation.Status != nil || mutation.PasswordHash == nil {
+			t.Fatal("final reset lost exact preparation")
+		}
+		matches, err := authority.NewPasswordHasher(nil).Verify(replacement, *mutation.PasswordHash)
+		if err != nil || !matches {
+			t.Fatal("final reset did not carry the actual newly computed verifier")
+		}
+		writes++
+		return user, nil
+	}
+	service.passwords = authority.NewPasswordHasher(passwordEntropyProbe{t, repository})
+	request := iamv1.ResetUserPasswordRequest{InitialPassword: replacement, ResourceVersion: user.ResourceVersion, RequestID: "reset-request"}
+	for _, secret := range []iamv1.Secret{current, recent} {
+		request.InitialPassword = secret
+		if _, err := service.ResetUserPassword(t.Context(), login.Credential, user.ID, request); !errors.Is(err, ErrInvalidArgument) || writes != 0 {
+			t.Fatal("reset accepted current/recent password", err)
+		}
+	}
+	request.InitialPassword = replacement
+	prepared = false
+	repository.afterTransaction = func(err error) error { return ErrUnavailable }
+	if _, err := service.ResetUserPassword(t.Context(), login.Credential, user.ID, request); !errors.Is(err, ErrUnavailable) || writes != 0 {
+		t.Fatal("unknown preparation committed a reset", err)
+	}
+	repository.afterTransaction = func(err error) error {
+		if prepared && err == nil {
+			tx.profileErr = ErrUnavailable
+		}
+		return err
+	}
+	if _, err := service.ResetUserPassword(t.Context(), login.Credential, user.ID, request); !errors.Is(err, ErrUnavailable) || writes != 0 {
+		t.Fatal("reset reused past authority after preparation", err)
+	}
+	repository.afterTransaction, tx.profileErr = nil, nil
+	if _, err := service.ResetUserPassword(t.Context(), login.Credential, user.ID, request); err != nil || writes != 1 {
+		t.Fatal("valid prepared reset failed", err)
+	}
+	if encoded, err := json.Marshal(material); err == nil || len(encoded) != 0 || strings.Contains(fmt.Sprintf("%+v %#v", material, material), string(material.PasswordHash)) {
+		t.Fatal("password preparation was serializable")
+	}
+}
+
 func TestTOTPRemovalWorkflowKeepsCallerAndDoesNotExposeUncertainCompletion(t *testing.T) {
 	tx := newCoreTransaction()
 	repository := &coreRepository{transaction: tx}
@@ -2181,6 +2265,16 @@ type coreTransaction struct {
 	totpAttemptReads         int
 	settingsLockError        error
 	settingsMutationCalled   bool
+	passwordResetRead        func(AccountRead, iamv1.PrincipalID, uint64) (PasswordReplacementMaterial, error)
+	userChange               func(UserChange) (iamv1.User, error)
+}
+
+func (transaction *coreTransaction) ReadPasswordReset(_ context.Context, read AccountRead, user iamv1.PrincipalID, version uint64) (PasswordReplacementMaterial, error) {
+	return transaction.passwordResetRead(read, user, version)
+}
+
+func (transaction *coreTransaction) ChangeUser(_ context.Context, mutation UserChange) (iamv1.User, error) {
+	return transaction.userChange(mutation)
 }
 
 func (transaction *coreTransaction) LockAccountSecuritySettings(_ context.Context, caller iamv1.Session) error {

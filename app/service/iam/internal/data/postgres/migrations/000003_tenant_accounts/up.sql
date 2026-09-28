@@ -1120,17 +1120,12 @@ BEGIN
 END
 $function$;
 
-CREATE OR REPLACE FUNCTION iam.change_user(tenant text, actor text, decision text,
-    user_id text, expected_version bigint, new_status text, new_password_hash text, event jsonb)
-RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $function$
-DECLARE stored iam.principals%ROWTYPE; action text; event_action text;
+-- Status changes and password preparation/finalization share the same protected
+-- identity check and Account -> USER lock order as platform attachment changes.
+CREATE OR REPLACE FUNCTION iam.lock_managed_user(tenant text, actor text, user_id text, expected_version bigint)
+RETURNS void LANGUAGE plpgsql SET search_path = pg_catalog, pg_temp AS $function$
+DECLARE stored iam.principals%ROWTYPE;
 BEGIN
-    IF (new_status IS NULL) = (new_password_hash IS NULL) THEN
-        RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='user change is invalid';
-    END IF;
-    IF new_status IS NOT NULL THEN action := 'iam.user.set-status'; event_action := 'iam.user.status-set';
-    ELSE action := 'iam.user.reset-password'; event_action := 'iam.user.password-reset'; END IF;
-    PERFORM iam.assert_allowed_decision(tenant,actor,decision,action,'USER',user_id,'INSTANCE',NULL);
     PERFORM set_config('matrix.iam_tenant_id',tenant,true);
     PERFORM 1 FROM iam.accounts AS organization
         WHERE organization.id=tenant AND organization.status='ACTIVE' FOR SHARE;
@@ -1147,6 +1142,62 @@ BEGIN
     END IF;
     IF expected_version IS NULL OR expected_version < 1 OR expected_version <> stored.resource_version THEN
         RAISE EXCEPTION USING ERRCODE='P0002', MESSAGE='user version changed';
+    END IF;
+END
+$function$;
+
+CREATE OR REPLACE FUNCTION iam.read_password_reset(tenant text, actor text, decision text, user_id text, expected_version bigint)
+RETURNS TABLE(password_hash text,credential_generation bigint,password_history text[],history_digest text)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE credential iam.user_credentials%ROWTYPE;
+BEGIN
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.user.reset-password','USER',user_id,'INSTANCE',NULL);
+    PERFORM iam.lock_managed_user(tenant,actor,user_id,expected_version);
+    SELECT * INTO credential FROM iam.user_credentials c WHERE c.tenant_id=tenant AND c.principal_id=user_id FOR UPDATE;
+    IF NOT FOUND OR NOT iam.valid_password_history(credential.password_history,credential.password_history_digest,
+        credential.credential_version,credential.password_changed_at) THEN
+        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='password history is unavailable';
+    END IF;
+    RETURN QUERY SELECT credential.password_hash,credential.credential_version,
+        ARRAY(SELECT e.value->>'hash' FROM jsonb_array_elements(credential.password_history) WITH ORDINALITY e(value,ordinality) ORDER BY e.ordinality),
+        'sha256:'||encode(credential.password_history_digest,'hex');
+END
+$function$;
+
+DROP FUNCTION IF EXISTS iam.change_user(text,text,text,text,bigint,text,text,jsonb);
+CREATE OR REPLACE FUNCTION iam.change_user(tenant text, actor text, decision text,
+    user_id text, expected_version bigint, new_status text, new_password_hash text, event jsonb,
+    expected_generation bigint, expected_password_hash text, expected_history_digest text)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $function$
+DECLARE credential iam.user_credentials%ROWTYPE; action text; event_action text;
+BEGIN
+    IF (new_status IS NULL) = (new_password_hash IS NULL) THEN
+        RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='user change is invalid';
+    END IF;
+    IF new_status IS NOT NULL THEN
+        action := 'iam.user.set-status'; event_action := 'iam.user.status-set';
+        IF expected_generation IS NOT NULL OR expected_password_hash IS NOT NULL OR expected_history_digest IS NOT NULL THEN
+            RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='status change cannot use password material';
+        END IF;
+    ELSE
+        action := 'iam.user.reset-password'; event_action := 'iam.user.password-reset';
+        IF expected_generation IS NULL OR expected_generation NOT BETWEEN 1 AND 9007199254740990
+            OR COALESCE(expected_password_hash,'') NOT LIKE '$matrix-iam-v1$argon2id$v=19$%'
+            OR COALESCE(expected_history_digest,'') !~ '^sha256:[0-9a-f]{64}$'
+            OR expected_password_hash=new_password_hash THEN
+            RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='password reset is invalid';
+        END IF;
+    END IF;
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,action,'USER',user_id,'INSTANCE',NULL);
+    PERFORM iam.lock_managed_user(tenant,actor,user_id,expected_version);
+    IF new_password_hash IS NOT NULL THEN
+        SELECT * INTO credential FROM iam.user_credentials c WHERE c.tenant_id=tenant AND c.principal_id=user_id FOR UPDATE;
+        IF NOT FOUND OR credential.credential_version<>expected_generation OR credential.password_hash<>expected_password_hash
+            OR expected_history_digest<>'sha256:'||encode(credential.password_history_digest,'hex')
+            OR NOT iam.valid_password_history(credential.password_history,credential.password_history_digest,
+                credential.credential_version,credential.password_changed_at) THEN
+            RAISE EXCEPTION USING ERRCODE='P0002',MESSAGE='password changed concurrently';
+        END IF;
     END IF;
     IF (new_status IS NOT NULL AND new_status NOT IN ('ACTIVE','DISABLED'))
         OR (new_password_hash IS NOT NULL AND new_password_hash NOT LIKE '$matrix-iam-v1$argon2id$v=19$%') THEN
@@ -1189,7 +1240,7 @@ REVOKE ALL ON FUNCTION iam.read_account(text,text), iam.read_account_as_platform
     iam.read_user(text,text,text,text),
     iam.update_user(text,text,text,text,text,bigint,jsonb),
     iam.delete_user(text,text,text,text,bigint,jsonb),
-    iam.change_user(text,text,text,text,bigint,text,text,jsonb) FROM PUBLIC, matrix_iam_worker;
+    iam.change_user(text,text,text,text,bigint,text,text,jsonb,bigint,text,text) FROM PUBLIC, matrix_iam_worker;
 GRANT EXECUTE ON FUNCTION iam.read_account(text,text), iam.read_account_as_platform(text,text,text,text),
     iam.read_account_root(text,text,text,text), iam.set_account_status(text,text,text,text,text,bigint,jsonb),
     iam.recover_root_credentials(text,text,text,text,text,bigint,text,text,jsonb),
@@ -1200,4 +1251,34 @@ GRANT EXECUTE ON FUNCTION iam.read_account(text,text), iam.read_account_as_platf
     iam.read_user(text,text,text,text),
     iam.update_user(text,text,text,text,text,bigint,jsonb),
     iam.delete_user(text,text,text,text,bigint,jsonb),
-    iam.change_user(text,text,text,text,bigint,text,text,jsonb) TO matrix_iam_api;
+    iam.change_user(text,text,text,text,bigint,text,text,jsonb,bigint,text,text) TO matrix_iam_api;
+
+REVOKE ALL ON FUNCTION iam.lock_managed_user(text,text,text,bigint),iam.read_password_reset(text,text,text,text,bigint)
+    FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_notification_worker,
+        matrix_iam_credential_recovery,matrix_iam_authentication_recovery,matrix_iam_backup_custody;
+GRANT EXECUTE ON FUNCTION iam.read_password_reset(text,text,text,text,bigint) TO matrix_iam_api;
+
+CREATE OR REPLACE FUNCTION iam.user_password_reset_contract_ready()
+RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $function$
+    SELECT to_regprocedure('iam.change_user(text,text,text,text,bigint,text,text,jsonb)') IS NULL
+      AND (SELECT count(*)=3 FROM pg_catalog.pg_proc p JOIN (VALUES
+        ('iam.lock_managed_user(text,text,text,bigint)',false,'void',false,'tenant,actor,user_id,expected_version'),
+        ('iam.read_password_reset(text,text,text,text,bigint)',true,
+         'TABLE(password_hash text, credential_generation bigint, password_history text[], history_digest text)',true,
+         'tenant,actor,decision,user_id,expected_version,password_hash,credential_generation,password_history,history_digest'),
+        ('iam.change_user(text,text,text,text,bigint,text,text,jsonb,bigint,text,text)',true,'jsonb',false,
+         'tenant,actor,decision,user_id,expected_version,new_status,new_password_hash,event,expected_generation,expected_password_hash,expected_history_digest'))
+        expected(signature,definer,result_type,returns_set,names)
+        ON p.oid=to_regprocedure(expected.signature) AND p.prosecdef=expected.definer
+          AND pg_get_function_result(p.oid)=expected.result_type AND p.proretset=expected.returns_set
+          AND array_to_string(p.proargnames,',')=expected.names
+        WHERE p.proowner='matrix_iam_owner'::regrole AND p.provolatile='v' AND NOT p.proisstrict
+          AND p.proconfig=ARRAY['search_path=pg_catalog, pg_temp']
+          AND has_function_privilege('matrix_iam_api',p.oid,'EXECUTE')=expected.definer
+          AND NOT EXISTS(SELECT 1 FROM aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) acl
+            WHERE acl.privilege_type='EXECUTE' AND (acl.is_grantable OR
+              acl.grantee NOT IN (p.proowner,CASE WHEN expected.definer THEN 'matrix_iam_api'::regrole ELSE p.proowner END))
+              AND acl.grantee<>p.proowner))
+$function$;
+REVOKE ALL ON FUNCTION iam.user_password_reset_contract_ready() FROM PUBLIC,matrix_iam_api,matrix_iam_worker,
+    matrix_iam_notification_worker,matrix_iam_credential_recovery,matrix_iam_authentication_recovery,matrix_iam_backup_custody;

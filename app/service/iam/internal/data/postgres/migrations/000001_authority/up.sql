@@ -2059,6 +2059,7 @@ BEGIN
             AND to_regprocedure('iam.recover_organization_administrator(text,text,text,text,text,bigint,text,text,jsonb)') IS NULL
            AND iam.password_attempt_contract_ready()
            AND iam.password_history_contract_ready()
+           AND iam.user_password_reset_contract_ready()
            AND iam.totp_custody_contract_ready()
            AND iam.totp_backup_custody_contract_ready()
            AND iam.totp_authentication_contract_ready()
