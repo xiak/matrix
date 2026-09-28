@@ -1309,6 +1309,26 @@ func (value *gate) rejectRevokedAuthorizationRecovery(ctx context.Context, beare
 	}); err != nil {
 		return fail("recovery-authorization-t1-audit")
 	}
+	readDirectory := func() (iamv1.UserList, error) {
+		response, err := value.edge.json(ctx, http.MethodGet, "/api/iam/v1/users", bearer, nil, nil, http.StatusOK)
+		if err != nil {
+			return iamv1.UserList{}, err
+		}
+		var directory iamv1.UserList
+		decodeErr := decodeOne(response.body, &directory)
+		clear(response.body)
+		if decodeErr != nil {
+			return iamv1.UserList{}, decodeErr
+		}
+		if err := iamv1.ValidateUserList(directory); err != nil {
+			return iamv1.UserList{}, err
+		}
+		return directory, nil
+	}
+	beforeDirectory, err := readDirectory()
+	if err != nil {
+		return fail("recovery-authorization-t1-directory")
+	}
 	before, err := value.captureRejectedUpgradeBoundary(ctx)
 	if err != nil {
 		return fail("recovery-authorization-t1-boundary")
@@ -1324,14 +1344,8 @@ func (value *gate) rejectRevokedAuthorizationRecovery(ctx context.Context, beare
 	if err != nil || !reflect.DeepEqual(before, after) {
 		return fail("recovery-revoked-authorization-effects")
 	}
-	directoryResponse, err := value.edge.json(ctx, http.MethodGet, "/api/iam/v1/users", bearer, nil, nil, http.StatusOK)
-	if err != nil {
-		return fail("recovery-revoked-authorization-retained")
-	}
-	var directory iamv1.UserList
-	decodeErr = decodeOne(directoryResponse.body, &directory)
-	clear(directoryResponse.body)
-	if decodeErr != nil || iamv1.ValidateUserList(directory) != nil {
+	directory, err := readDirectory()
+	if err != nil || !reflect.DeepEqual(beforeDirectory, directory) {
 		return fail("recovery-revoked-authorization-retained")
 	}
 	primaryFound := false
