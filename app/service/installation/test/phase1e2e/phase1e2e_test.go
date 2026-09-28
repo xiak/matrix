@@ -834,7 +834,7 @@ func TestReleasePairRequiresCompatibleImmediatePredecessor(t *testing.T) {
 		{name: "retained-data profile follows separate recovery admission", accept: release.ValidateDatabaseRecoveryPath(
 			release.SupportedDatabaseUpgradePredecessorProfile(), release.CurrentDatabaseProfile()) == nil, mutate: func(a, _ *release.Manifest) {
 			a.Database = release.SupportedDatabaseUpgradePredecessorProfile()
-			a.TopologyDigest = topology.SupportedPredecessorContractDigest()
+			a.TopologyDigest = topology.ContractDigest()
 		}},
 		{name: "retained-data profile with changed predecessor topology", mutate: func(a, _ *release.Manifest) {
 			a.Database = release.SupportedDatabaseUpgradePredecessorProfile()
@@ -1090,7 +1090,7 @@ func TestReleaseSequenceRequiresTwoCompatibleImmediateTransitions(t *testing.T) 
 				Release: release.ReleaseIdentity{
 					ID: "release-base", Version: "v0.1.0", SourceCommit: strings.Repeat("a", 40),
 				},
-				Database: bridgeProfile, TopologyDigest: topology.SupportedPredecessorContractDigest(),
+				Database: bridgeProfile, TopologyDigest: topology.ContractDigest(),
 				Images: []release.Image{{Purpose: release.ImageWorkload, SourceDigest: "sha256:base"}},
 			}}
 			bridge := release.VerifiedBundle{Manifest: release.Manifest{
@@ -1130,11 +1130,11 @@ func TestPostMigrationLifecycleRequiresAdjacentEqualCurrentProfiles(t *testing.T
 		{name: "current pair after retained-data migration", accept: true},
 		{name: "profile still needs migration", mutate: func(a, _ *release.Manifest) {
 			a.Database = release.SupportedDatabaseUpgradePredecessorProfile()
-			a.TopologyDigest = topology.SupportedPredecessorContractDigest()
+			a.TopologyDigest = topology.ContractDigest()
 		}},
 		{name: "both profiles are predecessor", mutate: func(a, b *release.Manifest) {
 			a.Database, b.Database = release.SupportedDatabaseUpgradePredecessorProfile(), release.SupportedDatabaseUpgradePredecessorProfile()
-			a.TopologyDigest, b.TopologyDigest = topology.SupportedPredecessorContractDigest(), topology.SupportedPredecessorContractDigest()
+			a.TopologyDigest, b.TopologyDigest = topology.ContractDigest(), topology.ContractDigest()
 		}},
 		{name: "successor changes profile", mutate: func(_, b *release.Manifest) { b.Database.ContractRevision++ }},
 		{name: "successor skips current release", mutate: func(_, b *release.Manifest) { b.Release.PreviousID = "other-release" }},
@@ -1177,6 +1177,19 @@ func TestAuthenticatedHistoricalPreparationLifecycleAdmission(t *testing.T) {
 	base, err := release.VerifyDirectory(os.Getenv("MATRIX_PHASE1_RELEASE_BASE"), trust)
 	if err != nil {
 		t.Fatal("historical enabling authentication failed")
+	}
+	if base.Manifest.TopologyDigest != topology.ContractDigest() ||
+		topology.ValidateInstalledContract(base.Manifest) != nil ||
+		topology.ValidateInstalledContract(preparation.Manifest) == nil {
+		t.Fatal("fixed signed enabling topology was rejected or older preparation was admitted")
+	}
+	compiled, err := topology.CompileInstalled(base.Manifest, topology.Options{
+		InstallationID: "mxi-" + strings.Repeat("b", 32), Root: "/matrix-fixture", Listener: "0.0.0.0",
+		Port: 8080, NorthboundOrigin: "https://matrix.example.com:443",
+	})
+	if err != nil || compiled.ContractDigest != base.Manifest.TopologyDigest ||
+		!strings.Contains(string(compiled.ComposeJSON), "iam-notification-dispatcher") {
+		t.Fatal("fixed signed enabling topology lost its notification boundary", err)
 	}
 	// Only the historical edge uses real accepted packages here. These two
 	// metadata-only successors test admission, never installed runtime behavior.

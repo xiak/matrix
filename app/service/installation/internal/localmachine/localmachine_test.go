@@ -2312,28 +2312,27 @@ func TestMigrationArgumentsUseOnlyTheAuthenticatedReleaseCapabilities(t *testing
 		}
 	}
 	for _, mount := range iamMigration.mounts {
-		writeMount(mount)
+		if mount.relative != layout.IAMNotificationWorker {
+			writeMount(mount)
+		}
 	}
 	plan := platformcommand.InstallPlan{Root: root}
-	plan.Bundle.Manifest.TopologyDigest = topology.SupportedPredecessorContractDigest()
-	predecessor, err := migrationArguments(plan, "matrix-test", "network-test", "sha256:"+strings.Repeat("a", 64), iamMigration, "verify")
-	if err != nil || hasArgumentPair(predecessor, "--env", "MATRIX_MIGRATION_IAM_NOTIFICATION_DSN_FILE=/run/matrix/iam-notification-worker-dsn") {
-		t.Fatalf("predecessor IAM verification required an unissued worker identity: %v", err)
-	}
-	plan.Bundle.Manifest.TopologyDigest = topology.ContractDigest()
+	plan.Bundle.Manifest = releasetest.Manifest()
+	plan.Bundle.Manifest.Database = release.SupportedDatabaseUpgradePredecessorProfile()
 	if _, err := migrationArguments(plan, "matrix-test", "network-test", "sha256:"+strings.Repeat("a", 64), iamMigration, "verify"); err == nil {
-		t.Fatal("current IAM verification omitted its notification worker identity")
+		t.Fatal("signed enabling predecessor verified IAM without its notification worker identity")
 	}
-	for _, mount := range iamMigration.currentOnlyMounts {
-		writeMount(mount)
+	writeMount(migrationMount{relative: layout.IAMNotificationWorker})
+	for _, profile := range []release.DatabaseProfile{release.SupportedDatabaseUpgradePredecessorProfile(), release.CurrentDatabaseProfile()} {
+		plan.Bundle.Manifest.Database = profile
+		arguments, err := migrationArguments(plan, "matrix-test", "network-test", "sha256:"+strings.Repeat("a", 64), iamMigration, "verify")
+		if err != nil || !hasArgumentPair(arguments, "--env", "MATRIX_MIGRATION_IAM_NOTIFICATION_DSN_FILE=/run/matrix/iam-notification-worker-dsn") {
+			t.Fatalf("profile %#v lost its purpose-only worker identity: %v", profile, err)
+		}
 	}
-	current, err := migrationArguments(plan, "matrix-test", "network-test", "sha256:"+strings.Repeat("a", 64), iamMigration, "verify")
-	if err != nil || !hasArgumentPair(current, "--env", "MATRIX_MIGRATION_IAM_NOTIFICATION_DSN_FILE=/run/matrix/iam-notification-worker-dsn") {
-		t.Fatalf("current IAM verification lost its purpose-only worker identity: %v", err)
-	}
-	plan.Bundle.Manifest.TopologyDigest = "sha256:" + strings.Repeat("f", 64)
+	plan.Bundle.Manifest.TopologyDigest = "sha256:18629f764f41ed5129d7bb4cea9b6ff6204c87cb3bac69798c997a6a7b8d992f"
 	if _, err := migrationArguments(plan, "matrix-test", "network-test", "sha256:"+strings.Repeat("a", 64), iamMigration, "verify"); err == nil {
-		t.Fatal("unknown migration topology was accepted")
+		t.Fatal("pre-notification migration topology was accepted")
 	}
 }
 

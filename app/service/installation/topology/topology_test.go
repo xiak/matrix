@@ -517,8 +517,10 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 }
 
 func TestCompileInstalledPinsCurrentAndExactPredecessorProfilePairs(t *testing.T) {
-	const publishedPredecessorDigest = "sha256:18629f764f41ed5129d7bb4cea9b6ff6204c87cb3bac69798c997a6a7b8d992f"
-	if got := SupportedPredecessorContractDigest(); got != publishedPredecessorDigest {
+	// The authenticated IAM40/Audit24/PaaS6 enabling package has this exact
+	// topology, including the purpose-only notification dispatcher.
+	const publishedPredecessorDigest = "sha256:c557033be301244974d2bd19636f33eebfd55b7f1a8daed821814f1a093ba7b5"
+	if got := ContractDigest(); got != publishedPredecessorDigest {
 		t.Fatalf("exact predecessor topology digest = %q, want %q", got, publishedPredecessorDigest)
 	}
 	options := Options{InstallationID: "mxi-" + strings.Repeat("b", 32), Root: "/data/xiak/matrix-predecessor", Listener: "0.0.0.0", Port: 8080, NorthboundOrigin: "https://matrix.example.com:443"}
@@ -531,13 +533,8 @@ func TestCompileInstalledPinsCurrentAndExactPredecessorProfilePairs(t *testing.T
 	if err != nil || !reflect.DeepEqual(gotCurrent, wantCurrent) {
 		t.Fatal("current installed topology changed through predecessor admission")
 	}
-	if ContractDigest() == SupportedPredecessorContractDigest() {
-		t.Fatal("the enabling topology failed to declare its notification worker change")
-	}
-
 	predecessor := current
 	predecessor.Database = release.SupportedDatabaseUpgradePredecessorProfile()
-	predecessor.TopologyDigest = SupportedPredecessorContractDigest()
 	currentOrigin, err := ResolveInstalledNorthboundOrigin(current, options.NorthboundOrigin)
 	if err != nil || currentOrigin != options.NorthboundOrigin {
 		t.Fatalf("resolve current northbound origin = %q / %v", currentOrigin, err)
@@ -556,17 +553,15 @@ func TestCompileInstalledPinsCurrentAndExactPredecessorProfilePairs(t *testing.T
 		t.Fatal("current target compiler accepted the predecessor database profile")
 	}
 	compiled, err := CompileInstalled(predecessor, options)
-	if err != nil || compiled.ContractDigest != predecessor.TopologyDigest ||
-		bytes.Equal(compiled.ComposeJSON, gotCurrent.ComposeJSON) ||
-		bytes.Contains(compiled.ComposeJSON, []byte("iam-notification-dispatcher")) ||
-		!bytes.Contains(gotCurrent.ComposeJSON, []byte("iam-notification-dispatcher")) {
+	if err != nil || !reflect.DeepEqual(compiled, gotCurrent) ||
+		!bytes.Contains(compiled.ComposeJSON, []byte("iam-notification-dispatcher")) {
 		t.Fatalf("compile predecessor topology: %#v %v", compiled, err)
 	}
 
 	for name, candidate := range map[string]release.Manifest{
 		"predecessor profile with stale older topology": func() release.Manifest {
 			value := predecessor
-			value.TopologyDigest = "sha256:3b5e33844c8f9fc90bcad489a071cc292b1b42d65dbe387adb05ffec562d9178"
+			value.TopologyDigest = "sha256:18629f764f41ed5129d7bb4cea9b6ff6204c87cb3bac69798c997a6a7b8d992f"
 			return value
 		}(),
 		"unsupported database profile": func() release.Manifest {

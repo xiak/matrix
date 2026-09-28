@@ -71,13 +71,6 @@ func ContractDigest() string {
 	return contractDescriptionDigest(contractDescription())
 }
 
-// SupportedPredecessorContractDigest is the exact signed topology emitted by
-// the one platform release that this source can upgrade in place. It excludes
-// the successor's purpose-only security mail notification worker.
-func SupportedPredecessorContractDigest() string {
-	return contractDescriptionDigest(predecessorContractDescription())
-}
-
 func contractDescriptionDigest(value contract) string {
 	content, err := json.Marshal(value)
 	if err != nil {
@@ -88,10 +81,6 @@ func contractDescriptionDigest(value contract) string {
 }
 
 func contractDescription() contract {
-	return platformContractDescription(true)
-}
-
-func platformContractDescription(securityMail bool) contract {
 	options := Options{
 		InstallationID:   "mxi-00000000000000000000000000000000",
 		Root:             "/matrix-installation-root",
@@ -113,7 +102,7 @@ func platformContractDescription(securityMail bool) contract {
 	}
 	document := composeDocument{
 		Name:     "matrix-00000000000000000000000000000000",
-		Services: compileServices(manifest, images, options, securityMail),
+		Services: compileServices(manifest, images, options),
 		Networks: map[string]networkConfig{
 			"control":    {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-control")},
 			"edge":       {Internal: false, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-edge")},
@@ -133,10 +122,6 @@ func platformContractDescription(securityMail bool) contract {
 	}
 }
 
-func predecessorContractDescription() contract {
-	return platformContractDescription(false)
-}
-
 func Compile(manifest release.Manifest, options Options) (Result, error) {
 	if err := release.ValidateManifest(manifest); err != nil {
 		return Result{}, fmt.Errorf("release manifest cannot supply platform topology: %w", err)
@@ -144,7 +129,7 @@ func Compile(manifest release.Manifest, options Options) (Result, error) {
 	if manifest.Database != release.CurrentDatabaseProfile() || manifest.TopologyDigest != ContractDigest() {
 		return Result{}, errors.New("release topology contract digest is unsupported")
 	}
-	return compile(manifest, options, ContractDigest())
+	return compile(manifest, options)
 }
 
 // CompileInstalled reconstructs the topology named by an authenticated
@@ -152,11 +137,10 @@ func Compile(manifest release.Manifest, options Options) (Result, error) {
 // authenticated pair; only the current release and its exact predecessor are
 // admitted.
 func CompileInstalled(manifest release.Manifest, options Options) (Result, error) {
-	digest, err := installedContractDigest(manifest)
-	if err != nil {
+	if _, err := installedContractDigest(manifest); err != nil {
 		return Result{}, err
 	}
-	return compile(manifest, options, digest)
+	return compile(manifest, options)
 }
 
 func ValidateInstalledContract(manifest release.Manifest) error {
@@ -181,18 +165,15 @@ func installedContractDigest(manifest release.Manifest) (string, error) {
 	if err := release.ValidateManifest(manifest); err != nil {
 		return "", fmt.Errorf("release manifest cannot supply installed platform topology: %w", err)
 	}
-	switch {
-	case manifest.Database == release.CurrentDatabaseProfile() && manifest.TopologyDigest == ContractDigest():
+	if (manifest.Database == release.CurrentDatabaseProfile() ||
+		manifest.Database == release.SupportedDatabaseUpgradePredecessorProfile()) &&
+		manifest.TopologyDigest == ContractDigest() {
 		return ContractDigest(), nil
-	case manifest.Database == release.SupportedDatabaseUpgradePredecessorProfile() &&
-		manifest.TopologyDigest == SupportedPredecessorContractDigest():
-		return SupportedPredecessorContractDigest(), nil
-	default:
-		return "", errors.New("installed platform topology contract is unsupported")
 	}
+	return "", errors.New("installed platform topology contract is unsupported")
 }
 
-func compile(manifest release.Manifest, options Options, digest string) (Result, error) {
+func compile(manifest release.Manifest, options Options) (Result, error) {
 	if err := validateOptions(options); err != nil {
 		return Result{}, err
 	}
@@ -200,13 +181,10 @@ func compile(manifest release.Manifest, options Options, digest string) (Result,
 	for _, image := range manifest.Images {
 		images[image.Component] = image.ImageID
 	}
-	if digest != ContractDigest() && digest != SupportedPredecessorContractDigest() {
-		return Result{}, errors.New("platform topology contract is unsupported")
-	}
 	if externalrequest.ValidateOrigin(options.NorthboundOrigin) != nil {
 		return Result{}, errors.New("platform northbound origin is invalid")
 	}
-	services := compileServices(manifest, images, options, digest == ContractDigest())
+	services := compileServices(manifest, images, options)
 	document := composeDocument{
 		Name:     "matrix-" + strings.TrimPrefix(options.InstallationID, "mxi-"),
 		Services: services,
@@ -222,7 +200,7 @@ func compile(manifest release.Manifest, options Options, digest string) (Result,
 		return Result{}, errors.New("encode platform Compose topology failed")
 	}
 	return Result{
-		ProjectName: document.Name, ContractDigest: digest, ComposeJSON: content,
+		ProjectName: document.Name, ContractDigest: ContractDigest(), ComposeJSON: content,
 	}, nil
 }
 
@@ -316,7 +294,6 @@ func compileServices(
 	manifest release.Manifest,
 	images map[string]string,
 	options Options,
-	securityMail bool,
 ) map[string]serviceConfig {
 	root := options.Root
 	postgresPassword := path.Join(root, layout.PostgresPassword)
@@ -415,10 +392,8 @@ func compileServices(
 		bind(totpKeyring, "/run/matrix/iam-totp-keyring.json", true),
 		bind(iamCursorKey, "/run/matrix/iam-cursor-key", true),
 	}
-	if securityMail {
-		iam.Environment["MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE"] = "/run/matrix/iam-email-verification-keyring.json"
-		iam.Volumes = append(iam.Volumes, bind(emailKeyring, "/run/matrix/iam-email-verification-keyring.json", true))
-	}
+	iam.Environment["MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE"] = "/run/matrix/iam-email-verification-keyring.json"
+	iam.Volumes = append(iam.Volumes, bind(emailKeyring, "/run/matrix/iam-email-verification-keyring.json", true))
 	iam.DependsOn = healthy("postgres")
 
 	audit := service(
@@ -605,9 +580,7 @@ func compileServices(
 		"paas-audit-dispatcher": paasAudit, "paas-ui": ui, "paas-worker": paasWorker,
 		"postgres": postgres,
 	}
-	if securityMail {
-		services["iam-notification-dispatcher"] = iamNotification
-	}
+	services["iam-notification-dispatcher"] = iamNotification
 	return services
 }
 

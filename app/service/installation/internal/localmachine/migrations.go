@@ -22,11 +22,10 @@ type migrationMount struct {
 }
 
 type migrationDefinition struct {
-	component         string
-	name              string
-	entrypoint        string
-	mounts            []migrationMount
-	currentOnlyMounts []migrationMount
+	component  string
+	name       string
+	entrypoint string
+	mounts     []migrationMount
 }
 
 var platformMigrations = []migrationDefinition{
@@ -39,8 +38,6 @@ var platformMigrations = []migrationDefinition{
 			{layout.IAMCredentialRecovery, "/run/matrix/iam-recovery-dsn", "MATRIX_MIGRATION_IAM_RECOVERY_DSN_FILE"},
 			{layout.IAMAuthenticationRecovery, "/run/matrix/iam-authentication-recovery-dsn", installationv1.AuthenticationRecoveryMigrationDSNFileEnvironment},
 			{layout.IAMBackupCustody, "/run/matrix/iam-backup-custody-dsn", installationv1.TOTPBackupCustodyMigrationDSNFileEnvironment},
-		},
-		currentOnlyMounts: []migrationMount{
 			{layout.IAMNotificationWorker, "/run/matrix/iam-notification-worker-dsn", "MATRIX_MIGRATION_IAM_NOTIFICATION_DSN_FILE"},
 		},
 	},
@@ -279,17 +276,10 @@ func migrationArguments(
 		"--label", "com.xiak.matrix.release=" + plan.Bundle.Manifest.Release.ID,
 		"--label", "com.xiak.matrix.role=migration-" + migration.name,
 	}
-	mounts := migration.mounts
-	switch plan.Bundle.Manifest.TopologyDigest {
-	case topology.ContractDigest():
-		mounts = append(append([]migrationMount(nil), mounts...), migration.currentOnlyMounts...)
-	case topology.SupportedPredecessorContractDigest():
-		// The authenticated predecessor has no notification worker identity.
-		// Verify its own binary and schema without creating a new credential.
-	default:
+	if err := topology.ValidateInstalledContract(plan.Bundle.Manifest); err != nil {
 		return nil, errors.New("migration topology contract is unsupported")
 	}
-	for _, mount := range mounts {
+	for _, mount := range migration.mounts {
 		source, err := managedPath(plan.Root, filepath.FromSlash(mount.relative))
 		if err != nil || strings.ContainsRune(source, ',') {
 			return nil, errors.New("migration secret mount path is invalid")

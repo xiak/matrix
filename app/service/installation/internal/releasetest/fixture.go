@@ -117,7 +117,7 @@ func writeSequence(
 				manifest.APIVersion = release.LegacyManifestAPIVersion
 			}
 			if manifest.Database == release.SupportedDatabaseUpgradePredecessorProfile() {
-				manifest.TopologyDigest = topology.SupportedPredecessorContractDigest()
+				manifest.TopologyDigest = topology.ContractDigest()
 			}
 		}
 		commit := strings.Repeat(string("abcdef12"[index]), 40)

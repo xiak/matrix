@@ -466,14 +466,26 @@ The fixture recomputes canonical manifest content rather than trusting a
 caller-supplied digest field. The original signed preparation executable owns
 its status and topology verification; only after that verification does the
 fixture compare Docker inventory and ports with its installed configuration.
-Current/predecessor inventory still uses the current topology compiler. This
-test boundary does not add a product upgrade/recovery profile or permit an
+Current/predecessor inventory uses the current topology compiler. This
+boundary does not add a product upgrade/recovery profile or permit an
 arbitrary historical release. Exact test source
 `ba037e30c33a6a9c2e0c336afd0eee80d32c637a` passed Linux package race tests,
 installation unit/vet and architecture checks, and
 [Verification 36314399263](https://github.com/xiak/matrix/actions/runs/36314399263)
 with Go, UI, authority-process and node-process success. Its real
 historical-path validation remains open.
+
+The authenticated enabling package has topology digest
+`sha256:c557033be301244974d2bd19636f33eebfd55b7f1a8daed821814f1a093ba7b5`
+and already includes the purpose-only notification worker. Its preparation
+package has the distinct older digest
+`sha256:18629f764f41ed5129d7bb4cea9b6ff6204c87cb3bac69798c997a6a7b8d992f`.
+Installed-profile admission pairs IAM 40/Audit 24/PaaS 6 revision 15 only with
+the enabling digest and requires its notification-worker migration identity;
+the older preparation topology stays confined to its authenticated original
+executable. The signed-package admission test verified this exact pair and
+rejected the preparation profile under the current compiler; it does not
+replace the complete signed runtime upgrade/recovery gate.
 
 Mutable Account security settings and factor replacement add a recovery fence.
 Each new protected backup must seal a separate, non-secret authentication and

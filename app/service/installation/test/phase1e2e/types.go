@@ -178,7 +178,7 @@ func validateRejectedPredecessorCandidates(a, b, skipped, mismatched release.Ver
 func supportedPlatformTopology(manifest release.Manifest) bool {
 	return manifest.Database == release.CurrentDatabaseProfile() && manifest.TopologyDigest == topology.ContractDigest() ||
 		manifest.Database == release.SupportedDatabaseUpgradePredecessorProfile() &&
-			manifest.TopologyDigest == topology.SupportedPredecessorContractDigest()
+			manifest.TopologyDigest == topology.ContractDigest()
 }
 
 func workloadImage(manifest release.Manifest) (release.Image, bool) {
