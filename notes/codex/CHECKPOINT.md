@@ -3,20 +3,22 @@
 > Non-authoritative portable memory. Validate Git and the owning FEAT.
 
 - Repository https://github.com/xiak/matrix.git, branch feat/iam; exclusive
-  independent worktree only. Milestone 2026-09-27. Full goal ACTIVE/incomplete.
+  independent worktree only. Milestone 2026-09-28. Full goal ACTIVE/incomplete.
 - Latest committed and pushed source:
-  **fa27b0fbf54e94e21da38d32763dcaf89f370538**.
+  **42035189eb823e388509f54525889c1a18c6b79d**.
   Production remains **1584de22e156ea47a4db6056e91a9340b4f364f9**'s existing
   snapshot-consuming authentication recovery slice, IAM45/Audit26, above
   fixed 29668fa/dce/e24. Above 2b46's exact schema45 readiness test correction,
   fa27 fixes the original RoleSession test's first-page assumption and extends
   the existing three-database recovery gate with last-slot OTP concurrency
-  and real reset/change of a generation-bound exhausted password. Only tests
-  and their original FEAT owners changed. No installation release
+  and real reset/change of a generation-bound exhausted password. 420 adds
+  real contact/first-factor/replacement qualification checks in the same
+  close gate and moves the existing Role fixtures to a serial CI lane.
+  Only tests, CI and their original FEAT owners changed. No installation release
   profile, CLI, PaaS, UI, ServiceIdentity or Audit canonical change is included.
-- Exact successor Verification **36318553704**:
-  https://github.com/xiak/matrix/actions/runs/36318553704
-  GitHub API confirmed exact fa27 SHA; last observed pending, NOT accepted CI.
+- Exact successor Verification **36367216408**:
+  https://github.com/xiak/matrix/actions/runs/36367216408
+  GitHub API confirmed exact 42035189 SHA; last observed queued, NOT accepted CI.
   Read fresh status/jobs/logs before claiming success. Source pushes cancel an
   in-progress branch run; do not cancel this gate with an incidental source
   push. Checkpoint-only pushes do not trigger Verification.
@@ -26,9 +28,15 @@
   wrongly required the one remaining Session to appear in the first scanned
   page despite over100 random-ID history records. Original bounded SQL/API
   allows empty items plus a cursor. fa27 consumes both real pages and checks
-  exact target/capability and unchanged revision. Go/node succeeded on 2b46;
-  runtime was still live and other lanes queued at the fa27 push. Inspect
-  actual old status before declaring cancellation; no failed run is backfilled.
+  exact target/capability and unchanged revision. 2b46 is now terminal cancelled;
+  no failed run is backfilled.
+- fa27 Verification36318553704 is terminal cancelled. The exact storage
+  annotation says the job exceeded20m. Its actual test step passed19m25s,
+  including Role344.607s and PaaS2.330s, but preparation/cleanup made total20m08s.
+  Other seven jobs succeeded; aggregate failed as required. 420 moves, not
+  duplicates, that Role entry's seven databases/DSNs into authority-roles15m.
+  All lanes remain serial with original PG1CPU/768MiB/PIDs192; storage remains
+  20m, each Role fixture2m, no historical matrix or weaker assertions added.
 - Last independently verified source remains
   **29668fa330b2233b43ebd48ed37738623377f9de**, Verification36044565312 all nine
   jobs success. Its parent dce is pure snapshot/envelope codec; the prior
@@ -83,6 +91,23 @@ release acceptance is implied.
 
 ## Contract and acceptance boundaries
 
+420's local evidence: real PG18.6 close gate70.87s/package74.356s, including
+64.36s contact/factor scenario and natural OTP windows. Confirmed contact,
+initial TOTP binding and normal replacement change backup qualification;
+unverified contact, pending factors, MFA login/OTP use and step-up do not.
+Old leases fail before any close effect, while real revoked/new factor lineage
+and one replacement fact remain. First attempt lacked startup email registration;
+adding the normal registration fixed the fixture, not production custody.
+IAM/architecture default race-p2 and vet passed. YAML and17 Bash blocks passed;
+old/new exact DSN inventory is unchanged. Full CI and signed recovery remain open.
+
+402a's docs-only correction describes the already fixed first ENROLLMENT
+contract instead of stale LOGIN-only prose. Exact e24 Verification36033828072
+was rechecked all9success; public IAM API/nethttp did not change e24->fa27.
+UX received that fixed backend proof, not an inherited LIVE UI acceptance.
+Qualification-changed full recovery remains a later independent design in009,
+not a permissive current mode or new IAM45 consumer dependency.
+
 The same RR backup lease now requires authenticationStateDigest independently
 of original byte-preserving TOTP custody. Close emits the unique Go-coded
 snapshot/closure envelope; reconcile/reopen require both original files.
@@ -106,7 +131,7 @@ authorize cross-profile upgrade, rollback or recovery.
 
 Installation task 01a04149-5dbb-7300-9e4c-31d9e85c8ada owns signed consumers,
 profile/journal/keys/backup and actual restore, with its PaaS6/host/terminal
-and security-mail owners. It was told 2b46 failed and fa27 is the successor
+and security-mail owners. It was told fa27 timed out and 420 is the successor
 candidate; send exact CI success only after all jobs actually pass.
 The fixed owner-specific dependency/ADAPT closure from its integrated b7
 IAM40 baseline is now in docs/adoption/FEAT-006-platform-authorities.md,
@@ -131,9 +156,9 @@ Git identity exactly Xiak <Jellal@aliyun.com>, repository-local only.
 Go GOMAXPROCS2/GOMEMLIMIT512MiB; default-p2, real heavy gates race-p1 serial.
 Own native PG uses Windows Job2logicalCPU/1GiB/24processes,
 16connections/64MiB shared_buffers/4MiB work_mem/no parallel workers.
-fa27's milestone removed exactly13 owned synthetic databases (four3DB recovery
-attempts and one role-management database) after zero clients, and normally
-stopped its exclusive PG. Launcher confirmed terminal exit0;
+420's milestone removed exactly two owned synthetic close-factor databases
+after zero-client/ownership checks and normally stopped its exclusive PG.
+Launcher confirmed terminal exit0;
 there are no live local tests or PG handles. Earlier retained data was not
 deleted. Inspect actual handles/ownership before any new runtime work.
 Also removed one old stopped, unmounted, exactly feat-iam/task-labelled
