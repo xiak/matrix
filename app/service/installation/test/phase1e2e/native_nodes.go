@@ -1605,6 +1605,7 @@ func (value *gate) createNativePlacementFiller(
 	}
 	if _, err = value.waitNativeDeploymentRuntime(
 		ctx, bearer, deployment, target.identity.ExecutionTargetID, time.Time{},
+		component.Resources.CPUMillis,
 	); err != nil {
 		return nil, fail("native-placement-filler-target")
 	}
@@ -1680,11 +1681,11 @@ func (value *gate) assertNativeDeploymentRuntime(ctx context.Context, bearer []b
 		if err != nil {
 			return fail("native-runtime-deployment-convergence")
 		}
-		first, err := value.waitNativeDeploymentRuntime(ctx, bearer, deployment, node.identity.ExecutionTargetID, time.Time{})
+		first, err := value.waitNativeDeploymentRuntime(ctx, bearer, deployment, node.identity.ExecutionTargetID, time.Time{}, 100)
 		if err != nil {
 			return err
 		}
-		second, err := value.waitNativeDeploymentRuntime(ctx, bearer, deployment, node.identity.ExecutionTargetID, first.Value.Observation.ObservedAt)
+		second, err := value.waitNativeDeploymentRuntime(ctx, bearer, deployment, node.identity.ExecutionTargetID, first.Value.Observation.ObservedAt, 100)
 		if err != nil || first.Value.Observation.Instances[0].ID != second.Value.Observation.Instances[0].ID ||
 			first.Resources.Value == nil || second.Resources.Value == nil ||
 			first.Resources.Value.Observation.Instances[0].ID != second.Resources.Value.Observation.Instances[0].ID ||
@@ -1701,7 +1702,7 @@ func (value *gate) assertNativeDeploymentRuntime(ctx context.Context, bearer []b
 		// newer observation for the same opaque instance after that proof.
 		current, err := value.waitNativeDeploymentRuntime(
 			ctx, bearer, deployment, node.identity.ExecutionTargetID,
-			second.Value.Observation.ObservedAt,
+			second.Value.Observation.ObservedAt, 100,
 		)
 		if err != nil || !sameNativeRuntimeInstance(second, current) {
 			return fail("native-runtime-current-terminal-instance")
@@ -1991,7 +1992,7 @@ func (value *gate) beginNativeTargetLifecycle(
 	}
 	afterRuntime, err := value.waitNativeDeploymentRuntime(
 		ctx, bearer, deployments[0], firstTarget,
-		snapshots[0].Value.Observation.ObservedAt,
+		snapshots[0].Value.Observation.ObservedAt, 100,
 	)
 	if err != nil || afterRuntime.Value.Observation.Instances[0].ID != snapshots[0].Value.Observation.Instances[0].ID {
 		return nil, fail("native-lifecycle-drain-retained-runtime")
@@ -2111,7 +2112,7 @@ func (value *gate) completeNativeTargetLifecycle(
 		return fail("native-lifecycle-post-removal-convergence")
 	}
 	snapshot, err := value.waitNativeDeploymentRuntime(
-		ctx, bearer, deployment, secondNode.identity.ExecutionTargetID, time.Time{},
+		ctx, bearer, deployment, secondNode.identity.ExecutionTargetID, time.Time{}, 100,
 	)
 	if err != nil {
 		return err
@@ -2239,6 +2240,7 @@ func (value *gate) waitNativeDeploymentRuntime(
 	deployment paasv1.Deployment,
 	targetID paasv1.ResourceID,
 	after time.Time,
+	expectedCPUMillis int64,
 ) (paasv1.DeploymentRuntimeSnapshot, error) {
 	// CPU, memory and network are sampled immediately, while the first complete
 	// storage view may need several bounded retries when Docker's disk inventory
@@ -2249,7 +2251,7 @@ func (value *gate) waitNativeDeploymentRuntime(
 	for poll.Err() == nil {
 		var snapshot paasv1.DeploymentRuntimeSnapshot
 		_, err := value.edge.get(poll, "/api/paas/v1/deployments/"+string(deployment.Metadata.ID)+"/runtime", bearer, &snapshot)
-		if err == nil && validNativeDeploymentRuntime(snapshot, deployment, targetID, after, time.Now()) {
+		if err == nil && validNativeDeploymentRuntime(snapshot, deployment, targetID, after, time.Now(), expectedCPUMillis) {
 			return snapshot, nil
 		}
 		if !waitPoll(poll, 250*time.Millisecond) {
@@ -2264,6 +2266,7 @@ func validNativeDeploymentRuntime(
 	deployment paasv1.Deployment,
 	targetID paasv1.ResourceID,
 	after, now time.Time,
+	expectedCPUMillis int64,
 ) bool {
 	if paasv1.ValidateDeploymentRuntimeSnapshot(snapshot) != nil || snapshot.Scope != deployment.Metadata.Scope || snapshot.State != paasv1.MeasurementAvailable || snapshot.Value == nil {
 		return false
@@ -2296,7 +2299,7 @@ func validNativeDeploymentRuntime(
 	}
 	resource := resourceObservation.Instances[0]
 	if resource.CPU.State != paasv1.MeasurementAvailable || resource.CPU.Value == nil ||
-		resource.CPU.Value.LimitCPUMillis != 100 || resource.CPU.Value.WindowMillis < 1 ||
+		resource.CPU.Value.LimitCPUMillis != expectedCPUMillis || resource.CPU.Value.WindowMillis < 1 ||
 		resource.Memory.State != paasv1.MeasurementAvailable || resource.Memory.Value == nil ||
 		resource.Memory.Value.LimitBytes != 32*1024*1024 ||
 		resource.Memory.Value.UsedBytes > resource.Memory.Value.LimitBytes ||

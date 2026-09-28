@@ -845,8 +845,16 @@ func TestNativeDeploymentRuntimeRequiresExactAdvancingProviderNeutralProof(t *te
 			},
 		},
 	}
-	if !validNativeDeploymentRuntime(snapshot, deployment, "target-a", now.Add(-time.Second), now.Add(time.Second)) {
+	if !validNativeDeploymentRuntime(snapshot, deployment, "target-a", now.Add(-time.Second), now.Add(time.Second), 100) {
 		t.Fatal("exact advancing runtime proof rejected")
+	}
+	if validNativeDeploymentRuntime(snapshot, deployment, "target-a", now.Add(-time.Second), now.Add(time.Second), 3900) {
+		t.Fatal("runtime proof accepted a CPU limit different from the requested workload")
+	}
+	filler := snapshot.Snapshot(now)
+	filler.Resources.Value.Observation.Instances[0].CPU.Value.LimitCPUMillis = 3900
+	if !validNativeDeploymentRuntime(filler, deployment, "target-a", now.Add(-time.Second), now.Add(time.Second), 3900) {
+		t.Fatal("resource-filling workload was rejected despite its exact CPU limit")
 	}
 	advanced := snapshot.Snapshot(now)
 	advanced.Value.Observation.ObservedAt = now.Add(time.Second)
@@ -893,7 +901,7 @@ func TestNativeDeploymentRuntimeRequiresExactAdvancingProviderNeutralProof(t *te
 	} {
 		candidate := snapshot.Snapshot(now)
 		change(&candidate)
-		if validNativeDeploymentRuntime(candidate, deployment, "target-a", now.Add(-time.Second), now.Add(time.Second)) {
+		if validNativeDeploymentRuntime(candidate, deployment, "target-a", now.Add(-time.Second), now.Add(time.Second), 100) {
 			t.Fatal("stale, unready or wrong-target runtime proof accepted")
 		}
 	}
