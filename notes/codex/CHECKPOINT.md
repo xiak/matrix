@@ -6,7 +6,7 @@
 - Updated: 2026-09-28
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `44fed164`
+- Pushed UI source: `1bfec882`
 
 ## Authoritative route
 
@@ -33,8 +33,9 @@ with another branch's renderer or inherit that branch's UI acceptance.
 
 The current milestone keeps the independent MOCK preview, fixed-contract LIVE
 paths and synchronized static Go host. The latest pushed UI includes bounded
-User reset unknown-outcome handling; its exact behavior and test evidence are
-owned only by FEAT-007. First-login MFA enrollment remains staged against
+User reset unknown-outcome handling and an isolated password-rule design
+preview; exact behavior and test evidence are owned only by FEAT-007.
+First-login MFA enrollment remains staged against
 IAM's fixed contract. Real IAM process browser, installation and release
 acceptance are not established. Detailed behavior and evidence remain only in
 the FEAT owners.
