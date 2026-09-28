@@ -6,7 +6,7 @@
 - Updated: 2026-09-28
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `d600a7cf`
+- Pushed UI source: `6d7b5cb4`
 
 ## Authoritative route
 
@@ -32,20 +32,12 @@ UI, full static host/export and independent MOCK entry; do not replace them
 with another branch's renderer or inherit that branch's UI acceptance.
 
 The current milestone keeps the independent MOCK preview, fixed-contract LIVE
-paths and synchronized static Go host. The latest pushed UI includes LIVE
-tab-scoped, non-secret User reset unknown-outcome reminders and an isolated
-password-rule design preview that separates proposed, draft, actual and
-historical-result provenance. A compact IAM route audit also corrected the
-MOCK policy-detail summary's narrow-screen description flow; exact behavior
-and test evidence are owned only by FEAT-007. The isolated MOCK password-age
-preview now distinguishes expiry disabled/unknown, expiry enabled/unknown,
-IAM-confirmed expired and IAM-confirmed current without synthesizing a
-challenge, session or completion. Its contract exclusions belong to
-FEAT-IAM-010 and verification to FEAT-007.
-First-login MFA enrollment remains staged against
-IAM's fixed contract. Real IAM process browser, installation and release
-acceptance are not established. Detailed behavior and evidence remain only in
-the FEAT owners.
+paths and synchronized static Go host. Compact policy-editor modes, isolated
+password-age scenarios and read-only account password-rule projection are
+present; exact behavior and evidence belong to the linked FEAT owners. The
+LIVE account-rule write path remains closed, and IAM's S3b candidate is not yet a
+fixed release gate. Real IAM-process browser, installation and release
+acceptance remain open.
 
 ## Continuation
 
