@@ -5,6 +5,7 @@ import { ArrowLeft, Boxes, KeyRound, ShieldCheck } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { Alert, Badge, Button, Card, Steps, Table } from "@ui/xiak";
 import type { AccessPolicy, AccessWorkspace } from "../domain/accessWorkspace";
+import { ConditionSummary, PolicyResourcesSummary } from "./PolicyDocumentViewer";
 import styles from "./ServiceAuthorizationPreview.module.css";
 
 type PreviewView = "directory" | "detail" | "review";
@@ -94,7 +95,9 @@ function ConsentReview({ accountId, policy, stage, onStageChange, onClose }: {
   const steps = useMemo(() => stageIds.map((id) => ({ id, label: t(`steps.${id}`) })), [t]);
   const currentStage = stageIds[stage] ?? "identity";
   const version = pinnedPolicyVersion(policy);
-  const actions = version?.document.statement.flatMap((statement) => statement.action) ?? [];
+  const statements = version?.document.statement ?? [];
+  const hasWildcard = statements.some((statement) => statement.action.some((action) => action.includes("*")) || statement.resource.includes("*"));
+  const hasPreviewOnlyActionSyntax = statements.some((statement) => statement.action.some((action) => action.includes(":")));
   return <div className={styles.stack}>
     <div className={styles.steps}><Steps label={t("progress")} items={steps} current={stage} onChange={onStageChange} /></div>
     <Card className={styles.reviewCard}>
@@ -102,7 +105,16 @@ function ConsentReview({ accountId, policy, stage, onStageChange, onClose }: {
       <Card.Body className={styles.cardBody}>
         <p className={styles.lead}>{t(`review.${currentStage}.lead`)}</p>
         {stage === 0 ? <><dl className={styles.facts}><div><dt>{t("fields.targetAccount")}</dt><dd><code>{accountId}</code></dd></div><div><dt>{t("fields.servicePrincipal")}</dt><dd><code>{previewTemplate.servicePrincipal}</code></dd></div><div><dt>{t("fields.purpose")}</dt><dd><code>{previewTemplate.purpose}</code></dd></div><div><dt>{t("fields.roleName")}</dt><dd><code>{previewTemplate.roleName}</code></dd></div></dl><Alert status="info">{t("review.identity.passRoleBoundary")}</Alert></> : null}
-        {stage === 1 ? <><div className={styles.permissionReference}><div><span>{t("fields.policySnapshot")}</span><strong>{policy && version ? `${policy.name} · v${previewTemplate.policyVersion}` : "—"}</strong></div><Badge>{t("review.permissions.immutable")}</Badge></div><ul className={styles.permissionList}>{actions.map((action) => <li key={action}><code>{action}</code></li>)}</ul><Alert status="warning">{t("review.permissions.crossProduct")}</Alert></> : null}
+        {stage === 1 ? <><div className={styles.permissionReference}><div><span>{t("fields.policySnapshot")}</span><strong>{policy && version ? `${policy.name} · v${previewTemplate.policyVersion}` : "—"}</strong></div><Badge>{t("review.permissions.immutable")}</Badge></div>
+          <div className={styles.permissionStatements}>{statements.map((statement, index) => <section aria-label={t("review.permissions.statement", { number: index + 1 })} className={styles.permissionStatement} key={index}>
+            <div className={styles.permissionStatementHeading}><strong>{t("review.permissions.statement", { number: index + 1 })}</strong><Badge status={statement.effect === "deny" ? "danger" : "success"}>{t(`review.permissions.${statement.effect}`)}</Badge></div>
+            <dl><div><dt>{t("review.permissions.actionPatterns")}</dt><dd><ul className={styles.permissionList}>{statement.action.map((action) => <li key={action}><code>{action}</code></li>)}</ul></dd></div>
+              <div><dt>{t("review.permissions.resources")}</dt><dd><PolicyResourcesSummary resources={statement.resource} /></dd></div>
+              <div><dt>{t("review.permissions.conditions")}</dt><dd><ConditionSummary value={statement.condition} /></dd></div></dl>
+          </section>)}</div>
+          {hasPreviewOnlyActionSyntax ? <Alert status="info">{t("review.permissions.previewDialect")}</Alert> : null}
+          {hasWildcard ? <Alert status="warning">{t("review.permissions.wildcardRisk")}</Alert> : null}
+          <Alert status="warning">{t("review.permissions.crossProduct")}</Alert></> : null}
         {stage === 2 ? <><ul className={styles.boundaries}>{(["explicit", "shortTerm", "noExpansion", "cleanup"] as const).map((item) => <li key={item}><strong>{t(`review.consent.items.${item}.title`)}</strong><p>{t(`review.consent.items.${item}.hint`)}</p></li>)}</ul><Alert status="warning">{t("review.consent.unavailable")}</Alert></> : null}
       </Card.Body>
     </Card>

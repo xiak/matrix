@@ -14,6 +14,7 @@
 .link:hover { text-decoration: underline; }
 .link:focus-visible { outline: 2px solid var(--xiak-color-border-focus); outline-offset: 4px; border-radius: var(--xiak-radius-small); }
 .root td small { display: block; margin-top: var(--xiak-spacing-micro); color: var(--xiak-color-text-muted); overflow-wrap: anywhere; }
+.root td small code { white-space: normal; overflow-wrap: anywhere; }
 .detailGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--xiak-spacing-comfortable); }
 .cardHeading { display: flex; align-items: center; gap: var(--xiak-spacing-default); }
 .cardHeading > svg { flex: none; width: 20px; height: 20px; color: var(--xiak-color-accent-text); }
@@ -34,6 +35,14 @@
 .permissionReference { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-default); }
 .permissionReference > div { display: grid; min-width: 0; gap: var(--xiak-spacing-narrow); }
 .permissionReference strong { color: var(--xiak-color-text-strong); overflow-wrap: anywhere; }
+.permissionStatements { display: grid; gap: var(--xiak-spacing-default); }
+.permissionStatement { min-width: 0; padding: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); }
+.permissionStatementHeading { display: flex; align-items: center; gap: var(--xiak-spacing-tight); margin-bottom: var(--xiak-spacing-default); }
+.permissionStatementHeading strong { color: var(--xiak-color-text-strong); }
+.permissionStatement dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--xiak-spacing-default); margin: 0; }
+.permissionStatement dl > div { min-width: 0; }
+.permissionStatement dt { margin-bottom: var(--xiak-spacing-narrow); color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
+.permissionStatement dd { margin: 0; overflow-wrap: anywhere; }
 .boundaries { display: grid; gap: var(--xiak-spacing-default); margin: 0; padding: 0; list-style: none; }
 .boundaries li { padding-inline-start: var(--xiak-spacing-default); border-inline-start: 3px solid var(--xiak-color-border-accent); }
 .boundaries strong { display: block; margin-bottom: var(--xiak-spacing-micro); color: var(--xiak-color-text-strong); }
@@ -45,6 +54,7 @@
   .heading { grid-template-columns: auto minmax(0, 1fr); }
   .badges { grid-column: 2; justify-content: flex-start; }
   .detailGrid, .facts { grid-template-columns: minmax(0, 1fr); }
+  .permissionStatement dl { grid-template-columns: minmax(0, 1fr); }
   .sectionHeading { flex-direction: column; }
   .reviewActions { align-items: stretch; flex-direction: column-reverse; }
   .reviewActions > div, .reviewActions > button { width: 100%; }

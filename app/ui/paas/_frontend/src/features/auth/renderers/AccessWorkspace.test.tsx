@@ -954,8 +954,13 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByText(/必须同时校验操作者、目标账号与角色、实际工作负载和 service purpose/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "下一步" }));
     expect(screen.getByText("MatrixDeliveryAccess · v1")).toBeTruthy();
-    expect(screen.getByText("paas:*")).toBeTruthy();
-    expect(screen.getByText("devops:*")).toBeTruthy();
+    const statement = screen.getByRole("region", { name: "声明 1" });
+    expect(within(statement).getByText("paas:*")).toBeTruthy();
+    expect(within(statement).getByText("devops:*")).toBeTruthy();
+    expect(within(statement).getByText("当前账号内的全部适用资源")).toBeTruthy();
+    expect(within(statement).getByText("无条件限制")).toBeTruthy();
+    expect(screen.getByText(/这些冒号式动作属于隔离 MOCK 的旧记法/)).toBeTruthy();
+    expect(screen.getByText(/固定策略版本不等于最小权限/)).toBeTruthy();
     expect(screen.getByText(/跨产品代操作/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "下一步" }));
     const authorize = screen.getByRole("button", { name: "授权服务（未接入）" }) as HTMLButtonElement;
@@ -990,6 +995,32 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByText("MatrixDeliveryAccess · v1")).toBeTruthy();
     expect(screen.getByText("paas:*")).toBeTruthy();
     expect(screen.queryByText("iam:*")).toBeNull();
+  });
+  it("reviews each service policy statement with its own resources and conditions", async () => {
+    const resource = "matrix:paas:org-xiak:global:application/staging-release";
+    const { user } = await open("roles", { seed: async (extension) => {
+      extension.transact((source) => ({ workspace: { ...source, policies: source.policies.map((policy) => policy.id !== "policy-delivery" ? policy : {
+        ...policy,
+        versions: [{ ...policy.versions[0]!, document: { version: "1" as const, statement: [
+          { effect: "allow" as const, action: ["paas:deploy"], resource: [resource], condition: { resourceTag: [{ key: "environment", value: "staging" }] } },
+          { effect: "deny" as const, action: ["devops:delete"], resource: ["*"] }
+        ] } }]
+      }) } }));
+    } });
+    await user.click(await screen.findByRole("button", { name: "服务授权" }));
+    await user.click(screen.getByRole("button", { name: "Application delivery" }));
+    await user.click(screen.getByRole("button", { name: "审阅服务授权" }));
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    const allow = screen.getByRole("region", { name: "声明 1" });
+    expect(within(allow).getByText("paas:deploy")).toBeTruthy();
+    expect(within(allow).getByText(resource)).toBeTruthy();
+    expect(within(allow).getByText('environment = "staging"')).toBeTruthy();
+    expect(within(allow).queryByText("devops:delete")).toBeNull();
+    const deny = screen.getByRole("region", { name: "声明 2" });
+    expect(within(deny).getByText("拒绝")).toBeTruthy();
+    expect(within(deny).getByText("devops:delete")).toBeTruthy();
+    expect(within(deny).getByText("当前账号内的全部适用资源")).toBeTruthy();
+    expect(within(deny).queryByText('environment = "staging"')).toBeNull();
   });
   it("blocks service consent instead of falling back when its pinned policy version is missing", async () => {
     const { user } = await open("roles", { seed: async (extension) => {
