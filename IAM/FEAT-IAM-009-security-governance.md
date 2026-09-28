@@ -1069,7 +1069,11 @@ INSTALLATION USER附件的真实新增与撤销在现有Account→稳定USER锁�
 
 继续扩展现有`AccountSecuritySettings`、`SecuritySettingsUpdateIntent`和PUT请求：当前读取及新写入必须有完整`mfa`与`password`，所有字段显式给出；省略/null/未知字段、越界或部分merge均拒绝。证明绑定同一requestId、预期resourceVersion及两段的准确值。只改密码规则也是真实配置版本变化，沿原设置屏障淘汰旧Session/Challenge；无变化不增版本。没有第三个Policy对象、通用payload证明、另一组账号配置ID或新权限动作。
 
-历史完成、已消费StepUp及原Audit bytes不可补填`password`默认值：固定前驱确有只含MFA的不可变完成，这是保留读取的真实依据。旧完成缺段只能表示“原记录没有该配置”，不能作为当前设置或新请求；当前配置校验与历史投影校验必须在既有codec owner明确区分。新写入/证明不得接受旧缺段形状，旧未完成证明不能因迁移补默认后继续执行。UI由010消费固定契约，不依据自身默认值重建旧命令；首次引入规则时只初始化当前有效配置并推进其资格屏障，不改旧完成或认证事实。实际字段/ABI和旧证明处置须由单前驱真库门禁验证后才对外冻结可用性。
+历史完成、已消费StepUp及原Audit bytes不可补填`password`默认值：固定前驱确有只含MFA的不可变完成，这是保留读取的真实依据。旧完成缺段只能表示“原记录没有该配置”，不能作为当前设置或新请求；当前配置校验与历史投影校验必须在既有codec owner明确区分。新写入/证明不得接受旧缺段形状，旧未完成证明不能因迁移补默认后继续执行。UI由010消费固定契约，不依据自身默认值重建旧命令。实际字段/ABI和旧证明处置须由单前驱真库门禁验证后才对外冻结可用性。
+
+**初始化不伪造配置变更。** 原`security_settings_version`同时是连续完成谱系的编号，不能在迁移时直接加一，再补造USER/Decision/Audit或绕过前一完成检查。首次落地只在当前Account初始化上述密码默认值，保留原配置版本、MFA值、更新时间、完成记录和Session认证事实；它不追溯否定原密码或已有登录，新密码写入则立即执行当前有效规则。不增加迁移专用身份、第二个配置epoch或通用来源receipt。后续真实配置操作才沿同一编号加一，密码规则单独变化也必须有完整step-up、当前Decision、完成、审计和通知；新完成的previous密码值必须准确等于当前值，第一条新完成之前只有真实旧完成时，其previous密码值只能是初始化默认值，不能接受任意补值或跳过原MFA谱系。
+
+旧的未完成`SECURITY_SETTINGS_UPDATE`证明没有承诺密码段，因此即使Session与预期版本仍有效，也不得验证、消费或通过原requestId重建为新意图；运行时入口和锁内函数均检查完整承诺。保留其原存储状态、时间及已扣尝试预算，不伪造CONSUMED或提前到期的事实。只有原已完成记录及其CONSUMED证明可以按真实旧形状只读；缺段不能成为当前PENDING/PROVED响应或新写入。新的INSERT/更新函数不得产生缺段设置证明，旧无密码参数的写函数删除；普通Role/worker/通知/恢复身份不获得直接修补能力。首次初始化、同版本重放和损坏列集分别判定，重放不能重新填默认值来修复被删改的当前规则。唯一资格投影纳入新规则后自然改变；这不授予旧备份新的恢复资格，也不需要为迁移而撤销所有正常Session。
 
 本人有效要求与管理员配置读取分开：拟新增`GET /v1/auth/password-requirements`，仅从当前LOGIN_SESSION推导本人，允许真实forced-change临时会话；不接受accountId/userId或Role/Key/Service载体，不需要取得整账号`security-settings.read`。拟新增`POST /v1/auth/challenges/{challengeId}/password-requirements`只接受原`challengeCredential`，仅当前有效LOGIN或ENROLLMENT的PASSWORD_CHANGE阶段可读，不能据此跨阶段或发行Session。返回`PasswordRequirements`只包含本人适用的完整新密码规则、固定长度/字节上限、当前Account配置版本及`ACCOUNT|PROTECTED_IDENTITY`来源；不含hash、历史条目、密码年龄、内部generation或其他用户状态。普通未认证login/realm查询不暴露规则。requirements是填写提示，不是写许可或可缓存验证结论；最终写入仍以锁内当前规则为准。管理员创建/重置页面按原权限读取账号配置，不为此新增窥探他人密码历史的入口。
 
@@ -1095,7 +1099,7 @@ INSTALLATION USER附件的真实新增与撤销在现有Account→稳定USER锁�
 
 当前配置、真实密码历史承诺和年龄属于认证资格。S3b必须扩展唯一认证状态投影及备份比较，不能仍用忽略这些字段的旧digest放行恢复。已有公开Audit/canonical、ServiceIdentity/lookup_service与七列claim保持；历史hash不进入公共snapshot、Audit、普通journal或错误。私有快照/恢复schema的具体变更与安装owner先对齐，完整release profile仍由安装另验；资格变化的旧备份仍需完整可信状态携带路径，本片不把永久拒绝当成该最终能力。
 
-验收复用现有authority/usecase/API、IAM PG18与authorityprocess owners：每个写入口有真实正负向；两个Account同名USER与两个IAM副本验证当前规则/历史；0/1/24、Unicode/空格/512字节、无历史及旧hash准确验证；改密与reset/recover/规则修改/受保护附件授撤的相反提交次序，证明旧计算无部分效果。真实恢复提升generation但不使密码变年轻、等值Bootstrap/receipt不追加历史、末端失败/重启和历史审计保留均要单独断言。保留数据只滚动一个真实固定前驱，不枚举全部未发布schema；锁不变量覆盖采用代表性竞争边界，不为每个字段复制整套重型进程/升级矩阵。词表与有限资源容量、LIVE UI、签名恢复分别沿其owner验收，不能以这份设计或纯单测替代。
+验收复用现有authority/usecase/API、IAM PG18与authorityprocess owners：每个写入口有真实正负向；两个Account同名USER与两个IAM副本验证当前规则/历史；0/1/24、Unicode/空格/512字节、无历史及旧hash准确验证；改密与reset/recover/规则修改/受保护附件授撤的相反提交次序，证明旧计算无部分效果。真实恢复提升generation但不使密码变年轻、等值Bootstrap/receipt不追加历史、末端失败/重启和历史审计保留均要单独断言。单前驱必须真实产生至少两次MFA设置完成及一个未完成设置证明：迁移后原完成/CONSUMED证明/原Audit字节保持，当前初始化不跳版本，旧未完成证明拒绝，新完整证明可以从原末版本完成密码规则变化，接续谱系无缺口；仅原合法Session仍有效不等于旧证明仍可写入。缺列/错误默认/历史篡改、同版本重放及末端DDL失败不得部分初始化或修复旧资格。保留数据只滚动一个真实固定前驱，不枚举全部未发布schema；锁不变量覆盖采用代表性竞争边界，不为每个字段复制整套重型进程/升级矩阵。词表与有限资源容量、LIVE UI、签名恢复分别沿其owner验收，不能以这份设计或纯单测替代。
 
 #### 认证尝试的持久预算
 
