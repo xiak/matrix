@@ -1691,6 +1691,64 @@ func TestInstalledArtifactCatalogAdmitsOnlyTheCommittedPredecessorState(t *testi
 	}
 }
 
+func TestInstalledArtifactCatalogReadsSealedHistoricalPredecessorWithoutAdmittingUpgrade(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("signed release staging targets Linux installation state")
+	}
+	historical := release.SupportedDatabaseUpgradePredecessorProfile()
+	historical.Authorities.IAM = 36
+	historical.Authorities.Audit = 19
+	historical.ContractRevision = 14
+	fixtures, err := releasetest.WriteSequence(t.TempDir(), 2,
+		historical, release.SupportedDatabaseUpgradePredecessorProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	trust, err := os.ReadFile(fixtures[0].TrustPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous, err := release.VerifyDirectory(fixtures[0].Root, trust)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := release.VerifyDirectory(fixtures[1].Root, trust)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if validateUpgradeReleasePair(previous, current) == nil {
+		t.Fatal("historical predecessor was admitted as a new upgrade path")
+	}
+	root := t.TempDir()
+	staged := filepath.Join(root, "releases")
+	if err := os.Mkdir(staged, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, bundle := range []release.VerifiedBundle{previous, current} {
+		if _, err := release.StageDirectory(bundle, trust,
+			filepath.Join(staged, bundle.Manifest.Release.ID)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plan := platformcommand.InstallPlan{
+		Root: root, Bundle: current, TrustBytes: trust,
+		PreviousID: previous.Manifest.Release.ID, PreviousDigest: previous.ManifestSHA256,
+	}
+	actual, err := installedArtifactCatalogConfig(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := artifactCatalogConfig(previous.Manifest, current.Manifest)
+	if err != nil || !bytes.Equal(actual, want) {
+		t.Fatalf("historical predecessor catalog differs: %v", err)
+	}
+	changed := plan
+	changed.PreviousDigest = "sha256:" + strings.Repeat("0", 64)
+	if _, err := installedArtifactCatalogConfig(changed); err == nil {
+		t.Fatal("catalog admitted a predecessor outside the sealed digest")
+	}
+}
+
 func TestUpgradeConfigurationReplacesOnlyReleaseDerivedFilesAndReplaysBothWays(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("local-machine upgrade configuration targets Linux")

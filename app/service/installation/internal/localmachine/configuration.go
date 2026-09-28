@@ -298,12 +298,13 @@ func installedArtifactCatalogConfig(plan platformcommand.InstallPlan) ([]byte, e
 	previous, err := release.VerifyDirectory(previousRoot, plan.TrustBytes)
 	if err != nil || previous.ManifestSHA256 != plan.PreviousDigest ||
 		previous.Manifest.Kind != release.ManifestKind ||
-		topology.ValidateInstalledContract(previous.Manifest) != nil {
+		previous.Manifest.Release.ID != identity.PreviousID ||
+		previous.Manifest.Release.Version != identity.PreviousVersion {
 		return nil, errors.New("installed predecessor release is invalid")
 	}
-	if validateUpgradeReleasePair(previous, current) != nil {
-		return nil, errors.New("installed predecessor release is inconsistent")
-	}
+	// The sealed predecessor contributes only signed workload image mappings.
+	// It is not being started or admitted as a current upgrade/rollback target;
+	// those operations keep their separate closed profile and topology checks.
 	return artifactCatalogConfig(previous.Manifest, current.Manifest)
 }
 

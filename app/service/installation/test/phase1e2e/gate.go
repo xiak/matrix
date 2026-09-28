@@ -105,6 +105,11 @@ func (value *gate) activateReleaseA(ctx context.Context) error {
 		return nil
 	}
 	emit("release-base-install-status-verify")
+	if _, err := runMX(ctx, value.releases.a, "verify",
+		[]string{"--root", value.config.root}, value.pathLeakage()); err != nil {
+		return err
+	}
+	emit("successor-verifies-installed-predecessor")
 
 	upgrade := func(step string) error {
 		result, err := runMX(ctx, value.releases.a, "upgrade",
