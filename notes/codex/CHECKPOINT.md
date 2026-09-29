@@ -6,8 +6,8 @@
 - Updated: 2026-09-29
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `8e9240bf`
-- Pushed documentation head: `1701d5c0`
+- Pushed UI source: `75095727`
+- Pushed documentation head: `49db509d`
 
 ## Authoritative route
 
@@ -33,14 +33,17 @@ UI, full static host/export and independent MOCK entry; do not replace them
 with another branch's renderer or inherit that branch's UI acceptance.
 
 The current milestone keeps the independent MOCK preview, fixed-contract LIVE
-paths and synchronized static Go host. It adds truthful request-context guidance
-to the isolated policy author and access simulator: source IP and time remain
-operator-constructed preview facts, browser and forwarded-header values are not
-trusted, and the UI does not claim to simulate a gateway, proxy or product PEP.
-No LIVE condition key or unpushed IAM network-context work was adopted. The
-existing LIVE member Role self-service and independent MOCK Role journey remain
-intact. Exact behavior, verification evidence and replacement rules belong to
-the linked FEAT owners. Real IAM-process Role/network browser, installation and
+paths and synchronized static Go host. Its access simulator now separates
+principal-policy evaluation, optional permission-boundary evaluation and their
+final intersection, and classifies evidence as `MATCH`, `NOT_MATCH`,
+`CONTEXT_MISSING` or `CONTRACT_UNAVAILABLE`. Request-context guidance remains
+truthful: source IP and time are operator-constructed preview facts, browser and
+forwarded-header values are not trusted, and the UI does not claim to simulate
+a gateway, proxy or product PEP. These are diagnostics, not a permit. No LIVE
+condition key or unpushed IAM network-context work was adopted. The existing
+LIVE member Role self-service and independent MOCK Role journey remain intact.
+Exact behavior, verification evidence and replacement rules belong to the
+linked FEAT owners. Real IAM-process Role/network browser, installation and
 release acceptance remain open.
 
 ## Continuation
