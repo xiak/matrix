@@ -6,8 +6,8 @@
 - Updated: 2026-09-29
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `cf11b8cb`
-- Pushed documentation head: `1e070738`
+- Pushed UI source: `d119a54d`
+- Pushed documentation head: `b35867dc`
 
 ## Authoritative route
 
@@ -42,12 +42,17 @@ forwarded-header values are not trusted, and the UI does not claim to simulate
 a gateway, proxy or product PEP. The product-onboarding MOCK now also exposes
 the immutable Profile reference and digest, condition fact sources, the calling
 service's PEP responsibility and an explicit unverified runtime-evidence state.
-These are diagnostics, not a permit or published registry state. No LIVE
-condition key, Profile publication or unpushed IAM network-context work was
-adopted. The existing LIVE member Role self-service and independent MOCK Role
-journey remain intact. Exact behavior, verification evidence and replacement
-rules belong to the linked FEAT owners. Real IAM-process Role/network browser,
-product PEP, installation and release acceptance remain open.
+The isolated policy author also exposes all/partial/unsupported condition
+coverage for the selected Actions and blocks empty, malformed, host-bit-set or
+exact duplicate source CIDR input without silently splitting a statement. Its
+shared multi-line control preserves the invalid state and receives focus after
+failed progression. These are diagnostics, not a permit or published registry
+state. No LIVE condition key, Profile publication or unpushed IAM
+network-context work was adopted. The existing LIVE member Role self-service
+and independent MOCK Role journey remain intact. Exact behavior, verification
+evidence and replacement rules belong to the linked FEAT owners. Real
+IAM-process Role/network browser, product PEP, installation and release
+acceptance remain open.
 
 ## Continuation
 
