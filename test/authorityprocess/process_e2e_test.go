@@ -8116,6 +8116,20 @@ func processTOTPCode(t *testing.T, ctx context.Context, admin *pgx.Conn, seed st
 		}
 		step := now.Unix() / 30
 		if initialBinding {
+			// Initial enrollment deliberately consumes the preceding step so the
+			// next real login can use the current window without sleeping. Do not
+			// return that code at the end of its validity: crossing the next
+			// 30-second boundary before the HTTP transaction validates it would
+			// correctly turn it into a two-step-old rejection. Waiting here keeps
+			// the production +/-1 window and replay policy unchanged.
+			if now.Unix()%30 >= 20 {
+				select {
+				case <-ctx.Done():
+					t.Fatal("TOTP process deadline")
+				case <-time.After(50 * time.Millisecond):
+				}
+				continue
+			}
 			step--
 		}
 		if step <= previous {
