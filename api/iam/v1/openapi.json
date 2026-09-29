@@ -6569,9 +6569,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:5b728c9d7cdd97cc7eeb4cc095d9e053bbf5dab74ca2c08a239b25a6a4c99e2f",
+                    "contentDigest": "sha256:fb235455b1ff388f64d39d7f59b998622847363cb7b9c14e9a7fa52e77baddfd",
                     "product": "managedservice",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -6644,9 +6644,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:5b728c9d7cdd97cc7eeb4cc095d9e053bbf5dab74ca2c08a239b25a6a4c99e2f",
+                    "contentDigest": "sha256:fb235455b1ff388f64d39d7f59b998622847363cb7b9c14e9a7fa52e77baddfd",
                     "product": "managedservice",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -6708,9 +6708,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:5b728c9d7cdd97cc7eeb4cc095d9e053bbf5dab74ca2c08a239b25a6a4c99e2f",
+                    "contentDigest": "sha256:fb235455b1ff388f64d39d7f59b998622847363cb7b9c14e9a7fa52e77baddfd",
                     "product": "managedservice",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -6783,9 +6783,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:5b728c9d7cdd97cc7eeb4cc095d9e053bbf5dab74ca2c08a239b25a6a4c99e2f",
+                    "contentDigest": "sha256:fb235455b1ff388f64d39d7f59b998622847363cb7b9c14e9a7fa52e77baddfd",
                     "product": "managedservice",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -6847,9 +6847,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:5b728c9d7cdd97cc7eeb4cc095d9e053bbf5dab74ca2c08a239b25a6a4c99e2f",
+                    "contentDigest": "sha256:fb235455b1ff388f64d39d7f59b998622847363cb7b9c14e9a7fa52e77baddfd",
                     "product": "managedservice",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -6922,9 +6922,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:5b728c9d7cdd97cc7eeb4cc095d9e053bbf5dab74ca2c08a239b25a6a4c99e2f",
+                    "contentDigest": "sha256:fb235455b1ff388f64d39d7f59b998622847363cb7b9c14e9a7fa52e77baddfd",
                     "product": "managedservice",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -6939,7 +6939,8 @@
                     "accessKeyId": false,
                     "type": {
                       "enum": [
-                        "USER"
+                        "USER",
+                        "ROLE"
                       ]
                     }
                   }
@@ -11770,9 +11771,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:5b728c9d7cdd97cc7eeb4cc095d9e053bbf5dab74ca2c08a239b25a6a4c99e2f",
+                    "contentDigest": "sha256:fb235455b1ff388f64d39d7f59b998622847363cb7b9c14e9a7fa52e77baddfd",
                     "product": "managedservice",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -11835,9 +11836,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:5b728c9d7cdd97cc7eeb4cc095d9e053bbf5dab74ca2c08a239b25a6a4c99e2f",
+                    "contentDigest": "sha256:fb235455b1ff388f64d39d7f59b998622847363cb7b9c14e9a7fa52e77baddfd",
                     "product": "managedservice",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -11889,9 +11890,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:5b728c9d7cdd97cc7eeb4cc095d9e053bbf5dab74ca2c08a239b25a6a4c99e2f",
+                    "contentDigest": "sha256:fb235455b1ff388f64d39d7f59b998622847363cb7b9c14e9a7fa52e77baddfd",
                     "product": "managedservice",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -11954,9 +11955,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:5b728c9d7cdd97cc7eeb4cc095d9e053bbf5dab74ca2c08a239b25a6a4c99e2f",
+                    "contentDigest": "sha256:fb235455b1ff388f64d39d7f59b998622847363cb7b9c14e9a7fa52e77baddfd",
                     "product": "managedservice",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -12008,9 +12009,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:5b728c9d7cdd97cc7eeb4cc095d9e053bbf5dab74ca2c08a239b25a6a4c99e2f",
+                    "contentDigest": "sha256:fb235455b1ff388f64d39d7f59b998622847363cb7b9c14e9a7fa52e77baddfd",
                     "product": "managedservice",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -12073,9 +12074,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:5b728c9d7cdd97cc7eeb4cc095d9e053bbf5dab74ca2c08a239b25a6a4c99e2f",
+                    "contentDigest": "sha256:fb235455b1ff388f64d39d7f59b998622847363cb7b9c14e9a7fa52e77baddfd",
                     "product": "managedservice",
-                    "revision": 1
+                    "revision": 2
                   }
                 },
                 "resource": {
@@ -22252,7 +22253,8 @@
       },
       "RoleManagement": {
         "enum": [
-          "CUSTOMER"
+          "CUSTOMER",
+          "SERVICE_LINKED"
         ],
         "type": "string"
       },
@@ -22785,12 +22787,236 @@
         ],
         "type": "object"
       },
+      "ServiceLinkedRole": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "properties": {
+              "role": {
+                "properties": {
+                  "management": {
+                    "const": "SERVICE_LINKED"
+                  }
+                }
+              }
+            }
+          }
+        ],
+        "description": "Target-Account consent relation between a SERVICE_LINKED Role, an exact release template and one registered installation service principal. It is not a service credential or generic platform grant.",
+        "properties": {
+          "apiVersion": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "permissionCeiling": {
+            "$ref": "#/components/schemas/PolicyVersionReference"
+          },
+          "role": {
+            "$ref": "#/components/schemas/Role"
+          },
+          "servicePrincipal": {
+            "$ref": "#/components/schemas/ServicePrincipalReference"
+          },
+          "template": {
+            "$ref": "#/components/schemas/ServiceRoleTemplateReference"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "permissionCeiling",
+          "role",
+          "servicePrincipal",
+          "template"
+        ],
+        "type": "object"
+      },
+      "ServiceLinkedRoleAccess": {
+        "additionalProperties": false,
+        "description": "Non-secret Account observation of one service-linked Role and its exact workload bindings. It carries no permission, session or service secret.",
+        "properties": {
+          "apiVersion": {
+            "type": "string"
+          },
+          "bindings": {
+            "items": {
+              "$ref": "#/components/schemas/WorkloadRoleBinding"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "relation": {
+            "$ref": "#/components/schemas/ServiceLinkedRole"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "bindings",
+          "kind",
+          "relation"
+        ],
+        "type": "object"
+      },
+      "ServicePrincipalReference": {
+        "additionalProperties": false,
+        "properties": {
+          "installationId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "principalId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "purpose": {
+            "$ref": "#/components/schemas/ServicePurpose"
+          }
+        },
+        "required": [
+          "installationId",
+          "principalId",
+          "purpose"
+        ],
+        "type": "object"
+      },
       "ServicePurpose": {
         "enum": [
           "IAM",
           "PAAS",
           "AUDIT",
           "INSTALLATION_VERIFIER"
+        ],
+        "type": "string"
+      },
+      "ServiceRoleTemplate": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "type": "string"
+          },
+          "contentDigest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/ServiceRoleTemplateSpec"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ServiceRoleTemplateStatus"
+          },
+          "version": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "contentDigest",
+          "id",
+          "kind",
+          "spec",
+          "status",
+          "version"
+        ],
+        "type": "object"
+      },
+      "ServiceRoleTemplateList": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ServiceRoleTemplate"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "kind": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "items",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "ServiceRoleTemplateReference": {
+        "additionalProperties": false,
+        "properties": {
+          "contentDigest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "version": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "contentDigest",
+          "id",
+          "version"
+        ],
+        "type": "object"
+      },
+      "ServiceRoleTemplateSpec": {
+        "additionalProperties": false,
+        "description": "Release-owned immutable service-role authority. Product, service purpose, fixed policy version and workload kinds are not Account-selected authorization inputs.",
+        "properties": {
+          "maxSessionDurationSeconds": {
+            "maximum": 43200,
+            "minimum": 60,
+            "type": "integer"
+          },
+          "policyVersion": {
+            "$ref": "#/components/schemas/PolicyVersionReference"
+          },
+          "product": {
+            "$ref": "#/components/schemas/ProductID"
+          },
+          "servicePurpose": {
+            "$ref": "#/components/schemas/ServicePurpose"
+          },
+          "workloadResourceKinds": {
+            "items": {
+              "$ref": "#/components/schemas/ResourceKind"
+            },
+            "maxItems": 16,
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "maxSessionDurationSeconds",
+          "policyVersion",
+          "product",
+          "servicePurpose",
+          "workloadResourceKinds"
+        ],
+        "type": "object"
+      },
+      "ServiceRoleTemplateStatus": {
+        "enum": [
+          "ACTIVE",
+          "RETIRED"
         ],
         "type": "string"
       },
@@ -24549,6 +24775,101 @@
           "requestId"
         ],
         "type": "object"
+      },
+      "WorkloadRoleBinding": {
+        "additionalProperties": false,
+        "description": "Immutable workload consent followed by one terminal revocation. The target Account, Role, template and resource are authority, not caller selectors.",
+        "oneOf": [
+          {
+            "properties": {
+              "resourceVersion": {
+                "const": 1
+              },
+              "revokedAt": false,
+              "status": {
+                "const": "ACTIVE"
+              }
+            }
+          },
+          {
+            "properties": {
+              "resourceVersion": {
+                "const": 2
+              },
+              "revokedAt": {
+                "format": "date-time",
+                "type": "string"
+              },
+              "status": {
+                "const": "REVOKED"
+              }
+            },
+            "required": [
+              "revokedAt"
+            ]
+          }
+        ],
+        "properties": {
+          "accountId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "apiVersion": {
+            "type": "string"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "resourceVersion": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "revokedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "roleId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "status": {
+            "$ref": "#/components/schemas/WorkloadRoleBindingStatus"
+          },
+          "template": {
+            "$ref": "#/components/schemas/ServiceRoleTemplateReference"
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "workload": {
+            "$ref": "#/components/schemas/ResourceReference"
+          }
+        },
+        "required": [
+          "accountId",
+          "apiVersion",
+          "createdAt",
+          "id",
+          "kind",
+          "resourceVersion",
+          "roleId",
+          "status",
+          "template",
+          "updatedAt",
+          "workload"
+        ],
+        "type": "object"
+      },
+      "WorkloadRoleBindingStatus": {
+        "enum": [
+          "ACTIVE",
+          "REVOKED"
+        ],
+        "type": "string"
       }
     },
     "securitySchemes": {

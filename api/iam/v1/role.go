@@ -26,6 +26,7 @@ const (
 	RoleActive                        RoleStatus     = "ACTIVE"
 	RoleDisabled                      RoleStatus     = "DISABLED"
 	RoleCustomerManaged               RoleManagement = "CUSTOMER"
+	RoleServiceLinked                 RoleManagement = "SERVICE_LINKED"
 	DefaultRoleSessionDurationSeconds uint32         = 3600
 	MinRoleSessionDurationSeconds     uint32         = 60
 	MaxRoleSessionDurationSeconds     uint32         = 43200
@@ -688,7 +689,8 @@ func validateRoleMetadata(name, description string, tags []RoleTag, duration uin
 }
 
 func ValidateRole(value Role) error {
-	if value.APIVersion != APIVersion || value.Kind != "Role" || value.Management != RoleCustomerManaged ||
+	if value.APIVersion != APIVersion || value.Kind != "Role" ||
+		(value.Management != RoleCustomerManaged && value.Management != RoleServiceLinked) ||
 		(value.Status != RoleActive && value.Status != RoleDisabled) {
 		return errors.New("role is invalid")
 	}
@@ -751,7 +753,7 @@ func ValidateRoleList(value RoleList) error {
 	}
 	var previous RoleID
 	for _, item := range value.Items {
-		if ValidateRole(item.Role) != nil || item.Role.AccountID != value.AccountID || item.Role.ID <= previous ||
+		if ValidateRole(item.Role) != nil || item.Role.Management != RoleCustomerManaged || item.Role.AccountID != value.AccountID || item.Role.ID <= previous ||
 			validateCapabilities(item.Capabilities, roleCapabilitySet(item.Role.ID)) != nil {
 			return errors.New("role list item is invalid")
 		}
@@ -768,7 +770,7 @@ func ValidateRoleList(value RoleList) error {
 }
 
 func ValidateRoleAccess(value RoleAccess) error {
-	if ValidateRole(value.Role) != nil || ValidateRoleTrustVersion(value.TrustVersion) != nil ||
+	if ValidateRole(value.Role) != nil || value.Role.Management != RoleCustomerManaged || ValidateRoleTrustVersion(value.TrustVersion) != nil ||
 		value.TrustVersion.AccountID != value.Role.AccountID || value.TrustVersion.RoleID != value.Role.ID ||
 		value.TrustVersion.ID != value.Role.CurrentTrustVersionID || value.TrustVersion.CreatedAt.Before(value.Role.CreatedAt) ||
 		value.TrustVersion.CreatedAt.After(value.Role.UpdatedAt) || value.PolicyAttachments == nil || len(value.PolicyAttachments) > 256 {

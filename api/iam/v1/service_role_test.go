@@ -2,7 +2,9 @@ package iamv1
 
 import (
 	"encoding/json"
+	"reflect"
 	"testing"
+	"time"
 )
 
 func serviceRoleTemplateForTest(t *testing.T) ServiceRoleTemplate {
@@ -24,6 +26,32 @@ func serviceRoleTemplateForTest(t *testing.T) ServiceRoleTemplate {
 	}
 	return ServiceRoleTemplate{APIVersion: APIVersion, Kind: "ServiceRoleTemplate", ID: "managedservice.installation-reader",
 		Version: 1, Spec: spec, ContentDigest: digest, Status: ServiceRoleTemplateActive}
+}
+
+func serviceLinkedRoleAccessForTest(t *testing.T) ServiceLinkedRoleAccess {
+	t.Helper()
+	template := serviceRoleTemplateForTest(t)
+	createdAt := time.Date(2026, 9, 30, 3, 0, 0, 0, time.UTC)
+	relation := ServiceLinkedRole{
+		APIVersion: APIVersion,
+		Kind:       "ServiceLinkedRole",
+		Role: Role{
+			APIVersion: APIVersion, Kind: "Role", ID: "role-managedservice-installation-reader", AccountID: "account-a",
+			Name: "ManagedServiceInstallationReader", Description: "Managed service installation reader", Tags: []RoleTag{},
+			Management: RoleServiceLinked, Status: RoleActive, MaxSessionDurationSeconds: 900,
+			ResourceVersion: 1, CurrentTrustVersionID: "trust-version-a", CreatedAt: createdAt, UpdatedAt: createdAt,
+		},
+		Template:          template.Reference(),
+		ServicePrincipal:  ServicePrincipalReference{InstallationID: "installation-a", PrincipalID: "service-paas-a", Purpose: ServicePaaS},
+		PermissionCeiling: template.Spec.PolicyVersion,
+	}
+	binding := WorkloadRoleBinding{
+		APIVersion: APIVersion, Kind: "WorkloadRoleBinding", ID: "binding-a", AccountID: relation.Role.AccountID,
+		RoleID: relation.Role.ID, Template: template.Reference(),
+		Workload: ResourceReference{Kind: ResourceServiceInstallation, ID: "service-installation-a"},
+		Status:   WorkloadRoleBindingActive, ResourceVersion: 1, CreatedAt: createdAt, UpdatedAt: createdAt,
+	}
+	return ServiceLinkedRoleAccess{APIVersion: APIVersion, Kind: "ServiceLinkedRoleAccess", Relation: relation, Bindings: []WorkloadRoleBinding{binding}}
 }
 
 func TestServiceRoleTemplateCanonicalizesReleaseOwnedAuthority(t *testing.T) {
@@ -94,5 +122,82 @@ func TestServiceRoleTemplateStrictDecodingAndBoundedList(t *testing.T) {
 	list.Items = []ServiceRoleTemplate{template, template}
 	if ValidateServiceRoleTemplateList(list) == nil {
 		t.Fatal("duplicate or unordered template list accepted")
+	}
+}
+
+func TestServiceLinkedRoleAndBindingPreserveExactConsent(t *testing.T) {
+	access := serviceLinkedRoleAccessForTest(t)
+	if ValidateServiceLinkedRoleAccess(access) != nil {
+		t.Fatal("valid service-linked role access rejected")
+	}
+	encoded, err := json.Marshal(access)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded ServiceLinkedRoleAccess
+	if json.Unmarshal(encoded, &decoded) != nil || !reflect.DeepEqual(decoded, access) {
+		t.Fatal("valid service-linked role access did not strictly round trip")
+	}
+
+	for name, mutate := range map[string]func(*ServiceLinkedRoleAccess){
+		"customer role": func(value *ServiceLinkedRoleAccess) { value.Relation.Role.Management = RoleCustomerManaged },
+		"wrong account": func(value *ServiceLinkedRoleAccess) { value.Bindings[0].AccountID = "account-b" },
+		"wrong role":    func(value *ServiceLinkedRoleAccess) { value.Bindings[0].RoleID = "role-b" },
+		"wrong template version": func(value *ServiceLinkedRoleAccess) {
+			value.Bindings[0].Template.Version++
+		},
+		"unknown purpose": func(value *ServiceLinkedRoleAccess) { value.Relation.ServicePrincipal.Purpose = "PROBE" },
+		"empty workload":  func(value *ServiceLinkedRoleAccess) { value.Bindings[0].Workload.ID = "" },
+		"forged revocation": func(value *ServiceLinkedRoleAccess) {
+			value.Bindings[0].Status = WorkloadRoleBindingRevoked
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := access
+			changed.Bindings = append([]WorkloadRoleBinding(nil), access.Bindings...)
+			mutate(&changed)
+			if ValidateServiceLinkedRoleAccess(changed) == nil {
+				t.Fatal("invalid service-linked role access accepted")
+			}
+		})
+	}
+
+	attacks := []string{
+		string(encoded[:len(encoded)-1]) + `,"accountId":"account-b"}`,
+		string(encoded[:len(encoded)-1]) + `,"kind":"Other"}`,
+	}
+	for _, attack := range attacks {
+		if json.Unmarshal([]byte(attack), &decoded) == nil {
+			t.Fatal("strict decoder accepted selector or duplicate identity")
+		}
+	}
+}
+
+func TestWorkloadRoleBindingTerminalStateIsExact(t *testing.T) {
+	createdAt := time.Date(2026, 9, 30, 3, 0, 0, 0, time.UTC)
+	revokedAt := createdAt.Add(time.Minute)
+	binding := WorkloadRoleBinding{
+		APIVersion: APIVersion, Kind: "WorkloadRoleBinding", ID: "binding-a", AccountID: "account-a", RoleID: "role-a",
+		Template: serviceRoleTemplateForTest(t).Reference(), Workload: ResourceReference{Kind: ResourceServiceInstallation, ID: "service-installation-a"},
+		Status: WorkloadRoleBindingRevoked, ResourceVersion: 2, CreatedAt: createdAt, UpdatedAt: revokedAt, RevokedAt: &revokedAt,
+	}
+	if ValidateWorkloadRoleBinding(binding) != nil {
+		t.Fatal("valid terminal workload binding rejected")
+	}
+	for name, mutate := range map[string]func(*WorkloadRoleBinding){
+		"old version":       func(value *WorkloadRoleBinding) { value.ResourceVersion = 1 },
+		"active terminal":   func(value *WorkloadRoleBinding) { value.Status = WorkloadRoleBindingActive },
+		"mismatched update": func(value *WorkloadRoleBinding) { value.UpdatedAt = value.UpdatedAt.Add(time.Second) },
+		"missing revocation": func(value *WorkloadRoleBinding) {
+			value.RevokedAt = nil
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := binding
+			mutate(&changed)
+			if ValidateWorkloadRoleBinding(changed) == nil {
+				t.Fatal("invalid terminal workload binding accepted")
+			}
+		})
 	}
 }

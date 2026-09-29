@@ -2932,18 +2932,18 @@ func TestRoleMetadataAndAccessAreSeparateFromLoginAuthority(t *testing.T) {
 		t.Fatal("valid closed role detail rejected")
 	}
 	for name, change := range map[string]func(*RoleAccess){
-		"foreign trust account":    func(v *RoleAccess) { v.TrustVersion.AccountID = "other" },
-		"foreign trust role":       func(v *RoleAccess) { v.TrustVersion.RoleID = "other" },
-		"unselected trust":         func(v *RoleAccess) { v.TrustVersion.ID = "other" },
-		"trust beyond revision":    func(v *RoleAccess) { v.TrustVersion.CreatedAt = now.Add(time.Second) },
-		"managed service selector": func(v *RoleAccess) { v.Role.Management = "SERVICE" },
-		"null tags":                func(v *RoleAccess) { v.Role.Tags = nil },
-		"duplicate tag key":        func(v *RoleAccess) { v.Role.Tags = []RoleTag{{"env", "a"}, {"env", "b"}} },
-		"control tag":              func(v *RoleAccess) { v.Role.Tags = []RoleTag{{"env", "a\u0085"}} },
-		"short duration":           func(v *RoleAccess) { v.Role.MaxSessionDurationSeconds = 59 },
-		"long duration":            func(v *RoleAccess) { v.Role.MaxSessionDurationSeconds = 43201 },
-		"missing capabilities":     func(v *RoleAccess) { v.Capabilities = nil },
-		"implicit attachments":     func(v *RoleAccess) { v.PolicyAttachments = nil },
+		"foreign trust account": func(v *RoleAccess) { v.TrustVersion.AccountID = "other" },
+		"foreign trust role":    func(v *RoleAccess) { v.TrustVersion.RoleID = "other" },
+		"unselected trust":      func(v *RoleAccess) { v.TrustVersion.ID = "other" },
+		"trust beyond revision": func(v *RoleAccess) { v.TrustVersion.CreatedAt = now.Add(time.Second) },
+		"service-linked role":   func(v *RoleAccess) { v.Role.Management = RoleServiceLinked },
+		"null tags":             func(v *RoleAccess) { v.Role.Tags = nil },
+		"duplicate tag key":     func(v *RoleAccess) { v.Role.Tags = []RoleTag{{"env", "a"}, {"env", "b"}} },
+		"control tag":           func(v *RoleAccess) { v.Role.Tags = []RoleTag{{"env", "a\u0085"}} },
+		"short duration":        func(v *RoleAccess) { v.Role.MaxSessionDurationSeconds = 59 },
+		"long duration":         func(v *RoleAccess) { v.Role.MaxSessionDurationSeconds = 43201 },
+		"missing capabilities":  func(v *RoleAccess) { v.Capabilities = nil },
+		"implicit attachments":  func(v *RoleAccess) { v.PolicyAttachments = nil },
 	} {
 		t.Run(name, func(t *testing.T) {
 			value := access
@@ -2975,6 +2975,11 @@ func TestRoleMetadataAndAccessAreSeparateFromLoginAuthority(t *testing.T) {
 	if ValidateRoleList(page) != nil {
 		t.Fatal("valid full metadata directory exceeds declared budget")
 	}
+	page.Items[0].Role.Management = RoleServiceLinked
+	if ValidateRoleList(page) == nil {
+		t.Fatal("customer role directory accepted service-linked authority")
+	}
+	page.Items[0].Role.Management = RoleCustomerManaged
 	page.Items[0].Role.Tags[len(page.Items[0].Role.Tags)-1].Value += "x"
 	if ValidateRoleList(page) == nil {
 		t.Fatal("aggregate role metadata budget was bypassed")

@@ -457,7 +457,9 @@ func enumSchemas() map[string][]string {
 		"PasswordExpiryMode":           {string(iamv1.PasswordExpiryChange), string(iamv1.PasswordExpiryAdminReset)},
 		"RoleStatus":                   {string(iamv1.RoleActive), string(iamv1.RoleDisabled)},
 		"AccessKeyStatus":              {string(iamv1.AccessKeyEnabled), string(iamv1.AccessKeyDisabled)},
-		"RoleManagement":               {string(iamv1.RoleCustomerManaged)},
+		"RoleManagement":               {string(iamv1.RoleCustomerManaged), string(iamv1.RoleServiceLinked)},
+		"ServiceRoleTemplateStatus":    {string(iamv1.ServiceRoleTemplateActive), string(iamv1.ServiceRoleTemplateRetired)},
+		"WorkloadRoleBindingStatus":    {string(iamv1.WorkloadRoleBindingActive), string(iamv1.WorkloadRoleBindingRevoked)},
 		"AccountStatus":                {string(iamv1.AccountActive), string(iamv1.AccountDisabled)},
 		"PrincipalType":                {string(iamv1.PrincipalUser), string(iamv1.PrincipalServiceAccount)},
 		"SubjectType":                  {string(iamv1.SubjectUser), string(iamv1.SubjectServiceAccount), string(iamv1.SubjectRole)},
@@ -524,6 +526,14 @@ func structContracts() map[string]reflect.Type {
 		"PolicyCompilation":                             openapi31.StructType[iamv1.PolicyCompilation](),
 		"PolicyResolvedStatement":                       openapi31.StructType[iamv1.PolicyResolvedStatement](),
 		"PolicyVersionReference":                        openapi31.StructType[iamv1.PolicyVersionReference](),
+		"ServiceRoleTemplateSpec":                       openapi31.StructType[iamv1.ServiceRoleTemplateSpec](),
+		"ServiceRoleTemplateReference":                  openapi31.StructType[iamv1.ServiceRoleTemplateReference](),
+		"ServiceRoleTemplate":                           openapi31.StructType[iamv1.ServiceRoleTemplate](),
+		"ServiceRoleTemplateList":                       openapi31.StructType[iamv1.ServiceRoleTemplateList](),
+		"ServicePrincipalReference":                     openapi31.StructType[iamv1.ServicePrincipalReference](),
+		"ServiceLinkedRole":                             openapi31.StructType[iamv1.ServiceLinkedRole](),
+		"WorkloadRoleBinding":                           openapi31.StructType[iamv1.WorkloadRoleBinding](),
+		"ServiceLinkedRoleAccess":                       openapi31.StructType[iamv1.ServiceLinkedRoleAccess](),
 		"UserPermissionBoundary":                        openapi31.StructType[iamv1.UserPermissionBoundary](),
 		"SetUserPermissionBoundaryRequest":              openapi31.StructType[iamv1.SetUserPermissionBoundaryRequest](),
 		"RemoveUserPermissionBoundaryRequest":           openapi31.StructType[iamv1.RemoveUserPermissionBoundaryRequest](),
@@ -1114,6 +1124,25 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 }
 
 func applySemanticOverlays(schemas object) {
+	schemas["ServiceRoleTemplateSpec"].(object)["description"] = "Release-owned immutable service-role authority. Product, service purpose, fixed policy version and workload kinds are not Account-selected authorization inputs."
+	schemas["ServiceRoleTemplateSpec"].(object)["properties"].(object)["workloadResourceKinds"].(object)["minItems"] = 1
+	schemas["ServiceRoleTemplateSpec"].(object)["properties"].(object)["workloadResourceKinds"].(object)["maxItems"] = iamv1.MaxServiceRoleTemplateWorkloadKinds
+	schemas["ServiceRoleTemplateSpec"].(object)["properties"].(object)["maxSessionDurationSeconds"].(object)["minimum"] = iamv1.MinRoleSessionDurationSeconds
+	schemas["ServiceRoleTemplateSpec"].(object)["properties"].(object)["maxSessionDurationSeconds"].(object)["maximum"] = iamv1.MaxRoleSessionDurationSeconds
+	for _, name := range []string{"ServiceRoleTemplateReference", "ServiceRoleTemplate"} {
+		schemas[name].(object)["properties"].(object)["version"].(object)["minimum"] = 1
+		schemas[name].(object)["properties"].(object)["version"].(object)["maximum"] = uint64(9007199254740991)
+	}
+	schemas["ServiceRoleTemplateList"].(object)["properties"].(object)["items"].(object)["maxItems"] = iamv1.DirectoryPageSize
+	schemas["ServiceLinkedRole"].(object)["description"] = "Target-Account consent relation between a SERVICE_LINKED Role, an exact release template and one registered installation service principal. It is not a service credential or generic platform grant."
+	schemas["ServiceLinkedRole"].(object)["allOf"] = []any{object{"properties": object{"role": object{"properties": object{"management": object{"const": string(iamv1.RoleServiceLinked)}}}}}}
+	schemas["WorkloadRoleBinding"].(object)["description"] = "Immutable workload consent followed by one terminal revocation. The target Account, Role, template and resource are authority, not caller selectors."
+	schemas["WorkloadRoleBinding"].(object)["oneOf"] = []any{
+		object{"properties": object{"status": object{"const": string(iamv1.WorkloadRoleBindingActive)}, "resourceVersion": object{"const": 1}, "revokedAt": false}},
+		object{"required": []string{"revokedAt"}, "properties": object{"status": object{"const": string(iamv1.WorkloadRoleBindingRevoked)}, "resourceVersion": object{"const": 2}, "revokedAt": object{"type": "string", "format": "date-time"}}},
+	}
+	schemas["ServiceLinkedRoleAccess"].(object)["description"] = "Non-secret Account observation of one service-linked Role and its exact workload bindings. It carries no permission, session or service secret."
+	schemas["ServiceLinkedRoleAccess"].(object)["properties"].(object)["bindings"].(object)["maxItems"] = iamv1.DirectoryPageSize
 	schemas["UserPasswordResetCompletion"].(object)["description"] = "Non-secret confirmation of one committed administrator reset, not password-input equality, current credential validity, Audit delivery or replay authority. Runtime validation requires a distinct actor and target, resultingResourceVersion = expectedResourceVersion + 1, and the original UTC microsecond fact time. Lookup must bind current Account/actor authorization and the exact original target/request/version; schema validation alone proves neither provenance nor completion."
 	schemas["PasswordRequirements"].(object)["description"] = "Current self-only password rules, measured in Unicode code points and UTF-8 bytes. An observation, never a write permit; final replacement rechecks current qualification and settings."
 	schemas["PasswordRequirements"].(object)["oneOf"] = []any{

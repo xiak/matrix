@@ -56,6 +56,10 @@ ServiceRoleTemplate 定义注册服务主体、用途、允许权限和生命周
 
 当前后端同时登记一个 release-owned `managedservice.installation-reader` 模板及其精确 `system.managedservice-installation-reader` 策略版本。策略只允许 `managedservice.service-installation.read`，资源上限只覆盖当前 Account 内的 `SERVICE_INSTALLATION`，模板只接受 `PAAS` purpose、该 workload kind 和最长十五分钟会话；模板查询必须提交完整 `{id,version,contentDigest}`，不能仅按 ID 跟随当前头。注册表返回隔离副本，caller 不能修改进程内权威。managedservice Profile revision 2 只为该安装读取动作增加 ROLE，原 revision 1 继续按原摘要归档且不获得 ROLE；其他 managedservice 动作仍只允许 USER，ServiceIdentity 也不能直接求值。既有 `PaaSDeveloper/PaaSViewer` 默认版本不因新主体能力被迁移或隐式扩权，服务模板使用独立的新系统策略。该模板尚没有公开目录、同意关系或发行入口，任何服务来源仍无法取得 RoleSession；完成账号同意和真实产品 PEP 后，才可把本片称为可用服务角色。
 
+后继公共契约已经冻结 `Role.management=SERVICE_LINKED`、非秘密 `ServicePrincipalReference`、`ServiceLinkedRole`、`WorkloadRoleBinding` 及聚合观察 `ServiceLinkedRoleAccess` 的字段和严格编码。binding 只允许创建时ACTIVE/revision 1及一次终态REVOKED/revision 2，精确绑定Account、Role、template版本/摘要和workload `{kind,id}`；关系同时保留安装、服务principal、purpose及不可变PolicyVersion上限。普通客户Role目录/详情明确拒绝`SERVICE_LINKED`，不能借既有更新、trust、附件或boundary入口修改系统关系；组件schema与运行校验共同拒绝换Account/Role/template、未知purpose、空workload、伪终态及重复字段。本片仍没有SQL、northbound路径或同意事务，因此只证明稳定数据契约，不证明租户已经能够授权服务。
+
+模板目录与账号同意必须在API/UI上分层：`ServiceRoleTemplate.status`只表示平台发布的模板版本能否用于后继同意/发行，不能显示成目标Account已授权；`ServiceLinkedRole`和`WorkloadRoleBinding.status`才是该Account的同意及资源绑定状态。首个northbound目录仍由IAM向当前USER提供只读、非秘密模板/关系观察，实际绑定/解绑由managedservice面向真实`ServiceInstallation`的产品入口编排，浏览器不直接调用内部双凭据或服务会话入口。UI可以展示template ID/version/digest、product/purpose、workload kind、service principal、固定PolicyVersion和目标资源语义，但在bind/unbind/assume契约及真实后端固定前必须保持预览/禁用，不以模板ACTIVE渲染“已授权”。
+
 1. 产品 owner 在发布物中提供不可变、版本化的 `ServiceRoleTemplate`。模板至少绑定稳定 template ID、产品、服务 purpose、版本/摘要、允许的目标资源种类、可授权限上限和生命周期；它与普通 Policy 默认版本分离，不能由租户或请求方上传、改写或选择未登记版本。
 2. 当前账号内持有明确管理 Action 的 USER 对模板执行显式同意，IAM 在同一事务中创建或确认一个 `SERVICE_LINKED` Role、模板版本关系、权限上限及不可变事实。显示名不参与安全身份；等值重放返回同一关系，变体冲突。普通角色 API 不能修改其 trust、扩大权限、换 template 或把它转换为 customer-managed Role。
 3. 已认证 ServiceIdentity 只能以自身真实 installation、principal 和 purpose 请求承担目标账号中与其模板精确匹配的 Role。目标账号、Role 和 workload 必须来自已验证关系而不是通用 header/body selector；当前凭据失效、同意撤销、Role/账号停用、模板退役或 purpose 不匹配在下一次受保护请求失败关闭。

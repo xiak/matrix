@@ -1794,6 +1794,43 @@ func TestRoleManagementRequestsKeepSelectorsAndDefaultsClosed(t *testing.T) {
 	}
 }
 
+func TestServiceRoleConsentSchemasMatchClosedObjects(t *testing.T) {
+	api := loadIAMOpenAPI(t)
+	access := serviceLinkedRoleAccessForTest(t)
+	values := map[string]any{
+		"ServiceRoleTemplate":     serviceRoleTemplateForTest(t),
+		"ServiceLinkedRole":       access.Relation,
+		"WorkloadRoleBinding":     access.Bindings[0],
+		"ServiceLinkedRoleAccess": access,
+	}
+	for name, value := range values {
+		t.Run(name, func(t *testing.T) {
+			encoded, err := json.Marshal(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+			instance, err := jsonschema.UnmarshalJSON(bytes.NewReader(encoded))
+			if err != nil || compileIAMOpenAPISchema(t, api, name).Validate(instance) != nil {
+				t.Fatal("valid consent object disagrees with generated schema")
+			}
+		})
+	}
+
+	encoded, err := json.Marshal(access)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, attack := range []string{
+		strings.Replace(string(encoded), `"management":"SERVICE_LINKED"`, `"management":"CUSTOMER"`, 1),
+		strings.Replace(string(encoded), `"status":"ACTIVE","resourceVersion":1`, `"status":"REVOKED","resourceVersion":1`, 1),
+	} {
+		instance, decodeErr := jsonschema.UnmarshalJSON(strings.NewReader(attack))
+		if decodeErr == nil && compileIAMOpenAPISchema(t, api, "ServiceLinkedRoleAccess").Validate(instance) == nil {
+			t.Fatal("generated schema accepted a forged consent relationship")
+		}
+	}
+}
+
 func TestRoleTrustSchemasKeepCarrierAdmissionSeparateFromIdentityPolicies(t *testing.T) {
 	api := loadIAMOpenAPI(t)
 	schema := compileIAMOpenAPISchema(t, api, "TrustPolicyDocument")
