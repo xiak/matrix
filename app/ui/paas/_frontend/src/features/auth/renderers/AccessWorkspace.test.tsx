@@ -1044,12 +1044,13 @@ describe("CAM-style access workspace", () => {
     expect(within(templateDirectory).getByText("当前账号未授权")).toBeTruthy();
     expect(screen.getByText(/普通服务角色仍在角色列表中单独管理/)).toBeTruthy();
 
-    const template = screen.getByRole("button", { name: "Application operations review" });
+    const template = screen.getByRole("button", { name: "托管服务安装访问" });
     await user.click(template);
     expect(screen.getByRole("heading", { level: 2, name: "服务授权模板" })).toBe(document.activeElement);
     expect(screen.getAllByText("preview.paas.service").length).toBeGreaterThan(0);
-    expect(screen.getByText("PreviewServiceRoleForApplicationOperationsRead")).toBeTruthy();
+    expect(screen.getByText("PreviewServiceRoleForManagedServiceInstallationRead")).toBeTruthy();
     expect(screen.getByText("目标账号").nextElementSibling?.textContent).toBe("org-xiak");
+    expect(screen.getByText("发起授权的产品资源").nextElementSibling?.textContent).toBe("SERVICE_INSTALLATION:service-installation-example");
     expect(screen.getByText(/PipelineDeploymentRole 是普通工作负载角色/)).toBeTruthy();
     expect(screen.getByText(/不引用租户可编辑策略/)).toBeTruthy();
 
@@ -1057,17 +1058,15 @@ describe("CAM-style access workspace", () => {
     await user.click(review);
     expect(screen.getByRole("heading", { level: 2, name: "审阅服务授权" })).toBe(document.activeElement);
     expect(screen.getByRole("heading", { level: 3, name: "确认服务身份与单一用途" })).toBeTruthy();
-    expect(screen.getByText(/必须同时校验操作者、目标账号与角色、实际工作负载和 service purpose/)).toBeTruthy();
+    expect(screen.getByText(/必须同时校验操作者、目标账号与角色、实际工作负载、service purpose 和发起授权的产品资源/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "下一步" }));
-    expect(screen.getByText("PreviewPaaSOperationsRead · v1")).toBeTruthy();
+    expect(screen.getByText("PreviewManagedServiceInstallationRead · v1")).toBeTruthy();
     const statement = screen.getByRole("region", { name: "声明 1" });
-    expect(within(statement).getByText("paas.application.read")).toBeTruthy();
-    expect(within(statement).getByText("APPLICATION")).toBeTruthy();
-    expect(within(statement).getByText("APPLICATION").parentElement?.textContent).toContain("精确 ID");
-    expect(within(statement).getByText("application-example")).toBeTruthy();
+    expect(within(statement).getByText("managedservice.service-installation.read")).toBeTruthy();
+    expect(within(statement).getByText("SERVICE_INSTALLATION")).toBeTruthy();
+    expect(within(statement).getByText("SERVICE_INSTALLATION").parentElement?.textContent).toContain("精确 ID");
+    expect(within(statement).getByText("service-installation-example")).toBeTruthy();
     expect(within(statement).getByText("无条件限制")).toBeTruthy();
-    expect(within(screen.getByRole("region", { name: "声明 2" })).getByText("paas.deployment.read")).toBeTruthy();
-    expect(within(screen.getByRole("region", { name: "声明 3" })).getByText("paas.operation.read")).toBeTruthy();
     expect(screen.getByText(/服务主体、资源 ID 和模板修订未在 IAM 发布/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "下一步" }));
     const authorize = screen.getByRole("button", { name: "授权服务（未接入）" }) as HTMLButtonElement;
@@ -1082,7 +1081,7 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: "结束审阅" }));
     expect(screen.getByRole("button", { name: "审阅服务授权" })).toBe(document.activeElement);
     await user.click(screen.getByRole("button", { name: "返回服务授权" }));
-    expect(screen.getByRole("button", { name: "Application operations review" })).toBe(document.activeElement);
+    expect(screen.getByRole("button", { name: "托管服务安装访问" })).toBe(document.activeElement);
     await user.click(screen.getByRole("button", { name: "返回角色列表" }));
     await waitFor(() => expect(screen.getByRole("button", { name: "服务授权" })).toBe(document.activeElement));
   });
@@ -1096,13 +1095,13 @@ describe("CAM-style access workspace", () => {
       }) } }));
     } });
     await user.click(await screen.findByRole("button", { name: "服务授权" }));
-    await user.click(screen.getByRole("button", { name: "Application operations review" }));
+    await user.click(screen.getByRole("button", { name: "托管服务安装访问" }));
     expect(screen.queryByRole("button", { name: /打开策略详情/ })).toBeNull();
     expect(screen.getByText(/不引用租户可编辑策略/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "审阅服务授权" }));
     await user.click(screen.getByRole("button", { name: "下一步" }));
-    expect(screen.getByText("PreviewPaaSOperationsRead · v1")).toBeTruthy();
-    expect(screen.getByText("paas.application.read")).toBeTruthy();
+    expect(screen.getByText("PreviewManagedServiceInstallationRead · v1")).toBeTruthy();
+    expect(screen.getByText("managedservice.service-installation.read")).toBeTruthy();
     expect(screen.queryByText("iam:*")).toBeNull();
   });
   it("does not treat removal of an ordinary tenant policy as service-template revocation", async () => {
@@ -1110,12 +1109,12 @@ describe("CAM-style access workspace", () => {
       extension.transact((source) => ({ workspace: { ...source, policies: source.policies.filter((policy) => policy.id !== "policy-delivery") } }));
     } });
     await user.click(await screen.findByRole("button", { name: "服务授权" }));
-    expect(within(screen.getByRole("table", { name: "服务授权模板" })).getByText("PreviewPaaSOperationsRead")).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "Application operations review" }));
+    expect(within(screen.getByRole("table", { name: "服务授权模板" })).getByText("PreviewManagedServiceInstallationRead")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "托管服务安装访问" }));
     await user.click(screen.getByRole("button", { name: "审阅服务授权" }));
     await user.click(screen.getByRole("button", { name: "下一步" }));
-    expect(screen.getByText("paas.application.read")).toBeTruthy();
-    expect(screen.queryByText("paas:*")).toBeNull();
+    expect(screen.getByText("managedservice.service-installation.read")).toBeTruthy();
+    expect(screen.queryByText("managedservice:*")).toBeNull();
   });
   it("separates role trust admission, grants and boundary without claiming effective access", async () => {
     await open("roles", { entityId: "role-log-reviewer", seed: async (extension) => {

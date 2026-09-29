@@ -68,14 +68,14 @@ const previewAuthorizationProfiles: AuthorizationProfileEntry[] = [
   {
     profile: {
       product: "managedservice", revision: 1, callingService: "PAAS", actions: [
-        { action: "managedservice.installation.create", resourceKind: "SERVICE_INSTALLATION", scope: "TENANT",
+        { action: "managedservice.service-installation.create", resourceKind: "SERVICE_INSTALLATION", scope: "TENANT",
           resourceShapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_CREATE" }],
           conditions: [
             { key: "iam.account-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" },
             { key: "iam.current-time", valueType: "TIME", source: "IAM_TRANSACTION_TIME" },
             { key: "iam.principal-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" }
           ], resultResourceKind: "SERVICE_INSTALLATION" },
-        { action: "managedservice.installation.read", resourceKind: "SERVICE_INSTALLATION", scope: "TENANT",
+        { action: "managedservice.service-installation.read", resourceKind: "SERVICE_INSTALLATION", scope: "TENANT",
           resourceShapes: [{ mode: "INSTANCE", prefixAllowed: false }, { mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_LIST" }],
           conditions: [
             { key: "iam.account-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" },

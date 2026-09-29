@@ -45,6 +45,15 @@ describe("preview adapter for the fixed group contract", () => {
 });
 
 describe("isolated authorization catalog preview", () => {
+  it("uses the current managed-service installation Action namespace", async () => {
+    const directory = await previewAccountRepository.listAuthorizationProfiles(previewCredential);
+    const managedService = directory.items.find((entry) => entry.profile.product === "managedservice")?.profile;
+    expect(managedService).toBeTruthy();
+    expect(managedService?.actions.map((action) => ({ action: action.action, kind: action.resourceKind, shapes: action.resourceShapes }))).toEqual([
+      { action: "managedservice.service-installation.create", kind: "SERVICE_INSTALLATION", shapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_CREATE" }] },
+      { action: "managedservice.service-installation.read", kind: "SERVICE_INSTALLATION", shapes: [{ mode: "INSTANCE", prefixAllowed: false }, { mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_LIST" }] }
+    ]);
+  });
   it("offers the service-review sample's exact PaaS read actions without inventing prefix support", async () => {
     const directory = await previewAccountRepository.listAuthorizationProfiles(previewCredential);
     const paas = directory.items.find((entry) => entry.profile.product === "paas")?.profile;

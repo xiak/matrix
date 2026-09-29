@@ -2071,7 +2071,7 @@
     "title": "服务授权",
     "subtitle": "从 IAM 观察平台模板与账号授权边界的隔离 MOCK 体验",
     "previewOnly": "未接入后端",
-    "boundary": "产品接入、服务身份和客户授权是三个独立边界。真实创建或撤销必须从对应云产品的具体资源入口发起，IAM 只读观察模板及服务关联角色状态。本页仍是独立 MOCK：动作名称参照现行 PaaS 目录，但服务主体、目标资源及修订号均为示意值；不创建角色、不签发凭据、不写入 IAM。",
+    "boundary": "产品接入、服务身份和客户授权是三个独立边界。真实创建或撤销必须从对应云产品的具体资源入口发起，IAM 只读观察模板及服务关联角色状态。本页仍是独立 MOCK：动作名称参照当前 Matrix 权限目录，但服务主体、目标资源及修订号均为示意值；不创建角色、不签发凭据、不写入 IAM。",
     "directory": {
       "title": "可审阅的服务授权模板",
       "hint": "模板由云产品与 IAM 平台受控发布；租户管理员从具体产品资源入口发起同意，在 IAM 中只读审阅，不能自行注册产品 Action。",
@@ -2093,7 +2093,7 @@
       "ordinaryRole": "现有 PipelineDeploymentRole 是普通工作负载角色，不是本服务授权的既有实例；本页不会把普通角色或租户策略冒充为已发布的服务模板。",
       "review": "审阅服务授权"
     },
-    "template": { "purpose": "在示例资源上只读查看应用、部署与操作" },
+    "template": { "name": "托管服务安装访问", "purpose": "允许 PaaS 服务只读一个托管服务安装" },
     "fields": {
       "product": "云产品",
       "purpose": "业务用途",
@@ -2103,7 +2103,8 @@
       "targetAccount": "目标账号",
       "templateRevision": "模板修订",
       "servicePrincipal": "服务主体",
-      "roleName": "预定义角色名"
+      "roleName": "预定义角色名",
+      "targetResource": "发起授权的产品资源"
     },
     "states": { "illustrative": "示意模板 · 未发布", "notAuthorized": "当前账号未授权" },
     "progress": "服务授权审阅进度",
@@ -2111,11 +2112,11 @@
     "steps": { "identity": "服务身份与用途", "permissions": "权限快照", "consent": "同意与生命周期" },
     "review": {
       "title": "审阅服务授权",
-      "identity": { "title": "确认服务身份与单一用途", "lead": "正式授权对象应是经过登记的服务主体在明确业务用途下对目标账号的访问请求。本页主体只是示意值，不是已受信服务，也不是普通用户凭据。", "passRoleBoundary": "未来 PassRole／承担角色必须同时校验操作者、目标账号与角色、实际工作负载和 service purpose；当前 UX 示例没有工作负载证明，因此不表示服务已经可以承担该角色。" },
-      "permissions": { "title": "核对示例权限范围", "lead": "逐条核对已登记的精确动作、资源种类、匹配方式和条件。示例 ID 只说明范围，不会获得真实资源权限。", "illustrative": "只读示例", "statement": "声明 {number}", "allow": "允许", "deny": "拒绝", "actionPatterns": "精确动作", "resources": "资源范围", "conditions": "请求条件", "noConditions": "无条件限制", "match": { "EXACT": "精确 ID", "PREFIX_IN_AUTHORITY": "当前权威范围内的前缀", "ANY_IN_AUTHORITY": "当前权威范围内全部" }, "snapshotBoundary": "这里只演示 PaaS 已声明的只读动作与资源形状；示例服务主体、资源 ID 和模板修订未在 IAM 发布。真实授权仍须由受控模板、内容摘要、目标账号同意及工作负载绑定共同约束。" },
+      "identity": { "title": "确认服务身份与单一用途", "lead": "正式授权对象应是经过登记的服务主体，为一个明确用途请求访问目标账号中的准确产品资源。本页主体和资源均为示意值，不是已受信服务或既有授权。", "passRoleBoundary": "未来 PassRole／承担角色必须同时校验操作者、目标账号与角色、实际工作负载、service purpose 和发起授权的产品资源；当前 UX 示例没有工作负载证明，因此不表示服务已经可以承担该角色。" },
+      "permissions": { "title": "核对示例权限范围", "lead": "逐条核对已登记的精确动作、资源种类、匹配方式和条件。示例 ID 只说明范围，不会获得真实资源权限。", "illustrative": "只读示例", "statement": "声明 {number}", "allow": "允许", "deny": "拒绝", "actionPatterns": "精确动作", "resources": "资源范围", "conditions": "请求条件", "noConditions": "无条件限制", "match": { "EXACT": "精确 ID", "PREFIX_IN_AUTHORITY": "当前权威范围内的前缀", "ANY_IN_AUTHORITY": "当前权威范围内全部" }, "snapshotBoundary": "这里只演示当前 Matrix 目录中已声明的托管服务安装只读动作与资源形状；示例服务主体、资源 ID 和模板修订未在 IAM 发布。真实授权仍须由受控模板、内容摘要、目标账号同意及工作负载绑定共同约束。" },
       "consent": {
         "title": "确认客户同意与撤销边界",
-        "lead": "只有客户在对应产品资源入口明确同意后，平台才能创建面向该账号和用途的服务关联角色；IAM 只读观察该结果，当前 MOCK 不执行此动作。",
+        "lead": "只有客户从准确的托管服务安装资源入口明确同意后，平台才能创建面向该账号、产品资源和用途的服务关联角色；IAM 只读观察该结果，当前 MOCK 不执行此动作。",
         "items": {
           "explicit": { "title": "显式客户同意", "hint": "目录可见、产品安装和服务身份认证均不替代当前账号的授权。" },
           "shortTerm": { "title": "仅使用短期会话", "hint": "服务未来通过承担专用角色获取受限临时凭据，不接收客户长期密钥。" },

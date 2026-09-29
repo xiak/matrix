@@ -14,27 +14,23 @@ type PreviewView = "directory" | "detail" | "review";
 // sample permission content is separate from tenant-editable MOCK policies.
 // Neither these identities nor the snapshot revision are a published contract.
 const previewTemplate = {
-  id: "preview.service-role-template.application-operations-read.v1",
-  product: "Application operations review",
+  id: "preview.service-role-template.managed-service-installation-read.v1",
   servicePrincipal: "preview.paas.service",
-  roleName: "PreviewServiceRoleForApplicationOperationsRead",
-  purpose: "application-operations-read",
+  roleName: "PreviewServiceRoleForManagedServiceInstallationRead",
+  purpose: "managed-service-installation-read",
   revision: 1,
-  snapshotName: "PreviewPaaSOperationsRead",
+  snapshotName: "PreviewManagedServiceInstallationRead",
+  targetResourceId: "service-installation-example",
 } as const;
 
 const stageIds = ["identity", "permissions", "consent"] as const;
 
-// Only already-declared PaaS read Actions are used here. Exact sample IDs
-// illustrate the resource boundary; they do not grant access to those IDs.
+// Only an already-declared managed-service read Action is used here. The exact
+// sample ID illustrates the resource boundary; it grants no access to that ID.
 const previewSnapshot: AccountPolicyDocument = {
   languageVersion: "1", scope: "TENANT", statements: [
-    { sid: "read-application", effect: "ALLOW", actions: ["paas.application.read"],
-      resources: [{ kind: "APPLICATION", match: "EXACT", id: "application-example" }] },
-    { sid: "read-deployment", effect: "ALLOW", actions: ["paas.deployment.read"],
-      resources: [{ kind: "DEPLOYMENT", match: "EXACT", id: "deployment-example" }] },
-    { sid: "read-operation", effect: "ALLOW", actions: ["paas.operation.read"],
-      resources: [{ kind: "OPERATION", match: "EXACT", id: "operation-example" }] }
+    { sid: "read-service-installation", effect: "ALLOW", actions: ["managedservice.service-installation.read"],
+      resources: [{ kind: "SERVICE_INSTALLATION", match: "EXACT", id: previewTemplate.targetResourceId }] }
   ]
 };
 
@@ -48,7 +44,7 @@ function TemplateDirectory({ triggerRef, onOpen }: {
     <Table aria-label={t("directory.tableLabel")} mobileLayout="stack">
       <thead><tr><th scope="col">{t("fields.product")}</th><th scope="col">{t("fields.purpose")}</th><th scope="col">{t("fields.policySnapshot")}</th><th scope="col">{t("fields.templateState")}</th><th scope="col">{t("fields.accountState")}</th></tr></thead>
       <tbody><tr>
-        <td data-label={t("fields.product")}><button className={styles.link} ref={triggerRef} onClick={onOpen}>{previewTemplate.product}</button><small><code>{previewTemplate.id}</code></small></td>
+        <td data-label={t("fields.product")}><button className={styles.link} ref={triggerRef} onClick={onOpen}>{t("template.name")}</button><small><code>{previewTemplate.id}</code></small></td>
         <td data-label={t("fields.purpose")}>{t("template.purpose")}<small><code>{previewTemplate.servicePrincipal}</code></small></td>
         <td data-label={t("fields.policySnapshot")}>{previewTemplate.snapshotName}<small>v{previewTemplate.revision} · {t("previewOnly")}</small></td>
         <td data-label={t("fields.templateState")}><Badge status="warning">{t("states.illustrative")}</Badge></td>
@@ -66,13 +62,14 @@ function TemplateDetail({ accountId, reviewRef, onReview }: {
 }) {
   const t = useTranslations("ServiceAuthorizationPreview");
   return <div className={styles.stack}>
-    <div className={styles.sectionHeading}><div><span>{t("detail.eyebrow")}</span><h3>{previewTemplate.product}</h3><p>{t("detail.hint")}</p></div><div className={styles.stateBadges}><Badge status="warning">{t("states.illustrative")}</Badge><Badge status="neutral">{t("states.notAuthorized")}</Badge></div></div>
+    <div className={styles.sectionHeading}><div><span>{t("detail.eyebrow")}</span><h3>{t("template.name")}</h3><p>{t("detail.hint")}</p></div><div className={styles.stateBadges}><Badge status="warning">{t("states.illustrative")}</Badge><Badge status="neutral">{t("states.notAuthorized")}</Badge></div></div>
     <dl className={styles.facts}>
       <div><dt>{t("fields.targetAccount")}</dt><dd><code>{accountId}</code></dd></div>
       <div><dt>{t("fields.templateRevision")}</dt><dd>v{previewTemplate.revision}</dd></div>
       <div><dt>{t("fields.servicePrincipal")}</dt><dd><code>{previewTemplate.servicePrincipal}</code></dd></div>
       <div><dt>{t("fields.roleName")}</dt><dd><code>{previewTemplate.roleName}</code></dd></div>
       <div><dt>{t("fields.purpose")}</dt><dd><code>{previewTemplate.purpose}</code></dd></div>
+      <div><dt>{t("fields.targetResource")}</dt><dd><code>SERVICE_INSTALLATION:{previewTemplate.targetResourceId}</code></dd></div>
     </dl>
     <div className={styles.detailGrid}>
       <Card><Card.Header className={styles.cardHeading}><KeyRound aria-hidden="true" /><div><span>{t("detail.trustLabel")}</span><h4>{t("detail.trustTitle")}</h4></div></Card.Header><Card.Body className={styles.cardBody}><p>{t("detail.trustHint")}</p><code>{previewTemplate.servicePrincipal}</code></Card.Body></Card>
@@ -100,7 +97,7 @@ function ConsentReview({ accountId, stage, onStageChange, onClose }: {
       <Card.Header className={styles.cardHeading}>{stage === 0 ? <KeyRound aria-hidden="true" /> : stage === 1 ? <ShieldCheck aria-hidden="true" /> : <Boxes aria-hidden="true" />}<div><span>{t("stageLabel", { current: stage + 1, total: stageIds.length })}</span><h3>{t(`review.${currentStage}.title`)}</h3></div></Card.Header>
       <Card.Body className={styles.cardBody}>
         <p className={styles.lead}>{t(`review.${currentStage}.lead`)}</p>
-        {stage === 0 ? <><dl className={styles.facts}><div><dt>{t("fields.targetAccount")}</dt><dd><code>{accountId}</code></dd></div><div><dt>{t("fields.servicePrincipal")}</dt><dd><code>{previewTemplate.servicePrincipal}</code></dd></div><div><dt>{t("fields.purpose")}</dt><dd><code>{previewTemplate.purpose}</code></dd></div><div><dt>{t("fields.roleName")}</dt><dd><code>{previewTemplate.roleName}</code></dd></div></dl><Alert status="info">{t("review.identity.passRoleBoundary")}</Alert></> : null}
+        {stage === 0 ? <><dl className={styles.facts}><div><dt>{t("fields.targetAccount")}</dt><dd><code>{accountId}</code></dd></div><div><dt>{t("fields.targetResource")}</dt><dd><code>SERVICE_INSTALLATION:{previewTemplate.targetResourceId}</code></dd></div><div><dt>{t("fields.servicePrincipal")}</dt><dd><code>{previewTemplate.servicePrincipal}</code></dd></div><div><dt>{t("fields.purpose")}</dt><dd><code>{previewTemplate.purpose}</code></dd></div><div><dt>{t("fields.roleName")}</dt><dd><code>{previewTemplate.roleName}</code></dd></div></dl><Alert status="info">{t("review.identity.passRoleBoundary")}</Alert></> : null}
         {stage === 1 ? <><div className={styles.permissionReference}><div><span>{t("fields.policySnapshot")}</span><strong>{previewTemplate.snapshotName} · v{previewTemplate.revision}</strong></div><Badge>{t("review.permissions.illustrative")}</Badge></div>
           <div className={styles.permissionStatements}>{statements.map((statement, index) => <section aria-label={t("review.permissions.statement", { number: index + 1 })} className={styles.permissionStatement} key={index}>
             <div className={styles.permissionStatementHeading}><strong>{t("review.permissions.statement", { number: index + 1 })}</strong><Badge status={statement.effect === "DENY" ? "danger" : "success"}>{t(`review.permissions.${statement.effect === "DENY" ? "deny" : "allow"}`)}</Badge></div>
