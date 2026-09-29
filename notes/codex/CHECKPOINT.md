@@ -6,8 +6,8 @@
 - Updated: 2026-09-29
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `75095727`
-- Pushed documentation head: `49db509d`
+- Pushed UI source: `cf11b8cb`
+- Pushed documentation head: `1e070738`
 
 ## Authoritative route
 
@@ -39,12 +39,15 @@ final intersection, and classifies evidence as `MATCH`, `NOT_MATCH`,
 `CONTEXT_MISSING` or `CONTRACT_UNAVAILABLE`. Request-context guidance remains
 truthful: source IP and time are operator-constructed preview facts, browser and
 forwarded-header values are not trusted, and the UI does not claim to simulate
-a gateway, proxy or product PEP. These are diagnostics, not a permit. No LIVE
-condition key or unpushed IAM network-context work was adopted. The existing
-LIVE member Role self-service and independent MOCK Role journey remain intact.
-Exact behavior, verification evidence and replacement rules belong to the
-linked FEAT owners. Real IAM-process Role/network browser, installation and
-release acceptance remain open.
+a gateway, proxy or product PEP. The product-onboarding MOCK now also exposes
+the immutable Profile reference and digest, condition fact sources, the calling
+service's PEP responsibility and an explicit unverified runtime-evidence state.
+These are diagnostics, not a permit or published registry state. No LIVE
+condition key, Profile publication or unpushed IAM network-context work was
+adopted. The existing LIVE member Role self-service and independent MOCK Role
+journey remain intact. Exact behavior, verification evidence and replacement
+rules belong to the linked FEAT owners. Real IAM-process Role/network browser,
+product PEP, installation and release acceptance remain open.
 
 ## Continuation
 
