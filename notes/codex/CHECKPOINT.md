@@ -6,7 +6,8 @@
 - Updated: 2026-09-29
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `5fe9fddf`
+- Pushed UI source: `751b0d69`
+- Pushed documentation head: `5e044cfe`
 
 ## Authoritative route
 
@@ -32,19 +33,15 @@ UI, full static host/export and independent MOCK entry; do not replace them
 with another branch's renderer or inherit that branch's UI acceptance.
 
 The current milestone keeps the independent MOCK preview, fixed-contract LIVE
-paths and synchronized static Go host. Account security includes isolated
-session-idle, Passkey/WebAuthn, unused-access review and security-report review
-previews. They are local-only UX and add no IAM wire, credential ceremony,
-timer, global activity listener, LIVE state machine, destructive action or
-browser-fabricated report. Report review fails closed across Accounts and keeps
-formal CSV visibly disabled until IAM freezes a server-sealed, reauthorized
-download contract. The tenant and report directories use the shared labelled
-mobile table contract. Desktop and compact browser audits covered the
-all-service directory and all thirteen IAM routes, including light/mixed themes
-and focus return, without stale outgoing content, document overflow or browser
-warning/error. Exact behavior, verification evidence and replacement rules
-belong to the linked FEAT owners. Real IAM-process browser, installation and
-release acceptance remain open.
+paths and synchronized static Go host. The new LIVE member Role self-service
+consumes only the fixed IAM-006 discovery, AssumeRole, by-request recovery,
+CurrentRoleIdentity and logout boundary. It switches product requests only
+after exact Role identity verification, never persists USER or Role bearer
+material, does not reuse USER IAM administration while ROLE/exit recovery is
+active, and restores USER mode only after source revalidation. The original
+MOCK role journey remains independently inspectable. Exact behavior,
+verification evidence and replacement rules belong to the linked FEAT owners.
+Real IAM-process Role browser, installation and release acceptance remain open.
 
 ## Continuation
 
@@ -60,9 +57,10 @@ into the UI.
 
 Next integration must select one fixed boundary from the owning FEAT. Session
 activity/touch and Passkey registration remain MOCK until IAM provides a fixed,
-pushed commit with their required gates. Do not infer endpoints, persisted
-fields, credentials, newer self-removal, replacement, remaining Role, SSO or
-session wire contracts from the MOCK UI or from another task's unpushed work.
+pushed commit with their required gates. The Role self-service client still
+requires real IAM-process browser verification; do not infer additional Role,
+SSO or session endpoints, persisted fields or credentials from the MOCK UI or
+from another task's unpushed work.
 
 Replace this file only at another committed-and-pushed milestone. Do not append
 command logs, chat transcripts, secrets, raw provider payloads, or machine-local
