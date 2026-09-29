@@ -64,6 +64,7 @@ export function AccessSimulator({ workspace, scene, entityId, onOpen }: { worksp
     {subject === "user" && request.principalId && !scene.users.some((user) => user.id === request.principalId) ? <Alert status="warning">{t("errors.unknownIdentity")}</Alert> : null}
     <Card><Card.Header><h2>{t("request")}</h2></Card.Header><Card.Body>
       <form className={styles.stack} onSubmit={(event) => { event.preventDefault(); setPage(1); const users = scene.users.map((user) => user.id); setTested({ workspace, result: subject === "user" ? evaluateUserAccess(workspace, users, request) : evaluateRoleSessionAccess(workspace, users, request.principalId, request, new Date().toISOString()) }); }}>
+        <p className={styles.note}>{t("contextProvenance")}</p>
         {subject === "user" && workspace.testRequests.length ? <FormField id={id + "-example"} label={t("example")} hint={exampleId ? t(`examples.${exampleId}.hint`) : t("exampleHint")}><Select id={id + "-example"} aria-describedby={id + "-example-hint"} value={exampleId} placeholder={t("chooseExample")} options={workspace.testRequests.map((entry) => ({ value: entry.id, label: t(`examples.${entry.id}.label`), disabled: !scene.users.some((user) => user.id === entry.request.principalId) || !inventory.some((resource) => resource.id === entry.request.resourceId && resource.parsed) }))} onValueChange={(value) => {
           const example = workspace.testRequests.find((entry) => entry.id === value);
           const resource = inventory.find((entry) => entry.id === example?.request.resourceId);

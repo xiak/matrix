@@ -79,7 +79,10 @@ function ConditionsEditor({ value, actions, tagMode, onChange }: { value?: Polic
     <p className={styles.note}>{actions.length ? p("supportedConditions", { conditions: supported.map((key) => t(`conditionNames.${key}`)).join(" · ") || t("noConditions") }) : p("selectActionsFirst")}</p>
     {incompatible ? <Alert status="warning">{p("incompatibleConditions")}</Alert> : null}
     <Checkbox disabled={!available("sourceIp") && !value?.sourceIp} checked={value?.sourceIp !== undefined} onChange={(event) => update("sourceIp", event.target.checked ? [""] : undefined)}>{t("useIp")}</Checkbox>
-    {value?.sourceIp ? <FormField id={id + "-ip"} label={t("sourceIp")} hint={t("ipHint")}><TextArea id={id + "-ip"} value={value.sourceIp.join("\n")} maxLength={900} rows={2} aria-describedby={id + "-ip-hint"} onChange={(event) => update("sourceIp", event.target.value.split(/\r?\n/))} /></FormField> : null}
+    {value?.sourceIp ? <>
+      <p className={styles.note}>{t("sourceIpContext")}</p>
+      <FormField id={id + "-ip"} label={t("sourceIp")} hint={t("ipHint")}><TextArea id={id + "-ip"} value={value.sourceIp.join("\n")} maxLength={900} rows={2} aria-describedby={id + "-ip-hint"} onChange={(event) => update("sourceIp", event.target.value.split(/\r?\n/))} /></FormField>
+    </> : null}
     <Checkbox disabled={!available("resourceTag") && !value?.resourceTag} checked={value?.resourceTag !== undefined} onChange={(event) => update("resourceTag", event.target.checked ? [{ key: "", value: "" }] : undefined)}>{t("useTags")}</Checkbox>
     {tagMode && !value?.resourceTag ? <p className={styles.note}>{p("tagMethodHint")}</p> : null}
     {value?.resourceTag ? <div><p className={styles.note}>{t("resourceTags")}</p><TagEditor value={value.resourceTag} onChange={(next) => update("resourceTag", next)} labels={{ key: (index) => u("tagKey", { index }), value: (index) => u("tagValue", { index }), remove: (index) => u("removeTag", { index }), add: u("addTag"), empty: t("emptyTags"), count: u("tagCount", { count: value.resourceTag.length }) }} /></div> : null}

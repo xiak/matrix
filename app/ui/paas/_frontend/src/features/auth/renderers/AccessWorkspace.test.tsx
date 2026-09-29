@@ -1969,6 +1969,7 @@ describe("CAM-style access workspace", () => {
     await select(user, "资源授权范围", "指定资源");
     fireEvent.change(screen.getByLabelText("资源 ID 或前缀 1"), { target: { value: "production/*" } });
     await user.click(screen.getByRole("checkbox", { name: "限制来源 IP" }));
+    expect(screen.getByText(/来源 IP 只能由受信入口写入请求上下文/)).toBeTruthy();
     fireEvent.change(screen.getByLabelText("来源 IP 范围（CIDR）"), { target: { value: "192.0.2.0/24\n2001:db8::/32" } });
     await user.click(screen.getByRole("checkbox", { name: "按资源标签限制" }));
     fireEvent.change(screen.getByLabelText("标签键 1"), { target: { value: "environment" } });
@@ -2046,6 +2047,7 @@ describe("CAM-style access workspace", () => {
   });
   it("explains user grants, clears stale results on input changes and remains preview-only", async () => {
     const { user, repository } = await open("simulator");
+    expect(screen.getByText(/本页不探测当前浏览器网络地址/)).toBeTruthy();
     await user.click(await screen.findByRole("button", { name: "运行模拟" }));
     expect(screen.getByText("策略允许")).toBeTruthy();
     expect(document.activeElement).toBe(screen.getByRole("heading", { name: "模拟结果" }));
