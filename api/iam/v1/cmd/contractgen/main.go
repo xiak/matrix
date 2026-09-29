@@ -484,7 +484,7 @@ func enumSchemas() map[string][]string {
 		"ResourceKind": {
 			string(iamv1.ResourceAccount), string(iamv1.ResourceUser), string(iamv1.ResourceAccessKey),
 			string(iamv1.ResourcePolicy), string(iamv1.ResourceRole), string(iamv1.ResourceRoleSession),
-			string(iamv1.ResourceOrganization), string(iamv1.ResourcePrincipal), string(iamv1.ResourceGroup), string(iamv1.ResourceGroupMembership), string(iamv1.ResourceRoleBinding), string(iamv1.ResourcePolicyAttachment),
+			string(iamv1.ResourceOrganization), string(iamv1.ResourcePrincipal), string(iamv1.ResourceGroup), string(iamv1.ResourceGroupMembership), string(iamv1.ResourceRoleBinding), string(iamv1.ResourceWorkloadRoleBinding), string(iamv1.ResourcePolicyAttachment),
 			string(iamv1.ResourceSession), string(iamv1.ResourceApplication), string(iamv1.ResourceConfiguration),
 			string(iamv1.ResourceConfigurationRevision), string(iamv1.ResourceApplicationRevision),
 			string(iamv1.ResourceDeployment), string(iamv1.ResourceOperation),

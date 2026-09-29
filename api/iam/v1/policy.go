@@ -421,6 +421,7 @@ const (
 	SystemPolicyAuditReader                      PolicyID = "system.audit-reader"
 	SystemPolicyInstallationVerifier             PolicyID = "system.installation-verifier"
 	SystemPolicyManagedServiceInstallationReader PolicyID = "system.managedservice-installation-reader"
+	SystemPolicyServiceRoleAdministrator         PolicyID = "system.service-role-administrator"
 )
 
 const (

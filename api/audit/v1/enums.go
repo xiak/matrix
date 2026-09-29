@@ -60,6 +60,9 @@ const (
 	ActionIAMRoleSessionRevoked                     Action = "iam.role-session.revoked"
 	ActionIAMRoleSessionAdminRevoked                Action = "iam.role-session.admin-revoked"
 	ActionIAMRoleSessionExited                      Action = "iam.role-session.exited"
+	ActionIAMServiceLinkedRoleCreated               Action = "iam.service-linked-role.created"
+	ActionIAMWorkloadRoleBindingCreated             Action = "iam.workload-role-binding.created"
+	ActionIAMWorkloadRoleBindingRevoked             Action = "iam.workload-role-binding.revoked"
 	ActionIAMAccessKeyCreated                       Action = "iam.access-key.created"
 	ActionIAMAccessKeyEnabled                       Action = "iam.access-key.enabled"
 	ActionIAMAccessKeyDisabled                      Action = "iam.access-key.disabled"
@@ -140,6 +143,7 @@ const (
 	TargetInstallation          TargetKind = "INSTALLATION"
 	TargetPrincipal             TargetKind = "PRINCIPAL"
 	TargetRoleBinding           TargetKind = "ROLE_BINDING"
+	TargetWorkloadRoleBinding   TargetKind = "WORKLOAD_ROLE_BINDING"
 	TargetPolicyAttachment      TargetKind = "POLICY_ATTACHMENT"
 	TargetSession               TargetKind = "SESSION"
 	TargetAuthorizationDecision TargetKind = "AUTHORIZATION_DECISION"
@@ -250,6 +254,9 @@ var allActions = []Action{
 	ActionIAMRoleSessionRevoked,
 	ActionIAMRoleSessionAdminRevoked,
 	ActionIAMRoleSessionExited,
+	ActionIAMServiceLinkedRoleCreated,
+	ActionIAMWorkloadRoleBindingCreated,
+	ActionIAMWorkloadRoleBindingRevoked,
 	ActionIAMAccessKeyCreated,
 	ActionIAMAccessKeyEnabled,
 	ActionIAMAccessKeyDisabled,
@@ -380,6 +387,9 @@ var actionContracts = map[Action]ActionContract{
 	ActionIAMRoleSessionRevoked:            {Source: SourceIAM, Target: TargetRoleSession, Results: []Result{ResultSucceeded}, UserActorRequired: true},
 	ActionIAMRoleSessionAdminRevoked:       {Source: SourceIAM, Target: TargetRoleSession, Results: []Result{ResultSucceeded}, UserActorRequired: true, IAMDecisionRequired: true},
 	ActionIAMRoleSessionExited:             {Source: SourceIAM, Target: TargetRoleSession, Results: []Result{ResultSucceeded}, RoleActorPermitted: true, RoleActorRequired: true},
+	ActionIAMServiceLinkedRoleCreated:      {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMWorkloadRoleBindingCreated:    {Source: SourceIAM, Target: TargetWorkloadRoleBinding, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMWorkloadRoleBindingRevoked:    {Source: SourceIAM, Target: TargetWorkloadRoleBinding, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
 	ActionIAMAccessKeyCreated:              {Source: SourceIAM, Target: TargetAccessKey, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
 	ActionIAMAccessKeyEnabled:              {Source: SourceIAM, Target: TargetAccessKey, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
 	ActionIAMAccessKeyDisabled:             {Source: SourceIAM, Target: TargetAccessKey, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},

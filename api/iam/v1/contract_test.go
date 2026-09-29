@@ -2098,8 +2098,8 @@ func FuzzAccessKeySignatureWire(f *testing.F) {
 
 func TestSecuritySettingsRequireCurrentUserSessionAndExactAccount(t *testing.T) {
 	profile, ok := LookupAuthorizationProfile(ProductIAM)
-	if !ok || profile.Revision != 7 {
-		t.Fatal("security settings must publish a distinct profile revision")
+	if !ok {
+		t.Fatal("missing current IAM profile")
 	}
 	_, digest, err := CanonicalizeAuthorizationProfile(profile)
 	if err != nil {
@@ -2128,27 +2128,35 @@ func TestSecuritySettingsRequireCurrentUserSessionAndExactAccount(t *testing.T) 
 		if _, err := NewAuthorizationRequest(action, resource, AuthorizationResourceCollection, AuthorizationCollectionList, "settings-read", "settings-read"); err == nil {
 			t.Fatal("settings read admitted an unbound collection")
 		}
-		foundPrevious := false
+		introducedAt := uint64(7)
+		if action == ActionIAMSecuritySettingsRead {
+			introducedAt = 6
+		}
+		foundIntroduction := false
 		for _, old := range HistoricalAuthorizationProfiles() {
 			if old.Product != ProductIAM {
 				continue
 			}
-			foundPrevious = foundPrevious || old.Revision == 5
+			foundIntroduction = foundIntroduction || old.Revision == introducedAt
+			declared := false
 			for _, declaration := range old.Actions {
-				if declaration.Action == action && (action != ActionIAMSecuritySettingsRead || old.Revision < 6) {
-					t.Fatal("an immutable prior profile gained settings authority")
+				if declaration.Action == action {
+					declared = true
 				}
 			}
+			if declared != (old.Revision >= introducedAt) {
+				t.Fatal("an immutable profile changed its settings authority", action, old.Revision)
+			}
 		}
-		if !foundPrevious {
-			t.Fatal("the previous profile must remain available to historical evidence")
+		if !foundIntroduction {
+			t.Fatal("the introducing settings profile must remain available to historical evidence")
 		}
 	}
 }
 
 func TestAccessKeyManagementUsesAnExplicitNewUserOnlyProfile(t *testing.T) {
 	profile, found := LookupAuthorizationProfile(ProductIAM)
-	if !found || profile.Revision != 7 {
+	if !found {
 		t.Fatal("missing source-owned access key management declaration")
 	}
 	_, digest, err := CanonicalizeAuthorizationProfile(profile)
@@ -3112,23 +3120,31 @@ func TestRoleBusinessProfilesRequireExplicitCurrentCapabilities(t *testing.T) {
 
 func TestManagedServiceRoleProfileOnlyAllowsInstallationRead(t *testing.T) {
 	archives := HistoricalAuthorizationProfiles()
-	index := slices.IndexFunc(archives, func(profile AuthorizationProfile) bool {
+	revisionOneIndex := slices.IndexFunc(archives, func(profile AuthorizationProfile) bool {
 		return profile.Product == ProductManagedService && profile.Revision == 1
 	})
-	if index < 0 {
+	revisionTwoIndex := slices.IndexFunc(archives, func(profile AuthorizationProfile) bool {
+		return profile.Product == ProductManagedService && profile.Revision == 2
+	})
+	if revisionOneIndex < 0 || revisionTwoIndex < 0 {
 		t.Fatal("missing retained managedservice revision")
 	}
-	_, originalDigest, err := CanonicalizeAuthorizationProfile(archives[index])
+	_, originalDigest, err := CanonicalizeAuthorizationProfile(archives[revisionOneIndex])
 	if err != nil || originalDigest != "sha256:5b728c9d7cdd97cc7eeb4cc095d9e053bbf5dab74ca2c08a239b25a6a4c99e2f" {
 		t.Fatal("registered managedservice revision one changed")
 	}
+	_, revisionTwoDigest, err := CanonicalizeAuthorizationProfile(archives[revisionTwoIndex])
+	if err != nil || revisionTwoDigest != "sha256:fb235455b1ff388f64d39d7f59b998622847363cb7b9c14e9a7fa52e77baddfd" {
+		t.Fatal("registered managedservice revision two changed")
+	}
 	current, found := LookupAuthorizationProfile(ProductManagedService)
 	_, currentDigest, err := CanonicalizeAuthorizationProfile(current)
-	if !found || err != nil || current.Revision != 2 || currentDigest == originalDigest {
-		t.Fatal("missing explicit managedservice role revision")
+	if !found || err != nil || current.Revision != 3 || currentDigest == originalDigest || currentDigest == revisionTwoDigest {
+		t.Fatal("missing explicit managedservice consent revision")
 	}
 	currentReference := AuthorizationProfileReference{Product: current.Product, Revision: current.Revision, ContentDigest: currentDigest}
-	oldReference := AuthorizationProfileReference{Product: archives[index].Product, Revision: archives[index].Revision, ContentDigest: originalDigest}
+	revisionOneReference := AuthorizationProfileReference{Product: archives[revisionOneIndex].Product, Revision: archives[revisionOneIndex].Revision, ContentDigest: originalDigest}
+	revisionTwoReference := AuthorizationProfileReference{Product: archives[revisionTwoIndex].Product, Revision: archives[revisionTwoIndex].Revision, ContentDigest: revisionTwoDigest}
 	for _, action := range current.Actions {
 		if CheckAuthorizationProfileSubject(current, currentReference, action.Action, SubjectUser) != nil ||
 			CheckAuthorizationProfileSubject(current, currentReference, action.Action, SubjectServiceAccount) == nil {
@@ -3138,16 +3154,87 @@ func TestManagedServiceRoleProfileOnlyAllowsInstallationRead(t *testing.T) {
 		if roleAllowed != (action.Action == ActionManagedServiceInstallationRead) {
 			t.Fatal("ROLE was not limited to managedservice installation read", action.Action)
 		}
-		if CheckAuthorizationProfileSubject(archives[index], oldReference, action.Action, SubjectRole) == nil {
+		if CheckAuthorizationProfileSubject(archives[revisionOneIndex], revisionOneReference, action.Action, SubjectRole) == nil {
 			t.Fatal("retained managedservice revision gained ROLE authority", action.Action)
 		}
+		revisionTwoRoleAllowed := CheckAuthorizationProfileSubject(archives[revisionTwoIndex], revisionTwoReference, action.Action, SubjectRole) == nil
+		if revisionTwoRoleAllowed != (action.Action == ActionManagedServiceInstallationRead) {
+			t.Fatal("retained managedservice role revision changed", action.Action)
+		}
+		if (action.Action == ActionManagedServiceInstallationRoleBind || action.Action == ActionManagedServiceInstallationRoleUnbind) &&
+			(CheckAuthorizationProfileSubject(archives[revisionTwoIndex], revisionTwoReference, action.Action, SubjectUser) == nil) {
+			t.Fatal("retained managedservice revision gained consent authority", action.Action)
+		}
 	}
-	archives[index].Actions[0].SubjectTypes = []SubjectType{SubjectRole, SubjectUser}
+	archives[revisionTwoIndex].Actions[0].SubjectTypes = []SubjectType{SubjectServiceAccount}
 	again := HistoricalAuthorizationProfiles()
-	_, againDigest, err := CanonicalizeAuthorizationProfile(again[index])
-	if err != nil || againDigest != originalDigest {
+	_, againDigest, err := CanonicalizeAuthorizationProfile(again[revisionTwoIndex])
+	if err != nil || againDigest != revisionTwoDigest {
 		t.Fatal("caller changed retained managedservice declaration")
 	}
+}
+
+func TestServiceRoleConsentActionsAreExplicitCurrentUserCapabilities(t *testing.T) {
+	profile, found := LookupAuthorizationProfile(ProductIAM)
+	if !found || profile.Revision != 8 {
+		t.Fatal("missing explicit IAM service-role revision")
+	}
+	_, digest, err := CanonicalizeAuthorizationProfile(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := AuthorizationProfileReference{Product: profile.Product, Revision: profile.Revision, ContentDigest: digest}
+	actions := map[Action]struct {
+		resource ResourceKind
+		result   ResourceKind
+	}{
+		ActionIAMServiceRoleTemplateList:   {resource: ResourceAccount},
+		ActionIAMServiceLinkedRoleList:     {resource: ResourceAccount},
+		ActionIAMServiceLinkedRoleRead:     {resource: ResourceRole},
+		ActionIAMServiceLinkedRoleCreate:   {resource: ResourceAccount, result: ResourceRole},
+		ActionIAMRolePass:                  {resource: ResourceRole},
+		ActionIAMWorkloadRoleBindingRevoke: {resource: ResourceWorkloadRoleBinding},
+	}
+	for action, expected := range actions {
+		definition, known := LookupActionDefinition(action)
+		if !known || definition.CallingService != ServiceIAM || definition.AuthorityScope != AuthorityScopeTenant ||
+			definition.ResourceKind != expected.resource {
+			t.Fatal("service-role action acquired a different authority boundary", action, definition)
+		}
+		declarationIndex := slices.IndexFunc(profile.Actions, func(candidate AuthorizationProfileAction) bool { return candidate.Action == action })
+		if declarationIndex < 0 || profile.Actions[declarationIndex].ResultResourceKind != expected.result {
+			t.Fatal("service-role action acquired a different result boundary", action)
+		}
+		request, err := NewAuthorizationRequest(action, ResourceReference{Kind: expected.resource, ID: "exact-target"}, AuthorizationResourceInstance, "", "service-role-action", "service-role-action")
+		if err != nil || ValidateAuthorizationRequest(request) != nil {
+			t.Fatal("service-role action rejected its exact target", action, err)
+		}
+		if CheckAuthorizationProfileSubject(profile, reference, action, SubjectUser) != nil ||
+			CheckAuthorizationProfileSubject(profile, reference, action, SubjectRole) == nil ||
+			CheckAuthorizationProfileSubject(profile, reference, action, SubjectServiceAccount) == nil {
+			t.Fatal("service-role management escaped the current USER", action)
+		}
+		if CheckAuthorizationProfileUserAuthentication(profile, reference, action, UserAuthenticationLoginSession) != nil ||
+			CheckAuthorizationProfileUserAuthentication(profile, reference, action, UserAuthenticationAccessKey) == nil {
+			t.Fatal("service-role management escaped the current login session", action)
+		}
+	}
+	for _, archived := range HistoricalAuthorizationProfiles() {
+		if archived.Product != ProductIAM || archived.Revision != 7 {
+			continue
+		}
+		_, archivedDigest, err := CanonicalizeAuthorizationProfile(archived)
+		if err != nil || archivedDigest != "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce" {
+			t.Fatal("registered IAM revision seven changed")
+		}
+		for _, declaration := range archived.Actions {
+			if _, added := actions[declaration.Action]; added {
+				t.Fatal("retained IAM revision gained service-role authority", declaration.Action)
+			}
+		}
+		return
+	}
+	t.Fatal("missing retained IAM revision seven")
 }
 
 func sampleRoleTrustDocument() TrustPolicyDocument {
@@ -4104,9 +4191,15 @@ func TestAuthorizationProfileUserAuthenticationIsExplicitAndCommitted(t *testing
 	}
 	for _, source := range AllAuthorizationProfiles() {
 		for _, declared := range source.Actions {
-			if source.Product == ProductIAM && (declared.Action == ActionIAMSecuritySettingsRead || declared.Action == ActionIAMSecuritySettingsUpdate) {
+			loginSessionRequired := source.Product == ProductIAM && slices.Contains([]Action{
+				ActionIAMSecuritySettingsRead, ActionIAMSecuritySettingsUpdate,
+				ActionIAMServiceRoleTemplateList, ActionIAMServiceLinkedRoleList,
+				ActionIAMServiceLinkedRoleRead, ActionIAMServiceLinkedRoleCreate,
+				ActionIAMRolePass, ActionIAMWorkloadRoleBindingRevoke,
+			}, declared.Action)
+			if loginSessionRequired {
 				if !slices.Equal(declared.UserAuthenticationMethods, []UserAuthenticationMethod{UserAuthenticationLoginSession}) {
-					t.Fatal("settings read widened the actual authentication carrier")
+					t.Fatal("current-session action widened its authentication carrier", declared.Action)
 				}
 			} else if declared.UserAuthenticationMethods != nil {
 				t.Fatal("unrelated product admission changed")

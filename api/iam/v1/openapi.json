@@ -905,6 +905,12 @@
           "iam.access-key.delete",
           "iam.security-settings.read",
           "iam.security-settings.update",
+          "iam.service-role-template.list",
+          "iam.service-linked-role.list",
+          "iam.service-linked-role.read",
+          "iam.service-linked-role.create",
+          "iam.role.pass",
+          "iam.workload-role-binding.revoke",
           "paas.execution-pool.create",
           "paas.execution-pool.read",
           "paas.execution-target.register",
@@ -937,6 +943,8 @@
           "managedservice.quota-entitlement.read",
           "managedservice.service-installation.create",
           "managedservice.service-installation.read",
+          "managedservice.service-installation.service-role.bind",
+          "managedservice.service-installation.service-role.unbind",
           "audit.record.read",
           "audit.integrity.verify",
           "audit.platform-record.read",
@@ -1673,9 +1681,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -1748,9 +1756,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -1802,9 +1810,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -1856,9 +1864,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -1910,9 +1918,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -1964,9 +1972,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -2018,9 +2026,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -2072,9 +2080,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -2126,9 +2134,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -2180,9 +2188,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -2234,9 +2242,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -2288,9 +2296,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -2342,9 +2350,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -2396,9 +2404,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -2450,9 +2458,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -2504,9 +2512,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -2558,9 +2566,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -2612,9 +2620,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -2666,9 +2674,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -2720,9 +2728,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -2774,9 +2782,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -2828,9 +2836,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -2882,9 +2890,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -2936,9 +2944,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -2990,9 +2998,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -3044,9 +3052,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -3098,9 +3106,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -3152,9 +3160,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -3206,9 +3214,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -3260,9 +3268,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -3314,9 +3322,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -3368,9 +3376,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -3422,9 +3430,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -3476,9 +3484,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -3530,9 +3538,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -3584,9 +3592,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -3638,9 +3646,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -3692,9 +3700,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -3746,9 +3754,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -3800,9 +3808,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -3854,9 +3862,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -3908,9 +3916,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -3962,9 +3970,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -4016,9 +4024,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -4070,9 +4078,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -4124,9 +4132,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -4178,9 +4186,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -4232,9 +4240,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -4286,9 +4294,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -4340,9 +4348,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -4394,9 +4402,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -4448,9 +4456,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -4502,9 +4510,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -4556,9 +4564,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -4610,9 +4618,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -4664,9 +4672,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -4718,9 +4726,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -4772,9 +4780,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -4826,9 +4834,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -4880,9 +4888,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -4934,9 +4942,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -4988,15 +4996,339 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "ACCOUNT"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "accessKeyId": false,
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.service-role-template.list"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "networkContext": false,
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "product": "iam",
+                    "revision": 8
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ACCOUNT"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "accessKeyId": false,
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.service-linked-role.list"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "networkContext": false,
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "product": "iam",
+                    "revision": 8
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ACCOUNT"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "accessKeyId": false,
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.service-linked-role.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "networkContext": false,
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "product": "iam",
+                    "revision": 8
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ROLE"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "accessKeyId": false,
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.service-linked-role.create"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "networkContext": false,
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "product": "iam",
+                    "revision": 8
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ACCOUNT"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "accessKeyId": false,
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.role.pass"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "networkContext": false,
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "product": "iam",
+                    "revision": 8
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ROLE"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "accessKeyId": false,
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.workload-role-binding.revoke"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "networkContext": false,
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "product": "iam",
+                    "revision": 8
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "WORKLOAD_ROLE_BINDING"
                     }
                   }
                 },
@@ -6569,9 +6901,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:fb235455b1ff388f64d39d7f59b998622847363cb7b9c14e9a7fa52e77baddfd",
+                    "contentDigest": "sha256:cd85c4f64eaf9d77be8aa1e2e8ab60cb0aa94d1eb6b198c8835026af810cf052",
                     "product": "managedservice",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -6644,9 +6976,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:fb235455b1ff388f64d39d7f59b998622847363cb7b9c14e9a7fa52e77baddfd",
+                    "contentDigest": "sha256:cd85c4f64eaf9d77be8aa1e2e8ab60cb0aa94d1eb6b198c8835026af810cf052",
                     "product": "managedservice",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -6708,9 +7040,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:fb235455b1ff388f64d39d7f59b998622847363cb7b9c14e9a7fa52e77baddfd",
+                    "contentDigest": "sha256:cd85c4f64eaf9d77be8aa1e2e8ab60cb0aa94d1eb6b198c8835026af810cf052",
                     "product": "managedservice",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -6783,9 +7115,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:fb235455b1ff388f64d39d7f59b998622847363cb7b9c14e9a7fa52e77baddfd",
+                    "contentDigest": "sha256:cd85c4f64eaf9d77be8aa1e2e8ab60cb0aa94d1eb6b198c8835026af810cf052",
                     "product": "managedservice",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -6847,9 +7179,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:fb235455b1ff388f64d39d7f59b998622847363cb7b9c14e9a7fa52e77baddfd",
+                    "contentDigest": "sha256:cd85c4f64eaf9d77be8aa1e2e8ab60cb0aa94d1eb6b198c8835026af810cf052",
                     "product": "managedservice",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -6922,9 +7254,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:fb235455b1ff388f64d39d7f59b998622847363cb7b9c14e9a7fa52e77baddfd",
+                    "contentDigest": "sha256:cd85c4f64eaf9d77be8aa1e2e8ab60cb0aa94d1eb6b198c8835026af810cf052",
                     "product": "managedservice",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -6941,6 +7273,114 @@
                       "enum": [
                         "USER",
                         "ROLE"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "managedservice.service-installation.service-role.bind"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "networkContext": false,
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:cd85c4f64eaf9d77be8aa1e2e8ab60cb0aa94d1eb6b198c8835026af810cf052",
+                    "product": "managedservice",
+                    "revision": 3
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "SERVICE_INSTALLATION"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "accessKeyId": false,
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "managedservice.service-installation.service-role.unbind"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "networkContext": false,
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:cd85c4f64eaf9d77be8aa1e2e8ab60cb0aa94d1eb6b198c8835026af810cf052",
+                    "product": "managedservice",
+                    "revision": 3
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "SERVICE_INSTALLATION"
+                    }
+                  }
+                },
+                "subject": {
+                  "properties": {
+                    "accessKeyId": false,
+                    "type": {
+                      "enum": [
+                        "USER"
                       ]
                     }
                   }
@@ -7769,9 +8209,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -7834,9 +8274,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -7878,9 +8318,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -7922,9 +8362,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -7966,9 +8406,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -8010,9 +8450,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -8054,9 +8494,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -8098,9 +8538,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -8142,9 +8582,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -8186,9 +8626,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -8230,9 +8670,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -8274,9 +8714,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -8318,9 +8758,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -8362,9 +8802,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -8406,9 +8846,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -8450,9 +8890,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -8494,9 +8934,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -8538,9 +8978,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -8582,9 +9022,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -8626,9 +9066,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -8670,9 +9110,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -8714,9 +9154,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -8758,9 +9198,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -8802,9 +9242,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -8846,9 +9286,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -8890,9 +9330,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -8934,9 +9374,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -8978,9 +9418,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -9022,9 +9462,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -9066,9 +9506,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -9110,9 +9550,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -9154,9 +9594,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -9198,9 +9638,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -9242,9 +9682,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -9286,9 +9726,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -9330,9 +9770,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -9374,9 +9814,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -9418,9 +9858,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -9462,9 +9902,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -9506,9 +9946,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -9550,9 +9990,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -9594,9 +10034,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -9638,9 +10078,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -9682,9 +10122,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -9726,9 +10166,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -9770,9 +10210,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -9814,9 +10254,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -9858,9 +10298,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -9902,9 +10342,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -9946,9 +10386,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -9990,9 +10430,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -10034,9 +10474,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -10078,9 +10518,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -10122,9 +10562,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -10166,9 +10606,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -10210,9 +10650,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -10254,9 +10694,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -10298,9 +10738,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -10342,9 +10782,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -10386,9 +10826,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -10430,9 +10870,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
@@ -10474,15 +10914,279 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
                     "product": "iam",
-                    "revision": 7
+                    "revision": 8
                   }
                 },
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "ACCOUNT"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.service-role-template.list"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "networkContext": false,
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "product": "iam",
+                    "revision": 8
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ACCOUNT"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.service-linked-role.list"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "networkContext": false,
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "product": "iam",
+                    "revision": 8
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ACCOUNT"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.service-linked-role.read"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "networkContext": false,
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "product": "iam",
+                    "revision": 8
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ROLE"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.service-linked-role.create"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "networkContext": false,
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "product": "iam",
+                    "revision": 8
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ACCOUNT"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.role.pass"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "networkContext": false,
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "product": "iam",
+                    "revision": 8
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ROLE"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.workload-role-binding.revoke"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "networkContext": false,
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "product": "iam",
+                    "revision": 8
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "WORKLOAD_ROLE_BINDING"
                     }
                   }
                 }
@@ -11771,9 +12475,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:fb235455b1ff388f64d39d7f59b998622847363cb7b9c14e9a7fa52e77baddfd",
+                    "contentDigest": "sha256:cd85c4f64eaf9d77be8aa1e2e8ab60cb0aa94d1eb6b198c8835026af810cf052",
                     "product": "managedservice",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -11836,9 +12540,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:fb235455b1ff388f64d39d7f59b998622847363cb7b9c14e9a7fa52e77baddfd",
+                    "contentDigest": "sha256:cd85c4f64eaf9d77be8aa1e2e8ab60cb0aa94d1eb6b198c8835026af810cf052",
                     "product": "managedservice",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -11890,9 +12594,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:fb235455b1ff388f64d39d7f59b998622847363cb7b9c14e9a7fa52e77baddfd",
+                    "contentDigest": "sha256:cd85c4f64eaf9d77be8aa1e2e8ab60cb0aa94d1eb6b198c8835026af810cf052",
                     "product": "managedservice",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -11955,9 +12659,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:fb235455b1ff388f64d39d7f59b998622847363cb7b9c14e9a7fa52e77baddfd",
+                    "contentDigest": "sha256:cd85c4f64eaf9d77be8aa1e2e8ab60cb0aa94d1eb6b198c8835026af810cf052",
                     "product": "managedservice",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -12009,9 +12713,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:fb235455b1ff388f64d39d7f59b998622847363cb7b9c14e9a7fa52e77baddfd",
+                    "contentDigest": "sha256:cd85c4f64eaf9d77be8aa1e2e8ab60cb0aa94d1eb6b198c8835026af810cf052",
                     "product": "managedservice",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -12074,9 +12778,97 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:fb235455b1ff388f64d39d7f59b998622847363cb7b9c14e9a7fa52e77baddfd",
+                    "contentDigest": "sha256:cd85c4f64eaf9d77be8aa1e2e8ab60cb0aa94d1eb6b198c8835026af810cf052",
                     "product": "managedservice",
-                    "revision": 2
+                    "revision": 3
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "SERVICE_INSTALLATION"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "managedservice.service-installation.service-role.bind"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "networkContext": false,
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:cd85c4f64eaf9d77be8aa1e2e8ab60cb0aa94d1eb6b198c8835026af810cf052",
+                    "product": "managedservice",
+                    "revision": 3
+                  }
+                },
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "SERVICE_INSTALLATION"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "managedservice.service-installation.service-role.unbind"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "networkContext": false,
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:cd85c4f64eaf9d77be8aa1e2e8ab60cb0aa94d1eb6b198c8835026af810cf052",
+                    "product": "managedservice",
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -15260,6 +16052,7 @@
                             "iam.role.create",
                             "iam.role.delete",
                             "iam.role.list",
+                            "iam.role.pass",
                             "iam.role.permission-boundary.remove",
                             "iam.role.permission-boundary.set",
                             "iam.role.read",
@@ -15268,6 +16061,12 @@
                             "iam.security-settings.*",
                             "iam.security-settings.read",
                             "iam.security-settings.update",
+                            "iam.service-linked-role.*",
+                            "iam.service-linked-role.create",
+                            "iam.service-linked-role.list",
+                            "iam.service-linked-role.read",
+                            "iam.service-role-template.*",
+                            "iam.service-role-template.list",
                             "iam.session.*",
                             "iam.session.revoke",
                             "iam.user.*",
@@ -15280,6 +16079,8 @@
                             "iam.user.reset-password",
                             "iam.user.set-status",
                             "iam.user.update",
+                            "iam.workload-role-binding.*",
+                            "iam.workload-role-binding.revoke",
                             "managedservice.offering.*",
                             "managedservice.offering.read",
                             "managedservice.quota-entitlement.*",
@@ -15290,6 +16091,8 @@
                             "managedservice.service-installation.*",
                             "managedservice.service-installation.create",
                             "managedservice.service-installation.read",
+                            "managedservice.service-installation.service-role.bind",
+                            "managedservice.service-installation.service-role.unbind",
                             "paas.application-revision.*",
                             "paas.application-revision.create",
                             "paas.application-revision.read",
@@ -15696,6 +16499,7 @@
               "ROLE",
               "ROLE_SESSION",
               "ACCESS_KEY",
+              "WORKLOAD_ROLE_BINDING",
               "EXECUTION_POOL",
               "EXECUTION_TARGET",
               "NODE_ENROLLMENT",
@@ -15804,6 +16608,7 @@
                       "iam.role.create",
                       "iam.role.delete",
                       "iam.role.list",
+                      "iam.role.pass",
                       "iam.role.permission-boundary.remove",
                       "iam.role.permission-boundary.set",
                       "iam.role.read",
@@ -15812,6 +16617,12 @@
                       "iam.security-settings.*",
                       "iam.security-settings.read",
                       "iam.security-settings.update",
+                      "iam.service-linked-role.*",
+                      "iam.service-linked-role.create",
+                      "iam.service-linked-role.list",
+                      "iam.service-linked-role.read",
+                      "iam.service-role-template.*",
+                      "iam.service-role-template.list",
                       "iam.session.*",
                       "iam.session.revoke",
                       "iam.user.*",
@@ -15824,6 +16635,8 @@
                       "iam.user.reset-password",
                       "iam.user.set-status",
                       "iam.user.update",
+                      "iam.workload-role-binding.*",
+                      "iam.workload-role-binding.revoke",
                       "managedservice.offering.*",
                       "managedservice.offering.read",
                       "managedservice.quota-entitlement.*",
@@ -15834,6 +16647,8 @@
                       "managedservice.service-installation.*",
                       "managedservice.service-installation.create",
                       "managedservice.service-installation.read",
+                      "managedservice.service-installation.service-role.bind",
+                      "managedservice.service-installation.service-role.unbind",
                       "paas.application-revision.*",
                       "paas.application-revision.create",
                       "paas.application-revision.read",
@@ -15938,6 +16753,7 @@
                       "iam.role.create",
                       "iam.role.delete",
                       "iam.role.list",
+                      "iam.role.pass",
                       "iam.role.permission-boundary.remove",
                       "iam.role.permission-boundary.set",
                       "iam.role.read",
@@ -15946,6 +16762,12 @@
                       "iam.security-settings.*",
                       "iam.security-settings.read",
                       "iam.security-settings.update",
+                      "iam.service-linked-role.*",
+                      "iam.service-linked-role.create",
+                      "iam.service-linked-role.list",
+                      "iam.service-linked-role.read",
+                      "iam.service-role-template.*",
+                      "iam.service-role-template.list",
                       "iam.session.*",
                       "iam.session.revoke",
                       "iam.user.*",
@@ -15958,6 +16780,8 @@
                       "iam.user.reset-password",
                       "iam.user.set-status",
                       "iam.user.update",
+                      "iam.workload-role-binding.*",
+                      "iam.workload-role-binding.revoke",
                       "managedservice.offering.*",
                       "managedservice.offering.read",
                       "managedservice.quota-entitlement.*",
@@ -15968,6 +16792,8 @@
                       "managedservice.service-installation.*",
                       "managedservice.service-installation.create",
                       "managedservice.service-installation.read",
+                      "managedservice.service-installation.service-role.bind",
+                      "managedservice.service-installation.service-role.unbind",
                       "paas.application-revision.*",
                       "paas.application-revision.create",
                       "paas.application-revision.read",
@@ -16072,6 +16898,7 @@
                       "iam.role.create",
                       "iam.role.delete",
                       "iam.role.list",
+                      "iam.role.pass",
                       "iam.role.permission-boundary.remove",
                       "iam.role.permission-boundary.set",
                       "iam.role.read",
@@ -16080,6 +16907,12 @@
                       "iam.security-settings.*",
                       "iam.security-settings.read",
                       "iam.security-settings.update",
+                      "iam.service-linked-role.*",
+                      "iam.service-linked-role.create",
+                      "iam.service-linked-role.list",
+                      "iam.service-linked-role.read",
+                      "iam.service-role-template.*",
+                      "iam.service-role-template.list",
                       "iam.session.*",
                       "iam.session.revoke",
                       "iam.user.*",
@@ -16092,6 +16925,8 @@
                       "iam.user.reset-password",
                       "iam.user.set-status",
                       "iam.user.update",
+                      "iam.workload-role-binding.*",
+                      "iam.workload-role-binding.revoke",
                       "managedservice.offering.*",
                       "managedservice.offering.read",
                       "managedservice.quota-entitlement.*",
@@ -16102,6 +16937,8 @@
                       "managedservice.service-installation.*",
                       "managedservice.service-installation.create",
                       "managedservice.service-installation.read",
+                      "managedservice.service-installation.service-role.bind",
+                      "managedservice.service-installation.service-role.unbind",
                       "paas.application-revision.*",
                       "paas.application-revision.create",
                       "paas.application-revision.read",
@@ -16245,6 +17082,11 @@
                         "iam.security-settings.*",
                         "iam.security-settings.read",
                         "iam.security-settings.update",
+                        "iam.service-linked-role.*",
+                        "iam.service-linked-role.create",
+                        "iam.service-linked-role.list",
+                        "iam.service-role-template.*",
+                        "iam.service-role-template.list",
                         "iam.user.*",
                         "iam.user.create",
                         "iam.user.list"
@@ -16291,6 +17133,11 @@
                       "iam.security-settings.*",
                       "iam.security-settings.read",
                       "iam.security-settings.update",
+                      "iam.service-linked-role.*",
+                      "iam.service-linked-role.create",
+                      "iam.service-linked-role.list",
+                      "iam.service-role-template.*",
+                      "iam.service-role-template.list",
                       "iam.user.*",
                       "iam.user.create",
                       "iam.user.list"
@@ -17934,11 +18781,14 @@
                         "iam.role.*",
                         "iam.role.assume",
                         "iam.role.delete",
+                        "iam.role.pass",
                         "iam.role.permission-boundary.remove",
                         "iam.role.permission-boundary.set",
                         "iam.role.read",
                         "iam.role.set-status",
-                        "iam.role.update"
+                        "iam.role.update",
+                        "iam.service-linked-role.*",
+                        "iam.service-linked-role.read"
                       ]
                     }
                   }
@@ -17974,11 +18824,14 @@
                       "iam.role.*",
                       "iam.role.assume",
                       "iam.role.delete",
+                      "iam.role.pass",
                       "iam.role.permission-boundary.remove",
                       "iam.role.permission-boundary.set",
                       "iam.role.read",
                       "iam.role.set-status",
-                      "iam.role.update"
+                      "iam.role.update",
+                      "iam.service-linked-role.*",
+                      "iam.service-linked-role.read"
                     ]
                   }
                 }
@@ -18615,6 +19468,227 @@
                         "const": "ACCOUNT"
                       }
                     }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "enum": [
+                      "iam.service-role-template.list",
+                      "iam.service-role-template.*"
+                    ]
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "ACCOUNT"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "enum": [
+                      "iam.service-linked-role.list",
+                      "iam.service-linked-role.*"
+                    ]
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "ACCOUNT"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "enum": [
+                      "iam.service-linked-role.read",
+                      "iam.service-linked-role.*"
+                    ]
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "ROLE"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "enum": [
+                      "iam.service-linked-role.create",
+                      "iam.service-linked-role.*"
+                    ]
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "ACCOUNT"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "enum": [
+                      "iam.role.pass",
+                      "iam.role.*"
+                    ]
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "ROLE"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "enum": [
+                      "iam.workload-role-binding.revoke",
+                      "iam.workload-role-binding.*"
+                    ]
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "WORKLOAD_ROLE_BINDING"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "WORKLOAD_ROLE_BINDING"
+                      },
+                      "match": {
+                        "const": "PREFIX_IN_AUTHORITY"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "not": {
+                    "contains": {
+                      "enum": [
+                        "iam.workload-role-binding.*",
+                        "iam.workload-role-binding.revoke"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "WORKLOAD_ROLE_BINDING"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "enum": [
+                      "iam.workload-role-binding.*",
+                      "iam.workload-role-binding.revoke"
+                    ]
                   }
                 }
               }
@@ -20207,7 +21281,9 @@
                       "enum": [
                         "managedservice.service-installation.*",
                         "managedservice.service-installation.create",
-                        "managedservice.service-installation.read"
+                        "managedservice.service-installation.read",
+                        "managedservice.service-installation.service-role.bind",
+                        "managedservice.service-installation.service-role.unbind"
                       ]
                     }
                   }
@@ -20236,7 +21312,9 @@
                     "enum": [
                       "managedservice.service-installation.*",
                       "managedservice.service-installation.create",
-                      "managedservice.service-installation.read"
+                      "managedservice.service-installation.read",
+                      "managedservice.service-installation.service-role.bind",
+                      "managedservice.service-installation.service-role.unbind"
                     ]
                   }
                 }
@@ -20251,6 +21329,58 @@
                     "enum": [
                       "managedservice.service-installation.read",
                       "managedservice.service-installation.*"
+                    ]
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "SERVICE_INSTALLATION"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "enum": [
+                      "managedservice.service-installation.service-role.bind"
+                    ]
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "SERVICE_INSTALLATION"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "enum": [
+                      "managedservice.service-installation.service-role.unbind"
                     ]
                   }
                 }
@@ -20591,6 +21721,12 @@
                 "iam.access-key.delete",
                 "iam.security-settings.read",
                 "iam.security-settings.update",
+                "iam.service-role-template.list",
+                "iam.service-linked-role.list",
+                "iam.service-linked-role.read",
+                "iam.service-linked-role.create",
+                "iam.role.pass",
+                "iam.workload-role-binding.revoke",
                 "paas.execution-pool.create",
                 "paas.execution-pool.read",
                 "paas.execution-target.register",
@@ -20623,6 +21759,8 @@
                 "managedservice.quota-entitlement.read",
                 "managedservice.service-installation.create",
                 "managedservice.service-installation.read",
+                "managedservice.service-installation.service-role.bind",
+                "managedservice.service-installation.service-role.unbind",
                 "audit.record.read",
                 "audit.integrity.verify",
                 "audit.platform-record.read",
@@ -20642,8 +21780,11 @@
                 "iam.role-trust.*",
                 "iam.role.*",
                 "iam.security-settings.*",
+                "iam.service-linked-role.*",
+                "iam.service-role-template.*",
                 "iam.session.*",
                 "iam.user.*",
+                "iam.workload-role-binding.*",
                 "managedservice.offering.*",
                 "managedservice.quota-entitlement.*",
                 "managedservice.region.*",
@@ -21767,6 +22908,7 @@
           "GROUP",
           "GROUP_MEMBERSHIP",
           "ROLE_BINDING",
+          "WORKLOAD_ROLE_BINDING",
           "POLICY_ATTACHMENT",
           "SESSION",
           "APPLICATION",

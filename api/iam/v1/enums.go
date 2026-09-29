@@ -234,6 +234,12 @@ const (
 	ActionIAMRoleSessionList                Action = "iam.role-session.list"
 	ActionIAMRoleSessionRead                Action = "iam.role-session.read"
 	ActionIAMRoleSessionRevoke              Action = "iam.role-session.revoke"
+	ActionIAMServiceRoleTemplateList        Action = "iam.service-role-template.list"
+	ActionIAMServiceLinkedRoleList          Action = "iam.service-linked-role.list"
+	ActionIAMServiceLinkedRoleRead          Action = "iam.service-linked-role.read"
+	ActionIAMServiceLinkedRoleCreate        Action = "iam.service-linked-role.create"
+	ActionIAMRolePass                       Action = "iam.role.pass"
+	ActionIAMWorkloadRoleBindingRevoke      Action = "iam.workload-role-binding.revoke"
 	ActionIAMSessionRevoke                  Action = "iam.session.revoke"
 	ActionIAMAccessKeyList                  Action = "iam.access-key.list"
 	ActionIAMAccessKeyCreate                Action = "iam.access-key.create"
@@ -279,6 +285,8 @@ const (
 	ActionManagedServiceQuotaEntitlementRead     Action = "managedservice.quota-entitlement.read"
 	ActionManagedServiceInstallationCreate       Action = "managedservice.service-installation.create"
 	ActionManagedServiceInstallationRead         Action = "managedservice.service-installation.read"
+	ActionManagedServiceInstallationRoleBind     Action = "managedservice.service-installation.service-role.bind"
+	ActionManagedServiceInstallationRoleUnbind   Action = "managedservice.service-installation.service-role.unbind"
 
 	ActionAuditRecordRead              Action = "audit.record.read"
 	ActionAuditIntegrityVerify         Action = "audit.integrity.verify"
@@ -317,6 +325,7 @@ const (
 	ResourceOrganization          ResourceKind = "ORGANIZATION"
 	ResourcePrincipal             ResourceKind = "PRINCIPAL"
 	ResourceRoleBinding           ResourceKind = "ROLE_BINDING"
+	ResourceWorkloadRoleBinding   ResourceKind = "WORKLOAD_ROLE_BINDING"
 	ResourcePolicyAttachment      ResourceKind = "POLICY_ATTACHMENT"
 	ResourcePolicy                ResourceKind = "POLICY"
 	ResourceSession               ResourceKind = "SESSION"
@@ -432,9 +441,9 @@ func AllServicePurposes() []ServicePurpose {
 // ActionDefinition and contract enum order are derived projections, not a second
 // editable source. Product revision changes must accompany changed declarations.
 var authorizationProfiles = [...]AuthorizationProfile{
-	iamSecuritySettingsProfile(),
+	iamServiceRoleProfile(),
 	paasProfileRevisionThree,
-	managedServiceProfileRevisionTwo,
+	managedServiceProfileRevisionThree,
 	roleBusinessProfile(auditProfileRevisionOne),
 	declaredProductProfile(ProductInstallation, ServiceInstallationVerifier, 1,
 		declaredProfileAction(ActionInstallationVerify, ResourceInstallation, AuthorityScopeInstallationProbe, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
@@ -487,7 +496,7 @@ var iamProfileRevisionOne = declaredProductProfile(ProductIAM, ServiceIAM, 1,
 )
 
 func HistoricalAuthorizationProfiles() []AuthorizationProfile {
-	return []AuthorizationProfile{cloneAuthorizationProfile(iamProfileRevisionOne), iamRoleManagementProfile(), iamRoleSessionProfile(), iamRoleSessionManagementProfile(), iamAccessKeyManagementProfile(), iamSecuritySettingsReadProfile(), cloneAuthorizationProfile(paasProfileRevisionOne), cloneAuthorizationProfile(paasProfileRevisionTwo), cloneAuthorizationProfile(managedServiceProfileRevisionOne), cloneAuthorizationProfile(auditProfileRevisionOne)}
+	return []AuthorizationProfile{cloneAuthorizationProfile(iamProfileRevisionOne), iamRoleManagementProfile(), iamRoleSessionProfile(), iamRoleSessionManagementProfile(), iamAccessKeyManagementProfile(), iamSecuritySettingsReadProfile(), iamSecuritySettingsProfile(), cloneAuthorizationProfile(paasProfileRevisionOne), cloneAuthorizationProfile(paasProfileRevisionTwo), cloneAuthorizationProfile(managedServiceProfileRevisionOne), cloneAuthorizationProfile(managedServiceProfileRevisionTwo), cloneAuthorizationProfile(auditProfileRevisionOne)}
 }
 
 // Revision one remains archived because compiled policy content and decisions
@@ -504,6 +513,7 @@ var managedServiceProfileRevisionOne = declaredProductProfile(ProductManagedServ
 )
 
 var managedServiceProfileRevisionTwo = managedServiceInstallationRoleProfile(managedServiceProfileRevisionOne)
+var managedServiceProfileRevisionThree = managedServiceRoleConsentProfile(managedServiceProfileRevisionTwo)
 
 var paasProfileRevisionOne = declaredProductProfile(ProductPaaS, ServicePaaS, 1,
 	declaredProfileAction(ActionPaaSExecutionPoolCreate, ResourceExecutionPool, AuthorityScopeInstallation, ResourceExecutionPool, []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
@@ -564,6 +574,17 @@ func managedServiceInstallationRoleProfile(previous AuthorizationProfile) Author
 		if profile.Actions[index].Action == ActionManagedServiceInstallationRead {
 			profile.Actions[index].SubjectTypes = []SubjectType{SubjectRole, SubjectUser}
 		}
+	}
+	return profile
+}
+
+func managedServiceRoleConsentProfile(previous AuthorizationProfile) AuthorizationProfile {
+	profile := cloneAuthorizationProfile(previous)
+	profile.Revision++
+	for _, action := range []Action{ActionManagedServiceInstallationRoleBind, ActionManagedServiceInstallationRoleUnbind} {
+		declaration := declaredProfileAction(action, ResourceServiceInstallation, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}})
+		declaration.SubjectTypes = []SubjectType{SubjectUser}
+		profile.Actions = append(profile.Actions, declaration)
 	}
 	return profile
 }
@@ -667,6 +688,24 @@ func iamSecuritySettingsProfile() AuthorizationProfile {
 	update.SubjectTypes = []SubjectType{SubjectUser}
 	update.UserAuthenticationMethods = []UserAuthenticationMethod{UserAuthenticationLoginSession}
 	profile.Actions = append(profile.Actions, update)
+	return profile
+}
+
+func iamServiceRoleProfile() AuthorizationProfile {
+	profile := iamSecuritySettingsProfile()
+	profile.Revision = 8
+	for _, declaration := range []AuthorizationProfileAction{
+		declaredProfileAction(ActionIAMServiceRoleTemplateList, ResourceAccount, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+		declaredProfileAction(ActionIAMServiceLinkedRoleList, ResourceAccount, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+		declaredProfileAction(ActionIAMServiceLinkedRoleRead, ResourceRole, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+		declaredProfileAction(ActionIAMServiceLinkedRoleCreate, ResourceAccount, AuthorityScopeTenant, ResourceRole, []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+		declaredProfileAction(ActionIAMRolePass, ResourceRole, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+		declaredProfileAction(ActionIAMWorkloadRoleBindingRevoke, ResourceWorkloadRoleBinding, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	} {
+		declaration.SubjectTypes = []SubjectType{SubjectUser}
+		declaration.UserAuthenticationMethods = []UserAuthenticationMethod{UserAuthenticationLoginSession}
+		profile.Actions = append(profile.Actions, declaration)
+	}
 	return profile
 }
 

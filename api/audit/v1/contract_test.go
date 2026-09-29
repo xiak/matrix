@@ -368,6 +368,45 @@ func TestAuditActionCatalogIsClosedAndSourceBound(t *testing.T) {
 	}
 }
 
+func TestServiceRoleConsentFactsRequireTenantUserDecisions(t *testing.T) {
+	for action, target := range map[Action]TargetKind{
+		ActionIAMServiceLinkedRoleCreated:   TargetRole,
+		ActionIAMWorkloadRoleBindingCreated: TargetWorkloadRoleBinding,
+		ActionIAMWorkloadRoleBindingRevoked: TargetWorkloadRoleBinding,
+	} {
+		event := Event{
+			APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-service-role",
+			TenantID: "account-example", Actor: ActorReference{Type: ActorUser, ID: "user-example"},
+			Action: action, Target: TargetReference{Kind: target, ID: "target-example"}, Result: ResultSucceeded,
+			IAMDecisionID: "decision-example", RequestDigest: "sha256:" + strings.Repeat("1", 64),
+			RequestID: "request-example", CorrelationID: "correlation-example",
+			OccurredAt: time.Date(2026, 9, 30, 1, 2, 3, 0, time.UTC),
+		}
+		if err := ValidateEventForSource(SourceIAM, event); err != nil {
+			t.Fatalf("valid service-role fact %s rejected: %v", action, err)
+		}
+		if ValidateEventForSource(otherAuditSource(SourceIAM), event) == nil {
+			t.Fatal("service-role fact accepted another source", action)
+		}
+		for name, mutate := range map[string]func(*Event){
+			"missing decision":   func(candidate *Event) { candidate.IAMDecisionID = "" },
+			"service actor":      func(candidate *Event) { candidate.Actor.Type = ActorServiceAccount },
+			"system actor":       func(candidate *Event) { candidate.Actor.Type = ActorSystem },
+			"wrong target":       func(candidate *Event) { candidate.Target.Kind = TargetPrincipal },
+			"installation scope": func(candidate *Event) { candidate.TenantID, candidate.InstallationID = "", "installation-example" },
+			"target namespace":   func(candidate *Event) { candidate.Target.TenantID = "account-other" },
+		} {
+			t.Run(string(action)+"/"+name, func(t *testing.T) {
+				forged := event
+				mutate(&forged)
+				if ValidateEventForSource(SourceIAM, forged) == nil {
+					t.Fatal("service-role fact accepted forged authority")
+				}
+			})
+		}
+	}
+}
+
 func TestAuditWireTypesHaveNoArbitraryPayloadEscapeHatch(t *testing.T) {
 	roots := []reflect.Type{
 		reflect.TypeOf(Event{}), reflect.TypeOf(AuditRecord{}), reflect.TypeOf(IngestionResult{}),

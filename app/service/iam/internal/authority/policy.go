@@ -634,6 +634,13 @@ func SystemPolicyVersion(id iamv1.PolicyID) (iamv1.PolicyVersion, error) {
 		actions = []iamv1.Action{iamv1.ActionInstallationVerify}
 	case iamv1.SystemPolicyManagedServiceInstallationReader:
 		actions = []iamv1.Action{iamv1.ActionManagedServiceInstallationRead}
+	case iamv1.SystemPolicyServiceRoleAdministrator:
+		actions = []iamv1.Action{
+			iamv1.ActionIAMServiceRoleTemplateList, iamv1.ActionIAMServiceLinkedRoleList,
+			iamv1.ActionIAMServiceLinkedRoleRead, iamv1.ActionIAMServiceLinkedRoleCreate,
+			iamv1.ActionIAMRolePass, iamv1.ActionIAMWorkloadRoleBindingRevoke,
+			iamv1.ActionManagedServiceInstallationRoleBind, iamv1.ActionManagedServiceInstallationRoleUnbind,
+		}
 	default:
 		return iamv1.PolicyVersion{}, ErrInvalidPolicyState
 	}

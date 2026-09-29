@@ -1768,6 +1768,74 @@ func TestManagedServiceUsesTheExistingClosedPaaSSystemPolicyMatrix(t *testing.T)
 	}
 }
 
+func TestServiceRoleAdministrationRequiresItsExplicitPolicyAndCallingService(t *testing.T) {
+	actions := map[iamv1.Action]iamv1.ServicePurpose{
+		iamv1.ActionIAMServiceRoleTemplateList:           iamv1.ServiceIAM,
+		iamv1.ActionIAMServiceLinkedRoleList:             iamv1.ServiceIAM,
+		iamv1.ActionIAMServiceLinkedRoleRead:             iamv1.ServiceIAM,
+		iamv1.ActionIAMServiceLinkedRoleCreate:           iamv1.ServiceIAM,
+		iamv1.ActionIAMRolePass:                          iamv1.ServiceIAM,
+		iamv1.ActionIAMWorkloadRoleBindingRevoke:         iamv1.ServiceIAM,
+		iamv1.ActionManagedServiceInstallationRoleBind:   iamv1.ServicePaaS,
+		iamv1.ActionManagedServiceInstallationRoleUnbind: iamv1.ServicePaaS,
+	}
+	for action, service := range actions {
+		if !ServiceCanRequest(service, action) {
+			t.Fatal("owning service cannot request service-role action", action)
+		}
+		for _, other := range []iamv1.ServicePurpose{iamv1.ServiceIAM, iamv1.ServicePaaS, iamv1.ServiceAudit, iamv1.ServiceInstallationVerifier} {
+			if other != service && ServiceCanRequest(other, action) {
+				t.Fatal("another service acquired service-role action", action, other)
+			}
+		}
+		for _, policyID := range testSystemPolicyIDs {
+			allowed := attachedSystemPolicyAllows(t, policyID, action)
+			if allowed != (policyID == iamv1.SystemPolicyServiceRoleAdministrator) {
+				t.Fatal("service-role action changed an existing system policy", action, policyID, allowed)
+			}
+		}
+	}
+	for _, unrelated := range []iamv1.Action{
+		iamv1.ActionIAMRoleCreate,
+		iamv1.ActionIAMPolicyAttachmentCreate,
+		iamv1.ActionManagedServiceInstallationRead,
+		iamv1.ActionPaaSApplicationRead,
+	} {
+		if attachedSystemPolicyAllows(t, iamv1.SystemPolicyServiceRoleAdministrator, unrelated) {
+			t.Fatal("service-role administration acquired unrelated authority", unrelated)
+		}
+	}
+
+	now := authorityTestTime()
+	context := authoritySubject(now, iamv1.SystemPolicyServiceRoleAdministrator)
+	for action, fixture := range map[iamv1.Action]struct {
+		service  iamv1.ServicePurpose
+		resource iamv1.ResourceReference
+	}{
+		iamv1.ActionIAMServiceLinkedRoleCreate: {
+			service: iamv1.ServiceIAM, resource: iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: string(context.Organization.ID)},
+		},
+		iamv1.ActionManagedServiceInstallationRoleBind: {
+			service: iamv1.ServicePaaS, resource: iamv1.ResourceReference{Kind: iamv1.ResourceServiceInstallation, ID: "service-installation-example"},
+		},
+	} {
+		request := declaredAuthorizationRequest(t, iamv1.AuthorizationRequest{Action: action, Resource: fixture.resource,
+			RequestID: "request-service-role", CorrelationID: "request-service-role"})
+		decision, err := Decide(context, fixture.service, request, "decision-service-role", now)
+		if err != nil || !decision.Allowed || decision.TenantID != context.Organization.ID || decision.InstallationID != "" {
+			t.Fatalf("explicit service-role administration denied: action=%s decision=%+v error=%v", action, decision, err)
+		}
+		wrongService := iamv1.ServiceIAM
+		if fixture.service == iamv1.ServiceIAM {
+			wrongService = iamv1.ServicePaaS
+		}
+		decision, err = Decide(context, wrongService, request, "decision-service-role-wrong-service", now)
+		if err != nil || decision.Allowed || decision.Subject != nil || decision.TenantID != "" || decision.InstallationID != "" {
+			t.Fatalf("wrong service obtained service-role authority: action=%s decision=%+v error=%v", action, decision, err)
+		}
+	}
+}
+
 func TestPlatformAuthorityRequiresAnExplicitPolicyAndInstallationBinding(t *testing.T) {
 	now := authorityTestTime()
 	for _, action := range iamv1.AllActions() {
@@ -1908,6 +1976,7 @@ var testSystemPolicyIDs = []iamv1.PolicyID{
 	iamv1.SystemPolicyAuditReader,
 	iamv1.SystemPolicyInstallationVerifier,
 	iamv1.SystemPolicyManagedServiceInstallationReader,
+	iamv1.SystemPolicyServiceRoleAdministrator,
 }
 
 func authorityServicePolicies(now time.Time, identity iamv1.ServiceIdentity, policyIDs ...iamv1.PolicyID) []AttachedPolicy {
