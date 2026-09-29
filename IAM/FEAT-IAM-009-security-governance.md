@@ -1336,6 +1336,8 @@ Account的`security-settings`增加明确的`session.idleTimeoutMinutes`，默�
 
 固定`139e1322730186cc555bec305ba3889edd59b10c`的[Verification36559683247](https://github.com/xiak/matrix/actions/runs/36559683247)在`authority-storage`失败，不能算作本片独立CI成功。失败先暴露Audit存储门禁写死IAM51；改为读取未初始化时的有效版本并证明bootstrap只让同一版本就绪，不把IAM内部schema号交给Audit测试拥有。随后同一门禁还暴露旧测试通过直接改写Session发行/到期时间制造过期，已删除该重复路径；真实自然absolute/idle到期仍由IAM所属门禁证明，跨authority测试继续证明服务器封存期限、撤销过滤和失败outbox原子性。修正后的`TestPostgresAuthorityIntegration`在新独立PG18.6上串行race-p1通过18.961s；后继固定SHA及独立CI仍待确认，旧失败不回填。
 
+同轮测试所有权审计确认，认证schema破坏矩阵只依赖同一最终schema，不依赖恢复、替换、移除或设置仪式的mode。当前仅在`TestIAMTOTPEnrollmentPostgres`执行这一完整矩阵，其他入口继续执行各自真实事务，不再重复相同catalog攻击。相同独立PG18容器、Go race-p1下，唯一攻击矩阵及enrollment业务96.561s通过，非enrollment的真实认证器移除事务82.423s通过；没有删除任何模式特有测试、readiness断言或安全攻击项。
+
 #### S3验收与衔接
 
 - 两账号同名用户、ID/别名两种realm、两个IAM副本，真实验证同USER预算共享/不同USER隔离、设置归属、受限规则读取及配置越权；root和未撤销平台附件保护不能通过停用后重试绕过。

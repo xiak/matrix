@@ -5841,6 +5841,12 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 		t.Fatal("rejected contact replacement changed trusted state")
 	}
 	t.Run("authentication_schema_damage_closes_readiness", func(t *testing.T) {
+		// Schema damage is independent of the ceremony selected below. Keep one
+		// authoritative attack matrix instead of rerunning the same catalog checks
+		// for every recovery, replacement, removal, and settings mode.
+		if mode != "enrollment" {
+			return
+		}
 		for _, attack := range []struct{ name, sql string }{
 			{"table_read", "GRANT SELECT ON iam.authentication_challenges TO matrix_iam_api"},
 			{"column_read", "GRANT SELECT (verification_digest) ON iam.mfa_recovery_codes TO matrix_iam_notification_worker"},
