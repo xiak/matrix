@@ -375,6 +375,28 @@ console authentication path, not keyboard-only or 360-pixel acceptance, a
 production signing root, or inclusion of later UI source changes in that
 signed pair.
 
+The final same-profile revision-17 pair was built from exact source
+`684fb8c2825b3f9da86cc8098f424c943800f940`, which includes the terminal
+availability correction fixed at `63ac0ed4`. Its A and B manifest SHA-256
+values are respectively
+`7cc26ede36c50c9140cab0e20897fcbb571159a17b5a3073330905c039685239`
+and `4b381e1d1fbc040c0b1977a1f844634062d2530136940832fe368cc1865668ce`.
+After the 508.35-second disconnected signed install/upgrade gate, the installed
+B console completed real password-plus-TOTP login through APISIX and was
+inspected at 360 by 800 CSS pixels. Overview, deployments and host resources
+all retained `scrollWidth == innerWidth == 360`; keyboard focus traversed the
+shell controls, Enter opened the contextual host-enrollment panel, and Escape
+closed it. The panel rendered the fixed one-time registration command without
+creating an enrollment. The deployments view kept a local target without a
+node binding unavailable for terminal use, and the installed UI binary
+contained the corrected explanation rather than describing every 404 as stale
+generation. Product logout revoked the IAM session and returned to login. The
+installed UI image was
+`sha256:95d931d79a3a134720da6b9bad108cdec2ee38ecffbc19ec561405eb40a4a740`.
+This closes the installed keyboard/360-pixel and current-copy gaps; the
+task-local signer remains test evidence rather than a published production
+trust root.
+
 - Gate A implementation replaces the Phase 1 page with the complete donor-
   shaped App Router -> route -> provider -> repository -> scene -> renderer ->
   public-component chain, seven static routes, memory-only IAM sessions,
@@ -384,11 +406,11 @@ signed pair.
   frontend tests, including visible failed revocation, logout during failed
   or pending resource loads, keyboard workspace sizing, and native instance-ID
   validation. The installed `8700095` candidate previously proved anonymous
-  login, offline assets, and no horizontal overflow. The current signed
-  candidate now proves password-plus-TOTP authentication and the IAM access
-  route; keyboard-only use and 360-pixel layout still require installed
-  browser verification. Source and component checks do not substitute for
-  those remaining gates.
+  login, offline assets, and no horizontal overflow. The final signed
+  revision-17 candidate proves password-plus-TOTP authentication, the IAM
+  access route, keyboard panel operation and a 360-pixel layout without page
+  overflow. Source and component checks remain supporting evidence rather
+  than substitutes for that installed gate.
 - Gate B authority is complete for the admitted PostgreSQL slice: the closed
   managed-service Go/OpenAPI contract now includes collection and single-
   resource reads for offerings, regions, quota entitlements, service
@@ -417,9 +439,9 @@ verification, full unit, vet and race suites, repeated critical packages,
 clean PostgreSQL 18 migration/tenant/Audit integration, the real fixed-image
 PostgreSQL lifecycle, Linux amd64 cross-build, all UI type/lint/architecture/
 style/test/embed gates, Markdown links, fixed-donor verification,
-donor-dependency and social-term scans, and `git diff --check`. Final
-acceptance must repeat the release and browser gates from the documentation-
-converged source commit.
+donor-dependency and social-term scans, and `git diff --check`. The final
+signed release and installed-browser repetition from documentation-converged
+source `684fb8c2` is recorded above.
 
 ## Deferred
 

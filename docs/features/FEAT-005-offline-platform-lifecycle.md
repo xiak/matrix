@@ -775,6 +775,29 @@ independent cross-profile two-host and runtime-browser gates are owned by
 FEAT-008; FEAT-007 owns the installed console login ceremony. Neither
 adjacent result publishes a production signing root.
 
+The documentation-converged source `684fb8c2825b3f9da86cc8098f424c943800f940`
+then produced a task-key-signed, same-profile revision-17 pair. Release A
+`matrix-v0.3.17-final.1-684fb8c2825b` has manifest SHA-256
+`7cc26ede36c50c9140cab0e20897fcbb571159a17b5a3073330905c039685239`;
+its exact-predecessor successor B `matrix-v0.3.17-final.2-684fb8c2825b`
+has SHA-256
+`4b381e1d1fbc040c0b1977a1f844634062d2530136940832fe368cc1865668ce`.
+Both authenticate IAM 49 / Audit 27 / PaaS 6, contract revision 17 and
+topology digest
+`sha256:c557033be301244974d2bd19636f33eebfd55b7f1a8daed821814f1a093ba7b5`.
+In a fresh, externally disconnected Docker 27.5.1 engine limited to 2 CPU and
+4 GiB, the 508.35-second gate rejected B as an initial install, installed and
+verified A, exercised real IAM authority, two application generations,
+original-primary credential recovery without a runtime restart, delivered-mail
+first MFA enrollment, Audit integrity, protected backup and injected-failure
+automatic rollback, then upgraded to B with retained state and reached
+`browser-successor-ready`. The installed-browser acceptance is owned by
+[FEAT-007](FEAT-007-control-plane-console.md). The dedicated engine, its two
+volumes and network, temporary signing material and 0.98 GiB package directory
+were removed after acceptance; no Docker service or remote machine was
+restarted. This proves a reproducible release candidate from the exact current
+source, not publication of the task-local key as a production trust root.
+
 ## Incremental acceptance
 
 ### Gate A: release and CLI contract

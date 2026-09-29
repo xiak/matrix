@@ -2064,6 +2064,22 @@ node directories, test image, DIND container/volumes, temporary routes and
 daemon was restarted. This proves the exact signed browser ceremony and
 source-level error copy, not that a later signed release contains the copy.
 
+The final signed revision-17 candidate closes that composition gap. Exact
+source `684fb8c2825b3f9da86cc8098f424c943800f940` produced the A/B manifests
+recorded by FEAT-005, and its installed B UI image
+`sha256:95d931d79a3a134720da6b9bad108cdec2ee38ecffbc19ec561405eb40a4a740`
+contains the corrected terminal-unavailable explanation. At 360 by 800 CSS
+pixels the authenticated host-resources page had no horizontal page overflow;
+keyboard Enter opened the enrollment panel and Escape closed it. The panel
+showed the fixed product command
+`sudo ./mx node install --root /opt/matrix-node --bundle ./matrix-node-release --trust-key ./release-trust.json --join ./matrix-node-join.json`.
+No enrollment was created in this local browser fixture; the independent
+one-time registration and two-host runtime evidence remains the accepted gate
+above. FEAT-007 owns the detailed browser acceptance. All task-only local
+runtime and package resources were removed afterward without restarting
+Docker or a remote machine. This proves the current signed package contains
+the final host-onboarding UI, not publication of a production signing root.
+
 ## Adoption
 
 - [FEAT-008 fixed-source review](../adoption/FEAT-008-linux-host-management.md)
