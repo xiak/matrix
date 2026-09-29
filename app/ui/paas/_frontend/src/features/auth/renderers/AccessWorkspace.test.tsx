@@ -1449,6 +1449,20 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByLabelText("Entity destination").textContent).toBe("principal-lin");
     expect((await extension.read("preview-only")).userPolicies["principal-lin"]).toEqual(["policy-prod-logs"]);
   });
+  it("surfaces user grant provenance and default-version denies without claiming effective access", async () => {
+    const { user } = await open("users", { entityId: "principal-qiao", users: reviewUsers });
+    await user.click(await screen.findByRole("tab", { name: "权限策略" }));
+    const overview = screen.getByRole("region", { name: "授权概览" });
+    expect(within(overview).getByText("直接关联").closest("div")?.textContent).toContain("3 项");
+    expect(within(overview).getByText("从用户组继承").closest("div")?.textContent).toContain("2 项");
+    expect(within(overview).getByText("含拒绝声明的策略").closest("div")?.textContent).toContain("1 项");
+    expect(within(overview).getByText("权限边界").closest("div")?.textContent).toContain("已配置");
+    expect(within(overview).getByText(/只汇总授权来源和策略当前默认版本/)).toBeTruthy();
+    const policies = screen.getByRole("table", { name: "用户关联策略（模拟）" });
+    const denyRow = within(policies).getByRole("button", { name: "ProtectProductionDeployments" }).closest("tr")!;
+    expect(within(denyRow).getByText("含显式拒绝").getAttribute("data-status")).toBe("danger");
+    expect(within(policies).getAllByText("仅允许声明")).toHaveLength(3);
+  });
   it.each([
     { tab: "权限策略", trigger: "关联策略", title: "管理直接关联策略", option: "MatrixReadOnlyAccess", change: "新增关联", kind: "policies" },
     { tab: "所属用户组", trigger: "编辑", title: "管理所属用户组", option: "DeliveryTeam", change: "移除关联", kind: "groups" }

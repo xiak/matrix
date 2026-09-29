@@ -88,6 +88,18 @@
   overflow-wrap: anywhere;
 }
 
+.grantOverview { display: grid; gap: var(--xiak-spacing-default); padding: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); background: var(--xiak-color-bg-panel-hover); }
+.grantOverviewHeading { display: grid; gap: var(--xiak-spacing-micro); }
+.grantOverviewHeading h3, .grantOverviewHeading p, .grantOverview dl, .grantOverview dt, .grantOverview dd { margin: 0; }
+.grantOverviewHeading h3 { color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-body); }
+.grantOverviewHeading p, .grantOverview dt { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: var(--xiak-line-height-body); }
+.grantOverview dl { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--xiak-spacing-default); }
+.grantOverview dl > div { display: grid; min-width: 0; gap: var(--xiak-spacing-narrow); padding-inline-start: var(--xiak-spacing-default); border-inline-start: var(--xiak-border-subtle); }
+.grantOverview dd { color: var(--xiak-color-text-strong); overflow-wrap: anywhere; }
+.grantOverview dd strong { font: var(--xiak-font-weight-medium) var(--xiak-font-size-subtitle)/1 var(--xiak-font-numeric); color: var(--xiak-color-accent-text); }
+@container account-access (max-width: 620px) { .grantOverview dl { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@container account-access (max-width: 340px) { .grantOverview dl { grid-template-columns: minmax(0, 1fr); } }
+
 .bindingList {
   list-style: none;
   margin: 0;
