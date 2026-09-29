@@ -353,6 +353,10 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 
 同一片把逐条依据标成 `MATCH`、`NOT_MATCH`、`CONTEXT_MISSING` 或 `CONTRACT_UNAVAILABLE`，并保留对应的自然语言原因和缺失事实。这里的 `CONTRACT_UNAVAILABLE` 只表示本地预览无法读取或解释策略/默认版本，不是尚未固定的 LIVE 网络 Profile `authority unavailable` 协议，也不能被产品服务当作 permit。50 文件/830 用例、三条静态归一化用例、类型/lint/架构/228 组主题对比、41 页静态导出、228 个嵌入文件等价及全仓 Go test/vet 通过；DEV 桌面和 `390 × 844` 检查确认三层决策卡片分别横排/纵排且 document/body 无横向溢出，控制台 warning/error 为空。本片没有新增 LIVE 条件、网络上下文提交或产品 PEP 行为。
 
+2026-09-29，已推送的 [`d119a54d`](https://github.com/xiak/matrix/commit/d119a54d) 在隔离 MOCK 策略作者中把闭合目录的条件能力直接放进声明信息流：每个条件分别显示全部所选 Action 支持、部分支持、均不支持或等待选择及准确覆盖数。可编辑条件仍只取全部所选 Action 的能力交集；部分支持不会自动拆分声明，也不会静默扩大授权。来源 IP 输入按当前 MOCK 上限保留最多十行，并阻断空值、非 CIDR、主机位非零的未掩码网段及完全相同的重复行；该输入校验不声称完成服务端规范化或消费尚未固定的 LIVE 网络条件协议。错误会同时保留提交级说明并把焦点落到具体多行输入框，公共 `TextArea` 也修复为不再覆盖调用方的 `aria-invalid`。
+
+本片 50 文件/833 用例及三条静态归一化、类型/lint/架构/228 组主题对比、41 页静态导出、228 个嵌入文件等价和全仓 Go test/vet 全部通过。DEV 桌面及 `390 × 844` 实测可见 `2 / 2` 全部支持与 `1 / 2` 部分支持，未掩码 CIDR 产生就地错误；两种宽度均无横向溢出或浏览器 warning/error。这里仍没有新增 LIVE 条件 key、请求上下文提交字段、代理头读取、产品 PEP attestation 或 permit。
+
 ### Role、trust 与会话 MOCK 的开发验收证据
 
 2026-09-24，当前前端实现固定在已推送的
