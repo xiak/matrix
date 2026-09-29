@@ -1334,6 +1334,8 @@ Account的`security-settings`增加明确的`session.idleTimeoutMinutes`，默�
 
 同一前驱门禁用两个由旧程序真实创建的独立USER分别证明旧MFA Session失败关闭和旧因子移除/重绑/新因子登录，避免通过清空共享五次OTP预算或延长窗口制造通过。闲置资格还已纳入密码尝试、本人/批量会话撤销及策略关联的锁内Session检查；门禁曾发现旧NULL会话被批量撤销计数的问题，生产函数现拒绝把这类无效历史行当作当前有效目标。最终独立双IAM/Audit/PaaS/dispatcher进程门禁在新PG18.4数据库串行race-p1通过284.626s，保留受限数据库身份、双租户资源、撤权、MFA、历史outbox/Audit和重启回归。CI新增独立自然闲置lane并从通用自动发现中显式排除该测试，避免缺DSN时SKIP被误记为通过；本候选的独立CI尚未完成。
 
+固定`139e1322730186cc555bec305ba3889edd59b10c`的[Verification36559683247](https://github.com/xiak/matrix/actions/runs/36559683247)在`authority-storage`失败，不能算作本片独立CI成功。失败先暴露Audit存储门禁写死IAM51；改为读取未初始化时的有效版本并证明bootstrap只让同一版本就绪，不把IAM内部schema号交给Audit测试拥有。随后同一门禁还暴露旧测试通过直接改写Session发行/到期时间制造过期，已删除该重复路径；真实自然absolute/idle到期仍由IAM所属门禁证明，跨authority测试继续证明服务器封存期限、撤销过滤和失败outbox原子性。修正后的`TestPostgresAuthorityIntegration`在新独立PG18.6上串行race-p1通过18.961s；后继固定SHA及独立CI仍待确认，旧失败不回填。
+
 #### S3验收与衔接
 
 - 两账号同名用户、ID/别名两种realm、两个IAM副本，真实验证同USER预算共享/不同USER隔离、设置归属、受限规则读取及配置越权；root和未撤销平台附件保护不能通过停用后重试绕过。
