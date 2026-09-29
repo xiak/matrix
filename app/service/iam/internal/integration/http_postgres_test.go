@@ -18178,6 +18178,7 @@ func TestIAMRoleAndManagementReferencesPostgres(t *testing.T) {
 			root := localRecoveryLogin(t, handler, "admin", adminPassword, true)
 			root = localRecoveryChangePassword(t, handler, root, adminPassword, changedAdminPassword)
 			if gate.name == "roles" {
+				proveServiceRoleTemplateDirectory(t, ctx, handler, database, root)
 				proveRoleManagement(t, ctx, handler, database, root)
 			} else if gate.name == "role_sessions" {
 				proveRoleSessionIssuance(t, ctx, handler, database, root)
@@ -22098,6 +22099,79 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 	t.Run("outbox physical owner and sealed chain", func(t *testing.T) {
 		proveIAMOutboxClaims(t, ctx, admin, poolConfig, handler)
 	})
+}
+
+func proveServiceRoleTemplateDirectory(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, root string) {
+	t.Helper()
+	request := func(method, path, bearer string, body any) *httptest.ResponseRecorder {
+		t.Helper()
+		var encoded []byte
+		if body != nil {
+			encoded = mustIAMJSON(t, body)
+		}
+		return performIAMRequest(handler, method, path, bearer, encoded)
+	}
+	if response := request(http.MethodGet, "/v1/service-role-templates", root, nil); response.Code != http.StatusForbidden {
+		t.Fatalf("account administrator silently inherited service template authority: status=%d body=%s", response.Code, response.Body.String())
+	}
+	for _, attack := range []struct {
+		method, path string
+		body         any
+		want         int
+	}{
+		{http.MethodGet, "/v1/service-role-templates?accountId=other", nil, http.StatusBadRequest},
+		{http.MethodGet, "/v1/service-role-templates?product=managedservice", nil, http.StatusBadRequest},
+		{http.MethodGet, "/v1/service-role-templates?purpose=PAAS", nil, http.StatusBadRequest},
+		{http.MethodGet, "/v1/service-role-templates", map[string]any{"installationId": "other"}, http.StatusBadRequest},
+		{http.MethodPost, "/v1/service-role-templates", map[string]any{}, http.StatusMethodNotAllowed},
+	} {
+		if response := request(attack.method, attack.path, root, attack.body); response.Code != attack.want {
+			t.Fatalf("service template selector attack %s %s: status=%d want=%d body=%s", attack.method, attack.path, response.Code, attack.want, response.Body.String())
+		}
+	}
+	var actor iamv1.CurrentIdentity
+	response := request(http.MethodGet, "/v1/auth/me", root, nil)
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &actor) != nil {
+		t.Fatal("read service template actor")
+	}
+	var attachment iamv1.PolicyAttachment
+	response = request(http.MethodPost, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{
+		Target:                iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(actor.User.ID)},
+		PolicyID:              iamv1.SystemPolicyServiceRoleAdministrator,
+		PolicyResourceVersion: 1,
+		RequestID:             "service-template-delegate",
+	})
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &attachment) != nil || iamv1.ValidatePolicyAttachment(attachment) != nil {
+		t.Fatalf("delegate service template authority: status=%d body=%s", response.Code, response.Body.String())
+	}
+	if response := request(http.MethodGet, "/v1/service-role-templates", paasCredential, nil); response.Code != http.StatusUnauthorized {
+		t.Fatal("service credential substituted for service template user authority")
+	}
+	response = request(http.MethodGet, "/v1/service-role-templates", root, nil)
+	var result iamv1.ServiceRoleTemplateList
+	decoder := json.NewDecoder(response.Body)
+	decoder.DisallowUnknownFields()
+	wanted, err := authority.ServiceRoleTemplates()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" || decoder.Decode(&result) != nil ||
+		iamv1.ValidateServiceRoleTemplateList(result) != nil || !reflect.DeepEqual(result.Items, wanted) || len(result.Items) != 1 ||
+		result.Items[0].Status != iamv1.ServiceRoleTemplateActive {
+		t.Fatalf("service template directory differs from release authority: status=%d body=%s err=%v", response.Code, response.Body.String(), err)
+	}
+	response = request(http.MethodPost, "/v1/policy-attachments/"+string(attachment.ID)+":revoke", root,
+		iamv1.RevokePolicyAttachmentRequest{ResourceVersion: attachment.ResourceVersion, RequestID: "service-template-revoke-delegation"})
+	if response.Code != http.StatusOK {
+		t.Fatalf("revoke service template authority: status=%d body=%s", response.Code, response.Body.String())
+	}
+	if response := request(http.MethodGet, "/v1/service-role-templates", root, nil); response.Code != http.StatusForbidden {
+		t.Fatal("revoked service template authority remained cached")
+	}
+	var active int
+	if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.policy_attachments WHERE tenant_id=$1 AND id=$2 AND revoked_at IS NULL`, actor.Account.ID, attachment.ID).Scan(&active); err != nil || active != 0 {
+		t.Fatal("service template delegation did not reach a terminal revocation", err)
+	}
 }
 
 func proveRoleManagement(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, root string) {

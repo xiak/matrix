@@ -14,6 +14,7 @@ import (
 	"time"
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
+	"github.com/xiak/matrix/app/service/iam/internal/authority"
 	"github.com/xiak/matrix/app/service/iam/internal/usecase/identityaccess"
 )
 
@@ -267,6 +268,81 @@ func TestIAMHTTPAuthorizationProfileDiscoveryRejectsInvalidMetadata(t *testing.T
 			newTestHandler(t, workflow).ServeHTTP(response, request)
 			if response.Code != test.status || workflow.policyCalls != 1 || strings.Contains(response.Body.String(), "AuthorizationProfileList") || strings.Contains(response.Body.String(), "contentDigest") {
 				t.Fatal("directory failure leaked partial metadata or bypassed authority")
+			}
+		})
+	}
+}
+
+func TestIAMHTTPServiceRoleTemplateDirectoryRequiresUserSession(t *testing.T) {
+	workflow := newHTTPWorkflow(t)
+	handler := newTestHandler(t, workflow)
+	for _, test := range []struct {
+		name, method, suffix, body, bearer string
+		status                             int
+	}{
+		{"current templates", http.MethodGet, "", "", "template-session", http.StatusOK},
+		{"no bearer", http.MethodGet, "", "", "", http.StatusUnauthorized},
+		{"account selector", http.MethodGet, "?accountId=other", "", "template-session", http.StatusBadRequest},
+		{"product selector", http.MethodGet, "?product=managedservice", "", "template-session", http.StatusBadRequest},
+		{"purpose selector", http.MethodGet, "?purpose=PAAS", "", "template-session", http.StatusBadRequest},
+		{"scope body", http.MethodGet, "", `{"installationId":"other"}`, "template-session", http.StatusBadRequest},
+		{"registration", http.MethodPost, "", `{}`, "template-session", http.StatusMethodNotAllowed},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			before := workflow.templateCalls
+			request := httptest.NewRequest(test.method, "/v1/service-role-templates"+test.suffix, strings.NewReader(test.body))
+			if test.bearer != "" {
+				request.Header.Set("Authorization", "Bearer "+test.bearer)
+			}
+			request.Header.Set("Matrix-Tenant-ID", "forged-account")
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != test.status {
+				t.Fatalf("template directory status=%d want=%d body=%s", response.Code, test.status, response.Body.String())
+			}
+			if test.status == http.StatusOK {
+				wantedCredential, _ := iamv1.NewSecret(test.bearer)
+				var result iamv1.ServiceRoleTemplateList
+				decoder := json.NewDecoder(response.Body)
+				decoder.DisallowUnknownFields()
+				expected, err := authority.ServiceRoleTemplates()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if decoder.Decode(&result) != nil || iamv1.ValidateServiceRoleTemplateList(result) != nil ||
+					!reflect.DeepEqual(result.Items, expected) || workflow.templateCalls != before+1 ||
+					workflow.templateCredential != wantedCredential || response.Header().Get("Cache-Control") != "no-store" {
+					t.Fatal("template directory lost its authenticated immutable projection")
+				}
+			} else if workflow.templateCalls != before {
+				t.Fatal("invalid template request reached the authority workflow")
+			}
+		})
+	}
+}
+
+func TestIAMHTTPServiceRoleTemplateDirectoryRejectsInvalidMetadata(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		failure error
+		invalid bool
+		status  int
+	}{
+		{"unauthenticated", identityaccess.ErrUnauthenticated, false, http.StatusUnauthorized},
+		{"forbidden", identityaccess.ErrForbidden, false, http.StatusForbidden},
+		{"unavailable", identityaccess.ErrUnavailable, false, http.StatusServiceUnavailable},
+		{"invalid template", nil, true, http.StatusServiceUnavailable},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			workflow := newHTTPWorkflow(t)
+			workflow.templateErr, workflow.invalidTemplate = test.failure, test.invalid
+			request := httptest.NewRequest(http.MethodGet, "/v1/service-role-templates", nil)
+			request.Header.Set("Authorization", "Bearer template-session")
+			response := httptest.NewRecorder()
+			newTestHandler(t, workflow).ServeHTTP(response, request)
+			if response.Code != test.status || workflow.templateCalls != 1 ||
+				strings.Contains(response.Body.String(), "ServiceRoleTemplate") || strings.Contains(response.Body.String(), "contentDigest") {
+				t.Fatal("template directory failure leaked partial metadata or bypassed authority")
 			}
 		})
 	}
@@ -1536,6 +1612,10 @@ type httpWorkflow struct {
 	policyCredential         iamv1.Secret
 	profileErr               error
 	invalidProfile           bool
+	templateCalls            int
+	templateCredential       iamv1.Secret
+	templateErr              error
+	invalidTemplate          bool
 	readiness                iamv1.Readiness
 	status                   iamv1.BootstrapStatus
 	identity                 iamv1.ServiceIdentity
@@ -1617,6 +1697,19 @@ func (value *httpWorkflow) ListAuthorizationProfiles(_ context.Context, credenti
 	}
 	return iamv1.AuthorizationProfileList{APIVersion: iamv1.APIVersion, Kind: "AuthorizationProfileList", AccountID: "account-catalog",
 		Items: []iamv1.AuthorizationProfileEntry{{Profile: profile, ContentDigest: digest}}}, value.profileErr
+}
+
+func (value *httpWorkflow) ListServiceRoleTemplates(_ context.Context, credential iamv1.Secret, _ string) (iamv1.ServiceRoleTemplateList, error) {
+	value.templateCalls++
+	value.templateCredential = credential
+	templates, err := authority.ServiceRoleTemplates()
+	if err != nil {
+		return iamv1.ServiceRoleTemplateList{}, identityaccess.ErrUnavailable
+	}
+	if value.invalidTemplate {
+		templates[0].ContentDigest = "invalid-digest"
+	}
+	return iamv1.ServiceRoleTemplateList{APIVersion: iamv1.APIVersion, Kind: "ServiceRoleTemplateList", Items: templates}, value.templateErr
 }
 
 func (value *httpWorkflow) ListPolicies(_ context.Context, credential iamv1.Secret, platform bool, _ string) (iamv1.PolicyList, error) {

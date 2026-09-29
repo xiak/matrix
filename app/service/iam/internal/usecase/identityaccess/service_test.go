@@ -1716,6 +1716,88 @@ func TestAuthorizationProfileDiscoveryRequiresCurrentAuthorityAndNoPermitCache(t
 	}
 }
 
+func TestServiceRoleTemplateDiscoveryRequiresDelegatedCurrentAuthority(t *testing.T) {
+	tx := newCoreTransaction()
+	service, err := newCoreAuthority(&coreRepository{transaction: tx}, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootstrap := coreBootstrap(t)
+	if _, err := service.Bootstrap(t.Context(), bootstrap); err != nil {
+		t.Fatal(err)
+	}
+	login, err := service.Login(t.Context(), iamv1.LoginRequest{
+		LoginName: "admin", Password: bootstrap.Administrator.Password, RequestID: "template-login",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.ListServiceRoleTemplates(t.Context(), login.Credential, "bad request"); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatal("invalid request identity reached template authority")
+	}
+	if _, err := service.ListServiceRoleTemplates(t.Context(), login.Credential, "template-forced"); !errors.Is(err, ErrForbidden) {
+		t.Fatal("temporary forced-change session obtained service template metadata")
+	}
+	if _, err := service.ChangePassword(t.Context(), login.Credential, iamv1.ChangePasswordRequest{
+		CurrentPassword: bootstrap.Administrator.Password,
+		NewPassword:     coreSecret(t, "Template-Changed-Password-58!"),
+		RequestID:       "template-change",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.ListServiceRoleTemplates(t.Context(), login.Credential, "template-not-delegated"); !errors.Is(err, ErrForbidden) {
+		t.Fatal("account administrator silently inherited service-role administration")
+	}
+	attachment, err := service.CreatePolicyAttachment(t.Context(), login.Credential, iamv1.CreatePolicyAttachmentRequest{
+		Target:                iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(bootstrap.Administrator.ID)},
+		PolicyID:              iamv1.SystemPolicyServiceRoleAdministrator,
+		PolicyResourceVersion: 1,
+		RequestID:             "template-delegate",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.ListServiceRoleTemplates(t.Context(), login.Credential, "template-allowed")
+	wanted, wantedErr := authority.ServiceRoleTemplates()
+	if err != nil || wantedErr != nil || iamv1.ValidateServiceRoleTemplateList(result) != nil || !reflect.DeepEqual(result.Items, wanted) {
+		t.Fatalf("authenticated service template directory failed: result=%#v err=%v wantedErr=%v", result, err, wantedErr)
+	}
+	last := tx.authorizations[len(tx.authorizations)-1]
+	if last.Decision.Action != iamv1.ActionIAMServiceRoleTemplateList || last.Decision.Resource.Kind != iamv1.ResourceAccount ||
+		last.Decision.Resource.ID != string(bootstrap.Organization.ID) || last.Decision.ResourceMode != iamv1.AuthorizationResourceInstance ||
+		last.Decision.Subject == nil || last.Decision.Subject.Type != iamv1.SubjectUser || last.AuditEvent.Action != auditv1.ActionIAMAuthorizationDecided {
+		t.Fatal("template directory substituted installation authority or lost its user decision")
+	}
+	result.Items[0].Spec.WorkloadResourceKinds[0] = "MUTATED"
+	fresh, err := service.ListServiceRoleTemplates(t.Context(), login.Credential, "template-fresh")
+	if err != nil || fresh.Items[0].Spec.WorkloadResourceKinds[0] == "MUTATED" {
+		t.Fatal("caller mutated release-owned service template authority")
+	}
+	before := len(tx.authorizations)
+	tx.profileErr = ErrUnavailable
+	if _, err := service.ListServiceRoleTemplates(t.Context(), login.Credential, "template-drift"); !errors.Is(err, ErrUnavailable) || len(tx.authorizations) != before {
+		t.Fatal("template directory bypassed current profile verification or recorded an ordinary drift decision")
+	}
+	tx.profileErr = nil
+	if _, err := service.ListServiceRoleTemplates(t.Context(), coreServiceCredential(t, bootstrap, iamv1.ServicePaaS), "template-service"); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatal("service credential substituted for a current user")
+	}
+	if _, err := service.RevokePolicyAttachment(t.Context(), login.Credential, attachment.ID, iamv1.RevokePolicyAttachmentRequest{
+		ResourceVersion: attachment.ResourceVersion, RequestID: "template-revoke-delegation",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.ListServiceRoleTemplates(t.Context(), login.Credential, "template-revoked-delegation"); !errors.Is(err, ErrForbidden) {
+		t.Fatal("revoked service-role administration remained cached")
+	}
+	if _, err := service.Logout(t.Context(), login.Credential, iamv1.LogoutRequest{RequestID: "template-logout"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.ListServiceRoleTemplates(t.Context(), login.Credential, "template-revoked-session"); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatal("revoked session reused service template access")
+	}
+}
+
 func TestTransactionRetryYieldsToContendingCommit(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		service, err := newCoreAuthority(&coreRepository{transaction: newCoreTransaction()}, Config{})

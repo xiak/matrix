@@ -196,6 +196,7 @@ func buildPaths() object {
 		"/v1/auth/totp/removals/by-request/{requestId}":                object{"get": readOperation("getAuthenticatorRemovalByRequest", "Read the original same-USER removal using a current valid login Session; never repeat removal effects", "AuthenticatorRemoval", nil, []any{openapi31.PathIDParameter("requestId")})},
 		"/v1/auth/me":                object{"get": readOperation("getCurrentIdentity", "Get the current account and identity", "CurrentIdentity", nil, nil)},
 		"/v1/authorization-profiles": object{"get": readOperation("listAuthorizationProfiles", "Read complete current product declarations under current account policy-list permission; metadata is not a permit or registration capability. Maximum complete response 64 KiB.", "AuthorizationProfileList", nil, nil)},
+		"/v1/service-role-templates": object{"get": readOperation("listServiceRoleTemplates", "Read release-owned immutable service-role templates under current account permission. ACTIVE is not account consent and the response contains no service credential.", "ServiceRoleTemplateList", nil, nil)},
 		"/v1/policies": object{
 			"get":  readOperation("listPolicies", "Read the complete bounded current account policy metadata directory", "PolicyList", nil, nil),
 			"post": mutationOperation("createPolicy", "Create an account-owned policy and its initial immutable version without attaching it", "CreatePolicyRequest", "PolicyDetail", "201", nil, nil),

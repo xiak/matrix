@@ -31591,6 +31591,36 @@
         "summary": "Get the identity bound to the current service credential"
       }
     },
+    "/v1/service-role-templates": {
+      "get": {
+        "operationId": "listServiceRoleTemplates",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceRoleTemplateList"
+                }
+              }
+            },
+            "description": "Current authority state."
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Read release-owned immutable service-role templates under current account permission. ACTIVE is not account consent and the response contains no service credential."
+      }
+    },
     "/v1/sessions/{sessionId}:revoke": {
       "post": {
         "operationId": "revokeSession",

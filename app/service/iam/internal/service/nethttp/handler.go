@@ -65,6 +65,7 @@ type Workflow interface {
 	RemoveGroupMembership(context.Context, iamv1.Secret, iamv1.GroupID, iamv1.GroupMembershipID, iamv1.RemoveGroupMembershipRequest) (iamv1.GroupMembership, error)
 	ListPolicies(context.Context, iamv1.Secret, bool, string) (iamv1.PolicyList, error)
 	ListAuthorizationProfiles(context.Context, iamv1.Secret, string) (iamv1.AuthorizationProfileList, error)
+	ListServiceRoleTemplates(context.Context, iamv1.Secret, string) (iamv1.ServiceRoleTemplateList, error)
 	GetPolicy(context.Context, iamv1.Secret, iamv1.PolicyID, string) (iamv1.PolicyDetail, error)
 	CreatePolicy(context.Context, iamv1.Secret, iamv1.CreatePolicyRequest) (iamv1.PolicyDetail, error)
 	ListPolicyVersions(context.Context, iamv1.Secret, iamv1.PolicyID, string) (iamv1.PolicyVersionList, error)
@@ -196,6 +197,7 @@ func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 	routes.HandleFunc("/v1/auth/me", value.currentIdentity)
 	routes.HandleFunc("/v1/policies", value.policies)
 	routes.HandleFunc("/v1/authorization-profiles", value.authorizationProfiles)
+	routes.HandleFunc("/v1/service-role-templates", value.serviceRoleTemplates)
 	routes.HandleFunc("/v1/policies/", value.policy)
 	routes.HandleFunc("/v1/platform-policies", value.listPolicies)
 	routes.HandleFunc("/v1/accounts", value.accounts)
@@ -436,6 +438,26 @@ func (value *handler) authorizationProfiles(response http.ResponseWriter, reques
 		return
 	}
 	if iamv1.ValidateAuthorizationProfileList(result) != nil {
+		value.writeError(response, request, identityaccess.ErrUnavailable)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (value *handler) serviceRoleTemplates(response http.ResponseWriter, request *http.Request) {
+	if !value.requireMethod(response, request, http.MethodGet) || !rejectQueryAndBody(response, request) {
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.ListServiceRoleTemplates(request.Context(), credential, requestID(request))
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	if iamv1.ValidateServiceRoleTemplateList(result) != nil {
 		value.writeError(response, request, identityaccess.ErrUnavailable)
 		return
 	}
