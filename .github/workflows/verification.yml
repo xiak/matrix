@@ -242,7 +242,9 @@ jobs:
         # No existing scenario or password cost is reduced.
         run: |
           time go test -race -p 1 -count=1 ./app/service/iam/internal/integration \
-            -run '^TestIAM(OwnSession(Postgres|ExpiryPostgres|BulkPostgres)|SessionIdlePostgres|PasswordAttemptsPostgres|TOTPCustodyPostgres|TOTPEnrollmentPostgres|TOTPBackupSnapshotPostgres|NotificationContactPostgres)$'
+            -run '^TestIAM(OwnSession(Postgres|ExpiryPostgres|BulkPostgres)|SessionIdlePostgres|PasswordAttemptsPostgres)$'
+          time go test -race -p 1 -count=1 ./app/service/iam/internal/integration \
+            -run '^TestIAM(TOTPCustodyPostgres|TOTPEnrollmentPostgres|TOTPBackupSnapshotPostgres|NotificationContactPostgres)$'
       - name: Retained data and actual authority processes
         if: matrix.lane == 'authority-runtime'
         env:
