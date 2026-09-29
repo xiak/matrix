@@ -3725,6 +3725,201 @@ func TestIAMSecuritySettingsPostgres(t *testing.T) {
 	testIAMTOTPEnrollmentPostgres(t, "security-settings")
 }
 
+// This opt-in two-invocation gate retains the real security-settings fixture
+// across an actual day. The first invocation must follow the ordinary fixture
+// test on the same private database; the second must run only after its real
+// password deadline. Neither invocation changes the database clock or writes
+// an authentication timestamp. A private file carries the first bearer so the
+// second invocation can prove that its originally issued Session really died.
+func TestIAMNaturalPasswordExpiryPostgres(t *testing.T) {
+	dsn := os.Getenv("MATRIX_IAM_NATURAL_PASSWORD_EXPIRY_POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set a retained matrix_iam_security_settings_natural_ PostgreSQL 18 database")
+	}
+	phase, secretPath := os.Getenv("MATRIX_IAM_NATURAL_PASSWORD_EXPIRY_PHASE"), os.Getenv("MATRIX_IAM_NATURAL_PASSWORD_EXPIRY_SECRET_FILE")
+	if (phase != "BEFORE" && phase != "AFTER") || !filepath.IsAbs(secretPath) || filepath.Base(secretPath) != "session-secret" {
+		t.Fatal("natural expiry requires a closed phase and a private absolute session-secret path")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	config, err := pgx.ParseConfig(dsn)
+	if err != nil || !strings.HasPrefix(config.Database, "matrix_iam_security_settings_natural_") {
+		t.Fatal("natural expiry requires its own retained database")
+	}
+	admin, err := pgx.ConnectConfig(ctx, config)
+	if err != nil {
+		t.Fatal("connect retained natural expiry database", err)
+	}
+	defer admin.Close(context.Background())
+	assertIAMPostgres18(t, ctx, admin)
+	var deadline, observed time.Time
+	var qualified bool
+	if err := admin.QueryRow(ctx, `SELECT c.password_changed_at+interval '86400 seconds',clock_timestamp(),
+		p.status='ACTIVE' AND NOT p.must_change_password AND m.enrollment_state='NEVER_BOUND'
+		AND a.password_settings->>'maxAgeDays'='1' AND a.password_settings->>'expiryMode'='CHANGE_PASSWORD'
+		AND NOT a.mfa_required_for_users
+		FROM iam.accounts a JOIN iam.principals p ON p.tenant_id=a.id
+		JOIN iam.user_credentials c ON (c.tenant_id,c.principal_id)=(p.tenant_id,p.id)
+		JOIN iam.user_mfa_states m ON (m.tenant_id,m.user_id)=(p.tenant_id,p.id)
+		WHERE a.id='organization-http-integration' AND p.login_name='settings-unbound'`).Scan(&deadline, &observed, &qualified); err != nil || !qualified || deadline.IsZero() {
+		t.Fatal("retained natural expiry fixture lost its real USER, password age or current Account rule", err)
+	}
+	if phase == "BEFORE" && !observed.Before(deadline.Add(-time.Hour)) {
+		t.Fatal("natural expiry preparation did not leave a real pre-deadline window")
+	}
+	if phase == "AFTER" && observed.Before(deadline) {
+		t.Fatal("real password deadline has not elapsed; no simulated time is accepted")
+	}
+	document := iamHTTPBootstrap(t)
+	wrapping, totp := iamHTTPAccessKeyWrapping(t, document), iamHTTPTOTPKeyring(t, document)
+	digest, err := iamv1.BootstrapDigest(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mail := iamv1.EmailVerificationKeyring{APIVersion: iamv1.APIVersion, Kind: "EmailVerificationKeyring", Purpose: iamv1.EmailVerificationWrappingPurpose,
+		Scope:          iamv1.SecurityMailInstallationScope{InstallationID: document.InstallationID, BootstrapDigest: digest},
+		KeysetRevision: 1, ActiveKeyID: "mfa-email", Keys: []iamv1.EmailVerificationWrappingKey{{KeyID: "mfa-email", FormatVersion: 1,
+			KeyMaterial: iamHTTPSecret(t, base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x63}, 32)))}}}
+	var handlers [2]http.Handler
+	var pools [2]*pgxpool.Pool
+	for index := range handlers {
+		poolConfig, err := pgxpool.ParseConfig(dsn)
+		if err != nil {
+			t.Fatal(err)
+		}
+		poolConfig.ConnConfig.User, poolConfig.ConnConfig.Password = iamHTTPTestRole, iamHTTPTestPassword
+		poolConfig.MaxConns = 2
+		pools[index], err = pgxpool.NewWithConfig(ctx, poolConfig)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer pools[index].Close()
+		repository, err := iampostgres.NewRepository(pools[index])
+		if err != nil {
+			t.Fatal(err)
+		}
+		authority, err := identityaccess.NewAuthority(repository, identityaccess.Config{CursorKey: bytes.Repeat([]byte{0x39}, 32),
+			AccessKeyWrapping: &wrapping, TOTPKeyring: &totp, EmailVerificationKeyring: &mail, SessionLifetime: 24 * time.Hour})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ready, err := authority.Readiness(ctx)
+		if err != nil || ready.State != iamv1.ReadinessReady || ready.SchemaVersion != identityaccess.SchemaVersion {
+			t.Fatal("retained natural expiry authority is not actually ready", err)
+		}
+		handlers[index], err = iamhttp.NewHandler(authority, iamhttp.Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	login := func(handler http.Handler, requestID, password string) iamv1.LoginResponse {
+		t.Helper()
+		encoded, err := json.Marshal(map[string]string{
+			"loginName": "settings-unbound@organization-http-integration", "password": password, "requestId": requestID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer clear(encoded)
+		response := performIAMRequest(handler, http.MethodPost, "/v1/auth/login", "", encoded)
+		var result iamv1.LoginResponse
+		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &result) != nil {
+			t.Fatal("natural expiry login did not return a valid closed result", response.Code)
+		}
+		return result
+	}
+	const currentPassword = "Settings-Ordinary-New-Password-125!"
+	parent := filepath.Dir(secretPath)
+	if phase == "BEFORE" {
+		if err := os.Mkdir(parent, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+			t.Fatal("natural expiry private directory is unavailable", err)
+		}
+	}
+	if stat, err := os.Lstat(parent); err != nil || !stat.IsDir() || stat.Mode().Perm() != 0o700 {
+		t.Fatal("natural expiry private directory is unavailable")
+	}
+	if phase == "BEFORE" {
+		result := login(handlers[0], "natural-expiry-before", currentPassword)
+		if result.Outcome != iamv1.LoginAuthenticated || !result.Credential.Present() || !result.Session.ExpiresAt.Equal(deadline) {
+			t.Fatal("pre-deadline password login did not issue a genuinely clipped Session")
+		}
+		for _, handler := range handlers {
+			if response := performIAMRequest(handler, http.MethodGet, "/v1/auth/me", string(result.Credential.CopyBytes()), nil); response.Code != http.StatusOK {
+				t.Fatal("pre-deadline Session was not usable across authorities", response.Code)
+			}
+		}
+		material := result.Credential.CopyBytes()
+		defer clear(material)
+		file, err := os.OpenFile(secretPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err != nil {
+			t.Fatal("create single-use private natural expiry Session", err)
+		}
+		if _, err := file.Write(material); err != nil {
+			file.Close()
+			t.Fatal("write private natural expiry Session", err)
+		}
+		if err := file.Sync(); err != nil {
+			file.Close()
+			t.Fatal("persist private natural expiry Session", err)
+		}
+		if err := file.Close(); err != nil {
+			t.Fatal("close private natural expiry Session", err)
+		}
+		return
+	}
+	info, err := os.Lstat(secretPath)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0o600 {
+		t.Fatal("original private Session proof is unavailable")
+	}
+	material, err := os.ReadFile(secretPath)
+	if err != nil {
+		t.Fatal("read original private Session proof", err)
+	}
+	defer clear(material)
+	for _, handler := range handlers {
+		if response := performIAMRequest(handler, http.MethodGet, "/v1/auth/me", string(material), nil); response.Code != http.StatusUnauthorized {
+			t.Fatal("real elapsed password deadline did not revoke the original Session", response.Code)
+		}
+	}
+	expired := login(handlers[1], "natural-expiry-after", currentPassword)
+	if expired.Outcome != iamv1.LoginChallengeRequired || expired.Challenge == nil || expired.Challenge.Purpose != "LOGIN" ||
+		expired.Challenge.NextStep != "PASSWORD_CHANGE" || expired.Credential.Present() || !expired.ChallengeCredential.Present() {
+		t.Fatal("real elapsed password deadline issued a full login or lost the restricted change path")
+	}
+	for _, handler := range handlers {
+		if response := performIAMRequest(handler, http.MethodGet, "/v1/auth/me", string(expired.ChallengeCredential.CopyBytes()), nil); response.Code != http.StatusUnauthorized {
+			t.Fatal("expired restricted password capability became a Session", response.Code)
+		}
+	}
+	changeBody, err := iamv1.EncodeChallengePasswordChangeRequest(iamv1.ChallengePasswordChangeRequest{
+		RequestID: "natural-expiry-change", ChallengeCredential: expired.ChallengeCredential,
+		NewPassword: iamHTTPSecret(t, "Natural-Expiry-New-Password-125!"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(changeBody)
+	changed := performIAMRequest(handlers[0], http.MethodPost, "/v1/auth/challenges/"+expired.Challenge.ID+":password", "", changeBody)
+	var result iamv1.ChallengePasswordChangeResponse
+	if changed.Code != http.StatusOK || json.Unmarshal(changed.Body.Bytes(), &result) != nil || result.NextStep != "REAUTHENTICATE" || !result.ChangedAt.After(deadline) {
+		t.Fatal("expired password challenge did not commit an actual replacement", changed.Code)
+	}
+	fresh := login(handlers[1], "natural-expiry-reauthenticate", "Natural-Expiry-New-Password-125!")
+	if fresh.Outcome != iamv1.LoginAuthenticated || !fresh.Credential.Present() {
+		t.Fatal("expired password replacement did not require and then allow ordinary reauthentication")
+	}
+	for _, handler := range handlers {
+		if response := performIAMRequest(handler, http.MethodGet, "/v1/auth/me", string(material), nil); response.Code != http.StatusUnauthorized {
+			t.Fatal("new credential revived the original expired Session", response.Code)
+		}
+		if response := performIAMRequest(handler, http.MethodGet, "/v1/auth/me", string(fresh.Credential.CopyBytes()), nil); response.Code != http.StatusOK {
+			t.Fatal("new password login was not accepted across authorities", response.Code)
+		}
+	}
+	if err := os.Remove(secretPath); err != nil {
+		t.Fatal("remove consumed private Session proof", err)
+	}
+}
+
 // Independent Accounts preserve the installation root's current qualification
 // while each case exercises a real Account-wide authentication barrier.
 func proveIAMSecuritySettingsRaces(t *testing.T, ctx context.Context, database *pgx.Conn, repo *iampostgres.Repository, first *identityaccess.Authority, root iamv1.Secret, config identityaccess.Config, mode string) {

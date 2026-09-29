@@ -1291,6 +1291,8 @@ S3b正在实施，尚未完整验收。最小可验收结果是：管理员按�
 
 尚缺真实已知年龄跨过到期时刻、平台附件/恢复等剩余代表性竞争、新终态专属跨进程投递/独立CI、LIVE浏览器和签名消费者。期限计算函数在截止前/等于/之后的只读观察不是实际经过一天；UNKNOWN流程不冒充自然到期或跨发布profile许可。各轮自有资源均已按精确ID/标签清理；本次确认零其他客户端后正常停止PG，删除两个已结束runner、PG及临时合成数据、无引用缓存卷和空网络，未操作其他任务或远端。
 
+实际一天门禁已在本任务单独保留的PG18.4数据库上完成前半段：先用原`TestIAMSecuritySettingsPostgres`的真实HTTP流程设置`maxAgeDays=1/CHANGE_PASSWORD`，保留普通USER的真实新密码时间；再由新增的单一`TestIAMNaturalPasswordExpiryPostgres`在两个独立Authority上证明截止前登录会话可用，且其数据库截止精确等于`password_changed_at+86400s`。本次数据库给出的截止为2026-09-30 06:52:34.699497 UTC；没有改时钟、缩短产品一天或回填正向资格。原bearer仅保存在本任务0600私有卷以供截止后拒绝门禁，PG容器与空网络已正常移除，保留本任务独立PG数据卷与证据卷，不涉及其他任务资源。**截止后的实际拒绝、受限改密及重新登录尚未运行，不计完整到期验收。**
+
 **已登录请求和派生资格。** 正常LOGIN_SESSION在最终发行事务中使用`min(原会话绝对截止, 当时有效的密码截止)`作为其已封存expiresAt，不能由调用者提交最终期限；对将到期但不足60秒的真实剩余时间不得向上补齐。每个发行入口，包括PASSWORD_TOTP完成，均执行相同权威计算。本增量已将`issue_session`与`complete_login_challenge`适配器同片替换成“原发行身份/时间一致、实际截止为有效且不超原上限的权威值”，不是只缩短SQL结果而使合法发行全部503，也不接受任意更长结果。锁后时间已经越过真实密码截止时不得发行Session；申请TTL的60秒下限不能用于给真实剩余期限续命。RoleSession保持不晚于来源Session的截止并在每次当前授权时重验来源，不能承担角色延长密码资格。已有设置版本及认证事实保持不可变：启用、收紧、放宽或关闭到期设置沿原版本更新结束旧Session/Challenge资格，不能给旧行回填当前版本；新登录才使用新规则。已到期Session不因后续真实改密、延长规则、关闭规则、时区变化或重启恢复；日常改密保留的当前Session也不延长其原已封存绝对截止。
 
 到期无需新增全局扫描/定时撤权器才能生效；期限及原设置版本检查负责下一次受保护请求失败关闭。长连接/已接受后台Operation仍按所属产品已声明的检查点处理，不宣称此片能实时中止它们。管理员重置仅使用既有授权入口和受保护身份限制，不因为返回终态向本人、普通管理员或安装服务增加恢复权。
@@ -1314,7 +1316,15 @@ S3b正在实施，尚未完整验收。最小可验收结果是：管理员按�
 
 #### 会话闲置期限（后继执行片）
 
-Session绝对期限在发行时有上限且不能滑动；idle期限依赖服务端实际观察到的有效LOGIN_SESSION认证请求，不接受浏览器自报活动时间。它表示认证请求闲置，不表示人是否坐在设备前；Role、AccessKey、服务/worker活动不暗中刷新原登录会话。允许哪些请求更新活动、是否排除控制台后台轮询及并发touch预算需要实际消费者对齐，不默认一次健康检查即可续命。超过idle或absolute后不能被迟到touch、改配置、重启或异步任务复活；续期只能重新认证。S1的会话目录不因此提前显示尚未采集的last-active或设备在线状态。
+此片尚未实现。最小目标为同一Account两名USER在两个IAM副本上获得各自LOGIN_SESSION：一个客户端仅在显式交互时更新自己的服务器活动水位，另一个没有活动的会话在真实闲置截止后的下一次IAM/PaaS受保护请求被拒；重启、后台安装轮询或另一个凭据的活动都不能复活它。Session绝对期限现有默认8小时、发行配置最多24小时，仍在发行时封存且不滑动；密码到期可进一步缩短它。闲置不是人类在场证明，也不是MFA或step-up。
+
+Account的`security-settings`增加明确的`session.idleTimeoutMinutes`，默认30分钟、允许5–60分钟；有未撤销安装级平台附件或原root身份的有效上限为30分钟。更新继续使用现有Account权限、目标限定step-up、版本CAS、不可变完成、通知和outbox事务；旧完成仍只读原字节，缺字段的旧未完成proof不能凭默认值变成写许可。设置改变沿既有安全设置屏障使旧会话/挑战失效，不能通过调大阈值挽回已过期会话。每个新Session封存发行时实际适用的idle秒数和由数据库产生的初始活动时间，不从客户端、当前策略或今天的角色关系倒填旧Session。升级前缺活动水位的旧Session失败关闭并重新登录，不用`issued_at`猜测其后是否有活动。
+
+唯一续闲置入口拟为`POST /v1/auth/sessions/current:touch`：只收当前有效LOGIN_SESSION bearer，不收Account/User/Session selector、时间戳、阈值或RoleSession；返回当前Session的非秘密服务器`lastActivityAt/idleExpiresAt/absoluteExpiresAt`。服务器在原Account→USER→credential→Session锁序中验证身份、代际、状态、MFA及`clock_timestamp()<min(原absolute,上次活动+封存idle)`，然后至多每60秒提交一次活动水位；更频繁的请求只返回原已记录水位，不给额外有效期。窗口是数据库时间和同一Session行的原子比较，双副本竞争只产生一次推进。后端可以验证请求持有者的有效bearer，但不能证明实际真人进行了鼠标/键盘操作；本入口不得被描述为强认证。无效、已到期或在等待锁期间过期的Session不能touch，任何失败都不改变活动水位。
+
+普通IAM/PaaS受保护请求、`/ready`及安装进度后台轮询只检查当前闲置资格，不续期；RoleSession、AccessKey、服务、worker和后台Operation均不触碰来源LOGIN_SESSION。UX owner只读核对发现控制台当前唯一周期性带bearer后端请求是PENDING/PROVISIONING安装阶段每4秒读取进度；IAM账号工作区无周期刷新，亦无通用交互活动上报。UI未来只能在明确的前台交互下调用已冻结的touch入口，不借轮询、页面可见性或客户端倒计时取得权威期限。该接口及字段在实现/生成/门禁固定前不可称LIVE；当前UX只做显式MOCK。跨服务查询仍以IAM当前会话为权威，业务服务不得缓存一次Allow当作持续有效。
+
+底层`Session`水位归现有IAM Session表/读取函数，不增SessionStore、Redis或后台扫描服务。lookup、本人目录、RoleSession来源资格及各最终写事务必须按服务端当前时间检查`min(absolute,idle)`；历史已过期记录可留存但不得作为ACTIVE资格或被后续touch复活。活动水位不是每次业务请求的Audit事实；它只能支持IAM已知的最近认证活动，不能填补S4所需的Key、Role和各产品业务结果水位。按两个真实IAM副本、有效/迟到并发touch、最低合法5分钟自然闲置、管理员延长设置、密码/状态/撤权交错、重启与旧行升级，以及PaaS跨进程拒绝实跑；不修改时钟或缩短生产配置假装到期。设计依据是[NIST 800-63B会话管理](https://pages.nist.gov/800-63-4/sp800-63b/session/)的总体/闲置双期限与[OWASP Session Management](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html)的服务端执行原则；30分钟是MATRIX产品默认，不宣称获得NIST等级认证。
 
 #### S3验收与衔接
 
