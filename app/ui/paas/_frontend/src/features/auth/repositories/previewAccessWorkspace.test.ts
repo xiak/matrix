@@ -49,9 +49,9 @@ describe("isolated authorization catalog preview", () => {
     const directory = await previewAccountRepository.listAuthorizationProfiles(previewCredential);
     const managedService = directory.items.find((entry) => entry.profile.product === "managedservice")?.profile;
     expect(managedService).toBeTruthy();
-    expect(managedService?.actions.map((action) => ({ action: action.action, kind: action.resourceKind, shapes: action.resourceShapes }))).toEqual([
-      { action: "managedservice.service-installation.create", kind: "SERVICE_INSTALLATION", shapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_CREATE" }] },
-      { action: "managedservice.service-installation.read", kind: "SERVICE_INSTALLATION", shapes: [{ mode: "INSTANCE", prefixAllowed: false }, { mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_LIST" }] }
+    expect(managedService?.actions.map((action) => ({ action: action.action, kind: action.resourceKind, shapes: action.resourceShapes, subjects: action.subjectTypes }))).toEqual([
+      { action: "managedservice.service-installation.create", kind: "SERVICE_INSTALLATION", shapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_CREATE" }], subjects: ["USER"] },
+      { action: "managedservice.service-installation.read", kind: "SERVICE_INSTALLATION", shapes: [{ mode: "INSTANCE", prefixAllowed: false }, { mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_LIST" }], subjects: ["USER", "ROLE"] }
     ]);
   });
   it("offers the service-review sample's exact PaaS read actions without inventing prefix support", async () => {

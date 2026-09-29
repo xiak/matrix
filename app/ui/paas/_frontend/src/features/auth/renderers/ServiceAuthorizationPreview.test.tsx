@@ -1,0 +1,33 @@
+import { cleanup, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { LocaleProvider } from "@/i18n/LocaleProvider";
+import { initialAccessWorkspace } from "../repositories/previewAccessWorkspace";
+import { ServiceAuthorizationPreview } from "./ServiceAuthorizationPreview";
+
+afterEach(cleanup);
+
+describe("ServiceAuthorizationPreview", () => {
+  it("keeps the published template, account relation, and exact workload binding visibly separate", async () => {
+    const user = userEvent.setup();
+    render(<LocaleProvider><ServiceAuthorizationPreview workspace={initialAccessWorkspace("org-xiak")} onClose={vi.fn()} /></LocaleProvider>);
+
+    await user.click(screen.getByRole("button", { name: "托管服务安装访问" }));
+    const observationTrigger = screen.getByRole("button", { name: "查看授权后观察" });
+    await user.click(observationTrigger);
+
+    expect(screen.getByRole("heading", { name: "账号服务授权观察" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "不可变 ServiceRoleTemplate" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "ServiceLinkedRoleAccess" })).toBeTruthy();
+    expect(screen.getByText("服务关联角色为 ACTIVE 只说明账号与发布模板、注册服务主体的关系可用；它不证明任何业务资源已经绑定，也不能替代逐条 WorkloadRoleBinding。")).toBeTruthy();
+
+    const bindings = screen.getByRole("table", { name: "服务角色业务资源绑定" });
+    expect(within(bindings).getByText("SERVICE_INSTALLATION")).toBeTruthy();
+    expect(within(bindings).getByText("service-installation-example")).toBeTruthy();
+    expect(within(bindings).getByText("preview.workload-role-binding.service-installation-example")).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "返回授权模板" }));
+    expect(screen.getByRole("button", { name: "查看授权后观察" })).toBe(document.activeElement);
+  });
+});

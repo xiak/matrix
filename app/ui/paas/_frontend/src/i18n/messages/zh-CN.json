@@ -2091,7 +2091,8 @@
       "snapshotTitle": "示例权限动作",
       "snapshotCount": "{count} 条声明",
       "ordinaryRole": "现有 PipelineDeploymentRole 是普通工作负载角色，不是本服务授权的既有实例；本页不会把普通角色或租户策略冒充为已发布的服务模板。",
-      "review": "审阅服务授权"
+      "review": "审阅服务授权",
+      "observeAuthorized": "查看授权后观察"
     },
     "template": { "name": "托管服务安装访问", "purpose": "允许 PaaS 服务只读一个托管服务安装" },
     "fields": {
@@ -2104,9 +2105,42 @@
       "templateRevision": "模板修订",
       "servicePrincipal": "服务主体",
       "roleName": "预定义角色名",
-      "targetResource": "发起授权的产品资源"
+      "targetResource": "发起授权的产品资源",
+      "templateId": "模板 ID",
+      "contentDigest": "内容摘要",
+      "permissionCeiling": "权限上限",
+      "workloadKinds": "允许的工作负载类型",
+      "maxSession": "最长会话",
+      "roleId": "服务关联角色 ID",
+      "roleManagement": "角色管理方式",
+      "resourceVersion": "资源版本",
+      "serviceInstallation": "服务安装实例",
+      "workload": "业务资源",
+      "bindingState": "绑定状态",
+      "bindingId": "绑定 ID",
+      "updatedAt": "更新时间"
     },
-    "states": { "illustrative": "示意模板 · 未发布", "notAuthorized": "当前账号未授权" },
+    "states": { "illustrative": "示意模板 · 未发布", "notAuthorized": "当前账号未授权", "authorized": "账号已授权 · 设计预览", "active": "ACTIVE" },
+    "observation": {
+      "pageTitle": "账号服务授权观察",
+      "eyebrow": "授权后只读场景 · MOCK",
+      "title": "服务关联角色与业务资源授权",
+      "hint": "将发布模板、账号级服务关联角色关系和精确业务资源绑定分区展示，避免把角色存在误解为所有资源都已授权。",
+      "contractBoundary": "这个页面按 IAM 当前固定模型制作，但账号关系与绑定的北向读取接口尚未发布。以下 ID、状态和时间均为设计预览，不是后端返回的数据。",
+      "durationMinutes": "{count} 分钟",
+      "template": { "eyebrow": "平台发布边界", "title": "不可变 ServiceRoleTemplate" },
+      "relation": { "eyebrow": "账号关系边界", "title": "ServiceLinkedRoleAccess" },
+      "roleIsNotBinding": "服务关联角色为 ACTIVE 只说明账号与发布模板、注册服务主体的关系可用；它不证明任何业务资源已经绑定，也不能替代逐条 WorkloadRoleBinding。",
+      "binding": {
+        "title": "精确业务资源绑定",
+        "hint": "每条绑定只授权一个已声明类型和 ID 的产品资源，并独立记录状态与资源版本。",
+        "tableLabel": "服务角色业务资源绑定",
+        "createdAt": "创建于"
+      },
+      "permissionTitle": "绑定的权限上限快照",
+      "permissionHint": "服务承担角色后仍不能超过这一精确动作和资源范围",
+      "readOnly": "IAM 中仅提供审计与状态观察。普通租户角色编辑不能修改服务关联角色的信任、权限上限或绑定；授权与撤销应回到对应云产品资源流程，并处理关联资源与短期会话生命周期。"
+    },
     "progress": "服务授权审阅进度",
     "stageLabel": "第 {current} / {total} 步",
     "steps": { "identity": "服务身份与用途", "permissions": "权限快照", "consent": "同意与生命周期" },

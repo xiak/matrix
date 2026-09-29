@@ -2091,7 +2091,8 @@
       "snapshotTitle": "Example permission actions",
       "snapshotCount": "{count} statements",
       "ordinaryRole": "The existing PipelineDeploymentRole is an ordinary workload role, not an existing instance of this service authorization. This page does not present an ordinary role or tenant policy as a published service template.",
-      "review": "Review service authorization"
+      "review": "Review service authorization",
+      "observeAuthorized": "View authorized-state observation"
     },
     "template": { "name": "Managed service installation access", "purpose": "Allow the PaaS service to read one managed-service installation" },
     "fields": {
@@ -2104,9 +2105,42 @@
       "templateRevision": "Template revision",
       "servicePrincipal": "Service principal",
       "roleName": "Predefined role name",
-      "targetResource": "Product resource initiating consent"
+      "targetResource": "Product resource initiating consent",
+      "templateId": "Template ID",
+      "contentDigest": "Content digest",
+      "permissionCeiling": "Permission ceiling",
+      "workloadKinds": "Allowed workload kinds",
+      "maxSession": "Maximum session",
+      "roleId": "Service-linked role ID",
+      "roleManagement": "Role management",
+      "resourceVersion": "Resource version",
+      "serviceInstallation": "Service installation",
+      "workload": "Product resource",
+      "bindingState": "Binding state",
+      "bindingId": "Binding ID",
+      "updatedAt": "Updated"
     },
-    "states": { "illustrative": "Illustrative · unpublished", "notAuthorized": "Not authorized for this account" },
+    "states": { "illustrative": "Illustrative · unpublished", "notAuthorized": "Not authorized for this account", "authorized": "Account authorized · design preview", "active": "ACTIVE" },
+    "observation": {
+      "pageTitle": "Account service-authorization observation",
+      "eyebrow": "Authorized read-only scenario · MOCK",
+      "title": "Service-linked role and product-resource authorization",
+      "hint": "Published template, account-level service-linked-role relation, and exact product-resource bindings are shown as separate boundaries so role existence is never mistaken for authorization to every resource.",
+      "contractBoundary": "This view follows IAM's current fixed model, but northbound reads for the account relation and bindings are not published yet. The IDs, states, and timestamps below are a design preview, not backend data.",
+      "durationMinutes": "{count} minutes",
+      "template": { "eyebrow": "Platform publication boundary", "title": "Immutable ServiceRoleTemplate" },
+      "relation": { "eyebrow": "Account relation boundary", "title": "ServiceLinkedRoleAccess" },
+      "roleIsNotBinding": "An ACTIVE service-linked role only says the account relation to a published template and registered service principal is usable. It proves no product resource is bound and never replaces individual WorkloadRoleBinding records.",
+      "binding": {
+        "title": "Exact product-resource bindings",
+        "hint": "Each binding authorizes one product resource of a declared kind and ID, with an independent state and resource version.",
+        "tableLabel": "Service-role product-resource bindings",
+        "createdAt": "Created"
+      },
+      "permissionTitle": "Bound permission-ceiling snapshot",
+      "permissionHint": "Role assumption still cannot exceed this exact action and resource scope",
+      "readOnly": "IAM exposes audit and state observation only. Ordinary tenant role editing cannot change a service-linked role's trust, permission ceiling, or bindings. Authorization and revocation belong to the corresponding cloud-product resource flow and must handle associated resources and short-lived-session lifecycle."
+    },
     "progress": "Service authorization review progress",
     "stageLabel": "Step {current} of {total}",
     "steps": { "identity": "Service identity and purpose", "permissions": "Permission snapshot", "consent": "Consent and lifecycle" },

@@ -21,8 +21,17 @@
 .cardHeading > svg { flex: none; width: 20px; height: 20px; color: var(--xiak-color-accent-text); }
 .cardHeading > div { display: grid; min-width: 0; gap: var(--xiak-spacing-micro); }
 .cardHeading span, .facts dt, .permissionReference span { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
+.observationHeading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--xiak-spacing-default); }
+.observationHeading > div { display: grid; min-width: 0; gap: var(--xiak-spacing-micro); }
+.observationHeading span, .compactFacts dt { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
+.observationHeading h4 { margin: 0; color: var(--xiak-color-text-strong); overflow-wrap: anywhere; }
 .cardBody { display: grid; min-width: 0; gap: var(--xiak-spacing-default); }
 .cardBody code { overflow-wrap: anywhere; white-space: normal; }
+.observationGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--xiak-spacing-comfortable); }
+.compactFacts { display: grid; gap: var(--xiak-spacing-default); margin: 0; }
+.compactFacts > div { display: grid; min-width: 0; grid-template-columns: minmax(120px, .65fr) minmax(0, 1.35fr); align-items: start; gap: var(--xiak-spacing-default); }
+.compactFacts dd { min-width: 0; margin: 0; color: var(--xiak-color-text-strong); font-weight: var(--xiak-font-weight-semibold); overflow-wrap: anywhere; }
+.compactFacts code { white-space: normal; overflow-wrap: anywhere; }
 .facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--xiak-spacing-comfortable); margin: 0; padding-block: var(--xiak-spacing-default); border-block: var(--xiak-border-subtle); }
 .facts > div { display: grid; min-width: 0; gap: var(--xiak-spacing-narrow); }
 .facts dd { min-width: 0; margin: 0; color: var(--xiak-color-text-strong); font-weight: var(--xiak-font-weight-semibold); overflow-wrap: anywhere; }
@@ -51,12 +60,16 @@
 .boundaries strong { display: block; margin-bottom: var(--xiak-spacing-micro); color: var(--xiak-color-text-strong); }
 .reviewActions { display: flex; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-default); padding-top: var(--xiak-spacing-default); border-top: var(--xiak-border-subtle); }
 .note { font-size: var(--xiak-font-size-small); }
+.bindingSection { display: grid; min-width: 0; gap: var(--xiak-spacing-default); }
+.bindingSection td { min-width: 0; }
+.bindingSection td code, .bindingSection time { white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
 
 @media (max-width: 600px) {
   .root { padding-inline: var(--xiak-spacing-default); }
   .heading { grid-template-columns: auto minmax(0, 1fr); }
   .badges { grid-column: 2; justify-content: flex-start; }
-  .detailGrid, .facts { grid-template-columns: minmax(0, 1fr); }
+  .detailGrid, .facts, .observationGrid { grid-template-columns: minmax(0, 1fr); }
+  .compactFacts > div { grid-template-columns: minmax(0, 1fr); gap: var(--xiak-spacing-micro); }
   .permissionStatement dl { grid-template-columns: minmax(0, 1fr); }
   .sectionHeading { flex-direction: column; }
   .stateBadges { justify-content: flex-start; }
