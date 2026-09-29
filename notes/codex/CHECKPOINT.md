@@ -6,7 +6,7 @@
 - Updated: 2026-09-29
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `3417cad4`
+- Pushed UI source: `2035231f`
 
 ## Authoritative route
 
@@ -33,15 +33,18 @@ with another branch's renderer or inherit that branch's UI acceptance.
 
 The current milestone keeps the independent MOCK preview, fixed-contract LIVE
 paths and synchronized static Go host. Account security includes isolated
-session-idle and Passkey/WebAuthn concept previews. Both are local-only UX:
-they add no IAM wire, credential ceremony, timer, global activity listener or
-LIVE write path. The tenant directory now uses the shared labelled mobile table
-contract instead of clipping identity and status fields. Desktop and compact
-browser audits covered the all-service directory and all thirteen IAM routes,
-including light/mixed themes and menu focus return, without stale outgoing
-content, document overflow or browser warning/error. Exact behavior,
-verification evidence and replacement rules belong to the linked FEAT owners.
-Real IAM-process browser, installation and release acceptance remain open.
+session-idle, Passkey/WebAuthn and unused-access review previews. They are
+local-only UX and add no IAM wire, credential ceremony, timer, global activity
+listener, LIVE state machine or destructive action. The unused-access directory
+uses an explicit synthetic complete window, separates finding state from
+resource state and routes only to existing object review. The tenant directory
+uses the shared labelled mobile table contract instead of clipping identity and
+status fields. Desktop and compact browser audits covered the all-service
+directory and all thirteen IAM routes, including light/mixed themes and menu
+focus return, without stale outgoing content, document overflow or browser
+warning/error. Exact behavior, verification evidence and replacement rules
+belong to the linked FEAT owners. Real IAM-process browser, installation and
+release acceptance remain open.
 
 ## Continuation
 
