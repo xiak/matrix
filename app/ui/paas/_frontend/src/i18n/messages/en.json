@@ -2069,12 +2069,12 @@
     "backToDirectory": "Back to service authorization",
     "backToTemplate": "Back to authorization template",
     "title": "Service authorization",
-    "subtitle": "An isolated MOCK of explicit customer consent for a cloud service to operate resources",
+    "subtitle": "An isolated MOCK view of the platform-template and account-authorization boundary",
     "previewOnly": "Backend not connected",
-    "boundary": "Product onboarding, service identity, and customer authorization are separate boundaries. This is an isolated read-only MOCK template: action names follow the current PaaS catalog, but the service subject, target resources, and revision are illustrative, not a published template or IAM grant. It creates no role or credential and writes nothing to IAM.",
+    "boundary": "Product onboarding, service identity, and customer authorization are separate boundaries. Real creation or revocation must start from the corresponding cloud product resource; IAM only observes template and service-linked-role state. This page remains an isolated MOCK: action names follow the current PaaS catalog, while the service subject, target resources, and revision are illustrative. It creates no role or credential and writes nothing to IAM.",
     "directory": {
       "title": "Service authorization templates available for review",
-      "hint": "Cloud products and the IAM platform publish templates through a controlled process. Tenant administrators review and consume them; they cannot register platform Actions.",
+      "hint": "Cloud products and the IAM platform publish templates through a controlled process. Tenant administrators initiate consent from the concrete product resource and review it read-only in IAM; they cannot register platform Actions.",
       "tableLabel": "Service authorization templates",
       "separation": "Ordinary service roles remain managed in the role directory. This is a separate service-linked-role consent preview; similar names or products do not merge the two concepts."
     },
@@ -2098,13 +2098,14 @@
       "product": "Cloud product",
       "purpose": "Business purpose",
       "policySnapshot": "Permission snapshot",
-      "state": "Authorization state",
+      "templateState": "Platform template state",
+      "accountState": "Current account state",
       "targetAccount": "Target account",
       "templateRevision": "Template revision",
       "servicePrincipal": "Service principal",
       "roleName": "Predefined role name"
     },
-    "states": { "notAuthorized": "Review only" },
+    "states": { "illustrative": "Illustrative · unpublished", "notAuthorized": "Not authorized for this account" },
     "progress": "Service authorization review progress",
     "stageLabel": "Step {current} of {total}",
     "steps": { "identity": "Service identity and purpose", "permissions": "Permission snapshot", "consent": "Consent and lifecycle" },
@@ -2114,7 +2115,7 @@
       "permissions": { "title": "Review the example permission scope", "lead": "Review each registered exact action, resource kind, matching rule, and condition. Example IDs illustrate scope and grant no real resource access.", "illustrative": "Read-only example", "statement": "Statement {number}", "allow": "Allow", "deny": "Deny", "actionPatterns": "Exact actions", "resources": "Resource scope", "conditions": "Request conditions", "noConditions": "No conditions", "match": { "EXACT": "Exact ID", "PREFIX_IN_AUTHORITY": "Prefix within current authority", "ANY_IN_AUTHORITY": "All within current authority" }, "snapshotBoundary": "Only declared PaaS read actions and resource shapes are illustrated here. The example service subject, resource IDs, and template revision have not been published by IAM. Real authorization still requires a controlled template, content digest, target-account consent, and workload binding." },
       "consent": {
         "title": "Confirm customer consent and revocation boundaries",
-        "lead": "Only explicit customer consent can create a service-linked role scoped to this account and purpose. This MOCK does not perform that action.",
+        "lead": "Only explicit customer consent from the corresponding product resource can create a service-linked role scoped to this account and purpose. IAM observes the result read-only; this MOCK does not perform that action.",
         "items": {
           "explicit": { "title": "Explicit customer consent", "hint": "Catalog visibility, product installation, and service authentication do not replace authorization by this account." },
           "shortTerm": { "title": "Short-lived sessions only", "hint": "The service would assume a dedicated role for constrained temporary credentials instead of receiving a customer's long-lived key." },

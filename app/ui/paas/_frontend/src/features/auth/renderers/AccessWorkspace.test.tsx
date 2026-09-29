@@ -1035,8 +1035,13 @@ describe("CAM-style access workspace", () => {
 
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByRole("heading", { level: 2, name: "服务授权" })).toBe(document.activeElement);
-    expect(screen.getByText(/产品接入、服务身份和客户授权是三个独立边界/)).toBeTruthy();
-    expect(screen.getByRole("table", { name: "服务授权模板" })).toBeTruthy();
+    expect(screen.getByText(/真实创建或撤销必须从对应云产品的具体资源入口发起/)).toBeTruthy();
+    expect(screen.getByText(/在 IAM 中只读审阅/)).toBeTruthy();
+    const templateDirectory = screen.getByRole("table", { name: "服务授权模板" });
+    expect(within(templateDirectory).getByRole("columnheader", { name: "平台模板状态" })).toBeTruthy();
+    expect(within(templateDirectory).getByRole("columnheader", { name: "当前账号状态" })).toBeTruthy();
+    expect(within(templateDirectory).getByText("示意模板 · 未发布")).toBeTruthy();
+    expect(within(templateDirectory).getByText("当前账号未授权")).toBeTruthy();
     expect(screen.getByText(/普通服务角色仍在角色列表中单独管理/)).toBeTruthy();
 
     const template = screen.getByRole("button", { name: "Application operations review" });
@@ -1067,6 +1072,8 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: "下一步" }));
     const authorize = screen.getByRole("button", { name: "授权服务（未接入）" }) as HTMLButtonElement;
     expect(authorize.disabled).toBe(true);
+    expect(screen.getAllByText("示意模板 · 未发布").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("当前账号未授权").length).toBeGreaterThan(0);
     expect(screen.getByText(/尚未发布 ServiceRoleTemplate/)).toBeTruthy();
     expect(repository.execute).not.toHaveBeenCalled();
     expect(repository.workspace!.execute).not.toHaveBeenCalled();

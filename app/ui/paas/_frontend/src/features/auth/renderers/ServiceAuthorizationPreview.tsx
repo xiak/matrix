@@ -44,14 +44,15 @@ function TemplateDirectory({ triggerRef, onOpen }: {
 }) {
   const t = useTranslations("ServiceAuthorizationPreview");
   return <div className={styles.stack}>
-    <div className={styles.sectionHeading}><div><h3>{t("directory.title")}</h3><p>{t("directory.hint")}</p></div><Badge status="warning">{t("states.notAuthorized")}</Badge></div>
+    <div className={styles.sectionHeading}><div><h3>{t("directory.title")}</h3><p>{t("directory.hint")}</p></div><Badge status="warning">{t("states.illustrative")}</Badge></div>
     <Table aria-label={t("directory.tableLabel")} mobileLayout="stack">
-      <thead><tr><th scope="col">{t("fields.product")}</th><th scope="col">{t("fields.purpose")}</th><th scope="col">{t("fields.policySnapshot")}</th><th scope="col">{t("fields.state")}</th></tr></thead>
+      <thead><tr><th scope="col">{t("fields.product")}</th><th scope="col">{t("fields.purpose")}</th><th scope="col">{t("fields.policySnapshot")}</th><th scope="col">{t("fields.templateState")}</th><th scope="col">{t("fields.accountState")}</th></tr></thead>
       <tbody><tr>
         <td data-label={t("fields.product")}><button className={styles.link} ref={triggerRef} onClick={onOpen}>{previewTemplate.product}</button><small><code>{previewTemplate.id}</code></small></td>
         <td data-label={t("fields.purpose")}>{t("template.purpose")}<small><code>{previewTemplate.servicePrincipal}</code></small></td>
         <td data-label={t("fields.policySnapshot")}>{previewTemplate.snapshotName}<small>v{previewTemplate.revision} · {t("previewOnly")}</small></td>
-        <td data-label={t("fields.state")}><Badge status="warning">{t("states.notAuthorized")}</Badge></td>
+        <td data-label={t("fields.templateState")}><Badge status="warning">{t("states.illustrative")}</Badge></td>
+        <td data-label={t("fields.accountState")}><Badge status="neutral">{t("states.notAuthorized")}</Badge></td>
       </tr></tbody>
     </Table>
     <p className={styles.note}>{t("directory.separation")}</p>
@@ -65,7 +66,7 @@ function TemplateDetail({ accountId, reviewRef, onReview }: {
 }) {
   const t = useTranslations("ServiceAuthorizationPreview");
   return <div className={styles.stack}>
-    <div className={styles.sectionHeading}><div><span>{t("detail.eyebrow")}</span><h3>{previewTemplate.product}</h3><p>{t("detail.hint")}</p></div><Badge status="warning">{t("states.notAuthorized")}</Badge></div>
+    <div className={styles.sectionHeading}><div><span>{t("detail.eyebrow")}</span><h3>{previewTemplate.product}</h3><p>{t("detail.hint")}</p></div><div className={styles.stateBadges}><Badge status="warning">{t("states.illustrative")}</Badge><Badge status="neutral">{t("states.notAuthorized")}</Badge></div></div>
     <dl className={styles.facts}>
       <div><dt>{t("fields.targetAccount")}</dt><dd><code>{accountId}</code></dd></div>
       <div><dt>{t("fields.templateRevision")}</dt><dd>v{previewTemplate.revision}</dd></div>
@@ -108,7 +109,7 @@ function ConsentReview({ accountId, stage, onStageChange, onClose }: {
               <div><dt>{t("review.permissions.conditions")}</dt><dd>{statement.conditions?.length ? statement.conditions.map((condition) => <code key={condition.key}>{condition.key} · {condition.operator} · {condition.values.join(", ")}</code>) : t("review.permissions.noConditions")}</dd></div></dl>
           </section>)}</div>
           <Alert status="info">{t("review.permissions.snapshotBoundary")}</Alert></> : null}
-        {stage === 2 ? <><ul className={styles.boundaries}>{(["explicit", "shortTerm", "noExpansion", "cleanup"] as const).map((item) => <li key={item}><strong>{t(`review.consent.items.${item}.title`)}</strong><p>{t(`review.consent.items.${item}.hint`)}</p></li>)}</ul><Alert status="warning">{t("review.consent.unavailable")}</Alert></> : null}
+        {stage === 2 ? <><dl className={styles.facts}><div><dt>{t("fields.templateState")}</dt><dd>{t("states.illustrative")}</dd></div><div><dt>{t("fields.accountState")}</dt><dd>{t("states.notAuthorized")}</dd></div></dl><ul className={styles.boundaries}>{(["explicit", "shortTerm", "noExpansion", "cleanup"] as const).map((item) => <li key={item}><strong>{t(`review.consent.items.${item}.title`)}</strong><p>{t(`review.consent.items.${item}.hint`)}</p></li>)}</ul><Alert status="warning">{t("review.consent.unavailable")}</Alert></> : null}
       </Card.Body>
     </Card>
     <div className={styles.reviewActions}>
