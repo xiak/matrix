@@ -6,8 +6,8 @@
 - Updated: 2026-09-30
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `c0ad4901`
-- Pushed documentation head: `bab88449`
+- Pushed UI source: `59728ee1`
+- Pushed documentation head: `e7272b76`
 
 ## Authoritative route
 
@@ -101,6 +101,14 @@ actions stay absent until the exact detail and capabilities arrive, and a
 failure retains the locator context with an in-place retry. No real failure
 falls back to MOCK, and the compact DEV check remains responsive evidence only,
 not real-IAM delay/failure acceptance.
+
+IAM initial CurrentIdentity/scene bootstrap now follows that stable-structure
+rule at the route boundary. Every access route mounts its semantic destination
+heading immediately; User, tenant, Group, Policy and Role directories limit
+initial feedback to their table region, while other routes retain their own
+content geometry. Verified scene refresh continues to keep current content.
+This is shared loading behavior, not a new data model or LIVE acceptance, and
+the independent MOCK entry remains available for inspection.
 
 LIVE member Role discovery also keeps its verified source identity, discovery
 heading and temporary-access boundary mounted while only role cards load. An
