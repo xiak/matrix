@@ -1,7 +1,7 @@
 "use client";
-import { useCallback, useEffect, useId, useState } from "react";
+import { useCallback, useEffect, useId, useState, type ReactNode } from "react";
 import { useTranslations } from "next-intl";
-import { Badge, Button, EmptyState, FormField, Input, PageSkeleton, Table, Tabs } from "@ui/xiak";
+import { Badge, Button, EmptyState, FormField, Input, Table, TableSkeleton, Tabs } from "@ui/xiak";
 import { useAccountAccess, type UserBoundarySnapshot } from "../application/AccountAccessProvider";
 import type { AccountAccessView } from "../domain/accounts";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
@@ -24,11 +24,29 @@ export function AccountUserAccessMethods({ user, workspace }: { user: AccountUse
   </ul>;
 }
 
+function AccountUserSnapshot({ user, busy, children }: { user: AccountUserScene; busy: boolean; children: ReactNode }) {
+  const t = useTranslations("AccountAccess");
+  return <div className={styles.detail} aria-busy={busy || undefined}>
+    <div className={styles.userSummary}>
+      <div><strong>{user.name}</strong><span className={styles.note}>{user.qualifiedName}</span></div>
+      <Badge status={user.enabled ? "success" : "neutral"}>{t(`states.${user.state}`)}</Badge>
+    </div>
+    <dl className={styles.facts}>
+      <div><dt>{t("userType")}</dt><dd>{t("child")}</dd></div>
+      <div><dt>{t("ownership")}</dt><dd>{user.accountId}</dd></div>
+      <div><dt>{t("userId")}</dt><dd>{user.id}</dd></div>
+    </dl>
+    <p className={styles.note}>{t("subuserOwnershipHint")}</p>
+    {children}
+  </div>;
+}
+
 export function AccountLiveUserWorkspace({ summary, onBack }: { summary: AccountUserScene; onBack(): void }) {
   const t = useTranslations("AccountAccess");
   const w = useTranslations("IamWorkspace");
   const { loadUser, permissionBoundaries } = useAccountAccess();
   const [loaded, setLoaded] = useState<{ state: "loading" } | { state: "ready"; user: AccountUserScene; boundary?: UserBoundarySnapshot } | { state: "error" }>({ state: "loading" });
+  const [loadVersion, setLoadVersion] = useState(0);
   const boundaryChanged = useCallback((boundary: UserBoundarySnapshot) => setLoaded({ state: "ready", user: boundary.user, boundary }), []);
   useEffect(() => {
     let current = true;
@@ -38,9 +56,16 @@ export function AccountLiveUserWorkspace({ summary, onBack }: { summary: Account
       () => { if (current) setLoaded({ state: "error" }); }
     );
     return () => { current = false; };
-  }, [loadUser, permissionBoundaries, summary.id, summary.resourceVersion]);
-  if (loaded.state === "loading") return <WorkspaceDetail title={summary.loginName} onBack={onBack}><PageSkeleton label={t("loadingUser")} layout="access" /></WorkspaceDetail>;
-  if (loaded.state === "error") return <WorkspaceDetail title={summary.loginName} onBack={onBack}><EmptyState title={w("entityUnavailable")} description={w("entityUnavailableHint")} action={<Button variant="secondary" onClick={onBack}>{w("back")}</Button>} /></WorkspaceDetail>;
+  }, [loadUser, loadVersion, permissionBoundaries, summary.id, summary.resourceVersion]);
+  if (loaded.state === "loading") return <WorkspaceDetail title={summary.loginName} onBack={onBack}><AccountUserSnapshot user={summary} busy>
+    <TableSkeleton label={t("loadingUser")} rows={3} header={false} />
+  </AccountUserSnapshot></WorkspaceDetail>;
+  if (loaded.state === "error") return <WorkspaceDetail title={summary.loginName} onBack={onBack}><AccountUserSnapshot user={summary} busy={false}>
+    <EmptyState title={w("entityUnavailable")} description={w("entityUnavailableHint")} action={<div className={styles.actions}>
+      <Button onClick={() => { setLoaded({ state: "loading" }); setLoadVersion((current) => current + 1); }}>{t("retryUser")}</Button>
+      <Button variant="secondary" onClick={onBack}>{w("back")}</Button>
+    </div>} />
+  </AccountUserSnapshot></WorkspaceDetail>;
   return <WorkspaceDetail title={loaded.user.loginName} onBack={onBack}>
     <UserAccessManagement key={`${loaded.user.id}:${loaded.user.resourceVersion}`} deleteAction profileActions showLiveEvidenceBoundary user={loaded.user} onDeleted={onBack} />
     {permissionBoundaries && loaded.boundary ? <LivePermissionBoundary key={`${permissionBoundaries.accountId}:${loaded.user.id}`} client={permissionBoundaries} snapshot={loaded.boundary} onChanged={boundaryChanged} /> : null}

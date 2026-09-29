@@ -666,7 +666,7 @@ describe("account access", () => {
     expect(listPolicies).toHaveBeenCalledTimes(2);
   });
 
-  it("replaces the directory immediately with a local skeleton before loading live user details", async () => {
+  it("keeps the verified directory identity visible while loading the exact live user detail", async () => {
     let resolveUser!: (value: UserAccess) => void;
     const getUser = vi.fn(() => new Promise<UserAccess>((resolve) => { resolveUser = resolve; }));
     const repository = accounts({ getUser });
@@ -674,13 +674,41 @@ describe("account access", () => {
     await screen.findByText("Developer A");
     await user.click(screen.getByRole("button", { name: "查看用户 developer" }));
     expect(screen.queryByRole("table", { name: "租户用户列表" })).toBeNull();
+    expect(screen.getByRole("heading", { name: "developer" })).toBeTruthy();
+    expect(screen.getByText("Developer A")).toBeTruthy();
+    expect(screen.getByText("developer@tenant-a")).toBeTruthy();
     expect(screen.getByText("正在读取用户详情…")).toBeTruthy();
     expect(screen.queryByText("用户资料")).toBeNull();
+    expect(screen.queryByRole("button", { name: "修改显示名称" })).toBeNull();
     await act(async () => { resolveUser(structuredClone(child)); });
     expect(await screen.findByText("用户资料")).toBeTruthy();
     expect(getUser).toHaveBeenCalledWith(credential, "child-a");
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByText(/不根据用户状态推断访问方式/)).toBeTruthy();
+  });
+
+  it("keeps the verified user snapshot and retries an unavailable exact detail in place", async () => {
+    let resolveUser!: (value: UserAccess) => void;
+    const getUser = vi.fn()
+      .mockRejectedValueOnce(new HttpProblem(503, "IAM_UNAVAILABLE"))
+      .mockImplementationOnce(() => new Promise<UserAccess>((resolve) => { resolveUser = resolve; }));
+    const repository = accounts({ getUser });
+    const { user } = await openAccess(repository);
+    await screen.findByText("Developer A");
+    await user.click(screen.getByRole("button", { name: "查看用户 developer" }));
+
+    expect(await screen.findByRole("button", { name: "重试读取" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "developer" })).toBeTruthy();
+    expect(screen.getByText("Developer A")).toBeTruthy();
+    expect(screen.getByText("developer@tenant-a")).toBeTruthy();
+    expect(screen.getByText("对象不可用")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "修改显示名称" })).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "重试读取" }));
+    expect(screen.getByText("正在读取用户详情…")).toBeTruthy();
+    await act(async () => { resolveUser(structuredClone(child)); });
+    expect(await screen.findByText("用户资料")).toBeTruthy();
+    expect(getUser).toHaveBeenCalledTimes(2);
   });
 
   it("keeps access-method facts unknown while opening the user's real key inventory in context", async () => {

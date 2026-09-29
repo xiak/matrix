@@ -1544,6 +1544,7 @@
     "refresh": "刷新",
     "loading": "正在读取 IAM 账号信息…",
     "loadingUser": "正在读取用户详情…",
+    "retryUser": "重试读取",
     "ownership": "所属账号 · 资源归属",
     "signedIn": "当前登录用户",
     "primary": "主账号",

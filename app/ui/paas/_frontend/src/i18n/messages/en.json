@@ -1544,6 +1544,7 @@
     "refresh": "Refresh",
     "loading": "Loading IAM account details…",
     "loadingUser": "Loading user details…",
+    "retryUser": "Retry read",
     "ownership": "Account · Resource ownership",
     "signedIn": "Signed-in user",
     "primary": "Primary account",
