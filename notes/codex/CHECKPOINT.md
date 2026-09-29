@@ -6,7 +6,7 @@
 - Updated: 2026-09-29
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `c3a2023d`
+- Pushed UI source: `7da81615`
 
 ## Authoritative route
 
@@ -32,10 +32,12 @@ UI, full static host/export and independent MOCK entry; do not replace them
 with another branch's renderer or inherit that branch's UI acceptance.
 
 The current milestone keeps the independent MOCK preview, fixed-contract LIVE
-paths and synchronized static Go host. The newest isolated preview explains
-session idle versus absolute expiry without inventing a threshold, timer or
-LIVE write path; exact behavior and evidence belong to the linked FEAT owners.
-Real IAM-process browser, installation and release acceptance remain open.
+paths and synchronized static Go host. Account security now includes isolated
+session-idle and Passkey/WebAuthn concept previews. Both are local-only UX:
+they add no IAM wire, credential ceremony, timer, global activity listener or
+LIVE write path. Exact behavior, verification evidence and replacement rules
+belong to the linked FEAT owners. Real IAM-process browser, installation and
+release acceptance remain open.
 
 ## Continuation
 
@@ -49,11 +51,11 @@ environment. Real browser acceptance cannot be replaced by MOCK or API-only
 checks. Do not duplicate the donor application or move installer-owned secrets
 into the UI.
 
-Next integration must select one fixed boundary from the owning FEAT. Current
-session activity/touch work is not a UI contract until IAM provides a fixed,
-pushed commit. Do not infer newer self-removal, replacement, remaining Role,
-SSO or session wire contracts from the MOCK UI or from another task's unpushed
-work.
+Next integration must select one fixed boundary from the owning FEAT. Session
+activity/touch and Passkey registration remain MOCK until IAM provides a fixed,
+pushed commit with their required gates. Do not infer endpoints, persisted
+fields, credentials, newer self-removal, replacement, remaining Role, SSO or
+session wire contracts from the MOCK UI or from another task's unpushed work.
 
 Replace this file only at another committed-and-pushed milestone. Do not append
 command logs, chat transcripts, secrets, raw provider payloads, or machine-local
