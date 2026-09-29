@@ -335,11 +335,11 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 
 ### 服务授权 MOCK 的开发验收证据
 
-角色目录的“服务授权”只提供内容区内的只读 MOCK 审阅。原型模板不再引用租户可编辑的 `MatrixDeliveryAccess`：权限示例仅使用 IAM 已声明的 PaaS 精确只读 Action，按 `APPLICATION`、`DEPLOYMENT`、`OPERATION` 的精确示例 ID 展示。隔离 MOCK 权限能力目录展示同一组 `paas.application.read`、`paas.deployment.read`、`paas.operation.read`：后两者仅支持租户范围的精确实例，不能被预览扩展成前缀或集合授权。服务主体、资源 ID、模板修订及角色名不是受信登记或发布结果；界面不提供可提交的策略内容摘要或客户同意记录。普通 `PipelineDeploymentRole` 与本流程分开，租户策略的更新或删除不会更改示例模板。
+角色目录的“服务授权”只提供内容区内的只读 MOCK 审阅。平台模板发布状态与当前 Account 授权状态是两个独立事实，目录、详情和最终审阅分别显示“示意模板 · 未发布”和“当前账号未授权”，不能用一个标签把平台发布、客户同意或服务关联角色实例混在一起。真实创建或撤销应由对应云产品的具体资源入口发起，IAM 只读观察模板和服务关联角色状态；当前角色目录入口只用于提前检查 IAM 信息结构，不宣称是未来 northbound 命令入口。原型模板不再引用租户可编辑的 `MatrixDeliveryAccess`：权限示例仅使用 IAM 已声明的 PaaS 精确只读 Action，按 `APPLICATION`、`DEPLOYMENT`、`OPERATION` 的精确示例 ID 展示。隔离 MOCK 权限能力目录展示同一组 `paas.application.read`、`paas.deployment.read`、`paas.operation.read`：后两者仅支持租户范围的精确实例，不能被预览扩展成前缀或集合授权。服务主体、资源 ID、模板修订及角色名不是受信登记或发布结果；界面不提供可提交的策略内容摘要或客户同意记录。普通 `PipelineDeploymentRole` 与本流程分开，租户策略的更新或删除不会更改示例模板。
 
-目录一致性回归锁定上述三个 Action、资源类型、范围及资源形状；DEV MOCK 浏览器核对了 PaaS 详情的五条声明与只读边界，`390px` 下文档／正文宽度均为 `390px`、无对话框或横向溢出。完整前端 45 文件／802 用例、类型与架构检查、228 对主题样式检查、41 页静态导出、228 个嵌入文件一致性及 Go UI 测试／vet 已通过。这些是隔离 MOCK 验收，不替代真实 IAM 注册表或服务授权联调。
+目录一致性回归锁定上述三个 Action、资源类型、范围及资源形状；状态回归另外证明两个状态列、详情双状态和最终审阅均存在，同时最终授权保持禁用且没有 repository 写入。2026-09-30 已推送 [`862603e6`](https://github.com/xiak/matrix/commit/862603e6)：桌面和 `390 × 844` DEV MOCK 实看目录、详情与第三步审阅，五列表格在窄屏转换为字段标签堆叠，document/body/viewport 均为 390px，无对话框或横向溢出。完整前端 50 文件／843 用例、三条静态归一化、类型、lint、架构、228 对主题样式、41 页静态导出、嵌入同步及全仓 Go test/vet 已通过。这些是隔离 MOCK 验收，不替代真实 IAM 注册表或服务授权联调。
 
-目录可见性、产品安装和 callingService 身份都不构成客户授权。未来 PassRole／承担角色需共同绑定操作者、目标 Account/Role、实际工作负载与单一用途；模板升版不能自动扩权，服务应使用短期会话。关联资源清理、授权撤销和既有会话失效语义仍待 FEAT-IAM-008 固定。当前没有已发布的 `ServiceRoleTemplate` 租户授权、撤销或承担角色 northbound contract 与对应 LIVE Action，因此最终“授权服务”禁用；页面不创建角色、凭据或授权成功状态。前端实现及验收证据由 [FEAT-007](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence) 维护。
+目录可见性、产品安装和 callingService 身份都不构成客户授权。未来 PassRole／承担角色需共同绑定操作者、目标 Account/Role、实际工作负载与单一用途；模板升版不能自动扩权，服务应使用短期会话。关联资源清理、授权撤销和既有会话失效语义仍待 FEAT-IAM-008 固定。IAM 工程师已对齐“产品资源入口编排、IAM 只读观察”和两类状态分离的方向，但对应实现尚未形成可消费的已推送固定来源；当前没有已发布的 `ServiceRoleTemplate` 租户授权、撤销或承担角色 northbound contract 与对应 LIVE Action。因此最终“授权服务”禁用，页面不创建角色、凭据或授权成功状态；未来只能从固定、已推送契约原位替换示意字段。前端实现及验收证据由 [FEAT-007](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence) 维护。
 
 ### 策略版本 MOCK 的开发验收证据
 
