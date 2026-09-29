@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "@/i18n/LocaleProvider";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
-import type { AccessKeyClient } from "../application/AccountAccessProvider";
+import type { AccessKeyClient, AccessKeyCreateIntent } from "../application/AccountAccessProvider";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
 import { LiveAccessCredentials } from "./LiveAccessCredentials";
 
@@ -35,6 +35,7 @@ function client(overrides: Partial<AccessKeyClient> = {}): AccessKeyClient {
     list: vi.fn().mockResolvedValue(directory),
     read: vi.fn().mockResolvedValue(directory.items[0]),
     create: vi.fn().mockResolvedValue({ outcome: "APPLIED", key: { ...key, id: "mak1.alex-rotated" }, secret: "mak1.one-time-secret" }),
+    acknowledgeIssued: vi.fn().mockReturnValue(true),
     setStatus: vi.fn(),
     delete: vi.fn(),
     ...overrides
@@ -96,6 +97,7 @@ describe("LiveAccessCredentials", () => {
     await user.click(screen.getByRole("button", { name: "已完成" }));
     expect(screen.queryByText("mak1.one-time-secret")).toBeNull();
     expect(api.create).toHaveBeenCalledTimes(1);
+    expect(api.acknowledgeIssued).toHaveBeenCalledOnce();
   });
 
   it("retains the original requestId when an uncertain create is retried", async () => {
@@ -117,5 +119,24 @@ describe("LiveAccessCredentials", () => {
     await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
     expect(create.mock.calls[0]?.[1].requestId).toBe(create.mock.calls[1]?.[1].requestId);
     expect(screen.getByText("Secret 无法再次显示", { exact: false })).toBeTruthy();
+  });
+
+  it("resumes an unknown request after the content view remounts without offering a second creation", async () => {
+    const user = userEvent.setup();
+    const intent: AccessKeyCreateIntent = { accountId: scene.accountId, actorId: "root-acme", userId: owner.id,
+      userResourceVersion: owner.resourceVersion, requestId: `ui-access-key-create-${"a".repeat(32)}`, phase: "unknown" };
+    const create = vi.fn().mockResolvedValue({ outcome: "EQUAL_REPLAY", key });
+    const api = client({ create });
+    const view = render(<LocaleProvider><LiveAccessCredentials client={api} scene={scene} createIntent={intent} scopedOwner={owner as unknown as AccountAccessScene["users"][number]} /></LocaleProvider>);
+    await screen.findByRole("button", { name: key.id });
+    expect(screen.getByRole("button", { name: "新建访问密钥" }).hasAttribute("disabled")).toBe(true);
+    view.unmount();
+    render(<LocaleProvider><LiveAccessCredentials client={api} scene={scene} createIntent={intent} scopedOwner={owner as unknown as AccountAccessScene["users"][number]} /></LocaleProvider>);
+    await user.click(await screen.findByRole("button", { name: "继续处理原请求" }));
+    expect(screen.getByText(intent.requestId)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "重试原请求" }));
+    expect(await screen.findByRole("heading", { name: "原创建请求已完成" })).toBeTruthy();
+    expect(create).toHaveBeenCalledWith(owner.id, { userResourceVersion: intent.userResourceVersion, requestId: intent.requestId });
+    expect(screen.queryByText("mak1.one-time-secret")).toBeNull();
   });
 });

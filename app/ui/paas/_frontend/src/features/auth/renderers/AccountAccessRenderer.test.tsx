@@ -254,6 +254,27 @@ function AccountIntentProbe() {
   </>;
 }
 
+const originalKeyRequestId = `ui-access-key-create-${"a".repeat(32)}`;
+function AccessKeyIntentProbe() {
+  const session = useSession();
+  const access = useAccountAccess();
+  const [visible, setVisible] = useState(true);
+  const client = access.accessKeys;
+  return <>
+    <button onClick={() => void session.login("admin", "password")}>login-key-probe</button>
+    <button onClick={() => setVisible((current) => !current)}>toggle-key-view</button>
+    <output aria-label="key-probe-session">{`${session.phase}:${access.scene?.accountId ?? "none"}:${access.loading}:${access.error ?? "none"}`}</output>
+    {visible ? <>
+      <button disabled={!client} onClick={() => { if (client) void client.create(childUser.id, { userResourceVersion: childUser.resourceVersion, requestId: originalKeyRequestId }).catch(() => {}); }}>create-original-key</button>
+      <button disabled={!client} onClick={() => { if (client) void client.create(childUser.id, { userResourceVersion: childUser.resourceVersion, requestId: `ui-access-key-create-${"b".repeat(32)}` }).catch(() => {}); }}>create-new-key</button>
+      <button disabled={!client} onClick={() => { if (client) void client.create("child-b", { userResourceVersion: 2, requestId: `ui-access-key-create-${"c".repeat(32)}` }).catch(() => {}); }}>create-other-user-key</button>
+      <button disabled={!client} onClick={() => { client?.acknowledgeIssued(originalKeyRequestId, "mak1.lost-secret"); }}>acknowledge-issued-key</button>
+      <button disabled={!client} onClick={() => { if (client) void client.delete(childUser.id, "mak1.lost-secret", { accessKeyResourceVersion: 2, requestId: "ui-access-key-delete-test" }).catch(() => {}); }}>retire-recovered-key</button>
+      <output aria-label="key-create-intent">{access.accessKeyCreateIntent ? `${access.accessKeyCreateIntent.phase}:${access.accessKeyCreateIntent.userId}:${access.accessKeyCreateIntent.requestId}` : "none"}</output>
+    </> : null}
+  </>;
+}
+
 function AuthenticatedAccess({ repository, initialView }: { repository: AccountRepository; initialView: AccountAccessView }) {
   const requestLeave = useLeaveConfirmation();
   const session = useSession();
@@ -667,6 +688,97 @@ describe("account access", () => {
     expect(await screen.findByText("尚未创建访问密钥")).toBeTruthy();
     expect(list).toHaveBeenCalledWith(credential, account.id, childUser.id);
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("retains one live key creation across view unmount and login, blocks another owner, and unlocks only after recovered-key retirement", async () => {
+    const key = { id: "mak1.lost-secret", accountId: account.id, userId: childUser.id, status: "DISABLED" as const,
+      resourceVersion: 2, createdAt: timestamp, updatedAt: timestamp };
+    const create = vi.fn().mockRejectedValueOnce(new HttpProblem(503, "IAM_UNAVAILABLE"))
+      .mockResolvedValueOnce({ outcome: "EQUAL_REPLAY", key });
+    const remove = vi.fn().mockResolvedValue({ outcome: "APPLIED", deletion: {
+      id: key.id, accountId: account.id, userId: childUser.id, resourceVersion: 3, deletedAt: timestamp
+    } });
+    const otherIdentity = { ...childUser, id: "child-b", loginName: "other" };
+    const otherUser = { user: otherIdentity, policyAttachments: [], capabilities: userCapabilities(otherIdentity) };
+    const repository = accounts({
+      listUsers: vi.fn().mockResolvedValue({ items: [child, otherUser], nextAfter: null }),
+      accessKeys: { list: vi.fn(), read: vi.fn(), create, setStatus: vi.fn(), delete: remove }
+    });
+    const auth = iam();
+    const user = userEvent.setup();
+    const tree = () => <LocaleProvider><SessionProvider repository={auth}><AccountAccessProvider repository={repository}><AccessKeyIntentProbe /></AccountAccessProvider></SessionProvider></LocaleProvider>;
+    const first = render(tree());
+    await user.click(screen.getByRole("button", { name: "login-key-probe" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "create-original-key" }).hasAttribute("disabled")).toBe(false));
+    await user.click(screen.getByRole("button", { name: "create-original-key" }));
+    await waitFor(() => expect(screen.getByLabelText("key-create-intent").textContent).toBe(`unknown:${childUser.id}:${originalKeyRequestId}`));
+    await user.click(screen.getByRole("button", { name: "create-new-key" }));
+    await user.click(screen.getByRole("button", { name: "create-other-user-key" }));
+    expect(create).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "toggle-key-view" }));
+    await user.click(screen.getByRole("button", { name: "toggle-key-view" }));
+    expect(screen.getByLabelText("key-create-intent").textContent).toBe(`unknown:${childUser.id}:${originalKeyRequestId}`);
+    first.unmount();
+
+    render(tree());
+    await user.click(screen.getByRole("button", { name: "login-key-probe" }));
+    await waitFor(() => expect(screen.getByLabelText("key-create-intent").textContent).toBe(`unknown:${childUser.id}:${originalKeyRequestId}`));
+    await user.click(screen.getByRole("button", { name: "create-original-key" }));
+    await waitFor(() => expect(screen.getByLabelText("key-create-intent").textContent).toBe(`recovered:${childUser.id}:${originalKeyRequestId}`));
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(create.mock.calls[0]?.[3]).toEqual(create.mock.calls[1]?.[3]);
+    await user.click(screen.getByRole("button", { name: "create-new-key" }));
+    expect(create).toHaveBeenCalledTimes(2);
+    await user.click(screen.getByRole("button", { name: "retire-recovered-key" }));
+    await waitFor(() => expect(screen.getByLabelText("key-create-intent").textContent).toBe("none"));
+    expect(remove).toHaveBeenCalledWith(credential, account.id, childUser.id, key.id, expect.anything());
+  });
+
+  it("keeps an applied key locked until its one-time Secret is acknowledged", async () => {
+    const key = { id: "mak1.lost-secret", accountId: account.id, userId: childUser.id, status: "DISABLED" as const,
+      resourceVersion: 2, createdAt: timestamp, updatedAt: timestamp };
+    const create = vi.fn().mockResolvedValue({ outcome: "APPLIED", key, secret: "test-only-one-time-secret" });
+    const repository = accounts({ accessKeys: { list: vi.fn(), read: vi.fn(), create, setStatus: vi.fn(), delete: vi.fn() } });
+    const auth = iam();
+    const user = userEvent.setup();
+    const tree = () => <LocaleProvider><SessionProvider repository={auth}><AccountAccessProvider repository={repository}><AccessKeyIntentProbe /></AccountAccessProvider></SessionProvider></LocaleProvider>;
+    render(tree());
+    await user.click(screen.getByRole("button", { name: "login-key-probe" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "create-original-key" }).hasAttribute("disabled")).toBe(false));
+    await user.click(screen.getByRole("button", { name: "create-original-key" }));
+    await waitFor(() => expect(screen.getByLabelText("key-create-intent").textContent).toBe(`recovered:${childUser.id}:${originalKeyRequestId}`));
+    await user.click(screen.getByRole("button", { name: "create-new-key" }));
+    expect(create).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "acknowledge-issued-key" }));
+    await waitFor(() => expect(screen.getByLabelText("key-create-intent").textContent).toBe("none"));
+    expect(sessionStorage.length).toBe(0);
+  });
+
+  it("treats an applied Secret as lost after page loss and requires the recovered key to be retired", async () => {
+    const key = { id: "mak1.lost-secret", accountId: account.id, userId: childUser.id, status: "DISABLED" as const,
+      resourceVersion: 2, createdAt: timestamp, updatedAt: timestamp };
+    const create = vi.fn().mockResolvedValue({ outcome: "APPLIED", key, secret: "test-only-one-time-secret" });
+    const remove = vi.fn().mockResolvedValue({ outcome: "APPLIED", deletion: {
+      id: key.id, accountId: account.id, userId: childUser.id, resourceVersion: 3, deletedAt: timestamp
+    } });
+    const repository = accounts({ accessKeys: { list: vi.fn(), read: vi.fn(), create, setStatus: vi.fn(), delete: remove } });
+    const auth = iam();
+    const user = userEvent.setup();
+    const tree = () => <LocaleProvider><SessionProvider repository={auth}><AccountAccessProvider repository={repository}><AccessKeyIntentProbe /></AccountAccessProvider></SessionProvider></LocaleProvider>;
+    const first = render(tree());
+    await user.click(screen.getByRole("button", { name: "login-key-probe" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "create-original-key" }).hasAttribute("disabled")).toBe(false));
+    await user.click(screen.getByRole("button", { name: "create-original-key" }));
+    await waitFor(() => expect(screen.getByLabelText("key-create-intent").textContent).toBe(`recovered:${childUser.id}:${originalKeyRequestId}`));
+    first.unmount();
+
+    render(tree());
+    await user.click(screen.getByRole("button", { name: "login-key-probe" }));
+    await waitFor(() => expect(screen.getByLabelText("key-create-intent").textContent).toBe(`recovered:${childUser.id}:${originalKeyRequestId}`));
+    await user.click(screen.getByRole("button", { name: "acknowledge-issued-key" }));
+    expect(screen.getByLabelText("key-create-intent").textContent).toBe(`recovered:${childUser.id}:${originalKeyRequestId}`);
+    await user.click(screen.getByRole("button", { name: "retire-recovered-key" }));
+    await waitFor(() => expect(screen.getByLabelText("key-create-intent").textContent).toBe("none"));
   });
 
   it("updates only the display name through the live user revision", async () => {

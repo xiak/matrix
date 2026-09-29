@@ -7,7 +7,7 @@ import { Alert, Badge, Button, Card, Checkbox, ContentPage, Table, Typography } 
 import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
 import type { AccessKeyAccess, AccessKeyDirectory, AccessKeyStatus } from "../domain/accessKeys";
 import type { IamAction } from "../domain/accounts";
-import type { AccessKeyClient } from "../application/AccountAccessProvider";
+import type { AccessKeyClient, AccessKeyCreateIntent } from "../application/AccountAccessProvider";
 import type { AccountAccessScene, AccountUserScene } from "../scenes/accountAccessScene";
 import { AccountIdentifier } from "./AccountOverview";
 import { WorkspaceTime } from "./AccessWorkspaceUi";
@@ -15,8 +15,8 @@ import styles from "./AccessCredentials.module.css";
 
 type LiveKeyError = "forbidden" | "routeUnavailable" | "conflict" | "unavailable";
 type LiveKeyFlow =
-  | { kind: "create"; requestId: string }
-  | { kind: "issued"; keyId: string; secret: string }
+  | { kind: "create"; requestId: string; userResourceVersion: number }
+  | { kind: "issued"; keyId: string; secret: string; requestId: string }
   | { kind: "replayed"; keyId: string }
   | { kind: "status"; access: AccessKeyAccess; status: AccessKeyStatus; requestId: string }
   | { kind: "delete"; access: AccessKeyAccess; requestId: string };
@@ -42,13 +42,15 @@ function RotationGuide() {
   </Card>;
 }
 
-function LiveKeyWorkflow({ flow, owner, directory, client, onChanged, onClose }: {
+function LiveKeyWorkflow({ flow, owner, directory, client, retryingOriginal, onChanged, onClose, onInspectRecovered }: {
   flow: LiveKeyFlow;
   owner: AccountUserScene;
   directory: AccessKeyDirectory;
   client: AccessKeyClient;
+  retryingOriginal: boolean;
   onChanged(): Promise<void>;
   onClose(): void;
+  onInspectRecovered(keyId: string): void;
 }) {
   const t = useTranslations("IamWorkspace");
   const restrictions = useTranslations("AccountAccess.restrictions");
@@ -72,10 +74,10 @@ function LiveKeyWorkflow({ flow, owner, directory, client, onChanged, onClose }:
     setBusy(true); setError(null);
     try {
       if (flow.kind === "create") {
-        const result = await client.create(owner.id, { userResourceVersion: directory.userResourceVersion, requestId: flow.requestId });
-        await onChanged();
-        if (result.outcome === "APPLIED") onCloseWith({ kind: "issued", keyId: result.key.id, secret: result.secret });
+        const result = await client.create(owner.id, { userResourceVersion: flow.userResourceVersion, requestId: flow.requestId });
+        if (result.outcome === "APPLIED") onCloseWith({ kind: "issued", keyId: result.key.id, secret: result.secret, requestId: flow.requestId });
         else onCloseWith({ kind: "replayed", keyId: result.key.id });
+        void onChanged();
         return;
       }
       if (flow.kind === "status") {
@@ -100,23 +102,23 @@ function LiveKeyWorkflow({ flow, owner, directory, client, onChanged, onClose }:
       {active.kind === "create" ? <>
         <dl className={styles.reviewFacts}>
           <div><dt>{t("owner")}</dt><dd><strong>{owner.name}</strong><span>{owner.loginName} · {owner.id}</span></dd></div>
-          <div><dt>{t("keyUserRevision")}</dt><dd>v{directory.userResourceVersion}</dd></div>
+          <div><dt>{t("keyUserRevision")}</dt><dd>v{active.userResourceVersion}</dd></div>
           <div><dt>requestId</dt><dd><code>{active.requestId}</code></dd></div>
         </dl>
         <Alert status="warning">{t("keyCreateWarning")}</Alert>
         {!createCapability?.available && createCapability?.restrictionReason ? <Alert status="warning">{restrictions(createCapability.restrictionReason)}</Alert> : null}
-        <div className={styles.actions}><Button disabled={busy || !createCapability?.available} onClick={() => void run()}>{busy ? t("keyLiveSaving") : t("keyConfirmCreate")}</Button><Button disabled={busy} onClick={onClose} variant="ghost">{t("cancel")}</Button></div>
+        <div className={styles.actions}><Button disabled={busy || !createCapability?.available} onClick={() => void run()}>{busy ? t("keyLiveSaving") : t(retryingOriginal ? "keyLiveRetryOriginal" : "keyConfirmCreate")}</Button><Button disabled={busy} onClick={onClose} variant="ghost">{t("cancel")}</Button></div>
       </> : null}
       {active.kind === "issued" ? <>
         <Alert status="warning">{t("keyLiveSecretWarning")}</Alert>
         <div className={styles.secretGrid}><div><span>{t("keyId")}</span><AccountIdentifier label={t("keyId")} value={active.keyId} /></div><div><span>{t("keySecret")}</span><AccountIdentifier label={t("keySecret")} value={active.secret} /></div></div>
         <Checkbox checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)}>{t("keyLiveAcknowledge")}</Checkbox>
-        <div className={styles.actions}><Button disabled={!acknowledged} onClick={onClose}>{t("done")}</Button></div>
+        <div className={styles.actions}><Button disabled={!acknowledged} onClick={() => { client.acknowledgeIssued(active.requestId, active.keyId); onClose(); }}>{t("done")}</Button></div>
       </> : null}
       {active.kind === "replayed" ? <>
         <Alert status="warning">{t("keyLiveReplay", { id: active.keyId })}</Alert>
         <p className={styles.note}>{t("keyRecoveredNext")}</p>
-        <div className={styles.actions}><Button onClick={onClose}>{t("done")}</Button></div>
+        <div className={styles.actions}><Button onClick={() => onInspectRecovered(active.keyId)}>{t("keyInspectAndReplace")}</Button><Button onClick={onClose} variant="ghost">{t("done")}</Button></div>
       </> : null}
       {active.kind === "status" ? <>
         <Alert status={active.status === "DISABLED" ? "warning" : "info"}>{t(active.status === "DISABLED" ? "keyDisableImpact" : "keyEnableImpact")}</Alert>
@@ -135,7 +137,7 @@ function LiveKeyWorkflow({ flow, owner, directory, client, onChanged, onClose }:
   </Card>;
 }
 
-export function LiveAccessCredentials({ client, scene, scopedOwner }: { client: AccessKeyClient; scene: AccountAccessScene; scopedOwner?: AccountUserScene }) {
+export function LiveAccessCredentials({ client, scene, createIntent = null, scopedOwner }: { client: AccessKeyClient; scene: AccountAccessScene; createIntent?: AccessKeyCreateIntent | null; scopedOwner?: AccountUserScene }) {
   const t = useTranslations("IamWorkspace");
   const restrictions = useTranslations("AccountAccess.restrictions");
   const [ownerId, setOwnerId] = useState<string | null>(scopedOwner?.id ?? null);
@@ -185,6 +187,7 @@ export function LiveAccessCredentials({ client, scene, scopedOwner }: { client: 
   if (!owner) return <section className={styles.root}>
     <ContentPage.Heading title={t("keys")} scrollKey="live-access-key-user-directory" />
     <Alert status="info"><KeyRound aria-hidden="true" />{t("keyBoundary")}</Alert>
+    {createIntent ? <Alert status="warning">{t("keyLivePendingOwner", { id: createIntent.userId })} {scene.users.some((user) => user.id === createIntent.userId) ? <Button onClick={() => chooseOwner(createIntent.userId)} size="small" variant="ghost">{t("keyLiveResume")}</Button> : null}</Alert> : null}
     <Card>
       <Card.Header className={styles.directoryHeader}><div><Typography.Title as="h2" level={3}>{t("keyUserDirectory")}</Typography.Title><Typography.Text tone="muted">{t("keyUserDirectoryHint")}</Typography.Text></div><Badge status="neutral">{t("userCount", { count: scene.users.length })}</Badge></Card.Header>
       <Card.Body className={styles.tableBody}>{scene.users.length ? <Table aria-label={t("keyUserDirectory")} mobileLayout="stack"><thead><tr><th scope="col">{t("owner")}</th><th scope="col">{t("state")}</th><th scope="col">{t("keyLoadingModel")}</th></tr></thead><tbody>{scene.users.map((user) => <tr key={user.id}><td data-label={t("owner")}><span className={styles.identity}><UserRound aria-hidden="true" /><span><strong>{user.name}</strong><small>{user.loginName} · {user.id}</small></span></span></td><td data-label={t("state")}><Badge status={user.enabled ? "success" : "neutral"}>{t(user.enabled ? "enabled" : "disabled")}</Badge></td><td data-label={t("keyLoadingModel")}><Button aria-label={t("keyManageNamed", { name: user.loginName })} onClick={() => chooseOwner(user.id)} size="small" variant="secondary">{t("keyManage")}</Button></td></tr>)}</tbody></Table> : <p className={styles.note}>{t("keyPrimary")}</p>}</Card.Body>
@@ -192,7 +195,16 @@ export function LiveAccessCredentials({ client, scene, scopedOwner }: { client: 
     <RotationGuide />
   </section>;
 
-  const startCreate = () => setFlow({ kind: "create", requestId: requestToken("ui-access-key-create-") });
+  const startCreate = () => {
+    if (createIntent) return;
+    if (directory) setFlow({ kind: "create", requestId: requestToken("ui-access-key-create-"), userResourceVersion: directory.userResourceVersion });
+  };
+  const resumeCreate = () => {
+    if (!createIntent || createIntent.userId !== owner.id) return;
+    setFlow(createIntent.phase === "unknown"
+      ? { kind: "create", requestId: createIntent.requestId, userResourceVersion: createIntent.userResourceVersion }
+      : { kind: "replayed", keyId: createIntent.keyId });
+  };
   const openKey = async (access: AccessKeyAccess) => {
     setSelected(access); setFlow(null); setError(null);
     try { setSelected(await client.read(owner.id, access.key.id)); }
@@ -201,12 +213,20 @@ export function LiveAccessCredentials({ client, scene, scopedOwner }: { client: 
   const createCapability = directory ? capability(directory, "iam.access-key.create") : null;
 
   return <section className={styles.root}>
-    {scopedOwner ? <div className={styles.embeddedHeading}><h3>{t("keys")}</h3><Button disabled={Boolean(flow) || !createCapability?.available} onClick={startCreate} size="small">{t("createKey")}</Button></div>
-      : <ContentPage.Heading title={`${owner.loginName} · ${t("keys")}`} scrollKey={`live-access-keys:${owner.id}`} back={{ label: t("back"), onClick: closeOwner }} actions={!flow && directory ? <ContentPage.Commands label={t("keys")} primary={{ id: "create-key", label: t("createKey"), disabled: !createCapability?.available, disabledReason: createCapability?.restrictionReason ? restrictions(createCapability.restrictionReason) : undefined, onSelect: startCreate }} /> : undefined} focus />}
+    {scopedOwner ? <div className={styles.embeddedHeading}><h3>{t("keys")}</h3><Button disabled={Boolean(flow || createIntent) || !createCapability?.available} onClick={startCreate} size="small">{t("createKey")}</Button></div>
+      : <ContentPage.Heading title={`${owner.loginName} · ${t("keys")}`} scrollKey={`live-access-keys:${owner.id}`} back={{ label: t("back"), onClick: closeOwner }} actions={!flow && directory ? <ContentPage.Commands label={t("keys")} primary={{ id: "create-key", label: t("createKey"), disabled: Boolean(createIntent) || !createCapability?.available, disabledReason: createCapability?.restrictionReason ? restrictions(createCapability.restrictionReason) : undefined, onSelect: startCreate }} /> : undefined} focus />}
     {!scopedOwner ? <Alert status="warning">{t("keyLiveProductBoundary")}</Alert> : null}
+    {createIntent && !flow ? <Alert status="warning">{createIntent.userId === owner.id
+      ? createIntent.phase === "unknown" ? t("keyCreateUncertain", { id: createIntent.requestId }) : t("keyRecovered", { id: createIntent.keyId })
+      : t("keyLivePendingOwner", { id: createIntent.userId })} {createIntent.userId === owner.id
+        ? <Button disabled={Boolean(flow) || createIntent.phase === "unknown" && !createCapability?.available} onClick={resumeCreate} size="small" variant="ghost">{t("keyLiveResume")}</Button>
+        : !scopedOwner && scene.users.some((user) => user.id === createIntent.userId) ? <Button onClick={() => chooseOwner(createIntent.userId)} size="small" variant="ghost">{t("keyLiveResume")}</Button> : null}</Alert> : null}
     {error ? <Alert status="danger">{t(`keyLiveErrors.${error}`)} <Button onClick={() => void load(owner.id)} size="small" variant="ghost">{t("keyLiveRetry")}</Button></Alert> : null}
     {loading && !directory ? <Card><Card.Body><p className={styles.note} role="status">{t("keyLiveLoading")}</p></Card.Body></Card> : null}
-    {flow && directory ? <LiveKeyWorkflow flow={flow} owner={owner} directory={directory} client={client} onChanged={() => load(owner.id, false)} onClose={() => setFlow(null)} /> : null}
+    {flow && directory ? <LiveKeyWorkflow flow={flow} owner={owner} directory={directory} client={client}
+      retryingOriginal={flow.kind === "create" && createIntent?.phase === "unknown" && createIntent.requestId === flow.requestId}
+      onChanged={() => load(owner.id, false)} onClose={() => setFlow(null)}
+      onInspectRecovered={(keyId) => { setFlow(null); const found = directory.items.find((item) => item.key.id === keyId); if (found) void openKey(found); else void load(owner.id); }} /> : null}
     {!flow && selected ? <>
       <Card><Card.Header><div><Typography.Title as="h2" level={3}>{selected.key.id}</Typography.Title><Typography.Text tone="muted">{t("keyDirectoryHint", { name: owner.loginName })}</Typography.Text></div><Badge status={selected.key.status === "ENABLED" ? "success" : "neutral"}>{t(selected.key.status === "ENABLED" ? "enabled" : "disabled")}</Badge></Card.Header><Card.Body className={styles.detailBody}>
         <dl className={styles.keyFacts}><div><dt>{t("keyId")}</dt><dd><AccountIdentifier label={t("keyId")} value={selected.key.id} /></dd></div><div><dt>{t("owner")}</dt><dd><strong>{owner.name}</strong><span>{owner.loginName} · {owner.id}</span></dd></div><div><dt>{t("created")}</dt><dd><WorkspaceTime value={selected.key.createdAt} /></dd></div><div><dt>{t("keyRevision")}</dt><dd>v{selected.key.resourceVersion}</dd></div></dl>

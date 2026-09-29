@@ -139,7 +139,7 @@ export function UserAccessManagement({ user, onDeleted, profileActions = false, 
         <p className={styles.note}>{t(access.accessKeys ? "liveCredentialManagedHint" : "liveCredentialContractHint")}</p>
         {access.accessKeys && access.scene ? <>
           <div className={styles.actions}><Button onClick={() => setShowKeys((current) => !current)} variant="secondary">{t(showKeys ? "hideAccessKeys" : "manageAccessKeys")}</Button></div>
-          {showKeys ? <LiveAccessCredentials client={access.accessKeys} scene={access.scene} scopedOwner={user} /> : null}
+          {showKeys ? <LiveAccessCredentials client={access.accessKeys} scene={access.scene} createIntent={access.accessKeyCreateIntent} scopedOwner={user} /> : null}
         </> : null}
       </section> : null}
       <div className={styles.sectionHeading}><ShieldCheck aria-hidden="true" /><strong>{t("directPolicyAttachments")}</strong></div>

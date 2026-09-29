@@ -150,7 +150,7 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
       view === "groups" && access.groups ? <AccountLiveGroups key={`${access.groups.accountId}:${entityId ?? "groups"}`} client={access.groups} entityId={entityId} scene={scene} onCreate={() => onNavigate("create-group")} onOpen={onNavigate} /> :
       view === "roles" && !workspace && access.roles ? <AccountLiveRoles key={`${access.roles.accountId}:${entityId ?? "roles"}`} client={access.roles} entityId={entityId} onCreate={() => onNavigate("create-role")} onOpen={onNavigate} revokeIntent={access.roleSessionRevokeIntent} onRevokeIntentChange={access.changeRoleSessionRevokeIntent} /> :
       view === "create-role" && !workspace && access.roles ? <LiveRoleCreationWizard client={access.roles} scene={scene} onBack={() => onNavigate("roles")} onDone={(id) => onNavigate("roles", id)} /> :
-      view === "keys" && !workspace && access.accessKeys ? <LiveAccessCredentials client={access.accessKeys} scene={scene} /> :
+      view === "keys" && !workspace && access.accessKeys ? <LiveAccessCredentials client={access.accessKeys} scene={scene} createIntent={access.accessKeyCreateIntent} /> :
       !workspace ? <EmptyState title={w("notConnected")} description={w("notConnectedHint")} /> :
       view === "create-policy" ? <PolicyAuthoringWizard method={policyCreationMethod(policyMethod)} workspace={workspace} scene={scene} doneLabel={w("finishBack")} onBack={() => onNavigate("policies")} onDone={() => onNavigate("policies")} /> :
       view === "create-role" ? <RoleCreationWizard workspace={workspace} scene={scene} onBack={() => onNavigate("roles")} onDone={(id) => onNavigate("roles", id)} /> :
