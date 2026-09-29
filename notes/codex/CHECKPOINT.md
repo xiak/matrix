@@ -3,11 +3,11 @@
 > Non-authoritative portable memory. Validate it against Git and the owning
 > FEAT before continuing.
 
-- Updated: 2026-09-29
+- Updated: 2026-09-30
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `255b9bf7`
-- Pushed documentation head: `c353b0a9`
+- Pushed UI source: `74dfa01b`
+- Pushed documentation head: `52716234`
 
 ## Authoritative route
 
@@ -93,6 +93,14 @@ delayed local skeleton. Directory request generations reject late results, and
 fast responses never render an intermediate empty directory. The DEV browser
 still exercises the explicit MOCK repository, so responsive browser evidence
 does not substitute for delayed real-IAM network acceptance.
+
+LIVE User detail now follows the same rule without broadening authority. A
+selected directory row immediately supplies its already verified read-only
+identity summary; only the exact `UserAccess` region loads or fails. Mutation
+actions stay absent until the exact detail and capabilities arrive, and a
+failure retains the locator context with an in-place retry. No real failure
+falls back to MOCK, and the compact DEV check remains responsive evidence only,
+not real-IAM delay/failure acceptance.
 
 ## Continuation
 
