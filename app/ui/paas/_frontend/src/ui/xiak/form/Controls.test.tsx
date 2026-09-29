@@ -2,7 +2,7 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ActionMenu, Alert, Badge, Button, Checkbox, Dialog, FormField, Input, RadioGroup, SearchInput, Select, Table, TablePagination, TableActions, TableSelectionCell, TagEditor } from "../index";
+import { ActionMenu, Alert, Badge, Button, Checkbox, Dialog, FormField, Input, RadioGroup, SearchInput, Select, Table, TablePagination, TableActions, TableSelectionCell, TagEditor, TextArea } from "../index";
 
 afterEach(cleanup);
 describe("shared themed controls", () => {
@@ -127,11 +127,13 @@ describe("shared themed controls", () => {
     render(<form>
       <FormField id="name" hint="Use a unique name" label="Name"><Input aria-describedby="name-hint" id="name" invalid required /></FormField>
       <FormField id="draft-name" label="Draft name"><Input id="draft-name" aria-required="true" /></FormField>
+      <FormField id="description" label="Description"><TextArea id="description" aria-invalid /></FormField>
       <FormField label="Region"><Select aria-required="true" defaultValue="a" name="region" options={[{ value: "a", label: "Region A" }, { value: "b", label: "Region B" }]} /></FormField>
     </form>);
     const input = screen.getByLabelText("Name") as HTMLInputElement;
     expect(screen.getByRole("textbox", { name: "Name" })).toHaveProperty("required", true);
     expect(screen.getByRole("textbox", { name: "Draft name" }).getAttribute("aria-required")).toBe("true");
+    expect(screen.getByRole("textbox", { name: "Description" }).getAttribute("aria-invalid")).toBe("true");
     expect(screen.getByRole("combobox", { name: "Region" }).getAttribute("aria-required")).toBe("true");
     expect(input.getAttribute("aria-invalid")).toBe("true");
     expect(document.getElementById(input.getAttribute("aria-describedby")!)?.textContent).toBe("Use a unique name");

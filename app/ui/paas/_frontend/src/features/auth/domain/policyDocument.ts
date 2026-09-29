@@ -110,7 +110,8 @@ export function parsePolicyDocument(text: string, accountId?: string): PolicyDoc
           typeof tag.key !== "string" || !tag.key.trim() || tag.key.length > 64 || typeof tag.value !== "string" || tag.value.length > 128 || /[<>\u0000-\u001f]/.test(tag.key + tag.value)) ||
         new Set(condition.resourceTag.map((tag) => tag.key)).size !== condition.resourceTag.length)) throw new AccessWorkspaceError("invalidCondition");
       if (condition.sourceIp !== undefined && (!Array.isArray(condition.sourceIp) || !condition.sourceIp.length || condition.sourceIp.length > 10 ||
-        condition.sourceIp.some((range) => typeof range !== "string" || !sourceCidrValid(range)))) throw new AccessWorkspaceError("invalidCondition");
+        condition.sourceIp.some((range) => typeof range !== "string" || !sourceCidrValid(range)) ||
+        new Set(condition.sourceIp).size !== condition.sourceIp.length)) throw new AccessWorkspaceError("invalidCondition");
       for (const key of ["notBefore", "notAfter"] as const) if (condition[key] !== undefined && (typeof condition[key] !== "string" || !utcTimeValid(condition[key]))) throw new AccessWorkspaceError("invalidCondition");
       if (condition.notBefore && condition.notAfter && Date.parse(condition.notBefore) > Date.parse(condition.notAfter)) throw new AccessWorkspaceError("invalidCondition");
     }

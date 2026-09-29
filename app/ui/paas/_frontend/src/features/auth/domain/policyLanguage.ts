@@ -57,6 +57,12 @@ function cidr(value: string): [ipaddr.IPv4 | ipaddr.IPv6, number] | null {
       if (bits < 96) return null;
       address = address.toIPv4Address(); bits -= 96;
     }
+    const bytes = address.toByteArray();
+    if (bytes.some((byte, index) => {
+      const retained = Math.max(0, Math.min(8, bits - index * 8));
+      const mask = retained === 0 ? 0 : (0xff << (8 - retained)) & 0xff;
+      return (byte & ~mask) !== 0;
+    })) return null;
     return [address, bits];
   } catch { return null; }
 }

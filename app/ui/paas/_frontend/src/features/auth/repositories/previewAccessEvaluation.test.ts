@@ -112,7 +112,7 @@ describe("closed preview policy language", () => {
     expect(parsePolicyDocument(JSON.stringify(document))).toEqual(document);
     expect(() => parsePolicyDocument(JSON.stringify(grant({ sourceIp: ["192.0.2.0/24"], unsupported: true } as PolicyCondition)))).toThrow("unsupportedPolicy");
   });
-  it.each([{}, null, { sourceIp: [] }, { sourceIp: [""] }, { sourceIp: ["192.0.2.1/33"] }, { sourceIp: ["2001:db8::/129"] }, { sourceIp: ["010.0.0.1/8"] }, { sourceIp: ["fe80::1%en0/64"] }, { resourceTag: [] }, { resourceTag: [{ key: "team", value: "one" }, { key: "team", value: "two" }] }, { resourceTag: [{ key: "team", value: 1 }] }, { notBefore: "" }, { notBefore: "2026-02-30T00:00:00Z" }, { notAfter: "2026-09-09T12:00:00+08:00" }, { notBefore: "2026-09-10T00:00:00Z", notAfter: "2026-09-09T00:00:00Z" }])("blocks malformed conditions %j", (condition) => {
+  it.each([{}, null, { sourceIp: [] }, { sourceIp: [""] }, { sourceIp: ["192.0.2.1/33"] }, { sourceIp: ["192.0.2.42/24"] }, { sourceIp: ["2001:db8::1/32"] }, { sourceIp: ["192.0.2.0/24", "192.0.2.0/24"] }, { sourceIp: ["2001:db8::/129"] }, { sourceIp: ["010.0.0.1/8"] }, { sourceIp: ["fe80::1%en0/64"] }, { resourceTag: [] }, { resourceTag: [{ key: "team", value: "one" }, { key: "team", value: "two" }] }, { resourceTag: [{ key: "team", value: 1 }] }, { notBefore: "" }, { notBefore: "2026-02-30T00:00:00Z" }, { notAfter: "2026-09-09T12:00:00+08:00" }, { notBefore: "2026-09-10T00:00:00Z", notAfter: "2026-09-09T00:00:00Z" }])("blocks malformed conditions %j", (condition) => {
     expect(() => parsePolicyDocument(JSON.stringify(grant(condition as PolicyCondition)))).toThrow("invalidCondition");
   });
   it("checks canonical resources, ownership, operation granularity and resource type", () => {
@@ -134,6 +134,8 @@ describe("closed preview policy language", () => {
     expect(sourceIpMatches("192.0.2.42", ["::ffff:192.0.2.0/120"])).toBe(true);
     expect(sourceIpMatches("2001:db8:1234::1", ["2001:db8::/32"])).toBe(true);
     expect(sourceIpMatches("2001:db9::1", ["2001:db8::/32", "192.0.2.0/24"])).toBe(false);
+    expect(sourceCidrValid("192.0.2.42/24")).toBe(false);
+    expect(sourceCidrValid("2001:db8::1/32")).toBe(false);
     expect(sourceIpMatches("not-an-ip", ["192.0.2.0/24"])).toBeNull();
     expect(sourceCidrValid("::ffff:192.0.2.0/80")).toBe(false);
     expect(utcTimeValid("2026-09-09T12:00:00.012Z")).toBe(true);

@@ -2019,6 +2019,10 @@ describe("CAM-style access workspace", () => {
     await user.type(screen.getByLabelText("资源 ID 或前缀 1"), "production/*");
     await user.click(screen.getByRole("checkbox", { name: "logs:list" }));
     expect((screen.getByRole("checkbox", { name: "按资源标签限制" }) as HTMLInputElement).disabled).toBe(true);
+    const conditionCapabilities = screen.getByRole("region", { name: "条件能力" });
+    expect(within(conditionCapabilities).getAllByText("全部操作支持").length).toBeGreaterThan(0);
+    expect(within(conditionCapabilities).getByText("部分操作支持")).toBeTruthy();
+    expect(within(conditionCapabilities).getByText("1 / 2 个所选操作")).toBeTruthy();
     await user.click(screen.getByRole("combobox", { name: "资源授权范围" }));
     expect(screen.getByRole("option", { name: "指定资源" }).getAttribute("aria-disabled")).toBe("true");
     await user.keyboard("{Escape}");
@@ -2027,10 +2031,13 @@ describe("CAM-style access workspace", () => {
     expect((screen.getByLabelText("资源 ID 或前缀 1") as HTMLInputElement).value).toBe("production/*");
     await user.click(screen.getByRole("checkbox", { name: "logs:list" }));
     await user.click(screen.getByRole("checkbox", { name: "限制来源 IP" }));
+    fireEvent.change(screen.getByLabelText("来源 IP 范围（CIDR）"), { target: { value: "192.0.2.42/24" } });
+    expect(screen.getByText(/主机位必须为 0/)).toBeTruthy();
+    expect(screen.getByLabelText("来源 IP 范围（CIDR）").getAttribute("aria-invalid")).toBe("true");
     await user.click(screen.getByRole("button", { name: "下一步" }));
-    expect(screen.getByRole("alert").textContent).toContain("条件");
-    expect(document.activeElement).toBe(screen.getByRole("alert"));
-    expect(screen.getByLabelText("来源 IP 范围（CIDR）")).toBeTruthy();
+    const validationAlert = document.querySelector<HTMLElement>("[data-policy-validation]")!;
+    expect(validationAlert.textContent).toContain("条件");
+    expect(document.activeElement).toBe(screen.getByLabelText("来源 IP 范围（CIDR）"));
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
   });
   it("confirms a service change, retaining other statements and condition restrictions", async () => {

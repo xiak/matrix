@@ -3,11 +3,11 @@
 import { useId, useState } from "react";
 import { useTranslations } from "next-intl";
 import { ArrowDown, ArrowUp, Plus, Trash2 } from "lucide-react";
-import { Alert, Button, Checkbox, Dialog, FormField, Input, SearchInput, Select, TagEditor, TextArea } from "@ui/xiak";
+import { Alert, Badge, Button, Checkbox, Dialog, FormField, Input, SearchInput, Select, TagEditor, TextArea } from "@ui/xiak";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
 import type { PolicyCondition } from "../domain/policyDocument";
-import { expandPolicyActions, formatPolicyResource, parsePolicyResource, type PolicyResource } from "../domain/policyLanguage";
-import { policyActions, policyConditionsForActions, policyServices, type PolicyAction, type PolicyConditionKey, type PolicyService } from "../domain/previewAuthorizationCatalog";
+import { expandPolicyActions, formatPolicyResource, parsePolicyResource, sourceCidrValid, type PolicyResource } from "../domain/policyLanguage";
+import { policyActions, policyConditionKeys, policyConditionsForActions, policyServices, type PolicyAction, type PolicyConditionKey, type PolicyService } from "../domain/previewAuthorizationCatalog";
 import { PolicyActionCatalog } from "./PolicyActionCatalog";
 import styles from "./PolicyAuthoringWizard.module.css";
 
@@ -69,6 +69,12 @@ function ConditionsEditor({ value, actions, tagMode, onChange }: { value?: Polic
   const supported = policyConditionsForActions(actions);
   const available = (key: PolicyConditionKey) => supported.includes(key);
   const incompatible = value && Object.keys(value).some((key) => !supported.includes(key as PolicyConditionKey));
+  const sourceRanges = value?.sourceIp?.filter(Boolean) ?? [];
+  const sourceIpInvalid = sourceRanges.some((range) => !sourceCidrValid(range)) || new Set(sourceRanges).size !== sourceRanges.length;
+  const capabilities = policyConditionKeys.map((key) => {
+    const count = actions.filter((action) => (action.conditions as readonly PolicyConditionKey[]).includes(key)).length;
+    return { key, count, state: !actions.length ? "unselected" : count === actions.length ? "available" : count ? "partial" : "unavailable" } as const;
+  });
   function update(key: keyof PolicyCondition, next: PolicyCondition[keyof PolicyCondition] | undefined) {
     const result = { ...value, [key]: next };
     if (next === undefined) delete result[key];
@@ -77,11 +83,20 @@ function ConditionsEditor({ value, actions, tagMode, onChange }: { value?: Polic
   return <section className={styles.section}>
     <h3>{t(tagMode ? "tagConditions" : "conditions")}</h3><p className={styles.note}>{t("conditionsHint")}</p>
     <p className={styles.note}>{actions.length ? p("supportedConditions", { conditions: supported.map((key) => t(`conditionNames.${key}`)).join(" · ") || t("noConditions") }) : p("selectActionsFirst")}</p>
+    <section className={styles.conditionCapabilities} aria-label={t("conditionCapabilities")}>
+      <div className={styles.conditionCapabilityHeading}><h4>{t("conditionCapabilities")}</h4><p>{t("conditionCapabilitiesHint")}</p></div>
+      <ul>{capabilities.map((capability) => <li key={capability.key}>
+        <div><strong>{t(`conditionNames.${capability.key}`)}</strong><Badge status={capability.state === "available" ? "success" : capability.state === "partial" ? "warning" : undefined}>{t(`conditionStates.${capability.state}`)}</Badge></div>
+        <small>{actions.length ? t("conditionCoverage", { count: capability.count, total: actions.length }) : t("conditionCoverageEmpty")}</small>
+      </li>)}</ul>
+      <p>{t("missingFactsBoundary")}</p>
+    </section>
     {incompatible ? <Alert status="warning">{p("incompatibleConditions")}</Alert> : null}
     <Checkbox disabled={!available("sourceIp") && !value?.sourceIp} checked={value?.sourceIp !== undefined} onChange={(event) => update("sourceIp", event.target.checked ? [""] : undefined)}>{t("useIp")}</Checkbox>
     {value?.sourceIp ? <>
       <p className={styles.note}>{t("sourceIpContext")}</p>
-      <FormField id={id + "-ip"} label={t("sourceIp")} hint={t("ipHint")}><TextArea id={id + "-ip"} value={value.sourceIp.join("\n")} maxLength={900} rows={2} aria-describedby={id + "-ip-hint"} onChange={(event) => update("sourceIp", event.target.value.split(/\r?\n/))} /></FormField>
+      <FormField id={id + "-ip"} label={t("sourceIp")} hint={t("ipHint")}><TextArea id={id + "-ip"} value={value.sourceIp.join("\n")} maxLength={900} rows={2} aria-invalid={sourceIpInvalid || undefined} aria-describedby={id + "-ip-hint"} onChange={(event) => update("sourceIp", event.target.value.split(/\r?\n/))} /></FormField>
+      {sourceIpInvalid ? <Alert status="danger">{t("ipInvalid")}</Alert> : null}
     </> : null}
     <Checkbox disabled={!available("resourceTag") && !value?.resourceTag} checked={value?.resourceTag !== undefined} onChange={(event) => update("resourceTag", event.target.checked ? [{ key: "", value: "" }] : undefined)}>{t("useTags")}</Checkbox>
     {tagMode && !value?.resourceTag ? <p className={styles.note}>{p("tagMethodHint")}</p> : null}
