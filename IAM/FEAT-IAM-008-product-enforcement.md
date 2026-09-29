@@ -52,6 +52,8 @@ ServiceRoleTemplate 定义注册服务主体、用途、允许权限和生命周
 
 下一片先完成一个真实产品、一个只读业务动作的完整协议，再扩展动作族；不先铺开任意跨账号委派或动态插件市场。
 
+当前候选已先落单一纯契约边界：`ServiceRoleTemplateSpec` 把产品、服务 purpose、精确不可变 `PolicyVersion`、允许绑定的 workload resource kinds 与最大发行时长纳入域分隔摘要；`ServiceRoleTemplate` 的 ACTIVE/RETIRED 只控制后继绑定/发行，不改写原同意。workload kinds 在编码前排序、重复拒绝，caller 顺序不成为权限；严格解码拒绝 Account/安装选择器和重复字段。该阶段没有注册可调用 Action、HTTP 路由、SQL、同意关系或凭据发行，因此不是 IAM-SVC-01/02 完成证据；后继必须把这一承诺接到同一片真实 managedservice 资源、IAM 原子关系和 Role PDP。
+
 1. 产品 owner 在发布物中提供不可变、版本化的 `ServiceRoleTemplate`。模板至少绑定稳定 template ID、产品、服务 purpose、版本/摘要、允许的目标资源种类、可授权限上限和生命周期；它与普通 Policy 默认版本分离，不能由租户或请求方上传、改写或选择未登记版本。
 2. 当前账号内持有明确管理 Action 的 USER 对模板执行显式同意，IAM 在同一事务中创建或确认一个 `SERVICE_LINKED` Role、模板版本关系、权限上限及不可变事实。显示名不参与安全身份；等值重放返回同一关系，变体冲突。普通角色 API 不能修改其 trust、扩大权限、换 template 或把它转换为 customer-managed Role。
 3. 已认证 ServiceIdentity 只能以自身真实 installation、principal 和 purpose 请求承担目标账号中与其模板精确匹配的 Role。目标账号、Role 和 workload 必须来自已验证关系而不是通用 header/body selector；当前凭据失效、同意撤销、Role/账号停用、模板退役或 purpose 不匹配在下一次受保护请求失败关闭。
