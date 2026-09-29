@@ -346,7 +346,7 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 
 这次体验改动没有扩展 LIVE `AuthorizationConditionKey`、策略作者或 HTTP 协议，也没有宣称 IAM 工程师尚未推送的网络上下文契约已经固定。只有 IAM Profile、受信上下文来源、操作符、产品 PEP 与缺失事实语义成为固定来源后，LIVE 可视化作者才可消费对应条件；无法表达的服务端 JSON 仍须无损保留。
 
-前端 50 文件/830 用例、三条静态归一化用例、类型/lint/架构/228 组主题对比、41 页静态导出、228 个嵌入文件等价及全仓 Go test/vet 通过。DEV 桌面和 `390 × 844` 检查确认两处说明进入正确信息流，document/body 无横向溢出，控制台 warning/error 为空。它们只验收隔离 MOCK 的信息真实性与响应式体验，不替代真实 IAM、网关、代理或产品 PEP 浏览器验收。
+前端与同步嵌入资源已推送在 [`8e9240bf`](https://github.com/xiak/matrix/commit/8e9240bf)：50 文件/830 用例、三条静态归一化用例、类型/lint/架构/228 组主题对比、41 页静态导出、228 个嵌入文件等价及全仓 Go test/vet 通过。DEV 桌面和 `390 × 844` 检查确认两处说明进入正确信息流，document/body 无横向溢出，控制台 warning/error 为空。它们只验收隔离 MOCK 的信息真实性与响应式体验，不替代真实 IAM、网关、代理或产品 PEP 浏览器验收。
 
 ### Role、trust 与会话 MOCK 的开发验收证据
 
