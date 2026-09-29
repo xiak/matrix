@@ -118,6 +118,10 @@ async function seedBoundAccountRuleOperator(extension: ReturnType<typeof createP
   await extension.execute("preview", { kind: "confirm-personal-mfa" });
   await extension.execute("preview", { kind: "complete-personal-mfa-reauthentication" });
 }
+async function seedUnknownAccountRuleChange(extension: ReturnType<typeof createPreviewAccessWorkspace>) {
+  await seedBoundAccountRuleOperator(extension);
+  await extension.execute("preview", { kind: "save-account-rule", requestId: "seed-unknown-account-rule", expectedRuleVersion: 1, expectedLoginProtection: false, loginProtection: true, responseMode: "response-lost" });
+}
 async function select(user: ReturnType<typeof userEvent.setup>, label: string, option: string) {
   if (!screen.queryByRole("combobox", { name: label })) await user.click(screen.getByRole("button", { name: /^筛选(?: \d+)?$/ }));
   await user.click(screen.getByRole("combobox", { name: label }));
@@ -2942,7 +2946,7 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByText(/身份验证方法或账号规则的变更已生效/)).toBeTruthy();
     expect(repository.execute).not.toHaveBeenCalled();
   });
-  it("locks an unknown account-rule save, discards secrets and recovers only through the original intent", async () => {
+  it("locks an unknown account-rule save, discards secrets and keeps the lock across navigation", async () => {
     const { user, extension } = await open("settings", { seed: seedBoundAccountRuleOperator });
     await user.click(screen.getByRole("button", { name: "编辑模拟规则" }));
     await user.click(screen.getByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" }));
@@ -2950,8 +2954,8 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByText("体验异常结果（仅 MOCK）"));
     await select(user, "MOCK 保存结果", "提交后响应丢失（结果未知）");
     await user.click(screen.getByRole("button", { name: "继续验证身份" }));
-    await user.type(screen.getByLabelText("当前密码"), "demo-password");
-    await user.type(screen.getByLabelText("6 位动态验证码"), "624810");
+    fireEvent.change(screen.getByLabelText("当前密码"), { target: { value: "demo-password" } });
+    fireEvent.change(screen.getByLabelText("6 位动态验证码"), { target: { value: "624810" } });
     await user.click(screen.getByRole("button", { name: "验证并继续" }));
 
     const unknown = await screen.findByRole("heading", { name: "账号规则的保存结果未知" });
@@ -2971,6 +2975,14 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByTestId("go-users"));
     await user.click(screen.getByTestId("go-settings"));
     expect(await screen.findByRole("heading", { name: "账号规则的保存结果未知" })).toBeTruthy();
+    expect((await extension.read("preview")).pendingAccountRuleChange).toEqual(pending);
+  });
+  it("recovers an unknown account-rule only through the original intent", async () => {
+    const { user, extension } = await open("settings", { seed: seedUnknownAccountRuleChange });
+    const pending = (await extension.read("preview")).pendingAccountRuleChange;
+    expect(await screen.findByRole("heading", { name: "账号规则的保存结果未知" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "按原意图查询" })).toBeNull();
+    expect(screen.getByText(/账号规则保存结果未知。先重新登录/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "重新登录以继续" }));
     expect(screen.getByRole("button", { name: "Enter" })).toBeTruthy();
     await extension.execute("preview", { kind: "complete-personal-mfa-reauthentication" });

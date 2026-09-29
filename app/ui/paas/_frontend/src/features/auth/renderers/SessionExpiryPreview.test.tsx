@@ -14,7 +14,7 @@ describe("SessionExpiryPreview", () => {
     expect(screen.getByRole("heading", { name: "会话到期规则预览" })).toBeTruthy();
     expect(screen.getByText("MOCK")).toBeTruthy();
     expect(screen.getByText("可以延续空闲期限")).toBeTruthy();
-    expect(screen.getByText(/具体时长和服务端契约尚待 IAM 确定/)).toBeTruthy();
+    expect(screen.getByText(/账号级规则见用户设置，本区等待固定 IAM 来源后再接入真实会话事实与 touch 接口/)).toBeTruthy();
     expect(screen.queryByRole("button")).toBeNull();
     expect(screen.queryByRole("timer")).toBeNull();
 
