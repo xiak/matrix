@@ -6,8 +6,8 @@
 - Updated: 2026-09-29
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `29b93aac`
-- Pushed documentation head: `1d508aed`
+- Pushed UI source: `5a1f3013`
+- Pushed documentation head: `ca073f4b`
 
 ## Authoritative route
 
@@ -62,6 +62,15 @@ effective-access result. This slice does not read a new LIVE PolicyVersion
 contract or infer missing policy content; adopt it into LIVE only from a fixed
 pushed IAM response whose ownership and failure semantics are recorded by
 FEAT-IAM-010.
+
+The MOCK Role detail now reuses that authorization-overview hierarchy while
+keeping trust admission, permission policies and the optional boundary
+independent. It summarizes only current default policy documents, labels
+explicit deny statements in the policy table and does not claim a request-level
+decision. The overview owns its responsive container, yielding a two-by-two
+fact grid at 390px without page overflow. It remains MOCK-only until IAM
+publishes a fixed authoritative projection; do not assemble it from separate
+User, Group and Policy reads or reinterpret denial as empty data.
 
 ## Continuation
 
