@@ -49,6 +49,8 @@ export function LiveRoleSelfService() {
   const sourceAccount = roleSession.directory?.accountId ?? current?.session.organizationId ?? "—";
   const sourceUserId = roleSession.directory?.sourceUserId ?? current?.session.principalId ?? "—";
   const actionSession = roleSession.identity?.session ?? roleSession.observedSession;
+  const discoveryVisible = !selected && roleSession.stage !== "role-active" &&
+    !["exit-unknown", "source-validation-unknown", "role-expired"].includes(roleSession.stage);
 
   const selectRole = (role: AssumableRole) => {
     const choices = durationOptions(role.maxSessionDurationSeconds);
@@ -105,18 +107,18 @@ export function LiveRoleSelfService() {
       </dl></Card.Body>
     </Card> : null}
 
-    {roleSession.error && roleSession.stage !== "exit-unknown" && roleSession.stage !== "source-validation-unknown" ? <Alert status="danger">{t(`errors.${roleSession.error}`)}</Alert> : null}
+    {roleSession.error && (roleSession.directory || selected) && roleSession.stage !== "exit-unknown" && roleSession.stage !== "source-validation-unknown" ? <Alert status="danger">{t(`errors.${roleSession.error}`)}</Alert> : null}
 
-    {roleSession.busy === "discover" && !roleSession.directory ? <PageSkeleton label={t("loadingRoles")} layout="cards" /> : null}
-
-    {roleSession.directory && !selected && roleSession.stage !== "role-active" ? <div className={styles.discovery}>
-      <div className={styles.sectionHeading}><div><Typography.Title as="h2" level={3}>{t("discoveryTitle")}</Typography.Title><Typography.Text tone="muted">{t("discoveryHint")}</Typography.Text></div><Badge status="neutral">{t("roleCount", { count: roleSession.directory.items.length })}</Badge></div>
-      {roleSession.directory.items.length ? <div className={styles.roleGrid}>{roleSession.directory.items.map((role) => <Card key={role.roleId}>
+    {discoveryVisible ? <div aria-busy={roleSession.busy === "discover" || undefined} className={styles.discovery}>
+      <div className={styles.sectionHeading}><div><Typography.Title as="h2" level={3}>{t("discoveryTitle")}</Typography.Title><Typography.Text tone="muted">{t("discoveryHint")}</Typography.Text></div>{roleSession.directory ? <Badge status="neutral">{t("roleCount", { count: roleSession.directory.items.length })}</Badge> : null}</div>
+      <Alert status="info"><ShieldCheck aria-hidden="true" />{t("discoveryBoundary")}</Alert>
+      {roleSession.busy === "discover" && !roleSession.directory ? <PageSkeleton label={t("loadingRoles")} labelVisible={false} layout="cards" /> : null}
+      {roleSession.error && !roleSession.directory && roleSession.busy === null ? <Alert className={styles.attempt} status="danger"><div><div><strong>{t("discoveryUnavailableTitle")}</strong><span>{t("discoveryUnavailableHint")}</span></div><Button onClick={() => void roleSession.discover()} size="small" variant="secondary">{t("retryDiscovery")}</Button></div></Alert> : null}
+      {roleSession.directory?.items.length ? <div className={styles.roleGrid}>{roleSession.directory.items.map((role) => <Card key={role.roleId}>
         <Card.Header className={styles.roleHeader}><div><Typography.Title as="h3" level={3}>{role.name}</Typography.Title><code>{role.roleId}</code></div><Badge status="success">{t("eligible")}</Badge></Card.Header>
         <Card.Body className={styles.roleBody}><p>{t("eligibleHint")}</p><div className={styles.roleMeta}><span><Clock3 aria-hidden="true" />{t("maxDuration", { max: Math.floor(role.maxSessionDurationSeconds / 60) })}</span><span>{t("resourceVersion", { version: role.resourceVersion })}</span></div><Button aria-label={t("reviewRoleNamed", { name: role.name })} onClick={() => selectRole(role)} variant="secondary">{t("reviewRole")}</Button></Card.Body>
-      </Card>)}</div> : <Alert status="info">{roleSession.directory.nextAfter ? t("sparsePage") : t("noRoles")}</Alert>}
-      {roleSession.directory.nextAfter ? <Button disabled={roleSession.busy !== null} onClick={() => void roleSession.discover(false)} variant="secondary">{roleSession.busy === "more" ? t("loadingMore") : t("loadMore")}</Button> : null}
-      <Alert status="info"><ShieldCheck aria-hidden="true" />{t("discoveryBoundary")}</Alert>
+      </Card>)}</div> : roleSession.directory ? <Alert status="info">{roleSession.directory.nextAfter ? t("sparsePage") : t("noRoles")}</Alert> : null}
+      {roleSession.directory?.nextAfter ? <Button disabled={roleSession.busy !== null} onClick={() => void roleSession.discover(false)} variant="secondary">{roleSession.busy === "more" ? t("loadingMore") : t("loadMore")}</Button> : null}
     </div> : null}
 
     {selected && roleSession.stage !== "role-active" && !["exit-unknown", "source-validation-unknown", "role-expired"].includes(roleSession.stage) ? <Card>
