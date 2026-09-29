@@ -3,10 +3,10 @@
 > Non-authoritative portable memory. Validate it against Git and the owning
 > FEAT before continuing.
 
-- Updated: 2026-09-28
+- Updated: 2026-09-29
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `6d7b5cb4`
+- Pushed UI source: `c3a2023d`
 
 ## Authoritative route
 
@@ -32,12 +32,10 @@ UI, full static host/export and independent MOCK entry; do not replace them
 with another branch's renderer or inherit that branch's UI acceptance.
 
 The current milestone keeps the independent MOCK preview, fixed-contract LIVE
-paths and synchronized static Go host. Compact policy-editor modes, isolated
-password-age scenarios and read-only account password-rule projection are
-present; exact behavior and evidence belong to the linked FEAT owners. The
-LIVE account-rule write path remains closed, and IAM's S3b candidate is not yet a
-fixed release gate. Real IAM-process browser, installation and release
-acceptance remain open.
+paths and synchronized static Go host. The newest isolated preview explains
+session idle versus absolute expiry without inventing a threshold, timer or
+LIVE write path; exact behavior and evidence belong to the linked FEAT owners.
+Real IAM-process browser, installation and release acceptance remain open.
 
 ## Continuation
 
@@ -51,9 +49,11 @@ environment. Real browser acceptance cannot be replaced by MOCK or API-only
 checks. Do not duplicate the donor application or move installer-owned secrets
 into the UI.
 
-Next integration must select one fixed boundary from the owning FEAT. Do not
-infer newer self-removal, replacement, remaining Role or SSO wire contracts
-from the MOCK UI or from another task's unpushed work.
+Next integration must select one fixed boundary from the owning FEAT. Current
+session activity/touch work is not a UI contract until IAM provides a fixed,
+pushed commit. Do not infer newer self-removal, replacement, remaining Role,
+SSO or session wire contracts from the MOCK UI or from another task's unpushed
+work.
 
 Replace this file only at another committed-and-pushed milestone. Do not append
 command logs, chat transcripts, secrets, raw provider payloads, or machine-local
