@@ -3105,6 +3105,46 @@ func TestRoleBusinessProfilesRequireExplicitCurrentCapabilities(t *testing.T) {
 	}
 }
 
+func TestManagedServiceRoleProfileOnlyAllowsInstallationRead(t *testing.T) {
+	archives := HistoricalAuthorizationProfiles()
+	index := slices.IndexFunc(archives, func(profile AuthorizationProfile) bool {
+		return profile.Product == ProductManagedService && profile.Revision == 1
+	})
+	if index < 0 {
+		t.Fatal("missing retained managedservice revision")
+	}
+	_, originalDigest, err := CanonicalizeAuthorizationProfile(archives[index])
+	if err != nil || originalDigest != "sha256:5b728c9d7cdd97cc7eeb4cc095d9e053bbf5dab74ca2c08a239b25a6a4c99e2f" {
+		t.Fatal("registered managedservice revision one changed")
+	}
+	current, found := LookupAuthorizationProfile(ProductManagedService)
+	_, currentDigest, err := CanonicalizeAuthorizationProfile(current)
+	if !found || err != nil || current.Revision != 2 || currentDigest == originalDigest {
+		t.Fatal("missing explicit managedservice role revision")
+	}
+	currentReference := AuthorizationProfileReference{Product: current.Product, Revision: current.Revision, ContentDigest: currentDigest}
+	oldReference := AuthorizationProfileReference{Product: archives[index].Product, Revision: archives[index].Revision, ContentDigest: originalDigest}
+	for _, action := range current.Actions {
+		if CheckAuthorizationProfileSubject(current, currentReference, action.Action, SubjectUser) != nil ||
+			CheckAuthorizationProfileSubject(current, currentReference, action.Action, SubjectServiceAccount) == nil {
+			t.Fatal("managedservice subject boundary changed", action.Action)
+		}
+		roleAllowed := CheckAuthorizationProfileSubject(current, currentReference, action.Action, SubjectRole) == nil
+		if roleAllowed != (action.Action == ActionManagedServiceInstallationRead) {
+			t.Fatal("ROLE was not limited to managedservice installation read", action.Action)
+		}
+		if CheckAuthorizationProfileSubject(archives[index], oldReference, action.Action, SubjectRole) == nil {
+			t.Fatal("retained managedservice revision gained ROLE authority", action.Action)
+		}
+	}
+	archives[index].Actions[0].SubjectTypes = []SubjectType{SubjectRole, SubjectUser}
+	again := HistoricalAuthorizationProfiles()
+	_, againDigest, err := CanonicalizeAuthorizationProfile(again[index])
+	if err != nil || againDigest != originalDigest {
+		t.Fatal("caller changed retained managedservice declaration")
+	}
+}
+
 func sampleRoleTrustDocument() TrustPolicyDocument {
 	return TrustPolicyDocument{LanguageVersion: TrustPolicyLanguageVersion, Statements: []TrustPolicyStatement{
 		{SID: "z-allow", Effect: PolicyAllow, Principals: []TrustPrincipal{{Type: PrincipalUser, ID: "user-b"}, {Type: PrincipalUser, ID: "user-a"}}},

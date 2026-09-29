@@ -434,14 +434,7 @@ func AllServicePurposes() []ServicePurpose {
 var authorizationProfiles = [...]AuthorizationProfile{
 	iamSecuritySettingsProfile(),
 	paasProfileRevisionThree,
-	declaredProductProfile(ProductManagedService, ServicePaaS, 1,
-		declaredProfileAction(ActionManagedServiceOfferingRead, ResourceServiceOffering, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}, {Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
-		declaredProfileAction(ActionManagedServiceRegionRead, ResourceRegion, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}, {Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
-		declaredProfileAction(ActionManagedServiceQuotaEntitlementActivate, ResourceQuotaEntitlement, AuthorityScopeTenant, ResourceQuotaEntitlement, []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}}),
-		declaredProfileAction(ActionManagedServiceQuotaEntitlementRead, ResourceQuotaEntitlement, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}, {Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
-		declaredProfileAction(ActionManagedServiceInstallationCreate, ResourceServiceInstallation, AuthorityScopeTenant, ResourceServiceInstallation, []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}}),
-		declaredProfileAction(ActionManagedServiceInstallationRead, ResourceServiceInstallation, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}, {Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
-	),
+	managedServiceProfileRevisionTwo,
 	roleBusinessProfile(auditProfileRevisionOne),
 	declaredProductProfile(ProductInstallation, ServiceInstallationVerifier, 1,
 		declaredProfileAction(ActionInstallationVerify, ResourceInstallation, AuthorityScopeInstallationProbe, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
@@ -494,8 +487,23 @@ var iamProfileRevisionOne = declaredProductProfile(ProductIAM, ServiceIAM, 1,
 )
 
 func HistoricalAuthorizationProfiles() []AuthorizationProfile {
-	return []AuthorizationProfile{cloneAuthorizationProfile(iamProfileRevisionOne), iamRoleManagementProfile(), iamRoleSessionProfile(), iamRoleSessionManagementProfile(), iamAccessKeyManagementProfile(), iamSecuritySettingsReadProfile(), cloneAuthorizationProfile(paasProfileRevisionOne), cloneAuthorizationProfile(paasProfileRevisionTwo), cloneAuthorizationProfile(auditProfileRevisionOne)}
+	return []AuthorizationProfile{cloneAuthorizationProfile(iamProfileRevisionOne), iamRoleManagementProfile(), iamRoleSessionProfile(), iamRoleSessionManagementProfile(), iamAccessKeyManagementProfile(), iamSecuritySettingsReadProfile(), cloneAuthorizationProfile(paasProfileRevisionOne), cloneAuthorizationProfile(paasProfileRevisionTwo), cloneAuthorizationProfile(managedServiceProfileRevisionOne), cloneAuthorizationProfile(auditProfileRevisionOne)}
 }
+
+// Revision one remains archived because compiled policy content and decisions
+// already commit to it. Revision two grants ROLE only the one action required
+// by the first service-linked role; it does not make every managedservice
+// action assumable or admit SERVICE_ACCOUNT directly.
+var managedServiceProfileRevisionOne = declaredProductProfile(ProductManagedService, ServicePaaS, 1,
+	declaredProfileAction(ActionManagedServiceOfferingRead, ResourceServiceOffering, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}, {Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
+	declaredProfileAction(ActionManagedServiceRegionRead, ResourceRegion, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}, {Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
+	declaredProfileAction(ActionManagedServiceQuotaEntitlementActivate, ResourceQuotaEntitlement, AuthorityScopeTenant, ResourceQuotaEntitlement, []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}}),
+	declaredProfileAction(ActionManagedServiceQuotaEntitlementRead, ResourceQuotaEntitlement, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}, {Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
+	declaredProfileAction(ActionManagedServiceInstallationCreate, ResourceServiceInstallation, AuthorityScopeTenant, ResourceServiceInstallation, []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}}),
+	declaredProfileAction(ActionManagedServiceInstallationRead, ResourceServiceInstallation, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}, {Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
+)
+
+var managedServiceProfileRevisionTwo = managedServiceInstallationRoleProfile(managedServiceProfileRevisionOne)
 
 var paasProfileRevisionOne = declaredProductProfile(ProductPaaS, ServicePaaS, 1,
 	declaredProfileAction(ActionPaaSExecutionPoolCreate, ResourceExecutionPool, AuthorityScopeInstallation, ResourceExecutionPool, []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
@@ -542,6 +550,18 @@ func roleBusinessProfile(previous AuthorizationProfile) AuthorizationProfile {
 	for index := range profile.Actions {
 		profile.Actions[index].SubjectTypes = []SubjectType{SubjectUser}
 		if profile.Actions[index].Scope == AuthorityScopeTenant {
+			profile.Actions[index].SubjectTypes = []SubjectType{SubjectRole, SubjectUser}
+		}
+	}
+	return profile
+}
+
+func managedServiceInstallationRoleProfile(previous AuthorizationProfile) AuthorizationProfile {
+	profile := cloneAuthorizationProfile(previous)
+	profile.Revision++
+	for index := range profile.Actions {
+		profile.Actions[index].SubjectTypes = []SubjectType{SubjectUser}
+		if profile.Actions[index].Action == ActionManagedServiceInstallationRead {
 			profile.Actions[index].SubjectTypes = []SubjectType{SubjectRole, SubjectUser}
 		}
 	}
