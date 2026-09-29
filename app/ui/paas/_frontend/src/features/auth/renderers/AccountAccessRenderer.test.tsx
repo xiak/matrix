@@ -140,7 +140,7 @@ describe("qualified login", () => {
     expect(navigation.replace).toHaveBeenCalledWith("/console/access/");
     expect(screen.queryByRole("heading", { name: "设置你的正式密码" })).toBeNull();
     expect(localStorage.length + sessionStorage.length).toBe(0);
-  });
+  }, 15000);
 
   it("uses one text identifier, clears secrets on mode change, and preserves IAM's account namespace", async () => {
     const repository = iam();

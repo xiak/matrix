@@ -196,7 +196,9 @@ function deploymentFailureMessage(error: unknown): string {
 function terminalFailureMessage(error: unknown): string {
   if (error instanceof HttpProblem && error.status === 401) return "IAM 会话已失效，终端没有启动。";
   if (error instanceof HttpProblem && error.status === 403) return "当前角色无权打开或关闭该部署终端。";
-  if (error instanceof HttpProblem && error.status === 404) return "目标容器已不属于当前部署运行代次。";
+  if (error instanceof HttpProblem && error.status === 404) {
+    return "找不到可连接的当前容器；运行实例可能已更新，或执行目标尚未纳管。";
+  }
   if (error instanceof HttpProblem && (error.status === 409 || error.status === 410)) {
     return "终端请求已过期或与当前部署运行态冲突，请刷新后重试。";
   }

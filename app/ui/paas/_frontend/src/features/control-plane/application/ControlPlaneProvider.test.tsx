@@ -790,6 +790,39 @@ describe("ControlPlaneProvider", () => {
     expect(screen.getByTestId("deployment").textContent).toBe("deployment-beta");
   });
 
+  it("does not assume every terminal 404 means a stale runtime generation", async () => {
+    const terminals: TerminalSessionRepository = {
+      create: vi.fn().mockRejectedValue(new HttpProblem(404, "PRIVATE_UPSTREAM_DETAIL")),
+      connect: vi.fn(),
+      close: vi.fn()
+    };
+    const deployments: DeploymentInventoryRepository = {
+      load: vi.fn().mockResolvedValue(deploymentInventory()),
+      loadRuntime: vi.fn().mockResolvedValue(deploymentRuntime())
+    };
+    const screen = render(
+      <SessionProvider repository={iamRepository()}>
+        <ControlPlaneProvider
+          deploymentRepository={deployments}
+          selection={{ section: "deployments" }}
+          terminalRepository={terminals}
+        >
+          <Probe />
+        </ControlPlaneProvider>
+      </SessionProvider>
+    );
+    await act(async () => { fireEvent.click(screen.getByText("login")); });
+    await act(async () => {
+      fireEvent.click(screen.getByText("open terminal"));
+      await Promise.resolve();
+    });
+    expect(screen.getByTestId("terminal-phase").textContent).toBe("ERROR");
+    expect(screen.getByTestId("terminal-message").textContent).toBe(
+      "找不到可连接的当前容器；运行实例可能已更新，或执行目标尚未纳管。"
+    );
+    expect(terminals.connect).not.toHaveBeenCalled();
+  });
+
   it("aborts an in-flight deployment runtime read when navigation leaves the section", async () => {
     let signal: AbortSignal | undefined;
     const deployments: DeploymentInventoryRepository = {
