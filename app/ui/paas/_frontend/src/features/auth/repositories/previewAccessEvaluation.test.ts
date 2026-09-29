@@ -61,7 +61,7 @@ describe("coherent access-review examples", () => {
     expect(evaluateUserAccess(workspace, ids, deployment).decision).toBe("allow");
     expect(evaluateUserAccess(workspace, ids, { ...deployment, resourceId: "paas-checkout-api" }).decision).toBe("explicitDeny");
     const deletion = { ...deployment, action: "paas:delete" };
-    expect(evaluateUserAccess(workspace, ids, deletion)).toMatchObject({ decision: "implicitDeny", boundary: { decision: "implicitDeny" } });
+    expect(evaluateUserAccess(workspace, ids, deletion)).toMatchObject({ decision: "implicitDeny", principalPolicyDecision: "allow", boundary: { decision: "implicitDeny" } });
     delete workspace.userBoundaries[qiao.principalId];
     expect(evaluateUserAccess(workspace, ids, deletion).decision).toBe("allow");
   });

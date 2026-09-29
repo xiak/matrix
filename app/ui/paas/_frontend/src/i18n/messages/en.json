@@ -3993,11 +3993,48 @@
     "time": "Request time (UTC)",
     "run": "Run simulation",
     "result": "Simulation result",
+    "decisionPath": {
+      "title": "Decision path",
+      "hint": "Shows the evaluation order for policy layers supported by this MOCK. It is not an authorization record from a product service.",
+      "identityPolicies": "User and inherited group policies",
+      "rolePolicies": "Role policies",
+      "permissionBoundary": "Permission boundary",
+      "finalDecision": "Final decision",
+      "requestValidation": "Request-scope validation",
+      "notConfigured": "Not configured",
+      "states": {
+        "allow": "Allowed",
+        "explicitDeny": "Denied",
+        "implicitDeny": "Not allowed",
+        "indeterminate": "Unknown",
+        "invalidRequest": "Invalid scope"
+      },
+      "noBoundaryHint": "This identity has no permission boundary. This layer neither grants nor restricts the simulated request.",
+      "finalHint": "Intersects the principal's grant policies with its permission boundary and always gives a matching explicit deny precedence.",
+      "principalHints": {
+        "allow": "At least one allow statement matched and no explicit deny matched.",
+        "explicitDeny": "The principal-policy layer matched an explicit deny; allow statements cannot override it.",
+        "implicitDeny": "No allow statement fully matched the action, resource and request context.",
+        "indeterminate": "Condition context or a readable policy is missing, so the result cannot be treated as an allow."
+      },
+      "boundaryHints": {
+        "allow": "The boundary admits this request to the intersection with grant policies; it does not grant access by itself.",
+        "explicitDeny": "The boundary matched an explicit deny, so the final result cannot be allow.",
+        "implicitDeny": "The boundary did not allow this request and therefore narrowed the principal's grants.",
+        "indeterminate": "Boundary context or policy data is missing, so the final result remains indeterminate."
+      }
+    },
     "evidence": "Policy evaluation evidence",
     "evidenceCount": "{count} evaluation records, including the current default version and grant source.",
     "policy": "Policy / version",
     "source": "Grant source",
     "matching": "Match result",
+    "evaluationStates": {
+      "match": "MATCH",
+      "notMatch": "NOT_MATCH",
+      "contextMissing": "CONTEXT_MISSING",
+      "contractUnavailable": "CONTRACT_UNAVAILABLE"
+    },
     "beforeRun": "Choose a user or preview role session, action and test resource, then run the simulation. No real resources will be read or changed.",
     "noUsers": "No users to simulate",
     "noUsersHint": "Create a preview user before checking their policy grants.",

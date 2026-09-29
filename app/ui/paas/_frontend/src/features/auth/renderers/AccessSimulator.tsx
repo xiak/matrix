@@ -4,13 +4,20 @@ import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Play } from "lucide-react";
 import { Alert, Badge, Button, Card, EmptyState, FormField, Input, Select, Table, TablePagination } from "@ui/xiak";
-import { evaluateUserAccess, evaluateRoleSessionAccess, type AccessTestRequest, type AccessTestResult } from "../domain/policyEvaluation";
+import { evaluateUserAccess, evaluateRoleSessionAccess, type AccessPolicyDecision, type AccessTestEvidence, type AccessTestRequest, type AccessTestResult } from "../domain/policyEvaluation";
 import { parsePolicyResource } from "../domain/policyLanguage";
 import { policyActions, policyServices, type PolicyService } from "../domain/previewAuthorizationCatalog";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
 import type { AccountAccessView } from "../domain/accounts";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
 import styles from "./PolicyAuthoringWizard.module.css";
+
+function decisionStatus(decision: AccessTestResult["decision"]) {
+  return decision === "allow" ? "success" as const : decision === "explicitDeny" || decision === "invalidRequest" ? "danger" as const : "warning" as const;
+}
+function evidenceState(reason: AccessTestEvidence["reason"]) {
+  return reason === "matched" ? "match" as const : reason === "missingContext" ? "contextMissing" as const : reason === "invalidPolicy" ? "contractUnavailable" as const : "notMatch" as const;
+}
 
 export function AccessSimulator({ workspace, scene, entityId, onOpen }: { workspace: AccessWorkspace; scene: AccountAccessScene; entityId?: string; onOpen(view: AccountAccessView, id?: string): void }) {
   const t = useTranslations("AccessSimulator");
@@ -42,6 +49,13 @@ export function AccessSimulator({ workspace, scene, entityId, onOpen }: { worksp
   const primaryEvidence = result?.evidence.filter((entry) => result.decision === "explicitDeny" ? entry.reason === "matched" && entry.effect === "deny" : result.decision === "indeterminate" ? entry.reason === "missingContext" || entry.reason === "invalidPolicy" : result.decision === "implicitDeny" && result.boundary?.decision === "implicitDeny" ? entry.source === "boundary" : entry.reason === "matched") ?? [];
   const evidence = showAll || !primaryEvidence.length ? result?.evidence ?? [] : primaryEvidence;
   const extraCount = (result?.evidence.length ?? 0) - primaryEvidence.length;
+  const decisionSteps: { id: string; title: string; decision?: AccessPolicyDecision | "invalidRequest"; hint: string }[] = result?.principalPolicyDecision ? [
+    { id: "principal", title: t(subject === "user" ? "decisionPath.identityPolicies" : "decisionPath.rolePolicies"), decision: result.principalPolicyDecision, hint: t(`decisionPath.principalHints.${result.principalPolicyDecision}`) },
+    result.boundary
+      ? { id: "boundary", title: t("decisionPath.permissionBoundary"), decision: result.boundary.decision, hint: t(`decisionPath.boundaryHints.${result.boundary.decision}`) }
+      : { id: "boundary", title: t("decisionPath.permissionBoundary"), hint: t("decisionPath.noBoundaryHint") },
+    { id: "final", title: t("decisionPath.finalDecision"), decision: result.decision, hint: t("decisionPath.finalHint") }
+  ] : result ? [{ id: "request", title: t("decisionPath.requestValidation"), decision: "invalidRequest", hint: result.error ? t(`errors.${result.error}`) : t("explanations.invalidRequest") }] : [];
   useEffect(() => {
     if (!tested || tested.workspace !== workspace || subject !== "session") return;
     const session = workspace.roleSessions.find((entry) => entry.id === request.principalId);
@@ -91,6 +105,13 @@ export function AccessSimulator({ workspace, scene, entityId, onOpen }: { worksp
     </Card.Body></Card>
     {result ? <Card><Card.Header><h2 ref={resultHeading} tabIndex={-1}>{t("result")}</h2></Card.Header><Card.Body className={styles.stack}>
       <Alert status={result.decision === "allow" ? "success" : result.decision === "explicitDeny" || result.decision === "invalidRequest" ? "danger" : "warning"}><strong>{t(`decisions.${result.decision}`)}</strong><p>{result.error ? t(`errors.${result.error}`) : t(`explanations.${result.decision}`)}</p></Alert>
+      <section className={styles.decisionPath} aria-labelledby={id + "-decision-path"}>
+        <div className={styles.decisionPathHeading}><h3 id={id + "-decision-path"}>{t("decisionPath.title")}</h3><p>{t("decisionPath.hint")}</p></div>
+        <ol className={styles.decisionSteps}>{decisionSteps.map((step, index) => <li key={step.id} className={styles.decisionStep}>
+          <span className={styles.decisionNumber} aria-hidden="true">{index + 1}</span>
+          <div><div className={styles.decisionStepHeading}><strong>{step.title}</strong><Badge status={step.decision ? decisionStatus(step.decision) : undefined}>{step.decision ? t(`decisionPath.states.${step.decision}`) : t("decisionPath.notConfigured")}</Badge></div><p>{step.hint}</p></div>
+        </li>)}</ol>
+      </section>
       <div className={styles.evaluationScope}>
         <p>{t("notEvaluated")}</p>
         {subject === "session" ? <p>{t("sessionScope")}</p> : null}
@@ -100,12 +121,12 @@ export function AccessSimulator({ workspace, scene, entityId, onOpen }: { worksp
       {result.evidence.length ? <div className={styles.row}><p className={styles.note}>{t("evidenceCount", { count: result.evidence.length })}</p>{primaryEvidence.length > 0 && extraCount > 0 ? <Button variant="ghost" size="small" aria-expanded={showAll} onClick={() => { setShowAll((current) => !current); setPage(1); }}>{showAll ? t("decisiveOnly") : t("showAllEvidence", { count: extraCount })}</Button> : null}</div> : result.decision === "implicitDeny" ? <EmptyState title={t("noGrants")} description={t("noGrantsHint")} /> : null}
     </Card.Body>{result.evidence.length ? <><Table aria-label={t("evidence")}>
         <thead><tr><th scope="col">{t("policy")}</th><th scope="col">{t("source")}</th><th scope="col">{t("matching")}</th><th scope="col">{t("statementEffect")}</th></tr></thead>
-        <tbody>{evidence.slice((currentPage - 1) * pageSize, currentPage * pageSize).map((entry, index) => <tr key={index}>
+        <tbody>{evidence.slice((currentPage - 1) * pageSize, currentPage * pageSize).map((entry, index) => { const state = evidenceState(entry.reason); return <tr key={index}>
           <td><button className={styles.evidenceLink} onClick={() => onOpen("policies", entry.policyId)}>{entry.policyName}</button><small>{entry.version ? "v" + entry.version : "—"}{entry.statement ? " · " + w("statementNumber", { number: entry.statement }) : ""}</small></td>
           <td>{t(`sources.${entry.source}`)}{entry.groupId ? <small><button className={styles.evidenceLink} onClick={() => onOpen("groups", entry.groupId)}>{workspace.groups.find((group) => group.id === entry.groupId)?.name ?? entry.groupId}</button></small> : null}</td>
-          <td>{t(`reasons.${entry.reason}`)}{entry.reason === "missingContext" ? <small>{entry.missing?.map((key) => t(`missing.${key}`)).join(" · ")}</small> : null}</td>
+          <td><Badge status={state === "match" ? "success" : state === "contextMissing" || state === "contractUnavailable" ? "warning" : undefined}>{t(`evaluationStates.${state}`)}</Badge><small><span>{t(`reasons.${entry.reason}`)}</span>{entry.reason === "missingContext" ? <span> · {entry.missing?.map((key) => t(`missing.${key}`)).join(" · ")}</span> : null}</small></td>
           <td>{entry.effect ? <Badge status={entry.reason === "matched" ? entry.effect === "deny" ? "danger" : "success" : undefined}>{w(entry.effect)}</Badge> : "—"}</td>
-        </tr>)}</tbody>
+        </tr>; })}</tbody>
       </Table><Table.Footer><TablePagination page={currentPage} pages={pages} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} labels={{ summary: w("page", { page: currentPage, pages }), pageSize: w("pageSize"), previous: w("previous"), next: w("next") }} /></Table.Footer></> : null}</Card> : <p className={styles.note}>{t("beforeRun")}</p>}
   </div></div>;
 }

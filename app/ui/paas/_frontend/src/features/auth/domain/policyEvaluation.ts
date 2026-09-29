@@ -11,11 +11,13 @@ export type AccessTestEvidence = {
   reason: "matched" | "actionMismatch" | "resourceMismatch" | "conditionMismatch" | "missingContext" | "invalidPolicy";
   missing?: ("sourceIp" | "time" | "resourceTags")[];
 };
+export type AccessPolicyDecision = "allow" | "explicitDeny" | "implicitDeny" | "indeterminate";
 export type AccessTestResult = {
-  decision: "allow" | "explicitDeny" | "implicitDeny" | "indeterminate" | "invalidRequest";
+  decision: AccessPolicyDecision | "invalidRequest";
   evidence: AccessTestEvidence[];
   error?: "unknownIdentity" | "unknownResource" | "crossTenant" | "unknownAction" | "actionResourceMismatch" | "requiresRoleTrust" | "expiredSession" | "revokedSession" | "unavailableSession";
-  boundary?: { policyId: string; decision: AccessTestResult["decision"] };
+  principalPolicyDecision?: AccessPolicyDecision;
+  boundary?: { policyId: string; decision: AccessPolicyDecision };
 };
 function conditionsMatch(condition: PolicyCondition | undefined, request: AccessTestRequest, tags: Record<string, string> | undefined) {
   const missing: NonNullable<AccessTestEvidence["missing"]> = [];
@@ -36,7 +38,7 @@ function conditionsMatch(condition: PolicyCondition | undefined, request: Access
 }
 
 type PolicySource = Pick<AccessTestEvidence, "policyId" | "source" | "groupId">;
-function decisionFor(evidence: AccessTestEvidence[]): AccessTestResult["decision"] {
+function decisionFor(evidence: AccessTestEvidence[]): AccessPolicyDecision {
   return evidence.some((entry) => entry.effect === "deny" && entry.reason === "matched") ? "explicitDeny" :
     evidence.some((entry) => entry.reason === "missingContext" || entry.reason === "invalidPolicy") ? "indeterminate" :
     evidence.some((entry) => entry.effect === "allow" && entry.reason === "matched") ? "allow" : "implicitDeny";
@@ -72,12 +74,12 @@ function evaluatePolicies(workspace: AccessWorkspace, request: AccessTestRequest
       });
     } catch { evidence.push({ ...base, reason: "invalidPolicy" }); }
   }
-  const grant = decisionFor(evidence.filter((entry) => entry.source !== "boundary"));
-  if (!boundaryId) return { decision: grant, evidence };
+  const principalPolicyDecision = decisionFor(evidence.filter((entry) => entry.source !== "boundary"));
+  if (!boundaryId) return { decision: principalPolicyDecision, evidence, principalPolicyDecision };
   const boundary = { policyId: boundaryId, decision: decisionFor(evidence.filter((entry) => entry.source === "boundary")) };
-  const decisions = [grant, boundary.decision];
+  const decisions = [principalPolicyDecision, boundary.decision];
   const decision = decisions.includes("explicitDeny") ? "explicitDeny" : decisions.includes("indeterminate") ? "indeterminate" : decisions.every((value) => value === "allow") ? "allow" : "implicitDeny";
-  return { decision, evidence, boundary };
+  return { decision, evidence, principalPolicyDecision, boundary };
 }
 const invalid = (error: NonNullable<AccessTestResult["error"]>): AccessTestResult => ({ decision: "invalidRequest", evidence: [], error });
 function evaluateResource(workspace: AccessWorkspace, request: AccessTestRequest, sources: PolicySource[], boundaryId?: string): AccessTestResult {

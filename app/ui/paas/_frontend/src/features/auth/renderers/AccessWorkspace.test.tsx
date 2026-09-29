@@ -2051,9 +2051,14 @@ describe("CAM-style access workspace", () => {
     await user.click(await screen.findByRole("button", { name: "运行模拟" }));
     expect(screen.getByText("策略允许")).toBeTruthy();
     expect(document.activeElement).toBe(screen.getByRole("heading", { name: "模拟结果" }));
+    const decisionPath = screen.getByRole("region", { name: "决策路径" });
+    expect(within(decisionPath).getByText("用户策略与用户组继承")).toBeTruthy();
+    expect(within(decisionPath).getByText("权限边界")).toBeTruthy();
+    expect(within(decisionPath).getByText("最终结论")).toBeTruthy();
     const table = screen.getByRole("table", { name: "策略判断依据" });
     expect(screen.getByText("第 1 / 1 页")).toBeTruthy();
     expect(screen.getByRole("combobox", { name: "每页条数" })).toBeTruthy();
+    expect(within(table).getAllByText("MATCH").length).toBeGreaterThan(0);
     expect(within(table).getByText("直接关联")).toBeTruthy();
     expect(within(table).queryByText("DeliveryTeam")).toBeNull();
     await user.click(screen.getByRole("button", { name: /查看其余 \d+ 条判断依据/ }));
@@ -2064,7 +2069,9 @@ describe("CAM-style access workspace", () => {
     expect(screen.queryByText("策略允许")).toBeNull();
     await user.click(screen.getByRole("button", { name: "运行模拟" }));
     expect(screen.getByText("默认拒绝")).toBeTruthy();
+    expect(screen.getByText("当前身份未配置权限边界；本层不授予也不限制本次模拟。")).toBeTruthy();
     expect(screen.getByText("操作不匹配")).toBeTruthy();
+    expect(within(screen.getByRole("table", { name: "策略判断依据" })).getAllByText("NOT_MATCH").length).toBeGreaterThan(0);
     expect(repository.execute).not.toHaveBeenCalled();
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
   });
@@ -2149,6 +2156,7 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: "运行模拟" }));
     expect(screen.getByText("无法确定")).toBeTruthy();
     expect(screen.getByText("缺少条件上下文")).toBeTruthy();
+    expect(screen.getByText("CONTEXT_MISSING")).toBeTruthy();
     await user.type(screen.getByLabelText("来源 IP"), "::ffff:192.0.2.42");
     await user.click(screen.getByRole("button", { name: "运行模拟" }));
     expect(screen.getByText("显式拒绝", { exact: true })).toBeTruthy();

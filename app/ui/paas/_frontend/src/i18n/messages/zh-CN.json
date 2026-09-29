@@ -3993,11 +3993,48 @@
     "time": "请求时间（UTC）",
     "run": "运行模拟",
     "result": "模拟结果",
+    "decisionPath": {
+      "title": "决策路径",
+      "hint": "按本次 MOCK 支持的策略层展示计算顺序；这不是业务服务的真实鉴权记录。",
+      "identityPolicies": "用户策略与用户组继承",
+      "rolePolicies": "角色关联策略",
+      "permissionBoundary": "权限边界",
+      "finalDecision": "最终结论",
+      "requestValidation": "请求范围校验",
+      "notConfigured": "未设置",
+      "states": {
+        "allow": "允许",
+        "explicitDeny": "拒绝",
+        "implicitDeny": "未允许",
+        "indeterminate": "不确定",
+        "invalidRequest": "范围无效"
+      },
+      "noBoundaryHint": "当前身份未配置权限边界；本层不授予也不限制本次模拟。",
+      "finalHint": "综合身份授权策略与权限边界的交集，并始终让匹配的显式拒绝优先。",
+      "principalHints": {
+        "allow": "至少一条允许声明匹配，且没有匹配的显式拒绝。",
+        "explicitDeny": "身份授权层命中显式拒绝；其他允许声明不能覆盖。",
+        "implicitDeny": "没有允许声明完整匹配本次操作、资源和上下文。",
+        "indeterminate": "缺少条件上下文或策略不可读，不能把结果视为允许。"
+      },
+      "boundaryHints": {
+        "allow": "边界允许本次请求进入与身份授权的交集；它本身不授予权限。",
+        "explicitDeny": "边界命中显式拒绝，最终结果不能为允许。",
+        "implicitDeny": "边界没有允许本次请求，因此收窄了身份授权结果。",
+        "indeterminate": "边界缺少判断上下文或不可读，最终结果保持不确定。"
+      }
+    },
     "evidence": "策略判断依据",
     "evidenceCount": "共 {count} 条判断依据；每条展示当前默认版本和授权来源。",
     "policy": "策略 / 版本",
     "source": "授权来源",
     "matching": "匹配结果",
+    "evaluationStates": {
+      "match": "MATCH",
+      "notMatch": "NOT_MATCH",
+      "contextMissing": "CONTEXT_MISSING",
+      "contractUnavailable": "CONTRACT_UNAVAILABLE"
+    },
     "beforeRun": "选择用户或角色体验会话、操作和测试资源后运行模拟。不会读取或修改真实资源。",
     "noUsers": "暂无可模拟的用户",
     "noUsersHint": "先创建一个体验用户，再检查其策略授权。",
