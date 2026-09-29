@@ -339,6 +339,22 @@ describe("qualified login", () => {
 });
 
 describe("account access", () => {
+  it("mounts the destination identity immediately and limits first-load feedback to its data region", async () => {
+    let resolveIdentity!: (value: AccountIdentity) => void;
+    const repository = accounts({
+      currentIdentity: vi.fn(() => new Promise<AccountIdentity>((resolve) => { resolveIdentity = resolve; }))
+    });
+    await openAccess(repository, iam(), "users");
+
+    expect(screen.getByRole("heading", { level: 1, name: "用户" })).toBeTruthy();
+    expect(screen.getByText("正在读取 IAM 账号信息…").closest('[role="status"]')).toBeTruthy();
+    expect(screen.queryByRole("table", { name: "租户用户列表" })).toBeNull();
+
+    await act(async () => resolveIdentity(structuredClone(identity)));
+    expect(await screen.findByRole("table", { name: "租户用户列表" })).toBeTruthy();
+    expect(screen.queryByText("正在读取 IAM 账号信息…")).toBeNull();
+  });
+
   it("changes a live user boundary through selection, review and confirmation without changing grants", async () => {
     const f = boundaryFixture();
     const { user } = await openBoundary(f);

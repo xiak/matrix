@@ -3,7 +3,7 @@
 import { useEffect, useId, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
-import { Alert, ContentPage, FormField, Table, TablePagination, EmptyState, Badge, Button, Card, Input, Typography, PageSkeleton, Tabs } from "@ui/xiak";
+import { Alert, ContentPage, FormField, Table, TablePagination, TableSkeleton, EmptyState, Badge, Button, Card, Input, Typography, PageSkeleton, Tabs } from "@ui/xiak";
 import { useAccountAccess, useAccountCapabilities } from "../application/AccountAccessProvider";
 import type { AccountAccessView } from "../domain/accounts";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
@@ -91,6 +91,40 @@ function TenantDirectory({ scene }: { scene: AccountAccessScene }) {
 
 type AccountAccessRendererProps = { view?: AccountAccessView; entityId?: string; policyMethod?: string; onNavigate(view: AccountAccessView, id?: string, method?: PolicyCreationMethod): void };
 
+function AccountAccessInitialLoading({ entityId, view }: { entityId?: string; view: AccountAccessView }) {
+  const t = useTranslations("AccountAccess");
+  const w = useTranslations("IamWorkspace");
+  const title = entityId ?? ({
+    overview: t("title"),
+    users: t("usersTitle"),
+    tenants: t("tenantAccounts"),
+    settings: t("settings"),
+    groups: w("groups"),
+    policies: w("policies"),
+    roles: w("roles"),
+    simulator: w("simulateAccess"),
+    providers: w("providers"),
+    federations: w("federations"),
+    keys: w("keys"),
+    "user-sso": w("userSso"),
+    "create-user": t("createUserTitle"),
+    "create-group": w("createGroup"),
+    "create-policy": w("createPolicy"),
+    "policy-language": w("policyLanguagePreview"),
+    "create-role": w("createRole"),
+    sessions: t("title"),
+    "role-access": t("roleAccessTitle")
+  } satisfies Record<AccountAccessView, string>)[view];
+  const collection = view === "users" || view === "tenants" || view === "groups" || view === "policies" || view === "roles";
+
+  return <div className={styles.stack}>
+    <ContentPage.Heading title={title} scrollKey={`loading:${view}:${entityId ?? "directory"}`} />
+    {collection
+      ? <Card><TableSkeleton header label={t("loading")} labelVisible={false} rows={5} /></Card>
+      : <PageSkeleton label={t("loading")} labelVisible={false} layout={view === "overview" ? "dashboard" : "access"} />}
+  </div>;
+}
+
 export function AccountAccessRenderer(props: AccountAccessRendererProps) {
   const roleSession = useRoleSession();
   if (roleSession.mode !== "USER") return roleSession.supported ? <LiveRoleSelfService /> : <RoleSelfServicePreview />;
@@ -138,7 +172,7 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
     {access.error && !workflow ? <Alert status="danger">{t(`errors.${access.error}`)}</Alert> : null}
     {access.success && !workflow && view !== "policies" ? <Alert status="success">{t(access.success)}</Alert> : null}
     {access.workspaceError && !workflow && view !== "policies" ? <Alert status="danger">{w(`errors.${access.workspaceError}`)}</Alert> : null}
-    {access.loading ? scene ? <p className={styles.note} role="status">{t("loading")}</p> : <PageSkeleton label={t("loading")} layout={view === "overview" ? "dashboard" : "access"} /> : null}
+    {access.loading ? scene ? <p className={styles.note} role="status">{t("loading")}</p> : <AccountAccessInitialLoading entityId={entityId} view={view} /> : null}
     {scene ? denied ? <EmptyState title={t("accessDenied")} description={t("accessDeniedHint")} action={<Button onClick={() => onNavigate("overview")} variant="secondary">{t("backToOverview")}</Button>} /> :
       view === "overview" ? <AccountOverview scene={scene} onNavigate={onNavigate} /> :
       view === "users" ? <AccountUserDirectory key={entityId ?? "users"} entityId={entityId} scene={scene} onCreate={() => onNavigate("create-user")} onOpen={onNavigate} /> :
