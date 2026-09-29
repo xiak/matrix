@@ -1,6 +1,6 @@
 # FEAT-IAM-009：登录保护与安全治理
 
-- 状态：S1本人会话管理、S3a共享密码尝试、S2分项及S3b密码规则/历史与管理员重置完成查询已有固定实现和真实证据；最近独立通过的累计后端为047f6694（IAM50/Audit27），Verification36470362108已核对精确SHA、completed/success，13项含恢复窗口及最终进程汇总均成功。旧失败不回填，修复与证据见所属段落及011。S3c到期执行、Session idle、S4、资格变化的旧备份恢复及009完整发布仍未完成。以下设计不等于可用API；LIVE UI、签名安装及通知/恢复组合由对应owner另验，不继承局部源码状态。
+- 状态：S1本人会话管理、S3a共享密码尝试、S2分项及S3b密码规则/历史与管理员重置完成查询已有固定实现和真实证据。S3c后端累计固定`b9483f82`的[Verification36532338140](https://github.com/xiak/matrix/actions/runs/36532338140)已核对精确SHA、completed/success，13项全部通过；实际一天观察的固定`87e1c143`及[Verification36545493632](https://github.com/xiak/matrix/actions/runs/36545493632)也已核对精确SHA、completed/success，13项全部通过，但它只证明截止前准备和现有回归，截止后门禁尚未发生。Session idle源码候选已完成API/SQL、双副本、真实最低五分钟、固定前驱和五进程本地门禁，独立CI、LIVE UI及发布组合未完成。S4、资格变化的旧备份恢复及009完整发布仍未完成。旧失败不回填，修复与证据见所属段落及011；以下设计不等于发布可用性，签名安装及通知/恢复组合由对应owner另验。
 - 依赖：003、005、007。
 - Owner：IAM 身份/凭据/会话治理，Audit evidence。
 
@@ -1267,7 +1267,7 @@ S3b正在实施，尚未完整验收。最小可验收结果是：管理员按�
 
 复用原`LoginResponse`增加封闭终态`ADMIN_RESET_REQUIRED`，纯载体恰好包含`outcome`和`passwordResetReason=EXPIRED|AGE_UNKNOWN`两个字段，其他结果拒绝reason。即使值为null、false或空串也不能携带Session、bearer、challenge、challengeCredential、mustChangePassword、身份或恢复许可；仍只能通过原显式编码器输出。Login或TOTP验证未来只能在本次实际密码证明及所需已绑定因子证明后返回；该终态没有可点击跳过权限的恢复链接。页面只能将原账号输入显示为待登录请求，不能声称已经登录；AGE_UNKNOWN文案说明无法证实年龄而按账号规则要求管理员重置，不能写成已过期。管理员执行真正重置后，用户仍需以新密码重新登录并执行原强制改密和MFA，不由该终态续发会话。两副本重复消费原尝试/OTP不能再产生一份成功结果。相关认证尝试的已用额度、真实OTP消费及终态必须提交后再响应，不能把预期拒绝当作数据库异常而回滚额度；UNKNOWN不自动新发意图。UX已确认互斥终态应只提供重新登录/联系管理员指引，不显示新密码输入或自动重试；浏览器仍须在固定运行实现后验收。
 
-**当前本地证据（2026-09-29）。** S3c候选尚无独立CI。真库使用本任务独立PG18.4（1CPU/768MiB/PIDs192/24连接），Go1.26.5容器（2CPU/1536MiB/PIDs256、GOMAXPROCS2/GOMEMLIMIT512MiB），重型race-p1串行；不降低密码成本、OTP窗口或原三分钟前驱期限。
+**当前证据（2026-09-29）。** S3c后端固定`b9483f82`的独立CI已完成；实际一天观察固定`87e1c143`的独立CI也已完成，但截止后拒绝仍须在数据库真实时刻到达后执行，不能由绿色准备门禁回填。真库使用本任务独立PG18.4（1CPU/768MiB/PIDs192/24连接），Go1.26.5容器（2CPU/1536MiB/PIDs256、GOMAXPROCS2/GOMEMLIMIT512MiB），重型race-p1串行；不降低密码成本、OTP窗口或原三分钟前驱期限。
 
 | 现有门禁owner | 已实际证明的边界 | 结果 |
 | --- | --- | --- |
@@ -1316,7 +1316,7 @@ S3b正在实施，尚未完整验收。最小可验收结果是：管理员按�
 
 #### 会话闲置期限（后继执行片）
 
-此片尚未实现。最小目标为同一Account两名USER在两个IAM副本上获得各自LOGIN_SESSION：一个客户端仅在显式交互时更新自己的服务器活动水位，另一个没有活动的会话在真实闲置截止后的下一次IAM/PaaS受保护请求被拒；重启、后台安装轮询或另一个凭据的活动都不能复活它。Session绝对期限现有默认8小时、发行配置最多24小时，仍在发行时封存且不滑动；密码到期可进一步缩短它。闲置不是人类在场证明，也不是MFA或step-up。
+此片的后端源码候选已实现，完整009、独立CI、LIVE消费者和发布组合仍未验收。最小目标为同一Account两名USER在两个IAM副本上获得各自LOGIN_SESSION：一个客户端仅在显式交互时更新自己的服务器活动水位，另一个没有活动的会话在真实闲置截止后的下一次IAM/PaaS受保护请求被拒；重启、后台安装轮询或另一个凭据的活动都不能复活它。Session绝对期限现有默认8小时、发行配置最多24小时，仍在发行时封存且不滑动；密码到期可进一步缩短它。闲置不是人类在场证明，也不是MFA或step-up。
 
 Account的`security-settings`增加明确的`session.idleTimeoutMinutes`，默认30分钟、允许5–60分钟；有未撤销安装级平台附件或原root身份的有效上限为30分钟。更新继续使用现有Account权限、目标限定step-up、版本CAS、不可变完成、通知和outbox事务；旧完成仍只读原字节，缺字段的旧未完成proof不能凭默认值变成写许可。设置改变沿既有安全设置屏障使旧会话/挑战失效，不能通过调大阈值挽回已过期会话。每个新Session封存发行时实际适用的idle秒数和由数据库产生的初始活动时间，不从客户端、当前策略或今天的角色关系倒填旧Session。升级前缺活动水位的旧Session失败关闭并重新登录，不用`issued_at`猜测其后是否有活动。
 
@@ -1325,6 +1325,14 @@ Account的`security-settings`增加明确的`session.idleTimeoutMinutes`，默�
 普通IAM/PaaS受保护请求、`/ready`及安装进度后台轮询只检查当前闲置资格，不续期；RoleSession、AccessKey、服务、worker和后台Operation均不触碰来源LOGIN_SESSION。UX owner只读核对发现控制台当前唯一周期性带bearer后端请求是PENDING/PROVISIONING安装阶段每4秒读取进度；IAM账号工作区无周期刷新，亦无通用交互活动上报。UI未来只能在明确的前台交互下调用已冻结的touch入口，不借轮询、页面可见性或客户端倒计时取得权威期限。该接口及字段在实现/生成/门禁固定前不可称LIVE；当前UX只做显式MOCK。跨服务查询仍以IAM当前会话为权威，业务服务不得缓存一次Allow当作持续有效。
 
 底层`Session`水位归现有IAM Session表/读取函数，不增SessionStore、Redis或后台扫描服务。lookup、本人目录、RoleSession来源资格及各最终写事务必须按服务端当前时间检查`min(absolute,idle)`；历史已过期记录可留存但不得作为ACTIVE资格或被后续touch复活。活动水位不是每次业务请求的Audit事实；它只能支持IAM已知的最近认证活动，不能填补S4所需的Key、Role和各产品业务结果水位。按两个真实IAM副本、有效/迟到并发touch、最低合法5分钟自然闲置、管理员延长设置、密码/状态/撤权交错、重启与旧行升级，以及PaaS跨进程拒绝实跑；不修改时钟或缩短生产配置假装到期。设计依据是[NIST 800-63B会话管理](https://pages.nist.gov/800-63-4/sp800-63b/session/)的总体/闲置双期限与[OWASP Session Management](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html)的服务端执行原则；30分钟是MATRIX产品默认，不宣称获得NIST等级认证。
+
+**当前本地证据（2026-09-29）。** 源码形状为IAM52/Audit28；发布Profile仍由安装owner按完整组合冻结，不能从源码schema数字推导兼容。API严格codec/OpenAPI、usecase、HTTP路由和数据适配器的受影响race均通过；生成前后OpenAPI SHA256均为`a229ac03500b09cee1b1ebd4357cbc1368c0a4a5b4b84185af71113b8c1b43f2`。最终契约复核另发现生成器曾把写活动水位的入口描述为只读观察，当前以无body的POST mutation单独建模，明确400拒绝query/body且200只表示命令完成；契约回归已先失败后通过。默认/受保护30分钟、设置5–60分钟、60秒合并、普通读取不续期、双副本竞争、函数ACL/readiness及apply-twice由独立PG18.4的`TestIAMSessionIdlePostgres`串行race-p1在92.262s通过。
+
+`TestIAMSessionIdleNaturalPostgres`沿实际邮箱确认、TOTP、step-up和安全设置流程把普通Account配置为产品最低5分钟：两个独立Authority交替执行普通认证读取，数据库活动水位保持不变；真实经过截止后两个副本的业务读取和迟到touch都拒绝，USER及历史Session行不被删除或改写。该门禁424.632s通过，没有改宿主/数据库时钟、缩短生产最小值或用正向资格DML。原安全设置、并发和放宽门禁在新数据库分别140.212s、141.981s、126.548s通过，证明新增字段没有绕过原CAS、step-up、通知、历史及受保护身份边界。
+
+固定`42035189eb823e388509f54525889c1a18c6b79d`的实际IAM45程序创建旧设置谱系、MFA Session、恢复、密码年龄及产品Profile，再升级到IAM52。最终`TestIAMRetainedPredecessorProcessUpgrade`串行race-p1在182.518s通过：历史完成字节和新增字段NULL保持，旧Session因无活动水位失败关闭，同一USER重新完成密码+TOTP后只能读取自己的原完成且不能继承旧Session的未完成proof；当前完整proof可从旧版本谱系继续写入，迁移/等值bootstrap/重启不复活旧资格。真实门禁发现并修正了新设置谱系把旧NULL与当前默认值误判为断链的问题；比较时允许二者等价，但不回填旧行，也不让旧proof取得新字段。测试维护复核随后将Session、设置完成和step-up从整行减新列的布局快照改为明确业务字段，并删除readiness之后重复的`pg_proc`参数顺序断言；同一真实前驱门禁在新独立PG18上串行race-p1复验170.215s通过，行为、旧字节及失败关闭断言保留。
+
+同一前驱门禁用两个由旧程序真实创建的独立USER分别证明旧MFA Session失败关闭和旧因子移除/重绑/新因子登录，避免通过清空共享五次OTP预算或延长窗口制造通过。闲置资格还已纳入密码尝试、本人/批量会话撤销及策略关联的锁内Session检查；门禁曾发现旧NULL会话被批量撤销计数的问题，生产函数现拒绝把这类无效历史行当作当前有效目标。最终独立双IAM/Audit/PaaS/dispatcher进程门禁在新PG18.4数据库串行race-p1通过284.626s，保留受限数据库身份、双租户资源、撤权、MFA、历史outbox/Audit和重启回归。CI新增独立自然闲置lane并从通用自动发现中显式排除该测试，避免缺DSN时SKIP被误记为通过；本候选的独立CI尚未完成。
 
 #### S3验收与衔接
 

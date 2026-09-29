@@ -1093,6 +1093,12 @@ func TestIAMOwnSessionRoutesRejectSelectorsBeforeWorkflow(t *testing.T) {
 		{http.MethodGet, "/v1/auth/sessions?after=session-id", "", true, http.StatusBadRequest},
 		{http.MethodGet, "/v1/auth/sessions", `{}`, true, http.StatusBadRequest},
 		{http.MethodPost, "/v1/auth/sessions", `{}`, true, http.StatusMethodNotAllowed},
+		{http.MethodPost, "/v1/auth/sessions/current:touch", "", true, http.StatusOK},
+		{http.MethodPost, "/v1/auth/sessions/current:touch", "", false, http.StatusUnauthorized},
+		{http.MethodGet, "/v1/auth/sessions/current:touch", "", true, http.StatusMethodNotAllowed},
+		{http.MethodPost, "/v1/auth/sessions/current:touch?userId=foreign", "", true, http.StatusBadRequest},
+		{http.MethodPost, "/v1/auth/sessions/current:touch", `{}`, true, http.StatusBadRequest},
+		{http.MethodPost, "/v1/auth/sessions/current:touch/", "", true, http.StatusNotFound},
 		{http.MethodPost, "/v1/auth/sessions/other:revoke", `{"requestId":"revoke-own"}`, true, http.StatusOK},
 		{http.MethodPost, "/v1/auth/sessions/other:revoke", `{"requestId":"revoke-own"}`, false, http.StatusUnauthorized},
 		{http.MethodPost, "/v1/auth/sessions/other:revoke?userId=foreign", `{"requestId":"revoke-own"}`, true, http.StatusBadRequest},
@@ -1334,7 +1340,7 @@ func TestIAMUserPasswordResetCompletionBoundary(t *testing.T) {
 
 func TestIAMSecuritySettingsWriteAndCompletion(t *testing.T) {
 	const path = "/v1/account/security-settings"
-	const body = `{"requestId":"settings-command","stepUpId":"settings-proof","expectedResourceVersion":1,"mfa":{"requiredForUsers":false},"password":{"minimumLength":15,"requireLowercase":false,"requireUppercase":false,"requireDigit":false,"requireSymbol":false,"historyCount":1,"maxAgeDays":0,"expiryMode":"CHANGE_PASSWORD"}}`
+	const body = `{"requestId":"settings-command","stepUpId":"settings-proof","expectedResourceVersion":1,"mfa":{"requiredForUsers":false},"password":{"minimumLength":15,"requireLowercase":false,"requireUppercase":false,"requireDigit":false,"requireSymbol":false,"historyCount":1,"maxAgeDays":0,"expiryMode":"CHANGE_PASSWORD"},"session":{"idleTimeoutMinutes":30}}`
 	for _, endpoint := range []struct{ method, path, body string }{
 		{http.MethodPut, path, body}, {http.MethodGet, path + "/changes/settings-command", ""},
 	} {
@@ -1351,7 +1357,8 @@ func TestIAMSecuritySettingsWriteAndCompletion(t *testing.T) {
 			workflow.settingsChange = iamv1.AccountSecuritySettingsChange{APIVersion: iamv1.APIVersion, Kind: "AccountSecuritySettingsChange",
 				RequestID: "settings-command", ExpectedResourceVersion: 1, CallerSessionEnded: true,
 				Settings: iamv1.AccountSecuritySettings{APIVersion: iamv1.APIVersion, Kind: "AccountSecuritySettings", AccountID: "account-catalog",
-					ResourceVersion: 2, MFA: iamv1.AccountMFASettings{RequiredForUsers: false}, Password: &iamv1.AccountPasswordSettings{ExpiryMode: iamv1.PasswordExpiryChange, MinimumLength: 15, HistoryCount: 1}, UpdatedAt: time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC)}}
+					ResourceVersion: 2, MFA: iamv1.AccountMFASettings{RequiredForUsers: false}, Password: &iamv1.AccountPasswordSettings{ExpiryMode: iamv1.PasswordExpiryChange, MinimumLength: 15, HistoryCount: 1},
+					Session: &iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30}, UpdatedAt: time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC)}}
 			request := httptest.NewRequest(endpoint.method, endpoint.path, strings.NewReader(endpoint.body))
 			request.Header.Set("Content-Type", "application/json")
 			request.Header.Set("Authorization", "Bearer current")
@@ -1596,7 +1603,8 @@ func (value *httpWorkflow) AccountSecuritySettings(_ context.Context, credential
 	value.settingsCalls++
 	value.settingsCredential = credential
 	return iamv1.AccountSecuritySettings{APIVersion: iamv1.APIVersion, Kind: "AccountSecuritySettings", AccountID: "account-catalog",
-		ResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: false}, Password: &iamv1.AccountPasswordSettings{ExpiryMode: iamv1.PasswordExpiryChange, MinimumLength: 15, HistoryCount: 1}, UpdatedAt: time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC)}, value.settingsErr
+		ResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: false}, Password: &iamv1.AccountPasswordSettings{ExpiryMode: iamv1.PasswordExpiryChange, MinimumLength: 15, HistoryCount: 1},
+		Session: &iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30}, UpdatedAt: time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC)}, value.settingsErr
 }
 
 func (value *httpWorkflow) ListAuthorizationProfiles(_ context.Context, credential iamv1.Secret, _ string) (iamv1.AuthorizationProfileList, error) {
@@ -2070,6 +2078,14 @@ func (workflow *httpWorkflow) ListOwnSessions(_ context.Context, _ iamv1.Secret,
 	session := workflow.login.Session
 	return iamv1.SessionList{APIVersion: iamv1.APIVersion, Kind: "SessionList", AccountID: session.AccountID,
 		UserID: session.PrincipalID, CurrentSessionID: session.ID, ObservedAt: session.IssuedAt, Items: []iamv1.Session{session}}, nil
+}
+
+func (workflow *httpWorkflow) TouchCurrentSession(_ context.Context, _ iamv1.Secret) (iamv1.SessionActivity, error) {
+	workflow.ownSessionCalls++
+	session := workflow.login.Session
+	return iamv1.SessionActivity{APIVersion: iamv1.APIVersion, Kind: "SessionActivity", SessionID: session.ID,
+		AccountID: session.AccountID, UserID: session.PrincipalID, LastActivityAt: session.IssuedAt,
+		IdleExpiresAt: session.IssuedAt.Add(30 * time.Minute), AbsoluteExpiresAt: session.ExpiresAt}, nil
 }
 
 func (workflow *httpWorkflow) RevokeOwnSession(ctx context.Context, credential iamv1.Secret, id iamv1.SessionID, request iamv1.RevokeSessionRequest) (iamv1.RevokeOwnSessionResponse, error) {

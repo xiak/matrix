@@ -160,10 +160,15 @@ func (service *Authority) StartStepUp(ctx context.Context, credential iamv1.Secr
 	}
 	if (result.SecuritySettings == nil) != (request.SecuritySettings == nil) ||
 		(result.SecuritySettings != nil && (result.SecuritySettings.ExpectedResourceVersion != request.SecuritySettings.ExpectedResourceVersion ||
-			result.SecuritySettings.MFA != request.SecuritySettings.MFA || !samePasswordSettings(result.SecuritySettings.Password, request.SecuritySettings.Password))) {
+			result.SecuritySettings.MFA != request.SecuritySettings.MFA || !samePasswordSettings(result.SecuritySettings.Password, request.SecuritySettings.Password) ||
+			!sameSessionSettings(result.SecuritySettings.Session, request.SecuritySettings.Session))) {
 		return iamv1.StepUp{}, ErrUnavailable
 	}
 	return result, nil
+}
+
+func sameSessionSettings(left, right *iamv1.AccountSessionSettings) bool {
+	return left == nil && right == nil || left != nil && right != nil && *left == *right
 }
 
 func (service *Authority) StepUpByRequest(ctx context.Context, credential iamv1.Secret, requestID string) (iamv1.StepUp, error) {

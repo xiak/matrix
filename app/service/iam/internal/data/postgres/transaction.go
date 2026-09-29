@@ -522,6 +522,25 @@ func (value *transaction) ListOwnSessions(ctx context.Context, read identityacce
 	return items, nil
 }
 
+func (value *transaction) TouchSession(ctx context.Context, session iamv1.Session) (iamv1.SessionActivity, error) {
+	if iamv1.ValidateSession(session) != nil || session.Status != iamv1.SessionActive || session.RevokedAt != nil {
+		return iamv1.SessionActivity{}, identityaccess.ErrInvalidArgument
+	}
+	result := iamv1.SessionActivity{APIVersion: iamv1.APIVersion, Kind: "SessionActivity", SessionID: session.ID,
+		AccountID: session.AccountID, UserID: session.PrincipalID, AbsoluteExpiresAt: session.ExpiresAt}
+	if err := value.tx.QueryRow(ctx, "SELECT * FROM iam.touch_session($1,$2,$3)", session.AccountID, session.PrincipalID, session.ID).
+		Scan(&result.LastActivityAt, &result.IdleExpiresAt, &result.AbsoluteExpiresAt); err != nil {
+		return iamv1.SessionActivity{}, mapSubjectDatabaseError("touch IAM session", err)
+	}
+	result.LastActivityAt = result.LastActivityAt.UTC()
+	result.IdleExpiresAt = result.IdleExpiresAt.UTC()
+	result.AbsoluteExpiresAt = result.AbsoluteExpiresAt.UTC()
+	if iamv1.ValidateSessionActivity(result) != nil || result.AbsoluteExpiresAt.After(session.ExpiresAt) {
+		return iamv1.SessionActivity{}, identityaccess.ErrUnavailable
+	}
+	return result, nil
+}
+
 // The same boundary decoder protects USER authentication carriers; a key must
 // not acquire a second policy representation or fabricated login Session.
 func (value *transaction) decodeUserBoundary(ctx context.Context, boundary []byte, account iamv1.AccountID, user iamv1.PrincipalID, userVersion uint64) (*authority.ResolvedUserBoundary, error) {

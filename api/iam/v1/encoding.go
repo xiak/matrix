@@ -559,6 +559,21 @@ func (value *AccountMFASettings) UnmarshalJSON(source []byte) error {
 	return nil
 }
 
+func (value *AccountSessionSettings) UnmarshalJSON(source []byte) error {
+	var decoded struct {
+		IdleTimeoutMinutes *int `json:"idleTimeoutMinutes"`
+	}
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil || decoded.IdleTimeoutMinutes == nil {
+		return contractjson.ErrInvalidDocument
+	}
+	result := AccountSessionSettings{IdleTimeoutMinutes: *decoded.IdleTimeoutMinutes}
+	if ValidateAccountSessionSettings(result) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = result
+	return nil
+}
+
 func (value *AccountSecuritySettings) UnmarshalJSON(source []byte) error {
 	if value == nil {
 		return contractjson.ErrInvalidDocument
@@ -579,6 +594,7 @@ func decodeAccountSecuritySettings(source []byte, historical bool) (AccountSecur
 		ResourceVersion uint64              `json:"resourceVersion"`
 		MFA             *AccountMFASettings `json:"mfa"`
 		Password        json.RawMessage     `json:"password"`
+		Session         json.RawMessage     `json:"session"`
 		UpdatedAt       time.Time           `json:"updatedAt"`
 	}
 	if contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil || decoded.MFA == nil {
@@ -592,6 +608,13 @@ func decodeAccountSecuritySettings(source []byte, historical bool) (AccountSecur
 			return AccountSecuritySettings{}, err
 		}
 		result.Password = &password
+	}
+	if decoded.Session != nil {
+		var session AccountSessionSettings
+		if contractjson.DecodeObjectBytes(decoded.Session, MaxRequestBytes, &session) != nil || ValidateAccountSessionSettings(session) != nil {
+			return AccountSecuritySettings{}, contractjson.ErrInvalidDocument
+		}
+		result.Session = &session
 	}
 	if validateAccountSecuritySettings(result, historical) != nil {
 		return AccountSecuritySettings{}, contractjson.ErrInvalidDocument
@@ -616,6 +639,7 @@ func decodeSecuritySettingsIntent(source []byte, historical bool) (SecuritySetti
 		ExpectedResourceVersion uint64              `json:"expectedResourceVersion"`
 		MFA                     *AccountMFASettings `json:"mfa"`
 		Password                json.RawMessage     `json:"password"`
+		Session                 json.RawMessage     `json:"session"`
 	}
 	if contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil || decoded.MFA == nil {
 		return SecuritySettingsUpdateIntent{}, contractjson.ErrInvalidDocument
@@ -627,6 +651,13 @@ func decodeSecuritySettingsIntent(source []byte, historical bool) (SecuritySetti
 			return SecuritySettingsUpdateIntent{}, err
 		}
 		result.Password = &password
+	}
+	if decoded.Session != nil {
+		var session AccountSessionSettings
+		if contractjson.DecodeObjectBytes(decoded.Session, MaxRequestBytes, &session) != nil || ValidateAccountSessionSettings(session) != nil {
+			return SecuritySettingsUpdateIntent{}, contractjson.ErrInvalidDocument
+		}
+		result.Session = &session
 	}
 	if validateSecuritySettingsUpdateIntent(result, historical) != nil {
 		return SecuritySettingsUpdateIntent{}, contractjson.ErrInvalidDocument

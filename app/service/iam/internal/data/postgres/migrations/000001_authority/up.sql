@@ -868,6 +868,46 @@ CREATE TABLE IF NOT EXISTS iam.sessions (
 -- neither migration replay nor explicit retention may bless those rows.
 ALTER TABLE iam.sessions ADD COLUMN IF NOT EXISTS credential_version bigint CHECK (credential_version > 0);
 
+-- Retained Sessions predate an authoritative activity waterline. Leaving both
+-- fields NULL deliberately makes those rows fail closed; migration replay must
+-- never infer activity from issued_at or bless an old bearer with today's
+-- Account setting.
+ALTER TABLE iam.sessions ADD COLUMN IF NOT EXISTS last_activity_at timestamptz(6);
+ALTER TABLE iam.sessions ADD COLUMN IF NOT EXISTS idle_timeout_seconds integer;
+ALTER TABLE iam.sessions DROP CONSTRAINT IF EXISTS sessions_activity_valid;
+ALTER TABLE iam.sessions ADD CONSTRAINT sessions_activity_valid CHECK (
+    (last_activity_at IS NULL AND idle_timeout_seconds IS NULL)
+    OR (last_activity_at IS NOT NULL AND idle_timeout_seconds BETWEEN 300 AND 3600
+        AND idle_timeout_seconds % 60 = 0
+        AND last_activity_at >= issued_at AND last_activity_at < expires_at)
+);
+
+CREATE OR REPLACE FUNCTION iam.guard_session_activity()
+RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
+BEGIN
+    IF TG_OP='INSERT' THEN
+        IF NEW.last_activity_at IS NULL OR NEW.idle_timeout_seconds IS NULL THEN
+            RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='new session activity is required';
+        END IF;
+        RETURN NEW;
+    END IF;
+    IF NEW.idle_timeout_seconds IS DISTINCT FROM OLD.idle_timeout_seconds
+        OR (OLD.last_activity_at IS NULL AND NEW.last_activity_at IS NOT NULL)
+        OR (OLD.last_activity_at IS NOT NULL AND NEW.last_activity_at IS NULL)
+        OR (NEW.last_activity_at IS DISTINCT FROM OLD.last_activity_at AND (
+            NEW.last_activity_at<=OLD.last_activity_at
+            OR current_setting('matrix.iam_session_touch_id',true) IS DISTINCT FROM OLD.id)) THEN
+        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='session activity transition is invalid';
+    END IF;
+    RETURN NEW;
+END $function$;
+DROP TRIGGER IF EXISTS guard_activity ON iam.sessions;
+CREATE TRIGGER guard_activity BEFORE INSERT OR UPDATE ON iam.sessions
+    FOR EACH ROW EXECUTE FUNCTION iam.guard_session_activity();
+ALTER TABLE iam.sessions ENABLE ALWAYS TRIGGER guard_activity;
+REVOKE ALL ON FUNCTION iam.guard_session_activity()
+    FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
+
 -- One bounded slot per real USER. Sequence never resets with a window or
 -- credential change; replacing this temporary slot cannot replay old proof.
 CREATE TABLE IF NOT EXISTS iam.password_attempts (
@@ -2111,7 +2151,7 @@ BEGIN
                SELECT 1 FROM iam.audit_outbox AS outbox
                 WHERE outbox.status = 'DEAD_LETTER' OR outbox.attempts >= 100
            ),
-           51::bigint,
+           52::bigint,
            transaction_timestamp();
 END
 $function$;
@@ -2246,7 +2286,9 @@ BEGIN
     SELECT * INTO budget FROM iam.password_attempts b WHERE b.tenant_id=account_id AND b.principal_id=user_id FOR UPDATE;
     SELECT * INTO recovery_floor FROM iam.authentication_recovery_attempt_floors f WHERE f.tenant_id=account_id AND f.user_id=subject.id;
     effective_now:=clock_timestamp();
-    IF submitted_session_id IS NOT NULL AND caller.expires_at<=effective_now THEN RETURN; END IF;
+    IF submitted_session_id IS NOT NULL AND (caller.expires_at<=effective_now
+        OR caller.last_activity_at IS NULL OR caller.idle_timeout_seconds IS NULL
+        OR caller.last_activity_at+make_interval(secs=>caller.idle_timeout_seconds)<=effective_now) THEN RETURN; END IF;
     IF budget.credential_version=credential.credential_version THEN
         -- Neither a fresh purpose, caller request ID nor another replica refunds
         -- a reservation. A crashed verifier costs an attempt until window expiry.
@@ -2339,7 +2381,9 @@ BEGIN
         OR budget.purpose IS DISTINCT FROM expected_purpose OR budget.intent_digest IS DISTINCT FROM expected_intent_digest
         OR budget.credential_version<>credential.credential_version OR budget.account_version<>account_version
         OR budget.principal_version<>subject.resource_version OR budget.expires_at<=effective_now
-        OR (session_id IS NOT NULL AND caller.expires_at<=effective_now)
+        OR (session_id IS NOT NULL AND (caller.expires_at<=effective_now
+            OR caller.last_activity_at IS NULL OR caller.idle_timeout_seconds IS NULL
+            OR caller.last_activity_at+make_interval(secs=>caller.idle_timeout_seconds)<=effective_now))
         OR (expected_purpose IN ('NOTIFICATION_CONTACT_VERIFY','TOTP_ENROLLMENT','STEP_UP') AND subject.must_change_password)
         OR (session_id IS NOT NULL AND NOT iam.session_mfa_eligible(tenant,subject_id,session_id)) THEN
         RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='password attempt is unavailable';
@@ -2375,6 +2419,7 @@ DECLARE
     password_version bigint;
     authentication_state jsonb;
     password_expiry jsonb;
+    session_idle_seconds integer;
 BEGIN
     IF submitted_session_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR submitted_tenant_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
@@ -2403,6 +2448,11 @@ BEGIN
     IF effective_expires_at<=clock_timestamp() THEN
         RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='session issuance deadline has passed';
     END IF;
+    session_idle_seconds:=iam.user_session_idle_seconds(submitted_tenant_id,submitted_principal_id);
+    IF session_idle_seconds IS NULL OR session_idle_seconds NOT BETWEEN 300 AND 3600
+        OR session_idle_seconds%60<>0 THEN
+        RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='session idle authority is unavailable';
+    END IF;
     UPDATE iam.password_attempts b SET used_attempts=0,window_started_at=clock_timestamp()
         WHERE b.tenant_id=submitted_tenant_id AND b.principal_id=submitted_principal_id;
     PERFORM iam.assert_audit_event(
@@ -2412,11 +2462,13 @@ BEGIN
     PERFORM iam.assert_user_audit_actor(submitted_tenant_id,submitted_principal_id,submitted_audit_event);
     INSERT INTO iam.sessions (
         tenant_id, id, principal_id, verification_digest, status, resource_version,
-        issued_at, expires_at, credential_version, authentication_method, authenticated_at, mfa_revision
+        issued_at, expires_at, credential_version, authentication_method, authenticated_at, mfa_revision,
+        last_activity_at, idle_timeout_seconds
     ) VALUES (
         submitted_tenant_id, submitted_session_id, submitted_principal_id,
         submitted_verification_digest, 'ACTIVE', 1, effective_now,
-        effective_expires_at, password_version, 'PASSWORD', effective_now, (authentication_state->>'revision')::bigint
+        effective_expires_at, password_version, 'PASSWORD', effective_now, (authentication_state->>'revision')::bigint,
+        effective_now, session_idle_seconds
     );
     INSERT INTO iam.session_index (lookup_digest, tenant_id, session_id)
     VALUES (submitted_lookup_digest, submitted_tenant_id, submitted_session_id);
@@ -2606,6 +2658,61 @@ BEGIN
         AND iam.session_mfa_eligible(tenant,user_id,s.id)
       ORDER BY s.id COLLATE "C" LIMIT 101;
 END $function$;
+
+-- The foreground client may explicitly renew only the Session it currently
+-- possesses. Ordinary authenticated reads never call this function. The
+-- waterline is written at most once per minute, while eligibility is checked
+-- against the database clock again after the normal Account -> USER ->
+-- credential -> Session lock order.
+CREATE OR REPLACE FUNCTION iam.touch_session(tenant text,user_id text,session_id text)
+RETURNS TABLE(last_activity_at timestamptz,idle_expires_at timestamptz,absolute_expires_at timestamptz)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE stored_account iam.accounts%ROWTYPE; stored_user iam.principals%ROWTYPE;
+    stored_session iam.sessions%ROWTYPE; generation bigint; effective_now timestamptz(6);
+BEGIN
+    IF COALESCE(tenant,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        OR COALESCE(user_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        OR COALESCE(session_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
+        RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='session touch input is invalid';
+    END IF;
+    PERFORM set_config('matrix.iam_tenant_id',tenant,true);
+    SELECT * INTO stored_account FROM iam.accounts a WHERE a.id=tenant FOR SHARE;
+    IF NOT FOUND OR stored_account.status<>'ACTIVE' OR NOT iam.valid_session_settings(stored_account.session_settings) THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='session activity is unavailable';
+    END IF;
+    SELECT * INTO stored_user FROM iam.principals p
+        WHERE p.tenant_id=tenant AND p.id=user_id AND p.principal_type='USER' FOR SHARE;
+    IF NOT FOUND OR stored_user.status<>'ACTIVE' OR stored_user.deleted_at IS NOT NULL OR stored_user.must_change_password THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='session activity is unavailable';
+    END IF;
+    SELECT c.credential_version INTO generation FROM iam.user_credentials c
+        WHERE c.tenant_id=tenant AND c.principal_id=user_id FOR SHARE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='session activity is unavailable';
+    END IF;
+    SELECT * INTO stored_session FROM iam.sessions s
+        WHERE s.tenant_id=tenant AND s.principal_id=user_id AND s.id=session_id FOR UPDATE;
+    effective_now:=clock_timestamp();
+    IF NOT FOUND OR stored_session.status<>'ACTIVE' OR stored_session.revoked_at IS NOT NULL
+        OR stored_session.expires_at<=effective_now OR stored_session.credential_version IS DISTINCT FROM generation
+        OR stored_session.last_activity_at IS NULL OR stored_session.idle_timeout_seconds IS NULL
+        OR stored_session.idle_timeout_seconds NOT BETWEEN 300 AND 3600 OR stored_session.idle_timeout_seconds%60<>0
+        OR stored_session.last_activity_at+make_interval(secs=>stored_session.idle_timeout_seconds)<=effective_now
+        OR NOT iam.session_mfa_eligible(tenant,user_id,session_id) THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='session activity is unavailable';
+    END IF;
+    IF stored_session.last_activity_at+interval '60 seconds'<=effective_now THEN
+        PERFORM set_config('matrix.iam_session_touch_id',session_id,true);
+        UPDATE iam.sessions s SET last_activity_at=effective_now
+            WHERE s.tenant_id=tenant AND s.principal_id=user_id AND s.id=session_id;
+        stored_session.last_activity_at:=effective_now;
+    END IF;
+    RETURN QUERY SELECT stored_session.last_activity_at,
+        stored_session.last_activity_at+make_interval(secs=>stored_session.idle_timeout_seconds),stored_session.expires_at;
+END $function$;
+REVOKE ALL ON FUNCTION iam.touch_session(text,text,text)
+    FROM PUBLIC,matrix_iam_worker,matrix_iam_credential_recovery;
+GRANT EXECUTE ON FUNCTION iam.touch_session(text,text,text) TO matrix_iam_api;
 
 DROP FUNCTION IF EXISTS iam.lookup_service(text);
 CREATE FUNCTION iam.lookup_service(submitted_lookup_digest text)
@@ -3275,6 +3382,8 @@ BEGIN
       JOIN iam.user_credentials c ON c.tenant_id=p.tenant_id AND c.principal_id=p.id
       JOIN iam.sessions s ON s.tenant_id=p.tenant_id AND s.principal_id=p.id AND s.id=submitted_actor_session_id
         AND s.status='ACTIVE' AND s.revoked_at IS NULL AND s.expires_at>validation_now AND s.credential_version=c.credential_version
+        AND s.last_activity_at IS NOT NULL AND s.idle_timeout_seconds IS NOT NULL
+        AND s.last_activity_at+make_interval(secs=>s.idle_timeout_seconds)>validation_now
       WHERE p.tenant_id=submitted_tenant_id AND p.id=submitted_actor_principal_id AND p.principal_type='USER'
         AND p.status='ACTIVE' AND p.deleted_at IS NULL AND (submitted_decision_id IS NULL OR NOT p.must_change_password);
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='session caller is unavailable'; END IF;
@@ -3320,7 +3429,9 @@ BEGIN
             RETURN;
         END IF;
         IF stored.status<>'ACTIVE' OR stored.revoked_at IS NOT NULL OR stored.expires_at<=validation_now
-            OR stored.credential_version IS DISTINCT FROM actor_generation THEN
+            OR stored.credential_version IS DISTINCT FROM actor_generation
+            OR stored.last_activity_at IS NULL OR stored.idle_timeout_seconds IS NULL
+            OR stored.last_activity_at+make_interval(secs=>stored.idle_timeout_seconds)<=validation_now THEN
             RAISE EXCEPTION USING ERRCODE='P0002', MESSAGE='self session target is no longer available';
         END IF;
     END IF;
@@ -3377,7 +3488,8 @@ BEGIN
     validation_now:=clock_timestamp();
     IF NOT EXISTS(SELECT 1 FROM iam.sessions s WHERE s.tenant_id=submitted_tenant_id AND s.principal_id=submitted_user_id
         AND s.id=submitted_actor_session_id AND s.status='ACTIVE' AND s.revoked_at IS NULL AND s.expires_at>validation_now
-        AND s.credential_version=actor_generation) THEN
+        AND s.credential_version=actor_generation AND s.last_activity_at IS NOT NULL AND s.idle_timeout_seconds IS NOT NULL
+        AND s.last_activity_at+make_interval(secs=>s.idle_timeout_seconds)>validation_now) THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='session caller is unavailable';
     END IF;
     PERFORM iam.assert_audit_event(submitted_audit_event,submitted_tenant_id,
@@ -3404,6 +3516,8 @@ BEGIN
         UPDATE iam.sessions s SET status='REVOKED',resource_version=s.resource_version+1,revoked_at=effective_now
         WHERE s.tenant_id=submitted_tenant_id AND s.principal_id=submitted_user_id AND s.id<>submitted_actor_session_id
             AND s.status='ACTIVE' AND s.revoked_at IS NULL AND s.expires_at>validation_now AND s.credential_version=actor_generation
+            AND s.last_activity_at IS NOT NULL AND s.idle_timeout_seconds IS NOT NULL
+            AND s.last_activity_at+make_interval(secs=>s.idle_timeout_seconds)>validation_now
         RETURNING s.id,s.resource_version
     ) INSERT INTO iam.session_other_revocation_targets(tenant_id,user_id,request_id,session_id,resource_version)
         SELECT submitted_tenant_id,submitted_user_id,submitted_audit_event->>'requestId',e.id,e.resource_version FROM ended e;
@@ -3779,7 +3893,8 @@ BEGIN
         ON s.tenant_id=c.tenant_id AND s.principal_id=c.principal_id
         WHERE c.tenant_id=submitted_tenant_id AND c.principal_id=submitted_actor_principal_id AND s.id=actor_session_id
           AND s.status='ACTIVE' AND s.revoked_at IS NULL AND s.expires_at>clock_timestamp()
-          AND s.credential_version=c.credential_version FOR SHARE OF c,s;
+          AND s.credential_version=c.credential_version AND s.last_activity_at IS NOT NULL AND s.idle_timeout_seconds IS NOT NULL
+          AND s.last_activity_at+make_interval(secs=>s.idle_timeout_seconds)>clock_timestamp() FOR SHARE OF c,s;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='attachment session is unavailable'; END IF;
     IF submitted_target_kind='USER' THEN
         SELECT * INTO target_user FROM iam.principals
@@ -3888,7 +4003,8 @@ BEGIN
         ON s.tenant_id=c.tenant_id AND s.principal_id=c.principal_id
         WHERE c.tenant_id=submitted_tenant_id AND c.principal_id=submitted_actor_principal_id AND s.id=actor_session_id
           AND s.status='ACTIVE' AND s.revoked_at IS NULL AND s.expires_at>clock_timestamp()
-          AND s.credential_version=c.credential_version FOR SHARE OF c,s;
+          AND s.credential_version=c.credential_version AND s.last_activity_at IS NOT NULL AND s.idle_timeout_seconds IS NOT NULL
+          AND s.last_activity_at+make_interval(secs=>s.idle_timeout_seconds)>clock_timestamp() FOR SHARE OF c,s;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='attachment session is unavailable'; END IF;
     IF stored.target_kind='GROUP' THEN
         PERFORM 1 FROM iam.groups WHERE tenant_id=submitted_tenant_id AND id=stored.target_id FOR UPDATE;
@@ -4123,6 +4239,7 @@ GRANT EXECUTE ON FUNCTION iam.issue_session(
 ) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.lookup_session(text) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.list_own_sessions(text,text,text,text) TO matrix_iam_api;
+GRANT EXECUTE ON FUNCTION iam.touch_session(text,text,text) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.revoke_other_sessions(text,text,text,jsonb) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.lookup_service(text) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.lookup_service_policies(text, text) TO matrix_iam_api;

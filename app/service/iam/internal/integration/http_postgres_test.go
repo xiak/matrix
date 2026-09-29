@@ -1990,7 +1990,8 @@ func proveAccountSecuritySettingsRead(t *testing.T, ctx context.Context, handler
 		t.Helper()
 		var result iamv1.AccountSecuritySettings
 		call(http.MethodGet, path, credential, nil, http.StatusOK, &result)
-		if iamv1.ValidateAccountSecuritySettings(result) != nil || result.AccountID != account || result.ResourceVersion != 1 || result.MFA.RequiredForUsers {
+		if iamv1.ValidateAccountSecuritySettings(result) != nil || result.AccountID != account || result.ResourceVersion != 1 || result.MFA.RequiredForUsers ||
+			result.Session == nil || result.Session.IdleTimeoutMinutes != 30 {
 			t.Fatal("settings projection did not return the actual initial Account state")
 		}
 		var created time.Time
@@ -3725,6 +3726,14 @@ func TestIAMSecuritySettingsPostgres(t *testing.T) {
 	testIAMTOTPEnrollmentPostgres(t, "security-settings")
 }
 
+// The minimum supported idle timeout is a real product boundary. This gate
+// obtains it through the public security-settings workflow, then waits on the
+// PostgreSQL clock; it never shortens production configuration or rewrites a
+// Session timestamp to manufacture expiry.
+func TestIAMSessionIdleNaturalPostgres(t *testing.T) {
+	testIAMTOTPEnrollmentPostgres(t, "session-idle-natural")
+}
+
 // This opt-in two-invocation gate retains the real security-settings fixture
 // across an actual day. The first invocation must follow the ordinary fixture
 // test on the same private database; the second must run only after its real
@@ -4226,7 +4235,8 @@ func proveIAMSecuritySettingsRaces(t *testing.T, ctx context.Context, database *
 					// command, never by writing a positive authority row directly.
 					initialProof, err := first.StartStepUp(ctx, session.Credential, iamv1.StartStepUpRequest{RequestID: "race-initialize-settings",
 						Operation: iamv1.StepUpUpdateSecuritySettings, ExpectedFactorRevision: 2,
-						SecuritySettings: &iamv1.SecuritySettingsUpdateIntent{Password: &iamv1.AccountPasswordSettings{ExpiryMode: iamv1.PasswordExpiryChange, MinimumLength: 15, HistoryCount: 1}, ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}}})
+						SecuritySettings: &iamv1.SecuritySettingsUpdateIntent{Password: &iamv1.AccountPasswordSettings{ExpiryMode: iamv1.PasswordExpiryChange, MinimumLength: 15, HistoryCount: 1},
+							Session: &iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30}, ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}}})
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -4235,7 +4245,8 @@ func proveIAMSecuritySettingsRaces(t *testing.T, ctx context.Context, database *
 						t.Fatal(err)
 					}
 					if _, err := first.UpdateAccountSecuritySettings(ctx, session.Credential, iamv1.UpdateAccountSecuritySettingsRequest{Password: iamv1.AccountPasswordSettings{ExpiryMode: iamv1.PasswordExpiryChange, MinimumLength: 15, HistoryCount: 1},
-						RequestID: "race-initialize-settings", StepUpID: initialProof.ID, ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}}); err != nil {
+						Session: iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30}, RequestID: "race-initialize-settings", StepUpID: initialProof.ID,
+						ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}}); err != nil {
 						t.Fatal("establish actual stronger requirement", err)
 					}
 					challenge, err = second.Login(ctx, iamv1.LoginRequest{LoginName: account.RootIdentity.LoginName, Password: current, RequestID: "race-settings-new-login"})
@@ -4261,7 +4272,8 @@ func proveIAMSecuritySettingsRaces(t *testing.T, ctx context.Context, database *
 				}
 				proof, err := first.StartStepUp(ctx, session.Credential, iamv1.StartStepUpRequest{RequestID: "race-settings",
 					Operation: iamv1.StepUpUpdateSecuritySettings, ExpectedFactorRevision: 2,
-					SecuritySettings: &iamv1.SecuritySettingsUpdateIntent{Password: &passwordRules, ExpectedResourceVersion: uint64(expectedSettings), MFA: iamv1.AccountMFASettings{RequiredForUsers: required}}})
+					SecuritySettings: &iamv1.SecuritySettingsUpdateIntent{Password: &passwordRules, Session: &iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30},
+						ExpectedResourceVersion: uint64(expectedSettings), MFA: iamv1.AccountMFASettings{RequiredForUsers: required}}})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -4277,8 +4289,8 @@ func proveIAMSecuritySettingsRaces(t *testing.T, ctx context.Context, database *
 					body                  []byte
 				}
 				settings := command{http.MethodPut, "/v1/account/security-settings", "race-settings", auditv1.ActionIAMSecuritySettingsUpdated, session.Credential,
-					mustIAMJSON(t, iamv1.UpdateAccountSecuritySettingsRequest{Password: passwordRules, RequestID: "race-settings", StepUpID: proof.ID,
-						ExpectedResourceVersion: uint64(expectedSettings), MFA: iamv1.AccountMFASettings{RequiredForUsers: required}})}
+					mustIAMJSON(t, iamv1.UpdateAccountSecuritySettingsRequest{Password: passwordRules, Session: iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30},
+						RequestID: "race-settings", StepUpID: proof.ID, ExpectedResourceVersion: uint64(expectedSettings), MFA: iamv1.AccountMFASettings{RequiredForUsers: required}})}
 				other := command{method: http.MethodPost, request: "race-mutation", bearer: session.Credential}
 				var verification iamv1.LoginResponse
 				var replacement iamv1.StartTOTPEnrollmentResponse
@@ -4442,7 +4454,7 @@ func proveIAMSecuritySettingsRaces(t *testing.T, ctx context.Context, database *
 					}
 					var intact bool
 					if err := database.QueryRow(ctx, `SELECT
-						(SELECT security_settings_version=$3 AND mfa_required_for_users=$4 AND password_settings=$15::jsonb FROM iam.accounts WHERE id=$1)
+						(SELECT security_settings_version=$3 AND mfa_required_for_users=$4 AND password_settings=$15::jsonb AND session_settings=$16::jsonb FROM iam.accounts WHERE id=$1)
 						AND (SELECT credential_version=$5 AND jsonb_array_length(password_history)=$5-1 FROM iam.user_credentials WHERE tenant_id=$1 AND principal_id=$2)
 						AND (SELECT revision=$6 AND enrollment_state=$7 FROM iam.user_mfa_states WHERE tenant_id=$1 AND user_id=$2)
 						AND (SELECT state=$8 FROM iam.step_ups WHERE tenant_id=$1 AND id=$9)
@@ -4455,7 +4467,8 @@ func proveIAMSecuritySettingsRaces(t *testing.T, ctx context.Context, database *
 						AND (SELECT count(*)=$13 FROM iam.authenticator_recoveries WHERE tenant_id=$1)
 						AND (SELECT count(*)=$13 FROM iam.security_notifications WHERE tenant_id=$1 AND kind='RECOVERY_STARTED')`,
 						account.ID, session.Session.PrincipalID, expectedSettings+int64(settingsCount), settingsCount == 1 && required, wantGeneration, wantRevision, wantEnrollment,
-						proofState, proof.ID, settingsCount, otherCount, string(other.action), consumedCodes, expectedSettings-1+int64(settingsCount), string(mustIAMJSON(t, wantRules))).Scan(&intact); err != nil || !intact {
+						proofState, proof.ID, settingsCount, otherCount, string(other.action), consumedCodes, expectedSettings-1+int64(settingsCount), string(mustIAMJSON(t, wantRules)),
+						string(mustIAMJSON(t, iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30}))).Scan(&intact); err != nil || !intact {
 						t.Fatal("settings race left partial or repeated security effects", err)
 					}
 					if replacementsOnly {
@@ -4618,6 +4631,11 @@ func TestIAMTOTPRemovalSettingsPostgres(t *testing.T) {
 
 func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 	t.Helper()
+	securitySettingsMode := mode == "security-settings" || mode == "session-idle-natural"
+	sessionIdleMinutes := 60
+	if mode == "session-idle-natural" {
+		sessionIdleMinutes = 5
+	}
 	environment, prefix, lifetime := "MATRIX_IAM_TOTP_ENROLLMENT_POSTGRES_TEST_DSN", "matrix_iam_totp_enrollment_", 3*time.Minute
 	if mode == "exhaustion" {
 		environment, prefix, lifetime = "MATRIX_IAM_TOTP_RECOVERY_EXHAUSTION_POSTGRES_TEST_DSN", "matrix_iam_totp_recovery_exhaustion_", 25*time.Minute
@@ -4627,6 +4645,8 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 		environment, prefix, lifetime = "MATRIX_IAM_STEP_UP_POSTGRES_TEST_DSN", "matrix_iam_step_up_", 7*time.Minute
 	} else if mode == "security-settings" {
 		environment, prefix, lifetime = "MATRIX_IAM_SECURITY_SETTINGS_POSTGRES_TEST_DSN", "matrix_iam_security_settings_", 3*time.Minute
+	} else if mode == "session-idle-natural" {
+		environment, prefix, lifetime = "MATRIX_IAM_SESSION_IDLE_NATURAL_POSTGRES_TEST_DSN", "matrix_iam_session_idle_natural_", 10*time.Minute
 	} else if mode == "replacement" {
 		environment, prefix, lifetime = "MATRIX_IAM_TOTP_REPLACEMENT_POSTGRES_TEST_DSN", "matrix_iam_totp_replacement_", 3*time.Minute
 	} else if mode == "removal" {
@@ -4702,7 +4722,7 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 		// These paths also exercise the private installation backup contract.
 		document.InstallationID = "mxi-" + strings.Repeat("8", 32)
 	}
-	if mode == "security-settings" {
+	if securitySettingsMode {
 		t.Run("password-expiry-settings-contract", func(t *testing.T) {
 			current, err := json.Marshal(authority.DefaultPasswordSettings())
 			if err != nil {
@@ -4764,7 +4784,7 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 		t.Fatal(err)
 	}
 	totpConfig := identityaccess.Config{CursorKey: bytes.Repeat([]byte{0x39}, 32), AccessKeyWrapping: &wrapping, TOTPKeyring: &totp, EmailVerificationKeyring: &mail}
-	if mode == "security-settings" {
+	if securitySettingsMode {
 		// The actual one-day password rule must shorten even the maximum
 		// permitted Session request, without altering a password date or clock.
 		totpConfig.SessionLifetime = 24 * time.Hour
@@ -4784,7 +4804,7 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 		t.Fatal(err)
 	}
 	password := iamHTTPSecret(t, changedAdminPassword)
-	if mode == "security-settings" {
+	if securitySettingsMode {
 		requirements, err := service.PasswordRequirements(ctx, login.Credential)
 		if err != nil || !login.MustChangePassword || requirements.Source != "PROTECTED_IDENTITY" ||
 			requirements.Password != authority.DefaultPasswordSettings() || requirements.SettingsVersion != 1 {
@@ -5469,8 +5489,8 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 		{`UPDATE iam.authentication_challenges SET purpose='ENROLLMENT' WHERE tenant_id=$1 AND id=$2`, []any{account, challenges[1-winner].id}, "challenge identity and completion are immutable"},
 		{`UPDATE iam.authentication_challenges SET purpose='RECOVERY' WHERE tenant_id=$1 AND id=$2`, []any{account, challenges[winner].id}, "challenge identity and completion are immutable"},
 		{`UPDATE iam.authentication_challenges SET security_settings_version=security_settings_version+1 WHERE tenant_id=$1 AND id=$2`, []any{account, challenges[1-winner].id}, "challenge identity and completion are immutable"},
-		{`INSERT INTO iam.sessions(tenant_id,id,principal_id,verification_digest,status,resource_version,issued_at,expires_at,credential_version,authentication_method,authenticated_at,mfa_revision)
-		 SELECT tenant_id,'mfa-forged-session',principal_id,verification_digest,'ACTIVE',1,issued_at,expires_at,credential_version,authentication_method,authenticated_at,mfa_revision FROM iam.sessions WHERE tenant_id=$1 AND id=$2`, []any{account, completed.Session.ID}, "MFA session has no completed challenge"},
+		{`INSERT INTO iam.sessions(tenant_id,id,principal_id,verification_digest,status,resource_version,issued_at,expires_at,credential_version,authentication_method,authenticated_at,mfa_revision,last_activity_at,idle_timeout_seconds)
+		 SELECT tenant_id,'mfa-forged-session',principal_id,verification_digest,'ACTIVE',1,issued_at,expires_at,credential_version,authentication_method,authenticated_at,mfa_revision,last_activity_at,idle_timeout_seconds FROM iam.sessions WHERE tenant_id=$1 AND id=$2`, []any{account, completed.Session.ID}, "MFA session has no completed challenge"},
 	} {
 		_, err := admin.Exec(ctx, attack.sql, attack.args...)
 		var failure *pgconn.PgError
@@ -5479,7 +5499,7 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 		}
 	}
 	forcedCases := []string{"complete", "reset", "disable-user"}
-	if mode == "step-up" || mode == "security-settings" || strings.HasPrefix(mode, "removal") || strings.HasPrefix(mode, "replacement") {
+	if mode == "step-up" || securitySettingsMode || strings.HasPrefix(mode, "removal") || strings.HasPrefix(mode, "replacement") {
 		forcedCases = nil // Existing forced-login cases keep their original gate.
 	}
 	for _, securityChange := range forcedCases {
@@ -5934,12 +5954,12 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 			{"settings_notice_completion", "DROP TRIGGER verify_security_settings_change ON iam.security_notifications"},
 			{"settings_history_completion", "DROP TRIGGER verify_security_settings_change ON iam.account_security_settings_changes"},
 			{"settings_private_history", "GRANT EXECUTE ON FUNCTION iam.assert_security_settings_change(text,text,text) TO matrix_iam_api"},
-			{"settings_worker_mutation", "GRANT EXECUTE ON FUNCTION iam.update_account_security_settings(text,text,text,text,text,text,bigint,boolean,jsonb,jsonb) TO matrix_iam_worker"},
+			{"settings_worker_mutation", "GRANT EXECUTE ON FUNCTION iam.update_account_security_settings(text,text,text,text,text,text,bigint,boolean,jsonb,jsonb,jsonb) TO matrix_iam_worker"},
 			{"password_settings_nullable", "ALTER TABLE iam.accounts ALTER COLUMN password_settings DROP NOT NULL"},
 			{"password_settings_default", "ALTER TABLE iam.accounts ALTER COLUMN password_settings SET DEFAULT '{}'::jsonb"},
 			{"password_settings_history_default", "ALTER TABLE iam.account_security_settings_changes ALTER COLUMN password_settings SET DEFAULT '{}'::jsonb"},
 			{"password_settings_proof_default", "ALTER TABLE iam.step_ups ALTER COLUMN password_settings SET DEFAULT '{}'::jsonb"},
-			{"password_settings_history_values", "ALTER TABLE iam.account_security_settings_changes DROP CONSTRAINT account_security_settings_changes_password"},
+			{"password_settings_history_values", "ALTER TABLE iam.account_security_settings_changes DROP CONSTRAINT account_security_settings_changes_values"},
 			{"password_settings_private_projection", "GRANT EXECUTE ON FUNCTION iam.user_password_settings(text,text) TO matrix_iam_api"},
 			{"password_expiry_private_projection", "GRANT EXECUTE ON FUNCTION iam.password_expiry_state(text,text,timestamptz) TO matrix_iam_api"},
 			{"password_expiry_missing_projection", "DROP FUNCTION iam.password_expiry_state(text,text,timestamptz)"},
@@ -5956,6 +5976,14 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 			{"reset_terminal_scope", "ALTER TABLE iam.authentication_challenges DROP CONSTRAINT challenge_password_reset_terminal"},
 			{"password_settings_requirements_projection", "GRANT EXECUTE ON FUNCTION iam.user_password_requirements(text,text) TO matrix_iam_api"},
 			{"password_settings_worker_preparation", "GRANT EXECUTE ON FUNCTION iam.read_user_creation_password_settings(text,text,text) TO matrix_iam_worker"},
+			{"settings_session_account_nullable", "ALTER TABLE iam.accounts ALTER COLUMN session_settings DROP NOT NULL"},
+			{"settings_session_account_default", "ALTER TABLE iam.accounts ALTER COLUMN session_settings SET DEFAULT '{\"idleTimeoutMinutes\":60}'::jsonb"},
+			{"settings_session_history_required", "ALTER TABLE iam.account_security_settings_changes ALTER COLUMN session_settings SET NOT NULL"},
+			{"settings_session_activity_constraint", "ALTER TABLE iam.sessions DROP CONSTRAINT sessions_activity_valid"},
+			{"settings_session_activity_trigger", "ALTER TABLE iam.sessions DISABLE TRIGGER guard_activity"},
+			{"settings_session_touch_worker", "GRANT EXECUTE ON FUNCTION iam.touch_session(text,text,text) TO matrix_iam_worker"},
+			{"settings_session_touch_invoker", "ALTER FUNCTION iam.touch_session(text,text,text) SECURITY INVOKER"},
+			{"settings_session_effective_public", "GRANT EXECUTE ON FUNCTION iam.user_session_idle_seconds(text,text) TO matrix_iam_api"},
 			{"requirements_session_worker", "GRANT EXECUTE ON FUNCTION iam.read_password_requirements(text,text,text) TO matrix_iam_worker"},
 			{"requirements_challenge_invoker", "ALTER FUNCTION iam.read_challenge_password_requirements(text,text,text) SECURITY INVOKER"},
 			{"requirements_challenge_grant_option", "GRANT EXECUTE ON FUNCTION iam.read_challenge_password_requirements(text,text,text) TO matrix_iam_api WITH GRANT OPTION"},
@@ -5989,7 +6017,7 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 		recoveryCases = []string{"exhaustion"}
 	} else if mode == "step-up" {
 		recoveryCases = []string{"regenerate", "regenerate-competing-proofs", "regenerate-other-session", "regenerate-budgets", "regenerate-logout", "regenerate-password", "regenerate-reset", "regenerate-disable-user", "regenerate-lock-expiry"}
-	} else if mode == "security-settings" {
+	} else if securitySettingsMode {
 		recoveryCases = []string{"regenerate-settings-intent"}
 	} else if mode == "replacement" {
 		recoveryCases = []string{"replace-start", "replace-confirm", "replace-rollback"}
@@ -6187,7 +6215,7 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 					request.Operation = iamv1.StepUpUpdateSecuritySettings
 					request.SecuritySettings = &iamv1.SecuritySettingsUpdateIntent{Password: &iamv1.AccountPasswordSettings{ExpiryMode: iamv1.PasswordExpiryChange, MinimumLength: 24,
 						RequireLowercase: true, RequireUppercase: true, RequireDigit: true, RequireSymbol: true, HistoryCount: 24, MaxAgeDays: 1},
-						ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}}
+						Session: &iamv1.AccountSessionSettings{IdleTimeoutMinutes: sessionIdleMinutes}, ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}}
 				}
 				startBytes, err := json.Marshal(request)
 				if err != nil {
@@ -6214,18 +6242,13 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 				callMFA(secondHandler, http.MethodPost, "/v1/auth/step-up", currentSession.Credential, wrongBytes, http.StatusConflict, nil)
 				if recoveryCase == "regenerate-settings-intent" {
 					for _, altered := range []iamv1.SecuritySettingsUpdateIntent{
-						{ExpectedResourceVersion: 2, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}, Password: &iamv1.AccountPasswordSettings{ExpiryMode: iamv1.PasswordExpiryChange, MinimumLength: 15, HistoryCount: 1}},
-						{ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: false}, Password: &iamv1.AccountPasswordSettings{ExpiryMode: iamv1.PasswordExpiryChange, MinimumLength: 15, HistoryCount: 1}},
+						{ExpectedResourceVersion: 2, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}, Password: request.SecuritySettings.Password, Session: request.SecuritySettings.Session},
+						{ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: false}, Password: request.SecuritySettings.Password, Session: request.SecuritySettings.Session},
+						{ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}, Password: request.SecuritySettings.Password, Session: &iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30}},
 					} {
 						wrong := request
 						wrong.SecuritySettings = &altered
 						body, err := json.Marshal(wrong)
-						if err != nil {
-							t.Fatal(err)
-						}
-						callMFA(secondHandler, http.MethodPost, "/v1/auth/step-up", currentSession.Credential, body, http.StatusConflict, nil)
-						wrong.RequestID = "settings-new-conflict"
-						body, err = json.Marshal(wrong)
 						if err != nil {
 							t.Fatal(err)
 						}
@@ -6237,7 +6260,7 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 						t.Fatal("rejected settings variant changed original intent")
 					}
 					// Even the storage owner cannot mutate an already issued intent.
-					for _, update := range []string{"required_for_users=false", "expected_settings_version=2", "operation='RECOVERY_CODES_REGENERATE',expected_settings_version=NULL,required_for_users=NULL"} {
+					for _, update := range []string{"required_for_users=false", "expected_settings_version=2", "session_settings='{\"idleTimeoutMinutes\":30}'::jsonb", "operation='RECOVERY_CODES_REGENERATE',expected_settings_version=NULL,required_for_users=NULL,password_settings=NULL,session_settings=NULL"} {
 						tx, err := admin.Begin(ctx)
 						if err != nil {
 							t.Fatal(err)
@@ -6966,7 +6989,8 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 						}
 						settingsProof, err := service.StartStepUp(ctx, operatorLogin.Credential, iamv1.StartStepUpRequest{
 							RequestID: "remove-require-mfa", Operation: iamv1.StepUpUpdateSecuritySettings, ExpectedFactorRevision: 2,
-							SecuritySettings: &iamv1.SecuritySettingsUpdateIntent{Password: &iamv1.AccountPasswordSettings{ExpiryMode: iamv1.PasswordExpiryChange, MinimumLength: 15, HistoryCount: 1}, ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}}})
+							SecuritySettings: &iamv1.SecuritySettingsUpdateIntent{Password: &iamv1.AccountPasswordSettings{ExpiryMode: iamv1.PasswordExpiryChange, MinimumLength: 15, HistoryCount: 1},
+								Session: &iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30}, ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}}})
 						if err != nil {
 							t.Fatal("prepare real MFA requirement", err)
 						}
@@ -6977,7 +7001,8 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 							t.Fatal("prove real MFA requirement", err)
 						}
 						if _, err := service.UpdateAccountSecuritySettings(ctx, operatorLogin.Credential, iamv1.UpdateAccountSecuritySettingsRequest{Password: iamv1.AccountPasswordSettings{ExpiryMode: iamv1.PasswordExpiryChange, MinimumLength: 15, HistoryCount: 1},
-							RequestID: settingsProof.RequestID, StepUpID: settingsProof.ID, ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}}); err != nil {
+							Session: iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30}, RequestID: settingsProof.RequestID, StepUpID: settingsProof.ID,
+							ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}}); err != nil {
 							t.Fatal("commit real MFA requirement", err)
 						}
 						callMFA(firstHandler, http.MethodGet, path, fresh.Credential, nil, http.StatusUnauthorized, nil)
@@ -8114,9 +8139,10 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 						var actual bool
 						if err := admin.QueryRow(ctx, `SELECT c.password_changed_at+interval '86400 seconds',
 								s.expires_at=c.password_changed_at+interval '86400 seconds' AND s.authentication_method=$3
+								AND s.idle_timeout_seconds=$4 AND s.last_activity_at=s.issued_at
 								AND s.expires_at>s.issued_at AND s.expires_at<clock_timestamp()+interval '24 hours'
 								FROM iam.user_credentials c JOIN iam.sessions s ON (s.tenant_id,s.principal_id)=(c.tenant_id,c.principal_id)
-								WHERE s.tenant_id=$1 AND s.id=$2`, session.AccountID, session.ID, method).Scan(&deadline, &actual); err != nil || !actual ||
+								WHERE s.tenant_id=$1 AND s.id=$2`, session.AccountID, session.ID, method, sessionIdleMinutes*60).Scan(&deadline, &actual); err != nil || !actual ||
 							!session.ExpiresAt.Equal(deadline) || !session.ExpiresAt.Before(session.IssuedAt.Add(24*time.Hour)) {
 							t.Fatal("actual issued Session did not preserve the shorter password deadline", err)
 						}
@@ -8180,8 +8206,8 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 					if ownRules.Source != "ACCOUNT" || ownRules.SettingsVersion != 1 || ownRules.Password != authority.DefaultPasswordSettings() || stateDigest() != beforeRules {
 						t.Fatal("self requirements need management permission or change authentication state")
 					}
-					update := iamv1.UpdateAccountSecuritySettingsRequest{Password: *request.SecuritySettings.Password, RequestID: request.RequestID, StepUpID: proof.ID,
-						ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}}
+					update := iamv1.UpdateAccountSecuritySettingsRequest{Password: *request.SecuritySettings.Password, Session: *request.SecuritySettings.Session,
+						RequestID: request.RequestID, StepUpID: proof.ID, ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}}
 					updateBytes := mustIAMJSON(t, update)
 					// A real operation-bound proof is not an authorization grant.
 					callMFA(firstHandler, http.MethodPut, settingsPath, currentSession.Credential, updateBytes, http.StatusForbidden, nil)
@@ -8348,7 +8374,8 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 					var applied iamv1.UpdateAccountSecuritySettingsResponse
 					callMFA(firstHandler, http.MethodPut, settingsPath, currentSession.Credential, updateBytes, http.StatusOK, &applied)
 					if applied.Outcome != "APPLIED" || applied.Change.Settings.ResourceVersion != 2 || !applied.Change.Settings.MFA.RequiredForUsers || !applied.Change.CallerSessionEnded ||
-						applied.Change.Settings.Password == nil || *applied.Change.Settings.Password != update.Password {
+						applied.Change.Settings.Password == nil || *applied.Change.Settings.Password != update.Password ||
+						applied.Change.Settings.Session == nil || *applied.Change.Settings.Session != update.Session {
 						t.Fatal("settings mutation did not close original qualification")
 					}
 					for _, credential := range []iamv1.Secret{currentSession.Credential, completed.Credential, weakSession.Credential} {
@@ -8554,7 +8581,8 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 					variant.MFA.RequiredForUsers = false
 					callMFA(secondHandler, http.MethodPut, settingsPath, qualified.Credential, mustIAMJSON(t, variant), http.StatusConflict, nil)
 					lowerIntent := iamv1.StartStepUpRequest{RequestID: "settings-loosen", Operation: iamv1.StepUpUpdateSecuritySettings, ExpectedFactorRevision: 2,
-						SecuritySettings: &iamv1.SecuritySettingsUpdateIntent{Password: request.SecuritySettings.Password, ExpectedResourceVersion: 2, MFA: iamv1.AccountMFASettings{RequiredForUsers: false}}}
+						SecuritySettings: &iamv1.SecuritySettingsUpdateIntent{Password: request.SecuritySettings.Password, Session: request.SecuritySettings.Session,
+							ExpectedResourceVersion: 2, MFA: iamv1.AccountMFASettings{RequiredForUsers: false}}}
 					var lowerProof iamv1.StepUp
 					callMFA(firstHandler, http.MethodPost, "/v1/auth/step-up", qualified.Credential, mustIAMJSON(t, lowerIntent), http.StatusOK, &lowerProof)
 					body, err = iamv1.EncodeVerifyStepUpRequest(iamv1.VerifyStepUpRequest{RequestID: "settings-loosen-proof", Password: current, Code: freshTOTP()})
@@ -8584,7 +8612,8 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 					}{
 						{firstHandler, qualified.Credential, lowerProof}, {secondHandler, firstSession.Credential, otherProof},
 					} {
-						encoded := mustIAMJSON(t, iamv1.UpdateAccountSecuritySettingsRequest{Password: *entry.proof.SecuritySettings.Password, RequestID: entry.proof.RequestID, StepUpID: entry.proof.ID,
+						encoded := mustIAMJSON(t, iamv1.UpdateAccountSecuritySettingsRequest{Password: *entry.proof.SecuritySettings.Password,
+							Session: *entry.proof.SecuritySettings.Session, RequestID: entry.proof.RequestID, StepUpID: entry.proof.ID,
 							ExpectedResourceVersion: 2, MFA: lowerIntent.SecuritySettings.MFA})
 						go func() {
 							<-start
@@ -8615,7 +8644,8 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 					if wins != 1 || rejects != 1 {
 						t.Fatal("competing settings did not have exactly one winner")
 					}
-					if lowered.Outcome != "APPLIED" || lowered.Change.Settings.ResourceVersion != 3 || lowered.Change.Settings.MFA.RequiredForUsers || !lowered.Change.CallerSessionEnded {
+					if lowered.Outcome != "APPLIED" || lowered.Change.Settings.ResourceVersion != 3 || lowered.Change.Settings.MFA.RequiredForUsers || !lowered.Change.CallerSessionEnded ||
+						lowered.Change.Settings.Session == nil || *lowered.Change.Settings.Session != update.Session {
 						t.Fatal("loosening reused old qualification")
 					}
 					for _, credential := range []iamv1.Secret{qualified.Credential, currentSession.Credential, completed.Credential, weakSession.Credential, firstSession.Credential} {
@@ -8632,10 +8662,18 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 						t.Fatal("fresh unbound password login did not follow current settings", err)
 					}
 					assertPasswordDeadline(weakNew.Session, "PASSWORD")
+					platformNew, err := service.Login(ctx, iamv1.LoginRequest{LoginName: ruleOperatorName + "@" + string(account), Password: current, RequestID: "settings-platform-idle-login"})
+					if err != nil || platformNew.Outcome != iamv1.LoginAuthenticated || !platformNew.Credential.Present() {
+						t.Fatal("platform attachment could not obtain a fresh capped Session", err)
+					}
+					var platformIdle int
+					if err := admin.QueryRow(ctx, `SELECT idle_timeout_seconds FROM iam.sessions WHERE tenant_id=$1 AND id=$2`, account, platformNew.Session.ID).Scan(&platformIdle); err != nil || platformIdle != min(sessionIdleMinutes, 30)*60 {
+						t.Fatal("platform authority escaped the protected idle ceiling", err)
+					}
 					applyIAMSchema(t, ctx, admin)
 					applyIAMSchema(t, ctx, admin)
 					if err := admin.QueryRow(ctx, `SELECT
-						(SELECT security_settings_version=3 AND NOT mfa_required_for_users FROM iam.accounts WHERE id=$1)
+						(SELECT security_settings_version=3 AND NOT mfa_required_for_users AND session_settings=$7::jsonb FROM iam.accounts WHERE id=$1)
 						AND (SELECT count(*)=2 FROM iam.account_security_settings_changes WHERE tenant_id=$1)
 						AND (SELECT count(*)=3 AND count(*) FILTER(WHERE state='CONSUMED')=2 AND count(*) FILTER(WHERE state='PROVED' AND consumed_at IS NULL)=1
 							FROM iam.step_ups WHERE tenant_id=$1 AND operation='SECURITY_SETTINGS_UPDATE' AND id IN ($3,$4,$5))
@@ -8646,8 +8684,59 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 							WHERE n.tenant_id=$1 AND n.kind='SECURITY_SETTINGS_CHANGED' AND n.event_id=c.event_id
 								AND n.state=CASE WHEN $6::boolean AND c.expected_version=1 THEN 'ACCEPTED' ELSE 'PENDING' END
 								AND n.contact_revision=1 AND n.email=v.email AND v.state='VERIFIED')
-						AND (SELECT security_settings_version=3 AND authentication_method='PASSWORD' FROM iam.sessions WHERE tenant_id=$1 AND id=$2)`, member.AccountID, weakNew.Session.ID, proof.ID, lowerProof.ID, otherProof.ID, realMail).Scan(&intact); err != nil || !intact {
+						AND (SELECT security_settings_version=3 AND authentication_method='PASSWORD' AND idle_timeout_seconds=$8
+							AND last_activity_at=issued_at FROM iam.sessions WHERE tenant_id=$1 AND id=$2)`, member.AccountID, weakNew.Session.ID,
+						proof.ID, lowerProof.ID, otherProof.ID, realMail, string(mustIAMJSON(t, update.Session)), sessionIdleMinutes*60).Scan(&intact); err != nil || !intact {
 						t.Fatal("settings replay changed qualification, immutable completion or facts", err)
+					}
+					if mode == "session-idle-natural" {
+						var originalActivity, idleExpiresAt, absoluteExpiresAt time.Time
+						var idleSeconds int
+						if err := admin.QueryRow(ctx, `SELECT last_activity_at,
+							last_activity_at+idle_timeout_seconds*interval '1 second',expires_at,idle_timeout_seconds
+							FROM iam.sessions WHERE tenant_id=$1 AND id=$2`, member.AccountID, weakNew.Session.ID).
+							Scan(&originalActivity, &idleExpiresAt, &absoluteExpiresAt, &idleSeconds); err != nil || idleSeconds != 5*60 ||
+							!originalActivity.Equal(weakNew.Session.IssuedAt) || !absoluteExpiresAt.Equal(weakNew.Session.ExpiresAt) {
+							t.Fatal("minimum idle Session was not sealed from the committed Account setting", err)
+						}
+						authorities := []http.Handler{firstHandler, secondHandler}
+						for observation := 0; ; observation++ {
+							var remaining float64
+							if err := admin.QueryRow(ctx, `SELECT extract(epoch FROM ($1::timestamptz-clock_timestamp()))`, idleExpiresAt).Scan(&remaining); err != nil {
+								t.Fatal("observe natural idle deadline", err)
+							}
+							if remaining <= 0 {
+								break
+							}
+							if remaining > 3 {
+								callMFA(authorities[observation%len(authorities)], http.MethodGet, "/v1/auth/me", weakNew.Credential, nil, http.StatusOK, nil)
+								var retained time.Time
+								if err := admin.QueryRow(ctx, `SELECT last_activity_at FROM iam.sessions WHERE tenant_id=$1 AND id=$2`, member.AccountID, weakNew.Session.ID).Scan(&retained); err != nil || !retained.Equal(originalActivity) {
+									t.Fatal("background-style authenticated traffic renewed the minimum idle Session", err)
+								}
+							}
+							wait := 15 * time.Second
+							if remaining < wait.Seconds() {
+								wait = time.Duration(remaining*float64(time.Second)) + 100*time.Millisecond
+							}
+							select {
+							case <-time.After(wait):
+							case <-ctx.Done():
+								t.Fatal("minimum natural idle deadline exceeded its dedicated gate budget")
+							}
+						}
+						for _, handler := range authorities {
+							callMFA(handler, http.MethodGet, "/v1/auth/me", weakNew.Credential, nil, http.StatusUnauthorized, nil)
+							callMFA(handler, http.MethodPost, "/v1/auth/sessions/current:touch", weakNew.Credential, nil, http.StatusUnauthorized, nil)
+						}
+						var retained bool
+						if err := admin.QueryRow(ctx, `SELECT status='ACTIVE' AND last_activity_at=$3 AND idle_timeout_seconds=300
+							AND expires_at=$4 FROM iam.sessions WHERE tenant_id=$1 AND id=$2`, member.AccountID, weakNew.Session.ID,
+							originalActivity, absoluteExpiresAt).Scan(&retained); err != nil || !retained {
+							t.Fatal("late authentication or touch revived the naturally idle Session", err)
+						}
+						t.Log("real PostgreSQL clock crossed the supported five-minute idle deadline; ordinary traffic never renewed it and both authorities rejected late authentication/touch")
+						return
 					}
 					callMFA(secondHandler, http.MethodGet, "/v1/auth/me", weakNew.Credential, nil, http.StatusOK, nil)
 					callMFA(firstHandler, http.MethodGet, requirementsPath, weakNew.Credential, nil, http.StatusOK, &ownRules)
@@ -11542,6 +11631,192 @@ func TestIAMOwnSessionPostgres(t *testing.T) {
 	verify()
 }
 
+// This gate proves the explicit foreground activity contract against two
+// independent IAM authorities. It deliberately waits for the real one-minute
+// write coalescing boundary; the separate retained gate owns the five-minute
+// natural idle expiry observation.
+func TestIAMSessionIdlePostgres(t *testing.T) {
+	const environment = "MATRIX_IAM_SESSION_IDLE_POSTGRES_TEST_DSN"
+	dsn := os.Getenv(environment)
+	if dsn == "" {
+		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", environment)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	defer cancel()
+	config, err := pgx.ParseConfig(dsn)
+	if err != nil || !strings.HasPrefix(config.Database, "matrix_iam_session_idle_") {
+		t.Fatal("session-idle gate requires its own quiet disposable database")
+	}
+	config.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+	database, err := pgx.ConnectConfig(ctx, config)
+	if err != nil {
+		t.Fatal("connect session-idle database")
+	}
+	defer database.Close(context.Background())
+	assertIAMPostgres18(t, ctx, database)
+	assertCleanIAMSchema(t, ctx, database)
+	applyIAMSchema(t, ctx, database)
+	createIAMHTTPRole(t, ctx, database)
+	trace := &iamTransactionFailureTrace{}
+	first := localRecoveryWorkflow(t, ctx, dsn, iamHTTPTestRole, trace)
+	document := iamHTTPBootstrap(t)
+	if _, err := bootstrapIAMWithTOTP(t, ctx, first, document); err != nil {
+		t.Fatal(err)
+	}
+	var handlers []http.Handler
+	for index := range 2 {
+		workflow := first
+		if index > 0 {
+			poolConfig, err := pgxpool.ParseConfig(dsn)
+			if err != nil {
+				t.Fatal(err)
+			}
+			poolConfig.ConnConfig.User, poolConfig.ConnConfig.Password = iamHTTPTestRole, iamHTTPTestPassword
+			poolConfig.ConnConfig.Tracer, poolConfig.MaxConns = trace, 2
+			pool, err := pgxpool.NewWithConfig(ctx, poolConfig)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(pool.Close)
+			repository, err := iampostgres.NewRepository(pool)
+			if err != nil {
+				t.Fatal(err)
+			}
+			workflow, err = newIAMAuthorityWithTOTP(t, repository, identityaccess.Config{CursorKey: bytes.Repeat([]byte{0x39}, 32)})
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		endpoint, err := iamhttp.NewHandler(workflow, iamhttp.Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		handlers = append(handlers, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requestContext, cancelRequest := context.WithCancel(r.Context())
+			defer cancelRequest()
+			stop := context.AfterFunc(ctx, cancelRequest)
+			defer stop()
+			endpoint.ServeHTTP(w, r.WithContext(requestContext))
+		}))
+	}
+	root := localRecoveryLogin(t, handlers[0], "admin", adminPassword, true)
+	root = localRecoveryChangePassword(t, handlers[0], root, adminPassword, changedAdminPassword)
+	// Start from a fresh ordinary login so the write-coalescing observation is
+	// not accidentally satisfied by bootstrap/password work.
+	root = localRecoveryLogin(t, handlers[0], "admin", changedAdminPassword, false)
+	var directory iamv1.SessionList
+	response := performIAMRequest(handlers[0], http.MethodGet, "/v1/auth/sessions", root, nil)
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &directory) != nil || iamv1.ValidateSessionList(directory) != nil {
+		t.Fatal("read fresh session-idle fixture")
+	}
+	var current iamv1.Session
+	for _, session := range directory.Items {
+		if session.ID == directory.CurrentSessionID {
+			current = session
+		}
+	}
+	if current.ID == "" {
+		t.Fatal("fresh current Session is absent")
+	}
+	var originalActivity time.Time
+	var originalIdle int
+	if err := database.QueryRow(ctx, `SELECT last_activity_at,idle_timeout_seconds FROM iam.sessions WHERE tenant_id=$1 AND id=$2`,
+		current.AccountID, current.ID).Scan(&originalActivity, &originalIdle); err != nil || originalIdle != 30*60 || !originalActivity.Equal(current.IssuedAt) {
+		t.Fatal("protected root Session did not seal the default/capped idle authority", err)
+	}
+	touch := func(replica int, want int) iamv1.SessionActivity {
+		t.Helper()
+		result := performIAMRequest(handlers[replica], http.MethodPost, "/v1/auth/sessions/current:touch", root, nil)
+		if result.Code != want {
+			t.Fatalf("touch current Session status=%d want=%d body=%s", result.Code, want, result.Body.String())
+		}
+		if want != http.StatusOK {
+			return iamv1.SessionActivity{}
+		}
+		var activity iamv1.SessionActivity
+		if json.Unmarshal(result.Body.Bytes(), &activity) != nil || iamv1.ValidateSessionActivity(activity) != nil ||
+			activity.SessionID != current.ID || activity.AccountID != current.AccountID || activity.UserID != current.PrincipalID ||
+			!activity.AbsoluteExpiresAt.Equal(current.ExpiresAt) || activity.IdleExpiresAt.Sub(activity.LastActivityAt) != 30*time.Minute ||
+			result.Header().Get("Cache-Control") != "no-store" {
+			t.Fatal("invalid nonsecret session activity response")
+		}
+		return activity
+	}
+	immediate := touch(1, http.StatusOK)
+	if !immediate.LastActivityAt.Equal(originalActivity) {
+		t.Fatal("immediate explicit interaction amplified an activity write")
+	}
+	if result := performIAMRequest(handlers[1], http.MethodGet, "/v1/auth/me", root, nil); result.Code != http.StatusOK {
+		t.Fatal("fresh Session was not valid on the other authority")
+	}
+	var afterRead time.Time
+	if err := database.QueryRow(ctx, `SELECT last_activity_at FROM iam.sessions WHERE tenant_id=$1 AND id=$2`, current.AccountID, current.ID).Scan(&afterRead); err != nil || !afterRead.Equal(originalActivity) {
+		t.Fatal("ordinary authenticated request renewed idle activity", err)
+	}
+	// Real ordinary traffic spans the coalescing threshold and still must not
+	// renew the Session. Only the following explicit foreground touch may write.
+	for {
+		var ready bool
+		if err := database.QueryRow(ctx, `SELECT clock_timestamp()>=$1::timestamptz+interval '61 seconds'`, originalActivity).Scan(&ready); err != nil {
+			t.Fatal(err)
+		}
+		if ready {
+			break
+		}
+		if result := performIAMRequest(handlers[0], http.MethodGet, "/v1/auth/me", root, nil); result.Code != http.StatusOK {
+			t.Fatal("ordinary activity changed authentication while waiting")
+		}
+		select {
+		case <-time.After(2 * time.Second):
+		case <-ctx.Done():
+			t.Fatal("session write-coalescing boundary exceeded its gate budget")
+		}
+	}
+	if err := database.QueryRow(ctx, `SELECT last_activity_at FROM iam.sessions WHERE tenant_id=$1 AND id=$2`, current.AccountID, current.ID).Scan(&afterRead); err != nil || !afterRead.Equal(originalActivity) {
+		t.Fatal("background-style traffic renewed idle activity", err)
+	}
+	renewed := touch(1, http.StatusOK)
+	if !renewed.LastActivityAt.After(originalActivity.Add(60 * time.Second)) {
+		t.Fatal("explicit foreground interaction did not advance the real waterline")
+	}
+	var stored time.Time
+	if err := database.QueryRow(ctx, `SELECT last_activity_at FROM iam.sessions WHERE tenant_id=$1 AND id=$2`, current.AccountID, current.ID).Scan(&stored); err != nil || !stored.Equal(renewed.LastActivityAt) {
+		t.Fatal("activity response did not describe the committed waterline", err)
+	}
+	coalesced := touch(0, http.StatusOK)
+	if !coalesced.LastActivityAt.Equal(renewed.LastActivityAt) {
+		t.Fatal("cross-replica immediate touch bypassed write coalescing")
+	}
+	// Table access and internal writers remain unavailable even though the API
+	// role can invoke the single purpose-limited function.
+	for _, attack := range []struct{ role, sql, code string }{
+		{"matrix_iam_api", `UPDATE iam.sessions SET last_activity_at=clock_timestamp() WHERE id='` + string(current.ID) + `'`, "42501"},
+		{"matrix_iam_worker", `SELECT * FROM iam.touch_session('` + string(current.AccountID) + `','` + string(current.PrincipalID) + `','` + string(current.ID) + `')`, "42501"},
+	} {
+		tx, err := database.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, "SET LOCAL ROLE "+attack.role); err != nil {
+			t.Fatal(err)
+		}
+		_, rejected := tx.Exec(ctx, attack.sql)
+		_ = tx.Rollback(ctx)
+		var failure *pgconn.PgError
+		if !errors.As(rejected, &failure) || failure.Code != attack.code {
+			t.Fatal("session activity SQL boundary was not closed", rejected)
+		}
+	}
+	applyIAMSchema(t, ctx, database)
+	applyIAMSchema(t, ctx, database)
+	if replayed := touch(0, http.StatusOK); !replayed.LastActivityAt.Equal(renewed.LastActivityAt) || replayed.AbsoluteExpiresAt != renewed.AbsoluteExpiresAt {
+		t.Fatal("schema replay changed or reissued Session activity")
+	}
+	if trace.deadlock.Load() != 0 {
+		t.Fatal("session activity gate hid a database deadlock")
+	}
+}
+
 func TestIAMOwnSessionExpiryPostgres(t *testing.T) {
 	const environment = "MATRIX_IAM_OWN_SESSION_EXPIRY_POSTGRES_TEST_DSN"
 	dsn := os.Getenv(environment)
@@ -12987,17 +13262,21 @@ func proveManagementSessionReferences(t *testing.T, ctx context.Context, handler
 		t.Fatal("revoke attachment reference fixture")
 	}
 	// Explicitly synthetic retained/corrupt session rows, not a claimed old
-	// executable upgrade. Copy the real authentication facts so each negative
-	// reference is rejected for its expired/mismatched credential qualification,
-	// not because an unrelated missing MFA fact masks that boundary. No bearer
-	// or Session index is issued for these rows.
+	// executable upgrade. Copy the real authentication and activity facts so
+	// each negative reference is rejected for its expired/mismatched credential
+	// qualification, not because an unrelated missing MFA/activity fact masks
+	// that boundary. The expired row remains idle-eligible while its absolute
+	// deadline alone has passed. No bearer or Session index is issued.
 	for _, variant := range []string{"expired", "stale-generation", "null-generation"} {
 		if _, err := database.Exec(ctx, `INSERT INTO iam.sessions(tenant_id,id,principal_id,verification_digest,status,resource_version,
-			issued_at,expires_at,credential_version,authentication_method,authenticated_at,mfa_revision,security_settings_version)
+			issued_at,expires_at,credential_version,authentication_method,authenticated_at,mfa_revision,security_settings_version,
+			last_activity_at,idle_timeout_seconds)
 			SELECT tenant_id,$2,principal_id,verification_digest,'ACTIVE',1,
-			transaction_timestamp()-interval '2 hours',CASE WHEN $3='expired' THEN transaction_timestamp()-interval '1 hour'
+			transaction_timestamp()-interval '2 hours',CASE WHEN $3='expired' THEN transaction_timestamp()-interval '1 second'
 			ELSE expires_at END,CASE WHEN $3='null-generation' THEN NULL WHEN $3='stale-generation' THEN credential_version-1
-			ELSE credential_version END,authentication_method,authenticated_at,mfa_revision,security_settings_version
+			ELSE credential_version END,authentication_method,authenticated_at,mfa_revision,security_settings_version,
+			CASE WHEN $3='expired' THEN transaction_timestamp()-interval '4 minutes' ELSE last_activity_at END,
+			CASE WHEN $3='expired' THEN 300 ELSE idle_timeout_seconds END
 			FROM iam.sessions WHERE tenant_id=$1 AND id=$4`,
 			member.AccountID, "attachment-reference-"+variant, variant, currentID); err != nil {
 			var failure *pgconn.PgError

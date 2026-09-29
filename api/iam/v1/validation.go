@@ -657,6 +657,13 @@ func ValidateAccountSecuritySettings(value AccountSecuritySettings) error {
 	return validateAccountSecuritySettings(value, false)
 }
 
+func ValidateAccountSessionSettings(value AccountSessionSettings) error {
+	if value.IdleTimeoutMinutes < 5 || value.IdleTimeoutMinutes > 60 {
+		return errors.New("account session settings are invalid")
+	}
+	return nil
+}
+
 func validateAccountSecuritySettings(value AccountSecuritySettings, historical bool) error {
 	if value.APIVersion != APIVersion || value.Kind != "AccountSecuritySettings" {
 		return errors.New("account security settings type metadata is invalid")
@@ -666,6 +673,13 @@ func validateAccountSecuritySettings(value AccountSecuritySettings, historical b
 			return errors.New("current password settings are missing")
 		}
 	} else if err := validateAccountPasswordSettings(*value.Password, historical); err != nil {
+		return err
+	}
+	if value.Session == nil {
+		if !historical {
+			return errors.New("current session settings are missing")
+		}
+	} else if err := ValidateAccountSessionSettings(*value.Session); err != nil {
 		return err
 	}
 	return errors.Join(ValidateID("accountId", string(value.AccountID)), validatePositiveVersion(value.ResourceVersion), validateTime("updatedAt", value.UpdatedAt))
@@ -688,23 +702,44 @@ func validateSecuritySettingsUpdateIntent(value SecuritySettingsUpdateIntent, hi
 	} else if err := validateAccountPasswordSettings(*value.Password, historical); err != nil {
 		return err
 	}
+	if value.Session == nil {
+		if !historical {
+			return errors.New("session settings intent is missing")
+		}
+	} else if err := ValidateAccountSessionSettings(*value.Session); err != nil {
+		return err
+	}
 	return nil
 }
 
 func ValidateUpdateAccountSecuritySettingsRequest(value UpdateAccountSecuritySettingsRequest) error {
 	return errors.Join(ValidateID("requestId", value.RequestID), ValidateID("stepUpId", value.StepUpID),
-		ValidateSecuritySettingsUpdateIntent(SecuritySettingsUpdateIntent{ExpectedResourceVersion: value.ExpectedResourceVersion, MFA: value.MFA, Password: &value.Password}))
+		ValidateSecuritySettingsUpdateIntent(SecuritySettingsUpdateIntent{ExpectedResourceVersion: value.ExpectedResourceVersion, MFA: value.MFA, Password: &value.Password, Session: &value.Session}))
 }
 
 func ValidateAccountSecuritySettingsChange(value AccountSecuritySettingsChange) error {
 	if value.APIVersion != APIVersion || value.Kind != "AccountSecuritySettingsChange" ||
 		validateAccountSecuritySettings(value.Settings, true) != nil ||
-		validateSecuritySettingsUpdateIntent(SecuritySettingsUpdateIntent{ExpectedResourceVersion: value.ExpectedResourceVersion, MFA: value.Settings.MFA, Password: value.Settings.Password}, true) != nil ||
+		validateSecuritySettingsUpdateIntent(SecuritySettingsUpdateIntent{ExpectedResourceVersion: value.ExpectedResourceVersion, MFA: value.Settings.MFA, Password: value.Settings.Password, Session: value.Settings.Session}, true) != nil ||
 		value.Settings.ResourceVersion != value.ExpectedResourceVersion+1 ||
 		!value.CallerSessionEnded {
 		return errors.New("account security settings change is invalid")
 	}
 	return ValidateID("requestId", value.RequestID)
+}
+
+func ValidateSessionActivity(value SessionActivity) error {
+	if value.APIVersion != APIVersion || value.Kind != "SessionActivity" ||
+		ValidateID("sessionId", string(value.SessionID)) != nil || ValidateID("accountId", string(value.AccountID)) != nil ||
+		ValidateID("userId", string(value.UserID)) != nil || validateTime("lastActivityAt", value.LastActivityAt) != nil ||
+		validateTime("idleExpiresAt", value.IdleExpiresAt) != nil || validateTime("absoluteExpiresAt", value.AbsoluteExpiresAt) != nil {
+		return errors.New("session activity is invalid")
+	}
+	idle := value.IdleExpiresAt.Sub(value.LastActivityAt)
+	if idle < 5*time.Minute || idle > 60*time.Minute || idle%time.Minute != 0 || !value.AbsoluteExpiresAt.After(value.LastActivityAt) {
+		return errors.New("session activity deadline is invalid")
+	}
+	return nil
 }
 
 func ValidateUpdateAccountSecuritySettingsResponse(value UpdateAccountSecuritySettingsResponse) error {

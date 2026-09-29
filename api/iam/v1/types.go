@@ -274,6 +274,13 @@ type AccountMFASettings struct {
 	RequiredForUsers bool `json:"requiredForUsers"`
 }
 
+// AccountSessionSettings governs the maximum inactivity window sealed into a
+// newly issued login Session. It does not extend the Session's absolute
+// expiration and is not evidence of user presence or authentication strength.
+type AccountSessionSettings struct {
+	IdleTimeoutMinutes int `json:"idleTimeoutMinutes"`
+}
+
 type AccountSecuritySettings struct {
 	APIVersion      string             `json:"apiVersion"`
 	Kind            string             `json:"kind"`
@@ -282,8 +289,11 @@ type AccountSecuritySettings struct {
 	MFA             AccountMFASettings `json:"mfa"`
 	// Missing only in immutable completions from before password settings.
 	// Current settings must always contain the complete explicit value.
-	Password  *AccountPasswordSettings `json:"password,omitempty"`
-	UpdatedAt time.Time                `json:"updatedAt"`
+	Password *AccountPasswordSettings `json:"password,omitempty"`
+	// Missing only in immutable completions from before idle-session settings.
+	// Current settings must always contain the complete explicit value.
+	Session   *AccountSessionSettings `json:"session,omitempty"`
+	UpdatedAt time.Time               `json:"updatedAt"`
 }
 
 // SecuritySettingsUpdateIntent is the exact nonsecret target of a settings
@@ -293,6 +303,8 @@ type SecuritySettingsUpdateIntent struct {
 	MFA                     AccountMFASettings `json:"mfa"`
 	// Only a retained CONSUMED proof may lack the original password segment.
 	Password *AccountPasswordSettings `json:"password,omitempty"`
+	// Only a retained CONSUMED proof may lack the original session segment.
+	Session *AccountSessionSettings `json:"session,omitempty"`
 }
 
 type UpdateAccountSecuritySettingsRequest struct {
@@ -301,6 +313,7 @@ type UpdateAccountSecuritySettingsRequest struct {
 	ExpectedResourceVersion uint64                  `json:"expectedResourceVersion"`
 	MFA                     AccountMFASettings      `json:"mfa"`
 	Password                AccountPasswordSettings `json:"password"`
+	Session                 AccountSessionSettings  `json:"session"`
 }
 
 // This is an immutable historical completion. CallerSessionEnded describes
@@ -318,6 +331,20 @@ type AccountSecuritySettingsChange struct {
 type UpdateAccountSecuritySettingsResponse struct {
 	Outcome string                        `json:"outcome"`
 	Change  AccountSecuritySettingsChange `json:"change"`
+}
+
+// SessionActivity is the nonsecret server observation returned after an
+// explicit foreground interaction touches the possessed login Session. It is
+// not a bearer, an authorization permit, or a claim that a human is present.
+type SessionActivity struct {
+	APIVersion        string      `json:"apiVersion"`
+	Kind              string      `json:"kind"`
+	SessionID         SessionID   `json:"sessionId"`
+	AccountID         AccountID   `json:"accountId"`
+	UserID            PrincipalID `json:"userId"`
+	LastActivityAt    time.Time   `json:"lastActivityAt"`
+	IdleExpiresAt     time.Time   `json:"idleExpiresAt"`
+	AbsoluteExpiresAt time.Time   `json:"absoluteExpiresAt"`
 }
 
 // AuthenticatorState is a projection of the authenticated USER, not a

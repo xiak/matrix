@@ -116,6 +116,7 @@ type Workflow interface {
 	AuthenticatorRemovalByRequest(context.Context, iamv1.Secret, string) (iamv1.AuthenticatorRemoval, error)
 	Logout(context.Context, iamv1.Secret, iamv1.LogoutRequest) (iamv1.LogoutResponse, error)
 	ListOwnSessions(context.Context, iamv1.Secret, string) (iamv1.SessionList, error)
+	TouchCurrentSession(context.Context, iamv1.Secret) (iamv1.SessionActivity, error)
 	RevokeOwnSession(context.Context, iamv1.Secret, iamv1.SessionID, iamv1.RevokeSessionRequest) (iamv1.RevokeOwnSessionResponse, error)
 	RevokeOtherSessions(context.Context, iamv1.Secret, iamv1.RevokeSessionRequest) (iamv1.RevokeOtherSessionsResponse, error)
 	ChangePassword(context.Context, iamv1.Secret, iamv1.ChangePasswordRequest) (iamv1.ChangePasswordResponse, error)
@@ -204,6 +205,7 @@ func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 	routes.HandleFunc("/v1/account/security-settings/changes/", value.securitySettingsChange)
 	routes.HandleFunc("/v1/auth/logout", value.logout)
 	routes.HandleFunc("/v1/auth/sessions", value.listOwnSessions)
+	routes.HandleFunc("/v1/auth/sessions/current:touch", value.touchCurrentSession)
 	routes.HandleFunc("/v1/auth/sessions:revoke-others", value.revokeOtherSessions)
 	routes.HandleFunc("/v1/auth/sessions/", value.revokeOwnSession)
 	routes.HandleFunc("/v1/auth/password", value.changePassword)
@@ -802,6 +804,22 @@ func (value *handler) listOwnSessions(response http.ResponseWriter, request *htt
 		return
 	}
 	result, err := value.workflow.ListOwnSessions(request.Context(), credential, after)
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (value *handler) touchCurrentSession(response http.ResponseWriter, request *http.Request) {
+	if !value.requireMethod(response, request, http.MethodPost) || !rejectQueryAndBody(response, request) {
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.TouchCurrentSession(request.Context(), credential)
 	if err != nil {
 		value.writeError(response, request, err)
 		return

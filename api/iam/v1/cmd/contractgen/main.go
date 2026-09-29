@@ -258,6 +258,7 @@ func buildPaths() object {
 		)},
 		"/v1/auth/sessions": object{"get": readOperation("listOwnSessions", "Observe only the current user's valid login sessions; not devices or online activity", "SessionList", nil,
 			[]any{object{"name": "after", "in": "query", "required": false, "schema": pageCursorSchema(), "description": "Pass nextCursor unchanged. Bound to this actual login session, credential generation and installation; no account/user/current-session selectors."}})},
+		"/v1/auth/sessions/current:touch": object{"post": bodylessMutationOperation("touchCurrentSession", "Advance only the possessed login Session's server activity waterline after explicit foreground interaction; no body or selector", "SessionActivity", nil, nil)},
 		"/v1/auth/sessions/{sessionId}:revoke": object{"post": mutationOperation("revokeOwnSession", "End another login session of the current user; the current session must use logout", "RevokeSessionRequest", "RevokeOwnSessionResponse", "200", nil,
 			[]any{openapi31.PathIDParameter("sessionId")})},
 		"/v1/auth/sessions:revoke-others": object{"post": mutationOperation("revokeOtherSessions", "Atomically end the current user's other login sessions; exact replay preserves later logins", "RevokeSessionRequest", "RevokeOtherSessionsResponse", "200", nil, nil)},
@@ -351,6 +352,30 @@ func mutationOperation(
 		"operationId": operationID,
 		"summary":     summary,
 		"requestBody": openapi31.JSONRequestBody(requestSchema),
+		"responses":   responses,
+	}
+	if security != nil {
+		operation["security"] = security
+	}
+	if len(parameters) > 0 {
+		operation["parameters"] = parameters
+	}
+	return operation
+}
+
+// bodylessMutationOperation describes a state change whose complete authority
+// comes from the possessed credential and URL. It deliberately has no request
+// body: adding a nominal empty schema would make unexpected input look valid.
+func bodylessMutationOperation(
+	operationID, summary, responseSchema string,
+	security []any,
+	parameters []any,
+) object {
+	responses := openapi31.ProblemResponses("400", "401", "403", "500", "503")
+	responses["200"] = openapi31.JSONResponse("Command completed.", responseSchema)
+	operation := object{
+		"operationId": operationID,
+		"summary":     summary,
 		"responses":   responses,
 	}
 	if security != nil {
@@ -536,6 +561,7 @@ func structContracts() map[string]reflect.Type {
 		"InspectEnrollmentChallengeRequest":             openapi31.StructType[iamv1.InspectEnrollmentChallengeRequest](),
 		"StartChallengeTOTPEnrollmentRequest":           openapi31.StructType[iamv1.StartChallengeTOTPEnrollmentRequest](),
 		"AccountMFASettings":                            openapi31.StructType[iamv1.AccountMFASettings](),
+		"AccountSessionSettings":                        openapi31.StructType[iamv1.AccountSessionSettings](),
 		"AccountSecuritySettings":                       openapi31.StructType[iamv1.AccountSecuritySettings](),
 		"AccountPasswordSettings":                       openapi31.StructType[iamv1.AccountPasswordSettings](),
 		"PasswordRequirements":                          openapi31.StructType[iamv1.PasswordRequirements](),
@@ -544,6 +570,7 @@ func structContracts() map[string]reflect.Type {
 		"UpdateAccountSecuritySettingsRequest":          openapi31.StructType[iamv1.UpdateAccountSecuritySettingsRequest](),
 		"AccountSecuritySettingsChange":                 openapi31.StructType[iamv1.AccountSecuritySettingsChange](),
 		"UpdateAccountSecuritySettingsResponse":         openapi31.StructType[iamv1.UpdateAccountSecuritySettingsResponse](),
+		"SessionActivity":                               openapi31.StructType[iamv1.SessionActivity](),
 		"AuthenticatorState":                            openapi31.StructType[iamv1.AuthenticatorState](),
 		"TOTPEnrollment":                                openapi31.StructType[iamv1.TOTPEnrollment](),
 		"TOTPProvisioning":                              openapi31.StructType[iamv1.TOTPProvisioning](),
@@ -699,6 +726,10 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 		case "maxAgeDays":
 			return object{"type": "integer", "minimum": 0, "maximum": 365, "description": "Zero disables periodic expiry; otherwise elapsed 86400-second days, not local calendar days."}
 		}
+	}
+	if owner == "AccountSessionSettings" && jsonName == "idleTimeoutMinutes" {
+		return object{"type": "integer", "minimum": 5, "maximum": 60,
+			"description": "Whole minutes sealed into newly issued login Sessions; never extends their absolute expiration."}
 	}
 	if jsonName == "expectedResourceVersion" && (owner == "SecuritySettingsUpdateIntent" || owner == "UpdateAccountSecuritySettingsRequest" || owner == "AccountSecuritySettingsChange") {
 		return object{"type": "integer", "minimum": 1, "maximum": uint64(9007199254740990)}
@@ -1111,12 +1142,13 @@ func applySemanticOverlays(schemas object) {
 	}
 	for _, name := range []string{"AccountSecuritySettings", "SecuritySettingsUpdateIntent"} {
 		schema := schemas[name].(object)
-		schema["required"] = append(slices.Clone(schema["required"].([]string)), "password")
+		schema["required"] = append(slices.Clone(schema["required"].([]string)), "password", "session")
 	}
 	schemas["AccountMFASettings"].(object)["description"] = "Explicit ordinary USER MFA requirement, not factor state, Session authentication facts or an exception for protected identities. Missing or null is invalid, never an inferred false."
+	schemas["AccountSessionSettings"].(object)["description"] = "Explicit inactivity limit sealed into newly issued login Sessions. It neither extends the absolute deadline nor proves presence."
 	schemas["AccountSecuritySettings"].(object)["description"] = "Non-secret current-account configuration returned only under a current instance-scoped read decision. Neither factor state nor Session authentication facts."
 	schemas["SecuritySettingsUpdateIntent"].(object)["description"] = "Exact non-secret settings value and expected version for a Session-held SECURITY_SETTINGS_UPDATE proof. Not a selector or permit; cannot be attached to other operations."
-	schemas["UpdateAccountSecuritySettingsRequest"].(object)["description"] = "Replace the complete MFA and password configuration at one expected version using a proof held by the actual current Session and current instance permission. No identity selector, arbitrary patch or caller-controlled Session retention."
+	schemas["UpdateAccountSecuritySettingsRequest"].(object)["description"] = "Replace the complete MFA, password and login-session configuration at one expected version using a proof held by the actual current Session and current instance permission. No identity selector, arbitrary patch or caller-controlled Session retention."
 	schemas["AccountSecuritySettingsChange"].(object)["description"] = "Immutable historical completion. Runtime validation additionally requires settings.resourceVersion == expectedResourceVersion + 1. settings.updatedAt is the original completion time, not observation time; requestId is not lookup authority."
 	schemas["AccountSecuritySettingsChange"].(object)["properties"].(object)["callerSessionEnded"] = object{"const": true, "description": "Every settings change invalidates its original calling Session, including weakening the requirement. Never an instruction to end a later reader's current Session."}
 	historicalSettings["description"] = "Original settings at completion. A missing password segment or exact six-field pre-expiry segment records original history; never current configuration, inferred defaults or a new write."
@@ -1419,6 +1451,7 @@ func applySemanticOverlays(schemas object) {
 	}
 	kinds := map[string]string{
 		"AccountSecuritySettings": "AccountSecuritySettings", "AccountSecuritySettingsChange": "AccountSecuritySettingsChange",
+		"SessionActivity":             "SessionActivity",
 		"UserPasswordResetCompletion": "UserPasswordResetCompletion",
 		"NotificationContact":         "NotificationContact", "NotificationContactVerification": "NotificationContactVerification",
 		"AuthenticatorRemoval": "AuthenticatorRemoval",

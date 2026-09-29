@@ -101,6 +101,7 @@ type Transaction interface {
 	IssueSession(context.Context, SessionMutation) (iamv1.Session, error)
 	LookupSession(context.Context, string) (SessionCredential, bool, error)
 	ListOwnSessions(context.Context, OwnSessionRead) ([]iamv1.Session, error)
+	TouchSession(context.Context, iamv1.Session) (iamv1.SessionActivity, error)
 	ReadPasswordRequirements(context.Context, iamv1.Session) (iamv1.PasswordRequirements, error)
 	LookupRoleSession(context.Context, string) (RoleSessionCredential, bool, error)
 	LookupRoleSessionForExit(context.Context, string) (RoleSessionExitCredential, bool, error)

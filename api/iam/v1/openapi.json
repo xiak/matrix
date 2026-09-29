@@ -685,6 +685,9 @@
             "minimum": 1,
             "type": "integer"
           },
+          "session": {
+            "$ref": "#/components/schemas/AccountSessionSettings"
+          },
           "updatedAt": {
             "$ref": "#/components/schemas/Timestamp"
           }
@@ -696,7 +699,8 @@
           "mfa",
           "resourceVersion",
           "updatedAt",
-          "password"
+          "password",
+          "session"
         ],
         "type": "object"
       },
@@ -786,6 +790,9 @@
                 "minimum": 1,
                 "type": "integer"
               },
+              "session": {
+                "$ref": "#/components/schemas/AccountSessionSettings"
+              },
               "updatedAt": {
                 "$ref": "#/components/schemas/Timestamp"
               }
@@ -808,6 +815,22 @@
           "kind",
           "requestId",
           "settings"
+        ],
+        "type": "object"
+      },
+      "AccountSessionSettings": {
+        "additionalProperties": false,
+        "description": "Explicit inactivity limit sealed into newly issued login Sessions. It neither extends the absolute deadline nor proves presence.",
+        "properties": {
+          "idleTimeoutMinutes": {
+            "description": "Whole minutes sealed into newly issued login Sessions; never extends their absolute expiration.",
+            "maximum": 60,
+            "minimum": 5,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "idleTimeoutMinutes"
         ],
         "type": "object"
       },
@@ -22350,12 +22373,16 @@
           },
           "password": {
             "$ref": "#/components/schemas/AccountPasswordSettings"
+          },
+          "session": {
+            "$ref": "#/components/schemas/AccountSessionSettings"
           }
         },
         "required": [
           "expectedResourceVersion",
           "mfa",
-          "password"
+          "password",
+          "session"
         ],
         "type": "object"
       },
@@ -22464,6 +22491,46 @@
           "organizationId",
           "principalId",
           "status"
+        ],
+        "type": "object"
+      },
+      "SessionActivity": {
+        "additionalProperties": false,
+        "properties": {
+          "absoluteExpiresAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "accountId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "apiVersion": {
+            "const": "iam.matrix.xiak.com/v1"
+          },
+          "idleExpiresAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "kind": {
+            "const": "SessionActivity"
+          },
+          "lastActivityAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "sessionId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "userId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "absoluteExpiresAt",
+          "accountId",
+          "apiVersion",
+          "idleExpiresAt",
+          "kind",
+          "lastActivityAt",
+          "sessionId",
+          "userId"
         ],
         "type": "object"
       },
@@ -23309,6 +23376,9 @@
                     "type": "object"
                   }
                 ]
+              },
+              "session": {
+                "$ref": "#/components/schemas/AccountSessionSettings"
               }
             },
             "required": [
@@ -23596,7 +23666,7 @@
       },
       "UpdateAccountSecuritySettingsRequest": {
         "additionalProperties": false,
-        "description": "Replace the complete MFA and password configuration at one expected version using a proof held by the actual current Session and current instance permission. No identity selector, arbitrary patch or caller-controlled Session retention.",
+        "description": "Replace the complete MFA, password and login-session configuration at one expected version using a proof held by the actual current Session and current instance permission. No identity selector, arbitrary patch or caller-controlled Session retention.",
         "properties": {
           "expectedResourceVersion": {
             "maximum": 9007199254740990,
@@ -23612,6 +23682,9 @@
           "requestId": {
             "$ref": "#/components/schemas/ID"
           },
+          "session": {
+            "$ref": "#/components/schemas/AccountSessionSettings"
+          },
           "stepUpId": {
             "$ref": "#/components/schemas/ID"
           }
@@ -23621,6 +23694,7 @@
           "mfa",
           "password",
           "requestId",
+          "session",
           "stepUpId"
         ],
         "type": "object"
@@ -26407,6 +26481,39 @@
           }
         },
         "summary": "Observe only the current user's valid login sessions; not devices or online activity"
+      }
+    },
+    "/v1/auth/sessions/current:touch": {
+      "post": {
+        "operationId": "touchCurrentSession",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionActivity"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Advance only the possessed login Session's server activity waterline after explicit foreground interaction; no body or selector"
       }
     },
     "/v1/auth/sessions/{sessionId}:revoke": {

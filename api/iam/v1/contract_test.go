@@ -323,7 +323,8 @@ func securitySettingsContractSamples() []struct {
 } {
 	mfa := `{"requiredForUsers":false}`
 	password := `{"minimumLength":15,"requireLowercase":false,"requireUppercase":false,"requireDigit":false,"requireSymbol":false,"historyCount":1,"maxAgeDays":0,"expiryMode":"CHANGE_PASSWORD"}`
-	settings := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccountSecuritySettings","accountId":"account-a","resourceVersion":2,"mfa":` + mfa + `,"password":` + password + `,"updatedAt":"2026-09-24T12:00:00Z"}`
+	session := `{"idleTimeoutMinutes":30}`
+	settings := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccountSecuritySettings","accountId":"account-a","resourceVersion":2,"mfa":` + mfa + `,"password":` + password + `,"session":` + session + `,"updatedAt":"2026-09-24T12:00:00Z"}`
 	change := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccountSecuritySettingsChange","requestId":"change-a","expectedResourceVersion":1,"settings":` + settings + `,"callerSessionEnded":true}`
 	return []struct {
 		kind, wire string
@@ -331,8 +332,8 @@ func securitySettingsContractSamples() []struct {
 	}{
 		{"AccountMFASettings", mfa, func() any { return new(AccountMFASettings) }},
 		{"AccountSecuritySettings", settings, func() any { return new(AccountSecuritySettings) }},
-		{"SecuritySettingsUpdateIntent", `{"expectedResourceVersion":1,"mfa":` + mfa + `,"password":` + password + `}`, func() any { return new(SecuritySettingsUpdateIntent) }},
-		{"UpdateAccountSecuritySettingsRequest", `{"requestId":"change-a","stepUpId":"proof-a","expectedResourceVersion":1,"mfa":` + mfa + `,"password":` + password + `}`, func() any { return new(UpdateAccountSecuritySettingsRequest) }},
+		{"SecuritySettingsUpdateIntent", `{"expectedResourceVersion":1,"mfa":` + mfa + `,"password":` + password + `,"session":` + session + `}`, func() any { return new(SecuritySettingsUpdateIntent) }},
+		{"UpdateAccountSecuritySettingsRequest", `{"requestId":"change-a","stepUpId":"proof-a","expectedResourceVersion":1,"mfa":` + mfa + `,"password":` + password + `,"session":` + session + `}`, func() any { return new(UpdateAccountSecuritySettingsRequest) }},
 		{"AccountSecuritySettingsChange", change, func() any { return new(AccountSecuritySettingsChange) }},
 		{"UpdateAccountSecuritySettingsResponse", `{"outcome":"APPLIED","change":` + change + `}`, func() any { return new(UpdateAccountSecuritySettingsResponse) }},
 	}
@@ -393,6 +394,16 @@ func TestAccountSecuritySettingsRejectAmbiguityWithoutChangingPriorValue(t *test
 					strings.Replace(sample.wire, `"mfa":`, `"MFA":`, 1),
 				)
 			}
+			if strings.Contains(sample.wire, `"session":`) {
+				if sample.kind != "AccountSecuritySettingsChange" {
+					malformed = append(malformed, strings.Replace(sample.wire, `,"session":{"idleTimeoutMinutes":30}`, "", 1))
+				}
+				malformed = append(malformed,
+					strings.Replace(sample.wire, `"session":{"idleTimeoutMinutes":30}`, `"session":null`, 1),
+					strings.Replace(sample.wire, `"idleTimeoutMinutes":30`, `"idleTimeoutMinutes":4`, 1),
+					strings.Replace(sample.wire, `"idleTimeoutMinutes":30`, `"idleTimeoutMinutes":61`, 1),
+				)
+			}
 			if strings.Contains(sample.wire, `"expectedResourceVersion"`) {
 				for _, version := range []string{"0", "-1", "1.5", `"1"`, "null", "9007199254740991", "18446744073709551616"} {
 					malformed = append(malformed, strings.Replace(sample.wire, `"expectedResourceVersion":1`, `"expectedResourceVersion":`+version, 1))
@@ -445,7 +456,7 @@ func TestAccountSecuritySettingsRejectAmbiguityWithoutChangingPriorValue(t *test
 }
 
 func TestSettingsStepUpBindsExactIntentWithoutExpandingOtherOperations(t *testing.T) {
-	intent := `{"expectedResourceVersion":1,"mfa":{"requiredForUsers":false},"password":{"minimumLength":15,"requireLowercase":false,"requireUppercase":false,"requireDigit":false,"requireSymbol":false,"historyCount":1,"maxAgeDays":0,"expiryMode":"CHANGE_PASSWORD"}}`
+	intent := `{"expectedResourceVersion":1,"mfa":{"requiredForUsers":false},"password":{"minimumLength":15,"requireLowercase":false,"requireUppercase":false,"requireDigit":false,"requireSymbol":false,"historyCount":1,"maxAgeDays":0,"expiryMode":"CHANGE_PASSWORD"},"session":{"idleTimeoutMinutes":30}}`
 	start := `{"requestId":"settings-a","operation":"SECURITY_SETTINGS_UPDATE","expectedFactorRevision":2,"securitySettings":` + intent + `}`
 	for _, wire := range []string{start, strings.Replace(start, "false", "true", 1)} {
 		var value StartStepUpRequest
@@ -7201,6 +7212,35 @@ func FuzzLoginResponseRoundTrip(f *testing.F) {
 			t.Fatal("login result bypassed the explicit encoder")
 		}
 	})
+}
+
+func TestIAMOpenAPISessionTouchIsBodylessMutation(t *testing.T) {
+	document := loadIAMOpenAPI(t)
+	paths := mustIAMObject(t, document["paths"], "paths")
+	path := mustIAMObject(t, paths["/v1/auth/sessions/current:touch"], "session touch path")
+	if len(path) != 1 || path["post"] == nil {
+		t.Fatal("session activity touch is not an exact POST mutation")
+	}
+	operation := mustIAMObject(t, path["post"], "session touch operation")
+	if operation["operationId"] != "touchCurrentSession" || operation["requestBody"] != nil {
+		t.Fatal("session activity touch accepts a body or lost its operation identity")
+	}
+	if parameters, exists := operation["parameters"]; exists {
+		t.Fatalf("session activity touch exposes selectors: %#v", parameters)
+	}
+	responses := mustIAMObject(t, operation["responses"], "session touch outcomes")
+	for _, code := range []string{"200", "400", "401", "403", "500", "503"} {
+		if responses[code] == nil {
+			t.Fatal("session activity touch omitted a closed outcome", code)
+		}
+	}
+	if responses["201"] != nil || responses["409"] != nil {
+		t.Fatal("session activity touch advertises resource creation or replay conflict")
+	}
+	success := mustIAMObject(t, responses["200"], "session touch success")
+	if success["description"] != "Command completed." {
+		t.Fatal("session activity mutation is documented as an observation")
+	}
 }
 
 func TestIAMOpenAPIPasswordResetCompletionIsReadOnlyAndExact(t *testing.T) {

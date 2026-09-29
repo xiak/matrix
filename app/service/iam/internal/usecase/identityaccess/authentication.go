@@ -235,6 +235,37 @@ func (service *Authority) ListOwnSessions(ctx context.Context, credential iamv1.
 	return result, nil
 }
 
+func (service *Authority) TouchCurrentSession(ctx context.Context, credential iamv1.Secret) (iamv1.SessionActivity, error) {
+	var result iamv1.SessionActivity
+	err := service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
+		now, err := transactionTime(ctx, tx)
+		if err != nil {
+			return err
+		}
+		subject, err := service.authenticateSession(ctx, tx, credential, now)
+		if err != nil {
+			return err
+		}
+		if subject.Subject.Principal.Type != iamv1.PrincipalUser || subject.CredentialGeneration == 0 || subject.CredentialGeneration > 9007199254740991 {
+			return ErrUnauthenticated
+		}
+		result, err = tx.TouchSession(ctx, subject.Subject.Session)
+		if err != nil {
+			return err
+		}
+		if iamv1.ValidateSessionActivity(result) != nil || result.SessionID != subject.Subject.Session.ID ||
+			result.AccountID != subject.Subject.Organization.ID || result.UserID != subject.Subject.Principal.ID ||
+			!result.AbsoluteExpiresAt.Equal(subject.Subject.Session.ExpiresAt) {
+			return ErrUnavailable
+		}
+		return nil
+	})
+	if err != nil {
+		return iamv1.SessionActivity{}, err
+	}
+	return result, nil
+}
+
 func (service *Authority) ServiceIdentity(
 	ctx context.Context,
 	credential iamv1.Secret,

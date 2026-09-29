@@ -108,7 +108,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	const databasePrefix = "matrix_iam_upgrade_predecessor_"
 	const source = "42035189eb823e388509f54525889c1a18c6b79d"
 	const sourceSchema uint64 = 45
-	const currentSchema uint64 = 51
+	const currentSchema uint64 = 52
 	// Actual predecessor admission accepted these 14-byte passwords. The new
 	// executable must replay the sealed bootstrap and verify existing secrets
 	// without admitting them for a new password write.
@@ -118,7 +118,11 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	if dsn == "" {
 		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", variable)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	// The single supported predecessor gate builds and runs both historical
+	// recovery helpers before starting the current authority. Its harness
+	// deadline is not a product authentication budget; all lock, proof and
+	// challenge deadlines below remain unchanged.
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	defer cancel()
 	config, err := pgx.ParseConfig(dsn)
 	if err != nil || !strings.HasPrefix(config.Database, databasePrefix) {
@@ -332,7 +336,9 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		if err := admin.QueryRow(ctx, `SELECT jsonb_build_object(
 		 'bootstrap',(SELECT jsonb_agg(jsonb_build_array(singleton,installation_id,content_digest,organization_id,administrator_principal_id,applied_at)) FROM iam.bootstrap_receipts),
 		 'accounts',(SELECT jsonb_agg(jsonb_build_array(id,status,resource_version,created_at,updated_at,security_settings_version,mfa_required_for_users,security_settings_updated_at) ORDER BY id) FROM iam.accounts),
-		 'settingsChanges',(SELECT jsonb_agg(to_jsonb(c)-'previous_password_settings'-'password_settings' ORDER BY tenant_id,expected_version) FROM iam.account_security_settings_changes c),
+			 'settingsChanges',(SELECT jsonb_agg(jsonb_build_array(tenant_id,user_id,request_id,step_up_id,source_session_id,expected_version,
+			     previous_required_for_users,required_for_users,event_id,decision_id,request_digest,created_at) ORDER BY tenant_id,expected_version)
+			     FROM iam.account_security_settings_changes),
 		 'credentials',(SELECT jsonb_agg(jsonb_build_array(tenant_id,principal_id,password_hash,credential_version,changed_at) ORDER BY tenant_id,principal_id) FROM iam.user_credentials),
 		 'users',(SELECT jsonb_agg(jsonb_build_array(tenant_id,id,status,must_change_password,resource_version) ORDER BY tenant_id,id) FROM iam.principals),
 		 'attachments',(SELECT jsonb_agg(jsonb_build_array(tenant_id,id,target_id,policy_id,authority_scope,installation_id,resource_version,revoked_at) ORDER BY tenant_id,id) FROM iam.policy_attachments),
@@ -343,9 +349,14 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		 'codes',(SELECT jsonb_agg(to_jsonb(c) ORDER BY tenant_id,id) FROM iam.mfa_recovery_codes c),
 		 'recoveries',(SELECT jsonb_agg(to_jsonb(r) ORDER BY tenant_id,id) FROM iam.authenticator_recoveries r),
 		 'challenges',(SELECT jsonb_agg(to_jsonb(c)-'password_reset_required_event_id' ORDER BY tenant_id,id) FROM iam.authentication_challenges c),
-		 'proofs',(SELECT jsonb_agg(to_jsonb(p)-'password_settings' ORDER BY tenant_id,id) FROM iam.step_ups p),
-		 'otpAttempts',(SELECT jsonb_agg(to_jsonb(a) ORDER BY tenant_id,user_id) FROM iam.totp_attempts a),
-		 'sessions',(SELECT jsonb_agg(to_jsonb(s) ORDER BY tenant_id,id) FROM iam.sessions s))`).Scan(&state); err != nil {
+			 'proofs',(SELECT jsonb_agg(jsonb_build_array(tenant_id,user_id,id,request_id,operation,source_session_id,credential_generation,
+			     mfa_revision,factor_id,batch_id,account_version,principal_version,state,created_at,expires_at,proved_at,consumed_at,
+			     verification_request_id,verification_digest,password_attempt_id,password_attempt_sequence,totp_attempt_id,
+			     totp_attempt_sequence,verified_step,expected_settings_version,required_for_users) ORDER BY tenant_id,id) FROM iam.step_ups),
+			 'otpAttempts',(SELECT jsonb_agg(to_jsonb(a) ORDER BY tenant_id,user_id) FROM iam.totp_attempts a),
+			 'sessions',(SELECT jsonb_agg(jsonb_build_array(tenant_id,id,principal_id,verification_digest,status,resource_version,issued_at,
+			     expires_at,revoked_at,credential_version,authentication_method,authenticated_at,mfa_revision,security_settings_version)
+			     ORDER BY tenant_id,id) FROM iam.sessions))`).Scan(&state); err != nil {
 			t.Fatal("read retained session/credential invariants", err)
 		}
 		return state
@@ -425,14 +436,17 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		}
 	}
 	var shape bool
-	if err := admin.QueryRow(ctx, `SELECT schema_version=51 AND iam.password_history_contract_ready() AND iam.account_security_settings_contract_ready() AND iam.login_session_contract_ready() AND iam.password_attempt_contract_ready()
+	if err := admin.QueryRow(ctx, `SELECT schema_version=52 AND iam.password_history_contract_ready() AND iam.account_security_settings_contract_ready() AND iam.login_session_contract_ready() AND iam.password_attempt_contract_ready()
 	 AND iam.authentication_recovery_contract_ready()
 	 AND to_regprocedure('iam.close_authentication_recovery(jsonb,text,jsonb)') IS NULL
 	 AND NOT EXISTS(SELECT 1 FROM iam.user_credentials c WHERE c.password_history<>'[]'::jsonb
 	 OR c.password_changed_at IS NOT NULL OR NOT iam.valid_password_history(c.password_history,c.password_history_digest,c.credential_version,c.password_changed_at))
 	 AND NOT EXISTS(SELECT 1 FROM iam.accounts WHERE password_settings IS DISTINCT FROM iam.default_password_settings())
-	 AND NOT EXISTS(SELECT 1 FROM iam.step_ups WHERE password_settings IS NOT NULL)
-	 AND NOT EXISTS(SELECT 1 FROM iam.account_security_settings_changes WHERE password_settings IS NOT NULL OR previous_password_settings IS NOT NULL)
+	 AND NOT EXISTS(SELECT 1 FROM iam.accounts WHERE session_settings IS DISTINCT FROM iam.default_session_settings())
+	 AND NOT EXISTS(SELECT 1 FROM iam.step_ups WHERE password_settings IS NOT NULL OR session_settings IS NOT NULL)
+	 AND NOT EXISTS(SELECT 1 FROM iam.account_security_settings_changes WHERE password_settings IS NOT NULL OR previous_password_settings IS NOT NULL
+	     OR session_settings IS NOT NULL OR previous_session_settings IS NOT NULL)
+	 AND NOT EXISTS(SELECT 1 FROM iam.sessions WHERE last_activity_at IS NOT NULL OR idle_timeout_seconds IS NOT NULL)
 	 AND to_regprocedure('iam.close_authentication_recovery(jsonb,text,jsonb,jsonb,text)') IS NOT NULL
 	 AND to_regprocedure('iam.reconcile_authentication_recovery(jsonb,text,jsonb,jsonb)') IS NULL
 	 AND to_regprocedure('iam.reconcile_authentication_recovery(jsonb,text,jsonb,jsonb,jsonb)') IS NOT NULL
@@ -451,26 +465,39 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	 AND to_regprocedure('iam.start_totp_replacement(text,text,text,text,text,bigint,text,text,text,text,bytea,bytea)') IS NOT NULL
 	 AND NOT EXISTS(SELECT 1 FROM iam.totp_authenticators WHERE replacement_step_up_id IS NOT NULL OR replacement_contact_revision IS NOT NULL)
 	 AND NOT EXISTS(SELECT 1 FROM iam.mfa_recovery_batches WHERE revocation_replacement_factor_id IS NOT NULL)
-	 AND to_regprocedure('iam.revoke_session(text,text,text,text,jsonb)') IS NULL
-	 AND to_regprocedure('iam.revoke_session(text,text,text,text,jsonb,text)') IS NOT NULL
-	 AND (SELECT cardinality(proallargtypes)=25 AND proargnames[25]='credential_generation' FROM pg_proc WHERE oid='iam.lookup_session(text)'::regprocedure)
-	 AND (SELECT proargnames=ARRAY['submitted_tenant_id','submitted_user_id','submitted_actor_session_id','submitted_audit_event','revoked_count','completed_at','applied']
-	      AND proallargtypes=ARRAY['text'::regtype,'text'::regtype,'text'::regtype,'jsonb'::regtype,'bigint'::regtype,'timestamptz'::regtype,'boolean'::regtype]::oid[]
-	      FROM pg_proc WHERE oid='iam.revoke_other_sessions(text,text,text,jsonb)'::regprocedure)
 	 FROM iam.readiness()`).Scan(&shape); err != nil || !shape {
-		t.Fatal("retained database did not replace the exact Session ABI", err)
+		t.Fatal("retained database did not satisfy current IAM readiness and fail-closed defaults", err)
 	}
 	current := start(currentBinary, currentSchema)
 	if !bytes.Equal(originalState, identityState()) {
 		t.Fatal("migration or equal bootstrap changed original identity/credential state")
 	}
+	oldCallerSessionID := a.Session.ID
+	for _, session := range []loginResult{primary, a, b, ended, unknown, forcedA, forcedB, selfEnded} {
+		if response := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", session.Credential, nil); response.Status != http.StatusUnauthorized {
+			t.Fatal("migration accepted a predecessor Session without an activity waterline")
+		}
+		if response := performJSON(t, http.MethodPost, endpoint+"/v1/auth/sessions/current:touch", session.Credential, nil); response.Status != http.StatusUnauthorized {
+			t.Fatal("late touch upgraded or revived a predecessor Session")
+		}
+	}
+	primary = loginIAM(t, endpoint, "admin", changedAdminPassword, "own-upgrade-current-root")
+	a = loginIAM(t, endpoint, realm, changedReaderPassword, "own-upgrade-current-first")
+	b = loginIAM(t, endpoint, realm, changedReaderPassword, "own-upgrade-current-second")
+	forcedRealm := forcedUser.LoginName + "@" + string(forcedUser.AccountID)
+	forcedA = loginIAM(t, endpoint, forcedRealm, initialReaderPassword, "own-upgrade-current-forced-a")
+	forcedB = loginIAM(t, endpoint, forcedRealm, initialReaderPassword, "own-upgrade-current-forced-b")
+	for _, session := range []loginResult{primary, a, b, forcedA, forcedB} {
+		sensitive = append(sensitive, session.Credential)
+	}
+	postCutoverState := identityState()
 	legacyResetPath := fmt.Sprintf("/v1/users/%s/password-resets/retained-reset-command?resourceVersion=%d", legacyResetUser.ID, legacyResetUser.ResourceVersion)
 	if response := performJSON(t, http.MethodGet, endpoint+legacyResetPath, primary.Credential, nil); response.Status != http.StatusNotFound {
 		t.Fatal("migration invented a reset completion from an old outbox fact")
 	}
 	legacyRetry := performJSON(t, http.MethodPost, endpoint+"/v1/users/"+string(legacyResetUser.ID)+":reset-password", primary.Credential,
 		map[string]any{"initialPassword": "Retained-Reset-Another-Password-94!", "resourceVersion": legacyResetResult.ResourceVersion, "requestId": "retained-reset-command"})
-	if legacyRetry.Status != http.StatusConflict || !bytes.Equal(originalState, identityState()) {
+	if legacyRetry.Status != http.StatusConflict || !bytes.Equal(postCutoverState, identityState()) {
 		t.Fatal("old reset intent was reused at a newer target version")
 	}
 	var inventedReset bool
@@ -494,21 +521,21 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 			t.Fatal("migration/restart rewrote pending notification or verification material")
 		}
 		response := performJSON(t, http.MethodGet, endpoint+"/v1/auth/notification-contact/verifications/"+oldVerification.ID, oldContactBearer, nil)
-		if response.Status != http.StatusOK {
-			t.Fatal("retained first-contact intent lost its original qualified Session", response.Status)
+		if response.Status != http.StatusForbidden {
+			t.Fatal("fresh Session inherited a predecessor Session-bound contact intent", response.Status)
 		}
 	}
 	assertRetainedMail()
-	for _, session := range []loginResult{primary, a, b, forcedA, forcedB} {
-		if response := performJSON(t, http.MethodGet, endpoint+"/v1/auth/sessions", session.Credential, nil); response.Status != http.StatusOK {
-			t.Fatal("predecessor Session lost its actual account qualification")
-		}
-	}
 	oldResponse = performJSON(t, http.MethodPost, oldPath, a.Credential, oldIntent)
-	var retainedCompletion iamv1.RevokeOwnSessionResponse
-	if oldResponse.Status != http.StatusOK || json.Unmarshal(oldResponse.Body, &retainedCompletion) != nil ||
-		retainedCompletion.Outcome != "EQUAL_REPLAY" || retainedCompletion.Revocation != oldCompleted.Revocation {
-		t.Fatal("original qualified caller lost its immutable completion")
+	if oldResponse.Status != http.StatusConflict {
+		t.Fatal("fresh Session adopted the predecessor caller's completion")
+	}
+	var retainedCompletion bool
+	if err := admin.QueryRow(ctx, `SELECT actor_session_id=$4 AND target_session_id=$5 AND resource_version=$6 AND revoked_at=$7
+		FROM iam.session_self_revocations WHERE tenant_id=$1 AND user_id=$2 AND request_id=$3`, member.AccountID, member.ID,
+		oldIntent.RequestID, oldCallerSessionID, selfEnded.Session.ID, oldCompleted.Revocation.ResourceVersion, oldCompleted.Revocation.RevokedAt).
+		Scan(&retainedCompletion); err != nil || !retainedCompletion {
+		t.Fatal("migration changed the predecessor self-revocation completion", err)
 	}
 	list := func(session loginResult, want int) iamv1.SessionList {
 		t.Helper()
@@ -708,25 +735,39 @@ func provePredecessorAuthenticationRecovery(t *testing.T, ctx context.Context, r
 	suffix := sha256.Sum256([]byte(config.Database))
 	var databases []*pgx.Conn
 	var configs []*pgx.ConnConfig
+	var databaseNames []string
+	defer func() {
+		for _, database := range databases {
+			database.Close(context.Background())
+		}
+		for _, name := range databaseNames {
+			cleanup, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			dropControl, connectErr := pgx.ConnectConfig(cleanup, controlConfig.Copy())
+			if connectErr != nil {
+				cancel()
+				t.Error("connect owned predecessor recovery cleanup", connectErr)
+				continue
+			}
+			_, dropErr := dropControl.Exec(cleanup, "DROP DATABASE "+pgx.Identifier{name}.Sanitize()+" WITH (FORCE)")
+			dropControl.Close(context.Background())
+			cancel()
+			if dropErr != nil {
+				t.Error("remove owned predecessor recovery copy", dropErr)
+			}
+		}
+	}()
 	for _, scope := range []string{"source", "target", "unreconciled"} {
 		name := "matrix_iam_old_recovery_" + scope + "_" + hex.EncodeToString(suffix[:10])
 		if _, err := control.Exec(ctx, "CREATE DATABASE "+pgx.Identifier{name}.Sanitize()+" TEMPLATE "+pgx.Identifier{config.Database}.Sanitize()); err != nil {
 			t.Fatal("copy quiescent predecessor database", err)
 		}
-		defer func() {
-			cleanup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			if _, err := control.Exec(cleanup, "DROP DATABASE "+pgx.Identifier{name}.Sanitize()); err != nil {
-				t.Error("remove owned predecessor recovery copy", err)
-			}
-		}()
+		databaseNames = append(databaseNames, name)
 		copyConfig := config.Copy()
 		copyConfig.Database = name
 		database, err := pgx.ConnectConfig(ctx, copyConfig)
 		if err != nil {
 			t.Fatal("connect predecessor recovery copy")
 		}
-		defer database.Close(context.Background())
 		databases, configs = append(databases, database), append(configs, copyConfig)
 	}
 	oldBinary := buildAuthorityBinary(t, ctx, baseline, temporary, "predecessor-private-recovery", "./app/service/iam/cmd/matrix-iam-authentication-recovery")
@@ -797,7 +838,9 @@ func provePredecessorAuthenticationRecovery(t *testing.T, ctx context.Context, r
 		 'completions',(SELECT jsonb_agg(to_jsonb(c) ORDER BY command_id) FROM iam.authentication_recovery_completions c),
 		 'floors',(SELECT jsonb_agg(to_jsonb(f) ORDER BY tenant_id,user_id) FROM iam.authentication_recovery_attempt_floors f),
 		 'credentials',(SELECT jsonb_agg(jsonb_build_array(tenant_id,principal_id,password_hash,credential_version,changed_at) ORDER BY tenant_id,principal_id) FROM iam.user_credentials),
-		 'sessions',(SELECT jsonb_agg(to_jsonb(s) ORDER BY tenant_id,id) FROM iam.sessions s),
+		 'sessions',(SELECT jsonb_agg(jsonb_build_array(tenant_id,id,principal_id,verification_digest,status,resource_version,issued_at,
+		     expires_at,revoked_at,credential_version,authentication_method,authenticated_at,mfa_revision,security_settings_version)
+		     ORDER BY tenant_id,id) FROM iam.sessions),
 		 'factors',(SELECT jsonb_agg(to_jsonb(f)-'removal_id' ORDER BY tenant_id,id) FROM iam.totp_authenticators f),
 		 'facts',(SELECT jsonb_agg(event_document ORDER BY event_id) FROM iam.audit_outbox))`).Scan(&encoded); err != nil {
 			t.Fatal("read original private recovery history")
@@ -837,8 +880,9 @@ func provePredecessorAuthenticationRecovery(t *testing.T, ctx context.Context, r
 		}
 		var unchanged bool
 		if err := database.QueryRow(ctx, `SELECT
-		 (SELECT schema_version=51 AND ready FROM iam.readiness())
+			 (SELECT schema_version=52 AND ready FROM iam.readiness())
 		 AND NOT EXISTS(SELECT 1 FROM iam.authenticator_removals)
+		 AND NOT EXISTS(SELECT 1 FROM iam.sessions WHERE last_activity_at IS NOT NULL OR idle_timeout_seconds IS NOT NULL)
 		 AND NOT EXISTS(SELECT 1 FROM iam.user_credentials c WHERE c.password_history<>'[]'::jsonb
 		 OR c.password_changed_at IS NOT NULL OR NOT iam.valid_password_history(c.password_history,c.password_history_digest,c.credential_version,c.password_changed_at))
 		 AND (SELECT state='OPEN' AND epoch=$1 FROM iam.authentication_recovery_state)`, 2-index).Scan(&unchanged); err != nil || !unchanged || !bytes.Equal(original, history(database)) {
@@ -959,6 +1003,12 @@ func prepareRetainedSecuritySettingsProcesses(t *testing.T, ctx context.Context,
 	boundAdminSession := loginIAM(t, endpoint, boundAdminRealm, initial, "retained-bound-admin-initial")
 	*sensitive = append(*sensitive, boundAdminSession.Credential)
 	changePasswordIAM(t, endpoint, boundAdminSession.Credential, initial, password, "retained-bound-admin-password")
+	pendingUser := createIAMUser(t, endpoint, owner.Credential, "retained.settings.pending", "Retained pending settings operator", initial, "retained-settings-pending-create")
+	createIAMPolicyAttachment(t, endpoint, owner.Credential, pendingUser.ID, policy.Policy.ID, "retained-settings-pending-grant")
+	pendingRealm := pendingUser.LoginName + "@" + tenant
+	pendingFirst := loginIAM(t, endpoint, pendingRealm, initial, "retained-settings-pending-login")
+	*sensitive = append(*sensitive, pendingFirst.Credential)
+	changePasswordIAM(t, endpoint, pendingFirst.Credential, initial, password, "retained-settings-pending-password")
 	var resetRaceUsers [2]iamv1.User
 	for index := range resetRaceUsers {
 		prefix := fmt.Sprintf("retained-expiry-race-%d", index)
@@ -979,7 +1029,9 @@ func prepareRetainedSecuritySettingsProcesses(t *testing.T, ctx context.Context,
 		{first: boundAgeSession, realm: boundAgeRealm},
 		{first: boundFaultSession, realm: boundFaultRealm},
 		{first: boundAdminSession, realm: boundAdminRealm},
+		{first: pendingFirst, realm: pendingRealm},
 	}
+	const pendingActorIndex = 5
 	bindActor := func(i int) {
 		t.Helper()
 		a := &actors[i]
@@ -1071,17 +1123,25 @@ func prepareRetainedSecuritySettingsProcesses(t *testing.T, ctx context.Context,
 		call(http.MethodGet, "/v1/auth/me", bearer, nil, http.StatusUnauthorized, nil)
 	}
 	const pendingCommand = "retained-settings-unfinished"
-	caller := login(1, "retained-settings-version-three")
-	pendingID := oldProof(1, caller, pendingCommand, 3, true)
+	caller := login(pendingActorIndex, "retained-settings-version-three")
+	pendingID := oldProof(pendingActorIndex, caller, pendingCommand, 3, true)
 	oldHistory := func() []byte {
 		t.Helper()
 		var result []byte
 		if err := admin.QueryRow(ctx, `SELECT jsonb_build_object(
-		 'changes',(SELECT jsonb_agg(to_jsonb(c)-'previous_password_settings'-'password_settings' ORDER BY expected_version)
-		   FROM iam.account_security_settings_changes c WHERE tenant_id=$1 AND expected_version<3),
-		 'proofs',(SELECT jsonb_agg(to_jsonb(p)-'password_settings' ORDER BY id) FROM iam.step_ups p
+		 'changes',(SELECT jsonb_agg(jsonb_build_array(tenant_id,user_id,request_id,step_up_id,source_session_id,expected_version,
+		     previous_required_for_users,required_for_users,event_id,decision_id,request_digest,created_at) ORDER BY expected_version)
+		   FROM iam.account_security_settings_changes WHERE tenant_id=$1 AND expected_version<3),
+		 'proofs',(SELECT jsonb_agg(jsonb_build_array(tenant_id,user_id,id,request_id,operation,source_session_id,credential_generation,
+		     mfa_revision,factor_id,batch_id,account_version,principal_version,state,created_at,expires_at,proved_at,consumed_at,
+		     verification_request_id,verification_digest,password_attempt_id,password_attempt_sequence,totp_attempt_id,
+		     totp_attempt_sequence,verified_step,expected_settings_version,required_for_users) ORDER BY id) FROM iam.step_ups
 		   WHERE tenant_id=$1 AND request_id IN ('retained-settings-change-0','retained-settings-change-1')),
-		 'unfinished',(SELECT to_jsonb(p)-'password_settings' FROM iam.step_ups p WHERE tenant_id=$1 AND id=$2))`, tenant, pendingID).Scan(&result); err != nil {
+		 'unfinished',(SELECT jsonb_build_array(tenant_id,user_id,id,request_id,operation,source_session_id,credential_generation,
+		     mfa_revision,factor_id,batch_id,account_version,principal_version,state,created_at,expires_at,proved_at,consumed_at,
+		     verification_request_id,verification_digest,password_attempt_id,password_attempt_sequence,totp_attempt_id,
+		     totp_attempt_sequence,verified_step,expected_settings_version,required_for_users)
+		   FROM iam.step_ups WHERE tenant_id=$1 AND id=$2))`, tenant, pendingID).Scan(&result); err != nil {
 			t.Fatal("read immutable predecessor settings lineage", err)
 		}
 		return result
@@ -1097,42 +1157,48 @@ func prepareRetainedSecuritySettingsProcesses(t *testing.T, ctx context.Context,
 		}
 		var unchanged bool
 		if err := admin.QueryRow(ctx, `SELECT (SELECT count(*)=2 FROM iam.account_security_settings_changes WHERE tenant_id=$1 AND expected_version<3
-		 AND password_settings IS NULL AND previous_password_settings IS NULL)
-		 AND (SELECT count(*)=3 FROM iam.step_ups WHERE tenant_id=$1 AND password_settings IS NULL
+		 AND password_settings IS NULL AND previous_password_settings IS NULL AND session_settings IS NULL AND previous_session_settings IS NULL)
+		 AND (SELECT count(*)=3 FROM iam.step_ups WHERE tenant_id=$1 AND password_settings IS NULL AND session_settings IS NULL
 		 AND request_id IN ('retained-settings-change-0','retained-settings-change-1',$2))`, tenant, pendingCommand).Scan(&unchanged); err != nil || !unchanged {
-			t.Fatal("migration invented password commitments for old settings history", err)
+			t.Fatal("migration invented password or session commitments for old settings history", err)
 		}
 	}
 	return func() func() {
 		t.Helper()
 		assertHistory()
-		call(http.MethodGet, "/v1/auth/me", caller, nil, http.StatusOK, nil)
+		call(http.MethodGet, "/v1/auth/me", caller, nil, http.StatusUnauthorized, nil)
+		currentCaller := login(pendingActorIndex, "retained-settings-current-pending")
+		historicalCaller := login(1, "retained-settings-current-history")
 		var live bool
 		if err := admin.QueryRow(ctx, `SELECT state='PROVED' AND expires_at>clock_timestamp() AND consumed_at IS NULL AND password_settings IS NULL
 		 FROM iam.step_ups WHERE tenant_id=$1 AND id=$2`, tenant, pendingID).Scan(&live); err != nil || !live {
 			t.Fatal("old settings negative must use a still-live, genuinely proved intent", err)
 		}
 		var historical iamv1.AccountSecuritySettingsChange
-		call(http.MethodGet, path+"/changes/"+completions[1].RequestID, caller, nil, http.StatusOK, &historical)
+		call(http.MethodGet, path+"/changes/"+completions[1].RequestID, historicalCaller, nil, http.StatusOK, &historical)
 		if !reflect.DeepEqual(historical, completions[1]) || historical.Settings.Password != nil {
 			t.Fatal("current completion reader rewrote the predecessor response")
 		}
-		call(http.MethodGet, "/v1/auth/step-up/by-request/"+pendingCommand, caller, nil, http.StatusServiceUnavailable, nil)
+		// The retained proof still exists and is inspected above, but its old
+		// Session binding is not transferable to the same USER's new Session.
+		call(http.MethodGet, "/v1/auth/step-up/by-request/"+pendingCommand, currentCaller, nil, http.StatusNotFound, nil)
 		defaultRules := iamv1.AccountPasswordSettings{ExpiryMode: iamv1.PasswordExpiryChange, MinimumLength: 15, HistoryCount: 1}
-		call(http.MethodPut, path, caller, iamv1.UpdateAccountSecuritySettingsRequest{RequestID: pendingCommand, StepUpID: pendingID,
-			ExpectedResourceVersion: 3, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}, Password: defaultRules}, http.StatusUnauthorized, nil)
+		call(http.MethodPut, path, currentCaller, iamv1.UpdateAccountSecuritySettingsRequest{RequestID: pendingCommand, StepUpID: pendingID,
+			ExpectedResourceVersion: 3, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}, Password: defaultRules,
+			Session: iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30}}, http.StatusUnauthorized, nil)
 		assertHistory()
 		var clean bool
-		if err := admin.QueryRow(ctx, `SELECT (SELECT security_settings_version=3 AND NOT mfa_required_for_users AND password_settings=iam.default_password_settings() FROM iam.accounts WHERE id=$1)
+		if err := admin.QueryRow(ctx, `SELECT (SELECT security_settings_version=3 AND NOT mfa_required_for_users AND password_settings=iam.default_password_settings()
+		 AND session_settings=iam.default_session_settings() FROM iam.accounts WHERE id=$1)
 		 AND NOT EXISTS(SELECT 1 FROM iam.account_security_settings_changes WHERE tenant_id=$1 AND expected_version>=3)
 		 AND NOT EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.security-settings.updated' AND event_document->>'requestId'=$2)
-		 AND EXISTS(SELECT 1 FROM iam.totp_attempts WHERE tenant_id=$1 AND user_id=$3 AND used_attempts=5 AND state='SUCCEEDED')`, tenant, pendingCommand, user.ID).Scan(&clean); err != nil || !clean {
+			 AND EXISTS(SELECT 1 FROM iam.totp_attempts WHERE tenant_id=$1 AND user_id=$3 AND used_attempts=4 AND state='SUCCEEDED')`, tenant, pendingCommand, pendingUser.ID).Scan(&clean); err != nil || !clean {
 			t.Fatal("old unbound proof caused partial settings effects", err)
 		}
-		// The second operator really spent five OTP attempts in the predecessor.
-		// Neither upgrade nor a new purpose refunds that ten-minute budget. Use
-		// the other independently qualified operator, not a counter reset or an
-		// increased gate timeout, for the new successful settings mutation.
+		// The dedicated pending operator retains all four real OTP attempts
+		// across upgrade and reauthentication. Use another independently
+		// qualified operator for the new successful settings mutation rather
+		// than resetting its budget or extending the gate timeout.
 		freshCaller := login(0, "retained-settings-current-root")
 		const windowInitial, windowCurrent = "Retained-Window-Initial-Password-531!", "Retained-Window-Current-Password-729!"
 		*sensitive = append(*sensitive, windowInitial, windowCurrent)
@@ -1171,14 +1237,16 @@ func prepareRetainedSecuritySettingsProcesses(t *testing.T, ctx context.Context,
 		rules := iamv1.AccountPasswordSettings{ExpiryMode: iamv1.PasswordExpiryAdminReset, MaxAgeDays: 1, MinimumLength: 24, HistoryCount: 0}
 		var proof iamv1.StepUp
 		call(http.MethodPost, "/v1/auth/step-up", freshCaller, iamv1.StartStepUpRequest{RequestID: command, Operation: iamv1.StepUpUpdateSecuritySettings, ExpectedFactorRevision: 2,
-			SecuritySettings: &iamv1.SecuritySettingsUpdateIntent{ExpectedResourceVersion: 3, MFA: iamv1.AccountMFASettings{}, Password: &rules}}, http.StatusOK, &proof)
+			SecuritySettings: &iamv1.SecuritySettingsUpdateIntent{ExpectedResourceVersion: 3, MFA: iamv1.AccountMFASettings{}, Password: &rules,
+				Session: &iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30}}}, http.StatusOK, &proof)
 		call(http.MethodPost, "/v1/auth/step-up/"+proof.ID+":verify", freshCaller,
 			map[string]string{"requestId": command + "-proof", "password": password, "code": nextCode(0)}, http.StatusOK, &proof)
 		var applied iamv1.UpdateAccountSecuritySettingsResponse
 		call(http.MethodPut, path, freshCaller, iamv1.UpdateAccountSecuritySettingsRequest{RequestID: command, StepUpID: proof.ID, ExpectedResourceVersion: 3,
-			MFA: iamv1.AccountMFASettings{}, Password: rules}, http.StatusOK, &applied)
+			MFA: iamv1.AccountMFASettings{}, Password: rules, Session: iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30}}, http.StatusOK, &applied)
 		if applied.Outcome != "APPLIED" || !applied.Change.CallerSessionEnded || applied.Change.Settings.ResourceVersion != 4 ||
-			applied.Change.Settings.MFA.RequiredForUsers || applied.Change.Settings.Password == nil || *applied.Change.Settings.Password != rules {
+			applied.Change.Settings.MFA.RequiredForUsers || applied.Change.Settings.Password == nil || *applied.Change.Settings.Password != rules ||
+			applied.Change.Settings.Session == nil || applied.Change.Settings.Session.IdleTimeoutMinutes != 30 {
 			t.Fatal("new password-only settings did not continue the actual predecessor lineage")
 		}
 		call(http.MethodGet, "/v1/auth/me", caller, nil, http.StatusUnauthorized, nil)
@@ -1340,7 +1408,8 @@ func prepareRetainedSecuritySettingsProcesses(t *testing.T, ctx context.Context,
 		rules.ExpiryMode = iamv1.PasswordExpiryChange
 		const modeCommand = "retained-mode-change"
 		call(http.MethodPost, "/v1/auth/step-up", modeCaller, iamv1.StartStepUpRequest{RequestID: modeCommand, Operation: iamv1.StepUpUpdateSecuritySettings, ExpectedFactorRevision: 2,
-			SecuritySettings: &iamv1.SecuritySettingsUpdateIntent{ExpectedResourceVersion: 4, MFA: iamv1.AccountMFASettings{}, Password: &rules}}, http.StatusOK, &proof)
+			SecuritySettings: &iamv1.SecuritySettingsUpdateIntent{ExpectedResourceVersion: 4, MFA: iamv1.AccountMFASettings{}, Password: &rules,
+				Session: &iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30}}}, http.StatusOK, &proof)
 		call(http.MethodPost, "/v1/auth/step-up/"+proof.ID+":verify", modeCaller,
 			map[string]string{"requestId": modeCommand + "-proof", "password": password, "code": nextCode(modeIndex)}, http.StatusOK, &proof)
 		// Hold the real settings transaction after it owns the Account lock.
@@ -1459,7 +1528,7 @@ func prepareRetainedSecuritySettingsProcesses(t *testing.T, ctx context.Context,
 		}
 		modeResponse, staleResponse := orderedRequests(func() <-chan raceResult {
 			return startRequest(http.MethodPut, path, modeCaller, iamv1.UpdateAccountSecuritySettingsRequest{RequestID: modeCommand, StepUpID: proof.ID, ExpectedResourceVersion: 4,
-				MFA: iamv1.AccountMFASettings{}, Password: rules})
+				MFA: iamv1.AccountMFASettings{}, Password: rules, Session: iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30}})
 		}, func() <-chan raceResult {
 			return startRequest(http.MethodPost, "/v1/auth/challenges/"+resetReplay.Challenge.ID+":verify", "",
 				map[string]string{"requestId": "retained-reset-settings-race", "challengeCredential": secret(resetReplay.ChallengeCredential), "code": raceCode})
@@ -1823,25 +1892,69 @@ func prepareRetainedMFAProcesses(t *testing.T, ctx context.Context, admin *pgx.C
 			'challenges',(SELECT jsonb_agg(to_jsonb(c)-'password_reset_required_event_id' ORDER BY id) FROM iam.authentication_challenges c WHERE tenant_id=$1 AND user_id=$2),
 			'recoveries',(SELECT jsonb_agg(to_jsonb(r) ORDER BY id) FROM iam.authenticator_recoveries r WHERE tenant_id=$1 AND user_id=$2),
 			'attempt',(SELECT to_jsonb(a) FROM iam.totp_attempts a WHERE tenant_id=$1 AND user_id=$2),
-			'sessions',(SELECT jsonb_agg(to_jsonb(s) ORDER BY id) FROM iam.sessions s WHERE tenant_id=$1 AND principal_id=$2),
-			'proofs',(SELECT jsonb_agg(to_jsonb(p)-'password_settings' ORDER BY id) FROM iam.step_ups p WHERE tenant_id=$1 AND user_id=$2),
+			'sessions',(SELECT jsonb_agg(jsonb_build_array(tenant_id,id,principal_id,verification_digest,status,resource_version,issued_at,
+			    expires_at,revoked_at,credential_version,authentication_method,authenticated_at,mfa_revision,security_settings_version)
+			    ORDER BY id) FROM iam.sessions WHERE tenant_id=$1 AND principal_id=$2),
+			'proofs',(SELECT jsonb_agg(jsonb_build_array(tenant_id,user_id,id,request_id,operation,source_session_id,credential_generation,
+			    mfa_revision,factor_id,batch_id,account_version,principal_version,state,created_at,expires_at,proved_at,consumed_at,
+			    verification_request_id,verification_digest,password_attempt_id,password_attempt_sequence,totp_attempt_id,
+			    totp_attempt_sequence,verified_step,expected_settings_version,required_for_users) ORDER BY id)
+			    FROM iam.step_ups WHERE tenant_id=$1 AND user_id=$2),
 			'notices',(SELECT jsonb_agg(to_jsonb(n) ORDER BY id) FROM iam.security_notifications n WHERE tenant_id=$1 AND user_id=$2))`, user.AccountID, user.ID).Scan(&state); err != nil {
 			t.Fatal("read original MFA authority invariants", err)
 		}
 		return state
 	}
 	oldBearer := first.Credential
+	var retainedSessionBearer, retainedSessionID, retainedSessionFactor string
+	var retainedSessionUser iamv1.User
+	var retainedSessionStep int64
 	if !recoveryHistory {
-		challenge := login("retained-mfa-old-login")
-		code, consumedStep := processTOTPCode(t, ctx, admin, seed, step, false)
-		*sensitive = append(*sensitive, code)
-		var authenticated iamv1.LoginResponse
-		call(http.MethodPost, "/v1/auth/challenges/"+challenge.Challenge.ID+":verify", "",
-			map[string]string{"requestId": "retained-mfa-old-verify", "challengeCredential": secret(challenge.ChallengeCredential), "code": code}, http.StatusOK, &authenticated)
-		if authenticated.Outcome != iamv1.LoginAuthenticated || !authenticated.Credential.Present() {
-			t.Fatal("old executable did not issue an actual MFA Session")
+		// A dedicated predecessor USER proves the old-Session fail-closed
+		// boundary without spending the removal actor's five-attempt TOTP
+		// budget. Both users and factors are created by the real predecessor.
+		const idlePrefix = "retained-mfa-idle"
+		retainedSessionUser = createIAMUser(t, endpoint, root, "retained.mfa.idle", "Retained MFA idle Session", initial, idlePrefix+"-user")
+		idleRealm := retainedSessionUser.LoginName + "@" + string(retainedSessionUser.AccountID)
+		idleFirst := loginIAM(t, endpoint, idleRealm, initial, idlePrefix+"-initial")
+		*sensitive = append(*sensitive, idleFirst.Credential)
+		changePasswordIAM(t, endpoint, idleFirst.Credential, initial, password, idlePrefix+"-password")
+		var idleContact iamv1.NotificationContactVerification
+		call(http.MethodPost, "/v1/auth/notification-contact/verifications", idleFirst.Credential,
+			map[string]string{"email": idlePrefix + "@matrix.test", "password": password, "requestId": idlePrefix + "-contact"}, http.StatusOK, &idleContact)
+		idleContactCode := readProcessContactCode(t, ctx, admin, idleContact)
+		*sensitive = append(*sensitive, idleContactCode)
+		call(http.MethodPost, "/v1/auth/notification-contact/verifications/"+idleContact.ID+":confirm", idleFirst.Credential,
+			map[string]string{"requestId": idlePrefix + "-contact-confirm", "code": idleContactCode}, http.StatusOK, nil)
+		var idleEnrollment iamv1.StartTOTPEnrollmentResponse
+		call(http.MethodPost, "/v1/auth/totp/enrollments", idleFirst.Credential,
+			map[string]any{"requestId": idlePrefix + "-enroll", "password": password, "expectedFactorRevision": 1}, http.StatusOK, &idleEnrollment)
+		if idleEnrollment.Provisioning == nil {
+			t.Fatal("old executable did not provision the retained idle Session factor")
 		}
-		oldBearer = secret(authenticated.Credential)
+		idleSeed := secret(idleEnrollment.Provisioning.Seed)
+		secret(idleEnrollment.Provisioning.URI)
+		idleCode, idleBoundStep := processTOTPCode(t, ctx, admin, idleSeed, -1, true)
+		*sensitive = append(*sensitive, idleCode)
+		var idleBound iamv1.ConfirmTOTPEnrollmentResponse
+		call(http.MethodPost, "/v1/auth/totp/enrollments/"+idleEnrollment.Enrollment.ID+":confirm", idleFirst.Credential,
+			map[string]string{"requestId": idlePrefix + "-bound", "code": idleCode}, http.StatusOK, &idleBound)
+		for _, material := range idleBound.RecoveryCodes {
+			secret(material)
+		}
+		var idleChallenge, idleAuthenticated iamv1.LoginResponse
+		call(http.MethodPost, "/v1/auth/login", "", map[string]string{"loginName": idleRealm, "password": password, "requestId": idlePrefix + "-login"}, http.StatusOK, &idleChallenge)
+		idleCode, retainedSessionStep = processTOTPCode(t, ctx, admin, idleSeed, idleBoundStep, false)
+		*sensitive = append(*sensitive, idleCode)
+		call(http.MethodPost, "/v1/auth/challenges/"+idleChallenge.Challenge.ID+":verify", "",
+			map[string]string{"requestId": idlePrefix + "-verify", "challengeCredential": secret(idleChallenge.ChallengeCredential), "code": idleCode}, http.StatusOK, &idleAuthenticated)
+		if idleAuthenticated.Outcome != iamv1.LoginAuthenticated || !idleAuthenticated.Credential.Present() {
+			t.Fatal("old executable did not issue the retained idle MFA Session")
+		}
+		retainedSessionBearer = secret(idleAuthenticated.Credential)
+		retainedSessionID = string(idleAuthenticated.Session.ID)
+		retainedSessionFactor = idleEnrollment.Enrollment.ID
+		consumedStep := step
 		pending := login("retained-mfa-old-pending")
 		original := snapshot()
 		t.Cleanup(func() { clear(original) })
@@ -1854,18 +1967,31 @@ func prepareRetainedMFAProcesses(t *testing.T, ctx context.Context, admin *pgx.C
 			}
 			var intact bool
 			if err := admin.QueryRow(ctx, `SELECT
-			 (SELECT status='ACTIVE' AND authentication_method='PASSWORD_TOTP' AND mfa_revision=2 AND security_settings_version=1
-			  FROM iam.sessions WHERE tenant_id=$1 AND principal_id=$2 AND id=$3)
-			 AND (SELECT state='ACTIVE' AND last_consumed_step=$4 FROM iam.totp_authenticators WHERE tenant_id=$1 AND user_id=$2 AND id=$5)
-			 AND (SELECT state='PENDING' AND purpose='LOGIN' AND security_settings_version=1 FROM iam.authentication_challenges WHERE tenant_id=$1 AND id=$6)`,
-				user.AccountID, user.ID, authenticated.Session.ID, consumedStep, enrollment.Enrollment.ID, pending.Challenge.ID).Scan(&intact); err != nil || !intact {
+				 (SELECT status='ACTIVE' AND authentication_method='PASSWORD_TOTP' AND mfa_revision=2 AND security_settings_version=1
+				  AND last_activity_at IS NULL AND idle_timeout_seconds IS NULL
+				  FROM iam.sessions WHERE tenant_id=$1 AND principal_id=$2 AND id=$3)
+				 AND (SELECT state='ACTIVE' AND last_consumed_step=$4 FROM iam.totp_authenticators WHERE tenant_id=$1 AND user_id=$2 AND id=$5)
+				 AND (SELECT state='PENDING' AND purpose='LOGIN' AND security_settings_version=1 FROM iam.authentication_challenges WHERE tenant_id=$1 AND id=$6)`,
+				user.AccountID, retainedSessionUser.ID, retainedSessionID, retainedSessionStep, retainedSessionFactor, pending.Challenge.ID).Scan(&intact); err != nil || !intact {
 				t.Fatal("migration changed actual MFA consumption or original qualification", err)
 			}
-			call(http.MethodGet, "/v1/auth/me", oldBearer, nil, http.StatusOK, nil)
+			call(http.MethodGet, "/v1/auth/me", retainedSessionBearer, nil, http.StatusUnauthorized, nil)
 		}
 		return assertRetained, func() func() {
-			// This proof is made against a genuine predecessor factor, batch
-			// and Session. No migration/DML creates removal authority.
+			// The retained factor and batch remain genuine, but the predecessor
+			// Session has no authoritative activity waterline. Reauthenticate
+			// normally before creating any current removal authority.
+			currentLogin := login("retained-mfa-current-login")
+			currentCode, currentStep := processTOTPCode(t, ctx, admin, seed, consumedStep, false)
+			*sensitive = append(*sensitive, currentCode)
+			var currentAuthentication iamv1.LoginResponse
+			call(http.MethodPost, "/v1/auth/challenges/"+currentLogin.Challenge.ID+":verify", "",
+				map[string]string{"requestId": "retained-mfa-current-proof", "challengeCredential": secret(currentLogin.ChallengeCredential), "code": currentCode}, http.StatusOK, &currentAuthentication)
+			if currentAuthentication.Outcome != iamv1.LoginAuthenticated || !currentAuthentication.Credential.Present() {
+				t.Fatal("retained factor did not support a fresh current Session")
+			}
+			oldBearer = secret(currentAuthentication.Credential)
+			consumedStep = currentStep
 			const request = "retained-mfa-removal"
 			var proof iamv1.StepUp
 			call(http.MethodPost, "/v1/auth/step-up", oldBearer,
@@ -2632,7 +2758,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	// Exercise the exact source services together without weakening install
 	// admission: the workflow separately proves the published installer rejects
 	// this unmatched database shape before effects.
-	sourceProfile := installationrelease.AuthoritySchemas{IAM: 51, Audit: 28, PaaS: 2}
+	sourceProfile := installationrelease.AuthoritySchemas{IAM: 52, Audit: 28, PaaS: 2}
 	publishedProfile := installationrelease.CurrentDatabaseProfile()
 	if publishedProfile.Authorities == sourceProfile {
 		t.Fatal("unreleased authority source shape was published without a final profile gate")
@@ -3670,7 +3796,15 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		t.Fatalf("revoked producer credential reused historical proof: status=%d", response.Status)
 	}
 	assertAuditEventCount(t, ctx, admin, outageEventID, 1)
-	assertAuthorityPlaintextAbsent(t, ctx, admin, sensitive...)
+	if err := ctx.Err(); err != nil {
+		t.Fatal("authority process flow exhausted its original deadline before terminal inspection", err)
+	}
+	// The flow itself retains its original six-minute deadline. Give the final
+	// read-only full-store scan its own bounded observation context so a query
+	// crossing that exact deadline is not misreported as an incomplete scan.
+	inspection, stopInspection := context.WithTimeout(context.Background(), 15*time.Second)
+	defer stopInspection()
+	assertAuthorityPlaintextAbsent(t, inspection, admin, sensitive...)
 }
 
 type binarySet struct {
@@ -4126,16 +4260,19 @@ func configureIAMCapacityHistory(t *testing.T, ctx context.Context, database *pg
 	rules := iamv1.AccountPasswordSettings{ExpiryMode: iamv1.PasswordExpiryChange, MinimumLength: 15, HistoryCount: 24}
 	var proof iamv1.StepUp
 	call(http.MethodPost, "/v1/auth/step-up", caller, iamv1.StartStepUpRequest{RequestID: "history-capacity-settings", Operation: iamv1.StepUpUpdateSecuritySettings, ExpectedFactorRevision: 2,
-		SecuritySettings: &iamv1.SecuritySettingsUpdateIntent{ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{}, Password: &rules}}, &proof, http.StatusOK)
+		SecuritySettings: &iamv1.SecuritySettingsUpdateIntent{ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{}, Password: &rules,
+			Session: &iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30}}}, &proof, http.StatusOK)
 	code, _ = processTOTPCode(t, ctx, database, seed, previous, false)
 	secrets = append(secrets, code)
 	call(http.MethodPost, "/v1/auth/step-up/"+proof.ID+":verify", caller,
 		map[string]string{"requestId": "history-capacity-proof", "password": password, "code": code}, &proof, http.StatusOK)
 	response := performJSON(t, http.MethodPut, replica+"/v1/account/security-settings", caller, iamv1.UpdateAccountSecuritySettingsRequest{
-		RequestID: "history-capacity-settings", StepUpID: proof.ID, ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{}, Password: rules})
+		RequestID: "history-capacity-settings", StepUpID: proof.ID, ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{}, Password: rules,
+		Session: iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30}})
 	var applied iamv1.UpdateAccountSecuritySettingsResponse
 	if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &applied) != nil || applied.Outcome != "APPLIED" ||
-		applied.Change.Settings.Password == nil || *applied.Change.Settings.Password != rules || applied.Change.Settings.MFA.RequiredForUsers || applied.Change.Settings.ResourceVersion != 2 {
+		applied.Change.Settings.Password == nil || *applied.Change.Settings.Password != rules || applied.Change.Settings.Session == nil ||
+		applied.Change.Settings.Session.IdleTimeoutMinutes != 30 || applied.Change.Settings.MFA.RequiredForUsers || applied.Change.Settings.ResourceVersion != 2 {
 		t.Fatal("capacity history rule was not changed by its real operation-bound proof")
 	}
 	return secrets
@@ -7548,10 +7685,12 @@ func proveSecuritySettingsMutationProcesses(t *testing.T, ctx context.Context, a
 	getPaaSApplication(t, paasEndpoint, roleCredential, "application-settings-process", http.StatusOK)
 	var proof iamv1.StepUp
 	call(endpoint, http.MethodPost, "/v1/auth/step-up", caller, iamv1.StartStepUpRequest{RequestID: command, Operation: iamv1.StepUpUpdateSecuritySettings, ExpectedFactorRevision: 2,
-		SecuritySettings: &iamv1.SecuritySettingsUpdateIntent{Password: &iamv1.AccountPasswordSettings{ExpiryMode: iamv1.PasswordExpiryChange, MinimumLength: 15, HistoryCount: 1}, ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}}}, http.StatusOK, &proof)
+		SecuritySettings: &iamv1.SecuritySettingsUpdateIntent{Password: &iamv1.AccountPasswordSettings{ExpiryMode: iamv1.PasswordExpiryChange, MinimumLength: 15, HistoryCount: 1},
+			Session: &iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30}, ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}}}, http.StatusOK, &proof)
 	call(replica, http.MethodPost, "/v1/auth/step-up/"+proof.ID+":verify", caller,
 		map[string]string{"requestId": "process-settings-proof", "password": password, "code": nextCode()}, http.StatusOK, &proof)
-	intent := iamv1.UpdateAccountSecuritySettingsRequest{Password: iamv1.AccountPasswordSettings{ExpiryMode: iamv1.PasswordExpiryChange, MinimumLength: 15, HistoryCount: 1}, RequestID: command, StepUpID: proof.ID, ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}}
+	intent := iamv1.UpdateAccountSecuritySettingsRequest{Password: iamv1.AccountPasswordSettings{ExpiryMode: iamv1.PasswordExpiryChange, MinimumLength: 15, HistoryCount: 1},
+		Session: iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30}, RequestID: command, StepUpID: proof.ID, ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}}
 	var fact auditv1.Event
 	withDispatcherStopped(func() {
 		lost := loseIAMCompletion(t, ctx, http.MethodPut, endpoint, path, caller, intent)

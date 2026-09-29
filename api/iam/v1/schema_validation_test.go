@@ -368,17 +368,21 @@ func TestAccountSecuritySettingsSchemasRejectMissingConfigurationAndAuthoritySel
 func TestPasswordSettingsHistoryCannotBecomeCurrentAuthority(t *testing.T) {
 	api := loadIAMOpenAPI(t)
 	password := `{"minimumLength":15,"requireLowercase":false,"requireUppercase":false,"requireDigit":false,"requireSymbol":false,"historyCount":1,"maxAgeDays":0,"expiryMode":"CHANGE_PASSWORD"}`
+	session := `{"idleTimeoutMinutes":30}`
 	oldSettings := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccountSecuritySettings","accountId":"account-a","resourceVersion":2,"mfa":{"requiredForUsers":true},"updatedAt":"2026-09-24T12:00:00Z"}`
 	oldIntent := `{"expectedResourceVersion":1,"mfa":{"requiredForUsers":true}}`
-	currentSettings := strings.Replace(oldSettings, `,"updatedAt":`, `,"password":`+password+`,"updatedAt":`, 1)
-	currentIntent := strings.TrimSuffix(oldIntent, "}") + `,"password":` + password + `}`
+	passwordSettings := strings.Replace(oldSettings, `,"updatedAt":`, `,"password":`+password+`,"updatedAt":`, 1)
+	passwordIntent := strings.TrimSuffix(oldIntent, "}") + `,"password":` + password + `}`
+	currentSettings := strings.Replace(passwordSettings, `,"updatedAt":`, `,"session":`+session+`,"updatedAt":`, 1)
+	currentIntent := strings.TrimSuffix(passwordIntent, "}") + `,"session":` + session + `}`
 	oldChange := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccountSecuritySettingsChange","requestId":"change-a","expectedResourceVersion":1,"settings":` + oldSettings + `,"callerSessionEnded":true}`
+	passwordChange := strings.Replace(oldChange, oldSettings, passwordSettings, 1)
 	currentChange := strings.Replace(oldChange, oldSettings, currentSettings, 1)
 	oldProof := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"StepUp","id":"proof-a","requestId":"change-a","operation":"SECURITY_SETTINGS_UPDATE","expectedFactorRevision":2,"securitySettings":` + oldIntent + `,"state":"CONSUMED","createdAt":"2026-09-24T11:59:00Z","expiresAt":"2026-09-24T12:01:00Z","provedAt":"2026-09-24T11:59:30Z","consumedAt":"2026-09-24T12:00:00Z"}`
 	preExpiryPassword := strings.Replace(password, `,"maxAgeDays":0,"expiryMode":"CHANGE_PASSWORD"`, "", 1)
-	preExpirySettings := strings.Replace(currentSettings, password, preExpiryPassword, 1)
-	preExpiryIntent := strings.Replace(currentIntent, password, preExpiryPassword, 1)
-	preExpiryChange := strings.Replace(currentChange, password, preExpiryPassword, 1)
+	preExpirySettings := strings.Replace(passwordSettings, password, preExpiryPassword, 1)
+	preExpiryIntent := strings.Replace(passwordIntent, password, preExpiryPassword, 1)
+	preExpiryChange := strings.Replace(passwordChange, password, preExpiryPassword, 1)
 	preExpiryProof := strings.Replace(oldProof, oldIntent, preExpiryIntent, 1)
 	newValue := map[string]func() any{
 		"AccountSecuritySettings":               func() any { return new(AccountSecuritySettings) },
@@ -392,12 +396,15 @@ func TestPasswordSettingsHistoryCannotBecomeCurrentAuthority(t *testing.T) {
 		valid      bool
 	}{
 		{"AccountSecuritySettings", oldSettings, false},
+		{"AccountSecuritySettings", passwordSettings, false},
 		{"AccountSecuritySettings", currentSettings, true},
 		{"AccountSecuritySettings", preExpirySettings, false},
 		{"SecuritySettingsUpdateIntent", oldIntent, false},
+		{"SecuritySettingsUpdateIntent", passwordIntent, false},
 		{"SecuritySettingsUpdateIntent", currentIntent, true},
 		{"SecuritySettingsUpdateIntent", preExpiryIntent, false},
 		{"AccountSecuritySettingsChange", oldChange, true},
+		{"AccountSecuritySettingsChange", passwordChange, true},
 		{"AccountSecuritySettingsChange", currentChange, true},
 		{"AccountSecuritySettingsChange", preExpiryChange, true},
 		{"AccountSecuritySettingsChange", strings.Replace(currentChange, `,"maxAgeDays":0`, "", 1), false},
@@ -409,15 +416,19 @@ func TestPasswordSettingsHistoryCannotBecomeCurrentAuthority(t *testing.T) {
 		{"AccountSecuritySettingsChange", strings.Replace(currentChange, `"historyCount":1`, `"historyCount":25`, 1), false},
 		{"UpdateAccountSecuritySettingsResponse", `{"outcome":"APPLIED","change":` + oldChange + `}`, false},
 		{"UpdateAccountSecuritySettingsResponse", `{"outcome":"EQUAL_REPLAY","change":` + oldChange + `}`, true},
+		{"UpdateAccountSecuritySettingsResponse", `{"outcome":"APPLIED","change":` + passwordChange + `}`, false},
+		{"UpdateAccountSecuritySettingsResponse", `{"outcome":"EQUAL_REPLAY","change":` + passwordChange + `}`, true},
 		{"UpdateAccountSecuritySettingsResponse", `{"outcome":"APPLIED","change":` + currentChange + `}`, true},
 		{"UpdateAccountSecuritySettingsResponse", `{"outcome":"APPLIED","change":` + preExpiryChange + `}`, false},
 		{"UpdateAccountSecuritySettingsResponse", `{"outcome":"EQUAL_REPLAY","change":` + preExpiryChange + `}`, true},
 		{"StepUp", oldProof, true},
+		{"StepUp", strings.Replace(oldProof, oldIntent, passwordIntent, 1), true},
 		{"StepUp", preExpiryProof, true},
 		{"StepUp", strings.Replace(strings.Replace(preExpiryProof, `,"consumedAt":"2026-09-24T12:00:00Z"`, "", 1), "CONSUMED", "PROVED", 1), false},
 		{"StepUp", strings.Replace(strings.Replace(preExpiryProof, `,"provedAt":"2026-09-24T11:59:30Z","consumedAt":"2026-09-24T12:00:00Z"`, "", 1), "CONSUMED", "PENDING", 1), false},
 		{"StepUp", strings.Replace(strings.Replace(preExpiryProof, `,"consumedAt":"2026-09-24T12:00:00Z"`, "", 1), "CONSUMED", "EXPIRED", 1), false},
 		{"StepUp", strings.Replace(oldProof, oldIntent, currentIntent, 1), true},
+		{"StepUp", strings.Replace(strings.Replace(strings.Replace(oldProof, oldIntent, passwordIntent, 1), `,"consumedAt":"2026-09-24T12:00:00Z"`, "", 1), "CONSUMED", "PROVED", 1), false},
 		{"StepUp", strings.Replace(oldProof, oldIntent, strings.TrimSuffix(oldIntent, "}")+`,"password":null}`, 1), false},
 		{"StepUp", strings.Replace(strings.Replace(oldProof, `,"consumedAt":"2026-09-24T12:00:00Z"`, "", 1), "CONSUMED", "PROVED", 1), false},
 		{"StepUp", strings.Replace(strings.Replace(oldProof, `,"provedAt":"2026-09-24T11:59:30Z","consumedAt":"2026-09-24T12:00:00Z"`, "", 1), "CONSUMED", "PENDING", 1), false},
@@ -448,7 +459,7 @@ func TestPasswordSettingsHistoryCannotBecomeCurrentAuthority(t *testing.T) {
 		})
 	}
 	var old AccountSecuritySettingsChange
-	if json.Unmarshal([]byte(oldChange), &old) != nil || old.Settings.Password != nil || ValidateAccountSecuritySettings(old.Settings) == nil {
+	if json.Unmarshal([]byte(oldChange), &old) != nil || old.Settings.Password != nil || old.Settings.Session != nil || ValidateAccountSecuritySettings(old.Settings) == nil {
 		t.Fatal("historical settings passed current configuration validation")
 	}
 	var proof StepUp
@@ -456,7 +467,7 @@ func TestPasswordSettingsHistoryCannotBecomeCurrentAuthority(t *testing.T) {
 		t.Fatal("consumed legacy intent became a new command")
 	}
 	if json.Unmarshal([]byte(preExpiryChange), &old) != nil || old.Settings.Password == nil ||
-		old.Settings.Password.ExpiryMode != "" || ValidateAccountSecuritySettings(old.Settings) == nil {
+		old.Settings.Password.ExpiryMode != "" || old.Settings.Session != nil || ValidateAccountSecuritySettings(old.Settings) == nil {
 		t.Fatal("pre-expiry completion acquired current expiry defaults")
 	}
 	if json.Unmarshal([]byte(preExpiryProof), &proof) != nil || proof.SecuritySettings == nil || ValidateSecuritySettingsUpdateIntent(*proof.SecuritySettings) == nil {
@@ -468,7 +479,7 @@ func TestStepUpSchemasKeepOperationProofSeparateFromLoginAndSecretReplay(t *test
 	api := loadIAMOpenAPI(t)
 	step := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"StepUp","id":"proof-a","requestId":"regenerate-a","operation":"RECOVERY_CODES_REGENERATE","expectedFactorRevision":2,"state":"PENDING","createdAt":"2026-09-21T12:00:00Z","expiresAt":"2026-09-21T12:02:00Z"}`
 	start := `{"requestId":"regenerate-a","operation":"RECOVERY_CODES_REGENERATE","expectedFactorRevision":2}`
-	settingsIntent := `{"expectedResourceVersion":1,"mfa":{"requiredForUsers":true},"password":{"minimumLength":15,"requireLowercase":false,"requireUppercase":false,"requireDigit":false,"requireSymbol":false,"historyCount":1,"maxAgeDays":0,"expiryMode":"CHANGE_PASSWORD"}}`
+	settingsIntent := `{"expectedResourceVersion":1,"mfa":{"requiredForUsers":true},"password":{"minimumLength":15,"requireLowercase":false,"requireUppercase":false,"requireDigit":false,"requireSymbol":false,"historyCount":1,"maxAgeDays":0,"expiryMode":"CHANGE_PASSWORD"},"session":{"idleTimeoutMinutes":30}}`
 	settingsStep := strings.TrimSuffix(strings.Replace(step, "RECOVERY_CODES_REGENERATE", "SECURITY_SETTINGS_UPDATE", 1), "}") + `,"securitySettings":` + settingsIntent + `}`
 	settingsStart := strings.TrimSuffix(strings.Replace(start, "RECOVERY_CODES_REGENERATE", "SECURITY_SETTINGS_UPDATE", 1), "}") + `,"securitySettings":` + settingsIntent + `}`
 	removeStep := strings.Replace(step, "RECOVERY_CODES_REGENERATE", "TOTP_REMOVE", 1)

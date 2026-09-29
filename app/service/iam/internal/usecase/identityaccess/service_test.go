@@ -1108,7 +1108,7 @@ func TestTOTPReplacementStartKeepsOriginalCallerProofAndOneTimeMaterial(t *testi
 func TestStartStepUpRejectsChangedSettingsIntent(t *testing.T) {
 	// The storage port must return the exact non-secret intent, not merely a
 	// syntactically valid proof. Real MFA eligibility remains a PostgreSQL gate.
-	for _, changed := range []string{"none", "missing", "version", "value", "password", "missing password", "operation"} {
+	for _, changed := range []string{"none", "missing", "version", "value", "password", "missing password", "session", "missing session", "operation"} {
 		t.Run(changed, func(t *testing.T) {
 			tx := newCoreTransaction()
 			service, err := newCoreAuthority(&coreRepository{transaction: tx}, Config{})
@@ -1128,11 +1128,14 @@ func TestStartStepUpRejectsChangedSettingsIntent(t *testing.T) {
 				t.Fatal(err)
 			}
 			passwordSettings := authority.DefaultPasswordSettings()
-			intent := iamv1.SecuritySettingsUpdateIntent{ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}, Password: &passwordSettings}
+			sessionSettings := iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30}
+			intent := iamv1.SecuritySettingsUpdateIntent{ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}, Password: &passwordSettings, Session: &sessionSettings}
 			request := iamv1.StartStepUpRequest{RequestID: "settings-original", Operation: iamv1.StepUpUpdateSecuritySettings, ExpectedFactorRevision: 2, SecuritySettings: &intent}
 			returnedIntent := intent
 			returnedPassword := passwordSettings
+			returnedSession := sessionSettings
 			returnedIntent.Password = &returnedPassword
+			returnedIntent.Session = &returnedSession
 			tx.stepUpStartResult = iamv1.StepUp{APIVersion: iamv1.APIVersion, Kind: "StepUp", ID: "settings-proof", RequestID: request.RequestID,
 				Operation: request.Operation, ExpectedFactorRevision: request.ExpectedFactorRevision, SecuritySettings: &returnedIntent,
 				State: "PENDING", CreatedAt: tx.now, ExpiresAt: tx.now.Add(120 * time.Second)}
@@ -1147,6 +1150,10 @@ func TestStartStepUpRejectsChangedSettingsIntent(t *testing.T) {
 				returnedPassword.HistoryCount = 24
 			case "missing password":
 				returnedIntent.Password = nil
+			case "session":
+				returnedSession.IdleTimeoutMinutes = 60
+			case "missing session":
+				returnedIntent.Session = nil
 			case "operation":
 				tx.stepUpStartResult.Operation, tx.stepUpStartResult.SecuritySettings = iamv1.StepUpRegenerateRecoveryCodes, nil
 			}
@@ -1388,6 +1395,13 @@ func TestOwnLoginSessionWorkflowBindsTheActualCallerAndRejectsBadStorage(t *test
 		page.UserID != a.Session.PrincipalID || !page.ObservedAt.Equal(tx.now) || len(tx.authorizations) != 0 {
 		t.Fatal("self directory invented management authority or a caller", err)
 	}
+	activity, err := service.TouchCurrentSession(t.Context(), a.Credential)
+	if err != nil || iamv1.ValidateSessionActivity(activity) != nil || activity.SessionID != a.Session.ID ||
+		activity.AccountID != a.Session.AccountID || activity.UserID != a.Session.PrincipalID ||
+		!activity.AbsoluteExpiresAt.Equal(a.Session.ExpiresAt) || len(tx.sessionTouches) != 1 || tx.sessionTouches[0] != a.Session ||
+		len(tx.authorizations) != 0 {
+		t.Fatal("session activity invented management authority or another caller", err)
+	}
 	if _, err := service.RevokeOwnSession(t.Context(), a.Credential, a.Session.ID, iamv1.RevokeSessionRequest{RequestID: "own-current"}); !errors.Is(err, ErrConflict) || tx.sessionRevocation != nil {
 		t.Fatal("current session bypassed logout", err)
 	}
@@ -1401,6 +1415,10 @@ func TestOwnLoginSessionWorkflowBindsTheActualCallerAndRejectsBadStorage(t *test
 		}
 		if _, err := service.RevokeOwnSession(t.Context(), wrong.Credential, b.Session.ID, iamv1.RevokeSessionRequest{RequestID: "own-wrong"}); !errors.Is(err, ErrUnauthenticated) || tx.sessionRevocation != nil {
 			t.Fatal("non-login revocation", err)
+		}
+		before := len(tx.sessionTouches)
+		if _, err := service.TouchCurrentSession(t.Context(), wrong.Credential); !errors.Is(err, ErrUnauthenticated) || len(tx.sessionTouches) != before {
+			t.Fatal("non-login activity touch", err)
 		}
 	}
 	for _, variant := range []string{"null", "cross-account", "cross-user", "duplicate", "expired", "lookahead"} {
@@ -1432,6 +1450,30 @@ func TestOwnLoginSessionWorkflowBindsTheActualCallerAndRejectsBadStorage(t *test
 			}
 		})
 	}
+	validActivity := activity
+	for name, alter := range map[string]func(*iamv1.SessionActivity){
+		"session":  func(value *iamv1.SessionActivity) { value.SessionID = "unrelated-session" },
+		"account":  func(value *iamv1.SessionActivity) { value.AccountID = "unrelated-account" },
+		"user":     func(value *iamv1.SessionActivity) { value.UserID = "unrelated-user" },
+		"idle":     func(value *iamv1.SessionActivity) { value.IdleExpiresAt = value.LastActivityAt.Add(4 * time.Minute) },
+		"absolute": func(value *iamv1.SessionActivity) { value.AbsoluteExpiresAt = value.AbsoluteExpiresAt.Add(time.Second) },
+		"time":     func(value *iamv1.SessionActivity) { value.LastActivityAt = time.Time{} },
+	} {
+		t.Run("activity-"+name, func(t *testing.T) {
+			candidate := validActivity
+			alter(&candidate)
+			tx.sessionActivity = &candidate
+			defer func() { tx.sessionActivity = nil }()
+			if result, err := service.TouchCurrentSession(t.Context(), a.Credential); !errors.Is(err, ErrUnavailable) || result != (iamv1.SessionActivity{}) {
+				t.Fatal("untrusted session activity became a public result", err)
+			}
+		})
+	}
+	tx.sessionActivityError = ErrConflict
+	if result, err := service.TouchCurrentSession(t.Context(), a.Credential); !errors.Is(err, ErrConflict) || result != (iamv1.SessionActivity{}) {
+		t.Fatal("failed activity touch escaped", err)
+	}
+	tx.sessionActivityError = nil
 	request := iamv1.RevokeSessionRequest{RequestID: "own-revoke"}
 	result, err := service.RevokeOwnSession(t.Context(), a.Credential, b.Session.ID, request)
 	if err != nil || result.Outcome != "APPLIED" || result.Revocation.ID != string(b.Session.ID) || tx.sessionRevocation == nil || len(tx.authorizations) != 0 {
@@ -1588,7 +1630,8 @@ func TestAccountSecuritySettingsCannotBypassCurrentSessionAndExplicitAuthority(t
 		t.Fatal("settings denial did not bind the current real Account and audit decision")
 	}
 	update := iamv1.UpdateAccountSecuritySettingsRequest{RequestID: "settings-denied-write", StepUpID: "not-a-permit",
-		ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}, Password: authority.DefaultPasswordSettings()}
+		ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}, Password: authority.DefaultPasswordSettings(),
+		Session: iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30}}
 	if _, err := service.UpdateAccountSecuritySettings(t.Context(), login.Credential, update); !errors.Is(err, ErrForbidden) {
 		t.Fatal("settings proof ID substituted for current write permission", err)
 	}
@@ -2778,6 +2821,9 @@ type coreTransaction struct {
 	otherSessionResult            iamv1.RevokeOtherSessionsResponse
 	otherSessionError             error
 	ownSessionItems               *[]iamv1.Session
+	sessionActivity               *iamv1.SessionActivity
+	sessionActivityError          error
+	sessionTouches                []iamv1.Session
 	localRecoveryInspection       iamv1.LocalCredentialRecoveryInspection
 	localRecoveryResult           iamv1.LocalCredentialRecoveryResult
 	localRecoveryMutation         *LocalCredentialRecoveryMutation
@@ -3310,6 +3356,19 @@ func (transaction *coreTransaction) ListOwnSessions(_ context.Context, read OwnS
 	}
 	slices.SortFunc(items, func(a, b iamv1.Session) int { return strings.Compare(string(a.ID), string(b.ID)) })
 	return items[:min(len(items), iamv1.DirectoryPageSize+1)], nil
+}
+
+func (transaction *coreTransaction) TouchSession(_ context.Context, session iamv1.Session) (iamv1.SessionActivity, error) {
+	transaction.sessionTouches = append(transaction.sessionTouches, session)
+	if transaction.sessionActivityError != nil {
+		return iamv1.SessionActivity{}, transaction.sessionActivityError
+	}
+	if transaction.sessionActivity != nil {
+		return *transaction.sessionActivity, nil
+	}
+	return iamv1.SessionActivity{APIVersion: iamv1.APIVersion, Kind: "SessionActivity", SessionID: session.ID,
+		AccountID: session.AccountID, UserID: session.PrincipalID, LastActivityAt: transaction.now,
+		IdleExpiresAt: transaction.now.Add(30 * time.Minute), AbsoluteExpiresAt: session.ExpiresAt}, nil
 }
 
 func (transaction *coreTransaction) LookupService(
