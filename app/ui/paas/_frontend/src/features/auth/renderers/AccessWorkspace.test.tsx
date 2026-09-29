@@ -1665,6 +1665,54 @@ describe("CAM-style access workspace", () => {
     expect(within(table).getByRole("columnheader", { name: "直接关联策略" })).toBeTruthy();
     expect(within(table).getByText("2 项直接关联")).toBeTruthy();
   });
+  it("keeps the group directory structure mounted while live rows load or fail", async () => {
+    let resolveGroups!: (page: { items: GroupAccess[]; nextAfter: null }) => void;
+    const listGroups = vi.fn()
+      .mockImplementationOnce(() => new Promise<{ items: GroupAccess[]; nextAfter: null }>((resolve) => { resolveGroups = resolve; }))
+      .mockRejectedValueOnce(new HttpProblem(503, "IAM_UNAVAILABLE"))
+      .mockResolvedValueOnce({ items: [], nextAfter: null });
+    const { user } = await open("groups", { live: true, repository: { listGroups } });
+
+    expect(screen.getByRole("heading", { name: "用户组" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "新建用户组" })).toBeTruthy();
+    expect(screen.getByRole("searchbox", { name: "搜索名称、ID 或关键字" })).toBeTruthy();
+    expect(screen.getByText("正在读取用户组…")).toBeTruthy();
+    expect(screen.queryByText("暂无记录")).toBeNull();
+
+    await act(async () => { resolveGroups({ items: [], nextAfter: null }); });
+    expect(await screen.findByText("暂无记录")).toBeTruthy();
+
+    await user.click(screen.getByTestId("go-users"));
+    await user.click(screen.getByTestId("go-groups"));
+    expect(await screen.findByText("暂时无法读取用户组")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "用户组" })).toBeTruthy();
+    expect(screen.getByRole("searchbox", { name: "搜索名称、ID 或关键字" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "重试" }));
+    expect(await screen.findByText("暂无记录")).toBeTruthy();
+    expect(listGroups).toHaveBeenCalledTimes(3);
+  });
+  it("keeps a stable group detail heading and back path while the live object loads", async () => {
+    let resolveGroup!: (access: GroupAccess) => void;
+    const liveGroup: GroupAccess = {
+      group: { id: "group-slow", accountId: account.id, name: "SlowTeam", description: "Loaded after the detail shell", resourceVersion: 1, createdAt: "2026-09-11T08:00:00Z", updatedAt: "2026-09-11T08:00:00Z" },
+      policyAttachments: [],
+      capabilities: [capability("iam.group.read", "GROUP", "group-slow")]
+    };
+    const { user } = await open("groups", { live: true, entityId: liveGroup.group.id, repository: {
+      getGroup: vi.fn(() => new Promise<GroupAccess>((resolve) => { resolveGroup = resolve; }))
+    } });
+
+    expect(screen.getByRole("heading", { name: "用户组" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "返回列表" })).toBeTruthy();
+    expect(screen.getByText("正在读取用户组详情…")).toBeTruthy();
+    expect(screen.queryByText("Loaded after the detail shell")).toBeNull();
+
+    await act(async () => { resolveGroup(liveGroup); });
+    expect(await screen.findByRole("heading", { name: "SlowTeam" })).toBeTruthy();
+    expect(screen.getByText("Loaded after the detail shell")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "返回列表" }));
+    expect(await screen.findByRole("heading", { name: "用户组" })).toBeTruthy();
+  });
   it("keeps already loaded group members visible during refresh but not after a failed authoritative read", () => {
     const detail = {
       id: "group-refetch", name: "RefetchTeam", description: "", createdAt: "2026-09-11T08:00:00Z", directPolicyCount: 0,

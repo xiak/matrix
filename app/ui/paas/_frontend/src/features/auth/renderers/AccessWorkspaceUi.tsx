@@ -3,7 +3,7 @@
 import { Children, Fragment, cloneElement, isValidElement, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode, type Ref, type RefObject } from "react";
 import { useFormatter, useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
-import { Alert, Button, Card, ContentPage, Dialog, EmptyState, FormField, Input, Table, TableToolbar, TablePagination, Transfer, type PageCommand, type PageCommandsHandle } from "@ui/xiak";
+import { Alert, Button, Card, ContentPage, Dialog, EmptyState, FormField, Input, Table, TableSkeleton, TableToolbar, TablePagination, Transfer, type PageCommand, type PageCommandsHandle } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import styles from "./AccountAccessRenderer.module.css";
@@ -36,7 +36,7 @@ function labelCollectionCells(content: ReactNode, columns: readonly string[]) {
     : cell);
 }
 
-export function WorkspaceCollection<T extends { id: string; name: string }>({ title, description, items, columns, row, create, secondaryActions = [], keywords, filter, embedded = false, status, loadMore, footerNote, workflow, createActionRef, createFocusRef }: {
+export function WorkspaceCollection<T extends { id: string; name: string }>({ title, description, items, columns, row, create, secondaryActions = [], keywords, filter, embedded = false, status, loadMore, footerNote, workflow, loading, unavailable, createActionRef, createFocusRef }: {
   title: string; description: string; items: T[]; columns: string[];
   row(item: T): ReactNode; create?: { label: string; disabled?: boolean; reason?: string; onClick(): void }; embedded?: boolean;
   secondaryActions?: readonly PageCommand[];
@@ -46,6 +46,8 @@ export function WorkspaceCollection<T extends { id: string; name: string }>({ ti
   loadMore?: { label: string; disabled?: boolean; busy?: boolean; onClick(): void };
   footerNote?: ReactNode;
   workflow?: ReactNode;
+  loading?: { label: string; rows?: number };
+  unavailable?: { title: string; description?: string; action?: ReactNode };
   createActionRef?: RefObject<HTMLButtonElement | null>;
   createFocusRef?: Ref<PageCommandsHandle>;
 }) {
@@ -73,14 +75,18 @@ export function WorkspaceCollection<T extends { id: string; name: string }>({ ti
     <TableToolbar labels={toolbarLabels} search={{ label: t("search"), value: query, onChange: (value) => { setQuery(value); setPage(1); } }}
       actions={embedded ? action : null}
       filters={filter ? [{ id: "kind", label: filter.label, options: [{ value: "all", label: t("all") }, ...filter.options], value: kind, onChange: (value) => { setKind(value); setPage(1); } }] : []}
-      status={status ?? t("count", { count: matches.length })} />
-    <Table aria-label={title} aria-busy={deferredQuery !== query} mobileLayout="stack"><thead><tr>{columns.map((column) => <th scope="col" key={column}>{column}</th>)}</tr></thead><tbody>{matches.slice((currentPage - 1) * pageSize, currentPage * pageSize).map((item) => <tr key={item.id}>{labelCollectionCells(row(item), columns)}</tr>)}</tbody></Table>
-    {!matches.length ? <EmptyState title={items.length ? t("noResults") : t("empty")} description={items.length ? t("noResultsHint") : t("emptyHint")} action={items.length ? <Button onClick={reset} variant="secondary">{toolbarLabels.resetQuery}</Button> : undefined} /> : null}
-    <Table.Footer note={footerNote}>
-      <TablePagination page={currentPage} pages={pages} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
-        trailing={loadMore ? <Button disabled={loadMore.disabled || loadMore.busy} onClick={loadMore.onClick} size="small" variant="secondary">{loadMore.label}</Button> : null}
-        labels={{ summary: t("page", { page: currentPage, pages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} />
-    </Table.Footer>
+      status={loading || unavailable ? "" : status ?? t("count", { count: matches.length })} />
+    {unavailable ? <EmptyState title={unavailable.title} description={unavailable.description} action={unavailable.action} />
+      : loading ? <TableSkeleton label={loading.label} rows={loading.rows ?? 4} header={false} />
+      : <>
+        <Table aria-label={title} aria-busy={deferredQuery !== query} mobileLayout="stack"><thead><tr>{columns.map((column) => <th scope="col" key={column}>{column}</th>)}</tr></thead><tbody>{matches.slice((currentPage - 1) * pageSize, currentPage * pageSize).map((item) => <tr key={item.id}>{labelCollectionCells(row(item), columns)}</tr>)}</tbody></Table>
+        {!matches.length ? <EmptyState title={items.length ? t("noResults") : t("empty")} description={items.length ? t("noResultsHint") : t("emptyHint")} action={items.length ? <Button onClick={reset} variant="secondary">{toolbarLabels.resetQuery}</Button> : undefined} /> : null}
+        <Table.Footer note={footerNote}>
+          <TablePagination page={currentPage} pages={pages} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
+            trailing={loadMore ? <Button disabled={loadMore.disabled || loadMore.busy} onClick={loadMore.onClick} size="small" variant="secondary">{loadMore.label}</Button> : null}
+            labels={{ summary: t("page", { page: currentPage, pages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} />
+        </Table.Footer>
+      </>}
     </>}
   </Card>;
 }

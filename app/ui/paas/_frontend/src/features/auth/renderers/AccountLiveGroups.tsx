@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Alert, Badge, Button, EmptyState, FormField, Input, PageSkeleton, TextArea } from "@ui/xiak";
+import { Alert, Badge, Button, EmptyState, FormField, Input, TableSkeleton, TextArea } from "@ui/xiak";
 import { accountError, type GroupAccessClient } from "../application/AccountAccessProvider";
 import type {
   AccountAccessView,
@@ -12,7 +12,7 @@ import type {
 } from "../domain/accounts";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
 import { findActionCapability } from "../scenes/accountAccessScene";
-import { WorkspaceDelete, WorkspaceDialog, WorkspaceInlineForm, WorkspaceSelection } from "./AccessWorkspaceUi";
+import { WorkspaceDelete, WorkspaceDetail, WorkspaceDialog, WorkspaceInlineForm, WorkspaceSelection } from "./AccessWorkspaceUi";
 import {
   GroupDetail,
   GroupDirectory,
@@ -236,9 +236,10 @@ function LiveGroupDelete({ client, access, onClose, onDeleted, onStale }: {
   />;
 }
 
-function LiveGroupWorkspace({ client, entityId, scene, onOpen }: {
+function LiveGroupWorkspace({ client, entityId, summary, scene, onOpen }: {
   client: GroupAccessClient;
   entityId: string;
+  summary?: GroupAccess;
   scene: AccountAccessScene;
   onOpen: OpenGroupEntity;
 }) {
@@ -378,8 +379,13 @@ function LiveGroupWorkspace({ client, entityId, scene, onOpen }: {
     (target?.disabled ? editTrigger.current : target)?.focus({ preventScroll: true });
   }, [change, membersPhase, phase]);
 
-  if (phase === "loading") return <PageSkeleton label={t("loadingGroup")} layout="access" />;
-  if (phase === "error" || !access || !record) return <EmptyState title={w("entityUnavailable")} description={pageError ?? w("entityUnavailableHint")} action={<Button variant="secondary" onClick={() => { setPhase("loading"); void load(true); }}>{t("retry")}</Button>} />;
+  const stableTitle = access?.group.name ?? summary?.group.name ?? w("groups");
+  if (phase === "loading") return <WorkspaceDetail title={stableTitle} onBack={() => onOpen("groups")}>
+    <TableSkeleton label={t("loadingGroup")} rows={4} header={false} />
+  </WorkspaceDetail>;
+  if (phase === "error" || !access || !record) return <WorkspaceDetail title={stableTitle} onBack={() => onOpen("groups")}>
+    <EmptyState title={w("entityUnavailable")} description={pageError ?? w("entityUnavailableHint")} action={<Button variant="secondary" onClick={() => { setPhase("loading"); void load(true); }}>{t("retry")}</Button>} />
+  </WorkspaceDetail>;
 
   const edit = groupCapability(access, "iam.group.update");
   const remove = groupCapability(access, "iam.group.delete");
@@ -445,26 +451,28 @@ export function AccountLiveGroups({ client, entityId, scene, onCreate, onOpen }:
   const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
   const [error, setError] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
+  const directoryRequestVersion = useRef(0);
 
   useEffect(() => {
-    if (entityId) return;
-    let current = true;
+    if (entityId) {
+      directoryRequestVersion.current += 1;
+      return;
+    }
+    const version = ++directoryRequestVersion.current;
     client.list().then((page) => {
-      if (!current) return;
+      if (version !== directoryRequestVersion.current) return;
       setGroups(page.items);
       setNextAfter(page.nextAfter);
       setPhase("ready");
     }, (failure: unknown) => {
-      if (!current) return;
+      if (version !== directoryRequestVersion.current) return;
       setError(a(`errors.${accountError(failure)}`));
       setPhase("error");
     });
-    return () => { current = false; };
+    return () => { directoryRequestVersion.current += 1; };
   }, [a, client, entityId]);
 
-  if (entityId) return <LiveGroupWorkspace key={entityId} client={client} entityId={entityId} scene={scene} onOpen={onOpen} />;
-  if (phase === "loading") return <PageSkeleton label={t("loadingGroups")} layout="access" />;
-  if (phase === "error") return <EmptyState title={t("directoryUnavailable")} description={error ?? undefined} action={<Button variant="secondary" onClick={() => { setPhase("loading"); client.list().then((page) => { setGroups(page.items); setNextAfter(page.nextAfter); setPhase("ready"); setError(null); }, (failure: unknown) => { setError(a(`errors.${accountError(failure)}`)); setPhase("error"); }); }}>{t("retry")}</Button>} />;
+  if (entityId) return <LiveGroupWorkspace key={entityId} client={client} entityId={entityId} summary={groups.find((entry) => entry.group.id === entityId)} scene={scene} onOpen={onOpen} />;
 
   const directory: GroupDirectoryRecord[] = groups.map((entry) => ({
     id: entry.group.id,
@@ -474,9 +482,25 @@ export function AccountLiveGroups({ client, entityId, scene, onCreate, onOpen }:
     directPolicyCount: entry.policyAttachments.length
   }));
   return <>
-    {error ? <Alert status="warning">{error}</Alert> : null}
+    {phase === "ready" && error ? <Alert status="warning">{error}</Alert> : null}
     <GroupDirectory
       groups={directory}
+      loading={phase === "loading"}
+      unavailable={phase === "error" ? { description: error ?? undefined, retry: { onInvoke: () => {
+        const version = ++directoryRequestVersion.current;
+        setPhase("loading");
+        setError(null);
+        client.list().then((page) => {
+          if (version !== directoryRequestVersion.current) return;
+          setGroups(page.items);
+          setNextAfter(page.nextAfter);
+          setPhase("ready");
+        }, (failure: unknown) => {
+          if (version !== directoryRequestVersion.current) return;
+          setError(a(`errors.${accountError(failure)}`));
+          setPhase("error");
+        });
+      } } } : undefined}
       status={t("loadedGroups", { count: groups.length })}
       footerNote={t("loadedSearchScope")}
       create={{ disabled: !client.canCreate, reason: client.createRestrictionReason ?? undefined, onInvoke: onCreate }}

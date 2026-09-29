@@ -61,12 +61,14 @@ export type GroupDetailControls = {
   retryMembers?: GroupActionControl;
 };
 
-export function GroupDirectory({ groups, create, loadMore, status, footerNote, onOpen }: {
+export function GroupDirectory({ groups, create, loadMore, status, footerNote, loading, unavailable, onOpen }: {
   groups: GroupDirectoryRecord[];
   create?: GroupActionControl;
   loadMore?: GroupActionControl;
   status?: string;
   footerNote?: string;
+  loading?: boolean;
+  unavailable?: { description?: string; retry: GroupActionControl };
   onOpen(groupId: string): void;
 }) {
   const t = useTranslations("IamWorkspace");
@@ -82,6 +84,12 @@ export function GroupDirectory({ groups, create, loadMore, status, footerNote, o
     loadMore={loadMore ? { label: g("loadMore"), disabled: loadMore.disabled, onClick: loadMore.onInvoke } : undefined}
     status={status}
     footerNote={footerNote}
+    loading={loading ? { label: g("loadingGroups"), rows: 6 } : undefined}
+    unavailable={unavailable ? {
+      title: g("directoryUnavailable"),
+      description: unavailable.description,
+      action: <Button variant="secondary" disabled={unavailable.retry.disabled} title={unavailable.retry.reason} onClick={unavailable.retry.onInvoke}>{g("retry")}</Button>
+    } : undefined}
     columns={[t("name"), ...(showMemberCount ? [t("members")] : []), g("directPolicies"), t("created")]}
     row={(group) => <>
       <td>
