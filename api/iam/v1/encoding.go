@@ -923,13 +923,26 @@ func (subject *Subject) UnmarshalJSON(source []byte) error {
 	return nil
 }
 
+func (context *AuthorizationNetworkContext) UnmarshalJSON(source []byte) error {
+	type wire AuthorizationNetworkContext
+	var decoded wire
+	if context == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil ||
+		ValidateAuthorizationNetworkContext(AuthorizationNetworkContext(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*context = AuthorizationNetworkContext(decoded)
+	return nil
+}
+
 func (request *AuthorizationRequest) UnmarshalJSON(source []byte) error {
 	type wire AuthorizationRequest
 	var decoded wire
 	if err := contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded); err != nil {
 		return err
 	}
-	if checkAuthorizationTargetEncoding(source, decoded.ResourceMode) != nil {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(source, &fields) != nil || checkOptionalNetworkContextEncoding(fields, decoded.NetworkContext) != nil ||
+		checkAuthorizationTargetEncoding(source, decoded.ResourceMode) != nil {
 		return contractjson.ErrInvalidDocument
 	}
 	*request = AuthorizationRequest(decoded)
@@ -947,7 +960,7 @@ func (decision *AuthorizationDecision) UnmarshalJSON(source []byte) error {
 		return contractjson.ErrInvalidDocument
 	}
 	current := false
-	for _, key := range []string{"profile", "resourceMode", "collectionUsage", "correlationId"} {
+	for _, key := range []string{"profile", "resourceMode", "collectionUsage", "networkContext", "correlationId"} {
 		if _, exists := fields[key]; exists {
 			current = true
 		}
@@ -955,11 +968,25 @@ func (decision *AuthorizationDecision) UnmarshalJSON(source []byte) error {
 	// This preserves only historical syntax. It does not establish legacy row
 	// eligibility; current consumers validate the mandatory full binding.
 	if current {
-		if checkAuthorizationTargetEncoding(source, decoded.ResourceMode) != nil || decoded.Profile == nil || decoded.CorrelationID == "" {
+		if checkOptionalNetworkContextEncoding(fields, decoded.NetworkContext) != nil || checkAuthorizationTargetEncoding(source, decoded.ResourceMode) != nil || decoded.Profile == nil || decoded.CorrelationID == "" {
 			return contractjson.ErrInvalidDocument
 		}
 	}
 	*decision = AuthorizationDecision(decoded)
+	return nil
+}
+
+func checkOptionalNetworkContextEncoding(fields map[string]json.RawMessage, value *AuthorizationNetworkContext) error {
+	encoded, present := fields["networkContext"]
+	if !present {
+		if value != nil {
+			return contractjson.ErrInvalidDocument
+		}
+		return nil
+	}
+	if value == nil || bytes.Equal(bytes.TrimSpace(encoded), []byte("null")) {
+		return contractjson.ErrInvalidDocument
+	}
 	return nil
 }
 

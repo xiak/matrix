@@ -32,6 +32,7 @@ func TestClientMapsAllowedIAMDecisionWithoutTrustingCallerAuthority(t *testing.T
 		if iamv1.DecodeRequest(request.Body, &body) != nil ||
 			body.Action != iamv1.ActionPaaSApplicationCreate ||
 			body.Resource != (iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "collection"}) ||
+			body.NetworkContext == nil || body.NetworkContext.SourceIP != "192.0.2.10" ||
 			body.RequestID != "request-paas-authorize" || body.CorrelationID != body.RequestID {
 			t.Fatalf("IAM authorization request=%#v", body)
 		}
@@ -42,7 +43,7 @@ func TestClientMapsAllowedIAMDecisionWithoutTrustingCallerAuthority(t *testing.T
 			TenantID: "organization-a",
 			Subject:  &iamv1.Subject{Type: iamv1.SubjectUser, ID: "principal-developer"},
 			Action:   body.Action, Resource: body.Resource, RequestID: body.RequestID,
-			Profile: &body.Profile, ResourceMode: body.ResourceMode, CollectionUsage: body.CollectionUsage, CorrelationID: body.CorrelationID,
+			Profile: &body.Profile, ResourceMode: body.ResourceMode, CollectionUsage: body.CollectionUsage, NetworkContext: body.NetworkContext, CorrelationID: body.CorrelationID,
 			DecidedAt: time.Date(2026, 8, 26, 1, 2, 3, 456_000, time.UTC),
 		})
 	}))
@@ -64,6 +65,7 @@ func TestClientMapsAllowedIAMDecisionWithoutTrustingCallerAuthority(t *testing.T
 		Action:       port.AuthorizeDeploymentStop,
 		Resource:     paasv1.ResourceRef{Kind: "Deployment", ID: "deployment-a"},
 		ResourceMode: iamv1.AuthorizationResourceInstance,
+		SourceIP:     "192.0.2.10",
 		RequestID:    "request-paas-stop",
 	})
 	if err != nil || stopRequest.Action != iamv1.ActionPaaSDeploymentStop {
@@ -85,7 +87,7 @@ func TestClientFailsClosedForDenialStatusAndInvalidResponse(t *testing.T) {
 					APIVersion: iamv1.APIVersion, Kind: "AuthorizationDecision",
 					ID: "decision-denied", Reason: iamv1.DecisionDenied,
 					Action: request.Action, Resource: request.Resource, RequestID: request.RequestID,
-					Profile: &request.Profile, ResourceMode: request.ResourceMode, CollectionUsage: request.CollectionUsage, CorrelationID: request.CorrelationID,
+					Profile: &request.Profile, ResourceMode: request.ResourceMode, CollectionUsage: request.CollectionUsage, NetworkContext: request.NetworkContext, CorrelationID: request.CorrelationID,
 					DecidedAt: time.Date(2026, 8, 26, 1, 2, 3, 0, time.UTC),
 				})
 			},
@@ -109,7 +111,7 @@ func TestClientFailsClosedForDenialStatusAndInvalidResponse(t *testing.T) {
 					TenantID: "organization-a",
 					Subject:  &iamv1.Subject{Type: iamv1.SubjectUser, ID: "principal-developer"},
 					Action:   request.Action, Resource: request.Resource, RequestID: request.RequestID,
-					Profile: &request.Profile, ResourceMode: request.ResourceMode, CollectionUsage: request.CollectionUsage, CorrelationID: request.CorrelationID,
+					Profile: &request.Profile, ResourceMode: request.ResourceMode, CollectionUsage: request.CollectionUsage, NetworkContext: request.NetworkContext, CorrelationID: request.CorrelationID,
 					DecidedAt: time.Date(2026, 8, 26, 1, 2, 3, 0, time.UTC),
 				})
 			},
@@ -188,6 +190,9 @@ func TestClientRejectsEveryMismatchedDecisionBindingForAllowAndDeny(t *testing.T
 			},
 			"request":     func(d *iamv1.AuthorizationDecision) { d.RequestID = "another-request" },
 			"correlation": func(d *iamv1.AuthorizationDecision) { d.CorrelationID = "another-correlation" },
+			"network": func(d *iamv1.AuthorizationDecision) {
+				d.NetworkContext = &iamv1.AuthorizationNetworkContext{SourceIP: "192.0.2.11"}
+			},
 		} {
 			t.Run(fmt.Sprintf("allowed=%v/%s", allowed, name), func(t *testing.T) {
 				calls := 0
@@ -201,7 +206,7 @@ func TestClientRejectsEveryMismatchedDecisionBindingForAllowAndDeny(t *testing.T
 					}
 					decision := iamv1.AuthorizationDecision{APIVersion: iamv1.APIVersion, Kind: "AuthorizationDecision", ID: "decision-bound",
 						Allowed: allowed, Reason: iamv1.DecisionDenied, Action: request.Action, Resource: request.Resource,
-						Profile: &request.Profile, ResourceMode: request.ResourceMode, CollectionUsage: request.CollectionUsage,
+						Profile: &request.Profile, ResourceMode: request.ResourceMode, CollectionUsage: request.CollectionUsage, NetworkContext: request.NetworkContext,
 						RequestID: request.RequestID, CorrelationID: request.CorrelationID, DecidedAt: time.Date(2026, 9, 15, 1, 2, 3, 0, time.UTC)}
 					if allowed {
 						decision.Reason, decision.TenantID = iamv1.DecisionAllowed, "organization-a"
@@ -307,6 +312,7 @@ func testAuthorizationRequest() port.AuthorizationRequest {
 		Action:       port.AuthorizeApplicationCreate,
 		Resource:     paasv1.ResourceRef{Kind: "Application", ID: "collection"},
 		ResourceMode: iamv1.AuthorizationResourceCollection, CollectionUsage: iamv1.AuthorizationCollectionCreate,
+		SourceIP:  "192.0.2.10",
 		RequestID: "request-paas-authorize",
 	}
 }

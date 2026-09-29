@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -2364,6 +2365,123 @@ func TestPolicyConditionSchemaRejectsUntrustedShape(t *testing.T) {
 	}
 }
 
+func TestSourceIPPolicyAndAuthorizationSchemasMatchStrictContracts(t *testing.T) {
+	openapi := loadIAMOpenAPI(t)
+	policySchema := compileIAMOpenAPISchema(t, openapi, "CreatePolicyRequest")
+	authorizationSchema := compileIAMOpenAPISchema(t, openapi, "AuthorizationRequest")
+	instance := func(value any) any {
+		t.Helper()
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded, err := jsonschema.UnmarshalJSON(bytes.NewReader(encoded))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return decoded
+	}
+
+	policy := CreatePolicyRequest{DisplayName: "Trusted network", RequestID: "network-policy", Document: policyDocumentFixture()}
+	policy.Document.Statements[0].Conditions = []PolicyCondition{{
+		Key: ConditionRequestSourceIP, Operator: PolicyIPAddress,
+		Values: []string{"192.0.2.0/24", "2001:db8::/32"},
+	}}
+	checkPolicy := func(name string, value CreatePolicyRequest, want, schemaMustAgree bool) {
+		t.Helper()
+		validatorErr, schemaErr := ValidateCreatePolicyRequest(value), policySchema.Validate(instance(value))
+		if (validatorErr == nil) != want || schemaMustAgree && (schemaErr == nil) != want || want && schemaErr != nil {
+			t.Fatalf("source-IP policy %s schema/validator acceptance differs: want=%t validator=%v schema=%v", name, want, validatorErr, schemaErr)
+		}
+	}
+	checkPolicy("canonical", policy, true, true)
+	negative := policy
+	negative.Document.Statements = slices.Clone(policy.Document.Statements)
+	negative.Document.Statements[0].Conditions = slices.Clone(policy.Document.Statements[0].Conditions)
+	negative.Document.Statements[0].Conditions[0].Operator = PolicyNotIPAddress
+	checkPolicy("negative", negative, true, true)
+	// Canonical masking and the complete IP prefix grammar are semantic server
+	// checks; JSON Schema cannot express them without duplicating the parser.
+	// The schema still closes the object/operator/action shape below.
+	for _, invalid := range []string{"192.0.2.1/24", "192.0.2.1", "192.0.2.0/33", "::ffff:192.0.2.0/120", "2001:0db8::/32", "2001:db8::/129", "fe80::%25eth0/64"} {
+		value := policy
+		value.Document.Statements = slices.Clone(policy.Document.Statements)
+		value.Document.Statements[0].Conditions = slices.Clone(policy.Document.Statements[0].Conditions)
+		value.Document.Statements[0].Conditions[0].Values = []string{invalid}
+		checkPolicy(invalid, value, false, false)
+	}
+	wrongOperator := policy
+	wrongOperator.Document.Statements = slices.Clone(policy.Document.Statements)
+	wrongOperator.Document.Statements[0].Conditions = slices.Clone(policy.Document.Statements[0].Conditions)
+	wrongOperator.Document.Statements[0].Conditions[0].Operator = PolicyStringEquals
+	checkPolicy("wrong operator", wrongOperator, false, true)
+	unsupported := policy
+	unsupported.Document.Statements = slices.Clone(policy.Document.Statements)
+	unsupported.Document.Statements[0].Actions = []Action{ActionIAMUserRead}
+	unsupported.Document.Statements[0].Resources = []PolicyResourceSelector{{Kind: ResourceUser, Match: PolicyResourceAnyInAuthority}}
+	checkPolicy("unsupported action", unsupported, false, true)
+
+	request, err := NewAuthorizationRequest(ActionPaaSApplicationRead,
+		ResourceReference{Kind: ResourceApplication, ID: "application-one"}, AuthorizationResourceInstance, "", "network-request", "network-request")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err = BindAuthorizationSourceIP(request, "2001:db8::1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ValidateAuthorizationRequest(request) != nil || authorizationSchema.Validate(instance(request)) != nil {
+		t.Fatal("canonical PEP-bound source IP failed the public request contract")
+	}
+	for _, test := range []struct {
+		sourceIP         string
+		schemaMustReject bool
+	}{
+		{"192.0.2.1:443", true},
+		{"192.0.2.01", true},
+		// Standard IP formats cannot express canonical spelling, unicast-only,
+		// or the IPv4-mapped exclusion. The strict shared parser owns those
+		// semantics; OpenAPI still documents and closes the IPv4/IPv6 shape.
+		{"::ffff:192.0.2.1", false},
+		{"2001:0db8::1", false},
+		{"::", false},
+		{"ff02::1", false},
+	} {
+		invalid := request
+		invalid.NetworkContext = &AuthorizationNetworkContext{SourceIP: test.sourceIP}
+		if ValidateAuthorizationRequest(invalid) == nil || test.schemaMustReject && authorizationSchema.Validate(instance(invalid)) == nil {
+			t.Fatalf("invalid source IP %q entered the public request contract", test.sourceIP)
+		}
+	}
+	iamRequest, err := NewAuthorizationRequest(ActionIAMUserRead,
+		ResourceReference{Kind: ResourceUser, ID: "user-one"}, AuthorizationResourceInstance, "", "iam-request", "iam-request")
+	if err != nil {
+		t.Fatal(err)
+	}
+	iamRequest.NetworkContext = &AuthorizationNetworkContext{SourceIP: "192.0.2.1"}
+	if ValidateAuthorizationRequest(iamRequest) == nil || authorizationSchema.Validate(instance(iamRequest)) == nil {
+		t.Fatal("an IAM action accepted a calling-service network selector")
+	}
+
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, source := range []string{
+		strings.Replace(string(encoded), `"networkContext":{"sourceIp":"2001:db8::1"}`, `"networkContext":null`, 1),
+		strings.Replace(string(encoded), `"sourceIp":"2001:db8::1"`, `"sourceIp":"2001:db8::1","forwardedFor":"198.51.100.1"`, 1),
+	} {
+		decoded, err := jsonschema.UnmarshalJSON(strings.NewReader(source))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var strict AuthorizationRequest
+		if authorizationSchema.Validate(decoded) == nil || DecodeRequest(strings.NewReader(source), &strict) == nil {
+			t.Fatal("null or caller-supplied network metadata bypassed schema/strict decoding")
+		}
+	}
+}
+
 func TestResourcePrefixSchemaIsLiteralAndTenantOnly(t *testing.T) {
 	schema := compileIAMOpenAPISchema(t, loadIAMOpenAPI(t), "PolicyDocument")
 	for _, action := range AllActionDefinitions() {
@@ -3212,6 +3330,7 @@ func TestIAMOpenAPIEnforcesAuthorizationAndBootstrapSemantics(t *testing.T) {
 	platform["resource"].(map[string]any)["kind"] = string(ResourceExecutionTarget)
 	platform["resourceMode"] = string(AuthorizationResourceInstance)
 	delete(platform, "collectionUsage")
+	delete(platform, "networkContext")
 	platform["installationId"] = "installation-example"
 	if err := decisionSchema.Validate(platform); err != nil {
 		t.Fatalf("installation-bound platform decision failed schema validation: %v", err)

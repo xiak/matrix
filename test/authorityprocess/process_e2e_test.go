@@ -108,7 +108,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	const databasePrefix = "matrix_iam_upgrade_predecessor_"
 	const source = "42035189eb823e388509f54525889c1a18c6b79d"
 	const sourceSchema uint64 = 45
-	const currentSchema uint64 = 52
+	const currentSchema uint64 = 53
 	// Actual predecessor admission accepted these 14-byte passwords. The new
 	// executable must replay the sealed bootstrap and verify existing secrets
 	// without admitting them for a new password write.
@@ -436,7 +436,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		}
 	}
 	var shape bool
-	if err := admin.QueryRow(ctx, `SELECT schema_version=52 AND iam.password_history_contract_ready() AND iam.account_security_settings_contract_ready() AND iam.login_session_contract_ready() AND iam.password_attempt_contract_ready()
+	if err := admin.QueryRow(ctx, `SELECT schema_version=53 AND iam.password_history_contract_ready() AND iam.account_security_settings_contract_ready() AND iam.login_session_contract_ready() AND iam.password_attempt_contract_ready()
 	 AND iam.authentication_recovery_contract_ready()
 	 AND to_regprocedure('iam.close_authentication_recovery(jsonb,text,jsonb)') IS NULL
 	 AND NOT EXISTS(SELECT 1 FROM iam.user_credentials c WHERE c.password_history<>'[]'::jsonb
@@ -880,7 +880,7 @@ func provePredecessorAuthenticationRecovery(t *testing.T, ctx context.Context, r
 		}
 		var unchanged bool
 		if err := database.QueryRow(ctx, `SELECT
-			 (SELECT schema_version=52 AND ready FROM iam.readiness())
+			 (SELECT schema_version=53 AND ready FROM iam.readiness())
 		 AND NOT EXISTS(SELECT 1 FROM iam.authenticator_removals)
 		 AND NOT EXISTS(SELECT 1 FROM iam.sessions WHERE last_activity_at IS NOT NULL OR idle_timeout_seconds IS NOT NULL)
 		 AND NOT EXISTS(SELECT 1 FROM iam.user_credentials c WHERE c.password_history<>'[]'::jsonb
@@ -2278,7 +2278,7 @@ func proveFrozenFamilyProfileAdvance(t *testing.T, ctx context.Context, admin *p
 	if err != nil {
 		t.Fatal(err)
 	}
-	const declaration = "\troleBusinessProfile(paasProfileRevisionOne),"
+	const declaration = "\tpaasProfileRevisionThree,"
 	if strings.Count(string(source), declaration) != 1 {
 		t.Fatal("future source declaration anchor is not unique")
 	}
@@ -2286,7 +2286,7 @@ func proveFrozenFamilyProfileAdvance(t *testing.T, ctx context.Context, admin *p
 	// condition in the future build. Even a resource-nonmatching old Deny must
 	// then fail closed, rather than disappear behind another Allow.
 	replacement := fmt.Sprintf(`func() AuthorizationProfile {
-		profile := roleBusinessProfile(paasProfileRevisionOne)
+		profile := paasProfileRevisionThree
 		profile.Revision = %d
 		var added AuthorizationProfileAction
 		for index, action := range profile.Actions {
@@ -2758,7 +2758,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	// Exercise the exact source services together without weakening install
 	// admission: the workflow separately proves the published installer rejects
 	// this unmatched database shape before effects.
-	sourceProfile := installationrelease.AuthoritySchemas{IAM: 52, Audit: 28, PaaS: 2}
+	sourceProfile := installationrelease.AuthoritySchemas{IAM: 53, Audit: 28, PaaS: 2}
 	publishedProfile := installationrelease.CurrentDatabaseProfile()
 	if publishedProfile.Authorities == sourceProfile {
 		t.Fatal("unreleased authority source shape was published without a final profile gate")
@@ -3280,6 +3280,97 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	}
 	getPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-process", http.StatusForbidden)
 	revokeIAMPolicyAttachment(t, replicaEndpoint, adminLogin.Credential, timedAttachment.ID, timedAttachment.ResourceVersion, "request-process-time-revoke")
+	getPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-process", http.StatusForbidden)
+
+	// Prove the source-IP condition through actual independent PaaS and IAM
+	// processes. The product PEP binds the TCP peer; caller forwarding headers
+	// never become authority. Switching the immutable default version changes
+	// the result for the same bearer without caching an earlier Allow.
+	paasURL, err := url.Parse(paasEndpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer, err := iamv1.ParseAuthorizationSourceIP(paasURL.Hostname())
+	if err != nil || peer.String() != "127.0.0.1" {
+		t.Fatal("PaaS process endpoint does not expose a canonical test peer", err)
+	}
+	peerCIDR := fmt.Sprintf("%s/%d", peer, peer.BitLen())
+	networkDocument := iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+		Statements: []iamv1.PolicyStatement{{SID: "trusted-process-peer", Effect: iamv1.PolicyAllow,
+			Actions:   []iamv1.Action{iamv1.ActionPaaSApplicationRead},
+			Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: "application-process"}},
+			Conditions: []iamv1.PolicyCondition{{Key: iamv1.ConditionRequestSourceIP, Operator: iamv1.PolicyIPAddress,
+				Values: []string{peerCIDR}}}}}}
+	networkPublication := performJSON(t, http.MethodPost, iamEndpoint+"/v1/policies", adminLogin.Credential,
+		iamv1.CreatePolicyRequest{DisplayName: "Trusted process peer", Document: networkDocument, RequestID: "request-process-network-policy"})
+	var networkPolicy iamv1.PolicyDetail
+	if networkPublication.Status != http.StatusCreated || json.Unmarshal(networkPublication.Body, &networkPolicy) != nil || iamv1.ValidatePolicyDetail(networkPolicy) != nil {
+		t.Fatalf("process network policy publication status=%d", networkPublication.Status)
+	}
+	networkAttachment := createIAMPolicyAttachment(t, replicaEndpoint, adminLogin.Credential, developer.ID, networkPolicy.Policy.ID, "request-process-network-attach")
+	networkRead := performJSONWithHeaders(t, http.MethodGet, paasEndpoint+"/v1/applications/application-process", developerLogin.Credential, "", nil,
+		map[string]string{"Forwarded": "for=203.0.113.9", "X-Forwarded-For": "203.0.113.8", "X-Real-IP": "203.0.113.7"})
+	if networkRead.Status != http.StatusOK {
+		t.Fatalf("actual product peer did not satisfy source-IP policy: status=%d", networkRead.Status)
+	}
+	requestID := networkRead.Header.Get("X-Request-ID")
+	var contractVersion int
+	var storedSourceIP string
+	var leakedForwarded bool
+	if err := admin.QueryRow(ctx, `SELECT contract_version,document#>>'{networkContext,sourceIp}',
+		document::text LIKE '%203.0.113.%' FROM iam.authorization_decisions
+		WHERE tenant_id='organization-process' AND request_id=$1`, requestID).Scan(&contractVersion, &storedSourceIP, &leakedForwarded); err != nil ||
+		requestID == "" || contractVersion != 5 || storedSourceIP != peer.String() || leakedForwarded {
+		t.Fatalf("product decision did not bind the exact socket peer request=%q contract=%d source=%q forwarded=%t err=%v",
+			requestID, contractVersion, storedSourceIP, leakedForwarded, err)
+	}
+	alternateClient := newProcessHTTPClient()
+	alternateTransport, ok := alternateClient.Transport.(*http.Transport)
+	if !ok {
+		t.Fatal("process HTTP transport does not support a bound network peer")
+	}
+	alternateDialer := &net.Dialer{LocalAddr: &net.TCPAddr{IP: net.ParseIP("127.0.0.2")}}
+	alternateTransport.DialContext = alternateDialer.DialContext
+	t.Cleanup(alternateTransport.CloseIdleConnections)
+	alternateRead := performJSONWithHeadersUsingClient(t, alternateClient, http.MethodGet,
+		paasEndpoint+"/v1/applications/application-process", developerLogin.Credential, "", nil,
+		map[string]string{"Forwarded": "for=127.0.0.1", "X-Forwarded-For": "127.0.0.1", "X-Real-IP": "127.0.0.1"})
+	if alternateRead.Status != http.StatusForbidden {
+		t.Fatalf("disallowed socket peer borrowed forwarding headers: status=%d", alternateRead.Status)
+	}
+	var alternateAllowed bool
+	if err := admin.QueryRow(ctx, `SELECT contract_version,document#>>'{networkContext,sourceIp}',allowed
+		FROM iam.authorization_decisions WHERE tenant_id='organization-process' AND request_id=$1`,
+		alternateRead.Header.Get("X-Request-ID")).Scan(&contractVersion, &storedSourceIP, &alternateAllowed); err != nil ||
+		contractVersion != 5 || storedSourceIP != "127.0.0.2" || alternateAllowed {
+		t.Fatalf("denied process decision lost its actual network peer contract=%d source=%q allowed=%t err=%v",
+			contractVersion, storedSourceIP, alternateAllowed, err)
+	}
+
+	outsideDocument := networkDocument
+	outsideDocument.Statements = append([]iamv1.PolicyStatement(nil), networkDocument.Statements...)
+	outsideDocument.Statements[0].Conditions = []iamv1.PolicyCondition{{Key: iamv1.ConditionRequestSourceIP, Operator: iamv1.PolicyIPAddress,
+		Values: []string{"203.0.113.0/24"}}}
+	outsideResponse := performJSON(t, http.MethodPost, replicaEndpoint+"/v1/policies/"+string(networkPolicy.Policy.ID)+"/versions", adminLogin.Credential,
+		iamv1.CreatePolicyVersionRequest{Document: outsideDocument, ResourceVersion: 1, RequestID: "request-process-network-outside-version"})
+	var outsideVersion iamv1.PolicyVersionDetail
+	if outsideResponse.Status != http.StatusCreated || json.Unmarshal(outsideResponse.Body, &outsideVersion) != nil || iamv1.ValidatePolicyVersionDetail(outsideVersion) != nil {
+		t.Fatalf("outside network version status=%d", outsideResponse.Status)
+	}
+	getPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-process", http.StatusOK)
+	outsideDefault := performJSON(t, http.MethodPost, iamEndpoint+"/v1/policies/"+string(networkPolicy.Policy.ID)+":set-default-version", adminLogin.Credential,
+		iamv1.SetDefaultPolicyVersionRequest{VersionID: outsideVersion.Version.ID, ResourceVersion: 2, RequestID: "request-process-network-outside-default"})
+	if outsideDefault.Status != http.StatusOK {
+		t.Fatal("outside network default selection failed")
+	}
+	getPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-process", http.StatusForbidden)
+	peerDefault := performJSON(t, http.MethodPost, replicaEndpoint+"/v1/policies/"+string(networkPolicy.Policy.ID)+":set-default-version", adminLogin.Credential,
+		iamv1.SetDefaultPolicyVersionRequest{VersionID: networkPolicy.Version.ID, ResourceVersion: 3, RequestID: "request-process-network-peer-default"})
+	if peerDefault.Status != http.StatusOK {
+		t.Fatal("peer network default selection failed")
+	}
+	getPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-process", http.StatusOK)
+	revokeIAMPolicyAttachment(t, iamEndpoint, adminLogin.Credential, networkAttachment.ID, networkAttachment.ResourceVersion, "request-process-network-revoke")
 	getPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-process", http.StatusForbidden)
 	proveUserBoundaryProcesses(t, ctx, admin, iamEndpoint, replicaEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, developerLogin.Credential, developer.ID)
 	waitAllIAMOutboxDelivered(t, ctx, admin)
@@ -5434,6 +5525,7 @@ func waitHTTPStatus(
 type processResponse struct {
 	Status int
 	Body   []byte
+	Header http.Header
 }
 
 func performJSON(
@@ -5461,6 +5553,11 @@ func performJSONWithIdempotency(
 
 func performJSONWithHeaders(t *testing.T, method, endpoint, bearer, idempotencyKey string, body any, headers map[string]string) processResponse {
 	t.Helper()
+	return performJSONWithHeadersUsingClient(t, processHTTPClient(), method, endpoint, bearer, idempotencyKey, body, headers)
+}
+
+func performJSONWithHeadersUsingClient(t *testing.T, client *http.Client, method, endpoint, bearer, idempotencyKey string, body any, headers map[string]string) processResponse {
+	t.Helper()
 	var encoded []byte
 	var err error
 	if body != nil {
@@ -5485,7 +5582,7 @@ func performJSONWithHeaders(t *testing.T, method, endpoint, bearer, idempotencyK
 	for name, value := range headers {
 		request.Header.Set(name, value)
 	}
-	response, err := processHTTPClient().Do(request)
+	response, err := client.Do(request)
 	if err != nil {
 		t.Fatalf("call authority HTTP endpoint: %v", err)
 	}
@@ -5494,7 +5591,7 @@ func performJSONWithHeaders(t *testing.T, method, endpoint, bearer, idempotencyK
 	if err != nil {
 		t.Fatalf("read authority HTTP response: %v", err)
 	}
-	return processResponse{Status: response.StatusCode, Body: responseBody}
+	return processResponse{Status: response.StatusCode, Body: responseBody, Header: response.Header.Clone()}
 }
 
 var authorityHTTPClient = newProcessHTTPClient()

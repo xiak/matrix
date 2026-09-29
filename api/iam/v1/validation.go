@@ -3,6 +3,7 @@ package iamv1
 import (
 	"errors"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"regexp"
 	"strings"
@@ -920,6 +921,7 @@ func ValidateAuthorizationRequest(value AuthorizationRequest) error {
 	}
 	problems = append(problems,
 		validateResourceForAction(value.Action, value.Resource),
+		validateAuthorizationNetworkContextForAction(value.Action, value.NetworkContext, nil),
 		ValidateID("requestId", value.RequestID),
 		ValidateID("correlationId", value.CorrelationID),
 	)
@@ -945,6 +947,9 @@ func ValidateAuthorizationDecision(value AuthorizationDecision) error {
 	if !known {
 		return errors.New("authorization decision action is not declared")
 	}
+	if err := validateAuthorizationNetworkContextForAction(value.Action, value.NetworkContext, nil); err != nil {
+		return err
+	}
 	return validateAuthorizationDecision(value, definition)
 }
 
@@ -960,6 +965,9 @@ func ValidateAuthorizationDecisionForProfile(value AuthorizationDecision, profil
 	}
 	for _, action := range profile.Actions {
 		if action.Action == value.Action {
+			if err := validateAuthorizationNetworkContextForAction(value.Action, value.NetworkContext, &profile); err != nil {
+				return err
+			}
 			return validateAuthorizationDecision(value, authorizationProfileActionDefinition(profile, action))
 		}
 	}
@@ -970,11 +978,59 @@ func ValidateAuthorizationDecisionForProfile(value AuthorizationDecision, profil
 // database metadata says contract1. This function alone is not legacy admission.
 func ValidateLegacyAuthorizationDecision(value AuthorizationDecision) error {
 	definition, known := lookupRecordedActionDefinition(value.Action)
-	if !known || value.Resource.Kind != definition.ResourceKind || value.Profile != nil || value.ResourceMode != "" || value.CollectionUsage != "" || value.CorrelationID != "" ||
+	if !known || value.Resource.Kind != definition.ResourceKind || value.Profile != nil || value.ResourceMode != "" || value.CollectionUsage != "" || value.NetworkContext != nil || value.CorrelationID != "" ||
 		value.Subject != nil && value.Subject.AccessKeyID != "" {
 		return errors.New("legacy decision contains an invalid or current binding")
 	}
 	return validateAuthorizationDecision(value, definition)
+}
+
+// ParseAuthorizationSourceIP accepts the one canonical address form shared by
+// product PEPs, IAM request validation, and policy evaluation. Private and
+// loopback addresses remain valid for private deployment; ambiguous wire forms
+// and addresses that cannot be a unicast network peer fail closed.
+func ParseAuthorizationSourceIP(value string) (netip.Addr, error) {
+	address, err := netip.ParseAddr(value)
+	if err != nil || value == "" || strings.TrimSpace(value) != value || address.Zone() != "" || address.Is4In6() ||
+		address.IsUnspecified() || address.IsMulticast() || address.String() != value {
+		return netip.Addr{}, errors.New("authorization source IP is invalid")
+	}
+	return address, nil
+}
+
+func ValidateAuthorizationNetworkContext(value AuthorizationNetworkContext) error {
+	_, err := ParseAuthorizationSourceIP(value.SourceIP)
+	return err
+}
+
+func validateAuthorizationNetworkContextForAction(action Action, value *AuthorizationNetworkContext, profile *AuthorizationProfile) error {
+	if value == nil {
+		return nil
+	}
+	if ValidateAuthorizationNetworkContext(*value) != nil {
+		return errors.New("authorization network context is invalid")
+	}
+	var definition ConditionKeyDefinition
+	var supported bool
+	if profile == nil {
+		definition, supported = LookupActionConditionDefinition(action, ConditionRequestSourceIP)
+	} else {
+		for _, declared := range profile.Actions {
+			if declared.Action != action {
+				continue
+			}
+			for _, condition := range declared.Conditions {
+				if condition.Key == ConditionRequestSourceIP {
+					definition = ConditionKeyDefinition{condition.Key, condition.ValueType, condition.Source}
+					supported = true
+				}
+			}
+		}
+	}
+	if !supported || definition.ValueType != ConditionIP || definition.Source != ConditionCallingServiceNetwork {
+		return errors.New("authorization action does not accept network context")
+	}
+	return nil
 }
 
 func validateAuthorizationDecision(value AuthorizationDecision, definition ActionDefinition) error {

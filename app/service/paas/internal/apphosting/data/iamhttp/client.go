@@ -230,6 +230,10 @@ func toIAMRequest(request port.AuthorizationRequest) (iamv1.AuthorizationRequest
 	if err != nil {
 		return iamv1.AuthorizationRequest{}, errors.New("PaaS authorization cannot map to IAM")
 	}
+	result, err = iamv1.BindAuthorizationSourceIP(result, request.SourceIP)
+	if err != nil {
+		return iamv1.AuthorizationRequest{}, errors.New("PaaS authorization cannot bind network authority")
+	}
 	return result, nil
 }
 

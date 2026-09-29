@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/netip"
 	"slices"
 	"strconv"
 	"strings"
@@ -31,8 +32,11 @@ const (
 	PolicyDateLessThan          PolicyConditionOperator = "DATE_LESS_THAN"
 	PolicyStringEquals          PolicyConditionOperator = "STRING_EQUALS"
 	PolicyStringNotEquals       PolicyConditionOperator = "STRING_NOT_EQUALS"
+	PolicyIPAddress             PolicyConditionOperator = "IP_ADDRESS"
+	PolicyNotIPAddress          PolicyConditionOperator = "NOT_IP_ADDRESS"
 	MaxStatementConditions                              = 16
 	MaxStringConditionValues                            = 16
+	MaxIPConditionValues                                = 16
 )
 
 const (
@@ -510,6 +514,17 @@ func ParsePolicyTime(value string) (time.Time, error) {
 	return parsed, nil
 }
 
+// ParsePolicyCIDR accepts only one canonical, already-masked IP prefix. A
+// policy value is never interpreted as DNS, a range, a zone, or a host alias.
+func ParsePolicyCIDR(value string) (netip.Prefix, error) {
+	prefix, err := netip.ParsePrefix(value)
+	if err != nil || value == "" || strings.TrimSpace(value) != value || prefix.Addr().Zone() != "" || prefix.Addr().Is4In6() ||
+		prefix.Masked() != prefix || prefix.String() != value {
+		return netip.Prefix{}, ErrInvalidPolicy
+	}
+	return prefix, nil
+}
+
 // Authority-scoped matching never asserts resource ownership. Product PEPs
 // must bind the actual resource to the credential-derived authority. For
 // PREFIX_IN_AUTHORITY, ID is a literal, nonempty prefix, not a glob or a path.
@@ -932,7 +947,7 @@ func validatePolicyConditions(statement PolicyStatement, pointer string, capabil
 	var start, end time.Time
 	for index, condition := range statement.Conditions {
 		location := pointer + "/conditions/" + strconv.Itoa(index)
-		if condition.Key != ConditionIAMCurrentTime && condition.Key != ConditionIAMAccountID && condition.Key != ConditionIAMPrincipalID {
+		if condition.Key != ConditionIAMCurrentTime && condition.Key != ConditionIAMAccountID && condition.Key != ConditionIAMPrincipalID && condition.Key != ConditionRequestSourceIP {
 			return invalidPolicyAt(PolicyUnsupported, location+"/key")
 		}
 		for _, action := range statement.Actions {
@@ -951,7 +966,7 @@ func validatePolicyConditions(statement PolicyStatement, pointer string, capabil
 			return invalidPolicyAt(PolicyDuplicate, location)
 		}
 		seen[identity] = true
-		if condition.Key != ConditionIAMCurrentTime {
+		if condition.Key == ConditionIAMAccountID || condition.Key == ConditionIAMPrincipalID {
 			if condition.Operator != PolicyStringEquals && condition.Operator != PolicyStringNotEquals {
 				return invalidPolicyAt(PolicyUnsupported, location+"/operator")
 			}
@@ -962,6 +977,26 @@ func validatePolicyConditions(statement PolicyStatement, pointer string, capabil
 			for valueIndex, value := range condition.Values {
 				valuePointer := location + "/values/" + strconv.Itoa(valueIndex)
 				if ValidateID("condition.value", value) != nil {
+					return invalidPolicyAt(PolicyInvalidValue, valuePointer)
+				}
+				if values[value] {
+					return invalidPolicyAt(PolicyDuplicate, valuePointer)
+				}
+				values[value] = true
+			}
+			continue
+		}
+		if condition.Key == ConditionRequestSourceIP {
+			if condition.Operator != PolicyIPAddress && condition.Operator != PolicyNotIPAddress {
+				return invalidPolicyAt(PolicyUnsupported, location+"/operator")
+			}
+			if len(condition.Values) < 1 || len(condition.Values) > MaxIPConditionValues {
+				return invalidPolicyAt(PolicyLimitExceeded, location+"/values")
+			}
+			values := make(map[string]bool, len(condition.Values))
+			for valueIndex, value := range condition.Values {
+				valuePointer := location + "/values/" + strconv.Itoa(valueIndex)
+				if _, err := ParsePolicyCIDR(value); err != nil {
 					return invalidPolicyAt(PolicyInvalidValue, valuePointer)
 				}
 				if values[value] {

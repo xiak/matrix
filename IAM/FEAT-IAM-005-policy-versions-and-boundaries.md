@@ -1,6 +1,6 @@
 # FEAT-IAM-005：自定义策略、条件与权限边界
 
-- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联、版本生命周期、时间/身份字符串条件及资源前缀已有固定 CI。User 权限边界后端固定 `119f232e` 的本地真库、独立多进程、竞争/撤销、混合授权、分页及独立 CI 已通过。受限动作族通配后端固定 `f15cc983` 的真实运行及独立 CI 已通过；IP 条件及完整委派未完成，Role边界与STS交集的实施/验收归006。最终 UI 接入由 UX/UI 工程师在独立分支负责，当前进度归010，不以旧控制台局部闭环替代，整体未验收。
+- 状态：实施中；结构诊断、自定义策略 CRUD、显式关联、版本生命周期、时间/身份字符串条件及资源前缀已有固定 CI。User 权限边界后端固定 `119f232e` 的本地真库、独立多进程、竞争/撤销、混合授权、分页及独立 CI 已通过。受限动作族通配后端固定 `f15cc983` 的真实运行及独立 CI 已通过；IP 条件后端候选已有本地 PG18、独立多进程与唯一前驱保留数据证据，固定提交及独立 CI 尚未完成。完整委派未完成，Role边界与STS交集的实施/验收归006。最终 UI 接入由 UX/UI 工程师在独立分支负责，当前进度归010，不以旧控制台局部闭环替代，整体未验收。
 - 依赖：002、004、001 的目录。
 - Owner：IAM 策略语言、分析器、版本与权限上限。
 
@@ -188,9 +188,20 @@ policy_versions 增加无默认、必填的 contract_version，1只标识切换�
 - 真实闭环：同一 Group 中两个普通 User 共享同一条件策略，仅被选中的当前主体得到目标资源权限；账号条件、否定集合和时间条件可共同约束。显式切换默认版本后原 bearer 的下一请求反映新条件，移除成员或附件仍即时拒绝。两账号同名 User/Group/策略不串用；caller header/body/cursor 不能换身份，服务凭据不能冒充 USER。当前条件不参与历史事实重新授权，原版本/决定/outbox/链仍可重放。
 - 门禁还覆盖大小写差异、多值顺序、重复 key/operator/值、空/超限值、非法 ID、类型错误、未知来源、不同键同算子、AND 与全来源 Deny、缺少必需身份、默认切换前后及分页续查；纯函数与 fuzz 不替代独立 IAM/PaaS/Audit 的真实业务调用。
 
-后续 IP 条件仍使用同一条件结构，但必须先冻结可信来源、支持算子和缺失/多值规则。来源 IP 不从未经信任的转发 header 或任意 PEP 字段取得；产品标签按 008 从已认证产品与真实业务对象提供。
+#### IP 条件：产品服务提供的可信网络来源
 
-评估器处理类型化 Statement。必需的 IAM 身份/时间上下文缺失使整个决定失败关闭；未来可选业务属性缺失时条件不匹配，否定条件也不能因此自动放行。显式 Null 存在检查尚未启用，不能把 null 输入当成受支持算子。多个条件同时满足，多值规则明确为 any/all；禁止隐式字符串类型转换。资源列表中每个必要资源都要通过，不以某个资源成功代替全部。
+本片沿用唯一 `conditions` 语言与产品 Profile，不增加通用 attributes map、PaaS 专用策略模型或按角色分叉的求值器。条件键固定为 `request.source-ip`，类型为 `IP`，来源固定为 `CALLING_SERVICE_NETWORK`；它表示已认证产品服务从自己实际处理的网络请求中建立的来源地址，不是 IAM 连接对端、资源归属或调用者声明。首个运行消费者只覆盖 PaaS 的 TENANT 应用、配置、修订、部署和 Operation 动作；平台主机、安装探针、IAM、Audit 与 ManagedService 动作不因同名字符串自动取得该能力。以后其他产品接入时必须在自己的新 Profile revision 中显式声明并完成相同 PEP 门禁。
+
+- 产品 PEP 从真实 socket/受信 edge 上下文生成 `networkContext.sourceIp`，不读取或转交 caller 的 `Forwarded`、`X-Forwarded-For`、query、body 或普通业务 header。当前直连 PaaS 切片只接受 `RemoteAddr` 中的直接网络对端；经过 APISIX 时，在 installation/edge owner 提供准确可信代理链、覆盖攻击和签名组合证据前，不能把 APISIX 地址或 caller header 宣称为原始客户端 IP。缺少该能力的发布组合必须关闭相应 IP 条件，而不是默默降级成任意来源。
+- 北向授权仍不接受 tenant、subject 或条件值 selector。`AuthorizationRequest` 只增加可省略且严格封闭的 `networkContext:{sourceIp}`；`AuthorizationDecision` 原样绑定同一上下文，PEP 在消费 Allow 或 Deny 前精确比对。省略保持已有非网络请求的 bytes；存在时必须是无端口、无 zone、非 IPv4-mapped IPv6 的规范 IPv4/IPv6 单地址，允许私有地址与 loopback 以支持私有部署，拒绝 unspecified、multicast、非规范文本及额外字段。产品服务身份、Profile caller 和来源上下文三者都成立才进入求值；IAM 自己看到的服务连接地址不能替代它。
+- 算子只开放 `IP_ADDRESS` 与 `NOT_IP_ADDRESS`。`values` 为 1–16 个互异、规范且已 masked 的 IPv4/IPv6 CIDR；不接受裸地址别名、host bits、zone、映射地址、范围字符串、DNS、VPC 名或隐式族转换。正向条件为当前单一地址命中任一 CIDR；否定条件为当前地址不命中全部 CIDR。多个条件继续 AND，匹配 Deny 继续跨来源优先；值规范排序后进入原 canonical/digest，调用者切片不被修改。
+- `request.source-ip` 是使用该条件时必须存在的权威上下文。策略不使用该键时，旧的无网络上下文请求保持原行为；任一当前有效 Policy、User/Role boundary 或 SessionPolicy 使用该键而上下文缺失、非法、来源声明不符时，整次决定失败关闭，不把它当作普通“不匹配”，尤其不能让 `NOT_IP_ADDRESS` 因缺值变成 Allow。显式 Null/存在性检查仍不开放。
+- PaaS 当前 Profile 以新 revision 声明这一能力；原 USER+ROLE revision 作为唯一明确历史解释保留，旧 PolicyVersion 没有使用该键时可按既有逐动作相容性继续求值，但不会凭新 head 获得 IP 条件。发布含 IP 条件的新版本必须引用新 Profile；旧 profile、旧决定和旧策略 canonical bytes/digest 不改写。请求、决定、数据库不可变证据和 AccessKey 授权结果绑定相同 network context；历史 outbox 继续验证原决定，不用当前 IP 重新授权。
+- 最小真实门禁覆盖 IPv4/IPv6、私网/loopback、CIDR边界、正向/否定、多值/多条件、Allow+Deny、User/Role/AccessKey 与 User/Role boundary；伪造/重复转发头、空 RemoteAddr、端口/zone/mapped/host-bit/非规范编码、请求与决定替换、缺上下文、错误产品/动作/Profile、重启及默认版本切换均失败关闭。真实 PaaS HTTP 需证明同一 bearer 从允许地址成功、从不允许地址拒绝，tenant/resource/cursor 不能改变来源；独立 IAM/PaaS/Audit 进程和数据库 proof 通过后才接受本片，纯解析或 mock context 测试不构成纵向验收。
+
+当前后端候选形状为 IAM schema 53、authorization decision contract 5、PaaS Profile revision 3；它没有更新已发布 installation profile，不能以源码数字宣称可安装。2026-09-29 在本任务独立 PostgreSQL 18.6（2 CPU、1 GiB、PIDs 256、随机 loopback 端口）和 GOMAXPROCS=2/`-p 2` 下完成：API、唯一求值器、IAM usecase 及 PaaS PEP/client 聚焦 race；空库迁移、双重 apply、策略编译、当前/历史决定和全部网络替换攻击的完整 policy storage race 193.40s；两个 IAM、PaaS、Audit、dispatcher 的独立进程 race 167.66s，实际 `127.0.0.1` peer 命中、绑定 `127.0.0.2` 的同 bearer 被拒且伪造三个转发头无效，默认版本切换即时生效，落库决定精确为 contract 5；固定 IAM45 executable 产生保留数据后升级到 IAM53 的 race 103.42s，原 Session/MFA/恢复/策略版本/决定/outbox/canonical 与重启行为保持，迁移不补造网络上下文。生成文件连续两次 SHA256 一致，相关 vet 通过。该证据仍不包含独立 CI、固定推送 SHA、APISIX 可信代理链、签名发布 Profile、正式 UI 或完整 005 验收。
+
+评估器处理类型化 Statement。必需的 IAM 身份/时间/已使用网络上下文缺失使整个决定失败关闭；未来可选业务属性缺失时条件不匹配，否定条件也不能因此自动放行。显式 Null 存在检查尚未启用，不能把 null 输入当成受支持算子。多个条件同时满足，多值规则明确为 any/all；禁止隐式字符串类型转换。资源列表中每个必要资源都要通过，不以某个资源成功代替全部。
 
 变更在 account → principal → policy → default pointer/attachment 锁顺序内检查管理者当前委派上限。当前高风险发布与边界写入仅限原 Account Root；仅持有管理策略不足以开放这些写入。后续 LANG-08 必须证明受委派者不能经创建/改版/附件或去除边界扩大自身许可，不能用通用子集推理的假实现宣称安全委派。
 

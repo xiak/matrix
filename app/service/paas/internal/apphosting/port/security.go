@@ -41,6 +41,7 @@ type AuthorizationRequest struct {
 	Resource        paasv1.ResourceRef
 	ResourceMode    iamv1.AuthorizationResourceMode
 	CollectionUsage iamv1.AuthorizationCollectionUsage
+	SourceIP        string
 	RequestID       string
 }
 
@@ -86,8 +87,10 @@ func ValidateAuthorizationRequest(value AuthorizationRequest) error {
 	default:
 		problems = append(problems, errors.New("authorization resource mode is required"))
 	}
+	_, sourceIPErr := iamv1.ParseAuthorizationSourceIP(value.SourceIP)
 	problems = append(problems,
 		paasv1.ValidateID("authorization.resource.id", string(value.Resource.ID)),
+		sourceIPErr,
 		paasv1.ValidateID("authorization.requestId", value.RequestID),
 	)
 	return errors.Join(problems...)

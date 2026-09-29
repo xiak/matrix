@@ -512,7 +512,7 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='settings lineage differs';
     END IF;
     IF NOT EXISTS(SELECT 1 FROM iam.authorization_decisions d WHERE d.tenant_id=tenant AND d.id=receipt.decision_id
-        AND d.principal_id=actor AND d.subject_type='USER' AND d.contract_version=4 AND d.access_key_id IS NULL AND d.allowed
+        AND d.principal_id=actor AND d.subject_type='USER' AND d.contract_version IN (4,5) AND d.access_key_id IS NULL AND d.allowed
         AND d.action_name='iam.security-settings.update' AND d.target_kind='ACCOUNT' AND d.target_id=tenant
         AND d.resource_mode='INSTANCE' AND d.collection_usage IS NULL AND d.request_id=command_id AND d.decided_at=receipt.created_at) THEN
         RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='settings historical decision differs';
@@ -1039,7 +1039,7 @@ BEGIN
           AND (decision.boundary_evidence IS NULL OR decision.boundary_evidence->>'state'<>'BOUND'
               OR iam.recorded_policy_version_matches(decision.boundary_evidence))
           AND iam.access_key_authorization_evidence_matches(proof_tenant,decision.id)
-          AND (CASE WHEN decision.contract_version IN (3,4) AND decision.subject_type='ROLE' THEN
+          AND (CASE WHEN decision.contract_version IN (3,4,5) AND decision.subject_type='ROLE' THEN
             decision.principal_id IS NULL AND decision.role_evidence IS NOT NULL
             AND iam.role_authorization_evidence(proof_tenant,decision.role_evidence->>'sessionId')=decision.role_evidence
             AND decision.role_id=decision.role_evidence->>'roleId' AND decision.source_principal_id=decision.role_evidence->>'sourceUserId'
@@ -1585,7 +1585,7 @@ BEGIN
         OR NOT EXISTS(SELECT 1 FROM iam.principals p WHERE p.tenant_id=tenant AND p.id=actor AND p.principal_type='USER')
         OR NOT EXISTS(SELECT 1 FROM iam.principals p WHERE p.tenant_id=tenant AND p.id=receipt.user_id AND p.principal_type='USER')
         OR NOT EXISTS(SELECT 1 FROM iam.authorization_decisions d WHERE d.tenant_id=tenant AND d.id=fact->>'iamDecisionId'
-            AND d.principal_id=actor AND d.subject_type='USER' AND d.contract_version=4 AND d.access_key_id IS NULL AND d.allowed
+            AND d.principal_id=actor AND d.subject_type='USER' AND d.contract_version IN (4,5) AND d.access_key_id IS NULL AND d.allowed
             AND d.action_name='iam.user.reset-password' AND d.target_kind='USER' AND d.target_id=receipt.user_id
             AND d.resource_mode='INSTANCE' AND d.collection_usage IS NULL
             AND d.request_id=command_id AND d.decided_at=receipt.occurred_at) THEN

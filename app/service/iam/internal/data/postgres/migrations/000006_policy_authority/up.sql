@@ -267,7 +267,7 @@ BEGIN
             FOR condition IN SELECT value FROM jsonb_array_elements(statement->'conditions') LOOP
                 IF jsonb_typeof(condition) IS DISTINCT FROM 'object' OR NOT(condition ?& ARRAY['key','operator','values'])
                    OR condition-ARRAY['key','operator','values']<>'{}'::jsonb
-                   OR COALESCE(condition->>'key','') NOT IN ('iam.current-time','iam.account-id','iam.principal-id')
+                   OR COALESCE(condition->>'key','') NOT IN ('iam.current-time','iam.account-id','iam.principal-id','request.source-ip')
                    OR jsonb_typeof(condition->'values') IS DISTINCT FROM 'array' THEN
                     RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy condition is invalid';
                 END IF;
@@ -286,6 +286,25 @@ BEGIN
                         IF jsonb_typeof(condition_value) IS DISTINCT FROM 'string'
                            OR (condition_value#>>'{}') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
                             RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy identity value is invalid';
+                        END IF;
+                    END LOOP;
+                    CONTINUE;
+                END IF;
+                IF condition->>'key'='request.source-ip' THEN
+                    IF COALESCE(condition->>'operator','') NOT IN ('IP_ADDRESS','NOT_IP_ADDRESS')
+                       OR jsonb_array_length(condition->'values') NOT BETWEEN 1 AND 16
+                       OR (SELECT count(DISTINCT value) FROM jsonb_array_elements(condition->'values'))<>jsonb_array_length(condition->'values') THEN
+                        RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy IP condition is invalid';
+                    END IF;
+                    FOR condition_value IN SELECT value FROM jsonb_array_elements(condition->'values') LOOP
+                        IF jsonb_typeof(condition_value) IS DISTINCT FROM 'string'
+                           OR NOT pg_input_is_valid(condition_value#>>'{}','cidr') THEN
+                            RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy IP value is invalid';
+                        END IF;
+                        IF condition_value#>>'{}' IS DISTINCT FROM ((condition_value#>>'{}')::cidr)::text
+                           OR (family((condition_value#>>'{}')::cidr)=6
+                             AND network((condition_value#>>'{}')::cidr)::inet <<= '::ffff:0.0.0.0/96'::inet) THEN
+                            RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy IP value is invalid';
                         END IF;
                     END LOOP;
                     CONTINUE;

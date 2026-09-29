@@ -2047,6 +2047,30 @@ func TestAuditProofClosedHistoricalMappings(t *testing.T) {
 			if got, err := auditContentDigest(identity, event, current); err != nil || got != expected {
 				t.Fatalf("frozen v2 proof borrowed current head or changed fact: %v", err)
 			}
+			if _, supported := iamv1.LookupActionConditionDefinition(decision.Action, iamv1.ConditionRequestSourceIP); supported {
+				withNetwork := current
+				networkDecision := *current.Decision
+				networkDecision.NetworkContext = &iamv1.AuthorizationNetworkContext{SourceIP: "192.0.2.10"}
+				withNetwork.Decision = &networkDecision
+				withNetwork.DecisionContractVersion = 5
+				if got, err := auditContentDigest(identity, event, withNetwork); err != nil || got != expected {
+					t.Fatalf("contract5 historical network fact rejected: %v", err)
+				}
+
+				legacyWithNetwork := withNetwork
+				legacyWithNetwork.DecisionContractVersion = 4
+				if _, err := auditContentDigest(identity, event, legacyWithNetwork); !errors.Is(err, ErrForbidden) {
+					t.Fatal("contract4 borrowed the contract5 network context")
+				}
+
+				corruptNetwork := withNetwork
+				corruptDecision := networkDecision
+				corruptDecision.NetworkContext = &iamv1.AuthorizationNetworkContext{SourceIP: "192.0.2.010"}
+				corruptNetwork.Decision = &corruptDecision
+				if _, err := auditContentDigest(identity, event, corruptNetwork); !errors.Is(err, ErrForbidden) {
+					t.Fatal("contract5 accepted a noncanonical historical network fact")
+				}
+			}
 			if contract, _ := auditv1.ContractForAction(event.Action); contract.AccessKeyActorPermitted {
 				keyProfile, _ := iamv1.LookupAuthorizationProfile(profile.Product)
 				keyProfile.Revision = profile.Revision
@@ -2105,7 +2129,7 @@ func TestAuditProofClosedHistoricalMappings(t *testing.T) {
 			}
 			for name, mutate := range map[string]func(*AuditEvidence){
 				"version absent":      func(e *AuditEvidence) { e.DecisionContractVersion = 0 },
-				"version unknown":     func(e *AuditEvidence) { e.DecisionContractVersion = 5 },
+				"version unknown":     func(e *AuditEvidence) { e.DecisionContractVersion = 6 },
 				"downgrade to legacy": func(e *AuditEvidence) { e.DecisionContractVersion = 1 },
 				"archive absent":      func(e *AuditEvidence) { e.DecisionProfile = nil },
 				"profile absent":      func(e *AuditEvidence) { e.Decision.Profile = nil },

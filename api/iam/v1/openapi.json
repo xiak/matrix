@@ -1670,6 +1670,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -1744,6 +1745,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -1797,6 +1799,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -1850,6 +1853,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -1903,6 +1907,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -1956,6 +1961,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -2009,6 +2015,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -2062,6 +2069,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -2115,6 +2123,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -2168,6 +2177,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -2221,6 +2231,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -2274,6 +2285,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -2327,6 +2339,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -2380,6 +2393,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -2433,6 +2447,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -2486,6 +2501,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -2539,6 +2555,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -2592,6 +2609,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -2645,6 +2663,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -2698,6 +2717,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -2751,6 +2771,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -2804,6 +2825,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -2857,6 +2879,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -2910,6 +2933,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -2963,6 +2987,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -3016,6 +3041,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -3069,6 +3095,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -3122,6 +3149,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -3175,6 +3203,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -3228,6 +3257,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -3281,6 +3311,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -3334,6 +3365,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -3387,6 +3419,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -3440,6 +3473,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -3493,6 +3527,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -3546,6 +3581,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -3599,6 +3635,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -3652,6 +3689,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -3705,6 +3743,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -3758,6 +3797,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -3811,6 +3851,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -3864,6 +3905,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -3917,6 +3959,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -3970,6 +4013,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -4023,6 +4067,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -4076,6 +4121,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -4129,6 +4175,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -4182,6 +4229,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -4235,6 +4283,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -4288,6 +4337,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -4341,6 +4391,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -4394,6 +4445,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -4447,6 +4499,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -4500,6 +4553,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -4553,6 +4607,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -4606,6 +4661,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -4659,6 +4715,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -4712,6 +4769,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -4765,6 +4823,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -4818,6 +4877,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -4871,6 +4931,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -4924,6 +4985,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -4977,11 +5039,12 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -5051,11 +5114,12 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -5104,11 +5168,12 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -5178,11 +5243,12 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -5231,11 +5297,12 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -5284,11 +5351,12 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -5337,11 +5405,12 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -5400,11 +5469,12 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -5453,11 +5523,12 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -5506,11 +5577,12 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -5559,11 +5631,12 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -5612,11 +5685,12 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -5677,9 +5751,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -5731,9 +5805,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -5795,9 +5869,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -5849,9 +5923,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -5913,9 +5987,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -5967,9 +6041,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -6031,9 +6105,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -6085,9 +6159,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -6149,9 +6223,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -6203,9 +6277,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -6257,9 +6331,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -6311,9 +6385,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -6365,9 +6439,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -6419,9 +6493,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -6492,6 +6566,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:5b728c9d7cdd97cc7eeb4cc095d9e053bbf5dab74ca2c08a239b25a6a4c99e2f",
@@ -6566,6 +6641,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:5b728c9d7cdd97cc7eeb4cc095d9e053bbf5dab74ca2c08a239b25a6a4c99e2f",
@@ -6629,6 +6705,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:5b728c9d7cdd97cc7eeb4cc095d9e053bbf5dab74ca2c08a239b25a6a4c99e2f",
@@ -6703,6 +6780,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:5b728c9d7cdd97cc7eeb4cc095d9e053bbf5dab74ca2c08a239b25a6a4c99e2f",
@@ -6766,6 +6844,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:5b728c9d7cdd97cc7eeb4cc095d9e053bbf5dab74ca2c08a239b25a6a4c99e2f",
@@ -6840,6 +6919,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:5b728c9d7cdd97cc7eeb4cc095d9e053bbf5dab74ca2c08a239b25a6a4c99e2f",
@@ -6903,6 +6983,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:d59fe726e2aaa4857b395da04ef79906305e56137974dfea5c96a26b32fdfa55",
@@ -6967,6 +7048,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:d59fe726e2aaa4857b395da04ef79906305e56137974dfea5c96a26b32fdfa55",
@@ -7031,6 +7113,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:d59fe726e2aaa4857b395da04ef79906305e56137974dfea5c96a26b32fdfa55",
@@ -7094,6 +7177,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:d59fe726e2aaa4857b395da04ef79906305e56137974dfea5c96a26b32fdfa55",
@@ -7147,6 +7231,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:04493b4c1dfacebbb6a2ed0d47b38c686c6d56a5526acdcf2a886d00ac45b730",
@@ -7203,6 +7288,9 @@
           "kind": {
             "const": "AuthorizationDecision"
           },
+          "networkContext": {
+            "$ref": "#/components/schemas/AuthorizationNetworkContext"
+          },
           "profile": {
             "$ref": "#/components/schemas/AuthorizationProfileReference"
           },
@@ -7238,6 +7326,29 @@
           "profile",
           "resourceMode",
           "correlationId"
+        ],
+        "type": "object"
+      },
+      "AuthorizationNetworkContext": {
+        "additionalProperties": false,
+        "properties": {
+          "sourceIp": {
+            "description": "Canonical unicast socket-peer IPv4 or IPv6 address established by the calling service; forwarding headers are not accepted.",
+            "maxLength": 45,
+            "minLength": 2,
+            "oneOf": [
+              {
+                "format": "ipv4"
+              },
+              {
+                "format": "ipv6"
+              }
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "sourceIp"
         ],
         "type": "object"
       },
@@ -7419,7 +7530,7 @@
                 "items": {
                   "$ref": "#/components/schemas/AuthorizationProfileCondition"
                 },
-                "maxItems": 3,
+                "maxItems": 4,
                 "type": "array"
               }
             ]
@@ -7511,6 +7622,19 @@
               },
               "valueType": {
                 "const": "STRING"
+              }
+            }
+          },
+          {
+            "properties": {
+              "key": {
+                "const": "request.source-ip"
+              },
+              "source": {
+                "const": "CALLING_SERVICE_NETWORK"
+              },
+              "valueType": {
+                "const": "IP"
               }
             }
           }
@@ -7641,6 +7765,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -7705,6 +7830,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -7748,6 +7874,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -7791,6 +7918,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -7834,6 +7962,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -7877,6 +8006,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -7920,6 +8050,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -7963,6 +8094,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -8006,6 +8138,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -8049,6 +8182,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -8092,6 +8226,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -8135,6 +8270,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -8178,6 +8314,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -8221,6 +8358,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -8264,6 +8402,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -8307,6 +8446,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -8350,6 +8490,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -8393,6 +8534,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -8436,6 +8578,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -8479,6 +8622,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -8522,6 +8666,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -8565,6 +8710,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -8608,6 +8754,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -8651,6 +8798,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -8694,6 +8842,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -8737,6 +8886,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -8780,6 +8930,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -8823,6 +8974,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -8866,6 +9018,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -8909,6 +9062,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -8952,6 +9106,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -8995,6 +9150,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -9038,6 +9194,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -9081,6 +9238,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -9124,6 +9282,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -9167,6 +9326,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -9210,6 +9370,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -9253,6 +9414,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -9296,6 +9458,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -9339,6 +9502,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -9382,6 +9546,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -9425,6 +9590,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -9468,6 +9634,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -9511,6 +9678,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -9554,6 +9722,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -9597,6 +9766,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -9640,6 +9810,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -9683,6 +9854,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -9726,6 +9898,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -9769,6 +9942,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -9812,6 +9986,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -9855,6 +10030,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -9898,6 +10074,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -9941,6 +10118,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -9984,6 +10162,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -10027,6 +10206,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -10070,6 +10250,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -10113,6 +10294,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -10156,6 +10338,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -10199,6 +10382,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -10242,6 +10426,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -10285,6 +10470,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:395c10af59bd20af9f0d5166e5341d60b5064816d95d970917320070fad1e8ce",
@@ -10328,11 +10514,12 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -10392,11 +10579,12 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -10435,11 +10623,12 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -10499,11 +10688,12 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -10542,11 +10732,12 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -10585,11 +10776,12 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -10628,11 +10820,12 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -10681,11 +10874,12 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -10724,11 +10918,12 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -10767,11 +10962,12 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -10810,11 +11006,12 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -10853,11 +11050,12 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -10908,9 +11106,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -10951,9 +11149,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -11004,9 +11202,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -11047,9 +11245,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -11100,9 +11298,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -11143,9 +11341,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -11196,9 +11394,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -11239,9 +11437,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -11292,9 +11490,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -11335,9 +11533,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -11378,9 +11576,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -11421,9 +11619,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -11464,9 +11662,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -11507,9 +11705,9 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df",
+                    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f",
                     "product": "paas",
-                    "revision": 2
+                    "revision": 3
                   }
                 },
                 "resource": {
@@ -11569,6 +11767,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:5b728c9d7cdd97cc7eeb4cc095d9e053bbf5dab74ca2c08a239b25a6a4c99e2f",
@@ -11633,6 +11832,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:5b728c9d7cdd97cc7eeb4cc095d9e053bbf5dab74ca2c08a239b25a6a4c99e2f",
@@ -11686,6 +11886,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:5b728c9d7cdd97cc7eeb4cc095d9e053bbf5dab74ca2c08a239b25a6a4c99e2f",
@@ -11750,6 +11951,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:5b728c9d7cdd97cc7eeb4cc095d9e053bbf5dab74ca2c08a239b25a6a4c99e2f",
@@ -11803,6 +12005,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:5b728c9d7cdd97cc7eeb4cc095d9e053bbf5dab74ca2c08a239b25a6a4c99e2f",
@@ -11867,6 +12070,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:5b728c9d7cdd97cc7eeb4cc095d9e053bbf5dab74ca2c08a239b25a6a4c99e2f",
@@ -11920,6 +12124,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:d59fe726e2aaa4857b395da04ef79906305e56137974dfea5c96a26b32fdfa55",
@@ -11973,6 +12178,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:d59fe726e2aaa4857b395da04ef79906305e56137974dfea5c96a26b32fdfa55",
@@ -12026,6 +12232,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:d59fe726e2aaa4857b395da04ef79906305e56137974dfea5c96a26b32fdfa55",
@@ -12079,6 +12286,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:d59fe726e2aaa4857b395da04ef79906305e56137974dfea5c96a26b32fdfa55",
@@ -12122,6 +12330,7 @@
                 }
               ],
               "properties": {
+                "networkContext": false,
                 "profile": {
                   "const": {
                     "contentDigest": "sha256:04493b4c1dfacebbb6a2ed0d47b38c686c6d56a5526acdcf2a886d00ac45b730",
@@ -12149,6 +12358,9 @@
           },
           "correlationId": {
             "$ref": "#/components/schemas/ID"
+          },
+          "networkContext": {
+            "$ref": "#/components/schemas/AuthorizationNetworkContext"
           },
           "profile": {
             "$ref": "#/components/schemas/AuthorizationProfileReference"
@@ -12534,7 +12746,8 @@
         "enum": [
           "iam.current-time",
           "iam.account-id",
-          "iam.principal-id"
+          "iam.principal-id",
+          "request.source-ip"
         ],
         "type": "string"
       },
@@ -14862,6 +15075,29 @@
                 }
               }
             }
+          },
+          {
+            "properties": {
+              "key": {
+                "const": "request.source-ip"
+              },
+              "operator": {
+                "enum": [
+                  "IP_ADDRESS",
+                  "NOT_IP_ADDRESS"
+                ]
+              },
+              "values": {
+                "items": {
+                  "description": "Canonical, already-masked IPv4 or IPv6 prefix; the service rejects DNS names, ranges, zones and IPv4-mapped IPv6.",
+                  "format": "matrix-cidr",
+                  "maxLength": 49,
+                  "minLength": 3,
+                  "type": "string"
+                },
+                "maxItems": 16
+              }
+            }
           }
         ],
         "properties": {
@@ -14894,7 +15130,9 @@
           "DATE_GREATER_THAN_EQUALS",
           "DATE_LESS_THAN",
           "STRING_EQUALS",
-          "STRING_NOT_EQUALS"
+          "STRING_NOT_EQUALS",
+          "IP_ADDRESS",
+          "NOT_IP_ADDRESS"
         ],
         "type": "string"
       },
@@ -15490,6 +15728,459 @@
           {
             "if": {
               "properties": {
+                "conditions": {
+                  "contains": {
+                    "properties": {
+                      "key": {
+                        "const": "iam.current-time"
+                      }
+                    },
+                    "required": [
+                      "key"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "conditions"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "items": {
+                    "enum": [
+                      "audit.integrity.*",
+                      "audit.integrity.verify",
+                      "audit.record.*",
+                      "audit.record.read",
+                      "iam.access-key.*",
+                      "iam.access-key.create",
+                      "iam.access-key.delete",
+                      "iam.access-key.list",
+                      "iam.access-key.read",
+                      "iam.access-key.set-status",
+                      "iam.account.alias-set",
+                      "iam.group-membership.*",
+                      "iam.group-membership.create",
+                      "iam.group-membership.list",
+                      "iam.group-membership.remove",
+                      "iam.group-policy-attachment.*",
+                      "iam.group-policy-attachment.create",
+                      "iam.group-policy-attachment.revoke",
+                      "iam.group.*",
+                      "iam.group.create",
+                      "iam.group.delete",
+                      "iam.group.list",
+                      "iam.group.read",
+                      "iam.group.update",
+                      "iam.policy-attachment.*",
+                      "iam.policy-attachment.create",
+                      "iam.policy-attachment.revoke",
+                      "iam.policy-version.*",
+                      "iam.policy-version.create",
+                      "iam.policy-version.delete",
+                      "iam.policy-version.list",
+                      "iam.policy-version.read",
+                      "iam.policy.*",
+                      "iam.policy.create",
+                      "iam.policy.delete",
+                      "iam.policy.list",
+                      "iam.policy.read",
+                      "iam.policy.set-default-version",
+                      "iam.policy.update",
+                      "iam.role-policy-attachment.*",
+                      "iam.role-policy-attachment.create",
+                      "iam.role-policy-attachment.revoke",
+                      "iam.role-session.*",
+                      "iam.role-session.list",
+                      "iam.role-session.read",
+                      "iam.role-session.revoke",
+                      "iam.role-trust.*",
+                      "iam.role-trust.set",
+                      "iam.role.*",
+                      "iam.role.assume",
+                      "iam.role.create",
+                      "iam.role.delete",
+                      "iam.role.list",
+                      "iam.role.permission-boundary.remove",
+                      "iam.role.permission-boundary.set",
+                      "iam.role.read",
+                      "iam.role.set-status",
+                      "iam.role.update",
+                      "iam.security-settings.*",
+                      "iam.security-settings.read",
+                      "iam.security-settings.update",
+                      "iam.session.*",
+                      "iam.session.revoke",
+                      "iam.user.*",
+                      "iam.user.create",
+                      "iam.user.delete",
+                      "iam.user.list",
+                      "iam.user.permission-boundary.remove",
+                      "iam.user.permission-boundary.set",
+                      "iam.user.read",
+                      "iam.user.reset-password",
+                      "iam.user.set-status",
+                      "iam.user.update",
+                      "managedservice.offering.*",
+                      "managedservice.offering.read",
+                      "managedservice.quota-entitlement.*",
+                      "managedservice.quota-entitlement.activate",
+                      "managedservice.quota-entitlement.read",
+                      "managedservice.region.*",
+                      "managedservice.region.read",
+                      "managedservice.service-installation.*",
+                      "managedservice.service-installation.create",
+                      "managedservice.service-installation.read",
+                      "paas.application-revision.*",
+                      "paas.application-revision.create",
+                      "paas.application-revision.read",
+                      "paas.application.*",
+                      "paas.application.create",
+                      "paas.application.read",
+                      "paas.configuration-revision.*",
+                      "paas.configuration-revision.create",
+                      "paas.configuration-revision.read",
+                      "paas.configuration.*",
+                      "paas.configuration.create",
+                      "paas.configuration.read",
+                      "paas.deployment.*",
+                      "paas.deployment.create",
+                      "paas.deployment.read",
+                      "paas.deployment.rollback",
+                      "paas.deployment.stop",
+                      "paas.deployment.update",
+                      "paas.operation.*",
+                      "paas.operation.read"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "conditions": {
+                  "contains": {
+                    "properties": {
+                      "key": {
+                        "const": "iam.account-id"
+                      }
+                    },
+                    "required": [
+                      "key"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "conditions"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "items": {
+                    "enum": [
+                      "audit.integrity.*",
+                      "audit.integrity.verify",
+                      "audit.record.*",
+                      "audit.record.read",
+                      "iam.access-key.*",
+                      "iam.access-key.create",
+                      "iam.access-key.delete",
+                      "iam.access-key.list",
+                      "iam.access-key.read",
+                      "iam.access-key.set-status",
+                      "iam.account.alias-set",
+                      "iam.group-membership.*",
+                      "iam.group-membership.create",
+                      "iam.group-membership.list",
+                      "iam.group-membership.remove",
+                      "iam.group-policy-attachment.*",
+                      "iam.group-policy-attachment.create",
+                      "iam.group-policy-attachment.revoke",
+                      "iam.group.*",
+                      "iam.group.create",
+                      "iam.group.delete",
+                      "iam.group.list",
+                      "iam.group.read",
+                      "iam.group.update",
+                      "iam.policy-attachment.*",
+                      "iam.policy-attachment.create",
+                      "iam.policy-attachment.revoke",
+                      "iam.policy-version.*",
+                      "iam.policy-version.create",
+                      "iam.policy-version.delete",
+                      "iam.policy-version.list",
+                      "iam.policy-version.read",
+                      "iam.policy.*",
+                      "iam.policy.create",
+                      "iam.policy.delete",
+                      "iam.policy.list",
+                      "iam.policy.read",
+                      "iam.policy.set-default-version",
+                      "iam.policy.update",
+                      "iam.role-policy-attachment.*",
+                      "iam.role-policy-attachment.create",
+                      "iam.role-policy-attachment.revoke",
+                      "iam.role-session.*",
+                      "iam.role-session.list",
+                      "iam.role-session.read",
+                      "iam.role-session.revoke",
+                      "iam.role-trust.*",
+                      "iam.role-trust.set",
+                      "iam.role.*",
+                      "iam.role.assume",
+                      "iam.role.create",
+                      "iam.role.delete",
+                      "iam.role.list",
+                      "iam.role.permission-boundary.remove",
+                      "iam.role.permission-boundary.set",
+                      "iam.role.read",
+                      "iam.role.set-status",
+                      "iam.role.update",
+                      "iam.security-settings.*",
+                      "iam.security-settings.read",
+                      "iam.security-settings.update",
+                      "iam.session.*",
+                      "iam.session.revoke",
+                      "iam.user.*",
+                      "iam.user.create",
+                      "iam.user.delete",
+                      "iam.user.list",
+                      "iam.user.permission-boundary.remove",
+                      "iam.user.permission-boundary.set",
+                      "iam.user.read",
+                      "iam.user.reset-password",
+                      "iam.user.set-status",
+                      "iam.user.update",
+                      "managedservice.offering.*",
+                      "managedservice.offering.read",
+                      "managedservice.quota-entitlement.*",
+                      "managedservice.quota-entitlement.activate",
+                      "managedservice.quota-entitlement.read",
+                      "managedservice.region.*",
+                      "managedservice.region.read",
+                      "managedservice.service-installation.*",
+                      "managedservice.service-installation.create",
+                      "managedservice.service-installation.read",
+                      "paas.application-revision.*",
+                      "paas.application-revision.create",
+                      "paas.application-revision.read",
+                      "paas.application.*",
+                      "paas.application.create",
+                      "paas.application.read",
+                      "paas.configuration-revision.*",
+                      "paas.configuration-revision.create",
+                      "paas.configuration-revision.read",
+                      "paas.configuration.*",
+                      "paas.configuration.create",
+                      "paas.configuration.read",
+                      "paas.deployment.*",
+                      "paas.deployment.create",
+                      "paas.deployment.read",
+                      "paas.deployment.rollback",
+                      "paas.deployment.stop",
+                      "paas.deployment.update",
+                      "paas.operation.*",
+                      "paas.operation.read"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "conditions": {
+                  "contains": {
+                    "properties": {
+                      "key": {
+                        "const": "iam.principal-id"
+                      }
+                    },
+                    "required": [
+                      "key"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "conditions"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "items": {
+                    "enum": [
+                      "audit.integrity.*",
+                      "audit.integrity.verify",
+                      "audit.record.*",
+                      "audit.record.read",
+                      "iam.access-key.*",
+                      "iam.access-key.create",
+                      "iam.access-key.delete",
+                      "iam.access-key.list",
+                      "iam.access-key.read",
+                      "iam.access-key.set-status",
+                      "iam.account.alias-set",
+                      "iam.group-membership.*",
+                      "iam.group-membership.create",
+                      "iam.group-membership.list",
+                      "iam.group-membership.remove",
+                      "iam.group-policy-attachment.*",
+                      "iam.group-policy-attachment.create",
+                      "iam.group-policy-attachment.revoke",
+                      "iam.group.*",
+                      "iam.group.create",
+                      "iam.group.delete",
+                      "iam.group.list",
+                      "iam.group.read",
+                      "iam.group.update",
+                      "iam.policy-attachment.*",
+                      "iam.policy-attachment.create",
+                      "iam.policy-attachment.revoke",
+                      "iam.policy-version.*",
+                      "iam.policy-version.create",
+                      "iam.policy-version.delete",
+                      "iam.policy-version.list",
+                      "iam.policy-version.read",
+                      "iam.policy.*",
+                      "iam.policy.create",
+                      "iam.policy.delete",
+                      "iam.policy.list",
+                      "iam.policy.read",
+                      "iam.policy.set-default-version",
+                      "iam.policy.update",
+                      "iam.role-policy-attachment.*",
+                      "iam.role-policy-attachment.create",
+                      "iam.role-policy-attachment.revoke",
+                      "iam.role-session.*",
+                      "iam.role-session.list",
+                      "iam.role-session.read",
+                      "iam.role-session.revoke",
+                      "iam.role-trust.*",
+                      "iam.role-trust.set",
+                      "iam.role.*",
+                      "iam.role.assume",
+                      "iam.role.create",
+                      "iam.role.delete",
+                      "iam.role.list",
+                      "iam.role.permission-boundary.remove",
+                      "iam.role.permission-boundary.set",
+                      "iam.role.read",
+                      "iam.role.set-status",
+                      "iam.role.update",
+                      "iam.security-settings.*",
+                      "iam.security-settings.read",
+                      "iam.security-settings.update",
+                      "iam.session.*",
+                      "iam.session.revoke",
+                      "iam.user.*",
+                      "iam.user.create",
+                      "iam.user.delete",
+                      "iam.user.list",
+                      "iam.user.permission-boundary.remove",
+                      "iam.user.permission-boundary.set",
+                      "iam.user.read",
+                      "iam.user.reset-password",
+                      "iam.user.set-status",
+                      "iam.user.update",
+                      "managedservice.offering.*",
+                      "managedservice.offering.read",
+                      "managedservice.quota-entitlement.*",
+                      "managedservice.quota-entitlement.activate",
+                      "managedservice.quota-entitlement.read",
+                      "managedservice.region.*",
+                      "managedservice.region.read",
+                      "managedservice.service-installation.*",
+                      "managedservice.service-installation.create",
+                      "managedservice.service-installation.read",
+                      "paas.application-revision.*",
+                      "paas.application-revision.create",
+                      "paas.application-revision.read",
+                      "paas.application.*",
+                      "paas.application.create",
+                      "paas.application.read",
+                      "paas.configuration-revision.*",
+                      "paas.configuration-revision.create",
+                      "paas.configuration-revision.read",
+                      "paas.configuration.*",
+                      "paas.configuration.create",
+                      "paas.configuration.read",
+                      "paas.deployment.*",
+                      "paas.deployment.create",
+                      "paas.deployment.read",
+                      "paas.deployment.rollback",
+                      "paas.deployment.stop",
+                      "paas.deployment.update",
+                      "paas.operation.*",
+                      "paas.operation.read"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "conditions": {
+                  "contains": {
+                    "properties": {
+                      "key": {
+                        "const": "request.source-ip"
+                      }
+                    },
+                    "required": [
+                      "key"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "conditions"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "items": {
+                    "enum": [
+                      "paas.application-revision.*",
+                      "paas.application-revision.create",
+                      "paas.application-revision.read",
+                      "paas.application.*",
+                      "paas.application.create",
+                      "paas.application.read",
+                      "paas.configuration-revision.*",
+                      "paas.configuration-revision.create",
+                      "paas.configuration-revision.read",
+                      "paas.configuration.*",
+                      "paas.configuration.create",
+                      "paas.configuration.read",
+                      "paas.deployment.*",
+                      "paas.deployment.create",
+                      "paas.deployment.read",
+                      "paas.deployment.rollback",
+                      "paas.deployment.stop",
+                      "paas.deployment.update",
+                      "paas.operation.*",
+                      "paas.operation.read"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
                 "actions": {
                   "contains": {
                     "enum": [
@@ -15510,24 +16201,6 @@
                     }
                   }
                 }
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "actions": {
-                  "contains": {
-                    "enum": [
-                      "iam.account.create"
-                    ]
-                  }
-                }
-              }
-            },
-            "then": {
-              "properties": {
-                "conditions": false
               }
             }
           },
@@ -15658,69 +16331,7 @@
                 "actions": {
                   "contains": {
                     "enum": [
-                      "iam.account.read"
-                    ]
-                  }
-                }
-              }
-            },
-            "then": {
-              "properties": {
-                "conditions": false
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "actions": {
-                  "contains": {
-                    "enum": [
                       "iam.account.set-status"
-                    ]
-                  }
-                }
-              }
-            },
-            "then": {
-              "properties": {
-                "resources": {
-                  "contains": {
-                    "properties": {
-                      "kind": {
-                        "const": "ACCOUNT"
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "actions": {
-                  "contains": {
-                    "enum": [
-                      "iam.account.set-status"
-                    ]
-                  }
-                }
-              }
-            },
-            "then": {
-              "properties": {
-                "conditions": false
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "actions": {
-                  "contains": {
-                    "enum": [
-                      "iam.account.recover-root-credentials"
                     ]
                   }
                 }
@@ -15754,7 +16365,15 @@
             },
             "then": {
               "properties": {
-                "conditions": false
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "ACCOUNT"
+                      }
+                    }
+                  }
+                }
               }
             }
           },
@@ -16179,24 +16798,6 @@
                     }
                   }
                 }
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "actions": {
-                  "contains": {
-                    "enum": [
-                      "iam.platform-policy.list"
-                    ]
-                  }
-                }
-              }
-            },
-            "then": {
-              "properties": {
-                "conditions": false
               }
             }
           },
@@ -17199,24 +17800,6 @@
                 "actions": {
                   "contains": {
                     "enum": [
-                      "iam.platform-policy-attachment.create"
-                    ]
-                  }
-                }
-              }
-            },
-            "then": {
-              "properties": {
-                "conditions": false
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "actions": {
-                  "contains": {
-                    "enum": [
                       "iam.platform-policy-attachment.revoke"
                     ]
                   }
@@ -17234,24 +17817,6 @@
                     }
                   }
                 }
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "actions": {
-                  "contains": {
-                    "enum": [
-                      "iam.platform-policy-attachment.revoke"
-                    ]
-                  }
-                }
-              }
-            },
-            "then": {
-              "properties": {
-                "conditions": false
               }
             }
           },
@@ -18083,24 +18648,6 @@
           {
             "if": {
               "properties": {
-                "actions": {
-                  "contains": {
-                    "enum": [
-                      "paas.execution-pool.create"
-                    ]
-                  }
-                }
-              }
-            },
-            "then": {
-              "properties": {
-                "conditions": false
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
                 "resources": {
                   "contains": {
                     "properties": {
@@ -18189,24 +18736,6 @@
                 "actions": {
                   "contains": {
                     "enum": [
-                      "paas.execution-pool.read"
-                    ]
-                  }
-                }
-              }
-            },
-            "then": {
-              "properties": {
-                "conditions": false
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "actions": {
-                  "contains": {
-                    "enum": [
                       "paas.execution-target.register"
                     ]
                   }
@@ -18224,24 +18753,6 @@
                     }
                   }
                 }
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "actions": {
-                  "contains": {
-                    "enum": [
-                      "paas.execution-target.register"
-                    ]
-                  }
-                }
-              }
-            },
-            "then": {
-              "properties": {
-                "conditions": false
               }
             }
           },
@@ -18342,24 +18853,6 @@
                 "actions": {
                   "contains": {
                     "enum": [
-                      "paas.execution-target.read"
-                    ]
-                  }
-                }
-              }
-            },
-            "then": {
-              "properties": {
-                "conditions": false
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "actions": {
-                  "contains": {
-                    "enum": [
                       "paas.execution-target.drain"
                     ]
                   }
@@ -18377,24 +18870,6 @@
                     }
                   }
                 }
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "actions": {
-                  "contains": {
-                    "enum": [
-                      "paas.execution-target.drain"
-                    ]
-                  }
-                }
-              }
-            },
-            "then": {
-              "properties": {
-                "conditions": false
               }
             }
           },
@@ -18430,24 +18905,6 @@
                 "actions": {
                   "contains": {
                     "enum": [
-                      "paas.execution-target.activate"
-                    ]
-                  }
-                }
-              }
-            },
-            "then": {
-              "properties": {
-                "conditions": false
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "actions": {
-                  "contains": {
-                    "enum": [
                       "paas.execution-target.remove"
                     ]
                   }
@@ -18465,24 +18922,6 @@
                     }
                   }
                 }
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "actions": {
-                  "contains": {
-                    "enum": [
-                      "paas.execution-target.remove"
-                    ]
-                  }
-                }
-              }
-            },
-            "then": {
-              "properties": {
-                "conditions": false
               }
             }
           },
@@ -18509,24 +18948,6 @@
                     }
                   }
                 }
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "actions": {
-                  "contains": {
-                    "enum": [
-                      "paas.node-enrollment.create"
-                    ]
-                  }
-                }
-              }
-            },
-            "then": {
-              "properties": {
-                "conditions": false
               }
             }
           },
@@ -18625,69 +19046,7 @@
                 "actions": {
                   "contains": {
                     "enum": [
-                      "paas.node-enrollment.read"
-                    ]
-                  }
-                }
-              }
-            },
-            "then": {
-              "properties": {
-                "conditions": false
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "actions": {
-                  "contains": {
-                    "enum": [
                       "paas.node-enrollment.revoke"
-                    ]
-                  }
-                }
-              }
-            },
-            "then": {
-              "properties": {
-                "resources": {
-                  "contains": {
-                    "properties": {
-                      "kind": {
-                        "const": "NODE_ENROLLMENT"
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "actions": {
-                  "contains": {
-                    "enum": [
-                      "paas.node-enrollment.revoke"
-                    ]
-                  }
-                }
-              }
-            },
-            "then": {
-              "properties": {
-                "conditions": false
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "actions": {
-                  "contains": {
-                    "enum": [
-                      "paas.node-enrollment.regenerate"
                     ]
                   }
                 }
@@ -18721,7 +19080,15 @@
             },
             "then": {
               "properties": {
-                "conditions": false
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "NODE_ENROLLMENT"
+                      }
+                    }
+                  }
+                }
               }
             }
           },
@@ -18748,24 +19115,6 @@
                     }
                   }
                 }
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "actions": {
-                  "contains": {
-                    "enum": [
-                      "paas.platform-operation.read"
-                    ]
-                  }
-                }
-              }
-            },
-            "then": {
-              "properties": {
-                "conditions": false
               }
             }
           },
@@ -20128,24 +20477,6 @@
                 "actions": {
                   "contains": {
                     "enum": [
-                      "audit.platform-record.read"
-                    ]
-                  }
-                }
-              }
-            },
-            "then": {
-              "properties": {
-                "conditions": false
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "actions": {
-                  "contains": {
-                    "enum": [
                       "audit.platform-integrity.verify"
                     ]
                   }
@@ -20172,24 +20503,6 @@
                 "actions": {
                   "contains": {
                     "enum": [
-                      "audit.platform-integrity.verify"
-                    ]
-                  }
-                }
-              }
-            },
-            "then": {
-              "properties": {
-                "conditions": false
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "actions": {
-                  "contains": {
-                    "enum": [
                       "installation.verify"
                     ]
                   }
@@ -20207,24 +20520,6 @@
                     }
                   }
                 }
-              }
-            }
-          },
-          {
-            "if": {
-              "properties": {
-                "actions": {
-                  "contains": {
-                    "enum": [
-                      "installation.verify"
-                    ]
-                  }
-                }
-              }
-            },
-            "then": {
-              "properties": {
-                "conditions": false
               }
             }
           }
@@ -20465,6 +20760,42 @@
                     },
                     "operator": {
                       "const": "STRING_NOT_EQUALS"
+                    }
+                  },
+                  "required": [
+                    "key",
+                    "operator"
+                  ]
+                },
+                "maxContains": 1,
+                "minContains": 0
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "key": {
+                      "const": "request.source-ip"
+                    },
+                    "operator": {
+                      "const": "IP_ADDRESS"
+                    }
+                  },
+                  "required": [
+                    "key",
+                    "operator"
+                  ]
+                },
+                "maxContains": 1,
+                "minContains": 0
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "key": {
+                      "const": "request.source-ip"
+                    },
+                    "operator": {
+                      "const": "NOT_IP_ADDRESS"
                     }
                   },
                   "required": [
@@ -20742,6 +21073,42 @@
                               },
                               "operator": {
                                 "const": "STRING_NOT_EQUALS"
+                              }
+                            },
+                            "required": [
+                              "key",
+                              "operator"
+                            ]
+                          },
+                          "maxContains": 1,
+                          "minContains": 0
+                        },
+                        {
+                          "contains": {
+                            "properties": {
+                              "key": {
+                                "const": "request.source-ip"
+                              },
+                              "operator": {
+                                "const": "IP_ADDRESS"
+                              }
+                            },
+                            "required": [
+                              "key",
+                              "operator"
+                            ]
+                          },
+                          "maxContains": 1,
+                          "minContains": 0
+                        },
+                        {
+                          "contains": {
+                            "properties": {
+                              "key": {
+                                "const": "request.source-ip"
+                              },
+                              "operator": {
+                                "const": "NOT_IP_ADDRESS"
                               }
                             },
                             "required": [

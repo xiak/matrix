@@ -8,9 +8,12 @@
   "correlationId": "correlation-authorize",
   "profile": {
     "product": "paas",
-    "revision": 2,
-    "contentDigest": "sha256:c221cd69042a0799ba79b67fdb6b627feb7e18799853229a80f092eee16797df"
+    "revision": 3,
+    "contentDigest": "sha256:c226efa46dc6d8880bea1608b161934ec128817632bde1833923bcdeb2f77f6f"
   },
   "resourceMode": "COLLECTION",
-  "collectionUsage": "COLLECTION_CREATE"
+  "collectionUsage": "COLLECTION_CREATE",
+  "networkContext": {
+    "sourceIp": "203.0.113.10"
+  }
 }

@@ -480,6 +480,10 @@ func authorizationDecision(tenantID iamv1.AccountID, installationID string, subj
 		CollectionUsage: request.CollectionUsage,
 		CorrelationID:   request.CorrelationID,
 	}
+	if request.NetworkContext != nil {
+		network := *request.NetworkContext
+		decision.NetworkContext = &network
+	}
 	if allowed {
 		decision.Reason = iamv1.DecisionAllowed
 		if iamv1.IsPlatformAction(request.Action) {

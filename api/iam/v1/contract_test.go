@@ -3074,7 +3074,11 @@ func TestRoleBusinessProfilesRequireExplicitCurrentCapabilities(t *testing.T) {
 			t.Fatal("registered product bytes changed")
 		}
 		current, found := LookupAuthorizationProfile(product)
-		if !found || current.Revision != 2 {
+		expectedRevision := uint64(2)
+		if product == ProductPaaS {
+			expectedRevision = 3
+		}
+		if !found || current.Revision != expectedRevision {
 			t.Fatal("missing explicit new product revision")
 		}
 		_, currentDigest, err := CanonicalizeAuthorizationProfile(current)
@@ -3087,6 +3091,10 @@ func TestRoleBusinessProfilesRequireExplicitCurrentCapabilities(t *testing.T) {
 				(CheckAuthorizationProfileSubject(current, ref, action.Action, SubjectRole) == nil) != (action.Scope == AuthorityScopeTenant) ||
 				CheckAuthorizationProfileSubject(current, ref, action.Action, SubjectServiceAccount) == nil {
 				t.Fatal("product granted an undeclared subject capability", action.Action)
+			}
+			_, network := LookupActionConditionDefinition(action.Action, ConditionRequestSourceIP)
+			if network != (product == ProductPaaS && action.Scope == AuthorityScopeTenant) {
+				t.Fatal("product network capability is not explicit", action.Action)
 			}
 			old := AuthorizationProfileReference{Product: product, Revision: 1, ContentDigest: original}
 			if CheckAuthorizationProfileSubject(archives[index], old, action.Action, SubjectRole) == nil ||
@@ -3573,7 +3581,7 @@ func TestHistoricalDecisionProfileDoesNotBorrowCurrentHead(t *testing.T) {
 
 func TestPaaSProfileDeclaresCompletePlatformProduct(t *testing.T) {
 	profile, found := LookupAuthorizationProfile(ProductPaaS)
-	if !found || profile.Revision != 2 {
+	if !found || profile.Revision != 3 {
 		t.Fatal("missing current PaaS role-capable declaration")
 	}
 	expected := map[Action]struct {
@@ -4728,6 +4736,7 @@ func TestPlatformDecisionsCannotMasqueradeAsTenantAuthority(t *testing.T) {
 	}
 	valid.Action, valid.Resource.Kind = ActionPaaSExecutionTargetRegister, ResourceExecutionTarget
 	valid.ResourceMode, valid.CollectionUsage = AuthorizationResourceInstance, ""
+	valid.NetworkContext = nil
 	valid.TenantID, valid.InstallationID = "", "installation-example"
 	if err := ValidateAuthorizationDecision(valid); err != nil {
 		t.Fatal(err)
@@ -4837,6 +4846,64 @@ func TestIAMAuthorizationInputCannotForgeAuthorityContext(t *testing.T) {
 		strings.Repeat("A", int(MaxRequestBytes)) + `"}`
 	if err := DecodeRequest(strings.NewReader(oversized), &request); !errors.Is(err, contractjson.ErrDocumentTooLarge) {
 		t.Fatalf("oversized authority document error = %v, want document too large", err)
+	}
+}
+
+func TestAuthorizationNetworkContextIsCanonicalActionBoundAndResponseBound(t *testing.T) {
+	request, err := NewAuthorizationRequest(ActionPaaSApplicationRead,
+		ResourceReference{Kind: ResourceApplication, ID: "application-one"}, AuthorizationResourceInstance, "", "request-network", "correlation-network")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, sourceIP := range []string{"192.0.2.10", "10.0.0.1", "127.0.0.1", "2001:db8::10", "::1"} {
+		bound, err := BindAuthorizationSourceIP(request, sourceIP)
+		if err != nil || bound.NetworkContext == nil || bound.NetworkContext.SourceIP != sourceIP || ValidateAuthorizationRequest(bound) != nil {
+			t.Fatalf("canonical source %q was not bound: %#v err=%v", sourceIP, bound.NetworkContext, err)
+		}
+		decision := AuthorizationDecision{APIVersion: APIVersion, Kind: "AuthorizationDecision", ID: "decision-network",
+			Allowed: false, Reason: DecisionDenied, Action: bound.Action, Resource: bound.Resource, Profile: &bound.Profile,
+			ResourceMode: bound.ResourceMode, NetworkContext: bound.NetworkContext, RequestID: bound.RequestID,
+			CorrelationID: bound.CorrelationID, DecidedAt: time.Date(2026, 9, 29, 1, 2, 3, 0, time.UTC)}
+		if CheckAuthorizationDecisionForRequest(decision, bound) != nil {
+			t.Fatal("exact network-bound decision was rejected")
+		}
+		decision.NetworkContext = &AuthorizationNetworkContext{SourceIP: "192.0.2.11"}
+		if CheckAuthorizationDecisionForRequest(decision, bound) == nil {
+			t.Fatal("decision changed the request network authority")
+		}
+	}
+	for _, sourceIP := range []string{"", " 192.0.2.10", "192.0.2.10 ", "192.0.2.10:443", "0.0.0.0", "::", "224.0.0.1", "ff02::1", "::ffff:192.0.2.10", "fe80::1%eth0", "2001:0db8::1"} {
+		if _, err := BindAuthorizationSourceIP(request, sourceIP); err == nil {
+			t.Fatalf("ambiguous or unusable source %q was admitted", sourceIP)
+		}
+	}
+	bound, err := BindAuthorizationSourceIP(request, "192.0.2.10")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := BindAuthorizationSourceIP(bound, "192.0.2.10"); err == nil {
+		t.Fatal("network authority was replaceable")
+	}
+	unsupported, err := NewAuthorizationRequest(ActionIAMUserRead,
+		ResourceReference{Kind: ResourceUser, ID: "user-one"}, AuthorizationResourceInstance, "", "request-user", "correlation-user")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := BindAuthorizationSourceIP(unsupported, "192.0.2.10"); err == nil {
+		t.Fatal("an undeclared action borrowed PaaS network authority")
+	}
+	encoded, err := json.Marshal(bound)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, invalid := range []string{
+		strings.Replace(string(encoded), `"networkContext":{"sourceIp":"192.0.2.10"}`, `"networkContext":null`, 1),
+		strings.Replace(string(encoded), `"sourceIp":"192.0.2.10"`, `"sourceIp":"192.0.2.10","forwardedFor":"203.0.113.1"`, 1),
+	} {
+		var decoded AuthorizationRequest
+		if DecodeRequest(strings.NewReader(invalid), &decoded) == nil {
+			t.Fatal("ambiguous network context wire document was admitted")
+		}
 	}
 }
 
@@ -6240,6 +6307,62 @@ func TestPolicyIdentityStringConditionsAreBoundedSets(t *testing.T) {
 				t.Fatal("identity condition source crossed a scope")
 			}
 		}
+	}
+}
+
+func TestPolicySourceIPConditionsAreCanonicalAndPaaSScoped(t *testing.T) {
+	document := PolicyDocument{LanguageVersion: PolicyLanguageVersion, Scope: AuthorityScopeTenant, Statements: []PolicyStatement{{
+		SID: "source-network", Effect: PolicyAllow, Actions: []Action{ActionPaaSApplicationRead},
+		Resources: []PolicyResourceSelector{{Kind: ResourceApplication, Match: PolicyResourceAnyInAuthority}},
+		Conditions: []PolicyCondition{{Key: ConditionRequestSourceIP, Operator: PolicyIPAddress,
+			Values: []string{"2001:db8::/32", "10.0.0.0/8"}}},
+	}}}
+	before, _ := json.Marshal(document)
+	canonical, _, err := CanonicalizePolicyDocument(document)
+	if err != nil || !strings.Contains(canonical, `"values":["10.0.0.0/8","2001:db8::/32"]`) {
+		t.Fatal("canonical CIDR condition was rejected or not sorted", err)
+	}
+	after, _ := json.Marshal(document)
+	if !bytes.Equal(before, after) {
+		t.Fatal("CIDR canonicalization modified the caller document")
+	}
+	negative := document
+	negative.Statements = append([]PolicyStatement(nil), document.Statements...)
+	negative.Statements[0] = document.Statements[0]
+	negative.Statements[0].Conditions = []PolicyCondition{{Key: ConditionRequestSourceIP, Operator: PolicyNotIPAddress, Values: []string{"192.0.2.0/24"}}}
+	if ValidatePolicyDocument(negative) != nil {
+		t.Fatal("canonical negative CIDR condition was rejected")
+	}
+	for _, invalid := range []string{"", "10.0.0.1", "10.0.0.1/8", " 10.0.0.0/8", "010.0.0.0/8", "fe80::1%eth0/64", "::ffff:192.0.2.0/120", "2001:0db8::/32"} {
+		candidate := document
+		candidate.Statements = append([]PolicyStatement(nil), document.Statements...)
+		candidate.Statements[0] = document.Statements[0]
+		candidate.Statements[0].Conditions = []PolicyCondition{{Key: ConditionRequestSourceIP, Operator: PolicyIPAddress, Values: []string{invalid}}}
+		if ValidatePolicyDocument(candidate) == nil {
+			t.Fatalf("noncanonical CIDR %q was admitted", invalid)
+		}
+	}
+	duplicate := document
+	duplicate.Statements = append([]PolicyStatement(nil), document.Statements...)
+	duplicate.Statements[0] = document.Statements[0]
+	duplicate.Statements[0].Conditions = []PolicyCondition{{Key: ConditionRequestSourceIP, Operator: PolicyIPAddress, Values: []string{"10.0.0.0/8", "10.0.0.0/8"}}}
+	if ValidatePolicyDocument(duplicate) == nil {
+		t.Fatal("duplicate CIDR condition value was admitted")
+	}
+	wrongOperator := document
+	wrongOperator.Statements = append([]PolicyStatement(nil), document.Statements...)
+	wrongOperator.Statements[0] = document.Statements[0]
+	wrongOperator.Statements[0].Conditions = []PolicyCondition{{Key: ConditionRequestSourceIP, Operator: PolicyStringEquals, Values: []string{"10.0.0.0/8"}}}
+	if ValidatePolicyDocument(wrongOperator) == nil {
+		t.Fatal("source IP accepted a string operator")
+	}
+	wrongAction := document
+	wrongAction.Statements = append([]PolicyStatement(nil), document.Statements...)
+	wrongAction.Statements[0] = document.Statements[0]
+	wrongAction.Statements[0].Actions = []Action{ActionIAMUserRead}
+	wrongAction.Statements[0].Resources = []PolicyResourceSelector{{Kind: ResourceUser, Match: PolicyResourceAnyInAuthority}}
+	if ValidatePolicyDocument(wrongAction) == nil {
+		t.Fatal("an IAM action borrowed the PaaS source-IP condition")
 	}
 }
 

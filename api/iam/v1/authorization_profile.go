@@ -77,12 +77,13 @@ type AuthorizationResourceMode string
 type AuthorizationCollectionUsage string
 
 const (
-	AuthorizationResourceInstance   AuthorizationResourceMode    = "INSTANCE"
-	AuthorizationResourceCollection AuthorizationResourceMode    = "COLLECTION"
-	AuthorizationCollectionList     AuthorizationCollectionUsage = "COLLECTION_LIST"
-	AuthorizationCollectionCreate   AuthorizationCollectionUsage = "COLLECTION_CREATE"
-	MaxAuthorizationProfileActions                               = 128
-	MaxAuthorizationProfileBytes    int64                        = 64 * 1024
+	AuthorizationResourceInstance     AuthorizationResourceMode    = "INSTANCE"
+	AuthorizationResourceCollection   AuthorizationResourceMode    = "COLLECTION"
+	AuthorizationCollectionList       AuthorizationCollectionUsage = "COLLECTION_LIST"
+	AuthorizationCollectionCreate     AuthorizationCollectionUsage = "COLLECTION_CREATE"
+	MaxAuthorizationProfileActions                                 = 128
+	MaxAuthorizationProfileConditions                              = 4
+	MaxAuthorizationProfileBytes      int64                        = 64 * 1024
 )
 
 // Prefix support belongs to the instance shape, not every use of an Action.
@@ -229,7 +230,7 @@ func validateAuthorizationProfileStructure(value AuthorizationProfile) error {
 	for _, action := range value.Actions {
 		product, _, _ := strings.Cut(string(action.Action), ".")
 		if !authorizationActionIdentifier(action.Action) || product != string(value.Product) || seen[action.Action] ||
-			!profileIdentifier(string(action.ResourceKind), true) || len(action.ResourceShapes) == 0 || len(action.ResourceShapes) > 3 || len(action.Conditions) > 3 {
+			!profileIdentifier(string(action.ResourceKind), true) || len(action.ResourceShapes) == 0 || len(action.ResourceShapes) > 3 || len(action.Conditions) > MaxAuthorizationProfileConditions {
 			return ErrInvalidAuthorizationProfile
 		}
 		seen[action.Action] = true
@@ -603,14 +604,33 @@ func NewAuthorizationRequest(action Action, resource ResourceReference, mode Aut
 	return request, nil
 }
 
+// BindAuthorizationSourceIP is the sole public constructor for a product PEP's
+// network context. It refuses replacement and only succeeds when the current
+// source-owned action declaration explicitly accepts the condition source.
+func BindAuthorizationSourceIP(request AuthorizationRequest, sourceIP string) (AuthorizationRequest, error) {
+	if request.NetworkContext != nil || ValidateAuthorizationRequest(request) != nil {
+		return AuthorizationRequest{}, ErrInvalidAuthorizationProfile
+	}
+	request.NetworkContext = &AuthorizationNetworkContext{SourceIP: sourceIP}
+	if ValidateAuthorizationRequest(request) != nil {
+		return AuthorizationRequest{}, ErrInvalidAuthorizationProfile
+	}
+	return request, nil
+}
+
 // CheckAuthorizationDecisionForRequest is the shared response-binding contract
 // used by PEPs before consuming either an Allow or a Deny.
 func CheckAuthorizationDecisionForRequest(decision AuthorizationDecision, request AuthorizationRequest) error {
 	if ValidateAuthorizationRequest(request) != nil || ValidateAuthorizationDecision(decision) != nil || decision.Profile == nil ||
 		*decision.Profile != request.Profile || decision.Action != request.Action || decision.Resource != request.Resource ||
 		decision.ResourceMode != request.ResourceMode || decision.CollectionUsage != request.CollectionUsage ||
+		!authorizationNetworkContextsEqual(decision.NetworkContext, request.NetworkContext) ||
 		decision.RequestID != request.RequestID || decision.CorrelationID != request.CorrelationID {
 		return ErrInvalidAuthorizationProfile
 	}
 	return nil
+}
+
+func authorizationNetworkContextsEqual(left, right *AuthorizationNetworkContext) bool {
+	return left == nil && right == nil || left != nil && right != nil && *left == *right
 }

@@ -475,8 +475,8 @@ func enumSchemas() map[string][]string {
 		"PolicyManagement":             {string(iamv1.PolicySystemManaged), string(iamv1.PolicyCustomerManaged)},
 		"PolicyStatus":                 {string(iamv1.PolicyActive), string(iamv1.PolicyRetired)},
 		"PolicyEffect":                 {string(iamv1.PolicyAllow), string(iamv1.PolicyDeny)},
-		"ConditionKey":                 {string(iamv1.ConditionIAMCurrentTime), string(iamv1.ConditionIAMAccountID), string(iamv1.ConditionIAMPrincipalID)},
-		"PolicyConditionOperator":      {string(iamv1.PolicyDateGreaterThanEquals), string(iamv1.PolicyDateLessThan), string(iamv1.PolicyStringEquals), string(iamv1.PolicyStringNotEquals)},
+		"ConditionKey":                 {string(iamv1.ConditionIAMCurrentTime), string(iamv1.ConditionIAMAccountID), string(iamv1.ConditionIAMPrincipalID), string(iamv1.ConditionRequestSourceIP)},
+		"PolicyConditionOperator":      {string(iamv1.PolicyDateGreaterThanEquals), string(iamv1.PolicyDateLessThan), string(iamv1.PolicyStringEquals), string(iamv1.PolicyStringNotEquals), string(iamv1.PolicyIPAddress), string(iamv1.PolicyNotIPAddress)},
 		"PolicyResourceMatch":          {string(iamv1.PolicyResourceExact), string(iamv1.PolicyResourceAnyInAuthority), string(iamv1.PolicyResourcePrefixInAuthority)},
 		"Action":                       openapi31.StringValues(iamv1.AllActions()),
 		"ResourceKind": {
@@ -680,6 +680,7 @@ func structContracts() map[string]reflect.Type {
 		"UserPasswordResetCompletion":                   openapi31.StructType[iamv1.UserPasswordResetCompletion](),
 		"RevokeSessionRequest":                          openapi31.StructType[iamv1.RevokeSessionRequest](),
 		"Revocation":                                    openapi31.StructType[iamv1.Revocation](),
+		"AuthorizationNetworkContext":                   openapi31.StructType[iamv1.AuthorizationNetworkContext](),
 		"AuthorizationRequest":                          openapi31.StructType[iamv1.AuthorizationRequest](),
 		"AuthorizationDecision":                         openapi31.StructType[iamv1.AuthorizationDecision](),
 		"AccessKeyAuthorization":                        openapi31.StructType[iamv1.AccessKeyAuthorization](),
@@ -1004,7 +1005,7 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 		case "userAuthenticationMethods":
 			base["minItems"], base["maxItems"], base["uniqueItems"] = 1, 2, true
 		case "conditions":
-			base["maxItems"] = 3
+			base["maxItems"] = iamv1.MaxAuthorizationProfileConditions
 			base = object{"anyOf": []any{object{"type": "null"}, base}}
 		}
 	}
@@ -1522,6 +1523,11 @@ func applySemanticOverlays(schemas object) {
 	}
 
 	decision := schemas["AuthorizationDecision"].(object)
+	schemas["AuthorizationNetworkContext"].(object)["properties"].(object)["sourceIp"] = object{
+		"type": "string", "minLength": 2, "maxLength": 45,
+		"description": "Canonical unicast socket-peer IPv4 or IPv6 address established by the calling service; forwarding headers are not accepted.",
+		"oneOf":       []any{object{"format": "ipv4"}, object{"format": "ipv6"}},
+	}
 	decision["required"] = append(decision["required"].([]string), "profile", "resourceMode", "correlationId")
 	decision["properties"].(object)["profile"] = openapi31.Ref("AuthorizationProfileReference")
 	decisionRules := []any{
@@ -1639,6 +1645,9 @@ func authorizationTargetRules(includeSubject bool) []any {
 				"profile":  object{"const": object{"product": string(profile.Product), "revision": profile.Revision, "contentDigest": digest}},
 				"resource": object{"properties": object{"kind": object{"const": string(action.ResourceKind)}}},
 			}
+			if _, supported := iamv1.LookupActionConditionDefinition(action.Action, iamv1.ConditionRequestSourceIP); !supported {
+				properties["networkContext"] = false
+			}
 			if includeSubject {
 				var subjects []string
 				for _, subject := range []iamv1.SubjectType{iamv1.SubjectUser, iamv1.SubjectServiceAccount, iamv1.SubjectRole} {
@@ -1698,11 +1707,14 @@ func applyPolicyLanguageOverlays(schemas object) {
 	statementProperties["conditions"].(object)["minItems"] = 1
 	statementProperties["conditions"].(object)["maxItems"] = iamv1.MaxStatementConditions
 	statementProperties["conditions"].(object)["uniqueItems"] = true
+	conditionKeys := []iamv1.ConditionKey{iamv1.ConditionIAMCurrentTime, iamv1.ConditionIAMAccountID, iamv1.ConditionIAMPrincipalID, iamv1.ConditionRequestSourceIP}
 	var uniqueConditions []any
-	for _, key := range []iamv1.ConditionKey{iamv1.ConditionIAMCurrentTime, iamv1.ConditionIAMAccountID, iamv1.ConditionIAMPrincipalID} {
+	for _, key := range conditionKeys {
 		operators := []iamv1.PolicyConditionOperator{iamv1.PolicyStringEquals, iamv1.PolicyStringNotEquals}
 		if key == iamv1.ConditionIAMCurrentTime {
 			operators = []iamv1.PolicyConditionOperator{iamv1.PolicyDateGreaterThanEquals, iamv1.PolicyDateLessThan}
+		} else if key == iamv1.ConditionRequestSourceIP {
+			operators = []iamv1.PolicyConditionOperator{iamv1.PolicyIPAddress, iamv1.PolicyNotIPAddress}
 		}
 		for _, operator := range operators {
 			uniqueConditions = append(uniqueConditions, object{
@@ -1728,6 +1740,14 @@ func applyPolicyLanguageOverlays(schemas object) {
 			"key":      object{"enum": []string{string(iamv1.ConditionIAMAccountID), string(iamv1.ConditionIAMPrincipalID)}},
 			"operator": object{"enum": []string{string(iamv1.PolicyStringEquals), string(iamv1.PolicyStringNotEquals)}},
 			"values":   object{"items": openapi31.Ref("ID")},
+		}},
+		object{"properties": object{
+			"key":      object{"const": string(iamv1.ConditionRequestSourceIP)},
+			"operator": object{"enum": []string{string(iamv1.PolicyIPAddress), string(iamv1.PolicyNotIPAddress)}},
+			"values": object{"maxItems": iamv1.MaxIPConditionValues, "items": object{
+				"type": "string", "format": "matrix-cidr", "minLength": 3, "maxLength": 49,
+				"description": "Canonical, already-masked IPv4 or IPv6 prefix; the service rejects DNS names, ranges, zones and IPv4-mapped IPv6.",
+			}},
 		}},
 	}
 	for field, maximum := range map[string]int{"actions": iamv1.MaxStatementActions, "resources": iamv1.MaxStatementResources} {
@@ -1759,18 +1779,44 @@ func applyPolicyLanguageOverlays(schemas object) {
 	}
 	document["allOf"] = scopeRules
 	var actionRules []any
+	for _, key := range conditionKeys {
+		supportedSelectors := []string{}
+		for _, definition := range iamv1.AllActionDefinitions() {
+			if _, supported := iamv1.LookupActionConditionDefinition(definition.Action, key); supported {
+				supportedSelectors = append(supportedSelectors, string(definition.Action))
+			}
+		}
+		for _, pattern := range patterns {
+			actions := families[pattern]
+			supported := len(actions) != 0
+			for _, action := range actions {
+				if _, found := iamv1.LookupActionConditionDefinition(action, key); !found {
+					supported = false
+					break
+				}
+			}
+			if supported {
+				supportedSelectors = append(supportedSelectors, string(pattern))
+			}
+		}
+		slices.Sort(supportedSelectors)
+		supportedSelectors = slices.Compact(supportedSelectors)
+		actionRules = append(actionRules, object{
+			"if": object{
+				"required": []string{"conditions"},
+				"properties": object{"conditions": object{"contains": object{
+					"required": []string{"key"}, "properties": object{"key": object{"const": string(key)}},
+				}}},
+			},
+			"then": object{"properties": object{"actions": object{"items": object{"enum": supportedSelectors}}}},
+		})
+	}
 	seenKinds := map[iamv1.ResourceKind]bool{}
 	for _, definition := range iamv1.AllActionDefinitions() {
 		actionRules = append(actionRules, object{
 			"if":   object{"properties": object{"actions": object{"contains": object{"enum": selectors[definition.Action]}}}},
 			"then": object{"properties": object{"resources": object{"contains": object{"properties": object{"kind": object{"const": string(definition.ResourceKind)}}}}}},
 		})
-		if _, supported := iamv1.LookupActionConditionDefinition(definition.Action, iamv1.ConditionIAMCurrentTime); !supported {
-			actionRules = append(actionRules, object{
-				"if":   object{"properties": object{"actions": object{"contains": object{"enum": selectors[definition.Action]}}}},
-				"then": object{"properties": object{"conditions": false}},
-			})
-		}
 		if seenKinds[definition.ResourceKind] {
 			continue
 		}

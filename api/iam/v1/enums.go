@@ -25,13 +25,16 @@ type ConditionValueType string
 type ConditionSource string
 
 const (
-	ConditionIAMCurrentTime     ConditionKey       = "iam.current-time"
-	ConditionIAMAccountID       ConditionKey       = "iam.account-id"
-	ConditionIAMPrincipalID     ConditionKey       = "iam.principal-id"
-	ConditionTime               ConditionValueType = "TIME"
-	ConditionString             ConditionValueType = "STRING"
-	ConditionIAMTransactionTime ConditionSource    = "IAM_TRANSACTION_TIME"
-	ConditionIAMIdentity        ConditionSource    = "IAM_AUTHENTICATED_IDENTITY"
+	ConditionIAMCurrentTime        ConditionKey       = "iam.current-time"
+	ConditionIAMAccountID          ConditionKey       = "iam.account-id"
+	ConditionIAMPrincipalID        ConditionKey       = "iam.principal-id"
+	ConditionRequestSourceIP       ConditionKey       = "request.source-ip"
+	ConditionTime                  ConditionValueType = "TIME"
+	ConditionString                ConditionValueType = "STRING"
+	ConditionIP                    ConditionValueType = "IP"
+	ConditionIAMTransactionTime    ConditionSource    = "IAM_TRANSACTION_TIME"
+	ConditionIAMIdentity           ConditionSource    = "IAM_AUTHENTICATED_IDENTITY"
+	ConditionCallingServiceNetwork ConditionSource    = "CALLING_SERVICE_NETWORK"
 )
 
 // This is a source declaration, not caller-supplied context or a complete
@@ -67,6 +70,8 @@ func lookupConditionDefinition(key ConditionKey) (ConditionKeyDefinition, bool) 
 		return ConditionKeyDefinition{key, ConditionTime, ConditionIAMTransactionTime}, true
 	case ConditionIAMAccountID, ConditionIAMPrincipalID:
 		return ConditionKeyDefinition{key, ConditionString, ConditionIAMIdentity}, true
+	case ConditionRequestSourceIP:
+		return ConditionKeyDefinition{key, ConditionIP, ConditionCallingServiceNetwork}, true
 	default:
 		return ConditionKeyDefinition{}, false
 	}
@@ -428,7 +433,7 @@ func AllServicePurposes() []ServicePurpose {
 // editable source. Product revision changes must accompany changed declarations.
 var authorizationProfiles = [...]AuthorizationProfile{
 	iamSecuritySettingsProfile(),
-	roleBusinessProfile(paasProfileRevisionOne),
+	paasProfileRevisionThree,
 	declaredProductProfile(ProductManagedService, ServicePaaS, 1,
 		declaredProfileAction(ActionManagedServiceOfferingRead, ResourceServiceOffering, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}, {Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
 		declaredProfileAction(ActionManagedServiceRegionRead, ResourceRegion, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}, {Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
@@ -489,7 +494,7 @@ var iamProfileRevisionOne = declaredProductProfile(ProductIAM, ServiceIAM, 1,
 )
 
 func HistoricalAuthorizationProfiles() []AuthorizationProfile {
-	return []AuthorizationProfile{cloneAuthorizationProfile(iamProfileRevisionOne), iamRoleManagementProfile(), iamRoleSessionProfile(), iamRoleSessionManagementProfile(), iamAccessKeyManagementProfile(), iamSecuritySettingsReadProfile(), cloneAuthorizationProfile(paasProfileRevisionOne), cloneAuthorizationProfile(auditProfileRevisionOne)}
+	return []AuthorizationProfile{cloneAuthorizationProfile(iamProfileRevisionOne), iamRoleManagementProfile(), iamRoleSessionProfile(), iamRoleSessionManagementProfile(), iamAccessKeyManagementProfile(), iamSecuritySettingsReadProfile(), cloneAuthorizationProfile(paasProfileRevisionOne), cloneAuthorizationProfile(paasProfileRevisionTwo), cloneAuthorizationProfile(auditProfileRevisionOne)}
 }
 
 var paasProfileRevisionOne = declaredProductProfile(ProductPaaS, ServicePaaS, 1,
@@ -521,6 +526,9 @@ var paasProfileRevisionOne = declaredProductProfile(ProductPaaS, ServicePaaS, 1,
 	declaredProfileAction(ActionPaaSOperationRead, ResourceOperation, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
 )
 
+var paasProfileRevisionTwo = roleBusinessProfile(paasProfileRevisionOne)
+var paasProfileRevisionThree = networkConditionProfile(paasProfileRevisionTwo)
+
 var auditProfileRevisionOne = declaredProductProfile(ProductAudit, ServiceAudit, 1,
 	declaredProfileAction(ActionAuditRecordRead, ResourceAuditRecord, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
 	declaredProfileAction(ActionAuditIntegrityVerify, ResourceAuditChain, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
@@ -536,6 +544,27 @@ func roleBusinessProfile(previous AuthorizationProfile) AuthorizationProfile {
 		if profile.Actions[index].Scope == AuthorityScopeTenant {
 			profile.Actions[index].SubjectTypes = []SubjectType{SubjectRole, SubjectUser}
 		}
+	}
+	return profile
+}
+
+// networkConditionProfile explicitly advances one product declaration. It does
+// not infer capability from action names or make this condition available to
+// another product. Each product owner must opt in with a new revision and a PEP
+// that derives the value from its trusted network boundary.
+func networkConditionProfile(previous AuthorizationProfile) AuthorizationProfile {
+	profile := cloneAuthorizationProfile(previous)
+	profile.Revision++
+	definition, known := lookupConditionDefinition(ConditionRequestSourceIP)
+	if !known {
+		panic("invalid release-owned network condition declaration")
+	}
+	for index := range profile.Actions {
+		if profile.Actions[index].Scope != AuthorityScopeTenant {
+			continue
+		}
+		profile.Actions[index].Conditions = append(profile.Actions[index].Conditions,
+			AuthorizationProfileCondition{Key: definition.Key, ValueType: definition.ValueType, Source: definition.Source})
 	}
 	return profile
 }

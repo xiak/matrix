@@ -980,10 +980,13 @@ RETURNS boolean LANGUAGE sql STABLE SET search_path = pg_catalog, pg_temp AS $fu
           AND (decision->'allowed'='false'::jsonb OR CASE WHEN action ? 'subjectTypes'
             THEN action->'subjectTypes' ? (decision#>>'{subject,type}')
             ELSE decision#>>'{subject,type}'=CASE WHEN action->>'scope'='INSTALLATION_PROBE' THEN 'SERVICE_ACCOUNT' ELSE 'USER' END END)
-          AND (decision->'allowed'='false'::jsonb OR decision#>>'{subject,type}'<>'USER' OR
+           AND (decision->'allowed'='false'::jsonb OR decision#>>'{subject,type}'<>'USER' OR
             CASE WHEN decision->'subject' ? 'accessKeyId' THEN action->>'scope'='TENANT'
               AND action->'userAuthenticationMethods' ? 'ACCESS_KEY'
             ELSE NOT action ? 'userAuthenticationMethods' OR action->'userAuthenticationMethods' ? 'LOGIN_SESSION' END)
+          AND (NOT decision ? 'networkContext' OR EXISTS(
+            SELECT 1 FROM jsonb_array_elements(COALESCE(action->'conditions','[]'::jsonb)) condition
+             WHERE condition=jsonb_build_object('key','request.source-ip','valueType','IP','source','CALLING_SERVICE_NETWORK')))
           AND (CASE WHEN decision->'allowed'='true'::jsonb THEN
             CASE WHEN action->>'scope'='INSTALLATION' THEN
               decision ? 'installationId' AND NOT decision ? 'tenantId' AND decision#>>'{subject,type}'='USER'
@@ -1064,8 +1067,8 @@ ALTER TABLE iam.authorization_decisions ADD COLUMN IF NOT EXISTS resource_mode t
 ALTER TABLE iam.authorization_decisions ADD COLUMN IF NOT EXISTS collection_usage text COLLATE "C";
 ALTER TABLE iam.authorization_decisions DROP CONSTRAINT IF EXISTS authorization_decision_contract_valid;
 ALTER TABLE iam.authorization_decisions ADD CONSTRAINT authorization_decision_contract_valid CHECK (COALESCE(
-    contract_version IN (1,2,3,4)
-    AND (access_key_id IS NULL OR (contract_version=4 AND subject_type='USER'
+    contract_version IN (1,2,3,4,5)
+    AND (access_key_id IS NULL OR (contract_version IN (4,5) AND subject_type='USER'
       AND access_key_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'))
     AND (CASE WHEN contract_version IN (1,2) THEN principal_id IS NOT NULL AND subject_type IS NULL AND role_id IS NULL AND source_principal_id IS NULL AND role_evidence IS NULL
       ELSE subject_type IS NOT NULL AND policy_evidence IS NOT NULL AND boundary_evidence IS NOT NULL AND
@@ -1076,7 +1079,7 @@ ALTER TABLE iam.authorization_decisions ADD CONSTRAINT authorization_decision_co
     AND jsonb_typeof(document)='object'
     AND document ?& ARRAY['apiVersion','kind','id','allowed','reason','action','resource','requestId','decidedAt']
     AND (document-ARRAY['apiVersion','kind','id','allowed','reason','action','resource','requestId','decidedAt',
-        'tenantId','installationId','subject','profile','resourceMode','collectionUsage','correlationId'])='{}'::jsonb
+        'tenantId','installationId','subject','profile','resourceMode','collectionUsage','networkContext','correlationId'])='{}'::jsonb
     AND jsonb_typeof(document->'allowed')='boolean' AND document->>'allowed'=allowed::text
     AND jsonb_typeof(document->'apiVersion')='string' AND jsonb_typeof(document->'kind')='string'
     AND jsonb_typeof(document->'id')='string' AND jsonb_typeof(document->'action')='string'
@@ -1092,7 +1095,7 @@ ALTER TABLE iam.authorization_decisions ADD CONSTRAINT authorization_decision_co
     AND (CASE WHEN allowed THEN
         jsonb_typeof(document->'subject')='object'
         AND document->'subject' ?& ARRAY['type','id']
-        AND (CASE WHEN contract_version IN (3,4) AND subject_type='ROLE' THEN
+        AND (CASE WHEN contract_version IN (3,4,5) AND subject_type='ROLE' THEN
           document->'subject'=jsonb_build_object('type','ROLE','id',role_id,'roleSession',jsonb_build_object('sessionId',role_evidence->>'sessionId','sourceUserId',source_principal_id))
           AND NOT document ? 'installationId'
           WHEN access_key_id IS NOT NULL THEN
@@ -1100,7 +1103,7 @@ ALTER TABLE iam.authorization_decisions ADD CONSTRAINT authorization_decision_co
             AND NOT document ? 'installationId'
           ELSE ((document->'subject')-ARRAY['type','id'])='{}'::jsonb AND document#>>'{subject,id}'=principal_id
             AND document#>>'{subject,type}' IN ('USER','SERVICE_ACCOUNT')
-            AND (contract_version NOT IN (3,4) OR document#>>'{subject,type}'=subject_type) END)
+            AND (contract_version NOT IN (3,4,5) OR document#>>'{subject,type}'=subject_type) END)
         AND jsonb_typeof(document#>'{subject,id}')='string'
         AND jsonb_typeof(document#>'{subject,type}')='string'
         AND ((document ? 'tenantId' AND NOT document ? 'installationId' AND jsonb_typeof(document->'tenantId')='string' AND document->>'tenantId'=tenant_id)
@@ -1110,7 +1113,7 @@ ALTER TABLE iam.authorization_decisions ADD CONSTRAINT authorization_decision_co
     AND (CASE WHEN contract_version=1 THEN
         profile_product IS NULL AND profile_revision IS NULL AND profile_content_digest IS NULL AND resource_mode IS NULL AND collection_usage IS NULL
         AND NOT document ?| ARRAY['profile','resourceMode','collectionUsage','correlationId']
-      WHEN contract_version IN (2,3,4) THEN
+      WHEN contract_version IN (2,3,4,5) THEN
         profile_product IS NOT NULL AND profile_revision IS NOT NULL AND profile_content_digest IS NOT NULL AND resource_mode IS NOT NULL
         AND document ?& ARRAY['profile','resourceMode','correlationId']
         AND document->'profile'=jsonb_build_object('product',profile_product,'revision',profile_revision,'contentDigest',profile_content_digest)
@@ -1119,7 +1122,18 @@ ALTER TABLE iam.authorization_decisions ADD CONSTRAINT authorization_decision_co
         AND document->>'correlationId' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND (CASE WHEN resource_mode='INSTANCE' THEN collection_usage IS NULL AND NOT document ? 'collectionUsage'
              WHEN resource_mode='COLLECTION' THEN collection_usage IS NOT NULL AND document->>'collectionUsage'=collection_usage
-             ELSE false END)
+              ELSE false END)
+        AND (CASE WHEN contract_version<5 THEN NOT document ? 'networkContext'
+          WHEN NOT document ? 'networkContext' THEN true
+          WHEN jsonb_typeof(document->'networkContext') IS DISTINCT FROM 'object'
+            OR ((document->'networkContext')-ARRAY['sourceIp'])<>'{}'::jsonb
+            OR jsonb_typeof(document#>'{networkContext,sourceIp}') IS DISTINCT FROM 'string'
+            OR NOT pg_input_is_valid(document#>>'{networkContext,sourceIp}','inet') THEN false
+          ELSE document#>>'{networkContext,sourceIp}'=host((document#>>'{networkContext,sourceIp}')::inet)
+            AND (document#>>'{networkContext,sourceIp}')::inet NOT IN ('0.0.0.0'::inet,'::'::inet)
+            AND NOT (document#>>'{networkContext,sourceIp}')::inet << '224.0.0.0/4'::inet
+            AND NOT (document#>>'{networkContext,sourceIp}')::inet << 'ff00::/8'::inet
+            AND NOT (document#>>'{networkContext,sourceIp}')::inet <<= '::ffff:0.0.0.0/96'::inet END)
       ELSE false END),false));
 -- A CHECK must depend only on its own row. Looking up the archive from a
 -- CHECK makes valid populated pg_restore fail before profile data is loaded.
@@ -1131,7 +1145,7 @@ ALTER TABLE iam.authorization_decisions ADD CONSTRAINT authorization_decisions_p
 CREATE OR REPLACE FUNCTION iam.guard_authorization_decision_profile()
 RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
 BEGIN
-    IF NEW.contract_version IN (2,3,4) AND NOT iam.authorization_decision_profile_matches(NEW.document) THEN
+    IF NEW.contract_version IN (2,3,4,5) AND NOT iam.authorization_decision_profile_matches(NEW.document) THEN
         RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='authorization decision archived profile conflicts';
     END IF;
     RETURN NEW;
@@ -1878,9 +1892,30 @@ END
 $function$;
 
 -- Shared private ABI/row-protection verification, valid even before bootstrap.
+CREATE OR REPLACE FUNCTION iam.authorization_decision_contract_version()
+RETURNS integer LANGUAGE sql IMMUTABLE PARALLEL SAFE
+SET search_path=pg_catalog,pg_temp AS $function$
+    SELECT 5
+$function$;
+REVOKE ALL ON FUNCTION iam.authorization_decision_contract_version() FROM PUBLIC,matrix_iam_api,matrix_iam_worker,
+    matrix_iam_notification_worker,matrix_iam_credential_recovery,matrix_iam_authentication_recovery,matrix_iam_backup_custody;
+
 CREATE OR REPLACE FUNCTION iam.authorization_decision_contract_ready()
 RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $function$
-    SELECT EXISTS(SELECT 1 FROM pg_catalog.pg_proc AS recorder
+    SELECT iam.authorization_decision_contract_version()=5
+           AND EXISTS(SELECT 1 FROM pg_catalog.pg_proc AS version
+                WHERE version.oid=to_regprocedure('iam.authorization_decision_contract_version()')
+                  AND version.proowner='matrix_iam_owner'::regrole AND NOT version.prosecdef
+                  AND version.pronargs=0 AND version.prorettype='integer'::regtype AND NOT version.proretset
+                  AND version.provolatile='i' AND version.proparallel='s'
+                  AND COALESCE((SELECT count(*)=1 AND bool_and(
+                    (SELECT array_agg(parse_ident(btrim(component.name),true) ORDER BY component.position)
+                     FROM unnest(string_to_array(substr(config.setting,strpos(config.setting,'=')+1),','))
+                       WITH ORDINALITY AS component(name,position))=ARRAY[ARRAY['pg_catalog'],ARRAY['pg_temp']])
+                    FROM unnest(version.proconfig) AS config(setting) WHERE split_part(config.setting,'=',1)='search_path'),false)
+                  AND NOT EXISTS(SELECT 1 FROM aclexplode(COALESCE(version.proacl,acldefault('f',version.proowner))) permission
+                    WHERE permission.grantee<>version.proowner))
+           AND EXISTS(SELECT 1 FROM pg_catalog.pg_proc AS recorder
                 WHERE recorder.oid=to_regprocedure('iam.record_authorization(text,text,jsonb,jsonb,jsonb,jsonb,integer,jsonb,jsonb)')
                   AND recorder.prosecdef AND recorder.proowner='matrix_iam_owner'::regrole
                   AND recorder.proargnames=ARRAY['submitted_tenant_id','submitted_subject_id','input_authorization','submitted_audit_event',
@@ -2151,7 +2186,7 @@ BEGIN
                SELECT 1 FROM iam.audit_outbox AS outbox
                 WHERE outbox.status = 'DEAD_LETTER' OR outbox.attempts >= 100
            ),
-           52::bigint,
+           53::bigint,
            transaction_timestamp();
 END
 $function$;
@@ -2828,7 +2863,7 @@ DECLARE
     binding_key text;
     expected_subject jsonb;
 BEGIN
-    IF input_contract_version IS DISTINCT FROM 4 OR submitted_role_evidence IS NULL OR submitted_key_evidence IS NULL
+    IF input_contract_version IS DISTINCT FROM 5 OR submitted_role_evidence IS NULL OR submitted_key_evidence IS NULL
        OR (submitted_role_evidence<>'null'::jsonb AND submitted_key_evidence<>'null'::jsonb) THEN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='authorization contract version is invalid';
     END IF;
@@ -2842,10 +2877,10 @@ BEGIN
     submitted_request := input_authorization->'request';
     submitted_decision := input_authorization->'decision';
     IF NOT submitted_request ?& ARRAY['action','resource','requestId','correlationId','profile','resourceMode']
-        OR (submitted_request-ARRAY['action','resource','requestId','correlationId','profile','resourceMode','collectionUsage'])<>'{}'::jsonb THEN
+        OR (submitted_request-ARRAY['action','resource','requestId','correlationId','profile','resourceMode','collectionUsage','networkContext'])<>'{}'::jsonb THEN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='authorization request is invalid';
     END IF;
-    FOREACH binding_key IN ARRAY ARRAY['action','resource','requestId','correlationId','profile','resourceMode','collectionUsage'] LOOP
+    FOREACH binding_key IN ARRAY ARRAY['action','resource','requestId','correlationId','profile','resourceMode','collectionUsage','networkContext'] LOOP
         IF (submitted_request ? binding_key)<>(submitted_decision ? binding_key)
             OR submitted_request->binding_key IS DISTINCT FROM submitted_decision->binding_key THEN
             RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='authorization request binding differs';
@@ -2881,7 +2916,7 @@ BEGIN
        ])
        OR (submitted_decision - ARRAY[
             'apiVersion', 'kind', 'id', 'allowed', 'reason', 'tenantId',
-            'subject', 'installationId', 'action', 'resource', 'requestId', 'decidedAt', 'profile', 'resourceMode', 'collectionUsage', 'correlationId'
+             'subject', 'installationId', 'action', 'resource', 'requestId', 'decidedAt', 'profile', 'resourceMode', 'collectionUsage', 'networkContext', 'correlationId'
        ]) <> '{}'::jsonb
        OR NOT ((submitted_decision->'resource') ?& ARRAY['kind', 'id'])
        OR ((submitted_decision->'resource') - ARRAY['kind', 'id']) <> '{}'::jsonb
@@ -2904,6 +2939,24 @@ BEGIN
         RAISE EXCEPTION USING
             ERRCODE = '22023',
             MESSAGE = 'authorization decision is invalid';
+    END IF;
+
+    IF submitted_request ? 'networkContext' THEN
+        IF jsonb_typeof(submitted_request->'networkContext') IS DISTINCT FROM 'object'
+           OR ((submitted_request->'networkContext')-ARRAY['sourceIp'])<>'{}'::jsonb
+           OR jsonb_typeof(submitted_request#>'{networkContext,sourceIp}') IS DISTINCT FROM 'string' THEN
+            RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='authorization network context is invalid';
+        END IF;
+        IF NOT pg_input_is_valid(submitted_request#>>'{networkContext,sourceIp}','inet') THEN
+            RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='authorization network context is invalid';
+        END IF;
+        IF submitted_request#>>'{networkContext,sourceIp}'<>host((submitted_request#>>'{networkContext,sourceIp}')::inet)
+           OR (submitted_request#>>'{networkContext,sourceIp}')::inet IN ('0.0.0.0'::inet,'::'::inet)
+           OR (submitted_request#>>'{networkContext,sourceIp}')::inet << '224.0.0.0/4'::inet
+           OR (submitted_request#>>'{networkContext,sourceIp}')::inet << 'ff00::/8'::inet
+           OR (submitted_request#>>'{networkContext,sourceIp}')::inet <<= '::ffff:0.0.0.0/96'::inet THEN
+            RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='authorization network context is invalid';
+        END IF;
     END IF;
 
     expected_kind := iam.resource_kind_for_action(submitted_decision->>'action');
@@ -3082,7 +3135,7 @@ BEGIN
         submitted_decision,
         submitted_policy_evidence,
         submitted_boundary_evidence,
-        4,
+        5,
         submitted_decision#>>'{profile,product}',
         (submitted_decision#>>'{profile,revision}')::bigint,
         submitted_decision#>>'{profile,contentDigest}',
@@ -3151,7 +3204,7 @@ BEGIN
            AND decision.action_name = submitted_action
            AND decision.target_kind = submitted_target_kind
            AND decision.target_id = submitted_target_id
-           AND decision.contract_version = 4 AND decision.subject_type='USER' AND decision.access_key_id IS NULL
+           AND decision.contract_version = 5 AND decision.subject_type='USER' AND decision.access_key_id IS NULL
            AND EXISTS(SELECT 1 FROM iam.authorization_profile_heads head
              JOIN iam.authorization_profiles archive ON archive.product=head.product AND archive.revision=head.revision
              WHERE head.product=decision.profile_product AND head.revision=decision.profile_revision

@@ -1089,6 +1089,7 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 	runFlow("direct policy attachment management", proveDirectPolicyAttachments)
 	runFlow("group inheritance and terminal membership", proveGroupInheritance)
 	runFlow("customer policy publication and current authority", proveCustomerPolicyPublication)
+	runFlow("source IP policy conditions use product-bound network facts", proveSourceIPPolicyConditions)
 	runFlow("customer immutable versions and default selection", proveCustomerPolicyVersions)
 	runFlow("customer policy metadata lifecycle", proveCustomerPolicyMetadata)
 	runFlow("customer policy terminal deletion", proveCustomerPolicyDeletion)
@@ -1136,7 +1137,7 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 			jsonb_build_object('request',document-'apiVersion'-'kind'-'id'-'allowed'-'reason'-'decidedAt'-'tenantId'-'installationId'-'subject','decision',
 			document||jsonb_build_object('id','forged-boundary-decision','decidedAt',
 			to_char(transaction_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'))),
-			'{}'::jsonb,policy_evidence,`+attack.evidence+`,4,'null'::jsonb,'null'::jsonb) FROM iam.authorization_decisions
+			'{}'::jsonb,policy_evidence,`+attack.evidence+`,5,'null'::jsonb,'null'::jsonb) FROM iam.authorization_decisions
 			WHERE principal_id=$2 AND action_name='paas.application.read' AND allowed ORDER BY decided_at,id LIMIT 1`,
 			"42501", document.Organization.ID, document.Administrator.ID)
 	}
@@ -1153,7 +1154,7 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 			jsonb_build_object('request',document-'apiVersion'-'kind'-'id'-'allowed'-'reason'-'decidedAt'-'tenantId'-'installationId'-'subject','decision',
 			document||jsonb_build_object('id','forged-policy-decision','decidedAt',
 			to_char(transaction_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'))),
-			'{}'::jsonb,`+attack.evidence+`,boundary_evidence,4,'null'::jsonb,'null'::jsonb) FROM iam.authorization_decisions WHERE allowed ORDER BY decided_at,id LIMIT 1`,
+			'{}'::jsonb,`+attack.evidence+`,boundary_evidence,5,'null'::jsonb,'null'::jsonb) FROM iam.authorization_decisions WHERE allowed ORDER BY decided_at,id LIMIT 1`,
 			attack.code, document.Organization.ID, document.Administrator.ID)
 	}
 	assertRejected("immutable-version-truncate", `TRUNCATE iam.policy_versions`, "0A000") // Referenced defaults also prohibit truncation.
@@ -1402,7 +1403,7 @@ func proveDecisionTargetConsumption(t *testing.T, ctx context.Context, admin *pg
 			Request  iamv1.AuthorizationRequest  `json:"request"`
 			Decision iamv1.AuthorizationDecision `json:"decision"`
 		}{request, decision}
-		if _, err := tx.Exec(ctx, `SELECT iam.record_authorization($1,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,4,'null'::jsonb,'null'::jsonb)`,
+		if _, err := tx.Exec(ctx, `SELECT iam.record_authorization($1,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,5,'null'::jsonb,'null'::jsonb)`,
 			decision.TenantID, decision.Subject.ID, string(mustIAMJSON(t, envelope)), string(mustIAMJSON(t, fact)), string(policy), string(boundary)); err != nil {
 			t.Fatalf("record target fixture: %v", err)
 		}
@@ -1445,6 +1446,11 @@ func proveProfileBoundRecorder(t *testing.T, ctx context.Context, admin *pgx.Con
 	t.Helper()
 	request := profileBoundIAMRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead,
 		Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "collection"}, RequestID: "wire-proof", CorrelationID: "wire-correlation"}, iamv1.AuthorizationResourceInstance, "")
+	var err error
+	request, err = iamv1.BindAuthorizationSourceIP(request, "192.0.2.10")
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, allowed := range []bool{false, true} {
 		credential := auditCredential
 		if allowed {
@@ -1456,21 +1462,22 @@ func proveProfileBoundRecorder(t *testing.T, ctx context.Context, admin *pgx.Con
 			t.Fatalf("actual bound authorization failed: status=%d", response.Code)
 		}
 		var version int
-		var product, digest, mode, tenant, principal string
+		var product, digest, mode, tenant, principal, sourceIP string
 		var revision uint64
 		var usage *string
 		var userEvidence bool
 		var factBytes, policyBytes, boundaryBytes []byte
 		if err := admin.QueryRow(ctx, `SELECT d.tenant_id,d.principal_id,d.contract_version,d.profile_product,d.profile_revision,d.profile_content_digest,d.resource_mode,d.collection_usage,
+			d.document#>>'{networkContext,sourceIp}',
 			o.event_document,d.policy_evidence,d.boundary_evidence,
 			d.subject_type='USER' AND d.role_id IS NULL AND d.source_principal_id IS NULL AND d.role_evidence IS NULL AND d.access_key_id IS NULL
 			AND NOT EXISTS(SELECT 1 FROM iam.access_key_authorization_evidence e WHERE e.tenant_id=d.tenant_id AND e.decision_id=d.id)
 			FROM iam.authorization_decisions d JOIN iam.audit_outbox o
 			ON o.tenant_id=d.tenant_id AND o.event_document->>'action'='iam.authorization.decided' AND o.event_document->>'iamDecisionId'=d.id WHERE d.id=$1`, decision.ID).
-			Scan(&tenant, &principal, &version, &product, &revision, &digest, &mode, &usage, &factBytes, &policyBytes, &boundaryBytes, &userEvidence); err != nil {
+			Scan(&tenant, &principal, &version, &product, &revision, &digest, &mode, &usage, &sourceIP, &factBytes, &policyBytes, &boundaryBytes, &userEvidence); err != nil {
 			t.Fatal(err)
 		}
-		if version != 4 || !userEvidence || product != string(request.Profile.Product) || revision != request.Profile.Revision || digest != request.Profile.ContentDigest || mode != string(request.ResourceMode) || usage != nil {
+		if version != 5 || sourceIP != request.NetworkContext.SourceIP || !userEvidence || product != string(request.Profile.Product) || revision != request.Profile.Revision || digest != request.Profile.ContentDigest || mode != string(request.ResourceMode) || usage != nil {
 			t.Fatal("stored row did not preserve exact contract/instance binding")
 		}
 		var fact auditv1.Event
@@ -1499,6 +1506,14 @@ func proveProfileBoundRecorder(t *testing.T, ctx context.Context, admin *pgx.Con
 			"correlationId":    func(e map[string]any) { e["request"].(map[string]any)["correlationId"] = "other-correlation" },
 			"mode":             func(e map[string]any) { e["request"].(map[string]any)["resourceMode"] = "COLLECTION" },
 			"usage presence":   func(e map[string]any) { e["request"].(map[string]any)["collectionUsage"] = nil },
+			"network mismatch": func(e map[string]any) {
+				e["request"].(map[string]any)["networkContext"].(map[string]any)["sourceIp"] = "198.51.100.10"
+			},
+			"network missing": func(e map[string]any) { delete(e["request"].(map[string]any), "networkContext") },
+			"network null":    func(e map[string]any) { e["request"].(map[string]any)["networkContext"] = nil },
+			"network extra field": func(e map[string]any) {
+				e["request"].(map[string]any)["networkContext"].(map[string]any)["forwardedFor"] = "198.51.100.10"
+			},
 			"both stale revision": func(e map[string]any) {
 				for _, k := range []string{"request", "decision"} {
 					e[k].(map[string]any)["profile"].(map[string]any)["revision"] = 1000
@@ -1517,6 +1532,31 @@ func proveProfileBoundRecorder(t *testing.T, ctx context.Context, admin *pgx.Con
 			"both missing profile": func(e map[string]any) {
 				for _, k := range []string{"request", "decision"} {
 					delete(e[k].(map[string]any), "profile")
+				}
+			},
+			"both network port": func(e map[string]any) {
+				for _, k := range []string{"request", "decision"} {
+					e[k].(map[string]any)["networkContext"].(map[string]any)["sourceIp"] = "192.0.2.10:443"
+				}
+			},
+			"both mapped network": func(e map[string]any) {
+				for _, k := range []string{"request", "decision"} {
+					e[k].(map[string]any)["networkContext"].(map[string]any)["sourceIp"] = "::ffff:192.0.2.10"
+				}
+			},
+			"both unspecified network": func(e map[string]any) {
+				for _, k := range []string{"request", "decision"} {
+					e[k].(map[string]any)["networkContext"].(map[string]any)["sourceIp"] = "0.0.0.0"
+				}
+			},
+			"both multicast network": func(e map[string]any) {
+				for _, k := range []string{"request", "decision"} {
+					e[k].(map[string]any)["networkContext"].(map[string]any)["sourceIp"] = "ff02::1"
+				}
+			},
+			"both noncanonical network": func(e map[string]any) {
+				for _, k := range []string{"request", "decision"} {
+					e[k].(map[string]any)["networkContext"].(map[string]any)["sourceIp"] = "2001:0db8::1"
 				}
 			},
 		} {
@@ -1544,7 +1584,7 @@ func proveProfileBoundRecorder(t *testing.T, ctx context.Context, admin *pgx.Con
 				if _, err := tx.Exec(ctx, "SET LOCAL ROLE "+pgx.Identifier{iamHTTPTestRole}.Sanitize()); err != nil {
 					t.Fatal(err)
 				}
-				_, err = tx.Exec(ctx, "SELECT iam.record_authorization($1,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,4,'null'::jsonb,'null'::jsonb)", tenant, principal, string(mustIAMJSON(t, envelope)), string(mustIAMJSON(t, copyFact)), string(policyBytes), string(boundaryBytes))
+				_, err = tx.Exec(ctx, "SELECT iam.record_authorization($1,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,5,'null'::jsonb,'null'::jsonb)", tenant, principal, string(mustIAMJSON(t, envelope)), string(mustIAMJSON(t, copyFact)), string(policyBytes), string(boundaryBytes))
 				if name == "valid" {
 					if err != nil {
 						t.Fatalf("restricted recorder rejected complete original input: %v", err)
@@ -1572,10 +1612,11 @@ func proveProfileBoundRecorder(t *testing.T, ctx context.Context, admin *pgx.Con
 		{`SELECT iam.record_authorization('tenant','principal','{}','{}','[]','{}',1,'null','null')`, "22023"},
 		{`SELECT iam.record_authorization('tenant','principal','{}','{}','[]','{}',2,'null','null')`, "22023"},
 		{`SELECT iam.record_authorization('tenant','principal','{}','{}','[]','{}',3,'null','null')`, "22023"},
+		{`SELECT iam.record_authorization('tenant','principal','{}','{}','[]','{}',4,'null','null')`, "22023"},
 		{`SELECT iam.record_authorization('tenant','principal','{}','{}','[]','{}',NULL,'null','null')`, "22023"},
-		{`SELECT iam.record_authorization('tenant','principal','{}','{}','[]','{}',4,NULL,'null')`, "22023"},
-		{`SELECT iam.record_authorization('tenant','principal','{}','{}','[]','{}',4,'null',NULL)`, "22023"},
-		{`SELECT iam.record_authorization('tenant','principal','{}','{}','[]','{}',4,'{}','{}')`, "22023"},
+		{`SELECT iam.record_authorization('tenant','principal','{}','{}','[]','{}',5,NULL,'null')`, "22023"},
+		{`SELECT iam.record_authorization('tenant','principal','{}','{}','[]','{}',5,'null',NULL)`, "22023"},
+		{`SELECT iam.record_authorization('tenant','principal','{}','{}','[]','{}',5,'{}','{}')`, "22023"},
 	} {
 		tx, err := admin.Begin(ctx)
 		if err != nil {
@@ -1678,7 +1719,7 @@ func proveAuthorizationProfileRegistry(t *testing.T, ctx context.Context, dsn st
 			Resource: iamv1.ResourceReference{Kind: source.resource, ID: "collection"}, RequestID: "registry-historical", CorrelationID: "registry-historical"}, iamv1.AuthorizationResourceCollection, source.usage)
 		var document []byte
 		if err := admin.QueryRow(ctx, `SELECT document FROM iam.authorization_decisions
-			WHERE request_id='registry-historical' AND action_name=$1 AND contract_version=4`, source.action).Scan(&document); err != nil {
+			WHERE request_id='registry-historical' AND action_name=$1 AND contract_version=5`, source.action).Scan(&document); err != nil {
 			t.Fatal("missing original protected business decision")
 		}
 		var decision iamv1.AuthorizationDecision
@@ -1705,12 +1746,14 @@ func proveAuthorizationProfileRegistry(t *testing.T, ctx context.Context, dsn st
 			var proof iamv1.AuditProducerAuthorization
 			contract, _ := auditv1.ContractForAction(original.event.Action)
 			_, digest, err := auditv1.CanonicalizeEvent(contract.Source, original.event)
-			if err != nil || response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &proof) != nil ||
-				iamv1.ValidateAuditProducerAuthorization(proof) != nil || proof.ContentDigest != digest {
-				t.Fatal("historical business proof consulted a current head or changed its event commitment")
+			decodeErr := json.Unmarshal(response.Body.Bytes(), &proof)
+			validationErr := iamv1.ValidateAuditProducerAuthorization(proof)
+			if err != nil || response.Code != http.StatusOK || decodeErr != nil || validationErr != nil || proof.ContentDigest != digest {
+				t.Fatalf("historical business proof action=%s status=%d canonical=%v decode=%v validation=%v body=%s consulted a current head or changed its event commitment",
+					original.event.Action, response.Code, err, decodeErr, validationErr, response.Body.String())
 			}
 			var current []byte
-			if err := admin.QueryRow(ctx, `SELECT document FROM iam.authorization_decisions WHERE tenant_id=$1 AND id=$2 AND contract_version=4`, original.event.TenantID, original.event.IAMDecisionID).Scan(&current); err != nil || !bytes.Equal(current, original.document) {
+			if err := admin.QueryRow(ctx, `SELECT document FROM iam.authorization_decisions WHERE tenant_id=$1 AND id=$2 AND contract_version=5`, original.event.TenantID, original.event.IAMDecisionID).Scan(&current); err != nil || !bytes.Equal(current, original.document) {
 				t.Fatal("historical decision changed while current profile advanced")
 			}
 		}
@@ -1816,7 +1859,7 @@ func proveAuthorizationProfileRegistry(t *testing.T, ctx context.Context, dsn st
 	lookup(future, true)
 	for _, function := range []string{"iam.current_authorization_profiles()", "iam.lookup_authorization_profile(text,bigint,text)",
 		"iam.record_authorization(text,text,jsonb,jsonb,jsonb,jsonb,integer,jsonb,jsonb)", "iam.read_audit_evidence(text,text,text,text,jsonb)",
-		"iam.resource_kind_for_action(text)", "iam.is_platform_action(text)"} {
+		"iam.authorization_decision_contract_version()", "iam.resource_kind_for_action(text)", "iam.is_platform_action(text)"} {
 		// Configuration spelling is not the boundary: accept the same two
 		// PostgreSQL identifiers with different whitespace, then roll it back.
 		equivalent, err := admin.Begin(ctx)
@@ -1856,6 +1899,7 @@ func proveAuthorizationProfileRegistry(t *testing.T, ctx context.Context, dsn st
 		}
 	}
 	for _, mutation := range []string{
+		"CREATE OR REPLACE FUNCTION iam.authorization_decision_contract_version() RETURNS integer LANGUAGE sql IMMUTABLE PARALLEL SAFE SET search_path=pg_catalog,pg_temp AS 'SELECT 4'",
 		"ALTER TABLE iam.authorization_decisions ALTER COLUMN contract_version SET DEFAULT 1",
 		"ALTER TABLE iam.authorization_decisions ALTER COLUMN contract_version DROP NOT NULL",
 		"ALTER TABLE iam.authorization_decisions DROP CONSTRAINT authorization_decision_contract_valid",
@@ -13904,6 +13948,131 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 	post("/v1/audit-producer:resolve", iamProducerCredential, iamv1.ResolveAuditProducerRequest{Event: event}, http.StatusOK, nil)
 }
 
+func proveSourceIPPolicyConditions(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, root string) {
+	t.Helper()
+	post := func(path, bearer string, body any, want int, result any) {
+		t.Helper()
+		response := performIAMRequest(handler, http.MethodPost, path, bearer, mustIAMJSON(t, body))
+		if response.Code != want {
+			t.Fatalf("source-IP condition %s: status=%d want=%d body=%s", path, response.Code, want, response.Body.String())
+		}
+		if result != nil && json.Unmarshal(response.Body.Bytes(), result) != nil {
+			t.Fatal("decode source-IP condition response")
+		}
+	}
+	var member iamv1.User
+	post("/v1/users", root, map[string]any{"loginName": "network-member", "displayName": "Network member", "initialPassword": initialDeveloperPassword, "requestId": "network-member-create"}, http.StatusCreated, &member)
+	bearer := localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.AccountID), initialDeveloperPassword, true)
+	bearer = localRecoveryChangePassword(t, handler, bearer, initialDeveloperPassword, changedDeveloperPassword)
+	document := iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+		Statements: []iamv1.PolicyStatement{{SID: "trusted-network", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionPaaSApplicationRead},
+			Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: "network-application"}},
+			Conditions: []iamv1.PolicyCondition{{Key: iamv1.ConditionRequestSourceIP, Operator: iamv1.PolicyIPAddress,
+				Values: []string{"192.0.2.0/24", "2001:db8::/32"}}}}}}
+	var policy iamv1.PolicyDetail
+	post("/v1/policies", root, iamv1.CreatePolicyRequest{DisplayName: "Trusted network application", Document: document, RequestID: "network-policy-create"}, http.StatusCreated, &policy)
+	var attachment iamv1.PolicyAttachment
+	post("/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(member.ID)},
+		PolicyID: policy.Policy.ID, PolicyResourceVersion: policy.Policy.ResourceVersion, RequestID: "network-policy-attach"}, http.StatusOK, &attachment)
+	if attachment.PolicyID != policy.Policy.ID || attachment.Target.ID != string(member.ID) {
+		t.Fatal("source-IP policy attachment lost its user or immutable policy owner")
+	}
+
+	authorize := func(sourceIP, requestID string, want bool) iamv1.AuthorizationDecision {
+		t.Helper()
+		request := profileBoundIAMRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead,
+			Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "network-application"}, RequestID: requestID, CorrelationID: requestID}, iamv1.AuthorizationResourceInstance, "")
+		var err error
+		request, err = iamv1.BindAuthorizationSourceIP(request, sourceIP)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response := performIAMRequestWithSubject(handler, mustIAMJSON(t, request), paasCredential, bearer)
+		var decision iamv1.AuthorizationDecision
+		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &decision) != nil || iamv1.ValidateAuthorizationDecision(decision) != nil ||
+			decision.Allowed != want || iamv1.CheckAuthorizationDecisionForRequest(decision, request) != nil {
+			t.Fatalf("source-IP decision source=%s status=%d allowed=%t want=%t body=%s", sourceIP, response.Code, decision.Allowed, want, response.Body.String())
+		}
+		var storedDocument, evidenceBytes []byte
+		var contract uint64
+		if err := database.QueryRow(ctx, `SELECT contract_version,document,policy_evidence FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2 AND id=$3`,
+			member.AccountID, member.ID, decision.ID).Scan(&contract, &storedDocument, &evidenceBytes); err != nil {
+			t.Fatal("read source-IP decision", err)
+		}
+		var stored iamv1.AuthorizationDecision
+		var evidence []authority.PolicyAttachmentEvidence
+		if contract != 5 || json.Unmarshal(storedDocument, &stored) != nil || iamv1.CheckAuthorizationDecisionForRequest(stored, request) != nil ||
+			json.Unmarshal(evidenceBytes, &evidence) != nil || want && (len(evidence) != 1 || evidence[0].Version.VersionID != policy.Version.ID) || !want && len(evidence) != 0 {
+			t.Fatal("source-IP decision did not preserve contract, context and exact policy evidence")
+		}
+		return decision
+	}
+	allowed := authorize("192.0.2.10", "network-read-ipv4", true)
+	authorize("2001:db8::1", "network-read-ipv6", true)
+	authorize("198.51.100.10", "network-read-outside", false)
+
+	missing := profileBoundIAMRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead,
+		Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "network-application"}, RequestID: "network-read-missing", CorrelationID: "network-read-missing"}, iamv1.AuthorizationResourceInstance, "")
+	response := performIAMRequestWithSubject(handler, mustIAMJSON(t, missing), paasCredential, bearer)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("missing PEP network fact became a Deny/Allow: status=%d body=%s", response.Code, response.Body.String())
+	}
+	var partial int
+	if err := database.QueryRow(ctx, `SELECT (SELECT count(*) FROM iam.authorization_decisions WHERE request_id='network-read-missing')+
+		(SELECT count(*) FROM iam.audit_outbox WHERE event_document->>'requestId'='network-read-missing')`).Scan(&partial); err != nil || partial != 0 {
+		t.Fatal("missing source-IP authority committed a partial decision or fact")
+	}
+
+	for _, forged := range []string{"X-Forwarded-For", "Forwarded", "X-Real-IP"} {
+		request := profileBoundIAMRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead,
+			Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "network-application"}, RequestID: "network-header-" + strings.ToLower(forged), CorrelationID: "network-header"}, iamv1.AuthorizationResourceInstance, "")
+		httpRequest := httptest.NewRequest(http.MethodPost, "/v1/authorize", bytes.NewReader(mustIAMJSON(t, request)))
+		httpRequest.Header.Set("Content-Type", "application/json")
+		httpRequest.Header.Set("Authorization", "Bearer "+paasCredential)
+		httpRequest.Header.Set("Matrix-Subject-Credential", bearer)
+		httpRequest.Header.Set(forged, "192.0.2.10")
+		httpResponse := httptest.NewRecorder()
+		handler.ServeHTTP(httpResponse, httpRequest)
+		if httpResponse.Code != http.StatusServiceUnavailable {
+			t.Fatalf("IAM inferred source IP from %s: status=%d", forged, httpResponse.Code)
+		}
+	}
+
+	canonical, _, err := compileIAMPolicyForStorage(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unsupportedDocument := iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+		Statements: []iamv1.PolicyStatement{{SID: "unsupported-network", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMUserRead},
+			Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceUser, Match: iamv1.PolicyResourceAnyInAuthority}}}}}
+	unsupportedCanonical, _, err := compileIAMPolicyForStorage(unsupportedDocument)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unsupportedCondition := strings.Replace(unsupportedCanonical, `"effect":`, `"conditions":[{"key":"request.source-ip","operator":"IP_ADDRESS","values":["192.0.2.0/24"]}],"effect":`, 1)
+	for name, malformed := range map[string]string{
+		"unknown source":     strings.Replace(canonical, "request.source-ip", "caller.source-ip", 1),
+		"wrong operator":     strings.Replace(canonical, "IP_ADDRESS", "STRING_EQUALS", 1),
+		"host bits":          strings.Replace(canonical, "192.0.2.0/24", "192.0.2.1/24", 1),
+		"range":              strings.Replace(canonical, "192.0.2.0/24", "192.0.2.0-192.0.2.255", 1),
+		"mapped IPv6 prefix": strings.Replace(canonical, "192.0.2.0/24", "::ffff:192.0.2.0/120", 1),
+		"unsupported action": unsupportedCondition,
+	} {
+		_, err := database.Exec(ctx, `SELECT iam.assert_policy_compilation($1,'sha256:'||encode(sha256(convert_to('matrix.iam.policy-compilation.v1','UTF8')||decode('00','hex')||convert_to($1,'UTF8')),'hex'),'TENANT')`, malformed)
+		var failure *pgconn.PgError
+		if !errors.As(err, &failure) || failure.Code != "22023" {
+			t.Fatalf("SQL policy compiler accepted %s source-IP authority: %v", name, err)
+		}
+	}
+
+	var eventBytes []byte
+	var event auditv1.Event
+	if err := database.QueryRow(ctx, `SELECT event_document FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'iamDecisionId'=$2 AND event_document->>'action'='iam.authorization.decided'`, member.AccountID, allowed.ID).Scan(&eventBytes); err != nil || json.Unmarshal(eventBytes, &event) != nil {
+		t.Fatal("read source-IP decision fact")
+	}
+	post("/v1/audit-producer:resolve", iamProducerCredential, iamv1.ResolveAuditProducerRequest{Event: event}, http.StatusOK, nil)
+}
+
 func proveCustomerPolicyVersions(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, root string) {
 	t.Helper()
 	request := func(method, path, bearer string, body any, want int, result any) {
@@ -15342,7 +15511,7 @@ func proveGroupInheritance(t *testing.T, ctx context.Context, handler http.Handl
 		if _, err = tx.Exec(ctx, `SET LOCAL ROLE matrix_iam_owner; SELECT set_config('matrix.iam_tenant_id',$1,true)`, member.AccountID); err != nil {
 			t.Fatal(err)
 		}
-		_, err = tx.Exec(ctx, `SELECT iam.record_authorization($1,$2,jsonb_build_object('request',document-'apiVersion'-'kind'-'id'-'allowed'-'reason'-'decidedAt'-'tenantId'-'installationId'-'subject','decision',document||jsonb_build_object('id','forged-group-decision','decidedAt',to_char(transaction_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'))),'{}'::jsonb,`+expression+`,boundary_evidence,4,'null'::jsonb,'null'::jsonb) FROM iam.authorization_decisions WHERE tenant_id=$1 AND id=$3`, member.AccountID, member.ID, decision.ID)
+		_, err = tx.Exec(ctx, `SELECT iam.record_authorization($1,$2,jsonb_build_object('request',document-'apiVersion'-'kind'-'id'-'allowed'-'reason'-'decidedAt'-'tenantId'-'installationId'-'subject','decision',document||jsonb_build_object('id','forged-group-decision','decidedAt',to_char(transaction_timestamp() AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'))),'{}'::jsonb,`+expression+`,boundary_evidence,5,'null'::jsonb,'null'::jsonb) FROM iam.authorization_decisions WHERE tenant_id=$1 AND id=$3`, member.AccountID, member.ID, decision.ID)
 		var databaseError *pgconn.PgError
 		if !errors.As(err, &databaseError) || databaseError.Code != code {
 			t.Fatalf("group evidence attack: %v want=%s", err, code)
@@ -16655,7 +16824,7 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 			request := sign(first, fmt.Sprintf("key-signed-deny-%d", offset/time.Second), offset)
 			result := assertDenied(handler, request)
 			var complete bool
-			if err := database.QueryRow(ctx, `SELECT d.contract_version=4 AND d.subject_type='USER' AND NOT d.allowed
+			if err := database.QueryRow(ctx, `SELECT d.contract_version=5 AND d.subject_type='USER' AND NOT d.allowed
 			 AND d.principal_id=$3 AND d.access_key_id=$2 AND e.signed_request_digest=$4 AND e.service_lookup_digest=$5
 			 AND e.service_tenant_id=$6 AND e.installation_id=$7 AND d.document->'subject' IS NULL
 			 FROM iam.authorization_decisions d JOIN iam.access_key_authorization_evidence e ON e.tenant_id=d.tenant_id AND e.decision_id=d.id
@@ -16713,10 +16882,10 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 					decision.ID = iamv1.DecisionID("signed-recorder-" + sample.name)
 					fact := original
 					fact.EventID, fact.IAMDecisionID, fact.Target.ID, fact.OccurredAt = auditv1.EventID(decision.ID), auditv1.DecisionID(decision.ID), string(decision.ID), decision.DecidedAt
-					tenant, actor, contract, role := user.AccountID, user.ID, 4, "null"
+					tenant, actor, contract, role := user.AccountID, user.ID, 5, "null"
 					switch sample.name {
 					case "old-contract":
-						contract = 3
+						contract = 4
 					case "role-and-key":
 						role = `{}`
 					case "extra-field":
@@ -19475,7 +19644,7 @@ func proveRoleSessionIssuance(t *testing.T, ctx context.Context, handler http.Ha
 				t.Fatal("business subject is not the exact role lineage")
 			}
 			var bound bool
-			if err := database.QueryRow(ctx, `SELECT contract_version=4 AND principal_id IS NULL AND subject_type='ROLE' AND role_id=$3 AND source_principal_id=$4
+			if err := database.QueryRow(ctx, `SELECT contract_version=5 AND principal_id IS NULL AND subject_type='ROLE' AND role_id=$3 AND source_principal_id=$4
 				AND role_evidence->>'sessionId'=$5 AND role_evidence=iam.role_authorization_evidence(tenant_id,$5)
 				AND boundary_evidence='{"state":"NOT_APPLICABLE"}'::jsonb
 				AND EXISTS(SELECT 1 FROM iam.audit_outbox o WHERE o.tenant_id=d.tenant_id AND o.event_document->>'iamDecisionId'=d.id
@@ -20291,7 +20460,7 @@ func proveRolePolicyIntersection(t *testing.T, ctx context.Context, handler http
 				t.Fatal("intersection permission lost role identity")
 			}
 			var matches bool
-			if err := database.QueryRow(ctx, `SELECT contract_version=4 AND role_evidence=iam.role_authorization_evidence(tenant_id,$3)
+			if err := database.QueryRow(ctx, `SELECT contract_version=5 AND role_evidence=iam.role_authorization_evidence(tenant_id,$3)
 			 AND (role_evidence->'sessionPolicy'='null'::jsonb)=$4 AND principal_id IS NULL AND source_principal_id=$5
 			 FROM iam.authorization_decisions WHERE tenant_id=$1 AND id=$2`, user.AccountID, decision.ID, issued.Session.ID, mode == "omitted", user.ID).Scan(&matches); err != nil || !matches {
 				t.Fatal("intersection did not record the exact private session policy", err)
@@ -21265,11 +21434,12 @@ func proveRoleDecisionEvidence(t *testing.T, ctx context.Context, database *pgx.
 			decision.ID, decision.DecidedAt = "role-evidence-fixture", now.UTC()
 			fact.EventID, fact.IAMDecisionID, fact.Target.ID, fact.OccurredAt = "role-evidence-fixture-event", auditv1.DecisionID(decision.ID), string(decision.ID), now.UTC()
 			request := iamv1.AuthorizationRequest{Action: decision.Action, Resource: decision.Resource, Profile: *decision.Profile,
-				ResourceMode: decision.ResourceMode, CollectionUsage: decision.CollectionUsage, RequestID: decision.RequestID, CorrelationID: decision.CorrelationID}
+				ResourceMode: decision.ResourceMode, CollectionUsage: decision.CollectionUsage, NetworkContext: decision.NetworkContext,
+				RequestID: decision.RequestID, CorrelationID: decision.CorrelationID}
 			if _, err := tx.Exec(ctx, "SET LOCAL ROLE "+pgx.Identifier{iamHTTPTestRole}.Sanitize()); err != nil {
 				t.Fatal(err)
 			}
-			_, err = tx.Exec(ctx, `SELECT iam.record_authorization($1,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,4,$7::jsonb,'null'::jsonb)`, account, fact.Actor.ID,
+			_, err = tx.Exec(ctx, `SELECT iam.record_authorization($1,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,5,$7::jsonb,'null'::jsonb)`, account, fact.Actor.ID,
 				string(mustIAMJSON(t, map[string]any{"request": request, "decision": decision})), string(mustIAMJSON(t, fact)), string(policy), string(boundary), string(mustIAMJSON(t, evidence)))
 			if test.name == "valid" {
 				if err != nil {

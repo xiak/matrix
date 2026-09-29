@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"mime"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -494,11 +495,17 @@ func (value *handler) authorizeRequest(
 	mode iamv1.AuthorizationResourceMode,
 	usage iamv1.AuthorizationCollectionUsage,
 ) (port.Authorization, bool) {
+	sourceIP, err := authorizationSourceIP(request.RemoteAddr)
+	if err != nil {
+		writeProblem(response, requestID, http.StatusServiceUnavailable, paasv1.ErrorIdentityUnavailable, "Identity unavailable", "request network authority could not be established", true)
+		return port.Authorization{}, false
+	}
 	authorizationRequest := port.AuthorizationRequest{
 		Credential:   request.Header.Get("Authorization"),
 		Action:       action,
 		Resource:     paasv1.ResourceRef{Kind: kind, ID: id},
 		ResourceMode: mode, CollectionUsage: usage,
+		SourceIP:  sourceIP,
 		RequestID: requestID,
 	}
 	if err := port.ValidateAuthorizationRequest(authorizationRequest); err != nil {
@@ -515,6 +522,22 @@ func (value *handler) authorizeRequest(
 		return port.Authorization{}, false
 	}
 	return authorization, true
+}
+
+func authorizationSourceIP(remoteAddress string) (string, error) {
+	host, port, err := net.SplitHostPort(remoteAddress)
+	if err != nil || host == "" {
+		return "", errors.New("request remote address is invalid")
+	}
+	number, err := strconv.ParseUint(port, 10, 16)
+	if err != nil || number == 0 {
+		return "", errors.New("request remote port is invalid")
+	}
+	address, err := iamv1.ParseAuthorizationSourceIP(host)
+	if err != nil {
+		return "", err
+	}
+	return address.String(), nil
 }
 
 func (value *handler) writeCreation(

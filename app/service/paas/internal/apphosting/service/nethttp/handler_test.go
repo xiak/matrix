@@ -125,7 +125,7 @@ func TestHandlerUsesAuthorizedTenantAndSubjectInsteadOfClientHeaders(t *testing.
 	}
 	if authorizer.request.Action != port.AuthorizeDeploymentCreate ||
 		authorizer.request.Resource != (paasv1.ResourceRef{Kind: "Deployment", ID: "collection"}) ||
-		authorizer.request.Credential != "Bearer opaque-credential" {
+		authorizer.request.Credential != "Bearer opaque-credential" || authorizer.request.SourceIP != "192.0.2.1" {
 		t.Fatalf("authorization request = %#v", authorizer.request)
 	}
 	if response.Header().Get("Location") != "/v1/deployments/deployment-a" ||
@@ -306,6 +306,40 @@ func TestHandlerPassesIAMTenantToReadsAndIgnoresTenantHeader(t *testing.T) {
 	if workflow.readAuthorization.TenantID != "tenant-authorized" ||
 		workflow.readID != "application-a" {
 		t.Fatalf("read authorization/id = %#v / %q", workflow.readAuthorization, workflow.readID)
+	}
+}
+
+func TestHandlerUsesSocketPeerInsteadOfCallerForwardingHeaders(t *testing.T) {
+	authorizer := &fakeAuthorizer{}
+	workflow := &fakeWorkflow{}
+	handler := mustHandler(t, authorizer, workflow)
+	request := httptest.NewRequest(http.MethodGet, "/v1/applications/application-a", nil)
+	request.RemoteAddr = "198.51.100.23:443"
+	request.Header.Set("Authorization", "Bearer opaque-credential")
+	request.Header.Set("Forwarded", "for=203.0.113.99")
+	request.Header.Set("X-Forwarded-For", "203.0.113.98, 203.0.113.97")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || authorizer.request.SourceIP != "198.51.100.23" || workflow.getApplicationCalls != 1 {
+		t.Fatalf("socket authority status=%d request=%#v calls=%d", response.Code, authorizer.request, workflow.getApplicationCalls)
+	}
+}
+
+func TestHandlerFailsClosedWithoutCanonicalSocketPeer(t *testing.T) {
+	for _, remote := range []string{"", "198.51.100.23", "198.51.100.23:0", "0.0.0.0:443", "[::]:443", "[::ffff:192.0.2.1]:443"} {
+		t.Run(remote, func(t *testing.T) {
+			authorizer := &fakeAuthorizer{}
+			workflow := &fakeWorkflow{}
+			handler := mustHandler(t, authorizer, workflow)
+			request := httptest.NewRequest(http.MethodGet, "/v1/applications/application-a", nil)
+			request.RemoteAddr = remote
+			request.Header.Set("Authorization", "Bearer opaque-credential")
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusServiceUnavailable || authorizer.request != (port.AuthorizationRequest{}) || workflow.getApplicationCalls != 0 {
+				t.Fatalf("invalid socket authority remote=%q status=%d request=%#v calls=%d", remote, response.Code, authorizer.request, workflow.getApplicationCalls)
+			}
+		})
 	}
 }
 

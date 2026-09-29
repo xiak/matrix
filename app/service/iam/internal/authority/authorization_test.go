@@ -1203,6 +1203,147 @@ func TestIdentityConditionDenyAndMissingAuthorityFailClosed(t *testing.T) {
 	}
 }
 
+func TestSourceIPConditionsUseThePEPBoundNetworkContext(t *testing.T) {
+	context := policyContextForTest(authorityTestTime())
+	resource := iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "network-application"}
+	baseRequest := policyEvaluationRequestForTest(t, iamv1.ActionPaaSApplicationRead, resource)
+	policy := policyVersionForTest(t, "policy-network", iamv1.PolicyAllow, baseRequest.Action, iamv1.PolicyResourceAnyInAuthority, "")
+	policy.Document.Statements[0].Conditions = []iamv1.PolicyCondition{{
+		Key: iamv1.ConditionRequestSourceIP, Operator: iamv1.PolicyIPAddress,
+		Values: []string{"192.0.2.0/24", "2001:db8::/32"},
+	}}
+	compilePolicyVersionForTest(t, &policy)
+
+	for _, test := range []struct {
+		name     string
+		sourceIP string
+		allowed  bool
+	}{
+		{"IPv4 first address", "192.0.2.0", true},
+		{"IPv4 last address", "192.0.2.255", true},
+		{"IPv4 outside", "192.0.3.1", false},
+		{"IPv6 first address", "2001:db8::", true},
+		{"IPv6 last address", "2001:db8:ffff:ffff:ffff:ffff:ffff:ffff", true},
+		{"IPv6 outside", "2001:db9::1", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request, err := iamv1.BindAuthorizationSourceIP(baseRequest, test.sourceIP)
+			if err != nil {
+				t.Fatal(err)
+			}
+			decision, err := evaluatePolicies(context, []iamv1.PolicyVersion{policy}, request)
+			if err != nil || decision.Allowed != test.allowed || decision.ExplicitDeny || (len(decision.MatchedVersions) == 1) != test.allowed {
+				t.Fatalf("source=%s allowed=%t matched=%d err=%v", test.sourceIP, decision.Allowed, len(decision.MatchedVersions), err)
+			}
+		})
+	}
+
+	policy.Document.Statements[0].Conditions[0].Operator = iamv1.PolicyNotIPAddress
+	compilePolicyVersionForTest(t, &policy)
+	for sourceIP, allowed := range map[string]bool{
+		"192.0.2.10":   false,
+		"2001:db8::1":  false,
+		"198.51.100.7": true,
+	} {
+		request, err := iamv1.BindAuthorizationSourceIP(baseRequest, sourceIP)
+		if err != nil {
+			t.Fatal(err)
+		}
+		decision, err := evaluatePolicies(context, []iamv1.PolicyVersion{policy}, request)
+		if err != nil || decision.Allowed != allowed {
+			t.Fatalf("NOT_IP_ADDRESS source=%s allowed=%t err=%v", sourceIP, decision.Allowed, err)
+		}
+	}
+}
+
+func TestSourceIPConditionMissingOrCorruptAuthorityFailsClosed(t *testing.T) {
+	context := policyContextForTest(authorityTestTime())
+	resource := iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "network-application"}
+	baseRequest := policyEvaluationRequestForTest(t, iamv1.ActionPaaSApplicationRead, resource)
+	plain := policyVersionForTest(t, "policy-plain", iamv1.PolicyAllow, baseRequest.Action, iamv1.PolicyResourceAnyInAuthority, "")
+	conditional := policyVersionForTest(t, "policy-network", iamv1.PolicyAllow, baseRequest.Action, iamv1.PolicyResourceAnyInAuthority, "")
+	conditional.Document.Statements[0].Conditions = []iamv1.PolicyCondition{{
+		Key: iamv1.ConditionRequestSourceIP, Operator: iamv1.PolicyIPAddress, Values: []string{"192.0.2.0/24"},
+	}}
+	compilePolicyVersionForTest(t, &conditional)
+
+	for _, versions := range [][]iamv1.PolicyVersion{{plain, conditional}, {conditional, plain}} {
+		decision, err := evaluatePolicies(context, versions, baseRequest)
+		if !errors.Is(err, ErrInvalidPolicyState) || decision.Allowed || len(decision.MatchedVersions) != 0 {
+			t.Fatal("a plain Allow bypassed a missing source-IP authority", err)
+		}
+	}
+
+	bound, err := iamv1.BindAuthorizationSourceIP(baseRequest, "192.0.2.10")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, corrupt := range map[string]func(*iamv1.PolicyVersion){
+		"operator": func(value *iamv1.PolicyVersion) {
+			value.Document.Statements[0].Conditions[0].Operator = iamv1.PolicyStringEquals
+		},
+		"CIDR": func(value *iamv1.PolicyVersion) {
+			value.Document.Statements[0].Conditions[0].Values[0] = "192.0.2.1/24"
+		},
+		"profile commitment": func(value *iamv1.PolicyVersion) {
+			value.Compilation.Profiles[0].ContentDigest = "sha256:" + strings.Repeat("0", 64)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := conditional
+			value.Document.Statements = slices.Clone(conditional.Document.Statements)
+			value.Document.Statements[0].Conditions = slices.Clone(conditional.Document.Statements[0].Conditions)
+			value.Document.Statements[0].Conditions[0].Values = slices.Clone(conditional.Document.Statements[0].Conditions[0].Values)
+			compilation := *conditional.Compilation
+			compilation.Profiles = slices.Clone(conditional.Compilation.Profiles)
+			value.Compilation = &compilation
+			corrupt(&value)
+			decision, err := evaluatePolicies(context, []iamv1.PolicyVersion{plain, value}, bound)
+			if !errors.Is(err, ErrInvalidPolicyState) || decision.Allowed || len(decision.MatchedVersions) != 0 {
+				t.Fatal("corrupt network policy bypassed fail-closed evaluation", err)
+			}
+		})
+	}
+
+	malformed := bound
+	malformed.NetworkContext = &iamv1.AuthorizationNetworkContext{SourceIP: "192.0.2.10:443"}
+	if decision, err := evaluatePolicies(context, []iamv1.PolicyVersion{conditional}, malformed); !errors.Is(err, ErrInvalidAuthorizationRequest) || decision.Allowed {
+		t.Fatal("malformed caller network context was treated as policy state or a completed Deny", err)
+	}
+}
+
+func TestSourceIPConditionalDenyWinsAcrossPolicySources(t *testing.T) {
+	context := policyContextForTest(authorityTestTime())
+	resource := iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "network-application"}
+	baseRequest := policyEvaluationRequestForTest(t, iamv1.ActionPaaSApplicationRead, resource)
+	plain := policyVersionForTest(t, "policy-plain", iamv1.PolicyAllow, baseRequest.Action, iamv1.PolicyResourceAnyInAuthority, "")
+	deny := policyVersionForTest(t, "policy-network-deny", iamv1.PolicyDeny, baseRequest.Action, iamv1.PolicyResourceAnyInAuthority, "")
+	deny.Document.Statements[0].Conditions = []iamv1.PolicyCondition{{
+		Key: iamv1.ConditionRequestSourceIP, Operator: iamv1.PolicyIPAddress, Values: []string{"192.0.2.0/24"},
+	}}
+	compilePolicyVersionForTest(t, &deny)
+
+	for _, versions := range [][]iamv1.PolicyVersion{{plain, deny}, {deny, plain}} {
+		request, err := iamv1.BindAuthorizationSourceIP(baseRequest, "192.0.2.10")
+		if err != nil {
+			t.Fatal(err)
+		}
+		decision, err := evaluatePolicies(context, versions, request)
+		if err != nil || decision.Allowed || !decision.ExplicitDeny || len(decision.MatchedVersions) != 2 {
+			t.Fatal("source-IP Deny lost across policy sources", err)
+		}
+
+		request, err = iamv1.BindAuthorizationSourceIP(baseRequest, "198.51.100.10")
+		if err != nil {
+			t.Fatal(err)
+		}
+		decision, err = evaluatePolicies(context, versions, request)
+		if err != nil || !decision.Allowed || decision.ExplicitDeny || len(decision.MatchedVersions) != 1 {
+			t.Fatal("an unmatched source-IP Deny suppressed an independent Allow", err)
+		}
+	}
+}
+
 func TestPolicyTimeWindowsUseOneAuthorityClockAndDenyAcrossSources(t *testing.T) {
 	now := authorityTestTime()
 	plain := policyVersionForTest(t, "policy-plain", iamv1.PolicyAllow, iamv1.ActionPaaSApplicationRead, iamv1.PolicyResourceAnyInAuthority, "")

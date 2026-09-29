@@ -958,6 +958,13 @@ type Revocation struct {
 	RevokedAt       time.Time `json:"revokedAt"`
 }
 
+// AuthorizationNetworkContext is established by the authenticated product
+// service from its trusted network boundary. It is not a caller attribute map
+// and cannot select an account, subject, product, or resource.
+type AuthorizationNetworkContext struct {
+	SourceIP string `json:"sourceIp"`
+}
+
 // AuthorizationRequest contains no tenant or subject field. IAM derives both
 // from the subject credential and authenticates the calling service
 // independently at the HTTP boundary.
@@ -967,6 +974,7 @@ type AuthorizationRequest struct {
 	Profile         AuthorizationProfileReference `json:"profile"`
 	ResourceMode    AuthorizationResourceMode     `json:"resourceMode"`
 	CollectionUsage AuthorizationCollectionUsage  `json:"collectionUsage,omitempty"`
+	NetworkContext  *AuthorizationNetworkContext  `json:"networkContext,omitempty"`
 	RequestID       string                        `json:"requestId"`
 	CorrelationID   string                        `json:"correlationId"`
 }
@@ -991,6 +999,7 @@ type AuthorizationDecision struct {
 	Profile         *AuthorizationProfileReference `json:"profile,omitempty"`
 	ResourceMode    AuthorizationResourceMode      `json:"resourceMode,omitempty"`
 	CollectionUsage AuthorizationCollectionUsage   `json:"collectionUsage,omitempty"`
+	NetworkContext  *AuthorizationNetworkContext   `json:"networkContext,omitempty"`
 	CorrelationID   string                         `json:"correlationId,omitempty"`
 }
 

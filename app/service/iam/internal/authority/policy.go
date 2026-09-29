@@ -422,7 +422,7 @@ func evaluateCompiledStatements(context policyEvaluationContext, document iamv1.
 		if !slices.Contains(resolvedActions[statement.SID], request.Action) {
 			continue
 		}
-		matched, err := policyConditionsMatch(statement.Conditions, request.Action, context)
+		matched, err := policyConditionsMatch(statement.Conditions, request.Action, context, request)
 		if err != nil {
 			return PolicyEvaluation{}, err
 		}
@@ -469,7 +469,7 @@ func evaluateSessionPolicy(value *ResolvedSessionPolicy, context policyEvaluatio
 	return evaluateCompiledStatements(context, value.Document, value.Compilation, request)
 }
 
-func policyConditionsMatch(conditions []iamv1.PolicyCondition, action iamv1.Action, context policyEvaluationContext) (bool, error) {
+func policyConditionsMatch(conditions []iamv1.PolicyCondition, action iamv1.Action, context policyEvaluationContext, request iamv1.AuthorizationRequest) (bool, error) {
 	matched := true
 	for _, condition := range conditions {
 		definition, supported := iamv1.LookupActionConditionDefinition(action, condition.Key)
@@ -498,6 +498,33 @@ func policyConditionsMatch(conditions []iamv1.PolicyCondition, action iamv1.Acti
 				matched = matched && equals
 			case iamv1.PolicyStringNotEquals:
 				matched = matched && !equals
+			default:
+				return false, ErrInvalidPolicyState
+			}
+			continue
+		}
+		if definition.Source == iamv1.ConditionCallingServiceNetwork {
+			if definition.ValueType != iamv1.ConditionIP || condition.Key != iamv1.ConditionRequestSourceIP ||
+				request.NetworkContext == nil || len(condition.Values) < 1 || len(condition.Values) > iamv1.MaxIPConditionValues {
+				return false, ErrInvalidPolicyState
+			}
+			address, err := iamv1.ParseAuthorizationSourceIP(request.NetworkContext.SourceIP)
+			if err != nil {
+				return false, ErrInvalidPolicyState
+			}
+			contained := false
+			for _, value := range condition.Values {
+				prefix, err := iamv1.ParsePolicyCIDR(value)
+				if err != nil {
+					return false, ErrInvalidPolicyState
+				}
+				contained = contained || prefix.Contains(address)
+			}
+			switch condition.Operator {
+			case iamv1.PolicyIPAddress:
+				matched = matched && contained
+			case iamv1.PolicyNotIPAddress:
+				matched = matched && !contained
 			default:
 				return false, ErrInvalidPolicyState
 			}

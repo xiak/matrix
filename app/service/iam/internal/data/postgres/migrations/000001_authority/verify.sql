@@ -294,12 +294,13 @@ DECLARE
     seed jsonb;
     entry regprocedure;
 BEGIN
-    IF (SELECT schema_version FROM iam.readiness())<>52 OR NOT iam.authorization_decision_contract_ready()
+    IF (SELECT schema_version FROM iam.readiness())<>53 OR NOT iam.authorization_decision_contract_ready()
         OR NOT iam.login_session_contract_ready()
         OR NOT iam.policy_attachment_contract_ready() THEN
         RAISE EXCEPTION 'IAM profile registry schema is invalid';
     END IF;
     FOREACH entry IN ARRAY ARRAY['iam.authorization_decision_contract_ready()'::regprocedure,
+        'iam.authorization_decision_contract_version()'::regprocedure,
         'iam.policy_attachment_contract_ready()'::regprocedure,
         'iam.authorization_decision_profile_matches(jsonb)'::regprocedure,
         'iam.resource_kind_for_action(text)'::regprocedure,'iam.is_platform_action(text)'::regprocedure,
@@ -385,7 +386,7 @@ BEGIN
     FOR account IN SELECT account_id FROM iam.account_roots ORDER BY account_id COLLATE "C" LOOP
         PERFORM set_config('matrix.iam_tenant_id',account.account_id,true);
         IF EXISTS(SELECT 1 FROM iam.authorization_decisions d WHERE d.tenant_id=account.account_id
-          AND d.contract_version IN (2,3,4) AND NOT iam.authorization_decision_profile_matches(d.document)) THEN
+          AND d.contract_version IN (2,3,4,5) AND NOT iam.authorization_decision_profile_matches(d.document)) THEN
             RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='IAM retained decision archived profile conflicts';
         END IF;
     END LOOP;
