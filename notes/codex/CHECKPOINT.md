@@ -6,8 +6,8 @@
 - Updated: 2026-09-30
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `79ca2cfd`
-- Pushed documentation head: `03ca70d2`
+- Pushed UI source: `4a99a069`
+- Pushed documentation head: `11ad4db7`
 
 ## Authoritative route
 
@@ -117,10 +117,14 @@ while IAM observes template and service-linked-role state read-only. Its single
 illustrative permission now follows the repository's current
 `managedservice.service-installation.read` namespace and an exact
 `SERVICE_INSTALLATION` resource; the initiating product resource remains a
-separate fact from Account, principal, purpose and role. The sample remains
-unpublished and unauthorized, and its final command stays disabled. Do not map
-it to LIVE until IAM supplies a fixed, pushed northbound contract; the
-engineer's current local ServiceRole work is not a consumable source.
+separate fact from Account, principal, purpose and role. An additional explicit
+MOCK observation separates immutable template publication, the Account-level
+service-linked Role relation and exact workload bindings, and never treats an
+active Role as proof that a resource is bound. The catalog marks create as
+USER-only and read as USER/ROLE. Example relation/binding facts do not enter a
+LIVE decoder or enable writes. The Account relation/binding northbound reads
+and all authorize/revoke/assume contracts remain unavailable from a fixed
+pushed source, so the final command stays disabled.
 
 LIVE member Role discovery also keeps its verified source identity, discovery
 heading and temporary-access boundary mounted while only role cards load. An
