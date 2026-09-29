@@ -2132,7 +2132,7 @@ func assertIAMAuthorizationCatalog(
 		}
 		_, err = tx.Exec(
 			ctx,
-			"SELECT iam.record_authorization($1, $2, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb,4,'null'::jsonb,'null'::jsonb)",
+			"SELECT iam.record_authorization($1, $2, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb,5,'null'::jsonb,'null'::jsonb)",
 			string(fixture.TenantID),
 			actorID,
 			authorityJSON(t, map[string]any{"request": request, "decision": decision}),
@@ -2148,7 +2148,7 @@ func assertIAMAuthorizationCatalog(
 			t.Fatalf("commit IAM authorization action %q: %v", action, err)
 		}
 		var matches bool
-		if err := admin.QueryRow(ctx, `SELECT contract_version=4 AND subject_type=$6 AND principal_id=$7 AND role_id IS NULL AND source_principal_id IS NULL AND role_evidence IS NULL AND access_key_id IS NULL
+		if err := admin.QueryRow(ctx, `SELECT contract_version=5 AND subject_type=$6 AND principal_id=$7 AND role_id IS NULL AND source_principal_id IS NULL AND role_evidence IS NULL AND access_key_id IS NULL
 			AND document=$3::jsonb AND policy_evidence=$4::jsonb AND boundary_evidence=$5::jsonb
 			FROM iam.authorization_decisions WHERE tenant_id=$1 AND id=$2`, string(fixture.TenantID), decisionID,
 			authorityJSON(t, decision), string(evidence), string(boundary), string(decision.Subject.Type), actorID).Scan(&matches); err != nil || !matches {
@@ -2204,7 +2204,7 @@ func assertIAMAuthorizationCatalog(
 			}
 			request.Action, request.Resource = decision.Action, decision.Resource
 			decision.Profile, decision.ResourceMode, decision.CorrelationID = &request.Profile, request.ResourceMode, request.CorrelationID
-			_, err = tx.Exec(ctx, "SELECT iam.record_authorization($1,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,4,'null'::jsonb,'null'::jsonb)",
+			_, err = tx.Exec(ctx, "SELECT iam.record_authorization($1,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,5,'null'::jsonb,'null'::jsonb)",
 				string(fixture.TenantID), fixture.Administrator, authorityJSON(t, map[string]any{"request": request, "decision": decision}), authorityJSON(t, event), string(evidence), string(boundary))
 			_ = tx.Rollback(ctx)
 			assertAuthorityPostgresCode(t, err, "22023")
@@ -2265,7 +2265,7 @@ func assertIAMAuthorizationCatalog(
 	decision.Profile, decision.ResourceMode, decision.CorrelationID = &request.Profile, request.ResourceMode, request.CorrelationID
 	_, err = transaction.Exec(
 		ctx,
-		"SELECT iam.record_authorization($1, $2, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb,4,'null'::jsonb,'null'::jsonb)",
+		"SELECT iam.record_authorization($1, $2, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb,5,'null'::jsonb,'null'::jsonb)",
 		string(fixture.TenantID),
 		fixture.Administrator,
 		authorityJSON(t, map[string]any{"request": request, "decision": decision}),
@@ -2308,7 +2308,7 @@ func assertIAMAuthorizationCatalog(
 		if attack == "wrong installation" {
 			decision.InstallationID = "installation-other"
 		}
-		_, err = tx.Exec(ctx, "SELECT iam.record_authorization($1,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,4,'null'::jsonb,'null'::jsonb)",
+		_, err = tx.Exec(ctx, "SELECT iam.record_authorization($1,$2,$3::jsonb,$4::jsonb,$5::jsonb,$6::jsonb,5,'null'::jsonb,'null'::jsonb)",
 			string(fixture.TenantID), fixture.Administrator, authorityJSON(t, map[string]any{"request": request, "decision": decision}), authorityJSON(t, event), string(platformEvidence), string(notApplicableBoundary))
 		_ = tx.Rollback(ctx)
 		code := "22023"
