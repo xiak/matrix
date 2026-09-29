@@ -27,7 +27,10 @@ export function AuthorizationActionTable({ actions, label }: { actions: Authoriz
             : t("notApplicable")}</small>
           {subjects.includes("USER") && action.userAuthenticationMethods === undefined ? <small>{t("legacyCredentials")}</small> : null}
         </td>
-        <td data-label={t("conditions")}>{action.conditions?.length ? action.conditions.map((condition) => <small key={condition.key} title={`${condition.valueType} · ${condition.source}`}>{condition.key}</small>) : t("none")}</td>
+        <td data-label={t("conditions")}>{action.conditions?.length ? <ul className={styles.conditionList}>{action.conditions.map((condition) => <li key={condition.key}>
+          <code>{condition.key}</code>
+          <small>{t(`conditionSources.${condition.source}`)} · {t(`conditionValueTypes.${condition.valueType}`)}</small>
+        </li>)}</ul> : t("none")}</td>
       </tr>;
     })}</tbody>
   </Table>;

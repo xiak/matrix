@@ -90,7 +90,10 @@ async function open(initialView: AccountAccessView, options?: { live?: boolean; 
       return entry;
     }),
     listPolicies: vi.fn().mockImplementation(async (_credential: string, platform: boolean) => ({ accountId: "org-xiak", scope: platform ? "INSTALLATION" : "TENANT", installationId: platform ? "preview" : null, items: [] })),
-    listAuthorizationProfiles: vi.fn().mockResolvedValue({ accountId: "org-xiak", items: [{ profile: { product: "paas", revision: 1, callingService: "PAAS", actions: [{ action: "paas.application.read", resourceKind: "APPLICATION", scope: "TENANT", resourceShapes: [{ mode: "INSTANCE", prefixAllowed: true }] }] }, contentDigest: `sha256:${"a".repeat(64)}` }] }),
+    listAuthorizationProfiles: vi.fn().mockResolvedValue({ accountId: "org-xiak", items: [{ profile: { product: "paas", revision: 1, callingService: "PAAS", actions: [{ action: "paas.application.read", resourceKind: "APPLICATION", scope: "TENANT", resourceShapes: [{ mode: "INSTANCE", prefixAllowed: true }], conditions: [
+      { key: "iam.account-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" },
+      { key: "iam.current-time", valueType: "TIME", source: "IAM_TRANSACTION_TIME" }
+    ] }] }, contentDigest: `sha256:${"a".repeat(64)}` }] }),
     listAccounts: vi.fn().mockResolvedValue({ items: [], nextAfter: null }),
     listGroups: vi.fn().mockRejectedValue(new Error("unused group contract")),
     getGroup: vi.fn().mockRejectedValue(new Error("unused group contract")),
@@ -592,10 +595,16 @@ describe("policy creation entry and directory contract", () => {
     expect(screen.getByRole("heading", { level: 3, name: "检查 IAM 契约与真实鉴权边界" })).toBeTruthy();
     expect(screen.getByText(/不是在线校验结果/)).toBeTruthy();
     expect(screen.getByText(/subjectTypes 与 userAuthenticationMethods/)).toBeTruthy();
+    const diagnostics = screen.getByRole("region", { name: "接入诊断快照" });
+    expect(within(diagnostics).getByText("paas@1")).toBeTruthy();
+    expect(within(diagnostics).getByText("PAAS")).toBeTruthy();
+    expect(within(diagnostics).getByText("运行时证据未验证")).toBeTruthy();
+    expect(within(diagnostics).getAllByText(/IAM 已认证身份/).length).toBeGreaterThan(0);
     const reviewActions = screen.getByRole("table", { name: "逐项核对权限声明" });
     expect(within(reviewActions).getByText("paas.application.read")).toBeTruthy();
     expect(within(reviewActions).getByText("实例（支持已声明前缀）")).toBeTruthy();
     expect(within(reviewActions).getByText(/用户凭证: 登录会话/)).toBeTruthy();
+    expect(within(reviewActions).getAllByText(/IAM 事务时间/).length).toBeGreaterThan(0);
     await user.click(screen.getByRole("button", { name: "下一步" }));
     expect(screen.getByRole("heading", { level: 3, name: "审阅不可变发布引用与消费边界" })).toBeTruthy();
     const publish = screen.getByRole("button", { name: "发布修订（未接入）" }) as HTMLButtonElement;

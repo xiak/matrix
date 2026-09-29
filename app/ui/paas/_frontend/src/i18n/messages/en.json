@@ -1955,6 +1955,8 @@
     "legacyCredentials": "Historical credential default (login session only)",
     "subjects": { "USER": "User", "SERVICE_ACCOUNT": "Service identity", "ROLE": "Role" },
     "credentials": { "LOGIN_SESSION": "Login session", "ACCESS_KEY": "Access key" },
+    "conditionSources": { "IAM_AUTHENTICATED_IDENTITY": "IAM-authenticated identity", "IAM_TRANSACTION_TIME": "IAM transaction time" },
+    "conditionValueTypes": { "STRING": "String", "TIME": "Time" },
     "platformScopeHint": "INSTALLATION and INSTALLATION_PROBE are shown only as platform-scope metadata and cannot be selected in a tenant CUSTOMER policy editor.",
     "searchActions": "Search Actions",
     "searchActionsPlaceholder": "Action, resource, scope or condition key",
@@ -2026,6 +2028,18 @@
         "enforcement": { "title": "Real PEP enforcement evidence", "hint": "Product APIs must check the matching Action and cover resource ownership, list filtering, and bulk operations instead of relying on catalog registration alone." }
       },
       "snapshot": { "actions": "Actions to review", "resources": "Resource kinds", "conditions": "Condition keys" },
+      "diagnostics": {
+        "title": "Onboarding diagnostics snapshot",
+        "hint": "Review declaration identity, trusted condition facts, and runtime enforcement ownership together. This shows declarations and responsibilities only; it does not invent online validation or a passing PEP state.",
+        "profileReference": "Immutable Profile reference",
+        "conditionSources": "Condition fact sources",
+        "noConditionSources": "This declaration has no condition facts",
+        "pepOwner": "Product PEP owner",
+        "pepOwnerHint": "The calling service must enforce the matching Action across real APIs, list and bulk paths, and resource ownership checks.",
+        "runtimeEvidence": "Runtime enforcement evidence",
+        "notVerified": "Runtime evidence not verified",
+        "runtimeEvidenceHint": "This MOCK is not connected to a product PEP, gateway, or audit evidence and cannot prove whether a request will be allowed or denied."
+      },
       "reviewActionsTitle": "Review each permission declaration",
       "reviewActionsHint": "Show each declared Action, resource target, subject, credential, and trusted condition as written. Paging changes only what is displayed; it is not IAM validation.",
       "notProof": "IAM currently exposes code-level pure validation and a read-only directory only. These checklist items are not an online validation result, approval record, or release credential."

@@ -27,6 +27,7 @@ export function AuthorizationProfilePublishingPreview({ entry, onClose }: {
   const scopes = [...new Set(profile.actions.map((action) => action.scope))];
   const resources = [...new Set(profile.actions.map((action) => action.resourceKind))];
   const conditions = [...new Set(profile.actions.flatMap((action) => action.conditions?.map((condition) => condition.key) ?? []))];
+  const conditionFacts = [...new Map(profile.actions.flatMap((action) => action.conditions ?? []).map((condition) => [`${condition.key}:${condition.source}:${condition.valueType}`, condition])).values()];
   const actionPages = Math.max(1, Math.ceil(profile.actions.length / actionPageSize));
   const currentActionPage = Math.min(actionPage, actionPages);
   const reviewActions = profile.actions.slice((currentActionPage - 1) * actionPageSize, currentActionPage * actionPageSize);
@@ -73,6 +74,15 @@ export function AuthorizationProfilePublishingPreview({ entry, onClose }: {
           <div><span>{t("validation.snapshot.resources")}</span><strong>{resources.length}</strong></div>
           <div><span>{t("validation.snapshot.conditions")}</span><strong>{conditions.length}</strong></div>
         </div>
+        <section className={styles.diagnostics} aria-labelledby="authorization-profile-diagnostics-title">
+          <div className={styles.diagnosticsHeading}><h4 id="authorization-profile-diagnostics-title">{t("validation.diagnostics.title")}</h4><p>{t("validation.diagnostics.hint")}</p></div>
+          <dl className={styles.diagnosticGrid}>
+            <div><dt>{t("validation.diagnostics.profileReference")}</dt><dd><code>{profile.product}@{profile.revision}</code><small><code>{entry.contentDigest}</code></small></dd></div>
+            <div><dt>{t("validation.diagnostics.conditionSources")}</dt><dd>{conditionFacts.length ? conditionFacts.map((condition) => <span key={`${condition.key}:${condition.source}:${condition.valueType}`}><code>{condition.key}</code><small>{catalog(`conditionSources.${condition.source}`)} · {catalog(`conditionValueTypes.${condition.valueType}`)}</small></span>) : t("validation.diagnostics.noConditionSources")}</dd></div>
+            <div><dt>{t("validation.diagnostics.pepOwner")}</dt><dd><code>{profile.callingService}</code><small>{t("validation.diagnostics.pepOwnerHint")}</small></dd></div>
+            <div><dt>{t("validation.diagnostics.runtimeEvidence")}</dt><dd><Badge status="warning">{t("validation.diagnostics.notVerified")}</Badge><small>{t("validation.diagnostics.runtimeEvidenceHint")}</small></dd></div>
+          </dl>
+        </section>
         <section aria-label={t("validation.reviewActionsTitle")} className={styles.reviewActions}>
           <div><h4>{t("validation.reviewActionsTitle")}</h4><p>{t("validation.reviewActionsHint")}</p></div>
           <AuthorizationActionTable actions={reviewActions} label={t("validation.reviewActionsTitle")} />

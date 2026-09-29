@@ -45,6 +45,17 @@
 .snapshot > div { display: grid; gap: var(--xiak-spacing-narrow); padding: var(--xiak-spacing-default); }
 .snapshot > div + div { border-inline-start: var(--xiak-border-subtle); }
 .snapshot strong { color: var(--xiak-color-text-strong); font-family: var(--xiak-font-numeric); font-size: var(--xiak-font-size-title); }
+.diagnostics { display: grid; min-width: 0; gap: var(--xiak-spacing-default); padding: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); background: var(--xiak-color-bg-panel-hover); }
+.diagnosticsHeading { display: grid; gap: var(--xiak-spacing-micro); }
+.diagnosticsHeading h4, .diagnosticsHeading p { margin: 0; }
+.diagnosticsHeading h4 { color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-subtitle); }
+.diagnosticsHeading p, .diagnosticGrid small { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: var(--xiak-line-height-body); }
+.diagnosticGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--xiak-spacing-default); margin: 0; }
+.diagnosticGrid > div { display: grid; align-content: start; min-width: 0; gap: var(--xiak-spacing-narrow); padding: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-small); background: var(--xiak-color-bg-panel); }
+.diagnosticGrid dt { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
+.diagnosticGrid dd { display: grid; min-width: 0; gap: var(--xiak-spacing-narrow); margin: 0; color: var(--xiak-color-text-strong); font-weight: var(--xiak-font-weight-semibold); overflow-wrap: anywhere; }
+.diagnosticGrid dd > span { display: grid; min-width: 0; gap: var(--xiak-spacing-micro); }
+.diagnosticGrid code { white-space: normal; overflow-wrap: anywhere; }
 .reviewActions { display: grid; min-width: 0; gap: var(--xiak-spacing-default); }
 .reviewActions h4 { margin: 0; color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-subtitle); }
 .reviewActions p { margin: var(--xiak-spacing-micro) 0 0; color: var(--xiak-color-text-muted); line-height: 1.65; }
@@ -62,6 +73,7 @@
   .heading { grid-template-columns: auto minmax(0, 1fr); }
   .badges { grid-column: 2; justify-content: flex-start; }
   .facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .diagnosticGrid { grid-template-columns: minmax(0, 1fr); }
   .snapshot, .releaseReference { grid-template-columns: minmax(0, 1fr); }
   .snapshot > div + div { border-inline-start: 0; border-top: var(--xiak-border-subtle); }
   .releaseReference > div + div { border-top: var(--xiak-border-subtle); }

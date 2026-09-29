@@ -1955,6 +1955,8 @@
     "legacyCredentials": "凭证沿用历史默认（仅登录会话）",
     "subjects": { "USER": "用户", "SERVICE_ACCOUNT": "服务身份", "ROLE": "角色" },
     "credentials": { "LOGIN_SESSION": "登录会话", "ACCESS_KEY": "访问密钥" },
+    "conditionSources": { "IAM_AUTHENTICATED_IDENTITY": "IAM 已认证身份", "IAM_TRANSACTION_TIME": "IAM 事务时间" },
+    "conditionValueTypes": { "STRING": "字符串", "TIME": "时间" },
     "platformScopeHint": "INSTALLATION 与 INSTALLATION_PROBE 仅作为平台范围元数据展示，不能在租户 CUSTOMER 策略编辑器中选择。",
     "searchActions": "搜索 Action",
     "searchActionsPlaceholder": "Action、资源、范围或条件键",
@@ -2026,6 +2028,18 @@
         "enforcement": { "title": "真实 PEP 鉴权证据", "hint": "产品 API 必须执行对应 Action 检查，并覆盖资源归属、列表过滤和批量操作，避免只登记目录却绕过鉴权。" }
       },
       "snapshot": { "actions": "待审 Action", "resources": "资源类型", "conditions": "条件键" },
+      "diagnostics": {
+        "title": "接入诊断快照",
+        "hint": "把声明身份、条件事实来源与运行时执行责任并列核对；这里只显示声明和责任边界，不制造在线校验或 PEP 通过状态。",
+        "profileReference": "不可变 Profile 引用",
+        "conditionSources": "条件事实来源",
+        "noConditionSources": "当前声明没有条件事实",
+        "pepOwner": "产品 PEP 责任方",
+        "pepOwnerHint": "调用服务必须在真实 API、列表、批量和资源归属路径执行对应 Action 检查。",
+        "runtimeEvidence": "运行时执行证据",
+        "notVerified": "运行时证据未验证",
+        "runtimeEvidenceHint": "该 MOCK 没有连接产品 PEP、网关或审计证据，不能证明请求会被允许或拒绝。"
+      },
       "reviewActionsTitle": "逐项核对权限声明",
       "reviewActionsHint": "按当前声明原样列出 Action、资源目标、主体、凭据和可信条件；分页仅改变显示，不代表已通过 IAM 校验。",
       "notProof": "当前 IAM 只提供代码内纯校验与只读目录；本页的检查项不是在线校验结果、审批记录或发布凭证。"

@@ -2,6 +2,8 @@
 .table th:first-child { min-width: 190px; }
 .table code { white-space: normal; overflow-wrap: anywhere; }
 .table td small { display: block; margin-top: var(--xiak-spacing-micro); color: var(--xiak-color-text-muted); overflow-wrap: anywhere; }
+.conditionList { display: grid; gap: var(--xiak-spacing-narrow); margin: 0; padding: 0; list-style: none; }
+.conditionList li { min-width: 0; }
 
 @media (max-width: 600px) {
   .table { min-width: 0; }
