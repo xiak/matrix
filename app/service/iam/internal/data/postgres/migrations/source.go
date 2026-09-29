@@ -210,6 +210,7 @@ func systemPolicySQL() (string, error) {
 		{LegacyRole: "PAAS_VIEWER", PolicyID: iamv1.SystemPolicyPaaSViewer, DisplayName: "PaaSViewer"},
 		{LegacyRole: "AUDIT_READER", PolicyID: iamv1.SystemPolicyAuditReader, DisplayName: "AuditReader"},
 		{LegacyRole: "INSTALLATION_VERIFIER", PolicyID: iamv1.SystemPolicyInstallationVerifier, DisplayName: "InstallationVerifier"},
+		{PolicyID: iamv1.SystemPolicyManagedServiceInstallationReader, DisplayName: "ManagedServiceInstallationReader"},
 	}
 	for index := range seeds {
 		version, err := authority.SystemPolicyVersion(seeds[index].PolicyID)

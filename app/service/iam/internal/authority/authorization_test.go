@@ -1608,7 +1608,8 @@ func TestAttachedPolicyEvaluationRequiresCurrentOwnedRelationships(t *testing.T)
 
 func TestSystemPoliciesPublishIndependentContentBoundVersions(t *testing.T) {
 	for _, id := range []iamv1.PolicyID{iamv1.SystemPolicyAccountAdministrator, iamv1.SystemPolicyPlatformOperator,
-		iamv1.SystemPolicyPaaSDeveloper, iamv1.SystemPolicyPaaSViewer, iamv1.SystemPolicyAuditReader, iamv1.SystemPolicyInstallationVerifier} {
+		iamv1.SystemPolicyPaaSDeveloper, iamv1.SystemPolicyPaaSViewer, iamv1.SystemPolicyAuditReader, iamv1.SystemPolicyInstallationVerifier,
+		iamv1.SystemPolicyManagedServiceInstallationReader} {
 		t.Run(string(id), func(t *testing.T) {
 			original, err := SystemPolicyVersion(id)
 			if err != nil || iamv1.ValidatePolicyVersion(original) != nil {
@@ -1906,6 +1907,7 @@ var testSystemPolicyIDs = []iamv1.PolicyID{
 	iamv1.SystemPolicyPaaSViewer,
 	iamv1.SystemPolicyAuditReader,
 	iamv1.SystemPolicyInstallationVerifier,
+	iamv1.SystemPolicyManagedServiceInstallationReader,
 }
 
 func authorityServicePolicies(now time.Time, identity iamv1.ServiceIdentity, policyIDs ...iamv1.PolicyID) []AttachedPolicy {

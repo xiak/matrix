@@ -632,6 +632,8 @@ func SystemPolicyVersion(id iamv1.PolicyID) (iamv1.PolicyVersion, error) {
 	case iamv1.SystemPolicyInstallationVerifier:
 		scope = iamv1.AuthorityScopeInstallationProbe
 		actions = []iamv1.Action{iamv1.ActionInstallationVerify}
+	case iamv1.SystemPolicyManagedServiceInstallationReader:
+		actions = []iamv1.Action{iamv1.ActionManagedServiceInstallationRead}
 	default:
 		return iamv1.PolicyVersion{}, ErrInvalidPolicyState
 	}

@@ -414,12 +414,13 @@ func validPolicyScope(scope AuthorityScope) bool {
 }
 
 const (
-	SystemPolicyAccountAdministrator PolicyID = "system.account-administrator"
-	SystemPolicyPlatformOperator     PolicyID = "system.platform-operator"
-	SystemPolicyPaaSDeveloper        PolicyID = "system.paas-developer"
-	SystemPolicyPaaSViewer           PolicyID = "system.paas-viewer"
-	SystemPolicyAuditReader          PolicyID = "system.audit-reader"
-	SystemPolicyInstallationVerifier PolicyID = "system.installation-verifier"
+	SystemPolicyAccountAdministrator             PolicyID = "system.account-administrator"
+	SystemPolicyPlatformOperator                 PolicyID = "system.platform-operator"
+	SystemPolicyPaaSDeveloper                    PolicyID = "system.paas-developer"
+	SystemPolicyPaaSViewer                       PolicyID = "system.paas-viewer"
+	SystemPolicyAuditReader                      PolicyID = "system.audit-reader"
+	SystemPolicyInstallationVerifier             PolicyID = "system.installation-verifier"
+	SystemPolicyManagedServiceInstallationReader PolicyID = "system.managedservice-installation-reader"
 )
 
 const (
