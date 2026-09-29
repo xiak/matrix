@@ -14,6 +14,18 @@ export function WorkspaceTime({ value }: { value: string | null }) {
   return value ? <time dateTime={value} title={value}>{format.dateTime(new Date(value), { dateStyle: "medium", timeStyle: "short" })}</time> : <span>{t("neverUsed")}</span>;
 }
 
+export function AuthorizationOverview({ title, hint, items }: {
+  title: string;
+  hint: string;
+  items: readonly { label: string; value: ReactNode }[];
+}) {
+  const id = useId();
+  return <section className={styles.grantOverview} aria-labelledby={id}>
+    <div className={styles.grantOverviewHeading}><h3 id={id}>{title}</h3><p>{hint}</p></div>
+    <dl>{items.map((item) => <div key={item.label}><dt>{item.label}</dt><dd>{item.value}</dd></div>)}</dl>
+  </section>;
+}
+
 function labelCollectionCells(content: ReactNode, columns: readonly string[]) {
   const nodes = Children.toArray(content);
   const cells = nodes.length === 1 && isValidElement<{ children?: ReactNode }>(nodes[0]) && nodes[0].type === Fragment

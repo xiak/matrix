@@ -5,8 +5,9 @@ import { Badge, Button, EmptyState, FormField, Input, PageSkeleton, Table, Tabs 
 import { useAccountAccess, type UserBoundarySnapshot } from "../application/AccountAccessProvider";
 import type { AccountAccessView } from "../domain/accounts";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
+import { containsDenyStatement } from "../domain/policyDocument";
 import type { AccountAccessScene, AccountUserScene } from "../scenes/accountAccessScene";
-import { WorkspaceDelete, WorkspaceDetail, WorkspaceDialog } from "./AccessWorkspaceUi";
+import { AuthorizationOverview, WorkspaceDelete, WorkspaceDetail, WorkspaceDialog } from "./AccessWorkspaceUi";
 import { AccessCredentials } from "./AccessCredentials";
 import { UserAccessDialog, UserAccessManagement } from "./AccountUserDialogs";
 import { LivePermissionBoundary, PermissionBoundary } from "./PermissionBoundary";
@@ -81,14 +82,16 @@ export function AccountUserWorkspace({ user, scene, workspace, onBack, onOpen }:
   const a = useTranslations("AccountAccess");
   const wizard = useTranslations("UserWizard");
   const access = useAccountAccess();
-  const grantOverviewId = useId();
   const [dialog, setDialog] = useState<"security" | "edit" | "delete" | null>(null);
   const [association, setAssociation] = useState<"groups" | "policies" | null>(null);
   const groups = workspace.groups.filter((group) => group.memberIds.includes(user.id));
   const direct = workspace.userPolicies[user.id] ?? [];
   const inherited = [...new Set(groups.flatMap((group) => group.policyIds))];
   const attachedPolicies = workspace.policies.filter((policy) => direct.includes(policy.id) || inherited.includes(policy.id));
-  const policiesWithDeny = new Set(attachedPolicies.filter((policy) => policy.versions.find((version) => version.id === policy.defaultVersion)?.document.statement.some((statement) => statement.effect === "deny")).map((policy) => policy.id));
+  const policiesWithDeny = new Set(attachedPolicies.filter((policy) => {
+    const document = policy.versions.find((version) => version.id === policy.defaultVersion)?.document;
+    return document ? containsDenyStatement(document) : false;
+  }).map((policy) => policy.id));
   const boundary = workspace.userBoundaries[user.id];
   const profile = workspace.userProfiles[user.id];
   if (association) return <UserAssociationWorkflow user={user} workspace={workspace} kind={association} onBack={() => setAssociation(null)} />;
@@ -101,10 +104,12 @@ export function AccountUserWorkspace({ user, scene, workspace, onBack, onOpen }:
       </dl><p className={styles.note}>{a("subuserOwnershipHint")}</p></Tabs.Content>
       <Tabs.Content className={styles.stack} value="access"><AccountUserAccessMethods user={user} workspace={workspace} /><p className={styles.note}>{a("accessPermissionHint")}</p><p className={styles.note}>{wizard("keyHint")}</p><p className={styles.note}>{wizard("mockSecurity")}</p></Tabs.Content>
       <Tabs.Content className={styles.stack} value="policies"><div className={styles.actions}><Button variant="secondary" onClick={() => setAssociation("policies")}>{t("associate")}</Button><Button variant="secondary" onClick={() => onOpen("simulator", user.id)}>{t("simulateAccess")}</Button></div><p className={styles.note}>{a("permissionSourceHint")}</p>
-        <section className={styles.grantOverview} aria-labelledby={grantOverviewId}>
-          <div className={styles.grantOverviewHeading}><h3 id={grantOverviewId}>{t("grantOverview")}</h3><p>{t("grantOverviewHint")}</p></div>
-          <dl><div><dt>{t("directPolicies")}</dt><dd><strong>{direct.length}</strong> {t(direct.length === 1 ? "item" : "items")}</dd></div><div><dt>{t("inheritedPolicies")}</dt><dd><strong>{inherited.length}</strong> {t(inherited.length === 1 ? "item" : "items")}</dd></div><div><dt>{t("policiesWithDeny")}</dt><dd><strong>{policiesWithDeny.size}</strong> {t(policiesWithDeny.size === 1 ? "item" : "items")}</dd></div><div><dt>{t("permissionBoundary")}</dt><dd>{t(boundary ? "configured" : "notConfigured")}</dd></div></dl>
-        </section>
+        <AuthorizationOverview title={t("grantOverview")} hint={t("grantOverviewHint")} items={[
+          { label: t("directPolicies"), value: <><strong>{direct.length}</strong> {t(direct.length === 1 ? "item" : "items")}</> },
+          { label: t("inheritedPolicies"), value: <><strong>{inherited.length}</strong> {t(inherited.length === 1 ? "item" : "items")}</> },
+          { label: t("policiesWithDeny"), value: <><strong>{policiesWithDeny.size}</strong> {t(policiesWithDeny.size === 1 ? "item" : "items")}</> },
+          { label: t("permissionBoundary"), value: t(boundary ? "configured" : "notConfigured") }
+        ]} />
         <Table aria-label={t("userPolicies")} mobileLayout="stack"><thead><tr><th scope="col">{t("name")}</th><th scope="col">{t("type")}</th><th scope="col">{t("documentEffect")}</th><th scope="col">{t("grantSource")}</th></tr></thead><tbody>{attachedPolicies.map((policy) => <tr key={policy.id}><td data-label={t("name")}><button className={styles.userLink} onClick={() => onOpen("policies", policy.id)}>{policy.name}</button><small>{policy.description}</small></td><td data-label={t("type")}>{t(policy.kind)}</td><td data-label={t("documentEffect")}><Badge status={policiesWithDeny.has(policy.id) ? "danger" : "neutral"}>{t(policiesWithDeny.has(policy.id) ? "containsDeny" : "allowStatementsOnly")}</Badge></td><td data-label={t("grantSource")}><div className={styles.stack}>{direct.includes(policy.id) ? <span>{t("directPolicies")}</span> : null}{groups.filter((group) => group.policyIds.includes(policy.id)).map((group) => <button key={group.id} className={styles.userLink} onClick={() => onOpen("groups", group.id)}>{t("inheritedFrom", { name: group.name })}</button>)}</div></td></tr>)}</tbody></Table>{!direct.length && !inherited.length ? <p className={styles.note}>{t("noSelection")}</p> : null}
         <PermissionBoundary owner="user" workspace={workspace} value={boundary} onSave={(policyId) => access.executeWorkspace({ kind: "set-user-boundary", principalId: user.id, policyId })} onOpen={(id) => onOpen("policies", id)} />
       </Tabs.Content>

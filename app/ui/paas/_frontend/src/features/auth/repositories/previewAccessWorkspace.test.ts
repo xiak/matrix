@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { applyAccessWorkspaceCommand, policyUsageCounts } from "../domain/accessWorkspace";
-import { analyzePolicyDocument, includesPermissionManagement, parsePolicyDocument, policyStatementKey, resourcesForPolicyActions, summarizePolicyServices, type PolicyDocument } from "../domain/policyDocument";
+import { analyzePolicyDocument, containsDenyStatement, includesPermissionManagement, parsePolicyDocument, policyStatementKey, resourcesForPolicyActions, summarizePolicyServices, type PolicyDocument } from "../domain/policyDocument";
 import { expandPolicyActions } from "../domain/policyLanguage";
 import { policyActions, policyServices } from "../domain/previewAuthorizationCatalog";
 import { createPreviewAccessWorkspace, initialAccessWorkspace } from "./previewAccessWorkspace";
@@ -336,6 +336,10 @@ describe("access workspace preview invariants", () => {
     ["allow", "iam:assumeRole", true], ["allow", "iam:readAudit", false], ["deny", "*", false]
   ] as const)("classifies %s %s for review without treating it as an effective-access decision", (effect, action, expected) => {
     expect(includesPermissionManagement({ version: "1", statement: [{ effect, action: [action], resource: ["*"] }] })).toBe(expected);
+  });
+  it("classifies explicit deny only as a document review signal", () => {
+    expect(containsDenyStatement({ version: "1", statement: [{ effect: "allow", action: ["logs:search"], resource: ["*"] }] })).toBe(false);
+    expect(containsDenyStatement({ version: "1", statement: [{ effect: "deny", action: ["logs:search"], resource: ["*"] }] })).toBe(true);
   });
   it("creates a preview user with atomic groups, policies and tags, without live grants or credentials", async () => {
     resetPreviewEnvironment();

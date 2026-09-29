@@ -69,6 +69,12 @@ export function includesPermissionManagement(document: PolicyDocument): boolean 
   return document.statement.some((statement) => statement.effect === "allow" &&
     expandPolicyActions(statement.action).some((action) => action.level === "permissions"));
 }
+
+// Display signal only. A deny statement is not an effective-access result until
+// the complete request, grant sources and permission boundary are evaluated.
+export function containsDenyStatement(document: PolicyDocument): boolean {
+  return document.statement.some((statement) => statement.effect === "deny");
+}
 export function parsePolicyDocument(text: string, accountId?: string): PolicyDocument {
   if (text.length > 65536) throw new AccessWorkspaceError("invalid");
   let value: unknown;

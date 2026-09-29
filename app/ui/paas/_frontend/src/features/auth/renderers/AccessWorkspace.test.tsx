@@ -1109,6 +1109,25 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByText("paas.application.read")).toBeTruthy();
     expect(screen.queryByText("paas:*")).toBeNull();
   });
+  it("separates role trust admission, grants and boundary without claiming effective access", async () => {
+    await open("roles", { entityId: "role-log-reviewer", seed: async (extension) => {
+      extension.transact((source) => ({ workspace: { ...source, roles: source.roles.map((role) => role.id === "role-log-reviewer" ? {
+        ...role,
+        policyIds: ["policy-tag-logs", "policy-production-guard"],
+        boundaryPolicyId: "policy-delivery-boundary"
+      } : role) } }));
+    } });
+    const overview = await screen.findByRole("region", { name: "角色授权模型" });
+    expect(within(overview).getByText("承担入口").closest("div")?.textContent).toContain("1 位可信用户");
+    expect(within(overview).getByText("权限策略").closest("div")?.textContent).toContain("2 项");
+    expect(within(overview).getByText("含拒绝声明的策略").closest("div")?.textContent).toContain("1 项");
+    expect(within(overview).getByText("权限边界").closest("div")?.textContent).toContain("已配置");
+    expect(within(overview).getByText(/信任关系只控制谁可以申请承担角色/)).toBeTruthy();
+    const policies = screen.getByRole("table", { name: "权限策略" });
+    const denyRow = within(policies).getByRole("button", { name: "ProtectProductionDeployments" }).closest("tr")!;
+    expect(within(denyRow).getByText("含显式拒绝").getAttribute("data-status")).toBe("danger");
+    expect(within(policies).getByText("仅允许声明")).toBeTruthy();
+  });
   it("keeps identity-provider and federation mutations in their detail pages", async () => {
     const { user } = await open("providers");
     const providers = await screen.findByRole("table", { name: "角色 SSO" });
