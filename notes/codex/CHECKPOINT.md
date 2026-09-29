@@ -6,8 +6,8 @@
 - Updated: 2026-09-29
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `a943c86c`
-- Pushed documentation head: `c053060f`
+- Pushed UI source: `255b9bf7`
+- Pushed documentation head: `c353b0a9`
 
 ## Authoritative route
 
@@ -85,6 +85,14 @@ keeps the source member/policy tab and restores focus to the source action, with
 a stable edit-action fallback during authoritative refresh; deletion remains a
 focused confirmation. Target-User and Group grant-source/effect projections
 remain backend-owned and unimplemented until a fixed pushed IAM contract exists.
+
+LIVE Group loading now follows the shared stable-structure rule. Directory
+heading, search and create command stay mounted across initial read, failure and
+retry; direct detail keeps a heading and back path while only remote facts use a
+delayed local skeleton. Directory request generations reject late results, and
+fast responses never render an intermediate empty directory. The DEV browser
+still exercises the explicit MOCK repository, so responsive browser evidence
+does not substitute for delayed real-IAM network acceptance.
 
 ## Continuation
 
