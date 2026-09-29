@@ -44,7 +44,7 @@ ServiceRoleTemplate 定义注册服务主体、用途、允许权限和生命周
 | IAM-SVC-01/02 | 未实现 | 当前 ServiceIdentity 只证明安装归属、服务主体及 purpose；不能承担目标账号 Role。现有 RoleSession 只允许同账号 USER 来源，TrustPolicy 也明确拒绝 SERVICE_ACCOUNT。没有模板、账号同意、PassRole、工作负载绑定或服务短期凭据。 |
 | IAM-TAG-01/02 | 未实现 | Role 的 `tags` 仍只是元数据，不能进入授权。产品资源标签、创建请求标签、标签写入授权和并发一致性尚无可信来源协议。 |
 
-`app/service/paas/internal/managedservice/port/security.go` 的 action→resource 检查当前是该产品适配器自己的封闭边界，不是通用求值器按产品名称分叉。后继接入不得继续复制声明：适配器应消费自己编译进发布物且已由 IAM Profile 摘要认证的声明，通用 IAM 求值器仍只解释统一 Profile/Policy 语义。
+`app/service/paas/internal/managedservice/port/security.go` 原 action→resource switch 是该产品适配器的封闭边界，不是通用求值器按产品名称分叉，但它重复了 release-owned Profile。本轮候选已删除这份重复映射：port 直接使用 IAM Action/ResourceKind 类型，通过 `NewAuthorizationRequest` 和 managedservice 当前 Profile 的完整引用/calling service 核对形状；IAM HTTP adapter不再执行第二次字符串翻译。七种合法集合/实例形状及其他产品、错资源、错集合用途/ID攻击的聚焦测试通过；API/PaaS 全包 race、对应 vet 和 architecture 门禁通过，尚待独立CI。后继产品适配器同样应消费自己编译进发布物且已由 IAM Profile 摘要认证的声明，通用 IAM 求值器仍只解释统一 Profile/Policy 语义。
 
 ## 下一纵向切片：账号同意的服务相关角色
 

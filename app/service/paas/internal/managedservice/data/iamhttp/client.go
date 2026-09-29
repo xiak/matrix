@@ -116,32 +116,15 @@ func (client *Client) Authorize(
 }
 
 func toIAMRequest(request port.AuthorizationRequest) (iamv1.AuthorizationRequest, error) {
-	resourceKind, err := toIAMResourceKind(request.Resource.Kind)
-	if err != nil {
-		return iamv1.AuthorizationRequest{}, err
-	}
-	result, err := iamv1.NewAuthorizationRequest(iamv1.Action(request.Action),
-		iamv1.ResourceReference{Kind: resourceKind, ID: request.Resource.ID},
+	result, err := iamv1.NewAuthorizationRequest(request.Action,
+		iamv1.ResourceReference{Kind: request.Resource.Kind, ID: request.Resource.ID},
 		request.ResourceMode, request.CollectionUsage, request.RequestID, request.RequestID)
-	if err != nil {
+	profile, known := iamv1.LookupAuthorizationProfile(iamv1.ProductManagedService)
+	if err != nil || !known || iamv1.CheckAuthorizationProfileReference(profile, result.Profile) != nil ||
+		profile.CallingService != iamv1.ServicePaaS {
 		return iamv1.AuthorizationRequest{}, errors.New("managed-service authorization cannot map to IAM")
 	}
 	return result, nil
-}
-
-func toIAMResourceKind(value string) (iamv1.ResourceKind, error) {
-	switch value {
-	case port.ResourceServiceOffering:
-		return iamv1.ResourceServiceOffering, nil
-	case port.ResourceRegion:
-		return iamv1.ResourceRegion, nil
-	case port.ResourceQuotaEntitlement:
-		return iamv1.ResourceQuotaEntitlement, nil
-	case port.ResourceServiceInstallation:
-		return iamv1.ResourceServiceInstallation, nil
-	default:
-		return "", errors.New("managed-service authorization resource kind is invalid")
-	}
 }
 
 func parseBearer(value string) (iamv1.Secret, error) {

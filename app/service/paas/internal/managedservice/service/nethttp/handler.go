@@ -226,8 +226,8 @@ func (value *handler) createInstallation(response http.ResponseWriter, request *
 func (value *handler) authorizeCollection(
 	response http.ResponseWriter,
 	request *http.Request,
-	action string,
-	resourceKind string,
+	action iamv1.Action,
+	resourceKind iamv1.ResourceKind,
 	usage iamv1.AuthorizationCollectionUsage,
 ) (port.Authorization, string, bool) {
 	return value.authorizeResource(response, request, action, resourceKind, "collection", iamv1.AuthorizationResourceCollection, usage)
@@ -236,8 +236,8 @@ func (value *handler) authorizeCollection(
 func (value *handler) authorizeResource(
 	response http.ResponseWriter,
 	request *http.Request,
-	action string,
-	resourceKind string,
+	action iamv1.Action,
+	resourceKind iamv1.ResourceKind,
 	resourceID string,
 	mode iamv1.AuthorizationResourceMode,
 	usage iamv1.AuthorizationCollectionUsage,

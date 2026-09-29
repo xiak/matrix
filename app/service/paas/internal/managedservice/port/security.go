@@ -15,23 +15,23 @@ var (
 )
 
 const (
-	AuthorizeOfferingRead             = "managedservice.offering.read"
-	AuthorizeRegionRead               = "managedservice.region.read"
-	AuthorizeQuotaEntitlementActivate = "managedservice.quota-entitlement.activate"
-	AuthorizeQuotaEntitlementRead     = "managedservice.quota-entitlement.read"
-	AuthorizeInstallationCreate       = "managedservice.service-installation.create"
-	AuthorizeInstallationRead         = "managedservice.service-installation.read"
+	AuthorizeOfferingRead             = iamv1.ActionManagedServiceOfferingRead
+	AuthorizeRegionRead               = iamv1.ActionManagedServiceRegionRead
+	AuthorizeQuotaEntitlementActivate = iamv1.ActionManagedServiceQuotaEntitlementActivate
+	AuthorizeQuotaEntitlementRead     = iamv1.ActionManagedServiceQuotaEntitlementRead
+	AuthorizeInstallationCreate       = iamv1.ActionManagedServiceInstallationCreate
+	AuthorizeInstallationRead         = iamv1.ActionManagedServiceInstallationRead
 )
 
 const (
-	ResourceServiceOffering     = "ServiceOffering"
-	ResourceRegion              = "Region"
-	ResourceQuotaEntitlement    = "QuotaEntitlement"
-	ResourceServiceInstallation = "ServiceInstallation"
+	ResourceServiceOffering     = iamv1.ResourceServiceOffering
+	ResourceRegion              = iamv1.ResourceRegion
+	ResourceQuotaEntitlement    = iamv1.ResourceQuotaEntitlement
+	ResourceServiceInstallation = iamv1.ResourceServiceInstallation
 )
 
 type ResourceReference struct {
-	Kind string
+	Kind iamv1.ResourceKind
 	ID   string
 }
 
@@ -44,7 +44,7 @@ const (
 
 type AuthorizationRequest struct {
 	Credential      string
-	Action          string
+	Action          iamv1.Action
 	Resource        ResourceReference
 	ResourceMode    iamv1.AuthorizationResourceMode
 	CollectionUsage iamv1.AuthorizationCollectionUsage
@@ -81,25 +81,20 @@ func ValidateAuthorizationRequest(value AuthorizationRequest) error {
 	if value.Credential == "" {
 		return errors.New("authorization credential is required")
 	}
-	if value.Resource.Kind == "" || expectedResourceKind(value.Action) != value.Resource.Kind {
-		return errors.New("authorization action and resource kind differ")
-	}
-	switch value.ResourceMode {
-	case iamv1.AuthorizationResourceInstance:
-		if value.CollectionUsage != "" {
-			return errors.New("instance authorization cannot carry collection usage")
-		}
-	case iamv1.AuthorizationResourceCollection:
-		if value.Resource.ID != "collection" || (value.CollectionUsage != iamv1.AuthorizationCollectionCreate && value.CollectionUsage != iamv1.AuthorizationCollectionList) {
-			return errors.New("collection authorization target is invalid")
-		}
-	default:
-		return errors.New("authorization resource mode is required")
-	}
-	return errors.Join(
-		managedservicev1.ValidateID("authorization.resource.id", value.Resource.ID),
-		managedservicev1.ValidateID("authorization.requestId", value.RequestID),
+	profileRequest, err := iamv1.NewAuthorizationRequest(
+		value.Action,
+		iamv1.ResourceReference{Kind: value.Resource.Kind, ID: value.Resource.ID},
+		value.ResourceMode,
+		value.CollectionUsage,
+		value.RequestID,
+		value.RequestID,
 	)
+	profile, known := iamv1.LookupAuthorizationProfile(iamv1.ProductManagedService)
+	if err != nil || !known || iamv1.CheckAuthorizationProfileReference(profile, profileRequest.Profile) != nil ||
+		profile.CallingService != iamv1.ServicePaaS {
+		return errors.New("authorization request is outside the managed-service profile")
+	}
+	return nil
 }
 
 func ValidateAuthorizationForRequest(value Authorization, request AuthorizationRequest) error {
@@ -107,19 +102,4 @@ func ValidateAuthorizationForRequest(value Authorization, request AuthorizationR
 		return errors.New("authorization request correlation differs")
 	}
 	return ValidateAuthorization(value)
-}
-
-func expectedResourceKind(action string) string {
-	switch action {
-	case AuthorizeOfferingRead:
-		return ResourceServiceOffering
-	case AuthorizeRegionRead:
-		return ResourceRegion
-	case AuthorizeQuotaEntitlementActivate, AuthorizeQuotaEntitlementRead:
-		return ResourceQuotaEntitlement
-	case AuthorizeInstallationCreate, AuthorizeInstallationRead:
-		return ResourceServiceInstallation
-	default:
-		return ""
-	}
 }
