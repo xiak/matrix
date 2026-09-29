@@ -331,8 +331,8 @@ requires explicit offline-code acknowledgement before a fresh login. Its
 locked-dependency source gate passed typecheck, lint, architecture, 20 contrast
 pairs, 16 test files with 163 tests, and two 2-worker exports with an identical
 72-file embed digest. FEAT-005/006 continue to own the authority and recovery
-semantics; this evidence proves only the console consumer. Installed-browser
-and signed-release acceptance for the combined Phase 3 source remain open.
+semantics; this evidence proves only the console consumer. At that source-only
+checkpoint, installed-browser and signed-release acceptance remained open.
 
 The current Phase 3 release branch now also consumes the restricted initial
 ENROLLMENT challenge. Its login form verifies notification contact before
@@ -343,8 +343,8 @@ re-disclosing a seed. Local gates passed 168 frontend tests, type/lint,
 architecture and style checks, two deterministic 2-worker static exports with
 73 matching embedded files, all Go tests/vet, and a restricted PostgreSQL 18
 retained-data IAM40-to-IAM45 process upgrade. The test container and its
-anonymous volume were removed. This is not the installed LIVE browser or
-combined signed A/B acceptance, which remain open.
+anonymous volume were removed. That source gate alone did not establish an
+installed LIVE browser or combined signed A/B acceptance.
 
 The account directory now consumes the installed IAM `/v1/users`,
 `/v1/accounts`, policy attachment and actor-relative capability contracts;
@@ -363,6 +363,17 @@ then revoked the IAM session on logout. The test-only TOTP seed was exported
 once to a new mode-0600 fixture inside the disposable engine; it was never
 added to product APIs or the signed release. No browser-side user/policy
 mutation or keyboard-only/360-pixel acceptance is claimed by this gate.
+
+The later task-key-signed revision-16-to-17 browser-ready pair, built from
+fixed `1602fad3925b` and `648aac4ec956`, completed its offline upgrade and
+first-MFA ceremony. In the installed successor the original administrator
+completed password-plus-TOTP login through APISIX, navigated the authenticated
+console, and revoked the IAM session on logout. The two-host runtime and
+interactive browser terminal evidence are owned by
+[FEAT-008](FEAT-008-linux-host-management.md). This proves the exact signed
+console authentication path, not keyboard-only or 360-pixel acceptance, a
+production signing root, or inclusion of later UI source changes in that
+signed pair.
 
 - Gate A implementation replaces the Phase 1 page with the complete donor-
   shaped App Router -> route -> provider -> repository -> scene -> renderer ->

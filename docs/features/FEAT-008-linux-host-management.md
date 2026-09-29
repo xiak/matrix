@@ -2032,8 +2032,37 @@ and volumes, and temporary address/routes were removed afterward; neither
 remote host nor its Docker daemon was restarted. The independent source gate
 at `951ef72d` passed Go, UI, authority-process, authentication-recovery and
 node-process in [Verification 36473359829](https://github.com/xiak/matrix/actions/runs/36473359829).
-This accepts the exact revision-16-to-17 two-host composition, not the LIVE
-browser ceremony or publication of a production signing root.
+This accepts the exact revision-16-to-17 two-host composition, not publication
+of a production signing root. A separate browser-ready run from the same fixed
+platform/node sources and runner then passed in 631.58 seconds. Its isolated
+controller had no default route; Docker's native published-port forwarding
+preserved the observed `172.30.1.160` and `172.30.1.161` enrollment peers.
+Both nodes remained enrolled across the profile upgrade, and the gate ended
+with `browser-native-deployments-ready`, `browser-successor-ready` and PASS.
+The earlier setup attempts are not product passes: a removed task-only node
+directory failed preflight before node writes, and a temporary TCP proxy
+changed the observed peer to a bridge address, which admission correctly
+rejected. Both were discarded before the fresh passing run.
+
+In that installed successor, a real password-plus-TOTP browser session opened
+`phase3-runtime-deployment-1` on a managed node and typed a marker into its
+actual `/bin/sh`. The rendered terminal returned the marker and changed
+`stty size` from `20 70` to `33 70` after expansion. Explicit close ended
+session `terminal-session-41b4f5c6994ba8be9fc29e7f874e48ea` as
+`ENDED/COMPLETED`, cleared its ticket digest, and delivered all three closed
+terminal Audit outbox facts. The host page showed both nodes' sourced CPU,
+memory and ext4 capacity; a refresh advanced observation times and values.
+An earlier local-machine-only browser fixture correctly returned 404 for
+terminal creation because its execution target had no node binding; the
+source-level UI message no longer calls every 404 a stale generation. That
+copy and its regression are fixed at `63ac0ed4` with all five jobs passing in
+[Verification 36529052870](https://github.com/xiak/matrix/actions/runs/36529052870),
+but were not part of the signed `648aac4` runtime used above. The browser
+session was revoked, all task workloads, node/collector units, startup units,
+node directories, test image, DIND container/volumes, temporary routes and
+8.3 GiB local packaging directory were removed; no remote host or Docker
+daemon was restarted. This proves the exact signed browser ceremony and
+source-level error copy, not that a later signed release contains the copy.
 
 ## Adoption
 

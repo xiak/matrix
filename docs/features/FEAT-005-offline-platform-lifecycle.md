@@ -771,8 +771,9 @@ history. Restarting only that task-owned engine passed status/verify and
 complete offline lifecycle in 16.53 seconds. The engine and its two labeled
 volumes were removed; no remote machine was restarted. This does not grant
 cross-profile restore permission or publish a production signing root. The
-independent cross-profile two-host gate is owned by FEAT-008; the installed
-LIVE browser ceremony remains separately open in FEAT-007.
+independent cross-profile two-host and runtime-browser gates are owned by
+FEAT-008; FEAT-007 owns the installed console login ceremony. Neither
+adjacent result publishes a production signing root.
 
 ## Incremental acceptance
 
