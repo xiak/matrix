@@ -6,8 +6,8 @@
 - Updated: 2026-09-30
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `74dfa01b`
-- Pushed documentation head: `52716234`
+- Pushed UI source: `c0ad4901`
+- Pushed documentation head: `bab88449`
 
 ## Authoritative route
 
@@ -101,6 +101,12 @@ actions stay absent until the exact detail and capabilities arrive, and a
 failure retains the locator context with an in-place retry. No real failure
 falls back to MOCK, and the compact DEV check remains responsive evidence only,
 not real-IAM delay/failure acceptance.
+
+LIVE member Role discovery also keeps its verified source identity, discovery
+heading and temporary-access boundary mounted while only role cards load. An
+initial directory failure creates no RoleSession and retries in place; an
+already verified directory remains visible through later errors. The explicit
+MOCK Role experience is unchanged and remains independently inspectable.
 
 ## Continuation
 
