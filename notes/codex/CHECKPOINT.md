@@ -6,8 +6,8 @@
 - Updated: 2026-09-29
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `d119a54d`
-- Pushed documentation head: `b35867dc`
+- Pushed UI source: `29b93aac`
+- Pushed documentation head: `1d508aed`
 
 ## Authoritative route
 
@@ -53,6 +53,15 @@ and independent MOCK Role journey remain intact. Exact behavior, verification
 evidence and replacement rules belong to the linked FEAT owners. Real
 IAM-process Role/network browser, product PEP, installation and release
 acceptance remain open.
+
+The MOCK User permission page now summarizes direct and group-derived policy
+sources, current default documents containing explicit deny statements, and
+permission-boundary configuration before its relationship table. It labels
+each row's current-document effect while explicitly refusing to call that an
+effective-access result. This slice does not read a new LIVE PolicyVersion
+contract or infer missing policy content; adopt it into LIVE only from a fixed
+pushed IAM response whose ownership and failure semantics are recorded by
+FEAT-IAM-010.
 
 ## Continuation
 
