@@ -615,8 +615,21 @@ func ValidateConfirmAuthenticatorRecoveryResponse(value ConfirmAuthenticatorReco
 }
 
 func ValidateAccountPasswordSettings(value AccountPasswordSettings) error {
+	return validateAccountPasswordSettings(value, false)
+}
+
+func validateAccountPasswordSettings(value AccountPasswordSettings, historical bool) error {
 	if value.MinimumLength < 15 || value.MinimumLength > 128 || value.HistoryCount < 0 || value.HistoryCount > 24 {
 		return errors.New("account password settings are invalid")
+	}
+	// An absent expiry pair is an actual immutable pre-expiry value, never a
+	// defaulted current rule or a new proof's target.
+	if historical && value.ExpiryMode == "" && value.MaxAgeDays == 0 {
+		return nil
+	}
+	if value.MaxAgeDays < 0 || value.MaxAgeDays > 365 ||
+		(value.ExpiryMode != PasswordExpiryChange && value.ExpiryMode != PasswordExpiryAdminReset) {
+		return errors.New("account password expiry settings are invalid")
 	}
 	return nil
 }
@@ -627,7 +640,7 @@ func ValidatePasswordRequirements(value PasswordRequirements) error {
 		(value.Source != "ACCOUNT" && value.Source != "PROTECTED_IDENTITY") {
 		return errors.New("password requirements are invalid")
 	}
-	if value.Source == "PROTECTED_IDENTITY" && value.Password != (AccountPasswordSettings{MinimumLength: 15, HistoryCount: 1}) {
+	if value.Source == "PROTECTED_IDENTITY" && value.Password != (AccountPasswordSettings{MinimumLength: 15, HistoryCount: 1, ExpiryMode: PasswordExpiryChange}) {
 		return errors.New("protected password requirements are invalid")
 	}
 	return errors.Join(ValidateAccountPasswordSettings(value.Password), validatePositiveVersion(value.SettingsVersion))
@@ -652,7 +665,7 @@ func validateAccountSecuritySettings(value AccountSecuritySettings, historical b
 		if !historical {
 			return errors.New("current password settings are missing")
 		}
-	} else if err := ValidateAccountPasswordSettings(*value.Password); err != nil {
+	} else if err := validateAccountPasswordSettings(*value.Password, historical); err != nil {
 		return err
 	}
 	return errors.Join(ValidateID("accountId", string(value.AccountID)), validatePositiveVersion(value.ResourceVersion), validateTime("updatedAt", value.UpdatedAt))
@@ -672,7 +685,7 @@ func validateSecuritySettingsUpdateIntent(value SecuritySettingsUpdateIntent, hi
 		if !historical {
 			return errors.New("password settings intent is missing")
 		}
-	} else if err := ValidateAccountPasswordSettings(*value.Password); err != nil {
+	} else if err := validateAccountPasswordSettings(*value.Password, historical); err != nil {
 		return err
 	}
 	return nil
@@ -698,8 +711,8 @@ func ValidateUpdateAccountSecuritySettingsResponse(value UpdateAccountSecuritySe
 	if value.Outcome != "APPLIED" && value.Outcome != "EQUAL_REPLAY" {
 		return errors.New("account security settings outcome is invalid")
 	}
-	if value.Outcome == "APPLIED" && value.Change.Settings.Password == nil {
-		return errors.New("new settings completion is missing password settings")
+	if value.Outcome == "APPLIED" && ValidateAccountSecuritySettings(value.Change.Settings) != nil {
+		return errors.New("new settings completion requires complete current settings")
 	}
 	return ValidateAccountSecuritySettingsChange(value.Change)
 }

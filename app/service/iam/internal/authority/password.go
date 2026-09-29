@@ -127,7 +127,7 @@ func ValidatePassword(password iamv1.Secret) error {
 // Defaults are explicit values for creation and the protected-identity floor,
 // never a fallback for missing or malformed persisted Account configuration.
 func DefaultPasswordSettings() iamv1.AccountPasswordSettings {
-	return iamv1.AccountPasswordSettings{MinimumLength: minimumPasswordCodePoints, HistoryCount: 1}
+	return iamv1.AccountPasswordSettings{ExpiryMode: iamv1.PasswordExpiryChange, MinimumLength: minimumPasswordCodePoints, HistoryCount: 1}
 }
 
 func ValidatePasswordWithSettings(password iamv1.Secret, settings iamv1.AccountPasswordSettings) error {

@@ -93,6 +93,7 @@ type Transaction interface {
 	ReadTOTPAttempt(context.Context, TOTPAttempt) (TOTPVerification, error)
 	RejectTOTPAttempt(context.Context, TOTPAttempt) error
 	CompleteLoginChallenge(context.Context, LoginChallengeCompletion) (iamv1.Session, error)
+	RequirePasswordReset(context.Context, PasswordResetRequirement) (iamv1.PasswordResetReason, error)
 	BeginPasswordChallenge(context.Context, PasswordChallengeCreation) (iamv1.AuthenticationChallenge, error)
 	ReadPasswordChallenge(context.Context, AuthenticationChallengeCredential) (PasswordReplacementMaterial, error)
 	ReadChallengePasswordRequirements(context.Context, AuthenticationChallengeCredential) (iamv1.PasswordRequirements, error)

@@ -449,7 +449,7 @@ func assertAuditContractCatalog(
 				invalid = append(invalid, candidate)
 			}
 		}
-		if action == auditv1.ActionIAMOtherSessionsRevoked || action == auditv1.ActionIAMNotificationContactVerificationStarted || action == auditv1.ActionIAMNotificationContactVerified || action == auditv1.ActionIAMAuthenticatorBound || action == auditv1.ActionIAMAuthenticatorReplaced || action == auditv1.ActionIAMAuthenticatorRemoved || action == auditv1.ActionIAMAuthenticatorRecoveryStarted || action == auditv1.ActionIAMAuthenticatorRecovered || action == auditv1.ActionIAMRecoveryCodesRegenerated {
+		if action == auditv1.ActionIAMUserPasswordResetRequired || action == auditv1.ActionIAMOtherSessionsRevoked || action == auditv1.ActionIAMNotificationContactVerificationStarted || action == auditv1.ActionIAMNotificationContactVerified || action == auditv1.ActionIAMAuthenticatorBound || action == auditv1.ActionIAMAuthenticatorReplaced || action == auditv1.ActionIAMAuthenticatorRemoved || action == auditv1.ActionIAMAuthenticatorRecoveryStarted || action == auditv1.ActionIAMAuthenticatorRecovered || action == auditv1.ActionIAMRecoveryCodesRegenerated {
 			candidate := event
 			candidate.Target.ID = "another-users-principal"
 			invalid = append(invalid, candidate)
@@ -457,6 +457,13 @@ func assertAuditContractCatalog(
 			candidate.Actor = auditv1.ActorReference{Type: auditv1.ActorRole, ID: event.Actor.ID,
 				RoleSession: &auditv1.RoleSessionReference{SessionID: "catalog-role-session", SourceUserID: "catalog-source"}}
 			invalid = append(invalid, candidate)
+		}
+		if action == auditv1.ActionIAMUserPasswordResetRequired {
+			for _, result := range []auditv1.Result{auditv1.ResultSucceeded, auditv1.ResultAccepted} {
+				candidate := event
+				candidate.Result = result
+				invalid = append(invalid, candidate)
+			}
 		}
 		if contract.IAMDecisionRequired {
 			candidate := event
@@ -1094,7 +1101,7 @@ func assertIAMLookupBoundaries(
 	); err != nil {
 		t.Fatalf("read IAM readiness: %v", err)
 	}
-	if !ready || schemaVersion != 50 || checkedAt.IsZero() {
+	if !ready || schemaVersion != 51 || checkedAt.IsZero() {
 		t.Fatalf("IAM readiness ready=%t schema=%d checked=%s", ready, schemaVersion, checkedAt)
 	}
 	_, err := iamAPI.Exec(ctx, "SELECT * FROM iam.lookup_login($1)", fixture.LoginName)
@@ -1154,7 +1161,7 @@ func assertIAMUninitialized(t *testing.T, ctx context.Context, iamAPI *pgx.Conn)
 	); err != nil {
 		t.Fatalf("read uninitialized IAM readiness: %v", err)
 	}
-	if ready || schemaVersion != 50 || checkedAt.IsZero() {
+	if ready || schemaVersion != 51 || checkedAt.IsZero() {
 		t.Fatalf("uninitialized IAM readiness ready=%t schema=%d checked=%s", ready, schemaVersion, checkedAt)
 	}
 }
@@ -2398,7 +2405,7 @@ func authorityAuditEvent(
 	if contract.UserActorRequired {
 		event.Actor.Type = auditv1.ActorUser
 	}
-	if action == auditv1.ActionIAMOtherSessionsRevoked || action == auditv1.ActionIAMNotificationContactVerificationStarted || action == auditv1.ActionIAMNotificationContactVerified || action == auditv1.ActionIAMAuthenticatorBound || action == auditv1.ActionIAMAuthenticatorReplaced || action == auditv1.ActionIAMAuthenticatorRemoved || action == auditv1.ActionIAMAuthenticatorRecoveryStarted || action == auditv1.ActionIAMAuthenticatorRecovered || action == auditv1.ActionIAMRecoveryCodesRegenerated {
+	if action == auditv1.ActionIAMUserPasswordResetRequired || action == auditv1.ActionIAMOtherSessionsRevoked || action == auditv1.ActionIAMNotificationContactVerificationStarted || action == auditv1.ActionIAMNotificationContactVerified || action == auditv1.ActionIAMAuthenticatorBound || action == auditv1.ActionIAMAuthenticatorReplaced || action == auditv1.ActionIAMAuthenticatorRemoved || action == auditv1.ActionIAMAuthenticatorRecoveryStarted || action == auditv1.ActionIAMAuthenticatorRecovered || action == auditv1.ActionIAMRecoveryCodesRegenerated {
 		event.Target.ID = string(event.Actor.ID)
 	}
 	if contract.RoleActorRequired {

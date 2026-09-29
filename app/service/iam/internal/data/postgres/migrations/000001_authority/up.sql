@@ -1592,7 +1592,7 @@ BEGIN
        )
         OR (expected_action IN (
             'iam.bootstrap.applied', 'iam.session.issued',
-            'iam.password.changed', 'iam.user.password-changed', 'iam.installation-primary.credentials-recovered',
+            'iam.password.changed', 'iam.user.password-changed', 'iam.user.password-reset-required', 'iam.installation-primary.credentials-recovered',
             'iam.role-session.revoked','iam.role-session.exited',
             'iam.notification-contact.verification-started','iam.notification-contact.verified','iam.authenticator.bound','iam.authenticator.replaced','iam.authenticator.removed',
             'iam.authenticator.recovery-started','iam.authenticator.recovered','iam.recovery-codes.regenerated'
@@ -2111,7 +2111,7 @@ BEGIN
                SELECT 1 FROM iam.audit_outbox AS outbox
                 WHERE outbox.status = 'DEAD_LETTER' OR outbox.attempts >= 100
            ),
-           50::bigint,
+           51::bigint,
            transaction_timestamp();
 END
 $function$;
@@ -2374,6 +2374,7 @@ DECLARE
     effective_expires_at timestamptz(6);
     password_version bigint;
     authentication_state jsonb;
+    password_expiry jsonb;
 BEGIN
     IF submitted_session_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR submitted_tenant_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
@@ -2392,6 +2393,16 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='further authentication is required';
     END IF;
     password_version:=iam.consume_password_attempt(submitted_tenant_id,submitted_principal_id,NULL,submitted_attempt_id,submitted_attempt_sequence,'LOGIN',NULL);
+    password_expiry:=iam.password_expiry_state(submitted_tenant_id,submitted_principal_id,clock_timestamp());
+    IF password_expiry ? 'passwordResetReason' THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='password expiry requires further authentication';
+    END IF;
+    IF password_expiry ? 'passwordExpiresAt' THEN
+        effective_expires_at:=LEAST(effective_expires_at,(password_expiry->>'passwordExpiresAt')::timestamptz);
+    END IF;
+    IF effective_expires_at<=clock_timestamp() THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='session issuance deadline has passed';
+    END IF;
     UPDATE iam.password_attempts b SET used_attempts=0,window_started_at=clock_timestamp()
         WHERE b.tenant_id=submitted_tenant_id AND b.principal_id=submitted_principal_id;
     PERFORM iam.assert_audit_event(

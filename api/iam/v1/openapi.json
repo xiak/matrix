@@ -617,8 +617,17 @@
       "AccountPasswordSettings": {
         "additionalProperties": false,
         "properties": {
+          "expiryMode": {
+            "$ref": "#/components/schemas/PasswordExpiryMode"
+          },
           "historyCount": {
             "maximum": 24,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "maxAgeDays": {
+            "description": "Zero disables periodic expiry; otherwise elapsed 86400-second days, not local calendar days.",
+            "maximum": 365,
             "minimum": 0,
             "type": "integer"
           },
@@ -641,7 +650,9 @@
           }
         },
         "required": [
+          "expiryMode",
           "historyCount",
+          "maxAgeDays",
           "minimumLength",
           "requireDigit",
           "requireLowercase",
@@ -713,22 +724,62 @@
           },
           "settings": {
             "additionalProperties": false,
-            "description": "Original settings at completion. A missing password segment records an actual pre-password completion; never current configuration, a default or a new write.",
+            "description": "Original settings at completion. A missing password segment or exact six-field pre-expiry segment records original history; never current configuration, inferred defaults or a new write.",
             "properties": {
               "accountId": {
                 "$ref": "#/components/schemas/ID"
               },
               "apiVersion": {
-                "const": "iam.matrix.xiak.com/v1"
+                "type": "string"
               },
               "kind": {
-                "const": "AccountSecuritySettings"
+                "type": "string"
               },
               "mfa": {
                 "$ref": "#/components/schemas/AccountMFASettings"
               },
               "password": {
-                "$ref": "#/components/schemas/AccountPasswordSettings"
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/AccountPasswordSettings"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "historyCount": {
+                        "maximum": 24,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "minimumLength": {
+                        "maximum": 128,
+                        "minimum": 15,
+                        "type": "integer"
+                      },
+                      "requireDigit": {
+                        "type": "boolean"
+                      },
+                      "requireLowercase": {
+                        "type": "boolean"
+                      },
+                      "requireSymbol": {
+                        "type": "boolean"
+                      },
+                      "requireUppercase": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "historyCount",
+                      "minimumLength",
+                      "requireDigit",
+                      "requireLowercase",
+                      "requireSymbol",
+                      "requireUppercase"
+                    ],
+                    "type": "object"
+                  }
+                ]
               },
               "resourceVersion": {
                 "maximum": 9007199254740991,
@@ -14384,6 +14435,13 @@
         ],
         "type": "object"
       },
+      "PasswordExpiryMode": {
+        "enum": [
+          "CHANGE_PASSWORD",
+          "ADMIN_RESET"
+        ],
+        "type": "string"
+      },
       "PasswordRequirements": {
         "additionalProperties": false,
         "description": "Current self-only password rules, measured in Unicode code points and UTF-8 bytes. An observation, never a write permit; final replacement rechecks current qualification and settings.",
@@ -14399,8 +14457,14 @@
             "properties": {
               "password": {
                 "properties": {
+                  "expiryMode": {
+                    "const": "CHANGE_PASSWORD"
+                  },
                   "historyCount": {
                     "const": 1
+                  },
+                  "maxAgeDays": {
+                    "const": 0
                   },
                   "minimumLength": {
                     "const": 15
@@ -23085,8 +23149,8 @@
                     "const": "SECURITY_SETTINGS_UPDATE"
                   },
                   "securitySettings": {
-                    "properties": {
-                      "password": false
+                    "not": {
+                      "$ref": "#/components/schemas/SecuritySettingsUpdateIntent"
                     }
                   },
                   "state": {
@@ -23204,7 +23268,47 @@
                 "$ref": "#/components/schemas/AccountMFASettings"
               },
               "password": {
-                "$ref": "#/components/schemas/AccountPasswordSettings"
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/AccountPasswordSettings"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "historyCount": {
+                        "maximum": 24,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "minimumLength": {
+                        "maximum": 128,
+                        "minimum": 15,
+                        "type": "integer"
+                      },
+                      "requireDigit": {
+                        "type": "boolean"
+                      },
+                      "requireLowercase": {
+                        "type": "boolean"
+                      },
+                      "requireSymbol": {
+                        "type": "boolean"
+                      },
+                      "requireUppercase": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": [
+                      "historyCount",
+                      "minimumLength",
+                      "requireDigit",
+                      "requireLowercase",
+                      "requireSymbol",
+                      "requireUppercase"
+                    ],
+                    "type": "object"
+                  }
+                ]
               }
             },
             "required": [
@@ -23530,9 +23634,7 @@
               "change": {
                 "properties": {
                   "settings": {
-                    "required": [
-                      "password"
-                    ]
+                    "$ref": "#/components/schemas/AccountSecuritySettings"
                   }
                 }
               },

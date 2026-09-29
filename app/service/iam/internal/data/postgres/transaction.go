@@ -366,7 +366,7 @@ func (value *transaction) IssueSession(
 	stored.IssuedAt = issuedAt.UTC()
 	stored.ExpiresAt = expiresAt.UTC()
 	if stored.IssuedAt != mutation.Session.IssuedAt ||
-		stored.ExpiresAt != mutation.Session.ExpiresAt ||
+		stored.ExpiresAt.After(mutation.Session.ExpiresAt) ||
 		iamv1.ValidateSession(stored) != nil {
 		return iamv1.Session{}, identityaccess.ErrUnavailable
 	}

@@ -181,7 +181,7 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='TOTP backup custody context is forbidden';
     END IF;
     IF NOT iam.totp_custody_contract_ready() OR NOT iam.totp_backup_custody_contract_ready()
-        OR NOT EXISTS(SELECT 1 FROM iam.readiness() WHERE ready AND schema_version=50) THEN
+        OR NOT EXISTS(SELECT 1 FROM iam.readiness() WHERE ready AND schema_version=51) THEN
         RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='TOTP backup custody shape is unavailable';
     END IF;
     registration:=iam.totp_keyset_snapshot();
@@ -474,6 +474,30 @@ CREATE INDEX IF NOT EXISTS authentication_challenges_user ON iam.authentication_
 ALTER TABLE iam.authentication_challenges ADD COLUMN IF NOT EXISTS recovery_id text COLLATE "C";
 ALTER TABLE iam.authentication_challenges ADD COLUMN IF NOT EXISTS security_settings_version bigint;
 ALTER TABLE iam.authentication_challenges ADD COLUMN IF NOT EXISTS enrollment_event_id text COLLATE "C";
+DO $password_reset_terminal$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid='iam.authentication_challenges'::regclass
+        AND attname='password_reset_required_event_id' AND NOT attisdropped) THEN
+        IF to_regprocedure('iam.require_password_reset(text,text,text,bigint,text,text,bigint,bigint,jsonb)') IS NOT NULL THEN
+            RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='password reset terminal authority is incomplete';
+        END IF;
+        -- NULL is historical absence, not permission or a fabricated denial.
+        ALTER TABLE iam.authentication_challenges ADD COLUMN password_reset_required_event_id text COLLATE "C";
+    END IF;
+    IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='iam.authentication_challenges'::regclass AND conname='challenge_password_reset_fact') THEN
+        ALTER TABLE iam.authentication_challenges ADD CONSTRAINT challenge_password_reset_fact
+            FOREIGN KEY(tenant_id,password_reset_required_event_id) REFERENCES iam.audit_outbox(tenant_id,event_id) DEFERRABLE INITIALLY DEFERRED;
+    END IF;
+    IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='iam.authentication_challenges'::regclass AND conname='challenge_password_reset_unique') THEN
+        ALTER TABLE iam.authentication_challenges ADD CONSTRAINT challenge_password_reset_unique UNIQUE(tenant_id,password_reset_required_event_id);
+    END IF;
+END $password_reset_terminal$;
+ALTER TABLE iam.authentication_challenges DROP CONSTRAINT IF EXISTS challenge_password_reset_terminal;
+ALTER TABLE iam.authentication_challenges ADD CONSTRAINT challenge_password_reset_terminal CHECK(
+    password_reset_required_event_id IS NULL OR (state='CONSUMED' AND purpose='LOGIN' AND next_step='TOTP'
+        AND factor_id IS NOT NULL AND verified_step IS NOT NULL AND recovery_id IS NULL AND source_challenge_id IS NULL
+        AND session_id IS NULL AND issuance_event_id IS NULL AND password_challenge_id IS NULL
+        AND password_changed_event_id IS NULL AND password_change_request_id IS NULL AND enrollment_event_id IS NULL));
 ALTER TABLE iam.authentication_challenges ALTER COLUMN factor_id DROP NOT NULL;
 DO $initial_enrollment_references$
 BEGIN
@@ -515,7 +539,8 @@ ALTER TABLE iam.authentication_challenges ADD CONSTRAINT authentication_challeng
     OR (state='CONSUMED' AND completed_at IS NOT NULL AND completed_at>=created_at AND completed_at<expires_at AND (
         (next_step='TOTP' AND recovery_id IS NULL AND password_changed_event_id IS NULL AND password_change_request_id IS NULL AND (
             (session_id IS NOT NULL AND issuance_event_id IS NOT NULL AND password_challenge_id IS NULL)
-            OR (session_id IS NULL AND issuance_event_id IS NULL AND password_challenge_id IS NOT NULL AND password_challenge_id<>id)))
+            OR (session_id IS NULL AND issuance_event_id IS NULL AND password_challenge_id IS NOT NULL AND password_challenge_id<>id)
+            OR password_reset_required_event_id IS NOT NULL))
         OR (next_step='PASSWORD_CHANGE' AND session_id IS NULL AND issuance_event_id IS NULL AND password_challenge_id IS NULL
             AND password_changed_event_id IS NOT NULL AND password_change_request_id IS NOT NULL
             AND password_change_request_id ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
@@ -575,6 +600,9 @@ END $challenge_purpose$;
 ALTER TABLE iam.authentication_challenges DROP CONSTRAINT IF EXISTS authentication_challenges_purpose;
 ALTER TABLE iam.authentication_challenges ADD CONSTRAINT authentication_challenges_purpose CHECK(
     (purpose='LOGIN' AND next_step IN ('TOTP','RECOVER','PASSWORD_CHANGE') AND factor_id IS NOT NULL AND enrollment_event_id IS NULL)
+    OR (purpose='LOGIN' AND next_step='PASSWORD_CHANGE' AND factor_id IS NULL AND source_challenge_id IS NULL
+        AND verified_step IS NULL AND recovery_id IS NULL AND enrollment_event_id IS NULL
+        AND security_settings_version IS NOT NULL AND security_settings_version BETWEEN 1 AND 9007199254740991)
     OR (purpose='RECOVERY' AND next_step='ENROLLMENT' AND source_challenge_id IS NOT NULL AND recovery_id IS NOT NULL
         AND factor_id IS NOT NULL AND enrollment_event_id IS NULL)
     OR (purpose='ENROLLMENT' AND next_step IN ('PASSWORD_CHANGE','ENROLLMENT') AND factor_id IS NULL
@@ -806,7 +834,7 @@ ALTER TABLE iam.step_ups ADD CONSTRAINT step_ups_operation_check CHECK(
     OR (operation IN ('TOTP_REPLACE','TOTP_REMOVE') AND mfa_revision<=9007199254740990 AND expected_settings_version IS NULL AND required_for_users IS NULL AND password_settings IS NULL)
     OR (operation='SECURITY_SETTINGS_UPDATE' AND expected_settings_version IS NOT NULL
         AND expected_settings_version BETWEEN 1 AND 9007199254740990 AND required_for_users IS NOT NULL
-        AND (password_settings IS NULL OR iam.valid_password_settings(password_settings))));
+        AND (password_settings IS NULL OR iam.valid_password_settings_history(password_settings))));
 ALTER TABLE iam.totp_authenticators DROP CONSTRAINT IF EXISTS totp_replacement_step_up;
 ALTER TABLE iam.totp_authenticators ADD CONSTRAINT totp_replacement_step_up
     FOREIGN KEY(tenant_id,replacement_step_up_id) REFERENCES iam.step_ups(tenant_id,id);
@@ -1027,11 +1055,13 @@ REVOKE ALL ON FUNCTION iam.requires_initial_enrollment(text,text)
 
 CREATE OR REPLACE FUNCTION iam.login_authentication_state(tenant text,subject_id text)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
-DECLARE value iam.user_mfa_states%ROWTYPE;
+DECLARE value iam.user_mfa_states%ROWTYPE; password_expiry jsonb;
 BEGIN
     value:=iam.lock_mfa_user(tenant,subject_id);
+    password_expiry:=iam.password_expiry_state(tenant,subject_id,clock_timestamp());
     RETURN jsonb_strip_nulls(jsonb_build_object('state',value.enrollment_state,'revision',value.revision,'factorId',value.factor_id,
-        'enrollmentRequired',iam.requires_initial_enrollment(tenant,subject_id)));
+        'enrollmentRequired',iam.requires_initial_enrollment(tenant,subject_id),
+        'passwordExpiryMode',password_expiry->'expiryMode','passwordResetReason',password_expiry->'passwordResetReason'));
 END $function$;
 
 -- Called inside existing Session/Role reads. A retained password-only Session
@@ -1301,7 +1331,7 @@ CREATE OR REPLACE FUNCTION iam.create_login_challenge(tenant text,subject_id tex
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE state iam.user_mfa_states%ROWTYPE; generation bigint; effective_now timestamptz(6);
     account_version bigint; principal_version bigint; original_factor text; next_step text:='TOTP'; batch iam.mfa_recovery_batches%ROWTYPE;
-    challenge_purpose text:='LOGIN'; settings_version bigint;
+    challenge_purpose text:='LOGIN'; settings_version bigint; password_expiry jsonb;
 BEGIN
     IF COALESCE(challenge_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         OR COALESCE(request_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
@@ -1310,14 +1340,24 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='authentication challenge is invalid';
     END IF;
     state:=iam.lock_mfa_user(tenant,subject_id);
+    password_expiry:=iam.password_expiry_state(tenant,subject_id,clock_timestamp());
     original_factor:=state.factor_id;
     IF state.enrollment_state='RECOVERY_REQUIRED' THEN
         batch:=iam.lock_recovery_batch(tenant,subject_id);
         original_factor:=batch.factor_id; next_step:='RECOVER';
-    ELSIF state.enrollment_state IN ('NEVER_BOUND','REMOVED') AND iam.requires_initial_enrollment(tenant,subject_id) THEN
-        challenge_purpose:='ENROLLMENT';
-        SELECT CASE WHEN p.must_change_password THEN 'PASSWORD_CHANGE' ELSE 'ENROLLMENT' END INTO next_step
-            FROM iam.principals p WHERE p.tenant_id=tenant AND p.id=subject_id;
+    ELSIF state.enrollment_state IN ('NEVER_BOUND','REMOVED') THEN
+        IF password_expiry ? 'passwordResetReason' AND password_expiry->>'expiryMode'='ADMIN_RESET' THEN
+            RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='authentication challenge is unavailable';
+        END IF;
+        IF iam.requires_initial_enrollment(tenant,subject_id) THEN
+            challenge_purpose:='ENROLLMENT';
+            SELECT CASE WHEN p.must_change_password OR password_expiry ? 'passwordResetReason' THEN 'PASSWORD_CHANGE' ELSE 'ENROLLMENT' END INTO next_step
+                FROM iam.principals p WHERE p.tenant_id=tenant AND p.id=subject_id;
+        ELSIF password_expiry ? 'passwordResetReason' AND password_expiry->>'expiryMode'='CHANGE_PASSWORD' THEN
+            next_step:='PASSWORD_CHANGE';
+        ELSE
+            RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='authentication challenge is unavailable';
+        END IF;
     ELSIF state.enrollment_state<>'BOUND' THEN
         RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='authentication challenge is unavailable';
     END IF;
@@ -2287,7 +2327,7 @@ CREATE OR REPLACE FUNCTION iam.complete_login_challenge(tenant text,subject_id t
 RETURNS TABLE(issued_at timestamptz,expires_at timestamptz)
 LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE factor iam.totp_authenticators%ROWTYPE; generation bigint; effective_now timestamptz(6):=transaction_timestamp();
-    effective_expiry timestamptz(6);
+    effective_expiry timestamptz(6); password_expiry jsonb;
 BEGIN
     IF COALESCE(session_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         OR COALESCE(lookup_digest,'') !~ '^sha256:[0-9a-f]{64}$'
@@ -2303,6 +2343,16 @@ BEGIN
     PERFORM iam.assert_audit_event(audit_event,tenant,'iam.session.issued','SESSION',session_id,'SUCCEEDED');
     PERFORM iam.assert_user_audit_actor(tenant,subject_id,audit_event);
     effective_expiry:=effective_now+make_interval(secs=>lifetime_seconds);
+    password_expiry:=iam.password_expiry_state(tenant,subject_id,clock_timestamp());
+    IF password_expiry ? 'passwordResetReason' THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='password expiry requires further authentication';
+    END IF;
+    IF password_expiry ? 'passwordExpiresAt' THEN
+        effective_expiry:=LEAST(effective_expiry,(password_expiry->>'passwordExpiresAt')::timestamptz);
+    END IF;
+    IF effective_expiry<=clock_timestamp() THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='session issuance deadline has passed';
+    END IF;
     -- Password success alone did not reset the guessing budget. Only this
     -- completed ceremony can reset its still-current original attempt; a
     -- later failed/in-flight password attempt is never erased by an old one.
@@ -2324,14 +2374,63 @@ BEGIN
     RETURN QUERY SELECT effective_now,effective_expiry;
 END $function$;
 
--- A successful forced login consumes its OTP but issues no Session. Its
+-- This terminal consumes exactly one verified origin. Password/TOTP crypto
+-- remains inside the trusted IAM process; SQL independently rechecks current
+-- qualification and commits consumption and the closed denial atomically.
+CREATE OR REPLACE FUNCTION iam.require_password_reset(tenant text,subject_id text,password_attempt_id text,
+    password_sequence bigint,challenge_id text,totp_attempt_id text,totp_sequence bigint,verified_step bigint,audit_event jsonb)
+RETURNS text LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE state iam.user_mfa_states%ROWTYPE; factor iam.totp_authenticators%ROWTYPE;
+    password_expiry jsonb; effective_now timestamptz(6):=transaction_timestamp();
+BEGIN
+    IF NOT ((password_attempt_id IS NOT NULL AND password_sequence IS NOT NULL AND password_sequence>0
+        AND challenge_id IS NULL AND totp_attempt_id IS NULL AND totp_sequence IS NULL AND verified_step IS NULL)
+        OR (password_attempt_id IS NULL AND password_sequence IS NULL AND challenge_id IS NOT NULL
+            AND totp_attempt_id IS NOT NULL AND totp_sequence IS NOT NULL AND totp_sequence>0 AND verified_step IS NOT NULL)) THEN
+        RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='password reset origin is invalid';
+    END IF;
+    state:=iam.lock_mfa_user(tenant,subject_id);
+    IF password_attempt_id IS NOT NULL THEN
+        IF state.enrollment_state NOT IN ('NEVER_BOUND','REMOVED') OR state.factor_id IS NOT NULL THEN
+            RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='password reset instruction is unavailable';
+        END IF;
+        PERFORM iam.consume_password_attempt(tenant,subject_id,NULL,password_attempt_id,password_sequence,'LOGIN',NULL);
+    ELSE
+        factor:=iam.consume_totp_attempt(tenant,subject_id,NULL,challenge_id,'LOGIN',totp_attempt_id,totp_sequence,verified_step);
+    END IF;
+    -- Do not classify expiry using the pre-lock transaction timestamp. Neither
+    -- a changed setting nor a changed credential may reuse old authentication.
+    password_expiry:=iam.password_expiry_state(tenant,subject_id,clock_timestamp());
+    IF password_expiry->>'expiryMode' IS DISTINCT FROM 'ADMIN_RESET'
+        OR COALESCE(password_expiry->>'passwordResetReason','') NOT IN ('EXPIRED','AGE_UNKNOWN') THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='password reset instruction is unavailable';
+    END IF;
+    PERFORM iam.assert_audit_event(audit_event,tenant,'iam.user.password-reset-required','USER',subject_id,'DENIED');
+    PERFORM iam.assert_user_audit_actor(tenant,subject_id,audit_event);
+    IF challenge_id IS NOT NULL THEN
+        UPDATE iam.totp_authenticators f SET last_consumed_step=require_password_reset.verified_step
+            WHERE f.tenant_id=tenant AND f.id=factor.id;
+        UPDATE iam.authentication_challenges c SET state='CONSUMED',completed_at=effective_now,
+            verified_step=require_password_reset.verified_step,password_reset_required_event_id=audit_event->>'eventId'
+            WHERE c.tenant_id=tenant AND c.id=challenge_id;
+    END IF;
+    INSERT INTO iam.audit_outbox(tenant_id,event_id,event_document,next_attempt_at,created_at,updated_at)
+        VALUES(tenant,audit_event->>'eventId',audit_event,effective_now,effective_now,effective_now);
+    -- No successful-login budget reset and no credential/account mutation.
+    RETURN password_expiry->>'passwordResetReason';
+END $function$;
+REVOKE ALL ON FUNCTION iam.require_password_reset(text,text,text,bigint,text,text,bigint,bigint,jsonb)
+    FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery,matrix_iam_backup_custody,matrix_iam_notification_worker;
+GRANT EXECUTE ON FUNCTION iam.require_password_reset(text,text,text,bigint,text,text,bigint,bigint,jsonb) TO matrix_iam_api;
+
+-- A forced or expired login consumes its OTP but issues no Session. Its
 -- successor has a fresh secret and cannot outlive the original login intent.
 CREATE OR REPLACE FUNCTION iam.begin_password_challenge(tenant text,subject_id text,challenge_id text,
     attempt_id text,attempt_sequence bigint,verified_step bigint,password_challenge_id text,
     lookup_digest text,verification_digest text,request_id text,request_digest text)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE factor iam.totp_authenticators%ROWTYPE; original iam.authentication_challenges%ROWTYPE;
-    effective_now timestamptz(6):=transaction_timestamp();
+    effective_now timestamptz(6):=transaction_timestamp(); password_expiry jsonb;
 BEGIN
     IF COALESCE(password_challenge_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' OR password_challenge_id=challenge_id
         OR COALESCE(lookup_digest,'') !~ '^sha256:[0-9a-f]{64}$' OR COALESCE(verification_digest,'') !~ '^sha256:[0-9a-f]{64}$'
@@ -2340,7 +2439,10 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='password challenge is invalid';
     END IF;
     factor:=iam.consume_totp_attempt(tenant,subject_id,NULL,challenge_id,'LOGIN',attempt_id,attempt_sequence,verified_step);
-    IF NOT (SELECT p.must_change_password FROM iam.principals p WHERE p.tenant_id=tenant AND p.id=subject_id) THEN
+    password_expiry:=iam.password_expiry_state(tenant,subject_id,clock_timestamp());
+    IF (password_expiry ? 'passwordResetReason' AND password_expiry->>'expiryMode'='ADMIN_RESET')
+        OR NOT ((SELECT p.must_change_password FROM iam.principals p WHERE p.tenant_id=tenant AND p.id=subject_id)
+            OR (password_expiry ? 'passwordResetReason' AND password_expiry->>'expiryMode'='CHANGE_PASSWORD')) THEN
         RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='password challenge is unavailable';
     END IF;
     SELECT * INTO original FROM iam.authentication_challenges c WHERE c.tenant_id=tenant AND c.id=challenge_id;
@@ -2362,14 +2464,16 @@ END $function$;
 -- password-change successor issued only after LOGIN has consumed an OTP.
 CREATE OR REPLACE FUNCTION iam.lock_initial_enrollment_challenge(tenant text,subject_id text,challenge_id text,expected_step text)
 RETURNS iam.authentication_challenges LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
-DECLARE state iam.user_mfa_states%ROWTYPE; challenge iam.authentication_challenges%ROWTYPE;
+DECLARE state iam.user_mfa_states%ROWTYPE; challenge iam.authentication_challenges%ROWTYPE; password_expiry jsonb;
 BEGIN
     IF expected_step IS NULL OR expected_step NOT IN ('PASSWORD_CHANGE','ENROLLMENT') THEN
         RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='enrollment stage is invalid';
     END IF;
     state:=iam.lock_mfa_user(tenant,subject_id);
+    password_expiry:=iam.password_expiry_state(tenant,subject_id,clock_timestamp());
     IF state.enrollment_state NOT IN ('NEVER_BOUND','REMOVED') OR state.factor_id IS NOT NULL
-        OR NOT iam.requires_initial_enrollment(tenant,subject_id) THEN
+        OR NOT iam.requires_initial_enrollment(tenant,subject_id)
+        OR (password_expiry ? 'passwordResetReason' AND password_expiry->>'expiryMode'='ADMIN_RESET') THEN
         RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='enrollment challenge is unavailable';
     END IF;
     SELECT * INTO challenge FROM iam.authentication_challenges c
@@ -2381,7 +2485,8 @@ BEGIN
         OR challenge.account_version IS DISTINCT FROM (SELECT a.resource_version FROM iam.accounts a WHERE a.id=tenant)
         OR challenge.security_settings_version IS DISTINCT FROM (SELECT a.security_settings_version FROM iam.accounts a WHERE a.id=tenant)
         OR challenge.principal_version IS DISTINCT FROM (SELECT p.resource_version FROM iam.principals p WHERE p.tenant_id=tenant AND p.id=subject_id)
-        OR (expected_step='PASSWORD_CHANGE') IS DISTINCT FROM (SELECT p.must_change_password FROM iam.principals p WHERE p.tenant_id=tenant AND p.id=subject_id) THEN
+        OR (expected_step='PASSWORD_CHANGE') IS DISTINCT FROM ((SELECT p.must_change_password FROM iam.principals p WHERE p.tenant_id=tenant AND p.id=subject_id)
+            OR password_expiry ? 'passwordResetReason') THEN
         RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='enrollment challenge is unavailable';
     END IF;
     RETURN challenge;
@@ -2413,13 +2518,34 @@ GRANT EXECUTE ON FUNCTION iam.inspect_initial_enrollment_challenge(text,text,tex
 CREATE OR REPLACE FUNCTION iam.lock_password_challenge(tenant text,subject_id text,challenge_id text)
 RETURNS iam.authentication_challenges LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE state iam.user_mfa_states%ROWTYPE; factor iam.totp_authenticators%ROWTYPE;
-    challenge iam.authentication_challenges%ROWTYPE; original iam.authentication_challenges%ROWTYPE;
+    challenge iam.authentication_challenges%ROWTYPE; original iam.authentication_challenges%ROWTYPE; password_expiry jsonb;
 BEGIN
     state:=iam.lock_mfa_user(tenant,subject_id);
     -- Read only immutable classification before choosing the exact lock path.
     IF EXISTS(SELECT 1 FROM iam.authentication_challenges c WHERE c.tenant_id=tenant AND c.user_id=subject_id
         AND c.id=challenge_id AND c.purpose='ENROLLMENT') THEN
         RETURN iam.lock_initial_enrollment_challenge(tenant,subject_id,challenge_id,'PASSWORD_CHANGE');
+    END IF;
+    password_expiry:=iam.password_expiry_state(tenant,subject_id,clock_timestamp());
+    IF state.enrollment_state IN ('NEVER_BOUND','REMOVED') AND state.factor_id IS NULL THEN
+        -- The absence of a factor is not an OTP proof. This exact branch was
+        -- issued after consuming a real password attempt, with immutable
+        -- current qualification pins and no upstream ceremony or Session.
+        IF iam.requires_initial_enrollment(tenant,subject_id) OR NOT (password_expiry ? 'passwordResetReason')
+            OR password_expiry->>'expiryMode'<>'CHANGE_PASSWORD' THEN
+            RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='password challenge is unavailable';
+        END IF;
+        SELECT * INTO challenge FROM iam.authentication_challenges c WHERE c.tenant_id=tenant AND c.user_id=subject_id AND c.id=challenge_id FOR UPDATE;
+        IF NOT FOUND OR challenge.purpose<>'LOGIN' OR challenge.next_step<>'PASSWORD_CHANGE' OR challenge.state<>'PENDING'
+            OR challenge.factor_id IS NOT NULL OR challenge.source_challenge_id IS NOT NULL OR challenge.verified_step IS NOT NULL
+            OR challenge.recovery_id IS NOT NULL OR challenge.mfa_revision<>state.revision OR challenge.expires_at<=clock_timestamp()
+            OR challenge.security_settings_version IS DISTINCT FROM (SELECT a.security_settings_version FROM iam.accounts a WHERE a.id=tenant)
+            OR challenge.credential_generation IS DISTINCT FROM (SELECT c.credential_version FROM iam.user_credentials c WHERE c.tenant_id=tenant AND c.principal_id=subject_id)
+            OR challenge.account_version IS DISTINCT FROM (SELECT a.resource_version FROM iam.accounts a WHERE a.id=tenant)
+            OR challenge.principal_version IS DISTINCT FROM (SELECT p.resource_version FROM iam.principals p WHERE p.tenant_id=tenant AND p.id=subject_id) THEN
+            RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='password challenge is unavailable';
+        END IF;
+        RETURN challenge;
     END IF;
     SELECT * INTO factor FROM iam.totp_authenticators f WHERE f.tenant_id=tenant AND f.user_id=subject_id AND f.id=state.factor_id FOR UPDATE;
     IF NOT FOUND OR state.enrollment_state<>'BOUND' OR factor.state<>'ACTIVE' OR factor.bound_revision<>state.revision THEN
@@ -2432,7 +2558,9 @@ BEGIN
         OR challenge.credential_generation IS DISTINCT FROM (SELECT c.credential_version FROM iam.user_credentials c WHERE c.tenant_id=tenant AND c.principal_id=subject_id)
         OR challenge.account_version IS DISTINCT FROM (SELECT a.resource_version FROM iam.accounts a WHERE a.id=tenant)
         OR challenge.principal_version IS DISTINCT FROM (SELECT p.resource_version FROM iam.principals p WHERE p.tenant_id=tenant AND p.id=subject_id)
-        OR NOT (SELECT p.must_change_password FROM iam.principals p WHERE p.tenant_id=tenant AND p.id=subject_id) THEN
+        OR (password_expiry ? 'passwordResetReason' AND password_expiry->>'expiryMode'='ADMIN_RESET')
+        OR NOT ((SELECT p.must_change_password FROM iam.principals p WHERE p.tenant_id=tenant AND p.id=subject_id)
+            OR (password_expiry ? 'passwordResetReason' AND password_expiry->>'expiryMode'='CHANGE_PASSWORD')) THEN
         RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='password challenge is unavailable';
     END IF;
     SELECT * INTO original FROM iam.authentication_challenges c WHERE c.tenant_id=tenant AND c.id=challenge.source_challenge_id;
@@ -2977,7 +3105,7 @@ ALTER TABLE iam.sessions ENABLE ALWAYS TRIGGER authentication_fact_is_immutable;
 
 CREATE OR REPLACE FUNCTION iam.guard_authentication_challenge()
 RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
-DECLARE current_version bigint;
+DECLARE current_version bigint; password_expiry jsonb;
 BEGIN
     IF TG_OP='INSERT' THEN
         SELECT a.security_settings_version INTO current_version FROM iam.accounts a
@@ -2989,22 +3117,36 @@ BEGIN
             RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='challenge qualification is unavailable';
         END IF;
         NEW.security_settings_version:=current_version;
-        IF NEW.purpose='ENROLLMENT' AND (NEW.state<>'PENDING' OR NOT iam.requires_initial_enrollment(NEW.tenant_id,NEW.user_id)
-            OR NEW.security_settings_version IS DISTINCT FROM (SELECT a.security_settings_version FROM iam.accounts a WHERE a.id=NEW.tenant_id)
-            OR NEW.account_version IS DISTINCT FROM (SELECT a.resource_version FROM iam.accounts a WHERE a.id=NEW.tenant_id)
-            OR NEW.principal_version IS DISTINCT FROM (SELECT p.resource_version FROM iam.principals p WHERE p.tenant_id=NEW.tenant_id AND p.id=NEW.user_id)
-            OR (NEW.next_step='PASSWORD_CHANGE') IS DISTINCT FROM (SELECT p.must_change_password FROM iam.principals p WHERE p.tenant_id=NEW.tenant_id AND p.id=NEW.user_id)
-            OR NOT EXISTS(SELECT 1 FROM iam.password_attempts a WHERE a.tenant_id=NEW.tenant_id AND a.principal_id=NEW.user_id
-                AND a.attempt_id=NEW.password_attempt_id AND a.attempt_sequence=NEW.password_attempt_sequence
-                AND a.state='SUCCEEDED' AND a.purpose='LOGIN' AND a.session_id IS NULL
-                AND a.credential_version=NEW.credential_generation AND a.account_version=NEW.account_version
-                AND a.principal_version=NEW.principal_version)) THEN
-            RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='initial enrollment has no exact password origin';
+        IF NEW.purpose='ENROLLMENT' OR (NEW.purpose='LOGIN' AND NEW.factor_id IS NULL) THEN
+            password_expiry:=iam.password_expiry_state(NEW.tenant_id,NEW.user_id,clock_timestamp());
+            IF NEW.state<>'PENDING' OR NEW.factor_id IS NOT NULL OR NEW.source_challenge_id IS NOT NULL OR NEW.verified_step IS NOT NULL
+                OR NEW.account_version IS DISTINCT FROM (SELECT a.resource_version FROM iam.accounts a WHERE a.id=NEW.tenant_id)
+                OR NEW.principal_version IS DISTINCT FROM (SELECT p.resource_version FROM iam.principals p WHERE p.tenant_id=NEW.tenant_id AND p.id=NEW.user_id)
+                OR NOT EXISTS(SELECT 1 FROM iam.user_mfa_states m WHERE m.tenant_id=NEW.tenant_id AND m.user_id=NEW.user_id
+                    AND m.enrollment_state IN ('NEVER_BOUND','REMOVED') AND m.factor_id IS NULL AND m.revision=NEW.mfa_revision)
+                OR (password_expiry ? 'passwordResetReason' AND password_expiry->>'expiryMode'='ADMIN_RESET')
+                OR NOT EXISTS(SELECT 1 FROM iam.password_attempts a WHERE a.tenant_id=NEW.tenant_id AND a.principal_id=NEW.user_id
+                    AND a.attempt_id=NEW.password_attempt_id AND a.attempt_sequence=NEW.password_attempt_sequence
+                    AND a.state='SUCCEEDED' AND a.purpose='LOGIN' AND a.session_id IS NULL
+                    AND a.credential_version=NEW.credential_generation AND a.account_version=NEW.account_version
+                    AND a.principal_version=NEW.principal_version) THEN
+                RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='challenge has no exact password origin';
+            END IF;
+            IF NEW.purpose='ENROLLMENT' THEN
+                IF NOT iam.requires_initial_enrollment(NEW.tenant_id,NEW.user_id)
+                    OR (NEW.next_step='PASSWORD_CHANGE') IS DISTINCT FROM ((SELECT p.must_change_password FROM iam.principals p
+                        WHERE p.tenant_id=NEW.tenant_id AND p.id=NEW.user_id) OR password_expiry ? 'passwordResetReason') THEN
+                    RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='initial enrollment qualification differs';
+                END IF;
+            ELSIF NEW.next_step<>'PASSWORD_CHANGE' OR iam.requires_initial_enrollment(NEW.tenant_id,NEW.user_id)
+                OR NOT (password_expiry ? 'passwordResetReason') OR password_expiry->>'expiryMode'<>'CHANGE_PASSWORD' THEN
+                RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='password challenge qualification differs';
+            END IF;
         END IF;
         RETURN NEW;
     END IF;
-    IF OLD.state<>'PENDING' OR (to_jsonb(NEW)-ARRAY['state','attempts','completed_at','session_id','issuance_event_id','password_challenge_id','verified_step','password_changed_event_id','password_change_request_id','recovery_id','enrollment_event_id'])
-        IS DISTINCT FROM (to_jsonb(OLD)-ARRAY['state','attempts','completed_at','session_id','issuance_event_id','password_challenge_id','verified_step','password_changed_event_id','password_change_request_id','recovery_id','enrollment_event_id'])
+    IF OLD.state<>'PENDING' OR (to_jsonb(NEW)-ARRAY['state','attempts','completed_at','session_id','issuance_event_id','password_challenge_id','verified_step','password_changed_event_id','password_change_request_id','recovery_id','enrollment_event_id','password_reset_required_event_id'])
+        IS DISTINCT FROM (to_jsonb(OLD)-ARRAY['state','attempts','completed_at','session_id','issuance_event_id','password_challenge_id','verified_step','password_changed_event_id','password_change_request_id','recovery_id','enrollment_event_id','password_reset_required_event_id'])
         OR (OLD.next_step='PASSWORD_CHANGE' AND NEW.verified_step IS DISTINCT FROM OLD.verified_step)
         OR (OLD.next_step='ENROLLMENT' AND NEW.recovery_id IS DISTINCT FROM OLD.recovery_id) THEN
         RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='challenge identity and completion are immutable';
@@ -3053,7 +3195,28 @@ BEGIN
     ELSE
         SELECT * INTO challenge FROM iam.authentication_challenges c WHERE c.tenant_id=NEW.tenant_id AND c.id=NEW.id;
         IF NOT FOUND THEN RETURN NULL; END IF;
-        IF challenge.purpose='ENROLLMENT' THEN
+        IF challenge.password_reset_required_event_id IS NOT NULL THEN
+            SELECT o.event_document INTO event FROM iam.audit_outbox o
+                WHERE o.tenant_id=challenge.tenant_id AND o.event_id=challenge.password_reset_required_event_id;
+            IF NOT FOUND OR event->>'action' IS DISTINCT FROM 'iam.user.password-reset-required'
+                OR event->>'tenantId' IS DISTINCT FROM challenge.tenant_id
+                OR event->'actor' IS DISTINCT FROM jsonb_build_object('type','USER','id',challenge.user_id)
+                OR event->'target' IS DISTINCT FROM jsonb_build_object('kind','USER','id',challenge.user_id)
+                OR event->>'result' IS DISTINCT FROM 'DENIED'
+                OR (event->>'occurredAt')::timestamptz IS DISTINCT FROM challenge.completed_at
+                OR event ?| ARRAY['installationId','iamDecisionId','operationId'] THEN
+                RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='password reset instruction has no exact denial fact';
+            END IF;
+            SELECT * INTO factor FROM iam.totp_authenticators f
+                WHERE f.tenant_id=challenge.tenant_id AND f.user_id=challenge.user_id AND f.id=challenge.factor_id;
+            IF NOT FOUND OR factor.enrollment_outcome IS DISTINCT FROM 'CONFIRMED'
+                OR factor.bound_revision IS DISTINCT FROM challenge.mfa_revision OR factor.last_consumed_step<challenge.verified_step THEN
+                RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='password reset instruction has no original confirmed factor';
+            END IF;
+            -- This is immutable history, not a new current-login decision.
+            RETURN NULL;
+        END IF;
+        IF challenge.purpose='ENROLLMENT' OR (challenge.purpose='LOGIN' AND challenge.factor_id IS NULL) THEN
             IF challenge.state='CONSUMED' THEN
                 IF challenge.next_step='ENROLLMENT' THEN
                     SELECT f.* INTO factor FROM iam.totp_authenticators f
@@ -3327,10 +3490,10 @@ BEGIN
         OR to_regprocedure('iam.start_step_up(text,text,text,text,text,text,bigint,bigint,boolean)') IS NOT NULL THEN RETURN false; END IF;
     FOR expected IN SELECT * FROM (VALUES
         ('user_mfa_states','tenant_id,user_id,revision,enrollment_state,factor_id,recovery_id,removal_id','text,text,bigint,text,text,text,text','factor_id,recovery_id,removal_id','tenant_id,user_id,factor_id,recovery_id,removal_id',true),
-        ('authentication_challenges','tenant_id,id,user_id,lookup_digest,verification_digest,credential_generation,password_attempt_id,password_attempt_sequence,account_version,principal_version,mfa_revision,factor_id,request_id,request_digest,next_step,source_challenge_id,password_challenge_id,verified_step,password_changed_event_id,password_change_request_id,state,created_at,expires_at,attempts,completed_at,session_id,issuance_event_id,recovery_id,purpose,security_settings_version,enrollment_event_id',
-            'text,text,text,text,text,bigint,text,bigint,bigint,bigint,bigint,text,text,text,text,text,text,bigint,text,text,text,timestamptz,timestamptz,integer,timestamptz,text,text,text,text,bigint,text',
-            'factor_id,source_challenge_id,password_challenge_id,verified_step,password_changed_event_id,password_change_request_id,completed_at,session_id,issuance_event_id,recovery_id,security_settings_version,enrollment_event_id',
-            'tenant_id,id,user_id,password_attempt_id,factor_id,request_id,source_challenge_id,password_challenge_id,password_changed_event_id,password_change_request_id,session_id,issuance_event_id,recovery_id,enrollment_event_id',true),
+        ('authentication_challenges','tenant_id,id,user_id,lookup_digest,verification_digest,credential_generation,password_attempt_id,password_attempt_sequence,account_version,principal_version,mfa_revision,factor_id,request_id,request_digest,next_step,source_challenge_id,password_challenge_id,verified_step,password_changed_event_id,password_change_request_id,state,created_at,expires_at,attempts,completed_at,session_id,issuance_event_id,recovery_id,purpose,security_settings_version,enrollment_event_id,password_reset_required_event_id',
+            'text,text,text,text,text,bigint,text,bigint,bigint,bigint,bigint,text,text,text,text,text,text,bigint,text,text,text,timestamptz,timestamptz,integer,timestamptz,text,text,text,text,bigint,text,text',
+            'factor_id,source_challenge_id,password_challenge_id,verified_step,password_changed_event_id,password_change_request_id,completed_at,session_id,issuance_event_id,recovery_id,security_settings_version,enrollment_event_id,password_reset_required_event_id',
+            'tenant_id,id,user_id,password_attempt_id,factor_id,request_id,source_challenge_id,password_challenge_id,password_changed_event_id,password_change_request_id,session_id,issuance_event_id,recovery_id,enrollment_event_id,password_reset_required_event_id',true),
         ('totp_attempts','tenant_id,user_id,attempt_id,sequence,purpose,reference_id,source_session_id,credential_generation,mfa_revision,state,window_started_at,used_attempts,reserved_at,expires_at,completed_at',
             'text,text,text,bigint,text,text,text,bigint,bigint,text,timestamptz,integer,timestamptz,timestamptz,timestamptz',
             'source_session_id,completed_at','tenant_id,user_id,attempt_id,reference_id,source_session_id',true),
@@ -3412,6 +3575,8 @@ BEGIN
         ('authentication_challenges','p','tenant_id,id',NULL,NULL,false),
         ('authentication_challenges','f','tenant_id,user_id','iam.principals','tenant_id,id',false),
         ('authentication_challenges','f','tenant_id,enrollment_event_id','iam.audit_outbox','tenant_id,event_id',true),
+        ('authentication_challenges','f','tenant_id,password_reset_required_event_id','iam.audit_outbox','tenant_id,event_id',true),
+        ('authentication_challenges','u','tenant_id,password_reset_required_event_id',NULL,NULL,false),
         ('authentication_challenges','u','lookup_digest',NULL,NULL,false),
         ('authentication_challenges','u','tenant_id,session_id',NULL,NULL,false),
         ('authentication_challenges','u','tenant_id,source_challenge_id',NULL,NULL,false),
@@ -3506,7 +3671,7 @@ BEGIN
         ('mfa_recovery_codes','mfa_recovery_codes_verification_digest_check,recovery_consumption_shape'),
         ('totp_authenticators','totp_enrollment_lineage,totp_removal_shape'),
         ('sessions','session_authentication_fact,session_security_settings_version'),
-        ('authentication_challenges','challenge_security_settings_version')
+        ('authentication_challenges','challenge_security_settings_version,challenge_password_reset_terminal')
     ) e(relation_name,names) LOOP
         IF EXISTS(SELECT 1 FROM unnest(string_to_array(expected.names,',')) n(name)
             WHERE NOT EXISTS(SELECT 1 FROM pg_constraint c WHERE c.conrelid=to_regclass('iam.'||expected.relation_name)
@@ -3628,6 +3793,7 @@ BEGIN
         ('iam.confirm_totp_enrollment(text,text,text,text,text,text,bigint,bigint,text,jsonb,text,jsonb)',true,'jsonb','v','tenant,subject_id,caller_id,reference_id,purpose,attempt_id,attempt_sequence,verified_step,batch_id,recovery_codes,notification_id,audit_event'),
         ('iam.complete_login_challenge(text,text,text,text,bigint,bigint,text,text,text,integer,jsonb)',true,'TABLE(issued_at timestamp with time zone, expires_at timestamp with time zone)','v','tenant,subject_id,challenge_id,attempt_id,attempt_sequence,verified_step,session_id,lookup_digest,verification_digest,lifetime_seconds,audit_event,issued_at,expires_at'),
         ('iam.begin_password_challenge(text,text,text,text,bigint,bigint,text,text,text,text,text)',true,'jsonb','v','tenant,subject_id,challenge_id,attempt_id,attempt_sequence,verified_step,password_challenge_id,lookup_digest,verification_digest,request_id,request_digest'),
+        ('iam.require_password_reset(text,text,text,bigint,text,text,bigint,bigint,jsonb)',true,'text','v','tenant,subject_id,password_attempt_id,password_sequence,challenge_id,totp_attempt_id,totp_sequence,verified_step,audit_event'),
         ('iam.read_password_requirements(text,text,text)',true,'jsonb','v','tenant,subject_id,caller_id'),
         ('iam.read_challenge_password_requirements(text,text,text)',true,'jsonb','v','tenant,subject_id,challenge_id'),
         ('iam.read_password_challenge(text,text,text)',true,'TABLE(password_hash text, credential_generation bigint, password_history text[], history_digest text, password_settings jsonb, settings_version bigint)','v','tenant,subject_id,challenge_id,password_hash,credential_generation,password_history,history_digest,password_settings,settings_version'),

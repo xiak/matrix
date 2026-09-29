@@ -1,6 +1,6 @@
 # FEAT-IAM-009：登录保护与安全治理
 
-- 状态：S1本人会话管理、S3a共享密码尝试及S2分项已有各自固定实现和真实证据，最近独立通过的累计后端为3178b649（IAM46/Audit27，底线实现ba17e702）；Verification36391053858已核对精确SHA、completed/success，12项含恢复窗口及最终进程门禁均成功。原主动解绑/重绑18bdcd9a的独立CI failure不回填；后继修复与本地证据见所属段落。S3账号可配置密码规则/历史/到期、Session idle、S4、资格变化的旧备份恢复及009完整发布仍未完成。以下设计不等于可用API；LIVE UI、签名安装及通知/恢复组合由对应owner另验，不继承局部源码状态。
+- 状态：S1本人会话管理、S3a共享密码尝试、S2分项及S3b密码规则/历史与管理员重置完成查询已有固定实现和真实证据；最近独立通过的累计后端为047f6694（IAM50/Audit27），Verification36470362108已核对精确SHA、completed/success，13项含恢复窗口及最终进程汇总均成功。旧失败不回填，修复与证据见所属段落及011。S3c到期执行、Session idle、S4、资格变化的旧备份恢复及009完整发布仍未完成。以下设计不等于可用API；LIVE UI、签名安装及通知/恢复组合由对应owner另验，不继承局部源码状态。
 - 依赖：003、005、007。
 - Owner：IAM 身份/凭据/会话治理，Audit evidence。
 
@@ -1101,7 +1101,7 @@ S3b正在实施，尚未完整验收。最小可验收结果是：管理员按�
 
 管理员reset沿原入口执行当前Account规则/历史，公开请求不变。准备事务以真实当前`iam.user.reset-password`决定取得目标同Account、版本相同、非本人/原root/未撤销安装附件的USER材料；与最终写入共用原Account→USER锁序。事务提交后才在有界槽内比较/hash，最终重新认证原Session并执行当前PDP，锁内同时比较账号设置版本、目标版本、credential generation、current hash与history head；准备的历史允许决定不充当最终写许可。状态管理不取得密码材料，也不能附带密码expected值。旧8/11参数`change_user`删除，仅API可调用封闭六列`read_password_reset`与12参数最终写入；内部材料沿原类型复用且不可JSON/普通格式化输出，不新增公开历史查询。受保护身份、停用、forced及原会话撤销语义不变。
 
-在线reset写入仍为版本CAS，不提供`EQUAL_REPLAY`；相同原版本在首次成功后冲突，不证明原请求成功。候选`21b3de3a`已实现下节的原管理员完成查询和实际丢失回包门禁，但独立CI尚未通过，不能提前作为LIVE或发布验收。UI的网络/协议UNKNOWN保留原Account/actor/target/requestId/expectedVersion，只核对该原意图，不自动生成新请求或取新版本重置；404、409、当前版本/forced-change变化均不代表原成功。临时秘密只在当前视图内存持有，离开或身份切换清除；查询不需要原密码，也不恢复已失效身份的权限。主动获取新版本再次重置是新的明确操作，必须告知可能覆盖已生效临时密码。完成查询的唯一契约及证据归下节，不复用离线能力或增加通用查询许可。
+在线reset写入仍为版本CAS，不提供`EQUAL_REPLAY`；相同原版本在首次成功后冲突，不证明原请求成功。固定`047f6694`已包含下节的原管理员完成查询及实际丢失回包门禁，并通过精确独立CI；LIVE UI与发布组合仍需各自验收。UI的网络/协议UNKNOWN保留原Account/actor/target/requestId/expectedVersion，只核对该原意图，不自动生成新请求或取新版本重置；404、409、当前版本/forced-change变化均不代表原成功。临时秘密只在当前视图内存持有，离开或身份切换清除；查询不需要原密码，也不恢复已失效身份的权限。主动获取新版本再次重置是新的明确操作，必须告知可能覆盖已生效临时密码。完成查询的唯一契约及证据归下节，不复用离线能力或增加通用查询许可。
 
 安装本地凭据恢复的历史执行片已实现，仍沿原封存scope/expected/commandId/inputCommitment与专用登录：四参数私有`prepare_local_credential_recovery`复核精确历史完成；未完成时按原Account→USER→Policy→Attachment→credential顺序锁定同一当前资格，只返回原primary的有界材料。昂贵比较/hash在事务外的原工作槽执行；最终八参数`recover_local_credentials`复用同一准备/锁序，并比对原current hash/history digest，generation仍由原expected绑定，删除旧六参数旁路。两阶段之间若同一意图已经完成，仍只返回原receipt，不因当前密码已更换/附件撤销而重做、拒绝准确历史或重新签发expected。新请求及变体仍须当前资格，不启用身份/Account、不授附件、不变更MFA；公开FILE/inspection/result及旧完成字节不变。准备与最终入口仅专用本地角色可调用，历史材料不进入inspection/stdout/错误/Audit。本地真实PG18已验证新输入复用拒绝、准备后改密/撤权、精确并发完成、末端outbox失败和受限SQL；独立进程、唯一前驱的当前增量已本地通过，独立CI仍待收口，不据此宣称完整S3b或签名发布已验收。
 
@@ -1183,7 +1183,7 @@ S3b正在实施，尚未完整验收。最小可验收结果是：管理员按�
 
 最终全仓默认race-p2（含architecture）、vet-p2、模块校验、122个API文件生成集合/哈希一致及Linux amd64构建通过；默认外部DSN缺失的SKIP不计真实运行证据。核对零其他客户端后正常停止并移除本轮唯一专属PG、两个合成数据/模块缓存卷和空网络，未操作其他任务或远端服务。容量CI冷缓存修正的失败边界与复验证据归011，不用本地通过覆盖独立CI。
 
-固定`21b3de3a`的独立CI已出现storage失败，不能把上述本地证据提升为累计候选验收。原HTTP夹具的超时复现、分页边界分离及真实复验归[011当前CI任务分配](FEAT-IAM-011-acceptance.md#当前ci任务分配)；生产重置契约和本片源码schema未因此改变。
+累计固定`047f669490278fee978e0e11208a241ac7eac6df`的[Verification36470362108](https://github.com/xiak/matrix/actions/runs/36470362108)于2026-09-29经GitHub API核实精确SHA及全部13项job（含汇总）completed/success；该IAM50/Audit27基线不包含下述S3c增量。原`21b3de3a`的storage失败不回填；HTTP夹具的超时复现、分页边界分离及真实复验归[011当前CI任务分配](FEAT-IAM-011-acceptance.md#当前ci任务分配)。生产重置契约和本片源码schema未因此改变，消费者仍需验证自己的运行组合。
 
 查询只追加现有授权决定/相关审计，不再次产生`iam.user.password-reset`成功事实；Audit暂不可投递不应抹除IAM已提交完成。目标随后自行改密、被再次reset、停用或删除时，原完成仍是历史记录，不能被当前状态替换、撤销或重新执行。受支持恢复后的历史缺失保持UNKNOWN；本关系不声称抵抗整机回滚、恢复密码资格或授予跨profile恢复许可。原公开Audit/canonical、ServiceIdentity/lookup_service、claim7和离线FILE均不改变。
 
@@ -1239,11 +1239,11 @@ S3b正在实施，尚未完整验收。最小可验收结果是：管理员按�
 
 #### S3c：密码到期执行设计
 
-本节为后继切片的详细设计，**到期执行、配置字段及真实运行验收未完成**。当前源码IAM50/Audit27已实现原reset完成查询；S3c仅先实现下述不含凭据的终态载体、严格codec与OpenAPI分支，登录用例尚不发行该结果，也不接受到期配置。本准备不改变SQL、源码schema、发布profile或000015的无效果检查。完整执行的后继函数形状及Audit事实另行冻结；不能将纯契约当作到期已经生效。最小企业目标不仅是显示到期日期，而是同一账号两个真实IAM副本在期限、锁等待、配置改变及恢复后作出一致的登录/业务拒绝，并提供规定的后续路径。
+本节为S3c执行切片，**完整到期验收未完成**。已提交的IAM50/Audit27基线及纯契约只提供原reset完成查询和下述不含凭据的终态格式，不发行该终态。本分支候选增量增加显式八字段密码配置、历史六字段的只读边界、真实密码年龄计算及两个Session发行入口的截止截断；无因子和已有因子的受限改密、管理员重置终态及其原子拒绝事实均已接通。真实旧程序产生的UNKNOWN年龄已按两种模式运行，证据范围见下文；设置/重置竞争及末端故障已实测，自然到期与最终独立CI仍待完成，不能将该候选当作可发布版本。源码形状定为IAM51/Audit28，发布profile及000015无效果检查没有变更。最小企业目标不仅是显示到期日期，而是同一账号两个真实IAM副本在期限、锁等待、配置改变及恢复后作出一致的登录/业务拒绝，并提供规定的后续路径。
 
 在原`AccountSecuritySettings.password`中增加两个明确字段，不另建密码Policy、年龄服务或可替换的授权权威：
 
-| 拟定字段 | 当前配置及新意图要求 | 默认及边界 |
+| 字段 | 当前配置及新意图要求 | 默认及边界 |
 | --- | --- | --- |
 | `maxAgeDays` | 整数，0或1–365；一个日为86400秒的实际经过时长，不采用本地日历日/DST计算 | 0，关闭周期到期；不是“不校验密码” |
 | `expiryMode` | 封闭枚举`CHANGE_PASSWORD`或`ADMIN_RESET`，即使maxAgeDays=0也必须明确提交 | `CHANGE_PASSWORD`；只有开启到期时执行 |
@@ -1263,19 +1263,45 @@ S3b正在实施，尚未完整验收。最小可验收结果是：管理员按�
 | 当前要求首次绑定、但尚未有因子 | 原ENROLLMENT路径先完成PASSWORD_CHANGE；改密后重新登录并继续真实首次绑定 | 先由有当前权限的管理员重置密码，再走原首次绑定，不顺便解除MFA要求 |
 | 因子恢复待完成或来源不明 | 保留原RECOVERY_REQUIRED/失败关闭路径，不能只靠旧密码取得改密或登录权 | 同左；管理员重置密码不等于恢复因子 |
 
-无因子的LOGIN/PASSWORD_CHANGE是当前代码尚不支持的分支，必须原子绑定实际已消费LOGIN密码尝试、当前凭据代际、MFA历史和设置版本；不得伪造TOTP、已消费的上游TOTP挑战或正常Session。已绑定分支保留真实两阶段来源。完成挑战改密沿现有接口返回重新登录，消费原挑战并结束其他旧资格；新密码与新MFA必须通过正常流程，不能将受限挑战升级成bearer。普通未到期的日常改密仍保留当前会话选项；到期边界之外不得复用旧Session执行改密。
+无因子的LOGIN/PASSWORD_CHANGE原子绑定实际已消费LOGIN密码尝试、当前凭据代际、MFA历史和设置版本；factor/source challenge/verified step均必须为空，不能伪造TOTP、已消费的上游TOTP挑战或正常Session。发行时的原始密码尝试、当前NEVER_BOUND/合法REMOVED和准确期限由原插入guard验证；后续继续由Account→USER→credential锁内的真实状态、修订及期限资格约束，密码尝试预算的后来使用不改写已封存来源。已绑定分支保留真实两阶段来源，必须先消费真实OTP，原LOGIN/TOTP与新PASSWORD_CHANGE双向关联及其原因子校验不放宽。完成挑战改密沿现有接口返回重新登录，消费原挑战并结束其他旧资格；新密码与新MFA必须通过正常流程，不能将受限挑战升级成bearer。普通未到期的日常改密仍保留当前会话选项；到期边界之外不得复用旧Session执行改密。
 
 复用原`LoginResponse`增加封闭终态`ADMIN_RESET_REQUIRED`，纯载体恰好包含`outcome`和`passwordResetReason=EXPIRED|AGE_UNKNOWN`两个字段，其他结果拒绝reason。即使值为null、false或空串也不能携带Session、bearer、challenge、challengeCredential、mustChangePassword、身份或恢复许可；仍只能通过原显式编码器输出。Login或TOTP验证未来只能在本次实际密码证明及所需已绑定因子证明后返回；该终态没有可点击跳过权限的恢复链接。页面只能将原账号输入显示为待登录请求，不能声称已经登录；AGE_UNKNOWN文案说明无法证实年龄而按账号规则要求管理员重置，不能写成已过期。管理员执行真正重置后，用户仍需以新密码重新登录并执行原强制改密和MFA，不由该终态续发会话。两副本重复消费原尝试/OTP不能再产生一份成功结果。相关认证尝试的已用额度、真实OTP消费及终态必须提交后再响应，不能把预期拒绝当作数据库异常而回滚额度；UNKNOWN不自动新发意图。UX已确认互斥终态应只提供重新登录/联系管理员指引，不显示新密码输入或自动重试；浏览器仍须在固定运行实现后验收。
 
-纯契约准备的2026-09-29本地证据：原LoginResult schema/codec测试先拒绝两种新合法终态，实现后分支矩阵race通过，覆盖两种理由、缺项/null/未知理由、凭据或身份混入及其他分支附reason拒绝。普通Go载体校验、失败不输出/不部分改写、重复/变体键、额外许可及字节上限均通过；原文件内的LoginResponse round-trip fuzz以2 worker运行20秒，完成524078次，无失败。API/IAM默认race、architecture、对应vet、全仓默认测试及Linux amd64构建通过，122个API文件生成集合及哈希稳定；最终API race45.354s、integration默认3.453s、architecture4.901s再通过。缺外部环境的SKIP不计真库证据。这些只证明格式、分支隔离及现有消费者回归，不证明真实密码/MFA核验、尝试消费、到期或任何恢复权限。
+**当前本地证据（2026-09-29）。** S3c候选尚无独立CI。真库使用本任务独立PG18.4（1CPU/768MiB/PIDs192/24连接），Go1.26.5容器（2CPU/1536MiB/PIDs256、GOMAXPROCS2/GOMEMLIMIT512MiB），重型race-p1串行；不降低密码成本、OTP窗口或原三分钟前驱期限。
 
-**已登录请求和派生资格。** 正常LOGIN_SESSION在最终发行事务中使用`min(原会话绝对截止, 当时有效的密码截止)`作为其已封存expiresAt，不能由调用者提交最终期限；对将到期但不足60秒的真实剩余时间不得向上补齐。每个发行入口，包括PASSWORD_TOTP完成，均执行相同权威计算。当前`issue_session`与`complete_login_challenge`的适配器严格要求返回截止等于申请截止，完整实现必须同片替换成“原发行身份/时间一致、实际截止为有效且不超原上限的权威值”，不能仅缩短SQL结果却使合法发行全部503，也不能接受任意更长结果。锁后时间已经越过真实密码截止时不得发行Session；申请TTL的60秒下限不能用于给真实剩余期限续命。RoleSession保持不晚于来源Session的截止并在每次当前授权时重验来源，不能承担角色延长密码资格。已有设置版本及认证事实保持不可变：启用、收紧、放宽或关闭到期设置沿原版本更新结束旧Session/Challenge资格，不能给旧行回填当前版本；新登录才使用新规则。已到期Session不因后续真实改密、延长规则、关闭规则、时区变化或重启恢复；日常改密保留的当前Session也不延长其原已封存绝对截止。
+| 现有门禁owner | 已实际证明的边界 | 结果 |
+| --- | --- | --- |
+| API codec/schema及用例 | 两种终态理由、无凭据/身份混入、非法/null/重复字段拒绝；历史六字段逐字保留，当前八字段必需；错误密码及最终事务失败不输出终态 | race通过；LoginResponse 2-worker/20s fuzz 524078次、密码设置2-worker/10s fuzz 15709次，无失败 |
+| 原安全设置真库 | 真实step-up开启一天期限；PASSWORD与PASSWORD_TOTP返回和存储截止均精确截断于真实password_changed_at+86400s；保留当前Session的改密不延长原较早截止；规则、历史、强制首次绑定、设置竞争与平台保护 | 完整包118.700s通过；SMTP分支SKIP，不计邮件验收 |
+| 唯一前驱进程门禁 | 固定`42035189eb823e388509f54525889c1a18c6b79d`的实际IAM45创建普通USER、真实改密/联系验证/因子，当前IAM51保留NULL年龄；两种处置、精确原历史、迁移重放与重启 | 最终带独立因子资格的完整运行171.53s（包172.614s）通过，原三分钟期限不变 |
+| 原readiness攻击门禁 | 专用函数ACL、SECURITY DEFINER、STRICT、缺失及关联FK/唯一性/终态约束八类真实破坏均关闭 | 8.47s（包9.534s）通过；密码配置/历史及五类函数形状的所属合同门禁亦已通过 |
+| 既有独立进程组合 | 当前源码IAM51/Audit28/PaaS2的实际readiness、受限运行登录、两个IAM实例、PaaS资源、原身份变更及历史Audit投递/重放；安装发布profile仍按其owner效果前拒绝 | `TestIndependentIAMAuditAndPaaSProcesses` 152.62s（包153.679s）通过；该场景尚未产生新增到期终态事实 |
+| Audit原存储/HTTP | IAM51/Audit28；真实append/query新DENIED事实，错误actor/target/Decision/结果拒绝，受限登录、RLS及旧链保持 | 双authority 4.80s（包5.853s）、HTTP 1.10s（包2.141s）通过 |
+| 默认回归与生成 | API/IAM/Audit race、architecture、对应vet及双API生成一致；末次新增测试的原authorityprocess/architecture race和vet再通过 | 最新测试包4.903s、architecture10.349s；缺外部环境的SKIP不计运行证据 |
+
+前驱进程的ADMIN_RESET正向必须先提交实际密码证明，已有因子的USER还必须消费当前TOTP；响应恰好两字段，密码/principal不变、不发行Session或改密后继。错误密码、重复挑战、同码新挑战均拒绝且不增加该终态事实；已用尝试额度不清零。另一个实际授权、密码年龄已知的操作者通过真实step-up切换CHANGE_PASSWORD；无因子USER取得密码来源的受限LOGIN/PASSWORD_CHANGE，已有因子USER先通过TOTP取得原两阶段后继。两者真实改密后重新认证，原挑战/Session拒绝，未移除因子。模式/密码改变及重启后，原DENIED事实的producer证明仍核对准确digest，伪造requestId拒绝。
+
+末端故障只在本任务数据库的原outbox触发器注入，非事务sequence证明三个实际请求均已到达最终写入：无因子终态、已有因子终态、受限改密分别返回503；密码/hash/generation、principal、MFA水位、挑战完成、Session及事实无部分变更。密码与OTP的独立RESERVED尝试及已用额度保留；OTP挑战准确保留一次尝试，不因业务事务回滚而退款。受限改密失败后，原未消费挑战可完成一次真实改密，不绕过重新认证。
+
+设置竞争用实际outbox屏障暂停已持有Account锁的设置事务；通过pg_locks和pg_blocking_pids确认持有旧版本挑战及新鲜未用OTP的请求确实等待该事务。设置提交后，旧请求401，未消费OTP或共享预算，也不新增终态事实；新规则下后续真实认证仍成功。该证据不替代其他改密/reset/恢复及平台附件的双向竞争。
+
+同一门禁另外由旧程序创建两名独立普通USER及一名显式获准确USER权限的操作者。当前进程的两个并发请求在真实Account/USER锁上分别证明：管理员重置先提交时，旧受限挑战改密401；受限挑战改密先提交时，持旧版本的重置409。每组只有赢家的凭据代际+1及对应成功事实；原重置完成关系仅在重置赢家存在，改密赢家只消费原挑战。真实新密码重新登录并核对强制改密要求，重启后旧挑战仍拒绝且身份、Session、MFA及事实不变。两种到期模式使用各自旧程序真实绑定的因子，避免一个测试身份连续消耗互不相关的自然OTP窗口。最初共享因子的运行超过原三分钟而失败，不作为验收证据；没有通过正向DML回填年龄或刷新尝试预算。
+
+迁移对旧挑战只比较原字段，并另验新增nullable关联始终NULL、无补造终态；末端DDL失败全回滚。判断旧Session是否有效使用真实bearer拒绝和当前版本/代际资格，而不是要求删除所有ACTIVE历史行。没有回填密码时间、修改宿主时钟、清空预算或用正向资格DML制造通过。
+
+尚缺真实已知年龄跨过到期时刻、平台附件/恢复等剩余代表性竞争、新终态专属跨进程投递/独立CI、LIVE浏览器和签名消费者。期限计算函数在截止前/等于/之后的只读观察不是实际经过一天；UNKNOWN流程不冒充自然到期或跨发布profile许可。各轮自有资源均已按精确ID/标签清理；本次确认零其他客户端后正常停止PG，删除两个已结束runner、PG及临时合成数据、无引用缓存卷和空网络，未操作其他任务或远端。
+
+**已登录请求和派生资格。** 正常LOGIN_SESSION在最终发行事务中使用`min(原会话绝对截止, 当时有效的密码截止)`作为其已封存expiresAt，不能由调用者提交最终期限；对将到期但不足60秒的真实剩余时间不得向上补齐。每个发行入口，包括PASSWORD_TOTP完成，均执行相同权威计算。本增量已将`issue_session`与`complete_login_challenge`适配器同片替换成“原发行身份/时间一致、实际截止为有效且不超原上限的权威值”，不是只缩短SQL结果而使合法发行全部503，也不接受任意更长结果。锁后时间已经越过真实密码截止时不得发行Session；申请TTL的60秒下限不能用于给真实剩余期限续命。RoleSession保持不晚于来源Session的截止并在每次当前授权时重验来源，不能承担角色延长密码资格。已有设置版本及认证事实保持不可变：启用、收紧、放宽或关闭到期设置沿原版本更新结束旧Session/Challenge资格，不能给旧行回填当前版本；新登录才使用新规则。已到期Session不因后续真实改密、延长规则、关闭规则、时区变化或重启恢复；日常改密保留的当前Session也不延长其原已封存绝对截止。
 
 到期无需新增全局扫描/定时撤权器才能生效；期限及原设置版本检查负责下一次受保护请求失败关闭。长连接/已接受后台Operation仍按所属产品已声明的检查点处理，不宣称此片能实时中止它们。管理员重置仅使用既有授权入口和受保护身份限制，不因为返回终态向本人、普通管理员或安装服务增加恢复权。
 
 **事务、审计和恢复。** 设置StepUp、当前配置和新请求必须承诺两个新字段；精确历史完成保持原字节，缺新字段的旧未完成证明不能按默认值变成当前写许可。初始化当前默认不跳设置版本、不补造USER事实；全部新密码设置进入唯一认证资格投影。认证恢复的同hash generation fence继续保留原年龄，已完成恢复/设置receipt只读重放不重新变年轻。旧备份的状态与当前资格无法对应时保持关闭，不将本片视作跨release/profile恢复准入。
 
-真实改密及配置变化沿原封闭事实与事务outbox。管理员重置终态的可审计拒绝拟使用单一tenant事实`iam.user.password-reset-required`（USER actor/USER target、DENIED），只由消费本次真实密码及所需因子证明的封闭IAM入口写入；不伪造业务Decision或SYSTEM身份，不把每次匿名猜测都写成该USER事实。它证明本次当前规则要求重置，不把UNKNOWN年龄记录为已证明密码过期。其原子来源、一次消费、IAM-source历史proof及Audit action分类须同片冻结和验证后开放，不先放宽通用producer admission或改写旧canonical。仅观察到时钟过期不自动改凭据、生成成功改密事实或发送重复通知；任何新增通知种类仍必须通过012真实运输验收，不能借outbox入队宣称已通知。
+真实改密及配置变化沿原封闭事实与事务outbox。管理员重置终态的可审计拒绝使用单一tenant事实`iam.user.password-reset-required`（USER actor/USER target必须同一主体、DENIED），只由消费本次真实密码及所需因子证明的封闭IAM入口写入；不伪造业务Decision或SYSTEM身份，不把每次匿名猜测都写成该USER事实。它证明本次当前规则要求重置，不把UNKNOWN年龄记录为已证明密码过期；不含Decision、Operation、Key/Role来源、安装scope或任意附加属性，不新增通知类别或改写旧canonical。
+
+原事务适配器的`RequirePasswordReset`只接受真实LOGIN密码尝试或原LOGIN/TOTP尝试二选一。SQL入口`iam.require_password_reset(text,text,text,bigint,text,text,bigint,bigint,jsonb)→text`仅API角色可执行，沿原Account→USER→凭据及因子/挑战/尝试锁，锁后以数据库当前时钟重验ADMIN_RESET及EXPIRED/AGE_UNKNOWN。无因子分支只接受NEVER_BOUND/合法REMOVED；已绑定分支调用原TOTP消费，不接纳RECOVERY_REQUIRED或其他目的。凭据、身份、附件和工作负载均不变；尝试消费、实际OTP水位及outbox同事务，终态不重置成功登录预算，提交失败或不确定不能返回完成。
+
+原`authentication_challenges`增加nullable `password_reset_required_event_id`，仅已消费LOGIN/TOTP的无Session、无改密后继分支可填，唯一外键绑定同tenant outbox；原延迟完整性检查核对真实已确认因子/修订/已消费时间步及同一USER、时间、DENIED事实。旧行保持NULL，迁移不得补造终态或事实；不新建表、通用receipt或查询许可。IAM-source投递沿既有当前producer凭据及不可变outbox精确摘要，不用用户今天的密码年龄、配置或状态重新授权历史事实；业务payload不因此获得额外证明。只观察时钟过期不会自动改凭据、写成功改密事实或发送重复通知。
 
 **验收。** 沿原密码/挑战/设置、IAM真库和authorityprocess owner增量验证，不复制历史版本矩阵：
 

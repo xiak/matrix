@@ -476,27 +476,76 @@ func EncodeConfirmAuthenticatorRecoveryResponse(value ConfirmAuthenticatorRecove
 }
 
 func (value *AccountPasswordSettings) UnmarshalJSON(source []byte) error {
-	var decoded struct {
-		MinimumLength    *int  `json:"minimumLength"`
-		RequireLowercase *bool `json:"requireLowercase"`
-		RequireUppercase *bool `json:"requireUppercase"`
-		RequireDigit     *bool `json:"requireDigit"`
-		RequireSymbol    *bool `json:"requireSymbol"`
-		HistoryCount     *int  `json:"historyCount"`
+	if value == nil {
+		return contractjson.ErrInvalidDocument
 	}
-	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil ||
+	decoded, err := decodeAccountPasswordSettings(source, false)
+	if err != nil {
+		return err
+	}
+	*value = decoded
+	return nil
+}
+
+// Only immutable settings completions and CONSUMED proofs may decode the
+// exact six-field predecessor shape. No historical defaults are inferred.
+func decodeAccountPasswordSettings(source []byte, historical bool) (AccountPasswordSettings, error) {
+	var decoded struct {
+		MinimumLength    *int                `json:"minimumLength"`
+		RequireLowercase *bool               `json:"requireLowercase"`
+		RequireUppercase *bool               `json:"requireUppercase"`
+		RequireDigit     *bool               `json:"requireDigit"`
+		RequireSymbol    *bool               `json:"requireSymbol"`
+		HistoryCount     *int                `json:"historyCount"`
+		MaxAgeDays       *int                `json:"maxAgeDays"`
+		ExpiryMode       *PasswordExpiryMode `json:"expiryMode"`
+	}
+	if contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil ||
 		decoded.MinimumLength == nil || decoded.RequireLowercase == nil || decoded.RequireUppercase == nil ||
 		decoded.RequireDigit == nil || decoded.RequireSymbol == nil || decoded.HistoryCount == nil {
-		return contractjson.ErrInvalidDocument
+		return AccountPasswordSettings{}, contractjson.ErrInvalidDocument
 	}
 	result := AccountPasswordSettings{MinimumLength: *decoded.MinimumLength, RequireLowercase: *decoded.RequireLowercase,
 		RequireUppercase: *decoded.RequireUppercase, RequireDigit: *decoded.RequireDigit, RequireSymbol: *decoded.RequireSymbol,
 		HistoryCount: *decoded.HistoryCount}
-	if ValidateAccountPasswordSettings(result) != nil {
-		return contractjson.ErrInvalidDocument
+	if decoded.MaxAgeDays != nil && decoded.ExpiryMode != nil {
+		result.MaxAgeDays, result.ExpiryMode = *decoded.MaxAgeDays, *decoded.ExpiryMode
+		// Even historical records cannot represent an explicitly empty mode.
+		if ValidateAccountPasswordSettings(result) != nil {
+			return AccountPasswordSettings{}, contractjson.ErrInvalidDocument
+		}
+	} else {
+		var fields map[string]json.RawMessage
+		if !historical || json.Unmarshal(source, &fields) != nil || fields["maxAgeDays"] != nil || fields["expiryMode"] != nil {
+			return AccountPasswordSettings{}, contractjson.ErrInvalidDocument
+		}
 	}
-	*value = result
-	return nil
+	if validateAccountPasswordSettings(result, historical) != nil {
+		return AccountPasswordSettings{}, contractjson.ErrInvalidDocument
+	}
+	return result, nil
+}
+
+func (value AccountPasswordSettings) MarshalJSON() ([]byte, error) {
+	if validateAccountPasswordSettings(value, true) != nil {
+		return nil, contractjson.ErrInvalidDocument
+	}
+	var days *int
+	if value.ExpiryMode != "" {
+		days = &value.MaxAgeDays
+	}
+	// Preserve original history without manufacturing expiry fields. Current
+	// values always emit both, including explicit zero (disabled).
+	return json.Marshal(struct {
+		MinimumLength    int                `json:"minimumLength"`
+		RequireLowercase bool               `json:"requireLowercase"`
+		RequireUppercase bool               `json:"requireUppercase"`
+		RequireDigit     bool               `json:"requireDigit"`
+		RequireSymbol    bool               `json:"requireSymbol"`
+		HistoryCount     int                `json:"historyCount"`
+		MaxAgeDays       *int               `json:"maxAgeDays,omitempty"`
+		ExpiryMode       PasswordExpiryMode `json:"expiryMode,omitempty"`
+	}{value.MinimumLength, value.RequireLowercase, value.RequireUppercase, value.RequireDigit, value.RequireSymbol, value.HistoryCount, days, value.ExpiryMode})
 }
 
 func (value *AccountMFASettings) UnmarshalJSON(source []byte) error {
@@ -523,17 +572,31 @@ func (value *AccountSecuritySettings) UnmarshalJSON(source []byte) error {
 }
 
 func decodeAccountSecuritySettings(source []byte, historical bool) (AccountSecuritySettings, error) {
-	type wire AccountSecuritySettings
-	var decoded wire
-	var fields map[string]json.RawMessage
-	if contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil ||
-		validateAccountSecuritySettings(AccountSecuritySettings(decoded), historical) != nil || json.Unmarshal(source, &fields) != nil || fields["mfa"] == nil {
+	var decoded struct {
+		APIVersion      string              `json:"apiVersion"`
+		Kind            string              `json:"kind"`
+		AccountID       AccountID           `json:"accountId"`
+		ResourceVersion uint64              `json:"resourceVersion"`
+		MFA             *AccountMFASettings `json:"mfa"`
+		Password        json.RawMessage     `json:"password"`
+		UpdatedAt       time.Time           `json:"updatedAt"`
+	}
+	if contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil || decoded.MFA == nil {
 		return AccountSecuritySettings{}, contractjson.ErrInvalidDocument
 	}
-	if _, present := fields["password"]; present != (decoded.Password != nil) {
+	result := AccountSecuritySettings{APIVersion: decoded.APIVersion, Kind: decoded.Kind, AccountID: decoded.AccountID,
+		ResourceVersion: decoded.ResourceVersion, MFA: *decoded.MFA, UpdatedAt: decoded.UpdatedAt}
+	if decoded.Password != nil {
+		password, err := decodeAccountPasswordSettings(decoded.Password, historical)
+		if err != nil {
+			return AccountSecuritySettings{}, err
+		}
+		result.Password = &password
+	}
+	if validateAccountSecuritySettings(result, historical) != nil {
 		return AccountSecuritySettings{}, contractjson.ErrInvalidDocument
 	}
-	return AccountSecuritySettings(decoded), nil
+	return result, nil
 }
 
 func (value *SecuritySettingsUpdateIntent) UnmarshalJSON(source []byte) error {
@@ -549,17 +612,26 @@ func (value *SecuritySettingsUpdateIntent) UnmarshalJSON(source []byte) error {
 }
 
 func decodeSecuritySettingsIntent(source []byte, historical bool) (SecuritySettingsUpdateIntent, error) {
-	type wire SecuritySettingsUpdateIntent
-	var decoded wire
-	var fields map[string]json.RawMessage
-	if contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil ||
-		validateSecuritySettingsUpdateIntent(SecuritySettingsUpdateIntent(decoded), historical) != nil || json.Unmarshal(source, &fields) != nil || fields["mfa"] == nil {
+	var decoded struct {
+		ExpectedResourceVersion uint64              `json:"expectedResourceVersion"`
+		MFA                     *AccountMFASettings `json:"mfa"`
+		Password                json.RawMessage     `json:"password"`
+	}
+	if contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil || decoded.MFA == nil {
 		return SecuritySettingsUpdateIntent{}, contractjson.ErrInvalidDocument
 	}
-	if _, present := fields["password"]; present != (decoded.Password != nil) {
+	result := SecuritySettingsUpdateIntent{ExpectedResourceVersion: decoded.ExpectedResourceVersion, MFA: *decoded.MFA}
+	if decoded.Password != nil {
+		password, err := decodeAccountPasswordSettings(decoded.Password, historical)
+		if err != nil {
+			return SecuritySettingsUpdateIntent{}, err
+		}
+		result.Password = &password
+	}
+	if validateSecuritySettingsUpdateIntent(result, historical) != nil {
 		return SecuritySettingsUpdateIntent{}, contractjson.ErrInvalidDocument
 	}
-	return SecuritySettingsUpdateIntent(decoded), nil
+	return result, nil
 }
 
 func (value *UpdateAccountSecuritySettingsRequest) UnmarshalJSON(source []byte) error {

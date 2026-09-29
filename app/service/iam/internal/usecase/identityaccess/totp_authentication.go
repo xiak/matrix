@@ -13,10 +13,17 @@ import (
 // These private projections describe a locked ceremony, never a bearer
 // identity or cacheable authority. Missing state is not NEVER_BOUND.
 type LoginAuthenticationState struct {
-	State              string `json:"state"`
-	Revision           uint64 `json:"revision"`
-	FactorID           string `json:"factorId,omitempty"`
-	EnrollmentRequired bool   `json:"enrollmentRequired"`
+	State               string                    `json:"state"`
+	Revision            uint64                    `json:"revision"`
+	FactorID            string                    `json:"factorId,omitempty"`
+	EnrollmentRequired  bool                      `json:"enrollmentRequired"`
+	PasswordExpiryMode  iamv1.PasswordExpiryMode  `json:"passwordExpiryMode"`
+	PasswordResetReason iamv1.PasswordResetReason `json:"passwordResetReason,omitempty"`
+}
+
+func (state LoginAuthenticationState) validPasswordExpiry() bool {
+	return (state.PasswordExpiryMode == iamv1.PasswordExpiryChange || state.PasswordExpiryMode == iamv1.PasswordExpiryAdminReset) &&
+		(state.PasswordResetReason == "" || state.PasswordResetReason == iamv1.PasswordResetExpired || state.PasswordResetReason == iamv1.PasswordResetAgeUnknown)
 }
 
 type LoginChallengeCreation struct {
@@ -60,6 +67,15 @@ type LoginChallengeCompletion struct {
 	Session      SessionMutation
 }
 
+// Exactly one already verified origin is consumed with the terminal denial.
+// It is not a reset command, Session, or reusable completion receipt.
+type PasswordResetRequirement struct {
+	PasswordAttempt *PasswordAttempt
+	TOTPAttempt     *TOTPAttempt
+	VerifiedStep    int64
+	AuditEvent      auditv1.Event
+}
+
 type PasswordChallengeCreation struct {
 	Attempt                                                        TOTPAttempt
 	VerifiedStep                                                   int64
@@ -80,6 +96,9 @@ func (ChallengePasswordMutation) GoString() string {
 func (ChallengePasswordMutation) MarshalJSON() ([]byte, error) { return nil, ErrUnavailable }
 
 func (service *Authority) createLoginChallenge(ctx context.Context, tx Transaction, attempt PasswordAttempt, state LoginAuthenticationState, requestID, requestDigest string) (iamv1.LoginResponse, error) {
+	if !state.validPasswordExpiry() {
+		return iamv1.LoginResponse{}, ErrUnavailable
+	}
 	purpose, step := "LOGIN", "TOTP"
 	switch state.State {
 	case "BOUND":
@@ -92,12 +111,20 @@ func (service *Authority) createLoginChallenge(ctx context.Context, tx Transacti
 		}
 		step = "RECOVER"
 	case "NEVER_BOUND", "REMOVED":
-		if state.FactorID != "" || !state.EnrollmentRequired || (state.State == "NEVER_BOUND" && state.Revision != 1) || (state.State == "REMOVED" && state.Revision < 3) {
+		if state.FactorID != "" || (state.State == "NEVER_BOUND" && state.Revision != 1) || (state.State == "REMOVED" && state.Revision < 3) ||
+			(state.PasswordResetReason != "" && state.PasswordExpiryMode == iamv1.PasswordExpiryAdminReset) {
 			return iamv1.LoginResponse{}, ErrUnavailable
 		}
-		purpose, step = "ENROLLMENT", "ENROLLMENT"
-		if attempt.MustChangePassword {
+		if state.EnrollmentRequired {
+			purpose, step = "ENROLLMENT", "ENROLLMENT"
+			if attempt.MustChangePassword || state.PasswordResetReason != "" {
+				step = "PASSWORD_CHANGE"
+			}
+		} else if state.PasswordResetReason != "" {
+			// This is a password-only ceremony, not a synthetic OTP successor.
 			step = "PASSWORD_CHANGE"
+		} else {
+			return iamv1.LoginResponse{}, ErrUnavailable
 		}
 	default:
 		return iamv1.LoginResponse{}, ErrUnavailable
@@ -245,7 +272,19 @@ func (service *Authority) VerifyAuthenticationChallenge(ctx context.Context, id 
 		if err != nil {
 			return err
 		}
-		if mustChangePassword {
+		state, err := tx.ReadLoginAuthenticationState(ctx, attempt.AccountID, attempt.UserID)
+		if err != nil {
+			return err
+		}
+		if !state.validPasswordExpiry() || state.State != "BOUND" || state.Revision <= 1 || state.EnrollmentRequired ||
+			iamv1.ValidateID("factorId", state.FactorID) != nil {
+			return ErrUnavailable
+		}
+		if state.PasswordResetReason != "" && state.PasswordExpiryMode == iamv1.PasswordExpiryAdminReset {
+			response, err = service.requirePasswordReset(ctx, tx, PasswordResetRequirement{TOTPAttempt: &attempt, VerifiedStep: step}, request.RequestID, requestDigest)
+			return err
+		}
+		if mustChangePassword || state.PasswordResetReason != "" {
 			challenge, err := tx.BeginPasswordChallenge(ctx, PasswordChallengeCreation{Attempt: attempt, VerifiedStep: step,
 				ID: passwordChallengeID, LookupDigest: passwordChallengeCredential.LookupDigest, VerificationDigest: passwordChallengeCredential.VerificationDigest,
 				RequestID: request.RequestID, RequestDigest: requestDigest})
@@ -378,6 +417,42 @@ func (service *Authority) ChangeChallengePassword(ctx context.Context, id string
 		return iamv1.ChallengePasswordChangeResponse{}, ErrUnavailable
 	}
 	return result, nil
+}
+
+func (service *Authority) requirePasswordReset(ctx context.Context, tx Transaction, mutation PasswordResetRequirement, requestID, requestDigest string) (iamv1.LoginResponse, error) {
+	if (mutation.PasswordAttempt == nil) == (mutation.TOTPAttempt == nil) {
+		return iamv1.LoginResponse{}, ErrUnavailable
+	}
+	var account iamv1.AccountID
+	var user iamv1.PrincipalID
+	if mutation.PasswordAttempt != nil {
+		account, user = mutation.PasswordAttempt.AccountID, mutation.PasswordAttempt.PrincipalID
+	} else {
+		account, user = mutation.TOTPAttempt.AccountID, mutation.TOTPAttempt.UserID
+	}
+	now, err := transactionTime(ctx, tx)
+	if err != nil {
+		return iamv1.LoginResponse{}, err
+	}
+	eventID, err := service.config.NewID("event")
+	if err != nil {
+		return iamv1.LoginResponse{}, ErrUnavailable
+	}
+	mutation.AuditEvent, err = newAuditEvent(eventID, account, "", auditv1.ActorReference{Type: auditv1.ActorUser, ID: auditv1.ActorID(user)},
+		auditv1.ActionIAMUserPasswordResetRequired, auditv1.TargetReference{Kind: auditv1.TargetUser, ID: string(user)}, auditv1.ResultDenied,
+		"", requestDigest, requestID, requestID, now)
+	if err != nil {
+		return iamv1.LoginResponse{}, err
+	}
+	reason, err := tx.RequirePasswordReset(ctx, mutation)
+	if err != nil {
+		return iamv1.LoginResponse{}, err
+	}
+	response := iamv1.LoginResponse{Outcome: iamv1.LoginAdminResetRequired, PasswordResetReason: reason}
+	if iamv1.ValidateLoginResponse(response) != nil {
+		return iamv1.LoginResponse{}, ErrUnavailable
+	}
+	return response, nil
 }
 
 func (service *Authority) newSessionMutation(ctx context.Context, tx Transaction, account iamv1.AccountID, user iamv1.PrincipalID, requestID, requestDigest string) (SessionMutation, iamv1.Secret, error) {

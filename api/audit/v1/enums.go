@@ -39,6 +39,7 @@ const (
 	ActionIAMUserStatusSet                          Action = "iam.user.status-set"
 	ActionIAMUserPasswordReset                      Action = "iam.user.password-reset"
 	ActionIAMUserPasswordChanged                    Action = "iam.user.password-changed"
+	ActionIAMUserPasswordResetRequired              Action = "iam.user.password-reset-required"
 	ActionIAMNotificationContactVerificationStarted Action = "iam.notification-contact.verification-started"
 	ActionIAMNotificationContactVerified            Action = "iam.notification-contact.verified"
 	ActionIAMAuthenticatorBound                     Action = "iam.authenticator.bound"
@@ -227,6 +228,7 @@ var allActions = []Action{
 	ActionIAMUserStatusSet,
 	ActionIAMUserPasswordReset,
 	ActionIAMUserPasswordChanged,
+	ActionIAMUserPasswordResetRequired,
 	ActionIAMNotificationContactVerificationStarted,
 	ActionIAMNotificationContactVerified,
 	ActionIAMAuthenticatorBound,
@@ -351,6 +353,9 @@ var actionContracts = map[Action]ActionContract{
 	},
 	ActionIAMUserPasswordChanged: {
 		Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, UserActorRequired: true,
+	},
+	ActionIAMUserPasswordResetRequired: {
+		Source: SourceIAM, Target: TargetUser, Results: []Result{ResultDenied}, UserActorRequired: true,
 	},
 	ActionIAMNotificationContactVerificationStarted: {Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, UserActorRequired: true},
 	ActionIAMNotificationContactVerified:            {Source: SourceIAM, Target: TargetUser, Results: []Result{ResultSucceeded}, UserActorRequired: true},

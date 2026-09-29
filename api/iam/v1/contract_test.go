@@ -215,11 +215,13 @@ func FuzzEnrollmentChallengeRequests(f *testing.F) {
 }
 
 func TestAccountPasswordSettingsRequireCompleteBoundedValues(t *testing.T) {
-	wire := `{"minimumLength":15,"requireLowercase":false,"requireUppercase":false,"requireDigit":false,"requireSymbol":false,"historyCount":1}`
+	wire := `{"minimumLength":15,"requireLowercase":false,"requireUppercase":false,"requireDigit":false,"requireSymbol":false,"historyCount":1,"maxAgeDays":0,"expiryMode":"CHANGE_PASSWORD"}`
 	for _, input := range []string{
 		wire,
 		strings.ReplaceAll(wire, "false", "true"),
 		strings.Replace(wire, `"historyCount":1`, `"historyCount":0`, 1),
+		strings.Replace(wire, `"maxAgeDays":0`, `"maxAgeDays":1`, 1),
+		strings.Replace(strings.Replace(wire, `"maxAgeDays":0`, `"maxAgeDays":365`, 1), "CHANGE_PASSWORD", "ADMIN_RESET", 1),
 		strings.Replace(strings.Replace(wire, `"minimumLength":15`, `"minimumLength":128`, 1), `"historyCount":1`, `"historyCount":24`, 1),
 	} {
 		var value AccountPasswordSettings
@@ -237,7 +239,7 @@ func TestAccountPasswordSettingsRequireCompleteBoundedValues(t *testing.T) {
 	if json.Unmarshal([]byte(wire), &fields) != nil {
 		t.Fatal("invalid fixture")
 	}
-	for _, name := range []string{"minimumLength", "requireLowercase", "requireUppercase", "requireDigit", "requireSymbol", "historyCount"} {
+	for _, name := range []string{"minimumLength", "requireLowercase", "requireUppercase", "requireDigit", "requireSymbol", "historyCount", "maxAgeDays", "expiryMode"} {
 		original := fields[name]
 		for _, replacement := range []json.RawMessage{nil, json.RawMessage(`null`), json.RawMessage(`"false"`), json.RawMessage(`[]`)} {
 			if replacement == nil {
@@ -262,6 +264,13 @@ func TestAccountPasswordSettingsRequireCompleteBoundedValues(t *testing.T) {
 	for _, count := range []string{"-1", "25", "1.5", "18446744073709551616"} {
 		malformed = append(malformed, strings.Replace(wire, `"historyCount":1`, `"historyCount":`+count, 1))
 	}
+	for _, days := range []string{"-1", "366", "0.5", "18446744073709551616", "true"} {
+		malformed = append(malformed, strings.Replace(wire, `"maxAgeDays":0`, `"maxAgeDays":`+days, 1))
+	}
+	for _, mode := range []string{`""`, `"change_password"`, `"ALLOW"`, `0`, `false`} {
+		malformed = append(malformed, strings.Replace(wire, `"expiryMode":"CHANGE_PASSWORD"`, `"expiryMode":`+mode, 1))
+	}
+	malformed = append(malformed, strings.Replace(wire, `,"maxAgeDays":0,"expiryMode":"CHANGE_PASSWORD"`, "", 1))
 	malformed = append(malformed, strings.TrimSuffix(wire, "}")+`,"require\u0053ymbol":false}`)
 	for index, input := range malformed {
 		var value AccountPasswordSettings
@@ -275,6 +284,11 @@ func TestAccountPasswordSettingsRequireCompleteBoundedValues(t *testing.T) {
 	}
 	for _, value := range []AccountPasswordSettings{
 		{}, {MinimumLength: 14}, {MinimumLength: 129}, {MinimumLength: 15, HistoryCount: -1}, {MinimumLength: 15, HistoryCount: 25},
+		{MinimumLength: 15, HistoryCount: 1},
+		{MinimumLength: 15, HistoryCount: 1, MaxAgeDays: 366, ExpiryMode: PasswordExpiryChange},
+		{MinimumLength: 15, HistoryCount: 1, MaxAgeDays: -1, ExpiryMode: PasswordExpiryChange},
+		{MinimumLength: 15, HistoryCount: 1, MaxAgeDays: 1},
+		{MinimumLength: 15, HistoryCount: 1, ExpiryMode: "ALLOW"},
 	} {
 		if ValidateAccountPasswordSettings(value) == nil {
 			t.Fatal("invalid in-process settings bypassed bounds")
@@ -283,8 +297,8 @@ func TestAccountPasswordSettingsRequireCompleteBoundedValues(t *testing.T) {
 }
 
 func FuzzAccountPasswordSettingsRoundTrip(f *testing.F) {
-	f.Add(`{"minimumLength":15,"requireLowercase":false,"requireUppercase":false,"requireDigit":false,"requireSymbol":false,"historyCount":1}`)
-	f.Add(`{"minimumLength":128,"requireLowercase":true,"requireUppercase":true,"requireDigit":true,"requireSymbol":true,"historyCount":24}`)
+	f.Add(`{"minimumLength":15,"requireLowercase":false,"requireUppercase":false,"requireDigit":false,"requireSymbol":false,"historyCount":1,"maxAgeDays":0,"expiryMode":"CHANGE_PASSWORD"}`)
+	f.Add(`{"minimumLength":128,"requireLowercase":true,"requireUppercase":true,"requireDigit":true,"requireSymbol":true,"historyCount":24,"maxAgeDays":0,"expiryMode":"CHANGE_PASSWORD"}`)
 	f.Add(`{"minimumLength":15,"historyCount":0}`)
 	f.Add(`null`)
 	f.Fuzz(func(t *testing.T, input string) {
@@ -308,7 +322,7 @@ func securitySettingsContractSamples() []struct {
 	newValue   func() any
 } {
 	mfa := `{"requiredForUsers":false}`
-	password := `{"minimumLength":15,"requireLowercase":false,"requireUppercase":false,"requireDigit":false,"requireSymbol":false,"historyCount":1}`
+	password := `{"minimumLength":15,"requireLowercase":false,"requireUppercase":false,"requireDigit":false,"requireSymbol":false,"historyCount":1,"maxAgeDays":0,"expiryMode":"CHANGE_PASSWORD"}`
 	settings := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccountSecuritySettings","accountId":"account-a","resourceVersion":2,"mfa":` + mfa + `,"password":` + password + `,"updatedAt":"2026-09-24T12:00:00Z"}`
 	change := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccountSecuritySettingsChange","requestId":"change-a","expectedResourceVersion":1,"settings":` + settings + `,"callerSessionEnded":true}`
 	return []struct {
@@ -431,7 +445,7 @@ func TestAccountSecuritySettingsRejectAmbiguityWithoutChangingPriorValue(t *test
 }
 
 func TestSettingsStepUpBindsExactIntentWithoutExpandingOtherOperations(t *testing.T) {
-	intent := `{"expectedResourceVersion":1,"mfa":{"requiredForUsers":false},"password":{"minimumLength":15,"requireLowercase":false,"requireUppercase":false,"requireDigit":false,"requireSymbol":false,"historyCount":1}}`
+	intent := `{"expectedResourceVersion":1,"mfa":{"requiredForUsers":false},"password":{"minimumLength":15,"requireLowercase":false,"requireUppercase":false,"requireDigit":false,"requireSymbol":false,"historyCount":1,"maxAgeDays":0,"expiryMode":"CHANGE_PASSWORD"}}`
 	start := `{"requestId":"settings-a","operation":"SECURITY_SETTINGS_UPDATE","expectedFactorRevision":2,"securitySettings":` + intent + `}`
 	for _, wire := range []string{start, strings.Replace(start, "false", "true", 1)} {
 		var value StartStepUpRequest

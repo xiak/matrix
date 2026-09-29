@@ -56,7 +56,19 @@ func TestLoginChallengeIssuerRequiresExactLockedCeremony(t *testing.T) {
 		{LoginAuthenticationState{State: "NEVER_BOUND", Revision: 1, EnrollmentRequired: true}, true, "ENROLLMENT", "PASSWORD_CHANGE"},
 		{LoginAuthenticationState{State: "NEVER_BOUND", Revision: 1}, false, "", ""},
 		{LoginAuthenticationState{State: "BOUND", Revision: 2, FactorID: "factor-one", EnrollmentRequired: true}, false, "", ""},
+		{LoginAuthenticationState{State: "NEVER_BOUND", Revision: 1, PasswordResetReason: iamv1.PasswordResetExpired}, false, "LOGIN", "PASSWORD_CHANGE"},
+		{LoginAuthenticationState{State: "REMOVED", Revision: 3, PasswordResetReason: iamv1.PasswordResetAgeUnknown}, false, "LOGIN", "PASSWORD_CHANGE"},
+		{LoginAuthenticationState{State: "NEVER_BOUND", Revision: 1, EnrollmentRequired: true, PasswordResetReason: iamv1.PasswordResetExpired}, false, "ENROLLMENT", "PASSWORD_CHANGE"},
+		{LoginAuthenticationState{State: "NEVER_BOUND", Revision: 1, PasswordExpiryMode: iamv1.PasswordExpiryAdminReset, PasswordResetReason: iamv1.PasswordResetExpired}, true, "", ""},
+		{LoginAuthenticationState{State: "NEVER_BOUND", Revision: 1, EnrollmentRequired: true, PasswordExpiryMode: iamv1.PasswordExpiryAdminReset, PasswordResetReason: iamv1.PasswordResetAgeUnknown}, true, "", ""},
+		{LoginAuthenticationState{State: "BOUND", Revision: 2, FactorID: "factor-one", PasswordExpiryMode: iamv1.PasswordExpiryAdminReset, PasswordResetReason: iamv1.PasswordResetExpired}, false, "LOGIN", "TOTP"},
+		{LoginAuthenticationState{State: "RECOVERY_REQUIRED", Revision: 3, PasswordResetReason: iamv1.PasswordResetExpired}, false, "LOGIN", "RECOVER"},
+		{LoginAuthenticationState{State: "NEVER_BOUND", Revision: 1, PasswordResetReason: "UNKNOWN"}, false, "", ""},
+		{LoginAuthenticationState{State: "NEVER_BOUND", Revision: 1, PasswordExpiryMode: "UNKNOWN", PasswordResetReason: iamv1.PasswordResetExpired}, false, "", ""},
 	} {
+		if original.state.PasswordExpiryMode == "" {
+			original.state.PasswordExpiryMode = iamv1.PasswordExpiryChange
+		}
 		for _, sample := range []struct{ purpose, step string }{
 			{"LOGIN", "TOTP"}, {"LOGIN", "RECOVER"}, {"LOGIN", "PASSWORD_CHANGE"},
 			{"ENROLLMENT", "ENROLLMENT"}, {"ENROLLMENT", "PASSWORD_CHANGE"}, {"RECOVERY", "ENROLLMENT"},
@@ -67,10 +79,10 @@ func TestLoginChallengeIssuerRequiresExactLockedCeremony(t *testing.T) {
 				"request-one", "sha256:"+strings.Repeat("a", 64))
 			if sample.purpose == original.purpose && sample.step == original.step {
 				if err != nil || iamv1.ValidateLoginResponse(result) != nil || result.Credential.Present() || result.Session != (iamv1.Session{}) {
-					t.Fatal("exact ceremony was not issued as a restricted challenge", err)
+					t.Fatalf("exact ceremony was not issued as a restricted challenge: state=%+v: %v", original.state, err)
 				}
 			} else if !errors.Is(err, ErrUnavailable) || result.ChallengeCredential.Present() || result.Credential.Present() || result.Challenge != nil {
-				t.Fatal("issuer leaked another ceremony or secret", err)
+				t.Fatalf("issuer leaked another ceremony or secret: state=%+v: %v", original.state, err)
 			}
 		}
 	}
@@ -170,7 +182,7 @@ func TestRequiredInitialEnrollmentNeverFallsBackToPasswordSession(t *testing.T) 
 			user := tx.users[document.Administrator.ID]
 			user.MustChangePassword = forced
 			tx.users[user.ID] = user
-			tx.loginAuthenticationState = &LoginAuthenticationState{State: "NEVER_BOUND", Revision: 1, EnrollmentRequired: true}
+			tx.loginAuthenticationState = &LoginAuthenticationState{State: "NEVER_BOUND", Revision: 1, EnrollmentRequired: true, PasswordExpiryMode: iamv1.PasswordExpiryChange}
 			step := "ENROLLMENT"
 			if forced {
 				step = "PASSWORD_CHANGE"
@@ -181,6 +193,122 @@ func TestRequiredInitialEnrollmentNeverFallsBackToPasswordSession(t *testing.T) 
 			if err != nil || iamv1.ValidateLoginResponse(response) != nil || response.Outcome != "CHALLENGE_REQUIRED" ||
 				response.Challenge.NextStep != step || response.Credential.Present() || response.Session != (iamv1.Session{}) || len(tx.sessions) != 0 {
 				t.Fatal("required first enrollment created or leaked a password Session", err)
+			}
+		})
+	}
+}
+
+func TestPasswordOnlyExpiryCannotIssueOrdinarySession(t *testing.T) {
+	for _, sample := range []struct {
+		name, state, purpose string
+		revision             uint64
+		enrollment           bool
+		mode                 iamv1.PasswordExpiryMode
+		reason               iamv1.PasswordResetReason
+	}{
+		{"expired", "NEVER_BOUND", "LOGIN", 1, false, iamv1.PasswordExpiryChange, iamv1.PasswordResetExpired},
+		{"unknown_age", "REMOVED", "LOGIN", 3, false, iamv1.PasswordExpiryChange, iamv1.PasswordResetAgeUnknown},
+		{"required_enrollment", "NEVER_BOUND", "ENROLLMENT", 1, true, iamv1.PasswordExpiryChange, iamv1.PasswordResetExpired},
+		{"missing_mode", "NEVER_BOUND", "", 1, false, "", ""},
+		{"invalid_reason", "NEVER_BOUND", "", 1, false, iamv1.PasswordExpiryChange, "UNKNOWN"},
+	} {
+		t.Run(sample.name, func(t *testing.T) {
+			tx := newCoreTransaction()
+			service, err := newCoreAuthority(&coreRepository{transaction: tx}, Config{NewID: func(prefix string) (string, error) { return prefix + "-expiry", nil }})
+			if err != nil {
+				t.Fatal(err)
+			}
+			document := coreBootstrap(t)
+			if _, err := service.Bootstrap(t.Context(), document); err != nil {
+				t.Fatal(err)
+			}
+			tx.loginAuthenticationState = &LoginAuthenticationState{State: sample.state, Revision: sample.revision,
+				EnrollmentRequired: sample.enrollment, PasswordExpiryMode: sample.mode, PasswordResetReason: sample.reason}
+			tx.loginChallenge = iamv1.AuthenticationChallenge{APIVersion: iamv1.APIVersion, Kind: "AuthenticationChallenge",
+				ID: "authentication-challenge-expiry", Purpose: sample.purpose, NextStep: "PASSWORD_CHANGE", ExpiresAt: tx.now.Add(5 * time.Minute)}
+			response, err := service.Login(t.Context(), iamv1.LoginRequest{LoginName: document.Administrator.LoginName,
+				Password: document.Administrator.Password, RequestID: "expiry-login"})
+			if response.Credential.Present() || response.Session != (iamv1.Session{}) || len(tx.sessions) != 0 || len(tx.totpReservations) != 0 {
+				t.Fatal("password-only expiry created ordinary or synthetic MFA authority")
+			}
+			if sample.purpose == "" {
+				if !errors.Is(err, ErrUnavailable) || response.Challenge != nil || response.ChallengeCredential.Present() {
+					t.Fatal("missing or unknown expiry authority became a password-only fallback", err)
+				}
+			} else if err != nil || response.Outcome != iamv1.LoginChallengeRequired || response.Challenge == nil ||
+				response.Challenge.Purpose != sample.purpose || response.Challenge.NextStep != "PASSWORD_CHANGE" || !response.ChallengeCredential.Present() {
+				t.Fatal("password expiry did not preserve its exact restricted next step", err)
+			}
+		})
+	}
+}
+
+func TestPasswordResetTerminalRequiresCommittedProofAndContainsNoAuthority(t *testing.T) {
+	for _, sample := range []struct {
+		name                                  string
+		reason                                iamv1.PasswordResetReason
+		enrollment, wrongPassword, failCommit bool
+	}{
+		{"expired", iamv1.PasswordResetExpired, false, false, false},
+		{"age_unknown_required_enrollment", iamv1.PasswordResetAgeUnknown, true, false, false},
+		{"wrong_password", iamv1.PasswordResetExpired, false, true, false},
+		{"unknown_commit", iamv1.PasswordResetExpired, false, false, true},
+		{"invalid_result", "UNKNOWN", false, false, false},
+	} {
+		t.Run(sample.name, func(t *testing.T) {
+			tx := newCoreTransaction()
+			repository := &coreRepository{transaction: tx}
+			service, err := newCoreAuthority(repository, Config{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			document := coreBootstrap(t)
+			if _, err := service.Bootstrap(t.Context(), document); err != nil {
+				t.Fatal(err)
+			}
+			tx.loginAuthenticationState = &LoginAuthenticationState{State: "NEVER_BOUND", Revision: 1,
+				EnrollmentRequired: sample.enrollment, PasswordExpiryMode: iamv1.PasswordExpiryAdminReset, PasswordResetReason: iamv1.PasswordResetExpired}
+			tx.passwordResetReason = sample.reason
+			if sample.failCommit {
+				repository.afterTransaction = func(err error) error {
+					if tx.passwordResetRequirement != nil {
+						return ErrUnavailable
+					}
+					return err
+				}
+			}
+			password := document.Administrator.Password
+			if sample.wrongPassword {
+				password, err = iamv1.NewSecret("Wrong-Password-For-Expiry-73!")
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			response, err := service.Login(t.Context(), iamv1.LoginRequest{LoginName: document.Administrator.LoginName, Password: password, RequestID: "terminal-login"})
+			if response.Session != (iamv1.Session{}) || response.Credential.Present() || response.Challenge != nil || response.ChallengeCredential.Present() ||
+				response.MustChangePassword || len(tx.sessions) != 0 || len(tx.totpReservations) != 0 {
+				t.Fatal("administrator reset instruction created authentication authority")
+			}
+			if sample.wrongPassword {
+				if !errors.Is(err, ErrUnauthenticated) || tx.passwordResetRequirement != nil || len(tx.rejectedAttempts) != 1 {
+					t.Fatal("wrong password disclosed age or created terminal evidence", err)
+				}
+				return
+			}
+			if sample.failCommit || sample.reason == "UNKNOWN" {
+				if !errors.Is(err, ErrUnavailable) || response != (iamv1.LoginResponse{}) {
+					t.Fatal("uncommitted/invalid terminal leaked", err)
+				}
+			} else if err != nil || response.Outcome != iamv1.LoginAdminResetRequired || response.PasswordResetReason != sample.reason || iamv1.ValidateLoginResponse(response) != nil {
+				t.Fatal("committed terminal was not returned", err)
+			}
+			mutation := tx.passwordResetRequirement
+			if mutation == nil || mutation.PasswordAttempt == nil || mutation.TOTPAttempt != nil || mutation.VerifiedStep != 0 ||
+				mutation.PasswordAttempt.ID == "" || mutation.PasswordAttempt.Purpose != PasswordAttemptLogin ||
+				mutation.AuditEvent.Action != auditv1.ActionIAMUserPasswordResetRequired || mutation.AuditEvent.Result != auditv1.ResultDenied ||
+				mutation.AuditEvent.Actor.ID != auditv1.ActorID(document.Administrator.ID) || mutation.AuditEvent.Target.ID != string(document.Administrator.ID) ||
+				mutation.AuditEvent.RequestID != "terminal-login" || auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil {
+				t.Fatal("terminal omitted its exact password origin or closed denial")
 			}
 		})
 	}
@@ -474,7 +602,7 @@ func TestUserCreationUsesAccountRulesOutsideTheTransaction(t *testing.T) {
 		NewPassword: coreSecret(t, "Creation-Actor-Password-74!"), RequestID: "creation-rules-password"}); err != nil {
 		t.Fatal(err)
 	}
-	rules := iamv1.AccountPasswordSettings{MinimumLength: 28, RequireDigit: true, HistoryCount: 24}
+	rules := iamv1.AccountPasswordSettings{ExpiryMode: iamv1.PasswordExpiryChange, MinimumLength: 28, RequireDigit: true, HistoryCount: 24}
 	prepared := false
 	tx.userCreationSettings = func(read AccountRead) (iamv1.AccountPasswordSettings, uint64, error) {
 		prepared = true
@@ -1160,7 +1288,7 @@ func TestPasswordRequirementsUseOnlyTheAuthenticatedSelfOrPasswordChallenge(t *t
 	}
 	tx.attachments = map[iamv1.PolicyAttachmentID]iamv1.PolicyAttachment{}
 	valid := iamv1.PasswordRequirements{APIVersion: iamv1.APIVersion, Kind: "PasswordRequirements",
-		Password: iamv1.AccountPasswordSettings{MinimumLength: 15, HistoryCount: 1}, MaximumLength: 128, MaximumUTF8Bytes: 512, SettingsVersion: 3, Source: "PROTECTED_IDENTITY"}
+		Password: iamv1.AccountPasswordSettings{ExpiryMode: iamv1.PasswordExpiryChange, MinimumLength: 15, HistoryCount: 1}, MaximumLength: 128, MaximumUTF8Bytes: 512, SettingsVersion: 3, Source: "PROTECTED_IDENTITY"}
 	tx.passwordRequirements = valid
 	got, err := service.PasswordRequirements(t.Context(), login.Credential)
 	if err != nil || got != valid || tx.passwordRequirementsSession != login.Session || len(tx.authorizations) != 0 {
@@ -2620,6 +2748,8 @@ type coreTransaction struct {
 	loginChallenge                iamv1.AuthenticationChallenge
 	enrollmentInspection          EnrollmentChallengeInspection
 	loginAuthenticationState      *LoginAuthenticationState
+	passwordResetRequirement      *PasswordResetRequirement
+	passwordResetReason           iamv1.PasswordResetReason
 	enrollmentReads               int
 	challengeCredential           AuthenticationChallengeCredential
 	challengeLookupDigest         string
@@ -2725,6 +2855,11 @@ func (tx *coreTransaction) CreateLoginChallenge(context.Context, LoginChallengeC
 	return tx.loginChallenge, nil
 }
 
+func (tx *coreTransaction) RequirePasswordReset(_ context.Context, mutation PasswordResetRequirement) (iamv1.PasswordResetReason, error) {
+	tx.passwordResetRequirement = &mutation
+	return tx.passwordResetReason, nil
+}
+
 func (tx *coreTransaction) ReadPasswordRequirements(_ context.Context, session iamv1.Session) (iamv1.PasswordRequirements, error) {
 	tx.passwordRequirementsReads++
 	tx.passwordRequirementsSession = session
@@ -2786,7 +2921,7 @@ func (transaction *coreTransaction) ReadLoginAuthenticationState(context.Context
 	if transaction.loginAuthenticationState != nil {
 		return *transaction.loginAuthenticationState, nil
 	}
-	return LoginAuthenticationState{State: "NEVER_BOUND", Revision: 1}, nil
+	return LoginAuthenticationState{State: "NEVER_BOUND", Revision: 1, PasswordExpiryMode: iamv1.PasswordExpiryChange}, nil
 }
 
 func (*coreTransaction) ReadAuthenticatorState(context.Context, iamv1.Session) (iamv1.AuthenticatorState, error) {

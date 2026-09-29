@@ -144,7 +144,7 @@ func TestPasswordVerifierDoesNotApplyNewAdmissionToStoredSecrets(t *testing.T) {
 
 func TestAccountPasswordRulesUseExplicitUnicodeCategories(t *testing.T) {
 	baseline := DefaultPasswordSettings()
-	if baseline != (iamv1.AccountPasswordSettings{MinimumLength: 15, HistoryCount: 1}) {
+	if baseline != (iamv1.AccountPasswordSettings{ExpiryMode: iamv1.PasswordExpiryChange, MinimumLength: 15, HistoryCount: 1}) {
 		t.Fatal("product baseline introduced composition requirements or lost known history")
 	}
 	for _, test := range []struct {

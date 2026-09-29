@@ -429,6 +429,7 @@ func scalarSchemas() object {
 
 func enumSchemas() map[string][]string {
 	return map[string][]string{
+		"PasswordExpiryMode":           {string(iamv1.PasswordExpiryChange), string(iamv1.PasswordExpiryAdminReset)},
 		"RoleStatus":                   {string(iamv1.RoleActive), string(iamv1.RoleDisabled)},
 		"AccessKeyStatus":              {string(iamv1.AccessKeyEnabled), string(iamv1.AccessKeyDisabled)},
 		"RoleManagement":               {string(iamv1.RoleCustomerManaged)},
@@ -695,6 +696,8 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 			return object{"type": "integer", "minimum": 15, "maximum": 128}
 		case "historyCount":
 			return object{"type": "integer", "minimum": 0, "maximum": 24}
+		case "maxAgeDays":
+			return object{"type": "integer", "minimum": 0, "maximum": 365, "description": "Zero disables periodic expiry; otherwise elapsed 86400-second days, not local calendar days."}
 		}
 	}
 	if jsonName == "expectedResourceVersion" && (owner == "SecuritySettingsUpdateIntent" || owner == "UpdateAccountSecuritySettingsRequest" || owner == "AccountSecuritySettingsChange") {
@@ -1085,6 +1088,7 @@ func applySemanticOverlays(schemas object) {
 		object{"properties": object{"source": object{"const": "ACCOUNT"}}},
 		object{"properties": object{"source": object{"const": "PROTECTED_IDENTITY"}, "password": object{"properties": object{
 			"minimumLength": object{"const": 15}, "historyCount": object{"const": 1},
+			"maxAgeDays": object{"const": 0}, "expiryMode": object{"const": string(iamv1.PasswordExpiryChange)},
 			"requireLowercase": object{"const": false}, "requireUppercase": object{"const": false},
 			"requireDigit": object{"const": false}, "requireSymbol": object{"const": false},
 		}}}},
@@ -1094,6 +1098,17 @@ func applySemanticOverlays(schemas object) {
 	// model. Never turn missing historical rules into current default values.
 	historicalSettings := maps.Clone(schemas["AccountSecuritySettings"].(object))
 	historicalIntent := maps.Clone(schemas["SecuritySettingsUpdateIntent"].(object))
+	preExpiryPassword := maps.Clone(schemas["AccountPasswordSettings"].(object))
+	preExpiryPassword["properties"] = maps.Clone(preExpiryPassword["properties"].(object))
+	delete(preExpiryPassword["properties"].(object), "maxAgeDays")
+	delete(preExpiryPassword["properties"].(object), "expiryMode")
+	preExpiryPassword["required"] = slices.DeleteFunc(slices.Clone(preExpiryPassword["required"].([]string)), func(name string) bool {
+		return name == "maxAgeDays" || name == "expiryMode"
+	})
+	for _, historical := range []object{historicalSettings, historicalIntent} {
+		historical["properties"] = maps.Clone(historical["properties"].(object))
+		historical["properties"].(object)["password"] = object{"oneOf": []any{openapi31.Ref("AccountPasswordSettings"), preExpiryPassword}}
+	}
 	for _, name := range []string{"AccountSecuritySettings", "SecuritySettingsUpdateIntent"} {
 		schema := schemas[name].(object)
 		schema["required"] = append(slices.Clone(schema["required"].([]string)), "password")
@@ -1104,11 +1119,11 @@ func applySemanticOverlays(schemas object) {
 	schemas["UpdateAccountSecuritySettingsRequest"].(object)["description"] = "Replace the complete MFA and password configuration at one expected version using a proof held by the actual current Session and current instance permission. No identity selector, arbitrary patch or caller-controlled Session retention."
 	schemas["AccountSecuritySettingsChange"].(object)["description"] = "Immutable historical completion. Runtime validation additionally requires settings.resourceVersion == expectedResourceVersion + 1. settings.updatedAt is the original completion time, not observation time; requestId is not lookup authority."
 	schemas["AccountSecuritySettingsChange"].(object)["properties"].(object)["callerSessionEnded"] = object{"const": true, "description": "Every settings change invalidates its original calling Session, including weakening the requirement. Never an instruction to end a later reader's current Session."}
-	historicalSettings["description"] = "Original settings at completion. A missing password segment records an actual pre-password completion; never current configuration, a default or a new write."
+	historicalSettings["description"] = "Original settings at completion. A missing password segment or exact six-field pre-expiry segment records original history; never current configuration, inferred defaults or a new write."
 	schemas["AccountSecuritySettingsChange"].(object)["properties"].(object)["settings"] = historicalSettings
 	schemas["UpdateAccountSecuritySettingsResponse"].(object)["description"] = "APPLIED and EQUAL_REPLAY carry the same original non-secret completion, not fresh authorization, current Session state or a credential."
 	schemas["UpdateAccountSecuritySettingsResponse"].(object)["oneOf"] = []any{
-		object{"properties": object{"outcome": object{"const": "APPLIED"}, "change": object{"properties": object{"settings": object{"required": []string{"password"}}}}}},
+		object{"properties": object{"outcome": object{"const": "APPLIED"}, "change": object{"properties": object{"settings": openapi31.Ref("AccountSecuritySettings")}}}},
 		object{"properties": object{"outcome": object{"const": "EQUAL_REPLAY"}}},
 	}
 	schemas["StepUp"].(object)["description"] = "Non-secret metadata bound to one operation and its original effective login Session. It is not a bearer, unlogged challenge or authorization permit. Runtime validation enforces the original 120-second lifetime and proof/consumption ordering; proving never extends expiry."
@@ -1123,7 +1138,7 @@ func applySemanticOverlays(schemas object) {
 			schemas[name].(object)["properties"].(object)["securitySettings"] = historicalIntent
 			operations = append(operations, object{"required": []string{"securitySettings"}, "properties": object{
 				"operation": object{"const": string(iamv1.StepUpUpdateSecuritySettings)}, "state": object{"const": "CONSUMED"},
-				"securitySettings": object{"properties": object{"password": false}},
+				"securitySettings": object{"not": openapi31.Ref("SecuritySettingsUpdateIntent")},
 			}})
 		}
 		schemas[name].(object)["allOf"] = []any{object{"oneOf": operations}}

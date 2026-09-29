@@ -229,15 +229,24 @@ type StartChallengeTOTPEnrollmentRequest struct {
 	ChallengeCredential Secret `json:"challengeCredential"`
 }
 
-// AccountPasswordSettings governs new passwords, not the stored-secret
-// verifier, an authorization Policy or a selectable hashing profile.
+type PasswordExpiryMode string
+
+const (
+	PasswordExpiryChange     PasswordExpiryMode = "CHANGE_PASSWORD"
+	PasswordExpiryAdminReset PasswordExpiryMode = "ADMIN_RESET"
+)
+
+// AccountPasswordSettings governs password admission and lifetime, not the
+// stored-secret verifier, an authorization Policy or a selectable hash profile.
 type AccountPasswordSettings struct {
-	MinimumLength    int  `json:"minimumLength"`
-	RequireLowercase bool `json:"requireLowercase"`
-	RequireUppercase bool `json:"requireUppercase"`
-	RequireDigit     bool `json:"requireDigit"`
-	RequireSymbol    bool `json:"requireSymbol"`
-	HistoryCount     int  `json:"historyCount"`
+	MinimumLength    int                `json:"minimumLength"`
+	RequireLowercase bool               `json:"requireLowercase"`
+	RequireUppercase bool               `json:"requireUppercase"`
+	RequireDigit     bool               `json:"requireDigit"`
+	RequireSymbol    bool               `json:"requireSymbol"`
+	HistoryCount     int                `json:"historyCount"`
+	MaxAgeDays       int                `json:"maxAgeDays"`
+	ExpiryMode       PasswordExpiryMode `json:"expiryMode"`
 }
 
 // PasswordRequirements describes this authenticated USER's current rules.

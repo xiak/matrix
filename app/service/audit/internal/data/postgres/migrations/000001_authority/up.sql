@@ -359,6 +359,7 @@ BEGIN
         ('iam.user.status-set', 'IAM', 'USER', 'SUCCEEDED', true, true, false),
         ('iam.user.password-reset', 'IAM', 'USER', 'SUCCEEDED', true, true, false),
         ('iam.user.password-changed', 'IAM', 'USER', 'SUCCEEDED', false, false, false),
+        ('iam.user.password-reset-required', 'IAM', 'USER', 'DENIED', false, false, false),
         ('iam.tenant.created', 'IAM', 'ORGANIZATION', 'SUCCEEDED', true, true, false),
         ('iam.tenant.disabled', 'IAM', 'ORGANIZATION', 'SUCCEEDED', true, true, false),
         ('iam.tenant.enabled', 'IAM', 'ORGANIZATION', 'SUCCEEDED', true, true, false),
@@ -512,7 +513,7 @@ BEGIN
        OR (action_name='iam.role-session.exited' AND (
             submitted_event#>>'{actor,type}' IS DISTINCT FROM 'ROLE'
             OR submitted_event#>>'{actor,roleSession,sessionId}' IS DISTINCT FROM submitted_event#>>'{target,id}'))
-       OR (action_name IN ('iam.session.others-revoked','iam.notification-contact.verification-started','iam.notification-contact.verified','iam.authenticator.bound','iam.authenticator.replaced','iam.authenticator.removed',
+       OR (action_name IN ('iam.user.password-reset-required','iam.session.others-revoked','iam.notification-contact.verification-started','iam.notification-contact.verified','iam.authenticator.bound','iam.authenticator.replaced','iam.authenticator.removed',
             'iam.authenticator.recovery-started','iam.authenticator.recovered','iam.recovery-codes.regenerated') AND (
             submitted_event#>>'{actor,type}' IS DISTINCT FROM 'USER'
             OR submitted_event#>>'{actor,id}' IS DISTINCT FROM submitted_event#>>'{target,id}'))
@@ -523,7 +524,7 @@ BEGIN
             'iam.role-session.issued','iam.role-session.revoked','iam.role-session.admin-revoked',
             'iam.access-key.created','iam.access-key.enabled','iam.access-key.disabled','iam.access-key.deleted',
             'iam.user.permission-boundary.set','iam.user.permission-boundary.removed',
-            'iam.user.password-reset','iam.user.password-changed',
+            'iam.user.password-reset','iam.user.password-changed','iam.user.password-reset-required',
             'iam.policy-attachment.created','iam.policy-attachment.revoked')
             AND submitted_event#>>'{actor,type}' IS DISTINCT FROM 'USER')
        OR COALESCE(submitted_event#>>'{target,id}', '') COLLATE "C"
@@ -600,7 +601,7 @@ AS $function$
         AND to_regclass('audit.records') IS NOT NULL
         AND to_regclass('audit.event_registry') IS NOT NULL
         AND audit.role_actor_contract_ready(),
-        27::bigint,
+        28::bigint,
         transaction_timestamp()
 $function$;
 
@@ -910,7 +911,7 @@ BEGIN
             'iam.user.permission-boundary.set','iam.user.permission-boundary.removed',
             'iam.group-membership.created','iam.group-membership.removed',
             'iam.user.status-set', 'iam.user.password-reset',
-            'iam.user.password-changed',
+            'iam.user.password-changed', 'iam.user.password-reset-required',
             'iam.bootstrap.applied', 'iam.session.issued',
             'iam.session.revoked', 'iam.session.others-revoked', 'iam.password.changed',
             'iam.notification-contact.verification-started','iam.notification-contact.verified',

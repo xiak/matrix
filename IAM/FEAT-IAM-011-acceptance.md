@@ -63,7 +63,7 @@
 
 当前修正将原101个用户和99个账号的HTTP分页准备及全部分页/跨账号/跨目录cursor断言移到同一integration文件的`TestIAMDirectoryPaginationPostgres`，使用独立空库；原纵向用例保留身份、生命周期、全部密码与平台竞争、等值重放和outbox检查。两部分串行执行，均有三分钟context；这是独立行为夹具的分离，不是把一次事务或认证期限续长。新增入口复用原受限运行身份和真实bootstrap/登录/改密，所有分页对象仍经真实HTTP创建，不复制原200条准备、不伪造hash或授权行。原storage lane二十分钟、PG/runner限额、密码成本、分页上限和生产期限均不变；CI的编译枚举必须实际选择新入口且有配套DSN，不能以默认SKIP通过。
 
-相同固定生产源码加测试Go blob`dc7d27b1dbee3a3b491590a26f7c38e6961c63e2`，在同限额PG18.4/Go1.26.5的两个新空库串行race-p1复验：独立分页83.92s（包85.005s），原HTTP纵向139.98s（包141.094s）全部通过。原change/reset/recover/logout/旧密码登录五组竞争、平台grant与reset/status/历史停用三组、原bootstrap/schema重放和outbox物理owner/链均实际到达并通过；不是删掉超时尾部或缩短密码历史。专属编译缓存被复用，不能将差异声称为生产性能优化；该修正仍待精确固定源独立CI，不能回填21b3失败。
+相同固定生产源码加测试Go blob`dc7d27b1dbee3a3b491590a26f7c38e6961c63e2`，在同限额PG18.4/Go1.26.5的两个新空库串行race-p1复验：独立分页83.92s（包85.005s），原HTTP纵向139.98s（包141.094s）全部通过。原change/reset/recover/logout/旧密码登录五组竞争、平台grant与reset/status/历史停用三组、原bootstrap/schema重放和outbox物理owner/链均实际到达并通过；不是删掉超时尾部或缩短密码历史。专属编译缓存被复用，不能将差异声称为生产性能优化。最终固定`047f669490278fee978e0e11208a241ac7eac6df`的[Verification36470362108](https://github.com/xiak/matrix/actions/runs/36470362108)于2026-09-29经GitHub API核实精确SHA、十二项执行job及汇总全部completed/success；storage与capacity均有实际成功结果，不回填21b3或9df的失败，不包含后续未提交密码到期增量。
 
 工作流选择核对另发现十个解绑fixture虽然已在两个专门lane运行，却仍被storage枚举后因缺DSN而SKIP。修正只将这十个准确名称排除出storage，专门lane的实际命令和场景不变，不使用会吞掉未来新测试的宽泛前缀。原编译清单的40个顶层IAM fixture与全部选择器联合核对，每个恰有一个实际执行位置；storage为9项，新增分页具备独立DSN。YAML及19段Bash语法校验、API/IAM integration/architecture默认race和对应vet通过；缺外部环境的默认SKIP不计真实证据。确认零其他数据库客户端后正常停止本轮PG，已删除三个自有容器、两个源码/编译缓存卷和空网络；合成数据不保留，没有操作其他任务或远端资源。
 

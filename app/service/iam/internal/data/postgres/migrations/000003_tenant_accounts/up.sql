@@ -135,23 +135,46 @@ END $account_security_settings$;
 CREATE OR REPLACE FUNCTION iam.valid_password_settings(document jsonb)
 RETURNS boolean LANGUAGE sql IMMUTABLE SET search_path=pg_catalog,pg_temp AS $function$
     SELECT COALESCE(jsonb_typeof(document)='object'
-      AND document ?& ARRAY['minimumLength','requireLowercase','requireUppercase','requireDigit','requireSymbol','historyCount']
-      AND document-ARRAY['minimumLength','requireLowercase','requireUppercase','requireDigit','requireSymbol','historyCount']='{}'::jsonb
+      AND document ?& ARRAY['minimumLength','requireLowercase','requireUppercase','requireDigit','requireSymbol','historyCount','maxAgeDays','expiryMode']
+      AND document-ARRAY['minimumLength','requireLowercase','requireUppercase','requireDigit','requireSymbol','historyCount','maxAgeDays','expiryMode']='{}'::jsonb
       AND jsonb_typeof(document->'minimumLength')='number'
       AND (document->>'minimumLength') COLLATE "C" ~ '^(1[5-9]|[2-9][0-9]|1[01][0-9]|12[0-8])$'
       AND jsonb_typeof(document->'historyCount')='number'
       AND (document->>'historyCount') COLLATE "C" ~ '^([0-9]|1[0-9]|2[0-4])$'
+      AND jsonb_typeof(document->'maxAgeDays')='number'
+      AND (document->>'maxAgeDays') COLLATE "C" ~ '^([0-9]|[1-9][0-9]|[12][0-9][0-9]|3[0-5][0-9]|36[0-5])$'
+      AND jsonb_typeof(document->'expiryMode')='string'
+      AND document->>'expiryMode' IN ('CHANGE_PASSWORD','ADMIN_RESET')
       AND jsonb_typeof(document->'requireLowercase')='boolean'
       AND jsonb_typeof(document->'requireUppercase')='boolean'
       AND jsonb_typeof(document->'requireDigit')='boolean'
       AND jsonb_typeof(document->'requireSymbol')='boolean',false)
 $function$;
 
+-- A six-field value survives only as immutable history, never a new request.
+CREATE OR REPLACE FUNCTION iam.valid_password_settings_history(document jsonb)
+RETURNS boolean LANGUAGE sql IMMUTABLE SET search_path=pg_catalog,pg_temp AS $function$
+    SELECT iam.valid_password_settings(document) OR COALESCE(jsonb_typeof(document)='object'
+        AND NOT document ?| ARRAY['maxAgeDays','expiryMode']
+        AND iam.valid_password_settings(document||'{"maxAgeDays":0,"expiryMode":"CHANGE_PASSWORD"}'::jsonb),false)
+$function$;
+
 CREATE OR REPLACE FUNCTION iam.default_password_settings()
 RETURNS jsonb LANGUAGE sql IMMUTABLE SET search_path=pg_catalog,pg_temp AS $function$
-    SELECT '{"minimumLength":15,"requireLowercase":false,"requireUppercase":false,"requireDigit":false,"requireSymbol":false,"historyCount":1}'::jsonb
+    SELECT '{"minimumLength":15,"requireLowercase":false,"requireUppercase":false,"requireDigit":false,"requireSymbol":false,"historyCount":1,"maxAgeDays":0,"expiryMode":"CHANGE_PASSWORD"}'::jsonb
 $function$;
-REVOKE ALL ON FUNCTION iam.valid_password_settings(jsonb),iam.default_password_settings()
+
+-- Compare retained lineage with initialized current values without returning
+-- a projected value that a proof or mutation could accidentally consume.
+CREATE OR REPLACE FUNCTION iam.password_settings_history_matches(left_value jsonb,right_value jsonb)
+RETURNS boolean LANGUAGE sql IMMUTABLE SET search_path=pg_catalog,pg_temp AS $function$
+    SELECT (left_value IS NULL OR iam.valid_password_settings_history(left_value))
+       AND (right_value IS NULL OR iam.valid_password_settings_history(right_value))
+       AND ('{"maxAgeDays":0,"expiryMode":"CHANGE_PASSWORD"}'::jsonb||COALESCE(left_value,iam.default_password_settings()))
+         = ('{"maxAgeDays":0,"expiryMode":"CHANGE_PASSWORD"}'::jsonb||COALESCE(right_value,iam.default_password_settings()))
+$function$;
+REVOKE ALL ON FUNCTION iam.valid_password_settings(jsonb),iam.valid_password_settings_history(jsonb),
+    iam.password_settings_history_matches(jsonb,jsonb),iam.default_password_settings()
     FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_notification_worker,matrix_iam_credential_recovery,matrix_iam_authentication_recovery,matrix_iam_backup_custody;
 
 -- Only initialize today's settings. Do not increment the continuous revision,
@@ -164,9 +187,29 @@ BEGIN
             RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='IAM password settings authority is missing';
         END IF;
         ALTER TABLE iam.accounts ADD COLUMN password_settings jsonb NOT NULL
-            DEFAULT '{"minimumLength":15,"requireLowercase":false,"requireUppercase":false,"requireDigit":false,"requireSymbol":false,"historyCount":1}'::jsonb;
+            DEFAULT '{"minimumLength":15,"requireLowercase":false,"requireUppercase":false,"requireDigit":false,"requireSymbol":false,"historyCount":1,"maxAgeDays":0,"expiryMode":"CHANGE_PASSWORD"}'::jsonb;
     END IF;
 END $account_password_settings$;
+
+-- Initialization is restricted to the one pre-expiry transition. Replay
+-- cannot repair a partial/missing authority value after this ABI exists.
+ALTER TABLE iam.accounts DROP CONSTRAINT IF EXISTS account_security_settings_values;
+DROP TRIGGER IF EXISTS guard_security_settings ON iam.accounts;
+DROP TRIGGER IF EXISTS verify_security_settings_change ON iam.accounts;
+CREATE POLICY password_expiry_cutover_owner ON iam.accounts FOR ALL TO matrix_iam_owner USING(true) WITH CHECK(true);
+DO $password_expiry_settings$
+BEGIN
+    IF EXISTS(SELECT 1 FROM iam.accounts WHERE NOT iam.valid_password_settings_history(password_settings))
+        OR (to_regprocedure('iam.password_expiry_state(text,text,timestamp with time zone)') IS NOT NULL
+            AND EXISTS(SELECT 1 FROM iam.accounts WHERE NOT iam.valid_password_settings(password_settings))) THEN
+        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='IAM password expiry authority is invalid';
+    END IF;
+    UPDATE iam.accounts SET password_settings=password_settings||'{"maxAgeDays":0,"expiryMode":"CHANGE_PASSWORD"}'::jsonb
+        WHERE NOT iam.valid_password_settings(password_settings);
+END $password_expiry_settings$;
+ALTER TABLE iam.accounts ALTER COLUMN password_settings SET DEFAULT
+    '{"minimumLength":15,"requireLowercase":false,"requireUppercase":false,"requireDigit":false,"requireSymbol":false,"historyCount":1,"maxAgeDays":0,"expiryMode":"CHANGE_PASSWORD"}'::jsonb;
+DROP POLICY password_expiry_cutover_owner ON iam.accounts;
 
 -- Callers first hold Account -> USER locks. Installation protection is the
 -- unrevoked attachment, never an effective Allow or today's login status.
@@ -188,6 +231,37 @@ RETURNS jsonb LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $functio
     SELECT iam.user_password_requirements(tenant,subject_id)->'password'
 $function$;
 REVOKE ALL ON FUNCTION iam.user_password_settings(text,text),iam.user_password_requirements(text,text) FROM PUBLIC,matrix_iam_api,matrix_iam_worker,
+    matrix_iam_notification_worker,matrix_iam_credential_recovery,matrix_iam_authentication_recovery,matrix_iam_backup_custody;
+
+-- Internal password/derived-Session qualification, never a USER status or
+-- independent key restriction. Callers hold the existing identity locks and
+-- provide the database clock observed after waiting, not a client timestamp.
+CREATE OR REPLACE FUNCTION iam.password_expiry_state(tenant text,subject_id text,observed_at timestamptz)
+RETURNS jsonb LANGUAGE plpgsql STABLE SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE settings jsonb; changed_at timestamptz; deadline timestamptz; days integer; result jsonb;
+BEGIN
+    settings:=iam.user_password_settings(tenant,subject_id);
+    SELECT c.password_changed_at INTO changed_at FROM iam.user_credentials c WHERE c.tenant_id=tenant AND c.principal_id=subject_id;
+    IF NOT FOUND OR NOT iam.valid_password_settings(settings) OR observed_at IS NULL OR NOT isfinite(observed_at)
+        OR extract(year FROM observed_at AT TIME ZONE 'UTC') NOT BETWEEN 1 AND 9999
+        OR (changed_at IS NOT NULL AND (NOT isfinite(changed_at) OR changed_at>observed_at
+            OR extract(year FROM changed_at AT TIME ZONE 'UTC') NOT BETWEEN 1 AND 9999)) THEN
+        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='IAM password age authority is invalid';
+    END IF;
+    days:=(settings->>'maxAgeDays')::integer;
+    result:=jsonb_build_object('expiryMode',settings->>'expiryMode');
+    IF days=0 THEN RETURN result; END IF;
+    IF changed_at IS NULL THEN RETURN result||'{"passwordResetReason":"AGE_UNKNOWN"}'::jsonb; END IF;
+    -- Seconds deliberately avoid local calendar/DST arithmetic.
+    deadline:=changed_at+make_interval(secs=>days*86400);
+    IF NOT isfinite(deadline) OR extract(year FROM deadline AT TIME ZONE 'UTC') NOT BETWEEN 1 AND 9999 THEN
+        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='IAM password expiry authority is invalid';
+    END IF;
+    result:=result||jsonb_build_object('passwordExpiresAt',to_char(deadline AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'));
+    IF observed_at>=deadline THEN result:=result||'{"passwordResetReason":"EXPIRED"}'::jsonb; END IF;
+    RETURN result;
+END $function$;
+REVOKE ALL ON FUNCTION iam.password_expiry_state(text,text,timestamptz) FROM PUBLIC,matrix_iam_api,matrix_iam_worker,
     matrix_iam_notification_worker,matrix_iam_credential_recovery,matrix_iam_authentication_recovery,matrix_iam_backup_custody;
 
 ALTER TABLE iam.accounts DROP CONSTRAINT IF EXISTS account_security_settings_initial;
@@ -244,7 +318,7 @@ ALTER TABLE iam.account_security_settings_changes DROP CONSTRAINT IF EXISTS acco
 ALTER TABLE iam.account_security_settings_changes ADD CONSTRAINT account_security_settings_changes_password CHECK(
     (previous_password_settings IS NULL AND password_settings IS NULL AND previous_required_for_users<>required_for_users)
     OR (previous_password_settings IS NOT NULL AND password_settings IS NOT NULL
-        AND iam.valid_password_settings(previous_password_settings) AND iam.valid_password_settings(password_settings)
+        AND iam.valid_password_settings_history(previous_password_settings) AND iam.valid_password_settings_history(password_settings)
         AND (previous_required_for_users<>required_for_users OR previous_password_settings<>password_settings)));
 ALTER TABLE iam.account_security_settings_changes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE iam.account_security_settings_changes FORCE ROW LEVEL SECURITY;
@@ -344,14 +418,16 @@ BEGIN
     SELECT * INTO current_account FROM iam.accounts a WHERE a.id=tenant;
     IF NOT FOUND OR current_account.security_settings_version<receipt.expected_version+1
         OR (current_account.security_settings_version=receipt.expected_version+1 AND
-            (current_account.mfa_required_for_users,current_account.security_settings_updated_at,current_account.password_settings)
-                IS DISTINCT FROM (receipt.required_for_users,receipt.created_at,COALESCE(receipt.password_settings,iam.default_password_settings())))
+            ((current_account.mfa_required_for_users,current_account.security_settings_updated_at)
+                IS DISTINCT FROM (receipt.required_for_users,receipt.created_at)
+             OR NOT iam.password_settings_history_matches(current_account.password_settings,receipt.password_settings)))
         OR (receipt.expected_version=1 AND receipt.previous_required_for_users)
         OR (receipt.expected_version>1 AND NOT EXISTS(SELECT 1 FROM iam.account_security_settings_changes previous
             WHERE previous.tenant_id=tenant AND previous.expected_version=receipt.expected_version-1
                 AND previous.required_for_users=receipt.previous_required_for_users AND previous.created_at<=receipt.created_at
-                AND (receipt.password_settings IS NULL OR receipt.previous_password_settings=COALESCE(previous.password_settings,iam.default_password_settings()))))
-        OR (receipt.expected_version=1 AND receipt.password_settings IS NOT NULL AND receipt.previous_password_settings<>iam.default_password_settings()) THEN
+                AND (receipt.password_settings IS NULL OR iam.password_settings_history_matches(receipt.previous_password_settings,previous.password_settings))))
+        OR (receipt.expected_version=1 AND receipt.password_settings IS NOT NULL
+            AND NOT iam.password_settings_history_matches(receipt.previous_password_settings,iam.default_password_settings())) THEN
         RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='settings lineage differs';
     END IF;
     IF NOT EXISTS(SELECT 1 FROM iam.authorization_decisions d WHERE d.tenant_id=tenant AND d.id=receipt.decision_id
@@ -534,14 +610,17 @@ RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $funct
         AND c.conname='account_security_settings_changes_password' AND c.contype='c' AND c.convalidated AND c.conenforced)
       AND to_regprocedure('iam.update_account_security_settings(text,text,text,text,text,text,bigint,boolean,jsonb)') IS NULL
       AND to_regprocedure('iam.create_user(text,text,text,text,text,text,text,jsonb)') IS NULL
-      AND (SELECT count(*)=4 FROM pg_proc p JOIN (VALUES
+      AND (SELECT count(*)=7 FROM pg_proc p JOIN (VALUES
         ('iam.valid_password_settings(jsonb)','boolean'::regtype,'document','i'),
+        ('iam.valid_password_settings_history(jsonb)','boolean'::regtype,'document','i'),
+        ('iam.password_settings_history_matches(jsonb,jsonb)','boolean'::regtype,'left_value,right_value','i'),
         ('iam.default_password_settings()','jsonb'::regtype,'','i'),
+        ('iam.password_expiry_state(text,text,timestamptz)','jsonb'::regtype,'tenant,subject_id,observed_at','s'),
         ('iam.user_password_settings(text,text)','jsonb'::regtype,'tenant,subject_id','s'),
         ('iam.user_password_requirements(text,text)','jsonb'::regtype,'tenant,subject_id','s')) expected(signature,kind,names,volatility)
         ON p.oid=to_regprocedure(expected.signature) AND p.prorettype=expected.kind
         AND COALESCE(array_to_string(p.proargnames,','),'')=expected.names
-        WHERE p.proowner='matrix_iam_owner'::regrole AND NOT p.prosecdef AND NOT p.proretset
+        WHERE p.proowner='matrix_iam_owner'::regrole AND NOT p.prosecdef AND NOT p.proretset AND NOT p.proisstrict
           AND p.provolatile::text=expected.volatility AND p.proparallel='u' AND p.prokind='f' AND p.pronargdefaults=0
           AND p.proconfig=ARRAY['search_path=pg_catalog, pg_temp']
           AND NOT EXISTS(SELECT 1 FROM aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) acl

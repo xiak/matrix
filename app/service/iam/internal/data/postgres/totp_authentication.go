@@ -19,10 +19,12 @@ func (value *transaction) ReadLoginAuthenticationState(ctx context.Context, acco
 		return identityaccess.LoginAuthenticationState{}, mapSubjectDatabaseError("read login authentication state", err)
 	}
 	var state struct {
-		State              string `json:"state"`
-		Revision           uint64 `json:"revision"`
-		FactorID           string `json:"factorId,omitempty"`
-		EnrollmentRequired *bool  `json:"enrollmentRequired"`
+		State               string                   `json:"state"`
+		Revision            uint64                   `json:"revision"`
+		FactorID            string                   `json:"factorId,omitempty"`
+		EnrollmentRequired  *bool                    `json:"enrollmentRequired"`
+		PasswordExpiryMode  iamv1.PasswordExpiryMode `json:"passwordExpiryMode"`
+		PasswordResetReason json.RawMessage          `json:"passwordResetReason"`
 	}
 	if contractjson.DecodeObjectBytes(encoded, 1024, &state) != nil || state.EnrollmentRequired == nil || state.Revision == 0 || state.Revision > 9007199254740991 ||
 		(state.State != "NEVER_BOUND" && state.State != "REMOVED" && state.State != "BOUND" && state.State != "RECOVERY_REQUIRED") ||
@@ -32,8 +34,16 @@ func (value *transaction) ReadLoginAuthenticationState(ctx context.Context, acco
 		(state.State != "NEVER_BOUND" && state.State != "REMOVED" && *state.EnrollmentRequired) {
 		return identityaccess.LoginAuthenticationState{}, identityaccess.ErrUnavailable
 	}
+	if state.PasswordExpiryMode != iamv1.PasswordExpiryChange && state.PasswordExpiryMode != iamv1.PasswordExpiryAdminReset {
+		return identityaccess.LoginAuthenticationState{}, identityaccess.ErrUnavailable
+	}
+	var reason iamv1.PasswordResetReason
+	if len(state.PasswordResetReason) != 0 && (json.Unmarshal(state.PasswordResetReason, &reason) != nil ||
+		(reason != iamv1.PasswordResetExpired && reason != iamv1.PasswordResetAgeUnknown)) {
+		return identityaccess.LoginAuthenticationState{}, identityaccess.ErrUnavailable
+	}
 	return identityaccess.LoginAuthenticationState{State: state.State, Revision: state.Revision, FactorID: state.FactorID,
-		EnrollmentRequired: *state.EnrollmentRequired}, nil
+		EnrollmentRequired: *state.EnrollmentRequired, PasswordExpiryMode: state.PasswordExpiryMode, PasswordResetReason: reason}, nil
 }
 
 func (value *transaction) CreateLoginChallenge(ctx context.Context, mutation identityaccess.LoginChallengeCreation) (iamv1.AuthenticationChallenge, error) {
@@ -129,6 +139,49 @@ func (value *transaction) ReadTOTPAttempt(ctx context.Context, attempt identitya
 	return identityaccess.TOTPVerification{FactorID: result.FactorID, InstallationID: result.InstallationID,
 		Sealed:           authority.SealedTOTPSeed{KeyID: result.KeyID, FormatVersion: result.FormatVersion, Nonce: result.Nonce, Ciphertext: result.Ciphertext},
 		LastConsumedStep: *result.LastConsumedStep, FactorRevision: result.FactorRevision, DatabaseTime: result.DatabaseTime.UTC(), MustChangePassword: *result.MustChangePassword}, nil
+}
+
+func (value *transaction) RequirePasswordReset(ctx context.Context, mutation identityaccess.PasswordResetRequirement) (iamv1.PasswordResetReason, error) {
+	if (mutation.PasswordAttempt == nil) == (mutation.TOTPAttempt == nil) || mutation.AuditEvent.Action != auditv1.ActionIAMUserPasswordResetRequired ||
+		auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil {
+		return "", identityaccess.ErrInvalidArgument
+	}
+	var account iamv1.AccountID
+	var user iamv1.PrincipalID
+	var passwordID, challengeID, totpID string
+	var passwordSequence, totpSequence uint64
+	var step any
+	if attempt := mutation.PasswordAttempt; attempt != nil {
+		if attempt.Purpose != identityaccess.PasswordAttemptLogin || attempt.SessionID != "" || mutation.VerifiedStep != 0 {
+			return "", identityaccess.ErrInvalidArgument
+		}
+		account, user, passwordID, passwordSequence = attempt.AccountID, attempt.PrincipalID, attempt.ID, attempt.Sequence
+	} else {
+		attempt := mutation.TOTPAttempt
+		if attempt.Purpose != "LOGIN" || attempt.SessionID != "" || mutation.VerifiedStep < 0 || mutation.VerifiedStep > 8446743359 {
+			return "", identityaccess.ErrInvalidArgument
+		}
+		account, user, challengeID, totpID, totpSequence = attempt.AccountID, attempt.UserID, attempt.ReferenceID, attempt.ID, attempt.Sequence
+		step = mutation.VerifiedStep
+	}
+	if string(mutation.AuditEvent.TenantID) != string(account) || string(mutation.AuditEvent.Actor.ID) != string(user) {
+		return "", identityaccess.ErrInvalidArgument
+	}
+	event, err := json.Marshal(mutation.AuditEvent)
+	if err != nil {
+		return "", identityaccess.ErrUnavailable
+	}
+	defer clear(event)
+	var reason iamv1.PasswordResetReason
+	err = value.tx.QueryRow(ctx, "SELECT iam.require_password_reset($1,$2,NULLIF($3,''),NULLIF($4::bigint,0),NULLIF($5,''),NULLIF($6,''),NULLIF($7::bigint,0),$8,$9::jsonb)",
+		account, user, passwordID, passwordSequence, challengeID, totpID, totpSequence, step, event).Scan(&reason)
+	if err != nil {
+		return "", mapSubjectDatabaseError("require password reset", err)
+	}
+	if reason != iamv1.PasswordResetExpired && reason != iamv1.PasswordResetAgeUnknown {
+		return "", identityaccess.ErrUnavailable
+	}
+	return reason, nil
 }
 
 func (value *transaction) BeginPasswordChallenge(ctx context.Context, mutation identityaccess.PasswordChallengeCreation) (iamv1.AuthenticationChallenge, error) {
@@ -265,7 +318,7 @@ func (value *transaction) CompleteLoginChallenge(ctx context.Context, completion
 	}
 	stored := mutation.Session
 	stored.IssuedAt, stored.ExpiresAt = issuedAt.UTC(), expiresAt.UTC()
-	if stored.IssuedAt != mutation.Session.IssuedAt || stored.ExpiresAt != mutation.Session.ExpiresAt || iamv1.ValidateSession(stored) != nil {
+	if stored.IssuedAt != mutation.Session.IssuedAt || stored.ExpiresAt.After(mutation.Session.ExpiresAt) || iamv1.ValidateSession(stored) != nil {
 		return iamv1.Session{}, identityaccess.ErrUnavailable
 	}
 	return stored, nil

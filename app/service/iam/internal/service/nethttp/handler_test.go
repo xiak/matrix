@@ -346,7 +346,7 @@ func TestIAMHTTPPasswordRequirementsKeepOneIdentityCarrier(t *testing.T) {
 		t.Run(sample.name, func(t *testing.T) {
 			workflow := newHTTPWorkflow(t)
 			workflow.passwordRequirements = iamv1.PasswordRequirements{APIVersion: iamv1.APIVersion, Kind: "PasswordRequirements",
-				Password: iamv1.AccountPasswordSettings{MinimumLength: 24, HistoryCount: 3}, MaximumLength: 128, MaximumUTF8Bytes: 512, SettingsVersion: 2, Source: "ACCOUNT"}
+				Password: iamv1.AccountPasswordSettings{ExpiryMode: iamv1.PasswordExpiryChange, MinimumLength: 24, HistoryCount: 3}, MaximumLength: 128, MaximumUTF8Bytes: 512, SettingsVersion: 2, Source: "ACCOUNT"}
 			request := httptest.NewRequest(sample.method, sample.path, strings.NewReader(sample.body))
 			request.Header.Set("Content-Type", "application/json")
 			if sample.bearer != "" {
@@ -1334,7 +1334,7 @@ func TestIAMUserPasswordResetCompletionBoundary(t *testing.T) {
 
 func TestIAMSecuritySettingsWriteAndCompletion(t *testing.T) {
 	const path = "/v1/account/security-settings"
-	const body = `{"requestId":"settings-command","stepUpId":"settings-proof","expectedResourceVersion":1,"mfa":{"requiredForUsers":false},"password":{"minimumLength":15,"requireLowercase":false,"requireUppercase":false,"requireDigit":false,"requireSymbol":false,"historyCount":1}}`
+	const body = `{"requestId":"settings-command","stepUpId":"settings-proof","expectedResourceVersion":1,"mfa":{"requiredForUsers":false},"password":{"minimumLength":15,"requireLowercase":false,"requireUppercase":false,"requireDigit":false,"requireSymbol":false,"historyCount":1,"maxAgeDays":0,"expiryMode":"CHANGE_PASSWORD"}}`
 	for _, endpoint := range []struct{ method, path, body string }{
 		{http.MethodPut, path, body}, {http.MethodGet, path + "/changes/settings-command", ""},
 	} {
@@ -1351,7 +1351,7 @@ func TestIAMSecuritySettingsWriteAndCompletion(t *testing.T) {
 			workflow.settingsChange = iamv1.AccountSecuritySettingsChange{APIVersion: iamv1.APIVersion, Kind: "AccountSecuritySettingsChange",
 				RequestID: "settings-command", ExpectedResourceVersion: 1, CallerSessionEnded: true,
 				Settings: iamv1.AccountSecuritySettings{APIVersion: iamv1.APIVersion, Kind: "AccountSecuritySettings", AccountID: "account-catalog",
-					ResourceVersion: 2, MFA: iamv1.AccountMFASettings{RequiredForUsers: false}, Password: &iamv1.AccountPasswordSettings{MinimumLength: 15, HistoryCount: 1}, UpdatedAt: time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC)}}
+					ResourceVersion: 2, MFA: iamv1.AccountMFASettings{RequiredForUsers: false}, Password: &iamv1.AccountPasswordSettings{ExpiryMode: iamv1.PasswordExpiryChange, MinimumLength: 15, HistoryCount: 1}, UpdatedAt: time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC)}}
 			request := httptest.NewRequest(endpoint.method, endpoint.path, strings.NewReader(endpoint.body))
 			request.Header.Set("Content-Type", "application/json")
 			request.Header.Set("Authorization", "Bearer current")
@@ -1596,7 +1596,7 @@ func (value *httpWorkflow) AccountSecuritySettings(_ context.Context, credential
 	value.settingsCalls++
 	value.settingsCredential = credential
 	return iamv1.AccountSecuritySettings{APIVersion: iamv1.APIVersion, Kind: "AccountSecuritySettings", AccountID: "account-catalog",
-		ResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: false}, Password: &iamv1.AccountPasswordSettings{MinimumLength: 15, HistoryCount: 1}, UpdatedAt: time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC)}, value.settingsErr
+		ResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: false}, Password: &iamv1.AccountPasswordSettings{ExpiryMode: iamv1.PasswordExpiryChange, MinimumLength: 15, HistoryCount: 1}, UpdatedAt: time.Date(2026, 9, 24, 0, 0, 0, 0, time.UTC)}, value.settingsErr
 }
 
 func (value *httpWorkflow) ListAuthorizationProfiles(_ context.Context, credential iamv1.Secret, _ string) (iamv1.AuthorizationProfileList, error) {

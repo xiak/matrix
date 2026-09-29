@@ -74,6 +74,41 @@ func TestSelfServiceFactsRequireTheActualTenantUser(t *testing.T) {
 	}
 }
 
+func TestPasswordResetRequiredIsOnlyAnAuthenticatedTenantDenial(t *testing.T) {
+	valid := Event{APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-reset-required", TenantID: "account-one",
+		Actor: ActorReference{Type: ActorUser, ID: "user-one"}, Action: Action("iam.user.password-reset-required"),
+		Target: TargetReference{Kind: TargetUser, ID: "user-one"}, Result: ResultDenied,
+		RequestDigest: "sha256:" + strings.Repeat("a", 64), RequestID: "request-one", CorrelationID: "request-one",
+		OccurredAt: time.Date(2026, 9, 29, 0, 0, 0, 0, time.UTC)}
+	if _, _, err := CanonicalizeEvent(SourceIAM, valid); err != nil {
+		t.Fatal("authenticated terminal denial rejected", err)
+	}
+	for name, mutate := range map[string]func(*Event){
+		"success":      func(v *Event) { v.Result = ResultSucceeded },
+		"accepted":     func(v *Event) { v.Result = ResultAccepted },
+		"other user":   func(v *Event) { v.Target.ID = "other-user" },
+		"system":       func(v *Event) { v.Actor.Type = ActorSystem },
+		"service":      func(v *Event) { v.Actor.Type = ActorServiceAccount },
+		"key":          func(v *Event) { v.Actor.AccessKeyID = "key-one" },
+		"decision":     func(v *Event) { v.IAMDecisionID = "not-a-permit" },
+		"operation":    func(v *Event) { v.OperationID = "not-an-operation" },
+		"installation": func(v *Event) { v.TenantID, v.InstallationID = "", "installation-one" },
+		"target scope": func(v *Event) { v.Target.TenantID = v.TenantID },
+		"session":      func(v *Event) { v.Target.Kind = TargetSession },
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := valid
+			mutate(&value)
+			if ValidateEventForSource(SourceIAM, value) == nil {
+				t.Fatal("reset instruction became another authority or success fact")
+			}
+		})
+	}
+	if ValidateEventForSource(SourcePaaS, valid) == nil || ValidateEventForSource(SourceAudit, valid) == nil {
+		t.Fatal("another producer admitted a password authentication fact")
+	}
+}
+
 func TestAccessKeyFactsRequireRealTenantUserDecisions(t *testing.T) {
 	event := Event{APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-key", TenantID: "account-a",
 		Actor: ActorReference{Type: ActorUser, ID: "manager-a"}, IAMDecisionID: "decision-key", Target: TargetReference{Kind: TargetAccessKey, ID: "key-a"},
@@ -256,7 +291,7 @@ func TestAuditActionCatalogIsClosedAndSourceBound(t *testing.T) {
 		if contract.UserActorRequired {
 			event.Actor.Type = ActorUser
 		}
-		if action == ActionIAMOtherSessionsRevoked || action == ActionIAMNotificationContactVerificationStarted || action == ActionIAMNotificationContactVerified || action == ActionIAMAuthenticatorBound || action == ActionIAMAuthenticatorReplaced || action == ActionIAMAuthenticatorRemoved || action == ActionIAMAuthenticatorRecoveryStarted || action == ActionIAMAuthenticatorRecovered || action == ActionIAMRecoveryCodesRegenerated {
+		if action == ActionIAMUserPasswordResetRequired || action == ActionIAMOtherSessionsRevoked || action == ActionIAMNotificationContactVerificationStarted || action == ActionIAMNotificationContactVerified || action == ActionIAMAuthenticatorBound || action == ActionIAMAuthenticatorReplaced || action == ActionIAMAuthenticatorRemoved || action == ActionIAMAuthenticatorRecoveryStarted || action == ActionIAMAuthenticatorRecovered || action == ActionIAMRecoveryCodesRegenerated {
 			event.Target.ID = string(event.Actor.ID)
 		}
 		if contract.RoleActorRequired {

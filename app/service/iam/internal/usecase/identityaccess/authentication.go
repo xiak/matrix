@@ -66,6 +66,9 @@ func (service *Authority) Login(
 		if err != nil {
 			return err
 		}
+		if !state.validPasswordExpiry() {
+			return ErrUnavailable
+		}
 		switch state.State {
 		case "BOUND", "RECOVERY_REQUIRED":
 			response, err = service.createLoginChallenge(transactionContext, transaction, attempt, state, request.RequestID, requestDigest)
@@ -74,7 +77,11 @@ func (service *Authority) Login(
 			if state.FactorID != "" || (state.State == "NEVER_BOUND" && state.Revision != 1) || (state.State == "REMOVED" && state.Revision < 3) {
 				return ErrUnavailable
 			}
-			if state.EnrollmentRequired {
+			if state.PasswordResetReason != "" && state.PasswordExpiryMode == iamv1.PasswordExpiryAdminReset {
+				response, err = service.requirePasswordReset(transactionContext, transaction, PasswordResetRequirement{PasswordAttempt: &attempt}, request.RequestID, requestDigest)
+				return err
+			}
+			if state.EnrollmentRequired || state.PasswordResetReason != "" {
 				response, err = service.createLoginChallenge(transactionContext, transaction, attempt, state, request.RequestID, requestDigest)
 				return err
 			}
