@@ -3122,6 +3122,53 @@
         "hint": "Authenticator enrollment facts are unavailable, so the UI cannot infer either unenrolled or secure."
       }
     },
+    "unusedAccessReview": {
+      "open": "Review unused access",
+      "title": "Unused access review",
+      "previewBoundary": "MOCK · Matrix does not yet have a complete activity collection window or source watermarks, so it cannot classify real principals as idle. This directory previews the common cloud finding, evidence and human-remediation experience only; it changes no account, credential, role or permission.",
+      "sampleAnalyzer": "Analyzer sample",
+      "sampleAnalyzerHint": "A synthetic complete 90-day observation window for evaluating information structure and action boundaries.",
+      "mock": "MOCK analyzer",
+      "statusSummary": "Sample finding status",
+      "sampleWindow": "The sample only analyzes identities and credentials that existed before the complete {count}-day window began; current real data does not meet that condition.",
+      "findings": "Unused access finding samples",
+      "directoryHint": "Finding state is separate from resource state. Archived means deferred; resolved means a later analyzer scan no longer meets the finding condition. Neither is inferred locally by the browser.",
+      "principal": "Principal or credential",
+      "principalType": "Object type",
+      "findingType": "Finding type",
+      "lastObserved": "Last observed",
+      "status": "Finding status",
+      "reviewWindow": "Observation window",
+      "findingCreated": "Finding generated",
+      "evidenceCoverage": "Evidence coverage",
+      "completeSample": "Complete window (synthetic sample)",
+      "days": "{count} days",
+      "detailTitle": "Review · {name}",
+      "sampleEvidence": "This page shows synthetic complete-window evidence. Real Matrix activity remains unknown and cannot justify action against an object with the same name.",
+      "recommendationTitle": "Recommended remediation path",
+      "noAutomaticAction": "An unused-access finding must not directly delete an identity or permission. Verify ownership, workloads, authorization sources and business impact first; a real change still requires separate capability checks, review and an authoritative server result.",
+      "reviewTarget": "View corresponding object",
+      "subjects": {
+        "user": "User sign-in credential",
+        "accessKey": "Access key",
+        "role": "Role"
+      },
+      "types": {
+        "unusedPassword": "Unused console password",
+        "unusedAccessKey": "Unused access key",
+        "unusedRole": "Unused role"
+      },
+      "statuses": {
+        "active": "Needs review",
+        "archived": "Archived",
+        "resolved": "Resolved"
+      },
+      "recommendations": {
+        "unusedPassword": "Confirm whether the user still needs console access. If not, remove the sign-in method or disable the user while preserving resource ownership and audit facts.",
+        "unusedAccessKey": "Confirm that no workload depends on the key, disable it, and observe before deletion. Neither disabled state nor age alone proves that a key is unused.",
+        "unusedRole": "Verify trusted principals, service workloads, recent assumed sessions and business-resource dependencies. Remove real dependencies before deletion; the role's mere existence is not a usage result."
+      }
+    },
     "reviewSecurityCheck": "View {name}",
     "exportReports": "Export reports",
     "credentialReport": "User credential report",

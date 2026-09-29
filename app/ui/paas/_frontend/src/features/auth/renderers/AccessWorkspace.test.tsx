@@ -13,8 +13,8 @@ import { PolicyDocumentViewer } from "./PolicyDocumentViewer";
 import type { PolicyDocument } from "../domain/policyDocument";
 import { AccountAccessRenderer } from "./AccountAccessRenderer";
 import { GroupDetail, GroupDirectory } from "./GroupAccessWorkspace";
-import { AccessReports } from "./AccessReports";
-import { buildAccessActivityObservations, buildAccessReport, buildAccessSecuritySnapshot } from "../scenes/accessReport";
+import { AccessReports, UnusedAccessReviewPreview } from "./AccessReports";
+import { buildAccessActivityObservations, buildAccessReport, buildAccessSecuritySnapshot, buildUnusedAccessFindingPreview } from "../scenes/accessReport";
 import { buildAccountAccessScene } from "../scenes/accountAccessScene";
 import { previewAccountRepository, previewCredential, previewIamRepository, resetPreviewEnvironment } from "../repositories/previewIamRepository";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
@@ -3299,5 +3299,32 @@ describe("CAM-style access workspace", () => {
     expect(within(card).getByRole("button", { name: "导出报告" })).toBeTruthy();
     await user.click(within(card).getByRole("button", { name: "查看长期访问密钥" }));
     expect(onNavigate).toHaveBeenCalledWith("keys");
+  });
+  it("previews unused-access findings without turning missing live evidence into a destructive action", async () => {
+    const extension = createPreviewAccessWorkspace("org-xiak", () => users.map((entry) => entry.user.id), identity.account.rootIdentity.principalId);
+    const workspace = await extension.read("preview");
+    const scene = buildAccountAccessScene(identity, { items: users, nextAfter: null }, null, { accountId: "org-xiak", scope: "TENANT", installationId: null, items: [] }, { accountId: "org-xiak", scope: "INSTALLATION", installationId: "preview", items: [] });
+    const findings = buildUnusedAccessFindingPreview(workspace, scene);
+    expect(findings.map(({ findingType, status }) => ({ findingType, status }))).toEqual([
+      { findingType: "unusedPassword", status: "active" },
+      { findingType: "unusedAccessKey", status: "archived" },
+      { findingType: "unusedRole", status: "resolved" }
+    ]);
+    const onNavigate = vi.fn();
+    const user = userEvent.setup();
+    render(<LocaleProvider><UnusedAccessReviewPreview workspace={workspace} scene={scene} onBack={vi.fn()} onNavigate={onNavigate} /></LocaleProvider>);
+    expect(screen.getByRole("heading", { name: "未使用访问审阅" })).toBeTruthy();
+    expect(screen.getByText(/当前 Matrix 尚无完整活动采集窗口/)).toBeTruthy();
+    const table = screen.getByRole("table", { name: "未使用访问发现样例" });
+    expect(table.getAttribute("data-mobile-layout")).toBe("stack");
+    expect(within(table).queryByRole("button", { name: /删除|停用/ })).toBeNull();
+    const first = findings[0]!;
+    await user.click(within(table).getByRole("button", { name: first.name }));
+    expect(screen.getByRole("heading", { name: `审阅 · ${first.name}` })).toBeTruthy();
+    expect(screen.getByText("完整窗口（合成样例）")).toBeTruthy();
+    expect(screen.getByText(/不能从一条未使用发现直接删除身份或权限/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "查看对应对象" }));
+    expect(onNavigate).toHaveBeenCalledWith(first.target.view, first.target.id);
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 });

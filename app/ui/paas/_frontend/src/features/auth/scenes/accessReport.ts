@@ -20,6 +20,67 @@ export type AccessActivityObservation = {
   source: "CURRENT_PREVIEW_SESSION" | null;
 };
 
+export type UnusedAccessFindingPreview = {
+  id: string;
+  name: string;
+  subjectId: string;
+  subjectKind: "user" | "accessKey" | "role";
+  findingType: "unusedPassword" | "unusedAccessKey" | "unusedRole";
+  status: "active" | "archived" | "resolved";
+  lastObservedAt: string;
+  generatedAt: string;
+  windowDays: 90;
+  target: { view: Extract<AccountAccessView, "users" | "keys" | "roles">; id?: string };
+};
+
+// This is a visibly synthetic UX sample. Current Matrix activity sources do
+// not prove a complete collection window, so no current workspace principal is
+// classified as unused. The sample lets the review workflow be evaluated
+// without inventing a live analyzer or a destructive command.
+export function buildUnusedAccessFindingPreview(workspace: AccessWorkspace, scene: AccountAccessScene): UnusedAccessFindingPreview[] {
+  const user = scene.users[0];
+  const key = workspace.keys[0];
+  const role = workspace.roles[0];
+  const findings: UnusedAccessFindingPreview[] = [];
+  if (user) findings.push({
+      id: "mock-unused-password",
+      name: user.loginName,
+      subjectId: user.id,
+      subjectKind: "user",
+      findingType: "unusedPassword",
+      status: "active",
+      lastObservedAt: "2026-05-18T08:15:00Z",
+      generatedAt: "2026-09-09T03:00:00Z",
+      windowDays: 90,
+      target: { view: "users", id: user.id }
+    });
+  if (key) findings.push({
+      id: "mock-unused-access-key",
+      name: key.id,
+      subjectId: key.ownerId,
+      subjectKind: "accessKey",
+      findingType: "unusedAccessKey",
+      status: "archived",
+      lastObservedAt: "2026-05-04T11:30:00Z",
+      generatedAt: "2026-09-09T03:00:00Z",
+      windowDays: 90,
+      target: { view: "keys" }
+    });
+  if (role) findings.push({
+      id: "mock-unused-role",
+      name: role.name,
+      subjectId: role.id,
+      subjectKind: "role",
+      findingType: "unusedRole",
+      status: "resolved",
+      lastObservedAt: "2026-04-21T01:45:00Z",
+      generatedAt: "2026-09-09T03:00:00Z",
+      windowDays: 90,
+      target: { view: "roles", id: role.id }
+    });
+  return findings;
+}
+
 // This is a preview of evidence *shape*, not an activity/idle judgment. Only
 // the current issued Session proves a sample login; generic operation events,
 // metadata and absent events cannot establish a collection window or watermark.
