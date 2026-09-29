@@ -44,9 +44,9 @@ ServiceRoleTemplate 定义注册服务主体、用途、允许权限和生命周
 | IAM-SVC-01/02 | 未实现 | 当前 ServiceIdentity 只证明安装归属、服务主体及 purpose；不能承担目标账号 Role。现有 RoleSession 只允许同账号 USER 来源，TrustPolicy 也明确拒绝 SERVICE_ACCOUNT。没有模板、账号同意、PassRole、工作负载绑定或服务短期凭据。 |
 | IAM-TAG-01/02 | 未实现 | Role 的 `tags` 仍只是元数据，不能进入授权。产品资源标签、创建请求标签、标签写入授权和并发一致性尚无可信来源协议。 |
 
-`app/service/paas/internal/managedservice/port/security.go` 原 action→resource switch 是该产品适配器的封闭边界，不是通用求值器按产品名称分叉，但它重复了 release-owned Profile。本轮候选已删除这份重复映射：port 直接使用 IAM Action/ResourceKind 类型，通过 `NewAuthorizationRequest` 和 managedservice 当前 Profile 的完整引用/calling service 核对形状；IAM HTTP adapter不再执行第二次字符串翻译。七种合法集合/实例形状及其他产品、错资源、错集合用途/ID攻击的聚焦测试通过；API/PaaS 全包 race、对应 vet 和 architecture 门禁通过，尚待独立CI。后继产品适配器同样应消费自己编译进发布物且已由 IAM Profile 摘要认证的声明，通用 IAM 求值器仍只解释统一 Profile/Policy 语义。
+`app/service/paas/internal/managedservice/port/security.go` 原 action→resource switch 是该产品适配器的封闭边界，不是通用求值器按产品名称分叉，但它重复了 release-owned Profile。本轮候选已删除这份重复映射：port 直接使用 IAM Action/ResourceKind 类型，通过 `NewAuthorizationRequest` 和 managedservice 当前 Profile 的完整引用/calling service 核对形状；IAM HTTP adapter不再执行第二次字符串翻译。七种合法集合/实例形状及其他产品、错资源、错集合用途/ID攻击的聚焦测试通过；全仓默认 race/vet、architecture、模块校验和 Linux amd64 构建通过，尚待独立CI。后继产品适配器同样应消费自己编译进发布物且已由 IAM Profile 摘要认证的声明，通用 IAM 求值器仍只解释统一 Profile/Policy 语义。
 
-同片后继候选把 apphosting 的 PaaS→IAM 资源词汇翻译收敛到 port 的单一构造器，HTTP adapter不再维护第二份资源 switch，Action/资源形状、当前 Profile 引用、PAAS calling service 和可信 source IP 一次绑定。apphosting 仍保留14个路由动作的显式 PEP 子集：同一PaaS Profile中的平台主机/安装动作不能因“属于PaaS”进入应用托管。14条合法形状及同产品错PEP、其他产品、错资源/集合/source IP攻击的聚焦测试通过；API/PaaS 全包 race、对应 vet 和 architecture 门禁通过，尚待独立CI。
+同片后继候选把 apphosting 的 PaaS→IAM 资源词汇翻译收敛到 port 的单一构造器，HTTP adapter不再维护第二份资源 switch，Action/资源形状、当前 Profile 引用、PAAS calling service 和可信 source IP 一次绑定。apphosting 仍保留14个路由动作的显式 PEP 子集：同一PaaS Profile中的平台主机/安装动作不能因“属于PaaS”进入应用托管。14条合法形状及同产品错PEP、其他产品、错资源/集合/source IP攻击的聚焦测试通过；同一全仓默认 race/vet、architecture、模块校验和 Linux amd64 构建通过，尚待独立CI。
 
 ## 下一纵向切片：账号同意的服务相关角色
 
@@ -60,6 +60,44 @@ ServiceRoleTemplate 定义注册服务主体、用途、允许权限和生命周
 6. 同意、发行、撤销和使用分别审计。IAM 只证明服务主体、模板、同意、Role 和临时身份；具体业务 payload 仍由产品事务/outbox 证明。删除有活跃 workload 的关系必须拒绝或走明确异步解绑，不能留下无限可用凭据。
 
 本切片复用 006 的 Role、Role boundary、RoleSession、凭据发行和唯一策略求值器；只有服务来源、模板/同意及 workload 绑定构成新的安全边界。它不新增可由客户写入的产品目录、不把 ServiceIdentity 直接当租户管理员、不开放跨 installation 通配，也不把服务模板政策混入客户自定义 Policy。
+
+### 对象与入口
+
+| 对象 | 最小字段/关系 | 所有权与可变性 |
+| --- | --- | --- |
+| `ServiceRoleTemplate` | 稳定 template ID、product、service purpose、递增版本、完整摘要、精确系统 PolicyVersion、允许的 workload resource kinds、最大发行时长 | 产品发布物拥有；版本不可变，当前头由受信源码/发布注册。租户不能上传、改写或选择未登记版本 |
+| `ServiceLinkedRole` | 复用 `Role`，`management=SERVICE_LINKED`；另存精确 template 版本/摘要、当前安装内的服务主体及权限上限 | 属于目标 Account；由显式同意创建。普通 Role 更新/trust/附件/boundary API只读或拒绝，不能转换为 `CUSTOMER` |
+| `WorkloadRoleBinding` | binding ID、Account、Role、template 引用、精确 `{kind,id}` workload、状态、资源版本、创建/撤销时间 | 属于目标 Account；产品 PEP 证明真实 workload，IAM 原子保存同意关系。一个绑定只服务一个 workload，不以名称或 tag 关联 |
+| `ServiceRoleSession` | 复用 Role 权限求值，但来源为精确 ServiceIdentity、binding、purpose、installation、服务凭据代际和短期会话 | IAM 发行；只显示一次秘密。当前 source/binding/Role/Account任一失效后下一请求拒绝，不缓存为 permit |
+
+现有 USER `RoleSession` 历史和 Audit canonical 已有固定消费者，服务来源不能伪造 `sourceUserId`。公共 Role actor lineage 增加与 `sourceUserId` 严格二选一的 `sourceServicePrincipalId`，原USER编码因新增字段 `omitempty` 保持原字节；私有证据另保存 installation、purpose、binding、服务凭据代际和模板承诺。管理员目录必须准确区分 USER 与 SERVICE 来源，不能隐藏服务会话而使其不可撤销。若实现证明统一表会破坏现有锁序，可在同一 RoleSession owner内分开持久化生命周期，但公开身份、PDP和撤销语义仍只有一个，不保留两个求值器。
+
+首个消费者由 managedservice product owner 暴露“给当前 ServiceInstallation 绑定/解绑服务角色”的业务入口，而不是让浏览器直接调用内部 IAM：
+
+1. managedservice 以当前 USER bearer 对实际 `SERVICE_INSTALLATION` 做新增的精确 bind/unbind Action；从数据库确认该资源属于 IAM 推导的 Account。
+2. PaaS 使用自己的 ServiceIdentity 和同一个 USER bearer 调用 IAM 的双凭据内部入口，提交规范化 product AuthorizationRequest、template 精确引用及 command ID。IAM 核对 calling service/profile，并在同一事务重新评估 workload Action、`iam.service-linked-role.create`（需要创建时）和精确 Role 的 `iam.role.pass`，不能只信任 caller 给出的 Allow 或 tenant。
+3. IAM 等值重放返回同一 Role/binding；同 command 更换 template、workload、Role、产品请求或主体冲突。IAM 已提交而产品回包丢失时可按原 command查询非敏感完成，不重新选择当前模板或签发第二份关系。
+4. 服务承担入口只接受当前 ServiceIdentity、binding ID、时长和 request ID；不接受 Account、Role、purpose、installation、Policy 或任意 AuthorizationRequest。IAM从binding反查全部目标并按当前状态发行短期凭据。完成查询只返回原会话身份/终态，不重放秘密。
+5. 产品资源删除先进入不可新增效果的删除中状态，再撤销binding和全部来源会话，最后删除资源；撤销成功而业务删除失败保持安全关闭，可显式重新同意。不能先删资源再留下可发行会话的悬空binding。
+
+建议入口形状如下；路径是当前服务契约而非要求拆出新的部署单元：
+
+| 入口 | 调用凭据 | 作用 |
+| --- | --- | --- |
+| `GET /v1/service-role-templates` | 当前USER | 读取受信模板目录及精确版本，不返回安装服务秘密 |
+| `GET /v1/service-linked-roles`、`/{roleId}` | 当前USER | 读取本Account的服务相关Role、template和binding摘要 |
+| `POST /v1/internal/workload-role-bindings` | PaaS ServiceIdentity + 当前USER | 由真实产品PEP发起，原子创建/确认Role和binding |
+| `DELETE /v1/internal/workload-role-bindings/{bindingId}` | PaaS ServiceIdentity + 当前USER | 重评实际workload与PassRole后撤销binding及其会话 |
+| `POST /v1/internal/service-role-sessions` | 当前ServiceIdentity | 按binding承担Role并一次返回短期秘密 |
+| `GET /v1/internal/service-role-sessions/by-request/{requestId}` | 当前ServiceIdentity | 仅查询本服务原意图的非敏感完成/终态 |
+
+`iam.role.pass` 不授予业务资源权限；workload Action 也不授予承担任意Role。两者与模板、服务trust必须全部通过。模板升级默认不改变既有Role/binding；扩大权限必须以新版本重新同意，缩减或安全退役可让旧版本停止新发行但不改写历史事实。
+
+事务锁序沿现有 Account→USER/当前Session→Role，再取得稳定binding；服务发行沿 Account→服务主体/凭据代际→Role→binding→会话配额。模板/PolicyVersion/历史决定不可变，只核对精确承诺。binding 撤销与发行使用同一 Role/binding锁序；任一顺序都不得在撤销后产生有效新会话，不能用数据库死锁重试隐藏两个都成功。Role/Account停用、模板退役、service credential撤销及binding撤销只终止后继访问和新发行，不删除租户业务资源或篡改已接受Operation/历史outbox。
+
+新增租户事实分别命名为 `iam.service-linked-role.created`、`iam.workload-role-binding.created/revoked` 和服务来源的 session issued/revoked；不改变现有USER `iam.role-session.*` action含义。业务调用仍使用原产品事实，但ROLE actor lineage准确记录服务来源。Audit正文不含临时凭据、模板完整策略、服务长期凭据或私有代际证据。
+
+本切片落地时只验证当前开发schema和一个确有数据意义的最近前驱；项目尚未发布，不建立从所有历史草稿逐版升级的组合矩阵。已固定的USER RoleSession/Audit历史字节、撤权不复活和真实产品资源数据仍必须保留；源码schema迁移通过不代表签名release profile可跨版本运行。
 
 ## 验收
 
