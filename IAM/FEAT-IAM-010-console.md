@@ -28,6 +28,8 @@
 
 Account/RootIdentity 与日常 User 分开。主身份展示为受保护的账号所有者，不因没有普通策略附件显示为未授权，也不进入普通 User 的授权、禁用、删除或边界设置流程。按照 IAM 的固定目标架构 `204b1d55`，Root 的账号管理与恢复权能来自封闭的 tenant-owner capability catalog，而非通配策略或平台角色；所有者身份不自动证明任意业务资源操作可用，具体按钮仍按已验证的当前 capability 和服务端动作结果决定。此目标架构尚未替代当前 LIVE 权威。创建 User 不开通另一个 Account。
 
+租户账号目录与 User、Group、Policy 目录使用同一原生表格契约。桌面保留列式比较，小屏改为带字段标签的纵向行，必须同时呈现租户稳定 ID、主账号登录名、主账号别名与状态；不能依靠横向裁切隐藏账号身份字段，也不增加逐行操作列。对象名称继续进入内容区详情，生命周期动作由详情页准确 capability 决定。
+
 `AccountPolicy`、`PolicyDirectory` 和 `UserPolicyAttachment` 替代旧的内置角色投影；新 User 默认无业务授权。Tenant/installation 策略目录独立读取与授权，各为稳定 ID 有序、最多 256 项的完整元数据快照；仅 403 是局部不可用，其他失败关闭对应真实场景。缺少 installation 策略元数据时展示稳定 Policy ID，不隐藏有效直接附件，也不由元数据制造正文、继承、边界或最终允许结果。
 
 当前在线授权权威只有 `Policy`、`PolicyVersion` 与 `PolicyAttachment`；历史 `RoleBinding` 标识只服务旧事实或迁移证据，不能形成兼容授权页、只读入口或第二套客户端模型。真正的 `Role` / `RoleSession` 拥有独立信任策略、承担检查与有界临时会话，不得与旧枚举角色混淆。目标 MOCK 同样不再显示“平台内置角色”并行入口。

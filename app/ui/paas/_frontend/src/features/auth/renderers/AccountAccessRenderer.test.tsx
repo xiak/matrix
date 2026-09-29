@@ -594,6 +594,12 @@ describe("account access", () => {
     const repository = accounts();
     const { user } = await openAccess(repository, iam(), "tenants");
     const table = await screen.findByRole("table", { name: "租户账号列表" });
+    expect(table.getAttribute("data-mobile-layout")).toBe("stack");
+    const firstRow = within(table).getByRole("row", { name: /Team A/ });
+    expect(within(firstRow).getByRole("cell", { name: /Team A/ }).getAttribute("data-label")).toBe("租户");
+    expect(within(firstRow).getByRole("cell", { name: "admin" }).getAttribute("data-label")).toBe("主账号登录名");
+    expect(within(firstRow).getByRole("cell", { name: "未设置" }).getAttribute("data-label")).toBe("主账号别名");
+    expect(within(firstRow).getByRole("cell", { name: "正常" }).getAttribute("data-label")).toBe("状态");
     expect(within(table).queryByRole("columnheader", { name: "操作" })).toBeNull();
     await user.click(within(table).getByRole("button", { name: "Team A" }));
     expect(screen.getByRole("heading", { name: "Team A" })).toBeTruthy();
