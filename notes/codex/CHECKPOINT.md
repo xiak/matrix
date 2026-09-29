@@ -6,8 +6,8 @@
 - Updated: 2026-09-30
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `59728ee1`
-- Pushed documentation head: `e7272b76`
+- Pushed UI source: `862603e6`
+- Pushed documentation head: `5d35b600`
 
 ## Authoritative route
 
@@ -109,6 +109,14 @@ initial feedback to their table region, while other routes retain their own
 content geometry. Verified scene refresh continues to keep current content.
 This is shared loading behavior, not a new data model or LIVE acceptance, and
 the independent MOCK entry remains available for inspection.
+
+The service-authorization MOCK now separates platform-template publication
+from current-Account consent in its directory, detail and final review. It
+states that a concrete cloud-product resource initiates real create/revoke,
+while IAM observes template and service-linked-role state read-only. The sample
+remains unpublished and unauthorized, and its final command stays disabled.
+Do not map it to LIVE until IAM supplies a fixed, pushed northbound contract;
+the engineer's current local ServiceRole work is not a consumable source.
 
 LIVE member Role discovery also keeps its verified source identity, discovery
 heading and temporary-access boundary mounted while only role cards load. An
