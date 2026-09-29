@@ -5,6 +5,7 @@
 - 全局导航、视觉体系、响应式布局和隔离 MOCK 体验由 [FEAT-007](../docs/features/FEAT-007-control-plane-console.md) 拥有；固定来源由 [adoption review](../docs/adoption/FEAT-007-control-plane-console.md) 拥有。不引入另一套 IAM UI。
 - 当前 IAM 集成基线固定为 `04041d2d3f7ed55225a5164bc2bc05251d25a6f1`（Verification `35485632542` completed/success）。该来源只固定当前 API 与权威对象，不把 IAM 各 FEAT 的未完成验收继承为 UI 验收。
 - 权限能力目录的 CAT-06 固定契约为 `40407e2710a45ee1000552146cd362740074369a`，对应 IAM 累积来源 `a36a35c2eddbeb7c76a8d7c140e180b24a169aab`。它只固定只读目录及其错误边界，不接受租户注册产品、目录生命周期或策略作者发布能力。
+- 成员 Role 自服务固定到 IAM-006 来源 `62a18a48168e87a4158b95eba41427b445ed10d1`、公开目录数量边界 `0567c8b2699521b137db0f8b69f17630c59f04fb` 和来源身份不可复活修正 `1ebab37aef4bce12b963f52d3919748a9d50d4c6`。该边界只接受当前 USER 的可承担目录、承担、按原请求查询/撤销、CurrentRoleIdentity 和 Role logout，不扩大管理员 Role 管理能力。
 - 本人安全通知、首次 TOTP 绑定及原登录挑战的固定契约来源为 `f5cec0e132ad18900d9a5a5629eae04fda4817f1`。受限自助恢复客户端按 IAM-009 S2b 候选 `48e56cbb1d3490ee8cee8314a41cfc26d1f24b2e` 的三个封闭接口实现。IAM 的 `80a6e6d18288df7f5d89ffee40722ee9aa614ee7` 已在真实 PostgreSQL 18.6 上完成十码逐条耗尽、两次自然十分钟窗口及相关 race/vet 验证；其独立 CI 仍因平台 billing/spending 未取得 runner，真实 IAM 浏览器也未验收，因此这里只固定客户端解释与隔离 MOCK，不把候选称为已发布或继承未完成的发布验收。
 
 ## 需求
@@ -195,7 +196,11 @@ LIVE 管理片提供角色目录、详情读取和角色创建。固定标题、
 
 角色信任关系是详情页中的完整配置工作流。进入后在当前 trust 页签内选择、校验、审阅前后主体及完整信任文档，再显式保存；返回、取消、失败重试和完成都不打开 Dialog，并恢复到稳定触发器。同账号 USER 的 MOCK 预览沿用固定 `TrustPolicyDocument` 形状（`languageVersion`、`statements`、`sid`、`effect`、`principals`），只用于说明未来可复用的文档结构，不声称当前 MOCK 保存走 LIVE 命令；服务与身份提供商只展示明确标记的合成主体，不伪装为 LIVE 信任文档。信任只是承担准入，不替代调用 User 针对该 Role 的 `iam.role.assume` 授权，也不授予角色资源权限。
 
-管理员的角色会话目录与成员自服务承担必须分开。管理目录只展示非秘密会话记录、来源 User、到期/撤销观察和单条撤销能力；`UNREVOKED` 只表示在该观察时刻既未撤销也未到期，不得翻译为“当前仍可用”。管理员角色详情不提供创建或模拟承担入口，隔离 MOCK 也遵循同一信息架构；可承担角色发现、承担审阅和体验身份只存在于独立成员自服务入口。撤销确认留在内容区，目录行只保留单个更多菜单；不确定撤销结果保留原 requestId，只允许等价重试或读取该会话的权威状态，读到 `REVOKED` 也不能据此声称是此前未知命令造成。真实 AssumeRole、临时凭据和当前 Role 身份仍需后续固定成员自服务契约，不能从管理员目录反推承担成功。
+管理员的角色会话目录与成员自服务承担必须分开。管理目录只展示非秘密会话记录、来源 User、到期/撤销观察和单条撤销能力；`UNREVOKED` 只表示在该观察时刻既未撤销也未到期，不得翻译为“当前仍可用”。管理员角色详情不提供创建或模拟承担入口，隔离 MOCK 也遵循同一信息架构；可承担角色发现、承担审阅和体验身份只存在于独立成员自服务入口。撤销确认留在内容区，目录行只保留单个更多菜单；不确定撤销结果保留原 requestId，只允许等价重试或读取该会话的权威状态，读到 `REVOKED` 也不能据此声称是此前未知命令造成。
+
+LIVE 成员入口只用当前 USER bearer 发现其本人的可承担 Role；Account、来源 User、trust 结果和承担授权均由后端上下文决定，页面不提供身份选择器。固定身份/边界先呈现，只有目录数据区延迟骨架；选择后在内容区审阅准确 Role、资源版本和有界时长。首次 `APPLIED` 的 Role credential 只留 React 内存，必须通过 CurrentRoleIdentity 精确核对 Account、Role、来源 User 和会话后才替换业务 credential；`EQUAL_REPLAY` 与按原请求查询都不含秘密，不能恢复或猜测 credential，只能先撤销已定位会话再创建新意图。Role 模式不复用来源 USER 的 IAM 管理目录或产品 credential；产品请求统一消费核验后的有效身份。
+
+退出 Role 不签发或复活 USER credential。客户端先停止 Role credential 的业务使用，以原 logout requestId 等价重试；只有确认 RoleSession 已撤销后，才用原 USER bearer 调用 `/auth/me` 重新核对同一 Account/User 并恢复 USER 模式。网络、5xx、401 或协议失败均是退出结果未知，不能显示已退出；显式兜底也必须先重新核对来源 USER，再按原承担 requestId 撤销对应会话。浏览器刷新或进程丢失不会持久化 USER/Role credential，要求重新登录。
 
 成员自服务 MOCK 会话从实际点击承担的时刻计算签发与所选时长，不使用陈旧示例时间冒充当前会话。到期后即使浏览器标签页曾在后台，也不能继续显示“可用角色身份”或退出有效会话的动作；返回角色发现是新的体验入口，不表示真实 RoleSession 的服务端状态已被本地时钟证明。
 
@@ -213,7 +218,7 @@ Secret 只在创建结果明确为 `APPLIED` 时展示一次，并在确认离�
 
 真实策略新建、版本读取、发布、切默认与退休已有前端客户端，JSON 与当前目录驱动的可视化作者也已有行为测试，但仍需与固定 IAM 进程完成浏览器联调；当前目录元数据和边界引用不能替代这些权威结果。Action 家族、跨资源类型多 Action 可视化、更多云产品条件与资源挑选尚未纳入 LIVE 表单；现有 DEV 创建策略四路径仍是隔离 MOCK 体验，不构成 IAM 当前发布能力。只读权限能力目录客户端同样仍需真实进程浏览器验收；产品声明管理不是租户策略功能。
 
-Role 管理 list/read/create 与管理员 RoleSession list/read/revoke 的固定 LIVE 客户端已经完成，但仍需真实 IAM 进程浏览器联调；Role update/status/delete、trust 与 policy attachment 变更、权限边界、可承担角色发现、AssumeRole、当前 Role 身份、签发结果 by-request 恢复和 Role logout 仍待各自固定契约接入。恢复码再生成的固定 LIVE 客户端已经完成，但仍需固定 IAM 进程验证 step-up、一次性秘密交付和重新登录查询闭环；账号安全规则仍是隔离 MOCK，不能从纯设计契约推导 LIVE 写入。SSO 与其余登录安全专项按各自固定后端契约推进。访问密钥 LIVE 客户端已固定到 IAM-007 的每用户管理契约，但仍需真实 IAM 进程的浏览器联调；产品 Profile 尚不接受 AccessKey，不能据此宣称云产品 API 已可使用长期密钥。本片不宣称全部错误页面或完整访问管理已验收，也不改变保留 MOCK 验收入口的安排。
+Role 管理 list/read/create、管理员 RoleSession list/read/revoke，以及成员可承担角色发现、AssumeRole、当前 Role 身份、签发结果 by-request 恢复/撤销和 Role logout 的固定 LIVE 客户端已经完成，但仍需真实 IAM 进程浏览器联调；Role update/status/delete、trust 与 policy attachment 变更和权限边界仍待各自固定契约接入。恢复码再生成的固定 LIVE 客户端已经完成，但仍需固定 IAM 进程验证 step-up、一次性秘密交付和重新登录查询闭环；账号安全规则仍是隔离 MOCK，不能从纯设计契约推导 LIVE 写入。SSO 与其余登录安全专项按各自固定后端契约推进。访问密钥 LIVE 客户端已固定到 IAM-007 的每用户管理契约，但仍需真实 IAM 进程的浏览器联调；产品 Profile 尚不接受 AccessKey，不能据此宣称云产品 API 已可使用长期密钥。本片不宣称全部错误页面或完整访问管理已验收，也不改变保留 MOCK 验收入口的安排。
 
 ## 验收
 
@@ -400,7 +405,22 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 - 撤销确认留在内容区。响应未知时由 Account/credential 绑定的 Provider 持有原意图；返回角色目录、重新进入同一 Role/Session 或切换详情页签后仍只复用原 requestId。更新按 requestId、Account、Role 与 Session 比较后写入，旧异步回调不能覆盖另一个意图；切换 Account 或 credential 后原意图立即不可见。可选择等价重试或精确读取；权威读到 `REVOKED` 只说明当前状态，页面明确不声称此前未知命令导致撤销。成功后只更新当前会话数据区，并按服务器筛选移除或保留该行，焦点返回行操作或区块标题。
 - 完整前端 42 个测试文件、674 条用例及三条静态归一化用例通过；类型、lint、架构、228 组主题对比、40 页生产导出、223 个嵌入文件等价、`go test ./...` 与 `go vet ./...` 通过。DEV 浏览器同时验证桌面 Role 目录和 `390 × 844` 小屏公共页面命令；“新建角色”和“服务授权”均可从稳定标题区进入，移动端菜单不挤压标题，保留的 MOCK 目录可继续检查且没有 Dialog 或页面横向溢出。
 - IAM 工程师对固定提交执行只读定向复核，确认未决意图的 owner 位于实体 key 之外，所有异步回调携带原 expected requestId，Account、Role 与 Session 比较阻止旧结果覆盖另一意图；该复核不替代真实 IAM 进程浏览器验收。
-- 当前证据接受固定 LIVE Role 目录/详情/创建与管理员 RoleSession 客户端、响应式信息架构、局部加载和独立 MOCK 可检查性；尚未以真实 IAM 进程执行 Role 创建、目录/详情或会话撤销的浏览器验收，也没有开放 Role 更新/状态/删除、后续 trust/policy attachment/权限边界变更、成员可承担角色发现、真实 AssumeRole、临时凭据、当前 Role 身份、签发结果 by-request 恢复或 logout。
+- 当前证据接受固定 LIVE Role 目录/详情/创建与管理员 RoleSession 客户端、响应式信息架构、局部加载和独立 MOCK 可检查性；尚未以真实 IAM 进程执行 Role 创建、目录/详情或会话撤销的浏览器验收，也没有开放 Role 更新/状态/删除及后续 trust/policy attachment/权限边界变更。成员承担及身份切换由下一节的独立自服务证据拥有，不能反向扩大本管理片。
+
+### 成员 Role 自服务 LIVE 客户端的开发验收证据
+
+2026-09-29，LIVE 前端适配与同步嵌入资源固定在已推送的
+[`751b0d69`](https://github.com/xiak/matrix/commit/751b0d69)，消费 IAM-006 固定来源
+`62a18a48168e87a4158b95eba41427b445ed10d1`、目录数量边界
+`0567c8b2699521b137db0f8b69f17630c59f04fb` 与来源身份不可复活修正
+`1ebab37aef4bce12b963f52d3919748a9d50d4c6`。
+
+- 严格 HTTP 客户端只调用当前 USER 的 `/auth/assumable-roles`、Role `:assume`、按承担 requestId 查询/撤销、Role bearer 的 `/auth/role-session` 与 `:logout`，以及来源 USER 的 `/auth/me`。请求不发送 Account/User 选择器；目录、Role、会话、当前身份、opaque continuation、页大小、排序、时间窗、能力和精确字段均失败关闭，真实失败不回退 MOCK。
+- 固定标题、来源身份和边界说明同步呈现，只有可承担目录使用延迟局部骨架。目录不伪造管理员 Role 总数；选择、时长审阅、未知结果定位、撤销、身份确认和退出恢复都在内容区完成，不打开 Dialog。显式 DEV MOCK 继续走原隔离仓库，不调用 LIVE 客户端，也不改变 Header 当前身份。
+- `APPLIED` 的一次性 Role credential 先留内存，只有 CurrentRoleIdentity 精确核对同一 Account、Role、来源 User 和会话后才成为产品请求的有效 credential。`EQUAL_REPLAY` 与 by-request 响应不得携带秘密；凭据不可恢复时只能撤销原会话。Role 模式隐藏来源 USER 的 IAM 管理入口；手工进入 USER/Session 路由也返回 Role 会话页，不静默复用 USER 管理权限。
+- Role logout 开始即停止业务使用；不确定结果保留同一 logout requestId、Role credential 和原承担 requestId，只允许等价重试，或在来源 USER `/auth/me` 精确复核后按原承担 requestId 撤销。401 只证明该端点不接受当前 bearer，不被解释为已撤销。确认退出后仍须重新验证来源 USER；源凭据替换或消失会同步关闭产品 credential，并对旧 Role 做尽力 logout。浏览器持久层不保存 USER/Role credential。
+- 状态机、渲染器、账号菜单和严格 HTTP 定向用例通过；完整前端门禁通过 50 个文件/830 条用例及 3 条静态归一化用例、类型、lint、架构、228 组浅色/混色/深色对比度、41 页生产导出和 228 个嵌入文件等价；`go test -p 2 ./...` 与 `go vet -p 2 ./...` 通过。DEV MOCK 在 `390px` 与 `1280px` 实看发现、审阅和成功态，390px 的 document/body 均无横向溢出，Dialog 为零，浏览器 warning/error 为空。
+- 本证据接受固定 LIVE 客户端、身份切换与恢复状态机、响应式信息架构和 MOCK 保留；尚未以真实 IAM 进程完成承担、产品请求、logout/来源恢复或故障注入的浏览器闭环，也不接受 Role 管理写入、跨账号、角色链、服务身份或 SSO。
 
 ### 访问密钥生命周期的开发验收证据
 
