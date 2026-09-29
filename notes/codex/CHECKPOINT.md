@@ -6,8 +6,8 @@
 - Updated: 2026-09-29
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `5a1f3013`
-- Pushed documentation head: `ca073f4b`
+- Pushed UI source: `5476b3ad`
+- Pushed documentation head: `4b7f869b`
 
 ## Authoritative route
 
@@ -71,6 +71,15 @@ decision. The overview owns its responsive container, yielding a two-by-two
 fact grid at 390px without page overflow. It remains MOCK-only until IAM
 publishes a fixed authoritative projection; do not assemble it from separate
 User, Group and Policy reads or reinterpret denial as empty data.
+
+The MOCK Group detail now completes the same hierarchy: members inherit the
+group's directly attached policies, policy rows expose current-default document
+effects, and the overview states that groups do not have permission boundaries.
+The shared renderer displays that summary only when its caller supplies complete
+current-document coverage. The LIVE Group adapter deliberately omits it under
+the current contract and performs no policy-detail fan-out, name inference or
+denial-to-empty fallback. Target-User and Group grant-source/effect projections
+remain backend-owned and unimplemented until a fixed pushed IAM contract exists.
 
 ## Continuation
 
