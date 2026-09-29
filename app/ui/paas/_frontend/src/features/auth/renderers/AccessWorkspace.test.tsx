@@ -1698,6 +1698,7 @@ describe("CAM-style access workspace", () => {
     const directory = await screen.findByRole("table", { name: "用户组" });
     await user.click(within(directory).getByRole("button", { name: "ProgressiveTeam" }));
     expect(await screen.findByRole("heading", { name: "ProgressiveTeam" })).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "用户组授权模型" })).toBeNull();
     expect(screen.getByText("正在读取成员关系…")).toBeTruthy();
     expect(screen.queryByRole("table", { name: "成员" })).toBeNull();
     await act(async () => { resolveMemberships({ accountId: account.id, groupId: liveGroup.group.id, items: [], nextAfter: null }); });
@@ -1933,6 +1934,21 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByRole("button", { name: "lin" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "DeliveryTeam" }));
     expect(screen.getByRole("heading", { name: "DeliveryTeam" })).toBeTruthy();
+  });
+  it("summarizes the preview group inheritance model only from complete current policy documents", async () => {
+    const { user } = await open("groups", { entityId: "group-delivery", seed: async (extension) => {
+      await extension.execute("preview", { kind: "change-group-policies", id: "group-delivery", added: ["policy-production-guard"], removed: [] });
+    } });
+    const overview = await screen.findByRole("region", { name: "用户组授权模型" });
+    expect(within(overview).getByText("1 位成员")).toBeTruthy();
+    expect(within(overview).getByText("2 项直接关联")).toBeTruthy();
+    expect(within(overview).getByText(/不代表成员某次请求的最终判定/)).toBeTruthy();
+    expect(within(overview).getByText("用户组不设置")).toBeTruthy();
+    await user.click(screen.getByRole("tab", { name: "直接关联策略 (2)" }));
+    const denyRow = screen.getByRole("button", { name: "ProtectProductionDeployments" }).closest("tr")!;
+    expect(within(denyRow).getByText("含显式拒绝")).toBeTruthy();
+    const allowRow = screen.getByRole("button", { name: "MatrixDeliveryAccess" }).closest("tr")!;
+    expect(within(allowRow).getByText("仅允许声明")).toBeTruthy();
   });
   it("changes group policies only after review and keeps metadata edits independent", async () => {
     const { user, extension } = await open("groups", { entityId: "group-delivery" });

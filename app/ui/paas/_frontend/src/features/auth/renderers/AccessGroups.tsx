@@ -6,6 +6,7 @@ import { Alert, Badge, Button, EmptyState, FormField, Input, TextArea } from "@u
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import type { AccountAccessView } from "../domain/accounts";
 import type { AccessGroup, AccessWorkspace } from "../domain/accessWorkspace";
+import { containsDenyStatement } from "../domain/policyDocument";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
 import { WorkspaceDelete, WorkspaceDialog, WorkspaceSelection } from "./AccessWorkspaceUi";
 import {
@@ -158,6 +159,19 @@ export function AccessGroups({ workspace, scene, entityId, onCreate, onOpen }: {
   const policyById = useMemo(() => new Map(workspace.policies.map((policy) => [policy.id, policy])), [workspace.policies]);
   const selectedRecord = useMemo<GroupDetailRecord | undefined>(() => {
     if (!selected) return undefined;
+    const policies = selected.policyIds.map((policyId) => {
+      const policy = policyById.get(policyId);
+      const document = policy?.versions.find((version) => version.id === policy.defaultVersion)?.document;
+      return {
+        id: `preview-attachment:${selected.id}:${policyId}`,
+        policyId,
+        name: policy?.name ?? policyId,
+        description: policy?.description,
+        kind: policy?.kind,
+        version: policy?.defaultVersion,
+        documentEffect: document ? containsDenyStatement(document) ? "containsDeny" as const : "allowStatementsOnly" as const : undefined
+      };
+    });
     return {
       id: selected.id,
       name: selected.name,
@@ -176,17 +190,8 @@ export function AccessGroups({ workspace, scene, entityId, onCreate, onOpen }: {
           state: user?.state
         };
       }),
-      policies: selected.policyIds.map((policyId) => {
-        const policy = policyById.get(policyId);
-        return {
-          id: `preview-attachment:${selected.id}:${policyId}`,
-          policyId,
-          name: policy?.name ?? policyId,
-          description: policy?.description,
-          kind: policy?.kind,
-          version: policy?.defaultVersion
-        };
-      })
+      policies,
+      ...(policies.every((policy) => policy.documentEffect !== undefined) ? { policyDocumentEffects: "complete" as const } : {})
     };
   }, [policyById, selected, userById]);
 

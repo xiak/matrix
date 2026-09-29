@@ -2,7 +2,7 @@
 
 import { useTranslations } from "next-intl";
 import { Alert, Badge, Button, EmptyState, Table, TableSkeleton, Tabs } from "@ui/xiak";
-import { WorkspaceCollection, WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
+import { AuthorizationOverview, WorkspaceCollection, WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
 import styles from "./AccountAccessRenderer.module.css";
 
 export type GroupActionControl = {
@@ -37,11 +37,14 @@ export type GroupPolicyRecord = {
   description?: string;
   kind?: "system" | "custom";
   version?: number | string;
+  documentEffect?: "allowStatementsOnly" | "containsDeny";
 };
 
 export type GroupDetailRecord = GroupDirectoryRecord & {
   members: GroupMemberRecord[];
   policies: GroupPolicyRecord[];
+  /** Present only when every attached policy's current default document is available to this view. */
+  policyDocumentEffects?: "complete";
   membersAvailability?: "ready" | "loading" | "refreshing" | "forbidden" | "error";
   membersError?: string;
 };
@@ -118,9 +121,10 @@ function GroupPolicyTable({ policies, onOpen }: {
   onOpen(policyId: string): void;
 }) {
   const t = useTranslations("IamWorkspace");
+  const showDocumentEffect = policies.some((policy) => policy.documentEffect !== undefined);
 
   return <Table aria-label={t("permissions")} mobileLayout="stack">
-    <thead><tr><th scope="col">{t("name")}</th><th scope="col">{t("type")}</th><th scope="col">{t("version")}</th></tr></thead>
+    <thead><tr><th scope="col">{t("name")}</th><th scope="col">{t("type")}</th><th scope="col">{t("version")}</th>{showDocumentEffect ? <th scope="col">{t("documentEffect")}</th> : null}</tr></thead>
     <tbody>{policies.map((policy) => <tr key={policy.id}>
       <td data-label={t("name")}>
         <button className={styles.userLink} onClick={() => onOpen(policy.policyId)}>{policy.name}</button>
@@ -128,6 +132,9 @@ function GroupPolicyTable({ policies, onOpen }: {
       </td>
       <td data-label={t("type")}>{policy.kind ? t(policy.kind) : "—"}</td>
       <td data-label={t("version")}>{policy.version === undefined ? "—" : typeof policy.version === "number" ? `v${policy.version}` : policy.version}</td>
+      {showDocumentEffect ? <td data-label={t("documentEffect")}>{policy.documentEffect
+        ? <Badge status={policy.documentEffect === "containsDeny" ? "danger" : "neutral"}>{t(policy.documentEffect)}</Badge>
+        : "—"}</td> : null}
     </tr>)}</tbody>
   </Table>;
 }
@@ -155,6 +162,8 @@ export function GroupDetail({ group, controls, onBack, onOpenMember, onOpenPolic
 }) {
   const t = useTranslations("IamWorkspace");
   const g = useTranslations("GroupWorkspace");
+  const policiesWithDeny = group.policies.filter((policy) => policy.documentEffect === "containsDeny").length;
+  const showAuthorizationOverview = group.policyDocumentEffects === "complete" && group.memberCount !== undefined;
 
   return <WorkspaceDetail
     title={group.name}
@@ -170,6 +179,16 @@ export function GroupDetail({ group, controls, onBack, onOpenMember, onOpenPolic
       <div><dt>ID</dt><dd>{group.id}</dd></div>
       <div><dt>{t("created")}</dt><dd><WorkspaceTime value={group.createdAt} /></dd></div>
     </dl>
+    {showAuthorizationOverview ? <AuthorizationOverview
+      title={g("authorizationOverview")}
+      hint={g("authorizationOverviewHint")}
+      items={[
+        { label: t("members"), value: t("memberCount", { count: group.memberCount! }) },
+        { label: g("directPolicies"), value: g("directPolicyCount", { count: group.directPolicyCount }) },
+        { label: t("policiesWithDeny"), value: <><strong>{policiesWithDeny}</strong> {t(policiesWithDeny === 1 ? "item" : "items")}</> },
+        { label: t("permissionBoundary"), value: g("noPermissionBoundary") }
+      ]}
+    /> : null}
     <Tabs.Root defaultValue="members">
       <Tabs.List aria-label={group.name}>
         <Tabs.Trigger value="members">{t("members")}{group.memberCount === undefined ? null : ` (${group.memberCount})`}</Tabs.Trigger>
