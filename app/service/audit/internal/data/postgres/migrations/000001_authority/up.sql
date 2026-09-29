@@ -350,6 +350,9 @@ BEGIN
         ('iam.role-session.revoked', 'IAM', 'ROLE_SESSION', 'SUCCEEDED', false, false, false),
         ('iam.role-session.admin-revoked', 'IAM', 'ROLE_SESSION', 'SUCCEEDED', true, true, false),
         ('iam.role-session.exited', 'IAM', 'ROLE_SESSION', 'SUCCEEDED', false, false, false),
+        ('iam.service-linked-role.created', 'IAM', 'ROLE', 'SUCCEEDED', true, true, false),
+        ('iam.workload-role-binding.created', 'IAM', 'WORKLOAD_ROLE_BINDING', 'SUCCEEDED', true, true, false),
+        ('iam.workload-role-binding.revoked', 'IAM', 'WORKLOAD_ROLE_BINDING', 'SUCCEEDED', true, true, false),
         ('iam.access-key.created', 'IAM', 'ACCESS_KEY', 'SUCCEEDED', true, true, false),
         ('iam.access-key.enabled', 'IAM', 'ACCESS_KEY', 'SUCCEEDED', true, true, false),
         ('iam.access-key.disabled', 'IAM', 'ACCESS_KEY', 'SUCCEEDED', true, true, false),
@@ -522,6 +525,7 @@ BEGIN
             'iam.role.created','iam.role.updated','iam.role.disabled','iam.role.enabled','iam.role.trust-set','iam.role.deleted',
             'iam.role.permission-boundary.set','iam.role.permission-boundary.removed',
             'iam.role-session.issued','iam.role-session.revoked','iam.role-session.admin-revoked',
+            'iam.service-linked-role.created','iam.workload-role-binding.created','iam.workload-role-binding.revoked',
             'iam.access-key.created','iam.access-key.enabled','iam.access-key.disabled','iam.access-key.deleted',
             'iam.user.permission-boundary.set','iam.user.permission-boundary.removed',
             'iam.user.password-reset','iam.user.password-changed','iam.user.password-reset-required',
@@ -601,7 +605,7 @@ AS $function$
         AND to_regclass('audit.records') IS NOT NULL
         AND to_regclass('audit.event_registry') IS NOT NULL
         AND audit.role_actor_contract_ready(),
-        28::bigint,
+        29::bigint,
         transaction_timestamp()
 $function$;
 
@@ -907,6 +911,7 @@ BEGIN
             'iam.role.created','iam.role.updated','iam.role.disabled','iam.role.enabled','iam.role.trust-set','iam.role.deleted',
             'iam.role.permission-boundary.set','iam.role.permission-boundary.removed',
             'iam.role-session.issued','iam.role-session.revoked','iam.role-session.exited','iam.role-session.admin-revoked',
+            'iam.service-linked-role.created','iam.workload-role-binding.created','iam.workload-role-binding.revoked',
             'iam.access-key.created','iam.access-key.enabled','iam.access-key.disabled','iam.access-key.deleted',
             'iam.user.permission-boundary.set','iam.user.permission-boundary.removed',
             'iam.group-membership.created','iam.group-membership.removed',

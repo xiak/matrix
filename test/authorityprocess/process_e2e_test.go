@@ -2758,7 +2758,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	// Exercise the exact source services together without weakening install
 	// admission: the workflow separately proves the published installer rejects
 	// this unmatched database shape before effects.
-	sourceProfile := installationrelease.AuthoritySchemas{IAM: 53, Audit: 28, PaaS: 2}
+	sourceProfile := installationrelease.AuthoritySchemas{IAM: 53, Audit: 29, PaaS: 2}
 	publishedProfile := installationrelease.CurrentDatabaseProfile()
 	if publishedProfile.Authorities == sourceProfile {
 		t.Fatal("unreleased authority source shape was published without a final profile gate")

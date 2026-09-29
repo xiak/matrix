@@ -325,6 +325,9 @@ func assertAuditContractCatalog(
 		if contract.AccessKeyActorPermitted {
 			event.Actor = auditv1.ActorReference{Type: auditv1.ActorUser, ID: "catalog-key-user"}
 		}
+		if err := auditv1.ValidateEventForSource(contract.Source, event); err != nil {
+			t.Fatalf("Audit catalog action %q fixture violates its public contract: %v", action, err)
+		}
 		record, _ := appendAcceptedAuditRecord(
 			t, ctx, runtimeConnection, contract.Source, event,
 		)
