@@ -17,27 +17,36 @@ var (
 )
 
 const (
-	AuthorizeApplicationCreate           = "paas.application.create"
-	AuthorizeApplicationRead             = "paas.application.read"
-	AuthorizeConfigurationCreate         = "paas.configuration.create"
-	AuthorizeConfigurationRead           = "paas.configuration.read"
-	AuthorizeConfigurationRevisionCreate = "paas.configuration-revision.create"
-	AuthorizeConfigurationRevisionRead   = "paas.configuration-revision.read"
-	AuthorizeApplicationRevisionCreate   = "paas.application-revision.create"
-	AuthorizeApplicationRevisionRead     = "paas.application-revision.read"
-	AuthorizeDeploymentCreate            = "paas.deployment.create"
-	AuthorizeDeploymentUpdate            = "paas.deployment.update"
-	AuthorizeDeploymentStop              = "paas.deployment.stop"
-	AuthorizeDeploymentRollback          = "paas.deployment.rollback"
-	AuthorizeDeploymentRead              = "paas.deployment.read"
-	AuthorizeOperationRead               = "paas.operation.read"
+	AuthorizeApplicationCreate           = iamv1.ActionPaaSApplicationCreate
+	AuthorizeApplicationRead             = iamv1.ActionPaaSApplicationRead
+	AuthorizeConfigurationCreate         = iamv1.ActionPaaSConfigurationCreate
+	AuthorizeConfigurationRead           = iamv1.ActionPaaSConfigurationRead
+	AuthorizeConfigurationRevisionCreate = iamv1.ActionPaaSConfigurationRevisionCreate
+	AuthorizeConfigurationRevisionRead   = iamv1.ActionPaaSConfigurationRevisionRead
+	AuthorizeApplicationRevisionCreate   = iamv1.ActionPaaSApplicationRevisionCreate
+	AuthorizeApplicationRevisionRead     = iamv1.ActionPaaSApplicationRevisionRead
+	AuthorizeDeploymentCreate            = iamv1.ActionPaaSDeploymentCreate
+	AuthorizeDeploymentUpdate            = iamv1.ActionPaaSDeploymentUpdate
+	AuthorizeDeploymentStop              = iamv1.ActionPaaSDeploymentStop
+	AuthorizeDeploymentRollback          = iamv1.ActionPaaSDeploymentRollback
+	AuthorizeDeploymentRead              = iamv1.ActionPaaSDeploymentRead
+	AuthorizeOperationRead               = iamv1.ActionPaaSOperationRead
+)
+
+const (
+	ResourceApplication           = "Application"
+	ResourceConfiguration         = "Configuration"
+	ResourceConfigurationRevision = "ConfigurationRevision"
+	ResourceApplicationRevision   = "ApplicationRevision"
+	ResourceDeployment            = "Deployment"
+	ResourceOperation             = "Operation"
 )
 
 // AuthorizationRequest carries transient credential material to the IAM
 // boundary. Credential must never be persisted, logged, or copied into Audit.
 type AuthorizationRequest struct {
 	Credential      string
-	Action          string
+	Action          iamv1.Action
 	Resource        paasv1.ResourceRef
 	ResourceMode    iamv1.AuthorizationResourceMode
 	CollectionUsage iamv1.AuthorizationCollectionUsage
@@ -69,31 +78,70 @@ func ValidateAuthorizationRequest(value AuthorizationRequest) error {
 		len([]byte(value.Credential)) > 16*1024 {
 		problems = append(problems, errors.New("authorization credential is invalid"))
 	}
-	if !knownAuthorizationAction(value.Action) {
-		problems = append(problems, fmt.Errorf("unknown authorization action %q", value.Action))
-	}
-	if strings.TrimSpace(value.Resource.Kind) == "" {
-		problems = append(problems, errors.New("authorization resource kind is required"))
-	}
-	switch value.ResourceMode {
-	case iamv1.AuthorizationResourceInstance:
-		if value.CollectionUsage != "" {
-			problems = append(problems, errors.New("instance authorization cannot carry collection usage"))
-		}
-	case iamv1.AuthorizationResourceCollection:
-		if value.Resource.ID != "collection" || (value.CollectionUsage != iamv1.AuthorizationCollectionCreate && value.CollectionUsage != iamv1.AuthorizationCollectionList) {
-			problems = append(problems, errors.New("collection authorization target is invalid"))
-		}
-	default:
-		problems = append(problems, errors.New("authorization resource mode is required"))
-	}
-	_, sourceIPErr := iamv1.ParseAuthorizationSourceIP(value.SourceIP)
-	problems = append(problems,
-		paasv1.ValidateID("authorization.resource.id", string(value.Resource.ID)),
-		sourceIPErr,
-		paasv1.ValidateID("authorization.requestId", value.RequestID),
-	)
+	_, requestErr := NewIAMAuthorizationRequest(value)
+	problems = append(problems, requestErr)
 	return errors.Join(problems...)
+}
+
+// NewIAMAuthorizationRequest is the single PaaS-to-IAM vocabulary adapter.
+// The release-owned Profile remains the authority for actions, shapes,
+// conditions and caller purpose; this function only translates PaaS resource
+// names and binds the network fact observed by the PEP.
+func NewIAMAuthorizationRequest(value AuthorizationRequest) (iamv1.AuthorizationRequest, error) {
+	if !isAppHostingAction(value.Action) {
+		return iamv1.AuthorizationRequest{}, errors.New("authorization action is outside apphosting")
+	}
+	resource, err := iamResourceReference(value.Resource)
+	if err != nil {
+		return iamv1.AuthorizationRequest{}, err
+	}
+	request, err := iamv1.NewAuthorizationRequest(value.Action, resource,
+		value.ResourceMode, value.CollectionUsage, value.RequestID, value.RequestID)
+	profile, known := iamv1.LookupAuthorizationProfile(iamv1.ProductPaaS)
+	if err != nil || !known || iamv1.CheckAuthorizationProfileReference(profile, request.Profile) != nil ||
+		profile.CallingService != iamv1.ServicePaaS {
+		return iamv1.AuthorizationRequest{}, errors.New("authorization request is outside the PaaS profile")
+	}
+	request, err = iamv1.BindAuthorizationSourceIP(request, value.SourceIP)
+	if err != nil {
+		return iamv1.AuthorizationRequest{}, errors.New("authorization network context is invalid")
+	}
+	return request, nil
+}
+
+// isAppHostingAction is the PEP route boundary within the wider PaaS product
+// Profile. Platform host and installation actions intentionally remain in the
+// same release-owned product declaration but are not accepted by this HTTP
+// adapter.
+func isAppHostingAction(value iamv1.Action) bool {
+	switch value {
+	case AuthorizeApplicationCreate, AuthorizeApplicationRead,
+		AuthorizeConfigurationCreate, AuthorizeConfigurationRead,
+		AuthorizeConfigurationRevisionCreate, AuthorizeConfigurationRevisionRead,
+		AuthorizeApplicationRevisionCreate, AuthorizeApplicationRevisionRead,
+		AuthorizeDeploymentCreate, AuthorizeDeploymentUpdate,
+		AuthorizeDeploymentStop, AuthorizeDeploymentRollback,
+		AuthorizeDeploymentRead, AuthorizeOperationRead:
+		return true
+	default:
+		return false
+	}
+}
+
+func iamResourceReference(value paasv1.ResourceRef) (iamv1.ResourceReference, error) {
+	kinds := map[string]iamv1.ResourceKind{
+		ResourceApplication:           iamv1.ResourceApplication,
+		ResourceConfiguration:         iamv1.ResourceConfiguration,
+		ResourceConfigurationRevision: iamv1.ResourceConfigurationRevision,
+		ResourceApplicationRevision:   iamv1.ResourceApplicationRevision,
+		ResourceDeployment:            iamv1.ResourceDeployment,
+		ResourceOperation:             iamv1.ResourceOperation,
+	}
+	kind, known := kinds[value.Kind]
+	if !known {
+		return iamv1.ResourceReference{}, fmt.Errorf("unknown PaaS resource kind %q", value.Kind)
+	}
+	return iamv1.ResourceReference{Kind: kind, ID: string(value.ID)}, nil
 }
 
 func ValidateAuthorizationForRequest(
@@ -124,28 +172,4 @@ func ValidateAuthorization(value Authorization) error {
 		)
 	}
 	return errors.Join(problems...)
-}
-
-func knownAuthorizationAction(value string) bool {
-	for _, candidate := range []string{
-		AuthorizeApplicationCreate,
-		AuthorizeApplicationRead,
-		AuthorizeConfigurationCreate,
-		AuthorizeConfigurationRead,
-		AuthorizeConfigurationRevisionCreate,
-		AuthorizeConfigurationRevisionRead,
-		AuthorizeApplicationRevisionCreate,
-		AuthorizeApplicationRevisionRead,
-		AuthorizeDeploymentCreate,
-		AuthorizeDeploymentUpdate,
-		AuthorizeDeploymentStop,
-		AuthorizeDeploymentRollback,
-		AuthorizeDeploymentRead,
-		AuthorizeOperationRead,
-	} {
-		if value == candidate {
-			return true
-		}
-	}
-	return false
 }

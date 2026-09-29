@@ -210,7 +210,7 @@ func (value *handler) ServeHTTP(response http.ResponseWriter, request *http.Requ
 }
 
 func (value *handler) createApplication(response http.ResponseWriter, request *http.Request) {
-	requestID, authorization, ok := value.authorizeCreationCollection(response, request, port.AuthorizeApplicationCreate, "Application")
+	requestID, authorization, ok := value.authorizeCreationCollection(response, request, port.AuthorizeApplicationCreate, port.ResourceApplication)
 	if !ok {
 		return
 	}
@@ -226,7 +226,7 @@ func (value *handler) createApplication(response http.ResponseWriter, request *h
 }
 
 func (value *handler) createConfiguration(response http.ResponseWriter, request *http.Request) {
-	requestID, authorization, ok := value.authorizeCreationCollection(response, request, port.AuthorizeConfigurationCreate, "Configuration")
+	requestID, authorization, ok := value.authorizeCreationCollection(response, request, port.AuthorizeConfigurationCreate, port.ResourceConfiguration)
 	if !ok {
 		return
 	}
@@ -242,7 +242,7 @@ func (value *handler) createConfiguration(response http.ResponseWriter, request 
 }
 
 func (value *handler) createConfigurationRevision(response http.ResponseWriter, request *http.Request) {
-	requestID, authorization, ok := value.authorizeCreationCollection(response, request, port.AuthorizeConfigurationRevisionCreate, "ConfigurationRevision")
+	requestID, authorization, ok := value.authorizeCreationCollection(response, request, port.AuthorizeConfigurationRevisionCreate, port.ResourceConfigurationRevision)
 	if !ok {
 		return
 	}
@@ -258,7 +258,7 @@ func (value *handler) createConfigurationRevision(response http.ResponseWriter, 
 }
 
 func (value *handler) createApplicationRevision(response http.ResponseWriter, request *http.Request) {
-	requestID, authorization, ok := value.authorizeCreationCollection(response, request, port.AuthorizeApplicationRevisionCreate, "ApplicationRevision")
+	requestID, authorization, ok := value.authorizeCreationCollection(response, request, port.AuthorizeApplicationRevisionCreate, port.ResourceApplicationRevision)
 	if !ok {
 		return
 	}
@@ -274,7 +274,7 @@ func (value *handler) createApplicationRevision(response http.ResponseWriter, re
 }
 
 func (value *handler) createDeployment(response http.ResponseWriter, request *http.Request) {
-	requestID, authorization, ok := value.authorizeCreationCollection(response, request, port.AuthorizeDeploymentCreate, "Deployment")
+	requestID, authorization, ok := value.authorizeCreationCollection(response, request, port.AuthorizeDeploymentCreate, port.ResourceDeployment)
 	if !ok {
 		return
 	}
@@ -311,7 +311,7 @@ func (value *handler) updateDeployment(response http.ResponseWriter, request *ht
 		request,
 		requestID,
 		action,
-		"Deployment",
+		port.ResourceDeployment,
 		deploymentID,
 		iamv1.AuthorizationResourceInstance, "",
 	)
@@ -334,7 +334,7 @@ func (value *handler) rollbackDeployment(response http.ResponseWriter, request *
 	if !ok {
 		return
 	}
-	requestID, authorization, ok := value.authorize(response, request, port.AuthorizeDeploymentRollback, "Deployment", deploymentID, iamv1.AuthorizationResourceInstance, "")
+	requestID, authorization, ok := value.authorize(response, request, port.AuthorizeDeploymentRollback, port.ResourceDeployment, deploymentID, iamv1.AuthorizationResourceInstance, "")
 	if !ok {
 		return
 	}
@@ -355,7 +355,7 @@ func (value *handler) rollbackDeployment(response http.ResponseWriter, request *
 }
 
 func (value *handler) getApplication(response http.ResponseWriter, request *http.Request) {
-	id, authorization, requestID, ok := value.authorizePath(response, request, "applicationId", port.AuthorizeApplicationRead, "Application")
+	id, authorization, requestID, ok := value.authorizePath(response, request, "applicationId", port.AuthorizeApplicationRead, port.ResourceApplication)
 	if !ok {
 		return
 	}
@@ -364,7 +364,7 @@ func (value *handler) getApplication(response http.ResponseWriter, request *http
 }
 
 func (value *handler) getConfiguration(response http.ResponseWriter, request *http.Request) {
-	id, authorization, requestID, ok := value.authorizePath(response, request, "configurationId", port.AuthorizeConfigurationRead, "Configuration")
+	id, authorization, requestID, ok := value.authorizePath(response, request, "configurationId", port.AuthorizeConfigurationRead, port.ResourceConfiguration)
 	if !ok {
 		return
 	}
@@ -373,7 +373,7 @@ func (value *handler) getConfiguration(response http.ResponseWriter, request *ht
 }
 
 func (value *handler) getConfigurationRevision(response http.ResponseWriter, request *http.Request) {
-	id, authorization, requestID, ok := value.authorizePath(response, request, "configurationRevisionId", port.AuthorizeConfigurationRevisionRead, "ConfigurationRevision")
+	id, authorization, requestID, ok := value.authorizePath(response, request, "configurationRevisionId", port.AuthorizeConfigurationRevisionRead, port.ResourceConfigurationRevision)
 	if !ok {
 		return
 	}
@@ -382,7 +382,7 @@ func (value *handler) getConfigurationRevision(response http.ResponseWriter, req
 }
 
 func (value *handler) getApplicationRevision(response http.ResponseWriter, request *http.Request) {
-	id, authorization, requestID, ok := value.authorizePath(response, request, "applicationRevisionId", port.AuthorizeApplicationRevisionRead, "ApplicationRevision")
+	id, authorization, requestID, ok := value.authorizePath(response, request, "applicationRevisionId", port.AuthorizeApplicationRevisionRead, port.ResourceApplicationRevision)
 	if !ok {
 		return
 	}
@@ -391,7 +391,7 @@ func (value *handler) getApplicationRevision(response http.ResponseWriter, reque
 }
 
 func (value *handler) getDeployment(response http.ResponseWriter, request *http.Request) {
-	id, authorization, requestID, ok := value.authorizePath(response, request, "deploymentId", port.AuthorizeDeploymentRead, "Deployment")
+	id, authorization, requestID, ok := value.authorizePath(response, request, "deploymentId", port.AuthorizeDeploymentRead, port.ResourceDeployment)
 	if !ok {
 		return
 	}
@@ -400,7 +400,7 @@ func (value *handler) getDeployment(response http.ResponseWriter, request *http.
 }
 
 func (value *handler) getDeploymentGeneration(response http.ResponseWriter, request *http.Request) {
-	id, authorization, requestID, ok := value.authorizePath(response, request, "deploymentId", port.AuthorizeDeploymentRead, "Deployment")
+	id, authorization, requestID, ok := value.authorizePath(response, request, "deploymentId", port.AuthorizeDeploymentRead, port.ResourceDeployment)
 	if !ok {
 		return
 	}
@@ -422,7 +422,7 @@ func (value *handler) getOperation(response http.ResponseWriter, request *http.R
 	if !ok {
 		return
 	}
-	requestID, authorization, ok := value.authorize(response, request, port.AuthorizeOperationRead, "Operation", paasv1.ResourceID(id), iamv1.AuthorizationResourceInstance, "")
+	requestID, authorization, ok := value.authorize(response, request, port.AuthorizeOperationRead, port.ResourceOperation, paasv1.ResourceID(id), iamv1.AuthorizationResourceInstance, "")
 	if !ok {
 		return
 	}
@@ -437,7 +437,7 @@ func (value *handler) getOperation(response http.ResponseWriter, request *http.R
 func (value *handler) authorizeCreationCollection(
 	response http.ResponseWriter,
 	request *http.Request,
-	action string,
+	action iamv1.Action,
 	kind string,
 ) (string, port.Authorization, bool) {
 	return value.authorize(response, request, action, kind, "collection", iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate)
@@ -447,7 +447,7 @@ func (value *handler) authorizePath(
 	response http.ResponseWriter,
 	request *http.Request,
 	pathName string,
-	action string,
+	action iamv1.Action,
 	kind string,
 ) (paasv1.ResourceID, port.Authorization, string, bool) {
 	id, ok := pathResourceID(response, request, pathName)
@@ -461,7 +461,7 @@ func (value *handler) authorizePath(
 func (value *handler) authorize(
 	response http.ResponseWriter,
 	request *http.Request,
-	action string,
+	action iamv1.Action,
 	kind string,
 	id paasv1.ResourceID,
 	mode iamv1.AuthorizationResourceMode,
@@ -489,7 +489,7 @@ func (value *handler) authorizeRequest(
 	response http.ResponseWriter,
 	request *http.Request,
 	requestID string,
-	action string,
+	action iamv1.Action,
 	kind string,
 	id paasv1.ResourceID,
 	mode iamv1.AuthorizationResourceMode,

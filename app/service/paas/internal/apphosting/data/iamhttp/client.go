@@ -220,40 +220,11 @@ func parseBearer(value string) (iamv1.Secret, error) {
 }
 
 func toIAMRequest(request port.AuthorizationRequest) (iamv1.AuthorizationRequest, error) {
-	resourceKind, err := toIAMResourceKind(request.Resource.Kind)
-	if err != nil {
-		return iamv1.AuthorizationRequest{}, err
-	}
-	result, err := iamv1.NewAuthorizationRequest(iamv1.Action(request.Action),
-		iamv1.ResourceReference{Kind: resourceKind, ID: string(request.Resource.ID)},
-		request.ResourceMode, request.CollectionUsage, request.RequestID, request.RequestID)
+	result, err := port.NewIAMAuthorizationRequest(request)
 	if err != nil {
 		return iamv1.AuthorizationRequest{}, errors.New("PaaS authorization cannot map to IAM")
 	}
-	result, err = iamv1.BindAuthorizationSourceIP(result, request.SourceIP)
-	if err != nil {
-		return iamv1.AuthorizationRequest{}, errors.New("PaaS authorization cannot bind network authority")
-	}
 	return result, nil
-}
-
-func toIAMResourceKind(kind string) (iamv1.ResourceKind, error) {
-	switch kind {
-	case "Application":
-		return iamv1.ResourceApplication, nil
-	case "Configuration":
-		return iamv1.ResourceConfiguration, nil
-	case "ConfigurationRevision":
-		return iamv1.ResourceConfigurationRevision, nil
-	case "ApplicationRevision":
-		return iamv1.ResourceApplicationRevision, nil
-	case "Deployment":
-		return iamv1.ResourceDeployment, nil
-	case "Operation":
-		return iamv1.ResourceOperation, nil
-	default:
-		return "", errors.New("PaaS authorization resource kind is invalid")
-	}
 }
 
 func toPaaSSubjectType(value iamv1.SubjectType) (paasv1.SubjectType, error) {
