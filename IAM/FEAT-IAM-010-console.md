@@ -447,6 +447,7 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 - `APPLIED` 的一次性 Role credential 先留内存，只有 CurrentRoleIdentity 精确核对同一 Account、Role、来源 User 和会话后才成为产品请求的有效 credential。`EQUAL_REPLAY` 与 by-request 响应不得携带秘密；凭据不可恢复时只能撤销原会话。Role 模式隐藏来源 USER 的 IAM 管理入口；手工进入 USER/Session 路由也返回 Role 会话页，不静默复用 USER 管理权限。
 - Role logout 开始即停止业务使用；不确定结果保留同一 logout requestId、Role credential 和原承担 requestId，只允许等价重试，或在来源 USER `/auth/me` 精确复核后按原承担 requestId 撤销。401 只证明该端点不接受当前 bearer，不被解释为已撤销。确认退出后仍须重新验证来源 USER；源凭据替换或消失会同步关闭产品 credential，并对旧 Role 做尽力 logout。浏览器持久层不保存 USER/Role credential。
 - 状态机、渲染器、账号菜单和严格 HTTP 定向用例通过；完整前端门禁通过 50 个文件/830 条用例及 3 条静态归一化用例、类型、lint、架构、228 组浅色/混色/深色对比度、41 页生产导出和 228 个嵌入文件等价；`go test -p 2 ./...` 与 `go vet -p 2 ./...` 通过。DEV MOCK 在 `390px` 与 `1280px` 实看发现、审阅和成功态，390px 的 document/body 均无横向溢出，Dialog 为零，浏览器 warning/error 为空。
+- 2026-09-30 已推送 [`c0ad4901`](https://github.com/xiak/matrix/commit/c0ad4901)：来源身份、可承担角色标题和承担边界说明现在同步呈现，只有角色卡目录使用延迟骨架。初次目录失败保留当前 USER 身份和同一内容结构，明确没有创建 RoleSession，并提供原位重试；有已验证目录时的后续错误继续保留该目录。受控延迟和 503→重试用例证明固定结构不会被 `PageSkeleton` 整块替换，也不会提前出现承担操作。完整前端门禁现为 50 文件/842 条用例及三条静态归一化，类型/lint/架构/228 组主题对比、41 页导出、嵌入同步及全仓 Go test/vet 通过。`390 × 844` DEV MOCK 共用布局的 document/body/viewport 均为 390px 且 warning/error 为空；该浏览器观察不冒充 LIVE 延迟或故障注入验收。
 - 本证据接受固定 LIVE 客户端、身份切换与恢复状态机、响应式信息架构和 MOCK 保留；尚未以真实 IAM 进程完成承担、产品请求、logout/来源恢复或故障注入的浏览器闭环，也不接受 Role 管理写入、跨账号、角色链、服务身份或 SSO。
 
 ### 访问密钥生命周期的开发验收证据
