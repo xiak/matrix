@@ -6,6 +6,8 @@ import { LogOut, RefreshCcw, ShieldCheck, XCircle } from "lucide-react";
 import { Alert, Badge, Button, Card, ContentPage, EmptyState, Table, TablePagination, TableSkeleton, Typography } from "@ui/xiak";
 import { useOwnSessions } from "../application/OwnSessionsProvider";
 import { useSession } from "../application/SessionProvider";
+import { uxPreviewEnabled } from "@/infrastructure/runtime/uxPreviewMode";
+import { SessionExpiryPreview } from "./SessionExpiryPreview";
 import styles from "./OwnSessionsPage.module.css";
 
 export function OwnSessionsPage() {
@@ -146,5 +148,6 @@ export function OwnSessionsPage() {
         </Table.Footer>
       </> : sessions.loading ? null : <EmptyState title={t("loadTitle")} description={t("loadDescription")} action={<Button onClick={() => { void sessions.load(activeCursor); }} variant="secondary">{t("retryLoad")}</Button>} />}
     </Card> : null}
+    {uxPreviewEnabled ? <SessionExpiryPreview /> : null}
   </section>;
 }

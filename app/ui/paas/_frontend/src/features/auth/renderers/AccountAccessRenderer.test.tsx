@@ -284,7 +284,7 @@ function AuthenticatedAccess({ repository, initialView }: { repository: AccountR
 }
 
 async function openAccess(repository = accounts(), iamRepository = iam(), initialView: AccountAccessView = "users") {
-  const user = userEvent.setup();
+  const user = userEvent.setup({ delay: null });
   const view = render(<LocaleProvider><LanguageSwitch /><SessionProvider repository={iamRepository}><UnsavedChangesProvider><AuthenticatedAccess repository={repository} initialView={initialView} /></UnsavedChangesProvider></SessionProvider></LocaleProvider>);
   await user.type(screen.getByLabelText("密码", { exact: true }), "Only-Test-Password-49!");
   await user.click(screen.getByRole("button", { name: "登录控制台" }));
@@ -862,6 +862,10 @@ describe("account access", () => {
     expect(within(securityRegion).getByRole("heading", { name: "安全通知地址" })).toBeTruthy();
     expect(within(securityRegion).getByRole("heading", { name: "身份验证器应用" })).toBeTruthy();
     expect(screen.queryByRole("dialog")).toBeNull();
+    await waitFor(() => {
+      expect(security.notificationContact).toHaveBeenCalled();
+      expect(security.authenticatorState).toHaveBeenCalled();
+    });
     await act(async () => {
       finishContact({ accountId: account.id, userId: rootUser.id, state: "NONE", resourceVersion: 0, pendingVerificationId: null });
       finishFactor({ enrollmentState: "NEVER_BOUND", factorRevision: 1, factorId: null });

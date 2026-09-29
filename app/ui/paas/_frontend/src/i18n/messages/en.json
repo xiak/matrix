@@ -624,6 +624,30 @@
     "scopeTitle": "Active credentials for the current user",
     "description": "Review the current user's active login sessions and end other sessions that are no longer needed.",
     "notDevices": "A session is not a physical device or proof of online activity. One device can hold several sessions, and several tabs can share one session.",
+    "idlePreview": {
+      "title": "Session expiry rule preview",
+      "hint": "Compare how requests affect idle and absolute expiry. This demonstration neither reads nor changes real sessions.",
+      "scenarioLabel": "Choose a request scenario",
+      "explicit": {
+        "label": "Explicit action in this session",
+        "hint": "A user-initiated request recorded as activity by the server.",
+        "outcome": "May extend idle expiry",
+        "result": "Only while the session remains valid and the server recognizes the request as explicit activity. Absolute expiry never moves."
+      },
+      "polling": {
+        "label": "Background polling or ordinary request",
+        "hint": "Installation polling, automatic refresh, or another credential-bearing request.",
+        "outcome": "Does not extend idle expiry",
+        "result": "Background traffic cannot keep an unused console signed in indefinitely. Sign in again after expiry."
+      },
+      "absolute": {
+        "label": "Absolute deadline reached",
+        "hint": "The session reached its maximum duration despite earlier explicit actions.",
+        "outcome": "Sign in again",
+        "result": "The absolute deadline is a hard cap. Neither explicit actions nor background requests extend it."
+      },
+      "boundary": "MOCK shows intended behavior only, without a fictional countdown or active configuration. Session idle expiry differs from managing long-unused subusers. IAM has not yet fixed the duration or server contract."
+    },
     "refresh": "Refresh sessions",
     "endOthers": "End other sessions",
     "noOtherSessions": "No other active sessions",

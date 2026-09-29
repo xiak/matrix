@@ -107,7 +107,7 @@ async function open(initialView: AccountAccessView, options?: { live?: boolean; 
     ...options?.repository,
     readPasswordResetCompletion: options?.repository?.readPasswordResetCompletion ?? vi.fn(async () => { throw new HttpProblem(404, "PREVIEW_RESET_RESULT_UNOBSERVED"); })
   };
-  const user = userEvent.setup();
+  const user = userEvent.setup({ delay: null });
   render(<LocaleProvider><SessionProvider repository={login}><UnsavedChangesProvider><Harness initialView={initialView} initialEntityId={options?.entityId} repository={repository} /></UnsavedChangesProvider></SessionProvider></LocaleProvider>);
   await user.click(screen.getByRole("button", { name: "Enter" }));
   await waitFor(() => expect(repository.currentIdentity).toHaveBeenCalled());

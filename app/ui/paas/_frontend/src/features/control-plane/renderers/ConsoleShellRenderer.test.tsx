@@ -130,7 +130,7 @@ async function renderConsole({
     async changePassword() {},
     logout
   };
-  const user = userEvent.setup();
+  const user = userEvent.setup({ delay: null });
   function RoutedPage() {
     const [href, setHref] = useState(consoleRouteHref({ section, view: initialView }));
     if (heldRoute) navigation.push.mockImplementation((target: string) => {
