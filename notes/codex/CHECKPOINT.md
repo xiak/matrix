@@ -6,8 +6,8 @@
 - Updated: 2026-09-29
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `5476b3ad`
-- Pushed documentation head: `4b7f869b`
+- Pushed UI source: `a943c86c`
+- Pushed documentation head: `c053060f`
 
 ## Authoritative route
 
@@ -78,7 +78,12 @@ effects, and the overview states that groups do not have permission boundaries.
 The shared renderer displays that summary only when its caller supplies complete
 current-document coverage. The LIVE Group adapter deliberately omits it under
 the current contract and performs no policy-detail fan-out, name inference or
-denial-to-empty fallback. Target-User and Group grant-source/effect projections
+denial-to-empty fallback. MOCK and LIVE member/policy association flows now
+replace the Group detail body instead of opening a wide dialog, while retaining
+the existing select/review/submit and LIVE request/readback semantics. Returning
+keeps the source member/policy tab and restores focus to the source action, with
+a stable edit-action fallback during authoritative refresh; deletion remains a
+focused confirmation. Target-User and Group grant-source/effect projections
 remain backend-owned and unimplemented until a fixed pushed IAM contract exists.
 
 ## Continuation
