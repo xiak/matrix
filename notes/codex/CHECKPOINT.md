@@ -6,7 +6,7 @@
 - Updated: 2026-09-29
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `2035231f`
+- Pushed UI source: `5fe9fddf`
 
 ## Authoritative route
 
@@ -33,15 +33,15 @@ with another branch's renderer or inherit that branch's UI acceptance.
 
 The current milestone keeps the independent MOCK preview, fixed-contract LIVE
 paths and synchronized static Go host. Account security includes isolated
-session-idle, Passkey/WebAuthn and unused-access review previews. They are
-local-only UX and add no IAM wire, credential ceremony, timer, global activity
-listener, LIVE state machine or destructive action. The unused-access directory
-uses an explicit synthetic complete window, separates finding state from
-resource state and routes only to existing object review. The tenant directory
-uses the shared labelled mobile table contract instead of clipping identity and
-status fields. Desktop and compact browser audits covered the all-service
-directory and all thirteen IAM routes, including light/mixed themes and menu
-focus return, without stale outgoing content, document overflow or browser
+session-idle, Passkey/WebAuthn, unused-access review and security-report review
+previews. They are local-only UX and add no IAM wire, credential ceremony,
+timer, global activity listener, LIVE state machine, destructive action or
+browser-fabricated report. Report review fails closed across Accounts and keeps
+formal CSV visibly disabled until IAM freezes a server-sealed, reauthorized
+download contract. The tenant and report directories use the shared labelled
+mobile table contract. Desktop and compact browser audits covered the
+all-service directory and all thirteen IAM routes, including light/mixed themes
+and focus return, without stale outgoing content, document overflow or browser
 warning/error. Exact behavior, verification evidence and replacement rules
 belong to the linked FEAT owners. Real IAM-process browser, installation and
 release acceptance remain open.
