@@ -34,26 +34,28 @@ export function UnusedAccessReviewPreview({ workspace, scene, onBack, onNavigate
   const t = useTranslations("IamWorkspace.unusedAccessReview");
   const [selected, setSelected] = useState<UnusedAccessFindingPreview | null>(null);
   const findings = buildUnusedAccessFindingPreview(workspace, scene);
-  if (selected) return <WorkspaceDetail key={selected.id} title={t("detailTitle", { name: selected.name })} onBack={() => setSelected(null)}>
+  const selectedFinding = selected?.accountId === workspace.accountId ? selected : null;
+  if (selectedFinding) return <WorkspaceDetail key={selectedFinding.id} title={t("detailTitle", { name: selectedFinding.name })} onBack={() => setSelected(null)}>
     <Alert status="info">{t("sampleEvidence")}</Alert>
     <Card>
-      <Card.Header><div><Typography.Title as="h2" level={3}>{selected.name}</Typography.Title><Typography.Text tone="muted">{selected.subjectId}</Typography.Text></div><Badge status={findingStatus[selected.status]}>{t(`statuses.${selected.status}`)}</Badge></Card.Header>
+      <Card.Header><div><Typography.Title as="h2" level={3}>{selectedFinding.name}</Typography.Title><Typography.Text tone="muted">{selectedFinding.subjectId}</Typography.Text></div><Badge status={findingStatus[selectedFinding.status]}>{t(`statuses.${selectedFinding.status}`)}</Badge></Card.Header>
       <Card.Body className={styles.detail}>
         <dl className={styles.facts}>
-          <div><dt>{t("findingType")}</dt><dd>{t(`types.${selected.findingType}`)}</dd></div>
-          <div><dt>{t("principalType")}</dt><dd>{t(`subjects.${selected.subjectKind}`)}</dd></div>
-          <div><dt>{t("lastObserved")}</dt><dd><WorkspaceTime value={selected.lastObservedAt} /></dd></div>
-          <div><dt>{t("reviewWindow")}</dt><dd>{t("days", { count: selected.windowDays })}</dd></div>
-          <div><dt>{t("findingCreated")}</dt><dd><WorkspaceTime value={selected.generatedAt} /></dd></div>
+          <div><dt>{t("account")}</dt><dd><code>{selectedFinding.accountId}</code></dd></div>
+          <div><dt>{t("findingType")}</dt><dd>{t(`types.${selectedFinding.findingType}`)}</dd></div>
+          <div><dt>{t("principalType")}</dt><dd>{t(`subjects.${selectedFinding.subjectKind}`)}</dd></div>
+          <div><dt>{t("lastObserved")}</dt><dd><WorkspaceTime value={selectedFinding.lastObservedAt} /></dd></div>
+          <div><dt>{t("reviewWindow")}</dt><dd>{t("days", { count: selectedFinding.windowDays })}</dd></div>
+          <div><dt>{t("findingCreated")}</dt><dd><WorkspaceTime value={selectedFinding.generatedAt} /></dd></div>
           <div><dt>{t("evidenceCoverage")}</dt><dd>{t("completeSample")}</dd></div>
         </dl>
         <section aria-labelledby="unused-access-recommendation" className={styles.stack}>
           <Typography.Title as="h3" id="unused-access-recommendation" level={3}>{t("recommendationTitle")}</Typography.Title>
-          <p className={styles.note}>{t(`recommendations.${selected.findingType}`)}</p>
+          <p className={styles.note}>{t(`recommendations.${selectedFinding.findingType}`)}</p>
           <Alert status="warning">{t("noAutomaticAction")}</Alert>
         </section>
       </Card.Body>
-      <Card.Footer><Button onClick={() => onNavigate(selected.target.view, selected.target.id)}>{t("reviewTarget")}<ArrowRight aria-hidden="true" /></Button></Card.Footer>
+      <Card.Footer><Button onClick={() => onNavigate(selectedFinding.target.view, selectedFinding.target.id)}>{t("reviewTarget")}<ArrowRight aria-hidden="true" /></Button></Card.Footer>
     </Card>
   </WorkspaceDetail>;
 
@@ -81,36 +83,77 @@ export function UnusedAccessReviewPreview({ workspace, scene, onBack, onNavigate
   </WorkspaceDetail>;
 }
 
-export function AccessReports({ workspace, scene, currentSession = null, onNavigate, onOpenUnusedReview, unusedReviewTriggerRef }: {
+export function AccessReportPreview({ kind, workspace, scene, currentSession = null, onBack }: {
+  kind: "credentials" | "security";
+  workspace: AccessWorkspace;
+  scene: AccountAccessScene;
+  currentSession?: SessionSummary | null;
+  onBack(): void;
+}) {
+  const t = useTranslations("IamWorkspace.reportPreview");
+  const workspaceT = useTranslations("IamWorkspace");
+  const [generatedAt] = useState(() => new Date().toISOString());
+  const scopedSession = currentSession?.principalId === scene.currentUserId ? currentSession : null;
+  const report = buildAccessReport(kind, workspace, scene, generatedAt, scopedSession);
+  const members = report.users.map((user) => ({ ...user, id: user.loginName, name: user.loginName }));
+  const accessLabel = (value: boolean | string) => t(value === true ? "enabled" : value === false ? "disabled" : value === "NOT_APPLICABLE" ? "notApplicable" : "unknown");
+  const passwordLabel = (value: boolean | string) => t(value === true ? "resetRequired" : value === false ? "current" : value === "NOT_APPLICABLE" ? "notApplicable" : "unknown");
+  const coverageLabels: Record<string, string> = {
+    COMPLETE: t("coverage.COMPLETE"), PARTIAL: t("coverage.PARTIAL"),
+    UNOBSERVED: t("coverage.UNOBSERVED"), UNAVAILABLE: t("coverage.UNAVAILABLE")
+  };
+  const actions = { secondary: [{ id: "export", label: t("exportCsv"), disabledReason: t("exportUnavailable"), onSelect: () => undefined }] };
+  return <WorkspaceDetail key={`report:${kind}:${workspace.accountId}`} title={workspaceT(kind === "credentials" ? "credentialReport" : "securityReport")} onBack={onBack} actions={actions}>
+    <Alert status="info">{t("previewBoundary")}</Alert>
+    <Card>
+      <Card.Header><div><Typography.Title as="h2" level={3}>{t("coverageTitle")}</Typography.Title><Typography.Text tone="muted">{t("coverageHint")}</Typography.Text></div><Badge status="info">{t("mock")}</Badge></Card.Header>
+      <Card.Body className={styles.detail}>
+        <dl className={styles.facts}>
+          <div><dt>{t("account")}</dt><dd><code>{report.accountId}</code></dd></div>
+          <div><dt>{t("generatedAt")}</dt><dd><WorkspaceTime value={report.generatedAt} /></dd></div>
+          <div><dt>{t("directory")}</dt><dd>{coverageLabels[report.coverage.directory]}</dd></div>
+          <div><dt>{t("authenticator")}</dt><dd>{coverageLabels[report.coverage.authenticatorEnrollment]}</dd></div>
+          <div><dt>{t("activityWindow")}</dt><dd>{coverageLabels[report.coverage.activityWindow]}</dd></div>
+          <div><dt>{t("collectionStart")}</dt><dd>{report.coverage.collectionStart ? <WorkspaceTime value={report.coverage.collectionStart} /> : t("unavailable")}</dd></div>
+        </dl>
+        <section className={styles.stack} aria-labelledby="report-source-watermarks">
+          <Typography.Title as="h3" id="report-source-watermarks" level={3}>{t("sourceWatermarks")}</Typography.Title>
+          <dl className={styles.activityEvidence}>
+            {(["successfulLogin", "accessKeyUse", "roleUse", "businessOutcome"] as const).map((source) => <div key={source}><dt>{workspaceT(`activityObservations.${source}.title`)}</dt><dd>{report.coverage.sourceWatermarks[source] ? <WorkspaceTime value={report.coverage.sourceWatermarks[source]} /> : t("unavailable")}</dd></div>)}
+          </dl>
+        </section>
+      </Card.Body>
+    </Card>
+    <WorkspaceCollection embedded title={t("members")} description={t("membersHint")} items={members}
+      columns={[t("member"), t("status"), t("accessMethods"), t("credentialEvidence"), t("directPolicies"), t("accessKeys")]}
+      keywords={(user) => `${user.status} ${String(user.consoleAccess)} ${String(user.programmaticAccess)}`}
+      row={(user) => <><td><strong>{user.loginName}</strong></td><td>{t(`states.${user.status}`)}</td><td><span>{t("consoleAccess")} · {accessLabel(user.consoleAccess)}</span><small>{t("programmaticAccess")} · {accessLabel(user.programmaticAccess)}</small></td><td><span>{t("password")} · {passwordLabel(user.passwordResetRequired)}</span><small>{t("authenticator")} · {accessLabel(user.authenticatorEnrollment)}</small></td><td>{user.directPolicyIds.length}</td><td><span>{t("keyCount", { count: user.accessKeys.active })}</span><small>{t("keyTotal", { count: user.accessKeys.total })}</small></td></>}
+      footerNote={t("membersHint")} />
+    {kind === "security" && report.checks && report.activity ? <Card>
+      <Card.Header><Typography.Title as="h2" level={3}>{t("securityEvidence")}</Typography.Title></Card.Header>
+      <Card.Body className={styles.securityReportBody}>
+        <ul className={styles.securityChecks}>{report.checks.map((check) => <li key={check.id}><div className={styles.securityCheckCopy}><div className={styles.securityCheckHeading}><strong>{workspaceT(`securityChecks.${check.id}.title`)}</strong><Badge status={badgeStatus[check.state]}>{workspaceT(`securityStates.${check.state}`)}</Badge></div><span className={styles.securityEvidenceState}>{workspaceT("securityEvidenceLabel")}: {workspaceT(`securityEvidenceStates.${check.evidence}`)}</span></div></li>)}</ul>
+        <dl className={styles.activityEvidence} aria-label={workspaceT("activityEvidenceTitle")}>{report.activity.observations.map((observation) => <div key={observation.id}><dt>{workspaceT(`activityObservations.${observation.id}.title`)}</dt><dd><Badge status={observation.state === "observed" ? "info" : "neutral"}>{workspaceT(`activityStates.${observation.state}`)}</Badge>{observation.occurredAt ? <WorkspaceTime value={observation.occurredAt} /> : <span>{t("unavailable")}</span>}</dd></div>)}</dl>
+      </Card.Body>
+    </Card> : null}
+  </WorkspaceDetail>;
+}
+
+export function AccessReports({ workspace, scene, currentSession = null, onNavigate, onOpenUnusedReview, onOpenReport, unusedReviewTriggerRef, reportTriggerRef }: {
   workspace: AccessWorkspace;
   scene: AccountAccessScene;
   currentSession?: SessionSummary | null;
   onNavigate(view: AccountAccessView, id?: string): void;
   onOpenUnusedReview?(): void;
+  onOpenReport?(kind: "credentials" | "security"): void;
   unusedReviewTriggerRef?: RefObject<HTMLButtonElement | null>;
+  reportTriggerRef?: RefObject<HTMLButtonElement | null>;
 }) {
   const t = useTranslations("IamWorkspace");
   const format = useFormatter();
-  const [failed, setFailed] = useState(false);
   const snapshot = buildAccessSecuritySnapshot(workspace, scene.directoryComplete);
   const scopedSession = currentSession?.principalId === scene.currentUserId ? currentSession : null;
   const activity = buildAccessActivityObservations(workspace, scopedSession);
-
-  function download(kind: "credentials" | "security") {
-    try {
-      const report = buildAccessReport(kind, workspace, scene, new Date().toISOString(), scopedSession);
-      const url = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2)], { type: "application/json" }));
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = `matrix-mock-${kind}-report.json`;
-      link.click();
-      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-      setFailed(false);
-    } catch {
-      setFailed(true);
-    }
-  }
-
   return <Card>
     <Card.Header>
       <Typography.Title as="h2" level={3}>{t("securityOverview")}</Typography.Title>
@@ -167,14 +210,13 @@ export function AccessReports({ workspace, scene, currentSession = null, onNavig
         </div>)}
       </dl>
       <p className={styles.note}>{t("activityCoverageHint", { accountId: workspace.accountId })}</p>
-      {failed ? <Alert status="danger">{t("errors.unavailable")}</Alert> : null}
     </Card.Body>
     <Card.Footer>
       <p className={styles.note}>{t("reportHint")}</p>
-      <ActionMenu label={t("exportReports")} actions={[
-        { id: "credentials", label: t("credentialReport"), onSelect: () => download("credentials") },
-        { id: "security", label: t("securityReport"), onSelect: () => download("security") }
-      ]} />
+      {onOpenReport ? <ActionMenu triggerRef={reportTriggerRef} label={t("reviewReports")} actions={[
+        { id: "credentials", label: t("credentialReport"), onSelect: () => onOpenReport("credentials") },
+        { id: "security", label: t("securityReport"), onSelect: () => onOpenReport("security") }
+      ]} /> : null}
     </Card.Footer>
   </Card>;
 }

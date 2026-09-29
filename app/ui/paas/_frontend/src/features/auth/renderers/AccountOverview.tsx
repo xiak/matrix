@@ -10,7 +10,7 @@ import type { AccountAccessScene } from "../scenes/accountAccessScene";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import { useSession } from "../application/SessionProvider";
 import { WorkspaceCollection, WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
-import { AccessReports, UnusedAccessReviewPreview } from "./AccessReports";
+import { AccessReportPreview, AccessReports, UnusedAccessReviewPreview } from "./AccessReports";
 import { UserBoundarySummary } from "./PermissionBoundary";
 import { policyUsageCounts } from "../domain/accessWorkspace";
 import { includesPermissionManagement } from "../domain/policyDocument";
@@ -61,8 +61,11 @@ export function AccountOverview({ scene, onNavigate }: { scene: AccountAccessSce
   const workspace = access.workspace;
   const [showEvents, setShowEvents] = useState(false);
   const [showUnusedReview, setShowUnusedReview] = useState(false);
+  const [reportKind, setReportKind] = useState<"credentials" | "security" | null>(null);
   const unusedReviewTrigger = useRef<HTMLButtonElement>(null);
+  const reportTrigger = useRef<HTMLButtonElement>(null);
   const restoreUnusedReviewFocus = useRef(false);
+  const restoreReportFocus = useRef(false);
   const pending = scene.users.filter((user) => user.state === "passwordChangeRequired").length;
   const ungranted = scene.users.filter((user) => user.attachments.length === 0).length;
   const highPolicies = workspace?.policies.filter((policy) => {
@@ -77,8 +80,15 @@ export function AccountOverview({ scene, onNavigate }: { scene: AccountAccessSce
       unusedReviewTrigger.current?.focus({ preventScroll: true });
     }
   }, [showUnusedReview]);
+  useEffect(() => {
+    if (!reportKind && restoreReportFocus.current) {
+      restoreReportFocus.current = false;
+      reportTrigger.current?.focus({ preventScroll: true });
+    }
+  }, [reportKind]);
 if (showEvents && workspace) return <WorkspaceDetail title={w("sensitiveOperations")} onBack={() => setShowEvents(false)}><p className={styles.note}>{w("eventHistoryHint")}</p><WorkspaceCollection embedded title={w("sensitiveOperations")} description={w("eventHistoryHint")} items={workspace.events.map((event) => ({ ...event, name: w(`events.${event.action}`) }))} keywords={(event) => event.target} columns={[w("event"), w("target"), w("time")]} row={(event) => <><td>{event.name}</td><td>{event.target}</td><td><WorkspaceTime value={event.at} /></td></>} /></WorkspaceDetail>;
   if (showUnusedReview && workspace) return <UnusedAccessReviewPreview workspace={workspace} scene={scene} onNavigate={onNavigate} onBack={() => { restoreUnusedReviewFocus.current = true; setShowUnusedReview(false); }} />;
+  if (reportKind && workspace) return <AccessReportPreview kind={reportKind} workspace={workspace} scene={scene} currentSession={session.current?.session} onBack={() => { restoreReportFocus.current = true; setReportKind(null); }} />;
   return <div className={styles.accessOverview + " " + styles.stack}>
     {workspace ? <div className={styles.workspaceMetrics} aria-label={t("userSummary")}>{([
       ["users", "subusers", scene.users.length],
@@ -102,7 +112,7 @@ if (showEvents && workspace) return <WorkspaceDetail title={w("sensitiveOperatio
           </div> : null}
           {!scene.directoryComplete ? <Alert status="info">{t("partialSummary")}</Alert> : null}
           {workspace ? <Card><Card.Header><Typography.Title as="h2" level={3}>{w("sensitiveOperations")}</Typography.Title><Button variant="ghost" size="small" onClick={() => setShowEvents(true)}>{w("viewAllEvents")}<ArrowRight aria-hidden="true" /></Button></Card.Header><Table className={styles.compactTable} aria-label={w("sensitiveOperations")}><thead><tr><th scope="col">{w("event")}</th><th scope="col">{w("target")}</th><th scope="col">{w("time")}</th></tr></thead><tbody>{workspace.events.slice(0, 5).map((event) => <tr key={event.id}><td>{w(`events.${event.action}`)}</td><td>{event.target}</td><td><WorkspaceTime value={event.at} /></td></tr>)}</tbody></Table></Card> : null}
-          {workspace ? <AccessReports workspace={workspace} scene={scene} currentSession={session.current?.session} onNavigate={onNavigate} onOpenUnusedReview={() => setShowUnusedReview(true)} unusedReviewTriggerRef={unusedReviewTrigger} /> : null}
+          {workspace ? <AccessReports workspace={workspace} scene={scene} currentSession={session.current?.session} onNavigate={onNavigate} onOpenUnusedReview={() => setShowUnusedReview(true)} onOpenReport={setReportKind} unusedReviewTriggerRef={unusedReviewTrigger} reportTriggerRef={reportTrigger} /> : null}
         </> : <Alert>{t("ownAccountHint")}</Alert>}
         <Card>
           <Card.Header><Typography.Title as="h2" level={3}>{t("permissionPrinciples")}</Typography.Title><Button asChild size="small" variant="ghost"><Link href={workspace ? "/console/access/roles/" : "/console/access/policies/"} onNavigate={open(workspace ? "roles" : "policies")}>{t(workspace ? "viewRoles" : "viewPolicies")}<ArrowRight aria-hidden="true" /></Link></Button></Card.Header>

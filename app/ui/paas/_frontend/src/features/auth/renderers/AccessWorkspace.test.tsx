@@ -13,7 +13,7 @@ import { PolicyDocumentViewer } from "./PolicyDocumentViewer";
 import type { PolicyDocument } from "../domain/policyDocument";
 import { AccountAccessRenderer } from "./AccountAccessRenderer";
 import { GroupDetail, GroupDirectory } from "./GroupAccessWorkspace";
-import { AccessReports, UnusedAccessReviewPreview } from "./AccessReports";
+import { AccessReportPreview, AccessReports, UnusedAccessReviewPreview } from "./AccessReports";
 import { buildAccessActivityObservations, buildAccessReport, buildAccessSecuritySnapshot, buildUnusedAccessFindingPreview } from "../scenes/accessReport";
 import { buildAccountAccessScene } from "../scenes/accountAccessScene";
 import { previewAccountRepository, previewCredential, previewIamRepository, resetPreviewEnvironment } from "../repositories/previewIamRepository";
@@ -3231,6 +3231,7 @@ describe("CAM-style access workspace", () => {
     expect(JSON.stringify(report)).not.toContain("EntityDescriptor");
     expect(JSON.stringify(report)).not.toContain("preview-only");
     expect(report.users).toHaveLength(2);
+    expect(() => buildAccessReport("security", workspace, { ...scene, accountId: "org-foreign" }, "2026-09-09T00:00:00Z")).toThrow("INVALID_IAM_TENANT");
   });
   it("separates review, configured, unknown, and not-applicable security evidence", async () => {
     const extension = createPreviewAccessWorkspace("org-xiak", () => users.map((entry) => entry.user.id), identity.account.rootIdentity.principalId);
@@ -3285,8 +3286,9 @@ describe("CAM-style access workspace", () => {
     const workspace = await extension.read("preview");
     const scene = buildAccountAccessScene(identity, { items: users, nextAfter: null }, null, { accountId: "org-xiak", scope: "TENANT", installationId: null, items: [] }, { accountId: "org-xiak", scope: "INSTALLATION", installationId: "preview", items: [] });
     const onNavigate = vi.fn();
+    const onOpenReport = vi.fn();
     const user = userEvent.setup();
-    render(<LocaleProvider><AccessReports workspace={workspace} scene={scene} currentSession={{ id: "preview-session", organizationId: "org-xiak", principalId: identity.user.id, status: "ACTIVE", issuedAt: "2026-09-09T02:00:00Z", expiresAt: "2026-09-09T03:00:00Z" }} onNavigate={onNavigate} /></LocaleProvider>);
+    render(<LocaleProvider><AccessReports workspace={workspace} scene={scene} currentSession={{ id: "preview-session", organizationId: "org-xiak", principalId: identity.user.id, status: "ACTIVE", issuedAt: "2026-09-09T02:00:00Z", expiresAt: "2026-09-09T03:00:00Z" }} onNavigate={onNavigate} onOpenReport={onOpenReport} /></LocaleProvider>);
     const card = screen.getByRole("heading", { name: "身份安全概览" }).closest("article")!;
     expect(within(card).getByLabelText("身份安全检查状态")).toBeTruthy();
     expect(within(card).getByLabelText("身份安全证据覆盖")).toBeTruthy();
@@ -3296,7 +3298,9 @@ describe("CAM-style access workspace", () => {
     expect(within(card).getByText(/没有签名请求的使用证据/)).toBeTruthy();
     expect(within(card).getAllByText("状态未知").length).toBeGreaterThanOrEqual(1);
     expect(within(card).getAllByText("证据: 未观测").length).toBeGreaterThanOrEqual(1);
-    expect(within(card).getByRole("button", { name: "导出报告" })).toBeTruthy();
+    await user.click(within(card).getByRole("button", { name: "审阅报告" }));
+    await user.click(screen.getByRole("menuitem", { name: "用户凭证报告" }));
+    expect(onOpenReport).toHaveBeenCalledWith("credentials");
     await user.click(within(card).getByRole("button", { name: "查看长期访问密钥" }));
     expect(onNavigate).toHaveBeenCalledWith("keys");
   });
@@ -3305,11 +3309,12 @@ describe("CAM-style access workspace", () => {
     const workspace = await extension.read("preview");
     const scene = buildAccountAccessScene(identity, { items: users, nextAfter: null }, null, { accountId: "org-xiak", scope: "TENANT", installationId: null, items: [] }, { accountId: "org-xiak", scope: "INSTALLATION", installationId: "preview", items: [] });
     const findings = buildUnusedAccessFindingPreview(workspace, scene);
-    expect(findings.map(({ findingType, status }) => ({ findingType, status }))).toEqual([
-      { findingType: "unusedPassword", status: "active" },
-      { findingType: "unusedAccessKey", status: "archived" },
-      { findingType: "unusedRole", status: "resolved" }
+    expect(findings.map(({ accountId, findingType, status }) => ({ accountId, findingType, status }))).toEqual([
+      { accountId: "org-xiak", findingType: "unusedPassword", status: "active" },
+      { accountId: "org-xiak", findingType: "unusedAccessKey", status: "archived" },
+      { accountId: "org-xiak", findingType: "unusedRole", status: "resolved" }
     ]);
+    expect(() => buildUnusedAccessFindingPreview(workspace, { ...scene, accountId: "org-foreign" })).toThrow("INVALID_IAM_TENANT");
     const onNavigate = vi.fn();
     const user = userEvent.setup();
     render(<LocaleProvider><UnusedAccessReviewPreview workspace={workspace} scene={scene} onBack={vi.fn()} onNavigate={onNavigate} /></LocaleProvider>);
@@ -3325,6 +3330,22 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByText(/不能从一条未使用发现直接删除身份或权限/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "查看对应对象" }));
     expect(onNavigate).toHaveBeenCalledWith(first.target.view, first.target.id);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+  it("reviews the account-bound security report in content before any formal CSV exists", async () => {
+    const extension = createPreviewAccessWorkspace("org-xiak", () => users.map((entry) => entry.user.id), identity.account.rootIdentity.principalId);
+    const workspace = await extension.read("preview");
+    const scene = buildAccountAccessScene(identity, { items: users, nextAfter: null }, null, { accountId: "org-xiak", scope: "TENANT", installationId: null, items: [] }, { accountId: "org-xiak", scope: "INSTALLATION", installationId: "preview", items: [] });
+    render(<LocaleProvider><AccessReportPreview kind="security" workspace={workspace} scene={scene} onBack={vi.fn()} /></LocaleProvider>);
+    expect(screen.getByRole("heading", { name: "安全分析报告" })).toBeTruthy();
+    expect(screen.getByText(/不是 IAM-009 S4 的正式报告或下载契约/)).toBeTruthy();
+    expect(screen.getByText("org-xiak")).toBeTruthy();
+    expect(screen.getByText("当前 MOCK 目录完整")).toBeTruthy();
+    expect(screen.getAllByText("未提供").length).toBeGreaterThanOrEqual(5);
+    const table = screen.getByRole("table", { name: "成员凭证快照" });
+    expect(table.getAttribute("data-mobile-layout")).toBe("stack");
+    expect(within(table).getByText("lin")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "导出 CSV（MOCK）" }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 });

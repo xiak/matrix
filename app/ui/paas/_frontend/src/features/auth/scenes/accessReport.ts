@@ -22,6 +22,7 @@ export type AccessActivityObservation = {
 
 export type UnusedAccessFindingPreview = {
   id: string;
+  accountId: string;
   name: string;
   subjectId: string;
   subjectKind: "user" | "accessKey" | "role";
@@ -33,17 +34,23 @@ export type UnusedAccessFindingPreview = {
   target: { view: Extract<AccountAccessView, "users" | "keys" | "roles">; id?: string };
 };
 
+function assertReportAccount(workspace: AccessWorkspace, scene: AccountAccessScene) {
+  if (workspace.accountId !== scene.accountId) throw new Error("INVALID_IAM_TENANT");
+}
+
 // This is a visibly synthetic UX sample. Current Matrix activity sources do
 // not prove a complete collection window, so no current workspace principal is
 // classified as unused. The sample lets the review workflow be evaluated
 // without inventing a live analyzer or a destructive command.
 export function buildUnusedAccessFindingPreview(workspace: AccessWorkspace, scene: AccountAccessScene): UnusedAccessFindingPreview[] {
+  assertReportAccount(workspace, scene);
   const user = scene.users[0];
   const key = workspace.keys[0];
   const role = workspace.roles[0];
   const findings: UnusedAccessFindingPreview[] = [];
   if (user) findings.push({
       id: "mock-unused-password",
+      accountId: workspace.accountId,
       name: user.loginName,
       subjectId: user.id,
       subjectKind: "user",
@@ -56,6 +63,7 @@ export function buildUnusedAccessFindingPreview(workspace: AccessWorkspace, scen
     });
   if (key) findings.push({
       id: "mock-unused-access-key",
+      accountId: workspace.accountId,
       name: key.id,
       subjectId: key.ownerId,
       subjectKind: "accessKey",
@@ -68,6 +76,7 @@ export function buildUnusedAccessFindingPreview(workspace: AccessWorkspace, scen
     });
   if (role) findings.push({
       id: "mock-unused-role",
+      accountId: workspace.accountId,
       name: role.name,
       subjectId: role.id,
       subjectKind: "role",
@@ -175,6 +184,7 @@ export function buildAccessSecuritySnapshot(workspace: AccessWorkspace, director
 
 // Allowlist report fields: neither credentials nor metadata may enter a report.
 export function buildAccessReport(kind: "credentials" | "security", workspace: AccessWorkspace, scene: AccountAccessScene, generatedAt: string, currentSession: SessionSummary | null = null) {
+  assertReportAccount(workspace, scene);
   const snapshot = buildAccessSecuritySnapshot(workspace, scene.directoryComplete);
   return {
     mode: "MOCK", kind, accountId: workspace.accountId, generatedAt,
