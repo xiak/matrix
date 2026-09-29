@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Alert, Badge, Button, EmptyState, FormField, Input, TextArea } from "@ui/xiak";
 import { useAccountAccess } from "../application/AccountAccessProvider";
@@ -8,7 +8,7 @@ import type { AccountAccessView } from "../domain/accounts";
 import type { AccessGroup, AccessWorkspace } from "../domain/accessWorkspace";
 import { containsDenyStatement } from "../domain/policyDocument";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
-import { WorkspaceDelete, WorkspaceDialog, WorkspaceSelection } from "./AccessWorkspaceUi";
+import { WorkspaceDelete, WorkspaceDialog, WorkspaceInlineForm, WorkspaceSelection } from "./AccessWorkspaceUi";
 import {
   GroupDetail,
   GroupDirectory,
@@ -81,9 +81,9 @@ function GroupAssociationEditor({ group, workspace, scene, change, onClose }: {
     reviewHeading.current?.scrollIntoView?.({ block: "center" });
   }, [review]);
 
-  return <WorkspaceDialog
-    size="wide"
+  return <WorkspaceInlineForm
     title={`${label} · ${group.name}`}
+    backLabel={t("backToGroupDetails")}
     onClose={onClose}
     submitLabel={t(review ? "confirmChange" : "reviewChange")}
     submitDisabled={!selection.length}
@@ -120,7 +120,7 @@ function GroupAssociationEditor({ group, workspace, scene, change, onClose }: {
         {!affected.length ? <p className={styles.note}>{t("noMembers")}</p> : null}
       </section> : null}
       <div>
-        <Button variant="secondary" onClick={() => { setReview(false); access.clearWorkspaceError(); }}>
+        <Button type="button" variant="secondary" onClick={() => { setReview(false); access.clearWorkspaceError(); }}>
           {t("backToSelection")}
         </Button>
       </div>
@@ -128,7 +128,7 @@ function GroupAssociationEditor({ group, workspace, scene, change, onClose }: {
       <Alert>{t(change.kind === "members" ? "membershipHint" : "policyChangeHint")}</Alert>
       <WorkspaceSelection label={label} options={options} value={selection} onChange={setSelection} limit={1} />
     </>}
-  </WorkspaceDialog>;
+  </WorkspaceInlineForm>;
 }
 
 export function AccessGroups({ workspace, scene, entityId, onCreate, onOpen }: {
@@ -144,6 +144,12 @@ export function AccessGroups({ workspace, scene, entityId, onCreate, onOpen }: {
   const [editing, setEditing] = useState<AccessGroup | null>(null);
   const [deleting, setDeleting] = useState<AccessGroup | null>(null);
   const [change, setChange] = useState<GroupChange | null>(null);
+  const editTrigger = useRef<HTMLButtonElement>(null);
+  const addMemberTrigger = useRef<HTMLButtonElement>(null);
+  const removeMemberTrigger = useRef<HTMLButtonElement>(null);
+  const addPolicyTrigger = useRef<HTMLButtonElement>(null);
+  const removePolicyTrigger = useRef<HTMLButtonElement>(null);
+  const previousChange = useRef<GroupChange | null>(null);
   const selected = workspace.groups.find((group) => group.id === entityId);
   const changing = workspace.groups.find((group) => group.id === change?.groupId);
   const busy = access.busy || access.loading;
@@ -195,6 +201,16 @@ export function AccessGroups({ workspace, scene, entityId, onCreate, onOpen }: {
     };
   }, [policyById, selected, userById]);
 
+  useLayoutEffect(() => {
+    const closed = previousChange.current;
+    previousChange.current = change;
+    if (change || !closed) return;
+    const target = (closed.kind === "members"
+      ? closed.mode === "add" ? addMemberTrigger : removeMemberTrigger
+      : closed.mode === "add" ? addPolicyTrigger : removePolicyTrigger).current;
+    (target?.disabled ? editTrigger.current : target)?.focus({ preventScroll: true });
+  }, [change]);
+
   if (entityId && !selected) {
     return <EmptyState
       title={t("entityUnavailable")}
@@ -206,6 +222,7 @@ export function AccessGroups({ workspace, scene, entityId, onCreate, onOpen }: {
   return <>
     {selected && selectedRecord ? <GroupDetail
       group={selectedRecord}
+      workflow={changing && change ? <GroupAssociationEditor group={changing} workspace={workspace} scene={scene} change={change} onClose={() => setChange(null)} /> : undefined}
       controls={{
         edit: { disabled: busy, onInvoke: () => setEditing(selected) },
         delete: { disabled: busy, onInvoke: () => setDeleting(selected) },
@@ -214,6 +231,11 @@ export function AccessGroups({ workspace, scene, entityId, onCreate, onOpen }: {
         addPolicy: { disabled: busy, onInvoke: () => setChange({ groupId: selected.id, kind: "policies", mode: "add" }) },
         removePolicy: { disabled: busy || !selected.policyIds.length, onInvoke: () => setChange({ groupId: selected.id, kind: "policies", mode: "remove" }) }
       }}
+      editTriggerRef={editTrigger}
+      addMemberTriggerRef={addMemberTrigger}
+      removeMemberTriggerRef={removeMemberTrigger}
+      addPolicyTriggerRef={addPolicyTrigger}
+      removePolicyTriggerRef={removePolicyTrigger}
       onBack={() => onOpen("groups")}
       onOpenMember={(userId) => onOpen("users", userId)}
       onOpenPolicy={(policyId) => onOpen("policies", policyId)}
@@ -223,7 +245,6 @@ export function AccessGroups({ workspace, scene, entityId, onCreate, onOpen }: {
       onOpen={(groupId) => onOpen("groups", groupId)}
     />}
     {editing ? <GroupMetadataEditor group={editing} onClose={() => setEditing(null)} /> : null}
-    {changing && change ? <GroupAssociationEditor group={changing} workspace={workspace} scene={scene} change={change} onClose={() => setChange(null)} /> : null}
     {deleting ? <WorkspaceDelete
       name={deleting.name}
       impact={<Alert status="warning">

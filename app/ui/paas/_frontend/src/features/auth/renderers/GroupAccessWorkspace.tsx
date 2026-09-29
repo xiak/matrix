@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, type ReactNode, type RefObject } from "react";
 import { useTranslations } from "next-intl";
 import { Alert, Badge, Button, EmptyState, Table, TableSkeleton, Tabs } from "@ui/xiak";
 import { AuthorizationOverview, WorkspaceCollection, WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
@@ -139,13 +140,15 @@ function GroupPolicyTable({ policies, onOpen }: {
   </Table>;
 }
 
-function GroupActionButton({ control, children, variant }: {
+function GroupActionButton({ control, triggerRef, children, variant }: {
   control?: GroupActionControl;
+  triggerRef?: RefObject<HTMLButtonElement | null>;
   children: string;
   variant?: "secondary" | "ghost";
 }) {
   if (!control) return null;
   return <Button
+    ref={triggerRef}
     disabled={control.disabled}
     onClick={control.onInvoke}
     title={control.disabled ? control.reason : undefined}
@@ -153,26 +156,35 @@ function GroupActionButton({ control, children, variant }: {
   >{children}</Button>;
 }
 
-export function GroupDetail({ group, controls, onBack, onOpenMember, onOpenPolicy }: {
+export function GroupDetail({ group, controls, workflow, editTriggerRef, addMemberTriggerRef, removeMemberTriggerRef, addPolicyTriggerRef, removePolicyTriggerRef, onBack, onOpenMember, onOpenPolicy }: {
   group: GroupDetailRecord;
   controls: GroupDetailControls;
+  workflow?: ReactNode;
+  editTriggerRef?: RefObject<HTMLButtonElement | null>;
+  addMemberTriggerRef?: RefObject<HTMLButtonElement | null>;
+  removeMemberTriggerRef?: RefObject<HTMLButtonElement | null>;
+  addPolicyTriggerRef?: RefObject<HTMLButtonElement | null>;
+  removePolicyTriggerRef?: RefObject<HTMLButtonElement | null>;
   onBack(): void;
   onOpenMember(userId: string): void;
   onOpenPolicy(policyId: string): void;
 }) {
   const t = useTranslations("IamWorkspace");
   const g = useTranslations("GroupWorkspace");
+  const [activeTab, setActiveTab] = useState<"members" | "policies">("members");
   const policiesWithDeny = group.policies.filter((policy) => policy.documentEffect === "containsDeny").length;
   const showAuthorizationOverview = group.policyDocumentEffects === "complete" && group.memberCount !== undefined;
 
   return <WorkspaceDetail
     title={group.name}
     onBack={onBack}
-    actions={{
+    primaryActionRef={editTriggerRef}
+    actions={workflow ? undefined : {
       primary: controls.edit ? { id: "edit", label: t("edit"), variant: "secondary", disabled: controls.edit.disabled, disabledReason: controls.edit.disabled ? controls.edit.reason : undefined, onSelect: controls.edit.onInvoke } : undefined,
       secondary: controls.delete ? [{ id: "delete", label: t("delete"), danger: true, disabled: controls.delete.disabled, disabledReason: controls.delete.disabled ? controls.delete.reason : undefined, onSelect: controls.delete.onInvoke }] : undefined
     }}
   >
+    {workflow ?? <>
     <p className={styles.note}>{group.description || t("none")}</p>
     <Alert>{g("groupIdentityHint")}</Alert>
     <dl className={styles.facts}>
@@ -189,15 +201,15 @@ export function GroupDetail({ group, controls, onBack, onOpenMember, onOpenPolic
         { label: t("permissionBoundary"), value: g("noPermissionBoundary") }
       ]}
     /> : null}
-    <Tabs.Root defaultValue="members">
+    <Tabs.Root value={activeTab} onValueChange={(value) => setActiveTab(value as "members" | "policies")}>
       <Tabs.List aria-label={group.name}>
         <Tabs.Trigger value="members">{t("members")}{group.memberCount === undefined ? null : ` (${group.memberCount})`}</Tabs.Trigger>
         <Tabs.Trigger value="policies">{g("directPolicies")} ({group.directPolicyCount})</Tabs.Trigger>
       </Tabs.List>
       <Tabs.Content className={styles.stack} value="members">
         <div className={styles.actions}>
-          <GroupActionButton control={controls.addMember}>{g("addMembers")}</GroupActionButton>
-          <GroupActionButton control={controls.removeMember} variant="secondary">{g("removeMembers")}</GroupActionButton>
+          <GroupActionButton control={controls.addMember} triggerRef={addMemberTriggerRef}>{g("addMembers")}</GroupActionButton>
+          <GroupActionButton control={controls.removeMember} triggerRef={removeMemberTriggerRef} variant="secondary">{g("removeMembers")}</GroupActionButton>
         </div>
         {group.membersAvailability === "loading" ? <TableSkeleton label={g("loadingMembers")} rows={3} header={false} />
           : group.membersAvailability === "forbidden" ? <EmptyState title={g("membersUnavailable")} description={g("membersUnavailableHint")} />
@@ -210,8 +222,8 @@ export function GroupDetail({ group, controls, onBack, onOpenMember, onOpenPolic
       </Tabs.Content>
       <Tabs.Content className={styles.stack} value="policies">
         <div className={styles.actions}>
-          <GroupActionButton control={controls.addPolicy}>{g("addPolicies")}</GroupActionButton>
-          <GroupActionButton control={controls.removePolicy} variant="secondary">{g("removePolicies")}</GroupActionButton>
+          <GroupActionButton control={controls.addPolicy} triggerRef={addPolicyTriggerRef}>{g("addPolicies")}</GroupActionButton>
+          <GroupActionButton control={controls.removePolicy} triggerRef={removePolicyTriggerRef} variant="secondary">{g("removePolicies")}</GroupActionButton>
         </div>
         <Alert>{g("policyChangeHint")}</Alert>
         {group.policies.length
@@ -219,5 +231,6 @@ export function GroupDetail({ group, controls, onBack, onOpenMember, onOpenPolic
           : <EmptyState title={g("noPolicies")} />}
       </Tabs.Content>
     </Tabs.Root>
+    </>}
   </WorkspaceDetail>;
 }

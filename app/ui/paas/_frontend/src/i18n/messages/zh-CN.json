@@ -2570,6 +2570,7 @@
   },
   "GroupWorkspace": {
     "back": "返回用户组列表",
+    "backToGroupDetails": "返回用户组详情",
     "steps": {
       "details": "填写用户组信息",
       "review": "审阅并创建"

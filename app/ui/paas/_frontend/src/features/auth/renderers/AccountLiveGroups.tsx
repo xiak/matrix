@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Alert, Badge, Button, EmptyState, FormField, Input, PageSkeleton, TextArea } from "@ui/xiak";
 import { accountError, type GroupAccessClient } from "../application/AccountAccessProvider";
@@ -12,7 +12,7 @@ import type {
 } from "../domain/accounts";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
 import { findActionCapability } from "../scenes/accountAccessScene";
-import { WorkspaceDelete, WorkspaceDialog, WorkspaceSelection } from "./AccessWorkspaceUi";
+import { WorkspaceDelete, WorkspaceDialog, WorkspaceInlineForm, WorkspaceSelection } from "./AccessWorkspaceUi";
 import {
   GroupDetail,
   GroupDirectory,
@@ -148,9 +148,9 @@ function LiveGroupAssociationEditor({ client, access, memberships, scene, change
     clearError();
   };
 
-  return <WorkspaceDialog
-    size="wide"
+  return <WorkspaceInlineForm
     title={`${label} · ${access.group.name}`}
+    backLabel={t("backToGroupDetails")}
     onClose={onClose}
     submitLabel={t(review ? "confirmChange" : "reviewChange")}
     submitDisabled={!selection.length}
@@ -191,13 +191,13 @@ function LiveGroupAssociationEditor({ client, access, memberships, scene, change
       <Alert status={change.mode === "remove" ? "warning" : "info"}>{t("singleRelationImpact")}</Alert>
       <div className={styles.roleTags}><Badge>{selected?.name}</Badge></div>
       {change.mode === "remove" ? <Alert status="warning">{t("remainingSources")}</Alert> : null}
-      <div><Button variant="secondary" onClick={() => { setReview(false); clearError(); }}>{t("backToSelection")}</Button></div>
+      <div><Button type="button" variant="secondary" onClick={() => { setReview(false); clearError(); }}>{t("backToSelection")}</Button></div>
     </> : <>
       <Alert>{t(change.kind === "members" ? "membershipHint" : "policyChangeHint")}</Alert>
       <WorkspaceSelection label={label} options={options} value={selection} onChange={select} limit={1} />
       {change.kind === "members" && change.mode === "add" && !scene.directoryComplete ? <p className={styles.note}>{t("loadedUsersOnly")}</p> : null}
     </>}
-  </WorkspaceDialog>;
+  </WorkspaceInlineForm>;
 }
 
 function LiveGroupDelete({ client, access, onClose, onDeleted, onStale }: {
@@ -258,6 +258,12 @@ function LiveGroupWorkspace({ client, entityId, scene, onOpen }: {
   const [editing, setEditing] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  const editTrigger = useRef<HTMLButtonElement>(null);
+  const addMemberTrigger = useRef<HTMLButtonElement>(null);
+  const removeMemberTrigger = useRef<HTMLButtonElement>(null);
+  const addPolicyTrigger = useRef<HTMLButtonElement>(null);
+  const removePolicyTrigger = useRef<HTMLButtonElement>(null);
+  const previousChange = useRef<GroupChange | null>(null);
 
   const applyFailure = useCallback((failure: unknown) => {
     setPageError(a(`errors.${accountError(failure)}`));
@@ -362,6 +368,16 @@ function LiveGroupWorkspace({ client, entityId, scene, onOpen }: {
     };
   }, [access, membersError, memberships, membersPhase, policyById, t, userById]);
 
+  useLayoutEffect(() => {
+    const closed = previousChange.current;
+    previousChange.current = change;
+    if (change || !closed) return;
+    const target = (closed.kind === "members"
+      ? closed.mode === "add" ? addMemberTrigger : removeMemberTrigger
+      : closed.mode === "add" ? addPolicyTrigger : removePolicyTrigger).current;
+    (target?.disabled ? editTrigger.current : target)?.focus({ preventScroll: true });
+  }, [change, membersPhase, phase]);
+
   if (phase === "loading") return <PageSkeleton label={t("loadingGroup")} layout="access" />;
   if (phase === "error" || !access || !record) return <EmptyState title={w("entityUnavailable")} description={pageError ?? w("entityUnavailableHint")} action={<Button variant="secondary" onClick={() => { setPhase("loading"); void load(true); }}>{t("retry")}</Button>} />;
 
@@ -379,6 +395,7 @@ function LiveGroupWorkspace({ client, entityId, scene, onOpen }: {
     {pageError ? <Alert status="warning">{pageError}</Alert> : null}
     <GroupDetail
       group={record}
+      workflow={change ? <LiveGroupAssociationEditor client={client} access={access} memberships={memberships} scene={scene} change={change} onClose={() => setChange(null)} onChanged={() => load()} onStale={stale} /> : undefined}
       controls={{
         edit: { disabled: refreshingGroup || edit?.available !== true, reason: refreshingGroup ? t("loadingGroup") : edit?.restrictionReason ?? undefined, onInvoke: () => setEditing(true) },
         delete: { disabled: refreshingGroup || remove?.available !== true, reason: refreshingGroup ? t("loadingGroup") : remove?.restrictionReason ?? undefined, onInvoke: () => setDeleting(true) },
@@ -400,12 +417,16 @@ function LiveGroupWorkspace({ client, entityId, scene, onOpen }: {
           finally { setLoadingMore(false); }
         } } : undefined
       }}
+      editTriggerRef={editTrigger}
+      addMemberTriggerRef={addMemberTrigger}
+      removeMemberTriggerRef={removeMemberTrigger}
+      addPolicyTriggerRef={addPolicyTrigger}
+      removePolicyTriggerRef={removePolicyTrigger}
       onBack={() => onOpen("groups")}
       onOpenMember={(userId) => onOpen("users", userId)}
       onOpenPolicy={(policyId) => onOpen("policies", policyId)}
     />
     {editing ? <LiveGroupMetadataEditor client={client} access={access} onClose={() => setEditing(false)} onChanged={() => load()} onStale={stale} /> : null}
-    {change ? <LiveGroupAssociationEditor client={client} access={access} memberships={memberships} scene={scene} change={change} onClose={() => setChange(null)} onChanged={() => load()} onStale={stale} /> : null}
     {deleting ? <LiveGroupDelete client={client} access={access} onClose={() => setDeleting(false)} onDeleted={() => onOpen("groups")} onStale={stale} /> : null}
   </>;
 }

@@ -2570,6 +2570,7 @@
   },
   "GroupWorkspace": {
     "back": "Back to groups",
+    "backToGroupDetails": "Back to group details",
     "steps": {
       "details": "Group details",
       "review": "Review and create"
