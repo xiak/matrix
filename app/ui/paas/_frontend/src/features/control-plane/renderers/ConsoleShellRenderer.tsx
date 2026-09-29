@@ -45,6 +45,7 @@ import {
   X
 } from "lucide-react";
 import { useSession } from "@/features/auth/application/SessionProvider";
+import { useRoleSession } from "@/features/auth/application/RoleSessionProvider";
 import { AccountAccessProvider, useAccountCapabilities } from "@/features/auth/application/AccountAccessProvider";
 import { LoginRenderer } from "@/features/auth/renderers/LoginRenderer";
 import type { AccountRepository } from "@/features/auth/repositories/iamRepository";
@@ -205,6 +206,7 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
   const router = useRouter();
   const requestLeave = useLeaveConfirmation();
   const session = useSession();
+  const roleSession = useRoleSession();
   const controlPlane = useControlPlane();
   const projectScene = controlPlane.projectScene;
   const prepareControlPlane = controlPlane.prepare;
@@ -244,12 +246,17 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
   const principal = session.current;
   const organizationId = committedFrame.scope?.organization.id;
   const organizationName = committedFrame.scope?.organization.name;
-  const headerIdentity = useMemo(() => ({
+  const headerIdentity = useMemo(() => roleSession.identity ? ({
+    accountType: accountMessages("role"),
+    loginName: roleSession.identity.role.name,
+    principalId: roleSession.identity.role.id,
+    tenant: { id: roleSession.identity.account.id, name: roleSession.identity.account.displayName }
+  }) : ({
     accountType: accountMessages(principal?.loginName.includes("@") ? "child" : "primary"),
     loginName: principal?.loginName ?? t("user"),
     principalId: principal?.session.principalId ?? "IAM session",
     tenant: { id: organizationId, name: organizationName ?? principal?.session.organizationId ?? t("unspecifiedTenant") }
-  }), [principal, organizationId, organizationName, accountMessages, t]);
+  }), [principal, organizationId, organizationName, accountMessages, roleSession.identity, t]);
   const headerScope = useMemo(() => ({ regionId, onRegionChange: setRegionId }), [regionId]);
   useEffect(() => () => useConsoleUiStore.getState().resetSessionUi(), []);
 
@@ -310,12 +317,17 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
 
   const sessionLogout = session.logout;
   const logout = useCallback(async () => {
+    if (roleSession.mode === "ROLE") {
+      await roleSession.exitRole();
+      setHeaderPanel(null);
+      return;
+    }
     if (await sessionLogout()) {
       router.replace("/");
       return;
     }
     setHeaderPanel(null);
-  }, [sessionLogout, router, setHeaderPanel]);
+  }, [roleSession, sessionLogout, router, setHeaderPanel]);
   const headerLogout = useCallback(() => { setHeaderPanel(null); requestLeave(logout); }, [setHeaderPanel, requestLeave, logout]);
 
   const workspaceVisible = Boolean(scene?.workspace && workspaceOpen && !navigation.pendingHref);
@@ -327,6 +339,7 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
   const headerProductName = committedFrame.productId === "console" ? t("consoleName") : directory(`services.${committedFrame.productId}.name`);
   const selectedPage = frame.navigation.find((item) => item.selected);
   const localNavigation = frame.navigation.filter((item) => {
+    if (frame.section === "access" && roleSession.mode !== "USER") return item.id === "access";
     if (frame.section !== "access" || item.id === "access" || item.id === "sessions" || item.id === "settings") return true;
     if (item.id === "users") return accountCapabilities.canListUsers;
     if (item.id === "groups") return accountCapabilities.hasPreviewWorkspace ? accountCapabilities.canListUsers : accountCapabilities.canListGroups;
@@ -393,7 +406,9 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
           <ConsoleHeader
             identity={headerIdentity}
             onLogout={headerLogout}
-            revoking={session.phase === "revoking"}
+            revoking={session.phase === "revoking" || roleSession.busy === "exit" || roleSession.busy === "restore" || roleSession.mode === "BLOCKED"}
+            roleAccessHref={frame.preview || roleSession.supported ? "/console/access/role-access/" : undefined}
+            roleSessionActive={roleSession.mode !== "USER"}
             scene={committedFrame}
             productName={frame.preview ? headerProductName : productName}
             scope={headerScope}
@@ -521,12 +536,13 @@ export function ConsoleShellRenderer({ accountRepository, experience, repository
   selection: ControlPlaneRouteSelection;
 }) {
   const session = useSession();
+  const roleSession = useRoleSession();
   const t = useTranslations("Auth");
   const returnTo = consoleRouteHref(selection);
   if (!session.current || (session.phase !== "authenticated" && session.phase !== "revoking")) return <Suspense fallback={<ShellFrame><PageSkeleton label={t("welcome")} layout="access" /></ShellFrame>}><ConsoleSignIn returnTo={returnTo} /></Suspense>;
   return (
     <ConsoleNavigationProvider selection={selection}>
-      <AccountAccessProvider active={selection.section === "access" && selection.view !== "sessions" && selection.view !== "role-access"} repository={accountRepository}>
+      <AccountAccessProvider active={roleSession.mode === "USER" && selection.section === "access" && selection.view !== "sessions" && selection.view !== "role-access"} repository={accountRepository}>
         <ControlPlaneProvider experience={experience} repository={repository} selection={selection}>
           <ConsoleShell experience={experience} />
         </ControlPlaneProvider>

@@ -32,6 +32,8 @@ import { OwnSessionsPage } from "./OwnSessionsPage";
 import { LivePersonalSecuritySettings } from "./LivePersonalSecuritySettings";
 import { LiveAccountSecuritySettings } from "./LiveAccountSecuritySettings";
 import { RoleSelfServicePreview } from "./RoleSelfServicePreview";
+import { LiveRoleSelfService } from "./LiveRoleSelfService";
+import { useRoleSession } from "../application/RoleSessionProvider";
 import { AccountLiveRoles } from "./AccountLiveRoles";
 import { LiveRoleCreationWizard } from "./LiveRoleCreationWizard";
 import styles from "./AccountAccessRenderer.module.css";
@@ -90,8 +92,10 @@ function TenantDirectory({ scene }: { scene: AccountAccessScene }) {
 type AccountAccessRendererProps = { view?: AccountAccessView; entityId?: string; policyMethod?: string; onNavigate(view: AccountAccessView, id?: string, method?: PolicyCreationMethod): void };
 
 export function AccountAccessRenderer(props: AccountAccessRendererProps) {
+  const roleSession = useRoleSession();
+  if (roleSession.mode !== "USER") return roleSession.supported ? <LiveRoleSelfService /> : <RoleSelfServicePreview />;
   if (props.view === "sessions") return <OwnSessionsPage />;
-  if (props.view === "role-access") return <RoleSelfServicePreview />;
+  if (props.view === "role-access") return roleSession.supported ? <LiveRoleSelfService /> : <RoleSelfServicePreview />;
   return <ManagedAccountAccessRenderer {...props} />;
 }
 

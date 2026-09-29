@@ -26,16 +26,18 @@ export type AccountIdentity = Readonly<{
 
 type AccountMenuProps = Readonly<{
   identity: AccountIdentity;
+  accessHref?: string | null;
   onLogout(): void;
   onOpenChange(open: boolean): void;
   open: boolean;
   revoking: boolean;
   roleAccessHref?: string;
+  roleSessionActive?: boolean;
 }>;
 
 const accountMenuId = "global-account-menu";
 
-export function AccountMenu({ identity, onLogout, onOpenChange, open, revoking, roleAccessHref }: AccountMenuProps) {
+export function AccountMenu({ identity, accessHref = "/console/access/", onLogout, onOpenChange, open, revoking, roleAccessHref, roleSessionActive = false }: AccountMenuProps) {
   const t = useTranslations("AccountMenu");
   const trigger = useRef<HTMLButtonElement>(null);
   const items = useRef<Array<HTMLAnchorElement | HTMLButtonElement | null>>([]);
@@ -63,7 +65,10 @@ export function AccountMenu({ identity, onLogout, onOpenChange, open, revoking, 
   }
 
   function handleMenuKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
-    const availableItems = revoking ? roleAccessHref ? [0, 1] : [0] : roleAccessHref ? [0, 1, 2] : [0, 1];
+    const accessIndex = accessHref ? 0 : -1;
+    const roleIndex = roleAccessHref ? (accessHref ? 1 : 0) : -1;
+    const logoutIndex = (accessHref ? 1 : 0) + (roleAccessHref ? 1 : 0);
+    const availableItems = [accessIndex, roleIndex, ...(revoking ? [] : [logoutIndex])].filter((index) => index >= 0);
     const currentPosition = Math.max(0, availableItems.indexOf(activeItem));
     let nextPosition: number | undefined;
 
@@ -78,6 +83,9 @@ export function AccountMenu({ identity, onLogout, onOpenChange, open, revoking, 
   }
 
   const initial = identity.loginName.slice(0, 1).toUpperCase();
+  const accessIndex = accessHref ? 0 : -1;
+  const roleIndex = roleAccessHref ? (accessHref ? 1 : 0) : -1;
+  const logoutIndex = (accessHref ? 1 : 0) + (roleAccessHref ? 1 : 0);
 
   return (
     <div className={styles.root}>
@@ -132,25 +140,25 @@ export function AccountMenu({ identity, onLogout, onOpenChange, open, revoking, 
             <PanelSections aria-label={t("actions")} onKeyDown={handleMenuKeyDown} role="menu">
               <PanelSections.Section role="none">
                 <span className={styles.actionLabel}>{t("actions")}</span>
-                <Link
+                {accessHref ? <Link
                   className={styles.menuItem}
-                  href="/console/access/"
+                  href={accessHref}
                   onAccepted={() => onOpenChange(false)}
-                  ref={(node) => { items.current[0] = node; }}
+                  ref={(node) => { items.current[accessIndex] = node; }}
                   role="menuitem"
-                  tabIndex={activeItem === 0 ? 0 : -1}
+                  tabIndex={activeItem === accessIndex ? 0 : -1}
                 >
                   <span aria-hidden="true" className={styles.menuIcon}><ShieldCheck /></span>
                   <span className={styles.menuCopy}><strong>{t("access")}</strong><small>{t("accessHint")}</small></span>
                   <ChevronRight aria-hidden="true" className={styles.chevron} />
-                </Link>
+                </Link> : null}
                 {roleAccessHref ? <Link
                   className={styles.menuItem}
                   href={roleAccessHref}
                   onAccepted={() => onOpenChange(false)}
-                  ref={(node) => { items.current[1] = node; }}
+                  ref={(node) => { items.current[roleIndex] = node; }}
                   role="menuitem"
-                  tabIndex={activeItem === 1 ? 0 : -1}
+                  tabIndex={activeItem === roleIndex ? 0 : -1}
                 >
                   <span aria-hidden="true" className={styles.menuIcon}><Repeat2 /></span>
                   <span className={styles.menuCopy}><strong>{t("roleAccess")}</strong><small>{t("roleAccessHint")}</small></span>
@@ -159,17 +167,17 @@ export function AccountMenu({ identity, onLogout, onOpenChange, open, revoking, 
               </PanelSections.Section>
               <PanelSections.Section role="none">
                 <button
-                  aria-label={t("logoutLabel")}
+                  aria-label={t(roleSessionActive ? "exitRoleLabel" : "logoutLabel")}
                   className={`${styles.menuItem} ${styles.dangerItem}`}
                   disabled={revoking}
                   onClick={onLogout}
-                  ref={(node) => { items.current[roleAccessHref ? 2 : 1] = node; }}
+                  ref={(node) => { items.current[logoutIndex] = node; }}
                   role="menuitem"
-                  tabIndex={activeItem === (roleAccessHref ? 2 : 1) ? 0 : -1}
+                  tabIndex={activeItem === logoutIndex ? 0 : -1}
                   type="button"
                 >
                   <span aria-hidden="true" className={styles.menuIcon}><LogOut /></span>
-                  <span className={styles.menuCopy}><strong>{t(revoking ? "loggingOut" : "logout")}</strong><small>{t("logoutHint")}</small></span>
+                  <span className={styles.menuCopy}><strong>{t(roleSessionActive ? revoking ? "exitingRole" : "exitRole" : revoking ? "loggingOut" : "logout")}</strong><small>{t(roleSessionActive ? "exitRoleHint" : "logoutHint")}</small></span>
                   <span aria-hidden="true" className={styles.chevronSpace} />
                 </button>
               </PanelSections.Section>

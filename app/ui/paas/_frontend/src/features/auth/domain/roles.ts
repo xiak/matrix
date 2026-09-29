@@ -123,3 +123,40 @@ export type RoleSessionDirectory = {
 export type RoleSessionAccess = { observedAt: string; item: RoleSessionListing };
 export type RoleSessionRevocation = { outcome: "APPLIED" | "EQUAL_REPLAY"; session: LiveRoleSession };
 export type RoleSessionFilter = { exactKind: "session" | "sourceUser"; exactId: string; lifecycle: RoleSessionFilterLifecycle };
+
+// Member self-service is intentionally separate from account-scoped Role
+// administration. The authenticated USER selects its own account/source
+// identity, while the path selects only the Role.
+export type AssumableRole = {
+  roleId: string;
+  accountId: string;
+  name: string;
+  status: "ACTIVE";
+  maxSessionDurationSeconds: number;
+  resourceVersion: number;
+  capability: RoleCapability & { action: "iam.role.assume"; resource: { kind: "ROLE"; id: string }; available: true; restrictionReason: null };
+};
+
+export type AssumableRoleDirectory = {
+  accountId: string;
+  sourceUserId: string;
+  items: AssumableRole[];
+  nextAfter: string | null;
+};
+
+export type AssumeRoleCommand = {
+  resourceVersion: number;
+  durationSeconds: number;
+  requestId: string;
+};
+
+export type AssumeRoleResult =
+  | { outcome: "APPLIED"; session: LiveRoleSession; credential: string }
+  | { outcome: "EQUAL_REPLAY"; session: LiveRoleSession; credential: null };
+
+export type CurrentRoleIdentity = {
+  session: LiveRoleSession & { status: "ACTIVE"; revokedAt: null };
+  account: { id: string; displayName: string };
+  role: { id: string; name: string };
+  sourceUser: RoleSessionSourceUser;
+};

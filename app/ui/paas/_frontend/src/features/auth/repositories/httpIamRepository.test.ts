@@ -321,6 +321,77 @@ describe("IAM HTTP role-session boundary", () => {
   });
 });
 
+describe("IAM HTTP member role self-service boundary", () => {
+  const assumable = {
+    roleId: role.id,
+    accountId: account.id,
+    name: role.name,
+    status: "ACTIVE",
+    maxSessionDurationSeconds: role.maxSessionDurationSeconds,
+    resourceVersion: role.resourceVersion,
+    capability: capability("iam.role.assume", "ROLE", role.id)
+  };
+
+  it("discovers only the current USER scope and preserves sparse discovery cursors", async () => {
+    let fetcher = reply({ apiVersion, kind: "AssumableRoleList", accountId: account.id, sourceUserId: user.id, items: [], nextAfter: "ir1.next-window" });
+    const first = await httpIamRepository.roleSelfService!.listAssumable("user-bearer");
+    expect(first).toMatchObject({ accountId: account.id, sourceUserId: user.id, items: [], nextAfter: "ir1.next-window" });
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/assumable-roles");
+    expect(firstRequest(fetcher)[1]).toMatchObject({ cache: "no-store", headers: { Authorization: "Bearer user-bearer" } });
+
+    fetcher = reply({ apiVersion, kind: "AssumableRoleList", accountId: account.id, sourceUserId: user.id, items: [assumable] });
+    const second = await httpIamRepository.roleSelfService!.listAssumable("user-bearer", "ir1.next-window");
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/assumable-roles?after=ir1.next-window");
+    expect(second.items[0]).toMatchObject({ roleId: role.id, capability: { action: "iam.role.assume", available: true } });
+  });
+
+  it("sends only the frozen role intent and accepts a secret only on first application", async () => {
+    const command = { resourceVersion: role.resourceVersion, durationSeconds: 3600, requestId: "ui-role-assume-one" };
+    let fetcher = reply({ outcome: "APPLIED", session: roleSession, credential: "role-secret" });
+    const applied = await httpIamRepository.roleSelfService!.assume("user-bearer", role.id, command);
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/roles/${role.id}:assume`);
+    expect(requestBody(fetcher)).toEqual(command);
+    expect(applied).toMatchObject({ outcome: "APPLIED", credential: "role-secret", session: { sourceUserId: user.id } });
+
+    fetcher = reply({ outcome: "EQUAL_REPLAY", session: roleSession });
+    expect(await httpIamRepository.roleSelfService!.assume("user-bearer", role.id, command)).toMatchObject({ outcome: "EQUAL_REPLAY", credential: null });
+    reply({ outcome: "EQUAL_REPLAY", session: roleSession, credential: "leaked-secret" });
+    await expect(httpIamRepository.roleSelfService!.assume("user-bearer", role.id, command)).rejects.toThrow("INVALID_IAM_RESPONSE");
+  });
+
+  it("separates non-secret recovery, role-bearer identity, logout, and source revalidation", async () => {
+    let fetcher = reply(roleSession);
+    expect((await httpIamRepository.roleSelfService!.readByRequest("user-bearer", "ui-role-assume-one")).id).toBe(roleSession.id);
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/role-sessions/by-request/ui-role-assume-one");
+
+    const revoked = { ...roleSession, status: "REVOKED", revokedAt: "2026-09-11T08:31:00Z" };
+    fetcher = reply(revoked);
+    await httpIamRepository.roleSelfService!.revokeByRequest("user-bearer", "ui-role-assume-one", "ui-role-revoke-one");
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/role-sessions/by-request/ui-role-assume-one:revoke");
+    expect(requestBody(fetcher)).toEqual({ requestId: "ui-role-revoke-one" });
+
+    fetcher = reply({
+      apiVersion, kind: "CurrentRoleIdentity", session: roleSession,
+      account: { id: account.id, displayName: account.displayName },
+      role: { id: role.id, name: role.name },
+      sourceUser: { id: user.id, loginName: user.loginName, displayName: user.displayName }
+    });
+    expect((await httpIamRepository.roleSelfService!.currentIdentity("role-bearer")).role.id).toBe(role.id);
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/role-session");
+    expect(firstRequest(fetcher)[1]).toMatchObject({ headers: { Authorization: "Bearer role-bearer" } });
+
+    fetcher = reply(revoked);
+    await httpIamRepository.roleSelfService!.logout("role-bearer", "ui-role-logout-one");
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/role-session:logout");
+    expect(requestBody(fetcher)).toEqual({ requestId: "ui-role-logout-one" });
+
+    fetcher = reply({ apiVersion, kind: "CurrentIdentity", account, user, identityKind: "USER", policySources: [], permissionBoundary, capabilities: currentCapabilities() });
+    await httpIamRepository.roleSelfService!.revalidateSource("user-bearer", account.id, user.id);
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/me");
+    expect(firstRequest(fetcher)[1]).toMatchObject({ headers: { Authorization: "Bearer user-bearer" } });
+  });
+});
+
 const accessKey = { apiVersion, kind: "AccessKey", id: "mak1.alex-primary", accountId: account.id, userId: user.id,
   status: "ENABLED", resourceVersion: 1, createdAt: timestamp, updatedAt: timestamp };
 function accessKeyAccess(value = accessKey) {

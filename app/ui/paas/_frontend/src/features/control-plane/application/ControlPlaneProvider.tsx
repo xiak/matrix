@@ -10,7 +10,7 @@ import {
   useState,
   type ReactNode
 } from "react";
-import { useSessionCredential } from "@/features/auth/application/SessionProvider";
+import { useEffectiveCredential } from "@/features/auth/application/RoleSessionProvider";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import type { ExperienceSnapshot } from "../domain/experience";
 import type {
@@ -63,7 +63,7 @@ export function ControlPlaneProvider({
   repository?: ControlPlaneRepository;
   selection: ControlPlaneRouteSelection;
 }) {
-  const credential = useSessionCredential();
+  const credential = useEffectiveCredential();
   const isAccess = selection.section === "access";
   const [snapshot, setSnapshot] = useState<ControlPlaneSnapshot | null>(null);
   const [snapshotOwner, setSnapshotOwner] = useState<string | null>(null);

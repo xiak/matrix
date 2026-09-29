@@ -55,7 +55,7 @@ import type {
 import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDirectory, AccessKeyStatus, AccessKeyStatusChange, ManagedAccessKey } from "../domain/accessKeys";
 import type { AuthenticatorState, EnrollmentChallengeState, NotificationContact, NotificationContactVerification, NotificationDeliveryObservation, RecoveryCodeRegeneration, RecoveryCodeRegenerationResponse, SecurityStepUp, TOTPEnrollment, TOTPEnrollmentConfirmation, TOTPEnrollmentStart } from "../domain/personalSecurity";
 import type { ChangePasswordCommand, AccountRepository, IamRepository, LoginCommand } from "./iamRepository";
-import type { LiveRoleSession, Role, RoleAccess, RoleCapability, RoleCapabilityAction, RoleDirectory, RoleListing, RolePolicyAttachment, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionLifecycle, RoleSessionListing, RoleSessionRevocation, RoleTrustDocument, RoleTrustVersion } from "../domain/roles";
+import type { AssumeRoleCommand, AssumeRoleResult, AssumableRole, AssumableRoleDirectory, CurrentRoleIdentity, LiveRoleSession, Role, RoleAccess, RoleCapability, RoleCapabilityAction, RoleDirectory, RoleListing, RolePolicyAttachment, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionLifecycle, RoleSessionListing, RoleSessionRevocation, RoleTrustDocument, RoleTrustVersion } from "../domain/roles";
 
 function accountRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("INVALID_IAM_RESPONSE");
@@ -965,18 +965,110 @@ function parseRoleAccess(value: unknown, accountId: string, roleId: string): Rol
   return { role, trustVersion, policyAttachments, capabilities };
 }
 
-function parseLiveRoleSession(value: unknown, accountId: string, roleId: string, sessionId?: string): LiveRoleSession {
+function parseRoleSessionRecord(value: unknown): LiveRoleSession {
   const wire = accountRecord(value);
   exactKeys(wire, ["apiVersion", "kind", "id", "accountId", "roleId", "sourceUserId", "status", "issuedAt", "expiresAt"], ["revokedAt"]);
   requireAccountKind(wire, "RoleSession");
   const id = accountIdentifier(wire.id), issuedAt = accountTimestamp(wire.issuedAt), expiresAt = accountTimestamp(wire.expiresAt);
   const status = wire.status;
   const revokedAt = wire.revokedAt === undefined ? null : accountTimestamp(wire.revokedAt);
-  if (accountIdentifier(wire.accountId) !== accountId || accountIdentifier(wire.roleId) !== roleId || (sessionId && id !== sessionId) ||
-      (status !== "ACTIVE" && status !== "REVOKED") || (status === "REVOKED") !== Boolean(revokedAt) ||
+  if ((status !== "ACTIVE" && status !== "REVOKED") || (status === "REVOKED") !== Boolean(revokedAt) ||
       timestampMicros(expiresAt) <= timestampMicros(issuedAt) || timestampMicros(expiresAt) - timestampMicros(issuedAt) > 43_200_000_000n ||
       (revokedAt && timestampMicros(revokedAt) < timestampMicros(issuedAt))) throw new Error("INVALID_IAM_RESPONSE");
-  return { id, accountId, roleId, sourceUserId: accountIdentifier(wire.sourceUserId), status, issuedAt, expiresAt, revokedAt };
+  return { id, accountId: accountIdentifier(wire.accountId), roleId: accountIdentifier(wire.roleId), sourceUserId: accountIdentifier(wire.sourceUserId), status, issuedAt, expiresAt, revokedAt };
+}
+
+function parseLiveRoleSession(value: unknown, accountId: string, roleId: string, sessionId?: string): LiveRoleSession {
+  const session = parseRoleSessionRecord(value);
+  if (session.accountId !== accountId || session.roleId !== roleId || sessionId && session.id !== sessionId) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  return session;
+}
+
+function roleDiscoveryCursor(value: unknown): string {
+  if (typeof value !== "string" || value.length < 5 || value.length > 384 || !/^ir1\.[A-Za-z0-9_-]+$/.test(value)) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  return value;
+}
+
+function parseAssumableRole(value: unknown, accountId: string): AssumableRole {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["roleId", "accountId", "name", "status", "maxSessionDurationSeconds", "resourceVersion", "capability"]);
+  const roleId = accountIdentifier(wire.roleId);
+  const capability = parseRoleCapability(wire.capability);
+  if (accountIdentifier(wire.accountId) !== accountId || wire.status !== "ACTIVE" ||
+      typeof wire.maxSessionDurationSeconds !== "number" || !Number.isSafeInteger(wire.maxSessionDurationSeconds) ||
+      wire.maxSessionDurationSeconds < 60 || wire.maxSessionDurationSeconds > 43200 ||
+      capability.action !== "iam.role.assume" || capability.resource.kind !== "ROLE" || capability.resource.id !== roleId ||
+      !capability.available || capability.restrictionReason !== null) throw new Error("INVALID_IAM_RESPONSE");
+  return {
+    roleId,
+    accountId,
+    name: groupText(wire.name, 1, 64),
+    status: "ACTIVE",
+    maxSessionDurationSeconds: wire.maxSessionDurationSeconds,
+    resourceVersion: accountVersion(wire.resourceVersion),
+    capability: capability as AssumableRole["capability"]
+  };
+}
+
+function parseAssumableRoleDirectory(value: unknown, after?: string): AssumableRoleDirectory {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "accountId", "sourceUserId", "items"], ["nextAfter"]);
+  requireAccountKind(wire, "AssumableRoleList");
+  const accountId = accountIdentifier(wire.accountId);
+  const sourceUserId = accountIdentifier(wire.sourceUserId);
+  if (!Array.isArray(wire.items) || wire.items.length > 20 || new TextEncoder().encode(JSON.stringify(wire)).length > 64 * 1024) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  const items = wire.items.map((item) => parseAssumableRole(item, accountId));
+  if (items.some((item, index) => item.roleId <= (index ? items[index - 1]!.roleId : ""))) throw new Error("INVALID_IAM_RESPONSE");
+  const nextAfter = wire.nextAfter === undefined ? null : roleDiscoveryCursor(wire.nextAfter);
+  if (nextAfter === after) throw new Error("INVALID_IAM_RESPONSE");
+  return { accountId, sourceUserId, items, nextAfter };
+}
+
+function parseAssumeRoleResult(value: unknown, roleId: string, command: AssumeRoleCommand): AssumeRoleResult {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["outcome", "session"], ["credential"]);
+  const session = parseRoleSessionRecord(wire.session);
+  if (session.roleId !== roleId || session.status !== "ACTIVE" || session.revokedAt !== null ||
+      timestampMicros(session.expiresAt) - timestampMicros(session.issuedAt) !== BigInt(command.durationSeconds) * 1_000_000n) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  if (wire.outcome === "APPLIED") {
+    if (!("credential" in wire)) throw new Error("INVALID_IAM_RESPONSE");
+    return { outcome: "APPLIED", session, credential: responseSecret(wire.credential) };
+  }
+  if (wire.outcome === "EQUAL_REPLAY" && !("credential" in wire)) return { outcome: "EQUAL_REPLAY", session, credential: null };
+  throw new Error("INVALID_IAM_RESPONSE");
+}
+
+function parseCurrentRoleIdentity(value: unknown): CurrentRoleIdentity {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "session", "account", "role", "sourceUser"]);
+  requireAccountKind(wire, "CurrentRoleIdentity");
+  const session = parseRoleSessionRecord(wire.session);
+  const account = accountRecord(wire.account);
+  const role = accountRecord(wire.role);
+  const sourceUser = accountRecord(wire.sourceUser);
+  exactKeys(account, ["id", "displayName"]);
+  exactKeys(role, ["id", "name"]);
+  exactKeys(sourceUser, ["id", "loginName", "displayName"]);
+  const result: CurrentRoleIdentity = {
+    session: session as CurrentRoleIdentity["session"],
+    account: { id: accountIdentifier(account.id), displayName: groupText(account.displayName, 1, 128) },
+    role: { id: accountIdentifier(role.id), name: groupText(role.name, 1, 64) },
+    sourceUser: {
+      id: accountIdentifier(sourceUser.id), loginName: accountText(sourceUser.loginName), displayName: groupText(sourceUser.displayName, 1, 128)
+    }
+  };
+  if (session.status !== "ACTIVE" || session.revokedAt !== null || result.account.id !== session.accountId ||
+      result.role.id !== session.roleId || result.sourceUser.id !== session.sourceUserId ||
+      !/^[a-z][a-z0-9._-]{2,63}$/.test(result.sourceUser.loginName)) throw new Error("INVALID_IAM_RESPONSE");
+  return result;
 }
 
 function roleSessionLifecycle(session: LiveRoleSession, observedAt: string): RoleSessionLifecycle {
@@ -2364,6 +2456,73 @@ export const httpIamRepository: IamRepository = {
       throw new Error("INVALID_IAM_RESPONSE");
     }
     return result;
+  },
+  roleSelfService: {
+    async listAssumable(credential, after) {
+      const query = after ? `?after=${encodeURIComponent(roleDiscoveryCursor(after))}` : "";
+      return parseAssumableRoleDirectory(await requestJSON<unknown>(`/api/iam/v1/auth/assumable-roles${query}`, {
+        headers: accountHeaders(credential)
+      }), after);
+    },
+    async assume(credential, roleId, command) {
+      const target = accountIdentifier(roleId);
+      const normalized: AssumeRoleCommand = {
+        resourceVersion: accountVersion(command.resourceVersion),
+        durationSeconds: command.durationSeconds,
+        requestId: accountIdentifier(command.requestId)
+      };
+      if (!Number.isSafeInteger(normalized.durationSeconds) || normalized.durationSeconds < 60 || normalized.durationSeconds > 43200) {
+        throw new Error("INVALID_IAM_REQUEST");
+      }
+      return parseAssumeRoleResult(await requestJSON<unknown>(`/api/iam/v1/roles/${encodeURIComponent(target)}:assume`, {
+        method: "POST",
+        headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
+        body: JSON.stringify(normalized)
+      }), target, normalized);
+    },
+    async readByRequest(credential, requestId) {
+      const target = accountIdentifier(requestId);
+      return parseRoleSessionRecord(await requestJSON<unknown>(
+        `/api/iam/v1/auth/role-sessions/by-request/${encodeURIComponent(target)}`,
+        { headers: accountHeaders(credential) }
+      ));
+    },
+    async revokeByRequest(credential, issuanceRequestId, requestId) {
+      const issuance = accountIdentifier(issuanceRequestId);
+      const request = accountIdentifier(requestId);
+      const session = parseRoleSessionRecord(await requestJSON<unknown>(
+        `/api/iam/v1/auth/role-sessions/by-request/${encodeURIComponent(issuance)}:revoke`,
+        {
+          method: "POST",
+          headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
+          body: JSON.stringify({ requestId: request })
+        }
+      ));
+      if (session.status !== "REVOKED") throw new Error("INVALID_IAM_RESPONSE");
+      return session;
+    },
+    async currentIdentity(roleCredential) {
+      return parseCurrentRoleIdentity(await requestJSON<unknown>("/api/iam/v1/auth/role-session", {
+        headers: accountHeaders(responseSecret(roleCredential))
+      }));
+    },
+    async logout(roleCredential, requestId) {
+      const session = parseRoleSessionRecord(await requestJSON<unknown>("/api/iam/v1/auth/role-session:logout", {
+        method: "POST",
+        headers: { ...accountHeaders(responseSecret(roleCredential)), "Content-Type": "application/json" },
+        body: JSON.stringify({ requestId: accountIdentifier(requestId) })
+      }));
+      if (session.status !== "REVOKED") throw new Error("INVALID_IAM_RESPONSE");
+      return session;
+    },
+    async revalidateSource(credential, accountId, userId) {
+      const identity = parseAccountIdentity(await requestJSON<unknown>("/api/iam/v1/auth/me", {
+        headers: accountHeaders(credential)
+      }));
+      if (identity.account.id !== accountIdentifier(accountId) || identity.user.id !== accountIdentifier(userId)) {
+        throw new Error("INVALID_IAM_RESPONSE");
+      }
+    }
   },
   authenticationChallenges: {
     async verify(command) {

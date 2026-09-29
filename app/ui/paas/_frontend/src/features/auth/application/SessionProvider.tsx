@@ -24,6 +24,7 @@ import { httpIamRepository } from "../repositories/httpIamRepository";
 import type { IamRepository } from "../repositories/iamRepository";
 import { OwnSessionsProvider } from "./OwnSessionsProvider";
 import { PersonalSecurityProvider } from "./PersonalSecurityProvider";
+import { RoleSessionProvider } from "./RoleSessionProvider";
 
 export type SessionErrorCode = "invalidCredentials" | "tooManyAttempts" | "loginUnavailable"
   | "invalidVerificationCode" | "challengeExpired" | "challengeUnavailable"
@@ -831,7 +832,9 @@ export function SessionProvider({
       <SessionContext.Provider value={sessionValue}>
         <PersonalSecurityProvider repository={repository} credential={credential} current={current} sessionRevision={sessionRevision} isCurrentSession={isCurrentSession} expire={expire} completeEnrollment={completeEnrollment}>
           <OwnSessionsProvider repository={repository} credential={credential} current={current} expire={expire}>
-            {children}
+            <RoleSessionProvider current={current} expireSource={expire} repository={repository} sourceCredential={credential}>
+              {children}
+            </RoleSessionProvider>
           </OwnSessionsProvider>
         </PersonalSecurityProvider>
       </SessionContext.Provider>

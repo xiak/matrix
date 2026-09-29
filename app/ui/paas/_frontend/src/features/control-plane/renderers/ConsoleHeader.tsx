@@ -26,6 +26,8 @@ type ConsoleHeaderProps = Readonly<{
   identity: AccountIdentity;
   onLogout(): void;
   revoking: boolean;
+  roleAccessHref?: string;
+  roleSessionActive?: boolean;
 }>;
 
 export function ConsoleBrand({ inactive = false }: { inactive?: boolean }) {
@@ -45,7 +47,7 @@ function RouteProgress() {
   return <Progress className={styles.routeProgress} aria-label={t("openingPage", { name: navigation(`items.${pendingSelection.view ?? pendingSelection.section}.label`) })} />;
 }
 
-export const ConsoleHeader = memo(function ConsoleHeader({ scene, productName, scope, identity, onLogout, revoking }: ConsoleHeaderProps) {
+export const ConsoleHeader = memo(function ConsoleHeader({ scene, productName, scope, identity, onLogout, revoking, roleAccessHref, roleSessionActive }: ConsoleHeaderProps) {
   const t = useTranslations("Console");
   const navigation = useTranslations("ServiceNavigation");
   const resourceKinds = useTranslations("GlobalSearch.resourceKinds");
@@ -81,7 +83,7 @@ export const ConsoleHeader = memo(function ConsoleHeader({ scene, productName, s
         {scene.preview ? <span className={styles.previewChip} title={t("previewHint")}><span aria-hidden="true" />MOCK<span className={styles.previewLabel}>{t("preview")}</span></span> : null}
         <div aria-label={t("globalTools")} className={styles.tools}>
           {scene.preview ? <NotificationCenter activeOperationCount={scene.activeOperationCount} messages={scene.messages} onOpenChange={openPanel("notifications")} open={activePanel === "notifications"} /> : null}
-          <AccountMenu identity={identity} onLogout={onLogout} onOpenChange={openPanel("account")} open={activePanel === "account"} revoking={revoking} roleAccessHref={scene.preview ? "/console/access/role-access/" : undefined} />
+          <AccountMenu accessHref={roleSessionActive ? null : "/console/access/"} identity={identity} onLogout={onLogout} onOpenChange={openPanel("account")} open={activePanel === "account"} revoking={revoking} roleAccessHref={roleAccessHref} roleSessionActive={roleSessionActive} />
         </div>
       </div>
       <RouteProgress />

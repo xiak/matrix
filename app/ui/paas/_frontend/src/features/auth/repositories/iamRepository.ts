@@ -37,7 +37,7 @@ import type { AccessWorkspace, AccessWorkspaceCommand } from "../domain/accessWo
 import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDirectory, AccessKeyStatus, AccessKeyStatusChange } from "../domain/accessKeys";
 import type { AuthenticatorState, EnrollmentChallengeState, NotificationContact, NotificationContactVerification, RecoveryCodeRegeneration, RecoveryCodeRegenerationResponse, SecurityStepUp, TOTPEnrollment, TOTPEnrollmentConfirmation, TOTPEnrollmentStart } from "../domain/personalSecurity";
 import type { UserBatchCommand } from "../domain/userBatch";
-import type { CreateRoleCommand, Role, RoleAccess, RoleDirectory, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionRevocation } from "../domain/roles";
+import type { AssumeRoleCommand, AssumeRoleResult, AssumableRoleDirectory, CreateRoleCommand, CurrentRoleIdentity, LiveRoleSession, Role, RoleAccess, RoleDirectory, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionRevocation } from "../domain/roles";
 
 export type LoginCommand = { loginName: string; password: string };
 export type ChangePasswordCommand = { currentPassword: string; newPassword: string; revokeOtherSessions?: boolean };
@@ -78,6 +78,15 @@ export interface IamRepository {
   };
   changePassword(credential: string, command: ChangePasswordCommand): Promise<void>;
   logout(credential: string): Promise<void>;
+  roleSelfService?: {
+    listAssumable(credential: string, after?: string): Promise<AssumableRoleDirectory>;
+    assume(credential: string, roleId: string, command: AssumeRoleCommand): Promise<AssumeRoleResult>;
+    readByRequest(credential: string, requestId: string): Promise<LiveRoleSession>;
+    revokeByRequest(credential: string, issuanceRequestId: string, requestId: string): Promise<LiveRoleSession>;
+    currentIdentity(roleCredential: string): Promise<CurrentRoleIdentity>;
+    logout(roleCredential: string, requestId: string): Promise<LiveRoleSession>;
+    revalidateSource(credential: string, accountId: string, userId: string): Promise<void>;
+  };
   sessions?: {
     list(credential: string, after?: string): Promise<OwnSessionPage>;
     revoke(credential: string, targetSessionId: string, requestId: string): Promise<OwnSessionRevocation>;
