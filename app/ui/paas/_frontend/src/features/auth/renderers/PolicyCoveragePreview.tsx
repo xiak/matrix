@@ -118,7 +118,6 @@ export function PolicyCoveragePreview({ workspace, scene, entityId, onOpen }: { 
     <Card><Card.Header><h2>{t("request")}</h2></Card.Header><Card.Body>
       <form className={styles.stack} onSubmit={(event) => { event.preventDefault(); setPage(1); setChecked({ workspace, worksheet: buildConfigurationWorksheet(workspace, scene, subject, request) }); }}>
         <p className={styles.note}>{t("profileFixture", { version: previewAuthorizationCatalogVersion })}</p>
-        <p className={styles.note}>{t("contextProvenance")}</p>
         {subject === "user" && workspace.testRequests.length ? <FormField id={id + "-example"} label={t("example")} hint={exampleId ? t(`examples.${exampleId}.hint`) : t("exampleHint")}><Select id={id + "-example"} aria-describedby={id + "-example-hint"} value={exampleId} placeholder={t("chooseExample")} options={workspace.testRequests.map((entry) => ({ value: entry.id, label: t(`examples.${entry.id}.label`), disabled: !scene.users.some((user) => user.id === entry.request.principalId) || !inventory.some((resource) => resource.id === entry.request.resourceId && resource.parsed) }))} onValueChange={(value) => {
           const example = workspace.testRequests.find((entry) => entry.id === value);
           const resource = inventory.find((entry) => entry.id === example?.request.resourceId);
@@ -135,9 +134,17 @@ export function PolicyCoveragePreview({ workspace, scene, entityId, onOpen }: { 
             change({ resourceId, action: compatible ? request.action : "" });
           }} /></FormField>
           <FormField id={id + "-action"} label={t("action")}><Select id={id + "-action"} value={request.action} placeholder={t("chooseAction")} options={actions.map((action) => ({ value: action.id, label: r(`actionNames.${action.id}`) + " · " + action.id }))} onValueChange={(action) => change({ action })} /></FormField>
-          <FormField id={id + "-ip"} label={t("sourceIp")} hint={t("contextHint")}><Input id={id + "-ip"} maxLength={64} value={request.sourceIp ?? ""} placeholder="192.0.2.42" aria-describedby={id + "-ip-hint"} onChange={(event) => change({ sourceIp: event.target.value })} /></FormField>
-          <FormField id={id + "-time"} label={t("time")}><Input id={id + "-time"} type="datetime-local" step="0.001" value={request.at?.replace(/Z$/, "") ?? ""} onChange={(event) => { const text = event.target.value; const date = new Date(text + "Z"); change({ at: text && Number.isFinite(date.getTime()) ? date.toISOString() : text }); }} /></FormField>
         </div>
+        <details className={styles.contextDetails}>
+          <summary>{t("contextTitle")}</summary>
+          <div className={styles.contextBody}>
+            <p className={styles.note}>{t("contextProvenance")}</p>
+            <div className={styles.fields}>
+              <FormField id={id + "-ip"} label={t("sourceIp")} hint={t("contextHint")}><Input id={id + "-ip"} maxLength={64} value={request.sourceIp ?? ""} placeholder="192.0.2.42" aria-describedby={id + "-ip-hint"} onChange={(event) => change({ sourceIp: event.target.value })} /></FormField>
+              <FormField id={id + "-time"} label={t("time")}><Input id={id + "-time"} type="datetime-local" step="0.001" value={request.at?.replace(/Z$/, "") ?? ""} onChange={(event) => { const text = event.target.value; const date = new Date(text + "Z"); change({ at: text && Number.isFinite(date.getTime()) ? date.toISOString() : text }); }} /></FormField>
+            </div>
+          </div>
+        </details>
         {selectedUser && !selectedUser.enabled ? <Alert status="warning">{t("disabledUser")}</Alert> : null}
         {selected ? <div className={styles.section}><code className={styles.resourcePreview}>{selected.reference}</code><div className={styles.actions}>{Object.entries(selected.tags ?? {}).map(([key, value]) => <Badge key={key}>{key} : {value}</Badge>)}</div></div> : null}
         <div><Button type="submit" disabled={!request.principalId || !request.action || !selected}><ClipboardList aria-hidden="true" />{t("run")}</Button></div>

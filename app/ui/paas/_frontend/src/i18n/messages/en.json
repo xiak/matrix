@@ -4513,6 +4513,7 @@
     "scope": "The isolated MOCK only inventories policy documents, default versions, statements and permission-boundary configuration referenced by a local identity fixture. It does not call a policy evaluator, read real resources or produce Allow/Deny, effective-permission or business-execution results.",
     "request": "Local check input",
     "profileFixture": "Actions and resource types come from versioned static Profile fixture {version}. It is not the current backend directory or a compatibility commitment.",
+    "contextTitle": "Additional request context (record only)",
     "contextProvenance": "Source IP and time are operator-entered fields used only to review condition information architecture. The page does not detect the browser address, simulate a gateway or proxy, or let these values affect an authorization result.",
     "user": "User",
     "resource": "Test resource",

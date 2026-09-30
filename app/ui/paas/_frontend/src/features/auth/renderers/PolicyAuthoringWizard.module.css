@@ -25,6 +25,11 @@
 .resourcePreview { grid-column: 1 / -1; font-size: var(--xiak-font-size-small); overflow-wrap: anywhere; color: var(--xiak-color-text-muted); }
 .conditionTime { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--xiak-spacing-tight); align-content: start; min-width: 0; }
 .note { margin: 0; color: var(--xiak-color-text-muted); line-height: 1.7; font-size: var(--xiak-font-size-small); }
+.contextDetails { min-width: 0; border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); background: var(--xiak-color-bg-panel-hover); }
+.contextDetails summary { padding: var(--xiak-spacing-default); color: var(--xiak-color-text-strong); cursor: pointer; font-size: var(--xiak-font-size-body); font-weight: var(--xiak-font-weight-semibold); }
+.contextDetails summary:focus-visible { outline: 2px solid var(--xiak-color-border-focus); outline-offset: 2px; border-radius: var(--xiak-radius-small); }
+.contextDetails[open] summary { border-bottom: var(--xiak-border-subtle); }
+.contextBody { display: grid; min-width: 0; gap: var(--xiak-spacing-default); padding: var(--xiak-spacing-default); }
 .evaluationScope { padding: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
 .evaluationScope p { margin: 0; line-height: var(--xiak-line-height-body); }
 .coverage { display: grid; min-width: 0; gap: var(--xiak-spacing-default); padding: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); background: var(--xiak-color-bg-panel-hover); }

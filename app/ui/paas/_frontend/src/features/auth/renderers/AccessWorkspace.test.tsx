@@ -2201,7 +2201,9 @@ describe("CAM-style access workspace", () => {
   });
   it("inventories local policy references, clears stale worksheets and remains preview-only", async () => {
     const { user, repository } = await open("policy-coverage");
-    expect(screen.getByText(/本页不探测浏览器地址/)).toBeTruthy();
+    const context = screen.getByText("补充请求上下文（仅记录）").closest("details")!;
+    expect(context.open).toBe(false);
+    expect(within(context).getByText(/本页不探测浏览器地址/)).toBeTruthy();
     expect(screen.getByText(/mock-profile-v1/)).toBeTruthy();
     await user.click(await screen.findByRole("button", { name: "生成本地检查表" }));
     expect(screen.queryByText("策略允许")).toBeNull();
@@ -2310,6 +2312,8 @@ describe("CAM-style access workspace", () => {
     const { user } = await open("policy-coverage", { seed: async (extension) => {
       await extension.execute("preview", { kind: "save-policy", id: "policy-prod-logs", name: "ProductionLogReader", description: "", document: { version: "1", statement: [{ effect: "deny", action: ["logs:search"], resource: ["*"], condition: { sourceIp: ["192.0.2.0/24"] } }] } });
     } });
+    await user.click(screen.getByText("补充请求上下文（仅记录）"));
+    expect(screen.getByText("补充请求上下文（仅记录）").closest("details")?.open).toBe(true);
     await user.clear(screen.getByLabelText("来源 IP"));
     await user.click(screen.getByRole("button", { name: "生成本地检查表" }));
     expect(screen.queryByText("无法确定")).toBeNull();

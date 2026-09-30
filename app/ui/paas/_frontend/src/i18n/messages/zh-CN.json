@@ -4527,6 +4527,7 @@
     "scope": "隔离 MOCK 仅列出本地身份 fixture 关联的策略文档、默认版本、声明和权限边界配置。页面不调用策略求值器，不读取真实资源，也不产生 Allow／Deny、有效权限或业务执行结论。",
     "request": "本地检查输入",
     "profileFixture": "Action 与资源类型来自版本化静态 Profile fixture：{version}。它不是当前后端目录或兼容性承诺。",
+    "contextTitle": "补充请求上下文（仅记录）",
     "contextProvenance": "来源 IP 与时间均由操作者填写，只用于检查条件信息架构；本页不探测浏览器地址，不模拟网关或代理，也不会让这些值影响任何授权结果。",
     "user": "用户",
     "resource": "测试资源",
