@@ -6,8 +6,8 @@
 - Updated: 2026-09-30
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `8f0ca4c3`
-- Pushed documentation head: `60e094a5`
+- Pushed UI source: `7cda7000`
+- Pushed documentation head: `eed8c2ce`
 
 ## Authoritative route
 
@@ -146,6 +146,10 @@ heading and temporary-access boundary mounted while only role cards load. An
 initial directory failure creates no RoleSession and retries in place; an
 already verified directory remains visible through later errors. The explicit
 MOCK Role experience is unchanged and remains independently inspectable.
+
+Shared compact Tabs now expose overflow through a theme-aware native scroll
+cue without React state, observers or parent rerenders. The responsive browser
+and full verification evidence is owned by FEAT-007.
 
 ## Continuation
 
