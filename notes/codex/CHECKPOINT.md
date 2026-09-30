@@ -7,7 +7,7 @@
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
 - Pushed source/embed milestone: `fc7c3b54`
-- Pushed documentation milestone: `9818a8f5`
+- Pushed documentation milestone: `59023f71`
 
 ## Authoritative route
 
@@ -58,8 +58,10 @@ Source and synchronized Go embed at `fc7c3b54` passed 55 frontend files / 889
 tests, static normalization, type/lint/architecture, 228 theme contrast pairs,
 41-page export, 228-file embed equality and repository Go test/vet. Existing
 MOCK pages remain available; the LIVE administrator session path still lacks
-real-login browser evidence and the fixed IAM source's independent CI remains
-separate.
+real-login browser evidence. IAM follow-up `a464299b` changes only the
+`authority-roles` test evidence, not production wire/API/SQL; its replacement
+Verification `36779942782` is still pending, so product-side LIVE bind/unbind
+remains closed.
 Exact behavioral evidence and limits are owned by FEAT-IAM-010.
 
 The earlier navigation stress gate remains unchanged: 200 alternating suspended
