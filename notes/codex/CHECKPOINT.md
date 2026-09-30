@@ -6,8 +6,8 @@
 - Updated: 2026-10-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `46b72b04`
-- Pushed documentation milestone: `49df1c8b`
+- Pushed source/embed milestone: `1509b0f0`
+- Pushed documentation milestone: `960c7ef9`
 
 ## Authoritative route
 
@@ -60,6 +60,17 @@ IAM-to-Logs and IAM-to-PostgreSQL transitions took about 199ms and 205ms in the
 local automation observation; `390 × 844` inspection had no overflow or
 warning/error. Existing MOCK pages remain available. Durable details and
 limits are owned by FEAT-007 at `49df1c8b`.
+
+The shared contextual workspace now mounts its quota, installation or platform
+status body only after the named page action is first accepted. A closed,
+never-used workspace therefore has no hidden form subscribing to the broad
+control-plane context. After first use, collapse keeps the body inert and
+mounted so the operator's draft survives reopen; a different current workspace
+does not render the previous body. Source/embed `1509b0f0` passed the same full
+55-file/896-test frontend, export/embed and focused Go UI host gates. A real DEV
+installation check proved zero initial forms, retained a changed display-name
+draft across collapse/reopen, no overflow and no browser warning/error. The
+contract is owned by FEAT-007 at `960c7ef9`.
 
 The fixed administrator RoleSession northbound contract is consumed only by
 Role detail. The service-authorization MOCK reuses its public fields but sends
