@@ -98,4 +98,17 @@ describe("ServiceAuthorizationPreview", () => {
     await user.click(screen.getByRole("button", { name: "返回授权模板" }));
     expect(screen.getByRole("button", { name: "查看授权后观察" })).toBe(document.activeElement);
   });
+
+  it("explains product, IAM, and tenant ownership without exposing publisher controls", async () => {
+    const user = userEvent.setup();
+    render(<LocaleProvider><ServiceAuthorizationPreview workspace={initialAccessWorkspace("org-xiak")} onClose={vi.fn()} /></LocaleProvider>);
+
+    await user.click(screen.getByRole("tab", { name: "平台模板" }));
+    const responsibility = screen.getByRole("region", { name: "服务授权职责边界" });
+    expect(within(responsibility).getByText("产品团队定义能力")).toBeTruthy();
+    expect(within(responsibility).getByText("IAM 平台校验并发布")).toBeTruthy();
+    expect(within(responsibility).getByText("租户管理员消费目录")).toBeTruthy();
+    expect(within(responsibility).getByText(/不能注册云平台 Action/)).toBeTruthy();
+    expect(within(responsibility).queryByRole("button")).toBeNull();
+  });
 });

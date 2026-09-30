@@ -2086,7 +2086,14 @@
       "separation": "Ordinary service roles remain managed in the role directory. This is a separate service-linked-role consent preview; similar names or products do not merge the two concepts.",
       "sectionsLabel": "Service authorization directory views",
       "authorizations": "Current account authorizations",
-      "templates": "Platform templates"
+      "templates": "Platform templates",
+      "responsibility": {
+        "title": "Service-authorization ownership boundary",
+        "hint": "Catalog publication and customer authorization are different operations. Each layer owns only its facts and a later layer cannot rewrite or replace an earlier one.",
+        "product": { "title": "Product team defines capabilities", "hint": "Declare Actions, resource kinds, conditions, and enforcement points in the business API. This cannot grant access to a customer account.", "state": "Define" },
+        "iam": { "title": "IAM validates and publishes", "hint": "Validate namespaces, service subjects, immutable revisions, and content digests while governing the trusted publication boundary.", "state": "Validate / publish" },
+        "tenant": { "title": "Tenant administrator consumes the catalog", "hint": "Initiate consent, binding, or revocation from the concrete product resource. Tenants cannot register platform Actions or rewrite templates.", "state": "Consume / consent" }
+      }
     },
     "accountDirectory": {
       "title": "Current account service authorizations",

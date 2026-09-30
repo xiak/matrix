@@ -71,8 +71,22 @@ function TemplateDirectory({ triggerRef, onOpen }: {
   onOpen(): void;
 }) {
   const t = useTranslations("ServiceAuthorizationPreview");
+  const responsibilityTitleId = useId();
   return <div className={styles.stack}>
     <div className={styles.sectionHeading}><div><h3>{t("directory.title")}</h3><p>{t("directory.hint")}</p></div><Badge status="warning">{t("states.illustrative")}</Badge></div>
+    <section aria-labelledby={responsibilityTitleId} className={styles.responsibility}>
+      <div className={styles.responsibilityHeading}>
+        <h4 id={responsibilityTitleId}>{t("directory.responsibility.title")}</h4>
+        <p>{t("directory.responsibility.hint")}</p>
+      </div>
+      <ol className={styles.responsibilityStages}>
+        {(["product", "iam", "tenant"] as const).map((owner, index) => <li key={owner}>
+          <span className={styles.runtimeIndex} aria-hidden="true">{index + 1}</span>
+          <div><strong>{t(`directory.responsibility.${owner}.title`)}</strong><small>{t(`directory.responsibility.${owner}.hint`)}</small></div>
+          <Badge status="neutral">{t(`directory.responsibility.${owner}.state`)}</Badge>
+        </li>)}
+      </ol>
+    </section>
     <Table aria-label={t("directory.tableLabel")} mobileLayout="stack">
       <thead><tr><th scope="col">{t("fields.product")}</th><th scope="col">{t("fields.purpose")}</th><th scope="col">{t("fields.policySnapshot")}</th><th scope="col">{t("fields.templateState")}</th><th scope="col">{t("fields.accountState")}</th></tr></thead>
       <tbody><tr>
