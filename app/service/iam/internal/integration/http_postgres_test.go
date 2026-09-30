@@ -22525,11 +22525,25 @@ func proveServiceRoleSessionManagement(t *testing.T, ctx context.Context, handle
 	if err != nil {
 		t.Fatal("begin service RoleSession lineage drift probe", err)
 	}
-	if _, err = tamper.Exec(ctx, `SET LOCAL session_replication_role=replica;
-		UPDATE iam.service_role_session_evidence SET service_installation_id=service_installation_id||'.drift'
-		WHERE tenant_id=$1 AND session_id=$2`, proof.Session.AccountID, proof.Session.ID); err != nil {
+	// immutable_history is ENABLE ALWAYS, so session_replication_role cannot
+	// silently bypass the primary protection. Disable only that exact trigger
+	// inside this rollback-only corruption probe, restore it before invoking
+	// the production projection, and require one precise row to have changed.
+	if _, err = tamper.Exec(ctx, `ALTER TABLE iam.service_role_session_evidence DISABLE TRIGGER immutable_history`); err != nil {
 		_ = tamper.Rollback(ctx)
-		t.Fatal("prepare service RoleSession lineage drift", err)
+		t.Fatal("open service RoleSession lineage drift probe", err)
+	}
+	var driftedRows int
+	if err = tamper.QueryRow(ctx, `WITH changed AS (
+		UPDATE iam.service_role_session_evidence SET service_installation_id=service_installation_id||'.drift'
+		WHERE tenant_id=$1 AND session_id=$2 RETURNING 1)
+		SELECT count(*) FROM changed`, proof.Session.AccountID, proof.Session.ID).Scan(&driftedRows); err != nil || driftedRows != 1 {
+		_ = tamper.Rollback(ctx)
+		t.Fatal("prepare exact service RoleSession lineage drift", err, driftedRows)
+	}
+	if _, err = tamper.Exec(ctx, `ALTER TABLE iam.service_role_session_evidence ENABLE ALWAYS TRIGGER immutable_history`); err != nil {
+		_ = tamper.Rollback(ctx)
+		t.Fatal("restore service RoleSession lineage protection", err)
 	}
 	var drifted []byte
 	if err = tamper.QueryRow(ctx, `SELECT iam.managed_role_session_snapshot($1,$2,$3)`, proof.Session.AccountID,
@@ -22872,7 +22886,8 @@ func proveServiceRoleSessionRevocation(t *testing.T, ctx context.Context, handle
 	rolePath := "/v1/roles/" + string(access.Relation.Role.ID) + "/sessions/" + string(proof.Session.ID)
 	directoryResponse := performIAMRequest(handler, http.MethodGet, "/v1/roles/"+string(access.Relation.Role.ID)+
 		"/sessions?sourceType=SERVICE_ACCOUNT&sourceServicePrincipalId="+
-		string(access.Relation.ServicePrincipal.PrincipalID), root, nil)
+		url.QueryEscape(string(access.Relation.ServicePrincipal.PrincipalID))+"&sessionId="+
+		url.QueryEscape(string(proof.Session.ID))+"&lifecycle=UNREVOKED", root, nil)
 	var directory iamv1.RoleSessionList
 	if directoryResponse.Code != http.StatusOK || directoryResponse.Header().Get("Cache-Control") != "no-store" ||
 		json.Unmarshal(directoryResponse.Body.Bytes(), &directory) != nil || iamv1.ValidateRoleSessionList(directory) != nil ||
@@ -22880,7 +22895,7 @@ func proveServiceRoleSessionRevocation(t *testing.T, ctx context.Context, handle
 		directory.Items[0].Lifecycle != iamv1.RoleSessionUnrevoked || !directory.Items[0].RevokeCapability.Available ||
 		directory.Items[0].Source.Type != iamv1.PrincipalServiceAccount || directory.Items[0].Source.User != nil ||
 		directory.Items[0].Source.ServicePrincipal == nil || *directory.Items[0].Source.ServicePrincipal != access.Relation.ServicePrincipal {
-		t.Fatalf("invalidated service RoleSession was not retained as one revocable directory record: status=%d body=%s",
+		t.Fatalf("invalidated service RoleSession exact directory filter did not retain one revocable record: status=%d body=%s",
 			directoryResponse.Code, directoryResponse.Body.String())
 	}
 	detailResponse := performIAMRequest(handler, http.MethodGet, rolePath, root, nil)
@@ -23411,7 +23426,7 @@ func proveWorkloadServiceRoleConsent(t *testing.T, ctx context.Context, handler 
 	serviceRoleDirectory = iamv1.ServiceLinkedRoleList{}
 	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &serviceRoleDirectory) != nil ||
 		iamv1.ValidateServiceLinkedRoleList(serviceRoleDirectory) != nil || len(serviceRoleDirectory.Items) != 1 ||
-		serviceRoleDirectory.Items[0].BindingCount != 4 || serviceRoleDirectory.Items[0].ActiveBindingCount != 2 {
+		serviceRoleDirectory.Items[0].BindingCount != 5 || serviceRoleDirectory.Items[0].ActiveBindingCount != 2 {
 		t.Fatalf("service-linked role summary did not expose terminal consent: status=%d body=%s", response.Code, response.Body.String())
 	}
 	response = performIAMRequest(handler, http.MethodGet, "/v1/service-linked-roles/"+string(created.Relation.Role.ID), root, nil)
