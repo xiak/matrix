@@ -2415,6 +2415,7 @@
       "boundary": "服务关联角色由服务授权流程管理，不属于普通客户角色编辑边界。",
       "exactTemplate": "已固定模板",
       "bindingHistory": "资源绑定历史",
+      "runtimeNotObserved": "运行时未观测",
       "authorityTitle": "授权来源与权限上限",
       "authorityHint": "当前关系固定引用一个模板版本和一个不可变策略版本；上限不是对任意资源的自动授权。",
       "bindingsTitle": "资源绑定历史",
@@ -2467,6 +2468,7 @@
     "authorizationUnavailable": "尚未接入",
     "noAccountObservation": "平台模板不代表账号授权；请到“当前账号授权”查看已确认的服务关联角色与资源绑定。",
     "accountReadSeparately": "在账号授权中单独确认",
+    "runtimeReadSeparately": "在运行边界中单独观察",
     "workloadTitle": "可绑定的业务资源",
     "workloadHint": "产品发布模板时同时声明资源类型及对应的绑定、解绑 Action；租户不能自行增加平台 Action。",
     "workloadTable": "服务授权模板业务资源契约",
@@ -2507,10 +2509,11 @@
   },
   "ServiceAuthorizationChain": {
     "title": "服务授权链",
-    "hint": "公有云服务授权分为三个独立边界。后一个状态不能由前一个状态推断。",
+    "hint": "公有云服务授权分为四个独立阶段。后一个状态不能由前一个状态推断。",
     "template": { "title": "平台模板", "hint": "由产品团队和 IAM 平台受控发布，只定义可供同意的权限上限。" },
     "account": { "title": "账号同意", "hint": "必须由目标账号明确同意后，才能形成服务关联角色关系。" },
-    "binding": { "title": "资源绑定", "hint": "每个业务资源仍需独立绑定；账号同意不等于所有资源都已授权。" }
+    "binding": { "title": "资源绑定", "hint": "每个业务资源仍需独立绑定；账号同意不等于所有资源都已授权。" },
+    "runtime": { "title": "运行时使用", "hint": "短期会话签发、产品侧再次鉴权与业务执行必须单独观察；配置完成不等于请求成功。" }
   },
   "Console": {
     "brandHome": "Matrix Cloud 控制台首页",
@@ -2847,6 +2850,7 @@
     "illustrativeTemplate": "示意模板",
     "accountNotAuthorized": "账号未授权",
     "resourceNotBound": "实例未绑定",
+    "runtimeNotObserved": "运行时未观测",
     "previewAccountAuthorized": "账号已授权 · MOCK",
     "previewInstanceBound": "当前实例已绑定 · MOCK",
     "previewAuthorizationApplied": "已在当前浏览器会话中模拟账号同意与精确实例绑定。它不会调用 IAM、创建角色、写入后端或签发临时凭据；刷新后即恢复初始状态。",

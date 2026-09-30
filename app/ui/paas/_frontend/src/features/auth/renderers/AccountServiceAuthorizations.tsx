@@ -156,6 +156,7 @@ function TemplateDetail({ template, onBack }: { template: ServiceRoleTemplate; o
         template={{ label: t(`states.${template.status}`), tone: template.status === "ACTIVE" ? "success" : "neutral" }}
         account={{ label: t("accountReadSeparately") }}
         binding={{ label: t("accountReadSeparately") }}
+        runtime={{ label: t("runtimeReadSeparately") }}
       />
       <section className={styles.stack} aria-labelledby="service-role-workloads">
         <div><h3 className={styles.detailTitle} id="service-role-workloads">{t("workloadTitle")}</h3><p className={styles.note}>{t("workloadHint")}</p></div>
@@ -318,6 +319,7 @@ function RelationDetail({ client, roleId, initialName, onBack }: { client: Servi
           template={{ label: t("detail.exactTemplate"), tone: "neutral" }}
           account={{ label: t(`states.${relation.role.status}`), tone: relation.role.status === "ACTIVE" ? "success" : "neutral" }}
           binding={{ label: t("detail.bindingHistory"), tone: current.bindings.some((binding) => binding.status === "ACTIVE") ? "success" : "neutral" }}
+          runtime={{ label: t("detail.runtimeNotObserved"), tone: "neutral" }}
         />
         <section className={styles.stack} aria-labelledby="service-linked-role-authority">
           <div><h3 className={styles.detailTitle} id="service-linked-role-authority">{t("detail.authorityTitle")}</h3><p className={styles.note}>{t("detail.authorityHint")}</p></div>

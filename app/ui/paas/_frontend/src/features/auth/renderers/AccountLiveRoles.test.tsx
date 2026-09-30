@@ -155,7 +155,9 @@ describe("AccountLiveRoles", () => {
     expect(within(chain).getByText("平台模板")).toBeTruthy();
     expect(within(chain).getByText("账号同意")).toBeTruthy();
     expect(within(chain).getByText("资源绑定")).toBeTruthy();
+    expect(within(chain).getByText("运行时使用")).toBeTruthy();
     expect(within(chain).getAllByText("在账号授权中单独确认")).toHaveLength(2);
+    expect(within(chain).getByText("在运行边界中单独观察")).toBeTruthy();
     expect(screen.queryByRole("button", { name: /授权|撤销/ })).toBeNull();
   });
 

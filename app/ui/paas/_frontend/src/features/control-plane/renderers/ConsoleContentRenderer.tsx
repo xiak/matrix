@@ -252,6 +252,7 @@ function LiveServiceAuthorizationCard({ accountId, installationId }: {
           template={{ label: t("publishedTemplate", { version: observation.template.version }), tone: "success" }}
           account={{ label: accountAuthorized ? t("accountAuthorized") : t("accountAuthorizationPending"), tone: accountAuthorized ? "success" : undefined }}
           binding={{ label: instanceBound ? t("instanceBound") : t("resourceNotBound"), tone: instanceBound ? "success" : undefined }}
+          runtime={{ label: t("runtimeNotObserved") }}
         />
         <dl className={styles.authorizationFacts}>
           <div><dt>{t("authorizationTemplate")}</dt><dd><Typography.Code>{observation.template.id}@v{observation.template.version}</Typography.Code><small><Typography.Code>{observation.template.contentDigest}</Typography.Code></small></dd></div>
@@ -347,7 +348,7 @@ function InstallationContent({ scene, preview, accountId }: {
         {preview && accountId ? <Card className={styles.authorizationCard}>
           <Card.Header className={styles.authorizationHeading}><span><ShieldCheck aria-hidden="true" /></span><div><Typography.Eyebrow>{t("authorizationEyebrow")}</Typography.Eyebrow><Typography.Title as="h3" level={3}>{t("serviceAuthorization")}</Typography.Title><Typography.Text tone="muted">{t("serviceAuthorizationHint")}</Typography.Text></div><Badge status="warning">MOCK</Badge></Card.Header>
           <Card.Body className={styles.authorizationBody}>
-            <ServiceAuthorizationChain template={{ label: t("illustrativeTemplate"), tone: "warning" }} account={{ label: t(previewAccountAuthorized ? "previewAccountAuthorized" : "accountNotAuthorized"), tone: previewAccountAuthorized ? "success" : undefined }} binding={{ label: t(previewBound ? "previewInstanceBound" : "resourceNotBound"), tone: previewBound ? "success" : undefined }} />
+            <ServiceAuthorizationChain template={{ label: t("illustrativeTemplate"), tone: "warning" }} account={{ label: t(previewAccountAuthorized ? "previewAccountAuthorized" : "accountNotAuthorized"), tone: previewAccountAuthorized ? "success" : undefined }} binding={{ label: t(previewBound ? "previewInstanceBound" : "resourceNotBound"), tone: previewBound ? "success" : undefined }} runtime={{ label: t("runtimeNotObserved") }} />
             <Alert status={previewBound || previewUnbound ? "success" : "info"}>{t(previewBound ? "previewAuthorizationApplied" : previewUnbound ? "previewUnbindApplied" : "productEntryHint")}</Alert>
             {previewAccountAuthorized ? <dl className={styles.authorizationFacts}>
               <div><dt>{t("authorizationTemplate")}</dt><dd><Typography.Code>preview.service-role-template.managed-service-installation-read.v1@v1</Typography.Code></dd></div>

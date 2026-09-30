@@ -164,6 +164,8 @@ describe("ServiceAuthorizationPreview", () => {
     expect(within(chain).getByText("示意模板 · 未发布")).toBeTruthy();
     expect(within(chain).getByText("当前账号未授权")).toBeTruthy();
     expect(within(chain).getByText("未配置")).toBeTruthy();
+    expect(within(chain).getByText("运行时使用")).toBeTruthy();
+    expect(within(chain).getByText("运行时未观测")).toBeTruthy();
     const observationTrigger = screen.getByRole("button", { name: "查看授权后观察" });
     await user.click(observationTrigger);
     await user.click(screen.getByRole("button", { name: "返回授权模板" }));

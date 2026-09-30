@@ -213,6 +213,7 @@ describe("ConsoleShellRenderer", () => {
     expect(screen.getByRole("heading", { name: "服务授权链" })).toBeTruthy();
     expect(screen.getByText("账号未授权")).toBeTruthy();
     expect(screen.getByText("实例未绑定")).toBeTruthy();
+    expect(screen.getByText("运行时未观测")).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "审阅服务授权" }));
     expect(screen.getByRole("heading", { name: "审阅服务授权 · 订单主库" })).toBe(document.activeElement);

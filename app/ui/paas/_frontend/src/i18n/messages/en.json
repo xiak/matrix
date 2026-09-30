@@ -2415,6 +2415,7 @@
       "boundary": "A service-linked role is managed by the service-authorization flow and is outside the customer-role editing boundary.",
       "exactTemplate": "Pinned template",
       "bindingHistory": "Resource-binding history",
+      "runtimeNotObserved": "Runtime not observed",
       "authorityTitle": "Authority source and permission ceiling",
       "authorityHint": "This relation pins one template version and one immutable policy version. The ceiling is not automatic access to arbitrary resources.",
       "bindingsTitle": "Resource-binding history",
@@ -2467,6 +2468,7 @@
     "authorizationUnavailable": "Not connected",
     "noAccountObservation": "A platform template is not account authorization. Use Current account to inspect confirmed service-linked roles and resource bindings.",
     "accountReadSeparately": "Confirm under account authorization",
+    "runtimeReadSeparately": "Observe under the runtime boundary",
     "workloadTitle": "Bindable workload resources",
     "workloadHint": "The product release declares each resource kind and its bind and unbind Actions. A tenant cannot add platform Actions.",
     "workloadTable": "Service authorization template workload contract",
@@ -2507,10 +2509,11 @@
   },
   "ServiceAuthorizationChain": {
     "title": "Service authorization chain",
-    "hint": "Cloud service authorization has three independent boundaries. A later state must not be inferred from an earlier one.",
+    "hint": "Cloud service authorization has four independent stages. A later state must not be inferred from an earlier one.",
     "template": { "title": "Platform template", "hint": "Published through a controlled product and IAM platform release; it defines only the ceiling available to consent." },
     "account": { "title": "Account consent", "hint": "The target account must explicitly consent before a service-linked role relation can exist." },
-    "binding": { "title": "Resource binding", "hint": "Each business resource still requires an exact binding; account consent does not authorize every resource." }
+    "binding": { "title": "Resource binding", "hint": "Each business resource still requires an exact binding; account consent does not authorize every resource." },
+    "runtime": { "title": "Runtime use", "hint": "Short-lived session issuance, product-side re-authorization, and business execution must be observed separately; complete configuration does not prove request success." }
   },
   "Console": {
     "brandHome": "Matrix Cloud console home",
@@ -2847,6 +2850,7 @@
     "illustrativeTemplate": "Illustrative template",
     "accountNotAuthorized": "Account not authorized",
     "resourceNotBound": "Instance not bound",
+    "runtimeNotObserved": "Runtime not observed",
     "previewAccountAuthorized": "Account authorized · MOCK",
     "previewInstanceBound": "Current instance bound · MOCK",
     "previewAuthorizationApplied": "Account consent and the exact instance binding are now simulated in this browser session. This does not call IAM, create a role, write the backend, or issue temporary credentials; a refresh restores the initial state.",

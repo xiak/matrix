@@ -159,6 +159,9 @@ describe("AccountServiceAuthorizations", () => {
     expect(within(table).getByText("有效")).toBeTruthy();
     expect(within(table).getByText("已撤销")).toBeTruthy();
     expect(within(table).getByText("installation-old")).toBeTruthy();
+    const chain = screen.getByRole("heading", { name: "服务授权链" }).closest("section")!;
+    expect(within(chain).getByText("运行时使用")).toBeTruthy();
+    expect(within(chain).getByText("运行时未观测")).toBeTruthy();
     expect(screen.getByText("上限不是对任意资源的自动授权", { exact: false })).toBeTruthy();
     expect(screen.getByText("有效绑定只表示该业务资源已同意关联此服务角色", { exact: false })).toBeTruthy();
     expect(screen.queryByRole("dialog")).toBeNull();

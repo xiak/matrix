@@ -205,6 +205,7 @@ function TemplateDetail({ accountId, reviewRef, observationRef, onReview, onObse
       template={{ label: t("states.illustrative"), tone: "warning" }}
       account={{ label: t("states.notAuthorized") }}
       binding={{ label: t("states.notConfigured") }}
+      runtime={{ label: t("observation.validity.runtimeState") }}
     />
     <div className={styles.detailGrid}>
       <Card><Card.Header className={styles.cardHeading}><KeyRound aria-hidden="true" /><div><span>{t("detail.trustLabel")}</span><h4>{t("detail.trustTitle")}</h4></div></Card.Header><Card.Body className={styles.cardBody}><p>{t("detail.trustHint")}</p><code>{previewTemplate.servicePrincipal}</code></Card.Body></Card>
