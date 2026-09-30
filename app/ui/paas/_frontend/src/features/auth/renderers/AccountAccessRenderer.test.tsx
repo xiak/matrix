@@ -898,6 +898,23 @@ describe("account access", () => {
     expect(screen.getByText("admin", { exact: true })).toBeTruthy();
   });
 
+  it("navigates the long settings page by responsibility without remounting or refetching it", async () => {
+    const repository = accounts();
+    const { user } = await openAccess(repository, iam(), "settings");
+    const navigation = screen.getByRole("navigation", { name: "账号设置分区" });
+    const initialReads = vi.mocked(repository.currentIdentity).mock.calls.length;
+
+    await user.click(within(navigation).getByRole("link", { name: /^本人安全/ }));
+    expect(screen.getByRole("heading", { name: "安全通知与身份验证器" })).toBe(document.activeElement);
+
+    await user.click(within(navigation).getByRole("link", { name: /^账号安全/ }));
+    expect(screen.getByRole("heading", { name: "账号安全规则" })).toBe(document.activeElement);
+
+    await user.click(within(navigation).getByRole("link", { name: /^登录标识/ }));
+    expect(screen.getByRole("heading", { name: "主账号别名" })).toBe(document.activeElement);
+    expect(repository.currentIdentity).toHaveBeenCalledTimes(initialReads);
+  });
+
   it("keeps the personal-security shell stable while only live security cards load", async () => {
     let finishContact!: (value: NotificationContact) => void;
     let finishFactor!: (value: AuthenticatorState) => void;

@@ -1355,6 +1355,13 @@
     "cancel": "取消",
     "permissions": "角色与权限",
     "settings": "账号设置",
+    "settingsNavigation": "账号设置分区",
+    "settingsSignIn": "登录标识",
+    "settingsSignInHint": "主账号别名与子用户登录",
+    "settingsPersonalSecurity": "本人安全",
+    "settingsPersonalSecurityHint": "通知、验证器与通行密钥",
+    "settingsAccountSecurity": "账号安全",
+    "settingsAccountSecurityHint": "MFA、会话与密码规则",
     "roles": {
       "ORGANIZATION_ADMIN": "租户管理员",
       "PAAS_DEVELOPER": "服务开发者",

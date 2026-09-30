@@ -39,7 +39,7 @@ export function LiveAccountSecuritySettings({ client }: { client: AccountSecurit
 
   return <section aria-labelledby="live-account-security" className={styles.section}>
     <div className={styles.sectionHeading}>
-      <div><p>{t("accountEyebrow")}</p><h2 id="live-account-security">{t("liveAccountTitle")}</h2><span>{t("liveAccountHint")}</span></div>
+      <div><p>{t("accountEyebrow")}</p><h2 id="live-account-security" tabIndex={-1}>{t("liveAccountTitle")}</h2><span>{t("liveAccountHint")}</span></div>
       <Badge status="success">LIVE</Badge>
     </div>
     <Card>

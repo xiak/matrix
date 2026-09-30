@@ -167,7 +167,7 @@ function SessionPersonalSecuritySettings({ client }: { client: PersonalSecurityC
 
   return <section aria-labelledby="live-personal-security" className={styles.securityRoot}>
     <div className={styles.sectionHeading}>
-      <div><p>{t("eyebrow")}</p><h2 id="live-personal-security">{t("title")}</h2><span>{t("hint")}</span></div>
+      <div><p>{t("eyebrow")}</p><h2 id="live-personal-security" tabIndex={-1}>{t("title")}</h2><span>{t("hint")}</span></div>
       <Badge status="success">LIVE</Badge>
     </div>
     <Alert status="info"><ShieldCheck aria-hidden="true" />{t("boundary")}</Alert>

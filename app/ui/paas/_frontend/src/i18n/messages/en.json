@@ -1355,6 +1355,13 @@
     "cancel": "Cancel",
     "permissions": "Roles and permissions",
     "settings": "Account settings",
+    "settingsNavigation": "Account settings sections",
+    "settingsSignIn": "Sign-in identity",
+    "settingsSignInHint": "Primary alias and subuser sign-in",
+    "settingsPersonalSecurity": "Personal security",
+    "settingsPersonalSecurityHint": "Notifications, authenticators and passkeys",
+    "settingsAccountSecurity": "Account security",
+    "settingsAccountSecurityHint": "MFA, sessions and password rules",
     "roles": {
       "ORGANIZATION_ADMIN": "Tenant administrator",
       "PAAS_DEVELOPER": "Service developer",

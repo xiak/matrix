@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useState, type MouseEvent } from "react";
 import { useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
 import { Alert, ContentPage, FormField, Table, TablePagination, TableSkeleton, EmptyState, Badge, Button, Card, Input, Typography, PageSkeleton, Tabs } from "@ui/xiak";
@@ -39,6 +39,30 @@ import { LiveRoleCreationWizard } from "./LiveRoleCreationWizard";
 import styles from "./AccountAccessRenderer.module.css";
 
 const aliasPattern = "[a-z][a-z0-9\\-]{1,61}[a-z0-9]";
+const accountSignInSettingsId = "account-sign-in-settings";
+
+function SettingsSectionNav({ preview }: { preview: boolean }) {
+  const t = useTranslations("AccountAccess");
+  const sections = [
+    { id: accountSignInSettingsId, label: t("settingsSignIn"), hint: t("settingsSignInHint") },
+    { id: preview ? "security-notification-address" : "live-personal-security", label: t("settingsPersonalSecurity"), hint: t("settingsPersonalSecurityHint") },
+    { id: preview ? "account-policy" : "live-account-security", label: t("settingsAccountSecurity"), hint: t("settingsAccountSecurityHint") }
+  ];
+
+  function openSection(event: MouseEvent<HTMLAnchorElement>, id: string) {
+    event.preventDefault();
+    const target = document.getElementById(id);
+    target?.focus({ preventScroll: true });
+    target?.scrollIntoView?.({ block: "center" });
+  }
+
+  return <nav aria-label={t("settingsNavigation")} className={styles.settingsSectionNav}>
+    {sections.map((section) => <a className={styles.settingsSectionLink} href={`#${section.id}`} key={section.id} onClick={(event) => openSection(event, section.id)}>
+      <strong>{section.label}</strong>
+      <span>{section.hint}</span>
+    </a>)}
+  </nav>;
+}
 
 function UserSettings({ scene }: { scene: AccountAccessScene }) {
   const t = useTranslations("AccountAccess");
@@ -46,7 +70,7 @@ function UserSettings({ scene }: { scene: AccountAccessScene }) {
   const aliasId = useId();
   const [alias, setAlias] = useState(scene.loginAlias ?? "");
   return <Card>
-    <Card.Header><div><Typography.Title as="h2" level={3}>{t("alias")}</Typography.Title><Typography.Text tone="muted">{t("aliasSubtitle")}</Typography.Text></div><Badge status={scene.loginAlias ? "success" : "neutral"}>{scene.loginAlias ? t("aliasSet") : t("aliasUnset")}</Badge></Card.Header>
+    <Card.Header><div><Typography.Title as="h2" id={accountSignInSettingsId} level={3} tabIndex={-1}>{t("alias")}</Typography.Title><Typography.Text tone="muted">{t("aliasSubtitle")}</Typography.Text></div><Badge status={scene.loginAlias ? "success" : "neutral"}>{scene.loginAlias ? t("aliasSet") : t("aliasUnset")}</Badge></Card.Header>
     <Card.Body className={styles.detail}>
       <p className={styles.note}>{t("aliasHint")}</p>
       <dl className={styles.facts}>
@@ -178,7 +202,7 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
       view === "users" ? <AccountUserDirectory key={entityId ?? "users"} entityId={entityId} scene={scene} onCreate={() => onNavigate("create-user")} onOpen={onNavigate} /> :
       view === "create-user" ? <CreateUserWizard onBack={() => onNavigate("users")} /> :
       view === "tenants" ? <TenantDirectory scene={scene} /> :
-      view === "settings" ? <><UserSettings key={scene.accountVersion} scene={scene} />{workspace ? <AccessSecuritySettings workspace={workspace} /> : <><LivePersonalSecuritySettings /><LiveAccountSecuritySettings client={access.accountSecuritySettings} /></>}</> :
+      view === "settings" ? <><SettingsSectionNav preview={Boolean(workspace)} /><UserSettings key={scene.accountVersion} scene={scene} />{workspace ? <AccessSecuritySettings workspace={workspace} /> : <><LivePersonalSecuritySettings /><LiveAccountSecuritySettings client={access.accountSecuritySettings} /></>}</> :
       view === "policies" && !workspace ? <AccountPolicyDirectory scene={scene} entityId={entityId} onOpen={(id) => onNavigate("policies", id)} onCreate={() => onNavigate("create-policy")} /> :
       view === "create-policy" && !workspace && access.policyCreate ? <LivePolicyCreationWizard client={access.policyCreate}
         onBack={() => onNavigate("policies")} onDone={(id) => onNavigate("policies", id)} /> :
