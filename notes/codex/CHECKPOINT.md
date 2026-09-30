@@ -6,8 +6,8 @@
 - Updated: 2026-09-30
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `35cecbd8`
-- Pushed documentation/head milestone: `6002d5f0`
+- Pushed source/embed milestone: `8fef3f20`
+- Pushed documentation/head milestone: `07ee21c7`
 
 ## Authoritative route
 
@@ -46,6 +46,13 @@ chain explicit: product teams define permission capabilities and business PEP
 points, IAM validates and publishes immutable catalog facts, and tenant
 administrators only consume those facts through product-resource consent and
 binding. It provides no upload, product registration or publish action.
+
+The shared policy workspace now also isolates commands by that ownership
+boundary. Tenant policy selection and creation commands exist only on the
+policy tab; the capability directory, product declaration and internal
+onboarding review do not retain those unrelated mutation actions. Returning to
+the policy tab restores its commands without remounting the catalog or changing
+the IAM contract.
 
 The current-account observation now leads with a four-stage tenant-readable
 status summary: exact platform template, Account relation, exact resource
