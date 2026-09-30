@@ -7,7 +7,7 @@
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
 - Pushed source/embed milestone: `9ad0856e`
-- Pushed documentation/head milestone: `975ce4d2`
+- Pushed documentation/head milestone: `eb83acdd`
 
 ## Authoritative route
 
@@ -40,6 +40,12 @@ product-PEP re-authorization and product-owned business execution. All four
 remain explicit unverified MOCK states. It exposes no session ID, temporary
 credential, internal endpoint or revoke action, and never turns configuration
 state into a request permit.
+
+Fixed IAM source `aecc9f1c50f663af9a0bae8198bef0f66c9192af` is classified as
+`REFERENCE` only. It proves the strict USER/SERVICE RoleSession source union,
+selector-free internal service-assume intent and Audit storage acceptance, but
+publishes no customer-readable service-session or PEP-observation surface.
+No LIVE parser or service-session action was added from it.
 
 The product repository now contains a strict but unmounted public bind/unbind
 client adapted from fixed IAM source `92ea765b`. It accepts a caller-owned
