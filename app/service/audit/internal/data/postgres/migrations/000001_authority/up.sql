@@ -355,6 +355,7 @@ BEGIN
         ('iam.role-session.revoked', 'IAM', 'ROLE_SESSION', 'SUCCEEDED', false, false, false),
         ('iam.role-session.admin-revoked', 'IAM', 'ROLE_SESSION', 'SUCCEEDED', true, true, false),
         ('iam.role-session.exited', 'IAM', 'ROLE_SESSION', 'SUCCEEDED', false, false, false),
+        ('iam.service-role-session.issued', 'IAM', 'ROLE_SESSION', 'SUCCEEDED', false, false, false),
         ('iam.service-linked-role.created', 'IAM', 'ROLE', 'SUCCEEDED', true, true, false),
         ('iam.workload-role-binding.created', 'IAM', 'WORKLOAD_ROLE_BINDING', 'SUCCEEDED', true, true, false),
         ('iam.workload-role-binding.revoked', 'IAM', 'WORKLOAD_ROLE_BINDING', 'SUCCEEDED', true, true, false),
@@ -521,6 +522,8 @@ BEGIN
        OR (action_name='iam.role-session.exited' AND (
             submitted_event#>>'{actor,type}' IS DISTINCT FROM 'ROLE'
             OR submitted_event#>>'{actor,roleSession,sessionId}' IS DISTINCT FROM submitted_event#>>'{target,id}'))
+       OR (action_name='iam.service-role-session.issued'
+            AND submitted_event#>>'{actor,type}' IS DISTINCT FROM 'SERVICE_ACCOUNT')
        OR (action_name IN ('iam.user.password-reset-required','iam.session.others-revoked','iam.notification-contact.verification-started','iam.notification-contact.verified','iam.authenticator.bound','iam.authenticator.replaced','iam.authenticator.removed',
             'iam.authenticator.recovery-started','iam.authenticator.recovered','iam.recovery-codes.regenerated') AND (
             submitted_event#>>'{actor,type}' IS DISTINCT FROM 'USER'
@@ -610,7 +613,7 @@ AS $function$
         AND to_regclass('audit.records') IS NOT NULL
         AND to_regclass('audit.event_registry') IS NOT NULL
         AND audit.role_actor_contract_ready(),
-        29::bigint,
+        30::bigint,
         transaction_timestamp()
 $function$;
 
@@ -915,7 +918,7 @@ BEGIN
             'iam.policy.created','iam.policy.updated','iam.policy.deleted','iam.policy-version.created','iam.policy-version.deleted','iam.policy.default-version-set','iam.group.created','iam.group.updated','iam.group.deleted',
             'iam.role.created','iam.role.updated','iam.role.disabled','iam.role.enabled','iam.role.trust-set','iam.role.deleted',
             'iam.role.permission-boundary.set','iam.role.permission-boundary.removed',
-            'iam.role-session.issued','iam.role-session.revoked','iam.role-session.exited','iam.role-session.admin-revoked',
+            'iam.role-session.issued','iam.role-session.revoked','iam.role-session.exited','iam.role-session.admin-revoked','iam.service-role-session.issued',
             'iam.service-linked-role.created','iam.workload-role-binding.created','iam.workload-role-binding.revoked',
             'iam.access-key.created','iam.access-key.enabled','iam.access-key.disabled','iam.access-key.deleted',
             'iam.user.permission-boundary.set','iam.user.permission-boundary.removed',

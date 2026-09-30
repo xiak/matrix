@@ -152,9 +152,16 @@ func (service *Authority) Authorize(
 				if roleErr != nil {
 					return roleErr
 				}
+				if role.Subject.Service != nil && role.Subject.Service.Identity != caller.Identity {
+					return ErrUnauthenticated
+				}
+				reference, roleErr := roleSessionReference(role.Subject.Session)
+				if roleErr != nil {
+					return roleErr
+				}
 				decision, roleErr = service.decideAndRecord(transactionContext, transaction, request, requestDigest, now,
 					authorizationActor{organizationID: role.Subject.Session.AccountID, subject: iamv1.Subject{Type: iamv1.SubjectRole, ID: string(role.Subject.Role.ID),
-						RoleSession: &iamv1.RoleSessionReference{SessionID: role.Subject.Session.ID, SourceUserID: role.Subject.Session.SourceUserID}}},
+						RoleSession: &reference}},
 					func(id iamv1.DecisionID) (authority.AuthorizationEvaluation, error) {
 						return authority.DecideRole(role.Subject, caller.Identity.Purpose, request, id, now)
 					})
@@ -332,10 +339,22 @@ func auditActorForSubject(subject iamv1.Subject) (auditv1.ActorReference, error)
 	}
 	actor := auditv1.ActorReference{Type: auditv1.ActorType(subject.Type), ID: auditv1.ActorID(subject.ID), AccessKeyID: string(subject.AccessKeyID)}
 	if subject.RoleSession != nil {
-		actor.RoleSession = &auditv1.RoleSessionReference{SessionID: string(subject.RoleSession.SessionID), SourceUserID: auditv1.ActorID(subject.RoleSession.SourceUserID)}
+		actor.RoleSession = &auditv1.RoleSessionReference{SessionID: string(subject.RoleSession.SessionID),
+			SourceUserID:             auditv1.ActorID(subject.RoleSession.SourceUserID),
+			SourceServicePrincipalID: auditv1.ActorID(subject.RoleSession.SourceServicePrincipalID)}
 	}
 	if auditv1.ValidateActor(actor) != nil {
 		return auditv1.ActorReference{}, ErrUnavailable
 	}
 	return actor, nil
+}
+
+func roleSessionReference(session iamv1.RoleSession) (iamv1.RoleSessionReference, error) {
+	reference := iamv1.RoleSessionReference{SessionID: session.ID, SourceUserID: session.SourceUserID,
+		SourceServicePrincipalID: session.SourceServicePrincipalID}
+	subject := iamv1.Subject{Type: iamv1.SubjectRole, ID: string(session.RoleID), RoleSession: &reference}
+	if iamv1.ValidateRoleSession(session) != nil || iamv1.ValidateSubject(subject) != nil {
+		return iamv1.RoleSessionReference{}, ErrUnavailable
+	}
+	return reference, nil
 }

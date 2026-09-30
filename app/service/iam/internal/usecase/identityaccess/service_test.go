@@ -1882,6 +1882,46 @@ func TestWorkloadRoleBindingRequiresProductAdmissionPassRoleAndDelegatedCurrentA
 	if len(seen) != len(wantDecisions) {
 		t.Fatal("consent decision chain omitted required actions")
 	}
+	assumeRequest := iamv1.AssumeServiceRoleRequest{BindingID: mutation.Binding.ID, RequestID: "service-role-assume"}
+	assumed, err := service.AssumeServiceRole(t.Context(), paasCredential, assumeRequest)
+	if err != nil || iamv1.ValidateAssumeRoleResponse(assumed) != nil || assumed.Outcome != "APPLIED" ||
+		assumed.Session.AccountID != bootstrap.Organization.ID || assumed.Session.RoleID != mutation.Role.ID ||
+		assumed.Session.SourceServicePrincipalID != "service-paas" || assumed.Session.SourceUserID != "" ||
+		!assumed.Credential.Present() || !assumed.Session.ExpiresAt.Equal(tx.now.Add(15*time.Minute)) {
+		t.Fatal("service role session did not derive its current binding authority", err)
+	}
+	issuance := tx.serviceRoleSessionIssuance
+	if issuance == nil || issuance.BindingID != mutation.Binding.ID || issuance.Identity.PrincipalID != "service-paas" ||
+		issuance.ExpectedBindingVersion != mutation.Binding.ResourceVersion || issuance.ExpectedSecurityGeneration != 1 ||
+		issuance.DurationSeconds != 15*60 || issuance.AuditEvent.Action != auditv1.ActionIAMServiceRoleSessionIssued ||
+		issuance.AuditEvent.Actor != (auditv1.ActorReference{Type: auditv1.ActorServiceAccount, ID: "service-paas"}) ||
+		issuance.AuditEvent.IAMDecisionID != "" || issuance.AuditEvent.Target.ID != string(assumed.Session.ID) {
+		t.Fatal("service role issuance lost current binding or service lineage")
+	}
+	replayed, err := service.AssumeServiceRole(t.Context(), paasCredential, assumeRequest)
+	if err != nil || replayed.Outcome != "EQUAL_REPLAY" || replayed.Credential.Present() || replayed.Session != assumed.Session {
+		t.Fatal("service role issuance replayed a credential or changed identity", err)
+	}
+	read, found, err := service.GetServiceRoleSessionByRequest(t.Context(), paasCredential, assumeRequest.RequestID)
+	if err != nil || !found || read != assumed.Session {
+		t.Fatal("service role completion lookup lost its non-secret receipt", err)
+	}
+	tooLong := uint32(15*60 + 1)
+	if _, err := service.AssumeServiceRole(t.Context(), paasCredential, iamv1.AssumeServiceRoleRequest{
+		BindingID: mutation.Binding.ID, DurationSeconds: &tooLong, RequestID: "service-role-too-long",
+	}); !errors.Is(err, ErrForbidden) {
+		t.Fatal("service role template duration ceiling was not enforced", err)
+	}
+	if _, err := service.AssumeServiceRole(t.Context(), coreServiceCredential(t, bootstrap, iamv1.ServiceAudit),
+		iamv1.AssumeServiceRoleRequest{BindingID: mutation.Binding.ID, RequestID: "service-role-wrong-service"}); !errors.Is(err, ErrForbidden) {
+		t.Fatal("another service principal assumed the binding", err)
+	}
+	changed := assumeRequest
+	shorter := uint32(iamv1.MinRoleSessionDurationSeconds)
+	changed.DurationSeconds = &shorter
+	if _, err := service.AssumeServiceRole(t.Context(), paasCredential, changed); !errors.Is(err, ErrConflict) {
+		t.Fatal("service role request identity accepted a changed intent", err)
+	}
 	directory, err := service.ListServiceLinkedRoles(t.Context(), login.Credential, "", "binding-directory")
 	if err != nil || iamv1.ValidateServiceLinkedRoleList(directory) != nil || len(directory.Items) != 1 ||
 		directory.AccountID != bootstrap.Organization.ID || directory.Items[0].Relation.Role.ID != mutation.Role.ID ||
@@ -1948,6 +1988,11 @@ func TestWorkloadRoleBindingRequiresProductAdmissionPassRoleAndDelegatedCurrentA
 	if replayed, err := service.RevokeWorkloadRoleBinding(t.Context(), paasCredential, login.Credential, mutation.Binding.ID, revokeRequest); err != nil ||
 		replayed.ID != revoked.ID || replayed.ResourceVersion != revoked.ResourceVersion || replayed.RevokedAt == nil || !replayed.RevokedAt.Equal(*revoked.RevokedAt) {
 		t.Fatal("equal workload revocation replay changed its terminal result", err)
+	}
+	if _, err := service.AssumeServiceRole(t.Context(), paasCredential, iamv1.AssumeServiceRoleRequest{
+		BindingID: mutation.Binding.ID, RequestID: "service-role-after-revoke",
+	}); !errors.Is(err, ErrForbidden) {
+		t.Fatal("revoked workload binding could still issue a service role session", err)
 	}
 	invalid := request
 	invalid.Authorization, err = iamv1.NewAuthorizationRequest(iamv1.ActionManagedServiceInstallationRead,
@@ -3149,6 +3194,9 @@ type coreTransaction struct {
 	serviceLinkedRoleAccess          *iamv1.ServiceLinkedRoleAccess
 	serviceLinkedRoleListRead        *AccountRead
 	serviceLinkedRoleRead            *ServiceLinkedRoleRead
+	serviceRoleAssumptionRead        *ServiceRoleAssumptionRead
+	serviceRoleSessionIssuance       *ServiceRoleSessionIssuance
+	serviceRoleSessionReceipts       map[string]ServiceRoleSessionReceipt
 }
 
 func (transaction *coreTransaction) LockWorkloadRoleBindingSources(_ context.Context, accountID iamv1.AccountID,
@@ -3224,6 +3272,84 @@ func (transaction *coreTransaction) RevokeWorkloadRoleBinding(_ context.Context,
 		return transaction.serviceLinkedRoleAccess.Bindings[index], nil
 	}
 	return iamv1.WorkloadRoleBinding{}, ErrForbidden
+}
+
+func serviceRoleSessionReceiptKey(principal iamv1.PrincipalID, requestID string) string {
+	return string(principal) + "\x00" + requestID
+}
+
+func (transaction *coreTransaction) ReadServiceRoleAssumption(_ context.Context, read ServiceRoleAssumptionRead) (ServiceRoleAssumption, error) {
+	transaction.serviceRoleAssumptionRead = &read
+	service, found := transaction.services[read.ServiceLookupDigest]
+	if !found || service.Identity != read.Identity || transaction.serviceLinkedRoleAccess == nil ||
+		transaction.serviceLinkedRoleAccess.Relation.ServicePrincipal != (iamv1.ServicePrincipalReference{
+			InstallationID: read.Identity.InstallationID, PrincipalID: read.Identity.PrincipalID, Purpose: read.Identity.Purpose,
+		}) {
+		return ServiceRoleAssumption{}, ErrForbidden
+	}
+	var binding iamv1.WorkloadRoleBinding
+	for _, candidate := range transaction.serviceLinkedRoleAccess.Bindings {
+		if candidate.ID == read.BindingID {
+			binding = candidate
+			break
+		}
+	}
+	if binding.ID == "" || binding.Status != iamv1.WorkloadRoleBindingActive {
+		return ServiceRoleAssumption{}, ErrForbidden
+	}
+	templates, err := authority.ServiceRoleTemplates()
+	if err != nil {
+		return ServiceRoleAssumption{}, ErrUnavailable
+	}
+	var template iamv1.ServiceRoleTemplate
+	for _, candidate := range templates {
+		if candidate.Reference() == transaction.serviceLinkedRoleAccess.Relation.Template {
+			template = candidate
+			break
+		}
+	}
+	if template.ID == "" {
+		return ServiceRoleAssumption{}, ErrUnavailable
+	}
+	result := ServiceRoleAssumption{Relation: transaction.serviceLinkedRoleAccess.Relation, Binding: binding,
+		Template: template, SecurityGeneration: 1}
+	if receipt, exists := transaction.serviceRoleSessionReceipts[serviceRoleSessionReceiptKey(read.Identity.PrincipalID, read.RequestID)]; exists {
+		copy := receipt
+		result.Existing = &copy
+	}
+	return result, nil
+}
+
+func (transaction *coreTransaction) IssueServiceRoleSession(_ context.Context, mutation ServiceRoleSessionIssuance) (iamv1.RoleSession, error) {
+	transaction.serviceRoleSessionIssuance = &mutation
+	assumption, err := transaction.ReadServiceRoleAssumption(context.Background(), mutation.ServiceRoleAssumptionRead)
+	if err != nil {
+		return iamv1.RoleSession{}, err
+	}
+	if assumption.Existing != nil || assumption.Binding.ResourceVersion != mutation.ExpectedBindingVersion ||
+		assumption.SecurityGeneration != mutation.ExpectedSecurityGeneration || mutation.Session.AccountID != assumption.Binding.AccountID ||
+		mutation.Session.RoleID != assumption.Binding.RoleID || mutation.Session.SourceServicePrincipalID != mutation.Identity.PrincipalID ||
+		mutation.Request.BindingID != mutation.BindingID || mutation.Request.RequestID != mutation.RequestID ||
+		mutation.Session.SourceUserID != "" || mutation.LookupDigest == "" || mutation.VerificationDigest == "" ||
+		mutation.DurationSeconds > assumption.Template.Spec.MaxSessionDurationSeconds ||
+		auditv1.ValidateEventForSource(auditv1.SourceIAM, mutation.AuditEvent) != nil ||
+		mutation.AuditEvent.Actor != (auditv1.ActorReference{Type: auditv1.ActorServiceAccount, ID: auditv1.ActorID(mutation.Identity.PrincipalID)}) ||
+		mutation.AuditEvent.Target.ID != string(mutation.Session.ID) || mutation.AuditEvent.TenantID != auditv1.TenantID(mutation.Session.AccountID) {
+		return iamv1.RoleSession{}, ErrForbidden
+	}
+	transaction.serviceRoleSessionReceipts[serviceRoleSessionReceiptKey(mutation.Identity.PrincipalID, mutation.RequestID)] = ServiceRoleSessionReceipt{
+		Session: mutation.Session, BindingID: mutation.BindingID, RequestDigest: mutation.RequestDigest,
+	}
+	return mutation.Session, nil
+}
+
+func (transaction *coreTransaction) ReadServiceRoleSessionByRequest(_ context.Context, read ServiceRoleSessionRead) (iamv1.RoleSession, bool, error) {
+	service, found := transaction.services[read.ServiceLookupDigest]
+	if !found || service.Identity != read.Identity {
+		return iamv1.RoleSession{}, false, ErrForbidden
+	}
+	receipt, found := transaction.serviceRoleSessionReceipts[serviceRoleSessionReceiptKey(read.Identity.PrincipalID, read.RequestID)]
+	return receipt.Session, found, nil
 }
 
 func (transaction *coreTransaction) ListServiceLinkedRoles(_ context.Context, read AccountRead) (iamv1.ServiceLinkedRoleList, error) {
@@ -3566,12 +3692,13 @@ func (transaction *coreTransaction) RecoverLocalCredentials(_ context.Context, m
 
 func newCoreTransaction() *coreTransaction {
 	return &coreTransaction{
-		now:         time.Date(2026, 8, 26, 8, 9, 10, 123000, time.UTC),
-		services:    make(map[string]ServiceCredential),
-		sessions:    make(map[string]SessionCredential),
-		passwords:   make(map[iamv1.PrincipalID]authority.PasswordHash),
-		users:       make(map[iamv1.PrincipalID]iamv1.Principal),
-		attachments: make(map[iamv1.PolicyAttachmentID]iamv1.PolicyAttachment),
+		now:                        time.Date(2026, 8, 26, 8, 9, 10, 123000, time.UTC),
+		services:                   make(map[string]ServiceCredential),
+		sessions:                   make(map[string]SessionCredential),
+		passwords:                  make(map[iamv1.PrincipalID]authority.PasswordHash),
+		users:                      make(map[iamv1.PrincipalID]iamv1.Principal),
+		attachments:                make(map[iamv1.PolicyAttachmentID]iamv1.PolicyAttachment),
+		serviceRoleSessionReceipts: make(map[string]ServiceRoleSessionReceipt),
 	}
 }
 

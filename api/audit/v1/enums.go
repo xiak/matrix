@@ -60,6 +60,7 @@ const (
 	ActionIAMRoleSessionRevoked                     Action = "iam.role-session.revoked"
 	ActionIAMRoleSessionAdminRevoked                Action = "iam.role-session.admin-revoked"
 	ActionIAMRoleSessionExited                      Action = "iam.role-session.exited"
+	ActionIAMServiceRoleSessionIssued               Action = "iam.service-role-session.issued"
 	ActionIAMServiceLinkedRoleCreated               Action = "iam.service-linked-role.created"
 	ActionIAMWorkloadRoleBindingCreated             Action = "iam.workload-role-binding.created"
 	ActionIAMWorkloadRoleBindingRevoked             Action = "iam.workload-role-binding.revoked"
@@ -199,6 +200,7 @@ type ActionContract struct {
 	UserActorRequired         bool
 	RoleActorPermitted        bool
 	RoleActorRequired         bool
+	ServiceActorRequired      bool
 	AccessKeyActorPermitted   bool
 	PlatformSystemActorID     ActorID
 	TargetMatchesInstallation bool
@@ -254,6 +256,7 @@ var allActions = []Action{
 	ActionIAMRoleSessionRevoked,
 	ActionIAMRoleSessionAdminRevoked,
 	ActionIAMRoleSessionExited,
+	ActionIAMServiceRoleSessionIssued,
 	ActionIAMServiceLinkedRoleCreated,
 	ActionIAMWorkloadRoleBindingCreated,
 	ActionIAMWorkloadRoleBindingRevoked,
@@ -387,6 +390,7 @@ var actionContracts = map[Action]ActionContract{
 	ActionIAMRoleSessionRevoked:            {Source: SourceIAM, Target: TargetRoleSession, Results: []Result{ResultSucceeded}, UserActorRequired: true},
 	ActionIAMRoleSessionAdminRevoked:       {Source: SourceIAM, Target: TargetRoleSession, Results: []Result{ResultSucceeded}, UserActorRequired: true, IAMDecisionRequired: true},
 	ActionIAMRoleSessionExited:             {Source: SourceIAM, Target: TargetRoleSession, Results: []Result{ResultSucceeded}, RoleActorPermitted: true, RoleActorRequired: true},
+	ActionIAMServiceRoleSessionIssued:      {Source: SourceIAM, Target: TargetRoleSession, Results: []Result{ResultSucceeded}, ServiceActorRequired: true},
 	ActionIAMServiceLinkedRoleCreated:      {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
 	ActionIAMWorkloadRoleBindingCreated:    {Source: SourceIAM, Target: TargetWorkloadRoleBinding, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
 	ActionIAMWorkloadRoleBindingRevoked:    {Source: SourceIAM, Target: TargetWorkloadRoleBinding, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},

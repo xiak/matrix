@@ -1,6 +1,7 @@
 package authority
 
 import (
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -108,6 +109,22 @@ type RoleSessionContext struct {
 	Policies                      []AttachedPolicy
 	Boundary                      *ResolvedRoleBoundary
 	SessionPolicy                 *ResolvedSessionPolicy
+	Service                       *ServiceRoleSessionAuthority
+}
+
+// ServiceRoleSessionAuthority is the current, database-resolved half of a
+// SERVICE-origin RoleSession. It is neither a policy attachment nor customer
+// trust: the exact release template and PolicyVersion are the grant ceiling,
+// while the workload binding narrows that ceiling to one product resource.
+type ServiceRoleSessionAuthority struct {
+	Identity               iamv1.ServiceIdentity
+	LookupDigest           string
+	BindingID              iamv1.WorkloadRoleBindingID
+	BindingResourceVersion uint64
+	Template               iamv1.ServiceRoleTemplate
+	Workload               iamv1.ResourceReference
+	PermissionVersion      iamv1.PolicyVersion
+	PermissionProfiles     []iamv1.AuthorizationProfile
 }
 
 // Private issuance evidence, not public group metadata or current permissions.
@@ -149,18 +166,23 @@ func AuthenticateRoleSession(value RoleSessionContext, storedDigest string, cred
 }
 
 func validateRoleSessionContext(value RoleSessionContext, now time.Time) error {
-	if ValidateRoleSourceAuthority(value.AuthorityContractVersion, value.SourceAuthorizationGeneration, value.SourceGroupGenerations) != nil ||
-		iamv1.ValidateRoleSession(value.Session) != nil || validateAuthorityTime(now) != nil ||
-		value.Session.AccountID != value.Source.Organization.ID || value.Session.SourceUserID != value.Source.Principal.ID ||
-		value.Session.RoleID != value.Role.ID || value.SourceSessionID != value.Source.Session.ID ||
-		value.Session.ExpiresAt.After(value.Source.Session.ExpiresAt) || value.Session.IssuedAt.After(now) ||
-		value.CredentialGeneration == 0 || value.CredentialGeneration > 9007199254740991 ||
-		value.SecurityGeneration == 0 || value.SecurityGeneration > 9007199254740991 ||
-		iamv1.ValidateID("assumeDecisionId", string(value.AssumeDecisionID)) != nil {
+	if iamv1.ValidateRoleSession(value.Session) != nil || iamv1.ValidateRole(value.Role) != nil || validateAuthorityTime(now) != nil ||
+		value.Session.AccountID != value.Role.AccountID || value.Session.RoleID != value.Role.ID ||
+		value.Session.IssuedAt.After(now) || value.SecurityGeneration == 0 || value.SecurityGeneration > 9007199254740991 {
 		return ErrAuthorityUnavailable
 	}
 	if value.Session.Status != iamv1.SessionActive || !now.Before(value.Session.ExpiresAt) {
 		return ErrUnauthenticated
+	}
+	if value.Session.SourceServicePrincipalID != "" {
+		return validateServiceRoleSessionContext(value)
+	}
+	if value.Service != nil || ValidateRoleSourceAuthority(value.AuthorityContractVersion, value.SourceAuthorizationGeneration, value.SourceGroupGenerations) != nil ||
+		value.Session.AccountID != value.Source.Organization.ID || value.Session.SourceUserID != value.Source.Principal.ID ||
+		value.SourceSessionID != value.Source.Session.ID || value.Session.ExpiresAt.After(value.Source.Session.ExpiresAt) ||
+		value.CredentialGeneration == 0 || value.CredentialGeneration > 9007199254740991 ||
+		iamv1.ValidateID("assumeDecisionId", string(value.AssumeDecisionID)) != nil {
+		return ErrAuthorityUnavailable
 	}
 	if ValidateRoleBoundary(value.Boundary, value.Session.AccountID) != nil ||
 		ValidateSessionPolicy(value.SessionPolicy) != nil {
@@ -192,6 +214,46 @@ func validateRoleSessionContext(value RoleSessionContext, now time.Time) error {
 	return nil
 }
 
+func validateServiceRoleSessionContext(value RoleSessionContext) error {
+	service := value.Service
+	if service == nil || value.AuthorityContractVersion != 3 || value.SourceAuthorizationGeneration != 0 ||
+		value.SourceGroupGenerations != nil || value.Session.SourceUserID != "" ||
+		value.Source.Organization.ID != "" || value.Source.Principal.ID != "" || value.Source.Session.ID != "" ||
+		value.Source.Policies != nil || value.Source.Boundary != nil || value.Source.InstallationID != "" ||
+		value.SourceSessionID != "" || value.CredentialGeneration != 0 || value.AssumeDecisionID != "" ||
+		value.Policies != nil || value.Boundary != nil || value.SessionPolicy != nil ||
+		value.Trust.ID != "" || value.Trust.AccountID != "" || value.Trust.RoleID != "" ||
+		value.Trust.Document.Statements != nil || value.Trust.ContentDigest != "" || !value.Trust.CreatedAt.IsZero() ||
+		iamv1.ValidateServiceIdentity(service.Identity) != nil ||
+		iamv1.ValidateDigest("serviceLookupDigest", service.LookupDigest) != nil ||
+		iamv1.ValidateID("bindingId", string(service.BindingID)) != nil ||
+		service.BindingResourceVersion == 0 || service.BindingResourceVersion > 9007199254740991 ||
+		iamv1.ValidateServiceRoleTemplate(service.Template) != nil ||
+		iamv1.ValidatePolicyVersion(service.PermissionVersion) != nil ||
+		iamv1.ValidateID("workload.id", service.Workload.ID) != nil || service.Workload.Kind == "" ||
+		value.Role.Management != iamv1.RoleServiceLinked || value.Role.Status != iamv1.RoleActive ||
+		value.Session.SourceServicePrincipalID != service.Identity.PrincipalID ||
+		value.Role.MaxSessionDurationSeconds != service.Template.Spec.MaxSessionDurationSeconds ||
+		value.Session.ExpiresAt.After(value.Session.IssuedAt.Add(time.Duration(service.Template.Spec.MaxSessionDurationSeconds)*time.Second)) ||
+		service.Template.Status != iamv1.ServiceRoleTemplateActive ||
+		service.Template.Spec.ServicePurpose != service.Identity.Purpose ||
+		service.Template.Spec.PolicyVersion != (iamv1.PolicyVersionReference{PolicyID: service.PermissionVersion.PolicyID,
+			VersionID: service.PermissionVersion.ID, ContentDigest: service.PermissionVersion.ContentDigest}) {
+		return ErrAuthorityUnavailable
+	}
+	workloadAllowed := false
+	for _, workload := range service.Template.Spec.Workloads {
+		if workload.ResourceKind == service.Workload.Kind {
+			workloadAllowed = true
+			break
+		}
+	}
+	if !workloadAllowed {
+		return ErrAuthorityUnavailable
+	}
+	return nil
+}
+
 // AuthorizationEvaluation keeps private policy provenance alongside the
 // sanitized public decision. Only the decision is returned to a caller.
 type AuthorizationEvaluation struct {
@@ -205,20 +267,80 @@ type AuthorizationEvaluation struct {
 // full source and role authority vectors. The SQL recorder checks each field;
 // delivery checks the original vectors, never a current login or policy head.
 type RoleAuthorizationEvidence struct {
-	AuthorityContractVersion      uint64                      `json:"authorityContractVersion"`
-	SourceAuthorizationGeneration uint64                      `json:"sourceAuthorizationGeneration"`
-	SourceGroupGenerations        []RoleSourceGroupGeneration `json:"sourceGroupGenerations"`
-	SessionID                     iamv1.RoleSessionID         `json:"sessionId"`
-	RoleID                        iamv1.RoleID                `json:"roleId"`
-	SourceUserID                  iamv1.PrincipalID           `json:"sourceUserId"`
-	SourceSessionID               iamv1.SessionID             `json:"sourceSessionId"`
-	CredentialGeneration          uint64                      `json:"credentialGeneration"`
-	SecurityGeneration            uint64                      `json:"securityGeneration"`
-	TrustVersionID                iamv1.RoleTrustVersionID    `json:"trustVersionId"`
-	TrustDigest                   string                      `json:"trustDigest"`
-	AssumeDecisionID              iamv1.DecisionID            `json:"assumeDecisionId"`
-	Boundary                      RoleBoundaryEvidence        `json:"boundary"`
-	SessionPolicy                 *RoleSessionPolicyEvidence  `json:"sessionPolicy"`
+	AuthorityContractVersion      uint64                            `json:"authorityContractVersion"`
+	SourceAuthorizationGeneration uint64                            `json:"sourceAuthorizationGeneration"`
+	SourceGroupGenerations        []RoleSourceGroupGeneration       `json:"sourceGroupGenerations"`
+	SessionID                     iamv1.RoleSessionID               `json:"sessionId"`
+	RoleID                        iamv1.RoleID                      `json:"roleId"`
+	SourceUserID                  iamv1.PrincipalID                 `json:"sourceUserId"`
+	SourceSessionID               iamv1.SessionID                   `json:"sourceSessionId"`
+	CredentialGeneration          uint64                            `json:"credentialGeneration"`
+	SecurityGeneration            uint64                            `json:"securityGeneration"`
+	TrustVersionID                iamv1.RoleTrustVersionID          `json:"trustVersionId"`
+	TrustDigest                   string                            `json:"trustDigest"`
+	AssumeDecisionID              iamv1.DecisionID                  `json:"assumeDecisionId"`
+	Boundary                      RoleBoundaryEvidence              `json:"boundary"`
+	SessionPolicy                 *RoleSessionPolicyEvidence        `json:"sessionPolicy"`
+	Service                       *ServiceRoleAuthorizationEvidence `json:"-"`
+}
+
+// ServiceRoleAuthorizationEvidence is immutable issuance provenance. Current
+// service credential, binding, template and policy eligibility are checked
+// separately for each request; historical outbox delivery can still prove the
+// decision after any of them is revoked.
+type ServiceRoleAuthorizationEvidence struct {
+	Identity               iamv1.ServiceIdentity              `json:"identity"`
+	LookupDigest           string                             `json:"lookupDigest"`
+	BindingID              iamv1.WorkloadRoleBindingID        `json:"bindingId"`
+	BindingResourceVersion uint64                             `json:"bindingResourceVersion"`
+	Template               iamv1.ServiceRoleTemplateReference `json:"template"`
+	Workload               iamv1.ResourceReference            `json:"workload"`
+	PermissionVersion      iamv1.PolicyVersionReference       `json:"permissionVersion"`
+	ContractVersion        uint64                             `json:"contractVersion"`
+	Compilation            *iamv1.PolicyCompilation           `json:"compilation,omitempty"`
+}
+
+// MarshalJSON preserves the already-published USER evidence shape byte for
+// byte while giving SERVICE sessions a disjoint shape. Zero-valued USER fields
+// are never serialized as fake service lineage, and vice versa.
+func (value RoleAuthorizationEvidence) MarshalJSON() ([]byte, error) {
+	if value.AuthorityContractVersion == 3 {
+		if value.Service == nil {
+			return nil, errors.New("service role authorization evidence is incomplete")
+		}
+		return json.Marshal(struct {
+			AuthorityContractVersion uint64                           `json:"authorityContractVersion"`
+			SessionID                iamv1.RoleSessionID              `json:"sessionId"`
+			RoleID                   iamv1.RoleID                     `json:"roleId"`
+			SourceServicePrincipalID iamv1.PrincipalID                `json:"sourceServicePrincipalId"`
+			SecurityGeneration       uint64                           `json:"securityGeneration"`
+			Service                  ServiceRoleAuthorizationEvidence `json:"service"`
+		}{value.AuthorityContractVersion, value.SessionID, value.RoleID,
+			value.Service.Identity.PrincipalID, value.SecurityGeneration, *value.Service})
+	}
+	if value.Service != nil {
+		return nil, errors.New("user role authorization evidence contains service lineage")
+	}
+	return json.Marshal(struct {
+		AuthorityContractVersion      uint64                      `json:"authorityContractVersion"`
+		SourceAuthorizationGeneration uint64                      `json:"sourceAuthorizationGeneration"`
+		SourceGroupGenerations        []RoleSourceGroupGeneration `json:"sourceGroupGenerations"`
+		SessionID                     iamv1.RoleSessionID         `json:"sessionId"`
+		RoleID                        iamv1.RoleID                `json:"roleId"`
+		SourceUserID                  iamv1.PrincipalID           `json:"sourceUserId"`
+		SourceSessionID               iamv1.SessionID             `json:"sourceSessionId"`
+		CredentialGeneration          uint64                      `json:"credentialGeneration"`
+		SecurityGeneration            uint64                      `json:"securityGeneration"`
+		TrustVersionID                iamv1.RoleTrustVersionID    `json:"trustVersionId"`
+		TrustDigest                   string                      `json:"trustDigest"`
+		AssumeDecisionID              iamv1.DecisionID            `json:"assumeDecisionId"`
+		Boundary                      RoleBoundaryEvidence        `json:"boundary"`
+		SessionPolicy                 *RoleSessionPolicyEvidence  `json:"sessionPolicy"`
+	}{value.AuthorityContractVersion, value.SourceAuthorizationGeneration,
+		value.SourceGroupGenerations, value.SessionID, value.RoleID, value.SourceUserID,
+		value.SourceSessionID, value.CredentialGeneration, value.SecurityGeneration,
+		value.TrustVersionID, value.TrustDigest, value.AssumeDecisionID, value.Boundary,
+		value.SessionPolicy})
 }
 
 type RoleBoundaryEvidence struct {
@@ -366,6 +488,9 @@ func DecideRole(value RoleSessionContext, callingService iamv1.ServicePurpose, r
 	if iamv1.ValidateID("decisionId", string(decisionID)) != nil || !knownServicePurpose(callingService) {
 		return AuthorizationEvaluation{}, ErrAuthorityUnavailable
 	}
+	if value.Service != nil {
+		return decideServiceRole(value, callingService, request, decisionID, now)
+	}
 	subject := iamv1.Subject{Type: iamv1.SubjectRole, ID: string(value.Role.ID), RoleSession: &iamv1.RoleSessionReference{SessionID: value.Session.ID, SourceUserID: value.Session.SourceUserID}}
 	grant, policies, err := EvaluateAttachedPolicies(now, value.Session.AccountID, "", subject, value.Policies, request)
 	supported := !errors.Is(err, errUnsupportedPolicySubject)
@@ -408,6 +533,44 @@ func DecideRole(value RoleSessionContext, callingService iamv1.ServicePurpose, r
 		return AuthorizationEvaluation{}, err
 	}
 	return AuthorizationEvaluation{AuthorizationDecision: decision, PolicyEvidence: policies, BoundaryEvidence: UserBoundaryEvidence{State: "NOT_APPLICABLE"}, RoleEvidence: proof}, nil
+}
+
+func decideServiceRole(value RoleSessionContext, callingService iamv1.ServicePurpose, request iamv1.AuthorizationRequest,
+	decisionID iamv1.DecisionID, now time.Time,
+) (AuthorizationEvaluation, error) {
+	service := value.Service
+	if service == nil || callingService != service.Identity.Purpose {
+		return AuthorizationEvaluation{}, ErrAuthorityUnavailable
+	}
+	subject := iamv1.Subject{Type: iamv1.SubjectRole, ID: string(value.Role.ID), RoleSession: &iamv1.RoleSessionReference{
+		SessionID: value.Session.ID, SourceServicePrincipalID: value.Session.SourceServicePrincipalID,
+	}}
+	context := policyEvaluationContext{databaseTime: now, accountID: value.Session.AccountID, subject: subject,
+		profiles: make(map[iamv1.AuthorizationProfileReference]iamv1.AuthorizationProfile)}
+	if context.includeProfiles(service.PermissionProfiles) != nil {
+		return AuthorizationEvaluation{}, ErrAuthorityUnavailable
+	}
+	grant, err := evaluatePolicies(context, []iamv1.PolicyVersion{service.PermissionVersion}, request)
+	supported := !errors.Is(err, errUnsupportedPolicySubject)
+	if err != nil && supported {
+		return AuthorizationEvaluation{}, ErrAuthorityUnavailable
+	}
+	allowed := supported && grant.Allowed && request.Resource == service.Workload &&
+		ServiceCanRequest(callingService, request.Action)
+	decision, err := authorizationDecision(value.Session.AccountID, "", subject, request, decisionID, now, allowed)
+	if err != nil {
+		return AuthorizationEvaluation{}, err
+	}
+	permission := iamv1.PolicyVersionReference{PolicyID: service.PermissionVersion.PolicyID,
+		VersionID: service.PermissionVersion.ID, ContentDigest: service.PermissionVersion.ContentDigest}
+	proof := &RoleAuthorizationEvidence{AuthorityContractVersion: value.AuthorityContractVersion,
+		SessionID: value.Session.ID, RoleID: value.Role.ID, SecurityGeneration: value.SecurityGeneration,
+		Service: &ServiceRoleAuthorizationEvidence{Identity: service.Identity, LookupDigest: service.LookupDigest,
+			BindingID: service.BindingID, BindingResourceVersion: service.BindingResourceVersion,
+			Template: service.Template.Reference(), Workload: service.Workload, PermissionVersion: permission,
+			ContractVersion: service.PermissionVersion.ContractVersion, Compilation: service.PermissionVersion.Compilation}}
+	return AuthorizationEvaluation{AuthorizationDecision: decision, PolicyEvidence: []PolicyAttachmentEvidence{},
+		BoundaryEvidence: UserBoundaryEvidence{State: "NOT_APPLICABLE"}, RoleEvidence: proof}, nil
 }
 
 func decide(

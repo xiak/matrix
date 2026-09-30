@@ -1,6 +1,6 @@
 # FEAT-IAM-006：角色、信任与 STS
 
-- 状态：R1角色管理、R2同账号承担与tenant PaaS/Audit真实授权、R3自服务发现/当前角色显示及管理员会话管理后端，已在累计固定`62a18a48168e87a4158b95eba41427b445ed10d1`通过本地真库/并发/保留数据/独立进程/全仓检查和三项独立CI；包含原`1ebab37a`的来源代际/身份锁修复。必须同时消费公开schema数量边界修正`0567c8b2699521b137db0f8b69f17630c59f04fb`，其本地契约及三项独立CI也已通过。原R2覆盖不足及旧R3固定960416dd的CI失败不被回填。UX/UI、容量和发布未完成，整体006未验收。
+- 状态：R1角色管理、R2同账号承担与tenant PaaS/Audit真实授权、R3自服务发现/当前角色显示及管理员会话管理后端，已在累计固定`62a18a48168e87a4158b95eba41427b445ed10d1`通过本地真库/并发/保留数据/独立进程/全仓检查和三项独立CI；包含原`1ebab37a`的来源代际/身份锁修复。必须同时消费公开schema数量边界修正`0567c8b2699521b137db0f8b69f17630c59f04fb`，其本地契约及三项独立CI也已通过。服务来源RoleSession发行、回执、当前PDP及binding撤销即时失效已有本地候选和真实门禁，尚待固定提交/独立CI及首个产品消费。原R2覆盖不足及旧R3固定960416dd的CI失败不被回填。UX/UI、容量和发布未完成，整体006未验收。
 - 依赖：005。
 - Owner：IAM Role、TrustPolicy、RoleSession、凭据发行；业务服务消费临时身份。
 
@@ -16,6 +16,7 @@
 | IAM-ROLE-06 | 主体/角色/信任/附件/边界撤销影响下次请求，不延长或复活旧会话 |
 | IAM-ROLE-07 | console 切换显式提示账号/角色和到期；恢复原身份需要原有效 session |
 | IAM-ROLE-08 | 获授权的管理员在精确Role范围分页查询非秘密会话记录，并显式撤销单个会话；读取、撤销和自服务承担权限分离 |
+| IAM-ROLE-09 | 当前有效ServiceIdentity只能通过精确WorkloadRoleBinding承担SERVICE_LINKED Role；服务来源与USER来源严格互斥，解绑或来源失效影响下一请求且历史事实仍可验证 |
 
 ## 详细设计
 
@@ -146,6 +147,16 @@ R2同片实现原Root+当前PDP守护的RoleBoundary read/set/remove，不引用
 `Subject`公开类型与登录`PrincipalType`分离，ROLE必须携带且仅携带`roleSession.sessionId/sourceUserId`；USER/SERVICE_ACCOUNT连显式null的roleSession字段也拒绝。旧USER/SERVICE公开bytes不变，只有实际产品Profile声明及策略编译支持后才可产生ROLE Allow。当前工作区PaaS/Audit声明、record8/contract3与业务消费者已接入完整ROLE引用；平台、probe和未声明产品仍关闭ROLE。角色边界及SessionPolicy读取使用现有冻结版本/编译器，不造PolicyVersion ID或引入另一编码器。PaaS的Operation/事务outbox、创建者比较和幂等摘要均保留精确角色会话，另一RoleSession不能重放前一会话命令；资源归属仍是Account。Audit actor过滤使用完整引用，cursor绑定完整过滤条件而非查询者身份，同账号有权查询者仍可继续相同过滤页；不同会话过滤或不同Account不能复用该游标。
 
 **撤销后再授权不得复活旧角色会话。** 当前Assume资格仍须每次重算；此外绑定发行时的授权来源修订承诺，至少包含实际附件及修订、成员关系身份/修订、Policy修订/默认精确版本、边界关系/修订和User修订。只有“当前Allow”或当前内容digest不足以识别默认指针切走再切回。复用原目录快照中已经验证的修订素材，不复用cursor作为permit；完整来源的保守失效可能要求重新承担，即使仍有另一条Allow，也不能自动更新旧RoleSession的承诺。Role安全generation覆盖信任选择、状态、期限及角色授权/边界变更；来源credential generation单独固定。显示元数据变化与安全变更区分，最终通过真实ABA/并发和两实例门禁证明，不能仅靠字段命名声称完成。
+
+### 服务来源 RoleSession（与 008 协作）
+
+RoleSession继续由本FEAT唯一拥有，008拥有模板、账号同意、workload binding和实际产品PEP。内部发行入口只接受当前ServiceIdentity及`{bindingId,durationSeconds?,requestId}`；Account、Role、installation、purpose、template、Policy和产品授权请求均由IAM从当前凭据与binding推导，不能由调用者选择。服务主体的物理home Account与RoleSession目标Account分别保存：前者证明生产者身份归属，后者仍是Role及业务资源的安全归属，二者不同不构成越权或自动跨租户许可。
+
+公开`RoleSession`的`sourceUserId`与`sourceServicePrincipalId`严格二选一；USER既有字节保持，SERVICE不能伪造USER。私有发行证据另绑定准确服务home Account、封存installation、principal、purpose、当前服务凭据查找承诺、binding及其修订、不可变template/PolicyVersion上限和目标workload。当前授权仍进入唯一Role PDP，并重新检查Account、Role、binding、template和服务来源；历史`iam.authorization.decided`证据只验证发生时封存的不可变来源，不因目标Account的RLS重新读取生产者home Account，也不按当前用户权限重授权旧事实。
+
+首次成功发行一次返回用途隔离的短期秘密，等值重放及`GET /v1/internal/service-role-sessions/by-request/{requestId}`只返回非秘密原结果；响应均`no-store`。`iam.service-role-session.issued`是新的租户事实，SERVICE_ACCOUNT actor、目标ROLE_SESSION和原请求必须准确，不能借旧`iam.role-session.issued`改变USER历史含义。binding撤销与发行按同一Role/binding锁序串行；撤销终态后新发行失败，若发行先提交，所得凭据在撤销后的下一受保护请求失败。已提交发行事实和私有历史证明仍可投递/重放，不能因当前binding撤销而丢失。服务会话管理员目录、单会话显式撤销及managedservice实际业务读取仍未完成，不能用内部发行门禁冒充完整服务受托闭环。
+
+当前候选源码形状为IAM55/Audit30，PaaS仍按其实际源码2；发布安装profile未改变。独立PG18的Role聚焦race门禁48.26秒通过，包括同/跨Account发行、真实PDP、错误production source、一次秘密/完成回执、Audit proof、解绑即时失效、发行与解绑真实并发，以及私有表RLS/ACL/FK/index/触发器/函数漂移失败关闭。独立IAM双副本、Audit、PaaS与两个dispatcher的进程门禁183.50秒通过：一个IAM发行，另一个IAM以同一临时身份执行真实Role PDP，两个Account同名资源互不合并；解绑后原凭据401、新发行403，原非秘密回执和`iam.service-role-session.issued`仍进入准确tenant链。固定IAM45 executable产生的数据升级到IAM55、双迁移/bootstrap/重启的唯一前驱门禁111.26秒通过，保留MFA、Session、恢复、Profile及原receipt/canonical/proof。聚焦API/Audit/IAM race、architecture、连续两次生成哈希稳定、全仓`go test -race -count=1 -p 2 ./...`、`go vet -p 2 ./...`、模块校验及Linux amd64全仓构建均已通过。以上是本地候选证据；尚无固定SHA/独立CI，不构成发布profile、跨任意历史版本、真实managedservice数据读取、UI或整体006验收。
 
 ### 来源授权代际：临时撤权不复活
 

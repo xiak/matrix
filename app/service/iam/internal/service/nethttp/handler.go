@@ -70,6 +70,8 @@ type Workflow interface {
 	GetServiceLinkedRole(context.Context, iamv1.Secret, iamv1.RoleID, string, string) (iamv1.ServiceLinkedRoleAccess, error)
 	CreateWorkloadRoleBinding(context.Context, iamv1.Secret, iamv1.Secret, iamv1.CreateWorkloadRoleBindingRequest) (iamv1.ServiceLinkedRoleAccess, error)
 	RevokeWorkloadRoleBinding(context.Context, iamv1.Secret, iamv1.Secret, iamv1.WorkloadRoleBindingID, iamv1.RevokeWorkloadRoleBindingRequest) (iamv1.WorkloadRoleBinding, error)
+	AssumeServiceRole(context.Context, iamv1.Secret, iamv1.AssumeServiceRoleRequest) (iamv1.AssumeRoleResponse, error)
+	GetServiceRoleSessionByRequest(context.Context, iamv1.Secret, string) (iamv1.RoleSession, bool, error)
 	GetPolicy(context.Context, iamv1.Secret, iamv1.PolicyID, string) (iamv1.PolicyDetail, error)
 	CreatePolicy(context.Context, iamv1.Secret, iamv1.CreatePolicyRequest) (iamv1.PolicyDetail, error)
 	ListPolicyVersions(context.Context, iamv1.Secret, iamv1.PolicyID, string) (iamv1.PolicyVersionList, error)
@@ -206,6 +208,8 @@ func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 	routes.HandleFunc("/v1/service-linked-roles/", value.serviceLinkedRole)
 	routes.HandleFunc("/v1/internal/workload-role-bindings", value.createWorkloadRoleBinding)
 	routes.HandleFunc("/v1/internal/workload-role-bindings/", value.revokeWorkloadRoleBinding)
+	routes.HandleFunc("/v1/internal/service-role-sessions", value.assumeServiceRole)
+	routes.HandleFunc("/v1/internal/service-role-sessions/by-request/", value.serviceRoleSessionByRequest)
 	routes.HandleFunc("/v1/policies/", value.policy)
 	routes.HandleFunc("/v1/platform-policies", value.listPolicies)
 	routes.HandleFunc("/v1/accounts", value.accounts)
@@ -580,6 +584,65 @@ func (value *handler) revokeWorkloadRoleBinding(response http.ResponseWriter, re
 	if iamv1.ValidateWorkloadRoleBinding(result) != nil || result.ID != iamv1.WorkloadRoleBindingID(id) ||
 		result.Status != iamv1.WorkloadRoleBindingRevoked || result.ResourceVersion != body.ResourceVersion+1 ||
 		result.Workload != body.Authorization.Resource {
+		value.writeError(response, request, identityaccess.ErrUnavailable)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (value *handler) assumeServiceRole(response http.ResponseWriter, request *http.Request) {
+	if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
+		return
+	}
+	if len(request.Header.Values("Matrix-Subject-Credential")) != 0 {
+		writeProblem(response, requestID(request), http.StatusBadRequest, "iam.header.unsupported", "IAM header unsupported")
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	body, ok := decodeJSON[iamv1.AssumeServiceRoleRequest](value, response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.AssumeServiceRole(request.Context(), credential, body)
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	encoded, err := iamv1.EncodeAssumeRoleResponse(result)
+	if err != nil {
+		value.writeError(response, request, identityaccess.ErrUnavailable)
+		return
+	}
+	defer clear(encoded)
+	writeEncodedJSON(response, http.StatusOK, encoded)
+}
+
+func (value *handler) serviceRoleSessionByRequest(response http.ResponseWriter, request *http.Request) {
+	id, ok := commandPathID(response, request, "/v1/internal/service-role-sessions/by-request/", "", "requestId")
+	if !ok || !value.requireMethod(response, request, http.MethodGet) || !rejectQueryAndBody(response, request) {
+		return
+	}
+	if len(request.Header.Values("Matrix-Subject-Credential")) != 0 {
+		writeProblem(response, requestID(request), http.StatusBadRequest, "iam.header.unsupported", "IAM header unsupported")
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	result, found, err := value.workflow.GetServiceRoleSessionByRequest(request.Context(), credential, id)
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	if !found {
+		value.notFound(response, request)
+		return
+	}
+	if iamv1.ValidateRoleSession(result) != nil || result.SourceServicePrincipalID == "" {
 		value.writeError(response, request, identityaccess.ErrUnavailable)
 		return
 	}

@@ -108,7 +108,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	const databasePrefix = "matrix_iam_upgrade_predecessor_"
 	const source = "42035189eb823e388509f54525889c1a18c6b79d"
 	const sourceSchema uint64 = 45
-	const currentSchema uint64 = 54
+	const currentSchema uint64 = 55
 	// Actual predecessor admission accepted these 14-byte passwords. The new
 	// executable must replay the sealed bootstrap and verify existing secrets
 	// without admitting them for a new password write.
@@ -444,7 +444,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		}
 	}
 	var shape bool
-	if err := admin.QueryRow(ctx, `SELECT schema_version=54 AND iam.password_history_contract_ready() AND iam.account_security_settings_contract_ready() AND iam.login_session_contract_ready() AND iam.password_attempt_contract_ready()
+	if err := admin.QueryRow(ctx, `SELECT schema_version=55 AND iam.password_history_contract_ready() AND iam.account_security_settings_contract_ready() AND iam.login_session_contract_ready() AND iam.password_attempt_contract_ready()
 	 AND iam.authentication_recovery_contract_ready()
 	 AND to_regprocedure('iam.close_authentication_recovery(jsonb,text,jsonb)') IS NULL
 	 AND NOT EXISTS(SELECT 1 FROM iam.user_credentials c WHERE c.password_history<>'[]'::jsonb
@@ -891,7 +891,7 @@ func provePredecessorAuthenticationRecovery(t *testing.T, ctx context.Context, r
 		}
 		var unchanged bool
 		if err := database.QueryRow(ctx, `SELECT
-			 (SELECT schema_version=54 AND ready FROM iam.readiness())
+			 (SELECT schema_version=55 AND ready FROM iam.readiness())
 		 AND NOT EXISTS(SELECT 1 FROM iam.authenticator_removals)
 		 AND NOT EXISTS(SELECT 1 FROM iam.sessions WHERE last_activity_at IS NOT NULL OR idle_timeout_seconds IS NOT NULL)
 		 AND NOT EXISTS(SELECT 1 FROM iam.user_credentials c WHERE c.password_history<>'[]'::jsonb
@@ -2775,7 +2775,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	// Exercise the exact source services together without weakening install
 	// admission: the workflow separately proves the published installer rejects
 	// this unmatched database shape before effects.
-	sourceProfile := installationrelease.AuthoritySchemas{IAM: 54, Audit: 29, PaaS: 2}
+	sourceProfile := installationrelease.AuthoritySchemas{IAM: 55, Audit: 30, PaaS: 2}
 	publishedProfile := installationrelease.CurrentDatabaseProfile()
 	if publishedProfile.Authorities == sourceProfile {
 		t.Fatal("unreleased authority source shape was published without a final profile gate")
@@ -6599,7 +6599,7 @@ func proveTenantAccountProcesses(
 	if userProducer.Status != http.StatusUnauthorized {
 		t.Fatal("tenant owner gained audit producer authority")
 	}
-	retainedQuota, retainedDatabase, resourceSecrets := proveTenantResourceProcesses(t, ctx, admin, endpoint, auditEndpoint, paasEndpoint, bearer, primary.Credential, childLogin)
+	retainedQuota, retainedDatabase, resourceSecrets := proveTenantResourceProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, paasEndpoint, bearer, primary.Credential, childLogin)
 	proveAccountSecuritySettingsProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, bearer, primary.Credential, childLogin, restartIAM)
 	sensitive := append(resourceSecrets, initial, changed, primary.Credential, childLogin.Credential)
 	sensitive = append(sensitive, proveGroupResourceProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, paasEndpoint, bearer, primary.Credential, withAuditOutage, restartIAM)...)
@@ -9318,7 +9318,7 @@ func proveAccountSecuritySettingsProcesses(t *testing.T, ctx context.Context, da
 	}
 }
 
-func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.Conn, iamEndpoint, auditEndpoint, paasEndpoint, homeBearer, customerBearer string, customer loginResult) (managedservicev1.QuotaEntitlement, managedservicev1.ServiceInstallation, []string) {
+func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.Conn, iamEndpoint, iamReplicaEndpoint, auditEndpoint, paasEndpoint, homeBearer, customerBearer string, customer loginResult) (managedservicev1.QuotaEntitlement, managedservicev1.ServiceInstallation, []string) {
 	t.Helper()
 	base := paasEndpoint + "/managed-services/v1"
 	homeUser := createIAMUser(t, iamEndpoint, homeBearer, "account.user", "Home resource member", initialDeveloperPassword, "request-home-resource-member")
@@ -9343,6 +9343,9 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 		serviceRoleTemplate iamv1.ServiceRoleTemplateReference
 		serviceRoleReceipt  managedservicev1.ServiceRoleBindingReceipt
 		serviceRoleRevoked  managedservicev1.ServiceRoleUnbindingReceipt
+		serviceRoleSession  iamv1.RoleSession
+		serviceRoleSecret   string
+		serviceRoleRequest  string
 	}{
 		{id: "organization-process", owner: homeBearer, member: home.Credential, memberID: homeUser.ID},
 		{id: "organization-process-customer", owner: customerBearer, member: customer.Credential, memberID: customer.Session.PrincipalID},
@@ -9455,6 +9458,48 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 			detail.Bindings[0].ID != tenant.serviceRoleReceipt.BindingID ||
 			detail.Bindings[0].Workload.ID != tenant.shared.ID {
 			t.Fatal("IAM detail lost the product-owned workload binding")
+		}
+
+		tenant.serviceRoleRequest = "process-service-role-session-" + tenant.id
+		issued := performJSON(t, http.MethodPost, iamEndpoint+"/v1/internal/service-role-sessions", paasServiceCredential,
+			iamv1.AssumeServiceRoleRequest{BindingID: tenant.serviceRoleReceipt.BindingID, RequestID: tenant.serviceRoleRequest})
+		var issuance struct {
+			Outcome    string            `json:"outcome"`
+			Session    iamv1.RoleSession `json:"session"`
+			Credential string            `json:"credential"`
+		}
+		decoder := json.NewDecoder(bytes.NewReader(issued.Body))
+		decoder.DisallowUnknownFields()
+		if issued.Status != http.StatusOK || issued.Header.Get("Cache-Control") != "no-store" || decoder.Decode(&issuance) != nil ||
+			issuance.Outcome != "APPLIED" || issuance.Credential == "" || iamv1.ValidateRoleSession(issuance.Session) != nil ||
+			issuance.Session.AccountID != iamv1.AccountID(tenant.id) || issuance.Session.RoleID != tenant.serviceRoleReceipt.RoleID ||
+			issuance.Session.SourceUserID != "" || issuance.Session.SourceServicePrincipalID != "service-paas" {
+			t.Fatalf("independent IAM process did not issue the exact service RoleSession: status=%d body=%s", issued.Status, issued.Body)
+		}
+		tenant.serviceRoleSession, tenant.serviceRoleSecret = issuance.Session, issuance.Credential
+		receipt := performJSON(t, http.MethodGet, iamReplicaEndpoint+"/v1/internal/service-role-sessions/by-request/"+
+			tenant.serviceRoleRequest, paasServiceCredential, nil)
+		var retained iamv1.RoleSession
+		if receipt.Status != http.StatusOK || receipt.Header.Get("Cache-Control") != "no-store" ||
+			json.Unmarshal(receipt.Body, &retained) != nil || retained != tenant.serviceRoleSession ||
+			bytes.Contains(receipt.Body, []byte(tenant.serviceRoleSecret)) {
+			t.Fatal("second IAM process did not retain the non-secret service RoleSession receipt")
+		}
+		authorization, err := iamv1.NewAuthorizationRequest(iamv1.ActionManagedServiceInstallationRead,
+			iamv1.ResourceReference{Kind: iamv1.ResourceServiceInstallation, ID: tenant.shared.ID},
+			iamv1.AuthorizationResourceInstance, "", tenant.serviceRoleRequest+"-read", tenant.serviceRoleRequest+"-read")
+		if err != nil {
+			t.Fatal(err)
+		}
+		decisionResponse := performJSONWithHeaders(t, http.MethodPost, iamReplicaEndpoint+"/v1/authorize", paasServiceCredential, "",
+			authorization, map[string]string{"Matrix-Subject-Credential": tenant.serviceRoleSecret})
+		var decision iamv1.AuthorizationDecision
+		if decisionResponse.Status != http.StatusOK || json.Unmarshal(decisionResponse.Body, &decision) != nil ||
+			iamv1.ValidateAuthorizationDecision(decision) != nil || !decision.Allowed || decision.TenantID != iamv1.AccountID(tenant.id) ||
+			decision.Subject == nil || decision.Subject.Type != iamv1.SubjectRole || decision.Subject.ID != string(tenant.serviceRoleReceipt.RoleID) ||
+			decision.Subject.RoleSession == nil || decision.Subject.RoleSession.SessionID != tenant.serviceRoleSession.ID ||
+			decision.Subject.RoleSession.SourceUserID != "" || decision.Subject.RoleSession.SourceServicePrincipalID != "service-paas" {
+			t.Fatalf("second IAM process lost service RoleSession authorization: status=%d body=%s", decisionResponse.Status, decisionResponse.Body)
 		}
 	}
 	if tenants[0].quota.ID == tenants[1].quota.ID || tenants[0].shared.Operation.ID == tenants[1].shared.Operation.ID {
@@ -9569,6 +9614,25 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 			detail.Bindings[0].Status != iamv1.WorkloadRoleBindingRevoked || detail.Bindings[0].RevokedAt == nil {
 			t.Fatal("IAM directory lost the terminal workload Role binding history")
 		}
+		readAfterUnbind, err := iamv1.NewAuthorizationRequest(iamv1.ActionManagedServiceInstallationRead,
+			iamv1.ResourceReference{Kind: iamv1.ResourceServiceInstallation, ID: tenant.shared.ID},
+			iamv1.AuthorizationResourceInstance, "", tenant.serviceRoleRequest+"-after-unbind", tenant.serviceRoleRequest+"-after-unbind")
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertStatus(performJSONWithHeaders(t, http.MethodPost, iamEndpoint+"/v1/authorize", paasServiceCredential, "", readAfterUnbind,
+			map[string]string{"Matrix-Subject-Credential": tenant.serviceRoleSecret}), http.StatusUnauthorized,
+			"service RoleSession after workload unbind")
+		assertStatus(performJSON(t, http.MethodPost, iamReplicaEndpoint+"/v1/internal/service-role-sessions", paasServiceCredential,
+			iamv1.AssumeServiceRoleRequest{BindingID: tenant.serviceRoleReceipt.BindingID, RequestID: tenant.serviceRoleRequest + "-after-unbind"}),
+			http.StatusForbidden, "service RoleSession issue after workload unbind")
+		receipt := performJSON(t, http.MethodGet, iamReplicaEndpoint+"/v1/internal/service-role-sessions/by-request/"+
+			tenant.serviceRoleRequest, paasServiceCredential, nil)
+		var retained iamv1.RoleSession
+		if receipt.Status != http.StatusOK || json.Unmarshal(receipt.Body, &retained) != nil || retained != tenant.serviceRoleSession ||
+			bytes.Contains(receipt.Body, []byte(tenant.serviceRoleSecret)) {
+			t.Fatal("workload unbind erased or exposed the original service RoleSession receipt")
+		}
 	}
 	for i := range tenants {
 		tenant := &tenants[i]
@@ -9626,6 +9690,17 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 				t.Fatal("service Role consent fact lost its Account, actor or authority")
 			}
 		}
+		page := queryAudit(t, auditEndpoint, tenant.owner,
+			auditv1.QueryRecordsRequest{PageSize: 100, Action: auditv1.ActionIAMServiceRoleSessionIssued}, http.StatusOK)
+		if page.TenantID != auditv1.TenantID(tenant.id) || len(page.Records) != 1 ||
+			page.Records[0].Source != auditv1.SourceIAM || page.Records[0].Event.Actor.Type != auditv1.ActorServiceAccount ||
+			page.Records[0].Event.Actor.ID != "service-paas" || page.Records[0].Event.IAMDecisionID != "" ||
+			page.Records[0].Event.Target.ID != string(tenant.serviceRoleSession.ID) {
+			t.Fatal("service RoleSession issuance fact lost its target Account or producer lineage")
+		}
+	}
+	for _, tenant := range tenants {
+		applicationValues = append(applicationValues, tenant.serviceRoleSecret)
 	}
 	return tenants[1].quota, tenants[1].shared, append(applicationValues, home.Credential, oldPlatformCredential, platform.Credential)
 }

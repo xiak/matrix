@@ -798,18 +798,19 @@ CREATE TABLE IF NOT EXISTS iam.role_sessions (
     tenant_id text COLLATE "C" NOT NULL,
     id text COLLATE "C" NOT NULL,
     role_id text COLLATE "C" NOT NULL,
-    source_user_id text COLLATE "C" NOT NULL,
-    source_session_id text COLLATE "C" NOT NULL,
-    credential_generation bigint NOT NULL CHECK(credential_generation BETWEEN 1 AND 9007199254740991),
+    source_user_id text COLLATE "C",
+    source_service_principal_id text COLLATE "C",
+    source_session_id text COLLATE "C",
+    credential_generation bigint CHECK(credential_generation BETWEEN 1 AND 9007199254740991),
     security_generation bigint NOT NULL CHECK(security_generation BETWEEN 1 AND 9007199254740991),
     authority_contract_version integer NOT NULL,
     source_authorization_generation bigint,
     source_group_generations jsonb,
-    trust_version_id text COLLATE "C" NOT NULL,
+    trust_version_id text COLLATE "C",
     request_id text COLLATE "C" NOT NULL CHECK(request_id ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'),
     request_digest text NOT NULL CHECK(request_digest ~ '^sha256:[0-9a-f]{64}$'),
     verification_digest text NOT NULL CHECK(verification_digest ~ '^sha256:[0-9a-f]{64}$'),
-    decision_id text COLLATE "C" NOT NULL,
+    decision_id text COLLATE "C",
     authority_evidence jsonb NOT NULL CHECK(jsonb_typeof(authority_evidence)='object'),
     session_policy_canonical text,
     session_policy_digest text,
@@ -852,15 +853,34 @@ BEGIN
 END $role_authority_contract_cutover$;
 ALTER TABLE iam.role_sessions ADD COLUMN IF NOT EXISTS source_authorization_generation bigint;
 ALTER TABLE iam.role_sessions ADD COLUMN IF NOT EXISTS source_group_generations jsonb;
+ALTER TABLE iam.role_sessions ADD COLUMN IF NOT EXISTS source_service_principal_id text COLLATE "C";
+ALTER TABLE iam.role_sessions ALTER COLUMN source_user_id DROP NOT NULL;
+ALTER TABLE iam.role_sessions ALTER COLUMN source_session_id DROP NOT NULL;
+ALTER TABLE iam.role_sessions ALTER COLUMN credential_generation DROP NOT NULL;
+ALTER TABLE iam.role_sessions ALTER COLUMN trust_version_id DROP NOT NULL;
+ALTER TABLE iam.role_sessions ALTER COLUMN decision_id DROP NOT NULL;
 ALTER TABLE iam.role_sessions DROP CONSTRAINT IF EXISTS role_sessions_authority_contract;
 ALTER TABLE iam.role_sessions ADD CONSTRAINT role_sessions_authority_contract CHECK(
     (authority_contract_version=1 AND source_authorization_generation IS NULL AND source_group_generations IS NULL)
     OR (authority_contract_version=2 AND source_authorization_generation IS NOT NULL
       AND source_authorization_generation BETWEEN 1 AND 9007199254740991
       AND source_group_generations IS NOT NULL AND jsonb_typeof(source_group_generations)='array'
-      AND jsonb_array_length(source_group_generations)<=100));
+      AND jsonb_array_length(source_group_generations)<=100)
+    OR (authority_contract_version=3 AND source_authorization_generation IS NULL AND source_group_generations IS NULL));
+ALTER TABLE iam.role_sessions DROP CONSTRAINT IF EXISTS role_sessions_source_union;
+ALTER TABLE iam.role_sessions ADD CONSTRAINT role_sessions_source_union CHECK(
+    (source_user_id IS NOT NULL AND source_service_principal_id IS NULL
+      AND source_session_id IS NOT NULL AND credential_generation IS NOT NULL
+      AND trust_version_id IS NOT NULL AND decision_id IS NOT NULL
+      AND authority_contract_version IN (1,2))
+    OR (source_user_id IS NULL AND source_service_principal_id IS NOT NULL
+      AND source_session_id IS NULL AND credential_generation IS NULL
+      AND trust_version_id IS NULL AND decision_id IS NULL
+      AND authority_contract_version=3
+      AND session_policy_canonical IS NULL AND session_policy_digest IS NULL));
 CREATE INDEX IF NOT EXISTS role_sessions_live_account_idx ON iam.role_sessions(tenant_id,expires_at) WHERE revoked_at IS NULL;
 CREATE INDEX IF NOT EXISTS role_sessions_live_user_idx ON iam.role_sessions(tenant_id,source_user_id,expires_at) WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS role_sessions_live_service_idx ON iam.role_sessions(source_service_principal_id,expires_at) WHERE revoked_at IS NULL;
 CREATE INDEX IF NOT EXISTS role_sessions_live_role_idx ON iam.role_sessions(tenant_id,role_id,expires_at) WHERE revoked_at IS NULL;
 CREATE TABLE IF NOT EXISTS iam.role_session_index (
     lookup_digest text COLLATE "C" PRIMARY KEY CHECK(lookup_digest ~ '^sha256:[0-9a-f]{64}$'),
@@ -877,9 +897,11 @@ CREATE OR REPLACE FUNCTION iam.guard_role_session_change()
 RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
 BEGIN
     IF TG_OP='INSERT' THEN
-        IF NEW.authority_contract_version IS DISTINCT FROM 2
+        IF NEW.source_user_id IS NOT NULL AND (NEW.authority_contract_version IS DISTINCT FROM 2
           OR jsonb_build_object('userGeneration',NEW.source_authorization_generation,'groups',NEW.source_group_generations)
-             IS DISTINCT FROM iam.role_source_authority_snapshot(NEW.tenant_id,NEW.source_user_id) THEN
+             IS DISTINCT FROM iam.role_source_authority_snapshot(NEW.tenant_id,NEW.source_user_id)) THEN
+            RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='role source authority is invalid'; END IF;
+        IF NEW.source_service_principal_id IS NOT NULL AND NEW.authority_contract_version IS DISTINCT FROM 3 THEN
             RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='role source authority is invalid'; END IF;
         RETURN NEW;
     END IF;
@@ -930,7 +952,8 @@ END $function$;
 CREATE OR REPLACE FUNCTION iam.role_session_snapshot(tenant text,session_id text)
 RETURNS jsonb LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $function$
     SELECT jsonb_strip_nulls(jsonb_build_object('apiVersion','iam.matrix.xiak.com/v1','kind','RoleSession','id',s.id,
-      'accountId',s.tenant_id,'roleId',s.role_id,'sourceUserId',s.source_user_id,'status',CASE WHEN s.revoked_at IS NULL THEN 'ACTIVE' ELSE 'REVOKED' END,
+      'accountId',s.tenant_id,'roleId',s.role_id,'sourceUserId',s.source_user_id,
+      'sourceServicePrincipalId',s.source_service_principal_id,'status',CASE WHEN s.revoked_at IS NULL THEN 'ACTIVE' ELSE 'REVOKED' END,
       'issuedAt',s.issued_at,'expiresAt',s.expires_at,'revokedAt',s.revoked_at)) FROM iam.role_sessions s WHERE s.tenant_id=tenant AND s.id=session_id
 $function$;
 
@@ -1134,7 +1157,11 @@ BEGIN
     -- Read immutable linkage before locks, then use the same Account -> USER ->
     -- credential/session -> Role order as issuance and security mutations.
     SELECT * INTO stored FROM iam.role_sessions s WHERE s.tenant_id=located.tenant_id AND s.id=located.session_id;
-    IF NOT FOUND OR stored.authority_contract_version<>2 OR stored.revoked_at IS NOT NULL OR stored.expires_at<=clock_timestamp() THEN RETURN NULL; END IF;
+    IF NOT FOUND OR stored.revoked_at IS NOT NULL OR stored.expires_at<=clock_timestamp() THEN RETURN NULL; END IF;
+    IF stored.source_service_principal_id IS NOT NULL THEN
+        RETURN iam.lookup_service_role_session_authority(stored.tenant_id,stored.id);
+    END IF;
+    IF stored.authority_contract_version<>2 THEN RETURN NULL; END IF;
     SELECT * INTO account_row FROM iam.accounts WHERE id=stored.tenant_id AND status='ACTIVE' FOR SHARE;
     IF NOT FOUND THEN RETURN NULL; END IF;
     SELECT * INTO source_user FROM iam.principals WHERE tenant_id=stored.tenant_id AND id=stored.source_user_id
@@ -1478,6 +1505,9 @@ DECLARE stored iam.role_sessions%ROWTYPE; original iam.authorization_decisions%R
 BEGIN
     SELECT * INTO stored FROM iam.role_sessions s WHERE s.tenant_id=tenant AND s.id=session_id;
     IF NOT FOUND THEN RETURN NULL; END IF;
+    IF stored.authority_contract_version=3 THEN
+        RETURN iam.service_role_authorization_evidence(tenant,session_id);
+    END IF;
     IF stored.authority_contract_version=1 THEN
         IF stored.source_authorization_generation IS NOT NULL OR stored.source_group_generations IS NOT NULL THEN RETURN NULL; END IF;
     ELSIF stored.authority_contract_version=2 THEN
@@ -1561,7 +1591,8 @@ CREATE OR REPLACE FUNCTION iam.assert_current_role_authorization(tenant text,rol
 RETURNS void LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE expected jsonb; lookup_digest text; current_identity jsonb;
 BEGIN
-    IF evidence->'authorityContractVersion' IS DISTINCT FROM '2'::jsonb THEN
+    IF evidence->'authorityContractVersion' IS DISTINCT FROM '2'::jsonb
+      AND evidence->'authorityContractVersion' IS DISTINCT FROM '3'::jsonb THEN
       RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='role authority contract is not current'; END IF;
     expected:=iam.role_authorization_evidence(tenant,evidence->>'sessionId');
     IF expected IS NULL OR evidence IS DISTINCT FROM expected OR expected->>'roleId' IS DISTINCT FROM role_id THEN
@@ -1619,13 +1650,14 @@ BEGIN
       ('role_permission_boundaries','updated_at','timestamptz'::regtype,true),
       ('role_permission_boundaries','revoked_at','timestamptz'::regtype,false),
       ('role_sessions','tenant_id','text'::regtype,true),('role_sessions','id','text'::regtype,true),
-      ('role_sessions','role_id','text'::regtype,true),('role_sessions','source_user_id','text'::regtype,true),
-      ('role_sessions','source_session_id','text'::regtype,true),('role_sessions','credential_generation','bigint'::regtype,true),
+      ('role_sessions','role_id','text'::regtype,true),('role_sessions','source_user_id','text'::regtype,false),
+      ('role_sessions','source_service_principal_id','text'::regtype,false),
+      ('role_sessions','source_session_id','text'::regtype,false),('role_sessions','credential_generation','bigint'::regtype,false),
       ('role_sessions','authority_contract_version','integer'::regtype,true),
       ('role_sessions','source_authorization_generation','bigint'::regtype,false),
       ('role_sessions','source_group_generations','jsonb'::regtype,false),
-      ('role_sessions','security_generation','bigint'::regtype,true),('role_sessions','trust_version_id','text'::regtype,true),
-      ('role_sessions','decision_id','text'::regtype,true),('role_sessions','request_id','text'::regtype,true),
+      ('role_sessions','security_generation','bigint'::regtype,true),('role_sessions','trust_version_id','text'::regtype,false),
+      ('role_sessions','decision_id','text'::regtype,false),('role_sessions','request_id','text'::regtype,true),
       ('role_sessions','request_digest','text'::regtype,true),('role_sessions','verification_digest','text'::regtype,true),
       ('role_sessions','authority_evidence','jsonb'::regtype,true),('role_sessions','session_policy_canonical','text'::regtype,false),
       ('role_sessions','session_policy_digest','text'::regtype,false),('role_sessions','issued_at','timestamptz'::regtype,true),
@@ -1685,7 +1717,7 @@ BEGIN
       ('role_permission_boundaries','role_boundaries_terminal_state'),('role_directory_revisions','role_directory_revision_range'),
       ('role_source_authority_generations','role_source_exact_kind'),('role_source_authority_generations','role_source_generation_range'),
       ('role_session_directory_revisions','role_session_directory_revision_range'),
-      ('role_sessions','role_sessions_authority_contract')) expected(table_name,constraint_name) LOOP
+      ('role_sessions','role_sessions_authority_contract'),('role_sessions','role_sessions_source_union')) expected(table_name,constraint_name) LOOP
         IF NOT EXISTS(SELECT 1 FROM pg_constraint c WHERE c.conrelid=to_regclass('iam.'||required.table_name)
           AND c.conname=required.constraint_name AND c.contype='c' AND c.convalidated) THEN RETURN false; END IF;
     END LOOP;

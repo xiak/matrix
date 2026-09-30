@@ -170,6 +170,181 @@ func roleSessionContextForTest(now time.Time) RoleSessionContext {
 		Boundary: &ResolvedRoleBoundary{BoundaryID: "role-ceiling", ResourceVersion: 1, Policy: limit.Policy, Version: limit.Version, Profiles: limit.Profiles}}
 }
 
+func serviceRoleSessionContextForTest(t *testing.T, now time.Time) RoleSessionContext {
+	t.Helper()
+	templates, err := ServiceRoleTemplates()
+	if err != nil || len(templates) != 1 {
+		t.Fatalf("load service-role template: count=%d err=%v", len(templates), err)
+	}
+	permission, err := SystemPolicyVersion(iamv1.SystemPolicyManagedServiceInstallationReader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := templates[0]
+	identity := iamv1.ServiceIdentity{APIVersion: iamv1.APIVersion, Kind: "ServiceIdentity",
+		InstallationID: "installation-platform", AccountID: "organization-platform",
+		PrincipalID: "service-paas", Purpose: iamv1.ServicePaaS}
+	role := iamv1.Role{APIVersion: iamv1.APIVersion, Kind: "Role", ID: "role-service-installation-reader",
+		AccountID: "organization-customer", Name: template.Spec.RoleName, Description: template.Spec.RoleDescription,
+		Tags: []iamv1.RoleTag{}, Management: iamv1.RoleServiceLinked, Status: iamv1.RoleActive,
+		MaxSessionDurationSeconds: template.Spec.MaxSessionDurationSeconds, ResourceVersion: 1,
+		CurrentTrustVersionID: "trust-service-installation-reader", CreatedAt: now.Add(-time.Minute), UpdatedAt: now.Add(-time.Minute)}
+	return RoleSessionContext{AuthorityContractVersion: 3, SecurityGeneration: 1, Role: role,
+		Session: iamv1.RoleSession{APIVersion: iamv1.APIVersion, Kind: "RoleSession", ID: "role-session-service-one",
+			AccountID: role.AccountID, RoleID: role.ID, SourceServicePrincipalID: identity.PrincipalID,
+			Status: iamv1.SessionActive, IssuedAt: now, ExpiresAt: now.Add(10 * time.Minute)},
+		Service: &ServiceRoleSessionAuthority{Identity: identity, LookupDigest: "sha256:" + strings.Repeat("a", 64),
+			BindingID: "binding-service-installation", BindingResourceVersion: 1, Template: template,
+			Workload:          iamv1.ResourceReference{Kind: iamv1.ResourceServiceInstallation, ID: "service-installation-a"},
+			PermissionVersion: permission, PermissionProfiles: iamv1.AllAuthorizationProfiles()}}
+}
+
+func TestServiceRoleDecisionUsesOnePDPAndExactWorkloadConsent(t *testing.T) {
+	now := authorityTestTime()
+	value := serviceRoleSessionContextForTest(t, now)
+	request := policyEvaluationRequestForTest(t, iamv1.ActionManagedServiceInstallationRead, value.Service.Workload)
+	result, err := DecideRole(value, iamv1.ServicePaaS, request, "service-role-decision", now)
+	if err != nil || !result.Allowed || result.TenantID != value.Session.AccountID || result.InstallationID != "" {
+		t.Fatalf("service role decision = %#v err=%v", result.AuthorizationDecision, err)
+	}
+	if result.Subject == nil || result.Subject.Type != iamv1.SubjectRole || result.Subject.ID != string(value.Role.ID) ||
+		result.Subject.RoleSession == nil || result.Subject.RoleSession.SessionID != value.Session.ID ||
+		result.Subject.RoleSession.SourceServicePrincipalID != value.Service.Identity.PrincipalID ||
+		result.Subject.RoleSession.SourceUserID != "" {
+		t.Fatal("public decision lost or mixed the SERVICE role-session lineage")
+	}
+	if result.RoleEvidence == nil || result.RoleEvidence.AuthorityContractVersion != 3 || result.RoleEvidence.Service == nil ||
+		result.RoleEvidence.Service.Identity != value.Service.Identity || result.RoleEvidence.Service.BindingID != value.Service.BindingID ||
+		result.RoleEvidence.Service.BindingResourceVersion != value.Service.BindingResourceVersion ||
+		result.RoleEvidence.Service.Workload != value.Service.Workload || result.RoleEvidence.Service.Template != value.Service.Template.Reference() ||
+		result.RoleEvidence.Service.PermissionVersion.PolicyID != value.Service.PermissionVersion.PolicyID ||
+		len(result.PolicyEvidence) != 0 || result.BoundaryEvidence.State != "NOT_APPLICABLE" {
+		t.Fatal("private service-role provenance is incomplete or became a policy attachment")
+	}
+	public, err := json.Marshal(result.AuthorizationDecision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, forbidden := range []string{"lookupDigest", "bindingId", "bindingResourceVersion", "permissionVersion", "authorityContractVersion", "sourceUserId"} {
+		if bytes.Contains(public, []byte(forbidden)) {
+			t.Fatalf("public decision leaked private %s evidence", forbidden)
+		}
+	}
+	private, err := json.Marshal(result.RoleEvidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range []string{"\"authorityContractVersion\":3", "\"sourceServicePrincipalId\":\"service-paas\"", "\"lookupDigest\"", "\"bindingId\"", "\"permissionVersion\""} {
+		if !bytes.Contains(private, []byte(required)) {
+			t.Fatalf("private evidence omitted %s: %s", required, private)
+		}
+	}
+	for _, forbidden := range []string{"sourceUserId", "sourceSessionId", "credentialGeneration", "trustVersionId", "assumeDecisionId", "sessionPolicy"} {
+		if bytes.Contains(private, []byte(forbidden)) {
+			t.Fatalf("service evidence fabricated USER field %s: %s", forbidden, private)
+		}
+	}
+
+	other := request
+	other.Resource.ID = "service-installation-b"
+	denied, err := DecideRole(value, iamv1.ServicePaaS, other, "service-role-denied", now)
+	if err != nil || denied.Allowed || denied.Subject != nil || denied.TenantID != "" || denied.RoleEvidence == nil {
+		t.Fatalf("another workload was not a recordable authority-free Deny: %#v err=%v", denied.AuthorizationDecision, err)
+	}
+	if _, err := DecideRole(value, iamv1.ServiceAudit, request, "service-role-wrong-purpose", now); !errors.Is(err, ErrAuthorityUnavailable) {
+		t.Fatalf("another service purpose used the session: %v", err)
+	}
+
+	issued, err := NewCredentialIssuer(nil).Issue(CredentialRoleSession, string(value.Session.ID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := AuthenticateRoleSession(value, issued.VerificationDigest, issued.Credential, now); err != nil {
+		t.Fatalf("active SERVICE role session rejected: %v", err)
+	}
+}
+
+func TestServiceRoleSessionRejectsMixedOrDriftedAuthority(t *testing.T) {
+	now := authorityTestTime()
+	for name, change := range map[string]func(*RoleSessionContext){
+		"legacy contract":          func(v *RoleSessionContext) { v.AuthorityContractVersion = 2 },
+		"fake user source":         func(v *RoleSessionContext) { v.Source.Organization.ID = v.Session.AccountID },
+		"fake source groups":       func(v *RoleSessionContext) { v.SourceGroupGenerations = []RoleSourceGroupGeneration{} },
+		"fake role policy":         func(v *RoleSessionContext) { v.Policies = []AttachedPolicy{} },
+		"fake boundary":            func(v *RoleSessionContext) { v.Boundary = &ResolvedRoleBoundary{} },
+		"fake session policy":      func(v *RoleSessionContext) { v.SessionPolicy = &ResolvedSessionPolicy{} },
+		"fake customer trust":      func(v *RoleSessionContext) { v.Trust.ID = "trust-fake" },
+		"mixed user lineage":       func(v *RoleSessionContext) { v.Session.SourceUserID = "user-fake" },
+		"another service source":   func(v *RoleSessionContext) { v.Session.SourceServicePrincipalID = "service-other" },
+		"customer managed role":    func(v *RoleSessionContext) { v.Role.Management = iamv1.RoleCustomerManaged },
+		"disabled role":            func(v *RoleSessionContext) { v.Role.Status = iamv1.RoleDisabled },
+		"retired template":         func(v *RoleSessionContext) { v.Service.Template.Status = iamv1.ServiceRoleTemplateRetired },
+		"another template purpose": func(v *RoleSessionContext) { v.Service.Template.Spec.ServicePurpose = iamv1.ServiceAudit },
+		"another workload kind":    func(v *RoleSessionContext) { v.Service.Workload.Kind = iamv1.ResourceApplication },
+		"another policy version": func(v *RoleSessionContext) {
+			v.Service.Template.Spec.PolicyVersion.VersionID = "version-other"
+		},
+		"oversized session": func(v *RoleSessionContext) {
+			v.Session.ExpiresAt = v.Session.IssuedAt.Add(time.Duration(v.Service.Template.Spec.MaxSessionDurationSeconds+1) * time.Second)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := serviceRoleSessionContextForTest(t, now)
+			change(&value)
+			request := policyEvaluationRequestForTest(t, iamv1.ActionManagedServiceInstallationRead,
+				iamv1.ResourceReference{Kind: iamv1.ResourceServiceInstallation, ID: "service-installation-a"})
+			if _, err := DecideRole(value, iamv1.ServicePaaS, request, "service-role-invalid", now); !errors.Is(err, ErrAuthorityUnavailable) {
+				t.Fatalf("mixed or drifted authority accepted: %v", err)
+			}
+		})
+	}
+}
+
+func TestRoleAuthorizationEvidencePreservesUserWireShape(t *testing.T) {
+	now := authorityTestTime()
+	value := roleSessionContextForTest(now)
+	request := policyEvaluationRequestForTest(t, iamv1.ActionPaaSApplicationRead,
+		iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "application-prod"})
+	value.Policies = authorityPolicies(now, value.Session.AccountID,
+		iamv1.Subject{Type: iamv1.SubjectRole, ID: string(value.Role.ID)}, "", iamv1.SystemPolicyPaaSViewer)
+	result, err := DecideRole(value, iamv1.ServicePaaS, request, "user-role-wire", now)
+	if err != nil || result.RoleEvidence == nil {
+		t.Fatal("build USER role evidence", err)
+	}
+	actual, err := json.Marshal(result.RoleEvidence)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type legacyRoleAuthorizationEvidence struct {
+		AuthorityContractVersion      uint64                      `json:"authorityContractVersion"`
+		SourceAuthorizationGeneration uint64                      `json:"sourceAuthorizationGeneration"`
+		SourceGroupGenerations        []RoleSourceGroupGeneration `json:"sourceGroupGenerations"`
+		SessionID                     iamv1.RoleSessionID         `json:"sessionId"`
+		RoleID                        iamv1.RoleID                `json:"roleId"`
+		SourceUserID                  iamv1.PrincipalID           `json:"sourceUserId"`
+		SourceSessionID               iamv1.SessionID             `json:"sourceSessionId"`
+		CredentialGeneration          uint64                      `json:"credentialGeneration"`
+		SecurityGeneration            uint64                      `json:"securityGeneration"`
+		TrustVersionID                iamv1.RoleTrustVersionID    `json:"trustVersionId"`
+		TrustDigest                   string                      `json:"trustDigest"`
+		AssumeDecisionID              iamv1.DecisionID            `json:"assumeDecisionId"`
+		Boundary                      RoleBoundaryEvidence        `json:"boundary"`
+		SessionPolicy                 *RoleSessionPolicyEvidence  `json:"sessionPolicy"`
+	}
+	evidence := result.RoleEvidence
+	expected, err := json.Marshal(legacyRoleAuthorizationEvidence{evidence.AuthorityContractVersion,
+		evidence.SourceAuthorizationGeneration, evidence.SourceGroupGenerations, evidence.SessionID,
+		evidence.RoleID, evidence.SourceUserID, evidence.SourceSessionID, evidence.CredentialGeneration,
+		evidence.SecurityGeneration, evidence.TrustVersionID, evidence.TrustDigest, evidence.AssumeDecisionID,
+		evidence.Boundary, evidence.SessionPolicy})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(actual, expected) {
+		t.Fatalf("USER evidence wire shape changed\nactual:   %s\nexpected: %s", actual, expected)
+	}
+}
+
 func TestRoleSessionAuthenticationRechecksTheCurrentSource(t *testing.T) {
 	now := authorityTestTime()
 	fixture := func() RoleSessionContext { return roleSessionContextForTest(now) }

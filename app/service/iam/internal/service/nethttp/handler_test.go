@@ -551,6 +551,104 @@ func TestIAMHTTPWorkloadRoleBindingRevocationRequiresExactPathAndTwoCredentials(
 	}
 }
 
+func TestIAMHTTPServiceRoleSessionUsesOnlyCurrentServiceCredential(t *testing.T) {
+	workflow := newHTTPWorkflow(t)
+	credential, err := iamv1.NewSecret("issued-service-role-credential")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := workflow.login.Session.IssuedAt
+	workflow.serviceRoleSessionResult = iamv1.AssumeRoleResponse{Outcome: "APPLIED", Credential: credential,
+		Session: iamv1.RoleSession{APIVersion: iamv1.APIVersion, Kind: "RoleSession", ID: "role-session-service",
+			AccountID: "account-customer", RoleID: "role-service-linked", SourceServicePrincipalID: "service-paas",
+			Status: iamv1.SessionActive, IssuedAt: now, ExpiresAt: now.Add(15 * time.Minute)}}
+	workflow.serviceRoleSessionFound = true
+	handler := newTestHandler(t, workflow)
+	duration := uint32(600)
+	command := iamv1.AssumeServiceRoleRequest{BindingID: "binding-service-linked", DurationSeconds: &duration, RequestID: "assume-service-role"}
+	body, err := json.Marshal(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/v1/internal/service-role-sessions", bytes.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer current-paas-service")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	var issued struct {
+		Outcome    string            `json:"outcome"`
+		Session    iamv1.RoleSession `json:"session"`
+		Credential string            `json:"credential"`
+	}
+	decoder := json.NewDecoder(response.Body)
+	decoder.DisallowUnknownFields()
+	if response.Code != http.StatusOK || decoder.Decode(&issued) != nil || issued.Outcome != "APPLIED" ||
+		iamv1.ValidateRoleSession(issued.Session) != nil || issued.Credential != "issued-service-role-credential" ||
+		workflow.serviceRoleSessionCalls != 1 || !reflect.DeepEqual(workflow.serviceRoleSessionRequest, command) ||
+		string(workflow.serviceRoleSessionCredential.CopyBytes()) != "current-paas-service" {
+		t.Fatalf("service RoleSession issue status=%d body=%s", response.Code, response.Body.String())
+	}
+
+	read := httptest.NewRequest(http.MethodGet, "/v1/internal/service-role-sessions/by-request/assume-service-role", nil)
+	read.Header.Set("Authorization", "Bearer current-paas-service")
+	readResponse := httptest.NewRecorder()
+	handler.ServeHTTP(readResponse, read)
+	var retained iamv1.RoleSession
+	if readResponse.Code != http.StatusOK || json.Unmarshal(readResponse.Body.Bytes(), &retained) != nil ||
+		retained != workflow.serviceRoleSessionResult.Session || workflow.serviceRoleSessionReadCalls != 1 ||
+		workflow.serviceRoleSessionReadRequestID != command.RequestID ||
+		string(workflow.serviceRoleSessionReadCredential.CopyBytes()) != "current-paas-service" ||
+		strings.Contains(readResponse.Body.String(), "issued-service-role-credential") {
+		t.Fatalf("service RoleSession receipt status=%d body=%s", readResponse.Code, readResponse.Body.String())
+	}
+
+	for _, test := range []struct {
+		name, method, target, body, bearer, subject string
+		status                                      int
+	}{
+		{"issue missing bearer", http.MethodPost, "/v1/internal/service-role-sessions", string(body), "", "", http.StatusUnauthorized},
+		{"issue second carrier", http.MethodPost, "/v1/internal/service-role-sessions", string(body), "current-paas-service", "user-session", http.StatusBadRequest},
+		{"issue account query", http.MethodPost, "/v1/internal/service-role-sessions?accountId=other", string(body), "current-paas-service", "", http.StatusBadRequest},
+		{"issue account body", http.MethodPost, "/v1/internal/service-role-sessions", string(body[:len(body)-1]) + `,"accountId":"other"}`, "current-paas-service", "", http.StatusBadRequest},
+		{"issue role body", http.MethodPost, "/v1/internal/service-role-sessions", string(body[:len(body)-1]) + `,"roleId":"other"}`, "current-paas-service", "", http.StatusBadRequest},
+		{"issue service body", http.MethodPost, "/v1/internal/service-role-sessions", string(body[:len(body)-1]) + `,"servicePrincipalId":"other"}`, "current-paas-service", "", http.StatusBadRequest},
+		{"issue wrong method", http.MethodPut, "/v1/internal/service-role-sessions", string(body), "current-paas-service", "", http.StatusMethodNotAllowed},
+		{"read second carrier", http.MethodGet, "/v1/internal/service-role-sessions/by-request/assume-service-role", "", "current-paas-service", "user-session", http.StatusBadRequest},
+		{"read selector", http.MethodGet, "/v1/internal/service-role-sessions/by-request/assume-service-role?principalId=other", "", "current-paas-service", "", http.StatusBadRequest},
+		{"read body", http.MethodGet, "/v1/internal/service-role-sessions/by-request/assume-service-role", `{}`, "current-paas-service", "", http.StatusBadRequest},
+		{"read nested path", http.MethodGet, "/v1/internal/service-role-sessions/by-request/assume-service-role/other", "", "current-paas-service", "", http.StatusNotFound},
+		{"read wrong method", http.MethodPost, "/v1/internal/service-role-sessions/by-request/assume-service-role", `{}`, "current-paas-service", "", http.StatusMethodNotAllowed},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			beforeIssue, beforeRead := workflow.serviceRoleSessionCalls, workflow.serviceRoleSessionReadCalls
+			request := httptest.NewRequest(test.method, test.target, strings.NewReader(test.body))
+			request.Header.Set("Content-Type", "application/json")
+			if test.bearer != "" {
+				request.Header.Set("Authorization", "Bearer "+test.bearer)
+			}
+			if test.subject != "" {
+				request.Header.Set("Matrix-Subject-Credential", test.subject)
+			}
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != test.status || workflow.serviceRoleSessionCalls != beforeIssue ||
+				workflow.serviceRoleSessionReadCalls != beforeRead {
+				t.Fatalf("invalid service RoleSession request status=%d want=%d body=%s", response.Code, test.status, response.Body.String())
+			}
+		})
+	}
+
+	workflow.serviceRoleSessionFound = false
+	notFound := httptest.NewRequest(http.MethodGet, "/v1/internal/service-role-sessions/by-request/unknown-intent", nil)
+	notFound.Header.Set("Authorization", "Bearer current-paas-service")
+	notFoundResponse := httptest.NewRecorder()
+	handler.ServeHTTP(notFoundResponse, notFound)
+	if notFoundResponse.Code != http.StatusNotFound || strings.Contains(notFoundResponse.Body.String(), "role-session-service") {
+		t.Fatalf("unknown receipt status=%d body=%s", notFoundResponse.Code, notFoundResponse.Body.String())
+	}
+}
+
 func TestIAMHTTPPolicyDirectoriesDeriveScopeOnlyFromRoute(t *testing.T) {
 	workflow := newHTTPWorkflow(t)
 	handler := newTestHandler(t, workflow)
@@ -1809,71 +1907,80 @@ type httpWorkflow struct {
 	passwordRequirementsError  error
 	passwordRequirementsBearer iamv1.Secret
 	Workflow
-	policyCalls                     int
-	ownSessionCalls                 int
-	policyPlatform                  bool
-	policyCredential                iamv1.Secret
-	profileErr                      error
-	invalidProfile                  bool
-	templateCalls                   int
-	templateCredential              iamv1.Secret
-	templateErr                     error
-	invalidTemplate                 bool
-	readiness                       iamv1.Readiness
-	status                          iamv1.BootstrapStatus
-	identity                        iamv1.ServiceIdentity
-	login                           iamv1.LoginResponse
-	decision                        iamv1.AuthorizationDecision
-	verificationDecision            iamv1.AuthorizationDecision
-	loginErr                        error
-	identityCalls                   int
-	loginCalls                      int
-	verifiedChallengeID             string
-	enrollmentCalls                 int
-	enrollmentCredential            iamv1.Secret
-	enrollmentRequestID             string
-	enrollmentVerificationID        string
-	enrollmentState                 iamv1.EnrollmentChallengeState
-	enrollmentStart                 iamv1.StartTOTPEnrollmentResponse
-	enrollmentConfirmation          iamv1.ConfirmTOTPEnrollmentResponse
-	enrollmentMail                  iamv1.NotificationContactVerification
-	enrollmentErr                   error
-	totpCalls                       int
-	stepCalls                       int
-	stepCredential                  iamv1.Secret
-	stepResult                      iamv1.StepUp
-	regenerationResult              iamv1.RegenerateRecoveryCodesResponse
-	removalResult                   iamv1.RemoveTOTPResponse
-	stepErr                         error
-	getUserCalls                    int
-	updateUserCalls                 int
-	deleteUserCalls                 int
-	userID                          iamv1.PrincipalID
-	updateUser                      iamv1.UpdateUserRequest
-	deleteUser                      iamv1.DeleteUserRequest
-	authorizeCalls                  int
-	keyCalls                        int
-	verifyInstallationCalls         int
-	settingsCalls                   int
-	settingsCredential              iamv1.Secret
-	settingsErr                     error
-	settingsRequest                 iamv1.UpdateAccountSecuritySettingsRequest
-	settingsChange                  iamv1.AccountSecuritySettingsChange
-	settingsCommand                 string
-	workloadBindingCalls            int
-	workloadServiceCredential       iamv1.Secret
-	workloadSubjectCredential       iamv1.Secret
-	workloadBindingRequest          iamv1.CreateWorkloadRoleBindingRequest
-	workloadRevocationCalls         int
-	workloadRevokeServiceCredential iamv1.Secret
-	workloadRevokeSubjectCredential iamv1.Secret
-	workloadRevocationID            iamv1.WorkloadRoleBindingID
-	workloadRevocationRequest       iamv1.RevokeWorkloadRoleBindingRequest
-	serviceLinkedRoleListCalls      int
-	serviceLinkedRoleReadCalls      int
-	serviceLinkedRoleCredential     iamv1.Secret
-	serviceLinkedRoleID             iamv1.RoleID
-	invalidServiceLinkedRole        bool
+	policyCalls                      int
+	ownSessionCalls                  int
+	policyPlatform                   bool
+	policyCredential                 iamv1.Secret
+	profileErr                       error
+	invalidProfile                   bool
+	templateCalls                    int
+	templateCredential               iamv1.Secret
+	templateErr                      error
+	invalidTemplate                  bool
+	readiness                        iamv1.Readiness
+	status                           iamv1.BootstrapStatus
+	identity                         iamv1.ServiceIdentity
+	login                            iamv1.LoginResponse
+	decision                         iamv1.AuthorizationDecision
+	verificationDecision             iamv1.AuthorizationDecision
+	loginErr                         error
+	identityCalls                    int
+	loginCalls                       int
+	verifiedChallengeID              string
+	enrollmentCalls                  int
+	enrollmentCredential             iamv1.Secret
+	enrollmentRequestID              string
+	enrollmentVerificationID         string
+	enrollmentState                  iamv1.EnrollmentChallengeState
+	enrollmentStart                  iamv1.StartTOTPEnrollmentResponse
+	enrollmentConfirmation           iamv1.ConfirmTOTPEnrollmentResponse
+	enrollmentMail                   iamv1.NotificationContactVerification
+	enrollmentErr                    error
+	totpCalls                        int
+	stepCalls                        int
+	stepCredential                   iamv1.Secret
+	stepResult                       iamv1.StepUp
+	regenerationResult               iamv1.RegenerateRecoveryCodesResponse
+	removalResult                    iamv1.RemoveTOTPResponse
+	stepErr                          error
+	getUserCalls                     int
+	updateUserCalls                  int
+	deleteUserCalls                  int
+	userID                           iamv1.PrincipalID
+	updateUser                       iamv1.UpdateUserRequest
+	deleteUser                       iamv1.DeleteUserRequest
+	authorizeCalls                   int
+	keyCalls                         int
+	verifyInstallationCalls          int
+	settingsCalls                    int
+	settingsCredential               iamv1.Secret
+	settingsErr                      error
+	settingsRequest                  iamv1.UpdateAccountSecuritySettingsRequest
+	settingsChange                   iamv1.AccountSecuritySettingsChange
+	settingsCommand                  string
+	workloadBindingCalls             int
+	workloadServiceCredential        iamv1.Secret
+	workloadSubjectCredential        iamv1.Secret
+	workloadBindingRequest           iamv1.CreateWorkloadRoleBindingRequest
+	workloadRevocationCalls          int
+	workloadRevokeServiceCredential  iamv1.Secret
+	workloadRevokeSubjectCredential  iamv1.Secret
+	workloadRevocationID             iamv1.WorkloadRoleBindingID
+	workloadRevocationRequest        iamv1.RevokeWorkloadRoleBindingRequest
+	serviceLinkedRoleListCalls       int
+	serviceLinkedRoleReadCalls       int
+	serviceLinkedRoleCredential      iamv1.Secret
+	serviceLinkedRoleID              iamv1.RoleID
+	invalidServiceLinkedRole         bool
+	serviceRoleSessionCalls          int
+	serviceRoleSessionCredential     iamv1.Secret
+	serviceRoleSessionRequest        iamv1.AssumeServiceRoleRequest
+	serviceRoleSessionReadCalls      int
+	serviceRoleSessionReadCredential iamv1.Secret
+	serviceRoleSessionReadRequestID  string
+	serviceRoleSessionResult         iamv1.AssumeRoleResponse
+	serviceRoleSessionFound          bool
+	serviceRoleSessionErr            error
 }
 
 func (value *httpWorkflow) UserPasswordResetCompletion(_ context.Context, credential iamv1.Secret, user iamv1.PrincipalID, command string, version uint64, _ string) (iamv1.UserPasswordResetCompletion, error) {
@@ -1971,6 +2078,22 @@ func (value *httpWorkflow) RevokeWorkloadRoleBinding(_ context.Context, serviceC
 	binding.Status, binding.ResourceVersion, binding.UpdatedAt, binding.RevokedAt =
 		iamv1.WorkloadRoleBindingRevoked, request.ResourceVersion+1, revokedAt, &revokedAt
 	return binding, nil
+}
+
+func (value *httpWorkflow) AssumeServiceRole(_ context.Context, credential iamv1.Secret,
+	request iamv1.AssumeServiceRoleRequest,
+) (iamv1.AssumeRoleResponse, error) {
+	value.serviceRoleSessionCalls++
+	value.serviceRoleSessionCredential, value.serviceRoleSessionRequest = credential, request
+	return value.serviceRoleSessionResult, value.serviceRoleSessionErr
+}
+
+func (value *httpWorkflow) GetServiceRoleSessionByRequest(_ context.Context, credential iamv1.Secret,
+	requestID string,
+) (iamv1.RoleSession, bool, error) {
+	value.serviceRoleSessionReadCalls++
+	value.serviceRoleSessionReadCredential, value.serviceRoleSessionReadRequestID = credential, requestID
+	return value.serviceRoleSessionResult.Session, value.serviceRoleSessionFound, value.serviceRoleSessionErr
 }
 
 func serviceLinkedRoleAccessForHTTPTest() iamv1.ServiceLinkedRoleAccess {

@@ -316,6 +316,9 @@ func TestAuditActionCatalogIsClosedAndSourceBound(t *testing.T) {
 			event.Actor = ActorReference{Type: ActorRole, ID: "role-example",
 				RoleSession: &RoleSessionReference{SessionID: event.Target.ID, SourceUserID: "source-example"}}
 		}
+		if contract.ServiceActorRequired {
+			event.Actor = ActorReference{Type: ActorServiceAccount, ID: "service-example"}
+		}
 		if action == ActionIAMAccountRootCredentialsRecovered || action == ActionIAMTenantAdministratorRecovered || action == ActionIAMInstallationPrimaryCredentialsRecovered {
 			event.Target.TenantID = "organization-recovered"
 		}
@@ -356,6 +359,18 @@ func TestAuditActionCatalogIsClosedAndSourceBound(t *testing.T) {
 				forged.Actor.Type = actorType
 				if ValidateEvent(forged) == nil {
 					t.Fatal("attachment fact accepted a non-USER actor")
+				}
+			}
+		}
+		if contract.ServiceActorRequired {
+			for _, actorType := range []ActorType{ActorUser, ActorSystem, ActorRole} {
+				forged := event
+				forged.Actor = ActorReference{Type: actorType, ID: event.Actor.ID}
+				if actorType == ActorRole {
+					forged.Actor.RoleSession = &RoleSessionReference{SessionID: event.Target.ID, SourceServicePrincipalID: event.Actor.ID}
+				}
+				if ValidateEvent(forged) == nil {
+					t.Fatal("service role issuance accepted another actor type")
 				}
 			}
 		}
@@ -422,6 +437,39 @@ func TestServiceRoleConsentFactsRequireTenantUserDecisions(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestServiceRoleSessionIssuanceRequiresExactServiceActor(t *testing.T) {
+	event := Event{
+		APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-service-session",
+		TenantID: "account-example", Actor: ActorReference{Type: ActorServiceAccount, ID: "service-example"},
+		Action: ActionIAMServiceRoleSessionIssued,
+		Target: TargetReference{Kind: TargetRoleSession, ID: "role-session-example"}, Result: ResultSucceeded,
+		RequestDigest: "sha256:" + strings.Repeat("2", 64), RequestID: "request-service-session",
+		CorrelationID: "request-service-session", OccurredAt: time.Date(2026, 9, 30, 1, 2, 3, 0, time.UTC),
+	}
+	if err := ValidateEventForSource(SourceIAM, event); err != nil {
+		t.Fatal("valid service role session issuance rejected", err)
+	}
+	for name, mutate := range map[string]func(*Event){
+		"user actor":   func(candidate *Event) { candidate.Actor.Type = ActorUser },
+		"system actor": func(candidate *Event) { candidate.Actor.Type = ActorSystem },
+		"role actor": func(candidate *Event) {
+			candidate.Actor = ActorReference{Type: ActorRole, ID: "role-example", RoleSession: &RoleSessionReference{SessionID: "role-session-source", SourceServicePrincipalID: "service-example"}}
+		},
+		"decision":           func(candidate *Event) { candidate.IAMDecisionID = "decision-forged" },
+		"wrong target":       func(candidate *Event) { candidate.Target.Kind = TargetPrincipal },
+		"installation scope": func(candidate *Event) { candidate.TenantID, candidate.InstallationID = "", "installation-example" },
+		"target namespace":   func(candidate *Event) { candidate.Target.TenantID = "account-other" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			forged := event
+			mutate(&forged)
+			if ValidateEventForSource(SourceIAM, forged) == nil {
+				t.Fatal("service role session issuance accepted forged authority")
+			}
+		})
 	}
 }
 

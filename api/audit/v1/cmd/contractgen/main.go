@@ -342,6 +342,8 @@ func actionRules() (eventRules []any, recordRules []any) {
 			thenProperties["actor"] = object{"properties": object{"type": object{"const": string(auditv1.ActorUser)}}}
 		} else if contract.RoleActorRequired {
 			thenProperties["actor"] = object{"properties": object{"type": object{"const": string(auditv1.ActorRole)}}}
+		} else if contract.ServiceActorRequired {
+			thenProperties["actor"] = object{"properties": object{"type": object{"const": string(auditv1.ActorServiceAccount)}}}
 		} else if !contract.RoleActorPermitted {
 			thenProperties["actor"] = object{"properties": object{"type": object{"enum": []string{string(auditv1.ActorUser), string(auditv1.ActorServiceAccount), string(auditv1.ActorSystem)}}}}
 		}

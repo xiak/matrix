@@ -3,10 +3,156 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"reflect"
+	"time"
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/app/service/iam/internal/usecase/identityaccess"
 )
+
+func (value *transaction) ReadServiceRoleAssumption(
+	ctx context.Context,
+	read identityaccess.ServiceRoleAssumptionRead,
+) (identityaccess.ServiceRoleAssumption, error) {
+	if iamv1.ValidateDigest("serviceLookupDigest", read.ServiceLookupDigest) != nil ||
+		iamv1.ValidateServiceIdentity(read.Identity) != nil ||
+		iamv1.ValidateID("bindingId", string(read.BindingID)) != nil ||
+		iamv1.ValidateID("requestId", read.RequestID) != nil {
+		return identityaccess.ServiceRoleAssumption{}, identityaccess.ErrInvalidArgument
+	}
+	var encoded []byte
+	if err := value.tx.QueryRow(ctx, `SELECT iam.read_service_role_assumption($1,$2,$3)`,
+		read.ServiceLookupDigest, read.BindingID, read.RequestID).Scan(&encoded); err != nil {
+		return identityaccess.ServiceRoleAssumption{}, mapAuthorizationDatabaseError("read IAM service role assumption", err)
+	}
+	defer clear(encoded)
+	type serviceLinkedRoleWire iamv1.ServiceLinkedRole
+	type workloadRoleBindingWire iamv1.WorkloadRoleBinding
+	var stored struct {
+		Relation           serviceLinkedRoleWire                     `json:"relation"`
+		Binding            workloadRoleBindingWire                   `json:"binding"`
+		Template           iamv1.ServiceRoleTemplate                 `json:"template"`
+		SecurityGeneration uint64                                    `json:"securityGeneration"`
+		Existing           *identityaccess.ServiceRoleSessionReceipt `json:"existing,omitempty"`
+	}
+	if json.Unmarshal(encoded, &stored) != nil {
+		return identityaccess.ServiceRoleAssumption{}, identityaccess.ErrUnavailable
+	}
+	relation := iamv1.ServiceLinkedRole(stored.Relation)
+	binding := iamv1.WorkloadRoleBinding(stored.Binding)
+	normalizeRole(&relation.Role)
+	binding.CreatedAt, binding.UpdatedAt = binding.CreatedAt.UTC(), binding.UpdatedAt.UTC()
+	if binding.RevokedAt != nil {
+		revoked := binding.RevokedAt.UTC()
+		binding.RevokedAt = &revoked
+	}
+	if stored.Existing != nil {
+		normalizeRoleSession(&stored.Existing.Session)
+	}
+	result := identityaccess.ServiceRoleAssumption{Relation: relation, Binding: binding,
+		Template: stored.Template, SecurityGeneration: stored.SecurityGeneration, Existing: stored.Existing}
+	if iamv1.ValidateServiceLinkedRole(result.Relation) != nil || iamv1.ValidateWorkloadRoleBinding(result.Binding) != nil ||
+		iamv1.ValidateServiceRoleTemplate(result.Template) != nil || result.SecurityGeneration == 0 || result.SecurityGeneration > 9007199254740991 ||
+		result.Relation.ServicePrincipal != (iamv1.ServicePrincipalReference{InstallationID: read.Identity.InstallationID,
+			PrincipalID: read.Identity.PrincipalID, Purpose: read.Identity.Purpose}) || result.Binding.ID != read.BindingID ||
+		result.Binding.AccountID != result.Relation.Role.AccountID || result.Binding.RoleID != result.Relation.Role.ID ||
+		result.Binding.Template != result.Relation.Template || result.Template.Reference() != result.Relation.Template {
+		return identityaccess.ServiceRoleAssumption{}, identityaccess.ErrUnavailable
+	}
+	if result.Existing != nil && (iamv1.ValidateRoleSession(result.Existing.Session) != nil ||
+		result.Existing.Session.SourceServicePrincipalID != read.Identity.PrincipalID ||
+		result.Existing.BindingID != read.BindingID || iamv1.ValidateDigest("requestDigest", result.Existing.RequestDigest) != nil) {
+		return identityaccess.ServiceRoleAssumption{}, identityaccess.ErrUnavailable
+	}
+	return result, nil
+}
+
+func (value *transaction) IssueServiceRoleSession(
+	ctx context.Context,
+	mutation identityaccess.ServiceRoleSessionIssuance,
+) (iamv1.RoleSession, error) {
+	if iamv1.ValidateServiceIdentity(mutation.Identity) != nil || iamv1.ValidateRoleSession(mutation.Session) != nil ||
+		iamv1.ValidateAssumeServiceRoleRequest(mutation.Request) != nil || mutation.Request.BindingID != mutation.BindingID ||
+		mutation.Request.RequestID != mutation.RequestID ||
+		mutation.Session.Status != iamv1.SessionActive || mutation.Session.SourceServicePrincipalID != mutation.Identity.PrincipalID ||
+		mutation.Session.SourceUserID != "" || iamv1.ValidateDigest("serviceLookupDigest", mutation.ServiceLookupDigest) != nil ||
+		iamv1.ValidateDigest("requestDigest", mutation.RequestDigest) != nil || iamv1.ValidateDigest("lookupDigest", mutation.LookupDigest) != nil ||
+		iamv1.ValidateDigest("verificationDigest", mutation.VerificationDigest) != nil || mutation.DurationSeconds < iamv1.MinRoleSessionDurationSeconds ||
+		mutation.DurationSeconds > iamv1.MaxRoleSessionDurationSeconds || mutation.ExpectedBindingVersion == 0 ||
+		mutation.ExpectedSecurityGeneration == 0 || mutation.ExpectedSecurityGeneration > 9007199254740991 {
+		return iamv1.RoleSession{}, identityaccess.ErrInvalidArgument
+	}
+	requestDocument, err := json.Marshal(mutation.Request)
+	if err != nil {
+		return iamv1.RoleSession{}, identityaccess.ErrInvalidArgument
+	}
+	defer clear(requestDocument)
+	intent, err := json.Marshal(struct {
+		SessionID                  iamv1.RoleSessionID `json:"sessionId"`
+		RequestID                  string              `json:"requestId"`
+		RequestDigest              string              `json:"requestDigest"`
+		ExpectedBindingVersion     uint64              `json:"expectedBindingVersion"`
+		ExpectedSecurityGeneration uint64              `json:"expectedSecurityGeneration"`
+		DurationSeconds            uint32              `json:"durationSeconds"`
+		IssuedAt                   time.Time           `json:"issuedAt"`
+		ExpiresAt                  time.Time           `json:"expiresAt"`
+	}{mutation.Session.ID, mutation.RequestID, mutation.RequestDigest, mutation.ExpectedBindingVersion,
+		mutation.ExpectedSecurityGeneration, mutation.DurationSeconds, mutation.Session.IssuedAt, mutation.Session.ExpiresAt})
+	if err != nil {
+		return iamv1.RoleSession{}, identityaccess.ErrInvalidArgument
+	}
+	defer clear(intent)
+	event, err := marshalManagementEvent(mutation.AuditEvent)
+	if err != nil {
+		return iamv1.RoleSession{}, err
+	}
+	defer clear(event)
+	var encoded []byte
+	err = value.tx.QueryRow(ctx, `SELECT iam.issue_service_role_session($1,$2,$3,$4::jsonb,$5,$6,$7::jsonb)`,
+		mutation.ServiceLookupDigest, mutation.BindingID, string(requestDocument), intent,
+		mutation.LookupDigest, mutation.VerificationDigest, event).Scan(&encoded)
+	if err != nil {
+		return iamv1.RoleSession{}, mapAuthorizationDatabaseError("issue IAM service role session", err)
+	}
+	result, err := decodeServiceRoleSession(encoded, mutation.Identity.PrincipalID)
+	if err != nil || !reflect.DeepEqual(result, mutation.Session) {
+		return iamv1.RoleSession{}, identityaccess.ErrUnavailable
+	}
+	return result, nil
+}
+
+func (value *transaction) ReadServiceRoleSessionByRequest(
+	ctx context.Context,
+	read identityaccess.ServiceRoleSessionRead,
+) (iamv1.RoleSession, bool, error) {
+	if iamv1.ValidateDigest("serviceLookupDigest", read.ServiceLookupDigest) != nil ||
+		iamv1.ValidateServiceIdentity(read.Identity) != nil || iamv1.ValidateID("requestId", read.RequestID) != nil {
+		return iamv1.RoleSession{}, false, identityaccess.ErrInvalidArgument
+	}
+	var encoded []byte
+	if err := value.tx.QueryRow(ctx, `SELECT iam.read_service_role_session_by_request($1,$2)`,
+		read.ServiceLookupDigest, read.RequestID).Scan(&encoded); err != nil {
+		return iamv1.RoleSession{}, false, mapAuthorizationDatabaseError("read IAM service role issuance", err)
+	}
+	if encoded == nil {
+		return iamv1.RoleSession{}, false, nil
+	}
+	result, err := decodeServiceRoleSession(encoded, read.Identity.PrincipalID)
+	return result, err == nil, err
+}
+
+func decodeServiceRoleSession(encoded []byte, principal iamv1.PrincipalID) (iamv1.RoleSession, error) {
+	defer clear(encoded)
+	var result iamv1.RoleSession
+	if json.Unmarshal(encoded, &result) != nil {
+		return iamv1.RoleSession{}, identityaccess.ErrUnavailable
+	}
+	normalizeRoleSession(&result)
+	if iamv1.ValidateRoleSession(result) != nil || result.SourceServicePrincipalID != principal || result.SourceUserID != "" {
+		return iamv1.RoleSession{}, identityaccess.ErrUnavailable
+	}
+	return result, nil
+}
 
 func (value *transaction) LockWorkloadRoleBindingSources(ctx context.Context, accountID iamv1.AccountID,
 	actor iamv1.PrincipalID, session iamv1.SessionID, serviceLookupDigest string, purpose iamv1.ServicePurpose,

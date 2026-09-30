@@ -3,6 +3,7 @@ package identityaccess
 import (
 	"cmp"
 	"context"
+	"reflect"
 	"slices"
 	"time"
 
@@ -94,6 +95,170 @@ func (service *Authority) GetServiceLinkedRole(ctx context.Context, credential i
 			}
 			return result, nil
 		})
+}
+
+// AssumeServiceRole exchanges one current service credential and one active
+// workload binding for a short-lived Role credential. Binding is the only
+// customer-side selector; every Account, Role, template and service-principal
+// fact is resolved again under the transaction locks.
+func (service *Authority) AssumeServiceRole(
+	ctx context.Context,
+	credential iamv1.Secret,
+	request iamv1.AssumeServiceRoleRequest,
+) (iamv1.AssumeRoleResponse, error) {
+	if iamv1.ValidateAssumeServiceRoleRequest(request) != nil {
+		return iamv1.AssumeRoleResponse{}, ErrInvalidArgument
+	}
+	requestDigest, err := digestSanitized("service-role-session-assume", request)
+	if err != nil {
+		return iamv1.AssumeRoleResponse{}, err
+	}
+	var response iamv1.AssumeRoleResponse
+	err = service.withinTransaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
+		response = iamv1.AssumeRoleResponse{}
+		now, err := transactionTime(transactionContext, transaction)
+		if err != nil {
+			return err
+		}
+		caller, err := service.authenticateService(transactionContext, transaction, credential)
+		if err != nil {
+			return err
+		}
+		if err := transaction.CheckCurrentAuthorizationProfiles(transactionContext); err != nil {
+			return err
+		}
+		read := ServiceRoleAssumptionRead{ServiceRoleSessionRead: ServiceRoleSessionRead{
+			ServiceLookupDigest: caller.LookupDigest, Identity: caller.Identity, RequestID: request.RequestID,
+		}, BindingID: request.BindingID}
+		assumption, err := transaction.ReadServiceRoleAssumption(transactionContext, read)
+		if err != nil {
+			return err
+		}
+		if validateServiceRoleAssumption(read, assumption) != nil {
+			return ErrUnavailable
+		}
+		if assumption.Existing != nil {
+			if assumption.Existing.RequestDigest != requestDigest || assumption.Existing.BindingID != request.BindingID {
+				return ErrConflict
+			}
+			response = iamv1.AssumeRoleResponse{Outcome: "EQUAL_REPLAY", Session: assumption.Existing.Session}
+			return nil
+		}
+		duration := iamv1.DefaultRoleSessionDurationSeconds
+		if duration > assumption.Template.Spec.MaxSessionDurationSeconds {
+			duration = assumption.Template.Spec.MaxSessionDurationSeconds
+		}
+		if request.DurationSeconds != nil {
+			duration = *request.DurationSeconds
+			if duration > assumption.Template.Spec.MaxSessionDurationSeconds {
+				return ErrForbidden
+			}
+		}
+		expires := now.Add(time.Duration(duration) * time.Second)
+		sessionID, err := service.config.NewID("role-session")
+		if err != nil {
+			return ErrUnavailable
+		}
+		issued, err := service.credentials.Issue(authority.CredentialRoleSession, sessionID)
+		if err != nil {
+			return ErrUnavailable
+		}
+		session := iamv1.RoleSession{APIVersion: iamv1.APIVersion, Kind: "RoleSession", ID: iamv1.RoleSessionID(sessionID),
+			AccountID: assumption.Binding.AccountID, RoleID: assumption.Binding.RoleID,
+			SourceServicePrincipalID: caller.Identity.PrincipalID, Status: iamv1.SessionActive, IssuedAt: now, ExpiresAt: expires}
+		if iamv1.ValidateRoleSession(session) != nil {
+			return ErrUnavailable
+		}
+		eventID, err := service.config.NewID("event")
+		if err != nil {
+			return ErrUnavailable
+		}
+		event, err := newAuditEvent(eventID, session.AccountID, "",
+			auditv1.ActorReference{Type: auditv1.ActorServiceAccount, ID: auditv1.ActorID(caller.Identity.PrincipalID)},
+			auditv1.ActionIAMServiceRoleSessionIssued,
+			auditv1.TargetReference{Kind: auditv1.TargetRoleSession, ID: sessionID}, auditv1.ResultSucceeded, "",
+			requestDigest, request.RequestID, request.RequestID, now)
+		if err != nil {
+			return err
+		}
+		stored, err := transaction.IssueServiceRoleSession(transactionContext, ServiceRoleSessionIssuance{
+			ServiceRoleAssumptionRead: read, Session: session, Request: request,
+			ExpectedBindingVersion: assumption.Binding.ResourceVersion, ExpectedSecurityGeneration: assumption.SecurityGeneration,
+			DurationSeconds: duration, RequestDigest: requestDigest, LookupDigest: issued.LookupDigest,
+			VerificationDigest: issued.VerificationDigest, AuditEvent: event,
+		})
+		if err != nil {
+			return err
+		}
+		if !reflect.DeepEqual(stored, session) {
+			return ErrUnavailable
+		}
+		response = iamv1.AssumeRoleResponse{Outcome: "APPLIED", Session: stored, Credential: issued.Credential}
+		return nil
+	})
+	if err != nil {
+		return iamv1.AssumeRoleResponse{}, err
+	}
+	if iamv1.ValidateAssumeRoleResponse(response) != nil {
+		return iamv1.AssumeRoleResponse{}, ErrUnavailable
+	}
+	return response, nil
+}
+
+func validateServiceRoleAssumption(read ServiceRoleAssumptionRead, value ServiceRoleAssumption) error {
+	if iamv1.ValidateServiceIdentity(read.Identity) != nil || iamv1.ValidateDigest("serviceLookupDigest", read.ServiceLookupDigest) != nil ||
+		iamv1.ValidateServiceLinkedRole(value.Relation) != nil || iamv1.ValidateWorkloadRoleBinding(value.Binding) != nil ||
+		iamv1.ValidateServiceRoleTemplate(value.Template) != nil || value.Template.Status != iamv1.ServiceRoleTemplateActive ||
+		value.SecurityGeneration == 0 || value.SecurityGeneration > 9007199254740991 ||
+		value.Relation.Role.Management != iamv1.RoleServiceLinked || value.Relation.Role.Status != iamv1.RoleActive ||
+		value.Relation.ServicePrincipal != (iamv1.ServicePrincipalReference{InstallationID: read.Identity.InstallationID,
+			PrincipalID: read.Identity.PrincipalID, Purpose: read.Identity.Purpose}) ||
+		value.Relation.Template != value.Template.Reference() || value.Relation.PermissionCeiling != value.Template.Spec.PolicyVersion ||
+		value.Binding.ID != read.BindingID || value.Binding.AccountID != value.Relation.Role.AccountID ||
+		value.Binding.RoleID != value.Relation.Role.ID || value.Binding.Template != value.Relation.Template ||
+		value.Binding.Status != iamv1.WorkloadRoleBindingActive ||
+		value.Relation.Role.MaxSessionDurationSeconds != value.Template.Spec.MaxSessionDurationSeconds {
+		return ErrUnavailable
+	}
+	if value.Existing != nil {
+		if iamv1.ValidateRoleSession(value.Existing.Session) != nil || value.Existing.Session.AccountID != value.Binding.AccountID ||
+			value.Existing.Session.RoleID != value.Binding.RoleID || value.Existing.Session.SourceServicePrincipalID != read.Identity.PrincipalID ||
+			value.Existing.BindingID != value.Binding.ID || iamv1.ValidateDigest("requestDigest", value.Existing.RequestDigest) != nil {
+			return ErrUnavailable
+		}
+	}
+	return nil
+}
+
+// GetServiceRoleSessionByRequest returns only the original non-secret result.
+// It never replays a credential and the authenticated service principal is the
+// sole namespace for the request identity.
+func (service *Authority) GetServiceRoleSessionByRequest(ctx context.Context, credential iamv1.Secret, requestID string) (iamv1.RoleSession, bool, error) {
+	if iamv1.ValidateID("requestId", requestID) != nil {
+		return iamv1.RoleSession{}, false, ErrInvalidArgument
+	}
+	var result iamv1.RoleSession
+	var found bool
+	err := service.withinTransaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
+		caller, err := service.authenticateService(transactionContext, transaction, credential)
+		if err != nil {
+			return err
+		}
+		result, found, err = transaction.ReadServiceRoleSessionByRequest(transactionContext, ServiceRoleSessionRead{
+			ServiceLookupDigest: caller.LookupDigest, Identity: caller.Identity, RequestID: requestID,
+		})
+		if err != nil || !found {
+			return err
+		}
+		if iamv1.ValidateRoleSession(result) != nil || result.SourceServicePrincipalID != caller.Identity.PrincipalID {
+			return ErrUnavailable
+		}
+		return nil
+	})
+	if err != nil {
+		return iamv1.RoleSession{}, false, err
+	}
+	return result, found, nil
 }
 
 // CreateWorkloadRoleBinding consumes one product-owned workload admission and

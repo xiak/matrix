@@ -1039,11 +1039,16 @@ ALTER TABLE iam.authorization_decisions ALTER COLUMN principal_id DROP NOT NULL;
 ALTER TABLE iam.authorization_decisions ADD COLUMN IF NOT EXISTS subject_type text COLLATE "C";
 ALTER TABLE iam.authorization_decisions ADD COLUMN IF NOT EXISTS role_id text COLLATE "C";
 ALTER TABLE iam.authorization_decisions ADD COLUMN IF NOT EXISTS source_principal_id text COLLATE "C";
+ALTER TABLE iam.authorization_decisions ADD COLUMN IF NOT EXISTS source_service_account_id text COLLATE "C";
+ALTER TABLE iam.authorization_decisions ADD COLUMN IF NOT EXISTS source_service_principal_id text COLLATE "C";
 ALTER TABLE iam.authorization_decisions ADD COLUMN IF NOT EXISTS role_evidence jsonb;
 ALTER TABLE iam.authorization_decisions ADD COLUMN IF NOT EXISTS access_key_id text COLLATE "C";
 ALTER TABLE iam.authorization_decisions DROP CONSTRAINT IF EXISTS authorization_decisions_source_principal_fk;
 ALTER TABLE iam.authorization_decisions ADD CONSTRAINT authorization_decisions_source_principal_fk
     FOREIGN KEY(tenant_id,source_principal_id) REFERENCES iam.principals(tenant_id,id);
+ALTER TABLE iam.authorization_decisions DROP CONSTRAINT IF EXISTS authorization_decisions_source_service_principal_fk;
+ALTER TABLE iam.authorization_decisions ADD CONSTRAINT authorization_decisions_source_service_principal_fk
+    FOREIGN KEY(source_service_account_id,source_service_principal_id) REFERENCES iam.principals(tenant_id,id);
 -- No default, fallback, or repeat-time backfill. Only pre-cutover rows enter
 -- contract1, and the enclosing transaction must validate every complete row.
 -- ACCESS EXCLUSIVE plus transactional DDL exposes no mutable/RLS-free window.
@@ -1070,12 +1075,22 @@ ALTER TABLE iam.authorization_decisions ADD CONSTRAINT authorization_decision_co
     contract_version IN (1,2,3,4,5)
     AND (access_key_id IS NULL OR (contract_version IN (4,5) AND subject_type='USER'
       AND access_key_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'))
-    AND (CASE WHEN contract_version IN (1,2) THEN principal_id IS NOT NULL AND subject_type IS NULL AND role_id IS NULL AND source_principal_id IS NULL AND role_evidence IS NULL
+    AND (CASE WHEN contract_version IN (1,2) THEN principal_id IS NOT NULL AND subject_type IS NULL AND role_id IS NULL
+        AND source_principal_id IS NULL AND source_service_account_id IS NULL AND source_service_principal_id IS NULL AND role_evidence IS NULL
       ELSE subject_type IS NOT NULL AND policy_evidence IS NOT NULL AND boundary_evidence IS NOT NULL AND
-        CASE WHEN subject_type='ROLE' THEN principal_id IS NULL AND role_id IS NOT NULL AND source_principal_id IS NOT NULL
-          AND jsonb_typeof(role_evidence)='object' AND role_evidence->>'roleId'=role_id AND role_evidence->>'sourceUserId'=source_principal_id
+        CASE WHEN subject_type='ROLE' THEN principal_id IS NULL AND role_id IS NOT NULL
+          AND jsonb_typeof(role_evidence)='object' AND role_evidence->>'roleId'=role_id
           AND jsonb_typeof(role_evidence->'sessionId')='string' AND role_evidence->>'sessionId' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-        ELSE subject_type IN ('USER','SERVICE_ACCOUNT') AND principal_id IS NOT NULL AND role_id IS NULL AND source_principal_id IS NULL AND role_evidence IS NULL END END)
+          AND ((source_principal_id IS NOT NULL AND source_service_account_id IS NULL AND source_service_principal_id IS NULL
+              AND role_evidence->>'sourceUserId'=source_principal_id AND NOT role_evidence ? 'sourceServicePrincipalId')
+            OR (source_principal_id IS NULL AND source_service_account_id IS NOT NULL AND source_service_principal_id IS NOT NULL
+              AND role_evidence->'authorityContractVersion'='3'::jsonb
+              AND role_evidence->>'sourceServicePrincipalId'=source_service_principal_id
+              AND role_evidence#>>'{service,identity,organizationId}'=source_service_account_id
+              AND NOT role_evidence ? 'sourceUserId'))
+        ELSE subject_type IN ('USER','SERVICE_ACCOUNT') AND principal_id IS NOT NULL AND role_id IS NULL
+          AND source_principal_id IS NULL AND source_service_account_id IS NULL AND source_service_principal_id IS NULL
+          AND role_evidence IS NULL END END)
     AND jsonb_typeof(document)='object'
     AND document ?& ARRAY['apiVersion','kind','id','allowed','reason','action','resource','requestId','decidedAt']
     AND (document-ARRAY['apiVersion','kind','id','allowed','reason','action','resource','requestId','decidedAt',
@@ -1096,7 +1111,11 @@ ALTER TABLE iam.authorization_decisions ADD CONSTRAINT authorization_decision_co
         jsonb_typeof(document->'subject')='object'
         AND document->'subject' ?& ARRAY['type','id']
         AND (CASE WHEN contract_version IN (3,4,5) AND subject_type='ROLE' THEN
-          document->'subject'=jsonb_build_object('type','ROLE','id',role_id,'roleSession',jsonb_build_object('sessionId',role_evidence->>'sessionId','sourceUserId',source_principal_id))
+          document->'subject'=jsonb_build_object('type','ROLE','id',role_id,'roleSession',
+            jsonb_build_object('sessionId',role_evidence->>'sessionId')||
+              CASE WHEN source_service_principal_id IS NOT NULL
+                THEN jsonb_build_object('sourceServicePrincipalId',source_service_principal_id)
+                ELSE jsonb_build_object('sourceUserId',source_principal_id) END)
           AND NOT document ? 'installationId'
           WHEN access_key_id IS NOT NULL THEN
             document->'subject'=jsonb_build_object('type','USER','id',principal_id,'accessKeyId',access_key_id)
@@ -1568,11 +1587,21 @@ BEGIN
             expected_action NOT IN ('iam.authorization.decided','iam.role-session.exited')
             OR ((submitted_event->'actor')-ARRAY['type','id','roleSession'])<>'{}'::jsonb
             OR jsonb_typeof(submitted_event#>'{actor,roleSession}') IS DISTINCT FROM 'object'
-            OR ((submitted_event#>'{actor,roleSession}')-ARRAY['sessionId','sourceUserId'])<>'{}'::jsonb
-            OR jsonb_typeof(submitted_event#>'{actor,roleSession,sessionId}') IS DISTINCT FROM 'string'
-            OR jsonb_typeof(submitted_event#>'{actor,roleSession,sourceUserId}') IS DISTINCT FROM 'string'
-            OR COALESCE(submitted_event#>>'{actor,roleSession,sessionId}','') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-            OR COALESCE(submitted_event#>>'{actor,roleSession,sourceUserId}','') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+            OR NOT COALESCE(
+              ((submitted_event#>'{actor,roleSession}') ?& ARRAY['sessionId','sourceUserId']
+                AND ((submitted_event#>'{actor,roleSession}')-ARRAY['sessionId','sourceUserId'])='{}'::jsonb
+                AND jsonb_typeof(submitted_event#>'{actor,roleSession,sessionId}')='string'
+                AND jsonb_typeof(submitted_event#>'{actor,roleSession,sourceUserId}')='string'
+                AND submitted_event#>>'{actor,roleSession,sessionId}' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+                AND submitted_event#>>'{actor,roleSession,sourceUserId}' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
+              OR (expected_action='iam.authorization.decided'
+                AND (submitted_event#>'{actor,roleSession}') ?& ARRAY['sessionId','sourceServicePrincipalId']
+                AND ((submitted_event#>'{actor,roleSession}')-ARRAY['sessionId','sourceServicePrincipalId'])='{}'::jsonb
+                AND jsonb_typeof(submitted_event#>'{actor,roleSession,sessionId}')='string'
+                AND jsonb_typeof(submitted_event#>'{actor,roleSession,sourceServicePrincipalId}')='string'
+                AND submitted_event#>>'{actor,roleSession,sessionId}' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+                AND submitted_event#>>'{actor,roleSession,sourceServicePrincipalId}' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'),
+              false)
           WHEN submitted_event->'actor' ? 'accessKeyId' THEN
             expected_action<>'iam.authorization.decided' OR submitted_event#>>'{actor,type}'<>'USER'
             OR ((submitted_event->'actor')-ARRAY['type','id','accessKeyId'])<>'{}'::jsonb
@@ -1647,7 +1676,7 @@ BEGIN
         OR (expected_action IN (
             'iam.bootstrap.applied', 'iam.session.issued',
             'iam.password.changed', 'iam.user.password-changed', 'iam.user.password-reset-required', 'iam.installation-primary.credentials-recovered',
-            'iam.role-session.revoked','iam.role-session.exited',
+            'iam.role-session.revoked','iam.role-session.exited','iam.service-role-session.issued',
             'iam.notification-contact.verification-started','iam.notification-contact.verified','iam.authenticator.bound','iam.authenticator.replaced','iam.authenticator.removed',
             'iam.authenticator.recovery-started','iam.authenticator.recovered','iam.recovery-codes.regenerated'
         ) AND submitted_event ? 'iamDecisionId')
@@ -1673,7 +1702,11 @@ BEGIN
        ) AND NOT (submitted_event ? 'iamDecisionId'))
        OR (expected_action = 'iam.role-session.exited' AND (
             submitted_event#>>'{actor,type}' IS DISTINCT FROM 'ROLE'
+            OR NOT (submitted_event#>'{actor,roleSession}') ? 'sourceUserId'
+            OR (submitted_event#>'{actor,roleSession}') ? 'sourceServicePrincipalId'
             OR submitted_event#>>'{actor,roleSession,sessionId}' IS DISTINCT FROM submitted_event#>>'{target,id}'))
+       OR (expected_action = 'iam.service-role-session.issued'
+            AND submitted_event#>>'{actor,type}' IS DISTINCT FROM 'SERVICE_ACCOUNT')
        OR (expected_action = 'iam.authorization.decided'
             AND submitted_event#>>'{target,id}' IS DISTINCT FROM
                 submitted_event->>'iamDecisionId') THEN
@@ -1934,7 +1967,8 @@ RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $funct
                 ('profile_revision','bigint'::regtype,false),('profile_content_digest','text'::regtype,false),
                 ('resource_mode','text'::regtype,false),('collection_usage','text'::regtype,false),
                 ('principal_id','text'::regtype,false),('subject_type','text'::regtype,false),('role_id','text'::regtype,false),
-                ('source_principal_id','text'::regtype,false),('role_evidence','jsonb'::regtype,false),('access_key_id','text'::regtype,false)) expected(name,type_oid,required)
+                ('source_principal_id','text'::regtype,false),('source_service_account_id','text'::regtype,false),
+                ('source_service_principal_id','text'::regtype,false),('role_evidence','jsonb'::regtype,false),('access_key_id','text'::regtype,false)) expected(name,type_oid,required)
                 LEFT JOIN pg_catalog.pg_attribute a ON a.attrelid='iam.authorization_decisions'::regclass AND a.attname=expected.name AND NOT a.attisdropped
                 WHERE a.attnum IS NULL OR a.atttypid<>expected.type_oid OR a.attnotnull<>expected.required OR a.atthasdef)
            AND EXISTS(SELECT 1 FROM pg_catalog.pg_constraint c WHERE c.conrelid='iam.authorization_decisions'::regclass
@@ -1957,6 +1991,7 @@ RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $funct
            AND NOT EXISTS(SELECT 1 FROM (VALUES
                 ('authorization_decisions_principal_fk','iam.principals',ARRAY['tenant_id','principal_id']),
                 ('authorization_decisions_source_principal_fk','iam.principals',ARRAY['tenant_id','source_principal_id']),
+                ('authorization_decisions_source_service_principal_fk','iam.principals',ARRAY['source_service_account_id','source_service_principal_id']),
                 ('authorization_decisions_role_fk','iam.roles',ARRAY['tenant_id','role_id'])) expected(name,target_table,source_columns)
                 WHERE NOT EXISTS(SELECT 1 FROM pg_catalog.pg_constraint c WHERE c.conrelid='iam.authorization_decisions'::regclass
                   AND c.conname=expected.name AND c.contype='f' AND c.confrelid=to_regclass(expected.target_table)
@@ -2977,8 +3012,11 @@ BEGIN
     ELSIF submitted_role_evidence <> 'null'::jsonb THEN
         actor_type:='ROLE';
         PERFORM iam.assert_current_role_authorization(submitted_tenant_id,submitted_subject_id,submitted_role_evidence);
-        expected_subject:=jsonb_build_object('type','ROLE','id',submitted_subject_id,'roleSession',jsonb_build_object(
-          'sessionId',submitted_role_evidence->>'sessionId','sourceUserId',submitted_role_evidence->>'sourceUserId'));
+        expected_subject:=jsonb_build_object('type','ROLE','id',submitted_subject_id)||CASE WHEN submitted_role_evidence->'authorityContractVersion'='3'::jsonb
+            THEN jsonb_build_object('roleSession',jsonb_build_object('sessionId',submitted_role_evidence->>'sessionId',
+              'sourceServicePrincipalId',submitted_role_evidence->>'sourceServicePrincipalId'))
+            ELSE jsonb_build_object('roleSession',jsonb_build_object('sessionId',submitted_role_evidence->>'sessionId',
+              'sourceUserId',submitted_role_evidence->>'sourceUserId')) END;
     ELSE
       SELECT principal.principal_type INTO actor_type
       FROM iam.accounts AS organization
@@ -3002,7 +3040,10 @@ BEGIN
     END IF;
     IF jsonb_typeof(submitted_policy_evidence) IS DISTINCT FROM 'array'
         OR jsonb_array_length(submitted_policy_evidence)>256
-        OR (decision_allowed AND jsonb_array_length(submitted_policy_evidence)=0) THEN
+        OR (actor_type='ROLE' AND submitted_role_evidence->'authorityContractVersion'='3'::jsonb
+            AND jsonb_array_length(submitted_policy_evidence)<>0)
+        OR (decision_allowed AND jsonb_array_length(submitted_policy_evidence)=0
+            AND NOT (actor_type='ROLE' AND submitted_role_evidence->'authorityContractVersion'='3'::jsonb)) THEN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='authorization policy evidence is invalid';
     END IF;
     FOR evidence IN SELECT value FROM jsonb_array_elements(submitted_policy_evidence) LOOP
@@ -3121,7 +3162,8 @@ BEGIN
         tenant_id, id, principal_id, allowed, action_name, target_kind,
         target_id, request_id, decided_at, document, policy_evidence, boundary_evidence,
         contract_version, profile_product, profile_revision, profile_content_digest, resource_mode, collection_usage,
-        subject_type, role_id, source_principal_id, role_evidence, access_key_id
+        subject_type, role_id, source_principal_id, source_service_account_id, source_service_principal_id,
+        role_evidence, access_key_id
     ) VALUES (
         submitted_tenant_id,
         submitted_decision->>'id',
@@ -3142,7 +3184,12 @@ BEGIN
         submitted_decision->>'resourceMode',
         submitted_decision->>'collectionUsage',
         actor_type, CASE WHEN actor_type='ROLE' THEN submitted_subject_id ELSE NULL END,
-        CASE WHEN actor_type='ROLE' THEN submitted_role_evidence->>'sourceUserId' ELSE NULL END,
+        CASE WHEN actor_type='ROLE' AND submitted_role_evidence->'authorityContractVersion'<>'3'::jsonb
+          THEN submitted_role_evidence->>'sourceUserId' ELSE NULL END,
+        CASE WHEN actor_type='ROLE' AND submitted_role_evidence->'authorityContractVersion'='3'::jsonb
+          THEN submitted_role_evidence#>>'{service,identity,organizationId}' ELSE NULL END,
+        CASE WHEN actor_type='ROLE' AND submitted_role_evidence->'authorityContractVersion'='3'::jsonb
+          THEN submitted_role_evidence->>'sourceServicePrincipalId' ELSE NULL END,
         nullif(submitted_role_evidence,'null'::jsonb),
         submitted_key_evidence->>'accessKeyId'
     );

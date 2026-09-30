@@ -143,6 +143,9 @@ type Transaction interface {
 	CreateWorkloadRoleBinding(context.Context, WorkloadRoleBindingCreation) (iamv1.ServiceLinkedRoleAccess, error)
 	PrepareWorkloadRoleBindingRevocation(context.Context, iamv1.AccountID, iamv1.WorkloadRoleBindingID, string, iamv1.ServicePurpose) (iamv1.ServiceLinkedRoleAccess, error)
 	RevokeWorkloadRoleBinding(context.Context, WorkloadRoleBindingRevocation) (iamv1.WorkloadRoleBinding, error)
+	ReadServiceRoleAssumption(context.Context, ServiceRoleAssumptionRead) (ServiceRoleAssumption, error)
+	IssueServiceRoleSession(context.Context, ServiceRoleSessionIssuance) (iamv1.RoleSession, error)
+	ReadServiceRoleSessionByRequest(context.Context, ServiceRoleSessionRead) (iamv1.RoleSession, bool, error)
 	ReadRoleAssumption(context.Context, RoleAssumptionRead) (RoleAssumption, error)
 	IssueRoleSession(context.Context, RoleSessionIssuance) (iamv1.RoleSession, error)
 	ReadRoleSessionByRequest(context.Context, RoleAssumptionRead) (iamv1.RoleSession, bool, error)
@@ -346,6 +349,50 @@ type WorkloadRoleBindingRevocation struct {
 	BindingRevokeDecisionID iamv1.DecisionID
 	RolePassDecisionID      iamv1.DecisionID
 	AuditEvent              auditv1.Event
+}
+
+// ServiceRoleSessionRead is derived exclusively from the authenticated
+// service credential. RequestID is an idempotency identity inside that
+// physical service principal, not an Account or Role selector.
+type ServiceRoleSessionRead struct {
+	ServiceLookupDigest string
+	Identity            iamv1.ServiceIdentity
+	RequestID           string
+}
+
+type ServiceRoleAssumptionRead struct {
+	ServiceRoleSessionRead
+	BindingID iamv1.WorkloadRoleBindingID
+}
+
+type ServiceRoleSessionReceipt struct {
+	Session       iamv1.RoleSession           `json:"session"`
+	BindingID     iamv1.WorkloadRoleBindingID `json:"bindingId"`
+	RequestDigest string                      `json:"requestDigest"`
+}
+
+// ServiceRoleAssumption is a locked current authority snapshot. The service
+// home Account is identity provenance only; Relation and Binding derive the
+// target Account and Role.
+type ServiceRoleAssumption struct {
+	Relation           iamv1.ServiceLinkedRole
+	Binding            iamv1.WorkloadRoleBinding
+	Template           iamv1.ServiceRoleTemplate
+	SecurityGeneration uint64
+	Existing           *ServiceRoleSessionReceipt
+}
+
+type ServiceRoleSessionIssuance struct {
+	ServiceRoleAssumptionRead
+	Session                    iamv1.RoleSession
+	Request                    iamv1.AssumeServiceRoleRequest
+	ExpectedBindingVersion     uint64
+	ExpectedSecurityGeneration uint64
+	DurationSeconds            uint32
+	RequestDigest              string
+	LookupDigest               string
+	VerificationDigest         string
+	AuditEvent                 auditv1.Event
 }
 
 // RoleMutation carries the exact authenticated writer and expected revision,

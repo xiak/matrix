@@ -14,6 +14,30 @@ import (
 	"github.com/xiak/matrix/app/service/iam/internal/usecase/identityaccess"
 )
 
+type storedRoleSessionLookup struct {
+	AuthorityContractVersion      uint64                                `json:"authorityContractVersion"`
+	SourceAuthorizationGeneration uint64                                `json:"sourceAuthorizationGeneration"`
+	SourceGroupGenerations        []authority.RoleSourceGroupGeneration `json:"sourceGroupGenerations"`
+	Session                       iamv1.RoleSession                     `json:"session"`
+	SourceSessionID               iamv1.SessionID                       `json:"sourceSessionId"`
+	SourceLookupDigest            string                                `json:"sourceLookupDigest"`
+	CredentialGeneration          uint64                                `json:"credentialGeneration"`
+	SecurityGeneration            uint64                                `json:"securityGeneration"`
+	AssumeDecisionID              iamv1.DecisionID                      `json:"assumeDecisionId"`
+	VerificationDigest            string                                `json:"verificationDigest"`
+	Role                          iamv1.Role                            `json:"role"`
+	AuthorityEvidence             json.RawMessage                       `json:"authorityEvidence"`
+	SessionPolicyCanonical        *string                               `json:"sessionPolicyCanonical"`
+	SessionPolicyDigest           *string                               `json:"sessionPolicyDigest"`
+	SourceServiceIdentity         *iamv1.ServiceIdentity                `json:"sourceServiceIdentity"`
+	SourceServiceLookupDigest     string                                `json:"sourceServiceLookupDigest"`
+	BindingID                     iamv1.WorkloadRoleBindingID           `json:"bindingId"`
+	BindingResourceVersion        uint64                                `json:"bindingResourceVersion"`
+	Template                      *iamv1.ServiceRoleTemplate            `json:"template"`
+	Workload                      *iamv1.ResourceReference              `json:"workload"`
+	PermissionVersion             *storedPolicyVersion                  `json:"permissionVersion"`
+}
+
 func (value *transaction) LookupRoleSessionForExit(ctx context.Context, digest string) (identityaccess.RoleSessionExitCredential, bool, error) {
 	var encoded []byte
 	if err := value.tx.QueryRow(ctx, "SELECT iam.lookup_role_session_for_exit($1)", digest).Scan(&encoded); err != nil {
@@ -64,31 +88,25 @@ func (value *transaction) LookupRoleSession(ctx context.Context, digest string) 
 	if encoded == nil {
 		return identityaccess.RoleSessionCredential{}, false, nil
 	}
-	var stored struct {
-		AuthorityContractVersion      uint64                                `json:"authorityContractVersion"`
-		SourceAuthorizationGeneration uint64                                `json:"sourceAuthorizationGeneration"`
-		SourceGroupGenerations        []authority.RoleSourceGroupGeneration `json:"sourceGroupGenerations"`
-		Session                       iamv1.RoleSession                     `json:"session"`
-		SourceSessionID               iamv1.SessionID                       `json:"sourceSessionId"`
-		SourceLookupDigest            string                                `json:"sourceLookupDigest"`
-		CredentialGeneration          uint64                                `json:"credentialGeneration"`
-		SecurityGeneration            uint64                                `json:"securityGeneration"`
-		AssumeDecisionID              iamv1.DecisionID                      `json:"assumeDecisionId"`
-		VerificationDigest            string                                `json:"verificationDigest"`
-		Role                          iamv1.Role                            `json:"role"`
-		AuthorityEvidence             json.RawMessage                       `json:"authorityEvidence"`
-		SessionPolicyCanonical        *string                               `json:"sessionPolicyCanonical"`
-		SessionPolicyDigest           *string                               `json:"sessionPolicyDigest"`
-	}
+	var stored storedRoleSessionLookup
 	// The complete vector is bounded by the existing policy/attachment budgets.
 	if contractjson.DecodeObjectBytes(encoded, 2*257*maxStoredPolicyVersionBytes, &stored) != nil ||
-		authority.ValidateRoleSourceAuthority(stored.AuthorityContractVersion, stored.SourceAuthorizationGeneration, stored.SourceGroupGenerations) != nil ||
-		stored.CredentialGeneration == 0 || stored.CredentialGeneration > 9007199254740991 ||
 		stored.SecurityGeneration == 0 || stored.SecurityGeneration > 9007199254740991 ||
+		iamv1.ValidateDigest("verificationDigest", stored.VerificationDigest) != nil {
+		return identityaccess.RoleSessionCredential{}, false, identityaccess.ErrUnavailable
+	}
+	normalizeRoleSession(&stored.Session)
+	normalizeRole(&stored.Role)
+	if stored.Session.SourceServicePrincipalID != "" {
+		return value.decodeServiceRoleSessionLookup(ctx, stored)
+	}
+	if authority.ValidateRoleSourceAuthority(stored.AuthorityContractVersion, stored.SourceAuthorizationGeneration, stored.SourceGroupGenerations) != nil ||
+		stored.CredentialGeneration == 0 || stored.CredentialGeneration > 9007199254740991 ||
 		iamv1.ValidateID("assumeDecisionId", string(stored.AssumeDecisionID)) != nil ||
 		iamv1.ValidateDigest("sourceLookupDigest", stored.SourceLookupDigest) != nil ||
-		iamv1.ValidateDigest("verificationDigest", stored.VerificationDigest) != nil ||
-		(stored.SessionPolicyCanonical == nil) != (stored.SessionPolicyDigest == nil) {
+		(stored.SessionPolicyCanonical == nil) != (stored.SessionPolicyDigest == nil) || stored.SourceServiceIdentity != nil ||
+		stored.SourceServiceLookupDigest != "" || stored.BindingID != "" || stored.BindingResourceVersion != 0 ||
+		stored.Template != nil || stored.Workload != nil || stored.PermissionVersion != nil {
 		return identityaccess.RoleSessionCredential{}, false, identityaccess.ErrUnavailable
 	}
 	var evidence struct {
@@ -113,8 +131,6 @@ func (value *transaction) LookupRoleSession(ctx context.Context, digest string) 
 	if err != nil || !found {
 		return identityaccess.RoleSessionCredential{}, false, err
 	}
-	normalizeRoleSession(&stored.Session)
-	normalizeRole(&stored.Role)
 	normalizeRole(&evidence.Role)
 	evidence.Trust.CreatedAt = evidence.Trust.CreatedAt.UTC()
 	if iamv1.ValidateRoleSession(stored.Session) != nil || iamv1.ValidateRole(stored.Role) != nil || iamv1.ValidateRole(evidence.Role) != nil ||
@@ -175,6 +191,37 @@ func (value *transaction) LookupRoleSession(ctx context.Context, digest string) 
 		CredentialGeneration: stored.CredentialGeneration, SecurityGeneration: stored.SecurityGeneration, AssumeDecisionID: stored.AssumeDecisionID,
 		SourceSessionID: stored.SourceSessionID, Role: stored.Role, Trust: evidence.Trust, Policies: rolePolicies, Boundary: boundary, SessionPolicy: restriction},
 		VerificationDigest: stored.VerificationDigest}, true, nil
+}
+
+func (value *transaction) decodeServiceRoleSessionLookup(ctx context.Context, stored storedRoleSessionLookup) (identityaccess.RoleSessionCredential, bool, error) {
+	if stored.AuthorityContractVersion != 3 || stored.Session.SourceUserID != "" || stored.SourceAuthorizationGeneration != 0 ||
+		stored.SourceGroupGenerations != nil || stored.SourceSessionID != "" || stored.SourceLookupDigest != "" ||
+		stored.CredentialGeneration != 0 || stored.AssumeDecisionID != "" || len(stored.AuthorityEvidence) != 0 ||
+		stored.SessionPolicyCanonical != nil || stored.SessionPolicyDigest != nil || stored.SourceServiceIdentity == nil ||
+		stored.Template == nil || stored.Workload == nil || stored.PermissionVersion == nil ||
+		iamv1.ValidateRoleSession(stored.Session) != nil || iamv1.ValidateRole(stored.Role) != nil ||
+		iamv1.ValidateServiceIdentity(*stored.SourceServiceIdentity) != nil ||
+		iamv1.ValidateDigest("sourceServiceLookupDigest", stored.SourceServiceLookupDigest) != nil ||
+		iamv1.ValidateID("bindingId", string(stored.BindingID)) != nil || stored.BindingResourceVersion == 0 ||
+		stored.BindingResourceVersion > 9007199254740991 || iamv1.ValidateServiceRoleTemplate(*stored.Template) != nil ||
+		iamv1.ValidateID("workload.id", stored.Workload.ID) != nil || stored.Workload.Kind == "" ||
+		stored.Session.AccountID != stored.Role.AccountID || stored.Session.RoleID != stored.Role.ID ||
+		stored.Session.SourceServicePrincipalID != stored.SourceServiceIdentity.PrincipalID ||
+		stored.Role.Management != iamv1.RoleServiceLinked {
+		return identityaccess.RoleSessionCredential{}, false, identityaccess.ErrUnavailable
+	}
+	permission, profiles, err := value.resolvePolicyVersion(ctx, *stored.PermissionVersion)
+	if err != nil {
+		return identityaccess.RoleSessionCredential{}, false, err
+	}
+	service := &authority.ServiceRoleSessionAuthority{Identity: *stored.SourceServiceIdentity,
+		LookupDigest: stored.SourceServiceLookupDigest, BindingID: stored.BindingID,
+		BindingResourceVersion: stored.BindingResourceVersion, Template: *stored.Template,
+		Workload: *stored.Workload, PermissionVersion: permission, PermissionProfiles: profiles}
+	return identityaccess.RoleSessionCredential{Subject: authority.RoleSessionContext{
+		AuthorityContractVersion: stored.AuthorityContractVersion, Session: stored.Session,
+		SecurityGeneration: stored.SecurityGeneration, Role: stored.Role, Service: service,
+	}, VerificationDigest: stored.VerificationDigest}, true, nil
 }
 
 func normalizeRoleSession(session *iamv1.RoleSession) {

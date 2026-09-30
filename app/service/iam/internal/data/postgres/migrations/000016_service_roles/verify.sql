@@ -4,7 +4,7 @@ DECLARE seeds jsonb:=__SERVICE_ROLE_TEMPLATE_SEEDS__; seed jsonb;
 BEGIN
     IF NOT iam.service_role_contract_ready() THEN
         RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='IAM service role storage contract is unavailable'; END IF;
-    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 54::bigint THEN
+    IF (SELECT schema_version FROM iam.readiness()) IS DISTINCT FROM 55::bigint THEN
         RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='IAM service role schema version is unavailable'; END IF;
     FOR seed IN SELECT value FROM jsonb_array_elements(seeds) LOOP
         IF NOT EXISTS(SELECT 1 FROM iam.service_role_templates template

@@ -214,6 +214,14 @@ func buildPaths() object {
 			[]any{object{"ServiceCredential": []string{}, "SubjectCredential": []string{}}},
 			[]any{openapi31.PathIDParameter("bindingId")},
 		)},
+		"/v1/internal/service-role-sessions": object{"post": mutationOperation(
+			"assumeServiceRole", "Exchange the current authenticated service principal and one active workload binding for a short-lived Role credential. IAM resolves every Account, Role, installation, purpose, template and policy fact; the credential is returned only on APPLIED.",
+			"AssumeServiceRoleRequest", "AssumeRoleResponse", "200",
+			[]any{object{"ServiceCredential": []string{}}}, nil,
+		)},
+		"/v1/internal/service-role-sessions/by-request/{requestId}": object{"get": readOperation(
+			"getServiceRoleSessionByRequest", "Read only the original non-secret service RoleSession result in the namespace of the current authenticated service principal; never replay a credential.",
+			"RoleSession", []any{object{"ServiceCredential": []string{}}}, []any{openapi31.PathIDParameter("requestId")})},
 		"/v1/policies": object{
 			"get":  readOperation("listPolicies", "Read the complete bounded current account policy metadata directory", "PolicyList", nil, nil),
 			"post": mutationOperation("createPolicy", "Create an account-owned policy and its initial immutable version without attaching it", "CreatePolicyRequest", "PolicyDetail", "201", nil, nil),

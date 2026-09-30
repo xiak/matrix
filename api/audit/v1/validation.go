@@ -76,6 +76,9 @@ func ValidateEvent(value Event) error {
 		if contract.RoleActorRequired && value.Actor.Type != ActorRole {
 			problems = append(problems, errors.New("Audit action requires a ROLE actor"))
 		}
+		if contract.ServiceActorRequired && value.Actor.Type != ActorServiceAccount {
+			problems = append(problems, errors.New("Audit action requires a SERVICE_ACCOUNT actor"))
+		}
 		if value.Action == ActionIAMRoleSessionExited && (value.Actor.RoleSession == nil || value.Target.ID != value.Actor.RoleSession.SessionID) {
 			problems = append(problems, errors.New("role self-exit must target the actor's exact session"))
 		}
