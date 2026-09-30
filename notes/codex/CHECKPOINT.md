@@ -6,8 +6,8 @@
 - Updated: 2026-10-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `28552769`
-- Pushed documentation milestone: `cd72a31e`
+- Pushed source/embed milestone: `46b72b04`
+- Pushed documentation milestone: `49df1c8b`
 
 ## Authoritative route
 
@@ -43,20 +43,23 @@ preview evaluator and does not render match states, effective permission,
 final Allow/Deny, a reason tree or remediation. Source IP and time remain
 operator-entered information-architecture fields only.
 
-The PostgreSQL instance and product-specification directories now treat
-resource visibility as a product-server boundary: the UI labels only records
-currently loaded and never infers an Account-wide total or coverage. A
-successful empty product directory is distinct from service unavailability and
-does not disclose hidden names, denial reasons or denial counts. Isolated MOCK
-fixtures are explicitly not IAM-filtered; non-preview copy requires the product
-service to combine trusted candidates with IAM decisions before returning rows.
-The browser does not hide denied rows, expose a tenant-facing batch-grant
-action, or claim the unfinished `/v1/authorize:batch` candidate is integrated.
-Source/embed at `28552769` passed 55 frontend files / 893 tests, static
+The PostgreSQL instance and product-specification directories retain their
+product-server visibility boundary and truthful loaded-record wording. The
+control-plane repository no longer performs one product-wide four-collection
+read for every non-IAM route. Each destination requests only its declared
+resource slices; preview-owned Applications, Logs, DevOps and Observability
+make no managed-service request, while catalog, Regions, Quotas and PostgreSQL
+installations have distinct least-privilege read sets. Requested slices merge
+into a credential-owned cache, missing slices are never treated as empty, and
+terminal installation refresh rereads only entitlements and installations.
+The browser still does not call IAM batch authorization or hide denied rows.
+Source/embed `46b72b04` passed 55 frontend files / 896 tests, static
 normalization, type/lint/architecture, 228 theme contrast pairs, 41-page
-export, 228-file embed equality and repository Go test/vet. Desktop and
-`390 × 844` inspection had no Dialog, overflow or warning/error. Existing MOCK
-pages remain available.
+export, 228-file embed equality and focused Go UI host test/vet. Real DEV
+IAM-to-Logs and IAM-to-PostgreSQL transitions took about 199ms and 205ms in the
+local automation observation; `390 × 844` inspection had no overflow or
+warning/error. Existing MOCK pages remain available. Durable details and
+limits are owned by FEAT-007 at `49df1c8b`.
 
 The fixed administrator RoleSession northbound contract is consumed only by
 Role detail. The service-authorization MOCK reuses its public fields but sends
