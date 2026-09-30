@@ -462,6 +462,16 @@ func assertAuditContractCatalog(
 				invalid = append(invalid, candidate)
 			}
 		}
+		if contract.ServiceActorRequired {
+			for _, actorType := range []auditv1.ActorType{auditv1.ActorUser, auditv1.ActorSystem, auditv1.ActorRole} {
+				candidate := event
+				candidate.Actor = auditv1.ActorReference{Type: actorType, ID: event.Actor.ID}
+				if actorType == auditv1.ActorRole {
+					candidate.Actor.RoleSession = &auditv1.RoleSessionReference{SessionID: "catalog-role-session", SourceUserID: "catalog-source"}
+				}
+				invalid = append(invalid, candidate)
+			}
+		}
 		if action == auditv1.ActionIAMUserPasswordResetRequired || action == auditv1.ActionIAMOtherSessionsRevoked || action == auditv1.ActionIAMNotificationContactVerificationStarted || action == auditv1.ActionIAMNotificationContactVerified || action == auditv1.ActionIAMAuthenticatorBound || action == auditv1.ActionIAMAuthenticatorReplaced || action == auditv1.ActionIAMAuthenticatorRemoved || action == auditv1.ActionIAMAuthenticatorRecoveryStarted || action == auditv1.ActionIAMAuthenticatorRecovered || action == auditv1.ActionIAMRecoveryCodesRegenerated {
 			candidate := event
 			candidate.Target.ID = "another-users-principal"
@@ -2409,6 +2419,9 @@ func authorityAuditEvent(
 	}
 	if contract.UserActorRequired {
 		event.Actor.Type = auditv1.ActorUser
+	}
+	if contract.ServiceActorRequired {
+		event.Actor = auditv1.ActorReference{Type: auditv1.ActorServiceAccount, ID: "catalog-base-service"}
 	}
 	if action == auditv1.ActionIAMUserPasswordResetRequired || action == auditv1.ActionIAMOtherSessionsRevoked || action == auditv1.ActionIAMNotificationContactVerificationStarted || action == auditv1.ActionIAMNotificationContactVerified || action == auditv1.ActionIAMAuthenticatorBound || action == auditv1.ActionIAMAuthenticatorReplaced || action == auditv1.ActionIAMAuthenticatorRemoved || action == auditv1.ActionIAMAuthenticatorRecoveryStarted || action == auditv1.ActionIAMAuthenticatorRecovered || action == auditv1.ActionIAMRecoveryCodesRegenerated {
 		event.Target.ID = string(event.Actor.ID)
