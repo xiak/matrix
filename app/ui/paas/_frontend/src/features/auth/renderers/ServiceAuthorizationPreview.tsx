@@ -176,10 +176,18 @@ export function ServiceAuthorizationConsentReview({ accountId, targetResourceId,
   const steps = useMemo(() => stageIds.map((id) => ({ id, label: t(`steps.${id}`) })), [t]);
   const currentStage = stageIds[stage] ?? "identity";
   const statements = previewSnapshotFor(targetResourceId).statements;
+  const stageHeading = useRef<HTMLHeadingElement>(null);
+  const previousStage = useRef(stage);
+
+  useLayoutEffect(() => {
+    if (previousStage.current !== stage) stageHeading.current?.focus({ preventScroll: true });
+    previousStage.current = stage;
+  }, [stage]);
+
   return <div className={styles.stack}>
     <div className={styles.steps}><Steps label={t("progress")} items={steps} current={stage} onChange={onStageChange} /></div>
     <Card className={styles.reviewCard}>
-      <Card.Header className={styles.cardHeading}>{stage === 0 ? <KeyRound aria-hidden="true" /> : stage === 1 ? <ShieldCheck aria-hidden="true" /> : <Boxes aria-hidden="true" />}<div><span>{t("stageLabel", { current: stage + 1, total: stageIds.length })}</span><h3>{t(`review.${currentStage}.title`)}</h3></div></Card.Header>
+      <Card.Header className={styles.cardHeading}>{stage === 0 ? <KeyRound aria-hidden="true" /> : stage === 1 ? <ShieldCheck aria-hidden="true" /> : <Boxes aria-hidden="true" />}<div><span>{t("stageLabel", { current: stage + 1, total: stageIds.length })}</span><h3 ref={stageHeading} tabIndex={-1}>{t(`review.${currentStage}.title`)}</h3></div></Card.Header>
       <Card.Body className={styles.cardBody}>
         <p className={styles.lead}>{t(`review.${currentStage}.lead`)}</p>
         {stage === 0 ? <><dl className={styles.facts}><div><dt>{t("fields.targetAccount")}</dt><dd><code>{accountId}</code></dd></div><div><dt>{t("fields.targetResource")}</dt><dd><code>SERVICE_INSTALLATION:{targetResourceId}</code></dd></div><div><dt>{t("fields.servicePrincipal")}</dt><dd><code>{previewTemplate.servicePrincipal}</code></dd></div><div><dt>{t("fields.purpose")}</dt><dd><code>{previewTemplate.purpose}</code></dd></div><div><dt>{t("fields.roleName")}</dt><dd><code>{previewTemplate.roleName}</code></dd></div></dl><Alert status="info">{t("review.identity.passRoleBoundary")}</Alert></> : null}
@@ -224,7 +232,7 @@ export function ServiceAuthorizationPreview({ workspace, onClose }: {
       heading.current?.scrollIntoView?.({ block: "start" });
       heading.current?.focus({ preventScroll: true });
     }
-  }, [stage, view]);
+  }, [view]);
 
   const back = () => {
     if (view === "directory") onClose();

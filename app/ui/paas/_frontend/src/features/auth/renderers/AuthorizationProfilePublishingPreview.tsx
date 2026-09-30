@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, FileCode2, LockKeyhole, ShieldCheck } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { Alert, Badge, Button, Card, Steps, Table, TablePagination } from "@ui/xiak";
@@ -20,8 +20,14 @@ export function AuthorizationProfilePublishingPreview({ entry, onClose }: {
   const [actionPage, setActionPage] = useState(1);
   const [actionPageSize, setActionPageSize] = useState(10);
   const heading = useRef<HTMLHeadingElement>(null);
+  const stageHeading = useRef<HTMLHeadingElement>(null);
+  const previousStage = useRef(stage);
   const steps = useMemo(() => stageIds.map((id) => ({ id, label: t(`steps.${id}`) })), [t]);
-  useEffect(() => { heading.current?.focus(); }, [stage]);
+  useLayoutEffect(() => {
+    const target = previousStage.current === stage ? heading.current : stageHeading.current;
+    previousStage.current = stage;
+    target?.focus({ preventScroll: true });
+  }, [stage]);
 
   const profile = entry.profile;
   const scopes = [...new Set(profile.actions.map((action) => action.scope))];
@@ -46,7 +52,7 @@ export function AuthorizationProfilePublishingPreview({ entry, onClose }: {
     <div className={styles.steps}><Steps label={t("progress")} items={steps} current={stage} onChange={setStage} /></div>
 
     {stage === 0 ? <Card className={styles.stageCard}>
-      <Card.Header className={styles.stageHeader}><span className={styles.stageIcon}><FileCode2 aria-hidden="true" /></span><div><span>{t("stageLabel", { current: 1, total: 3 })}</span><h3>{t("declaration.title")}</h3></div></Card.Header>
+      <Card.Header className={styles.stageHeader}><span className={styles.stageIcon}><FileCode2 aria-hidden="true" /></span><div><span>{t("stageLabel", { current: 1, total: 3 })}</span><h3 ref={stageHeading} tabIndex={-1}>{t("declaration.title")}</h3></div></Card.Header>
       <Card.Body className={styles.stageBody}>
         <p className={styles.lead}>{t("declaration.lead")}</p>
         <dl className={styles.facts}>
@@ -63,7 +69,7 @@ export function AuthorizationProfilePublishingPreview({ entry, onClose }: {
     </Card> : null}
 
     {stage === 1 ? <Card className={styles.stageCard}>
-      <Card.Header className={styles.stageHeader}><span className={styles.stageIcon}><ShieldCheck aria-hidden="true" /></span><div><span>{t("stageLabel", { current: 2, total: 3 })}</span><h3>{t("validation.title")}</h3></div></Card.Header>
+      <Card.Header className={styles.stageHeader}><span className={styles.stageIcon}><ShieldCheck aria-hidden="true" /></span><div><span>{t("stageLabel", { current: 2, total: 3 })}</span><h3 ref={stageHeading} tabIndex={-1}>{t("validation.title")}</h3></div></Card.Header>
       <Card.Body className={styles.stageBody}>
         <p className={styles.lead}>{t("validation.lead")}</p>
         <ul className={styles.reviewList}>
@@ -93,7 +99,7 @@ export function AuthorizationProfilePublishingPreview({ entry, onClose }: {
     </Card> : null}
 
     {stage === 2 ? <Card className={styles.stageCard}>
-      <Card.Header className={styles.stageHeader}><span className={styles.stageIcon}><LockKeyhole aria-hidden="true" /></span><div><span>{t("stageLabel", { current: 3, total: 3 })}</span><h3>{t("release.title")}</h3></div></Card.Header>
+      <Card.Header className={styles.stageHeader}><span className={styles.stageIcon}><LockKeyhole aria-hidden="true" /></span><div><span>{t("stageLabel", { current: 3, total: 3 })}</span><h3 ref={stageHeading} tabIndex={-1}>{t("release.title")}</h3></div></Card.Header>
       <Card.Body className={styles.stageBody}>
         <p className={styles.lead}>{t("release.lead")}</p>
         <div className={styles.releaseReference}>

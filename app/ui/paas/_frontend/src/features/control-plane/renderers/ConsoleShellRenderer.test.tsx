@@ -212,14 +212,16 @@ describe("ConsoleShellRenderer", () => {
     expect(screen.getByText("实例未绑定")).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "审阅服务授权" }));
-    expect(screen.getByRole("heading", { name: "审阅服务授权 · 订单主库" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "审阅服务授权 · 订单主库" })).toBe(document.activeElement);
     expect(screen.getByText("SERVICE_INSTALLATION:pg-test")).toBeTruthy();
     expect(screen.queryByRole("dialog")).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "下一步" }));
+    await waitFor(() => expect(screen.getByRole("heading", { level: 3, name: "核对示例权限范围" })).toBe(document.activeElement));
     expect(screen.getByText("managedservice.service-installation.read")).toBeTruthy();
     expect(screen.getByText("pg-test")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "下一步" }));
+    await waitFor(() => expect(screen.getByRole("heading", { level: 3, name: "确认客户同意与撤销边界" })).toBe(document.activeElement));
     expect((screen.getByRole("button", { name: "授权服务（未接入）" }) as HTMLButtonElement).disabled).toBe(true);
   });
 

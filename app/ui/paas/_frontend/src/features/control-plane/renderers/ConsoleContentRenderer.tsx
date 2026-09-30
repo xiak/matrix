@@ -223,7 +223,7 @@ function InstallationContent({ scene, preview, accountId }: {
     const id = returnToList.current;
     returnToList.current = null;
     rowTriggers.current.get(id)?.focus({ preventScroll: true });
-  }, [review, selected, stage]);
+  }, [review, selected]);
 
   if (selected) {
     const closeDetail = () => {

@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "@/i18n/LocaleProvider";
@@ -8,6 +8,20 @@ import { ServiceAuthorizationPreview } from "./ServiceAuthorizationPreview";
 afterEach(cleanup);
 
 describe("ServiceAuthorizationPreview", () => {
+  it("moves focus through the current consent step without returning to the page title", async () => {
+    const user = userEvent.setup();
+    render(<LocaleProvider><ServiceAuthorizationPreview workspace={initialAccessWorkspace("org-xiak")} onClose={vi.fn()} /></LocaleProvider>);
+
+    await user.click(screen.getByRole("button", { name: "托管服务安装访问" }));
+    await user.click(screen.getByRole("button", { name: "审阅服务授权" }));
+    expect(screen.getByRole("heading", { level: 2, name: "审阅服务授权" })).toBe(document.activeElement);
+
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await waitFor(() => expect(screen.getByRole("heading", { level: 3, name: "核对示例权限范围" })).toBe(document.activeElement));
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await waitFor(() => expect(screen.getByRole("heading", { level: 3, name: "确认客户同意与撤销边界" })).toBe(document.activeElement));
+  });
+
   it("keeps the published template, account relation, and exact workload binding visibly separate", async () => {
     const user = userEvent.setup();
     render(<LocaleProvider><ServiceAuthorizationPreview workspace={initialAccessWorkspace("org-xiak")} onClose={vi.fn()} /></LocaleProvider>);
