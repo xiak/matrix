@@ -38,7 +38,7 @@ import type { AccessWorkspace, AccessWorkspaceCommand } from "../domain/accessWo
 import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDirectory, AccessKeyStatus, AccessKeyStatusChange } from "../domain/accessKeys";
 import type { AuthenticatorState, EnrollmentChallengeState, NotificationContact, NotificationContactVerification, RecoveryCodeRegeneration, RecoveryCodeRegenerationResponse, SecurityStepUp, TOTPEnrollment, TOTPEnrollmentConfirmation, TOTPEnrollmentStart } from "../domain/personalSecurity";
 import type { UserBatchCommand } from "../domain/userBatch";
-import type { AssumeRoleCommand, AssumeRoleResult, AssumableRoleDirectory, CreateRoleCommand, CurrentRoleIdentity, LiveRoleSession, Role, RoleAccess, RoleDirectory, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionRevocation } from "../domain/roles";
+import type { AssumeRoleCommand, AssumeRoleResult, AssumableRoleDirectory, CreateRoleCommand, CurrentRoleIdentity, Role, RoleAccess, RoleDirectory, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionRevocation, UserRoleSession } from "../domain/roles";
 
 export type LoginCommand = { loginName: string; password: string };
 export type ChangePasswordCommand = { currentPassword: string; newPassword: string; revokeOtherSessions?: boolean };
@@ -82,10 +82,10 @@ export interface IamRepository {
   roleSelfService?: {
     listAssumable(credential: string, after?: string): Promise<AssumableRoleDirectory>;
     assume(credential: string, roleId: string, command: AssumeRoleCommand): Promise<AssumeRoleResult>;
-    readByRequest(credential: string, requestId: string): Promise<LiveRoleSession>;
-    revokeByRequest(credential: string, issuanceRequestId: string, requestId: string): Promise<LiveRoleSession>;
+    readByRequest(credential: string, requestId: string): Promise<UserRoleSession>;
+    revokeByRequest(credential: string, issuanceRequestId: string, requestId: string): Promise<UserRoleSession>;
     currentIdentity(roleCredential: string): Promise<CurrentRoleIdentity>;
-    logout(roleCredential: string, requestId: string): Promise<LiveRoleSession>;
+    logout(roleCredential: string, requestId: string): Promise<UserRoleSession>;
     revalidateSource(credential: string, accountId: string, userId: string): Promise<void>;
   };
   sessions?: {

@@ -99,7 +99,7 @@ const managedRoleSession = {
 };
 const managedRoleSessionItem = {
   session: managedRoleSession,
-  sourceUser: { id: childUser.id, loginName: childUser.loginName, displayName: childUser.displayName },
+  source: { type: "USER" as const, user: { id: childUser.id, loginName: childUser.loginName, displayName: childUser.displayName } },
   lifecycle: "UNREVOKED" as const,
   revokeCapability: { action: "iam.role-session.revoke" as const, resource: { kind: "ROLE_SESSION" as const, id: managedRoleSession.id }, available: true, restrictionReason: null }
 };

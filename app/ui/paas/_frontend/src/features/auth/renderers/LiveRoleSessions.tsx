@@ -5,7 +5,7 @@ import { useTranslations } from "next-intl";
 import { ActionMenu, Alert, Badge, Button, EmptyState, Table, TablePagination, TableSkeleton, TableToolbar } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import { accountError, type RoleAccessClient, type RoleSessionRevokeIntent } from "../application/AccountAccessProvider";
-import type { RoleCapability, RoleSessionDirectory, RoleSessionFilter, RoleSessionFilterLifecycle, RoleSessionListing } from "../domain/roles";
+import type { RoleCapability, RoleSessionDirectory, RoleSessionFilter, RoleSessionFilterLifecycle, RoleSessionListing, RoleSessionSource } from "../domain/roles";
 import { WorkspaceTime } from "./AccessWorkspaceUi";
 import styles from "./AccountAccessRenderer.module.css";
 
@@ -13,8 +13,23 @@ const exactIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 function replaceSession(directory: RoleSessionDirectory | null, item: RoleSessionListing, filter: RoleSessionFilter): RoleSessionDirectory | null {
   if (!directory) return directory;
   const matchesLifecycle = filter.lifecycle === "ALL" || filter.lifecycle === item.lifecycle;
-  const matchesExact = !filter.exactId || (filter.exactKind === "session" ? item.session.id === filter.exactId : item.sourceUser.id === filter.exactId);
-  return { ...directory, items: directory.items.flatMap((candidate) => candidate.session.id === item.session.id ? matchesLifecycle && matchesExact ? [item] : [] : [candidate]) };
+  const matchesType = filter.sourceType === "ALL" || filter.sourceType === item.source.type;
+  const sourceId = item.source.type === "USER" ? item.source.user.id : item.source.servicePrincipal.principalId;
+  const matchesExact = !filter.exactId || (filter.exactKind === "session" ? item.session.id === filter.exactId : sourceId === filter.exactId);
+  return { ...directory, items: directory.items.flatMap((candidate) => candidate.session.id === item.session.id ? matchesLifecycle && matchesType && matchesExact ? [item] : [] : [candidate]) };
+}
+
+function SessionSourceSummary({ source, sessionId }: { source: RoleSessionSource; sessionId?: string }) {
+  const t = useTranslations("RoleWorkspace");
+  return source.type === "USER" ? <>
+    <strong>{source.user.loginName}</strong>
+    <small><Badge status="neutral">{t("sourceTypes.USER")}</Badge> {source.user.displayName} · <code>{source.user.id}</code></small>
+    {sessionId ? <small><code>{sessionId}</code></small> : null}
+  </> : <>
+    <strong><code>{source.servicePrincipal.principalId}</code></strong>
+    <small><Badge status="info">{t("sourceTypes.SERVICE_ACCOUNT")}</Badge> <code>{source.servicePrincipal.installationId}</code></small>
+    <small>{t("servicePurpose")}: <code>{source.servicePrincipal.purpose}</code>{sessionId ? <> · <code>{sessionId}</code></> : null}</small>
+  </>;
 }
 
 export function LiveRoleSessions({ client, roleId, listCapability, revokeIntent, onRevokeIntentChange }: {
@@ -26,6 +41,7 @@ export function LiveRoleSessions({ client, roleId, listCapability, revokeIntent,
 }) {
   const t = useTranslations("RoleWorkspace"), w = useTranslations("IamWorkspace"), a = useTranslations("AccountAccess"), toolbarLabels = useTableToolbarLabels();
   const [queryKind, setQueryKind] = useState<RoleSessionFilter["exactKind"]>("session"), [query, setQuery] = useState(""), [appliedQuery, setAppliedQuery] = useState("");
+  const [sourceType, setSourceType] = useState<RoleSessionFilter["sourceType"]>("ALL");
   const [lifecycle, setLifecycle] = useState<RoleSessionFilterLifecycle>("UNREVOKED"), [directory, setDirectory] = useState<RoleSessionDirectory | null>(null);
   const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading"), [completedRequest, setCompletedRequest] = useState(""), [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null), [page, setPage] = useState(1), [pageSize, setPageSize] = useState(10), [refresh, setRefresh] = useState(0);
@@ -33,8 +49,8 @@ export function LiveRoleSessions({ client, roleId, listCapability, revokeIntent,
   const directoryRegion = useRef<HTMLDivElement>(null), heading = useRef<HTMLHeadingElement>(null), returnFocus = useRef<string | null>(null);
   const previousIntentOpen = useRef(ownedRevokeIntent?.open ?? false), requests = useRef(0), pageRequests = useRef(0);
   const normalized = query.trim(), queryValid = !normalized || exactIdPattern.test(normalized);
-  const filter = useMemo<RoleSessionFilter>(() => ({ exactKind: queryKind, exactId: appliedQuery, lifecycle }), [appliedQuery, lifecycle, queryKind]);
-  const requestKey = `${roleId}\u0000${queryKind}\u0000${appliedQuery}\u0000${lifecycle}\u0000${refresh}`;
+  const filter = useMemo<RoleSessionFilter>(() => ({ exactKind: queryKind, exactId: appliedQuery, sourceType, lifecycle }), [appliedQuery, lifecycle, queryKind, sourceType]);
+  const requestKey = `${roleId}\u0000${queryKind}\u0000${appliedQuery}\u0000${sourceType}\u0000${lifecycle}\u0000${refresh}`;
   const pending = listCapability.available && (!appliedQuery || exactIdPattern.test(appliedQuery)) && completedRequest !== requestKey;
 
   useEffect(() => { const timer = window.setTimeout(() => { pageRequests.current += 1; setLoadingMore(false); setAppliedQuery(normalized); }, 250); return () => window.clearTimeout(timer); }, [normalized]);
@@ -87,7 +103,7 @@ export function LiveRoleSessions({ client, roleId, listCapability, revokeIntent,
       <div className={styles.sectionHeading}><Button variant="ghost" disabled={busy} onClick={close}>{t("backToSessions")}</Button><h3 className={styles.detailTitle} tabIndex={-1}>{t("revoke")}</h3></div>
       <Alert status="warning">{t("liveRevokeHint")}</Alert>
       {ownedRevokeIntent.phase === "unknown" ? <Alert status={terminalObservation ? "info" : "danger"}>{observed ? t(observed.lifecycle === "REVOKED" ? "authoritativeRevoked" : observed.lifecycle === "EXPIRED" ? "authoritativeExpired" : "authoritativeUnrevoked") : t("revokeOutcomeUnknown")}</Alert> : null}
-      <dl className={styles.facts}><div><dt>{t("caller")}</dt><dd>{ownedRevokeIntent.item.sourceUser.loginName}<small>{ownedRevokeIntent.item.sourceUser.id}</small></dd></div><div><dt>{t("sessionId")}</dt><dd><code>{ownedRevokeIntent.item.session.id}</code></dd></div><div><dt>{t("requestId")}</dt><dd><code>{ownedRevokeIntent.requestId}</code></dd></div><div><dt>{t("expires")}</dt><dd><WorkspaceTime value={ownedRevokeIntent.item.session.expiresAt} /></dd></div></dl>
+      <dl className={styles.facts}><div><dt>{t("caller")}</dt><dd><SessionSourceSummary source={ownedRevokeIntent.item.source} /></dd></div><div><dt>{t("sessionId")}</dt><dd><code>{ownedRevokeIntent.item.session.id}</code></dd></div><div><dt>{t("requestId")}</dt><dd><code>{ownedRevokeIntent.requestId}</code></dd></div><div><dt>{t("expires")}</dt><dd><WorkspaceTime value={ownedRevokeIntent.item.session.expiresAt} /></dd></div></dl>
       <div className={styles.actions}>
         {terminalObservation ? <Button variant="secondary" onClick={close}>{t("backToSessions")}</Button> : <Button variant="danger" disabled={busy} onClick={() => void confirm()}>{ownedRevokeIntent.phase === "unknown" ? t("retryOriginalRequest") : t("revoke")}</Button>}
         {ownedRevokeIntent.phase === "unknown" && !terminalObservation ? <Button variant="secondary" disabled={busy} onClick={() => void inspect()}>{t("readAuthoritativeState")}</Button> : null}
@@ -119,9 +135,10 @@ export function LiveRoleSessions({ client, roleId, listCapability, revokeIntent,
     <div className={styles.actionHeader}><h3 ref={heading} tabIndex={-1}>{t("liveSessions")}</h3><Badge status="success">LIVE</Badge></div>
     <Alert>{t("liveSessionDirectoryHint")}</Alert>
     {ownedRevokeIntent?.phase === "unknown" ? <div className={styles.stack}><Alert status="warning">{t("pendingUnknownRevoke", { id: ownedRevokeIntent.item.session.id })}</Alert><div className={styles.actions}><Button size="small" variant="secondary" onClick={() => { returnFocus.current = ownedRevokeIntent.item.session.id; onRevokeIntentChange(ownedRevokeIntent.requestId, { ...ownedRevokeIntent, open: true }); }}>{t("resumeUnknownRevoke")}</Button></div></div> : null}
-    <TableToolbar labels={toolbarLabels} search={{ label: t(queryKind === "session" ? "exactSessionSearch" : "exactSourceUserSearch"), value: query, onChange: (value) => { setQuery(value); resetDirectoryQuery(); } }}
+    <TableToolbar labels={toolbarLabels} search={{ label: t(queryKind === "session" ? "exactSessionSearch" : queryKind === "sourceUser" ? "exactSourceUserSearch" : "exactSourceServiceSearch"), value: query, onChange: (value) => { setQuery(value); resetDirectoryQuery(); } }}
       filters={[
-        { id: "exact-kind", label: t("exactQueryKind"), value: queryKind, defaultValue: "session", onChange: (value) => { setQueryKind(value as RoleSessionFilter["exactKind"]); resetDirectoryQuery(); }, options: [{ value: "session", label: t("sessionId") }, { value: "sourceUser", label: t("sourceUserId") }] },
+        { id: "exact-kind", label: t("exactQueryKind"), value: queryKind, defaultValue: "session", onChange: (value) => { const next = value as RoleSessionFilter["exactKind"]; setQueryKind(next); if (next === "sourceUser" && sourceType === "SERVICE_ACCOUNT") setSourceType("USER"); if (next === "sourceServicePrincipal" && sourceType === "USER") setSourceType("SERVICE_ACCOUNT"); resetDirectoryQuery(); }, options: [{ value: "session", label: t("sessionId") }, { value: "sourceUser", label: t("sourceUserId") }, { value: "sourceServicePrincipal", label: t("sourceServicePrincipalId") }] },
+        { id: "source-type", label: t("sourceTypeFilter"), value: sourceType, defaultValue: "ALL", onChange: (value) => { const next = value as RoleSessionFilter["sourceType"]; setSourceType(next); if (next === "USER" && queryKind === "sourceServicePrincipal") setQueryKind("sourceUser"); if (next === "SERVICE_ACCOUNT" && queryKind === "sourceUser") setQueryKind("sourceServicePrincipal"); resetDirectoryQuery(); }, options: (["ALL", "USER", "SERVICE_ACCOUNT"] as const).map((value) => ({ value, label: t(`sourceTypes.${value}`) })) },
         { id: "lifecycle", label: t("lifecycleFilter"), value: lifecycle, defaultValue: "UNREVOKED", onChange: (value) => { setLifecycle(value as RoleSessionFilterLifecycle); resetDirectoryQuery(); }, options: (["UNREVOKED", "EXPIRED", "REVOKED", "ALL"] as const).map((value) => ({ value, label: t(`liveLifecycle.${value}`) })) }
       ]}
       status={pending ? t("refreshingSessions") : directory ? t("sessionCount", { count: items.length }) : undefined}
@@ -129,7 +146,7 @@ export function LiveRoleSessions({ client, roleId, listCapability, revokeIntent,
     {!queryValid ? <Alert status="warning">{t("exactIdInvalid")}</Alert> : null}
     {phase === "loading" ? <TableSkeleton label={t("loadingSessions")} rows={4} /> : null}
     {phase === "error" ? <EmptyState title={t("sessionDirectoryUnavailable")} description={error ?? undefined} action={<Button variant="secondary" onClick={() => { setError(null); setRefresh((value) => value + 1); }}>{t("retry")}</Button>} /> : null}
-      {phase === "ready" && items.length ? <><Table aria-label={t("liveSessions")} mobileLayout="stack"><thead><tr><th scope="col">{t("caller")}</th><th scope="col">{t("sessionStatus")}</th><th scope="col">{t("issued")}</th><th scope="col">{t("expires")}</th><th scope="col">{w("actions")}</th></tr></thead><tbody>{items.slice((current - 1) * pageSize, current * pageSize).map((item) => { const resumesPending = ownedRevokeIntent?.phase === "unknown" && ownedRevokeIntent.item.session.id === item.session.id; const blockedByPending = Boolean(revokeIntent) && !resumesPending; return <tr key={item.session.id}><td data-label={t("caller")}><strong>{item.sourceUser.loginName}</strong><small>{item.sourceUser.displayName} · {item.sourceUser.id}</small><small>{item.session.id}</small></td><td data-label={t("sessionStatus")}><Badge status={item.lifecycle === "UNREVOKED" ? "success" : "neutral"}>{t(`liveLifecycle.${item.lifecycle}`)}</Badge></td><td data-label={t("issued")}><WorkspaceTime value={item.session.issuedAt} /></td><td data-label={t("expires")}><WorkspaceTime value={item.session.expiresAt} /></td><td data-label={w("actions")}><span data-live-session-actions={item.session.id}><ActionMenu iconOnly label={t("sessionActions", { id: item.session.id })} actions={[{ id: "revoke", label: t(resumesPending ? "resumeUnknownRevoke" : "revoke"), danger: true, disabledReason: blockedByPending ? t("pendingRevokeAnother") : item.revokeCapability.available ? undefined : t("revokeUnavailable"), onSelect: () => { returnFocus.current = item.session.id; if (resumesPending && ownedRevokeIntent) onRevokeIntentChange(ownedRevokeIntent.requestId, { ...ownedRevokeIntent, open: true }); else onRevokeIntentChange(null, { accountId: client.accountId, roleId, item, requestId: `ui-role-session-revoke-${crypto.randomUUID()}`, phase: "confirm", open: true }); } }]} /></span></td></tr>; })}</tbody></Table><Table.Footer note={t("liveSessionPageHint")}><TablePagination page={current} pages={pages} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} trailing={directory?.nextAfter ? <Button size="small" variant="secondary" disabled={pending || loadingMore} onClick={() => void loadMore()}>{t("loadMore")}</Button> : null} labels={{ summary: w("page", { page: current, pages }), pageSize: w("pageSize"), previous: w("previous"), next: w("next") }} /></Table.Footer></> : null}
+      {phase === "ready" && items.length ? <><Table aria-label={t("liveSessions")} mobileLayout="stack"><thead><tr><th scope="col">{t("caller")}</th><th scope="col">{t("sessionStatus")}</th><th scope="col">{t("issued")}</th><th scope="col">{t("expires")}</th><th scope="col">{w("actions")}</th></tr></thead><tbody>{items.slice((current - 1) * pageSize, current * pageSize).map((item) => { const resumesPending = ownedRevokeIntent?.phase === "unknown" && ownedRevokeIntent.item.session.id === item.session.id; const blockedByPending = Boolean(revokeIntent) && !resumesPending; return <tr key={item.session.id}><td data-label={t("caller")}><SessionSourceSummary source={item.source} sessionId={item.session.id} /></td><td data-label={t("sessionStatus")}><Badge status={item.lifecycle === "UNREVOKED" ? "success" : "neutral"}>{t(`liveLifecycle.${item.lifecycle}`)}</Badge></td><td data-label={t("issued")}><WorkspaceTime value={item.session.issuedAt} /></td><td data-label={t("expires")}><WorkspaceTime value={item.session.expiresAt} /></td><td data-label={w("actions")}><span data-live-session-actions={item.session.id}><ActionMenu iconOnly label={t("sessionActions", { id: item.session.id })} actions={[{ id: "revoke", label: t(resumesPending ? "resumeUnknownRevoke" : "revoke"), danger: true, disabledReason: blockedByPending ? t("pendingRevokeAnother") : item.revokeCapability.available ? undefined : t("revokeUnavailable"), onSelect: () => { returnFocus.current = item.session.id; if (resumesPending && ownedRevokeIntent) onRevokeIntentChange(ownedRevokeIntent.requestId, { ...ownedRevokeIntent, open: true }); else onRevokeIntentChange(null, { accountId: client.accountId, roleId, item, requestId: `ui-role-session-revoke-${crypto.randomUUID()}`, phase: "confirm", open: true }); } }]} /></span></td></tr>; })}</tbody></Table><Table.Footer note={t("liveSessionPageHint")}><TablePagination page={current} pages={pages} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} trailing={directory?.nextAfter ? <Button size="small" variant="secondary" disabled={pending || loadingMore} onClick={() => void loadMore()}>{t("loadMore")}</Button> : null} labels={{ summary: w("page", { page: current, pages }), pageSize: w("pageSize"), previous: w("previous"), next: w("next") }} /></Table.Footer></> : null}
     {phase === "ready" && !items.length ? <EmptyState title={directory?.nextAfter ? t("emptySessionWindow") : t("noMatchingSessions")} description={directory?.nextAfter ? t("emptySessionWindowHint") : t("noMatchingSessionsHint")} action={directory?.nextAfter ? <Button variant="secondary" disabled={pending || loadingMore} onClick={() => void loadMore()}>{t("continueSessionScan")}</Button> : undefined} /> : null}
     {error && phase === "ready" ? <Alert status="warning">{error}</Alert> : null}
   </div>;

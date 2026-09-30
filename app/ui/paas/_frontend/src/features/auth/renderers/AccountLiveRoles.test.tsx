@@ -45,9 +45,19 @@ const liveSession = {
 };
 const liveSessionItem = {
   session: liveSession,
-  sourceUser: { id: "user-alex", loginName: "alex", displayName: "Alex" },
+  source: { type: "USER" as const, user: { id: "user-alex", loginName: "alex", displayName: "Alex" } },
   lifecycle: "UNREVOKED" as const,
   revokeCapability: { action: "iam.role-session.revoke" as const, resource: { kind: "ROLE_SESSION" as const, id: liveSession.id }, available: true, restrictionReason: null }
+};
+const serviceSession = {
+  id: "rs1.service-read", accountId: role.accountId, roleId: role.id, sourceServicePrincipalId: "service-paas-runtime", status: "ACTIVE" as const,
+  issuedAt: timestamp, expiresAt: "2026-09-21T08:15:00Z", revokedAt: null
+};
+const serviceSessionItem = {
+  session: serviceSession,
+  source: { type: "SERVICE_ACCOUNT" as const, servicePrincipal: { installationId: "installation-paas-primary", principalId: "service-paas-runtime", purpose: "PAAS" as const } },
+  lifecycle: "UNREVOKED" as const,
+  revokeCapability: { action: "iam.role-session.revoke" as const, resource: { kind: "ROLE_SESSION" as const, id: serviceSession.id }, available: true, restrictionReason: null }
 };
 
 function client(overrides: Partial<RoleAccessClient> = {}): RoleAccessClient {
@@ -188,6 +198,39 @@ describe("AccountLiveRoles", () => {
     expect(revoke.mock.calls[1]?.[2]).toBe(revoke.mock.calls[0]?.[2]);
     expect(api.readSession).toHaveBeenCalledWith(role.id, liveSession.id);
     expect(document.activeElement).toBe(screen.getByRole("heading", { name: "角色会话" }));
+  });
+
+  it("renders service-account lineage and sends closed source filters", async () => {
+    const user = userEvent.setup();
+    const listSessions = vi.fn().mockImplementation((_roleId, filter) => {
+      const candidates = filter.sourceType === "USER" ? [liveSessionItem]
+        : filter.sourceType === "SERVICE_ACCOUNT" ? [serviceSessionItem] : [liveSessionItem, serviceSessionItem];
+      const items = !filter.exactId ? candidates : candidates.filter((item) => filter.exactKind === "session"
+        ? item.session.id === filter.exactId
+        : filter.exactKind === "sourceUser" ? item.source.type === "USER" && item.source.user.id === filter.exactId
+          : item.source.type === "SERVICE_ACCOUNT" && item.source.servicePrincipal.principalId === filter.exactId);
+      return Promise.resolve({ accountId: role.accountId, roleId: role.id, observedAt: timestamp, items, nextAfter: null });
+    });
+    render(<LocaleProvider><RolesHarness api={client({ listSessions })} entityId={role.id} /></LocaleProvider>);
+
+    await user.click(await screen.findByRole("tab", { name: "角色会话" }));
+    const initial = await screen.findByRole("table", { name: "角色会话" });
+    expect(initial.textContent).toContain("service-paas-runtime");
+    expect(initial.textContent).toContain("installation-paas-primary");
+    expect(initial.textContent).toContain("PAAS");
+
+    await user.click(screen.getByRole("button", { name: "筛选" }));
+    await user.click(screen.getByRole("combobox", { name: "来源类型" }));
+    await user.click(screen.getByRole("option", { name: "服务账号" }));
+    await waitFor(() => expect(listSessions).toHaveBeenLastCalledWith(role.id, expect.objectContaining({ sourceType: "SERVICE_ACCOUNT" })));
+    expect(screen.getByRole("table", { name: "角色会话" }).textContent).not.toContain("user-alex");
+
+    await user.click(screen.getByRole("combobox", { name: "精确查询字段" }));
+    await user.click(screen.getByRole("option", { name: "服务主体 ID" }));
+    await user.type(screen.getByRole("searchbox", { name: "输入完整服务主体 ID" }), "service-paas-runtime");
+    await waitFor(() => expect(listSessions).toHaveBeenLastCalledWith(role.id, {
+      exactKind: "sourceServicePrincipal", exactId: "service-paas-runtime", sourceType: "SERVICE_ACCOUNT", lifecycle: "UNREVOKED"
+    }));
   });
 
   it("does not let a late empty-window continuation overwrite a newer lifecycle filter", async () => {

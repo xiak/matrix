@@ -1,4 +1,5 @@
 import type { CapabilityRestriction } from "./accounts";
+import type { ServicePrincipalReference } from "./serviceAuthorization";
 
 export type RoleStatus = "ACTIVE" | "DISABLED";
 
@@ -92,22 +93,28 @@ export type RoleAccess = {
 export type RoleSessionLifecycle = "UNREVOKED" | "EXPIRED" | "REVOKED";
 export type RoleSessionFilterLifecycle = RoleSessionLifecycle | "ALL";
 
-export type LiveRoleSession = {
+type RoleSessionRecord = {
   id: string;
   accountId: string;
   roleId: string;
-  sourceUserId: string;
   status: "ACTIVE" | "REVOKED";
   issuedAt: string;
   expiresAt: string;
   revokedAt: string | null;
 };
 
+export type UserRoleSession = RoleSessionRecord & { sourceUserId: string; sourceServicePrincipalId?: never };
+export type ServiceRoleSession = RoleSessionRecord & { sourceUserId?: never; sourceServicePrincipalId: string };
+export type LiveRoleSession = UserRoleSession | ServiceRoleSession;
+
 export type RoleSessionSourceUser = { id: string; loginName: string; displayName: string };
+export type RoleSessionSource =
+  | { type: "USER"; user: RoleSessionSourceUser; servicePrincipal?: never }
+  | { type: "SERVICE_ACCOUNT"; user?: never; servicePrincipal: ServicePrincipalReference };
 
 export type RoleSessionListing = {
   session: LiveRoleSession;
-  sourceUser: RoleSessionSourceUser;
+  source: RoleSessionSource;
   lifecycle: RoleSessionLifecycle;
   revokeCapability: RoleCapability;
 };
@@ -122,7 +129,12 @@ export type RoleSessionDirectory = {
 
 export type RoleSessionAccess = { observedAt: string; item: RoleSessionListing };
 export type RoleSessionRevocation = { outcome: "APPLIED" | "EQUAL_REPLAY"; session: LiveRoleSession };
-export type RoleSessionFilter = { exactKind: "session" | "sourceUser"; exactId: string; lifecycle: RoleSessionFilterLifecycle };
+export type RoleSessionFilter = {
+  exactKind: "session" | "sourceUser" | "sourceServicePrincipal";
+  exactId: string;
+  sourceType: "ALL" | RoleSessionSource["type"];
+  lifecycle: RoleSessionFilterLifecycle;
+};
 
 // Member self-service is intentionally separate from account-scoped Role
 // administration. The authenticated USER selects its own account/source
@@ -151,11 +163,11 @@ export type AssumeRoleCommand = {
 };
 
 export type AssumeRoleResult =
-  | { outcome: "APPLIED"; session: LiveRoleSession; credential: string }
-  | { outcome: "EQUAL_REPLAY"; session: LiveRoleSession; credential: null };
+  | { outcome: "APPLIED"; session: UserRoleSession; credential: string }
+  | { outcome: "EQUAL_REPLAY"; session: UserRoleSession; credential: null };
 
 export type CurrentRoleIdentity = {
-  session: LiveRoleSession & { status: "ACTIVE"; revokedAt: null };
+  session: UserRoleSession & { status: "ACTIVE"; revokedAt: null };
   account: { id: string; displayName: string };
   role: { id: string; name: string };
   sourceUser: RoleSessionSourceUser;

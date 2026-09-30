@@ -281,45 +281,66 @@ const roleSession = {
   apiVersion, kind: "RoleSession", id: "rs1.incident-review", accountId: account.id, roleId: role.id,
   sourceUserId: user.id, status: "ACTIVE", issuedAt: timestamp, expiresAt: "2026-09-11T09:00:00Z"
 };
+const servicePrincipal = { installationId: "installation-paas-primary", principalId: "service-paas-runtime", purpose: "PAAS" };
+const serviceRoleSession = {
+  apiVersion, kind: "RoleSession", id: "rs1.service-read", accountId: account.id, roleId: role.id,
+  sourceServicePrincipalId: servicePrincipal.principalId, status: "ACTIVE", issuedAt: timestamp, expiresAt: "2026-09-11T09:00:00Z"
+};
 function roleSessionListing(session: typeof roleSession & Record<string, unknown> = roleSession, lifecycle = "UNREVOKED", available = true) {
   return {
     session,
-    sourceUser: { id: user.id, loginName: user.loginName, displayName: user.displayName },
+    source: { type: "USER", user: { id: user.id, loginName: user.loginName, displayName: user.displayName } },
     lifecycle,
     revokeCapability: capability("iam.role-session.revoke", "ROLE_SESSION", session.id, available, available ? "AUTHORITY_REQUIRED" : "SESSION_NOT_REVOCABLE")
   };
 }
-function roleSessionDirectory(items = [roleSessionListing()], nextAfter?: string) {
+function serviceRoleSessionListing(lifecycle = "UNREVOKED", available = true) {
+  return {
+    session: serviceRoleSession,
+    source: { type: "SERVICE_ACCOUNT", servicePrincipal },
+    lifecycle,
+    revokeCapability: capability("iam.role-session.revoke", "ROLE_SESSION", serviceRoleSession.id, available, available ? "AUTHORITY_REQUIRED" : "SESSION_NOT_REVOCABLE")
+  };
+}
+function roleSessionDirectory(items: Record<string, unknown>[] = [roleSessionListing()], nextAfter?: string) {
   return { apiVersion, kind: "RoleSessionList", accountId: account.id, roleId: role.id, observedAt: roleSessionObservedAt, items, ...(nextAfter ? { nextAfter } : {}) };
 }
 
 describe("IAM HTTP role-session boundary", () => {
   it("uses exact server filters and preserves opaque empty-window cursors", async () => {
     let fetcher = reply(roleSessionDirectory());
-    const result = await httpAccountRepository.roles!.listSessions("bearer", account.id, role.id, { exactKind: "sourceUser", exactId: user.id, lifecycle: "ALL" });
-    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/roles/${role.id}/sessions?sourceUserId=${user.id}&lifecycle=ALL`);
-    expect(result.items[0]).toMatchObject({ lifecycle: "UNREVOKED", session: { id: roleSession.id }, sourceUser: { id: user.id } });
+    const result = await httpAccountRepository.roles!.listSessions("bearer", account.id, role.id, { exactKind: "sourceUser", exactId: user.id, sourceType: "USER", lifecycle: "ALL" });
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/roles/${role.id}/sessions?sourceType=USER&sourceUserId=${user.id}&lifecycle=ALL`);
+    expect(result.items[0]).toMatchObject({ lifecycle: "UNREVOKED", session: { id: roleSession.id }, source: { type: "USER", user: { id: user.id } } });
+
+    fetcher = reply(roleSessionDirectory([serviceRoleSessionListing()]));
+    const service = await httpAccountRepository.roles!.listSessions("bearer", account.id, role.id, { exactKind: "sourceServicePrincipal", exactId: servicePrincipal.principalId, sourceType: "SERVICE_ACCOUNT", lifecycle: "ALL" });
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/roles/${role.id}/sessions?sourceType=SERVICE_ACCOUNT&sourceServicePrincipalId=${servicePrincipal.principalId}&lifecycle=ALL`);
+    expect(service.items[0]).toMatchObject({ session: { sourceServicePrincipalId: servicePrincipal.principalId }, source: { type: "SERVICE_ACCOUNT", servicePrincipal } });
 
     fetcher = reply(roleSessionDirectory([], "ic1.next-window"));
-    const empty = await httpAccountRepository.roles!.listSessions("bearer", account.id, role.id, { exactKind: "session", exactId: "", lifecycle: "UNREVOKED" });
+    const empty = await httpAccountRepository.roles!.listSessions("bearer", account.id, role.id, { exactKind: "session", exactId: "", sourceType: "ALL", lifecycle: "UNREVOKED" });
     expect(empty).toMatchObject({ items: [], nextAfter: "ic1.next-window" });
     expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/roles/${role.id}/sessions`);
 
     fetcher = reply(roleSessionDirectory([], "ic1.next-window"));
-    await httpAccountRepository.roles!.listSessions("bearer", account.id, role.id, { exactKind: "session", exactId: "", lifecycle: "UNREVOKED" }, "ic1.previous-window");
+    await httpAccountRepository.roles!.listSessions("bearer", account.id, role.id, { exactKind: "session", exactId: "", sourceType: "ALL", lifecycle: "UNREVOKED" }, "ic1.previous-window");
     expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/roles/${role.id}/sessions?after=ic1.previous-window`);
   });
 
   it("rejects invented lifecycle, source, capability and private response fields", async () => {
     const invalid = [
       roleSessionDirectory([{ ...roleSessionListing(), lifecycle: "EXPIRED" }]),
-      roleSessionDirectory([{ ...roleSessionListing(), sourceUser: { id: "user-other", loginName: "other", displayName: "Other" } }]),
+      roleSessionDirectory([{ ...roleSessionListing(), source: { type: "USER", user: { id: "user-other", loginName: "other", displayName: "Other" } } }]),
+      roleSessionDirectory([{ ...serviceRoleSessionListing(), source: { type: "USER", user: { id: user.id, loginName: user.loginName, displayName: user.displayName } } }]),
+      roleSessionDirectory([{ ...serviceRoleSessionListing(), source: { type: "SERVICE_ACCOUNT", servicePrincipal, user: { id: user.id } } }]),
       roleSessionDirectory([{ ...roleSessionListing(), revokeCapability: capability("iam.role-session.revoke", "ROLE_SESSION", "rs1.other") }]),
-      roleSessionDirectory([{ ...roleSessionListing(), session: { ...roleSession, sourceSessionId: "private-login-session" } }])
+      roleSessionDirectory([{ ...roleSessionListing(), session: { ...roleSession, sourceSessionId: "private-login-session" } }]),
+      roleSessionDirectory([{ ...roleSessionListing(), session: { ...roleSession, sourceServicePrincipalId: servicePrincipal.principalId } }])
     ];
     for (const response of invalid) {
       reply(response);
-      await expect(httpAccountRepository.roles!.listSessions("bearer", account.id, role.id, { exactKind: "session", exactId: "", lifecycle: "ALL" })).rejects.toThrow("INVALID_IAM_RESPONSE");
+      await expect(httpAccountRepository.roles!.listSessions("bearer", account.id, role.id, { exactKind: "session", exactId: "", sourceType: "ALL", lifecycle: "ALL" })).rejects.toThrow("INVALID_IAM_RESPONSE");
     }
   });
 

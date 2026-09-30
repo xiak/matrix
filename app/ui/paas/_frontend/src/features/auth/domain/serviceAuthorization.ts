@@ -11,6 +11,12 @@ export type ServiceRoleTemplateReference = {
   contentDigest: string;
 };
 
+export type ServicePrincipalReference = {
+  installationId: string;
+  principalId: string;
+  purpose: ServiceRoleTemplatePurpose;
+};
+
 export type ServiceRoleWorkload = {
   resourceKind: string;
   bindAction: string;
@@ -54,11 +60,7 @@ export type ServiceLinkedRoleMetadata = {
 export type ServiceLinkedRoleRelation = {
   role: ServiceLinkedRoleMetadata;
   template: ServiceRoleTemplateReference;
-  servicePrincipal: {
-    installationId: string;
-    principalId: string;
-    purpose: ServiceRoleTemplatePurpose;
-  };
+  servicePrincipal: ServicePrincipalReference;
   permissionCeiling: PolicyVersionReference;
 };
 
