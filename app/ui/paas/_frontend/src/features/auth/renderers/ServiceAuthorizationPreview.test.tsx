@@ -93,12 +93,29 @@ describe("ServiceAuthorizationPreview", () => {
     expect(within(runtime).queryByRole("button")).toBeNull();
     expect(within(runtime).getByText(/下方目录另行展示非秘密会话元数据/)).toBeTruthy();
 
-    const sessions = screen.getByRole("table", { name: "服务会话目录样例" });
-    const currentSession = within(sessions).getByRole("button", { name: "preview.service-role-session.current" });
+    let sessions = screen.getByRole("table", { name: "服务会话目录样例" });
     expect(within(sessions).getByText("preview.service-role-session.expired")).toBeTruthy();
     expect(within(sessions).getAllByText("preview.paas.service").length).toBe(2);
     expect(within(sessions).getAllByText("PreviewServiceRoleForManagedServiceInstallationRead").length).toBe(2);
+    expect(within(sessions).queryByText("2026-10-01T02:20:00Z")).toBeNull();
     expect(within(sessions).queryByText(/credential|proof|decision/i)).toBeNull();
+    expect(screen.getByText("显示 2 / 2 条")).toBeTruthy();
+
+    const sessionSearch = screen.getByRole("searchbox", { name: "搜索会话 ID、来源服务或目标角色" });
+    await user.type(sessionSearch, "expired");
+    sessions = screen.getByRole("table", { name: "服务会话目录样例" });
+    expect(within(sessions).queryByRole("button", { name: "preview.service-role-session.current" })).toBeNull();
+    expect(within(sessions).getByRole("button", { name: "preview.service-role-session.expired" })).toBeTruthy();
+    expect(screen.getByText("显示 1 / 2 条")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "清空搜索" }));
+    await user.click(screen.getByRole("button", { name: "筛选" }));
+    await user.click(screen.getByRole("combobox", { name: "观察状态" }));
+    await user.click(screen.getByRole("option", { name: "已到期样例" }));
+    sessions = screen.getByRole("table", { name: "服务会话目录样例" });
+    expect(within(sessions).queryByRole("button", { name: "preview.service-role-session.current" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "移除筛选：观察状态: 已到期样例" }));
+    sessions = screen.getByRole("table", { name: "服务会话目录样例" });
+    const currentSession = within(sessions).getByRole("button", { name: "preview.service-role-session.current" });
 
     await user.click(currentSession);
     expect(screen.getByRole("heading", { name: "服务会话详情" })).toBe(document.activeElement);
