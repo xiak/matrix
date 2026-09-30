@@ -143,10 +143,14 @@ relation, workload binding and short-term session remain distinct facts, so an
 authorized Account may still show the current instance as unbound. The
 isolated product preview completes the same review with a visibly browser-only
 MOCK result that resets on refresh and never calls IAM, writes a role/binding
-or issues credentials. Pushed source/embed `5f65e36e` and documentation
-`c67d43e8` own this milestone. Public bind candidate
+or issues credentials. A bound MOCK instance also has an inline exact-unbind
+review: it removes only that resource binding, preserves the Account relation
+and does not claim existing short-lived sessions are immediately invalid.
+Cancellation and completion restore focus to a surviving resource action; the
+flow uses no Dialog. Pushed source/embed `d9b35525` and documentation
+`1670d5eb` own this milestone. Public bind candidate
 `50710ea503f919d00d8f6702687d338c27725c45` is reference-only pending exact CI
-and target acceptance; LIVE bind, revoke, unbind and service-session actions
+and target acceptance; LIVE bind/unbind, revoke and service-session actions
 remain absent, and the UI never calls `/v1/internal/*`. Exact evidence and
 limitations belong to FEAT-IAM-010 and FEAT-007.
 
