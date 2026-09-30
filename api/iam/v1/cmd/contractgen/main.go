@@ -557,6 +557,7 @@ func structContracts() map[string]reflect.Type {
 		"ServiceLinkedRoleList":                         openapi31.StructType[iamv1.ServiceLinkedRoleList](),
 		"CreateWorkloadRoleBindingRequest":              openapi31.StructType[iamv1.CreateWorkloadRoleBindingRequest](),
 		"RevokeWorkloadRoleBindingRequest":              openapi31.StructType[iamv1.RevokeWorkloadRoleBindingRequest](),
+		"AssumeServiceRoleRequest":                      openapi31.StructType[iamv1.AssumeServiceRoleRequest](),
 		"UserPermissionBoundary":                        openapi31.StructType[iamv1.UserPermissionBoundary](),
 		"SetUserPermissionBoundaryRequest":              openapi31.StructType[iamv1.SetUserPermissionBoundaryRequest](),
 		"RemoveUserPermissionBoundaryRequest":           openapi31.StructType[iamv1.RemoveUserPermissionBoundaryRequest](),
@@ -915,7 +916,7 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 	if owner == "AccessKeyList" && jsonName == "items" {
 		base["maxItems"], base["uniqueItems"] = iamv1.MaxUserAccessKeys, true
 	}
-	if owner == "AssumeRoleRequest" {
+	if owner == "AssumeRoleRequest" || owner == "AssumeServiceRoleRequest" {
 		switch jsonName {
 		case "durationSeconds":
 			base = object{"type": "integer", "minimum": iamv1.MinRoleSessionDurationSeconds, "maximum": iamv1.MaxRoleSessionDurationSeconds,
@@ -1168,6 +1169,7 @@ func applySemanticOverlays(schemas object) {
 	schemas["RevokeWorkloadRoleBindingRequest"].(object)["properties"].(object)["resourceVersion"] = object{"const": 1}
 	schemas["ServiceLinkedRoleAccess"].(object)["description"] = "Non-secret Account observation of one service-linked Role and its exact workload bindings. It carries no permission, session or service secret."
 	schemas["ServiceLinkedRoleAccess"].(object)["properties"].(object)["bindings"].(object)["maxItems"] = iamv1.DirectoryPageSize
+	schemas["AssumeServiceRoleRequest"].(object)["description"] = "Service-authenticated intent selecting only an existing workload binding and bounded duration. Account, Role, installation, purpose, template and policy are resolved by IAM."
 	schemas["ServiceLinkedRoleListing"].(object)["description"] = "Bounded current-Account summary. BindingCount is immutable history; ActiveBindingCount is current workload consent and never a cached authorization permit."
 	for _, field := range []string{"bindingCount", "activeBindingCount"} {
 		schemas["ServiceLinkedRoleListing"].(object)["properties"].(object)[field].(object)["maximum"] = uint64(9007199254740991)
@@ -1432,6 +1434,12 @@ func applySemanticOverlays(schemas object) {
 		object{"properties": object{"type": object{"const": "USER"}, "roleSession": false}},
 		object{"properties": object{"type": object{"const": "SERVICE_ACCOUNT"}, "roleSession": false, "accessKeyId": false}},
 	}
+	sourceLineage := []any{
+		object{"required": []string{"sourceUserId"}, "properties": object{"sourceServicePrincipalId": false}},
+		object{"required": []string{"sourceServicePrincipalId"}, "properties": object{"sourceUserId": false}},
+	}
+	schemas["RoleSessionReference"].(object)["oneOf"] = sourceLineage
+	schemas["RoleSession"].(object)["allOf"] = []any{object{"oneOf": sourceLineage}}
 	roleResponse["required"] = []string{"outcome", "session"}
 	roleResponse["oneOf"] = []any{
 		object{"required": []string{"credential"}, "properties": object{"outcome": object{"const": "APPLIED"}, "session": object{"properties": object{"status": object{"const": "ACTIVE"}}}}},

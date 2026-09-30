@@ -1673,11 +1673,15 @@ func TestAssumeRoleRequestSchemaMatchesTheClosedIntent(t *testing.T) {
 func TestRoleSessionResponseSchemaHasNoSecretReplayOrPrivateLineage(t *testing.T) {
 	api := loadIAMOpenAPI(t)
 	session := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"RoleSession","id":"role-session-a","accountId":"account-a","roleId":"role-a","sourceUserId":"user-a","status":"ACTIVE","issuedAt":"2026-09-16T00:00:00Z","expiresAt":"2026-09-16T01:00:00Z"}`
+	serviceSession := strings.Replace(session, `"sourceUserId":"user-a"`, `"sourceServicePrincipalId":"service-a"`, 1)
 	for _, sample := range []struct {
 		kind, wire string
 		valid      bool
 	}{
 		{"RoleSession", session, true},
+		{"RoleSession", serviceSession, true},
+		{"RoleSession", strings.Replace(session, `"sourceUserId":"user-a"`, `"sourceUserId":"user-a","sourceServicePrincipalId":"service-a"`, 1), false},
+		{"RoleSession", strings.Replace(session, `,"sourceUserId":"user-a"`, ``, 1), false},
 		{"RoleSession", strings.Replace(session, `"id":"role-session-a"`, `"id":""`, 1), false},
 		{"RoleSession", strings.Replace(session, `"status":"ACTIVE"`, `"status":"REVOKED"`, 1), false},
 		{"RoleSession", strings.Replace(session, `"status":"ACTIVE"`, `"status":"ACTIVE","sourceSessionId":"private"`, 1), false},
@@ -1695,6 +1699,29 @@ func TestRoleSessionResponseSchemaHasNoSecretReplayOrPrivateLineage(t *testing.T
 		value, err := jsonschema.UnmarshalJSON(strings.NewReader(sample.wire))
 		if err != nil || (schema.Validate(value) == nil) != sample.valid {
 			t.Fatal("role session schema disagrees with closed response", sample.kind, sample.valid)
+		}
+	}
+}
+
+func TestAssumeServiceRoleRequestSchemaHasNoAuthoritySelectors(t *testing.T) {
+	schema := compileIAMOpenAPISchema(t, loadIAMOpenAPI(t), "AssumeServiceRoleRequest")
+	base := `{"bindingId":"binding-a","requestId":"service-assume-a"}`
+	with := func(member string) string { return strings.TrimSuffix(base, "}") + "," + member + "}" }
+	for _, sample := range []struct {
+		wire  string
+		valid bool
+	}{
+		{base, true}, {with(`"durationSeconds":900`), true},
+		{with(`"durationSeconds":null`), false}, {with(`"durationSeconds":59`), false},
+		{with(`"accountId":"account-a"`), false}, {with(`"roleId":"role-a"`), false},
+		{with(`"installationId":"installation-a"`), false}, {with(`"purpose":"PAAS"`), false},
+		{with(`"templateId":"template-a"`), false}, {with(`"policyId":"policy-a"`), false},
+	} {
+		value, err := jsonschema.UnmarshalJSON(strings.NewReader(sample.wire))
+		var decoded AssumeServiceRoleRequest
+		decodeErr := DecodeRequest(strings.NewReader(sample.wire), &decoded)
+		if (err == nil && schema.Validate(value) == nil) != sample.valid || (decodeErr == nil) != sample.valid {
+			t.Fatalf("service role intent schema/runtime accepted=%v/%v want=%v: %s", err == nil && schema.Validate(value) == nil, decodeErr == nil, sample.valid, sample.wire)
 		}
 	}
 }

@@ -287,6 +287,10 @@ func applySemanticOverlays(schemas object) {
 		object{"properties": object{"type": object{"const": string(auditv1.ActorUser)}, "roleSession": false}},
 		object{"properties": object{"type": object{"enum": []string{string(auditv1.ActorServiceAccount), string(auditv1.ActorSystem)}}, "roleSession": false, "accessKeyId": false}},
 	}
+	schemas["RoleSessionReference"].(object)["oneOf"] = []any{
+		object{"required": []string{"sourceUserId"}, "properties": object{"sourceServicePrincipalId": false}},
+		object{"required": []string{"sourceServicePrincipalId"}, "properties": object{"sourceUserId": false}},
+	}
 
 	installation := schemas["InstallationVerification"].(object)
 	installation["allOf"] = []any{

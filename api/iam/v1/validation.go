@@ -1077,8 +1077,16 @@ func ValidateSubject(value Subject) error {
 		if value.RoleSession == nil {
 			problems = append(problems, errors.New("role subject has no session reference"))
 		} else {
-			problems = append(problems, ValidateID("roleSession.sessionId", string(value.RoleSession.SessionID)),
-				ValidateID("roleSession.sourceUserId", string(value.RoleSession.SourceUserID)))
+			if (value.RoleSession.SourceUserID == "") == (value.RoleSession.SourceServicePrincipalID == "") {
+				problems = append(problems, errors.New("role session source is invalid"))
+			}
+			problems = append(problems, ValidateID("roleSession.sessionId", string(value.RoleSession.SessionID)))
+			if value.RoleSession.SourceUserID != "" {
+				problems = append(problems, ValidateID("roleSession.sourceUserId", string(value.RoleSession.SourceUserID)))
+			}
+			if value.RoleSession.SourceServicePrincipalID != "" {
+				problems = append(problems, ValidateID("roleSession.sourceServicePrincipalId", string(value.RoleSession.SourceServicePrincipalID)))
+			}
 		}
 	} else if value.RoleSession != nil {
 		problems = append(problems, errors.New("non-role subject contains role session"))

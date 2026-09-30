@@ -152,7 +152,16 @@ func ValidateActor(value ActorReference) error {
 		if value.RoleSession == nil {
 			problems = append(problems, errors.New("ROLE actor requires its session lineage"))
 		} else {
-			problems = append(problems, ValidateID("actor.roleSession.sessionId", value.RoleSession.SessionID), ValidateID("actor.roleSession.sourceUserId", string(value.RoleSession.SourceUserID)))
+			if (value.RoleSession.SourceUserID == "") == (value.RoleSession.SourceServicePrincipalID == "") {
+				problems = append(problems, errors.New("ROLE actor source lineage is invalid"))
+			}
+			problems = append(problems, ValidateID("actor.roleSession.sessionId", value.RoleSession.SessionID))
+			if value.RoleSession.SourceUserID != "" {
+				problems = append(problems, ValidateID("actor.roleSession.sourceUserId", string(value.RoleSession.SourceUserID)))
+			}
+			if value.RoleSession.SourceServicePrincipalID != "" {
+				problems = append(problems, ValidateID("actor.roleSession.sourceServicePrincipalId", string(value.RoleSession.SourceServicePrincipalID)))
+			}
 		}
 	} else if value.RoleSession != nil {
 		problems = append(problems, errors.New("non-ROLE actor cannot contain session lineage"))

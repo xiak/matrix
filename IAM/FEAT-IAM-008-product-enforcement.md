@@ -100,6 +100,8 @@ managedservice 的首个 northbound bind 候选使用 `POST /managed-services/v1
 
 现有 USER `RoleSession` 历史和 Audit canonical 已有固定消费者，服务来源不能伪造 `sourceUserId`。公共 Role actor lineage 增加与 `sourceUserId` 严格二选一的 `sourceServicePrincipalId`，原USER编码因新增字段 `omitempty` 保持原字节；私有证据另保存 installation、purpose、binding、服务凭据代际和模板承诺。管理员目录必须准确区分 USER 与 SERVICE 来源，不能隐藏服务会话而使其不可撤销。若实现证明统一表会破坏现有锁序，可在同一 RoleSession owner内分开持久化生命周期，但公开身份、PDP和撤销语义仍只有一个，不保留两个求值器。
 
+当前本地契约切片已经把 `RoleSession`、IAM `Subject` 与 Audit `ActorReference` 的来源收敛为上述严格联合类型，并加入只含 `{bindingId,durationSeconds?,requestId}` 的封闭服务承担意图；Account、Role、installation、purpose、template、Policy及任意授权请求 selector 均由运行时解码和 OpenAPI 同时拒绝。既有 USER RoleSession JSON 与 ROLE Audit canonical document/digest 有精确字节回归；Audit PostgreSQL 18 在独占限额数据库中已通过真实迁移、角色过滤和混合/缺失来源攻击。该证据只证明公共契约及 Audit 存储接受面，尚未证明 IAM 发行事务、短期凭据、完成查询、管理员撤销或 managedservice 业务读取，不能据此开放 LIVE UI。
+
 首个消费者由 managedservice product owner 暴露“给当前 ServiceInstallation 绑定/解绑服务角色”的业务入口，而不是让浏览器直接调用内部 IAM：
 
 1. managedservice 以当前 USER bearer 对实际 `SERVICE_INSTALLATION` 做新增的精确 bind/unbind Action；从数据库确认该资源属于 IAM 推导的 Account。

@@ -280,9 +280,19 @@ func assertAuditContractCatalog(
 		`{"type":"USER","id":"user-one","accessKeyId":null}`,
 		`{"type":"USER","id":"user-one","accessKeyId":""}`,
 		`{"type":"SERVICE_ACCOUNT","id":"service-one","accessKeyId":"key-one"}`,
+		`{"type":"ROLE","id":"role-one","roleSession":{"sessionId":"one"}}`,
+		`{"type":"ROLE","id":"role-one","roleSession":{"sessionId":"one","sourceUserId":"user","sourceServicePrincipalId":"service"}}`,
 		`{"type":"ROLE","id":"role-one","roleSession":{"sessionId":"one","sourceUserId":"user","sourceSessionId":"private"}}`} {
 		_, err := runtimeConnection.Exec(ctx, `SELECT * FROM audit.read_records('tenant:filter-contract',100,2,NULL,NULL,NULL,$1::jsonb)`, actor)
 		assertAuthorityPostgresCode(t, err, "22023")
+	}
+	for _, actor := range []string{
+		`{"type":"ROLE","id":"role-one","roleSession":{"sessionId":"one","sourceUserId":"user"}}`,
+		`{"type":"ROLE","id":"role-one","roleSession":{"sessionId":"one","sourceServicePrincipalId":"service"}}`,
+	} {
+		if _, err := runtimeConnection.Exec(ctx, `SELECT * FROM audit.read_records('tenant:filter-contract',100,2,NULL,NULL,NULL,$1::jsonb)`, actor); err != nil {
+			t.Fatal("valid role source lineage was rejected", err)
+		}
 	}
 	for _, drift := range []string{
 		`ALTER FUNCTION audit.read_records(text,bigint,integer,timestamptz,timestamptz,text,jsonb) SET search_path=public,pg_temp`,

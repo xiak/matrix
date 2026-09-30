@@ -7815,17 +7815,37 @@
       },
       "RoleSessionReference": {
         "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "sourceServicePrincipalId": false
+            },
+            "required": [
+              "sourceUserId"
+            ]
+          },
+          {
+            "properties": {
+              "sourceUserId": false
+            },
+            "required": [
+              "sourceServicePrincipalId"
+            ]
+          }
+        ],
         "properties": {
           "sessionId": {
             "$ref": "#/components/schemas/ID"
+          },
+          "sourceServicePrincipalId": {
+            "$ref": "#/components/schemas/ActorID"
           },
           "sourceUserId": {
             "$ref": "#/components/schemas/ID"
           }
         },
         "required": [
-          "sessionId",
-          "sourceUserId"
+          "sessionId"
         ],
         "type": "object"
       },

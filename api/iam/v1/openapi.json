@@ -1177,6 +1177,29 @@
         ],
         "type": "object"
       },
+      "AssumeServiceRoleRequest": {
+        "additionalProperties": false,
+        "description": "Service-authenticated intent selecting only an existing workload binding and bounded duration. Account, Role, installation, purpose, template and policy are resolved by IAM.",
+        "properties": {
+          "bindingId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "durationSeconds": {
+            "default": 3600,
+            "maximum": 43200,
+            "minimum": 60,
+            "type": "integer"
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "bindingId",
+          "requestId"
+        ],
+        "type": "object"
+      },
       "AuditProducerAuthorization": {
         "additionalProperties": false,
         "oneOf": [
@@ -23476,6 +23499,28 @@
       },
       "RoleSession": {
         "additionalProperties": false,
+        "allOf": [
+          {
+            "oneOf": [
+              {
+                "properties": {
+                  "sourceServicePrincipalId": false
+                },
+                "required": [
+                  "sourceUserId"
+                ]
+              },
+              {
+                "properties": {
+                  "sourceUserId": false
+                },
+                "required": [
+                  "sourceServicePrincipalId"
+                ]
+              }
+            ]
+          }
+        ],
         "oneOf": [
           {
             "properties": {
@@ -23521,6 +23566,9 @@
           "roleId": {
             "$ref": "#/components/schemas/ID"
           },
+          "sourceServicePrincipalId": {
+            "$ref": "#/components/schemas/ID"
+          },
           "sourceUserId": {
             "$ref": "#/components/schemas/ID"
           },
@@ -23536,7 +23584,6 @@
           "issuedAt",
           "kind",
           "roleId",
-          "sourceUserId",
           "status"
         ],
         "type": "object"
@@ -23723,8 +23770,29 @@
       },
       "RoleSessionReference": {
         "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "sourceServicePrincipalId": false
+            },
+            "required": [
+              "sourceUserId"
+            ]
+          },
+          {
+            "properties": {
+              "sourceUserId": false
+            },
+            "required": [
+              "sourceServicePrincipalId"
+            ]
+          }
+        ],
         "properties": {
           "sessionId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "sourceServicePrincipalId": {
             "$ref": "#/components/schemas/ID"
           },
           "sourceUserId": {
@@ -23732,8 +23800,7 @@
           }
         },
         "required": [
-          "sessionId",
-          "sourceUserId"
+          "sessionId"
         ],
         "type": "object"
       },

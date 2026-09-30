@@ -201,6 +201,24 @@ func TestLegacyOrganizationCreationRetainsItsTenantCanonicalContract(t *testing.
 	}
 }
 
+func TestUserRoleLineageRetainsItsCanonicalContract(t *testing.T) {
+	event := Event{
+		APIVersion: APIVersion, Kind: "AuditEvent", EventID: "event-role-exit", TenantID: "account-original",
+		Actor: ActorReference{Type: ActorRole, ID: "role-original", RoleSession: &RoleSessionReference{
+			SessionID: "role-session-original", SourceUserID: "user-original",
+		}},
+		Action: ActionIAMRoleSessionExited, Target: TargetReference{Kind: TargetRoleSession, ID: "role-session-original"},
+		Result: ResultSucceeded, RequestDigest: "sha256:" + strings.Repeat("2", 64), RequestID: "request-role-exit",
+		CorrelationID: "request-role-exit", OccurredAt: time.Date(2026, 9, 30, 8, 0, 0, 0, time.UTC),
+	}
+	const expected = `{"canonicalVersion":"matrix.audit.canonical-event.v1","source":"IAM","event":{"apiVersion":"audit.matrix.xiak.com/v1","kind":"AuditEvent","eventId":"event-role-exit","tenantId":"account-original","actor":{"type":"ROLE","id":"role-original","roleSession":{"sessionId":"role-session-original","sourceUserId":"user-original"}},"action":"iam.role-session.exited","target":{"kind":"ROLE_SESSION","id":"role-session-original"},"result":"SUCCEEDED","requestDigest":"sha256:2222222222222222222222222222222222222222222222222222222222222222","requestId":"request-role-exit","correlationId":"request-role-exit","occurredAt":"2026-09-30T08:00:00.000000Z"}}`
+	document, digest, err := CanonicalizeEvent(SourceIAM, event)
+	expectedDigest := sha256.Sum256([]byte(expected))
+	if err != nil || document != expected || digest != "sha256:"+hex.EncodeToString(expectedDigest[:]) {
+		t.Fatal("existing USER RoleSession fact changed its canonical contract")
+	}
+}
+
 func TestAuditExamplesPassDomainValidation(t *testing.T) {
 	tests := []struct {
 		name string

@@ -23,11 +23,15 @@ func TestEveryAuditOpenAPISchemaCompilesAsJSONSchema202012(t *testing.T) {
 func TestRoleActorLineageIsStrictAndFactBound(t *testing.T) {
 	schema := compileAuditOpenAPISchema(t, loadAuditOpenAPI(t), "ActorReference")
 	valid := `{"type":"ROLE","id":"role-one","roleSession":{"sessionId":"role-session-one","sourceUserId":"source-user"}}`
+	service := `{"type":"ROLE","id":"role-one","roleSession":{"sessionId":"role-session-one","sourceServicePrincipalId":"service-one"}}`
 	for _, test := range []struct {
 		body string
 		want bool
 	}{
 		{valid, true},
+		{service, true},
+		{strings.Replace(valid, `"sourceUserId":"source-user"`, `"sourceUserId":"source-user","sourceServicePrincipalId":"service-one"`, 1), false},
+		{strings.Replace(valid, `,"sourceUserId":"source-user"`, ``, 1), false},
 		{`{"type":"USER","id":"source-user"}`, true},
 		{`{"type":"USER","id":"source-user","roleSession":null}`, false},
 		{`{"type":"ROLE","id":"role-one"}`, false},

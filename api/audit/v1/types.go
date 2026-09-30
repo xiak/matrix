@@ -17,8 +17,9 @@ type ActorReference struct {
 }
 
 type RoleSessionReference struct {
-	SessionID    string  `json:"sessionId"`
-	SourceUserID ActorID `json:"sourceUserId"`
+	SessionID                string  `json:"sessionId"`
+	SourceUserID             ActorID `json:"sourceUserId,omitempty"`
+	SourceServicePrincipalID ActorID `json:"sourceServicePrincipalId,omitempty"`
 }
 
 // Lineage is part of the actor identity, not pointer identity or an attribute.

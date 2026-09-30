@@ -139,16 +139,17 @@ type AssumeRoleRequest struct {
 // ACTIVE means not explicitly revoked; expiry and current source/role authority
 // must still be checked for every protected request.
 type RoleSession struct {
-	APIVersion   string        `json:"apiVersion"`
-	Kind         string        `json:"kind"`
-	ID           RoleSessionID `json:"id"`
-	AccountID    AccountID     `json:"accountId"`
-	RoleID       RoleID        `json:"roleId"`
-	SourceUserID PrincipalID   `json:"sourceUserId"`
-	Status       SessionStatus `json:"status"`
-	IssuedAt     time.Time     `json:"issuedAt"`
-	ExpiresAt    time.Time     `json:"expiresAt"`
-	RevokedAt    *time.Time    `json:"revokedAt,omitempty"`
+	APIVersion               string        `json:"apiVersion"`
+	Kind                     string        `json:"kind"`
+	ID                       RoleSessionID `json:"id"`
+	AccountID                AccountID     `json:"accountId"`
+	RoleID                   RoleID        `json:"roleId"`
+	SourceUserID             PrincipalID   `json:"sourceUserId,omitempty"`
+	SourceServicePrincipalID PrincipalID   `json:"sourceServicePrincipalId,omitempty"`
+	Status                   SessionStatus `json:"status"`
+	IssuedAt                 time.Time     `json:"issuedAt"`
+	ExpiresAt                time.Time     `json:"expiresAt"`
+	RevokedAt                *time.Time    `json:"revokedAt,omitempty"`
 }
 
 // These display projections deliberately omit the Account root relationship,
@@ -476,15 +477,22 @@ func ValidateRoleSession(value RoleSession) error {
 	if value.APIVersion != APIVersion || value.Kind != "RoleSession" ||
 		(value.Status != SessionActive && value.Status != SessionRevoked) ||
 		(value.Status == SessionRevoked) != (value.RevokedAt != nil) ||
+		(value.SourceUserID == "") == (value.SourceServicePrincipalID == "") ||
 		!value.ExpiresAt.After(value.IssuedAt) || value.ExpiresAt.Sub(value.IssuedAt) > time.Duration(MaxRoleSessionDurationSeconds)*time.Second {
 		return errors.New("role session is invalid")
 	}
 	if value.RevokedAt != nil && (validateTime("revokedAt", *value.RevokedAt) != nil || value.RevokedAt.Before(value.IssuedAt)) {
 		return errors.New("role session revocation is invalid")
 	}
-	return errors.Join(ValidateID("sessionId", string(value.ID)), ValidateID("accountId", string(value.AccountID)),
-		ValidateID("roleId", string(value.RoleID)), ValidateID("sourceUserId", string(value.SourceUserID)),
-		validateTime("issuedAt", value.IssuedAt), validateTime("expiresAt", value.ExpiresAt))
+	problems := []error{ValidateID("sessionId", string(value.ID)), ValidateID("accountId", string(value.AccountID)),
+		ValidateID("roleId", string(value.RoleID)), validateTime("issuedAt", value.IssuedAt), validateTime("expiresAt", value.ExpiresAt)}
+	if value.SourceUserID != "" {
+		problems = append(problems, ValidateID("sourceUserId", string(value.SourceUserID)))
+	}
+	if value.SourceServicePrincipalID != "" {
+		problems = append(problems, ValidateID("sourceServicePrincipalId", string(value.SourceServicePrincipalID)))
+	}
+	return errors.Join(problems...)
 }
 
 func ValidateAssumeRoleResponse(value AssumeRoleResponse) error {

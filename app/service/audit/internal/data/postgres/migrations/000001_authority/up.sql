@@ -268,12 +268,17 @@ RETURNS boolean LANGUAGE sql IMMUTABLE SET search_path=pg_catalog,pg_temp AS $fu
       AND jsonb_typeof(actor->'id')='string' AND actor->>'id' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
       AND CASE WHEN actor->>'type'='ROLE' THEN
         actor ? 'roleSession' AND actor-ARRAY['type','id','roleSession']='{}'::jsonb
-        AND jsonb_typeof(actor->'roleSession')='object' AND (actor->'roleSession') ?& ARRAY['sessionId','sourceUserId']
-        AND (actor->'roleSession')-ARRAY['sessionId','sourceUserId']='{}'::jsonb
+        AND jsonb_typeof(actor->'roleSession')='object' AND (actor->'roleSession') ? 'sessionId'
         AND jsonb_typeof(actor#>'{roleSession,sessionId}')='string'
         AND actor#>>'{roleSession,sessionId}' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-        AND jsonb_typeof(actor#>'{roleSession,sourceUserId}')='string'
-        AND actor#>>'{roleSession,sourceUserId}' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND (((actor->'roleSession') ?& ARRAY['sessionId','sourceUserId']
+              AND (actor->'roleSession')-ARRAY['sessionId','sourceUserId']='{}'::jsonb
+              AND jsonb_typeof(actor#>'{roleSession,sourceUserId}')='string'
+              AND actor#>>'{roleSession,sourceUserId}' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
+          OR ((actor->'roleSession') ?& ARRAY['sessionId','sourceServicePrincipalId']
+              AND (actor->'roleSession')-ARRAY['sessionId','sourceServicePrincipalId']='{}'::jsonb
+              AND jsonb_typeof(actor#>'{roleSession,sourceServicePrincipalId}')='string'
+              AND actor#>>'{roleSession,sourceServicePrincipalId}' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'))
       WHEN actor ? 'accessKeyId' THEN actor->>'type'='USER' AND actor-ARRAY['type','id','accessKeyId']='{}'::jsonb
         AND jsonb_typeof(actor->'accessKeyId')='string' AND actor->>'accessKeyId' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
       ELSE actor->>'type' IN('USER','SERVICE_ACCOUNT','SYSTEM') AND actor-ARRAY['type','id']='{}'::jsonb END,false)

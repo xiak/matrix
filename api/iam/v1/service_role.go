@@ -1,6 +1,7 @@
 package iamv1
 
 import (
+	"bytes"
 	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
@@ -157,12 +158,29 @@ type RevokeWorkloadRoleBindingRequest struct {
 	ResourceVersion uint64               `json:"resourceVersion"`
 }
 
+// AssumeServiceRoleRequest is a service-authenticated intent. The binding is
+// the sole customer-side selector; IAM resolves its Account, Role, template,
+// workload, installation, principal and purpose from current authority.
+type AssumeServiceRoleRequest struct {
+	BindingID       WorkloadRoleBindingID `json:"bindingId"`
+	DurationSeconds *uint32               `json:"durationSeconds,omitempty"`
+	RequestID       string                `json:"requestId"`
+}
+
 func ValidateServicePrincipalReference(value ServicePrincipalReference) error {
 	if !knownServicePurpose(value.Purpose) {
 		return errors.New("service principal reference is invalid")
 	}
 	return errors.Join(ValidateID("servicePrincipal.installationId", value.InstallationID),
 		ValidateID("servicePrincipal.principalId", string(value.PrincipalID)))
+}
+
+func ValidateAssumeServiceRoleRequest(value AssumeServiceRoleRequest) error {
+	if value.DurationSeconds != nil && (*value.DurationSeconds < MinRoleSessionDurationSeconds ||
+		*value.DurationSeconds > MaxRoleSessionDurationSeconds) {
+		return errors.New("service role session duration is invalid")
+	}
+	return errors.Join(ValidateID("bindingId", string(value.BindingID)), ValidateID("requestId", value.RequestID))
 }
 
 func ValidateServiceLinkedRole(value ServiceLinkedRole) error {
@@ -477,5 +495,20 @@ func (value *RevokeWorkloadRoleBindingRequest) UnmarshalJSON(source []byte) erro
 		return contractjson.ErrInvalidDocument
 	}
 	*value = RevokeWorkloadRoleBindingRequest(decoded)
+	return nil
+}
+
+func (value *AssumeServiceRoleRequest) UnmarshalJSON(source []byte) error {
+	type wire AssumeServiceRoleRequest
+	var decoded wire
+	if contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil ||
+		ValidateAssumeServiceRoleRequest(AssumeServiceRoleRequest(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(source, &fields) != nil || bytes.Equal(bytes.TrimSpace(fields["durationSeconds"]), []byte("null")) {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = AssumeServiceRoleRequest(decoded)
 	return nil
 }

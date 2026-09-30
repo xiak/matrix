@@ -189,6 +189,81 @@ func TestServiceLinkedRoleAndBindingPreserveExactConsent(t *testing.T) {
 	}
 }
 
+func TestServiceRoleSessionIntentAndLineageAreClosed(t *testing.T) {
+	duration := uint32(900)
+	request := AssumeServiceRoleRequest{
+		BindingID:       WorkloadRoleBindingID("wrb-" + strings.Repeat("a", 64)),
+		DurationSeconds: &duration,
+		RequestID:       "assume-service-role-a",
+	}
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded AssumeServiceRoleRequest
+	if json.Unmarshal(encoded, &decoded) != nil || ValidateAssumeServiceRoleRequest(decoded) != nil || !reflect.DeepEqual(request, decoded) {
+		t.Fatal("valid service role intent did not strictly round trip")
+	}
+	for name, attack := range map[string]string{
+		"account selector":      strings.TrimSuffix(string(encoded), "}") + `,"accountId":"account-b"}`,
+		"role selector":         strings.TrimSuffix(string(encoded), "}") + `,"roleId":"role-b"}`,
+		"installation selector": strings.TrimSuffix(string(encoded), "}") + `,"installationId":"install-b"}`,
+		"purpose selector":      strings.TrimSuffix(string(encoded), "}") + `,"purpose":"AUDIT"}`,
+		"policy selector":       strings.TrimSuffix(string(encoded), "}") + `,"policyId":"policy-b"}`,
+		"null duration":         strings.Replace(string(encoded), `"durationSeconds":900`, `"durationSeconds":null`, 1),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if json.Unmarshal([]byte(attack), &decoded) == nil {
+				t.Fatal("service role intent accepted caller-owned authority")
+			}
+		})
+	}
+
+	issuedAt := time.Date(2026, 9, 30, 8, 0, 0, 0, time.UTC)
+	base := RoleSession{APIVersion: APIVersion, Kind: "RoleSession", ID: "role-session-a", AccountID: "account-a", RoleID: "role-a",
+		Status: SessionActive, IssuedAt: issuedAt, ExpiresAt: issuedAt.Add(15 * time.Minute)}
+	user := base
+	user.SourceUserID = "user-a"
+	service := base
+	service.SourceServicePrincipalID = "service-a"
+	if ValidateRoleSession(user) != nil || ValidateRoleSession(service) != nil {
+		t.Fatal("valid USER or SERVICE role lineage rejected")
+	}
+	for name, session := range map[string]RoleSession{
+		"missing source": base,
+		"mixed source": func() RoleSession {
+			value := user
+			value.SourceServicePrincipalID = "service-a"
+			return value
+		}(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if ValidateRoleSession(session) == nil {
+				t.Fatal("role session accepted ambiguous source lineage")
+			}
+		})
+	}
+	userReference := RoleSessionReference{SessionID: user.ID, SourceUserID: user.SourceUserID}
+	userWire, err := json.Marshal(userReference)
+	if err != nil || string(userWire) != `{"sessionId":"role-session-a","sourceUserId":"user-a"}` {
+		t.Fatal("existing USER lineage bytes changed", string(userWire), err)
+	}
+	legacySessionWire, err := json.Marshal(user)
+	const legacySession = `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"RoleSession","id":"role-session-a","accountId":"account-a","roleId":"role-a","sourceUserId":"user-a","status":"ACTIVE","issuedAt":"2026-09-30T08:00:00Z","expiresAt":"2026-09-30T08:15:00Z"}`
+	if err != nil || string(legacySessionWire) != legacySession {
+		t.Fatal("existing USER role session bytes changed", string(legacySessionWire), err)
+	}
+	for _, reference := range []RoleSessionReference{
+		userReference,
+		{SessionID: service.ID, SourceServicePrincipalID: service.SourceServicePrincipalID},
+	} {
+		subject := Subject{Type: SubjectRole, ID: string(base.RoleID), RoleSession: &reference}
+		if ValidateSubject(subject) != nil {
+			t.Fatal("valid role source reference rejected")
+		}
+	}
+}
+
 func TestServiceLinkedRoleDirectorySeparatesSummaryFromBindingDetail(t *testing.T) {
 	access := serviceLinkedRoleAccessForTest(t)
 	list := ServiceLinkedRoleList{
