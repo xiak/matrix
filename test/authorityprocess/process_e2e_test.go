@@ -2528,7 +2528,13 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", variable)
 	}
 	duration := 6 * time.Minute
-	if mode == authorityProcessBrowser {
+	if mode == authorityProcessPasswordCapacity {
+		// One hundred production-cost password-history changes take slightly
+		// more than six minutes on the bounded CI runner. This extends only the
+		// observation harness; sample count, password cost and product request
+		// deadlines remain unchanged.
+		duration = 8 * time.Minute
+	} else if mode == authorityProcessBrowser {
 		duration = 30 * time.Minute
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), duration)
