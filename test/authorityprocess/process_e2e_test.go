@@ -330,6 +330,14 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		&originalIAMProfileRevision, &originalIAMProfileDocument, &originalIAMProfileDigest); err != nil {
 		t.Fatal("read actual predecessor IAM product declaration", err)
 	}
+	expectedIAMProfile, found := iamv1.LookupAuthorizationProfile(iamv1.ProductIAM)
+	if !found {
+		t.Fatal("current source has no IAM product declaration")
+	}
+	expectedIAMProfileDocument, expectedIAMProfileDigest, err := iamv1.CanonicalizeAuthorizationProfile(expectedIAMProfile)
+	if err != nil {
+		t.Fatal("canonicalize current IAM product declaration", err)
+	}
 	identityState := func() []byte {
 		t.Helper()
 		var state []byte
@@ -506,11 +514,14 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	}
 	if err := admin.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM iam.authorization_profiles WHERE product='iam' AND revision=$1
 	 AND canonical_document=$2 AND content_digest=$3)
-	 AND EXISTS(SELECT 1 FROM iam.authorization_profile_heads WHERE product='iam' AND revision=7)
+	 AND EXISTS(SELECT 1 FROM iam.authorization_profiles p JOIN iam.authorization_profile_heads h
+	   ON (h.product,h.revision)=(p.product,p.revision) WHERE p.product='iam' AND p.revision=$4
+	   AND p.canonical_document=$5 AND p.content_digest=$6)
 	 AND (SELECT count(*)=2 FROM iam.account_security_settings_changes)
 	 AND EXISTS(SELECT 1 FROM iam.accounts WHERE id='retained-settings-account' AND security_settings_version=3 AND NOT mfa_required_for_users)
 	 AND NOT EXISTS(SELECT 1 FROM iam.accounts WHERE id<>'retained-settings-account' AND (security_settings_version<>1 OR mfa_required_for_users
-	 OR security_settings_updated_at IS DISTINCT FROM created_at))`, originalIAMProfileRevision, originalIAMProfileDocument, originalIAMProfileDigest).Scan(&shape); err != nil || !shape {
+	 OR security_settings_updated_at IS DISTINCT FROM created_at))`, originalIAMProfileRevision, originalIAMProfileDocument, originalIAMProfileDigest,
+		expectedIAMProfile.Revision, expectedIAMProfileDocument, expectedIAMProfileDigest).Scan(&shape); err != nil || !shape {
 		t.Fatal("replacement migration rewrote the old product declaration or invented configuration history", err)
 	}
 	assertRetainedMFA()
