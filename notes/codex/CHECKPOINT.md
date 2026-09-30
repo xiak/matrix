@@ -6,8 +6,8 @@
 - Updated: 2026-10-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `937b9bbd`
-- Pushed documentation milestone: `da8a431e`
+- Pushed source/embed milestone: `ed978ba9`
+- Pushed documentation milestone: `482aec3e`
 
 ## Authoritative route
 
@@ -26,36 +26,29 @@ compaction or handoff, then validate it against Git and the linked FEAT.
 ## Durable pushed state
 
 The independent MOCK console remains the inspectable UX surface and login
-verification remains disabled. Access analysis, product authorization,
-product-onboarding, policy diagnostics and security settings preserve their
-explicit MOCK/LIVE boundaries; no unverified IAM route or secret-bearing
-service-session field is mounted.
+verification remains disabled. The permissions catalog now separates tenant
+consumption from trusted product-team/IAM publication instead of placing the
+internal onboarding action beside a tenant resource title.
 
-User settings now has two top-level responsibilities: sign-in identity and
-security configuration. The explicit MOCK security workspace separates
-personal security, account policy and session security. Only personal security
-mounts initially; another section mounts on first entry, stays mounted to retain
-its draft, and leaves layout while inactive. The shared Tabs inactive-state
-rule and the workspace-specific display rule prevent retained panels from
-appearing together.
+The service-authorization runtime preview now includes a non-secret
+`ServiceRoleSession` sample directory, inline detail and a disabled single-
+session revoke review. It exposes no credential, proof/decision, private
+endpoint or bootstrap summary; it sends no request and produces no request ID
+or success state. LIVE service-session query and revoke remain absent until IAM
+publishes a fixed northbound contract.
 
-TOTP and current Account security-settings remain the only relevant real IAM
-objects for this surface. Passkey/WebAuthn and idle-session policy stay explicit
-previews with no real-success claim. The IAM engineer confirmed that the current
-service RoleSession work adds no stable northbound field for this page and must
-not be consumed before a fixed pushed source and successful independent gate.
-
-The source and synchronized Go embed at `937b9bbd` passed the complete frontend
-suite, export/embed equality, architecture/style/type/lint checks and repository
-Go test/vet. Exact counts, browser evidence and limitations live in FEAT-007.
+Source and synchronized Go embed at `ed978ba9` passed 55 frontend files / 886
+tests, static normalization, type/lint/architecture, 228 theme contrast pairs,
+41-page export, 228-file embed equality and repository Go test/vet. Desktop and
+390 x 844 DEV checks had no Dialog, page overflow, warning or error. Exact
+behavioral evidence and limits are owned by FEAT-IAM-010.
 
 ## Continuation
 
 Keep the DEV MOCK available for progress review. Coordinate only against fixed,
 pushed IAM commits with accepted verification. When IAM publishes a page-owned
-contract delta, inspect that exact source and update the existing adoption
-decision before replacing a MOCK section in place; do not add a parallel model
-or infer LIVE capability from backend WIP.
+contract delta, inspect that exact source and replace the MOCK section in place;
+do not add a parallel model or infer LIVE capability from backend WIP.
 
 Continue the console-wide UX audit from the next uncovered customer workflow,
 preserving fixed page structure, localized data loading, compact responsive
