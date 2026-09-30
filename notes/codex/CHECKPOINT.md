@@ -6,8 +6,8 @@
 - Updated: 2026-09-30
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `dda28920`
-- Pushed documentation/head milestone: `cbd19353`
+- Pushed source/embed milestone: `9ad0856e`
+- Pushed documentation/head milestone: `975ce4d2`
 
 ## Authoritative route
 
@@ -33,6 +33,13 @@ the fixed public error boundary: uncertain results preserve one request intent
 for equal replay, authorization-state conflicts require reread, idempotency
 content conflicts and invalid requests stop, and authentication/authorization
 failures never become a success state.
+
+The observation surface also separates a future service request into trusted
+service authentication, short-lived `source=SERVICE` session issuance,
+product-PEP re-authorization and product-owned business execution. All four
+remain explicit unverified MOCK states. It exposes no session ID, temporary
+credential, internal endpoint or revoke action, and never turns configuration
+state into a request permit.
 
 The product repository now contains a strict but unmounted public bind/unbind
 client adapted from fixed IAM source `92ea765b`. It accepts a caller-owned
