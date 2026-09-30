@@ -25,6 +25,7 @@ const previewTemplate = {
   revision: 1,
   policyId: "preview.policy.managed-service-installation-read",
   policyVersionId: "v1",
+  policyContentDigest: `sha256:${"9".repeat(64)}`,
   maxSessionDurationSeconds: 3600,
   workloadResourceKind: "SERVICE_INSTALLATION",
   snapshotName: "PreviewManagedServiceInstallationRead",
@@ -95,6 +96,7 @@ function TemplateDetail({ accountId, reviewRef, observationRef, onReview, onObse
       <div><dt>{t("fields.templateRevision")}</dt><dd>v{previewTemplate.revision}</dd></div>
       <div><dt>{t("fields.servicePrincipal")}</dt><dd><code>{previewTemplate.servicePrincipal}</code></dd></div>
       <div><dt>{t("fields.roleName")}</dt><dd><code>{previewTemplate.roleName}</code></dd></div>
+      <div><dt>{t("fields.roleDescription")}</dt><dd>{t("template.roleDescription")}</dd></div>
       <div><dt>{t("fields.purpose")}</dt><dd><code>{previewTemplate.purpose}</code></dd></div>
       <div><dt>{t("fields.targetResource")}</dt><dd><code>SERVICE_INSTALLATION:{previewTemplate.targetResourceId}</code></dd></div>
     </dl>
@@ -143,6 +145,13 @@ function ServiceLinkedRoleObservation({ accountId }: { accountId: string }) {
           <div><dt>{t("fields.resourceVersion")}</dt><dd>{previewAccountAccess.roleResourceVersion}</dd></div>
           <div><dt>{t("fields.serviceInstallation")}</dt><dd><code>{previewAccountAccess.principalInstallationId}</code></dd></div>
           <div><dt>{t("fields.servicePrincipal")}</dt><dd><code>{previewAccountAccess.principalId}</code></dd></div>
+          <div><dt>{t("fields.purpose")}</dt><dd><code>{previewTemplate.purpose}</code></dd></div>
+          <div><dt>{t("fields.roleName")}</dt><dd><code>{previewTemplate.roleName}</code></dd></div>
+          <div><dt>{t("fields.roleDescription")}</dt><dd>{t("template.roleDescription")}</dd></div>
+          <div><dt>{t("fields.templateReference")}</dt><dd><code>{previewTemplate.id}@v{previewTemplate.version}</code></dd></div>
+          <div><dt>{t("fields.contentDigest")}</dt><dd><code>{previewTemplate.contentDigest}</code></dd></div>
+          <div><dt>{t("fields.permissionCeiling")}</dt><dd><code>{previewTemplate.policyId}@{previewTemplate.policyVersionId}</code></dd></div>
+          <div><dt>{t("fields.permissionCeilingDigest")}</dt><dd><code>{previewTemplate.policyContentDigest}</code></dd></div>
         </dl></Card.Body>
       </Card>
     </div>
@@ -154,7 +163,12 @@ function ServiceLinkedRoleObservation({ accountId }: { accountId: string }) {
         <tbody><tr>
           <td data-label={t("fields.workload")}><strong>{previewTemplate.workloadResourceKind}</strong><small><code>{previewTemplate.targetResourceId}</code></small></td>
           <td data-label={t("fields.bindingState")}><Badge status="success">{previewAccountAccess.bindingStatus}</Badge></td>
-          <td data-label={t("fields.bindingId")}><code>{previewAccountAccess.bindingId}</code></td>
+          <td data-label={t("fields.bindingId")}><code>{previewAccountAccess.bindingId}</code>
+            <small>{t("fields.targetAccount")} · <code>{accountId}</code></small>
+            <small>{t("fields.roleId")} · <code>{previewAccountAccess.roleId}</code></small>
+            <small>{t("fields.templateReference")} · <code>{previewTemplate.id}@v{previewTemplate.version}</code></small>
+            <small>{t("fields.contentDigest")} · <code>{previewTemplate.contentDigest}</code></small>
+          </td>
           <td data-label={t("fields.resourceVersion")}>{previewAccountAccess.bindingResourceVersion}</td>
           <td data-label={t("fields.updatedAt")}><time dateTime={previewAccountAccess.updatedAt}>{previewAccountAccess.updatedAt}</time><small>{t("observation.binding.createdAt")} <time dateTime={previewAccountAccess.createdAt}>{previewAccountAccess.createdAt}</time></small></td>
         </tr></tbody>
@@ -204,8 +218,9 @@ export function ServiceAuthorizationConsentReview({ accountId, targetResourceId,
       <Card.Header className={styles.cardHeading}>{stage === 0 ? <KeyRound aria-hidden="true" /> : stage === 1 ? <ShieldCheck aria-hidden="true" /> : <Boxes aria-hidden="true" />}<div><span>{t("stageLabel", { current: stage + 1, total: stageIds.length })}</span><h3 ref={stageHeading} tabIndex={-1}>{t(`review.${currentStage}.title`)}</h3></div></Card.Header>
       <Card.Body className={styles.cardBody}>
         <p className={styles.lead}>{t(`review.${currentStage}.lead`)}</p>
-        {stage === 0 ? <><dl className={styles.facts}><div><dt>{t("fields.targetAccount")}</dt><dd><code>{accountId}</code></dd></div><div><dt>{t("fields.targetResource")}</dt><dd><code>SERVICE_INSTALLATION:{targetResourceId}</code></dd></div><div><dt>{t("fields.servicePrincipal")}</dt><dd><code>{previewTemplate.servicePrincipal}</code></dd></div><div><dt>{t("fields.purpose")}</dt><dd><code>{previewTemplate.purpose}</code></dd></div><div><dt>{t("fields.roleName")}</dt><dd><code>{previewTemplate.roleName}</code></dd></div></dl><Alert status="info">{t("review.identity.passRoleBoundary")}</Alert></> : null}
+        {stage === 0 ? <><dl className={styles.facts}><div><dt>{t("fields.product")}</dt><dd><code>{previewTemplate.product}</code></dd></div><div><dt>{t("fields.targetAccount")}</dt><dd><code>{accountId}</code></dd></div><div><dt>{t("fields.targetResource")}</dt><dd><code>SERVICE_INSTALLATION:{targetResourceId}</code></dd></div><div><dt>{t("fields.servicePrincipal")}</dt><dd><code>{previewTemplate.servicePrincipal}</code></dd></div><div><dt>{t("fields.purpose")}</dt><dd><code>{previewTemplate.purpose}</code></dd></div><div><dt>{t("fields.roleName")}</dt><dd><code>{previewTemplate.roleName}</code></dd></div><div><dt>{t("fields.roleDescription")}</dt><dd>{t("template.roleDescription")}</dd></div><div><dt>{t("fields.maxSession")}</dt><dd>{t("observation.durationMinutes", { count: previewTemplate.maxSessionDurationSeconds / 60 })}</dd></div></dl><Alert status="info">{t("review.identity.passRoleBoundary")}</Alert></> : null}
         {stage === 1 ? <><div className={styles.permissionReference}><div><span>{t("fields.policySnapshot")}</span><strong>{previewTemplate.snapshotName} · v{previewTemplate.revision}</strong></div><Badge>{t("review.permissions.illustrative")}</Badge></div>
+          <dl className={styles.facts}><div><dt>{t("fields.policyId")}</dt><dd><code>{previewTemplate.policyId}</code></dd></div><div><dt>{t("fields.policyVersion")}</dt><dd><code>{previewTemplate.policyVersionId}</code></dd></div><div><dt>{t("fields.permissionCeilingDigest")}</dt><dd><code>{previewTemplate.policyContentDigest}</code></dd></div></dl>
           <div className={styles.permissionStatements}>{statements.map((statement, index) => <section aria-label={t("review.permissions.statement", { number: index + 1 })} className={styles.permissionStatement} key={index}>
             <div className={styles.permissionStatementHeading}><strong>{t("review.permissions.statement", { number: index + 1 })}</strong><Badge status={statement.effect === "DENY" ? "danger" : "success"}>{t(`review.permissions.${statement.effect === "DENY" ? "deny" : "allow"}`)}</Badge></div>
             <dl><div><dt>{t("review.permissions.actionPatterns")}</dt><dd><ul className={styles.permissionList}>{statement.actions.map((action) => <li key={action}><code>{action}</code></li>)}</ul></dd></div>
