@@ -1426,28 +1426,43 @@ END $function$;
 CREATE OR REPLACE FUNCTION iam.managed_role_session_snapshot(tenant text,role_id text,session_id text)
 RETURNS jsonb LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $function$
     SELECT jsonb_build_object('session',iam.role_session_snapshot(tenant,s.id),
-      'sourceUser',jsonb_build_object('id',p.id,'loginName',p.login_name,'displayName',p.display_name))
-    FROM iam.role_sessions s JOIN iam.principals p ON p.tenant_id=s.tenant_id AND p.id=s.source_user_id AND p.principal_type='USER'
-    WHERE s.tenant_id=tenant AND s.role_id=managed_role_session_snapshot.role_id AND s.id=session_id
+      'source',jsonb_build_object('type','USER','user',
+        jsonb_build_object('id',p.id,'loginName',p.login_name,'displayName',p.display_name)))
+    FROM iam.role_sessions s JOIN iam.principals p
+      ON p.tenant_id=s.tenant_id AND p.id=s.source_user_id AND p.principal_type='USER'
+    WHERE s.tenant_id=tenant AND s.role_id=managed_role_session_snapshot.role_id
+      AND s.id=managed_role_session_snapshot.session_id
+      AND s.source_service_principal_id IS NULL
 $function$;
-CREATE OR REPLACE FUNCTION iam.list_managed_role_sessions(tenant text,actor text,actor_session text,role_id text,decision text,after_id text,source_user_id text,session_id text,lifecycle text)
+DROP FUNCTION IF EXISTS iam.list_managed_role_sessions(text,text,text,text,text,text,text,text,text);
+CREATE OR REPLACE FUNCTION iam.list_managed_role_sessions(tenant text,actor text,actor_session text,role_id text,decision text,after_id text,source_type text,source_user_id text,source_service_principal_id text,session_id text,lifecycle text)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE candidate record; scanned integer:=0; previous_id text:=''; next_after text:=''; items jsonb:='[]'; observed timestamptz(6):=transaction_timestamp(); item jsonb;
 BEGIN
     PERFORM iam.prepare_role_session_management(tenant,actor,actor_session,role_id,'',false);
     PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.role-session.list','ROLE',role_id,'INSTANCE',NULL);
-    IF after_id IS NULL OR source_user_id IS NULL OR session_id IS NULL OR lifecycle IS NULL OR lifecycle NOT IN ('ALL','UNREVOKED','EXPIRED','REVOKED')
+    IF after_id IS NULL OR source_type IS NULL OR source_user_id IS NULL OR source_service_principal_id IS NULL OR session_id IS NULL
+      OR lifecycle IS NULL OR lifecycle NOT IN ('ALL','UNREVOKED','EXPIRED','REVOKED')
+      OR source_type NOT IN ('','USER','SERVICE_ACCOUNT')
       OR (after_id<>'' AND after_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
       OR (source_user_id<>'' AND source_user_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
+      OR (source_service_principal_id<>'' AND source_service_principal_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
+      OR (source_user_id<>'' AND source_service_principal_id<>'')
+      OR (source_user_id<>'' AND source_type<>'USER')
+      OR (source_service_principal_id<>'' AND source_type<>'SERVICE_ACCOUNT')
       OR (session_id<>'' AND session_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$') THEN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='role session query is invalid'; END IF;
     -- Filters cannot turn a response limit into an unbounded historical scan.
-    FOR candidate IN SELECT s.id,s.source_user_id,s.revoked_at,s.expires_at FROM iam.role_sessions s
+    FOR candidate IN SELECT s.id,s.source_user_id,s.source_service_principal_id,s.revoked_at,s.expires_at FROM iam.role_sessions s
       WHERE s.tenant_id=tenant AND s.role_id=list_managed_role_sessions.role_id AND (after_id='' OR s.id>after_id COLLATE "C")
       AND (session_id='' OR s.id=session_id) ORDER BY s.id LIMIT 101 LOOP
         IF scanned=100 THEN next_after:=previous_id; EXIT; END IF;
         scanned:=scanned+1; previous_id:=candidate.id;
-        IF (source_user_id='' OR candidate.source_user_id=source_user_id) AND (lifecycle='ALL'
+        IF (source_type='' OR (source_type='USER' AND candidate.source_user_id IS NOT NULL)
+              OR (source_type='SERVICE_ACCOUNT' AND candidate.source_service_principal_id IS NOT NULL))
+          AND (source_user_id='' OR candidate.source_user_id=source_user_id)
+          AND (source_service_principal_id='' OR candidate.source_service_principal_id=source_service_principal_id)
+          AND (lifecycle='ALL'
           OR (lifecycle='REVOKED' AND candidate.revoked_at IS NOT NULL)
           OR (lifecycle='EXPIRED' AND candidate.revoked_at IS NULL AND candidate.expires_at<=observed)
           OR (lifecycle='UNREVOKED' AND candidate.revoked_at IS NULL AND candidate.expires_at>observed)) THEN
@@ -1493,10 +1508,10 @@ END $function$;
 REVOKE ALL ON iam.role_session_directory_revisions FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
 REVOKE ALL ON FUNCTION iam.guard_role_session_directory_revision(),iam.advance_role_session_directory_revision(),
     iam.managed_role_session_snapshot(text,text,text),iam.prepare_role_session_management(text,text,text,text,text,boolean),
-    iam.list_managed_role_sessions(text,text,text,text,text,text,text,text,text),iam.read_managed_role_session(text,text,text,text,text,text),
+    iam.list_managed_role_sessions(text,text,text,text,text,text,text,text,text,text,text),iam.read_managed_role_session(text,text,text,text,text,text),
     iam.revoke_managed_role_session(text,text,text,text,text,text,jsonb) FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
 GRANT EXECUTE ON FUNCTION iam.prepare_role_session_management(text,text,text,text,text,boolean),
-    iam.list_managed_role_sessions(text,text,text,text,text,text,text,text,text),iam.read_managed_role_session(text,text,text,text,text,text),
+    iam.list_managed_role_sessions(text,text,text,text,text,text,text,text,text,text,text),iam.read_managed_role_session(text,text,text,text,text,text),
     iam.revoke_managed_role_session(text,text,text,text,text,text,jsonb) TO matrix_iam_api;
 
 -- Pure historical linkage: lifecycle fields and current default pointers do
@@ -1747,7 +1762,7 @@ BEGIN
       ('iam.list_roles(text,text,text,text)',false),('iam.read_role(text,text,text,text)',false),
       ('iam.read_role_discovery_revision(text,text,text)',false),('iam.read_role_candidates(text,text,text,text,text)',false),
       ('iam.prepare_role_session_management(text,text,text,text,text,boolean)',false),
-      ('iam.list_managed_role_sessions(text,text,text,text,text,text,text,text,text)',false),
+      ('iam.list_managed_role_sessions(text,text,text,text,text,text,text,text,text,text,text)',false),
       ('iam.read_managed_role_session(text,text,text,text,text,text)',false),
       ('iam.revoke_managed_role_session(text,text,text,text,text,text,jsonb)',false),
       ('iam.read_role_permission_boundary(text,text,text,text)',false),
@@ -1777,7 +1792,7 @@ BEGIN
           OR (entrypoint.proname='read_role_discovery_revision' AND entrypoint.proargnames IS DISTINCT FROM ARRAY['tenant','actor','source_session'])
           OR (entrypoint.proname='read_role_candidates' AND entrypoint.proargnames IS DISTINCT FROM ARRAY['tenant','actor','source_session','after_id','role_id'])
           OR (entrypoint.proname='prepare_role_session_management' AND entrypoint.proargnames IS DISTINCT FROM ARRAY['tenant','actor','actor_session','role_id','session_id','writing'])
-          OR (entrypoint.proname='list_managed_role_sessions' AND entrypoint.proargnames IS DISTINCT FROM ARRAY['tenant','actor','actor_session','role_id','decision','after_id','source_user_id','session_id','lifecycle'])
+          OR (entrypoint.proname='list_managed_role_sessions' AND entrypoint.proargnames IS DISTINCT FROM ARRAY['tenant','actor','actor_session','role_id','decision','after_id','source_type','source_user_id','source_service_principal_id','session_id','lifecycle'])
           OR (entrypoint.proname='read_managed_role_session' AND entrypoint.proargnames IS DISTINCT FROM ARRAY['tenant','actor','actor_session','role_id','session_id','decision'])
           OR (entrypoint.proname='revoke_managed_role_session' AND entrypoint.proargnames IS DISTINCT FROM ARRAY['tenant','actor','actor_session','role_id','session_id','decision','event'])
           OR NOT has_function_privilege('matrix_iam_api',entrypoint.oid,'EXECUTE')

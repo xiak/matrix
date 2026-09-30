@@ -475,8 +475,8 @@ type RoleSessionManagementRead struct {
 }
 
 type ManagedRoleSession struct {
-	Session    iamv1.RoleSession           `json:"session"`
-	SourceUser iamv1.RoleSourceUserDisplay `json:"sourceUser"`
+	Session iamv1.RoleSession              `json:"session"`
+	Source  iamv1.RoleSessionSourceDisplay `json:"source"`
 }
 
 type ManagedRoleSessionPage struct {

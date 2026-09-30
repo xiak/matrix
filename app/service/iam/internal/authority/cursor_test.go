@@ -171,9 +171,15 @@ func TestRoleSessionDirectoryCursorBindsAuthorityFiltersAndTerminalRevision(t *t
 		t.Fatal("session directory could not continue", err)
 	}
 	for name, change := range map[string]func(*DirectoryQuery){
-		"another role":               func(q *DirectoryQuery) { q.Resource.ID = "role-b" },
-		"changed filter":             func(q *DirectoryQuery) { q.RoleSessions.Filter.Lifecycle = "REVOKED" },
-		"source filter":              func(q *DirectoryQuery) { q.RoleSessions.Filter.SourceUserID = "user-b" },
+		"another role":       func(q *DirectoryQuery) { q.Resource.ID = "role-b" },
+		"changed filter":     func(q *DirectoryQuery) { q.RoleSessions.Filter.Lifecycle = "REVOKED" },
+		"source type filter": func(q *DirectoryQuery) { q.RoleSessions.Filter.SourceType = iamv1.PrincipalServiceAccount },
+		"source filter": func(q *DirectoryQuery) {
+			q.RoleSessions.Filter.SourceType, q.RoleSessions.Filter.SourceUserID = iamv1.PrincipalUser, "user-b"
+		},
+		"service source filter": func(q *DirectoryQuery) {
+			q.RoleSessions.Filter.SourceType, q.RoleSessions.Filter.SourceServicePrincipalID = iamv1.PrincipalServiceAccount, "service-b"
+		},
 		"session filter":             func(q *DirectoryQuery) { q.RoleSessions.Filter.SessionID = "session-b" },
 		"new issuance or revocation": func(q *DirectoryQuery) { q.RoleSessions.Revision.DirectoryRevision++ },
 		"credential change":          func(q *DirectoryQuery) { q.RoleSessions.Revision.CredentialGeneration++ },

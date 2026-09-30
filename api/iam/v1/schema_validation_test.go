@@ -1598,7 +1598,9 @@ func TestOwnLoginSessionSchemasExposeOnlyBoundedPublicObservations(t *testing.T)
 func TestRoleSessionManagementSchemasAreBoundedAndNonSecret(t *testing.T) {
 	api := loadIAMOpenAPI(t)
 	session := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"RoleSession","id":"session-a","accountId":"account-a","roleId":"role-a","sourceUserId":"user-a","status":"ACTIVE","issuedAt":"2026-09-17T00:00:00Z","expiresAt":"2026-09-17T01:00:00Z"}`
-	item := `{"session":` + session + `,"sourceUser":{"id":"user-a","loginName":"member","displayName":"Member"},"lifecycle":"UNREVOKED","revokeCapability":{"action":"iam.role-session.revoke","resource":{"kind":"ROLE_SESSION","id":"session-a"},"available":true}}`
+	item := `{"session":` + session + `,"source":{"type":"USER","user":{"id":"user-a","loginName":"member","displayName":"Member"}},"lifecycle":"UNREVOKED","revokeCapability":{"action":"iam.role-session.revoke","resource":{"kind":"ROLE_SESSION","id":"session-a"},"available":true}}`
+	serviceSession := strings.Replace(session, `"sourceUserId":"user-a"`, `"sourceServicePrincipalId":"service-a"`, 1)
+	serviceItem := `{"session":` + serviceSession + `,"source":{"type":"SERVICE_ACCOUNT","servicePrincipal":{"installationId":"installation-a","principalId":"service-a","purpose":"PAAS"}},"lifecycle":"UNREVOKED","revokeCapability":{"action":"iam.role-session.revoke","resource":{"kind":"ROLE_SESSION","id":"session-a"},"available":true}}`
 	list := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"RoleSessionList","accountId":"account-a","roleId":"role-a","observedAt":"2026-09-17T00:01:00Z","items":[]}`
 	access := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"RoleSessionAccess","observedAt":"2026-09-17T00:01:00Z","item":` + item + `}`
 	revoked := strings.Replace(session, `"status":"ACTIVE"`, `"status":"REVOKED","revokedAt":"2026-09-17T00:01:00Z"`, 1)
@@ -1613,12 +1615,14 @@ func TestRoleSessionManagementSchemasAreBoundedAndNonSecret(t *testing.T) {
 		{"RoleSessionList", strings.TrimSuffix(list, "}") + `,"total":10}`, false},
 		{"RoleSessionList", strings.Replace(list, `"items":[]`, `"items":[`+strings.Repeat(item+",", DirectoryPageSize)+item+`]`, 1), false},
 		{"RoleSessionAccess", access, true},
+		{"RoleSessionAccess", strings.Replace(access, item, serviceItem, 1), true},
 		{"RoleSessionAccess", strings.Replace(access, `"UNREVOKED"`, `"USABLE"`, 1), false},
 		{"RoleSessionAccess", strings.Replace(access, `"UNREVOKED"`, `"EXPIRED"`, 1), false},
 		{"RoleSessionAccess", strings.Replace(access, `"UNREVOKED"`, `"REVOKED"`, 1), false},
 		{"RoleSessionAccess", strings.Replace(access, `"iam.role-session.revoke"`, `"iam.role-session.read"`, 1), false},
 		{"RoleSessionAccess", strings.Replace(access, `"sourceUserId":"user-a"`, `"sourceUserId":"user-a","credentialGeneration":1`, 1), false},
 		{"RoleSessionAccess", strings.Replace(access, `"displayName":"Member"`, `"displayName":"Member","principalType":"FEDERATION"`, 1), false},
+		{"RoleSessionAccess", strings.Replace(strings.Replace(access, item, serviceItem, 1), `"type":"SERVICE_ACCOUNT"`, `"type":"USER"`, 1), false},
 		{"RevokeRoleSessionResponse", `{"outcome":"APPLIED","session":` + revoked + `}`, true},
 		{"RevokeRoleSessionResponse", `{"outcome":"EQUAL_REPLAY","session":` + revoked + `}`, true},
 		{"RevokeRoleSessionResponse", `{"outcome":"APPLIED","session":` + session + `}`, false},

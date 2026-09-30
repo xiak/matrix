@@ -420,7 +420,7 @@ func managedRoleSessionListing(subject SessionCredential, item ManagedRoleSessio
 	if lifecycle != iamv1.RoleSessionUnrevoked {
 		restrictCapability(&capability, iamv1.CapabilitySessionNotRevocable)
 	}
-	result := iamv1.RoleSessionListing{Session: item.Session, SourceUser: item.SourceUser, Lifecycle: lifecycle, RevokeCapability: capability}
+	result := iamv1.RoleSessionListing{Session: item.Session, Source: item.Source, Lifecycle: lifecycle, RevokeCapability: capability}
 	if iamv1.ValidateRoleSessionListing(result, now) != nil {
 		return iamv1.RoleSessionListing{}, ErrUnavailable
 	}

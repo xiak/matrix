@@ -23756,15 +23756,15 @@
           "session": {
             "$ref": "#/components/schemas/RoleSession"
           },
-          "sourceUser": {
-            "$ref": "#/components/schemas/RoleSourceUserDisplay"
+          "source": {
+            "$ref": "#/components/schemas/RoleSessionSourceDisplay"
           }
         },
         "required": [
           "lifecycle",
           "revokeCapability",
           "session",
-          "sourceUser"
+          "source"
         ],
         "type": "object"
       },
@@ -23801,6 +23801,48 @@
         },
         "required": [
           "sessionId"
+        ],
+        "type": "object"
+      },
+      "RoleSessionSourceDisplay": {
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "properties": {
+              "servicePrincipal": false,
+              "type": {
+                "const": "USER"
+              }
+            },
+            "required": [
+              "user"
+            ]
+          },
+          {
+            "properties": {
+              "type": {
+                "const": "SERVICE_ACCOUNT"
+              },
+              "user": false
+            },
+            "required": [
+              "servicePrincipal"
+            ]
+          }
+        ],
+        "properties": {
+          "servicePrincipal": {
+            "$ref": "#/components/schemas/ServicePrincipalReference"
+          },
+          "type": {
+            "$ref": "#/components/schemas/PrincipalType"
+          },
+          "user": {
+            "$ref": "#/components/schemas/RoleSourceUserDisplay"
+          }
+        },
+        "required": [
+          "type"
         ],
         "type": "object"
       },
@@ -31492,7 +31534,27 @@
           },
           {
             "in": "query",
+            "name": "sourceType",
+            "required": false,
+            "schema": {
+              "enum": [
+                "USER",
+                "SERVICE_ACCOUNT"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
             "name": "sourceUserId",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ID"
+            }
+          },
+          {
+            "in": "query",
+            "name": "sourceServicePrincipalId",
             "required": false,
             "schema": {
               "$ref": "#/components/schemas/ID"

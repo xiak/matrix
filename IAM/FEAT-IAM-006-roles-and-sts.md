@@ -1,6 +1,6 @@
 # FEAT-IAM-006：角色、信任与 STS
 
-- 状态：R1角色管理、R2同账号承担与tenant PaaS/Audit真实授权、R3自服务发现/当前角色显示及管理员会话管理后端，已在累计固定`62a18a48168e87a4158b95eba41427b445ed10d1`通过本地真库/并发/保留数据/独立进程/全仓检查和三项独立CI；包含原`1ebab37a`的来源代际/身份锁修复。必须同时消费公开schema数量边界修正`0567c8b2699521b137db0f8b69f17630c59f04fb`，其本地契约及三项独立CI也已通过。服务来源RoleSession发行、回执、当前PDP及binding撤销即时失效已有固定实现；当前后继提交候选已让首个managedservice消费者实际读取业务资源并以服务来源ROLE自退出，真实PG18及独立多进程门禁通过，尚待独立CI。服务来源的管理员目录/代撤销、UX/UI、容量和发布未完成，整体006未验收。原R2覆盖不足及旧R3固定960416dd的CI失败不被回填。
+- 状态：R1角色管理、R2同账号承担与tenant PaaS/Audit真实授权、R3自服务发现/当前角色显示及管理员会话管理后端，已在累计固定`62a18a48168e87a4158b95eba41427b445ed10d1`通过本地真库/并发/保留数据/独立进程/全仓检查和三项独立CI；包含原`1ebab37a`的来源代际/身份锁修复。必须同时消费公开schema数量边界修正`0567c8b2699521b137db0f8b69f17630c59f04fb`，其本地契约及三项独立CI也已通过。服务来源RoleSession发行、回执、当前PDP及binding撤销即时失效已有固定实现；固定`f98d4088`已让首个managedservice消费者实际读取业务资源并以服务来源ROLE自退出，本地真实PG18及独立多进程门禁通过，独立CI仍在串行执行。后继本地候选已把管理员目录/读取/代撤销扩展到严格SERVICE来源并通过真实PG18纵向、累计Role管理、独立进程及整仓门禁；尚待固定提交和独立CI。UX/UI、容量和发布未完成，整体006未验收。原R2覆盖不足及旧R3固定960416dd的CI失败不被回填。
 - 依赖：005。
 - Owner：IAM Role、TrustPolicy、RoleSession、凭据发行；业务服务消费临时身份。
 
@@ -156,9 +156,9 @@ RoleSession继续由本FEAT唯一拥有，008拥有模板、账号同意、workl
 
 首次成功发行一次返回用途隔离的短期秘密，等值重放及`GET /v1/internal/service-role-sessions/by-request/{requestId}`只返回非秘密原结果；响应均`no-store`。`iam.service-role-session.issued`是新的租户事实，SERVICE_ACCOUNT actor、目标ROLE_SESSION和原请求必须准确，不能借旧`iam.role-session.issued`改变USER历史含义。binding撤销与发行按同一Role/binding锁序串行；撤销终态后新发行失败，若发行先提交，所得凭据在撤销后的下一受保护请求失败。已提交发行事实和私有历史证明仍可投递/重放，不能因当前binding撤销而丢失。
 
-ROLE bearer的同一`POST /v1/auth/role-session:logout`现按公开联合类型同时支持USER或SERVICE来源，但两者仍严格二选一。服务来源退出只接受该会话的一次性秘密，不能由PaaS长期服务凭据、另一会话或调用方selector代替；它只执行不可逆终止，因此来源服务或binding后来失效不阻止销毁已持有凭据。SQL在目标Account及会话原锁序内重新核对准确来源并原子写入`iam.role-session.exited`，actor只含Role、sessionId及sourceServicePrincipalId，不伪造USER，也不重获任何业务权限。服务会话管理员目录及代撤销仍未完成。
+ROLE bearer的同一`POST /v1/auth/role-session:logout`按公开联合类型同时支持USER或SERVICE来源，但两者仍严格二选一。服务来源退出只接受该会话的一次性秘密，不能由PaaS长期服务凭据、另一会话或调用方selector代替；它只执行不可逆终止，因此来源服务或binding后来失效不阻止销毁已持有凭据。SQL在目标Account及会话原锁序内重新核对准确来源并原子写入`iam.role-session.exited`，actor只含Role、sessionId及sourceServicePrincipalId，不伪造USER，也不重获任何业务权限。后继管理员候选复用原三个Role会话管理入口，以当前USER的独立list/read/revoke决定查询和终止服务来源会话；SERVICE或ROLE凭据不能调用这些入口。管理员撤销与持有者自退出竞争同一终态锁，恰好一个成功事实，另一路冲突；binding已经撤销不阻止管理员销毁仍未终止的历史会话。
 
-当前源码形状仍为IAM55/Audit30/PaaS2；本片替换未发布迁移内的最终函数/事件目录形状，没有新增schema数字或发布兼容声明。独立PG18 Role race门禁59.913秒通过服务来源自退出、准确Audit联合类型及原USER回归；独立IAM双副本、Audit、PaaS与两个dispatcher的真实进程门禁195.488秒通过首个managedservice消费者的60秒会话发行、唯一PDP决定、真实`ServiceInstallation`读取及即时自退出，两个Account的同名资源和会话证据不合并。全仓`go test -race -count=1 -p 2 ./...`、`go vet -p 2 ./...`、模块校验、API生成稳定及Linux amd64全仓构建通过。以上是当前提交候选的本地证据；独立CI、发布profile、服务会话管理员管理、UX/UI和整体006验收均未完成。
+固定`f98d4088`的源码形状为IAM55/Audit30/PaaS2；它替换未发布迁移内的最终函数/事件目录形状，没有发布兼容声明。独立PG18 Role race门禁59.913秒通过服务来源自退出、准确Audit联合类型及原USER回归；独立IAM双副本、Audit、PaaS与两个dispatcher的真实进程门禁195.488秒通过首个managedservice消费者的60秒会话发行、唯一PDP决定、真实`ServiceInstallation`读取及即时自退出，两个Account的同名资源和会话证据不合并。全仓`go test -race -count=1 -p 2 ./...`、`go vet -p 2 ./...`、模块校验、API生成稳定及Linux amd64全仓构建通过。当前管理员扩展因公开响应联合类型及私有SQL函数形状变化推进到IAM56，仍是pre-v1的单实现替换，不建立IAM55兼容入口。2026-10-01最终源码的真实PG18 HTTP纵向门禁79.73秒和累计Role管理回归55.40秒通过；后者新增管理员撤销与workload解绑的同记录竞争，证明两类终态及各自唯一事实无死锁、无活凭据。独立双IAM、Audit、PaaS与双dispatcher的当前进程组合209.46秒通过IAM56/Audit30/PaaS2 readiness、受限数据库登录、双Account业务资源/Operation/outbox，并实际由AccountAdministrator跨副本完成服务会话list/read/revoke、等值重放、终态读取和Audit链查询；仅有服务Role绑定管理权限的USER及另一Account均被拒绝。已撤binding的未终止会话仍以封存服务来源显示为UNREVOKED并可明确销毁，业务凭据则已在解绑后的下一请求失效。规范化服务证据与封存发行向量的独立漂移继续失败关闭；最终秘密扫描仅豁免契约有效Audit时间戳内随机六位子串，精确验证码和任意普通字段仍失败。独立CI、发布profile、UX/UI和整体006验收仍未完成。
 
 ### 来源授权代际：临时撤权不复活
 
@@ -277,10 +277,10 @@ USER recorder真库聚焦9.556秒及完整策略回归119.373秒通过：contrac
 
 管理目录的实施契约见下一节；已有自服务按原意图查询/撤销不等于管理目录。UX/UI owner已确认真实页面位于“角色详情 > 角色会话”，整张目录在内容区，单条危险操作用确认框；不需要全账号会话产品页、批量接口或此处的创建/承担入口。其既有任意USER/SERVICE/FEDERATION caller和前端状态推导仅属于preview，不是需要保留的线上契约。
 
-- Account仍来自当前有效USER，Role由准确路径绑定；首片只包含现有真实USER来源的RoleSession。查询可按准确sourceUserId、sessionId和封闭生命周期过滤，不开放模糊全局搜索、IP、服务/联邦caller或来源登录会话信息。目录/逐项撤销使用各自精确权限，不能从Role名称、可读目录或可承担能力推导；受委派的会话管理不是创建策略/修改Trust的权限。
-- 默认列出未显式撤销且未过期的发行记录。服务端以同一数据库观测时间区分未撤销、已过期、已撤销；返回observedAt和每项完整非秘密session及匹配的最小sourceUser显示，避免UI逐项查询User目录。该生命周期不是当前业务许可，不逐行执行完整业务授权来制造“USABLE”，也不把ACTIVE或浏览器时钟当作有效凭据证明。
+- Account仍来自当前有效USER，Role由准确路径绑定；管理caller仍只允许USER，目标RoleSession则以严格`USER|SERVICE_ACCOUNT`联合类型显示来源。查询可按准确sourceType、sourceUserId、sourceServicePrincipalId、sessionId和封闭生命周期过滤，不开放模糊全局搜索、IP、联邦caller或来源登录会话信息；两个来源ID不能混用，精确ID会推导并约束对应sourceType。目录/逐项撤销使用各自精确权限，不能从Role名称、可读目录或可承担能力推导；受委派的会话管理不是创建策略/修改Trust的权限。
+- 默认列出未显式撤销且未过期的发行记录。服务端以同一数据库观测时间区分未撤销、已过期、已撤销；返回observedAt和每项完整非秘密session及严格来源显示。USER只含最小`id/loginName/displayName`，SERVICE只含不可变`installationId/principalId/purpose`，避免UI再查询另一目录或把服务伪装成用户。该生命周期不是当前业务许可，不逐行执行完整业务授权来制造“USABLE”，也不把ACTIVE或浏览器时钟当作有效凭据证明。
 - 有界opaque cursor绑定Account、Role、完整过滤、当前调用者授权与准确目录变更水位；每页仍检查当前身份和权限。不得返回秘密、原Assume意图/登录lineage、授权代际、Trust/Policy材料或未授权总数。空items与nextAfter可以同时存在，客户端原样继续；新发行、撤销、权限改变及跨Role/Account/过滤替换都须有真实分页门禁。
-- 每项返回精确ROLE_SESSION目标的撤销capability。UI在选择记录后通过页级命令发起单条危险确认，确认只显示Role、来源User、sessionId和发行/到期时间；capability不是permit。当前发行记录仅允许单向撤销，不为套用CRUD模式新增伪resourceVersion；唯一并发结果由不可变身份、原意图和单向终态确定。
+- 每项返回精确ROLE_SESSION目标的撤销capability。UI在选择记录后通过页级命令发起单条危险确认，确认显示Role、严格来源User或ServicePrincipal、sessionId和发行/到期时间；capability不是permit。当前发行记录仅允许单向撤销，不为套用CRUD模式新增伪resourceVersion；唯一并发结果由不可变身份、原意图和单向终态确定。
 - 撤销原意图绑定Account/Role/Session、当前操作者和完整请求。同意图精确重放不重复事实，不同意图或已由其他路径撤销不得冒充自己的成功；网络/503等不确定结果保留原意图。必须与原来源自撤销、ROLE持有证明退出、自然到期、身份/Role安全变更串行化，无部分终态/成功事实，不复活旧会话。管理员事实必须携带其真实权限决定，不能套用原无业务decision的自撤销事实或伪造source actor。
 - 提供按精确Role+Session身份的独立单项读取，以当前读取权限核对终态；不能让默认目录过滤、空页或水位冲突代替确认。APPLIED/EQUAL_REPLAY、不同意图竞争、已撤销、已过期但未撤销、锁内资格失效的唯一结果须在接口实施前明确。未知结果时UI保留原requestId，只有权威响应或准确读取证明revokedAt/终态后才显示已撤销；读取资格丢失不补造成功。
 - 继续沿现有API、唯一PDP、Role/Session事务及outbox owner实现，并覆盖双Account、过滤/cursor攻击、同一Session多路径竞争、受限runtime/锁诊断、历史投递、重放/重启和真实消费者。UI实现及浏览器验收仍由010 owner独立完成。
@@ -295,7 +295,7 @@ USER recorder真库聚焦9.556秒及完整策略回归119.373秒通过：contrac
 | `GET /v1/roles/{roleId}/sessions/{sessionId}` | `iam.role-session.read`，精确ROLE_SESSION INSTANCE | `RoleSessionAccess{apiVersion,kind,observedAt,item}`；路径Role必须与记录真实归属一致 |
 | `POST /v1/roles/{roleId}/sessions/{sessionId}:revoke` | `iam.role-session.revoke`，精确ROLE_SESSION INSTANCE | 原`RevokeRoleSessionRequest{requestId}`；`RevokeRoleSessionResponse{outcome,session}`仅APPLIED/EQUAL_REPLAY |
 
-目录仅接受after、精确sourceUserId/sessionId及lifecycle过滤，查询串最多1024字节，空值、重复或未知参数拒绝；缺省UNREVOKED，可显式选择ALL/EXPIRED/REVOKED。每个`RoleSessionListing`包含原RoleSession、匹配的最小sourceUser、lifecycle和精确revokeCapability，不公开私有来源会话、代际、Trust、凭据或失效原因。lifecycle按同一数据库时刻计算：已有revokedAt优先REVOKED，否则到期为EXPIRED，其余UNREVOKED；它绝不表示当前业务USABLE。停用/墓碑Role及失效来源USER的历史记录仍可被独立授权查询；未到期、未显式撤销的记录可由当前有效管理员撤销，不重新认证来源USER，不启用任何身份或改变业务资源。
+目录仅接受after、精确sourceType/sourceUserId/sourceServicePrincipalId/sessionId及lifecycle过滤，查询串最多1024字节，空值、重复、未知参数、两个来源ID并存或类型/ID不匹配均拒绝；缺省UNREVOKED，可显式选择ALL/EXPIRED/REVOKED。每个`RoleSessionListing`包含原RoleSession、严格`source`联合类型、lifecycle和精确revokeCapability，不公开私有来源会话、服务home Account、binding、代际、Trust、凭据或失效原因。lifecycle按同一数据库时刻计算：已有revokedAt优先REVOKED，否则到期为EXPIRED，其余UNREVOKED；它绝不表示当前业务USABLE。停用/墓碑Role、失效来源USER及已撤binding的SERVICE历史记录仍可被独立授权查询；未到期、未显式撤销的记录可由当前有效管理员撤销，不重新认证来源主体，不启用任何身份或改变业务资源。
 
 加入独立会话list能力后，原`RoleListing.capabilities`必须完整含9项；`RoleAccess`还含精确Assume能力及每个真实附件的revoke能力，因此为10–266项（最多256附件）。生成schema同步约束这些上下限；完整能力、动作/资源归属与附件对应关系仍由Go语义校验保证，不能用数量代替权限，也不能为旧UI删掉新增能力。
 
@@ -305,7 +305,7 @@ USER recorder真库聚焦9.556秒及完整策略回归119.373秒通过：contrac
 
 目录使用独立的每Role会话水位，发行/三类实际撤销在原事务内推进，失败或精确重放不推进。原cursor owner绑定当前actor/session/credential与授权来源代际、Role、水位和完整过滤，不能跨用途/账号/Role/过滤使用；不把目录水位当PDP许可，也不借Role安全generation使有效业务会话被目录操作误撤。写路径先按Account→稳定排序的actor/source USER非键更新锁→当前actor credential/session→来源授权保护→RoleSession终态锁；真实PDP在锁保护下形成，末端再次核对当前bearer/期限。只认证actor，source USER锁只用于与自撤、退出及凭据变化排序。只读路径不取发行配额锁，不在目录水位之后反向锁Role/User。
 
-开发schema目标IAM28/Audit16/PaaS2，以真实函数/表/ACL/readiness检查为准；发布profile/revision不变。record8/evidence5/claim7、ServiceIdentity/lookup_service及旧canonical不变。三路径竞争、失效来源可撤、过期冲突、同意图重放、末尾outbox失败、分页过滤攻击与历史投递须在既有真库/进程owner证明后交固定接口给UI。
+当前开发schema为IAM56/Audit30/PaaS2，以真实函数/表/ACL/readiness检查为准；发布profile/revision仍未据此自动改变。record8/evidence5/claim7、ServiceIdentity/lookup_service及旧canonical不变。服务来源显示只从已封存的发行证据投影，不能由请求或可变产品元数据补齐。三路径竞争、失效来源可撤、过期冲突、同意图重放、末尾outbox失败、分页过滤攻击与历史投递须在既有真库/进程owner证明后交固定接口给UI。
 
 ### R3管理会话本地证据
 

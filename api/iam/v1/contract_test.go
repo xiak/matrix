@@ -2754,11 +2754,19 @@ func TestRoleSessionManagementObservationAndIntent(t *testing.T) {
 	}
 	for _, lifecycle := range []string{"", "ALL", "UNREVOKED", "EXPIRED", "REVOKED"} {
 		filter, err := NormalizeRoleSessionFilter(RoleSessionFilter{SourceUserID: "user-a", SessionID: "session-a", Lifecycle: lifecycle})
-		if err != nil || (lifecycle == "" && filter.Lifecycle != "UNREVOKED") {
+		if err != nil || filter.SourceType != PrincipalUser || (lifecycle == "" && filter.Lifecycle != "UNREVOKED") {
 			t.Fatal("valid closed filter rejected")
 		}
 	}
-	for _, filter := range []RoleSessionFilter{{Lifecycle: "USABLE"}, {Lifecycle: "ACTIVE"}, {Lifecycle: "all"}, {SourceUserID: "*"}, {SessionID: "a/b"}} {
+	serviceFilter, err := NormalizeRoleSessionFilter(RoleSessionFilter{SourceServicePrincipalID: "service-a", Lifecycle: "ALL"})
+	if err != nil || serviceFilter.SourceType != PrincipalServiceAccount {
+		t.Fatal("valid service source filter rejected")
+	}
+	for _, filter := range []RoleSessionFilter{{Lifecycle: "USABLE"}, {Lifecycle: "ACTIVE"}, {Lifecycle: "all"},
+		{SourceType: "ROLE"}, {SourceUserID: "*"}, {SourceServicePrincipalID: "*"}, {SessionID: "a/b"},
+		{SourceUserID: "user-a", SourceServicePrincipalID: "service-a"},
+		{SourceType: PrincipalServiceAccount, SourceUserID: "user-a"},
+		{SourceType: PrincipalUser, SourceServicePrincipalID: "service-a"}} {
 		if _, err := NormalizeRoleSessionFilter(filter); err == nil {
 			t.Fatal("unsupported filter accepted")
 		}
@@ -2767,7 +2775,7 @@ func TestRoleSessionManagementObservationAndIntent(t *testing.T) {
 
 func TestRoleSessionManagementViewsBindMinimalCurrentObservation(t *testing.T) {
 	session := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"RoleSession","id":"role-session-a","accountId":"account-a","roleId":"role-a","sourceUserId":"user-a","status":"ACTIVE","issuedAt":"2026-09-17T00:00:00Z","expiresAt":"2026-09-17T01:00:00Z"}`
-	item := `{"session":` + session + `,"sourceUser":{"id":"user-a","loginName":"member","displayName":"Member"},"lifecycle":"UNREVOKED","revokeCapability":{"action":"iam.role-session.revoke","resource":{"kind":"ROLE_SESSION","id":"role-session-a"},"available":true}}`
+	item := `{"session":` + session + `,"source":{"type":"USER","user":{"id":"user-a","loginName":"member","displayName":"Member"}},"lifecycle":"UNREVOKED","revokeCapability":{"action":"iam.role-session.revoke","resource":{"kind":"ROLE_SESSION","id":"role-session-a"},"available":true}}`
 	wire := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"RoleSessionList","accountId":"account-a","roleId":"role-a","observedAt":"2026-09-17T00:01:00Z","items":[` + item + `]}`
 	var listed RoleSessionList
 	if DecodeRequest(strings.NewReader(wire), &listed) != nil || ValidateRoleSessionList(listed) != nil {
@@ -2775,6 +2783,8 @@ func TestRoleSessionManagementViewsBindMinimalCurrentObservation(t *testing.T) {
 	}
 	for name, broken := range map[string]string{
 		"source mismatch":                    strings.Replace(wire, `"id":"user-a"`, `"id":"user-b"`, 1),
+		"source type mismatch":               strings.Replace(wire, `"type":"USER"`, `"type":"SERVICE_ACCOUNT"`, 1),
+		"mixed source":                       strings.Replace(wire, `"user":{"id":"user-a"`, `"servicePrincipal":{"installationId":"install-a","principalId":"service-a","purpose":"PAAS"},"user":{"id":"user-a"`, 1),
 		"account mismatch":                   strings.Replace(wire, `"accountId":"account-a"`, `"accountId":"account-b"`, 1),
 		"role mismatch":                      strings.Replace(wire, `"roleId":"role-a"`, `"roleId":"role-b"`, 1),
 		"capability target":                  strings.Replace(wire, `"kind":"ROLE_SESSION","id":"role-session-a"`, `"kind":"ROLE_SESSION","id":"another"`, 1),
@@ -2805,6 +2815,25 @@ func TestRoleSessionManagementViewsBindMinimalCurrentObservation(t *testing.T) {
 	var detail RoleSessionAccess
 	if DecodeRequest(strings.NewReader(access), &detail) != nil {
 		t.Fatal("precise observation rejected")
+	}
+	serviceSession := strings.Replace(session, `"sourceUserId":"user-a"`, `"sourceServicePrincipalId":"service-a"`, 1)
+	serviceItem := `{"session":` + serviceSession + `,"source":{"type":"SERVICE_ACCOUNT","servicePrincipal":{"installationId":"installation-a","principalId":"service-a","purpose":"PAAS"}},"lifecycle":"UNREVOKED","revokeCapability":{"action":"iam.role-session.revoke","resource":{"kind":"ROLE_SESSION","id":"role-session-a"},"available":true}}`
+	serviceWire := strings.Replace(wire, item, serviceItem, 1)
+	if DecodeRequest(strings.NewReader(serviceWire), &listed) != nil || ValidateRoleSessionList(listed) != nil {
+		t.Fatal("valid service-origin management observation rejected")
+	}
+	for name, broken := range map[string]string{
+		"principal mismatch":   strings.Replace(serviceWire, `"principalId":"service-a"`, `"principalId":"service-b"`, 1),
+		"missing installation": strings.Replace(serviceWire, `"installationId":"installation-a",`, "", 1),
+		"unknown purpose":      strings.Replace(serviceWire, `"purpose":"PAAS"`, `"purpose":"UNKNOWN"`, 1),
+		"user union":           strings.Replace(serviceWire, `"servicePrincipal":{"installationId":"installation-a","principalId":"service-a","purpose":"PAAS"}`, `"user":{"id":"user-a","loginName":"member","displayName":"Member"}`, 1),
+	} {
+		t.Run("service "+name, func(t *testing.T) {
+			var value RoleSessionList
+			if DecodeRequest(strings.NewReader(broken), &value) == nil {
+				t.Fatal("invalid service source projection accepted")
+			}
+		})
 	}
 }
 
@@ -7473,6 +7502,41 @@ func FuzzLoginResponseRoundTrip(f *testing.F) {
 			t.Fatal("login result bypassed the explicit encoder")
 		}
 	})
+}
+
+func TestIAMOpenAPIRoleSessionDirectoryFiltersAreClosed(t *testing.T) {
+	document := loadIAMOpenAPI(t)
+	paths := mustIAMObject(t, document["paths"], "paths")
+	path := mustIAMObject(t, paths["/v1/roles/{roleId}/sessions"], "role session directory path")
+	if len(path) != 1 || path["get"] == nil {
+		t.Fatal("role session directory exposed a mutation")
+	}
+	operation := mustIAMObject(t, path["get"], "role session directory operation")
+	parameters, ok := operation["parameters"].([]any)
+	if !ok || len(parameters) != 7 {
+		t.Fatal("role session directory filter set is not closed")
+	}
+	expected := map[string]string{
+		"roleId": "path", "after": "query", "sourceType": "query", "sourceUserId": "query",
+		"sourceServicePrincipalId": "query", "sessionId": "query", "lifecycle": "query",
+	}
+	for _, raw := range parameters {
+		parameter := mustIAMObject(t, raw, "role session directory parameter")
+		name, ok := parameter["name"].(string)
+		if !ok || expected[name] == "" || parameter["in"] != expected[name] || (parameter["required"] == true) != (name == "roleId") {
+			t.Fatal("role session directory accepts an unknown selector or changed path authority")
+		}
+		delete(expected, name)
+		if name == "sourceType" {
+			schema := mustIAMObject(t, parameter["schema"], "role session source type")
+			if !reflect.DeepEqual(schema["enum"], []any{string(PrincipalUser), string(PrincipalServiceAccount)}) {
+				t.Fatal("role session directory source type is not the strict USER/SERVICE_ACCOUNT union")
+			}
+		}
+	}
+	if len(expected) != 0 {
+		t.Fatalf("role session directory omitted filters: %#v", expected)
+	}
 }
 
 func TestIAMOpenAPISessionTouchIsBodylessMutation(t *testing.T) {

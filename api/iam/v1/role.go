@@ -174,6 +174,34 @@ func ValidateRoleSourceUserDisplay(value RoleSourceUserDisplay) error {
 	return errors.Join(ValidateID("sourceUser.id", string(value.ID)), validateLoginName(value.LoginName), validateText("sourceUser.displayName", value.DisplayName, 1, 128))
 }
 
+// RoleSessionSourceDisplay is a strict display-only union for the principal
+// that obtained a RoleSession. It is neither an authenticated identity nor a
+// cached authorization result. USER sessions disclose only the minimum user
+// display; SERVICE_ACCOUNT sessions disclose only immutable installation,
+// principal and purpose lineage.
+type RoleSessionSourceDisplay struct {
+	Type             PrincipalType              `json:"type"`
+	User             *RoleSourceUserDisplay     `json:"user,omitempty"`
+	ServicePrincipal *ServicePrincipalReference `json:"servicePrincipal,omitempty"`
+}
+
+func ValidateRoleSessionSourceDisplay(value RoleSessionSourceDisplay) error {
+	switch value.Type {
+	case PrincipalUser:
+		if value.User == nil || value.ServicePrincipal != nil {
+			return errors.New("role session USER source is invalid")
+		}
+		return ValidateRoleSourceUserDisplay(*value.User)
+	case PrincipalServiceAccount:
+		if value.User != nil || value.ServicePrincipal == nil {
+			return errors.New("role session SERVICE_ACCOUNT source is invalid")
+		}
+		return ValidateServicePrincipalReference(*value.ServicePrincipal)
+	default:
+		return errors.New("role session source type is invalid")
+	}
+}
+
 // CurrentRoleIdentity is a current authenticated projection, not the durable
 // issuance receipt. A cached copy never establishes continuing authority.
 type CurrentRoleIdentity struct {
@@ -329,9 +357,11 @@ const (
 // RoleSessionFilter contains only public list filters, never identity selectors.
 // Lifecycle may also be ALL; its empty query value means UNREVOKED.
 type RoleSessionFilter struct {
-	SourceUserID PrincipalID   `json:"sourceUserId,omitempty"`
-	SessionID    RoleSessionID `json:"sessionId,omitempty"`
-	Lifecycle    string        `json:"lifecycle"`
+	SourceType               PrincipalType `json:"sourceType,omitempty"`
+	SourceUserID             PrincipalID   `json:"sourceUserId,omitempty"`
+	SourceServicePrincipalID PrincipalID   `json:"sourceServicePrincipalId,omitempty"`
+	SessionID                RoleSessionID `json:"sessionId,omitempty"`
+	Lifecycle                string        `json:"lifecycle"`
 }
 
 func NormalizeRoleSessionFilter(value RoleSessionFilter) (RoleSessionFilter, error) {
@@ -339,8 +369,27 @@ func NormalizeRoleSessionFilter(value RoleSessionFilter) (RoleSessionFilter, err
 		value.Lifecycle = string(RoleSessionUnrevoked)
 	}
 	if (value.SourceUserID != "" && ValidateID("sourceUserId", string(value.SourceUserID)) != nil) ||
+		(value.SourceServicePrincipalID != "" && ValidateID("sourceServicePrincipalId", string(value.SourceServicePrincipalID)) != nil) ||
 		(value.SessionID != "" && ValidateID("sessionId", string(value.SessionID)) != nil) {
 		return RoleSessionFilter{}, errors.New("role session filter is invalid")
+	}
+	if value.SourceUserID != "" && value.SourceServicePrincipalID != "" {
+		return RoleSessionFilter{}, errors.New("role session source filter is ambiguous")
+	}
+	if value.SourceUserID != "" {
+		if value.SourceType != "" && value.SourceType != PrincipalUser {
+			return RoleSessionFilter{}, errors.New("role session source filter differs")
+		}
+		value.SourceType = PrincipalUser
+	}
+	if value.SourceServicePrincipalID != "" {
+		if value.SourceType != "" && value.SourceType != PrincipalServiceAccount {
+			return RoleSessionFilter{}, errors.New("role session source filter differs")
+		}
+		value.SourceType = PrincipalServiceAccount
+	}
+	if value.SourceType != "" && value.SourceType != PrincipalUser && value.SourceType != PrincipalServiceAccount {
+		return RoleSessionFilter{}, errors.New("role session source type filter is invalid")
 	}
 	switch value.Lifecycle {
 	case "ALL", string(RoleSessionUnrevoked), string(RoleSessionExpired), string(RoleSessionRevoked):
@@ -365,10 +414,10 @@ func ObserveRoleSession(value RoleSession, observedAt time.Time) (RoleSessionLif
 }
 
 type RoleSessionListing struct {
-	Session          RoleSession           `json:"session"`
-	SourceUser       RoleSourceUserDisplay `json:"sourceUser"`
-	Lifecycle        RoleSessionLifecycle  `json:"lifecycle"`
-	RevokeCapability ActionCapability      `json:"revokeCapability"`
+	Session          RoleSession              `json:"session"`
+	Source           RoleSessionSourceDisplay `json:"source"`
+	Lifecycle        RoleSessionLifecycle     `json:"lifecycle"`
+	RevokeCapability ActionCapability         `json:"revokeCapability"`
 }
 
 type RoleSessionList struct {
@@ -396,13 +445,22 @@ type RevokeRoleSessionResponse struct {
 
 func ValidateRoleSessionListing(value RoleSessionListing, observedAt time.Time) error {
 	lifecycle, err := ObserveRoleSession(value.Session, observedAt)
-	if err != nil || lifecycle != value.Lifecycle || value.SourceUser.ID != value.Session.SourceUserID ||
+	if err != nil || lifecycle != value.Lifecycle || ValidateRoleSessionSourceDisplay(value.Source) != nil ||
 		ValidateActionCapability(value.RevokeCapability) != nil || value.RevokeCapability.Action != ActionIAMRoleSessionRevoke ||
 		value.RevokeCapability.Resource != (ResourceReference{Kind: ResourceRoleSession, ID: string(value.Session.ID)}) ||
 		(lifecycle != RoleSessionUnrevoked && value.RevokeCapability.Available) {
 		return errors.New("role session listing is invalid")
 	}
-	return ValidateRoleSourceUserDisplay(value.SourceUser)
+	if value.Source.Type == PrincipalUser {
+		if value.Session.SourceServicePrincipalID != "" || value.Source.User.ID != value.Session.SourceUserID {
+			return errors.New("role session USER source differs")
+		}
+		return nil
+	}
+	if value.Session.SourceUserID != "" || value.Source.ServicePrincipal.PrincipalID != value.Session.SourceServicePrincipalID {
+		return errors.New("role session SERVICE_ACCOUNT source differs")
+	}
+	return nil
 }
 
 func ValidateRoleSessionList(value RoleSessionList) error {

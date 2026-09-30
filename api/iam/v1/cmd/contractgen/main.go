@@ -97,7 +97,9 @@ func buildPaths() object {
 		"/v1/roles/{roleId}/sessions": object{
 			"get": readOperation("listRoleSessions", "List a bounded role-session history window; lifecycle is not current business eligibility", "RoleSessionList", nil,
 				append(append([]any{openapi31.PathIDParameter("roleId")}, accountPageParameters()...),
+					object{"name": "sourceType", "in": "query", "required": false, "schema": object{"type": "string", "enum": []string{string(iamv1.PrincipalUser), string(iamv1.PrincipalServiceAccount)}}},
 					object{"name": "sourceUserId", "in": "query", "required": false, "schema": openapi31.Ref("ID")},
+					object{"name": "sourceServicePrincipalId", "in": "query", "required": false, "schema": openapi31.Ref("ID")},
 					object{"name": "sessionId", "in": "query", "required": false, "schema": openapi31.Ref("ID")},
 					object{"name": "lifecycle", "in": "query", "required": false, "schema": object{"type": "string", "enum": []string{"ALL", "UNREVOKED", "EXPIRED", "REVOKED"}, "default": "UNREVOKED"}})),
 		},
@@ -685,6 +687,7 @@ func structContracts() map[string]reflect.Type {
 		"RoleAccountDisplay":                            openapi31.StructType[iamv1.RoleAccountDisplay](),
 		"RoleDisplay":                                   openapi31.StructType[iamv1.RoleDisplay](),
 		"RoleSourceUserDisplay":                         openapi31.StructType[iamv1.RoleSourceUserDisplay](),
+		"RoleSessionSourceDisplay":                      openapi31.StructType[iamv1.RoleSessionSourceDisplay](),
 		"AssumableRole":                                 openapi31.StructType[iamv1.AssumableRole](),
 		"AssumableRoleList":                             openapi31.StructType[iamv1.AssumableRoleList](),
 		"RevokeRoleSessionRequest":                      openapi31.StructType[iamv1.RevokeRoleSessionRequest](),
@@ -1448,6 +1451,10 @@ func applySemanticOverlays(schemas object) {
 	}
 	schemas["RoleSessionReference"].(object)["oneOf"] = sourceLineage
 	schemas["RoleSession"].(object)["allOf"] = []any{object{"oneOf": sourceLineage}}
+	schemas["RoleSessionSourceDisplay"].(object)["oneOf"] = []any{
+		object{"required": []string{"user"}, "properties": object{"type": object{"const": string(iamv1.PrincipalUser)}, "servicePrincipal": false}},
+		object{"required": []string{"servicePrincipal"}, "properties": object{"type": object{"const": string(iamv1.PrincipalServiceAccount)}, "user": false}},
+	}
 	roleResponse["required"] = []string{"outcome", "session"}
 	roleResponse["oneOf"] = []any{
 		object{"required": []string{"credential"}, "properties": object{"outcome": object{"const": "APPLIED"}, "session": object{"properties": object{"status": object{"const": "ACTIVE"}}}}},

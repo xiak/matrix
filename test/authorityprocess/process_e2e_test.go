@@ -108,7 +108,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	const databasePrefix = "matrix_iam_upgrade_predecessor_"
 	const source = "42035189eb823e388509f54525889c1a18c6b79d"
 	const sourceSchema uint64 = 45
-	const currentSchema uint64 = 55
+	const currentSchema uint64 = 56
 	// Actual predecessor admission accepted these 14-byte passwords. The new
 	// executable must replay the sealed bootstrap and verify existing secrets
 	// without admitting them for a new password write.
@@ -444,7 +444,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		}
 	}
 	var shape bool
-	if err := admin.QueryRow(ctx, `SELECT schema_version=55 AND iam.password_history_contract_ready() AND iam.account_security_settings_contract_ready() AND iam.login_session_contract_ready() AND iam.password_attempt_contract_ready()
+	if err := admin.QueryRow(ctx, `SELECT schema_version=56 AND iam.password_history_contract_ready() AND iam.account_security_settings_contract_ready() AND iam.login_session_contract_ready() AND iam.password_attempt_contract_ready()
 	 AND iam.authentication_recovery_contract_ready()
 	 AND to_regprocedure('iam.close_authentication_recovery(jsonb,text,jsonb)') IS NULL
 	 AND NOT EXISTS(SELECT 1 FROM iam.user_credentials c WHERE c.password_history<>'[]'::jsonb
@@ -891,7 +891,7 @@ func provePredecessorAuthenticationRecovery(t *testing.T, ctx context.Context, r
 		}
 		var unchanged bool
 		if err := database.QueryRow(ctx, `SELECT
-			 (SELECT schema_version=55 AND ready FROM iam.readiness())
+			 (SELECT schema_version=56 AND ready FROM iam.readiness())
 		 AND NOT EXISTS(SELECT 1 FROM iam.authenticator_removals)
 		 AND NOT EXISTS(SELECT 1 FROM iam.sessions WHERE last_activity_at IS NOT NULL OR idle_timeout_seconds IS NOT NULL)
 		 AND NOT EXISTS(SELECT 1 FROM iam.user_credentials c WHERE c.password_history<>'[]'::jsonb
@@ -2775,7 +2775,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	// Exercise the exact source services together without weakening install
 	// admission: the workflow separately proves the published installer rejects
 	// this unmatched database shape before effects.
-	sourceProfile := installationrelease.AuthoritySchemas{IAM: 55, Audit: 30, PaaS: 2}
+	sourceProfile := installationrelease.AuthoritySchemas{IAM: 56, Audit: 30, PaaS: 2}
 	publishedProfile := installationrelease.CurrentDatabaseProfile()
 	if publishedProfile.Authorities == sourceProfile {
 		t.Fatal("unreleased authority source shape was published without a final profile gate")
@@ -6599,7 +6599,7 @@ func proveTenantAccountProcesses(
 	if userProducer.Status != http.StatusUnauthorized {
 		t.Fatal("tenant owner gained audit producer authority")
 	}
-	retainedQuota, retainedDatabase, resourceSecrets := proveTenantResourceProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, paasEndpoint, bearer, primary.Credential, childLogin)
+	retainedQuota, retainedDatabase, resourceSecrets := proveTenantResourceProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, paasEndpoint, bearer, primary.Credential, primary.Session.PrincipalID, childLogin)
 	proveAccountSecuritySettingsProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, bearer, primary.Credential, childLogin, restartIAM)
 	sensitive := append(resourceSecrets, initial, changed, primary.Credential, childLogin.Credential)
 	sensitive = append(sensitive, proveGroupResourceProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, paasEndpoint, bearer, primary.Credential, withAuditOutage, restartIAM)...)
@@ -8803,14 +8803,18 @@ func proveRoleManagementProcesses(t *testing.T, ctx context.Context, admin *pgx.
 		if action == auditv1.ActionIAMRoleSessionIssued {
 			expected = 2
 		}
-		if page.TenantID != tenant || len(page.Records) != expected {
+		if page.TenantID != tenant || (action != auditv1.ActionIAMRoleSessionAdminRevoked && len(page.Records) != expected) {
 			t.Fatal("role issuance fact did not reach its tenant chain", action)
 		}
+		matched := 0
 		for _, record := range page.Records {
 			event := record.Event
 			expectedActor, expectedSession := auditv1.ActorID(user.ID), string(issued.Session.ID)
 			if action == auditv1.ActionIAMRoleSessionAdminRevoked {
 				expectedActor, expectedSession = auditv1.ActorID(actor.User.ID), string(administrativelyIssued.Session.ID)
+				if event.Target.ID != expectedSession {
+					continue
+				}
 			}
 			if action == auditv1.ActionIAMRoleSessionIssued && event.Target.ID == string(administrativelyIssued.Session.ID) {
 				expectedSession = event.Target.ID
@@ -8819,6 +8823,7 @@ func proveRoleManagementProcesses(t *testing.T, ctx context.Context, admin *pgx.
 				event.Target.ID != expectedSession || (event.IAMDecisionID != "") != (action != auditv1.ActionIAMRoleSessionRevoked) {
 				t.Fatal("role issuance history changed actor or original decision")
 			}
+			matched++
 			var duplicate auditv1.IngestionResult
 			call(http.MethodPost, auditEndpoint, "/v1/events", iamServiceCredential, event, http.StatusOK, &duplicate)
 			if duplicate.Outcome != auditv1.IngestionDuplicate {
@@ -8826,6 +8831,9 @@ func proveRoleManagementProcesses(t *testing.T, ctx context.Context, admin *pgx.
 			}
 			event.Target.ID = "role-session-forged"
 			call(http.MethodPost, auditEndpoint, "/v1/events", iamServiceCredential, event, http.StatusForbidden, nil)
+		}
+		if matched != expected {
+			t.Fatal("role issuance fact did not retain its exact target", action)
 		}
 	}
 	restartIAM()
@@ -9318,7 +9326,7 @@ func proveAccountSecuritySettingsProcesses(t *testing.T, ctx context.Context, da
 	}
 }
 
-func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.Conn, iamEndpoint, iamReplicaEndpoint, auditEndpoint, paasEndpoint, homeBearer, customerBearer string, customer loginResult) (managedservicev1.QuotaEntitlement, managedservicev1.ServiceInstallation, []string) {
+func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.Conn, iamEndpoint, iamReplicaEndpoint, auditEndpoint, paasEndpoint, homeBearer, customerBearer string, customerOwnerID iamv1.PrincipalID, customer loginResult) (managedservicev1.QuotaEntitlement, managedservicev1.ServiceInstallation, []string) {
 	t.Helper()
 	base := paasEndpoint + "/managed-services/v1"
 	homeUser := createIAMUser(t, iamEndpoint, homeBearer, "account.user", "Home resource member", initialDeveloperPassword, "request-home-resource-member")
@@ -9336,6 +9344,7 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 	platform = loginIAM(t, iamEndpoint, "resource.platform@organization-process", changedDeveloperPassword, "request-resource-platform-reauthenticated")
 	tenants := []struct {
 		id, owner, member   string
+		ownerID             iamv1.PrincipalID
 		memberID            iamv1.PrincipalID
 		quota               managedservicev1.QuotaEntitlement
 		shared, unique      managedservicev1.ServiceInstallation
@@ -9347,8 +9356,8 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 		serviceRoleSecret   string
 		serviceRoleRequest  string
 	}{
-		{id: "organization-process", owner: homeBearer, member: home.Credential, memberID: homeUser.ID},
-		{id: "organization-process-customer", owner: customerBearer, member: customer.Credential, memberID: customer.Session.PrincipalID},
+		{id: "organization-process", owner: homeBearer, member: home.Credential, ownerID: "principal-admin", memberID: homeUser.ID},
+		{id: "organization-process-customer", owner: customerBearer, member: customer.Credential, ownerID: customerOwnerID, memberID: customer.Session.PrincipalID},
 	}
 	assertStatus := func(response processResponse, status int, action string) {
 		t.Helper()
@@ -9561,6 +9570,10 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 			http.StatusForbidden, "foreign workload Role unbinding")
 		assertStatus(performJSON(t, http.MethodGet, iamEndpoint+"/v1/service-linked-roles/"+
 			string(other.serviceRoleReceipt.RoleID), tenant.member, nil), http.StatusForbidden, "foreign service-linked Role")
+		foreignSessionPath := "/v1/roles/" + string(other.serviceRoleReceipt.RoleID) + "/sessions/" +
+			string(other.serviceRoleSession.ID)
+		assertStatus(performJSON(t, http.MethodGet, iamReplicaEndpoint+foreignSessionPath, tenant.owner, nil),
+			http.StatusForbidden, "foreign service RoleSession")
 		for _, field := range []string{"tenantId", "organizationId", "requestedBy"} {
 			body := map[string]any{"offeringId": "postgresql-18", "quotaShapeId": "pg-small", "instanceCount": 1, field: other.id}
 			assertStatus(performJSONWithIdempotency(t, http.MethodPost, base+"/quota-entitlements", tenant.member, "forged-"+field, body), http.StatusBadRequest, "forged authority body")
@@ -9667,6 +9680,64 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 			bytes.Contains(receipt.Body, []byte(tenant.serviceRoleSecret)) {
 			t.Fatal("workload unbind erased or exposed the original service RoleSession receipt")
 		}
+		servicePrincipal := iamv1.ServicePrincipalReference{
+			InstallationID: "installation-process", PrincipalID: "service-paas", Purpose: iamv1.ServicePaaS,
+		}
+		roleDirectoryPath := "/v1/roles/" + string(tenant.serviceRoleReceipt.RoleID) + "/sessions"
+		assertStatus(performJSON(t, http.MethodGet, iamReplicaEndpoint+roleDirectoryPath, tenant.member, nil),
+			http.StatusForbidden, "service Role binding administrator without session authority")
+		directoryResponse := performJSON(t, http.MethodGet, iamReplicaEndpoint+roleDirectoryPath+
+			"?sourceType=SERVICE_ACCOUNT&sourceServicePrincipalId=service-paas", tenant.owner, nil)
+		var directory iamv1.RoleSessionList
+		if directoryResponse.Status != http.StatusOK || directoryResponse.Header.Get("Cache-Control") != "no-store" ||
+			json.Unmarshal(directoryResponse.Body, &directory) != nil || iamv1.ValidateRoleSessionList(directory) != nil ||
+			len(directory.Items) != 1 || directory.Items[0].Session.ID != tenant.serviceRoleSession.ID ||
+			directory.Items[0].Lifecycle != iamv1.RoleSessionUnrevoked || !directory.Items[0].RevokeCapability.Available ||
+			directory.Items[0].Source.Type != iamv1.PrincipalServiceAccount || directory.Items[0].Source.User != nil ||
+			directory.Items[0].Source.ServicePrincipal == nil || *directory.Items[0].Source.ServicePrincipal != servicePrincipal {
+			t.Fatalf("independent IAM process lost the invalidated service RoleSession directory: status=%d body=%s",
+				directoryResponse.Status, directoryResponse.Body)
+		}
+		sessionPath := roleDirectoryPath + "/" + string(tenant.serviceRoleSession.ID)
+		detailResponse = performJSON(t, http.MethodGet, iamEndpoint+sessionPath, tenant.owner, nil)
+		var sessionAccess iamv1.RoleSessionAccess
+		if detailResponse.Status != http.StatusOK || detailResponse.Header.Get("Cache-Control") != "no-store" ||
+			json.Unmarshal(detailResponse.Body, &sessionAccess) != nil || iamv1.ValidateRoleSessionAccess(sessionAccess) != nil ||
+			sessionAccess.Item.Session.ID != tenant.serviceRoleSession.ID ||
+			sessionAccess.Item.Lifecycle != iamv1.RoleSessionUnrevoked || !sessionAccess.Item.RevokeCapability.Available ||
+			sessionAccess.Item.Source.ServicePrincipal == nil || *sessionAccess.Item.Source.ServicePrincipal != servicePrincipal {
+			t.Fatalf("independent IAM process lost the exact invalidated service RoleSession: status=%d body=%s",
+				detailResponse.Status, detailResponse.Body)
+		}
+		revokeRequest := iamv1.RevokeRoleSessionRequest{RequestID: tenant.serviceRoleRequest + "-admin-revoke"}
+		revokeResponse := performJSON(t, http.MethodPost, iamReplicaEndpoint+sessionPath+":revoke", tenant.owner, revokeRequest)
+		var revoked iamv1.RevokeRoleSessionResponse
+		if revokeResponse.Status != http.StatusOK || revokeResponse.Header.Get("Cache-Control") != "no-store" ||
+			json.Unmarshal(revokeResponse.Body, &revoked) != nil || iamv1.ValidateRevokeRoleSessionResponse(revoked) != nil ||
+			revoked.Outcome != "APPLIED" || revoked.Session.ID != tenant.serviceRoleSession.ID ||
+			revoked.Session.SourceUserID != "" || revoked.Session.SourceServicePrincipalID != "service-paas" {
+			t.Fatalf("second IAM process could not revoke invalidated service RoleSession: status=%d body=%s",
+				revokeResponse.Status, revokeResponse.Body)
+		}
+		replayResponse := performJSON(t, http.MethodPost, iamEndpoint+sessionPath+":revoke", tenant.owner, revokeRequest)
+		if replayResponse.Status != http.StatusOK || json.Unmarshal(replayResponse.Body, &revoked) != nil ||
+			revoked.Outcome != "EQUAL_REPLAY" {
+			t.Fatalf("service RoleSession process replay changed terminal outcome: status=%d body=%s",
+				replayResponse.Status, replayResponse.Body)
+		}
+		assertStatus(performJSON(t, http.MethodPost, iamReplicaEndpoint+sessionPath+":revoke", tenant.owner,
+			iamv1.RevokeRoleSessionRequest{RequestID: tenant.serviceRoleRequest + "-admin-revoke-variant"}),
+			http.StatusConflict, "service RoleSession administrator variant")
+		terminalResponse := performJSON(t, http.MethodGet, iamEndpoint+sessionPath, tenant.owner, nil)
+		var terminal iamv1.RoleSessionAccess
+		if terminalResponse.Status != http.StatusOK || terminalResponse.Header.Get("Cache-Control") != "no-store" ||
+			json.Unmarshal(terminalResponse.Body, &terminal) != nil || iamv1.ValidateRoleSessionAccess(terminal) != nil ||
+			terminal.Item.Session.ID != tenant.serviceRoleSession.ID || terminal.Item.Lifecycle != iamv1.RoleSessionRevoked ||
+			terminal.Item.RevokeCapability.Available || terminal.Item.Source.ServicePrincipal == nil ||
+			*terminal.Item.Source.ServicePrincipal != servicePrincipal {
+			t.Fatalf("first IAM process lost the terminal service RoleSession record: status=%d body=%s",
+				terminalResponse.Status, terminalResponse.Body)
+		}
 	}
 	for i := range tenants {
 		tenant := &tenants[i]
@@ -9742,6 +9813,22 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 		}
 		if matches != 1 {
 			t.Fatal("manual service RoleSession issuance did not retain one exact immutable fact")
+		}
+		page = queryAudit(t, auditEndpoint, tenant.owner,
+			auditv1.QueryRecordsRequest{PageSize: 100, Action: auditv1.ActionIAMRoleSessionAdminRevoked}, http.StatusOK)
+		matches = 0
+		for _, record := range page.Records {
+			if record.Event.Target.ID != string(tenant.serviceRoleSession.ID) {
+				continue
+			}
+			matches++
+			if record.Source != auditv1.SourceIAM || record.Event.Actor.Type != auditv1.ActorUser ||
+				record.Event.Actor.ID != auditv1.ActorID(tenant.ownerID) || record.Event.IAMDecisionID == "" {
+				t.Fatal("service RoleSession administrator fact lost USER decision authority")
+			}
+		}
+		if matches != 1 {
+			t.Fatal("service RoleSession process revocation did not retain one exact immutable fact")
 		}
 	}
 	for _, tenant := range tenants {
@@ -10627,10 +10714,10 @@ func assertAuthorityPlaintextAbsent(
 
 // Decode strings before scanning: JSON escapes must not hide a credential,
 // and SQL LIKE metacharacters in a credential are literal, not wildcards.
-// A six-digit substring in a contract-valid Audit requestDigest is not
-// disclosure. Exact pre-seed events may also contain that later code in an
-// already published identifier. Neither exception applies to arbitrary text,
-// an exact code value, a changed event or any longer credential.
+// A six-digit substring in a contract-valid Audit requestDigest or occurredAt
+// is not disclosure. Exact pre-seed events may also contain that later code in
+// an already published identifier. Neither exception applies to arbitrary
+// text, an exact code value, a changed event or any longer credential.
 // Diagnostic paths contain only fixed contract field names. Unknown keys and
 // array positions are redacted: neither a leaked key nor its value may enter
 // the failure message, including low-entropy OTPs and their fingerprints.
@@ -10697,7 +10784,7 @@ func authorityPlaintextLocationWithStructural(document string, beforeOTP map[str
 					"requestDigest", "requestId", "correlationId", "occurredAt", "iamDecisionId", "operationId", "data":
 					field = key
 				}
-				ignoreCode := (validEvent && key == "requestDigest") ||
+				ignoreCode := (validEvent && (key == "requestDigest" || key == "occurredAt")) ||
 					(earlierEvent && (key == "eventId" || key == "iamDecisionId")) || (earlierIdentity && key == "id")
 				if location := inspect(child, ignoreCode, earlierEvent && (key == "actor" || key == "target"), path+"."+field); location != "" {
 					return location
@@ -10742,12 +10829,19 @@ func TestAuthorityPlaintextInspection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	timestampEvent := event
+	timestampEvent.OccurredAt = time.Date(2026, 9, 24, 0, 0, 0, 123456000, time.UTC)
+	timestampEncoded, err := json.Marshal(timestampEvent)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, test := range []struct {
 		name, document, plaintext string
 		present, invalid          bool
 	}{
 		{"code-in-request-digest", string(encoded), code, false, false},
 		{"code-in-canonical-request-digest", canonical, code, false, false},
+		{"code-in-occurred-at", string(timestampEncoded), code, false, false},
 		{"plaintext-code", `{"code":"123456"}`, code, true, false},
 		{"numeric-code", `{"code":123456}`, code, true, false},
 		{"embedded-code", `{"message":"received code 123456"}`, code, true, false},

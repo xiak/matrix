@@ -251,6 +251,37 @@ CREATE TABLE IF NOT EXISTS iam.service_role_session_evidence (
         AND workload_id ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
 );
 
+-- Extend the existing RoleSession management projection only after the
+-- normalized service evidence owner exists. The public display is derived
+-- from two immutable copies of the issuance lineage and closes on drift;
+-- neither current service lookup nor caller input may rewrite history.
+CREATE OR REPLACE FUNCTION iam.managed_role_session_snapshot(tenant text,role_id text,session_id text)
+RETURNS jsonb LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $function$
+    SELECT jsonb_build_object('session',iam.role_session_snapshot(tenant,s.id),
+      'source',CASE WHEN s.source_user_id IS NOT NULL THEN jsonb_build_object(
+        'type','USER','user',jsonb_build_object('id',p.id,'loginName',p.login_name,'displayName',p.display_name))
+      ELSE jsonb_build_object('type','SERVICE_ACCOUNT','servicePrincipal',jsonb_build_object(
+        'installationId',e.service_installation_id,
+        'principalId',e.service_principal_id,
+        'purpose',e.service_purpose)) END)
+    FROM iam.role_sessions s LEFT JOIN iam.principals p
+      ON p.tenant_id=s.tenant_id AND p.id=s.source_user_id AND p.principal_type='USER'
+    LEFT JOIN iam.service_role_session_evidence e ON e.tenant_id=s.tenant_id AND e.session_id=s.id
+    WHERE s.tenant_id=tenant AND s.role_id=managed_role_session_snapshot.role_id
+      AND s.id=managed_role_session_snapshot.session_id
+      AND ((s.source_user_id IS NOT NULL AND s.source_service_principal_id IS NULL AND p.id IS NOT NULL AND e.session_id IS NULL)
+        OR (s.source_user_id IS NULL AND s.source_service_principal_id IS NOT NULL
+          AND s.authority_contract_version=3
+          AND e.service_principal_id=s.source_service_principal_id
+          AND e.service_account_id=s.authority_evidence#>>'{serviceSource,accountId}'
+          AND e.service_installation_id=s.authority_evidence#>>'{serviceSource,installationId}'
+          AND e.service_principal_id=s.authority_evidence#>>'{serviceSource,principalId}'
+          AND e.service_purpose=s.authority_evidence#>>'{serviceSource,purpose}'
+          AND e.service_lookup_digest=s.authority_evidence#>>'{serviceSource,lookupDigest}'
+          AND e.service_installation_id ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+          AND e.service_purpose IN ('IAM','PAAS','AUDIT','INSTALLATION_VERIFIER')))
+$function$;
+
 CREATE TABLE IF NOT EXISTS iam.service_role_session_request_index (
     service_account_id text COLLATE "C" NOT NULL,
     service_principal_id text COLLATE "C" NOT NULL,
@@ -1796,7 +1827,7 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $functio
 DECLARE predecessor record;
 BEGIN
     SELECT * INTO predecessor FROM iam.readiness_v53();
-    RETURN QUERY SELECT predecessor.ready AND iam.service_role_contract_ready(),55::bigint,predecessor.checked_at;
+    RETURN QUERY SELECT predecessor.ready AND iam.service_role_contract_ready(),56::bigint,predecessor.checked_at;
 END $function$;
 REVOKE ALL ON FUNCTION iam.readiness() FROM PUBLIC,matrix_iam_worker,matrix_iam_credential_recovery,
   matrix_iam_backup_custody,matrix_iam_notification_worker,matrix_iam_authentication_recovery;

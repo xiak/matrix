@@ -18352,7 +18352,9 @@ func proveRoleSessionManagement(t *testing.T, ctx context.Context, handler http.
 		t.Fatal("directory lost actual ownership")
 	}
 	for _, row := range page.Items {
-		if row.SourceUser.ID != source.ID || row.SourceUser.LoginName != source.LoginName || row.SourceUser.DisplayName != source.DisplayName || row.Lifecycle != iamv1.RoleSessionUnrevoked || !row.RevokeCapability.Available {
+		if row.Source.Type != iamv1.PrincipalUser || row.Source.User == nil || row.Source.ServicePrincipal != nil ||
+			row.Source.User.ID != source.ID || row.Source.User.LoginName != source.LoginName ||
+			row.Source.User.DisplayName != source.DisplayName || row.Lifecycle != iamv1.RoleSessionUnrevoked || !row.RevokeCapability.Available {
 			t.Fatal("directory display or exact capability changed")
 		}
 	}
@@ -18361,7 +18363,9 @@ func proveRoleSessionManagement(t *testing.T, ctx context.Context, handler http.
 	call(http.MethodGet, sessionPath(first.Session.ID), sourceBearer, nil, http.StatusForbidden, nil)
 	call(http.MethodGet, "/v1/roles/not-this-role/sessions/"+string(first.Session.ID), managerBearer, nil, http.StatusForbidden, nil)
 	call(http.MethodGet, path+"/sessions/not-this-session", managerBearer, nil, http.StatusForbidden, nil)
-	for _, query := range []string{"?tenantId=other", "?accountId=other", "?sourceSessionId=private", "?lifecycle=ACTIVE", "?lifecycle=USABLE", "?sourceUserId=", "?lifecycle=ALL&lifecycle=REVOKED", "?after=ir1.private", "?limit=1"} {
+	for _, query := range []string{"?tenantId=other", "?accountId=other", "?sourceSessionId=private", "?lifecycle=ACTIVE", "?lifecycle=USABLE",
+		"?sourceType=ROLE", "?sourceUserId=", "?sourceServicePrincipalId=", "?sourceType=USER&sourceServicePrincipalId=service-paas",
+		"?sourceUserId=" + string(source.ID) + "&sourceServicePrincipalId=service-paas", "?lifecycle=ALL&lifecycle=REVOKED", "?after=ir1.private", "?limit=1"} {
 		call(http.MethodGet, path+"/sessions"+query, managerBearer, nil, http.StatusBadRequest, nil)
 	}
 	call(http.MethodGet, path+"/sessions?sourceUserId="+string(manager.ID), managerBearer, nil, http.StatusOK, &page)
@@ -18582,7 +18586,7 @@ func proveRoleSessionManagement(t *testing.T, ctx context.Context, handler http.
 		`ALTER TABLE iam.role_session_directory_revisions ALTER COLUMN revision SET DEFAULT 1`,
 		`GRANT EXECUTE ON FUNCTION iam.revoke_managed_role_session(text,text,text,text,text,text,jsonb) TO matrix_iam_worker`,
 		`ALTER FUNCTION iam.prepare_role_session_management(text,text,text,text,text,boolean) SECURITY INVOKER`,
-		`ALTER FUNCTION iam.list_managed_role_sessions(text,text,text,text,text,text,text,text,text) SET search_path=public,pg_temp`,
+		`ALTER FUNCTION iam.list_managed_role_sessions(text,text,text,text,text,text,text,text,text,text,text) SET search_path=public,pg_temp`,
 		`ALTER FUNCTION iam.managed_role_session_snapshot(text,text,text) VOLATILE`,
 		`DROP INDEX iam.role_sessions_directory_idx`,
 	} {
@@ -22457,6 +22461,166 @@ func proveServiceRoleSessionIssuance(t *testing.T, ctx context.Context, handler 
 		DecisionInput: authorization, RoleEvidence: evidence, IssueEvent: issueEvent}
 }
 
+func proveServiceRoleSessionManagement(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn,
+	root string, access iamv1.ServiceLinkedRoleAccess, proof serviceRoleSessionRuntimeProof,
+) {
+	t.Helper()
+	rolePath := "/v1/roles/" + string(access.Relation.Role.ID)
+	sessionPath := rolePath + "/sessions/" + string(proof.Session.ID)
+	call := func(method, path, bearer string, body any, want int) *httptest.ResponseRecorder {
+		t.Helper()
+		var encoded []byte
+		if body != nil {
+			encoded = mustIAMJSON(t, body)
+		}
+		response := performIAMRequest(handler, method, path, bearer, encoded)
+		if response.Code != want || response.Header().Get("Cache-Control") != "no-store" {
+			t.Fatalf("service RoleSession management %s %s status=%d want=%d body=%s", method, path, response.Code, want, response.Body.String())
+		}
+		return response
+	}
+	decodeList := func(response *httptest.ResponseRecorder) iamv1.RoleSessionList {
+		t.Helper()
+		var result iamv1.RoleSessionList
+		decoder := json.NewDecoder(response.Body)
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&result) != nil || iamv1.ValidateRoleSessionList(result) != nil {
+			t.Fatalf("invalid service RoleSession directory: %s", response.Body.String())
+		}
+		return result
+	}
+	assertSource := func(item iamv1.RoleSessionListing) {
+		t.Helper()
+		if item.Source.Type != iamv1.PrincipalServiceAccount || item.Source.User != nil || item.Source.ServicePrincipal == nil ||
+			*item.Source.ServicePrincipal != access.Relation.ServicePrincipal || item.Session.SourceUserID != "" ||
+			item.Session.SourceServicePrincipalID != access.Relation.ServicePrincipal.PrincipalID {
+			t.Fatal("service RoleSession directory mixed or lost source lineage")
+		}
+	}
+
+	call(http.MethodGet, rolePath+"/sessions", proof.Credential, nil, http.StatusUnauthorized)
+	call(http.MethodGet, rolePath+"/sessions", paasCredential, nil, http.StatusUnauthorized)
+	page := decodeList(call(http.MethodGet, rolePath+"/sessions?sourceType=SERVICE_ACCOUNT&sourceServicePrincipalId="+
+		string(access.Relation.ServicePrincipal.PrincipalID), root, nil, http.StatusOK))
+	if page.AccountID != access.Relation.Role.AccountID || page.RoleID != access.Relation.Role.ID || len(page.Items) != 1 ||
+		page.Items[0].Session.ID != proof.Session.ID || page.Items[0].Lifecycle != iamv1.RoleSessionUnrevoked ||
+		!page.Items[0].RevokeCapability.Available {
+		t.Fatal("service RoleSession directory did not expose exactly the current revocable session")
+	}
+	assertSource(page.Items[0])
+	for _, query := range []string{
+		"?sourceType=SERVICE_ACCOUNT",
+		"?sourceServicePrincipalId=" + string(access.Relation.ServicePrincipal.PrincipalID),
+	} {
+		filtered := decodeList(call(http.MethodGet, rolePath+"/sessions"+query, root, nil, http.StatusOK))
+		if len(filtered.Items) != 1 || filtered.Items[0].Session.ID != proof.Session.ID {
+			t.Fatal("normalized service RoleSession source filter changed its exact result")
+		}
+		assertSource(filtered.Items[0])
+	}
+	// A structurally valid mutation of one immutable copy must not become a
+	// plausible display. The final projection cross-checks normalized evidence
+	// against the sealed issuance vector and fails closed on drift.
+	tamper, err := database.Begin(ctx)
+	if err != nil {
+		t.Fatal("begin service RoleSession lineage drift probe", err)
+	}
+	if _, err = tamper.Exec(ctx, `SET LOCAL session_replication_role=replica;
+		UPDATE iam.service_role_session_evidence SET service_installation_id=service_installation_id||'.drift'
+		WHERE tenant_id=$1 AND session_id=$2`, proof.Session.AccountID, proof.Session.ID); err != nil {
+		_ = tamper.Rollback(ctx)
+		t.Fatal("prepare service RoleSession lineage drift", err)
+	}
+	var drifted []byte
+	if err = tamper.QueryRow(ctx, `SELECT iam.managed_role_session_snapshot($1,$2,$3)`, proof.Session.AccountID,
+		proof.Session.RoleID, proof.Session.ID).Scan(&drifted); err != nil || drifted != nil {
+		_ = tamper.Rollback(ctx)
+		t.Fatal("service RoleSession lineage drift produced a display", err)
+	}
+	if err = tamper.Rollback(ctx); err != nil {
+		t.Fatal("rollback service RoleSession lineage drift probe", err)
+	}
+	if userOnly := decodeList(call(http.MethodGet, rolePath+"/sessions?sourceType=USER", root, nil, http.StatusOK)); len(userOnly.Items) != 0 {
+		t.Fatal("USER source filter admitted a service RoleSession")
+	}
+	if otherService := decodeList(call(http.MethodGet, rolePath+"/sessions?sourceServicePrincipalId=another-service", root, nil, http.StatusOK)); len(otherService.Items) != 0 {
+		t.Fatal("exact service source filter expanded its result")
+	}
+	call(http.MethodGet, rolePath+"/sessions?sourceType=USER&sourceServicePrincipalId="+
+		string(access.Relation.ServicePrincipal.PrincipalID), root, nil, http.StatusBadRequest)
+	var detail iamv1.RoleSessionAccess
+	response := call(http.MethodGet, sessionPath, root, nil, http.StatusOK)
+	decoder := json.NewDecoder(response.Body)
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&detail) != nil || iamv1.ValidateRoleSessionAccess(detail) != nil || detail.Item.Session.ID != proof.Session.ID {
+		t.Fatalf("invalid exact service RoleSession observation: %s", response.Body.String())
+	}
+	assertSource(detail.Item)
+
+	// Administrator revocation and possession-only self-exit share one exact
+	// terminal session lock. Neither path may report success after the other
+	// wins, duplicate a fact, or turn current service authority into a permit.
+	duration := uint32(60)
+	raceRequest := iamv1.AssumeServiceRoleRequest{BindingID: access.Bindings[0].ID, DurationSeconds: &duration, RequestID: "service-role-management-race-issue"}
+	issued := call(http.MethodPost, "/v1/internal/service-role-sessions", paasCredential, raceRequest, http.StatusOK)
+	var race struct {
+		Outcome    string            `json:"outcome"`
+		Session    iamv1.RoleSession `json:"session"`
+		Credential string            `json:"credential"`
+	}
+	if json.Unmarshal(issued.Body.Bytes(), &race) != nil || race.Outcome != "APPLIED" || race.Credential == "" || iamv1.ValidateRoleSession(race.Session) != nil {
+		t.Fatalf("invalid service RoleSession race fixture: %s", issued.Body.String())
+	}
+	type result struct {
+		operation string
+		response  *httptest.ResponseRecorder
+	}
+	adminBody := mustIAMJSON(t, iamv1.RevokeRoleSessionRequest{RequestID: "service-role-management-race-admin"})
+	exitBody := mustIAMJSON(t, iamv1.LogoutRequest{RequestID: "service-role-management-race-exit"})
+	results := make(chan result, 2)
+	start := make(chan struct{})
+	go func() {
+		<-start
+		results <- result{"admin", performIAMRequest(handler, http.MethodPost, rolePath+"/sessions/"+string(race.Session.ID)+":revoke",
+			root, adminBody)}
+	}()
+	go func() {
+		<-start
+		results <- result{"exit", performIAMRequest(handler, http.MethodPost, "/v1/auth/role-session:logout", race.Credential,
+			exitBody)}
+	}()
+	close(start)
+	statuses := map[string]int{}
+	for len(statuses) != 2 {
+		select {
+		case completed := <-results:
+			statuses[completed.operation] = completed.response.Code
+			if completed.response.Header().Get("Cache-Control") != "no-store" {
+				t.Fatal("service RoleSession terminal race returned a cacheable result")
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("service RoleSession administrator/self-exit race did not terminate")
+		}
+	}
+	if !((statuses["admin"] == http.StatusOK && statuses["exit"] == http.StatusConflict) ||
+		(statuses["admin"] == http.StatusConflict && statuses["exit"] == http.StatusOK)) {
+		t.Fatalf("service RoleSession terminal race has no unique winner: %#v", statuses)
+	}
+	var terminalFacts int
+	if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1
+		AND event_document#>>'{target,kind}'='ROLE_SESSION' AND event_document#>>'{target,id}'=$2
+		AND event_document->>'action' IN ('iam.role-session.admin-revoked','iam.role-session.exited')`,
+		race.Session.AccountID, race.Session.ID).Scan(&terminalFacts); err != nil || terminalFacts != 1 {
+		t.Fatal("service RoleSession terminal race did not retain exactly one fact", err)
+	}
+	var terminal iamv1.RoleSessionAccess
+	response = call(http.MethodGet, rolePath+"/sessions/"+string(race.Session.ID), root, nil, http.StatusOK)
+	if json.Unmarshal(response.Body.Bytes(), &terminal) != nil || terminal.Item.Lifecycle != iamv1.RoleSessionRevoked || terminal.Item.RevokeCapability.Available {
+		t.Fatal("service RoleSession terminal race did not expose one closed record")
+	}
+	assertSource(terminal.Item)
+}
+
 func proveServiceRoleSessionIssueRevocationRace(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn,
 	root string, binding iamv1.WorkloadRoleBinding,
 ) {
@@ -22573,8 +22737,109 @@ func proveServiceRoleSessionIssueRevocationRace(t *testing.T, ctx context.Contex
 	}
 }
 
+func proveServiceRoleSessionAdminUnbindRace(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn,
+	root string, access iamv1.ServiceLinkedRoleAccess, proof serviceRoleSessionRuntimeProof,
+) {
+	t.Helper()
+	if len(access.Bindings) != 1 || access.Bindings[0].ID != proof.Request.BindingID {
+		t.Fatal("service RoleSession administrator/unbind race has no exact binding")
+	}
+	binding := access.Bindings[0]
+	unbind := serviceRoleRevocationRequest(t, binding, "service-role-admin-unbind-race-unbind")
+	adminRequest := iamv1.RevokeRoleSessionRequest{RequestID: "service-role-admin-unbind-race-admin"}
+	runContext, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	type result struct {
+		operation string
+		response  *httptest.ResponseRecorder
+	}
+	results := make(chan result, 2)
+	start := make(chan struct{})
+	go func() {
+		<-start
+		request := httptest.NewRequest(http.MethodPost, "/v1/roles/"+string(binding.RoleID)+"/sessions/"+
+			string(proof.Session.ID)+":revoke", bytes.NewReader(mustIAMJSON(t, adminRequest))).WithContext(runContext)
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Authorization", "Bearer "+root)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		results <- result{operation: "admin", response: response}
+	}()
+	go func() {
+		<-start
+		request := httptest.NewRequest(http.MethodDelete, "/v1/internal/workload-role-bindings/"+string(binding.ID),
+			bytes.NewReader(mustIAMJSON(t, unbind))).WithContext(runContext)
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Authorization", "Bearer "+paasCredential)
+		request.Header.Set("Matrix-Subject-Credential", root)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		results <- result{operation: "unbind", response: response}
+	}()
+	close(start)
+	completed := map[string]*httptest.ResponseRecorder{}
+	for len(completed) != 2 {
+		select {
+		case value := <-results:
+			completed[value.operation] = value.response
+		case <-runContext.Done():
+			t.Fatal("service RoleSession administrator/unbind race did not terminate")
+		}
+	}
+	for operation, response := range completed {
+		if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" {
+			t.Fatalf("concurrent service RoleSession %s did not close: status=%d body=%s", operation,
+				response.Code, response.Body.String())
+		}
+	}
+	var revokedSession iamv1.RevokeRoleSessionResponse
+	if json.Unmarshal(completed["admin"].Body.Bytes(), &revokedSession) != nil ||
+		iamv1.ValidateRevokeRoleSessionResponse(revokedSession) != nil || revokedSession.Outcome != "APPLIED" ||
+		revokedSession.Session.ID != proof.Session.ID {
+		t.Fatalf("concurrent service RoleSession administrator result is invalid: %s", completed["admin"].Body.String())
+	}
+	var revokedBinding iamv1.WorkloadRoleBinding
+	if json.Unmarshal(completed["unbind"].Body.Bytes(), &revokedBinding) != nil ||
+		iamv1.ValidateWorkloadRoleBinding(revokedBinding) != nil || revokedBinding.Status != iamv1.WorkloadRoleBindingRevoked ||
+		revokedBinding.ID != binding.ID {
+		t.Fatalf("concurrent service Role binding result is invalid: %s", completed["unbind"].Body.String())
+	}
+	if response := performIAMRequestWithSubject(handler, mustIAMJSON(t, proof.DecisionInput), paasCredential,
+		proof.Credential); response.Code != http.StatusUnauthorized {
+		t.Fatalf("concurrent administrator/unbind left service RoleSession usable: status=%d body=%s",
+			response.Code, response.Body.String())
+	}
+	var terminalSession iamv1.RoleSessionAccess
+	response := performIAMRequest(handler, http.MethodGet, "/v1/roles/"+string(binding.RoleID)+"/sessions/"+
+		string(proof.Session.ID), root, nil)
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &terminalSession) != nil ||
+		iamv1.ValidateRoleSessionAccess(terminalSession) != nil || terminalSession.Item.Lifecycle != iamv1.RoleSessionRevoked ||
+		terminalSession.Item.RevokeCapability.Available {
+		t.Fatalf("concurrent administrator/unbind lost terminal service RoleSession: status=%d body=%s",
+			response.Code, response.Body.String())
+	}
+	var terminal bool
+	var sessionFacts, bindingFacts int
+	if err := database.QueryRow(ctx, `SELECT binding.status='REVOKED' AND binding.resource_version=2 AND binding.revoked_at IS NOT NULL
+		AND session_value.revoked_at IS NOT NULL,
+		(SELECT count(*) FROM iam.audit_outbox fact WHERE fact.tenant_id=$1
+		  AND fact.event_document->>'action'='iam.role-session.admin-revoked'
+		  AND fact.event_document#>>'{target,id}'=$3 AND fact.event_document->>'requestId'=$4),
+		(SELECT count(*) FROM iam.audit_outbox fact WHERE fact.tenant_id=$1
+		  AND fact.event_document->>'action'='iam.workload-role-binding.revoked'
+		  AND fact.event_document#>>'{target,id}'=$2 AND fact.event_document->>'requestId'=$5)
+		FROM iam.workload_role_bindings binding JOIN iam.role_sessions session_value
+		  ON session_value.tenant_id=binding.tenant_id AND session_value.id=$3
+		WHERE binding.tenant_id=$1 AND binding.id=$2`, binding.AccountID, binding.ID, proof.Session.ID,
+		adminRequest.RequestID, unbind.Authorization.RequestID).Scan(&terminal, &sessionFacts, &bindingFacts); err != nil ||
+		!terminal || sessionFacts != 1 || bindingFacts != 1 {
+		t.Fatalf("service RoleSession administrator/unbind race retained partial authority terminal=%t facts(session=%d binding=%d): %v",
+			terminal, sessionFacts, bindingFacts, err)
+	}
+}
+
 func proveServiceRoleSessionRevocation(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn,
-	proof serviceRoleSessionRuntimeProof,
+	root string, access iamv1.ServiceLinkedRoleAccess, proof serviceRoleSessionRuntimeProof,
 ) {
 	t.Helper()
 	response := performIAMRequestWithSubject(handler, mustIAMJSON(t, proof.DecisionInput), paasCredential, proof.Credential)
@@ -22603,6 +22868,69 @@ func proveServiceRoleSessionRevocation(t *testing.T, ctx context.Context, handle
 	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &producerProof) != nil ||
 		iamv1.ValidateAuditProducerAuthorization(producerProof) != nil || producerProof.TenantID != proof.Session.AccountID {
 		t.Fatalf("revocation stranded the already committed issuance fact: status=%d body=%s", response.Code, response.Body.String())
+	}
+	rolePath := "/v1/roles/" + string(access.Relation.Role.ID) + "/sessions/" + string(proof.Session.ID)
+	directoryResponse := performIAMRequest(handler, http.MethodGet, "/v1/roles/"+string(access.Relation.Role.ID)+
+		"/sessions?sourceType=SERVICE_ACCOUNT&sourceServicePrincipalId="+
+		string(access.Relation.ServicePrincipal.PrincipalID), root, nil)
+	var directory iamv1.RoleSessionList
+	if directoryResponse.Code != http.StatusOK || directoryResponse.Header().Get("Cache-Control") != "no-store" ||
+		json.Unmarshal(directoryResponse.Body.Bytes(), &directory) != nil || iamv1.ValidateRoleSessionList(directory) != nil ||
+		len(directory.Items) != 1 || directory.Items[0].Session.ID != proof.Session.ID ||
+		directory.Items[0].Lifecycle != iamv1.RoleSessionUnrevoked || !directory.Items[0].RevokeCapability.Available ||
+		directory.Items[0].Source.Type != iamv1.PrincipalServiceAccount || directory.Items[0].Source.User != nil ||
+		directory.Items[0].Source.ServicePrincipal == nil || *directory.Items[0].Source.ServicePrincipal != access.Relation.ServicePrincipal {
+		t.Fatalf("invalidated service RoleSession was not retained as one revocable directory record: status=%d body=%s",
+			directoryResponse.Code, directoryResponse.Body.String())
+	}
+	detailResponse := performIAMRequest(handler, http.MethodGet, rolePath, root, nil)
+	var detail iamv1.RoleSessionAccess
+	if detailResponse.Code != http.StatusOK || detailResponse.Header().Get("Cache-Control") != "no-store" ||
+		json.Unmarshal(detailResponse.Body.Bytes(), &detail) != nil || iamv1.ValidateRoleSessionAccess(detail) != nil ||
+		detail.Item.Session.ID != proof.Session.ID || detail.Item.Lifecycle != iamv1.RoleSessionUnrevoked ||
+		!detail.Item.RevokeCapability.Available || detail.Item.Source.ServicePrincipal == nil ||
+		*detail.Item.Source.ServicePrincipal != access.Relation.ServicePrincipal {
+		t.Fatalf("invalidated service RoleSession exact read was not retained for explicit revocation: status=%d body=%s",
+			detailResponse.Code, detailResponse.Body.String())
+	}
+	revokeRequest := iamv1.RevokeRoleSessionRequest{RequestID: "service-role-admin-revoke-after-unbind"}
+	response = performIAMRequest(handler, http.MethodPost, rolePath+":revoke", root, mustIAMJSON(t, revokeRequest))
+	var revoked iamv1.RevokeRoleSessionResponse
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &revoked) != nil ||
+		iamv1.ValidateRevokeRoleSessionResponse(revoked) != nil || revoked.Outcome != "APPLIED" ||
+		revoked.Session.ID != proof.Session.ID || revoked.Session.SourceUserID != "" ||
+		revoked.Session.SourceServicePrincipalID != access.Relation.ServicePrincipal.PrincipalID {
+		t.Fatalf("administrator could not terminate invalidated service RoleSession: status=%d body=%s", response.Code, response.Body.String())
+	}
+	response = performIAMRequest(handler, http.MethodPost, rolePath+":revoke", root, mustIAMJSON(t, revokeRequest))
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &revoked) != nil || revoked.Outcome != "EQUAL_REPLAY" {
+		t.Fatalf("service RoleSession administrator replay changed outcome: status=%d body=%s", response.Code, response.Body.String())
+	}
+	response = performIAMRequest(handler, http.MethodPost, rolePath+":revoke", root,
+		mustIAMJSON(t, iamv1.RevokeRoleSessionRequest{RequestID: "service-role-admin-revoke-variant"}))
+	if response.Code != http.StatusConflict {
+		t.Fatalf("service RoleSession administrator variant claimed an existing terminal state: status=%d body=%s", response.Code, response.Body.String())
+	}
+	response = performIAMRequest(handler, http.MethodGet, rolePath, root, nil)
+	var terminal iamv1.RoleSessionAccess
+	if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" ||
+		json.Unmarshal(response.Body.Bytes(), &terminal) != nil || iamv1.ValidateRoleSessionAccess(terminal) != nil ||
+		terminal.Item.Session.ID != proof.Session.ID || terminal.Item.Lifecycle != iamv1.RoleSessionRevoked ||
+		terminal.Item.RevokeCapability.Available || terminal.Item.Source.ServicePrincipal == nil ||
+		*terminal.Item.Source.ServicePrincipal != access.Relation.ServicePrincipal {
+		t.Fatalf("administrator revocation did not retain one closed service RoleSession record: status=%d body=%s",
+			response.Code, response.Body.String())
+	}
+	var eventDocument []byte
+	if err := database.QueryRow(ctx, `SELECT event_document FROM iam.audit_outbox WHERE tenant_id=$1
+		AND event_document->>'action'='iam.role-session.admin-revoked' AND event_document#>>'{target,id}'=$2`,
+		proof.Session.AccountID, proof.Session.ID).Scan(&eventDocument); err != nil {
+		t.Fatal("read service RoleSession administrator fact", err)
+	}
+	var event auditv1.Event
+	if json.Unmarshal(eventDocument, &event) != nil || auditv1.ValidateEventForSource(auditv1.SourceIAM, event) != nil ||
+		event.Actor.Type != auditv1.ActorUser || event.IAMDecisionID == "" || event.Target.ID != string(proof.Session.ID) {
+		t.Fatal("service RoleSession administrator fact lost USER decision authority")
 	}
 }
 
@@ -22672,6 +23000,7 @@ func proveWorkloadServiceRoleConsent(t *testing.T, ctx context.Context, handler 
 		t.Fatal("workload service role creation or exact replay lost immutable authority")
 	}
 	serviceSession := proveServiceRoleSessionIssuance(t, ctx, handler, database, created, "service-role")
+	proveServiceRoleSessionManagement(t, ctx, handler, database, root, created, serviceSession)
 	response = performIAMRequest(handler, http.MethodGet, "/v1/service-linked-roles", root, nil)
 	var serviceRoleDirectory iamv1.ServiceLinkedRoleList
 	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &serviceRoleDirectory) != nil ||
@@ -22919,6 +23248,14 @@ func proveWorkloadServiceRoleConsent(t *testing.T, ctx context.Context, handler 
 		t.Fatal("same workload and command identity crossed account namespaces")
 	}
 	foreignSession := proveServiceRoleSessionIssuance(t, ctx, handler, database, foreign, "service-role-foreign")
+	if response := performIAMRequest(handler, http.MethodGet, "/v1/roles/"+string(created.Relation.Role.ID)+"/sessions/"+
+		string(serviceSession.Session.ID), foreignRoot, nil); response.Code != http.StatusForbidden {
+		t.Fatalf("foreign Account read original service RoleSession: status=%d body=%s", response.Code, response.Body.String())
+	}
+	if response := performIAMRequest(handler, http.MethodGet, "/v1/roles/"+string(foreign.Relation.Role.ID)+"/sessions/"+
+		string(foreignSession.Session.ID), root, nil); response.Code != http.StatusForbidden {
+		t.Fatalf("original Account read foreign service RoleSession: status=%d body=%s", response.Code, response.Body.String())
+	}
 	var crossAccountLineage bool
 	if err := database.QueryRow(ctx, `SELECT source_service_account_id<>tenant_id
 		AND source_service_principal_id=$3 AND source_principal_id IS NULL
@@ -22975,6 +23312,10 @@ func proveWorkloadServiceRoleConsent(t *testing.T, ctx context.Context, handler 
 	raceBindingCommand := serviceRoleBindingRequest(t, template, "service-installation-issue-unbind-race", "service-role-issue-unbind-race-bind")
 	raceAccess := decode(call(paasCredential, root, raceBindingCommand, http.StatusOK))
 	proveServiceRoleSessionIssueRevocationRace(t, ctx, handler, database, root, raceAccess.Bindings[0])
+	adminRaceBindingCommand := serviceRoleBindingRequest(t, template, "service-installation-admin-unbind-race", "service-role-admin-unbind-race-bind")
+	adminRaceAccess := decode(call(paasCredential, root, adminRaceBindingCommand, http.StatusOK))
+	adminRaceSession := proveServiceRoleSessionIssuance(t, ctx, handler, database, adminRaceAccess, "service-role-admin-unbind-race")
+	proveServiceRoleSessionAdminUnbindRace(t, ctx, handler, database, root, adminRaceAccess, adminRaceSession)
 	revocation := serviceRoleRevocationRequest(t, created.Bindings[0], "service-role-unbind")
 	foreignRevocation := serviceRoleRevocationRequest(t, foreign.Bindings[0], "service-role-unbind-foreign")
 	revoke(paasCredential, root, foreign.Bindings[0].ID, foreignRevocation, http.StatusForbidden)
@@ -23030,7 +23371,7 @@ func proveWorkloadServiceRoleConsent(t *testing.T, ctx context.Context, handler 
 		revoked.Template != template.Reference() || revoked.Workload != command.Authorization.Resource {
 		t.Fatal("workload service role terminal result or equal replay lost immutable authority")
 	}
-	proveServiceRoleSessionRevocation(t, ctx, handler, database, serviceSession)
+	proveServiceRoleSessionRevocation(t, ctx, handler, database, root, created, serviceSession)
 	variantRevocation := revocation
 	variantRevocation.Authorization.CorrelationID = "service-role-unbind-variant"
 	revoke(paasCredential, root, created.Bindings[0].ID, variantRevocation, http.StatusConflict)

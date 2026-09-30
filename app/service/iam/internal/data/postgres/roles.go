@@ -492,9 +492,16 @@ func (value *transaction) PrepareRoleSessionManagement(ctx context.Context, targ
 
 func validateManagedRoleSession(item *identityaccess.ManagedRoleSession, target identityaccess.RoleSessionManagementTarget) error {
 	normalizeRoleSession(&item.Session)
-	if iamv1.ValidateRoleSession(item.Session) != nil || iamv1.ValidateRoleSourceUserDisplay(item.SourceUser) != nil ||
-		item.Session.AccountID != target.AccountID || item.Session.RoleID != target.RoleID || item.SourceUser.ID != item.Session.SourceUserID ||
+	if iamv1.ValidateRoleSession(item.Session) != nil || iamv1.ValidateRoleSessionSourceDisplay(item.Source) != nil ||
+		item.Session.AccountID != target.AccountID || item.Session.RoleID != target.RoleID ||
 		(target.SessionID != "" && item.Session.ID != target.SessionID) {
+		return identityaccess.ErrUnavailable
+	}
+	if item.Source.Type == iamv1.PrincipalUser {
+		if item.Session.SourceServicePrincipalID != "" || item.Source.User.ID != item.Session.SourceUserID {
+			return identityaccess.ErrUnavailable
+		}
+	} else if item.Session.SourceUserID != "" || item.Source.ServicePrincipal.PrincipalID != item.Session.SourceServicePrincipalID {
 		return identityaccess.ErrUnavailable
 	}
 	return nil
@@ -502,8 +509,9 @@ func validateManagedRoleSession(item *identityaccess.ManagedRoleSession, target 
 
 func (value *transaction) ListManagedRoleSessions(ctx context.Context, read identityaccess.RoleSessionManagementRead) (identityaccess.ManagedRoleSessionPage, error) {
 	var encoded []byte
-	err := value.tx.QueryRow(ctx, "SELECT iam.list_managed_role_sessions($1,$2,$3,$4,$5,$6,$7,$8,$9)", read.AccountID,
-		read.ActorPrincipalID, read.ActorSessionID, read.RoleID, read.DecisionID, read.After, read.Filter.SourceUserID, read.Filter.SessionID, read.Filter.Lifecycle).Scan(&encoded)
+	err := value.tx.QueryRow(ctx, "SELECT iam.list_managed_role_sessions($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)", read.AccountID,
+		read.ActorPrincipalID, read.ActorSessionID, read.RoleID, read.DecisionID, read.After, read.Filter.SourceType,
+		read.Filter.SourceUserID, read.Filter.SourceServicePrincipalID, read.Filter.SessionID, read.Filter.Lifecycle).Scan(&encoded)
 	if err != nil {
 		return identityaccess.ManagedRoleSessionPage{}, mapAuthorizationDatabaseError("list IAM role sessions", err)
 	}
@@ -517,7 +525,10 @@ func (value *transaction) ListManagedRoleSessions(ctx context.Context, read iden
 	for index := range result.Items {
 		item := &result.Items[index]
 		if validateManagedRoleSession(item, read.RoleSessionManagementTarget) != nil || string(item.Session.ID) <= previous ||
-			(read.Filter.SourceUserID != "" && item.Session.SourceUserID != read.Filter.SourceUserID) || (read.Filter.SessionID != "" && item.Session.ID != read.Filter.SessionID) ||
+			(read.Filter.SourceType != "" && item.Source.Type != read.Filter.SourceType) ||
+			(read.Filter.SourceUserID != "" && item.Session.SourceUserID != read.Filter.SourceUserID) ||
+			(read.Filter.SourceServicePrincipalID != "" && item.Session.SourceServicePrincipalID != read.Filter.SourceServicePrincipalID) ||
+			(read.Filter.SessionID != "" && item.Session.ID != read.Filter.SessionID) ||
 			(result.NextAfter != "" && string(item.Session.ID) > result.NextAfter) {
 			return identityaccess.ManagedRoleSessionPage{}, identityaccess.ErrUnavailable
 		}

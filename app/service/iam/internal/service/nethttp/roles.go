@@ -273,13 +273,18 @@ func (value *handler) roleSessions(response http.ResponseWriter, request *http.R
 			return
 		}
 		query, err := url.ParseQuery(request.URL.RawQuery)
-		valid := err == nil && len(request.URL.RawQuery) <= 1024 && len(query) <= 4 && request.ContentLength == 0 && len(request.TransferEncoding) == 0
+		valid := err == nil && len(request.URL.RawQuery) <= 1024 && len(query) <= 6 && request.ContentLength == 0 && len(request.TransferEncoding) == 0
 		for key, values := range query {
-			if len(values) != 1 || values[0] == "" || (key != "after" && key != "sourceUserId" && key != "sessionId" && key != "lifecycle") {
+			if len(values) != 1 || values[0] == "" || (key != "after" && key != "sourceType" && key != "sourceUserId" &&
+				key != "sourceServicePrincipalId" && key != "sessionId" && key != "lifecycle") {
 				valid = false
 			}
 		}
-		filter, err := iamv1.NormalizeRoleSessionFilter(iamv1.RoleSessionFilter{SourceUserID: iamv1.PrincipalID(query.Get("sourceUserId")), SessionID: iamv1.RoleSessionID(query.Get("sessionId")), Lifecycle: query.Get("lifecycle")})
+		filter, err := iamv1.NormalizeRoleSessionFilter(iamv1.RoleSessionFilter{
+			SourceType: iamv1.PrincipalType(query.Get("sourceType")), SourceUserID: iamv1.PrincipalID(query.Get("sourceUserId")),
+			SourceServicePrincipalID: iamv1.PrincipalID(query.Get("sourceServicePrincipalId")),
+			SessionID:                iamv1.RoleSessionID(query.Get("sessionId")), Lifecycle: query.Get("lifecycle"),
+		})
 		after := query.Get("after")
 		if !valid || err != nil || (after != "" && iamv1.ValidatePageCursor(after) != nil) {
 			writeProblem(response, requestID(request), http.StatusBadRequest, "iam.query.unsupported", "IAM role session query invalid")
