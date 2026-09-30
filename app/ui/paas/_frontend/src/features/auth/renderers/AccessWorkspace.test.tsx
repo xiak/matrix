@@ -568,13 +568,17 @@ describe("policy creation entry and directory contract", () => {
   it("previews the exact-shaped permission catalog without presenting it as the IAM registry", async () => {
     const { user, repository } = await open("policies");
     await screen.findByRole("table", { name: "策略" });
+    expect(screen.getByRole("button", { name: "新建自定义策略" })).toBeTruthy();
     expect(repository.listAuthorizationProfiles).not.toHaveBeenCalled();
     await user.click(screen.getByRole("tab", { name: "权限能力目录" }));
     expect(await screen.findByRole("table", { name: "产品权限能力目录" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "新建自定义策略" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "更多操作" })).toBeNull();
     expect(screen.getByText(/隔离 MOCK 的权限能力目录示例/)).toBeTruthy();
     expect(repository.listAuthorizationProfiles).toHaveBeenCalledTimes(1);
     await user.click(screen.getByRole("button", { name: "paas" }));
     expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.queryByRole("button", { name: "新建自定义策略" })).toBeNull();
     expect(screen.getByRole("heading", { level: 2, name: "paas" })).toBe(document.activeElement);
   });
   it("previews product-owned profile onboarding inline without inventing a live publish contract", async () => {

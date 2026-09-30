@@ -68,12 +68,12 @@ export function PolicyDirectory({ workspace, onCreate, onOpen, onAssociate, onPr
   const reset = () => setView({ ...defaultPolicyDirectoryView, pageSize: view.pageSize, sort: view.sort });
   const customOnly = view.kind === "custom";
   return <Tabs.Root className={styles.directory} value={section} onValueChange={(next) => { setSection(next); setSelection([]); if (next === "profiles") setCatalogMounted(true); }}>
-    <ContentPage.Heading title={w("policies")} scrollKey="policy-directory" actions={<ContentPage.Commands label={collection("pageActions")}
-      selection={section === "policies" ? { label: collection("moreActions"), disabled: busy || !selected.length, hint: !selected.length ? collection("selectFirst") : undefined,
+    <ContentPage.Heading title={w("policies")} scrollKey="policy-directory" actions={section === "policies" ? <ContentPage.Commands label={collection("pageActions")}
+      selection={{ label: collection("moreActions"), disabled: busy || !selected.length, hint: !selected.length ? collection("selectFirst") : undefined,
         selectionLabel: selected.length ? t("selected", { count: selected.length }) : undefined, clearLabel: t("clearSelected"), onClear: () => setSelection([]),
-        actions: [{ id: "associate", label: selected.length > 1 ? t("batchAttach") : w("associateTargets"), onSelect: () => onAssociate(selected, selected.length > 1) }] } : undefined}
+        actions: [{ id: "associate", label: selected.length > 1 ? t("batchAttach") : w("associateTargets"), onSelect: () => onAssociate(selected, selected.length > 1) }] }}
       primary={{ id: "create", label: t("createCustomPolicy"), icon: <Plus aria-hidden="true" />, disabled: busy, onSelect: onCreate }}
-    />} />
+    /> : undefined} />
     <Card>
       <div className={styles.directoryHeading}>
         <Tabs.List aria-label={w("policies")}><Tabs.Trigger value="policies">{w("policies")}</Tabs.Trigger><Tabs.Trigger value="profiles">{catalog("title")}</Tabs.Trigger></Tabs.List>
