@@ -344,9 +344,15 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 
 目录可见性、产品安装和 callingService 身份都不构成客户授权。未来 PassRole／承担角色需共同绑定操作者、目标 Account/Role、实际工作负载与单一用途；模板升版不能自动扩权，服务应使用短期会话。IAM 工程师已对齐“产品资源入口编排、IAM 只读观察”以及模板、Account Role 关系和 workload binding 三层分离的模型；当前只有模板目录读取进入后端下一片，Account relation/binding 的 northbound 读取以及租户授权、撤销和承担角色 contract 尚未形成可消费的已推送来源。关联资源清理、授权撤销和既有会话失效语义也仍待固定。因此最终“授权服务”禁用，页面不创建角色、binding、凭据或授权成功状态；未来只能从固定、已推送契约原位替换示意字段。前端实现及共享门禁由 [FEAT-007](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence) 维护。
 
+2026-09-30，IAM 工程师提供的固定后端来源 `2ff682404a167164ba580a7d78f235b78cd995e2` 将内部创建限制为 PaaS `ServiceCredential`、当前 USER `SubjectCredential` 及 `{template, authorization}`；该入口不是浏览器接口。可供未来北向读取复用的稳定事实是 `ServiceLinkedRoleAccess={relation,bindings}`：relation 固定 `SERVICE_LINKED` Role、精确模板引用、`servicePrincipal{installationId,principalId,purpose}` 与精确 `permissionCeiling{policyId,versionId,contentDigest}`；每条 binding 固定自身 ID、Account/Role/模板引用、workload kind/ID、状态、版本和时间。授权撤销、关系/绑定 northbound 读取、产品侧 bind/unbind 和 `ServiceRoleSession` 尚未固定，后端独立 CI 当时仍排队，不能记为 accepted。
+
+已推送的 [`71c0c90c`](https://github.com/xiak/matrix/commit/71c0c90c) 只把上述稳定读取形状投影到既有隔离 MOCK：身份审阅补齐产品、用途、精确 workload、Role 名称/说明和会话上限；权限审阅同时显示权限上限 Policy ID、版本与独立内容摘要；Account 观察显示 relation 的精确模板、服务主体 purpose、权限上限及每条 binding 的 Account/Role/模板引用。模板摘要和权限上限摘要是两个不同示意值，并明确不是 IAM 发布或客户同意证明。最终授权继续禁用，页面没有撤销、解除绑定或会话操作，也不冻结撤销后 Role 是否保留、既有会话何时失效、级联删除或自动授权等未定语义。定向组件用例覆盖全部必要字段、禁用提交、零 Dialog 与返回焦点；`390 × 844` 浅色 DEV 实看审阅和授权后观察，长摘要与 binding 引用均在现有响应式内容区内换行。
+
 该边界在 2026-09-30 以公有云官方模型再次校准，没有引入新的并行概念。AWS 的 service-linked role 由服务预定义并拥有，账号管理员可观察但不能编辑其权限，关联资源未清理前也不能删除；创建和删除入口可由具体服务流程承载（[AWS IAM](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_roles_create-service-linked-role.html)）。Azure 的 system-assigned managed identity 与准确云资源共享生命周期，只有该资源可取令牌，凭据本身不暴露给操作者；身份的创建／绑定与其访问下游资源的授权仍是两步（[Microsoft Entra](https://learn.microsoft.com/en-us/entra/identity/managed-identities-azure-resources/overview)）。因此 Matrix 继续把产品资源页作为同意与资源绑定的主入口，把 IAM 作为模板、Account 关系、逐资源 binding 和短期 session 的只读观察面；撤销必须先显示受影响资源与会话，而不能在普通 Role 编辑器中直接删除或改写受管信任／权限，也不向浏览器显示服务凭据。不同云的内部对象名和生命周期并不冻结为 Matrix API 字段。
 
 2026-09-30，已推送的 [`51c63c78`](https://github.com/xiak/matrix/commit/51c63c78) 把同一隔离审阅接到产品资源侧：一键 MOCK 的托管服务实例名称打开稳定内容区详情，准确实例 ID 作为 `SERVICE_INSTALLATION` 目标进入共享三步同意审阅，不再沿用 IAM 目录中的固定示例资源。详情先展示平台模板、Account 同意和实例 binding 三个独立状态，再由当前资源发起审阅；最终授权仍禁用。非 preview 的真实实例目录不出现该入口，页面不增加逐行操作列、Dialog、IAM 写入、服务关联角色、binding 或凭据。当前交互实现在 [`63acaa4f`](https://github.com/xiak/matrix/commit/63acaa4f) 进一步统一焦点边界：进入审阅聚焦新的页面标题，只有步骤变化才聚焦当前步骤标题；外层产品详情不再因步骤 state 改变而重复聚焦或滚动。定向 35 条、三文件 203 条及完整 52 文件／854 条前端用例通过；三条静态归一化、类型、lint、架构、228 对主题样式、41 页静态导出、228 文件嵌入等价以及全仓 Go test/vet 通过。干净浏览器会话从准确实例走完三步，焦点分别落在页面标题与当前步骤标题，无 Dialog 或 warning/error。这仍是产品侧 UX 原型，不是可消费的 northbound 授权契约或真实 IAM/产品 PEP 联调证据。
+
+上述服务授权固定形状与设置导航同批通过完整门禁：52 文件／861 条前端用例、三条归一化、类型/lint/架构/228 对主题样式、41 页导出、228 文件嵌入等价及全仓 Go test/vet。
 
 ### LIVE 服务角色模板目录的开发验收证据
 
@@ -504,6 +510,7 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 - 非体验设置页通过独立 Provider 消费联系地址读取、验证开始/读取/确认；严格适配器验证精确字段、地址规范、Account/User/ID/requestId 归属、十分钟生命周期和封闭投递状态。`ACCEPTED` 只有 SMTP `250` 才合法，页面同时说明这不等于收件人收到或阅读。
 - 固定标题、说明和两张安全卡立即出现，只有动态数据区使用局部 Skeleton；验证确认后的权威重读不把整个设置页替换成骨架，也不打开 Dialog。401 只过期当前 bearer；其他失败留在安全区块且不回退 MOCK。
 - 一键体验设置页继续显示原高保真 MOCK、无真实 IAM/SMTP 写入及禁用的前置动作。实际紧凑 DEV 检查确认体验入口、设置页区块、纵向卡片和 MOCK 标识仍可见，浏览器 warning/error 为空。
+- 2026-09-30 已推送 [`87b0b4b4`](https://github.com/xiak/matrix/commit/87b0b4b4)：长设置页在原内容流前增加“登录标识／本人安全／账号安全”三个责任分区入口。入口只聚焦并滚动到已挂载的对应标题，不切换路由、不复制设置模型、不引入 React 状态，也不重新读取当前身份；LIVE 与显式 MOCK 分别指向各自已有区块。行为用例锁定三次导航期间 `currentIdentity` 读取次数不变；`390 × 844` 浅色 DEV 实看三个紧凑入口同排，分别落焦主账号别名、安全通知和账号 MFA 规则，未打开 Dialog 或卸载中间草稿。本里程碑完整前端 52 文件／861 条用例及三条静态归一化、类型、lint、架构、228 对主题样式、41 页静态导出、228 文件嵌入等价以及全仓 Go test/vet 均通过。
 - 本轮完整前端 41 个测试文件、638 条用例及三条静态归一化用例通过；类型、lint、架构、228 组主题对比、40 页生产导出、222 个嵌入文件等价、`go test -p 2 ./...` 与 `go vet -p 2 ./...` 通过。尚未以真实 IAM 与 SMTP 进程执行浏览器投递闭环，替换/删除/管理员代绑仍未开放。
 
 ### 本人 MFA 生命周期的开发验收证据
