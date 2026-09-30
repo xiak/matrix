@@ -6,8 +6,8 @@
 - Updated: 2026-09-30
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `ba2ffe49`
-- Pushed documentation head: `97ac62e1`
+- Pushed UI source: `51c63c78`
+- Pushed documentation head: `895d7b13`
 
 ## Authoritative route
 
@@ -120,8 +120,12 @@ failure stay local and never fall back to MOCK. LIVE and MOCK template details
 now reuse one three-stage authorization-chain component; platform template,
 Account consent and exact workload binding display only their own observed or
 explicitly illustrative status, so no later fact is inferred from an earlier
-one. Relation/binding reads and all authorize/revoke/assume controls remain
-absent. Backend follow-ups `2e2476ad` and `9db81aa0` were pushed after the first
+one. The isolated managed-service instance directory now demonstrates the
+product-owned entry: an exact selected `SERVICE_INSTALLATION` opens a stable
+detail and reuses the same consent review, while non-preview instances expose
+no command and the final authorize action remains disabled. Relation/binding
+reads and all authorize/revoke/assume controls remain absent. Backend follow-ups
+`2e2476ad` and `9db81aa0` were pushed after the first
 independent CI exposed an Audit directory gap; CI `36661158790` was still queued
 at the documented milestone, so backend acceptance remains open. Exact evidence
 and limitations belong to FEAT-IAM-010 and FEAT-007.
