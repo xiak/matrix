@@ -2242,7 +2242,6 @@
         "filteredCount": "显示 {count} / {total} 条",
         "emptyTitle": "没有匹配的服务会话",
         "emptyHint": "调整关键字或观察状态；这不会查询或改变真实 IAM 会话。",
-        "reset": "重置查询",
         "footer": "样例目录不声称当前账号存在活动服务会话；LIVE 目录未来只按后端权威状态和不透明分页继续。",
         "cursorPage": "第 {page} 页",
         "previous": "上一页服务会话",

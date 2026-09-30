@@ -2242,7 +2242,6 @@
         "filteredCount": "Showing {count} of {total}",
         "emptyTitle": "No matching service sessions",
         "emptyHint": "Adjust the keyword or observed state. This neither queries nor changes a real IAM session.",
-        "reset": "Reset query",
         "footer": "The example directory does not claim this account has an active service session. A future LIVE directory follows only authoritative backend state and opaque pagination.",
         "cursorPage": "Page {page}",
         "previous": "Previous service-session page",

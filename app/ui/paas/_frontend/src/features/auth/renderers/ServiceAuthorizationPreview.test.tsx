@@ -107,7 +107,11 @@ describe("ServiceAuthorizationPreview", () => {
     expect(within(sessions).queryByRole("button", { name: "preview.service-role-session.current" })).toBeNull();
     expect(within(sessions).getByRole("button", { name: "preview.service-role-session.expired" })).toBeTruthy();
     expect(screen.getByText("显示 1 / 2 条")).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "清空搜索" }));
+    await user.clear(sessionSearch);
+    await user.type(sessionSearch, "missing-session");
+    expect(screen.getByRole("heading", { name: "没有匹配的服务会话" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "重置查询" }));
+    expect(screen.getByRole("table", { name: "服务会话目录样例" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "筛选" }));
     await user.click(screen.getByRole("combobox", { name: "观察状态" }));
     await user.click(screen.getByRole("option", { name: "已到期样例" }));

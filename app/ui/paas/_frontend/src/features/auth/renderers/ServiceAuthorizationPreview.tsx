@@ -2,10 +2,12 @@
 
 import { useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { ArrowLeft, Boxes, KeyRound, ShieldCheck, Unlink } from "lucide-react";
-import { useFormatter, useTranslations } from "next-intl";
+import { useTranslations } from "next-intl";
 import { Alert, Badge, Button, Card, ContentPage, EmptyState, Select, Steps, Table, TablePagination, TableToolbar, Tabs } from "@ui/xiak";
+import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
 import type { AccountPolicyDocument } from "../domain/accounts";
+import { WorkspaceTime } from "./AccessWorkspaceUi";
 import { ServiceAuthorizationChain } from "./ServiceAuthorizationChain";
 import styles from "./ServiceAuthorizationPreview.module.css";
 
@@ -79,13 +81,6 @@ type PreviewOperationKind = "bind" | "unbind";
 type PreviewOperationScenario = "success" | "unknown" | "stateChanged" | "requestMismatch" | "unauthenticated" | "forbidden" | "invalidRequest";
 type PreviewOperationResult = Exclude<PreviewOperationScenario, "success">;
 
-function PreviewTimestamp({ value }: { value: string }) {
-  const format = useFormatter();
-  return <time dateTime={value} title={value}>{format.dateTime(new Date(value), {
-    year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit"
-  })}</time>;
-}
-
 // Only an already-declared managed-service read Action is used here. The exact
 // sample ID illustrates the resource boundary; it grants no access to that ID.
 function previewSnapshotFor(targetResourceId: string): AccountPolicyDocument {
@@ -150,7 +145,7 @@ function AccountAuthorizationDirectory({ accountId, triggerRef, onOpen }: {
         <td data-label={t("accountDirectory.columns.authorization")}><button aria-label={t("accountDirectory.open", { name: t("template.name") })} className={styles.link} ref={triggerRef} onClick={onOpen}>{t("template.name")}</button><small>{t("template.purpose")}</small><small><code>{previewTemplate.product} · {previewTemplate.purpose}</code></small></td>
         <td data-label={t("accountDirectory.columns.role")}><code>{previewTemplate.roleName}</code><small>{t("fields.targetAccount")} · <code>{accountId}</code></small></td>
         <td data-label={t("accountDirectory.columns.resource")}><strong>{t("accountDirectory.bindingCount", { active: previewAccountAccess.activeBindingCount, total: previewAccountAccess.bindingCount })}</strong><small><code>{previewTemplate.workloadResourceKind}: {previewTemplate.targetResourceId}</code></small></td>
-        <td data-label={t("accountDirectory.columns.state")}><Badge status="success">{previewAccountAccess.roleStatus}</Badge><small><PreviewTimestamp value={previewAccountAccess.updatedAt} /></small></td>
+        <td data-label={t("accountDirectory.columns.state")}><Badge status="success">{previewAccountAccess.roleStatus}</Badge><small><WorkspaceTime value={previewAccountAccess.updatedAt} /></small></td>
       </tr></tbody>
     </Table>
     <p className={styles.note}>{t("accountDirectory.readOnly")}</p>
@@ -214,7 +209,7 @@ function ServiceRoleRuntimeTrace() {
 
 function ServiceRoleSessionDirectoryPreview() {
   const t = useTranslations("ServiceAuthorizationPreview");
-  const collection = useTranslations("Collection");
+  const toolbarLabels = useTableToolbarLabels();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [reviewing, setReviewing] = useState(false);
   const [query, setQuery] = useState("");
@@ -267,8 +262,8 @@ function ServiceRoleSessionDirectoryPreview() {
         <div><dt>{t("observation.session.fields.id")}</dt><dd><code>{selected.id}</code></dd></div>
         <div><dt>{t("observation.session.fields.sourceService")}</dt><dd><code>{selected.sourceService}</code><small><code>{selected.sourceInstallation}</code></small></dd></div>
         <div><dt>{t("observation.session.fields.role")}</dt><dd><code>{selected.roleName}</code><small><code>{selected.roleId}</code></small></dd></div>
-        <div><dt>{t("observation.session.fields.issuedAt")}</dt><dd><PreviewTimestamp value={selected.issuedAt} /></dd></div>
-        <div><dt>{t("observation.session.fields.expiresAt")}</dt><dd><PreviewTimestamp value={selected.expiresAt} /></dd></div>
+        <div><dt>{t("observation.session.fields.issuedAt")}</dt><dd><WorkspaceTime value={selected.issuedAt} /></dd></div>
+        <div><dt>{t("observation.session.fields.expiresAt")}</dt><dd><WorkspaceTime value={selected.expiresAt} /></dd></div>
         <div><dt>{t("observation.session.fields.state")}</dt><dd>{t(`observation.session.states.${selected.observation}`)}</dd></div>
       </dl>
       {reviewing ? <>
@@ -292,7 +287,7 @@ function ServiceRoleSessionDirectoryPreview() {
           { value: "expired", label: t("observation.session.states.expired") }
         ]
       }]}
-      labels={{ filters: collection("filters"), clearSearch: collection("clearSearch"), clearFilters: collection("clearFilters"), removeFilter: (label) => collection("removeFilter", { label }) }}
+      labels={toolbarLabels}
       status={t("observation.session.filteredCount", { count: visibleSessions.length, total: previewServiceSessions.length })}
     />
     {visibleSessions.length ? <><Table aria-label={t("observation.session.tableLabel")} className={styles.sessionDirectoryTable} mobileLayout="stack">
@@ -301,13 +296,13 @@ function ServiceRoleSessionDirectoryPreview() {
         <td data-label={t("observation.session.fields.id")}><button className={`${styles.link} ${styles.directoryIdentifier}`} title={session.id} ref={(node) => { if (node) sessionTriggers.current.set(session.id, node); else sessionTriggers.current.delete(session.id); }} onClick={() => { setReviewing(false); setSelectedId(session.id); }}>{session.id}</button></td>
         <td data-label={t("observation.session.fields.sourceService")}><code>{session.sourceService}</code><small><code>{session.sourceInstallation}</code></small></td>
         <td data-label={t("observation.session.fields.role")}><strong>{t("template.name")}</strong><small className={styles.directoryIdentifier} title={session.roleName}><code>{session.roleName}</code></small></td>
-        <td data-label={t("observation.session.fields.lifecycle")}><PreviewTimestamp value={session.expiresAt} /><small><Badge status={session.observation === "expired" ? "neutral" : "info"}>{t(`observation.session.states.${session.observation}`)}</Badge></small></td>
+        <td data-label={t("observation.session.fields.lifecycle")}><WorkspaceTime value={session.expiresAt} /><small><Badge status={session.observation === "expired" ? "neutral" : "info"}>{t(`observation.session.states.${session.observation}`)}</Badge></small></td>
       </tr>)}</tbody>
     </Table>
     <Table.Footer note={t("observation.session.footer")}><TablePagination mode="cursor" summary={t("observation.session.cursorPage", { page: 1 })}
       previous={{ label: t("observation.session.previous"), disabled: true, onClick: () => undefined }}
       next={{ label: t("observation.session.next"), disabled: true, onClick: () => undefined }} /></Table.Footer></>
-      : <EmptyState title={t("observation.session.emptyTitle")} description={t("observation.session.emptyHint")} action={<Button variant="secondary" onClick={() => { setQuery(""); setLifecycle("all"); }}>{t("observation.session.reset")}</Button>} />}
+      : <EmptyState title={t("observation.session.emptyTitle")} description={t("observation.session.emptyHint")} action={<Button variant="secondary" onClick={() => { setQuery(""); setLifecycle("all"); }}>{toolbarLabels.resetQuery}</Button>} />}
   </section>;
 }
 
@@ -401,7 +396,7 @@ function ServiceLinkedRoleObservation({ accountId }: { accountId: string }) {
                 <small>{t("fields.contentDigest")} · <code>{previewTemplate.contentDigest}</code></small>
               </td>
               <td data-label={t("fields.resourceVersion")}>{previewAccountAccess.bindingResourceVersion}</td>
-              <td data-label={t("fields.updatedAt")}><PreviewTimestamp value={previewAccountAccess.updatedAt} /><small>{t("observation.binding.createdAt")} <PreviewTimestamp value={previewAccountAccess.createdAt} /></small></td>
+              <td data-label={t("fields.updatedAt")}><WorkspaceTime value={previewAccountAccess.updatedAt} /><small>{t("observation.binding.createdAt")} <WorkspaceTime value={previewAccountAccess.createdAt} /></small></td>
             </tr></tbody>
           </Table>
           <Table.Footer note={t("observation.binding.snapshotNote")}><TablePagination mode="cursor" summary={t("observation.binding.cursorPage", { page: 1 })}
