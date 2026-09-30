@@ -352,6 +352,7 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 - 内容区流程复用公共页面标题和响应式命令组件：桌面角色页保留“新建角色 + 服务授权模板”，小屏自动收进统一更多菜单；目录与详情直接替换内容区域，不开 Dialog。行为用例证明懒读取、局部失败/重试、`ACTIVE != Account consent`、精确策略快照、无写操作和角色页集成；HTTP 用例锁定精确路由、空请求及 fail-closed 结构。
 - 完整前端 52 文件／851 用例、三条静态归一化、类型、lint、架构、228 对主题样式、41 页静态导出、228 个嵌入文件等价及全仓 `go test -p 2 ./...`、`go vet -p 2 ./...`、`git diff --check` 已通过。DEV 浏览器对保留 MOCK 做桌面与 `390 × 844` 回归：小屏 document/body/viewport 均为 390px，binding 表格容器 `clientWidth == scrollWidth == 330px`，无 Dialog、横向溢出或 warning/error。
 - 当前 UI 分支没有 IAM 真实登录与该 GET 的完整运行时，因此上述浏览器证据只证明 MOCK 保留和共享呈现无回归，不替代 LIVE route 联调。IAM 工程师已确认代理路径、无 selector 请求和 `00c03175` 的响应形状；该后端批次的独立 CI 曾暴露 Audit 封闭目录漏登记后继 consent facts，修复已分别推送为 `2e2476ad` 和 `9db81aa0`，独立 CI `36661158790` 在本检查点仍在排队。前端可继续按固定契约开发，但在该 CI 给出绿色结论前，不把后端验收标为完成。Account relation/binding 读取及 authorize/revoke/assume 仍没有可消费契约并保持禁用。
+- 2026-09-30 已推送 [`ba2ffe49`](https://github.com/xiak/matrix/commit/ba2ffe49)：LIVE 模板详情与隔离 MOCK 模板详情共用一套“平台模板 → 账号同意 → 精确资源绑定”授权链组件。每一级只显示自身已观察或明确的示意状态，后一级永远不从前一级推导；LIVE 只把模板 `ACTIVE` 显示为可用于未来同意，账号同意与 binding 均显示尚未接入，MOCK 则分别显示未发布、未授权与未配置。组件不提供授权、撤销、编辑或承担入口，也没有请求新的 API。IAM 工程师同轮确认 Account relation/binding、同意、撤销和 service-role session 仍无固定路由，后继 bind/unbind Action 将由 release-owned 模板声明而不是前端按产品名写死；未推送 WIP 不进入当前客户端。定向用例、52 文件／852 条完整前端用例、三条归一化用例、类型、lint、架构、228 对主题样式、41 页导出、228 个嵌入文件以及全仓 Go test/vet 通过。`390 × 844` DEV MOCK 中三个阶段在 330px 容器内逐行堆叠，document/body 与视口同为 390px，warning/error 为空；这仍不替代 LIVE 服务授权联调。独立后端 CI `36661158790` 在本次检查时仍为 queued，未标记后端 accepted。
 
 ### 策略版本 MOCK 的开发验收证据
 
