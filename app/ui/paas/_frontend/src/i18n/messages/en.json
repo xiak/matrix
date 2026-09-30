@@ -2204,6 +2204,19 @@
         "previewAvailable": "Simulate service authorization updates only this isolated MOCK's in-memory state so success feedback, information hierarchy, and return paths can be reviewed. It is not IAM authorization evidence."
       }
     },
+    "unbind": {
+      "eyebrow": "Exact resource unbind · MOCK",
+      "title": "Review instance authorization removal",
+      "lead": "Only the exact binding for this product resource can be removed. Resource unbinding must not be presented as deleting the account relation, service-linked role, or platform template.",
+      "items": {
+        "resourceOnly": { "title": "Affects only this instance", "hint": "Confirmation marks only this SERVICE_INSTALLATION as unbound; other product resources are unaffected." },
+        "accountRelation": { "title": "Keep the account service relation", "hint": "The account-level ServiceLinkedRoleAccess remains active for other bound resources and later reauthorization." },
+        "sessions": { "title": "Do not promise immediate session termination", "hint": "The backend has not frozen short-lived session revocation and expiry semantics. The product cannot present an unbound resource as proof that every existing credential is already invalid." }
+      },
+      "previewBoundary": "This confirmation changes only the isolated MOCK's browser memory. It calls no unbind API, deletes no service-linked role, and changes no real resource permission.",
+      "cancel": "Keep instance authorization",
+      "confirmPreview": "Simulate authorization removal"
+    },
     "previous": "Previous",
     "next": "Next",
     "authorizeDisabled": "Authorize service (not connected)",
@@ -2655,6 +2668,7 @@
     "authorizationEyebrow": "Product-resource authorization · MOCK",
     "authorizationLiveEyebrow": "Product-resource authorization · LIVE read-only",
     "authorizationTitle": "Review service authorization · {name}",
+    "unbindTitle": "Remove instance authorization · {name}",
     "serviceAuthorization": "Service access authorization",
     "serviceAuthorizationHint": "Allow a registered PaaS service to read this exact instance for one purpose. Product onboarding, account consent, and resource binding remain separate facts.",
     "authorizationChecking": "Checking",
@@ -2686,10 +2700,14 @@
     "previewAccountAuthorized": "Account authorized · MOCK",
     "previewInstanceBound": "Current instance bound · MOCK",
     "previewAuthorizationApplied": "Account consent and the exact instance binding are now simulated in this browser session. This does not call IAM, create a role, write the backend, or issue temporary credentials; a refresh restores the initial state.",
+    "previewUnbindApplied": "Removal of this instance's exact binding is now simulated in this browser session. The account service relation remains active; no backend was called, no role was deleted, and no existing short-lived session is claimed invalid. A refresh restores the initial state.",
     "previewBrowserOnly": "Browser memory only",
     "productEntryHint": "Public-cloud customer consent should start from the exact product resource. IAM observes the result read-only. This entry exists only in the isolated MOCK and creates no service-linked role, resource binding, or temporary credential.",
     "reviewAuthorization": "Review service authorization",
     "reviewAuthorizationAgain": "Review authorization again",
+    "reviewBinding": "Bind current instance",
+    "reviewUnbind": "Remove instance authorization",
+    "unbindPreviewBoundary": "This is the product resource's exact-unbind experience preview. The MOCK only exercises impact review and return state; it calls no backend and does not delete the account relation or other resource bindings.",
     "authorizationPreviewBoundary": "This is a product-owned authorization-flow preview. The instance, account, and permission scope come from the current MOCK view; the template and service principal remain illustrative, and the final authorization write is not integrated. It neither reads nor writes IAM and creates no successful authorization state.",
     "regionsEmpty": "No configured regions",
     "regionsEmptyHint": "Register a local region binding with the platform installer first.",

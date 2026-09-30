@@ -1,7 +1,7 @@
 "use client";
 
 import { useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { Boxes, KeyRound, ShieldCheck } from "lucide-react";
+import { Boxes, KeyRound, ShieldCheck, Unlink } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { Alert, Badge, Button, Card, ContentPage, Steps, Table, TablePagination, Tabs } from "@ui/xiak";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
@@ -266,6 +266,37 @@ export function ServiceAuthorizationConsentReview({ accountId, targetResourceId,
     <div className={styles.reviewActions}>
       {stage > 0 ? <Button variant="secondary" onClick={() => onStageChange(stage - 1)}>{t("previous")}</Button> : <span />}
       <div>{stage < stageIds.length - 1 ? <Button onClick={() => onStageChange(stage + 1)}>{t("next")}</Button> : <>{onPreviewAuthorize ? <Button onClick={onPreviewAuthorize}>{t("authorizePreview")}</Button> : <Button disabled title={t("review.consent.unavailable")}>{t("authorizeDisabled")}</Button>}<Button variant="secondary" onClick={onClose}>{t("finish")}</Button></>}</div>
+    </div>
+  </div>;
+}
+
+export function ServiceAuthorizationUnbindReview({ accountId, targetResourceId, bindingId, onClose, onPreviewUnbind }: {
+  accountId: string;
+  targetResourceId: string;
+  bindingId: string;
+  onClose(): void;
+  onPreviewUnbind(): void;
+}) {
+  const t = useTranslations("ServiceAuthorizationPreview");
+
+  return <div className={styles.stack}>
+    <Card className={styles.reviewCard}>
+      <Card.Header className={styles.cardHeading}><Unlink aria-hidden="true" /><div><span>{t("unbind.eyebrow")}</span><h3>{t("unbind.title")}</h3></div></Card.Header>
+      <Card.Body className={styles.cardBody}>
+        <p className={styles.lead}>{t("unbind.lead")}</p>
+        <dl className={styles.facts}>
+          <div><dt>{t("fields.targetAccount")}</dt><dd><code>{accountId}</code></dd></div>
+          <div><dt>{t("fields.targetResource")}</dt><dd><code>SERVICE_INSTALLATION:{targetResourceId}</code></dd></div>
+          <div><dt>{t("fields.bindingId")}</dt><dd><code>{bindingId}</code></dd></div>
+          <div><dt>{t("fields.templateReference")}</dt><dd><code>{previewTemplate.id}@v{previewTemplate.version}</code></dd></div>
+        </dl>
+        <ul className={styles.boundaries}>{(["resourceOnly", "accountRelation", "sessions"] as const).map((item) => <li key={item}><strong>{t(`unbind.items.${item}.title`)}</strong><p>{t(`unbind.items.${item}.hint`)}</p></li>)}</ul>
+        <Alert status="warning">{t("unbind.previewBoundary")}</Alert>
+      </Card.Body>
+    </Card>
+    <div className={styles.reviewActions}>
+      <Button variant="secondary" onClick={onClose}>{t("unbind.cancel")}</Button>
+      <div><Button variant="danger" onClick={onPreviewUnbind}>{t("unbind.confirmPreview")}</Button></div>
     </div>
   </div>;
 }

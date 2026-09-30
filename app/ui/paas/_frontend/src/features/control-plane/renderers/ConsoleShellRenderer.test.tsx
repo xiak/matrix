@@ -233,7 +233,24 @@ describe("ConsoleShellRenderer", () => {
     expect(screen.getByText("账号已授权 · MOCK")).toBeTruthy();
     expect(screen.getByText("当前实例已绑定 · MOCK")).toBeTruthy();
     expect(screen.getByText(/不会调用 IAM、创建角色、写入后端或签发临时凭据/)).toBeTruthy();
-    expect(screen.getByRole("button", { name: "重新审阅授权" })).toBe(document.activeElement);
+    const unbind = screen.getByRole("button", { name: "解除实例授权" });
+    expect(unbind).toBe(document.activeElement);
+
+    await user.click(unbind);
+    expect(screen.getByRole("heading", { name: "解除实例授权 · 订单主库" })).toBe(document.activeElement);
+    expect(screen.getByText("preview.workload-role-binding.pg-test")).toBeTruthy();
+    expect(screen.getByText(/账号级 ServiceLinkedRoleAccess 继续有效/)).toBeTruthy();
+    expect(screen.getByText(/不承诺立即终止既有会话/)).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "保留实例授权" }));
+    expect(screen.getByRole("button", { name: "解除实例授权" })).toBe(document.activeElement);
+    await user.click(screen.getByRole("button", { name: "解除实例授权" }));
+    await user.click(screen.getByRole("button", { name: "模拟解除授权" }));
+    expect(screen.getByRole("heading", { name: "订单主库" })).toBeTruthy();
+    expect(screen.getByText("账号已授权 · MOCK")).toBeTruthy();
+    expect(screen.getByText(/已在当前浏览器会话中模拟解除这个实例的精确 binding/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "绑定当前实例" })).toBe(document.activeElement);
   });
 
   it("keeps live instance chrome stable while only its service-authorization region loads", async () => {

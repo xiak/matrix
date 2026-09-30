@@ -39,7 +39,7 @@ import { useTranslations } from "next-intl";
 import { LogServiceRenderer } from "./LogServiceRenderer";
 import { MessageCenterRenderer } from "./MessageCenterRenderer";
 import { ServiceAuthorizationChain } from "@/features/auth/renderers/ServiceAuthorizationChain";
-import { ServiceAuthorizationConsentReview } from "@/features/auth/renderers/ServiceAuthorizationPreview";
+import { ServiceAuthorizationConsentReview, ServiceAuthorizationUnbindReview } from "@/features/auth/renderers/ServiceAuthorizationPreview";
 import { useControlPlane } from "../application/ControlPlaneProvider";
 import type { ManagedServiceAuthorizationLoad } from "../domain/serviceAuthorization";
 
@@ -275,11 +275,14 @@ function InstallationContent({ scene, preview, accountId }: {
 }) {
   const t = useTranslations("ManagedService");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [review, setReview] = useState(false);
+  const [review, setReview] = useState<"authorize" | "unbind" | null>(null);
   const [stage, setStage] = useState(0);
-  const [previewAuthorizedIds, setPreviewAuthorizedIds] = useState<Set<string>>(() => new Set());
+  const [previewAccountAuthorized, setPreviewAccountAuthorized] = useState(false);
+  const [previewBoundIds, setPreviewBoundIds] = useState<Set<string>>(() => new Set());
+  const [previewUnboundIds, setPreviewUnboundIds] = useState<Set<string>>(() => new Set());
   const heading = useRef<HTMLHeadingElement>(null);
   const authorizationTrigger = useRef<HTMLButtonElement>(null);
+  const unbindTrigger = useRef<HTMLButtonElement>(null);
   const rowTriggers = useRef(new Map<string, HTMLButtonElement>());
   const returnToList = useRef<string | null>(null);
   const selected = scene.installations.find((item) => item.id === selectedId) ?? null;
@@ -296,11 +299,14 @@ function InstallationContent({ scene, preview, accountId }: {
   }, [review, selected]);
 
   if (selected) {
-    const previewAuthorized = previewAuthorizedIds.has(selected.id);
+    const previewBound = previewBoundIds.has(selected.id);
+    const previewUnbound = previewUnboundIds.has(selected.id);
+    const previewBindingId = `preview.workload-role-binding.${selected.id}`;
     const closeDetail = () => {
       if (review) {
-        setReview(false);
-        window.setTimeout(() => authorizationTrigger.current?.focus({ preventScroll: true }), 0);
+        const previousReview = review;
+        setReview(null);
+        window.setTimeout(() => (previousReview === "unbind" ? unbindTrigger.current : authorizationTrigger.current)?.focus({ preventScroll: true }), 0);
         return;
       }
       returnToList.current = selected.id;
@@ -309,17 +315,27 @@ function InstallationContent({ scene, preview, accountId }: {
     return <section className={styles.installationDetail} aria-labelledby="managed-service-installation-detail-title">
       <div className={styles.detailHeading}>
         <Button variant="ghost" size="small" onClick={closeDetail}><ArrowLeft aria-hidden="true" />{t(review ? "backToInstance" : "backToInstances")}</Button>
-        <div><Typography.Eyebrow>{t(review ? "authorizationEyebrow" : "instanceEyebrow")}</Typography.Eyebrow><h2 className={styles.detailTitle} id="managed-service-installation-detail-title" ref={heading} tabIndex={-1}>{review ? t("authorizationTitle", { name: selected.name }) : selected.name}</h2></div>
+        <div><Typography.Eyebrow>{t(review ? "authorizationEyebrow" : "instanceEyebrow")}</Typography.Eyebrow><h2 className={styles.detailTitle} id="managed-service-installation-detail-title" ref={heading} tabIndex={-1}>{review === "authorize" ? t("authorizationTitle", { name: selected.name }) : review === "unbind" ? t("unbindTitle", { name: selected.name }) : selected.name}</h2></div>
         <Badge status={review ? "warning" : selected.status}>{review ? "MOCK" : t(`installationPhases.${selected.phase}`)}</Badge>
       </div>
 
-      {review && accountId ? <>
+      {review === "authorize" && accountId ? <>
         <Alert status="warning">{t("authorizationPreviewBoundary")}</Alert>
         <ServiceAuthorizationConsentReview accountId={accountId} targetResourceId={selected.id} stage={stage} onStageChange={setStage} onClose={closeDetail} onPreviewAuthorize={preview ? () => {
-          setPreviewAuthorizedIds((current) => new Set(current).add(selected.id));
-          setReview(false);
-          window.setTimeout(() => authorizationTrigger.current?.focus({ preventScroll: true }), 0);
+          setPreviewAccountAuthorized(true);
+          setPreviewBoundIds((current) => new Set(current).add(selected.id));
+          setPreviewUnboundIds((current) => { const next = new Set(current); next.delete(selected.id); return next; });
+          setReview(null);
+          window.setTimeout(() => unbindTrigger.current?.focus({ preventScroll: true }), 0);
         } : undefined} />
+      </> : review === "unbind" && accountId && preview ? <>
+        <Alert status="warning">{t("unbindPreviewBoundary")}</Alert>
+        <ServiceAuthorizationUnbindReview accountId={accountId} targetResourceId={selected.id} bindingId={previewBindingId} onClose={closeDetail} onPreviewUnbind={() => {
+          setPreviewBoundIds((current) => { const next = new Set(current); next.delete(selected.id); return next; });
+          setPreviewUnboundIds((current) => new Set(current).add(selected.id));
+          setReview(null);
+          window.setTimeout(() => authorizationTrigger.current?.focus({ preventScroll: true }), 0);
+        }} />
       </> : <>
         <dl className={styles.installationFacts}>
           <div><dt>{t("instanceId")}</dt><dd><Typography.Code>{selected.id}</Typography.Code></dd></div>
@@ -331,14 +347,17 @@ function InstallationContent({ scene, preview, accountId }: {
         {preview && accountId ? <Card className={styles.authorizationCard}>
           <Card.Header className={styles.authorizationHeading}><span><ShieldCheck aria-hidden="true" /></span><div><Typography.Eyebrow>{t("authorizationEyebrow")}</Typography.Eyebrow><Typography.Title as="h3" level={3}>{t("serviceAuthorization")}</Typography.Title><Typography.Text tone="muted">{t("serviceAuthorizationHint")}</Typography.Text></div><Badge status="warning">MOCK</Badge></Card.Header>
           <Card.Body className={styles.authorizationBody}>
-            <ServiceAuthorizationChain template={{ label: t("illustrativeTemplate"), tone: "warning" }} account={{ label: t(previewAuthorized ? "previewAccountAuthorized" : "accountNotAuthorized"), tone: previewAuthorized ? "success" : undefined }} binding={{ label: t(previewAuthorized ? "previewInstanceBound" : "resourceNotBound"), tone: previewAuthorized ? "success" : undefined }} />
-            <Alert status={previewAuthorized ? "success" : "info"}>{t(previewAuthorized ? "previewAuthorizationApplied" : "productEntryHint")}</Alert>
-            {previewAuthorized ? <dl className={styles.authorizationFacts}>
+            <ServiceAuthorizationChain template={{ label: t("illustrativeTemplate"), tone: "warning" }} account={{ label: t(previewAccountAuthorized ? "previewAccountAuthorized" : "accountNotAuthorized"), tone: previewAccountAuthorized ? "success" : undefined }} binding={{ label: t(previewBound ? "previewInstanceBound" : "resourceNotBound"), tone: previewBound ? "success" : undefined }} />
+            <Alert status={previewBound || previewUnbound ? "success" : "info"}>{t(previewBound ? "previewAuthorizationApplied" : previewUnbound ? "previewUnbindApplied" : "productEntryHint")}</Alert>
+            {previewAccountAuthorized ? <dl className={styles.authorizationFacts}>
               <div><dt>{t("authorizationTemplate")}</dt><dd><Typography.Code>preview.service-role-template.managed-service-installation-read.v1@v1</Typography.Code></dd></div>
-              <div><dt>{t("authorizationBinding")}</dt><dd><Typography.Code>preview.workload-role-binding.{selected.id}</Typography.Code></dd></div>
+              <div><dt>{t("authorizationBinding")}</dt><dd>{previewBound ? <Typography.Code>{previewBindingId}</Typography.Code> : t("resourceNotBound")}</dd></div>
               <div><dt>{t("instanceId")}</dt><dd><Typography.Code>{selected.id}</Typography.Code><small>MOCK · {t("previewBrowserOnly")}</small></dd></div>
             </dl> : null}
-            <div><Button ref={authorizationTrigger} onClick={() => { setStage(0); setReview(true); }}>{t(previewAuthorized ? "reviewAuthorizationAgain" : "reviewAuthorization")}</Button></div>
+            <div className={styles.authorizationActions}>
+              {!previewBound ? <Button ref={authorizationTrigger} onClick={() => { setStage(0); setReview("authorize"); }}>{t(previewAccountAuthorized ? "reviewBinding" : "reviewAuthorization")}</Button> : null}
+              {previewBound ? <Button ref={unbindTrigger} variant="danger" onClick={() => setReview("unbind")}>{t("reviewUnbind")}</Button> : null}
+            </div>
           </Card.Body>
         </Card> : accountId ? <LiveServiceAuthorizationCard accountId={accountId} installationId={selected.id} /> : null}
       </>}

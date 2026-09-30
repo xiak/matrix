@@ -2204,6 +2204,19 @@
         "previewAvailable": "点击“模拟授权服务”只更新当前隔离 MOCK 的内存状态，用于验收成功反馈、信息层级和返回路径；它不是 IAM 授权证据。"
       }
     },
+    "unbind": {
+      "eyebrow": "精确资源解绑 · MOCK",
+      "title": "审阅解除实例授权",
+      "lead": "解除的对象只能是当前产品资源的精确 binding，不能把资源解绑误写成删除账号关系、服务关联角色或平台模板。",
+      "items": {
+        "resourceOnly": { "title": "只影响当前实例", "hint": "确认后只把这个 SERVICE_INSTALLATION 标记为未绑定；其他业务资源不受影响。" },
+        "accountRelation": { "title": "保留账号服务关系", "hint": "账号级 ServiceLinkedRoleAccess 继续有效，以便其他已绑定资源和后续重新授权使用。" },
+        "sessions": { "title": "不承诺立即终止既有会话", "hint": "短期会话撤销与到期语义尚未由后端固定；产品不能把 binding 已解除显示成所有既有凭据已立即失效。" }
+      },
+      "previewBoundary": "这次确认只更新当前隔离 MOCK 的浏览器内存。它不调用 unbind API、不删除服务关联角色，也不改变真实资源权限。",
+      "cancel": "保留实例授权",
+      "confirmPreview": "模拟解除授权"
+    },
     "previous": "上一步",
     "next": "下一步",
     "authorizeDisabled": "授权服务（未接入）",
@@ -2655,6 +2668,7 @@
     "authorizationEyebrow": "产品资源授权 · MOCK",
     "authorizationLiveEyebrow": "产品资源授权 · LIVE 只读",
     "authorizationTitle": "审阅服务授权 · {name}",
+    "unbindTitle": "解除实例授权 · {name}",
     "serviceAuthorization": "服务访问授权",
     "serviceAuthorizationHint": "允许已登记的 PaaS 服务为单一用途读取这个准确实例；产品接入、账号同意与资源绑定仍是三个独立事实。",
     "authorizationChecking": "正在核对",
@@ -2686,10 +2700,14 @@
     "previewAccountAuthorized": "账号已授权 · MOCK",
     "previewInstanceBound": "当前实例已绑定 · MOCK",
     "previewAuthorizationApplied": "已在当前浏览器会话中模拟账号同意与精确实例绑定。它不会调用 IAM、创建角色、写入后端或签发临时凭据；刷新后即恢复初始状态。",
+    "previewUnbindApplied": "已在当前浏览器会话中模拟解除这个实例的精确 binding。账号服务关系仍保持有效；它没有调用后端、删除角色或承诺既有短期会话已经失效，刷新后即恢复初始状态。",
     "previewBrowserOnly": "仅当前浏览器内存",
     "productEntryHint": "公有云的客户同意应从当前准确产品资源发起；IAM 只读观察结果。此入口仅存在于隔离 MOCK，不会创建服务关联角色、资源绑定或短期凭据。",
     "reviewAuthorization": "审阅服务授权",
     "reviewAuthorizationAgain": "重新审阅授权",
+    "reviewBinding": "绑定当前实例",
+    "reviewUnbind": "解除实例授权",
+    "unbindPreviewBoundary": "这是产品资源侧的精确解绑体验预览。当前 MOCK 只演练影响审阅和返回状态，不调用后端；账号关系与其他资源绑定不会被删除。",
     "authorizationPreviewBoundary": "这是产品侧发起授权的信息流预览。实例、账号与权限范围来自当前 MOCK 视图，模板与服务主体仍是示例，最终授权写入尚未接入；不会读取或写入 IAM，也不会产生授权成功状态。",
     "regionsEmpty": "尚未配置区域",
     "regionsEmptyHint": "请先由平台安装器登记本机区域绑定。",
