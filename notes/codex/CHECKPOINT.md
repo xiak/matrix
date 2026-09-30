@@ -6,8 +6,8 @@
 - Updated: 2026-09-30
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `2789f616`
-- Pushed documentation/head milestone: `c737a7c5`
+- Pushed source/embed milestone: `7f0a45ba`
+- Pushed documentation/head milestone: `5c7b4b66`
 
 ## Authoritative route
 
@@ -46,6 +46,15 @@ chain explicit: product teams define permission capabilities and business PEP
 points, IAM validates and publishes immutable catalog facts, and tenant
 administrators only consume those facts through product-resource consent and
 binding. It provides no upload, product registration or publish action.
+
+The current-account observation now leads with a four-stage tenant-readable
+status summary: exact platform template, Account relation, exact resource
+binding and runtime observation. The MOCK may conclude that the first three
+configuration facts agree while runtime remains unobserved; it never presents
+that conclusion as an issued session or successful business request. It states
+that a revoked exact binding forbids new issuance without promising immediate
+termination of an existing session, and exposes no session ID, credential,
+private issuance/result route, decision evidence or per-session revoke.
 
 Fixed IAM source `aecc9f1c50f663af9a0bae8198bef0f66c9192af` is classified as
 `REFERENCE` only. It proves the strict USER/SERVICE RoleSession source union,
