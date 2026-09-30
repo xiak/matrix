@@ -53,6 +53,7 @@ function NavigationControls({ onAccepted }: { onAccepted?(): void }) {
     <ConsoleLink href="/console/logs/" onAccepted={onAccepted}>Logs</ConsoleLink>
     <ConsoleLink href="/console/access/groups/?id=group%2Fexample">Group detail</ConsoleLink>
     <ConsoleLink href="/console/access/groups/">Group directory</ConsoleLink>
+    <ConsoleLink href="/console/access/roles/">Roles</ConsoleLink>
     <ConsoleLink href="/console/quotas/" onNavigate={(event) => event.preventDefault()}>Blocked</ConsoleLink>
     <button onClick={() => navigation.navigate("/console/operations/")} type="button">Search result</button>
   </>;
@@ -231,6 +232,33 @@ describe("Console navigation", () => {
     expect(screen.getByLabelText("Pending destination").textContent).toBe("idle");
     await act(async () => first.release());
     expect(screen.getByLabelText("Current content").textContent).toBe("/console/logs/");
+  });
+
+  it("remains interactive after 200 rapid interrupted IAM menu visits", async () => {
+    const groups = hold("/console/access/groups/");
+    const roles = hold("/console/access/roles/");
+    render(<Harness />);
+
+    const groupsLink = screen.getByRole("link", { name: "Group directory" });
+    const rolesLink = screen.getByRole("link", { name: "Roles" });
+    for (let index = 0; index < 200; index += 1) {
+      fireEvent.click(index % 2 === 0 ? groupsLink : rolesLink);
+    }
+
+    expect(router.push).toHaveBeenCalledTimes(200);
+    expect(screen.getByLabelText("Pending destination").textContent).toBe("/console/access/roles/");
+    expect(rolesLink.getAttribute("aria-busy")).toBe("true");
+    expect(groupsLink.getAttribute("aria-busy")).toBeNull();
+
+    await act(async () => roles.release());
+    expect(screen.getByLabelText("Current content").textContent).toBe("/console/access/roles/");
+    expect(screen.getByLabelText("Pending destination").textContent).toBe("idle");
+    expect(rolesLink.getAttribute("aria-busy")).toBeNull();
+
+    await act(async () => groups.release());
+    expect(screen.getByLabelText("Current content").textContent).toBe("/console/access/roles/");
+    fireEvent.click(groupsLink);
+    expect(screen.getByLabelText("Current content").textContent).toBe("/console/access/groups/");
   });
 
   it("does not fabricate waits for cached/same-page visits or intercept modified/cancelled links", async () => {
