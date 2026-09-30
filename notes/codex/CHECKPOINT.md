@@ -6,8 +6,8 @@
 - Updated: 2026-09-30
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `7cda7000`
-- Pushed documentation head: `eed8c2ce`
+- Pushed UI/test source: `e0cfb72c`
+- Pushed documentation head: `50fc29d0`
 
 ## Authoritative route
 
@@ -57,10 +57,11 @@ acceptance remain open.
 Shared cross-service navigation now focuses the stable destination `H1` both
 when an accepted target frame is projected and after the Next route commits.
 This applies to product launcher, service navigation and browser-history route
-changes without remounting feature content or adding data reads. Compact light
-and mixed DEV checks reached Applications and IAM with title focus, no page
-overflow and no browser warning/error. Feature-owned inline workflow focus
-remains separate.
+changes without remounting feature content or adding data reads. The held-route
+gate now covers Region, Application hosting, PostgreSQL, Logs, DevOps and
+Observability; IAM keeps its own data-region case. A fresh desktop DEV pass
+opened all product entries plus IAM with exact-width pages and no new browser
+warning/error. Feature-owned inline workflow focus remains separate.
 
 The MOCK User permission page now summarizes direct and group-derived policy
 sources, current default documents containing explicit deny statements, and
