@@ -487,7 +487,7 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
                       <Button onClick={() => void controlPlane.reload()} variant="secondary"><RefreshCcw aria-hidden="true" />{t("retry")}</Button>
                       <Button asChild variant="ghost"><Link href="/console/access/">{t("openAccess")}</Link></Button>
                     </div>} /></div> : null}
-                    {content ? <ConsoleContentRenderer pendingHref={pendingContent ? navigation.pendingHref : null} scene={content} scope={{ regionId }} /> : !controlPlane.error ? <ConsoleContentLoadingRenderer label={loadingLabel} selection={navigation.selection} /> : null}
+                    {content ? <ConsoleContentRenderer accountId={frame.scope?.organization.id} pendingHref={pendingContent ? navigation.pendingHref : null} preview={frame.preview} scene={content} scope={{ regionId }} /> : !controlPlane.error ? <ConsoleContentLoadingRenderer label={loadingLabel} selection={navigation.selection} /> : null}
                   </div>
                 </ContentPage.Body>
               </ContentPage>

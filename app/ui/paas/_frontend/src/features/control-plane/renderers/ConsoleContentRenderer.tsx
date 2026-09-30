@@ -1,18 +1,21 @@
-import { Suspense } from "react";
+import { Suspense, useLayoutEffect, useRef, useState, type MutableRefObject } from "react";
 import { useSearchParams } from "next/navigation";
 import { ConsoleLink as Link, useConsoleNavigation } from "../routes/ConsoleNavigation";
 import { AccountAccessRenderer } from "@/features/auth/renderers/AccountAccessRenderer";
 import {
   ArrowRight,
+  ArrowLeft,
   CheckCircle2,
   Cpu,
   Database,
   HardDrive,
   MapPin,
   PackageCheck,
-  Server
+  Server,
+  ShieldCheck
 } from "lucide-react";
 import {
+  Alert,
   Table,
   PageSkeleton,
   EmptyState,
@@ -34,8 +37,14 @@ import { useConsoleFormat } from "./useConsoleFormat";
 import { useTranslations } from "next-intl";
 import { LogServiceRenderer } from "./LogServiceRenderer";
 import { MessageCenterRenderer } from "./MessageCenterRenderer";
+import { ServiceAuthorizationChain } from "@/features/auth/renderers/ServiceAuthorizationChain";
+import { ServiceAuthorizationConsentReview } from "@/features/auth/renderers/ServiceAuthorizationPreview";
 
-function InstallationRows({ items }: { items: InstallationScene[] }) {
+function InstallationRows({ items, onOpen, triggerRefs }: {
+  items: InstallationScene[];
+  onOpen?(item: InstallationScene): void;
+  triggerRefs?: MutableRefObject<Map<string, HTMLButtonElement>>;
+}) {
   const t = useTranslations("ManagedService");
   const format = useConsoleFormat();
   if (items.length === 0) {
@@ -54,7 +63,10 @@ function InstallationRows({ items }: { items: InstallationScene[] }) {
         <tbody>
           {items.map((item) => (
             <tr key={item.id}>
-              <td><strong>{item.name}</strong><small>{item.engine}</small></td>
+              <td>{onOpen ? <button className={styles.instanceLink} ref={(node) => {
+                if (node) triggerRefs?.current.set(item.id, node);
+                else triggerRefs?.current.delete(item.id);
+              }} onClick={() => onOpen(item)}>{item.name}</button> : <strong>{item.name}</strong>}<small>{item.engine}</small></td>
               <td data-label={t("region")}>{item.regionName}</td>
               <td data-label={t("status")}><Badge status={item.status}>{t(`installationPhases.${item.phase}`)}</Badge></td>
               <td data-label={t("endpoint")} data-mobile-span="full"><Typography.Code>{item.endpoint ?? t("unassigned")}</Typography.Code></td>
@@ -187,8 +199,72 @@ function QuotaContent({ scene }: { scene: Extract<ConsoleContentScene, { kind: "
   );
 }
 
-function InstallationContent({ scene }: { scene: Extract<ConsoleContentScene, { kind: "installations" }> }) {
+function InstallationContent({ scene, preview, accountId }: {
+  scene: Extract<ConsoleContentScene, { kind: "installations" }>;
+  preview: boolean;
+  accountId?: string;
+}) {
   const t = useTranslations("ManagedService");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [review, setReview] = useState(false);
+  const [stage, setStage] = useState(0);
+  const heading = useRef<HTMLHeadingElement>(null);
+  const authorizationTrigger = useRef<HTMLButtonElement>(null);
+  const rowTriggers = useRef(new Map<string, HTMLButtonElement>());
+  const returnToList = useRef<string | null>(null);
+  const selected = scene.installations.find((item) => item.id === selectedId) ?? null;
+
+  useLayoutEffect(() => {
+    if (selected) {
+      heading.current?.focus({ preventScroll: true });
+      return;
+    }
+    if (!returnToList.current) return;
+    const id = returnToList.current;
+    returnToList.current = null;
+    rowTriggers.current.get(id)?.focus({ preventScroll: true });
+  }, [review, selected, stage]);
+
+  if (selected) {
+    const closeDetail = () => {
+      if (review) {
+        setReview(false);
+        window.setTimeout(() => authorizationTrigger.current?.focus({ preventScroll: true }), 0);
+        return;
+      }
+      returnToList.current = selected.id;
+      setSelectedId(null);
+    };
+    return <section className={styles.installationDetail} aria-labelledby="managed-service-installation-detail-title">
+      <div className={styles.detailHeading}>
+        <Button variant="ghost" size="small" onClick={closeDetail}><ArrowLeft aria-hidden="true" />{t(review ? "backToInstance" : "backToInstances")}</Button>
+        <div><Typography.Eyebrow>{t(review ? "authorizationEyebrow" : "instanceEyebrow")}</Typography.Eyebrow><h2 className={styles.detailTitle} id="managed-service-installation-detail-title" ref={heading} tabIndex={-1}>{review ? t("authorizationTitle", { name: selected.name }) : selected.name}</h2></div>
+        <Badge status={review ? "warning" : selected.status}>{review ? "MOCK" : t(`installationPhases.${selected.phase}`)}</Badge>
+      </div>
+
+      {review && accountId ? <>
+        <Alert status="warning">{t("authorizationPreviewBoundary")}</Alert>
+        <ServiceAuthorizationConsentReview accountId={accountId} targetResourceId={selected.id} stage={stage} onStageChange={setStage} onClose={closeDetail} />
+      </> : <>
+        <dl className={styles.installationFacts}>
+          <div><dt>{t("instanceId")}</dt><dd><Typography.Code>{selected.id}</Typography.Code></dd></div>
+          <div><dt>{t("region")}</dt><dd>{selected.regionName}</dd></div>
+          <div><dt>{t("status")}</dt><dd><Badge status={selected.status}>{t(`installationPhases.${selected.phase}`)}</Badge></dd></div>
+          <div><dt>{t("endpoint")}</dt><dd><Typography.Code>{selected.endpoint ?? t("unassigned")}</Typography.Code></dd></div>
+          <div><dt>{t("operationId")}</dt><dd><Typography.Code>{selected.operationId}</Typography.Code></dd></div>
+        </dl>
+        {preview && accountId ? <Card className={styles.authorizationCard}>
+          <Card.Header className={styles.authorizationHeading}><span><ShieldCheck aria-hidden="true" /></span><div><Typography.Eyebrow>{t("authorizationEyebrow")}</Typography.Eyebrow><Typography.Title as="h3" level={3}>{t("serviceAuthorization")}</Typography.Title><Typography.Text tone="muted">{t("serviceAuthorizationHint")}</Typography.Text></div><Badge status="warning">MOCK</Badge></Card.Header>
+          <Card.Body className={styles.authorizationBody}>
+            <ServiceAuthorizationChain template={{ label: t("illustrativeTemplate"), tone: "warning" }} account={{ label: t("accountNotAuthorized") }} binding={{ label: t("resourceNotBound") }} />
+            <Alert status="info">{t("productEntryHint")}</Alert>
+            <div><Button ref={authorizationTrigger} onClick={() => { setStage(0); setReview(true); }}>{t("reviewAuthorization")}</Button></div>
+          </Card.Body>
+        </Card> : null}
+      </>}
+    </section>;
+  }
+
   return (
     <Card>
       <Card.Header>
@@ -198,7 +274,7 @@ function InstallationContent({ scene }: { scene: Extract<ConsoleContentScene, { 
         </div>
         <Badge status="info">{t("instanceCount", { count: scene.installations.length })}</Badge>
       </Card.Header>
-      <InstallationRows items={scene.installations} />
+      <InstallationRows items={scene.installations} onOpen={preview && accountId ? (item) => setSelectedId(item.id) : undefined} triggerRefs={rowTriggers} />
     </Card>
   );
 }
@@ -246,11 +322,15 @@ function AccessContent({ pendingHref, view }: { pendingHref?: string | null; vie
 }
 
 export function ConsoleContentRenderer({
+  accountId,
   pendingHref,
+  preview = false,
   scene,
   scope
 }: {
+  accountId?: string;
   pendingHref?: string | null;
+  preview?: boolean;
   scene: ConsoleContentScene;
   scope?: ResourceScope;
 }) {
@@ -270,6 +350,6 @@ export function ConsoleContentRenderer({
   if (scene.kind === "overview") return <OverviewContent scene={scene} />;
   if (scene.kind === "catalog") return <CatalogContent scene={scene} />;
   if (scene.kind === "quotas") return <QuotaContent scene={scene} />;
-  if (scene.kind === "installations") return <InstallationContent scene={scene} />;
+  if (scene.kind === "installations") return <InstallationContent scene={scene} preview={preview} accountId={accountId} />;
   return <RegionContent scene={scene} />;
 }

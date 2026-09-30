@@ -190,6 +190,39 @@ describe("ConsoleShellRenderer", () => {
     expect(dataTable.querySelector('tbody td[data-mobile-span="full"]')).not.toBeNull();
   });
 
+  it("starts the isolated service-authorization review from the exact product resource", async () => {
+    const installation = {
+      id: "pg-test", name: "订单主库", offeringId: "postgresql-18", engineVersion: "18",
+      quotaEntitlementId: "quota-primary", regionId: "local-primary", phase: "READY" as const,
+      endpoint: "pg-test.service.local:5432", credentialReference: null,
+      operation: { id: "operation-test", phase: "READY" as const, safeFailureCode: null, observedAt: "2026-08-26T12:00:00Z" },
+      createdAt: "2026-08-26T12:00:00Z"
+    };
+    const { user } = await renderConsole({
+      section: "installations",
+      experience: previewExperienceSnapshot,
+      load: vi.fn().mockResolvedValue({ ...snapshot, installations: [installation] })
+    });
+
+    const instance = await screen.findByRole("button", { name: "订单主库" });
+    await user.click(instance);
+    expect(screen.getByRole("heading", { name: "订单主库" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "服务授权链" })).toBeTruthy();
+    expect(screen.getByText("账号未授权")).toBeTruthy();
+    expect(screen.getByText("实例未绑定")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "审阅服务授权" }));
+    expect(screen.getByRole("heading", { name: "审阅服务授权 · 订单主库" })).toBeTruthy();
+    expect(screen.getByText("SERVICE_INSTALLATION:pg-test")).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    expect(screen.getByText("managedservice.service-installation.read")).toBeTruthy();
+    expect(screen.getByText("pg-test")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    expect((screen.getByRole("button", { name: "授权服务（未接入）" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
   it("opens a cached service destination immediately when its route suspends", async () => {
     let release!: () => void;
     const heldRoute = { href: "/console/logs/", ready: false, promise: new Promise<void>(resolve => { release = resolve; }) };

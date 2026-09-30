@@ -49,12 +49,14 @@ const stageIds = ["identity", "permissions", "consent"] as const;
 
 // Only an already-declared managed-service read Action is used here. The exact
 // sample ID illustrates the resource boundary; it grants no access to that ID.
-const previewSnapshot: AccountPolicyDocument = {
-  languageVersion: "1", scope: "TENANT", statements: [
-    { sid: "read-service-installation", effect: "ALLOW", actions: ["managedservice.service-installation.read"],
-      resources: [{ kind: "SERVICE_INSTALLATION", match: "EXACT", id: previewTemplate.targetResourceId }] }
-  ]
-};
+function previewSnapshotFor(targetResourceId: string): AccountPolicyDocument {
+  return {
+    languageVersion: "1", scope: "TENANT", statements: [
+      { sid: "read-service-installation", effect: "ALLOW", actions: ["managedservice.service-installation.read"],
+        resources: [{ kind: "SERVICE_INSTALLATION", match: "EXACT", id: targetResourceId }] }
+    ]
+  };
+}
 
 function TemplateDirectory({ triggerRef, onOpen }: {
   triggerRef: RefObject<HTMLButtonElement | null>;
@@ -85,6 +87,7 @@ function TemplateDetail({ accountId, reviewRef, observationRef, onReview, onObse
   onObserve(): void;
 }) {
   const t = useTranslations("ServiceAuthorizationPreview");
+  const previewSnapshot = previewSnapshotFor(previewTemplate.targetResourceId);
   return <div className={styles.stack}>
     <div className={styles.sectionHeading}><div><span>{t("detail.eyebrow")}</span><h3>{t("template.name")}</h3><p>{t("detail.hint")}</p></div><div className={styles.stateBadges}><Badge status="warning">{t("states.illustrative")}</Badge><Badge status="neutral">{t("states.notAuthorized")}</Badge></div></div>
     <dl className={styles.facts}>
@@ -112,6 +115,7 @@ function TemplateDetail({ accountId, reviewRef, observationRef, onReview, onObse
 
 function ServiceLinkedRoleObservation({ accountId }: { accountId: string }) {
   const t = useTranslations("ServiceAuthorizationPreview");
+  const previewSnapshot = previewSnapshotFor(previewTemplate.targetResourceId);
   return <div className={styles.stack}>
     <div className={styles.sectionHeading}>
       <div><span>{t("observation.eyebrow")}</span><h3>{t("observation.title")}</h3><p>{t("observation.hint")}</p></div>
@@ -161,8 +165,9 @@ function ServiceLinkedRoleObservation({ accountId }: { accountId: string }) {
   </div>;
 }
 
-function ConsentReview({ accountId, stage, onStageChange, onClose }: {
+export function ServiceAuthorizationConsentReview({ accountId, targetResourceId, stage, onStageChange, onClose }: {
   accountId: string;
+  targetResourceId: string;
   stage: number;
   onStageChange(stage: number): void;
   onClose(): void;
@@ -170,14 +175,14 @@ function ConsentReview({ accountId, stage, onStageChange, onClose }: {
   const t = useTranslations("ServiceAuthorizationPreview");
   const steps = useMemo(() => stageIds.map((id) => ({ id, label: t(`steps.${id}`) })), [t]);
   const currentStage = stageIds[stage] ?? "identity";
-  const statements = previewSnapshot.statements;
+  const statements = previewSnapshotFor(targetResourceId).statements;
   return <div className={styles.stack}>
     <div className={styles.steps}><Steps label={t("progress")} items={steps} current={stage} onChange={onStageChange} /></div>
     <Card className={styles.reviewCard}>
       <Card.Header className={styles.cardHeading}>{stage === 0 ? <KeyRound aria-hidden="true" /> : stage === 1 ? <ShieldCheck aria-hidden="true" /> : <Boxes aria-hidden="true" />}<div><span>{t("stageLabel", { current: stage + 1, total: stageIds.length })}</span><h3>{t(`review.${currentStage}.title`)}</h3></div></Card.Header>
       <Card.Body className={styles.cardBody}>
         <p className={styles.lead}>{t(`review.${currentStage}.lead`)}</p>
-        {stage === 0 ? <><dl className={styles.facts}><div><dt>{t("fields.targetAccount")}</dt><dd><code>{accountId}</code></dd></div><div><dt>{t("fields.targetResource")}</dt><dd><code>SERVICE_INSTALLATION:{previewTemplate.targetResourceId}</code></dd></div><div><dt>{t("fields.servicePrincipal")}</dt><dd><code>{previewTemplate.servicePrincipal}</code></dd></div><div><dt>{t("fields.purpose")}</dt><dd><code>{previewTemplate.purpose}</code></dd></div><div><dt>{t("fields.roleName")}</dt><dd><code>{previewTemplate.roleName}</code></dd></div></dl><Alert status="info">{t("review.identity.passRoleBoundary")}</Alert></> : null}
+        {stage === 0 ? <><dl className={styles.facts}><div><dt>{t("fields.targetAccount")}</dt><dd><code>{accountId}</code></dd></div><div><dt>{t("fields.targetResource")}</dt><dd><code>SERVICE_INSTALLATION:{targetResourceId}</code></dd></div><div><dt>{t("fields.servicePrincipal")}</dt><dd><code>{previewTemplate.servicePrincipal}</code></dd></div><div><dt>{t("fields.purpose")}</dt><dd><code>{previewTemplate.purpose}</code></dd></div><div><dt>{t("fields.roleName")}</dt><dd><code>{previewTemplate.roleName}</code></dd></div></dl><Alert status="info">{t("review.identity.passRoleBoundary")}</Alert></> : null}
         {stage === 1 ? <><div className={styles.permissionReference}><div><span>{t("fields.policySnapshot")}</span><strong>{previewTemplate.snapshotName} · v{previewTemplate.revision}</strong></div><Badge>{t("review.permissions.illustrative")}</Badge></div>
           <div className={styles.permissionStatements}>{statements.map((statement, index) => <section aria-label={t("review.permissions.statement", { number: index + 1 })} className={styles.permissionStatement} key={index}>
             <div className={styles.permissionStatementHeading}><strong>{t("review.permissions.statement", { number: index + 1 })}</strong><Badge status={statement.effect === "DENY" ? "danger" : "success"}>{t(`review.permissions.${statement.effect === "DENY" ? "deny" : "allow"}`)}</Badge></div>
@@ -238,7 +243,7 @@ export function ServiceAuthorizationPreview({ workspace, onClose }: {
     <Alert status="warning">{t("boundary")}</Alert>
     {view === "directory" ? <TemplateDirectory triggerRef={templateTrigger} onOpen={() => setView("detail")} /> : null}
     {view === "detail" ? <TemplateDetail accountId={workspace.accountId} reviewRef={reviewTrigger} observationRef={observationTrigger} onReview={() => { setStage(0); setView("review"); }} onObserve={() => setView("account-access")} /> : null}
-    {view === "review" ? <ConsentReview accountId={workspace.accountId} stage={stage} onStageChange={setStage} onClose={() => setView("detail")} /> : null}
+    {view === "review" ? <ServiceAuthorizationConsentReview accountId={workspace.accountId} targetResourceId={previewTemplate.targetResourceId} stage={stage} onStageChange={setStage} onClose={() => setView("detail")} /> : null}
     {view === "account-access" ? <ServiceLinkedRoleObservation accountId={workspace.accountId} /> : null}
   </section>;
 }
