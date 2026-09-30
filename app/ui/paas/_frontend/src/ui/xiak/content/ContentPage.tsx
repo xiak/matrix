@@ -41,7 +41,7 @@ function HeadingIdentity({ title, back, focus, headingRef }: Omit<PageHeading, "
   </div>;
 }
 
-function Header({ className, title, back, leading, trailing, progress, ...props }: Omit<ComponentPropsWithoutRef<"header">, "children" | "title"> & { title: ReactNode; back?: BackAction; leading?: ReactNode; trailing?: ReactNode; progress?: ReactNode }) {
+function Header({ className, title, back, leading, trailing, progress, navigationFocusKey, ...props }: Omit<ComponentPropsWithoutRef<"header">, "children" | "title"> & { title: ReactNode; back?: BackAction; leading?: ReactNode; trailing?: ReactNode; progress?: ReactNode; navigationFocusKey?: string }) {
   const state = useContext(HeaderStateContext);
   const heading = state?.heading;
   const pending = state?.pending ?? false;
@@ -51,11 +51,11 @@ function Header({ className, title, back, leading, trailing, progress, ...props 
   const focus = heading?.focus;
   const displayedBack = heading ? heading.back : back;
   const safeBack = displayedBack && pending ? { ...displayedBack, disabled: true } : displayedBack;
-  useLayoutEffect(() => { if (focus) titleRef.current?.focus({ preventScroll: true }); }, [owner, focus]);
+  useLayoutEffect(() => { if (focus || navigationFocusKey) titleRef.current?.focus({ preventScroll: true }); }, [owner, focus, navigationFocusKey]);
   return <header className={classNames(styles.header, className)} {...props}>
     {leading}
     <div className={styles.headerContent}>
-      <HeadingIdentity title={heading?.title ?? title} back={safeBack} focus={focus} headingRef={titleRef} />
+      <HeadingIdentity title={heading?.title ?? title} back={safeBack} focus={focus || Boolean(navigationFocusKey)} headingRef={titleRef} />
       {setTarget ? <div className={styles.headerActions} hidden={!heading || pending} ref={setTarget} /> : null}
     </div>
     {trailing ? <div className={styles.headerActions}>{trailing}</div> : null}

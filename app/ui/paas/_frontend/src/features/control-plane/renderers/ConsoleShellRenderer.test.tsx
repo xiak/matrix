@@ -238,6 +238,7 @@ describe("ConsoleShellRenderer", () => {
     fireEvent.click(service);
     expect(screen.queryByRole("dialog", { name: "云产品入口" })).toBeNull();
     expect(screen.getByRole("heading", { name: "日志概览" })).toBe(title);
+    expect(title).toBe(document.activeElement);
     expect(menu).toBe(screen.getByRole("navigation", { name: "控制台导航" }));
     expect(within(menu).getByRole("link", { name: /^日志概览/ }).getAttribute("aria-current")).toBe("page");
     expect(within(menu.parentElement!).getByText("日志服务")).toBeTruthy();
@@ -254,6 +255,7 @@ describe("ConsoleShellRenderer", () => {
     await act(async () => { heldRoute.ready = true; release(); });
     expect(screen.getByRole("heading", { name: "日志概览" })).toBe(title);
     await waitFor(() => expect(destination.closest("[inert]")).toBeNull());
+    expect(title).toBe(document.activeElement);
     expect(destination.isConnected).toBe(true);
     expect(screen.queryByRole("progressbar")).toBeNull();
     expect(screen.getByLabelText("全局导航")).toBe(header);

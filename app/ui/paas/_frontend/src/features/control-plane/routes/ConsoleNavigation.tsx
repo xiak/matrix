@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useLayoutEffect, useState, useTransition, type ComponentProps, type ReactNode } from "react";
+import { createContext, useContext, useLayoutEffect, useRef, useState, useTransition, type ComponentProps, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { UnsavedChangesProvider, useLeaveConfirmation } from "@ui/xiak";
@@ -13,6 +13,7 @@ type ConsoleNavigationState = {
   currentHref: string;
   pendingHref: string | null;
   pendingSelection: ControlPlaneRouteSelection | null;
+  navigationFocusKey?: string;
   navigate(href: string, options?: NavigationOptions): void;
 };
 
@@ -37,6 +38,20 @@ function ConsoleNavigationBoundary({ selection, children }: { selection: Control
   // Destination identity is urgent; only route content belongs to the router
   // transition. Regional loading feedback owns its own anti-flash delay.
   const pendingHref = isPending ? destination?.href ?? null : null;
+  const previousHref = useRef(currentHref);
+  const focusSequence = useRef(0);
+  const [committedFocusKey, setCommittedFocusKey] = useState<string>();
+
+  // Next restores document focus when an RSC navigation commits. Announce the
+  // accepted destination immediately, then focus the same stable title once
+  // more after commit so keyboard focus cannot fall back to the document.
+  useLayoutEffect(() => {
+    if (previousHref.current === currentHref) return;
+    previousHref.current = currentHref;
+    focusSequence.current += 1;
+    setCommittedFocusKey(`committed:${focusSequence.current}:${currentHref}`);
+  }, [currentHref]);
+  const navigationFocusKey = pendingHref ? `pending:${pendingHref}` : committedFocusKey;
 
   // Overlay and compact-navigation dismissal is an accepted-navigation side
   // effect. Run it after the destination frame has reached the DOM so closing
@@ -75,7 +90,7 @@ function ConsoleNavigationBoundary({ selection, children }: { selection: Control
     else requestLeave(proceed);
   }
 
-  return <NavigationContext.Provider value={{ selection, currentHref, pendingHref, pendingSelection: pendingHref ? parseControlPlanePathname(pendingHref.split(/[?#]/)[0] ?? "") : null, navigate }}>
+  return <NavigationContext.Provider value={{ selection, currentHref, pendingHref, pendingSelection: pendingHref ? parseControlPlanePathname(pendingHref.split(/[?#]/)[0] ?? "") : null, navigationFocusKey, navigate }}>
     {children}
   </NavigationContext.Provider>;
 }

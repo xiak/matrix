@@ -7,6 +7,14 @@ import { ContentPage, type PageCommandsHandle } from "./ContentPage";
 afterEach(cleanup);
 
 describe("ContentPage context heading", () => {
+  it("moves focus to the stable page title when an accepted navigation announces its destination", () => {
+    const view = render(<ContentPage><ContentPage.Header title="Users" navigationFocusKey="/console/access/users/" /><ContentPage.Body><button>Old page action</button></ContentPage.Body></ContentPage>);
+    expect(screen.getByRole("heading", { level: 1, name: "Users" })).toBe(document.activeElement);
+
+    view.rerender(<ContentPage><ContentPage.Header title="Groups" navigationFocusKey="/console/access/groups/" /><ContentPage.Body><button>Old page action</button></ContentPage.Body></ContentPage>);
+    expect(screen.getByRole("heading", { level: 1, name: "Groups" })).toBe(document.activeElement);
+  });
+
   it("does not rerender the title frame for draft input, while back uses the current draft guard", async () => {
     const user = userEvent.setup(), headerRendered = vi.fn(), back = vi.fn();
     function Draft() {
