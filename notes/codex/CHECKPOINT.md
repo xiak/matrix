@@ -6,8 +6,8 @@
 - Updated: 2026-09-30
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI/test source: `e0cfb72c`
-- Pushed documentation head: `d7a55a64`
+- Pushed UI/test source: `71c0c90c`
+- Pushed documentation head: `003f4184`
 
 ## Authoritative route
 
@@ -126,28 +126,31 @@ closed overlays, exact page width and the shared page-action menu's keyboard
 open/Escape focus return. Detailed evidence and the remaining real-IAM boundary
 belong to the linked FEAT owners; this does not accept backend or release work.
 
+The long Account settings stream now starts with stable sign-in identity,
+personal security and Account security anchors. They focus and scroll to the
+already mounted section without route changes, local selection state or an
+identity refetch. LIVE and explicit MOCK map to their existing section owners;
+no settings contract was added.
+
 The service-authorization MOCK separates platform-template publication,
 current-Account consent, the service-linked Role relation and each exact
 workload binding. LIVE Roles additionally expose a lazy, read-only platform
 template directory from the fixed `GET /v1/service-role-templates` contract.
 Its closed decoder shows immutable template/policy facts without treating
 `ACTIVE` as Account authorization; denial and route failure stay local and
-never fall back to MOCK. The preview directory, template, consent review and
-Account observation are now real content-page states: each owns the shared
-`H1` and back relationship instead of nesting under a stale Role title. The
-Account observation also presents `ServiceRoleSession` as not issued and
-source `SERVICE`; an `ACTIVE` relation or binding does not imply temporary
-credentials. The isolated managed-service instance directory remains the
-product-owned entry: an exact selected `SERVICE_INSTALLATION` opens a stable
-detail and reuses the same consent review, while non-preview instances expose
-no command and the final authorize action stays disabled. Relation/binding
-reads and all authorize/revoke/assume controls remain absent. Internal review
-steps focus only their new step heading; reverse navigation restores the
-originating control. This shared behavior adds no backend contract. Backend
-follow-ups `2e2476ad` and `9db81aa0` were pushed after the first independent CI
-exposed an Audit directory gap; CI `36661158790` was still queued at the
-documented milestone, so backend acceptance remains open. Exact evidence and
-limitations belong to FEAT-IAM-010 and FEAT-007.
+never fall back to MOCK. Fixed backend source
+`2ff682404a167164ba580a7d78f235b78cd995e2` adds an internal, non-browser
+creation boundary and freezes the relation/binding read facts only. The
+existing isolated review now shows product, purpose, exact workload, Role
+name/description, session ceiling and the exact permission-ceiling Policy
+ID/version/digest. Account observation shows the relation's exact template,
+service-principal purpose and every binding's Account/Role/template references.
+Template and ceiling digests are distinct illustrative values, not publication
+or consent evidence. The isolated managed-service instance remains the
+product-owned entry. Relation/binding northbound reads and authorize, revoke,
+unbind and ServiceRoleSession commands are still absent; the final action stays
+disabled and no unsettled revocation or session lifecycle is frozen. Exact
+evidence and limitations belong to FEAT-IAM-010 and FEAT-007.
 
 LIVE member Role discovery also keeps its verified source identity, discovery
 heading and temporary-access boundary mounted while only role cards load. An
@@ -171,10 +174,11 @@ environment. Real browser acceptance cannot be replaced by MOCK or API-only
 checks. Do not duplicate the donor application or move installer-owned secrets
 into the UI.
 
-Next integration must select one fixed boundary from the owning FEAT. First
-reconcile the final result of backend CI `36661158790`; do not broaden LIVE
-service authorization until a later fixed source publishes relation/binding
-observation or product-owned consent lifecycle contracts. Session
+Next integration must select one fixed boundary from the owning FEAT. Do not
+broaden LIVE service authorization until a later fixed source publishes
+relation/binding observation or product-owned consent lifecycle contracts;
+internal creation at `2ff682404a167164ba580a7d78f235b78cd995e2` is not a
+browser endpoint and does not accept that release boundary. Session
 activity/touch, Passkey registration and trusted network request context remain
 MOCK until IAM provides a fixed, pushed commit with their required gates. The
 Role self-service client still requires real IAM-process browser verification;
