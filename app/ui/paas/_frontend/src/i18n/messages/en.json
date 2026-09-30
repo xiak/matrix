@@ -2204,6 +2204,33 @@
         "previewAvailable": "Simulate service authorization updates only this isolated MOCK's in-memory state so success feedback, information hierarchy, and return paths can be reviewed. It is not IAM authorization evidence."
       }
     },
+    "operationPreview": {
+      "title": "Operation-outcome rehearsal",
+      "hint": "Choose one response shape inside this isolated MOCK to review public-cloud feedback and recovery paths. No network request is sent.",
+      "scenarioLabel": "Simulated response",
+      "scenarios": {
+        "success": "200 · Success",
+        "unknown": "Network loss / 500 / 503 / 504 · Result unknown",
+        "stateChanged": "404 / SERVICE_ROLE_CONFLICT · State changed",
+        "requestMismatch": "IDEMPOTENCY_CONFLICT · Request content differs",
+        "unauthenticated": "401 · Reauthentication required",
+        "forbidden": "403 · Forbidden",
+        "invalidRequest": "400 / 415 · Invalid contract"
+      },
+      "results": {
+        "unknown": { "title": "Submission result is unknown", "description": "No trustworthy response arrived, so the UI must neither claim success nor create a new intent. The original path, body, and request identifier are frozen; only an identical replay can safely reconcile the same operation." },
+        "stateChanged": { "title": "The real authorization state changed", "description": "The target resource, binding, or relation may be missing or have a new version. Return to the instance and reread real state. Only a user decision based on that new state can create a new request intent." },
+        "requestMismatch": { "title": "One request identifier was used for different content", "description": "This is a client-state error, not a retryable business conflict. Stop and preserve evidence; never send a different path or body under this request identifier." },
+        "unauthenticated": { "title": "Reauthentication is required", "description": "Sign-in verification remains disabled during the current UX acceptance phase. After reauthentication, the client must keep the original path, body, and request identifier to reconcile the original intent; a new bearer must not create a new command." },
+        "forbidden": { "title": "The current identity cannot perform this operation", "description": "Stop and return to the instance. Seeing the catalog or reading authorization state does not grant permission to bind or unbind a resource." },
+        "invalidRequest": { "title": "The request violates the public contract", "description": "The client must stop instead of retrying or sending a degraded request. After the path, media type, or body is fixed, the user must review again and create a new request intent." }
+      },
+      "requestId": "Frozen request identifier",
+      "retrySame": "Replay the identical request",
+      "reread": "Return and reread authorization state",
+      "returnPreservingRequest": "Return and preserve the request",
+      "returnWithoutConfirmation": "Return without claiming success"
+    },
     "unbind": {
       "eyebrow": "Exact resource unbind · MOCK",
       "title": "Review instance authorization removal",

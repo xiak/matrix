@@ -2204,6 +2204,33 @@
         "previewAvailable": "点击“模拟授权服务”只更新当前隔离 MOCK 的内存状态，用于验收成功反馈、信息层级和返回路径；它不是 IAM 授权证据。"
       }
     },
+    "operationPreview": {
+      "title": "操作结果演练",
+      "hint": "仅在当前隔离 MOCK 中选择一次提交的返回形态，用来验收公有云操作的反馈和恢复路径；不会发送网络请求。",
+      "scenarioLabel": "模拟返回结果",
+      "scenarios": {
+        "success": "200 · 成功",
+        "unknown": "网络中断 / 500 / 503 / 504 · 结果未知",
+        "stateChanged": "404 / SERVICE_ROLE_CONFLICT · 状态已变化",
+        "requestMismatch": "IDEMPOTENCY_CONFLICT · 同一请求内容不一致",
+        "unauthenticated": "401 · 需要重新认证",
+        "forbidden": "403 · 权限不足",
+        "invalidRequest": "400 / 415 · 请求契约错误"
+      },
+      "results": {
+        "unknown": { "title": "提交结果未知", "description": "没有收到可信响应，不能宣称成功，也不能创建新意图。原路径、请求体和请求标识已经冻结；只有原样重试才能安全核对同一次操作。" },
+        "stateChanged": { "title": "真实授权状态已变化", "description": "目标资源、binding 或关系可能已不存在或版本已变化。返回实例并重新读取真实状态；只有用户基于新状态再次确认，才能创建新的请求意图。" },
+        "requestMismatch": { "title": "同一请求标识对应了不同内容", "description": "这是客户端状态错误，不是可重试的业务冲突。停止提交并保留现场；不得用这个请求标识发送不同的路径或请求体。" },
+        "unauthenticated": { "title": "需要重新认证", "description": "当前 UX 验收阶段不启动登录验证。重新认证后仍须保留原路径、请求体和请求标识来核对原意图，不能因更换 bearer 而生成新命令。" },
+        "forbidden": { "title": "当前身份无权执行此操作", "description": "停止提交并返回实例。目录可见或能够查看授权状态，都不代表当前身份拥有绑定或解绑权限。" },
+        "invalidRequest": { "title": "请求不符合公开契约", "description": "客户端必须停止，而不是重试或降级发送。应修正路径、媒体类型或请求体后，由用户重新审阅并形成新的请求意图。" }
+      },
+      "requestId": "冻结的请求标识",
+      "retrySame": "使用同一请求原样重试",
+      "reread": "返回并重新读取授权状态",
+      "returnPreservingRequest": "返回并保留原请求",
+      "returnWithoutConfirmation": "返回实例，不确认成功"
+    },
     "unbind": {
       "eyebrow": "精确资源解绑 · MOCK",
       "title": "审阅解除实例授权",

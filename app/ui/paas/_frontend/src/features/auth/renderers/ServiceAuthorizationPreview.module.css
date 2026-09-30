@@ -57,6 +57,19 @@
 .boundaries li { padding-inline-start: var(--xiak-spacing-default); border-inline-start: 3px solid var(--xiak-color-border-accent); }
 .boundaries strong { display: block; margin-bottom: var(--xiak-spacing-micro); color: var(--xiak-color-text-strong); }
 .reviewActions { display: flex; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-default); padding-top: var(--xiak-spacing-default); border-top: var(--xiak-border-subtle); }
+.operationPreview { display: grid; min-width: 0; gap: var(--xiak-spacing-default); padding: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); background: var(--xiak-color-bg-panel-hover); }
+.operationPreviewHeading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--xiak-spacing-comfortable); }
+.operationPreviewHeading > div { display: grid; min-width: 0; gap: var(--xiak-spacing-narrow); }
+.operationPreviewHeading > div > :first-child { justify-self: start; }
+.operationPreviewHeading strong { color: var(--xiak-color-text-strong); }
+.operationPreviewHeading p, .operationResultCopy p { margin: 0; color: var(--xiak-color-text-muted); line-height: 1.6; }
+.operationScenario { display: grid; flex: 0 1 360px; min-width: min(100%, 280px); gap: var(--xiak-spacing-narrow); color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
+.operationResult { display: grid; min-width: 0; gap: var(--xiak-spacing-default); }
+.operationResultCopy { display: grid; min-width: 0; gap: var(--xiak-spacing-narrow); }
+.operationRequest { margin: 0; }
+.operationRequest > div { display: grid; grid-template-columns: minmax(120px, auto) minmax(0, 1fr); gap: var(--xiak-spacing-default); }
+.operationRequest dt { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
+.operationRequest dd { min-width: 0; margin: 0; color: var(--xiak-color-text-strong); font-weight: var(--xiak-font-weight-semibold); overflow-wrap: anywhere; }
 .note { font-size: var(--xiak-font-size-small); }
 .bindingSection { display: grid; min-width: 0; gap: var(--xiak-spacing-default); }
 .bindingSection td { min-width: 0; }
@@ -70,6 +83,9 @@
   .permissionStatement dl { grid-template-columns: minmax(0, 1fr); }
   .sectionHeading { flex-direction: column; }
   .stateBadges { justify-content: flex-start; }
+  .operationPreviewHeading { flex-direction: column; }
+  .operationScenario { flex: none; width: 100%; min-width: 0; }
+  .operationRequest > div { grid-template-columns: minmax(0, 1fr); gap: var(--xiak-spacing-micro); }
   .reviewActions { align-items: stretch; flex-direction: column-reverse; }
   .reviewActions > div, .reviewActions > button { width: 100%; }
   .reviewActions > div > button { flex: 1; }

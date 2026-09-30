@@ -1,9 +1,9 @@
 "use client";
 
-import { useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { Boxes, KeyRound, ShieldCheck, Unlink } from "lucide-react";
 import { useTranslations } from "next-intl";
-import { Alert, Badge, Button, Card, ContentPage, Steps, Table, TablePagination, Tabs } from "@ui/xiak";
+import { Alert, Badge, Button, Card, ContentPage, Select, Steps, Table, TablePagination, Tabs } from "@ui/xiak";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
 import type { AccountPolicyDocument } from "../domain/accounts";
 import { ServiceAuthorizationChain } from "./ServiceAuthorizationChain";
@@ -50,6 +50,9 @@ const previewAccountAccess = {
 } as const;
 
 const stageIds = ["identity", "permissions", "consent"] as const;
+type PreviewOperationKind = "bind" | "unbind";
+type PreviewOperationScenario = "success" | "unknown" | "stateChanged" | "requestMismatch" | "unauthenticated" | "forbidden" | "invalidRequest";
+type PreviewOperationResult = Exclude<PreviewOperationScenario, "success">;
 
 // Only an already-declared managed-service read Action is used here. The exact
 // sample ID illustrates the resource boundary; it grants no access to that ID.
@@ -224,6 +227,52 @@ function ServiceLinkedRoleObservation({ accountId }: { accountId: string }) {
   </div>;
 }
 
+function PreviewOperationControls({ kind, targetResourceId, primaryLabel, closeLabel, danger = false, leadingAction, onApplied, onClose }: {
+  kind: PreviewOperationKind;
+  targetResourceId: string;
+  primaryLabel: string;
+  closeLabel: string;
+  danger?: boolean;
+  leadingAction?: ReactNode;
+  onApplied(): void;
+  onClose(): void;
+}) {
+  const t = useTranslations("ServiceAuthorizationPreview");
+  const headingId = useId();
+  const [scenario, setScenario] = useState<PreviewOperationScenario>("success");
+  const [result, setResult] = useState<PreviewOperationResult | null>(null);
+  const requestId = `preview-service-role-${kind}-${targetResourceId}`;
+  const options = useMemo(() => (["success", "unknown", "stateChanged", "requestMismatch", "unauthenticated", "forbidden", "invalidRequest"] as const)
+    .map((value) => ({ value, label: t(`operationPreview.scenarios.${value}`) })), [t]);
+  const submit = () => {
+    if (scenario === "success") onApplied();
+    else setResult(scenario);
+  };
+  const alertStatus = result === "forbidden" || result === "invalidRequest" || result === "requestMismatch" ? "danger" : "warning";
+  const recoveryLabel = result === "stateChanged" ? t("operationPreview.reread")
+    : result === "unauthenticated" ? t("operationPreview.returnPreservingRequest")
+      : t("operationPreview.returnWithoutConfirmation");
+
+  return <>
+    <section aria-labelledby={headingId} className={styles.operationPreview}>
+      <div className={styles.operationPreviewHeading}>
+        <div><Badge status="warning">MOCK</Badge><strong id={headingId}>{t("operationPreview.title")}</strong><p>{t("operationPreview.hint")}</p></div>
+        {!result ? <label className={styles.operationScenario}><span>{t("operationPreview.scenarioLabel")}</span><Select aria-label={t("operationPreview.scenarioLabel")} options={options} value={scenario} onValueChange={(value) => setScenario(value as PreviewOperationScenario)} /></label> : null}
+      </div>
+      {result ? <div className={styles.operationResult}>
+        <Alert status={alertStatus}><div className={styles.operationResultCopy}><strong>{t(`operationPreview.results.${result}.title`)}</strong><p>{t(`operationPreview.results.${result}.description`)}</p></div></Alert>
+        <dl className={styles.operationRequest}><div><dt>{t("operationPreview.requestId")}</dt><dd><code>{requestId}</code></dd></div></dl>
+      </div> : null}
+    </section>
+    <div className={styles.reviewActions}>
+      {!result ? leadingAction ?? <span /> : <span />}
+      <div>{result === "unknown" ? <><Button onClick={onApplied}>{t("operationPreview.retrySame")}</Button><Button variant="secondary" onClick={onClose}>{t("operationPreview.returnWithoutConfirmation")}</Button></>
+        : result ? <Button variant="secondary" onClick={onClose}>{recoveryLabel}</Button>
+          : <>{danger ? <Button variant="danger" onClick={submit}>{primaryLabel}</Button> : <Button onClick={submit}>{primaryLabel}</Button>}<Button variant="secondary" onClick={onClose}>{closeLabel}</Button></>}</div>
+    </div>
+  </>;
+}
+
 export function ServiceAuthorizationConsentReview({ accountId, targetResourceId, stage, onStageChange, onClose, onPreviewAuthorize }: {
   accountId: string;
   targetResourceId: string;
@@ -263,10 +312,11 @@ export function ServiceAuthorizationConsentReview({ accountId, targetResourceId,
         {stage === 2 ? <><dl className={styles.facts}><div><dt>{t("fields.templateState")}</dt><dd>{t("states.illustrative")}</dd></div><div><dt>{t("fields.accountState")}</dt><dd>{t("states.notAuthorized")}</dd></div></dl><ul className={styles.boundaries}>{(["explicit", "shortTerm", "noExpansion", "cleanup"] as const).map((item) => <li key={item}><strong>{t(`review.consent.items.${item}.title`)}</strong><p>{t(`review.consent.items.${item}.hint`)}</p></li>)}</ul><Alert status={onPreviewAuthorize ? "info" : "warning"}>{t(onPreviewAuthorize ? "review.consent.previewAvailable" : "review.consent.unavailable")}</Alert></> : null}
       </Card.Body>
     </Card>
-    <div className={styles.reviewActions}>
-      {stage > 0 ? <Button variant="secondary" onClick={() => onStageChange(stage - 1)}>{t("previous")}</Button> : <span />}
-      <div>{stage < stageIds.length - 1 ? <Button onClick={() => onStageChange(stage + 1)}>{t("next")}</Button> : <>{onPreviewAuthorize ? <Button onClick={onPreviewAuthorize}>{t("authorizePreview")}</Button> : <Button disabled title={t("review.consent.unavailable")}>{t("authorizeDisabled")}</Button>}<Button variant="secondary" onClick={onClose}>{t("finish")}</Button></>}</div>
-    </div>
+    {stage === stageIds.length - 1 && onPreviewAuthorize ? <PreviewOperationControls kind="bind" targetResourceId={targetResourceId} primaryLabel={t("authorizePreview")} closeLabel={t("finish")} leadingAction={<Button variant="secondary" onClick={() => onStageChange(stage - 1)}>{t("previous")}</Button>} onApplied={onPreviewAuthorize} onClose={onClose} />
+      : <div className={styles.reviewActions}>
+        {stage > 0 ? <Button variant="secondary" onClick={() => onStageChange(stage - 1)}>{t("previous")}</Button> : <span />}
+        <div>{stage < stageIds.length - 1 ? <Button onClick={() => onStageChange(stage + 1)}>{t("next")}</Button> : <><Button disabled title={t("review.consent.unavailable")}>{t("authorizeDisabled")}</Button><Button variant="secondary" onClick={onClose}>{t("finish")}</Button></>}</div>
+      </div>}
   </div>;
 }
 
@@ -296,10 +346,7 @@ export function ServiceAuthorizationUnbindReview({ accountId, targetResourceId, 
         <Alert status="warning">{t("unbind.previewBoundary")}</Alert>
       </Card.Body>
     </Card>
-    <div className={styles.reviewActions}>
-      <Button variant="secondary" onClick={onClose}>{t("unbind.cancel")}</Button>
-      <div><Button variant="danger" onClick={onPreviewUnbind}>{t("unbind.confirmPreview")}</Button></div>
-    </div>
+    <PreviewOperationControls kind="unbind" targetResourceId={targetResourceId} primaryLabel={t("unbind.confirmPreview")} closeLabel={t("unbind.cancel")} danger onApplied={onPreviewUnbind} onClose={onClose} />
   </div>;
 }
 

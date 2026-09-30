@@ -254,6 +254,50 @@ describe("ConsoleShellRenderer", () => {
     expect(screen.getByRole("button", { name: "绑定当前实例" })).toBe(document.activeElement);
   });
 
+  it("keeps one frozen intent for unknown results and rereads changed authorization state", async () => {
+    const installation = {
+      id: "pg-test", name: "订单主库", offeringId: "postgresql-18", engineVersion: "18",
+      quotaEntitlementId: "quota-primary", regionId: "local-primary", phase: "READY" as const,
+      endpoint: "pg-test.service.local:5432", credentialReference: null,
+      operation: { id: "operation-test", phase: "READY" as const, safeFailureCode: null, observedAt: "2026-08-26T12:00:00Z" },
+      createdAt: "2026-08-26T12:00:00Z"
+    };
+    const { user } = await renderConsole({
+      section: "installations",
+      experience: previewExperienceSnapshot,
+      load: vi.fn().mockResolvedValue({ ...snapshot, installations: [installation] })
+    });
+
+    await user.click(await screen.findByRole("button", { name: "订单主库" }));
+    await user.click(screen.getByRole("button", { name: "审阅服务授权" }));
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.click(screen.getByRole("combobox", { name: "模拟返回结果" }));
+    expect(screen.getByRole("option", { name: /IDEMPOTENCY_CONFLICT/ })).toBeTruthy();
+    expect(screen.getByRole("option", { name: /401/ })).toBeTruthy();
+    expect(screen.getByRole("option", { name: /400 \/ 415/ })).toBeTruthy();
+    await user.click(screen.getByRole("option", { name: /结果未知/ }));
+    await user.click(screen.getByRole("button", { name: "模拟授权服务" }));
+
+    expect(screen.getByText("提交结果未知")).toBeTruthy();
+    expect(screen.getByText("preview-service-role-bind-pg-test")).toBeTruthy();
+    expect(screen.getByText(/不能宣称成功，也不能创建新意图/)).toBeTruthy();
+    expect(screen.queryByText("账号已授权 · MOCK")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "使用同一请求原样重试" }));
+    expect(screen.getByText("账号已授权 · MOCK")).toBeTruthy();
+    expect(screen.getByText("当前实例已绑定 · MOCK")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "解除实例授权" }));
+    await user.click(screen.getByRole("combobox", { name: "模拟返回结果" }));
+    await user.click(screen.getByRole("option", { name: /SERVICE_ROLE_CONFLICT/ }));
+    await user.click(screen.getByRole("button", { name: "模拟解除授权" }));
+    expect(screen.getByText("真实授权状态已变化")).toBeTruthy();
+    expect(screen.getByText("preview-service-role-unbind-pg-test")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "返回并重新读取授权状态" }));
+    expect(screen.getByText("当前实例已绑定 · MOCK")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "解除实例授权" })).toBe(document.activeElement);
+  });
+
   it("keeps one MOCK account relation while binding and unbinding exact resources independently", async () => {
     const installation = (id: string, name: string) => ({
       id, name, offeringId: "postgresql-18", engineVersion: "18",
