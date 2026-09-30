@@ -73,7 +73,7 @@ export function AuthorizationProfilePublishingPreview({ entry, onClose }: {
       <Card.Body className={styles.stageBody}>
         <p className={styles.lead}>{t("validation.lead")}</p>
         <ul className={styles.reviewList}>
-          {(["namespace", "resources", "subjects", "conditions", "enforcement"] as const).map((item, index) => <li key={item}><span aria-hidden="true">{index + 1}</span><div><strong>{t(`validation.items.${item}.title`)}</strong><p>{t(`validation.items.${item}.hint`)}</p></div></li>)}
+          {(["namespace", "resources", "subjects", "conditions", "enforcement"] as const).map((item, index) => <li key={item}><span aria-hidden="true">{index + 1}</span><div><strong>{t(`validation.items.${item}.title`)}</strong><p>{t(`validation.items.${item}.hint`)}</p></div><Badge status="neutral">{t("validation.pending")}</Badge></li>)}
         </ul>
         <div className={styles.snapshot}>
           <div><span>{t("validation.snapshot.actions")}</span><strong>{profile.actions.length}</strong></div>
@@ -113,6 +113,18 @@ export function AuthorizationProfilePublishingPreview({ entry, onClose }: {
           <li>{t("release.boundaries.noExpansion")}</li>
           <li>{t("release.boundaries.serviceConsent")}</li>
         </ul>
+        <section className={styles.releaseGates} aria-labelledby="authorization-profile-release-gates-title">
+          <div className={styles.releaseGatesHeading}>
+            <h4 id="authorization-profile-release-gates-title">{t("release.gates.title")}</h4>
+            <p>{t("release.gates.hint")}</p>
+          </div>
+          <dl className={styles.releaseGateGrid}>
+            {(["declaration", "contract", "runtime", "registry"] as const).map((gate) => <div key={gate}>
+              <dt>{t(`release.gates.items.${gate}.title`)}</dt>
+              <dd><Badge status={gate === "declaration" ? "info" : gate === "registry" ? "neutral" : "warning"}>{t(`release.gates.items.${gate}.state`)}</Badge><small>{t(`release.gates.items.${gate}.hint`)}</small></dd>
+            </div>)}
+          </dl>
+        </section>
         <Alert status="warning">{t("release.unavailable")}</Alert>
       </Card.Body>
     </Card> : null}

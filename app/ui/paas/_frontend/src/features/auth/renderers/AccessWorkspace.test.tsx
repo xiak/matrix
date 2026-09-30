@@ -599,6 +599,7 @@ describe("policy creation entry and directory contract", () => {
     expect(screen.getByRole("heading", { level: 3, name: "检查 IAM 契约与真实鉴权边界" })).toBe(document.activeElement);
     expect(screen.getByText(/不是在线校验结果/)).toBeTruthy();
     expect(screen.getByText(/subjectTypes 与 userAuthenticationMethods/)).toBeTruthy();
+    expect(screen.getAllByText("待核验")).toHaveLength(5);
     const diagnostics = screen.getByRole("region", { name: "接入诊断快照" });
     expect(within(diagnostics).getByText("paas@1")).toBeTruthy();
     expect(within(diagnostics).getByText("PAAS")).toBeTruthy();
@@ -611,6 +612,11 @@ describe("policy creation entry and directory contract", () => {
     expect(within(reviewActions).getAllByText(/IAM 事务时间/).length).toBeGreaterThan(0);
     await user.click(screen.getByRole("button", { name: "下一步" }));
     expect(screen.getByRole("heading", { level: 3, name: "审阅不可变发布引用与消费边界" })).toBe(document.activeElement);
+    const releaseGates = screen.getByRole("region", { name: "发布门禁状态" });
+    expect(within(releaseGates).getByText("仅 MOCK 输入")).toBeTruthy();
+    expect(within(releaseGates).getByText("未执行")).toBeTruthy();
+    expect(within(releaseGates).getByText("未验证")).toBeTruthy();
+    expect(within(releaseGates).getByText("未接入")).toBeTruthy();
     const publish = screen.getByRole("button", { name: "发布修订（未接入）" }) as HTMLButtonElement;
     expect(publish.disabled).toBe(true);
     expect(screen.getByText(/没有对应发布 Action/)).toBeTruthy();

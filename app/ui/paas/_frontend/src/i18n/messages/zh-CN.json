@@ -2031,6 +2031,7 @@
     "validation": {
       "title": "检查 IAM 契约与真实鉴权边界",
       "lead": "以下是未来受控接入流程必须证明的审阅项。它们是 UX 检查清单，不代表当前浏览器已经调用在线校验服务。",
+      "pending": "待核验",
       "items": {
         "namespace": { "title": "命名空间与版本所有权", "hint": "确认产品、callingService、Action 前缀和 revision 由对应产品团队维护，且同一修订不能覆盖不同内容摘要。" },
         "resources": { "title": "Action 与资源模型一致", "hint": "逐项核对 resourceKind、授权目标形状、结果资源及 TENANT／平台范围边界。" },
@@ -2058,6 +2059,16 @@
     "release": {
       "title": "审阅不可变发布引用与消费边界",
       "lead": "受信发布必须以精确的 product、revision 与 contentDigest 标识内容；目录可见性和权限授予是两件不同的事。",
+      "gates": {
+        "title": "发布门禁状态",
+        "hint": "每个门禁独立成立；前一步可见不代表后一步已经通过，也不能据此授予权限。",
+        "items": {
+          "declaration": { "title": "产品声明输入", "state": "仅 MOCK 输入", "hint": "只读复用当前示例声明，未证明来源、审批或仓库状态。" },
+          "contract": { "title": "IAM 契约校验", "state": "未执行", "hint": "本页没有连接在线校验服务，也没有生成通过记录。" },
+          "runtime": { "title": "产品 PEP 证据", "state": "未验证", "hint": "尚未核对真实 API、列表、批量操作及资源归属路径的执行证据。" },
+          "registry": { "title": "受信目录发布", "state": "未接入", "hint": "没有草稿、审批、发布 API 或发布 Action，目录不会被本页改变。" }
+        }
+      },
       "boundaries": {
         "noGrant": "声明进入目录不向任何用户、组、角色或服务自动授予权限。",
         "immutable": "同一修订必须保持内容不可变；不同摘要不能覆盖既有修订。",

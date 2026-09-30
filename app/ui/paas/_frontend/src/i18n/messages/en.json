@@ -2031,6 +2031,7 @@
     "validation": {
       "title": "Review the IAM contract and real enforcement boundary",
       "lead": "A future controlled onboarding flow must prove each item below. This is a UX checklist, not evidence that the browser called an online validation service.",
+      "pending": "Needs verification",
       "items": {
         "namespace": { "title": "Namespace and version ownership", "hint": "Confirm that product, callingService, Action prefixes, and revision are owned by the product team, and that one revision cannot be overwritten with a different digest." },
         "resources": { "title": "Action and resource model alignment", "hint": "Review resourceKind, authorization target shapes, result resources, and TENANT versus platform scope for every Action." },
@@ -2058,6 +2059,16 @@
     "release": {
       "title": "Review the immutable release reference and consumption boundary",
       "lead": "A trusted release identifies content with an exact product, revision, and contentDigest. Catalog visibility and permission grants remain separate concerns.",
+      "gates": {
+        "title": "Release gate status",
+        "hint": "Each gate stands on its own. Seeing an earlier stage does not mean a later stage passed and grants no permission.",
+        "items": {
+          "declaration": { "title": "Product declaration input", "state": "MOCK input only", "hint": "This read-only sample proves neither its source, approval, nor repository state." },
+          "contract": { "title": "IAM contract validation", "state": "Not executed", "hint": "This page calls no online validator and creates no passing record." },
+          "runtime": { "title": "Product PEP evidence", "state": "Not verified", "hint": "Evidence from real APIs, list and bulk paths, and resource ownership checks has not been inspected." },
+          "registry": { "title": "Trusted catalog release", "state": "Not connected", "hint": "No draft, approval, publish API, or publish Action exists here; this page cannot change the catalog." }
+        }
+      },
       "boundaries": {
         "noGrant": "Catalog registration grants no permissions to a user, group, role, or service.",
         "immutable": "A revision remains immutable; a different digest cannot overwrite an existing revision.",
