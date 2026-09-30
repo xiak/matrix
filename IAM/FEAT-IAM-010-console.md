@@ -354,6 +354,10 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 
 上述服务授权固定形状与设置导航同批通过完整门禁：52 文件／861 条前端用例、三条归一化、类型/lint/架构/228 对主题样式、41 页导出、228 文件嵌入等价及全仓 Go test/vet。
 
+2026-09-30，已推送的 [`1afa1b2f`](https://github.com/xiak/matrix/commit/1afa1b2f) 把隔离 MOCK 的服务授权目录改为租户观察优先：默认页只读列出当前 Account 的 `ServiceLinkedRoleAccess`，直接显示有效／全部 binding 数量、预定义 Role、精确业务资源与关系状态；平台模板作为独立次级页签保留。账号关系行进入既有三边界观察页，binding 页脚只表达不透明游标的上一页／下一页，不推断总页数。桌面目录把产品与用途、Role 与 Account、资源绑定、状态与时间合并为四个信息组；`390 × 844` 继续使用带字段标签的单列 Table。目录、详情和模板往返恢复原触发点，页面没有撤销、解绑、编辑或 Dialog。
+
+IAM 工程师随后固定并推送来源 `cb62ed2f6c307f5a50aa27480f89c8c58cf081ee`：`GET /v1/service-linked-roles` 返回 `relation + bindingCount + activeBindingCount`，详情返回 `relation + bindings[] + nextAfter?`；Role 名称／说明／会话上限归 `relation.role`，relation 与 binding 的模板引用均为完整 `{id,version,contentDigest}`，权限上限引用 release-owned 的不可变系统 PolicyVersion。该来源的本地 race/vet/build 与三套 PostgreSQL 18 门禁已通过，独立 CI 尚未作为本 FEAT 的 accepted 证据。当前前端提交只校准 MOCK 信息结构，尚未消费这两个 LIVE 读取路由，也未增加任何浏览器写入口；后续 LIVE 适配必须从这个固定来源生成的 OpenAPI 做封闭解码，并通过真实 IAM 浏览器门禁。本片同步嵌入资源固定在 [`c6a3cf9b`](https://github.com/xiak/matrix/commit/c6a3cf9b)；完整 52 文件／862 条前端用例、三条静态归一化、类型、lint、架构、228 对主题样式、41 页静态导出、228 文件嵌入等价及全仓 Go test/vet 已通过。
+
 ### LIVE 服务角色模板目录的开发验收证据
 
 2026-09-30，已推送 [`675b5390`](https://github.com/xiak/matrix/commit/675b5390) 消费 IAM 工程师已推送的固定来源 `00c031751b861130e92766ac4ecac0505dffab66`：LIVE 角色目录提供“服务授权模板”次级入口，在同一内容区读取 `GET /v1/service-role-templates`（控制台代理 `/api/iam/v1/service-role-templates`）。请求只带当前 USER bearer，不带 Account、installation、query 或 body；目录在操作者打开后才读取，角色列表不会预取。原隔离 MOCK 的“服务授权”入口、三边界观察和零写入行为不变。
