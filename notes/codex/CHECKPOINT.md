@@ -6,8 +6,8 @@
 - Updated: 2026-10-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `058ca1d3`
-- Pushed documentation/head milestone: `749ccd7d`
+- Pushed source/embed milestone: `23f09eb7`
+- Pushed documentation/head milestone: `235532bf`
 
 ## Authoritative route
 
@@ -76,6 +76,14 @@ has been removed. Read and mutation surfaces list each finding by policy and
 state that denies, boundaries, grant sources and request context still require
 evaluation; this is isolated MOCK guidance, not effective access or a backend
 risk contract.
+
+The former unused-access page is now one content-area Access analysis
+workspace. It inventories only tenant-local federation mappings and service
+roles, labels resource-side policy/ACL and cross-account coverage unsupported,
+and keeps the real activity window unobserved. Configuration state never
+becomes effective permission, external exposure or observed use. Synthetic
+90-day unused-access samples remain a separate tab, and neither tab performs
+automatic disable, deletion or authorization mutation.
 
 The current-account observation now leads with a four-stage tenant-readable
 status summary: exact platform template, Account relation, exact resource
