@@ -938,7 +938,7 @@
         "label": "Login sessions",
         "hint": "Own sessions and secure sign-out"
       },
-      "simulator": {
+      "policy-coverage": {
         "label": "Policy coverage preview",
         "hint": "Local configuration checks for users and role sessions"
       }
@@ -2210,7 +2210,7 @@
           "runtime": { "title": "Runtime use is not observed", "hint": "Only an isolated MOCK service-session directory design exists; there is no trustworthy LIVE session or business-request result. Valid configuration proves neither session issuance nor successful access.", "state": "No trustworthy record" }
         },
         "conclusion": "The only current conclusion is that the configuration relation is valid. A real request must still authenticate the trusted service subject, issue a short-lived session, pass product PEP authorization, and complete business execution; each can fail independently.",
-        "revocationBoundary": "Once the exact binding becomes REVOKED, no new session may be issued for that resource. The per-session revoke flow below is a MOCK review with submission disabled; until query and revoke contracts are fixed, it promises no immediate termination and fabricates no successful revoke."
+        "revocationBoundary": "Once the exact binding becomes REVOKED, no new session may be issued for that resource. IAM now has fixed per-session read and revoke contracts; the disabled isolated MOCK below validates information hierarchy only and promises no immediate termination or fabricated success."
       },
       "template": { "eyebrow": "Platform publication boundary", "title": "Immutable ServiceRoleTemplate" },
       "relation": { "eyebrow": "Account relation boundary", "title": "ServiceLinkedRoleAccess" },
@@ -2231,43 +2231,44 @@
         "notIssued": "Directory example · MOCK",
         "identityType": "Short-lived identity type",
         "source": "Identity source",
-        "boundary": "An ACTIVE relation and an ACTIVE resource binding do not mean temporary credentials have been issued. A future service must assume the role with a SERVICE source under the exact binding, business purpose, and session ceiling. This MOCK does not call AssumeRole, and the records below are not backend activity.",
+        "boundary": "An ACTIVE relation and an ACTIVE resource binding do not mean temporary credentials have been issued. A real service must assume the role with a SERVICE_ACCOUNT source under the exact binding, business purpose, and session ceiling. This MOCK does not call AssumeRole, and the records below are not backend activity.",
         "directoryTitle": "Service-session directory",
-        "directoryHint": "Account security administrators inspect non-secret session metadata by source service and target role, then review a single-session revoke from the detail view.",
-        "directoryBoundary": "Isolated MOCK · These {count} records only validate source-identity and lifecycle information hierarchy plus revoke review; they do not come from IAM. The page exposes no short-lived credential, internal proof or decision, private endpoint, or installation bootstrap summary.",
+        "directoryHint": "Preview the source service, target role, lifecycle and revoke capability in the fixed IAM list/read hierarchy. Real queries and revokes live in LIVE role detail.",
+        "directoryBoundary": "Isolated MOCK · These {count} records reproduce only non-secret fields exposed by the fixed contract; they do not come from IAM. The page exposes no short-lived credential, internal proof or decision, private endpoint, generation, or installation bootstrap summary.",
         "tableLabel": "Service-session directory example",
         "search": "Search session ID, account, source identity, or target role",
-        "stateFilter": "Observed state",
+        "stateFilter": "Lifecycle",
         "allStates": "All states",
         "filteredCount": "Showing {count} of {total}",
         "emptyTitle": "No matching service sessions",
-        "emptyHint": "Adjust the keyword or observed state. This neither queries nor changes a real IAM session.",
-        "footer": "The example directory does not claim this account has an active service session. A future LIVE directory follows only authoritative backend state and opaque pagination.",
+        "emptyHint": "Adjust the keyword or lifecycle. This neither queries nor changes a real IAM session.",
+        "footer": "The example directory does not claim this account has a usable service session. LIVE follows only authoritative lifecycle, revokeCapability and opaque backend cursors.",
         "cursorPage": "Page {page}",
         "previous": "Previous service-session page",
         "next": "Next service-session page",
         "detailEyebrow": "Non-secret session observation · MOCK",
         "detailTitle": "Service-session detail",
         "detailBoundaries": {
-          "unrevoked": "Unrevoked only means that no revocation fact was observed at this illustrative instant. It does not mean the session is currently valid, a request was allowed, or a business operation succeeded.",
-          "expired": "Expired comes only from this example's displayed time. The local clock cannot prove backend cleanup or that any business request succeeded or failed.",
-          "revoked": "Revoked means only that this example has an explicit revokedAt. It does not mean the service-linked role, resource binding, or permission ceiling was deleted, nor prove that an in-flight business request was cancelled."
+          "UNREVOKED": "UNREVOKED only means IAM reported the session unrevoked and unexpired at the observation instant. It does not mean the session is currently usable, a request was allowed, or a business operation succeeded; a disabled source, revoked binding or policy change may still make it unusable.",
+          "EXPIRED": "EXPIRED is an IAM lifecycle value. It proves no historical business success or failure and says nothing about whether credential material still exists.",
+          "REVOKED": "REVOKED records a revocation fact for this exact session. It does not mean the service-linked role, resource binding, or permission ceiling was deleted, nor prove an in-flight business request was cancelled."
         },
         "backToDirectory": "Back to session directory",
         "backToDetail": "Back to session detail",
         "reviewRevoke": "Review revoke",
         "revokeEyebrow": "Single-session revoke review · MOCK",
         "revokeTitle": "Revoke service session",
-        "revokeBoundary": "This review covers the effect on one exact session. IAM has no fixed northbound service-session revoke contract, so the page sends no request, creates no request ID, and presents no successful revoke.",
-        "revokeUnavailable": "Revoke session (not connected)",
+        "revokeBoundary": "The fixed IAM contract revokes only this exact session and relies on the authoritative server result. This isolated MOCK sends no request, creates no request ID, and presents no fake success; the real action lives in LIVE role detail.",
+        "revokeUnavailable": "Preview only; do not send",
         "revokeEffectTitle": "Expected effect boundary",
-        "revokeEffectHint": "IAM must confirm any future effect authoritatively. This page performs none of the changes below.",
+        "revokeEffectHint": "IAM must confirm any real effect authoritatively. This page performs none of the changes below.",
         "revokeEffectSession": "Terminate only this exact service session; do not delete the service-linked role or resource binding.",
         "revokeEffectNoGrant": "Revocation grants, expands, or rewrites no policy or permission ceiling.",
         "revokeEffectNoProof": "A refreshed list, expiry time, or state change cannot prove that this unsent revoke succeeded.",
-        "expiredHint": "This example is beyond its displayed expiry and offers no revoke review. The local clock is not authoritative backend state.",
-        "revokedHint": "This example has an explicit revocation time and offers no further revoke review. Revoking one session does not delete account service authorization or a resource binding.",
-        "states": { "unrevoked": "No revoke observed · MOCK", "expired": "Expired example", "revoked": "Revoked example" },
+        "expiredHint": "The fixed capability marks an EXPIRED session as non-revocable. No revoke review is offered, and this says nothing about historical business execution.",
+        "revokedHint": "The fixed capability marks a REVOKED session as non-revocable. Revoking one session does not delete account service authorization or a resource binding.",
+        "states": { "UNREVOKED": "UNREVOKED · unrevoked and unexpired", "EXPIRED": "EXPIRED", "REVOKED": "REVOKED" },
+        "capabilities": { "available": "Revoke can be requested", "unavailable": "Not revocable" },
         "fields": {
           "id": "Session ID",
           "account": "Account",
@@ -2277,7 +2278,8 @@
           "expiresAt": "Expires",
           "revokedAt": "Revoked",
           "lifecycle": "Expiry and state",
-          "state": "Observed state"
+          "state": "Lifecycle",
+          "revokeCapability": "Revoke capability"
         }
       },
       "runtime": {
@@ -2285,11 +2287,11 @@
         "hint": "Authorization configuration, short-lived identity issuance, product-side enforcement, and business execution are four independent outcomes. An earlier success never proves a later one.",
         "stages": {
           "authenticate": { "title": "Authenticate the trusted service subject", "hint": "The platform must prove a registered service installation and subject server-side. Browser-supplied service, Account, or purpose selectors are never authority.", "state": "Request not verified" },
-          "issue": { "title": "Issue a short-lived service session", "hint": "IAM issues a source=SERVICE identity only when the account relation, exact binding, template snapshot, and purpose agree. The console never reveals its credential.", "state": "Not issued" },
+          "issue": { "title": "Issue a short-lived service session", "hint": "IAM issues a sourceType=SERVICE_ACCOUNT identity only when the account relation, exact binding, template snapshot, and purpose agree. The console never reveals its credential.", "state": "Not issued" },
           "enforce": { "title": "Re-authorize at the product PEP", "hint": "The product API must still verify the current Account, Action, exact resource, purpose, and session lifetime. A RoleSession is not a permit by itself.", "state": "Not evaluated" },
           "execute": { "title": "Execute and return the business result", "hint": "An IAM allow or authorization receipt does not prove a database read or another business transaction succeeded. The product returns and audits that result independently.", "state": "Not executed" }
         },
-        "boundary": "MOCK · This only explains the future runtime information flow. The separate directory below shows non-secret session metadata and a revoke review with submission disabled. It exposes no temporary credential, internal endpoint, proof, or decision and never presents configuration state as permission for a request."
+        "boundary": "MOCK · This explains the runtime information flow without calling AssumeRole or a product PEP. The separate directory below shows non-secret session metadata allowed by the fixed contract and a revoke review with submission disabled. It exposes no temporary credential, internal endpoint, proof, or decision and never presents configuration state as permission for a request."
       },
       "permissionTitle": "Bound permission-ceiling snapshot",
       "permissionHint": "Role assumption still cannot exceed this exact action and resource scope",
@@ -3342,7 +3344,7 @@
     "groupPolicyGrants": "Group policies",
     "directPolicyCount": "{count} direct",
     "groupPolicyCount": "{count} from groups",
-    "simulateAccess": "Simulate access",
+    "policyCoveragePreview": "View policy coverage",
     "previewNote": "Access preview · Groups, policies, roles, SSO and keys are MOCK, session-only and grant no real permissions.",
     "notConnected": "This capability is not connected",
     "notConnectedHint": "This operation is not available for live accounts. Use MOCK preview from the sign-in page to explore the complete workflow.",
@@ -4487,7 +4489,7 @@
       "cancel": "The enrollment could not be cancelled. Keep this page open and retry."
     }
   },
-  "AccessSimulator": {
+  "PolicyCoveragePreview": {
     "example": "Inspect a local configuration scenario",
     "chooseExample": "Choose a scenario (optional)",
     "exampleHint": "Fills local fixture fields only. Policies and memberships do not change, and no authorization conclusion is produced.",

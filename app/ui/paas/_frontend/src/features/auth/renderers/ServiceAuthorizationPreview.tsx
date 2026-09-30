@@ -7,6 +7,8 @@ import { Alert, Badge, Button, Card, ContentPage, EmptyState, Select, Steps, Tab
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
 import type { AccountPolicyDocument } from "../domain/accounts";
+import type { RoleCapability, RoleSessionFilterLifecycle, RoleSessionLifecycle } from "../domain/roles";
+import type { ServicePrincipalReference } from "../domain/serviceAuthorization";
 import { WorkspaceTime } from "./AccessWorkspaceUi";
 import { ServiceAuthorizationChain } from "./ServiceAuthorizationChain";
 import styles from "./ServiceAuthorizationPreview.module.css";
@@ -51,9 +53,7 @@ const previewAccountAccess = {
   updatedAt: "2026-09-29T08:35:00Z",
 } as const;
 
-type PreviewServiceRoleSessionSource =
-  | { kind: "USER"; userId: string }
-  | { kind: "SERVICE"; principalId: string; installationId: string };
+type PreviewServiceRoleSessionSource = ServicePrincipalReference & { type: "SERVICE_ACCOUNT" };
 
 type PreviewServiceRoleSession = {
   id: string;
@@ -61,7 +61,8 @@ type PreviewServiceRoleSession = {
   source: PreviewServiceRoleSessionSource;
   roleId: string;
   roleName: string;
-  observation: "unrevoked" | "expired" | "revoked";
+  lifecycle: RoleSessionLifecycle;
+  revokeCapability: RoleCapability;
   issuedAt: string;
   expiresAt: string;
   revokedAt: string | null;
@@ -71,10 +72,11 @@ function previewServiceSessions(accountId: string): readonly PreviewServiceRoleS
   return [{
     id: "preview.service-role-session.current",
     accountId,
-    source: { kind: "SERVICE", principalId: "preview.paas.service", installationId: "preview.service-installation.paas" },
+    source: { type: "SERVICE_ACCOUNT", principalId: "preview.paas.service", installationId: "preview.service-installation.paas", purpose: "PAAS" },
     roleId: previewAccountAccess.roleId,
     roleName: previewTemplate.roleName,
-    observation: "unrevoked",
+    lifecycle: "UNREVOKED",
+    revokeCapability: { action: "iam.role-session.revoke", resource: { kind: "ROLE_SESSION", id: "preview.service-role-session.current" }, available: true, restrictionReason: null },
     issuedAt: "2026-10-01T01:20:00Z",
     expiresAt: "2026-10-01T02:20:00Z",
     revokedAt: null
@@ -82,10 +84,11 @@ function previewServiceSessions(accountId: string): readonly PreviewServiceRoleS
   {
     id: "preview.service-role-session.expired",
     accountId,
-    source: { kind: "SERVICE", principalId: "preview.paas.service", installationId: "preview.service-installation.paas" },
+    source: { type: "SERVICE_ACCOUNT", principalId: "preview.paas.service", installationId: "preview.service-installation.paas", purpose: "PAAS" },
     roleId: previewAccountAccess.roleId,
     roleName: previewTemplate.roleName,
-    observation: "expired",
+    lifecycle: "EXPIRED",
+    revokeCapability: { action: "iam.role-session.revoke", resource: { kind: "ROLE_SESSION", id: "preview.service-role-session.expired" }, available: false, restrictionReason: "SESSION_NOT_REVOCABLE" },
     issuedAt: "2026-09-30T23:45:00Z",
     expiresAt: "2026-10-01T00:45:00Z",
     revokedAt: null
@@ -93,10 +96,11 @@ function previewServiceSessions(accountId: string): readonly PreviewServiceRoleS
   {
     id: "preview.service-role-session.revoked",
     accountId,
-    source: { kind: "SERVICE", principalId: "preview.paas.service", installationId: "preview.service-installation.paas" },
+    source: { type: "SERVICE_ACCOUNT", principalId: "preview.paas.service", installationId: "preview.service-installation.paas", purpose: "PAAS" },
     roleId: previewAccountAccess.roleId,
     roleName: previewTemplate.roleName,
-    observation: "revoked",
+    lifecycle: "REVOKED",
+    revokeCapability: { action: "iam.role-session.revoke", resource: { kind: "ROLE_SESSION", id: "preview.service-role-session.revoked" }, available: false, restrictionReason: "SESSION_NOT_REVOCABLE" },
     issuedAt: "2026-09-30T21:00:00Z",
     expiresAt: "2026-09-30T22:00:00Z",
     revokedAt: "2026-09-30T21:15:00Z"
@@ -244,7 +248,7 @@ function ServiceRoleSessionDirectoryPreview({ accountId }: { accountId: string }
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [reviewing, setReviewing] = useState(false);
   const [query, setQuery] = useState("");
-  const [lifecycle, setLifecycle] = useState<"all" | "unrevoked" | "expired" | "revoked">("all");
+  const [lifecycle, setLifecycle] = useState<RoleSessionFilterLifecycle>("ALL");
   const detailHeading = useRef<HTMLHeadingElement>(null);
   const reviewHeading = useRef<HTMLHeadingElement>(null);
   const returnToSession = useRef<string | null>(null);
@@ -253,11 +257,9 @@ function ServiceRoleSessionDirectoryPreview({ accountId }: { accountId: string }
   const visibleSessions = useMemo(() => {
     const needle = query.trim().toLocaleLowerCase();
     return sessions.filter((session) => {
-      if (lifecycle !== "all" && session.observation !== lifecycle) return false;
+      if (lifecycle !== "ALL" && session.lifecycle !== lifecycle) return false;
       if (!needle) return true;
-      const sourceValues = session.source.kind === "SERVICE"
-        ? [session.source.kind, session.source.principalId, session.source.installationId]
-        : [session.source.kind, session.source.userId];
+      const sourceValues = [session.source.type, session.source.principalId, session.source.installationId, session.source.purpose];
       return [session.id, session.accountId, ...sourceValues, session.roleId, session.roleName]
         .some((value) => value.toLocaleLowerCase().includes(needle));
     });
@@ -289,26 +291,25 @@ function ServiceRoleSessionDirectoryPreview({ accountId }: { accountId: string }
           <span>{t(reviewing ? "observation.session.revokeEyebrow" : "observation.session.detailEyebrow")}</span>
           <h4 id="service-role-session-detail-title" ref={reviewing ? reviewHeading : detailHeading} tabIndex={-1}>{t(reviewing ? "observation.session.revokeTitle" : "observation.session.detailTitle")}</h4>
         </div>
-        <div className={styles.stateBadges}><Badge status="warning">MOCK</Badge><Badge status={selected.observation === "expired" ? "neutral" : "info"}>{t(`observation.session.states.${selected.observation}`)}</Badge></div>
+        <div className={styles.stateBadges}><Badge status="warning">MOCK</Badge><Badge status={selected.lifecycle === "EXPIRED" ? "neutral" : "info"}>{t(`observation.session.states.${selected.lifecycle}`)}</Badge></div>
       </div>
-      <Alert status="warning">{t(reviewing ? "observation.session.revokeBoundary" : `observation.session.detailBoundaries.${selected.observation}`)}</Alert>
+      <Alert status="warning">{t(reviewing ? "observation.session.revokeBoundary" : `observation.session.detailBoundaries.${selected.lifecycle}`)}</Alert>
       <dl className={styles.compactFacts}>
         <div><dt>{t("observation.session.fields.id")}</dt><dd><code>{selected.id}</code></dd></div>
         <div><dt>{t("observation.session.fields.account")}</dt><dd><code>{selected.accountId}</code></dd></div>
-        <div><dt>{t("observation.session.fields.sourceIdentity")}</dt><dd><Badge status="info">{selected.source.kind}</Badge>{selected.source.kind === "SERVICE"
-          ? <><code>{selected.source.principalId}</code><small><code>{selected.source.installationId}</code></small></>
-          : <code>{selected.source.userId}</code>}</dd></div>
+        <div><dt>{t("observation.session.fields.sourceIdentity")}</dt><dd><Badge status="info">{selected.source.type}</Badge><code>{selected.source.principalId}</code><small><code>{selected.source.installationId}</code> · {selected.source.purpose}</small></dd></div>
         <div><dt>{t("observation.session.fields.role")}</dt><dd><code>{selected.roleName}</code><small><code>{selected.roleId}</code></small></dd></div>
         <div><dt>{t("observation.session.fields.issuedAt")}</dt><dd><WorkspaceTime value={selected.issuedAt} /></dd></div>
         <div><dt>{t("observation.session.fields.expiresAt")}</dt><dd><WorkspaceTime value={selected.expiresAt} /></dd></div>
         {selected.revokedAt ? <div><dt>{t("observation.session.fields.revokedAt")}</dt><dd><WorkspaceTime value={selected.revokedAt} /></dd></div> : null}
-        <div><dt>{t("observation.session.fields.state")}</dt><dd>{t(`observation.session.states.${selected.observation}`)}</dd></div>
+        <div><dt>{t("observation.session.fields.state")}</dt><dd>{t(`observation.session.states.${selected.lifecycle}`)}</dd></div>
+        <div><dt>{t("observation.session.fields.revokeCapability")}</dt><dd><Badge status={selected.revokeCapability.available ? "info" : "neutral"}>{t(selected.revokeCapability.available ? "observation.session.capabilities.available" : "observation.session.capabilities.unavailable")}</Badge><small><code>{selected.revokeCapability.action}</code></small></dd></div>
       </dl>
       {reviewing ? <>
         <div className={styles.snapshot}><div><strong>{t("observation.session.revokeEffectTitle")}</strong><span>{t("observation.session.revokeEffectHint")}</span></div><ul><li>{t("observation.session.revokeEffectSession")}</li><li>{t("observation.session.revokeEffectNoGrant")}</li><li>{t("observation.session.revokeEffectNoProof")}</li></ul></div>
         <div className={styles.actions}><Button disabled title={t("observation.session.revokeUnavailable")} variant="danger">{t("observation.session.revokeUnavailable")}</Button></div>
-      </> : selected.observation === "unrevoked" ? <div className={styles.actions}><Button onClick={() => setReviewing(true)} variant="secondary">{t("observation.session.reviewRevoke")}</Button></div>
-        : <Alert status="info">{t(selected.observation === "expired" ? "observation.session.expiredHint" : "observation.session.revokedHint")}</Alert>}
+      </> : selected.revokeCapability.available ? <div className={styles.actions}><Button onClick={() => setReviewing(true)} variant="secondary">{t("observation.session.reviewRevoke")}</Button></div>
+        : <Alert status="info">{t(selected.lifecycle === "EXPIRED" ? "observation.session.expiredHint" : "observation.session.revokedHint")}</Alert>}
     </section>;
   }
 
@@ -318,13 +319,13 @@ function ServiceRoleSessionDirectoryPreview({ accountId }: { accountId: string }
     <TableToolbar
       search={{ label: t("observation.session.search"), value: query, onChange: setQuery }}
       filters={[{
-        id: "lifecycle", label: t("observation.session.stateFilter"), value: lifecycle, defaultValue: "all",
-        onChange: (value) => setLifecycle(value as "all" | "unrevoked" | "expired" | "revoked"),
+        id: "lifecycle", label: t("observation.session.stateFilter"), value: lifecycle, defaultValue: "ALL",
+        onChange: (value) => setLifecycle(value as RoleSessionFilterLifecycle),
         options: [
-          { value: "all", label: t("observation.session.allStates") },
-          { value: "unrevoked", label: t("observation.session.states.unrevoked") },
-          { value: "expired", label: t("observation.session.states.expired") },
-          { value: "revoked", label: t("observation.session.states.revoked") }
+          { value: "ALL", label: t("observation.session.allStates") },
+          { value: "UNREVOKED", label: t("observation.session.states.UNREVOKED") },
+          { value: "EXPIRED", label: t("observation.session.states.EXPIRED") },
+          { value: "REVOKED", label: t("observation.session.states.REVOKED") }
         ]
       }]}
       labels={toolbarLabels}
@@ -334,17 +335,15 @@ function ServiceRoleSessionDirectoryPreview({ accountId }: { accountId: string }
       <thead><tr><th scope="col">{t("observation.session.fields.id")}</th><th scope="col">{t("observation.session.fields.sourceIdentity")}</th><th scope="col">{t("observation.session.fields.role")}</th><th scope="col">{t("observation.session.fields.lifecycle")}</th></tr></thead>
       <tbody>{visibleSessions.map((session) => <tr key={session.id}>
         <td data-label={t("observation.session.fields.id")}><button className={`${styles.link} ${styles.directoryIdentifier}`} title={session.id} ref={(node) => { if (node) sessionTriggers.current.set(session.id, node); else sessionTriggers.current.delete(session.id); }} onClick={() => { setReviewing(false); setSelectedId(session.id); }}>{session.id}</button></td>
-        <td data-label={t("observation.session.fields.sourceIdentity")}><Badge status="info">{session.source.kind}</Badge>{session.source.kind === "SERVICE"
-          ? <><code>{session.source.principalId}</code><small><code>{session.source.installationId}</code></small></>
-          : <code>{session.source.userId}</code>}</td>
+        <td data-label={t("observation.session.fields.sourceIdentity")}><Badge status="info">{session.source.type}</Badge><code>{session.source.principalId}</code><small><code>{session.source.installationId}</code> · {session.source.purpose}</small></td>
         <td data-label={t("observation.session.fields.role")}><strong>{t("template.name")}</strong><small className={styles.directoryIdentifier} title={session.roleName}><code>{session.roleName}</code></small></td>
-        <td data-label={t("observation.session.fields.lifecycle")}><WorkspaceTime value={session.expiresAt} /><small><Badge status={session.observation === "expired" ? "neutral" : "info"}>{t(`observation.session.states.${session.observation}`)}</Badge></small></td>
+        <td data-label={t("observation.session.fields.lifecycle")}><WorkspaceTime value={session.expiresAt} /><small><Badge status={session.lifecycle === "EXPIRED" ? "neutral" : "info"}>{t(`observation.session.states.${session.lifecycle}`)}</Badge></small></td>
       </tr>)}</tbody>
     </Table>
     <Table.Footer note={t("observation.session.footer")}><TablePagination mode="cursor" summary={t("observation.session.cursorPage", { page: 1 })}
       previous={{ label: t("observation.session.previous"), disabled: true, onClick: () => undefined }}
       next={{ label: t("observation.session.next"), disabled: true, onClick: () => undefined }} /></Table.Footer></>
-      : <EmptyState title={t("observation.session.emptyTitle")} description={t("observation.session.emptyHint")} action={<Button variant="secondary" onClick={() => { setQuery(""); setLifecycle("all"); }}>{toolbarLabels.resetQuery}</Button>} />}
+      : <EmptyState title={t("observation.session.emptyTitle")} description={t("observation.session.emptyHint")} action={<Button variant="secondary" onClick={() => { setQuery(""); setLifecycle("ALL"); }}>{toolbarLabels.resetQuery}</Button>} />}
   </section>;
 }
 
@@ -455,7 +454,7 @@ function ServiceLinkedRoleObservation({ accountId }: { accountId: string }) {
           <Card.Body className={styles.cardBody}>
             <dl className={styles.compactFacts}>
               <div><dt>{t("observation.session.identityType")}</dt><dd><code>ServiceRoleSession</code></dd></div>
-              <div><dt>{t("observation.session.source")}</dt><dd><code>SERVICE</code></dd></div>
+              <div><dt>{t("observation.session.source")}</dt><dd><code>SERVICE_ACCOUNT</code></dd></div>
               <div><dt>{t("fields.maxSession")}</dt><dd>{t("observation.durationMinutes", { count: previewTemplate.maxSessionDurationSeconds / 60 })}</dd></div>
             </dl>
             <Alert status="info">{t("observation.session.boundary")}</Alert>

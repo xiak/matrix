@@ -938,7 +938,7 @@
         "label": "登录会话",
         "hint": "本人会话与安全退出"
       },
-      "simulator": {
+      "policy-coverage": {
         "label": "策略覆盖预览",
         "hint": "用户与角色会话的本地配置检查"
       }
@@ -2210,7 +2210,7 @@
           "runtime": { "title": "运行时使用未观测", "hint": "当前只有隔离 MOCK 的服务会话目录设计，没有可信 LIVE 会话或业务请求结果；配置有效不能证明已签发会话或访问成功。", "state": "无可信记录" }
         },
         "conclusion": "当前只能得出“配置关系有效”。一次实际请求仍须完成受信服务主体认证、短期会话签发、产品 PEP 鉴权和业务执行，任一步都可能独立失败。",
-        "revocationBoundary": "精确绑定变为 REVOKED 后不得再为该资源签发新会话；下方逐会话撤销仅为禁用提交的 MOCK 审阅，在后端固定查询与撤销契约前不会承诺实时下线或伪造撤销成功。"
+        "revocationBoundary": "精确绑定变为 REVOKED 后不得再为该资源签发新会话。IAM 已固定逐会话查询与撤销契约；下方仍是禁用提交的隔离 MOCK，只验证信息层级，不承诺实时下线或伪造撤销成功。"
       },
       "template": { "eyebrow": "平台发布边界", "title": "不可变 ServiceRoleTemplate" },
       "relation": { "eyebrow": "账号关系边界", "title": "ServiceLinkedRoleAccess" },
@@ -2231,43 +2231,44 @@
         "notIssued": "目录样例 · MOCK",
         "identityType": "短期身份类型",
         "source": "身份来源",
-        "boundary": "关系 ACTIVE 与资源绑定 ACTIVE 都不代表已经发行临时凭据。未来服务必须以 SERVICE 来源承担角色，并受精确 binding、业务用途和会话上限共同约束；当前 MOCK 不调用 AssumeRole，下面的记录也不是后端活动会话。",
+        "boundary": "关系 ACTIVE 与资源绑定 ACTIVE 都不代表已经发行临时凭据。真实服务必须以 SERVICE_ACCOUNT 来源承担角色，并受精确 binding、业务用途和会话上限共同约束；当前 MOCK 不调用 AssumeRole，下面的记录也不是后端活动会话。",
         "directoryTitle": "服务会话目录",
-        "directoryHint": "账号安全管理员按来源服务和目标角色查看非秘密会话元数据，再从详情审阅单条撤销。",
-        "directoryBoundary": "隔离 MOCK · 以下 {count} 条记录只用于验证来源身份、生命周期信息层级和撤销审阅，不来自 IAM。页面不会展示短期凭据、内部 proof／decision、私有端点或 installation bootstrap 摘要。",
+        "directoryHint": "按已固定的 IAM list/read 信息层级预览来源服务、目标角色、生命周期与撤销能力；真实查询和撤销位于 LIVE 角色详情。",
+        "directoryBoundary": "隔离 MOCK · 以下 {count} 条记录只复现固定契约允许公开的非秘密字段，不来自 IAM。页面不会展示短期凭据、内部 proof／decision、私有端点、generation 或 installation bootstrap 摘要。",
         "tableLabel": "服务会话目录样例",
         "search": "搜索会话 ID、账号、来源身份或目标角色",
-        "stateFilter": "观察状态",
+        "stateFilter": "生命周期",
         "allStates": "全部状态",
         "filteredCount": "显示 {count} / {total} 条",
         "emptyTitle": "没有匹配的服务会话",
-        "emptyHint": "调整关键字或观察状态；这不会查询或改变真实 IAM 会话。",
-        "footer": "样例目录不声称当前账号存在活动服务会话；LIVE 目录未来只按后端权威状态和不透明分页继续。",
+        "emptyHint": "调整关键字或生命周期；这不会查询或改变真实 IAM 会话。",
+        "footer": "样例目录不声称当前账号存在可用服务会话；LIVE 目录只按后端权威 lifecycle、revokeCapability 和不透明游标继续。",
         "cursorPage": "第 {page} 页",
         "previous": "上一页服务会话",
         "next": "下一页服务会话",
         "detailEyebrow": "非秘密会话观察 · MOCK",
         "detailTitle": "服务会话详情",
         "detailBoundaries": {
-          "unrevoked": "未撤销只表示这个样例观察时点没有撤销事实，不等于会话当前有效、请求已获允许或业务操作成功。",
-          "expired": "已到期只来自这个样例的展示时间；本地时钟不能证明后端已经清理会话，也不能证明任何业务请求成功或失败。",
-          "revoked": "已撤销只表达这个样例存在明确 revokedAt；它不表示服务关联角色、资源绑定或权限上限已经被删除，也不证明在途业务请求已取消。"
+          "UNREVOKED": "UNREVOKED 只表示 IAM 在观察时点报告会话未撤销且未到期，不等于它当前可用、请求已获允许或业务操作成功；来源停用、binding 撤销和策略变化仍可能让它不可使用。",
+          "EXPIRED": "EXPIRED 是 IAM lifecycle，不代表任何历史业务请求成功或失败，也不能证明凭据材料仍然存在。",
+          "REVOKED": "REVOKED 只表达该精确会话已有撤销事实；它不表示服务关联角色、资源绑定或权限上限已经删除，也不证明在途业务请求已取消。"
         },
         "backToDirectory": "返回会话目录",
         "backToDetail": "返回会话详情",
         "reviewRevoke": "审阅撤销",
         "revokeEyebrow": "单会话撤销审阅 · MOCK",
         "revokeTitle": "撤销服务会话",
-        "revokeBoundary": "只审阅精确会话的影响。IAM 尚未固定服务会话北向撤销契约，因此不发送请求、不生成 requestId，也不会展示撤销成功。",
-        "revokeUnavailable": "撤销会话（未接入）",
+        "revokeBoundary": "已固定的 IAM 契约只撤销这一条精确会话，并以服务端权威结果为准。本页是隔离 MOCK，不发送请求、不生成 requestId，也不展示虚假的撤销成功；真实操作位于 LIVE 角色详情。",
+        "revokeUnavailable": "仅预览，不发送",
         "revokeEffectTitle": "预期影响边界",
-        "revokeEffectHint": "未来仍需 IAM 以权威结果确认；本页不执行以下变化。",
+        "revokeEffectHint": "真实变化仍必须由 IAM 权威结果确认；本页不执行以下变化。",
         "revokeEffectSession": "仅终止这一个精确服务会话，不删除服务关联角色或资源绑定。",
         "revokeEffectNoGrant": "撤销不会授予、扩大或重写任何策略和权限上限。",
         "revokeEffectNoProof": "列表刷新、过期时间或状态变化都不能证明本次未发送的撤销已成功。",
-        "expiredHint": "该样例已超过展示的到期时间，不提供撤销审阅；本地时钟也不替代服务端权威状态。",
-        "revokedHint": "该样例已包含明确的撤销时间，不再提供撤销审阅；撤销单个会话不会删除账号服务授权或资源绑定。",
-        "states": { "unrevoked": "未观测到撤销 · MOCK", "expired": "已到期样例", "revoked": "已撤销样例" },
+        "expiredHint": "固定 capability 表明 EXPIRED 会话不可撤销；它不提供撤销审阅，也不代表历史业务执行结果。",
+        "revokedHint": "固定 capability 表明 REVOKED 会话不可再次撤销；撤销单个会话不会删除账号服务授权或资源绑定。",
+        "states": { "UNREVOKED": "UNREVOKED · 未撤销且未到期", "EXPIRED": "EXPIRED · 已到期", "REVOKED": "REVOKED · 已撤销" },
+        "capabilities": { "available": "可请求撤销", "unavailable": "不可撤销" },
         "fields": {
           "id": "会话 ID",
           "account": "账号",
@@ -2277,7 +2278,8 @@
           "expiresAt": "到期时间",
           "revokedAt": "撤销时间",
           "lifecycle": "到期与状态",
-          "state": "观察状态"
+          "state": "生命周期",
+          "revokeCapability": "撤销能力"
         }
       },
       "runtime": {
@@ -2285,11 +2287,11 @@
         "hint": "配置授权、签发短期身份、产品侧鉴权和业务执行是四个独立结果；前一步成立不能推导后一步成功。",
         "stages": {
           "authenticate": { "title": "认证受信服务主体", "hint": "平台必须从服务端证明已登记的服务安装与主体，不能接受浏览器提供的 service、Account 或 purpose selector。", "state": "未验证请求" },
-          "issue": { "title": "签发短期服务会话", "hint": "IAM 仅在账号关系、精确 binding、模板快照与用途一致时签发 source=SERVICE 的短期身份；控制台不展示凭据。", "state": "未签发" },
+          "issue": { "title": "签发短期服务会话", "hint": "IAM 仅在账号关系、精确 binding、模板快照与用途一致时签发 sourceType=SERVICE_ACCOUNT 的短期身份；控制台不展示凭据。", "state": "未签发" },
           "enforce": { "title": "产品 PEP 重新鉴权", "hint": "产品接口仍须校验当前 Account、Action、精确资源、purpose 与会话有效期；RoleSession 不是通行证。", "state": "未评估" },
           "execute": { "title": "执行并返回业务结果", "hint": "IAM 允许或授权操作回执不等于数据库读取等业务事务成功；最终结果由产品独立返回和审计。", "state": "未执行" }
         },
-        "boundary": "MOCK · 这里只解释未来运行时信息流。下方目录另行展示非秘密会话元数据和禁用提交的撤销审阅；不展示临时凭据、内部端点或 proof／decision，也不把任何配置状态写成一次请求的许可。"
+        "boundary": "MOCK · 这里只解释运行时信息流，不调用 AssumeRole 或产品 PEP。下方目录另行展示固定契约允许公开的非秘密会话元数据和禁用提交的撤销审阅；不展示临时凭据、内部端点或 proof／decision，也不把任何配置状态写成一次请求的许可。"
       },
       "permissionTitle": "绑定的权限上限快照",
       "permissionHint": "服务承担角色后仍不能超过这一精确动作和资源范围",
@@ -3342,7 +3344,7 @@
     "groupPolicyGrants": "用户组策略",
     "directPolicyCount": "直接 {count} 项",
     "groupPolicyCount": "用户组 {count} 项",
-    "simulateAccess": "模拟访问",
+    "policyCoveragePreview": "查看策略覆盖",
     "previewNote": "访问管理体验 · 用户组、策略、角色、SSO 与密钥为 MOCK，仅在当前浏览器会话中生效，不授予真实权限。",
     "notConnected": "此能力尚未接入后端",
     "notConnectedHint": "真实账号暂不提供此操作。请从登录页进入 MOCK 体验查看完整流程。",
@@ -4501,7 +4503,7 @@
       "cancel": "无法取消当前绑定流程。请保留当前页面并重试。"
     }
   },
-  "AccessSimulator": {
+  "PolicyCoveragePreview": {
     "example": "查看本地配置场景",
     "chooseExample": "选择场景（可选）",
     "exampleHint": "仅预填本地 fixture，不修改策略或成员关系，也不会产生授权结论。",

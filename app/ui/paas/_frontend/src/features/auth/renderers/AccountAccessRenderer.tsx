@@ -17,7 +17,7 @@ import { GroupCreationWizard } from "./GroupCreationWizard";
 import { AccessPolicies } from "./AccessPolicies";
 import { PolicyAuthoringWizard } from "./PolicyAuthoringWizard";
 import { policyCreationMethod, type PolicyCreationMethod } from "./PolicyCreationMethods";
-import { AccessSimulator } from "./AccessSimulator";
+import { PolicyCoveragePreview } from "./PolicyCoveragePreview";
 import { AccessRoles } from "./AccessRoles";
 import { RoleCreationWizard } from "./RoleCreationWizard";
 import { AccessProviders, AccessFederations } from "./AccessIdentity";
@@ -129,7 +129,7 @@ function AccountAccessInitialLoading({ entityId, view }: { entityId?: string; vi
     groups: w("groups"),
     policies: w("policies"),
     roles: w("roles"),
-    simulator: w("simulateAccess"),
+    "policy-coverage": w("policyCoveragePreview"),
     providers: w("providers"),
     federations: w("federations"),
     keys: w("keys"),
@@ -172,7 +172,7 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
   const clearFeedback = access.clearFeedback;
   const workflow = view === "create-user" || view === "create-policy" || view === "policy-language" || view === "create-group" || view === "create-role";
   useEffect(() => { clearFeedback(); }, [view, clearFeedback]);
-  const previewOnly = ["create-policy", "policy-language", "simulator", "roles", "create-role", "providers", "user-sso", "federations", "keys"].includes(view);
+  const previewOnly = ["create-policy", "policy-language", "policy-coverage", "roles", "create-role", "providers", "user-sso", "federations", "keys"].includes(view);
   const denied = scene && (
     (view === "users" && !scene.canListUsers) ||
     (view === "create-user" && !scene.canCreateUsers) ||
@@ -221,7 +221,7 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
       view === "create-role" ? <RoleCreationWizard workspace={workspace} scene={scene} onBack={() => onNavigate("roles")} onDone={(id) => onNavigate("roles", id)} /> :
       view === "policies" ? <AccessPolicies key={entityId ?? "policies"} entityId={entityId} workspace={workspace} scene={scene} onCreate={(method) => onNavigate("create-policy", undefined, method)} onOpen={onNavigate} /> :
       view === "roles" ? <AccessRoles key={entityId ?? "roles"} workspace={workspace} scene={scene} entityId={entityId} onCreate={() => onNavigate("create-role")} onOpen={onNavigate} /> :
-      view === "simulator" ? <AccessSimulator key={entityId ?? "simulator"} workspace={workspace} scene={scene} entityId={entityId} onOpen={onNavigate} /> :
+      view === "policy-coverage" ? <PolicyCoveragePreview key={entityId ?? "policy-coverage"} workspace={workspace} scene={scene} entityId={entityId} onOpen={onNavigate} /> :
       view === "providers" ? <Tabs.Root defaultValue="providers"><Tabs.List aria-label={w("providers")}><Tabs.Trigger value="providers">{w("provider")}</Tabs.Trigger><Tabs.Trigger value="identities">{w("federatedIdentities")}</Tabs.Trigger></Tabs.List><Tabs.Content value="providers"><AccessProviders workspace={workspace} /></Tabs.Content><Tabs.Content value="identities"><AccessFederations workspace={workspace} /></Tabs.Content></Tabs.Root> :
       view === "federations" ? <AccessEnterpriseAccounts workspace={workspace} onUsers={() => onNavigate("users")} /> :
       view === "keys" ? <AccessCredentials workspace={workspace} scene={scene} /> :

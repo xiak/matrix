@@ -1510,6 +1510,11 @@ describe("CAM-style access workspace", () => {
     const denyRow = within(policies).getByRole("button", { name: "ProtectProductionDeployments" }).closest("tr")!;
     expect(within(denyRow).getByText("含显式拒绝").getAttribute("data-status")).toBe("danger");
     expect(within(policies).getAllByText("仅允许声明")).toHaveLength(3);
+    expect(screen.queryByText("模拟访问")).toBeNull();
+    await user.click(within(screen.getByRole("tabpanel", { name: "权限策略" })).getByRole("button", { name: "查看策略覆盖" }));
+    expect(await screen.findByRole("button", { name: "生成本地检查表" })).toBeTruthy();
+    expect(screen.getByRole("combobox", { name: "用户" }).textContent).toContain("qiao");
+    expect(screen.getByLabelText("Entity destination").textContent).toBe("principal-qiao");
   });
   it.each([
     { tab: "权限策略", trigger: "关联策略", title: "管理直接关联策略", option: "MatrixReadOnlyAccess", change: "新增关联", kind: "policies" },
@@ -1655,7 +1660,7 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: "返回列表" }));
     expect(screen.getByRole("button", { name: "查看全部记录" })).toBeTruthy();
   });
-  it.each(["groups", "policies", "simulator", "roles", "providers", "user-sso", "federations", "keys", "settings"] as const)("renders %s with consistent localized controls", async (view) => {
+  it.each(["groups", "policies", "policy-coverage", "roles", "providers", "user-sso", "federations", "keys", "settings"] as const)("renders %s with consistent localized controls", async (view) => {
     const { user } = await open(view);
     expect(screen.getByRole("region", { name: "账号与权限" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Language" }));
@@ -2069,7 +2074,7 @@ describe("CAM-style access workspace", () => {
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
   });
   it("reports an unknown local worksheet identity without evaluating another user", async () => {
-    const { user } = await open("simulator", { entityId: "missing-user" });
+    const { user } = await open("policy-coverage", { entityId: "missing-user" });
     await user.click(await screen.findByRole("button", { name: "生成本地检查表" }));
     expect(screen.queryByText("策略允许")).toBeNull();
     expect(screen.getByText("本地输入需要修正")).toBeTruthy();
@@ -2195,7 +2200,7 @@ describe("CAM-style access workspace", () => {
     expect(JSON.parse(json().value).statement).toEqual([{ ...initial.statement[0], action: ["database:read"], resource: ["*"] }, initial.statement[1]]);
   });
   it("inventories local policy references, clears stale worksheets and remains preview-only", async () => {
-    const { user, repository } = await open("simulator");
+    const { user, repository } = await open("policy-coverage");
     expect(screen.getByText(/本页不探测浏览器地址/)).toBeTruthy();
     expect(screen.getByText(/mock-profile-v1/)).toBeTruthy();
     await user.click(await screen.findByRole("button", { name: "生成本地检查表" }));
@@ -2226,7 +2231,7 @@ describe("CAM-style access workspace", () => {
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
   });
   it("prefills local configuration scenarios without mutation or automatic conclusions and links reference sources", async () => {
-    const { user, repository, extension } = await open("simulator", { users: reviewUsers });
+    const { user, repository, extension } = await open("policy-coverage", { users: reviewUsers });
     const before = await extension.read("preview");
     await select(user, "查看本地配置场景", "直接关联与组继承");
     const example = screen.getByRole("combobox", { name: "查看本地配置场景" });
@@ -2248,7 +2253,7 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByLabelText("Entity destination").textContent).toBe("group-operators");
   });
   it("retains a compatible action across resources and clears it across services", async () => {
-    const { user } = await open("simulator");
+    const { user } = await open("policy-coverage");
     await user.click(screen.getByRole("button", { name: "生成本地检查表" }));
     await select(user, "测试资源", "archive/payment · cn-shanghai-a");
     expect(screen.getByRole("combobox", { name: "请求操作" }).textContent).toContain("logs:search");
@@ -2266,7 +2271,7 @@ describe("CAM-style access workspace", () => {
     expect(screen.queryByRole("heading", { name: "本地策略配置检查表" })).toBeNull();
   });
   it("lists Deny and boundary declarations without evaluating or prioritizing them", async () => {
-    const { user } = await open("simulator", { users: reviewUsers });
+    const { user } = await open("policy-coverage", { users: reviewUsers });
     await select(user, "查看本地配置场景", "包含 Deny 声明");
     await user.click(screen.getByRole("button", { name: "生成本地检查表" }));
     expect(screen.queryByText("显式拒绝", { exact: true })).toBeNull();
@@ -2285,7 +2290,7 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByLabelText("Entity destination").textContent).toBe("policy-delivery-boundary");
   });
   it("keeps disabled and unreferenced user fixtures separate from runtime authorization", async () => {
-    const { user } = await open("simulator", { users: reviewUsers.map((entry) => entry.user.id === "principal-lin" ? { ...entry, user: { ...entry.user, status: "DISABLED" } } : entry) });
+    const { user } = await open("policy-coverage", { users: reviewUsers.map((entry) => entry.user.id === "principal-lin" ? { ...entry, user: { ...entry.user, status: "DISABLED" } } : entry) });
     expect(screen.getByText(/本地用户 fixture 标记为停用/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "生成本地检查表" }));
     expect(screen.queryByText("策略允许", { exact: true })).toBeNull();
@@ -2302,7 +2307,7 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByText(/访问方式决定如何登录或调用 API，不代表资源权限/)).toBeTruthy();
   });
   it("shows condition fields without letting source input produce an authorization result", async () => {
-    const { user } = await open("simulator", { seed: async (extension) => {
+    const { user } = await open("policy-coverage", { seed: async (extension) => {
       await extension.execute("preview", { kind: "save-policy", id: "policy-prod-logs", name: "ProductionLogReader", description: "", document: { version: "1", statement: [{ effect: "deny", action: ["logs:search"], resource: ["*"], condition: { sourceIp: ["192.0.2.0/24"] } }] } });
     } });
     await user.clear(screen.getByLabelText("来源 IP"));
@@ -3385,14 +3390,14 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: "保存" }));
     expect((await extension.read("preview")).settings).toMatchObject({ userSsoEnabled: false, userSsoConfiguration: state.settings.userSsoConfiguration });
   });
-  it.each(["groups", "simulator"] as const)("never loads the %s preview graph after the directory denies management", async (view) => {
+  it.each(["groups", "policy-coverage"] as const)("never loads the %s preview graph after the directory denies management", async (view) => {
     const { repository } = await open(view, { reader: true });
     await screen.findByText("没有此页面的管理权限");
     expect(repository.workspace?.read).not.toHaveBeenCalled();
     expect(repository.listUsers).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: "新建用户组" })).toBeNull();
   });
-  it.each(["keys", "create-policy", "policy-language", "simulator"] as const)("shows an honest unavailable state for %s on the live adapter", async (view) => {
+  it.each(["keys", "create-policy", "policy-language", "policy-coverage"] as const)("shows an honest unavailable state for %s on the live adapter", async (view) => {
     const { repository } = await open(view, { live: true });
     await screen.findByText("此能力尚未接入后端");
     expect(repository.execute).not.toHaveBeenCalled();

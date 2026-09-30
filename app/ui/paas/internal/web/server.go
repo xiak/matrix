@@ -128,7 +128,7 @@ func validStaticQuery(request *http.Request, assetName string) bool {
 			// These queries locate a client-owned workspace. They never select
 			// an authority account or change which static content is served.
 			switch route {
-			case "console/access/users", "console/access/groups", "console/access/policies", "console/access/roles", "console/access/simulator":
+			case "console/access/users", "console/access/groups", "console/access/policies", "console/access/roles", "console/access/policy-coverage":
 			default:
 				return false
 			}

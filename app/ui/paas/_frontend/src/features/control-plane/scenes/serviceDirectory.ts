@@ -56,7 +56,7 @@ export const serviceNavigation = {
     { id: "groups", section: "access", view: "groups", icon: "users", group: "identity" },
     { id: "federations", section: "access", view: "federations", icon: "tenants", group: "identity" },
     { id: "policies", section: "access", view: "policies", icon: "policy", group: "authorization" },
-    { id: "simulator", section: "access", view: "simulator", icon: "policy", group: "authorization" },
+    { id: "policy-coverage", section: "access", view: "policy-coverage", icon: "policy", group: "authorization" },
     { id: "roles", section: "access", view: "roles", icon: "access", group: "authorization" },
     { id: "providers", section: "access", view: "providers", icon: "sso", group: "identityProviders" },
     { id: "user-sso", section: "access", view: "user-sso", icon: "sso", group: "identityProviders" },
