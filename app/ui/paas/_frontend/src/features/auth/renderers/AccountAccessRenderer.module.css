@@ -303,6 +303,16 @@
 .catalogDetailHeading { display: flex; flex-wrap: wrap; align-items: center; gap: var(--xiak-spacing-default); }
 .catalogDetailHeading h2 { min-width: 0; margin: 0; color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-title); overflow-wrap: anywhere; }
 .catalogDetailHeading h2:focus { outline: none; }
+.catalogResponsibility { display: grid; gap: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); padding: var(--xiak-spacing-default); background: var(--xiak-color-bg-panel-hover); }
+.catalogResponsibilityHeading { display: grid; gap: var(--xiak-spacing-tight); }
+.catalogResponsibilityHeading h3, .catalogResponsibilityHeading p, .catalogResponsibilityOwner p { margin: 0; }
+.catalogResponsibilityHeading h3 { color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-body); font-weight: var(--xiak-font-weight-semibold); }
+.catalogResponsibilityHeading p, .catalogResponsibilityOwner p { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: 1.6; }
+.catalogResponsibilityFlow { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: stretch; gap: var(--xiak-spacing-default); }
+.catalogResponsibilityOwner { display: flex; min-width: 0; flex-direction: column; align-items: flex-start; gap: var(--xiak-spacing-tight); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-small); padding: var(--xiak-spacing-default); background: var(--xiak-color-bg-panel); }
+.catalogResponsibilityOwner strong { color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-body); }
+.catalogResponsibilityOwner button { margin-top: auto; }
+.catalogResponsibilityArrow { align-self: center; width: 1rem; height: 1rem; color: var(--xiak-color-text-subtle); }
 .catalogFacts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--xiak-spacing-default); margin: 0; padding-block: var(--xiak-spacing-default); border-block: var(--xiak-border-subtle); }
 .catalogFacts > div { display: grid; min-width: 0; gap: var(--xiak-spacing-narrow); }
 .catalogFacts dt { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
@@ -317,5 +327,7 @@
 @media (max-width: 600px) {
   .catalogSection { padding-inline: var(--xiak-spacing-default); }
   .catalogFacts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .catalogResponsibilityFlow { grid-template-columns: 1fr; }
+  .catalogResponsibilityArrow { justify-self: center; transform: rotate(90deg); }
   .policyStatementTable { min-width: 0; }
 }

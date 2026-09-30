@@ -30,6 +30,7 @@
 .compactFacts > div { display: grid; min-width: 0; grid-template-columns: minmax(120px, .65fr) minmax(0, 1.35fr); align-items: start; gap: var(--xiak-spacing-default); }
 .compactFacts dd { min-width: 0; margin: 0; color: var(--xiak-color-text-strong); font-weight: var(--xiak-font-weight-semibold); overflow-wrap: anywhere; }
 .compactFacts code { white-space: normal; overflow-wrap: anywhere; }
+.compactFacts dd small { display: block; margin-top: var(--xiak-spacing-micro); color: var(--xiak-color-text-muted); font-weight: var(--xiak-font-weight-regular); }
 .facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--xiak-spacing-comfortable); margin: 0; padding-block: var(--xiak-spacing-default); border-block: var(--xiak-border-subtle); }
 .facts > div { display: grid; min-width: 0; gap: var(--xiak-spacing-narrow); }
 .facts dd { min-width: 0; margin: 0; color: var(--xiak-color-text-strong); font-weight: var(--xiak-font-weight-semibold); overflow-wrap: anywhere; }
@@ -96,6 +97,12 @@
 .bindingSection { display: grid; min-width: 0; gap: var(--xiak-spacing-default); }
 .bindingSection td { min-width: 0; }
 .bindingSection td code, .bindingSection time { white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
+.sessionDirectoryTable { table-layout: fixed; }
+.sessionDirectoryTable th:first-child { width: 25%; }
+.sessionDirectoryTable th:nth-child(2) { width: 23%; }
+.sessionDirectoryTable th:nth-child(3) { width: 30%; }
+.sessionDirectoryTable th:last-child { width: 22%; }
+.directoryIdentifier { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 @media (max-width: 600px) {
   .summary { align-items: flex-start; flex-direction: column; }
@@ -113,6 +120,7 @@
   .reviewActions { align-items: stretch; flex-direction: column-reverse; }
   .reviewActions > div, .reviewActions > button { width: 100%; }
   .reviewActions > div > button { flex: 1; }
+  .directoryIdentifier { overflow: visible; text-overflow: clip; white-space: normal; overflow-wrap: anywhere; }
 }
 
 @container service-authorization-responsibility (max-width: 680px) {

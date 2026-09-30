@@ -1941,7 +1941,21 @@
     "loading": "Loading the permission catalog…",
     "retry": "Retry",
     "back": "Back to permission catalog",
-    "previewPublishing": "Preview product onboarding review",
+    "previewPublishing": "View internal onboarding (MOCK)",
+    "responsibility": {
+      "title": "Catalog consumption and product onboarding are separate responsibilities",
+      "hint": "Tenants read released capabilities when authoring policies; product declarations, validation, and registration stay in a controlled internal workflow.",
+      "tenant": {
+        "badge": "Tenant view",
+        "title": "Tenant administrator · consume the catalog",
+        "hint": "Inspect actions, resources, and conditions to author and assign policies. Tenants cannot register products, replace revisions, or publish capabilities."
+      },
+      "internal": {
+        "badge": "Internal workflow",
+        "title": "Product engineering + IAM platform · trusted onboarding",
+        "hint": "The product team declares and enforces authorization while IAM validates namespaces, contracts, and release boundaries. This entry only previews the collaboration UX."
+      }
+    },
     "notConnected": "Permission catalog is not connected",
     "notConnectedHint": "This console has no available live catalog client and will not fall back to MOCK data.",
     "errors": {
@@ -2193,10 +2207,10 @@
           "template": { "title": "Platform template is pinned", "hint": "Account consent references an exact template version, content digest, and permission ceiling. A template revision never expands existing consent automatically.", "state": "Reference matches" },
           "account": { "title": "Account relation is usable", "hint": "The service-linked role belongs only to this account, registered service subject, and single purpose. It is not an ordinary tenant-editable role.", "state": "ACTIVE" },
           "binding": { "title": "Current resource is bound", "hint": "The current workload kind and exact resource ID have an independent ACTIVE binding. No other resource gains access from it.", "state": "ACTIVE" },
-          "runtime": { "title": "Runtime use is not observed", "hint": "No tenant-facing service-session directory or business-request result exists. Valid configuration proves neither session issuance nor successful access.", "state": "No verifiable record" }
+          "runtime": { "title": "Runtime use is not observed", "hint": "Only an isolated MOCK service-session directory design exists; there is no trustworthy LIVE session or business-request result. Valid configuration proves neither session issuance nor successful access.", "state": "No trustworthy record" }
         },
         "conclusion": "The only current conclusion is that the configuration relation is valid. A real request must still authenticate the trusted service subject, issue a short-lived session, pass product PEP authorization, and complete business execution; each can fail independently.",
-        "revocationBoundary": "Once the exact binding becomes REVOKED, no new session may be issued for that resource. Until the backend fixes existing-session invalidation and query contracts, this page promises no immediate termination and exposes no per-session revoke action."
+        "revocationBoundary": "Once the exact binding becomes REVOKED, no new session may be issued for that resource. The per-session revoke flow below is a MOCK review with submission disabled; until query and revoke contracts are fixed, it promises no immediate termination and fabricates no successful revoke."
       },
       "template": { "eyebrow": "Platform publication boundary", "title": "Immutable ServiceRoleTemplate" },
       "relation": { "eyebrow": "Account relation boundary", "title": "ServiceLinkedRoleAccess" },
@@ -2214,10 +2228,41 @@
       "session": {
         "eyebrow": "Temporary-credential boundary",
         "title": "ServiceRoleSession",
-        "notIssued": "Not issued",
+        "notIssued": "Directory example · MOCK",
         "identityType": "Short-lived identity type",
         "source": "Identity source",
-        "boundary": "An ACTIVE relation and an ACTIVE resource binding do not mean temporary credentials have been issued. A future service must assume the role with a SERVICE source under the exact binding, business purpose, and session ceiling. This MOCK does not call AssumeRole or present an active session."
+        "boundary": "An ACTIVE relation and an ACTIVE resource binding do not mean temporary credentials have been issued. A future service must assume the role with a SERVICE source under the exact binding, business purpose, and session ceiling. This MOCK does not call AssumeRole, and the records below are not backend activity.",
+        "directoryTitle": "Service-session directory",
+        "directoryHint": "Account security administrators inspect non-secret session metadata by source service and target role, then review a single-session revoke from the detail view.",
+        "directoryBoundary": "Isolated MOCK · These two records only validate information hierarchy and revoke review; they do not come from IAM. The page exposes no short-lived credential, internal proof or decision, private endpoint, or installation bootstrap summary.",
+        "tableLabel": "Service-session directory example",
+        "footer": "The example directory does not claim this account has an active service session. A future LIVE directory follows only authoritative backend state and opaque pagination.",
+        "detailEyebrow": "Non-secret session observation · MOCK",
+        "detailTitle": "Service-session detail",
+        "detailBoundary": "Unrevoked only means that no revocation fact was observed at this illustrative instant. It does not mean the session is currently valid, a request was allowed, or a business operation succeeded.",
+        "backToDirectory": "Back to session directory",
+        "backToDetail": "Back to session detail",
+        "reviewRevoke": "Review revoke",
+        "revokeEyebrow": "Single-session revoke review · MOCK",
+        "revokeTitle": "Revoke service session",
+        "revokeBoundary": "This review covers the effect on one exact session. IAM has no fixed northbound service-session revoke contract, so the page sends no request, creates no request ID, and presents no successful revoke.",
+        "revokeUnavailable": "Revoke session (not connected)",
+        "revokeEffectTitle": "Expected effect boundary",
+        "revokeEffectHint": "IAM must confirm any future effect authoritatively. This page performs none of the changes below.",
+        "revokeEffectSession": "Terminate only this exact service session; do not delete the service-linked role or resource binding.",
+        "revokeEffectNoGrant": "Revocation grants, expands, or rewrites no policy or permission ceiling.",
+        "revokeEffectNoProof": "A refreshed list, expiry time, or state change cannot prove that this unsent revoke succeeded.",
+        "expiredHint": "This example is beyond its displayed expiry and offers no revoke review. The local clock is not authoritative backend state.",
+        "states": { "unrevoked": "No revoke observed · MOCK", "expired": "Expired example" },
+        "fields": {
+          "id": "Session ID",
+          "sourceService": "Source service",
+          "role": "Target role",
+          "issuedAt": "Issued",
+          "expiresAt": "Expires",
+          "lifecycle": "Expiry and state",
+          "state": "Observed state"
+        }
       },
       "runtime": {
         "title": "Execution boundaries for one service request",
@@ -2228,7 +2273,7 @@
           "enforce": { "title": "Re-authorize at the product PEP", "hint": "The product API must still verify the current Account, Action, exact resource, purpose, and session lifetime. A RoleSession is not a permit by itself.", "state": "Not evaluated" },
           "execute": { "title": "Execute and return the business result", "hint": "An IAM allow or authorization receipt does not prove a database read or another business transaction succeeded. The product returns and audits that result independently.", "state": "Not executed" }
         },
-        "boundary": "MOCK · This explains the future runtime information flow; no actionable ServiceRoleSession exists. The page exposes no session ID, temporary credential, internal endpoint, or revoke action, and it never presents configuration state as permission for a request."
+        "boundary": "MOCK · This only explains the future runtime information flow. The separate directory below shows non-secret session metadata and a revoke review with submission disabled. It exposes no temporary credential, internal endpoint, proof, or decision and never presents configuration state as permission for a request."
       },
       "permissionTitle": "Bound permission-ceiling snapshot",
       "permissionHint": "Role assumption still cannot exceed this exact action and resource scope",

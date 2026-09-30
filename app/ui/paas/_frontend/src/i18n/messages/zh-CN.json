@@ -1941,7 +1941,21 @@
     "loading": "正在读取权限能力目录…",
     "retry": "重新读取",
     "back": "返回能力目录",
-    "previewPublishing": "体验产品接入审阅",
+    "previewPublishing": "查看内部接入流程（MOCK）",
+    "responsibility": {
+      "title": "目录消费与产品接入是两个责任域",
+      "hint": "租户侧只读取已发布能力来编写策略；产品能力的声明、校验和登记由内部受控流程完成。",
+      "tenant": {
+        "badge": "租户使用视图",
+        "title": "租户管理员 · 消费目录",
+        "hint": "查询 Action、资源和条件，编写并分配策略；不能注册产品、覆盖修订或发布能力。"
+      },
+      "internal": {
+        "badge": "内部工程流程",
+        "title": "产品研发 + IAM 平台 · 受信接入",
+        "hint": "产品团队声明并落实鉴权，IAM 平台校验命名空间、契约和发布边界。该入口仅预览协作体验。"
+      }
+    },
     "notConnected": "权限能力目录未连接",
     "notConnectedHint": "当前控制台没有可用的真实目录客户端，也不会回退到 MOCK 数据。",
     "errors": {
@@ -2193,10 +2207,10 @@
           "template": { "title": "平台模板已固定", "hint": "账号同意引用精确模板版本、内容摘要和权限上限；模板升版不会自动扩大既有同意。", "state": "引用一致" },
           "account": { "title": "账号关系可用", "hint": "服务关联角色只归属于当前账号、登记服务主体和单一用途，不能作为普通租户角色编辑。", "state": "ACTIVE" },
           "binding": { "title": "当前资源已绑定", "hint": "当前工作负载类型和精确资源 ID 有独立 ACTIVE 绑定；其他资源不会因此获得访问权。", "state": "ACTIVE" },
-          "runtime": { "title": "运行时使用未观测", "hint": "当前没有面向租户的服务会话目录或业务请求结果；配置有效不能证明已签发会话或访问成功。", "state": "无可验证记录" }
+          "runtime": { "title": "运行时使用未观测", "hint": "当前只有隔离 MOCK 的服务会话目录设计，没有可信 LIVE 会话或业务请求结果；配置有效不能证明已签发会话或访问成功。", "state": "无可信记录" }
         },
         "conclusion": "当前只能得出“配置关系有效”。一次实际请求仍须完成受信服务主体认证、短期会话签发、产品 PEP 鉴权和业务执行，任一步都可能独立失败。",
-        "revocationBoundary": "精确绑定变为 REVOKED 后不得再为该资源签发新会话；在后端固定既有会话失效与查询契约前，本页不会承诺实时下线，也不提供逐会话撤销。"
+        "revocationBoundary": "精确绑定变为 REVOKED 后不得再为该资源签发新会话；下方逐会话撤销仅为禁用提交的 MOCK 审阅，在后端固定查询与撤销契约前不会承诺实时下线或伪造撤销成功。"
       },
       "template": { "eyebrow": "平台发布边界", "title": "不可变 ServiceRoleTemplate" },
       "relation": { "eyebrow": "账号关系边界", "title": "ServiceLinkedRoleAccess" },
@@ -2214,10 +2228,41 @@
       "session": {
         "eyebrow": "临时凭据边界",
         "title": "ServiceRoleSession",
-        "notIssued": "未发行",
+        "notIssued": "目录样例 · MOCK",
         "identityType": "短期身份类型",
         "source": "身份来源",
-        "boundary": "关系 ACTIVE 与资源绑定 ACTIVE 都不代表已经发行临时凭据。未来服务必须以 SERVICE 来源承担角色，并受精确 binding、业务用途和会话上限共同约束；当前 MOCK 不调用 AssumeRole，也不展示活动会话。"
+        "boundary": "关系 ACTIVE 与资源绑定 ACTIVE 都不代表已经发行临时凭据。未来服务必须以 SERVICE 来源承担角色，并受精确 binding、业务用途和会话上限共同约束；当前 MOCK 不调用 AssumeRole，下面的记录也不是后端活动会话。",
+        "directoryTitle": "服务会话目录",
+        "directoryHint": "账号安全管理员按来源服务和目标角色查看非秘密会话元数据，再从详情审阅单条撤销。",
+        "directoryBoundary": "隔离 MOCK · 以下两条记录只用于验证信息层级和撤销审阅，不来自 IAM。页面不会展示短期凭据、内部 proof／decision、私有端点或 installation bootstrap 摘要。",
+        "tableLabel": "服务会话目录样例",
+        "footer": "样例目录不声称当前账号存在活动服务会话；LIVE 目录未来只按后端权威状态和不透明分页继续。",
+        "detailEyebrow": "非秘密会话观察 · MOCK",
+        "detailTitle": "服务会话详情",
+        "detailBoundary": "未撤销只表示这个样例观察时点没有撤销事实，不等于会话当前有效、请求已获允许或业务操作成功。",
+        "backToDirectory": "返回会话目录",
+        "backToDetail": "返回会话详情",
+        "reviewRevoke": "审阅撤销",
+        "revokeEyebrow": "单会话撤销审阅 · MOCK",
+        "revokeTitle": "撤销服务会话",
+        "revokeBoundary": "只审阅精确会话的影响。IAM 尚未固定服务会话北向撤销契约，因此不发送请求、不生成 requestId，也不会展示撤销成功。",
+        "revokeUnavailable": "撤销会话（未接入）",
+        "revokeEffectTitle": "预期影响边界",
+        "revokeEffectHint": "未来仍需 IAM 以权威结果确认；本页不执行以下变化。",
+        "revokeEffectSession": "仅终止这一个精确服务会话，不删除服务关联角色或资源绑定。",
+        "revokeEffectNoGrant": "撤销不会授予、扩大或重写任何策略和权限上限。",
+        "revokeEffectNoProof": "列表刷新、过期时间或状态变化都不能证明本次未发送的撤销已成功。",
+        "expiredHint": "该样例已超过展示的到期时间，不提供撤销审阅；本地时钟也不替代服务端权威状态。",
+        "states": { "unrevoked": "未观测到撤销 · MOCK", "expired": "已到期样例" },
+        "fields": {
+          "id": "会话 ID",
+          "sourceService": "来源服务",
+          "role": "目标角色",
+          "issuedAt": "签发时间",
+          "expiresAt": "到期时间",
+          "lifecycle": "到期与状态",
+          "state": "观察状态"
+        }
       },
       "runtime": {
         "title": "一次服务请求的执行边界",
@@ -2228,7 +2273,7 @@
           "enforce": { "title": "产品 PEP 重新鉴权", "hint": "产品接口仍须校验当前 Account、Action、精确资源、purpose 与会话有效期；RoleSession 不是通行证。", "state": "未评估" },
           "execute": { "title": "执行并返回业务结果", "hint": "IAM 允许或授权操作回执不等于数据库读取等业务事务成功；最终结果由产品独立返回和审计。", "state": "未执行" }
         },
-        "boundary": "MOCK · 这里只解释未来运行时信息流，不存在可操作的 ServiceRoleSession。页面不展示会话 ID、临时凭据、内部端点或撤销按钮，也不把任何配置状态写成一次请求的许可。"
+        "boundary": "MOCK · 这里只解释未来运行时信息流。下方目录另行展示非秘密会话元数据和禁用提交的撤销审阅；不展示临时凭据、内部端点或 proof／decision，也不把任何配置状态写成一次请求的许可。"
       },
       "permissionTitle": "绑定的权限上限快照",
       "permissionHint": "服务承担角色后仍不能超过这一精确动作和资源范围",

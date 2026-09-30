@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, ArrowRight } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { Alert, Badge, Button, EmptyState, Table, TablePagination, TableSkeleton, TableToolbar } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
@@ -112,7 +112,6 @@ function AuthorizationProfileCatalog({ client }: { client: AuthorizationProfileC
       <Button variant="ghost" size="small" onClick={back}><ArrowLeft aria-hidden="true" />{t("back")}</Button>
       <h2 ref={selectedHeading} tabIndex={-1}>{selected.profile.product}</h2>
       {client.preview ? <Badge status="warning">{t("mock")}</Badge> : null}
-      {client.preview ? <Button ref={publishingTrigger} variant="secondary" size="small" onClick={() => setPublishingPreview(true)}>{t("previewPublishing")}</Button> : null}
     </div>
     <p className={styles.note}>{t("detailHint")}</p>
     <p className={styles.note}>{t("admissionHint")}</p>
@@ -123,6 +122,26 @@ function AuthorizationProfileCatalog({ client }: { client: AuthorizationProfileC
       <div className={styles.catalogDigest}><dt>{t("digest")}</dt><dd><code>{selected.contentDigest}</code></dd></div>
     </dl>
     {selected.profile.actions.some((action) => action.scope !== "TENANT") ? <Alert status="warning">{t("platformScopeHint")}</Alert> : null}
+    {client.preview ? <section aria-labelledby="authorization-profile-responsibility-title" className={styles.catalogResponsibility}>
+      <div className={styles.catalogResponsibilityHeading}>
+        <h3 id="authorization-profile-responsibility-title">{t("responsibility.title")}</h3>
+        <p>{t("responsibility.hint")}</p>
+      </div>
+      <div className={styles.catalogResponsibilityFlow}>
+        <div className={styles.catalogResponsibilityOwner}>
+          <Badge status="info">{t("responsibility.tenant.badge")}</Badge>
+          <strong>{t("responsibility.tenant.title")}</strong>
+          <p>{t("responsibility.tenant.hint")}</p>
+        </div>
+        <ArrowRight aria-hidden="true" className={styles.catalogResponsibilityArrow} />
+        <div className={styles.catalogResponsibilityOwner}>
+          <Badge status="warning">{t("responsibility.internal.badge")}</Badge>
+          <strong>{t("responsibility.internal.title")}</strong>
+          <p>{t("responsibility.internal.hint")}</p>
+          <Button ref={publishingTrigger} variant="secondary" size="small" onClick={() => setPublishingPreview(true)}>{t("previewPublishing")}</Button>
+        </div>
+      </div>
+    </section> : null}
     <TableToolbar labels={toolbarLabels}
       search={{ label: t("searchActions"), placeholder: t("searchActionsPlaceholder"), value: actionQuery, onChange: (value) => { setActionQuery(value); setPage(1); } }}
       status={t("actionCount", { count: filteredActions.length })} />

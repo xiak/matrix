@@ -589,7 +589,10 @@ describe("policy creation entry and directory contract", () => {
     await screen.findByRole("table", { name: "策略" });
     await user.click(screen.getByRole("tab", { name: "权限能力目录" }));
     await user.click(await screen.findByRole("button", { name: "paas" }));
-    const trigger = screen.getByRole("button", { name: "体验产品接入审阅" });
+    expect(screen.getByRole("heading", { level: 3, name: "目录消费与产品接入是两个责任域" })).toBeTruthy();
+    expect(screen.getByText("租户管理员 · 消费目录")).toBeTruthy();
+    expect(screen.getByText("产品研发 + IAM 平台 · 受信接入")).toBeTruthy();
+    const trigger = screen.getByRole("button", { name: "查看内部接入流程（MOCK）" });
     await user.click(trigger);
 
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -627,7 +630,7 @@ describe("policy creation entry and directory contract", () => {
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole("button", { name: "结束体验" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "体验产品接入审阅" })).toBe(document.activeElement));
+    await waitFor(() => expect(screen.getByRole("button", { name: "查看内部接入流程（MOCK）" })).toBe(document.activeElement));
   });
   it("pages action evidence instead of mounting an unbounded onboarding review", async () => {
     const actions = Array.from({ length: 1202 }, (_, index) => ({
@@ -639,7 +642,7 @@ describe("policy creation entry and directory contract", () => {
     }) } });
     await user.click(screen.getByRole("tab", { name: "权限能力目录" }));
     await user.click(await screen.findByRole("button", { name: "paas" }));
-    await user.click(screen.getByRole("button", { name: "体验产品接入审阅" }));
+    await user.click(screen.getByRole("button", { name: "查看内部接入流程（MOCK）" }));
     await user.click(screen.getByRole("button", { name: "下一步" }));
     const review = screen.getByRole("table", { name: "逐项核对权限声明" });
     expect(within(review).getAllByRole("row")).toHaveLength(11);

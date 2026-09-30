@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
-import { Boxes, KeyRound, ShieldCheck, Unlink } from "lucide-react";
+import { ArrowLeft, Boxes, KeyRound, ShieldCheck, Unlink } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { Alert, Badge, Button, Card, ContentPage, Select, Steps, Table, TablePagination, Tabs } from "@ui/xiak";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
@@ -48,6 +48,29 @@ const previewAccountAccess = {
   createdAt: "2026-09-29T08:30:00Z",
   updatedAt: "2026-09-29T08:35:00Z",
 } as const;
+
+const previewServiceSessions = [
+  {
+    id: "preview.service-role-session.current",
+    sourceService: "preview.paas.service",
+    sourceInstallation: "preview.service-installation.paas",
+    roleId: previewAccountAccess.roleId,
+    roleName: previewTemplate.roleName,
+    observation: "unrevoked",
+    issuedAt: "2026-10-01T01:20:00Z",
+    expiresAt: "2026-10-01T02:20:00Z"
+  },
+  {
+    id: "preview.service-role-session.expired",
+    sourceService: "preview.paas.service",
+    sourceInstallation: "preview.service-installation.paas",
+    roleId: previewAccountAccess.roleId,
+    roleName: previewTemplate.roleName,
+    observation: "expired",
+    issuedAt: "2026-09-30T23:45:00Z",
+    expiresAt: "2026-10-01T00:45:00Z"
+  }
+] as const;
 
 const stageIds = ["identity", "permissions", "consent"] as const;
 const runtimeStageIds = ["authenticate", "issue", "enforce", "execute"] as const;
@@ -182,6 +205,76 @@ function ServiceRoleRuntimeTrace() {
   </section>;
 }
 
+function ServiceRoleSessionDirectoryPreview() {
+  const t = useTranslations("ServiceAuthorizationPreview");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [reviewing, setReviewing] = useState(false);
+  const detailHeading = useRef<HTMLHeadingElement>(null);
+  const reviewHeading = useRef<HTMLHeadingElement>(null);
+  const returnToSession = useRef<string | null>(null);
+  const sessionTriggers = useRef(new Map<string, HTMLButtonElement>());
+  const selected = previewServiceSessions.find((session) => session.id === selectedId) ?? null;
+
+  useLayoutEffect(() => {
+    if (reviewing) reviewHeading.current?.focus({ preventScroll: true });
+    else if (selected) detailHeading.current?.focus({ preventScroll: true });
+    else if (returnToSession.current) {
+      const id = returnToSession.current;
+      returnToSession.current = null;
+      sessionTriggers.current.get(id)?.focus({ preventScroll: true });
+    }
+  }, [reviewing, selected]);
+
+  if (selected) {
+    const back = () => {
+      if (reviewing) {
+        setReviewing(false);
+        return;
+      }
+      returnToSession.current = selected.id;
+      setSelectedId(null);
+    };
+    return <section aria-labelledby="service-role-session-detail-title" className={styles.bindingSection}>
+      <div className={styles.observationHeading}>
+        <div>
+          <Button onClick={back} size="small" variant="ghost"><ArrowLeft aria-hidden="true" />{t(reviewing ? "observation.session.backToDetail" : "observation.session.backToDirectory")}</Button>
+          <span>{t(reviewing ? "observation.session.revokeEyebrow" : "observation.session.detailEyebrow")}</span>
+          <h4 id="service-role-session-detail-title" ref={reviewing ? reviewHeading : detailHeading} tabIndex={-1}>{t(reviewing ? "observation.session.revokeTitle" : "observation.session.detailTitle")}</h4>
+        </div>
+        <div className={styles.stateBadges}><Badge status="warning">MOCK</Badge><Badge status={selected.observation === "expired" ? "neutral" : "info"}>{t(`observation.session.states.${selected.observation}`)}</Badge></div>
+      </div>
+      <Alert status="warning">{t(reviewing ? "observation.session.revokeBoundary" : "observation.session.detailBoundary")}</Alert>
+      <dl className={styles.compactFacts}>
+        <div><dt>{t("observation.session.fields.id")}</dt><dd><code>{selected.id}</code></dd></div>
+        <div><dt>{t("observation.session.fields.sourceService")}</dt><dd><code>{selected.sourceService}</code><small><code>{selected.sourceInstallation}</code></small></dd></div>
+        <div><dt>{t("observation.session.fields.role")}</dt><dd><code>{selected.roleName}</code><small><code>{selected.roleId}</code></small></dd></div>
+        <div><dt>{t("observation.session.fields.issuedAt")}</dt><dd><time dateTime={selected.issuedAt}>{selected.issuedAt}</time></dd></div>
+        <div><dt>{t("observation.session.fields.expiresAt")}</dt><dd><time dateTime={selected.expiresAt}>{selected.expiresAt}</time></dd></div>
+        <div><dt>{t("observation.session.fields.state")}</dt><dd>{t(`observation.session.states.${selected.observation}`)}</dd></div>
+      </dl>
+      {reviewing ? <>
+        <div className={styles.snapshot}><div><strong>{t("observation.session.revokeEffectTitle")}</strong><span>{t("observation.session.revokeEffectHint")}</span></div><ul><li>{t("observation.session.revokeEffectSession")}</li><li>{t("observation.session.revokeEffectNoGrant")}</li><li>{t("observation.session.revokeEffectNoProof")}</li></ul></div>
+        <div className={styles.actions}><Button disabled title={t("observation.session.revokeUnavailable")} variant="danger">{t("observation.session.revokeUnavailable")}</Button></div>
+      </> : selected.observation === "unrevoked" ? <div className={styles.actions}><Button onClick={() => setReviewing(true)} variant="secondary">{t("observation.session.reviewRevoke")}</Button></div> : <Alert status="info">{t("observation.session.expiredHint")}</Alert>}
+    </section>;
+  }
+
+  return <section aria-labelledby="service-role-session-directory-title" className={styles.bindingSection}>
+    <div className={styles.sectionHeading}><div><h3 id="service-role-session-directory-title">{t("observation.session.directoryTitle")}</h3><p>{t("observation.session.directoryHint")}</p></div><div className={styles.stateBadges}><Badge status="warning">MOCK</Badge><Badge status="neutral">{previewServiceSessions.length}</Badge></div></div>
+    <Alert status="warning">{t("observation.session.directoryBoundary")}</Alert>
+    <Table aria-label={t("observation.session.tableLabel")} className={styles.sessionDirectoryTable} mobileLayout="stack">
+      <thead><tr><th scope="col">{t("observation.session.fields.id")}</th><th scope="col">{t("observation.session.fields.sourceService")}</th><th scope="col">{t("observation.session.fields.role")}</th><th scope="col">{t("observation.session.fields.lifecycle")}</th></tr></thead>
+      <tbody>{previewServiceSessions.map((session) => <tr key={session.id}>
+        <td data-label={t("observation.session.fields.id")}><button className={`${styles.link} ${styles.directoryIdentifier}`} title={session.id} ref={(node) => { if (node) sessionTriggers.current.set(session.id, node); else sessionTriggers.current.delete(session.id); }} onClick={() => { setReviewing(false); setSelectedId(session.id); }}>{session.id}</button></td>
+        <td data-label={t("observation.session.fields.sourceService")}><code>{session.sourceService}</code><small><code>{session.sourceInstallation}</code></small></td>
+        <td data-label={t("observation.session.fields.role")}><strong>{t("template.name")}</strong><small className={styles.directoryIdentifier} title={session.roleName}><code>{session.roleName}</code></small></td>
+        <td data-label={t("observation.session.fields.lifecycle")}><time dateTime={session.expiresAt}>{session.expiresAt}</time><small><Badge status={session.observation === "expired" ? "neutral" : "info"}>{t(`observation.session.states.${session.observation}`)}</Badge></small></td>
+      </tr>)}</tbody>
+    </Table>
+    <Table.Footer note={t("observation.session.footer")} />
+  </section>;
+}
+
 function ServiceAuthorizationValiditySummary() {
   const t = useTranslations("ServiceAuthorizationPreview");
   const titleId = useId();
@@ -296,6 +389,7 @@ function ServiceLinkedRoleObservation({ accountId }: { accountId: string }) {
             <ServiceRoleRuntimeTrace />
           </Card.Body>
         </Card>
+        <ServiceRoleSessionDirectoryPreview />
         <div className={styles.snapshot}><div><strong>{t("observation.permissionTitle")}</strong><span>{t("observation.permissionHint")}</span></div><ul>{previewSnapshot.statements.flatMap((statement) => statement.actions).map((action) => <li key={action}><code>{action}</code></li>)}</ul></div>
       </Tabs.Content>
     </Tabs.Root>
