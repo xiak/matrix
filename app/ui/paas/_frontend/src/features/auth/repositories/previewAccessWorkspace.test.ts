@@ -307,8 +307,8 @@ describe("access workspace preview invariants", () => {
     const analysis = analyzePolicyDocument(text, "org-xiak");
     expect(analysis.document).toEqual(parsePolicyDocument(text, "org-xiak"));
     expect(analysis.diagnostics.some((item) => item.severity === "error")).toBe(false);
-    expect(analysis.diagnostics).toContainEqual({ severity: "warning", code: "permissionManagement", path: "$.statement[0].action" });
-    expect(analysis.diagnostics).toContainEqual({ severity: "warning", code: "unrestrictedWrite", path: "$.statement[0].resource" });
+    expect(analysis.diagnostics).toContainEqual({ severity: "security-warning", code: "permissionManagement", path: "$.statement[0].action" });
+    expect(analysis.diagnostics).toContainEqual({ severity: "security-warning", code: "unrestrictedWrite", path: "$.statement[0].resource" });
     expect(analysis.diagnostics).toContainEqual({ severity: "suggestion", code: "duplicateStatement", path: "$.statement[1]" });
     const read = { effect: "allow" as const, action: ["logs:read", "logs:search"], resource: ["*"], condition: { resourceTag: [{ key: "team", value: "platform" }, { key: "env", value: "production" }] } };
     expect(policyStatementKey(read)).toBe(policyStatementKey({ ...read, action: ["logs:search", "logs:read", "logs:read"], condition: { resourceTag: [...read.condition.resourceTag].reverse() } }));

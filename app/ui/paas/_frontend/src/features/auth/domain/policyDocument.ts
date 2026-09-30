@@ -9,7 +9,7 @@ export type PolicyDocument = {
 };
 export type PolicyDiagnostic =
   | { severity: "error"; code: AccessWorkspaceError["code"]; path: string }
-  | { severity: "warning"; code: "permissionManagement" | "unrestrictedWrite" | "wildcardAction"; path: string }
+  | { severity: "security-warning"; code: "permissionManagement" | "unrestrictedWrite" | "wildcardAction"; path: string }
   | { severity: "suggestion"; code: "duplicateStatement"; path: string };
 
 // Compare structure, not effective permissions. Wildcards must not be expanded:
@@ -54,9 +54,9 @@ export function analyzePolicyDocument(text: string, accountId?: string): { docum
     const path = `$.statement[${index}]`;
     if (statement.effect === "allow") {
       const actions = expandPolicyActions(statement.action);
-      if (actions.some((action) => action.level === "permissions")) diagnostics.push({ severity: "warning", code: "permissionManagement", path: path + ".action" });
-      if (statement.action.some((action) => action.includes("*"))) diagnostics.push({ severity: "warning", code: "wildcardAction", path: path + ".action" });
-      if (statement.resource.includes("*") && !statement.condition?.resourceTag && actions.some((action) => action.level === "write" || action.level === "permissions")) diagnostics.push({ severity: "warning", code: "unrestrictedWrite", path: path + ".resource" });
+      if (actions.some((action) => action.level === "permissions")) diagnostics.push({ severity: "security-warning", code: "permissionManagement", path: path + ".action" });
+      if (statement.action.some((action) => action.includes("*"))) diagnostics.push({ severity: "security-warning", code: "wildcardAction", path: path + ".action" });
+      if (statement.resource.includes("*") && !statement.condition?.resourceTag && actions.some((action) => action.level === "write" || action.level === "permissions")) diagnostics.push({ severity: "security-warning", code: "unrestrictedWrite", path: path + ".resource" });
     }
     const key = policyStatementKey(statement);
     if (seen.has(key)) diagnostics.push({ severity: "suggestion", code: "duplicateStatement", path });

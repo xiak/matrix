@@ -59,6 +59,7 @@
 .subjectList { margin: 0; padding: 0; list-style: none; display: grid; gap: var(--xiak-spacing-tight); }
 .subjectList li { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--xiak-spacing-tight); overflow-wrap: anywhere; }
 .diagnostics { min-width: 0; border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); padding: var(--xiak-spacing-comfortable); display: grid; gap: var(--xiak-spacing-default); background: var(--xiak-color-bg-panel); }
+.severityHint { margin: 0 0 var(--xiak-spacing-default); color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: var(--xiak-line-height-body); }
 .diagnosticList { margin: 0; padding: 0; list-style: none; display: grid; gap: var(--xiak-spacing-default); max-height: 300px; overflow: auto; }
 .diagnosticList li { display: grid; gap: var(--xiak-spacing-tight); padding-bottom: var(--xiak-spacing-default); border-bottom: var(--xiak-border-subtle); }
 .diagnosticList button { justify-self: start; }
@@ -78,6 +79,10 @@
 }
 @container policy-association (max-width: 520px) {
   .policySet { grid-template-columns: minmax(0, 1fr); }
+}
+@container policy-authoring (max-width: 420px) {
+  .diagnosticTabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 var(--xiak-spacing-default); overflow: visible; }
+  .diagnosticTabs > button { justify-content: flex-start; min-width: 0; }
 }
 
 .summaryBrowser { container: policy-summary / inline-size; display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--xiak-spacing-comfortable); min-width: 0; }

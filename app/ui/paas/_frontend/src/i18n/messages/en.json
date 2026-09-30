@@ -3891,9 +3891,16 @@
     "analyzerHint": "Syntax checks and risk guidance, not proof of authorization. Statement indices in JSON paths start at 0.",
     "analysisPending": "Configure actions to check this policy. Drafts are never saved automatically.",
     "analysisPassed": "The document passes syntax checks for the supported subset.",
+    "securityWarning": "Security warnings",
     "error": "Errors",
     "warning": "Warnings",
     "suggestion": "Suggestions",
+    "severityHints": {
+      "securityWarning": "Local rules found patterns that may broaden access. Review them, but do not treat them as a final finding about real resource exposure.",
+      "error": "The document cannot be parsed safely under the current policy contract. Fix errors before review or save.",
+      "warning": "General issues might not change access, but can reduce maintainability or diverge from recommended authoring practices.",
+      "suggestion": "Optional structural improvements do not block saving and do not prove that permissions became narrower."
+    },
     "diagnosticCount": "{count} items",
     "locate": "Inspect {path}",
     "permissionManagement": "Includes permission-management actions. Confirm the need to create identities, grant access or assume roles.",

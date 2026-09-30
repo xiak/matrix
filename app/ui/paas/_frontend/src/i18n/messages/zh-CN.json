@@ -3891,9 +3891,16 @@
     "analyzerHint": "语法检查和权限风险提示，不代表请求必然获准。JSON 路径中的声明下标从 0 开始。",
     "analysisPending": "配置操作后检查策略；当前草稿不会自动保存。",
     "analysisPassed": "当前文档通过支持范围内的语法检查。",
+    "securityWarning": "安全警告",
     "error": "错误",
     "warning": "警告",
     "suggestion": "建议",
+    "severityHints": {
+      "securityWarning": "本地规则发现可能扩大访问范围的写法；需要人工复核，但不是对真实资源暴露的最终判定。",
+      "error": "文档无法按当前策略契约安全解析；修复错误后才能进入审阅或保存。",
+      "warning": "一般问题不一定改变权限，但可能降低策略的可维护性或与推荐写法不一致。",
+      "suggestion": "可选的结构改进，不会作为保存门禁，也不代表权限已经收紧。"
+    },
     "diagnosticCount": "{count} 项",
     "locate": "查看 {path}",
     "permissionManagement": "包含权限管理操作。请确认确实需要创建身份、授权或扮演角色。",
