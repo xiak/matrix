@@ -90,14 +90,15 @@ describe("AccountLiveRoles", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
-  it("opens the live service template directory in the content area instead of a dialog", async () => {
+  it("opens the live service authorization workspace in the content area instead of a dialog", async () => {
     const user = userEvent.setup();
-    const serviceRoleTemplates: ServiceRoleTemplateClient = { load: vi.fn().mockResolvedValue({ status: "ready", directory: { items: [] } }) };
+    const serviceRoleTemplates: ServiceRoleTemplateClient = { sessionRevision: 1, load: vi.fn().mockResolvedValue({ status: "ready", directory: { items: [] } }) };
     render(<LocaleProvider><RolesHarness api={client()} serviceRoleTemplates={serviceRoleTemplates} /></LocaleProvider>);
 
     await screen.findByRole("button", { name: role.name });
-    await user.click(screen.getByRole("button", { name: "服务授权模板" }));
-    expect(await screen.findByRole("heading", { name: "服务授权模板" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "服务授权" }));
+    expect(await screen.findByRole("heading", { name: "服务授权" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "平台模板", selected: true })).toBeTruthy();
     expect(await screen.findByText("暂无已发布模板")).toBeTruthy();
     expect(serviceRoleTemplates.load).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -126,22 +127,25 @@ describe("AccountLiveRoles", () => {
       id: "managedservice.installation-reader", version: 1,
       spec: {
         product: "managedservice", servicePurpose: "PAAS" as const,
+        roleName: "ManagedServiceInstallationReader",
+        roleDescription: "Allows inspection of one consented installation.",
         policyVersion: { policyId: "system.managedservice-installation-reader", versionId: "version-managedservice-installation-reader-v1", contentDigest: `sha256:${"b".repeat(64)}` },
-        workloadResourceKinds: ["SERVICE_INSTALLATION"], maxSessionDurationSeconds: 900
+        workloads: [{ resourceKind: "SERVICE_INSTALLATION", bindAction: "managedservice.installation.bind-service-role", unbindAction: "managedservice.installation.unbind-service-role" }],
+        maxSessionDurationSeconds: 900
       },
       contentDigest: `sha256:${"c".repeat(64)}`, status: "ACTIVE" as const
     };
-    const serviceRoleTemplates: ServiceRoleTemplateClient = { load: vi.fn().mockResolvedValue({ status: "ready", directory: { items: [template] } }) };
+    const serviceRoleTemplates: ServiceRoleTemplateClient = { sessionRevision: 1, load: vi.fn().mockResolvedValue({ status: "ready", directory: { items: [template] } }) };
     render(<LocaleProvider><RolesHarness api={client()} serviceRoleTemplates={serviceRoleTemplates} /></LocaleProvider>);
 
-    await user.click(screen.getByRole("button", { name: "服务授权模板" }));
+    await user.click(screen.getByRole("button", { name: "服务授权" }));
     await user.click(await screen.findByRole("button", { name: template.id }));
 
     const chain = screen.getByRole("heading", { name: "服务授权链" }).closest("section")!;
     expect(within(chain).getByText("平台模板")).toBeTruthy();
     expect(within(chain).getByText("账号同意")).toBeTruthy();
     expect(within(chain).getByText("资源绑定")).toBeTruthy();
-    expect(within(chain).getAllByText("尚未接入")).toHaveLength(2);
+    expect(within(chain).getAllByText("在账号授权中单独确认")).toHaveLength(2);
     expect(screen.queryByRole("button", { name: /授权|撤销/ })).toBeNull();
   });
 

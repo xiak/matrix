@@ -11,7 +11,6 @@ import type {
   AccountSecuritySettings,
   AccountPolicy,
   AuthorizationProfileDirectory,
-  ServiceRoleTemplateDirectory,
   CapabilityRestriction,
   DirectoryPage,
   Group,
@@ -25,6 +24,7 @@ import type {
   UserPasswordResetCompletion,
   UserPermissionBoundary
 } from "../domain/accounts";
+import type { ServiceLinkedRoleAccess, ServiceLinkedRoleDirectory, ServiceRoleTemplateDirectory } from "../domain/serviceAuthorization";
 import { type AccessWorkspace, type AccessWorkspaceCommand, type PendingAccountRuleChange } from "../domain/accessWorkspace";
 import { AccessWorkspaceError } from "../domain/accessWorkspaceError";
 import type { AccountRepository } from "../repositories/iamRepository";
@@ -83,7 +83,23 @@ export type ServiceRoleTemplateLoad =
   | { status: "forbidden" | "routeUnavailable" | "unavailable" | "expired" };
 
 export type ServiceRoleTemplateClient = {
+  sessionRevision: number;
   load(): Promise<ServiceRoleTemplateLoad>;
+};
+
+export type ServiceLinkedRoleDirectoryLoad =
+  | { status: "ready"; directory: ServiceLinkedRoleDirectory }
+  | { status: "forbidden" | "routeUnavailable" | "unavailable" | "expired" };
+
+export type ServiceLinkedRoleAccessLoad =
+  | { status: "ready"; access: ServiceLinkedRoleAccess }
+  | { status: "forbidden" | "routeUnavailable" | "unavailable" | "expired" };
+
+export type ServiceLinkedRoleClient = {
+  accountId: string;
+  sessionRevision: number;
+  list(after?: string): Promise<ServiceLinkedRoleDirectoryLoad>;
+  read(roleId: string, after?: string): Promise<ServiceLinkedRoleAccessLoad>;
 };
 
 type AccountPolicyReadFailure = { status: "forbidden" | "routeUnavailable" | "unavailable" | "expired" };
@@ -308,6 +324,7 @@ type AccountAccess = {
   permissionBoundaries: UserBoundaryClient | null;
   authorizationProfiles: AuthorizationProfileClient | null;
   serviceRoleTemplates: ServiceRoleTemplateClient | null;
+  serviceLinkedRoles: ServiceLinkedRoleClient | null;
   policyRead: AccountPolicyReadClient | null;
   policyCreate: PolicyCreateClient | null;
   policyVersionMutation: PolicyVersionMutationClient | null;
@@ -696,13 +713,14 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     const read = repository.listServiceRoleTemplates;
     if (!active || !credential || !scene || scene.accountId !== tenantId || repository.workspace || !read) return null;
     return {
+      sessionRevision,
       async load() {
         try {
           return { status: "ready", directory: await read(credential) };
         } catch (failure) {
           if (failure instanceof HttpProblem) {
             if (failure.status === 401) {
-              if (expireSession(credential)) {
+              if (expireSession(credential, sessionRevision)) {
                 setScene(null); setWorkspace(null); setWorkspaceError(null); setSuccess(null); setError("expired");
               }
               return { status: "expired" };
@@ -714,7 +732,39 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         }
       }
     };
-  }, [active, credential, expireSession, repository, scene, tenantId]);
+  }, [active, credential, expireSession, repository, scene, sessionRevision, tenantId]);
+
+  const serviceLinkedRoles = useMemo<ServiceLinkedRoleClient | null>(() => {
+    const list = repository.listServiceLinkedRoles;
+    const read = repository.getServiceLinkedRole;
+    if (!active || !credential || !scene || scene.accountId !== tenantId || repository.workspace || !list || !read) return null;
+    const accountId = scene.accountId;
+    const failed = (failure: unknown): Exclude<ServiceLinkedRoleDirectoryLoad, { status: "ready" }> => {
+      if (failure instanceof HttpProblem) {
+        if (failure.status === 401) {
+          if (expireSession(credential, sessionRevision)) {
+            setScene(null); setWorkspace(null); setWorkspaceError(null); setSuccess(null); setError("expired");
+          }
+          return { status: "expired" };
+        }
+        if (failure.status === 403) return { status: "forbidden" };
+        if (failure.status === 404) return { status: "routeUnavailable" };
+      }
+      return { status: "unavailable" };
+    };
+    return {
+      accountId,
+      sessionRevision,
+      async list(after) {
+        try { return { status: "ready", directory: await list(credential, accountId, after) }; }
+        catch (failure) { return failed(failure); }
+      },
+      async read(roleId, after) {
+        try { return { status: "ready", access: await read(credential, accountId, roleId, after) }; }
+        catch (failure) { return failed(failure); }
+      }
+    };
+  }, [active, credential, expireSession, repository, scene, sessionRevision, tenantId]);
 
   const policyRead = useMemo<AccountPolicyReadClient | null>(() => {
     if (!active || !credential || !scene || scene.accountId !== tenantId || !scene.canViewPolicies || !repository.readPolicy || repository.workspace) return null;
@@ -1225,6 +1275,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     permissionBoundaries,
     authorizationProfiles,
     serviceRoleTemplates,
+    serviceLinkedRoles,
     policyRead,
     policyCreate,
     policyVersionMutation,
@@ -1370,7 +1421,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       } catch (failure) { setError(accountError(failure)); return false; }
       finally { mutationPending.current = false; setBusy(false); }
     }
-  }), [active, busy, credential, error, loading, repository, scene, success, tenantId, principalId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, permissionBoundaries, authorizationProfiles, serviceRoleTemplates, policyRead, policyCreate, policyVersionMutation, accountSecuritySettings, accessKeys, accessKeyCreateIntent, roles, roleSessionRevokeIntent, changeRoleSessionRevokeIntent, userPolicyChangeIntent, passwordResetUnknown, passwordResetLookup, beginUserPolicyAttachment, beginUserPolicyRevocation, submitUserPolicyChange, endUserPolicyChange, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
+  }), [active, busy, credential, error, loading, repository, scene, success, tenantId, principalId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, permissionBoundaries, authorizationProfiles, serviceRoleTemplates, serviceLinkedRoles, policyRead, policyCreate, policyVersionMutation, accountSecuritySettings, accessKeys, accessKeyCreateIntent, roles, roleSessionRevokeIntent, changeRoleSessionRevokeIntent, userPolicyChangeIntent, passwordResetUnknown, passwordResetLookup, beginUserPolicyAttachment, beginUserPolicyRevocation, submitUserPolicyChange, endUserPolicyChange, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
 
   return <AccountCapabilitiesContext.Provider value={capabilities}>
     <AccountAccessContext.Provider value={value}>{children}</AccountAccessContext.Provider>

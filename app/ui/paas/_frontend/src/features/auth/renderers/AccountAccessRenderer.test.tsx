@@ -1862,6 +1862,63 @@ describe("account access", () => {
     expect(screen.getByRole("table", { name: "策略元数据目录" })).toBeTruthy();
   });
 
+  it("loads current-account service authorization before the optional platform template directory", async () => {
+    const roleIdentity: AccountIdentity = { ...identity, capabilities: [
+      ...identity.capabilities,
+      capability("iam.role.list", "ACCOUNT", account.id)
+    ] };
+    const templateReference = { id: "managedservice.installation-reader", version: 1, contentDigest: `sha256:${"c".repeat(64)}` };
+    const relation = {
+      role: {
+        ...managedRole,
+        id: "role-managedservice-reader",
+        name: "ManagedServiceInstallationReader",
+        description: "Allows one service to inspect a consented installation.",
+        management: "SERVICE_LINKED" as const,
+        resourceVersion: 1,
+        currentTrustVersionId: "trust-managedservice-v1"
+      },
+      template: templateReference,
+      servicePrincipal: { installationId: "installation-managedservice", principalId: "service-managedservice", purpose: "PAAS" as const },
+      permissionCeiling: { policyId: "system.managedservice-installation-reader", versionId: "version-managedservice-installation-reader-v1", contentDigest: `sha256:${"b".repeat(64)}` }
+    };
+    const listServiceLinkedRoles = vi.fn().mockResolvedValue({ accountId: account.id, items: [{ relation, bindingCount: 1, activeBindingCount: 1 }], nextAfter: null });
+    const getServiceLinkedRole = vi.fn().mockResolvedValue({ relation, bindings: [{
+      id: "binding-managedservice", accountId: account.id, roleId: relation.role.id, template: templateReference,
+      workload: { kind: "SERVICE_INSTALLATION", id: "installation-1" }, status: "ACTIVE", resourceVersion: 1,
+      createdAt: timestamp, updatedAt: timestamp, revokedAt: null
+    }], nextAfter: null });
+    const listServiceRoleTemplates = vi.fn().mockResolvedValue({ items: [] });
+    const repository = accounts({
+      currentIdentity: vi.fn().mockResolvedValue(roleIdentity),
+      listServiceLinkedRoles,
+      getServiceLinkedRole,
+      listServiceRoleTemplates,
+      roles: {
+        list: vi.fn().mockResolvedValue(managedRoleDirectory),
+        read: vi.fn().mockResolvedValue(managedRoleAccess),
+        create: vi.fn().mockResolvedValue(managedRole),
+        listSessions: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, observedAt: timestamp, items: [], nextAfter: null }),
+        readSession: vi.fn().mockRejectedValue(new Error("unused session read")),
+        revokeSession: vi.fn().mockRejectedValue(new Error("unused session revoke"))
+      }
+    });
+    const { user } = await openAccess(repository, iam(), "roles");
+
+    await screen.findByRole("table", { name: "角色" });
+    expect(listServiceLinkedRoles).not.toHaveBeenCalled();
+    expect(listServiceRoleTemplates).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "服务授权" }));
+    expect(await screen.findByRole("table", { name: "当前账号服务授权关系" })).toBeTruthy();
+    expect(listServiceLinkedRoles).toHaveBeenCalledWith(expect.any(String), account.id, undefined);
+    expect(listServiceRoleTemplates).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: relation.role.name }));
+    expect(await screen.findByRole("table", { name: "服务授权资源绑定历史" })).toBeTruthy();
+    expect(getServiceLinkedRole).toHaveBeenCalledWith(expect.any(String), account.id, relation.role.id, undefined);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
   it("loads the live platform service-role templates only after the inline directory opens", async () => {
     const roleIdentity: AccountIdentity = { ...identity, capabilities: [
       ...identity.capabilities,
@@ -1871,8 +1928,11 @@ describe("account access", () => {
       id: "managedservice.installation-reader", version: 1,
       spec: {
         product: "managedservice", servicePurpose: "PAAS",
+        roleName: "ManagedServiceInstallationReader",
+        roleDescription: "Allows inspection of one consented installation.",
         policyVersion: { policyId: "system.managedservice-installation-reader", versionId: "version-managedservice-installation-reader-v1", contentDigest: `sha256:${"b".repeat(64)}` },
-        workloadResourceKinds: ["SERVICE_INSTALLATION"], maxSessionDurationSeconds: 900
+        workloads: [{ resourceKind: "SERVICE_INSTALLATION", bindAction: "managedservice.installation.bind-service-role", unbindAction: "managedservice.installation.unbind-service-role" }],
+        maxSessionDurationSeconds: 900
       },
       contentDigest: `sha256:${"c".repeat(64)}`, status: "ACTIVE"
     }] });
@@ -1892,7 +1952,8 @@ describe("account access", () => {
 
     await screen.findByRole("table", { name: "角色" });
     expect(listServiceRoleTemplates).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "服务授权模板" }));
+    await user.click(screen.getByRole("button", { name: "服务授权" }));
+    await user.click(screen.getByRole("tab", { name: "平台模板" }));
     expect(await screen.findByRole("table", { name: "服务授权模板目录" })).toBeTruthy();
     expect(listServiceRoleTemplates).toHaveBeenCalledTimes(1);
     expect(screen.getByText("非账号授权状态")).toBeTruthy();

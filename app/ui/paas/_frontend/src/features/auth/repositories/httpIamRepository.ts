@@ -34,9 +34,6 @@ import type {
   PolicyManagement,
   PolicyScope,
   PolicyStatus,
-  ServiceRoleTemplate,
-  ServiceRoleTemplateDirectory,
-  ServiceRoleTemplatePurpose,
   PasswordResetRequestIdentity,
   UserPasswordResetCompletion,
   User,
@@ -44,6 +41,17 @@ import type {
   UserPolicyAttachment,
   UserPermissionBoundary
 } from "../domain/accounts";
+import type {
+  ServiceLinkedRoleAccess,
+  ServiceLinkedRoleDirectory,
+  ServiceLinkedRoleMetadata,
+  ServiceLinkedRoleRelation,
+  ServiceRoleTemplate,
+  ServiceRoleTemplateDirectory,
+  ServiceRoleTemplatePurpose,
+  ServiceRoleTemplateReference,
+  WorkloadRoleBinding
+} from "../domain/serviceAuthorization";
 import type {
   AuthenticationChallenge,
   AuthenticatorRecovery,
@@ -811,14 +819,14 @@ function parseRoleTag(value: unknown): { key: string; value: string } {
   return { key: groupText(wire.key, 1, 64), value: groupText(wire.value, 0, 256) };
 }
 
-function parseRole(value: unknown): Role {
+function parseRoleWithManagement<M extends "CUSTOMER" | "SERVICE_LINKED">(value: unknown, management: M): Omit<Role, "management"> & { management: M } {
   const wire = accountRecord(value);
   exactKeys(wire, [
     "apiVersion", "kind", "id", "accountId", "name", "description", "tags", "management", "status",
     "maxSessionDurationSeconds", "resourceVersion", "currentTrustVersionId", "createdAt", "updatedAt"
   ]);
   requireAccountKind(wire, "Role");
-  if (wire.management !== "CUSTOMER" || (wire.status !== "ACTIVE" && wire.status !== "DISABLED") ||
+  if (wire.management !== management || (wire.status !== "ACTIVE" && wire.status !== "DISABLED") ||
       !Array.isArray(wire.tags) || wire.tags.length > 50 || typeof wire.maxSessionDurationSeconds !== "number" ||
       !Number.isSafeInteger(wire.maxSessionDurationSeconds) || wire.maxSessionDurationSeconds < 60 || wire.maxSessionDurationSeconds > 43200) {
     throw new Error("INVALID_IAM_RESPONSE");
@@ -834,13 +842,17 @@ function parseRole(value: unknown): Role {
     name: groupText(wire.name, 1, 64),
     description: groupText(wire.description, 0, 512),
     tags,
-    management: "CUSTOMER",
+    management,
     status: wire.status,
     maxSessionDurationSeconds: wire.maxSessionDurationSeconds,
     resourceVersion: accountVersion(wire.resourceVersion),
     currentTrustVersionId: accountIdentifier(wire.currentTrustVersionId),
     ...chronologicalTimestamps(wire.createdAt, wire.updatedAt)
   };
+}
+
+function parseRole(value: unknown): Role {
+  return parseRoleWithManagement(value, "CUSTOMER");
 }
 
 function roleCapabilities(roleId: string): Array<Pick<RoleCapability, "action" | "resource">> {
@@ -1402,6 +1414,13 @@ function parseAuthorizationProfileDirectory(value: unknown): AuthorizationProfil
 }
 
 const serviceRolePurposes = new Set<ServiceRoleTemplatePurpose>(["IAM", "PAAS", "AUDIT", "INSTALLATION_VERIFIER"]);
+const serviceAuthorizationResourceKinds = new Set([
+  "ACCOUNT", "USER", "ACCESS_KEY", "POLICY", "ROLE", "ROLE_SESSION", "ORGANIZATION", "PRINCIPAL", "GROUP",
+  "GROUP_MEMBERSHIP", "ROLE_BINDING", "WORKLOAD_ROLE_BINDING", "POLICY_ATTACHMENT", "SESSION", "APPLICATION",
+  "CONFIGURATION", "CONFIGURATION_REVISION", "APPLICATION_REVISION", "DEPLOYMENT", "OPERATION", "SERVICE_OFFERING",
+  "REGION", "QUOTA_ENTITLEMENT", "SERVICE_INSTALLATION", "AUDIT_RECORD", "AUDIT_CHAIN", "INSTALLATION",
+  "EXECUTION_POOL", "EXECUTION_TARGET", "NODE_ENROLLMENT"
+]);
 
 function contentDigest(value: unknown): string {
   if (typeof value !== "string" || !/^sha256:[a-f0-9]{64}$/.test(value)) throw new Error("INVALID_IAM_RESPONSE");
@@ -1418,28 +1437,53 @@ function parsePolicyVersionReference(value: unknown): ServiceRoleTemplate["spec"
   };
 }
 
+function parseServiceRoleTemplateReference(value: unknown): ServiceRoleTemplateReference {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["id", "version", "contentDigest"]);
+  return { id: accountIdentifier(wire.id), version: accountVersion(wire.version), contentDigest: contentDigest(wire.contentDigest) };
+}
+
+function serviceRoleAction(value: unknown, product: string): string {
+  const action = accountText(value);
+  if (action.length > 128 || !/^[a-z][a-z0-9_-]{0,63}(\.[a-z][a-z0-9_-]{0,63}){1,4}$/.test(action) || action.split(".")[0] !== product) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  return action;
+}
+
 function parseServiceRoleTemplate(value: unknown): ServiceRoleTemplate {
   const wire = accountRecord(value);
   exactKeys(wire, ["apiVersion", "kind", "id", "version", "spec", "contentDigest", "status"]);
   requireAccountKind(wire, "ServiceRoleTemplate");
   if (wire.status !== "ACTIVE" && wire.status !== "RETIRED") throw new Error("INVALID_IAM_RESPONSE");
   const spec = accountRecord(wire.spec);
-  exactKeys(spec, ["product", "servicePurpose", "policyVersion", "workloadResourceKinds", "maxSessionDurationSeconds"]);
+  exactKeys(spec, ["product", "servicePurpose", "roleName", "roleDescription", "policyVersion", "workloads", "maxSessionDurationSeconds"]);
   if (typeof spec.servicePurpose !== "string" || !serviceRolePurposes.has(spec.servicePurpose as ServiceRoleTemplatePurpose) ||
-      !Array.isArray(spec.workloadResourceKinds) || spec.workloadResourceKinds.length < 1 || spec.workloadResourceKinds.length > 16 ||
-      spec.workloadResourceKinds.some((kind) => typeof kind !== "string") ||
+      !Array.isArray(spec.workloads) || spec.workloads.length < 1 || spec.workloads.length > 16 ||
       typeof spec.maxSessionDurationSeconds !== "number" || !Number.isSafeInteger(spec.maxSessionDurationSeconds) ||
       spec.maxSessionDurationSeconds < 60 || spec.maxSessionDurationSeconds > 43_200) throw new Error("INVALID_IAM_RESPONSE");
-  const workloadResourceKinds = spec.workloadResourceKinds.map((kind) => authorizationIdentifier(kind, true));
-  if (new Set(workloadResourceKinds).size !== workloadResourceKinds.length) throw new Error("INVALID_IAM_RESPONSE");
+  const product = authorizationIdentifier(spec.product, false);
+  const workloads = spec.workloads.map((value) => {
+    const workload = accountRecord(value);
+    exactKeys(workload, ["resourceKind", "bindAction", "unbindAction"]);
+    const resourceKind = accountText(workload.resourceKind);
+    if (!serviceAuthorizationResourceKinds.has(resourceKind)) throw new Error("INVALID_IAM_RESPONSE");
+    const bindAction = serviceRoleAction(workload.bindAction, product);
+    const unbindAction = serviceRoleAction(workload.unbindAction, product);
+    if (bindAction === unbindAction) throw new Error("INVALID_IAM_RESPONSE");
+    return { resourceKind, bindAction, unbindAction };
+  });
+  if (new Set(workloads.map((workload) => workload.resourceKind)).size !== workloads.length) throw new Error("INVALID_IAM_RESPONSE");
   return {
     id: accountIdentifier(wire.id),
     version: accountVersion(wire.version),
     spec: {
-      product: authorizationIdentifier(spec.product, false),
+      product,
       servicePurpose: spec.servicePurpose as ServiceRoleTemplatePurpose,
+      roleName: groupText(spec.roleName, 1, 64),
+      roleDescription: groupText(spec.roleDescription, 0, 512),
       policyVersion: parsePolicyVersionReference(spec.policyVersion),
-      workloadResourceKinds,
+      workloads,
       maxSessionDurationSeconds: spec.maxSessionDurationSeconds
     },
     contentDigest: contentDigest(wire.contentDigest),
@@ -1456,6 +1500,90 @@ function parseServiceRoleTemplateDirectory(value: unknown): ServiceRoleTemplateD
   const items = wire.items.map(parseServiceRoleTemplate);
   if (items.some((item, index) => index > 0 && items[index - 1]!.id >= item.id)) throw new Error("INVALID_IAM_RESPONSE");
   return { items };
+}
+
+function parseServiceLinkedRole(value: unknown): ServiceLinkedRoleRelation {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "role", "template", "servicePrincipal", "permissionCeiling"]);
+  requireAccountKind(wire, "ServiceLinkedRole");
+  const servicePrincipal = accountRecord(wire.servicePrincipal);
+  exactKeys(servicePrincipal, ["installationId", "principalId", "purpose"]);
+  if (typeof servicePrincipal.purpose !== "string" || !serviceRolePurposes.has(servicePrincipal.purpose as ServiceRoleTemplatePurpose)) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  return {
+    role: parseRoleWithManagement(wire.role, "SERVICE_LINKED") as ServiceLinkedRoleMetadata,
+    template: parseServiceRoleTemplateReference(wire.template),
+    servicePrincipal: {
+      installationId: accountIdentifier(servicePrincipal.installationId),
+      principalId: accountIdentifier(servicePrincipal.principalId),
+      purpose: servicePrincipal.purpose as ServiceRoleTemplatePurpose
+    },
+    permissionCeiling: parsePolicyVersionReference(wire.permissionCeiling)
+  };
+}
+
+function parseWorkloadRoleBinding(value: unknown): WorkloadRoleBinding {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "id", "accountId", "roleId", "template", "workload", "status", "resourceVersion", "createdAt", "updatedAt"], ["revokedAt"]);
+  requireAccountKind(wire, "WorkloadRoleBinding");
+  const workload = accountRecord(wire.workload);
+  exactKeys(workload, ["kind", "id"]);
+  const kind = accountText(workload.kind);
+  if (!serviceAuthorizationResourceKinds.has(kind)) throw new Error("INVALID_IAM_RESPONSE");
+  const createdAt = accountTimestamp(wire.createdAt);
+  const updatedAt = accountTimestamp(wire.updatedAt);
+  const active = wire.status === "ACTIVE" && wire.resourceVersion === 1 && wire.revokedAt === undefined && timestampOrder(updatedAt) === timestampOrder(createdAt);
+  const revokedAt = wire.revokedAt === undefined ? null : accountTimestamp(wire.revokedAt);
+  const revoked = wire.status === "REVOKED" && wire.resourceVersion === 2 && revokedAt !== null &&
+    timestampOrder(updatedAt) === timestampOrder(revokedAt) && timestampOrder(revokedAt) >= timestampOrder(createdAt);
+  if (!active && !revoked) throw new Error("INVALID_IAM_RESPONSE");
+  return {
+    id: accountIdentifier(wire.id),
+    accountId: accountIdentifier(wire.accountId),
+    roleId: accountIdentifier(wire.roleId),
+    template: parseServiceRoleTemplateReference(wire.template),
+    workload: { kind, id: accountIdentifier(workload.id) },
+    status: wire.status as WorkloadRoleBinding["status"],
+    resourceVersion: accountVersion(wire.resourceVersion),
+    createdAt,
+    updatedAt,
+    revokedAt
+  };
+}
+
+function parseServiceLinkedRoleDirectory(value: unknown, accountId: string, after?: string): ServiceLinkedRoleDirectory {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "accountId", "items"], ["nextAfter"]);
+  requireAccountKind(wire, "ServiceLinkedRoleList");
+  if (accountIdentifier(wire.accountId) !== accountId || !Array.isArray(wire.items) || wire.items.length > 100 ||
+      new TextEncoder().encode(JSON.stringify(value)).byteLength > 4 * 1024 * 1024) throw new Error("INVALID_IAM_RESPONSE");
+  const items = wire.items.map((value) => {
+    const item = accountRecord(value);
+    exactKeys(item, ["relation", "bindingCount", "activeBindingCount"]);
+    const relation = parseServiceLinkedRole(item.relation);
+    if (relation.role.accountId !== accountId || typeof item.bindingCount !== "number" || !Number.isSafeInteger(item.bindingCount) || item.bindingCount < 1 ||
+        typeof item.activeBindingCount !== "number" || !Number.isSafeInteger(item.activeBindingCount) || item.activeBindingCount < 0 || item.activeBindingCount > item.bindingCount) {
+      throw new Error("INVALID_IAM_RESPONSE");
+    }
+    return { relation, bindingCount: item.bindingCount, activeBindingCount: item.activeBindingCount };
+  });
+  return { accountId, items, nextAfter: orderedDirectoryPage(items.map((item) => item.relation.role.id), wire.nextAfter, after) };
+}
+
+function parseServiceLinkedRoleAccess(value: unknown, accountId: string, roleId: string, after?: string): ServiceLinkedRoleAccess {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "relation", "bindings"], ["nextAfter"]);
+  requireAccountKind(wire, "ServiceLinkedRoleAccess");
+  if (!Array.isArray(wire.bindings) || wire.bindings.length > 100 ||
+      new TextEncoder().encode(JSON.stringify(value)).byteLength > 512 * 1024) throw new Error("INVALID_IAM_RESPONSE");
+  const relation = parseServiceLinkedRole(wire.relation);
+  if (relation.role.accountId !== accountId || relation.role.id !== roleId) throw new Error("INVALID_IAM_RESPONSE");
+  const bindings = wire.bindings.map(parseWorkloadRoleBinding);
+  if (bindings.some((binding) => binding.accountId !== accountId || binding.roleId !== roleId ||
+      binding.template.id !== relation.template.id || binding.template.version !== relation.template.version ||
+      binding.template.contentDigest !== relation.template.contentDigest)) throw new Error("INVALID_IAM_RESPONSE");
+  return { relation, bindings, nextAfter: orderedDirectoryPage(bindings.map((binding) => binding.id), wire.nextAfter, after) };
 }
 
 function parsePolicy(value: unknown): AccountPolicy {
@@ -2149,6 +2277,21 @@ export const httpAccountRepository: AccountRepository = {
   },
   async listServiceRoleTemplates(credential) {
     return parseServiceRoleTemplateDirectory(await requestJSON<unknown>("/api/iam/v1/service-role-templates", { headers: accountHeaders(credential) }));
+  },
+  async listServiceLinkedRoles(credential, accountId, after) {
+    const expectedAccountId = accountIdentifier(accountId);
+    return parseServiceLinkedRoleDirectory(await requestJSON<unknown>(
+      `/api/iam/v1/service-linked-roles${pageQuery(after)}`,
+      { headers: accountHeaders(credential) }
+    ), expectedAccountId, after);
+  },
+  async getServiceLinkedRole(credential, accountId, roleId, after) {
+    const expectedAccountId = accountIdentifier(accountId);
+    const exactRoleId = accountIdentifier(roleId);
+    return parseServiceLinkedRoleAccess(await requestJSON<unknown>(
+      `/api/iam/v1/service-linked-roles/${encodeURIComponent(exactRoleId)}${pageQuery(after)}`,
+      { headers: accountHeaders(credential) }
+    ), expectedAccountId, exactRoleId, after);
   },
   async listAccounts(credential, after) {
     return accountPage<AccountAccess>(await requestJSON<unknown>(`/api/iam/v1/accounts${pageQuery(after)}`, { headers: accountHeaders(credential) }), "AccountList", parseAccountAccess, (item) => item.account.id, after);

@@ -60,12 +60,18 @@ function serviceRoleTemplate(id = "managedservice.installation-reader") {
     apiVersion, kind: "ServiceRoleTemplate", id, version: 1,
     spec: {
       product: "managedservice", servicePurpose: "PAAS",
+      roleName: "ManagedServiceInstallationReader",
+      roleDescription: "Allows inspection of one consented installation.",
       policyVersion: {
         policyId: "system.managedservice-installation-reader",
         versionId: "version-managedservice-installation-reader-v1",
         contentDigest: `sha256:${"b".repeat(64)}`
       },
-      workloadResourceKinds: ["SERVICE_INSTALLATION"],
+      workloads: [{
+        resourceKind: "SERVICE_INSTALLATION",
+        bindAction: "managedservice.installation.bind-service-role",
+        unbindAction: "managedservice.installation.unbind-service-role"
+      }],
       maxSessionDurationSeconds: 900
     },
     contentDigest: `sha256:${"c".repeat(64)}`,
@@ -1565,14 +1571,123 @@ describe("IAM HTTP account boundary", () => {
       { apiVersion, kind: "ServiceRoleTemplateList", items: [{ ...template, spec: { ...template.spec, product: "ManagedService" } }] },
       { apiVersion, kind: "ServiceRoleTemplateList", items: [{ ...template, spec: { ...template.spec, servicePurpose: "UNKNOWN" } }] },
       { apiVersion, kind: "ServiceRoleTemplateList", items: [{ ...template, spec: { ...template.spec, maxSessionDurationSeconds: 30 } }] },
-      { apiVersion, kind: "ServiceRoleTemplateList", items: [{ ...template, spec: { ...template.spec, workloadResourceKinds: [] } }] },
-      { apiVersion, kind: "ServiceRoleTemplateList", items: [{ ...template, spec: { ...template.spec, workloadResourceKinds: ["SERVICE_INSTALLATION", "SERVICE_INSTALLATION"] } }] },
+      { apiVersion, kind: "ServiceRoleTemplateList", items: [{ ...template, spec: { ...template.spec, workloads: [] } }] },
+      { apiVersion, kind: "ServiceRoleTemplateList", items: [{ ...template, spec: { ...template.spec, workloads: [template.spec.workloads[0], template.spec.workloads[0]] } }] },
+      { apiVersion, kind: "ServiceRoleTemplateList", items: [{ ...template, spec: { ...template.spec, roleName: "" } }] },
+      { apiVersion, kind: "ServiceRoleTemplateList", items: [{ ...template, spec: { ...template.spec, workloads: [{ ...template.spec.workloads[0], bindAction: "ManagedService.bind" }] } }] },
       { apiVersion, kind: "ServiceRoleTemplateList", items: [{ ...template, spec: { ...template.spec, policyVersion: { ...template.spec.policyVersion, contentDigest: "digest" } } }] },
       { apiVersion, kind: "ServiceRoleTemplateList", items: [{ ...template, spec: { ...template.spec, policyVersion: { ...template.spec.policyVersion, latest: true } } }] }
     ];
     for (const directory of invalid) {
       reply(directory);
       await expect(httpAccountRepository.listServiceRoleTemplates!("bearer")).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+  });
+
+  it("reads current-account service-linked roles without sending an account selector", async () => {
+    const template = serviceRoleTemplate();
+    const serviceRole = {
+      ...role,
+      id: "role-managedservice-reader",
+      name: "ManagedServiceInstallationReader",
+      management: "SERVICE_LINKED",
+      resourceVersion: 1,
+      currentTrustVersionId: "trust-managedservice-v1"
+    };
+    const relation = {
+      apiVersion, kind: "ServiceLinkedRole", role: serviceRole,
+      template: { id: template.id, version: template.version, contentDigest: template.contentDigest },
+      servicePrincipal: { installationId: "installation-managedservice", principalId: "service-managedservice", purpose: "PAAS" },
+      permissionCeiling: template.spec.policyVersion
+    };
+    const fetcher = reply({ apiVersion, kind: "ServiceLinkedRoleList", accountId: account.id,
+      items: [{ relation, bindingCount: 2, activeBindingCount: 1 }] });
+    const result = await httpAccountRepository.listServiceLinkedRoles!("bearer", account.id);
+
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/service-linked-roles");
+    expect(firstRequest(fetcher)[1]).toMatchObject({ cache: "no-store", headers: { Authorization: "Bearer bearer" } });
+    expect(firstRequest(fetcher)[1].body).toBeUndefined();
+    expect(result).toMatchObject({ accountId: account.id, nextAfter: null, items: [{
+      bindingCount: 2, activeBindingCount: 1, relation: { role: { id: serviceRole.id, management: "SERVICE_LINKED" },
+        template: { id: template.id, version: 1 }, permissionCeiling: { versionId: template.spec.policyVersion.versionId } }
+    }] });
+
+    const cursorFetcher = reply({ apiVersion, kind: "ServiceLinkedRoleList", accountId: account.id, items: [] });
+    await httpAccountRepository.listServiceLinkedRoles!("bearer", account.id, "ic1.next-service-role");
+    expect(firstRequest(cursorFetcher)[0]).toBe("/api/iam/v1/service-linked-roles?after=ic1.next-service-role");
+  });
+
+  it("reads exact active and revoked workload bindings as immutable history", async () => {
+    const template = serviceRoleTemplate();
+    const serviceRole = {
+      ...role,
+      id: "role-managedservice-reader",
+      name: "ManagedServiceInstallationReader",
+      management: "SERVICE_LINKED",
+      resourceVersion: 1,
+      currentTrustVersionId: "trust-managedservice-v1"
+    };
+    const templateReference = { id: template.id, version: template.version, contentDigest: template.contentDigest };
+    const relation = {
+      apiVersion, kind: "ServiceLinkedRole", role: serviceRole, template: templateReference,
+      servicePrincipal: { installationId: "installation-managedservice", principalId: "service-managedservice", purpose: "PAAS" },
+      permissionCeiling: template.spec.policyVersion
+    };
+    const active = {
+      apiVersion, kind: "WorkloadRoleBinding", id: "binding-active", accountId: account.id, roleId: serviceRole.id,
+      template: templateReference, workload: { kind: "SERVICE_INSTALLATION", id: "installation-current" },
+      status: "ACTIVE", resourceVersion: 1, createdAt: timestamp, updatedAt: timestamp
+    };
+    const revokedAt = "2026-09-12T08:00:00Z";
+    const revoked = {
+      ...active, id: "binding-revoked", workload: { kind: "SERVICE_INSTALLATION", id: "installation-former" },
+      status: "REVOKED", resourceVersion: 2, updatedAt: revokedAt, revokedAt
+    };
+    const fetcher = reply({ apiVersion, kind: "ServiceLinkedRoleAccess", relation, bindings: [active, revoked] });
+    const result = await httpAccountRepository.getServiceLinkedRole!("bearer", account.id, serviceRole.id);
+
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/service-linked-roles/${serviceRole.id}`);
+    expect(result.bindings).toEqual([
+      expect.objectContaining({ id: active.id, status: "ACTIVE", revokedAt: null, resourceVersion: 1 }),
+      expect.objectContaining({ id: revoked.id, status: "REVOKED", revokedAt, resourceVersion: 2 })
+    ]);
+  });
+
+  it("fails closed on cross-account service relations, ambiguous counts, or invalid binding lifecycle", async () => {
+    const template = serviceRoleTemplate();
+    const serviceRole = {
+      ...role,
+      id: "role-managedservice-reader",
+      name: "ManagedServiceInstallationReader",
+      management: "SERVICE_LINKED",
+      resourceVersion: 1,
+      currentTrustVersionId: "trust-managedservice-v1"
+    };
+    const templateReference = { id: template.id, version: template.version, contentDigest: template.contentDigest };
+    const relation = {
+      apiVersion, kind: "ServiceLinkedRole", role: serviceRole, template: templateReference,
+      servicePrincipal: { installationId: "installation-managedservice", principalId: "service-managedservice", purpose: "PAAS" },
+      permissionCeiling: template.spec.policyVersion
+    };
+    for (const body of [
+      { apiVersion, kind: "ServiceLinkedRoleList", accountId: "foreign-account", items: [] },
+      { apiVersion, kind: "ServiceLinkedRoleList", accountId: account.id, items: [{ relation, bindingCount: 0, activeBindingCount: 0 }] },
+      { apiVersion, kind: "ServiceLinkedRoleList", accountId: account.id, items: [{ relation, bindingCount: 1, activeBindingCount: 2 }] },
+      { apiVersion, kind: "ServiceLinkedRoleList", accountId: account.id, items: [{ relation: { ...relation, role: { ...serviceRole, management: "CUSTOMER" } }, bindingCount: 1, activeBindingCount: 1 }] }
+    ]) {
+      reply(body);
+      await expect(httpAccountRepository.listServiceLinkedRoles!("bearer", account.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+
+    const invalidActive = {
+      apiVersion, kind: "WorkloadRoleBinding", id: "binding-active", accountId: account.id, roleId: serviceRole.id,
+      template: templateReference, workload: { kind: "SERVICE_INSTALLATION", id: "installation-current" },
+      status: "ACTIVE", resourceVersion: 1, createdAt: timestamp, updatedAt: "2026-09-12T08:00:00Z"
+    };
+    const invalidRevoked = { ...invalidActive, status: "REVOKED", resourceVersion: 2, revokedAt: "2026-09-12T08:01:00Z" };
+    for (const binding of [invalidActive, invalidRevoked, { ...invalidActive, accountId: "foreign-account", updatedAt: timestamp }]) {
+      reply({ apiVersion, kind: "ServiceLinkedRoleAccess", relation, bindings: [binding] });
+      await expect(httpAccountRepository.getServiceLinkedRole!("bearer", account.id, serviceRole.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
     }
   });
 

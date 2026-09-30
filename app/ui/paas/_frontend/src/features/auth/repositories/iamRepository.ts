@@ -28,12 +28,12 @@ import type {
   PolicyAttachmentRevocation,
   PolicyDirectory,
   AuthorizationProfileDirectory,
-  ServiceRoleTemplateDirectory,
   PasswordResetRequestIdentity,
   UserPasswordResetCompletion,
   UserAccess,
   UserPermissionBoundary
 } from "../domain/accounts";
+import type { ServiceLinkedRoleAccess, ServiceLinkedRoleDirectory, ServiceRoleTemplateDirectory } from "../domain/serviceAuthorization";
 import type { AccessWorkspace, AccessWorkspaceCommand } from "../domain/accessWorkspace";
 import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDirectory, AccessKeyStatus, AccessKeyStatusChange } from "../domain/accessKeys";
 import type { AuthenticatorState, EnrollmentChallengeState, NotificationContact, NotificationContactVerification, RecoveryCodeRegeneration, RecoveryCodeRegenerationResponse, SecurityStepUp, TOTPEnrollment, TOTPEnrollmentConfirmation, TOTPEnrollmentStart } from "../domain/personalSecurity";
@@ -208,6 +208,9 @@ export interface AccountRepository {
   // Platform-published inputs for a future product-owned consent flow. This
   // list contains no Account authorization or workload binding state.
   listServiceRoleTemplates?(credential: string): Promise<ServiceRoleTemplateDirectory>;
+  // accountId is a local response-scope assertion and is never sent as a selector.
+  listServiceLinkedRoles?(credential: string, accountId: string, after?: string): Promise<ServiceLinkedRoleDirectory>;
+  getServiceLinkedRole?(credential: string, accountId: string, roleId: string, after?: string): Promise<ServiceLinkedRoleAccess>;
   listAccounts(credential: string, after?: string): Promise<DirectoryPage<AccountAccess>>;
   // accountId is a local response-scope check, never an HTTP authority selector.
   // Callers retain the same explicit requestId/input for an uncertain outcome.
