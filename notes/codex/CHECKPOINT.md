@@ -6,8 +6,8 @@
 - Updated: 2026-10-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `fc12343c`
-- Pushed documentation milestone: `8b64404c`
+- Pushed source/embed milestone: `fc7c3b54`
+- Pushed documentation milestone: `9818a8f5`
 
 ## Authoritative route
 
@@ -46,7 +46,15 @@ continues to use only its server-owned opaque cursor and does not fake global
 search over one page. A future fixed template cursor replaces this local
 pagination instead of creating a parallel model.
 
-Source and synchronized Go embed at `fc12343c` passed 55 frontend files / 889
+The shared service-authorization chain now requires four explicit facts:
+platform template, current-Account consent/service-linked Role, exact workload
+binding and runtime observation. LIVE read views, product-resource cards and
+the isolated MOCK all show runtime as unobserved instead of deriving it from
+configuration. The responsive chain uses four columns only when space permits,
+2 × 2 at medium content widths and one column on small containers. It adds no
+session query/revoke, credential, internal route or product-PEP conclusion.
+
+Source and synchronized Go embed at `fc7c3b54` passed 55 frontend files / 889
 tests, static normalization, type/lint/architecture, 228 theme contrast pairs,
 41-page export, 228-file embed equality and repository Go test/vet. Existing
 MOCK pages remain available; the LIVE administrator session path still lacks
