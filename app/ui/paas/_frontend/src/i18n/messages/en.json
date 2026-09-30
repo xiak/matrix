@@ -2165,6 +2165,7 @@
       "hint": "Published template, account-level service-linked-role relation, and exact product-resource bindings are shown as separate boundaries so role existence is never mistaken for authorization to every resource.",
       "contractBoundary": "A fixed read-only contract now exists for account relations and resource bindings, but this isolated MOCK neither calls it nor performs writes. The IDs, states, and timestamps below are design-preview data, not backend responses.",
       "durationMinutes": "{count} minutes",
+      "details": { "sectionsLabel": "Service-authorization details", "configuration": "Authorization configuration", "bindings": "Resource bindings ({count})", "runtime": "Runtime boundary" },
       "validity": {
         "title": "Current authorization status",
         "hint": "Lead with the configuration conclusion a tenant can act on, then expand the template, account relation, and exact-resource facts.",

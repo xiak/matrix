@@ -2165,6 +2165,7 @@
       "hint": "将发布模板、账号级服务关联角色关系和精确业务资源绑定分区展示，避免把角色存在误解为所有资源都已授权。",
       "contractBoundary": "账号关系与资源绑定已有固定只读契约，但这个隔离 MOCK 不调用它，也不执行写入。以下 ID、状态和时间均为设计预览，不是后端返回的数据。",
       "durationMinutes": "{count} 分钟",
+      "details": { "sectionsLabel": "服务授权详情", "configuration": "授权配置", "bindings": "资源绑定 ({count})", "runtime": "运行边界" },
       "validity": {
         "title": "当前授权状态",
         "hint": "先给出租户可采取行动的配置结论，再展开模板、账号关系和精确资源绑定的技术事实。",

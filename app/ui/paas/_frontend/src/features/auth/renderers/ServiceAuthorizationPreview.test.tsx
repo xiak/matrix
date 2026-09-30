@@ -45,9 +45,6 @@ describe("ServiceAuthorizationPreview", () => {
     expect(screen.queryByText(/北向读取接口尚未发布/)).toBeNull();
     expect(screen.getByRole("heading", { name: "不可变 ServiceRoleTemplate" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "ServiceLinkedRoleAccess" })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "ServiceRoleSession" })).toBeTruthy();
-    expect(screen.getByText("SERVICE")).toBeTruthy();
-    expect(screen.getByText("未发行")).toBeTruthy();
     const validity = screen.getByRole("region", { name: "当前授权状态" });
     expect(within(validity).getByText("配置关系有效 · MOCK")).toBeTruthy();
     expect(within(validity).getByText("运行时未观测")).toBeTruthy();
@@ -58,23 +55,16 @@ describe("ServiceAuthorizationPreview", () => {
     expect(within(validity).getByText(/当前只能得出“配置关系有效”/)).toBeTruthy();
     expect(within(validity).getByText(/本页不会承诺实时下线/)).toBeTruthy();
     expect(within(validity).queryByRole("button")).toBeNull();
-    const runtime = screen.getByRole("heading", { name: "一次服务请求的执行边界" }).closest("section")!;
-    expect(within(runtime).getByText("认证受信服务主体")).toBeTruthy();
-    expect(within(runtime).getByText("签发短期服务会话")).toBeTruthy();
-    expect(within(runtime).getByText("产品 PEP 重新鉴权")).toBeTruthy();
-    expect(within(runtime).getByText("执行并返回业务结果")).toBeTruthy();
-    expect(within(runtime).getByText("未验证请求")).toBeTruthy();
-    expect(within(runtime).getByText("未签发")).toBeTruthy();
-    expect(within(runtime).getByText("未评估")).toBeTruthy();
-    expect(within(runtime).getByText("未执行")).toBeTruthy();
-    expect(within(runtime).queryByRole("button")).toBeNull();
-    expect(within(runtime).getByText(/不展示会话 ID、临时凭据、内部端点或撤销按钮/)).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "授权配置" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("heading", { name: "不可变 ServiceRoleTemplate" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "ServiceLinkedRoleAccess" })).toBeTruthy();
     expect(screen.getByText("允许已登记的 PaaS 服务按单一用途读取一个精确的托管服务安装。")).toBeTruthy();
     expect(screen.getAllByText("managed-service-installation-read", { selector: "code" }).length).toBeGreaterThan(0);
     expect(screen.getAllByText(`sha256:${"8".repeat(64)}`).length).toBeGreaterThan(0);
     expect(screen.getAllByText(`sha256:${"9".repeat(64)}`).length).toBeGreaterThan(0);
     expect(screen.getByText("服务关联角色为 ACTIVE 只说明账号与发布模板、注册服务主体的关系可用；它不证明任何业务资源已经绑定，也不能替代逐条 WorkloadRoleBinding。")).toBeTruthy();
 
+    await user.click(screen.getByRole("tab", { name: "资源绑定 (1)" }));
     const bindings = screen.getByRole("table", { name: "服务角色业务资源绑定" });
     expect(within(bindings).getByText("SERVICE_INSTALLATION")).toBeTruthy();
     expect(within(bindings).getByText("service-installation-example")).toBeTruthy();
@@ -86,6 +76,22 @@ describe("ServiceAuthorizationPreview", () => {
     expect(screen.getByText("当前 MOCK 只展示一页精确绑定；LIVE 读取仅按后端返回的不透明游标继续，不推断总页数。")).toBeTruthy();
     expect((screen.getByRole("button", { name: "上一页绑定" }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole("button", { name: "下一页绑定" }) as HTMLButtonElement).disabled).toBe(true);
+
+    await user.click(screen.getByRole("tab", { name: "运行边界" }));
+    expect(screen.getByRole("heading", { name: "ServiceRoleSession" })).toBeTruthy();
+    expect(screen.getByText("SERVICE")).toBeTruthy();
+    expect(screen.getByText("未发行")).toBeTruthy();
+    const runtime = screen.getByRole("heading", { name: "一次服务请求的执行边界" }).closest("section")!;
+    expect(within(runtime).getByText("认证受信服务主体")).toBeTruthy();
+    expect(within(runtime).getByText("签发短期服务会话")).toBeTruthy();
+    expect(within(runtime).getByText("产品 PEP 重新鉴权")).toBeTruthy();
+    expect(within(runtime).getByText("执行并返回业务结果")).toBeTruthy();
+    expect(within(runtime).getByText("未验证请求")).toBeTruthy();
+    expect(within(runtime).getByText("未签发")).toBeTruthy();
+    expect(within(runtime).getByText("未评估")).toBeTruthy();
+    expect(within(runtime).getByText("未执行")).toBeTruthy();
+    expect(within(runtime).queryByRole("button")).toBeNull();
+    expect(within(runtime).getByText(/不展示会话 ID、临时凭据、内部端点或撤销按钮/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: /撤销|解除/ })).toBeNull();
     expect(screen.queryByRole("dialog")).toBeNull();
 

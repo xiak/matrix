@@ -209,6 +209,7 @@ function ServiceAuthorizationValiditySummary() {
 function ServiceLinkedRoleObservation({ accountId }: { accountId: string }) {
   const t = useTranslations("ServiceAuthorizationPreview");
   const previewSnapshot = previewSnapshotFor(previewTemplate.targetResourceId);
+  const [detailSection, setDetailSection] = useState("configuration");
   return <div className={styles.stack}>
     <div className={styles.sectionHeading}>
       <div><span>{t("observation.eyebrow")}</span><h3>{t("observation.title")}</h3><p>{t("observation.hint")}</p></div>
@@ -216,75 +217,88 @@ function ServiceLinkedRoleObservation({ accountId }: { accountId: string }) {
     </div>
     <Alert status="info">{t("observation.contractBoundary")}</Alert>
     <ServiceAuthorizationValiditySummary />
-    <div className={styles.observationGrid}>
-      <Card>
-        <Card.Header className={styles.observationHeading}><div><span>{t("observation.template.eyebrow")}</span><h4>{t("observation.template.title")}</h4></div><Badge status="success">{t("states.active")}</Badge></Card.Header>
-        <Card.Body className={styles.cardBody}><dl className={styles.compactFacts}>
-          <div><dt>{t("fields.templateId")}</dt><dd><code>{previewTemplate.id}</code></dd></div>
-          <div><dt>{t("fields.templateRevision")}</dt><dd>v{previewTemplate.version}</dd></div>
-          <div><dt>{t("fields.contentDigest")}</dt><dd><code>{previewTemplate.contentDigest}</code></dd></div>
-          <div><dt>{t("fields.permissionCeiling")}</dt><dd><code>{previewTemplate.policyId}@{previewTemplate.policyVersionId}</code></dd></div>
-          <div><dt>{t("fields.workloadKinds")}</dt><dd><code>{previewTemplate.workloadResourceKind}</code></dd></div>
-          <div><dt>{t("fields.maxSession")}</dt><dd>{t("observation.durationMinutes", { count: previewTemplate.maxSessionDurationSeconds / 60 })}</dd></div>
-        </dl></Card.Body>
-      </Card>
-      <Card>
-        <Card.Header className={styles.observationHeading}><div><span>{t("observation.relation.eyebrow")}</span><h4>{t("observation.relation.title")}</h4></div><Badge status="success">{previewAccountAccess.roleStatus}</Badge></Card.Header>
-        <Card.Body className={styles.cardBody}><dl className={styles.compactFacts}>
-          <div><dt>{t("fields.targetAccount")}</dt><dd><code>{accountId}</code></dd></div>
-          <div><dt>{t("fields.roleId")}</dt><dd><code>{previewAccountAccess.roleId}</code></dd></div>
-          <div><dt>{t("fields.roleManagement")}</dt><dd><code>{previewAccountAccess.roleManagement}</code></dd></div>
-          <div><dt>{t("fields.resourceVersion")}</dt><dd>{previewAccountAccess.roleResourceVersion}</dd></div>
-          <div><dt>{t("fields.serviceInstallation")}</dt><dd><code>{previewAccountAccess.principalInstallationId}</code></dd></div>
-          <div><dt>{t("fields.servicePrincipal")}</dt><dd><code>{previewAccountAccess.principalId}</code></dd></div>
-          <div><dt>{t("fields.purpose")}</dt><dd><code>{previewTemplate.purpose}</code></dd></div>
-          <div><dt>{t("fields.roleName")}</dt><dd><code>{previewTemplate.roleName}</code></dd></div>
-          <div><dt>{t("fields.roleDescription")}</dt><dd>{t("template.roleDescription")}</dd></div>
-          <div><dt>{t("fields.templateReference")}</dt><dd><code>{previewTemplate.id}@v{previewTemplate.version}</code></dd></div>
-          <div><dt>{t("fields.contentDigest")}</dt><dd><code>{previewTemplate.contentDigest}</code></dd></div>
-          <div><dt>{t("fields.permissionCeiling")}</dt><dd><code>{previewTemplate.policyId}@{previewTemplate.policyVersionId}</code></dd></div>
-          <div><dt>{t("fields.permissionCeilingDigest")}</dt><dd><code>{previewTemplate.policyContentDigest}</code></dd></div>
-        </dl></Card.Body>
-      </Card>
-    </div>
-    <Alert status="warning">{t("observation.roleIsNotBinding")}</Alert>
-    <section className={styles.bindingSection} aria-labelledby="service-authorization-binding-title">
-      <div className={styles.sectionHeading}><div><h3 id="service-authorization-binding-title">{t("observation.binding.title")}</h3><p>{t("observation.binding.hint")}</p></div><Badge status="neutral">1</Badge></div>
-      <Table aria-label={t("observation.binding.tableLabel")} mobileLayout="stack">
-        <thead><tr><th scope="col">{t("fields.workload")}</th><th scope="col">{t("fields.bindingState")}</th><th scope="col">{t("fields.bindingId")}</th><th scope="col">{t("fields.resourceVersion")}</th><th scope="col">{t("fields.updatedAt")}</th></tr></thead>
-        <tbody><tr>
-          <td data-label={t("fields.workload")}><strong>{previewTemplate.workloadResourceKind}</strong><small><code>{previewTemplate.targetResourceId}</code></small></td>
-          <td data-label={t("fields.bindingState")}><Badge status="success">{previewAccountAccess.bindingStatus}</Badge></td>
-          <td data-label={t("fields.bindingId")}><code>{previewAccountAccess.bindingId}</code>
-            <small>{t("fields.targetAccount")} · <code>{accountId}</code></small>
-            <small>{t("fields.roleId")} · <code>{previewAccountAccess.roleId}</code></small>
-            <small>{t("fields.templateReference")} · <code>{previewTemplate.id}@v{previewTemplate.version}</code></small>
-            <small>{t("fields.contentDigest")} · <code>{previewTemplate.contentDigest}</code></small>
-          </td>
-          <td data-label={t("fields.resourceVersion")}>{previewAccountAccess.bindingResourceVersion}</td>
-          <td data-label={t("fields.updatedAt")}><time dateTime={previewAccountAccess.updatedAt}>{previewAccountAccess.updatedAt}</time><small>{t("observation.binding.createdAt")} <time dateTime={previewAccountAccess.createdAt}>{previewAccountAccess.createdAt}</time></small></td>
-        </tr></tbody>
-      </Table>
-      <Table.Footer note={t("observation.binding.snapshotNote")}><TablePagination mode="cursor" summary={t("observation.binding.cursorPage", { page: 1 })}
-        previous={{ label: t("observation.binding.previous"), disabled: true, onClick: () => undefined }}
-        next={{ label: t("observation.binding.next"), disabled: true, onClick: () => undefined }} /></Table.Footer>
-    </section>
-    <Card>
-      <Card.Header className={styles.observationHeading}>
-        <div><span>{t("observation.session.eyebrow")}</span><h4>{t("observation.session.title")}</h4></div>
-        <Badge status="neutral">{t("observation.session.notIssued")}</Badge>
-      </Card.Header>
-      <Card.Body className={styles.cardBody}>
-        <dl className={styles.compactFacts}>
-          <div><dt>{t("observation.session.identityType")}</dt><dd><code>ServiceRoleSession</code></dd></div>
-          <div><dt>{t("observation.session.source")}</dt><dd><code>SERVICE</code></dd></div>
-          <div><dt>{t("fields.maxSession")}</dt><dd>{t("observation.durationMinutes", { count: previewTemplate.maxSessionDurationSeconds / 60 })}</dd></div>
-        </dl>
-        <Alert status="info">{t("observation.session.boundary")}</Alert>
-        <ServiceRoleRuntimeTrace />
-      </Card.Body>
-    </Card>
-    <div className={styles.snapshot}><div><strong>{t("observation.permissionTitle")}</strong><span>{t("observation.permissionHint")}</span></div><ul>{previewSnapshot.statements.flatMap((statement) => statement.actions).map((action) => <li key={action}><code>{action}</code></li>)}</ul></div>
+    <Tabs.Root value={detailSection} onValueChange={setDetailSection}>
+      <Tabs.List aria-label={t("observation.details.sectionsLabel")}>
+        <Tabs.Trigger value="configuration">{t("observation.details.configuration")}</Tabs.Trigger>
+        <Tabs.Trigger value="bindings">{t("observation.details.bindings", { count: 1 })}</Tabs.Trigger>
+        <Tabs.Trigger value="runtime">{t("observation.details.runtime")}</Tabs.Trigger>
+      </Tabs.List>
+      <Tabs.Content className={styles.stack} value="configuration">
+        <div className={styles.observationGrid}>
+          <Card>
+            <Card.Header className={styles.observationHeading}><div><span>{t("observation.template.eyebrow")}</span><h4>{t("observation.template.title")}</h4></div><Badge status="success">{t("states.active")}</Badge></Card.Header>
+            <Card.Body className={styles.cardBody}><dl className={styles.compactFacts}>
+              <div><dt>{t("fields.templateId")}</dt><dd><code>{previewTemplate.id}</code></dd></div>
+              <div><dt>{t("fields.templateRevision")}</dt><dd>v{previewTemplate.version}</dd></div>
+              <div><dt>{t("fields.contentDigest")}</dt><dd><code>{previewTemplate.contentDigest}</code></dd></div>
+              <div><dt>{t("fields.permissionCeiling")}</dt><dd><code>{previewTemplate.policyId}@{previewTemplate.policyVersionId}</code></dd></div>
+              <div><dt>{t("fields.workloadKinds")}</dt><dd><code>{previewTemplate.workloadResourceKind}</code></dd></div>
+              <div><dt>{t("fields.maxSession")}</dt><dd>{t("observation.durationMinutes", { count: previewTemplate.maxSessionDurationSeconds / 60 })}</dd></div>
+            </dl></Card.Body>
+          </Card>
+          <Card>
+            <Card.Header className={styles.observationHeading}><div><span>{t("observation.relation.eyebrow")}</span><h4>{t("observation.relation.title")}</h4></div><Badge status="success">{previewAccountAccess.roleStatus}</Badge></Card.Header>
+            <Card.Body className={styles.cardBody}><dl className={styles.compactFacts}>
+              <div><dt>{t("fields.targetAccount")}</dt><dd><code>{accountId}</code></dd></div>
+              <div><dt>{t("fields.roleId")}</dt><dd><code>{previewAccountAccess.roleId}</code></dd></div>
+              <div><dt>{t("fields.roleManagement")}</dt><dd><code>{previewAccountAccess.roleManagement}</code></dd></div>
+              <div><dt>{t("fields.resourceVersion")}</dt><dd>{previewAccountAccess.roleResourceVersion}</dd></div>
+              <div><dt>{t("fields.serviceInstallation")}</dt><dd><code>{previewAccountAccess.principalInstallationId}</code></dd></div>
+              <div><dt>{t("fields.servicePrincipal")}</dt><dd><code>{previewAccountAccess.principalId}</code></dd></div>
+              <div><dt>{t("fields.purpose")}</dt><dd><code>{previewTemplate.purpose}</code></dd></div>
+              <div><dt>{t("fields.roleName")}</dt><dd><code>{previewTemplate.roleName}</code></dd></div>
+              <div><dt>{t("fields.roleDescription")}</dt><dd>{t("template.roleDescription")}</dd></div>
+              <div><dt>{t("fields.templateReference")}</dt><dd><code>{previewTemplate.id}@v{previewTemplate.version}</code></dd></div>
+              <div><dt>{t("fields.contentDigest")}</dt><dd><code>{previewTemplate.contentDigest}</code></dd></div>
+              <div><dt>{t("fields.permissionCeiling")}</dt><dd><code>{previewTemplate.policyId}@{previewTemplate.policyVersionId}</code></dd></div>
+              <div><dt>{t("fields.permissionCeilingDigest")}</dt><dd><code>{previewTemplate.policyContentDigest}</code></dd></div>
+            </dl></Card.Body>
+          </Card>
+        </div>
+        <Alert status="warning">{t("observation.roleIsNotBinding")}</Alert>
+      </Tabs.Content>
+      <Tabs.Content className={styles.stack} value="bindings">
+        <section className={styles.bindingSection} aria-labelledby="service-authorization-binding-title">
+          <div className={styles.sectionHeading}><div><h3 id="service-authorization-binding-title">{t("observation.binding.title")}</h3><p>{t("observation.binding.hint")}</p></div><Badge status="neutral">1</Badge></div>
+          <Table aria-label={t("observation.binding.tableLabel")} mobileLayout="stack">
+            <thead><tr><th scope="col">{t("fields.workload")}</th><th scope="col">{t("fields.bindingState")}</th><th scope="col">{t("fields.bindingId")}</th><th scope="col">{t("fields.resourceVersion")}</th><th scope="col">{t("fields.updatedAt")}</th></tr></thead>
+            <tbody><tr>
+              <td data-label={t("fields.workload")}><strong>{previewTemplate.workloadResourceKind}</strong><small><code>{previewTemplate.targetResourceId}</code></small></td>
+              <td data-label={t("fields.bindingState")}><Badge status="success">{previewAccountAccess.bindingStatus}</Badge></td>
+              <td data-label={t("fields.bindingId")}><code>{previewAccountAccess.bindingId}</code>
+                <small>{t("fields.targetAccount")} · <code>{accountId}</code></small>
+                <small>{t("fields.roleId")} · <code>{previewAccountAccess.roleId}</code></small>
+                <small>{t("fields.templateReference")} · <code>{previewTemplate.id}@v{previewTemplate.version}</code></small>
+                <small>{t("fields.contentDigest")} · <code>{previewTemplate.contentDigest}</code></small>
+              </td>
+              <td data-label={t("fields.resourceVersion")}>{previewAccountAccess.bindingResourceVersion}</td>
+              <td data-label={t("fields.updatedAt")}><time dateTime={previewAccountAccess.updatedAt}>{previewAccountAccess.updatedAt}</time><small>{t("observation.binding.createdAt")} <time dateTime={previewAccountAccess.createdAt}>{previewAccountAccess.createdAt}</time></small></td>
+            </tr></tbody>
+          </Table>
+          <Table.Footer note={t("observation.binding.snapshotNote")}><TablePagination mode="cursor" summary={t("observation.binding.cursorPage", { page: 1 })}
+            previous={{ label: t("observation.binding.previous"), disabled: true, onClick: () => undefined }}
+            next={{ label: t("observation.binding.next"), disabled: true, onClick: () => undefined }} /></Table.Footer>
+        </section>
+      </Tabs.Content>
+      <Tabs.Content className={styles.stack} value="runtime">
+        <Card>
+          <Card.Header className={styles.observationHeading}>
+            <div><span>{t("observation.session.eyebrow")}</span><h4>{t("observation.session.title")}</h4></div>
+            <Badge status="neutral">{t("observation.session.notIssued")}</Badge>
+          </Card.Header>
+          <Card.Body className={styles.cardBody}>
+            <dl className={styles.compactFacts}>
+              <div><dt>{t("observation.session.identityType")}</dt><dd><code>ServiceRoleSession</code></dd></div>
+              <div><dt>{t("observation.session.source")}</dt><dd><code>SERVICE</code></dd></div>
+              <div><dt>{t("fields.maxSession")}</dt><dd>{t("observation.durationMinutes", { count: previewTemplate.maxSessionDurationSeconds / 60 })}</dd></div>
+            </dl>
+            <Alert status="info">{t("observation.session.boundary")}</Alert>
+            <ServiceRoleRuntimeTrace />
+          </Card.Body>
+        </Card>
+        <div className={styles.snapshot}><div><strong>{t("observation.permissionTitle")}</strong><span>{t("observation.permissionHint")}</span></div><ul>{previewSnapshot.statements.flatMap((statement) => statement.actions).map((action) => <li key={action}><code>{action}</code></li>)}</ul></div>
+      </Tabs.Content>
+    </Tabs.Root>
     <Alert status="info">{t("observation.readOnly")}</Alert>
   </div>;
 }
