@@ -6,8 +6,8 @@
 - Updated: 2026-09-30
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `4a99a069`
-- Pushed documentation head: `11ad4db7`
+- Pushed UI source: `675b5390`
+- Pushed documentation head: `9bfce4ee`
 
 ## Authoritative route
 
@@ -110,21 +110,18 @@ content geometry. Verified scene refresh continues to keep current content.
 This is shared loading behavior, not a new data model or LIVE acceptance, and
 the independent MOCK entry remains available for inspection.
 
-The service-authorization MOCK now separates platform-template publication
-from current-Account consent in its directory, detail and final review. It
-states that a concrete cloud-product resource initiates real create/revoke,
-while IAM observes template and service-linked-role state read-only. Its single
-illustrative permission now follows the repository's current
-`managedservice.service-installation.read` namespace and an exact
-`SERVICE_INSTALLATION` resource; the initiating product resource remains a
-separate fact from Account, principal, purpose and role. An additional explicit
-MOCK observation separates immutable template publication, the Account-level
-service-linked Role relation and exact workload bindings, and never treats an
-active Role as proof that a resource is bound. The catalog marks create as
-USER-only and read as USER/ROLE. Example relation/binding facts do not enter a
-LIVE decoder or enable writes. The Account relation/binding northbound reads
-and all authorize/revoke/assume contracts remain unavailable from a fixed
-pushed source, so the final command stays disabled.
+The service-authorization MOCK still separates platform-template publication,
+current-Account consent, the service-linked Role relation and each exact
+workload binding. LIVE Roles now additionally expose a lazy, read-only platform
+template directory from the fixed `GET /v1/service-role-templates` contract.
+Its closed decoder and content-area workflow show immutable template/policy
+facts without treating `ACTIVE` as Account authorization; denial and route
+failure stay local and never fall back to MOCK. Relation/binding reads and all
+authorize/revoke/assume controls remain absent. Backend follow-ups `2e2476ad`
+and `9db81aa0` were pushed after the first independent CI exposed an Audit
+directory gap; CI `36661158790` was still queued at the documented milestone,
+so backend acceptance remains open. Exact evidence and limitations belong to
+FEAT-IAM-010 and FEAT-007.
 
 LIVE member Role discovery also keeps its verified source identity, discovery
 heading and temporary-access boundary mounted while only role cards load. An
@@ -144,7 +141,10 @@ environment. Real browser acceptance cannot be replaced by MOCK or API-only
 checks. Do not duplicate the donor application or move installer-owned secrets
 into the UI.
 
-Next integration must select one fixed boundary from the owning FEAT. Session
+Next integration must select one fixed boundary from the owning FEAT. First
+reconcile the final result of backend CI `36661158790`; do not broaden LIVE
+service authorization until a later fixed source publishes relation/binding
+observation or product-owned consent lifecycle contracts. Session
 activity/touch, Passkey registration and trusted network request context remain
 MOCK until IAM provides a fixed, pushed commit with their required gates. The
 Role self-service client still requires real IAM-process browser verification;
