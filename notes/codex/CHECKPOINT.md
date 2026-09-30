@@ -6,8 +6,8 @@
 - Updated: 2026-09-30
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `51c63c78`
-- Pushed documentation head: `895d7b13`
+- Pushed UI source: `63acaa4f`
+- Pushed documentation head: `13faa723`
 
 ## Authoritative route
 
@@ -124,7 +124,11 @@ one. The isolated managed-service instance directory now demonstrates the
 product-owned entry: an exact selected `SERVICE_INSTALLATION` opens a stable
 detail and reuses the same consent review, while non-preview instances expose
 no command and the final authorize action remains disabled. Relation/binding
-reads and all authorize/revoke/assume controls remain absent. Backend follow-ups
+reads and all authorize/revoke/assume controls remain absent. Product onboarding
+and service-consent reviews now focus their content-page title only when the
+view changes; changing an internal step focuses the newly visible step heading
+with no parent refocus or scroll jump. The shared behavior applies to both IAM
+and product-resource entries and adds no backend contract. Backend follow-ups
 `2e2476ad` and `9db81aa0` were pushed after the first
 independent CI exposed an Audit directory gap; CI `36661158790` was still queued
 at the documented milestone, so backend acceptance remains open. Exact evidence
