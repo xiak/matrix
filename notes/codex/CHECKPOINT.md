@@ -6,8 +6,8 @@
 - Updated: 2026-10-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `eeb6dd14`
-- Pushed documentation milestone: `2206d988`
+- Pushed source/embed milestone: `28552769`
+- Pushed documentation milestone: `cd72a31e`
 
 ## Authoritative route
 
@@ -43,17 +43,20 @@ preview evaluator and does not render match states, effective permission,
 final Allow/Deny, a reason tree or remediation. Source IP and time remain
 operator-entered information-architecture fields only.
 
-The PostgreSQL product directory now treats resource visibility as a product
-server boundary: the UI labels only the records currently loaded and never
-infers an Account-wide total or coverage. Isolated MOCK fixtures are explicitly
-not IAM-filtered; non-preview copy requires the product service to combine its
-candidate resource list with IAM decisions before returning rows. The browser
-does not hide denied rows, expose a tenant-facing batch-grant action, or claim
-the unfinished `/v1/authorize:batch` candidate is integrated. Source/embed at
-`eeb6dd14` passed 55 frontend files / 891 tests, static normalization,
-type/lint/architecture, 228 theme contrast pairs, 41-page export, 228-file embed
-equality and repository Go test/vet. Desktop and `390 × 844` inspection had no
-Dialog, overflow or warning/error. Existing MOCK pages remain available.
+The PostgreSQL instance and product-specification directories now treat
+resource visibility as a product-server boundary: the UI labels only records
+currently loaded and never infers an Account-wide total or coverage. A
+successful empty product directory is distinct from service unavailability and
+does not disclose hidden names, denial reasons or denial counts. Isolated MOCK
+fixtures are explicitly not IAM-filtered; non-preview copy requires the product
+service to combine trusted candidates with IAM decisions before returning rows.
+The browser does not hide denied rows, expose a tenant-facing batch-grant
+action, or claim the unfinished `/v1/authorize:batch` candidate is integrated.
+Source/embed at `28552769` passed 55 frontend files / 893 tests, static
+normalization, type/lint/architecture, 228 theme contrast pairs, 41-page
+export, 228-file embed equality and repository Go test/vet. Desktop and
+`390 × 844` inspection had no Dialog, overflow or warning/error. Existing MOCK
+pages remain available.
 
 The fixed administrator RoleSession northbound contract is consumed only by
 Role detail. The service-authorization MOCK reuses its public fields but sends
