@@ -245,6 +245,7 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
   const setHeaderPanel = useConsoleUiStore((state) => state.setHeaderPanel);
   const principal = session.current;
   const organizationId = committedFrame.scope?.organization.id;
+  const effectiveOrganizationId = organizationId ?? principal?.session.organizationId;
   const organizationName = committedFrame.scope?.organization.name;
   const headerIdentity = useMemo(() => roleSession.identity ? ({
     accountType: accountMessages("role"),
@@ -255,8 +256,8 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
     accountType: accountMessages(principal?.loginName.includes("@") ? "child" : "primary"),
     loginName: principal?.loginName ?? t("user"),
     principalId: principal?.session.principalId ?? "IAM session",
-    tenant: { id: organizationId, name: organizationName ?? principal?.session.organizationId ?? t("unspecifiedTenant") }
-  }), [principal, organizationId, organizationName, accountMessages, roleSession.identity, t]);
+    tenant: { id: effectiveOrganizationId, name: organizationName ?? principal?.session.organizationId ?? t("unspecifiedTenant") }
+  }), [principal, effectiveOrganizationId, organizationName, accountMessages, roleSession.identity, t]);
   const headerScope = useMemo(() => ({ regionId, onRegionChange: setRegionId }), [regionId]);
   useEffect(() => () => useConsoleUiStore.getState().resetSessionUi(), []);
 
@@ -487,7 +488,7 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
                       <Button onClick={() => void controlPlane.reload()} variant="secondary"><RefreshCcw aria-hidden="true" />{t("retry")}</Button>
                       <Button asChild variant="ghost"><Link href="/console/access/">{t("openAccess")}</Link></Button>
                     </div>} /></div> : null}
-                    {content ? <ConsoleContentRenderer accountId={frame.scope?.organization.id} pendingHref={pendingContent ? navigation.pendingHref : null} preview={frame.preview} scene={content} scope={{ regionId }} /> : !controlPlane.error ? <ConsoleContentLoadingRenderer label={loadingLabel} selection={navigation.selection} /> : null}
+                    {content ? <ConsoleContentRenderer accountId={frame.scope?.organization.id ?? principal?.session.organizationId} pendingHref={pendingContent ? navigation.pendingHref : null} preview={frame.preview} scene={content} scope={{ regionId }} /> : !controlPlane.error ? <ConsoleContentLoadingRenderer label={loadingLabel} selection={navigation.selection} /> : null}
                   </div>
                 </ContentPage.Body>
               </ContentPage>

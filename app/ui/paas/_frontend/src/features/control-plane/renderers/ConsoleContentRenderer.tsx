@@ -1,4 +1,4 @@
-import { Suspense, useLayoutEffect, useRef, useState, type MutableRefObject } from "react";
+import { Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState, type MutableRefObject } from "react";
 import { useSearchParams } from "next/navigation";
 import { ConsoleLink as Link, useConsoleNavigation } from "../routes/ConsoleNavigation";
 import { AccountAccessRenderer } from "@/features/auth/renderers/AccountAccessRenderer";
@@ -17,6 +17,7 @@ import {
 import {
   Alert,
   Table,
+  TableSkeleton,
   PageSkeleton,
   EmptyState,
   Badge,
@@ -39,6 +40,8 @@ import { LogServiceRenderer } from "./LogServiceRenderer";
 import { MessageCenterRenderer } from "./MessageCenterRenderer";
 import { ServiceAuthorizationChain } from "@/features/auth/renderers/ServiceAuthorizationChain";
 import { ServiceAuthorizationConsentReview } from "@/features/auth/renderers/ServiceAuthorizationPreview";
+import { useControlPlane } from "../application/ControlPlaneProvider";
+import type { ManagedServiceAuthorizationLoad } from "../domain/serviceAuthorization";
 
 function InstallationRows({ items, onOpen, triggerRefs }: {
   items: InstallationScene[];
@@ -199,6 +202,72 @@ function QuotaContent({ scene }: { scene: Extract<ConsoleContentScene, { kind: "
   );
 }
 
+function LiveServiceAuthorizationCard({ accountId, installationId }: {
+  accountId: string;
+  installationId: string;
+}) {
+  const t = useTranslations("ManagedService");
+  const { inspectServiceAuthorization } = useControlPlane();
+  const [result, setResult] = useState<ManagedServiceAuthorizationLoad | { status: "loading" }>({ status: "loading" });
+  const revision = useRef(0);
+
+  const inspect = useCallback(() => {
+    const current = ++revision.current;
+    setResult({ status: "loading" });
+    void inspectServiceAuthorization(accountId, installationId).then((next) => {
+      if (revision.current === current) setResult(next);
+    });
+  }, [accountId, inspectServiceAuthorization, installationId]);
+
+  useEffect(() => {
+    const current = ++revision.current;
+    void inspectServiceAuthorization(accountId, installationId).then((next) => {
+      if (revision.current === current) setResult(next);
+    });
+    return () => { revision.current += 1; };
+  }, [accountId, inspectServiceAuthorization, installationId]);
+
+  const observation = result.status === "ready" ? result.observation : null;
+  const accountAuthorized = observation?.relation?.role.status === "ACTIVE";
+  const instanceBound = observation?.binding?.status === "ACTIVE";
+  const authorized = Boolean(accountAuthorized && instanceBound);
+  const stateLabel = result.status === "loading" ? t("authorizationChecking")
+    : result.status === "ready" ? t(authorized ? "authorizationActive" : "authorizationPending")
+      : t("authorizationUnavailableState");
+
+  return <Card aria-label={t("serviceAuthorization")} className={styles.authorizationCard}>
+    <Card.Header className={styles.authorizationHeading}>
+      <span><ShieldCheck aria-hidden="true" /></span>
+      <div><Typography.Eyebrow>{t("authorizationLiveEyebrow")}</Typography.Eyebrow><Typography.Title as="h3" level={3}>{t("serviceAuthorization")}</Typography.Title><Typography.Text tone="muted">{t("serviceAuthorizationHint")}</Typography.Text></div>
+      <Badge status={authorized ? "success" : result.status === "ready" ? "info" : "neutral"}>{stateLabel}</Badge>
+    </Card.Header>
+    <Card.Body className={styles.authorizationBody} aria-busy={result.status === "loading"}>
+      {result.status === "loading" ? <TableSkeleton header={false} label={t("authorizationLoading")} rows={2} /> : null}
+      {result.status === "expired" || result.status === "forbidden" || result.status === "unavailable" ? <>
+        <Alert status={result.status === "forbidden" ? "warning" : "danger"}>{t(`authorizationErrors.${result.status}`)}</Alert>
+        {result.status === "unavailable" ? <div><Button onClick={inspect} variant="secondary">{t("retryAuthorization")}</Button></div> : null}
+      </> : null}
+      {observation ? <>
+        <ServiceAuthorizationChain
+          template={{ label: t("publishedTemplate", { version: observation.template.version }), tone: "success" }}
+          account={{ label: accountAuthorized ? t("accountAuthorized") : t("accountAuthorizationPending"), tone: accountAuthorized ? "success" : undefined }}
+          binding={{ label: instanceBound ? t("instanceBound") : t("resourceNotBound"), tone: instanceBound ? "success" : undefined }}
+        />
+        <dl className={styles.authorizationFacts}>
+          <div><dt>{t("authorizationTemplate")}</dt><dd><Typography.Code>{observation.template.id}@v{observation.template.version}</Typography.Code><small><Typography.Code>{observation.template.contentDigest}</Typography.Code></small></dd></div>
+          <div><dt>{t("authorizationPermissionCeiling")}</dt><dd><Typography.Code>{observation.template.spec.policyVersion.policyId}</Typography.Code><small><Typography.Code>{observation.template.spec.policyVersion.versionId}</Typography.Code></small></dd></div>
+          <div><dt>{t("authorizationBinding")}</dt><dd>{observation.binding ? <Typography.Code>{observation.binding.id}</Typography.Code> : t("resourceNotBound")}<small>{observation.relation ? <Typography.Code>{observation.relation.role.id}</Typography.Code> : t("accountAuthorizationPending")}</small></dd></div>
+        </dl>
+        <Alert status={authorized ? "info" : "warning"}>{t(authorized ? "authorizationObservedBoundary" : "authorizationReleaseBoundary")}</Alert>
+        <div className={styles.authorizationActions}>
+          <Button disabled title={t("authorizationReleaseBoundary")}>{t(authorized ? "authorizationAlreadyActive" : "authorizePendingRelease")}</Button>
+          <Link className={styles.textLink} href="/console/access/roles/">{t("openIamObservation")} <ArrowRight aria-hidden="true" /></Link>
+        </div>
+      </> : null}
+    </Card.Body>
+  </Card>;
+}
+
 function InstallationContent({ scene, preview, accountId }: {
   scene: Extract<ConsoleContentScene, { kind: "installations" }>;
   preview: boolean;
@@ -208,6 +277,7 @@ function InstallationContent({ scene, preview, accountId }: {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [review, setReview] = useState(false);
   const [stage, setStage] = useState(0);
+  const [previewAuthorizedIds, setPreviewAuthorizedIds] = useState<Set<string>>(() => new Set());
   const heading = useRef<HTMLHeadingElement>(null);
   const authorizationTrigger = useRef<HTMLButtonElement>(null);
   const rowTriggers = useRef(new Map<string, HTMLButtonElement>());
@@ -226,6 +296,7 @@ function InstallationContent({ scene, preview, accountId }: {
   }, [review, selected]);
 
   if (selected) {
+    const previewAuthorized = previewAuthorizedIds.has(selected.id);
     const closeDetail = () => {
       if (review) {
         setReview(false);
@@ -244,7 +315,11 @@ function InstallationContent({ scene, preview, accountId }: {
 
       {review && accountId ? <>
         <Alert status="warning">{t("authorizationPreviewBoundary")}</Alert>
-        <ServiceAuthorizationConsentReview accountId={accountId} targetResourceId={selected.id} stage={stage} onStageChange={setStage} onClose={closeDetail} />
+        <ServiceAuthorizationConsentReview accountId={accountId} targetResourceId={selected.id} stage={stage} onStageChange={setStage} onClose={closeDetail} onPreviewAuthorize={preview ? () => {
+          setPreviewAuthorizedIds((current) => new Set(current).add(selected.id));
+          setReview(false);
+          window.setTimeout(() => authorizationTrigger.current?.focus({ preventScroll: true }), 0);
+        } : undefined} />
       </> : <>
         <dl className={styles.installationFacts}>
           <div><dt>{t("instanceId")}</dt><dd><Typography.Code>{selected.id}</Typography.Code></dd></div>
@@ -256,11 +331,16 @@ function InstallationContent({ scene, preview, accountId }: {
         {preview && accountId ? <Card className={styles.authorizationCard}>
           <Card.Header className={styles.authorizationHeading}><span><ShieldCheck aria-hidden="true" /></span><div><Typography.Eyebrow>{t("authorizationEyebrow")}</Typography.Eyebrow><Typography.Title as="h3" level={3}>{t("serviceAuthorization")}</Typography.Title><Typography.Text tone="muted">{t("serviceAuthorizationHint")}</Typography.Text></div><Badge status="warning">MOCK</Badge></Card.Header>
           <Card.Body className={styles.authorizationBody}>
-            <ServiceAuthorizationChain template={{ label: t("illustrativeTemplate"), tone: "warning" }} account={{ label: t("accountNotAuthorized") }} binding={{ label: t("resourceNotBound") }} />
-            <Alert status="info">{t("productEntryHint")}</Alert>
-            <div><Button ref={authorizationTrigger} onClick={() => { setStage(0); setReview(true); }}>{t("reviewAuthorization")}</Button></div>
+            <ServiceAuthorizationChain template={{ label: t("illustrativeTemplate"), tone: "warning" }} account={{ label: t(previewAuthorized ? "previewAccountAuthorized" : "accountNotAuthorized"), tone: previewAuthorized ? "success" : undefined }} binding={{ label: t(previewAuthorized ? "previewInstanceBound" : "resourceNotBound"), tone: previewAuthorized ? "success" : undefined }} />
+            <Alert status={previewAuthorized ? "success" : "info"}>{t(previewAuthorized ? "previewAuthorizationApplied" : "productEntryHint")}</Alert>
+            {previewAuthorized ? <dl className={styles.authorizationFacts}>
+              <div><dt>{t("authorizationTemplate")}</dt><dd><Typography.Code>preview.service-role-template.managed-service-installation-read.v1@v1</Typography.Code></dd></div>
+              <div><dt>{t("authorizationBinding")}</dt><dd><Typography.Code>preview.workload-role-binding.{selected.id}</Typography.Code></dd></div>
+              <div><dt>{t("instanceId")}</dt><dd><Typography.Code>{selected.id}</Typography.Code><small>MOCK · {t("previewBrowserOnly")}</small></dd></div>
+            </dl> : null}
+            <div><Button ref={authorizationTrigger} onClick={() => { setStage(0); setReview(true); }}>{t(previewAuthorized ? "reviewAuthorizationAgain" : "reviewAuthorization")}</Button></div>
           </Card.Body>
-        </Card> : null}
+        </Card> : accountId ? <LiveServiceAuthorizationCard accountId={accountId} installationId={selected.id} /> : null}
       </>}
     </section>;
   }
@@ -274,7 +354,7 @@ function InstallationContent({ scene, preview, accountId }: {
         </div>
         <Badge status="info">{t("instanceCount", { count: scene.installations.length })}</Badge>
       </Card.Header>
-      <InstallationRows items={scene.installations} onOpen={preview && accountId ? (item) => setSelectedId(item.id) : undefined} triggerRefs={rowTriggers} />
+      <InstallationRows items={scene.installations} onOpen={accountId ? (item) => setSelectedId(item.id) : undefined} triggerRefs={rowTriggers} />
     </Card>
   );
 }

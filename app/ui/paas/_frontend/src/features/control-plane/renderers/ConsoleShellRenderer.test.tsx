@@ -89,6 +89,7 @@ async function renderConsole({
   experience,
   openWorkspace = false,
   load = vi.fn().mockResolvedValue(snapshot),
+  inspectServiceAuthorization,
   logout = vi.fn().mockResolvedValue(undefined),
   accountRepository,
   iamRepository,
@@ -100,6 +101,7 @@ async function renderConsole({
   experience?: ExperienceSnapshot;
   openWorkspace?: boolean;
   load?: ControlPlaneRepository["load"];
+  inspectServiceAuthorization?: ControlPlaneRepository["inspectServiceAuthorization"];
   logout?: IamRepository["logout"];
   accountRepository?: AccountRepository;
   iamRepository?: IamRepository;
@@ -109,7 +111,8 @@ async function renderConsole({
     load,
     getInstallation: vi.fn(),
     activateQuota: vi.fn(),
-    createInstallation: vi.fn()
+    createInstallation: vi.fn(),
+    inspectServiceAuthorization
   };
   const iam: IamRepository = iamRepository ?? {
     async login() {
@@ -223,7 +226,101 @@ describe("ConsoleShellRenderer", () => {
     expect(screen.getByText("pg-test")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "下一步" }));
     await waitFor(() => expect(screen.getByRole("heading", { level: 3, name: "确认客户同意与撤销边界" })).toBe(document.activeElement));
-    expect((screen.getByRole("button", { name: "授权服务（未接入）" }) as HTMLButtonElement).disabled).toBe(true);
+    const authorize = screen.getByRole("button", { name: "模拟授权服务" }) as HTMLButtonElement;
+    expect(authorize.disabled).toBe(false);
+    await user.click(authorize);
+    expect(screen.getByRole("heading", { name: "订单主库" })).toBeTruthy();
+    expect(screen.getByText("账号已授权 · MOCK")).toBeTruthy();
+    expect(screen.getByText("当前实例已绑定 · MOCK")).toBeTruthy();
+    expect(screen.getByText(/不会调用 IAM、创建角色、写入后端或签发临时凭据/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "重新审阅授权" })).toBe(document.activeElement);
+  });
+
+  it("keeps live instance chrome stable while only its service-authorization region loads", async () => {
+    const installation = {
+      id: "pg-test", name: "订单主库", offeringId: "postgresql-18", engineVersion: "18",
+      quotaEntitlementId: "quota-primary", regionId: "local-primary", phase: "READY" as const,
+      endpoint: "pg-test.service.local:5432", credentialReference: null,
+      operation: { id: "operation-test", phase: "READY" as const, safeFailureCode: null, observedAt: "2026-08-26T12:00:00Z" },
+      createdAt: "2026-08-26T12:00:00Z"
+    };
+    let finishInspection!: (value: Awaited<ReturnType<NonNullable<ControlPlaneRepository["inspectServiceAuthorization"]>>>) => void;
+    const inspectServiceAuthorization = vi.fn(() => new Promise<Awaited<ReturnType<NonNullable<ControlPlaneRepository["inspectServiceAuthorization"]>>>>((resolve) => {
+      finishInspection = resolve;
+    }));
+    const { user } = await renderConsole({
+      section: "installations",
+      load: vi.fn().mockResolvedValue({ ...snapshot, installations: [installation] }),
+      inspectServiceAuthorization
+    });
+
+    await user.click(await screen.findByRole("button", { name: "订单主库" }));
+    expect(screen.getByRole("heading", { name: "订单主库" })).toBeTruthy();
+    expect(screen.getByText("pg-test.service.local:5432")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "服务访问授权" })).toBeTruthy();
+    expect(screen.getByText("正在核对")).toBeTruthy();
+    expect(screen.queryByText("授权服务（等待发布）")).toBeNull();
+
+    finishInspection({
+      template: {
+        id: "managedservice.installation-reader", version: 1, contentDigest: `sha256:${"c".repeat(64)}`, status: "ACTIVE",
+        spec: {
+          product: "managedservice", servicePurpose: "PAAS", roleName: "ManagedServiceInstallationReader",
+          roleDescription: "Read one installation.", maxSessionDurationSeconds: 900,
+          policyVersion: { policyId: "system.managedservice-installation-reader", versionId: "version-v1", contentDigest: `sha256:${"b".repeat(64)}` },
+          workloads: [{ resourceKind: "SERVICE_INSTALLATION", bindAction: "managedservice.service-installation.service-role.bind", unbindAction: "managedservice.service-installation.service-role.unbind" }]
+        }
+      },
+      relation: null,
+      binding: null
+    });
+
+    expect(await screen.findByText("待授权")).toBeTruthy();
+    expect(screen.getAllByText("待显式授权")).toHaveLength(2);
+    expect((screen.getByRole("button", { name: "授权服务（等待发布）" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(inspectServiceAuthorization).toHaveBeenCalledWith("renderer-test-memory-only-session", "organization-test", "pg-test");
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("renders an active account relation separately from an unbound live instance", async () => {
+    const { user } = await renderConsole({
+      section: "installations",
+      load: vi.fn().mockResolvedValue({ ...snapshot, installations: [{
+        id: "pg-unbound", name: "审计只读库", offeringId: "postgresql-18", engineVersion: "18",
+        quotaEntitlementId: "quota-primary", regionId: "local-primary", phase: "READY" as const,
+        endpoint: "pg-unbound.service.local:5432", credentialReference: null,
+        operation: { id: "operation-unbound", phase: "READY" as const, safeFailureCode: null, observedAt: "2026-08-26T12:00:00Z" },
+        createdAt: "2026-08-26T12:00:00Z"
+      }] }),
+      inspectServiceAuthorization: vi.fn().mockResolvedValue({
+        template: {
+          id: "managedservice.installation-reader", version: 1, contentDigest: `sha256:${"c".repeat(64)}`, status: "ACTIVE",
+          spec: {
+            product: "managedservice", servicePurpose: "PAAS", roleName: "ManagedServiceInstallationReader",
+            roleDescription: "Read one installation.", maxSessionDurationSeconds: 900,
+            policyVersion: { policyId: "system.managedservice-installation-reader", versionId: "version-v1", contentDigest: `sha256:${"b".repeat(64)}` },
+            workloads: [{ resourceKind: "SERVICE_INSTALLATION", bindAction: "managedservice.service-installation.service-role.bind", unbindAction: "managedservice.service-installation.service-role.unbind" }]
+          }
+        },
+        relation: {
+          role: {
+            id: "role-managedservice-reader", accountId: "organization-test", name: "ManagedServiceInstallationReader",
+            description: "Read one installation.", tags: [], management: "SERVICE_LINKED", status: "ACTIVE",
+            maxSessionDurationSeconds: 900, resourceVersion: 1, currentTrustVersionId: "trust-v1",
+            createdAt: "2026-08-26T12:00:00Z", updatedAt: "2026-08-26T12:00:00Z"
+          },
+          template: { id: "managedservice.installation-reader", version: 1, contentDigest: `sha256:${"c".repeat(64)}` },
+          servicePrincipal: { installationId: "installation-paas", principalId: "service-paas", purpose: "PAAS" },
+          permissionCeiling: { policyId: "system.managedservice-installation-reader", versionId: "version-v1", contentDigest: `sha256:${"b".repeat(64)}` }
+        },
+        binding: null
+      })
+    });
+
+    await user.click(await screen.findByRole("button", { name: "审计只读库" }));
+    expect(await screen.findByText("账号关系有效")).toBeTruthy();
+    expect(screen.getAllByText("实例未绑定").length).toBeGreaterThan(0);
+    expect(screen.queryByText("当前实例已绑定")).toBeNull();
   });
 
   it.each([

@@ -5,6 +5,7 @@ import type {
   QuotaEntitlement,
   ServiceInstallation
 } from "../domain/resources";
+import type { ManagedServiceAuthorizationObservation } from "../domain/serviceAuthorization";
 
 export interface ControlPlaneRepository {
   load(credential: string): Promise<ControlPlaneSnapshot>;
@@ -17,4 +18,9 @@ export interface ControlPlaneRepository {
     credential: string,
     command: CreateInstallationCommand
   ): Promise<ServiceInstallation>;
+  inspectServiceAuthorization?(
+    credential: string,
+    accountId: string,
+    installationId: string
+  ): Promise<ManagedServiceAuthorizationObservation>;
 }

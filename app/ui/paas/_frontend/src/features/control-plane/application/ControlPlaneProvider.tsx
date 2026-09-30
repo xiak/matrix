@@ -19,6 +19,7 @@ import type {
   CreateInstallationCommand
 } from "../domain/resources";
 import type { ControlPlaneRouteSelection } from "../domain/selection";
+import type { ManagedServiceAuthorizationLoad } from "../domain/serviceAuthorization";
 import type { ControlPlaneRepository } from "../repositories/controlPlaneRepository";
 import { httpControlPlaneRepository } from "../repositories/httpControlPlaneRepository";
 import { buildAccessConsoleScene, buildConsoleScene, buildExperienceConsoleScene } from "../scenes/buildConsoleScene";
@@ -38,6 +39,7 @@ type ControlPlaneContextValue = {
   reload(): Promise<void>;
   activateQuota(command: ActivateQuotaCommand): Promise<boolean>;
   createInstallation(command: CreateInstallationCommand): Promise<boolean>;
+  inspectServiceAuthorization(accountId: string, installationId: string): Promise<ManagedServiceAuthorizationLoad>;
 };
 
 const ControlPlaneContext = createContext<ControlPlaneContextValue | null>(null);
@@ -222,6 +224,20 @@ export function ControlPlaneProvider({
     }
   }, [credential, repository]);
 
+  const inspectServiceAuthorization = useCallback(async (
+    accountId: string,
+    installationId: string
+  ): Promise<ManagedServiceAuthorizationLoad> => {
+    if (!credential || !repository.inspectServiceAuthorization) return { status: "unavailable" };
+    try {
+      return { status: "ready", observation: await repository.inspectServiceAuthorization(credential, accountId, installationId) };
+    } catch (inspectionError) {
+      if (inspectionError instanceof HttpProblem && inspectionError.status === 401) return { status: "expired" };
+      if (inspectionError instanceof HttpProblem && inspectionError.status === 403) return { status: "forbidden" };
+      return { status: "unavailable" };
+    }
+  }, [credential, repository]);
+
   // The repository snapshot is product-wide. A route transition may project a
   // destination from that already-authoritative cache without issuing another
   // read. Preview-only products can also project from their own fixed snapshot;
@@ -248,8 +264,9 @@ export function ControlPlaneProvider({
     mutation,
     reload,
     activateQuota,
-    createInstallation
-  }), [activateQuota, createInstallation, error, isAccess, loading, mutation, prepare, projectScene, reload, scene]);
+    createInstallation,
+    inspectServiceAuthorization
+  }), [activateQuota, createInstallation, error, inspectServiceAuthorization, isAccess, loading, mutation, prepare, projectScene, reload, scene]);
 
   return (
     <ControlPlaneContext.Provider value={value}>

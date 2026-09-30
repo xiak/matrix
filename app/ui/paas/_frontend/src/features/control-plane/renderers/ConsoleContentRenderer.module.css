@@ -162,6 +162,56 @@
   gap: var(--xiak-spacing-micro);
 }
 
+.authorizationFacts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin: 0;
+  border-block: var(--xiak-border-subtle);
+}
+
+.authorizationFacts > div {
+  display: grid;
+  min-width: 0;
+  align-content: start;
+  gap: var(--xiak-spacing-narrow);
+  padding: var(--xiak-spacing-default);
+}
+
+.authorizationFacts > div + div {
+  border-inline-start: var(--xiak-border-subtle);
+}
+
+.authorizationFacts dt {
+  color: var(--xiak-color-text-subtle);
+  font-size: var(--xiak-font-size-small);
+}
+
+.authorizationFacts dd {
+  display: grid;
+  min-width: 0;
+  gap: var(--xiak-spacing-narrow);
+  margin: 0;
+  color: var(--xiak-color-text-strong);
+  font-weight: var(--xiak-font-weight-semibold);
+}
+
+.authorizationFacts code {
+  overflow-wrap: anywhere;
+}
+
+.authorizationFacts small {
+  min-width: 0;
+  color: var(--xiak-color-text-subtle);
+  font-weight: var(--xiak-font-weight-regular);
+}
+
+.authorizationActions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--xiak-spacing-default);
+}
+
 .featureCard {
   background: var(--xiak-color-bg-panel);
 }
@@ -385,6 +435,15 @@
   .authorizationHeading > :last-child {
     grid-column: 2;
     justify-self: start;
+  }
+
+  .authorizationFacts {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .authorizationFacts > div + div {
+    border-block-start: var(--xiak-border-subtle);
+    border-inline-start: 0;
   }
 
   .quotaRow {

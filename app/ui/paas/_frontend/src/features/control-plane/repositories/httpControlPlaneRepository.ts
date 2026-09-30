@@ -10,6 +10,19 @@ import type {
   ServiceOffering
 } from "../domain/resources";
 import type { ControlPlaneRepository } from "./controlPlaneRepository";
+import { httpAccountRepository } from "@/features/auth/repositories/httpIamRepository";
+import {
+  isManagedServiceInstallationReader,
+  managedServiceInstallationReader,
+  sameTemplateReference,
+  type ManagedServiceAuthorizationObservation
+} from "../domain/serviceAuthorization";
+import type {
+  ServiceLinkedRoleAccess,
+  ServiceLinkedRoleListing,
+  ServiceRoleTemplate,
+  WorkloadRoleBinding
+} from "@/features/auth/domain/serviceAuthorization";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -147,6 +160,80 @@ function authorization(credential: string): HeadersInit {
   return { Authorization: `Bearer ${credential}` };
 }
 
+const maximumServiceAuthorizationPages = 20;
+
+async function matchingServiceRoleListings(credential: string, accountId: string, template: ServiceRoleTemplate) {
+  const read = httpAccountRepository.listServiceLinkedRoles;
+  if (!read) throw new Error("SERVICE_AUTHORIZATION_READ_UNAVAILABLE");
+  const result: ServiceLinkedRoleListing[] = [];
+  const cursors = new Set<string>();
+  let after: string | undefined;
+  for (let page = 0; page < maximumServiceAuthorizationPages; page += 1) {
+    const directory = await read(credential, accountId, after);
+    result.push(...directory.items.filter((item) =>
+      item.relation.servicePrincipal.purpose === managedServiceInstallationReader.purpose &&
+      sameTemplateReference(item.relation.template, template)
+    ));
+    if (!directory.nextAfter) return result;
+    if (cursors.has(directory.nextAfter)) throw new Error("INVALID_SERVICE_AUTHORIZATION_CURSOR");
+    cursors.add(directory.nextAfter);
+    after = directory.nextAfter;
+  }
+  throw new Error("SERVICE_AUTHORIZATION_DIRECTORY_TOO_LARGE");
+}
+
+async function completeServiceRoleAccess(
+  credential: string,
+  accountId: string,
+  listing: ServiceLinkedRoleListing
+): Promise<ServiceLinkedRoleAccess> {
+  const read = httpAccountRepository.getServiceLinkedRole;
+  if (!read) throw new Error("SERVICE_AUTHORIZATION_READ_UNAVAILABLE");
+  const bindings: WorkloadRoleBinding[] = [];
+  const cursors = new Set<string>();
+  let after: string | undefined;
+  let relation = listing.relation;
+  for (let page = 0; page < maximumServiceAuthorizationPages; page += 1) {
+    const access = await read(credential, accountId, listing.relation.role.id, after);
+    if (access.relation.role.id !== relation.role.id || !sameTemplateReference(access.relation.template, relation.template)) {
+      throw new Error("INVALID_SERVICE_AUTHORIZATION_RELATION");
+    }
+    relation = access.relation;
+    bindings.push(...access.bindings);
+    if (!access.nextAfter) return { relation, bindings, nextAfter: null };
+    if (cursors.has(access.nextAfter)) throw new Error("INVALID_SERVICE_AUTHORIZATION_CURSOR");
+    cursors.add(access.nextAfter);
+    after = access.nextAfter;
+  }
+  throw new Error("SERVICE_AUTHORIZATION_HISTORY_TOO_LARGE");
+}
+
+async function inspectServiceAuthorization(
+  credential: string,
+  accountId: string,
+  installationId: string
+): Promise<ManagedServiceAuthorizationObservation> {
+  const readTemplates = httpAccountRepository.listServiceRoleTemplates;
+  if (!readTemplates) throw new Error("SERVICE_AUTHORIZATION_TEMPLATE_READ_UNAVAILABLE");
+  const templates = (await readTemplates(credential)).items.filter(isManagedServiceInstallationReader);
+  if (templates.length !== 1) throw new Error("SERVICE_AUTHORIZATION_TEMPLATE_UNAVAILABLE");
+  const template = templates[0]!;
+  const listings = await matchingServiceRoleListings(credential, accountId, template);
+  if (listings.length > 1) throw new Error("INVALID_SERVICE_AUTHORIZATION_RELATIONS");
+  const listing = listings[0];
+  if (!listing) return { template, relation: null, binding: null };
+  if (listing.activeBindingCount === 0) return { template, relation: listing.relation, binding: null };
+  const access = await completeServiceRoleAccess(credential, accountId, listing);
+  const matches = access.bindings
+    .filter((binding) => binding.status === "ACTIVE" &&
+      binding.workload.kind === managedServiceInstallationReader.workloadKind &&
+      binding.workload.id === installationId &&
+      sameTemplateReference(binding.template, template))
+    .map((binding) => ({ relation: access.relation, binding }));
+  if (matches.length > 1) throw new Error("INVALID_SERVICE_AUTHORIZATION_BINDINGS");
+  return { template, relation: access.relation, binding: matches[0]?.binding ?? null };
+}
+
 export const httpControlPlaneRepository: ControlPlaneRepository = {
   async load(credential: string): Promise<ControlPlaneSnapshot> {
     const headers = authorization(credential);
@@ -200,5 +287,7 @@ export const httpControlPlaneRepository: ControlPlaneRepository = {
       body: JSON.stringify(command)
     });
     return parseInstallation(value);
-  }
+  },
+
+  inspectServiceAuthorization
 };
