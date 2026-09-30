@@ -2083,7 +2083,25 @@
       "title": "Service authorization templates available for review",
       "hint": "Cloud products and the IAM platform publish templates through a controlled process. Tenant administrators initiate consent from the concrete product resource and review it read-only in IAM; they cannot register platform Actions.",
       "tableLabel": "Service authorization templates",
-      "separation": "Ordinary service roles remain managed in the role directory. This is a separate service-linked-role consent preview; similar names or products do not merge the two concepts."
+      "separation": "Ordinary service roles remain managed in the role directory. This is a separate service-linked-role consent preview; similar names or products do not merge the two concepts.",
+      "sectionsLabel": "Service authorization directory views",
+      "authorizations": "Current account authorizations",
+      "templates": "Platform templates"
+    },
+    "accountDirectory": {
+      "title": "Current account service authorizations",
+      "hint": "Read the service-linked-role relations already formed for this account and their exact product-resource bindings. Authorization and revocation remain in the corresponding cloud-product resource.",
+      "boundary": "This is an isolated MOCK of the post-authorization read shape. An ACTIVE relation says only that account consent remains usable. Resource bindings and temporary sessions must be observed separately and cannot be inferred from it.",
+      "tableLabel": "Current account service authorizations",
+      "open": "View account service authorization: {name}",
+      "columns": {
+        "authorization": "Product authorization",
+        "role": "Service-linked role",
+        "resource": "Product-resource bindings",
+        "state": "State and updated time"
+      },
+      "bindingCount": "{active} active / {total} total",
+      "readOnly": "IAM provides queries, audit, and troubleshooting for account authorization relations. The ordinary role editor offers no modify, revoke, or unbind actions."
     },
     "detail": {
       "title": "Service authorization template",
@@ -2147,7 +2165,11 @@
         "title": "Exact product-resource bindings",
         "hint": "Each binding authorizes one product resource of a declared kind and ID, with an independent state and resource version.",
         "tableLabel": "Service-role product-resource bindings",
-        "createdAt": "Created"
+        "createdAt": "Created",
+        "snapshotNote": "This MOCK shows one exact binding page. A future client follows only opaque backend cursors and never infers a total page count.",
+        "cursorPage": "Page {page}",
+        "previous": "Previous binding page",
+        "next": "Next binding page"
       },
       "session": {
         "eyebrow": "Temporary-credential boundary",

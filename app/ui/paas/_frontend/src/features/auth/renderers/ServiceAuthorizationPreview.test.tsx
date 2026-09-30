@@ -12,6 +12,7 @@ describe("ServiceAuthorizationPreview", () => {
     const user = userEvent.setup();
     render(<LocaleProvider><ServiceAuthorizationPreview workspace={initialAccessWorkspace("org-xiak")} onClose={vi.fn()} /></LocaleProvider>);
 
+    await user.click(screen.getByRole("tab", { name: "平台模板" }));
     await user.click(screen.getByRole("button", { name: "托管服务安装访问" }));
     await user.click(screen.getByRole("button", { name: "审阅服务授权" }));
     expect(screen.getByRole("heading", { level: 1, name: "审阅服务授权" })).toBe(document.activeElement);
@@ -29,17 +30,15 @@ describe("ServiceAuthorizationPreview", () => {
     expect(screen.getByRole("button", { name: "授权服务（未接入）" }).hasAttribute("disabled")).toBe(true);
   });
 
-  it("keeps the published template, account relation, and exact workload binding visibly separate", async () => {
+  it("opens the current account authorization directory before platform templates", async () => {
     const user = userEvent.setup();
     render(<LocaleProvider><ServiceAuthorizationPreview workspace={initialAccessWorkspace("org-xiak")} onClose={vi.fn()} /></LocaleProvider>);
 
-    await user.click(screen.getByRole("button", { name: "托管服务安装访问" }));
-    const chain = screen.getByRole("heading", { name: "服务授权链" }).closest("section")!;
-    expect(within(chain).getByText("示意模板 · 未发布")).toBeTruthy();
-    expect(within(chain).getByText("当前账号未授权")).toBeTruthy();
-    expect(within(chain).getByText("未配置")).toBeTruthy();
-    const observationTrigger = screen.getByRole("button", { name: "查看授权后观察" });
-    await user.click(observationTrigger);
+    const directory = screen.getByRole("table", { name: "当前账号服务授权" });
+    expect(within(directory).getByText("1 个有效 / 1 个全部")).toBeTruthy();
+    expect(within(directory).getByText("PreviewServiceRoleForManagedServiceInstallationRead")).toBeTruthy();
+    const accountTrigger = within(directory).getByRole("button", { name: "查看账号服务授权：托管服务安装访问" });
+    await user.click(accountTrigger);
 
     expect(screen.getByRole("heading", { name: "账号服务授权观察" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "不可变 ServiceRoleTemplate" })).toBeTruthy();
@@ -60,9 +59,28 @@ describe("ServiceAuthorizationPreview", () => {
     expect(within(bindings).getByText("org-xiak")).toBeTruthy();
     expect(within(bindings).getByText("preview.service-linked-role.managed-service-installation-read")).toBeTruthy();
     expect(within(bindings).getByText("preview.service-role-template.managed-service-installation-read.v1@v1")).toBeTruthy();
+    expect(screen.getByText("第 1 页")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "上一页绑定" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "下一页绑定" }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.queryByRole("button", { name: /撤销|解除/ })).toBeNull();
     expect(screen.queryByRole("dialog")).toBeNull();
 
+    await user.click(screen.getByRole("button", { name: "返回服务授权" }));
+    expect(screen.getByRole("button", { name: "查看账号服务授权：托管服务安装访问" })).toBe(document.activeElement);
+  });
+
+  it("keeps the published template, account relation, and exact workload binding visibly separate", async () => {
+    const user = userEvent.setup();
+    render(<LocaleProvider><ServiceAuthorizationPreview workspace={initialAccessWorkspace("org-xiak")} onClose={vi.fn()} /></LocaleProvider>);
+
+    await user.click(screen.getByRole("tab", { name: "平台模板" }));
+    await user.click(screen.getByRole("button", { name: "托管服务安装访问" }));
+    const chain = screen.getByRole("heading", { name: "服务授权链" }).closest("section")!;
+    expect(within(chain).getByText("示意模板 · 未发布")).toBeTruthy();
+    expect(within(chain).getByText("当前账号未授权")).toBeTruthy();
+    expect(within(chain).getByText("未配置")).toBeTruthy();
+    const observationTrigger = screen.getByRole("button", { name: "查看授权后观察" });
+    await user.click(observationTrigger);
     await user.click(screen.getByRole("button", { name: "返回授权模板" }));
     expect(screen.getByRole("button", { name: "查看授权后观察" })).toBe(document.activeElement);
   });

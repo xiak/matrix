@@ -1036,7 +1036,11 @@ describe("CAM-style access workspace", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByRole("heading", { level: 1, name: "服务授权" })).toBe(document.activeElement);
     expect(screen.getByText(/真实创建或撤销必须从对应云产品的具体资源入口发起/)).toBeTruthy();
-    expect(screen.getByText(/在 IAM 中只读审阅/)).toBeTruthy();
+    expect(screen.getByText(/只读查看本账号已经形成的服务关联角色关系/)).toBeTruthy();
+    const accountDirectory = screen.getByRole("table", { name: "当前账号服务授权" });
+    expect(within(accountDirectory).getByText("1 个有效 / 1 个全部")).toBeTruthy();
+    expect(within(accountDirectory).getByText("PreviewServiceRoleForManagedServiceInstallationRead")).toBeTruthy();
+    await user.click(screen.getByRole("tab", { name: "平台模板" }));
     const templateDirectory = screen.getByRole("table", { name: "服务授权模板" });
     expect(within(templateDirectory).getByRole("columnheader", { name: "平台模板状态" })).toBeTruthy();
     expect(within(templateDirectory).getByRole("columnheader", { name: "当前账号状态" })).toBeTruthy();
@@ -1095,6 +1099,7 @@ describe("CAM-style access workspace", () => {
       }) } }));
     } });
     await user.click(await screen.findByRole("button", { name: "服务授权" }));
+    await user.click(screen.getByRole("tab", { name: "平台模板" }));
     await user.click(screen.getByRole("button", { name: "托管服务安装访问" }));
     expect(screen.queryByRole("button", { name: /打开策略详情/ })).toBeNull();
     expect(screen.getByText(/不引用租户可编辑策略/)).toBeTruthy();
@@ -1109,6 +1114,7 @@ describe("CAM-style access workspace", () => {
       extension.transact((source) => ({ workspace: { ...source, policies: source.policies.filter((policy) => policy.id !== "policy-delivery") } }));
     } });
     await user.click(await screen.findByRole("button", { name: "服务授权" }));
+    await user.click(screen.getByRole("tab", { name: "平台模板" }));
     expect(within(screen.getByRole("table", { name: "服务授权模板" })).getByText("PreviewManagedServiceInstallationRead")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "托管服务安装访问" }));
     await user.click(screen.getByRole("button", { name: "审阅服务授权" }));
