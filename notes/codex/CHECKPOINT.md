@@ -6,8 +6,8 @@
 - Updated: 2026-10-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `5f85b6aa`
-- Pushed documentation milestone: `41aa1a9c`
+- Pushed source/embed milestone: `96afde8c`
+- Pushed documentation milestone: `fd536208`
 
 ## Authoritative route
 
@@ -31,16 +31,15 @@ consumption from trusted product-team/IAM publication instead of placing the
 internal onboarding action beside a tenant resource title.
 
 The service-authorization runtime preview now includes a non-secret
-`ServiceRoleSession` sample directory, inline detail and a disabled single-
-session revoke review. The directory uses the shared collection toolbar, empty
-state and cursor footer; local search covers session/source/target identifiers,
-the filter exposes only illustrative observation states, and visible timestamps
-reuse the IAM-wide `WorkspaceTime` while their ISO values remain machine-readable.
-Toolbar labels and the empty-query reset also reuse the shared collection
-primitives instead of page-local copies. It exposes
-no credential, proof/decision, private endpoint or bootstrap summary; it sends
-no request, touch or revoke action and produces no request ID or success state.
-LIVE service-session query and revoke remain absent until IAM publishes a fixed
+`ServiceRoleSession` sample directory and inline detail. Its source is a strict
+`USER | SERVICE` union, while this service-authorization scene deliberately
+shows only `SERVICE` examples. Account, source, target Role, issue, expiry and
+revocation fields are explicit, with separate active, expired and revoked
+records. Expired and revoked records expose no revoke action, and revocation
+copy does not imply deletion of the Role, binding or permission ceiling. The
+directory reuses the shared collection primitives and IAM-wide `WorkspaceTime`;
+it exposes no credential or authorization proof and sends no request. LIVE
+service-session query and revoke remain absent until IAM publishes a fixed
 northbound contract.
 
 The LIVE platform service-role template tab consumes the current complete,
@@ -50,11 +49,12 @@ continues to use only its server-owned opaque cursor and does not fake global
 search over one page. A future fixed template cursor replaces this local
 pagination instead of creating a parallel model.
 
-Source and synchronized Go embed at `5f85b6aa` passed 55 frontend files / 887
+Source and synchronized Go embed at `96afde8c` passed 55 frontend files / 887
 tests, static normalization, type/lint/architecture, 228 theme contrast pairs,
 41-page export, 228-file embed equality and repository Go test/vet. Existing
-MOCK desktop and 390 x 844 DEV checks had no Dialog, page overflow, warning or
-error; the LIVE template directory still lacks real-login browser evidence.
+MOCK desktop and 390 x 844 DEV checks show the three lifecycle states without a
+Dialog, page overflow, warning or error; the LIVE template directory and
+service-session route still lack real-login browser evidence.
 Exact behavioral evidence and limits are owned by FEAT-IAM-010.
 
 ## Continuation
