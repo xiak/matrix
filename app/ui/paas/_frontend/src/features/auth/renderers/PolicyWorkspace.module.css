@@ -60,6 +60,11 @@
 .subjectList li { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--xiak-spacing-tight); overflow-wrap: anywhere; }
 .diagnostics { min-width: 0; border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); padding: var(--xiak-spacing-comfortable); display: grid; gap: var(--xiak-spacing-default); background: var(--xiak-color-bg-panel); }
 .severityHint { margin: 0 0 var(--xiak-spacing-default); color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: var(--xiak-line-height-body); }
+.policySecurityReview { display: grid; min-width: 0; gap: var(--xiak-spacing-tight); }
+.policySecurityReview > p { margin: 0; }
+.policySecurityPolicies { display: grid; gap: var(--xiak-spacing-default); margin: 0; padding-inline-start: var(--xiak-spacing-comfortable); }
+.policySecurityPolicies > li { padding-inline-start: var(--xiak-spacing-narrow); }
+.policySecurityFindings { display: grid; gap: var(--xiak-spacing-tight); margin: var(--xiak-spacing-tight) 0 0; padding-inline-start: var(--xiak-spacing-comfortable); }
 .diagnosticList { margin: 0; padding: 0; list-style: none; display: grid; gap: var(--xiak-spacing-default); max-height: 300px; overflow: auto; }
 .diagnosticList li { display: grid; gap: var(--xiak-spacing-tight); padding-bottom: var(--xiak-spacing-default); border-bottom: var(--xiak-border-subtle); }
 .diagnosticList button { justify-self: start; }

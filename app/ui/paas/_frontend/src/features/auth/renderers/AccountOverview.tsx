@@ -13,7 +13,7 @@ import { WorkspaceCollection, WorkspaceDetail, WorkspaceTime } from "./AccessWor
 import { AccessReportPreview, AccessReports, UnusedAccessReviewPreview } from "./AccessReports";
 import { UserBoundarySummary } from "./PermissionBoundary";
 import { policyUsageCounts } from "../domain/accessWorkspace";
-import { includesPermissionManagement } from "../domain/policyDocument";
+import { policyDocumentDiagnostics } from "../domain/policyDocument";
 import styles from "./AccountAccessRenderer.module.css";
 
 // Only non-secret account identifiers may be passed to this control.
@@ -68,9 +68,9 @@ export function AccountOverview({ scene, onNavigate }: { scene: AccountAccessSce
   const restoreReportFocus = useRef(false);
   const pending = scene.users.filter((user) => user.state === "passwordChangeRequired").length;
   const ungranted = scene.users.filter((user) => user.attachments.length === 0).length;
-  const highPolicies = workspace?.policies.filter((policy) => {
+  const reviewPolicies = workspace?.policies.filter((policy) => {
     const document = policy.versions.find((version) => version.id === policy.defaultVersion)?.document;
-    return document && includesPermissionManagement(document);
+    return document && policyDocumentDiagnostics(document).some((entry) => entry.severity === "security-warning");
   }) ?? [];
   const active = scene.users.filter((user) => user.enabled).length;
   const open = (view: AccountAccessView, id?: string) => ({ preventDefault }: { preventDefault(): void }) => { preventDefault(); onNavigate(view, id); };
@@ -123,7 +123,7 @@ if (showEvents && workspace) return <WorkspaceDetail title={w("sensitiveOperatio
           <Card.Body><p className={styles.note}>{w("highPoliciesHint")}</p></Card.Body>
           <Table className={styles.compactTable} aria-label={w("highPolicies")}>
             <thead><tr><th scope="col">{w("name")}</th><th scope="col">{w("associations")}</th></tr></thead>
-            <tbody>{highPolicies.map((policy) => <tr key={policy.id}><td><Link className={styles.userLink} href={`/console/access/policies/?id=${encodeURIComponent(policy.id)}`} onNavigate={open("policies", policy.id)}>{policy.name}</Link></td><td>{policyUsageCounts(workspace, policy.id).total}</td></tr>)}</tbody>
+            <tbody>{reviewPolicies.map((policy) => <tr key={policy.id}><td><Link className={styles.userLink} href={`/console/access/policies/?id=${encodeURIComponent(policy.id)}`} onNavigate={open("policies", policy.id)}>{policy.name}</Link></td><td>{policyUsageCounts(workspace, policy.id).total}</td></tr>)}</tbody>
           </Table>
         </Card> : null}
       </div>

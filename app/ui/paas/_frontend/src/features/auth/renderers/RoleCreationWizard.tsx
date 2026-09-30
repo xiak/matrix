@@ -6,10 +6,10 @@ import { ContentPage, Alert, Badge, Button, FormField, Input, TextArea, Wizard }
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import type { AccessRole, AccessWorkspace } from "../domain/accessWorkspace";
 import { validateRoleTrust, type RoleTrust } from "../domain/roleTrust";
-import { includesPermissionManagement } from "../domain/policyDocument";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
 import { WorkspaceSelection } from "./AccessWorkspaceUi";
 import { BoundarySelector } from "./PermissionBoundary";
+import { PolicySecurityReview } from "./PolicySecurityReview";
 import { RoleSessionSettings, RoleTags, RoleTrustFields } from "./RoleConfiguration";
 import { useAccessDraft } from "./useAccessDraft";
 import styles from "./PolicyAuthoringWizard.module.css";
@@ -43,17 +43,14 @@ export function RoleCreationWizard({ workspace, scene, onBack, onDone }: { works
     submitting.current = false; if (saved) setCreated(true);
   }
   const steps = ["trust", "permissions", "details", "review"] as const;
-  const highPrivilege = workspace.policies.some((policy) => {
-    const document = policy.versions.find((version) => version.id === policy.defaultVersion)?.document;
-    return policyIds.includes(policy.id) && document && includesPermissionManagement(document);
-  });
+  const selectedPolicies = workspace.policies.filter((policy) => policyIds.includes(policy.id));
   const selectedNames = (ids: string[]) => ids.map((id) => workspace.policies.find((entry) => entry.id === id)?.name ?? id).join(" · ");
   return <div className={styles.root}><ContentPage.Heading title={w("createRole")} scrollKey="create-role" back={{ label: t("back"), parentLabel: w("roles"), disabled: busy, onClick: cancel }} />
     <Wizard label={w("createRole")} steps={steps.map((key) => ({ id: key, label: t(`steps.${key}`) }))} currentStep={step} onStepChange={(step) => { setError(null); clear(); setStep(step); }} completed={created} busy={busy} formRef={form} onSubmit={submit} title={created ? t("created") : t(`steps.${steps[step] ?? "trust"}`)} description={created ? t("createdHint") : t(`hints.${steps[step] ?? "trust"}`)} progressLabel={u("stepCount", { current: step + 1, total: 4 })} hint={<><ShieldCheck aria-hidden="true" />{w("roleSecurity")}</>}
       actions={created ? <Button onClick={() => { const role = workspace.roles.find((role) => role.name === name.trim()); if (role) onDone(role.id); else onBack(); }}>{t("viewRole")}</Button> : <><Button variant="ghost" disabled={busy} onClick={cancel}>{w("cancel")}</Button>{step ? <Button variant="secondary" disabled={busy} onClick={() => { setStep(step - 1); setError(null); }}>{a("previousStep")}</Button> : null}<Button type="submit" disabled={busy}>{busy ? t("saving") : step < 3 ? t("next") : w("createRole")}</Button></>}>
       {created ? <Alert status="success">{t("createdHint")}</Alert> : <>
         {error ? <Alert status="danger" tabIndex={-1}>{t(error)}</Alert> : null}
-        {(step === 1 || step === 3) && highPrivilege ? <Alert status="warning">{w("highPrivilege")}</Alert> : null}
+        {(step === 1 || step === 3) ? <PolicySecurityReview policies={selectedPolicies} /> : null}
         {step === 0 ? <RoleTrustFields workspace={workspace} users={scene.users.map((user) => ({ id: user.id, name: user.loginName }))} value={trust} onChange={(next) => { if (next.principalType === "service") setSettings((value) => ({ ...value, consoleAccess: false })); setTrust(next); setError(null); }} /> : null}
         {step === 1 ? <div className={styles.stack}><Alert>{t("permissionsHint")}</Alert><WorkspaceSelection label={w("selectPolicies")} options={workspace.policies} value={policyIds} onChange={setPolicyIds} /><section className={styles.section}><BoundarySelector workspace={workspace} value={boundaryPolicyId} onChange={setBoundary} /></section></div> : null}
         {step === 2 ? <div className={styles.metadata}><FormField id={id + "-name"} label={w("name")} hint={t("nameHint")}><Input id={id + "-name"} required maxLength={64} value={name} aria-describedby={id + "-name-hint"} onChange={(event) => { setName(event.target.value); setError(null); }} /></FormField><FormField id={id + "-description"} label={w("description")}><TextArea id={id + "-description"} maxLength={256} rows={3} value={description} onChange={(event) => setDescription(event.target.value)} /></FormField><section className={styles.section}><h3>{t("tags")}</h3><RoleTags value={tags} onChange={setTags} /></section><RoleSessionSettings value={settings} onChange={setSettings} service={trust.principalType === "service"} /></div> : null}

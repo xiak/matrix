@@ -48,6 +48,12 @@ export function analyzePolicyDocument(text: string, accountId?: string): { docum
     });
     return diagnostics.length ? { document: null, diagnostics } : root;
   }
+  return { document, diagnostics: policyDocumentDiagnostics(document) };
+}
+
+/** Local authoring guidance for an already validated document. This is not a
+ * PDP result, an IAM publication decision or proof of real resource exposure. */
+export function policyDocumentDiagnostics(document: PolicyDocument): PolicyDiagnostic[] {
   const diagnostics: PolicyDiagnostic[] = [];
   const seen = new Set<string>();
   document.statement.forEach((statement, index) => {
@@ -62,14 +68,8 @@ export function analyzePolicyDocument(text: string, accountId?: string): { docum
     if (seen.has(key)) diagnostics.push({ severity: "suggestion", code: "duplicateStatement", path });
     seen.add(key);
   });
-  return { document, diagnostics };
+  return diagnostics;
 }
-// Review signal only; effective access still requires request evaluation.
-export function includesPermissionManagement(document: PolicyDocument): boolean {
-  return document.statement.some((statement) => statement.effect === "allow" &&
-    expandPolicyActions(statement.action).some((action) => action.level === "permissions"));
-}
-
 // Display signal only. A deny statement is not an effective-access result until
 // the complete request, grant sources and permission boundary are evaluated.
 export function containsDenyStatement(document: PolicyDocument): boolean {

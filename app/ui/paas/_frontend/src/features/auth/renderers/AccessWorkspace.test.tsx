@@ -863,11 +863,11 @@ describe("CAM-style access workspace", () => {
     expect(within(workflow).getByRole("region", { name: "移除关联" }).textContent).toContain("DeliveryTeam");
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
   });
-  it("links high-privilege review candidates to their exact policy, using default content rather than names", async () => {
+  it("links local security-review candidates to their exact policy, using default content rather than names", async () => {
     const { user, repository } = await open("overview", { seed: async (extension) => {
       await extension.execute("preview", { kind: "save-policy", name: "ReviewGrant", description: "", document: { version: "1", statement: [{ effect: "allow", action: ["iam:grantUser"], resource: ["*"] }] }, tags: [], targets: { userIds: ["principal-lin"], groupIds: ["group-delivery", "group-auditors"], roleIds: [] } });
     } });
-    const table = await screen.findByRole("table", { name: "高权限策略" });
+    const table = await screen.findByRole("table", { name: "需要安全复核的策略" });
     const link = within(table).getByRole("link", { name: "ReviewGrant" });
     const id = new URL(link.getAttribute("href")!, "https://matrix.example.invalid").searchParams.get("id");
     expect(id).toBeTruthy();

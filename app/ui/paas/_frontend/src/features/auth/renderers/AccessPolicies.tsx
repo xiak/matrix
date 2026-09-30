@@ -4,7 +4,6 @@ import { useTranslations } from "next-intl";
 import { ActionMenu, Alert, Badge, Button, EmptyState, FormField, Table, Tabs, TextArea } from "@ui/xiak";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import { policyUsageCounts, policyVersionLimit, type AccessPolicy, type AccessWorkspace } from "../domain/accessWorkspace";
-import { includesPermissionManagement } from "../domain/policyDocument";
 import type { AccountAccessView } from "../domain/accounts";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
 import { WorkspaceDelete, WorkspaceDetail, WorkspaceDialog, WorkspaceTime } from "./AccessWorkspaceUi";
@@ -12,6 +11,7 @@ import { PolicyDocumentViewer } from "./PolicyDocumentViewer";
 import { PolicyAuthoringWizard } from "./PolicyAuthoringWizard";
 import { PolicyDirectory, usePolicyDescription } from "./PolicyDirectory";
 import { PolicyCreationMethods, type PolicyCreationMethod } from "./PolicyCreationMethods";
+import { PolicySecurityReview } from "./PolicySecurityReview";
 import { PolicyAssociationWizard, PolicyAffectedIdentities } from "./PolicyAssociationReview";
 import { PolicyDocumentChanges } from "./PolicyDocumentChanges";
 import policyStyles from "./PolicyWorkspace.module.css";
@@ -181,7 +181,7 @@ export function AccessPolicies({ workspace, scene, entityId, onCreate, onOpen }:
       </div>
       {selected.tags.length ? <section aria-label={p("metadataTags")} className={styles.actions}><span className={styles.note}>{p("metadataTags")}</span>{selected.tags.map((tag) => <Badge key={tag.key}>{tag.key} : {tag.value || "—"}</Badge>)}</section> : null}
       {selected.kind === "system" ? <p className={styles.note}>{t("systemReadOnly")}</p> : null}
-      {includesPermissionManagement(currentDocument(selected)) ? <Alert status="warning">{t("highPrivilege")}</Alert> : null}
+      <PolicySecurityReview policies={[selected]} />
       <Tabs.Root defaultValue="document"><Tabs.List aria-label={selected.name}><Tabs.Trigger value="document">{t("document")}</Tabs.Trigger><Tabs.Trigger value="versions">{t("versions")}</Tabs.Trigger><Tabs.Trigger value="usage">{t("usage")} ({usage!.total})</Tabs.Trigger></Tabs.List>
         <Tabs.Content value="document"><PolicyDocumentViewer document={currentDocument(selected)} /></Tabs.Content>
         <Tabs.Content value="versions"><PolicyVersionHistory policy={selected} usageCount={usage!.total} workspace={workspace} scene={scene} onWorkflowChange={setVersionWorkflow} /></Tabs.Content>

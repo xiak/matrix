@@ -5,7 +5,7 @@ import { useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
 import { Alert, Button, Dialog, FormField, Select, Tabs, TextArea } from "@ui/xiak";
 import { type AccessPolicy, type AccessWorkspace } from "../domain/accessWorkspace";
-import { analyzePolicyDocument, includesPermissionManagement, type PolicyDocument } from "../domain/policyDocument";
+import { analyzePolicyDocument, type PolicyDocument } from "../domain/policyDocument";
 import { actionPatternValid, parsePolicyResource, utcTimeValid } from "../domain/policyLanguage";
 import { PolicyStatementEditor, statementService, type StatementDraft } from "./PolicyStatementEditor";
 import { PolicyDiagnostics } from "./PolicyDiagnostics";
@@ -141,7 +141,6 @@ export function PolicyDocumentEditor({ text, onChange, policies, accountId, reso
     </Tabs.Root>
     {featureDocument && !featuresAvailable ? <p className={styles.note}>{t("featureUnavailable")}</p> : null}
     {error ? <Alert status="danger" tabIndex={-1} data-policy-validation>{error}</Alert> : null}
-    {parsed && includesPermissionManagement(parsed) ? <Alert status="warning">{w("highPrivilege")}</Alert> : null}
     <PolicyDiagnostics diagnostics={analysis.diagnostics} pristine={!hasDocumentChanges && !parsed && !error} onLocate={(path) => {
       const index = path.match(/^\$\.statement\[(\d+)\]/)?.[1];
       const target = mode !== "json" && index !== undefined ? root.current?.querySelector<HTMLElement>(`[data-policy-statement="${index}"]`) : root.current?.querySelector<HTMLTextAreaElement>("textarea");

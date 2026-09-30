@@ -6,9 +6,9 @@ import { ArrowRight, ShieldCheck } from "lucide-react";
 import { Alert, Button, ContentPage, Wizard } from "@ui/xiak";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
-import { includesPermissionManagement } from "../domain/policyDocument";
 import type { AccountUserScene } from "../scenes/accountAccessScene";
 import { WorkspaceSelection } from "./AccessWorkspaceUi";
+import { PolicySecurityReview } from "./PolicySecurityReview";
 import { useAccessDraft } from "./useAccessDraft";
 import styles from "./AccountAccessRenderer.module.css";
 
@@ -65,8 +65,7 @@ export function UserAssociationWorkflow({ user, workspace, kind, onBack }: {
   const selectionHint = t(kind === "groups" ? "userGroupAssociationHint" : "userPolicyAssociationHint");
   const savedHint = t(kind === "groups" ? "userGroupAssociationsSavedHint" : "userPolicyAssociationsSavedHint");
   const selectedPolicyIds = kind === "policies" ? selection : workspace.groups.filter((group) => selection.includes(group.id)).flatMap((group) => group.policyIds);
-  const includesHighPrivilege = workspace.policies.some((policy) => selectedPolicyIds.includes(policy.id)
-    && includesPermissionManagement(policy.versions.find((version) => version.id === policy.defaultVersion)!.document));
+  const selectedPolicies = workspace.policies.filter((policy) => selectedPolicyIds.includes(policy.id));
   const requestLeave = useAccessDraft({
     dirty: changed && !complete,
     busy,
@@ -140,7 +139,7 @@ export function UserAssociationWorkflow({ user, workspace, kind, onBack }: {
             <AssociationChangeList label={p("unchanged")} ids={unchanged} items={reviewItems} />
             {!changed ? <p className={styles.note}>{p("noChanges")}</p> : null}
           </section>}
-        {includesHighPrivilege ? <Alert status="warning">{t("highPrivilege")}</Alert> : null}
+        <PolicySecurityReview policies={selectedPolicies} />
         {access.workspaceError ? <Alert data-workspace-error status="danger" tabIndex={-1}>{t(`errors.${access.workspaceError}`)}</Alert> : null}
       </div>}
     </Wizard>

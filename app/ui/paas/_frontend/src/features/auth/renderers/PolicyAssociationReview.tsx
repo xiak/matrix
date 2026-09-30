@@ -6,9 +6,9 @@ import { ArrowRight, ShieldCheck } from "lucide-react";
 import { Alert, Badge, Button, ContentPage, Wizard } from "@ui/xiak";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import { policyGrantTargets, type AccessPolicy, type AccessWorkspace, type PolicyTargets } from "../domain/accessWorkspace";
-import { includesPermissionManagement } from "../domain/policyDocument";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
 import { PolicyTargetSelector } from "./PolicyTargetSelector";
+import { PolicySecurityReview } from "./PolicySecurityReview";
 import { useAccessDraft } from "./useAccessDraft";
 import styles from "./PolicyWorkspace.module.css";
 
@@ -79,7 +79,6 @@ export function PolicyAssociationWizard({ policies, additive = false, workspace,
   const form = useRef<HTMLFormElement>(null);
   const submitting = useRef(false);
   const changed = kinds.some((kind) => initial[kind].some((id) => !targets[kind].includes(id)) || targets[kind].some((id) => !initial[kind].includes(id)));
-  const high = policies.some((policy) => includesPermissionManagement(policy.versions.find((version) => version.id === policy.defaultVersion)!.document));
   const busy = access.busy || access.loading;
   const clearError = access.clearWorkspaceError;
   const pageTitle = additive ? t("batchAttach") : w("associateTargets");
@@ -114,7 +113,7 @@ export function PolicyAssociationWizard({ policies, additive = false, workspace,
       {complete ? <Alert status="success">{t("associationSavedScope")}</Alert> : <div className={styles.stack}>
         <section aria-label={t("policySet")} className={styles.policySet}><span className={styles.note}>{t("policySet")}</span><div className={styles.actions}>{policies.map((policy) => <Badge key={policy.id}>{policy.name}</Badge>)}</div></section>
         {step === 0 ? <PolicyTargetSelector workspace={workspace} scene={scene} value={targets} onChange={setTargets} /> : <section aria-label={t("reviewAssociations")}><PolicyAssociationChanges before={initial} after={targets} workspace={workspace} scene={scene} /></section>}
-        {high ? <Alert status="warning">{w("highPrivilege")}</Alert> : null}
+        <PolicySecurityReview policies={policies} />
         {access.workspaceError ? <Alert data-workspace-error status="danger" tabIndex={-1}>{w(`errors.${access.workspaceError}`)}</Alert> : null}
       </div>}
     </Wizard>
