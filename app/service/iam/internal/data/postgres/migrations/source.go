@@ -1,9 +1,11 @@
 package migrations
 
 import (
+	"cmp"
 	_ "embed"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
@@ -58,6 +60,10 @@ var (
 	authenticationRecoveryInspectionUpSQL string
 	//go:embed 000015_authentication_recovery_inspection/verify.sql
 	authenticationRecoveryInspectionVerifySQL string
+	//go:embed 000016_service_roles/up.sql
+	serviceRolesUpSQL string
+	//go:embed 000016_service_roles/verify.sql
+	serviceRolesVerifySQL string
 )
 
 func Source() postgresmigration.Source {
@@ -73,15 +79,53 @@ func Source() postgresmigration.Source {
 	}
 	profileLiteral := "'" + strings.ReplaceAll(profileSeeds, "'", "''") + "'::jsonb"
 	authoritySQL := strings.Replace(authorityUpSQL, profilePlaceholder, profileLiteral, 1)
-	verification := strings.Replace(authorityVerifySQL, profilePlaceholder, profileLiteral, 1) + "\n" + tenantAccountsVerifySQL + "\n" + localRecoveryVerifySQL + "\n" + policyVerifySQL + "\n" + groupsVerifySQL + "\n" + rolesVerifySQL + "\n" + accessKeysVerifySQL + "\n" + totpVerifySQL + "\n" + securityMailVerifySQL + "\n" + authenticationRecoveryVerifySQL + "\n" + authenticationRecoveryInspectionVerifySQL
+	templateSeeds, err := serviceRoleTemplateSeeds()
+	const templatePlaceholder = "__SERVICE_ROLE_TEMPLATE_SEEDS__"
+	if err != nil || strings.Count(serviceRolesUpSQL, templatePlaceholder) != 1 || strings.Count(serviceRolesVerifySQL, templatePlaceholder) != 1 {
+		return postgresmigration.Source{Context: "iam"}
+	}
+	templateLiteral := "'" + strings.ReplaceAll(templateSeeds, "'", "''") + "'::jsonb"
+	serviceRolesSQL := strings.Replace(serviceRolesUpSQL, templatePlaceholder, templateLiteral, 1)
+	serviceRolesVerification := strings.Replace(serviceRolesVerifySQL, templatePlaceholder, templateLiteral, 1)
+	verification := strings.Replace(authorityVerifySQL, profilePlaceholder, profileLiteral, 1) + "\n" + tenantAccountsVerifySQL + "\n" + localRecoveryVerifySQL + "\n" + policyVerifySQL + "\n" + groupsVerifySQL + "\n" + rolesVerifySQL + "\n" + accessKeysVerifySQL + "\n" + totpVerifySQL + "\n" + securityMailVerifySQL + "\n" + authenticationRecoveryVerifySQL + "\n" + authenticationRecoveryInspectionVerifySQL + "\n" + serviceRolesVerification
 	return postgresmigration.Source{
 		Context: "iam", BootstrapSQL: bootstrapSQL,
 		// IAM owns one commit boundary across schema, retained-state changes and
 		// its final invariant verification. A late failure exposes none of them.
-		UpSQL:         "BEGIN;\n" + policyCutoverPreflight + "\n" + authoritySQL + "\n" + tenantAccountsUpSQL + "\n" + localRecoveryUpSQL + "\n" + policySQL + "\n" + groupsUpSQL + "\n" + rolesUpSQL + "\n" + accessKeysUpSQL + "\n" + totpUpSQL + "\n" + securityMailUpSQL + "\n" + authenticationRecoveryUpSQL + "\n" + authenticationRecoveryInspectionUpSQL + "\n" + verification + "\nCOMMIT;",
+		UpSQL:         "BEGIN;\n" + policyCutoverPreflight + "\n" + authoritySQL + "\n" + tenantAccountsUpSQL + "\n" + localRecoveryUpSQL + "\n" + policySQL + "\n" + groupsUpSQL + "\n" + rolesUpSQL + "\n" + accessKeysUpSQL + "\n" + totpUpSQL + "\n" + securityMailUpSQL + "\n" + authenticationRecoveryUpSQL + "\n" + authenticationRecoveryInspectionUpSQL + "\n" + serviceRolesSQL + "\n" + verification + "\nCOMMIT;",
 		VerifySQL:     verification,
 		ExecutionRole: "matrix_iam_migrator",
 	}
+}
+
+func serviceRoleTemplateSeeds() (string, error) {
+	type seed struct {
+		ID            iamv1.ServiceRoleTemplateID     `json:"id"`
+		Version       uint64                          `json:"version"`
+		CanonicalSpec string                          `json:"canonicalSpec"`
+		ContentDigest string                          `json:"contentDigest"`
+		Status        iamv1.ServiceRoleTemplateStatus `json:"status"`
+	}
+	templates, err := authority.ServiceRoleTemplates()
+	if err != nil || len(templates) == 0 || len(templates) > iamv1.DirectoryPageSize {
+		return "", errors.New("invalid service role template registration set")
+	}
+	slices.SortFunc(templates, func(left, right iamv1.ServiceRoleTemplate) int {
+		if order := cmp.Compare(left.ID, right.ID); order != 0 {
+			return order
+		}
+		return cmp.Compare(left.Version, right.Version)
+	})
+	seeds := make([]seed, 0, len(templates))
+	for _, template := range templates {
+		canonical, digest, err := iamv1.CanonicalizeServiceRoleTemplateSpec(template.Spec)
+		if err != nil || digest != template.ContentDigest {
+			return "", errors.New("invalid service role template registration")
+		}
+		seeds = append(seeds, seed{template.ID, template.Version, canonical, digest, template.Status})
+	}
+	encoded, err := json.Marshal(seeds)
+	return string(encoded), err
 }
 
 // Archive insertion and current selection are distinct release decisions.

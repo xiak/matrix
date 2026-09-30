@@ -316,6 +316,7 @@ func (service *Authority) authenticateService(
 	if iamv1.ValidateServiceIdentity(binding.Identity) != nil {
 		return ServiceCredential{}, ErrUnavailable
 	}
+	binding.LookupDigest = lookupDigest
 	return binding, nil
 }
 

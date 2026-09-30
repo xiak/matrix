@@ -108,7 +108,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	const databasePrefix = "matrix_iam_upgrade_predecessor_"
 	const source = "42035189eb823e388509f54525889c1a18c6b79d"
 	const sourceSchema uint64 = 45
-	const currentSchema uint64 = 53
+	const currentSchema uint64 = 54
 	// Actual predecessor admission accepted these 14-byte passwords. The new
 	// executable must replay the sealed bootstrap and verify existing secrets
 	// without admitting them for a new password write.
@@ -444,7 +444,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		}
 	}
 	var shape bool
-	if err := admin.QueryRow(ctx, `SELECT schema_version=53 AND iam.password_history_contract_ready() AND iam.account_security_settings_contract_ready() AND iam.login_session_contract_ready() AND iam.password_attempt_contract_ready()
+	if err := admin.QueryRow(ctx, `SELECT schema_version=54 AND iam.password_history_contract_ready() AND iam.account_security_settings_contract_ready() AND iam.login_session_contract_ready() AND iam.password_attempt_contract_ready()
 	 AND iam.authentication_recovery_contract_ready()
 	 AND to_regprocedure('iam.close_authentication_recovery(jsonb,text,jsonb)') IS NULL
 	 AND NOT EXISTS(SELECT 1 FROM iam.user_credentials c WHERE c.password_history<>'[]'::jsonb
@@ -891,7 +891,7 @@ func provePredecessorAuthenticationRecovery(t *testing.T, ctx context.Context, r
 		}
 		var unchanged bool
 		if err := database.QueryRow(ctx, `SELECT
-			 (SELECT schema_version=53 AND ready FROM iam.readiness())
+			 (SELECT schema_version=54 AND ready FROM iam.readiness())
 		 AND NOT EXISTS(SELECT 1 FROM iam.authenticator_removals)
 		 AND NOT EXISTS(SELECT 1 FROM iam.sessions WHERE last_activity_at IS NOT NULL OR idle_timeout_seconds IS NOT NULL)
 		 AND NOT EXISTS(SELECT 1 FROM iam.user_credentials c WHERE c.password_history<>'[]'::jsonb
@@ -2769,7 +2769,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	// Exercise the exact source services together without weakening install
 	// admission: the workflow separately proves the published installer rejects
 	// this unmatched database shape before effects.
-	sourceProfile := installationrelease.AuthoritySchemas{IAM: 53, Audit: 29, PaaS: 2}
+	sourceProfile := installationrelease.AuthoritySchemas{IAM: 54, Audit: 29, PaaS: 2}
 	publishedProfile := installationrelease.CurrentDatabaseProfile()
 	if publishedProfile.Authorities == sourceProfile {
 		t.Fatal("unreleased authority source shape was published without a final profile gate")
@@ -10300,7 +10300,28 @@ func assertAuthorityPlaintextAbsent(
 		if rows.Scan(&source, &document) != nil {
 			t.Fatal("read authority plaintext inspection")
 		}
-		location, err := authorityPlaintextLocation(document, beforeOTP, plaintexts...)
+		structuralLowEntropy := map[string]struct{}{}
+		if source == "paas.operation" {
+			var operation paasv1.Operation
+			if json.Unmarshal([]byte(document), &operation) != nil || paasv1.ValidateOperation(operation) != nil {
+				t.Fatal("invalid PaaS operation plaintext inspection source")
+			}
+			// These values are contract-validated digests/timestamps. A random
+			// six-digit TOTP may occur inside them without having been persisted;
+			// exact code values and every longer secret remain forbidden.
+			for _, value := range []string{
+				operation.IdempotencyFingerprint,
+				operation.RequestDigest,
+				operation.CreatedAt.Format(time.RFC3339Nano),
+				operation.UpdatedAt.Format(time.RFC3339Nano),
+			} {
+				structuralLowEntropy[value] = struct{}{}
+			}
+			if operation.TerminalAt != nil {
+				structuralLowEntropy[operation.TerminalAt.Format(time.RFC3339Nano)] = struct{}{}
+			}
+		}
+		location, err := authorityPlaintextLocationWithStructural(document, beforeOTP, structuralLowEntropy, plaintexts...)
 		if err != nil {
 			t.Fatal("invalid authority plaintext inspection")
 		}
@@ -10327,6 +10348,12 @@ func assertAuthorityPlaintextAbsent(
 // array positions are redacted: neither a leaked key nor its value may enter
 // the failure message, including low-entropy OTPs and their fingerprints.
 func authorityPlaintextLocation(document string, beforeOTP map[string]struct{}, plaintexts ...string) (string, error) {
+	return authorityPlaintextLocationWithStructural(document, beforeOTP, nil, plaintexts...)
+}
+
+func authorityPlaintextLocationWithStructural(document string, beforeOTP map[string]struct{},
+	structuralLowEntropy map[string]struct{}, plaintexts ...string,
+) (string, error) {
 	for _, plaintext := range plaintexts {
 		if plaintext == "" {
 			return "", errors.New("empty plaintext inspection input")
@@ -10345,7 +10372,8 @@ func authorityPlaintextLocation(document string, beforeOTP map[string]struct{}, 
 				continue
 			}
 			if len(plaintext) == 6 && strings.IndexFunc(plaintext, func(r rune) bool { return r < '0' || r > '9' }) == -1 {
-				if unrelatedCode && text != plaintext {
+				_, structural := structuralLowEntropy[text]
+				if (unrelatedCode || structural) && text != plaintext {
 					continue
 				}
 				matchKind = "six-digit-substring"
@@ -10462,6 +10490,22 @@ func TestAuthorityPlaintextInspection(t *testing.T) {
 			}
 		})
 	}
+	t.Run("validated-low-entropy-structure", func(t *testing.T) {
+		digest := "sha256:" + strings.Repeat("a", 58) + code
+		observedAt := "2026-09-30T12:34:56.123456Z"
+		document := `{"requestDigest":"` + digest + `","observedAt":"` + observedAt + `","message":"safe"}`
+		structural := map[string]struct{}{digest: {}, observedAt: {}}
+		if location, err := authorityPlaintextLocationWithStructural(document, nil, structural, code); err != nil || location != "" {
+			t.Fatal("validated structural value was treated as a persisted OTP")
+		}
+		if location, err := authorityPlaintextLocationWithStructural(document, nil, structural, digest); err != nil || location == "" {
+			t.Fatal("validated structure hid an exact longer credential")
+		}
+		if location, err := authorityPlaintextLocationWithStructural(`{"value":"123456"}`, nil,
+			map[string]struct{}{code: {}}, code); err != nil || location == "" {
+			t.Fatal("validated structure hid an exact OTP value")
+		}
+	})
 	t.Run("pre-seed-identifier-provenance", func(t *testing.T) {
 		prior := event
 		prior.Target.ID = "principal-" + strings.Repeat("a", 26) + code

@@ -1768,9 +1768,9 @@ func TestServiceRoleTemplateDiscoveryRequiresDelegatedCurrentAuthority(t *testin
 		last.Decision.Subject == nil || last.Decision.Subject.Type != iamv1.SubjectUser || last.AuditEvent.Action != auditv1.ActionIAMAuthorizationDecided {
 		t.Fatal("template directory substituted installation authority or lost its user decision")
 	}
-	result.Items[0].Spec.WorkloadResourceKinds[0] = "MUTATED"
+	result.Items[0].Spec.Workloads[0].ResourceKind = "MUTATED"
 	fresh, err := service.ListServiceRoleTemplates(t.Context(), login.Credential, "template-fresh")
-	if err != nil || fresh.Items[0].Spec.WorkloadResourceKinds[0] == "MUTATED" {
+	if err != nil || fresh.Items[0].Spec.Workloads[0].ResourceKind == "MUTATED" {
 		t.Fatal("caller mutated release-owned service template authority")
 	}
 	before := len(tx.authorizations)
@@ -1795,6 +1795,113 @@ func TestServiceRoleTemplateDiscoveryRequiresDelegatedCurrentAuthority(t *testin
 	}
 	if _, err := service.ListServiceRoleTemplates(t.Context(), login.Credential, "template-revoked-session"); !errors.Is(err, ErrUnauthenticated) {
 		t.Fatal("revoked session reused service template access")
+	}
+}
+
+func TestWorkloadRoleBindingRequiresProductAdmissionPassRoleAndDelegatedCurrentAuthority(t *testing.T) {
+	tx := newCoreTransaction()
+	service, err := newCoreAuthority(&coreRepository{transaction: tx}, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootstrap := coreBootstrap(t)
+	if _, err := service.Bootstrap(t.Context(), bootstrap); err != nil {
+		t.Fatal(err)
+	}
+	login, err := service.Login(t.Context(), iamv1.LoginRequest{
+		LoginName: "admin", Password: bootstrap.Administrator.Password, RequestID: "binding-login",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.ChangePassword(t.Context(), login.Credential, iamv1.ChangePasswordRequest{
+		CurrentPassword: bootstrap.Administrator.Password,
+		NewPassword:     coreSecret(t, "Binding-Changed-Password-62!"),
+		RequestID:       "binding-change",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	templates, err := authority.ServiceRoleTemplates()
+	if err != nil || len(templates) != 1 {
+		t.Fatal("service role template fixture unavailable", err)
+	}
+	authorization, err := iamv1.NewAuthorizationRequest(iamv1.ActionManagedServiceInstallationRoleBind,
+		iamv1.ResourceReference{Kind: iamv1.ResourceServiceInstallation, ID: "service-installation-a"},
+		iamv1.AuthorizationResourceInstance, "", "binding-create", "binding-create")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := iamv1.CreateWorkloadRoleBindingRequest{Template: templates[0].Reference(), Authorization: authorization}
+	paasCredential := coreServiceCredential(t, bootstrap, iamv1.ServicePaaS)
+	if _, err := service.CreateWorkloadRoleBinding(t.Context(), paasCredential, login.Credential, request); !errors.Is(err, ErrForbidden) || tx.workloadRoleBindingCreation != nil {
+		t.Fatal("account administrator silently inherited service-role consent", err)
+	}
+	attachment, err := service.CreatePolicyAttachment(t.Context(), login.Credential, iamv1.CreatePolicyAttachmentRequest{
+		Target:                iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(bootstrap.Administrator.ID)},
+		PolicyID:              iamv1.SystemPolicyServiceRoleAdministrator,
+		PolicyResourceVersion: 1,
+		RequestID:             "binding-delegate",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := len(tx.authorizations)
+	result, err := service.CreateWorkloadRoleBinding(t.Context(), paasCredential, login.Credential, request)
+	if err != nil || iamv1.ValidateServiceLinkedRoleAccess(result) != nil || len(result.Bindings) != 1 {
+		t.Fatal("delegated workload consent failed", err)
+	}
+	mutation := tx.workloadRoleBindingCreation
+	if !tx.workloadRoleBindingSourcesLocked || mutation == nil || mutation.AccountID != bootstrap.Organization.ID || mutation.ActorPrincipalID != bootstrap.Administrator.ID ||
+		mutation.ActorSessionID != login.Session.ID || mutation.ServiceLookupDigest == "" || mutation.Template.Reference() != request.Template ||
+		mutation.Role.Management != iamv1.RoleServiceLinked || mutation.Role.ID != result.Relation.Role.ID ||
+		mutation.Binding.Workload != authorization.Resource || mutation.Binding.ID != result.Bindings[0].ID ||
+		mutation.RoleCreationDecisionID == "" || mutation.RolePassDecisionID == "" || mutation.WorkloadDecisionID == "" ||
+		mutation.RoleCreatedAuditEvent.Action != auditv1.ActionIAMServiceLinkedRoleCreated ||
+		mutation.BindingCreatedAuditEvent.Action != auditv1.ActionIAMWorkloadRoleBindingCreated {
+		t.Fatal("consent mutation lost authenticated or immutable authority")
+	}
+	if len(tx.authorizations) != before+3 {
+		t.Fatal("consent did not record exactly product, create and pass decisions")
+	}
+	wantDecisions := map[iamv1.Action]iamv1.DecisionID{
+		iamv1.ActionManagedServiceInstallationRoleBind: mutation.WorkloadDecisionID,
+		iamv1.ActionIAMServiceLinkedRoleCreate:         mutation.RoleCreationDecisionID,
+		iamv1.ActionIAMRolePass:                        mutation.RolePassDecisionID,
+	}
+	seen := make(map[iamv1.Action]bool, len(wantDecisions))
+	for _, authorization := range tx.authorizations[before:] {
+		decision := authorization.Decision
+		wantID, known := wantDecisions[decision.Action]
+		if !known || seen[decision.Action] || decision.ID != wantID || !decision.Allowed ||
+			decision.Subject == nil || decision.Subject.Type != iamv1.SubjectUser ||
+			decision.Subject.ID != string(bootstrap.Administrator.ID) {
+			t.Fatal("consent decision chain changed", decision)
+		}
+		seen[decision.Action] = true
+	}
+	if len(seen) != len(wantDecisions) {
+		t.Fatal("consent decision chain omitted required actions")
+	}
+	invalid := request
+	invalid.Authorization, err = iamv1.NewAuthorizationRequest(iamv1.ActionManagedServiceInstallationRead,
+		authorization.Resource, iamv1.AuthorizationResourceInstance, "", "binding-read", "binding-read")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreateWorkloadRoleBinding(t.Context(), paasCredential, login.Credential, invalid); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatal("non-bind product action entered consent", err)
+	}
+	if _, err := service.CreateWorkloadRoleBinding(t.Context(), coreServiceCredential(t, bootstrap, iamv1.ServiceAudit), login.Credential, request); !errors.Is(err, ErrForbidden) {
+		t.Fatal("another service purpose entered consent", err)
+	}
+	if _, err := service.RevokePolicyAttachment(t.Context(), login.Credential, attachment.ID, iamv1.RevokePolicyAttachmentRequest{
+		ResourceVersion: attachment.ResourceVersion, RequestID: "binding-revoke-delegation",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	tx.workloadRoleBindingCreation = nil
+	if _, err := service.CreateWorkloadRoleBinding(t.Context(), paasCredential, login.Credential, request); !errors.Is(err, ErrForbidden) || tx.workloadRoleBindingCreation != nil {
+		t.Fatal("revoked service-role administration remained cached", err)
 	}
 }
 
@@ -2889,76 +2996,101 @@ func TestRecoveryCodeMatchUsesCompleteOriginalBatchAndScope(t *testing.T) {
 
 type coreTransaction struct {
 	Transaction
-	passwordRequirements          iamv1.PasswordRequirements
-	passwordRequirementsError     error
-	passwordRequirementsReads     int
-	passwordRequirementsSession   iamv1.Session
-	passwordRequirementsChallenge AuthenticationChallengeCredential
-	loginChallenge                iamv1.AuthenticationChallenge
-	enrollmentInspection          EnrollmentChallengeInspection
-	loginAuthenticationState      *LoginAuthenticationState
-	passwordResetRequirement      *PasswordResetRequirement
-	passwordResetReason           iamv1.PasswordResetReason
-	enrollmentReads               int
-	challengeCredential           AuthenticationChallengeCredential
-	challengeLookupDigest         string
-	now                           time.Time
-	status                        iamv1.BootstrapStatus
-	contentDigest                 string
-	organization                  iamv1.Organization
-	principal                     iamv1.Principal
-	services                      map[string]ServiceCredential
-	sessions                      map[string]SessionCredential
-	roleSessions                  map[string]RoleSessionCredential
-	roleExitCredentials           map[string]RoleSessionExitCredential
-	roleExitEvents                []auditv1.Event
-	authorizations                []AuthorizationMutation
-	passwords                     map[iamv1.PrincipalID]authority.PasswordHash
-	passwordHistories             map[iamv1.PrincipalID][]authority.PasswordHash
-	passwordAttempts              map[iamv1.PrincipalID]PasswordAttempt
-	attemptSequence               uint64
-	rejectedAttempts              []string
-	users                         map[iamv1.PrincipalID]iamv1.Principal
-	attachments                   map[iamv1.PolicyAttachmentID]iamv1.PolicyAttachment
-	attachmentSession             iamv1.SessionID
-	revocationSession             iamv1.SessionID
-	sessionRevocation             *SessionRevocationMutation
-	otherSessionRevocation        *OtherSessionRevocationMutation
-	otherSessionResult            iamv1.RevokeOtherSessionsResponse
-	otherSessionError             error
-	ownSessionItems               *[]iamv1.Session
-	sessionActivity               *iamv1.SessionActivity
-	sessionActivityError          error
-	sessionTouches                []iamv1.Session
-	localRecoveryInspection       iamv1.LocalCredentialRecoveryInspection
-	localRecoveryResult           iamv1.LocalCredentialRecoveryResult
-	localRecoveryMutation         *LocalCredentialRecoveryMutation
-	localRecoveryMaterial         PasswordReplacementMaterial
-	localRecoveryPrepared         iamv1.LocalCredentialRecoveryInspection
-	onLocalRecoveryPrepare        func()
-	profileErr                    error
-	accessKeyCustody              *AccessKeyCustody
-	accessKeyCustodyErr           error
-	totpCustody                   *TOTPCustody
-	totpCustodyErr                error
-	stepUpForVerification         iamv1.StepUp
-	stepUpStartResult             iamv1.StepUp
-	emailKeyset                   *authority.EmailVerificationKeyset
-	replacementStart              func(TOTPReplacementStart) (TOTPEnrollmentStartResult, error)
-	removalEffect                 func(AuthenticatorRemovalMutation) (iamv1.RemoveTOTPResponse, error)
-	replacementCalls              int
-	totpReservations              []TOTPAttempt
-	denyTOTPReservation           bool
-	totpAttemptReads              int
-	settingsLockError             error
-	settingsMutationCalled        bool
-	passwordResetRead             func(AccountRead, iamv1.PrincipalID, uint64) (PasswordReplacementMaterial, error)
-	passwordResetCompletionRead   func(AccountRead, iamv1.PrincipalID, string, uint64) (iamv1.UserPasswordResetCompletion, error)
-	userCreationSettings          func(AccountRead) (iamv1.AccountPasswordSettings, uint64, error)
-	userCreationMutation          *UserMutation
-	userChange                    func(UserChange) (iamv1.User, error)
-	rootPasswordRead              func(AccountRead, iamv1.AccountID, uint64) (iamv1.RootIdentity, PasswordReplacementMaterial, error)
-	rootCredentialRecovery        func(RootCredentialRecovery) (iamv1.Account, error)
+	passwordRequirements             iamv1.PasswordRequirements
+	passwordRequirementsError        error
+	passwordRequirementsReads        int
+	passwordRequirementsSession      iamv1.Session
+	passwordRequirementsChallenge    AuthenticationChallengeCredential
+	loginChallenge                   iamv1.AuthenticationChallenge
+	enrollmentInspection             EnrollmentChallengeInspection
+	loginAuthenticationState         *LoginAuthenticationState
+	passwordResetRequirement         *PasswordResetRequirement
+	passwordResetReason              iamv1.PasswordResetReason
+	enrollmentReads                  int
+	challengeCredential              AuthenticationChallengeCredential
+	challengeLookupDigest            string
+	now                              time.Time
+	status                           iamv1.BootstrapStatus
+	contentDigest                    string
+	organization                     iamv1.Organization
+	principal                        iamv1.Principal
+	services                         map[string]ServiceCredential
+	sessions                         map[string]SessionCredential
+	roleSessions                     map[string]RoleSessionCredential
+	roleExitCredentials              map[string]RoleSessionExitCredential
+	roleExitEvents                   []auditv1.Event
+	authorizations                   []AuthorizationMutation
+	passwords                        map[iamv1.PrincipalID]authority.PasswordHash
+	passwordHistories                map[iamv1.PrincipalID][]authority.PasswordHash
+	passwordAttempts                 map[iamv1.PrincipalID]PasswordAttempt
+	attemptSequence                  uint64
+	rejectedAttempts                 []string
+	users                            map[iamv1.PrincipalID]iamv1.Principal
+	attachments                      map[iamv1.PolicyAttachmentID]iamv1.PolicyAttachment
+	attachmentSession                iamv1.SessionID
+	revocationSession                iamv1.SessionID
+	sessionRevocation                *SessionRevocationMutation
+	otherSessionRevocation           *OtherSessionRevocationMutation
+	otherSessionResult               iamv1.RevokeOtherSessionsResponse
+	otherSessionError                error
+	ownSessionItems                  *[]iamv1.Session
+	sessionActivity                  *iamv1.SessionActivity
+	sessionActivityError             error
+	sessionTouches                   []iamv1.Session
+	localRecoveryInspection          iamv1.LocalCredentialRecoveryInspection
+	localRecoveryResult              iamv1.LocalCredentialRecoveryResult
+	localRecoveryMutation            *LocalCredentialRecoveryMutation
+	localRecoveryMaterial            PasswordReplacementMaterial
+	localRecoveryPrepared            iamv1.LocalCredentialRecoveryInspection
+	onLocalRecoveryPrepare           func()
+	profileErr                       error
+	accessKeyCustody                 *AccessKeyCustody
+	accessKeyCustodyErr              error
+	totpCustody                      *TOTPCustody
+	totpCustodyErr                   error
+	stepUpForVerification            iamv1.StepUp
+	stepUpStartResult                iamv1.StepUp
+	emailKeyset                      *authority.EmailVerificationKeyset
+	replacementStart                 func(TOTPReplacementStart) (TOTPEnrollmentStartResult, error)
+	removalEffect                    func(AuthenticatorRemovalMutation) (iamv1.RemoveTOTPResponse, error)
+	replacementCalls                 int
+	totpReservations                 []TOTPAttempt
+	denyTOTPReservation              bool
+	totpAttemptReads                 int
+	settingsLockError                error
+	settingsMutationCalled           bool
+	passwordResetRead                func(AccountRead, iamv1.PrincipalID, uint64) (PasswordReplacementMaterial, error)
+	passwordResetCompletionRead      func(AccountRead, iamv1.PrincipalID, string, uint64) (iamv1.UserPasswordResetCompletion, error)
+	userCreationSettings             func(AccountRead) (iamv1.AccountPasswordSettings, uint64, error)
+	userCreationMutation             *UserMutation
+	userChange                       func(UserChange) (iamv1.User, error)
+	rootPasswordRead                 func(AccountRead, iamv1.AccountID, uint64) (iamv1.RootIdentity, PasswordReplacementMaterial, error)
+	rootCredentialRecovery           func(RootCredentialRecovery) (iamv1.Account, error)
+	workloadRoleBindingSourcesLocked bool
+	workloadRoleBindingCreation      *WorkloadRoleBindingCreation
+}
+
+func (transaction *coreTransaction) LockWorkloadRoleBindingSources(_ context.Context, accountID iamv1.AccountID,
+	actor iamv1.PrincipalID, session iamv1.SessionID, lookupDigest string, purpose iamv1.ServicePurpose,
+) error {
+	if accountID != transaction.organization.ID || actor != transaction.principal.ID || session == "" ||
+		transaction.sessions == nil || lookupDigest == "" || transaction.services[lookupDigest].Identity.Purpose != purpose {
+		return ErrForbidden
+	}
+	transaction.workloadRoleBindingSourcesLocked = true
+	return nil
+}
+
+func (transaction *coreTransaction) CreateWorkloadRoleBinding(_ context.Context, mutation WorkloadRoleBindingCreation) (iamv1.ServiceLinkedRoleAccess, error) {
+	transaction.workloadRoleBindingCreation = &mutation
+	serviceIdentity := transaction.services[mutation.ServiceLookupDigest].Identity
+	result := iamv1.ServiceLinkedRoleAccess{APIVersion: iamv1.APIVersion, Kind: "ServiceLinkedRoleAccess",
+		Relation: iamv1.ServiceLinkedRole{APIVersion: iamv1.APIVersion, Kind: "ServiceLinkedRole", Role: mutation.Role,
+			Template: mutation.Template.Reference(), ServicePrincipal: iamv1.ServicePrincipalReference{
+				InstallationID: serviceIdentity.InstallationID, PrincipalID: serviceIdentity.PrincipalID, Purpose: serviceIdentity.Purpose,
+			}, PermissionCeiling: mutation.Template.Spec.PolicyVersion},
+		Bindings: []iamv1.WorkloadRoleBinding{mutation.Binding}}
+	return result, nil
 }
 
 func (transaction *coreTransaction) ReadUserCreationPasswordSettings(_ context.Context, read AccountRead) (iamv1.AccountPasswordSettings, uint64, error) {

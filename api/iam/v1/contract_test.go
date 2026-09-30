@@ -7563,6 +7563,19 @@ func TestIAMOpenAPICredentialBoundaries(t *testing.T) {
 	if len(requirement) != 2 || requirement["ServiceCredential"] == nil || requirement["SubjectCredential"] == nil {
 		t.Fatalf("authorize security = %#v, want service and subject credentials", requirement)
 	}
+	bindingPath := mustIAMObject(t, paths["/v1/internal/workload-role-bindings"], "workload role binding path")
+	bindingOperation := mustIAMObject(t, bindingPath["post"], "workload role binding operation")
+	bindingSecurity, ok := bindingOperation["security"].([]any)
+	if !ok || len(bindingSecurity) != 1 {
+		t.Fatalf("workload role binding security = %#v, want one AND requirement", bindingOperation["security"])
+	}
+	bindingRequirement := mustIAMObject(t, bindingSecurity[0], "workload role binding security requirement")
+	if len(bindingRequirement) != 2 || bindingRequirement["ServiceCredential"] == nil || bindingRequirement["SubjectCredential"] == nil {
+		t.Fatalf("workload role binding security = %#v, want service and subject credentials", bindingRequirement)
+	}
+	if _, exists := bindingOperation["parameters"]; exists {
+		t.Fatal("workload role binding exposes an account, role or service selector")
+	}
 	keyPath := mustIAMObject(t, paths["/v1/authorize:access-key"], "signed authorization path")
 	keyOperation := mustIAMObject(t, keyPath["post"], "signed authorization operation")
 	keySecurity, ok := keyOperation["security"].([]any)

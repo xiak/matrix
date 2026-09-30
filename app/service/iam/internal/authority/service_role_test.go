@@ -17,8 +17,13 @@ func TestServiceRoleTemplateCatalogBindsAnExactLeastPrivilegePolicyVersion(t *te
 	ceiling, err := SystemPolicyVersion(iamv1.SystemPolicyManagedServiceInstallationReader)
 	if err != nil || iamv1.ValidateServiceRoleTemplate(template) != nil || template.Status != iamv1.ServiceRoleTemplateActive ||
 		template.Spec.Product != iamv1.ProductManagedService || template.Spec.ServicePurpose != iamv1.ServicePaaS ||
+		template.Spec.RoleName != "ManagedServiceInstallationReader" || template.Spec.RoleDescription == "" ||
 		template.Spec.PolicyVersion != (iamv1.PolicyVersionReference{PolicyID: ceiling.PolicyID, VersionID: ceiling.ID, ContentDigest: ceiling.ContentDigest}) ||
-		!slices.Equal(template.Spec.WorkloadResourceKinds, []iamv1.ResourceKind{iamv1.ResourceServiceInstallation}) ||
+		!slices.Equal(template.Spec.Workloads, []iamv1.ServiceRoleWorkloadSpec{{
+			ResourceKind: iamv1.ResourceServiceInstallation,
+			BindAction:   iamv1.ActionManagedServiceInstallationRoleBind,
+			UnbindAction: iamv1.ActionManagedServiceInstallationRoleUnbind,
+		}}) ||
 		template.Spec.MaxSessionDurationSeconds != 15*60 {
 		t.Fatal("template lost its exact product, service, policy, workload or session ceiling")
 	}
@@ -49,9 +54,9 @@ func TestServiceRoleTemplateCatalogReturnsIsolatedCopies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first[0].Spec.WorkloadResourceKinds[0] = iamv1.ResourceApplication
+	first[0].Spec.Workloads[0].ResourceKind = iamv1.ResourceApplication
 	second, err := ServiceRoleTemplates()
-	if err != nil || second[0].Spec.WorkloadResourceKinds[0] != iamv1.ResourceServiceInstallation {
+	if err != nil || second[0].Spec.Workloads[0].ResourceKind != iamv1.ResourceServiceInstallation {
 		t.Fatal("caller mutation changed the release-owned service role template")
 	}
 }

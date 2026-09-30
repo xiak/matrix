@@ -18211,6 +18211,14 @@ func TestIAMRoleAndManagementReferencesPostgres(t *testing.T) {
 			// Replaying schema/bootstrap must not assign new state to either fixture.
 			var before, after string
 			const retainedRoles = `SELECT jsonb_build_object('roles',(SELECT COALESCE(jsonb_agg(to_jsonb(r) ORDER BY r.tenant_id,r.id),'[]') FROM iam.roles r),
+				'serviceRoleTemplates',(SELECT COALESCE(jsonb_agg(jsonb_build_array(t.id,t.version,t.canonical_spec,t.content_digest,t.status,t.created_at,t.retired_at) ORDER BY t.id,t.version),'[]') FROM iam.service_role_templates t),
+				'serviceLinkedRoles',(SELECT COALESCE(jsonb_agg(jsonb_build_array(r.tenant_id,r.role_id,r.template_id,r.template_version,r.template_digest,
+					r.service_account_id,r.service_installation_id,r.service_principal_id,r.service_purpose,r.policy_id,r.policy_version_id,r.policy_content_digest,
+					r.actor_principal_id,r.actor_session_id,r.role_creation_decision_id,r.role_pass_decision_id,r.request_id,r.request_digest,r.created_at)
+					ORDER BY r.tenant_id,r.role_id),'[]') FROM iam.service_linked_roles r),
+				'workloadRoleBindings',(SELECT COALESCE(jsonb_agg(jsonb_build_array(b.tenant_id,b.id,b.role_id,b.template_id,b.template_version,b.template_digest,
+					b.workload_kind,b.workload_id,b.status,b.resource_version,b.actor_principal_id,b.actor_session_id,b.workload_decision_id,
+					b.request_id,b.request_digest,b.created_at,b.updated_at,b.revoked_at) ORDER BY b.tenant_id,b.id),'[]') FROM iam.workload_role_bindings b),
 				'sessionDirectoryRevisions',(SELECT COALESCE(jsonb_agg(to_jsonb(d) ORDER BY d.tenant_id,d.role_id),'[]') FROM iam.role_session_directory_revisions d),
 				'directoryRevisions',(SELECT COALESCE(jsonb_agg(to_jsonb(d) ORDER BY d.tenant_id),'[]') FROM iam.role_directory_revisions d),
 				'sourceGenerations',(SELECT COALESCE(jsonb_agg(to_jsonb(g) ORDER BY g.tenant_id,g.user_id,g.group_id),'[]') FROM iam.role_source_authority_generations g),
@@ -22134,6 +22142,14 @@ func proveServiceRoleTemplateDirectory(t *testing.T, ctx context.Context, handle
 	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &actor) != nil {
 		t.Fatal("read service template actor")
 	}
+	wanted, err := authority.ServiceRoleTemplates()
+	if err != nil || len(wanted) != 1 {
+		t.Fatal("read release service role templates", err)
+	}
+	bindingRequest := serviceRoleBindingRequest(t, wanted[0], "service-installation-shared", "service-role-bind")
+	if response := performIAMWorkloadRoleBinding(t, handler, paasCredential, root, bindingRequest); response.Code != http.StatusForbidden {
+		t.Fatalf("account administrator silently inherited service role consent: status=%d body=%s", response.Code, response.Body.String())
+	}
 	var attachment iamv1.PolicyAttachment
 	response = request(http.MethodPost, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{
 		Target:                iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(actor.User.ID)},
@@ -22151,15 +22167,12 @@ func proveServiceRoleTemplateDirectory(t *testing.T, ctx context.Context, handle
 	var result iamv1.ServiceRoleTemplateList
 	decoder := json.NewDecoder(response.Body)
 	decoder.DisallowUnknownFields()
-	wanted, err := authority.ServiceRoleTemplates()
-	if err != nil {
-		t.Fatal(err)
-	}
 	if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" || decoder.Decode(&result) != nil ||
 		iamv1.ValidateServiceRoleTemplateList(result) != nil || !reflect.DeepEqual(result.Items, wanted) || len(result.Items) != 1 ||
 		result.Items[0].Status != iamv1.ServiceRoleTemplateActive {
 		t.Fatalf("service template directory differs from release authority: status=%d body=%s err=%v", response.Code, response.Body.String(), err)
 	}
+	proveWorkloadServiceRoleConsent(t, ctx, handler, database, root, actor, result.Items[0], bindingRequest)
 	response = request(http.MethodPost, "/v1/policy-attachments/"+string(attachment.ID)+":revoke", root,
 		iamv1.RevokePolicyAttachmentRequest{ResourceVersion: attachment.ResourceVersion, RequestID: "service-template-revoke-delegation"})
 	if response.Code != http.StatusOK {
@@ -22168,9 +22181,378 @@ func proveServiceRoleTemplateDirectory(t *testing.T, ctx context.Context, handle
 	if response := request(http.MethodGet, "/v1/service-role-templates", root, nil); response.Code != http.StatusForbidden {
 		t.Fatal("revoked service template authority remained cached")
 	}
+	if response := performIAMWorkloadRoleBinding(t, handler, paasCredential, root, bindingRequest); response.Code != http.StatusForbidden {
+		t.Fatalf("revoked service role consent authority remained cached: status=%d body=%s", response.Code, response.Body.String())
+	}
 	var active int
 	if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.policy_attachments WHERE tenant_id=$1 AND id=$2 AND revoked_at IS NULL`, actor.Account.ID, attachment.ID).Scan(&active); err != nil || active != 0 {
 		t.Fatal("service template delegation did not reach a terminal revocation", err)
+	}
+}
+
+func serviceRoleBindingRequest(t *testing.T, template iamv1.ServiceRoleTemplate, workloadID, requestID string) iamv1.CreateWorkloadRoleBindingRequest {
+	t.Helper()
+	authorization, err := iamv1.NewAuthorizationRequest(iamv1.ActionManagedServiceInstallationRoleBind,
+		iamv1.ResourceReference{Kind: iamv1.ResourceServiceInstallation, ID: workloadID},
+		iamv1.AuthorizationResourceInstance, "", requestID, requestID)
+	if err != nil {
+		t.Fatal("construct workload service role admission", err)
+	}
+	return iamv1.CreateWorkloadRoleBindingRequest{Template: template.Reference(), Authorization: authorization}
+}
+
+func performIAMWorkloadRoleBinding(t *testing.T, handler http.Handler, serviceCredential, subjectCredential string,
+	command iamv1.CreateWorkloadRoleBindingRequest,
+) *httptest.ResponseRecorder {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodPost, "/v1/internal/workload-role-bindings", bytes.NewReader(mustIAMJSON(t, command)))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer "+serviceCredential)
+	request.Header.Set("Matrix-Subject-Credential", subjectCredential)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	return response
+}
+
+func proveWorkloadServiceRoleConsent(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn,
+	root string, actor iamv1.CurrentIdentity, template iamv1.ServiceRoleTemplate, command iamv1.CreateWorkloadRoleBindingRequest,
+) {
+	t.Helper()
+	call := func(serviceCredential, subjectCredential string, request iamv1.CreateWorkloadRoleBindingRequest, want int) *httptest.ResponseRecorder {
+		t.Helper()
+		response := performIAMWorkloadRoleBinding(t, handler, serviceCredential, subjectCredential, request)
+		if response.Code != want {
+			t.Fatalf("workload service role binding: status=%d want=%d body=%s", response.Code, want, response.Body.String())
+		}
+		if response.Header().Get("Cache-Control") != "no-store" {
+			t.Fatal("workload service role response is cacheable")
+		}
+		return response
+	}
+	decode := func(response *httptest.ResponseRecorder) iamv1.ServiceLinkedRoleAccess {
+		t.Helper()
+		var result iamv1.ServiceLinkedRoleAccess
+		decoder := json.NewDecoder(response.Body)
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&result) != nil || iamv1.ValidateServiceLinkedRoleAccess(result) != nil || len(result.Bindings) != 1 {
+			t.Fatalf("invalid workload service role result: %s", response.Body.String())
+		}
+		return result
+	}
+
+	atomicFailure := serviceRoleBindingRequest(t, template, "service-installation-atomic-failure", "service-role-atomic-failure")
+	if _, err := database.Exec(ctx, `CREATE FUNCTION public.matrix_service_role_fact_failure() RETURNS trigger LANGUAGE plpgsql AS $body$
+		BEGIN IF NEW.event_document->>'requestId'='service-role-atomic-failure'
+			AND NEW.event_document->>'action'='iam.workload-role-binding.created'
+		THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='isolated service role fact failure'; END IF; RETURN NEW; END $body$;
+		CREATE TRIGGER matrix_service_role_fact_failure BEFORE INSERT ON iam.audit_outbox
+		FOR EACH ROW EXECUTE FUNCTION public.matrix_service_role_fact_failure()`); err != nil {
+		t.Fatal("install service role final fact fault", err)
+	}
+	call(paasCredential, root, atomicFailure, http.StatusServiceUnavailable)
+	var partial int
+	if err := database.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM iam.roles WHERE tenant_id=$1 AND management='SERVICE_LINKED')+
+		(SELECT count(*) FROM iam.service_linked_roles WHERE tenant_id=$1)+
+		(SELECT count(*) FROM iam.workload_role_bindings WHERE tenant_id=$1)+
+		(SELECT count(*) FROM iam.authorization_decisions WHERE tenant_id=$1 AND request_id=$2)+
+		(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$2)`,
+		actor.Account.ID, atomicFailure.Authorization.RequestID).Scan(&partial); err != nil || partial != 0 {
+		t.Fatal("failed service role consent retained authority, decision or fact", err)
+	}
+	if _, err := database.Exec(ctx, `DROP TRIGGER matrix_service_role_fact_failure ON iam.audit_outbox;
+		DROP FUNCTION public.matrix_service_role_fact_failure()`); err != nil {
+		t.Fatal("remove service role final fact fault", err)
+	}
+
+	created := decode(call(paasCredential, root, command, http.StatusOK))
+	replayed := decode(call(paasCredential, root, command, http.StatusOK))
+	if !reflect.DeepEqual(created, replayed) || created.Relation.Template != template.Reference() ||
+		created.Relation.Role.AccountID != actor.Account.ID || created.Relation.Role.Management != iamv1.RoleServiceLinked ||
+		created.Relation.ServicePrincipal.Purpose != iamv1.ServicePaaS ||
+		created.Bindings[0].Workload != command.Authorization.Resource || created.Bindings[0].Status != iamv1.WorkloadRoleBindingActive {
+		t.Fatal("workload service role creation or exact replay lost immutable authority")
+	}
+
+	var directory iamv1.RoleList
+	response := performIAMRequest(handler, http.MethodGet, "/v1/roles", root, nil)
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &directory) != nil || iamv1.ValidateRoleList(directory) != nil {
+		t.Fatalf("read customer role directory: status=%d body=%s", response.Code, response.Body.String())
+	}
+	for _, item := range directory.Items {
+		if item.Role.ID == created.Relation.Role.ID || item.Role.Management != iamv1.RoleCustomerManaged {
+			t.Fatal("service-linked role leaked into the customer role directory")
+		}
+	}
+	if response := performIAMRequest(handler, http.MethodGet, "/v1/roles/"+string(created.Relation.Role.ID), root, nil); response.Code != http.StatusForbidden {
+		t.Fatalf("generic role detail exposed service-linked authority: status=%d body=%s", response.Code, response.Body.String())
+	}
+	response = performIAMRequest(handler, http.MethodPost, "/v1/policy-attachments", root, mustIAMJSON(t, iamv1.CreatePolicyAttachmentRequest{
+		Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetRole, ID: string(created.Relation.Role.ID)},
+		PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1, RequestID: "service-role-forged-ceiling",
+	}))
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("ordinary attachment changed a service-linked permission ceiling: status=%d body=%s", response.Code, response.Body.String())
+	}
+	rolePath := "/v1/roles/" + string(created.Relation.Role.ID)
+	for _, operation := range []struct {
+		method, path, requestID string
+		body                    any
+	}{
+		{http.MethodPatch, rolePath, "service-role-generic-update", iamv1.UpdateRoleRequest{
+			Name: created.Relation.Role.Name, Description: "forged customer update", Tags: []iamv1.RoleTag{},
+			MaxSessionDurationSeconds: created.Relation.Role.MaxSessionDurationSeconds,
+			ResourceVersion:           created.Relation.Role.ResourceVersion, RequestID: "service-role-generic-update",
+		}},
+		{http.MethodPost, rolePath + ":set-status", "service-role-generic-status", iamv1.SetRoleStatusRequest{
+			Status: iamv1.RoleDisabled, ResourceVersion: created.Relation.Role.ResourceVersion, RequestID: "service-role-generic-status",
+		}},
+		{http.MethodPut, rolePath + "/trust-policy", "service-role-generic-trust", iamv1.SetRoleTrustPolicyRequest{
+			Document: iamv1.TrustPolicyDocument{LanguageVersion: iamv1.TrustPolicyLanguageVersion, Statements: []iamv1.TrustPolicyStatement{{
+				SID: "forged-user", Effect: iamv1.PolicyAllow,
+				Principals: []iamv1.TrustPrincipal{{Type: iamv1.PrincipalUser, ID: actor.User.ID}},
+			}}},
+			ResourceVersion: created.Relation.Role.ResourceVersion, RequestID: "service-role-generic-trust",
+		}},
+		{http.MethodPut, rolePath + "/permission-boundary", "service-role-generic-boundary", iamv1.SetRolePermissionBoundaryRequest{
+			PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1,
+			ResourceVersion: created.Relation.Role.ResourceVersion, RequestID: "service-role-generic-boundary",
+		}},
+		{http.MethodPost, rolePath + ":assume", "service-role-generic-assume", iamv1.AssumeRoleRequest{
+			ResourceVersion: created.Relation.Role.ResourceVersion, RequestID: "service-role-generic-assume",
+		}},
+		{http.MethodDelete, rolePath, "service-role-generic-delete", iamv1.DeleteRoleRequest{
+			ResourceVersion: created.Relation.Role.ResourceVersion, RequestID: "service-role-generic-delete",
+		}},
+	} {
+		response = performIAMRequest(handler, operation.method, operation.path, root, mustIAMJSON(t, operation.body))
+		if response.Code != http.StatusForbidden {
+			t.Fatalf("generic role operation %s changed service-linked authority: status=%d body=%s", operation.requestID, response.Code, response.Body.String())
+		}
+	}
+	var genericRoleUnchanged bool
+	if err := database.QueryRow(ctx, `SELECT role_value.status='ACTIVE' AND role_value.resource_version=1 AND role_value.deleted_at IS NULL
+		AND (SELECT count(*) FROM iam.role_trust_versions trust_value WHERE trust_value.tenant_id=role_value.tenant_id AND trust_value.role_id=role_value.id)=1
+		AND NOT EXISTS(SELECT 1 FROM iam.audit_outbox fact WHERE fact.tenant_id=role_value.tenant_id
+			AND fact.event_document->>'requestId' LIKE 'service-role-generic-%')
+		FROM iam.roles role_value WHERE role_value.tenant_id=$1 AND role_value.id=$2`,
+		actor.Account.ID, created.Relation.Role.ID).Scan(&genericRoleUnchanged); err != nil || !genericRoleUnchanged {
+		t.Fatal("generic role APIs partially changed service-linked authority", err)
+	}
+
+	variant := serviceRoleBindingRequest(t, template, "service-installation-variant", command.Authorization.RequestID)
+	call(paasCredential, root, variant, http.StatusConflict)
+	duplicateWorkload := serviceRoleBindingRequest(t, template, command.Authorization.Resource.ID, "service-role-bind-duplicate")
+	call(paasCredential, root, duplicateWorkload, http.StatusConflict)
+	response = performIAMRequest(handler, http.MethodPost, "/v1/users", root, mustIAMJSON(t, map[string]any{
+		"loginName": "service-role-peer", "displayName": "Service role peer administrator",
+		"initialPassword": initialDeveloperPassword, "requestId": "service-role-peer-create",
+	}))
+	var peer iamv1.User
+	if response.Code != http.StatusCreated || json.Unmarshal(response.Body.Bytes(), &peer) != nil || iamv1.ValidateUser(peer) != nil {
+		t.Fatalf("create second service role administrator: status=%d body=%s", response.Code, response.Body.String())
+	}
+	peerBearer := localRecoveryLogin(t, handler, peer.LoginName+"@"+string(peer.AccountID), initialDeveloperPassword, true)
+	peerBearer = localRecoveryChangePassword(t, handler, peerBearer, initialDeveloperPassword, changedDeveloperPassword)
+	response = performIAMRequest(handler, http.MethodPost, "/v1/policy-attachments", root, mustIAMJSON(t, iamv1.CreatePolicyAttachmentRequest{
+		Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(peer.ID)},
+		PolicyID: iamv1.SystemPolicyServiceRoleAdministrator, PolicyResourceVersion: 1, RequestID: "service-role-peer-delegate",
+	}))
+	if response.Code != http.StatusOK {
+		t.Fatalf("delegate second service role administrator: status=%d body=%s", response.Code, response.Body.String())
+	}
+	call(paasCredential, peerBearer, command, http.StatusConflict)
+	call(paasCredential, peerBearer, variant, http.StatusConflict)
+	call(auditCredential, root, command, http.StatusForbidden)
+	call(paasCredential, paasCredential, command, http.StatusUnauthorized)
+
+	var relations, bindings, roles, trustVersions, creationFacts, bindAllowed, bindDenied, createAllowed, passAllowed int
+	if err := database.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM iam.service_linked_roles WHERE tenant_id=$1),
+		(SELECT count(*) FROM iam.workload_role_bindings WHERE tenant_id=$1),
+		(SELECT count(*) FROM iam.roles WHERE tenant_id=$1 AND management='SERVICE_LINKED'),
+		(SELECT count(*) FROM iam.role_trust_versions WHERE tenant_id=$1 AND role_id=$2),
+		(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$3
+		  AND event_document->>'action' IN ('iam.service-linked-role.created','iam.workload-role-binding.created')),
+		(SELECT count(*) FROM iam.authorization_decisions WHERE tenant_id=$1 AND request_id=$3
+		  AND action_name='managedservice.service-installation.service-role.bind' AND allowed),
+		(SELECT count(*) FROM iam.authorization_decisions WHERE tenant_id=$1 AND request_id=$3
+		  AND action_name='managedservice.service-installation.service-role.bind' AND NOT allowed),
+		(SELECT count(*) FROM iam.authorization_decisions WHERE tenant_id=$1 AND request_id=$3
+		  AND action_name='iam.service-linked-role.create' AND allowed),
+		(SELECT count(*) FROM iam.authorization_decisions WHERE tenant_id=$1 AND request_id=$3
+		  AND action_name='iam.role.pass' AND allowed)`,
+		actor.Account.ID, created.Relation.Role.ID, command.Authorization.RequestID).Scan(
+		&relations, &bindings, &roles, &trustVersions, &creationFacts, &bindAllowed, &bindDenied, &createAllowed, &passAllowed); err != nil {
+		t.Fatal("inspect service role atomic state", err)
+	}
+	if relations != 1 || bindings != 1 || roles != 1 || trustVersions != 1 || creationFacts != 2 ||
+		bindAllowed != 2 || bindDenied != 1 || createAllowed != 2 || passAllowed != 2 {
+		t.Fatalf("service role state relation=%d binding=%d role=%d trust=%d facts=%d decisions(bind=%d/%d create=%d pass=%d)",
+			relations, bindings, roles, trustVersions, creationFacts, bindAllowed, bindDenied, createAllowed, passAllowed)
+	}
+	type consentRaceResult struct {
+		actor, requestID string
+		response         *httptest.ResponseRecorder
+	}
+	runRace := func(leftActor string, left iamv1.CreateWorkloadRoleBindingRequest,
+		rightActor string, right iamv1.CreateWorkloadRoleBindingRequest,
+	) (consentRaceResult, consentRaceResult) {
+		t.Helper()
+		leftWire, rightWire := mustIAMJSON(t, left), mustIAMJSON(t, right)
+		results := make(chan consentRaceResult, 2)
+		send := func(actor, requestID string, wire []byte) {
+			request := httptest.NewRequest(http.MethodPost, "/v1/internal/workload-role-bindings", bytes.NewReader(wire))
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("Authorization", "Bearer "+paasCredential)
+			request.Header.Set("Matrix-Subject-Credential", actor)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			results <- consentRaceResult{actor: actor, requestID: requestID, response: response}
+		}
+		go send(leftActor, left.Authorization.RequestID, leftWire)
+		go send(rightActor, right.Authorization.RequestID, rightWire)
+		return <-results, <-results
+	}
+	doubleActor := serviceRoleBindingRequest(t, template, "service-installation-double-actor", "service-role-double-actor")
+	first, second := runRace(root, doubleActor, peerBearer, doubleActor)
+	var winner consentRaceResult
+	if first.response.Code == http.StatusOK && second.response.Code == http.StatusConflict {
+		winner = first
+	} else if second.response.Code == http.StatusOK && first.response.Code == http.StatusConflict {
+		winner = second
+	} else {
+		t.Fatalf("double-actor command was not serialized: first=%d/%s second=%d/%s",
+			first.response.Code, first.response.Body.String(), second.response.Code, second.response.Body.String())
+	}
+	createdByWinner := decode(winner.response)
+	replayedByWinner := decode(call(paasCredential, winner.actor, doubleActor, http.StatusOK))
+	if !reflect.DeepEqual(createdByWinner, replayedByWinner) {
+		t.Fatal("winning actor could not recover the exact concurrent command result")
+	}
+	left := serviceRoleBindingRequest(t, template, "service-installation-request-race", "service-role-request-race-left")
+	right := serviceRoleBindingRequest(t, template, left.Authorization.Resource.ID, "service-role-request-race-right")
+	first, second = runRace(root, left, root, right)
+	var losingRequestID string
+	if first.response.Code == http.StatusOK && second.response.Code == http.StatusConflict {
+		losingRequestID = second.requestID
+	} else if second.response.Code == http.StatusOK && first.response.Code == http.StatusConflict {
+		losingRequestID = first.requestID
+	} else {
+		t.Fatalf("same-workload commands were not serialized: first=%d/%s second=%d/%s",
+			first.response.Code, first.response.Body.String(), second.response.Code, second.response.Body.String())
+	}
+	var losingEffects int
+	if err := database.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM iam.authorization_decisions WHERE tenant_id=$1 AND request_id=$2)+
+		(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'requestId'=$2)+
+		(SELECT count(*) FROM iam.workload_role_bindings WHERE tenant_id=$1 AND request_id=$2)`,
+		actor.Account.ID, losingRequestID).Scan(&losingEffects); err != nil || losingEffects != 0 {
+		t.Fatal("losing concurrent service role command retained partial effects", err)
+	}
+
+	foreignResponse := performIAMRequest(handler, http.MethodPost, "/v1/accounts", root, mustIAMJSON(t, map[string]any{
+		"id": "service-role-other-account", "displayName": "Service role isolation", "rootLoginName": "service.role.other",
+		"rootDisplayName": "Service role other owner", "initialPassword": initialDeveloperPassword, "requestId": "service-role-other-account-create",
+	}))
+	var foreignAccount iamv1.Account
+	if foreignResponse.Code != http.StatusCreated || json.Unmarshal(foreignResponse.Body.Bytes(), &foreignAccount) != nil {
+		t.Fatalf("create service role isolation account: status=%d body=%s", foreignResponse.Code, foreignResponse.Body.String())
+	}
+	foreignRoot := localRecoveryLogin(t, handler, "service.role.other", initialDeveloperPassword, true)
+	foreignRoot = localRecoveryChangePassword(t, handler, foreignRoot, initialDeveloperPassword, changedDeveloperPassword)
+	var foreignActor iamv1.CurrentIdentity
+	response = performIAMRequest(handler, http.MethodGet, "/v1/auth/me", foreignRoot, nil)
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &foreignActor) != nil || foreignActor.Account.ID != foreignAccount.ID {
+		t.Fatal("read service role isolation actor")
+	}
+	response = performIAMRequest(handler, http.MethodPost, "/v1/policy-attachments", foreignRoot, mustIAMJSON(t, iamv1.CreatePolicyAttachmentRequest{
+		Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(foreignActor.User.ID)},
+		PolicyID: iamv1.SystemPolicyServiceRoleAdministrator, PolicyResourceVersion: 1, RequestID: "service-role-other-delegate",
+	}))
+	var foreignAttachment iamv1.PolicyAttachment
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &foreignAttachment) != nil {
+		t.Fatalf("delegate service role isolation authority: status=%d body=%s", response.Code, response.Body.String())
+	}
+	foreign := decode(call(paasCredential, foreignRoot, command, http.StatusOK))
+	if foreign.Relation.Role.AccountID != foreignAccount.ID || foreign.Bindings[0].AccountID != foreignAccount.ID ||
+		foreign.Relation.Role.ID == created.Relation.Role.ID || foreign.Bindings[0].ID == created.Bindings[0].ID {
+		t.Fatal("same workload and command identity crossed account namespaces")
+	}
+	response = performIAMRequest(handler, http.MethodPost, "/v1/policy-attachments/"+string(foreignAttachment.ID)+":revoke", foreignRoot,
+		mustIAMJSON(t, iamv1.RevokePolicyAttachmentRequest{ResourceVersion: foreignAttachment.ResourceVersion, RequestID: "service-role-other-revoke"}))
+	if response.Code != http.StatusOK {
+		t.Fatalf("revoke service role isolation authority: status=%d body=%s", response.Code, response.Body.String())
+	}
+	call(paasCredential, foreignRoot, command, http.StatusForbidden)
+
+	for _, attack := range []string{
+		`UPDATE iam.service_role_templates SET canonical_spec='{}'`,
+		`UPDATE iam.service_linked_roles SET service_principal_id='forged'`,
+		`DELETE FROM iam.service_linked_roles`,
+		`TRUNCATE iam.workload_role_bindings`,
+	} {
+		tx, err := database.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = tx.Exec(ctx, attack)
+		_ = tx.Rollback(ctx)
+		var databaseError *pgconn.PgError
+		if !errors.As(err, &databaseError) || databaseError.Code != "42501" {
+			t.Fatal("service role immutable history accepted mutation", err)
+		}
+	}
+	for _, drift := range []string{
+		`ALTER TABLE iam.service_linked_roles DISABLE ROW LEVEL SECURITY`,
+		`ALTER POLICY tenant_isolation ON iam.service_linked_roles USING(true) WITH CHECK(true)`,
+		`ALTER POLICY tenant_isolation ON iam.workload_role_bindings TO matrix_iam_api`,
+		`ALTER TABLE iam.service_role_templates DROP CONSTRAINT service_role_templates_valid`,
+		`ALTER TABLE iam.service_linked_roles DROP CONSTRAINT service_linked_roles_principal_uq`,
+		`ALTER TABLE iam.service_linked_roles DROP CONSTRAINT service_linked_roles_role_fk`,
+		`DROP INDEX iam.workload_role_bindings_active_uq`,
+		`DROP INDEX iam.workload_role_bindings_active_uq;
+		 CREATE UNIQUE INDEX workload_role_bindings_active_uq ON iam.workload_role_bindings(tenant_id,id) WHERE revoked_at IS NULL`,
+		`DROP INDEX iam.workload_role_bindings_active_uq;
+		 CREATE UNIQUE INDEX workload_role_bindings_active_uq ON iam.workload_role_bindings(tenant_id,template_id,template_version,workload_kind,workload_id) WHERE status='ACTIVE'`,
+		`ALTER TABLE iam.workload_role_bindings DROP CONSTRAINT workload_role_bindings_request_uq`,
+		`ALTER TABLE iam.workload_role_bindings DROP CONSTRAINT workload_role_bindings_decision_fk`,
+		`ALTER TABLE iam.workload_role_bindings DISABLE TRIGGER workload_role_binding_transitions`,
+		`ALTER TABLE iam.service_linked_roles DISABLE TRIGGER cannot_truncate`,
+		`GRANT SELECT ON iam.workload_role_bindings TO matrix_iam_api`,
+		`ALTER FUNCTION iam.lock_workload_role_binding_sources(text,text,text,text,text) SECURITY INVOKER`,
+		`GRANT EXECUTE ON FUNCTION iam.lock_workload_role_binding_sources(text,text,text,text,text) TO matrix_iam_worker`,
+		`ALTER FUNCTION iam.service_linked_role_snapshot(text,text) SECURITY DEFINER`,
+		`GRANT EXECUTE ON FUNCTION iam.workload_role_binding_snapshot(text,text) TO matrix_iam_api`,
+	} {
+		tx, err := database.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = tx.Exec(ctx, drift); err != nil {
+			_ = tx.Rollback(context.Background())
+			t.Fatal("inject service role contract drift", err)
+		}
+		var contractReady, ready bool
+		err = tx.QueryRow(ctx, `SELECT iam.service_role_contract_ready(),ready FROM iam.readiness()`).Scan(&contractReady, &ready)
+		_ = tx.Rollback(context.Background())
+		if err != nil || contractReady || ready {
+			t.Fatal("service role contract drift did not close readiness", drift, err)
+		}
+	}
+	tx, err := database.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, `SET LOCAL ROLE matrix_iam_api`); err != nil {
+		_ = tx.Rollback(context.Background())
+		t.Fatal("enter restricted IAM API role", err)
+	}
+	_, err = tx.Exec(ctx, `SELECT tenant_id,id FROM iam.workload_role_bindings`)
+	_ = tx.Rollback(context.Background())
+	var databaseError *pgconn.PgError
+	if !errors.As(err, &databaseError) || databaseError.Code != "42501" {
+		t.Fatal("restricted IAM API role read private service role state", err)
 	}
 }
 

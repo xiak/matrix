@@ -1797,11 +1797,19 @@ func TestRoleManagementRequestsKeepSelectorsAndDefaultsClosed(t *testing.T) {
 func TestServiceRoleConsentSchemasMatchClosedObjects(t *testing.T) {
 	api := loadIAMOpenAPI(t)
 	access := serviceLinkedRoleAccessForTest(t)
+	authorization, err := NewAuthorizationRequest(ActionManagedServiceInstallationRoleBind,
+		ResourceReference{Kind: ResourceServiceInstallation, ID: "service-installation-a"},
+		AuthorizationResourceInstance, "", "service-role-bind", "service-role-bind")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := CreateWorkloadRoleBindingRequest{Template: access.Relation.Template, Authorization: authorization}
 	values := map[string]any{
-		"ServiceRoleTemplate":     serviceRoleTemplateForTest(t),
-		"ServiceLinkedRole":       access.Relation,
-		"WorkloadRoleBinding":     access.Bindings[0],
-		"ServiceLinkedRoleAccess": access,
+		"ServiceRoleTemplate":              serviceRoleTemplateForTest(t),
+		"ServiceLinkedRole":                access.Relation,
+		"WorkloadRoleBinding":              access.Bindings[0],
+		"ServiceLinkedRoleAccess":          access,
+		"CreateWorkloadRoleBindingRequest": request,
 	}
 	for name, value := range values {
 		t.Run(name, func(t *testing.T) {
@@ -1828,6 +1836,19 @@ func TestServiceRoleConsentSchemasMatchClosedObjects(t *testing.T) {
 		if decodeErr == nil && compileIAMOpenAPISchema(t, api, "ServiceLinkedRoleAccess").Validate(instance) == nil {
 			t.Fatal("generated schema accepted a forged consent relationship")
 		}
+	}
+	requestWire, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selectorAttack := strings.Replace(string(requestWire), `"template":`, `"accountId":"other","template":`, 1)
+	instance, decodeErr := jsonschema.UnmarshalJSON(strings.NewReader(selectorAttack))
+	if decodeErr == nil && compileIAMOpenAPISchema(t, api, "CreateWorkloadRoleBindingRequest").Validate(instance) == nil {
+		t.Fatal("generated binding request schema accepted an account selector")
+	}
+	var decoded CreateWorkloadRoleBindingRequest
+	if json.Unmarshal([]byte(selectorAttack), &decoded) == nil {
+		t.Fatal("runtime binding request accepted an account selector")
 	}
 }
 

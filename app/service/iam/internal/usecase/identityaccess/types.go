@@ -137,6 +137,8 @@ type Transaction interface {
 	ReadRoleDiscoveryRevision(context.Context, RoleDiscoveryRead) (authority.RoleDiscoveryRevision, error)
 	ReadRoleCandidates(context.Context, RoleDiscoveryRead) (RoleCandidates, error)
 	ReadRolePermissionBoundary(context.Context, RoleRead) (iamv1.RolePermissionBoundary, error)
+	LockWorkloadRoleBindingSources(context.Context, iamv1.AccountID, iamv1.PrincipalID, iamv1.SessionID, string, iamv1.ServicePurpose) error
+	CreateWorkloadRoleBinding(context.Context, WorkloadRoleBindingCreation) (iamv1.ServiceLinkedRoleAccess, error)
 	ReadRoleAssumption(context.Context, RoleAssumptionRead) (RoleAssumption, error)
 	IssueRoleSession(context.Context, RoleSessionIssuance) (iamv1.RoleSession, error)
 	ReadRoleSessionByRequest(context.Context, RoleAssumptionRead) (iamv1.RoleSession, bool, error)
@@ -296,6 +298,26 @@ type RoleCreation struct {
 	ActorSessionID   iamv1.SessionID
 	DecisionID       iamv1.DecisionID
 	AuditEvent       auditv1.Event
+}
+
+// WorkloadRoleBindingCreation contains only authenticated/derived authority.
+// The public command never selects an Account, Role or service principal.
+type WorkloadRoleBindingCreation struct {
+	AccountID                iamv1.AccountID
+	ActorPrincipalID         iamv1.PrincipalID
+	ActorSessionID           iamv1.SessionID
+	ServiceLookupDigest      string
+	Request                  iamv1.CreateWorkloadRoleBindingRequest
+	Template                 iamv1.ServiceRoleTemplate
+	Role                     iamv1.Role
+	TrustVersion             iamv1.RoleTrustVersion
+	Binding                  iamv1.WorkloadRoleBinding
+	WorkloadDecisionID       iamv1.DecisionID
+	RoleCreationDecisionID   iamv1.DecisionID
+	RolePassDecisionID       iamv1.DecisionID
+	RequestDigest            string
+	RoleCreatedAuditEvent    auditv1.Event
+	BindingCreatedAuditEvent auditv1.Event
 }
 
 // RoleMutation carries the exact authenticated writer and expected revision,
@@ -676,6 +698,7 @@ type RoleSessionCredential struct {
 
 type ServiceCredential struct {
 	Identity           iamv1.ServiceIdentity
+	LookupDigest       string
 	VerificationDigest string
 }
 

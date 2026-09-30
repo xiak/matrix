@@ -197,6 +197,11 @@ func buildPaths() object {
 		"/v1/auth/me":                object{"get": readOperation("getCurrentIdentity", "Get the current account and identity", "CurrentIdentity", nil, nil)},
 		"/v1/authorization-profiles": object{"get": readOperation("listAuthorizationProfiles", "Read complete current product declarations under current account policy-list permission; metadata is not a permit or registration capability. Maximum complete response 64 KiB.", "AuthorizationProfileList", nil, nil)},
 		"/v1/service-role-templates": object{"get": readOperation("listServiceRoleTemplates", "Read release-owned immutable service-role templates under current account permission. ACTIVE is not account consent and the response contains no service credential.", "ServiceRoleTemplateList", nil, nil)},
+		"/v1/internal/workload-role-bindings": object{"post": mutationOperation(
+			"createWorkloadRoleBinding", "Atomically record current-Account consent for one product-verified workload and exact release template; no Account, Role or service selector is accepted.",
+			"CreateWorkloadRoleBindingRequest", "ServiceLinkedRoleAccess", "200",
+			[]any{object{"ServiceCredential": []string{}, "SubjectCredential": []string{}}}, nil,
+		)},
 		"/v1/policies": object{
 			"get":  readOperation("listPolicies", "Read the complete bounded current account policy metadata directory", "PolicyList", nil, nil),
 			"post": mutationOperation("createPolicy", "Create an account-owned policy and its initial immutable version without attaching it", "CreatePolicyRequest", "PolicyDetail", "201", nil, nil),
@@ -527,6 +532,7 @@ func structContracts() map[string]reflect.Type {
 		"PolicyCompilation":                             openapi31.StructType[iamv1.PolicyCompilation](),
 		"PolicyResolvedStatement":                       openapi31.StructType[iamv1.PolicyResolvedStatement](),
 		"PolicyVersionReference":                        openapi31.StructType[iamv1.PolicyVersionReference](),
+		"ServiceRoleWorkloadSpec":                       openapi31.StructType[iamv1.ServiceRoleWorkloadSpec](),
 		"ServiceRoleTemplateSpec":                       openapi31.StructType[iamv1.ServiceRoleTemplateSpec](),
 		"ServiceRoleTemplateReference":                  openapi31.StructType[iamv1.ServiceRoleTemplateReference](),
 		"ServiceRoleTemplate":                           openapi31.StructType[iamv1.ServiceRoleTemplate](),
@@ -535,6 +541,7 @@ func structContracts() map[string]reflect.Type {
 		"ServiceLinkedRole":                             openapi31.StructType[iamv1.ServiceLinkedRole](),
 		"WorkloadRoleBinding":                           openapi31.StructType[iamv1.WorkloadRoleBinding](),
 		"ServiceLinkedRoleAccess":                       openapi31.StructType[iamv1.ServiceLinkedRoleAccess](),
+		"CreateWorkloadRoleBindingRequest":              openapi31.StructType[iamv1.CreateWorkloadRoleBindingRequest](),
 		"UserPermissionBoundary":                        openapi31.StructType[iamv1.UserPermissionBoundary](),
 		"SetUserPermissionBoundaryRequest":              openapi31.StructType[iamv1.SetUserPermissionBoundaryRequest](),
 		"RemoveUserPermissionBoundaryRequest":           openapi31.StructType[iamv1.RemoveUserPermissionBoundaryRequest](),
@@ -1125,9 +1132,10 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 }
 
 func applySemanticOverlays(schemas object) {
-	schemas["ServiceRoleTemplateSpec"].(object)["description"] = "Release-owned immutable service-role authority. Product, service purpose, fixed policy version and workload kinds are not Account-selected authorization inputs."
-	schemas["ServiceRoleTemplateSpec"].(object)["properties"].(object)["workloadResourceKinds"].(object)["minItems"] = 1
-	schemas["ServiceRoleTemplateSpec"].(object)["properties"].(object)["workloadResourceKinds"].(object)["maxItems"] = iamv1.MaxServiceRoleTemplateWorkloadKinds
+	schemas["ServiceRoleWorkloadSpec"].(object)["description"] = "Release-owned mapping from one workload kind to its exact product bind and unbind Actions. Consumers must not infer these Actions from product, Role or resource names."
+	schemas["ServiceRoleTemplateSpec"].(object)["description"] = "Release-owned immutable service-role authority. Product, service purpose, fixed policy version and workload Action mappings are not Account-selected authorization inputs."
+	schemas["ServiceRoleTemplateSpec"].(object)["properties"].(object)["workloads"].(object)["minItems"] = 1
+	schemas["ServiceRoleTemplateSpec"].(object)["properties"].(object)["workloads"].(object)["maxItems"] = iamv1.MaxServiceRoleTemplateWorkloads
 	schemas["ServiceRoleTemplateSpec"].(object)["properties"].(object)["maxSessionDurationSeconds"].(object)["minimum"] = iamv1.MinRoleSessionDurationSeconds
 	schemas["ServiceRoleTemplateSpec"].(object)["properties"].(object)["maxSessionDurationSeconds"].(object)["maximum"] = iamv1.MaxRoleSessionDurationSeconds
 	for _, name := range []string{"ServiceRoleTemplateReference", "ServiceRoleTemplate"} {

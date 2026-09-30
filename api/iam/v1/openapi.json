@@ -14011,6 +14011,22 @@
         ],
         "type": "object"
       },
+      "CreateWorkloadRoleBindingRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "authorization": {
+            "$ref": "#/components/schemas/AuthorizationRequest"
+          },
+          "template": {
+            "$ref": "#/components/schemas/ServiceRoleTemplateReference"
+          }
+        },
+        "required": [
+          "authorization",
+          "template"
+        ],
+        "type": "object"
+      },
       "CurrentIdentity": {
         "additionalProperties": false,
         "properties": {
@@ -24121,7 +24137,7 @@
       },
       "ServiceRoleTemplateSpec": {
         "additionalProperties": false,
-        "description": "Release-owned immutable service-role authority. Product, service purpose, fixed policy version and workload kinds are not Account-selected authorization inputs.",
+        "description": "Release-owned immutable service-role authority. Product, service purpose, fixed policy version and workload Action mappings are not Account-selected authorization inputs.",
         "properties": {
           "maxSessionDurationSeconds": {
             "maximum": 43200,
@@ -24134,12 +24150,18 @@
           "product": {
             "$ref": "#/components/schemas/ProductID"
           },
+          "roleDescription": {
+            "type": "string"
+          },
+          "roleName": {
+            "type": "string"
+          },
           "servicePurpose": {
             "$ref": "#/components/schemas/ServicePurpose"
           },
-          "workloadResourceKinds": {
+          "workloads": {
             "items": {
-              "$ref": "#/components/schemas/ResourceKind"
+              "$ref": "#/components/schemas/ServiceRoleWorkloadSpec"
             },
             "maxItems": 16,
             "minItems": 1,
@@ -24150,8 +24172,10 @@
           "maxSessionDurationSeconds",
           "policyVersion",
           "product",
+          "roleDescription",
+          "roleName",
           "servicePurpose",
-          "workloadResourceKinds"
+          "workloads"
         ],
         "type": "object"
       },
@@ -24161,6 +24185,27 @@
           "RETIRED"
         ],
         "type": "string"
+      },
+      "ServiceRoleWorkloadSpec": {
+        "additionalProperties": false,
+        "description": "Release-owned mapping from one workload kind to its exact product bind and unbind Actions. Consumers must not infer these Actions from product, Role or resource names.",
+        "properties": {
+          "bindAction": {
+            "$ref": "#/components/schemas/Action"
+          },
+          "resourceKind": {
+            "$ref": "#/components/schemas/ResourceKind"
+          },
+          "unbindAction": {
+            "$ref": "#/components/schemas/Action"
+          }
+        },
+        "required": [
+          "bindAction",
+          "resourceKind",
+          "unbindAction"
+        ],
+        "type": "object"
       },
       "Session": {
         "additionalProperties": false,
@@ -29847,6 +29892,67 @@
           }
         ],
         "summary": "Authorize the credential-bound installation verifier"
+      }
+    },
+    "/v1/internal/workload-role-bindings": {
+      "post": {
+        "operationId": "createWorkloadRoleBinding",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWorkloadRoleBindingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceLinkedRoleAccess"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [
+          {
+            "ServiceCredential": [],
+            "SubjectCredential": []
+          }
+        ],
+        "summary": "Atomically record current-Account consent for one product-verified workload and exact release template; no Account, Role or service selector is accepted."
       }
     },
     "/v1/platform-policies": {

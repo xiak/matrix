@@ -17,12 +17,18 @@ func ServiceRoleTemplates() ([]iamv1.ServiceRoleTemplate, error) {
 		return nil, ErrInvalidPolicyState
 	}
 	spec := iamv1.ServiceRoleTemplateSpec{
-		Product:        iamv1.ProductManagedService,
-		ServicePurpose: iamv1.ServicePaaS,
+		Product:         iamv1.ProductManagedService,
+		ServicePurpose:  iamv1.ServicePaaS,
+		RoleName:        "ManagedServiceInstallationReader",
+		RoleDescription: "Allows the managed service controller to read one explicitly bound service installation.",
 		PolicyVersion: iamv1.PolicyVersionReference{
 			PolicyID: ceiling.PolicyID, VersionID: ceiling.ID, ContentDigest: ceiling.ContentDigest,
 		},
-		WorkloadResourceKinds:     []iamv1.ResourceKind{iamv1.ResourceServiceInstallation},
+		Workloads: []iamv1.ServiceRoleWorkloadSpec{{
+			ResourceKind: iamv1.ResourceServiceInstallation,
+			BindAction:   iamv1.ActionManagedServiceInstallationRoleBind,
+			UnbindAction: iamv1.ActionManagedServiceInstallationRoleUnbind,
+		}},
 		MaxSessionDurationSeconds: 15 * 60,
 	}
 	_, digest, err := iamv1.CanonicalizeServiceRoleTemplateSpec(spec)
@@ -62,7 +68,7 @@ func LookupServiceRoleTemplate(reference iamv1.ServiceRoleTemplateReference) (ia
 func cloneServiceRoleTemplates(values []iamv1.ServiceRoleTemplate) []iamv1.ServiceRoleTemplate {
 	result := slices.Clone(values)
 	for index := range result {
-		result[index].Spec.WorkloadResourceKinds = slices.Clone(result[index].Spec.WorkloadResourceKinds)
+		result[index].Spec.Workloads = slices.Clone(result[index].Spec.Workloads)
 	}
 	return result
 }

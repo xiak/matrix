@@ -3,6 +3,7 @@ package iamv1
 import (
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -10,14 +11,20 @@ import (
 func serviceRoleTemplateForTest(t *testing.T) ServiceRoleTemplate {
 	t.Helper()
 	spec := ServiceRoleTemplateSpec{
-		Product:        ProductManagedService,
-		ServicePurpose: ServicePaaS,
+		Product:         ProductManagedService,
+		ServicePurpose:  ServicePaaS,
+		RoleName:        "ManagedServiceInstallationReader",
+		RoleDescription: "Allows the managed service controller to read one explicitly bound service installation.",
 		PolicyVersion: PolicyVersionReference{
 			PolicyID:      "system.managedservice-installation-reader",
 			VersionID:     "version-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 			ContentDigest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 		},
-		WorkloadResourceKinds:     []ResourceKind{ResourceServiceInstallation},
+		Workloads: []ServiceRoleWorkloadSpec{{
+			ResourceKind: ResourceServiceInstallation,
+			BindAction:   ActionManagedServiceInstallationRoleBind,
+			UnbindAction: ActionManagedServiceInstallationRoleUnbind,
+		}},
 		MaxSessionDurationSeconds: 900,
 	}
 	_, digest, err := CanonicalizeServiceRoleTemplateSpec(spec)
@@ -54,28 +61,31 @@ func serviceLinkedRoleAccessForTest(t *testing.T) ServiceLinkedRoleAccess {
 	return ServiceLinkedRoleAccess{APIVersion: APIVersion, Kind: "ServiceLinkedRoleAccess", Relation: relation, Bindings: []WorkloadRoleBinding{binding}}
 }
 
-func TestServiceRoleTemplateCanonicalizesReleaseOwnedAuthority(t *testing.T) {
+func TestServiceRoleTemplateValidatesReleaseOwnedAuthority(t *testing.T) {
 	template := serviceRoleTemplateForTest(t)
 	if ValidateServiceRoleTemplate(template) != nil || ValidateServiceRoleTemplateReference(template.Reference()) != nil {
 		t.Fatal("valid service role template rejected")
 	}
-	left := template.Spec
-	left.WorkloadResourceKinds = []ResourceKind{ResourceRegion, ResourceServiceInstallation}
-	right := left
-	right.WorkloadResourceKinds = []ResourceKind{ResourceServiceInstallation, ResourceRegion}
-	leftDocument, leftDigest, leftErr := CanonicalizeServiceRoleTemplateSpec(left)
-	rightDocument, rightDigest, rightErr := CanonicalizeServiceRoleTemplateSpec(right)
-	if leftErr != nil || rightErr != nil || leftDocument != rightDocument || leftDigest != rightDigest {
-		t.Fatal("template authority depends on caller array order")
+	document, digest, err := CanonicalizeServiceRoleTemplateSpec(template.Spec)
+	if err != nil || document == "" || digest != template.ContentDigest ||
+		!json.Valid([]byte(document)) {
+		t.Fatal("template authority did not preserve its registered product actions")
 	}
 
 	for name, mutate := range map[string]func(*ServiceRoleTemplate){
 		"tenant supplied product": func(value *ServiceRoleTemplate) { value.Spec.Product = "managedservice.other" },
 		"unknown service":         func(value *ServiceRoleTemplate) { value.Spec.ServicePurpose = "PROBE" },
+		"empty role name":         func(value *ServiceRoleTemplate) { value.Spec.RoleName = "" },
 		"duplicate workload": func(value *ServiceRoleTemplate) {
-			value.Spec.WorkloadResourceKinds = []ResourceKind{ResourceServiceInstallation, ResourceServiceInstallation}
+			value.Spec.Workloads = append(value.Spec.Workloads, value.Spec.Workloads[0])
 		},
-		"empty workload":    func(value *ServiceRoleTemplate) { value.Spec.WorkloadResourceKinds = nil },
+		"empty workload": func(value *ServiceRoleTemplate) { value.Spec.Workloads = nil },
+		"foreign bind action": func(value *ServiceRoleTemplate) {
+			value.Spec.Workloads[0].BindAction = ActionPaaSApplicationRead
+		},
+		"same product actions": func(value *ServiceRoleTemplate) {
+			value.Spec.Workloads[0].UnbindAction = value.Spec.Workloads[0].BindAction
+		},
 		"unbounded session": func(value *ServiceRoleTemplate) { value.Spec.MaxSessionDurationSeconds = 0 },
 		"changed policy":    func(value *ServiceRoleTemplate) { value.Spec.PolicyVersion.PolicyID = SystemPolicyPaaSViewer },
 		"changed digest": func(value *ServiceRoleTemplate) {
@@ -86,7 +96,7 @@ func TestServiceRoleTemplateCanonicalizesReleaseOwnedAuthority(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			changed := template
-			changed.Spec.WorkloadResourceKinds = append([]ResourceKind(nil), template.Spec.WorkloadResourceKinds...)
+			changed.Spec.Workloads = append([]ServiceRoleWorkloadSpec(nil), template.Spec.Workloads...)
 			mutate(&changed)
 			if ValidateServiceRoleTemplate(changed) == nil {
 				t.Fatal("invalid service role template accepted")
@@ -137,6 +147,12 @@ func TestServiceLinkedRoleAndBindingPreserveExactConsent(t *testing.T) {
 	var decoded ServiceLinkedRoleAccess
 	if json.Unmarshal(encoded, &decoded) != nil || !reflect.DeepEqual(decoded, access) {
 		t.Fatal("valid service-linked role access did not strictly round trip")
+	}
+	for _, offset := range []string{"+00:00", "+01:00", "+08:00"} {
+		databaseWire := []byte(strings.ReplaceAll(string(encoded), `Z"`, offset+`"`))
+		if json.Unmarshal(databaseWire, &decoded) == nil {
+			t.Fatalf("public contract accepted non-canonical timestamp offset %s", offset)
+		}
 	}
 
 	for name, mutate := range map[string]func(*ServiceLinkedRoleAccess){
@@ -200,4 +216,61 @@ func TestWorkloadRoleBindingTerminalStateIsExact(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestCreateWorkloadRoleBindingRequestHasOneWorkloadAndCommandIdentity(t *testing.T) {
+	template := serviceRoleTemplateForTest(t)
+	authorization, err := NewAuthorizationRequest(ActionManagedServiceInstallationRoleBind,
+		ResourceReference{Kind: ResourceServiceInstallation, ID: "service-installation-a"},
+		AuthorizationResourceInstance, "", "bind-service-installation-a", "bind-service-installation-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := CreateWorkloadRoleBindingRequest{Template: template.Reference(), Authorization: authorization}
+	if ValidateCreateWorkloadRoleBindingRequest(request) != nil {
+		t.Fatal("valid workload role binding command rejected")
+	}
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded CreateWorkloadRoleBindingRequest
+	if json.Unmarshal(encoded, &decoded) != nil || !reflect.DeepEqual(decoded, request) {
+		t.Fatal("workload role binding command did not strictly round trip")
+	}
+	for _, attack := range []string{
+		string(encoded[:len(encoded)-1]) + `,"accountId":"account-b"}`,
+		string(encoded[:len(encoded)-1]) + `,"roleId":"role-b"}`,
+		string(encoded[:len(encoded)-1]) + `,"servicePrincipalId":"service-b"}`,
+		string(encoded[:len(encoded)-1]) + `,"template":` + string(mustServiceRoleJSON(t, template.Reference())) + `}`,
+	} {
+		if json.Unmarshal([]byte(attack), &decoded) == nil {
+			t.Fatal("strict decoder accepted a derived authority selector or duplicate template")
+		}
+	}
+	mutations := []func(*CreateWorkloadRoleBindingRequest){
+		func(value *CreateWorkloadRoleBindingRequest) {
+			value.Authorization.ResourceMode = AuthorizationResourceCollection
+		},
+		func(value *CreateWorkloadRoleBindingRequest) {
+			value.Authorization.CollectionUsage = AuthorizationCollectionCreate
+		},
+		func(value *CreateWorkloadRoleBindingRequest) { value.Authorization.Resource.ID = "" },
+	}
+	for _, mutate := range mutations {
+		changed := request
+		mutate(&changed)
+		if ValidateCreateWorkloadRoleBindingRequest(changed) == nil {
+			t.Fatal("invalid workload role binding command accepted")
+		}
+	}
+}
+
+func mustServiceRoleJSON(t *testing.T, value any) []byte {
+	t.Helper()
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return encoded
 }

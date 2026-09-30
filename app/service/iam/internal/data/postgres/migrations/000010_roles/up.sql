@@ -62,6 +62,7 @@ CREATE TABLE IF NOT EXISTS iam.roles (
     tenant_id text COLLATE "C" NOT NULL REFERENCES iam.accounts(id),
     id text COLLATE "C" NOT NULL,
     metadata jsonb NOT NULL,
+    management text COLLATE "C" NOT NULL DEFAULT 'CUSTOMER',
     status text NOT NULL CHECK(status IN ('ACTIVE','DISABLED')),
     resource_version bigint NOT NULL CHECK(resource_version BETWEEN 1 AND 9007199254740991),
     current_trust_version_id text COLLATE "C" NOT NULL,
@@ -75,7 +76,13 @@ CREATE TABLE IF NOT EXISTS iam.roles (
     CHECK(updated_at>=created_at AND ((deleted_at IS NULL AND revoked_attachments_count IS NULL)
       OR (deleted_at IS NOT NULL AND deleted_at=updated_at AND resource_version>=2 AND revoked_attachments_count IS NOT NULL AND revoked_attachments_count>=0)))
 );
-CREATE UNIQUE INDEX IF NOT EXISTS roles_live_name_uq ON iam.roles(tenant_id,((metadata->>'name') COLLATE "C")) WHERE deleted_at IS NULL;
+ALTER TABLE iam.roles ADD COLUMN IF NOT EXISTS management text COLLATE "C" NOT NULL DEFAULT 'CUSTOMER';
+ALTER TABLE iam.roles DROP CONSTRAINT IF EXISTS roles_management_valid;
+ALTER TABLE iam.roles ADD CONSTRAINT roles_management_valid CHECK(management IN ('CUSTOMER','SERVICE_LINKED'));
+DROP INDEX IF EXISTS iam.roles_live_name_uq;
+CREATE UNIQUE INDEX IF NOT EXISTS roles_live_customer_name_uq
+    ON iam.roles(tenant_id,((metadata->>'name') COLLATE "C"))
+    WHERE deleted_at IS NULL AND management='CUSTOMER';
 
 -- Roles had no sessions before this cutover. Starting their monotonic counter
 -- does not authenticate or assign a generation to any existing USER session.
@@ -130,7 +137,8 @@ BEGIN
     -- revision. No other column may change on this path.
     IF OLD.deleted_at IS NULL AND NEW.security_generation=OLD.security_generation+1
        AND to_jsonb(NEW)-'security_generation'=to_jsonb(OLD)-'security_generation' THEN RETURN NEW; END IF;
-    IF ROW(NEW.tenant_id,NEW.id,NEW.created_at) IS DISTINCT FROM ROW(OLD.tenant_id,OLD.id,OLD.created_at)
+    IF OLD.management='SERVICE_LINKED' OR NEW.management IS DISTINCT FROM OLD.management
+       OR ROW(NEW.tenant_id,NEW.id,NEW.created_at) IS DISTINCT FROM ROW(OLD.tenant_id,OLD.id,OLD.created_at)
        OR OLD.deleted_at IS NOT NULL OR NEW.resource_version<>OLD.resource_version+1 OR NEW.updated_at<>transaction_timestamp()
        OR NEW.security_generation NOT IN (OLD.security_generation,OLD.security_generation+1)
        OR (NEW.deleted_at IS NOT NULL AND (NEW.metadata IS DISTINCT FROM OLD.metadata OR NEW.status<>OLD.status
@@ -151,7 +159,8 @@ BEGIN
     IF TG_OP='INSERT' THEN
         IF NEW.resource_version<>1 OR NEW.revoked_at IS NOT NULL OR NEW.created_at<>transaction_timestamp()
            OR NEW.updated_at<>NEW.created_at OR NOT EXISTS(SELECT 1 FROM iam.roles r
-             WHERE r.tenant_id=NEW.tenant_id AND r.id=NEW.role_id AND r.deleted_at IS NULL)
+             WHERE r.tenant_id=NEW.tenant_id AND r.id=NEW.role_id
+               AND r.management='CUSTOMER' AND r.deleted_at IS NULL)
            OR NOT EXISTS(SELECT 1 FROM iam.policies p WHERE p.id=NEW.policy_id AND p.status='ACTIVE'
              AND p.authority_scope='TENANT' AND (p.owner_tenant_id IS NULL OR p.owner_tenant_id=NEW.tenant_id)) THEN
             RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='role boundary identity is invalid';
@@ -227,7 +236,9 @@ CREATE OR REPLACE FUNCTION iam.advance_role_directory_revision()
 RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE tenant text;
 BEGIN
-    IF TG_RELID='iam.roles'::regclass THEN tenant:=NEW.tenant_id;
+    IF TG_RELID='iam.roles'::regclass THEN
+        IF NEW.management<>'CUSTOMER' THEN RETURN NEW; END IF;
+        tenant:=NEW.tenant_id;
     ELSIF TG_RELID='iam.policies'::regclass THEN
         IF NEW.management<>'CUSTOMER' OR NEW.authority_scope<>'TENANT' THEN RETURN NEW; END IF;
         tenant:=NEW.owner_tenant_id;
@@ -327,7 +338,7 @@ $function$;
 CREATE OR REPLACE FUNCTION iam.role_snapshot(tenant text,role_id text)
 RETURNS jsonb LANGUAGE sql SET search_path=pg_catalog,pg_temp AS $function$
     SELECT r.metadata||jsonb_build_object('apiVersion','iam.matrix.xiak.com/v1','kind','Role','accountId',r.tenant_id,'id',r.id,
-      'management','CUSTOMER','status',r.status,'resourceVersion',r.resource_version,'currentTrustVersionId',r.current_trust_version_id,
+      'management',r.management,'status',r.status,'resourceVersion',r.resource_version,'currentTrustVersionId',r.current_trust_version_id,
       'createdAt',r.created_at,'updatedAt',r.updated_at) FROM iam.roles r WHERE r.tenant_id=tenant AND r.id=role_id AND r.deleted_at IS NULL
 $function$;
 CREATE OR REPLACE FUNCTION iam.role_trust_snapshot(tenant text,role_id text,version_id text)
@@ -355,7 +366,8 @@ BEGIN
     PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.role.list','ACCOUNT',tenant,'INSTANCE',NULL);
     IF COALESCE(after_id,'')<>'' AND after_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='role page is invalid'; END IF;
     SELECT COALESCE(jsonb_agg(jsonb_build_object('role',iam.role_snapshot(tenant,r.id),'capabilities','[]'::jsonb) ORDER BY r.id),'[]') INTO result
-      FROM (SELECT id FROM iam.roles WHERE tenant_id=tenant AND deleted_at IS NULL AND (COALESCE(after_id,'')='' OR id>after_id COLLATE "C") ORDER BY id LIMIT 101) r;
+      FROM (SELECT id FROM iam.roles WHERE tenant_id=tenant AND deleted_at IS NULL AND management='CUSTOMER'
+        AND (COALESCE(after_id,'')='' OR id>after_id COLLATE "C") ORDER BY id LIMIT 101) r;
     RETURN result;
 END $function$;
 CREATE OR REPLACE FUNCTION iam.read_role(tenant text,actor text,decision text,role_id text)
@@ -364,6 +376,9 @@ DECLARE result jsonb;
 BEGIN
     PERFORM iam.read_account(tenant,actor);
     PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.role.read','ROLE',role_id,'INSTANCE',NULL);
+    IF NOT EXISTS(SELECT 1 FROM iam.roles r WHERE r.tenant_id=tenant AND r.id=role_id
+      AND r.management='CUSTOMER' AND r.deleted_at IS NULL) THEN
+        RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='role is unavailable'; END IF;
     result:=iam.role_access_snapshot(tenant,role_id);
     IF result IS NULL THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='role is unavailable'; END IF;
     RETURN result;
@@ -384,7 +399,8 @@ BEGIN
     PERFORM iam.assert_role_intent(tenant,actor,event);
     SELECT * INTO stored FROM iam.roles r WHERE r.tenant_id=tenant AND r.id=role_id FOR UPDATE;
     IF FOUND THEN
-        IF stored.deleted_at IS NOT NULL OR stored.resource_version<>1 OR stored.metadata IS DISTINCT FROM metadata OR stored.current_trust_version_id<>trust_id
+        IF stored.management<>'CUSTOMER' OR stored.deleted_at IS NOT NULL OR stored.resource_version<>1
+           OR stored.metadata IS DISTINCT FROM metadata OR stored.current_trust_version_id<>trust_id
            OR NOT EXISTS(SELECT 1 FROM iam.role_trust_versions v WHERE v.tenant_id=tenant AND v.role_id=create_role.role_id AND v.id=trust_id
                AND v.canonical_document=trust->>'canonicalDocument' AND v.content_digest=trust->>'contentDigest')
            OR NOT EXISTS(SELECT 1 FROM iam.audit_outbox WHERE tenant_id=tenant AND event_document->>'action'='iam.role.created' AND event_document#>>'{target,id}'=role_id
@@ -392,8 +408,8 @@ BEGIN
             RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='role creation intent conflicts'; END IF;
         RETURN iam.role_snapshot(tenant,role_id);
     END IF;
-    INSERT INTO iam.roles(tenant_id,id,metadata,status,resource_version,current_trust_version_id,created_at,updated_at)
-      VALUES(tenant,role_id,metadata,'ACTIVE',1,trust_id,effective_now,effective_now);
+    INSERT INTO iam.roles(tenant_id,id,metadata,management,status,resource_version,current_trust_version_id,created_at,updated_at)
+      VALUES(tenant,role_id,metadata,'CUSTOMER','ACTIVE',1,trust_id,effective_now,effective_now);
     INSERT INTO iam.role_trust_versions(tenant_id,role_id,id,canonical_document,content_digest,created_at)
       VALUES(tenant,role_id,trust_id,trust->>'canonicalDocument',trust->>'contentDigest',effective_now);
     INSERT INTO iam.audit_outbox(tenant_id,event_id,event_document,next_attempt_at,created_at,updated_at)
@@ -554,7 +570,8 @@ CREATE OR REPLACE FUNCTION iam.role_permission_boundary_snapshot(tenant text,rol
 RETURNS jsonb LANGUAGE plpgsql STABLE SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE stored iam.roles%ROWTYPE; binding iam.role_permission_boundaries%ROWTYPE; reference jsonb;
 BEGIN
-    SELECT * INTO stored FROM iam.roles r WHERE r.tenant_id=tenant AND r.id=role_id AND r.deleted_at IS NULL;
+    SELECT * INTO stored FROM iam.roles r WHERE r.tenant_id=tenant AND r.id=role_id
+      AND r.management='CUSTOMER' AND r.deleted_at IS NULL;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='boundary role is unavailable'; END IF;
     SELECT * INTO binding FROM iam.role_permission_boundaries b
       WHERE b.tenant_id=tenant AND b.role_id=role_permission_boundary_snapshot.role_id AND b.revoked_at IS NULL;
@@ -929,7 +946,8 @@ BEGIN
           'session',iam.role_session_snapshot(tenant,previous.id),'sourceSessionId',previous.source_session_id,
           'credentialGeneration',previous.credential_generation,'requestDigest',previous.request_digest));
     END IF;
-    SELECT * INTO role_value FROM iam.roles r WHERE r.tenant_id=tenant AND r.id=role_id AND r.deleted_at IS NULL FOR UPDATE;
+    SELECT * INTO role_value FROM iam.roles r WHERE r.tenant_id=tenant AND r.id=role_id
+      AND r.management='CUSTOMER' AND r.deleted_at IS NULL FOR UPDATE;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='role is unavailable'; END IF;
     RETURN jsonb_build_object('credentialGeneration',generation,'securityGeneration',role_value.security_generation,
       'role',iam.role_snapshot(tenant,role_id),'trust',iam.role_trust_snapshot(tenant,role_id,role_value.current_trust_version_id));
@@ -976,7 +994,8 @@ BEGIN
       OR (after_id<>'' AND after_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
       OR (role_id<>'' AND role_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$') THEN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='role discovery query is invalid'; END IF;
-    FOR candidate IN SELECT r.id,r.current_trust_version_id FROM iam.roles r WHERE r.tenant_id=tenant AND r.deleted_at IS NULL
+    FOR candidate IN SELECT r.id,r.current_trust_version_id FROM iam.roles r WHERE r.tenant_id=tenant
+        AND r.management='CUSTOMER' AND r.deleted_at IS NULL
         AND (after_id='' OR r.id>after_id COLLATE "C") AND (role_id='' OR r.id=role_id) ORDER BY r.id LIMIT 21 LOOP
         IF jsonb_array_length(items)=20 THEN next_after:=previous_id; EXIT; END IF;
         boundary_value:=NULL;
@@ -1583,7 +1602,7 @@ BEGIN
     IF NOT EXISTS(SELECT 1 FROM pg_class c WHERE c.oid=to_regclass('iam.role_session_index') AND c.relowner='matrix_iam_owner'::regrole
       AND NOT EXISTS(SELECT 1 FROM aclexplode(COALESCE(c.relacl,acldefault('r',c.relowner))) permission WHERE permission.grantee<>c.relowner)) THEN RETURN false; END IF;
     FOR required IN SELECT * FROM (VALUES
-      ('roles','security_generation','bigint'::regtype,true),
+      ('roles','management','text'::regtype,true),('roles','security_generation','bigint'::regtype,true),
       ('role_directory_revisions','tenant_id','text'::regtype,true),('role_directory_revisions','revision','bigint'::regtype,true),
       ('role_session_directory_revisions','tenant_id','text'::regtype,true),('role_session_directory_revisions','role_id','text'::regtype,true),
       ('role_session_directory_revisions','revision','bigint'::regtype,true),
@@ -1662,7 +1681,7 @@ BEGIN
           AND ARRAY(SELECT a.attname::text FROM unnest(c.confkey) WITH ORDINALITY k(number,position)
               JOIN pg_attribute a ON a.attrelid=c.confrelid AND a.attnum=k.number ORDER BY k.position)=required.target_columns) THEN RETURN false; END IF;
     END LOOP;
-    FOR required IN SELECT * FROM (VALUES ('roles','roles_security_generation_range'),
+    FOR required IN SELECT * FROM (VALUES ('roles','roles_management_valid'),('roles','roles_security_generation_range'),
       ('role_permission_boundaries','role_boundaries_terminal_state'),('role_directory_revisions','role_directory_revision_range'),
       ('role_source_authority_generations','role_source_exact_kind'),('role_source_authority_generations','role_source_generation_range'),
       ('role_session_directory_revisions','role_session_directory_revision_range'),

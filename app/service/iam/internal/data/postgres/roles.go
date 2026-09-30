@@ -663,7 +663,8 @@ func (value *transaction) CreateRole(ctx context.Context, mutation identityacces
 		return iamv1.Role{}, mapAuthorizationDatabaseError("create IAM role", err)
 	}
 	result, err := decodeRole(encoded, role.AccountID, role.ID, 1)
-	if err != nil || result.CurrentTrustVersionID != role.CurrentTrustVersionID || result.Status != iamv1.RoleActive ||
+	if err != nil || result.Management != iamv1.RoleCustomerManaged ||
+		result.CurrentTrustVersionID != role.CurrentTrustVersionID || result.Status != iamv1.RoleActive ||
 		result.Name != role.Name || result.Description != role.Description || !reflect.DeepEqual(result.Tags, role.Tags) || result.MaxSessionDurationSeconds != role.MaxSessionDurationSeconds {
 		return iamv1.Role{}, identityaccess.ErrUnavailable
 	}

@@ -66,6 +66,7 @@ type Workflow interface {
 	ListPolicies(context.Context, iamv1.Secret, bool, string) (iamv1.PolicyList, error)
 	ListAuthorizationProfiles(context.Context, iamv1.Secret, string) (iamv1.AuthorizationProfileList, error)
 	ListServiceRoleTemplates(context.Context, iamv1.Secret, string) (iamv1.ServiceRoleTemplateList, error)
+	CreateWorkloadRoleBinding(context.Context, iamv1.Secret, iamv1.Secret, iamv1.CreateWorkloadRoleBindingRequest) (iamv1.ServiceLinkedRoleAccess, error)
 	GetPolicy(context.Context, iamv1.Secret, iamv1.PolicyID, string) (iamv1.PolicyDetail, error)
 	CreatePolicy(context.Context, iamv1.Secret, iamv1.CreatePolicyRequest) (iamv1.PolicyDetail, error)
 	ListPolicyVersions(context.Context, iamv1.Secret, iamv1.PolicyID, string) (iamv1.PolicyVersionList, error)
@@ -198,6 +199,7 @@ func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 	routes.HandleFunc("/v1/policies", value.policies)
 	routes.HandleFunc("/v1/authorization-profiles", value.authorizationProfiles)
 	routes.HandleFunc("/v1/service-role-templates", value.serviceRoleTemplates)
+	routes.HandleFunc("/v1/internal/workload-role-bindings", value.createWorkloadRoleBinding)
 	routes.HandleFunc("/v1/policies/", value.policy)
 	routes.HandleFunc("/v1/platform-policies", value.listPolicies)
 	routes.HandleFunc("/v1/accounts", value.accounts)
@@ -458,6 +460,34 @@ func (value *handler) serviceRoleTemplates(response http.ResponseWriter, request
 		return
 	}
 	if iamv1.ValidateServiceRoleTemplateList(result) != nil {
+		value.writeError(response, request, identityaccess.ErrUnavailable)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (value *handler) createWorkloadRoleBinding(response http.ResponseWriter, request *http.Request) {
+	if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
+		return
+	}
+	serviceCredential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	subjectCredential, ok := subjectBearer(response, request)
+	if !ok {
+		return
+	}
+	body, ok := decodeJSON[iamv1.CreateWorkloadRoleBindingRequest](value, response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.CreateWorkloadRoleBinding(request.Context(), serviceCredential, subjectCredential, body)
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	if iamv1.ValidateServiceLinkedRoleAccess(result) != nil {
 		value.writeError(response, request, identityaccess.ErrUnavailable)
 		return
 	}

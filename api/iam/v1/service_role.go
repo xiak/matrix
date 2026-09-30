@@ -18,24 +18,35 @@ type WorkloadRoleBindingID string
 type WorkloadRoleBindingStatus string
 
 const (
-	ServiceRoleTemplateActive           ServiceRoleTemplateStatus = "ACTIVE"
-	ServiceRoleTemplateRetired          ServiceRoleTemplateStatus = "RETIRED"
-	WorkloadRoleBindingActive           WorkloadRoleBindingStatus = "ACTIVE"
-	WorkloadRoleBindingRevoked          WorkloadRoleBindingStatus = "REVOKED"
-	MaxServiceRoleTemplateWorkloadKinds                           = 16
-	MaxServiceRoleTemplateListBytes     int64                     = 256 * 1024
+	ServiceRoleTemplateActive       ServiceRoleTemplateStatus = "ACTIVE"
+	ServiceRoleTemplateRetired      ServiceRoleTemplateStatus = "RETIRED"
+	WorkloadRoleBindingActive       WorkloadRoleBindingStatus = "ACTIVE"
+	WorkloadRoleBindingRevoked      WorkloadRoleBindingStatus = "REVOKED"
+	MaxServiceRoleTemplateWorkloads                           = 16
+	MaxServiceRoleTemplateListBytes int64                     = 256 * 1024
 )
+
+// ServiceRoleWorkloadSpec is the product-owned consent surface for one
+// workload kind. IAM validates these exact registered Actions and never
+// derives them from a product, service, Role or resource name.
+type ServiceRoleWorkloadSpec struct {
+	ResourceKind ResourceKind `json:"resourceKind"`
+	BindAction   Action       `json:"bindAction"`
+	UnbindAction Action       `json:"unbindAction"`
+}
 
 // ServiceRoleTemplateSpec is release-owned authority, not a tenant policy or
 // a caller-selected service name. The exact immutable PolicyVersion is the
 // permission ceiling; workload kinds only constrain where that ceiling may be
 // delegated and never grant those permissions by themselves.
 type ServiceRoleTemplateSpec struct {
-	Product                   ProductID              `json:"product"`
-	ServicePurpose            ServicePurpose         `json:"servicePurpose"`
-	PolicyVersion             PolicyVersionReference `json:"policyVersion"`
-	WorkloadResourceKinds     []ResourceKind         `json:"workloadResourceKinds"`
-	MaxSessionDurationSeconds uint32                 `json:"maxSessionDurationSeconds"`
+	Product                   ProductID                 `json:"product"`
+	ServicePurpose            ServicePurpose            `json:"servicePurpose"`
+	RoleName                  string                    `json:"roleName"`
+	RoleDescription           string                    `json:"roleDescription"`
+	PolicyVersion             PolicyVersionReference    `json:"policyVersion"`
+	Workloads                 []ServiceRoleWorkloadSpec `json:"workloads"`
+	MaxSessionDurationSeconds uint32                    `json:"maxSessionDurationSeconds"`
 }
 
 // ServiceRoleTemplate is an immutable template version. Retirement prevents
@@ -109,6 +120,15 @@ type ServiceLinkedRoleAccess struct {
 	Bindings   []WorkloadRoleBinding `json:"bindings"`
 }
 
+// CreateWorkloadRoleBindingRequest carries one product PEP decision input and
+// one exact release-owned template reference. The authorization request is the
+// command identity and workload reference; duplicating Account, Role, service
+// principal or request selectors here would let the caller make them disagree.
+type CreateWorkloadRoleBindingRequest struct {
+	Template      ServiceRoleTemplateReference `json:"template"`
+	Authorization AuthorizationRequest         `json:"authorization"`
+}
+
 func ValidateServicePrincipalReference(value ServicePrincipalReference) error {
 	if !knownServicePurpose(value.Purpose) {
 		return errors.New("service principal reference is invalid")
@@ -167,23 +187,56 @@ func ValidateServiceLinkedRoleAccess(value ServiceLinkedRoleAccess) error {
 	return nil
 }
 
+func ValidateCreateWorkloadRoleBindingRequest(value CreateWorkloadRoleBindingRequest) error {
+	if ValidateServiceRoleTemplateReference(value.Template) != nil ||
+		ValidateAuthorizationRequest(value.Authorization) != nil ||
+		value.Authorization.ResourceMode != AuthorizationResourceInstance ||
+		value.Authorization.CollectionUsage != "" {
+		return errors.New("workload role binding request is invalid")
+	}
+	return nil
+}
+
 func ValidateServiceRoleTemplateSpec(value ServiceRoleTemplateSpec) error {
 	if !profileIdentifier(string(value.Product), false) || !knownServicePurpose(value.ServicePurpose) ||
 		ValidateID("policyVersion.policyId", string(value.PolicyVersion.PolicyID)) != nil ||
 		ValidateID("policyVersion.versionId", string(value.PolicyVersion.VersionID)) != nil ||
 		ValidateDigest("policyVersion.contentDigest", value.PolicyVersion.ContentDigest) != nil ||
-		value.WorkloadResourceKinds == nil || len(value.WorkloadResourceKinds) == 0 ||
-		len(value.WorkloadResourceKinds) > MaxServiceRoleTemplateWorkloadKinds ||
+		validateRoleMetadata(value.RoleName, value.RoleDescription, []RoleTag{}, value.MaxSessionDurationSeconds) != nil ||
+		value.Workloads == nil || len(value.Workloads) == 0 ||
+		len(value.Workloads) > MaxServiceRoleTemplateWorkloads ||
 		value.MaxSessionDurationSeconds < MinRoleSessionDurationSeconds ||
 		value.MaxSessionDurationSeconds > MaxRoleSessionDurationSeconds {
 		return errors.New("service role template spec is invalid")
 	}
-	seen := make(map[ResourceKind]bool, len(value.WorkloadResourceKinds))
-	for _, kind := range value.WorkloadResourceKinds {
-		if !profileIdentifier(string(kind), true) || seen[kind] {
+	profile, found := LookupAuthorizationProfile(value.Product)
+	if !found {
+		return errors.New("service role template product is not registered")
+	}
+	_, profileDigest, err := CanonicalizeAuthorizationProfile(profile)
+	if err != nil {
+		return errors.New("service role template product is invalid")
+	}
+	profileReference := AuthorizationProfileReference{Product: profile.Product, Revision: profile.Revision, ContentDigest: profileDigest}
+	seen := make(map[ResourceKind]bool, len(value.Workloads))
+	for _, workload := range value.Workloads {
+		bind, bindFound := LookupActionDefinition(workload.BindAction)
+		unbind, unbindFound := LookupActionDefinition(workload.UnbindAction)
+		if !profileIdentifier(string(workload.ResourceKind), true) || seen[workload.ResourceKind] ||
+			!bindFound || !unbindFound || workload.BindAction == workload.UnbindAction ||
+			bind.Product != value.Product || unbind.Product != value.Product ||
+			bind.CallingService != value.ServicePurpose || unbind.CallingService != value.ServicePurpose ||
+			bind.ResourceKind != workload.ResourceKind || unbind.ResourceKind != workload.ResourceKind ||
+			bind.AuthorityScope != AuthorityScopeTenant || unbind.AuthorityScope != AuthorityScopeTenant ||
+			CheckAuthorizationProfileSubject(profile, profileReference, workload.BindAction, SubjectUser) != nil ||
+			CheckAuthorizationProfileSubject(profile, profileReference, workload.UnbindAction, SubjectUser) != nil ||
+			CheckAuthorizationProfileTarget(profile, profileReference, workload.BindAction,
+				ResourceReference{Kind: workload.ResourceKind, ID: "registered-workload"}, AuthorizationResourceInstance, "") != nil ||
+			CheckAuthorizationProfileTarget(profile, profileReference, workload.UnbindAction,
+				ResourceReference{Kind: workload.ResourceKind, ID: "registered-workload"}, AuthorizationResourceInstance, "") != nil {
 			return errors.New("service role template workload kind is invalid")
 		}
-		seen[kind] = true
+		seen[workload.ResourceKind] = true
 	}
 	return nil
 }
@@ -195,9 +248,15 @@ func CanonicalizeServiceRoleTemplateSpec(value ServiceRoleTemplateSpec) (string,
 	if ValidateServiceRoleTemplateSpec(value) != nil {
 		return "", "", errors.New("service role template spec is invalid")
 	}
-	value.WorkloadResourceKinds = slices.Clone(value.WorkloadResourceKinds)
-	slices.SortFunc(value.WorkloadResourceKinds, func(left, right ResourceKind) int {
-		return cmp.Compare(left, right)
+	value.Workloads = slices.Clone(value.Workloads)
+	slices.SortFunc(value.Workloads, func(left, right ServiceRoleWorkloadSpec) int {
+		if order := cmp.Compare(left.ResourceKind, right.ResourceKind); order != 0 {
+			return order
+		}
+		if order := cmp.Compare(left.BindAction, right.BindAction); order != 0 {
+			return order
+		}
+		return cmp.Compare(left.UnbindAction, right.UnbindAction)
 	})
 	document, err := json.Marshal(value)
 	if err != nil {
@@ -321,5 +380,16 @@ func (value *ServiceLinkedRoleAccess) UnmarshalJSON(source []byte) error {
 		return contractjson.ErrInvalidDocument
 	}
 	*value = ServiceLinkedRoleAccess(decoded)
+	return nil
+}
+
+func (value *CreateWorkloadRoleBindingRequest) UnmarshalJSON(source []byte) error {
+	type wire CreateWorkloadRoleBindingRequest
+	var decoded wire
+	if contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil ||
+		ValidateCreateWorkloadRoleBindingRequest(CreateWorkloadRoleBindingRequest(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = CreateWorkloadRoleBindingRequest(decoded)
 	return nil
 }
