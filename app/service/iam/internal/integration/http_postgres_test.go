@@ -7438,16 +7438,17 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 						// its OTP remains valid after that deadline. Otherwise a stale
 						// OTP could conceal use of transaction time instead of lock time.
 						var now time.Time
+						const lockAdmissionLead = 20 * time.Second
 						for {
 							if err := admin.QueryRow(ctx, "SELECT clock_timestamp()").Scan(&now); err != nil {
 								t.Fatal("observe actual replacement deadline", err)
 							}
-							if prepared.Enrollment.ExpiresAt.Sub(now) <= 10*time.Second {
+							if prepared.Enrollment.ExpiresAt.Sub(now) <= lockAdmissionLead {
 								break
 							}
 							time.Sleep(200 * time.Millisecond)
 						}
-						if prepared.Enrollment.ExpiresAt.Sub(now) <= 5*time.Second {
+						if prepared.Enrollment.ExpiresAt.Sub(now) <= lockAdmissionLead/2 {
 							t.Fatal("replacement lacks a live interval for actual lock admission")
 						}
 						before := stateDigest()
@@ -7479,13 +7480,26 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 							responses <- response.Code
 						}()
 						waiting := false
-						for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {
-							if err := hold.QueryRow(ctx, `SELECT clock_timestamp()<$3 AND EXISTS(SELECT 1 FROM pg_stat_activity
-								WHERE datname=current_database() AND usename=$1 AND wait_event_type='Lock' AND xact_start<$3
-								AND $2=ANY(pg_blocking_pids(pid)))`, iamHTTPTestRole, blocker, prepared.Enrollment.ExpiresAt).Scan(&waiting); err != nil {
+						for {
+							// The same database observation proves both that the original
+							// deadline is still live and that this exact transaction is the
+							// blocker. Connection-pool activity metadata such as xact_start
+							// is not an authorization fact and can change while a connection
+							// is acquired or returned, so it must not mask the real row wait.
+							if err := hold.QueryRow(ctx, `SELECT clock_timestamp(),EXISTS(SELECT 1 FROM pg_stat_activity
+								WHERE datname=current_database() AND usename=$1 AND wait_event_type='Lock'
+								AND $2=ANY(pg_blocking_pids(pid)))`, iamHTTPTestRole, blocker).Scan(&now, &waiting); err != nil {
 								t.Fatal("observe original replacement lock before expiry", err)
 							}
 							if waiting {
+								break
+							}
+							select {
+							case status := <-responses:
+								t.Fatalf("replacement returned %d before reaching its real USER lock", status)
+							default:
+							}
+							if !now.Before(prepared.Enrollment.ExpiresAt) {
 								break
 							}
 							time.Sleep(25 * time.Millisecond)
