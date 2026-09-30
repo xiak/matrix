@@ -1901,6 +1901,54 @@ func TestWorkloadRoleBindingRequiresProductAdmissionPassRoleAndDelegatedCurrentA
 	if _, err := service.ListServiceLinkedRoles(t.Context(), paasCredential, "", "binding-directory-service"); !errors.Is(err, ErrUnauthenticated) {
 		t.Fatal("service credential substituted for a current USER directory session", err)
 	}
+	revokeAuthorization, err := iamv1.NewAuthorizationRequest(iamv1.ActionManagedServiceInstallationRoleUnbind,
+		mutation.Binding.Workload, iamv1.AuthorizationResourceInstance, "", "binding-revoke", "binding-revoke")
+	if err != nil {
+		t.Fatal(err)
+	}
+	revokeRequest := iamv1.RevokeWorkloadRoleBindingRequest{Authorization: revokeAuthorization, ResourceVersion: 1}
+	before = len(tx.authorizations)
+	revoked, err := service.RevokeWorkloadRoleBinding(t.Context(), paasCredential, login.Credential, mutation.Binding.ID, revokeRequest)
+	if err != nil || iamv1.ValidateWorkloadRoleBinding(revoked) != nil || revoked.ID != mutation.Binding.ID ||
+		revoked.Status != iamv1.WorkloadRoleBindingRevoked || revoked.ResourceVersion != 2 || revoked.RevokedAt == nil {
+		t.Fatal("delegated workload revocation failed", err)
+	}
+	revocation := tx.workloadRoleBindingRevocation
+	if revocation == nil || revocation.AccountID != bootstrap.Organization.ID || revocation.BindingID != mutation.Binding.ID ||
+		revocation.ActorPrincipalID != bootstrap.Administrator.ID || revocation.ActorSessionID != login.Session.ID ||
+		revocation.ServiceLookupDigest == "" || revocation.ServicePurpose != iamv1.ServicePaaS ||
+		revocation.Request != revokeRequest || revocation.WorkloadDecisionID == "" ||
+		revocation.BindingRevokeDecisionID == "" || revocation.RolePassDecisionID == "" ||
+		revocation.AuditEvent.Action != auditv1.ActionIAMWorkloadRoleBindingRevoked ||
+		revocation.AuditEvent.IAMDecisionID != auditv1.DecisionID(revocation.BindingRevokeDecisionID) {
+		t.Fatal("revocation mutation lost authenticated or immutable authority")
+	}
+	if len(tx.authorizations) != before+3 {
+		t.Fatal("revocation did not record exactly product, revoke and pass decisions")
+	}
+	wantDecisions = map[iamv1.Action]iamv1.DecisionID{
+		iamv1.ActionManagedServiceInstallationRoleUnbind: revocation.WorkloadDecisionID,
+		iamv1.ActionIAMWorkloadRoleBindingRevoke:         revocation.BindingRevokeDecisionID,
+		iamv1.ActionIAMRolePass:                          revocation.RolePassDecisionID,
+	}
+	seen = make(map[iamv1.Action]bool, len(wantDecisions))
+	for _, authorization := range tx.authorizations[before:] {
+		decision := authorization.Decision
+		wantID, known := wantDecisions[decision.Action]
+		if !known || seen[decision.Action] || decision.ID != wantID || !decision.Allowed ||
+			decision.Subject == nil || decision.Subject.Type != iamv1.SubjectUser ||
+			decision.Subject.ID != string(bootstrap.Administrator.ID) {
+			t.Fatal("revocation decision chain changed", decision)
+		}
+		seen[decision.Action] = true
+	}
+	if len(seen) != len(wantDecisions) {
+		t.Fatal("revocation decision chain omitted required actions")
+	}
+	if replayed, err := service.RevokeWorkloadRoleBinding(t.Context(), paasCredential, login.Credential, mutation.Binding.ID, revokeRequest); err != nil ||
+		replayed.ID != revoked.ID || replayed.ResourceVersion != revoked.ResourceVersion || replayed.RevokedAt == nil || !replayed.RevokedAt.Equal(*revoked.RevokedAt) {
+		t.Fatal("equal workload revocation replay changed its terminal result", err)
+	}
 	invalid := request
 	invalid.Authorization, err = iamv1.NewAuthorizationRequest(iamv1.ActionManagedServiceInstallationRead,
 		authorization.Resource, iamv1.AuthorizationResourceInstance, "", "binding-read", "binding-read")
@@ -1919,6 +1967,7 @@ func TestWorkloadRoleBindingRequiresProductAdmissionPassRoleAndDelegatedCurrentA
 		t.Fatal(err)
 	}
 	tx.workloadRoleBindingCreation = nil
+	tx.workloadRoleBindingRevocation = nil
 	if _, err := service.CreateWorkloadRoleBinding(t.Context(), paasCredential, login.Credential, request); !errors.Is(err, ErrForbidden) || tx.workloadRoleBindingCreation != nil {
 		t.Fatal("revoked service-role administration remained cached", err)
 	}
@@ -1927,6 +1976,9 @@ func TestWorkloadRoleBindingRequiresProductAdmissionPassRoleAndDelegatedCurrentA
 	}
 	if _, err := service.GetServiceLinkedRole(t.Context(), login.Credential, mutation.Role.ID, "", "binding-detail-revoked"); !errors.Is(err, ErrForbidden) {
 		t.Fatal("revoked service-role administration retained detail access", err)
+	}
+	if _, err := service.RevokeWorkloadRoleBinding(t.Context(), paasCredential, login.Credential, mutation.Binding.ID, revokeRequest); !errors.Is(err, ErrForbidden) || tx.workloadRoleBindingRevocation != nil {
+		t.Fatal("revoked service-role administration retained unbind authority", err)
 	}
 }
 
@@ -3093,6 +3145,7 @@ type coreTransaction struct {
 	rootCredentialRecovery           func(RootCredentialRecovery) (iamv1.Account, error)
 	workloadRoleBindingSourcesLocked bool
 	workloadRoleBindingCreation      *WorkloadRoleBindingCreation
+	workloadRoleBindingRevocation    *WorkloadRoleBindingRevocation
 	serviceLinkedRoleAccess          *iamv1.ServiceLinkedRoleAccess
 	serviceLinkedRoleListRead        *AccountRead
 	serviceLinkedRoleRead            *ServiceLinkedRoleRead
@@ -3120,6 +3173,57 @@ func (transaction *coreTransaction) CreateWorkloadRoleBinding(_ context.Context,
 		Bindings: []iamv1.WorkloadRoleBinding{mutation.Binding}}
 	transaction.serviceLinkedRoleAccess = &result
 	return result, nil
+}
+
+func (transaction *coreTransaction) PrepareWorkloadRoleBindingRevocation(_ context.Context, accountID iamv1.AccountID,
+	bindingID iamv1.WorkloadRoleBindingID, lookupDigest string, purpose iamv1.ServicePurpose,
+) (iamv1.ServiceLinkedRoleAccess, error) {
+	if transaction.serviceLinkedRoleAccess == nil || accountID != transaction.organization.ID || lookupDigest == "" {
+		return iamv1.ServiceLinkedRoleAccess{}, ErrForbidden
+	}
+	serviceIdentity := transaction.services[lookupDigest].Identity
+	relation := transaction.serviceLinkedRoleAccess.Relation
+	if serviceIdentity.Purpose != purpose || relation.ServicePrincipal != (iamv1.ServicePrincipalReference{
+		InstallationID: serviceIdentity.InstallationID, PrincipalID: serviceIdentity.PrincipalID, Purpose: purpose,
+	}) {
+		return iamv1.ServiceLinkedRoleAccess{}, ErrForbidden
+	}
+	for _, binding := range transaction.serviceLinkedRoleAccess.Bindings {
+		if binding.ID == bindingID {
+			return iamv1.ServiceLinkedRoleAccess{APIVersion: iamv1.APIVersion, Kind: "ServiceLinkedRoleAccess",
+				Relation: relation, Bindings: []iamv1.WorkloadRoleBinding{binding}}, nil
+		}
+	}
+	return iamv1.ServiceLinkedRoleAccess{}, ErrForbidden
+}
+
+func (transaction *coreTransaction) RevokeWorkloadRoleBinding(_ context.Context, mutation WorkloadRoleBindingRevocation) (iamv1.WorkloadRoleBinding, error) {
+	transaction.workloadRoleBindingRevocation = &mutation
+	if transaction.serviceLinkedRoleAccess == nil || mutation.AccountID != transaction.organization.ID ||
+		mutation.ActorPrincipalID != transaction.principal.ID ||
+		!transaction.hasAuthorizationDecision(mutation.WorkloadDecisionID, iamv1.ActionManagedServiceInstallationRoleUnbind, mutation.Request.Authorization.Resource) ||
+		!transaction.hasAuthorizationDecision(mutation.BindingRevokeDecisionID, iamv1.ActionIAMWorkloadRoleBindingRevoke,
+			iamv1.ResourceReference{Kind: iamv1.ResourceWorkloadRoleBinding, ID: string(mutation.BindingID)}) ||
+		!transaction.hasAuthorizationDecision(mutation.RolePassDecisionID, iamv1.ActionIAMRolePass,
+			iamv1.ResourceReference{Kind: iamv1.ResourceRole, ID: string(transaction.serviceLinkedRoleAccess.Relation.Role.ID)}) {
+		return iamv1.WorkloadRoleBinding{}, ErrForbidden
+	}
+	for index, binding := range transaction.serviceLinkedRoleAccess.Bindings {
+		if binding.ID != mutation.BindingID {
+			continue
+		}
+		if binding.Status == iamv1.WorkloadRoleBindingActive {
+			if binding.ResourceVersion != mutation.Request.ResourceVersion || binding.Workload != mutation.Request.Authorization.Resource {
+				return iamv1.WorkloadRoleBinding{}, ErrConflict
+			}
+			revokedAt := transaction.now
+			binding.Status, binding.ResourceVersion, binding.UpdatedAt, binding.RevokedAt =
+				iamv1.WorkloadRoleBindingRevoked, binding.ResourceVersion+1, revokedAt, &revokedAt
+			transaction.serviceLinkedRoleAccess.Bindings[index] = binding
+		}
+		return transaction.serviceLinkedRoleAccess.Bindings[index], nil
+	}
+	return iamv1.WorkloadRoleBinding{}, ErrForbidden
 }
 
 func (transaction *coreTransaction) ListServiceLinkedRoles(_ context.Context, read AccountRead) (iamv1.ServiceLinkedRoleList, error) {

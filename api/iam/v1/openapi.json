@@ -23129,6 +23129,22 @@
         ],
         "type": "object"
       },
+      "RevokeWorkloadRoleBindingRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "authorization": {
+            "$ref": "#/components/schemas/AuthorizationRequest"
+          },
+          "resourceVersion": {
+            "const": 1
+          }
+        },
+        "required": [
+          "authorization",
+          "resourceVersion"
+        ],
+        "type": "object"
+      },
       "Role": {
         "additionalProperties": false,
         "properties": {
@@ -30024,6 +30040,80 @@
           }
         ],
         "summary": "Atomically record current-Account consent for one product-verified workload and exact release template; no Account, Role or service selector is accepted."
+      }
+    },
+    "/v1/internal/workload-role-bindings/{bindingId}": {
+      "delete": {
+        "operationId": "revokeWorkloadRoleBinding",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "bindingId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeWorkloadRoleBindingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkloadRoleBinding"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [
+          {
+            "ServiceCredential": [],
+            "SubjectCredential": []
+          }
+        ],
+        "summary": "Atomically revoke one recorded workload binding after re-evaluating the actual product resource, binding authority and PassRole; no Account, Role, template or service selector is accepted."
       }
     },
     "/v1/platform-policies": {

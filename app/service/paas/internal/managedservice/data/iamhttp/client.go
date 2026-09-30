@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
@@ -14,7 +15,7 @@ import (
 )
 
 var _ port.Authorizer = (*Client)(nil)
-var _ port.WorkloadRoleBinder = (*Client)(nil)
+var _ port.WorkloadRoleAuthority = (*Client)(nil)
 
 type Config struct {
 	Endpoint          string
@@ -165,6 +166,61 @@ func (client *Client) BindWorkloadRole(
 		result.Relation.ServicePrincipal.Purpose != iamv1.ServicePaaS ||
 		result.Bindings[0].Workload != iamAuthorization.Resource {
 		return iamv1.ServiceLinkedRoleAccess{}, port.ErrAuthorizationUnavailable
+	}
+	return result, nil
+}
+
+func (client *Client) RevokeWorkloadRole(
+	ctx context.Context,
+	bindingID iamv1.WorkloadRoleBindingID,
+	resourceVersion uint64,
+	request port.AuthorizationRequest,
+) (iamv1.WorkloadRoleBinding, error) {
+	if client == nil || client.http == nil {
+		return iamv1.WorkloadRoleBinding{}, port.ErrAuthorizationUnavailable
+	}
+	if ctx == nil || iamv1.ValidateID("bindingId", string(bindingID)) != nil || resourceVersion != 1 ||
+		port.ValidateAuthorizationRequest(request) != nil || request.Action != port.AuthorizeInstallationRoleUnbind ||
+		request.Resource.Kind != port.ResourceServiceInstallation ||
+		request.ResourceMode != iamv1.AuthorizationResourceInstance || request.CollectionUsage != "" {
+		return iamv1.WorkloadRoleBinding{}, port.ErrAuthorizationUnavailable
+	}
+	subjectCredential, err := parseBearer(request.Credential)
+	if err != nil {
+		return iamv1.WorkloadRoleBinding{}, port.ErrUnauthenticated
+	}
+	iamAuthorization, err := toIAMRequest(request)
+	if err != nil {
+		return iamv1.WorkloadRoleBinding{}, port.ErrAuthorizationUnavailable
+	}
+	command := iamv1.RevokeWorkloadRoleBindingRequest{
+		Authorization: iamAuthorization, ResourceVersion: resourceVersion,
+	}
+	if iamv1.ValidateRevokeWorkloadRoleBindingRequest(command) != nil {
+		return iamv1.WorkloadRoleBinding{}, port.ErrAuthorizationUnavailable
+	}
+	body, err := json.Marshal(command)
+	if err != nil {
+		return iamv1.WorkloadRoleBinding{}, port.ErrAuthorizationUnavailable
+	}
+	defer clear(body)
+	response, err := client.http.Do(
+		ctx, http.MethodDelete, "/v1/internal/workload-role-bindings/"+url.PathEscape(string(bindingID)),
+		bytes.NewReader(body), "application/json", client.serviceCredential, subjectCredential,
+	)
+	if err != nil {
+		return iamv1.WorkloadRoleBinding{}, port.ErrAuthorizationUnavailable
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return iamv1.WorkloadRoleBinding{}, bindingStatusError(response.StatusCode)
+	}
+	var result iamv1.WorkloadRoleBinding
+	if !authorityhttp.ResponseIsJSON(response) || iamv1.DecodeRequest(response.Body, &result) != nil ||
+		iamv1.ValidateWorkloadRoleBinding(result) != nil || result.ID != bindingID ||
+		result.Status != iamv1.WorkloadRoleBindingRevoked || result.ResourceVersion != resourceVersion+1 ||
+		result.Workload != iamAuthorization.Resource {
+		return iamv1.WorkloadRoleBinding{}, port.ErrAuthorizationUnavailable
 	}
 	return result, nil
 }

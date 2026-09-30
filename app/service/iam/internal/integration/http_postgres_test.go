@@ -22225,6 +22225,29 @@ func performIAMWorkloadRoleBinding(t *testing.T, handler http.Handler, serviceCr
 	return response
 }
 
+func serviceRoleRevocationRequest(t *testing.T, binding iamv1.WorkloadRoleBinding, requestID string) iamv1.RevokeWorkloadRoleBindingRequest {
+	t.Helper()
+	authorization, err := iamv1.NewAuthorizationRequest(iamv1.ActionManagedServiceInstallationRoleUnbind,
+		binding.Workload, iamv1.AuthorizationResourceInstance, "", requestID, requestID)
+	if err != nil {
+		t.Fatal("construct workload service role revocation", err)
+	}
+	return iamv1.RevokeWorkloadRoleBindingRequest{Authorization: authorization, ResourceVersion: binding.ResourceVersion}
+}
+
+func performIAMWorkloadRoleRevocation(t *testing.T, handler http.Handler, serviceCredential, subjectCredential string,
+	bindingID iamv1.WorkloadRoleBindingID, command iamv1.RevokeWorkloadRoleBindingRequest,
+) *httptest.ResponseRecorder {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodDelete, "/v1/internal/workload-role-bindings/"+string(bindingID), bytes.NewReader(mustIAMJSON(t, command)))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Bearer "+serviceCredential)
+	request.Header.Set("Matrix-Subject-Credential", subjectCredential)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	return response
+}
+
 func proveWorkloadServiceRoleConsent(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn,
 	root string, actor iamv1.CurrentIdentity, template iamv1.ServiceRoleTemplate, command iamv1.CreateWorkloadRoleBindingRequest,
 ) iamv1.RoleID {
@@ -22556,6 +22579,143 @@ func proveWorkloadServiceRoleConsent(t *testing.T, ctx context.Context, handler 
 	}
 	call(paasCredential, foreignRoot, command, http.StatusForbidden)
 
+	revoke := func(serviceCredential, subjectCredential string, bindingID iamv1.WorkloadRoleBindingID,
+		request iamv1.RevokeWorkloadRoleBindingRequest, want int,
+	) *httptest.ResponseRecorder {
+		t.Helper()
+		response := performIAMWorkloadRoleRevocation(t, handler, serviceCredential, subjectCredential, bindingID, request)
+		if response.Code != want {
+			t.Fatalf("workload service role revocation: status=%d want=%d body=%s", response.Code, want, response.Body.String())
+		}
+		if response.Header().Get("Cache-Control") != "no-store" {
+			t.Fatal("workload service role revocation response is cacheable")
+		}
+		return response
+	}
+	decodeRevocation := func(response *httptest.ResponseRecorder) iamv1.WorkloadRoleBinding {
+		t.Helper()
+		var result iamv1.WorkloadRoleBinding
+		decoder := json.NewDecoder(response.Body)
+		decoder.DisallowUnknownFields()
+		if decoder.Decode(&result) != nil || iamv1.ValidateWorkloadRoleBinding(result) != nil ||
+			result.Status != iamv1.WorkloadRoleBindingRevoked || result.ResourceVersion != 2 || result.RevokedAt == nil {
+			t.Fatalf("invalid workload service role revocation result: %s", response.Body.String())
+		}
+		return result
+	}
+	revocation := serviceRoleRevocationRequest(t, created.Bindings[0], "service-role-unbind")
+	foreignRevocation := serviceRoleRevocationRequest(t, foreign.Bindings[0], "service-role-unbind-foreign")
+	revoke(paasCredential, root, foreign.Bindings[0].ID, foreignRevocation, http.StatusForbidden)
+	revoke(auditCredential, root, created.Bindings[0].ID, revocation, http.StatusForbidden)
+	revoke(paasCredential, paasCredential, created.Bindings[0].ID, revocation, http.StatusUnauthorized)
+	revoke(paasCredential, root, iamv1.WorkloadRoleBindingID("wrb-"+strings.Repeat("f", 64)), revocation, http.StatusForbidden)
+	wrongWorkload := revocation
+	wrongWorkload.Authorization.Resource.ID = "service-installation-other"
+	revoke(paasCredential, root, created.Bindings[0].ID, wrongWorkload, http.StatusUnprocessableEntity)
+	wrongAction := revocation
+	wrongAction.Authorization.Action = iamv1.ActionManagedServiceInstallationRead
+	revoke(paasCredential, root, created.Bindings[0].ID, wrongAction, http.StatusUnprocessableEntity)
+
+	var initialSecurityGeneration int64
+	if err := database.QueryRow(ctx, `SELECT security_generation FROM iam.roles WHERE tenant_id=$1 AND id=$2`,
+		actor.Account.ID, created.Relation.Role.ID).Scan(&initialSecurityGeneration); err != nil {
+		t.Fatal("read service Role security generation", err)
+	}
+	atomicRevocation := serviceRoleRevocationRequest(t, created.Bindings[0], "service-role-unbind-atomic")
+	if _, err := database.Exec(ctx, `CREATE FUNCTION public.matrix_service_role_revoke_fact_failure() RETURNS trigger LANGUAGE plpgsql AS $body$
+		BEGIN IF NEW.event_document->>'requestId'='service-role-unbind-atomic'
+			AND NEW.event_document->>'action'='iam.workload-role-binding.revoked'
+		THEN RAISE EXCEPTION USING ERRCODE='P0001',MESSAGE='isolated service role revoke fact failure'; END IF; RETURN NEW; END $body$;
+		CREATE TRIGGER matrix_service_role_revoke_fact_failure BEFORE INSERT ON iam.audit_outbox
+		FOR EACH ROW EXECUTE FUNCTION public.matrix_service_role_revoke_fact_failure()`); err != nil {
+		t.Fatal("install service role revocation fact fault", err)
+	}
+	revoke(paasCredential, root, created.Bindings[0].ID, atomicRevocation, http.StatusServiceUnavailable)
+	var atomicRevocationSafe bool
+	if err := database.QueryRow(ctx, `SELECT binding.status='ACTIVE' AND binding.resource_version=1 AND binding.revoked_at IS NULL
+		AND role_value.security_generation=$3
+		AND NOT EXISTS(SELECT 1 FROM iam.authorization_decisions decision WHERE decision.tenant_id=$1 AND decision.request_id=$4)
+		AND NOT EXISTS(SELECT 1 FROM iam.audit_outbox fact WHERE fact.tenant_id=$1 AND fact.event_document->>'requestId'=$4)
+		FROM iam.workload_role_bindings binding JOIN iam.roles role_value
+		  ON role_value.tenant_id=binding.tenant_id AND role_value.id=binding.role_id
+		WHERE binding.tenant_id=$1 AND binding.id=$2`, actor.Account.ID, created.Bindings[0].ID,
+		initialSecurityGeneration, atomicRevocation.Authorization.RequestID).Scan(&atomicRevocationSafe); err != nil || !atomicRevocationSafe {
+		t.Fatal("failed service role revocation retained a partial effect", err)
+	}
+	if _, err := database.Exec(ctx, `DROP TRIGGER matrix_service_role_revoke_fact_failure ON iam.audit_outbox;
+		DROP FUNCTION public.matrix_service_role_revoke_fact_failure()`); err != nil {
+		t.Fatal("remove service role revocation fact fault", err)
+	}
+	if _, err := database.Exec(ctx, `UPDATE iam.service_role_templates SET status='RETIRED',retired_at=transaction_timestamp()
+		WHERE id=$1 AND version=$2`, template.ID, template.Version); err != nil {
+		t.Fatal("retire exact service role template before unbind", err)
+	}
+
+	revoked := decodeRevocation(revoke(paasCredential, root, created.Bindings[0].ID, revocation, http.StatusOK))
+	replayedRevocation := decodeRevocation(revoke(paasCredential, root, created.Bindings[0].ID, revocation, http.StatusOK))
+	if !reflect.DeepEqual(revoked, replayedRevocation) || revoked.ID != created.Bindings[0].ID ||
+		revoked.AccountID != actor.Account.ID || revoked.RoleID != created.Relation.Role.ID ||
+		revoked.Template != template.Reference() || revoked.Workload != command.Authorization.Resource {
+		t.Fatal("workload service role terminal result or equal replay lost immutable authority")
+	}
+	variantRevocation := revocation
+	variantRevocation.Authorization.CorrelationID = "service-role-unbind-variant"
+	revoke(paasCredential, root, created.Bindings[0].ID, variantRevocation, http.StatusConflict)
+	newIntent := serviceRoleRevocationRequest(t, created.Bindings[0], "service-role-unbind-new-intent")
+	revoke(paasCredential, root, created.Bindings[0].ID, newIntent, http.StatusConflict)
+
+	var terminalBinding bool
+	var revokeFacts, unbindAllowed, revokeAllowed, passOnRevoke int
+	if err := database.QueryRow(ctx, `SELECT
+		binding.status='REVOKED' AND binding.resource_version=2 AND binding.revoked_at=binding.updated_at
+		  AND binding.revoked_at=$3 AND role_value.security_generation=$4+1
+		  AND template_value.status='RETIRED' AND template_value.retired_at IS NOT NULL,
+		(SELECT count(*) FROM iam.audit_outbox fact JOIN iam.authorization_decisions decision
+		  ON decision.tenant_id=fact.tenant_id AND decision.id=fact.event_document->>'iamDecisionId'
+		  WHERE fact.tenant_id=$1 AND fact.event_document->>'action'='iam.workload-role-binding.revoked'
+		    AND fact.event_document#>>'{target,id}'=$2 AND fact.event_document->>'requestId'=$5
+		    AND decision.allowed AND decision.action_name='iam.workload-role-binding.revoke'),
+		(SELECT count(*) FROM iam.authorization_decisions decision WHERE decision.tenant_id=$1
+		  AND decision.request_id=$5 AND decision.action_name='managedservice.service-installation.service-role.unbind' AND decision.allowed),
+		(SELECT count(*) FROM iam.authorization_decisions decision WHERE decision.tenant_id=$1
+		  AND decision.request_id=$5 AND decision.action_name='iam.workload-role-binding.revoke' AND decision.allowed),
+		(SELECT count(*) FROM iam.authorization_decisions decision WHERE decision.tenant_id=$1
+		  AND decision.request_id=$5 AND decision.action_name='iam.role.pass' AND decision.allowed)
+		FROM iam.workload_role_bindings binding
+		JOIN iam.roles role_value ON role_value.tenant_id=binding.tenant_id AND role_value.id=binding.role_id
+		JOIN iam.service_role_templates template_value ON template_value.id=binding.template_id AND template_value.version=binding.template_version
+		WHERE binding.tenant_id=$1 AND binding.id=$2`, actor.Account.ID, created.Bindings[0].ID,
+		*revoked.RevokedAt, initialSecurityGeneration, revocation.Authorization.RequestID).Scan(
+		&terminalBinding, &revokeFacts, &unbindAllowed, &revokeAllowed, &passOnRevoke); err != nil {
+		t.Fatal("inspect terminal service role revocation", err)
+	}
+	if !terminalBinding || revokeFacts != 1 || unbindAllowed != 2 || revokeAllowed != 2 || passOnRevoke != 2 {
+		t.Fatalf("terminal service role revocation binding=%t facts=%d decisions(unbind=%d revoke=%d pass=%d)",
+			terminalBinding, revokeFacts, unbindAllowed, revokeAllowed, passOnRevoke)
+	}
+	response = performIAMRequest(handler, http.MethodGet, "/v1/service-linked-roles", root, nil)
+	serviceRoleDirectory = iamv1.ServiceLinkedRoleList{}
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &serviceRoleDirectory) != nil ||
+		iamv1.ValidateServiceLinkedRoleList(serviceRoleDirectory) != nil || len(serviceRoleDirectory.Items) != 1 ||
+		serviceRoleDirectory.Items[0].BindingCount != 3 || serviceRoleDirectory.Items[0].ActiveBindingCount != 2 {
+		t.Fatalf("service-linked role summary did not expose terminal consent: status=%d body=%s", response.Code, response.Body.String())
+	}
+	response = performIAMRequest(handler, http.MethodGet, "/v1/service-linked-roles/"+string(created.Relation.Role.ID), root, nil)
+	serviceRoleDetail = iamv1.ServiceLinkedRoleAccess{}
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &serviceRoleDetail) != nil ||
+		iamv1.ValidateServiceLinkedRoleAccess(serviceRoleDetail) != nil {
+		t.Fatalf("service-linked role detail lost terminal binding history: status=%d body=%s", response.Code, response.Body.String())
+	}
+	foundTerminal := false
+	for _, binding := range serviceRoleDetail.Bindings {
+		if binding.ID == revoked.ID {
+			foundTerminal = reflect.DeepEqual(binding, revoked)
+		}
+	}
+	if !foundTerminal {
+		t.Fatal("service-linked role detail omitted or rewrote the revoked binding")
+	}
+
 	for _, attack := range []string{
 		`UPDATE iam.service_role_templates SET canonical_spec='{}'`,
 		`UPDATE iam.service_linked_roles SET service_principal_id='forged'`,
@@ -22595,6 +22755,8 @@ func proveWorkloadServiceRoleConsent(t *testing.T, ctx context.Context, handler 
 		`GRANT SELECT ON iam.workload_role_bindings TO matrix_iam_api`,
 		`ALTER FUNCTION iam.lock_workload_role_binding_sources(text,text,text,text,text) SECURITY INVOKER`,
 		`GRANT EXECUTE ON FUNCTION iam.lock_workload_role_binding_sources(text,text,text,text,text) TO matrix_iam_worker`,
+		`ALTER FUNCTION iam.prepare_workload_role_binding_revocation(text,text,text,text) SECURITY INVOKER`,
+		`GRANT EXECUTE ON FUNCTION iam.revoke_workload_role_binding(text,text,text,text,text,text,text,text,text,text,text,jsonb) TO matrix_iam_worker`,
 		`ALTER FUNCTION iam.list_service_linked_roles(text,text,text,text) SECURITY INVOKER`,
 		`GRANT EXECUTE ON FUNCTION iam.read_service_linked_role(text,text,text,text,text) TO matrix_iam_worker`,
 		`ALTER FUNCTION iam.service_linked_role_snapshot(text,text) SECURITY DEFINER`,

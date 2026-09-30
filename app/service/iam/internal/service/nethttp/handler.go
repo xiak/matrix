@@ -69,6 +69,7 @@ type Workflow interface {
 	ListServiceLinkedRoles(context.Context, iamv1.Secret, string, string) (iamv1.ServiceLinkedRoleList, error)
 	GetServiceLinkedRole(context.Context, iamv1.Secret, iamv1.RoleID, string, string) (iamv1.ServiceLinkedRoleAccess, error)
 	CreateWorkloadRoleBinding(context.Context, iamv1.Secret, iamv1.Secret, iamv1.CreateWorkloadRoleBindingRequest) (iamv1.ServiceLinkedRoleAccess, error)
+	RevokeWorkloadRoleBinding(context.Context, iamv1.Secret, iamv1.Secret, iamv1.WorkloadRoleBindingID, iamv1.RevokeWorkloadRoleBindingRequest) (iamv1.WorkloadRoleBinding, error)
 	GetPolicy(context.Context, iamv1.Secret, iamv1.PolicyID, string) (iamv1.PolicyDetail, error)
 	CreatePolicy(context.Context, iamv1.Secret, iamv1.CreatePolicyRequest) (iamv1.PolicyDetail, error)
 	ListPolicyVersions(context.Context, iamv1.Secret, iamv1.PolicyID, string) (iamv1.PolicyVersionList, error)
@@ -204,6 +205,7 @@ func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 	routes.HandleFunc("/v1/service-linked-roles", value.serviceLinkedRoles)
 	routes.HandleFunc("/v1/service-linked-roles/", value.serviceLinkedRole)
 	routes.HandleFunc("/v1/internal/workload-role-bindings", value.createWorkloadRoleBinding)
+	routes.HandleFunc("/v1/internal/workload-role-bindings/", value.revokeWorkloadRoleBinding)
 	routes.HandleFunc("/v1/policies/", value.policy)
 	routes.HandleFunc("/v1/platform-policies", value.listPolicies)
 	routes.HandleFunc("/v1/accounts", value.accounts)
@@ -542,6 +544,42 @@ func (value *handler) createWorkloadRoleBinding(response http.ResponseWriter, re
 		return
 	}
 	if iamv1.ValidateServiceLinkedRoleAccess(result) != nil {
+		value.writeError(response, request, identityaccess.ErrUnavailable)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (value *handler) revokeWorkloadRoleBinding(response http.ResponseWriter, request *http.Request) {
+	if !value.requireMethod(response, request, http.MethodDelete) || !rejectQuery(response, request) {
+		return
+	}
+	id, ok := commandPathID(response, request, "/v1/internal/workload-role-bindings/", "", "bindingId")
+	if !ok {
+		return
+	}
+	serviceCredential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	subjectCredential, ok := subjectBearer(response, request)
+	if !ok {
+		return
+	}
+	body, ok := decodeJSON[iamv1.RevokeWorkloadRoleBindingRequest](value, response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.RevokeWorkloadRoleBinding(
+		request.Context(), serviceCredential, subjectCredential, iamv1.WorkloadRoleBindingID(id), body,
+	)
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	if iamv1.ValidateWorkloadRoleBinding(result) != nil || result.ID != iamv1.WorkloadRoleBindingID(id) ||
+		result.Status != iamv1.WorkloadRoleBindingRevoked || result.ResourceVersion != body.ResourceVersion+1 ||
+		result.Workload != body.Authorization.Resource {
 		value.writeError(response, request, identityaccess.ErrUnavailable)
 		return
 	}

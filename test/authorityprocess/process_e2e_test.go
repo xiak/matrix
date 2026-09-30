@@ -9336,6 +9336,7 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 		serviceRoleGrant    iamv1.PolicyAttachment
 		serviceRoleTemplate iamv1.ServiceRoleTemplateReference
 		serviceRoleReceipt  managedservicev1.ServiceRoleBindingReceipt
+		serviceRoleRevoked  managedservicev1.ServiceRoleUnbindingReceipt
 	}{
 		{id: "organization-process", owner: homeBearer, member: home.Credential, memberID: homeUser.ID},
 		{id: "organization-process-customer", owner: customerBearer, member: customer.Credential, memberID: customer.Session.PrincipalID},
@@ -9468,6 +9469,11 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 		assertStatus(performJSONWithIdempotency(t, http.MethodPost, foreignBindingPath, tenant.member,
 			"foreign-service-role-binding-key", managedservicev1.BindServiceRoleRequest{Template: tenant.serviceRoleTemplate}),
 			http.StatusNotFound, "foreign workload Role binding")
+		crossAccountUnbindPath := base + "/service-installations/" + tenant.shared.ID +
+			"/service-role-bindings/" + string(other.serviceRoleReceipt.BindingID)
+		assertStatus(performJSONWithIdempotency(t, http.MethodDelete, crossAccountUnbindPath, tenant.member,
+			"foreign-service-role-unbinding-key", managedservicev1.UnbindServiceRoleRequest{ResourceVersion: 1}),
+			http.StatusForbidden, "foreign workload Role unbinding")
 		assertStatus(performJSON(t, http.MethodGet, iamEndpoint+"/v1/service-linked-roles/"+
 			string(other.serviceRoleReceipt.RoleID), tenant.member, nil), http.StatusForbidden, "foreign service-linked Role")
 		for _, field := range []string{"tenantId", "organizationId", "requestedBy"} {
@@ -9507,8 +9513,66 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 	}
 	for i := range tenants {
 		tenant := &tenants[i]
+		path := base + "/service-installations/" + tenant.shared.ID +
+			"/service-role-bindings/" + string(tenant.serviceRoleReceipt.BindingID)
+		request := managedservicev1.UnbindServiceRoleRequest{ResourceVersion: 1}
+		for _, query := range []string{"?tenantId=forged", "?roleId=forged", "?purpose=PAAS"} {
+			assertStatus(performJSONWithIdempotency(t, http.MethodDelete, path+query, tenant.member,
+				"selector-service-role-unbinding-key", request), http.StatusBadRequest, "service Role unbind query selector")
+		}
+		assertStatus(performJSONWithIdempotency(t, http.MethodDelete, path, tenant.member,
+			"body-selector-service-role-unbinding-key", map[string]any{"resourceVersion": 1, "accountId": "forged"}),
+			http.StatusBadRequest, "service Role unbind body selector")
+		unbound := performJSONWithIdempotency(t, http.MethodDelete, path, tenant.member,
+			"shared-service-role-unbinding-key", request)
+		assertStatus(unbound, http.StatusOK, "unbind actual service installation Role")
+		if json.Unmarshal(unbound.Body, &tenant.serviceRoleRevoked) != nil ||
+			managedservicev1.ValidateServiceRoleUnbindingReceipt(tenant.serviceRoleRevoked) != nil ||
+			tenant.serviceRoleRevoked.ServiceInstallationID != tenant.shared.ID ||
+			tenant.serviceRoleRevoked.BindingID != tenant.serviceRoleReceipt.BindingID ||
+			tenant.serviceRoleRevoked.RoleID != tenant.serviceRoleReceipt.RoleID ||
+			tenant.serviceRoleRevoked.Template != tenant.serviceRoleTemplate {
+			t.Fatal("managed-service unbinding did not return the exact terminal IAM result")
+		}
+		replay := performJSONWithIdempotency(t, http.MethodDelete, path, tenant.member,
+			"shared-service-role-unbinding-key", request)
+		var replayed managedservicev1.ServiceRoleUnbindingReceipt
+		if replay.Status != http.StatusOK || json.Unmarshal(replay.Body, &replayed) != nil ||
+			replayed != tenant.serviceRoleRevoked {
+			t.Fatal("managed-service unbinding replay changed its terminal result")
+		}
+		assertStatus(performJSONWithIdempotency(t, http.MethodDelete, path, tenant.member,
+			"second-service-role-unbinding-key", request), http.StatusConflict, "changed service Role unbind intent")
+		assertStatus(performJSONWithIdempotency(t, http.MethodDelete, path, tenant.member,
+			"invalid-version-service-role-unbinding-key", managedservicev1.UnbindServiceRoleRequest{ResourceVersion: 2}),
+			http.StatusBadRequest, "service Role unbind resource version")
+		linkedResponse := performJSON(t, http.MethodGet, iamEndpoint+"/v1/service-linked-roles", tenant.member, nil)
+		var linked iamv1.ServiceLinkedRoleList
+		if linkedResponse.Status != http.StatusOK || json.Unmarshal(linkedResponse.Body, &linked) != nil ||
+			iamv1.ValidateServiceLinkedRoleList(linked) != nil || len(linked.Items) != 1 ||
+			linked.Items[0].Relation.Role.ID != tenant.serviceRoleReceipt.RoleID ||
+			linked.Items[0].BindingCount != 1 || linked.Items[0].ActiveBindingCount != 0 {
+			t.Fatal("terminal product unbind changed service Role history or retained active authority")
+		}
+		detailResponse := performJSON(t, http.MethodGet, iamEndpoint+"/v1/service-linked-roles/"+
+			string(tenant.serviceRoleReceipt.RoleID), tenant.member, nil)
+		var detail iamv1.ServiceLinkedRoleAccess
+		if detailResponse.Status != http.StatusOK || json.Unmarshal(detailResponse.Body, &detail) != nil ||
+			iamv1.ValidateServiceLinkedRoleAccess(detail) != nil || len(detail.Bindings) != 1 ||
+			detail.Bindings[0].ID != tenant.serviceRoleReceipt.BindingID ||
+			detail.Bindings[0].Status != iamv1.WorkloadRoleBindingRevoked || detail.Bindings[0].RevokedAt == nil {
+			t.Fatal("IAM directory lost the terminal workload Role binding history")
+		}
+	}
+	for i := range tenants {
+		tenant := &tenants[i]
 		revokeIAMPolicyAttachment(t, iamEndpoint, tenant.owner, tenant.serviceRoleGrant.ID,
 			tenant.serviceRoleGrant.ResourceVersion, "request-service-role-administrator-revoked-"+tenant.id)
+		unbindPath := base + "/service-installations/" + tenant.shared.ID +
+			"/service-role-bindings/" + string(tenant.serviceRoleReceipt.BindingID)
+		assertStatus(performJSONWithIdempotency(t, http.MethodDelete, unbindPath, tenant.member,
+			"shared-service-role-unbinding-key", managedservicev1.UnbindServiceRoleRequest{ResourceVersion: 1}),
+			http.StatusForbidden, "next-request service Role unbind delegation revocation")
 		path := base + "/service-installations/" + tenant.unique.ID + "/service-role-bindings"
 		assertStatus(performJSONWithIdempotency(t, http.MethodPost, path, tenant.member,
 			"revoked-service-role-binding-key", managedservicev1.BindServiceRoleRequest{Template: tenant.serviceRoleTemplate}),
@@ -9546,6 +9610,7 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 		}
 		for _, action := range []auditv1.Action{
 			auditv1.ActionIAMServiceLinkedRoleCreated, auditv1.ActionIAMWorkloadRoleBindingCreated,
+			auditv1.ActionIAMWorkloadRoleBindingRevoked,
 		} {
 			page := queryAudit(t, auditEndpoint, tenant.owner, auditv1.QueryRecordsRequest{PageSize: 100, Action: action}, http.StatusOK)
 			if page.TenantID != auditv1.TenantID(tenant.id) || len(page.Records) != 1 ||

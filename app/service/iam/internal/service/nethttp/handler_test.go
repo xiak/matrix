@@ -489,6 +489,68 @@ func TestIAMHTTPWorkloadRoleBindingRequiresExactlyTwoCredentialsAndNoSelectors(t
 	}
 }
 
+func TestIAMHTTPWorkloadRoleBindingRevocationRequiresExactPathAndTwoCredentials(t *testing.T) {
+	workflow := newHTTPWorkflow(t)
+	handler := newTestHandler(t, workflow)
+	authorization, err := iamv1.NewAuthorizationRequest(iamv1.ActionManagedServiceInstallationRoleUnbind,
+		iamv1.ResourceReference{Kind: iamv1.ResourceServiceInstallation, ID: "service-installation-a"},
+		iamv1.AuthorizationResourceInstance, "", "binding-revoke", "binding-revoke")
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := iamv1.RevokeWorkloadRoleBindingRequest{Authorization: authorization, ResourceVersion: 1}
+	body, err := json.Marshal(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name, method, suffix, body, service, subject string
+		status                                       int
+	}{
+		{"valid", http.MethodDelete, "", string(body), "paas-service", "current-user", http.StatusOK},
+		{"missing service", http.MethodDelete, "", string(body), "", "current-user", http.StatusUnauthorized},
+		{"missing subject", http.MethodDelete, "", string(body), "paas-service", "", http.StatusUnauthorized},
+		{"query account", http.MethodDelete, "?accountId=other", string(body), "paas-service", "current-user", http.StatusBadRequest},
+		{"nested path", http.MethodDelete, "/other", string(body), "paas-service", "current-user", http.StatusNotFound},
+		{"wrong method", http.MethodPost, "", string(body), "paas-service", "current-user", http.StatusMethodNotAllowed},
+		{"body account", http.MethodDelete, "", string(body[:len(body)-1]) + `,"accountId":"other"}`, "paas-service", "current-user", http.StatusBadRequest},
+		{"body role", http.MethodDelete, "", string(body[:len(body)-1]) + `,"roleId":"other"}`, "paas-service", "current-user", http.StatusBadRequest},
+		{"body template", http.MethodDelete, "", string(body[:len(body)-1]) + `,"template":{"id":"other"}}`, "paas-service", "current-user", http.StatusBadRequest},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			before := workflow.workloadRevocationCalls
+			request := httptest.NewRequest(test.method, "/v1/internal/workload-role-bindings/binding-service-linked"+test.suffix, strings.NewReader(test.body))
+			request.Header.Set("Content-Type", "application/json")
+			if test.service != "" {
+				request.Header.Set("Authorization", "Bearer "+test.service)
+			}
+			if test.subject != "" {
+				request.Header.Set("Matrix-Subject-Credential", test.subject)
+			}
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != test.status {
+				t.Fatalf("workload revocation status=%d want=%d body=%s", response.Code, test.status, response.Body.String())
+			}
+			if test.status == http.StatusOK {
+				if workflow.workloadRevocationCalls != before+1 || workflow.workloadRevocationID != "binding-service-linked" ||
+					string(workflow.workloadRevokeServiceCredential.CopyBytes()) != test.service ||
+					string(workflow.workloadRevokeSubjectCredential.CopyBytes()) != test.subject ||
+					!reflect.DeepEqual(workflow.workloadRevocationRequest, command) {
+					t.Fatal("dual-credential revocation lost its exact authenticated input")
+				}
+				var result iamv1.WorkloadRoleBinding
+				if json.Unmarshal(response.Body.Bytes(), &result) != nil || iamv1.ValidateWorkloadRoleBinding(result) != nil ||
+					result.Status != iamv1.WorkloadRoleBindingRevoked {
+					t.Fatal("workload revocation response is invalid")
+				}
+			} else if workflow.workloadRevocationCalls != before {
+				t.Fatal("invalid revocation reached the workflow")
+			}
+		})
+	}
+}
+
 func TestIAMHTTPPolicyDirectoriesDeriveScopeOnlyFromRoute(t *testing.T) {
 	workflow := newHTTPWorkflow(t)
 	handler := newTestHandler(t, workflow)
@@ -1747,66 +1809,71 @@ type httpWorkflow struct {
 	passwordRequirementsError  error
 	passwordRequirementsBearer iamv1.Secret
 	Workflow
-	policyCalls                 int
-	ownSessionCalls             int
-	policyPlatform              bool
-	policyCredential            iamv1.Secret
-	profileErr                  error
-	invalidProfile              bool
-	templateCalls               int
-	templateCredential          iamv1.Secret
-	templateErr                 error
-	invalidTemplate             bool
-	readiness                   iamv1.Readiness
-	status                      iamv1.BootstrapStatus
-	identity                    iamv1.ServiceIdentity
-	login                       iamv1.LoginResponse
-	decision                    iamv1.AuthorizationDecision
-	verificationDecision        iamv1.AuthorizationDecision
-	loginErr                    error
-	identityCalls               int
-	loginCalls                  int
-	verifiedChallengeID         string
-	enrollmentCalls             int
-	enrollmentCredential        iamv1.Secret
-	enrollmentRequestID         string
-	enrollmentVerificationID    string
-	enrollmentState             iamv1.EnrollmentChallengeState
-	enrollmentStart             iamv1.StartTOTPEnrollmentResponse
-	enrollmentConfirmation      iamv1.ConfirmTOTPEnrollmentResponse
-	enrollmentMail              iamv1.NotificationContactVerification
-	enrollmentErr               error
-	totpCalls                   int
-	stepCalls                   int
-	stepCredential              iamv1.Secret
-	stepResult                  iamv1.StepUp
-	regenerationResult          iamv1.RegenerateRecoveryCodesResponse
-	removalResult               iamv1.RemoveTOTPResponse
-	stepErr                     error
-	getUserCalls                int
-	updateUserCalls             int
-	deleteUserCalls             int
-	userID                      iamv1.PrincipalID
-	updateUser                  iamv1.UpdateUserRequest
-	deleteUser                  iamv1.DeleteUserRequest
-	authorizeCalls              int
-	keyCalls                    int
-	verifyInstallationCalls     int
-	settingsCalls               int
-	settingsCredential          iamv1.Secret
-	settingsErr                 error
-	settingsRequest             iamv1.UpdateAccountSecuritySettingsRequest
-	settingsChange              iamv1.AccountSecuritySettingsChange
-	settingsCommand             string
-	workloadBindingCalls        int
-	workloadServiceCredential   iamv1.Secret
-	workloadSubjectCredential   iamv1.Secret
-	workloadBindingRequest      iamv1.CreateWorkloadRoleBindingRequest
-	serviceLinkedRoleListCalls  int
-	serviceLinkedRoleReadCalls  int
-	serviceLinkedRoleCredential iamv1.Secret
-	serviceLinkedRoleID         iamv1.RoleID
-	invalidServiceLinkedRole    bool
+	policyCalls                     int
+	ownSessionCalls                 int
+	policyPlatform                  bool
+	policyCredential                iamv1.Secret
+	profileErr                      error
+	invalidProfile                  bool
+	templateCalls                   int
+	templateCredential              iamv1.Secret
+	templateErr                     error
+	invalidTemplate                 bool
+	readiness                       iamv1.Readiness
+	status                          iamv1.BootstrapStatus
+	identity                        iamv1.ServiceIdentity
+	login                           iamv1.LoginResponse
+	decision                        iamv1.AuthorizationDecision
+	verificationDecision            iamv1.AuthorizationDecision
+	loginErr                        error
+	identityCalls                   int
+	loginCalls                      int
+	verifiedChallengeID             string
+	enrollmentCalls                 int
+	enrollmentCredential            iamv1.Secret
+	enrollmentRequestID             string
+	enrollmentVerificationID        string
+	enrollmentState                 iamv1.EnrollmentChallengeState
+	enrollmentStart                 iamv1.StartTOTPEnrollmentResponse
+	enrollmentConfirmation          iamv1.ConfirmTOTPEnrollmentResponse
+	enrollmentMail                  iamv1.NotificationContactVerification
+	enrollmentErr                   error
+	totpCalls                       int
+	stepCalls                       int
+	stepCredential                  iamv1.Secret
+	stepResult                      iamv1.StepUp
+	regenerationResult              iamv1.RegenerateRecoveryCodesResponse
+	removalResult                   iamv1.RemoveTOTPResponse
+	stepErr                         error
+	getUserCalls                    int
+	updateUserCalls                 int
+	deleteUserCalls                 int
+	userID                          iamv1.PrincipalID
+	updateUser                      iamv1.UpdateUserRequest
+	deleteUser                      iamv1.DeleteUserRequest
+	authorizeCalls                  int
+	keyCalls                        int
+	verifyInstallationCalls         int
+	settingsCalls                   int
+	settingsCredential              iamv1.Secret
+	settingsErr                     error
+	settingsRequest                 iamv1.UpdateAccountSecuritySettingsRequest
+	settingsChange                  iamv1.AccountSecuritySettingsChange
+	settingsCommand                 string
+	workloadBindingCalls            int
+	workloadServiceCredential       iamv1.Secret
+	workloadSubjectCredential       iamv1.Secret
+	workloadBindingRequest          iamv1.CreateWorkloadRoleBindingRequest
+	workloadRevocationCalls         int
+	workloadRevokeServiceCredential iamv1.Secret
+	workloadRevokeSubjectCredential iamv1.Secret
+	workloadRevocationID            iamv1.WorkloadRoleBindingID
+	workloadRevocationRequest       iamv1.RevokeWorkloadRoleBindingRequest
+	serviceLinkedRoleListCalls      int
+	serviceLinkedRoleReadCalls      int
+	serviceLinkedRoleCredential     iamv1.Secret
+	serviceLinkedRoleID             iamv1.RoleID
+	invalidServiceLinkedRole        bool
 }
 
 func (value *httpWorkflow) UserPasswordResetCompletion(_ context.Context, credential iamv1.Secret, user iamv1.PrincipalID, command string, version uint64, _ string) (iamv1.UserPasswordResetCompletion, error) {
@@ -1890,6 +1957,20 @@ func (value *httpWorkflow) CreateWorkloadRoleBinding(_ context.Context, serviceC
 	value.workloadBindingCalls++
 	value.workloadServiceCredential, value.workloadSubjectCredential, value.workloadBindingRequest = serviceCredential, subjectCredential, request
 	return serviceLinkedRoleAccessForHTTPTest(), nil
+}
+
+func (value *httpWorkflow) RevokeWorkloadRoleBinding(_ context.Context, serviceCredential, subjectCredential iamv1.Secret,
+	id iamv1.WorkloadRoleBindingID, request iamv1.RevokeWorkloadRoleBindingRequest,
+) (iamv1.WorkloadRoleBinding, error) {
+	value.workloadRevocationCalls++
+	value.workloadRevokeServiceCredential, value.workloadRevokeSubjectCredential = serviceCredential, subjectCredential
+	value.workloadRevocationID, value.workloadRevocationRequest = id, request
+	binding := serviceLinkedRoleAccessForHTTPTest().Bindings[0]
+	binding.ID, binding.Workload = id, request.Authorization.Resource
+	revokedAt := binding.CreatedAt.Add(time.Second)
+	binding.Status, binding.ResourceVersion, binding.UpdatedAt, binding.RevokedAt =
+		iamv1.WorkloadRoleBindingRevoked, request.ResourceVersion+1, revokedAt, &revokedAt
+	return binding, nil
 }
 
 func serviceLinkedRoleAccessForHTTPTest() iamv1.ServiceLinkedRoleAccess {

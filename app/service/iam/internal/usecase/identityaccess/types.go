@@ -141,6 +141,8 @@ type Transaction interface {
 	ReadRolePermissionBoundary(context.Context, RoleRead) (iamv1.RolePermissionBoundary, error)
 	LockWorkloadRoleBindingSources(context.Context, iamv1.AccountID, iamv1.PrincipalID, iamv1.SessionID, string, iamv1.ServicePurpose) error
 	CreateWorkloadRoleBinding(context.Context, WorkloadRoleBindingCreation) (iamv1.ServiceLinkedRoleAccess, error)
+	PrepareWorkloadRoleBindingRevocation(context.Context, iamv1.AccountID, iamv1.WorkloadRoleBindingID, string, iamv1.ServicePurpose) (iamv1.ServiceLinkedRoleAccess, error)
+	RevokeWorkloadRoleBinding(context.Context, WorkloadRoleBindingRevocation) (iamv1.WorkloadRoleBinding, error)
 	ReadRoleAssumption(context.Context, RoleAssumptionRead) (RoleAssumption, error)
 	IssueRoleSession(context.Context, RoleSessionIssuance) (iamv1.RoleSession, error)
 	ReadRoleSessionByRequest(context.Context, RoleAssumptionRead) (iamv1.RoleSession, bool, error)
@@ -325,6 +327,25 @@ type WorkloadRoleBindingCreation struct {
 	RequestDigest            string
 	RoleCreatedAuditEvent    auditv1.Event
 	BindingCreatedAuditEvent auditv1.Event
+}
+
+// WorkloadRoleBindingRevocation contains only identities recovered from the
+// authenticated credentials and the existing binding. The public command can
+// select neither the target Account nor any Role, template, workload or
+// service-principal authority.
+type WorkloadRoleBindingRevocation struct {
+	AccountID               iamv1.AccountID
+	BindingID               iamv1.WorkloadRoleBindingID
+	ActorPrincipalID        iamv1.PrincipalID
+	ActorSessionID          iamv1.SessionID
+	ServiceLookupDigest     string
+	ServicePurpose          iamv1.ServicePurpose
+	Request                 iamv1.RevokeWorkloadRoleBindingRequest
+	RequestDigest           string
+	WorkloadDecisionID      iamv1.DecisionID
+	BindingRevokeDecisionID iamv1.DecisionID
+	RolePassDecisionID      iamv1.DecisionID
+	AuditEvent              auditv1.Event
 }
 
 // RoleMutation carries the exact authenticated writer and expected revision,

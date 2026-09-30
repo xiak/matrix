@@ -96,4 +96,33 @@ func TestServiceRoleBindingContractHasNoAuthoritySelectors(t *testing.T) {
 	if err != nil || strings.Contains(string(encoded), "accountId") || strings.Contains(string(encoded), "servicePrincipal") {
 		t.Fatalf("receipt leaked authority selector: %s err=%v", encoded, err)
 	}
+	unbind := UnbindServiceRoleRequest{ResourceVersion: 1}
+	if ValidateUnbindServiceRoleRequest(unbind) != nil {
+		t.Fatal("valid unbind request rejected")
+	}
+	for _, body := range []string{
+		`{"resourceVersion":1,"accountId":"forged"}`,
+		`{"resourceVersion":1,"roleId":"forged"}`,
+		`{"resourceVersion":1,"template":{"id":"forged"}}`,
+		`{"resourceVersion":1,"workloadId":"forged"}`,
+	} {
+		var decoded UnbindServiceRoleRequest
+		if err := DecodeRequest(strings.NewReader(body), &decoded); err == nil {
+			t.Fatalf("unbind authority selector accepted: %s", body)
+		}
+	}
+	revokedAt := now.Add(time.Minute)
+	unbinding := ServiceRoleUnbindingReceipt{
+		Kind: "ServiceRoleUnbindingReceipt", ServiceInstallationID: receipt.ServiceInstallationID,
+		BindingID: receipt.BindingID, RoleID: receipt.RoleID, Template: template,
+		Status: iamv1.WorkloadRoleBindingRevoked, ResourceVersion: 2,
+		CreatedAt: now, RevokedAt: revokedAt,
+	}
+	if err := ValidateServiceRoleUnbindingReceipt(unbinding); err != nil {
+		t.Fatalf("valid unbinding receipt rejected: %v", err)
+	}
+	if encoded, err = json.Marshal(unbinding); err != nil || strings.Contains(string(encoded), "accountId") ||
+		strings.Contains(string(encoded), "servicePrincipal") {
+		t.Fatalf("unbinding receipt leaked authority selector: %s err=%v", encoded, err)
+	}
 }

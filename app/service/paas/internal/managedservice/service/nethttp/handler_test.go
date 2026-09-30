@@ -171,6 +171,60 @@ func TestBindServiceRoleUsesExactInstallationAndNoAuthoritySelectors(t *testing.
 	}
 }
 
+func TestUnbindServiceRoleUsesExactInstallationBindingAndNoAuthoritySelectors(t *testing.T) {
+	now := time.Date(2026, 9, 30, 8, 0, 0, 0, time.UTC)
+	template := iamv1.ServiceRoleTemplateReference{
+		ID: "managedservice.installation-reader", Version: 1,
+		ContentDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}
+	authorizer := &stubAuthorizer{}
+	workflow := &stubWorkflow{roleUnbindingReceipt: managedservicev1.ServiceRoleUnbindingReceipt{
+		Kind: "ServiceRoleUnbindingReceipt", ServiceInstallationID: "postgres-primary",
+		BindingID: "binding-one", RoleID: "role-one", Template: template,
+		Status: iamv1.WorkloadRoleBindingRevoked, ResourceVersion: 2,
+		CreatedAt: now, RevokedAt: now.Add(time.Second),
+	}}
+	handler := testHandler(t, authorizer, workflow)
+	request := httptest.NewRequest(http.MethodDelete,
+		"/managed-services/v1/service-installations/postgres-primary/service-role-bindings/binding-one",
+		strings.NewReader(`{"resourceVersion":1}`))
+	request.Header.Set("Authorization", "Bearer session-secret")
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Idempotency-Key", "unbind-postgres-primary")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || workflow.unbindCalls != 1 {
+		t.Fatalf("status=%d calls=%d body=%s", response.Code, workflow.unbindCalls, response.Body.String())
+	}
+	if authorizer.request.Action != port.AuthorizeInstallationRoleUnbind ||
+		authorizer.request.Resource != (port.ResourceReference{Kind: port.ResourceServiceInstallation, ID: "postgres-primary"}) ||
+		workflow.unbindCommand.Credential != "Bearer session-secret" ||
+		workflow.unbindCommand.InstallationID != "postgres-primary" || workflow.unbindCommand.BindingID != "binding-one" ||
+		workflow.unbindCommand.IdempotencyKey != "unbind-postgres-primary" || workflow.unbindCommand.Request.ResourceVersion != 1 {
+		t.Fatalf("authorization=%#v command=%#v", authorizer.request, workflow.unbindCommand)
+	}
+	for _, suffix := range []string{`?tenantId=forged`, `?roleId=forged`, `?purpose=PAAS`} {
+		attack := httptest.NewRequest(http.MethodDelete,
+			"/managed-services/v1/service-installations/postgres-primary/service-role-bindings/binding-one"+suffix,
+			strings.NewReader(`{"resourceVersion":1}`))
+		attack.Header = request.Header.Clone()
+		attackResponse := httptest.NewRecorder()
+		handler.ServeHTTP(attackResponse, attack)
+		if attackResponse.Code != http.StatusBadRequest {
+			t.Fatalf("selector %s status=%d body=%s", suffix, attackResponse.Code, attackResponse.Body.String())
+		}
+	}
+	selectorBody := httptest.NewRequest(http.MethodDelete,
+		"/managed-services/v1/service-installations/postgres-primary/service-role-bindings/binding-one",
+		strings.NewReader(`{"resourceVersion":1,"accountId":"forged"}`))
+	selectorBody.Header = request.Header.Clone()
+	selectorResponse := httptest.NewRecorder()
+	handler.ServeHTTP(selectorResponse, selectorBody)
+	if selectorResponse.Code != http.StatusBadRequest {
+		t.Fatalf("body selector status=%d body=%s", selectorResponse.Code, selectorResponse.Body.String())
+	}
+}
+
 func TestResourceReadRejectsMalformedIdentityBeforeWorkflow(t *testing.T) {
 	workflow := &stubWorkflow{}
 	handler := testHandler(t, &stubAuthorizer{}, workflow)
@@ -226,16 +280,19 @@ func (authorizer *stubAuthorizer) Authorize(
 }
 
 type stubWorkflow struct {
-	offerings      managedservicev1.ServiceOfferingList
-	installation   managedservicev1.ServiceInstallation
-	operation      managedservicev1.InstallationOperation
-	offeringReads  int
-	operationReads int
-	activateCalls  int
-	createCalls    int
-	bindCalls      int
-	bindCommand    usecase.BindServiceRoleCommand
-	roleReceipt    managedservicev1.ServiceRoleBindingReceipt
+	offerings            managedservicev1.ServiceOfferingList
+	installation         managedservicev1.ServiceInstallation
+	operation            managedservicev1.InstallationOperation
+	offeringReads        int
+	operationReads       int
+	activateCalls        int
+	createCalls          int
+	bindCalls            int
+	bindCommand          usecase.BindServiceRoleCommand
+	roleReceipt          managedservicev1.ServiceRoleBindingReceipt
+	unbindCalls          int
+	unbindCommand        usecase.UnbindServiceRoleCommand
+	roleUnbindingReceipt managedservicev1.ServiceRoleUnbindingReceipt
 }
 
 func (workflow *stubWorkflow) ListOfferings(context.Context, port.Authorization) (managedservicev1.ServiceOfferingList, error) {
@@ -302,4 +359,13 @@ func (workflow *stubWorkflow) BindServiceRole(
 	workflow.bindCalls++
 	workflow.bindCommand = command
 	return workflow.roleReceipt, nil
+}
+
+func (workflow *stubWorkflow) UnbindServiceRole(
+	_ context.Context,
+	command usecase.UnbindServiceRoleCommand,
+) (managedservicev1.ServiceRoleUnbindingReceipt, error) {
+	workflow.unbindCalls++
+	workflow.unbindCommand = command
+	return workflow.roleUnbindingReceipt, nil
 }

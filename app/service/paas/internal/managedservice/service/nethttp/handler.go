@@ -29,6 +29,7 @@ type Workflow interface {
 	GetServiceInstallation(context.Context, port.Authorization, string) (managedservicev1.ServiceInstallation, error)
 	GetInstallationOperation(context.Context, port.Authorization, string) (managedservicev1.InstallationOperation, error)
 	BindServiceRole(context.Context, usecase.BindServiceRoleCommand) (managedservicev1.ServiceRoleBindingReceipt, error)
+	UnbindServiceRole(context.Context, usecase.UnbindServiceRoleCommand) (managedservicev1.ServiceRoleUnbindingReceipt, error)
 	ActivateQuota(context.Context, usecase.ActivateQuotaCommand) (managedservicev1.QuotaEntitlement, bool, error)
 	CreateInstallation(context.Context, usecase.CreateInstallationCommand) (managedservicev1.ServiceInstallation, bool, error)
 }
@@ -64,6 +65,7 @@ func NewHandler(authorizer port.Authorizer, workflow Workflow, config Config) (h
 	routes.HandleFunc("GET /managed-services/v1/service-installations/{installationId}", value.getServiceInstallation)
 	routes.HandleFunc("GET /managed-services/v1/service-installations/{installationId}/operation", value.getInstallationOperation)
 	routes.HandleFunc("POST /managed-services/v1/service-installations/{installationId}/service-role-bindings", value.bindServiceRole)
+	routes.HandleFunc("DELETE /managed-services/v1/service-installations/{installationId}/service-role-bindings/{bindingId}", value.unbindServiceRole)
 	return routes, nil
 }
 
@@ -241,6 +243,31 @@ func (value *handler) bindServiceRole(response http.ResponseWriter, request *htt
 	result, err := value.workflow.BindServiceRole(request.Context(), usecase.BindServiceRoleCommand{
 		Authorization: authorization, Credential: request.Header.Get("Authorization"),
 		InstallationID: id, Request: body, IdempotencyKey: request.Header.Get("Idempotency-Key"),
+	})
+	if err != nil {
+		writeWorkflowError(response, requestID, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (value *handler) unbindServiceRole(response http.ResponseWriter, request *http.Request) {
+	installationID, bindingID := request.PathValue("installationId"), request.PathValue("bindingId")
+	authorization, requestID, ok := value.authorizeResource(
+		response, request, port.AuthorizeInstallationRoleUnbind, port.ResourceServiceInstallation, installationID,
+		iamv1.AuthorizationResourceInstance, "",
+	)
+	if !ok || !acceptsNoQuery(response, request, requestID) {
+		return
+	}
+	body, ok := decodeRequest[managedservicev1.UnbindServiceRoleRequest](response, request, requestID)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.UnbindServiceRole(request.Context(), usecase.UnbindServiceRoleCommand{
+		Authorization: authorization, Credential: request.Header.Get("Authorization"),
+		InstallationID: installationID, BindingID: iamv1.WorkloadRoleBindingID(bindingID),
+		Request: body, IdempotencyKey: request.Header.Get("Idempotency-Key"),
 	})
 	if err != nil {
 		writeWorkflowError(response, requestID, err)

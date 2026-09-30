@@ -23,6 +23,7 @@ const (
 	AuthorizeInstallationCreate       = iamv1.ActionManagedServiceInstallationCreate
 	AuthorizeInstallationRead         = iamv1.ActionManagedServiceInstallationRead
 	AuthorizeInstallationRoleBind     = iamv1.ActionManagedServiceInstallationRoleBind
+	AuthorizeInstallationRoleUnbind   = iamv1.ActionManagedServiceInstallationRoleUnbind
 )
 
 const (
@@ -65,15 +66,23 @@ type Authorizer interface {
 	Authorize(context.Context, AuthorizationRequest) (Authorization, error)
 }
 
-// WorkloadRoleBinder is the product-to-IAM consent boundary. Its request uses
-// the same current USER credential and normalized product authorization shape;
-// the implementation adds the PaaS ServiceIdentity credential privately.
-type WorkloadRoleBinder interface {
+// WorkloadRoleAuthority is the product-to-IAM consent boundary. Its requests
+// use the same current USER credential and normalized product authorization
+// shape; the implementation adds the PaaS ServiceIdentity credential
+// privately. Revocation identifies an existing binding but never re-selects
+// its Account, Role, template, workload or service principal.
+type WorkloadRoleAuthority interface {
 	BindWorkloadRole(
 		context.Context,
 		iamv1.ServiceRoleTemplateReference,
 		AuthorizationRequest,
 	) (iamv1.ServiceLinkedRoleAccess, error)
+	RevokeWorkloadRole(
+		context.Context,
+		iamv1.WorkloadRoleBindingID,
+		uint64,
+		AuthorizationRequest,
+	) (iamv1.WorkloadRoleBinding, error)
 }
 
 func ValidateAuthorization(value Authorization) error {

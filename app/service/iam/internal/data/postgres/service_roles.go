@@ -114,6 +114,85 @@ func (value *transaction) CreateWorkloadRoleBinding(
 	return result, nil
 }
 
+// PrepareWorkloadRoleBindingRevocation locks the exact Role and binding after
+// the shared source lock has authenticated the service and USER. PostgreSQL
+// re-derives the service relationship, so this lookup cannot be used to probe
+// another Account or another service principal.
+func (value *transaction) PrepareWorkloadRoleBindingRevocation(
+	ctx context.Context,
+	accountID iamv1.AccountID,
+	bindingID iamv1.WorkloadRoleBindingID,
+	serviceLookupDigest string,
+	purpose iamv1.ServicePurpose,
+) (iamv1.ServiceLinkedRoleAccess, error) {
+	if iamv1.ValidateID("accountId", string(accountID)) != nil ||
+		iamv1.ValidateID("bindingId", string(bindingID)) != nil ||
+		iamv1.ValidateDigest("serviceLookupDigest", serviceLookupDigest) != nil {
+		return iamv1.ServiceLinkedRoleAccess{}, identityaccess.ErrInvalidArgument
+	}
+	var encoded []byte
+	if err := value.tx.QueryRow(ctx, `SELECT iam.prepare_workload_role_binding_revocation($1,$2,$3,$4)`,
+		accountID, bindingID, serviceLookupDigest, purpose).Scan(&encoded); err != nil {
+		return iamv1.ServiceLinkedRoleAccess{}, mapAuthorizationDatabaseError("prepare IAM workload role binding revocation", err)
+	}
+	if int64(len(encoded)) > iamv1.MaxRoleAccessBytes {
+		return iamv1.ServiceLinkedRoleAccess{}, identityaccess.ErrUnavailable
+	}
+	result, err := decodeServiceLinkedRoleAccess(encoded)
+	if err != nil || iamv1.ValidateServiceLinkedRoleAccess(result) != nil || len(result.Bindings) != 1 ||
+		result.Bindings[0].ID != bindingID || result.Bindings[0].AccountID != accountID ||
+		result.Bindings[0].RoleID != result.Relation.Role.ID {
+		return iamv1.ServiceLinkedRoleAccess{}, identityaccess.ErrUnavailable
+	}
+	return result, nil
+}
+
+func (value *transaction) RevokeWorkloadRoleBinding(
+	ctx context.Context,
+	mutation identityaccess.WorkloadRoleBindingRevocation,
+) (iamv1.WorkloadRoleBinding, error) {
+	if iamv1.ValidateID("accountId", string(mutation.AccountID)) != nil ||
+		iamv1.ValidateID("bindingId", string(mutation.BindingID)) != nil ||
+		iamv1.ValidateID("actorPrincipalId", string(mutation.ActorPrincipalID)) != nil ||
+		iamv1.ValidateID("actorSessionId", string(mutation.ActorSessionID)) != nil ||
+		iamv1.ValidateDigest("serviceLookupDigest", mutation.ServiceLookupDigest) != nil ||
+		iamv1.ValidateDigest("requestDigest", mutation.RequestDigest) != nil ||
+		iamv1.ValidateRevokeWorkloadRoleBindingRequest(mutation.Request) != nil {
+		return iamv1.WorkloadRoleBinding{}, identityaccess.ErrInvalidArgument
+	}
+	requestDocument, err := json.Marshal(mutation.Request)
+	if err != nil {
+		return iamv1.WorkloadRoleBinding{}, identityaccess.ErrInvalidArgument
+	}
+	defer clear(requestDocument)
+	event, err := marshalManagementEvent(mutation.AuditEvent)
+	if err != nil {
+		return iamv1.WorkloadRoleBinding{}, err
+	}
+	defer clear(event)
+	var encoded []byte
+	err = value.tx.QueryRow(ctx, `SELECT iam.revoke_workload_role_binding(
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb)`,
+		mutation.AccountID, mutation.ActorPrincipalID, mutation.ActorSessionID,
+		mutation.ServiceLookupDigest, mutation.ServicePurpose, mutation.BindingID,
+		string(requestDocument), mutation.RequestDigest, mutation.WorkloadDecisionID,
+		mutation.BindingRevokeDecisionID, mutation.RolePassDecisionID, event).Scan(&encoded)
+	if err != nil {
+		return iamv1.WorkloadRoleBinding{}, mapAuthorizationDatabaseError("revoke IAM workload role binding", err)
+	}
+	if int64(len(encoded)) > iamv1.MaxRequestBytes {
+		return iamv1.WorkloadRoleBinding{}, identityaccess.ErrUnavailable
+	}
+	result, err := decodeWorkloadRoleBinding(encoded)
+	if err != nil || iamv1.ValidateWorkloadRoleBinding(result) != nil || result.ID != mutation.BindingID ||
+		result.AccountID != mutation.AccountID || result.Status != iamv1.WorkloadRoleBindingRevoked ||
+		result.ResourceVersion != mutation.Request.ResourceVersion+1 ||
+		result.Workload != mutation.Request.Authorization.Resource {
+		return iamv1.WorkloadRoleBinding{}, identityaccess.ErrUnavailable
+	}
+	return result, nil
+}
+
 // ListServiceLinkedRoles reads the bounded Account-owned relation directory.
 // PostgreSQL returns one look-ahead row so this adapter, rather than SQL or a
 // caller, remains the owner of public page boundaries.
@@ -235,6 +314,22 @@ func decodeServiceLinkedRoleAccess(encoded []byte) (iamv1.ServiceLinkedRoleAcces
 			revoked := result.Bindings[index].RevokedAt.UTC()
 			result.Bindings[index].RevokedAt = &revoked
 		}
+	}
+	return result, nil
+}
+
+func decodeWorkloadRoleBinding(encoded []byte) (iamv1.WorkloadRoleBinding, error) {
+	type workloadRoleBindingWire iamv1.WorkloadRoleBinding
+	var wire workloadRoleBindingWire
+	if err := json.Unmarshal(encoded, &wire); err != nil {
+		return iamv1.WorkloadRoleBinding{}, err
+	}
+	result := iamv1.WorkloadRoleBinding(wire)
+	result.CreatedAt = result.CreatedAt.UTC()
+	result.UpdatedAt = result.UpdatedAt.UTC()
+	if result.RevokedAt != nil {
+		revoked := result.RevokedAt.UTC()
+		result.RevokedAt = &revoked
 	}
 	return result, nil
 }

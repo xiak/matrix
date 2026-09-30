@@ -113,6 +113,13 @@ type BindServiceRoleRequest struct {
 	Template iamv1.ServiceRoleTemplateReference `json:"template"`
 }
 
+// UnbindServiceRoleRequest protects the single terminal transition. The
+// installation and binding identities are path resources; all remaining IAM
+// authority is recovered from the existing binding rather than caller input.
+type UnbindServiceRoleRequest struct {
+	ResourceVersion uint64 `json:"resourceVersion"`
+}
+
 // ServiceRoleBindingReceipt is the non-secret product result for one exact
 // ServiceInstallation. IAM remains the authority for the complete Role,
 // relation and binding history exposed by its separately authorized directory.
@@ -125,6 +132,21 @@ type ServiceRoleBindingReceipt struct {
 	Status                iamv1.WorkloadRoleBindingStatus    `json:"status"`
 	ResourceVersion       uint64                             `json:"resourceVersion"`
 	CreatedAt             time.Time                          `json:"createdAt"`
+}
+
+// ServiceRoleUnbindingReceipt is the non-secret terminal projection returned
+// by the product API. IAM retains the full relation, decisions and audit
+// history; this receipt cannot be used as an authorization permit.
+type ServiceRoleUnbindingReceipt struct {
+	Kind                  string                             `json:"kind"`
+	ServiceInstallationID string                             `json:"serviceInstallationId"`
+	BindingID             iamv1.WorkloadRoleBindingID        `json:"bindingId"`
+	RoleID                iamv1.RoleID                       `json:"roleId"`
+	Template              iamv1.ServiceRoleTemplateReference `json:"template"`
+	Status                iamv1.WorkloadRoleBindingStatus    `json:"status"`
+	ResourceVersion       uint64                             `json:"resourceVersion"`
+	CreatedAt             time.Time                          `json:"createdAt"`
+	RevokedAt             time.Time                          `json:"revokedAt"`
 }
 
 type FieldViolation struct {

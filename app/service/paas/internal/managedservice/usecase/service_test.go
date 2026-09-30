@@ -96,7 +96,7 @@ func TestInstallationRejectsUnavailableRegionBeforePersistence(t *testing.T) {
 	region := testRegion()
 	region.State = managedservicev1.RegionStale
 	service, err := NewService(repository, Config{
-		Catalog: domain.DefaultCatalog(), Region: region, WorkloadRoleBinder: &stubWorkloadRoleBinder{},
+		Catalog: domain.DefaultCatalog(), Region: region, WorkloadRoleAuthority: &stubWorkloadRoleBinder{},
 	})
 	if err != nil {
 		t.Fatalf("new service: %v", err)
@@ -170,7 +170,7 @@ func TestBindServiceRoleUsesVerifiedInstallationAndStableCommandIdentity(t *test
 	repository := newMemoryRepository()
 	binder := &stubWorkloadRoleBinder{}
 	service := newTestService(t, repository)
-	service.workloadRoleBinder = binder
+	service.workloadRoleAuthority = binder
 	authorization := testAuthorization()
 	quota, _, err := service.ActivateQuota(context.Background(), ActivateQuotaCommand{
 		Authorization: authorization, IdempotencyKey: "quota-role-binding",
@@ -225,13 +225,79 @@ func TestBindServiceRoleUsesVerifiedInstallationAndStableCommandIdentity(t *test
 	}
 }
 
+func TestUnbindServiceRoleUsesVerifiedInstallationAndStableCommandIdentity(t *testing.T) {
+	repository := newMemoryRepository()
+	authority := &stubWorkloadRoleBinder{}
+	service := newTestService(t, repository)
+	service.workloadRoleAuthority = authority
+	authorization := testAuthorization()
+	quota, _, err := service.ActivateQuota(context.Background(), ActivateQuotaCommand{
+		Authorization: authorization, IdempotencyKey: "quota-role-unbinding",
+		Request: managedservicev1.ActivateQuotaRequest{
+			OfferingID: domain.PostgreSQLOfferingID, QuotaShapeID: "pg-small", InstanceCount: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("activate quota: %v", err)
+	}
+	installation, _, err := service.CreateInstallation(context.Background(), CreateInstallationCommand{
+		Authorization: authorization, IdempotencyKey: "installation-role-unbinding",
+		Request: managedservicev1.CreateInstallationRequest{
+			ID: "postgres-role-unbinding", Name: "Postgres role unbinding",
+			OfferingID: domain.PostgreSQLOfferingID, QuotaEntitlementID: quota.ID, RegionID: "local-primary",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create installation: %v", err)
+	}
+	template := testServiceRoleTemplateReference()
+	access := testServiceLinkedRoleAccess(t, authorization.TenantID, installation.ID, template)
+	revoked := access.Bindings[0]
+	revokedAt := revoked.CreatedAt.Add(time.Second)
+	revoked.Status, revoked.ResourceVersion, revoked.UpdatedAt, revoked.RevokedAt =
+		iamv1.WorkloadRoleBindingRevoked, 2, revokedAt, &revokedAt
+	authority.revokeResult = revoked
+	command := UnbindServiceRoleCommand{
+		Authorization: authorization, Credential: "Bearer user-session",
+		InstallationID: installation.ID, BindingID: revoked.ID,
+		Request:        managedservicev1.UnbindServiceRoleRequest{ResourceVersion: 1},
+		IdempotencyKey: "unbind-role-request",
+	}
+	receipt, err := service.UnbindServiceRole(context.Background(), command)
+	if err != nil || receipt.ServiceInstallationID != installation.ID || receipt.Template != template ||
+		receipt.BindingID != revoked.ID || receipt.RoleID != revoked.RoleID || receipt.Status != iamv1.WorkloadRoleBindingRevoked ||
+		receipt.ResourceVersion != 2 || !receipt.RevokedAt.Equal(revokedAt) {
+		t.Fatalf("unbinding receipt=%#v err=%v", receipt, err)
+	}
+	wantRequestID := serviceRoleUnbindingRequestID(command.IdempotencyKey)
+	if authority.revokeCalls != 1 || authority.revokeBindingID != revoked.ID || authority.revokeVersion != 1 ||
+		authority.revokeRequest.Action != port.AuthorizeInstallationRoleUnbind ||
+		authority.revokeRequest.Resource != (port.ResourceReference{Kind: port.ResourceServiceInstallation, ID: installation.ID}) ||
+		authority.revokeRequest.RequestID != wantRequestID || authority.revokeRequest.Credential != command.Credential {
+		t.Fatalf("unbinding request=%#v calls=%d", authority.revokeRequest, authority.revokeCalls)
+	}
+	if _, err := service.UnbindServiceRole(context.Background(), command); err != nil || authority.revokeRequest.RequestID != wantRequestID {
+		t.Fatalf("equal unbinding replay did not keep command identity: request=%#v err=%v", authority.revokeRequest, err)
+	}
+	before := authority.revokeCalls
+	command.InstallationID = "postgres-absent"
+	if _, err := service.UnbindServiceRole(context.Background(), command); !errors.Is(err, ErrNotFound) || authority.revokeCalls != before {
+		t.Fatalf("absent unbinding resource reached IAM: calls=%d before=%d err=%v", authority.revokeCalls, before, err)
+	}
+	command.InstallationID = installation.ID
+	command.Authorization.SubjectType = port.SubjectServiceAccount
+	if _, err := service.UnbindServiceRole(context.Background(), command); !errors.Is(err, ErrInvalidArgument) || authority.revokeCalls != before {
+		t.Fatalf("service subject reached USER unbinding: calls=%d before=%d err=%v", authority.revokeCalls, before, err)
+	}
+}
+
 func newTestService(t *testing.T, repository Repository) *Service {
 	t.Helper()
 	var operationSequence atomic.Uint32
 	service, err := NewService(repository, Config{
 		Catalog: domain.DefaultCatalog(), Region: testRegion(),
-		WorkloadRoleBinder: &stubWorkloadRoleBinder{},
-		NewQuotaID:         func() (string, error) { return "quota-test", nil },
+		WorkloadRoleAuthority: &stubWorkloadRoleBinder{},
+		NewQuotaID:            func() (string, error) { return "quota-test", nil },
 		NewOperationID: func() (string, error) {
 			if operationSequence.Add(1) == 1 {
 				return "operation-one", nil
@@ -246,11 +312,16 @@ func newTestService(t *testing.T, repository Repository) *Service {
 }
 
 type stubWorkloadRoleBinder struct {
-	calls    int
-	template iamv1.ServiceRoleTemplateReference
-	request  port.AuthorizationRequest
-	result   iamv1.ServiceLinkedRoleAccess
-	err      error
+	calls           int
+	template        iamv1.ServiceRoleTemplateReference
+	request         port.AuthorizationRequest
+	result          iamv1.ServiceLinkedRoleAccess
+	revokeCalls     int
+	revokeBindingID iamv1.WorkloadRoleBindingID
+	revokeVersion   uint64
+	revokeRequest   port.AuthorizationRequest
+	revokeResult    iamv1.WorkloadRoleBinding
+	err             error
 }
 
 func (binder *stubWorkloadRoleBinder) BindWorkloadRole(
@@ -262,6 +333,17 @@ func (binder *stubWorkloadRoleBinder) BindWorkloadRole(
 	binder.template = template
 	binder.request = request
 	return binder.result, binder.err
+}
+
+func (binder *stubWorkloadRoleBinder) RevokeWorkloadRole(
+	_ context.Context,
+	bindingID iamv1.WorkloadRoleBindingID,
+	resourceVersion uint64,
+	request port.AuthorizationRequest,
+) (iamv1.WorkloadRoleBinding, error) {
+	binder.revokeCalls++
+	binder.revokeBindingID, binder.revokeVersion, binder.revokeRequest = bindingID, resourceVersion, request
+	return binder.revokeResult, binder.err
 }
 
 func testServiceRoleTemplateReference() iamv1.ServiceRoleTemplateReference {

@@ -320,6 +320,53 @@ func TestCreateWorkloadRoleBindingRequestHasOneWorkloadAndCommandIdentity(t *tes
 	}
 }
 
+func TestRevokeWorkloadRoleBindingRequestUsesRecordedBindingAuthority(t *testing.T) {
+	authorization, err := NewAuthorizationRequest(ActionManagedServiceInstallationRoleUnbind,
+		ResourceReference{Kind: ResourceServiceInstallation, ID: "service-installation-a"},
+		AuthorizationResourceInstance, "", "unbind-service-installation-a", "unbind-service-installation-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := RevokeWorkloadRoleBindingRequest{Authorization: authorization, ResourceVersion: 1}
+	if ValidateRevokeWorkloadRoleBindingRequest(request) != nil {
+		t.Fatal("valid workload role binding revocation rejected")
+	}
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded RevokeWorkloadRoleBindingRequest
+	if json.Unmarshal(encoded, &decoded) != nil || !reflect.DeepEqual(decoded, request) {
+		t.Fatal("workload role binding revocation did not strictly round trip")
+	}
+	for _, attack := range []string{
+		string(encoded[:len(encoded)-1]) + `,"accountId":"account-b"}`,
+		string(encoded[:len(encoded)-1]) + `,"roleId":"role-b"}`,
+		string(encoded[:len(encoded)-1]) + `,"template":{"id":"template-b"}}`,
+		string(encoded[:len(encoded)-1]) + `,"workload":{"kind":"SERVICE_INSTALLATION","id":"other"}}`,
+	} {
+		if json.Unmarshal([]byte(attack), &decoded) == nil {
+			t.Fatal("strict revocation decoder accepted a derived authority selector")
+		}
+	}
+	for _, mutate := range []func(*RevokeWorkloadRoleBindingRequest){
+		func(value *RevokeWorkloadRoleBindingRequest) { value.ResourceVersion = 2 },
+		func(value *RevokeWorkloadRoleBindingRequest) {
+			value.Authorization.ResourceMode = AuthorizationResourceCollection
+		},
+		func(value *RevokeWorkloadRoleBindingRequest) {
+			value.Authorization.CollectionUsage = AuthorizationCollectionCreate
+		},
+		func(value *RevokeWorkloadRoleBindingRequest) { value.Authorization.Resource.ID = "" },
+	} {
+		changed := request
+		mutate(&changed)
+		if ValidateRevokeWorkloadRoleBindingRequest(changed) == nil {
+			t.Fatal("invalid workload role binding revocation accepted")
+		}
+	}
+}
+
 func mustServiceRoleJSON(t *testing.T, value any) []byte {
 	t.Helper()
 	encoded, err := json.Marshal(value)

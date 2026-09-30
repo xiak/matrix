@@ -246,6 +246,151 @@ func (service *Authority) CreateWorkloadRoleBinding(
 	return result, nil
 }
 
+// RevokeWorkloadRoleBinding performs the one terminal consent transition. The
+// binding is loaded under the authenticated service and USER sources before
+// decisions are made, so a path ID cannot select another Account, Role,
+// template, workload or service principal.
+func (service *Authority) RevokeWorkloadRoleBinding(
+	ctx context.Context,
+	serviceCredential iamv1.Secret,
+	subjectCredential iamv1.Secret,
+	id iamv1.WorkloadRoleBindingID,
+	request iamv1.RevokeWorkloadRoleBindingRequest,
+) (iamv1.WorkloadRoleBinding, error) {
+	if iamv1.ValidateID("bindingId", string(id)) != nil ||
+		iamv1.ValidateRevokeWorkloadRoleBindingRequest(request) != nil {
+		return iamv1.WorkloadRoleBinding{}, ErrInvalidArgument
+	}
+	requestDigest, err := digestSanitized("workload-role-binding-revoke:"+string(id), request)
+	if err != nil {
+		return iamv1.WorkloadRoleBinding{}, err
+	}
+	var result iamv1.WorkloadRoleBinding
+	denied := false
+	err = service.withinTransaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
+		denied = false
+		now, err := transactionTime(transactionContext, transaction)
+		if err != nil {
+			return err
+		}
+		caller, err := service.authenticateService(transactionContext, transaction, serviceCredential)
+		if err != nil {
+			return err
+		}
+		subject, err := service.authenticateSession(transactionContext, transaction, subjectCredential, now)
+		if err != nil {
+			return err
+		}
+		if err := transaction.LockWorkloadRoleBindingSources(transactionContext,
+			subject.Subject.Organization.ID, subject.Subject.Principal.ID, subject.Subject.Session.ID,
+			caller.LookupDigest, caller.Identity.Purpose); err != nil {
+			return err
+		}
+		target, err := transaction.PrepareWorkloadRoleBindingRevocation(transactionContext,
+			subject.Subject.Organization.ID, id, caller.LookupDigest, caller.Identity.Purpose)
+		if err != nil {
+			return err
+		}
+		if iamv1.ValidateServiceLinkedRoleAccess(target) != nil || len(target.Bindings) != 1 {
+			return ErrUnavailable
+		}
+		binding, relation := target.Bindings[0], target.Relation
+		if binding.ID != id || binding.AccountID != subject.Subject.Organization.ID ||
+			binding.RoleID != relation.Role.ID || binding.Template != relation.Template ||
+			relation.Role.AccountID != subject.Subject.Organization.ID ||
+			relation.ServicePrincipal != (iamv1.ServicePrincipalReference{
+				InstallationID: caller.Identity.InstallationID,
+				PrincipalID:    caller.Identity.PrincipalID,
+				Purpose:        caller.Identity.Purpose,
+			}) {
+			return ErrForbidden
+		}
+		template, found, err := authority.LookupServiceRoleTemplate(binding.Template)
+		if err != nil || !found || iamv1.ValidateServiceRoleTemplate(template) != nil {
+			return ErrUnavailable
+		}
+		workloadRegistered := false
+		for _, workload := range template.Spec.Workloads {
+			if workload.ResourceKind == binding.Workload.Kind &&
+				workload.UnbindAction == request.Authorization.Action {
+				workloadRegistered = true
+				break
+			}
+		}
+		if !workloadRegistered || request.Authorization.Profile.Product != template.Spec.Product ||
+			request.Authorization.Resource != binding.Workload || caller.Identity.Purpose != template.Spec.ServicePurpose {
+			return ErrInvalidArgument
+		}
+		authorizationDigest, err := digestSanitized("authorization", request.Authorization)
+		if err != nil {
+			return err
+		}
+		workloadDecision, err := service.decideAndRecord(transactionContext, transaction, request.Authorization,
+			authorizationDigest, now,
+			authorizationActor{organizationID: subject.Subject.Organization.ID,
+				subject: iamv1.Subject{Type: iamv1.SubjectUser, ID: string(subject.Subject.Principal.ID)}},
+			func(decisionID iamv1.DecisionID) (authority.AuthorizationEvaluation, error) {
+				return authority.Decide(subject.Subject, caller.Identity.Purpose, request.Authorization, decisionID, now)
+			})
+		if err != nil {
+			return err
+		}
+		if !workloadDecision.Allowed {
+			denied = true
+			return nil
+		}
+		bindingRevokeDecision, err := service.managementDecision(transactionContext, transaction, subject,
+			iamv1.ActionIAMWorkloadRoleBindingRevoke,
+			iamv1.ResourceReference{Kind: iamv1.ResourceWorkloadRoleBinding, ID: string(id)},
+			iamv1.AuthorizationResourceInstance, "", request.Authorization.RequestID, now)
+		if err != nil {
+			return err
+		}
+		if !bindingRevokeDecision.Allowed {
+			denied = true
+			return nil
+		}
+		rolePassDecision, err := service.managementDecision(transactionContext, transaction, subject,
+			iamv1.ActionIAMRolePass,
+			iamv1.ResourceReference{Kind: iamv1.ResourceRole, ID: string(binding.RoleID)},
+			iamv1.AuthorizationResourceInstance, "", request.Authorization.RequestID, now)
+		if err != nil {
+			return err
+		}
+		if !rolePassDecision.Allowed {
+			denied = true
+			return nil
+		}
+		event, err := service.newManagementEvent(subject, auditv1.ActionIAMWorkloadRoleBindingRevoked,
+			auditv1.TargetWorkloadRoleBinding, string(id), bindingRevokeDecision.ID,
+			requestDigest, request.Authorization.RequestID, now)
+		if err != nil {
+			return err
+		}
+		result, err = transaction.RevokeWorkloadRoleBinding(transactionContext, WorkloadRoleBindingRevocation{
+			AccountID: subject.Subject.Organization.ID, BindingID: id,
+			ActorPrincipalID: subject.Subject.Principal.ID, ActorSessionID: subject.Subject.Session.ID,
+			ServiceLookupDigest: caller.LookupDigest, ServicePurpose: caller.Identity.Purpose,
+			Request: request, RequestDigest: requestDigest,
+			WorkloadDecisionID: workloadDecision.ID, BindingRevokeDecisionID: bindingRevokeDecision.ID,
+			RolePassDecisionID: rolePassDecision.ID, AuditEvent: event,
+		})
+		return err
+	})
+	if err != nil {
+		return iamv1.WorkloadRoleBinding{}, err
+	}
+	if denied {
+		return iamv1.WorkloadRoleBinding{}, ErrForbidden
+	}
+	if iamv1.ValidateWorkloadRoleBinding(result) != nil || result.ID != id ||
+		result.Status != iamv1.WorkloadRoleBindingRevoked || result.ResourceVersion != request.ResourceVersion+1 ||
+		result.Workload != request.Authorization.Resource {
+		return iamv1.WorkloadRoleBinding{}, ErrUnavailable
+	}
+	return result, nil
+}
+
 func serviceRoleConsentIdentities(subject SessionCredential, caller ServiceCredential,
 	request iamv1.CreateWorkloadRoleBindingRequest) (iamv1.RoleID, iamv1.RoleTrustVersionID, iamv1.WorkloadRoleBindingID, error) {
 	roleDigest, err := digestSanitized("service-linked-role-identity", struct {

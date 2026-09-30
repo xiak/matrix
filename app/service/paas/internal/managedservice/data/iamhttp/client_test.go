@@ -134,6 +134,108 @@ func TestBindWorkloadRoleFailsClosedOnInvalidShapeStatusAndResponse(t *testing.T
 	}
 }
 
+func TestRevokeWorkloadRoleUsesServiceAndCurrentUserCredentials(t *testing.T) {
+	binding := clientTestServiceLinkedRoleAccess(t, clientTestTemplateReference(), "postgres-primary").Bindings[0]
+	revokedAt := binding.CreatedAt.Add(time.Second)
+	binding.Status, binding.ResourceVersion, binding.UpdatedAt, binding.RevokedAt =
+		iamv1.WorkloadRoleBindingRevoked, 2, revokedAt, &revokedAt
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodDelete || request.URL.Path != "/v1/internal/workload-role-bindings/binding-reader" ||
+			request.Header.Get("Authorization") != "Bearer paas-service-secret" ||
+			request.Header.Get("Matrix-Subject-Credential") != "user-session-secret" ||
+			request.Header.Get("Content-Type") != "application/json" {
+			t.Errorf("unexpected IAM revocation request: method=%s path=%s headers=%v", request.Method, request.URL.Path, request.Header)
+			response.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		var command iamv1.RevokeWorkloadRoleBindingRequest
+		if iamv1.DecodeRequest(request.Body, &command) != nil || command.ResourceVersion != 1 ||
+			command.Authorization.Action != iamv1.ActionManagedServiceInstallationRoleUnbind ||
+			command.Authorization.Resource != binding.Workload || command.Authorization.RequestID != "msru-command-one" {
+			t.Errorf("unexpected revocation command: %#v", command)
+			response.WriteHeader(http.StatusUnprocessableEntity)
+			return
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(response).Encode(binding)
+	}))
+	defer server.Close()
+	serviceCredential, err := iamv1.NewSecret("paas-service-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := NewClient(Config{Endpoint: server.URL, ServiceCredential: serviceCredential})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := client.RevokeWorkloadRole(t.Context(), binding.ID, 1, port.AuthorizationRequest{
+		Credential: "Bearer user-session-secret", Action: port.AuthorizeInstallationRoleUnbind,
+		Resource:     port.ResourceReference{Kind: port.ResourceServiceInstallation, ID: "postgres-primary"},
+		ResourceMode: iamv1.AuthorizationResourceInstance, RequestID: "msru-command-one",
+	})
+	if err != nil || result.ID != binding.ID || result.Status != iamv1.WorkloadRoleBindingRevoked {
+		t.Fatalf("result=%#v err=%v", result, err)
+	}
+}
+
+func TestRevokeWorkloadRoleFailsClosedOnInvalidShapeStatusAndResponse(t *testing.T) {
+	base := port.AuthorizationRequest{
+		Credential: "Bearer user-session-secret", Action: port.AuthorizeInstallationRoleUnbind,
+		Resource:     port.ResourceReference{Kind: port.ResourceServiceInstallation, ID: "postgres-primary"},
+		ResourceMode: iamv1.AuthorizationResourceInstance, RequestID: "msru-command-one",
+	}
+	serviceCredential, _ := iamv1.NewSecret("paas-service-secret")
+	for name, status := range map[string]int{
+		"expired user": http.StatusUnauthorized, "revoked authority": http.StatusForbidden,
+		"revocation conflict": http.StatusConflict, "authority outage": http.StatusServiceUnavailable,
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) { response.WriteHeader(status) }))
+			defer server.Close()
+			client, err := NewClient(Config{Endpoint: server.URL, ServiceCredential: serviceCredential})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = client.RevokeWorkloadRole(t.Context(), "binding-reader", 1, base)
+			want := port.ErrAuthorizationUnavailable
+			switch status {
+			case http.StatusUnauthorized:
+				want = port.ErrUnauthenticated
+			case http.StatusForbidden:
+				want = port.ErrPermissionDenied
+			case http.StatusConflict:
+				want = port.ErrWorkloadRoleConflict
+			}
+			if !errors.Is(err, want) {
+				t.Fatalf("status=%d err=%v want=%v", status, err, want)
+			}
+		})
+	}
+	active := clientTestServiceLinkedRoleAccess(t, clientTestTemplateReference(), "postgres-primary").Bindings[0]
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(response).Encode(active)
+	}))
+	defer server.Close()
+	client, err := NewClient(Config{Endpoint: server.URL, ServiceCredential: serviceCredential})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.RevokeWorkloadRole(t.Context(), active.ID, 1, base); !errors.Is(err, port.ErrAuthorizationUnavailable) {
+		t.Fatalf("active forged response error=%v", err)
+	}
+	changed := base
+	changed.Action = port.AuthorizeInstallationRead
+	if _, err := client.RevokeWorkloadRole(context.Background(), active.ID, 1, changed); !errors.Is(err, port.ErrAuthorizationUnavailable) {
+		t.Fatalf("wrong product action error=%v", err)
+	}
+	changed = base
+	changed.Credential = "Basic user-session-secret"
+	if _, err := client.RevokeWorkloadRole(context.Background(), active.ID, 1, changed); !errors.Is(err, port.ErrUnauthenticated) {
+		t.Fatalf("non-bearer subject error=%v", err)
+	}
+}
+
 func clientTestTemplateReference() iamv1.ServiceRoleTemplateReference {
 	return iamv1.ServiceRoleTemplateReference{
 		ID: "managedservice.installation-reader", Version: 1,

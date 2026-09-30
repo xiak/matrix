@@ -148,6 +148,15 @@ type CreateWorkloadRoleBindingRequest struct {
 	Authorization AuthorizationRequest         `json:"authorization"`
 }
 
+// RevokeWorkloadRoleBindingRequest carries only the product PEP decision for
+// the binding's already-recorded workload and its expected current revision.
+// The path binding is authoritative for Account, Role, template, service
+// principal and workload; none of those identities may be selected again.
+type RevokeWorkloadRoleBindingRequest struct {
+	Authorization   AuthorizationRequest `json:"authorization"`
+	ResourceVersion uint64               `json:"resourceVersion"`
+}
+
 func ValidateServicePrincipalReference(value ServicePrincipalReference) error {
 	if !knownServicePurpose(value.Purpose) {
 		return errors.New("service principal reference is invalid")
@@ -239,6 +248,15 @@ func ValidateCreateWorkloadRoleBindingRequest(value CreateWorkloadRoleBindingReq
 		value.Authorization.ResourceMode != AuthorizationResourceInstance ||
 		value.Authorization.CollectionUsage != "" {
 		return errors.New("workload role binding request is invalid")
+	}
+	return nil
+}
+
+func ValidateRevokeWorkloadRoleBindingRequest(value RevokeWorkloadRoleBindingRequest) error {
+	if ValidateAuthorizationRequest(value.Authorization) != nil ||
+		value.Authorization.ResourceMode != AuthorizationResourceInstance ||
+		value.Authorization.CollectionUsage != "" || value.ResourceVersion != 1 {
+		return errors.New("workload role binding revocation request is invalid")
 	}
 	return nil
 }
@@ -448,5 +466,16 @@ func (value *CreateWorkloadRoleBindingRequest) UnmarshalJSON(source []byte) erro
 		return contractjson.ErrInvalidDocument
 	}
 	*value = CreateWorkloadRoleBindingRequest(decoded)
+	return nil
+}
+
+func (value *RevokeWorkloadRoleBindingRequest) UnmarshalJSON(source []byte) error {
+	type wire RevokeWorkloadRoleBindingRequest
+	var decoded wire
+	if contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil ||
+		ValidateRevokeWorkloadRoleBindingRequest(RevokeWorkloadRoleBindingRequest(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = RevokeWorkloadRoleBindingRequest(decoded)
 	return nil
 }

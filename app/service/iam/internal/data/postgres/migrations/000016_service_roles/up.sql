@@ -70,7 +70,8 @@ BEGIN
         IF NOT EXISTS(SELECT 1 FROM iam.service_role_templates template
           WHERE template.id=seed->>'id' AND template.version=(seed->>'version')::bigint
             AND template.canonical_spec=seed->>'canonicalSpec' AND template.content_digest=seed->>'contentDigest'
-            AND template.status=seed->>'status') THEN
+            AND (template.status=seed->>'status'
+              OR (template.status='RETIRED' AND seed->>'status'='ACTIVE'))) THEN
             RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='immutable service role template conflicts'; END IF;
     END LOOP;
     IF EXISTS(SELECT 1 FROM iam.service_role_templates template WHERE template.status='ACTIVE'
@@ -497,6 +498,221 @@ EXCEPTION WHEN invalid_text_representation OR numeric_value_out_of_range OR inva
     RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='workload role binding command is invalid';
 END $function$;
 
+-- Resolve and lock one existing binding only after both current credentials
+-- have been locked by lock_workload_role_binding_sources. The binding remains
+-- the authority for Account, Role, template, workload and service principal;
+-- its path ID is never a selector for any of those identities.
+CREATE OR REPLACE FUNCTION iam.prepare_workload_role_binding_revocation(
+    tenant text,binding_id text,service_lookup_digest text,service_purpose text)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE service_index iam.service_credential_index%ROWTYPE;
+    service_credential iam.service_credentials%ROWTYPE; service_installation text; target_role text;
+    relation iam.service_linked_roles%ROWTYPE; binding iam.workload_role_bindings%ROWTYPE;
+BEGIN
+    IF COALESCE(tenant,'') !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      OR COALESCE(binding_id,'') !~ '^wrb-[0-9a-f]{64}$'
+      OR COALESCE(service_lookup_digest,'') !~ '^sha256:[0-9a-f]{64}$'
+      OR service_purpose NOT IN ('IAM','PAAS','AUDIT','INSTALLATION_VERIFIER') THEN
+        RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='workload role binding revocation target is invalid'; END IF;
+
+    SELECT * INTO service_index FROM iam.service_credential_index indexed
+      WHERE indexed.lookup_digest=service_lookup_digest;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='service role producer is unavailable'; END IF;
+    PERFORM set_config('matrix.iam_tenant_id',service_index.tenant_id,true);
+    SELECT credential.* INTO service_credential FROM iam.service_credentials credential
+      JOIN iam.accounts account ON account.id=credential.tenant_id AND account.status='ACTIVE'
+      JOIN iam.principals principal ON principal.tenant_id=credential.tenant_id AND principal.id=credential.principal_id
+        AND principal.principal_type='SERVICE_ACCOUNT' AND principal.status='ACTIVE' AND principal.deleted_at IS NULL
+      WHERE credential.tenant_id=service_index.tenant_id AND credential.principal_id=service_index.principal_id
+        AND credential.lookup_digest=service_lookup_digest AND credential.purpose=service_purpose
+        AND credential.revoked_at IS NULL FOR SHARE OF credential,account,principal;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='service role producer is unavailable'; END IF;
+    SELECT receipt.installation_id INTO service_installation FROM iam.bootstrap_receipts receipt
+      WHERE receipt.singleton AND receipt.organization_id=service_index.tenant_id FOR SHARE;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='service role installation is unavailable'; END IF;
+
+    PERFORM set_config('matrix.iam_tenant_id',tenant,true);
+    SELECT candidate.role_id INTO target_role FROM iam.workload_role_bindings candidate
+      WHERE candidate.tenant_id=tenant AND candidate.id=binding_id;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='workload role binding is unavailable'; END IF;
+    PERFORM 1 FROM iam.roles role_value WHERE role_value.tenant_id=tenant AND role_value.id=target_role
+      AND role_value.management='SERVICE_LINKED' AND role_value.deleted_at IS NULL FOR UPDATE;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='service-linked role is unavailable'; END IF;
+    SELECT * INTO relation FROM iam.service_linked_roles stored
+      WHERE stored.tenant_id=tenant AND stored.role_id=target_role FOR SHARE;
+    SELECT * INTO binding FROM iam.workload_role_bindings stored
+      WHERE stored.tenant_id=tenant AND stored.id=binding_id AND stored.role_id=target_role FOR UPDATE;
+    IF NOT FOUND OR relation.role_id IS NULL
+      OR ROW(relation.service_account_id,relation.service_installation_id,relation.service_principal_id,relation.service_purpose)
+         IS DISTINCT FROM ROW(service_index.tenant_id,service_installation,service_credential.principal_id,service_purpose)
+      OR ROW(binding.template_id,binding.template_version,binding.template_digest)
+         IS DISTINCT FROM ROW(relation.template_id,relation.template_version,relation.template_digest) THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='workload role binding is unavailable'; END IF;
+    RETURN jsonb_build_object('apiVersion','iam.matrix.xiak.com/v1','kind','ServiceLinkedRoleAccess',
+      'relation',iam.service_linked_role_snapshot(tenant,target_role),
+      'bindings',jsonb_build_array(iam.workload_role_binding_snapshot(tenant,binding_id)));
+END $function$;
+
+-- This is the only terminal binding transition. Current authorization is
+-- required even for an equal replay; the retained original outbox fact and
+-- decision trio prove that a previous success was the same immutable intent.
+CREATE OR REPLACE FUNCTION iam.revoke_workload_role_binding(
+    tenant text,actor text,actor_session text,service_lookup_digest text,service_purpose text,
+    binding_id text,request_document text,request_digest text,workload_decision text,
+    binding_revoke_decision text,role_pass_decision text,binding_event jsonb)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE request_value jsonb; service_index iam.service_credential_index%ROWTYPE;
+    service_credential iam.service_credentials%ROWTYPE; service_installation text;
+    stored iam.workload_role_bindings%ROWTYPE; relation iam.service_linked_roles%ROWTYPE;
+    template iam.service_role_templates%ROWTYPE; role_value iam.roles%ROWTYPE;
+    target_role text; unbind_action text; effective_now timestamptz(6):=transaction_timestamp();
+BEGIN
+    IF COALESCE(tenant,'') !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      OR COALESCE(actor,'') !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      OR COALESCE(actor_session,'') !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      OR COALESCE(service_lookup_digest,'') !~ '^sha256:[0-9a-f]{64}$'
+      OR service_purpose NOT IN ('IAM','PAAS','AUDIT','INSTALLATION_VERIFIER')
+      OR COALESCE(binding_id,'') !~ '^wrb-[0-9a-f]{64}$'
+      OR COALESCE(request_digest,'') !~ '^sha256:[0-9a-f]{64}$'
+      OR COALESCE(workload_decision,'') !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      OR COALESCE(binding_revoke_decision,'') !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      OR COALESCE(role_pass_decision,'') !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      OR request_document IS NULL OR octet_length(request_document)>262144
+      OR NOT (request_document IS JSON OBJECT WITH UNIQUE KEYS)
+      OR request_digest IS DISTINCT FROM 'sha256:'||encode(sha256(convert_to('matrix.iam.request.v1','UTF8')||decode('00','hex')
+        ||convert_to('workload-role-binding-revoke:'||binding_id,'UTF8')||decode('00','hex')||convert_to(request_document,'UTF8')),'hex') THEN
+        RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='workload role binding revocation command is invalid'; END IF;
+    request_value:=request_document::jsonb;
+    IF (SELECT array_agg(key ORDER BY key) FROM jsonb_object_keys(request_value) key)
+         IS DISTINCT FROM ARRAY['authorization','resourceVersion']
+      OR jsonb_typeof(request_value->'authorization')<>'object'
+      OR jsonb_typeof(request_value->'resourceVersion')<>'number'
+      OR (request_value->>'resourceVersion')::bigint<>1
+      OR request_value#>>'{authorization,resourceMode}'<>'INSTANCE'
+      OR request_value#>'{authorization,collectionUsage}' IS NOT NULL THEN
+        RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='workload role binding revocation request is invalid'; END IF;
+
+    -- Re-acquire the complete source lock inside the write authority. Calls
+    -- from the use case already hold it, while direct adapter misuse cannot
+    -- bypass current service, USER, Session or MFA validity.
+    PERFORM iam.lock_workload_role_binding_sources(tenant,actor,actor_session,service_lookup_digest,service_purpose);
+    SELECT * INTO service_index FROM iam.service_credential_index indexed
+      WHERE indexed.lookup_digest=service_lookup_digest;
+    PERFORM set_config('matrix.iam_tenant_id',service_index.tenant_id,true);
+    SELECT credential.* INTO service_credential FROM iam.service_credentials credential
+      JOIN iam.accounts account ON account.id=credential.tenant_id AND account.status='ACTIVE'
+      JOIN iam.principals principal ON principal.tenant_id=credential.tenant_id AND principal.id=credential.principal_id
+        AND principal.principal_type='SERVICE_ACCOUNT' AND principal.status='ACTIVE' AND principal.deleted_at IS NULL
+      WHERE credential.tenant_id=service_index.tenant_id AND credential.principal_id=service_index.principal_id
+        AND credential.lookup_digest=service_lookup_digest AND credential.purpose=service_purpose
+        AND credential.revoked_at IS NULL FOR SHARE OF credential,account,principal;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='service role producer is unavailable'; END IF;
+    SELECT receipt.installation_id INTO service_installation FROM iam.bootstrap_receipts receipt
+      WHERE receipt.singleton AND receipt.organization_id=service_index.tenant_id FOR SHARE;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='service role installation is unavailable'; END IF;
+
+    PERFORM set_config('matrix.iam_tenant_id',tenant,true);
+    SELECT candidate.role_id INTO target_role FROM iam.workload_role_bindings candidate
+      WHERE candidate.tenant_id=tenant AND candidate.id=binding_id;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='workload role binding is unavailable'; END IF;
+    SELECT * INTO role_value FROM iam.roles candidate WHERE candidate.tenant_id=tenant AND candidate.id=target_role
+      AND candidate.management='SERVICE_LINKED' AND candidate.deleted_at IS NULL FOR UPDATE;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='service-linked role is unavailable'; END IF;
+    SELECT * INTO relation FROM iam.service_linked_roles candidate
+      WHERE candidate.tenant_id=tenant AND candidate.role_id=role_value.id FOR SHARE;
+    SELECT * INTO stored FROM iam.workload_role_bindings candidate
+      WHERE candidate.tenant_id=tenant AND candidate.id=binding_id AND candidate.role_id=role_value.id FOR UPDATE;
+    IF NOT FOUND OR relation.role_id IS NULL
+      OR ROW(relation.service_account_id,relation.service_installation_id,relation.service_principal_id,relation.service_purpose)
+         IS DISTINCT FROM ROW(service_index.tenant_id,service_installation,service_credential.principal_id,service_purpose)
+      OR ROW(stored.template_id,stored.template_version,stored.template_digest)
+         IS DISTINCT FROM ROW(relation.template_id,relation.template_version,relation.template_digest) THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='workload role binding is unavailable'; END IF;
+    SELECT * INTO template FROM iam.service_role_templates published
+      WHERE published.id=stored.template_id AND published.version=stored.template_version
+        AND published.content_digest=stored.template_digest FOR SHARE;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='service role template is unavailable'; END IF;
+    SELECT workload->>'unbindAction' INTO unbind_action
+      FROM jsonb_array_elements(template.canonical_spec::jsonb->'workloads') workload
+      WHERE workload->>'resourceKind'=stored.workload_kind;
+    IF NOT FOUND OR unbind_action IS DISTINCT FROM request_value#>>'{authorization,action}'
+      OR request_value#>>'{authorization,profile,product}' IS DISTINCT FROM template.canonical_spec::jsonb->>'product'
+      OR request_value#>>'{authorization,resource,kind}' IS DISTINCT FROM stored.workload_kind
+      OR request_value#>>'{authorization,resource,id}' IS DISTINCT FROM stored.workload_id
+      OR template.canonical_spec::jsonb->>'servicePurpose' IS DISTINCT FROM service_purpose THEN
+        RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='service role workload revocation is invalid'; END IF;
+
+    PERFORM iam.assert_allowed_decision(tenant,actor,workload_decision,unbind_action,
+      stored.workload_kind,stored.workload_id,'INSTANCE',NULL);
+    PERFORM iam.assert_allowed_decision(tenant,actor,binding_revoke_decision,
+      'iam.workload-role-binding.revoke','WORKLOAD_ROLE_BINDING',stored.id,'INSTANCE',NULL);
+    PERFORM iam.assert_allowed_decision(tenant,actor,role_pass_decision,
+      'iam.role.pass','ROLE',stored.role_id,'INSTANCE',NULL);
+    IF NOT EXISTS(SELECT 1 FROM iam.authorization_decisions decision
+      JOIN iam.authorization_profiles profile ON profile.product=decision.profile_product
+        AND profile.revision=decision.profile_revision AND profile.content_digest=decision.profile_content_digest
+      WHERE decision.tenant_id=tenant AND decision.id=workload_decision
+        AND decision.document->'profile'=request_value#>'{authorization,profile}'
+        AND decision.document->'action'=request_value#>'{authorization,action}'
+        AND decision.document->'resource'=request_value#>'{authorization,resource}'
+        AND decision.document->'requestId'=request_value#>'{authorization,requestId}'
+        AND decision.document->'correlationId'=request_value#>'{authorization,correlationId}'
+        AND decision.document->'networkContext' IS NOT DISTINCT FROM request_value#>'{authorization,networkContext}'
+        AND decision.document->'resourceMode'=request_value#>'{authorization,resourceMode}'
+        AND NOT decision.document ? 'collectionUsage'
+        AND profile.canonical_document::jsonb->>'callingService'=service_purpose) THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='workload role authorization is unavailable'; END IF;
+    PERFORM iam.assert_audit_event(binding_event,tenant,'iam.workload-role-binding.revoked',
+      'WORKLOAD_ROLE_BINDING',stored.id,'SUCCEEDED');
+    PERFORM iam.assert_user_audit_actor(tenant,actor,binding_event);
+    IF binding_event->>'iamDecisionId' IS DISTINCT FROM binding_revoke_decision
+      OR binding_event->>'requestId' IS DISTINCT FROM request_value#>>'{authorization,requestId}'
+      OR binding_event->>'requestDigest' IS DISTINCT FROM request_digest THEN
+        RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='workload role revocation audit correlation is invalid'; END IF;
+
+    IF stored.revoked_at IS NOT NULL THEN
+        IF stored.status<>'REVOKED' OR stored.resource_version<>(request_value->>'resourceVersion')::bigint+1
+          OR NOT EXISTS(SELECT 1 FROM iam.audit_outbox fact
+            JOIN iam.authorization_decisions decision ON decision.tenant_id=fact.tenant_id
+              AND decision.id=fact.event_document->>'iamDecisionId'
+            WHERE fact.tenant_id=tenant AND fact.event_document->>'action'='iam.workload-role-binding.revoked'
+              AND fact.event_document#>>'{target,kind}'='WORKLOAD_ROLE_BINDING'
+              AND fact.event_document#>>'{target,id}'=stored.id
+              AND fact.event_document->>'requestId'=request_value#>>'{authorization,requestId}'
+              AND fact.event_document->>'requestDigest'=request_digest
+              AND fact.event_document#>>'{actor,type}'='USER' AND fact.event_document#>>'{actor,id}'=actor
+              AND (fact.event_document->>'occurredAt')::timestamptz=stored.revoked_at
+              AND decision.allowed AND decision.action_name='iam.workload-role-binding.revoke'
+              AND decision.target_kind='WORKLOAD_ROLE_BINDING' AND decision.target_id=stored.id
+              AND decision.principal_id=actor AND decision.request_id=fact.event_document->>'requestId'
+              AND decision.decided_at=stored.revoked_at)
+          OR NOT EXISTS(SELECT 1 FROM iam.authorization_decisions decision
+            WHERE decision.tenant_id=tenant AND decision.principal_id=actor AND decision.allowed
+              AND decision.action_name=unbind_action AND decision.target_kind=stored.workload_kind
+              AND decision.target_id=stored.workload_id AND decision.request_id=request_value#>>'{authorization,requestId}'
+              AND decision.decided_at=stored.revoked_at)
+          OR NOT EXISTS(SELECT 1 FROM iam.authorization_decisions decision
+            WHERE decision.tenant_id=tenant AND decision.principal_id=actor AND decision.allowed
+              AND decision.action_name='iam.role.pass' AND decision.target_kind='ROLE'
+              AND decision.target_id=stored.role_id AND decision.request_id=request_value#>>'{authorization,requestId}'
+              AND decision.decided_at=stored.revoked_at) THEN
+            RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='workload role binding revocation intent conflicts'; END IF;
+        RETURN iam.workload_role_binding_snapshot(tenant,stored.id);
+    END IF;
+    IF stored.status<>'ACTIVE' OR stored.resource_version<>(request_value->>'resourceVersion')::bigint
+      OR role_value.security_generation=9007199254740991 THEN
+        RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='workload role binding revision conflicts'; END IF;
+    UPDATE iam.workload_role_bindings binding SET status='REVOKED',resource_version=stored.resource_version+1,
+      updated_at=effective_now,revoked_at=effective_now WHERE binding.tenant_id=tenant AND binding.id=stored.id;
+    UPDATE iam.roles role_update SET security_generation=role_update.security_generation+1
+      WHERE role_update.tenant_id=tenant AND role_update.id=stored.role_id;
+    INSERT INTO iam.audit_outbox(tenant_id,event_id,event_document,next_attempt_at,created_at,updated_at)
+      VALUES(tenant,binding_event->>'eventId',binding_event,effective_now,effective_now,effective_now);
+    RETURN iam.workload_role_binding_snapshot(tenant,stored.id);
+EXCEPTION WHEN invalid_text_representation OR numeric_value_out_of_range OR invalid_datetime_format OR datetime_field_overflow THEN
+    RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='workload role binding revocation command is invalid';
+END $function$;
+
 -- These read entrypoints expose only the authenticated Account's consent.
 -- They re-check the current authorization decision in the database and keep
 -- binding history separate from the bounded relation directory.
@@ -567,6 +783,10 @@ REVOKE ALL ON FUNCTION iam.lock_workload_role_binding_sources(text,text,text,tex
 REVOKE ALL ON FUNCTION iam.create_workload_role_binding(text,text,text,text,text,text,jsonb,jsonb,jsonb,jsonb,text,text,text,jsonb,jsonb)
   FROM PUBLIC,matrix_iam_worker,matrix_iam_credential_recovery,matrix_iam_backup_custody,
     matrix_iam_notification_worker,matrix_iam_authentication_recovery;
+REVOKE ALL ON FUNCTION iam.prepare_workload_role_binding_revocation(text,text,text,text),
+  iam.revoke_workload_role_binding(text,text,text,text,text,text,text,text,text,text,text,jsonb)
+  FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery,matrix_iam_backup_custody,
+    matrix_iam_notification_worker,matrix_iam_authentication_recovery;
 REVOKE ALL ON FUNCTION iam.list_service_linked_roles(text,text,text,text),
   iam.read_service_linked_role(text,text,text,text,text)
   FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery,matrix_iam_backup_custody,
@@ -574,6 +794,8 @@ REVOKE ALL ON FUNCTION iam.list_service_linked_roles(text,text,text,text),
 GRANT EXECUTE ON FUNCTION iam.lock_workload_role_binding_sources(text,text,text,text,text) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.create_workload_role_binding(text,text,text,text,text,text,jsonb,jsonb,jsonb,jsonb,text,text,text,jsonb,jsonb)
   TO matrix_iam_api;
+GRANT EXECUTE ON FUNCTION iam.prepare_workload_role_binding_revocation(text,text,text,text),
+  iam.revoke_workload_role_binding(text,text,text,text,text,text,text,text,text,text,text,jsonb) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.list_service_linked_roles(text,text,text,text),
   iam.read_service_linked_role(text,text,text,text,text) TO matrix_iam_api;
 
@@ -688,6 +910,31 @@ RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $funct
         AND has_function_privilege('matrix_iam_api',function_value.oid,'EXECUTE')
         AND NOT has_function_privilege('matrix_iam_worker',function_value.oid,'EXECUTE')
         AND NOT has_function_privilege('matrix_iam_credential_recovery',function_value.oid,'EXECUTE'))
+      AND EXISTS(SELECT 1 FROM pg_proc function_value WHERE function_value.oid=to_regprocedure(
+        'iam.prepare_workload_role_binding_revocation(text,text,text,text)')
+        AND function_value.proowner='matrix_iam_owner'::regrole AND function_value.prosecdef
+        AND function_value.prorettype='jsonb'::regtype AND NOT function_value.proretset
+        AND function_value.proargnames=ARRAY['tenant','binding_id','service_lookup_digest','service_purpose']
+        AND function_value.proconfig=ARRAY['search_path=pg_catalog, pg_temp']
+        AND has_function_privilege('matrix_iam_api',function_value.oid,'EXECUTE')
+        AND NOT has_function_privilege('matrix_iam_worker',function_value.oid,'EXECUTE')
+        AND NOT has_function_privilege('matrix_iam_credential_recovery',function_value.oid,'EXECUTE')
+        AND NOT has_function_privilege('matrix_iam_backup_custody',function_value.oid,'EXECUTE')
+        AND NOT has_function_privilege('matrix_iam_notification_worker',function_value.oid,'EXECUTE')
+        AND NOT has_function_privilege('matrix_iam_authentication_recovery',function_value.oid,'EXECUTE'))
+      AND EXISTS(SELECT 1 FROM pg_proc function_value WHERE function_value.oid=to_regprocedure(
+        'iam.revoke_workload_role_binding(text,text,text,text,text,text,text,text,text,text,text,jsonb)')
+        AND function_value.proowner='matrix_iam_owner'::regrole AND function_value.prosecdef
+        AND function_value.prorettype='jsonb'::regtype AND NOT function_value.proretset
+        AND function_value.proargnames=ARRAY['tenant','actor','actor_session','service_lookup_digest','service_purpose','binding_id',
+          'request_document','request_digest','workload_decision','binding_revoke_decision','role_pass_decision','binding_event']
+        AND function_value.proconfig=ARRAY['search_path=pg_catalog, pg_temp']
+        AND has_function_privilege('matrix_iam_api',function_value.oid,'EXECUTE')
+        AND NOT has_function_privilege('matrix_iam_worker',function_value.oid,'EXECUTE')
+        AND NOT has_function_privilege('matrix_iam_credential_recovery',function_value.oid,'EXECUTE')
+        AND NOT has_function_privilege('matrix_iam_backup_custody',function_value.oid,'EXECUTE')
+        AND NOT has_function_privilege('matrix_iam_notification_worker',function_value.oid,'EXECUTE')
+        AND NOT has_function_privilege('matrix_iam_authentication_recovery',function_value.oid,'EXECUTE'))
       AND EXISTS(SELECT 1 FROM pg_proc function_value WHERE function_value.oid=to_regprocedure(
         'iam.list_service_linked_roles(text,text,text,text)')
         AND function_value.proowner='matrix_iam_owner'::regrole AND function_value.prosecdef

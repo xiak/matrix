@@ -51,6 +51,7 @@ func buildDocument() object {
 				"name": "installationId", "in": "path", "required": true,
 				"schema": openapi31.Ref("Name"),
 			},
+			"BindingID": openapi31.PathIDParameter("bindingId"),
 		},
 		Responses: object{
 			"ProblemResponse": object{
@@ -135,6 +136,12 @@ func paths() object {
 				"InstallationID", "BindServiceRoleRequest", "ServiceRoleBindingReceipt",
 			),
 		},
+		"/v1/service-installations/{installationId}/service-role-bindings/{bindingId}": object{
+			"delete": resourceMutationOperationWithParameters(
+				"unbindServiceRole", "Revoke one exact service Role binding from this installation.",
+				[]string{"InstallationID", "BindingID"}, "UnbindServiceRoleRequest", "ServiceRoleUnbindingReceipt",
+			),
+		},
 	}
 }
 
@@ -166,14 +173,20 @@ func mutationOperation(operationID, summary, requestSchema, responseSchema, crea
 }
 
 func resourceMutationOperation(operationID, summary, parameter, requestSchema, responseSchema string) object {
+	return resourceMutationOperationWithParameters(operationID, summary, []string{parameter}, requestSchema, responseSchema)
+}
+
+func resourceMutationOperationWithParameters(operationID, summary string, parameters []string, requestSchema, responseSchema string) object {
 	responses := openapi31.ProblemResponses("400", "401", "403", "404", "409", "415", "500", "503", "504")
 	responses["200"] = openapi31.JSONResponse("Durable service Role binding or equal idempotent replay.", responseSchema)
+	operationParameters := make([]any, 0, len(parameters)+1)
+	for _, parameter := range parameters {
+		operationParameters = append(operationParameters, openapi31.ComponentRef("#/components/parameters/"+parameter))
+	}
+	operationParameters = append(operationParameters, openapi31.ComponentRef("#/components/parameters/IdempotencyKey"))
 	return object{
 		"operationId": operationID, "summary": summary,
-		"parameters": []any{
-			openapi31.ComponentRef("#/components/parameters/" + parameter),
-			openapi31.ComponentRef("#/components/parameters/IdempotencyKey"),
-		},
+		"parameters":  operationParameters,
 		"requestBody": openapi31.JSONRequestBody(requestSchema), "responses": responses,
 	}
 }
@@ -196,6 +209,8 @@ func structs() map[string]reflect.Type {
 		"ServiceRoleTemplateReference": openapi31.StructType[iamv1.ServiceRoleTemplateReference](),
 		"BindServiceRoleRequest":       openapi31.StructType[managedservicev1.BindServiceRoleRequest](),
 		"ServiceRoleBindingReceipt":    openapi31.StructType[managedservicev1.ServiceRoleBindingReceipt](),
+		"UnbindServiceRoleRequest":     openapi31.StructType[managedservicev1.UnbindServiceRoleRequest](),
+		"ServiceRoleUnbindingReceipt":  openapi31.StructType[managedservicev1.ServiceRoleUnbindingReceipt](),
 		"FieldViolation":               openapi31.StructType[managedservicev1.FieldViolation](),
 		"Problem":                      openapi31.StructType[managedservicev1.Problem](),
 	}
@@ -245,6 +260,11 @@ func schemaOverlay(schemas object) {
 	receipt["kind"] = object{"const": "ServiceRoleBindingReceipt"}
 	receipt["resourceVersion"] = object{"const": 1}
 	receipt["status"] = object{"const": string(iamv1.WorkloadRoleBindingActive)}
+	schemas["UnbindServiceRoleRequest"].(object)["properties"].(object)["resourceVersion"] = object{"const": 1}
+	unbinding := schemas["ServiceRoleUnbindingReceipt"].(object)["properties"].(object)
+	unbinding["kind"] = object{"const": "ServiceRoleUnbindingReceipt"}
+	unbinding["resourceVersion"] = object{"const": 2}
+	unbinding["status"] = object{"const": string(iamv1.WorkloadRoleBindingRevoked)}
 }
 
 func fatalf(format string, arguments ...any) {

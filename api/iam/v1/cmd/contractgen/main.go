@@ -208,6 +208,12 @@ func buildPaths() object {
 			"CreateWorkloadRoleBindingRequest", "ServiceLinkedRoleAccess", "200",
 			[]any{object{"ServiceCredential": []string{}, "SubjectCredential": []string{}}}, nil,
 		)},
+		"/v1/internal/workload-role-bindings/{bindingId}": object{"delete": mutationOperation(
+			"revokeWorkloadRoleBinding", "Atomically revoke one recorded workload binding after re-evaluating the actual product resource, binding authority and PassRole; no Account, Role, template or service selector is accepted.",
+			"RevokeWorkloadRoleBindingRequest", "WorkloadRoleBinding", "200",
+			[]any{object{"ServiceCredential": []string{}, "SubjectCredential": []string{}}},
+			[]any{openapi31.PathIDParameter("bindingId")},
+		)},
 		"/v1/policies": object{
 			"get":  readOperation("listPolicies", "Read the complete bounded current account policy metadata directory", "PolicyList", nil, nil),
 			"post": mutationOperation("createPolicy", "Create an account-owned policy and its initial immutable version without attaching it", "CreatePolicyRequest", "PolicyDetail", "201", nil, nil),
@@ -550,6 +556,7 @@ func structContracts() map[string]reflect.Type {
 		"ServiceLinkedRoleListing":                      openapi31.StructType[iamv1.ServiceLinkedRoleListing](),
 		"ServiceLinkedRoleList":                         openapi31.StructType[iamv1.ServiceLinkedRoleList](),
 		"CreateWorkloadRoleBindingRequest":              openapi31.StructType[iamv1.CreateWorkloadRoleBindingRequest](),
+		"RevokeWorkloadRoleBindingRequest":              openapi31.StructType[iamv1.RevokeWorkloadRoleBindingRequest](),
 		"UserPermissionBoundary":                        openapi31.StructType[iamv1.UserPermissionBoundary](),
 		"SetUserPermissionBoundaryRequest":              openapi31.StructType[iamv1.SetUserPermissionBoundaryRequest](),
 		"RemoveUserPermissionBoundaryRequest":           openapi31.StructType[iamv1.RemoveUserPermissionBoundaryRequest](),
@@ -1158,6 +1165,7 @@ func applySemanticOverlays(schemas object) {
 		object{"properties": object{"status": object{"const": string(iamv1.WorkloadRoleBindingActive)}, "resourceVersion": object{"const": 1}, "revokedAt": false}},
 		object{"required": []string{"revokedAt"}, "properties": object{"status": object{"const": string(iamv1.WorkloadRoleBindingRevoked)}, "resourceVersion": object{"const": 2}, "revokedAt": object{"type": "string", "format": "date-time"}}},
 	}
+	schemas["RevokeWorkloadRoleBindingRequest"].(object)["properties"].(object)["resourceVersion"] = object{"const": 1}
 	schemas["ServiceLinkedRoleAccess"].(object)["description"] = "Non-secret Account observation of one service-linked Role and its exact workload bindings. It carries no permission, session or service secret."
 	schemas["ServiceLinkedRoleAccess"].(object)["properties"].(object)["bindings"].(object)["maxItems"] = iamv1.DirectoryPageSize
 	schemas["ServiceLinkedRoleListing"].(object)["description"] = "Bounded current-Account summary. BindingCount is immutable history; ActiveBindingCount is current workload consent and never a cached authorization permit."
