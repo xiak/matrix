@@ -6,8 +6,9 @@
 - Updated: 2026-09-30
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI/test source: `71c0c90c`
-- Pushed documentation head: `003f4184`
+- Pushed UI/test source: `1afa1b2f`
+- Pushed synchronized embed: `c6a3cf9b`
+- Pushed documentation head: `cac3e7f7`
 
 ## Authoritative route
 
@@ -132,25 +133,19 @@ already mounted section without route changes, local selection state or an
 identity refetch. LIVE and explicit MOCK map to their existing section owners;
 no settings contract was added.
 
-The service-authorization MOCK separates platform-template publication,
-current-Account consent, the service-linked Role relation and each exact
-workload binding. LIVE Roles additionally expose a lazy, read-only platform
-template directory from the fixed `GET /v1/service-role-templates` contract.
-Its closed decoder shows immutable template/policy facts without treating
-`ACTIVE` as Account authorization; denial and route failure stay local and
-never fall back to MOCK. Fixed backend source
-`2ff682404a167164ba580a7d78f235b78cd995e2` adds an internal, non-browser
-creation boundary and freezes the relation/binding read facts only. The
-existing isolated review now shows product, purpose, exact workload, Role
-name/description, session ceiling and the exact permission-ceiling Policy
-ID/version/digest. Account observation shows the relation's exact template,
-service-principal purpose and every binding's Account/Role/template references.
-Template and ceiling digests are distinct illustrative values, not publication
-or consent evidence. The isolated managed-service instance remains the
-product-owned entry. Relation/binding northbound reads and authorize, revoke,
-unbind and ServiceRoleSession commands are still absent; the final action stays
-disabled and no unsettled revocation or session lifecycle is frozen. Exact
-evidence and limitations belong to FEAT-IAM-010 and FEAT-007.
+The service-authorization MOCK is now tenant-first. Its default directory shows
+current-Account service-linked Role relations with active/total binding counts,
+while the platform-template directory remains a separate read-only tab. Opening
+a relation preserves the existing template, Account relation, exact binding and
+unissued-session boundaries; opaque cursor controls do not invent totals. The
+isolated managed-service instance remains the product-owned consent entry, and
+authorize, revoke, unbind and session actions remain absent or disabled. Fixed
+IAM source `cb62ed2f6c307f5a50aa27480f89c8c58cf081ee` now publishes matching
+northbound list/detail read shapes with Role metadata owned by `relation.role`,
+complete template references and a release-owned immutable PolicyVersion
+ceiling. This milestone does not yet consume those LIVE routes; use their
+generated OpenAPI and closed decoding in the next adapter slice. Exact evidence
+and limitations belong to FEAT-IAM-010 and FEAT-007.
 
 LIVE member Role discovery also keeps its verified source identity, discovery
 heading and temporary-access boundary mounted while only role cards load. An
@@ -174,17 +169,16 @@ environment. Real browser acceptance cannot be replaced by MOCK or API-only
 checks. Do not duplicate the donor application or move installer-owned secrets
 into the UI.
 
-Next integration must select one fixed boundary from the owning FEAT. Do not
-broaden LIVE service authorization until a later fixed source publishes
-relation/binding observation or product-owned consent lifecycle contracts;
-internal creation at `2ff682404a167164ba580a7d78f235b78cd995e2` is not a
-browser endpoint and does not accept that release boundary. Session
-activity/touch, Passkey registration and trusted network request context remain
-MOCK until IAM provides a fixed, pushed commit with their required gates. The
-Role self-service client still requires real IAM-process browser verification;
-do not infer additional Role, SSO, session or network-context endpoints,
-persisted fields, operators or credentials from the MOCK UI or from another
-task's unpushed work.
+Next integration must select one fixed boundary from the owning FEAT. The
+relation/binding observation reads may now adopt fixed IAM source
+`cb62ed2f6c307f5a50aa27480f89c8c58cf081ee`; do not infer authorize, revoke,
+unbind, product-owned consent lifecycle or ServiceRoleSession commands from
+those reads. Session activity/touch, Passkey registration and trusted network
+request context remain MOCK until IAM provides a fixed, pushed commit with
+their required gates. The Role self-service client still requires real
+IAM-process browser verification; do not infer additional Role, SSO, session or
+network-context endpoints, persisted fields, operators or credentials from the
+MOCK UI or from another task's unpushed work.
 
 Replace this file only at another committed-and-pushed milestone. Do not append
 command logs, chat transcripts, secrets, raw provider payloads, or machine-local
