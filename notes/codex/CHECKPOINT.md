@@ -3,11 +3,11 @@
 > Non-authoritative portable memory. Validate it against Git and the owning
 > FEAT before continuing.
 
-- Updated: 2026-09-30
+- Updated: 2026-10-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `a8f6dbbb`
-- Pushed documentation/head milestone: `02339cdb`
+- Pushed source/embed milestone: `058ca1d3`
+- Pushed documentation/head milestone: `749ccd7d`
 
 ## Authoritative route
 
@@ -67,6 +67,15 @@ patterns require explicit review but are not presented as IAM validation, PDP
 execution or product-PEP exposure evidence. At compact widths all four
 destinations stay visible in a two-by-two grid and JSON-path actions retain
 precise editor focus.
+
+One pure local security-review projection now drives the Account overview,
+policy detail, policy association, Role creation and User policy/group
+association as well as the author's diagnostic vocabulary. The author no
+longer duplicates a binary high-privilege alert, and the old parallel helper
+has been removed. Read and mutation surfaces list each finding by policy and
+state that denies, boundaries, grant sources and request context still require
+evaluation; this is isolated MOCK guidance, not effective access or a backend
+risk contract.
 
 The current-account observation now leads with a four-stage tenant-readable
 status summary: exact platform template, Account relation, exact resource
