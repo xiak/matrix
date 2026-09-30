@@ -343,6 +343,8 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 
 目录可见性、产品安装和 callingService 身份都不构成客户授权。未来 PassRole／承担角色需共同绑定操作者、目标 Account/Role、实际工作负载与单一用途；模板升版不能自动扩权，服务应使用短期会话。IAM 工程师已对齐“产品资源入口编排、IAM 只读观察”以及模板、Account Role 关系和 workload binding 三层分离的模型；当前只有模板目录读取进入后端下一片，Account relation/binding 的 northbound 读取以及租户授权、撤销和承担角色 contract 尚未形成可消费的已推送来源。关联资源清理、授权撤销和既有会话失效语义也仍待固定。因此最终“授权服务”禁用，页面不创建角色、binding、凭据或授权成功状态；未来只能从固定、已推送契约原位替换示意字段。前端实现及共享门禁由 [FEAT-007](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence) 维护。
 
+2026-09-30，已推送的 [`51c63c78`](https://github.com/xiak/matrix/commit/51c63c78) 把同一隔离审阅接到产品资源侧：一键 MOCK 的托管服务实例名称打开稳定内容区详情，准确实例 ID 作为 `SERVICE_INSTALLATION` 目标进入共享三步同意审阅，不再沿用 IAM 目录中的固定示例资源。详情先展示平台模板、Account 同意和实例 binding 三个独立状态，再由当前资源发起审阅；最终授权仍禁用。非 preview 的真实实例目录不出现该入口，页面不增加逐行操作列、Dialog、IAM 写入、服务关联角色、binding 或凭据。定向用例覆盖资源 ID 传播、禁用终态与零 Dialog；完整 52 文件／853 用例、三条静态归一化、类型、lint、架构、228 对主题样式、41 页静态导出、228 文件嵌入等价以及全仓 Go test/vet 通过。桌面及 `390 × 844` DEV 实看确认产品详情、三步审阅和底部操作无横向溢出；手机 document/body/viewport 均为 390px，浏览器 warning/error 为零。这仍是产品侧 UX 原型，不是可消费的 northbound 授权契约或真实 IAM/产品 PEP 联调证据。
+
 ### LIVE 服务角色模板目录的开发验收证据
 
 2026-09-30，已推送 [`675b5390`](https://github.com/xiak/matrix/commit/675b5390) 消费 IAM 工程师已推送的固定来源 `00c031751b861130e92766ac4ecac0505dffab66`：LIVE 角色目录提供“服务授权模板”次级入口，在同一内容区读取 `GET /v1/service-role-templates`（控制台代理 `/api/iam/v1/service-role-templates`）。请求只带当前 USER bearer，不带 Account、installation、query 或 body；目录在操作者打开后才读取，角色列表不会预取。原隔离 MOCK 的“服务授权”入口、三边界观察和零写入行为不变。
