@@ -7,7 +7,7 @@
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
 - Pushed UI/test source: `e0cfb72c`
-- Pushed documentation head: `b243b884`
+- Pushed documentation head: `97e4d33a`
 
 ## Authoritative route
 
@@ -118,6 +118,13 @@ initial feedback to their table region, while other routes retain their own
 content geometry. Verified scene refresh continues to keep current content.
 This is shared loading behavior, not a new data model or LIVE acceptance, and
 the independent MOCK entry remains available for inspection.
+
+The previously open dedicated compact theme/keyboard audit is now accepted for
+the independent DEV MOCK only. All 13 IAM destinations were rechecked at the
+compact viewport in light and mixed themes, including stable destination focus,
+closed overlays, exact page width and the shared page-action menu's keyboard
+open/Escape focus return. Detailed evidence and the remaining real-IAM boundary
+belong to the linked FEAT owners; this does not accept backend or release work.
 
 The service-authorization MOCK separates platform-template publication,
 current-Account consent, the service-linked Role relation and each exact
