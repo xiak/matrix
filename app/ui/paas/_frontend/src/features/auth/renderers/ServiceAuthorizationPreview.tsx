@@ -51,6 +51,7 @@ const previewAccountAccess = {
 
 const stageIds = ["identity", "permissions", "consent"] as const;
 const runtimeStageIds = ["authenticate", "issue", "enforce", "execute"] as const;
+const authorizationValidityStageIds = ["template", "account", "binding", "runtime"] as const;
 type PreviewOperationKind = "bind" | "unbind";
 type PreviewOperationScenario = "success" | "unknown" | "stateChanged" | "requestMismatch" | "unauthenticated" | "forbidden" | "invalidRequest";
 type PreviewOperationResult = Exclude<PreviewOperationScenario, "success">;
@@ -181,6 +182,30 @@ function ServiceRoleRuntimeTrace() {
   </section>;
 }
 
+function ServiceAuthorizationValiditySummary() {
+  const t = useTranslations("ServiceAuthorizationPreview");
+  const titleId = useId();
+
+  return <section aria-labelledby={titleId} className={styles.responsibility}>
+    <div className={styles.runtimeTraceHeading}>
+      <div><h4 id={titleId}>{t("observation.validity.title")}</h4><p>{t("observation.validity.hint")}</p></div>
+      <div className={styles.stateBadges}>
+        <Badge status="success">{t("observation.validity.configurationState")}</Badge>
+        <Badge status="neutral">{t("observation.validity.runtimeState")}</Badge>
+      </div>
+    </div>
+    <ol className={styles.runtimeStages}>
+      {authorizationValidityStageIds.map((stage, index) => <li key={stage}>
+        <span className={styles.runtimeIndex} aria-hidden="true">{index + 1}</span>
+        <div><strong>{t(`observation.validity.stages.${stage}.title`)}</strong><small>{t(`observation.validity.stages.${stage}.hint`)}</small></div>
+        <Badge status={stage === "runtime" ? "neutral" : "success"}>{t(`observation.validity.stages.${stage}.state`)}</Badge>
+      </li>)}
+    </ol>
+    <Alert status="info">{t("observation.validity.conclusion")}</Alert>
+    <Alert status="warning">{t("observation.validity.revocationBoundary")}</Alert>
+  </section>;
+}
+
 function ServiceLinkedRoleObservation({ accountId }: { accountId: string }) {
   const t = useTranslations("ServiceAuthorizationPreview");
   const previewSnapshot = previewSnapshotFor(previewTemplate.targetResourceId);
@@ -190,6 +215,7 @@ function ServiceLinkedRoleObservation({ accountId }: { accountId: string }) {
       <div className={styles.stateBadges}><Badge status="success">{t("states.authorized")}</Badge><Badge status="warning">MOCK</Badge></div>
     </div>
     <Alert status="info">{t("observation.contractBoundary")}</Alert>
+    <ServiceAuthorizationValiditySummary />
     <div className={styles.observationGrid}>
       <Card>
         <Card.Header className={styles.observationHeading}><div><span>{t("observation.template.eyebrow")}</span><h4>{t("observation.template.title")}</h4></div><Badge status="success">{t("states.active")}</Badge></Card.Header>

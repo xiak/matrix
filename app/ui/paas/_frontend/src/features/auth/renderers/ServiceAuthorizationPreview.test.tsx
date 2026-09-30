@@ -48,6 +48,16 @@ describe("ServiceAuthorizationPreview", () => {
     expect(screen.getByRole("heading", { name: "ServiceRoleSession" })).toBeTruthy();
     expect(screen.getByText("SERVICE")).toBeTruthy();
     expect(screen.getByText("未发行")).toBeTruthy();
+    const validity = screen.getByRole("region", { name: "当前授权状态" });
+    expect(within(validity).getByText("配置关系有效 · MOCK")).toBeTruthy();
+    expect(within(validity).getByText("运行时未观测")).toBeTruthy();
+    expect(within(validity).getByText("平台模板已固定")).toBeTruthy();
+    expect(within(validity).getByText("账号关系可用")).toBeTruthy();
+    expect(within(validity).getByText("当前资源已绑定")).toBeTruthy();
+    expect(within(validity).getByText("运行时使用未观测")).toBeTruthy();
+    expect(within(validity).getByText(/当前只能得出“配置关系有效”/)).toBeTruthy();
+    expect(within(validity).getByText(/本页不会承诺实时下线/)).toBeTruthy();
+    expect(within(validity).queryByRole("button")).toBeNull();
     const runtime = screen.getByRole("heading", { name: "一次服务请求的执行边界" }).closest("section")!;
     expect(within(runtime).getByText("认证受信服务主体")).toBeTruthy();
     expect(within(runtime).getByText("签发短期服务会话")).toBeTruthy();

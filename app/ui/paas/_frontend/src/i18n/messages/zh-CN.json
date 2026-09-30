@@ -2165,6 +2165,20 @@
       "hint": "将发布模板、账号级服务关联角色关系和精确业务资源绑定分区展示，避免把角色存在误解为所有资源都已授权。",
       "contractBoundary": "账号关系与资源绑定已有固定只读契约，但这个隔离 MOCK 不调用它，也不执行写入。以下 ID、状态和时间均为设计预览，不是后端返回的数据。",
       "durationMinutes": "{count} 分钟",
+      "validity": {
+        "title": "当前授权状态",
+        "hint": "先给出租户可采取行动的配置结论，再展开模板、账号关系和精确资源绑定的技术事实。",
+        "configurationState": "配置关系有效 · MOCK",
+        "runtimeState": "运行时未观测",
+        "stages": {
+          "template": { "title": "平台模板已固定", "hint": "账号同意引用精确模板版本、内容摘要和权限上限；模板升版不会自动扩大既有同意。", "state": "引用一致" },
+          "account": { "title": "账号关系可用", "hint": "服务关联角色只归属于当前账号、登记服务主体和单一用途，不能作为普通租户角色编辑。", "state": "ACTIVE" },
+          "binding": { "title": "当前资源已绑定", "hint": "当前工作负载类型和精确资源 ID 有独立 ACTIVE 绑定；其他资源不会因此获得访问权。", "state": "ACTIVE" },
+          "runtime": { "title": "运行时使用未观测", "hint": "当前没有面向租户的服务会话目录或业务请求结果；配置有效不能证明已签发会话或访问成功。", "state": "无可验证记录" }
+        },
+        "conclusion": "当前只能得出“配置关系有效”。一次实际请求仍须完成受信服务主体认证、短期会话签发、产品 PEP 鉴权和业务执行，任一步都可能独立失败。",
+        "revocationBoundary": "精确绑定变为 REVOKED 后不得再为该资源签发新会话；在后端固定既有会话失效与查询契约前，本页不会承诺实时下线，也不提供逐会话撤销。"
+      },
       "template": { "eyebrow": "平台发布边界", "title": "不可变 ServiceRoleTemplate" },
       "relation": { "eyebrow": "账号关系边界", "title": "ServiceLinkedRoleAccess" },
       "roleIsNotBinding": "服务关联角色为 ACTIVE 只说明账号与发布模板、注册服务主体的关系可用；它不证明任何业务资源已经绑定，也不能替代逐条 WorkloadRoleBinding。",

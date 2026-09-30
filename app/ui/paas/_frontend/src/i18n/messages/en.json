@@ -2165,6 +2165,20 @@
       "hint": "Published template, account-level service-linked-role relation, and exact product-resource bindings are shown as separate boundaries so role existence is never mistaken for authorization to every resource.",
       "contractBoundary": "A fixed read-only contract now exists for account relations and resource bindings, but this isolated MOCK neither calls it nor performs writes. The IDs, states, and timestamps below are design-preview data, not backend responses.",
       "durationMinutes": "{count} minutes",
+      "validity": {
+        "title": "Current authorization status",
+        "hint": "Lead with the configuration conclusion a tenant can act on, then expand the template, account relation, and exact-resource facts.",
+        "configurationState": "Configuration valid · MOCK",
+        "runtimeState": "Runtime not observed",
+        "stages": {
+          "template": { "title": "Platform template is pinned", "hint": "Account consent references an exact template version, content digest, and permission ceiling. A template revision never expands existing consent automatically.", "state": "Reference matches" },
+          "account": { "title": "Account relation is usable", "hint": "The service-linked role belongs only to this account, registered service subject, and single purpose. It is not an ordinary tenant-editable role.", "state": "ACTIVE" },
+          "binding": { "title": "Current resource is bound", "hint": "The current workload kind and exact resource ID have an independent ACTIVE binding. No other resource gains access from it.", "state": "ACTIVE" },
+          "runtime": { "title": "Runtime use is not observed", "hint": "No tenant-facing service-session directory or business-request result exists. Valid configuration proves neither session issuance nor successful access.", "state": "No verifiable record" }
+        },
+        "conclusion": "The only current conclusion is that the configuration relation is valid. A real request must still authenticate the trusted service subject, issue a short-lived session, pass product PEP authorization, and complete business execution; each can fail independently.",
+        "revocationBoundary": "Once the exact binding becomes REVOKED, no new session may be issued for that resource. Until the backend fixes existing-session invalidation and query contracts, this page promises no immediate termination and exposes no per-session revoke action."
+      },
       "template": { "eyebrow": "Platform publication boundary", "title": "Immutable ServiceRoleTemplate" },
       "relation": { "eyebrow": "Account relation boundary", "title": "ServiceLinkedRoleAccess" },
       "roleIsNotBinding": "An ACTIVE service-linked role only says the account relation to a published template and registered service principal is usable. It proves no product resource is bound and never replaces individual WorkloadRoleBinding records.",
