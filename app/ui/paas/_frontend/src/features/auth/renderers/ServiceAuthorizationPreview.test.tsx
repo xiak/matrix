@@ -41,6 +41,8 @@ describe("ServiceAuthorizationPreview", () => {
     await user.click(accountTrigger);
 
     expect(screen.getByRole("heading", { name: "账号服务授权观察" })).toBeTruthy();
+    expect(screen.getByText("账号关系与资源绑定已有固定只读契约，但这个隔离 MOCK 不调用它，也不执行写入。以下 ID、状态和时间均为设计预览，不是后端返回的数据。")).toBeTruthy();
+    expect(screen.queryByText(/北向读取接口尚未发布/)).toBeNull();
     expect(screen.getByRole("heading", { name: "不可变 ServiceRoleTemplate" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "ServiceLinkedRoleAccess" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "ServiceRoleSession" })).toBeTruthy();
@@ -60,6 +62,7 @@ describe("ServiceAuthorizationPreview", () => {
     expect(within(bindings).getByText("preview.service-linked-role.managed-service-installation-read")).toBeTruthy();
     expect(within(bindings).getByText("preview.service-role-template.managed-service-installation-read.v1@v1")).toBeTruthy();
     expect(screen.getByText("第 1 页")).toBeTruthy();
+    expect(screen.getByText("当前 MOCK 只展示一页精确绑定；LIVE 读取仅按后端返回的不透明游标继续，不推断总页数。")).toBeTruthy();
     expect((screen.getByRole("button", { name: "上一页绑定" }) as HTMLButtonElement).disabled).toBe(true);
     expect((screen.getByRole("button", { name: "下一页绑定" }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.queryByRole("button", { name: /撤销|解除/ })).toBeNull();

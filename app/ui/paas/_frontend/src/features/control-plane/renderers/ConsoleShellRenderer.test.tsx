@@ -213,6 +213,7 @@ describe("ConsoleShellRenderer", () => {
 
     await user.click(screen.getByRole("button", { name: "审阅服务授权" }));
     expect(screen.getByRole("heading", { name: "审阅服务授权 · 订单主库" })).toBe(document.activeElement);
+    expect(screen.getByText("这是产品侧发起授权的信息流预览。实例、账号与权限范围来自当前 MOCK 视图，模板与服务主体仍是示例，最终授权写入尚未接入；不会读取或写入 IAM，也不会产生授权成功状态。")).toBeTruthy();
     expect(screen.getByText("SERVICE_INSTALLATION:pg-test")).toBeTruthy();
     expect(screen.queryByRole("dialog")).toBeNull();
 
