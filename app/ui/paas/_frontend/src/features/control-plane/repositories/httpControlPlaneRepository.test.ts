@@ -1,6 +1,19 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { httpControlPlaneRepository } from "./httpControlPlaneRepository";
 
+const managedServiceTemplateReference = {
+  id: "managedservice.installation-reader",
+  version: 1,
+  contentDigest: `sha256:${"c".repeat(64)}`
+};
+
+function jsonResponse(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "Content-Type": "application/json" }
+  });
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -215,5 +228,153 @@ describe("httpControlPlaneRepository", () => {
     await expect(httpControlPlaneRepository.inspectServiceAuthorization!("session-secret", "account-acme", "pg-unbound"))
       .resolves.toMatchObject({ template: { id: template.id }, relation: { role: { id: role.id } }, binding: null });
     expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("binds only the exact published template and binds the receipt to the requested installation", async () => {
+    const receipt = {
+      kind: "ServiceRoleBindingReceipt",
+      serviceInstallationId: "postgres-primary",
+      bindingId: "binding-primary",
+      roleId: "role-managedservice-reader",
+      template: managedServiceTemplateReference,
+      status: "ACTIVE",
+      resourceVersion: 1,
+      createdAt: "2026-09-30T08:00:00.123456Z"
+    };
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(receipt));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(httpControlPlaneRepository.bindServiceRole!("session-secret", "postgres-primary", {
+      template: managedServiceTemplateReference,
+      requestId: "bind-postgres-primary"
+    })).resolves.toEqual(receipt);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [path, rawInit] = fetchMock.mock.calls[0]!;
+    const init = rawInit as RequestInit;
+    const headers = new Headers(init.headers);
+    expect(path).toBe("/api/managed-services/v1/service-installations/postgres-primary/service-role-bindings");
+    expect(init.method).toBe("POST");
+    expect(headers.get("Authorization")).toBe("Bearer session-secret");
+    expect(headers.get("Content-Type")).toBe("application/json");
+    expect(headers.get("Idempotency-Key")).toBe("bind-postgres-primary");
+    expect(JSON.parse(String(init.body))).toEqual({ template: managedServiceTemplateReference });
+  });
+
+  it("replays an unbind with the caller's frozen idempotency key and no authority selectors", async () => {
+    const receipt = {
+      kind: "ServiceRoleUnbindingReceipt",
+      serviceInstallationId: "postgres-primary",
+      bindingId: "binding-primary",
+      roleId: "role-managedservice-reader",
+      template: managedServiceTemplateReference,
+      status: "REVOKED",
+      resourceVersion: 2,
+      createdAt: "2026-09-30T08:00:00Z",
+      revokedAt: "2026-09-30T08:00:01Z"
+    };
+    const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse(receipt)));
+    vi.stubGlobal("fetch", fetchMock);
+    const command = {
+      bindingId: "binding-primary",
+      resourceVersion: 1,
+      expectedTemplate: managedServiceTemplateReference,
+      requestId: "unbind-postgres-primary"
+    };
+
+    await expect(httpControlPlaneRepository.unbindServiceRole!("session-secret", "postgres-primary", command))
+      .resolves.toEqual(receipt);
+    await expect(httpControlPlaneRepository.unbindServiceRole!("session-secret", "postgres-primary", command))
+      .resolves.toEqual(receipt);
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    for (const [path, rawInit] of fetchMock.mock.calls) {
+      const init = rawInit as RequestInit;
+      const headers = new Headers(init.headers);
+      expect(path).toBe("/api/managed-services/v1/service-installations/postgres-primary/service-role-bindings/binding-primary");
+      expect(init.method).toBe("DELETE");
+      expect(headers.get("Idempotency-Key")).toBe("unbind-postgres-primary");
+      expect(JSON.parse(String(init.body))).toEqual({ resourceVersion: 1 });
+      expect(String(init.body)).not.toContain("accountId");
+      expect(String(init.body)).not.toContain("roleId");
+      expect(String(init.body)).not.toContain("purpose");
+    }
+  });
+
+  it("fails closed on successful-looking bind receipts that are not the exact requested result", async () => {
+    const receipt = {
+      kind: "ServiceRoleBindingReceipt",
+      serviceInstallationId: "postgres-primary",
+      bindingId: "binding-primary",
+      roleId: "role-managedservice-reader",
+      template: managedServiceTemplateReference,
+      status: "ACTIVE",
+      resourceVersion: 1,
+      createdAt: "2026-09-30T08:00:00Z"
+    };
+    const invalid = [
+      { ...receipt, unexpected: true },
+      { ...receipt, serviceInstallationId: "postgres-other" },
+      { ...receipt, status: "REVOKED" },
+      { ...receipt, resourceVersion: 2 },
+      { ...receipt, template: { ...managedServiceTemplateReference, contentDigest: `sha256:${"d".repeat(64)}` } },
+      { ...receipt, createdAt: "2026-09-30T08:00:00.1234567Z" }
+    ];
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    for (const body of invalid) {
+      fetchMock.mockResolvedValueOnce(jsonResponse(body));
+      await expect(httpControlPlaneRepository.bindServiceRole!("session-secret", "postgres-primary", {
+        template: managedServiceTemplateReference,
+        requestId: "bind-postgres-primary"
+      })).rejects.toThrow("INVALID_SERVICE_AUTHORIZATION_RESPONSE");
+    }
+  });
+
+  it("fails closed on an unbind receipt for another binding or an impossible lifecycle", async () => {
+    const receipt = {
+      kind: "ServiceRoleUnbindingReceipt",
+      serviceInstallationId: "postgres-primary",
+      bindingId: "binding-primary",
+      roleId: "role-managedservice-reader",
+      template: managedServiceTemplateReference,
+      status: "REVOKED",
+      resourceVersion: 2,
+      createdAt: "2026-09-30T08:00:01Z",
+      revokedAt: "2026-09-30T08:00:00Z"
+    };
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const command = {
+      bindingId: "binding-primary",
+      resourceVersion: 1,
+      expectedTemplate: managedServiceTemplateReference,
+      requestId: "unbind-postgres-primary"
+    };
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(receipt));
+    await expect(httpControlPlaneRepository.unbindServiceRole!("session-secret", "postgres-primary", command))
+      .rejects.toThrow("INVALID_SERVICE_AUTHORIZATION_RESPONSE");
+    fetchMock.mockResolvedValueOnce(jsonResponse({ ...receipt, createdAt: receipt.revokedAt, bindingId: "binding-other" }));
+    await expect(httpControlPlaneRepository.unbindServiceRole!("session-secret", "postgres-primary", command))
+      .rejects.toThrow("INVALID_SERVICE_AUTHORIZATION_RESPONSE");
+  });
+
+  it("rejects malformed bind and unbind commands before making a request", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(httpControlPlaneRepository.bindServiceRole!("session-secret", "postgres/primary", {
+      template: managedServiceTemplateReference,
+      requestId: "bind-postgres-primary"
+    })).rejects.toThrow("INVALID_SERVICE_AUTHORIZATION_REQUEST");
+    await expect(httpControlPlaneRepository.unbindServiceRole!("session-secret", "postgres-primary", {
+      bindingId: "binding-primary",
+      resourceVersion: 2,
+      expectedTemplate: managedServiceTemplateReference,
+      requestId: "unbind-postgres-primary"
+    })).rejects.toThrow("INVALID_SERVICE_AUTHORIZATION_REQUEST");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

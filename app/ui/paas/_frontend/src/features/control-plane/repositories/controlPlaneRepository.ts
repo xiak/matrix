@@ -5,7 +5,13 @@ import type {
   QuotaEntitlement,
   ServiceInstallation
 } from "../domain/resources";
-import type { ManagedServiceAuthorizationObservation } from "../domain/serviceAuthorization";
+import type {
+  BindManagedServiceRoleCommand,
+  ManagedServiceAuthorizationObservation,
+  ManagedServiceRoleBindingReceipt,
+  ManagedServiceRoleUnbindingReceipt,
+  UnbindManagedServiceRoleCommand
+} from "../domain/serviceAuthorization";
 
 export interface ControlPlaneRepository {
   load(credential: string): Promise<ControlPlaneSnapshot>;
@@ -23,4 +29,14 @@ export interface ControlPlaneRepository {
     accountId: string,
     installationId: string
   ): Promise<ManagedServiceAuthorizationObservation>;
+  bindServiceRole?(
+    credential: string,
+    installationId: string,
+    command: BindManagedServiceRoleCommand
+  ): Promise<ManagedServiceRoleBindingReceipt>;
+  unbindServiceRole?(
+    credential: string,
+    installationId: string,
+    command: UnbindManagedServiceRoleCommand
+  ): Promise<ManagedServiceRoleUnbindingReceipt>;
 }

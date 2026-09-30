@@ -15,12 +15,17 @@ import {
   isManagedServiceInstallationReader,
   managedServiceInstallationReader,
   sameTemplateReference,
-  type ManagedServiceAuthorizationObservation
+  type BindManagedServiceRoleCommand,
+  type ManagedServiceAuthorizationObservation,
+  type ManagedServiceRoleBindingReceipt,
+  type ManagedServiceRoleUnbindingReceipt,
+  type UnbindManagedServiceRoleCommand
 } from "../domain/serviceAuthorization";
 import type {
   ServiceLinkedRoleAccess,
   ServiceLinkedRoleListing,
   ServiceRoleTemplate,
+  ServiceRoleTemplateReference,
   WorkloadRoleBinding
 } from "@/features/auth/domain/serviceAuthorization";
 
@@ -45,6 +50,130 @@ function integer(value: unknown, name: string): number {
     throw new Error(`INVALID_${name.toUpperCase()}_RESPONSE`);
   }
   return value;
+}
+
+function exactKeys(wire: UnknownRecord, required: string[]): void {
+  const allowed = new Set(required);
+  if (required.some((key) => !(key in wire)) || Object.keys(wire).some((key) => !allowed.has(key))) {
+    throw new Error("INVALID_SERVICE_AUTHORIZATION_RESPONSE");
+  }
+}
+
+const publicIdentifierPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const installationIdentifierPattern = /^[a-z0-9][a-z0-9._-]{0,61}[a-z0-9]$/;
+const digestPattern = /^sha256:[a-f0-9]{64}$/;
+const timestampPattern = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/;
+
+function publicIdentifier(value: unknown): string {
+  if (typeof value !== "string" || !publicIdentifierPattern.test(value)) {
+    throw new Error("INVALID_SERVICE_AUTHORIZATION_RESPONSE");
+  }
+  return value;
+}
+
+function timestamp(value: unknown): string {
+  if (typeof value !== "string" || !timestampPattern.test(value) || Number.isNaN(Date.parse(value)) ||
+      new Date(value).toISOString().slice(0, 19) !== value.slice(0, 19)) {
+    throw new Error("INVALID_SERVICE_AUTHORIZATION_RESPONSE");
+  }
+  return value;
+}
+
+function timestampOrder(value: string): string {
+  return value.slice(0, 19) + "." + value.slice(19, -1).slice(1).padEnd(6, "0");
+}
+
+function parseTemplateReference(value: unknown): ServiceRoleTemplateReference {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error("INVALID_SERVICE_AUTHORIZATION_RESPONSE");
+  }
+  const wire = value as UnknownRecord;
+  exactKeys(wire, ["id", "version", "contentDigest"]);
+  if (typeof wire.version !== "number" || !Number.isSafeInteger(wire.version) || wire.version < 1 ||
+      typeof wire.contentDigest !== "string" || !digestPattern.test(wire.contentDigest)) {
+    throw new Error("INVALID_SERVICE_AUTHORIZATION_RESPONSE");
+  }
+  return {
+    id: publicIdentifier(wire.id),
+    version: wire.version,
+    contentDigest: wire.contentDigest
+  };
+}
+
+function validBindCommand(command: BindManagedServiceRoleCommand): boolean {
+  try {
+    const template = parseTemplateReference(command.template);
+    return command.requestId.length > 0 && publicIdentifierPattern.test(command.requestId) &&
+      template.id === managedServiceInstallationReader.id && template.version === managedServiceInstallationReader.version;
+  } catch {
+    return false;
+  }
+}
+
+function validUnbindCommand(command: UnbindManagedServiceRoleCommand): boolean {
+  try {
+    return publicIdentifierPattern.test(command.bindingId) && command.resourceVersion === 1 &&
+      validBindCommand({ template: command.expectedTemplate, requestId: command.requestId });
+  } catch {
+    return false;
+  }
+}
+
+function validInstallationId(installationId: string): boolean {
+  return installationIdentifierPattern.test(installationId);
+}
+
+function parseBindingReceipt(
+  value: unknown,
+  installationId: string,
+  expectedTemplate: ServiceRoleTemplateReference
+): ManagedServiceRoleBindingReceipt {
+  const wire = record(value, "service role binding receipt");
+  exactKeys(wire, ["kind", "serviceInstallationId", "bindingId", "roleId", "template", "status", "resourceVersion", "createdAt"]);
+  const template = parseTemplateReference(wire.template);
+  const receipt: ManagedServiceRoleBindingReceipt = {
+    kind: "ServiceRoleBindingReceipt",
+    serviceInstallationId: publicIdentifier(wire.serviceInstallationId),
+    bindingId: publicIdentifier(wire.bindingId),
+    roleId: publicIdentifier(wire.roleId),
+    template,
+    status: "ACTIVE",
+    resourceVersion: 1,
+    createdAt: timestamp(wire.createdAt)
+  };
+  if (wire.kind !== receipt.kind || wire.status !== receipt.status || wire.resourceVersion !== receipt.resourceVersion ||
+      receipt.serviceInstallationId !== installationId || !sameTemplateReference(template, expectedTemplate)) {
+    throw new Error("INVALID_SERVICE_AUTHORIZATION_RESPONSE");
+  }
+  return receipt;
+}
+
+function parseUnbindingReceipt(
+  value: unknown,
+  installationId: string,
+  bindingId: string,
+  expectedTemplate: ServiceRoleTemplateReference
+): ManagedServiceRoleUnbindingReceipt {
+  const wire = record(value, "service role unbinding receipt");
+  exactKeys(wire, ["kind", "serviceInstallationId", "bindingId", "roleId", "template", "status", "resourceVersion", "createdAt", "revokedAt"]);
+  const template = parseTemplateReference(wire.template);
+  const receipt: ManagedServiceRoleUnbindingReceipt = {
+    kind: "ServiceRoleUnbindingReceipt",
+    serviceInstallationId: publicIdentifier(wire.serviceInstallationId),
+    bindingId: publicIdentifier(wire.bindingId),
+    roleId: publicIdentifier(wire.roleId),
+    template,
+    status: "REVOKED",
+    resourceVersion: 2,
+    createdAt: timestamp(wire.createdAt),
+    revokedAt: timestamp(wire.revokedAt)
+  };
+  if (wire.kind !== receipt.kind || wire.status !== receipt.status || wire.resourceVersion !== receipt.resourceVersion ||
+      receipt.serviceInstallationId !== installationId || receipt.bindingId !== bindingId ||
+      !sameTemplateReference(template, expectedTemplate) || timestampOrder(receipt.revokedAt) < timestampOrder(receipt.createdAt)) {
+    throw new Error("INVALID_SERVICE_AUTHORIZATION_RESPONSE");
+  }
+  return receipt;
 }
 
 function nullableText(value: unknown, name: string): string | null {
@@ -287,6 +416,44 @@ export const httpControlPlaneRepository: ControlPlaneRepository = {
       body: JSON.stringify(command)
     });
     return parseInstallation(value);
+  },
+
+  async bindServiceRole(credential, installationId, command) {
+    if (!validInstallationId(installationId) || !validBindCommand(command)) {
+      throw new Error("INVALID_SERVICE_AUTHORIZATION_REQUEST");
+    }
+    const value = await requestJSON<unknown>(
+      `/api/managed-services/v1/service-installations/${encodeURIComponent(installationId)}/service-role-bindings`,
+      {
+        method: "POST",
+        headers: {
+          ...authorization(credential),
+          "Content-Type": "application/json",
+          "Idempotency-Key": command.requestId
+        },
+        body: JSON.stringify({ template: command.template })
+      }
+    );
+    return parseBindingReceipt(value, installationId, command.template);
+  },
+
+  async unbindServiceRole(credential, installationId, command) {
+    if (!validInstallationId(installationId) || !validUnbindCommand(command)) {
+      throw new Error("INVALID_SERVICE_AUTHORIZATION_REQUEST");
+    }
+    const value = await requestJSON<unknown>(
+      `/api/managed-services/v1/service-installations/${encodeURIComponent(installationId)}/service-role-bindings/${encodeURIComponent(command.bindingId)}`,
+      {
+        method: "DELETE",
+        headers: {
+          ...authorization(credential),
+          "Content-Type": "application/json",
+          "Idempotency-Key": command.requestId
+        },
+        body: JSON.stringify({ resourceVersion: command.resourceVersion })
+      }
+    );
+    return parseUnbindingReceipt(value, installationId, command.bindingId, command.expectedTemplate);
   },
 
   inspectServiceAuthorization

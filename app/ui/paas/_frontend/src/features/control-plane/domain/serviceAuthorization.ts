@@ -1,6 +1,7 @@
 import type {
   ServiceLinkedRoleRelation,
   ServiceRoleTemplate,
+  ServiceRoleTemplateReference,
   WorkloadRoleBinding
 } from "@/features/auth/domain/serviceAuthorization";
 
@@ -23,6 +24,41 @@ export type ManagedServiceAuthorizationObservation = {
 export type ManagedServiceAuthorizationLoad =
   | { status: "ready"; observation: ManagedServiceAuthorizationObservation }
   | { status: "expired" | "forbidden" | "unavailable" };
+
+export type BindManagedServiceRoleCommand = {
+  template: ServiceRoleTemplateReference;
+  requestId: string;
+};
+
+export type UnbindManagedServiceRoleCommand = {
+  bindingId: string;
+  resourceVersion: number;
+  expectedTemplate: ServiceRoleTemplateReference;
+  requestId: string;
+};
+
+export type ManagedServiceRoleBindingReceipt = {
+  kind: "ServiceRoleBindingReceipt";
+  serviceInstallationId: string;
+  bindingId: string;
+  roleId: string;
+  template: ServiceRoleTemplateReference;
+  status: "ACTIVE";
+  resourceVersion: 1;
+  createdAt: string;
+};
+
+export type ManagedServiceRoleUnbindingReceipt = {
+  kind: "ServiceRoleUnbindingReceipt";
+  serviceInstallationId: string;
+  bindingId: string;
+  roleId: string;
+  template: ServiceRoleTemplateReference;
+  status: "REVOKED";
+  resourceVersion: 2;
+  createdAt: string;
+  revokedAt: string;
+};
 
 export function isManagedServiceInstallationReader(template: ServiceRoleTemplate): boolean {
   const workload = template.spec.workloads.find((item) => item.resourceKind === managedServiceInstallationReader.workloadKind);
