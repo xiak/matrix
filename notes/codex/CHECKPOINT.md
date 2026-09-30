@@ -6,8 +6,8 @@
 - Updated: 2026-09-30
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `8fef3f20`
-- Pushed documentation/head milestone: `07ee21c7`
+- Pushed source/embed milestone: `b79e4b1c`
+- Pushed documentation/head milestone: `b9428a53`
 
 ## Authoritative route
 
@@ -53,6 +53,13 @@ policy tab; the capability directory, product declaration and internal
 onboarding review do not retain those unrelated mutation actions. Returning to
 the policy tab restores its commands without remounting the catalog or changing
 the IAM contract.
+
+The internal product-onboarding preview no longer presents its checklist as if
+validation had succeeded. Every IAM review item is pending, and the release
+stage exposes four independent gates: MOCK declaration input, unexecuted IAM
+contract validation, unverified product-PEP evidence and unavailable trusted
+registry publication. It still writes nothing, publishes nothing and grants no
+permission.
 
 The current-account observation now leads with a four-stage tenant-readable
 status summary: exact platform template, Account relation, exact resource
