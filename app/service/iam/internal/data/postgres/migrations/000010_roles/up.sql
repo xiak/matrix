@@ -1668,7 +1668,8 @@ BEGIN
           AND (a.atttypid<>'timestamptz'::regtype OR a.atttypmod=6)) THEN RETURN false; END IF;
     END LOOP;
     IF EXISTS(SELECT 1 FROM pg_attribute a WHERE a.attrelid='iam.role_sessions'::regclass
-      AND a.attname IN ('authority_contract_version','source_authorization_generation','source_group_generations')
+      AND a.attname IN ('source_user_id','source_service_principal_id','source_session_id','credential_generation',
+        'authority_contract_version','source_authorization_generation','source_group_generations')
       AND a.atthasdef) THEN RETURN false; END IF;
     FOR required IN SELECT * FROM (VALUES
       ('iam.role_sessions','iam.roles',ARRAY['tenant_id','role_id'],ARRAY['tenant_id','id']),

@@ -16564,7 +16564,9 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 	if dsn == "" {
 		t.Skip("set MATRIX_IAM_ACCESS_KEY_POSTGRES_TEST_DSN to an own clean PostgreSQL 18 database")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	// This is the outer fixture budget only. The production lock, retry and
+	// credential deadlines exercised below keep their exact configured values.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 	config, err := pgx.ParseConfig(dsn)
 	if err != nil || !strings.HasPrefix(config.Database, "matrix_iam_access_keys_") {
@@ -19901,7 +19903,7 @@ func proveRoleSessionIssuance(t *testing.T, ctx context.Context, handler http.Ha
 	t.Run("authority readiness closes on role session drift", func(t *testing.T) {
 		for _, attack := range []string{
 			`ALTER TABLE iam.role_sessions NO FORCE ROW LEVEL SECURITY`,
-			`ALTER TABLE iam.role_sessions ALTER COLUMN credential_generation DROP NOT NULL`,
+			`ALTER TABLE iam.role_sessions ALTER COLUMN credential_generation SET DEFAULT 1`,
 			`ALTER TABLE iam.role_sessions ALTER COLUMN authority_contract_version SET DEFAULT 2`,
 			`ALTER TABLE iam.role_sessions ALTER COLUMN authority_contract_version DROP NOT NULL`,
 			`ALTER TABLE iam.role_sessions DROP CONSTRAINT role_sessions_authority_contract`,
@@ -19954,7 +19956,7 @@ func proveRoleSessionIssuance(t *testing.T, ctx context.Context, handler http.Ha
 			err = tx.QueryRow(ctx, `SELECT iam.role_contract_ready() AND iam.authorization_decision_contract_ready()`).Scan(&ready)
 			_ = tx.Rollback(ctx)
 			if err != nil || ready {
-				t.Fatal("role session shape drift remained ready", err)
+				t.Fatalf("role session shape drift remained ready: attack=%q err=%v", attack, err)
 			}
 		}
 	})
