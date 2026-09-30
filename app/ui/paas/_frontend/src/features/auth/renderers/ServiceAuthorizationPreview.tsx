@@ -1,9 +1,9 @@
 "use client";
 
 import { useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { ArrowLeft, Boxes, KeyRound, ShieldCheck } from "lucide-react";
+import { Boxes, KeyRound, ShieldCheck } from "lucide-react";
 import { useTranslations } from "next-intl";
-import { Alert, Badge, Button, Card, Steps, Table } from "@ui/xiak";
+import { Alert, Badge, Button, Card, ContentPage, Steps, Table } from "@ui/xiak";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
 import type { AccountPolicyDocument } from "../domain/accounts";
 import { ServiceAuthorizationChain } from "./ServiceAuthorizationChain";
@@ -160,6 +160,20 @@ function ServiceLinkedRoleObservation({ accountId }: { accountId: string }) {
         </tr></tbody>
       </Table>
     </section>
+    <Card>
+      <Card.Header className={styles.observationHeading}>
+        <div><span>{t("observation.session.eyebrow")}</span><h4>{t("observation.session.title")}</h4></div>
+        <Badge status="neutral">{t("observation.session.notIssued")}</Badge>
+      </Card.Header>
+      <Card.Body className={styles.cardBody}>
+        <dl className={styles.compactFacts}>
+          <div><dt>{t("observation.session.identityType")}</dt><dd><code>ServiceRoleSession</code></dd></div>
+          <div><dt>{t("observation.session.source")}</dt><dd><code>SERVICE</code></dd></div>
+          <div><dt>{t("fields.maxSession")}</dt><dd>{t("observation.durationMinutes", { count: previewTemplate.maxSessionDurationSeconds / 60 })}</dd></div>
+        </dl>
+        <Alert status="info">{t("observation.session.boundary")}</Alert>
+      </Card.Body>
+    </Card>
     <div className={styles.snapshot}><div><strong>{t("observation.permissionTitle")}</strong><span>{t("observation.permissionHint")}</span></div><ul>{previewSnapshot.statements.flatMap((statement) => statement.actions).map((action) => <li key={action}><code>{action}</code></li>)}</ul></div>
     <Alert status="info">{t("observation.readOnly")}</Alert>
   </div>;
@@ -216,7 +230,6 @@ export function ServiceAuthorizationPreview({ workspace, onClose }: {
   const t = useTranslations("ServiceAuthorizationPreview");
   const [view, setView] = useState<PreviewView>("directory");
   const [stage, setStage] = useState(0);
-  const heading = useRef<HTMLHeadingElement>(null);
   const templateTrigger = useRef<HTMLButtonElement>(null);
   const reviewTrigger = useRef<HTMLButtonElement>(null);
   const observationTrigger = useRef<HTMLButtonElement>(null);
@@ -228,10 +241,9 @@ export function ServiceAuthorizationPreview({ workspace, onClose }: {
     if (previous === "review" && view === "detail") reviewTrigger.current?.focus({ preventScroll: true });
     else if (previous === "account-access" && view === "detail") observationTrigger.current?.focus({ preventScroll: true });
     else if (previous === "detail" && view === "directory") templateTrigger.current?.focus({ preventScroll: true });
-    else {
-      heading.current?.scrollIntoView?.({ block: "start" });
-      heading.current?.focus({ preventScroll: true });
-    }
+    // Forward navigation is a page-level state change. The shared H1 owns
+    // focus through ContentPage.Heading; reverse navigation restores the
+    // control that opened the nested view.
   }, [view]);
 
   const back = () => {
@@ -242,16 +254,17 @@ export function ServiceAuthorizationPreview({ workspace, onClose }: {
   const backLabel = view === "directory" ? t("backToRoles") : view === "detail" ? t("backToDirectory") : t("backToTemplate");
   const title = view === "directory" ? t("title") : view === "detail" ? t("detail.title") : view === "account-access" ? t("observation.pageTitle") : t("review.title");
 
-  return <section aria-labelledby="service-authorization-preview-title" className={styles.root}>
-    <div className={styles.heading}>
-      <Button variant="ghost" size="small" onClick={back}><ArrowLeft aria-hidden="true" />{backLabel}</Button>
-      <div className={styles.headingCopy}><h2 id="service-authorization-preview-title" ref={heading} tabIndex={-1}>{title}</h2><p>{t("subtitle")}</p></div>
-      <div className={styles.badges}><Badge status="warning">MOCK</Badge><Badge>{t("previewOnly")}</Badge></div>
-    </div>
-    <Alert status="warning">{t("boundary")}</Alert>
-    {view === "directory" ? <TemplateDirectory triggerRef={templateTrigger} onOpen={() => setView("detail")} /> : null}
-    {view === "detail" ? <TemplateDetail accountId={workspace.accountId} reviewRef={reviewTrigger} observationRef={observationTrigger} onReview={() => { setStage(0); setView("review"); }} onObserve={() => setView("account-access")} /> : null}
-    {view === "review" ? <ServiceAuthorizationConsentReview accountId={workspace.accountId} targetResourceId={previewTemplate.targetResourceId} stage={stage} onStageChange={setStage} onClose={() => setView("detail")} /> : null}
-    {view === "account-access" ? <ServiceLinkedRoleObservation accountId={workspace.accountId} /> : null}
-  </section>;
+  return <>
+    <ContentPage.Heading key={view} title={title} scrollKey={`service-authorization:${view}`} back={{ label: backLabel, onClick: back }} focus />
+    <Card aria-label={title}>
+      <Card.Body className={styles.root}>
+        <div className={styles.summary}><p>{t("subtitle")}</p><div className={styles.badges}><Badge status="warning">MOCK</Badge><Badge>{t("previewOnly")}</Badge></div></div>
+        <Alert status="warning">{t("boundary")}</Alert>
+        {view === "directory" ? <TemplateDirectory triggerRef={templateTrigger} onOpen={() => setView("detail")} /> : null}
+        {view === "detail" ? <TemplateDetail accountId={workspace.accountId} reviewRef={reviewTrigger} observationRef={observationTrigger} onReview={() => { setStage(0); setView("review"); }} onObserve={() => setView("account-access")} /> : null}
+        {view === "review" ? <ServiceAuthorizationConsentReview accountId={workspace.accountId} targetResourceId={previewTemplate.targetResourceId} stage={stage} onStageChange={setStage} onClose={() => setView("detail")} /> : null}
+        {view === "account-access" ? <ServiceLinkedRoleObservation accountId={workspace.accountId} /> : null}
+      </Card.Body>
+    </Card>
+  </>;
 }

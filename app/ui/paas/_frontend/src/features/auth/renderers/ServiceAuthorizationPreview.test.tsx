@@ -14,7 +14,7 @@ describe("ServiceAuthorizationPreview", () => {
 
     await user.click(screen.getByRole("button", { name: "托管服务安装访问" }));
     await user.click(screen.getByRole("button", { name: "审阅服务授权" }));
-    expect(screen.getByRole("heading", { level: 2, name: "审阅服务授权" })).toBe(document.activeElement);
+    expect(screen.getByRole("heading", { level: 1, name: "审阅服务授权" })).toBe(document.activeElement);
 
     await user.click(screen.getByRole("button", { name: "下一步" }));
     await waitFor(() => expect(screen.getByRole("heading", { level: 3, name: "核对示例权限范围" })).toBe(document.activeElement));
@@ -37,6 +37,9 @@ describe("ServiceAuthorizationPreview", () => {
     expect(screen.getByRole("heading", { name: "账号服务授权观察" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "不可变 ServiceRoleTemplate" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "ServiceLinkedRoleAccess" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "ServiceRoleSession" })).toBeTruthy();
+    expect(screen.getByText("SERVICE")).toBeTruthy();
+    expect(screen.getByText("未发行")).toBeTruthy();
     expect(screen.getByText("服务关联角色为 ACTIVE 只说明账号与发布模板、注册服务主体的关系可用；它不证明任何业务资源已经绑定，也不能替代逐条 WorkloadRoleBinding。")).toBeTruthy();
 
     const bindings = screen.getByRole("table", { name: "服务角色业务资源绑定" });

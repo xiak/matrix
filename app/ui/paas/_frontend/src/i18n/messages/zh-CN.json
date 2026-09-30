@@ -2137,6 +2137,14 @@
         "tableLabel": "服务角色业务资源绑定",
         "createdAt": "创建于"
       },
+      "session": {
+        "eyebrow": "临时凭据边界",
+        "title": "ServiceRoleSession",
+        "notIssued": "未发行",
+        "identityType": "短期身份类型",
+        "source": "身份来源",
+        "boundary": "关系 ACTIVE 与资源绑定 ACTIVE 都不代表已经发行临时凭据。未来服务必须以 SERVICE 来源承担角色，并受精确 binding、业务用途和会话上限共同约束；当前 MOCK 不调用 AssumeRole，也不展示活动会话。"
+      },
       "permissionTitle": "绑定的权限上限快照",
       "permissionHint": "服务承担角色后仍不能超过这一精确动作和资源范围",
       "readOnly": "IAM 中仅提供审计与状态观察。普通租户角色编辑不能修改服务关联角色的信任、权限上限或绑定；授权与撤销应回到对应云产品资源流程，并处理关联资源与短期会话生命周期。"

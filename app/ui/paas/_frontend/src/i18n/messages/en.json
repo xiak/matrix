@@ -2137,6 +2137,14 @@
         "tableLabel": "Service-role product-resource bindings",
         "createdAt": "Created"
       },
+      "session": {
+        "eyebrow": "Temporary-credential boundary",
+        "title": "ServiceRoleSession",
+        "notIssued": "Not issued",
+        "identityType": "Short-lived identity type",
+        "source": "Identity source",
+        "boundary": "An ACTIVE relation and an ACTIVE resource binding do not mean temporary credentials have been issued. A future service must assume the role with a SERVICE source under the exact binding, business purpose, and session ceiling. This MOCK does not call AssumeRole or present an active session."
+      },
       "permissionTitle": "Bound permission-ceiling snapshot",
       "permissionHint": "Role assumption still cannot exceed this exact action and resource scope",
       "readOnly": "IAM exposes audit and state observation only. Ordinary tenant role editing cannot change a service-linked role's trust, permission ceiling, or bindings. Authorization and revocation belong to the corresponding cloud-product resource flow and must handle associated resources and short-lived-session lifecycle."

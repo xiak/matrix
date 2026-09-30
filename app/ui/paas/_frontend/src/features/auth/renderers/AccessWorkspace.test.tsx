@@ -1034,7 +1034,7 @@ describe("CAM-style access workspace", () => {
     await user.click(trigger);
 
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(screen.getByRole("heading", { level: 2, name: "服务授权" })).toBe(document.activeElement);
+    expect(screen.getByRole("heading", { level: 1, name: "服务授权" })).toBe(document.activeElement);
     expect(screen.getByText(/真实创建或撤销必须从对应云产品的具体资源入口发起/)).toBeTruthy();
     expect(screen.getByText(/在 IAM 中只读审阅/)).toBeTruthy();
     const templateDirectory = screen.getByRole("table", { name: "服务授权模板" });
@@ -1046,7 +1046,7 @@ describe("CAM-style access workspace", () => {
 
     const template = screen.getByRole("button", { name: "托管服务安装访问" });
     await user.click(template);
-    expect(screen.getByRole("heading", { level: 2, name: "服务授权模板" })).toBe(document.activeElement);
+    expect(screen.getByRole("heading", { level: 1, name: "服务授权模板" })).toBe(document.activeElement);
     expect(screen.getAllByText("preview.paas.service").length).toBeGreaterThan(0);
     expect(screen.getByText("PreviewServiceRoleForManagedServiceInstallationRead")).toBeTruthy();
     expect(screen.getByText("目标账号").nextElementSibling?.textContent).toBe("org-xiak");
@@ -1056,7 +1056,7 @@ describe("CAM-style access workspace", () => {
 
     const review = screen.getByRole("button", { name: "审阅服务授权" });
     await user.click(review);
-    expect(screen.getByRole("heading", { level: 2, name: "审阅服务授权" })).toBe(document.activeElement);
+    expect(screen.getByRole("heading", { level: 1, name: "审阅服务授权" })).toBe(document.activeElement);
     expect(screen.getByRole("heading", { level: 3, name: "确认服务身份与单一用途" })).toBeTruthy();
     expect(screen.getByText(/必须同时校验操作者、目标账号与角色、实际工作负载、service purpose 和发起授权的产品资源/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "下一步" }));

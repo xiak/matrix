@@ -1,10 +1,8 @@
-.root { display: grid; min-width: 0; gap: var(--xiak-spacing-comfortable); padding: 0 var(--xiak-panel-padding) var(--xiak-panel-padding); }
+.root { display: grid; min-width: 0; gap: var(--xiak-spacing-comfortable); }
 .stack { display: grid; min-width: 0; gap: var(--xiak-spacing-comfortable); }
-.heading { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: start; gap: var(--xiak-spacing-default); }
-.headingCopy { display: grid; min-width: 0; gap: var(--xiak-spacing-micro); }
-.headingCopy h2, .sectionHeading h3, .cardHeading h3, .cardHeading h4 { margin: 0; color: var(--xiak-color-text-strong); overflow-wrap: anywhere; }
-.headingCopy h2 { font-size: var(--xiak-font-size-title); outline: none; }
-.headingCopy p, .sectionHeading p, .cardBody p, .boundaries p, .lead, .note { margin: 0; color: var(--xiak-color-text-muted); line-height: 1.65; }
+.summary { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-default); }
+.summary p, .sectionHeading p, .cardBody p, .boundaries p, .lead, .note { margin: 0; color: var(--xiak-color-text-muted); line-height: 1.65; }
+.sectionHeading h3, .cardHeading h3, .cardHeading h4 { margin: 0; color: var(--xiak-color-text-strong); overflow-wrap: anywhere; }
 .badges, .actions, .reviewActions > div { display: flex; flex-wrap: wrap; align-items: center; gap: var(--xiak-spacing-tight); }
 .badges { justify-content: flex-end; }
 .stateBadges { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--xiak-spacing-tight); }
@@ -65,9 +63,8 @@
 .bindingSection td code, .bindingSection time { white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
 
 @media (max-width: 600px) {
-  .root { padding-inline: var(--xiak-spacing-default); }
-  .heading { grid-template-columns: auto minmax(0, 1fr); }
-  .badges { grid-column: 2; justify-content: flex-start; }
+  .summary { align-items: flex-start; flex-direction: column; }
+  .badges { justify-content: flex-start; }
   .detailGrid, .facts, .observationGrid { grid-template-columns: minmax(0, 1fr); }
   .compactFacts > div { grid-template-columns: minmax(0, 1fr); gap: var(--xiak-spacing-micro); }
   .permissionStatement dl { grid-template-columns: minmax(0, 1fr); }
