@@ -1362,6 +1362,13 @@
     "settingsPersonalSecurityHint": "通知、验证器与通行密钥",
     "settingsAccountSecurity": "账号安全",
     "settingsAccountSecurityHint": "MFA、会话与密码规则",
+    "securityWorkspaceEyebrow": "安全与登录保护",
+    "securityWorkspaceTitle": "安全配置",
+    "securityWorkspaceHint": "按责任域查看和审阅个人验证方式、账号级安全策略与会话控制。仅在首次进入分区时加载其内容。",
+    "securityWorkspaceNavHint": "个人验证、账号策略与会话控制",
+    "securityWorkspaceSections": "安全配置分区",
+    "securityWorkspaceAccountPolicy": "账号策略",
+    "securityWorkspaceSession": "会话安全",
     "roles": {
       "ORGANIZATION_ADMIN": "租户管理员",
       "PAAS_DEVELOPER": "服务开发者",

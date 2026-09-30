@@ -1,7 +1,7 @@
 "use client";
 import { useId, useLayoutEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Alert, Badge, Button, Card, Checkbox, FormField, Input, Select, TextArea, Typography } from "@ui/xiak";
+import { Alert, Badge, Button, Card, Checkbox, FormField, Input, Select, Tabs, TextArea, Typography } from "@ui/xiak";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import { userSsoConfigurationIssue, type AccessWorkspace, type UserSsoConfiguration, type UserSsoConfigurationIssue } from "../domain/accessWorkspace";
 import { MfaSecurityPreview } from "./MfaPreviewExperience";
@@ -13,15 +13,44 @@ import styles from "./AccountAccessRenderer.module.css";
 import securityStyles from "./MfaPreviewExperience.module.css";
 
 export function AccessSecuritySettings({ workspace }: { workspace: AccessWorkspace }) {
-  const t = useTranslations("MfaPreview");
-  return <div className={securityStyles.securityRoot}>
-    <Alert>{t("mockBoundary")}</Alert>
-    <MfaSecurityPreview workspace={workspace} />
-    <PasskeyConceptPreview />
-    <AccountSecuritySettingsPreview workspace={workspace} />
-    <SessionIdleSettingsPreview />
-    <PasswordRulesPreview accountId={workspace.accountId} />
-  </div>;
+  const t = useTranslations("AccountAccess");
+  const mfa = useTranslations("MfaPreview");
+  const [section, setSection] = useState<"personal" | "account" | "session">("personal");
+  const [mounted, setMounted] = useState({ personal: true, account: false, session: false });
+
+  const openSection = (value: string) => {
+    const next = value as "personal" | "account" | "session";
+    setSection(next);
+    setMounted((current) => current[next] ? current : { ...current, [next]: true });
+  };
+
+  return <section aria-labelledby="security-settings-workspace-title" className={securityStyles.securityRoot} id="security-settings-workspace" tabIndex={-1}>
+    <div className={securityStyles.sectionHeading}>
+      <div>
+        <p>{t("securityWorkspaceEyebrow")}</p>
+        <h2 id="security-settings-workspace-title">{t("securityWorkspaceTitle")}</h2>
+        <span>{t("securityWorkspaceHint")}</span>
+      </div>
+      <Badge status="warning">MOCK</Badge>
+    </div>
+    <Alert>{mfa("mockBoundary")}</Alert>
+    <Tabs.Root className={securityStyles.securityTabs} onValueChange={openSection} value={section}>
+      <Tabs.List aria-label={t("securityWorkspaceSections")}>
+        <Tabs.Trigger value="personal">{t("settingsPersonalSecurity")}</Tabs.Trigger>
+        <Tabs.Trigger value="account">{t("securityWorkspaceAccountPolicy")}</Tabs.Trigger>
+        <Tabs.Trigger value="session">{t("securityWorkspaceSession")}</Tabs.Trigger>
+      </Tabs.List>
+      <Tabs.Content className={securityStyles.securityTabContent} forceMount={mounted.personal || undefined} value="personal">
+        {mounted.personal ? <><MfaSecurityPreview workspace={workspace} /><PasskeyConceptPreview /></> : null}
+      </Tabs.Content>
+      <Tabs.Content className={securityStyles.securityTabContent} forceMount={mounted.account || undefined} value="account">
+        {mounted.account ? <><AccountSecuritySettingsPreview workspace={workspace} /><PasswordRulesPreview accountId={workspace.accountId} /></> : null}
+      </Tabs.Content>
+      <Tabs.Content className={securityStyles.securityTabContent} forceMount={mounted.session || undefined} value="session">
+        {mounted.session ? <SessionIdleSettingsPreview /> : null}
+      </Tabs.Content>
+    </Tabs.Root>
+  </section>;
 }
 
 const emptySaml: UserSsoConfiguration = { protocol: "SAML", metadata: "", mappingClaim: "NameID" };

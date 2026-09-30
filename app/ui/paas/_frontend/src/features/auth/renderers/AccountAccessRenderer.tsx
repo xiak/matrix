@@ -43,17 +43,20 @@ const accountSignInSettingsId = "account-sign-in-settings";
 
 function SettingsSectionNav({ preview }: { preview: boolean }) {
   const t = useTranslations("AccountAccess");
-  const sections = [
+  const sections = preview ? [
     { id: accountSignInSettingsId, label: t("settingsSignIn"), hint: t("settingsSignInHint") },
-    { id: preview ? "security-notification-address" : "live-personal-security", label: t("settingsPersonalSecurity"), hint: t("settingsPersonalSecurityHint") },
-    { id: preview ? "account-policy" : "live-account-security", label: t("settingsAccountSecurity"), hint: t("settingsAccountSecurityHint") }
+    { id: "security-settings-workspace", label: t("securityWorkspaceTitle"), hint: t("securityWorkspaceNavHint") }
+  ] : [
+    { id: accountSignInSettingsId, label: t("settingsSignIn"), hint: t("settingsSignInHint") },
+    { id: "live-personal-security", label: t("settingsPersonalSecurity"), hint: t("settingsPersonalSecurityHint") },
+    { id: "live-account-security", label: t("settingsAccountSecurity"), hint: t("settingsAccountSecurityHint") }
   ];
 
   function openSection(event: MouseEvent<HTMLAnchorElement>, id: string) {
     event.preventDefault();
     const target = document.getElementById(id);
     target?.focus({ preventScroll: true });
-    target?.scrollIntoView?.({ block: "center" });
+    target?.scrollIntoView?.({ block: "start" });
   }
 
   return <nav aria-label={t("settingsNavigation")} className={styles.settingsSectionNav}>

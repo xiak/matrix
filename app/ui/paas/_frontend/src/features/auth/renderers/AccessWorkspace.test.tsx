@@ -130,6 +130,9 @@ async function select(user: ReturnType<typeof userEvent.setup>, label: string, o
   await user.click(screen.getByRole("combobox", { name: label }));
   await user.click(screen.getByRole("option", { name: option }));
 }
+async function openSecuritySection(user: ReturnType<typeof userEvent.setup>, name: "本人安全" | "账号策略" | "会话安全") {
+  await user.click(await screen.findByRole("tab", { name }));
+}
 async function logActions(user: ReturnType<typeof userEvent.setup>, actions: string[]) {
   await select(user, "产品服务", "日志服务");
   for (const action of actions) await user.click(screen.getByRole("checkbox", { name: action }));
@@ -2695,8 +2698,29 @@ describe("CAM-style access workspace", () => {
     await waitFor(() => expect(screen.queryByRole("heading", { name: /删除 MOCK-/ })).toBeNull());
     expect((await extension.read("preview")).pendingKeyCreation).toBeNull();
   });
+  it("loads security responsibilities on demand and preserves an opened account-policy draft", async () => {
+    const { user } = await open("settings", { seed: seedBoundAccountRuleOperator });
+    expect(screen.getByRole("heading", { name: "身份验证方法" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "多因素认证要求" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "会话空闲策略" })).toBeNull();
+
+    await openSecuritySection(user, "账号策略");
+    await user.click(screen.getByRole("button", { name: "编辑模拟规则" }));
+    const draft = screen.getByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" }) as HTMLInputElement;
+    await user.click(draft);
+    expect(draft.checked).toBe(true);
+
+    await openSecuritySection(user, "本人安全");
+    expect(screen.getByRole("tab", { name: "本人安全" }).getAttribute("aria-selected")).toBe("true");
+    await openSecuritySection(user, "账号策略");
+    expect((screen.getByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" }) as HTMLInputElement).checked).toBe(true);
+
+    await openSecuritySection(user, "会话安全");
+    expect(screen.getByRole("heading", { name: "会话空闲策略" })).toBeTruthy();
+  });
   it("previews account password rule editing and effective requirements without an IAM write", async () => {
     const { user, extension } = await open("settings");
+    await openSecuritySection(user, "账号策略");
     const before = await extension.read("preview");
     expect(screen.getByText(/此处不读取或保存 IAM 密码规则/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "体验规则编辑" }));
@@ -2737,6 +2761,7 @@ describe("CAM-style access workspace", () => {
   }, 20000);
   it("keeps unknown password age distinct from expiry and never mints a preview session", async () => {
     const { user, extension } = await open("settings");
+    await openSecuritySection(user, "账号策略");
     const before = await extension.read("preview");
     expect(screen.getByRole("heading", { name: "密码年龄与登录路径 · 场景模拟" })).toBeTruthy();
     expect(screen.getByText("未知；没有可证明的最近改密时间")).toBeTruthy();
@@ -2769,6 +2794,8 @@ describe("CAM-style access workspace", () => {
   it("models personal MFA, scoped step-up and the frozen account requirement without invented settings", async () => {
     const { user, extension } = await open("settings");
     expect(screen.getByRole("heading", { name: "身份验证方法" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "多因素认证要求" })).toBeNull();
+    await openSecuritySection(user, "账号策略");
     expect(screen.getByRole("heading", { name: "多因素认证要求" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "登录时的 MFA 要求" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "密码规则" })).toBeTruthy();
@@ -2777,6 +2804,7 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByText("当前规则")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "编辑模拟规则" })).toBeNull();
     expect(screen.getByText(/操作者本人必须先绑定验证器/)).toBeTruthy();
+    await openSecuritySection(user, "本人安全");
     await user.click(screen.getByRole("button", { name: "查看本人身份验证方法" }));
     expect(screen.getByRole("heading", { name: "身份验证方法" })).toBe(document.activeElement);
     expect(screen.queryByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" })).toBeNull();
@@ -2979,7 +3007,8 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByText(extension.recoveryCodes()[0]!)).toBeTruthy();
   });
   it("keeps account-rule editing closed until a newly bound operator signs in again", async () => {
-    const { extension } = await open("settings", { seed: async (workspace) => { await workspace.execute("preview", { kind: "confirm-personal-mfa" }); } });
+    const { user, extension } = await open("settings", { seed: async (workspace) => { await workspace.execute("preview", { kind: "confirm-personal-mfa" }); } });
+    await openSecuritySection(user, "账号策略");
     expect(screen.getByText(/通过正常登录重新验证后再修改账号规则/)).toBeTruthy();
     expect((screen.getByRole("button", { name: "编辑模拟规则" }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByRole("button", { name: "重新登录以继续" })).toBeTruthy();
@@ -3077,6 +3106,7 @@ describe("CAM-style access workspace", () => {
   });
   it("shows the reviewed rule version and requires a new login after an applied account-rule change", async () => {
     const { user, extension, repository } = await open("settings", { seed: seedBoundAccountRuleOperator });
+    await openSecuritySection(user, "账号策略");
     await user.click(screen.getByRole("button", { name: "编辑模拟规则" }));
     const ruleInput = screen.getByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" });
     expect(ruleInput).toBe(document.activeElement);
@@ -3099,6 +3129,7 @@ describe("CAM-style access workspace", () => {
   });
   it("locks an unknown account-rule save, discards secrets and keeps the lock across navigation", async () => {
     const { user, extension } = await open("settings", { seed: seedBoundAccountRuleOperator });
+    await openSecuritySection(user, "账号策略");
     await user.click(screen.getByRole("button", { name: "编辑模拟规则" }));
     await user.click(screen.getByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" }));
     await user.click(screen.getByRole("button", { name: "审阅规则变更" }));
@@ -3121,15 +3152,18 @@ describe("CAM-style access workspace", () => {
     expect(screen.queryByRole("button", { name: "按原意图查询" })).toBeNull();
     expect(screen.getByText(/账号规则保存结果未知。先重新登录/)).toBeTruthy();
     expect(screen.queryByText(/身份验证方法或账号规则的变更已生效/)).toBeNull();
+    await openSecuritySection(user, "本人安全");
     expect(screen.getByRole("button", { name: "替换验证器" }).getAttribute("title")).toContain("账号规则结果尚未确定");
 
     await user.click(screen.getByTestId("go-users"));
     await user.click(screen.getByTestId("go-settings"));
+    await openSecuritySection(user, "账号策略");
     expect(await screen.findByRole("heading", { name: "账号规则的保存结果未知" })).toBeTruthy();
     expect((await extension.read("preview")).pendingAccountRuleChange).toEqual(pending);
   });
   it("recovers an unknown account-rule only through the original intent", async () => {
     const { user, extension } = await open("settings", { seed: seedUnknownAccountRuleChange });
+    await openSecuritySection(user, "账号策略");
     const pending = (await extension.read("preview")).pendingAccountRuleChange;
     expect(await screen.findByRole("heading", { name: "账号规则的保存结果未知" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "按原意图查询" })).toBeNull();
@@ -3138,6 +3172,7 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByRole("button", { name: "Enter" })).toBeTruthy();
     await extension.execute("preview", { kind: "complete-personal-mfa-reauthentication" });
     await user.click(screen.getByRole("button", { name: "Enter" }));
+    await openSecuritySection(user, "账号策略");
     expect(await screen.findByRole("heading", { name: "账号规则的保存结果未知" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "按原意图查询" })).toBeTruthy();
     await select(user, "MOCK 原意图查询结果", "暂未查询到确定结果（保持未知）");
@@ -3155,6 +3190,7 @@ describe("CAM-style access workspace", () => {
   });
   it("journals an unavailable account-rule save before exposing UNKNOWN and keeps it locked after reload", async () => {
     const { user, repository, extension } = await open("settings", { seed: seedBoundAccountRuleOperator });
+    await openSecuritySection(user, "账号策略");
     await user.click(screen.getByRole("button", { name: "编辑模拟规则" }));
     await user.click(screen.getByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" }));
     await user.click(screen.getByRole("button", { name: "审阅规则变更" }));
@@ -3175,12 +3211,14 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByTestId("refresh-account"));
     await waitFor(() => expect(repository.workspace!.read).toHaveBeenCalledTimes(2));
     await user.click(screen.getByTestId("go-settings"));
+    await openSecuritySection(user, "账号策略");
     expect(await screen.findByRole("heading", { name: "账号规则的保存结果未知" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "编辑模拟规则" })).toBeNull();
     expect((await extension.read("preview")).pendingAccountRuleChange).toEqual(pending);
   });
   it("keeps account-rule writes closed when both the save and recovery journal are unavailable", async () => {
     const { user, repository, extension } = await open("settings", { seed: seedBoundAccountRuleOperator });
+    await openSecuritySection(user, "账号策略");
     await user.click(screen.getByRole("button", { name: "编辑模拟规则" }));
     await user.click(screen.getByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" }));
     await user.click(screen.getByRole("button", { name: "审阅规则变更" }));
@@ -3203,12 +3241,14 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByTestId("refresh-account"));
     await waitFor(() => expect(repository.workspace!.read).toHaveBeenCalledTimes(2));
     await user.click(screen.getByTestId("go-settings"));
+    await openSecuritySection(user, "账号策略");
     expect(await screen.findByText(/保存与本地恢复日志同时不可用/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "按原意图查询" })).toBeNull();
     expect(screen.queryByRole("button", { name: "编辑模拟规则" })).toBeNull();
   });
   it("keeps readable account rules unchanged when update capability is denied", async () => {
     const { user, extension } = await open("settings", { seed: seedBoundAccountRuleOperator });
+    await openSecuritySection(user, "账号策略");
     const before = await extension.read("preview");
     await user.click(screen.getByRole("button", { name: "编辑模拟规则" }));
     await user.click(screen.getByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" }));
@@ -3226,6 +3266,7 @@ describe("CAM-style access workspace", () => {
   });
   it("discards a stale account-rule review and its operation-bound proof after conflict", async () => {
     const { user, repository, extension } = await open("settings", { seed: seedBoundAccountRuleOperator });
+    await openSecuritySection(user, "账号策略");
     const before = await extension.read("preview");
     await user.click(screen.getByRole("button", { name: "编辑模拟规则" }));
     await user.click(screen.getByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" }));

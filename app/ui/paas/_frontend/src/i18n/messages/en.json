@@ -1362,6 +1362,13 @@
     "settingsPersonalSecurityHint": "Notifications, authenticators and passkeys",
     "settingsAccountSecurity": "Account security",
     "settingsAccountSecurityHint": "MFA, sessions and password rules",
+    "securityWorkspaceEyebrow": "Security and sign-in protection",
+    "securityWorkspaceTitle": "Security configuration",
+    "securityWorkspaceHint": "Review personal authenticators, account-wide security policy, and session controls by responsibility. Each section loads only when first opened.",
+    "securityWorkspaceNavHint": "Personal authentication, account policy and sessions",
+    "securityWorkspaceSections": "Security configuration sections",
+    "securityWorkspaceAccountPolicy": "Account policy",
+    "securityWorkspaceSession": "Session security",
     "roles": {
       "ORGANIZATION_ADMIN": "Tenant administrator",
       "PAAS_DEVELOPER": "Service developer",
