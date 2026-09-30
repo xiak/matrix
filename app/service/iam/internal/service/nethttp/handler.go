@@ -66,6 +66,8 @@ type Workflow interface {
 	ListPolicies(context.Context, iamv1.Secret, bool, string) (iamv1.PolicyList, error)
 	ListAuthorizationProfiles(context.Context, iamv1.Secret, string) (iamv1.AuthorizationProfileList, error)
 	ListServiceRoleTemplates(context.Context, iamv1.Secret, string) (iamv1.ServiceRoleTemplateList, error)
+	ListServiceLinkedRoles(context.Context, iamv1.Secret, string, string) (iamv1.ServiceLinkedRoleList, error)
+	GetServiceLinkedRole(context.Context, iamv1.Secret, iamv1.RoleID, string, string) (iamv1.ServiceLinkedRoleAccess, error)
 	CreateWorkloadRoleBinding(context.Context, iamv1.Secret, iamv1.Secret, iamv1.CreateWorkloadRoleBindingRequest) (iamv1.ServiceLinkedRoleAccess, error)
 	GetPolicy(context.Context, iamv1.Secret, iamv1.PolicyID, string) (iamv1.PolicyDetail, error)
 	CreatePolicy(context.Context, iamv1.Secret, iamv1.CreatePolicyRequest) (iamv1.PolicyDetail, error)
@@ -199,6 +201,8 @@ func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 	routes.HandleFunc("/v1/policies", value.policies)
 	routes.HandleFunc("/v1/authorization-profiles", value.authorizationProfiles)
 	routes.HandleFunc("/v1/service-role-templates", value.serviceRoleTemplates)
+	routes.HandleFunc("/v1/service-linked-roles", value.serviceLinkedRoles)
+	routes.HandleFunc("/v1/service-linked-roles/", value.serviceLinkedRole)
 	routes.HandleFunc("/v1/internal/workload-role-bindings", value.createWorkloadRoleBinding)
 	routes.HandleFunc("/v1/policies/", value.policy)
 	routes.HandleFunc("/v1/platform-policies", value.listPolicies)
@@ -461,6 +465,56 @@ func (value *handler) serviceRoleTemplates(response http.ResponseWriter, request
 	}
 	if iamv1.ValidateServiceRoleTemplateList(result) != nil {
 		value.writeError(response, request, identityaccess.ErrUnavailable)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (value *handler) serviceLinkedRoles(response http.ResponseWriter, request *http.Request) {
+	if !value.requireMethod(response, request, http.MethodGet) {
+		return
+	}
+	after, ok := directoryPage(response, request, iamv1.ValidatePageCursor)
+	if !ok {
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.ListServiceLinkedRoles(request.Context(), credential, after, requestID(request))
+	if err == nil {
+		err = iamv1.ValidateServiceLinkedRoleList(result)
+	}
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (value *handler) serviceLinkedRole(response http.ResponseWriter, request *http.Request) {
+	id, ok := commandPathID(response, request, "/v1/service-linked-roles/", "", "roleId")
+	if !ok || !value.requireMethod(response, request, http.MethodGet) {
+		return
+	}
+	after, ok := directoryPage(response, request, iamv1.ValidatePageCursor)
+	if !ok {
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.GetServiceLinkedRole(request.Context(), credential, iamv1.RoleID(id), after, requestID(request))
+	if err == nil {
+		err = iamv1.ValidateServiceLinkedRoleAccess(result)
+		if err == nil && result.Relation.Role.ID != iamv1.RoleID(id) {
+			err = identityaccess.ErrUnavailable
+		}
+	}
+	if err != nil {
+		value.writeError(response, request, err)
 		return
 	}
 	writeJSON(response, http.StatusOK, result)

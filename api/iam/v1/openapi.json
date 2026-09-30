@@ -24008,6 +24008,15 @@
           "kind": {
             "type": "string"
           },
+          "nextAfter": {
+            "maxLength": 384,
+            "minLength": 5,
+            "not": {
+              "pattern": "[^A-Za-z0-9._-]"
+            },
+            "pattern": "^ic1\\.[A-Za-z0-9_-]+$",
+            "type": "string"
+          },
           "relation": {
             "$ref": "#/components/schemas/ServiceLinkedRole"
           }
@@ -24016,6 +24025,68 @@
           "apiVersion",
           "bindings",
           "kind",
+          "relation"
+        ],
+        "type": "object"
+      },
+      "ServiceLinkedRoleList": {
+        "additionalProperties": false,
+        "properties": {
+          "accountId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "apiVersion": {
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ServiceLinkedRoleListing"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "nextAfter": {
+            "maxLength": 384,
+            "minLength": 5,
+            "not": {
+              "pattern": "[^A-Za-z0-9._-]"
+            },
+            "pattern": "^ic1\\.[A-Za-z0-9_-]+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "accountId",
+          "apiVersion",
+          "items",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "ServiceLinkedRoleListing": {
+        "additionalProperties": false,
+        "description": "Bounded current-Account summary. BindingCount is immutable history; ActiveBindingCount is current workload consent and never a cached authorization permit.",
+        "properties": {
+          "activeBindingCount": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "bindingCount": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "relation": {
+            "$ref": "#/components/schemas/ServiceLinkedRole"
+          }
+        },
+        "required": [
+          "activeBindingCount",
+          "bindingCount",
           "relation"
         ],
         "type": "object"
@@ -31695,6 +31766,111 @@
           }
         ],
         "summary": "Get the identity bound to the current service credential"
+      }
+    },
+    "/v1/service-linked-roles": {
+      "get": {
+        "operationId": "listServiceLinkedRoles",
+        "parameters": [
+          {
+            "description": "Opaque signed continuation bound to the current account, session, query and authority revision. Pass nextAfter unchanged; raw resource IDs are not accepted.",
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "maxLength": 384,
+              "minLength": 5,
+              "not": {
+                "pattern": "[^A-Za-z0-9._-]"
+              },
+              "pattern": "^ic1\\.[A-Za-z0-9_-]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceLinkedRoleList"
+                }
+              }
+            },
+            "description": "Current authority state."
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "List current-Account service-linked Role consent summaries. Template publication is not consent; counts distinguish durable history from active workload bindings."
+      }
+    },
+    "/v1/service-linked-roles/{roleId}": {
+      "get": {
+        "operationId": "getServiceLinkedRole",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "roleId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Opaque signed continuation bound to the current account, session, query and authority revision. Pass nextAfter unchanged; raw resource IDs are not accepted.",
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "maxLength": 384,
+              "minLength": 5,
+              "not": {
+                "pattern": "[^A-Za-z0-9._-]"
+              },
+              "pattern": "^ic1\\.[A-Za-z0-9_-]+$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ServiceLinkedRoleAccess"
+                }
+              }
+            },
+            "description": "Current authority state."
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Read one current-Account service-linked Role relation and a signed page of exact workload binding history."
       }
     },
     "/v1/service-role-templates": {

@@ -24,6 +24,7 @@ const (
 	WorkloadRoleBindingRevoked      WorkloadRoleBindingStatus = "REVOKED"
 	MaxServiceRoleTemplateWorkloads                           = 16
 	MaxServiceRoleTemplateListBytes int64                     = 256 * 1024
+	MaxServiceLinkedRoleListBytes   int64                     = 4 * 1024 * 1024
 )
 
 // ServiceRoleWorkloadSpec is the product-owned consent surface for one
@@ -118,6 +119,24 @@ type ServiceLinkedRoleAccess struct {
 	Kind       string                `json:"kind"`
 	Relation   ServiceLinkedRole     `json:"relation"`
 	Bindings   []WorkloadRoleBinding `json:"bindings"`
+	NextAfter  string                `json:"nextAfter,omitempty"`
+}
+
+// ServiceLinkedRoleListing is a bounded directory projection. Counts describe
+// durable binding history and current ACTIVE consent; the detailed binding
+// identities remain behind the separately authorized Role detail route.
+type ServiceLinkedRoleListing struct {
+	Relation           ServiceLinkedRole `json:"relation"`
+	BindingCount       uint64            `json:"bindingCount"`
+	ActiveBindingCount uint64            `json:"activeBindingCount"`
+}
+
+type ServiceLinkedRoleList struct {
+	APIVersion string                     `json:"apiVersion"`
+	Kind       string                     `json:"kind"`
+	AccountID  AccountID                  `json:"accountId"`
+	Items      []ServiceLinkedRoleListing `json:"items"`
+	NextAfter  string                     `json:"nextAfter,omitempty"`
 }
 
 // CreateWorkloadRoleBindingRequest carries one product PEP decision input and
@@ -180,9 +199,36 @@ func ValidateServiceLinkedRoleAccess(value ServiceLinkedRoleAccess) error {
 		}
 		previous = binding.ID
 	}
+	if value.NextAfter != "" && (len(value.Bindings) != DirectoryPageSize || ValidatePageCursor(value.NextAfter) != nil) {
+		return errors.New("service-linked role page boundary is invalid")
+	}
 	encoded, err := json.Marshal(value)
 	if err != nil || int64(len(encoded)) > MaxRoleAccessBytes {
 		return errors.New("service-linked role access exceeds its byte budget")
+	}
+	return nil
+}
+
+func ValidateServiceLinkedRoleList(value ServiceLinkedRoleList) error {
+	if value.APIVersion != APIVersion || value.Kind != "ServiceLinkedRoleList" ||
+		ValidateID("accountId", string(value.AccountID)) != nil || value.Items == nil || len(value.Items) > DirectoryPageSize {
+		return errors.New("service-linked role list is invalid")
+	}
+	var previous RoleID
+	for _, item := range value.Items {
+		if ValidateServiceLinkedRole(item.Relation) != nil || item.Relation.Role.AccountID != value.AccountID ||
+			item.Relation.Role.ID <= previous || item.BindingCount == 0 || item.BindingCount > 9007199254740991 ||
+			item.ActiveBindingCount > item.BindingCount {
+			return errors.New("service-linked role list item is invalid")
+		}
+		previous = item.Relation.Role.ID
+	}
+	if value.NextAfter != "" && (len(value.Items) != DirectoryPageSize || ValidatePageCursor(value.NextAfter) != nil) {
+		return errors.New("service-linked role list page boundary is invalid")
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil || int64(len(encoded)) > MaxServiceLinkedRoleListBytes {
+		return errors.New("service-linked role list exceeds its byte budget")
 	}
 	return nil
 }
@@ -380,6 +426,17 @@ func (value *ServiceLinkedRoleAccess) UnmarshalJSON(source []byte) error {
 		return contractjson.ErrInvalidDocument
 	}
 	*value = ServiceLinkedRoleAccess(decoded)
+	return nil
+}
+
+func (value *ServiceLinkedRoleList) UnmarshalJSON(source []byte) error {
+	type wire ServiceLinkedRoleList
+	var decoded wire
+	if contractjson.DecodeObjectBytes(source, MaxServiceLinkedRoleListBytes, &decoded) != nil ||
+		ValidateServiceLinkedRoleList(ServiceLinkedRoleList(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = ServiceLinkedRoleList(decoded)
 	return nil
 }
 

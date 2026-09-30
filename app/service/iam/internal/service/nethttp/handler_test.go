@@ -348,6 +348,85 @@ func TestIAMHTTPServiceRoleTemplateDirectoryRejectsInvalidMetadata(t *testing.T)
 	}
 }
 
+func TestIAMHTTPServiceLinkedRoleDirectoryIsCurrentAccountOnly(t *testing.T) {
+	workflow := newHTTPWorkflow(t)
+	handler := newTestHandler(t, workflow)
+	access := serviceLinkedRoleAccessForHTTPTest()
+	roleID := access.Relation.Role.ID
+
+	listRequest := httptest.NewRequest(http.MethodGet, "/v1/service-linked-roles", nil)
+	listRequest.Header.Set("Authorization", "Bearer current-user")
+	listRequest.Header.Set("Matrix-Tenant-ID", "forged-account")
+	listResponse := httptest.NewRecorder()
+	handler.ServeHTTP(listResponse, listRequest)
+	var list iamv1.ServiceLinkedRoleList
+	if listResponse.Code != http.StatusOK || json.Unmarshal(listResponse.Body.Bytes(), &list) != nil ||
+		iamv1.ValidateServiceLinkedRoleList(list) != nil || len(list.Items) != 1 ||
+		list.Items[0].Relation.Role.ID != roleID || list.Items[0].BindingCount != 1 ||
+		list.Items[0].ActiveBindingCount != 1 || workflow.serviceLinkedRoleListCalls != 1 ||
+		string(workflow.serviceLinkedRoleCredential.CopyBytes()) != "current-user" {
+		t.Fatalf("service-linked role list status=%d body=%s", listResponse.Code, listResponse.Body.String())
+	}
+
+	detailRequest := httptest.NewRequest(http.MethodGet, "/v1/service-linked-roles/"+string(roleID), nil)
+	detailRequest.Header.Set("Authorization", "Bearer current-user")
+	detailResponse := httptest.NewRecorder()
+	handler.ServeHTTP(detailResponse, detailRequest)
+	var detail iamv1.ServiceLinkedRoleAccess
+	if detailResponse.Code != http.StatusOK || json.Unmarshal(detailResponse.Body.Bytes(), &detail) != nil ||
+		iamv1.ValidateServiceLinkedRoleAccess(detail) != nil || detail.Relation.Role.ID != roleID ||
+		workflow.serviceLinkedRoleReadCalls != 1 || workflow.serviceLinkedRoleID != roleID {
+		t.Fatalf("service-linked role detail status=%d body=%s", detailResponse.Code, detailResponse.Body.String())
+	}
+
+	for _, test := range []struct {
+		name, method, target, body string
+		status                     int
+	}{
+		{"list account selector", http.MethodGet, "/v1/service-linked-roles?accountId=other", "", http.StatusBadRequest},
+		{"list body selector", http.MethodGet, "/v1/service-linked-roles", `{"tenantId":"other"}`, http.StatusBadRequest},
+		{"list mutation", http.MethodPost, "/v1/service-linked-roles", `{}`, http.StatusMethodNotAllowed},
+		{"detail account selector", http.MethodGet, "/v1/service-linked-roles/" + string(roleID) + "?tenantId=other", "", http.StatusBadRequest},
+		{"detail body selector", http.MethodGet, "/v1/service-linked-roles/" + string(roleID), `{"templateId":"other"}`, http.StatusBadRequest},
+		{"detail nested path", http.MethodGet, "/v1/service-linked-roles/" + string(roleID) + "/bindings", "", http.StatusNotFound},
+		{"detail mutation", http.MethodDelete, "/v1/service-linked-roles/" + string(roleID), "", http.StatusMethodNotAllowed},
+		{"missing bearer", http.MethodGet, "/v1/service-linked-roles", "", http.StatusUnauthorized},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			beforeList, beforeRead := workflow.serviceLinkedRoleListCalls, workflow.serviceLinkedRoleReadCalls
+			request := httptest.NewRequest(test.method, test.target, strings.NewReader(test.body))
+			if test.name != "missing bearer" {
+				request.Header.Set("Authorization", "Bearer current-user")
+			}
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != test.status || workflow.serviceLinkedRoleListCalls != beforeList ||
+				workflow.serviceLinkedRoleReadCalls != beforeRead {
+				t.Fatalf("invalid service-linked role read status=%d want=%d body=%s", response.Code, test.status, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestIAMHTTPServiceLinkedRoleDirectoryRejectsInvalidWorkflowOutput(t *testing.T) {
+	for _, detail := range []bool{false, true} {
+		workflow := newHTTPWorkflow(t)
+		workflow.invalidServiceLinkedRole = true
+		access := serviceLinkedRoleAccessForHTTPTest()
+		target := "/v1/service-linked-roles"
+		if detail {
+			target += "/" + string(access.Relation.Role.ID)
+		}
+		request := httptest.NewRequest(http.MethodGet, target, nil)
+		request.Header.Set("Authorization", "Bearer current-user")
+		response := httptest.NewRecorder()
+		newTestHandler(t, workflow).ServeHTTP(response, request)
+		if response.Code != http.StatusServiceUnavailable || strings.Contains(response.Body.String(), "service-linked") {
+			t.Fatalf("invalid directory output leaked at %s: status=%d body=%s", target, response.Code, response.Body.String())
+		}
+	}
+}
+
 func TestIAMHTTPWorkloadRoleBindingRequiresExactlyTwoCredentialsAndNoSelectors(t *testing.T) {
 	workflow := newHTTPWorkflow(t)
 	handler := newTestHandler(t, workflow)
@@ -1668,61 +1747,66 @@ type httpWorkflow struct {
 	passwordRequirementsError  error
 	passwordRequirementsBearer iamv1.Secret
 	Workflow
-	policyCalls               int
-	ownSessionCalls           int
-	policyPlatform            bool
-	policyCredential          iamv1.Secret
-	profileErr                error
-	invalidProfile            bool
-	templateCalls             int
-	templateCredential        iamv1.Secret
-	templateErr               error
-	invalidTemplate           bool
-	readiness                 iamv1.Readiness
-	status                    iamv1.BootstrapStatus
-	identity                  iamv1.ServiceIdentity
-	login                     iamv1.LoginResponse
-	decision                  iamv1.AuthorizationDecision
-	verificationDecision      iamv1.AuthorizationDecision
-	loginErr                  error
-	identityCalls             int
-	loginCalls                int
-	verifiedChallengeID       string
-	enrollmentCalls           int
-	enrollmentCredential      iamv1.Secret
-	enrollmentRequestID       string
-	enrollmentVerificationID  string
-	enrollmentState           iamv1.EnrollmentChallengeState
-	enrollmentStart           iamv1.StartTOTPEnrollmentResponse
-	enrollmentConfirmation    iamv1.ConfirmTOTPEnrollmentResponse
-	enrollmentMail            iamv1.NotificationContactVerification
-	enrollmentErr             error
-	totpCalls                 int
-	stepCalls                 int
-	stepCredential            iamv1.Secret
-	stepResult                iamv1.StepUp
-	regenerationResult        iamv1.RegenerateRecoveryCodesResponse
-	removalResult             iamv1.RemoveTOTPResponse
-	stepErr                   error
-	getUserCalls              int
-	updateUserCalls           int
-	deleteUserCalls           int
-	userID                    iamv1.PrincipalID
-	updateUser                iamv1.UpdateUserRequest
-	deleteUser                iamv1.DeleteUserRequest
-	authorizeCalls            int
-	keyCalls                  int
-	verifyInstallationCalls   int
-	settingsCalls             int
-	settingsCredential        iamv1.Secret
-	settingsErr               error
-	settingsRequest           iamv1.UpdateAccountSecuritySettingsRequest
-	settingsChange            iamv1.AccountSecuritySettingsChange
-	settingsCommand           string
-	workloadBindingCalls      int
-	workloadServiceCredential iamv1.Secret
-	workloadSubjectCredential iamv1.Secret
-	workloadBindingRequest    iamv1.CreateWorkloadRoleBindingRequest
+	policyCalls                 int
+	ownSessionCalls             int
+	policyPlatform              bool
+	policyCredential            iamv1.Secret
+	profileErr                  error
+	invalidProfile              bool
+	templateCalls               int
+	templateCredential          iamv1.Secret
+	templateErr                 error
+	invalidTemplate             bool
+	readiness                   iamv1.Readiness
+	status                      iamv1.BootstrapStatus
+	identity                    iamv1.ServiceIdentity
+	login                       iamv1.LoginResponse
+	decision                    iamv1.AuthorizationDecision
+	verificationDecision        iamv1.AuthorizationDecision
+	loginErr                    error
+	identityCalls               int
+	loginCalls                  int
+	verifiedChallengeID         string
+	enrollmentCalls             int
+	enrollmentCredential        iamv1.Secret
+	enrollmentRequestID         string
+	enrollmentVerificationID    string
+	enrollmentState             iamv1.EnrollmentChallengeState
+	enrollmentStart             iamv1.StartTOTPEnrollmentResponse
+	enrollmentConfirmation      iamv1.ConfirmTOTPEnrollmentResponse
+	enrollmentMail              iamv1.NotificationContactVerification
+	enrollmentErr               error
+	totpCalls                   int
+	stepCalls                   int
+	stepCredential              iamv1.Secret
+	stepResult                  iamv1.StepUp
+	regenerationResult          iamv1.RegenerateRecoveryCodesResponse
+	removalResult               iamv1.RemoveTOTPResponse
+	stepErr                     error
+	getUserCalls                int
+	updateUserCalls             int
+	deleteUserCalls             int
+	userID                      iamv1.PrincipalID
+	updateUser                  iamv1.UpdateUserRequest
+	deleteUser                  iamv1.DeleteUserRequest
+	authorizeCalls              int
+	keyCalls                    int
+	verifyInstallationCalls     int
+	settingsCalls               int
+	settingsCredential          iamv1.Secret
+	settingsErr                 error
+	settingsRequest             iamv1.UpdateAccountSecuritySettingsRequest
+	settingsChange              iamv1.AccountSecuritySettingsChange
+	settingsCommand             string
+	workloadBindingCalls        int
+	workloadServiceCredential   iamv1.Secret
+	workloadSubjectCredential   iamv1.Secret
+	workloadBindingRequest      iamv1.CreateWorkloadRoleBindingRequest
+	serviceLinkedRoleListCalls  int
+	serviceLinkedRoleReadCalls  int
+	serviceLinkedRoleCredential iamv1.Secret
+	serviceLinkedRoleID         iamv1.RoleID
+	invalidServiceLinkedRole    bool
 }
 
 func (value *httpWorkflow) UserPasswordResetCompletion(_ context.Context, credential iamv1.Secret, user iamv1.PrincipalID, command string, version uint64, _ string) (iamv1.UserPasswordResetCompletion, error) {
@@ -1776,6 +1860,29 @@ func (value *httpWorkflow) ListServiceRoleTemplates(_ context.Context, credentia
 		templates[0].ContentDigest = "invalid-digest"
 	}
 	return iamv1.ServiceRoleTemplateList{APIVersion: iamv1.APIVersion, Kind: "ServiceRoleTemplateList", Items: templates}, value.templateErr
+}
+
+func (value *httpWorkflow) ListServiceLinkedRoles(_ context.Context, credential iamv1.Secret, _, _ string) (iamv1.ServiceLinkedRoleList, error) {
+	value.serviceLinkedRoleListCalls++
+	value.serviceLinkedRoleCredential = credential
+	access := serviceLinkedRoleAccessForHTTPTest()
+	count := uint64(1)
+	if value.invalidServiceLinkedRole {
+		count = 0
+	}
+	return iamv1.ServiceLinkedRoleList{APIVersion: iamv1.APIVersion, Kind: "ServiceLinkedRoleList",
+		AccountID: access.Relation.Role.AccountID, Items: []iamv1.ServiceLinkedRoleListing{{
+			Relation: access.Relation, BindingCount: count, ActiveBindingCount: count}}}, nil
+}
+
+func (value *httpWorkflow) GetServiceLinkedRole(_ context.Context, credential iamv1.Secret, id iamv1.RoleID, _, _ string) (iamv1.ServiceLinkedRoleAccess, error) {
+	value.serviceLinkedRoleReadCalls++
+	value.serviceLinkedRoleCredential, value.serviceLinkedRoleID = credential, id
+	result := serviceLinkedRoleAccessForHTTPTest()
+	if value.invalidServiceLinkedRole {
+		result.Kind = "InvalidServiceLinkedRoleAccess"
+	}
+	return result, nil
 }
 
 func (value *httpWorkflow) CreateWorkloadRoleBinding(_ context.Context, serviceCredential, subjectCredential iamv1.Secret,

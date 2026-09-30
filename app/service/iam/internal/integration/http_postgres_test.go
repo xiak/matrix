@@ -22122,6 +22122,9 @@ func proveServiceRoleTemplateDirectory(t *testing.T, ctx context.Context, handle
 	if response := request(http.MethodGet, "/v1/service-role-templates", root, nil); response.Code != http.StatusForbidden {
 		t.Fatalf("account administrator silently inherited service template authority: status=%d body=%s", response.Code, response.Body.String())
 	}
+	if response := request(http.MethodGet, "/v1/service-linked-roles", root, nil); response.Code != http.StatusForbidden {
+		t.Fatalf("account administrator silently inherited service-linked role directory authority: status=%d body=%s", response.Code, response.Body.String())
+	}
 	for _, attack := range []struct {
 		method, path string
 		body         any
@@ -22172,7 +22175,7 @@ func proveServiceRoleTemplateDirectory(t *testing.T, ctx context.Context, handle
 		result.Items[0].Status != iamv1.ServiceRoleTemplateActive {
 		t.Fatalf("service template directory differs from release authority: status=%d body=%s err=%v", response.Code, response.Body.String(), err)
 	}
-	proveWorkloadServiceRoleConsent(t, ctx, handler, database, root, actor, result.Items[0], bindingRequest)
+	serviceLinkedRoleID := proveWorkloadServiceRoleConsent(t, ctx, handler, database, root, actor, result.Items[0], bindingRequest)
 	response = request(http.MethodPost, "/v1/policy-attachments/"+string(attachment.ID)+":revoke", root,
 		iamv1.RevokePolicyAttachmentRequest{ResourceVersion: attachment.ResourceVersion, RequestID: "service-template-revoke-delegation"})
 	if response.Code != http.StatusOK {
@@ -22180,6 +22183,12 @@ func proveServiceRoleTemplateDirectory(t *testing.T, ctx context.Context, handle
 	}
 	if response := request(http.MethodGet, "/v1/service-role-templates", root, nil); response.Code != http.StatusForbidden {
 		t.Fatal("revoked service template authority remained cached")
+	}
+	if response := request(http.MethodGet, "/v1/service-linked-roles", root, nil); response.Code != http.StatusForbidden {
+		t.Fatal("revoked service-linked role directory authority remained cached")
+	}
+	if response := request(http.MethodGet, "/v1/service-linked-roles/"+string(serviceLinkedRoleID), root, nil); response.Code != http.StatusForbidden {
+		t.Fatal("revoked service-linked role detail authority remained cached")
 	}
 	if response := performIAMWorkloadRoleBinding(t, handler, paasCredential, root, bindingRequest); response.Code != http.StatusForbidden {
 		t.Fatalf("revoked service role consent authority remained cached: status=%d body=%s", response.Code, response.Body.String())
@@ -22216,7 +22225,7 @@ func performIAMWorkloadRoleBinding(t *testing.T, handler http.Handler, serviceCr
 
 func proveWorkloadServiceRoleConsent(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn,
 	root string, actor iamv1.CurrentIdentity, template iamv1.ServiceRoleTemplate, command iamv1.CreateWorkloadRoleBindingRequest,
-) {
+) iamv1.RoleID {
 	t.Helper()
 	call := func(serviceCredential, subjectCredential string, request iamv1.CreateWorkloadRoleBindingRequest, want int) *httptest.ResponseRecorder {
 		t.Helper()
@@ -22238,6 +22247,12 @@ func proveWorkloadServiceRoleConsent(t *testing.T, ctx context.Context, handler 
 			t.Fatalf("invalid workload service role result: %s", response.Body.String())
 		}
 		return result
+	}
+	response := performIAMRequest(handler, http.MethodGet, "/v1/service-linked-roles", root, nil)
+	var emptyDirectory iamv1.ServiceLinkedRoleList
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &emptyDirectory) != nil ||
+		iamv1.ValidateServiceLinkedRoleList(emptyDirectory) != nil || emptyDirectory.AccountID != actor.Account.ID || len(emptyDirectory.Items) != 0 {
+		t.Fatalf("authorized empty service-linked role directory is invalid: status=%d body=%s", response.Code, response.Body.String())
 	}
 
 	atomicFailure := serviceRoleBindingRequest(t, template, "service-installation-atomic-failure", "service-role-atomic-failure")
@@ -22273,9 +22288,42 @@ func proveWorkloadServiceRoleConsent(t *testing.T, ctx context.Context, handler 
 		created.Bindings[0].Workload != command.Authorization.Resource || created.Bindings[0].Status != iamv1.WorkloadRoleBindingActive {
 		t.Fatal("workload service role creation or exact replay lost immutable authority")
 	}
+	response = performIAMRequest(handler, http.MethodGet, "/v1/service-linked-roles", root, nil)
+	var serviceRoleDirectory iamv1.ServiceLinkedRoleList
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &serviceRoleDirectory) != nil ||
+		iamv1.ValidateServiceLinkedRoleList(serviceRoleDirectory) != nil || serviceRoleDirectory.AccountID != actor.Account.ID ||
+		len(serviceRoleDirectory.Items) != 1 || !reflect.DeepEqual(serviceRoleDirectory.Items[0].Relation, created.Relation) ||
+		serviceRoleDirectory.Items[0].BindingCount != 1 || serviceRoleDirectory.Items[0].ActiveBindingCount != 1 {
+		t.Fatalf("service-linked role directory lost current Account consent: status=%d body=%s", response.Code, response.Body.String())
+	}
+	response = performIAMRequest(handler, http.MethodGet, "/v1/service-linked-roles/"+string(created.Relation.Role.ID), root, nil)
+	var serviceRoleDetail iamv1.ServiceLinkedRoleAccess
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &serviceRoleDetail) != nil ||
+		iamv1.ValidateServiceLinkedRoleAccess(serviceRoleDetail) != nil || !reflect.DeepEqual(serviceRoleDetail, created) {
+		t.Fatalf("service-linked role detail lost durable binding history: status=%d body=%s", response.Code, response.Body.String())
+	}
+	if response := performIAMRequest(handler, http.MethodGet, "/v1/service-linked-roles", paasCredential, nil); response.Code != http.StatusUnauthorized {
+		t.Fatal("service credential substituted for service-linked role USER read authority")
+	}
+	for _, attack := range []struct {
+		method, path string
+		body         []byte
+		want         int
+	}{
+		{http.MethodGet, "/v1/service-linked-roles?accountId=other", nil, http.StatusBadRequest},
+		{http.MethodGet, "/v1/service-linked-roles/" + string(created.Relation.Role.ID) + "?tenantId=other", nil, http.StatusBadRequest},
+		{http.MethodGet, "/v1/service-linked-roles", []byte(`{"templateId":"other"}`), http.StatusBadRequest},
+		{http.MethodPost, "/v1/service-linked-roles", []byte(`{}`), http.StatusMethodNotAllowed},
+	} {
+		response := performIAMRequest(handler, attack.method, attack.path, root, attack.body)
+		if response.Code != attack.want {
+			t.Fatalf("service-linked role selector attack %s %s: status=%d want=%d body=%s",
+				attack.method, attack.path, response.Code, attack.want, response.Body.String())
+		}
+	}
 
 	var directory iamv1.RoleList
-	response := performIAMRequest(handler, http.MethodGet, "/v1/roles", root, nil)
+	response = performIAMRequest(handler, http.MethodGet, "/v1/roles", root, nil)
 	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &directory) != nil || iamv1.ValidateRoleList(directory) != nil {
 		t.Fatalf("read customer role directory: status=%d body=%s", response.Code, response.Body.String())
 	}
@@ -22450,6 +22498,13 @@ func proveWorkloadServiceRoleConsent(t *testing.T, ctx context.Context, handler 
 		actor.Account.ID, losingRequestID).Scan(&losingEffects); err != nil || losingEffects != 0 {
 		t.Fatal("losing concurrent service role command retained partial effects", err)
 	}
+	response = performIAMRequest(handler, http.MethodGet, "/v1/service-linked-roles", root, nil)
+	serviceRoleDirectory = iamv1.ServiceLinkedRoleList{}
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &serviceRoleDirectory) != nil ||
+		iamv1.ValidateServiceLinkedRoleList(serviceRoleDirectory) != nil || len(serviceRoleDirectory.Items) != 1 ||
+		serviceRoleDirectory.Items[0].BindingCount != 3 || serviceRoleDirectory.Items[0].ActiveBindingCount != 3 {
+		t.Fatalf("service-linked role summary counts are not current: status=%d body=%s", response.Code, response.Body.String())
+	}
 
 	foreignResponse := performIAMRequest(handler, http.MethodPost, "/v1/accounts", root, mustIAMJSON(t, map[string]any{
 		"id": "service-role-other-account", "displayName": "Service role isolation", "rootLoginName": "service.role.other",
@@ -22478,6 +22533,19 @@ func proveWorkloadServiceRoleConsent(t *testing.T, ctx context.Context, handler 
 	if foreign.Relation.Role.AccountID != foreignAccount.ID || foreign.Bindings[0].AccountID != foreignAccount.ID ||
 		foreign.Relation.Role.ID == created.Relation.Role.ID || foreign.Bindings[0].ID == created.Bindings[0].ID {
 		t.Fatal("same workload and command identity crossed account namespaces")
+	}
+	response = performIAMRequest(handler, http.MethodGet, "/v1/service-linked-roles", foreignRoot, nil)
+	var foreignDirectory iamv1.ServiceLinkedRoleList
+	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &foreignDirectory) != nil ||
+		iamv1.ValidateServiceLinkedRoleList(foreignDirectory) != nil || foreignDirectory.AccountID != foreignAccount.ID ||
+		len(foreignDirectory.Items) != 1 || foreignDirectory.Items[0].Relation.Role.ID != foreign.Relation.Role.ID {
+		t.Fatalf("foreign Account service-linked role directory crossed namespaces: status=%d body=%s", response.Code, response.Body.String())
+	}
+	if response := performIAMRequest(handler, http.MethodGet, "/v1/service-linked-roles/"+string(created.Relation.Role.ID), foreignRoot, nil); response.Code != http.StatusForbidden {
+		t.Fatalf("foreign Account read original service-linked Role: status=%d body=%s", response.Code, response.Body.String())
+	}
+	if response := performIAMRequest(handler, http.MethodGet, "/v1/service-linked-roles/"+string(foreign.Relation.Role.ID), root, nil); response.Code != http.StatusForbidden {
+		t.Fatalf("original Account read foreign service-linked Role: status=%d body=%s", response.Code, response.Body.String())
 	}
 	response = performIAMRequest(handler, http.MethodPost, "/v1/policy-attachments/"+string(foreignAttachment.ID)+":revoke", foreignRoot,
 		mustIAMJSON(t, iamv1.RevokePolicyAttachmentRequest{ResourceVersion: foreignAttachment.ResourceVersion, RequestID: "service-role-other-revoke"}))
@@ -22515,6 +22583,9 @@ func proveWorkloadServiceRoleConsent(t *testing.T, ctx context.Context, handler 
 		 CREATE UNIQUE INDEX workload_role_bindings_active_uq ON iam.workload_role_bindings(tenant_id,id) WHERE revoked_at IS NULL`,
 		`DROP INDEX iam.workload_role_bindings_active_uq;
 		 CREATE UNIQUE INDEX workload_role_bindings_active_uq ON iam.workload_role_bindings(tenant_id,template_id,template_version,workload_kind,workload_id) WHERE status='ACTIVE'`,
+		`DROP INDEX iam.workload_role_bindings_role_directory_idx`,
+		`DROP INDEX iam.workload_role_bindings_role_directory_idx;
+		 CREATE UNIQUE INDEX workload_role_bindings_role_directory_idx ON iam.workload_role_bindings(tenant_id,id,role_id)`,
 		`ALTER TABLE iam.workload_role_bindings DROP CONSTRAINT workload_role_bindings_request_uq`,
 		`ALTER TABLE iam.workload_role_bindings DROP CONSTRAINT workload_role_bindings_decision_fk`,
 		`ALTER TABLE iam.workload_role_bindings DISABLE TRIGGER workload_role_binding_transitions`,
@@ -22522,6 +22593,8 @@ func proveWorkloadServiceRoleConsent(t *testing.T, ctx context.Context, handler 
 		`GRANT SELECT ON iam.workload_role_bindings TO matrix_iam_api`,
 		`ALTER FUNCTION iam.lock_workload_role_binding_sources(text,text,text,text,text) SECURITY INVOKER`,
 		`GRANT EXECUTE ON FUNCTION iam.lock_workload_role_binding_sources(text,text,text,text,text) TO matrix_iam_worker`,
+		`ALTER FUNCTION iam.list_service_linked_roles(text,text,text,text) SECURITY INVOKER`,
+		`GRANT EXECUTE ON FUNCTION iam.read_service_linked_role(text,text,text,text,text) TO matrix_iam_worker`,
 		`ALTER FUNCTION iam.service_linked_role_snapshot(text,text) SECURITY DEFINER`,
 		`GRANT EXECUTE ON FUNCTION iam.workload_role_binding_snapshot(text,text) TO matrix_iam_api`,
 	} {
@@ -22554,6 +22627,19 @@ func proveWorkloadServiceRoleConsent(t *testing.T, ctx context.Context, handler 
 	if !errors.As(err, &databaseError) || databaseError.Code != "42501" {
 		t.Fatal("restricted IAM API role read private service role state", err)
 	}
+	tx, err = database.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(ctx, `SET LOCAL ROLE matrix_iam_api`); err == nil {
+		_, err = tx.Exec(ctx, `SELECT iam.list_service_linked_roles($1,$2,$3,'')`,
+			actor.Account.ID, actor.User.ID, "decision-forged")
+	}
+	_ = tx.Rollback(context.Background())
+	if !errors.As(err, &databaseError) || databaseError.Code != "42501" {
+		t.Fatal("restricted IAM API role read service-linked relations without a current decision", err)
+	}
+	return created.Relation.Role.ID
 }
 
 func proveRoleManagement(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, root string) {

@@ -231,7 +231,8 @@ func (codec CursorCodec) binding(subject SubjectContext, query DirectoryQuery, n
 		mode = iamv1.AuthorizationResourceInstance
 	} else {
 		switch query.Action {
-		case iamv1.ActionIAMUserList, iamv1.ActionIAMGroupList, iamv1.ActionIAMRoleList:
+		case iamv1.ActionIAMUserList, iamv1.ActionIAMGroupList, iamv1.ActionIAMRoleList,
+			iamv1.ActionIAMServiceLinkedRoleList:
 			validQuery = query.Resource == (iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: string(subject.Organization.ID)})
 			mode = iamv1.AuthorizationResourceInstance
 		case iamv1.ActionIAMAccountRead:
@@ -240,7 +241,7 @@ func (codec CursorCodec) binding(subject SubjectContext, query DirectoryQuery, n
 		case iamv1.ActionIAMGroupMembershipList:
 			validQuery = query.Resource.Kind == iamv1.ResourceGroup && iamv1.ValidateID("groupId", query.Resource.ID) == nil
 			mode = iamv1.AuthorizationResourceInstance
-		case iamv1.ActionIAMRoleRead:
+		case iamv1.ActionIAMRoleRead, iamv1.ActionIAMServiceLinkedRoleRead:
 			validQuery = query.Resource.Kind == iamv1.ResourceRole && iamv1.ValidateID("roleId", query.Resource.ID) == nil
 			mode = iamv1.AuthorizationResourceInstance
 		}

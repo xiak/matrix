@@ -538,3 +538,38 @@ func TestRoleDirectoryCursorsBindTheirExactCurrentAuthority(t *testing.T) {
 		})
 	}
 }
+
+func TestServiceLinkedRoleDirectoryCursorsCannotCrossListDetailOrRole(t *testing.T) {
+	now := authorityTestTime()
+	codec, _ := NewCursorCodec(bytes.Repeat([]byte{0x72}, 32))
+	subject := authoritySubject(now, iamv1.SystemPolicyServiceRoleAdministrator)
+	list := DirectoryQuery{InstallationID: subject.InstallationID, Action: iamv1.ActionIAMServiceLinkedRoleList,
+		Resource: iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: string(subject.Organization.ID)}}
+	detail := DirectoryQuery{InstallationID: subject.InstallationID, Action: iamv1.ActionIAMServiceLinkedRoleRead,
+		Resource: iamv1.ResourceReference{Kind: iamv1.ResourceRole, ID: "service-role-one"}}
+	for _, query := range []DirectoryQuery{list, detail} {
+		cursor, err := codec.Encode(subject, query, "last-service-role-item", now)
+		if err != nil {
+			t.Fatal("authorized service-role directory could not continue", err)
+		}
+		if after, err := codec.Decode(cursor, subject, query, now); err != nil || after != "last-service-role-item" {
+			t.Fatal("service-role cursor lost its exact boundary", err)
+		}
+		otherRole := detail
+		otherRole.Resource.ID = "service-role-two"
+		for _, other := range []DirectoryQuery{list, detail, otherRole,
+			{InstallationID: query.InstallationID, Action: iamv1.ActionIAMRoleList, Resource: list.Resource}} {
+			if other == query {
+				continue
+			}
+			if _, err := codec.Decode(cursor, subject, other, now); !errors.Is(err, ErrInvalidCursor) {
+				t.Fatal("service-role cursor crossed list, detail or Role authority")
+			}
+		}
+		denied := subject
+		denied.Policies = nil
+		if _, err := codec.Decode(cursor, denied, query, now); !errors.Is(err, ErrInvalidCursor) {
+			t.Fatal("service-role cursor survived authority revocation")
+		}
+	}
+}

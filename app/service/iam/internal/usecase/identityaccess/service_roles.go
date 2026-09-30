@@ -41,6 +41,61 @@ func (service *Authority) ListServiceRoleTemplates(ctx context.Context, credenti
 		})
 }
 
+// ListServiceLinkedRoles observes only consent owned by the authenticated
+// Account. Template publication is deliberately separate, and binding counts
+// are observations rather than cached authorization results.
+func (service *Authority) ListServiceLinkedRoles(ctx context.Context, credential iamv1.Secret, after, requestID string) (iamv1.ServiceLinkedRoleList, error) {
+	if iamv1.ValidateID("requestId", requestID) != nil || (after != "" && iamv1.ValidatePageCursor(after) != nil) {
+		return iamv1.ServiceLinkedRoleList{}, ErrInvalidArgument
+	}
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMServiceLinkedRoleList,
+		iamv1.AuthorizationResourceInstance, "", iamv1.ResourceReference{Kind: iamv1.ResourceAccount}, requestID,
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.ServiceLinkedRoleList, error) {
+			position, query, err := service.directoryPosition(ctx, tx, subject, decision, after, now)
+			if err != nil {
+				return iamv1.ServiceLinkedRoleList{}, err
+			}
+			result, err := tx.ListServiceLinkedRoles(ctx, AccountRead{AccountID: subject.Subject.Organization.ID,
+				ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID, After: position})
+			if err != nil {
+				return iamv1.ServiceLinkedRoleList{}, err
+			}
+			result.NextAfter, err = service.sealDirectoryPage(subject, query, result.NextAfter, now)
+			if err != nil || iamv1.ValidateServiceLinkedRoleList(result) != nil {
+				return iamv1.ServiceLinkedRoleList{}, ErrUnavailable
+			}
+			return result, nil
+		})
+}
+
+// GetServiceLinkedRole authorizes the exact SERVICE_LINKED Role on every page.
+// The route never falls back to the ordinary customer Role projection.
+func (service *Authority) GetServiceLinkedRole(ctx context.Context, credential iamv1.Secret, id iamv1.RoleID, after, requestID string) (iamv1.ServiceLinkedRoleAccess, error) {
+	if iamv1.ValidateID("roleId", string(id)) != nil || iamv1.ValidateID("requestId", requestID) != nil ||
+		(after != "" && iamv1.ValidatePageCursor(after) != nil) {
+		return iamv1.ServiceLinkedRoleAccess{}, ErrInvalidArgument
+	}
+	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMServiceLinkedRoleRead,
+		iamv1.AuthorizationResourceInstance, "", iamv1.ResourceReference{Kind: iamv1.ResourceRole, ID: string(id)}, requestID,
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.ServiceLinkedRoleAccess, error) {
+			position, query, err := service.directoryPosition(ctx, tx, subject, decision, after, now)
+			if err != nil {
+				return iamv1.ServiceLinkedRoleAccess{}, err
+			}
+			result, err := tx.ReadServiceLinkedRole(ctx, ServiceLinkedRoleRead{AccountRead: AccountRead{
+				AccountID: subject.Subject.Organization.ID, ActorPrincipalID: subject.Subject.Principal.ID,
+				DecisionID: decision.ID, After: position}, RoleID: id})
+			if err != nil {
+				return iamv1.ServiceLinkedRoleAccess{}, err
+			}
+			result.NextAfter, err = service.sealDirectoryPage(subject, query, result.NextAfter, now)
+			if err != nil || iamv1.ValidateServiceLinkedRoleAccess(result) != nil || result.Relation.Role.ID != id {
+				return iamv1.ServiceLinkedRoleAccess{}, ErrUnavailable
+			}
+			return result, nil
+		})
+}
+
 // CreateWorkloadRoleBinding consumes one product-owned workload admission and
 // the current USER's IAM management authority in one serializable transaction.
 // The service and USER credentials derive every identity; the command contains

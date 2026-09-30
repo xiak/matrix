@@ -176,6 +176,8 @@ CREATE TABLE IF NOT EXISTS iam.workload_role_bindings (
 CREATE UNIQUE INDEX IF NOT EXISTS workload_role_bindings_active_uq
     ON iam.workload_role_bindings(tenant_id,template_id,template_version,workload_kind,workload_id)
     WHERE revoked_at IS NULL;
+CREATE INDEX IF NOT EXISTS workload_role_bindings_role_directory_idx
+    ON iam.workload_role_bindings(tenant_id,role_id,id);
 
 CREATE OR REPLACE FUNCTION iam.guard_service_linked_role_change()
 RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
@@ -495,6 +497,62 @@ EXCEPTION WHEN invalid_text_representation OR numeric_value_out_of_range OR inva
     RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='workload role binding command is invalid';
 END $function$;
 
+-- These read entrypoints expose only the authenticated Account's consent.
+-- They re-check the current authorization decision in the database and keep
+-- binding history separate from the bounded relation directory.
+CREATE OR REPLACE FUNCTION iam.list_service_linked_roles(
+    tenant text,actor text,decision text,after_id text)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE result jsonb;
+BEGIN
+    PERFORM iam.read_account(tenant,actor);
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,
+      'iam.service-linked-role.list','ACCOUNT',tenant,'INSTANCE',NULL);
+    IF COALESCE(after_id,'')<>'' AND after_id COLLATE "C" !~ '^slr-[0-9a-f]{64}$' THEN
+        RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='service-linked role page is invalid'; END IF;
+    SELECT COALESCE(jsonb_agg(jsonb_build_object(
+      'relation',iam.service_linked_role_snapshot(tenant,directory.role_id),
+      'bindingCount',directory.binding_count,
+      'activeBindingCount',directory.active_binding_count) ORDER BY directory.role_id),'[]') INTO result
+    FROM (
+      SELECT relation.role_id,
+        (SELECT count(*) FROM iam.workload_role_bindings binding
+          WHERE binding.tenant_id=tenant AND binding.role_id=relation.role_id) AS binding_count,
+        (SELECT count(*) FROM iam.workload_role_bindings binding
+          WHERE binding.tenant_id=tenant AND binding.role_id=relation.role_id AND binding.revoked_at IS NULL) AS active_binding_count
+      FROM iam.service_linked_roles relation
+      WHERE relation.tenant_id=tenant
+        AND (COALESCE(after_id,'')='' OR relation.role_id>after_id COLLATE "C")
+      ORDER BY relation.role_id LIMIT 101
+    ) directory;
+    RETURN result;
+END $function$;
+
+CREATE OR REPLACE FUNCTION iam.read_service_linked_role(
+    tenant text,actor text,decision text,role_id text,after_id text)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE relation jsonb; bindings jsonb;
+BEGIN
+    PERFORM iam.read_account(tenant,actor);
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,
+      'iam.service-linked-role.read','ROLE',role_id,'INSTANCE',NULL);
+    IF COALESCE(role_id,'') COLLATE "C" !~ '^slr-[0-9a-f]{64}$'
+      OR (COALESCE(after_id,'')<>'' AND after_id COLLATE "C" !~ '^wrb-[0-9a-f]{64}$') THEN
+        RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='service-linked role read is invalid'; END IF;
+    relation:=iam.service_linked_role_snapshot(tenant,role_id);
+    IF relation IS NULL THEN
+        RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='service-linked role is unavailable'; END IF;
+    SELECT COALESCE(jsonb_agg(iam.workload_role_binding_snapshot(tenant,directory.id) ORDER BY directory.id),'[]') INTO bindings
+    FROM (
+      SELECT binding.id FROM iam.workload_role_bindings binding
+      WHERE binding.tenant_id=tenant AND binding.role_id=read_service_linked_role.role_id
+        AND (COALESCE(after_id,'')='' OR binding.id>after_id COLLATE "C")
+      ORDER BY binding.id LIMIT 101
+    ) directory;
+    RETURN jsonb_build_object('apiVersion','iam.matrix.xiak.com/v1','kind','ServiceLinkedRoleAccess',
+      'relation',relation,'bindings',bindings);
+END $function$;
+
 REVOKE ALL ON iam.service_role_templates,iam.service_linked_roles,iam.workload_role_bindings
   FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery,matrix_iam_backup_custody,
     matrix_iam_notification_worker,matrix_iam_authentication_recovery;
@@ -509,9 +567,15 @@ REVOKE ALL ON FUNCTION iam.lock_workload_role_binding_sources(text,text,text,tex
 REVOKE ALL ON FUNCTION iam.create_workload_role_binding(text,text,text,text,text,text,jsonb,jsonb,jsonb,jsonb,text,text,text,jsonb,jsonb)
   FROM PUBLIC,matrix_iam_worker,matrix_iam_credential_recovery,matrix_iam_backup_custody,
     matrix_iam_notification_worker,matrix_iam_authentication_recovery;
+REVOKE ALL ON FUNCTION iam.list_service_linked_roles(text,text,text,text),
+  iam.read_service_linked_role(text,text,text,text,text)
+  FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery,matrix_iam_backup_custody,
+    matrix_iam_notification_worker,matrix_iam_authentication_recovery;
 GRANT EXECUTE ON FUNCTION iam.lock_workload_role_binding_sources(text,text,text,text,text) TO matrix_iam_api;
 GRANT EXECUTE ON FUNCTION iam.create_workload_role_binding(text,text,text,text,text,text,jsonb,jsonb,jsonb,jsonb,text,text,text,jsonb,jsonb)
   TO matrix_iam_api;
+GRANT EXECUTE ON FUNCTION iam.list_service_linked_roles(text,text,text,text),
+  iam.read_service_linked_role(text,text,text,text,text) TO matrix_iam_api;
 
 CREATE OR REPLACE FUNCTION iam.service_role_contract_ready()
 RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $function$
@@ -594,6 +658,17 @@ RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $funct
               AND column_value.attnum=key_value.attnum)
             =ARRAY['tenant_id','template_id','template_version','workload_kind','workload_id']
           AND pg_get_expr(index_value.indpred,index_value.indrelid)='(revoked_at IS NULL)')
+      AND EXISTS(SELECT 1 FROM pg_index index_value
+        WHERE index_value.indexrelid=to_regclass('iam.workload_role_bindings_role_directory_idx')
+          AND index_value.indrelid='iam.workload_role_bindings'::regclass
+          AND NOT index_value.indisunique AND index_value.indisvalid AND index_value.indisready
+          AND index_value.indnkeyatts=3 AND index_value.indnatts=3
+          AND index_value.indpred IS NULL AND index_value.indexprs IS NULL
+          AND (SELECT array_agg(column_value.attname::text ORDER BY key_value.ordinality)
+            FROM unnest(index_value.indkey) WITH ORDINALITY AS key_value(attnum,ordinality)
+            JOIN pg_attribute column_value ON column_value.attrelid=index_value.indrelid
+              AND column_value.attnum=key_value.attnum)
+            =ARRAY['tenant_id','role_id','id'])
       AND EXISTS(SELECT 1 FROM pg_proc function_value WHERE function_value.oid=to_regprocedure(
         'iam.lock_workload_role_binding_sources(text,text,text,text,text)')
         AND function_value.proowner='matrix_iam_owner'::regrole AND function_value.prosecdef
@@ -613,6 +688,30 @@ RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $funct
         AND has_function_privilege('matrix_iam_api',function_value.oid,'EXECUTE')
         AND NOT has_function_privilege('matrix_iam_worker',function_value.oid,'EXECUTE')
         AND NOT has_function_privilege('matrix_iam_credential_recovery',function_value.oid,'EXECUTE'))
+      AND EXISTS(SELECT 1 FROM pg_proc function_value WHERE function_value.oid=to_regprocedure(
+        'iam.list_service_linked_roles(text,text,text,text)')
+        AND function_value.proowner='matrix_iam_owner'::regrole AND function_value.prosecdef
+        AND function_value.prorettype='jsonb'::regtype AND NOT function_value.proretset
+        AND function_value.proargnames=ARRAY['tenant','actor','decision','after_id']
+        AND function_value.proconfig=ARRAY['search_path=pg_catalog, pg_temp']
+        AND has_function_privilege('matrix_iam_api',function_value.oid,'EXECUTE')
+        AND NOT has_function_privilege('matrix_iam_worker',function_value.oid,'EXECUTE')
+        AND NOT has_function_privilege('matrix_iam_credential_recovery',function_value.oid,'EXECUTE')
+        AND NOT has_function_privilege('matrix_iam_backup_custody',function_value.oid,'EXECUTE')
+        AND NOT has_function_privilege('matrix_iam_notification_worker',function_value.oid,'EXECUTE')
+        AND NOT has_function_privilege('matrix_iam_authentication_recovery',function_value.oid,'EXECUTE'))
+      AND EXISTS(SELECT 1 FROM pg_proc function_value WHERE function_value.oid=to_regprocedure(
+        'iam.read_service_linked_role(text,text,text,text,text)')
+        AND function_value.proowner='matrix_iam_owner'::regrole AND function_value.prosecdef
+        AND function_value.prorettype='jsonb'::regtype AND NOT function_value.proretset
+        AND function_value.proargnames=ARRAY['tenant','actor','decision','role_id','after_id']
+        AND function_value.proconfig=ARRAY['search_path=pg_catalog, pg_temp']
+        AND has_function_privilege('matrix_iam_api',function_value.oid,'EXECUTE')
+        AND NOT has_function_privilege('matrix_iam_worker',function_value.oid,'EXECUTE')
+        AND NOT has_function_privilege('matrix_iam_credential_recovery',function_value.oid,'EXECUTE')
+        AND NOT has_function_privilege('matrix_iam_backup_custody',function_value.oid,'EXECUTE')
+        AND NOT has_function_privilege('matrix_iam_notification_worker',function_value.oid,'EXECUTE')
+        AND NOT has_function_privilege('matrix_iam_authentication_recovery',function_value.oid,'EXECUTE'))
       AND (SELECT count(*)=2 FROM pg_proc function_value WHERE function_value.oid IN (
           to_regprocedure('iam.service_linked_role_snapshot(text,text)'),
           to_regprocedure('iam.workload_role_binding_snapshot(text,text)'))

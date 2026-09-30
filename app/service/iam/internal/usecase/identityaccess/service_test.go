@@ -1800,7 +1800,7 @@ func TestServiceRoleTemplateDiscoveryRequiresDelegatedCurrentAuthority(t *testin
 
 func TestWorkloadRoleBindingRequiresProductAdmissionPassRoleAndDelegatedCurrentAuthority(t *testing.T) {
 	tx := newCoreTransaction()
-	service, err := newCoreAuthority(&coreRepository{transaction: tx}, Config{})
+	service, err := newCoreAuthority(&coreRepository{transaction: tx}, Config{CursorKey: bytes.Repeat([]byte{0x73}, 32)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1882,6 +1882,25 @@ func TestWorkloadRoleBindingRequiresProductAdmissionPassRoleAndDelegatedCurrentA
 	if len(seen) != len(wantDecisions) {
 		t.Fatal("consent decision chain omitted required actions")
 	}
+	directory, err := service.ListServiceLinkedRoles(t.Context(), login.Credential, "", "binding-directory")
+	if err != nil || iamv1.ValidateServiceLinkedRoleList(directory) != nil || len(directory.Items) != 1 ||
+		directory.AccountID != bootstrap.Organization.ID || directory.Items[0].Relation.Role.ID != mutation.Role.ID ||
+		directory.Items[0].BindingCount != 1 || directory.Items[0].ActiveBindingCount != 1 {
+		t.Fatal("current Account service-linked role directory is incomplete", err)
+	}
+	detail, err := service.GetServiceLinkedRole(t.Context(), login.Credential, mutation.Role.ID, "", "binding-detail")
+	if err != nil || iamv1.ValidateServiceLinkedRoleAccess(detail) != nil ||
+		detail.Relation.Role.ID != mutation.Role.ID || len(detail.Bindings) != 1 || detail.Bindings[0].ID != mutation.Binding.ID {
+		t.Fatal("service-linked role detail lost binding history", err)
+	}
+	if tx.serviceLinkedRoleListRead == nil || tx.serviceLinkedRoleRead == nil ||
+		tx.serviceLinkedRoleListRead.AccountID != bootstrap.Organization.ID ||
+		tx.serviceLinkedRoleRead.RoleID != mutation.Role.ID {
+		t.Fatal("service-linked role read accepted a caller-selected Account or lost the exact Role")
+	}
+	if _, err := service.ListServiceLinkedRoles(t.Context(), paasCredential, "", "binding-directory-service"); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatal("service credential substituted for a current USER directory session", err)
+	}
 	invalid := request
 	invalid.Authorization, err = iamv1.NewAuthorizationRequest(iamv1.ActionManagedServiceInstallationRead,
 		authorization.Resource, iamv1.AuthorizationResourceInstance, "", "binding-read", "binding-read")
@@ -1902,6 +1921,12 @@ func TestWorkloadRoleBindingRequiresProductAdmissionPassRoleAndDelegatedCurrentA
 	tx.workloadRoleBindingCreation = nil
 	if _, err := service.CreateWorkloadRoleBinding(t.Context(), paasCredential, login.Credential, request); !errors.Is(err, ErrForbidden) || tx.workloadRoleBindingCreation != nil {
 		t.Fatal("revoked service-role administration remained cached", err)
+	}
+	if _, err := service.ListServiceLinkedRoles(t.Context(), login.Credential, "", "binding-directory-revoked"); !errors.Is(err, ErrForbidden) {
+		t.Fatal("revoked service-role administration retained directory access", err)
+	}
+	if _, err := service.GetServiceLinkedRole(t.Context(), login.Credential, mutation.Role.ID, "", "binding-detail-revoked"); !errors.Is(err, ErrForbidden) {
+		t.Fatal("revoked service-role administration retained detail access", err)
 	}
 }
 
@@ -3068,6 +3093,9 @@ type coreTransaction struct {
 	rootCredentialRecovery           func(RootCredentialRecovery) (iamv1.Account, error)
 	workloadRoleBindingSourcesLocked bool
 	workloadRoleBindingCreation      *WorkloadRoleBindingCreation
+	serviceLinkedRoleAccess          *iamv1.ServiceLinkedRoleAccess
+	serviceLinkedRoleListRead        *AccountRead
+	serviceLinkedRoleRead            *ServiceLinkedRoleRead
 }
 
 func (transaction *coreTransaction) LockWorkloadRoleBindingSources(_ context.Context, accountID iamv1.AccountID,
@@ -3090,7 +3118,57 @@ func (transaction *coreTransaction) CreateWorkloadRoleBinding(_ context.Context,
 				InstallationID: serviceIdentity.InstallationID, PrincipalID: serviceIdentity.PrincipalID, Purpose: serviceIdentity.Purpose,
 			}, PermissionCeiling: mutation.Template.Spec.PolicyVersion},
 		Bindings: []iamv1.WorkloadRoleBinding{mutation.Binding}}
+	transaction.serviceLinkedRoleAccess = &result
 	return result, nil
+}
+
+func (transaction *coreTransaction) ListServiceLinkedRoles(_ context.Context, read AccountRead) (iamv1.ServiceLinkedRoleList, error) {
+	transaction.serviceLinkedRoleListRead = &read
+	if transaction.serviceLinkedRoleAccess == nil || read.AccountID != transaction.organization.ID ||
+		read.ActorPrincipalID != transaction.principal.ID || !transaction.hasAuthorizationDecision(read.DecisionID,
+		iamv1.ActionIAMServiceLinkedRoleList, iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: string(read.AccountID)}) {
+		return iamv1.ServiceLinkedRoleList{}, ErrForbidden
+	}
+	access := *transaction.serviceLinkedRoleAccess
+	if read.After != "" && string(access.Relation.Role.ID) <= read.After {
+		return iamv1.ServiceLinkedRoleList{APIVersion: iamv1.APIVersion, Kind: "ServiceLinkedRoleList", AccountID: read.AccountID,
+			Items: []iamv1.ServiceLinkedRoleListing{}}, nil
+	}
+	active := uint64(0)
+	for _, binding := range access.Bindings {
+		if binding.Status == iamv1.WorkloadRoleBindingActive {
+			active++
+		}
+	}
+	return iamv1.ServiceLinkedRoleList{APIVersion: iamv1.APIVersion, Kind: "ServiceLinkedRoleList", AccountID: read.AccountID,
+		Items: []iamv1.ServiceLinkedRoleListing{{Relation: access.Relation, BindingCount: uint64(len(access.Bindings)), ActiveBindingCount: active}}}, nil
+}
+
+func (transaction *coreTransaction) ReadServiceLinkedRole(_ context.Context, read ServiceLinkedRoleRead) (iamv1.ServiceLinkedRoleAccess, error) {
+	transaction.serviceLinkedRoleRead = &read
+	if transaction.serviceLinkedRoleAccess == nil || read.AccountID != transaction.organization.ID ||
+		read.ActorPrincipalID != transaction.principal.ID || read.RoleID != transaction.serviceLinkedRoleAccess.Relation.Role.ID ||
+		!transaction.hasAuthorizationDecision(read.DecisionID, iamv1.ActionIAMServiceLinkedRoleRead,
+			iamv1.ResourceReference{Kind: iamv1.ResourceRole, ID: string(read.RoleID)}) {
+		return iamv1.ServiceLinkedRoleAccess{}, ErrForbidden
+	}
+	result := *transaction.serviceLinkedRoleAccess
+	result.Bindings = slices.Clone(result.Bindings)
+	if read.After != "" {
+		result.Bindings = slices.DeleteFunc(result.Bindings, func(binding iamv1.WorkloadRoleBinding) bool {
+			return string(binding.ID) <= read.After
+		})
+	}
+	return result, nil
+}
+
+func (transaction *coreTransaction) hasAuthorizationDecision(id iamv1.DecisionID, action iamv1.Action, resource iamv1.ResourceReference) bool {
+	for _, mutation := range transaction.authorizations {
+		if mutation.Decision.ID == id && mutation.Decision.Allowed && mutation.Decision.Action == action && mutation.Decision.Resource == resource {
+			return true
+		}
+	}
+	return false
 }
 
 func (transaction *coreTransaction) ReadUserCreationPasswordSettings(_ context.Context, read AccountRead) (iamv1.AccountPasswordSettings, uint64, error) {

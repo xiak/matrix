@@ -197,6 +197,12 @@ func buildPaths() object {
 		"/v1/auth/me":                object{"get": readOperation("getCurrentIdentity", "Get the current account and identity", "CurrentIdentity", nil, nil)},
 		"/v1/authorization-profiles": object{"get": readOperation("listAuthorizationProfiles", "Read complete current product declarations under current account policy-list permission; metadata is not a permit or registration capability. Maximum complete response 64 KiB.", "AuthorizationProfileList", nil, nil)},
 		"/v1/service-role-templates": object{"get": readOperation("listServiceRoleTemplates", "Read release-owned immutable service-role templates under current account permission. ACTIVE is not account consent and the response contains no service credential.", "ServiceRoleTemplateList", nil, nil)},
+		"/v1/service-linked-roles": object{"get": readOperation(
+			"listServiceLinkedRoles", "List current-Account service-linked Role consent summaries. Template publication is not consent; counts distinguish durable history from active workload bindings.",
+			"ServiceLinkedRoleList", nil, accountPageParameters())},
+		"/v1/service-linked-roles/{roleId}": object{"get": readOperation(
+			"getServiceLinkedRole", "Read one current-Account service-linked Role relation and a signed page of exact workload binding history.",
+			"ServiceLinkedRoleAccess", nil, append([]any{openapi31.PathIDParameter("roleId")}, accountPageParameters()...))},
 		"/v1/internal/workload-role-bindings": object{"post": mutationOperation(
 			"createWorkloadRoleBinding", "Atomically record current-Account consent for one product-verified workload and exact release template; no Account, Role or service selector is accepted.",
 			"CreateWorkloadRoleBindingRequest", "ServiceLinkedRoleAccess", "200",
@@ -541,6 +547,8 @@ func structContracts() map[string]reflect.Type {
 		"ServiceLinkedRole":                             openapi31.StructType[iamv1.ServiceLinkedRole](),
 		"WorkloadRoleBinding":                           openapi31.StructType[iamv1.WorkloadRoleBinding](),
 		"ServiceLinkedRoleAccess":                       openapi31.StructType[iamv1.ServiceLinkedRoleAccess](),
+		"ServiceLinkedRoleListing":                      openapi31.StructType[iamv1.ServiceLinkedRoleListing](),
+		"ServiceLinkedRoleList":                         openapi31.StructType[iamv1.ServiceLinkedRoleList](),
 		"CreateWorkloadRoleBindingRequest":              openapi31.StructType[iamv1.CreateWorkloadRoleBindingRequest](),
 		"UserPermissionBoundary":                        openapi31.StructType[iamv1.UserPermissionBoundary](),
 		"SetUserPermissionBoundaryRequest":              openapi31.StructType[iamv1.SetUserPermissionBoundaryRequest](),
@@ -1152,6 +1160,12 @@ func applySemanticOverlays(schemas object) {
 	}
 	schemas["ServiceLinkedRoleAccess"].(object)["description"] = "Non-secret Account observation of one service-linked Role and its exact workload bindings. It carries no permission, session or service secret."
 	schemas["ServiceLinkedRoleAccess"].(object)["properties"].(object)["bindings"].(object)["maxItems"] = iamv1.DirectoryPageSize
+	schemas["ServiceLinkedRoleListing"].(object)["description"] = "Bounded current-Account summary. BindingCount is immutable history; ActiveBindingCount is current workload consent and never a cached authorization permit."
+	for _, field := range []string{"bindingCount", "activeBindingCount"} {
+		schemas["ServiceLinkedRoleListing"].(object)["properties"].(object)[field].(object)["maximum"] = uint64(9007199254740991)
+	}
+	schemas["ServiceLinkedRoleListing"].(object)["properties"].(object)["bindingCount"].(object)["minimum"] = 1
+	schemas["ServiceLinkedRoleList"].(object)["properties"].(object)["items"].(object)["maxItems"] = iamv1.DirectoryPageSize
 	schemas["UserPasswordResetCompletion"].(object)["description"] = "Non-secret confirmation of one committed administrator reset, not password-input equality, current credential validity, Audit delivery or replay authority. Runtime validation requires a distinct actor and target, resultingResourceVersion = expectedResourceVersion + 1, and the original UTC microsecond fact time. Lookup must bind current Account/actor authorization and the exact original target/request/version; schema validation alone proves neither provenance nor completion."
 	schemas["PasswordRequirements"].(object)["description"] = "Current self-only password rules, measured in Unicode code points and UTF-8 bytes. An observation, never a write permit; final replacement rechecks current qualification and settings."
 	schemas["PasswordRequirements"].(object)["oneOf"] = []any{

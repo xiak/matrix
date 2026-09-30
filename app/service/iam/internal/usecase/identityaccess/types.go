@@ -134,6 +134,8 @@ type Transaction interface {
 	ReadGroup(context.Context, GroupRead) (iamv1.GroupAccess, error)
 	ListRoles(context.Context, AccountRead) (iamv1.RoleList, error)
 	ReadRole(context.Context, RoleRead) (iamv1.RoleAccess, error)
+	ListServiceLinkedRoles(context.Context, AccountRead) (iamv1.ServiceLinkedRoleList, error)
+	ReadServiceLinkedRole(context.Context, ServiceLinkedRoleRead) (iamv1.ServiceLinkedRoleAccess, error)
 	ReadRoleDiscoveryRevision(context.Context, RoleDiscoveryRead) (authority.RoleDiscoveryRevision, error)
 	ReadRoleCandidates(context.Context, RoleDiscoveryRead) (RoleCandidates, error)
 	ReadRolePermissionBoundary(context.Context, RoleRead) (iamv1.RolePermissionBoundary, error)
@@ -264,6 +266,11 @@ type GroupRead struct {
 }
 
 type RoleRead struct {
+	AccountRead
+	RoleID iamv1.RoleID
+}
+
+type ServiceLinkedRoleRead struct {
 	AccountRead
 	RoleID iamv1.RoleID
 }

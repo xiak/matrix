@@ -114,6 +114,96 @@ func (value *transaction) CreateWorkloadRoleBinding(
 	return result, nil
 }
 
+// ListServiceLinkedRoles reads the bounded Account-owned relation directory.
+// PostgreSQL returns one look-ahead row so this adapter, rather than SQL or a
+// caller, remains the owner of public page boundaries.
+func (value *transaction) ListServiceLinkedRoles(
+	ctx context.Context,
+	read identityaccess.AccountRead,
+) (iamv1.ServiceLinkedRoleList, error) {
+	var encoded []byte
+	if err := value.tx.QueryRow(ctx, `SELECT iam.list_service_linked_roles($1,$2,$3,$4)`,
+		read.AccountID, read.ActorPrincipalID, read.DecisionID, read.After).Scan(&encoded); err != nil {
+		return iamv1.ServiceLinkedRoleList{}, mapAuthorizationDatabaseError("list IAM service-linked roles", err)
+	}
+	type serviceLinkedRoleWire iamv1.ServiceLinkedRole
+	type listingWire struct {
+		Relation           serviceLinkedRoleWire `json:"relation"`
+		BindingCount       uint64                `json:"bindingCount"`
+		ActiveBindingCount uint64                `json:"activeBindingCount"`
+	}
+	var wire []listingWire
+	if int64(len(encoded)) > iamv1.MaxServiceLinkedRoleListBytes || json.Unmarshal(encoded, &wire) != nil ||
+		wire == nil || len(wire) > iamv1.DirectoryPageSize+1 {
+		return iamv1.ServiceLinkedRoleList{}, identityaccess.ErrUnavailable
+	}
+	result := iamv1.ServiceLinkedRoleList{
+		APIVersion: iamv1.APIVersion,
+		Kind:       "ServiceLinkedRoleList",
+		AccountID:  read.AccountID,
+		Items:      make([]iamv1.ServiceLinkedRoleListing, len(wire)),
+	}
+	previous := iamv1.RoleID(read.After)
+	for index := range wire {
+		item := iamv1.ServiceLinkedRoleListing{
+			Relation:           iamv1.ServiceLinkedRole(wire[index].Relation),
+			BindingCount:       wire[index].BindingCount,
+			ActiveBindingCount: wire[index].ActiveBindingCount,
+		}
+		normalizeRole(&item.Relation.Role)
+		if iamv1.ValidateServiceLinkedRole(item.Relation) != nil || item.Relation.Role.AccountID != read.AccountID ||
+			item.Relation.Role.ID <= previous || item.BindingCount == 0 || item.BindingCount > 9007199254740991 ||
+			item.ActiveBindingCount > item.BindingCount {
+			return iamv1.ServiceLinkedRoleList{}, identityaccess.ErrUnavailable
+		}
+		result.Items[index] = item
+		previous = item.Relation.Role.ID
+	}
+	if len(result.Items) > iamv1.DirectoryPageSize {
+		result.Items = result.Items[:iamv1.DirectoryPageSize]
+		result.NextAfter = string(result.Items[iamv1.DirectoryPageSize-1].Relation.Role.ID)
+	}
+	return result, nil
+}
+
+// ReadServiceLinkedRole returns one relation and a bounded page of its durable
+// workload-binding history. Revoked history is never filtered from this
+// management projection; current authority remains a separately evaluated
+// fact.
+func (value *transaction) ReadServiceLinkedRole(
+	ctx context.Context,
+	read identityaccess.ServiceLinkedRoleRead,
+) (iamv1.ServiceLinkedRoleAccess, error) {
+	var encoded []byte
+	if err := value.tx.QueryRow(ctx, `SELECT iam.read_service_linked_role($1,$2,$3,$4,$5)`,
+		read.AccountID, read.ActorPrincipalID, read.DecisionID, read.RoleID, read.After).Scan(&encoded); err != nil {
+		return iamv1.ServiceLinkedRoleAccess{}, mapAuthorizationDatabaseError("read IAM service-linked role", err)
+	}
+	if int64(len(encoded)) > iamv1.MaxRoleAccessBytes {
+		return iamv1.ServiceLinkedRoleAccess{}, identityaccess.ErrUnavailable
+	}
+	result, err := decodeServiceLinkedRoleAccess(encoded)
+	if err != nil || len(result.Bindings) > iamv1.DirectoryPageSize+1 ||
+		iamv1.ValidateServiceLinkedRole(result.Relation) != nil || result.Relation.Role.AccountID != read.AccountID ||
+		result.Relation.Role.ID != read.RoleID {
+		return iamv1.ServiceLinkedRoleAccess{}, identityaccess.ErrUnavailable
+	}
+	previous := iamv1.WorkloadRoleBindingID(read.After)
+	for index := range result.Bindings {
+		binding := result.Bindings[index]
+		if iamv1.ValidateWorkloadRoleBinding(binding) != nil || binding.AccountID != read.AccountID ||
+			binding.RoleID != read.RoleID || binding.Template != result.Relation.Template || binding.ID <= previous {
+			return iamv1.ServiceLinkedRoleAccess{}, identityaccess.ErrUnavailable
+		}
+		previous = binding.ID
+	}
+	if len(result.Bindings) > iamv1.DirectoryPageSize {
+		result.Bindings = result.Bindings[:iamv1.DirectoryPageSize]
+		result.NextAfter = string(result.Bindings[iamv1.DirectoryPageSize-1].ID)
+	}
+	return result, nil
+}
+
 // PostgreSQL renders timestamptz values with an explicit +00:00 suffix. That
 // storage representation is normalized only inside this adapter; public IAM
 // JSON remains canonical UTC and therefore continues to reject non-Z inputs.

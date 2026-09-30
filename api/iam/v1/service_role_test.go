@@ -189,6 +189,60 @@ func TestServiceLinkedRoleAndBindingPreserveExactConsent(t *testing.T) {
 	}
 }
 
+func TestServiceLinkedRoleDirectorySeparatesSummaryFromBindingDetail(t *testing.T) {
+	access := serviceLinkedRoleAccessForTest(t)
+	list := ServiceLinkedRoleList{
+		APIVersion: APIVersion,
+		Kind:       "ServiceLinkedRoleList",
+		AccountID:  access.Relation.Role.AccountID,
+		Items: []ServiceLinkedRoleListing{{
+			Relation: access.Relation, BindingCount: 2, ActiveBindingCount: 1,
+		}},
+	}
+	if ValidateServiceLinkedRoleList(list) != nil {
+		t.Fatal("valid service-linked role summary rejected")
+	}
+	encoded, err := json.Marshal(list)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded ServiceLinkedRoleList
+	if json.Unmarshal(encoded, &decoded) != nil || !reflect.DeepEqual(decoded, list) {
+		t.Fatal("valid service-linked role directory did not strictly round trip")
+	}
+	for name, mutate := range map[string]func(*ServiceLinkedRoleList){
+		"foreign account": func(value *ServiceLinkedRoleList) { value.AccountID = "account-b" },
+		"no history":      func(value *ServiceLinkedRoleList) { value.Items[0].BindingCount = 0 },
+		"active overflow": func(value *ServiceLinkedRoleList) { value.Items[0].ActiveBindingCount = 3 },
+		"unsafe count":    func(value *ServiceLinkedRoleList) { value.Items[0].BindingCount = 9007199254740992 },
+		"duplicate role": func(value *ServiceLinkedRoleList) {
+			value.Items = append(value.Items, value.Items[0])
+		},
+		"cursor without full page": func(value *ServiceLinkedRoleList) { value.NextAfter = "ic1.valid" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := list
+			changed.Items = append([]ServiceLinkedRoleListing(nil), list.Items...)
+			mutate(&changed)
+			if ValidateServiceLinkedRoleList(changed) == nil {
+				t.Fatal("invalid service-linked role directory accepted")
+			}
+		})
+	}
+	for _, attack := range []string{
+		string(encoded[:len(encoded)-1]) + `,"accountId":"account-b"}`,
+		string(encoded[:len(encoded)-1]) + `,"tenantId":"account-b"}`,
+	} {
+		if json.Unmarshal([]byte(attack), &decoded) == nil {
+			t.Fatal("strict directory decoder accepted duplicate identity or tenant selector")
+		}
+	}
+	access.NextAfter = "ic1.valid"
+	if ValidateServiceLinkedRoleAccess(access) == nil {
+		t.Fatal("binding detail accepted a continuation without a full page")
+	}
+}
+
 func TestWorkloadRoleBindingTerminalStateIsExact(t *testing.T) {
 	createdAt := time.Date(2026, 9, 30, 3, 0, 0, 0, time.UTC)
 	revokedAt := createdAt.Add(time.Minute)
