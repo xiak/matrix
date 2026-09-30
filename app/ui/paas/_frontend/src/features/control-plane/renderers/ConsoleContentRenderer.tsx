@@ -374,6 +374,11 @@ function InstallationContent({ scene, preview, accountId }: {
         </div>
         <Badge status="info">{t("instanceCount", { count: scene.installations.length })}</Badge>
       </Card.Header>
+      <Card.Body>
+        <Alert status={preview ? "warning" : "info"}>
+          {t(preview ? "instanceVisibilityMockBoundary" : "instanceVisibilityBoundary")}
+        </Alert>
+      </Card.Body>
       <InstallationRows items={scene.installations} onOpen={accountId ? (item) => setSelectedId(item.id) : undefined} triggerRefs={rowTriggers} />
     </Card>
   );

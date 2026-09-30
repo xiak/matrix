@@ -193,6 +193,33 @@ describe("ConsoleShellRenderer", () => {
     expect(dataTable.querySelector('tbody td[data-mobile-span="full"]')).not.toBeNull();
   });
 
+  it("does not present the MOCK service-instance directory as an account-wide or IAM-filtered result", async () => {
+    const installation = (id: string, name: string) => ({
+      id, name, offeringId: "postgresql-18", engineVersion: "18",
+      quotaEntitlementId: "quota-primary", regionId: "local-primary", phase: "READY" as const,
+      endpoint: `${id}.service.local:5432`, credentialReference: null,
+      operation: { id: `operation-${id}`, phase: "READY" as const, safeFailureCode: null, observedAt: "2026-08-26T12:00:00Z" },
+      createdAt: "2026-08-26T12:00:00Z"
+    });
+    await renderConsole({
+      section: "installations",
+      experience: previewExperienceSnapshot,
+      load: vi.fn().mockResolvedValue({ ...snapshot, installations: [installation("pg-one", "订单主库"), installation("pg-two", "分析副本")] })
+    });
+
+    expect(await screen.findByText("当前已加载 2")).toBeTruthy();
+    expect(screen.getByText(/本地 fixture，未经过 IAM 实例级授权过滤/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /批量授权/ })).toBeNull();
+  });
+
+  it("states the server-side visibility boundary without claiming a live IAM integration", async () => {
+    await renderConsole({ section: "installations" });
+
+    expect(await screen.findByText(/实例可见性必须由产品服务在服务端结合 IAM 判定/)).toBeTruthy();
+    expect(screen.getByText(/不会把拒绝项下载到浏览器后再隐藏/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /批量授权/ })).toBeNull();
+  });
+
   it("starts the isolated service-authorization review from the exact product resource", async () => {
     const installation = {
       id: "pg-test", name: "订单主库", offeringId: "postgresql-18", engineVersion: "18",
