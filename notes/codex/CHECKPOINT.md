@@ -6,8 +6,8 @@
 - Updated: 2026-10-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `a7c22679`
-- Pushed documentation milestone: `ca1ef73a`
+- Pushed source/embed milestone: `eeb6dd14`
+- Pushed documentation milestone: `2206d988`
 
 ## Authoritative route
 
@@ -43,12 +43,17 @@ preview evaluator and does not render match states, effective permission,
 final Allow/Deny, a reason tree or remediation. Source IP and time remain
 operator-entered information-architecture fields only.
 
-Source and synchronized Go embed at `a7c22679` passed 55 frontend files / 889
-tests, static normalization, type/lint/architecture, 228 theme contrast pairs,
-41-page export, 228-file embed equality and repository Go test/vet. Desktop and
-`390 × 844` browser inspection passed for policy coverage and service-session
-directory/detail with responsive content, no horizontal overflow or Dialog.
-Existing MOCK pages remain available.
+The PostgreSQL product directory now treats resource visibility as a product
+server boundary: the UI labels only the records currently loaded and never
+infers an Account-wide total or coverage. Isolated MOCK fixtures are explicitly
+not IAM-filtered; non-preview copy requires the product service to combine its
+candidate resource list with IAM decisions before returning rows. The browser
+does not hide denied rows, expose a tenant-facing batch-grant action, or claim
+the unfinished `/v1/authorize:batch` candidate is integrated. Source/embed at
+`eeb6dd14` passed 55 frontend files / 891 tests, static normalization,
+type/lint/architecture, 228 theme contrast pairs, 41-page export, 228-file embed
+equality and repository Go test/vet. Desktop and `390 × 844` inspection had no
+Dialog, overflow or warning/error. Existing MOCK pages remain available.
 
 The fixed administrator RoleSession northbound contract is consumed only by
 Role detail. The service-authorization MOCK reuses its public fields but sends
@@ -73,8 +78,10 @@ authorization page.
 
 Keep permission analysis as the explicitly isolated, non-evaluating worksheet.
 Do not reintroduce a risk score, effective-permission result, Deny reason tree,
-remediation action or future API. Trusted-tag authorization and batch decisions
-remain too unstable for high-fidelity executable UI.
+remediation action or future API. Trusted-tag authorization remains outside the
+current executable UI. Treat IAM batch authorization only as a product-side
+server filtering candidate until its exact pushed source, fields and calling
+boundary are fixed; never reinterpret it as customer bulk authorization.
 
 Continue the console-wide UX audit from the next uncovered customer workflow,
 preserving fixed page structure, localized data loading, compact responsive
