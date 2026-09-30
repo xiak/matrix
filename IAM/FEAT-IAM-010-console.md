@@ -343,6 +343,16 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 
 目录可见性、产品安装和 callingService 身份都不构成客户授权。未来 PassRole／承担角色需共同绑定操作者、目标 Account/Role、实际工作负载与单一用途；模板升版不能自动扩权，服务应使用短期会话。IAM 工程师已对齐“产品资源入口编排、IAM 只读观察”以及模板、Account Role 关系和 workload binding 三层分离的模型；当前只有模板目录读取进入后端下一片，Account relation/binding 的 northbound 读取以及租户授权、撤销和承担角色 contract 尚未形成可消费的已推送来源。关联资源清理、授权撤销和既有会话失效语义也仍待固定。因此最终“授权服务”禁用，页面不创建角色、binding、凭据或授权成功状态；未来只能从固定、已推送契约原位替换示意字段。前端实现及共享门禁由 [FEAT-007](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence) 维护。
 
+### LIVE 服务角色模板目录的开发验收证据
+
+2026-09-30，已推送 [`675b5390`](https://github.com/xiak/matrix/commit/675b5390) 消费 IAM 工程师已推送的固定来源 `00c031751b861130e92766ac4ecac0505dffab66`：LIVE 角色目录提供“服务授权模板”次级入口，在同一内容区读取 `GET /v1/service-role-templates`（控制台代理 `/api/iam/v1/service-role-templates`）。请求只带当前 USER bearer，不带 Account、installation、query 或 body；目录在操作者打开后才读取，角色列表不会预取。原隔离 MOCK 的“服务授权”入口、三边界观察和零写入行为不变。
+
+- 响应按封闭的 `ServiceRoleTemplateList`、`ServiceRoleTemplate`、spec 和 `PolicyVersionReference` 逐层解码，拒绝额外字段、错误 apiVersion/kind、非规范 ID、未知 purpose/status、无效摘要、越界或重复 workload kind、60–43200 秒之外的会话上限、重复/乱序模板和超过 100 项或 256 KiB 的目录。前端展示模板 ID/版本、产品、服务用途、workload kind、固定策略版本与两个摘要；不从产品名、状态或目录可见性推导客户授权。
+- `ACTIVE` 在目录和详情中只译为“可用于未来同意”，每行同时标注“非账号授权状态”。模板详情明确 relation/binding 北向读取尚未发布，因此没有授权、撤销、承担角色或编辑按钮；没有 MOCK fallback。401 结束当前 Session，403、404 和不可用错误留在模板数据区并允许安全重读，固定标题和边界说明始终先渲染，只有目录区域使用共享表格骨架。
+- 内容区流程复用公共页面标题和响应式命令组件：桌面角色页保留“新建角色 + 服务授权模板”，小屏自动收进统一更多菜单；目录与详情直接替换内容区域，不开 Dialog。行为用例证明懒读取、局部失败/重试、`ACTIVE != Account consent`、精确策略快照、无写操作和角色页集成；HTTP 用例锁定精确路由、空请求及 fail-closed 结构。
+- 完整前端 52 文件／851 用例、三条静态归一化、类型、lint、架构、228 对主题样式、41 页静态导出、228 个嵌入文件等价及全仓 `go test -p 2 ./...`、`go vet -p 2 ./...`、`git diff --check` 已通过。DEV 浏览器对保留 MOCK 做桌面与 `390 × 844` 回归：小屏 document/body/viewport 均为 390px，binding 表格容器 `clientWidth == scrollWidth == 330px`，无 Dialog、横向溢出或 warning/error。
+- 当前 UI 分支没有 IAM 真实登录与该 GET 的完整运行时，因此上述浏览器证据只证明 MOCK 保留和共享呈现无回归，不替代 LIVE route 联调。IAM 工程师已确认代理路径、无 selector 请求和 `00c03175` 的响应形状；该后端批次的独立 CI 曾暴露 Audit 封闭目录漏登记后继 consent facts，修复已分别推送为 `2e2476ad` 和 `9db81aa0`，独立 CI `36661158790` 在本检查点仍在排队。前端可继续按固定契约开发，但在该 CI 给出绿色结论前，不把后端验收标为完成。Account relation/binding 读取及 authorize/revoke/assume 仍没有可消费契约并保持禁用。
+
 ### 策略版本 MOCK 的开发验收证据
 
 2026-09-20，前端实现固定在已推送的
