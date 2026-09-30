@@ -2881,6 +2881,44 @@ func TestIAMCoreUsecasesBindCredentialsAndRecordClosedAuthorization(t *testing.T
 		decision.Subject == nil || decision.Subject.ID != "principal-admin" {
 		t.Fatalf("PaaS decision = %#v err=%v, want allowed", decision, err)
 	}
+	batch := iamv1.AuthorizationBatchRequest{Requests: make([]iamv1.AuthorizationRequest, 2)}
+	for index, sample := range []struct{ resource, requestID string }{{"offering-a", "request-batch-a"}, {"offering-b", "request-batch-b"}} {
+		batch.Requests[index], err = iamv1.NewAuthorizationRequest(
+			iamv1.ActionManagedServiceOfferingRead,
+			iamv1.ResourceReference{Kind: iamv1.ResourceServiceOffering, ID: sample.resource},
+			iamv1.AuthorizationResourceInstance, "", sample.requestID, "correlation-batch",
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	beforeBatch := len(repository.transaction.authorizations)
+	batchDecision, err := service.AuthorizeBatch(context.Background(), paasCredential, login.Credential, batch)
+	if err != nil || batchDecision.TenantID != "organization-example" || batchDecision.Subject.ID != "principal-admin" ||
+		len(batchDecision.Decisions) != len(batch.Requests) || len(repository.transaction.authorizations) != beforeBatch+len(batch.Requests) {
+		t.Fatalf("batch decision=%#v mutations=%d err=%v", batchDecision, len(repository.transaction.authorizations)-beforeBatch, err)
+	}
+	for index, item := range batchDecision.Decisions {
+		mutation := repository.transaction.authorizations[beforeBatch+index]
+		if !item.Allowed || item.DecidedAt != batchDecision.DecidedAt || item.TenantID != batchDecision.TenantID ||
+			item.Subject == nil || *item.Subject != batchDecision.Subject || item.RequestID != batch.Requests[index].RequestID ||
+			mutation.Request != batch.Requests[index] || mutation.AuditEvent.RequestID != batch.Requests[index].RequestID ||
+			mutation.AuditEvent.CorrelationID != batchDecision.CorrelationID {
+			t.Fatalf("batch item %d was not bound to one snapshot and immutable fact: item=%#v mutation=%#v", index, item, mutation)
+		}
+		if index > 0 && item.ID == batchDecision.Decisions[index-1].ID {
+			t.Fatal("batch items reused one authorization decision")
+		}
+	}
+	repository.transaction.profileErr = ErrUnavailable
+	beforeProfileFailure := len(repository.transaction.authorizations)
+	if _, err := service.AuthorizeBatch(context.Background(), paasCredential, login.Credential, batch); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("batch with unavailable current profiles err=%v, want unavailable", err)
+	}
+	if len(repository.transaction.authorizations) != beforeProfileFailure {
+		t.Fatal("batch with unavailable current profiles persisted a partial decision")
+	}
+	repository.transaction.profileErr = nil
 	// This workflow intentionally has no directory key. Even an authorized
 	// administrator cannot fall back to raw IDs or an in-memory signing key.
 	if _, err := service.ListGroups(context.Background(), login.Credential, "", "request-no-cursor-key"); !errors.Is(err, ErrUnavailable) {

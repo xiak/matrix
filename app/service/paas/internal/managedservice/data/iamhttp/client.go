@@ -134,6 +134,66 @@ func (client *Client) Authorize(
 	return authorization, nil
 }
 
+func (client *Client) AuthorizeBatch(
+	ctx context.Context,
+	request port.AuthorizationBatchRequest,
+) (port.AuthorizationBatch, error) {
+	if client == nil || client.http == nil {
+		return port.AuthorizationBatch{}, port.ErrAuthorizationUnavailable
+	}
+	if ctx == nil || port.ValidateAuthorizationBatchRequest(request) != nil {
+		return port.AuthorizationBatch{}, port.ErrUnauthenticated
+	}
+	subjectCredential, err := parseBearer(request.Credential)
+	if err != nil {
+		return port.AuthorizationBatch{}, port.ErrUnauthenticated
+	}
+	iamRequests := make([]iamv1.AuthorizationRequest, len(request.Requests))
+	for index := range request.Requests {
+		mapped, mapErr := toIAMRequest(request.Requests[index])
+		if mapErr != nil {
+			return port.AuthorizationBatch{}, port.ErrAuthorizationUnavailable
+		}
+		iamRequests[index] = mapped
+	}
+	iamRequest := iamv1.AuthorizationBatchRequest{Requests: iamRequests}
+	body, err := json.Marshal(iamRequest)
+	if err != nil {
+		return port.AuthorizationBatch{}, port.ErrAuthorizationUnavailable
+	}
+	defer clear(body)
+	response, err := client.http.Do(
+		ctx, http.MethodPost, "/v1/authorize:batch", bytes.NewReader(body), "application/json",
+		client.serviceCredential, subjectCredential,
+	)
+	if err != nil {
+		return port.AuthorizationBatch{}, port.ErrAuthorizationUnavailable
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return port.AuthorizationBatch{}, authorizationStatusError(response.StatusCode)
+	}
+	var decision iamv1.AuthorizationBatchDecision
+	if !authorityhttp.ResponseIsJSON(response) || iamv1.DecodeRequest(response.Body, &decision) != nil ||
+		iamv1.CheckAuthorizationBatchDecisionForRequest(decision, iamRequest) != nil {
+		return port.AuthorizationBatch{}, port.ErrAuthorizationUnavailable
+	}
+	result := port.AuthorizationBatch{
+		TenantID: string(decision.TenantID), SubjectType: port.SubjectType(decision.Subject.Type),
+		SubjectID: decision.Subject.ID, Items: make([]port.AuthorizationBatchItem, len(decision.Decisions)),
+	}
+	for index, item := range decision.Decisions {
+		result.Items[index] = port.AuthorizationBatchItem{
+			Resource: port.ResourceReference{Kind: item.Resource.Kind, ID: item.Resource.ID},
+			Allowed:  item.Allowed, DecisionID: string(item.ID), RequestID: item.RequestID,
+		}
+	}
+	if port.ValidateAuthorizationBatchForRequest(result, request) != nil {
+		return port.AuthorizationBatch{}, port.ErrAuthorizationUnavailable
+	}
+	return result, nil
+}
+
 func (client *Client) BindWorkloadRole(
 	ctx context.Context,
 	template iamv1.ServiceRoleTemplateReference,
@@ -432,9 +492,7 @@ func (lease *workloadRoleLease) Release(ctx context.Context) error {
 }
 
 func toIAMRequest(request port.AuthorizationRequest) (iamv1.AuthorizationRequest, error) {
-	result, err := iamv1.NewAuthorizationRequest(request.Action,
-		iamv1.ResourceReference{Kind: request.Resource.Kind, ID: request.Resource.ID},
-		request.ResourceMode, request.CollectionUsage, request.RequestID, request.RequestID)
+	result, err := port.NewIAMAuthorizationRequest(request)
 	profile, known := iamv1.LookupAuthorizationProfile(iamv1.ProductManagedService)
 	if err != nil || !known || iamv1.CheckAuthorizationProfileReference(profile, result.Profile) != nil ||
 		profile.CallingService != iamv1.ServicePaaS {

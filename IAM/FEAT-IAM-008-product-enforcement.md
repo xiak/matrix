@@ -1,6 +1,6 @@
 # FEAT-IAM-008：业务接入、服务角色与 ABAC
 
-- 状态：实施中；版本化产品 Profile、PaaS/managedservice 的真实 PEP、请求与决定绑定及当前资源/Operation/outbox 租户隔离已有固定后端实现。服务受托已有账号同意关系、当前Account只读观察、managedservice真实资源绑定/解绑及服务会话发行/回执/当前PDP；固定`f98d4088`已让首个产品用60秒临时身份读取真实业务资源并自退出，本地真实PG18及独立多进程门禁通过，独立CI仍在串行执行。后继本地候选已补严格服务来源的管理员目录/读取/代撤销并通过真实PG18纵向及累计Role管理门禁；实例过滤/批量授权、可信标签、UI和发布组合仍未完成，整体未验收。
+- 状态：实施中；版本化产品 Profile、PaaS/managedservice 的真实 PEP、请求与决定绑定及当前资源/Operation/outbox 租户隔离已有固定后端实现。服务受托已有账号同意关系、当前Account只读观察、managedservice真实资源绑定/解绑及服务会话发行/回执/当前PDP；累计固定`a464299b`已补严格服务来源的管理员目录/读取/代撤销并通过本地真实PG18、累计Role管理、独立多进程及14项独立CI。实例目录批量过滤已有下述本地候选及真实PG18/独立进程证据，尚待固定提交和独立CI；可信标签、UI和发布组合仍未完成，整体未验收。
 - 依赖：001、005、006。
 - Owner：IAM Profile/Role，PaaS/managedservice/Audit 各自的真实资源与 PEP。
 
@@ -39,12 +39,12 @@ ServiceRoleTemplate 定义注册服务主体、用途、允许权限和生命周
 | --- | --- | --- |
 | IAM-PEP-01 | 已实现当前后端主体 | 固定 `1dc1079c` 已将 IAM、PaaS、managedservice、Audit、installation 的版本化 Profile、完整摘要、当前头及请求/决定绑定接入唯一契约并通过独立 CI。后继 PaaS Profile revision 3 增加 `request.source-ip`，固定 `94cc8d7f` 已有真实 PG18、独立进程及唯一前驱保留数据证据，独立 CI 尚未收口。当前仍是源码/开发 readiness，不是签名发布组合。 |
 | IAM-PEP-02 | PaaS apphosting 与 managedservice 已实现 | HTTP owner 从真实 path/body 和实际 `RemoteAddr` 构造 Action、资源、集合用途及可信网络上下文；账号和主体来自当前 IAM 凭据。IAM 决定必须逐字段绑定原请求，业务事务再按数据库所属账号取数，query/body/header 不能选择另一账号。 |
-| IAM-PEP-03 | 部分实现 | 当前集合列表只允许声明为 `COLLECTION_LIST` 的整体授权；两个账号同名/同 ID/key、伪造 tenant/cursor/after 及跨账号实例均有真实拒绝门禁。尚无“先取候选再逐实例过滤”的列表协议，也没有批量决定；因此不能把整体列表授权描述为细粒度过滤完成。 |
+| IAM-PEP-03 | 首个无游标目录的本地候选已实现 | managedservice仍先以`COLLECTION_LIST`完成目录准入，再从受信本地catalog取得真实候选，按ID排序后通过一次1–50项批量PDP逐实例过滤。两个账号同名/同 ID/key、伪造 tenant/cursor/after、错序/遗漏/替换决定、跨账号实例、撤权后下一请求及ROLE全拒绝已有行为或真实进程门禁；租户资源cursor和其他产品目录仍未接入，尚待固定提交、独立CI与发布组合。 |
 | IAM-PEP-04 | 当前应用托管与 managedservice 路径已实现 | Application、Configuration、Revision、QuotaEntitlement、ServiceInstallation 的创建由封闭集合请求开始，最终资源、Operation 和 outbox 由同一业务事务建立；IAM 原决定只证明集合准入，不证明 caller 填写的最终 ID 或 payload。真实双账号门禁核对配额、Operation、幂等、拒绝无部分效果及 Audit 关联。 |
 | IAM-SVC-01/02 | 最小产品运行闭环及管理员管理已在本地候选实现，发布未完成 | ServiceIdentity自身仍不获得目标Account权限；只有不可变模板、精确系统策略上限、当前Account同意和真实workload binding同时有效时，IAM才发行目标Account的60秒RoleSession。managedservice用该临时身份经唯一PDP读取实际`ServiceInstallation`后立即自退出；服务home Account与目标Account分开保存，SERVICE与USER来源严格互斥。当前AccountAdministrator能以独立权限查询和终止服务会话，只有服务Role绑定管理权限的USER、服务凭据及ROLE自身均不能获得管理能力。当前候选已通过真实PG18纵向、累计Role管理及209.46秒独立进程组合，后者实际覆盖双副本list/read/revoke、解绑后历史观察、等值重放、跨Account拒绝与唯一Audit事实；仍缺固定提交、独立CI和最终发布组合。 |
 | IAM-TAG-01/02 | 未实现 | Role 的 `tags` 仍只是元数据，不能进入授权。产品资源标签、创建请求标签、标签写入授权和并发一致性尚无可信来源协议。 |
 
-`app/service/paas/internal/managedservice/port/security.go` 原 action→resource switch 是该产品适配器的封闭边界，不是通用求值器按产品名称分叉，但它重复了 release-owned Profile。本轮候选已删除这份重复映射：port 直接使用 IAM Action/ResourceKind 类型，通过 `NewAuthorizationRequest` 和 managedservice 当前 Profile 的完整引用/calling service 核对形状；IAM HTTP adapter不再执行第二次字符串翻译。七种合法集合/实例形状及其他产品、错资源、错集合用途/ID攻击的聚焦测试通过；全仓默认 race/vet、architecture、模块校验和 Linux amd64 构建通过，尚待独立CI。后继产品适配器同样应消费自己编译进发布物且已由 IAM Profile 摘要认证的声明，通用 IAM 求值器仍只解释统一 Profile/Policy 语义。
+`app/service/paas/internal/managedservice/port/security.go` 原 action→resource switch 是该产品适配器的封闭边界，不是通用求值器按产品名称分叉，但它重复了 release-owned Profile。本轮候选已删除这份重复映射：port 直接使用 IAM Action/ResourceKind 类型，通过 `NewAuthorizationRequest` 和 managedservice 当前 Profile 的完整引用/calling service 核对形状；IAM HTTP adapter不再执行第二次字符串翻译。七种合法集合/实例形状及其他产品、错资源、错集合用途/ID攻击的聚焦测试通过；全仓默认 race/vet、architecture、模块校验和 Linux amd64 构建通过，并由累计`a464299b`的独立CI覆盖。后继产品适配器同样应消费自己编译进发布物且已由 IAM Profile 摘要认证的声明，通用 IAM 求值器仍只解释统一 Profile/Policy 语义。
 
 同片后继候选把 apphosting 的 PaaS→IAM 资源词汇翻译收敛到 port 的单一构造器，HTTP adapter不再维护第二份资源 switch，Action/资源形状、当前 Profile 引用、PAAS calling service 和可信 source IP 一次绑定。apphosting 仍保留14个路由动作的显式 PEP 子集：同一PaaS Profile中的平台主机/安装动作不能因“属于PaaS”进入应用托管。14条合法形状及同产品错PEP、其他产品、错资源/集合/source IP攻击的聚焦测试通过；同一全仓默认 race/vet、architecture、模块校验和 Linux amd64 构建通过，尚待独立CI。
 
@@ -58,7 +58,7 @@ ServiceRoleTemplate 定义注册服务主体、用途、允许权限和生命周
 
 公共契约现有 `Role.management=SERVICE_LINKED`、非秘密 `ServicePrincipalReference`、`ServiceLinkedRole`、`WorkloadRoleBinding` 及聚合观察 `ServiceLinkedRoleAccess`。binding 只允许创建时 ACTIVE/revision 1及一次终态 REVOKED/revision 2，精确绑定 Account、Role、template版本/摘要和 workload `{kind,id}`；关系同时保留服务主体的物理 home Account、installation、principal、purpose 及不可变 PolicyVersion 上限。普通客户 Role 目录/详情拒绝 `SERVICE_LINKED`，现有更新、trust、附件和 boundary 入口均不能修改系统关系。PostgreSQL 的强制 RLS、不可变触发器、服务相关 Role 专属索引和受限 SECURITY DEFINER 入口共同承载这些不变量。
 
-当前动作目录已将 IAM Profile 推进到 revision 8，新增模板/服务相关角色只读、创建服务相关Role、`iam.role.pass`及binding撤销六项能力；managedservice Profile revision 3只新增实际`SERVICE_INSTALLATION`的bind/unbind。八项能力全部要求当前USER，IAM六项还明确只接受LOGIN_SESSION；ROLE只能继续执行模板允许的安装读取，SERVICE_ACCOUNT不能直接求值。新`system.service-role-administrator`精确包含这八项且不自动附着，既有`AccountAdministrator`、`PaaSDeveloper`、`PaaSViewer`和安装读取策略均未扩权；具备原Policy附件管理权的管理员必须显式委派该职责。历史IAM revision 7、managedservice revision 1/2保持原能力。新增租户Audit事实`iam.service-linked-role.created`及`iam.workload-role-binding.created/revoked`只接受USER演员、准确目标和原IAM决定，不能由SYSTEM/服务主体或安装链伪造；三项事实同时进入Audit数据库的封闭append/query目录，Audit readiness推进到29，目录门禁先以公开Go契约验证fixture再证明SQL接受同一事件，避免API与存储目录静默漂移。聚焦API/Audit/authority/architecture race、生成、vet及负向门禁已本地通过；本任务独立限额PostgreSQL 18的`TestIAMPolicyAuthorityStoragePostgres`以225.31秒通过干净迁移原子性、Profile/系统策略注册重放、权限存储、附件并发和历史证据门禁；CI同形Audit存储、保留tenant链升级和HTTP门禁分别以16.52秒和4.67秒在新数据库通过。固定`2e2476ad`的独立CI已证明Go、Audit存储、Role及其余安全lane通过，但总体因保留数据门禁把当前IAM Profile头写死为历史revision 7而失败；该失败不回填为通过。当前门禁改为从唯一源码Profile取得精确revision、canonical document及digest，同时保留原前驱声明字节，并已在独立PostgreSQL 18上通过真实前驱升级158.97秒及真实备份恢复41.33秒；修复后的独立CI仍待确认。该固定阶段只证明同意关系及内部创建，不包含后继服务承担；后继候选及其独立边界由006和下文继续拥有。
+当前动作目录已将 IAM Profile 推进到 revision 8，新增模板/服务相关角色只读、创建服务相关Role、`iam.role.pass`及binding撤销六项能力；managedservice Profile revision 3只新增实际`SERVICE_INSTALLATION`的bind/unbind。八项能力全部要求当前USER，IAM六项还明确只接受LOGIN_SESSION；ROLE只能继续执行模板允许的安装读取，SERVICE_ACCOUNT不能直接求值。新`system.service-role-administrator`精确包含这八项且不自动附着，既有`AccountAdministrator`、`PaaSDeveloper`、`PaaSViewer`和安装读取策略均未扩权；具备原Policy附件管理权的管理员必须显式委派该职责。历史IAM revision 7、managedservice revision 1/2保持原能力。新增租户Audit事实`iam.service-linked-role.created`及`iam.workload-role-binding.created/revoked`只接受USER演员、准确目标和原IAM决定，不能由SYSTEM/服务主体或安装链伪造；三项事实同时进入Audit数据库的封闭append/query目录，Audit readiness推进到29，目录门禁先以公开Go契约验证fixture再证明SQL接受同一事件，避免API与存储目录静默漂移。聚焦API/Audit/authority/architecture race、生成、vet及负向门禁已本地通过；本任务独立限额PostgreSQL 18的`TestIAMPolicyAuthorityStoragePostgres`以225.31秒通过干净迁移原子性、Profile/系统策略注册重放、权限存储、附件并发和历史证据门禁；CI同形Audit存储、保留tenant链升级和HTTP门禁分别以16.52秒和4.67秒在新数据库通过。固定`2e2476ad`的独立CI已证明Go、Audit存储、Role及其余安全lane通过，但总体因保留数据门禁把当前IAM Profile头写死为历史revision 7而失败；该失败不回填为通过。当前门禁改为从唯一源码Profile取得精确revision、canonical document及digest，同时保留原前驱声明字节，并已在独立PostgreSQL 18上通过真实前驱升级158.97秒及真实备份恢复41.33秒；修复后的当前实现由累计`a464299b`的[Verification 36779942782](https://github.com/xiak/matrix/actions/runs/36779942782)再次覆盖，14项全部成功。该固定阶段只证明同意关系及内部创建，不包含后继服务承担；后继边界由006和下文继续拥有。
 
 `GET /v1/service-role-templates` 已接到当前 USER 的真实账号 PDP：服务端只接受无 query/body 的 GET 和 LOGIN_SESSION，以 `iam.service-role-template.list` 对 IAM 推导的当前 Account 实例求值，随后才返回完整有序模板。原 `AccountAdministrator` 默认拒绝，显式附加 `system.service-role-administrator` 后允许，撤销附件后的下一次请求立即拒绝；ServiceIdentity 不能替代 USER。
 
@@ -134,6 +134,22 @@ managedservice 的首个 northbound bind 候选使用 `POST /managed-services/v1
 新增租户事实分别命名为 `iam.service-linked-role.created`、`iam.workload-role-binding.created/revoked` 和服务来源的 session issued/revoked；不改变现有USER `iam.role-session.*` action含义。业务调用仍使用原产品事实，但ROLE actor lineage准确记录服务来源。Audit正文不含临时凭据、模板完整策略、服务长期凭据或私有代际证据。
 
 本切片落地时只验证当前开发schema和一个确有数据意义的最近前驱；项目尚未发布，不建立从所有历史草稿逐版升级的组合矩阵。已固定的USER RoleSession/Audit历史字节、撤权不复活和真实产品资源数据仍必须保留；源码schema迁移通过不代表签名release profile可跨版本运行。
+
+## 下一纵向切片：实例目录批量过滤
+
+本片只把 `managedservice.offering.read` 的真实发布目录从“集合全有或全无”推进为逐实例过滤，并建立可由其他产品复用的批量 PDP 契约；不同时引入资源标签、租户数据库分页或任意批量写入。managedservice Profile 以新 revision 仅为该 Action 声明 `instanceListBatch: true`，保留既有 revision 的原始声明与摘要。缺失该能力、只有 `INSTANCE`/`COLLECTION_LIST` 形状、Action 名称像 read/list，均不能调用批量入口。
+
+`POST /v1/authorize:batch` 使用与单项授权相同的当前服务凭据和 USER/ROLE bearer，只接受 `AuthorizationBatchRequest{requests}`。`requests` 为 1–50 个完整 `AuthorizationRequest`，必须使用同一当前 Profile、Action、资源种类、`INSTANCE` 模式、空 collection usage、可信 network context 和 correlation ID；资源 ID 与 request ID 分别唯一，资源按 ID 严格升序。50项上限由当前合法最大长度请求及USER Allow响应均能留在原64KiB严格IAM传输内的契约测试约束，不为批量入口放宽全局body上限。请求没有 Account、主体、候选属性、标签或集合 selector。IAM 在一个事务中只认证一次调用服务和主体，固定同一事务时刻与同一当前权威快照，再对每个精确实例执行原唯一 PDP 并写入各自不可变决定和 `iam.authorization.decided` 事实；Deny 是正常逐项结果，任一权威/存储错误使整个批次回滚且不返回部分结果。
+
+响应 `AuthorizationBatchDecision` 绑定本次已认证的 `tenantId`、严格主体、共同 `decidedAt`、Profile/Action/correlation 与按原顺序排列的完整决定。即使全部实例 Deny，envelope 也只返回调用者自己的已认证 Account/主体上下文，不能作为任一资源 permit；每个业务结果仍必须以其对应的 Allow 决定为准。PEP 逐项使用现有 `CheckAuthorizationDecisionForRequest` 后再消费，不能缓存批次、复用另一资源的 Allow，或从某一项 Allow 推导集合权限。
+
+首个 PEP 的候选只能来自进程内受信、版本固定的 managedservice catalog，浏览器不能提交 ID 列表、分页位置或过滤表达式。当前最窄协议先保留原 `COLLECTION_LIST` 决定作为目录入口及已认证Account/主体上下文，再在业务读取真实目录后，对排序后的精确候选发出一次批量请求；所以一次列表请求固定为“一次集合准入 + 一次批量过滤”，不是单次IAM网络调用，也暂不支持只有实例权限而没有集合准入的目录发现。返回集合只保留准确 Allow 的目录项，全部 Deny 返回成功空目录，凭据无效仍为 401，IAM 不可用、遗漏/重复/乱序/错主体/错租户/错 Profile 的响应均为 503。详情读取继续走单实例授权，二者对同一实例必须得到相同当前结果。
+
+本片验收覆盖：允许全部/部分/零项、显式 Deny 覆盖通配 Allow、USER 与 ROLE、另一 Account 同名策略、撤附件/边界/会话/binding 后下一请求、两个 IAM 副本、Profile 头漂移、批次中重复/变体/错序/超过预算、outbox写入失败整批回滚和重启不复活。真实 PG18 与独立 IAM/Audit/PaaS 进程必须证明每个列表请求只有一次集合决定和一次批量调用、每项唯一决定与 tenant chain；单项授权、AccessKey、安装 probe、服务承担、旧 Profile/Policy/Audit canonical 均保持。当前生产 catalog 只有一个 PostgreSQL offering，因此产品真实运行只能证明全Allow或全Deny；混合Allow/Deny由同一产品handler的多候选行为测试与IAM真实多资源事务证明，不虚构第二个已发布商品。该证据只完成首个无游标目录的批量过滤，不把租户资源 cursor、批量写、可信标签或最终发布组合标为完成。
+
+2026-10-01本地候选已通过API生成器/JSON Schema、IAM HTTP/usecase及managedservice port/client/handler聚焦测试和相关包race。独占PG18的完整IAM HTTP race门禁94.029秒通过：两个精确实例共享同一事务时刻和已认证主体，每项分别保存不可变决定及Audit outbox；第二项故意复用决定ID触发末端失败时，整个批次留下零决定、零事实。当前Profile目录不可用时，内存owner也在第一项记录前整体失败关闭。
+
+同一源码在另一独占PG18中以191.663秒通过独立双IAM、Audit、PaaS和双dispatcher进程门禁：两个Account各自的真实`/offerings`请求都只得到实际PostgreSQL商品，并准确保存一条集合准入和一条实例决定；服务来源ROLE对两个精确候选得到两条Deny及各自tenant Audit事实；查看者撤销附件后的下一次列表请求返回403。query中的tenant/cursor/after selector、平台凭据读取租户目录继续拒绝。固定IAM45实际程序产生账号、MFA、会话、恢复、撤权和历史证据后，当前IAM56的唯一最近前驱保留数据门禁以117.410秒通过双次迁移、等值bootstrap和重启；旧Profile/Policy、凭据及完成状态没有因当前managedservice revision 4复活或改写。全仓默认测试和architecture、`go vet -p 2`、模块校验、API生成前后diff摘要一致及Linux amd64全仓构建均通过。本候选未有固定提交或独立CI，以上本地证据不能写成发布验收。
 
 ## 验收
 

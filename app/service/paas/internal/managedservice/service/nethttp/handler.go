@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"mime"
 	"net/http"
+	"sort"
 	"strings"
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
@@ -77,7 +78,67 @@ func (value *handler) listOfferings(response http.ResponseWriter, request *http.
 		return
 	}
 	result, err := value.workflow.ListOfferings(request.Context(), authorization)
-	writeResult(response, requestID, result, err)
+	if err != nil {
+		writeWorkflowError(response, requestID, err)
+		return
+	}
+	filtered, err := value.filterOfferings(request, requestID, authorization, result)
+	if err != nil {
+		writeAuthorizationError(response, requestID, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, filtered)
+}
+
+func (value *handler) filterOfferings(
+	request *http.Request,
+	correlationID string,
+	collection port.Authorization,
+	result managedservicev1.ServiceOfferingList,
+) (managedservicev1.ServiceOfferingList, error) {
+	if request == nil || result.Kind != "ServiceOfferingList" || len(result.Items) < 1 ||
+		len(result.Items) > iamv1.MaxAuthorizationBatchItems || port.ValidateAuthorization(collection) != nil {
+		return managedservicev1.ServiceOfferingList{}, port.ErrAuthorizationUnavailable
+	}
+	items := append([]managedservicev1.ServiceOffering(nil), result.Items...)
+	sort.Slice(items, func(left, right int) bool { return items[left].ID < items[right].ID })
+	batch := port.AuthorizationBatchRequest{
+		Credential: request.Header.Get("Authorization"),
+		Requests:   make([]port.AuthorizationRequest, len(items)),
+	}
+	previous := ""
+	for index, offering := range items {
+		if managedservicev1.ValidateServiceOffering(offering) != nil || offering.ID <= previous {
+			return managedservicev1.ServiceOfferingList{}, port.ErrAuthorizationUnavailable
+		}
+		itemRequestID, err := value.config.NewRequestID()
+		if err != nil || managedservicev1.ValidateID("requestId", itemRequestID) != nil {
+			return managedservicev1.ServiceOfferingList{}, port.ErrAuthorizationUnavailable
+		}
+		batch.Requests[index] = port.AuthorizationRequest{
+			Credential: batch.Credential, Action: port.AuthorizeOfferingRead,
+			Resource:     port.ResourceReference{Kind: port.ResourceServiceOffering, ID: offering.ID},
+			ResourceMode: iamv1.AuthorizationResourceInstance,
+			RequestID:    itemRequestID, CorrelationID: correlationID,
+		}
+		previous = offering.ID
+	}
+	authorization, err := value.authorizer.AuthorizeBatch(request.Context(), batch)
+	if err != nil || port.ValidateAuthorizationBatchForRequest(authorization, batch) != nil ||
+		authorization.TenantID != collection.TenantID || authorization.SubjectType != collection.SubjectType ||
+		authorization.SubjectID != collection.SubjectID {
+		if err != nil {
+			return managedservicev1.ServiceOfferingList{}, err
+		}
+		return managedservicev1.ServiceOfferingList{}, port.ErrAuthorizationUnavailable
+	}
+	allowed := make([]managedservicev1.ServiceOffering, 0, len(items))
+	for index, item := range items {
+		if authorization.Items[index].Allowed {
+			allowed = append(allowed, item)
+		}
+	}
+	return managedservicev1.ServiceOfferingList{Kind: "ServiceOfferingList", Items: allowed}, nil
 }
 
 func (value *handler) getOffering(response http.ResponseWriter, request *http.Request) {

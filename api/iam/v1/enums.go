@@ -443,7 +443,7 @@ func AllServicePurposes() []ServicePurpose {
 var authorizationProfiles = [...]AuthorizationProfile{
 	iamServiceRoleProfile(),
 	paasProfileRevisionThree,
-	managedServiceProfileRevisionThree,
+	managedServiceProfileRevisionFour,
 	roleBusinessProfile(auditProfileRevisionOne),
 	declaredProductProfile(ProductInstallation, ServiceInstallationVerifier, 1,
 		declaredProfileAction(ActionInstallationVerify, ResourceInstallation, AuthorityScopeInstallationProbe, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
@@ -496,7 +496,7 @@ var iamProfileRevisionOne = declaredProductProfile(ProductIAM, ServiceIAM, 1,
 )
 
 func HistoricalAuthorizationProfiles() []AuthorizationProfile {
-	return []AuthorizationProfile{cloneAuthorizationProfile(iamProfileRevisionOne), iamRoleManagementProfile(), iamRoleSessionProfile(), iamRoleSessionManagementProfile(), iamAccessKeyManagementProfile(), iamSecuritySettingsReadProfile(), iamSecuritySettingsProfile(), cloneAuthorizationProfile(paasProfileRevisionOne), cloneAuthorizationProfile(paasProfileRevisionTwo), cloneAuthorizationProfile(managedServiceProfileRevisionOne), cloneAuthorizationProfile(managedServiceProfileRevisionTwo), cloneAuthorizationProfile(auditProfileRevisionOne)}
+	return []AuthorizationProfile{cloneAuthorizationProfile(iamProfileRevisionOne), iamRoleManagementProfile(), iamRoleSessionProfile(), iamRoleSessionManagementProfile(), iamAccessKeyManagementProfile(), iamSecuritySettingsReadProfile(), iamSecuritySettingsProfile(), cloneAuthorizationProfile(paasProfileRevisionOne), cloneAuthorizationProfile(paasProfileRevisionTwo), cloneAuthorizationProfile(managedServiceProfileRevisionOne), cloneAuthorizationProfile(managedServiceProfileRevisionTwo), cloneAuthorizationProfile(managedServiceProfileRevisionThree), cloneAuthorizationProfile(auditProfileRevisionOne)}
 }
 
 // Revision one remains archived because compiled policy content and decisions
@@ -514,6 +514,7 @@ var managedServiceProfileRevisionOne = declaredProductProfile(ProductManagedServ
 
 var managedServiceProfileRevisionTwo = managedServiceInstallationRoleProfile(managedServiceProfileRevisionOne)
 var managedServiceProfileRevisionThree = managedServiceRoleConsentProfile(managedServiceProfileRevisionTwo)
+var managedServiceProfileRevisionFour = managedServiceOfferingListBatchProfile(managedServiceProfileRevisionThree)
 
 var paasProfileRevisionOne = declaredProductProfile(ProductPaaS, ServicePaaS, 1,
 	declaredProfileAction(ActionPaaSExecutionPoolCreate, ResourceExecutionPool, AuthorityScopeInstallation, ResourceExecutionPool, []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
@@ -587,6 +588,18 @@ func managedServiceRoleConsentProfile(previous AuthorizationProfile) Authorizati
 		profile.Actions = append(profile.Actions, declaration)
 	}
 	return profile
+}
+
+func managedServiceOfferingListBatchProfile(previous AuthorizationProfile) AuthorizationProfile {
+	profile := cloneAuthorizationProfile(previous)
+	profile.Revision++
+	for index := range profile.Actions {
+		if profile.Actions[index].Action == ActionManagedServiceOfferingRead {
+			profile.Actions[index].InstanceListBatch = true
+			return profile
+		}
+	}
+	panic("managed-service offering read declaration is missing")
 }
 
 // networkConditionProfile explicitly advances one product declaration. It does

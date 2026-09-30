@@ -43,6 +43,7 @@ type SubjectType string
 const (
 	SubjectUser           SubjectType = "USER"
 	SubjectServiceAccount SubjectType = "SERVICE_ACCOUNT"
+	SubjectRole           SubjectType = "ROLE"
 )
 
 type AuthorizationRequest struct {
@@ -52,6 +53,7 @@ type AuthorizationRequest struct {
 	ResourceMode    iamv1.AuthorizationResourceMode
 	CollectionUsage iamv1.AuthorizationCollectionUsage
 	RequestID       string
+	CorrelationID   string
 }
 
 type Authorization struct {
@@ -64,6 +66,26 @@ type Authorization struct {
 
 type Authorizer interface {
 	Authorize(context.Context, AuthorizationRequest) (Authorization, error)
+	AuthorizeBatch(context.Context, AuthorizationBatchRequest) (AuthorizationBatch, error)
+}
+
+type AuthorizationBatchRequest struct {
+	Credential string
+	Requests   []AuthorizationRequest
+}
+
+type AuthorizationBatchItem struct {
+	Resource   ResourceReference
+	Allowed    bool
+	DecisionID string
+	RequestID  string
+}
+
+type AuthorizationBatch struct {
+	TenantID    string
+	SubjectType SubjectType
+	SubjectID   string
+	Items       []AuthorizationBatchItem
 }
 
 // WorkloadRoleAuthority is the product-to-IAM consent boundary. Its requests
@@ -142,18 +164,66 @@ func ValidateAuthorizationRequest(value AuthorizationRequest) error {
 	if value.Credential == "" {
 		return errors.New("authorization credential is required")
 	}
+	_, err := NewIAMAuthorizationRequest(value)
+	return err
+}
+
+// NewIAMAuthorizationRequest is the single managed-service vocabulary
+// adapter. Credential material remains outside the public IAM document.
+func NewIAMAuthorizationRequest(value AuthorizationRequest) (iamv1.AuthorizationRequest, error) {
+	correlationID := value.CorrelationID
+	if correlationID == "" {
+		correlationID = value.RequestID
+	}
 	profileRequest, err := iamv1.NewAuthorizationRequest(
 		value.Action,
 		iamv1.ResourceReference{Kind: value.Resource.Kind, ID: value.Resource.ID},
 		value.ResourceMode,
 		value.CollectionUsage,
 		value.RequestID,
-		value.RequestID,
+		correlationID,
 	)
 	profile, known := iamv1.LookupAuthorizationProfile(iamv1.ProductManagedService)
 	if err != nil || !known || iamv1.CheckAuthorizationProfileReference(profile, profileRequest.Profile) != nil ||
 		profile.CallingService != iamv1.ServicePaaS {
-		return errors.New("authorization request is outside the managed-service profile")
+		return iamv1.AuthorizationRequest{}, errors.New("authorization request is outside the managed-service profile")
+	}
+	return profileRequest, nil
+}
+
+func ValidateAuthorizationBatchRequest(value AuthorizationBatchRequest) error {
+	if value.Credential == "" || value.Requests == nil || len(value.Requests) < 1 || len(value.Requests) > iamv1.MaxAuthorizationBatchItems {
+		return errors.New("authorization batch is invalid")
+	}
+	requests := make([]iamv1.AuthorizationRequest, len(value.Requests))
+	for index, request := range value.Requests {
+		if request.Credential != value.Credential || ValidateAuthorizationRequest(request) != nil {
+			return errors.New("authorization batch item is invalid")
+		}
+		mapped, err := NewIAMAuthorizationRequest(request)
+		if err != nil {
+			return errors.New("authorization batch item is invalid")
+		}
+		requests[index] = mapped
+	}
+	if iamv1.ValidateAuthorizationBatchRequest(iamv1.AuthorizationBatchRequest{Requests: requests}) != nil {
+		return errors.New("authorization batch is outside the managed-service profile")
+	}
+	return nil
+}
+
+func ValidateAuthorizationBatchForRequest(value AuthorizationBatch, request AuthorizationBatchRequest) error {
+	if ValidateAuthorizationBatchRequest(request) != nil || value.Items == nil || len(value.Items) != len(request.Requests) ||
+		managedservicev1.ValidateID("authorization.tenantId", value.TenantID) != nil ||
+		(value.SubjectType != SubjectUser && value.SubjectType != SubjectRole) ||
+		managedservicev1.ValidateID("authorization.subjectId", value.SubjectID) != nil {
+		return errors.New("authorization batch response is invalid")
+	}
+	for index, item := range value.Items {
+		if item.Resource != request.Requests[index].Resource || item.RequestID != request.Requests[index].RequestID ||
+			managedservicev1.ValidateID("authorization.decisionId", item.DecisionID) != nil {
+			return errors.New("authorization batch response differs")
+		}
 	}
 	return nil
 }

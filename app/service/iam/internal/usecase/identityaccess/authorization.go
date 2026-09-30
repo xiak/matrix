@@ -196,6 +196,113 @@ func (service *Authority) Authorize(
 	return decision, nil
 }
 
+func (service *Authority) AuthorizeBatch(
+	ctx context.Context,
+	serviceCredential iamv1.Secret,
+	subjectCredential iamv1.Secret,
+	request iamv1.AuthorizationBatchRequest,
+) (iamv1.AuthorizationBatchDecision, error) {
+	if iamv1.ValidateAuthorizationBatchRequest(request) != nil {
+		return iamv1.AuthorizationBatchDecision{}, ErrInvalidArgument
+	}
+	digests := make([]string, len(request.Requests))
+	for index := range request.Requests {
+		digest, err := digestSanitized("authorization", request.Requests[index])
+		if err != nil {
+			return iamv1.AuthorizationBatchDecision{}, err
+		}
+		digests[index] = digest
+	}
+	first := request.Requests[0]
+	var result iamv1.AuthorizationBatchDecision
+	err := service.withinTransaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
+		now, err := transactionTime(transactionContext, transaction)
+		if err != nil {
+			return err
+		}
+		caller, err := service.authenticateService(transactionContext, transaction, serviceCredential)
+		if err != nil {
+			return err
+		}
+		actor, decide, err := service.batchAuthorizationActor(
+			transactionContext, transaction, caller, subjectCredential, now,
+		)
+		if err != nil {
+			return err
+		}
+		decisions := make([]iamv1.AuthorizationDecision, 0, len(request.Requests))
+		for index, item := range request.Requests {
+			decision, decisionErr := service.decideAndRecord(
+				transactionContext, transaction, item, digests[index], now, actor,
+				func(id iamv1.DecisionID) (authority.AuthorizationEvaluation, error) {
+					return decide(item, id)
+				},
+			)
+			if decisionErr != nil {
+				return decisionErr
+			}
+			decisions = append(decisions, decision)
+		}
+		result = iamv1.AuthorizationBatchDecision{
+			APIVersion: iamv1.APIVersion, Kind: "AuthorizationBatchDecision",
+			TenantID: actor.organizationID, Subject: actor.subject,
+			Profile: first.Profile, Action: first.Action, ResourceKind: first.Resource.Kind,
+			NetworkContext: first.NetworkContext, CorrelationID: first.CorrelationID,
+			DecidedAt: now, Decisions: decisions,
+		}
+		return nil
+	})
+	if err != nil {
+		return iamv1.AuthorizationBatchDecision{}, err
+	}
+	if iamv1.CheckAuthorizationBatchDecisionForRequest(result, request) != nil {
+		return iamv1.AuthorizationBatchDecision{}, ErrUnavailable
+	}
+	return result, nil
+}
+
+type batchDecider func(iamv1.AuthorizationRequest, iamv1.DecisionID) (authority.AuthorizationEvaluation, error)
+
+func (service *Authority) batchAuthorizationActor(
+	ctx context.Context,
+	transaction Transaction,
+	caller ServiceCredential,
+	credential iamv1.Secret,
+	now time.Time,
+) (authorizationActor, batchDecider, error) {
+	subject, err := service.authenticateSession(ctx, transaction, credential, now)
+	if err == nil {
+		actor := authorizationActor{
+			organizationID: subject.Subject.Organization.ID,
+			subject:        iamv1.Subject{Type: iamv1.SubjectType(subject.Subject.Principal.Type), ID: string(subject.Subject.Principal.ID)},
+		}
+		return actor, func(request iamv1.AuthorizationRequest, id iamv1.DecisionID) (authority.AuthorizationEvaluation, error) {
+			return authority.Decide(subject.Subject, caller.Identity.Purpose, request, id, now)
+		}, nil
+	}
+	if !errors.Is(err, ErrUnauthenticated) {
+		return authorizationActor{}, nil, err
+	}
+	role, err := service.authenticateRoleSession(ctx, transaction, credential, now)
+	if err != nil {
+		return authorizationActor{}, nil, err
+	}
+	if role.Subject.Service != nil && role.Subject.Service.Identity != caller.Identity {
+		return authorizationActor{}, nil, ErrUnauthenticated
+	}
+	reference, err := roleSessionReference(role.Subject.Session)
+	if err != nil {
+		return authorizationActor{}, nil, err
+	}
+	actor := authorizationActor{
+		organizationID: role.Subject.Session.AccountID,
+		subject:        iamv1.Subject{Type: iamv1.SubjectRole, ID: string(role.Subject.Role.ID), RoleSession: &reference},
+	}
+	return actor, func(request iamv1.AuthorizationRequest, id iamv1.DecisionID) (authority.AuthorizationEvaluation, error) {
+		return authority.DecideRole(role.Subject, caller.Identity.Purpose, request, id, now)
+	}, nil
+}
+
 // VerifyInstallation authenticates the verifier service as both caller and
 // subject. It cannot be used for a generic IAM, PaaS, or Audit action.
 func (service *Authority) VerifyInstallation(

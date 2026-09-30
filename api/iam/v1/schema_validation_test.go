@@ -2143,6 +2143,67 @@ func TestDecisionSubjectCapabilityIsCheckedByPEPAndFrozenEvidence(t *testing.T) 
 	}
 }
 
+func TestAuthorizationBatchSchemasPublishTheBoundedClosedEnvelope(t *testing.T) {
+	document := loadIAMOpenAPI(t)
+	requestSchema := compileIAMOpenAPISchema(t, document, "AuthorizationBatchRequest")
+	decisionSchema := compileIAMOpenAPISchema(t, document, "AuthorizationBatchDecision")
+	toInstance := func(value any) any {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		instance, err := jsonschema.UnmarshalJSON(bytes.NewReader(encoded))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return instance
+	}
+	request := AuthorizationBatchRequest{Requests: make([]AuthorizationRequest, 2)}
+	for index, sample := range []struct{ resource, requestID string }{{"offering-a", "request-a"}, {"offering-b", "request-b"}} {
+		var err error
+		request.Requests[index], err = NewAuthorizationRequest(ActionManagedServiceOfferingRead,
+			ResourceReference{Kind: ResourceServiceOffering, ID: sample.resource}, AuthorizationResourceInstance, "", sample.requestID, "correlation-list")
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if ValidateAuthorizationBatchRequest(request) != nil || requestSchema.Validate(toInstance(request)) != nil {
+		t.Fatal("valid batch request disagrees with generated schema")
+	}
+	for _, invalid := range []AuthorizationBatchRequest{{Requests: []AuthorizationRequest{}}, {Requests: make([]AuthorizationRequest, MaxAuthorizationBatchItems+1)}} {
+		if ValidateAuthorizationBatchRequest(invalid) == nil || requestSchema.Validate(toInstance(invalid)) == nil {
+			t.Fatal("unbounded batch request accepted")
+		}
+	}
+	now := time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC)
+	subject := Subject{Type: SubjectUser, ID: "user-one"}
+	response := AuthorizationBatchDecision{APIVersion: APIVersion, Kind: "AuthorizationBatchDecision", TenantID: "account-one", Subject: subject,
+		Profile: request.Requests[0].Profile, Action: request.Requests[0].Action, ResourceKind: request.Requests[0].Resource.Kind,
+		CorrelationID: request.Requests[0].CorrelationID, DecidedAt: now, Decisions: make([]AuthorizationDecision, len(request.Requests))}
+	for index, item := range request.Requests {
+		allowed := index == 0
+		response.Decisions[index] = AuthorizationDecision{APIVersion: APIVersion, Kind: "AuthorizationDecision", ID: DecisionID("decision-" + item.Resource.ID),
+			Allowed: allowed, Reason: DecisionDenied, Action: item.Action, Resource: item.Resource, RequestID: item.RequestID,
+			Profile: &item.Profile, ResourceMode: item.ResourceMode, CorrelationID: item.CorrelationID, DecidedAt: now}
+		if allowed {
+			response.Decisions[index].Reason, response.Decisions[index].TenantID, response.Decisions[index].Subject = DecisionAllowed, response.TenantID, &subject
+		}
+	}
+	if ValidateAuthorizationBatchDecision(response) != nil || decisionSchema.Validate(toInstance(response)) != nil {
+		t.Fatal("valid batch decision disagrees with generated schema")
+	}
+	changed := response
+	changed.Subject = Subject{Type: SubjectServiceAccount, ID: "service-one"}
+	if ValidateAuthorizationBatchDecision(changed) == nil || decisionSchema.Validate(toInstance(changed)) == nil {
+		t.Fatal("service identity escaped the batch subject contract")
+	}
+	changed = response
+	changed.Decisions = []AuthorizationDecision{}
+	if ValidateAuthorizationBatchDecision(changed) == nil || decisionSchema.Validate(toInstance(changed)) == nil {
+		t.Fatal("empty batch decision accepted")
+	}
+}
+
 func TestAuthorizationProfileDiscoverySchemaPreservesDeclaredScopeAndShape(t *testing.T) {
 	schema := compileIAMOpenAPISchema(t, loadIAMOpenAPI(t), "AuthorizationProfileList")
 	base := currentAuthorizationProfileList(t)

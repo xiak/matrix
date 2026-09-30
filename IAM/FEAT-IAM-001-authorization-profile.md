@@ -74,9 +74,11 @@ AccessKey 使用旧 USER 策略的最窄兼容规则归007的原子授权片：�
 
 产品 Profile 必须同时约束产品标识、允许调用的已认证服务、Action、scope、资源种类、请求目标模式、集合行为与可信条件能力。产品名或 Action 字符串只作为标识，不能推导调用权限或粒度。内容不可变、同产品同 revision 不得对应另一 digest；digest 覆盖所有影响授权解释的字段。返回副本不能修改注册目录。注册来源仍由可信产品发布/服务组合控制，不开放租户上传 Profile 或借此注册平台动作。
 
+实例过滤批量不是看到同一 Action 同时有 `INSTANCE` 与 `COLLECTION_LIST` 就自动获得的能力。`AuthorizationProfileAction.instanceListBatch` 是受信产品明确发布、进入完整摘要的可选能力；缺失固定解释为关闭，以保持历史声明原字节。它只能用于 `TENANT` scope、没有 `resultResourceKind`、同时声明精确 `INSTANCE` 与 `COLLECTION_LIST` 的 Action；不能用于创建、写入、平台/安装或 verifier probe。该位只允许调用封闭的实例列表批量传输，既不授予集合或任一实例权限，也不证明候选存在、归属、标签或业务载荷。策略仍按每个精确实例独立求值；旧 PolicyVersion 可继续按其已冻结的相同 Action/资源/条件语义参与实例决定，不能因当前 Profile 新增批量传输能力扩张旧 Action、资源形状、主体或条件。
+
 产品目录不是商品上架目录，也不是租户授权关系。产品研发 owner 提交动作、资源、条件与实际 PEP 的版本化声明；IAM owner 校验命名空间、调用服务、能力和版本不变性；受信发布流程决定组合中采用的准确声明。产品声明必须与对应业务实施一同通过门禁，不能只注册元数据就宣称业务已接入。租户管理员只消费已发布的只读目录来编写策略，不持有产品注册或发布权；一般平台运营者的租户/主机管理权限也不隐含产品发布权。首片以受审查源码发行作为注册权威，不新增在线产品管理接口或任意运行时上传入口。未来内部接入 API 应替换发行适配方式，不能在通用求值器增加产品名称分支。服务受托与账号同意仍由008单独拥有。
 
-纯声明编码由 `api/iam/v1/authorization_profile.go` 唯一拥有，不复制 Policy/Audit 编码。`AuthorizationProfile` 包含 `apiVersion/kind/product/revision/callingService/actions`；每个动作显式给出 `resourceKind/scope/resourceShapes/conditions`，末尾可声明 `resultResourceKind`。后者与授权目标正交：既可表达集合创建，也可表达对父Account实例授权后创建User/Group/Policy。`INSTANCE` 可以声明租户实例前缀；`COLLECTION` 只能声明 `COLLECTION_LIST` 或 `COLLECTION_CREATE`，不支持 prefix、filter 或 batch。集合创建必须声明动作级result；含集合LIST时不得声明创建结果，不允许同动作LIST+CREATE。结果仅是成功事实种类，不是API返回载荷、最终ID或payload证明，不能替换原decision资源。shape不接受result字段或兼容别名。
+纯声明编码由 `api/iam/v1/authorization_profile.go` 唯一拥有，不复制 Policy/Audit 编码。`AuthorizationProfile` 包含 `apiVersion/kind/product/revision/callingService/actions`；每个动作显式给出 `resourceKind/scope/resourceShapes/conditions`，末尾可声明 `resultResourceKind`。后者与授权目标正交：既可表达集合创建，也可表达对父Account实例授权后创建User/Group/Policy。`INSTANCE` 可以声明租户实例前缀；`COLLECTION` 只能声明 `COLLECTION_LIST` 或 `COLLECTION_CREATE`，不支持 prefix，也不能由 shape 自身推导 filter/batch；实例列表批量只能由上述独立动作能力显式开启。集合创建必须声明动作级result；含集合LIST时不得声明创建结果，不允许同动作LIST+CREATE。结果仅是成功事实种类，不是API返回载荷、最终ID或payload证明，不能替换原decision资源。shape不接受result字段或兼容别名。
 
 `DecodeAuthorizationProfile` 沿现有严格 JSON owner 拒绝重复/未知/大小写别名字段，输入与程序内声明都受64KiB、128动作上限约束。动作/形状/条件分别按集合排序，输入保持不变；`CanonicalizeAuthorizationProfile` 使用 `matrix.iam.authorization-profile.v1` 域分隔摘要，`CheckAuthorizationProfileReference` 精确比较 `product/revision/contentDigest`，不接受“更新版本即可兼容”。可选条件省略、null、空集合都规范为不声明任何条件能力；来源仍复用唯一 IAM 封闭定义。产品/服务标识的语法允许未来产品，但语法通过、摘要匹配均不构成注册、签名认证或授权。
 

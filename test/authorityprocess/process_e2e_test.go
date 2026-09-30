@@ -9368,6 +9368,22 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 	activation := managedservicev1.ActivateQuotaRequest{OfferingID: "postgresql-18", QuotaShapeID: "pg-small", InstanceCount: 2}
 	for i := range tenants {
 		tenant := &tenants[i]
+		offeringResponse := performJSON(t, http.MethodGet, base+"/offerings", tenant.member, nil)
+		var offerings managedservicev1.ServiceOfferingList
+		if offeringResponse.Status != http.StatusOK || json.Unmarshal(offeringResponse.Body, &offerings) != nil ||
+			len(offerings.Items) != 1 || offerings.Items[0].ID != managedservicev1.PostgreSQLOfferingID {
+			t.Fatalf("managed-service exact offering filtering status=%d body=%s", offeringResponse.Status, offeringResponse.Body)
+		}
+		var exactBatch bool
+		if err := admin.QueryRow(ctx, `SELECT count(*)=2
+			AND count(*) FILTER (WHERE target_id='collection' AND resource_mode='COLLECTION' AND collection_usage='COLLECTION_LIST')=1
+			AND count(*) FILTER (WHERE target_id=$3 AND resource_mode='INSTANCE' AND collection_usage IS NULL)=1
+			AND count(DISTINCT document->>'correlationId')=1 AND bool_and(allowed)
+			FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2 AND subject_type='USER'
+			AND action_name=$4 AND target_kind=$5`, tenant.id, tenant.memberID, managedservicev1.PostgreSQLOfferingID,
+			string(iamv1.ActionManagedServiceOfferingRead), string(iamv1.ResourceServiceOffering)).Scan(&exactBatch); err != nil || !exactBatch {
+			t.Fatal("product list did not persist one collection admission and one exact candidate decision", err)
+		}
 		response := performJSONWithIdempotency(t, http.MethodPost, base+"/quota-entitlements", tenant.member, "shared-tenant-quota-key", activation)
 		assertStatus(response, http.StatusCreated, "activate quota")
 		if json.Unmarshal(response.Body, &tenant.quota) != nil || managedservicev1.ValidateQuotaEntitlement(tenant.quota) != nil {
@@ -9544,6 +9560,38 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 			decision.Subject.RoleSession.SourceUserID != "" || decision.Subject.RoleSession.SourceServicePrincipalID != "service-paas" {
 			t.Fatalf("second IAM process lost service RoleSession authorization: status=%d body=%s", decisionResponse.Status, decisionResponse.Body)
 		}
+		roleBatch := iamv1.AuthorizationBatchRequest{Requests: []iamv1.AuthorizationRequest{}}
+		for index, offeringID := range []string{"offering-a", "offering-b"} {
+			request, err := iamv1.NewAuthorizationRequest(iamv1.ActionManagedServiceOfferingRead,
+				iamv1.ResourceReference{Kind: iamv1.ResourceServiceOffering, ID: offeringID},
+				iamv1.AuthorizationResourceInstance, "", fmt.Sprintf("%s-offering-%d", tenant.serviceRoleRequest, index+1), tenant.serviceRoleRequest+"-offering-batch")
+			if err != nil {
+				t.Fatal(err)
+			}
+			roleBatch.Requests = append(roleBatch.Requests, request)
+		}
+		roleBatchResponse := performJSONWithHeaders(t, http.MethodPost, iamReplicaEndpoint+"/v1/authorize:batch", paasServiceCredential, "",
+			roleBatch, map[string]string{"Matrix-Subject-Credential": tenant.serviceRoleSecret})
+		var roleBatchDecision iamv1.AuthorizationBatchDecision
+		if roleBatchResponse.Status != http.StatusOK || json.Unmarshal(roleBatchResponse.Body, &roleBatchDecision) != nil ||
+			iamv1.CheckAuthorizationBatchDecisionForRequest(roleBatchDecision, roleBatch) != nil ||
+			roleBatchDecision.TenantID != iamv1.AccountID(tenant.id) || roleBatchDecision.Subject.Type != iamv1.SubjectRole ||
+			roleBatchDecision.Subject.ID != string(tenant.serviceRoleReceipt.RoleID) || len(roleBatchDecision.Decisions) != 2 ||
+			roleBatchDecision.Decisions[0].Allowed || roleBatchDecision.Decisions[1].Allowed {
+			t.Fatalf("service Role batch deny status=%d body=%s", roleBatchResponse.Status, roleBatchResponse.Body)
+		}
+		if err := admin.QueryRow(ctx, `SELECT count(*)=2 AND count(DISTINCT document->>'correlationId')=1
+			AND bool_and(NOT allowed) AND count(DISTINCT id)=2
+			AND (SELECT count(*) FROM iam.audit_outbox fact WHERE fact.tenant_id=$1
+			  AND fact.event_document->>'action'='iam.authorization.decided'
+			  AND fact.event_document->>'correlationId'=$4
+			  AND fact.event_document#>>'{actor,type}'='ROLE'
+			  AND fact.event_document#>>'{actor,id}'=$2)=2
+			FROM iam.authorization_decisions WHERE tenant_id=$1 AND subject_type='ROLE' AND role_id=$2
+			AND action_name=$3 AND document->>'correlationId'=$4`, tenant.id, tenant.serviceRoleReceipt.RoleID,
+			string(iamv1.ActionManagedServiceOfferingRead), tenant.serviceRoleRequest+"-offering-batch").Scan(&exactBatch); err != nil || !exactBatch {
+			t.Fatal("ROLE batch did not retain two denied decisions and exact tenant Audit facts", err)
+		}
 	}
 	if tenants[0].quota.ID == tenants[1].quota.ID || tenants[0].shared.Operation.ID == tenants[1].shared.Operation.ID {
 		t.Fatal("cross-tenant idempotency merged independent quota or Operations")
@@ -9578,7 +9626,7 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 			body := map[string]any{"offeringId": "postgresql-18", "quotaShapeId": "pg-small", "instanceCount": 1, field: other.id}
 			assertStatus(performJSONWithIdempotency(t, http.MethodPost, base+"/quota-entitlements", tenant.member, "forged-"+field, body), http.StatusBadRequest, "forged authority body")
 		}
-		for _, path := range []string{"/quota-entitlements", "/service-installations", "/service-installations/" + tenant.shared.ID + "/operation"} {
+		for _, path := range []string{"/offerings", "/quota-entitlements", "/service-installations", "/service-installations/" + tenant.shared.ID + "/operation"} {
 			for _, query := range []string{"?tenantId=" + other.id, "?cursor=" + other.unique.ID, "?after=" + other.quota.ID} {
 				assertStatus(performJSON(t, http.MethodGet, base+path+query, tenant.member, nil), http.StatusBadRequest, "unsupported selector or cursor")
 			}
@@ -9757,12 +9805,14 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 	assertStatus(performJSONWithIdempotency(t, http.MethodPost, base+"/quota-entitlements", platform.Credential, "platform-quota-attempt", activation), http.StatusForbidden, "platform-only tenant write")
 	revokeIAMPolicyAttachment(t, iamEndpoint, homeBearer, developerBinding.ID, 1, "request-resource-developer-revoked")
 	viewerBinding := createIAMPolicyAttachment(t, iamEndpoint, homeBearer, homeUser.ID, iamv1.SystemPolicyPaaSViewer, "request-resource-viewer")
+	assertStatus(performJSON(t, http.MethodGet, base+"/offerings", home.Credential, nil), http.StatusOK, "viewer offering filter")
 	assertStatus(performJSON(t, http.MethodGet, base+"/service-installations", home.Credential, nil), http.StatusOK, "viewer read")
 	assertStatus(performJSONWithIdempotency(t, http.MethodPost, base+"/quota-entitlements", home.Credential, "viewer-quota-attempt", activation), http.StatusForbidden, "viewer write")
 	getPaaSApplication(t, paasEndpoint, home.Credential, "application-shared-id", http.StatusOK)
 	createPaaSApplication(t, paasEndpoint, home.Credential, "application-viewer-denied", "viewer-denied", "viewer-application-attempt", http.StatusForbidden)
 	assertPaaSApplicationAbsent(t, ctx, admin, "application-viewer-denied")
 	revokeIAMPolicyAttachment(t, iamEndpoint, homeBearer, viewerBinding.ID, 1, "request-resource-viewer-revoked")
+	assertStatus(performJSON(t, http.MethodGet, base+"/offerings", home.Credential, nil), http.StatusForbidden, "next-request offering permission revocation")
 	assertStatus(performJSON(t, http.MethodGet, base+"/service-installations", home.Credential, nil), http.StatusForbidden, "next-request role revocation")
 	getPaaSApplication(t, paasEndpoint, home.Credential, "application-shared-id", http.StatusForbidden)
 	waitAllIAMOutboxDelivered(t, ctx, admin)

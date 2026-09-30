@@ -40,6 +40,9 @@ type AuthorizationProfileAction struct {
 	Scope          AuthorityScope                  `json:"scope"`
 	ResourceShapes []AuthorizationResourceShape    `json:"resourceShapes"`
 	Conditions     []AuthorizationProfileCondition `json:"conditions,omitempty"`
+	// InstanceListBatch admits only the bounded batch transport used by a
+	// product PEP to filter its own trusted list candidates. It is not a grant.
+	InstanceListBatch bool `json:"instanceListBatch,omitempty"`
 	// The successful fact may concern a child/new resource. This declaration
 	// never changes the resource against which IAM makes its decision.
 	ResultResourceKind ResourceKind `json:"resultResourceKind,omitempty"`
@@ -267,6 +270,7 @@ func validateAuthorizationProfileStructure(value AuthorizationProfile) error {
 			return ErrInvalidAuthorizationProfile
 		}
 		shapes := make(map[string]bool, len(action.ResourceShapes))
+		var hasInstance, hasCollectionList bool
 		for _, shape := range action.ResourceShapes {
 			key := string(shape.Mode) + ":" + string(shape.CollectionUsage)
 			if shapes[key] {
@@ -278,6 +282,7 @@ func validateAuthorizationProfileStructure(value AuthorizationProfile) error {
 				if shape.CollectionUsage != "" || shape.PrefixAllowed && action.Scope != AuthorityScopeTenant {
 					return ErrInvalidAuthorizationProfile
 				}
+				hasInstance = true
 			case AuthorizationResourceCollection:
 				if shape.PrefixAllowed {
 					return ErrInvalidAuthorizationProfile
@@ -287,6 +292,7 @@ func validateAuthorizationProfileStructure(value AuthorizationProfile) error {
 					if action.ResultResourceKind != "" {
 						return ErrInvalidAuthorizationProfile
 					}
+					hasCollectionList = true
 				case AuthorizationCollectionCreate:
 					if action.ResultResourceKind == "" {
 						return ErrInvalidAuthorizationProfile
@@ -297,6 +303,10 @@ func validateAuthorizationProfileStructure(value AuthorizationProfile) error {
 			default:
 				return ErrInvalidAuthorizationProfile
 			}
+		}
+		if action.InstanceListBatch && (action.Scope != AuthorityScopeTenant || action.ResultResourceKind != "" ||
+			!hasInstance || !hasCollectionList) {
+			return ErrInvalidAuthorizationProfile
 		}
 		conditions := make(map[ConditionKey]bool, len(action.Conditions))
 		for _, condition := range action.Conditions {
@@ -353,6 +363,7 @@ func equalAuthorizationProfile(left, right AuthorizationProfile) bool {
 	for index, action := range left.Actions {
 		other := right.Actions[index]
 		if action.Action != other.Action || action.ResourceKind != other.ResourceKind || action.Scope != other.Scope ||
+			action.InstanceListBatch != other.InstanceListBatch ||
 			action.ResultResourceKind != other.ResultResourceKind ||
 			(action.SubjectTypes == nil) != (other.SubjectTypes == nil) || !slices.Equal(action.SubjectTypes, other.SubjectTypes) ||
 			(action.UserAuthenticationMethods == nil) != (other.UserAuthenticationMethods == nil) || !slices.Equal(action.UserAuthenticationMethods, other.UserAuthenticationMethods) ||
@@ -534,6 +545,39 @@ func CheckAuthorizationProfileTarget(
 	return checkValidatedProfileTarget(profile, action, resource, mode, usage)
 }
 
+// CheckAuthorizationProfileInstanceListBatch validates the transport
+// capability of one exact current declaration. It does not authenticate a
+// caller, establish candidate ownership or authorize any listed resource.
+func CheckAuthorizationProfileInstanceListBatch(
+	profile AuthorizationProfile,
+	reference AuthorizationProfileReference,
+	action Action,
+	resourceKind ResourceKind,
+) error {
+	if CheckAuthorizationProfileReference(profile, reference) != nil {
+		return ErrInvalidAuthorizationProfile
+	}
+	return checkValidatedProfileInstanceListBatch(profile, action, resourceKind)
+}
+
+func checkValidatedProfileInstanceListBatch(profile AuthorizationProfile, action Action, resourceKind ResourceKind) error {
+	for _, declared := range profile.Actions {
+		if declared.Action == action && declared.ResourceKind == resourceKind && declared.Scope == AuthorityScopeTenant &&
+			declared.InstanceListBatch {
+			return nil
+		}
+	}
+	return ErrInvalidAuthorizationProfile
+}
+
+func checkSourceProfileInstanceListBatch(reference AuthorizationProfileReference, action Action, resourceKind ResourceKind) error {
+	expected, known := sourceProfileCommitments[reference.Product]
+	if !known || expected.reference != reference {
+		return ErrInvalidAuthorizationProfile
+	}
+	return checkValidatedProfileInstanceListBatch(expected.profile, action, resourceKind)
+}
+
 // Private: only call after this exact profile's complete canonical commitment
 // has already been validated in the same stack. Never expose an unchecked PEP
 // entrypoint or retain this as an authorization result.
@@ -631,6 +675,85 @@ func CheckAuthorizationDecisionForRequest(decision AuthorizationDecision, reques
 	return nil
 }
 
+func ValidateAuthorizationBatchRequest(value AuthorizationBatchRequest) error {
+	if value.Requests == nil || len(value.Requests) < 1 || len(value.Requests) > MaxAuthorizationBatchItems {
+		return ErrInvalidAuthorizationProfile
+	}
+	first := value.Requests[0]
+	if ValidateAuthorizationRequest(first) != nil || first.ResourceMode != AuthorizationResourceInstance ||
+		first.CollectionUsage != "" || checkSourceProfileInstanceListBatch(first.Profile, first.Action, first.Resource.Kind) != nil {
+		return ErrInvalidAuthorizationProfile
+	}
+	seenRequests := make(map[string]bool, len(value.Requests))
+	previousResource := ""
+	for _, request := range value.Requests {
+		if ValidateAuthorizationRequest(request) != nil || request.Profile != first.Profile || request.Action != first.Action ||
+			request.Resource.Kind != first.Resource.Kind || request.ResourceMode != AuthorizationResourceInstance ||
+			request.CollectionUsage != "" || request.CorrelationID != first.CorrelationID ||
+			!authorizationNetworkContextsEqual(request.NetworkContext, first.NetworkContext) ||
+			request.Resource.ID <= previousResource || seenRequests[request.RequestID] {
+			return ErrInvalidAuthorizationProfile
+		}
+		seenRequests[request.RequestID] = true
+		previousResource = request.Resource.ID
+	}
+	return nil
+}
+
+func ValidateAuthorizationBatchDecision(value AuthorizationBatchDecision) error {
+	if value.APIVersion != APIVersion || value.Kind != "AuthorizationBatchDecision" ||
+		ValidateID("tenantId", string(value.TenantID)) != nil || ValidateSubject(value.Subject) != nil ||
+		(value.Subject.Type != SubjectUser && value.Subject.Type != SubjectRole) || value.Subject.AccessKeyID != "" ||
+		ValidateID("correlationId", value.CorrelationID) != nil || validateTime("decidedAt", value.DecidedAt) != nil ||
+		checkSourceProfileInstanceListBatch(value.Profile, value.Action, value.ResourceKind) != nil ||
+		value.Decisions == nil || len(value.Decisions) < 1 || len(value.Decisions) > MaxAuthorizationBatchItems {
+		return ErrInvalidAuthorizationProfile
+	}
+	previousResource := ""
+	seenRequests := make(map[string]bool, len(value.Decisions))
+	for _, decision := range value.Decisions {
+		if ValidateAuthorizationDecision(decision) != nil || decision.Profile == nil || *decision.Profile != value.Profile ||
+			decision.Action != value.Action || decision.Resource.Kind != value.ResourceKind ||
+			decision.ResourceMode != AuthorizationResourceInstance || decision.CollectionUsage != "" ||
+			decision.CorrelationID != value.CorrelationID || !decision.DecidedAt.Equal(value.DecidedAt) ||
+			!authorizationNetworkContextsEqual(decision.NetworkContext, value.NetworkContext) ||
+			decision.Resource.ID <= previousResource || seenRequests[decision.RequestID] ||
+			decision.Allowed && (decision.TenantID != value.TenantID || decision.Subject == nil ||
+				!authorizationSubjectsEqual(*decision.Subject, value.Subject)) {
+			return ErrInvalidAuthorizationProfile
+		}
+		seenRequests[decision.RequestID] = true
+		previousResource = decision.Resource.ID
+	}
+	return nil
+}
+
+func CheckAuthorizationBatchDecisionForRequest(value AuthorizationBatchDecision, request AuthorizationBatchRequest) error {
+	if ValidateAuthorizationBatchRequest(request) != nil || ValidateAuthorizationBatchDecision(value) != nil ||
+		len(value.Decisions) != len(request.Requests) {
+		return ErrInvalidAuthorizationProfile
+	}
+	first := request.Requests[0]
+	if value.Profile != first.Profile || value.Action != first.Action || value.ResourceKind != first.Resource.Kind ||
+		value.CorrelationID != first.CorrelationID || !authorizationNetworkContextsEqual(value.NetworkContext, first.NetworkContext) {
+		return ErrInvalidAuthorizationProfile
+	}
+	for index := range request.Requests {
+		if CheckAuthorizationDecisionForRequest(value.Decisions[index], request.Requests[index]) != nil {
+			return ErrInvalidAuthorizationProfile
+		}
+	}
+	return nil
+}
+
 func authorizationNetworkContextsEqual(left, right *AuthorizationNetworkContext) bool {
 	return left == nil && right == nil || left != nil && right != nil && *left == *right
+}
+
+func authorizationSubjectsEqual(left, right Subject) bool {
+	if left.Type != right.Type || left.ID != right.ID || left.AccessKeyID != right.AccessKeyID ||
+		(left.RoleSession == nil) != (right.RoleSession == nil) {
+		return false
+	}
+	return left.RoleSession == nil || *left.RoleSession == *right.RoleSession
 }

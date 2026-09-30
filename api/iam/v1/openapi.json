@@ -1541,6 +1541,94 @@
         ],
         "type": "string"
       },
+      "AuthorizationBatchDecision": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/Action"
+          },
+          "apiVersion": {
+            "const": "iam.matrix.xiak.com/v1"
+          },
+          "correlationId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "decidedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "decisions": {
+            "items": {
+              "$ref": "#/components/schemas/AuthorizationDecision"
+            },
+            "maxItems": 50,
+            "minItems": 1,
+            "type": "array"
+          },
+          "kind": {
+            "const": "AuthorizationBatchDecision"
+          },
+          "networkContext": {
+            "$ref": "#/components/schemas/AuthorizationNetworkContext"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/AuthorizationProfileReference"
+          },
+          "resourceKind": {
+            "$ref": "#/components/schemas/ResourceKind"
+          },
+          "subject": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Subject"
+              },
+              {
+                "properties": {
+                  "accessKeyId": false,
+                  "type": {
+                    "enum": [
+                      "USER",
+                      "ROLE"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          "tenantId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "action",
+          "apiVersion",
+          "correlationId",
+          "decidedAt",
+          "decisions",
+          "kind",
+          "profile",
+          "resourceKind",
+          "subject",
+          "tenantId"
+        ],
+        "type": "object"
+      },
+      "AuthorizationBatchRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "requests": {
+            "items": {
+              "$ref": "#/components/schemas/AuthorizationRequest"
+            },
+            "maxItems": 50,
+            "minItems": 1,
+            "type": "array"
+          }
+        },
+        "required": [
+          "requests"
+        ],
+        "type": "object"
+      },
       "AuthorizationCollectionUsage": {
         "enum": [
           "COLLECTION_LIST",
@@ -6924,9 +7012,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:cd85c4f64eaf9d77be8aa1e2e8ab60cb0aa94d1eb6b198c8835026af810cf052",
+                    "contentDigest": "sha256:7507b84b9aea07ac94a3807236214edb40d0c35e236a870fea6a7bcd230450af",
                     "product": "managedservice",
-                    "revision": 3
+                    "revision": 4
                   }
                 },
                 "resource": {
@@ -6999,9 +7087,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:cd85c4f64eaf9d77be8aa1e2e8ab60cb0aa94d1eb6b198c8835026af810cf052",
+                    "contentDigest": "sha256:7507b84b9aea07ac94a3807236214edb40d0c35e236a870fea6a7bcd230450af",
                     "product": "managedservice",
-                    "revision": 3
+                    "revision": 4
                   }
                 },
                 "resource": {
@@ -7063,9 +7151,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:cd85c4f64eaf9d77be8aa1e2e8ab60cb0aa94d1eb6b198c8835026af810cf052",
+                    "contentDigest": "sha256:7507b84b9aea07ac94a3807236214edb40d0c35e236a870fea6a7bcd230450af",
                     "product": "managedservice",
-                    "revision": 3
+                    "revision": 4
                   }
                 },
                 "resource": {
@@ -7138,9 +7226,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:cd85c4f64eaf9d77be8aa1e2e8ab60cb0aa94d1eb6b198c8835026af810cf052",
+                    "contentDigest": "sha256:7507b84b9aea07ac94a3807236214edb40d0c35e236a870fea6a7bcd230450af",
                     "product": "managedservice",
-                    "revision": 3
+                    "revision": 4
                   }
                 },
                 "resource": {
@@ -7202,9 +7290,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:cd85c4f64eaf9d77be8aa1e2e8ab60cb0aa94d1eb6b198c8835026af810cf052",
+                    "contentDigest": "sha256:7507b84b9aea07ac94a3807236214edb40d0c35e236a870fea6a7bcd230450af",
                     "product": "managedservice",
-                    "revision": 3
+                    "revision": 4
                   }
                 },
                 "resource": {
@@ -7277,9 +7365,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:cd85c4f64eaf9d77be8aa1e2e8ab60cb0aa94d1eb6b198c8835026af810cf052",
+                    "contentDigest": "sha256:7507b84b9aea07ac94a3807236214edb40d0c35e236a870fea6a7bcd230450af",
                     "product": "managedservice",
-                    "revision": 3
+                    "revision": 4
                   }
                 },
                 "resource": {
@@ -7332,9 +7420,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:cd85c4f64eaf9d77be8aa1e2e8ab60cb0aa94d1eb6b198c8835026af810cf052",
+                    "contentDigest": "sha256:7507b84b9aea07ac94a3807236214edb40d0c35e236a870fea6a7bcd230450af",
                     "product": "managedservice",
-                    "revision": 3
+                    "revision": 4
                   }
                 },
                 "resource": {
@@ -7386,9 +7474,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:cd85c4f64eaf9d77be8aa1e2e8ab60cb0aa94d1eb6b198c8835026af810cf052",
+                    "contentDigest": "sha256:7507b84b9aea07ac94a3807236214edb40d0c35e236a870fea6a7bcd230450af",
                     "product": "managedservice",
-                    "revision": 3
+                    "revision": 4
                   }
                 },
                 "resource": {
@@ -7935,6 +8023,51 @@
           {
             "if": {
               "properties": {
+                "instanceListBatch": {
+                  "const": true
+                }
+              },
+              "required": [
+                "instanceListBatch"
+              ]
+            },
+            "then": {
+              "properties": {
+                "resourceShapes": {
+                  "allOf": [
+                    {
+                      "contains": {
+                        "properties": {
+                          "mode": {
+                            "const": "INSTANCE"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "contains": {
+                        "properties": {
+                          "collectionUsage": {
+                            "const": "COLLECTION_LIST"
+                          },
+                          "mode": {
+                            "const": "COLLECTION"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                },
+                "resultResourceKind": false,
+                "scope": {
+                  "const": "TENANT"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
                 "resourceShapes": {
                   "contains": {
                     "properties": {
@@ -7998,6 +8131,9 @@
                 "type": "array"
               }
             ]
+          },
+          "instanceListBatch": {
+            "type": "boolean"
           },
           "resourceKind": {
             "maxLength": 64,
@@ -12498,9 +12634,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:cd85c4f64eaf9d77be8aa1e2e8ab60cb0aa94d1eb6b198c8835026af810cf052",
+                    "contentDigest": "sha256:7507b84b9aea07ac94a3807236214edb40d0c35e236a870fea6a7bcd230450af",
                     "product": "managedservice",
-                    "revision": 3
+                    "revision": 4
                   }
                 },
                 "resource": {
@@ -12563,9 +12699,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:cd85c4f64eaf9d77be8aa1e2e8ab60cb0aa94d1eb6b198c8835026af810cf052",
+                    "contentDigest": "sha256:7507b84b9aea07ac94a3807236214edb40d0c35e236a870fea6a7bcd230450af",
                     "product": "managedservice",
-                    "revision": 3
+                    "revision": 4
                   }
                 },
                 "resource": {
@@ -12617,9 +12753,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:cd85c4f64eaf9d77be8aa1e2e8ab60cb0aa94d1eb6b198c8835026af810cf052",
+                    "contentDigest": "sha256:7507b84b9aea07ac94a3807236214edb40d0c35e236a870fea6a7bcd230450af",
                     "product": "managedservice",
-                    "revision": 3
+                    "revision": 4
                   }
                 },
                 "resource": {
@@ -12682,9 +12818,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:cd85c4f64eaf9d77be8aa1e2e8ab60cb0aa94d1eb6b198c8835026af810cf052",
+                    "contentDigest": "sha256:7507b84b9aea07ac94a3807236214edb40d0c35e236a870fea6a7bcd230450af",
                     "product": "managedservice",
-                    "revision": 3
+                    "revision": 4
                   }
                 },
                 "resource": {
@@ -12736,9 +12872,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:cd85c4f64eaf9d77be8aa1e2e8ab60cb0aa94d1eb6b198c8835026af810cf052",
+                    "contentDigest": "sha256:7507b84b9aea07ac94a3807236214edb40d0c35e236a870fea6a7bcd230450af",
                     "product": "managedservice",
-                    "revision": 3
+                    "revision": 4
                   }
                 },
                 "resource": {
@@ -12801,9 +12937,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:cd85c4f64eaf9d77be8aa1e2e8ab60cb0aa94d1eb6b198c8835026af810cf052",
+                    "contentDigest": "sha256:7507b84b9aea07ac94a3807236214edb40d0c35e236a870fea6a7bcd230450af",
                     "product": "managedservice",
-                    "revision": 3
+                    "revision": 4
                   }
                 },
                 "resource": {
@@ -12845,9 +12981,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:cd85c4f64eaf9d77be8aa1e2e8ab60cb0aa94d1eb6b198c8835026af810cf052",
+                    "contentDigest": "sha256:7507b84b9aea07ac94a3807236214edb40d0c35e236a870fea6a7bcd230450af",
                     "product": "managedservice",
-                    "revision": 3
+                    "revision": 4
                   }
                 },
                 "resource": {
@@ -12889,9 +13025,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:cd85c4f64eaf9d77be8aa1e2e8ab60cb0aa94d1eb6b198c8835026af810cf052",
+                    "contentDigest": "sha256:7507b84b9aea07ac94a3807236214edb40d0c35e236a870fea6a7bcd230450af",
                     "product": "managedservice",
-                    "revision": 3
+                    "revision": 4
                   }
                 },
                 "resource": {
@@ -29511,6 +29647,67 @@
           }
         ],
         "summary": "Verify one signed product request and atomically record its decision and permanent nonce consumption"
+      }
+    },
+    "/v1/authorize:batch": {
+      "post": {
+        "operationId": "authorizeBatch",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthorizationBatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthorizationBatchDecision"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [
+          {
+            "ServiceCredential": [],
+            "SubjectCredential": []
+          }
+        ],
+        "summary": "Authorize a bounded ordered set of exact instances in one authentication and transaction snapshot"
       }
     },
     "/v1/bootstrap/status": {

@@ -3155,7 +3155,10 @@ func TestManagedServiceRoleProfileOnlyAllowsInstallationRead(t *testing.T) {
 	revisionTwoIndex := slices.IndexFunc(archives, func(profile AuthorizationProfile) bool {
 		return profile.Product == ProductManagedService && profile.Revision == 2
 	})
-	if revisionOneIndex < 0 || revisionTwoIndex < 0 {
+	revisionThreeIndex := slices.IndexFunc(archives, func(profile AuthorizationProfile) bool {
+		return profile.Product == ProductManagedService && profile.Revision == 3
+	})
+	if revisionOneIndex < 0 || revisionTwoIndex < 0 || revisionThreeIndex < 0 {
 		t.Fatal("missing retained managedservice revision")
 	}
 	_, originalDigest, err := CanonicalizeAuthorizationProfile(archives[revisionOneIndex])
@@ -3168,8 +3171,10 @@ func TestManagedServiceRoleProfileOnlyAllowsInstallationRead(t *testing.T) {
 	}
 	current, found := LookupAuthorizationProfile(ProductManagedService)
 	_, currentDigest, err := CanonicalizeAuthorizationProfile(current)
-	if !found || err != nil || current.Revision != 3 || currentDigest == originalDigest || currentDigest == revisionTwoDigest {
-		t.Fatal("missing explicit managedservice consent revision")
+	_, revisionThreeDigest, err := CanonicalizeAuthorizationProfile(archives[revisionThreeIndex])
+	if !found || err != nil || current.Revision != 4 || currentDigest == originalDigest ||
+		currentDigest == revisionTwoDigest || currentDigest == revisionThreeDigest {
+		t.Fatal("missing explicit managedservice list batch revision")
 	}
 	currentReference := AuthorizationProfileReference{Product: current.Product, Revision: current.Revision, ContentDigest: currentDigest}
 	revisionOneReference := AuthorizationProfileReference{Product: archives[revisionOneIndex].Product, Revision: archives[revisionOneIndex].Revision, ContentDigest: originalDigest}
@@ -3194,12 +3199,198 @@ func TestManagedServiceRoleProfileOnlyAllowsInstallationRead(t *testing.T) {
 			(CheckAuthorizationProfileSubject(archives[revisionTwoIndex], revisionTwoReference, action.Action, SubjectUser) == nil) {
 			t.Fatal("retained managedservice revision gained consent authority", action.Action)
 		}
+		batchAllowed := CheckAuthorizationProfileInstanceListBatch(current, currentReference, action.Action, action.ResourceKind) == nil
+		if batchAllowed != (action.Action == ActionManagedServiceOfferingRead) {
+			t.Fatal("instance list batch was not limited to offering read", action.Action)
+		}
+		if CheckAuthorizationProfileInstanceListBatch(archives[revisionThreeIndex], AuthorizationProfileReference{
+			Product: archives[revisionThreeIndex].Product, Revision: archives[revisionThreeIndex].Revision, ContentDigest: revisionThreeDigest,
+		}, action.Action, action.ResourceKind) == nil {
+			t.Fatal("retained managedservice revision gained list batch authority", action.Action)
+		}
 	}
 	archives[revisionTwoIndex].Actions[0].SubjectTypes = []SubjectType{SubjectServiceAccount}
 	again := HistoricalAuthorizationProfiles()
 	_, againDigest, err := CanonicalizeAuthorizationProfile(again[revisionTwoIndex])
 	if err != nil || againDigest != revisionTwoDigest {
 		t.Fatal("caller changed retained managedservice declaration")
+	}
+}
+
+func TestInstanceListBatchContractIsExplicitBoundedAndResponseBound(t *testing.T) {
+	profile, found := LookupAuthorizationProfile(ProductManagedService)
+	if !found {
+		t.Fatal("managedservice profile missing")
+	}
+	_, digest, err := CanonicalizeAuthorizationProfile(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := AuthorizationProfileReference{Product: profile.Product, Revision: profile.Revision, ContentDigest: digest}
+	requestFor := func(resource, requestID string) AuthorizationRequest {
+		request, requestErr := NewAuthorizationRequest(ActionManagedServiceOfferingRead,
+			ResourceReference{Kind: ResourceServiceOffering, ID: resource}, AuthorizationResourceInstance, "", requestID, "batch-correlation")
+		if requestErr != nil {
+			t.Fatal(requestErr)
+		}
+		return request
+	}
+	request := AuthorizationBatchRequest{Requests: []AuthorizationRequest{
+		requestFor("offering-a", "batch-request-a"), requestFor("offering-b", "batch-request-b"),
+	}}
+	if ValidateAuthorizationBatchRequest(request) != nil ||
+		CheckAuthorizationProfileInstanceListBatch(profile, reference, ActionManagedServiceOfferingRead, ResourceServiceOffering) != nil {
+		t.Fatal("valid instance list batch rejected")
+	}
+	maximum := AuthorizationBatchRequest{Requests: make([]AuthorizationRequest, MaxAuthorizationBatchItems)}
+	maximumCorrelation := "c" + strings.Repeat("z", 127)
+	for index := range maximum.Requests {
+		resourceID := fmt.Sprintf("offering-%03d-%s", index, strings.Repeat("r", 115))
+		requestID := fmt.Sprintf("request-%03d-%s", index, strings.Repeat("q", 116))
+		maximum.Requests[index], err = NewAuthorizationRequest(ActionManagedServiceOfferingRead,
+			ResourceReference{Kind: ResourceServiceOffering, ID: resourceID}, AuthorizationResourceInstance, "", requestID, maximumCorrelation)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	maximumWire, err := json.Marshal(maximum)
+	maximumTime := time.Date(2026, 10, 1, 8, 29, 0, 0, time.UTC)
+	maximumTenant := AccountID("t" + strings.Repeat("z", 127))
+	maximumSubject := Subject{Type: SubjectUser, ID: "u" + strings.Repeat("z", 127)}
+	maximumResponse := AuthorizationBatchDecision{
+		APIVersion: APIVersion, Kind: "AuthorizationBatchDecision", TenantID: maximumTenant, Subject: maximumSubject,
+		Profile: reference, Action: ActionManagedServiceOfferingRead, ResourceKind: ResourceServiceOffering,
+		CorrelationID: maximumCorrelation, DecidedAt: maximumTime,
+		Decisions: make([]AuthorizationDecision, len(maximum.Requests)),
+	}
+	for index, item := range maximum.Requests {
+		itemProfile := item.Profile
+		itemSubject := maximumSubject
+		maximumResponse.Decisions[index] = AuthorizationDecision{
+			APIVersion: APIVersion, Kind: "AuthorizationDecision", ID: DecisionID(fmt.Sprintf("decision-%03d-%s", index, strings.Repeat("d", 115))),
+			Allowed: true, Reason: DecisionAllowed, TenantID: maximumTenant, Subject: &itemSubject,
+			Action: item.Action, Resource: item.Resource, RequestID: item.RequestID, DecidedAt: maximumTime,
+			Profile: &itemProfile, ResourceMode: item.ResourceMode, CorrelationID: item.CorrelationID,
+		}
+	}
+	maximumResponseWire, responseErr := json.Marshal(maximumResponse)
+	var decodedMaximumRequest AuthorizationBatchRequest
+	var decodedMaximumResponse AuthorizationBatchDecision
+	requestDecodeErr := DecodeRequest(bytes.NewReader(maximumWire), &decodedMaximumRequest)
+	responseDecodeErr := DecodeRequest(bytes.NewReader(maximumResponseWire), &decodedMaximumResponse)
+	if err != nil || responseErr != nil || ValidateAuthorizationBatchRequest(maximum) != nil ||
+		ValidateAuthorizationBatchDecision(maximumResponse) != nil || int64(len(maximumWire)) > MaxRequestBytes ||
+		int64(len(maximumResponseWire)) > MaxRequestBytes || requestDecodeErr != nil || responseDecodeErr != nil {
+		t.Fatalf("maximum batch cannot use the common IAM transport: requestBytes=%d responseBytes=%d requestErr=%v responseErr=%v requestDecode=%v responseDecode=%v",
+			len(maximumWire), len(maximumResponseWire), err, responseErr, requestDecodeErr, responseDecodeErr)
+	}
+	for name, mutate := range map[string]func(*AuthorizationBatchRequest){
+		"empty": func(value *AuthorizationBatchRequest) { value.Requests = []AuthorizationRequest{} },
+		"reordered resources": func(value *AuthorizationBatchRequest) {
+			value.Requests[0], value.Requests[1] = value.Requests[1], value.Requests[0]
+		},
+		"duplicate resource":    func(value *AuthorizationBatchRequest) { value.Requests[1].Resource = value.Requests[0].Resource },
+		"duplicate request":     func(value *AuthorizationBatchRequest) { value.Requests[1].RequestID = value.Requests[0].RequestID },
+		"different correlation": func(value *AuthorizationBatchRequest) { value.Requests[1].CorrelationID = "other-correlation" },
+		"collection item": func(value *AuthorizationBatchRequest) {
+			value.Requests[1] = requestFor("collection", "batch-request-b")
+			value.Requests[1].ResourceMode = AuthorizationResourceCollection
+			value.Requests[1].CollectionUsage = AuthorizationCollectionList
+		},
+		"undeclared batch action": func(value *AuthorizationBatchRequest) {
+			value.Requests[0], _ = NewAuthorizationRequest(ActionManagedServiceRegionRead,
+				ResourceReference{Kind: ResourceRegion, ID: "region-a"}, AuthorizationResourceInstance, "", "batch-request-a", "batch-correlation")
+			value.Requests[1], _ = NewAuthorizationRequest(ActionManagedServiceRegionRead,
+				ResourceReference{Kind: ResourceRegion, ID: "region-b"}, AuthorizationResourceInstance, "", "batch-request-b", "batch-correlation")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := AuthorizationBatchRequest{Requests: append([]AuthorizationRequest(nil), request.Requests...)}
+			mutate(&candidate)
+			if ValidateAuthorizationBatchRequest(candidate) == nil {
+				t.Fatal("invalid batch accepted")
+			}
+		})
+	}
+	overBudget := AuthorizationBatchRequest{Requests: make([]AuthorizationRequest, MaxAuthorizationBatchItems+1)}
+	if ValidateAuthorizationBatchRequest(overBudget) == nil {
+		t.Fatal("over-budget batch accepted")
+	}
+	now := time.Date(2026, 10, 1, 8, 30, 0, 0, time.UTC)
+	subject := Subject{Type: SubjectUser, ID: "user-batch"}
+	decisionFor := func(item AuthorizationRequest, id DecisionID, allowed bool) AuthorizationDecision {
+		decision := AuthorizationDecision{
+			APIVersion: APIVersion, Kind: "AuthorizationDecision", ID: id,
+			Allowed: allowed, Reason: DecisionDenied, Action: item.Action, Resource: item.Resource,
+			RequestID: item.RequestID, DecidedAt: now, Profile: &item.Profile,
+			ResourceMode: item.ResourceMode, CollectionUsage: item.CollectionUsage,
+			NetworkContext: item.NetworkContext, CorrelationID: item.CorrelationID,
+		}
+		if allowed {
+			decision.Reason, decision.TenantID, decision.Subject = DecisionAllowed, "account-batch", &subject
+		}
+		return decision
+	}
+	response := AuthorizationBatchDecision{
+		APIVersion: APIVersion, Kind: "AuthorizationBatchDecision", TenantID: "account-batch", Subject: subject,
+		Profile: reference, Action: ActionManagedServiceOfferingRead, ResourceKind: ResourceServiceOffering,
+		CorrelationID: "batch-correlation", DecidedAt: now,
+		Decisions: []AuthorizationDecision{
+			decisionFor(request.Requests[0], "decision-batch-a", true),
+			decisionFor(request.Requests[1], "decision-batch-b", false),
+		},
+	}
+	if ValidateAuthorizationBatchDecision(response) != nil || CheckAuthorizationBatchDecisionForRequest(response, request) != nil {
+		t.Fatal("valid mixed batch response rejected")
+	}
+	changed := response
+	changed.Decisions = append([]AuthorizationDecision(nil), response.Decisions...)
+	changed.Decisions[1].Resource.ID = "offering-c"
+	if CheckAuthorizationBatchDecisionForRequest(changed, request) == nil {
+		t.Fatal("batch response resource substitution accepted")
+	}
+	changed = response
+	changed.TenantID = "account-other"
+	if ValidateAuthorizationBatchDecision(changed) == nil {
+		t.Fatal("batch response allowed decision escaped its account envelope")
+	}
+}
+
+func TestInstanceListBatchTransportDoesNotGrowFrozenPolicyAuthority(t *testing.T) {
+	archives := HistoricalAuthorizationProfiles()
+	index := slices.IndexFunc(archives, func(profile AuthorizationProfile) bool {
+		return profile.Product == ProductManagedService && profile.Revision == 3
+	})
+	current, found := LookupAuthorizationProfile(ProductManagedService)
+	if index < 0 || !found || current.Revision != 4 {
+		t.Fatal("managedservice profile transition is missing")
+	}
+	frozen := archives[index]
+	document := PolicyDocument{LanguageVersion: PolicyLanguageVersion, Scope: AuthorityScopeTenant, Statements: []PolicyStatement{{
+		SID: "offering", Effect: PolicyAllow, Actions: []Action{ActionManagedServiceOfferingRead},
+		Resources: []PolicyResourceSelector{{Kind: ResourceServiceOffering, Match: PolicyResourceExact, ID: "offering-a"}},
+	}}}
+	compilation, err := CompilePolicyDocument(document, []AuthorizationProfile{frozen})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, digest, err := CanonicalizePolicyCompilation(document, compilation, []AuthorizationProfile{frozen})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := NewAuthorizationRequest(ActionManagedServiceOfferingRead,
+		ResourceReference{Kind: ResourceServiceOffering, ID: "offering-a"}, AuthorizationResourceInstance, "", "request-offering-a", "correlation-offerings")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckPolicyCompilationRequest(document, compilation, digest, []AuthorizationProfile{frozen}, current, request, SubjectUser); err != nil {
+		t.Fatal("batch transport reinterpreted an unchanged exact policy permission", err)
+	}
+	_, frozenDigest, _ := CanonicalizeAuthorizationProfile(frozen)
+	if CheckAuthorizationProfileInstanceListBatch(frozen, AuthorizationProfileReference{Product: frozen.Product, Revision: frozen.Revision, ContentDigest: frozenDigest},
+		ActionManagedServiceOfferingRead, ResourceServiceOffering) == nil ||
+		CheckAuthorizationProfileInstanceListBatch(current, request.Profile, ActionManagedServiceOfferingRead, ResourceServiceOffering) != nil {
+		t.Fatal("transport capability was confused with frozen policy authority")
 	}
 }
 

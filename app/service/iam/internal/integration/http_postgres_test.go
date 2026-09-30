@@ -21861,6 +21861,63 @@ func TestIAMHTTPPostgresVerticalSlice(t *testing.T) {
 		decision.TenantID != "organization-http-integration" {
 		t.Fatalf("managed-service administrator decision=%#v err=%v", decision, err)
 	}
+	batchRequest := iamv1.AuthorizationBatchRequest{Requests: []iamv1.AuthorizationRequest{
+		profileBoundIAMRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionManagedServiceOfferingRead,
+			Resource:  iamv1.ResourceReference{Kind: iamv1.ResourceServiceOffering, ID: "offering-a"},
+			RequestID: "request-offering-a", CorrelationID: "correlation-offering-list"}, iamv1.AuthorizationResourceInstance, ""),
+		profileBoundIAMRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionManagedServiceOfferingRead,
+			Resource:  iamv1.ResourceReference{Kind: iamv1.ResourceServiceOffering, ID: "offering-b"},
+			RequestID: "request-offering-b", CorrelationID: "correlation-offering-list"}, iamv1.AuthorizationResourceInstance, ""),
+	}}
+	batchHTTP := httptest.NewRequest(http.MethodPost, "/v1/authorize:batch", bytes.NewReader(mustIAMJSON(t, batchRequest)))
+	batchHTTP.Header.Set("Content-Type", "application/json")
+	batchHTTP.Header.Set("Authorization", "Bearer "+paasCredential)
+	batchHTTP.Header.Set("Matrix-Subject-Credential", loginWire.Credential)
+	batchResponse := httptest.NewRecorder()
+	handler.ServeHTTP(batchResponse, batchHTTP)
+	var batchDecision iamv1.AuthorizationBatchDecision
+	if batchResponse.Code != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(batchResponse.Body.Bytes()), &batchDecision) != nil ||
+		iamv1.CheckAuthorizationBatchDecisionForRequest(batchDecision, batchRequest) != nil || len(batchDecision.Decisions) != 2 ||
+		!batchDecision.Decisions[0].Allowed || !batchDecision.Decisions[1].Allowed ||
+		batchDecision.Decisions[0].ID == batchDecision.Decisions[1].ID ||
+		!batchDecision.Decisions[0].DecidedAt.Equal(batchDecision.Decisions[1].DecidedAt) {
+		t.Fatalf("IAM batch authorization status=%d decision=%#v body=%s", batchResponse.Code, batchDecision, batchResponse.Body.String())
+	}
+	var persistedDecisions, persistedFacts int
+	if err := admin.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM iam.authorization_decisions WHERE document->>'correlationId'='correlation-offering-list'),
+		(SELECT count(*) FROM iam.audit_outbox WHERE event_document->>'correlationId'='correlation-offering-list')`).Scan(&persistedDecisions, &persistedFacts); err != nil || persistedDecisions != 2 || persistedFacts != 2 {
+		t.Fatalf("batch decisions=%d facts=%d err=%v", persistedDecisions, persistedFacts, err)
+	}
+	var duplicateEvents atomic.Int64
+	atomicWorkflow, err := newIAMAuthorityWithTOTP(t, repository, identityaccess.Config{
+		SessionLifetime: time.Hour, CursorKey: bytes.Repeat([]byte{0x39}, 32), AccessKeyWrapping: &keyring,
+		NewID: func(prefix string) (string, error) {
+			if prefix == "decision" {
+				return "decision-batch-atomic", nil
+			}
+			return fmt.Sprintf("%s-batch-atomic-%d", prefix, duplicateEvents.Add(1)), nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	atomicBatch := batchRequest
+	atomicBatch.Requests = append([]iamv1.AuthorizationRequest(nil), batchRequest.Requests...)
+	for index := range atomicBatch.Requests {
+		atomicBatch.Requests[index].RequestID = fmt.Sprintf("request-batch-atomic-%d", index+1)
+		atomicBatch.Requests[index].CorrelationID = "correlation-batch-atomic"
+	}
+	serviceSecret, _ := iamv1.NewSecret(paasCredential)
+	subjectSecret, _ := iamv1.NewSecret(loginWire.Credential)
+	if _, err := atomicWorkflow.AuthorizeBatch(ctx, serviceSecret, subjectSecret, atomicBatch); err == nil {
+		t.Fatal("duplicate second decision did not abort the batch")
+	}
+	if err := admin.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM iam.authorization_decisions WHERE document->>'correlationId'='correlation-batch-atomic'),
+		(SELECT count(*) FROM iam.audit_outbox WHERE event_document->>'correlationId'='correlation-batch-atomic')`).Scan(&persistedDecisions, &persistedFacts); err != nil || persistedDecisions != 0 || persistedFacts != 0 {
+		t.Fatalf("failed batch retained decisions=%d facts=%d err=%v", persistedDecisions, persistedFacts, err)
+	}
 	createUser := performIAMRequest(
 		handler,
 		http.MethodPost,

@@ -85,6 +85,74 @@ func TestIAMHTTPExposesOnlyCredentialBoundCoreRoutes(t *testing.T) {
 		t.Fatalf("decode authorization decision: decision=%#v err=%v", decision, err)
 	}
 
+	batchRequestValue := iamv1.AuthorizationBatchRequest{Requests: make([]iamv1.AuthorizationRequest, 2)}
+	for index, sample := range []struct{ resource, requestID string }{{"offering-a", "request-batch-a"}, {"offering-b", "request-batch-b"}} {
+		batchRequestValue.Requests[index], err = iamv1.NewAuthorizationRequest(
+			iamv1.ActionManagedServiceOfferingRead,
+			iamv1.ResourceReference{Kind: iamv1.ResourceServiceOffering, ID: sample.resource},
+			iamv1.AuthorizationResourceInstance, "", sample.requestID, "correlation-batch",
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	batchSubject := iamv1.Subject{Type: iamv1.SubjectUser, ID: "principal-admin"}
+	workflow.batchDecision = iamv1.AuthorizationBatchDecision{
+		APIVersion: iamv1.APIVersion, Kind: "AuthorizationBatchDecision",
+		TenantID: "organization-example", Subject: batchSubject,
+		Profile: batchRequestValue.Requests[0].Profile, Action: batchRequestValue.Requests[0].Action,
+		ResourceKind:  batchRequestValue.Requests[0].Resource.Kind,
+		CorrelationID: batchRequestValue.Requests[0].CorrelationID, DecidedAt: workflow.login.Session.IssuedAt,
+		Decisions: make([]iamv1.AuthorizationDecision, len(batchRequestValue.Requests)),
+	}
+	for index, item := range batchRequestValue.Requests {
+		allowed := index == 0
+		workflow.batchDecision.Decisions[index] = iamv1.AuthorizationDecision{
+			APIVersion: iamv1.APIVersion, Kind: "AuthorizationDecision", ID: iamv1.DecisionID(fmt.Sprintf("decision-batch-%d", index)),
+			Allowed: allowed, Reason: iamv1.DecisionDenied, Action: item.Action, Resource: item.Resource,
+			RequestID: item.RequestID, DecidedAt: workflow.batchDecision.DecidedAt, Profile: &item.Profile,
+			ResourceMode: item.ResourceMode, CorrelationID: item.CorrelationID,
+		}
+		if allowed {
+			workflow.batchDecision.Decisions[index].Reason = iamv1.DecisionAllowed
+			workflow.batchDecision.Decisions[index].TenantID = workflow.batchDecision.TenantID
+			workflow.batchDecision.Decisions[index].Subject = &batchSubject
+		}
+	}
+	batchJSON, err := json.Marshal(batchRequestValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	missingBatchSubject := httptest.NewRequest(http.MethodPost, "/v1/authorize:batch", bytes.NewReader(batchJSON))
+	missingBatchSubject.Header.Set("Content-Type", "application/json")
+	missingBatchSubject.Header.Set("Authorization", "Bearer service-credential")
+	missingBatchSubjectResponse := httptest.NewRecorder()
+	handler.ServeHTTP(missingBatchSubjectResponse, missingBatchSubject)
+	if missingBatchSubjectResponse.Code != http.StatusUnauthorized || workflow.authorizeBatchCalls != 0 {
+		t.Fatalf("missing batch subject status=%d calls=%d", missingBatchSubjectResponse.Code, workflow.authorizeBatchCalls)
+	}
+	batchRequest := httptest.NewRequest(http.MethodPost, "/v1/authorize:batch", bytes.NewReader(batchJSON))
+	batchRequest.Header.Set("Content-Type", "application/json")
+	batchRequest.Header.Set("Authorization", "Bearer service-credential")
+	batchRequest.Header.Set("Matrix-Subject-Credential", "subject-credential")
+	batchResponse := httptest.NewRecorder()
+	handler.ServeHTTP(batchResponse, batchRequest)
+	var batchDecision iamv1.AuthorizationBatchDecision
+	if batchResponse.Code != http.StatusOK || workflow.authorizeBatchCalls != 1 ||
+		json.Unmarshal(batchResponse.Body.Bytes(), &batchDecision) != nil || !reflect.DeepEqual(batchDecision, workflow.batchDecision) ||
+		!reflect.DeepEqual(workflow.authorizationBatchRequest, batchRequestValue) {
+		t.Fatalf("batch authorize status=%d calls=%d decision=%#v body=%s", batchResponse.Code, workflow.authorizeBatchCalls, batchDecision, batchResponse.Body.String())
+	}
+	invalidBatch := httptest.NewRequest(http.MethodPost, "/v1/authorize:batch", strings.NewReader(`{"requests":[],"tenantId":"forged"}`))
+	invalidBatch.Header.Set("Content-Type", "application/json")
+	invalidBatch.Header.Set("Authorization", "Bearer service-credential")
+	invalidBatch.Header.Set("Matrix-Subject-Credential", "subject-credential")
+	invalidBatchResponse := httptest.NewRecorder()
+	handler.ServeHTTP(invalidBatchResponse, invalidBatch)
+	if invalidBatchResponse.Code != http.StatusBadRequest || workflow.authorizeBatchCalls != 1 {
+		t.Fatalf("selector batch status=%d calls=%d body=%s", invalidBatchResponse.Code, workflow.authorizeBatchCalls, invalidBatchResponse.Body.String())
+	}
+
 	verifyValue, err := iamv1.NewAuthorizationRequest(iamv1.ActionInstallationVerify, workflow.verificationDecision.Resource, iamv1.AuthorizationResourceInstance, "", "request-installation-verify", "correlation-installation-verify")
 	if err != nil {
 		t.Fatal(err)
@@ -1922,6 +1990,8 @@ type httpWorkflow struct {
 	identity                         iamv1.ServiceIdentity
 	login                            iamv1.LoginResponse
 	decision                         iamv1.AuthorizationDecision
+	batchDecision                    iamv1.AuthorizationBatchDecision
+	authorizationBatchRequest        iamv1.AuthorizationBatchRequest
 	verificationDecision             iamv1.AuthorizationDecision
 	loginErr                         error
 	identityCalls                    int
@@ -1950,6 +2020,7 @@ type httpWorkflow struct {
 	updateUser                       iamv1.UpdateUserRequest
 	deleteUser                       iamv1.DeleteUserRequest
 	authorizeCalls                   int
+	authorizeBatchCalls              int
 	keyCalls                         int
 	verifyInstallationCalls          int
 	settingsCalls                    int
@@ -2618,6 +2689,17 @@ func (workflow *httpWorkflow) Authorize(
 ) (iamv1.AuthorizationDecision, error) {
 	workflow.authorizeCalls++
 	return workflow.decision, nil
+}
+
+func (workflow *httpWorkflow) AuthorizeBatch(
+	_ context.Context,
+	_ iamv1.Secret,
+	_ iamv1.Secret,
+	request iamv1.AuthorizationBatchRequest,
+) (iamv1.AuthorizationBatchDecision, error) {
+	workflow.authorizeBatchCalls++
+	workflow.authorizationBatchRequest = request
+	return workflow.batchDecision, nil
 }
 
 func (workflow *httpWorkflow) VerifyInstallation(

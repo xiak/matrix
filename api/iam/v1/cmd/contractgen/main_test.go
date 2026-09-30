@@ -23,6 +23,26 @@ func TestGeneratedOpenAPIIsCurrent(t *testing.T) {
 	}
 }
 
+func TestAuthorizationBatchPublishesOnlyTheCredentialBoundClosedRoute(t *testing.T) {
+	path, ok := buildPaths()["/v1/authorize:batch"].(object)
+	if !ok || len(path) != 1 || path["post"] == nil {
+		t.Fatal("authorization batch route is missing or exposes another method")
+	}
+	operation := path["post"].(object)
+	if operation["operationId"] != "authorizeBatch" || operation["parameters"] != nil {
+		t.Fatal("authorization batch exposes a selector")
+	}
+	security, ok := operation["security"].([]any)
+	if !ok || len(security) != 1 {
+		t.Fatal("authorization batch lost its two credential carriers")
+	}
+	request := operation["requestBody"].(object)["content"].(object)["application/json"].(object)["schema"].(object)
+	response := operation["responses"].(object)["200"].(object)["content"].(object)["application/json"].(object)["schema"].(object)
+	if request["$ref"] != "#/components/schemas/AuthorizationBatchRequest" || response["$ref"] != "#/components/schemas/AuthorizationBatchDecision" {
+		t.Fatal("authorization batch uses a broader request or response")
+	}
+}
+
 func TestPasswordOverloadOnlyDocumentsTheBoundedAuthenticationEntrypoints(t *testing.T) {
 	for _, operation := range []string{"login", "changePassword", "verifyStepUp", "createUser", "regenerateRecoveryCodes"} {
 		value := mutationOperation(operation, "test", "LoginRequest", "LoginResponse", "200", nil, nil)

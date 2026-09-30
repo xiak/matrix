@@ -326,6 +326,10 @@ func buildPaths() object {
 			"authorize", "Authorize a transient subject for one action", "AuthorizationRequest", "AuthorizationDecision", "200",
 			[]any{object{"ServiceCredential": []string{}, "SubjectCredential": []string{}}}, nil,
 		)},
+		"/v1/authorize:batch": object{"post": mutationOperation(
+			"authorizeBatch", "Authorize a bounded ordered set of exact instances in one authentication and transaction snapshot", "AuthorizationBatchRequest", "AuthorizationBatchDecision", "200",
+			[]any{object{"ServiceCredential": []string{}, "SubjectCredential": []string{}}}, nil,
+		)},
 		"/v1/authorize:access-key": object{"post": mutationOperation(
 			"authorizeAccessKey", "Verify one signed product request and atomically record its decision and permanent nonce consumption", "AccessKeyAuthorizationRequest", "AccessKeyAuthorization", "200",
 			[]any{object{"ServiceCredential": []string{}}}, nil,
@@ -728,6 +732,8 @@ func structContracts() map[string]reflect.Type {
 		"AuthorizationNetworkContext":                   openapi31.StructType[iamv1.AuthorizationNetworkContext](),
 		"AuthorizationRequest":                          openapi31.StructType[iamv1.AuthorizationRequest](),
 		"AuthorizationDecision":                         openapi31.StructType[iamv1.AuthorizationDecision](),
+		"AuthorizationBatchRequest":                     openapi31.StructType[iamv1.AuthorizationBatchRequest](),
+		"AuthorizationBatchDecision":                    openapi31.StructType[iamv1.AuthorizationBatchDecision](),
 		"AccessKeyAuthorization":                        openapi31.StructType[iamv1.AccessKeyAuthorization](),
 		"AccessKeyHTTPRequest":                          openapi31.StructType[iamv1.AccessKeyHTTPRequest](),
 		"Readiness":                                     openapi31.StructType[iamv1.Readiness](),
@@ -1053,6 +1059,9 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 			base["maxItems"] = iamv1.MaxAuthorizationProfileConditions
 			base = object{"anyOf": []any{object{"type": "null"}, base}}
 		}
+	}
+	if owner == "AuthorizationBatchRequest" && jsonName == "requests" || owner == "AuthorizationBatchDecision" && jsonName == "decisions" {
+		base["minItems"], base["maxItems"] = 1, iamv1.MaxAuthorizationBatchItems
 	}
 	if (owner == "Policy" || owner == "CreatePolicyRequest" || owner == "UpdatePolicyRequest" || owner == "UpdateUserRequest" ||
 		owner == "RoleAccountDisplay" || owner == "RoleSourceUserDisplay") && jsonName == "displayName" {
@@ -1555,7 +1564,7 @@ func applySemanticOverlays(schemas object) {
 		"Session":          "Session", "BootstrapDocument": "IAMBootstrap", "BootstrapStatus": "BootstrapStatus",
 		"ServiceIdentity":            "ServiceIdentity",
 		"AuditProducerAuthorization": "AuditProducerAuthorization",
-		"Revocation":                 "Revocation", "AuthorizationDecision": "AuthorizationDecision",
+		"Revocation":                 "Revocation", "AuthorizationDecision": "AuthorizationDecision", "AuthorizationBatchDecision": "AuthorizationBatchDecision",
 		"Readiness": "Readiness",
 	}
 	for owner, kind := range kinds {
@@ -1646,6 +1655,14 @@ func applySemanticOverlays(schemas object) {
 	})
 	decision["allOf"] = append(decisionRules, authorizationTargetRules(true)...)
 	schemas["AuthorizationRequest"].(object)["allOf"] = authorizationTargetRules(false)
+	batchDecision := schemas["AuthorizationBatchDecision"].(object)
+	batchDecision["properties"].(object)["subject"] = object{"allOf": []any{
+		openapi31.Ref("Subject"),
+		object{"properties": object{
+			"type":        object{"enum": []string{string(iamv1.SubjectUser), string(iamv1.SubjectRole)}},
+			"accessKeyId": false,
+		}},
+	}}
 
 	session := schemas["Session"].(object)
 	session["allOf"] = []any{
@@ -1691,6 +1708,19 @@ func applyAuthorizationProfileOverlays(schemas object) {
 				object{"required": []string{"subjectTypes"}, "properties": object{"subjectTypes": object{"contains": object{"const": string(iamv1.SubjectUser)}}}},
 				object{"not": object{"required": []string{"subjectTypes"}}, "properties": object{"scope": object{"not": object{"const": string(iamv1.AuthorityScopeInstallationProbe)}}}},
 			}}},
+		object{"if": object{"properties": object{"instanceListBatch": object{"const": true}}, "required": []string{"instanceListBatch"}},
+			"then": object{
+				"properties": object{
+					"scope":              object{"const": string(iamv1.AuthorityScopeTenant)},
+					"resultResourceKind": false,
+					"resourceShapes": object{
+						"allOf": []any{
+							object{"contains": object{"properties": object{"mode": object{"const": string(iamv1.AuthorizationResourceInstance)}}}},
+							object{"contains": object{"properties": object{"mode": object{"const": string(iamv1.AuthorizationResourceCollection)}, "collectionUsage": object{"const": string(iamv1.AuthorizationCollectionList)}}}},
+						},
+					},
+				},
+			}},
 	}
 	for _, usage := range []string{"COLLECTION_LIST", "COLLECTION_CREATE"} {
 		then := object{"properties": object{"resultResourceKind": false}}

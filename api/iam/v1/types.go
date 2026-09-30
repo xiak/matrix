@@ -1004,6 +1004,33 @@ type AuthorizationDecision struct {
 	CorrelationID   string                         `json:"correlationId,omitempty"`
 }
 
+// MaxAuthorizationBatchItems keeps a maximally sized current request and
+// response within the common 64 KiB strict IAM transport limit.
+const MaxAuthorizationBatchItems = 50
+
+// AuthorizationBatchRequest is a bounded transport for independent exact
+// instance decisions. It carries no account, subject or candidate attributes.
+type AuthorizationBatchRequest struct {
+	Requests []AuthorizationRequest `json:"requests"`
+}
+
+// AuthorizationBatchDecision binds every item to one authentication and
+// transaction snapshot. TenantID and Subject identify that context; they are
+// not a permit for a denied item or for any resource outside Decisions.
+type AuthorizationBatchDecision struct {
+	APIVersion     string                        `json:"apiVersion"`
+	Kind           string                        `json:"kind"`
+	TenantID       AccountID                     `json:"tenantId"`
+	Subject        Subject                       `json:"subject"`
+	Profile        AuthorizationProfileReference `json:"profile"`
+	Action         Action                        `json:"action"`
+	ResourceKind   ResourceKind                  `json:"resourceKind"`
+	NetworkContext *AuthorizationNetworkContext  `json:"networkContext,omitempty"`
+	CorrelationID  string                        `json:"correlationId"`
+	DecidedAt      time.Time                     `json:"decidedAt"`
+	Decisions      []AuthorizationDecision       `json:"decisions"`
+}
+
 type Readiness struct {
 	APIVersion    string         `json:"apiVersion"`
 	Kind          string         `json:"kind"`
