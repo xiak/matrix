@@ -6,8 +6,8 @@
 - Updated: 2026-10-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `19f8c2ec` (test-only after runtime `96afde8c`)
-- Pushed documentation milestone: `6d8696dd`
+- Pushed source/embed milestone: `fc12343c`
+- Pushed documentation milestone: `8b64404c`
 
 ## Authoritative route
 
@@ -30,17 +30,14 @@ verification remains disabled. The permissions catalog now separates tenant
 consumption from trusted product-team/IAM publication instead of placing the
 internal onboarding action beside a tenant resource title.
 
-The service-authorization runtime preview now includes a non-secret
-`ServiceRoleSession` sample directory and inline detail. Its source is a strict
-`USER | SERVICE` union, while this service-authorization scene deliberately
-shows only `SERVICE` examples. Account, source, target Role, issue, expiry and
-revocation fields are explicit, with separate active, expired and revoked
-records. Expired and revoked records expose no revoke action, and revocation
-copy does not imply deletion of the Role, binding or permission ceiling. The
-directory reuses the shared collection primitives and IAM-wide `WorkspaceTime`;
-it exposes no credential or authorization proof and sends no request. LIVE
-service-session query and revoke remain absent until IAM publishes a fixed
-northbound contract.
+The administrator RoleSession client now consumes fixed IAM source
+`5435ea97faecc965b5010d0b7129b0bd26e45898`. Session records and source displays
+are strict `USER | SERVICE_ACCOUNT` unions. The directory composes exact
+session, User or service-principal IDs with the closed source-type and lifecycle
+filters, and service rows expose only immutable installation, principal and
+purpose lineage. Member Role self-service remains User-only. Single-session
+revocation does not claim to delete the source identity, service relationship,
+Role or policy, and private lineage or mixed-source responses fail closed.
 
 The LIVE platform service-role template tab consumes the current complete,
 release-owned `{items[]}` snapshot. It uses deferred local search, purpose and
@@ -49,26 +46,32 @@ continues to use only its server-owned opaque cursor and does not fake global
 search over one page. A future fixed template cursor replaces this local
 pagination instead of creating a parallel model.
 
-Source and synchronized Go embed at `96afde8c` passed 55 frontend files / 887
+Source and synchronized Go embed at `fc12343c` passed 55 frontend files / 889
 tests, static normalization, type/lint/architecture, 228 theme contrast pairs,
 41-page export, 228-file embed equality and repository Go test/vet. Existing
-MOCK desktop and 390 x 844 DEV checks show the three lifecycle states without a
-Dialog, page overflow, warning or error; the LIVE template directory and
-service-session route still lack real-login browser evidence.
+MOCK pages remain available; the LIVE administrator session path still lacks
+real-login browser evidence and the fixed IAM source's independent CI remains
+separate.
 Exact behavioral evidence and limits are owned by FEAT-IAM-010.
 
-The test-only gate at `19f8c2ec` alternates suspended IAM Group and Role
-destinations 200 times. The latest click remains authoritative, a late stale
-destination cannot overwrite it, pending state clears, and navigation remains
-interactive. The complete frontend run now passes 55 files / 888 tests plus
-type, lint, architecture, 228 contrast pairs and static normalization.
+The earlier navigation stress gate remains unchanged: 200 alternating suspended
+IAM Group and Role destinations preserve the latest click and clear pending
+state after stale work completes.
 
 ## Continuation
 
 Keep the DEV MOCK available for progress review. Coordinate only against fixed,
-pushed IAM commits with accepted verification. When IAM publishes a page-owned
-contract delta, inspect that exact source and replace the MOCK section in place;
-do not add a parallel model or infer LIVE capability from backend WIP.
+pushed IAM commits and record independent verification separately. IAM owner
+prioritizes the service-authorization governance flow: immutable template,
+current-Account consent/service-linked Role, exact workload binding, then
+short-lived session observation and single revocation. Product-owned bind and
+unbind remain the northbound mutation boundary; the browser never calls IAM
+internal service-session endpoints.
+
+Permission analysis may advance only as an explicitly isolated MOCK information
+architecture. Do not invent a risk score, effective-permission result, Deny
+reason tree, remediation action or future API. Trusted-tag authorization and
+batch decisions remain too unstable for high-fidelity executable UI.
 
 Continue the console-wide UX audit from the next uncovered customer workflow,
 preserving fixed page structure, localized data loading, compact responsive
