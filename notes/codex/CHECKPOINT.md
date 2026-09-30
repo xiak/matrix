@@ -6,8 +6,8 @@
 - Updated: 2026-09-30
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `b79e4b1c`
-- Pushed documentation/head milestone: `b9428a53`
+- Pushed source/embed milestone: `a8f6dbbb`
+- Pushed documentation/head milestone: `02339cdb`
 
 ## Authoritative route
 
@@ -60,6 +60,13 @@ stage exposes four independent gates: MOCK declaration input, unexecuted IAM
 contract validation, unverified product-PEP evidence and unavailable trusted
 registry publication. It still writes nothing, publishes nothing and grants no
 permission.
+
+The isolated four-method policy author now separates security warnings,
+blocking errors, general warnings and optional suggestions. Local broad-access
+patterns require explicit review but are not presented as IAM validation, PDP
+execution or product-PEP exposure evidence. At compact widths all four
+destinations stay visible in a two-by-two grid and JSON-path actions retain
+precise editor focus.
 
 The current-account observation now leads with a four-stage tenant-readable
 status summary: exact platform template, Account relation, exact resource
