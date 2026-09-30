@@ -2208,6 +2208,8 @@
       "eyebrow": "精确资源解绑 · MOCK",
       "title": "审阅解除实例授权",
       "lead": "解除的对象只能是当前产品资源的精确 binding，不能把资源解绑误写成删除账号关系、服务关联角色或平台模板。",
+      "otherBindings": "其他已绑定实例",
+      "otherBindingsCount": "当前 MOCK 已知 {count} 个",
       "items": {
         "resourceOnly": { "title": "只影响当前实例", "hint": "确认后只把这个 SERVICE_INSTALLATION 标记为未绑定；其他业务资源不受影响。" },
         "accountRelation": { "title": "保留账号服务关系", "hint": "账号级 ServiceLinkedRoleAccess 继续有效，以便其他已绑定资源和后续重新授权使用。" },

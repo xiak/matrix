@@ -239,6 +239,7 @@ describe("ConsoleShellRenderer", () => {
     await user.click(unbind);
     expect(screen.getByRole("heading", { name: "解除实例授权 · 订单主库" })).toBe(document.activeElement);
     expect(screen.getByText("preview.workload-role-binding.pg-test")).toBeTruthy();
+    expect(screen.getByText("当前 MOCK 已知 0 个")).toBeTruthy();
     expect(screen.getByText(/账号级 ServiceLinkedRoleAccess 继续有效/)).toBeTruthy();
     expect(screen.getByText(/不承诺立即终止既有会话/)).toBeTruthy();
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -251,6 +252,49 @@ describe("ConsoleShellRenderer", () => {
     expect(screen.getByText("账号已授权 · MOCK")).toBeTruthy();
     expect(screen.getByText(/已在当前浏览器会话中模拟解除这个实例的精确 binding/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "绑定当前实例" })).toBe(document.activeElement);
+  });
+
+  it("keeps one MOCK account relation while binding and unbinding exact resources independently", async () => {
+    const installation = (id: string, name: string) => ({
+      id, name, offeringId: "postgresql-18", engineVersion: "18",
+      quotaEntitlementId: "quota-primary", regionId: "local-primary", phase: "READY" as const,
+      endpoint: `${id}.service.local:5432`, credentialReference: null,
+      operation: { id: `operation-${id}`, phase: "READY" as const, safeFailureCode: null, observedAt: "2026-08-26T12:00:00Z" },
+      createdAt: "2026-08-26T12:00:00Z"
+    });
+    const { user } = await renderConsole({
+      section: "installations",
+      experience: previewExperienceSnapshot,
+      load: vi.fn().mockResolvedValue({ ...snapshot, installations: [installation("pg-one", "订单主库"), installation("pg-two", "分析副本")] })
+    });
+    const authorizeCurrent = async (entryLabel: string) => {
+      await user.click(screen.getByRole("button", { name: entryLabel }));
+      await user.click(screen.getByRole("button", { name: /审阅服务授权|绑定当前实例/ }));
+      await user.click(screen.getByRole("button", { name: "下一步" }));
+      await user.click(screen.getByRole("button", { name: "下一步" }));
+      await user.click(screen.getByRole("button", { name: "模拟授权服务" }));
+    };
+
+    await authorizeCurrent("订单主库");
+    await user.click(screen.getByRole("button", { name: "返回服务实例" }));
+    await user.click(screen.getByRole("button", { name: "分析副本" }));
+    expect(screen.getByText("账号已授权 · MOCK")).toBeTruthy();
+    expect(screen.getAllByText("实例未绑定").length).toBeGreaterThan(0);
+    await user.click(screen.getByRole("button", { name: "绑定当前实例" }));
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.click(screen.getByRole("button", { name: "模拟授权服务" }));
+    await user.click(screen.getByRole("button", { name: "返回服务实例" }));
+
+    await user.click(screen.getByRole("button", { name: "订单主库" }));
+    await user.click(screen.getByRole("button", { name: "解除实例授权" }));
+    expect(screen.getByText("当前 MOCK 已知 1 个")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "模拟解除授权" }));
+    expect(screen.getByText("账号已授权 · MOCK")).toBeTruthy();
+    expect(screen.getAllByText("实例未绑定").length).toBeGreaterThan(0);
+    await user.click(screen.getByRole("button", { name: "返回服务实例" }));
+    await user.click(screen.getByRole("button", { name: "分析副本" }));
+    expect(screen.getByText("当前实例已绑定 · MOCK")).toBeTruthy();
   });
 
   it("keeps live instance chrome stable while only its service-authorization region loads", async () => {

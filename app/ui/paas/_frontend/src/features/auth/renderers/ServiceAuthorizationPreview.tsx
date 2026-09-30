@@ -270,10 +270,11 @@ export function ServiceAuthorizationConsentReview({ accountId, targetResourceId,
   </div>;
 }
 
-export function ServiceAuthorizationUnbindReview({ accountId, targetResourceId, bindingId, onClose, onPreviewUnbind }: {
+export function ServiceAuthorizationUnbindReview({ accountId, targetResourceId, bindingId, otherBoundResourceCount, onClose, onPreviewUnbind }: {
   accountId: string;
   targetResourceId: string;
   bindingId: string;
+  otherBoundResourceCount: number;
   onClose(): void;
   onPreviewUnbind(): void;
 }) {
@@ -289,6 +290,7 @@ export function ServiceAuthorizationUnbindReview({ accountId, targetResourceId, 
           <div><dt>{t("fields.targetResource")}</dt><dd><code>SERVICE_INSTALLATION:{targetResourceId}</code></dd></div>
           <div><dt>{t("fields.bindingId")}</dt><dd><code>{bindingId}</code></dd></div>
           <div><dt>{t("fields.templateReference")}</dt><dd><code>{previewTemplate.id}@v{previewTemplate.version}</code></dd></div>
+          <div><dt>{t("unbind.otherBindings")}</dt><dd>{t("unbind.otherBindingsCount", { count: otherBoundResourceCount })}</dd></div>
         </dl>
         <ul className={styles.boundaries}>{(["resourceOnly", "accountRelation", "sessions"] as const).map((item) => <li key={item}><strong>{t(`unbind.items.${item}.title`)}</strong><p>{t(`unbind.items.${item}.hint`)}</p></li>)}</ul>
         <Alert status="warning">{t("unbind.previewBoundary")}</Alert>

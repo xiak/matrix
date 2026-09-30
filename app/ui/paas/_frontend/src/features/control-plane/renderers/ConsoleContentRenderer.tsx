@@ -330,7 +330,7 @@ function InstallationContent({ scene, preview, accountId }: {
         } : undefined} />
       </> : review === "unbind" && accountId && preview ? <>
         <Alert status="warning">{t("unbindPreviewBoundary")}</Alert>
-        <ServiceAuthorizationUnbindReview accountId={accountId} targetResourceId={selected.id} bindingId={previewBindingId} onClose={closeDetail} onPreviewUnbind={() => {
+        <ServiceAuthorizationUnbindReview accountId={accountId} targetResourceId={selected.id} bindingId={previewBindingId} otherBoundResourceCount={Math.max(0, previewBoundIds.size - 1)} onClose={closeDetail} onPreviewUnbind={() => {
           setPreviewBoundIds((current) => { const next = new Set(current); next.delete(selected.id); return next; });
           setPreviewUnboundIds((current) => new Set(current).add(selected.id));
           setReview(null);

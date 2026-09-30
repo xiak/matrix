@@ -2208,6 +2208,8 @@
       "eyebrow": "Exact resource unbind · MOCK",
       "title": "Review instance authorization removal",
       "lead": "Only the exact binding for this product resource can be removed. Resource unbinding must not be presented as deleting the account relation, service-linked role, or platform template.",
+      "otherBindings": "Other bound instances",
+      "otherBindingsCount": "{count} known in the current MOCK",
       "items": {
         "resourceOnly": { "title": "Affects only this instance", "hint": "Confirmation marks only this SERVICE_INSTALLATION as unbound; other product resources are unaffected." },
         "accountRelation": { "title": "Keep the account service relation", "hint": "The account-level ServiceLinkedRoleAccess remains active for other bound resources and later reauthorization." },
