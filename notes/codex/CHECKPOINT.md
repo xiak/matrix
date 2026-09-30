@@ -133,20 +133,22 @@ already mounted section without route changes, local selection state or an
 identity refetch. LIVE and explicit MOCK map to their existing section owners;
 no settings contract was added.
 
-Service authorization is tenant-first in both the isolated MOCK and fixed-
-contract LIVE renderer. The LIVE default reads current-Account service-linked
-Role relations from fixed IAM source
-`cb62ed2f6c307f5a50aa27480f89c8c58cf081ee`; the platform-template directory is
-a separate lazy tab. Account is a local response assertion, not a request
-selector, and opaque binding cursors stay bound to the same Account, Role and
-login generation. Closed decoding preserves revoked binding history and keeps
-`SERVICE_LINKED` Roles out of ordinary Role editing. Template release, Account
-relation, workload binding and short-term session remain distinct facts; none
-of the first three proves an issued credential or final access. The isolated
-managed-service instance remains the product-owned consent preview. Authorize,
-revoke, bind/unbind and service-session actions remain absent because no fixed
-browser contract exists, and the UI never calls `/v1/internal/*`. Exact
-evidence and limitations belong to FEAT-IAM-010 and FEAT-007.
+Service authorization is tenant-first in IAM and resource-first in the owning
+product. IAM and managed-service LIVE reads use fixed source
+`cb62ed2f6c307f5a50aa27480f89c8c58cf081ee`; the selected product instance keeps
+its stable facts mounted while one local card matches the complete template
+reference, current-Account relation and exact workload binding. Account is a
+local response assertion, not a request selector. Template release, Account
+relation, workload binding and short-term session remain distinct facts, so an
+authorized Account may still show the current instance as unbound. The
+isolated product preview completes the same review with a visibly browser-only
+MOCK result that resets on refresh and never calls IAM, writes a role/binding
+or issues credentials. Pushed source/embed `5f65e36e` and documentation
+`c67d43e8` own this milestone. Public bind candidate
+`50710ea503f919d00d8f6702687d338c27725c45` is reference-only pending exact CI
+and target acceptance; LIVE bind, revoke, unbind and service-session actions
+remain absent, and the UI never calls `/v1/internal/*`. Exact evidence and
+limitations belong to FEAT-IAM-010 and FEAT-007.
 
 LIVE member Role discovery also keeps its verified source identity, discovery
 heading and temporary-access boundary mounted while only role cards load. An
