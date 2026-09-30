@@ -939,8 +939,8 @@
         "hint": "本人会话与安全退出"
       },
       "simulator": {
-        "label": "权限模拟",
-        "hint": "用户与角色会话的权限诊断"
+        "label": "策略覆盖预览",
+        "hint": "用户与角色会话的本地配置检查"
       }
     }
   },
@@ -4235,7 +4235,7 @@
     "conditionCoverage": "{count} / {total} 个所选操作",
     "conditionCoverageEmpty": "尚未选择操作",
     "conditionStates": { "available": "全部操作支持", "partial": "部分操作支持", "unavailable": "均不支持", "unselected": "等待选择" },
-    "missingFactsBoundary": "策略依赖的请求事实缺失时，本地模拟返回“无法确定”；真实授权链路必须失败关闭，不能忽略条件后继续允许。",
+    "missingFactsBoundary": "策略依赖的请求事实缺失时，本地检查表只标记缺失上下文，不产生授权结论；真实授权链路必须失败关闭，不能忽略条件后继续允许。",
     "useTags": "按资源标签限制",
     "resourceTags": "资源必须同时具有以下标签",
     "emptyTags": "添加至少一个资源标签条件。这里不是策略自身的管理标签。",
@@ -4502,132 +4502,96 @@
     }
   },
   "AccessSimulator": {
-    "example": "了解一个授权场景",
+    "example": "查看本地配置场景",
     "chooseExample": "选择场景（可选）",
-    "exampleHint": "仅预填请求，不修改策略或成员关系；结果始终按当前体验数据计算。",
+    "exampleHint": "仅预填本地 fixture，不修改策略或成员关系，也不会产生授权结论。",
     "examples": {
-      "path": { "label": "资源路径范围", "hint": "对比 production/payment 与 archive/payment：两者都有生产标签，但此用户的授权只匹配 production/ 路径。" },
-      "duplicate": { "label": "直接授权与组继承", "hint": "查看同一策略的直接和用户组两条来源。只移除一条授权来源，另一条仍可能适用。" },
-      "tags": { "label": "按资源标签授权", "hint": "此资源虽然以 archive/ 命名，但具有生产标签；可与预发布主题对比。策略自身的管理标签不参与授权。" },
-      "deny": { "label": "命中显式拒绝", "hint": "检查生产部署保护策略，再对比预发布部署。只有操作、资源和条件都匹配时，拒绝声明才会生效。" },
-      "boundary": { "label": "权限边界限制", "hint": "用户组授予应用操作，但此用户的权限边界不包含删除。可对比同一资源的部署操作。" },
-      "ungranted": { "label": "能登录但尚未授权", "hint": "此用户在 MOCK 中已启用控制台访问，但没有资源授权。访问方式与策略权限是独立的。" }
+      "path": { "label": "资源路径字段", "hint": "预填 production/payment 资源 fixture，查看已关联策略文档和声明字段；不判断路径是否匹配。" },
+      "duplicate": { "label": "直接关联与组继承", "hint": "查看同一策略文档如何同时出现在直接关联和用户组继承配置中。" },
+      "tags": { "label": "资源标签字段", "hint": "预填带生产标签的资源 fixture，只展示标签和策略声明中的条件字段，不执行条件求值。" },
+      "deny": { "label": "包含 Deny 声明", "hint": "查看生产部署保护策略中的 Deny 配置声明；本页不判断它是否匹配或产生效果。" },
+      "boundary": { "label": "配置权限边界", "hint": "查看用户关联策略和权限边界文档是否进入本地配置清单，不计算两者交集。" },
+      "ungranted": { "label": "未关联策略文档", "hint": "该用户 fixture 已配置控制台访问但未关联策略；这不是后端拒绝或有效权限结论。" }
     },
-    "disabledUser": "此用户已停用。可以检查其策略，但本工具不验证登录或凭证可用性。",
-    "notEvaluated": "未评估：账号／用户可用性、凭证、真实会话及业务服务鉴权。策略允许不代表真实请求一定成功。",
-    "sessionScope": "额外检查所选 MOCK 会话的到期、撤销及角色／调用身份是否存在；不验证真实 STS 凭证，也不继承原用户的策略。",
+    "disabledUser": "当前本地用户 fixture 标记为停用；本页不会据此判断真实登录、凭证或资源权限。",
+    "notEvaluated": "NOT_EVALUATED：未调用后端 PDP，未验证账号、凭证、真实会话、资源策略、产品 PEP 或业务执行；本页不能用于授权、审计或修复。",
+    "sessionScope": "所选 RoleSession 仅是本地 fixture。账号、调用来源、binding、到期、撤权和凭证状态均属于尚未验证的运行时证据。",
     "inspectUser": "查看用户 {name}",
     "inspectRole": "查看角色与会话",
-    "showAllEvidence": "查看其余 {count} 条判断依据",
-    "decisiveOnly": "仅看关键依据",
-    "scope": "模拟当前租户用户的直接/用户组策略，或角色体验会话的角色策略，并计算权限边界交集。不会访问真实资源、验证外部身份或改变后端授权；不支持跨账号、资源策略及角色链式扮演。",
-    "request": "模拟访问请求",
-    "contextProvenance": "来源 IP 与时间均由你为本次 MOCK 请求输入；本页不探测当前浏览器网络地址，也不模拟网关或代理。真实产品必须由受信入口构造请求上下文，并由服务端重新鉴权。",
+    "scope": "隔离 MOCK 仅列出本地身份 fixture 关联的策略文档、默认版本、声明和权限边界配置。页面不调用策略求值器，不读取真实资源，也不产生 Allow／Deny、有效权限或业务执行结论。",
+    "request": "本地检查输入",
+    "profileFixture": "Action 与资源类型来自版本化静态 Profile fixture：{version}。它不是当前后端目录或兼容性承诺。",
+    "contextProvenance": "来源 IP 与时间均由操作者填写，只用于检查条件信息架构；本页不探测浏览器地址，不模拟网关或代理，也不会让这些值影响任何授权结果。",
     "user": "用户",
     "resource": "测试资源",
     "chooseResource": "选择测试资源",
     "action": "请求操作",
     "chooseAction": "选择操作",
     "sourceIp": "来源 IP",
-    "contextHint": "仅作为本次 MOCK 的请求上下文；可留空以检查缺失上下文时的结果。",
+    "contextHint": "仅记录为本地 fixture 字段；可留空，不参与授权判断。",
     "time": "请求时间（UTC）",
-    "run": "运行模拟",
-    "result": "模拟结果",
-    "decisionPath": {
-      "title": "决策路径",
-      "hint": "按本次 MOCK 支持的策略层展示计算顺序；这不是业务服务的真实鉴权记录。",
-      "identityPolicies": "用户策略与用户组继承",
-      "rolePolicies": "角色关联策略",
-      "permissionBoundary": "权限边界",
-      "finalDecision": "最终结论",
-      "requestValidation": "请求范围校验",
-      "notConfigured": "未设置",
+    "run": "生成本地检查表",
+    "result": "本地策略配置检查表",
+    "worksheetReady": "检查表已生成",
+    "worksheetReadyHint": "只展示当前 MOCK 文档和输入的配置关系；所有运行时授权仍为 NOT_EVALUATED。",
+    "worksheetNeedsAttention": "本地输入需要修正",
+    "worksheetNeedsAttentionHint": "无法建立配置清单；未调用策略求值器，也没有生成授权结论。",
+    "coverage": {
+      "title": "检查范围",
+      "hint": "四个阶段只描述本地信息是否存在，不是授权决策路径。",
+      "input": "输入 fixture",
+      "documents": "关联策略文档",
+      "boundary": "权限边界配置",
+      "runtime": "运行时授权",
       "states": {
-        "allow": "允许",
-        "explicitDeny": "拒绝",
-        "implicitDeny": "未允许",
-        "indeterminate": "不确定",
-        "invalidRequest": "范围无效"
+        "recorded": "已记录",
+        "needsAttention": "需修正",
+        "referenced": "已引用",
+        "none": "无引用",
+        "configured": "已配置",
+        "notConfigured": "未配置",
+        "skipped": "未检查"
       },
-      "noBoundaryHint": "当前身份未配置权限边界；本层不授予也不限制本次模拟。",
-      "finalHint": "综合身份授权策略与权限边界的交集，并始终让匹配的显式拒绝优先。",
-      "principalHints": {
-        "allow": "至少一条允许声明匹配，且没有匹配的显式拒绝。",
-        "explicitDeny": "身份授权层命中显式拒绝；其他允许声明不能覆盖。",
-        "implicitDeny": "没有允许声明完整匹配本次操作、资源和上下文。",
-        "indeterminate": "缺少条件上下文或策略不可读，不能把结果视为允许。"
-      },
-      "boundaryHints": {
-        "allow": "边界允许本次请求进入与身份授权的交集；它本身不授予权限。",
-        "explicitDeny": "边界命中显式拒绝，最终结果不能为允许。",
-        "implicitDeny": "边界没有允许本次请求，因此收窄了身份授权结果。",
-        "indeterminate": "边界缺少判断上下文或不可读，最终结果保持不确定。"
-      }
+      "inputHint": "主体、Action 与资源均来自当前隔离 MOCK fixture；没有读取线上对象。",
+      "documentsHint": "列出 {policies} 份关联策略文档中的 {statements} 条配置声明；未判断是否适用于输入。",
+      "noDocumentsHint": "当前 fixture 未关联策略文档；这不等于后端拒绝。",
+      "boundaryConfiguredHint": "清单包含已配置的权限边界文档；未计算它与其他策略的交集。",
+      "boundaryNotConfiguredHint": "当前 fixture 没有权限边界引用；这不是授权结论。",
+      "runtimeHint": "后端 PDP、凭证／会话、资源策略、产品 PEP 和业务执行均未验证。",
+      "skippedHint": "先修正本地输入，配置关系才可列出；运行时授权仍不会被评估。"
     },
-    "evidence": "策略判断依据",
-    "evidenceCount": "共 {count} 条判断依据；每条展示当前默认版本和授权来源。",
+    "evidence": "配置声明清单",
+    "evidenceCount": "共 {count} 条配置声明；仅展示本地默认版本和关联来源。",
     "policy": "策略 / 版本",
-    "source": "授权来源",
-    "matching": "匹配结果",
-    "evaluationStates": {
-      "match": "MATCH",
-      "notMatch": "NOT_MATCH",
-      "contextMissing": "CONTEXT_MISSING",
-      "contractUnavailable": "CONTRACT_UNAVAILABLE"
-    },
-    "beforeRun": "选择用户或角色体验会话、操作和测试资源后运行模拟。不会读取或修改真实资源。",
-    "noUsers": "暂无可模拟的用户",
-    "noUsersHint": "先创建一个体验用户，再检查其策略授权。",
-    "noGrants": "没有适用的授权策略",
-    "noGrantsHint": "该用户没有直接授权，也未通过用户组获得策略。默认不允许访问。",
-    "decisions": {
-      "allow": "策略允许",
-      "explicitDeny": "显式拒绝",
-      "implicitDeny": "默认拒绝",
-      "indeterminate": "无法确定",
-      "invalidRequest": "请求无法模拟"
-    },
-    "explanations": {
-      "allow": "授权策略允许此请求，配置了权限边界时边界也同时允许；没有匹配的拒绝或缺失的判断信息。仅对本次模拟范围有效。",
-      "explicitDeny": "命中显式拒绝。即使其他策略允许，也不能通过本次模拟。",
-      "implicitDeny": "授权策略或配置的权限边界没有允许此操作、资源和条件的组合。请查看各授权来源的判断依据。",
-      "indeterminate": "存在缺失的条件上下文或无法读取的策略，不能据此宣称允许访问。",
-      "invalidRequest": "请检查用户、操作和测试资源是否属于支持的模拟范围。"
-    },
+    "source": "配置来源",
+    "configurationState": "文档状态",
+    "statement": "声明字段",
+    "configurationStates": { "loaded": "已载入", "unavailable": "引用不可用" },
+    "effects": { "allow": "Allow 声明", "deny": "Deny 声明" },
+    "conditionFields": "条件字段：{conditions}",
+    "noConditionFields": "未配置条件字段",
+    "conditionNames": { "sourceIp": "来源 IP", "resourceTag": "资源标签", "notBefore": "生效时间下限", "notAfter": "生效时间上限" },
+    "beforeRun": "选择本地主体、Action 和资源 fixture 后生成配置检查表。不会调用后端或本地策略求值器。",
+    "noUsers": "暂无可检查的本地主体",
+    "noUsersHint": "先创建一个体验用户或角色会话 fixture，再查看其策略配置。",
+    "noStatements": "未找到关联策略声明",
+    "noStatementsHint": "当前 MOCK 授权来源没有可展示的声明；这不是后端拒绝或有效权限结论。",
     "errors": {
-      "unknownIdentity": "找不到该用户。请重新选择当前租户的用户。",
-      "unknownResource": "测试资源不存在或引用无效。",
-      "crossTenant": "该资源不属于当前租户，不能跨租户模拟授权。",
-      "unknownAction": "该操作不在 Matrix 的受支持操作目录中。",
-      "actionResourceMismatch": "该操作不支持所选资源类型。",
-      "requiresRoleTrust": "角色扮演还需要信任策略与会话校验，不能用用户策略模拟器判断。",
-      "expiredSession": "会话已到期。调整请求时间不能延长会话。",
-      "revokedSession": "该体验会话已撤销。",
-      "unavailableSession": "会话、角色或原始调用身份已不可用。"
+      "unknownIdentity": "找不到该用户 fixture。请重新选择当前租户的本地用户。",
+      "unknownResource": "资源 fixture 不存在或引用格式无效。",
+      "crossTenant": "资源 fixture 不属于当前租户；本地检查表不跨租户拼接配置。",
+      "unknownAction": "该 Action 不在当前版本化静态 Profile fixture 中。",
+      "actionResourceMismatch": "Action 与所选资源 fixture 的类型不一致。",
+      "unavailableSession": "找不到该 RoleSession fixture 或其角色 fixture。"
     },
     "sources": {
       "direct": "直接关联",
       "group": "用户组继承",
       "role": "角色关联策略",
-      "boundary": "权限边界（仅限制）"
+      "boundary": "权限边界引用"
     },
-    "reasons": {
-      "matched": "声明匹配",
-      "actionMismatch": "操作不匹配",
-      "resourceMismatch": "资源不匹配",
-      "conditionMismatch": "条件不满足",
-      "missingContext": "缺少条件上下文",
-      "invalidPolicy": "策略或默认版本不可用"
-    },
-    "missing": {
-      "sourceIp": "来源 IP",
-      "time": "请求时间",
-      "resourceTags": "资源标签"
-    },
-    "statementEffect": "声明效果",
     "identityType": "身份类型",
-    "roleSession": "角色体验会话",
-    "boundaryResult": "权限边界 {name}：{decision}。最终结果仍需授权策略同时允许。"
+    "roleSession": "RoleSession fixture"
   },
   "PasswordRulesPreview": {
     "eyebrow": "账户安全",

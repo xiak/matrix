@@ -27,17 +27,17 @@
 .note { margin: 0; color: var(--xiak-color-text-muted); line-height: 1.7; font-size: var(--xiak-font-size-small); }
 .evaluationScope { padding: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
 .evaluationScope p { margin: 0; line-height: var(--xiak-line-height-body); }
-.decisionPath { display: grid; min-width: 0; gap: var(--xiak-spacing-default); padding: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); background: var(--xiak-color-bg-panel-hover); }
-.decisionPathHeading { display: grid; min-width: 0; gap: var(--xiak-spacing-narrow); }
-.decisionPathHeading h3, .decisionPathHeading p, .decisionStep p { margin: 0; }
-.decisionPathHeading h3 { color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-body); }
-.decisionPathHeading p, .decisionStep p { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: var(--xiak-line-height-body); }
-.decisionSteps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--xiak-spacing-default); margin: 0; padding: 0; list-style: none; }
-.decisionStep { display: grid; grid-template-columns: auto minmax(0, 1fr); align-content: start; gap: var(--xiak-spacing-tight); min-width: 0; padding: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-small); background: var(--xiak-color-bg-panel); }
-.decisionNumber { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--xiak-color-accent-haze); color: var(--xiak-color-accent-text); font-size: var(--xiak-font-size-small); font-weight: var(--xiak-font-weight-semibold); }
-.decisionStep > div { display: grid; min-width: 0; gap: var(--xiak-spacing-narrow); }
-.decisionStepHeading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-narrow); }
-.decisionStepHeading strong { color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-small); }
+.coverage { display: grid; min-width: 0; gap: var(--xiak-spacing-default); padding: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); background: var(--xiak-color-bg-panel-hover); }
+.coverageHeading { display: grid; min-width: 0; gap: var(--xiak-spacing-narrow); }
+.coverageHeading h3, .coverageHeading p, .coverageStage p { margin: 0; }
+.coverageHeading h3 { color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-body); }
+.coverageHeading p, .coverageStage p { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: var(--xiak-line-height-body); }
+.coverageStages { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--xiak-spacing-default); margin: 0; padding: 0; list-style: none; }
+.coverageStage { display: grid; grid-template-columns: auto minmax(0, 1fr); align-content: start; gap: var(--xiak-spacing-tight); min-width: 0; padding: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-small); background: var(--xiak-color-bg-panel); }
+.coverageNumber { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 50%; background: var(--xiak-color-accent-haze); color: var(--xiak-color-accent-text); font-size: var(--xiak-font-size-small); font-weight: var(--xiak-font-weight-semibold); }
+.coverageStage > div { display: grid; min-width: 0; gap: var(--xiak-spacing-narrow); }
+.coverageStageHeading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-narrow); }
+.coverageStageHeading strong { color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-small); }
 .conditionCapabilities { display: grid; min-width: 0; gap: var(--xiak-spacing-default); padding: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); background: var(--xiak-color-bg-panel-hover); }
 .conditionCapabilityHeading { display: grid; gap: var(--xiak-spacing-micro); }
 .conditionCapabilityHeading h4, .conditionCapabilityHeading p, .conditionCapabilities > p { margin: 0; }
@@ -57,9 +57,12 @@
 .facts > div { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: var(--xiak-spacing-default); }
 .facts dt { color: var(--xiak-color-text-muted); }
 .facts dd { margin: 0; display: flex; flex-wrap: wrap; gap: var(--xiak-spacing-tight); overflow-wrap: anywhere; }
+@container policy-authoring (max-width: 900px) {
+  .coverageStages { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 @container policy-authoring (max-width: 620px) {
   .fields, .template, .facts > div { grid-template-columns: minmax(0, 1fr); }
-  .decisionSteps { grid-template-columns: minmax(0, 1fr); }
+  .coverageStages { grid-template-columns: minmax(0, 1fr); }
   .conditionCapabilities ul { grid-template-columns: minmax(0, 1fr); }
   .statement { padding: var(--xiak-spacing-default); }
   .actionToolbar { grid-template-columns: minmax(0, 1fr); }

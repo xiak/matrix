@@ -1,6 +1,7 @@
 // Closed capability vocabulary for the isolated access-management preview.
 // This is not an IAM response, a grant, or a tenant-editable product profile.
 // A live adapter must wait for IAM's fixed catalog query contract.
+export const previewAuthorizationCatalogVersion = "mock-profile-v1";
 export const policyServices = ["regions", "paas", "database", "logs", "devops", "monitoring", "iam"] as const;
 export type PolicyService = typeof policyServices[number];
 export type ActionLevel = "read" | "list" | "write" | "permissions";

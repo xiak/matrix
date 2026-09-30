@@ -939,8 +939,8 @@
         "hint": "Own sessions and secure sign-out"
       },
       "simulator": {
-        "label": "Access simulator",
-        "hint": "Inspect user and role-session permissions"
+        "label": "Policy coverage preview",
+        "hint": "Local configuration checks for users and role sessions"
       }
     }
   },
@@ -4221,7 +4221,7 @@
     "conditionCoverage": "{count} / {total} selected operations",
     "conditionCoverageEmpty": "No operations selected",
     "conditionStates": { "available": "Supported by all", "partial": "Partially supported", "unavailable": "Unsupported", "unselected": "Awaiting selection" },
-    "missingFactsBoundary": "When a policy depends on a missing request fact, the local simulator reports an indeterminate result. Real authorization must fail closed instead of ignoring the condition and allowing the request.",
+    "missingFactsBoundary": "When a policy depends on a missing request fact, the local worksheet only records missing context and makes no authorization conclusion. Real authorization must fail closed instead of ignoring the condition and allowing the request.",
     "useTags": "Restrict by resource tags",
     "resourceTags": "Resource must have all these tags",
     "emptyTags": "Add at least one resource-tag condition. These are not the policy’s metadata tags.",
@@ -4488,132 +4488,96 @@
     }
   },
   "AccessSimulator": {
-    "example": "Explore an authorization scenario",
+    "example": "Inspect a local configuration scenario",
     "chooseExample": "Choose a scenario (optional)",
-    "exampleHint": "Fills the request only. No policies or memberships change; results use your current preview data.",
+    "exampleHint": "Fills local fixture fields only. Policies and memberships do not change, and no authorization conclusion is produced.",
     "examples": {
-      "path": { "label": "Resource path scope", "hint": "Compare production/payment with archive/payment. Both have production tags, but this user's grant matches only the production/ path." },
-      "duplicate": { "label": "Direct and inherited grants", "hint": "Inspect the same policy arriving directly and through a group. Removing just one grant source may leave another applicable source." },
-      "tags": { "label": "Resource-tag authorization", "hint": "This resource has production tags despite its archive/ name. Compare it with a staging topic; policy metadata tags do not control access." },
-      "deny": { "label": "Matching explicit deny", "hint": "Inspect the production deployment guard, then compare a staging deployment. A deny matters only when its action, resource and conditions match." },
-      "boundary": { "label": "Permission boundary", "hint": "The group grants application operations, but this user's boundary excludes deletion. Compare the same resource's deployment operation." },
-      "ungranted": { "label": "Console access without grants", "hint": "The user has console access enabled in MOCK, but no resource grants. Login method and policy permissions are independent." }
+      "path": { "label": "Resource-path fields", "hint": "Prefills the production/payment resource fixture and lists attached policy documents and statement fields. It does not evaluate the path." },
+      "duplicate": { "label": "Direct and inherited references", "hint": "Shows the same policy document referenced directly and through a group configuration." },
+      "tags": { "label": "Resource-tag fields", "hint": "Prefills a resource fixture with production tags and only displays tag and statement condition fields. Conditions are not evaluated." },
+      "deny": { "label": "Contains a Deny statement", "hint": "Shows the configured Deny statement in the production deployment guard. This page does not decide whether it applies or takes effect." },
+      "boundary": { "label": "Configured permission boundary", "hint": "Shows whether attached policies and a permission-boundary document enter the local configuration inventory. No intersection is computed." },
+      "ungranted": { "label": "No referenced policy documents", "hint": "The fixture has console access configured but no attached policies. This is not a backend denial or effective-permission result." }
     },
-    "disabledUser": "This user is disabled. You may inspect their policies, but this simulation does not validate login or credentials.",
-    "notEvaluated": "Not evaluated: account/user availability, credentials, real sessions and product-side enforcement. A policy allow is not proof that a real request will succeed.",
-    "sessionScope": "This diagnostic also checks the selected MOCK session's expiry, revocation and role/caller existence. It does not validate real STS credentials or inherit the caller's user policies.",
+    "disabledUser": "The local user fixture is marked disabled. This page does not infer real login, credential or resource-permission state from it.",
+    "notEvaluated": "NOT_EVALUATED: no backend PDP was called, and account, credentials, real sessions, resource policies, product PEPs and business execution were not verified. Do not use this page for authorization, audit or remediation.",
+    "sessionScope": "The selected RoleSession is only a local fixture. Account, caller source, binding, expiry, revocation and credential state remain unverified runtime evidence.",
     "inspectUser": "View user {name}",
     "inspectRole": "View role and sessions",
-    "showAllEvidence": "Show {count} other evaluation records",
-    "decisiveOnly": "Show key evidence only",
-    "scope": "Simulates current-tenant user grants or a preview role session, intersected with its boundary. No real resources, external identity verification or backend authorization. Cross-account, resource policies and role chaining are unsupported.",
-    "request": "Simulated access request",
-    "contextProvenance": "Source IP and time are inputs for this MOCK request. This page does not detect the browser's network address or simulate a gateway or proxy. A real product must obtain request context from a trusted entry point and authorize again on the server.",
+    "scope": "The isolated MOCK only inventories policy documents, default versions, statements and permission-boundary configuration referenced by a local identity fixture. It does not call a policy evaluator, read real resources or produce Allow/Deny, effective-permission or business-execution results.",
+    "request": "Local check input",
+    "profileFixture": "Actions and resource types come from versioned static Profile fixture {version}. It is not the current backend directory or a compatibility commitment.",
+    "contextProvenance": "Source IP and time are operator-entered fields used only to review condition information architecture. The page does not detect the browser address, simulate a gateway or proxy, or let these values affect an authorization result.",
     "user": "User",
     "resource": "Test resource",
     "chooseResource": "Choose a test resource",
     "action": "Requested action",
     "chooseAction": "Choose an action",
     "sourceIp": "Source IP",
-    "contextHint": "Used only as this MOCK request context. Leave blank to test missing-context behavior.",
+    "contextHint": "Recorded only as a local fixture field. It may be blank and never participates in an authorization decision.",
     "time": "Request time (UTC)",
-    "run": "Run simulation",
-    "result": "Simulation result",
-    "decisionPath": {
-      "title": "Decision path",
-      "hint": "Shows the evaluation order for policy layers supported by this MOCK. It is not an authorization record from a product service.",
-      "identityPolicies": "User and inherited group policies",
-      "rolePolicies": "Role policies",
-      "permissionBoundary": "Permission boundary",
-      "finalDecision": "Final decision",
-      "requestValidation": "Request-scope validation",
-      "notConfigured": "Not configured",
+    "run": "Generate local worksheet",
+    "result": "Local policy configuration worksheet",
+    "worksheetReady": "Worksheet generated",
+    "worksheetReadyHint": "Only configuration relationships from current MOCK documents and inputs are shown. Runtime authorization remains NOT_EVALUATED.",
+    "worksheetNeedsAttention": "Local input needs attention",
+    "worksheetNeedsAttentionHint": "A configuration inventory could not be built. No policy evaluator was called and no authorization conclusion was produced.",
+    "coverage": {
+      "title": "Inspection scope",
+      "hint": "These four stages describe whether local information exists; they are not an authorization decision path.",
+      "input": "Input fixture",
+      "documents": "Referenced policy documents",
+      "boundary": "Boundary configuration",
+      "runtime": "Runtime authorization",
       "states": {
-        "allow": "Allowed",
-        "explicitDeny": "Denied",
-        "implicitDeny": "Not allowed",
-        "indeterminate": "Unknown",
-        "invalidRequest": "Invalid scope"
+        "recorded": "Recorded",
+        "needsAttention": "Needs attention",
+        "referenced": "Referenced",
+        "none": "No references",
+        "configured": "Configured",
+        "notConfigured": "Not configured",
+        "skipped": "Not inspected"
       },
-      "noBoundaryHint": "This identity has no permission boundary. This layer neither grants nor restricts the simulated request.",
-      "finalHint": "Intersects the principal's grant policies with its permission boundary and always gives a matching explicit deny precedence.",
-      "principalHints": {
-        "allow": "At least one allow statement matched and no explicit deny matched.",
-        "explicitDeny": "The principal-policy layer matched an explicit deny; allow statements cannot override it.",
-        "implicitDeny": "No allow statement fully matched the action, resource and request context.",
-        "indeterminate": "Condition context or a readable policy is missing, so the result cannot be treated as an allow."
-      },
-      "boundaryHints": {
-        "allow": "The boundary admits this request to the intersection with grant policies; it does not grant access by itself.",
-        "explicitDeny": "The boundary matched an explicit deny, so the final result cannot be allow.",
-        "implicitDeny": "The boundary did not allow this request and therefore narrowed the principal's grants.",
-        "indeterminate": "Boundary context or policy data is missing, so the final result remains indeterminate."
-      }
+      "inputHint": "Principal, Action and resource come from the isolated MOCK fixture. No live object was read.",
+      "documentsHint": "Lists {statements} configured statements from {policies} referenced policy documents without deciding whether they apply to the input.",
+      "noDocumentsHint": "The fixture references no policy documents. This is not a backend denial.",
+      "boundaryConfiguredHint": "The inventory includes the configured permission-boundary document. Its intersection with other policies is not computed.",
+      "boundaryNotConfiguredHint": "The fixture has no permission-boundary reference. This is not an authorization conclusion.",
+      "runtimeHint": "Backend PDP, credentials/sessions, resource policies, product PEPs and business execution were not verified.",
+      "skippedHint": "Correct the local input before configuration references can be listed. Runtime authorization will still not be evaluated."
     },
-    "evidence": "Policy evaluation evidence",
-    "evidenceCount": "{count} evaluation records, including the current default version and grant source.",
+    "evidence": "Configured statement inventory",
+    "evidenceCount": "{count} configured statements from local default versions and reference sources.",
     "policy": "Policy / version",
-    "source": "Grant source",
-    "matching": "Match result",
-    "evaluationStates": {
-      "match": "MATCH",
-      "notMatch": "NOT_MATCH",
-      "contextMissing": "CONTEXT_MISSING",
-      "contractUnavailable": "CONTRACT_UNAVAILABLE"
-    },
-    "beforeRun": "Choose a user or preview role session, action and test resource, then run the simulation. No real resources will be read or changed.",
-    "noUsers": "No users to simulate",
-    "noUsersHint": "Create a preview user before checking their policy grants.",
-    "noGrants": "No applicable policy grants",
-    "noGrantsHint": "This user has no direct policies or inherited group policies. Access is denied by default.",
-    "decisions": {
-      "allow": "Policy allows",
-      "explicitDeny": "Explicit deny",
-      "implicitDeny": "Implicit deny",
-      "indeterminate": "Indeterminate",
-      "invalidRequest": "Cannot simulate request"
-    },
-    "explanations": {
-      "allow": "Grant policies allow this request, and a configured boundary must also allow it. No matching deny or missing decision context was found. Applies only to this simulation.",
-      "explicitDeny": "An explicit deny matched. Other allow statements cannot override it.",
-      "implicitDeny": "Grant policies or the configured boundary did not allow this action, resource and context. Inspect the evidence for each source.",
-      "indeterminate": "Condition context or a readable policy is missing. This result cannot be treated as permission to access a resource.",
-      "invalidRequest": "Check that the user, action and test resource are within the supported simulation scope."
-    },
+    "source": "Configuration source",
+    "configurationState": "Document state",
+    "statement": "Statement fields",
+    "configurationStates": { "loaded": "Loaded", "unavailable": "Reference unavailable" },
+    "effects": { "allow": "Allow statement", "deny": "Deny statement" },
+    "conditionFields": "Condition fields: {conditions}",
+    "noConditionFields": "No condition fields configured",
+    "conditionNames": { "sourceIp": "Source IP", "resourceTag": "Resource tags", "notBefore": "Not-before time", "notAfter": "Not-after time" },
+    "beforeRun": "Choose a local principal, Action and resource fixture, then generate a configuration worksheet. No backend or local policy evaluator is called.",
+    "noUsers": "No local principals to inspect",
+    "noUsersHint": "Create a preview user or role-session fixture before inspecting policy configuration.",
+    "noStatements": "No referenced policy statements",
+    "noStatementsHint": "The current MOCK configuration has no statements to display. This is not a backend denial or effective-permission result.",
     "errors": {
-      "unknownIdentity": "This user could not be found. Choose a user in the current tenant.",
-      "unknownResource": "The test resource is missing or its reference is invalid.",
-      "crossTenant": "The resource belongs to a different tenant. Cross-tenant access cannot be simulated.",
-      "unknownAction": "The action is not in the supported Matrix action catalog.",
-      "actionResourceMismatch": "The selected resource type is not supported by this action.",
-      "requiresRoleTrust": "Assuming a role also requires trust-policy and session checks. A user-policy simulation cannot determine this.",
-      "expiredSession": "The session has expired. Changing request time cannot extend its lifetime.",
-      "revokedSession": "This preview session has been revoked.",
-      "unavailableSession": "The session, role or original caller is unavailable."
+      "unknownIdentity": "The user fixture could not be found. Choose a local user in the current tenant.",
+      "unknownResource": "The resource fixture is missing or has an invalid reference.",
+      "crossTenant": "The resource fixture belongs to another tenant. The local worksheet does not merge cross-tenant configuration.",
+      "unknownAction": "The Action is absent from the current versioned static Profile fixture.",
+      "actionResourceMismatch": "The Action and selected resource fixture have incompatible types.",
+      "unavailableSession": "The RoleSession fixture or its role fixture could not be found."
     },
     "sources": {
       "direct": "Direct grant",
       "group": "Inherited from group",
       "role": "Role policy",
-      "boundary": "Permission boundary (restriction only)"
+      "boundary": "Permission-boundary reference"
     },
-    "reasons": {
-      "matched": "Statement matched",
-      "actionMismatch": "Action did not match",
-      "resourceMismatch": "Resource did not match",
-      "conditionMismatch": "Conditions not satisfied",
-      "missingContext": "Missing condition context",
-      "invalidPolicy": "Policy or default version unavailable"
-    },
-    "missing": {
-      "sourceIp": "Source IP",
-      "time": "Request time",
-      "resourceTags": "Resource tags"
-    },
-    "statementEffect": "Statement effect",
     "identityType": "Identity type",
-    "roleSession": "Preview role session",
-    "boundaryResult": "Boundary {name}: {decision}. Grant policies must also allow the request."
+    "roleSession": "RoleSession fixture"
   },
   "PasswordRulesPreview": {
     "eyebrow": "Account security",

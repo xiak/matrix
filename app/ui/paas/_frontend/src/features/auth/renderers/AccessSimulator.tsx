@@ -2,21 +2,72 @@
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Play } from "lucide-react";
+import { ClipboardList } from "lucide-react";
 import { Alert, Badge, Button, Card, EmptyState, FormField, Input, Select, Table, TablePagination } from "@ui/xiak";
-import { evaluateUserAccess, evaluateRoleSessionAccess, type AccessPolicyDecision, type AccessTestEvidence, type AccessTestRequest, type AccessTestResult } from "../domain/policyEvaluation";
 import { parsePolicyResource } from "../domain/policyLanguage";
-import { policyActions, policyServices, type PolicyService } from "../domain/previewAuthorizationCatalog";
+import { policyActions, policyServices, previewAuthorizationCatalogVersion, type PolicyConditionKey, type PolicyService } from "../domain/previewAuthorizationCatalog";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
 import type { AccountAccessView } from "../domain/accounts";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
 import styles from "./PolicyAuthoringWizard.module.css";
 
-function decisionStatus(decision: AccessTestResult["decision"]) {
-  return decision === "allow" ? "success" as const : decision === "explicitDeny" || decision === "invalidRequest" ? "danger" as const : "warning" as const;
+type ConfigurationSource = { policyId: string; source: "direct" | "group" | "role" | "boundary"; groupId?: string };
+type WorksheetRequest = { principalId: string; action: string; resourceId: string; sourceIp?: string; at?: string };
+type WorksheetError = "unknownIdentity" | "unknownResource" | "crossTenant" | "unknownAction" | "actionResourceMismatch" | "unavailableSession";
+type ConfigurationRow = ConfigurationSource & {
+  policyName: string;
+  version?: number;
+  statement?: number;
+  effect?: "allow" | "deny";
+  conditionKeys: string[];
+  state: "loaded" | "unavailable";
+};
+type ConfigurationWorksheet = { error?: WorksheetError; rows: ConfigurationRow[]; boundaryId?: string };
+
+function configurationSources(workspace: AccessWorkspace, scene: AccountAccessScene, subject: "user" | "session", principalId: string) {
+  if (subject === "user") {
+    if (!scene.users.some((user) => user.id === principalId)) return { error: "unknownIdentity" as const, sources: [] as ConfigurationSource[] };
+    const sources: ConfigurationSource[] = [
+      ...(workspace.userPolicies[principalId] ?? []).map((policyId) => ({ policyId, source: "direct" as const })),
+      ...workspace.groups.filter((group) => group.memberIds.includes(principalId)).flatMap((group) => group.policyIds.map((policyId) => ({ policyId, source: "group" as const, groupId: group.id })))
+    ];
+    return { sources, boundaryId: workspace.userBoundaries[principalId] };
+  }
+  const session = workspace.roleSessions.find((entry) => entry.id === principalId);
+  const role = session && workspace.roles.find((entry) => entry.id === session.roleId);
+  if (!session || !role) return { error: "unavailableSession" as const, sources: [] as ConfigurationSource[] };
+  return { sources: role.policyIds.map((policyId) => ({ policyId, source: "role" as const })), boundaryId: role.boundaryPolicyId };
 }
-function evidenceState(reason: AccessTestEvidence["reason"]) {
-  return reason === "matched" ? "match" as const : reason === "missingContext" ? "contextMissing" as const : reason === "invalidPolicy" ? "contractUnavailable" as const : "notMatch" as const;
+
+function buildConfigurationWorksheet(workspace: AccessWorkspace, scene: AccountAccessScene, subject: "user" | "session", request: WorksheetRequest): ConfigurationWorksheet {
+  const configuration = configurationSources(workspace, scene, subject, request.principalId);
+  if (configuration.error) return { error: configuration.error, rows: [] };
+  const fixture = workspace.testResources.find((entry) => entry.id === request.resourceId);
+  const resource = fixture && parsePolicyResource(fixture.reference, false);
+  if (!fixture || !resource) return { error: "unknownResource", rows: [] };
+  if (resource.tenant !== workspace.accountId) return { error: "crossTenant", rows: [] };
+  const action = policyActions.find((entry) => entry.id === request.action);
+  if (!action) return { error: "unknownAction", rows: [] };
+  if (action.service !== resource.service || action.resourceType !== resource.type) return { error: "actionResourceMismatch", rows: [] };
+
+  const allSources = configuration.boundaryId
+    ? [...configuration.sources, { policyId: configuration.boundaryId, source: "boundary" as const }]
+    : configuration.sources;
+  const rows = allSources.flatMap<ConfigurationRow>((source) => {
+    const policy = workspace.policies.find((entry) => entry.id === source.policyId);
+    const version = policy?.versions.find((entry) => entry.id === policy.defaultVersion);
+    if (!policy || !version) return [{ ...source, policyName: policy?.name ?? source.policyId, conditionKeys: [], state: "unavailable" }];
+    return version.document.statement.map((statement, index) => ({
+      ...source,
+      policyName: policy.name,
+      version: version.id,
+      statement: index + 1,
+      effect: statement.effect,
+      conditionKeys: Object.keys(statement.condition ?? {}),
+      state: "loaded" as const
+    }));
+  });
+  return { rows, boundaryId: configuration.boundaryId };
 }
 
 export function AccessSimulator({ workspace, scene, entityId, onOpen }: { workspace: AccessWorkspace; scene: AccountAccessScene; entityId?: string; onOpen(view: AccountAccessView, id?: string): void }) {
@@ -25,7 +76,7 @@ export function AccessSimulator({ workspace, scene, entityId, onOpen }: { worksp
   const w = useTranslations("IamWorkspace");
   const id = useId();
   const [subject, setSubject] = useState<"user" | "session">(() => workspace.roleSessions.some((session) => session.id === entityId) ? "session" : "user");
-  const [request, setRequest] = useState<AccessTestRequest>(() => {
+  const [request, setRequest] = useState<WorksheetRequest>(() => {
     const example = workspace.testRequests.find((entry) => scene.users.some((user) => user.id === entry.request.principalId))?.request;
     const resource = workspace.testResources.find((entry) => parsePolicyResource(entry.reference, false));
     const parsed = resource && parsePolicyResource(resource.reference, false);
@@ -34,50 +85,39 @@ export function AccessSimulator({ workspace, scene, entityId, onOpen }: { worksp
   });
   const [service, setService] = useState<PolicyService>(() => parsePolicyResource(workspace.testResources.find((entry) => entry.id === request.resourceId)?.reference ?? "", false)?.service ?? policyServices[0]);
   const [exampleId, setExampleId] = useState<AccessWorkspace["testRequests"][number]["id"] | "">("");
-  const [tested, setTested] = useState<{ result: AccessTestResult; workspace: AccessWorkspace } | null>(null);
+  const [checked, setChecked] = useState<{ worksheet: ConfigurationWorksheet; workspace: AccessWorkspace } | null>(null);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
-  const [showAll, setShowAll] = useState(false);
   const resultHeading = useRef<HTMLHeadingElement>(null);
   const inventory = useMemo(() => workspace.testResources.map((entry) => ({ ...entry, parsed: parsePolicyResource(entry.reference, false) })), [workspace.testResources]);
   const resources = inventory.filter((entry) => entry.parsed?.service === service);
   const selected = resources.find((entry) => entry.id === request.resourceId);
   const actions = policyActions.filter((action) => action.service === service && action.resourceType === selected?.parsed?.type);
-  const result = tested?.workspace === workspace ? tested.result : null;
+  const worksheet = checked?.workspace === workspace ? checked.worksheet : null;
   const selectedUser = subject === "user" ? scene.users.find((user) => user.id === request.principalId) : undefined;
-  const selectedRole = subject === "session" ? workspace.roleSessions.find((session) => session.id === request.principalId)?.roleId : undefined;
-  const primaryEvidence = result?.evidence.filter((entry) => result.decision === "explicitDeny" ? entry.reason === "matched" && entry.effect === "deny" : result.decision === "indeterminate" ? entry.reason === "missingContext" || entry.reason === "invalidPolicy" : result.decision === "implicitDeny" && result.boundary?.decision === "implicitDeny" ? entry.source === "boundary" : entry.reason === "matched") ?? [];
-  const evidence = showAll || !primaryEvidence.length ? result?.evidence ?? [] : primaryEvidence;
-  const extraCount = (result?.evidence.length ?? 0) - primaryEvidence.length;
-  const decisionSteps: { id: string; title: string; decision?: AccessPolicyDecision | "invalidRequest"; hint: string }[] = result?.principalPolicyDecision ? [
-    { id: "principal", title: t(subject === "user" ? "decisionPath.identityPolicies" : "decisionPath.rolePolicies"), decision: result.principalPolicyDecision, hint: t(`decisionPath.principalHints.${result.principalPolicyDecision}`) },
-    result.boundary
-      ? { id: "boundary", title: t("decisionPath.permissionBoundary"), decision: result.boundary.decision, hint: t(`decisionPath.boundaryHints.${result.boundary.decision}`) }
-      : { id: "boundary", title: t("decisionPath.permissionBoundary"), hint: t("decisionPath.noBoundaryHint") },
-    { id: "final", title: t("decisionPath.finalDecision"), decision: result.decision, hint: t("decisionPath.finalHint") }
-  ] : result ? [{ id: "request", title: t("decisionPath.requestValidation"), decision: "invalidRequest", hint: result.error ? t(`errors.${result.error}`) : t("explanations.invalidRequest") }] : [];
+  const selectedRole = subject === "session" ? workspace.roles.find((role) => role.id === workspace.roleSessions.find((session) => session.id === request.principalId)?.roleId) : undefined;
+  const policyCount = worksheet ? new Set(worksheet.rows.map((entry) => entry.policyId)).size : 0;
+  const coverageStages = worksheet ? [
+    { id: "input", title: t("coverage.input"), state: worksheet.error ? t("coverage.states.needsAttention") : t("coverage.states.recorded"), hint: worksheet.error ? t(`errors.${worksheet.error}`) : t("coverage.inputHint") },
+    { id: "documents", title: t("coverage.documents"), state: worksheet.error ? t("coverage.states.skipped") : worksheet.rows.length ? t("coverage.states.referenced") : t("coverage.states.none"), hint: worksheet.error ? t("coverage.skippedHint") : worksheet.rows.length ? t("coverage.documentsHint", { policies: policyCount, statements: worksheet.rows.length }) : t("coverage.noDocumentsHint") },
+    { id: "boundary", title: t("coverage.boundary"), state: worksheet.error ? t("coverage.states.skipped") : worksheet.boundaryId ? t("coverage.states.configured") : t("coverage.states.notConfigured"), hint: worksheet.error ? t("coverage.skippedHint") : worksheet.boundaryId ? t("coverage.boundaryConfiguredHint") : t("coverage.boundaryNotConfiguredHint") },
+    { id: "runtime", title: t("coverage.runtime"), state: "NOT_EVALUATED", hint: t("coverage.runtimeHint") }
+  ] : [];
   useEffect(() => {
-    if (!tested || tested.workspace !== workspace || subject !== "session") return;
-    const session = workspace.roleSessions.find((entry) => entry.id === request.principalId);
-    const remaining = session ? Date.parse(session.expiresAt) - Date.now() : 0;
-    if (remaining <= 0) return;
-    const timer = window.setTimeout(() => setTested({ workspace, result: evaluateRoleSessionAccess(workspace, scene.users.map((user) => user.id), request.principalId, request, new Date().toISOString()) }), remaining + 1);
-    return () => window.clearTimeout(timer);
-  }, [tested, workspace, subject, request, scene.users]);
-  useEffect(() => {
-    if (!result) return;
+    if (!worksheet) return;
     resultHeading.current?.focus({ preventScroll: true });
     resultHeading.current?.scrollIntoView?.({ block: "center", inline: "nearest" });
-  }, [result]);
-  const pages = Math.max(1, Math.ceil(evidence.length / pageSize));
+  }, [worksheet]);
+  const pages = Math.max(1, Math.ceil((worksheet?.rows.length ?? 0) / pageSize));
   const currentPage = Math.min(page, pages);
-  function change(patch: Partial<AccessTestRequest>) { setRequest((current) => ({ ...current, ...patch })); setTested(null); setPage(1); setShowAll(false); setExampleId(""); }
+  function change(patch: Partial<WorksheetRequest>) { setRequest((current) => ({ ...current, ...patch })); setChecked(null); setPage(1); setExampleId(""); }
   if (!scene.users.length && !workspace.roleSessions.length) return <EmptyState title={t("noUsers")} description={t("noUsersHint")} />;
   return <div className={styles.root}><div className={styles.stack}>
     <p className={styles.note}>{t("scope")}</p>
     {subject === "user" && request.principalId && !scene.users.some((user) => user.id === request.principalId) ? <Alert status="warning">{t("errors.unknownIdentity")}</Alert> : null}
     <Card><Card.Header><h2>{t("request")}</h2></Card.Header><Card.Body>
-      <form className={styles.stack} onSubmit={(event) => { event.preventDefault(); setPage(1); const users = scene.users.map((user) => user.id); setTested({ workspace, result: subject === "user" ? evaluateUserAccess(workspace, users, request) : evaluateRoleSessionAccess(workspace, users, request.principalId, request, new Date().toISOString()) }); }}>
+      <form className={styles.stack} onSubmit={(event) => { event.preventDefault(); setPage(1); setChecked({ workspace, worksheet: buildConfigurationWorksheet(workspace, scene, subject, request) }); }}>
+        <p className={styles.note}>{t("profileFixture", { version: previewAuthorizationCatalogVersion })}</p>
         <p className={styles.note}>{t("contextProvenance")}</p>
         {subject === "user" && workspace.testRequests.length ? <FormField id={id + "-example"} label={t("example")} hint={exampleId ? t(`examples.${exampleId}.hint`) : t("exampleHint")}><Select id={id + "-example"} aria-describedby={id + "-example-hint"} value={exampleId} placeholder={t("chooseExample")} options={workspace.testRequests.map((entry) => ({ value: entry.id, label: t(`examples.${entry.id}.label`), disabled: !scene.users.some((user) => user.id === entry.request.principalId) || !inventory.some((resource) => resource.id === entry.request.resourceId && resource.parsed) }))} onValueChange={(value) => {
           const example = workspace.testRequests.find((entry) => entry.id === value);
@@ -100,33 +140,32 @@ export function AccessSimulator({ workspace, scene, entityId, onOpen }: { worksp
         </div>
         {selectedUser && !selectedUser.enabled ? <Alert status="warning">{t("disabledUser")}</Alert> : null}
         {selected ? <div className={styles.section}><code className={styles.resourcePreview}>{selected.reference}</code><div className={styles.actions}>{Object.entries(selected.tags ?? {}).map(([key, value]) => <Badge key={key}>{key} : {value}</Badge>)}</div></div> : null}
-        <div><Button type="submit" disabled={!request.principalId || !request.action || !selected}><Play aria-hidden="true" />{t("run")}</Button></div>
+        <div><Button type="submit" disabled={!request.principalId || !request.action || !selected}><ClipboardList aria-hidden="true" />{t("run")}</Button></div>
       </form>
     </Card.Body></Card>
-    {result ? <Card><Card.Header><h2 ref={resultHeading} tabIndex={-1}>{t("result")}</h2></Card.Header><Card.Body className={styles.stack}>
-      <Alert status={result.decision === "allow" ? "success" : result.decision === "explicitDeny" || result.decision === "invalidRequest" ? "danger" : "warning"}><strong>{t(`decisions.${result.decision}`)}</strong><p>{result.error ? t(`errors.${result.error}`) : t(`explanations.${result.decision}`)}</p></Alert>
-      <section className={styles.decisionPath} aria-labelledby={id + "-decision-path"}>
-        <div className={styles.decisionPathHeading}><h3 id={id + "-decision-path"}>{t("decisionPath.title")}</h3><p>{t("decisionPath.hint")}</p></div>
-        <ol className={styles.decisionSteps}>{decisionSteps.map((step, index) => <li key={step.id} className={styles.decisionStep}>
-          <span className={styles.decisionNumber} aria-hidden="true">{index + 1}</span>
-          <div><div className={styles.decisionStepHeading}><strong>{step.title}</strong><Badge status={step.decision ? decisionStatus(step.decision) : undefined}>{step.decision ? t(`decisionPath.states.${step.decision}`) : t("decisionPath.notConfigured")}</Badge></div><p>{step.hint}</p></div>
+    {worksheet ? <Card><Card.Header><h2 ref={resultHeading} tabIndex={-1}>{t("result")}</h2></Card.Header><Card.Body className={styles.stack}>
+      <Alert status={worksheet.error ? "warning" : "info"}><strong>{t(worksheet.error ? "worksheetNeedsAttention" : "worksheetReady")}</strong><p>{t(worksheet.error ? "worksheetNeedsAttentionHint" : "worksheetReadyHint")}</p></Alert>
+      <section className={styles.coverage} aria-labelledby={id + "-coverage"}>
+        <div className={styles.coverageHeading}><h3 id={id + "-coverage"}>{t("coverage.title")}</h3><p>{t("coverage.hint")}</p></div>
+        <ol className={styles.coverageStages}>{coverageStages.map((stage, index) => <li key={stage.id} className={styles.coverageStage}>
+          <span className={styles.coverageNumber} aria-hidden="true">{index + 1}</span>
+          <div><div className={styles.coverageStageHeading}><strong>{stage.title}</strong><Badge>{stage.state}</Badge></div><p>{stage.hint}</p></div>
         </li>)}</ol>
       </section>
       <div className={styles.evaluationScope}>
         <p>{t("notEvaluated")}</p>
         {subject === "session" ? <p>{t("sessionScope")}</p> : null}
-        {selectedUser ? <Button variant="ghost" size="small" onClick={() => onOpen("users", selectedUser.id)}>{t("inspectUser", { name: selectedUser.loginName })}</Button> : selectedRole ? <Button variant="ghost" size="small" onClick={() => onOpen("roles", selectedRole)}>{t("inspectRole")}</Button> : null}
+        {selectedUser ? <Button variant="ghost" size="small" onClick={() => onOpen("users", selectedUser.id)}>{t("inspectUser", { name: selectedUser.loginName })}</Button> : selectedRole ? <Button variant="ghost" size="small" onClick={() => onOpen("roles", selectedRole.id)}>{t("inspectRole")}</Button> : null}
       </div>
-      {result.boundary ? <Alert>{t("boundaryResult", { name: workspace.policies.find((policy) => policy.id === result.boundary!.policyId)?.name ?? result.boundary.policyId, decision: t(`decisions.${result.boundary.decision}`) })}</Alert> : null}
-      {result.evidence.length ? <div className={styles.row}><p className={styles.note}>{t("evidenceCount", { count: result.evidence.length })}</p>{primaryEvidence.length > 0 && extraCount > 0 ? <Button variant="ghost" size="small" aria-expanded={showAll} onClick={() => { setShowAll((current) => !current); setPage(1); }}>{showAll ? t("decisiveOnly") : t("showAllEvidence", { count: extraCount })}</Button> : null}</div> : result.decision === "implicitDeny" ? <EmptyState title={t("noGrants")} description={t("noGrantsHint")} /> : null}
-    </Card.Body>{result.evidence.length ? <><Table aria-label={t("evidence")}>
-        <thead><tr><th scope="col">{t("policy")}</th><th scope="col">{t("source")}</th><th scope="col">{t("matching")}</th><th scope="col">{t("statementEffect")}</th></tr></thead>
-        <tbody>{evidence.slice((currentPage - 1) * pageSize, currentPage * pageSize).map((entry, index) => { const state = evidenceState(entry.reason); return <tr key={index}>
-          <td><button className={styles.evidenceLink} onClick={() => onOpen("policies", entry.policyId)}>{entry.policyName}</button><small>{entry.version ? "v" + entry.version : "—"}{entry.statement ? " · " + w("statementNumber", { number: entry.statement }) : ""}</small></td>
-          <td>{t(`sources.${entry.source}`)}{entry.groupId ? <small><button className={styles.evidenceLink} onClick={() => onOpen("groups", entry.groupId)}>{workspace.groups.find((group) => group.id === entry.groupId)?.name ?? entry.groupId}</button></small> : null}</td>
-          <td><Badge status={state === "match" ? "success" : state === "contextMissing" || state === "contractUnavailable" ? "warning" : undefined}>{t(`evaluationStates.${state}`)}</Badge><small><span>{t(`reasons.${entry.reason}`)}</span>{entry.reason === "missingContext" ? <span> · {entry.missing?.map((key) => t(`missing.${key}`)).join(" · ")}</span> : null}</small></td>
-          <td>{entry.effect ? <Badge status={entry.reason === "matched" ? entry.effect === "deny" ? "danger" : "success" : undefined}>{w(entry.effect)}</Badge> : "—"}</td>
-        </tr>; })}</tbody>
+      {!worksheet.error && worksheet.rows.length ? <p className={styles.note}>{t("evidenceCount", { count: worksheet.rows.length })}</p> : !worksheet.error ? <EmptyState title={t("noStatements")} description={t("noStatementsHint")} /> : null}
+    </Card.Body>{!worksheet.error && worksheet.rows.length ? <><Table aria-label={t("evidence")} mobileLayout="stack">
+        <thead><tr><th scope="col">{t("policy")}</th><th scope="col">{t("source")}</th><th scope="col">{t("configurationState")}</th><th scope="col">{t("statement")}</th></tr></thead>
+        <tbody>{worksheet.rows.slice((currentPage - 1) * pageSize, currentPage * pageSize).map((entry, index) => <tr key={`${entry.policyId}:${entry.source}:${entry.groupId ?? ""}:${entry.statement ?? index}`}>
+          <td data-label={t("policy")}>{workspace.policies.some((policy) => policy.id === entry.policyId) ? <button className={styles.evidenceLink} onClick={() => onOpen("policies", entry.policyId)}>{entry.policyName}</button> : entry.policyName}<small>{entry.version ? "v" + entry.version : "—"}{entry.statement ? " · " + w("statementNumber", { number: entry.statement }) : ""}</small></td>
+          <td data-label={t("source")}>{t(`sources.${entry.source}`)}{entry.groupId ? <small><button className={styles.evidenceLink} onClick={() => onOpen("groups", entry.groupId)}>{workspace.groups.find((group) => group.id === entry.groupId)?.name ?? entry.groupId}</button></small> : null}</td>
+          <td data-label={t("configurationState")}><Badge>{t(`configurationStates.${entry.state}`)}</Badge></td>
+          <td data-label={t("statement")}>{entry.effect ? <Badge>{t(`effects.${entry.effect}`)}</Badge> : "—"}<small>{entry.conditionKeys.length ? t("conditionFields", { conditions: entry.conditionKeys.map((key) => t(`conditionNames.${key as PolicyConditionKey}`)).join(" · ") }) : t("noConditionFields")}</small></td>
+        </tr>)}</tbody>
       </Table><Table.Footer><TablePagination page={currentPage} pages={pages} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} labels={{ summary: w("page", { page: currentPage, pages }), pageSize: w("pageSize"), previous: w("previous"), next: w("next") }} /></Table.Footer></> : null}</Card> : <p className={styles.note}>{t("beforeRun")}</p>}
   </div></div>;
 }
