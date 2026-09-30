@@ -515,9 +515,11 @@ func TestIAMPolicyAuthorityStoragePostgres(t *testing.T) {
 	if dsn == "" {
 		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", environment)
 	}
-	// This retained-data fixture runs serial protocol flows. Bound
-	// their aggregate separately from each flow; it is not an operation SLO.
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
+	// This retained-data fixture runs thirteen serial protocol flows plus the
+	// schema and immutable-evidence checks around them. Bound their aggregate
+	// separately from each flow; it is not an operation SLO. Each protocol flow
+	// retains its own two-minute deadline below.
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	defer cancel()
 	config, err := pgx.ParseConfig(dsn)
 	if err != nil || !strings.HasPrefix(config.Database, "matrix_iam_policy_") {
