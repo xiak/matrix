@@ -241,6 +241,7 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
   const toggleWorkspace = useConsoleUiStore((state) => state.toggleWorkspace);
   const closeWorkspace = useConsoleUiStore((state) => state.closeWorkspace);
   const [workspaceSize, setWorkspaceSize] = useState<WorkspaceSize>("medium");
+  const [activatedWorkspaceKey, setActivatedWorkspaceKey] = useState<string | null>(null);
   const [regionId, setRegionId] = useState("all");
   const setHeaderPanel = useConsoleUiStore((state) => state.setHeaderPanel);
   const principal = session.current;
@@ -272,7 +273,8 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
     window.setTimeout(() => workspaceTrigger.current?.focus(), 0);
   }, [closeWorkspace]);
 
-  useEffect(() => { closeWorkspace(); }, [scene?.section, closeWorkspace]);
+  const workspaceKey = scene?.workspace ? `${scene.section}:${scene.workspace.kind}` : null;
+  useEffect(() => { closeWorkspace(); }, [workspaceKey, closeWorkspace]);
 
   useEffect(() => {
     if (!navigation.pendingHref) return;
@@ -332,6 +334,7 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
   const headerLogout = useCallback(() => { setHeaderPanel(null); requestLeave(logout); }, [setHeaderPanel, requestLeave, logout]);
 
   const workspaceVisible = Boolean(scene?.workspace && workspaceOpen && !navigation.pendingHref);
+  const workspaceMounted = Boolean(scene?.workspace && (workspaceVisible || activatedWorkspaceKey === workspaceKey));
   const workspaceAction = scene?.workspace && !navigation.pendingHref ? workspaceActions[scene.workspace.kind] : null;
   const WorkspaceActionIcon = workspaceAction?.icon;
   const activeService = frame.preview ? serviceForSection(frame.section) : undefined;
@@ -374,6 +377,7 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
       return;
     }
     workspaceFocusRequested.current = true;
+    setActivatedWorkspaceKey(workspaceKey);
     toggleWorkspace();
   }
 
@@ -516,7 +520,7 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
                 tabIndex={0}
               />
               <Button aria-label={t("closeWorkspace")} className={styles.workspaceCloseButton} onClick={closeWorkspaceAndRestoreFocus} ref={workspaceCloseButton} iconOnly size="small" variant="ghost"><X aria-hidden="true" /></Button>
-              {scene?.workspace ? <ConsoleWorkspaceRenderer scene={scene.workspace} /> : null}
+              {workspaceMounted && scene?.workspace ? <ConsoleWorkspaceRenderer scene={scene.workspace} /> : null}
             </Layout.Workspace>
           </ServiceLayout>
         </App.Base>

@@ -973,18 +973,27 @@ describe("ConsoleShellRenderer", () => {
   it("shows the instance list first and opens setup only through the named installation action", async () => {
     const { user } = await renderConsole({ section: "installations" });
     const install = await screen.findByRole("button", { name: "安装服务" });
+    const workspace = document.getElementById("console-workspace");
     expect(install.getAttribute("aria-expanded")).toBe("false");
     expect(screen.queryByRole("button", { name: "提交安装任务" })).toBeNull();
+    expect(workspace?.querySelector("form")).toBeNull();
 
     await user.click(install);
     const collapse = await screen.findByRole("button", { name: "收起安装配置" });
     expect(collapse.getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByRole("button", { name: "提交安装任务" })).toBeTruthy();
+    const name = screen.getByLabelText("显示名称") as HTMLInputElement;
+    await user.clear(name);
+    await user.type(name, "复核中的数据库");
 
     await user.click(collapse);
 
     expect(install.getAttribute("aria-expanded")).toBe("false");
     expect(screen.queryByRole("button", { name: "提交安装任务" })).toBeNull();
+    expect(workspace?.querySelector("form")).toBeTruthy();
+
+    await user.click(install);
+    expect((screen.getByLabelText("显示名称") as HTMLInputElement).value).toBe("复核中的数据库");
   });
 
   it("contains compact navigation focus and restores the menu trigger", async () => {
