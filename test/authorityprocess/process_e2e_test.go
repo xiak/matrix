@@ -9422,6 +9422,40 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 			tenant.serviceRoleReceipt.Template != tenant.serviceRoleTemplate {
 			t.Fatal("managed-service binding did not return the exact non-secret IAM result")
 		}
+		var productSessionID string
+		var productReadClosed bool
+		if err := admin.QueryRow(ctx, `SELECT session_value.id,
+			session_value.revoked_at IS NOT NULL
+			AND session_value.expires_at-session_value.issued_at=interval '60 seconds'
+			AND evidence.workload_kind=$3 AND evidence.workload_id=$4
+			AND (SELECT count(*) FROM iam.authorization_decisions decision_value
+			  WHERE decision_value.tenant_id=session_value.tenant_id AND decision_value.allowed
+			    AND decision_value.action_name=$5 AND decision_value.target_kind=$3 AND decision_value.target_id=$4
+			    AND decision_value.subject_type='ROLE' AND decision_value.role_id=$6
+			    AND decision_value.source_principal_id IS NULL
+			    AND decision_value.source_service_principal_id='service-paas'
+			    AND decision_value.role_evidence->>'sessionId'=session_value.id
+			    AND decision_value.role_evidence#>>'{service,bindingId}'=evidence.binding_id)=1
+			AND (SELECT count(*) FROM iam.audit_outbox fact WHERE fact.tenant_id=session_value.tenant_id
+			  AND fact.event_document->>'action'='iam.service-role-session.issued'
+			  AND fact.event_document#>>'{target,id}'=session_value.id
+			  AND fact.event_document#>>'{actor,type}'='SERVICE_ACCOUNT'
+			  AND fact.event_document#>>'{actor,id}'='service-paas')=1
+			AND (SELECT count(*) FROM iam.audit_outbox fact WHERE fact.tenant_id=session_value.tenant_id
+			  AND fact.event_document->>'action'='iam.role-session.exited'
+			  AND fact.event_document#>>'{target,id}'=session_value.id
+			  AND fact.event_document#>>'{actor,type}'='ROLE'
+			  AND fact.event_document#>>'{actor,id}'=$6
+			  AND fact.event_document#>>'{actor,roleSession,sessionId}'=session_value.id
+			  AND fact.event_document#>>'{actor,roleSession,sourceServicePrincipalId}'='service-paas'
+			  AND NOT (fact.event_document#>'{actor,roleSession}' ? 'sourceUserId'))=1
+			FROM iam.service_role_session_evidence evidence
+			JOIN iam.role_sessions session_value ON session_value.tenant_id=evidence.tenant_id AND session_value.id=evidence.session_id
+			WHERE evidence.tenant_id=$1 AND evidence.binding_id=$2`, tenant.id, tenant.serviceRoleReceipt.BindingID,
+			string(iamv1.ResourceServiceInstallation), tenant.shared.ID, string(iamv1.ActionManagedServiceInstallationRead),
+			tenant.serviceRoleReceipt.RoleID).Scan(&productSessionID, &productReadClosed); err != nil || !productReadClosed {
+			t.Fatal("managed-service did not consume and close one exact temporary RoleSession for the real installation read", err)
+		}
 		bindReplay := performJSONWithIdempotency(t, http.MethodPost, bindingPath, tenant.member,
 			"shared-service-role-binding-key", bind)
 		var replayReceipt managedservicev1.ServiceRoleBindingReceipt
@@ -9692,11 +9726,22 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 		}
 		page := queryAudit(t, auditEndpoint, tenant.owner,
 			auditv1.QueryRecordsRequest{PageSize: 100, Action: auditv1.ActionIAMServiceRoleSessionIssued}, http.StatusOK)
-		if page.TenantID != auditv1.TenantID(tenant.id) || len(page.Records) != 1 ||
-			page.Records[0].Source != auditv1.SourceIAM || page.Records[0].Event.Actor.Type != auditv1.ActorServiceAccount ||
-			page.Records[0].Event.Actor.ID != "service-paas" || page.Records[0].Event.IAMDecisionID != "" ||
-			page.Records[0].Event.Target.ID != string(tenant.serviceRoleSession.ID) {
+		if page.TenantID != auditv1.TenantID(tenant.id) {
 			t.Fatal("service RoleSession issuance fact lost its target Account or producer lineage")
+		}
+		matches := 0
+		for _, record := range page.Records {
+			if record.Event.Target.ID != string(tenant.serviceRoleSession.ID) {
+				continue
+			}
+			matches++
+			if record.Source != auditv1.SourceIAM || record.Event.Actor.Type != auditv1.ActorServiceAccount ||
+				record.Event.Actor.ID != "service-paas" || record.Event.IAMDecisionID != "" {
+				t.Fatal("service RoleSession issuance fact lost its target Account or producer lineage")
+			}
+		}
+		if matches != 1 {
+			t.Fatal("manual service RoleSession issuance did not retain one exact immutable fact")
 		}
 	}
 	for _, tenant := range tenants {

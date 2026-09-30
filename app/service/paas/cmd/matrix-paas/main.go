@@ -152,6 +152,7 @@ func run(ctx context.Context) error {
 		managedserviceusecase.Config{
 			Catalog:               domain.DefaultCatalog(),
 			WorkloadRoleAuthority: managedServiceAuthorizer,
+			WorkloadRoleRuntime:   managedServiceAuthorizer,
 			Region: managedservicev1.Region{
 				ID: "local-primary", DisplayName: "本机主区域",
 				Profile: managedservicev1.RegionLocalMachine,

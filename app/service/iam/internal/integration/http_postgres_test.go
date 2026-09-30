@@ -22413,6 +22413,46 @@ func proveServiceRoleSessionIssuance(t *testing.T, ctx context.Context, handler 
 		producerProof.TenantID != binding.AccountID {
 		t.Fatal("service RoleSession issuance fact was not deliverable")
 	}
+	shortDuration := uint32(60)
+	exitCommand := iamv1.AssumeServiceRoleRequest{
+		BindingID: binding.ID, DurationSeconds: &shortDuration, RequestID: requestNamespace + "-self-exit-issue",
+	}
+	exitIssue := call(http.MethodPost, "/v1/internal/service-role-sessions", paasCredential, exitCommand, http.StatusOK)
+	var exitApplied struct {
+		Outcome    string            `json:"outcome"`
+		Session    iamv1.RoleSession `json:"session"`
+		Credential string            `json:"credential"`
+	}
+	if json.Unmarshal(exitIssue.Body.Bytes(), &exitApplied) != nil || exitApplied.Outcome != "APPLIED" || exitApplied.Credential == "" ||
+		iamv1.ValidateRoleSession(exitApplied.Session) != nil || exitApplied.Session.SourceServicePrincipalID != access.Relation.ServicePrincipal.PrincipalID {
+		t.Fatalf("service RoleSession self-exit fixture is invalid: %s", exitIssue.Body.String())
+	}
+	exitRequest := iamv1.LogoutRequest{RequestID: requestNamespace + "-self-exit"}
+	exitResponse := call(http.MethodPost, "/v1/auth/role-session:logout", exitApplied.Credential, exitRequest, http.StatusOK)
+	var exited iamv1.RoleSession
+	if json.Unmarshal(exitResponse.Body.Bytes(), &exited) != nil || iamv1.ValidateRoleSession(exited) != nil ||
+		exited.Status != iamv1.SessionRevoked || exited.ID != exitApplied.Session.ID ||
+		exited.SourceServicePrincipalID != exitApplied.Session.SourceServicePrincipalID || exited.SourceUserID != "" {
+		t.Fatalf("service RoleSession self-exit result is invalid: %s", exitResponse.Body.String())
+	}
+	exitAuthorization := authorization
+	exitAuthorization.RequestID, exitAuthorization.CorrelationID = requestNamespace+"-self-exit-read", requestNamespace+"-self-exit-read"
+	if response := performIAMRequestWithSubject(handler, mustIAMJSON(t, exitAuthorization), paasCredential, exitApplied.Credential); response.Code != http.StatusUnauthorized {
+		t.Fatalf("self-exited service RoleSession remained usable: status=%d body=%s", response.Code, response.Body.String())
+	}
+	var exitDocument []byte
+	if err := database.QueryRow(ctx, `SELECT event_document FROM iam.audit_outbox WHERE tenant_id=$1
+		AND event_document->>'action'='iam.role-session.exited' AND event_document->>'requestId'=$2`,
+		binding.AccountID, exitRequest.RequestID).Scan(&exitDocument); err != nil {
+		t.Fatal("read service RoleSession self-exit fact", err)
+	}
+	var exitEvent auditv1.Event
+	if json.Unmarshal(exitDocument, &exitEvent) != nil || auditv1.ValidateEventForSource(auditv1.SourceIAM, exitEvent) != nil ||
+		exitEvent.Actor.Type != auditv1.ActorRole || exitEvent.Actor.RoleSession == nil ||
+		exitEvent.Actor.RoleSession.SessionID != string(exitApplied.Session.ID) || exitEvent.Actor.RoleSession.SourceUserID != "" ||
+		exitEvent.Actor.RoleSession.SourceServicePrincipalID != auditv1.ActorID(access.Relation.ServicePrincipal.PrincipalID) {
+		t.Fatal("service RoleSession self-exit fact lost service lineage")
+	}
 	return serviceRoleSessionRuntimeProof{Session: applied.Session, Credential: applied.Credential, Request: command,
 		DecisionInput: authorization, RoleEvidence: evidence, IssueEvent: issueEvent}
 }

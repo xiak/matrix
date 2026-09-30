@@ -1,6 +1,6 @@
 # FEAT-IAM-008：业务接入、服务角色与 ABAC
 
-- 状态：实施中；版本化产品 Profile、PaaS/managedservice 的真实 PEP、请求与决定绑定及当前资源/Operation/outbox 租户隔离已有固定后端实现。服务受托已有账号同意关系、当前Account只读观察、managedservice真实资源绑定/解绑，以及服务会话发行/回执/当前PDP的本地后端候选；首个产品用该临时身份读取真实业务资源、服务会话管理闭环、实例过滤/批量授权和可信标签仍未完成，整体未验收。
+- 状态：实施中；版本化产品 Profile、PaaS/managedservice 的真实 PEP、请求与决定绑定及当前资源/Operation/outbox 租户隔离已有固定后端实现。服务受托已有账号同意关系、当前Account只读观察、managedservice真实资源绑定/解绑及服务会话发行/回执/当前PDP；当前后继提交候选已让首个产品用60秒临时身份读取真实业务资源并自退出，真实PG18及独立多进程门禁通过，尚待独立CI。服务会话管理员管理、实例过滤/批量授权、可信标签、UI和发布组合仍未完成，整体未验收。
 - 依赖：001、005、006。
 - Owner：IAM Profile/Role，PaaS/managedservice/Audit 各自的真实资源与 PEP。
 
@@ -41,7 +41,7 @@ ServiceRoleTemplate 定义注册服务主体、用途、允许权限和生命周
 | IAM-PEP-02 | PaaS apphosting 与 managedservice 已实现 | HTTP owner 从真实 path/body 和实际 `RemoteAddr` 构造 Action、资源、集合用途及可信网络上下文；账号和主体来自当前 IAM 凭据。IAM 决定必须逐字段绑定原请求，业务事务再按数据库所属账号取数，query/body/header 不能选择另一账号。 |
 | IAM-PEP-03 | 部分实现 | 当前集合列表只允许声明为 `COLLECTION_LIST` 的整体授权；两个账号同名/同 ID/key、伪造 tenant/cursor/after 及跨账号实例均有真实拒绝门禁。尚无“先取候选再逐实例过滤”的列表协议，也没有批量决定；因此不能把整体列表授权描述为细粒度过滤完成。 |
 | IAM-PEP-04 | 当前应用托管与 managedservice 路径已实现 | Application、Configuration、Revision、QuotaEntitlement、ServiceInstallation 的创建由封闭集合请求开始，最终资源、Operation 和 outbox 由同一业务事务建立；IAM 原决定只证明集合准入，不证明 caller 填写的最终 ID 或 payload。真实双账号门禁核对配额、Operation、幂等、拒绝无部分效果及 Audit 关联。 |
-| IAM-SVC-01/02 | 账号同意、关系观察、managedservice公开bind/unbind及服务来源RoleSession发行/回执已有真实数据库门禁，完整运行闭环未实现 | ServiceIdentity自身仍不获得目标Account权限；只有不可变模板、精确系统策略上限、当前Account同意和真实workload binding同时有效时，IAM才发行目标Account的短期RoleSession。服务home Account与目标Account分开保存，SERVICE与USER来源严格互斥，解绑后下一请求失败。仍缺managedservice用该临时身份读取实际业务资源、管理员服务会话撤销和最终发布组合。 |
+| IAM-SVC-01/02 | 最小产品运行闭环已在本地候选实现，管理与发布未完成 | ServiceIdentity自身仍不获得目标Account权限；只有不可变模板、精确系统策略上限、当前Account同意和真实workload binding同时有效时，IAM才发行目标Account的60秒RoleSession。managedservice用该临时身份经唯一PDP读取实际`ServiceInstallation`后立即自退出；服务home Account与目标Account分开保存，SERVICE与USER来源严格互斥。仍缺管理员服务会话目录/代撤销、独立CI和最终发布组合。 |
 | IAM-TAG-01/02 | 未实现 | Role 的 `tags` 仍只是元数据，不能进入授权。产品资源标签、创建请求标签、标签写入授权和并发一致性尚无可信来源协议。 |
 
 `app/service/paas/internal/managedservice/port/security.go` 原 action→resource switch 是该产品适配器的封闭边界，不是通用求值器按产品名称分叉，但它重复了 release-owned Profile。本轮候选已删除这份重复映射：port 直接使用 IAM Action/ResourceKind 类型，通过 `NewAuthorizationRequest` 和 managedservice 当前 Profile 的完整引用/calling service 核对形状；IAM HTTP adapter不再执行第二次字符串翻译。七种合法集合/实例形状及其他产品、错资源、错集合用途/ID攻击的聚焦测试通过；全仓默认 race/vet、architecture、模块校验和 Linux amd64 构建通过，尚待独立CI。后继产品适配器同样应消费自己编译进发布物且已由 IAM Profile 摘要认证的声明，通用 IAM 求值器仍只解释统一 Profile/Policy 语义。
@@ -74,13 +74,17 @@ ServiceRoleTemplate 定义注册服务主体、用途、允许权限和生命周
 
 managedservice 的首个 northbound bind 候选使用 `POST /managed-services/v1/service-installations/{installationId}/service-role-bindings`。公开 body 只有精确 `template {id,version,contentDigest}`，`Idempotency-Key` 经产品域分隔摘要生成账号级稳定 command identity；Account、Role、installation、service principal、purpose 和产品 AuthorizationRequest 均不能从 body/query/header 选择。产品先以当前 USER 对 path 中实际安装执行 `managedservice.service-installation.service-role.bind`，再由受限数据库读取证明该资源属于 IAM 决定推导的 Account；只有资源存在后，PaaS adapter 才以自身 ServiceIdentity 和同一 USER bearer 调用 IAM 内部入口。返回 `ServiceRoleBindingReceipt` 仅包含 workload、Role/binding ID、精确模板、ACTIVE 版本和创建时间；完整关系及历史仍由 IAM 目录拥有，不复制第二个权威模型。
 
-该候选的 API、port、adapter、usecase 和 HTTP 聚焦 race 已通过。现有独立五进程门禁在本任务唯一标签的 PostgreSQL 18（2 CPU、1536 MiB、PIDs 256）上以 220.41 秒通过：两个 Account 使用同名安装和同一幂等键仍生成不同 Role/binding；默认管理员在显式委派前拒绝，等值重放返回原身份，同 command 变更模板、第二 command 绑定同一 workload、query/body selector、跨 Account workload/Role ID及撤权后的下一请求均失败关闭；成功结果由 IAM 列表/详情反查并各产生一次 `iam.service-linked-role.created` 与 `iam.workload-role-binding.created`，原 actor/decision/tenant链保持。第一次运行只发现跨 Account Role 在 PDP 层按现有契约返回 403 而测试误期望存储层404，未发生越权；门禁改为准确断言403后在全新数据库重跑通过。所有本轮容器、网络和卷在标签及唯一占用核对后已删除。该实现仍是未固定候选；不据此开放 UI 写操作，也不宣称 session/ROLE 业务读取已经完成。
+该候选的 API、port、adapter、usecase 和 HTTP 聚焦 race 已通过。现有独立五进程门禁在本任务唯一标签的 PostgreSQL 18（2 CPU、1536 MiB、PIDs 256）上以 220.41 秒通过：两个 Account 使用同名安装和同一幂等键仍生成不同 Role/binding；默认管理员在显式委派前拒绝，等值重放返回原身份，同 command 变更模板、第二 command 绑定同一 workload、query/body selector、跨 Account workload/Role ID及撤权后的下一请求均失败关闭；成功结果由 IAM 列表/详情反查并各产生一次 `iam.service-linked-role.created` 与 `iam.workload-role-binding.created`，原 actor/decision/tenant链保持。第一次运行只发现跨 Account Role 在 PDP 层按现有契约返回 403 而测试误期望存储层404，未发生越权；门禁改为准确断言403后在全新数据库重跑通过。所有本轮容器、网络和卷在标签及唯一占用核对后已删除。该固定bind路径由下述后继产品消费候选继续使用；UI写操作仍须等待该后继固定及UI自身验收。
 
 公开 unbind 候选使用 `DELETE /managed-services/v1/service-installations/{installationId}/service-role-bindings/{bindingId}`，要求 `Idempotency-Key`，body 只有固定当前 `resourceVersion: 1`。产品先对 path 中真实安装执行 unbind PEP 并确认当前 Account 归属，IAM 再从 binding 反查并锁定 Account、Role、template、workload 与物理服务主体，重新评估实际产品 unbind、`iam.workload-role-binding.revoke` 和 `iam.role.pass` 后，原子写入 `REVOKED` revision 2、Role `security_generation+1` 和单一 Audit outbox 事实。模板退役仍允许撤销，但 schema/bootstrap 重放不得重新激活模板。返回 `ServiceRoleUnbindingReceipt` 只有非秘密终态；回包不确定时必须以原请求和原幂等键重试，等值重放仍要求当前权限，或通过 IAM 当前 Account 关系详情读取历史，不能把旧 receipt 缓存成 permit。
 
 该候选已在本任务独占 PostgreSQL 18 上通过 68.40 秒 Role race 门禁，覆盖错误账号/服务/USER/workload/Action、Audit 写失败整单回滚、退役模板后撤销、等值重放、变体/新意图冲突、Role 安全代际、不可变事实和迁移重放；同一独立 IAM 双实例、Audit、PaaS 与双 dispatcher 门禁以 204.25 秒通过公开 DELETE、两个 Account 同名安装、跨账号 binding ID、selector、终态目录、Audit 链及撤权后下一请求拒绝。聚焦 API/IAM/PaaS/architecture、生成稳定已通过；独立 CI 和全仓收口尚未完成，因此仍不得开放 LIVE UI 或把整个服务承担闭环标为验收。
 
-服务承担候选使用`POST /v1/internal/service-role-sessions`和按原request的非秘密查询入口。IAM从当前PaaS服务凭据、封存installation、精确binding、目标Role、模板/PolicyVersion上限和workload推导全部范围；同一服务home Account可以在另一个目标Account的明确binding下承担，但不能用自身Account或installation覆盖目标归属。内部发行、等值重放、当前单PDP、错误producer/workload、跨Account lineage、Audit事实、解绑即时失效和发行/解绑并发已在独立PG18通过；完整数据、锁序及本地证据归[006的服务来源RoleSession](./FEAT-IAM-006-roles-and-sts.md#服务来源-rolesession与-008-协作)。这一入口仍是服务间能力，不是浏览器API；managedservice尚未用临时凭据读取实际`ServiceInstallation`，管理员也尚无服务会话目录/单会话撤销，因此不开放LIVE UI、不把内部发行当成产品闭环。
+服务承担使用`POST /v1/internal/service-role-sessions`和按原request的非秘密查询入口。IAM从当前PaaS服务凭据、封存installation、精确binding、目标Role、模板/PolicyVersion上限和workload推导全部范围；同一服务home Account可以在另一个目标Account的明确binding下承担，但不能用自身Account或installation覆盖目标归属。内部发行、等值重放、当前单PDP、错误producer/workload、跨Account lineage、Audit事实、解绑即时失效和发行/解绑并发已在独立PG18通过；完整数据、锁序及本地证据归[006的服务来源RoleSession](./FEAT-IAM-006-roles-and-sts.md#服务来源-rolesession与-008-协作)。这一入口仍是服务间能力，不是浏览器API。
+
+当前后继候选在managedservice的公开bind成功或等值确认后，用binding ID和本次公开请求ID派生新的承担及业务读取意图，固定申请60秒会话。PaaS长期服务凭据只作为生产者认证，RoleSession秘密只在IAM HTTP adapter拥有，并仅作为`/v1/authorize`的subject carrier；use case只得到非秘密tenant/binding/Role/session/service/decision关联。adapter逐字段核对当前managedservice Profile、安装读取Action、真实path资源、ROLE主体、服务来源及目标Account；随后业务use case必须用该决定推导的Account开启第二个只读事务，读取同一`ServiceInstallation`并与USER已授权读取的语义对象一致，最后以准确ROLE bearer调用现有退出入口。业务层、公开回包、日志和Audit均不接触临时秘密，也没有第二PDP。
+
+账号同意是已提交的跨服务事实，不能因后继读取或回包失败伪装成从未发生；失败时相同公开幂等键确认原binding，再以新的公开请求ID取得新的一次性会话重试。旧承担请求的等值重放不会返回秘密，不能被缓存为permit。adapter在授权拒绝、响应形状错误、读取失败及调用上下文取消时仍以最多6秒的独立有界上下文尝试自退出；若退出结果不确定则失败关闭，最长60秒自然到期。本片只证明一次真实只读资源消费，不声称长连接、后台任务、服务会话管理员管理或任意产品接入已经完成。
 
 1. 产品 owner 在发布物中提供不可变、版本化的 `ServiceRoleTemplate`。模板至少绑定稳定 template ID、产品、服务 purpose、版本/摘要、允许的目标资源种类、可授权限上限和生命周期；它与普通 Policy 默认版本分离，不能由租户或请求方上传、改写或选择未登记版本。
 2. 当前账号内持有明确管理 Action 的 USER 对模板执行显式同意，IAM 在同一事务中创建或确认一个 `SERVICE_LINKED` Role、模板版本关系、权限上限及不可变事实。显示名不参与安全身份；等值重放返回同一关系，变体冲突。普通角色 API 不能修改其 trust、扩大权限、换 template 或把它转换为 customer-managed Role。
@@ -102,7 +106,7 @@ managedservice 的首个 northbound bind 候选使用 `POST /managed-services/v1
 
 现有 USER `RoleSession` 历史和 Audit canonical 已有固定消费者，服务来源不能伪造 `sourceUserId`。公共 Role actor lineage 增加与 `sourceUserId` 严格二选一的 `sourceServicePrincipalId`，原USER编码因新增字段 `omitempty` 保持原字节；私有证据另保存 installation、purpose、binding、服务凭据代际和模板承诺。管理员目录必须准确区分 USER 与 SERVICE 来源，不能隐藏服务会话而使其不可撤销。若实现证明统一表会破坏现有锁序，可在同一 RoleSession owner内分开持久化生命周期，但公开身份、PDP和撤销语义仍只有一个，不保留两个求值器。
 
-当前契约已把`RoleSession`、IAM `Subject`与Audit `ActorReference`的来源收敛为上述严格联合类型，并加入只含`{bindingId,durationSeconds?,requestId}`的封闭服务承担意图；Account、Role、installation、purpose、template、Policy及任意授权请求selector均由运行时解码和OpenAPI同时拒绝。既有USER RoleSession JSON与ROLE Audit canonical document/digest有精确字节回归。后继本地候选已经实现IAM发行事务、一次短期凭据、非秘密完成查询、当前单PDP和binding撤销即时失效；详细事务与证据由006拥有。管理员服务会话撤销和managedservice业务读取仍未实现，不能据此开放LIVE UI。
+当前契约已把`RoleSession`、IAM `Subject`与Audit `ActorReference`的来源收敛为上述严格联合类型，并加入只含`{bindingId,durationSeconds?,requestId}`的封闭服务承担意图；Account、Role、installation、purpose、template、Policy及任意授权请求selector均由运行时解码和OpenAPI同时拒绝。既有USER RoleSession JSON与ROLE Audit canonical document/digest有精确字节回归。后继本地候选已经实现IAM发行事务、一次短期凭据、非秘密完成查询、当前单PDP、binding撤销即时失效、managedservice真实业务读取和服务来源自退出；详细事务与证据由006拥有。管理员服务会话目录/代撤销、UI及发布组合仍未实现，不能据此开放LIVE写操作。
 
 首个消费者由 managedservice product owner 暴露“给当前 ServiceInstallation 绑定/解绑服务角色”的业务入口，而不是让浏览器直接调用内部 IAM：
 

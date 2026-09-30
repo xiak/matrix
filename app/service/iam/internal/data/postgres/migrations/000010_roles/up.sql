@@ -1234,7 +1234,7 @@ END $function$;
 CREATE OR REPLACE FUNCTION iam.exit_role_session(lookup_digest text,event jsonb)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE located iam.role_session_index%ROWTYPE; stored iam.role_sessions%ROWTYPE;
-    source_user text; expected_actor jsonb; now_at timestamptz(6):=transaction_timestamp();
+    source_user text; source_service text; expected_actor jsonb; now_at timestamptz(6):=transaction_timestamp();
 BEGIN
     IF COALESCE(lookup_digest,'') !~ '^sha256:[0-9a-f]{64}$' THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='role exit credential is unavailable';
@@ -1242,20 +1242,36 @@ BEGIN
     SELECT * INTO located FROM iam.role_session_index i WHERE i.lookup_digest=exit_role_session.lookup_digest;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='role exit credential is unavailable'; END IF;
     PERFORM set_config('matrix.iam_tenant_id',located.tenant_id,true);
-    SELECT s.source_user_id INTO source_user FROM iam.role_sessions s WHERE s.tenant_id=located.tenant_id AND s.id=located.session_id;
+    SELECT s.source_user_id,s.source_service_principal_id INTO source_user,source_service
+      FROM iam.role_sessions s WHERE s.tenant_id=located.tenant_id AND s.id=located.session_id;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='role exit credential is unavailable'; END IF;
-    -- Same Account -> USER -> session order as issuance/source revocation.
+    IF (source_user IS NULL)=(source_service IS NULL) THEN
+        RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='role exit source is unavailable'; END IF;
+    -- USER sessions keep the Account -> USER -> session order used by USER
+    -- issuance and source revocation. Service sessions need no current source
+    -- authority: the target Account preserves the tenant lock order and the
+    -- exact session lock serializes terminal transitions, while credential
+    -- possession permits only this irreversible exit. Current binding/Role
+    -- authority is deliberately not a prerequisite for destroying a bearer.
     -- No status/expiry check: disabling business access cannot prevent exit.
     PERFORM 1 FROM iam.accounts WHERE id=located.tenant_id FOR SHARE;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='role exit account is unavailable'; END IF;
-    PERFORM 1 FROM iam.principals WHERE tenant_id=located.tenant_id AND id=source_user AND principal_type='USER' FOR UPDATE;
-    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='role exit source is unavailable'; END IF;
+    IF source_user IS NOT NULL THEN
+      PERFORM 1 FROM iam.principals WHERE tenant_id=located.tenant_id AND id=source_user AND principal_type='USER' FOR UPDATE;
+      IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='role exit source is unavailable'; END IF;
+    END IF;
     SELECT * INTO stored FROM iam.role_sessions s WHERE s.tenant_id=located.tenant_id AND s.id=located.session_id FOR UPDATE;
-    IF NOT FOUND OR stored.source_user_id IS DISTINCT FROM source_user THEN
+    IF NOT FOUND OR stored.source_user_id IS DISTINCT FROM source_user
+      OR stored.source_service_principal_id IS DISTINCT FROM source_service THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='role exit linkage differs';
     END IF;
-    expected_actor:=jsonb_build_object('type','ROLE','id',stored.role_id,
-      'roleSession',jsonb_build_object('sessionId',stored.id,'sourceUserId',stored.source_user_id));
+    IF source_user IS NOT NULL THEN
+      expected_actor:=jsonb_build_object('type','ROLE','id',stored.role_id,
+        'roleSession',jsonb_build_object('sessionId',stored.id,'sourceUserId',source_user));
+    ELSE
+      expected_actor:=jsonb_build_object('type','ROLE','id',stored.role_id,
+        'roleSession',jsonb_build_object('sessionId',stored.id,'sourceServicePrincipalId',source_service));
+    END IF;
     PERFORM iam.assert_audit_event(event,stored.tenant_id,'iam.role-session.exited','ROLE_SESSION',stored.id,'SUCCEEDED');
     IF event->'actor' IS DISTINCT FROM expected_actor OR event ? 'iamDecisionId' THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='role exit actor differs';

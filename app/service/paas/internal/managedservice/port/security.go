@@ -85,6 +85,45 @@ type WorkloadRoleAuthority interface {
 	) (iamv1.WorkloadRoleBinding, error)
 }
 
+// WorkloadRoleAuthorizationRequest is one product-owned business read. It has
+// no caller credential or Account selector: the runtime recovers both from the
+// current PaaS ServiceIdentity and the exact workload binding before asking the
+// single IAM PDP.
+type WorkloadRoleAuthorizationRequest struct {
+	Action          iamv1.Action
+	Resource        ResourceReference
+	ResourceMode    iamv1.AuthorizationResourceMode
+	CollectionUsage iamv1.AuthorizationCollectionUsage
+	RequestID       string
+}
+
+// WorkloadRoleAuthorization is the non-secret authorization result retained
+// by the product use case. The temporary Role credential remains inside the
+// adapter-owned lease and can only be used to release that exact session.
+type WorkloadRoleAuthorization struct {
+	TenantID                 string
+	BindingID                iamv1.WorkloadRoleBindingID
+	RoleID                   iamv1.RoleID
+	RoleSessionID            iamv1.RoleSessionID
+	SourceServicePrincipalID iamv1.PrincipalID
+	DecisionID               iamv1.DecisionID
+	RequestID                string
+}
+
+type WorkloadRoleLease interface {
+	Authorization() WorkloadRoleAuthorization
+	Release(context.Context) error
+}
+
+type WorkloadRoleRuntime interface {
+	AssumeWorkloadRole(
+		context.Context,
+		iamv1.WorkloadRoleBindingID,
+		string,
+		WorkloadRoleAuthorizationRequest,
+	) (WorkloadRoleLease, error)
+}
+
 func ValidateAuthorization(value Authorization) error {
 	var problems []error
 	if value.SubjectType != SubjectUser && value.SubjectType != SubjectServiceAccount {
@@ -124,4 +163,44 @@ func ValidateAuthorizationForRequest(value Authorization, request AuthorizationR
 		return errors.New("authorization request correlation differs")
 	}
 	return ValidateAuthorization(value)
+}
+
+func ValidateWorkloadRoleAuthorizationRequest(value WorkloadRoleAuthorizationRequest) error {
+	profileRequest, err := iamv1.NewAuthorizationRequest(
+		value.Action,
+		iamv1.ResourceReference{Kind: value.Resource.Kind, ID: value.Resource.ID},
+		value.ResourceMode,
+		value.CollectionUsage,
+		value.RequestID,
+		value.RequestID,
+	)
+	profile, known := iamv1.LookupAuthorizationProfile(iamv1.ProductManagedService)
+	if err != nil || !known || iamv1.CheckAuthorizationProfileReference(profile, profileRequest.Profile) != nil ||
+		profile.CallingService != iamv1.ServicePaaS {
+		return errors.New("workload Role authorization is outside the managed-service profile")
+	}
+	return nil
+}
+
+func ValidateWorkloadRoleAuthorization(value WorkloadRoleAuthorization) error {
+	return errors.Join(
+		managedservicev1.ValidateID("authorization.tenantId", value.TenantID),
+		iamv1.ValidateID("authorization.bindingId", string(value.BindingID)),
+		iamv1.ValidateID("authorization.roleId", string(value.RoleID)),
+		iamv1.ValidateID("authorization.roleSessionId", string(value.RoleSessionID)),
+		iamv1.ValidateID("authorization.sourceServicePrincipalId", string(value.SourceServicePrincipalID)),
+		iamv1.ValidateID("authorization.decisionId", string(value.DecisionID)),
+		managedservicev1.ValidateID("authorization.requestId", value.RequestID),
+	)
+}
+
+func ValidateWorkloadRoleAuthorizationForRequest(
+	value WorkloadRoleAuthorization,
+	bindingID iamv1.WorkloadRoleBindingID,
+	request WorkloadRoleAuthorizationRequest,
+) error {
+	if value.BindingID != bindingID || value.RequestID != request.RequestID {
+		return errors.New("workload Role authorization correlation differs")
+	}
+	return ValidateWorkloadRoleAuthorization(value)
 }

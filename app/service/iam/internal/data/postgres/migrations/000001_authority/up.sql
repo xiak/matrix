@@ -1594,7 +1594,7 @@ BEGIN
                 AND jsonb_typeof(submitted_event#>'{actor,roleSession,sourceUserId}')='string'
                 AND submitted_event#>>'{actor,roleSession,sessionId}' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
                 AND submitted_event#>>'{actor,roleSession,sourceUserId}' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
-              OR (expected_action='iam.authorization.decided'
+              OR (expected_action IN ('iam.authorization.decided','iam.role-session.exited')
                 AND (submitted_event#>'{actor,roleSession}') ?& ARRAY['sessionId','sourceServicePrincipalId']
                 AND ((submitted_event#>'{actor,roleSession}')-ARRAY['sessionId','sourceServicePrincipalId'])='{}'::jsonb
                 AND jsonb_typeof(submitted_event#>'{actor,roleSession,sessionId}')='string'
@@ -1702,8 +1702,8 @@ BEGIN
        ) AND NOT (submitted_event ? 'iamDecisionId'))
        OR (expected_action = 'iam.role-session.exited' AND (
             submitted_event#>>'{actor,type}' IS DISTINCT FROM 'ROLE'
-            OR NOT (submitted_event#>'{actor,roleSession}') ? 'sourceUserId'
-            OR (submitted_event#>'{actor,roleSession}') ? 'sourceServicePrincipalId'
+            OR (((submitted_event#>'{actor,roleSession}') ? 'sourceUserId') =
+                ((submitted_event#>'{actor,roleSession}') ? 'sourceServicePrincipalId'))
             OR submitted_event#>>'{actor,roleSession,sessionId}' IS DISTINCT FROM submitted_event#>>'{target,id}'))
        OR (expected_action = 'iam.service-role-session.issued'
             AND submitted_event#>>'{actor,type}' IS DISTINCT FROM 'SERVICE_ACCOUNT')

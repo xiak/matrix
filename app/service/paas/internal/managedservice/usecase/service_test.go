@@ -95,8 +95,10 @@ func TestInstallationRejectsUnavailableRegionBeforePersistence(t *testing.T) {
 	repository := newMemoryRepository()
 	region := testRegion()
 	region.State = managedservicev1.RegionStale
+	authority := &stubWorkloadRoleBinder{}
 	service, err := NewService(repository, Config{
-		Catalog: domain.DefaultCatalog(), Region: region, WorkloadRoleAuthority: &stubWorkloadRoleBinder{},
+		Catalog: domain.DefaultCatalog(), Region: region,
+		WorkloadRoleAuthority: authority, WorkloadRoleRuntime: authority,
 	})
 	if err != nil {
 		t.Fatalf("new service: %v", err)
@@ -171,6 +173,7 @@ func TestBindServiceRoleUsesVerifiedInstallationAndStableCommandIdentity(t *test
 	binder := &stubWorkloadRoleBinder{}
 	service := newTestService(t, repository)
 	service.workloadRoleAuthority = binder
+	service.workloadRoleRuntime = binder
 	authorization := testAuthorization()
 	quota, _, err := service.ActivateQuota(context.Background(), ActivateQuotaCommand{
 		Authorization: authorization, IdempotencyKey: "quota-role-binding",
@@ -198,6 +201,7 @@ func TestBindServiceRoleUsesVerifiedInstallationAndStableCommandIdentity(t *test
 		InstallationID: installation.ID, Request: managedservicev1.BindServiceRoleRequest{Template: template},
 		IdempotencyKey: "bind-role-request",
 	}
+	beginCount := len(repository.beginTenants)
 	receipt, err := service.BindServiceRole(context.Background(), command)
 	if err != nil || receipt.ServiceInstallationID != installation.ID || receipt.Template != template ||
 		receipt.BindingID != binder.result.Bindings[0].ID {
@@ -209,10 +213,45 @@ func TestBindServiceRoleUsesVerifiedInstallationAndStableCommandIdentity(t *test
 		binder.request.RequestID != wantRequestID || binder.request.Credential != command.Credential {
 		t.Fatalf("binding request=%#v calls=%d", binder.request, binder.calls)
 	}
+	wantAssumeRequestID := serviceRoleSessionRequestID(binder.result.Bindings[0].ID, command.Authorization.RequestID)
+	wantReadRequestID := serviceRoleBusinessReadRequestID(binder.result.Bindings[0].ID, command.Authorization.RequestID)
+	if binder.runtimeCalls != 1 || binder.runtimeBindingID != binder.result.Bindings[0].ID ||
+		binder.runtimeAssumeRequestID != wantAssumeRequestID || binder.runtimeRequest.RequestID != wantReadRequestID ||
+		binder.runtimeRequest.Action != port.AuthorizeInstallationRead || binder.releaseCalls != 1 {
+		t.Fatalf("runtime binding=%s assume=%s request=%#v calls=%d releases=%d", binder.runtimeBindingID,
+			binder.runtimeAssumeRequestID, binder.runtimeRequest, binder.runtimeCalls, binder.releaseCalls)
+	}
+	if len(repository.beginTenants) != beginCount+2 || repository.beginTenants[beginCount] != authorization.TenantID ||
+		repository.beginTenants[beginCount+1] != authorization.TenantID {
+		t.Fatalf("service Role verification reads=%v", repository.beginTenants[beginCount:])
+	}
+	command.Authorization.RequestID = "request-bind-role-replay"
 	if _, err := service.BindServiceRole(context.Background(), command); err != nil ||
-		binder.request.RequestID != wantRequestID {
+		binder.request.RequestID != wantRequestID || binder.runtimeAssumeRequestID == wantAssumeRequestID {
 		t.Fatalf("equal replay did not keep command identity: request=%#v err=%v", binder.request, err)
 	}
+	binding := binder.result.Bindings[0]
+	binder.runtimeAuthorization = port.WorkloadRoleAuthorization{
+		TenantID: "organization-other", BindingID: binding.ID, RoleID: binding.RoleID,
+		RoleSessionID: "role-session-forged-account", SourceServicePrincipalID: binder.result.Relation.ServicePrincipal.PrincipalID,
+		DecisionID: "decision-forged-account", RequestID: "placeholder",
+	}
+	command.Authorization.RequestID = "request-bind-role-forged-runtime"
+	binder.runtimeAuthorization.RequestID = serviceRoleBusinessReadRequestID(binding.ID, command.Authorization.RequestID)
+	previousReleases := binder.releaseCalls
+	if _, err := service.BindServiceRole(context.Background(), command); !errors.Is(err, port.ErrAuthorizationUnavailable) ||
+		binder.releaseCalls != previousReleases+1 {
+		t.Fatalf("forged runtime Account was accepted or not released: releases=%d err=%v", binder.releaseCalls, err)
+	}
+	binder.runtimeAuthorization = port.WorkloadRoleAuthorization{}
+	binder.releaseErr = port.ErrAuthorizationUnavailable
+	command.Authorization.RequestID = "request-bind-role-release-unavailable"
+	previousReleases = binder.releaseCalls
+	if _, err := service.BindServiceRole(context.Background(), command); !errors.Is(err, port.ErrAuthorizationUnavailable) ||
+		binder.releaseCalls != previousReleases+1 {
+		t.Fatalf("failed RoleSession exit was hidden: releases=%d err=%v", binder.releaseCalls, err)
+	}
+	binder.releaseErr = nil
 	before := binder.calls
 	command.InstallationID = "postgres-absent"
 	if _, err := service.BindServiceRole(context.Background(), command); !errors.Is(err, ErrNotFound) || binder.calls != before {
@@ -294,10 +333,11 @@ func TestUnbindServiceRoleUsesVerifiedInstallationAndStableCommandIdentity(t *te
 func newTestService(t *testing.T, repository Repository) *Service {
 	t.Helper()
 	var operationSequence atomic.Uint32
+	authority := &stubWorkloadRoleBinder{}
 	service, err := NewService(repository, Config{
 		Catalog: domain.DefaultCatalog(), Region: testRegion(),
-		WorkloadRoleAuthority: &stubWorkloadRoleBinder{},
-		NewQuotaID:            func() (string, error) { return "quota-test", nil },
+		WorkloadRoleAuthority: authority, WorkloadRoleRuntime: authority,
+		NewQuotaID: func() (string, error) { return "quota-test", nil },
 		NewOperationID: func() (string, error) {
 			if operationSequence.Add(1) == 1 {
 				return "operation-one", nil
@@ -312,16 +352,61 @@ func newTestService(t *testing.T, repository Repository) *Service {
 }
 
 type stubWorkloadRoleBinder struct {
-	calls           int
-	template        iamv1.ServiceRoleTemplateReference
-	request         port.AuthorizationRequest
-	result          iamv1.ServiceLinkedRoleAccess
-	revokeCalls     int
-	revokeBindingID iamv1.WorkloadRoleBindingID
-	revokeVersion   uint64
-	revokeRequest   port.AuthorizationRequest
-	revokeResult    iamv1.WorkloadRoleBinding
-	err             error
+	calls                  int
+	template               iamv1.ServiceRoleTemplateReference
+	request                port.AuthorizationRequest
+	result                 iamv1.ServiceLinkedRoleAccess
+	revokeCalls            int
+	revokeBindingID        iamv1.WorkloadRoleBindingID
+	revokeVersion          uint64
+	revokeRequest          port.AuthorizationRequest
+	revokeResult           iamv1.WorkloadRoleBinding
+	err                    error
+	runtimeCalls           int
+	runtimeBindingID       iamv1.WorkloadRoleBindingID
+	runtimeAssumeRequestID string
+	runtimeRequest         port.WorkloadRoleAuthorizationRequest
+	runtimeAuthorization   port.WorkloadRoleAuthorization
+	runtimeErr             error
+	releaseCalls           int
+	releaseErr             error
+}
+
+func (binder *stubWorkloadRoleBinder) AssumeWorkloadRole(
+	_ context.Context,
+	bindingID iamv1.WorkloadRoleBindingID,
+	assumeRequestID string,
+	request port.WorkloadRoleAuthorizationRequest,
+) (port.WorkloadRoleLease, error) {
+	binder.runtimeCalls++
+	binder.runtimeBindingID, binder.runtimeAssumeRequestID, binder.runtimeRequest = bindingID, assumeRequestID, request
+	if binder.runtimeErr != nil {
+		return nil, binder.runtimeErr
+	}
+	authorization := binder.runtimeAuthorization
+	if authorization.TenantID == "" && len(binder.result.Bindings) == 1 {
+		binding := binder.result.Bindings[0]
+		authorization = port.WorkloadRoleAuthorization{
+			TenantID: string(binding.AccountID), BindingID: binding.ID, RoleID: binding.RoleID,
+			RoleSessionID: "role-session-managedservice", SourceServicePrincipalID: binder.result.Relation.ServicePrincipal.PrincipalID,
+			DecisionID: "decision-managedservice-read", RequestID: request.RequestID,
+		}
+	}
+	return &stubWorkloadRoleLease{binder: binder, authorization: authorization}, nil
+}
+
+type stubWorkloadRoleLease struct {
+	binder        *stubWorkloadRoleBinder
+	authorization port.WorkloadRoleAuthorization
+}
+
+func (lease *stubWorkloadRoleLease) Authorization() port.WorkloadRoleAuthorization {
+	return lease.authorization
+}
+
+func (lease *stubWorkloadRoleLease) Release(context.Context) error {
+	lease.binder.releaseCalls++
+	return lease.binder.releaseErr
 }
 
 func (binder *stubWorkloadRoleBinder) BindWorkloadRole(
@@ -425,6 +510,7 @@ type memoryRepository struct {
 	installations map[string]managedservicev1.ServiceInstallation
 	installKeys   map[string]memoryReplay
 	events        []audit.Event
+	beginTenants  []string
 }
 
 type memoryReplay struct {
@@ -441,10 +527,11 @@ func newMemoryRepository() *memoryRepository {
 
 func (repository *memoryRepository) Begin(
 	_ context.Context,
-	_ string,
+	tenantID string,
 	_ TransactionMode,
 ) (Transaction, error) {
 	repository.mu.Lock()
+	repository.beginTenants = append(repository.beginTenants, tenantID)
 	return &memoryTransaction{
 		repository: repository,
 		quotas:     maps.Clone(repository.quotas), quotaKeys: maps.Clone(repository.quotaKeys),

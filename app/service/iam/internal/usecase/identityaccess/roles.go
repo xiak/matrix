@@ -110,9 +110,15 @@ func (service *Authority) LogoutRoleSession(ctx context.Context, credential iamv
 		if err != nil {
 			return ErrUnavailable
 		}
+		roleSession := &auditv1.RoleSessionReference{SessionID: string(session.ID)}
+		if session.SourceUserID != "" {
+			roleSession.SourceUserID = auditv1.ActorID(session.SourceUserID)
+		} else {
+			roleSession.SourceServicePrincipalID = auditv1.ActorID(session.SourceServicePrincipalID)
+		}
 		event, err := newAuditEvent(eventID, session.AccountID, "", auditv1.ActorReference{
 			Type: auditv1.ActorRole, ID: auditv1.ActorID(session.RoleID),
-			RoleSession: &auditv1.RoleSessionReference{SessionID: string(session.ID), SourceUserID: auditv1.ActorID(session.SourceUserID)},
+			RoleSession: roleSession,
 		}, auditv1.ActionIAMRoleSessionExited, auditv1.TargetReference{Kind: auditv1.TargetRoleSession, ID: string(session.ID)},
 			auditv1.ResultSucceeded, "", digest, request.RequestID, request.RequestID, now)
 		if err != nil {
@@ -124,6 +130,7 @@ func (service *Authority) LogoutRoleSession(ctx context.Context, credential iamv
 		}
 		if iamv1.ValidateRoleSession(result) != nil || result.Status != iamv1.SessionRevoked || result.ID != session.ID ||
 			result.RoleID != session.RoleID || result.AccountID != session.AccountID || result.SourceUserID != session.SourceUserID ||
+			result.SourceServicePrincipalID != session.SourceServicePrincipalID ||
 			!result.IssuedAt.Equal(session.IssuedAt) || !result.ExpiresAt.Equal(session.ExpiresAt) {
 			return ErrUnavailable
 		}

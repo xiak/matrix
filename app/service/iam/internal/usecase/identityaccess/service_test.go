@@ -1601,6 +1601,26 @@ func TestRoleSelfExitUsesOnlyExactCredentialPossession(t *testing.T) {
 	if _, err := service.LogoutRoleSession(t.Context(), issued.Credential, iamv1.LogoutRequest{RequestID: "exit-wrong-proof"}); !errors.Is(err, ErrUnauthenticated) || len(tx.roleExitEvents) != 1 {
 		t.Fatal("lookup alone proved possession", err)
 	}
+
+	serviceIssued, err := authority.NewCredentialIssuer(nil).Issue(authority.CredentialRoleSession, "service-exit-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	serviceSession := iamv1.RoleSession{APIVersion: iamv1.APIVersion, Kind: "RoleSession", ID: "service-exit-session", AccountID: "customer-account",
+		RoleID: "service-linked-role", SourceServicePrincipalID: "service-paas", Status: iamv1.SessionActive,
+		IssuedAt: tx.now.Add(-2 * time.Minute), ExpiresAt: tx.now.Add(-time.Minute)}
+	tx.roleExitCredentials[serviceIssued.LookupDigest] = RoleSessionExitCredential{Session: serviceSession, VerificationDigest: serviceIssued.VerificationDigest}
+	serviceResult, err := service.LogoutRoleSession(t.Context(), serviceIssued.Credential, iamv1.LogoutRequest{RequestID: "service-exit-intent"})
+	if err != nil || serviceResult.Status != iamv1.SessionRevoked || len(tx.roleExitEvents) != 2 {
+		t.Fatal("service role self-exit failed", err)
+	}
+	serviceFact := tx.roleExitEvents[1]
+	if auditv1.ValidateEventForSource(auditv1.SourceIAM, serviceFact) != nil || serviceFact.Actor.RoleSession == nil ||
+		serviceFact.Actor.RoleSession.SessionID != string(serviceSession.ID) || serviceFact.Actor.RoleSession.SourceUserID != "" ||
+		serviceFact.Actor.RoleSession.SourceServicePrincipalID != auditv1.ActorID(serviceSession.SourceServicePrincipalID) ||
+		serviceFact.Target.ID != string(serviceSession.ID) {
+		t.Fatal("service role self-exit lost immutable service lineage")
+	}
 }
 
 func TestAccountSecuritySettingsCannotBypassCurrentSessionAndExplicitAuthority(t *testing.T) {

@@ -1,6 +1,6 @@
 # FEAT-IAM-006：角色、信任与 STS
 
-- 状态：R1角色管理、R2同账号承担与tenant PaaS/Audit真实授权、R3自服务发现/当前角色显示及管理员会话管理后端，已在累计固定`62a18a48168e87a4158b95eba41427b445ed10d1`通过本地真库/并发/保留数据/独立进程/全仓检查和三项独立CI；包含原`1ebab37a`的来源代际/身份锁修复。必须同时消费公开schema数量边界修正`0567c8b2699521b137db0f8b69f17630c59f04fb`，其本地契约及三项独立CI也已通过。服务来源RoleSession发行、回执、当前PDP及binding撤销即时失效已有本地候选和真实门禁，尚待固定提交/独立CI及首个产品消费。原R2覆盖不足及旧R3固定960416dd的CI失败不被回填。UX/UI、容量和发布未完成，整体006未验收。
+- 状态：R1角色管理、R2同账号承担与tenant PaaS/Audit真实授权、R3自服务发现/当前角色显示及管理员会话管理后端，已在累计固定`62a18a48168e87a4158b95eba41427b445ed10d1`通过本地真库/并发/保留数据/独立进程/全仓检查和三项独立CI；包含原`1ebab37a`的来源代际/身份锁修复。必须同时消费公开schema数量边界修正`0567c8b2699521b137db0f8b69f17630c59f04fb`，其本地契约及三项独立CI也已通过。服务来源RoleSession发行、回执、当前PDP及binding撤销即时失效已有固定实现；当前后继提交候选已让首个managedservice消费者实际读取业务资源并以服务来源ROLE自退出，真实PG18及独立多进程门禁通过，尚待独立CI。服务来源的管理员目录/代撤销、UX/UI、容量和发布未完成，整体006未验收。原R2覆盖不足及旧R3固定960416dd的CI失败不被回填。
 - 依赖：005。
 - Owner：IAM Role、TrustPolicy、RoleSession、凭据发行；业务服务消费临时身份。
 
@@ -154,9 +154,11 @@ RoleSession继续由本FEAT唯一拥有，008拥有模板、账号同意、workl
 
 公开`RoleSession`的`sourceUserId`与`sourceServicePrincipalId`严格二选一；USER既有字节保持，SERVICE不能伪造USER。私有发行证据另绑定准确服务home Account、封存installation、principal、purpose、当前服务凭据查找承诺、binding及其修订、不可变template/PolicyVersion上限和目标workload。当前授权仍进入唯一Role PDP，并重新检查Account、Role、binding、template和服务来源；历史`iam.authorization.decided`证据只验证发生时封存的不可变来源，不因目标Account的RLS重新读取生产者home Account，也不按当前用户权限重授权旧事实。
 
-首次成功发行一次返回用途隔离的短期秘密，等值重放及`GET /v1/internal/service-role-sessions/by-request/{requestId}`只返回非秘密原结果；响应均`no-store`。`iam.service-role-session.issued`是新的租户事实，SERVICE_ACCOUNT actor、目标ROLE_SESSION和原请求必须准确，不能借旧`iam.role-session.issued`改变USER历史含义。binding撤销与发行按同一Role/binding锁序串行；撤销终态后新发行失败，若发行先提交，所得凭据在撤销后的下一受保护请求失败。已提交发行事实和私有历史证明仍可投递/重放，不能因当前binding撤销而丢失。服务会话管理员目录、单会话显式撤销及managedservice实际业务读取仍未完成，不能用内部发行门禁冒充完整服务受托闭环。
+首次成功发行一次返回用途隔离的短期秘密，等值重放及`GET /v1/internal/service-role-sessions/by-request/{requestId}`只返回非秘密原结果；响应均`no-store`。`iam.service-role-session.issued`是新的租户事实，SERVICE_ACCOUNT actor、目标ROLE_SESSION和原请求必须准确，不能借旧`iam.role-session.issued`改变USER历史含义。binding撤销与发行按同一Role/binding锁序串行；撤销终态后新发行失败，若发行先提交，所得凭据在撤销后的下一受保护请求失败。已提交发行事实和私有历史证明仍可投递/重放，不能因当前binding撤销而丢失。
 
-当前候选源码形状为IAM55/Audit30，PaaS仍按其实际源码2；发布安装profile未改变。独立PG18的Role聚焦race门禁48.26秒通过，包括同/跨Account发行、真实PDP、错误production source、一次秘密/完成回执、Audit proof、解绑即时失效、发行与解绑真实并发，以及私有表RLS/ACL/FK/index/触发器/函数漂移失败关闭。独立IAM双副本、Audit、PaaS与两个dispatcher的进程门禁183.50秒通过：一个IAM发行，另一个IAM以同一临时身份执行真实Role PDP，两个Account同名资源互不合并；解绑后原凭据401、新发行403，原非秘密回执和`iam.service-role-session.issued`仍进入准确tenant链。固定IAM45 executable产生的数据升级到IAM55、双迁移/bootstrap/重启的唯一前驱门禁111.26秒通过，保留MFA、Session、恢复、Profile及原receipt/canonical/proof。聚焦API/Audit/IAM race、architecture、连续两次生成哈希稳定、全仓`go test -race -count=1 -p 2 ./...`、`go vet -p 2 ./...`、模块校验及Linux amd64全仓构建均已通过。以上是本地候选证据；尚无固定SHA/独立CI，不构成发布profile、跨任意历史版本、真实managedservice数据读取、UI或整体006验收。
+ROLE bearer的同一`POST /v1/auth/role-session:logout`现按公开联合类型同时支持USER或SERVICE来源，但两者仍严格二选一。服务来源退出只接受该会话的一次性秘密，不能由PaaS长期服务凭据、另一会话或调用方selector代替；它只执行不可逆终止，因此来源服务或binding后来失效不阻止销毁已持有凭据。SQL在目标Account及会话原锁序内重新核对准确来源并原子写入`iam.role-session.exited`，actor只含Role、sessionId及sourceServicePrincipalId，不伪造USER，也不重获任何业务权限。服务会话管理员目录及代撤销仍未完成。
+
+当前源码形状仍为IAM55/Audit30/PaaS2；本片替换未发布迁移内的最终函数/事件目录形状，没有新增schema数字或发布兼容声明。独立PG18 Role race门禁59.913秒通过服务来源自退出、准确Audit联合类型及原USER回归；独立IAM双副本、Audit、PaaS与两个dispatcher的真实进程门禁195.488秒通过首个managedservice消费者的60秒会话发行、唯一PDP决定、真实`ServiceInstallation`读取及即时自退出，两个Account的同名资源和会话证据不合并。全仓`go test -race -count=1 -p 2 ./...`、`go vet -p 2 ./...`、模块校验、API生成稳定及Linux amd64全仓构建通过。以上是当前提交候选的本地证据；独立CI、发布profile、服务会话管理员管理、UX/UI和整体006验收均未完成。
 
 ### 来源授权代际：临时撤权不复活
 

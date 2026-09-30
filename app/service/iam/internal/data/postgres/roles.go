@@ -71,9 +71,18 @@ func (value *transaction) ExitRoleSession(ctx context.Context, lookup string, fa
 	if err := value.tx.QueryRow(ctx, "SELECT iam.exit_role_session($1,$2::jsonb)", lookup, event).Scan(&encoded); err != nil {
 		return iamv1.RoleSession{}, mapAuthorizationDatabaseError("exit IAM role session", err)
 	}
-	result, err := decodeRoleSession(encoded, identityaccess.RoleAssumptionRead{AccountID: iamv1.AccountID(fact.TenantID),
-		ActorPrincipalID: iamv1.PrincipalID(fact.Actor.RoleSession.SourceUserID)})
-	if err != nil || result.ID != iamv1.RoleSessionID(fact.Target.ID) || result.RoleID != iamv1.RoleID(fact.Actor.ID) || result.Status != iamv1.SessionRevoked {
+	defer clear(encoded)
+	var result iamv1.RoleSession
+	if iamv1.DecodeRequest(bytes.NewReader(encoded), &result) != nil {
+		return iamv1.RoleSession{}, identityaccess.ErrUnavailable
+	}
+	normalizeRoleSession(&result)
+	if iamv1.ValidateRoleSession(result) != nil || result.AccountID != iamv1.AccountID(fact.TenantID) ||
+		result.ID != iamv1.RoleSessionID(fact.Target.ID) || result.RoleID != iamv1.RoleID(fact.Actor.ID) ||
+		result.Status != iamv1.SessionRevoked || fact.Actor.RoleSession == nil ||
+		result.ID != iamv1.RoleSessionID(fact.Actor.RoleSession.SessionID) ||
+		result.SourceUserID != iamv1.PrincipalID(fact.Actor.RoleSession.SourceUserID) ||
+		result.SourceServicePrincipalID != iamv1.PrincipalID(fact.Actor.RoleSession.SourceServicePrincipalID) {
 		return iamv1.RoleSession{}, identityaccess.ErrUnavailable
 	}
 	return result, nil

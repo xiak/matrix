@@ -60,6 +60,7 @@ func TestManagedServicePostgresJourneyAndTenantIsolation(t *testing.T) {
 	service, err := usecase.NewService(repository, usecase.Config{
 		Catalog:               domain.DefaultCatalog(),
 		WorkloadRoleAuthority: integrationWorkloadRoleBinder{},
+		WorkloadRoleRuntime:   integrationWorkloadRoleBinder{},
 		Region: managedservicev1.Region{
 			ID: "local-primary", DisplayName: "本机主区域",
 			Profile: managedservicev1.RegionLocalMachine,
@@ -233,6 +234,15 @@ func (integrationWorkloadRoleBinder) RevokeWorkloadRole(
 	port.AuthorizationRequest,
 ) (iamv1.WorkloadRoleBinding, error) {
 	return iamv1.WorkloadRoleBinding{}, port.ErrAuthorizationUnavailable
+}
+
+func (integrationWorkloadRoleBinder) AssumeWorkloadRole(
+	context.Context,
+	iamv1.WorkloadRoleBindingID,
+	string,
+	port.WorkloadRoleAuthorizationRequest,
+) (port.WorkloadRoleLease, error) {
+	return nil, port.ErrAuthorizationUnavailable
 }
 
 func integrationRuntimeDSN(t *testing.T, adminDSN, role, password string) string {
