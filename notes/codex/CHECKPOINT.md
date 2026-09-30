@@ -6,8 +6,8 @@
 - Updated: 2026-09-30
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `7f0a45ba`
-- Pushed documentation/head milestone: `5c7b4b66`
+- Pushed source/embed milestone: `35cecbd8`
+- Pushed documentation/head milestone: `6002d5f0`
 
 ## Authoritative route
 
@@ -55,6 +55,13 @@ that conclusion as an issued session or successful business request. It states
 that a revoked exact binding forbids new issuance without promising immediate
 termination of an existing session, and exposes no session ID, credential,
 private issuance/result route, decision evidence or per-session revoke.
+
+That stable summary now precedes three content-area evidence tabs for
+authorization configuration, exact resource bindings and the runtime boundary.
+Only the selected technical region is visible, so the mobile information flow
+does not become one long evidence stream. The tabs are presentation-only: they
+do not refetch, introduce a provider contract or turn an unobserved runtime
+stage into a verified result.
 
 Fixed IAM source `aecc9f1c50f663af9a0bae8198bef0f66c9192af` is classified as
 `REFERENCE` only. It proves the strict USER/SERVICE RoleSession source union,
