@@ -9,7 +9,11 @@ import type {
   ServiceInstallation,
   ServiceOffering
 } from "../domain/resources";
-import type { ControlPlaneRepository } from "./controlPlaneRepository";
+import type {
+  ControlPlaneRepository,
+  ControlPlaneResourceKind,
+  ControlPlaneResourceSnapshot
+} from "./controlPlaneRepository";
 import { httpAccountRepository } from "@/features/auth/repositories/httpIamRepository";
 import {
   isManagedServiceInstallationReader,
@@ -364,20 +368,33 @@ async function inspectServiceAuthorization(
 }
 
 export const httpControlPlaneRepository: ControlPlaneRepository = {
-  async load(credential: string): Promise<ControlPlaneSnapshot> {
+  async load(
+    credential: string,
+    resources: readonly ControlPlaneResourceKind[]
+  ): Promise<ControlPlaneResourceSnapshot> {
     const headers = authorization(credential);
-    const [offerings, regions, entitlements, installations] = await Promise.all([
-      requestJSON<unknown>("/api/managed-services/v1/offerings", { headers }),
-      requestJSON<unknown>("/api/managed-services/v1/regions", { headers }),
-      requestJSON<unknown>("/api/managed-services/v1/quota-entitlements", { headers }),
-      requestJSON<unknown>("/api/managed-services/v1/service-installations", { headers })
-    ]);
-    return {
-      offerings: listItems(offerings, "ServiceOfferingList").map(parseOffering),
-      regions: listItems(regions, "RegionList").map(parseRegion),
-      entitlements: listItems(entitlements, "QuotaEntitlementList").map(parseEntitlement),
-      installations: listItems(installations, "ServiceInstallationList").map(parseInstallation)
+    const readers: Record<ControlPlaneResourceKind, () => Promise<ControlPlaneSnapshot[ControlPlaneResourceKind]>> = {
+      offerings: async () => listItems(
+        await requestJSON<unknown>("/api/managed-services/v1/offerings", { headers }),
+        "ServiceOfferingList"
+      ).map(parseOffering),
+      regions: async () => listItems(
+        await requestJSON<unknown>("/api/managed-services/v1/regions", { headers }),
+        "RegionList"
+      ).map(parseRegion),
+      entitlements: async () => listItems(
+        await requestJSON<unknown>("/api/managed-services/v1/quota-entitlements", { headers }),
+        "QuotaEntitlementList"
+      ).map(parseEntitlement),
+      installations: async () => listItems(
+        await requestJSON<unknown>("/api/managed-services/v1/service-installations", { headers }),
+        "ServiceInstallationList"
+      ).map(parseInstallation)
     };
+    const entries = await Promise.all(resources.map(async (resource) => (
+      [resource, await readers[resource]()] as const
+    )));
+    return Object.fromEntries(entries) as ControlPlaneResourceSnapshot;
   },
 
   async getInstallation(credential, installationId) {

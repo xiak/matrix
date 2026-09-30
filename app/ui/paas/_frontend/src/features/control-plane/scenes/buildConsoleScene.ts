@@ -162,16 +162,15 @@ function isPaaSSection(section: ConsoleSection): boolean {
 
 function navigation(
   section: ConsoleSection,
-  snapshot?: ControlPlaneSnapshot,
   experience?: ExperienceSnapshot,
   view?: ServiceView
 ): ConsoleNavigationItemScene[] {
   if (!experience && section !== "access") {
     return [
-      { id: "catalog", messageKey: "catalog", href: "/console/catalog/", icon: "catalog", selected: section === "catalog", count: snapshot?.offerings.length },
-      { id: "quotas", messageKey: "quotas", href: "/console/quotas/", icon: "quota", selected: section === "quotas", count: snapshot?.entitlements.length },
-      { id: "installations", messageKey: "installations", href: "/console/installations/", icon: "installation", selected: section === "installations", count: snapshot?.installations.length },
-      { id: "regions", messageKey: "regions", href: "/console/regions/", icon: "region", selected: section === "regions", count: snapshot?.regions.length },
+      { id: "catalog", messageKey: "catalog", href: "/console/catalog/", icon: "catalog", selected: section === "catalog" },
+      { id: "quotas", messageKey: "quotas", href: "/console/quotas/", icon: "quota", selected: section === "quotas" },
+      { id: "installations", messageKey: "installations", href: "/console/installations/", icon: "installation", selected: section === "installations" },
+      { id: "regions", messageKey: "regions", href: "/console/regions/", icon: "region", selected: section === "regions" },
       { id: "access", messageKey: "access", href: "/console/access/", icon: "access", selected: false }
     ];
   }
@@ -251,10 +250,10 @@ function baseScene(section: ConsoleSection, experience?: ExperienceSnapshot): Om
 
 // Route-known presentation is available before resource reads; it is not an
 // empty business snapshot and cannot enable a mutation workspace.
-export function buildConsoleFrame({ section, view }: ControlPlaneRouteSelection, experience?: ExperienceSnapshot, snapshot?: ControlPlaneSnapshot): ConsoleFrameScene {
+export function buildConsoleFrame({ section, view }: ControlPlaneRouteSelection, experience?: ExperienceSnapshot): ConsoleFrameScene {
   return {
     ...baseScene(section, experience),
-    navigation: navigation(section, snapshot, experience, view)
+    navigation: navigation(section, experience, view)
   };
 }
 
@@ -361,25 +360,6 @@ function experienceContent(section: ConsoleSection, snapshot: ControlPlaneSnapsh
   return null;
 }
 
-// Preview-owned product data is already authoritative for these workspaces.
-// Project it without waiting for the unrelated managed-service snapshot. The
-// database catalog, quotas, installations and regions still fail closed until
-// their owning provider has returned real data.
-export function buildExperienceConsoleScene(
-  { section, view }: ControlPlaneRouteSelection,
-  experience: ExperienceSnapshot
-): ConsoleScene | null {
-  if (section === "access") return buildAccessConsoleScene(experience, view);
-  const content = experienceContent(section, undefined, experience);
-  if (!content) return null;
-  if (content.kind === "devops" || content.kind === "observability" || content.kind === "logs") content.view = view;
-  return {
-    ...buildConsoleFrame({ section, view }, experience),
-    content,
-    workspace: null
-  };
-}
-
 export function buildConsoleScene(
   section: ConsoleSection,
   snapshot: ControlPlaneSnapshot,
@@ -406,7 +386,7 @@ export function buildConsoleScene(
   if (content.kind === "devops" || content.kind === "observability" || content.kind === "logs") content.view = view;
 
   return {
-    ...buildConsoleFrame({ section, view }, experience, snapshot),
+    ...buildConsoleFrame({ section, view }, experience),
     content,
     workspace: section === "quotas"
       ? {

@@ -4,10 +4,10 @@ import { previewControlPlaneRepository } from "./previewControlPlaneRepository";
 
 describe("previewControlPlaneRepository", () => {
   it("provides a mutable but isolated end-to-end installation journey", async () => {
-    const initial = await previewControlPlaneRepository.load(previewCredential);
-    expect(initial.offerings[0]?.quotaShapes).toHaveLength(3);
-    initial.offerings.length = 0;
-    expect((await previewControlPlaneRepository.load(previewCredential)).offerings).toHaveLength(1);
+    const initial = await previewControlPlaneRepository.load(previewCredential, ["offerings"]);
+    expect(initial.offerings![0]?.quotaShapes).toHaveLength(3);
+    initial.offerings!.length = 0;
+    expect((await previewControlPlaneRepository.load(previewCredential, ["offerings"])).offerings).toHaveLength(1);
 
     const id = "pg-ux-journey";
     const pending = await previewControlPlaneRepository.createInstallation(previewCredential, {
@@ -24,7 +24,15 @@ describe("previewControlPlaneRepository", () => {
   });
 
   it("rejects non-preview credentials", async () => {
-    await expect(previewControlPlaneRepository.load("production-credential"))
+    await expect(previewControlPlaneRepository.load("production-credential", ["offerings"]))
       .rejects.toThrow("INVALID_PREVIEW_CREDENTIAL");
+  });
+
+  it("returns only the resource slices requested by the current page", async () => {
+    const regions = await previewControlPlaneRepository.load(previewCredential, ["regions"]);
+    expect(regions.regions).toHaveLength(2);
+    expect(regions).not.toHaveProperty("offerings");
+    expect(regions).not.toHaveProperty("entitlements");
+    expect(regions).not.toHaveProperty("installations");
   });
 });

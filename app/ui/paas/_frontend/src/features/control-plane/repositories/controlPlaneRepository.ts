@@ -13,8 +13,21 @@ import type {
   UnbindManagedServiceRoleCommand
 } from "../domain/serviceAuthorization";
 
+export const controlPlaneResourceKinds = [
+  "offerings",
+  "regions",
+  "entitlements",
+  "installations"
+] as const;
+
+export type ControlPlaneResourceKind = typeof controlPlaneResourceKinds[number];
+export type ControlPlaneResourceSnapshot = Partial<ControlPlaneSnapshot>;
+
 export interface ControlPlaneRepository {
-  load(credential: string): Promise<ControlPlaneSnapshot>;
+  load(
+    credential: string,
+    resources: readonly ControlPlaneResourceKind[]
+  ): Promise<ControlPlaneResourceSnapshot>;
   getInstallation(credential: string, installationId: string): Promise<ServiceInstallation>;
   activateQuota(
     credential: string,

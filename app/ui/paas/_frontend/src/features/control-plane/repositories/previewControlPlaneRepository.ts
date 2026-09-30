@@ -4,6 +4,7 @@ import type {
   ServiceInstallation
 } from "../domain/resources";
 import type { ControlPlaneRepository } from "./controlPlaneRepository";
+import type { ControlPlaneResourceSnapshot } from "./controlPlaneRepository";
 import { isPreviewCredential } from "@/features/auth/repositories/previewIamRepository";
 
 let entitlementSequence = 3;
@@ -92,8 +93,8 @@ function requirePreviewCredential(credential: string): void {
   if (!isPreviewCredential(credential)) throw new Error("INVALID_PREVIEW_CREDENTIAL");
 }
 
-function copySnapshot(): ControlPlaneSnapshot {
-  return structuredClone(snapshot);
+function copySnapshot(resources: Parameters<ControlPlaneRepository["load"]>[1]): ControlPlaneResourceSnapshot {
+  return Object.fromEntries(resources.map((resource) => [resource, structuredClone(snapshot[resource])])) as ControlPlaneResourceSnapshot;
 }
 
 function currentTime(): string {
@@ -101,9 +102,9 @@ function currentTime(): string {
 }
 
 export const previewControlPlaneRepository: ControlPlaneRepository = {
-  async load(credential) {
+  async load(credential, resources) {
     requirePreviewCredential(credential);
-    return copySnapshot();
+    return copySnapshot(resources);
   },
   async getInstallation(credential, installationId) {
     requirePreviewCredential(credential);

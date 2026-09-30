@@ -91,7 +91,9 @@ function Probe() {
   return (
     <div>
       <button onClick={() => void session.login("admin", "password")} type="button">login</button>
-      <button onClick={() => void controlPlane.prepare()} type="button">prepare services</button>
+      <button onClick={() => void controlPlane.prepare({ section: "catalog" })} type="button">prepare catalog</button>
+      <button onClick={() => void controlPlane.prepare({ section: "regions" })} type="button">prepare regions</button>
+      <button onClick={() => void controlPlane.prepare({ section: "installations" })} type="button">prepare installations</button>
       <span data-testid="phase">{installation?.phase ?? "none"}</span>
       <span data-testid="section">{controlPlane.scene?.section ?? "none"}</span>
       <span data-testid="projections">{JSON.stringify(projections)}</span>
@@ -163,8 +165,11 @@ describe("ControlPlaneProvider", () => {
       "access"
     ]);
     expect(repository.load).toHaveBeenCalledTimes(1);
+    expect(repository.load).toHaveBeenCalledWith("memory-only-session", [
+      "offerings", "regions", "entitlements", "installations"
+    ]);
   });
-  it("keeps IAM independent until product discovery prepares every service from one shared read", async () => {
+  it("keeps IAM independent and incrementally reads only each destination's missing resources", async () => {
     const repository: ControlPlaneRepository = {
       load: vi.fn().mockResolvedValue(snapshot(readyInstallation, 1)),
       getInstallation: vi.fn(),
@@ -191,20 +196,37 @@ describe("ControlPlaneProvider", () => {
     ]);
 
     await act(async () => {
-      fireEvent.click(screen.getByText("prepare services"));
+      fireEvent.click(screen.getByText("prepare catalog"));
       await Promise.resolve();
     });
 
     expect(JSON.parse(screen.getByTestId("projections").textContent ?? "[]")).toEqual([
-      "regions",
+      "none",
       "resources",
-      "installations",
+      "none",
       "logs",
       "devops",
       "observability",
       "access"
     ]);
     expect(repository.load).toHaveBeenCalledTimes(1);
+    expect(repository.load).toHaveBeenLastCalledWith("memory-only-session", ["offerings"]);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("prepare regions"));
+      await Promise.resolve();
+    });
+    expect(repository.load).toHaveBeenLastCalledWith("memory-only-session", ["regions"]);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText("prepare installations"));
+      await Promise.resolve();
+    });
+    expect(JSON.parse(screen.getByTestId("projections").textContent ?? "[]")).toEqual([
+      "regions", "resources", "installations", "logs", "devops", "observability", "access"
+    ]);
+    expect(repository.load).toHaveBeenLastCalledWith("memory-only-session", ["entitlements", "installations"]);
+    expect(repository.load).toHaveBeenCalledTimes(3);
   });
   it("polls only pending installation resources before refreshing terminal quota state", async () => {
     vi.useFakeTimers();
@@ -228,6 +250,9 @@ describe("ControlPlaneProvider", () => {
       await Promise.resolve();
     });
     expect(repository.load).toHaveBeenCalledTimes(1);
+    expect(repository.load).toHaveBeenNthCalledWith(1, "memory-only-session", [
+      "offerings", "regions", "entitlements", "installations"
+    ]);
     expect(screen.getByTestId("phase").textContent).toBe("PENDING");
 
     await act(async () => {
@@ -239,6 +264,7 @@ describe("ControlPlaneProvider", () => {
       "postgres-primary"
     );
     expect(repository.load).toHaveBeenCalledTimes(2);
+    expect(repository.load).toHaveBeenNthCalledWith(2, "memory-only-session", ["entitlements", "installations"]);
     expect(screen.getByTestId("phase").textContent).toBe("READY");
   });
 });

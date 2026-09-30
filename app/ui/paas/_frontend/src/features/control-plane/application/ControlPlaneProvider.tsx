@@ -20,9 +20,13 @@ import type {
 } from "../domain/resources";
 import type { ControlPlaneRouteSelection } from "../domain/selection";
 import type { ManagedServiceAuthorizationLoad } from "../domain/serviceAuthorization";
-import type { ControlPlaneRepository } from "../repositories/controlPlaneRepository";
+import type {
+  ControlPlaneRepository,
+  ControlPlaneResourceKind,
+  ControlPlaneResourceSnapshot
+} from "../repositories/controlPlaneRepository";
 import { httpControlPlaneRepository } from "../repositories/httpControlPlaneRepository";
-import { buildAccessConsoleScene, buildConsoleScene, buildExperienceConsoleScene } from "../scenes/buildConsoleScene";
+import { buildAccessConsoleScene, buildConsoleScene } from "../scenes/buildConsoleScene";
 import type { ConsoleScene } from "../scenes/consoleScene";
 
 type ControlPlaneError = "expired" | "forbidden" | "unavailable";
@@ -32,7 +36,7 @@ type MutationKind = "quota" | "installation" | null;
 type ControlPlaneContextValue = {
   scene: ConsoleScene | null;
   projectScene(selection: ControlPlaneRouteSelection): ConsoleScene | null;
-  prepare(): Promise<void>;
+  prepare(selection: ControlPlaneRouteSelection): Promise<void>;
   loading: boolean;
   error: ControlPlaneError | null;
   mutation: MutationKind;
@@ -43,6 +47,48 @@ type ControlPlaneContextValue = {
 };
 
 const ControlPlaneContext = createContext<ControlPlaneContextValue | null>(null);
+
+const emptySnapshot: ControlPlaneSnapshot = {
+  offerings: [],
+  regions: [],
+  entitlements: [],
+  installations: []
+};
+
+type ControlPlaneCache = {
+  owner: string;
+  snapshot: ControlPlaneSnapshot;
+  loaded: ReadonlySet<ControlPlaneResourceKind>;
+};
+
+function resourcesFor(
+  selection: ControlPlaneRouteSelection,
+  hasExperience: boolean
+): readonly ControlPlaneResourceKind[] {
+  if (selection.section === "access") return [];
+  if (selection.section === "catalog") return ["offerings"];
+  if (selection.section === "quotas") return ["offerings", "entitlements"];
+  if (selection.section === "installations") return ["offerings", "regions", "entitlements", "installations"];
+  if (selection.section === "regions") return ["regions"];
+  if (selection.section === "overview") {
+    return hasExperience ? ["regions"] : ["offerings", "regions", "entitlements", "installations"];
+  }
+  return [];
+}
+
+function mergeResources(
+  current: ControlPlaneSnapshot,
+  loaded: ControlPlaneResourceSnapshot,
+  resources: readonly ControlPlaneResourceKind[]
+): ControlPlaneSnapshot {
+  const next = { ...current };
+  for (const resource of resources) {
+    const values = loaded[resource];
+    if (!values) throw new Error(`INVALID_${resource.toUpperCase()}_RESPONSE`);
+    Object.assign(next, { [resource]: values });
+  }
+  return next;
+}
 
 function loadMessage(error: unknown): ControlPlaneError {
   if (error instanceof HttpProblem && error.status === 401) {
@@ -67,89 +113,144 @@ export function ControlPlaneProvider({
 }) {
   const credential = useEffectiveCredential();
   const isAccess = selection.section === "access";
-  const [snapshot, setSnapshot] = useState<ControlPlaneSnapshot | null>(null);
-  const [snapshotOwner, setSnapshotOwner] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [cache, setCache] = useState<ControlPlaneCache | null>(null);
+  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<ControlPlaneError | null>(null);
   const [mutation, setMutation] = useState<MutationKind>(null);
-  const snapshotRef = useRef<ControlPlaneSnapshot | null>(null);
-  const snapshotOwnerRef = useRef<string | null>(null);
-  const inFlight = useRef<Promise<ControlPlaneSnapshot> | null>(null);
-  const inFlightOwner = useRef<string | null>(null);
-  const loadRevision = useRef(0);
+  const cacheRef = useRef<ControlPlaneCache | null>(null);
+  const inFlight = useRef(new Map<ControlPlaneResourceKind, { owner: string; promise: Promise<void> }>());
+  const prepareRevision = useRef(0);
 
-  useEffect(() => { snapshotRef.current = snapshot; }, [snapshot]);
+  const commitResources = useCallback((
+    owner: string,
+    resources: readonly ControlPlaneResourceKind[],
+    loaded: ControlPlaneResourceSnapshot
+  ) => {
+    const current = cacheRef.current;
+    if (!current || current.owner !== owner) return;
+    const next: ControlPlaneCache = {
+      owner,
+      snapshot: mergeResources(current.snapshot, loaded, resources),
+      loaded: new Set([...current.loaded, ...resources])
+    };
+    cacheRef.current = next;
+    setCache(next);
+  }, []);
 
-  const loadSnapshot = useCallback(async (force: boolean) => {
-    // Keep both route effects and pointer handlers responsive; state changes
-    // belong to the asynchronous provider read, never the caller's render.
+  const readResources = useCallback(async (
+    resources: readonly ControlPlaneResourceKind[],
+    force: boolean
+  ) => {
+    if (!credential || resources.length === 0) return;
+    let current = cacheRef.current;
+    if (!current || current.owner !== credential) {
+      current = { owner: credential, snapshot: emptySnapshot, loaded: new Set() };
+      cacheRef.current = current;
+      setCache(current);
+      inFlight.current.clear();
+    }
+
+    const waits = new Set<Promise<void>>();
+    const missing: ControlPlaneResourceKind[] = [];
+    for (const resource of resources) {
+      if (!force && current.loaded.has(resource)) continue;
+      const pending = !force ? inFlight.current.get(resource) : undefined;
+      if (pending?.owner === credential) waits.add(pending.promise);
+      else missing.push(resource);
+    }
+
+    if (missing.length > 0) {
+      const request = repository.load(credential, missing)
+        .then((loaded) => commitResources(credential, missing, loaded))
+        .finally(() => {
+          for (const resource of missing) {
+            if (inFlight.current.get(resource)?.promise === request) inFlight.current.delete(resource);
+          }
+        });
+      for (const resource of missing) inFlight.current.set(resource, { owner: credential, promise: request });
+      waits.add(request);
+    }
+    await Promise.all(waits);
+  }, [commitResources, credential, repository]);
+
+  const prepare = useCallback(async (target: ControlPlaneRouteSelection) => {
+    // Route chrome and preview-owned content render synchronously. Only the
+    // target's server-owned data regions participate in this asynchronous read.
     await Promise.resolve();
-    if (!credential) {
-      loadRevision.current += 1;
-      snapshotRef.current = null;
-      snapshotOwnerRef.current = null;
-      inFlight.current = null;
-      inFlightOwner.current = null;
-      setSnapshot(null);
-      setSnapshotOwner(null);
+    const revision = ++prepareRevision.current;
+    const resources = resourcesFor(target, Boolean(experience));
+    if (!credential || resources.length === 0) {
+      if (revision === prepareRevision.current) {
+        setError(null);
+        setLoading(false);
+      }
+      return;
+    }
+    const current = cacheRef.current;
+    if (current?.owner === credential && resources.every((resource) => current.loaded.has(resource))) {
+      if (revision === prepareRevision.current) {
+        setError(null);
+        setLoading(false);
+      }
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    try {
+      await readResources(resources, false);
+      if (revision === prepareRevision.current) setError(null);
+    } catch (loadError) {
+      if (revision === prepareRevision.current) setError(loadMessage(loadError));
+    } finally {
+      if (revision === prepareRevision.current) setLoading(false);
+    }
+  }, [credential, experience, readResources]);
+
+  const reload = useCallback(async () => {
+    const revision = ++prepareRevision.current;
+    const resources = resourcesFor(selection, Boolean(experience));
+    if (!credential || resources.length === 0) {
+      setError(null);
       setLoading(false);
       return;
     }
-    if (!force && snapshotOwnerRef.current === credential && snapshotRef.current) return;
-    if (!force && inFlightOwner.current === credential && inFlight.current) {
-      await inFlight.current.catch(() => undefined);
-      return;
-    }
-    const revision = ++loadRevision.current;
     setLoading(true);
     setError(null);
-    const request = repository.load(credential);
-    inFlight.current = request;
-    inFlightOwner.current = credential;
     try {
-      const loaded = await request;
-      if (revision !== loadRevision.current) return;
-      snapshotRef.current = loaded;
-      snapshotOwnerRef.current = credential;
-      setSnapshot(loaded);
-      setSnapshotOwner(credential);
-      setError(null);
+      await readResources(resources, true);
+      if (revision === prepareRevision.current) setError(null);
     } catch (loadError) {
-      if (revision !== loadRevision.current) return;
-      snapshotRef.current = null;
-      snapshotOwnerRef.current = null;
-      setSnapshot(null);
-      setSnapshotOwner(null);
-      setError(loadMessage(loadError));
+      if (revision === prepareRevision.current) setError(loadMessage(loadError));
     } finally {
-      if (revision === loadRevision.current) {
-        inFlight.current = null;
-        inFlightOwner.current = null;
-        setLoading(false);
-      }
+      if (revision === prepareRevision.current) setLoading(false);
     }
-  }, [credential, repository]);
-
-  const prepare = useCallback(() => loadSnapshot(false), [loadSnapshot]);
-
-  const reload = useCallback(async () => {
-    await loadSnapshot(true);
-  }, [loadSnapshot]);
+  }, [credential, experience, readResources, selection]);
 
   useEffect(() => {
-    if (!credential || isAccess) return;
+    if (credential && cacheRef.current?.owner === credential) return;
+    prepareRevision.current += 1;
+    cacheRef.current = null;
+    inFlight.current.clear();
+    setCache(null);
+    setError(null);
+    setLoading(false);
+  }, [credential]);
+
+  useEffect(() => {
     let active = true;
-    queueMicrotask(() => { if (active) void prepare(); });
+    const target = { section: selection.section, view: selection.view };
+    queueMicrotask(() => { if (active) void prepare(target); });
     return () => { active = false; };
-  }, [credential, isAccess, prepare]);
+  }, [prepare, selection.section, selection.view]);
 
-  const ownedSnapshot = snapshotOwner === credential ? snapshot : null;
+  const ownedCache = cache?.owner === credential ? cache : null;
 
   useEffect(() => {
-    if (!credential || isAccess) return;
-    const pending = ownedSnapshot?.installations.filter(
+    if (!credential || selection.section !== "installations") return;
+    if (!ownedCache?.loaded.has("installations")) return;
+    const pending = ownedCache.snapshot.installations.filter(
       (item) => item.phase === "PENDING" || item.phase === "PROVISIONING"
-    ) ?? [];
+    );
     if (pending.length === 0) return;
     let active = true;
     const timer = window.setTimeout(() => {
@@ -161,20 +262,24 @@ export function ControlPlaneProvider({
           if (!active) return;
           setError(null);
           const byId = new Map(updates.map((item) => [item.id, item]));
-          setSnapshot((current) => current ? {
-            ...current,
-            installations: current.installations.map((item) => byId.get(item.id) ?? item)
-          } : current);
+          const current = cacheRef.current;
+          if (current?.owner === credential) {
+            const next = {
+              ...current,
+              snapshot: {
+                ...current.snapshot,
+                installations: current.snapshot.installations.map((item) => byId.get(item.id) ?? item)
+              }
+            };
+            cacheRef.current = next;
+            setCache(next);
+          }
           if (!updates.some((item) => item.phase === "READY" || item.phase === "FAILED")) {
             return;
           }
-          const refreshed = await repository.load(credential);
-          if (active) {
-            snapshotRef.current = refreshed;
-            snapshotOwnerRef.current = credential;
-            setSnapshot(refreshed);
-            setSnapshotOwner(credential);
-          }
+          const refreshedResources = ["entitlements", "installations"] as const;
+          const refreshed = await repository.load(credential, refreshedResources);
+          if (active) commitResources(credential, refreshedResources, refreshed);
         } catch (pollError: unknown) {
           if (active) setError(loadMessage(pollError));
         }
@@ -184,7 +289,7 @@ export function ControlPlaneProvider({
       active = false;
       window.clearTimeout(timer);
     };
-  }, [credential, isAccess, ownedSnapshot, repository]);
+  }, [commitResources, credential, ownedCache, repository, selection.section]);
 
   const activateQuota = useCallback(async (command: ActivateQuotaCommand) => {
     if (!credential) return false;
@@ -192,10 +297,18 @@ export function ControlPlaneProvider({
     setError(null);
     try {
       const entitlement = await repository.activateQuota(credential, command);
-      setSnapshot((current) => current ? {
-        ...current,
-        entitlements: [...current.entitlements.filter((item) => item.id !== entitlement.id), entitlement]
-      } : current);
+      const current = cacheRef.current;
+      if (current?.owner === credential) {
+        const next = {
+          ...current,
+          snapshot: {
+            ...current.snapshot,
+            entitlements: [...current.snapshot.entitlements.filter((item) => item.id !== entitlement.id), entitlement]
+          }
+        };
+        cacheRef.current = next;
+        setCache(next);
+      }
       return true;
     } catch (mutationError) {
       setError(loadMessage(mutationError));
@@ -211,10 +324,18 @@ export function ControlPlaneProvider({
     setError(null);
     try {
       const installation = await repository.createInstallation(credential, command);
-      setSnapshot((current) => current ? {
-        ...current,
-        installations: [...current.installations.filter((item) => item.id !== installation.id), installation]
-      } : current);
+      const current = cacheRef.current;
+      if (current?.owner === credential) {
+        const next = {
+          ...current,
+          snapshot: {
+            ...current.snapshot,
+            installations: [...current.snapshot.installations.filter((item) => item.id !== installation.id), installation]
+          }
+        };
+        cacheRef.current = next;
+        setCache(next);
+      }
       return true;
     } catch (mutationError) {
       setError(loadMessage(mutationError));
@@ -238,19 +359,18 @@ export function ControlPlaneProvider({
     }
   }, [credential, repository]);
 
-  // The repository snapshot is product-wide. A route transition may project a
-  // destination from that already-authoritative cache without issuing another
-  // read. Preview-only products can also project from their own fixed snapshot;
-  // managed-service products remain unavailable until prepare() completes.
-  const projectScene = useCallback((target: ControlPlaneRouteSelection): ConsoleScene | null => (
-    target.section === "access"
-      ? buildAccessConsoleScene(experience, target.view)
-      : ownedSnapshot
-        ? buildConsoleScene(target.section, ownedSnapshot, experience, target.view)
-        : experience
-          ? buildExperienceConsoleScene(target, experience)
-          : null
-  ), [experience, ownedSnapshot]);
+  const projectScene = useCallback((target: ControlPlaneRouteSelection): ConsoleScene | null => {
+    if (target.section === "access") return buildAccessConsoleScene(experience, target.view);
+    const resources = resourcesFor(target, Boolean(experience));
+    const targetCache = ownedCache;
+    if (!resources.every((resource) => targetCache?.loaded.has(resource))) return null;
+    return buildConsoleScene(
+      target.section,
+      targetCache?.snapshot ?? emptySnapshot,
+      experience,
+      target.view
+    );
+  }, [experience, ownedCache]);
   const scene = useMemo(
     () => projectScene({ section: selection.section, view: selection.view }),
     [projectScene, selection.section, selection.view]
@@ -260,13 +380,13 @@ export function ControlPlaneProvider({
     projectScene,
     prepare,
     loading,
-    error: isAccess ? null : error,
+    error: isAccess || resourcesFor(selection, Boolean(experience)).length === 0 ? null : error,
     mutation,
     reload,
     activateQuota,
     createInstallation,
     inspectServiceAuthorization
-  }), [activateQuota, createInstallation, error, inspectServiceAuthorization, isAccess, loading, mutation, prepare, projectScene, reload, scene]);
+  }), [activateQuota, createInstallation, error, experience, inspectServiceAuthorization, isAccess, loading, mutation, prepare, projectScene, reload, scene, selection]);
 
   return (
     <ControlPlaneContext.Provider value={value}>

@@ -151,7 +151,9 @@ async function renderConsole({
   );
   await user.type(screen.getByLabelText("密码", { exact: true }), "renderer-test-password");
   await user.click(screen.getByRole("button", { name: "登录控制台" }));
-  if (section !== "access") await waitFor(() => expect(load).toHaveBeenCalled());
+  if (["overview", "catalog", "quotas", "installations", "regions"].includes(section)) {
+    await waitFor(() => expect(load).toHaveBeenCalled());
+  }
   if (openWorkspace) await user.click(await screen.findByRole("button", { name: section === "quotas" ? "激活配额" : section === "installations" ? "安装服务" : "查看平台状态" }));
   const loginDestination = navigation.replace.mock.calls.at(-1)?.[0];
   navigation.replace.mockClear();
@@ -474,13 +476,13 @@ describe("ConsoleShellRenderer", () => {
   });
 
   it.each([
-    { href: "/console/regions/", service: /区域与节点/, title: "区域与节点", marker: { role: "text", name: "本机主区域" } },
-    { href: "/console/applications/", service: /应用托管/, title: "应用服务", marker: { role: "table", name: "统一资源列表" } },
-    { href: "/console/installations/", service: /云数据库 PostgreSQL/, title: "数据库实例", marker: { role: "heading", name: "组织服务实例" } },
-    { href: "/console/logs/", service: /日志服务/, title: "日志概览", marker: { role: "text", name: "Matrix · Log Service" } },
-    { href: "/console/devops/", service: /研发效能 DevOps/, title: "交付总览", marker: { role: "heading", name: "最近流水线" } },
-    { href: "/console/observability/", service: /云监控/, title: "监控总览", marker: { role: "heading", name: "服务健康" } }
-  ] as const)("opens the $title service frame immediately while its route bundle is pending", async ({ href, marker, service, title: expectedTitle }) => {
+    { href: "/console/regions/", service: /区域与节点/, title: "区域与节点", reads: 1, marker: { role: "text", name: "本机主区域" } },
+    { href: "/console/applications/", service: /应用托管/, title: "应用服务", reads: 0, marker: { role: "table", name: "统一资源列表" } },
+    { href: "/console/installations/", service: /云数据库 PostgreSQL/, title: "数据库实例", reads: 1, marker: { role: "heading", name: "组织服务实例" } },
+    { href: "/console/logs/", service: /日志服务/, title: "日志概览", reads: 0, marker: { role: "text", name: "Matrix · Log Service" } },
+    { href: "/console/devops/", service: /研发效能 DevOps/, title: "交付总览", reads: 0, marker: { role: "heading", name: "最近流水线" } },
+    { href: "/console/observability/", service: /云监控/, title: "监控总览", reads: 0, marker: { role: "heading", name: "服务健康" } }
+  ] as const)("opens the $title service frame immediately while its route bundle is pending", async ({ href, marker, reads, service, title: expectedTitle }) => {
     let release!: () => void;
     const heldRoute = { href, ready: false, promise: new Promise<void>(resolve => { release = resolve; }) };
     const { user, repository } = await renderConsole({ section: "resources", experience: previewExperienceSnapshot, heldRoute });
@@ -497,28 +499,31 @@ describe("ConsoleShellRenderer", () => {
     expect(title).toBe(document.activeElement);
     expect(screen.getByRole("navigation", { name: "控制台导航" })).toBe(menu);
     expect(screen.queryByRole("link", { name: "订单主库" })).toBeNull();
-    expect(oldResource.isConnected).toBe(false);
-    const destination = marker.role === "table"
-      ? screen.getByRole("table", { name: marker.name })
+    if (reads === 0) expect(oldResource.isConnected).toBe(false);
+    else expect(oldResource.closest("[hidden]")).toBeTruthy();
+    const findDestination = () => marker.role === "table"
+      ? screen.findByRole("table", { name: marker.name })
       : marker.role === "heading"
-        ? screen.getByRole("heading", { level: 2, name: marker.name })
-        : screen.getByText(marker.name);
-    expect(destination.closest("[inert]")).toBeTruthy();
+        ? screen.findByRole("heading", { level: 2, name: marker.name })
+        : screen.findByText(marker.name);
+    const destination = await findDestination();
+    if (reads === 0) expect(destination.closest("[inert]")).toBeTruthy();
     expect(destination.closest("[hidden]")).toBeNull();
     expect(screen.queryByText(`正在打开${expectedTitle}…`)).toBeNull();
     accountMenuRender.mockClear();
     expect(accountMenuRender).not.toHaveBeenCalled();
     expect(screen.getByLabelText("全局导航")).toBe(header);
-    expect(repository.load).toHaveBeenCalledTimes(1);
+    expect(repository.load).toHaveBeenCalledTimes(reads);
 
     await act(async () => { heldRoute.ready = true; release(); });
     expect(screen.getByRole("heading", { level: 1, name: expectedTitle })).toBe(title);
-    await waitFor(() => expect(destination.closest("[inert]")).toBeNull());
+    const committedDestination = await findDestination();
+    await waitFor(() => expect(committedDestination.closest("[inert]")).toBeNull());
     expect(title).toBe(document.activeElement);
-    expect(destination.isConnected).toBe(true);
+    expect(committedDestination.isConnected).toBe(true);
     expect(screen.queryByRole("progressbar")).toBeNull();
     expect(screen.getByLabelText("全局导航")).toBe(header);
-    expect(repository.load).toHaveBeenCalledTimes(1);
+    expect(repository.load).toHaveBeenCalledTimes(reads);
   });
 
   it("uses the same cached transition between pages of one database service", async () => {
@@ -579,9 +584,8 @@ describe("ConsoleShellRenderer", () => {
   });
 
   it("projects preview-owned service content immediately when navigation starts from IAM", async () => {
-    let resolveSnapshot!: (value: ControlPlaneSnapshot) => void;
     let releaseRoute!: () => void;
-    const load = vi.fn(() => new Promise<ControlPlaneSnapshot>((resolve) => { resolveSnapshot = resolve; }));
+    const load = vi.fn().mockResolvedValue(snapshot);
     const heldRoute = { href: "/console/logs/", ready: false, promise: new Promise<void>((resolve) => { releaseRoute = resolve; }) };
     const { user } = await renderConsole({
       accountRepository: previewAccountRepository,
@@ -599,7 +603,7 @@ describe("ConsoleShellRenderer", () => {
     expect(load).not.toHaveBeenCalled();
     expect(contentRender).not.toHaveBeenCalled();
     fireEvent.click(within(screen.getByRole("dialog", { name: "云产品入口" })).getByRole("link", { name: /日志服务/ }));
-    await waitFor(() => expect(load).toHaveBeenCalledTimes(1));
+    expect(load).not.toHaveBeenCalled();
 
     expect(screen.getByRole("heading", { level: 1, name: "日志概览" })).toBeTruthy();
     expect(screen.getByText("Matrix · Log Service").closest("[inert]")).toBeTruthy();
@@ -607,8 +611,7 @@ describe("ConsoleShellRenderer", () => {
 
     await act(async () => { heldRoute.ready = true; releaseRoute(); });
     await waitFor(() => expect(screen.getByText("Matrix · Log Service").closest("[inert]")).toBeNull());
-    await act(async () => resolveSnapshot(snapshot));
-    expect(load).toHaveBeenCalledTimes(1);
+    expect(load).not.toHaveBeenCalled();
   });
 
   it("keeps the database page structure stable while destination data is still pending", async () => {

@@ -19,6 +19,48 @@ afterEach(() => {
 });
 
 describe("httpControlPlaneRepository", () => {
+  it("reads only the resource slice requested by the destination page", async () => {
+    const fetchMock = vi.fn(async (path: string) => {
+      if (path !== "/api/managed-services/v1/offerings") {
+        return new Response(JSON.stringify({ code: "FORBIDDEN" }), { status: 403 });
+      }
+      return jsonResponse({
+        kind: "ServiceOfferingList",
+        items: [{
+          id: "postgresql-18",
+          kind: "POSTGRESQL",
+          displayName: "PostgreSQL 18",
+          description: "Managed PostgreSQL",
+          engineFamily: "PostgreSQL",
+          engineVersion: "18",
+          state: "AVAILABLE",
+          quotaShapes: []
+        }]
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await httpControlPlaneRepository.load("memory-only-session", ["offerings"]);
+
+    expect(result.offerings).toHaveLength(1);
+    expect(result).not.toHaveProperty("regions");
+    expect(result).not.toHaveProperty("entitlements");
+    expect(result).not.toHaveProperty("installations");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/managed-services/v1/offerings",
+      expect.objectContaining({ headers: expect.objectContaining({ Authorization: "Bearer memory-only-session" }) })
+    );
+  });
+
+  it("performs no HTTP request for a page without server-owned resource regions", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(httpControlPlaneRepository.load("memory-only-session", [])).resolves.toEqual({});
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("reads one installation through its encoded resource route", async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       id: "postgres-primary",

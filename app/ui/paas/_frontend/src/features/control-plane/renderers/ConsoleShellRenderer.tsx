@@ -284,7 +284,7 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
   // destination owns preparation, including favorites, search and direct links.
   useEffect(() => {
     if (!pendingSelection || pendingSelection.section === "access") return;
-    void prepareControlPlane();
+    void prepareControlPlane(pendingSelection);
   }, [pendingSelection, prepareControlPlane]);
 
   useEffect(() => {
