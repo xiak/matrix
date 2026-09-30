@@ -99,6 +99,22 @@ const templates: ServiceRoleTemplateDirectory = { items: [{
   },
   status: "ACTIVE"
 }] };
+const templatesWithRetired: ServiceRoleTemplateDirectory = { items: [...templates.items, {
+  ...templateReference,
+  id: "audit.export-reviewer",
+  version: 2,
+  contentDigest: digest("d"),
+  spec: {
+    product: "audit",
+    servicePurpose: "AUDIT",
+    roleName: "AuditExportReviewer",
+    roleDescription: "Reviews an immutable audit export snapshot.",
+    policyVersion: { policyId: "system.audit-export-reviewer", versionId: "version-audit-export-reviewer-v2", contentDigest: digest("e") },
+    workloads: [{ resourceKind: "AUDIT_EXPORT", bindAction: "audit.export.bind-service-role", unbindAction: "audit.export.unbind-service-role" }],
+    maxSessionDurationSeconds: 900
+  },
+  status: "RETIRED"
+}] };
 
 afterEach(cleanup);
 
@@ -155,7 +171,7 @@ describe("AccountServiceAuthorizations", () => {
       list: vi.fn().mockResolvedValue({ status: "ready", directory }),
       read: vi.fn()
     };
-    const templateClient: ServiceRoleTemplateClient = { sessionRevision: 1, load: vi.fn().mockResolvedValue({ status: "ready", directory: templates }) };
+    const templateClient: ServiceRoleTemplateClient = { sessionRevision: 1, load: vi.fn().mockResolvedValue({ status: "ready", directory: templatesWithRetired }) };
     const user = userEvent.setup();
     render(<LocaleProvider><AccountServiceAuthorizations relations={relations} templates={templateClient} onBack={vi.fn()} /></LocaleProvider>);
     await screen.findByRole("table", { name: "当前账号服务授权关系" });
@@ -165,8 +181,53 @@ describe("AccountServiceAuthorizations", () => {
     const table = await screen.findByRole("table", { name: "服务授权模板目录" });
     expect(templateClient.load).toHaveBeenCalledTimes(1);
     expect(within(table).getByText("ManagedServiceInstallationReader")).toBeTruthy();
-    expect(within(table).getByText("非账号授权状态")).toBeTruthy();
+    expect(within(table).getByText("AuditExportReviewer")).toBeTruthy();
+    expect(within(table).getAllByText("非账号授权状态")).toHaveLength(2);
+    expect(screen.getByText("显示 2 / 2 个模板")).toBeTruthy();
+
+    const search = screen.getByRole("searchbox", { name: "搜索模板、产品、角色或工作负载类型" });
+    await user.type(search, "AuditExportReviewer");
+    expect(within(screen.getByRole("table", { name: "服务授权模板目录" })).queryByText("ManagedServiceInstallationReader")).toBeNull();
+    expect(screen.getByText("显示 1 / 2 个模板")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "清空搜索" }));
+    await user.click(screen.getByRole("button", { name: "筛选" }));
+    await user.click(screen.getByRole("combobox", { name: "模板状态" }));
+    await user.click(screen.getByRole("option", { name: "已停止新授权" }));
+    expect(within(screen.getByRole("table", { name: "服务授权模板目录" })).queryByText("ManagedServiceInstallationReader")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "移除筛选：模板状态: 已停止新授权" }));
+    await user.type(search, "missing-template");
+    expect(screen.getByRole("heading", { name: "没有匹配的服务授权模板" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "重置查询" }));
+    expect(screen.getByRole("table", { name: "服务授权模板目录" })).toBeTruthy();
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("bounds a complete platform template snapshot with shared pagination and resets search to page one", async () => {
+    const base = templates.items[0]!;
+    const manyTemplates: ServiceRoleTemplateDirectory = { items: Array.from({ length: 25 }, (_, index) => ({
+      ...base,
+      id: `managedservice.template-${index}`,
+      spec: { ...base.spec, roleName: `ManagedServiceRole${index}` }
+    })) };
+    const templateClient: ServiceRoleTemplateClient = { sessionRevision: 1, load: vi.fn().mockResolvedValue({ status: "ready", directory: manyTemplates }) };
+    const user = userEvent.setup();
+    render(<LocaleProvider><AccountServiceAuthorizations relations={null} templates={templateClient} onBack={vi.fn()} /></LocaleProvider>);
+
+    let table = await screen.findByRole("table", { name: "服务授权模板目录" });
+    expect(within(table).getAllByRole("row")).toHaveLength(11);
+    expect(within(table).getByRole("button", { name: "managedservice.template-0" })).toBeTruthy();
+    expect(within(table).queryByRole("button", { name: "managedservice.template-10" })).toBeNull();
+    expect(screen.getByText("第 1 / 3 页")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "下一页" }));
+    table = screen.getByRole("table", { name: "服务授权模板目录" });
+    expect(within(table).getByRole("button", { name: "managedservice.template-10" })).toBeTruthy();
+    expect(within(table).queryByRole("button", { name: "managedservice.template-0" })).toBeNull();
+
+    await user.type(screen.getByRole("searchbox", { name: "搜索模板、产品、角色或工作负载类型" }), "template-24");
+    table = screen.getByRole("table", { name: "服务授权模板目录" });
+    expect(within(table).getByRole("button", { name: "managedservice.template-24" })).toBeTruthy();
+    expect(screen.getByText("第 1 / 1 页")).toBeTruthy();
   });
 
   it("localizes relation authorization failure and retries without MOCK fallback", async () => {

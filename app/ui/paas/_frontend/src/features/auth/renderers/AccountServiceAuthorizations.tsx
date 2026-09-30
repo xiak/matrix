@@ -1,8 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Alert, Badge, Button, Card, ContentPage, EmptyState, Table, TablePagination, TableSkeleton, Tabs } from "@ui/xiak";
+import { Alert, Badge, Button, Card, ContentPage, EmptyState, Table, TablePagination, TableSkeleton, TableToolbar, Tabs } from "@ui/xiak";
+import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import type {
   ServiceLinkedRoleAccessLoad,
   ServiceLinkedRoleClient,
@@ -183,7 +184,15 @@ function TemplateDetail({ template, onBack }: { template: ServiceRoleTemplate; o
 
 function TemplateDirectory({ client, onOpen }: { client: ServiceRoleTemplateClient; onOpen(template: ServiceRoleTemplate, trigger: HTMLButtonElement): void }) {
   const t = useTranslations("ServiceRoleTemplateDirectory");
+  const w = useTranslations("IamWorkspace");
+  const toolbarLabels = useTableToolbarLabels();
   const [state, setState] = useState<TemplateState>({ status: "loading" });
+  const [query, setQuery] = useState("");
+  const deferredQuery = useDeferredValue(query);
+  const [purpose, setPurpose] = useState<"all" | ServiceRoleTemplate["spec"]["servicePurpose"]>("all");
+  const [status, setStatus] = useState<"all" | ServiceRoleTemplate["status"]>("all");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
   const request = useRef(0);
   const retry = useCallback(() => {
     const revision = ++request.current;
@@ -195,24 +204,50 @@ function TemplateDirectory({ client, onOpen }: { client: ServiceRoleTemplateClie
     client.load().then((result) => { if (request.current === revision) setState(result); });
     return () => { request.current += 1; };
   }, [client]);
+  const filtered = useMemo(() => {
+    if (state.status !== "ready") return [];
+    const needle = deferredQuery.trim().toLocaleLowerCase();
+    return state.directory.items.filter((template) => {
+      if (purpose !== "all" && template.spec.servicePurpose !== purpose) return false;
+      if (status !== "all" && template.status !== status) return false;
+      if (!needle) return true;
+      return [template.id, template.spec.product, template.spec.roleName, template.spec.roleDescription,
+        template.spec.policyVersion.policyId, ...template.spec.workloads.map((workload) => workload.resourceKind)]
+        .some((value) => value.toLocaleLowerCase().includes(needle));
+    });
+  }, [deferredQuery, purpose, state, status]);
+  const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const currentPage = Math.min(page, pages);
+  const visible = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const resetQuery = () => { setQuery(""); setPurpose("all"); setStatus("all"); setPage(1); };
 
   return <section className={styles.stack} aria-labelledby="service-role-template-directory-title">
     <div><h3 className={styles.detailTitle} id="service-role-template-directory-title">{t("title")}</h3><p className={styles.note}>{t("directoryHint")}</p></div>
     <Alert>{t("boundary")}</Alert>
+    <TableToolbar labels={toolbarLabels}
+      search={{ label: t("search"), value: query, onChange: (value) => { setQuery(value); setPage(1); } }}
+      filters={[
+        { id: "purpose", label: t("purposeFilter"), value: purpose, defaultValue: "all", onChange: (value) => { setPurpose(value as typeof purpose); setPage(1); }, options: [{ value: "all", label: t("allPurposes") }, ...(["IAM", "PAAS", "AUDIT", "INSTALLATION_VERIFIER"] as const).map((value) => ({ value, label: t(`purposes.${value}`) }))] },
+        { id: "status", label: t("stateFilter"), value: status, defaultValue: "all", onChange: (value) => { setStatus(value as typeof status); setPage(1); }, options: [{ value: "all", label: t("allStates") }, ...(["ACTIVE", "RETIRED"] as const).map((value) => ({ value, label: t(`states.${value}`) }))] }
+      ]}
+      status={state.status === "ready" ? query !== deferredQuery ? t("filtering") : t("resultCount", { count: filtered.length, total: state.directory.items.length }) : state.status === "loading" ? t("loading") : undefined} />
     {state.status === "loading" ? <TableSkeleton label={t("loading")} rows={4} /> : null}
     {state.status !== "loading" && state.status !== "ready" ? <LoadFailure status={state.status} retry={retry} scope="templates" /> : null}
     {state.status === "ready" ? <>
-      {state.directory.items.length ? <Table aria-label={t("tableLabel")} mobileLayout="stack">
+      {filtered.length ? <Table aria-label={t("tableLabel")} aria-busy={query !== deferredQuery || undefined} mobileLayout="stack">
         <thead><tr><th scope="col">{t("fields.template")}</th><th scope="col">{t("fields.roleName")}</th><th scope="col">{t("fields.workloadKinds")}</th><th scope="col">{t("fields.policySnapshot")}</th><th scope="col">{t("fields.templateState")}</th></tr></thead>
-        <tbody>{state.directory.items.map((template) => <tr key={template.id}>
+        <tbody>{visible.map((template) => <tr key={template.id}>
           <td data-label={t("fields.template")}><button className={styles.userLink} onClick={(event) => onOpen(template, event.currentTarget)}>{template.id}</button><small>v{template.version} · <code>{template.spec.product}</code></small></td>
           <td data-label={t("fields.roleName")}><code>{template.spec.roleName}</code><small>{template.spec.roleDescription}</small></td>
           <td data-label={t("fields.workloadKinds")}><div className={styles.roleTags}>{template.spec.workloads.map((workload) => <Badge key={workload.resourceKind}>{workload.resourceKind}</Badge>)}</div></td>
           <td data-label={t("fields.policySnapshot")}><code>{template.spec.policyVersion.policyId}</code><small>{template.spec.policyVersion.versionId}</small></td>
           <td data-label={t("fields.templateState")}><Badge status={template.status === "ACTIVE" ? "success" : "neutral"}>{t(`states.${template.status}`)}</Badge><small>{t("notAccountState")}</small></td>
         </tr>)}</tbody>
-      </Table> : <EmptyState title={t("emptyTitle")} description={t("emptyDescription")} />}
-      <Table.Footer note={t("footerNote")} />
+      </Table> : <EmptyState title={state.directory.items.length ? t("noMatchesTitle") : t("emptyTitle")} description={state.directory.items.length ? t("noMatchesDescription") : t("emptyDescription")}
+        action={state.directory.items.length ? <Button variant="secondary" onClick={resetQuery}>{toolbarLabels.resetQuery}</Button> : undefined} />}
+      {filtered.length ? <Table.Footer note={t("footerNote")}><TablePagination page={currentPage} pages={pages} pageSize={pageSize}
+        onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
+        labels={{ summary: w("page", { page: currentPage, pages }), pageSize: w("pageSize"), previous: w("previous"), next: w("next") }} /></Table.Footer> : null}
     </> : null}
   </section>;
 }
