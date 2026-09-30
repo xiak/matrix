@@ -6,8 +6,8 @@
 - Updated: 2026-09-30
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `99dca970`
-- Pushed documentation head: `10eb45ea`
+- Pushed UI source: `8f0ca4c3`
+- Pushed documentation head: `60e094a5`
 
 ## Authoritative route
 
@@ -118,29 +118,28 @@ content geometry. Verified scene refresh continues to keep current content.
 This is shared loading behavior, not a new data model or LIVE acceptance, and
 the independent MOCK entry remains available for inspection.
 
-The service-authorization MOCK still separates platform-template publication,
+The service-authorization MOCK separates platform-template publication,
 current-Account consent, the service-linked Role relation and each exact
-workload binding. LIVE Roles now additionally expose a lazy, read-only platform
+workload binding. LIVE Roles additionally expose a lazy, read-only platform
 template directory from the fixed `GET /v1/service-role-templates` contract.
-Its closed decoder and content-area workflow show immutable template/policy
-facts without treating `ACTIVE` as Account authorization; denial and route
-failure stay local and never fall back to MOCK. LIVE and MOCK template details
-now reuse one three-stage authorization-chain component; platform template,
-Account consent and exact workload binding display only their own observed or
-explicitly illustrative status, so no later fact is inferred from an earlier
-one. The isolated managed-service instance directory now demonstrates the
+Its closed decoder shows immutable template/policy facts without treating
+`ACTIVE` as Account authorization; denial and route failure stay local and
+never fall back to MOCK. The preview directory, template, consent review and
+Account observation are now real content-page states: each owns the shared
+`H1` and back relationship instead of nesting under a stale Role title. The
+Account observation also presents `ServiceRoleSession` as not issued and
+source `SERVICE`; an `ACTIVE` relation or binding does not imply temporary
+credentials. The isolated managed-service instance directory remains the
 product-owned entry: an exact selected `SERVICE_INSTALLATION` opens a stable
 detail and reuses the same consent review, while non-preview instances expose
-no command and the final authorize action remains disabled. Relation/binding
-reads and all authorize/revoke/assume controls remain absent. Product onboarding
-and service-consent reviews now focus their content-page title only when the
-view changes; changing an internal step focuses the newly visible step heading
-with no parent refocus or scroll jump. The shared behavior applies to both IAM
-and product-resource entries and adds no backend contract. Backend follow-ups
-`2e2476ad` and `9db81aa0` were pushed after the first
-independent CI exposed an Audit directory gap; CI `36661158790` was still queued
-at the documented milestone, so backend acceptance remains open. Exact evidence
-and limitations belong to FEAT-IAM-010 and FEAT-007.
+no command and the final authorize action stays disabled. Relation/binding
+reads and all authorize/revoke/assume controls remain absent. Internal review
+steps focus only their new step heading; reverse navigation restores the
+originating control. This shared behavior adds no backend contract. Backend
+follow-ups `2e2476ad` and `9db81aa0` were pushed after the first independent CI
+exposed an Audit directory gap; CI `36661158790` was still queued at the
+documented milestone, so backend acceptance remains open. Exact evidence and
+limitations belong to FEAT-IAM-010 and FEAT-007.
 
 LIVE member Role discovery also keeps its verified source identity, discovery
 heading and temporary-access boundary mounted while only role cards load. An
