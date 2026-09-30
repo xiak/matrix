@@ -6,8 +6,8 @@
 - Updated: 2026-10-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `1509b0f0`
-- Pushed documentation milestone: `960c7ef9`
+- Pushed source/embed milestone: `87ad088e`
+- Pushed documentation milestone: `bc930eb5`
 
 ## Authoritative route
 
@@ -41,7 +41,12 @@ boundary references, while runtime remains `NOT_EVALUATED`. User detail opens
 the same route with the exact identity preselected. The page does not import the
 preview evaluator and does not render match states, effective permission,
 final Allow/Deny, a reason tree or remediation. Source IP and time remain
-operator-entered information-architecture fields only.
+operator-entered information-architecture fields only; they now live in a
+default-collapsed "additional request context (record only)" region so the
+identity, product, resource and Action form one uninterrupted core task flow.
+Source/embed `87ad088e` passed the full 55-file/896-test frontend, export/embed
+and focused Go UI host gates; desktop and `390 × 844` DEV inspection had no
+overflow or warning/error. FEAT-IAM-010 owns the evidence at `bc930eb5`.
 
 The PostgreSQL instance and product-specification directories retain their
 product-server visibility boundary and truthful loaded-record wording. The
