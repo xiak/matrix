@@ -6,9 +6,9 @@
 - Updated: 2026-09-30
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI/test source: `1afa1b2f`
-- Pushed synchronized embed: `c6a3cf9b`
-- Pushed documentation head: `cac3e7f7`
+- Pushed UI/test source: `56679a17`
+- Pushed synchronized embed: `4939993e`
+- Pushed documentation head: `947992c9`
 
 ## Authoritative route
 
@@ -133,19 +133,20 @@ already mounted section without route changes, local selection state or an
 identity refetch. LIVE and explicit MOCK map to their existing section owners;
 no settings contract was added.
 
-The service-authorization MOCK is now tenant-first. Its default directory shows
-current-Account service-linked Role relations with active/total binding counts,
-while the platform-template directory remains a separate read-only tab. Opening
-a relation preserves the existing template, Account relation, exact binding and
-unissued-session boundaries; opaque cursor controls do not invent totals. The
-isolated managed-service instance remains the product-owned consent entry, and
-authorize, revoke, unbind and session actions remain absent or disabled. Fixed
-IAM source `cb62ed2f6c307f5a50aa27480f89c8c58cf081ee` now publishes matching
-northbound list/detail read shapes with Role metadata owned by `relation.role`,
-complete template references and a release-owned immutable PolicyVersion
-ceiling. This milestone does not yet consume those LIVE routes; use their
-generated OpenAPI and closed decoding in the next adapter slice. Exact evidence
-and limitations belong to FEAT-IAM-010 and FEAT-007.
+Service authorization is tenant-first in both the isolated MOCK and fixed-
+contract LIVE renderer. The LIVE default reads current-Account service-linked
+Role relations from fixed IAM source
+`cb62ed2f6c307f5a50aa27480f89c8c58cf081ee`; the platform-template directory is
+a separate lazy tab. Account is a local response assertion, not a request
+selector, and opaque binding cursors stay bound to the same Account, Role and
+login generation. Closed decoding preserves revoked binding history and keeps
+`SERVICE_LINKED` Roles out of ordinary Role editing. Template release, Account
+relation, workload binding and short-term session remain distinct facts; none
+of the first three proves an issued credential or final access. The isolated
+managed-service instance remains the product-owned consent preview. Authorize,
+revoke, bind/unbind and service-session actions remain absent because no fixed
+browser contract exists, and the UI never calls `/v1/internal/*`. Exact
+evidence and limitations belong to FEAT-IAM-010 and FEAT-007.
 
 LIVE member Role discovery also keeps its verified source identity, discovery
 heading and temporary-access boundary mounted while only role cards load. An
@@ -169,13 +170,12 @@ environment. Real browser acceptance cannot be replaced by MOCK or API-only
 checks. Do not duplicate the donor application or move installer-owned secrets
 into the UI.
 
-Next integration must select one fixed boundary from the owning FEAT. The
-relation/binding observation reads may now adopt fixed IAM source
-`cb62ed2f6c307f5a50aa27480f89c8c58cf081ee`; do not infer authorize, revoke,
-unbind, product-owned consent lifecycle or ServiceRoleSession commands from
-those reads. Session activity/touch, Passkey registration and trusted network
-request context remain MOCK until IAM provides a fixed, pushed commit with
-their required gates. The Role self-service client still requires real
+Next integration must select one fixed boundary from the owning FEAT. Do not
+infer authorize, revoke, bind/unbind, product-owned consent lifecycle or
+ServiceRoleSession commands from the accepted relation/binding reads. Session
+activity/touch, Passkey registration and trusted network request context remain
+MOCK until IAM provides a fixed, pushed commit with their required gates. The
+Role self-service and service-authorization read clients still require real
 IAM-process browser verification; do not infer additional Role, SSO, session or
 network-context endpoints, persisted fields, operators or credentials from the
 MOCK UI or from another task's unpushed work.
