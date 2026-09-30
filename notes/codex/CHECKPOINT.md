@@ -6,8 +6,8 @@
 - Updated: 2026-09-30
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `63acaa4f`
-- Pushed documentation head: `13faa723`
+- Pushed UI source: `99dca970`
+- Pushed documentation head: `10eb45ea`
 
 ## Authoritative route
 
@@ -53,6 +53,14 @@ and independent MOCK Role journey remain intact. Exact behavior, verification
 evidence and replacement rules belong to the linked FEAT owners. Real
 IAM-process Role/network browser, product PEP, installation and release
 acceptance remain open.
+
+Shared cross-service navigation now focuses the stable destination `H1` both
+when an accepted target frame is projected and after the Next route commits.
+This applies to product launcher, service navigation and browser-history route
+changes without remounting feature content or adding data reads. Compact light
+and mixed DEV checks reached Applications and IAM with title focus, no page
+overflow and no browser warning/error. Feature-owned inline workflow focus
+remains separate.
 
 The MOCK User permission page now summarizes direct and group-derived policy
 sources, current default documents containing explicit deny statements, and
