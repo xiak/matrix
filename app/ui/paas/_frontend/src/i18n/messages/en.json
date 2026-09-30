@@ -2179,6 +2179,17 @@
         "source": "Identity source",
         "boundary": "An ACTIVE relation and an ACTIVE resource binding do not mean temporary credentials have been issued. A future service must assume the role with a SERVICE source under the exact binding, business purpose, and session ceiling. This MOCK does not call AssumeRole or present an active session."
       },
+      "runtime": {
+        "title": "Execution boundaries for one service request",
+        "hint": "Authorization configuration, short-lived identity issuance, product-side enforcement, and business execution are four independent outcomes. An earlier success never proves a later one.",
+        "stages": {
+          "authenticate": { "title": "Authenticate the trusted service subject", "hint": "The platform must prove a registered service installation and subject server-side. Browser-supplied service, Account, or purpose selectors are never authority.", "state": "Request not verified" },
+          "issue": { "title": "Issue a short-lived service session", "hint": "IAM issues a source=SERVICE identity only when the account relation, exact binding, template snapshot, and purpose agree. The console never reveals its credential.", "state": "Not issued" },
+          "enforce": { "title": "Re-authorize at the product PEP", "hint": "The product API must still verify the current Account, Action, exact resource, purpose, and session lifetime. A RoleSession is not a permit by itself.", "state": "Not evaluated" },
+          "execute": { "title": "Execute and return the business result", "hint": "An IAM allow or authorization receipt does not prove a database read or another business transaction succeeded. The product returns and audits that result independently.", "state": "Not executed" }
+        },
+        "boundary": "MOCK · This explains the future runtime information flow; no actionable ServiceRoleSession exists. The page exposes no session ID, temporary credential, internal endpoint, or revoke action, and it never presents configuration state as permission for a request."
+      },
       "permissionTitle": "Bound permission-ceiling snapshot",
       "permissionHint": "Role assumption still cannot exceed this exact action and resource scope",
       "readOnly": "IAM exposes audit and state observation only. Ordinary tenant role editing cannot change a service-linked role's trust, permission ceiling, or bindings. Authorization and revocation belong to the corresponding cloud-product resource flow and must handle associated resources and short-lived-session lifecycle."

@@ -50,6 +50,7 @@ const previewAccountAccess = {
 } as const;
 
 const stageIds = ["identity", "permissions", "consent"] as const;
+const runtimeStageIds = ["authenticate", "issue", "enforce", "execute"] as const;
 type PreviewOperationKind = "bind" | "unbind";
 type PreviewOperationScenario = "success" | "unknown" | "stateChanged" | "requestMismatch" | "unauthenticated" | "forbidden" | "invalidRequest";
 type PreviewOperationResult = Exclude<PreviewOperationScenario, "success">;
@@ -146,6 +147,26 @@ function TemplateDetail({ accountId, reviewRef, observationRef, onReview, onObse
   </div>;
 }
 
+function ServiceRoleRuntimeTrace() {
+  const t = useTranslations("ServiceAuthorizationPreview");
+  const titleId = useId();
+
+  return <section aria-labelledby={titleId} className={styles.runtimeTrace}>
+    <div className={styles.runtimeTraceHeading}>
+      <div><h4 id={titleId}>{t("observation.runtime.title")}</h4><p>{t("observation.runtime.hint")}</p></div>
+      <Badge status="warning">MOCK</Badge>
+    </div>
+    <ol className={styles.runtimeStages}>
+      {runtimeStageIds.map((stage, index) => <li key={stage}>
+        <span className={styles.runtimeIndex} aria-hidden="true">{index + 1}</span>
+        <div><strong>{t(`observation.runtime.stages.${stage}.title`)}</strong><small>{t(`observation.runtime.stages.${stage}.hint`)}</small></div>
+        <Badge status="neutral">{t(`observation.runtime.stages.${stage}.state`)}</Badge>
+      </li>)}
+    </ol>
+    <Alert status="warning">{t("observation.runtime.boundary")}</Alert>
+  </section>;
+}
+
 function ServiceLinkedRoleObservation({ accountId }: { accountId: string }) {
   const t = useTranslations("ServiceAuthorizationPreview");
   const previewSnapshot = previewSnapshotFor(previewTemplate.targetResourceId);
@@ -220,6 +241,7 @@ function ServiceLinkedRoleObservation({ accountId }: { accountId: string }) {
           <div><dt>{t("fields.maxSession")}</dt><dd>{t("observation.durationMinutes", { count: previewTemplate.maxSessionDurationSeconds / 60 })}</dd></div>
         </dl>
         <Alert status="info">{t("observation.session.boundary")}</Alert>
+        <ServiceRoleRuntimeTrace />
       </Card.Body>
     </Card>
     <div className={styles.snapshot}><div><strong>{t("observation.permissionTitle")}</strong><span>{t("observation.permissionHint")}</span></div><ul>{previewSnapshot.statements.flatMap((statement) => statement.actions).map((action) => <li key={action}><code>{action}</code></li>)}</ul></div>

@@ -2179,6 +2179,17 @@
         "source": "身份来源",
         "boundary": "关系 ACTIVE 与资源绑定 ACTIVE 都不代表已经发行临时凭据。未来服务必须以 SERVICE 来源承担角色，并受精确 binding、业务用途和会话上限共同约束；当前 MOCK 不调用 AssumeRole，也不展示活动会话。"
       },
+      "runtime": {
+        "title": "一次服务请求的执行边界",
+        "hint": "配置授权、签发短期身份、产品侧鉴权和业务执行是四个独立结果；前一步成立不能推导后一步成功。",
+        "stages": {
+          "authenticate": { "title": "认证受信服务主体", "hint": "平台必须从服务端证明已登记的服务安装与主体，不能接受浏览器提供的 service、Account 或 purpose selector。", "state": "未验证请求" },
+          "issue": { "title": "签发短期服务会话", "hint": "IAM 仅在账号关系、精确 binding、模板快照与用途一致时签发 source=SERVICE 的短期身份；控制台不展示凭据。", "state": "未签发" },
+          "enforce": { "title": "产品 PEP 重新鉴权", "hint": "产品接口仍须校验当前 Account、Action、精确资源、purpose 与会话有效期；RoleSession 不是通行证。", "state": "未评估" },
+          "execute": { "title": "执行并返回业务结果", "hint": "IAM 允许或授权操作回执不等于数据库读取等业务事务成功；最终结果由产品独立返回和审计。", "state": "未执行" }
+        },
+        "boundary": "MOCK · 这里只解释未来运行时信息流，不存在可操作的 ServiceRoleSession。页面不展示会话 ID、临时凭据、内部端点或撤销按钮，也不把任何配置状态写成一次请求的许可。"
+      },
       "permissionTitle": "绑定的权限上限快照",
       "permissionHint": "服务承担角色后仍不能超过这一精确动作和资源范围",
       "readOnly": "IAM 中仅提供审计与状态观察。普通租户角色编辑不能修改服务关联角色的信任、权限上限或绑定；授权与撤销应回到对应云产品资源流程，并处理关联资源与短期会话生命周期。"

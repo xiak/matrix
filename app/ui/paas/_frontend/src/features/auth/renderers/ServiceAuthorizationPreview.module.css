@@ -70,6 +70,18 @@
 .operationRequest > div { display: grid; grid-template-columns: minmax(120px, auto) minmax(0, 1fr); gap: var(--xiak-spacing-default); }
 .operationRequest dt { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
 .operationRequest dd { min-width: 0; margin: 0; color: var(--xiak-color-text-strong); font-weight: var(--xiak-font-weight-semibold); overflow-wrap: anywhere; }
+.runtimeTrace { display: grid; min-width: 0; gap: var(--xiak-spacing-default); padding-top: var(--xiak-spacing-default); border-top: var(--xiak-border-subtle); }
+.runtimeTraceHeading { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--xiak-spacing-default); }
+.runtimeTraceHeading > div { display: grid; min-width: 0; gap: var(--xiak-spacing-micro); }
+.runtimeTraceHeading h4, .runtimeTraceHeading p { margin: 0; }
+.runtimeTraceHeading h4 { color: var(--xiak-color-text-strong); }
+.runtimeTraceHeading p, .runtimeStages small { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: var(--xiak-line-height-body); }
+.runtimeStages { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--xiak-spacing-default); margin: 0; padding: 0; list-style: none; }
+.runtimeStages li { display: grid; grid-template-columns: auto minmax(0, 1fr); align-content: start; align-items: start; gap: var(--xiak-spacing-tight); min-width: 0; padding: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); }
+.runtimeStages li > div { display: grid; min-width: 0; gap: var(--xiak-spacing-micro); }
+.runtimeStages li > :last-child { grid-column: 2; justify-self: start; }
+.runtimeStages strong { color: var(--xiak-color-text-strong); overflow-wrap: anywhere; }
+.runtimeIndex { display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--xiak-color-accent-haze); color: var(--xiak-color-accent-text); font: var(--xiak-font-weight-semibold) var(--xiak-font-size-small)/1 var(--xiak-font-numeric); }
 .note { font-size: var(--xiak-font-size-small); }
 .bindingSection { display: grid; min-width: 0; gap: var(--xiak-spacing-default); }
 .bindingSection td { min-width: 0; }
@@ -86,6 +98,8 @@
   .operationPreviewHeading { flex-direction: column; }
   .operationScenario { flex: none; width: 100%; min-width: 0; }
   .operationRequest > div { grid-template-columns: minmax(0, 1fr); gap: var(--xiak-spacing-micro); }
+  .runtimeTraceHeading { flex-direction: column; }
+  .runtimeStages { grid-template-columns: minmax(0, 1fr); }
   .reviewActions { align-items: stretch; flex-direction: column-reverse; }
   .reviewActions > div, .reviewActions > button { width: 100%; }
   .reviewActions > div > button { flex: 1; }

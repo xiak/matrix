@@ -48,6 +48,17 @@ describe("ServiceAuthorizationPreview", () => {
     expect(screen.getByRole("heading", { name: "ServiceRoleSession" })).toBeTruthy();
     expect(screen.getByText("SERVICE")).toBeTruthy();
     expect(screen.getByText("未发行")).toBeTruthy();
+    const runtime = screen.getByRole("heading", { name: "一次服务请求的执行边界" }).closest("section")!;
+    expect(within(runtime).getByText("认证受信服务主体")).toBeTruthy();
+    expect(within(runtime).getByText("签发短期服务会话")).toBeTruthy();
+    expect(within(runtime).getByText("产品 PEP 重新鉴权")).toBeTruthy();
+    expect(within(runtime).getByText("执行并返回业务结果")).toBeTruthy();
+    expect(within(runtime).getByText("未验证请求")).toBeTruthy();
+    expect(within(runtime).getByText("未签发")).toBeTruthy();
+    expect(within(runtime).getByText("未评估")).toBeTruthy();
+    expect(within(runtime).getByText("未执行")).toBeTruthy();
+    expect(within(runtime).queryByRole("button")).toBeNull();
+    expect(within(runtime).getByText(/不展示会话 ID、临时凭据、内部端点或撤销按钮/)).toBeTruthy();
     expect(screen.getByText("允许已登记的 PaaS 服务按单一用途读取一个精确的托管服务安装。")).toBeTruthy();
     expect(screen.getAllByText("managed-service-installation-read", { selector: "code" }).length).toBeGreaterThan(0);
     expect(screen.getAllByText(`sha256:${"8".repeat(64)}`).length).toBeGreaterThan(0);
