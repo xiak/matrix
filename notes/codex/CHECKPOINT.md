@@ -6,8 +6,8 @@
 - Updated: 2026-09-30
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed UI source: `675b5390`
-- Pushed documentation head: `9bfce4ee`
+- Pushed UI source: `ba2ffe49`
+- Pushed documentation head: `97ac62e1`
 
 ## Authoritative route
 
@@ -116,12 +116,15 @@ workload binding. LIVE Roles now additionally expose a lazy, read-only platform
 template directory from the fixed `GET /v1/service-role-templates` contract.
 Its closed decoder and content-area workflow show immutable template/policy
 facts without treating `ACTIVE` as Account authorization; denial and route
-failure stay local and never fall back to MOCK. Relation/binding reads and all
-authorize/revoke/assume controls remain absent. Backend follow-ups `2e2476ad`
-and `9db81aa0` were pushed after the first independent CI exposed an Audit
-directory gap; CI `36661158790` was still queued at the documented milestone,
-so backend acceptance remains open. Exact evidence and limitations belong to
-FEAT-IAM-010 and FEAT-007.
+failure stay local and never fall back to MOCK. LIVE and MOCK template details
+now reuse one three-stage authorization-chain component; platform template,
+Account consent and exact workload binding display only their own observed or
+explicitly illustrative status, so no later fact is inferred from an earlier
+one. Relation/binding reads and all authorize/revoke/assume controls remain
+absent. Backend follow-ups `2e2476ad` and `9db81aa0` were pushed after the first
+independent CI exposed an Audit directory gap; CI `36661158790` was still queued
+at the documented milestone, so backend acceptance remains open. Exact evidence
+and limitations belong to FEAT-IAM-010 and FEAT-007.
 
 LIVE member Role discovery also keeps its verified source identity, discovery
 heading and temporary-access boundary mounted while only role cards load. An
