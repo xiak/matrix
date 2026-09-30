@@ -6,8 +6,8 @@
 - Updated: 2026-10-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `c0c7733a`
-- Pushed documentation milestone: `75788b6b`
+- Pushed source/embed milestone: `5f85b6aa`
+- Pushed documentation milestone: `41aa1a9c`
 
 ## Authoritative route
 
@@ -43,11 +43,19 @@ no request, touch or revoke action and produces no request ID or success state.
 LIVE service-session query and revoke remain absent until IAM publishes a fixed
 northbound contract.
 
-Source and synchronized Go embed at `c0c7733a` passed 55 frontend files / 886
+The LIVE platform service-role template tab consumes the current complete,
+release-owned `{items[]}` snapshot. It uses deferred local search, purpose and
+state filters, and bounded ten-row pagination; the Account authorization list
+continues to use only its server-owned opaque cursor and does not fake global
+search over one page. A future fixed template cursor replaces this local
+pagination instead of creating a parallel model.
+
+Source and synchronized Go embed at `5f85b6aa` passed 55 frontend files / 887
 tests, static normalization, type/lint/architecture, 228 theme contrast pairs,
-41-page export, 228-file embed equality and repository Go test/vet. Desktop and
-390 x 844 DEV checks had no Dialog, page overflow, warning or error. Exact
-behavioral evidence and limits are owned by FEAT-IAM-010.
+41-page export, 228-file embed equality and repository Go test/vet. Existing
+MOCK desktop and 390 x 844 DEV checks had no Dialog, page overflow, warning or
+error; the LIVE template directory still lacks real-login browser evidence.
+Exact behavioral evidence and limits are owned by FEAT-IAM-010.
 
 ## Continuation
 
