@@ -6,7 +6,7 @@
 - Updated: 2026-10-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `349a2ba2`
+- Pushed source/embed milestone: `c0c7733a`
 - Pushed documentation milestone: `75788b6b`
 
 ## Authoritative route
@@ -35,13 +35,15 @@ The service-authorization runtime preview now includes a non-secret
 session revoke review. The directory uses the shared collection toolbar, empty
 state and cursor footer; local search covers session/source/target identifiers,
 the filter exposes only illustrative observation states, and visible timestamps
-are locale-formatted while their ISO values remain machine-readable. It exposes
+reuse the IAM-wide `WorkspaceTime` while their ISO values remain machine-readable.
+Toolbar labels and the empty-query reset also reuse the shared collection
+primitives instead of page-local copies. It exposes
 no credential, proof/decision, private endpoint or bootstrap summary; it sends
 no request, touch or revoke action and produces no request ID or success state.
 LIVE service-session query and revoke remain absent until IAM publishes a fixed
 northbound contract.
 
-Source and synchronized Go embed at `349a2ba2` passed 55 frontend files / 886
+Source and synchronized Go embed at `c0c7733a` passed 55 frontend files / 886
 tests, static normalization, type/lint/architecture, 228 theme contrast pairs,
 41-page export, 228-file embed equality and repository Go test/vet. Desktop and
 390 x 844 DEV checks had no Dialog, page overflow, warning or error. Exact
