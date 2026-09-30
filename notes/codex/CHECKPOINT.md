@@ -6,8 +6,8 @@
 - Updated: 2026-10-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `96afde8c`
-- Pushed documentation milestone: `fd536208`
+- Pushed source/embed milestone: `19f8c2ec` (test-only after runtime `96afde8c`)
+- Pushed documentation milestone: `6d8696dd`
 
 ## Authoritative route
 
@@ -56,6 +56,12 @@ MOCK desktop and 390 x 844 DEV checks show the three lifecycle states without a
 Dialog, page overflow, warning or error; the LIVE template directory and
 service-session route still lack real-login browser evidence.
 Exact behavioral evidence and limits are owned by FEAT-IAM-010.
+
+The test-only gate at `19f8c2ec` alternates suspended IAM Group and Role
+destinations 200 times. The latest click remains authoritative, a late stale
+destination cannot overwrite it, pending state clears, and navigation remains
+interactive. The complete frontend run now passes 55 files / 888 tests plus
+type, lint, architecture, 228 contrast pairs and static normalization.
 
 ## Continuation
 
