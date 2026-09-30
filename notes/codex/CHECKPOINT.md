@@ -6,8 +6,8 @@
 - Updated: 2026-10-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `ed978ba9`
-- Pushed documentation milestone: `482aec3e`
+- Pushed source/embed milestone: `349a2ba2`
+- Pushed documentation milestone: `75788b6b`
 
 ## Authoritative route
 
@@ -32,12 +32,16 @@ internal onboarding action beside a tenant resource title.
 
 The service-authorization runtime preview now includes a non-secret
 `ServiceRoleSession` sample directory, inline detail and a disabled single-
-session revoke review. It exposes no credential, proof/decision, private
-endpoint or bootstrap summary; it sends no request and produces no request ID
-or success state. LIVE service-session query and revoke remain absent until IAM
-publishes a fixed northbound contract.
+session revoke review. The directory uses the shared collection toolbar, empty
+state and cursor footer; local search covers session/source/target identifiers,
+the filter exposes only illustrative observation states, and visible timestamps
+are locale-formatted while their ISO values remain machine-readable. It exposes
+no credential, proof/decision, private endpoint or bootstrap summary; it sends
+no request, touch or revoke action and produces no request ID or success state.
+LIVE service-session query and revoke remain absent until IAM publishes a fixed
+northbound contract.
 
-Source and synchronized Go embed at `ed978ba9` passed 55 frontend files / 886
+Source and synchronized Go embed at `349a2ba2` passed 55 frontend files / 886
 tests, static normalization, type/lint/architecture, 228 theme contrast pairs,
 41-page export, 228-file embed equality and repository Go test/vet. Desktop and
 390 x 844 DEV checks had no Dialog, page overflow, warning or error. Exact
