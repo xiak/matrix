@@ -6,8 +6,8 @@
 - Updated: 2026-10-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `f74e51d1`
-- Pushed documentation milestone: `d5678bce`
+- Pushed source/embed milestone: `a7c22679`
+- Pushed documentation milestone: `ca1ef73a`
 
 ## Authoritative route
 
@@ -29,26 +29,32 @@ The independent MOCK console remains the inspectable UX surface and login
 verification remains disabled. The current service-authorization UX keeps
 platform template, Account consent/service-linked Role, exact workload binding
 and runtime observation as four separate facts; configuration never implies
-runtime use.
+runtime use. Its local non-secret session examples now use the fixed public
+`SERVICE_ACCOUNT` source, `UNREVOKED | EXPIRED | REVOKED` lifecycle and explicit
+revoke capability. `UNREVOKED` is never presented as current usability.
 
-The former permission simulator is replaced by a policy-coverage worksheet.
-It inventories only local fixture input, referenced policy/default-version
-statements and boundary references, while runtime remains `NOT_EVALUATED`.
-The page does not import the preview evaluator and does not render match states,
-effective permission, final Allow/Deny, a reason tree or remediation. Source IP
-and time remain operator-entered information-architecture fields only.
+The former permission simulator is replacement-first removed. Component, view,
+route, localization, Go static-route and embedded-export ownership now use only
+`policy-coverage`; no compatibility path remains. The worksheet inventories
+only local fixture input, referenced policy/default-version statements and
+boundary references, while runtime remains `NOT_EVALUATED`. User detail opens
+the same route with the exact identity preselected. The page does not import the
+preview evaluator and does not render match states, effective permission,
+final Allow/Deny, a reason tree or remediation. Source IP and time remain
+operator-entered information-architecture fields only.
 
-Source and synchronized Go embed at `f74e51d1` passed 55 frontend files / 889
+Source and synchronized Go embed at `a7c22679` passed 55 frontend files / 889
 tests, static normalization, type/lint/architecture, 228 theme contrast pairs,
 41-page export, 228-file embed equality and repository Go test/vet. Desktop and
-`390 × 844` browser inspection passed with responsive scope cards and a stacked
-mobile statement table. Existing MOCK pages remain available.
+`390 × 844` browser inspection passed for policy coverage and service-session
+directory/detail with responsive content, no horizontal overflow or Dialog.
+Existing MOCK pages remain available.
 
-IAM follow-up `a464299b` changes only `authority-roles` test evidence, not
-production wire/API/SQL. Replacement Verification `36779942782` currently has
-four successful lanes including `authority-roles`, but the whole run is not yet
-terminal; product-side LIVE bind/unbind remains closed. Exact behavioral
-evidence and limits are owned by FEAT-IAM-010.
+The fixed administrator RoleSession northbound contract is consumed only by
+Role detail. The service-authorization MOCK reuses its public fields but sends
+no query/revoke request and keeps final submission disabled. Product-side LIVE
+bind/unbind, Account-relation revoke and real product-PEP evidence remain
+closed. Exact behavioral evidence and limits are owned by FEAT-IAM-010.
 
 The earlier navigation stress gate remains unchanged: 200 alternating suspended
 IAM Group and Role destinations preserve the latest click and clear pending
@@ -62,7 +68,8 @@ prioritizes the service-authorization governance flow: immutable template,
 current-Account consent/service-linked Role, exact workload binding, then
 short-lived session observation and single revocation. Product-owned bind and
 unbind remain the northbound mutation boundary; the browser never calls IAM
-internal service-session endpoints.
+internal endpoints or moves Role-detail session authority into the product
+authorization page.
 
 Keep permission analysis as the explicitly isolated, non-evaluating worksheet.
 Do not reintroduce a risk score, effective-permission result, Deny reason tree,
