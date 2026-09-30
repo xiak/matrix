@@ -225,43 +225,55 @@ describe("ConsoleShellRenderer", () => {
     expect((screen.getByRole("button", { name: "授权服务（未接入）" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
-  it("opens a cached service destination immediately when its route suspends", async () => {
+  it.each([
+    { href: "/console/regions/", service: /区域与节点/, title: "区域与节点", marker: { role: "text", name: "本机主区域" } },
+    { href: "/console/applications/", service: /应用托管/, title: "应用服务", marker: { role: "table", name: "统一资源列表" } },
+    { href: "/console/installations/", service: /云数据库 PostgreSQL/, title: "数据库实例", marker: { role: "heading", name: "组织服务实例" } },
+    { href: "/console/logs/", service: /日志服务/, title: "日志概览", marker: { role: "text", name: "Matrix · Log Service" } },
+    { href: "/console/devops/", service: /研发效能 DevOps/, title: "交付总览", marker: { role: "heading", name: "最近流水线" } },
+    { href: "/console/observability/", service: /云监控/, title: "监控总览", marker: { role: "heading", name: "服务健康" } }
+  ] as const)("opens the $title service frame immediately while its route bundle is pending", async ({ href, marker, service, title: expectedTitle }) => {
     let release!: () => void;
-    const heldRoute = { href: "/console/logs/", ready: false, promise: new Promise<void>(resolve => { release = resolve; }) };
+    const heldRoute = { href, ready: false, promise: new Promise<void>(resolve => { release = resolve; }) };
     const { user, repository } = await renderConsole({ section: "resources", experience: previewExperienceSnapshot, heldRoute });
     const oldResource = await screen.findByRole("link", { name: "订单主库" });
     const header = screen.getByLabelText("全局导航");
     const title = screen.getByRole("heading", { level: 1 });
     const menu = screen.getByRole("navigation", { name: "控制台导航" });
+
     await user.click(screen.getByRole("button", { name: "打开产品与服务" }));
-    const service = within(screen.getByRole("dialog", { name: "云产品入口" })).getByRole("link", { name: /日志服务/ });
-    fireEvent.click(service);
+    fireEvent.click(within(screen.getByRole("dialog", { name: "云产品入口" })).getByRole("link", { name: service }));
+
     expect(screen.queryByRole("dialog", { name: "云产品入口" })).toBeNull();
-    expect(screen.getByRole("heading", { name: "日志概览" })).toBe(title);
+    expect(screen.getByRole("heading", { level: 1, name: expectedTitle })).toBe(title);
     expect(title).toBe(document.activeElement);
-    expect(menu).toBe(screen.getByRole("navigation", { name: "控制台导航" }));
-    expect(within(menu).getByRole("link", { name: /^日志概览/ }).getAttribute("aria-current")).toBe("page");
-    expect(within(menu.parentElement!).getByText("日志服务")).toBeTruthy();
+    expect(screen.getByRole("navigation", { name: "控制台导航" })).toBe(menu);
     expect(screen.queryByRole("link", { name: "订单主库" })).toBeNull();
     expect(oldResource.isConnected).toBe(false);
-    const destination = screen.getByText("Matrix · Log Service");
+    const destination = marker.role === "table"
+      ? screen.getByRole("table", { name: marker.name })
+      : marker.role === "heading"
+        ? screen.getByRole("heading", { level: 2, name: marker.name })
+        : screen.getByText(marker.name);
     expect(destination.closest("[inert]")).toBeTruthy();
     expect(destination.closest("[hidden]")).toBeNull();
-    expect(screen.queryByText("正在打开日志概览…")).toBeNull();
+    expect(screen.queryByText(`正在打开${expectedTitle}…`)).toBeNull();
     accountMenuRender.mockClear();
     expect(accountMenuRender).not.toHaveBeenCalled();
     expect(screen.getByLabelText("全局导航")).toBe(header);
     expect(repository.load).toHaveBeenCalledTimes(1);
+
     await act(async () => { heldRoute.ready = true; release(); });
-    expect(screen.getByRole("heading", { name: "日志概览" })).toBe(title);
+    expect(screen.getByRole("heading", { level: 1, name: expectedTitle })).toBe(title);
     await waitFor(() => expect(destination.closest("[inert]")).toBeNull());
     expect(title).toBe(document.activeElement);
     expect(destination.isConnected).toBe(true);
     expect(screen.queryByRole("progressbar")).toBeNull();
     expect(screen.getByLabelText("全局导航")).toBe(header);
+    expect(repository.load).toHaveBeenCalledTimes(1);
   });
 
-  it("uses the same cached transition for database service pages", async () => {
+  it("uses the same cached transition between pages of one database service", async () => {
     let release!: () => void;
     const heldRoute = { href: "/console/catalog/", ready: false, promise: new Promise<void>(resolve => { release = resolve; }) };
     const { user, repository } = await renderConsole({ section: "installations", experience: previewExperienceSnapshot, heldRoute });
