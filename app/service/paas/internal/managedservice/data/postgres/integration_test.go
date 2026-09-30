@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	managedserviceadapterv1 "github.com/xiak/matrix/api/adapter/managedservice/v1"
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/audit"
 	auditpostgres "github.com/xiak/matrix/app/service/paas/internal/audit/data/postgres"
@@ -57,7 +58,8 @@ func TestManagedServicePostgresJourneyAndTenantIsolation(t *testing.T) {
 	inspectedAt := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
 	var quotaSequence, operationSequence atomic.Uint32
 	service, err := usecase.NewService(repository, usecase.Config{
-		Catalog: domain.DefaultCatalog(),
+		Catalog:            domain.DefaultCatalog(),
+		WorkloadRoleBinder: integrationWorkloadRoleBinder{},
 		Region: managedservicev1.Region{
 			ID: "local-primary", DisplayName: "本机主区域",
 			Profile: managedservicev1.RegionLocalMachine,
@@ -212,6 +214,16 @@ func TestManagedServicePostgresJourneyAndTenantIsolation(t *testing.T) {
 	if _, _, err := service.CreateInstallation(ctx, installationCommand); !errors.Is(err, usecase.ErrNotFound) {
 		t.Fatalf("cross-tenant entitlement error=%v", err)
 	}
+}
+
+type integrationWorkloadRoleBinder struct{}
+
+func (integrationWorkloadRoleBinder) BindWorkloadRole(
+	context.Context,
+	iamv1.ServiceRoleTemplateReference,
+	port.AuthorizationRequest,
+) (iamv1.ServiceLinkedRoleAccess, error) {
+	return iamv1.ServiceLinkedRoleAccess{}, port.ErrAuthorizationUnavailable
 }
 
 func integrationRuntimeDSN(t *testing.T, adminDSN, role, password string) string {

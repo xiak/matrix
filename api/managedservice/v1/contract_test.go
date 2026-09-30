@@ -17,7 +17,7 @@ func TestMutationSchemasAreClosedAndExcludeNativeAuthorityFields(t *testing.T) {
 	}
 	components := document["components"].(map[string]any)
 	schemas := components["schemas"].(map[string]any)
-	for _, name := range []string{"ActivateQuotaRequest", "CreateInstallationRequest"} {
+	for _, name := range []string{"ActivateQuotaRequest", "CreateInstallationRequest", "BindServiceRoleRequest"} {
 		schema := schemas[name].(map[string]any)
 		if schema["additionalProperties"] != false {
 			t.Fatalf("%s accepts unknown fields", name)
@@ -26,6 +26,7 @@ func TestMutationSchemasAreClosedAndExcludeNativeAuthorityFields(t *testing.T) {
 		for _, forbidden := range []string{
 			"organizationId", "tenantId", "price", "currency", "payment",
 			"image", "digest", "command", "compose", "hostPath", "credential",
+			"accountId", "roleId", "installationId", "principalId", "purpose",
 		} {
 			if _, found := properties[forbidden]; found {
 				t.Fatalf("%s exposes forbidden field %q", name, forbidden)

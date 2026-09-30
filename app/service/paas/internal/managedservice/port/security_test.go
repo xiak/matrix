@@ -23,6 +23,7 @@ func TestManagedServiceAuthorizationUsesRegisteredProfile(t *testing.T) {
 		{"quota instance", AuthorizeQuotaEntitlementRead, ResourceQuotaEntitlement, iamv1.AuthorizationResourceInstance, "", "quota-one"},
 		{"installation create", AuthorizeInstallationCreate, ResourceServiceInstallation, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate, "collection"},
 		{"installation instance", AuthorizeInstallationRead, ResourceServiceInstallation, iamv1.AuthorizationResourceInstance, "", "database-one"},
+		{"installation service Role bind", AuthorizeInstallationRoleBind, ResourceServiceInstallation, iamv1.AuthorizationResourceInstance, "", "database-one"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/audit"
 	"github.com/xiak/matrix/app/service/paas/internal/managedservice/domain"
@@ -93,9 +94,18 @@ type CreateInstallationCommand struct {
 	IdempotencyKey string
 }
 
+type BindServiceRoleCommand struct {
+	Authorization  port.Authorization
+	Credential     string
+	InstallationID string
+	Request        managedservicev1.BindServiceRoleRequest
+	IdempotencyKey string
+}
+
 type Config struct {
 	Catalog              domain.Catalog
 	Region               managedservicev1.Region
+	WorkloadRoleBinder   port.WorkloadRoleBinder
 	MaximumWriteAttempts int
 	NewQuotaID           func() (string, error)
 	NewOperationID       func() (string, error)
@@ -103,6 +113,7 @@ type Config struct {
 
 type Service struct {
 	repository           Repository
+	workloadRoleBinder   port.WorkloadRoleBinder
 	catalog              domain.Catalog
 	region               managedservicev1.Region
 	maximumWriteAttempts int
@@ -111,7 +122,7 @@ type Service struct {
 }
 
 func NewService(repository Repository, config Config) (*Service, error) {
-	if repository == nil || managedservicev1.ValidateRegion(config.Region) != nil {
+	if repository == nil || config.WorkloadRoleBinder == nil || managedservicev1.ValidateRegion(config.Region) != nil {
 		return nil, errors.New("managed-service use case configuration is invalid")
 	}
 	if len(config.Catalog.List()) == 0 {
@@ -130,7 +141,8 @@ func NewService(repository Repository, config Config) (*Service, error) {
 		config.NewOperationID = func() (string, error) { return newID("operation-") }
 	}
 	return &Service{
-		repository: repository, catalog: config.Catalog, region: config.Region,
+		repository: repository, workloadRoleBinder: config.WorkloadRoleBinder,
+		catalog: config.Catalog, region: config.Region,
 		maximumWriteAttempts: config.MaximumWriteAttempts,
 		newQuotaID:           config.NewQuotaID, newOperationID: config.NewOperationID,
 	}, nil
@@ -278,6 +290,65 @@ func (service *Service) GetInstallationOperation(
 		return managedservicev1.InstallationOperation{}, err
 	}
 	return installation.Operation, nil
+}
+
+// BindServiceRole proves the path resource exists in the IAM-derived Account
+// before forwarding one normalized, idempotent workload consent command. The
+// caller cannot select the Account, Role, service principal or purpose.
+func (service *Service) BindServiceRole(
+	ctx context.Context,
+	command BindServiceRoleCommand,
+) (managedservicev1.ServiceRoleBindingReceipt, error) {
+	if ctx == nil || port.ValidateAuthorization(command.Authorization) != nil ||
+		command.Authorization.SubjectType != port.SubjectUser || command.Credential == "" ||
+		managedservicev1.ValidateInstallationID(command.InstallationID) != nil ||
+		managedservicev1.ValidateBindServiceRoleRequest(command.Request) != nil ||
+		managedservicev1.ValidateIdempotencyKey(command.IdempotencyKey) != nil {
+		return managedservicev1.ServiceRoleBindingReceipt{}, ErrInvalidArgument
+	}
+	var installation managedservicev1.ServiceInstallation
+	err := service.withTransaction(ctx, command.Authorization.TenantID, ReadOnly, func(transaction Transaction) error {
+		var readErr error
+		installation, readErr = transaction.GetServiceInstallation(ctx, command.InstallationID)
+		return readErr
+	})
+	if err != nil {
+		return managedservicev1.ServiceRoleBindingReceipt{}, err
+	}
+	if managedservicev1.ValidateServiceInstallation(installation) != nil || installation.ID != command.InstallationID {
+		return managedservicev1.ServiceRoleBindingReceipt{}, ErrRepositoryUnavailable
+	}
+	requestID := serviceRoleBindingRequestID(command.IdempotencyKey)
+	request := port.AuthorizationRequest{
+		Credential: command.Credential, Action: port.AuthorizeInstallationRoleBind,
+		Resource:     port.ResourceReference{Kind: port.ResourceServiceInstallation, ID: installation.ID},
+		ResourceMode: iamv1.AuthorizationResourceInstance, RequestID: requestID,
+	}
+	result, err := service.workloadRoleBinder.BindWorkloadRole(ctx, command.Request.Template, request)
+	if err != nil {
+		return managedservicev1.ServiceRoleBindingReceipt{}, err
+	}
+	if iamv1.ValidateServiceLinkedRoleAccess(result) != nil || len(result.Bindings) != 1 ||
+		result.Relation.Role.AccountID != iamv1.AccountID(command.Authorization.TenantID) ||
+		result.Relation.Template != command.Request.Template ||
+		result.Bindings[0].AccountID != iamv1.AccountID(command.Authorization.TenantID) ||
+		result.Bindings[0].RoleID != result.Relation.Role.ID ||
+		result.Bindings[0].Template != command.Request.Template ||
+		result.Bindings[0].Workload != (iamv1.ResourceReference{
+			Kind: iamv1.ResourceServiceInstallation, ID: installation.ID,
+		}) {
+		return managedservicev1.ServiceRoleBindingReceipt{}, port.ErrAuthorizationUnavailable
+	}
+	binding := result.Bindings[0]
+	receipt := managedservicev1.ServiceRoleBindingReceipt{
+		Kind: "ServiceRoleBindingReceipt", ServiceInstallationID: installation.ID,
+		BindingID: binding.ID, RoleID: binding.RoleID, Template: binding.Template,
+		Status: binding.Status, ResourceVersion: binding.ResourceVersion, CreatedAt: binding.CreatedAt,
+	}
+	if managedservicev1.ValidateServiceRoleBindingReceipt(receipt) != nil {
+		return managedservicev1.ServiceRoleBindingReceipt{}, port.ErrAuthorizationUnavailable
+	}
+	return receipt, nil
 }
 
 func (service *Service) ActivateQuota(
@@ -482,6 +553,13 @@ func managedAuditEventID(action, resourceID string) string {
 		"matrix-managedservice-audit-event-v1\x00" + action + "\x00" + resourceID,
 	))
 	return "audit-" + hex.EncodeToString(digest[:])
+}
+
+func serviceRoleBindingRequestID(idempotencyKey string) string {
+	digest := sha256.Sum256([]byte(
+		"matrix-managedservice-service-role-binding-v1\x00" + idempotencyKey,
+	))
+	return "msrb-" + hex.EncodeToString(digest[:])
 }
 
 func (service *Service) withWriteRetry(

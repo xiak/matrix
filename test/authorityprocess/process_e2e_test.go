@@ -9329,10 +9329,13 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 	}
 	platform = loginIAM(t, iamEndpoint, "resource.platform@organization-process", changedDeveloperPassword, "request-resource-platform-reauthenticated")
 	tenants := []struct {
-		id, owner, member string
-		memberID          iamv1.PrincipalID
-		quota             managedservicev1.QuotaEntitlement
-		shared, unique    managedservicev1.ServiceInstallation
+		id, owner, member   string
+		memberID            iamv1.PrincipalID
+		quota               managedservicev1.QuotaEntitlement
+		shared, unique      managedservicev1.ServiceInstallation
+		serviceRoleGrant    iamv1.PolicyAttachment
+		serviceRoleTemplate iamv1.ServiceRoleTemplateReference
+		serviceRoleReceipt  managedservicev1.ServiceRoleBindingReceipt
 	}{
 		{id: "organization-process", owner: homeBearer, member: home.Credential, memberID: homeUser.ID},
 		{id: "organization-process-customer", owner: customerBearer, member: customer.Credential, memberID: customer.Session.PrincipalID},
@@ -9383,9 +9386,76 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 		}
 		full := managedservicev1.CreateInstallationRequest{ID: "postgres-over-quota", Name: "Over quota", OfferingID: "postgresql-18", QuotaEntitlementID: tenant.quota.ID, RegionID: "local-primary"}
 		assertStatus(performJSONWithIdempotency(t, http.MethodPost, base+"/service-installations", tenant.member, "over-quota-key", full), http.StatusConflict, "quota exhausted")
+		bindingPath := base + "/service-installations/" + tenant.shared.ID + "/service-role-bindings"
+		placeholder := managedservicev1.BindServiceRoleRequest{Template: iamv1.ServiceRoleTemplateReference{
+			ID: "managedservice.installation-reader", Version: 1,
+			ContentDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		}}
+		assertStatus(performJSONWithIdempotency(t, http.MethodPost, bindingPath, tenant.member,
+			"shared-service-role-binding-key", placeholder), http.StatusForbidden, "service Role default deny")
+		tenant.serviceRoleGrant = createIAMPolicyAttachment(t, iamEndpoint, tenant.owner, tenant.memberID,
+			iamv1.SystemPolicyServiceRoleAdministrator, "request-service-role-administrator-"+tenant.id)
+		templateResponse := performJSON(t, http.MethodGet, iamEndpoint+"/v1/service-role-templates", tenant.member, nil)
+		var templates iamv1.ServiceRoleTemplateList
+		if templateResponse.Status != http.StatusOK || json.Unmarshal(templateResponse.Body, &templates) != nil ||
+			iamv1.ValidateServiceRoleTemplateList(templates) != nil || len(templates.Items) != 1 {
+			t.Fatal("delegated product operator could not read the exact service Role template")
+		}
+		tenant.serviceRoleTemplate = templates.Items[0].Reference()
+		bind := managedservicev1.BindServiceRoleRequest{Template: tenant.serviceRoleTemplate}
+		bound := performJSONWithIdempotency(t, http.MethodPost, bindingPath, tenant.member,
+			"shared-service-role-binding-key", bind)
+		assertStatus(bound, http.StatusOK, "bind actual service installation Role")
+		if json.Unmarshal(bound.Body, &tenant.serviceRoleReceipt) != nil ||
+			managedservicev1.ValidateServiceRoleBindingReceipt(tenant.serviceRoleReceipt) != nil ||
+			tenant.serviceRoleReceipt.ServiceInstallationID != tenant.shared.ID ||
+			tenant.serviceRoleReceipt.Template != tenant.serviceRoleTemplate {
+			t.Fatal("managed-service binding did not return the exact non-secret IAM result")
+		}
+		bindReplay := performJSONWithIdempotency(t, http.MethodPost, bindingPath, tenant.member,
+			"shared-service-role-binding-key", bind)
+		var replayReceipt managedservicev1.ServiceRoleBindingReceipt
+		if bindReplay.Status != http.StatusOK || json.Unmarshal(bindReplay.Body, &replayReceipt) != nil ||
+			replayReceipt != tenant.serviceRoleReceipt {
+			t.Fatal("managed-service binding replay changed its Role or binding identity")
+		}
+		changedBind := bind
+		changedBind.Template.ContentDigest = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+		assertStatus(performJSONWithIdempotency(t, http.MethodPost, bindingPath, tenant.member,
+			"shared-service-role-binding-key", changedBind), http.StatusConflict, "changed service Role replay")
+		assertStatus(performJSONWithIdempotency(t, http.MethodPost, bindingPath, tenant.member,
+			"second-service-role-binding-key", bind), http.StatusConflict, "second active workload binding")
+		for _, query := range []string{"?tenantId=forged", "?roleId=forged", "?purpose=PAAS"} {
+			assertStatus(performJSONWithIdempotency(t, http.MethodPost, bindingPath+query, tenant.member,
+				"selector-service-role-binding-key", bind), http.StatusBadRequest, "service Role query selector")
+		}
+		selectorBody := map[string]any{"template": tenant.serviceRoleTemplate, "accountId": "forged"}
+		assertStatus(performJSONWithIdempotency(t, http.MethodPost, bindingPath, tenant.member,
+			"body-selector-service-role-binding-key", selectorBody), http.StatusBadRequest, "service Role body selector")
+		linkedResponse := performJSON(t, http.MethodGet, iamEndpoint+"/v1/service-linked-roles", tenant.member, nil)
+		var linked iamv1.ServiceLinkedRoleList
+		if linkedResponse.Status != http.StatusOK || json.Unmarshal(linkedResponse.Body, &linked) != nil ||
+			iamv1.ValidateServiceLinkedRoleList(linked) != nil || linked.AccountID != iamv1.AccountID(tenant.id) ||
+			len(linked.Items) != 1 || linked.Items[0].Relation.Role.ID != tenant.serviceRoleReceipt.RoleID ||
+			linked.Items[0].BindingCount != 1 || linked.Items[0].ActiveBindingCount != 1 {
+			t.Fatal("northbound product bind was not visible in the current Account IAM directory")
+		}
+		detailResponse := performJSON(t, http.MethodGet, iamEndpoint+"/v1/service-linked-roles/"+
+			string(tenant.serviceRoleReceipt.RoleID), tenant.member, nil)
+		var detail iamv1.ServiceLinkedRoleAccess
+		if detailResponse.Status != http.StatusOK || json.Unmarshal(detailResponse.Body, &detail) != nil ||
+			iamv1.ValidateServiceLinkedRoleAccess(detail) != nil || len(detail.Bindings) != 1 ||
+			detail.Bindings[0].ID != tenant.serviceRoleReceipt.BindingID ||
+			detail.Bindings[0].Workload.ID != tenant.shared.ID {
+			t.Fatal("IAM detail lost the product-owned workload binding")
+		}
 	}
 	if tenants[0].quota.ID == tenants[1].quota.ID || tenants[0].shared.Operation.ID == tenants[1].shared.Operation.ID {
 		t.Fatal("cross-tenant idempotency merged independent quota or Operations")
+	}
+	if tenants[0].serviceRoleReceipt.BindingID == tenants[1].serviceRoleReceipt.BindingID ||
+		tenants[0].serviceRoleReceipt.RoleID == tenants[1].serviceRoleReceipt.RoleID {
+		t.Fatal("same product resource and command identity merged service Role consent across Accounts")
 	}
 	for i := range tenants {
 		tenant, other := &tenants[i], &tenants[1-i]
@@ -9394,6 +9464,12 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 		}
 		foreign := managedservicev1.CreateInstallationRequest{ID: "postgres-foreign-quota", Name: "Foreign quota", OfferingID: "postgresql-18", QuotaEntitlementID: other.quota.ID, RegionID: "local-primary"}
 		assertStatus(performJSONWithIdempotency(t, http.MethodPost, base+"/service-installations", tenant.member, "foreign-quota-key", foreign), http.StatusNotFound, "foreign quota reservation")
+		foreignBindingPath := base + "/service-installations/" + other.unique.ID + "/service-role-bindings"
+		assertStatus(performJSONWithIdempotency(t, http.MethodPost, foreignBindingPath, tenant.member,
+			"foreign-service-role-binding-key", managedservicev1.BindServiceRoleRequest{Template: tenant.serviceRoleTemplate}),
+			http.StatusNotFound, "foreign workload Role binding")
+		assertStatus(performJSON(t, http.MethodGet, iamEndpoint+"/v1/service-linked-roles/"+
+			string(other.serviceRoleReceipt.RoleID), tenant.member, nil), http.StatusForbidden, "foreign service-linked Role")
 		for _, field := range []string{"tenantId", "organizationId", "requestedBy"} {
 			body := map[string]any{"offeringId": "postgresql-18", "quotaShapeId": "pg-small", "instanceCount": 1, field: other.id}
 			assertStatus(performJSONWithIdempotency(t, http.MethodPost, base+"/quota-entitlements", tenant.member, "forged-"+field, body), http.StatusBadRequest, "forged authority body")
@@ -9429,6 +9505,15 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 		tenant.quota = quotas.Items[0]
 		assertManagedServiceRetained(t, paasEndpoint, tenant.owner, tenant.quota, tenant.shared)
 	}
+	for i := range tenants {
+		tenant := &tenants[i]
+		revokeIAMPolicyAttachment(t, iamEndpoint, tenant.owner, tenant.serviceRoleGrant.ID,
+			tenant.serviceRoleGrant.ResourceVersion, "request-service-role-administrator-revoked-"+tenant.id)
+		path := base + "/service-installations/" + tenant.unique.ID + "/service-role-bindings"
+		assertStatus(performJSONWithIdempotency(t, http.MethodPost, path, tenant.member,
+			"revoked-service-role-binding-key", managedservicev1.BindServiceRoleRequest{Template: tenant.serviceRoleTemplate}),
+			http.StatusForbidden, "next-request service Role delegation revocation")
+	}
 	applicationValues := proveApplicationTenantProcesses(t, ctx, admin, paasEndpoint, home, customer, platform.Credential)
 	assertStatus(performJSONWithIdempotency(t, http.MethodPost, base+"/quota-entitlements", platform.Credential, "platform-quota-attempt", activation), http.StatusForbidden, "platform-only tenant write")
 	revokeIAMPolicyAttachment(t, iamEndpoint, homeBearer, developerBinding.ID, 1, "request-resource-developer-revoked")
@@ -9457,6 +9542,17 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 				if record.Source != auditv1.SourcePaaS || record.Event.Actor.ID != auditv1.ActorID(tenant.memberID) || record.Event.IAMDecisionID == "" || record.Event.TenantID != auditv1.TenantID(tenant.id) {
 					t.Fatal("managed-service fact lost its original tenant/actor/authority")
 				}
+			}
+		}
+		for _, action := range []auditv1.Action{
+			auditv1.ActionIAMServiceLinkedRoleCreated, auditv1.ActionIAMWorkloadRoleBindingCreated,
+		} {
+			page := queryAudit(t, auditEndpoint, tenant.owner, auditv1.QueryRecordsRequest{PageSize: 100, Action: action}, http.StatusOK)
+			if page.TenantID != auditv1.TenantID(tenant.id) || len(page.Records) != 1 ||
+				page.Records[0].Source != auditv1.SourceIAM ||
+				page.Records[0].Event.Actor.ID != auditv1.ActorID(tenant.memberID) ||
+				page.Records[0].Event.IAMDecisionID == "" {
+				t.Fatal("service Role consent fact lost its Account, actor or authority")
 			}
 		}
 	}

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/managedservice/port"
 	"github.com/xiak/matrix/app/service/paas/internal/managedservice/usecase"
@@ -115,6 +116,61 @@ func TestGetInstallationOperationAuthorizesTheExactInstallation(t *testing.T) {
 	}
 }
 
+func TestBindServiceRoleUsesExactInstallationAndNoAuthoritySelectors(t *testing.T) {
+	now := time.Date(2026, 9, 30, 8, 0, 0, 0, time.UTC)
+	template := iamv1.ServiceRoleTemplateReference{
+		ID: "managedservice.installation-reader", Version: 1,
+		ContentDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}
+	authorizer := &stubAuthorizer{}
+	workflow := &stubWorkflow{roleReceipt: managedservicev1.ServiceRoleBindingReceipt{
+		Kind: "ServiceRoleBindingReceipt", ServiceInstallationID: "postgres-primary",
+		BindingID: "binding-one", RoleID: "role-one", Template: template,
+		Status: iamv1.WorkloadRoleBindingActive, ResourceVersion: 1, CreatedAt: now,
+	}}
+	handler := testHandler(t, authorizer, workflow)
+	request := httptest.NewRequest(http.MethodPost,
+		"/managed-services/v1/service-installations/postgres-primary/service-role-bindings",
+		strings.NewReader(`{"template":{"id":"managedservice.installation-reader","version":1,"contentDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}`))
+	request.Header.Set("Authorization", "Bearer session-secret")
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Idempotency-Key", "bind-postgres-primary")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || workflow.bindCalls != 1 {
+		t.Fatalf("status=%d calls=%d body=%s", response.Code, workflow.bindCalls, response.Body.String())
+	}
+	if authorizer.request.Action != port.AuthorizeInstallationRoleBind ||
+		authorizer.request.Resource != (port.ResourceReference{Kind: port.ResourceServiceInstallation, ID: "postgres-primary"}) ||
+		workflow.bindCommand.Credential != "Bearer session-secret" ||
+		workflow.bindCommand.IdempotencyKey != "bind-postgres-primary" ||
+		workflow.bindCommand.Request.Template != template {
+		t.Fatalf("authorization=%#v command=%#v", authorizer.request, workflow.bindCommand)
+	}
+	for _, suffix := range []string{
+		`?tenantId=forged`, `?roleId=forged`, `?purpose=PAAS`,
+	} {
+		attack := httptest.NewRequest(http.MethodPost,
+			"/managed-services/v1/service-installations/postgres-primary/service-role-bindings"+suffix,
+			strings.NewReader(`{"template":{"id":"managedservice.installation-reader","version":1,"contentDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}`))
+		attack.Header = request.Header.Clone()
+		attackResponse := httptest.NewRecorder()
+		handler.ServeHTTP(attackResponse, attack)
+		if attackResponse.Code != http.StatusBadRequest {
+			t.Fatalf("selector %s status=%d body=%s", suffix, attackResponse.Code, attackResponse.Body.String())
+		}
+	}
+	selectorBody := httptest.NewRequest(http.MethodPost,
+		"/managed-services/v1/service-installations/postgres-primary/service-role-bindings",
+		strings.NewReader(`{"template":{"id":"managedservice.installation-reader","version":1,"contentDigest":"sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},"accountId":"forged"}`))
+	selectorBody.Header = request.Header.Clone()
+	selectorResponse := httptest.NewRecorder()
+	handler.ServeHTTP(selectorResponse, selectorBody)
+	if selectorResponse.Code != http.StatusBadRequest {
+		t.Fatalf("body selector status=%d body=%s", selectorResponse.Code, selectorResponse.Body.String())
+	}
+}
+
 func TestResourceReadRejectsMalformedIdentityBeforeWorkflow(t *testing.T) {
 	workflow := &stubWorkflow{}
 	handler := testHandler(t, &stubAuthorizer{}, workflow)
@@ -177,6 +233,9 @@ type stubWorkflow struct {
 	operationReads int
 	activateCalls  int
 	createCalls    int
+	bindCalls      int
+	bindCommand    usecase.BindServiceRoleCommand
+	roleReceipt    managedservicev1.ServiceRoleBindingReceipt
 }
 
 func (workflow *stubWorkflow) ListOfferings(context.Context, port.Authorization) (managedservicev1.ServiceOfferingList, error) {
@@ -234,4 +293,13 @@ func (workflow *stubWorkflow) CreateInstallation(
 ) (managedservicev1.ServiceInstallation, bool, error) {
 	workflow.createCalls++
 	return workflow.installation, false, nil
+}
+
+func (workflow *stubWorkflow) BindServiceRole(
+	_ context.Context,
+	command usecase.BindServiceRoleCommand,
+) (managedservicev1.ServiceRoleBindingReceipt, error) {
+	workflow.bindCalls++
+	workflow.bindCommand = command
+	return workflow.roleReceipt, nil
 }

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 )
 
 const maximumSafeInteger = uint64(9007199254740991)
@@ -32,6 +34,27 @@ func ValidateCreateInstallationRequest(value CreateInstallationRequest) error {
 		validateID("offeringId", value.OfferingID),
 		validateID("quotaEntitlementId", value.QuotaEntitlementID),
 		validateID("regionId", value.RegionID),
+	)
+}
+
+func ValidateBindServiceRoleRequest(value BindServiceRoleRequest) error {
+	if iamv1.ValidateServiceRoleTemplateReference(value.Template) != nil {
+		return errors.New("service role template reference is invalid")
+	}
+	return nil
+}
+
+func ValidateServiceRoleBindingReceipt(value ServiceRoleBindingReceipt) error {
+	if value.Kind != "ServiceRoleBindingReceipt" ||
+		value.Status != iamv1.WorkloadRoleBindingActive || value.ResourceVersion != 1 ||
+		iamv1.ValidateServiceRoleTemplateReference(value.Template) != nil {
+		return errors.New("service role binding receipt is invalid")
+	}
+	return errors.Join(
+		ValidateInstallationID(value.ServiceInstallationID),
+		iamv1.ValidateID("bindingId", string(value.BindingID)),
+		iamv1.ValidateID("roleId", string(value.RoleID)),
+		validateTime("createdAt", value.CreatedAt),
 	)
 }
 
@@ -251,7 +274,7 @@ func validateErrorCode(value ErrorCode) error {
 	case ErrorInvalidArgument, ErrorUnauthenticated, ErrorPermissionDenied,
 		ErrorIdentityUnavailable, ErrorNotFound, ErrorAlreadyExists,
 		ErrorIdempotencyConflict, ErrorQuotaExhausted, ErrorRegionUnavailable,
-		ErrorInternal:
+		ErrorServiceRoleConflict, ErrorInternal:
 		return nil
 	default:
 		return errors.New("problem code is invalid")

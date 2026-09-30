@@ -12,6 +12,7 @@ var (
 	ErrUnauthenticated          = errors.New("managed-service IAM authentication failed")
 	ErrPermissionDenied         = errors.New("managed-service IAM authorization denied")
 	ErrAuthorizationUnavailable = errors.New("managed-service IAM authorization unavailable")
+	ErrWorkloadRoleConflict     = errors.New("managed-service workload Role binding conflicts")
 )
 
 const (
@@ -21,6 +22,7 @@ const (
 	AuthorizeQuotaEntitlementRead     = iamv1.ActionManagedServiceQuotaEntitlementRead
 	AuthorizeInstallationCreate       = iamv1.ActionManagedServiceInstallationCreate
 	AuthorizeInstallationRead         = iamv1.ActionManagedServiceInstallationRead
+	AuthorizeInstallationRoleBind     = iamv1.ActionManagedServiceInstallationRoleBind
 )
 
 const (
@@ -61,6 +63,17 @@ type Authorization struct {
 
 type Authorizer interface {
 	Authorize(context.Context, AuthorizationRequest) (Authorization, error)
+}
+
+// WorkloadRoleBinder is the product-to-IAM consent boundary. Its request uses
+// the same current USER credential and normalized product authorization shape;
+// the implementation adds the PaaS ServiceIdentity credential privately.
+type WorkloadRoleBinder interface {
+	BindWorkloadRole(
+		context.Context,
+		iamv1.ServiceRoleTemplateReference,
+		AuthorizationRequest,
+	) (iamv1.ServiceLinkedRoleAccess, error)
 }
 
 func ValidateAuthorization(value Authorization) error {

@@ -150,7 +150,8 @@ func run(ctx context.Context) error {
 	managedServiceWorkflow, err := managedserviceusecase.NewService(
 		managedServiceRepository,
 		managedserviceusecase.Config{
-			Catalog: domain.DefaultCatalog(),
+			Catalog:            domain.DefaultCatalog(),
+			WorkloadRoleBinder: managedServiceAuthorizer,
 			Region: managedservicev1.Region{
 				ID: "local-primary", DisplayName: "本机主区域",
 				Profile: managedservicev1.RegionLocalMachine,

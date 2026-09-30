@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/audit"
 	"github.com/xiak/matrix/app/service/paas/internal/managedservice/domain"
@@ -94,7 +95,9 @@ func TestInstallationRejectsUnavailableRegionBeforePersistence(t *testing.T) {
 	repository := newMemoryRepository()
 	region := testRegion()
 	region.State = managedservicev1.RegionStale
-	service, err := NewService(repository, Config{Catalog: domain.DefaultCatalog(), Region: region})
+	service, err := NewService(repository, Config{
+		Catalog: domain.DefaultCatalog(), Region: region, WorkloadRoleBinder: &stubWorkloadRoleBinder{},
+	})
 	if err != nil {
 		t.Fatalf("new service: %v", err)
 	}
@@ -163,12 +166,72 @@ func TestSingleResourceReadsReturnCurrentStateAndNotFound(t *testing.T) {
 	}
 }
 
+func TestBindServiceRoleUsesVerifiedInstallationAndStableCommandIdentity(t *testing.T) {
+	repository := newMemoryRepository()
+	binder := &stubWorkloadRoleBinder{}
+	service := newTestService(t, repository)
+	service.workloadRoleBinder = binder
+	authorization := testAuthorization()
+	quota, _, err := service.ActivateQuota(context.Background(), ActivateQuotaCommand{
+		Authorization: authorization, IdempotencyKey: "quota-role-binding",
+		Request: managedservicev1.ActivateQuotaRequest{
+			OfferingID: domain.PostgreSQLOfferingID, QuotaShapeID: "pg-small", InstanceCount: 1,
+		},
+	})
+	if err != nil {
+		t.Fatalf("activate quota: %v", err)
+	}
+	installation, _, err := service.CreateInstallation(context.Background(), CreateInstallationCommand{
+		Authorization: authorization, IdempotencyKey: "installation-role-binding",
+		Request: managedservicev1.CreateInstallationRequest{
+			ID: "postgres-role-binding", Name: "Postgres role binding",
+			OfferingID: domain.PostgreSQLOfferingID, QuotaEntitlementID: quota.ID, RegionID: "local-primary",
+		},
+	})
+	if err != nil {
+		t.Fatalf("create installation: %v", err)
+	}
+	template := testServiceRoleTemplateReference()
+	binder.result = testServiceLinkedRoleAccess(t, authorization.TenantID, installation.ID, template)
+	command := BindServiceRoleCommand{
+		Authorization: authorization, Credential: "Bearer user-session",
+		InstallationID: installation.ID, Request: managedservicev1.BindServiceRoleRequest{Template: template},
+		IdempotencyKey: "bind-role-request",
+	}
+	receipt, err := service.BindServiceRole(context.Background(), command)
+	if err != nil || receipt.ServiceInstallationID != installation.ID || receipt.Template != template ||
+		receipt.BindingID != binder.result.Bindings[0].ID {
+		t.Fatalf("binding receipt=%#v err=%v", receipt, err)
+	}
+	wantRequestID := serviceRoleBindingRequestID(command.IdempotencyKey)
+	if binder.calls != 1 || binder.request.Action != port.AuthorizeInstallationRoleBind ||
+		binder.request.Resource != (port.ResourceReference{Kind: port.ResourceServiceInstallation, ID: installation.ID}) ||
+		binder.request.RequestID != wantRequestID || binder.request.Credential != command.Credential {
+		t.Fatalf("binding request=%#v calls=%d", binder.request, binder.calls)
+	}
+	if _, err := service.BindServiceRole(context.Background(), command); err != nil ||
+		binder.request.RequestID != wantRequestID {
+		t.Fatalf("equal replay did not keep command identity: request=%#v err=%v", binder.request, err)
+	}
+	before := binder.calls
+	command.InstallationID = "postgres-absent"
+	if _, err := service.BindServiceRole(context.Background(), command); !errors.Is(err, ErrNotFound) || binder.calls != before {
+		t.Fatalf("absent resource reached IAM: calls=%d before=%d err=%v", binder.calls, before, err)
+	}
+	command.InstallationID = installation.ID
+	command.Authorization.SubjectType = port.SubjectServiceAccount
+	if _, err := service.BindServiceRole(context.Background(), command); !errors.Is(err, ErrInvalidArgument) || binder.calls != before {
+		t.Fatalf("service subject reached USER consent: calls=%d before=%d err=%v", binder.calls, before, err)
+	}
+}
+
 func newTestService(t *testing.T, repository Repository) *Service {
 	t.Helper()
 	var operationSequence atomic.Uint32
 	service, err := NewService(repository, Config{
 		Catalog: domain.DefaultCatalog(), Region: testRegion(),
-		NewQuotaID: func() (string, error) { return "quota-test", nil },
+		WorkloadRoleBinder: &stubWorkloadRoleBinder{},
+		NewQuotaID:         func() (string, error) { return "quota-test", nil },
 		NewOperationID: func() (string, error) {
 			if operationSequence.Add(1) == 1 {
 				return "operation-one", nil
@@ -180,6 +243,77 @@ func newTestService(t *testing.T, repository Repository) *Service {
 		t.Fatalf("new service: %v", err)
 	}
 	return service
+}
+
+type stubWorkloadRoleBinder struct {
+	calls    int
+	template iamv1.ServiceRoleTemplateReference
+	request  port.AuthorizationRequest
+	result   iamv1.ServiceLinkedRoleAccess
+	err      error
+}
+
+func (binder *stubWorkloadRoleBinder) BindWorkloadRole(
+	_ context.Context,
+	template iamv1.ServiceRoleTemplateReference,
+	request port.AuthorizationRequest,
+) (iamv1.ServiceLinkedRoleAccess, error) {
+	binder.calls++
+	binder.template = template
+	binder.request = request
+	return binder.result, binder.err
+}
+
+func testServiceRoleTemplateReference() iamv1.ServiceRoleTemplateReference {
+	return iamv1.ServiceRoleTemplateReference{
+		ID: "managedservice.installation-reader", Version: 1,
+		ContentDigest: "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+	}
+}
+
+func testServiceLinkedRoleAccess(
+	t *testing.T,
+	accountID string,
+	installationID string,
+	template iamv1.ServiceRoleTemplateReference,
+) iamv1.ServiceLinkedRoleAccess {
+	t.Helper()
+	createdAt := time.Date(2026, 9, 30, 8, 0, 0, 0, time.UTC)
+	policyVersion := iamv1.PolicyVersionReference{
+		PolicyID:      "policy-managedservice-reader",
+		VersionID:     "version-managedservice-reader",
+		ContentDigest: "sha256:abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+	}
+	relation := iamv1.ServiceLinkedRole{
+		APIVersion: iamv1.APIVersion, Kind: "ServiceLinkedRole",
+		Role: iamv1.Role{
+			APIVersion: iamv1.APIVersion, Kind: "Role", ID: "role-managedservice-reader",
+			AccountID: iamv1.AccountID(accountID), Name: "ManagedServiceInstallationReader",
+			Description: "Managed service installation reader", Tags: []iamv1.RoleTag{},
+			Management: iamv1.RoleServiceLinked, Status: iamv1.RoleActive,
+			MaxSessionDurationSeconds: 900, ResourceVersion: 1,
+			CurrentTrustVersionID: "trust-managedservice-reader", CreatedAt: createdAt, UpdatedAt: createdAt,
+		},
+		Template: template,
+		ServicePrincipal: iamv1.ServicePrincipalReference{
+			InstallationID: "installation-platform", PrincipalID: "service-paas", Purpose: iamv1.ServicePaaS,
+		},
+		PermissionCeiling: policyVersion,
+	}
+	binding := iamv1.WorkloadRoleBinding{
+		APIVersion: iamv1.APIVersion, Kind: "WorkloadRoleBinding", ID: "binding-managedservice-reader",
+		AccountID: relation.Role.AccountID, RoleID: relation.Role.ID, Template: template,
+		Workload: iamv1.ResourceReference{Kind: iamv1.ResourceServiceInstallation, ID: installationID},
+		Status:   iamv1.WorkloadRoleBindingActive, ResourceVersion: 1, CreatedAt: createdAt, UpdatedAt: createdAt,
+	}
+	result := iamv1.ServiceLinkedRoleAccess{
+		APIVersion: iamv1.APIVersion, Kind: "ServiceLinkedRoleAccess", Relation: relation,
+		Bindings: []iamv1.WorkloadRoleBinding{binding},
+	}
+	if iamv1.ValidateServiceLinkedRoleAccess(result) != nil {
+		t.Fatal("test service-linked Role access is invalid")
+	}
+	return result
 }
 
 func testAuthorization() port.Authorization {

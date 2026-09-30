@@ -28,6 +28,7 @@ type Workflow interface {
 	ListServiceInstallations(context.Context, port.Authorization) (managedservicev1.ServiceInstallationList, error)
 	GetServiceInstallation(context.Context, port.Authorization, string) (managedservicev1.ServiceInstallation, error)
 	GetInstallationOperation(context.Context, port.Authorization, string) (managedservicev1.InstallationOperation, error)
+	BindServiceRole(context.Context, usecase.BindServiceRoleCommand) (managedservicev1.ServiceRoleBindingReceipt, error)
 	ActivateQuota(context.Context, usecase.ActivateQuotaCommand) (managedservicev1.QuotaEntitlement, bool, error)
 	CreateInstallation(context.Context, usecase.CreateInstallationCommand) (managedservicev1.ServiceInstallation, bool, error)
 }
@@ -62,6 +63,7 @@ func NewHandler(authorizer port.Authorizer, workflow Workflow, config Config) (h
 	routes.HandleFunc("POST /managed-services/v1/service-installations", value.createInstallation)
 	routes.HandleFunc("GET /managed-services/v1/service-installations/{installationId}", value.getServiceInstallation)
 	routes.HandleFunc("GET /managed-services/v1/service-installations/{installationId}/operation", value.getInstallationOperation)
+	routes.HandleFunc("POST /managed-services/v1/service-installations/{installationId}/service-role-bindings", value.bindServiceRole)
 	return routes, nil
 }
 
@@ -223,6 +225,30 @@ func (value *handler) createInstallation(response http.ResponseWriter, request *
 	writeJSON(response, status, result)
 }
 
+func (value *handler) bindServiceRole(response http.ResponseWriter, request *http.Request) {
+	id := request.PathValue("installationId")
+	authorization, requestID, ok := value.authorizeResource(
+		response, request, port.AuthorizeInstallationRoleBind, port.ResourceServiceInstallation, id,
+		iamv1.AuthorizationResourceInstance, "",
+	)
+	if !ok || !acceptsNoQuery(response, request, requestID) {
+		return
+	}
+	body, ok := decodeRequest[managedservicev1.BindServiceRoleRequest](response, request, requestID)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.BindServiceRole(request.Context(), usecase.BindServiceRoleCommand{
+		Authorization: authorization, Credential: request.Header.Get("Authorization"),
+		InstallationID: id, Request: body, IdempotencyKey: request.Header.Get("Idempotency-Key"),
+	})
+	if err != nil {
+		writeWorkflowError(response, requestID, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
 func (value *handler) authorizeCollection(
 	response http.ResponseWriter,
 	request *http.Request,
@@ -312,6 +338,15 @@ func acceptsNoInput(
 	return true
 }
 
+func acceptsNoQuery(response http.ResponseWriter, request *http.Request, requestID string) bool {
+	if request.URL.RawQuery != "" {
+		writeProblem(response, requestID, http.StatusBadRequest,
+			managedservicev1.ErrorInvalidArgument, "Invalid argument", "query selectors are not accepted", false)
+		return false
+	}
+	return true
+}
+
 func writeResult(response http.ResponseWriter, requestID string, result any, err error) {
 	if err != nil {
 		writeWorkflowError(response, requestID, err)
@@ -336,6 +371,18 @@ func writeAuthorizationError(response http.ResponseWriter, requestID string, err
 
 func writeWorkflowError(response http.ResponseWriter, requestID string, err error) {
 	switch {
+	case errors.Is(err, port.ErrUnauthenticated):
+		writeProblem(response, requestID, http.StatusUnauthorized,
+			managedservicev1.ErrorUnauthenticated, "Unauthenticated", "IAM authentication failed", false)
+	case errors.Is(err, port.ErrPermissionDenied):
+		writeProblem(response, requestID, http.StatusForbidden,
+			managedservicev1.ErrorPermissionDenied, "Permission denied", "IAM denied this action", false)
+	case errors.Is(err, port.ErrAuthorizationUnavailable):
+		writeProblem(response, requestID, http.StatusServiceUnavailable,
+			managedservicev1.ErrorIdentityUnavailable, "Identity unavailable", "IAM authorization is unavailable", true)
+	case errors.Is(err, port.ErrWorkloadRoleConflict):
+		writeProblem(response, requestID, http.StatusConflict,
+			managedservicev1.ErrorServiceRoleConflict, "Service Role conflict", "the service Role binding conflicts with current authority", false)
 	case errors.Is(err, usecase.ErrInvalidArgument):
 		writeProblem(response, requestID, http.StatusBadRequest,
 			managedservicev1.ErrorInvalidArgument, "Invalid argument", "request violates the managed-service contract", false)

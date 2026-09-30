@@ -42,5 +42,6 @@ const (
 	ErrorIdempotencyConflict ErrorCode = "IDEMPOTENCY_CONFLICT"
 	ErrorQuotaExhausted      ErrorCode = "QUOTA_EXHAUSTED"
 	ErrorRegionUnavailable   ErrorCode = "REGION_UNAVAILABLE"
+	ErrorServiceRoleConflict ErrorCode = "SERVICE_ROLE_CONFLICT"
 	ErrorInternal            ErrorCode = "INTERNAL"
 )

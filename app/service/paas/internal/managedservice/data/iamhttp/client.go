@@ -14,6 +14,7 @@ import (
 )
 
 var _ port.Authorizer = (*Client)(nil)
+var _ port.WorkloadRoleBinder = (*Client)(nil)
 
 type Config struct {
 	Endpoint          string
@@ -115,6 +116,59 @@ func (client *Client) Authorize(
 	return authorization, nil
 }
 
+func (client *Client) BindWorkloadRole(
+	ctx context.Context,
+	template iamv1.ServiceRoleTemplateReference,
+	request port.AuthorizationRequest,
+) (iamv1.ServiceLinkedRoleAccess, error) {
+	if client == nil || client.http == nil {
+		return iamv1.ServiceLinkedRoleAccess{}, port.ErrAuthorizationUnavailable
+	}
+	if ctx == nil || iamv1.ValidateServiceRoleTemplateReference(template) != nil ||
+		port.ValidateAuthorizationRequest(request) != nil || request.Action != port.AuthorizeInstallationRoleBind ||
+		request.Resource.Kind != port.ResourceServiceInstallation ||
+		request.ResourceMode != iamv1.AuthorizationResourceInstance || request.CollectionUsage != "" {
+		return iamv1.ServiceLinkedRoleAccess{}, port.ErrAuthorizationUnavailable
+	}
+	subjectCredential, err := parseBearer(request.Credential)
+	if err != nil {
+		return iamv1.ServiceLinkedRoleAccess{}, port.ErrUnauthenticated
+	}
+	iamAuthorization, err := toIAMRequest(request)
+	if err != nil {
+		return iamv1.ServiceLinkedRoleAccess{}, port.ErrAuthorizationUnavailable
+	}
+	command := iamv1.CreateWorkloadRoleBindingRequest{Template: template, Authorization: iamAuthorization}
+	if iamv1.ValidateCreateWorkloadRoleBindingRequest(command) != nil {
+		return iamv1.ServiceLinkedRoleAccess{}, port.ErrAuthorizationUnavailable
+	}
+	body, err := json.Marshal(command)
+	if err != nil {
+		return iamv1.ServiceLinkedRoleAccess{}, port.ErrAuthorizationUnavailable
+	}
+	defer clear(body)
+	response, err := client.http.Do(
+		ctx, http.MethodPost, "/v1/internal/workload-role-bindings", bytes.NewReader(body), "application/json",
+		client.serviceCredential, subjectCredential,
+	)
+	if err != nil {
+		return iamv1.ServiceLinkedRoleAccess{}, port.ErrAuthorizationUnavailable
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return iamv1.ServiceLinkedRoleAccess{}, bindingStatusError(response.StatusCode)
+	}
+	var result iamv1.ServiceLinkedRoleAccess
+	if !authorityhttp.ResponseIsJSON(response) || iamv1.DecodeRequest(response.Body, &result) != nil ||
+		iamv1.ValidateServiceLinkedRoleAccess(result) != nil || len(result.Bindings) != 1 ||
+		result.Relation.Template != template || result.Bindings[0].Template != template ||
+		result.Relation.ServicePrincipal.Purpose != iamv1.ServicePaaS ||
+		result.Bindings[0].Workload != iamAuthorization.Resource {
+		return iamv1.ServiceLinkedRoleAccess{}, port.ErrAuthorizationUnavailable
+	}
+	return result, nil
+}
+
 func toIAMRequest(request port.AuthorizationRequest) (iamv1.AuthorizationRequest, error) {
 	result, err := iamv1.NewAuthorizationRequest(request.Action,
 		iamv1.ResourceReference{Kind: request.Resource.Kind, ID: request.Resource.ID},
@@ -145,4 +199,11 @@ func authorizationStatusError(status int) error {
 	default:
 		return port.ErrAuthorizationUnavailable
 	}
+}
+
+func bindingStatusError(status int) error {
+	if status == http.StatusConflict {
+		return port.ErrWorkloadRoleConflict
+	}
+	return authorizationStatusError(status)
 }
