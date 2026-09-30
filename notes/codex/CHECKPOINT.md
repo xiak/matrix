@@ -6,8 +6,8 @@
 - Updated: 2026-09-30
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `4ba6807e`
-- Pushed documentation/head milestone: `2c949a60`
+- Pushed source/embed milestone: `dda28920`
+- Pushed documentation/head milestone: `cbd19353`
 
 ## Authoritative route
 
@@ -28,7 +28,11 @@ compaction or handoff, then validate it against Git and the linked FEAT.
 The existing independent MOCK console remains available and is the inspectable
 UX surface. Its service-authorization review and exact-resource unbind flow are
 browser-memory only; they preserve the Account relation and do not claim to
-terminate unimplemented service sessions.
+terminate unimplemented service sessions. The same inline flow now rehearses
+the fixed public error boundary: uncertain results preserve one request intent
+for equal replay, authorization-state conflicts require reread, idempotency
+content conflicts and invalid requests stop, and authentication/authorization
+failures never become a success state.
 
 The product repository now contains a strict but unmounted public bind/unbind
 client adapted from fixed IAM source `92ea765b`. It accepts a caller-owned
