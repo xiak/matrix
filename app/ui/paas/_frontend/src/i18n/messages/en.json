@@ -2120,7 +2120,7 @@
       "bindingId": "Binding ID",
       "updatedAt": "Updated"
     },
-    "states": { "illustrative": "Illustrative · unpublished", "notAuthorized": "Not authorized for this account", "authorized": "Account authorized · design preview", "active": "ACTIVE" },
+    "states": { "illustrative": "Illustrative · unpublished", "notAuthorized": "Not authorized for this account", "notConfigured": "Not configured", "authorized": "Account authorized · design preview", "active": "ACTIVE" },
     "observation": {
       "pageTitle": "Account service-authorization observation",
       "eyebrow": "Authorized read-only scenario · MOCK",
@@ -2177,6 +2177,7 @@
     "activeIsNotConsent": "ACTIVE means only that this platform template may be used by a future customer-consent flow. It does not mean this account has authorized it or that any business resource is bound.",
     "policySnapshotTitle": "Immutable permission ceiling",
     "policySnapshotHint": "Future consent must reference this exact policy version and digest. A template or policy revision must not silently expand an existing authorization.",
+    "authorizationUnavailable": "Not connected",
     "noAccountObservation": "IAM has not published a read route for this account's service-linked role and workload bindings. This page does not infer authorization from template state and exposes no authorize or revoke action.",
     "notAccountState": "Not account authorization state",
     "emptyTitle": "No published templates",
@@ -2205,6 +2206,13 @@
       "unavailable": { "title": "The template directory is temporarily unavailable", "description": "IAM did not return a verifiable template directory. Try again later." },
       "expired": { "title": "Your session has expired", "description": "Sign in again before reading service authorization templates." }
     }
+  },
+  "ServiceAuthorizationChain": {
+    "title": "Service authorization chain",
+    "hint": "Cloud service authorization has three independent boundaries. A later state must not be inferred from an earlier one.",
+    "template": { "title": "Platform template", "hint": "Published through a controlled product and IAM platform release; it defines only the ceiling available to consent." },
+    "account": { "title": "Account consent", "hint": "The target account must explicitly consent before a service-linked role relation can exist." },
+    "binding": { "title": "Resource binding", "hint": "Each business resource still requires an exact binding; account consent does not authorize every resource." }
   },
   "Console": {
     "brandHome": "Matrix Cloud console home",

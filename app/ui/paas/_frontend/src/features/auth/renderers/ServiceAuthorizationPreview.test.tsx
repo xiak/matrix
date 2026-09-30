@@ -13,6 +13,10 @@ describe("ServiceAuthorizationPreview", () => {
     render(<LocaleProvider><ServiceAuthorizationPreview workspace={initialAccessWorkspace("org-xiak")} onClose={vi.fn()} /></LocaleProvider>);
 
     await user.click(screen.getByRole("button", { name: "托管服务安装访问" }));
+    const chain = screen.getByRole("heading", { name: "服务授权链" }).closest("section")!;
+    expect(within(chain).getByText("示意模板 · 未发布")).toBeTruthy();
+    expect(within(chain).getByText("当前账号未授权")).toBeTruthy();
+    expect(within(chain).getByText("未配置")).toBeTruthy();
     const observationTrigger = screen.getByRole("button", { name: "查看授权后观察" });
     await user.click(observationTrigger);
 

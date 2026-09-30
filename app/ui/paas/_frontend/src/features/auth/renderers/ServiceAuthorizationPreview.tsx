@@ -6,6 +6,7 @@ import { useTranslations } from "next-intl";
 import { Alert, Badge, Button, Card, Steps, Table } from "@ui/xiak";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
 import type { AccountPolicyDocument } from "../domain/accounts";
+import { ServiceAuthorizationChain } from "./ServiceAuthorizationChain";
 import styles from "./ServiceAuthorizationPreview.module.css";
 
 type PreviewView = "directory" | "detail" | "review" | "account-access";
@@ -94,6 +95,11 @@ function TemplateDetail({ accountId, reviewRef, observationRef, onReview, onObse
       <div><dt>{t("fields.purpose")}</dt><dd><code>{previewTemplate.purpose}</code></dd></div>
       <div><dt>{t("fields.targetResource")}</dt><dd><code>SERVICE_INSTALLATION:{previewTemplate.targetResourceId}</code></dd></div>
     </dl>
+    <ServiceAuthorizationChain
+      template={{ label: t("states.illustrative"), tone: "warning" }}
+      account={{ label: t("states.notAuthorized") }}
+      binding={{ label: t("states.notConfigured") }}
+    />
     <div className={styles.detailGrid}>
       <Card><Card.Header className={styles.cardHeading}><KeyRound aria-hidden="true" /><div><span>{t("detail.trustLabel")}</span><h4>{t("detail.trustTitle")}</h4></div></Card.Header><Card.Body className={styles.cardBody}><p>{t("detail.trustHint")}</p><code>{previewTemplate.servicePrincipal}</code></Card.Body></Card>
       <Card><Card.Header className={styles.cardHeading}><ShieldCheck aria-hidden="true" /><div><span>{t("detail.permissionLabel")}</span><h4>{previewTemplate.snapshotName} · v{previewTemplate.revision}</h4></div></Card.Header><Card.Body className={styles.cardBody}><p>{t("detail.permissionHint")}</p><Alert status="info">{t("detail.snapshotBoundary")}</Alert></Card.Body></Card>

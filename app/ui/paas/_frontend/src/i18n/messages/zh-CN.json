@@ -2120,7 +2120,7 @@
       "bindingId": "绑定 ID",
       "updatedAt": "更新时间"
     },
-    "states": { "illustrative": "示意模板 · 未发布", "notAuthorized": "当前账号未授权", "authorized": "账号已授权 · 设计预览", "active": "ACTIVE" },
+    "states": { "illustrative": "示意模板 · 未发布", "notAuthorized": "当前账号未授权", "notConfigured": "未配置", "authorized": "账号已授权 · 设计预览", "active": "ACTIVE" },
     "observation": {
       "pageTitle": "账号服务授权观察",
       "eyebrow": "授权后只读场景 · MOCK",
@@ -2177,6 +2177,7 @@
     "activeIsNotConsent": "ACTIVE 只表示此平台模板可用于未来的客户同意流程，不表示当前账号已经授权，也不表示任何业务资源已经绑定。",
     "policySnapshotTitle": "不可变权限上限",
     "policySnapshotHint": "未来同意必须引用这个精确策略版本及摘要；模板或策略升版不能静默扩大既有授权。",
+    "authorizationUnavailable": "尚未接入",
     "noAccountObservation": "IAM 尚未发布当前账号的服务关联角色与工作负载绑定读取接口。本页不会据模板状态推断授权结果，也不提供授权或撤销操作。",
     "notAccountState": "非账号授权状态",
     "emptyTitle": "暂无已发布模板",
@@ -2205,6 +2206,13 @@
       "unavailable": { "title": "暂时无法读取模板目录", "description": "IAM 没有返回可验证的模板目录。请稍后重试。" },
       "expired": { "title": "会话已过期", "description": "请重新登录后再读取服务授权模板。" }
     }
+  },
+  "ServiceAuthorizationChain": {
+    "title": "服务授权链",
+    "hint": "公有云服务授权分为三个独立边界。后一个状态不能由前一个状态推断。",
+    "template": { "title": "平台模板", "hint": "由产品团队和 IAM 平台受控发布，只定义可供同意的权限上限。" },
+    "account": { "title": "账号同意", "hint": "必须由目标账号明确同意后，才能形成服务关联角色关系。" },
+    "binding": { "title": "资源绑定", "hint": "每个业务资源仍需独立绑定；账号同意不等于所有资源都已授权。" }
   },
   "Console": {
     "brandHome": "Matrix Cloud 控制台首页",

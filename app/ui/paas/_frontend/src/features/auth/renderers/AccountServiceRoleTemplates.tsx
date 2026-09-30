@@ -6,6 +6,7 @@ import { Alert, Badge, Button, Card, ContentPage, EmptyState, Table, TableSkelet
 import type { ServiceRoleTemplateClient, ServiceRoleTemplateLoad } from "../application/AccountAccessProvider";
 import type { ServiceRoleTemplate } from "../domain/accounts";
 import { WorkspaceDetail } from "./AccessWorkspaceUi";
+import { ServiceAuthorizationChain } from "./ServiceAuthorizationChain";
 import styles from "./AccountAccessRenderer.module.css";
 
 type State = { status: "loading" } | ServiceRoleTemplateLoad;
@@ -31,6 +32,11 @@ function TemplateDetail({ template, onBack }: { template: ServiceRoleTemplate; o
       <div><dt>{t("fields.maxSession")}</dt><dd>{durationLabel(template.spec.maxSessionDurationSeconds)}</dd></div>
       <div><dt>{t("fields.workloadKinds")}</dt><dd><div className={styles.roleTags}>{template.spec.workloadResourceKinds.map((kind) => <Badge key={kind}>{kind}</Badge>)}</div></dd></div>
     </dl>
+    <ServiceAuthorizationChain
+      template={{ label: t(`states.${template.status}`), tone: template.status === "ACTIVE" ? "success" : "neutral" }}
+      account={{ label: t("authorizationUnavailable") }}
+      binding={{ label: t("authorizationUnavailable") }}
+    />
     <section className={styles.stack} aria-labelledby="service-role-policy-version">
       <div>
         <h3 className={styles.detailTitle} id="service-role-policy-version">{t("policySnapshotTitle")}</h3>
