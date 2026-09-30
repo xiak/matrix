@@ -617,4 +617,4 @@ User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前�
 
 公共 UI、生产导出、完整前端及 Go 回归证据只归
 [FEAT-007](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence)
-所有。真实 PolicyVersion/授权目录作者流程的后端浏览器联调、Role/trust/policy 变更与 STS、SSO，个人 MFA 的替换/移除/恢复 LIVE 适配，Role 只读、首次绑定与访问密钥的真实后端浏览器联调，以及共享跨服务导航和概览之外的 IAM 浅色/混色浏览器与键盘专项尚未完成。仍需与固定后端原子整合并执行相应发布门禁；本 UX 分支独立运行不等于完整 IAM 安装候选已验收。
+所有。共享跨服务导航、概览和 13 个 IAM 主目的地的 DEV MOCK 浅色/混色及键盘专项已由 [FEAT-007 的 Real DEV browser 证据](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence) 统一验收并持有；本轮在 `390 × 844` 再次确认两种主题下页面标题、稳定焦点、视口宽度、浮层清理和控制台 warning/error 均无异常，用户页公共“页面操作”菜单可用键盘打开，并在 `Escape` 后把焦点交还触发器。该结果只接受共享外壳和隔离 MOCK 交互，不替代真实 IAM。真实 PolicyVersion/授权目录作者流程的后端浏览器联调、Role/trust/policy 变更与 STS、SSO，个人 MFA 的替换/移除/恢复 LIVE 适配，以及 Role 只读、首次绑定与访问密钥的真实后端浏览器联调仍未完成。仍需与固定后端原子整合并执行相应发布门禁；本 UX 分支独立运行不等于完整 IAM 安装候选已验收。
