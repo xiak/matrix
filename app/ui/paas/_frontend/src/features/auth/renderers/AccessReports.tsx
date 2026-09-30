@@ -3,12 +3,12 @@
 import { useState, type RefObject } from "react";
 import { useFormatter, useTranslations } from "next-intl";
 import { ArrowRight } from "lucide-react";
-import { ActionMenu, Alert, Badge, Button, Card, Typography } from "@ui/xiak";
+import { ActionMenu, Alert, Badge, Button, Card, Tabs, Typography } from "@ui/xiak";
 import type { AccountAccessView } from "../domain/accounts";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
 import type { SessionSummary } from "../domain/session";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
-import { buildAccessActivityObservations, buildAccessReport, buildAccessSecuritySnapshot, buildUnusedAccessFindingPreview, type AccessSecurityCheckState, type UnusedAccessFindingPreview } from "../scenes/accessReport";
+import { buildAccessActivityObservations, buildAccessAnalysisPreview, buildAccessReport, buildAccessSecuritySnapshot, type AccessAnalysisTrustEntry, type AccessSecurityCheckState, type UnusedAccessFindingPreview } from "../scenes/accessReport";
 import { WorkspaceCollection, WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
 import styles from "./AccountAccessRenderer.module.css";
 
@@ -25,61 +25,114 @@ const findingStatus: Record<UnusedAccessFindingPreview["status"], "warning" | "n
   resolved: "success"
 };
 
-export function UnusedAccessReviewPreview({ workspace, scene, onBack, onNavigate }: {
+const trustEntryStatus: Record<AccessAnalysisTrustEntry["configuration"], "info" | "warning" | "neutral"> = {
+  configured: "info",
+  incomplete: "warning",
+  disabled: "neutral"
+};
+
+export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: {
   workspace: AccessWorkspace;
   scene: AccountAccessScene;
   onBack(): void;
   onNavigate(view: AccountAccessView, id?: string): void;
 }) {
-  const t = useTranslations("IamWorkspace.unusedAccessReview");
-  const [selected, setSelected] = useState<UnusedAccessFindingPreview | null>(null);
-  const findings = buildUnusedAccessFindingPreview(workspace, scene);
-  const selectedFinding = selected?.accountId === workspace.accountId ? selected : null;
-  if (selectedFinding) return <WorkspaceDetail key={selectedFinding.id} title={t("detailTitle", { name: selectedFinding.name })} onBack={() => setSelected(null)}>
-    <Alert status="info">{t("sampleEvidence")}</Alert>
+  const t = useTranslations("IamWorkspace.accessAnalysis");
+  const [section, setSection] = useState<"external" | "unused">("external");
+  const [selectedTrustEntry, setSelectedTrustEntry] = useState<AccessAnalysisTrustEntry | null>(null);
+  const [selectedUnusedFinding, setSelectedUnusedFinding] = useState<UnusedAccessFindingPreview | null>(null);
+  const analysis = buildAccessAnalysisPreview(workspace, scene);
+  const selectedTrust = selectedTrustEntry?.accountId === workspace.accountId ? selectedTrustEntry : null;
+  const selectedUnused = selectedUnusedFinding?.accountId === workspace.accountId ? selectedUnusedFinding : null;
+
+  if (selectedTrust) return <WorkspaceDetail key={selectedTrust.id} title={t("external.detailTitle", { name: selectedTrust.name })} onBack={() => setSelectedTrustEntry(null)}>
+    <Alert status="info">{t("external.configurationEvidence")}</Alert>
     <Card>
-      <Card.Header><div><Typography.Title as="h2" level={3}>{selectedFinding.name}</Typography.Title><Typography.Text tone="muted">{selectedFinding.subjectId}</Typography.Text></div><Badge status={findingStatus[selectedFinding.status]}>{t(`statuses.${selectedFinding.status}`)}</Badge></Card.Header>
+      <Card.Header><div><Typography.Title as="h2" level={3}>{selectedTrust.name}</Typography.Title><Typography.Text tone="muted">{selectedTrust.principal}</Typography.Text></div><Badge status={trustEntryStatus[selectedTrust.configuration]}>{t(`external.states.${selectedTrust.configuration}`)}</Badge></Card.Header>
       <Card.Body className={styles.detail}>
         <dl className={styles.facts}>
-          <div><dt>{t("account")}</dt><dd><code>{selectedFinding.accountId}</code></dd></div>
-          <div><dt>{t("findingType")}</dt><dd>{t(`types.${selectedFinding.findingType}`)}</dd></div>
-          <div><dt>{t("principalType")}</dt><dd>{t(`subjects.${selectedFinding.subjectKind}`)}</dd></div>
-          <div><dt>{t("lastObserved")}</dt><dd><WorkspaceTime value={selectedFinding.lastObservedAt} /></dd></div>
-          <div><dt>{t("reviewWindow")}</dt><dd>{t("days", { count: selectedFinding.windowDays })}</dd></div>
-          <div><dt>{t("findingCreated")}</dt><dd><WorkspaceTime value={selectedFinding.generatedAt} /></dd></div>
-          <div><dt>{t("evidenceCoverage")}</dt><dd>{t("completeSample")}</dd></div>
+          <div><dt>{t("account")}</dt><dd><code>{selectedTrust.accountId}</code></dd></div>
+          <div><dt>{t("external.entryType")}</dt><dd>{t(`external.kinds.${selectedTrust.kind}`)}</dd></div>
+          <div><dt>{t("external.principal")}</dt><dd><code>{selectedTrust.principal}</code></dd></div>
+          <div><dt>{t("external.role")}</dt><dd>{selectedTrust.roleName}<small>{selectedTrust.roleId}</small></dd></div>
+          <div><dt>{t("external.source")}</dt><dd>{selectedTrust.sourceName}{selectedTrust.sourceId !== selectedTrust.sourceName ? <small>{selectedTrust.sourceId}</small> : null}</dd></div>
+          <div><dt>{t("external.createdAt")}</dt><dd><WorkspaceTime value={selectedTrust.createdAt} /></dd></div>
+          <div><dt>{t("external.evidenceCoverage")}</dt><dd>{t("external.configurationOnly")}</dd></div>
         </dl>
-        <section aria-labelledby="unused-access-recommendation" className={styles.stack}>
-          <Typography.Title as="h3" id="unused-access-recommendation" level={3}>{t("recommendationTitle")}</Typography.Title>
-          <p className={styles.note}>{t(`recommendations.${selectedFinding.findingType}`)}</p>
-          <Alert status="warning">{t("noAutomaticAction")}</Alert>
+        <section aria-labelledby="external-access-recommendation" className={styles.stack}>
+          <Typography.Title as="h3" id="external-access-recommendation" level={3}>{t("external.recommendationTitle")}</Typography.Title>
+          <p className={styles.note}>{t(`external.recommendations.${selectedTrust.kind}`)}</p>
+          <Alert status="warning">{t("external.noEffectiveAccessConclusion")}</Alert>
         </section>
       </Card.Body>
-      <Card.Footer><Button onClick={() => onNavigate(selectedFinding.target.view, selectedFinding.target.id)}>{t("reviewTarget")}<ArrowRight aria-hidden="true" /></Button></Card.Footer>
+      <Card.Footer><Button onClick={() => onNavigate(selectedTrust.target.view, selectedTrust.target.id)}>{t("external.reviewTarget")}<ArrowRight aria-hidden="true" /></Button></Card.Footer>
     </Card>
   </WorkspaceDetail>;
 
-  const statusCounts = findings.reduce<Record<UnusedAccessFindingPreview["status"], number>>((counts, finding) => {
+  if (selectedUnused) return <WorkspaceDetail key={selectedUnused.id} title={t("unused.detailTitle", { name: selectedUnused.name })} onBack={() => setSelectedUnusedFinding(null)}>
+    <Alert status="info">{t("unused.sampleEvidence")}</Alert>
+    <Card>
+      <Card.Header><div><Typography.Title as="h2" level={3}>{selectedUnused.name}</Typography.Title><Typography.Text tone="muted">{selectedUnused.subjectId}</Typography.Text></div><Badge status={findingStatus[selectedUnused.status]}>{t(`unused.statuses.${selectedUnused.status}`)}</Badge></Card.Header>
+      <Card.Body className={styles.detail}>
+        <dl className={styles.facts}>
+          <div><dt>{t("account")}</dt><dd><code>{selectedUnused.accountId}</code></dd></div>
+          <div><dt>{t("unused.findingType")}</dt><dd>{t(`unused.types.${selectedUnused.findingType}`)}</dd></div>
+          <div><dt>{t("unused.principalType")}</dt><dd>{t(`unused.subjects.${selectedUnused.subjectKind}`)}</dd></div>
+          <div><dt>{t("unused.lastObserved")}</dt><dd><WorkspaceTime value={selectedUnused.lastObservedAt} /></dd></div>
+          <div><dt>{t("unused.reviewWindow")}</dt><dd>{t("unused.days", { count: selectedUnused.windowDays })}</dd></div>
+          <div><dt>{t("unused.findingCreated")}</dt><dd><WorkspaceTime value={selectedUnused.generatedAt} /></dd></div>
+          <div><dt>{t("unused.evidenceCoverage")}</dt><dd>{t("unused.completeSample")}</dd></div>
+        </dl>
+        <section aria-labelledby="unused-access-recommendation" className={styles.stack}>
+          <Typography.Title as="h3" id="unused-access-recommendation" level={3}>{t("unused.recommendationTitle")}</Typography.Title>
+          <p className={styles.note}>{t(`unused.recommendations.${selectedUnused.findingType}`)}</p>
+          <Alert status="warning">{t("unused.noAutomaticAction")}</Alert>
+        </section>
+      </Card.Body>
+      <Card.Footer><Button onClick={() => onNavigate(selectedUnused.target.view, selectedUnused.target.id)}>{t("unused.reviewTarget")}<ArrowRight aria-hidden="true" /></Button></Card.Footer>
+    </Card>
+  </WorkspaceDetail>;
+
+  const statusCounts = analysis.unusedFindings.reduce<Record<UnusedAccessFindingPreview["status"], number>>((counts, finding) => {
     counts[finding.status] += 1;
     return counts;
   }, { active: 0, archived: 0, resolved: 0 });
-  return <WorkspaceDetail key="unused-access-directory" title={t("title")} onBack={onBack}>
+  return <WorkspaceDetail key="access-analysis" title={t("title")} onBack={onBack}>
     <Alert status="info">{t("previewBoundary")}</Alert>
-    <Card>
-      <Card.Header><div><Typography.Title as="h2" level={3}>{t("sampleAnalyzer")}</Typography.Title><Typography.Text tone="muted">{t("sampleAnalyzerHint")}</Typography.Text></div><Badge status="info">{t("mock")}</Badge></Card.Header>
-      <Card.Body className={styles.securityReportBody}>
-        <dl className={`${styles.securityReportSummary} ${styles.unusedAccessSummary}`} aria-label={t("statusSummary")}>
-          {(["active", "archived", "resolved"] as const).map((status) => <div key={status}><dt>{t(`statuses.${status}`)}</dt><dd>{statusCounts[status]}</dd></div>)}
-        </dl>
-        <p className={styles.note}>{t("sampleWindow", { count: 90 })}</p>
-      </Card.Body>
-    </Card>
-    <WorkspaceCollection embedded title={t("findings")} description={t("directoryHint")} items={findings}
-      columns={[t("principal"), t("findingType"), t("lastObserved"), t("status")]}
-      keywords={(finding) => `${finding.subjectId} ${finding.findingType} ${finding.status}`}
-      filter={{ label: t("status"), options: (["active", "archived", "resolved"] as const).map((value) => ({ value, label: t(`statuses.${value}`) })), matches: (finding, value) => finding.status === value }}
-      row={(finding) => <><td><button className={styles.userLink} onClick={() => setSelected(finding)}>{finding.name}</button><small>{finding.subjectId}</small></td><td>{t(`types.${finding.findingType}`)}</td><td><WorkspaceTime value={finding.lastObservedAt} /></td><td><Badge status={findingStatus[finding.status]}>{t(`statuses.${finding.status}`)}</Badge></td></>}
-      footerNote={t("directoryHint")} />
+    <Tabs.Root value={section} onValueChange={(value) => setSection(value as "external" | "unused")}>
+      <Tabs.List aria-label={t("sections")}><Tabs.Trigger value="external">{t("tabs.external")} ({analysis.trustEntries.length})</Tabs.Trigger><Tabs.Trigger value="unused">{t("tabs.unused")} ({analysis.unusedFindings.length})</Tabs.Trigger></Tabs.List>
+      <Tabs.Content className={styles.stack} value="external">
+        <Card>
+          <Card.Header><div><Typography.Title as="h2" level={3}>{t("external.coverageTitle")}</Typography.Title><Typography.Text tone="muted">{t("external.coverageHint")}</Typography.Text></div><Badge status="info">{t("mockConfiguration")}</Badge></Card.Header>
+          <Card.Body className={styles.securityReportBody}>
+            <dl className={styles.activityEvidence} aria-label={t("external.coverageTitle")}>{analysis.coverage.map((item) => <div key={item.id}><dt>{t(`external.coverage.${item.id}.title`)}</dt><dd><Badge status={item.state === "mockObserved" ? "info" : "neutral"}>{t(`external.coverageStates.${item.state}`)}</Badge><span>{t(`external.coverage.${item.id}.hint`)}</span></dd></div>)}</dl>
+          </Card.Body>
+        </Card>
+        <WorkspaceCollection embedded title={t("external.entries")} description={t("external.directoryHint")} items={analysis.trustEntries}
+          columns={[t("external.entry"), t("external.principal"), t("external.source"), t("external.role"), t("external.status")]}
+          keywords={(entry) => `${entry.name} ${entry.principal} ${entry.roleName} ${entry.sourceName}`}
+          filter={{ label: t("external.entryType"), options: (["federatedIdentity", "serviceWorkload"] as const).map((value) => ({ value, label: t(`external.kinds.${value}`) })), matches: (entry, value) => entry.kind === value }}
+          row={(entry) => <><td><button className={styles.userLink} onClick={() => setSelectedTrustEntry(entry)}>{entry.name}</button><small>{t(`external.kinds.${entry.kind}`)}</small></td><td><code>{entry.principal}</code></td><td>{entry.sourceName}{entry.sourceId !== entry.sourceName ? <small>{entry.sourceId}</small> : null}</td><td>{entry.roleName}<small>{entry.roleId}</small></td><td><Badge status={trustEntryStatus[entry.configuration]}>{t(`external.states.${entry.configuration}`)}</Badge></td></>}
+          footerNote={t("external.directoryHint")} />
+      </Tabs.Content>
+      <Tabs.Content className={styles.stack} value="unused">
+        <Card>
+          <Card.Header><div><Typography.Title as="h2" level={3}>{t("unused.sampleAnalyzer")}</Typography.Title><Typography.Text tone="muted">{t("unused.sampleAnalyzerHint")}</Typography.Text></div><Badge status="info">{t("unused.mock")}</Badge></Card.Header>
+          <Card.Body className={styles.securityReportBody}>
+            <dl className={`${styles.securityReportSummary} ${styles.unusedAccessSummary}`} aria-label={t("unused.statusSummary")}>
+              {(["active", "archived", "resolved"] as const).map((status) => <div key={status}><dt>{t(`unused.statuses.${status}`)}</dt><dd>{statusCounts[status]}</dd></div>)}
+            </dl>
+            <p className={styles.note}>{t("unused.sampleWindow", { count: 90 })}</p>
+          </Card.Body>
+        </Card>
+        <WorkspaceCollection embedded title={t("unused.findings")} description={t("unused.directoryHint")} items={analysis.unusedFindings}
+          columns={[t("unused.principal"), t("unused.findingType"), t("unused.lastObserved"), t("unused.status")]}
+          keywords={(finding) => `${finding.subjectId} ${finding.findingType} ${finding.status}`}
+          filter={{ label: t("unused.status"), options: (["active", "archived", "resolved"] as const).map((value) => ({ value, label: t(`unused.statuses.${value}`) })), matches: (finding, value) => finding.status === value }}
+          row={(finding) => <><td><button className={styles.userLink} onClick={() => setSelectedUnusedFinding(finding)}>{finding.name}</button><small>{finding.subjectId}</small></td><td>{t(`unused.types.${finding.findingType}`)}</td><td><WorkspaceTime value={finding.lastObservedAt} /></td><td><Badge status={findingStatus[finding.status]}>{t(`unused.statuses.${finding.status}`)}</Badge></td></>}
+          footerNote={t("unused.directoryHint")} />
+      </Tabs.Content>
+    </Tabs.Root>
   </WorkspaceDetail>;
 }
 
@@ -139,14 +192,14 @@ export function AccessReportPreview({ kind, workspace, scene, currentSession = n
   </WorkspaceDetail>;
 }
 
-export function AccessReports({ workspace, scene, currentSession = null, onNavigate, onOpenUnusedReview, onOpenReport, unusedReviewTriggerRef, reportTriggerRef }: {
+export function AccessReports({ workspace, scene, currentSession = null, onNavigate, onOpenAccessAnalysis, onOpenReport, accessAnalysisTriggerRef, reportTriggerRef }: {
   workspace: AccessWorkspace;
   scene: AccountAccessScene;
   currentSession?: SessionSummary | null;
   onNavigate(view: AccountAccessView, id?: string): void;
-  onOpenUnusedReview?(): void;
+  onOpenAccessAnalysis?(): void;
   onOpenReport?(kind: "credentials" | "security"): void;
-  unusedReviewTriggerRef?: RefObject<HTMLButtonElement | null>;
+  accessAnalysisTriggerRef?: RefObject<HTMLButtonElement | null>;
   reportTriggerRef?: RefObject<HTMLButtonElement | null>;
 }) {
   const t = useTranslations("IamWorkspace");
@@ -157,7 +210,7 @@ export function AccessReports({ workspace, scene, currentSession = null, onNavig
   return <Card>
     <Card.Header>
       <Typography.Title as="h2" level={3}>{t("securityOverview")}</Typography.Title>
-      <div className={styles.actions}><Badge status="info">{t("mockEvidence")}</Badge>{onOpenUnusedReview ? <Button ref={unusedReviewTriggerRef} size="small" variant="ghost" onClick={onOpenUnusedReview}>{t("unusedAccessReview.open")}<ArrowRight aria-hidden="true" /></Button> : null}</div>
+      <div className={styles.actions}><Badge status="info">{t("mockEvidence")}</Badge>{onOpenAccessAnalysis ? <Button ref={accessAnalysisTriggerRef} size="small" variant="ghost" onClick={onOpenAccessAnalysis}>{t("accessAnalysis.open")}<ArrowRight aria-hidden="true" /></Button> : null}</div>
     </Card.Header>
     <Card.Body className={styles.securityReportBody}>
       <p className={styles.note}>{t("securityOverviewHint")}</p>

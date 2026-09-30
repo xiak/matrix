@@ -3597,52 +3597,93 @@
         "hint": "当前数据未提供认证器绑定事实，不能推断为未绑定或已安全。"
       }
     },
-    "unusedAccessReview": {
-      "open": "审阅未使用访问",
-      "title": "未使用访问审阅",
-      "previewBoundary": "MOCK · 当前 Matrix 尚无完整活动采集窗口和来源水位，不能把真实身份判定为闲置。以下目录只预演公有云常见的发现、证据与人工处置体验，不会修改账号、凭证、角色或权限。",
-      "sampleAnalyzer": "分析器样例",
-      "sampleAnalyzerHint": "合成的 90 天完整观测窗口，用于检查信息结构和操作边界。",
-      "mock": "MOCK 分析器",
-      "statusSummary": "样例发现状态",
-      "sampleWindow": "样例仅分析在完整 {count} 天窗口开始前已经存在的身份与凭证；当前真实数据不满足该前提。",
-      "findings": "未使用访问发现样例",
-      "directoryHint": "发现状态与资源状态分开。归档表示暂不处理，解决表示分析器重扫后不再满足发现条件；两者都不是浏览器本地推断。",
-      "principal": "身份或凭证",
+    "accessAnalysis": {
+      "open": "访问分析",
+      "title": "访问分析",
+      "sections": "访问分析范围",
+      "previewBoundary": "MOCK · 本页只清点当前租户预览模型中的联合身份与服务角色配置，并用合成窗口预演未使用访问体验。配置存在不代表权限已生效、资源可达或入口曾被使用；本页不会自动撤权。",
+      "mockConfiguration": "MOCK 配置快照",
       "account": "目标账号",
-      "principalType": "对象类型",
-      "findingType": "发现类型",
-      "lastObserved": "最后观测",
-      "status": "发现状态",
-      "reviewWindow": "观测窗口",
-      "findingCreated": "发现生成时间",
-      "evidenceCoverage": "证据覆盖",
-      "completeSample": "完整窗口（合成样例）",
-      "days": "{count} 天",
-      "detailTitle": "审阅 · {name}",
-      "sampleEvidence": "本页展示合成的完整窗口证据。真实 Matrix 活动数据仍是未知，不能据此对同名对象执行处置。",
-      "recommendationTitle": "建议处置路径",
-      "noAutomaticAction": "不能从一条未使用发现直接删除身份或权限。先核对所有者、工作负载、授权来源和业务影响；真实变更还需独立能力校验、审阅及服务端结果。",
-      "reviewTarget": "查看对应对象",
-      "subjects": {
-        "user": "用户登录凭证",
-        "accessKey": "访问密钥",
-        "role": "角色"
+      "tabs": {
+        "external": "外部与非用户入口",
+        "unused": "未使用访问"
       },
-      "types": {
-        "unusedPassword": "未使用的控制台密码",
-        "unusedAccessKey": "未使用的访问密钥",
-        "unusedRole": "未使用的角色"
+      "external": {
+        "coverageTitle": "分析范围与证据覆盖",
+        "coverageHint": "先确认哪些来源已进入当前预览，再解释配置入口；未观测不等于不存在。",
+        "coverageStates": {
+          "mockObserved": "MOCK 已清点",
+          "unobserved": "未观测",
+          "unsupported": "当前不支持"
+        },
+        "coverage": {
+          "identityFederation": { "title": "联合身份配置", "hint": "清点 IdP、身份映射与 provider 信任角色的本地配置关系，不验证真实签发或登录。" },
+          "serviceWorkload": { "title": "服务工作负载角色", "hint": "清点 service principal 角色，不验证工作负载身份、承担会话或资源调用。" },
+          "resourcePolicies": { "title": "资源策略与 ACL", "hint": "当前租户预览未建模资源侧策略和 ACL，不能据此判断外部可达性。" },
+          "crossAccountDelegation": { "title": "跨账号委托", "hint": "当前角色契约不支持跨账号委托，不能把未显示解释为不存在。" },
+          "activityWindow": { "title": "真实活动窗口", "hint": "缺少完整采集窗口和来源水位，不能形成已使用或未使用结论。" }
+        },
+        "entries": "已配置入口",
+        "directoryHint": "列表只表达当前 MOCK 配置关系；承担角色仍需独立的信任、调用方授权、权限边界、拒绝规则和资源侧检查。",
+        "entry": "入口",
+        "entryType": "入口类型",
+        "principal": "主体",
+        "source": "身份来源",
+        "role": "目标角色",
+        "status": "配置状态",
+        "createdAt": "配置创建时间",
+        "evidenceCoverage": "证据覆盖",
+        "configurationOnly": "仅配置快照",
+        "detailTitle": "审阅入口 · {name}",
+        "configurationEvidence": "当前证据只来自租户内 MOCK 配置，不包含真实身份签发、角色会话、策略求值或业务资源访问结果。",
+        "recommendationTitle": "人工复核路径",
+        "noEffectiveAccessConclusion": "不能从配置入口直接推断有效权限或外部暴露，也不能在这里自动禁用身份、删除角色或撤销策略。",
+        "reviewTarget": "查看对应配置",
+        "kinds": {
+          "federatedIdentity": "联合身份入口",
+          "serviceWorkload": "服务工作负载入口"
+        },
+        "states": {
+          "configured": "配置完整",
+          "incomplete": "配置不完整",
+          "disabled": "已停用"
+        },
+        "recommendations": {
+          "federatedIdentity": "核对身份提供商状态、外部 subject 映射、目标角色信任与权限边界，再到真实登录和审计来源验证使用情况。",
+          "serviceWorkload": "核对服务主体所有者、工作负载绑定、角色信任、策略与权限边界，再通过服务端会话和业务审计验证调用。"
+        }
       },
-      "statuses": {
-        "active": "待审阅",
-        "archived": "已归档",
-        "resolved": "已解决"
-      },
-      "recommendations": {
-        "unusedPassword": "核对用户是否仍需要控制台访问；若不需要，优先移除登录方式或停用用户，并保留资源归属和审计事实。",
-        "unusedAccessKey": "先确认没有工作负载依赖，再停用旧密钥并观察；仅在业务验证完成后删除，不能把密钥未启用或创建较早当作未使用证明。",
-        "unusedRole": "核对信任主体、服务工作负载、近期承担会话和业务资源依赖；删除角色前先移除真实依赖，不能只依据角色当前存在。"
+      "unused": {
+        "sampleAnalyzer": "分析器样例",
+        "sampleAnalyzerHint": "合成的 90 天完整观测窗口，用于检查信息结构和操作边界。",
+        "mock": "MOCK 分析器",
+        "statusSummary": "样例发现状态",
+        "sampleWindow": "样例仅分析在完整 {count} 天窗口开始前已经存在的身份与凭证；当前真实数据不满足该前提。",
+        "findings": "未使用访问发现样例",
+        "directoryHint": "发现状态与资源状态分开。归档表示暂不处理，解决表示分析器重扫后不再满足发现条件；两者都不是浏览器本地推断。",
+        "principal": "身份或凭证",
+        "principalType": "对象类型",
+        "findingType": "发现类型",
+        "lastObserved": "最后观测",
+        "status": "发现状态",
+        "reviewWindow": "观测窗口",
+        "findingCreated": "发现生成时间",
+        "evidenceCoverage": "证据覆盖",
+        "completeSample": "完整窗口（合成样例）",
+        "days": "{count} 天",
+        "detailTitle": "审阅 · {name}",
+        "sampleEvidence": "本页展示合成的完整窗口证据。真实 Matrix 活动数据仍是未知，不能据此对同名对象执行处置。",
+        "recommendationTitle": "建议处置路径",
+        "noAutomaticAction": "不能从一条未使用发现直接删除身份或权限。先核对所有者、工作负载、授权来源和业务影响；真实变更还需独立能力校验、审阅及服务端结果。",
+        "reviewTarget": "查看对应对象",
+        "subjects": { "user": "用户登录凭证", "accessKey": "访问密钥", "role": "角色" },
+        "types": { "unusedPassword": "未使用的控制台密码", "unusedAccessKey": "未使用的访问密钥", "unusedRole": "未使用的角色" },
+        "statuses": { "active": "待审阅", "archived": "已归档", "resolved": "已解决" },
+        "recommendations": {
+          "unusedPassword": "核对用户是否仍需要控制台访问；若不需要，优先移除登录方式或停用用户，并保留资源归属和审计事实。",
+          "unusedAccessKey": "先确认没有工作负载依赖，再停用旧密钥并观察；仅在业务验证完成后删除，不能把密钥未启用或创建较早当作未使用证明。",
+          "unusedRole": "核对信任主体、服务工作负载、近期承担会话和业务资源依赖；删除角色前先移除真实依赖，不能只依据角色当前存在。"
+        }
       }
     },
     "reportPreview": {

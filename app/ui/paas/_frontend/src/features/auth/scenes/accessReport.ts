@@ -34,6 +34,26 @@ export type UnusedAccessFindingPreview = {
   target: { view: Extract<AccountAccessView, "users" | "keys" | "roles">; id?: string };
 };
 
+export type AccessAnalysisCoverageState = "mockObserved" | "unobserved" | "unsupported";
+export type AccessAnalysisCoverage = {
+  id: "identityFederation" | "serviceWorkload" | "resourcePolicies" | "crossAccountDelegation" | "activityWindow";
+  state: AccessAnalysisCoverageState;
+};
+export type AccessAnalysisTrustEntry = {
+  id: string;
+  accountId: string;
+  name: string;
+  kind: "federatedIdentity" | "serviceWorkload";
+  principal: string;
+  roleId: string;
+  roleName: string;
+  sourceId: string;
+  sourceName: string;
+  configuration: "configured" | "incomplete" | "disabled";
+  createdAt: string;
+  target: { view: Extract<AccountAccessView, "providers" | "roles">; id?: string };
+};
+
 function assertReportAccount(workspace: AccessWorkspace, scene: AccountAccessScene) {
   if (workspace.accountId !== scene.accountId) throw new Error("INVALID_IAM_TENANT");
 }
@@ -88,6 +108,69 @@ export function buildUnusedAccessFindingPreview(workspace: AccessWorkspace, scen
       target: { view: "roles", id: role.id }
     });
   return findings;
+}
+
+// This preview inventories tenant configuration only. A configured federation
+// mapping or service role is not proof that a principal can currently assume
+// the role, reach a resource, or has ever used the path.
+export function buildAccessAnalysisPreview(workspace: AccessWorkspace, scene: AccountAccessScene): {
+  accountId: string;
+  coverage: AccessAnalysisCoverage[];
+  trustEntries: AccessAnalysisTrustEntry[];
+  unusedFindings: UnusedAccessFindingPreview[];
+} {
+  assertReportAccount(workspace, scene);
+  const federatedEntries: AccessAnalysisTrustEntry[] = workspace.federations.map((federation) => {
+    const provider = workspace.providers.find((candidate) => candidate.id === federation.providerId);
+    const role = workspace.roles.find((candidate) => candidate.id === federation.roleId);
+    const configuration = !federation.enabled
+      ? "disabled"
+      : !provider?.enabled || !role || role.principalType !== "provider" || role.principal !== federation.providerId
+        ? "incomplete"
+        : "configured";
+    return {
+      id: `federation:${federation.id}`,
+      accountId: workspace.accountId,
+      name: federation.name,
+      kind: "federatedIdentity",
+      principal: federation.subject,
+      roleId: federation.roleId,
+      roleName: role?.name ?? federation.roleId,
+      sourceId: federation.providerId,
+      sourceName: provider?.name ?? federation.providerId,
+      configuration,
+      createdAt: federation.createdAt,
+      target: { view: "providers" }
+    };
+  });
+  const serviceEntries: AccessAnalysisTrustEntry[] = workspace.roles
+    .filter((role) => role.principalType === "service")
+    .map((role) => ({
+      id: `service:${role.id}`,
+      accountId: workspace.accountId,
+      name: role.name,
+      kind: "serviceWorkload",
+      principal: role.principal,
+      roleId: role.id,
+      roleName: role.name,
+      sourceId: role.principal,
+      sourceName: role.principal,
+      configuration: "configured",
+      createdAt: role.createdAt,
+      target: { view: "roles", id: role.id }
+    }));
+  return {
+    accountId: workspace.accountId,
+    coverage: [
+      { id: "identityFederation", state: "mockObserved" },
+      { id: "serviceWorkload", state: "mockObserved" },
+      { id: "resourcePolicies", state: "unsupported" },
+      { id: "crossAccountDelegation", state: "unsupported" },
+      { id: "activityWindow", state: "unobserved" }
+    ],
+    trustEntries: [...federatedEntries, ...serviceEntries],
+    unusedFindings: buildUnusedAccessFindingPreview(workspace, scene)
+  };
 }
 
 // This is a preview of evidence *shape*, not an activity/idle judgment. Only

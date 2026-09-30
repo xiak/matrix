@@ -13,8 +13,8 @@ import { PolicyDocumentViewer } from "./PolicyDocumentViewer";
 import type { PolicyDocument } from "../domain/policyDocument";
 import { AccountAccessRenderer } from "./AccountAccessRenderer";
 import { GroupDetail, GroupDirectory } from "./GroupAccessWorkspace";
-import { AccessReportPreview, AccessReports, UnusedAccessReviewPreview } from "./AccessReports";
-import { buildAccessActivityObservations, buildAccessReport, buildAccessSecuritySnapshot, buildUnusedAccessFindingPreview } from "../scenes/accessReport";
+import { AccessAnalysisPreview, AccessReportPreview, AccessReports } from "./AccessReports";
+import { buildAccessActivityObservations, buildAccessAnalysisPreview, buildAccessReport, buildAccessSecuritySnapshot } from "../scenes/accessReport";
 import { buildAccountAccessScene } from "../scenes/accountAccessScene";
 import { previewAccountRepository, previewCredential, previewIamRepository, resetPreviewEnvironment } from "../repositories/previewIamRepository";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
@@ -3455,26 +3455,50 @@ describe("CAM-style access workspace", () => {
     await user.click(within(card).getByRole("button", { name: "查看长期访问密钥" }));
     expect(onNavigate).toHaveBeenCalledWith("keys");
   });
-  it("previews unused-access findings without turning missing live evidence into a destructive action", async () => {
+  it("reviews configured trust entry points and synthetic unused access without inventing effective access", async () => {
     const extension = createPreviewAccessWorkspace("org-xiak", () => users.map((entry) => entry.user.id), identity.account.rootIdentity.principalId);
     const workspace = await extension.read("preview");
     const scene = buildAccountAccessScene(identity, { items: users, nextAfter: null }, null, { accountId: "org-xiak", scope: "TENANT", installationId: null, items: [] }, { accountId: "org-xiak", scope: "INSTALLATION", installationId: "preview", items: [] });
-    const findings = buildUnusedAccessFindingPreview(workspace, scene);
-    expect(findings.map(({ accountId, findingType, status }) => ({ accountId, findingType, status }))).toEqual([
+    const analysis = buildAccessAnalysisPreview(workspace, scene);
+    expect(analysis.coverage).toEqual([
+      { id: "identityFederation", state: "mockObserved" },
+      { id: "serviceWorkload", state: "mockObserved" },
+      { id: "resourcePolicies", state: "unsupported" },
+      { id: "crossAccountDelegation", state: "unsupported" },
+      { id: "activityWindow", state: "unobserved" }
+    ]);
+    expect(analysis.trustEntries.map(({ kind, name, configuration, target }) => ({ kind, name, configuration, target }))).toEqual([
+      { kind: "federatedIdentity", name: "ExternalAuditor", configuration: "configured", target: { view: "providers" } },
+      { kind: "serviceWorkload", name: "PipelineDeploymentRole", configuration: "configured", target: { view: "roles", id: "role-pipeline" } }
+    ]);
+    expect(analysis.unusedFindings.map(({ accountId, findingType, status }) => ({ accountId, findingType, status }))).toEqual([
       { accountId: "org-xiak", findingType: "unusedPassword", status: "active" },
       { accountId: "org-xiak", findingType: "unusedAccessKey", status: "archived" },
       { accountId: "org-xiak", findingType: "unusedRole", status: "resolved" }
     ]);
-    expect(() => buildUnusedAccessFindingPreview(workspace, { ...scene, accountId: "org-foreign" })).toThrow("INVALID_IAM_TENANT");
+    expect(() => buildAccessAnalysisPreview(workspace, { ...scene, accountId: "org-foreign" })).toThrow("INVALID_IAM_TENANT");
     const onNavigate = vi.fn();
     const user = userEvent.setup();
-    render(<LocaleProvider><UnusedAccessReviewPreview workspace={workspace} scene={scene} onBack={vi.fn()} onNavigate={onNavigate} /></LocaleProvider>);
-    expect(screen.getByRole("heading", { name: "未使用访问审阅" })).toBeTruthy();
-    expect(screen.getByText(/当前 Matrix 尚无完整活动采集窗口/)).toBeTruthy();
+    render(<LocaleProvider><AccessAnalysisPreview workspace={workspace} scene={scene} onBack={vi.fn()} onNavigate={onNavigate} /></LocaleProvider>);
+    expect(screen.getByRole("heading", { name: "访问分析" })).toBeTruthy();
+    expect(screen.getByText(/配置存在不代表权限已生效/)).toBeTruthy();
+    expect(screen.getByText("资源策略与 ACL")).toBeTruthy();
+    expect(screen.getAllByText("当前不支持").length).toBe(2);
+    const entryTable = screen.getByRole("table", { name: "已配置入口" });
+    expect(entryTable.getAttribute("data-mobile-layout")).toBe("stack");
+    expect(within(entryTable).getAllByText("devops.matrix.internal").length).toBe(2);
+    await user.click(within(entryTable).getByRole("button", { name: "ExternalAuditor" }));
+    expect(screen.getByRole("heading", { name: "审阅入口 · ExternalAuditor" })).toBeTruthy();
+    expect(screen.getByText(/不能从配置入口直接推断有效权限或外部暴露/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "查看对应配置" }));
+    expect(onNavigate).toHaveBeenCalledWith("providers", undefined);
+    await user.click(screen.getByRole("button", { name: "返回列表" }));
+    await user.click(screen.getByRole("tab", { name: "未使用访问 (3)" }));
+    expect(screen.getByText(/当前真实数据不满足该前提/)).toBeTruthy();
     const table = screen.getByRole("table", { name: "未使用访问发现样例" });
     expect(table.getAttribute("data-mobile-layout")).toBe("stack");
     expect(within(table).queryByRole("button", { name: /删除|停用/ })).toBeNull();
-    const first = findings[0]!;
+    const first = analysis.unusedFindings[0]!;
     await user.click(within(table).getByRole("button", { name: first.name }));
     expect(screen.getByRole("heading", { name: `审阅 · ${first.name}` })).toBeTruthy();
     expect(screen.getByText("完整窗口（合成样例）")).toBeTruthy();
