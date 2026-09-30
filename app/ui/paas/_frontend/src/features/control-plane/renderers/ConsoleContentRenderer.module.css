@@ -261,6 +261,11 @@
   color: var(--xiak-color-text-subtle);
 }
 
+.catalogPage {
+  display: grid;
+  gap: var(--xiak-spacing-roomy);
+}
+
 .catalogGrid,
 .regionGrid {
   display: grid;

@@ -220,6 +220,23 @@ describe("ConsoleShellRenderer", () => {
     expect(screen.queryByRole("button", { name: /批量授权/ })).toBeNull();
   });
 
+  it("keeps product-catalog fixtures distinct from IAM-filtered visibility", async () => {
+    await renderConsole({ section: "catalog", experience: previewExperienceSnapshot });
+
+    expect(await screen.findByText(/当前已加载 1 项隔离 MOCK 本地 fixture/)).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "PostgreSQL 18" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /批量授权/ })).toBeNull();
+  });
+
+  it("distinguishes a successful empty product catalog from an unavailable service", async () => {
+    await renderConsole({ section: "catalog", load: vi.fn().mockResolvedValue({ ...snapshot, offerings: [] }) });
+
+    expect(await screen.findByText(/产品服务成功返回了空目录/)).toBeTruthy();
+    expect(screen.getByText(/当前已加载 0 项/)).toBeTruthy();
+    expect(screen.queryByText("服务目录不可用")).toBeNull();
+    expect(screen.queryByText(/拒绝原因/)).not.toBeNull();
+  });
+
   it("starts the isolated service-authorization review from the exact product resource", async () => {
     const installation = {
       id: "pg-test", name: "订单主库", offeringId: "postgresql-18", engineVersion: "18",

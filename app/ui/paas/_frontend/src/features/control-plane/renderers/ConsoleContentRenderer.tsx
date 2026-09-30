@@ -126,39 +126,44 @@ function OverviewContent({ scene }: { scene: Extract<ConsoleContentScene, { kind
   );
 }
 
-function CatalogContent({ scene }: { scene: Extract<ConsoleContentScene, { kind: "catalog" }> }) {
+function CatalogContent({ scene, preview }: {
+  scene: Extract<ConsoleContentScene, { kind: "catalog" }>;
+  preview: boolean;
+}) {
   const t = useTranslations("ManagedService");
-  if (scene.offerings.length === 0) {
-    return <EmptyState title={t("catalogUnavailable")} description={t("catalogUnavailableHint")} />;
-  }
   return (
-    <div className={styles.catalogGrid}>
-      {scene.offerings.map((offering) => (
-        <Card className={styles.productCard} key={offering.id}>
-          <Card.Body className={styles.productCardBody}>
-            <div className={styles.productTopline}>
-              <div className={styles.databaseIcon}><Database aria-hidden="true" /></div>
-              <Badge status={offering.available ? "success" : "neutral"}>
-                {offering.available ? t("activatable") : t("unavailable")}
-              </Badge>
-            </div>
-            <Typography.Eyebrow>{offering.engine}</Typography.Eyebrow>
-            <Typography.Title as="h2" level={2}>{offering.name}</Typography.Title>
-            <p className={styles.productDescription}>{offering.description}</p>
-            <dl className={styles.productFacts}>
-              <div><dt>{t("engineVersion")}</dt><dd>{offering.version}</dd></div>
-              <div><dt>{t("quotaShapes")}</dt><dd>{t("shapeCount", { count: offering.shapeCount })}</dd></div>
-              <div><dt>{t("availableShapes")}</dt><dd>{offering.shapeSummary}</dd></div>
-            </dl>
-          </Card.Body>
-          <Card.Footer>
-            <Typography.Text tone="subtle">{t("noPayment")}</Typography.Text>
-            <Button asChild><Link href="/console/quotas/">
-              {t("configureQuota")} <ArrowRight aria-hidden="true" />
-            </Link></Button>
-          </Card.Footer>
-        </Card>
-      ))}
+    <div className={styles.catalogPage}>
+      <Alert status={preview ? "warning" : "info"}>
+        {t(preview ? "catalogVisibilityMockBoundary" : "catalogVisibilityBoundary", { count: scene.offerings.length })}
+      </Alert>
+      {scene.offerings.length === 0 ? <EmptyState title={t("catalogEmpty")} description={t("catalogEmptyHint")} /> : <div className={styles.catalogGrid}>
+        {scene.offerings.map((offering) => (
+          <Card className={styles.productCard} key={offering.id}>
+            <Card.Body className={styles.productCardBody}>
+              <div className={styles.productTopline}>
+                <div className={styles.databaseIcon}><Database aria-hidden="true" /></div>
+                <Badge status={offering.available ? "success" : "neutral"}>
+                  {offering.available ? t("activatable") : t("unavailable")}
+                </Badge>
+              </div>
+              <Typography.Eyebrow>{offering.engine}</Typography.Eyebrow>
+              <Typography.Title as="h2" level={2}>{offering.name}</Typography.Title>
+              <p className={styles.productDescription}>{offering.description}</p>
+              <dl className={styles.productFacts}>
+                <div><dt>{t("engineVersion")}</dt><dd>{offering.version}</dd></div>
+                <div><dt>{t("quotaShapes")}</dt><dd>{t("shapeCount", { count: offering.shapeCount })}</dd></div>
+                <div><dt>{t("availableShapes")}</dt><dd>{offering.shapeSummary}</dd></div>
+              </dl>
+            </Card.Body>
+            <Card.Footer>
+              <Typography.Text tone="subtle">{t("noPayment")}</Typography.Text>
+              <Button asChild><Link href="/console/quotas/">
+                {t("configureQuota")} <ArrowRight aria-hidden="true" />
+              </Link></Button>
+            </Card.Footer>
+          </Card>
+        ))}
+      </div>}
     </div>
   );
 }
@@ -453,7 +458,7 @@ export function ConsoleContentRenderer({
     return <ExperienceContentRenderer scene={scene} scope={scope} />;
   }
   if (scene.kind === "overview") return <OverviewContent scene={scene} />;
-  if (scene.kind === "catalog") return <CatalogContent scene={scene} />;
+  if (scene.kind === "catalog") return <CatalogContent scene={scene} preview={preview} />;
   if (scene.kind === "quotas") return <QuotaContent scene={scene} />;
   if (scene.kind === "installations") return <InstallationContent scene={scene} preview={preview} accountId={accountId} />;
   return <RegionContent scene={scene} />;
