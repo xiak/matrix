@@ -55,6 +55,24 @@ function profileEntry(product = "paas") {
   };
 }
 
+function serviceRoleTemplate(id = "managedservice.installation-reader") {
+  return {
+    apiVersion, kind: "ServiceRoleTemplate", id, version: 1,
+    spec: {
+      product: "managedservice", servicePurpose: "PAAS",
+      policyVersion: {
+        policyId: "system.managedservice-installation-reader",
+        versionId: "version-managedservice-installation-reader-v1",
+        contentDigest: `sha256:${"b".repeat(64)}`
+      },
+      workloadResourceKinds: ["SERVICE_INSTALLATION"],
+      maxSessionDurationSeconds: 900
+    },
+    contentDigest: `sha256:${"c".repeat(64)}`,
+    status: "ACTIVE"
+  };
+}
+
 function capability(action: string, kind: "ACCOUNT" | "USER" | "GROUP" | "ROLE" | "ROLE_SESSION" | "GROUP_MEMBERSHIP" | "POLICY_ATTACHMENT" | "ACCESS_KEY", id: string, available = true, restrictionReason = "AUTHORITY_REQUIRED") {
   return { action, resource: { kind, id }, available, ...(available ? {} : { restrictionReason }) };
 }
@@ -1513,6 +1531,49 @@ describe("IAM HTTP account boundary", () => {
     ].map((entry) => ({ contentDigest: entry.contentDigest, profile: {
       product: entry.profile.product, revision: entry.profile.revision, callingService: entry.profile.callingService, actions: entry.profile.actions
     } })) });
+  });
+
+  it("reads the platform service-role template directory without an account selector or request body", async () => {
+    const template = serviceRoleTemplate();
+    const fetcher = reply({ apiVersion, kind: "ServiceRoleTemplateList", items: [template] });
+    const result = await httpAccountRepository.listServiceRoleTemplates!("bearer");
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/service-role-templates");
+    expect(firstRequest(fetcher)[1]).toMatchObject({ cache: "no-store", headers: { Authorization: "Bearer bearer" } });
+    expect(firstRequest(fetcher)[1].method).toBeUndefined();
+    expect(firstRequest(fetcher)[1].body).toBeUndefined();
+    expect(result).toEqual({ items: [{
+      id: template.id, version: template.version, spec: template.spec,
+      contentDigest: template.contentDigest, status: template.status
+    }] });
+  });
+
+  it("fails closed on malformed, ambiguous, or unordered service-role template directories", async () => {
+    const template = serviceRoleTemplate("managedservice.a-reader");
+    const second = serviceRoleTemplate("managedservice.b-reader");
+    const invalid = [
+      { apiVersion, kind: "ServiceRoleTemplateList", items: [template], accountId: account.id },
+      { apiVersion: "legacy", kind: "ServiceRoleTemplateList", items: [template] },
+      { apiVersion, kind: "ServiceRoleTemplates", items: [template] },
+      { apiVersion, kind: "ServiceRoleTemplateList", items: null },
+      { apiVersion, kind: "ServiceRoleTemplateList", items: [second, template] },
+      { apiVersion, kind: "ServiceRoleTemplateList", items: [template, template] },
+      { apiVersion, kind: "ServiceRoleTemplateList", items: [{ ...template, consented: true }] },
+      { apiVersion, kind: "ServiceRoleTemplateList", items: [{ ...template, kind: "ServiceLinkedRole" }] },
+      { apiVersion, kind: "ServiceRoleTemplateList", items: [{ ...template, version: 0 }] },
+      { apiVersion, kind: "ServiceRoleTemplateList", items: [{ ...template, status: "AUTHORIZED" }] },
+      { apiVersion, kind: "ServiceRoleTemplateList", items: [{ ...template, contentDigest: "sha256:ABC" }] },
+      { apiVersion, kind: "ServiceRoleTemplateList", items: [{ ...template, spec: { ...template.spec, product: "ManagedService" } }] },
+      { apiVersion, kind: "ServiceRoleTemplateList", items: [{ ...template, spec: { ...template.spec, servicePurpose: "UNKNOWN" } }] },
+      { apiVersion, kind: "ServiceRoleTemplateList", items: [{ ...template, spec: { ...template.spec, maxSessionDurationSeconds: 30 } }] },
+      { apiVersion, kind: "ServiceRoleTemplateList", items: [{ ...template, spec: { ...template.spec, workloadResourceKinds: [] } }] },
+      { apiVersion, kind: "ServiceRoleTemplateList", items: [{ ...template, spec: { ...template.spec, workloadResourceKinds: ["SERVICE_INSTALLATION", "SERVICE_INSTALLATION"] } }] },
+      { apiVersion, kind: "ServiceRoleTemplateList", items: [{ ...template, spec: { ...template.spec, policyVersion: { ...template.spec.policyVersion, contentDigest: "digest" } } }] },
+      { apiVersion, kind: "ServiceRoleTemplateList", items: [{ ...template, spec: { ...template.spec, policyVersion: { ...template.spec.policyVersion, latest: true } } }] }
+    ];
+    for (const directory of invalid) {
+      reply(directory);
+      await expect(httpAccountRepository.listServiceRoleTemplates!("bearer")).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
   });
 
   it("preserves explicit subject and USER credential admission independently of legacy omission", async () => {

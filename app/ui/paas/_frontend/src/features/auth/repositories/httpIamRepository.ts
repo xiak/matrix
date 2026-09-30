@@ -34,6 +34,9 @@ import type {
   PolicyManagement,
   PolicyScope,
   PolicyStatus,
+  ServiceRoleTemplate,
+  ServiceRoleTemplateDirectory,
+  ServiceRoleTemplatePurpose,
   PasswordResetRequestIdentity,
   UserPasswordResetCompletion,
   User,
@@ -1398,6 +1401,63 @@ function parseAuthorizationProfileDirectory(value: unknown): AuthorizationProfil
   return { accountId: accountIdentifier(wire.accountId), items };
 }
 
+const serviceRolePurposes = new Set<ServiceRoleTemplatePurpose>(["IAM", "PAAS", "AUDIT", "INSTALLATION_VERIFIER"]);
+
+function contentDigest(value: unknown): string {
+  if (typeof value !== "string" || !/^sha256:[a-f0-9]{64}$/.test(value)) throw new Error("INVALID_IAM_RESPONSE");
+  return value;
+}
+
+function parsePolicyVersionReference(value: unknown): ServiceRoleTemplate["spec"]["policyVersion"] {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["policyId", "versionId", "contentDigest"]);
+  return {
+    policyId: accountIdentifier(wire.policyId),
+    versionId: accountIdentifier(wire.versionId),
+    contentDigest: contentDigest(wire.contentDigest)
+  };
+}
+
+function parseServiceRoleTemplate(value: unknown): ServiceRoleTemplate {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "id", "version", "spec", "contentDigest", "status"]);
+  requireAccountKind(wire, "ServiceRoleTemplate");
+  if (wire.status !== "ACTIVE" && wire.status !== "RETIRED") throw new Error("INVALID_IAM_RESPONSE");
+  const spec = accountRecord(wire.spec);
+  exactKeys(spec, ["product", "servicePurpose", "policyVersion", "workloadResourceKinds", "maxSessionDurationSeconds"]);
+  if (typeof spec.servicePurpose !== "string" || !serviceRolePurposes.has(spec.servicePurpose as ServiceRoleTemplatePurpose) ||
+      !Array.isArray(spec.workloadResourceKinds) || spec.workloadResourceKinds.length < 1 || spec.workloadResourceKinds.length > 16 ||
+      spec.workloadResourceKinds.some((kind) => typeof kind !== "string") ||
+      typeof spec.maxSessionDurationSeconds !== "number" || !Number.isSafeInteger(spec.maxSessionDurationSeconds) ||
+      spec.maxSessionDurationSeconds < 60 || spec.maxSessionDurationSeconds > 43_200) throw new Error("INVALID_IAM_RESPONSE");
+  const workloadResourceKinds = spec.workloadResourceKinds.map((kind) => authorizationIdentifier(kind, true));
+  if (new Set(workloadResourceKinds).size !== workloadResourceKinds.length) throw new Error("INVALID_IAM_RESPONSE");
+  return {
+    id: accountIdentifier(wire.id),
+    version: accountVersion(wire.version),
+    spec: {
+      product: authorizationIdentifier(spec.product, false),
+      servicePurpose: spec.servicePurpose as ServiceRoleTemplatePurpose,
+      policyVersion: parsePolicyVersionReference(spec.policyVersion),
+      workloadResourceKinds,
+      maxSessionDurationSeconds: spec.maxSessionDurationSeconds
+    },
+    contentDigest: contentDigest(wire.contentDigest),
+    status: wire.status
+  };
+}
+
+function parseServiceRoleTemplateDirectory(value: unknown): ServiceRoleTemplateDirectory {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "items"]);
+  requireAccountKind(wire, "ServiceRoleTemplateList");
+  if (!Array.isArray(wire.items) || wire.items.length > 100 ||
+      new TextEncoder().encode(JSON.stringify(value)).byteLength > 256 * 1024) throw new Error("INVALID_IAM_RESPONSE");
+  const items = wire.items.map(parseServiceRoleTemplate);
+  if (items.some((item, index) => index > 0 && items[index - 1]!.id >= item.id)) throw new Error("INVALID_IAM_RESPONSE");
+  return { items };
+}
+
 function parsePolicy(value: unknown): AccountPolicy {
   const wire = accountRecord(value);
   exactKeys(wire, ["apiVersion", "kind", "id", "management", "displayName", "scope", "status", "defaultVersionId", "resourceVersion", "createdAt", "updatedAt"], ["accountId"]);
@@ -2086,6 +2146,9 @@ export const httpAccountRepository: AccountRepository = {
   },
   async listAuthorizationProfiles(credential) {
     return parseAuthorizationProfileDirectory(await requestJSON<unknown>("/api/iam/v1/authorization-profiles", { headers: accountHeaders(credential) }));
+  },
+  async listServiceRoleTemplates(credential) {
+    return parseServiceRoleTemplateDirectory(await requestJSON<unknown>("/api/iam/v1/service-role-templates", { headers: accountHeaders(credential) }));
   },
   async listAccounts(credential, after) {
     return accountPage<AccountAccess>(await requestJSON<unknown>(`/api/iam/v1/accounts${pageQuery(after)}`, { headers: accountHeaders(credential) }), "AccountList", parseAccountAccess, (item) => item.account.id, after);

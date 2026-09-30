@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useState } from "react";
 import { LocaleProvider } from "@/i18n/LocaleProvider";
-import type { RoleAccessClient, RoleSessionRevokeIntent } from "../application/AccountAccessProvider";
+import type { RoleAccessClient, RoleSessionRevokeIntent, ServiceRoleTemplateClient } from "../application/AccountAccessProvider";
 import type { AccountAccessView } from "../domain/accounts";
 import type { RoleAccess, RoleCapabilityAction, RoleDirectory } from "../domain/roles";
 import { AccountLiveRoles } from "./AccountLiveRoles";
@@ -65,13 +65,13 @@ function client(overrides: Partial<RoleAccessClient> = {}): RoleAccessClient {
   };
 }
 
-function RolesHarness({ api, entityId, onOpen = vi.fn() }: { api: RoleAccessClient; entityId?: string; onOpen?: (view: AccountAccessView, id?: string) => void }) {
+function RolesHarness({ api, serviceRoleTemplates, entityId, onOpen = vi.fn() }: { api: RoleAccessClient; serviceRoleTemplates?: ServiceRoleTemplateClient; entityId?: string; onOpen?: (view: AccountAccessView, id?: string) => void }) {
   const [intent, setIntent] = useState<RoleSessionRevokeIntent | null>(null);
   const changeIntent = (expectedRequestId: string | null, next: RoleSessionRevokeIntent | null) => setIntent((current) => {
     if (expectedRequestId === null) return current ?? next;
     return current?.requestId === expectedRequestId ? next : current;
   });
-  return <AccountLiveRoles client={api} entityId={entityId} onCreate={vi.fn()} onOpen={onOpen} revokeIntent={intent} onRevokeIntentChange={changeIntent} />;
+  return <AccountLiveRoles client={api} serviceRoleTemplates={serviceRoleTemplates} entityId={entityId} onCreate={vi.fn()} onOpen={onOpen} revokeIntent={intent} onRevokeIntentChange={changeIntent} />;
 }
 
 afterEach(cleanup);
@@ -87,6 +87,19 @@ describe("AccountLiveRoles", () => {
     expect(screen.getByText("正在加载角色目录")).toBeTruthy();
     resolve(directory);
     expect(await screen.findByRole("button", { name: role.name })).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("opens the live service template directory in the content area instead of a dialog", async () => {
+    const user = userEvent.setup();
+    const serviceRoleTemplates: ServiceRoleTemplateClient = { load: vi.fn().mockResolvedValue({ status: "ready", directory: { items: [] } }) };
+    render(<LocaleProvider><RolesHarness api={client()} serviceRoleTemplates={serviceRoleTemplates} /></LocaleProvider>);
+
+    await screen.findByRole("button", { name: role.name });
+    await user.click(screen.getByRole("button", { name: "服务授权模板" }));
+    expect(await screen.findByRole("heading", { name: "服务授权模板" })).toBeTruthy();
+    expect(await screen.findByText("暂无已发布模板")).toBeTruthy();
+    expect(serviceRoleTemplates.load).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 

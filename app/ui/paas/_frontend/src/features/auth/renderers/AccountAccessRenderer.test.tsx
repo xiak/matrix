@@ -1845,6 +1845,43 @@ describe("account access", () => {
     expect(screen.getByRole("table", { name: "策略元数据目录" })).toBeTruthy();
   });
 
+  it("loads the live platform service-role templates only after the inline directory opens", async () => {
+    const roleIdentity: AccountIdentity = { ...identity, capabilities: [
+      ...identity.capabilities,
+      capability("iam.role.list", "ACCOUNT", account.id)
+    ] };
+    const listServiceRoleTemplates = vi.fn().mockResolvedValue({ items: [{
+      id: "managedservice.installation-reader", version: 1,
+      spec: {
+        product: "managedservice", servicePurpose: "PAAS",
+        policyVersion: { policyId: "system.managedservice-installation-reader", versionId: "version-managedservice-installation-reader-v1", contentDigest: `sha256:${"b".repeat(64)}` },
+        workloadResourceKinds: ["SERVICE_INSTALLATION"], maxSessionDurationSeconds: 900
+      },
+      contentDigest: `sha256:${"c".repeat(64)}`, status: "ACTIVE"
+    }] });
+    const repository = accounts({
+      currentIdentity: vi.fn().mockResolvedValue(roleIdentity),
+      listServiceRoleTemplates,
+      roles: {
+        list: vi.fn().mockResolvedValue(managedRoleDirectory),
+        read: vi.fn().mockResolvedValue(managedRoleAccess),
+        create: vi.fn().mockResolvedValue(managedRole),
+        listSessions: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, observedAt: timestamp, items: [], nextAfter: null }),
+        readSession: vi.fn().mockRejectedValue(new Error("unused session read")),
+        revokeSession: vi.fn().mockRejectedValue(new Error("unused session revoke"))
+      }
+    });
+    const { user } = await openAccess(repository, iam(), "roles");
+
+    await screen.findByRole("table", { name: "角色" });
+    expect(listServiceRoleTemplates).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "服务授权模板" }));
+    expect(await screen.findByRole("table", { name: "服务授权模板目录" })).toBeTruthy();
+    expect(listServiceRoleTemplates).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("非账号授权状态")).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
   it("creates a live role in the content area and retains the exact request after an unknown result", async () => {
     const roleIdentity: AccountIdentity = { ...identity, capabilities: [
       ...identity.capabilities,

@@ -264,6 +264,30 @@ export type PolicyVersionReference = {
   contentDigest: string;
 };
 
+// Release-owned service authorization metadata. A template is only a future
+// consent input: even an ACTIVE template is not an Account grant, Role
+// relation, workload binding or effective-permission result.
+export type ServiceRoleTemplateStatus = "ACTIVE" | "RETIRED";
+export type ServiceRoleTemplatePurpose = "IAM" | "PAAS" | "AUDIT" | "INSTALLATION_VERIFIER";
+
+export type ServiceRoleTemplate = {
+  id: string;
+  version: number;
+  spec: {
+    product: string;
+    servicePurpose: ServiceRoleTemplatePurpose;
+    policyVersion: PolicyVersionReference;
+    workloadResourceKinds: string[];
+    maxSessionDurationSeconds: number;
+  };
+  contentDigest: string;
+  status: ServiceRoleTemplateStatus;
+};
+
+export type ServiceRoleTemplateDirectory = {
+  items: ServiceRoleTemplate[];
+};
+
 // A bound revision of the user's permission ceiling, never a positive grant.
 // Only an explicit null policy means that this user has no tenant boundary.
 export type UserPermissionBoundary = {

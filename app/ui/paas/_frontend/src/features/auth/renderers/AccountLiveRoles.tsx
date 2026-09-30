@@ -5,11 +5,12 @@ import { useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
 import { Alert, Badge, Button, Card, ContentPage, EmptyState, Table, TablePagination, TableSkeleton, TableToolbar, Tabs } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
-import { accountError, type RoleAccessClient, type RoleSessionRevokeIntent } from "../application/AccountAccessProvider";
+import { accountError, type RoleAccessClient, type RoleSessionRevokeIntent, type ServiceRoleTemplateClient } from "../application/AccountAccessProvider";
 import type { AccountAccessView } from "../domain/accounts";
 import type { RoleAccess, RoleCapability, RoleListing } from "../domain/roles";
 import { WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
 import { LiveRoleSessions } from "./LiveRoleSessions";
+import { AccountServiceRoleTemplates } from "./AccountServiceRoleTemplates";
 import styles from "./AccountAccessRenderer.module.css";
 
 type OpenRoleEntity = (view: AccountAccessView, id?: string) => void;
@@ -137,8 +138,9 @@ function RoleDetail({ client, roleId, onOpen, revokeIntent, onRevokeIntentChange
   </WorkspaceDetail>;
 }
 
-export function AccountLiveRoles({ client, entityId, onCreate, onOpen, revokeIntent, onRevokeIntentChange }: {
+export function AccountLiveRoles({ client, serviceRoleTemplates, entityId, onCreate, onOpen, revokeIntent, onRevokeIntentChange }: {
   client: RoleAccessClient;
+  serviceRoleTemplates?: ServiceRoleTemplateClient | null;
   entityId?: string;
   onCreate(): void;
   onOpen: OpenRoleEntity;
@@ -158,6 +160,7 @@ export function AccountLiveRoles({ client, entityId, onCreate, onOpen, revokeInt
   const [state, setState] = useState("all");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+  const [serviceTemplatesOpen, setServiceTemplatesOpen] = useState(false);
   const deferredQuery = useDeferredValue(query);
 
   const retry = useCallback(() => {
@@ -196,11 +199,13 @@ export function AccountLiveRoles({ client, entityId, onCreate, onOpen, revokeInt
   const pages = Math.max(1, Math.ceil(matches.length / pageSize));
   const currentPage = Math.min(page, pages);
 
+  if (serviceTemplatesOpen && serviceRoleTemplates) return <AccountServiceRoleTemplates client={serviceRoleTemplates} onBack={() => setServiceTemplatesOpen(false)} />;
   if (entityId) return <RoleDetail client={client} roleId={entityId} onOpen={onOpen} revokeIntent={revokeIntent} onRevokeIntentChange={onRevokeIntentChange} />;
 
   return <Card aria-description={t("liveDirectoryHint")}>
     <ContentPage.Heading title={w("roles")} scrollKey="live-role-directory" actions={<ContentPage.Commands label={w("roles")}
-      primary={{ id: "create", label: w("createRole"), icon: <Plus aria-hidden="true" />, disabled: !client.canCreate, disabledReason: client.createRestrictionReason ?? undefined, onSelect: onCreate }} />} />
+      primary={{ id: "create", label: w("createRole"), icon: <Plus aria-hidden="true" />, disabled: !client.canCreate, disabledReason: client.createRestrictionReason ?? undefined, onSelect: onCreate }}
+      secondary={serviceRoleTemplates ? [{ id: "service-role-templates", label: t("serviceRoleTemplates"), variant: "secondary", onSelect: () => setServiceTemplatesOpen(true) }] : []} />} />
     <div className={styles.policyDirectoryIntro}><p>{t("liveDirectoryHint")}</p></div>
     <TableToolbar
       labels={toolbarLabels}

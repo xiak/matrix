@@ -2165,6 +2165,47 @@
     "authorizeDisabled": "Authorize service (not connected)",
     "finish": "Finish review"
   },
+  "ServiceRoleTemplateDirectory": {
+    "title": "Service authorization templates",
+    "backToRoles": "Back to roles",
+    "directoryHint": "Inspect service-role templates published through a controlled cloud-product and IAM platform release. A template fixes the permission ceiling and workload kinds available to a future consent flow.",
+    "boundary": "This directory describes platform capability only; it is not the current account's authorization list. Customer consent, the service-linked role relation, and exact resource bindings are separate state.",
+    "loading": "Loading service authorization templates",
+    "retry": "Retry",
+    "tableLabel": "Service authorization template directory",
+    "detailTitle": "Service authorization template",
+    "activeIsNotConsent": "ACTIVE means only that this platform template may be used by a future customer-consent flow. It does not mean this account has authorized it or that any business resource is bound.",
+    "policySnapshotTitle": "Immutable permission ceiling",
+    "policySnapshotHint": "Future consent must reference this exact policy version and digest. A template or policy revision must not silently expand an existing authorization.",
+    "noAccountObservation": "IAM has not published a read route for this account's service-linked role and workload bindings. This page does not infer authorization from template state and exposes no authorize or revoke action.",
+    "notAccountState": "Not account authorization state",
+    "emptyTitle": "No published templates",
+    "emptyDescription": "The platform has not published a service-role template for future customer consent.",
+    "footerNote": "Read-only platform directory · no account consent, role relation, resource binding, or effective-permission result",
+    "fields": {
+      "template": "Template",
+      "templateId": "Template ID",
+      "templateVersion": "Template version",
+      "product": "Cloud product",
+      "servicePurpose": "Service purpose",
+      "workloadKinds": "Workload kinds",
+      "maxSession": "Maximum session",
+      "policySnapshot": "Policy snapshot",
+      "policyId": "Policy ID",
+      "policyVersionId": "Policy version",
+      "policyDigest": "Policy digest",
+      "templateDigest": "Template digest",
+      "templateState": "Template state"
+    },
+    "states": { "ACTIVE": "Available for future consent", "RETIRED": "Closed to new authorization" },
+    "purposes": { "IAM": "Identity and access", "PAAS": "PaaS service", "AUDIT": "Audit service", "INSTALLATION_VERIFIER": "Installation verifier" },
+    "errors": {
+      "forbidden": { "title": "Service authorization templates are restricted", "description": "This identity cannot read the service-role template directory. The console will not fall back to MOCK data or infer its contents." },
+      "routeUnavailable": { "title": "The service authorization template route is not connected", "description": "This environment has not published the read-only template directory. The isolated MOCK remains independently available in preview mode." },
+      "unavailable": { "title": "The template directory is temporarily unavailable", "description": "IAM did not return a verifiable template directory. Try again later." },
+      "expired": { "title": "Your session has expired", "description": "Sign in again before reading service authorization templates." }
+    }
+  },
   "Console": {
     "brandHome": "Matrix Cloud console home",
     "globalNavigation": "Global navigation",
@@ -2701,6 +2742,7 @@
   "RoleWorkspace": {
     "back": "Back to roles",
     "serviceAuthorization": "Service authorization",
+    "serviceRoleTemplates": "Service authorization templates",
     "next": "Next",
     "saving": "Creating…",
     "created": "Role created",

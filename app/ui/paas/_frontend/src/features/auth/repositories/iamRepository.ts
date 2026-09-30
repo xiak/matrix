@@ -28,6 +28,7 @@ import type {
   PolicyAttachmentRevocation,
   PolicyDirectory,
   AuthorizationProfileDirectory,
+  ServiceRoleTemplateDirectory,
   PasswordResetRequestIdentity,
   UserPasswordResetCompletion,
   UserAccess,
@@ -204,6 +205,9 @@ export interface AccountRepository {
   // Complete current product declarations under the caller's existing policy
   // list permission. There is deliberately no account or revision selector.
   listAuthorizationProfiles(credential: string): Promise<AuthorizationProfileDirectory>;
+  // Platform-published inputs for a future product-owned consent flow. This
+  // list contains no Account authorization or workload binding state.
+  listServiceRoleTemplates?(credential: string): Promise<ServiceRoleTemplateDirectory>;
   listAccounts(credential: string, after?: string): Promise<DirectoryPage<AccountAccess>>;
   // accountId is a local response-scope check, never an HTTP authority selector.
   // Callers retain the same explicit requestId/input for an uncertain outcome.
