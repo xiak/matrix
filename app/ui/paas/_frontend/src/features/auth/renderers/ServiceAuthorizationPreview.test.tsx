@@ -79,7 +79,7 @@ describe("ServiceAuthorizationPreview", () => {
 
     await user.click(screen.getByRole("tab", { name: "运行边界" }));
     expect(screen.getByRole("heading", { name: "ServiceRoleSession" })).toBeTruthy();
-    expect(screen.getByText("SERVICE")).toBeTruthy();
+    expect(screen.getAllByText("SERVICE").length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText("目录样例 · MOCK")).toBeTruthy();
     const runtime = screen.getByRole("heading", { name: "一次服务请求的执行边界" }).closest("section")!;
     expect(within(runtime).getByText("认证受信服务主体")).toBeTruthy();
@@ -95,18 +95,20 @@ describe("ServiceAuthorizationPreview", () => {
 
     let sessions = screen.getByRole("table", { name: "服务会话目录样例" });
     expect(within(sessions).getByText("preview.service-role-session.expired")).toBeTruthy();
-    expect(within(sessions).getAllByText("preview.paas.service").length).toBe(2);
-    expect(within(sessions).getAllByText("PreviewServiceRoleForManagedServiceInstallationRead").length).toBe(2);
+    expect(within(sessions).getByText("preview.service-role-session.revoked")).toBeTruthy();
+    expect(within(sessions).getAllByText("preview.paas.service").length).toBe(3);
+    expect(within(sessions).getAllByText("SERVICE").length).toBe(3);
+    expect(within(sessions).getAllByText("PreviewServiceRoleForManagedServiceInstallationRead").length).toBe(3);
     expect(within(sessions).queryByText("2026-10-01T02:20:00Z")).toBeNull();
     expect(within(sessions).queryByText(/credential|proof|decision/i)).toBeNull();
-    expect(screen.getByText("显示 2 / 2 条")).toBeTruthy();
+    expect(screen.getByText("显示 3 / 3 条")).toBeTruthy();
 
-    const sessionSearch = screen.getByRole("searchbox", { name: "搜索会话 ID、来源服务或目标角色" });
+    const sessionSearch = screen.getByRole("searchbox", { name: "搜索会话 ID、账号、来源身份或目标角色" });
     await user.type(sessionSearch, "expired");
     sessions = screen.getByRole("table", { name: "服务会话目录样例" });
     expect(within(sessions).queryByRole("button", { name: "preview.service-role-session.current" })).toBeNull();
     expect(within(sessions).getByRole("button", { name: "preview.service-role-session.expired" })).toBeTruthy();
-    expect(screen.getByText("显示 1 / 2 条")).toBeTruthy();
+    expect(screen.getByText("显示 1 / 3 条")).toBeTruthy();
     await user.clear(sessionSearch);
     await user.type(sessionSearch, "missing-session");
     expect(screen.getByRole("heading", { name: "没有匹配的服务会话" })).toBeTruthy();
@@ -124,6 +126,8 @@ describe("ServiceAuthorizationPreview", () => {
     await user.click(currentSession);
     expect(screen.getByRole("heading", { name: "服务会话详情" })).toBe(document.activeElement);
     expect(screen.getByText(/未撤销只表示这个样例观察时点没有撤销事实/)).toBeTruthy();
+    expect(screen.getByText("账号").closest("div")?.textContent).toContain("org-xiak");
+    expect(screen.getByText("来源身份").closest("div")?.textContent).toContain("SERVICEpreview.paas.servicepreview.service-installation.paas");
     expect(screen.queryByRole("dialog")).toBeNull();
     await user.click(screen.getByRole("button", { name: "审阅撤销" }));
     expect(screen.getByRole("heading", { name: "撤销服务会话" })).toBe(document.activeElement);
@@ -139,6 +143,12 @@ describe("ServiceAuthorizationPreview", () => {
     expect(screen.getByText(/超过展示的到期时间/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "审阅撤销" })).toBeNull();
     expect(screen.queryByRole("dialog")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "返回会话目录" }));
+    await user.click(within(screen.getByRole("table", { name: "服务会话目录样例" })).getByRole("button", { name: "preview.service-role-session.revoked" }));
+    expect(screen.getByText("撤销时间").closest("div")?.textContent).not.toBe("撤销时间");
+    expect(screen.getByText(/已包含明确的撤销时间/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "审阅撤销" })).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "返回服务授权" }));
     expect(screen.getByRole("button", { name: "查看账号服务授权：托管服务安装访问" })).toBe(document.activeElement);

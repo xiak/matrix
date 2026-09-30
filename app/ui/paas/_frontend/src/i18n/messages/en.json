@@ -2234,9 +2234,9 @@
         "boundary": "An ACTIVE relation and an ACTIVE resource binding do not mean temporary credentials have been issued. A future service must assume the role with a SERVICE source under the exact binding, business purpose, and session ceiling. This MOCK does not call AssumeRole, and the records below are not backend activity.",
         "directoryTitle": "Service-session directory",
         "directoryHint": "Account security administrators inspect non-secret session metadata by source service and target role, then review a single-session revoke from the detail view.",
-        "directoryBoundary": "Isolated MOCK · These two records only validate information hierarchy and revoke review; they do not come from IAM. The page exposes no short-lived credential, internal proof or decision, private endpoint, or installation bootstrap summary.",
+        "directoryBoundary": "Isolated MOCK · These {count} records only validate source-identity and lifecycle information hierarchy plus revoke review; they do not come from IAM. The page exposes no short-lived credential, internal proof or decision, private endpoint, or installation bootstrap summary.",
         "tableLabel": "Service-session directory example",
-        "search": "Search session ID, source service, or target role",
+        "search": "Search session ID, account, source identity, or target role",
         "stateFilter": "Observed state",
         "allStates": "All states",
         "filteredCount": "Showing {count} of {total}",
@@ -2248,7 +2248,11 @@
         "next": "Next service-session page",
         "detailEyebrow": "Non-secret session observation · MOCK",
         "detailTitle": "Service-session detail",
-        "detailBoundary": "Unrevoked only means that no revocation fact was observed at this illustrative instant. It does not mean the session is currently valid, a request was allowed, or a business operation succeeded.",
+        "detailBoundaries": {
+          "unrevoked": "Unrevoked only means that no revocation fact was observed at this illustrative instant. It does not mean the session is currently valid, a request was allowed, or a business operation succeeded.",
+          "expired": "Expired comes only from this example's displayed time. The local clock cannot prove backend cleanup or that any business request succeeded or failed.",
+          "revoked": "Revoked means only that this example has an explicit revokedAt. It does not mean the service-linked role, resource binding, or permission ceiling was deleted, nor prove that an in-flight business request was cancelled."
+        },
         "backToDirectory": "Back to session directory",
         "backToDetail": "Back to session detail",
         "reviewRevoke": "Review revoke",
@@ -2262,13 +2266,16 @@
         "revokeEffectNoGrant": "Revocation grants, expands, or rewrites no policy or permission ceiling.",
         "revokeEffectNoProof": "A refreshed list, expiry time, or state change cannot prove that this unsent revoke succeeded.",
         "expiredHint": "This example is beyond its displayed expiry and offers no revoke review. The local clock is not authoritative backend state.",
-        "states": { "unrevoked": "No revoke observed · MOCK", "expired": "Expired example" },
+        "revokedHint": "This example has an explicit revocation time and offers no further revoke review. Revoking one session does not delete account service authorization or a resource binding.",
+        "states": { "unrevoked": "No revoke observed · MOCK", "expired": "Expired example", "revoked": "Revoked example" },
         "fields": {
           "id": "Session ID",
-          "sourceService": "Source service",
+          "account": "Account",
+          "sourceIdentity": "Source identity",
           "role": "Target role",
           "issuedAt": "Issued",
           "expiresAt": "Expires",
+          "revokedAt": "Revoked",
           "lifecycle": "Expiry and state",
           "state": "Observed state"
         }
