@@ -51,6 +51,35 @@ func TestReleasePairAllowsReleaseSpecificWorkloadImages(t *testing.T) {
 	}
 }
 
+func TestOptionsRequirePrivateSecurityMailOnlyForEffectfulLifecycle(t *testing.T) {
+	root := t.TempDir()
+	for name, value := range map[string]string{
+		"MATRIX_PHASE1_E2E_PHASE": "run",
+		"MATRIX_PHASE1_ROOT":      filepath.Join(root, "installation"),
+		"MATRIX_PHASE1_RELEASE_A": filepath.Join(root, "release-a"),
+		"MATRIX_PHASE1_RELEASE_B": filepath.Join(root, "release-b"),
+		"MATRIX_PHASE1_TRUST_KEY": filepath.Join(root, "release-trust.json"),
+	} {
+		t.Setenv(name, value)
+	}
+	if _, err := optionsFromEnvironment(); err == nil {
+		t.Fatal("effectful lifecycle admitted without private security-mail configuration")
+	}
+	securityMail := filepath.Join(root, "security-mail.json")
+	t.Setenv("MATRIX_PHASE1_SECURITY_MAIL_CONFIGURATION", securityMail)
+	config, err := optionsFromEnvironment()
+	if err != nil || config.securityMail != securityMail {
+		t.Fatalf("effectful lifecycle options = %#v / %v", config, err)
+	}
+
+	t.Setenv("MATRIX_PHASE1_E2E_PHASE", "after-restart")
+	t.Setenv("MATRIX_PHASE1_RELEASE_B", "")
+	t.Setenv("MATRIX_PHASE1_SECURITY_MAIL_CONFIGURATION", "")
+	if _, err := optionsFromEnvironment(); err != nil {
+		t.Fatalf("read-only after-restart lifecycle requires removed private input: %v", err)
+	}
+}
+
 func TestEdgeClientChecksSuccessAndProblemMediaTypes(t *testing.T) {
 	for _, check := range []struct {
 		name, mediaType string
@@ -86,21 +115,25 @@ func optionsFromEnvironment() (options, error) {
 		return options{}, fail("command-input")
 	}
 	config := options{
-		root:       os.Getenv("MATRIX_PHASE1_ROOT"),
-		releaseA:   os.Getenv("MATRIX_PHASE1_RELEASE_A"),
-		releaseB:   os.Getenv("MATRIX_PHASE1_RELEASE_B"),
-		trustKey:   os.Getenv("MATRIX_PHASE1_TRUST_KEY"),
-		edge:       defaultEdgeEndpoint,
-		afterStart: phase == "after-restart",
+		root:         os.Getenv("MATRIX_PHASE1_ROOT"),
+		releaseA:     os.Getenv("MATRIX_PHASE1_RELEASE_A"),
+		releaseB:     os.Getenv("MATRIX_PHASE1_RELEASE_B"),
+		trustKey:     os.Getenv("MATRIX_PHASE1_TRUST_KEY"),
+		securityMail: os.Getenv("MATRIX_PHASE1_SECURITY_MAIL_CONFIGURATION"),
+		edge:         defaultEdgeEndpoint,
+		afterStart:   phase == "after-restart",
 	}
 	for _, path := range []string{config.root, config.releaseA, config.trustKey} {
 		if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) != path {
 			return options{}, fail("command-input")
 		}
 	}
-	if !config.afterStart && (config.releaseB == "" || !filepath.IsAbs(config.releaseB) ||
-		filepath.Clean(config.releaseB) != config.releaseB) {
-		return options{}, fail("command-input")
+	if !config.afterStart {
+		for _, path := range []string{config.releaseB, config.securityMail} {
+			if path == "" || !filepath.IsAbs(path) || filepath.Clean(path) != path {
+				return options{}, fail("command-input")
+			}
+		}
 	}
 	return config, nil
 }

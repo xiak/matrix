@@ -13,12 +13,13 @@ import (
 const defaultEdgeEndpoint = "http://127.0.0.1:8080"
 
 type options struct {
-	root       string
-	releaseA   string
-	releaseB   string
-	trustKey   string
-	edge       string
-	afterStart bool
+	root         string
+	releaseA     string
+	releaseB     string
+	trustKey     string
+	securityMail string
+	edge         string
+	afterStart   bool
 }
 
 type releasePair struct {

@@ -1,9 +1,9 @@
 # FEAT-005: Offline platform distribution and lifecycle
 
-- Status: Accepted foundation; IAM security-report release integration is in progress
+- Status: Accepted foundation; IAM security-mail topology candidate is in verification
 - Target release: Private Application PaaS v0.1
 - Target design date: 2026-08-25
-- Release contract: accepted foundation `v1`; current isolated-IAM candidate is manifest `v2` with the exact `61/31/3` revision 6 profile, has passed its signed A/B lifecycle gate, and remains unaccepted until the exact source passes independent CI
+- Release contract: accepted foundation `v1`; current isolated-IAM candidate is manifest `v2` with the exact `61/31/3` revision 7 profile and remains unaccepted until the exact source passes independent CI and signed A/B lifecycle gates
 
 ## Outcome
 

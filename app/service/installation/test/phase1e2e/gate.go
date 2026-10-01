@@ -71,6 +71,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		"--bundle", value.releases.a.Root,
 		"--root", value.config.root,
 		"--trust-key", value.config.trustKey,
+		"--security-mail-configuration", value.config.securityMail,
 	}, value.pathLeakage())
 	if err != nil || install.ReleaseID != value.releases.a.Manifest.Release.ID || !install.Changed {
 		return fail("release-a-install")
@@ -219,6 +220,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 
 	upgrade, err := runMX(ctx, value.releases.a, "upgrade", []string{
 		"--bundle", value.releases.b.Root, "--root", value.config.root,
+		"--security-mail-configuration", value.config.securityMail,
 	}, value.forbidden(secret, newPassword, bearer))
 	if err != nil || upgrade.ReleaseID != value.releases.b.Manifest.Release.ID ||
 		upgrade.PreviousID != value.releases.a.Manifest.Release.ID || !upgrade.Changed {
@@ -1098,7 +1100,7 @@ func (value *gate) assertFreshHost(ctx context.Context) error {
 func (value *gate) pathLeakage() [][]byte {
 	result := [][]byte{
 		[]byte(value.config.root), []byte(value.config.releaseA), []byte(value.config.releaseB),
-		[]byte(value.config.trustKey),
+		[]byte(value.config.trustKey), []byte(value.config.securityMail),
 	}
 	if value.retainedIAM != nil {
 		result = append(result, value.retainedIAM.AdministratorPassword)
@@ -1452,7 +1454,10 @@ func (value *gate) failedUpgrade(
 	defer cancel()
 	command, stdout, stderr, err := startMX(
 		upgradeContext, value.releases.a, "upgrade",
-		[]string{"--bundle", value.releases.b.Root, "--root", value.config.root},
+		[]string{
+			"--bundle", value.releases.b.Root, "--root", value.config.root,
+			"--security-mail-configuration", value.config.securityMail,
+		},
 	)
 	if err != nil {
 		return fail("failed-upgrade-start")
