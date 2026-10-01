@@ -190,7 +190,7 @@ policy_versions 增加无默认、必填的 contract_version，1只标识切换�
 
 #### IP 条件：产品服务提供的可信网络来源
 
-本片沿用唯一 `conditions` 语言与产品 Profile，不增加通用 attributes map、PaaS 专用策略模型或按角色分叉的求值器。条件键固定为 `request.source-ip`，类型为 `IP`，来源固定为 `CALLING_SERVICE_NETWORK`；它表示已认证产品服务从自己实际处理的网络请求中建立的来源地址，不是 IAM 连接对端、资源归属或调用者声明。首个运行消费者只覆盖 PaaS 的 TENANT 应用、配置、修订、部署和 Operation 动作；平台主机、安装探针、IAM、Audit 与 ManagedService 动作不因同名字符串自动取得该能力。以后其他产品接入时必须在自己的新 Profile revision 中显式声明并完成相同 PEP 门禁。
+本片沿用唯一 `conditions` 语言与产品 Profile，不增加通用 attributes map、PaaS 专用策略模型或按角色分叉的求值器。条件键固定为 `request.source-ip`，类型为 `IP`，来源固定为 `CALLING_SERVICE_NETWORK`；它表示已认证产品服务从自己实际处理的网络请求中建立的来源地址，不是 IAM 连接对端、资源归属或调用者声明。首个运行消费者覆盖 PaaS 的 TENANT 应用、配置、修订、部署和 Operation 动作；后继程序访问切片又只为 Audit 的租户记录查询与完整性验证声明该条件，并由受信边缘事实驱动。平台主机、安装探针、IAM、Audit 平台动作与 ManagedService 动作不因同名字符串自动取得该能力。以后其他产品接入时必须在自己的新 Profile revision 中显式声明并完成相同 PEP 门禁。
 
 - 产品 PEP 从真实 socket/受信 edge 上下文生成 `networkContext.sourceIp`，不读取或转交 caller 的 `Forwarded`、`X-Forwarded-For`、query、body 或普通业务 header。当前直连 PaaS 切片只接受 `RemoteAddr` 中的直接网络对端；经过 APISIX 时，在 installation/edge owner 提供准确可信代理链、覆盖攻击和签名组合证据前，不能把 APISIX 地址或 caller header 宣称为原始客户端 IP。缺少该能力的发布组合必须关闭相应 IP 条件，而不是默默降级成任意来源。
 - 北向授权仍不接受 tenant、subject 或条件值 selector。`AuthorizationRequest` 只增加可省略且严格封闭的 `networkContext:{sourceIp}`；`AuthorizationDecision` 原样绑定同一上下文，PEP 在消费 Allow 或 Deny 前精确比对。省略保持已有非网络请求的 bytes；存在时必须是无端口、无 zone、非 IPv4-mapped IPv6 的规范 IPv4/IPv6 单地址，允许私有地址与 loopback 以支持私有部署，拒绝 unspecified、multicast、非规范文本及额外字段。产品服务身份、Profile caller 和来源上下文三者都成立才进入求值；IAM 自己看到的服务连接地址不能替代它。
