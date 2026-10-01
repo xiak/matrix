@@ -256,6 +256,12 @@ Role 管理 list/read/create、管理员 RoleSession list/read/revoke，以及�
 - 组件用例以延迟的关系 Promise 证明旧行在刷新中保留、关系命令禁用、新结果原位出现，并覆盖权威组详情失败后旧操作消失。完整共享门禁由 [FEAT-007 current development evidence](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence) 记录；这证明客户端刷新语义，不冒充真实组变更的浏览器验收。
 - 2026-09-29 已推送 [`255b9bf7`](https://github.com/xiak/matrix/commit/255b9bf7)：共享集合组件新增明确的数据加载/不可用区域，LIVE Group 目录初载、失败和重试不再用整页 `PageSkeleton` 替换固定结构；标题、搜索和新建入口持续挂载，延迟骨架不会先渲染“空目录”。组详情深链同样先呈现稳定标题与返回路径，只让远端组事实区域加载或失败。目录请求使用代次隔离，离开页面或新重试后的迟到结果不能覆盖当前状态。行为用例覆盖延迟目录、失败→重试、延迟详情和既有成员局部加载；完整 50 文件/839 条前端用例、三条静态归一化、类型/lint/架构/228 组主题对比、41 页导出、228 个嵌入文件及全仓 Go test/vet 通过。`390 × 844` DEV 目录 document/body 与视口同宽且 warning/error 为空；因 DEV 明确使用隔离 MOCK，该浏览器观察验证共享响应式目录而不冒充 LIVE 延迟网络或真实 IAM 浏览器验收。
 
+### 非破坏性元数据编辑的开发验收证据
+
+- 2026-10-02 已推送 [`67ed0429a`](https://github.com/xiak/matrix/commit/67ed0429a)：隔离 MOCK 的 User 显示名、Group 名称/描述和自定义 Policy 描述编辑统一复用内容区表单，不再打开 Dialog。进入编辑后稳定标题和返回路径保留，详情操作暂时收起；取消或完成后，桌面回到原直接操作，小屏回到公共“页面操作”按钮。输入、提交错误和重试继续留在同一表单；删除确认及高风险批量操作仍使用聚焦的确认 Dialog，不因本片扩大为普通内容编辑。
+- 本片只统一共享承载面、焦点和响应式行为，不新增 LIVE User、Group 或 Policy 写入端点，也不把隔离仓库结果解释成 IAM 权威状态。Role update/status/delete、trust、attachment 与权限边界写入继续保持关闭，直到各自固定公共契约和真实进程门禁完成。
+- 完整共享门禁与浏览器尺寸证据由 [FEAT-007 current development evidence](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence) 唯一拥有；这里仅固定 IAM 的操作边界与未开放能力。
+
 User 边界片需 root 设置 A → 替换 B → 移除；同一成员的当前身份投影相应变化，普通管理员保持只读，正向附件不被删除。桌面与 360px 验证长引用、内容区操作和目录返回；fixture 最终检查实际两个设置事实、一个移除事实、明确无边界与 Audit 链。completion marker 不能代替页面观察。组件行为测试覆盖进入内联编辑、审阅返回和取消恢复焦点；真实浏览器键盘专项仍待补，不宣称已验收。
 
 ### User 权限边界片的开发联调证据
