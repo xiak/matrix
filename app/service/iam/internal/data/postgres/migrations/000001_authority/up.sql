@@ -968,7 +968,7 @@ CREATE TABLE IF NOT EXISTS iam.session_index (
 
 -- Exact archived meaning is a stored decision invariant, independent of heads.
 -- This private predicate does not authenticate a producer or grant permission.
-CREATE OR REPLACE FUNCTION iam.authorization_request_tags_valid(tags jsonb)
+CREATE OR REPLACE FUNCTION iam.authorization_tags_valid(tags jsonb)
 RETURNS boolean LANGUAGE plpgsql IMMUTABLE SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE
     tag jsonb;
@@ -1017,12 +1017,19 @@ RETURNS boolean LANGUAGE sql STABLE SET search_path = pg_catalog, pg_temp AS $fu
             SELECT 1 FROM jsonb_array_elements(COALESCE(action->'conditions','[]'::jsonb)) condition
              WHERE condition=jsonb_build_object('key','request.source-ip','valueType','IP','source','CALLING_SERVICE_NETWORK')))
           AND (NOT decision ? 'requestTags' OR (
-            iam.authorization_request_tags_valid(decision->'requestTags')
+            iam.authorization_tags_valid(decision->'requestTags')
             AND NOT EXISTS(
               SELECT 1 FROM jsonb_array_elements(decision->'requestTags') tag
                WHERE NOT EXISTS(
                  SELECT 1 FROM jsonb_array_elements(COALESCE(action->'conditions','[]'::jsonb)) condition
                   WHERE condition=jsonb_build_object('key','request.tag/'||(tag->>'key'),'valueType','STRING','source','CALLING_SERVICE_REQUEST_TAG')))))
+          AND (NOT decision ? 'resourceTags' OR (
+            iam.authorization_tags_valid(decision->'resourceTags')
+            AND NOT EXISTS(
+              SELECT 1 FROM jsonb_array_elements(decision->'resourceTags') tag
+               WHERE NOT EXISTS(
+                 SELECT 1 FROM jsonb_array_elements(COALESCE(action->'conditions','[]'::jsonb)) condition
+                  WHERE condition=jsonb_build_object('key','resource.tag/'||(tag->>'key'),'valueType','STRING','source','CALLING_SERVICE_RESOURCE_TAG')))))
           AND (CASE WHEN decision->'allowed'='true'::jsonb THEN
             CASE WHEN action->>'scope'='INSTALLATION' THEN
               decision ? 'installationId' AND NOT decision ? 'tenantId' AND decision#>>'{subject,type}'='USER'
@@ -1108,8 +1115,8 @@ ALTER TABLE iam.authorization_decisions ADD COLUMN IF NOT EXISTS resource_mode t
 ALTER TABLE iam.authorization_decisions ADD COLUMN IF NOT EXISTS collection_usage text COLLATE "C";
 ALTER TABLE iam.authorization_decisions DROP CONSTRAINT IF EXISTS authorization_decision_contract_valid;
 ALTER TABLE iam.authorization_decisions ADD CONSTRAINT authorization_decision_contract_valid CHECK (COALESCE(
-    contract_version IN (1,2,3,4,5,6)
-    AND (access_key_id IS NULL OR (contract_version IN (4,5,6) AND subject_type='USER'
+    contract_version IN (1,2,3,4,5,6,7)
+    AND (access_key_id IS NULL OR (contract_version IN (4,5,6,7) AND subject_type='USER'
       AND access_key_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'))
     AND (CASE WHEN contract_version IN (1,2) THEN principal_id IS NOT NULL AND subject_type IS NULL AND role_id IS NULL
         AND source_principal_id IS NULL AND source_service_account_id IS NULL AND source_service_principal_id IS NULL AND role_evidence IS NULL
@@ -1130,7 +1137,7 @@ ALTER TABLE iam.authorization_decisions ADD CONSTRAINT authorization_decision_co
     AND jsonb_typeof(document)='object'
     AND document ?& ARRAY['apiVersion','kind','id','allowed','reason','action','resource','requestId','decidedAt']
     AND (document-ARRAY['apiVersion','kind','id','allowed','reason','action','resource','requestId','decidedAt',
-        'tenantId','installationId','subject','profile','resourceMode','collectionUsage','networkContext','requestTags','correlationId'])='{}'::jsonb
+        'tenantId','installationId','subject','profile','resourceMode','collectionUsage','networkContext','requestTags','resourceTags','correlationId'])='{}'::jsonb
     AND jsonb_typeof(document->'allowed')='boolean' AND document->>'allowed'=allowed::text
     AND jsonb_typeof(document->'apiVersion')='string' AND jsonb_typeof(document->'kind')='string'
     AND jsonb_typeof(document->'id')='string' AND jsonb_typeof(document->'action')='string'
@@ -1146,7 +1153,7 @@ ALTER TABLE iam.authorization_decisions ADD CONSTRAINT authorization_decision_co
     AND (CASE WHEN allowed THEN
         jsonb_typeof(document->'subject')='object'
         AND document->'subject' ?& ARRAY['type','id']
-        AND (CASE WHEN contract_version IN (3,4,5,6) AND subject_type='ROLE' THEN
+        AND (CASE WHEN contract_version IN (3,4,5,6,7) AND subject_type='ROLE' THEN
           document->'subject'=jsonb_build_object('type','ROLE','id',role_id,'roleSession',
             jsonb_build_object('sessionId',role_evidence->>'sessionId')||
               CASE WHEN source_service_principal_id IS NOT NULL
@@ -1158,7 +1165,7 @@ ALTER TABLE iam.authorization_decisions ADD CONSTRAINT authorization_decision_co
             AND NOT document ? 'installationId'
           ELSE ((document->'subject')-ARRAY['type','id'])='{}'::jsonb AND document#>>'{subject,id}'=principal_id
             AND document#>>'{subject,type}' IN ('USER','SERVICE_ACCOUNT')
-            AND (contract_version NOT IN (3,4,5,6) OR document#>>'{subject,type}'=subject_type) END)
+            AND (contract_version NOT IN (3,4,5,6,7) OR document#>>'{subject,type}'=subject_type) END)
         AND jsonb_typeof(document#>'{subject,id}')='string'
         AND jsonb_typeof(document#>'{subject,type}')='string'
         AND ((document ? 'tenantId' AND NOT document ? 'installationId' AND jsonb_typeof(document->'tenantId')='string' AND document->>'tenantId'=tenant_id)
@@ -1168,7 +1175,7 @@ ALTER TABLE iam.authorization_decisions ADD CONSTRAINT authorization_decision_co
     AND (CASE WHEN contract_version=1 THEN
         profile_product IS NULL AND profile_revision IS NULL AND profile_content_digest IS NULL AND resource_mode IS NULL AND collection_usage IS NULL
         AND NOT document ?| ARRAY['profile','resourceMode','collectionUsage','correlationId']
-      WHEN contract_version IN (2,3,4,5,6) THEN
+      WHEN contract_version IN (2,3,4,5,6,7) THEN
         profile_product IS NOT NULL AND profile_revision IS NOT NULL AND profile_content_digest IS NOT NULL AND resource_mode IS NOT NULL
         AND document ?& ARRAY['profile','resourceMode','correlationId']
         AND document->'profile'=jsonb_build_object('product',profile_product,'revision',profile_revision,'contentDigest',profile_content_digest)
@@ -1191,7 +1198,10 @@ ALTER TABLE iam.authorization_decisions ADD CONSTRAINT authorization_decision_co
             AND NOT (document#>>'{networkContext,sourceIp}')::inet <<= '::ffff:0.0.0.0/96'::inet END)
         AND (CASE WHEN contract_version<6 THEN NOT document ? 'requestTags'
           WHEN NOT document ? 'requestTags' THEN true
-          ELSE iam.authorization_request_tags_valid(document->'requestTags') END)
+          ELSE iam.authorization_tags_valid(document->'requestTags') END)
+        AND (CASE WHEN contract_version<7 THEN NOT document ? 'resourceTags'
+          WHEN NOT document ? 'resourceTags' THEN true
+          ELSE iam.authorization_tags_valid(document->'resourceTags') END)
       ELSE false END),false));
 -- A CHECK must depend only on its own row. Looking up the archive from a
 -- CHECK makes valid populated pg_restore fail before profile data is loaded.
@@ -1203,7 +1213,7 @@ ALTER TABLE iam.authorization_decisions ADD CONSTRAINT authorization_decisions_p
 CREATE OR REPLACE FUNCTION iam.guard_authorization_decision_profile()
 RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
 BEGIN
-    IF NEW.contract_version IN (2,3,4,5,6) AND NOT iam.authorization_decision_profile_matches(NEW.document) THEN
+    IF NEW.contract_version IN (2,3,4,5,6,7) AND NOT iam.authorization_decision_profile_matches(NEW.document) THEN
         RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='authorization decision archived profile conflicts';
     END IF;
     RETURN NEW;
@@ -1967,14 +1977,14 @@ $function$;
 CREATE OR REPLACE FUNCTION iam.authorization_decision_contract_version()
 RETURNS integer LANGUAGE sql IMMUTABLE PARALLEL SAFE
 SET search_path=pg_catalog,pg_temp AS $function$
-    SELECT 6
+    SELECT 7
 $function$;
 REVOKE ALL ON FUNCTION iam.authorization_decision_contract_version() FROM PUBLIC,matrix_iam_api,matrix_iam_worker,
     matrix_iam_notification_worker,matrix_iam_credential_recovery,matrix_iam_authentication_recovery,matrix_iam_backup_custody;
 
 CREATE OR REPLACE FUNCTION iam.authorization_decision_contract_ready()
 RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $function$
-    SELECT iam.authorization_decision_contract_version()=6
+    SELECT iam.authorization_decision_contract_version()=7
            AND EXISTS(SELECT 1 FROM pg_catalog.pg_proc AS version
                 WHERE version.oid=to_regprocedure('iam.authorization_decision_contract_version()')
                   AND version.proowner='matrix_iam_owner'::regrole AND NOT version.prosecdef
@@ -1988,7 +1998,7 @@ RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $funct
                   AND NOT EXISTS(SELECT 1 FROM aclexplode(COALESCE(version.proacl,acldefault('f',version.proowner))) permission
                     WHERE permission.grantee<>version.proowner))
            AND EXISTS(SELECT 1 FROM pg_catalog.pg_proc AS tags
-                WHERE tags.oid=to_regprocedure('iam.authorization_request_tags_valid(jsonb)')
+                WHERE tags.oid=to_regprocedure('iam.authorization_tags_valid(jsonb)')
                   AND tags.proowner='matrix_iam_owner'::regrole AND NOT tags.prosecdef
                   AND tags.pronargs=1 AND tags.proargtypes=ARRAY['jsonb'::regtype::oid]::oidvector
                   AND tags.prorettype='boolean'::regtype AND NOT tags.proretset
@@ -1996,6 +2006,7 @@ RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $funct
                   AND tags.proconfig=ARRAY['search_path=pg_catalog, pg_temp']
                   AND NOT EXISTS(SELECT 1 FROM aclexplode(COALESCE(tags.proacl,acldefault('f',tags.proowner))) permission
                     WHERE permission.grantee<>tags.proowner))
+	       AND to_regprocedure('iam.authorization_request_tags_valid(jsonb)') IS NULL
            AND EXISTS(SELECT 1 FROM pg_catalog.pg_proc AS recorder
                 WHERE recorder.oid=to_regprocedure('iam.record_authorization(text,text,jsonb,jsonb,jsonb,jsonb,integer,jsonb,jsonb)')
                   AND recorder.prosecdef AND recorder.proowner='matrix_iam_owner'::regrole
@@ -2946,7 +2957,7 @@ DECLARE
     binding_key text;
     expected_subject jsonb;
 BEGIN
-    IF input_contract_version IS DISTINCT FROM 6 OR submitted_role_evidence IS NULL OR submitted_key_evidence IS NULL
+    IF input_contract_version IS DISTINCT FROM 7 OR submitted_role_evidence IS NULL OR submitted_key_evidence IS NULL
        OR (submitted_role_evidence<>'null'::jsonb AND submitted_key_evidence<>'null'::jsonb) THEN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='authorization contract version is invalid';
     END IF;
@@ -2960,10 +2971,10 @@ BEGIN
     submitted_request := input_authorization->'request';
     submitted_decision := input_authorization->'decision';
     IF NOT submitted_request ?& ARRAY['action','resource','requestId','correlationId','profile','resourceMode']
-        OR (submitted_request-ARRAY['action','resource','requestId','correlationId','profile','resourceMode','collectionUsage','networkContext','requestTags'])<>'{}'::jsonb THEN
+        OR (submitted_request-ARRAY['action','resource','requestId','correlationId','profile','resourceMode','collectionUsage','networkContext','requestTags','resourceTags'])<>'{}'::jsonb THEN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='authorization request is invalid';
     END IF;
-    FOREACH binding_key IN ARRAY ARRAY['action','resource','requestId','correlationId','profile','resourceMode','collectionUsage','networkContext','requestTags'] LOOP
+    FOREACH binding_key IN ARRAY ARRAY['action','resource','requestId','correlationId','profile','resourceMode','collectionUsage','networkContext','requestTags','resourceTags'] LOOP
         IF (submitted_request ? binding_key)<>(submitted_decision ? binding_key)
             OR submitted_request->binding_key IS DISTINCT FROM submitted_decision->binding_key THEN
             RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='authorization request binding differs';
@@ -2999,7 +3010,7 @@ BEGIN
        ])
        OR (submitted_decision - ARRAY[
             'apiVersion', 'kind', 'id', 'allowed', 'reason', 'tenantId',
-             'subject', 'installationId', 'action', 'resource', 'requestId', 'decidedAt', 'profile', 'resourceMode', 'collectionUsage', 'networkContext', 'requestTags', 'correlationId'
+             'subject', 'installationId', 'action', 'resource', 'requestId', 'decidedAt', 'profile', 'resourceMode', 'collectionUsage', 'networkContext', 'requestTags', 'resourceTags', 'correlationId'
        ]) <> '{}'::jsonb
        OR NOT ((submitted_decision->'resource') ?& ARRAY['kind', 'id'])
        OR ((submitted_decision->'resource') - ARRAY['kind', 'id']) <> '{}'::jsonb
@@ -3225,7 +3236,7 @@ BEGIN
         submitted_decision,
         submitted_policy_evidence,
         submitted_boundary_evidence,
-        6,
+        7,
         submitted_decision#>>'{profile,product}',
         (submitted_decision#>>'{profile,revision}')::bigint,
         submitted_decision#>>'{profile,contentDigest}',
@@ -3299,7 +3310,7 @@ BEGIN
            AND decision.action_name = submitted_action
            AND decision.target_kind = submitted_target_kind
            AND decision.target_id = submitted_target_id
-           AND decision.contract_version = 6 AND decision.subject_type='USER' AND decision.access_key_id IS NULL
+           AND decision.contract_version = 7 AND decision.subject_type='USER' AND decision.access_key_id IS NULL
            AND EXISTS(SELECT 1 FROM iam.authorization_profile_heads head
              JOIN iam.authorization_profiles archive ON archive.product=head.product AND archive.revision=head.revision
              WHERE head.product=decision.profile_product AND head.revision=decision.profile_revision

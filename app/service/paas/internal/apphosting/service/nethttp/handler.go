@@ -45,6 +45,7 @@ type Workflow interface {
 	) (paasv1.ApplicationRevision, paasv1.Operation, bool, error)
 	Submit(context.Context, applicationlifecycle.SubmitCommand) (applicationlifecycle.Result, error)
 	Rollback(context.Context, applicationlifecycle.RollbackCommand) (applicationlifecycle.Result, error)
+	InspectApplicationAuthorization(context.Context, port.AuthorizationSubjectContext, paasv1.ResourceID) (applicationlifecycle.ApplicationAuthorizationSnapshot, error)
 	GetApplication(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.Application, error)
 	GetConfiguration(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.Configuration, error)
 	GetConfigurationRevision(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.ConfigurationRevision, error)
@@ -225,7 +226,7 @@ func (value *handler) createApplication(response http.ResponseWriter, request *h
 	}
 	authorization, ok := value.authorizeRequestWithLabels(response, request, requestID,
 		port.AuthorizeApplicationCreate, port.ResourceApplication, "collection",
-		iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate, body.Labels)
+		iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate, body.Labels, nil)
 	if !ok {
 		return
 	}
@@ -366,11 +367,55 @@ func (value *handler) rollbackDeployment(response http.ResponseWriter, request *
 }
 
 func (value *handler) getApplication(response http.ResponseWriter, request *http.Request) {
-	id, authorization, requestID, ok := value.authorizePath(response, request, "applicationId", port.AuthorizeApplicationRead, port.ResourceApplication)
+	id, ok := pathResourceID(response, request, "applicationId")
 	if !ok {
 		return
 	}
+	requestID, ok := value.beginRequest(response)
+	if !ok {
+		return
+	}
+	subjectRequest := port.SubjectResolutionRequest{Credential: request.Header.Get("Authorization")}
+	if port.ValidateSubjectResolutionRequest(subjectRequest) != nil {
+		writeAuthorizationError(response, requestID, port.ErrUnauthenticated)
+		return
+	}
+	subject, err := value.authorizer.ResolveSubject(request.Context(), subjectRequest)
+	if err != nil {
+		writeAuthorizationError(response, requestID, err)
+		return
+	}
+	if port.ValidateAuthorizationSubjectContext(subject) != nil {
+		writeAuthorizationError(response, requestID, port.ErrAuthorizationUnavailable)
+		return
+	}
+	snapshot, inspectErr := value.workflow.InspectApplicationAuthorization(request.Context(), subject, id)
+	found := inspectErr == nil
+	if inspectErr != nil && !errors.Is(inspectErr, applicationlifecycle.ErrNotFound) {
+		writeWorkflowError(response, requestID, inspectErr)
+		return
+	}
+	var labels map[string]string
+	if found {
+		labels = snapshot.Labels
+	}
+	authorization, ok := value.authorizeRequestWithLabels(response, request, requestID,
+		port.AuthorizeApplicationRead, port.ResourceApplication, id,
+		iamv1.AuthorizationResourceInstance, "", nil, labels)
+	if !ok {
+		return
+	}
+	if port.ValidateAuthorizationForSubjectContext(authorization, subject) != nil {
+		writeAuthorizationError(response, requestID, port.ErrAuthorizationUnavailable)
+		return
+	}
 	resource, err := value.workflow.GetApplication(request.Context(), authorization, id)
+	if err == nil && (!found || resource.Metadata.ID != snapshot.ID ||
+		resource.Metadata.ResourceVersion != snapshot.ResourceVersion ||
+		port.ValidateAuthorizationResourceTagsForAction(authorization, port.AuthorizeApplicationRead, resource.Metadata.Labels) != nil) {
+		writeAuthorizationError(response, requestID, port.ErrAuthorizationUnavailable)
+		return
+	}
 	writeResource(response, requestID, resource, resourceVersionETag(resource.Metadata.ResourceVersion), err)
 }
 
@@ -506,7 +551,7 @@ func (value *handler) authorizeRequest(
 	mode iamv1.AuthorizationResourceMode,
 	usage iamv1.AuthorizationCollectionUsage,
 ) (port.Authorization, bool) {
-	return value.authorizeRequestWithLabels(response, request, requestID, action, kind, id, mode, usage, nil)
+	return value.authorizeRequestWithLabels(response, request, requestID, action, kind, id, mode, usage, nil, nil)
 }
 
 func (value *handler) authorizeRequestWithLabels(
@@ -518,7 +563,8 @@ func (value *handler) authorizeRequestWithLabels(
 	id paasv1.ResourceID,
 	mode iamv1.AuthorizationResourceMode,
 	usage iamv1.AuthorizationCollectionUsage,
-	labels map[string]string,
+	requestLabels map[string]string,
+	resourceLabels map[string]string,
 ) (port.Authorization, bool) {
 	sourceIP, err := authorizationSourceIP(request.RemoteAddr)
 	if err != nil {
@@ -530,9 +576,10 @@ func (value *handler) authorizeRequestWithLabels(
 		Action:       action,
 		Resource:     paasv1.ResourceRef{Kind: kind, ID: id},
 		ResourceMode: mode, CollectionUsage: usage,
-		SourceIP:      sourceIP,
-		RequestLabels: maps.Clone(labels),
-		RequestID:     requestID,
+		SourceIP:       sourceIP,
+		RequestLabels:  maps.Clone(requestLabels),
+		ResourceLabels: maps.Clone(resourceLabels),
+		RequestID:      requestID,
 	}
 	if err := port.ValidateAuthorizationRequest(authorizationRequest); err != nil {
 		writeProblem(response, requestID, http.StatusUnauthorized, paasv1.ErrorUnauthenticated, "Unauthenticated", "a valid IAM credential is required", false)

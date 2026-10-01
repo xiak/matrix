@@ -1,6 +1,6 @@
 # FEAT-IAM-008：业务接入、服务角色与 ABAC
 
-- 状态：实施中；版本化产品 Profile、PaaS/managedservice 的真实 PEP、请求与决定绑定及当前资源/Operation/outbox 租户隔离已有固定后端实现。服务受托已有账号同意关系、当前Account只读观察、managedservice真实资源绑定/解绑及服务会话发行/回执/当前PDP；累计固定`a464299b`已补严格服务来源的管理员目录/读取/代撤销并通过本地真实PG18、累计Role管理、独立多进程及14项独立CI。实例目录批量过滤已固定为`a7f2e83b`，可信创建请求标签已固定为`710c1557`，二者均有本地真实PG18与独立进程证据；当前累计提交的独立CI正在复验。既有资源标签、标签写入、UI和发布组合仍未完成，整体未验收。
+- 状态：实施中；版本化产品 Profile、PaaS/managedservice 的真实 PEP、请求与决定绑定及当前资源/Operation/outbox 租户隔离已有固定后端实现。服务受托已有账号同意关系、当前Account只读观察、managedservice真实资源绑定/解绑及服务会话发行/回执/当前PDP；累计固定`a464299b`已补严格服务来源的管理员目录/读取/代撤销并通过本地真实PG18、累计Role管理、独立多进程及14项独立CI。实例目录批量过滤已固定为`a7f2e83b`，可信创建请求标签及Audit目录修复累计固定为`49aaf216`并通过14项独立CI；既有Application资源标签读取已有本地候选和真实PG18/进程证据。标签写入、其他资源接入、UI和发布组合仍未完成，整体未验收。
 - 依赖：001、005、006。
 - Owner：IAM Profile/Role，PaaS/managedservice/Audit 各自的真实资源与 PEP。
 
@@ -42,7 +42,7 @@ ServiceRoleTemplate 定义注册服务主体、用途、允许权限和生命周
 | IAM-PEP-03 | 首个无游标目录已固定，发布未完成 | 固定`a7f2e83b`使managedservice先以`COLLECTION_LIST`完成目录准入，再从受信本地catalog取得真实候选，按ID排序后通过一次1–50项批量PDP逐实例过滤。两个账号同名/同 ID/key、伪造 tenant/cursor/after、错序/遗漏/替换决定、跨账号实例、撤权后下一请求及ROLE全拒绝已有行为或真实进程门禁；租户资源cursor和其他产品目录仍未接入，独立CI与发布组合未完成。 |
 | IAM-PEP-04 | 当前应用托管与 managedservice 路径已实现 | Application、Configuration、Revision、QuotaEntitlement、ServiceInstallation 的创建由封闭集合请求开始，最终资源、Operation 和 outbox 由同一业务事务建立；IAM 原决定只证明集合准入，不证明 caller 填写的最终 ID 或 payload。真实双账号门禁核对配额、Operation、幂等、拒绝无部分效果及 Audit 关联。 |
 | IAM-SVC-01/02 | 最小产品运行闭环及管理员管理已在本地候选实现，发布未完成 | ServiceIdentity自身仍不获得目标Account权限；只有不可变模板、精确系统策略上限、当前Account同意和真实workload binding同时有效时，IAM才发行目标Account的60秒RoleSession。managedservice用该临时身份经唯一PDP读取实际`ServiceInstallation`后立即自退出；服务home Account与目标Account分开保存，SERVICE与USER来源严格互斥。当前AccountAdministrator能以独立权限查询和终止服务会话，只有服务Role绑定管理权限的USER、服务凭据及ROLE自身均不能获得管理能力。当前候选已通过真实PG18纵向、累计Role管理及209.46秒独立进程组合，后者实际覆盖双副本list/read/revoke、解绑后历史观察、等值重放、跨Account拒绝与唯一Audit事实；仍缺固定提交、独立CI和最终发布组合。 |
-| IAM-TAG-01/02 | 创建请求标签已有固定后端实现，其余未实现 | PaaS Application创建的`environment`标签已由产品Profile声明并从真实body标签构造受信请求事实，决定和SQL证据精确绑定；Role/User标签仍只是元数据。既有资源标签、标签修改授权、跨资源共享标签及并发更新尚未实现。 |
+| IAM-TAG-01/02 | 创建请求标签已固定，既有Application读取已有本地候选 | PaaS Application创建从真实body构造`request.tag/environment`；读取从PaaS数据库预读的同一Application构造`resource.tag/environment`，决定和SQL证据分别精确绑定。Role/User标签仍只是元数据；标签修改授权、其他资源标签及并发更新尚未实现。 |
 
 `app/service/paas/internal/managedservice/port/security.go` 原 action→resource switch 是该产品适配器的封闭边界，不是通用求值器按产品名称分叉，但它重复了 release-owned Profile。本轮候选已删除这份重复映射：port 直接使用 IAM Action/ResourceKind 类型，通过 `NewAuthorizationRequest` 和 managedservice 当前 Profile 的完整引用/calling service 核对形状；IAM HTTP adapter不再执行第二次字符串翻译。七种合法集合/实例形状及其他产品、错资源、错集合用途/ID攻击的聚焦测试通过；全仓默认 race/vet、architecture、模块校验和 Linux amd64 构建通过，并由累计`a464299b`的独立CI覆盖。后继产品适配器同样应消费自己编译进发布物且已由 IAM Profile 摘要认证的声明，通用 IAM 求值器仍只解释统一 Profile/Policy 语义。
 
@@ -157,9 +157,25 @@ managedservice 的首个 northbound bind 候选使用 `POST /managed-services/v1
 
 公开契约用排序的`requestTags[{key,value}]`保存受信事实：最多8项，键为1–63字节小写DNS label，值为1–128字节、不得带首尾Unicode空白或控制字符，键必须严格递增且唯一。`STRING_EQUALS`按一个条件内值OR、多个条件AND求值；缺失标签既不满足`STRING_EQUALS`，也不满足`STRING_NOT_EQUALS`，防止把“产品没有提供事实”解释为反向匹配。IAM决定必须逐项回显原标签，PEP在进入业务事务前核对决定，应用用例再把已绑定标签与最终写入的body标签核对；标签在授权后被替换不会产生资源或outbox。
 
-持久化把当前决策契约推进到6、IAM开发schema推进到57：受限recorder只接受请求与决定完全相同、且由精确归档Profile声明的标签；v1–v5不能携带该字段，历史Audit producer按各自归档Profile读取合法v6事实，不借用当前Profile。独占PostgreSQL 18中，完整IAM HTTP纵向门禁以77.76秒通过；最终完整策略存储门禁以158.313秒通过真实Allow及策略/请求/决定的未声明键、错误运算符、重复键/值、空/null、额外字段、非字符串、Unicode控制字符、首尾空白和超长值攻击，失败均无部分decision/outbox效果。独立双IAM、Audit、PaaS及双dispatcher进程以223.74秒通过：真实PaaS body只把已声明`environment`带入v6决定，未声明`team`仍保存为业务元数据；数据库发布条件Deny后，`environment=restricted`的下一次真实创建返回403且资源不存在，同时保留既有账号、MFA、Role/服务承担、跨Account资源、Operation/outbox、失联回包、重启和Audit链回归。固定IAM45真实程序的唯一最近前驱保留数据门禁以118.84秒通过双迁移、等值bootstrap、当前重启和源码Profile r5演进测试；原会话、恢复资格、撤权、Policy/Profile字节及历史proof未复活或改写，不据此声称签名release跨profile兼容。聚焦API、求值器和PaaS PEP测试也已通过。实现已固定推送为`710c1557f48611179715671cac76ff4dfe447c1b`；其[Verification 36802729732](https://github.com/xiak/matrix/actions/runs/36802729732)在`authority-storage`真实发现Audit目录门禁仍以旧授权证据contract v5调用已经严格要求v6的当前recorder，因此该run不能标为通过。生产SQL没有接受降级证据；当前修复只把五处现有Audit目录正向/负向fixture改为v6，不放宽recorder或保留v5旁路。修复后Audit PG18存储/HTTP门禁通过，并在1 CPU、768 MiB、192 PIDs的独占PostgreSQL 18上按CI准确集合串行复验Audit、十个IAM storage fixture与PaaS storage全部通过；新的独立CI仍待固定提交后确认。
+持久化把当前决策契约推进到6、IAM开发schema推进到57：受限recorder只接受请求与决定完全相同、且由精确归档Profile声明的标签；v1–v5不能携带该字段，历史Audit producer按各自归档Profile读取合法v6事实，不借用当前Profile。独占PostgreSQL 18中，完整IAM HTTP纵向门禁以77.76秒通过；最终完整策略存储门禁以158.313秒通过真实Allow及策略/请求/决定的未声明键、错误运算符、重复键/值、空/null、额外字段、非字符串、Unicode控制字符、首尾空白和超长值攻击，失败均无部分decision/outbox效果。独立双IAM、Audit、PaaS及双dispatcher进程以223.74秒通过：真实PaaS body只把已声明`environment`带入v6决定，未声明`team`仍保存为业务元数据；数据库发布条件Deny后，`environment=restricted`的下一次真实创建返回403且资源不存在，同时保留既有账号、MFA、Role/服务承担、跨Account资源、Operation/outbox、失联回包、重启和Audit链回归。固定IAM45真实程序的唯一最近前驱保留数据门禁以118.84秒通过双迁移、等值bootstrap、当前重启和源码Profile r5演进测试；原会话、恢复资格、撤权、Policy/Profile字节及历史proof未复活或改写，不据此声称签名release跨profile兼容。聚焦API、求值器和PaaS PEP测试也已通过。实现已固定推送为`710c1557f48611179715671cac76ff4dfe447c1b`；其[Verification 36802729732](https://github.com/xiak/matrix/actions/runs/36802729732)在`authority-storage`真实发现Audit目录门禁仍以旧授权证据contract v5调用已经严格要求v6的当前recorder，因此该run不能标为通过。生产SQL没有接受降级证据；修复`49aaf21657ef71cb83b1b9b51d835f3600f6ce9d`只把五处现有Audit目录正向/负向fixture改为v6，不放宽recorder或保留v5旁路。其[Verification 36805096402](https://github.com/xiak/matrix/actions/runs/36805096402)已按精确SHA核实go及全部authority/node共14项job均completed/success。
 
-本片不改变User、Group、Role、Policy等管理对象的元数据标签语义，不提供标签管理权限，也不宣称既有Application读取已经具备resource-tag ABAC。后继标签更新必须使用独立Action，锁定真实资源及resourceVersion，在同一业务事务内重评当前标签、目标标签和写权限；在该切片完成前，UI只能表达Profile已支持的创建条件，不能显示为通用资源标签权限已上线。
+本片不改变User、Group、Role、Policy等管理对象的元数据标签语义，也不提供标签管理权限。既有Application读取的resource-tag ABAC由下一节当前候选承载；后继标签更新仍必须使用独立Action，锁定真实资源及resourceVersion，在同一业务事务内重评当前标签、目标标签和写权限。UI可只读展示已发布Profile及PolicyVersion编译来源，但标签写入入口继续禁用。
+
+## 当前纵向切片：既有 Application 资源标签读取
+
+本片只把已持久化 Application 的 `environment` 标签接入 `paas.application.read`，不同时增加标签修改入口、把标签推广到其他资源，或让浏览器提交资源标签。PaaS Profile 下一修订只为该 Action 声明精确 `resource.tag/environment`、`STRING` 和 `CALLING_SERVICE_RESOURCE_TAG`；`team` 等未声明业务标签、User/Group/Role/Policy 元数据标签均不能成为该条件的事实。Policy 继续使用 `STRING_EQUALS` / `STRING_NOT_EQUALS`；缺失标签对二者都不匹配。
+
+资源服务在读取标签前必须先取得当前凭据的最小账号上下文，但这个上下文不是授权结果。IAM 增加目的限定的内部 subject-resolution：调用方同时证明当前已登记服务凭据和 USER/ROLE bearer，并提交该服务的精确当前 Profile 引用；响应只返回由 IAM 推导的 Account、严格 Subject 与 Profile，不接受 Account、User、Role、Session、Action、资源或标签 selector，不返回 Policy、权限或可缓存 permit。RoleSession血缘严格二选一保留原USER或原服务主体；服务来源RoleSession还必须与调用服务身份完全匹配，不能在PaaS adapter或持久化时退化成USER。AccessKey不借用此入口，仍须走绑定原始HTTP请求的签名授权协议。
+
+PaaS 用解析出的 Account 开启受RLS保护且数据库报告`transaction_read_only=on`的只读事务，按路径中的真实 Application ID读取当前资源及标签；资源不存在时仍对同一ID提交不带资源标签的实际授权请求，使无权限与不存在的响应顺序不因预读被反转。资源存在时，PEP只从完整、已校验的业务标签抽取Profile声明的键，构造严格排序的 `resourceTags`，再执行原唯一PDP。Allow之后必须在决定推导的同一Account内重新读取，并核对ID、resourceVersion和全部已声明标签与授权前快照一致后才能返回；漂移只能有界重试或失败关闭，不能使用旧Allow返回新标签状态。Deny、身份失效、IAM不可用、Profile漂移或第二次读取不一致均不返回资源。
+
+当前授权证据会以新contract保存 `resourceTags`；请求与决定必须逐项相同，并由该决定绑定的归档Profile声明。旧contract不能携带新字段，历史Policy/Profile/Decision/Audit canonical不回填或重新解释。这个推进只使用当前开发schema和唯一滚动前驱，不建立未发布草稿的全版本兼容矩阵。
+
+最低验收覆盖两个Account持有同ID但不同`environment`的Application、USER与ROLE、显式Deny、缺失标签、未声明`team`、伪造Profile/服务/主体、停用或撤权后的下一请求、跨Account路径、授权前后标签/resourceVersion竞争、IAM回包遗漏/替换标签和重启。真实PG18和独立IAM/Audit/PaaS进程必须证明标签只来自业务库、每次返回对应唯一当前决定、拒绝无业务副作用且tenant Audit链不串。标签写入/删除及其独立Action、CAS和Audit事实仍是后继切片；本片固定前UI继续禁用资源标签权限编辑。
+
+当前本地候选把PaaS Profile推进到revision 5、授权决定契约推进到7、IAM开发schema推进到58。`POST /v1/internal/authorization-subject:resolve`只解析精确当前服务与USER/ROLE身份，不返回permit；PaaS随后在RLS只读事务内预读Application，以数据库中的`environment`构造请求，取得IAM决定后重读并核对ID、resourceVersion及全部已声明标签。缺失资源仍先对同一ID做无标签授权再返回404；caller header/body/query中的标签或Account selector不能进入该路径。
+
+独占PostgreSQL 18上的完整IAM策略存储以`-race -p 1`用时237.069秒通过；PaaS存储门禁以5.840秒证明预读事务只读及Account RLS。独立双IAM/Audit/PaaS进程最终以`-race -p 1`用时245.500秒通过：两个Account持有同ID但分别为`production`/`staging`的Application，伪造另一Account header/query不能换标签或资源；同服务来源Role到达真实PDP并得到预期403而不是adapter 503；IAM决策落库事务中的确定性资源标签/resourceVersion变化使PaaS返回503且不泄露旧快照。IAM57真实前驱升级以`-race -p 1`用时131.412秒通过；实际旧二进制除账号、MFA、会话、设置和恢复事实外，还生成PaaS r4、contract6及`requestTags`决定，双迁移、等值bootstrap、当前重启后原Profile/Decision字节与Audit producer proof不变，不增加更早开发schema矩阵。聚焦及全仓race、架构、vet、模块校验、两次API生成摘要一致和Linux amd64构建通过。固定提交与独立CI尚未完成，因此本片仍是候选，UI继续不得开放资源标签写操作。
 
 ## 验收
 

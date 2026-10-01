@@ -4,10 +4,48 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 )
+
+func (usecase *Usecase) InspectApplicationAuthorization(
+	ctx context.Context,
+	subject port.AuthorizationSubjectContext,
+	id paasv1.ResourceID,
+) (ApplicationAuthorizationSnapshot, error) {
+	if usecase == nil || usecase.repository == nil || ctx == nil ||
+		port.ValidateAuthorizationSubjectContext(subject) != nil || paasv1.ValidateID("application.id", string(id)) != nil {
+		return ApplicationAuthorizationSnapshot{}, ErrInvalidArgument
+	}
+	var application paasv1.Application
+	var found bool
+	var transactionErr error
+	for attempt := 0; attempt < usecase.config.MaxTransactionAttempts; attempt++ {
+		application, found = paasv1.Application{}, false
+		transactionErr = usecase.repository.WithinReadOnlyTransaction(ctx, subject.TenantID,
+			func(transactionContext context.Context, transaction Transaction) error {
+				var err error
+				application, found, err = transaction.LoadApplication(transactionContext, id)
+				return err
+			})
+		if transactionErr == nil {
+			if !found {
+				return ApplicationAuthorizationSnapshot{}, ErrNotFound
+			}
+			return ApplicationAuthorizationSnapshot{ID: application.Metadata.ID,
+				ResourceVersion: application.Metadata.ResourceVersion, Labels: maps.Clone(application.Metadata.Labels)}, nil
+		}
+		if !errors.Is(transactionErr, ErrRetryableTransaction) {
+			return ApplicationAuthorizationSnapshot{}, transactionErr
+		}
+		if err := ctx.Err(); err != nil {
+			return ApplicationAuthorizationSnapshot{}, err
+		}
+	}
+	return ApplicationAuthorizationSnapshot{}, fmt.Errorf("application authorization inspection attempts exhausted: %w", transactionErr)
+}
 
 func (usecase *Usecase) GetApplication(
 	ctx context.Context,

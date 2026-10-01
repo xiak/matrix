@@ -27,9 +27,11 @@ func TestRoleSubjectLineageIsStrictAndIdentityBearing(t *testing.T) {
 	}{
 		{`{"type":"USER","id":"user-a"}`, true},
 		{`{"type":"ROLE","id":"role-a","roleSession":{"sessionId":"session-a","sourceUserId":"user-a"}}`, true},
+		{`{"type":"ROLE","id":"role-a","roleSession":{"sessionId":"session-a","sourceServicePrincipalId":"service-paas"}}`, true},
 		{`{"type":"ROLE","id":"role-a"}`, false},
 		{`{"type":"ROLE","id":"role-a","roleSession":null}`, false},
 		{`{"type":"ROLE","id":"role-a","roleSession":{"sessionId":"session-a"}}`, false},
+		{`{"type":"ROLE","id":"role-a","roleSession":{"sessionId":"session-a","sourceUserId":"user-a","sourceServicePrincipalId":"service-paas"}}`, false},
 		{`{"type":"ROLE","id":"role-a","roleSession":{"sessionId":"session-a","sourceUserId":"user-a","sourceSessionId":"private"}}`, false},
 		{`{"type":"ROLE","id":"role-a","roleSession":{"sessionId":"","sourceUserId":"user-a"}}`, false},
 		{`{"type":"USER","id":"user-a","roleSession":null}`, false},

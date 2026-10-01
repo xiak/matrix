@@ -289,7 +289,8 @@ CREATE TABLE IF NOT EXISTS paas.deployment_generations (
     )
 );
 
--- A ROLE is a virtual identity plus the exact session and original USER.
+-- A ROLE is a virtual identity plus the exact session and exactly one
+-- original USER or service principal. This is lineage, not authority.
 -- This validates persisted lineage; it never grants permission or looks up IAM.
 CREATE OR REPLACE FUNCTION paas.subject_reference_valid(subject jsonb)
 RETURNS boolean LANGUAGE sql IMMUTABLE PARALLEL SAFE SET search_path=pg_catalog,pg_temp AS $function$
@@ -297,12 +298,17 @@ RETURNS boolean LANGUAGE sql IMMUTABLE PARALLEL SAFE SET search_path=pg_catalog,
       AND jsonb_typeof(subject->'id')='string' AND subject->>'id' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
       AND CASE WHEN subject->>'type'='ROLE' THEN
         subject ? 'roleSession' AND subject-ARRAY['type','id','roleSession']='{}'::jsonb
-        AND jsonb_typeof(subject->'roleSession')='object' AND (subject->'roleSession') ?& ARRAY['sessionId','sourceUserId']
-        AND (subject->'roleSession')-ARRAY['sessionId','sourceUserId']='{}'::jsonb
+        AND jsonb_typeof(subject->'roleSession')='object'
+        AND (subject->'roleSession') ? 'sessionId'
+        AND ((subject->'roleSession') ? 'sourceUserId') <> ((subject->'roleSession') ? 'sourceServicePrincipalId')
+        AND (subject->'roleSession')-ARRAY['sessionId','sourceUserId','sourceServicePrincipalId']='{}'::jsonb
         AND jsonb_typeof(subject#>'{roleSession,sessionId}')='string'
         AND subject#>>'{roleSession,sessionId}' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-        AND jsonb_typeof(subject#>'{roleSession,sourceUserId}')='string'
-        AND subject#>>'{roleSession,sourceUserId}' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND CASE WHEN (subject->'roleSession') ? 'sourceUserId' THEN
+          jsonb_typeof(subject#>'{roleSession,sourceUserId}')='string'
+          AND subject#>>'{roleSession,sourceUserId}' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        ELSE jsonb_typeof(subject#>'{roleSession,sourceServicePrincipalId}')='string'
+          AND subject#>>'{roleSession,sourceServicePrincipalId}' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' END
       ELSE subject->>'type' IN ('USER','SERVICE_ACCOUNT','AGENT','SYSTEM_USER') AND subject-ARRAY['type','id']='{}'::jsonb END,false)
 $function$;
 REVOKE ALL ON FUNCTION paas.subject_reference_valid(jsonb) FROM PUBLIC;

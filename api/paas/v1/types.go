@@ -412,8 +412,9 @@ type SubjectRef struct {
 }
 
 type RoleSessionReference struct {
-	SessionID    string `json:"sessionId"`
-	SourceUserID string `json:"sourceUserId"`
+	SessionID                string `json:"sessionId"`
+	SourceUserID             string `json:"sourceUserId,omitempty"`
+	SourceServicePrincipalID string `json:"sourceServicePrincipalId,omitempty"`
 }
 
 func (subject SubjectRef) Equal(other SubjectRef) bool {

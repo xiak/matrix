@@ -989,7 +989,7 @@ func validatePolicyConditions(statement PolicyStatement, pointer string, capabil
 			}
 			continue
 		}
-		if definition.Source == ConditionCallingServiceRequestTag {
+		if definition.Source == ConditionCallingServiceRequestTag || definition.Source == ConditionCallingServiceResourceTag {
 			if condition.Operator != PolicyStringEquals && condition.Operator != PolicyStringNotEquals {
 				return invalidPolicyAt(PolicyUnsupported, location+"/operator")
 			}

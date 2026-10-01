@@ -113,7 +113,9 @@ func ToV1(value Event) (auditv1.Event, error) {
 	}
 	actor := auditv1.ActorReference{Type: actorType, ID: auditv1.ActorID(value.Actor.ID)}
 	if value.Actor.RoleSession != nil {
-		actor.RoleSession = &auditv1.RoleSessionReference{SessionID: value.Actor.RoleSession.SessionID, SourceUserID: auditv1.ActorID(value.Actor.RoleSession.SourceUserID)}
+		actor.RoleSession = &auditv1.RoleSessionReference{SessionID: value.Actor.RoleSession.SessionID,
+			SourceUserID:             auditv1.ActorID(value.Actor.RoleSession.SourceUserID),
+			SourceServicePrincipalID: auditv1.ActorID(value.Actor.RoleSession.SourceServicePrincipalID)}
 	}
 	return auditv1.Event{
 		APIVersion: auditv1.APIVersion, Kind: "AuditEvent",

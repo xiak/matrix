@@ -16,6 +16,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 	apphttp "github.com/xiak/matrix/app/service/paas/internal/apphosting/service/nethttp"
@@ -404,6 +405,20 @@ type integrationHTTPAuthorizer struct {
 	tenantID paasv1.TenantID
 }
 
+func (authorizer integrationHTTPAuthorizer) ResolveSubject(
+	_ context.Context,
+	request port.SubjectResolutionRequest,
+) (port.AuthorizationSubjectContext, error) {
+	if request.Credential != "Bearer integration-token" {
+		return port.AuthorizationSubjectContext{}, port.ErrUnauthenticated
+	}
+	profile, _ := iamv1.LookupAuthorizationProfile(iamv1.ProductPaaS)
+	_, digest, _ := iamv1.CanonicalizeAuthorizationProfile(profile)
+	return port.AuthorizationSubjectContext{TenantID: authorizer.tenantID,
+		Subject: paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "integration-http-user"},
+		Profile: iamv1.AuthorizationProfileReference{Product: profile.Product, Revision: profile.Revision, ContentDigest: digest}}, nil
+}
+
 func (authorizer integrationHTTPAuthorizer) Authorize(
 	_ context.Context,
 	request port.AuthorizationRequest,
@@ -411,12 +426,17 @@ func (authorizer integrationHTTPAuthorizer) Authorize(
 	if request.Credential != "Bearer integration-token" {
 		return port.Authorization{}, port.ErrUnauthenticated
 	}
+	iamRequest, err := port.NewIAMAuthorizationRequest(request)
+	if err != nil {
+		return port.Authorization{}, port.ErrAuthorizationUnavailable
+	}
 	return port.Authorization{
-		TenantID:   authorizer.tenantID,
-		Subject:    paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "integration-http-user"},
-		DecisionID: "decision-" + request.RequestID,
-		RequestID:  request.RequestID,
-		AuditID:    "audit-" + request.RequestID,
+		TenantID:    authorizer.tenantID,
+		Subject:     paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "integration-http-user"},
+		DecisionID:  "decision-" + request.RequestID,
+		RequestID:   request.RequestID,
+		RequestTags: iamRequest.RequestTags, ResourceTags: iamRequest.ResourceTags,
+		AuditID: "audit-" + request.RequestID,
 	}, nil
 }
 

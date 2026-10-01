@@ -254,7 +254,7 @@ IAM私有assert_allowed_decision由6参替换为8参，追加显式resource_mode
 
 CAT-05、策略替换及最终组合仍分别按 owning FEAT 实施。
 
-当前 PaaS Profile revision 4 只在`paas.application.create`声明精确`request.tag/environment`条件，类型为`STRING`、来源为`CALLING_SERVICE_REQUEST_TAG`；revision 1–3继续作为不可变历史解释，其他Action和标签名不因该动态命名空间自动获得能力。可信来源、请求/决定绑定、产品PEP及验收由[008](./FEAT-IAM-008-product-enforcement.md#下一纵向切片可信创建请求标签)拥有。
+当前 PaaS Profile revision 5 继承revision 4为`paas.application.create`声明的精确`request.tag/environment`，并只为`paas.application.read`新增精确`resource.tag/environment`；二者类型均为`STRING`，来源分别为`CALLING_SERVICE_REQUEST_TAG`和`CALLING_SERVICE_RESOURCE_TAG`。revision 1–4继续作为不可变历史解释，其他Action和标签名不因动态命名空间自动获得能力。可信来源、请求/决定绑定、产品PEP及验收由[008](./FEAT-IAM-008-product-enforcement.md#当前纵向切片既有-application-资源标签读取)拥有。
 
 2026-09-15 完整平台目录增量的本分支证据：
 

@@ -5,7 +5,32 @@ import (
 	"time"
 
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
+	paasv1 "github.com/xiak/matrix/api/paas/v1"
 )
+
+func TestRoleAuditLineagePreservesExactlyOneOriginalSubject(t *testing.T) {
+	for _, actor := range []paasv1.SubjectRef{
+		{Type: paasv1.SubjectRole, ID: "role-user", RoleSession: &paasv1.RoleSessionReference{
+			SessionID: "session-user", SourceUserID: "user-source",
+		}},
+		{Type: paasv1.SubjectRole, ID: "role-service", RoleSession: &paasv1.RoleSessionReference{
+			SessionID: "session-service", SourceServicePrincipalID: "service-paas",
+		}},
+	} {
+		event := Event{SchemaVersion: "v1", EventID: "audit-event-" + actor.ID,
+			TenantID: "organization-example", Actor: actor, IAMDecisionID: "decision-example",
+			Action: ApplicationCreated, Target: TargetReference{Kind: "Application", ID: "application-example"},
+			OperationID: "operation-example", RequestDigest: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			Result: Succeeded, RequestID: "request-example", OccurredAt: time.Date(2026, 8, 27, 8, 0, 0, 0, time.UTC)}
+		public, err := ToV1(event)
+		if err != nil || public.Actor.RoleSession == nil ||
+			string(public.Actor.RoleSession.SessionID) != actor.RoleSession.SessionID ||
+			string(public.Actor.RoleSession.SourceUserID) != actor.RoleSession.SourceUserID ||
+			string(public.Actor.RoleSession.SourceServicePrincipalID) != actor.RoleSession.SourceServicePrincipalID {
+			t.Fatalf("role lineage changed while mapping PaaS Audit: %#v err=%v", public.Actor, err)
+		}
+	}
+}
 
 func TestManagedServiceEventsMapToClosedAuditContracts(t *testing.T) {
 	now := time.Date(2026, 8, 27, 8, 0, 0, 123_000, time.UTC)

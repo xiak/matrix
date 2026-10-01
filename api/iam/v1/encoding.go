@@ -954,6 +954,7 @@ func (request *AuthorizationRequest) UnmarshalJSON(source []byte) error {
 	var fields map[string]json.RawMessage
 	if json.Unmarshal(source, &fields) != nil || checkOptionalNetworkContextEncoding(fields, decoded.NetworkContext) != nil ||
 		checkOptionalAuthorizationTagsEncoding(fields, "requestTags", decoded.RequestTags) != nil ||
+		checkOptionalAuthorizationTagsEncoding(fields, "resourceTags", decoded.ResourceTags) != nil ||
 		checkAuthorizationTargetEncoding(source, decoded.ResourceMode) != nil {
 		return contractjson.ErrInvalidDocument
 	}
@@ -972,7 +973,7 @@ func (decision *AuthorizationDecision) UnmarshalJSON(source []byte) error {
 		return contractjson.ErrInvalidDocument
 	}
 	current := false
-	for _, key := range []string{"profile", "resourceMode", "collectionUsage", "networkContext", "requestTags", "correlationId"} {
+	for _, key := range []string{"profile", "resourceMode", "collectionUsage", "networkContext", "requestTags", "resourceTags", "correlationId"} {
 		if _, exists := fields[key]; exists {
 			current = true
 		}
@@ -982,6 +983,7 @@ func (decision *AuthorizationDecision) UnmarshalJSON(source []byte) error {
 	if current {
 		if checkOptionalNetworkContextEncoding(fields, decoded.NetworkContext) != nil ||
 			checkOptionalAuthorizationTagsEncoding(fields, "requestTags", decoded.RequestTags) != nil ||
+			checkOptionalAuthorizationTagsEncoding(fields, "resourceTags", decoded.ResourceTags) != nil ||
 			checkAuthorizationTargetEncoding(source, decoded.ResourceMode) != nil || decoded.Profile == nil || decoded.CorrelationID == "" {
 			return contractjson.ErrInvalidDocument
 		}

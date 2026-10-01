@@ -153,6 +153,7 @@ type Workflow interface {
 		iamv1.Secret,
 		iamv1.AuthorizationRequest,
 	) (iamv1.AuthorizationDecision, error)
+	ResolveAuthorizationSubject(context.Context, iamv1.Secret, iamv1.Secret, iamv1.ResolveAuthorizationSubjectRequest) (iamv1.AuthorizationSubjectContext, error)
 	AuthorizeBatch(context.Context, iamv1.Secret, iamv1.Secret, iamv1.AuthorizationBatchRequest) (iamv1.AuthorizationBatchDecision, error)
 	AuthorizeAccessKey(context.Context, iamv1.Secret, iamv1.AccessKeyAuthorizationRequest) (iamv1.AccessKeyAuthorization, error)
 	VerifyInstallation(
@@ -229,6 +230,7 @@ func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 	routes.HandleFunc("/v1/auth/notification-contact/verifications", value.startNotificationVerification)
 	routes.HandleFunc("/v1/auth/notification-contact/verifications/", value.notificationVerification)
 	routes.HandleFunc("/v1/authorize", value.authorize)
+	routes.HandleFunc("/v1/internal/authorization-subject:resolve", value.resolveAuthorizationSubject)
 	routes.HandleFunc("/v1/authorize:batch", value.authorizeBatch)
 	routes.HandleFunc("/v1/authorize:access-key", value.authorizeAccessKey)
 	routes.HandleFunc("/v1/installation:verify", value.verifyInstallation)
@@ -1127,6 +1129,33 @@ func (value *handler) authorize(response http.ResponseWriter, request *http.Requ
 		return
 	}
 	writeJSON(response, http.StatusOK, decision)
+}
+
+func (value *handler) resolveAuthorizationSubject(response http.ResponseWriter, request *http.Request) {
+	if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
+		return
+	}
+	serviceCredential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	subjectCredential, ok := subjectBearer(response, request)
+	if !ok {
+		return
+	}
+	body, ok := decodeJSON[iamv1.ResolveAuthorizationSubjectRequest](value, response, request)
+	if !ok || iamv1.ValidateResolveAuthorizationSubjectRequest(body) != nil {
+		if ok {
+			writeProblem(response, requestID(request), http.StatusBadRequest, "iam.json.invalid", "IAM JSON invalid")
+		}
+		return
+	}
+	result, err := value.workflow.ResolveAuthorizationSubject(request.Context(), serviceCredential, subjectCredential, body)
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
 }
 
 func (value *handler) authorizeBatch(response http.ResponseWriter, request *http.Request) {

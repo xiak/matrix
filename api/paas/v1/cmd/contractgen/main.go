@@ -445,6 +445,12 @@ func structSchema(contract reflect.Type) schema {
 			schema{"properties": schema{"type": schema{"enum": stringsOf(paasv1.SubjectUser, paasv1.SubjectServiceAccount, paasv1.SubjectAgent, paasv1.SubjectSystemUser)}, "roleSession": false}},
 		}
 	}
+	if contract.Name() == "RoleSessionReference" {
+		result["oneOf"] = []any{
+			schema{"required": []string{"sourceUserId"}, "properties": schema{"sourceServicePrincipalId": false}},
+			schema{"required": []string{"sourceServicePrincipalId"}, "properties": schema{"sourceUserId": false}},
+		}
+	}
 	return result
 }
 

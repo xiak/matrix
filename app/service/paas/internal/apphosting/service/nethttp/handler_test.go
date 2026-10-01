@@ -347,6 +347,153 @@ func TestHandlerPassesIAMTenantToReadsAndIgnoresTenantHeader(t *testing.T) {
 	}
 }
 
+func TestHandlerBindsStoredApplicationLabelsAndRechecksAuthorizedSnapshot(t *testing.T) {
+	authorizer := &fakeAuthorizer{}
+	metadata := testMetadata("application-a", "application-a")
+	metadata.ResourceVersion = 7
+	metadata.Labels = map[string]string{
+		"environment": "production",
+		"team":        "payments",
+	}
+	application := paasv1.Application{
+		APIVersion: paasv1.APIVersion,
+		Kind:       "Application",
+		Metadata:   metadata,
+	}
+	workflow := &fakeWorkflow{
+		inspectSnapshot: &applicationlifecycle.ApplicationAuthorizationSnapshot{
+			ID: metadata.ID, ResourceVersion: metadata.ResourceVersion, Labels: metadata.Labels,
+		},
+		getApplicationResult: &application,
+	}
+	handler := mustHandler(t, authorizer, workflow)
+	request := httptest.NewRequest(http.MethodGet, "/v1/applications/application-a", nil)
+	request.Header.Set("Authorization", "Bearer opaque-credential")
+	request.Header.Set("X-Tenant-ID", "tenant-attacker")
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	if authorizer.resolveCalls != 1 || workflow.inspectApplicationCalls != 1 || workflow.getApplicationCalls != 1 {
+		t.Fatalf("resolve/inspect/read calls=%d/%d/%d", authorizer.resolveCalls, workflow.inspectApplicationCalls, workflow.getApplicationCalls)
+	}
+	if !reflect.DeepEqual(authorizer.request.ResourceLabels, metadata.Labels) {
+		t.Fatalf("PEP did not bind the complete stored label set: %#v", authorizer.request.ResourceLabels)
+	}
+	expected := []iamv1.AuthorizationTag{{Key: "environment", Value: "production"}}
+	if !reflect.DeepEqual(workflow.readAuthorization.ResourceTags, expected) {
+		t.Fatalf("declared resource tags=%#v, want %#v", workflow.readAuthorization.ResourceTags, expected)
+	}
+	if workflow.inspectSubject.TenantID != "tenant-authorized" ||
+		workflow.inspectSubject.Subject != (paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "user-authorized"}) {
+		t.Fatalf("inspection subject=%#v", workflow.inspectSubject)
+	}
+}
+
+func TestHandlerFailsClosedWhenApplicationAuthorizationFactsChange(t *testing.T) {
+	baseMetadata := testMetadata("application-a", "application-a")
+	baseMetadata.ResourceVersion = 7
+	baseMetadata.Labels = map[string]string{"environment": "production", "team": "payments"}
+	baseSnapshot := applicationlifecycle.ApplicationAuthorizationSnapshot{
+		ID: baseMetadata.ID, ResourceVersion: baseMetadata.ResourceVersion, Labels: baseMetadata.Labels,
+	}
+	resourceTags := []iamv1.AuthorizationTag{{Key: "environment", Value: "production"}}
+
+	tests := []struct {
+		name       string
+		authorizer *fakeAuthorizer
+		workflow   *fakeWorkflow
+	}{
+		{
+			name: "subject changed between resolution and authorization",
+			authorizer: &fakeAuthorizer{result: &port.Authorization{
+				TenantID: "tenant-other", Subject: paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "user-other"},
+				DecisionID: "decision-authorized", RequestID: "request-test", ResourceTags: resourceTags,
+			}},
+			workflow: &fakeWorkflow{inspectSnapshot: &baseSnapshot},
+		},
+		{
+			name:       "resource version changed after authorization",
+			authorizer: &fakeAuthorizer{},
+			workflow: &fakeWorkflow{
+				inspectSnapshot: &baseSnapshot,
+				getApplicationResult: &paasv1.Application{
+					APIVersion: paasv1.APIVersion, Kind: "Application",
+					Metadata: func() paasv1.ResourceMetadata {
+						changed := baseMetadata
+						changed.ResourceVersion++
+						return changed
+					}(),
+				},
+			},
+		},
+		{
+			name:       "declared resource tag changed after authorization",
+			authorizer: &fakeAuthorizer{},
+			workflow: &fakeWorkflow{
+				inspectSnapshot: &baseSnapshot,
+				getApplicationResult: &paasv1.Application{
+					APIVersion: paasv1.APIVersion, Kind: "Application",
+					Metadata: func() paasv1.ResourceMetadata {
+						changed := baseMetadata
+						changed.Labels = map[string]string{"environment": "staging", "team": "payments"}
+						return changed
+					}(),
+				},
+			},
+		},
+		{
+			name:       "missing resource appeared after authorization",
+			authorizer: &fakeAuthorizer{},
+			workflow: &fakeWorkflow{
+				inspectErr: applicationlifecycle.ErrNotFound,
+				getApplicationResult: &paasv1.Application{
+					APIVersion: paasv1.APIVersion, Kind: "Application", Metadata: baseMetadata,
+				},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			handler := mustHandler(t, test.authorizer, test.workflow)
+			request := httptest.NewRequest(http.MethodGet, "/v1/applications/application-a", nil)
+			request.Header.Set("Authorization", "Bearer opaque-credential")
+			response := httptest.NewRecorder()
+
+			handler.ServeHTTP(response, request)
+
+			if response.Code != http.StatusServiceUnavailable {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestHandlerPreservesApplicationNotFoundWithoutAuthorizingAnAppearingResource(t *testing.T) {
+	authorizer := &fakeAuthorizer{}
+	workflow := &fakeWorkflow{
+		inspectErr:        applicationlifecycle.ErrNotFound,
+		getApplicationErr: applicationlifecycle.ErrNotFound,
+	}
+	handler := mustHandler(t, authorizer, workflow)
+	request := httptest.NewRequest(http.MethodGet, "/v1/applications/application-a", nil)
+	request.Header.Set("Authorization", "Bearer opaque-credential")
+	response := httptest.NewRecorder()
+
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusNotFound || workflow.inspectApplicationCalls != 1 || workflow.getApplicationCalls != 1 {
+		t.Fatalf("status=%d inspect/read=%d/%d body=%s", response.Code, workflow.inspectApplicationCalls, workflow.getApplicationCalls, response.Body.String())
+	}
+	if authorizer.request.ResourceLabels != nil || workflow.readAuthorization.ResourceTags != nil {
+		t.Fatalf("missing resource acquired tags: request=%#v authorization=%#v", authorizer.request.ResourceLabels, workflow.readAuthorization.ResourceTags)
+	}
+}
+
 func TestHandlerUsesSocketPeerInsteadOfCallerForwardingHeaders(t *testing.T) {
 	authorizer := &fakeAuthorizer{}
 	workflow := &fakeWorkflow{}
@@ -382,9 +529,36 @@ func TestHandlerFailsClosedWithoutCanonicalSocketPeer(t *testing.T) {
 }
 
 type fakeAuthorizer struct {
-	request port.AuthorizationRequest
-	err     error
-	result  *port.Authorization
+	request        port.AuthorizationRequest
+	resolveRequest port.SubjectResolutionRequest
+	resolveCalls   int
+	err            error
+	resolveErr     error
+	result         *port.Authorization
+	resolveResult  *port.AuthorizationSubjectContext
+}
+
+func (authorizer *fakeAuthorizer) ResolveSubject(
+	_ context.Context,
+	request port.SubjectResolutionRequest,
+) (port.AuthorizationSubjectContext, error) {
+	authorizer.resolveCalls++
+	authorizer.resolveRequest = request
+	if authorizer.resolveErr != nil {
+		return port.AuthorizationSubjectContext{}, authorizer.resolveErr
+	}
+	if authorizer.resolveResult != nil {
+		return *authorizer.resolveResult, nil
+	}
+	profile, _ := iamv1.LookupAuthorizationProfile(iamv1.ProductPaaS)
+	_, digest, _ := iamv1.CanonicalizeAuthorizationProfile(profile)
+	return port.AuthorizationSubjectContext{
+		TenantID: "tenant-authorized",
+		Subject:  paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "user-authorized"},
+		Profile: iamv1.AuthorizationProfileReference{
+			Product: profile.Product, Revision: profile.Revision, ContentDigest: digest,
+		},
+	}, nil
 }
 
 func (authorizer *fakeAuthorizer) Authorize(
@@ -406,8 +580,9 @@ func (authorizer *fakeAuthorizer) Authorize(
 		TenantID:   "tenant-authorized",
 		Subject:    paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "user-authorized"},
 		DecisionID: "decision-authorized", RequestID: request.RequestID,
-		RequestTags: iamRequest.RequestTags,
-		AuditID:     "audit-authorized",
+		RequestTags:  iamRequest.RequestTags,
+		ResourceTags: iamRequest.ResourceTags,
+		AuditID:      "audit-authorized",
 	}, nil
 }
 
@@ -419,8 +594,14 @@ type fakeWorkflow struct {
 	rollbackCalls            int
 	rollbackCommand          applicationlifecycle.RollbackCommand
 	getApplicationCalls      int
+	inspectApplicationCalls  int
 	readAuthorization        port.Authorization
 	readID                   paasv1.ResourceID
+	inspectSubject           port.AuthorizationSubjectContext
+	inspectSnapshot          *applicationlifecycle.ApplicationAuthorizationSnapshot
+	inspectErr               error
+	getApplicationResult     *paasv1.Application
+	getApplicationErr        error
 }
 
 type fakeInstallationVerifier struct {
@@ -507,8 +688,33 @@ func (workflow *fakeWorkflow) GetApplication(
 ) (paasv1.Application, error) {
 	workflow.getApplicationCalls++
 	workflow.readAuthorization, workflow.readID = authorization, id
+	if workflow.getApplicationResult != nil || workflow.getApplicationErr != nil {
+		if workflow.getApplicationResult == nil {
+			return paasv1.Application{}, workflow.getApplicationErr
+		}
+		return *workflow.getApplicationResult, workflow.getApplicationErr
+	}
 	return paasv1.Application{
 		APIVersion: paasv1.APIVersion, Kind: "Application", Metadata: testMetadata(id, "application-a"),
+	}, nil
+}
+
+func (workflow *fakeWorkflow) InspectApplicationAuthorization(
+	_ context.Context,
+	subject port.AuthorizationSubjectContext,
+	id paasv1.ResourceID,
+) (applicationlifecycle.ApplicationAuthorizationSnapshot, error) {
+	workflow.inspectApplicationCalls++
+	workflow.inspectSubject, workflow.readID = subject, id
+	if workflow.inspectSnapshot != nil || workflow.inspectErr != nil {
+		if workflow.inspectSnapshot == nil {
+			return applicationlifecycle.ApplicationAuthorizationSnapshot{}, workflow.inspectErr
+		}
+		return *workflow.inspectSnapshot, workflow.inspectErr
+	}
+	metadata := testMetadata(id, "application-a")
+	return applicationlifecycle.ApplicationAuthorizationSnapshot{
+		ID: metadata.ID, ResourceVersion: metadata.ResourceVersion, Labels: metadata.Labels,
 	}, nil
 }
 

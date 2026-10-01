@@ -975,7 +975,16 @@ func ValidateSubjectRef(value SubjectRef) error {
 		return errors.New("only a ROLE requires exact role session lineage")
 	}
 	if value.RoleSession != nil {
-		if err := errors.Join(ValidateID("roleSession.sessionId", value.RoleSession.SessionID), ValidateID("roleSession.sourceUserId", value.RoleSession.SourceUserID)); err != nil {
+		if (value.RoleSession.SourceUserID == "") == (value.RoleSession.SourceServicePrincipalID == "") {
+			return errors.New("role session source is invalid")
+		}
+		var sourceErr error
+		if value.RoleSession.SourceUserID != "" {
+			sourceErr = ValidateID("roleSession.sourceUserId", value.RoleSession.SourceUserID)
+		} else {
+			sourceErr = ValidateID("roleSession.sourceServicePrincipalId", value.RoleSession.SourceServicePrincipalID)
+		}
+		if err := errors.Join(ValidateID("roleSession.sessionId", value.RoleSession.SessionID), sourceErr); err != nil {
 			return err
 		}
 	}

@@ -196,6 +196,55 @@ func (service *Authority) Authorize(
 	return decision, nil
 }
 
+// ResolveAuthorizationSubject authenticates the exact calling service and one
+// transient USER/ROLE bearer for its current product Profile. The result is
+// lookup context only: it contains no action, resource, Policy or permit.
+func (service *Authority) ResolveAuthorizationSubject(
+	ctx context.Context,
+	serviceCredential iamv1.Secret,
+	subjectCredential iamv1.Secret,
+	request iamv1.ResolveAuthorizationSubjectRequest,
+) (iamv1.AuthorizationSubjectContext, error) {
+	if iamv1.ValidateResolveAuthorizationSubjectRequest(request) != nil {
+		return iamv1.AuthorizationSubjectContext{}, ErrInvalidArgument
+	}
+	var result iamv1.AuthorizationSubjectContext
+	err := service.withinTransaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
+		now, err := transactionTime(transactionContext, transaction)
+		if err != nil {
+			return err
+		}
+		caller, err := service.authenticateService(transactionContext, transaction, serviceCredential)
+		if err != nil {
+			return err
+		}
+		profile, known := iamv1.LookupAuthorizationProfile(request.Profile.Product)
+		if !known || iamv1.CheckAuthorizationProfileReference(profile, request.Profile) != nil ||
+			profile.CallingService != caller.Identity.Purpose {
+			return ErrForbidden
+		}
+		actor, _, err := service.batchAuthorizationActor(transactionContext, transaction, caller, subjectCredential, now)
+		if err != nil {
+			return err
+		}
+		result = iamv1.AuthorizationSubjectContext{
+			APIVersion: iamv1.APIVersion,
+			Kind:       "AuthorizationSubjectContext",
+			TenantID:   actor.organizationID,
+			Subject:    actor.subject,
+			Profile:    request.Profile,
+		}
+		return nil
+	})
+	if err != nil {
+		return iamv1.AuthorizationSubjectContext{}, err
+	}
+	if iamv1.CheckAuthorizationSubjectContextForRequest(result, request) != nil {
+		return iamv1.AuthorizationSubjectContext{}, ErrUnavailable
+	}
+	return result, nil
+}
+
 func (service *Authority) AuthorizeBatch(
 	ctx context.Context,
 	serviceCredential iamv1.Secret,

@@ -923,6 +923,7 @@ func ValidateAuthorizationRequest(value AuthorizationRequest) error {
 		validateResourceForAction(value.Action, value.Resource),
 		validateAuthorizationNetworkContextForAction(value.Action, value.NetworkContext, nil),
 		validateAuthorizationRequestTagsForAction(value.Action, value.RequestTags, nil),
+		validateAuthorizationResourceTagsForAction(value.Action, value.ResourceTags, nil),
 		ValidateID("requestId", value.RequestID),
 		ValidateID("correlationId", value.CorrelationID),
 	)
@@ -961,6 +962,9 @@ func ValidateAuthorizationDecision(value AuthorizationDecision) error {
 	if err := validateAuthorizationRequestTagsForAction(value.Action, value.RequestTags, nil); err != nil {
 		return err
 	}
+	if err := validateAuthorizationResourceTagsForAction(value.Action, value.ResourceTags, nil); err != nil {
+		return err
+	}
 	return validateAuthorizationDecision(value, definition)
 }
 
@@ -982,6 +986,9 @@ func ValidateAuthorizationDecisionForProfile(value AuthorizationDecision, profil
 			if err := validateAuthorizationRequestTagsForAction(value.Action, value.RequestTags, &profile); err != nil {
 				return err
 			}
+			if err := validateAuthorizationResourceTagsForAction(value.Action, value.ResourceTags, &profile); err != nil {
+				return err
+			}
 			return validateAuthorizationDecision(value, authorizationProfileActionDefinition(profile, action))
 		}
 	}
@@ -992,7 +999,7 @@ func ValidateAuthorizationDecisionForProfile(value AuthorizationDecision, profil
 // database metadata says contract1. This function alone is not legacy admission.
 func ValidateLegacyAuthorizationDecision(value AuthorizationDecision) error {
 	definition, known := lookupRecordedActionDefinition(value.Action)
-	if !known || value.Resource.Kind != definition.ResourceKind || value.Profile != nil || value.ResourceMode != "" || value.CollectionUsage != "" || value.NetworkContext != nil || value.RequestTags != nil || value.CorrelationID != "" ||
+	if !known || value.Resource.Kind != definition.ResourceKind || value.Profile != nil || value.ResourceMode != "" || value.CollectionUsage != "" || value.NetworkContext != nil || value.RequestTags != nil || value.ResourceTags != nil || value.CorrelationID != "" ||
 		value.Subject != nil && value.Subject.AccessKeyID != "" {
 		return errors.New("legacy decision contains an invalid or current binding")
 	}
@@ -1000,6 +1007,20 @@ func ValidateLegacyAuthorizationDecision(value AuthorizationDecision) error {
 }
 
 func validateAuthorizationRequestTagsForAction(action Action, tags []AuthorizationTag, profile *AuthorizationProfile) error {
+	return validateAuthorizationTagsForAction(action, tags, profile, ConditionCallingServiceRequestTag, requestTagName)
+}
+
+func validateAuthorizationResourceTagsForAction(action Action, tags []AuthorizationTag, profile *AuthorizationProfile) error {
+	return validateAuthorizationTagsForAction(action, tags, profile, ConditionCallingServiceResourceTag, resourceTagName)
+}
+
+func validateAuthorizationTagsForAction(
+	action Action,
+	tags []AuthorizationTag,
+	profile *AuthorizationProfile,
+	source ConditionSource,
+	parse func(ConditionKey) (string, bool),
+) error {
 	if tags != nil && (len(tags) < 1 || len(tags) > MaxAuthorizationTags) {
 		return errors.New("authorization request tags are invalid")
 	}
@@ -1026,10 +1047,10 @@ func validateAuthorizationRequestTagsForAction(action Action, tags []Authorizati
 	}
 	allowed := make(map[string]bool)
 	for _, condition := range declaration.Conditions {
-		if condition.Source != ConditionCallingServiceRequestTag {
+		if condition.Source != source {
 			continue
 		}
-		name, valid := requestTagName(condition.Key)
+		name, valid := parse(condition.Key)
 		if !valid || condition.ValueType != ConditionString {
 			return errors.New("authorization tag declaration is invalid")
 		}
@@ -1041,6 +1062,33 @@ func validateAuthorizationRequestTagsForAction(action Action, tags []Authorizati
 			return errors.New("authorization request tags are invalid")
 		}
 		previous = tag.Key
+	}
+	return nil
+}
+
+func ValidateResolveAuthorizationSubjectRequest(value ResolveAuthorizationSubjectRequest) error {
+	source, known := sourceProfileCommitments[value.Profile.Product]
+	if !known || value.Profile != source.reference {
+		return errors.New("authorization subject profile is invalid")
+	}
+	return nil
+}
+
+func ValidateAuthorizationSubjectContext(value AuthorizationSubjectContext) error {
+	source, known := sourceProfileCommitments[value.Profile.Product]
+	if value.APIVersion != APIVersion || value.Kind != "AuthorizationSubjectContext" || !known ||
+		value.Profile != source.reference || ValidateID("tenantId", string(value.TenantID)) != nil ||
+		ValidateSubject(value.Subject) != nil || value.Subject.AccessKeyID != "" ||
+		(value.Subject.Type != SubjectUser && value.Subject.Type != SubjectRole) {
+		return errors.New("authorization subject context is invalid")
+	}
+	return nil
+}
+
+func CheckAuthorizationSubjectContextForRequest(value AuthorizationSubjectContext, request ResolveAuthorizationSubjectRequest) error {
+	if ValidateResolveAuthorizationSubjectRequest(request) != nil || ValidateAuthorizationSubjectContext(value) != nil ||
+		value.Profile != request.Profile {
+		return errors.New("authorization subject context does not match request")
 	}
 	return nil
 }

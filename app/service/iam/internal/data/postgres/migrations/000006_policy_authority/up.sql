@@ -268,7 +268,7 @@ BEGIN
                 IF jsonb_typeof(condition) IS DISTINCT FROM 'object' OR NOT(condition ?& ARRAY['key','operator','values'])
                    OR condition-ARRAY['key','operator','values']<>'{}'::jsonb
                    OR (COALESCE(condition->>'key','') NOT IN ('iam.current-time','iam.account-id','iam.principal-id','request.source-ip')
-                       AND COALESCE(condition->>'key','') COLLATE "C" !~ '^request\.tag/[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
+                       AND COALESCE(condition->>'key','') COLLATE "C" !~ '^(request|resource)\.tag/[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$')
                    OR jsonb_typeof(condition->'values') IS DISTINCT FROM 'array' THEN
                     RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy condition is invalid';
                 END IF;
@@ -291,17 +291,18 @@ BEGIN
                     END LOOP;
                     CONTINUE;
                 END IF;
-                IF (condition->>'key') COLLATE "C" LIKE 'request.tag/%' COLLATE "C" THEN
+                IF (condition->>'key') COLLATE "C" LIKE 'request.tag/%' COLLATE "C"
+                   OR (condition->>'key') COLLATE "C" LIKE 'resource.tag/%' COLLATE "C" THEN
                     IF COALESCE(condition->>'operator','') NOT IN ('STRING_EQUALS','STRING_NOT_EQUALS')
                        OR jsonb_array_length(condition->'values') NOT BETWEEN 1 AND 16
                        OR (SELECT count(DISTINCT value) FROM jsonb_array_elements(condition->'values'))<>jsonb_array_length(condition->'values') THEN
-                        RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy request tag condition is invalid';
+                        RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy tag condition is invalid';
                     END IF;
                     FOR condition_value IN SELECT value FROM jsonb_array_elements(condition->'values') LOOP
                         IF jsonb_typeof(condition_value) IS DISTINCT FROM 'string'
-                           OR NOT iam.authorization_request_tags_valid(jsonb_build_array(jsonb_build_object(
+                           OR NOT iam.authorization_tags_valid(jsonb_build_array(jsonb_build_object(
                                'key',split_part(condition->>'key','/',2),'value',condition_value#>>'{}'))) THEN
-                            RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy request tag value is invalid';
+                            RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='policy tag value is invalid';
                         END IF;
                     END LOOP;
                     CONTINUE;
@@ -882,3 +883,7 @@ REVOKE ALL ON FUNCTION iam.user_permission_boundary_snapshot(text,text),iam.read
     FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
 GRANT EXECUTE ON FUNCTION iam.read_user_permission_boundary(text,text,text,text),
     iam.change_user_permission_boundary(text,text,text,text,bigint,text,bigint,text,jsonb,text) TO matrix_iam_api;
+
+-- All current and historical authorization shapes now use the source-neutral
+-- bounded tag validator. The pre-v1 request-only name is not a supported ABI.
+DROP FUNCTION IF EXISTS iam.authorization_request_tags_valid(jsonb);

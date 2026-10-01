@@ -2382,6 +2382,10 @@ func TestAuditProofClosedHistoricalMappings(t *testing.T) {
 			if got, err := auditContentDigest(identity, event, current); err != nil || got != expected {
 				t.Fatalf("frozen v6 proof rejected: %v", err)
 			}
+			current.DecisionContractVersion = 7
+			if got, err := auditContentDigest(identity, event, current); err != nil || got != expected {
+				t.Fatalf("frozen v7 proof rejected: %v", err)
+			}
 			current.DecisionContractVersion = 2
 			if _, supported := iamv1.LookupActionConditionDefinition(decision.Action, iamv1.ConditionRequestSourceIP); supported {
 				withNetwork := current
@@ -2465,7 +2469,7 @@ func TestAuditProofClosedHistoricalMappings(t *testing.T) {
 			}
 			for name, mutate := range map[string]func(*AuditEvidence){
 				"version absent":      func(e *AuditEvidence) { e.DecisionContractVersion = 0 },
-				"version unknown":     func(e *AuditEvidence) { e.DecisionContractVersion = 7 },
+				"version unknown":     func(e *AuditEvidence) { e.DecisionContractVersion = 8 },
 				"downgrade to legacy": func(e *AuditEvidence) { e.DecisionContractVersion = 1 },
 				"archive absent":      func(e *AuditEvidence) { e.DecisionProfile = nil },
 				"profile absent":      func(e *AuditEvidence) { e.Decision.Profile = nil },
@@ -2874,6 +2878,29 @@ func TestIAMCoreUsecasesBindCredentialsAndRecordClosedAuthorization(t *testing.T
 	if err != nil || !changed.BootstrapFileRetirable || changed.ChangedAt != repository.transaction.now {
 		t.Fatalf("change bootstrap administrator password: response=%#v err=%v", changed, err)
 	}
+	resolved, err := service.ResolveAuthorizationSubject(
+		context.Background(), paasCredential, login.Credential,
+		iamv1.ResolveAuthorizationSubjectRequest{Profile: request.Profile},
+	)
+	if err != nil || resolved.TenantID != "organization-example" ||
+		resolved.Subject != (iamv1.Subject{Type: iamv1.SubjectUser, ID: "principal-admin"}) ||
+		resolved.Profile != request.Profile {
+		t.Fatalf("resolve current PaaS subject: context=%#v err=%v", resolved, err)
+	}
+	if _, err := service.ResolveAuthorizationSubject(
+		context.Background(), coreServiceCredential(t, document, iamv1.ServiceAudit), login.Credential,
+		iamv1.ResolveAuthorizationSubjectRequest{Profile: request.Profile},
+	); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("Audit service resolved a PaaS subject: %v", err)
+	}
+	staleProfile := request.Profile
+	staleProfile.Revision--
+	if _, err := service.ResolveAuthorizationSubject(
+		context.Background(), paasCredential, login.Credential,
+		iamv1.ResolveAuthorizationSubjectRequest{Profile: staleProfile},
+	); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("stale Profile resolved a subject: %v", err)
+	}
 	request.RequestID = "request-authorize-allowed"
 	request.CorrelationID = "correlation-authorize-allowed"
 	decision, err = service.Authorize(
@@ -3028,6 +3055,12 @@ func TestIAMCoreUsecasesBindCredentialsAndRecordClosedAuthorization(t *testing.T
 	request.CorrelationID = request.RequestID
 	if _, err := service.Authorize(context.Background(), paasCredential, developerLogin.Credential, request); !errors.Is(err, ErrUnauthenticated) {
 		t.Fatalf("revoked developer session error=%v, want unauthenticated", err)
+	}
+	if _, err := service.ResolveAuthorizationSubject(
+		context.Background(), paasCredential, developerLogin.Credential,
+		iamv1.ResolveAuthorizationSubjectRequest{Profile: request.Profile},
+	); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatalf("revoked developer session resolved subject: %v", err)
 	}
 	verifierRevocation, err := service.RevokePolicyAttachment(
 		context.Background(),

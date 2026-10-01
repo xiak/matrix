@@ -368,6 +368,14 @@ func (repository *fakeLifecycleRepository) WithinTransaction(
 	return nil
 }
 
+func (repository *fakeLifecycleRepository) WithinReadOnlyTransaction(
+	ctx context.Context,
+	tenantID paasv1.TenantID,
+	callback func(context.Context, Transaction) error,
+) error {
+	return repository.WithinTransaction(ctx, tenantID, callback)
+}
+
 type fakeLifecycleTransaction struct {
 	now                        time.Time
 	deployment                 paasv1.Deployment

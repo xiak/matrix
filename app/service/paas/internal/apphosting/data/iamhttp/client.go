@@ -126,6 +126,61 @@ func (client *Client) Authorize(
 	return authorization, nil
 }
 
+func (client *Client) ResolveSubject(
+	ctx context.Context,
+	request port.SubjectResolutionRequest,
+) (port.AuthorizationSubjectContext, error) {
+	if client == nil || client.http == nil {
+		return port.AuthorizationSubjectContext{}, port.ErrAuthorizationUnavailable
+	}
+	if ctx == nil || port.ValidateSubjectResolutionRequest(request) != nil {
+		return port.AuthorizationSubjectContext{}, port.ErrUnauthenticated
+	}
+	subjectCredential, err := parseBearer(request.Credential)
+	if err != nil {
+		return port.AuthorizationSubjectContext{}, port.ErrUnauthenticated
+	}
+	profile, known := iamv1.LookupAuthorizationProfile(iamv1.ProductPaaS)
+	if !known || profile.CallingService != iamv1.ServicePaaS {
+		return port.AuthorizationSubjectContext{}, port.ErrAuthorizationUnavailable
+	}
+	_, digest, err := iamv1.CanonicalizeAuthorizationProfile(profile)
+	if err != nil {
+		return port.AuthorizationSubjectContext{}, port.ErrAuthorizationUnavailable
+	}
+	iamRequest := iamv1.ResolveAuthorizationSubjectRequest{Profile: iamv1.AuthorizationProfileReference{
+		Product: profile.Product, Revision: profile.Revision, ContentDigest: digest,
+	}}
+	body, err := json.Marshal(iamRequest)
+	if err != nil {
+		return port.AuthorizationSubjectContext{}, port.ErrAuthorizationUnavailable
+	}
+	defer clear(body)
+	response, err := client.http.Do(ctx, http.MethodPost, "/v1/internal/authorization-subject:resolve",
+		bytes.NewReader(body), "application/json", client.serviceCredential, subjectCredential)
+	if err != nil {
+		return port.AuthorizationSubjectContext{}, port.ErrAuthorizationUnavailable
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return port.AuthorizationSubjectContext{}, authorizationStatusError(response.StatusCode)
+	}
+	var resolved iamv1.AuthorizationSubjectContext
+	if !authorityhttp.ResponseIsJSON(response) || iamv1.DecodeRequest(response.Body, &resolved) != nil ||
+		iamv1.CheckAuthorizationSubjectContextForRequest(resolved, iamRequest) != nil {
+		return port.AuthorizationSubjectContext{}, port.ErrAuthorizationUnavailable
+	}
+	subject, err := toPaaSSubject(resolved.Subject)
+	if err != nil {
+		return port.AuthorizationSubjectContext{}, port.ErrAuthorizationUnavailable
+	}
+	result := port.AuthorizationSubjectContext{TenantID: paasv1.TenantID(resolved.TenantID), Subject: subject, Profile: resolved.Profile}
+	if port.ValidateAuthorizationSubjectContext(result) != nil {
+		return port.AuthorizationSubjectContext{}, port.ErrAuthorizationUnavailable
+	}
+	return result, nil
+}
+
 func (client *Client) VerifyInstallation(
 	ctx context.Context,
 	credential string,
@@ -192,24 +247,43 @@ func authorizationFromDecision(
 	if decision.Subject == nil {
 		return port.Authorization{}, port.ErrAuthorizationUnavailable
 	}
-	subjectType, err := toPaaSSubjectType(decision.Subject.Type)
+	subject, err := toPaaSSubject(*decision.Subject)
 	if err != nil {
 		return port.Authorization{}, port.ErrAuthorizationUnavailable
 	}
 	authorization := port.Authorization{
-		TenantID:    paasv1.TenantID(decision.TenantID),
-		Subject:     paasv1.SubjectRef{Type: subjectType, ID: string(decision.Subject.ID)},
-		DecisionID:  string(decision.ID),
-		RequestID:   decision.RequestID,
-		RequestTags: slices.Clone(decision.RequestTags),
-	}
-	if decision.Subject.RoleSession != nil {
-		authorization.Subject.RoleSession = &paasv1.RoleSessionReference{SessionID: string(decision.Subject.RoleSession.SessionID), SourceUserID: string(decision.Subject.RoleSession.SourceUserID)}
+		TenantID:     paasv1.TenantID(decision.TenantID),
+		Subject:      subject,
+		DecisionID:   string(decision.ID),
+		RequestID:    decision.RequestID,
+		RequestTags:  slices.Clone(decision.RequestTags),
+		ResourceTags: slices.Clone(decision.ResourceTags),
 	}
 	if port.ValidateAuthorization(authorization) != nil {
 		return port.Authorization{}, port.ErrAuthorizationUnavailable
 	}
 	return authorization, nil
+}
+
+func toPaaSSubject(value iamv1.Subject) (paasv1.SubjectRef, error) {
+	subjectType, err := toPaaSSubjectType(value.Type)
+	if err != nil {
+		return paasv1.SubjectRef{}, err
+	}
+	result := paasv1.SubjectRef{Type: subjectType, ID: value.ID}
+	if value.RoleSession != nil {
+		if (value.RoleSession.SourceUserID == "") == (value.RoleSession.SourceServicePrincipalID == "") {
+			return paasv1.SubjectRef{}, errors.New("role source cannot map to apphosting")
+		}
+		result.RoleSession = &paasv1.RoleSessionReference{
+			SessionID: string(value.RoleSession.SessionID), SourceUserID: string(value.RoleSession.SourceUserID),
+			SourceServicePrincipalID: string(value.RoleSession.SourceServicePrincipalID),
+		}
+	}
+	if paasv1.ValidateSubjectRef(result) != nil {
+		return paasv1.SubjectRef{}, errors.New("IAM subject cannot map to PaaS")
+	}
+	return result, nil
 }
 
 func parseBearer(value string) (iamv1.Secret, error) {

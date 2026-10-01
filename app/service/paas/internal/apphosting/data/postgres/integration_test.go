@@ -223,10 +223,12 @@ func assertRoleSubjectStorage(t *testing.T, ctx context.Context, admin *pgx.Conn
 	}{
 		{`{"type":"USER","id":"storage-user"}`, true},
 		{`{"type":"ROLE","id":"storage-role","roleSession":{"sessionId":"storage-session","sourceUserId":"storage-user"}}`, true},
+		{`{"type":"ROLE","id":"storage-role","roleSession":{"sessionId":"storage-session","sourceServicePrincipalId":"service-paas"}}`, true},
 		{`null`, false}, {`{}`, false}, {`{"type":"ROLE","id":"storage-role"}`, false},
 		{`{"type":"USER","id":"storage-user","roleSession":null}`, false},
 		{`{"type":"ROLE","id":"storage-role","roleSession":{"sessionId":"storage-session","sourceUserId":""}}`, false},
 		{`{"type":"ROLE","id":"storage-role","roleSession":{"sessionId":"storage-session","sourceUserId":"storage-user","sourceSessionId":"private"}}`, false},
+		{`{"type":"ROLE","id":"storage-role","roleSession":{"sessionId":"storage-session","sourceUserId":"storage-user","sourceServicePrincipalId":"service-paas"}}`, false},
 		{`{"type":"GROUP","id":"storage-group"}`, false},
 	} {
 		for _, target := range []struct{ statement, constraint string }{
@@ -1054,6 +1056,14 @@ func (repository failAfterApplicationSubmitRepository) WithinTransaction(
 	)
 }
 
+func (repository failAfterApplicationSubmitRepository) WithinReadOnlyTransaction(
+	ctx context.Context,
+	tenantID paasv1.TenantID,
+	callback func(context.Context, applicationlifecycle.Transaction) error,
+) error {
+	return repository.delegate.WithinReadOnlyTransaction(ctx, tenantID, callback)
+}
+
 type failAfterApplicationSubmitTransaction struct {
 	applicationlifecycle.Transaction
 }
@@ -1080,6 +1090,43 @@ func assertApplicationLifecycle(
 	repository, err := NewApplicationRepository(apiPool)
 	if err != nil {
 		t.Fatalf("create application repository: %v", err)
+	}
+	if err := repository.WithinReadOnlyTransaction(ctx, fixture.tenantA,
+		func(transactionContext context.Context, transaction applicationlifecycle.Transaction) error {
+			actual, ok := transaction.(*applicationTransaction)
+			if !ok {
+				return errors.New("read-only application transaction has an unexpected implementation")
+			}
+			var readOnly, effectiveTenant string
+			if err := actual.tx.QueryRow(transactionContext, "SHOW transaction_read_only").Scan(&readOnly); err != nil {
+				return err
+			}
+			if err := actual.tx.QueryRow(transactionContext, "SELECT paas.current_tenant_id()").Scan(&effectiveTenant); err != nil {
+				return err
+			}
+			application, found, err := transaction.LoadApplication(transactionContext, fixture.applicationID)
+			if err != nil {
+				return err
+			}
+			if readOnly != "on" || effectiveTenant != string(fixture.tenantA) || !found || application.Metadata.ID != fixture.applicationID {
+				return errors.New("authorization inspection did not use the exact tenant read-only transaction")
+			}
+			return nil
+		}); err != nil {
+		t.Fatalf("application authorization read-only transaction: %v", err)
+	}
+	if err := repository.WithinReadOnlyTransaction(ctx, fixture.tenantB,
+		func(transactionContext context.Context, transaction applicationlifecycle.Transaction) error {
+			_, found, err := transaction.LoadApplication(transactionContext, fixture.applicationID)
+			if err != nil {
+				return err
+			}
+			if found {
+				return errors.New("read-only authorization inspection crossed tenant RLS")
+			}
+			return nil
+		}); err != nil {
+		t.Fatalf("application authorization read-only tenant RLS: %v", err)
 	}
 	usecase, err := applicationlifecycle.NewUsecase(
 		repository,

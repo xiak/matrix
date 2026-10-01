@@ -82,6 +82,14 @@ type ResourceSubmission struct {
 	AuditEvent audit.Event
 }
 
+// ApplicationAuthorizationSnapshot contains only the persisted facts needed
+// to authorize one read. It is never returned to a caller as the resource.
+type ApplicationAuthorizationSnapshot struct {
+	ID              paasv1.ResourceID
+	ResourceVersion uint64
+	Labels          map[string]string
+}
+
 type Transaction interface {
 	TransactionTime(context.Context) (time.Time, error)
 	FindOperationByFingerprint(
@@ -138,6 +146,11 @@ type Transaction interface {
 
 type Repository interface {
 	WithinTransaction(
+		context.Context,
+		paasv1.TenantID,
+		func(context.Context, Transaction) error,
+	) error
+	WithinReadOnlyTransaction(
 		context.Context,
 		paasv1.TenantID,
 		func(context.Context, Transaction) error,

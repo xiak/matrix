@@ -1797,6 +1797,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -1804,6 +1805,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -1872,6 +1874,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -1879,6 +1882,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -1926,6 +1930,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -1933,6 +1938,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -1980,6 +1986,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -1987,6 +1994,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -2034,6 +2042,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -2041,6 +2050,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -2088,6 +2098,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -2095,6 +2106,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -2142,6 +2154,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -2149,6 +2162,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -2196,6 +2210,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -2203,6 +2218,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -2250,6 +2266,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -2257,6 +2274,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -2304,6 +2322,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -2311,6 +2330,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -2358,6 +2378,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -2365,6 +2386,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -2412,6 +2434,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -2419,6 +2442,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -2466,6 +2490,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -2473,6 +2498,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -2520,6 +2546,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -2527,6 +2554,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -2574,6 +2602,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -2581,6 +2610,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -2628,6 +2658,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -2635,6 +2666,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -2682,6 +2714,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -2689,6 +2722,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -2736,6 +2770,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -2743,6 +2778,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -2790,6 +2826,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -2797,6 +2834,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -2844,6 +2882,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -2851,6 +2890,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -2898,6 +2938,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -2905,6 +2946,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -2952,6 +2994,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -2959,6 +3002,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -3006,6 +3050,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -3013,6 +3058,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -3060,6 +3106,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -3067,6 +3114,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -3114,6 +3162,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -3121,6 +3170,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -3168,6 +3218,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -3175,6 +3226,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -3222,6 +3274,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -3229,6 +3282,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -3276,6 +3330,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -3283,6 +3338,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -3330,6 +3386,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -3337,6 +3394,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -3384,6 +3442,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -3391,6 +3450,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -3438,6 +3498,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -3445,6 +3506,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -3492,6 +3554,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -3499,6 +3562,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -3546,6 +3610,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -3553,6 +3618,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -3600,6 +3666,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -3607,6 +3674,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -3654,6 +3722,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -3661,6 +3730,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -3708,6 +3778,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -3715,6 +3786,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -3762,6 +3834,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -3769,6 +3842,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -3816,6 +3890,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -3823,6 +3898,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -3870,6 +3946,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -3877,6 +3954,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -3924,6 +4002,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -3931,6 +4010,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -3978,6 +4058,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -3985,6 +4066,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -4032,6 +4114,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -4039,6 +4122,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -4086,6 +4170,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -4093,6 +4178,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -4140,6 +4226,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -4147,6 +4234,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -4194,6 +4282,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -4201,6 +4290,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -4248,6 +4338,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -4255,6 +4346,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -4302,6 +4394,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -4309,6 +4402,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -4356,6 +4450,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -4363,6 +4458,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -4410,6 +4506,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -4417,6 +4514,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -4464,6 +4562,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -4471,6 +4570,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -4518,6 +4618,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -4525,6 +4626,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -4572,6 +4674,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -4579,6 +4682,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -4626,6 +4730,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -4633,6 +4738,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -4680,6 +4786,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -4687,6 +4794,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -4734,6 +4842,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -4741,6 +4850,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -4788,6 +4898,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -4795,6 +4906,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -4842,6 +4954,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -4849,6 +4962,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -4896,6 +5010,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -4903,6 +5018,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -4950,6 +5066,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -4957,6 +5074,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -5004,6 +5122,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -5011,6 +5130,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -5058,6 +5178,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -5065,6 +5186,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -5112,6 +5234,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -5119,6 +5242,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -5166,6 +5290,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -5173,6 +5298,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -5220,6 +5346,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -5227,6 +5354,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -5274,6 +5402,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -5281,6 +5410,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -5328,6 +5458,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -5335,6 +5466,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -5382,6 +5514,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -5389,6 +5522,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -5436,6 +5570,7 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -5443,6 +5578,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -5485,11 +5621,12 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -5497,6 +5634,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -5560,11 +5698,12 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -5572,6 +5711,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -5614,11 +5754,12 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -5626,6 +5767,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -5689,11 +5831,12 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -5701,6 +5844,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -5743,11 +5887,12 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -5755,6 +5900,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -5797,11 +5943,12 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -5809,6 +5956,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -5851,11 +5999,12 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -5863,6 +6012,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -5915,11 +6065,12 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -5927,6 +6078,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -5969,11 +6121,12 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -5981,6 +6134,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -6023,11 +6177,12 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -6035,6 +6190,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -6077,11 +6233,12 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -6089,6 +6246,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -6131,11 +6289,12 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -6143,6 +6302,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -6194,10 +6354,32 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
+                },
+                "requestTags": {
+                  "items": {
+                    "allOf": [
+                      {
+                        "$ref": "#/components/schemas/AuthorizationTag"
+                      },
+                      {
+                        "properties": {
+                          "key": {
+                            "enum": [
+                              "environment"
+                            ]
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "maxItems": 1,
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
                 },
                 "resource": {
                   "properties": {
@@ -6206,6 +6388,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -6248,17 +6431,40 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "APPLICATION"
                     }
                   }
+                },
+                "resourceTags": {
+                  "items": {
+                    "allOf": [
+                      {
+                        "$ref": "#/components/schemas/AuthorizationTag"
+                      },
+                      {
+                        "properties": {
+                          "key": {
+                            "enum": [
+                              "environment"
+                            ]
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "maxItems": 1,
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
                 },
                 "subject": {
                   "properties": {
@@ -6312,11 +6518,12 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -6324,6 +6531,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -6366,11 +6574,12 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -6378,6 +6587,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -6430,11 +6640,12 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -6442,6 +6653,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -6484,11 +6696,12 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -6496,6 +6709,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -6548,11 +6762,12 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -6560,6 +6775,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -6602,11 +6818,12 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -6614,6 +6831,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -6666,11 +6884,12 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -6678,6 +6897,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -6720,11 +6940,12 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -6732,6 +6953,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -6774,11 +6996,12 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -6786,6 +7009,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -6828,11 +7052,12 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -6840,6 +7065,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -6882,11 +7108,12 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -6894,6 +7121,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -6936,11 +7164,12 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -6948,6 +7177,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -7017,6 +7247,7 @@
                     "revision": 4
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -7024,6 +7255,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -7092,6 +7324,7 @@
                     "revision": 4
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -7099,6 +7332,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -7156,6 +7390,7 @@
                     "revision": 4
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -7163,6 +7398,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -7231,6 +7467,7 @@
                     "revision": 4
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -7238,6 +7475,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -7295,6 +7533,7 @@
                     "revision": 4
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -7302,6 +7541,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -7370,6 +7610,7 @@
                     "revision": 4
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -7377,6 +7618,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -7425,6 +7667,7 @@
                     "revision": 4
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -7432,6 +7675,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -7479,6 +7723,7 @@
                     "revision": 4
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -7486,6 +7731,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -7543,6 +7789,7 @@
                     "revision": 2
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -7550,6 +7797,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -7608,6 +7856,7 @@
                     "revision": 2
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -7615,6 +7864,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -7673,6 +7923,7 @@
                     "revision": 2
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -7680,6 +7931,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -7737,6 +7989,7 @@
                     "revision": 2
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -7744,6 +7997,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -7791,6 +8045,7 @@
                     "revision": 1
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
@@ -7798,6 +8053,7 @@
                     }
                   }
                 },
+                "resourceTags": false,
                 "subject": {
                   "properties": {
                     "accessKeyId": false,
@@ -7866,6 +8122,15 @@
           },
           "resourceMode": {
             "$ref": "#/components/schemas/AuthorizationResourceMode"
+          },
+          "resourceTags": {
+            "items": {
+              "$ref": "#/components/schemas/AuthorizationTag"
+            },
+            "maxItems": 8,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
           },
           "subject": {
             "$ref": "#/components/schemas/Subject"
@@ -8259,6 +8524,19 @@
                 "const": "STRING"
               }
             }
+          },
+          {
+            "properties": {
+              "key": {
+                "const": "resource.tag/environment"
+              },
+              "source": {
+                "const": "CALLING_SERVICE_RESOURCE_TAG"
+              },
+              "valueType": {
+                "const": "STRING"
+              }
+            }
           }
         ],
         "properties": {
@@ -8395,13 +8673,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "ACCOUNT"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -8460,13 +8740,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "ACCOUNT"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -8504,13 +8786,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "ACCOUNT"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -8548,13 +8832,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "ACCOUNT"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -8592,13 +8878,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "ACCOUNT"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -8636,13 +8924,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "ACCOUNT"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -8680,13 +8970,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "ACCOUNT"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -8724,13 +9016,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "ACCOUNT"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -8768,13 +9062,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "POLICY"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -8812,13 +9108,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "POLICY"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -8856,13 +9154,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "POLICY"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -8900,13 +9200,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "POLICY"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -8944,13 +9246,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "POLICY"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -8988,13 +9292,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "POLICY"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -9032,13 +9338,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "POLICY"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -9076,13 +9384,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "POLICY"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -9120,13 +9430,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "INSTALLATION"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -9164,13 +9476,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "USER"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -9208,13 +9522,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "USER"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -9252,13 +9568,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "ACCOUNT"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -9296,13 +9614,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "USER"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -9340,13 +9660,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "USER"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -9384,13 +9706,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "USER"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -9428,13 +9752,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "USER"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -9472,13 +9798,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "USER"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -9516,13 +9844,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "ACCOUNT"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -9560,13 +9890,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "ACCOUNT"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -9604,13 +9936,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "GROUP"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -9648,13 +9982,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "GROUP"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -9692,13 +10028,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "GROUP"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -9736,13 +10074,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "GROUP"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -9780,13 +10120,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "GROUP"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -9824,13 +10166,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "GROUP_MEMBERSHIP"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -9868,13 +10212,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "GROUP"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -9912,13 +10258,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "POLICY_ATTACHMENT"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -9956,13 +10304,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "USER"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -10000,13 +10350,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "POLICY_ATTACHMENT"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -10044,13 +10396,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "SESSION"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -10088,13 +10442,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "USER"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -10132,13 +10488,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "POLICY_ATTACHMENT"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -10176,13 +10534,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "ACCOUNT"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -10220,13 +10580,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "ACCOUNT"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -10264,13 +10626,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "ROLE"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -10308,13 +10672,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "ROLE"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -10352,13 +10718,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "ROLE"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -10396,13 +10764,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "ROLE"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -10440,13 +10810,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "ROLE"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -10484,13 +10856,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "ROLE"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -10528,13 +10902,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "POLICY_ATTACHMENT"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -10572,13 +10948,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "ROLE"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -10616,13 +10994,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "ROLE"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -10660,13 +11040,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "ROLE"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -10704,13 +11086,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "ROLE"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -10748,13 +11132,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "ROLE_SESSION"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -10792,13 +11178,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "ROLE_SESSION"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -10836,13 +11224,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "USER"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -10880,13 +11270,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "USER"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -10924,13 +11316,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "ACCESS_KEY"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -10968,13 +11362,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "ACCESS_KEY"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -11012,13 +11408,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "ACCESS_KEY"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -11056,13 +11454,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "ACCOUNT"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -11100,13 +11500,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "ACCOUNT"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -11144,13 +11546,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "ACCOUNT"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -11188,13 +11592,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "ACCOUNT"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -11232,13 +11638,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "ROLE"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -11276,13 +11684,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "ACCOUNT"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -11320,13 +11730,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "ROLE"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -11364,13 +11776,15 @@
                     "revision": 8
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "WORKLOAD_ROLE_BINDING"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -11403,18 +11817,20 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "EXECUTION_POOL"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -11468,18 +11884,20 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "EXECUTION_POOL"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -11512,18 +11930,20 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "EXECUTION_TARGET"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -11577,18 +11997,20 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "EXECUTION_TARGET"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -11621,18 +12043,20 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "EXECUTION_TARGET"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -11665,18 +12089,20 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "EXECUTION_TARGET"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -11709,18 +12135,20 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "EXECUTION_TARGET"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -11763,18 +12191,20 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "NODE_ENROLLMENT"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -11807,18 +12237,20 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "NODE_ENROLLMENT"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -11851,18 +12283,20 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "NODE_ENROLLMENT"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -11895,18 +12329,20 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "NODE_ENROLLMENT"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -11939,18 +12375,20 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "OPERATION"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -11992,10 +12430,32 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
+                },
+                "requestTags": {
+                  "items": {
+                    "allOf": [
+                      {
+                        "$ref": "#/components/schemas/AuthorizationTag"
+                      },
+                      {
+                        "properties": {
+                          "key": {
+                            "enum": [
+                              "environment"
+                            ]
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "maxItems": 1,
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
                 },
                 "resource": {
                   "properties": {
@@ -12003,7 +12463,8 @@
                       "const": "APPLICATION"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -12035,17 +12496,40 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "APPLICATION"
                     }
                   }
+                },
+                "resourceTags": {
+                  "items": {
+                    "allOf": [
+                      {
+                        "$ref": "#/components/schemas/AuthorizationTag"
+                      },
+                      {
+                        "properties": {
+                          "key": {
+                            "enum": [
+                              "environment"
+                            ]
+                          }
+                        }
+                      }
+                    ]
+                  },
+                  "maxItems": 1,
+                  "minItems": 1,
+                  "type": "array",
+                  "uniqueItems": true
                 }
               }
             }
@@ -12088,18 +12572,20 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "CONFIGURATION"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -12131,18 +12617,20 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "CONFIGURATION"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -12184,18 +12672,20 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "CONFIGURATION_REVISION"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -12227,18 +12717,20 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "CONFIGURATION_REVISION"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -12280,18 +12772,20 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "APPLICATION_REVISION"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -12323,18 +12817,20 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "APPLICATION_REVISION"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -12376,18 +12872,20 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "DEPLOYMENT"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -12419,18 +12917,20 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "DEPLOYMENT"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -12462,18 +12962,20 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "DEPLOYMENT"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -12505,18 +13007,20 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "DEPLOYMENT"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -12548,18 +13052,20 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "DEPLOYMENT"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -12591,18 +13097,20 @@
               "properties": {
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:30a14a337d8cf98a9be3f73fb9369d9c021e9066c1a80c702d2c7ed87d157829",
+                    "contentDigest": "sha256:a6825e2dc52cdaa26509de9011d701d74651f6e8fc7977c39b895cd8d0fb5c35",
                     "product": "paas",
-                    "revision": 4
+                    "revision": 5
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "OPERATION"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -12661,13 +13169,15 @@
                     "revision": 4
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "SERVICE_OFFERING"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -12726,13 +13236,15 @@
                     "revision": 4
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "REGION"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -12780,13 +13292,15 @@
                     "revision": 4
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "QUOTA_ENTITLEMENT"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -12845,13 +13359,15 @@
                     "revision": 4
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "QUOTA_ENTITLEMENT"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -12899,13 +13415,15 @@
                     "revision": 4
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "SERVICE_INSTALLATION"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -12964,13 +13482,15 @@
                     "revision": 4
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "SERVICE_INSTALLATION"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -13008,13 +13528,15 @@
                     "revision": 4
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "SERVICE_INSTALLATION"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -13052,13 +13574,15 @@
                     "revision": 4
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "SERVICE_INSTALLATION"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -13106,13 +13630,15 @@
                     "revision": 2
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "AUDIT_RECORD"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -13160,13 +13686,15 @@
                     "revision": 2
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "AUDIT_CHAIN"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -13214,13 +13742,15 @@
                     "revision": 2
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "AUDIT_RECORD"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -13268,13 +13798,15 @@
                     "revision": 2
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "AUDIT_CHAIN"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           },
@@ -13312,13 +13844,15 @@
                     "revision": 1
                   }
                 },
+                "requestTags": false,
                 "resource": {
                   "properties": {
                     "kind": {
                       "const": "INSTALLATION"
                     }
                   }
-                }
+                },
+                "resourceTags": false
               }
             }
           }
@@ -13356,6 +13890,15 @@
           },
           "resourceMode": {
             "$ref": "#/components/schemas/AuthorizationResourceMode"
+          },
+          "resourceTags": {
+            "items": {
+              "$ref": "#/components/schemas/AuthorizationTag"
+            },
+            "maxItems": 8,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
           }
         },
         "required": [
@@ -13414,6 +13957,49 @@
         "required": [
           "mode",
           "prefixAllowed"
+        ],
+        "type": "object"
+      },
+      "AuthorizationSubjectContext": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "iam.matrix.xiak.com/v1"
+          },
+          "kind": {
+            "const": "AuthorizationSubjectContext"
+          },
+          "profile": {
+            "$ref": "#/components/schemas/AuthorizationProfileReference"
+          },
+          "subject": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Subject"
+              },
+              {
+                "properties": {
+                  "accessKeyId": false,
+                  "type": {
+                    "enum": [
+                      "USER",
+                      "ROLE"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          "tenantId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "profile",
+          "subject",
+          "tenantId"
         ],
         "type": "object"
       },
@@ -13760,6 +14346,12 @@
             "maxLength": 75,
             "minLength": 13,
             "pattern": "^request\\.tag/[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$",
+            "type": "string"
+          },
+          {
+            "maxLength": 76,
+            "minLength": 14,
+            "pattern": "^resource\\.tag/[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$",
             "type": "string"
           }
         ]
@@ -16149,6 +16741,28 @@
                 }
               }
             }
+          },
+          {
+            "properties": {
+              "key": {
+                "maxLength": 76,
+                "minLength": 14,
+                "pattern": "^resource\\.tag/[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$",
+                "type": "string"
+              },
+              "operator": {
+                "enum": [
+                  "STRING_EQUALS",
+                  "STRING_NOT_EQUALS"
+                ]
+              },
+              "values": {
+                "items": {
+                  "maxLength": 128,
+                  "type": "string"
+                }
+              }
+            }
           }
         ],
         "properties": {
@@ -16795,7 +17409,7 @@
                   "contains": {
                     "properties": {
                       "key": {
-                        "const": "iam.current-time"
+                        "const": "iam.account-id"
                       }
                     },
                     "required": [
@@ -16940,7 +17554,7 @@
                   "contains": {
                     "properties": {
                       "key": {
-                        "const": "iam.account-id"
+                        "const": "iam.current-time"
                       }
                     },
                     "required": [
@@ -17268,6 +17882,70 @@
                       "paas.deployment.update",
                       "paas.operation.*",
                       "paas.operation.read"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "conditions": {
+                  "contains": {
+                    "properties": {
+                      "key": {
+                        "const": "request.tag/environment"
+                      }
+                    },
+                    "required": [
+                      "key"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "conditions"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "items": {
+                    "enum": [
+                      "paas.application.create"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "conditions": {
+                  "contains": {
+                    "properties": {
+                      "key": {
+                        "const": "resource.tag/environment"
+                      }
+                    },
+                    "required": [
+                      "key"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "conditions"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actions": {
+                  "items": {
+                    "enum": [
+                      "paas.application.read"
                     ]
                   }
                 }
@@ -22066,42 +22744,6 @@
                 "contains": {
                   "properties": {
                     "key": {
-                      "const": "iam.current-time"
-                    },
-                    "operator": {
-                      "const": "DATE_GREATER_THAN_EQUALS"
-                    }
-                  },
-                  "required": [
-                    "key",
-                    "operator"
-                  ]
-                },
-                "maxContains": 1,
-                "minContains": 0
-              },
-              {
-                "contains": {
-                  "properties": {
-                    "key": {
-                      "const": "iam.current-time"
-                    },
-                    "operator": {
-                      "const": "DATE_LESS_THAN"
-                    }
-                  },
-                  "required": [
-                    "key",
-                    "operator"
-                  ]
-                },
-                "maxContains": 1,
-                "minContains": 0
-              },
-              {
-                "contains": {
-                  "properties": {
-                    "key": {
                       "const": "iam.account-id"
                     },
                     "operator": {
@@ -22124,6 +22766,42 @@
                     },
                     "operator": {
                       "const": "STRING_NOT_EQUALS"
+                    }
+                  },
+                  "required": [
+                    "key",
+                    "operator"
+                  ]
+                },
+                "maxContains": 1,
+                "minContains": 0
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "key": {
+                      "const": "iam.current-time"
+                    },
+                    "operator": {
+                      "const": "DATE_GREATER_THAN_EQUALS"
+                    }
+                  },
+                  "required": [
+                    "key",
+                    "operator"
+                  ]
+                },
+                "maxContains": 1,
+                "minContains": 0
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "key": {
+                      "const": "iam.current-time"
+                    },
+                    "operator": {
+                      "const": "DATE_LESS_THAN"
                     }
                   },
                   "required": [
@@ -22196,6 +22874,78 @@
                     },
                     "operator": {
                       "const": "NOT_IP_ADDRESS"
+                    }
+                  },
+                  "required": [
+                    "key",
+                    "operator"
+                  ]
+                },
+                "maxContains": 1,
+                "minContains": 0
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "key": {
+                      "const": "request.tag/environment"
+                    },
+                    "operator": {
+                      "const": "STRING_EQUALS"
+                    }
+                  },
+                  "required": [
+                    "key",
+                    "operator"
+                  ]
+                },
+                "maxContains": 1,
+                "minContains": 0
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "key": {
+                      "const": "request.tag/environment"
+                    },
+                    "operator": {
+                      "const": "STRING_NOT_EQUALS"
+                    }
+                  },
+                  "required": [
+                    "key",
+                    "operator"
+                  ]
+                },
+                "maxContains": 1,
+                "minContains": 0
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "key": {
+                      "const": "resource.tag/environment"
+                    },
+                    "operator": {
+                      "const": "STRING_EQUALS"
+                    }
+                  },
+                  "required": [
+                    "key",
+                    "operator"
+                  ]
+                },
+                "maxContains": 1,
+                "minContains": 0
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "key": {
+                      "const": "resource.tag/environment"
+                    },
+                    "operator": {
+                      "const": "STRING_NOT_EQUALS"
                     }
                   },
                   "required": [
@@ -22379,42 +23129,6 @@
                           "contains": {
                             "properties": {
                               "key": {
-                                "const": "iam.current-time"
-                              },
-                              "operator": {
-                                "const": "DATE_GREATER_THAN_EQUALS"
-                              }
-                            },
-                            "required": [
-                              "key",
-                              "operator"
-                            ]
-                          },
-                          "maxContains": 1,
-                          "minContains": 0
-                        },
-                        {
-                          "contains": {
-                            "properties": {
-                              "key": {
-                                "const": "iam.current-time"
-                              },
-                              "operator": {
-                                "const": "DATE_LESS_THAN"
-                              }
-                            },
-                            "required": [
-                              "key",
-                              "operator"
-                            ]
-                          },
-                          "maxContains": 1,
-                          "minContains": 0
-                        },
-                        {
-                          "contains": {
-                            "properties": {
-                              "key": {
                                 "const": "iam.account-id"
                               },
                               "operator": {
@@ -22437,6 +23151,42 @@
                               },
                               "operator": {
                                 "const": "STRING_NOT_EQUALS"
+                              }
+                            },
+                            "required": [
+                              "key",
+                              "operator"
+                            ]
+                          },
+                          "maxContains": 1,
+                          "minContains": 0
+                        },
+                        {
+                          "contains": {
+                            "properties": {
+                              "key": {
+                                "const": "iam.current-time"
+                              },
+                              "operator": {
+                                "const": "DATE_GREATER_THAN_EQUALS"
+                              }
+                            },
+                            "required": [
+                              "key",
+                              "operator"
+                            ]
+                          },
+                          "maxContains": 1,
+                          "minContains": 0
+                        },
+                        {
+                          "contains": {
+                            "properties": {
+                              "key": {
+                                "const": "iam.current-time"
+                              },
+                              "operator": {
+                                "const": "DATE_LESS_THAN"
                               }
                             },
                             "required": [
@@ -22509,6 +23259,78 @@
                               },
                               "operator": {
                                 "const": "NOT_IP_ADDRESS"
+                              }
+                            },
+                            "required": [
+                              "key",
+                              "operator"
+                            ]
+                          },
+                          "maxContains": 1,
+                          "minContains": 0
+                        },
+                        {
+                          "contains": {
+                            "properties": {
+                              "key": {
+                                "const": "request.tag/environment"
+                              },
+                              "operator": {
+                                "const": "STRING_EQUALS"
+                              }
+                            },
+                            "required": [
+                              "key",
+                              "operator"
+                            ]
+                          },
+                          "maxContains": 1,
+                          "minContains": 0
+                        },
+                        {
+                          "contains": {
+                            "properties": {
+                              "key": {
+                                "const": "request.tag/environment"
+                              },
+                              "operator": {
+                                "const": "STRING_NOT_EQUALS"
+                              }
+                            },
+                            "required": [
+                              "key",
+                              "operator"
+                            ]
+                          },
+                          "maxContains": 1,
+                          "minContains": 0
+                        },
+                        {
+                          "contains": {
+                            "properties": {
+                              "key": {
+                                "const": "resource.tag/environment"
+                              },
+                              "operator": {
+                                "const": "STRING_EQUALS"
+                              }
+                            },
+                            "required": [
+                              "key",
+                              "operator"
+                            ]
+                          },
+                          "maxContains": 1,
+                          "minContains": 0
+                        },
+                        {
+                          "contains": {
+                            "properties": {
+                              "key": {
+                                "const": "resource.tag/environment"
+                              },
+                              "operator": {
+                                "const": "STRING_NOT_EQUALS"
                               }
                             },
                             "required": [
@@ -23150,6 +23972,18 @@
         },
         "required": [
           "event"
+        ],
+        "type": "object"
+      },
+      "ResolveAuthorizationSubjectRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "profile": {
+            "$ref": "#/components/schemas/AuthorizationProfileReference"
+          }
+        },
+        "required": [
+          "profile"
         ],
         "type": "object"
       },
@@ -30368,6 +31202,67 @@
           }
         ],
         "summary": "Authorize the credential-bound installation verifier"
+      }
+    },
+    "/v1/internal/authorization-subject:resolve": {
+      "post": {
+        "operationId": "resolveAuthorizationSubject",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveAuthorizationSubjectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthorizationSubjectContext"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [
+          {
+            "ServiceCredential": [],
+            "SubjectCredential": []
+          }
+        ],
+        "summary": "Authenticate one transient USER or ROLE bearer for the exact current calling-service Profile; returns identity context, never a permit"
       }
     },
     "/v1/internal/service-role-sessions": {

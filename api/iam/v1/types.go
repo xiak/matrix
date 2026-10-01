@@ -985,6 +985,7 @@ type AuthorizationRequest struct {
 	CollectionUsage AuthorizationCollectionUsage  `json:"collectionUsage,omitempty"`
 	NetworkContext  *AuthorizationNetworkContext  `json:"networkContext,omitempty"`
 	RequestTags     []AuthorizationTag            `json:"requestTags,omitempty"`
+	ResourceTags    []AuthorizationTag            `json:"resourceTags,omitempty"`
 	RequestID       string                        `json:"requestId"`
 	CorrelationID   string                        `json:"correlationId"`
 }
@@ -1011,7 +1012,25 @@ type AuthorizationDecision struct {
 	CollectionUsage AuthorizationCollectionUsage   `json:"collectionUsage,omitempty"`
 	NetworkContext  *AuthorizationNetworkContext   `json:"networkContext,omitempty"`
 	RequestTags     []AuthorizationTag             `json:"requestTags,omitempty"`
+	ResourceTags    []AuthorizationTag             `json:"resourceTags,omitempty"`
 	CorrelationID   string                         `json:"correlationId,omitempty"`
+}
+
+// ResolveAuthorizationSubjectRequest asks IAM to authenticate the service and
+// one transient USER/ROLE bearer for an exact current product Profile. It has
+// deliberately no Account, Subject, Action, resource or tag selector.
+type ResolveAuthorizationSubjectRequest struct {
+	Profile AuthorizationProfileReference `json:"profile"`
+}
+
+// AuthorizationSubjectContext is identity context for a product's protected
+// resource lookup. It is not an authorization decision or reusable permit.
+type AuthorizationSubjectContext struct {
+	APIVersion string                        `json:"apiVersion"`
+	Kind       string                        `json:"kind"`
+	TenantID   AccountID                     `json:"tenantId"`
+	Subject    Subject                       `json:"subject"`
+	Profile    AuthorizationProfileReference `json:"profile"`
 }
 
 // MaxAuthorizationBatchItems keeps a maximally sized current request and

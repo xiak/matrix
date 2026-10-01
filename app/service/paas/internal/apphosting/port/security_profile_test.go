@@ -90,6 +90,84 @@ func TestApplicationCreateAuthorizationBindsOnlyProfileDeclaredLabels(t *testing
 	}
 }
 
+func TestApplicationReadAuthorizationBindsOnlyProfileDeclaredResourceLabels(t *testing.T) {
+	request := AuthorizationRequest{
+		Credential: "Bearer subject", Action: AuthorizeApplicationRead,
+		Resource:     paasv1.ResourceRef{Kind: ResourceApplication, ID: "application-one"},
+		ResourceMode: iamv1.AuthorizationResourceInstance,
+		SourceIP:     "192.0.2.23", RequestID: "request-resource-tags",
+		ResourceLabels: map[string]string{"environment": "production", "team": "payments", "1-metadata": "retained"},
+	}
+	iamRequest, err := NewIAMAuthorizationRequest(request)
+	expected := []iamv1.AuthorizationTag{{Key: "environment", Value: "production"}}
+	if err != nil || iamRequest.RequestTags != nil || !reflect.DeepEqual(iamRequest.ResourceTags, expected) {
+		t.Fatalf("stored resource labels were not bound by the PaaS Profile: request=%#v err=%v", iamRequest, err)
+	}
+	authorization := Authorization{
+		TenantID: "tenant-a", Subject: paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "user-a"},
+		DecisionID: "decision-resource-tags", RequestID: request.RequestID, ResourceTags: expected,
+	}
+	if ValidateAuthorizationForRequest(authorization, request) != nil ||
+		ValidateAuthorizationResourceTagsForAction(authorization, AuthorizeApplicationRead, request.ResourceLabels) != nil {
+		t.Fatal("exact PEP/IAM/read resource label binding was rejected")
+	}
+	changed := request
+	changed.ResourceLabels = map[string]string{"environment": "staging", "team": "payments"}
+	if ValidateAuthorizationForRequest(authorization, changed) == nil ||
+		ValidateAuthorizationResourceTagsForAction(authorization, AuthorizeApplicationRead, changed.ResourceLabels) == nil {
+		t.Fatal("an authorization decision was reused with changed resource labels")
+	}
+	create := request
+	create.Action, create.ResourceMode, create.CollectionUsage = AuthorizeApplicationCreate, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate
+	create.Resource.ID = "collection"
+	if ValidateAuthorizationRequest(create) == nil {
+		t.Fatal("resource labels leaked into an undeclared product action")
+	}
+}
+
+func TestAuthorizationSubjectContextIsProfileBoundAndSelectorFree(t *testing.T) {
+	profile, known := iamv1.LookupAuthorizationProfile(iamv1.ProductPaaS)
+	if !known {
+		t.Fatal("PaaS Profile is missing")
+	}
+	_, digest, err := iamv1.CanonicalizeAuthorizationProfile(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	context := AuthorizationSubjectContext{
+		TenantID: "tenant-a",
+		Subject:  paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "user-a"},
+		Profile: iamv1.AuthorizationProfileReference{
+			Product: profile.Product, Revision: profile.Revision, ContentDigest: digest,
+		},
+	}
+	if ValidateSubjectResolutionRequest(SubjectResolutionRequest{Credential: "Bearer subject"}) != nil ||
+		ValidateAuthorizationSubjectContext(context) != nil {
+		t.Fatalf("current selector-free subject context was rejected: %#v", context)
+	}
+	changed := context
+	changed.Profile.Revision--
+	if ValidateAuthorizationSubjectContext(changed) == nil {
+		t.Fatal("stale product Profile was accepted for resource preloading")
+	}
+	changed = context
+	changed.Subject.Type = paasv1.SubjectServiceAccount
+	if ValidateAuthorizationSubjectContext(changed) == nil {
+		t.Fatal("service account was accepted as an apphosting business subject")
+	}
+	authorization := Authorization{
+		TenantID: "tenant-a", Subject: context.Subject,
+		DecisionID: "decision-a", RequestID: "request-a",
+	}
+	if ValidateAuthorizationForSubjectContext(authorization, context) != nil {
+		t.Fatal("unchanged authorization subject context was rejected")
+	}
+	authorization.Subject.ID = "user-b"
+	if ValidateAuthorizationForSubjectContext(authorization, context) == nil {
+		t.Fatal("authorization was rebound to another subject after resource preloading")
+	}
+}
+
 func TestAppHostingAuthorizationRejectsOtherPEPSurfacesAndChangedShapes(t *testing.T) {
 	t.Parallel()
 	valid := AuthorizationRequest{

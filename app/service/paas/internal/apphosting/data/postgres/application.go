@@ -40,6 +40,25 @@ func (repository *ApplicationRepository) WithinTransaction(
 	tenantID paasv1.TenantID,
 	callback func(context.Context, applicationlifecycle.Transaction) error,
 ) error {
+	return repository.withinTransaction(ctx, tenantID,
+		pgx.TxOptions{IsoLevel: pgx.Serializable, AccessMode: pgx.ReadWrite}, callback)
+}
+
+func (repository *ApplicationRepository) WithinReadOnlyTransaction(
+	ctx context.Context,
+	tenantID paasv1.TenantID,
+	callback func(context.Context, applicationlifecycle.Transaction) error,
+) error {
+	return repository.withinTransaction(ctx, tenantID,
+		pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly}, callback)
+}
+
+func (repository *ApplicationRepository) withinTransaction(
+	ctx context.Context,
+	tenantID paasv1.TenantID,
+	options pgx.TxOptions,
+	callback func(context.Context, applicationlifecycle.Transaction) error,
+) error {
 	if repository == nil || repository.pool == nil {
 		return errors.New("application repository is nil")
 	}
@@ -56,7 +75,7 @@ func (repository *ApplicationRepository) WithinTransaction(
 		ctx,
 		repository.pool,
 		tenantID,
-		pgx.TxOptions{IsoLevel: pgx.Serializable, AccessMode: pgx.ReadWrite},
+		options,
 		func(tx pgx.Tx) error {
 			transaction := &applicationTransaction{placementTransaction: &placementTransaction{
 				tx:       tx,

@@ -25,18 +25,20 @@ type ConditionValueType string
 type ConditionSource string
 
 const (
-	ConditionIAMCurrentTime           ConditionKey       = "iam.current-time"
-	ConditionIAMAccountID             ConditionKey       = "iam.account-id"
-	ConditionIAMPrincipalID           ConditionKey       = "iam.principal-id"
-	ConditionRequestSourceIP          ConditionKey       = "request.source-ip"
-	ConditionRequestTagPrefix                            = "request.tag/"
-	ConditionTime                     ConditionValueType = "TIME"
-	ConditionString                   ConditionValueType = "STRING"
-	ConditionIP                       ConditionValueType = "IP"
-	ConditionIAMTransactionTime       ConditionSource    = "IAM_TRANSACTION_TIME"
-	ConditionIAMIdentity              ConditionSource    = "IAM_AUTHENTICATED_IDENTITY"
-	ConditionCallingServiceNetwork    ConditionSource    = "CALLING_SERVICE_NETWORK"
-	ConditionCallingServiceRequestTag ConditionSource    = "CALLING_SERVICE_REQUEST_TAG"
+	ConditionIAMCurrentTime            ConditionKey       = "iam.current-time"
+	ConditionIAMAccountID              ConditionKey       = "iam.account-id"
+	ConditionIAMPrincipalID            ConditionKey       = "iam.principal-id"
+	ConditionRequestSourceIP           ConditionKey       = "request.source-ip"
+	ConditionRequestTagPrefix                             = "request.tag/"
+	ConditionResourceTagPrefix                            = "resource.tag/"
+	ConditionTime                      ConditionValueType = "TIME"
+	ConditionString                    ConditionValueType = "STRING"
+	ConditionIP                        ConditionValueType = "IP"
+	ConditionIAMTransactionTime        ConditionSource    = "IAM_TRANSACTION_TIME"
+	ConditionIAMIdentity               ConditionSource    = "IAM_AUTHENTICATED_IDENTITY"
+	ConditionCallingServiceNetwork     ConditionSource    = "CALLING_SERVICE_NETWORK"
+	ConditionCallingServiceRequestTag  ConditionSource    = "CALLING_SERVICE_REQUEST_TAG"
+	ConditionCallingServiceResourceTag ConditionSource    = "CALLING_SERVICE_RESOURCE_TAG"
 )
 
 // This is a source declaration, not caller-supplied context or a complete
@@ -77,6 +79,9 @@ func lookupConditionDefinition(key ConditionKey) (ConditionKeyDefinition, bool) 
 	default:
 		if _, ok := requestTagName(key); ok {
 			return ConditionKeyDefinition{key, ConditionString, ConditionCallingServiceRequestTag}, true
+		}
+		if _, ok := resourceTagName(key); ok {
+			return ConditionKeyDefinition{key, ConditionString, ConditionCallingServiceResourceTag}, true
 		}
 		return ConditionKeyDefinition{}, false
 	}
@@ -447,7 +452,7 @@ func AllServicePurposes() []ServicePurpose {
 // editable source. Product revision changes must accompany changed declarations.
 var authorizationProfiles = [...]AuthorizationProfile{
 	iamServiceRoleProfile(),
-	paasProfileRevisionFour,
+	paasProfileRevisionFive,
 	managedServiceProfileRevisionFour,
 	roleBusinessProfile(auditProfileRevisionOne),
 	declaredProductProfile(ProductInstallation, ServiceInstallationVerifier, 1,
@@ -501,7 +506,7 @@ var iamProfileRevisionOne = declaredProductProfile(ProductIAM, ServiceIAM, 1,
 )
 
 func HistoricalAuthorizationProfiles() []AuthorizationProfile {
-	return []AuthorizationProfile{cloneAuthorizationProfile(iamProfileRevisionOne), iamRoleManagementProfile(), iamRoleSessionProfile(), iamRoleSessionManagementProfile(), iamAccessKeyManagementProfile(), iamSecuritySettingsReadProfile(), iamSecuritySettingsProfile(), cloneAuthorizationProfile(paasProfileRevisionOne), cloneAuthorizationProfile(paasProfileRevisionTwo), cloneAuthorizationProfile(paasProfileRevisionThree), cloneAuthorizationProfile(managedServiceProfileRevisionOne), cloneAuthorizationProfile(managedServiceProfileRevisionTwo), cloneAuthorizationProfile(managedServiceProfileRevisionThree), cloneAuthorizationProfile(auditProfileRevisionOne)}
+	return []AuthorizationProfile{cloneAuthorizationProfile(iamProfileRevisionOne), iamRoleManagementProfile(), iamRoleSessionProfile(), iamRoleSessionManagementProfile(), iamAccessKeyManagementProfile(), iamSecuritySettingsReadProfile(), iamSecuritySettingsProfile(), cloneAuthorizationProfile(paasProfileRevisionOne), cloneAuthorizationProfile(paasProfileRevisionTwo), cloneAuthorizationProfile(paasProfileRevisionThree), cloneAuthorizationProfile(paasProfileRevisionFour), cloneAuthorizationProfile(managedServiceProfileRevisionOne), cloneAuthorizationProfile(managedServiceProfileRevisionTwo), cloneAuthorizationProfile(managedServiceProfileRevisionThree), cloneAuthorizationProfile(auditProfileRevisionOne)}
 }
 
 // Revision one remains archived because compiled policy content and decisions
@@ -553,6 +558,7 @@ var paasProfileRevisionOne = declaredProductProfile(ProductPaaS, ServicePaaS, 1,
 var paasProfileRevisionTwo = roleBusinessProfile(paasProfileRevisionOne)
 var paasProfileRevisionThree = networkConditionProfile(paasProfileRevisionTwo)
 var paasProfileRevisionFour = applicationRequestTagProfile(paasProfileRevisionThree)
+var paasProfileRevisionFive = applicationResourceTagProfile(paasProfileRevisionFour)
 
 var auditProfileRevisionOne = declaredProductProfile(ProductAudit, ServiceAudit, 1,
 	declaredProfileAction(ActionAuditRecordRead, ResourceAuditRecord, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
@@ -652,6 +658,31 @@ func applicationRequestTagProfile(previous AuthorizationProfile) AuthorizationPr
 		return profile
 	}
 	panic("PaaS application create declaration is missing")
+}
+
+// applicationResourceTagProfile adds one resource-owned fact to the one read
+// operation whose PEP can load and revalidate that fact under the authenticated
+// Account. It does not turn arbitrary stored labels into Policy inputs.
+func applicationResourceTagProfile(previous AuthorizationProfile) AuthorizationProfile {
+	profile := cloneAuthorizationProfile(previous)
+	profile.Revision++
+	key, err := NewResourceTagConditionKey("environment")
+	if err != nil {
+		panic("invalid release-owned application resource tag")
+	}
+	definition, known := lookupConditionDefinition(key)
+	if !known {
+		panic("invalid release-owned application resource tag declaration")
+	}
+	for index := range profile.Actions {
+		if profile.Actions[index].Action != ActionPaaSApplicationRead {
+			continue
+		}
+		profile.Actions[index].Conditions = append(profile.Actions[index].Conditions,
+			AuthorizationProfileCondition{Key: definition.Key, ValueType: definition.ValueType, Source: definition.Source})
+		return profile
+	}
+	panic("PaaS application read declaration is missing")
 }
 
 func iamRoleManagementProfile() AuthorizationProfile {

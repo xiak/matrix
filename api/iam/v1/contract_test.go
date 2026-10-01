@@ -3118,7 +3118,7 @@ func TestRoleBusinessProfilesRequireExplicitCurrentCapabilities(t *testing.T) {
 		current, found := LookupAuthorizationProfile(product)
 		expectedRevision := uint64(2)
 		if product == ProductPaaS {
-			expectedRevision = 4
+			expectedRevision = 5
 		}
 		if !found || current.Revision != expectedRevision {
 			t.Fatal("missing explicit new product revision")
@@ -3933,8 +3933,8 @@ func TestHistoricalDecisionProfileDoesNotBorrowCurrentHead(t *testing.T) {
 
 func TestPaaSProfileDeclaresCompletePlatformProduct(t *testing.T) {
 	profile, found := LookupAuthorizationProfile(ProductPaaS)
-	if !found || profile.Revision != 4 {
-		t.Fatal("missing current PaaS role and request-tag capable declaration")
+	if !found || profile.Revision != 5 {
+		t.Fatal("missing current PaaS role and request/resource-tag capable declaration")
 	}
 	expected := map[Action]struct {
 		kind       ResourceKind
@@ -5346,6 +5346,135 @@ func TestAuthorizationRequestTagsAreProfileDeclaredCanonicalAndResponseBound(t *
 		var tag AuthorizationTag
 		if json.Unmarshal([]byte(invalid), &tag) == nil {
 			t.Fatal("strict authorization tag decoder accepted an invalid object")
+		}
+	}
+}
+
+func TestAuthorizationResourceTagsAreProfileDeclaredCanonicalAndResponseBound(t *testing.T) {
+	key, err := NewResourceTagConditionKey("environment")
+	if err != nil || key != "resource.tag/environment" {
+		t.Fatal("canonical resource-tag condition key was not constructed", err)
+	}
+	for _, invalid := range []string{"", "Environment", "environment-", "environment/name", strings.Repeat("e", 64)} {
+		if _, err := NewResourceTagConditionKey(invalid); err == nil {
+			t.Fatalf("invalid resource tag key accepted: %q", invalid)
+		}
+	}
+	definition, declared := LookupActionConditionDefinition(ActionPaaSApplicationRead, key)
+	if !declared || definition.ValueType != ConditionString || definition.Source != ConditionCallingServiceResourceTag {
+		t.Fatal("PaaS read does not declare its exact trusted resource tag")
+	}
+	if _, declared := LookupActionConditionDefinition(ActionPaaSApplicationCreate, key); declared {
+		t.Fatal("resource tag leaked into application creation")
+	}
+
+	request, err := NewAuthorizationRequest(ActionPaaSApplicationRead,
+		ResourceReference{Kind: ResourceApplication, ID: "application-tags"},
+		AuthorizationResourceInstance, "", "tag-read", "tag-read")
+	if err != nil {
+		t.Fatal(err)
+	}
+	missing, err := BindAuthorizationResourceTags(request, map[string]string{"team": "payments", "1-metadata": "retained"})
+	if err != nil || missing.ResourceTags != nil || ValidateAuthorizationRequest(missing) != nil {
+		t.Fatal("undeclared metadata became resource authority or missing tag became malformed", err)
+	}
+	bound, err := BindAuthorizationResourceTags(request, map[string]string{
+		"environment": "production", "team": "payments", "1-metadata": "retained",
+	})
+	if err != nil || !slices.Equal(bound.ResourceTags, []AuthorizationTag{{Key: "environment", Value: "production"}}) ||
+		bound.RequestTags != nil || ValidateAuthorizationRequest(bound) != nil {
+		t.Fatal("PEP did not bind only the exact Profile-declared resource tag", err)
+	}
+	if _, err := BindAuthorizationResourceTags(bound, map[string]string{"environment": "production"}); err == nil {
+		t.Fatal("an already-bound request accepted replacement resource tags")
+	}
+	for name, tags := range map[string][]AuthorizationTag{
+		"undeclared": {{Key: "team", Value: "payments"}},
+		"duplicate":  {{Key: "environment", Value: "production"}, {Key: "environment", Value: "staging"}},
+		"unsafe":     {{Key: "environment", Value: " production"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := request
+			changed.ResourceTags = tags
+			if ValidateAuthorizationRequest(changed) == nil {
+				t.Fatal("non-canonical or undeclared resource tags were accepted")
+			}
+		})
+	}
+	wrongAction, err := NewAuthorizationRequest(ActionPaaSApplicationCreate,
+		ResourceReference{Kind: ResourceApplication, ID: "collection"}, AuthorizationResourceCollection,
+		AuthorizationCollectionCreate, "tag-create-resource", "tag-create-resource")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongAction.ResourceTags = []AuthorizationTag{{Key: "environment", Value: "production"}}
+	if ValidateAuthorizationRequest(wrongAction) == nil {
+		t.Fatal("create borrowed the application-read resource tag")
+	}
+
+	decision := AuthorizationDecision{APIVersion: APIVersion, Kind: "AuthorizationDecision", ID: "decision-tag-read",
+		Allowed: true, Reason: DecisionAllowed, TenantID: "account-example", Subject: &Subject{Type: SubjectUser, ID: "user-example"},
+		Action: bound.Action, Resource: bound.Resource, RequestID: bound.RequestID, DecidedAt: time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC),
+		Profile: &bound.Profile, ResourceMode: bound.ResourceMode, ResourceTags: slices.Clone(bound.ResourceTags), CorrelationID: bound.CorrelationID}
+	if CheckAuthorizationDecisionForRequest(decision, bound) != nil {
+		t.Fatal("exact resource tags were not response-bound")
+	}
+	changed := decision
+	changed.ResourceTags = []AuthorizationTag{{Key: "environment", Value: "staging"}}
+	if CheckAuthorizationDecisionForRequest(changed, bound) == nil {
+		t.Fatal("response changed the PEP-bound resource tags")
+	}
+}
+
+func TestAuthorizationSubjectResolutionIsCurrentProfileBoundAndSelectorFree(t *testing.T) {
+	profile, found := LookupAuthorizationProfile(ProductPaaS)
+	if !found {
+		t.Fatal("missing PaaS profile")
+	}
+	_, digest, err := CanonicalizeAuthorizationProfile(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := ResolveAuthorizationSubjectRequest{Profile: AuthorizationProfileReference{
+		Product: profile.Product, Revision: profile.Revision, ContentDigest: digest,
+	}}
+	if ValidateResolveAuthorizationSubjectRequest(request) != nil {
+		t.Fatal("current PaaS profile was not accepted")
+	}
+	context := AuthorizationSubjectContext{APIVersion: APIVersion, Kind: "AuthorizationSubjectContext",
+		TenantID: "account-example", Subject: Subject{Type: SubjectUser, ID: "user-example"}, Profile: request.Profile}
+	if CheckAuthorizationSubjectContextForRequest(context, request) != nil {
+		t.Fatal("minimal subject context was not request-bound")
+	}
+	role := context
+	role.Subject = Subject{Type: SubjectRole, ID: "role-example", RoleSession: &RoleSessionReference{SessionID: "role-session-example", SourceUserID: "user-example"}}
+	if CheckAuthorizationSubjectContextForRequest(role, request) != nil {
+		t.Fatal("ROLE subject context was not accepted")
+	}
+	for name, change := range map[string]func(*AuthorizationSubjectContext){
+		"service":    func(value *AuthorizationSubjectContext) { value.Subject.Type = SubjectServiceAccount },
+		"access key": func(value *AuthorizationSubjectContext) { value.Subject.AccessKeyID = "key-example" },
+		"profile":    func(value *AuthorizationSubjectContext) { value.Profile.Revision-- },
+		"tenant":     func(value *AuthorizationSubjectContext) { value.TenantID = "" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := context
+			change(&changed)
+			if CheckAuthorizationSubjectContextForRequest(changed, request) == nil {
+				t.Fatal("invalid subject context was accepted")
+			}
+		})
+	}
+	encoded, err := json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, selector := range []string{`"tenantId":"other"`, `"action":"paas.application.read"`, `"resource":{"kind":"APPLICATION","id":"other"}`} {
+		forged := append([]byte(nil), encoded[:len(encoded)-1]...)
+		forged = append(forged, []byte(","+selector+"}")...)
+		var decoded ResolveAuthorizationSubjectRequest
+		if DecodeRequest(bytes.NewReader(forged), &decoded) == nil {
+			t.Fatalf("subject resolution admitted selector %s", selector)
 		}
 	}
 }

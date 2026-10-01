@@ -649,6 +649,7 @@ func authorizationDecision(tenantID iamv1.AccountID, installationID string, subj
 		decision.NetworkContext = &network
 	}
 	decision.RequestTags = slices.Clone(request.RequestTags)
+	decision.ResourceTags = slices.Clone(request.ResourceTags)
 	if allowed {
 		decision.Reason = iamv1.DecisionAllowed
 		if iamv1.IsPlatformAction(request.Action) {

@@ -76,6 +76,111 @@ func TestClientMapsAllowedIAMDecisionWithoutTrustingCallerAuthority(t *testing.T
 	}
 }
 
+func TestClientResolvesProfileBoundSubjectWithoutAuthoritySelectors(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/internal/authorization-subject:resolve" || request.URL.RawQuery != "" ||
+			request.Header.Get("Authorization") != "Bearer "+testServiceCredential ||
+			request.Header.Get("Matrix-Subject-Credential") != testSubjectCredential {
+			t.Fatalf("IAM subject request path=%s query=%q headers=%#v", request.URL.Path, request.URL.RawQuery, request.Header)
+		}
+		var body iamv1.ResolveAuthorizationSubjectRequest
+		if iamv1.DecodeRequest(request.Body, &body) != nil || iamv1.ValidateResolveAuthorizationSubjectRequest(body) != nil {
+			t.Fatalf("invalid IAM subject request=%#v", body)
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(response).Encode(iamv1.AuthorizationSubjectContext{
+			APIVersion: iamv1.APIVersion,
+			Kind:       "AuthorizationSubjectContext",
+			TenantID:   "organization-a",
+			Subject:    iamv1.Subject{Type: iamv1.SubjectUser, ID: "principal-developer"},
+			Profile:    body.Profile,
+		})
+	}))
+	defer server.Close()
+
+	resolved, err := newTestClient(t, server.URL).ResolveSubject(context.Background(), port.SubjectResolutionRequest{
+		Credential: "Bearer " + testSubjectCredential,
+	})
+	if err != nil || resolved.TenantID != "organization-a" ||
+		resolved.Subject != (paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "principal-developer"}) ||
+		port.ValidateAuthorizationSubjectContext(resolved) != nil {
+		t.Fatalf("resolved subject=%#v err=%v", resolved, err)
+	}
+}
+
+func TestClientResolvesServiceOriginRoleWithoutDroppingLineage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		var body iamv1.ResolveAuthorizationSubjectRequest
+		if request.URL.Path != "/v1/internal/authorization-subject:resolve" ||
+			iamv1.DecodeRequest(request.Body, &body) != nil {
+			t.Fatal("invalid service-origin subject request")
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(response).Encode(iamv1.AuthorizationSubjectContext{
+			APIVersion: iamv1.APIVersion, Kind: "AuthorizationSubjectContext", TenantID: "organization-a",
+			Subject: iamv1.Subject{Type: iamv1.SubjectRole, ID: "role-service", RoleSession: &iamv1.RoleSessionReference{
+				SessionID: "session-service", SourceServicePrincipalID: "service-paas",
+			}},
+			Profile: body.Profile,
+		})
+	}))
+	defer server.Close()
+
+	resolved, err := newTestClient(t, server.URL).ResolveSubject(context.Background(), port.SubjectResolutionRequest{
+		Credential: "Bearer " + testSubjectCredential,
+	})
+	want := paasv1.SubjectRef{Type: paasv1.SubjectRole, ID: "role-service", RoleSession: &paasv1.RoleSessionReference{
+		SessionID: "session-service", SourceServicePrincipalID: "service-paas",
+	}}
+	if err != nil || resolved.TenantID != "organization-a" || !resolved.Subject.Equal(want) ||
+		port.ValidateAuthorizationSubjectContext(resolved) != nil {
+		t.Fatalf("resolved service role=%#v err=%v", resolved, err)
+	}
+}
+
+func TestClientFailsClosedForInvalidResolvedSubject(t *testing.T) {
+	tests := map[string]func(*iamv1.AuthorizationSubjectContext){
+		"wrong profile": func(value *iamv1.AuthorizationSubjectContext) {
+			value.Profile.Revision--
+		},
+		"service subject": func(value *iamv1.AuthorizationSubjectContext) {
+			value.Subject.Type = iamv1.SubjectServiceAccount
+		},
+		"role without lineage": func(value *iamv1.AuthorizationSubjectContext) {
+			value.Subject.Type = iamv1.SubjectRole
+		},
+		"empty tenant": func(value *iamv1.AuthorizationSubjectContext) {
+			value.TenantID = ""
+		},
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				var body iamv1.ResolveAuthorizationSubjectRequest
+				if iamv1.DecodeRequest(request.Body, &body) != nil {
+					t.Fatal("decode subject request")
+				}
+				resolved := iamv1.AuthorizationSubjectContext{
+					APIVersion: iamv1.APIVersion, Kind: "AuthorizationSubjectContext",
+					TenantID: "organization-a", Subject: iamv1.Subject{Type: iamv1.SubjectUser, ID: "principal-developer"},
+					Profile: body.Profile,
+				}
+				mutate(&resolved)
+				response.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(response).Encode(resolved)
+			}))
+			defer server.Close()
+
+			_, err := newTestClient(t, server.URL).ResolveSubject(context.Background(), port.SubjectResolutionRequest{
+				Credential: "Bearer " + testSubjectCredential,
+			})
+			if !errors.Is(err, port.ErrAuthorizationUnavailable) {
+				t.Fatalf("invalid resolved subject err=%v", err)
+			}
+		})
+	}
+}
+
 func TestClientFailsClosedForDenialStatusAndInvalidResponse(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -150,6 +255,17 @@ func TestRoleDecisionMapsCompleteSubjectAndRejectsMissingLineage(t *testing.T) {
 	subject.RoleSession = nil
 	if _, err := authorizationFromDecision(decision); !errors.Is(err, port.ErrAuthorizationUnavailable) {
 		t.Fatal("role without lineage was accepted", err)
+	}
+	serviceSubject := &iamv1.Subject{Type: iamv1.SubjectRole, ID: "role-service", RoleSession: &iamv1.RoleSessionReference{
+		SessionID: "session-service", SourceServicePrincipalID: "service-paas",
+	}}
+	decision.Subject = serviceSubject
+	serviceAuthorization, err := authorizationFromDecision(decision)
+	serviceWant := paasv1.SubjectRef{Type: paasv1.SubjectRole, ID: "role-service", RoleSession: &paasv1.RoleSessionReference{
+		SessionID: "session-service", SourceServicePrincipalID: "service-paas",
+	}}
+	if err != nil || !serviceAuthorization.Subject.Equal(serviceWant) {
+		t.Fatal("service-origin role lost its authoritative lineage", err)
 	}
 }
 

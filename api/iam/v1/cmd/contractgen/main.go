@@ -326,6 +326,10 @@ func buildPaths() object {
 			"authorize", "Authorize a transient subject for one action", "AuthorizationRequest", "AuthorizationDecision", "200",
 			[]any{object{"ServiceCredential": []string{}, "SubjectCredential": []string{}}}, nil,
 		)},
+		"/v1/internal/authorization-subject:resolve": object{"post": mutationOperation(
+			"resolveAuthorizationSubject", "Authenticate one transient USER or ROLE bearer for the exact current calling-service Profile; returns identity context, never a permit", "ResolveAuthorizationSubjectRequest", "AuthorizationSubjectContext", "200",
+			[]any{object{"ServiceCredential": []string{}, "SubjectCredential": []string{}}}, nil,
+		)},
 		"/v1/authorize:batch": object{"post": mutationOperation(
 			"authorizeBatch", "Authorize a bounded ordered set of exact instances in one authentication and transaction snapshot", "AuthorizationBatchRequest", "AuthorizationBatchDecision", "200",
 			[]any{object{"ServiceCredential": []string{}, "SubjectCredential": []string{}}}, nil,
@@ -733,6 +737,8 @@ func structContracts() map[string]reflect.Type {
 		"AuthorizationTag":                              openapi31.StructType[iamv1.AuthorizationTag](),
 		"AuthorizationRequest":                          openapi31.StructType[iamv1.AuthorizationRequest](),
 		"AuthorizationDecision":                         openapi31.StructType[iamv1.AuthorizationDecision](),
+		"ResolveAuthorizationSubjectRequest":            openapi31.StructType[iamv1.ResolveAuthorizationSubjectRequest](),
+		"AuthorizationSubjectContext":                   openapi31.StructType[iamv1.AuthorizationSubjectContext](),
 		"AuthorizationBatchRequest":                     openapi31.StructType[iamv1.AuthorizationBatchRequest](),
 		"AuthorizationBatchDecision":                    openapi31.StructType[iamv1.AuthorizationBatchDecision](),
 		"AccessKeyAuthorization":                        openapi31.StructType[iamv1.AccessKeyAuthorization](),
@@ -1072,7 +1078,7 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 			base = object{"type": "string", "maxLength": 128}
 		}
 	}
-	if (owner == "AuthorizationRequest" || owner == "AuthorizationDecision") && jsonName == "requestTags" {
+	if (owner == "AuthorizationRequest" || owner == "AuthorizationDecision") && (jsonName == "requestTags" || jsonName == "resourceTags") {
 		base["minItems"], base["maxItems"], base["uniqueItems"] = 1, iamv1.MaxAuthorizationTags, true
 	}
 	if owner == "AuthorizationBatchRequest" && jsonName == "requests" || owner == "AuthorizationBatchDecision" && jsonName == "decisions" {
@@ -1183,8 +1189,8 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 }
 
 func applySemanticOverlays(schemas object) {
-	// Condition keys have a closed set of IAM-owned facts plus one dynamic,
-	// normalized namespace. An exact key is still usable only when the owning
+	// Condition keys have a closed set of IAM-owned facts plus two disjoint,
+	// normalized namespaces. An exact key is still usable only when the owning
 	// product Profile declares it for the selected Action.
 	schemas["ConditionKey"] = object{
 		"oneOf": []any{
@@ -1195,6 +1201,10 @@ func applySemanticOverlays(schemas object) {
 			object{
 				"type": "string", "pattern": `^request\.tag/[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`,
 				"minLength": 13, "maxLength": 75,
+			},
+			object{
+				"type": "string", "pattern": `^resource\.tag/[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`,
+				"minLength": 14, "maxLength": 76,
 			},
 		},
 	}
@@ -1592,9 +1602,10 @@ func applySemanticOverlays(schemas object) {
 		"Account": "Account", "User": "User", "Group": "Group", "GroupMembership": "GroupMembership", "GroupDeletion": "GroupDeletion",
 		"PolicyAttachment": "PolicyAttachment",
 		"Session":          "Session", "BootstrapDocument": "IAMBootstrap", "BootstrapStatus": "BootstrapStatus",
-		"ServiceIdentity":            "ServiceIdentity",
-		"AuditProducerAuthorization": "AuditProducerAuthorization",
-		"Revocation":                 "Revocation", "AuthorizationDecision": "AuthorizationDecision", "AuthorizationBatchDecision": "AuthorizationBatchDecision",
+		"ServiceIdentity":             "ServiceIdentity",
+		"AuditProducerAuthorization":  "AuditProducerAuthorization",
+		"AuthorizationSubjectContext": "AuthorizationSubjectContext",
+		"Revocation":                  "Revocation", "AuthorizationDecision": "AuthorizationDecision", "AuthorizationBatchDecision": "AuthorizationBatchDecision",
 		"Readiness": "Readiness",
 	}
 	for owner, kind := range kinds {
@@ -1645,6 +1656,14 @@ func applySemanticOverlays(schemas object) {
 	}
 
 	decision := schemas["AuthorizationDecision"].(object)
+	subjectContext := schemas["AuthorizationSubjectContext"].(object)
+	subjectContext["properties"].(object)["subject"] = object{"allOf": []any{
+		openapi31.Ref("Subject"),
+		object{"properties": object{
+			"type":        object{"enum": []string{string(iamv1.SubjectUser), string(iamv1.SubjectRole)}},
+			"accessKeyId": false,
+		}},
+	}}
 	schemas["AuthorizationNetworkContext"].(object)["properties"].(object)["sourceIp"] = object{
 		"type": "string", "minLength": 2, "maxLength": 45,
 		"description": "Canonical unicast socket-peer IPv4 or IPv6 address established by the calling service; forwarding headers are not accepted.",
@@ -1791,6 +1810,34 @@ func authorizationTargetRules(includeSubject bool) []any {
 			if _, supported := iamv1.LookupActionConditionDefinition(action.Action, iamv1.ConditionRequestSourceIP); !supported {
 				properties["networkContext"] = false
 			}
+			requestTagKeys, resourceTagKeys := []string{}, []string{}
+			for _, condition := range action.Conditions {
+				switch condition.Source {
+				case iamv1.ConditionCallingServiceRequestTag:
+					if key, ok := iamv1.ParseRequestTagConditionKey(condition.Key); ok {
+						requestTagKeys = append(requestTagKeys, key)
+					}
+				case iamv1.ConditionCallingServiceResourceTag:
+					if key, ok := iamv1.ParseResourceTagConditionKey(condition.Key); ok {
+						resourceTagKeys = append(resourceTagKeys, key)
+					}
+				}
+			}
+			for _, tags := range []struct {
+				name string
+				keys []string
+			}{{"requestTags", requestTagKeys}, {"resourceTags", resourceTagKeys}} {
+				name, keys := tags.name, tags.keys
+				if len(keys) == 0 {
+					properties[name] = false
+					continue
+				}
+				slices.Sort(keys)
+				properties[name] = object{
+					"type": "array", "minItems": 1, "maxItems": len(keys), "uniqueItems": true,
+					"items": object{"allOf": []any{openapi31.Ref("AuthorizationTag"), object{"properties": object{"key": object{"enum": keys}}}}},
+				}
+			}
 			if includeSubject {
 				var subjects []string
 				for _, subject := range []iamv1.SubjectType{iamv1.SubjectUser, iamv1.SubjectServiceAccount, iamv1.SubjectRole} {
@@ -1851,6 +1898,16 @@ func applyPolicyLanguageOverlays(schemas object) {
 	statementProperties["conditions"].(object)["maxItems"] = iamv1.MaxStatementConditions
 	statementProperties["conditions"].(object)["uniqueItems"] = true
 	conditionKeys := []iamv1.ConditionKey{iamv1.ConditionIAMCurrentTime, iamv1.ConditionIAMAccountID, iamv1.ConditionIAMPrincipalID, iamv1.ConditionRequestSourceIP}
+	for _, profile := range iamv1.AllAuthorizationProfiles() {
+		for _, action := range profile.Actions {
+			for _, condition := range action.Conditions {
+				if !slices.Contains(conditionKeys, condition.Key) {
+					conditionKeys = append(conditionKeys, condition.Key)
+				}
+			}
+		}
+	}
+	slices.Sort(conditionKeys)
 	var uniqueConditions []any
 	for _, key := range conditionKeys {
 		operators := []iamv1.PolicyConditionOperator{iamv1.PolicyStringEquals, iamv1.PolicyStringNotEquals}
@@ -1896,6 +1953,14 @@ func applyPolicyLanguageOverlays(schemas object) {
 			"key": object{
 				"type": "string", "pattern": `^request\.tag/[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`,
 				"minLength": 13, "maxLength": 75,
+			},
+			"operator": object{"enum": []string{string(iamv1.PolicyStringEquals), string(iamv1.PolicyStringNotEquals)}},
+			"values":   object{"items": object{"type": "string", "maxLength": 128}},
+		}},
+		object{"properties": object{
+			"key": object{
+				"type": "string", "pattern": `^resource\.tag/[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`,
+				"minLength": 14, "maxLength": 76,
 			},
 			"operator": object{"enum": []string{string(iamv1.PolicyStringEquals), string(iamv1.PolicyStringNotEquals)}},
 			"values":   object{"items": object{"type": "string", "maxLength": 128}},

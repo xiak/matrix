@@ -53,19 +53,37 @@ type AuthorizationRequest struct {
 	CollectionUsage iamv1.AuthorizationCollectionUsage
 	SourceIP        string
 	RequestLabels   map[string]string
+	ResourceLabels  map[string]string
 	RequestID       string
 }
 
 // Authorization is the trusted IAM result consumed by apphosting. Tenant and
 // subject are never reconstructed from HTTP headers or request documents.
 type Authorization struct {
-	TenantID    paasv1.TenantID
-	Subject     paasv1.SubjectRef
-	DecisionID  string
-	RequestID   string
-	RequestTags []iamv1.AuthorizationTag
-	AuditID     string
-	TraceParent string
+	TenantID     paasv1.TenantID
+	Subject      paasv1.SubjectRef
+	DecisionID   string
+	RequestID    string
+	RequestTags  []iamv1.AuthorizationTag
+	ResourceTags []iamv1.AuthorizationTag
+	AuditID      string
+	TraceParent  string
+}
+
+// SubjectResolutionRequest carries only the transient bearer. The adapter
+// supplies the exact current PaaS Profile; no caller-controlled Account,
+// Subject, Action, resource or tag selector crosses this boundary.
+type SubjectResolutionRequest struct {
+	Credential string
+}
+
+// AuthorizationSubjectContext is sufficient to open an Account-scoped
+// resource lookup. It is not an authorization result and must never be used
+// to return or mutate a resource without a subsequent decision.
+type AuthorizationSubjectContext struct {
+	TenantID paasv1.TenantID
+	Subject  paasv1.SubjectRef
+	Profile  iamv1.AuthorizationProfileReference
 }
 
 // Authorizer is implemented by the independently deployable IAM boundary.
@@ -73,6 +91,7 @@ type Authorization struct {
 // established.
 type Authorizer interface {
 	Authorize(context.Context, AuthorizationRequest) (Authorization, error)
+	ResolveSubject(context.Context, SubjectResolutionRequest) (AuthorizationSubjectContext, error)
 }
 
 func ValidateAuthorizationRequest(value AuthorizationRequest) error {
@@ -97,8 +116,14 @@ func NewIAMAuthorizationRequest(value AuthorizationRequest) (iamv1.Authorization
 	if value.RequestLabels != nil && value.Action != AuthorizeApplicationCreate {
 		return iamv1.AuthorizationRequest{}, errors.New("authorization labels are outside application creation")
 	}
+	if value.ResourceLabels != nil && value.Action != AuthorizeApplicationRead {
+		return iamv1.AuthorizationRequest{}, errors.New("authorization resource labels are outside application read")
+	}
 	if err := paasv1.ValidateLabels(value.RequestLabels); err != nil {
 		return iamv1.AuthorizationRequest{}, errors.New("authorization labels are invalid")
+	}
+	if err := paasv1.ValidateLabels(value.ResourceLabels); err != nil {
+		return iamv1.AuthorizationRequest{}, errors.New("authorization resource labels are invalid")
 	}
 	resource, err := iamResourceReference(value.Resource)
 	if err != nil {
@@ -118,6 +143,10 @@ func NewIAMAuthorizationRequest(value AuthorizationRequest) (iamv1.Authorization
 	request, err = iamv1.BindAuthorizationRequestTags(request, value.RequestLabels)
 	if err != nil {
 		return iamv1.AuthorizationRequest{}, errors.New("authorization request tags are invalid")
+	}
+	request, err = iamv1.BindAuthorizationResourceTags(request, value.ResourceLabels)
+	if err != nil {
+		return iamv1.AuthorizationRequest{}, errors.New("authorization resource tags are invalid")
 	}
 	return request, nil
 }
@@ -166,7 +195,8 @@ func ValidateAuthorizationForRequest(
 		problems = append(problems, errors.New("IAM authorization request correlation mismatch"))
 	}
 	iamRequest, err := NewIAMAuthorizationRequest(request)
-	if err != nil || !slices.Equal(value.RequestTags, iamRequest.RequestTags) {
+	if err != nil || !slices.Equal(value.RequestTags, iamRequest.RequestTags) ||
+		!slices.Equal(value.ResourceTags, iamRequest.ResourceTags) {
 		problems = append(problems, errors.New("IAM authorization request tags mismatch"))
 	}
 	return errors.Join(problems...)
@@ -178,6 +208,39 @@ func ValidateAuthorizationForRequest(
 func ValidateAuthorizationTagsForAction(value Authorization, action iamv1.Action, labels map[string]string) error {
 	if err := paasv1.ValidateLabels(labels); err != nil || iamv1.CheckAuthorizationTagsForAction(value.RequestTags, action, labels) != nil {
 		return errors.New("IAM authorization request tags mismatch")
+	}
+	return nil
+}
+
+func ValidateAuthorizationResourceTagsForAction(value Authorization, action iamv1.Action, labels map[string]string) error {
+	if err := paasv1.ValidateLabels(labels); err != nil || iamv1.CheckAuthorizationResourceTagsForAction(value.ResourceTags, action, labels) != nil {
+		return errors.New("IAM authorization resource tags mismatch")
+	}
+	return nil
+}
+
+func ValidateSubjectResolutionRequest(value SubjectResolutionRequest) error {
+	if value.Credential == "" || strings.TrimSpace(value.Credential) != value.Credential || len([]byte(value.Credential)) > 16*1024 {
+		return errors.New("subject credential is invalid")
+	}
+	return nil
+}
+
+func ValidateAuthorizationSubjectContext(value AuthorizationSubjectContext) error {
+	profile, known := iamv1.LookupAuthorizationProfile(iamv1.ProductPaaS)
+	if !known || iamv1.CheckAuthorizationProfileReference(profile, value.Profile) != nil ||
+		paasv1.ValidateID("authorizationSubject.tenantId", string(value.TenantID)) != nil ||
+		paasv1.ValidateSubjectRef(value.Subject) != nil ||
+		(value.Subject.Type != paasv1.SubjectUser && value.Subject.Type != paasv1.SubjectRole) {
+		return errors.New("authorization subject context is invalid")
+	}
+	return nil
+}
+
+func ValidateAuthorizationForSubjectContext(value Authorization, subject AuthorizationSubjectContext) error {
+	if ValidateAuthorization(value) != nil || ValidateAuthorizationSubjectContext(subject) != nil ||
+		value.TenantID != subject.TenantID || !value.Subject.Equal(subject.Subject) {
+		return errors.New("authorization subject context changed")
 	}
 	return nil
 }
@@ -205,6 +268,17 @@ func ValidateAuthorization(value Authorization) error {
 	for _, tag := range value.RequestTags {
 		if iamv1.ValidateAuthorizationTag(tag) != nil || tag.Key <= previous {
 			problems = append(problems, errors.New("authorization request tags are invalid"))
+			break
+		}
+		previous = tag.Key
+	}
+	if value.ResourceTags != nil && (len(value.ResourceTags) < 1 || len(value.ResourceTags) > iamv1.MaxAuthorizationTags) {
+		problems = append(problems, errors.New("authorization resource tags are invalid"))
+	}
+	previous = ""
+	for _, tag := range value.ResourceTags {
+		if iamv1.ValidateAuthorizationTag(tag) != nil || tag.Key <= previous {
+			problems = append(problems, errors.New("authorization resource tags are invalid"))
 			break
 		}
 		previous = tag.Key

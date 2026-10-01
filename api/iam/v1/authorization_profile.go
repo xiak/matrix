@@ -676,6 +676,31 @@ func ParseRequestTagConditionKey(key ConditionKey) (string, bool) {
 	return requestTagName(key)
 }
 
+// NewResourceTagConditionKey creates the resource-owned tag namespace. An
+// exact current action declaration is still required before the value can be
+// bound or evaluated.
+func NewResourceTagConditionKey(tag string) (ConditionKey, error) {
+	if !authorizationTagKey(tag) {
+		return "", ErrInvalidAuthorizationProfile
+	}
+	return ConditionKey(ConditionResourceTagPrefix + tag), nil
+}
+
+func resourceTagName(key ConditionKey) (string, bool) {
+	value := string(key)
+	if !strings.HasPrefix(value, ConditionResourceTagPrefix) {
+		return "", false
+	}
+	tag := strings.TrimPrefix(value, ConditionResourceTagPrefix)
+	return tag, authorizationTagKey(tag)
+}
+
+// ParseResourceTagConditionKey exposes only the normalized tag name. It does
+// not establish product ownership or authorization.
+func ParseResourceTagConditionKey(key ConditionKey) (string, bool) {
+	return resourceTagName(key)
+}
+
 func authorizationTagKey(value string) bool {
 	if len(value) < 1 || len(value) > 63 ||
 		(value[0] < 'a' || value[0] > 'z') && (value[0] < '0' || value[0] > '9') ||
@@ -702,7 +727,7 @@ func BindAuthorizationRequestTags(request AuthorizationRequest, labels map[strin
 	if !known || CheckAuthorizationProfileReference(profile, request.Profile) != nil {
 		return AuthorizationRequest{}, ErrInvalidAuthorizationProfile
 	}
-	tags, err := authorizationTagsForAction(profile, request.Action, labels)
+	tags, err := authorizationTagsForAction(profile, request.Action, labels, ConditionCallingServiceRequestTag, requestTagName)
 	if err != nil {
 		return AuthorizationRequest{}, err
 	}
@@ -725,14 +750,60 @@ func CheckAuthorizationTagsForAction(tags []AuthorizationTag, action Action, lab
 	if !known {
 		return ErrInvalidAuthorizationProfile
 	}
-	expected, err := authorizationTagsForAction(profile, action, labels)
+	expected, err := authorizationTagsForAction(profile, action, labels, ConditionCallingServiceRequestTag, requestTagName)
 	if err != nil || !slices.Equal(tags, expected) {
 		return ErrInvalidAuthorizationProfile
 	}
 	return nil
 }
 
-func authorizationTagsForAction(profile AuthorizationProfile, action Action, labels map[string]string) ([]AuthorizationTag, error) {
+// BindAuthorizationResourceTags extracts only the exact resource-tag facts
+// declared by the current action. The complete label map must come from the
+// product's trusted persistence boundary, never a northbound request body.
+func BindAuthorizationResourceTags(request AuthorizationRequest, labels map[string]string) (AuthorizationRequest, error) {
+	if request.ResourceTags != nil || ValidateAuthorizationRequest(request) != nil || len(labels) > 64 {
+		return AuthorizationRequest{}, ErrInvalidAuthorizationProfile
+	}
+	profile, known := LookupAuthorizationProfile(request.Profile.Product)
+	if !known || CheckAuthorizationProfileReference(profile, request.Profile) != nil {
+		return AuthorizationRequest{}, ErrInvalidAuthorizationProfile
+	}
+	tags, err := authorizationTagsForAction(profile, request.Action, labels, ConditionCallingServiceResourceTag, resourceTagName)
+	if err != nil {
+		return AuthorizationRequest{}, err
+	}
+	request.ResourceTags = tags
+	if ValidateAuthorizationRequest(request) != nil {
+		return AuthorizationRequest{}, ErrInvalidAuthorizationProfile
+	}
+	return request, nil
+}
+
+// CheckAuthorizationResourceTagsForAction re-derives an authorization
+// snapshot from current product storage before an allowed read is returned.
+func CheckAuthorizationResourceTagsForAction(tags []AuthorizationTag, action Action, labels map[string]string) error {
+	definition, known := LookupActionDefinition(action)
+	if !known {
+		return ErrInvalidAuthorizationProfile
+	}
+	profile, known := LookupAuthorizationProfile(definition.Product)
+	if !known {
+		return ErrInvalidAuthorizationProfile
+	}
+	expected, err := authorizationTagsForAction(profile, action, labels, ConditionCallingServiceResourceTag, resourceTagName)
+	if err != nil || !slices.Equal(tags, expected) {
+		return ErrInvalidAuthorizationProfile
+	}
+	return nil
+}
+
+func authorizationTagsForAction(
+	profile AuthorizationProfile,
+	action Action,
+	labels map[string]string,
+	source ConditionSource,
+	parse func(ConditionKey) (string, bool),
+) ([]AuthorizationTag, error) {
 	if len(labels) > 64 {
 		return nil, ErrInvalidAuthorizationProfile
 	}
@@ -742,10 +813,10 @@ func authorizationTagsForAction(profile AuthorizationProfile, action Action, lab
 		}
 		var tags []AuthorizationTag
 		for _, condition := range declaration.Conditions {
-			if condition.Source != ConditionCallingServiceRequestTag {
+			if condition.Source != source {
 				continue
 			}
-			key, valid := requestTagName(condition.Key)
+			key, valid := parse(condition.Key)
 			value, present := labels[key]
 			if !valid {
 				return nil, ErrInvalidAuthorizationProfile
@@ -797,6 +868,7 @@ func CheckAuthorizationDecisionForRequest(decision AuthorizationDecision, reques
 		decision.ResourceMode != request.ResourceMode || decision.CollectionUsage != request.CollectionUsage ||
 		!authorizationNetworkContextsEqual(decision.NetworkContext, request.NetworkContext) ||
 		!slices.Equal(decision.RequestTags, request.RequestTags) ||
+		!slices.Equal(decision.ResourceTags, request.ResourceTags) ||
 		decision.RequestID != request.RequestID || decision.CorrelationID != request.CorrelationID {
 		return ErrInvalidAuthorizationProfile
 	}
