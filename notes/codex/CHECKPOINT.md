@@ -7,7 +7,7 @@
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
 - Pushed source/embed milestone: `8e6a66718`
-- Pushed documentation milestone: `bc3de6239`
+- Pushed documentation milestone: `c605869ae`
 
 ## Authoritative route
 
@@ -37,7 +37,7 @@ observations without Secret material. The UI still does not create a file,
 digest or LIVE request; CSV remains visibly unavailable.
 
 Source and synchronized embed are pushed at `8e6a66718`; shared-console and
-IAM-client FEAT evidence is pushed through `bc3de6239`. The complete frontend
+IAM-client FEAT evidence is pushed through `c605869ae`. The complete frontend
 gate passed 58 files/959 cases plus three normalization cases,
 typecheck/lint/architecture/228-pair style checks, 42-route export, 233-file
 embed equality and repository Go test/vet. A fresh `390 x 844` browser session
@@ -72,12 +72,13 @@ unchanged. Verification `36897183328` has passed go, node-process and
 authority-storage, while the remaining authority matrix is still running and
 no explicit consumable confirmation has arrived. Keep `05fe4a74c`
 browser-memory-only; add no parallel LIVE model or inferred wire.
-IAM-009 S4a has a pushed runtime candidate at
-`57cb28d7984175a1c8b58f4855f8c2e5f4188a49`, but its final independent CI,
-signed-install/backup-restore composition and explicit consumable confirmation
-remain open. Keep `8e6a66718` as information architecture only; do not mount
-create/read/content adapters or enable CSV until IAM identifies the final fixed
-SHA and explicitly marks it consumable.
+IAM-009 S4a has a pushed signed-release candidate at
+`e012e446055c26136396efc5da28557b6cbb796f`; it does not change the report
+API/HTTP/use-case shape fixed by `57cb28d7`. Verification `36919226231` remains
+queued, while signed-install/backup-restore composition and explicit consumable
+confirmation remain open. Keep `8e6a66718` as information architecture only;
+do not mount create/read/content adapters or enable CSV until IAM explicitly
+marks the fixed SHA consumable.
 External assertions remain configuration-only: do not reintroduce a persistent
 federated-account/external-subject object, HTTP adapter, successful assumption
 path, RoleSession issuance or authorization claim until IAM publishes and
