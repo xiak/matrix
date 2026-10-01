@@ -3,11 +3,11 @@
 > Non-authoritative portable memory. Validate it against Git and the owning
 > FEAT before continuing.
 
-- Updated: 2026-10-01
+- Updated: 2026-10-02
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `ae91fd572`
-- Pushed documentation milestone: `339d25044`
+- Pushed source/embed milestone: `ccd7918fc`
+- Pushed documentation milestone: `aed5a955c`
 
 ## Authoritative route
 
@@ -29,21 +29,22 @@ compaction or handoff, then validate it against Git and the linked FEAT.
 ## Latest pushed milestone
 
 The independent DEV MOCK remains available at `http://127.0.0.1:4317`, and
-login verification remains disabled for UX review. The Role SSO provider
-preview now presents protocol-specific SAML and OIDC fields, help text and
-detail semantics. Switching protocol preserves two isolated drafts instead of
-reinterpreting XML, JWKS, URL or Audience values. The page states that it only
-checks local shape in the current browser session and performs no external
-discovery, signature/token validation, exchange, login or session issuance.
+login verification remains disabled for UX review. Role SSO keeps the
+protocol-specific SAML/OIDC provider preview, while the former account-shaped
+federation prototype has been removed and replaced by browser-memory
+`RoleSsoMappingPreview`. It describes only provider, assertion subject and
+target Role configuration; it cannot validate assertions, create RoleSession,
+act as a role-assumption caller or produce an effective-access decision.
 
-Source and synchronized embed are pushed at `ae91fd572`; shared-console and
-IAM-client FEAT evidence is pushed through `339d25044`. The complete frontend
+Source and synchronized embed are pushed at `ccd7918fc`; shared-console and
+IAM-client FEAT evidence is pushed through `aed5a955c`. The complete frontend
 gate passed 57 files/941 cases plus three normalization cases,
 typecheck/lint/architecture/228-pair style checks, 42-route export, 233-file
-embed equality and repository Go test/vet. Desktop and `390 x 844` DEV checks
-found no Dialog or horizontal overflow and no browser warning/error logs. IAM
-confirmed that no fixed consumable SSO backend contract exists, so this remains
-explicitly isolated MOCK UX.
+embed equality and repository Go test/vet. The focused post-copy run passed 311
+IAM cases and the same static/export/embed host gates. Desktop and `390 x 844`
+DEV checks found no Dialog or horizontal overflow and no browser warning/error
+logs. IAM confirmed the preview boundary is compatible with FEAT-IAM-012 and
+that no fixed consumable external-IdP/Role-trust wire exists.
 
 Earlier Deployment lifecycle, AccessKey carrier, same-User permission-source
 handoff, Application tag recovery, service authorization, policy
@@ -67,6 +68,10 @@ have backend-owned contracts and must not receive parallel frontend models.
 The IAM owner confirmed that existing AccessKey, Role and Group surfaces now
 have integration/acceptance gaps rather than missing UI contracts: do not
 rebuild them without an actual fixed-object diff.
+External assertions remain configuration-only: do not reintroduce a persistent
+federated-account/external-subject object, HTTP adapter, successful assumption
+path, RoleSession issuance or authorization claim until IAM publishes and
+explicitly exposes a fixed IdP/Role trust contract.
 An authoritative effective-access/policy-simulator API does not exist; keep the
 configuration review non-evaluating and do not create a decision-shaped MOCK.
 Continue without reintroducing whole-page loading, hidden broad Context
