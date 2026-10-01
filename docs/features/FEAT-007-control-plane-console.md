@@ -2187,12 +2187,16 @@ and is not inherited as a new backend acceptance result.
   conditions and other statements. IPv4/IPv6 CIDR, exact resource-tag and
   inclusive UTC conditions round-trip through visual/JSON/review/save.
   Unknown syntax, malformed or empty conditions and incompatible/cross-tenant
-  resources block saving. The bookmarkable IAM policy-coverage route inventories
-  direct/group/Role/boundary references, local default versions, statement fields
-  and condition-key presence without calling a policy evaluator. It explicitly
-  labels backend PDP, session/credential truth, resource policy, product PEP and
-  business execution as `NOT_EVALUATED`; changing an input removes the previous
-  worksheet before a new local inventory can be generated.
+  resources block saving. The bookmarkable IAM policy-configuration route is a
+  configuration review, not a policy-coverage or effective-access result. It
+  inventories direct/group/Role/boundary references, local default versions,
+  statement fields and condition-key presence without calling a policy evaluator.
+  It explicitly labels backend PDP, session/credential truth, resource policy,
+  product PEP and business execution as `NOT_EVALUATED`; changing an input removes
+  the previous worksheet before a new local inventory can be generated. The
+  superseded policy-coverage component, route and embedded export were removed in
+  the same replacement; the route parser and Go static-server tests retain only
+  the truthful policy-configuration URL.
   The expanded UI tests cover invalid local identities, input reset, direct and
   group references, boundary-document inventory, raw Deny declarations without
   prioritization, empty references, condition-field presence, locale switching
