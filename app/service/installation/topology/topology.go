@@ -217,6 +217,9 @@ func compileServices(
 	postgresPassword := path.Join(root, layout.PostgresPassword)
 	iamAPIDSN := path.Join(root, layout.IAMAPI)
 	iamWorkerDSN := path.Join(root, layout.IAMWorker)
+	accessKeyWrappingKeyring := path.Join(root, layout.IAMAccessKeyWrappingKeyring)
+	totpKeyring := path.Join(root, layout.IAMTOTPKeyring)
+	iamCursorKey := path.Join(root, layout.IAMCursorKey)
 	auditRuntimeDSN := path.Join(root, layout.AuditRuntime)
 	paasAPIDSN := path.Join(root, layout.PaaSAPI)
 	paasWorkerDSN := path.Join(root, layout.PaaSWorker)
@@ -286,13 +289,19 @@ func compileServices(
 		"1.0", "512M", "http://127.0.0.1:8080/ready",
 	)
 	iam.Environment = map[string]string{
-		"MATRIX_IAM_DATABASE_DSN_FILE": "/run/matrix/iam-api-dsn",
-		"MATRIX_IAM_BOOTSTRAP_FILE":    "/run/matrix/iam-bootstrap.json",
-		"MATRIX_IAM_LISTEN_ADDRESS":    "0.0.0.0:8080",
+		"MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE": "/run/matrix/iam-access-key-wrapping-keyring.json",
+		"MATRIX_IAM_TOTP_KEYRING_FILE":                "/run/matrix/iam-totp-keyring.json",
+		"MATRIX_IAM_DATABASE_DSN_FILE":                "/run/matrix/iam-api-dsn",
+		"MATRIX_IAM_BOOTSTRAP_FILE":                   "/run/matrix/iam-bootstrap.json",
+		"MATRIX_IAM_CURSOR_KEY_FILE":                  "/run/matrix/iam-cursor-key",
+		"MATRIX_IAM_LISTEN_ADDRESS":                   "0.0.0.0:8080",
 	}
 	iam.Volumes = []mount{
 		bind(iamAPIDSN, "/run/matrix/iam-api-dsn", true),
 		bind(bootstrapIAM, "/run/matrix/iam-bootstrap.json", true),
+		bind(accessKeyWrappingKeyring, "/run/matrix/iam-access-key-wrapping-keyring.json", true),
+		bind(totpKeyring, "/run/matrix/iam-totp-keyring.json", true),
+		bind(iamCursorKey, "/run/matrix/iam-cursor-key", true),
 	}
 	iam.DependsOn = healthy("postgres")
 

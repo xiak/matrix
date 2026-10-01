@@ -55,6 +55,24 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		len(bootstrap.Services) != len(iamv1.AllServicePurposes()) {
 		t.Fatalf("staged IAM bootstrap identity = %#v", bootstrap)
 	}
+	bootstrapDigest, err := iamv1.BootstrapDigest(bootstrap)
+	if err != nil {
+		t.Fatalf("digest staged IAM bootstrap: %v", err)
+	}
+	accessKeyKeyringBytes := readTestFile(t, plan.Root, layout.IAMAccessKeyWrappingKeyring)
+	accessKeyKeyring, err := iamv1.DecodeAccessKeyWrappingKeyring(bytes.NewReader(accessKeyKeyringBytes))
+	clear(accessKeyKeyringBytes)
+	if err != nil || accessKeyKeyring.Scope.InstallationID != plan.InstallationID ||
+		accessKeyKeyring.Scope.BootstrapDigest != bootstrapDigest {
+		t.Fatalf("staged access-key wrapping scope = %#v / %v", accessKeyKeyring.Scope, err)
+	}
+	totpKeyringBytes := readTestFile(t, plan.Root, layout.IAMTOTPKeyring)
+	totpKeyring, err := iamv1.DecodeTOTPKeyring(bytes.NewReader(totpKeyringBytes))
+	clear(totpKeyringBytes)
+	if err != nil || totpKeyring.Scope.InstallationID != plan.InstallationID ||
+		totpKeyring.Scope.BootstrapDigest != bootstrapDigest {
+		t.Fatalf("staged TOTP wrapping scope = %#v / %v", totpKeyring.Scope, err)
+	}
 
 	serviceCredentials := make(map[iamv1.ServicePurpose][]byte, len(bootstrap.Services))
 	for _, service := range bootstrap.Services {
@@ -92,6 +110,10 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		{layout.PostgresMigration, "matrix"},
 		{layout.IAMAPI, "matrix_iam_api_login"},
 		{layout.IAMWorker, "matrix_iam_worker_login"},
+		{layout.IAMCredentialRecovery, "matrix_iam_credential_recovery_login"},
+		{layout.IAMAuthenticationRecovery, "matrix_iam_authentication_recovery_login"},
+		{layout.IAMBackupCustody, "matrix_iam_backup_custody_login"},
+		{layout.IAMNotificationWorker, "matrix_iam_notification_worker_login"},
 		{layout.AuditRuntime, "matrix_audit_runtime_login"},
 		{layout.PaaSAPI, "matrix_paas_api_login"},
 		{layout.PaaSWorker, "matrix_paas_worker_login"},
@@ -413,6 +435,10 @@ func TestMigrateInstallationUsesFixedGoBinariesWithoutCredentialArguments(t *tes
 		readTestFile(t, plan.Root, layout.PostgresMigration),
 		readTestFile(t, plan.Root, layout.IAMAPI),
 		readTestFile(t, plan.Root, layout.IAMWorker),
+		readTestFile(t, plan.Root, layout.IAMCredentialRecovery),
+		readTestFile(t, plan.Root, layout.IAMAuthenticationRecovery),
+		readTestFile(t, plan.Root, layout.IAMBackupCustody),
+		readTestFile(t, plan.Root, layout.IAMNotificationWorker),
 		readTestFile(t, plan.Root, layout.AuditRuntime),
 		readTestFile(t, plan.Root, layout.PaaSAPI),
 		readTestFile(t, plan.Root, layout.PaaSWorker),
@@ -1533,10 +1559,13 @@ func snapshotManagedCredentials(t *testing.T, root string) map[string]string {
 		layout.ReleaseTrust, layout.IAMBootstrap, layout.AuditIAMCredential,
 		layout.IAMAuditCredential, layout.PaaSIAMCredential, layout.PaaSAuditCredential,
 		layout.InstallationVerifierCredential, layout.AuditCursorKey,
+		layout.IAMAccessKeyWrappingKeyring, layout.IAMTOTPKeyring, layout.IAMCursorKey,
 		layout.BackupSealKey,
 		layout.InitialAdministratorPassword,
 		layout.PostgresPassword, layout.PostgresMigration, layout.IAMAPI,
-		layout.IAMWorker, layout.AuditRuntime, layout.PaaSAPI, layout.PaaSWorker,
+		layout.IAMWorker, layout.IAMCredentialRecovery, layout.IAMAuthenticationRecovery,
+		layout.IAMBackupCustody, layout.IAMNotificationWorker,
+		layout.AuditRuntime, layout.PaaSAPI, layout.PaaSWorker,
 	}
 	result := make(map[string]string, len(paths))
 	for _, path := range paths {
