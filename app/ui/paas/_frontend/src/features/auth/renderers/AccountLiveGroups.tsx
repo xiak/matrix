@@ -12,7 +12,7 @@ import type {
 } from "../domain/accounts";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
 import { findActionCapability } from "../scenes/accountAccessScene";
-import { WorkspaceDelete, WorkspaceDetail, WorkspaceDialog, WorkspaceInlineForm, WorkspaceSelection } from "./AccessWorkspaceUi";
+import { WorkspaceDelete, WorkspaceDetail, WorkspaceInlineForm, WorkspaceSelection } from "./AccessWorkspaceUi";
 import {
   GroupDetail,
   GroupDirectory,
@@ -58,8 +58,9 @@ function LiveGroupMetadataEditor({ client, access, onClose, onChanged, onStale }
     clearError();
   };
 
-  return <WorkspaceDialog
+  return <WorkspaceInlineForm
     title={`${t("edit")} · ${access.group.name}`}
+    backLabel={g("backToGroupDetails")}
     onClose={onClose}
     operation={operationProps(operation, clearError)}
     onSubmit={async () => {
@@ -93,7 +94,7 @@ function LiveGroupMetadataEditor({ client, access, onClose, onChanged, onStale }
     <FormField id={`${id}-description`} label={t("description")}>
       <TextArea id={`${id}-description`} maxLength={512} rows={3} value={description} onChange={(event) => changeIntent(() => setDescription(event.target.value))} />
     </FormField>
-  </WorkspaceDialog>;
+  </WorkspaceInlineForm>;
 }
 
 function LiveGroupAssociationEditor({ client, access, memberships, scene, change, onClose, onChanged, onStale }: {
@@ -260,6 +261,8 @@ function LiveGroupWorkspace({ client, entityId, summary, scene, onOpen }: {
   const [deleting, setDeleting] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const editTrigger = useRef<HTMLButtonElement>(null);
+  const pageActionFocus = useRef<{ focus(): void }>(null);
+  const previousEditing = useRef(false);
   const addMemberTrigger = useRef<HTMLButtonElement>(null);
   const removeMemberTrigger = useRef<HTMLButtonElement>(null);
   const addPolicyTrigger = useRef<HTMLButtonElement>(null);
@@ -380,6 +383,12 @@ function LiveGroupWorkspace({ client, entityId, summary, scene, onOpen }: {
     (target?.disabled ? editTrigger.current : target)?.focus({ preventScroll: true });
   }, [change, membersPhase, phase]);
 
+  useLayoutEffect(() => {
+    const wasEditing = previousEditing.current;
+    previousEditing.current = editing;
+    if (wasEditing && !editing) pageActionFocus.current?.focus();
+  }, [editing]);
+
   const stableTitle = access?.group.name ?? summary?.group.name ?? w("groups");
   if (phase === "loading") return <WorkspaceDetail title={stableTitle} onBack={() => onOpen("groups")}>
     <TableSkeleton label={t("loadingGroup")} rows={4} header={false} />
@@ -402,7 +411,7 @@ function LiveGroupWorkspace({ client, entityId, summary, scene, onOpen }: {
     {pageError ? <Alert status="warning">{pageError}</Alert> : null}
     <GroupDetail
       group={record}
-      workflow={change ? <LiveGroupAssociationEditor client={client} access={access} memberships={memberships} scene={scene} change={change} onClose={() => setChange(null)} onChanged={() => load()} onStale={stale} /> : undefined}
+      workflow={editing ? <LiveGroupMetadataEditor client={client} access={access} onClose={() => setEditing(false)} onChanged={() => load()} onStale={stale} /> : change ? <LiveGroupAssociationEditor client={client} access={access} memberships={memberships} scene={scene} change={change} onClose={() => setChange(null)} onChanged={() => load()} onStale={stale} /> : undefined}
       controls={{
         edit: { disabled: refreshingGroup || edit?.available !== true, reason: refreshingGroup ? t("loadingGroup") : edit?.restrictionReason ?? undefined, onInvoke: () => setEditing(true) },
         delete: { disabled: refreshingGroup || remove?.available !== true, reason: refreshingGroup ? t("loadingGroup") : remove?.restrictionReason ?? undefined, onInvoke: () => setDeleting(true) },
@@ -425,6 +434,7 @@ function LiveGroupWorkspace({ client, entityId, summary, scene, onOpen }: {
         } } : undefined
       }}
       editTriggerRef={editTrigger}
+      actionFocusRef={pageActionFocus}
       addMemberTriggerRef={addMemberTrigger}
       removeMemberTriggerRef={removeMemberTrigger}
       addPolicyTriggerRef={addPolicyTrigger}
@@ -433,7 +443,6 @@ function LiveGroupWorkspace({ client, entityId, summary, scene, onOpen }: {
       onOpenMember={(userId) => onOpen("users", userId)}
       onOpenPolicy={(policyId) => onOpen("policies", policyId)}
     />
-    {editing ? <LiveGroupMetadataEditor client={client} access={access} onClose={() => setEditing(false)} onChanged={() => load()} onStale={stale} /> : null}
     {deleting ? <LiveGroupDelete client={client} access={access} onClose={() => setDeleting(false)} onDeleted={() => onOpen("groups")} onStale={stale} /> : null}
   </>;
 }

@@ -883,8 +883,9 @@ describe("ConsoleShellRenderer", () => {
     });
     const policies = await screen.findByRole("table", { name: "策略" });
     await user.click(screen.getByRole("button", { name: "新建自定义策略" }));
-    const methods = screen.getByRole("dialog", { name: "选择创建策略方式" });
-    await user.click(within(methods).getByRole("button", { name: /^按策略语法创建/ }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("heading", { name: "选择创建策略方式" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: /^按策略语法创建/ }));
 
     expect(screen.getByRole("heading", { level: 1, name: "新建策略" })).toBeTruthy();
     const jsonTab = screen.getByRole("tab", { name: "JSON 编辑" });

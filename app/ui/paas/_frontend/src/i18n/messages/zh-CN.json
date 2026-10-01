@@ -4755,6 +4755,7 @@
   "PolicyWizard": {
     "resourceTagsRequired": "请为每条声明开启「按资源标签限制」并填写标签。若不需要标签限制，请切换到可视化编辑。",
     "chooseMethod": "选择创建策略方式",
+    "chooseMethodHint": "选择一个创建起点；随后会在同一内容区完成编辑、审阅与保存。",
     "methods": {
       "visual": { "title": "按策略生成器创建", "description": "选择服务、操作、资源和条件，生成策略内容。" },
       "json": { "title": "按策略语法创建", "description": "编写 JSON 策略，检查语法与授权范围。" },

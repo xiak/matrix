@@ -445,7 +445,8 @@ describe("policy creation entry and directory contract", () => {
   it.each(["按策略生成器创建", "按策略语法创建", "按标签授权", "按产品功能或项目权限创建"])("keeps empty-draft editor tabs clickable from %s", async (method) => {
     const { user, repository } = await open("policies");
     await user.click(screen.getByRole("button", { name: "新建自定义策略" }));
-    await user.click(within(screen.getByRole("dialog", { name: "选择创建策略方式" })).getByRole("button", { name: new RegExp("^" + method) }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(screen.getByRole("button", { name: new RegExp("^" + method) }));
     // Selecting a template is not applying it: this reproduces the screenshot.
     await select(user, "从已有策略开始", "ProductionLogReader");
     for (const name of ["JSON 编辑", "可视化编辑", "JSON 编辑", "按资源标签", "JSON 编辑", "产品功能", "JSON 编辑"]) {
@@ -575,12 +576,12 @@ describe("policy creation entry and directory contract", () => {
     expect(screen.queryByRole("combobox", { name: "权限级别" })).toBeNull();
     const create = screen.getByRole("button", { name: "新建自定义策略" });
     await user.click(create);
-    const dialog = within(screen.getByRole("dialog", { name: "选择创建策略方式" }));
-    for (const name of [/^按策略生成器创建/, /^按策略语法创建/, /^按标签授权/, /^按产品功能或项目权限创建/]) expect(dialog.getByRole("button", { name })).toBeTruthy();
-    // jsdom does not synthesize the native dialog cancel event for Escape.
-    fireEvent(screen.getByRole("dialog"), new Event("cancel", { cancelable: true }));
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(document.activeElement).toBe(create);
+    expect(screen.getByRole("heading", { name: "选择创建策略方式" })).toBe(document.activeElement);
+    for (const name of [/^按策略生成器创建/, /^按策略语法创建/, /^按标签授权/, /^按产品功能或项目权限创建/]) expect(screen.getByRole("button", { name })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "返回列表" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "新建自定义策略" }));
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
   });
   it("previews the exact-shaped permission catalog without presenting it as the IAM registry", async () => {
@@ -677,7 +678,8 @@ describe("policy creation entry and directory contract", () => {
   ] as const)("creates via %s with one reviewed document and no live IAM writes", async (method, title, tab) => {
     const { user, repository, extension } = await open("policies");
     await user.click(screen.getByRole("button", { name: "新建自定义策略" }));
-    await user.click(within(screen.getByRole("dialog", { name: "选择创建策略方式" })).getByRole("button", { name: new RegExp("^" + title) }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(screen.getByRole("button", { name: new RegExp("^" + title) }));
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByRole("tab", { name: tab }).getAttribute("aria-selected")).toBe("true");
     if (method === "json") {
@@ -2025,6 +2027,30 @@ describe("CAM-style access workspace", () => {
     expect(getGroup).toHaveBeenCalledTimes(1);
     expect(listGroupMemberships).toHaveBeenCalledTimes(2);
   });
+  it("edits live group metadata in the content area and restores the source action", async () => {
+    const liveGroup: GroupAccess = {
+      group: { id: "group-inline", accountId: account.id, name: "InlineTeam", description: "Backend-owned metadata", resourceVersion: 1, createdAt: "2026-09-11T08:00:00Z", updatedAt: "2026-09-11T08:00:00Z" },
+      policyAttachments: [],
+      capabilities: [
+        capability("iam.group.read", "GROUP", "group-inline"),
+        capability("iam.group.update", "GROUP", "group-inline"),
+        capability("iam.group-membership.list", "GROUP", "group-inline")
+      ]
+    };
+    const { user } = await open("groups", { live: true, repository: {
+      listGroups: vi.fn().mockResolvedValue({ items: [liveGroup], nextAfter: null }),
+      getGroup: vi.fn().mockResolvedValue(liveGroup),
+      listGroupMemberships: vi.fn().mockResolvedValue({ accountId: account.id, groupId: liveGroup.group.id, items: [], nextAfter: null })
+    } });
+    await user.click(within(await screen.findByRole("table", { name: "用户组" })).getByRole("button", { name: "InlineTeam" }));
+    const edit = await screen.findByRole("button", { name: "编辑" });
+    await user.click(edit);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    const editor = screen.getByRole("group", { name: "编辑 · InlineTeam" });
+    expect(within(editor).getByDisplayValue("Backend-owned metadata")).toBeTruthy();
+    await user.click(within(editor).getByRole("button", { name: "取消" }));
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole("button", { name: "编辑" })));
+  });
   it("does not keep stale group controls or members after an authoritative group refresh fails", async () => {
     const liveGroup: GroupAccess = {
       group: { id: "group-stale", accountId: account.id, name: "StaleTeam", description: "Before update", resourceVersion: 1, createdAt: "2026-09-11T08:00:00Z", updatedAt: "2026-09-11T08:00:00Z" },
@@ -2047,7 +2073,9 @@ describe("CAM-style access workspace", () => {
     await user.click(within(await screen.findByRole("table", { name: "用户组" })).getByRole("button", { name: "StaleTeam" }));
     expect(within(await screen.findByRole("table", { name: "成员" })).getByRole("button", { name: "lin" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "编辑" }));
-    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "保存" }));
+    const editor = within(screen.getByRole("group", { name: "编辑 · StaleTeam" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(editor.getByRole("button", { name: "保存" }));
     await waitFor(() => expect(getGroup).toHaveBeenCalledTimes(2));
     expect(await screen.findByText("对象不可用")).toBeTruthy();
     expect(screen.queryByRole("table", { name: "成员" })).toBeNull();
@@ -2297,7 +2325,7 @@ describe("CAM-style access workspace", () => {
     const { user, extension } = await open("policies");
     const before = (await extension.read("preview")).policies;
     await user.click(await screen.findByRole("button", { name: "新建自定义策略" }));
-    await user.click(within(screen.getByRole("dialog", { name: "选择创建策略方式" })).getByRole("button", { name: /^按策略生成器创建/ }));
+    await user.click(screen.getByRole("button", { name: /^按策略生成器创建/ }));
     expect(screen.queryByRole("dialog")).toBeNull();
     await logActions(user, ["logs:read", "logs:search"]);
     await select(user, "资源授权范围", "指定资源");
@@ -2668,7 +2696,7 @@ describe("CAM-style access workspace", () => {
     const { user, repository, extension } = await open("policies");
     const before = (await extension.read("preview")).policies;
     await user.click(await screen.findByRole("button", { name: "新建自定义策略" }));
-    await user.click(within(screen.getByRole("dialog", { name: "选择创建策略方式" })).getByRole("button", { name: /^按策略语法创建/ }));
+    await user.click(screen.getByRole("button", { name: /^按策略语法创建/ }));
     await user.click(screen.getByRole("tab", { name: "JSON 编辑" }));
     const editor = screen.getByLabelText("策略内容", { selector: "textarea" });
     const text = '{"version":"1","statement":[{"effect":"allow","action":["logs:read"],"resource":["*"],"condition":{"ip":"192.0.2.0/24"}}]}';

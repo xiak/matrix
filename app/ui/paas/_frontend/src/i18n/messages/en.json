@@ -4741,6 +4741,7 @@
   "PolicyWizard": {
     "resourceTagsRequired": "Enable resource-tag restrictions and enter tags for every statement. Switch to visual editing if tag restrictions are not needed.",
     "chooseMethod": "Choose a policy creation method",
+    "chooseMethodHint": "Choose a starting point, then edit, review, and save in the same content workspace.",
     "methods": {
       "visual": { "title": "Policy generator", "description": "Select services, actions, resources and conditions to generate a policy." },
       "json": { "title": "Policy syntax", "description": "Write policy JSON and check its syntax and authorization scope." },

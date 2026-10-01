@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, useDeferredValue, useEffect, useMemo, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useState, type Ref } from "react";
 import { useLocale, useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
-import { Badge, Button, Card, ContentPage, EmptyState, TableSelectionCell, TablePagination, TableToolbar, Select, Table, Tabs } from "@ui/xiak";
+import { Badge, Button, Card, ContentPage, EmptyState, TableSelectionCell, TablePagination, TableToolbar, Select, Table, Tabs, type PageCommandsHandle } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import { defaultPolicyDirectoryView, useAccountAccess, type PolicyDirectoryView } from "../application/AccountAccessProvider";
 import { type AccessPolicy, type AccessWorkspace } from "../domain/accessWorkspace";
@@ -24,9 +24,10 @@ export function usePolicyDescription() {
 
 // Policy-specific directory complexity lives here, not in the generic collection
 // used by small identity directories. All controls still use the public UI owner.
-export function PolicyDirectory({ workspace, onCreate, onOpen, onAssociate, onPreviewLanguage }: {
+export function PolicyDirectory({ workspace, onCreate, onOpen, onAssociate, onPreviewLanguage, createFocusRef }: {
   workspace: AccessWorkspace; onCreate(): void; onOpen(id: string): void; onAssociate(policies: AccessPolicy[], additive?: boolean): void;
   onPreviewLanguage(): void;
+  createFocusRef?: Ref<PageCommandsHandle>;
 }) {
   const t = useTranslations("PolicyWorkspace"), w = useTranslations("IamWorkspace"), r = useTranslations("PolicyRules");
   const catalog = useTranslations("AuthorizationProfileCatalog");
@@ -68,7 +69,7 @@ export function PolicyDirectory({ workspace, onCreate, onOpen, onAssociate, onPr
   const reset = () => setView({ ...defaultPolicyDirectoryView, pageSize: view.pageSize, sort: view.sort });
   const customOnly = view.kind === "custom";
   return <Tabs.Root className={styles.directory} value={section} onValueChange={(next) => { setSection(next); setSelection([]); if (next === "profiles") setCatalogMounted(true); }}>
-    <ContentPage.Heading title={w("policies")} scrollKey="policy-directory" actions={section === "policies" ? <ContentPage.Commands label={collection("pageActions")}
+    <ContentPage.Heading title={w("policies")} scrollKey="policy-directory" actions={section === "policies" ? <ContentPage.Commands label={collection("pageActions")} focusRef={createFocusRef}
       selection={{ label: collection("moreActions"), disabled: busy || !selected.length, hint: !selected.length ? collection("selectFirst") : undefined,
         selectionLabel: selected.length ? t("selected", { count: selected.length }) : undefined, clearLabel: t("clearSelected"), onClear: () => setSelection([]),
         actions: [{ id: "associate", label: selected.length > 1 ? t("batchAttach") : w("associateTargets"), onSelect: () => onAssociate(selected, selected.length > 1) }] }}

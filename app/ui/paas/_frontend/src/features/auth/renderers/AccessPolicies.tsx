@@ -1,7 +1,7 @@
 "use client";
 import { useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { ActionMenu, Alert, Badge, Button, EmptyState, FormField, Table, TablePagination, TableToolbar, Tabs, TextArea } from "@ui/xiak";
+import { ActionMenu, Alert, Badge, Button, EmptyState, FormField, Table, TablePagination, TableToolbar, Tabs, TextArea, type PageCommandsHandle } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import { policyUsageCounts, policyVersionLimit, type AccessPolicy, type AccessWorkspace } from "../domain/accessWorkspace";
@@ -176,6 +176,8 @@ export function AccessPolicies({ workspace, scene, entityId, onCreate, onOpen }:
   const descriptionTrigger = useRef<HTMLButtonElement>(null);
   const previousDescriptionEditing = useRef(false);
   const [choosingMethod, setChoosingMethod] = useState(false);
+  const creationActionFocus = useRef<PageCommandsHandle>(null);
+  const previousChoosingMethod = useRef(false);
   const [versionWorkflow, setVersionWorkflow] = useState(false);
   const selected = workspace.policies.find((policy) => policy.id === entityId);
   const usage = selected ? policyUsageCounts(workspace, selected.id) : null;
@@ -184,9 +186,15 @@ export function AccessPolicies({ workspace, scene, entityId, onCreate, onOpen }:
     previousDescriptionEditing.current = editingDescription;
     if (wasEditing && !editingDescription) descriptionTrigger.current?.focus({ preventScroll: true });
   }, [editingDescription]);
+  useLayoutEffect(() => {
+    const wasChoosing = previousChoosingMethod.current;
+    previousChoosingMethod.current = choosingMethod;
+    if (wasChoosing && !choosingMethod) creationActionFocus.current?.focus("create");
+  }, [choosingMethod]);
   if (entityId && !selected) return <EmptyState title={t("entityUnavailable")} description={t("entityUnavailableHint")} action={<Button variant="secondary" onClick={() => onOpen("policies")}>{t("back")}</Button>} />;
   if (editing) return <PolicyAuthoringWizard {...editing} workspace={workspace} scene={scene} onBack={() => setEditing(null)} onDone={(id) => { setEditing(null); onOpen("policies", id); }} />;
   if (associating) return <PolicyAssociationWizard {...associating} workspace={workspace} scene={scene} onBack={() => setAssociating(null)} />;
+  if (choosingMethod) return <PolicyCreationMethods onClose={() => setChoosingMethod(false)} onSelect={onCreate} />;
   return <>
     {access.workspaceError && !deleting && !editingDescription && !versionWorkflow ? <Alert status="danger">{t(`errors.${access.workspaceError}`)}</Alert> : null}
     {selected ? <WorkspaceDetail title={selected.name} onBack={() => onOpen("policies")} actions={editingDescription ? undefined : {
@@ -218,8 +226,7 @@ export function AccessPolicies({ workspace, scene, entityId, onCreate, onOpen }:
         <Tabs.Content value="usage"><PolicyUses policyId={selected.id} workspace={workspace} scene={scene} onOpen={onOpen} /></Tabs.Content>
       </Tabs.Root>
       </>}
-    </WorkspaceDetail> : <PolicyDirectory workspace={workspace} onCreate={() => setChoosingMethod(true)} onOpen={(id) => onOpen("policies", id)} onAssociate={(policies, additive) => setAssociating({ policies, additive })} onPreviewLanguage={() => onOpen("policy-language")} />}
-    {choosingMethod ? <PolicyCreationMethods onClose={() => setChoosingMethod(false)} onSelect={(method) => { setChoosingMethod(false); onCreate(method); }} /> : null}
+    </WorkspaceDetail> : <PolicyDirectory workspace={workspace} createFocusRef={creationActionFocus} onCreate={() => setChoosingMethod(true)} onOpen={(id) => onOpen("policies", id)} onAssociate={(policies, additive) => setAssociating({ policies, additive })} onPreviewLanguage={() => onOpen("policy-language")} />}
     {deleting ? <WorkspaceDelete name={deleting.name} onClose={() => setDeleting(null)} onConfirm={async () => { const result = await access.executeWorkspace({ kind: "delete-policy", id: deleting.id }); if (result && entityId === deleting.id) onOpen("policies"); return result; }} /> : null}
   </>;
 }
