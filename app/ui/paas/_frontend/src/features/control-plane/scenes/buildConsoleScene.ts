@@ -146,7 +146,7 @@ function messageScenes(experience?: ExperienceSnapshot): ConsoleMessageScene[] {
   }));
   const operations: ConsoleMessageScene[] = experience.operations.flatMap((item) => item.state === "RUNNING" || !item.finishedAt ? [] : [{
     id: `operation:${item.id}:${item.state}:${item.finishedAt}`, category: "operation" as const, title: item.action,
-    description: `${item.target} · ${item.productName} · ${item.actor}`, createdAt: item.finishedAt,
+    description: `${item.target} · ${item.productName} · ${item.actor.id}`, createdAt: item.finishedAt,
     status: operationStatus(item.state), result: item.state, href: "/console/operations/"
   }]);
   const announcements: ConsoleMessageScene[] = experience.announcements.map((item) => ({

@@ -23,12 +23,23 @@ export type ExperienceApplicationTagSnapshot = {
   tags: Array<{ key: string; value: string }>;
 };
 
+export type ExperienceOperationActor = {
+  type: "USER" | "ROLE" | "SERVICE_ACCOUNT" | "AGENT" | "SYSTEM_USER";
+  id: string;
+  accessKeyId?: string;
+  roleSession?: {
+    sessionId: string;
+    sourceUserId?: string;
+    sourceServicePrincipalId?: string;
+  };
+};
+
 export type ExperienceOperation = {
   id: string;
   action: string;
   target: string;
   productName: string;
-  actor: string;
+  actor: ExperienceOperationActor;
   state: ExperienceOperationState;
   progress: number;
   startedAt: string;

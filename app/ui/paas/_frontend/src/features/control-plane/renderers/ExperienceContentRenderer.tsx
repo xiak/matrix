@@ -84,10 +84,26 @@ function OperationSummary({ operation }: { operation: OperationScene }) {
       </div>
       {operation.status === "info" ? <Progress aria-label={t("progressLabel", { name: operation.action })} max={100} value={operation.progress} /> : null}
       <div className={styles.operationMeta}>
-        <span>{operation.productName}</span><span>{operation.actor}</span><span>{format.timestamp(operation.startedAt)}</span>
+        <span>{operation.productName}</span><span>{t(`subjectTypes.${operation.actor.type}`)} · {operation.actor.id}</span><span>{format.timestamp(operation.startedAt)}</span>
       </div>
     </div>
   </>;
+}
+
+function OperationCredential({ operation }: { operation: OperationScene }) {
+  const t = useTranslations("CloudExperience");
+  if (operation.actor.accessKeyId) return <>{t("accessKeyCredential")} · <Typography.Code>{operation.actor.accessKeyId}</Typography.Code></>;
+  if (operation.actor.roleSession) return <>{t("roleSessionCredential")} · <Typography.Code>{operation.actor.roleSession.sessionId}</Typography.Code></>;
+  return <>{t("credentialNotRecorded")}</>;
+}
+
+function OperationSessionSource({ operation }: { operation: OperationScene }) {
+  const t = useTranslations("CloudExperience");
+  const session = operation.actor.roleSession;
+  if (!session) return null;
+  if (session.sourceUserId) return <>{t("subjectTypes.USER")} · <Typography.Code>{session.sourceUserId}</Typography.Code></>;
+  if (session.sourceServicePrincipalId) return <>{t("subjectTypes.SERVICE_ACCOUNT")} · <Typography.Code>{session.sourceServicePrincipalId}</Typography.Code></>;
+  return null;
 }
 
 function OperationList({ operations, compact = false }: { operations: OperationScene[]; compact?: boolean }) {
@@ -113,7 +129,9 @@ function OperationList({ operations, compact = false }: { operations: OperationS
             <dl>
               <div><dt>{t("operationId")}</dt><dd><Typography.Code>{operation.id}</Typography.Code></dd></div>
               <div><dt>{t("progress")}</dt><dd>{format.number(operation.progress / 100, { style: "percent" })}</dd></div>
-              <div><dt>{t("actor")}</dt><dd>{operation.actor}</dd></div>
+              <div><dt>{t("actor")}</dt><dd>{t(`subjectTypes.${operation.actor.type}`)} · <Typography.Code>{operation.actor.id}</Typography.Code></dd></div>
+              <div><dt>{t("credentialAttribution")}</dt><dd><OperationCredential operation={operation} /></dd></div>
+              {operation.actor.roleSession ? <div><dt>{t("sessionSource")}</dt><dd><OperationSessionSource operation={operation} /></dd></div> : null}
               <div><dt>{t("owningProduct")}</dt><dd>{operation.productName}</dd></div>
               <div><dt>{t("target")}</dt><dd>{operation.target}</dd></div>
               <div><dt>{t("started")}</dt><dd>{format.timestamp(operation.startedAt)}</dd></div>
@@ -283,8 +301,10 @@ function Operations({ scene }: { scene: Extract<ConsoleContentScene, { kind: "op
     const normalized = query.trim().toLowerCase();
     return scene.operations.filter((operation) => (
       (status === "all" || operation.state === status) &&
-      (!normalized || [operation.id, operation.action, operation.target, operation.productName, operation.actor, t(`operationStates.${operation.state}`)]
-        .some((value) => value.toLowerCase().includes(normalized)))
+      (!normalized || [operation.id, operation.action, operation.target, operation.productName, operation.actor.id, operation.actor.type,
+        operation.actor.accessKeyId, operation.actor.roleSession?.sessionId, operation.actor.roleSession?.sourceUserId,
+        operation.actor.roleSession?.sourceServicePrincipalId, t(`subjectTypes.${operation.actor.type}`), t(`operationStates.${operation.state}`)]
+        .some((value) => value?.toLowerCase().includes(normalized)))
     ));
   }, [query, scene.operations, status, t]);
 

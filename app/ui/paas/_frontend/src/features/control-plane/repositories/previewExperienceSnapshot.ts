@@ -110,10 +110,10 @@ export const previewExperienceSnapshot: ExperienceSnapshot = {
     }
   ],
   operations: [
-    { id: "op-1042", action: "发布应用", target: "结算 API · v2.8.0", productName: "应用托管", actor: "lin@org-xiak", state: "RUNNING", progress: 68, startedAt: "2026-09-08T09:12:00Z" },
-    { id: "op-1041", action: "运行流水线", target: "storefront-release #286", productName: "研发效能", actor: "chen@org-xiak", state: "SUCCEEDED", progress: 100, startedAt: "2026-09-08T09:03:00Z", finishedAt: "2026-09-08T09:09:18Z" },
-    { id: "op-1040", action: "扩容服务配额", target: "订单主库 · 生产型", productName: "托管数据库", actor: "admin", state: "SUCCEEDED", progress: 100, startedAt: "2026-09-08T08:37:00Z", finishedAt: "2026-09-08T08:38:24Z" },
-    { id: "op-1039", action: "部署基础设施", target: "上海私有云 B 区", productName: "云基础平台", actor: "platform-bot", state: "FAILED", progress: 41, startedAt: "2026-09-08T08:15:00Z", finishedAt: "2026-09-08T08:17:51Z" }
+    { id: "op-1042", action: "发布应用", target: "结算 API · v2.8.0", productName: "应用托管", actor: { type: "USER", id: "principal-lin", accessKeyId: "MOCK-pipeline-key" }, state: "RUNNING", progress: 68, startedAt: "2026-09-08T09:12:00Z" },
+    { id: "op-1041", action: "运行流水线", target: "storefront-release #286", productName: "研发效能", actor: { type: "ROLE", id: "role-release-operator", roleSession: { sessionId: "role-session-release-286", sourceUserId: "principal-chen" } }, state: "SUCCEEDED", progress: 100, startedAt: "2026-09-08T09:03:00Z", finishedAt: "2026-09-08T09:09:18Z" },
+    { id: "op-1040", action: "扩容服务配额", target: "订单主库 · 生产型", productName: "托管数据库", actor: { type: "USER", id: "principal-admin" }, state: "SUCCEEDED", progress: 100, startedAt: "2026-09-08T08:37:00Z", finishedAt: "2026-09-08T08:38:24Z" },
+    { id: "op-1039", action: "部署基础设施", target: "上海私有云 B 区", productName: "云基础平台", actor: { type: "SERVICE_ACCOUNT", id: "service-account-platform-rollout" }, state: "FAILED", progress: 41, startedAt: "2026-09-08T08:15:00Z", finishedAt: "2026-09-08T08:17:51Z" }
   ],
   pipelines: [
     { id: "pipe-storefront", name: "storefront-release", repository: "commerce/storefront", branch: "main", commit: "4c7e2a1", environment: "生产", state: "SUCCEEDED", durationSeconds: 378, triggeredAt: "2026-09-08T09:03:00Z" },

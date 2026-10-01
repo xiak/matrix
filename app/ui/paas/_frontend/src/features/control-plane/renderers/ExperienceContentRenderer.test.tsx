@@ -13,7 +13,7 @@ const operations: OperationScene[] = [
     action: "扩容实例",
     target: "订单主库",
     productName: "云数据库 PostgreSQL",
-    actor: "preview-admin",
+    actor: { type: "USER", id: "principal-preview-admin", accessKeyId: "MOCK-preview-key" },
     state: "RUNNING",
     status: "info",
     progress: 64,
@@ -24,7 +24,7 @@ const operations: OperationScene[] = [
     action: "发布应用",
     target: "edge-worker-01",
     productName: "应用平台",
-    actor: "deploy-bot",
+    actor: { type: "ROLE", id: "role-deployer", roleSession: { sessionId: "role-session-deploy", sourceServicePrincipalId: "deploy-bot" } },
     state: "SUCCEEDED",
     status: "success",
     progress: 100,
@@ -35,7 +35,7 @@ const operations: OperationScene[] = [
     action: "创建备份",
     target: "分析数据库",
     productName: "云数据库 PostgreSQL",
-    actor: "operator-lin",
+    actor: { type: "USER", id: "operator-lin" },
     state: "FAILED",
     status: "danger",
     progress: 31,
@@ -126,5 +126,36 @@ describe("ExperienceContentRenderer operation center", () => {
     expect(within(disclosure as HTMLElement).getByText("操作标识")).toBeTruthy();
     expect(within(disclosure as HTMLElement).getByText("op-scale-primary")).toBeTruthy();
     expect(within(disclosure as HTMLElement).getByText("任务仍在执行；刷新后可查看控制面返回的最新进度。")).toBeTruthy();
+    expect(within(disclosure as HTMLElement).getByText("用户 ·")).toBeTruthy();
+    expect(within(disclosure as HTMLElement).getByText("principal-preview-admin")).toBeTruthy();
+    expect(within(disclosure as HTMLElement).getByText("AccessKey ·")).toBeTruthy();
+    expect(within(disclosure as HTMLElement).getByText("MOCK-preview-key")).toBeTruthy();
+  });
+
+  it("finds an operation by its public credential attribution without exposing a secret", async () => {
+    const user = userEvent.setup();
+    render(<LocaleProvider><ExperienceContentRenderer scene={{ kind: "operations", operations }} /></LocaleProvider>);
+
+    await user.type(screen.getByLabelText("搜索操作"), "MOCK-preview-key");
+
+    expect(screen.getByText("扩容实例")).toBeTruthy();
+    expect(screen.queryByText("发布应用")).toBeNull();
+    expect(screen.queryByText(/secret/i)).toBeNull();
+  });
+
+  it("keeps an assumed role distinct from its session source", async () => {
+    const user = userEvent.setup();
+    render(<LocaleProvider><ExperienceContentRenderer scene={{ kind: "operations", operations }} /></LocaleProvider>);
+
+    const summary = screen.getByLabelText(/发布应用.*已完成.*查看详情/);
+    await user.click(summary);
+    const disclosure = summary.closest("details") as HTMLElement;
+
+    expect(within(disclosure).getByText("角色 ·")).toBeTruthy();
+    expect(within(disclosure).getByText("role-deployer")).toBeTruthy();
+    expect(within(disclosure).getByText("角色会话 ·")).toBeTruthy();
+    expect(within(disclosure).getByText("role-session-deploy")).toBeTruthy();
+    expect(within(disclosure).getByText("服务账号 ·")).toBeTruthy();
+    expect(within(disclosure).getByText("deploy-bot")).toBeTruthy();
   });
 });
