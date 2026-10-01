@@ -937,7 +937,9 @@ describe("CAM-style access workspace", () => {
     expect(screen.getAllByText("状态未知").length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByText("已完成")).toBeNull();
     await user.click(screen.getByRole("button", { name: "查看长期访问密钥" }));
-    expect(await screen.findByRole("table", { name: "选择要管理的用户" })).toBeTruthy();
+    const ownerDirectory = await screen.findByRole("table", { name: "选择要管理的用户" });
+    expect(within(ownerDirectory).getAllByRole("columnheader")).toHaveLength(2);
+    expect(within(ownerDirectory).queryByRole("columnheader", { name: "管理方式" })).toBeNull();
     expect(screen.getByRole("button", { name: "管理 chen 的访问密钥" })).toBeTruthy();
     const userSearch = screen.getByRole("searchbox", { name: "搜索已加载用户" });
     await user.type(userSearch, "lin");

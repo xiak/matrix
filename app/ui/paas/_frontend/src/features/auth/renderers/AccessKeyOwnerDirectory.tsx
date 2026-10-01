@@ -49,11 +49,10 @@ export function AccessKeyOwnerDirectory({ scene, busy = false, loading = false, 
     <TableToolbar labels={toolbarLabels} search={{ label: t("keySearchUsers"), placeholder: t("keySearchUsersPlaceholder"), value: query, onChange: (value) => { setQuery(value); setPage(1); } }}
       status={t("keyUserResults", { shown: filtered.length, loaded: scene.users.length })} />
     {filtered.length ? <Table aria-label={t("keyUserDirectory")} aria-busy={filtering || loading || undefined} mobileLayout="stack" className={styles.ownerDirectoryTable}>
-      <thead><tr><th scope="col">{t("owner")}</th><th scope="col">{t("state")}</th><th scope="col">{t("keyLoadingModel")}</th></tr></thead>
+      <thead><tr><th scope="col">{t("owner")}</th><th scope="col">{t("state")}</th></tr></thead>
       <tbody>{visible.map((user) => <tr key={user.id}>
-        <td data-label={t("owner")}><span className={styles.identity}><UserRound aria-hidden="true" /><span><strong>{user.name}</strong><small>{user.loginName} · {user.id}</small></span></span></td>
+        <td data-label={t("owner")}><button aria-label={t("keyManageNamed", { name: user.loginName })} className={`${styles.identity} ${styles.identityLink}`} disabled={blocked} onClick={() => onOpen(user.id)}><UserRound aria-hidden="true" /><span><strong>{user.name}</strong><small>{user.loginName} · {user.id}</small></span></button></td>
         <td data-label={t("state")}><Badge status={user.enabled ? "success" : "neutral"}>{t(user.enabled ? "enabled" : "disabled")}</Badge></td>
-        <td data-label={t("keyLoadingModel")}><Button aria-label={t("keyManageNamed", { name: user.loginName })} disabled={blocked} onClick={() => onOpen(user.id)} size="small" variant="secondary">{t("keyManage")}</Button></td>
       </tr>)}</tbody>
     </Table> : <EmptyState title={t(query ? "keyNoMatchingUsers" : "keyNoUsers")} description={t(query ? "keyNoMatchingUsersHint" : "keyPrimary")}
       action={query ? <Button onClick={clearSearch} variant="secondary">{toolbarLabels.resetQuery}</Button> : undefined} />}

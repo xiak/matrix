@@ -3910,8 +3910,6 @@
     "keyNoUsers": "No manageable subusers",
     "keyNoMatchingUsers": "No matching users",
     "keyNoMatchingUsersHint": "Adjust the search. It covers only the currently loaded user page.",
-    "keyLoadingModel": "Management",
-    "keyManage": "Manage access keys",
     "keyManageNamed": "Manage access keys for {name}",
     "keyDirectory": "User access keys",
     "keyDirectoryHint": "Only non-secret metadata for {name} is shown. A Secret is never returned again.",

@@ -3910,8 +3910,6 @@
     "keyNoUsers": "没有可管理的子用户",
     "keyNoMatchingUsers": "没有匹配的用户",
     "keyNoMatchingUsersHint": "请调整搜索条件；搜索仅覆盖当前已加载的用户页。",
-    "keyLoadingModel": "管理方式",
-    "keyManage": "管理访问密钥",
     "keyManageNamed": "管理 {name} 的访问密钥",
     "keyDirectory": "用户访问密钥",
     "keyDirectoryHint": "只显示 {name} 的非秘密元数据；Secret 不会再次返回。",
