@@ -2,9 +2,10 @@
 
 import { useId, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Alert, Button, Checkbox, FormField, Input, Radio, SearchInput, Select, TablePagination, TextArea } from "@ui/xiak";
+import { Alert, Button, Checkbox, FormField, Input, Radio, SearchInput, Select, Table, TablePagination, TextArea } from "@ui/xiak";
 import type { AccountPolicyDocument, AuthorizationProfileAction, AuthorizationProfileCondition, AuthorizationProfileDirectory } from "../domain/accounts";
 import { visualActionGroups, visualActionShapeKey, type VisualActionGroup } from "../domain/accountPolicyVisualAuthoring";
+import { AuthorizationActionTable } from "./AuthorizationActionTable";
 import styles from "./AccountPolicyVisualEditor.module.css";
 
 type Statement = AccountPolicyDocument["statements"][number];
@@ -50,6 +51,32 @@ function CatalogSnapshot({ document, directory, review = false }: {
   </section>;
 }
 
+function ActionDeclarationDisclosure({ actions }: { actions: AuthorizationProfileAction[] }) {
+  const t = useTranslations("PolicyVisualAuthoring");
+  const id = useId();
+  const [open, setOpen] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const pages = Math.max(1, Math.ceil(actions.length / pageSize));
+  const currentPage = Math.min(page, pages);
+  const title = t("selectedActionDeclarationsTitle", { count: actions.length });
+  return <section className={styles.actionDeclaration} aria-label={title}>
+    <div className={styles.actionDeclarationHeading}>
+      <div><strong>{title}</strong><p>{t("selectedActionDeclarationsHint")}</p></div>
+      <Button variant="ghost" aria-controls={id} aria-expanded={open} onClick={() => setOpen((value) => !value)}>
+        {t(open ? "hideSelectedActionDeclarations" : "showSelectedActionDeclarations")}
+      </Button>
+    </div>
+    {open ? <div className={styles.actionDeclarationBody} id={id}>
+      <AuthorizationActionTable actions={actions.slice((currentPage - 1) * pageSize, currentPage * pageSize)}
+        label={t("selectedActionDeclarationsTable")} />
+      <Table.Footer><TablePagination page={currentPage} pages={pages} pageSize={pageSize} onPageChange={setPage}
+        onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} labels={{ summary: t("page", { page: currentPage, pages }),
+          pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} /></Table.Footer>
+    </div> : null}
+  </section>;
+}
+
 export function PolicyVisualReview({ document, directory, headingLevel = 3 }: {
   document: AccountPolicyDocument; directory: AuthorizationProfileDirectory; headingLevel?: 3 | 4;
 }) {
@@ -58,6 +85,8 @@ export function PolicyVisualReview({ document, directory, headingLevel = 3 }: {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const statement = document.statements[selectedIndex];
   if (!statement) return null;
+  const actionNames = new Set(statement.actions);
+  const actionDeclarations = directory.items.flatMap((entry) => entry.profile.actions).filter((action) => actionNames.has(action.action));
   const SummaryHeading = headingLevel === 3 ? "h3" : "h4";
   const StatementHeading = headingLevel === 3 ? "h4" : "h5";
   return <section className={styles.reviewSummary} aria-label={t("reviewSummary")}>
@@ -83,6 +112,7 @@ export function PolicyVisualReview({ document, directory, headingLevel = 3 }: {
         {" · "}<code>{condition.values.join(", ")}</code>
       </li>)}</ul> : t("reviewNoConditions")}</dd></div>
     </dl>
+    {actionDeclarations.length ? <ActionDeclarationDisclosure actions={actionDeclarations} /> : null}
     <p>{t("reviewSummaryHint")}</p>
   </section>;
 }
@@ -176,6 +206,7 @@ function StatementFields({ statement, group, onChange }: {
           if (checked) next.add(action.action); else next.delete(action.action);
           onChange({ ...statement, actions: group.actions.filter((candidate) => next.has(candidate.action)).map((candidate) => candidate.action) });
         }} />
+      <ActionDeclarationDisclosure actions={selected} />
     </section>
     <section className={styles.groupSection} aria-label={t("resources")}>
       <div className={styles.sectionHeading}><div><h4>{t("resources")}</h4><p>{t("resourceHint", { kind: group.resourceKind })}</p></div></div>

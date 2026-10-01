@@ -1478,6 +1478,17 @@ describe("account access", () => {
     await user.click(action);
     expect(within(screen.getByRole("region", { name: "当前声明依赖的产品目录" }))
       .getByText("paas @ r1", { selector: "code" })).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "已选 Action 的产品声明" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "查看声明详情" }));
+    const declaration = screen.getByRole("region", { name: "已选 Action 的产品声明" });
+    expect(within(declaration).getByText("paas.application.read", { selector: "code" })).toBeTruthy();
+    expect(within(declaration).getByText("租户")).toBeTruthy();
+    expect(within(declaration).getByText("实例（支持已声明前缀）")).toBeTruthy();
+    expect(within(declaration).getByText("用户")).toBeTruthy();
+    expect(within(declaration).getByText("iam.account-id", { selector: "code" })).toBeTruthy();
+    expect(screen.getByText(/不是当前用户的授权结果，也不是策略编译结果/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "收起声明详情" }));
+    expect(screen.queryByRole("region", { name: "已选 Action 的产品声明" })).toBeNull();
     expect(screen.getAllByText("paas.application.read", { selector: "code" }).length).toBeGreaterThan(0);
     await user.click(screen.getByRole("button", { name: "审阅策略" }));
     expect(screen.getByText(/可视化声明还有未完成/)).toBeTruthy();
@@ -1489,6 +1500,9 @@ describe("account access", () => {
     const summary = screen.getByRole("region", { name: "声明摘要" });
     expect(within(summary).getByRole("region", { name: "待 IAM 校验的产品声明" })).toBeTruthy();
     expect(within(summary).getByText("paas.application.read", { selector: "code" })).toBeTruthy();
+    expect(within(summary).queryByRole("region", { name: "已选 Action 的产品声明" })).toBeNull();
+    await user.click(within(summary).getByRole("button", { name: "查看声明详情" }));
+    expect(within(summary).getByRole("region", { name: "已选 Action 的产品声明" })).toBeTruthy();
     expect(within(summary).getByText("app-prod", { selector: "code" })).toBeTruthy();
     expect(within(summary).getByText("当前账号 ID", { exact: false })).toBeTruthy();
     expect(within(summary).getByText("tenant-a", { selector: "code" })).toBeTruthy();

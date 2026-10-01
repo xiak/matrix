@@ -35,6 +35,12 @@
 .actionList code { min-width: 0; overflow-wrap: anywhere; font-family: var(--xiak-font-mono); font-size: var(--xiak-font-size-small); }
 .actionChoice { display: grid; min-width: 0; gap: 2px; }
 .actionChoice small { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-caption); }
+.actionDeclaration { display: grid; min-width: 0; gap: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-small); padding: var(--xiak-spacing-default); background: var(--xiak-color-bg-panel); }
+.actionDeclarationHeading { display: flex; min-width: 0; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: var(--xiak-spacing-default); }
+.actionDeclarationHeading > div { flex: 1 1 360px; min-width: 0; }
+.actionDeclarationHeading strong { color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-small); font-weight: var(--xiak-font-weight-semibold); }
+.actionDeclarationHeading p { margin: var(--xiak-spacing-narrow) 0 0; color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: 1.55; overflow-wrap: anywhere; }
+.actionDeclarationBody { display: grid; min-width: 0; gap: var(--xiak-spacing-default); border-top: var(--xiak-border-subtle); padding-top: var(--xiak-spacing-default); }
 .row { display: grid; min-width: 0; grid-template-columns: minmax(180px, 1fr) minmax(220px, 1.4fr) auto; align-items: end; gap: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-small); padding: var(--xiak-spacing-default); }
 .row > :first-child { min-width: 0; }
 .removal { display: grid; gap: var(--xiak-spacing-default); }
@@ -46,5 +52,5 @@
 }
 @media (max-width: 560px) {
   .statementToolbar, .identityFields, .row { grid-template-columns: minmax(0, 1fr); }
-  .statementToolbar > button, .row > button { justify-self: start; }
+  .statementToolbar > button, .row > button, .actionDeclarationHeading > button { justify-self: start; }
 }
