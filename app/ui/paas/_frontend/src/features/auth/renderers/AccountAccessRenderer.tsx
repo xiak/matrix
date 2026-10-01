@@ -216,7 +216,7 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
       view === "roles" && !workspace && access.roles ? <AccountLiveRoles key={`${access.roles.accountId}:${entityId ?? "roles"}`} client={access.roles} serviceRoleTemplates={access.serviceRoleTemplates} serviceLinkedRoles={access.serviceLinkedRoles} entityId={entityId} onCreate={() => onNavigate("create-role")} onOpen={onNavigate} revokeIntent={access.roleSessionRevokeIntent} onRevokeIntentChange={access.changeRoleSessionRevokeIntent} /> :
       view === "create-role" && !workspace && access.roles ? <LiveRoleCreationWizard client={access.roles} scene={scene} onBack={() => onNavigate("roles")} onDone={(id) => onNavigate("roles", id)} /> :
       view === "keys" && !workspace && access.accessKeys ? <LiveAccessCredentials authorizationProfiles={access.authorizationProfiles} client={access.accessKeys} scene={scene} createIntent={access.accessKeyCreateIntent}
-        userDirectory={{ busy: access.busy, loading: access.loading, readPage: access.usersPage }} /> :
+        userDirectory={{ busy: access.busy, loading: access.loading, readPage: access.usersPage }} onInspectPermissions={(ownerId) => onNavigate("users", ownerId)} /> :
       !workspace ? <EmptyState title={w("notConnected")} description={w("notConnectedHint")} /> :
       view === "create-policy" ? <PolicyAuthoringWizard method={policyCreationMethod(policyMethod)} workspace={workspace} scene={scene} doneLabel={w("finishBack")} onBack={() => onNavigate("policies")} onDone={() => onNavigate("policies")} /> :
       view === "create-role" ? <RoleCreationWizard workspace={workspace} scene={scene} onBack={() => onNavigate("roles")} onDone={(id) => onNavigate("roles", id)} /> :
@@ -225,7 +225,7 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
       view === "policy-coverage" ? <PolicyCoveragePreview key={entityId ?? "policy-coverage"} workspace={workspace} scene={scene} entityId={entityId} onOpen={onNavigate} /> :
       view === "providers" ? <Tabs.Root defaultValue="providers"><Tabs.List aria-label={w("providers")}><Tabs.Trigger value="providers">{w("provider")}</Tabs.Trigger><Tabs.Trigger value="identities">{w("federatedIdentities")}</Tabs.Trigger></Tabs.List><Tabs.Content value="providers"><AccessProviders workspace={workspace} /></Tabs.Content><Tabs.Content value="identities"><AccessFederations workspace={workspace} /></Tabs.Content></Tabs.Root> :
       view === "federations" ? <AccessEnterpriseAccounts workspace={workspace} onUsers={() => onNavigate("users")} /> :
-      view === "keys" ? <AccessCredentials workspace={workspace} scene={scene} /> :
+      view === "keys" ? <AccessCredentials workspace={workspace} scene={scene} onInspectPermissions={(ownerId) => onNavigate("policy-coverage", ownerId)} /> :
       <AccessUserSso workspace={workspace} /> : null}
   </section>;
 }

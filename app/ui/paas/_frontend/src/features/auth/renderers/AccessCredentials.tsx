@@ -196,7 +196,11 @@ function ProgrammaticRequestBoundaryPreview({ actions }: { actions: readonly str
   </details>;
 }
 
-export function ProgrammaticAccessGuide({ owner, client }: { owner: AccountUserScene; client: AuthorizationProfileClient | null }) {
+export function ProgrammaticAccessGuide({ owner, client, onInspectPermissions }: {
+  owner: AccountUserScene;
+  client: AuthorizationProfileClient | null;
+  onInspectPermissions?(ownerId: string): void;
+}) {
   const t = useTranslations("IamWorkspace");
   const [loading, setLoading] = useState(false);
   const [directory, setDirectory] = useState<AuthorizationProfileDirectory | null>(null);
@@ -251,6 +255,10 @@ export function ProgrammaticAccessGuide({ owner, client }: { owner: AccountUserS
         <Table.Footer note={t("keyProgrammaticCount", { count: accepted.length })}><TablePagination page={currentPage} pages={pages} pageSize={pageSize}
           onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
           labels={{ summary: t("page", { page: currentPage, pages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} /></Table.Footer>
+        {onInspectPermissions ? <div className={styles.programmaticActions}>
+          <Button onClick={() => onInspectPermissions(owner.id)} size="small" variant="secondary">{t("keyProgrammaticInspectPermissions")}</Button>
+          <Typography.Text tone="muted">{t("keyProgrammaticInspectPermissionsHint")}</Typography.Text>
+        </div> : null}
         {client?.preview ? <ProgrammaticRequestBoundaryPreview actions={accepted.map((entry) => entry.action)} /> : null}
       </> : null}
       {status !== "idle" && status !== "ready" && !loading ? <Alert status="warning">{t(`keyProgrammaticStatus.${status}`)}</Alert> : null}
@@ -260,7 +268,12 @@ export function ProgrammaticAccessGuide({ owner, client }: { owner: AccountUserS
   </details>;
 }
 
-export function AccessCredentials({ workspace, scene, embedded = false }: { workspace: AccessWorkspace; scene: AccountAccessScene; embedded?: boolean }) {
+export function AccessCredentials({ workspace, scene, embedded = false, onInspectPermissions }: {
+  workspace: AccessWorkspace;
+  scene: AccountAccessScene;
+  embedded?: boolean;
+  onInspectPermissions?(ownerId: string): void;
+}) {
   const t = useTranslations("IamWorkspace");
   const collection = useTranslations("Collection");
   const access = useAccountAccess();
@@ -312,7 +325,7 @@ export function AccessCredentials({ workspace, scene, embedded = false }: { work
       <dl className={styles.keyFacts}><div><dt>{t("keyId")}</dt><dd><AccountIdentifier label={t("keyId")} value={selected.id} /></dd></div><div><dt>{t("owner")}</dt><dd><strong>{owner.name}</strong><span>{owner.loginName} · {owner.id}</span></dd></div><div><dt>{t("state")}</dt><dd><Badge status={selected.status === "ENABLED" ? "success" : "neutral"}>{t(selected.status === "ENABLED" ? "enabled" : "disabled")}</Badge></dd></div><div><dt>{t("created")}</dt><dd><WorkspaceTime value={selected.createdAt} /></dd></div><div><dt>{t("keyRevision")}</dt><dd>v{selected.resourceVersion}</dd></div></dl>
       <Alert status="info">{t("keyNoUsageEvidence")}</Alert>
     </Card.Body></Card>
-    <ProgrammaticAccessGuide client={access.authorizationProfiles} owner={owner} />
+    <ProgrammaticAccessGuide client={access.authorizationProfiles} owner={owner} onInspectPermissions={onInspectPermissions} />
     <RotationGuide />
   </WorkspaceDetail>;
 
@@ -324,7 +337,7 @@ export function AccessCredentials({ workspace, scene, embedded = false }: { work
         <Card.Header className={styles.directoryHeader}><div><Typography.Title as="h2" level={3}>{t("keyDirectory")}</Typography.Title><Typography.Text tone="muted">{t("keyDirectoryHint", { name: owner.loginName })}</Typography.Text></div><Badge status={ownerKeys.length >= 2 ? "warning" : "neutral"}>{t("keyQuota", { count: ownerKeys.length })}</Badge></Card.Header>
         <Card.Body className={styles.tableBody}>{ownerKeys.length ? <Table aria-label={t("keys")} mobileLayout="stack"><thead><tr><th scope="col">{t("keyId")}</th><th scope="col">{t("state")}</th><th scope="col">{t("created")}</th><th scope="col">{t("keyRevision")}</th></tr></thead><tbody>{ownerKeys.map((key) => <tr key={key.id}><td data-label={t("keyId")}><button className={styles.keyLink} onClick={() => setSelectedId(key.id)}>{key.id}</button></td><td data-label={t("state")}><Badge status={key.status === "ENABLED" ? "success" : "neutral"}>{t(key.status === "ENABLED" ? "enabled" : "disabled")}</Badge></td><td data-label={t("created")}><WorkspaceTime value={key.createdAt} /></td><td data-label={t("keyRevision")}>v{key.resourceVersion}</td></tr>)}</tbody></Table> : <div className={styles.emptyKeys}><KeyRound aria-hidden="true" /><strong>{t("keyEmpty")}</strong><span>{t("keyEmptyHint")}</span></div>}</Card.Body>
       </Card>
-      <ProgrammaticAccessGuide client={access.authorizationProfiles} owner={owner} />
+      <ProgrammaticAccessGuide client={access.authorizationProfiles} owner={owner} onInspectPermissions={onInspectPermissions} />
       <RotationGuide />
     </>}
   </div>;

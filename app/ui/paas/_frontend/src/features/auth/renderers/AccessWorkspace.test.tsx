@@ -2891,6 +2891,8 @@ describe("CAM-style access workspace", () => {
     expect(boundary.getAllByText("权限声明修订 8")).toHaveLength(5);
     expect(screen.queryByText("paas.application.read")).toBeNull();
     expect(screen.getByText(/只表示产品声明接受这种凭据载体，不表示当前用户已获授权/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "核对该用户的权限来源" })).toBeTruthy();
+    expect(screen.getByText(/下一步只检查策略与用户组等配置来源/)).toBeTruthy();
     const requestBoundary = screen.getByText("签名创建请求的结果边界").closest("details")!;
     expect(requestBoundary.open).toBe(false);
     await user.click(screen.getByText("签名创建请求的结果边界").closest("summary")!);
@@ -2903,6 +2905,8 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByText("Operation")).toBeTruthy();
     expect(screen.getByText(/63ab867d/)).toBeTruthy();
     expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "核对该用户的权限来源" }));
+    expect(screen.getByLabelText("Entity destination").textContent).toBe("principal-lin");
   });
   it("locks an uncertain access-key creation to its original request and never reveals the lost secret", async () => {
     const { user, extension } = await open("keys");

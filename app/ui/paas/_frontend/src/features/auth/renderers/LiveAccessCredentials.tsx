@@ -131,13 +131,14 @@ function LiveKeyWorkflow({ flow, owner, directory, client, retryingOriginal, onC
   </Card>;
 }
 
-export function LiveAccessCredentials({ client, scene, createIntent = null, scopedOwner, userDirectory, authorizationProfiles = null }: {
+export function LiveAccessCredentials({ client, scene, createIntent = null, scopedOwner, userDirectory, authorizationProfiles = null, onInspectPermissions }: {
   client: AccessKeyClient;
   scene: AccountAccessScene;
   createIntent?: AccessKeyCreateIntent | null;
   scopedOwner?: AccountUserScene;
   userDirectory?: { busy: boolean; loading: boolean; readPage(after: string): void };
   authorizationProfiles?: AuthorizationProfileClient | null;
+  onInspectPermissions?(ownerId: string): void;
 }) {
   const t = useTranslations("IamWorkspace");
   const restrictions = useTranslations("AccountAccess.restrictions");
@@ -231,12 +232,12 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, scop
         <Alert status="info">{t("keyNoUsageEvidence")}</Alert>
         <div className={styles.actions}><Button onClick={() => setSelected(null)} variant="ghost">{t("back")}</Button><Button disabled={!capability(selected, "iam.access-key.set-status")?.available} onClick={() => setFlow({ kind: "status", access: selected, status: selected.key.status === "ENABLED" ? "DISABLED" : "ENABLED", requestId: requestToken("ui-access-key-status-") })} variant="secondary">{t(selected.key.status === "ENABLED" ? "disable" : "enable")}</Button><Button disabled={selected.key.status !== "DISABLED" || !capability(selected, "iam.access-key.delete")?.available} onClick={() => setFlow({ kind: "delete", access: selected, requestId: requestToken("ui-access-key-delete-") })} variant="danger">{t("delete")}</Button></div>
       </Card.Body></Card>
-      <ProgrammaticAccessGuide client={authorizationProfiles} owner={owner} />
+      <ProgrammaticAccessGuide client={authorizationProfiles} owner={owner} onInspectPermissions={onInspectPermissions} />
       <RotationGuide />
     </> : null}
     {!flow && !selected && directory ? <>
       <Card><Card.Header className={styles.directoryHeader}><div><Typography.Title as="h2" level={3}>{t("keyDirectory")}</Typography.Title><Typography.Text tone="muted">{t("keyDirectoryHint", { name: owner.loginName })}</Typography.Text></div><Badge status={directory.items.length >= 2 ? "warning" : "neutral"}>{t("keyQuota", { count: directory.items.length })}</Badge></Card.Header><Card.Body className={styles.tableBody}>{directory.items.length ? <Table aria-label={t("keys")} mobileLayout="stack"><thead><tr><th scope="col">{t("keyId")}</th><th scope="col">{t("state")}</th><th scope="col">{t("created")}</th><th scope="col">{t("keyRevision")}</th></tr></thead><tbody>{directory.items.map((item) => <tr key={item.key.id}><td data-label={t("keyId")}><button className={styles.keyLink} onClick={() => void openKey(item)}>{item.key.id}</button></td><td data-label={t("state")}><Badge status={item.key.status === "ENABLED" ? "success" : "neutral"}>{t(item.key.status === "ENABLED" ? "enabled" : "disabled")}</Badge></td><td data-label={t("created")}><WorkspaceTime value={item.key.createdAt} /></td><td data-label={t("keyRevision")}>v{item.key.resourceVersion}</td></tr>)}</tbody></Table> : <div className={styles.emptyKeys}><KeyRound aria-hidden="true" /><strong>{t("keyEmpty")}</strong><span>{t("keyEmptyHint")}</span></div>}</Card.Body></Card>
-      <ProgrammaticAccessGuide client={authorizationProfiles} owner={owner} />
+      <ProgrammaticAccessGuide client={authorizationProfiles} owner={owner} onInspectPermissions={onInspectPermissions} />
       <RotationGuide />
     </> : null}
   </section>;

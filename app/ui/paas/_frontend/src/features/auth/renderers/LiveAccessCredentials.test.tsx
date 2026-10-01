@@ -91,7 +91,8 @@ describe("LiveAccessCredentials", () => {
       ] }, contentDigest: `sha256:${"a".repeat(64)}` }]
     } });
     const authorizationProfiles: AuthorizationProfileClient = { accountId: scene.accountId, preview: false, load };
-    render(<LocaleProvider><LiveAccessCredentials authorizationProfiles={authorizationProfiles} client={api} scene={scene} /></LocaleProvider>);
+    const onInspectPermissions = vi.fn();
+    render(<LocaleProvider><LiveAccessCredentials authorizationProfiles={authorizationProfiles} client={api} scene={scene} onInspectPermissions={onInspectPermissions} /></LocaleProvider>);
 
     await user.click(screen.getByRole("button", { name: "管理 alex 的访问密钥" }));
     await screen.findByRole("button", { name: key.id });
@@ -102,6 +103,8 @@ describe("LiveAccessCredentials", () => {
     expect(screen.queryByText("创建 Application 的请求结果")).toBeNull();
     expect(load).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "核对该用户的权限来源" }));
+    expect(onInspectPermissions).toHaveBeenCalledWith(owner.id);
   });
 
   it("reveals an applied Secret once and clears it after acknowledgement", async () => {

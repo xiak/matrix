@@ -3921,6 +3921,8 @@
     "keyProgrammaticProduct": "Product declaration",
     "keyProgrammaticRevision": "Authorization declaration revision {revision}",
     "keyProgrammaticCount": "{count} Actions in the current catalog explicitly accept access keys",
+    "keyProgrammaticInspectPermissions": "Inspect this user's permission sources",
+    "keyProgrammaticInspectPermissionsHint": "The next view checks policy and group configuration only. A real request must still reevaluate the Action, resource, conditions and explicit denies.",
     "keyProgrammaticRetry": "Reload declarations",
     "keyProgrammaticSecretBoundary": "The browser does not retain the Secret, create signatures or send test business requests. Use the Secret only from protected workload credential storage.",
     "keyRequestPreviewTitle": "Signed create-request outcome boundary",

@@ -3921,6 +3921,8 @@
     "keyProgrammaticProduct": "产品声明",
     "keyProgrammaticRevision": "权限声明修订 {revision}",
     "keyProgrammaticCount": "当前目录中共 {count} 个明确接受访问密钥的 Action",
+    "keyProgrammaticInspectPermissions": "核对该用户的权限来源",
+    "keyProgrammaticInspectPermissionsHint": "下一步只检查策略与用户组等配置来源；真实请求仍须重新判定 Action、资源、条件和显式拒绝。",
     "keyProgrammaticRetry": "重新读取声明",
     "keyProgrammaticSecretBoundary": "浏览器不会保存 Secret、生成签名或发送测试业务请求。请在受保护的工作负载凭据存储中使用 Secret。",
     "keyRequestPreviewTitle": "签名创建请求的结果边界",
