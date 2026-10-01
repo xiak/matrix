@@ -6,8 +6,8 @@
 - Updated: 2026-10-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `6f4ac7c2`
-- Pushed documentation milestone: `6f4ac7c2`
+- Pushed source/embed milestone: `d141f6e2`
+- Pushed documentation milestone: `68fdaa25`
 
 ## Authoritative route
 
@@ -94,15 +94,19 @@ snapshot used for that edit. Edit and review now show the selected Actions'
 product/Profile revision while making clear that this is not an authorization
 result: the browser submits no Profile, digest, compilation or resolved Action
 set, and only the server-returned `PolicyVersion.compilation` is authoritative
-after publication. Fixed IAM source `710c1557f48611179715671cac76ff4dfe447c1b`
-owns trusted request context; cumulative source
-`49aaf21657ef71cb83b1b9b51d835f3600f6ce9d` confirms the publication boundary.
-Resource-tag ABAC and tag mutation remain disabled because their contract is
-not frozen. Source/embed/docs `6f4ac7c2` passed 57 frontend files / 913 tests,
-static normalization, type/lint/architecture, 228 theme contrast pairs,
-42-route export, 233-file embed equality and repository Go test/vet. Desktop
-and `390 × 844` DEV flows displayed catalog provenance in edit and review
-without a Dialog or horizontal layout failure. FEAT-007 owns the UX evidence
+after publication. Each selected Action now has one default-collapsed,
+content-area declaration inspector in edit and review. It reuses the catalog
+table for scope, resource/target shape, subject/credential admission and
+trusted condition sources, mounts only the current ten-row page on demand, and
+explicitly remains neither a user grant nor a compilation result. Fixed IAM
+source `710c1557f48611179715671cac76ff4dfe447c1b` owns trusted request context;
+cumulative source `49aaf21657ef71cb83b1b9b51d835f3600f6ce9d` confirms the
+catalog/publication boundary. Resource-tag ABAC and tag mutation remain disabled
+because their contract is not frozen. Source/embed `d141f6e2` and FEAT evidence
+`68fdaa25` passed 57 frontend files / 913 tests, three normalization cases,
+type/lint/architecture, 228 theme contrast pairs, 42-route export, 233-file
+embed equality and repository Go test/vet. Desktop edit/review and `390 × 844`
+review had no Dialog or horizontal layout failure. FEAT-007 owns the UX evidence
 and FEAT-IAM-010 owns the backend semantics and exclusions.
 
 Audit is now an independent console product rather than an IAM submenu. The
