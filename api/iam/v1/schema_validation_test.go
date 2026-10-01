@@ -1271,14 +1271,46 @@ func TestAccessKeySigningSchemasMatchExplicitTransportAndSanitizedResults(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	loginResult.Decision.Subject.AccessKeyID = "key-one"
-	unsupportedKeyWire, err := json.Marshal(loginResult)
+	unsupportedRequest, err := NewAuthorizationRequest(ActionPaaSConfigurationRead,
+		ResourceReference{Kind: ResourceConfiguration, ID: "configuration-one"},
+		AuthorizationResourceInstance, "", "request-unsupported-key", "correlation-unsupported-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	unsupportedKeyResult := result
+	unsupportedKeyResult.Decision.Allowed, unsupportedKeyResult.Decision.Reason = true, DecisionAllowed
+	unsupportedKeyResult.Decision.TenantID = "account-one"
+	unsupportedKeyResult.Decision.Subject = &Subject{Type: SubjectUser, ID: "user-one", AccessKeyID: "key-one"}
+	unsupportedKeyResult.Decision.Action = unsupportedRequest.Action
+	unsupportedKeyResult.Decision.Resource = unsupportedRequest.Resource
+	unsupportedKeyResult.Decision.Profile = &unsupportedRequest.Profile
+	unsupportedKeyResult.Decision.ResourceMode = unsupportedRequest.ResourceMode
+	unsupportedKeyResult.Decision.RequestID = unsupportedRequest.RequestID
+	unsupportedKeyResult.Decision.CorrelationID = unsupportedRequest.CorrelationID
+	unsupportedKeyWire, err := json.Marshal(unsupportedKeyResult)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolveRequest := ResolveAccessKeySubjectRequest{Profile: request.Profile, SignedRequest: input.SignedRequest}
+	resolveEncoded, err := EncodeResolveAccessKeySubjectRequest(resolveRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(resolveEncoded)
+	resolveResult := AccessKeySubjectContext{
+		APIVersion: APIVersion, Kind: "AccessKeySubjectContext", TenantID: "account-one",
+		Subject: Subject{Type: SubjectUser, ID: "user-one", AccessKeyID: input.SignedRequest.Parameters.AccessKeyID},
+		Profile: request.Profile, SignedRequestDigest: digest,
+	}
+	resolveResponse, err := json.Marshal(resolveResult)
 	if err != nil {
 		t.Fatal(err)
 	}
 	schemas := map[string]*jsonschema.Schema{
-		"AccessKeyAuthorizationRequest": compileIAMOpenAPISchema(t, api, "AccessKeyAuthorizationRequest"),
-		"AccessKeyAuthorization":        compileIAMOpenAPISchema(t, api, "AccessKeyAuthorization"),
+		"AccessKeyAuthorizationRequest":  compileIAMOpenAPISchema(t, api, "AccessKeyAuthorizationRequest"),
+		"AccessKeyAuthorization":         compileIAMOpenAPISchema(t, api, "AccessKeyAuthorization"),
+		"ResolveAccessKeySubjectRequest": compileIAMOpenAPISchema(t, api, "ResolveAccessKeySubjectRequest"),
+		"AccessKeySubjectContext":        compileIAMOpenAPISchema(t, api, "AccessKeySubjectContext"),
 	}
 	for _, sample := range []struct {
 		name, kind, wire   string
@@ -1310,6 +1342,12 @@ func TestAccessKeySigningSchemasMatchExplicitTransportAndSanitizedResults(t *tes
 		{"private-nonce", "AccessKeyAuthorization", replace(string(response), `"decision":`, `"nonce":"private","decision":`), false, false},
 		{"private-key-evidence", "AccessKeyAuthorization", replace(string(response), `"decision":`, `"keyEvidence":{},"decision":`), false, false},
 		{"wrong-content-digest", "AccessKeyAuthorization", replace(string(response), `"signedRequestDigest":"sha256:`, `"signedRequestDigest":"sha512:`), false, false},
+		{"resolve-explicit-wire", "ResolveAccessKeySubjectRequest", string(resolveEncoded), true, true},
+		{"resolve-account-selector", "ResolveAccessKeySubjectRequest", replace(string(resolveEncoded), `"profile":`, `"accountId":"other","profile":`), false, false},
+		{"resolve-action-selector", "ResolveAccessKeySubjectRequest", replace(string(resolveEncoded), `"profile":`, `"action":"paas.application.read","profile":`), false, false},
+		{"resolved-subject", "AccessKeySubjectContext", string(resolveResponse), true, true},
+		{"resolved-login-subject", "AccessKeySubjectContext", replace(string(resolveResponse), `,"accessKeyId":"access-key-a"`, ``), false, false},
+		{"resolved-role-subject", "AccessKeySubjectContext", replace(string(resolveResponse), `"type":"USER"`, `"type":"ROLE"`), false, false},
 	} {
 		t.Run(sample.name, func(t *testing.T) {
 			value, err := jsonschema.UnmarshalJSON(strings.NewReader(sample.wire))
@@ -1319,10 +1357,19 @@ func TestAccessKeySigningSchemasMatchExplicitTransportAndSanitizedResults(t *tes
 			if err := schemas[sample.kind].Validate(value); (err == nil) != sample.schemaValid {
 				t.Fatal("schema changed the explicit signing boundary", err)
 			}
-			if sample.kind == "AccessKeyAuthorizationRequest" {
+			switch sample.kind {
+			case "AccessKeyAuthorizationRequest":
 				_, err = DecodeAccessKeyAuthorizationRequest(strings.NewReader(sample.wire))
-			} else {
+			case "AccessKeyAuthorization":
 				_, err = DecodeAccessKeyAuthorization(strings.NewReader(sample.wire))
+			case "ResolveAccessKeySubjectRequest":
+				_, err = DecodeResolveAccessKeySubjectRequest(strings.NewReader(sample.wire))
+			case "AccessKeySubjectContext":
+				var value AccessKeySubjectContext
+				err = DecodeRequest(strings.NewReader(sample.wire), &value)
+				if err == nil {
+					err = ValidateAccessKeySubjectContext(value)
+				}
 			}
 			if (err == nil) != sample.valid {
 				t.Fatal("strict signing codec disagrees with the intended boundary", err)

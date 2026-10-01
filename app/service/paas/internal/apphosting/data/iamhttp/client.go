@@ -170,6 +170,58 @@ func (client *Client) AuthorizeAccessKey(
 	return authorization, nil
 }
 
+func (client *Client) ResolveAccessKeySubject(
+	ctx context.Context,
+	signed iamv1.AccessKeySignedRequest,
+) (port.AuthorizationSubjectContext, error) {
+	if client == nil || client.http == nil {
+		return port.AuthorizationSubjectContext{}, port.ErrAuthorizationUnavailable
+	}
+	if ctx == nil || iamv1.ValidateAccessKeySignedRequest(signed) != nil || signed.Parameters.Audience != iamv1.ProductPaaS {
+		return port.AuthorizationSubjectContext{}, port.ErrUnauthenticated
+	}
+	profile, known := iamv1.LookupAuthorizationProfile(iamv1.ProductPaaS)
+	if !known || profile.CallingService != iamv1.ServicePaaS {
+		return port.AuthorizationSubjectContext{}, port.ErrAuthorizationUnavailable
+	}
+	_, digest, err := iamv1.CanonicalizeAuthorizationProfile(profile)
+	if err != nil {
+		return port.AuthorizationSubjectContext{}, port.ErrAuthorizationUnavailable
+	}
+	request := iamv1.ResolveAccessKeySubjectRequest{
+		Profile:       iamv1.AuthorizationProfileReference{Product: profile.Product, Revision: profile.Revision, ContentDigest: digest},
+		SignedRequest: signed,
+	}
+	body, err := iamv1.EncodeResolveAccessKeySubjectRequest(request)
+	if err != nil {
+		return port.AuthorizationSubjectContext{}, port.ErrUnauthenticated
+	}
+	defer clear(body)
+	response, err := client.http.Do(ctx, http.MethodPost, "/v1/internal/access-key-subject:resolve",
+		bytes.NewReader(body), "application/json", client.serviceCredential, iamv1.Secret{})
+	if err != nil {
+		return port.AuthorizationSubjectContext{}, port.ErrAuthorizationUnavailable
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return port.AuthorizationSubjectContext{}, authorizationStatusError(response.StatusCode)
+	}
+	var resolved iamv1.AccessKeySubjectContext
+	if !authorityhttp.ResponseIsJSON(response) || iamv1.DecodeRequest(response.Body, &resolved) != nil ||
+		iamv1.CheckAccessKeySubjectContextForRequest(resolved, request) != nil {
+		return port.AuthorizationSubjectContext{}, port.ErrAuthorizationUnavailable
+	}
+	subject, err := toPaaSSubject(resolved.Subject)
+	if err != nil {
+		return port.AuthorizationSubjectContext{}, port.ErrAuthorizationUnavailable
+	}
+	result := port.AuthorizationSubjectContext{TenantID: paasv1.TenantID(resolved.TenantID), Subject: subject, Profile: resolved.Profile}
+	if port.ValidateAuthorizationSubjectContext(result) != nil || result.Subject.AccessKeyID == "" {
+		return port.AuthorizationSubjectContext{}, port.ErrAuthorizationUnavailable
+	}
+	return result, nil
+}
+
 func (client *Client) ResolveSubject(
 	ctx context.Context,
 	request port.SubjectResolutionRequest,

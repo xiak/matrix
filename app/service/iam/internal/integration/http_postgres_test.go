@@ -17139,8 +17139,9 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 	var deletedKeyPacket []byte
 	t.Cleanup(func() { clear(deletedKeyPacket) })
 	t.Run("signed-request-atomic-denial", func(t *testing.T) {
-		// Current product PEP declarations have not enabled ACCESS_KEY yet.
-		// Real MAC verification must still commit Deny+nonce, not a fake Session.
+		// Application read declares ACCESS_KEY, but this User has no PaaS grant.
+		// Subject resolution must stay read-only; only final authorization may
+		// commit a Deny and consume the nonce.
 		sign := func(key iamv1.CreateAccessKeyResponse, requestID string, offset time.Duration) iamv1.AccessKeyAuthorizationRequest {
 			t.Helper()
 			request, err := iamv1.NewAuthorizationRequest(iamv1.ActionPaaSApplicationRead,
@@ -17187,18 +17188,29 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 			}
 			return encoded
 		}
+		encodeResolution := func(request iamv1.AccessKeyAuthorizationRequest) []byte {
+			t.Helper()
+			encoded, err := iamv1.EncodeResolveAccessKeySubjectRequest(iamv1.ResolveAccessKeySubjectRequest{
+				Profile: request.Authorization.Profile, SignedRequest: request.SignedRequest,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			return encoded
+		}
 		deletedKeyPacket = encode(sign(first, "key-signed-deleted-material", 0))
-		counts := func() [3]int {
+		countsFor := func(key iamv1.AccessKeyID) [3]int {
 			t.Helper()
 			var result [3]int
 			if err := database.QueryRow(ctx, `SELECT
 			 (SELECT count(*) FROM iam.access_key_authorization_evidence WHERE access_key_id=$1),
 			 (SELECT count(*) FROM iam.authorization_decisions WHERE access_key_id=$1),
-			 (SELECT count(*) FROM iam.audit_outbox WHERE event_document#>>'{actor,accessKeyId}'=$1)`, first.Key.ID).Scan(&result[0], &result[1], &result[2]); err != nil {
+			 (SELECT count(*) FROM iam.audit_outbox WHERE event_document#>>'{actor,accessKeyId}'=$1)`, key).Scan(&result[0], &result[1], &result[2]); err != nil {
 				t.Fatal(err)
 			}
 			return result
 		}
+		counts := func() [3]int { return countsFor(first.Key.ID) }
 		assertDenied := func(endpoint http.Handler, request iamv1.AccessKeyAuthorizationRequest) iamv1.AccessKeyAuthorization {
 			t.Helper()
 			encoded := encode(request)
@@ -17226,6 +17238,30 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 			return result
 		}
 		initial := counts()
+		resolvedRequest := sign(first, "key-signed-resolve-before-deny", 0)
+		for _, endpoint := range []http.Handler{handler, second} {
+			encoded := encodeResolution(resolvedRequest)
+			response := performIAMRequest(endpoint, http.MethodPost, "/v1/internal/access-key-subject:resolve", paasCredential, encoded)
+			clear(encoded)
+			var resolved iamv1.AccessKeySubjectContext
+			if response.Code != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body.Bytes()), &resolved) != nil ||
+				iamv1.CheckAccessKeySubjectContextForRequest(resolved, iamv1.ResolveAccessKeySubjectRequest{
+					Profile: resolvedRequest.Authorization.Profile, SignedRequest: resolvedRequest.SignedRequest,
+				}) != nil || resolved.TenantID != user.AccountID || resolved.Subject.ID != string(user.ID) ||
+				counts() != initial {
+				t.Fatal("subject resolution mutated authority or changed its exact binding")
+			}
+		}
+		assertDenied(handler, resolvedRequest)
+		encodedResolved := encode(resolvedRequest)
+		if response := performIAMRequest(second, http.MethodPost, "/v1/authorize:access-key", paasCredential, encodedResolved); response.Code != http.StatusConflict {
+			t.Fatalf("resolved nonce was not consumed exactly once: %d", response.Code)
+		}
+		clear(encodedResolved)
+		if counts() != [3]int{initial[0] + 1, initial[1] + 1, initial[2] + 1} {
+			t.Fatal("subject resolution or replay produced extra facts")
+		}
+		initial = counts()
 		for _, offset := range []time.Duration{0, -10 * time.Minute, 10 * time.Minute} {
 			request := sign(first, fmt.Sprintf("key-signed-deny-%d", offset/time.Second), offset)
 			result := assertDenied(handler, request)
@@ -17389,6 +17425,12 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 				bearer = auditCredential
 			}
 			before := counts()
+			resolvedBody := encodeResolution(request)
+			resolvedResponse := performIAMRequest(handler, http.MethodPost, "/v1/internal/access-key-subject:resolve", bearer, resolvedBody)
+			clear(resolvedBody)
+			if resolvedResponse.Code != http.StatusUnauthorized || counts() != before {
+				t.Fatalf("unauthenticated subject resolution %s wrote evidence or status=%d", attack, resolvedResponse.Code)
+			}
 			encoded := encode(request)
 			response := performIAMRequest(handler, http.MethodPost, "/v1/authorize:access-key", bearer, encoded)
 			clear(encoded)
@@ -17463,6 +17505,16 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 							PolicyID: iamv1.SystemPolicyPlatformOperator, PolicyResourceVersion: 1, RequestID: prefix + "-grant"}, http.StatusOK, nil)
 				}
 				signed := sign(created, prefix+"-request", 0)
+				beforeResolution := countsFor(created.Key.ID)
+				resolutionBody := encodeResolution(signed)
+				resolutionResponse := performIAMRequest(second, http.MethodPost, "/v1/internal/access-key-subject:resolve", paasCredential, resolutionBody)
+				clear(resolutionBody)
+				var resolved iamv1.AccessKeySubjectContext
+				if resolutionResponse.Code != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(resolutionResponse.Body.Bytes()), &resolved) != nil ||
+					resolved.TenantID != target.AccountID || resolved.Subject.ID != string(target.ID) ||
+					resolved.Subject.AccessKeyID != created.Key.ID || countsFor(created.Key.ID) != beforeResolution {
+					t.Fatal("restricted current state changed non-authorizing subject resolution")
+				}
 				result := assertDenied(handler, signed)
 				var exact bool
 				if err := database.QueryRow(ctx, `SELECT count(*)=1 AND bool_and(d.id=$2 AND e.user_id=$3 AND NOT d.allowed)

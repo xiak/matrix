@@ -243,6 +243,14 @@ type accessKeyRequestContext struct {
 }
 
 func accessKeyActionForRoute(method, path string) (iamv1.Action, bool) {
+	if method == http.MethodGet {
+		const applicationPrefix = "/v1/applications/"
+		id := strings.TrimPrefix(path, applicationPrefix)
+		if id != path && !strings.Contains(id, "/") && paasv1.ValidateID("applicationId", id) == nil {
+			return port.AuthorizeApplicationRead, true
+		}
+		return "", false
+	}
 	if method != http.MethodPost {
 		return "", false
 	}
@@ -287,6 +295,16 @@ func (value *handler) prepareAccessKeyRequest(response http.ResponseWriter, requ
 		}
 		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument,
 			"Invalid argument", "signed request body is invalid or too large", false)
+		return false
+	}
+	if request.Method == http.MethodGet && len(body) != 0 {
+		clear(body)
+		requestID, ok := value.beginRequest(response)
+		if !ok {
+			return false
+		}
+		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument,
+			"Invalid argument", "signed resource reads accept no request body", false)
 		return false
 	}
 	signed, err := value.accessKeyBoundary.SignedRequest(request, body)
@@ -598,12 +616,23 @@ func (value *handler) getApplication(response http.ResponseWriter, request *http
 	if !ok {
 		return
 	}
-	subjectRequest := port.SubjectResolutionRequest{Credential: request.Header.Get("Authorization")}
-	if port.ValidateSubjectResolutionRequest(subjectRequest) != nil {
-		writeAuthorizationError(response, requestID, port.ErrUnauthenticated)
-		return
+	var subject port.AuthorizationSubjectContext
+	var err error
+	if signedContext, present := request.Context().Value(accessKeyContextKey{}).(accessKeyRequestContext); present {
+		accessKeyAuthorizer, ok := value.authorizer.(port.AccessKeyAuthorizer)
+		if !ok || signedContext.Action != port.AuthorizeApplicationRead {
+			writeAuthorizationError(response, requestID, port.ErrAuthorizationUnavailable)
+			return
+		}
+		subject, err = accessKeyAuthorizer.ResolveAccessKeySubject(request.Context(), signedContext.SignedRequest)
+	} else {
+		subjectRequest := port.SubjectResolutionRequest{Credential: request.Header.Get("Authorization")}
+		if port.ValidateSubjectResolutionRequest(subjectRequest) != nil {
+			writeAuthorizationError(response, requestID, port.ErrUnauthenticated)
+			return
+		}
+		subject, err = value.authorizer.ResolveSubject(request.Context(), subjectRequest)
 	}
-	subject, err := value.authorizer.ResolveSubject(request.Context(), subjectRequest)
 	if err != nil {
 		writeAuthorizationError(response, requestID, err)
 		return

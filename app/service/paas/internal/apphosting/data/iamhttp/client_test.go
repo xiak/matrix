@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -142,6 +143,84 @@ func TestClientMapsConsumedAccessKeyNonceWithoutRetryingAsBearer(t *testing.T) {
 	result, err := newTestClient(t, server.URL).AuthorizeAccessKey(context.Background(), testAccessKeyAuthorizationRequest(t))
 	if calls != 1 || !errors.Is(err, port.ErrAuthorizationReplay) || !reflect.DeepEqual(result, port.Authorization{}) {
 		t.Fatalf("AccessKey replay calls=%d result=%#v err=%v", calls, result, err)
+	}
+}
+
+func TestClientResolvesExactAccessKeySubjectWithoutPermitOrSubjectBearer(t *testing.T) {
+	signed := testAccessKeyAuthorizationRequest(t).SignedRequest
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/v1/internal/access-key-subject:resolve" || request.URL.RawQuery != "" ||
+			request.Header.Get("Authorization") != "Bearer "+testServiceCredential ||
+			request.Header.Get("Matrix-Subject-Credential") != "" {
+			t.Fatalf("IAM AccessKey subject request path=%s query=%q headers=%#v", request.URL.Path, request.URL.RawQuery, request.Header)
+		}
+		body, err := iamv1.DecodeResolveAccessKeySubjectRequest(request.Body)
+		if err != nil || !reflect.DeepEqual(body.SignedRequest, signed) {
+			t.Fatalf("IAM AccessKey subject request=%#v err=%v", body, err)
+		}
+		digest, err := iamv1.AccessKeySignedRequestDigest(body.SignedRequest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		result := iamv1.AccessKeySubjectContext{
+			APIVersion: iamv1.APIVersion, Kind: "AccessKeySubjectContext", TenantID: "organization-a",
+			Subject: iamv1.Subject{Type: iamv1.SubjectUser, ID: "principal-developer", AccessKeyID: signed.Parameters.AccessKeyID},
+			Profile: body.Profile, SignedRequestDigest: digest,
+		}
+		if iamv1.CheckAccessKeySubjectContextForRequest(result, body) != nil {
+			t.Fatal("fixture AccessKey subject response is not request-bound")
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(response).Encode(result)
+	}))
+	defer server.Close()
+
+	resolved, err := newTestClient(t, server.URL).ResolveAccessKeySubject(context.Background(), signed)
+	wantSubject := paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "principal-developer", AccessKeyID: "key-one"}
+	if err != nil || resolved.TenantID != "organization-a" || !resolved.Subject.Equal(wantSubject) ||
+		port.ValidateAuthorizationSubjectContext(resolved) != nil {
+		t.Fatalf("resolved AccessKey subject=%#v err=%v", resolved, err)
+	}
+}
+
+func TestClientFailsClosedForSubstitutedAccessKeySubject(t *testing.T) {
+	signed := testAccessKeyAuthorizationRequest(t).SignedRequest
+	for name, mutate := range map[string]func(*iamv1.AccessKeySubjectContext){
+		"wrong profile": func(value *iamv1.AccessKeySubjectContext) { value.Profile.Revision-- },
+		"wrong key":     func(value *iamv1.AccessKeySubjectContext) { value.Subject.AccessKeyID = "other-key" },
+		"wrong digest": func(value *iamv1.AccessKeySubjectContext) {
+			value.SignedRequestDigest = "sha256:" + strings.Repeat("0", 64)
+		},
+		"role subject": func(value *iamv1.AccessKeySubjectContext) {
+			value.Subject = iamv1.Subject{Type: iamv1.SubjectRole, ID: "role-one", RoleSession: &iamv1.RoleSessionReference{SessionID: "session-one", SourceUserID: "user-one"}}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				body, err := iamv1.DecodeResolveAccessKeySubjectRequest(request.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				digest, err := iamv1.AccessKeySignedRequestDigest(body.SignedRequest)
+				if err != nil {
+					t.Fatal(err)
+				}
+				result := iamv1.AccessKeySubjectContext{
+					APIVersion: iamv1.APIVersion, Kind: "AccessKeySubjectContext", TenantID: "organization-a",
+					Subject: iamv1.Subject{Type: iamv1.SubjectUser, ID: "principal-developer", AccessKeyID: signed.Parameters.AccessKeyID},
+					Profile: body.Profile, SignedRequestDigest: digest,
+				}
+				mutate(&result)
+				response.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(response).Encode(result)
+			}))
+			defer server.Close()
+
+			result, err := newTestClient(t, server.URL).ResolveAccessKeySubject(context.Background(), signed)
+			if !errors.Is(err, port.ErrAuthorizationUnavailable) || !reflect.DeepEqual(result, port.AuthorizationSubjectContext{}) {
+				t.Fatalf("substituted AccessKey subject=%#v err=%v", result, err)
+			}
+		})
 	}
 }
 

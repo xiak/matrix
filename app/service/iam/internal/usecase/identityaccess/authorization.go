@@ -17,13 +17,77 @@ type authorizationActor struct {
 	accessKeyEvidence *AccessKeyAuthorizationEvidence
 }
 
+type verifiedAccessKeyRequest struct {
+	caller       ServiceCredential
+	credential   AccessKeyCredential
+	signedDigest string
+}
+
+// verifyAccessKeyRequest authenticates the calling service and the exact MAC
+// without consuming the nonce or evaluating Policy. Callers either use the
+// result for a non-authorizing Account-scoped lookup or immediately feed it to
+// decideAndRecord in the same transaction.
+func (service *Authority) verifyAccessKeyRequest(
+	ctx context.Context,
+	tx Transaction,
+	serviceCredential iamv1.Secret,
+	profileReference iamv1.AuthorizationProfileReference,
+	signed iamv1.AccessKeySignedRequest,
+) (verifiedAccessKeyRequest, error) {
+	caller, err := service.authenticateService(ctx, tx, serviceCredential)
+	if err != nil {
+		return verifiedAccessKeyRequest{}, err
+	}
+	profile, known := iamv1.LookupAuthorizationProfile(profileReference.Product)
+	parameters := signed.Parameters
+	if !known || iamv1.CheckAuthorizationProfileReference(profile, profileReference) != nil ||
+		profile.CallingService != caller.Identity.Purpose || profile.Product != parameters.Audience ||
+		caller.Identity.InstallationID != parameters.InstallationID {
+		return verifiedAccessKeyRequest{}, ErrUnauthenticated
+	}
+	if err := tx.CheckCurrentAuthorizationProfiles(ctx); err != nil {
+		return verifiedAccessKeyRequest{}, err
+	}
+	if err := service.checkAccessKeyCustody(ctx, tx); err != nil {
+		return verifiedAccessKeyRequest{}, err
+	}
+	if err := service.checkTOTPCustody(ctx, tx); err != nil {
+		return verifiedAccessKeyRequest{}, err
+	}
+	credential, found, err := tx.LookupAccessKey(ctx, caller.LookupDigest, parameters.AccessKeyID, parameters.InstallationID, parameters.Audience)
+	if err != nil {
+		return verifiedAccessKeyRequest{}, err
+	}
+	if !found {
+		return verifiedAccessKeyRequest{}, ErrUnauthenticated
+	}
+	defer clear(credential.Material.Nonce)
+	defer clear(credential.Material.Ciphertext)
+	wrapping := service.accessKeys
+	if credential.Subject.InstallationID != wrapping.scope.InstallationID || credential.Material.WrappingKeyID != wrapping.id ||
+		subtle.ConstantTimeCompare([]byte(credential.MaterialCommitment), []byte(wrapping.commitment)) != 1 {
+		return verifiedAccessKeyRequest{}, ErrUnavailable
+	}
+	secret, err := authority.OpenAccessKeySecret(authority.AccessKeySecretScope{InstallationID: credential.Subject.InstallationID,
+		AccountID: credential.Subject.Organization.ID, UserID: credential.Subject.Principal.ID, AccessKeyID: string(credential.Subject.Key.ID)},
+		wrapping.id, wrapping.material, credential.Material)
+	if err != nil {
+		return verifiedAccessKeyRequest{}, ErrUnavailable
+	}
+	verified, err := authority.VerifyAccessKeyRequestSignature(secret, signed)
+	if err != nil || !verified {
+		return verifiedAccessKeyRequest{}, ErrUnauthenticated
+	}
+	signedDigest, err := iamv1.AccessKeySignedRequestDigest(signed)
+	if err != nil {
+		return verifiedAccessKeyRequest{}, ErrUnavailable
+	}
+	return verifiedAccessKeyRequest{caller: caller, credential: credential, signedDigest: signedDigest}, nil
+}
+
 func (service *Authority) AuthorizeAccessKey(ctx context.Context, serviceCredential iamv1.Secret, request iamv1.AccessKeyAuthorizationRequest) (iamv1.AccessKeyAuthorization, error) {
 	if iamv1.ValidateAccessKeyAuthorizationRequest(request) != nil {
 		return iamv1.AccessKeyAuthorization{}, ErrInvalidArgument
-	}
-	lookupDigest, err := authority.LookupCredentialDigest(authority.CredentialService, serviceCredential)
-	if err != nil {
-		return iamv1.AccessKeyAuthorization{}, ErrUnauthenticated
 	}
 	requestDigest, err := digestSanitized("authorization", request.Authorization)
 	if err != nil {
@@ -35,52 +99,15 @@ func (service *Authority) AuthorizeAccessKey(ctx context.Context, serviceCredent
 		if err != nil {
 			return err
 		}
-		caller, err := service.authenticateService(ctx, tx, serviceCredential)
+		verified, err := service.verifyAccessKeyRequest(ctx, tx, serviceCredential, request.Authorization.Profile, request.SignedRequest)
 		if err != nil {
 			return err
 		}
+		caller, credential := verified.caller, verified.credential
 		parameters := request.SignedRequest.Parameters
 		definition, found := iamv1.LookupActionDefinition(request.Authorization.Action)
-		if !found || definition.CallingService != caller.Identity.Purpose || definition.Product != parameters.Audience ||
-			caller.Identity.InstallationID != parameters.InstallationID {
+		if !found || definition.CallingService != caller.Identity.Purpose || definition.Product != parameters.Audience {
 			return ErrUnauthenticated
-		}
-		if err := tx.CheckCurrentAuthorizationProfiles(ctx); err != nil {
-			return err
-		}
-		if err := service.checkAccessKeyCustody(ctx, tx); err != nil {
-			return err
-		}
-		if err := service.checkTOTPCustody(ctx, tx); err != nil {
-			return err
-		}
-		credential, found, err := tx.LookupAccessKey(ctx, lookupDigest, parameters.AccessKeyID, parameters.InstallationID, parameters.Audience)
-		if err != nil {
-			return err
-		}
-		if !found {
-			return ErrUnauthenticated
-		}
-		defer clear(credential.Material.Nonce)
-		defer clear(credential.Material.Ciphertext)
-		wrapping := service.accessKeys
-		if credential.Subject.InstallationID != wrapping.scope.InstallationID || credential.Material.WrappingKeyID != wrapping.id ||
-			subtle.ConstantTimeCompare([]byte(credential.MaterialCommitment), []byte(wrapping.commitment)) != 1 {
-			return ErrUnavailable
-		}
-		secret, err := authority.OpenAccessKeySecret(authority.AccessKeySecretScope{InstallationID: credential.Subject.InstallationID,
-			AccountID: credential.Subject.Organization.ID, UserID: credential.Subject.Principal.ID, AccessKeyID: string(credential.Subject.Key.ID)},
-			wrapping.id, wrapping.material, credential.Material)
-		if err != nil {
-			return ErrUnavailable
-		}
-		verified, err := authority.VerifyAccessKeyRequestSignature(secret, request.SignedRequest)
-		if err != nil || !verified {
-			return ErrUnauthenticated
-		}
-		signedDigest, err := iamv1.AccessKeySignedRequestDigest(request.SignedRequest)
-		if err != nil {
-			return ErrUnavailable
 		}
 		nonceDigest, err := iamv1.AccessKeyNonceDigest(parameters)
 		if err != nil {
@@ -88,8 +115,8 @@ func (service *Authority) AuthorizeAccessKey(ctx context.Context, serviceCredent
 		}
 		evidence := &AccessKeyAuthorizationEvidence{AccessKeyID: credential.Subject.Key.ID, ResourceVersion: credential.Subject.Key.ResourceVersion,
 			FormatVersion: credential.Material.FormatVersion, WrappingKeyID: credential.Material.WrappingKeyID, MaterialCommitment: credential.MaterialCommitment,
-			InstallationID: credential.Subject.InstallationID, ServiceLookupDigest: lookupDigest, Audience: parameters.Audience,
-			SignedRequestDigest: signedDigest, NonceDigest: nonceDigest, SignedAt: parameters.SignedAt}
+			InstallationID: credential.Subject.InstallationID, ServiceLookupDigest: caller.LookupDigest, Audience: parameters.Audience,
+			SignedRequestDigest: verified.signedDigest, NonceDigest: nonceDigest, SignedAt: parameters.SignedAt}
 		decision, err := service.decideAndRecord(ctx, tx, request.Authorization, requestDigest, now,
 			authorizationActor{organizationID: credential.Subject.Organization.ID,
 				subject: iamv1.Subject{Type: iamv1.SubjectUser, ID: string(credential.Subject.Principal.ID), AccessKeyID: credential.Subject.Key.ID}, accessKeyEvidence: evidence},
@@ -99,7 +126,7 @@ func (service *Authority) AuthorizeAccessKey(ctx context.Context, serviceCredent
 		if err != nil {
 			return err
 		}
-		result = iamv1.AccessKeyAuthorization{APIVersion: iamv1.APIVersion, Kind: "AccessKeyAuthorization", Decision: decision, SignedRequestDigest: signedDigest}
+		result = iamv1.AccessKeyAuthorization{APIVersion: iamv1.APIVersion, Kind: "AccessKeyAuthorization", Decision: decision, SignedRequestDigest: verified.signedDigest}
 		// Deny commits exactly like Allow. Returning an authentication error here
 		// would roll back its nonce and permit the old packet after a later grant.
 		return nil
@@ -109,6 +136,52 @@ func (service *Authority) AuthorizeAccessKey(ctx context.Context, serviceCredent
 	}
 	if iamv1.CheckAccessKeyAuthorizationForRequest(result, request) != nil {
 		return iamv1.AccessKeyAuthorization{}, ErrUnavailable
+	}
+	return result, nil
+}
+
+// ResolveAccessKeySubject authenticates one fresh signed request for the
+// calling product's Account-scoped resource lookup. It deliberately does not
+// evaluate Policy, record a decision or consume the nonce; only the later
+// AuthorizeAccessKey call can permit resource access.
+func (service *Authority) ResolveAccessKeySubject(
+	ctx context.Context,
+	serviceCredential iamv1.Secret,
+	request iamv1.ResolveAccessKeySubjectRequest,
+) (iamv1.AccessKeySubjectContext, error) {
+	if iamv1.ValidateResolveAccessKeySubjectRequest(request) != nil {
+		return iamv1.AccessKeySubjectContext{}, ErrInvalidArgument
+	}
+	var result iamv1.AccessKeySubjectContext
+	err := service.withinTransaction(ctx, func(transactionContext context.Context, transaction Transaction) error {
+		now, err := transactionTime(transactionContext, transaction)
+		if err != nil {
+			return err
+		}
+		verified, err := service.verifyAccessKeyRequest(transactionContext, transaction, serviceCredential, request.Profile, request.SignedRequest)
+		if err != nil {
+			return err
+		}
+		if err := authority.ValidateAccessKeyLookupContext(verified.credential.Subject, now, request.SignedRequest.Parameters.SignedAt); err != nil {
+			if errors.Is(err, authority.ErrUnauthenticated) {
+				return ErrUnauthenticated
+			}
+			return ErrUnavailable
+		}
+		result = iamv1.AccessKeySubjectContext{
+			APIVersion: iamv1.APIVersion, Kind: "AccessKeySubjectContext",
+			TenantID: verified.credential.Subject.Organization.ID,
+			Subject: iamv1.Subject{Type: iamv1.SubjectUser, ID: string(verified.credential.Subject.Principal.ID),
+				AccessKeyID: verified.credential.Subject.Key.ID},
+			Profile: request.Profile, SignedRequestDigest: verified.signedDigest,
+		}
+		return nil
+	})
+	if err != nil {
+		return iamv1.AccessKeySubjectContext{}, err
+	}
+	if iamv1.CheckAccessKeySubjectContextForRequest(result, request) != nil {
+		return iamv1.AccessKeySubjectContext{}, ErrUnavailable
 	}
 	return result, nil
 }

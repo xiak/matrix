@@ -330,6 +330,10 @@ func buildPaths() object {
 			"resolveAuthorizationSubject", "Authenticate one transient USER or ROLE bearer for the exact current calling-service Profile; returns identity context, never a permit", "ResolveAuthorizationSubjectRequest", "AuthorizationSubjectContext", "200",
 			[]any{object{"ServiceCredential": []string{}, "SubjectCredential": []string{}}}, nil,
 		)},
+		"/v1/internal/access-key-subject:resolve": object{"post": mutationOperation(
+			"resolveAccessKeySubject", "Verify one signed request for an Account-scoped product lookup; returns request-bound identity context, never a permit and never consumes the nonce", "ResolveAccessKeySubjectRequest", "AccessKeySubjectContext", "200",
+			[]any{object{"ServiceCredential": []string{}}}, nil,
+		)},
 		"/v1/authorize:batch": object{"post": mutationOperation(
 			"authorizeBatch", "Authorize a bounded ordered set of exact instances in one authentication and transaction snapshot", "AuthorizationBatchRequest", "AuthorizationBatchDecision", "200",
 			[]any{object{"ServiceCredential": []string{}, "SubjectCredential": []string{}}}, nil,
@@ -742,6 +746,7 @@ func structContracts() map[string]reflect.Type {
 		"AuthorizationBatchRequest":                     openapi31.StructType[iamv1.AuthorizationBatchRequest](),
 		"AuthorizationBatchDecision":                    openapi31.StructType[iamv1.AuthorizationBatchDecision](),
 		"AccessKeyAuthorization":                        openapi31.StructType[iamv1.AccessKeyAuthorization](),
+		"AccessKeySubjectContext":                       openapi31.StructType[iamv1.AccessKeySubjectContext](),
 		"AccessKeyHTTPRequest":                          openapi31.StructType[iamv1.AccessKeyHTTPRequest](),
 		"Readiness":                                     openapi31.StructType[iamv1.Readiness](),
 		"Problem":                                       openapi31.StructType[iamv1.Problem](),
@@ -1426,10 +1431,19 @@ func applySemanticOverlays(schemas object) {
 		"required": []string{"authorization", "signedRequest"}, "properties": object{
 			"authorization": openapi31.Ref("AuthorizationRequest"), "signedRequest": openapi31.Ref("AccessKeySignedRequest")},
 		"description": "Service-bound internal request only. No subject/account selector. The actual PEP binds HTTP data and audience; IAM verifies the MAC and database-time window. Duplicate nonce conflicts, never replays a permit."}
+	schemas["ResolveAccessKeySubjectRequest"] = object{"type": "object", "additionalProperties": false,
+		"required": []string{"profile", "signedRequest"}, "properties": object{
+			"profile": openapi31.Ref("AuthorizationProfileReference"), "signedRequest": openapi31.Ref("AccessKeySignedRequest")},
+		"description": "Service-bound internal lookup context request only. No action, resource, subject or account selector. A successful response is not a permit and does not consume the signed nonce."}
 	schemas["AccessKeyAuthorization"].(object)["allOf"] = []any{object{
 		"if": object{"properties": object{"decision": object{"properties": object{"allowed": object{"const": true}}}}},
 		"then": object{"properties": object{"decision": object{"properties": object{"installationId": false, "subject": object{
 			"required": []string{"accessKeyId"}, "properties": object{"type": object{"const": "USER"}}}}}}},
+	}}
+	schemas["AccessKeySubjectContext"].(object)["allOf"] = []any{object{
+		"properties": object{"subject": object{
+			"required": []string{"accessKeyId"}, "properties": object{"type": object{"const": "USER"}},
+		}},
 	}}
 	schemas["AccessKeyHTTPRequest"].(object)["allOf"] = []any{object{
 		"if":   object{"properties": object{"contentType": object{"const": ""}}},

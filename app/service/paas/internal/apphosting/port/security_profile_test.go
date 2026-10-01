@@ -92,7 +92,7 @@ func TestApplicationCreateAuthorizationBindsOnlyProfileDeclaredLabels(t *testing
 	}
 }
 
-func TestAccessKeyAdmissionIsLimitedToDeclaredCollectionCreatesAndExactCredential(t *testing.T) {
+func TestAccessKeyAdmissionIsLimitedToDeclaredGraphCreatesAndApplicationRead(t *testing.T) {
 	nonce, err := iamv1.NewSecret("AAAAAAAAAAAAAAAAAAAAAA")
 	if err != nil {
 		t.Fatal(err)
@@ -159,8 +159,17 @@ func TestAccessKeyAdmissionIsLimitedToDeclaredCollectionCreatesAndExactCredentia
 	read.SignedRequest.HTTP.ContentType = ""
 	read.SignedRequest.HTTP.IdempotencyKey = ""
 	read.SignedRequest.HTTP.BodyDigest = "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-	if ValidateAccessKeyAuthorizationRequest(read) == nil {
-		t.Fatal("an undeclared tagged read borrowed AccessKey admission")
+	read.ResourceLabels = map[string]string{"environment": "production"}
+	if ValidateAccessKeyAuthorizationRequest(read) != nil {
+		t.Fatal("declared tagged Application read rejected")
+	}
+	wrongRead := read
+	wrongRead.Action = AuthorizeConfigurationRead
+	wrongRead.Resource = paasv1.ResourceRef{Kind: ResourceConfiguration, ID: "configuration-one"}
+	wrongRead.ResourceLabels = nil
+	wrongRead.SignedRequest.HTTP.EscapedPath = "/api/paas/v1/configurations/configuration-one"
+	if ValidateAccessKeyAuthorizationRequest(wrongRead) == nil {
+		t.Fatal("undeclared Configuration read borrowed Application AccessKey admission")
 	}
 }
 

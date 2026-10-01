@@ -1729,7 +1729,7 @@ func TestAccessKeySubjectLineageRequiresItsOwnDeclaredCarrier(t *testing.T) {
 			}
 		}
 	}
-	request, err := NewAuthorizationRequest(ActionPaaSApplicationRead, ResourceReference{Kind: ResourceApplication, ID: "application-one"}, AuthorizationResourceInstance, "", "request-key", "correlation-key")
+	request, err := NewAuthorizationRequest(ActionPaaSConfigurationRead, ResourceReference{Kind: ResourceConfiguration, ID: "configuration-one"}, AuthorizationResourceInstance, "", "request-key", "correlation-key")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1846,6 +1846,75 @@ func TestAccessKeyAuthorizationTransportBindsOneRequestWithoutSelectors(t *testi
 	}
 	if _, err := DecodeAccessKeyAuthorization(strings.NewReader(strings.Replace(string(wire), `"decision":`, `"nonce":"private","decision":`, 1))); err == nil {
 		t.Fatal("response admitted private material")
+	}
+}
+
+func TestAccessKeySubjectResolutionIsRequestBoundAndNeverASelector(t *testing.T) {
+	profile, known := LookupAuthorizationProfile(ProductPaaS)
+	if !known {
+		t.Fatal("PaaS profile is unavailable")
+	}
+	_, profileDigest, err := CanonicalizeAuthorizationProfile(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := ResolveAccessKeySubjectRequest{
+		Profile:       AuthorizationProfileReference{Product: profile.Product, Revision: profile.Revision, ContentDigest: profileDigest},
+		SignedRequest: accessKeySigningFixture(t),
+	}
+	encoded, err := EncodeResolveAccessKeySubjectRequest(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(encoded)
+	decoded, err := DecodeResolveAccessKeySubjectRequest(bytes.NewReader(encoded))
+	if err != nil || !reflect.DeepEqual(request, decoded) {
+		t.Fatal("dedicated subject-resolution transport changed the signed request")
+	}
+	if _, err := json.Marshal(request); err == nil || json.Unmarshal(encoded, &decoded) == nil ||
+		strings.Contains(fmt.Sprintf("%+v %#v", request, request), "Uz5Xlnd") {
+		t.Fatal("ordinary JSON or formatting exposed the subject-resolution signature")
+	}
+	for _, replacement := range []struct{ from, to string }{
+		{`"profile":`, `"accountId":"chosen","profile":`},
+		{`"profile":`, `"subjectId":"chosen","profile":`},
+		{`"profile":`, `"action":"paas.application.read","profile":`},
+		{`"profile":`, `"resource":{"kind":"APPLICATION","id":"chosen"},"profile":`},
+		{`"signedRequest":`, `"signedRequest":null,"signedRequest":`},
+		{`,Audience=paas,`, `,Audience=audit,`},
+	} {
+		attack := strings.Replace(string(encoded), replacement.from, replacement.to, 1)
+		if attack == string(encoded) {
+			t.Fatal("attack did not change subject-resolution request")
+		}
+		if _, err := DecodeResolveAccessKeySubjectRequest(strings.NewReader(attack)); !errors.Is(err, ErrInvalidAccessKeySignature) {
+			t.Fatal("subject selector, ambiguity or wrong audience decoded", err)
+		}
+	}
+	digest, err := AccessKeySignedRequestDigest(request.SignedRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := AccessKeySubjectContext{
+		APIVersion: APIVersion, Kind: "AccessKeySubjectContext", TenantID: "account-a",
+		Subject: Subject{Type: SubjectUser, ID: "user-a", AccessKeyID: request.SignedRequest.Parameters.AccessKeyID},
+		Profile: request.Profile, SignedRequestDigest: digest,
+	}
+	if CheckAccessKeySubjectContextForRequest(result, request) != nil {
+		t.Fatal("valid request-bound subject context rejected")
+	}
+	for name, change := range map[string]func(*AccessKeySubjectContext){
+		"different key": func(value *AccessKeySubjectContext) { value.Subject.AccessKeyID = "access-key-b" },
+		"wrong digest":  func(value *AccessKeySubjectContext) { value.SignedRequestDigest = "sha256:" + strings.Repeat("0", 64) },
+		"missing key":   func(value *AccessKeySubjectContext) { value.Subject.AccessKeyID = "" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed := result
+			change(&changed)
+			if CheckAccessKeySubjectContextForRequest(changed, request) == nil {
+				t.Fatal("substituted subject context was accepted")
+			}
+		})
 	}
 }
 
@@ -3118,7 +3187,7 @@ func TestRoleBusinessProfilesRequireExplicitCurrentCapabilities(t *testing.T) {
 		current, found := LookupAuthorizationProfile(product)
 		expectedRevision := uint64(2)
 		if product == ProductPaaS {
-			expectedRevision = 8
+			expectedRevision = 9
 		}
 		if !found || current.Revision != expectedRevision {
 			t.Fatal("missing explicit new product revision")
@@ -3941,7 +4010,7 @@ func TestHistoricalDecisionProfileDoesNotBorrowCurrentHead(t *testing.T) {
 
 func TestPaaSProfileDeclaresCompletePlatformProduct(t *testing.T) {
 	profile, found := LookupAuthorizationProfile(ProductPaaS)
-	if !found || profile.Revision != 8 {
+	if !found || profile.Revision != 9 {
 		t.Fatal("missing current PaaS role, tag, and AccessKey-capable declaration")
 	}
 	expected := map[Action]struct {
@@ -3997,32 +4066,39 @@ func TestPaaSProfileDeclaresCompletePlatformProduct(t *testing.T) {
 		t.Fatal(err)
 	}
 	reference := AuthorizationProfileReference{Product: profile.Product, Revision: profile.Revision, ContentDigest: profileDigest}
-	keyCreates := map[Action]struct{}{
-		ActionPaaSApplicationCreate:           {},
-		ActionPaaSConfigurationCreate:         {},
-		ActionPaaSConfigurationRevisionCreate: {},
-		ActionPaaSApplicationRevisionCreate:   {},
-		ActionPaaSDeploymentCreate:            {},
+	keyActions := map[Action]bool{
+		ActionPaaSApplicationCreate:           true,
+		ActionPaaSConfigurationCreate:         true,
+		ActionPaaSConfigurationRevisionCreate: true,
+		ActionPaaSApplicationRevisionCreate:   true,
+		ActionPaaSDeploymentCreate:            true,
+		ActionPaaSApplicationRead:             false,
 	}
 	for _, action := range profile.Actions {
-		_, keyCreate := keyCreates[action.Action]
+		keyCreate, keyAction := keyActions[action.Action]
 		for _, method := range []UserAuthenticationMethod{UserAuthenticationAccessKey, UserAuthenticationLoginSession} {
 			allowed := CheckAuthorizationProfileUserAuthentication(profile, reference, action.Action, method) == nil
-			if allowed != (method == UserAuthenticationLoginSession || keyCreate) {
+			if allowed != (method == UserAuthenticationLoginSession || keyAction) {
 				t.Fatal("PaaS action acquired the wrong USER credential carriers", action.Action, method)
 			}
 		}
-		if !keyCreate {
+		if !keyAction {
 			continue
 		}
-		if action.Scope != AuthorityScopeTenant || action.ResultResourceKind != action.ResourceKind || len(action.ResourceShapes) != 1 ||
-			action.ResourceShapes[0] != (AuthorizationResourceShape{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}) {
+		if action.Scope != AuthorityScopeTenant || len(action.ResourceShapes) != 1 {
+			t.Fatal("AccessKey action escaped its tenant resource shape", action.Action)
+		}
+		if keyCreate && (action.ResultResourceKind != action.ResourceKind ||
+			action.ResourceShapes[0] != (AuthorizationResourceShape{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate})) {
 			t.Fatal("AccessKey collection create escaped its original resource shape", action.Action)
 		}
-		delete(keyCreates, action.Action)
+		if !keyCreate && (action.ResultResourceKind != "" || action.ResourceShapes[0] != (AuthorizationResourceShape{Mode: AuthorizationResourceInstance, PrefixAllowed: true})) {
+			t.Fatal("AccessKey instance read escaped its original resource shape", action.Action)
+		}
+		delete(keyActions, action.Action)
 	}
-	if len(keyCreates) != 0 {
-		t.Fatal("PaaS product is missing AccessKey create declarations", keyCreates)
+	if len(keyActions) != 0 {
+		t.Fatal("PaaS product is missing AccessKey declarations", keyActions)
 	}
 	_, digest, err := CanonicalizeAuthorizationProfile(profile)
 	if err != nil || CheckAuthorizationProfileReference(profile, AuthorizationProfileReference{Product: ProductPaaS, Revision: profile.Revision + 1, ContentDigest: digest}) == nil {
@@ -4466,7 +4542,7 @@ func TestAuthorizationProfileUserAuthenticationIsExplicitAndCommitted(t *testing
 			} else if source.Product == ProductPaaS && slices.Contains([]Action{
 				ActionPaaSApplicationCreate, ActionPaaSConfigurationCreate,
 				ActionPaaSConfigurationRevisionCreate, ActionPaaSApplicationRevisionCreate,
-				ActionPaaSDeploymentCreate,
+				ActionPaaSDeploymentCreate, ActionPaaSApplicationRead,
 			}, declared.Action) {
 				if !slices.Equal(declared.UserAuthenticationMethods, []UserAuthenticationMethod{
 					UserAuthenticationAccessKey, UserAuthenticationLoginSession,

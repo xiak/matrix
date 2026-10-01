@@ -1753,7 +1753,7 @@ func proveFrozenFamilyProfileAdvance(t *testing.T, ctx context.Context, admin *p
 	// condition in the future build. Even a resource-nonmatching old Deny must
 	// then fail closed, rather than disappear behind another Allow.
 	replacement, err := parser.ParseExpr(fmt.Sprintf(`func() AuthorizationProfile {
-		profile := paasProfileRevisionEight
+		profile := paasProfileRevisionNine
 		profile.Revision = %d
 		var added AuthorizationProfileAction
 		for index, action := range profile.Actions {
@@ -1784,7 +1784,7 @@ func proveFrozenFamilyProfileAdvance(t *testing.T, ctx context.Context, admin *p
 		}
 		for index, element := range catalog.Elts {
 			current, ok := element.(*ast.Ident)
-			if ok && current.Name == "paasProfileRevisionEight" {
+			if ok && current.Name == "paasProfileRevisionNine" {
 				catalog.Elts[index] = replacement
 				replaced++
 			}
@@ -5908,19 +5908,19 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		sensitive = append(sensitive, base64.RawURLEncoding.EncodeToString(nonce), signature)
 		return signed
 	}
-	// Exercise the actual internal RPC in both IAM executables. Application
-	// read intentionally remains an AccessKey Deny because only create is in
-	// the current product declaration; the positive product path is below.
+	// Exercise the actual internal RPC in both IAM executables. Configuration
+	// read intentionally remains an AccessKey Deny; the positive Application
+	// read path must go through PaaS pre-read and final authorization below.
 	sign := func(account *accountFixture, requestID string) iamv1.AccessKeyAuthorizationRequest {
 		t.Helper()
-		request, err := iamv1.NewAuthorizationRequest(iamv1.ActionPaaSApplicationRead,
-			iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "program-signed-application"}, iamv1.AuthorizationResourceInstance, "", requestID, requestID)
+		request, err := iamv1.NewAuthorizationRequest(iamv1.ActionPaaSConfigurationRead,
+			iamv1.ResourceReference{Kind: iamv1.ResourceConfiguration, ID: "program-signed-configuration"}, iamv1.AuthorizationResourceInstance, "", requestID, requestID)
 		if err != nil {
 			t.Fatal(err)
 		}
 		bodyHash := sha256.Sum256(nil)
 		signed := signHTTP(account, iamv1.AccessKeyHTTPRequest{Method: http.MethodGet, Scheme: "https", Authority: "program-process.invalid:443",
-			EscapedPath: "/api/paas/v1/applications/program-signed-application", BodyDigest: "sha256:" + hex.EncodeToString(bodyHash[:])})
+			EscapedPath: "/api/paas/v1/configurations/program-signed-configuration", BodyDigest: "sha256:" + hex.EncodeToString(bodyHash[:])})
 		return iamv1.AccessKeyAuthorizationRequest{Authorization: request, SignedRequest: signed}
 	}
 	encode := func(request iamv1.AccessKeyAuthorizationRequest) []byte {
@@ -5977,8 +5977,8 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		return response
 	}
 	type signedProductRequest struct {
-		body, route, externalPath, idempotencyKey string
-		signed                                    iamv1.AccessKeySignedRequest
+		method, body, route, externalPath, idempotencyKey string
+		signed                                            iamv1.AccessKeySignedRequest
 	}
 	prepareProduct := func(account *accountFixture, route, idempotencyKey string, payload any) signedProductRequest {
 		t.Helper()
@@ -5989,11 +5989,23 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		digest := sha256.Sum256(body)
 		externalPath := "/api/paas" + route
 		return signedProductRequest{
-			body: string(body), route: route, externalPath: externalPath, idempotencyKey: idempotencyKey,
+			method: http.MethodPost, body: string(body), route: route, externalPath: externalPath, idempotencyKey: idempotencyKey,
 			signed: signHTTP(account, iamv1.AccessKeyHTTPRequest{
 				Method: http.MethodPost, Scheme: "https", Authority: "api.matrix.test:443",
 				EscapedPath: externalPath, ContentType: "application/json", IdempotencyKey: idempotencyKey,
 				BodyDigest: "sha256:" + hex.EncodeToString(digest[:]),
+			}),
+		}
+	}
+	prepareProductRead := func(account *accountFixture, route string) signedProductRequest {
+		t.Helper()
+		digest := sha256.Sum256(nil)
+		externalPath := "/api/paas" + route
+		return signedProductRequest{
+			method: http.MethodGet, route: route, externalPath: externalPath,
+			signed: signHTTP(account, iamv1.AccessKeyHTTPRequest{
+				Method: http.MethodGet, Scheme: "https", Authority: "api.matrix.test:443",
+				EscapedPath: externalPath, BodyDigest: "sha256:" + hex.EncodeToString(digest[:]),
 			}),
 		}
 	}
@@ -6005,13 +6017,15 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		}
 		plain := header.CopyBytes()
 		defer clear(plain)
-		request, err := http.NewRequestWithContext(ctx, http.MethodPost, paasEndpoint+value.route, strings.NewReader(value.body))
+		request, err := http.NewRequestWithContext(ctx, value.method, paasEndpoint+value.route, strings.NewReader(value.body))
 		if err != nil {
 			t.Fatal(err)
 		}
 		request.Header.Set("Authorization", string(plain))
-		request.Header.Set("Content-Type", "application/json")
-		request.Header.Set("Idempotency-Key", value.idempotencyKey)
+		if value.method == http.MethodPost {
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("Idempotency-Key", value.idempotencyKey)
+		}
 		request.Header.Set("X-Matrix-External-Origin", "https://api.matrix.test:443")
 		request.Header.Set("X-Matrix-External-Request-Target", value.externalPath)
 		response, err := processHTTPClient().Do(request)
@@ -6024,6 +6038,40 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 			t.Fatalf("signed PaaS %s status=%d want=%d body=%s err=%v", value.route, response.StatusCode, status, body, err)
 		}
 		return processResponse{Status: response.StatusCode, Body: body, Header: response.Header.Clone()}
+	}
+	resolveProductSubject := func(server string, account *accountFixture, signed iamv1.AccessKeySignedRequest, status int) processResponse {
+		t.Helper()
+		profile, known := iamv1.LookupAuthorizationProfile(iamv1.ProductPaaS)
+		if !known {
+			t.Fatal("PaaS Profile is unavailable")
+		}
+		_, digest, err := iamv1.CanonicalizeAuthorizationProfile(profile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		input := iamv1.ResolveAccessKeySubjectRequest{
+			Profile:       iamv1.AuthorizationProfileReference{Product: profile.Product, Revision: profile.Revision, ContentDigest: digest},
+			SignedRequest: signed,
+		}
+		body, err := iamv1.EncodeResolveAccessKeySubjectRequest(input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer clear(body)
+		response := performJSON(t, http.MethodPost, server+"/v1/internal/access-key-subject:resolve", paasServiceCredential, json.RawMessage(body))
+		if response.Status != status {
+			t.Fatalf("signed subject resolution status=%d want=%d body=%s", response.Status, status, response.Body)
+		}
+		if status == http.StatusOK {
+			var result iamv1.AccessKeySubjectContext
+			if iamv1.DecodeRequest(bytes.NewReader(response.Body), &result) != nil ||
+				iamv1.CheckAccessKeySubjectContextForRequest(result, input) != nil ||
+				result.TenantID != account.target.AccountID || result.Subject.ID != string(account.target.ID) ||
+				result.Subject.AccessKeyID != account.key.Key.ID {
+				t.Fatal("signed subject resolution changed Account/USER/key/request binding")
+			}
+		}
+		return response
 	}
 	decodeProductOperation := func(account *accountFixture, response processResponse, action paasv1.OperationAction, target paasv1.ResourceID) paasv1.Operation {
 		t.Helper()
@@ -6063,11 +6111,54 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		account := &accounts[index]
 		prefix := fmt.Sprintf("program-signature-%d", index)
 		createIAMPolicyAttachment(t, endpoint, account.owner, account.target.ID, iamv1.SystemPolicyPaaSDeveloper, prefix+"-grant")
+		environment := "production"
+		if index == 1 {
+			environment = "staging"
+		}
 		application := paasv1.CreateApplicationRequest{ID: "program-key-application", Name: "program-key-application",
-			Labels: map[string]string{"environment": "production", "team": "programmatic"}}
+			Labels: map[string]string{"environment": environment, "team": "programmatic"}}
 		applicationRequest := prepareProduct(account, "/v1/applications", prefix+"-application-create", application)
 		operations := []paasv1.Operation{decodeProductOperation(account, invokeProduct(applicationRequest, http.StatusCreated), paasv1.OperationCreateApplication, application.ID)}
 		invokeProduct(applicationRequest, http.StatusConflict)
+		readRequest := prepareProductRead(account, "/v1/applications/"+string(application.ID))
+		beforeRead := counts(account.key.Key.ID)
+		resolveProductSubject(endpoint, account, readRequest.signed, http.StatusOK)
+		resolveProductSubject(replica, account, readRequest.signed, http.StatusOK)
+		if counts(account.key.Key.ID) != beforeRead {
+			t.Fatal("non-authorizing subject resolution consumed nonce or wrote a decision")
+		}
+		readResponse := invokeProduct(readRequest, http.StatusOK)
+		var readApplication paasv1.Application
+		if iamv1.DecodeRequest(bytes.NewReader(readResponse.Body), &readApplication) != nil ||
+			paasv1.ValidateApplication(readApplication) != nil ||
+			readApplication.Metadata.Scope.TenantID != paasv1.TenantID(account.target.AccountID) ||
+			readApplication.Metadata.ID != application.ID ||
+			!reflect.DeepEqual(readApplication.Metadata.Labels, application.Labels) {
+			t.Fatal("signed Application read crossed Account ownership or changed labels")
+		}
+		invokeProduct(readRequest, http.StatusConflict)
+		if counts(account.key.Key.ID) != [3]int{beforeRead[0] + 1, beforeRead[1] + 1, beforeRead[2] + 1} {
+			t.Fatal("signed Application read did not consume exactly one nonce/decision/fact")
+		}
+		readRequestID := readResponse.Header.Get("X-Request-ID")
+		var readDecision iamv1.DecisionID
+		var exactRead bool
+		if readRequestID == "" {
+			t.Fatal("signed Application read omitted request identity")
+		}
+		if err := database.QueryRow(ctx, `SELECT id,allowed AND contract_version=7 AND principal_id=$2 AND access_key_id=$3
+			AND action_name=$4 AND target_kind=$5 AND target_id=$6
+			AND document->'resourceTags'=jsonb_build_array(
+			  jsonb_build_object('key','environment','value',$7::text))
+			FROM iam.authorization_decisions WHERE tenant_id=$1 AND request_id=$8`,
+			account.target.AccountID, account.target.ID, account.key.Key.ID, iamv1.ActionPaaSApplicationRead,
+			iamv1.ResourceApplication, application.ID, environment, readRequestID).Scan(&readDecision, &exactRead); err != nil || !exactRead {
+			t.Fatal("signed Application read decision lost exact Account-owned tags", err)
+		}
+		if decisions[account.key.Key.ID] == nil {
+			decisions[account.key.Key.ID] = map[iamv1.DecisionID]bool{}
+		}
+		decisions[account.key.Key.ID][readDecision] = true
 
 		configuration := paasv1.CreateConfigurationRequest{
 			ID: "program-key-configuration", Name: "program-key-configuration", ApplicationID: application.ID,
@@ -6155,6 +6246,49 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 			restartReplay = request
 		}
 	}
+	resourceTagKey, err := iamv1.NewResourceTagConditionKey("environment")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stagingDeny iamv1.PolicyDetail
+	call(endpoint, http.MethodPost, "/v1/policies", b.owner, iamv1.CreatePolicyRequest{
+		DisplayName: "Deny signed staging reads", RequestID: "program-signed-staging-deny-policy",
+		Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+			Statements: []iamv1.PolicyStatement{{SID: "deny-staging", Effect: iamv1.PolicyDeny,
+				Actions:    []iamv1.Action{iamv1.ActionPaaSApplicationRead},
+				Resources:  []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceAnyInAuthority}},
+				Conditions: []iamv1.PolicyCondition{{Key: resourceTagKey, Operator: iamv1.PolicyStringEquals, Values: []string{"staging"}}}}}},
+	}, http.StatusCreated, &stagingDeny)
+	stagingDenyAttachment := createIAMPolicyAttachment(t, endpoint, b.owner, b.target.ID, stagingDeny.Policy.ID, "program-signed-staging-deny-attach")
+	deniedRead := prepareProductRead(b, "/v1/applications/program-key-application")
+	beforeDeniedRead := counts(b.key.Key.ID)
+	resolveProductSubject(endpoint, b, deniedRead.signed, http.StatusOK)
+	resolveProductSubject(replica, b, deniedRead.signed, http.StatusOK)
+	if counts(b.key.Key.ID) != beforeDeniedRead {
+		t.Fatal("staging subject pre-read changed authority")
+	}
+	deniedReadResponse := invokeProduct(deniedRead, http.StatusForbidden)
+	if bytes.Contains(deniedReadResponse.Body, []byte("staging")) || bytes.Contains(deniedReadResponse.Body, []byte(string(b.target.AccountID))) {
+		t.Fatal("denied signed read disclosed Account resource facts")
+	}
+	invokeProduct(deniedRead, http.StatusConflict)
+	deniedReadRequestID := deniedReadResponse.Header.Get("X-Request-ID")
+	var deniedReadDecision iamv1.DecisionID
+	var exactDeniedRead bool
+	if deniedReadRequestID == "" {
+		t.Fatal("denied signed Application read omitted request identity")
+	}
+	if err := database.QueryRow(ctx, `SELECT id,NOT allowed AND contract_version=7 AND principal_id=$2 AND access_key_id=$3
+		AND action_name=$4 AND target_kind=$5 AND target_id=$6
+		AND document->'resourceTags'='[{"key":"environment","value":"staging"}]'::jsonb
+		FROM iam.authorization_decisions WHERE tenant_id=$1 AND request_id=$7`,
+		b.target.AccountID, b.target.ID, b.key.Key.ID, iamv1.ActionPaaSApplicationRead,
+		iamv1.ResourceApplication, "program-key-application", deniedReadRequestID).Scan(&deniedReadDecision, &exactDeniedRead); err != nil || !exactDeniedRead {
+		t.Fatal("signed staging Deny lost current Account-owned tags", err)
+	}
+	decisions[b.key.Key.ID][deniedReadDecision] = true
+	revokeIAMPolicyAttachment(t, endpoint, b.owner, stagingDenyAttachment.ID, stagingDenyAttachment.ResourceVersion,
+		"program-signed-staging-deny-revoke")
 	foreignApplication := paasv1.CreateApplicationRequest{ID: "program-key-customer-only", Name: "program-key-customer-only"}
 	foreignOperation := decodeProductOperation(b,
 		invokeProduct(prepareProduct(b, "/v1/applications", "program-customer-only-create", foreignApplication), http.StatusCreated),

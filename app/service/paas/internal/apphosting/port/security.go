@@ -115,6 +115,7 @@ type Authorizer interface {
 // AccessKeyAuthorizer is a separate capability so products cannot silently
 // reinterpret a signed request as a login bearer.
 type AccessKeyAuthorizer interface {
+	ResolveAccessKeySubject(context.Context, iamv1.AccessKeySignedRequest) (AuthorizationSubjectContext, error)
 	AuthorizeAccessKey(context.Context, AccessKeyAuthorizationRequest) (Authorization, error)
 }
 

@@ -427,16 +427,8 @@ func DecideAccessKey(value AccessKeyContext, callingService iamv1.ServicePurpose
 // known restriction yields a recorded Deny only after the use case verifies
 // the signature; corrupt authority is not a normal denial.
 func accessKeyEligibility(value AccessKeyContext, databaseTime time.Time, signedAt int64) (bool, error) {
-	if validateAuthorityTime(databaseTime) != nil || iamv1.ValidateOrganization(value.Organization) != nil ||
-		iamv1.ValidatePrincipal(value.Principal) != nil || value.Principal.Type != iamv1.PrincipalUser ||
-		iamv1.ValidateAccessKey(value.Key) != nil || iamv1.ValidateID("rootUserId", string(value.RootUserID)) != nil ||
-		iamv1.ValidateID("installationId", value.InstallationID) != nil ||
-		value.Principal.AccountID != value.Organization.ID || value.Key.AccountID != value.Organization.ID ||
-		value.Key.UserID != value.Principal.ID || value.Principal.CreatedAt.Before(value.Organization.CreatedAt) ||
-		value.Key.CreatedAt.Before(value.Principal.CreatedAt) || value.Key.UpdatedAt.After(databaseTime) ||
-		value.Principal.UpdatedAt.After(databaseTime) || value.Organization.UpdatedAt.After(databaseTime) ||
-		ValidateUserBoundary(value.Boundary, value.Organization.ID, value.Principal.ID, value.Principal.ResourceVersion) != nil {
-		return false, ErrAuthorityUnavailable
+	if err := validateAccessKeyLookupContext(value, databaseTime); err != nil {
+		return false, err
 	}
 	if signedAt <= 0 || signedAt > 253402300799 {
 		return false, ErrInvalidAuthorizationRequest
@@ -450,6 +442,32 @@ func accessKeyEligibility(value AccessKeyContext, databaseTime time.Time, signed
 		}
 	}
 	return !restricted, nil
+}
+
+// ValidateAccessKeyLookupContext permits a product to open only the Account
+// scope bound to a successfully verified, fresh signed request. Status,
+// forced-change, platform-binding and Policy restrictions remain inputs to the
+// later once-only authorization decision; this function never grants access.
+func ValidateAccessKeyLookupContext(value AccessKeyContext, databaseTime time.Time, signedAt int64) error {
+	if err := validateAccessKeyLookupContext(value, databaseTime); err != nil {
+		return err
+	}
+	return ValidateAccessKeySignatureTime(signedAt, databaseTime)
+}
+
+func validateAccessKeyLookupContext(value AccessKeyContext, databaseTime time.Time) error {
+	if validateAuthorityTime(databaseTime) != nil || iamv1.ValidateOrganization(value.Organization) != nil ||
+		iamv1.ValidatePrincipal(value.Principal) != nil || value.Principal.Type != iamv1.PrincipalUser ||
+		iamv1.ValidateAccessKey(value.Key) != nil || iamv1.ValidateID("rootUserId", string(value.RootUserID)) != nil ||
+		iamv1.ValidateID("installationId", value.InstallationID) != nil ||
+		value.Principal.AccountID != value.Organization.ID || value.Key.AccountID != value.Organization.ID ||
+		value.Key.UserID != value.Principal.ID || value.Principal.CreatedAt.Before(value.Organization.CreatedAt) ||
+		value.Key.CreatedAt.Before(value.Principal.CreatedAt) || value.Key.UpdatedAt.After(databaseTime) ||
+		value.Principal.UpdatedAt.After(databaseTime) || value.Organization.UpdatedAt.After(databaseTime) ||
+		ValidateUserBoundary(value.Boundary, value.Organization.ID, value.Principal.ID, value.Principal.ResourceVersion) != nil {
+		return ErrAuthorityUnavailable
+	}
+	return nil
 }
 
 // DecideService authorizes the credential-bound service as its own subject.

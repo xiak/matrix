@@ -99,6 +99,27 @@ type AccessKeyAuthorization struct {
 	SignedRequestDigest string                `json:"signedRequestDigest"`
 }
 
+// ResolveAccessKeySubjectRequest proves possession of one key for the exact
+// product HTTP request before the product opens an Account-scoped lookup. It
+// intentionally carries no Action, resource, Account or Subject selector.
+// Resolution is not authorization and does not consume the nonce.
+type ResolveAccessKeySubjectRequest struct {
+	Profile       AuthorizationProfileReference
+	SignedRequest AccessKeySignedRequest
+}
+
+// AccessKeySubjectContext is non-authorizing identity context for one exact
+// signed request. A product must bind it to the same request and obtain a
+// current AccessKeyAuthorization before returning or mutating any resource.
+type AccessKeySubjectContext struct {
+	APIVersion          string                        `json:"apiVersion"`
+	Kind                string                        `json:"kind"`
+	TenantID            AccountID                     `json:"tenantId"`
+	Subject             Subject                       `json:"subject"`
+	Profile             AuthorizationProfileReference `json:"profile"`
+	SignedRequestDigest string                        `json:"signedRequestDigest"`
+}
+
 func (AccessKeyAuthorizationRequest) String() string { return "[REDACTED]" }
 func (AccessKeyAuthorizationRequest) GoString() string {
 	return "iamv1.AccessKeyAuthorizationRequest{[REDACTED]}"
@@ -107,6 +128,17 @@ func (AccessKeyAuthorizationRequest) MarshalJSON() ([]byte, error) {
 	return nil, ErrInvalidAccessKeySignature
 }
 func (*AccessKeyAuthorizationRequest) UnmarshalJSON([]byte) error {
+	return ErrInvalidAccessKeySignature
+}
+
+func (ResolveAccessKeySubjectRequest) String() string { return "[REDACTED]" }
+func (ResolveAccessKeySubjectRequest) GoString() string {
+	return "iamv1.ResolveAccessKeySubjectRequest{[REDACTED]}"
+}
+func (ResolveAccessKeySubjectRequest) MarshalJSON() ([]byte, error) {
+	return nil, ErrInvalidAccessKeySignature
+}
+func (*ResolveAccessKeySubjectRequest) UnmarshalJSON([]byte) error {
 	return ErrInvalidAccessKeySignature
 }
 
@@ -156,6 +188,75 @@ func DecodeAccessKeyAuthorizationRequest(reader io.Reader) (AccessKeyAuthorizati
 		return AccessKeyAuthorizationRequest{}, ErrInvalidAccessKeySignature
 	}
 	return value, nil
+}
+
+func ValidateResolveAccessKeySubjectRequest(value ResolveAccessKeySubjectRequest) error {
+	source, known := sourceProfileCommitments[value.Profile.Product]
+	if !known || value.Profile != source.reference || ValidateAccessKeySignedRequest(value.SignedRequest) != nil ||
+		value.Profile.Product != value.SignedRequest.Parameters.Audience {
+		return ErrInvalidAccessKeySignature
+	}
+	return nil
+}
+
+func EncodeResolveAccessKeySubjectRequest(value ResolveAccessKeySubjectRequest) ([]byte, error) {
+	if ValidateResolveAccessKeySubjectRequest(value) != nil {
+		return nil, ErrInvalidAccessKeySignature
+	}
+	signed, err := EncodeAccessKeySignedRequest(value.SignedRequest)
+	if err != nil {
+		return nil, err
+	}
+	defer clear(signed)
+	encoded, err := json.Marshal(struct {
+		Profile       AuthorizationProfileReference `json:"profile"`
+		SignedRequest json.RawMessage               `json:"signedRequest"`
+	}{value.Profile, signed})
+	if err != nil || int64(len(encoded)) > MaxRequestBytes {
+		clear(encoded)
+		return nil, ErrInvalidAccessKeySignature
+	}
+	return encoded, nil
+}
+
+func DecodeResolveAccessKeySubjectRequest(reader io.Reader) (ResolveAccessKeySubjectRequest, error) {
+	var wire struct {
+		Profile       AuthorizationProfileReference `json:"profile"`
+		SignedRequest json.RawMessage               `json:"signedRequest"`
+	}
+	if contractjson.DecodeObject(reader, MaxRequestBytes, &wire) != nil {
+		return ResolveAccessKeySubjectRequest{}, ErrInvalidAccessKeySignature
+	}
+	defer clear(wire.SignedRequest)
+	signed, err := DecodeAccessKeySignedRequest(bytes.NewReader(wire.SignedRequest))
+	value := ResolveAccessKeySubjectRequest{Profile: wire.Profile, SignedRequest: signed}
+	if err != nil || ValidateResolveAccessKeySubjectRequest(value) != nil {
+		return ResolveAccessKeySubjectRequest{}, ErrInvalidAccessKeySignature
+	}
+	return value, nil
+}
+
+func ValidateAccessKeySubjectContext(value AccessKeySubjectContext) error {
+	source, known := sourceProfileCommitments[value.Profile.Product]
+	if value.APIVersion != APIVersion || value.Kind != "AccessKeySubjectContext" || !known ||
+		value.Profile != source.reference || ValidateID("tenantId", string(value.TenantID)) != nil ||
+		ValidateSubject(value.Subject) != nil || value.Subject.Type != SubjectUser || value.Subject.AccessKeyID == "" ||
+		ValidateDigest("signedRequestDigest", value.SignedRequestDigest) != nil {
+		return ErrInvalidAccessKeySignature
+	}
+	return nil
+}
+
+func CheckAccessKeySubjectContextForRequest(value AccessKeySubjectContext, request ResolveAccessKeySubjectRequest) error {
+	if ValidateResolveAccessKeySubjectRequest(request) != nil || ValidateAccessKeySubjectContext(value) != nil ||
+		value.Profile != request.Profile || value.Subject.AccessKeyID != request.SignedRequest.Parameters.AccessKeyID {
+		return ErrInvalidAccessKeySignature
+	}
+	digest, err := AccessKeySignedRequestDigest(request.SignedRequest)
+	if err != nil || digest != value.SignedRequestDigest {
+		return ErrInvalidAccessKeySignature
+	}
+	return nil
 }
 
 func ValidateAccessKeyAuthorization(value AccessKeyAuthorization) error {

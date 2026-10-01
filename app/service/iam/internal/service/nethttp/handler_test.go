@@ -263,6 +263,85 @@ func TestSignedAuthorizationTransportDoesNotAcceptSubjectSelectors(t *testing.T)
 	}
 }
 
+func TestSignedSubjectResolutionTransportIsExactAndNonAuthorizing(t *testing.T) {
+	workflow := newHTTPWorkflow(t)
+	endpoint := newTestHandler(t, workflow)
+	profile, known := iamv1.LookupAuthorizationProfile(iamv1.ProductPaaS)
+	if !known {
+		t.Fatal("PaaS profile is unavailable")
+	}
+	_, profileDigest, err := iamv1.CanonicalizeAuthorizationProfile(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonce, _ := iamv1.NewSecret(strings.Repeat("A", 22))
+	signature, _ := iamv1.NewSecret(strings.Repeat("A", 43))
+	input := iamv1.ResolveAccessKeySubjectRequest{
+		Profile: iamv1.AuthorizationProfileReference{Product: profile.Product, Revision: profile.Revision, ContentDigest: profileDigest},
+		SignedRequest: iamv1.AccessKeySignedRequest{
+			Parameters: iamv1.AccessKeySignatureParameters{AccessKeyID: "key-one", InstallationID: "installation-one", Audience: iamv1.ProductPaaS, SignedAt: 1700000000, Nonce: nonce},
+			HTTP: iamv1.AccessKeyHTTPRequest{Method: http.MethodGet, Scheme: "https", Authority: "fixture.invalid:443",
+				EscapedPath: "/api/paas/v1/applications/application-signed", BodyDigest: "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+			Signature: signature,
+		},
+	}
+	body, err := iamv1.EncodeResolveAccessKeySubjectRequest(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(body)
+	for _, name := range []string{"valid", "subject-header", "duplicate-bearer", "query-selector", "body-selector", "encoding", "method", "media"} {
+		t.Run(name, func(t *testing.T) {
+			wire := body
+			if name == "body-selector" {
+				wire = append(append([]byte(nil), body[:len(body)-1]...), []byte(`,"accountId":"another-account"}`)...)
+				defer clear(wire)
+			}
+			request := httptest.NewRequest(http.MethodPost, "/v1/internal/access-key-subject:resolve", bytes.NewReader(wire))
+			request.Header.Set("Content-Type", "application/json")
+			request.Header.Set("Authorization", "Bearer service-credential")
+			want := http.StatusBadRequest
+			switch name {
+			case "valid":
+				want = http.StatusOK
+			case "subject-header":
+				request.Header.Set("Matrix-Subject-Credential", "cannot-select-a-user")
+			case "duplicate-bearer":
+				request.Header.Add("Authorization", "Bearer another-service")
+				want = http.StatusUnauthorized
+			case "query-selector":
+				request.URL.RawQuery = "tenantId=another-account"
+			case "encoding":
+				request.Header.Set("Content-Encoding", "gzip")
+				want = http.StatusUnsupportedMediaType
+			case "method":
+				request.Method = http.MethodGet
+				want = http.StatusMethodNotAllowed
+			case "media":
+				request.Header.Set("Content-Type", "application/json; charset=utf-8")
+				want = http.StatusUnsupportedMediaType
+			}
+			beforeResolve, beforeAuthorize := workflow.keyResolveCalls, workflow.keyCalls
+			response := httptest.NewRecorder()
+			endpoint.ServeHTTP(response, request)
+			if response.Code != want {
+				t.Fatalf("subject resolution status=%d want=%d body=%s", response.Code, want, response.Body.String())
+			}
+			if name == "valid" {
+				var result iamv1.AccessKeySubjectContext
+				if iamv1.DecodeRequest(bytes.NewReader(response.Body.Bytes()), &result) != nil ||
+					iamv1.CheckAccessKeySubjectContextForRequest(result, input) != nil ||
+					workflow.keyResolveCalls != beforeResolve+1 || workflow.keyCalls != beforeAuthorize ||
+					response.Header().Get("Cache-Control") != "no-store" {
+					t.Fatal("subject resolution issued a permit or changed its request binding")
+				}
+			} else if workflow.keyResolveCalls != beforeResolve || workflow.keyCalls != beforeAuthorize {
+				t.Fatal("invalid subject resolution reached authority")
+			}
+		})
+	}
+}
+
 func TestIAMHTTPAuthorizationProfileDiscoveryRequiresUserSession(t *testing.T) {
 	workflow := newHTTPWorkflow(t)
 	handler := newTestHandler(t, workflow)
@@ -2022,6 +2101,8 @@ type httpWorkflow struct {
 	authorizeCalls                   int
 	authorizeBatchCalls              int
 	keyCalls                         int
+	keyResolveCalls                  int
+	keyResolveRequest                iamv1.ResolveAccessKeySubjectRequest
 	verifyInstallationCalls          int
 	settingsCalls                    int
 	settingsCredential               iamv1.Secret
@@ -2719,6 +2800,20 @@ func (workflow *httpWorkflow) AuthorizeAccessKey(_ context.Context, _ iamv1.Secr
 	decision.Action, decision.Resource, decision.RequestID, decision.CorrelationID = request.Authorization.Action, request.Authorization.Resource, request.Authorization.RequestID, request.Authorization.CorrelationID
 	decision.Profile, decision.ResourceMode, decision.CollectionUsage = &request.Authorization.Profile, request.Authorization.ResourceMode, request.Authorization.CollectionUsage
 	return iamv1.AccessKeyAuthorization{APIVersion: iamv1.APIVersion, Kind: "AccessKeyAuthorization", Decision: decision, SignedRequestDigest: digest}, err
+}
+
+func (workflow *httpWorkflow) ResolveAccessKeySubject(_ context.Context, _ iamv1.Secret, request iamv1.ResolveAccessKeySubjectRequest) (iamv1.AccessKeySubjectContext, error) {
+	workflow.keyResolveCalls++
+	workflow.keyResolveRequest = request
+	digest, err := iamv1.AccessKeySignedRequestDigest(request.SignedRequest)
+	if err != nil {
+		return iamv1.AccessKeySubjectContext{}, err
+	}
+	return iamv1.AccessKeySubjectContext{
+		APIVersion: iamv1.APIVersion, Kind: "AccessKeySubjectContext", TenantID: "account-one",
+		Subject: iamv1.Subject{Type: iamv1.SubjectUser, ID: "user-one", AccessKeyID: request.SignedRequest.Parameters.AccessKeyID},
+		Profile: request.Profile, SignedRequestDigest: digest,
+	}, nil
 }
 
 func newTestHandler(t *testing.T, workflow Workflow) http.Handler {

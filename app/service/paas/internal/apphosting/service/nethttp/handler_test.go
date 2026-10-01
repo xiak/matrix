@@ -309,8 +309,8 @@ func TestHandlerKeepsAccessKeyAdmissionClosedAndMapsNonceReplay(t *testing.T) {
 		authorizer := &fakeAuthorizer{}
 		workflow := &fakeWorkflow{}
 		handler := mustAccessKeyHandler(t, authorizer, workflow)
-		request := httptest.NewRequest(http.MethodGet, "/v1/applications/application-a", nil)
-		setAccessKeyEdgeHeaders(t, request, "/api/paas/v1/applications/application-a")
+		request := httptest.NewRequest(http.MethodGet, "/v1/configurations/configuration-a", nil)
+		setAccessKeyEdgeHeaders(t, request, "/api/paas/v1/configurations/configuration-a")
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, request)
 		if response.Code != http.StatusUnauthorized || authorizer.accessKeyCalls != 0 ||
@@ -334,6 +334,95 @@ func TestHandlerKeepsAccessKeyAdmissionClosedAndMapsNonceReplay(t *testing.T) {
 		if response.Code != http.StatusConflict || authorizer.accessKeyCalls != 1 || workflow.createApplicationCalls != 0 {
 			t.Fatalf("AccessKey replay status=%d calls=%d workflow=%d body=%s",
 				response.Code, authorizer.accessKeyCalls, workflow.createApplicationCalls, response.Body.String())
+		}
+	})
+}
+
+func TestHandlerReadsExactApplicationThroughAccessKeySubjectResolution(t *testing.T) {
+	labels := map[string]string{"environment": "production", "team": "payments"}
+	metadata := testMetadata("application-key", "application-key")
+	metadata.Labels = labels
+	resource := paasv1.Application{APIVersion: paasv1.APIVersion, Kind: "Application", Metadata: metadata}
+	authorizer := &fakeAuthorizer{}
+	workflow := &fakeWorkflow{
+		inspectSnapshot: &applicationlifecycle.ApplicationAuthorizationSnapshot{
+			ID: metadata.ID, ResourceVersion: metadata.ResourceVersion, Labels: labels,
+		},
+		getApplicationResult: &resource,
+	}
+	handler := mustAccessKeyHandler(t, authorizer, workflow)
+	request := httptest.NewRequest(http.MethodGet, "/v1/applications/application-key", nil)
+	setAccessKeyEdgeHeaders(t, request, "/api/paas/v1/applications/application-key")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || authorizer.keyResolveCalls != 1 || authorizer.resolveCalls != 0 ||
+		authorizer.accessKeyCalls != 1 || authorizer.authorizeCalls != 0 ||
+		workflow.inspectApplicationCalls != 1 || workflow.getApplicationCalls != 1 {
+		t.Fatalf("signed read status=%d key-resolve=%d bearer-resolve=%d key-authorize=%d bearer-authorize=%d inspect=%d get=%d body=%s",
+			response.Code, authorizer.keyResolveCalls, authorizer.resolveCalls, authorizer.accessKeyCalls,
+			authorizer.authorizeCalls, workflow.inspectApplicationCalls, workflow.getApplicationCalls, response.Body.String())
+	}
+	if authorizer.accessKeyRequest.Action != port.AuthorizeApplicationRead ||
+		authorizer.accessKeyRequest.Resource != (paasv1.ResourceRef{Kind: port.ResourceApplication, ID: "application-key"}) ||
+		authorizer.accessKeyRequest.SignedRequest.HTTP.Method != http.MethodGet ||
+		authorizer.accessKeyRequest.SignedRequest.HTTP.EscapedPath != "/api/paas/v1/applications/application-key" ||
+		!reflect.DeepEqual(authorizer.accessKeyRequest.ResourceLabels, labels) ||
+		!workflow.readAuthorization.Subject.Equal(paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "user-authorized", AccessKeyID: "key-one"}) {
+		t.Fatalf("signed read binding changed: request=%#v authorization=%#v", authorizer.accessKeyRequest, workflow.readAuthorization)
+	}
+	var got paasv1.Application
+	if json.NewDecoder(response.Body).Decode(&got) != nil || got.Metadata.ID != metadata.ID || !reflect.DeepEqual(got.Metadata.Labels, labels) {
+		t.Fatalf("signed read resource=%#v", got)
+	}
+
+	t.Run("body is rejected before IAM", func(t *testing.T) {
+		authorizer := &fakeAuthorizer{}
+		workflow := &fakeWorkflow{}
+		handler := mustAccessKeyHandler(t, authorizer, workflow)
+		request := httptest.NewRequest(http.MethodGet, "/v1/applications/application-key", strings.NewReader("{}"))
+		request.Header.Set("Content-Type", "application/json")
+		setAccessKeyEdgeHeaders(t, request, "/api/paas/v1/applications/application-key")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest || authorizer.keyResolveCalls != 0 || authorizer.accessKeyCalls != 0 ||
+			workflow.inspectApplicationCalls != 0 || workflow.getApplicationCalls != 0 {
+			t.Fatalf("signed read body reached authority: status=%d resolve=%d authorize=%d inspect=%d get=%d",
+				response.Code, authorizer.keyResolveCalls, authorizer.accessKeyCalls, workflow.inspectApplicationCalls, workflow.getApplicationCalls)
+		}
+	})
+
+	t.Run("subject resolution fails closed", func(t *testing.T) {
+		authorizer := &fakeAuthorizer{resolveErr: port.ErrAuthorizationUnavailable}
+		workflow := &fakeWorkflow{}
+		handler := mustAccessKeyHandler(t, authorizer, workflow)
+		request := httptest.NewRequest(http.MethodGet, "/v1/applications/application-key", nil)
+		setAccessKeyEdgeHeaders(t, request, "/api/paas/v1/applications/application-key")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusServiceUnavailable || authorizer.keyResolveCalls != 1 || authorizer.accessKeyCalls != 0 ||
+			workflow.inspectApplicationCalls != 0 || workflow.getApplicationCalls != 0 {
+			t.Fatalf("failed subject resolution leaked work: status=%d resolve=%d authorize=%d inspect=%d get=%d",
+				response.Code, authorizer.keyResolveCalls, authorizer.accessKeyCalls, workflow.inspectApplicationCalls, workflow.getApplicationCalls)
+		}
+	})
+
+	t.Run("final decision cannot switch subject", func(t *testing.T) {
+		authorizer := &fakeAuthorizer{accessKeyResult: &port.Authorization{
+			TenantID: "other-account", Subject: paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "other-user", AccessKeyID: "key-one"},
+			DecisionID: "decision-other", RequestID: "request-test",
+		}}
+		workflow := &fakeWorkflow{inspectSnapshot: &applicationlifecycle.ApplicationAuthorizationSnapshot{
+			ID: metadata.ID, ResourceVersion: metadata.ResourceVersion, Labels: labels,
+		}}
+		handler := mustAccessKeyHandler(t, authorizer, workflow)
+		request := httptest.NewRequest(http.MethodGet, "/v1/applications/application-key", nil)
+		setAccessKeyEdgeHeaders(t, request, "/api/paas/v1/applications/application-key")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusServiceUnavailable || authorizer.keyResolveCalls != 1 || authorizer.accessKeyCalls != 1 ||
+			workflow.inspectApplicationCalls != 1 || workflow.getApplicationCalls != 0 {
+			t.Fatalf("subject substitution reached resource: status=%d resolve=%d authorize=%d inspect=%d get=%d",
+				response.Code, authorizer.keyResolveCalls, authorizer.accessKeyCalls, workflow.inspectApplicationCalls, workflow.getApplicationCalls)
 		}
 	})
 }
@@ -761,6 +850,7 @@ type fakeAuthorizer struct {
 	accessKeyRequest port.AccessKeyAuthorizationRequest
 	resolveRequest   port.SubjectResolutionRequest
 	resolveCalls     int
+	keyResolveCalls  int
 	authorizeCalls   int
 	accessKeyCalls   int
 	err              error
@@ -769,6 +859,27 @@ type fakeAuthorizer struct {
 	result           *port.Authorization
 	accessKeyResult  *port.Authorization
 	resolveResult    *port.AuthorizationSubjectContext
+}
+
+func (authorizer *fakeAuthorizer) ResolveAccessKeySubject(
+	_ context.Context,
+	signed iamv1.AccessKeySignedRequest,
+) (port.AuthorizationSubjectContext, error) {
+	authorizer.keyResolveCalls++
+	if authorizer.resolveErr != nil {
+		return port.AuthorizationSubjectContext{}, authorizer.resolveErr
+	}
+	if authorizer.resolveResult != nil {
+		return *authorizer.resolveResult, nil
+	}
+	profile, _ := iamv1.LookupAuthorizationProfile(iamv1.ProductPaaS)
+	_, digest, _ := iamv1.CanonicalizeAuthorizationProfile(profile)
+	return port.AuthorizationSubjectContext{
+		TenantID: "tenant-authorized",
+		Subject: paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "user-authorized",
+			AccessKeyID: string(signed.Parameters.AccessKeyID)},
+		Profile: iamv1.AuthorizationProfileReference{Product: profile.Product, Revision: profile.Revision, ContentDigest: digest},
+	}, nil
 }
 
 func (authorizer *fakeAuthorizer) ResolveSubject(
