@@ -6,8 +6,8 @@
 - Updated: 2026-10-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `1ecd350f6`
-- Pushed documentation milestone: `18d331a54`
+- Pushed source/embed milestone: `f5364f6a7`
+- Pushed documentation milestone: `7996f07ab`
 
 ## Authoritative route
 
@@ -30,13 +30,14 @@ compaction or handoff, then validate it against Git and the linked FEAT.
 
 The independent DEV MOCK remains available at `http://127.0.0.1:4317`, and
 login verification remains disabled for UX review. The read-only capability
-directory and User-scoped AccessKey workspace now carry the isolated fixed
-Audit r3 declaration and its public query/integrity result boundaries. The
+directory and User-scoped AccessKey workspace carry the isolated fixed Audit
+r3 declaration and its public query/integrity result boundaries. A labelled
+operation selector now mounts only one PaaS/Audit outcome table at a time. The
 browser still does not sign, retain Secret material or send a product request;
 the pending backend verification keeps this outside LIVE acceptance.
 
-Source and synchronized embed are pushed at `1ecd350f6`; shared-console and
-IAM-client FEAT evidence is pushed through `18d331a54`. The complete frontend
+Source and synchronized embed are pushed at `f5364f6a7`; shared-console and
+IAM-client FEAT evidence is pushed through `7996f07ab`. The complete frontend
 gate passed 57 files/940 cases plus three normalization cases,
 typecheck/lint/architecture/228-pair style checks, 42-route export, 233-file
 embed equality and repository Go test/vet. Desktop and `390 x 844` DEV checks
@@ -61,6 +62,9 @@ fixed or pushed and therefore remain absent from the UI; the browser must not co
 or submit a client IP for this decision. Product
 Profile publication, service-related roles and permission boundaries already
 have backend-owned contracts and must not receive parallel frontend models.
+The IAM owner confirmed that existing AccessKey, Role and Group surfaces now
+have integration/acceptance gaps rather than missing UI contracts: do not
+rebuild them without an actual fixed-object diff.
 An authoritative effective-access/policy-simulator API does not exist; keep the
 configuration review non-evaluating and do not create a decision-shaped MOCK.
 Continue without reintroducing whole-page loading, hidden broad Context
