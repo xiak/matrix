@@ -1909,6 +1909,23 @@ describe("account access", () => {
     expect(within(rows[3]!).getByText("服务身份")).toBeTruthy();
     expect(within(rows[3]!).getByText("用户凭证: 不适用")).toBeTruthy();
     expect(within(rows[3]!).queryByText(/仅登录会话/)).toBeNull();
+
+    expect(screen.queryByRole("combobox", { name: "用户凭据" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "筛选" }));
+    await user.click(screen.getByRole("combobox", { name: "用户凭据" }));
+    await user.click(screen.getByRole("option", { name: "访问密钥" }));
+    expect(within(screen.getByRole("table", { name: "产品 paas 的 Action 声明" })).getAllByRole("row")).toHaveLength(2);
+    expect(screen.getByRole("button", { name: "移除筛选：用户凭据: 访问密钥" })).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "清除筛选" }));
+    expect(within(screen.getByRole("table", { name: "产品 paas 的 Action 声明" })).getAllByRole("row")).toHaveLength(4);
+    await user.click(screen.getByRole("combobox", { name: "适用主体" }));
+    await user.click(screen.getByRole("option", { name: "服务身份" }));
+    const serviceRows = within(screen.getByRole("table", { name: "产品 paas 的 Action 声明" })).getAllByRole("row");
+    expect(serviceRows).toHaveLength(2);
+    expect(within(serviceRows[1]!).getByText("paas.application.probe")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "清除筛选" }));
     await user.type(screen.getByRole("searchbox", { name: "搜索 Action" }), "ACCESS_KEY");
     expect(within(screen.getByRole("table", { name: "产品 paas 的 Action 声明" })).getAllByRole("row")).toHaveLength(2);
   });

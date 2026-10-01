@@ -6,7 +6,7 @@ import { KeyRound, RotateCw } from "lucide-react";
 import { Alert, Badge, Button, Card, Checkbox, ContentPage, FormField, Select, Table, TablePagination, Typography } from "@ui/xiak";
 import { requestToken } from "@/infrastructure/http/jsonRequest";
 import { useAccountAccess, type AuthorizationProfileClient } from "../application/AccountAccessProvider";
-import { admittedAuthorizationSubjects, type AuthorizationProfileDirectory } from "../domain/accounts";
+import { admittedAuthorizationUserAuthenticationMethods, type AuthorizationProfileDirectory } from "../domain/accounts";
 import type { AccessKey, AccessWorkspace } from "../domain/accessWorkspace";
 import type { AccountAccessScene, AccountUserScene } from "../scenes/accountAccessScene";
 import { AccountIdentifier } from "./AccountOverview";
@@ -23,10 +23,16 @@ type KeyFlow =
   | { kind: "delete"; keyId: string; requestId: string };
 
 const previewProgrammaticBoundaries = [{
-  action: "paas.application.create",
+  actions: [
+    "paas.application.create",
+    "paas.configuration.create",
+    "paas.configuration-revision.create",
+    "paas.application-revision.create",
+    "paas.deployment.create"
+  ],
   product: "paas",
-  profileRevision: 7,
-  fixedSource: "40adf6d8",
+  profileRevision: 8,
+  fixedSource: "63ab867d",
   outcomes: [
     { http: 202, code: "Operation", meaning: "accepted", nonce: "consumed" },
     { http: 400, code: "INVALID_ARGUMENT", meaning: "invalidArgument", nonce: "notConsumed" },
@@ -163,17 +169,21 @@ export function RotationGuide() {
 
 function ProgrammaticRequestBoundaryPreview({ actions }: { actions: readonly string[] }) {
   const t = useTranslations("IamWorkspace");
-  const boundaries = previewProgrammaticBoundaries.filter((entry) => actions.includes(entry.action));
+  const boundaries = previewProgrammaticBoundaries.map((entry) => ({
+    ...entry,
+    actions: entry.actions.filter((action) => actions.includes(action))
+  })).filter((entry) => entry.actions.length > 0);
   if (!boundaries.length) return null;
   return <details className={styles.requestPreview}>
     <summary><span><strong>{t("keyRequestPreviewTitle")}</strong><small>{t("keyRequestPreviewHint")}</small></span><Badge status="warning">MOCK</Badge></summary>
     <div className={styles.requestPreviewBody}>
       <Alert status="warning">{t("keyRequestPreviewNotLive")}</Alert>
-      {boundaries.map((entry) => <section className={styles.requestBoundary} key={entry.action}>
-        <header><div><strong>{entry.action}</strong><small>{t("keyRequestPreviewSource", { source: entry.fixedSource })}</small></div><Badge status="neutral">{entry.product} · r{entry.profileRevision}</Badge></header>
-        <Table aria-label={t("keyRequestPreviewTable", { action: entry.action })} className={styles.requestOutcomeTable} mobileLayout="stack">
+      {boundaries.map((entry) => <section className={styles.requestBoundary} key={`${entry.product}:${entry.profileRevision}`}>
+        <header><div><strong>{t("keyRequestPreviewScope", { count: entry.actions.length })}</strong><small>{t("keyRequestPreviewSource", { source: entry.fixedSource })}</small></div><Badge status="neutral">{entry.product} · r{entry.profileRevision}</Badge></header>
+        <div className={styles.requestActions}>{entry.actions.map((action) => <code key={action}>{action}</code>)}</div>
+        <Table aria-label={t("keyRequestPreviewTable")} className={styles.requestOutcomeTable} mobileLayout="stack">
           <thead><tr><th scope="col">HTTP</th><th scope="col">{t("keyRequestPreviewCode")}</th><th scope="col">{t("keyRequestPreviewMeaning")}</th><th scope="col">Nonce</th></tr></thead>
-          <tbody>{entry.outcomes.map((outcome) => <tr key={`${entry.action}:${outcome.http}`}>
+          <tbody>{entry.outcomes.map((outcome) => <tr key={`${entry.product}:${entry.profileRevision}:${outcome.http}`}>
             <td data-label="HTTP"><code>{outcome.http}</code></td>
             <td data-label={t("keyRequestPreviewCode")}><code>{outcome.code}</code></td>
             <td data-label={t("keyRequestPreviewMeaning")}>{t(`keyRequestPreviewOutcomes.${outcome.meaning}`)}</td>
@@ -194,7 +204,7 @@ export function ProgrammaticAccessGuide({ owner, client }: { owner: AccountUserS
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const accepted = useMemo(() => directory?.items.flatMap((entry) => entry.profile.actions
-    .filter((action) => admittedAuthorizationSubjects(action).includes("USER") && action.userAuthenticationMethods?.includes("ACCESS_KEY"))
+    .filter((action) => admittedAuthorizationUserAuthenticationMethods(action).includes("ACCESS_KEY"))
     .map((action) => ({ product: entry.profile.product, revision: entry.profile.revision, action: action.action }))) ?? [], [directory]);
   const pages = Math.max(1, Math.ceil(accepted.length / pageSize));
   const currentPage = Math.min(page, pages);

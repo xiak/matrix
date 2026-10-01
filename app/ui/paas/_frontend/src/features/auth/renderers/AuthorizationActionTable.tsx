@@ -2,7 +2,12 @@
 
 import { useTranslations } from "next-intl";
 import { Table } from "@ui/xiak";
-import { admittedAuthorizationSubjects, authorizationResourceShapeKind, type AuthorizationProfileAction } from "../domain/accounts";
+import {
+  admittedAuthorizationSubjects,
+  admittedAuthorizationUserAuthenticationMethods,
+  authorizationResourceShapeKind,
+  type AuthorizationProfileAction
+} from "../domain/accounts";
 import styles from "./AuthorizationActionTable.module.css";
 
 // The catalog and the product-onboarding review show the same declaration,
@@ -13,6 +18,7 @@ export function AuthorizationActionTable({ actions, label }: { actions: Authoriz
     <thead><tr><th scope="col">{t("action")}</th><th scope="col">{t("resourceTarget")}</th><th scope="col">{t("subjectCredential")}</th><th scope="col">{t("conditions")}</th></tr></thead>
     <tbody>{actions.map((action) => {
       const subjects = admittedAuthorizationSubjects(action);
+      const userAuthenticationMethods = admittedAuthorizationUserAuthenticationMethods(action);
       return <tr key={action.action}>
         <td data-label={t("action")}><code>{action.action}</code></td>
         <td data-label={t("resourceTarget")}><small>{t(`scopes.${action.scope}`)}</small><strong>{action.resourceKind}</strong>
@@ -23,7 +29,7 @@ export function AuthorizationActionTable({ actions, label }: { actions: Authoriz
           <strong>{subjects.map((subject) => t(`subjects.${subject}`)).join(" · ")}</strong>
           {action.subjectTypes === undefined ? <small>{t("legacySubjects")}</small> : null}
           <small>{t("userCredentials")}: {subjects.includes("USER")
-            ? (action.userAuthenticationMethods ?? ["LOGIN_SESSION"]).map((method) => t(`credentials.${method}`)).join(" · ")
+            ? userAuthenticationMethods.map((method) => t(`credentials.${method}`)).join(" · ")
             : t("notApplicable")}</small>
           {subjects.includes("USER") && action.userAuthenticationMethods === undefined ? <small>{t("legacyCredentials")}</small> : null}
         </td>

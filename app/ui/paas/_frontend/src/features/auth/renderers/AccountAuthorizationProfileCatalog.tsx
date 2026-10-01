@@ -6,7 +6,15 @@ import { useTranslations } from "next-intl";
 import { Alert, Badge, Button, EmptyState, Table, TablePagination, TableSkeleton, TableToolbar } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import { useAccountAccess, type AuthorizationProfileClient, type AuthorizationProfileLoad } from "../application/AccountAccessProvider";
-import { admittedAuthorizationSubjects, type AuthorizationProfileAction, type AuthorizationProfileEntry } from "../domain/accounts";
+import {
+  admittedAuthorizationSubjects,
+  admittedAuthorizationUserAuthenticationMethods,
+  type AuthorizationAuthorityScope,
+  type AuthorizationProfileAction,
+  type AuthorizationProfileEntry,
+  type AuthorizationSubjectType,
+  type AuthorizationUserAuthenticationMethod
+} from "../domain/accounts";
 import { AuthorizationActionTable } from "./AuthorizationActionTable";
 import { AuthorizationProfilePublishingPreview } from "./AuthorizationProfilePublishingPreview";
 import styles from "./AccountAccessRenderer.module.css";
@@ -32,6 +40,9 @@ function AuthorizationProfileCatalog({ client }: { client: AuthorizationProfileC
   const [state, setState] = useState<CatalogState>({ status: "loading" });
   const [query, setQuery] = useState("");
   const [actionQuery, setActionQuery] = useState("");
+  const [scopeFilter, setScopeFilter] = useState<"all" | AuthorizationAuthorityScope>("all");
+  const [subjectFilter, setSubjectFilter] = useState<"all" | AuthorizationSubjectType>("all");
+  const [credentialFilter, setCredentialFilter] = useState<"all" | AuthorizationUserAuthenticationMethod>("all");
   const [productPage, setProductPage] = useState(1);
   const [productPageSize, setProductPageSize] = useState(10);
   const [page, setPage] = useState(1);
@@ -84,12 +95,16 @@ function AuthorizationProfileCatalog({ client }: { client: AuthorizationProfileC
     if (!selected) return [];
     const words = actionQuery.normalize("NFKC").trim().toLowerCase().split(/\s+/).filter(Boolean);
     return selected.profile.actions.filter((action) => {
-      const value = [action.action, action.resourceKind, action.scope, action.resultResourceKind ?? "", ...admittedAuthorizationSubjects(action),
-        ...(action.userAuthenticationMethods ?? (admittedAuthorizationSubjects(action).includes("USER") ? ["LOGIN_SESSION"] : [])),
+      const subjects = admittedAuthorizationSubjects(action);
+      const credentials = admittedAuthorizationUserAuthenticationMethods(action);
+      if (scopeFilter !== "all" && action.scope !== scopeFilter) return false;
+      if (subjectFilter !== "all" && !subjects.includes(subjectFilter)) return false;
+      if (credentialFilter !== "all" && !credentials.includes(credentialFilter)) return false;
+      const value = [action.action, action.resourceKind, action.scope, action.resultResourceKind ?? "", ...subjects, ...credentials,
         ...(action.conditions ?? []).map((condition) => condition.key)].join(" ").toLowerCase();
       return words.every((word) => value.includes(word));
     });
-  }, [actionQuery, selected]);
+  }, [actionQuery, credentialFilter, scopeFilter, selected, subjectFilter]);
 
   const productPages = Math.max(1, Math.ceil(filteredEntries.length / productPageSize));
   const currentProductPage = Math.min(productPage, productPages);
@@ -97,10 +112,17 @@ function AuthorizationProfileCatalog({ client }: { client: AuthorizationProfileC
   const pages = Math.max(1, Math.ceil(filteredActions.length / pageSize));
   const currentPage = Math.min(page, pages);
   const visibleActions = filteredActions.slice((currentPage - 1) * pageSize, currentPage * pageSize);
-  const resetActions = () => { setActionQuery(""); setPage(1); };
+  const resetActions = () => {
+    setActionQuery("");
+    setScopeFilter("all");
+    setSubjectFilter("all");
+    setCredentialFilter("all");
+    setPage(1);
+  };
   const open = (entry: AuthorizationProfileEntry) => {
     returnProduct.current = entry.profile.product;
-    setActionQuery(""); setPage(1); setSelectedProduct(entry.profile.product);
+    resetActions();
+    setSelectedProduct(entry.profile.product);
   };
   const back = () => setSelectedProduct(null);
   const closePublishingPreview = () => { restorePublishingFocus.current = true; setPublishingPreview(false); };
@@ -144,6 +166,25 @@ function AuthorizationProfileCatalog({ client }: { client: AuthorizationProfileC
     </section> : null}
     <TableToolbar labels={toolbarLabels}
       search={{ label: t("searchActions"), placeholder: t("searchActionsPlaceholder"), value: actionQuery, onChange: (value) => { setActionQuery(value); setPage(1); } }}
+      filters={[
+        { id: "scope", label: t("scopeFilter"), value: scopeFilter, options: [
+          { value: "all", label: t("allScopes") },
+          { value: "TENANT", label: t("scopes.TENANT") },
+          { value: "INSTALLATION", label: t("scopes.INSTALLATION") },
+          { value: "INSTALLATION_PROBE", label: t("scopes.INSTALLATION_PROBE") }
+        ], onChange: (value) => { setScopeFilter(value as "all" | AuthorizationAuthorityScope); setPage(1); } },
+        { id: "subject", label: t("subjectFilter"), value: subjectFilter, options: [
+          { value: "all", label: t("allSubjects") },
+          { value: "USER", label: t("subjects.USER") },
+          { value: "ROLE", label: t("subjects.ROLE") },
+          { value: "SERVICE_ACCOUNT", label: t("subjects.SERVICE_ACCOUNT") }
+        ], onChange: (value) => { setSubjectFilter(value as "all" | AuthorizationSubjectType); setPage(1); } },
+        { id: "credential", label: t("credentialFilter"), value: credentialFilter, options: [
+          { value: "all", label: t("allCredentials") },
+          { value: "LOGIN_SESSION", label: t("credentials.LOGIN_SESSION") },
+          { value: "ACCESS_KEY", label: t("credentials.ACCESS_KEY") }
+        ], onChange: (value) => { setCredentialFilter(value as "all" | AuthorizationUserAuthenticationMethod); setPage(1); } }
+      ]}
       status={t("actionCount", { count: filteredActions.length })} />
     {visibleActions.length ? <AuthorizationActionTable actions={visibleActions} label={t("actionTable", { product: selected.profile.product })} />
       : <EmptyState title={t("noActions")} description={t("noActionsHint")} action={<Button variant="secondary" onClick={resetActions}>{toolbarLabels.resetQuery}</Button>} />}

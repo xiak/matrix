@@ -234,6 +234,14 @@ export function admittedAuthorizationSubjects(action: AuthorizationProfileAction
   return action.subjectTypes ?? (action.scope === "INSTALLATION_PROBE" ? ["SERVICE_ACCOUNT"] : ["USER"]);
 }
 
+export function admittedAuthorizationUserAuthenticationMethods(
+  action: AuthorizationProfileAction
+): AuthorizationUserAuthenticationMethod[] {
+  return admittedAuthorizationSubjects(action).includes("USER")
+    ? action.userAuthenticationMethods ?? ["LOGIN_SESSION"]
+    : [];
+}
+
 export function authorizationResourceShapeKind(shape: AuthorizationResourceShape): "INSTANCE" | "INSTANCE_PREFIX" | "COLLECTION_LIST" | "COLLECTION_CREATE" {
   if (shape.mode === "COLLECTION") return shape.collectionUsage === "COLLECTION_CREATE" ? "COLLECTION_CREATE" : "COLLECTION_LIST";
   return shape.prefixAllowed ? "INSTANCE_PREFIX" : "INSTANCE";

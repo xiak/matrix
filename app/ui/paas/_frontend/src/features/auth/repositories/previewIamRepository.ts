@@ -38,7 +38,8 @@ const previewAt = "2026-09-08T09:00:00Z";
 const previewSessionObservedAt = "2026-09-18T12:00:00Z";
 
 // This exact-shaped sample lets the DEV console exercise the catalog UX while
-// remaining visibly isolated from IAM's trusted registry and digests.
+// remaining visibly isolated from the running IAM registry. The PaaS carrier
+// set is copied only from the fixed revision below; it is not a LIVE read.
 const previewAuthorizationProfiles: AuthorizationProfileEntry[] = [
   {
     profile: {
@@ -88,7 +89,7 @@ const previewAuthorizationProfiles: AuthorizationProfileEntry[] = [
   },
   {
     profile: {
-      product: "paas", revision: 7, callingService: "PAAS", actions: [
+      product: "paas", revision: 8, callingService: "PAAS", actions: [
         { action: "paas.application.create", resourceKind: "APPLICATION", scope: "TENANT", subjectTypes: ["ROLE", "USER"],
           userAuthenticationMethods: ["ACCESS_KEY", "LOGIN_SESSION"],
           resourceShapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_CREATE" }],
@@ -99,6 +100,42 @@ const previewAuthorizationProfiles: AuthorizationProfileEntry[] = [
             { key: "request.source-ip", valueType: "IP", source: "CALLING_SERVICE_NETWORK" },
             { key: "request.tag/environment", valueType: "STRING", source: "CALLING_SERVICE_REQUEST_TAG" }
           ], resultResourceKind: "APPLICATION" },
+        { action: "paas.configuration.create", resourceKind: "CONFIGURATION", scope: "TENANT", subjectTypes: ["ROLE", "USER"],
+          userAuthenticationMethods: ["ACCESS_KEY", "LOGIN_SESSION"],
+          resourceShapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_CREATE" }],
+          conditions: [
+            { key: "iam.account-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" },
+            { key: "iam.current-time", valueType: "TIME", source: "IAM_TRANSACTION_TIME" },
+            { key: "iam.principal-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" },
+            { key: "request.source-ip", valueType: "IP", source: "CALLING_SERVICE_NETWORK" }
+          ], resultResourceKind: "CONFIGURATION" },
+        { action: "paas.configuration-revision.create", resourceKind: "CONFIGURATION_REVISION", scope: "TENANT", subjectTypes: ["ROLE", "USER"],
+          userAuthenticationMethods: ["ACCESS_KEY", "LOGIN_SESSION"],
+          resourceShapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_CREATE" }],
+          conditions: [
+            { key: "iam.account-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" },
+            { key: "iam.current-time", valueType: "TIME", source: "IAM_TRANSACTION_TIME" },
+            { key: "iam.principal-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" },
+            { key: "request.source-ip", valueType: "IP", source: "CALLING_SERVICE_NETWORK" }
+          ], resultResourceKind: "CONFIGURATION_REVISION" },
+        { action: "paas.application-revision.create", resourceKind: "APPLICATION_REVISION", scope: "TENANT", subjectTypes: ["ROLE", "USER"],
+          userAuthenticationMethods: ["ACCESS_KEY", "LOGIN_SESSION"],
+          resourceShapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_CREATE" }],
+          conditions: [
+            { key: "iam.account-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" },
+            { key: "iam.current-time", valueType: "TIME", source: "IAM_TRANSACTION_TIME" },
+            { key: "iam.principal-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" },
+            { key: "request.source-ip", valueType: "IP", source: "CALLING_SERVICE_NETWORK" }
+          ], resultResourceKind: "APPLICATION_REVISION" },
+        { action: "paas.deployment.create", resourceKind: "DEPLOYMENT", scope: "TENANT", subjectTypes: ["ROLE", "USER"],
+          userAuthenticationMethods: ["ACCESS_KEY", "LOGIN_SESSION"],
+          resourceShapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_CREATE" }],
+          conditions: [
+            { key: "iam.account-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" },
+            { key: "iam.current-time", valueType: "TIME", source: "IAM_TRANSACTION_TIME" },
+            { key: "iam.principal-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" },
+            { key: "request.source-ip", valueType: "IP", source: "CALLING_SERVICE_NETWORK" }
+          ], resultResourceKind: "DEPLOYMENT" },
         { action: "paas.application.read", resourceKind: "APPLICATION", scope: "TENANT", subjectTypes: ["ROLE", "USER"],
           resourceShapes: [{ mode: "INSTANCE", prefixAllowed: true }],
           conditions: [
@@ -128,7 +165,7 @@ const previewAuthorizationProfiles: AuthorizationProfileEntry[] = [
           resourceShapes: [{ mode: "INSTANCE", prefixAllowed: false }], resultResourceKind: "EXECUTION_TARGET" }
       ]
     },
-    contentDigest: `sha256:${"3".repeat(64)}`
+    contentDigest: "sha256:553bb69f2eed79887305f7884188769894f786459391ca8df71fe95e07f71812"
   }
 ];
 

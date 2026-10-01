@@ -6,7 +6,7 @@ import { LocaleProvider, useLocalePreference } from "@/i18n/LocaleProvider";
 import { UnsavedChangesProvider, useLeaveConfirmation } from "@ui/xiak";
 import { SessionProvider, useSession } from "../application/SessionProvider";
 import { AccountAccessProvider, useAccountAccess } from "../application/AccountAccessProvider";
-import { accountAccessViews, type AccountAccessView, type AccountIdentity, type ActionCapability, type CapabilityRestriction, type GroupAccess, type GroupMembershipAccess, type IamAction, type User, type UserAccess } from "../domain/accounts";
+import { accountAccessViews, type AccountAccessView, type AccountIdentity, type ActionCapability, type AuthorizationProfileAction, type CapabilityRestriction, type GroupAccess, type GroupMembershipAccess, type IamAction, type User, type UserAccess } from "../domain/accounts";
 import type { AccessPolicy } from "../domain/accessWorkspace";
 import type { AccountRepository, IamRepository } from "../repositories/iamRepository";
 import { createPreviewAccessWorkspace } from "../repositories/previewAccessWorkspace";
@@ -2866,28 +2866,42 @@ describe("CAM-style access workspace", () => {
   });
   it("lists exact access-key carrier declarations without presenting them as a user grant", async () => {
     const listAuthorizationProfiles = vi.fn().mockResolvedValue({ accountId: "org-xiak", items: [{ profile: {
-      product: "paas", revision: 7, callingService: "PAAS", actions: [
-        { action: "paas.application.create", resourceKind: "APPLICATION", scope: "TENANT", subjectTypes: ["USER"], userAuthenticationMethods: ["LOGIN_SESSION", "ACCESS_KEY"], resourceShapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_CREATE" }] },
+      product: "paas", revision: 8, callingService: "PAAS", actions: [
+        ...[
+          ["paas.application.create", "APPLICATION"],
+          ["paas.configuration.create", "CONFIGURATION"],
+          ["paas.configuration-revision.create", "CONFIGURATION_REVISION"],
+          ["paas.application-revision.create", "APPLICATION_REVISION"],
+          ["paas.deployment.create", "DEPLOYMENT"]
+        ].map(([action, resourceKind]): AuthorizationProfileAction => ({ action: action!, resourceKind: resourceKind!, resultResourceKind: resourceKind!,
+          scope: "TENANT", subjectTypes: ["USER"], userAuthenticationMethods: ["LOGIN_SESSION", "ACCESS_KEY"],
+          resourceShapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_CREATE" }] })),
         { action: "paas.application.read", resourceKind: "APPLICATION", scope: "TENANT", subjectTypes: ["USER"], userAuthenticationMethods: ["LOGIN_SESSION"], resourceShapes: [{ mode: "INSTANCE", prefixAllowed: false }] }
       ]
     }, contentDigest: `sha256:${"b".repeat(64)}` }] });
     const { user } = await open("keys", { repository: { listAuthorizationProfiles } });
     await user.click(await screen.findByRole("button", { name: "管理 lin 的访问密钥" }));
     await user.click(screen.getByText("编程访问边界").closest("summary")!);
-    expect(within(await screen.findByRole("table", { name: "编程访问边界" })).getByText("paas.application.create")).toBeTruthy();
-    expect(screen.getByText("权限声明修订 7")).toBeTruthy();
+    const boundary = within(await screen.findByRole("table", { name: "编程访问边界" }));
+    expect(boundary.getByText("paas.application.create")).toBeTruthy();
+    expect(boundary.getByText("paas.configuration.create")).toBeTruthy();
+    expect(boundary.getByText("paas.configuration-revision.create")).toBeTruthy();
+    expect(boundary.getByText("paas.application-revision.create")).toBeTruthy();
+    expect(boundary.getByText("paas.deployment.create")).toBeTruthy();
+    expect(boundary.getAllByText("权限声明修订 8")).toHaveLength(5);
     expect(screen.queryByText("paas.application.read")).toBeNull();
     expect(screen.getByText(/只表示产品声明接受这种凭据载体，不表示当前用户已获授权/)).toBeTruthy();
-    const requestBoundary = screen.getByText("创建 Application 的请求结果").closest("details")!;
+    const requestBoundary = screen.getByText("签名创建请求的结果边界").closest("details")!;
     expect(requestBoundary.open).toBe(false);
-    await user.click(screen.getByText("创建 Application 的请求结果").closest("summary")!);
+    await user.click(screen.getByText("签名创建请求的结果边界").closest("summary")!);
+    expect(screen.getByText("5 个精确签名创建 Action")).toBeTruthy();
     expect(screen.getByText("UNAUTHENTICATED")).toBeTruthy();
     expect(screen.getByText("PERMISSION_DENIED")).toBeTruthy();
     expect(screen.getByText("CONFLICT")).toBeTruthy();
     expect(screen.getByText("IDENTITY_UNAVAILABLE")).toBeTruthy();
     expect(screen.getByText("INVALID_ARGUMENT")).toBeTruthy();
     expect(screen.getByText("Operation")).toBeTruthy();
-    expect(screen.getByText(/40adf6d8/)).toBeTruthy();
+    expect(screen.getByText(/63ab867d/)).toBeTruthy();
     expect(screen.queryByRole("dialog")).toBeNull();
   });
   it("locks an uncertain access-key creation to its original request and never reveals the lost secret", async () => {

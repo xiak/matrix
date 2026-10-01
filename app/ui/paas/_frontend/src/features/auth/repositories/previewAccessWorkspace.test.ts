@@ -67,21 +67,35 @@ describe("isolated authorization catalog preview", () => {
     ]);
     expect(paas?.actions.some((action) => action.action.includes(":"))).toBe(false);
   });
-  it("pins revision 7 to the single AccessKey-capable PaaS create Action", async () => {
+  it("pins revision 8 to the exact AccessKey-capable PaaS immutable-resource graph", async () => {
     const directory = await previewAccountRepository.listAuthorizationProfiles(previewCredential);
-    const paas = directory.items.find((entry) => entry.profile.product === "paas")?.profile;
-    expect(paas?.revision).toBe(7);
-    expect(paas?.actions.filter((action) => action.userAuthenticationMethods?.includes("ACCESS_KEY"))).toEqual([
-      expect.objectContaining({
-        action: "paas.application.create",
-        resourceKind: "APPLICATION",
-        resultResourceKind: "APPLICATION",
-        scope: "TENANT",
-        subjectTypes: ["ROLE", "USER"],
-        userAuthenticationMethods: ["ACCESS_KEY", "LOGIN_SESSION"],
-        resourceShapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_CREATE" }]
-      })
-    ]);
+    const entry = directory.items.find((item) => item.profile.product === "paas");
+    expect(entry?.profile.revision).toBe(8);
+    expect(entry?.contentDigest).toBe("sha256:553bb69f2eed79887305f7884188769894f786459391ca8df71fe95e07f71812");
+    expect(entry?.profile.actions.filter((action) => action.userAuthenticationMethods?.includes("ACCESS_KEY")).map((action) => ({
+      action: action.action,
+      resourceKind: action.resourceKind,
+      resultResourceKind: action.resultResourceKind,
+      scope: action.scope,
+      subjectTypes: action.subjectTypes,
+      userAuthenticationMethods: action.userAuthenticationMethods,
+      resourceShapes: action.resourceShapes
+    }))).toEqual([
+      ["paas.application.create", "APPLICATION"],
+      ["paas.configuration.create", "CONFIGURATION"],
+      ["paas.configuration-revision.create", "CONFIGURATION_REVISION"],
+      ["paas.application-revision.create", "APPLICATION_REVISION"],
+      ["paas.deployment.create", "DEPLOYMENT"]
+    ].map(([action, resourceKind]) => ({
+      action,
+      resourceKind,
+      resultResourceKind: resourceKind,
+      scope: "TENANT",
+      subjectTypes: ["ROLE", "USER"],
+      userAuthenticationMethods: ["ACCESS_KEY", "LOGIN_SESSION"],
+      resourceShapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_CREATE" }]
+    })));
+    expect(entry?.profile.actions.filter((action) => action.userAuthenticationMethods?.includes("ACCESS_KEY"))).toHaveLength(5);
   });
 });
 
