@@ -21,7 +21,8 @@
 .trustDocuments summary { color: var(--xiak-color-accent-text); cursor: pointer; padding-block: var(--xiak-spacing-tight); }
 .trustDocuments summary:focus-visible { outline: 2px solid var(--xiak-color-border-focus); outline-offset: 2px; }
 .trustDocuments[open] summary { margin-bottom: var(--xiak-spacing-default); }
-.bindingList li > div { min-width: 0; overflow-wrap: anywhere; }
+.bindingList li > div { display: grid; flex: 1 1 16rem; min-width: 0; gap: var(--xiak-spacing-micro); overflow-wrap: anywhere; }
+.bindingList li > div > small { display: block; color: var(--xiak-color-text-muted); line-height: var(--xiak-line-height-body); }
 @media (max-width: 760px) { .policyComparison { grid-template-columns: minmax(0, 1fr); } }
 .settingsGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--xiak-spacing-roomy); }
 .settingsGrid > :last-child:nth-child(odd) { grid-column: 1 / -1; }

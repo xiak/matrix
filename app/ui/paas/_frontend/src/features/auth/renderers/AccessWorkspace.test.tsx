@@ -159,6 +159,18 @@ async function expectRetainedFailure(dialog: HTMLElement) {
 afterEach(() => { cleanup(); localStorage.clear(); sessionStorage.clear(); resetPreviewEnvironment(); });
 
 describe("selection-driven user directory", () => {
+  it("opens MOCK user security management in the content area and restores its source action", async () => {
+    const { user } = await open("users");
+    await user.click(await screen.findByRole("button", { name: "查看用户 lin" }));
+    await user.click(screen.getByRole("tab", { name: "安全设置" }));
+    await user.click(screen.getByRole("button", { name: "管理" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("heading", { level: 1, name: "管理 lin" })).toBe(document.activeElement);
+    await user.click(screen.getByRole("button", { name: "返回用户详情" }));
+    expect(screen.getByRole("tab", { name: "安全设置" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("button", { name: "管理" })).toBe(document.activeElement);
+  });
+
   it("keeps a MOCK password-reset uncertainty in memory without browser storage", async () => {
     const execute = vi.fn(async (_credential: string, command: { kind: string }) => {
       if (command.kind === "reset-password") throw new Error("preview response lost");

@@ -1,12 +1,13 @@
 "use client";
 
-import { useId, useLayoutEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { useTranslations } from "next-intl";
 import { KeyRound, ShieldCheck, UserRound } from "lucide-react";
-import { Alert, Dialog, FormField, Badge, Button, Input, PasswordInput, Select, Typography } from "@ui/xiak";
+import { Alert, FormField, Badge, Button, Input, PasswordInput, Select, Typography } from "@ui/xiak";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import { withinNewPasswordProductBounds } from "../domain/passwordEntry";
 import { LiveAccessCredentials } from "./LiveAccessCredentials";
+import { WorkspaceDetail } from "./AccessWorkspaceUi";
 import type { CapabilityRestriction } from "../domain/accounts";
 import type { AccountUserScene } from "../scenes/accountAccessScene";
 import styles from "./AccountAccessRenderer.module.css";
@@ -22,13 +23,20 @@ function PasswordField({ value, onChange, autoFocus = false }: { value: string; 
   </FormField>;
 }
 
-export function CreateTenantDialog({ onClose }: { onClose(): void }) {
+export function CreateTenantWorkspace({ onClose }: { onClose(): void }) {
   const access = useAccountAccess();
   const t = useTranslations("AccountAccess");
   const formId = useId();
+  const form = useRef<HTMLFormElement>(null);
   const [password, setPassword] = useState("");
   const [loginName, setLoginName] = useState("");
   const [displayName, setDisplayName] = useState("");
+  useEffect(() => {
+    if (!access.error || access.busy) return;
+    const alert = form.current?.querySelector<HTMLElement>('[role="alert"]');
+    alert?.focus({ preventScroll: true });
+    alert?.scrollIntoView?.({ block: "nearest" });
+  }, [access.busy, access.error]);
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (access.busy || access.loading || !withinNewPasswordProductBounds(password)) return;
@@ -41,20 +49,21 @@ export function CreateTenantDialog({ onClose }: { onClose(): void }) {
       rootLoginName: loginName.trim(), rootDisplayName: displayName.trim(), initialPassword
     })) onClose();
   }
-  return <Dialog open title={t("createTenantTitle")} closeLabel={t("closeCreate")} onClose={onClose} busy={access.busy} footer={<>
-    <Button disabled={access.busy} onClick={onClose} variant="secondary">{t("cancel")}</Button>
-    <Button disabled={access.busy || access.loading || !withinNewPasswordProductBounds(password)} form={formId} type="submit">{t(access.busy ? "creating" : "confirmTenant")}</Button>
-  </>}>
-    <form aria-label={t("createTenantTitle")} className={styles.form} id={formId} onSubmit={submit}>
+  return <WorkspaceDetail title={t("createTenantTitle")} onBack={onClose}>
+    <form aria-busy={access.busy || undefined} aria-label={t("createTenantTitle")} className={styles.form} id={formId} onSubmit={submit} ref={form}>
       <FormField id={formId + "-id"} label={t("accountId")} hint={t("accountIdHint")}><Input aria-describedby={formId + "-id-hint"} id={formId + "-id"} autoComplete="off" maxLength={128} name="accountId" pattern={"[A-Za-z0-9][A-Za-z0-9._:\\-]{0,127}"} placeholder={t("accountIdPlaceholder")} required /></FormField>
       <FormField id={formId + "-tenant"} label={t("accountName")}><Input id={formId + "-tenant"} maxLength={128} name="accountName" required /></FormField>
       <FormField id={formId + "-login"} label={t("primaryLogin")} hint={t("loginHint") + " " + t("primaryLoginHint")}><Input aria-describedby={formId + "-login-hint"} id={formId + "-login"} autoComplete="off" maxLength={64} minLength={3} name="loginName" pattern={loginPattern} placeholder={t("primaryPlaceholder")} required value={loginName} onChange={(event) => setLoginName(event.target.value)} /></FormField>
       <FormField id={formId + "-name"} label={t("displayName")}><Input id={formId + "-name"} maxLength={128} name="displayName" required value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></FormField>
       <PasswordField onChange={setPassword} value={password} />
       <Alert>{t("tenantNotice")}</Alert>
-      {access.error ? <Alert status="danger">{t(`errors.${access.error}`)}</Alert> : null}
+      {access.error ? <Alert status="danger" tabIndex={-1}>{t(`errors.${access.error}`)}</Alert> : null}
+      <div className={styles.actions}>
+        <Button disabled={access.busy || access.loading || !withinNewPasswordProductBounds(password)} type="submit">{t(access.busy ? "creating" : "confirmTenant")}</Button>
+        <Button disabled={access.busy} onClick={onClose} type="button" variant="secondary">{t("cancel")}</Button>
+      </div>
     </form>
-  </Dialog>;
+  </WorkspaceDetail>;
 }
 
 export function UserAccessManagement({ user, onDeleted, profileActions = false, deleteAction = false, showLiveEvidenceBoundary = false }: {
@@ -238,10 +247,10 @@ export function UserAccessManagement({ user, onDeleted, profileActions = false, 
     </div>;
 }
 
-export function UserAccessDialog({ user, onClose }: { user: AccountUserScene; onClose(): void }) {
+export function UserAccessWorkspace({ user, onClose }: { user: AccountUserScene; onClose(): void }) {
   const t = useTranslations("AccountAccess");
-  const access = useAccountAccess();
-  return <Dialog open title={t("manageUser", { name: user.name })} closeLabel={t("closeDetails")} onClose={onClose} busy={access.busy} footer={<Button disabled={access.busy} onClick={onClose} variant="secondary">{t("closeDetails")}</Button>}>
+  const boundary = useTranslations("UserBoundary");
+  return <WorkspaceDetail title={t("manageUser", { name: user.name })} backLabel={boundary("backToUserDetails")} onBack={onClose}>
     <UserAccessManagement key={`${user.id}:${user.resourceVersion}`} user={user} />
-  </Dialog>;
+  </WorkspaceDetail>;
 }

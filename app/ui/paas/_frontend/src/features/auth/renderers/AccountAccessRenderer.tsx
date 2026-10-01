@@ -1,15 +1,15 @@
 "use client";
 
-import { useEffect, useId, useState, type MouseEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type MouseEvent } from "react";
 import { useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
-import { Alert, ContentPage, FormField, Table, TablePagination, TableSkeleton, EmptyState, Badge, Button, Card, Input, Typography, PageSkeleton, Tabs } from "@ui/xiak";
+import { Alert, ContentPage, FormField, Table, TablePagination, TableSkeleton, EmptyState, Badge, Button, Card, Input, Typography, PageSkeleton, Tabs, type PageCommandsHandle } from "@ui/xiak";
 import { useAccountAccess, useAccountCapabilities } from "../application/AccountAccessProvider";
 import type { AccountAccessView } from "../domain/accounts";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
 import { AccountIdentifier, AccountOverview } from "./AccountOverview";
 import { AccountUserDirectory } from "./AccountUserDirectory";
-import { CreateTenantDialog } from "./AccountUserDialogs";
+import { CreateTenantWorkspace } from "./AccountUserDialogs";
 import { CreateUserWizard } from "./CreateUserWizard";
 import { AccessGroups } from "./AccessGroups";
 import { AccountLiveGroups } from "./AccountLiveGroups";
@@ -100,11 +100,19 @@ function TenantDirectory({ scene }: { scene: AccountAccessScene }) {
   const [creating, setCreating] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [cursorPage, setCursorPage] = useState(1);
+  const createActionFocus = useRef<PageCommandsHandle>(null);
+  const previousCreating = useRef(false);
   const selected = scene.accounts.find((account) => account.id === selectedId);
+  useLayoutEffect(() => {
+    const wasCreating = previousCreating.current;
+    previousCreating.current = creating;
+    if (wasCreating && !creating) createActionFocus.current?.focus("create");
+  }, [creating]);
   if (selected) return <AccountTenantWorkspace account={selected} key={`${selected.id}:${selected.resourceVersion}`} onBack={() => setSelectedId(null)} />;
+  if (creating) return <CreateTenantWorkspace onClose={() => setCreating(false)} />;
   return <div className={styles.stack}>
     <Card>
-      <ContentPage.Heading title={t("tenantAccounts")} scrollKey="tenant-directory" actions={scene.canCreateAccounts ? <ContentPage.Commands label={collection("pageActions")} primary={{ id: "create", label: t("openTenant"), icon: <Plus aria-hidden="true" />, disabled: access.busy || access.loading, onSelect: () => { setCreating(true); setSelectedId(null); } }} /> : undefined} />
+      <ContentPage.Heading title={t("tenantAccounts")} scrollKey="tenant-directory" actions={scene.canCreateAccounts ? <ContentPage.Commands label={collection("pageActions")} focusRef={createActionFocus} primary={{ id: "create", label: t("openTenant"), icon: <Plus aria-hidden="true" />, disabled: access.busy || access.loading, onSelect: () => { setCreating(true); setSelectedId(null); } }} /> : undefined} />
       <Table aria-label={t("tenantTable")} mobileLayout="stack"><thead><tr><th scope="col">{t("tenant")}</th><th scope="col">{t("primaryLogin")}</th><th scope="col">{t("alias")}</th><th scope="col">{t("status")}</th></tr></thead>
           <tbody>{scene.accounts.map((account) => <tr key={account.id}><td data-label={t("tenant")}><button className={styles.userLink} onClick={() => { setSelectedId(account.id); setCreating(false); }} type="button">{account.name}</button><small>{account.id}</small></td><td data-label={t("primaryLogin")}>{account.rootLoginName}</td><td data-label={t("alias")}>{account.loginAlias ?? t("aliasUnset")}</td><td data-label={t("status")}><Badge status={account.enabled ? "success" : "neutral"}>{t(account.enabled ? "tenantActive" : "tenantDisabled")}</Badge></td></tr>)}</tbody>
         </Table>
@@ -113,7 +121,6 @@ function TenantDirectory({ scene }: { scene: AccountAccessScene }) {
         previous={{ label: t("firstPage"), disabled: cursorPage <= 1, onClick: () => { setSelectedId(null); setCreating(false); setCursorPage(1); access.accountsPage(""); } }}
         next={{ label: t("nextPage"), disabled: !scene.nextAccountPage, onClick: () => { setSelectedId(null); setCreating(false); setCursorPage((current) => current + 1); access.accountsPage(scene.nextAccountPage!); } }} /></Table.Footer>
     </Card>
-    {creating ? <CreateTenantDialog onClose={() => setCreating(false)} /> : null}
   </div>;
 }
 

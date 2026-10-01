@@ -139,15 +139,18 @@ export function WorkspaceCollection<T extends { id: string; name: string }>({ ti
   </Card>;
 }
 
-export function WorkspaceDetail({ title, onBack, actions, children, embedded = false, primaryActionRef, actionFocusRef }: {
+export function WorkspaceDetail({ title, onBack, backLabel, actions, children, embedded = false, focus = true, primaryActionRef, actionFocusRef }: {
   title: string; onBack(): void; actions?: { primary?: PageCommand; secondary?: readonly PageCommand[] }; children: ReactNode; embedded?: boolean;
+  backLabel?: string;
+  focus?: boolean;
   primaryActionRef?: RefObject<HTMLButtonElement | null>;
   actionFocusRef?: Ref<PageCommandsHandle>;
 }) {
   const t = useTranslations("IamWorkspace");
   const c = useTranslations("Collection");
   const commands = actions ? <ContentPage.Commands label={c("pageActions")} primaryRef={primaryActionRef} focusRef={actionFocusRef} {...actions} /> : undefined;
-  return <div className={styles.detailWorkspace}>{embedded ? <div className={styles.sectionHeading}><Button variant="ghost" onClick={onBack}>{t("back")}</Button><h2 className={styles.detailTitle}>{title}</h2>{commands}</div> : <ContentPage.Heading title={title} scrollKey={`detail:${title}`} back={{ label: t("back"), onClick: onBack }} actions={commands} focus />}{children}</div>;
+  const resolvedBackLabel = backLabel ?? t("back");
+  return <div className={styles.detailWorkspace}>{embedded ? <div className={styles.sectionHeading}><Button variant="ghost" onClick={onBack}>{resolvedBackLabel}</Button><h2 className={styles.detailTitle}>{title}</h2>{commands}</div> : <ContentPage.Heading title={title} scrollKey={`detail:${title}`} back={{ label: resolvedBackLabel, onClick: onBack }} actions={commands} focus={focus} />}{children}</div>;
 }
 
 export function WorkspaceInlineForm({ title, onClose, onSubmit, children, backLabel, submitLabel, submitDisabled, submitVariant, validationError, operation }: {

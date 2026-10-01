@@ -630,6 +630,17 @@ describe("account access", () => {
     }));
   });
 
+  it("opens tenant creation in the content area and restores the create action", async () => {
+    const { user } = await openAccess(accounts(), iam(), "tenants");
+    await user.click(await screen.findByRole("button", { name: "开通租户" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("heading", { level: 1, name: "开通租户账号" })).toBe(document.activeElement);
+    expect(screen.getByRole("form", { name: "开通租户账号" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "返回列表" }));
+    expect(screen.getByRole("table", { name: "租户账号列表" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "开通租户" })).toBe(document.activeElement);
+  });
+
   it("starts on a dedicated overview and opens the user workspace without an extra fetch", async () => {
     const repository = accounts();
     const { user } = await openAccess(repository, iam(), "overview");
