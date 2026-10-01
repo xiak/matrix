@@ -1247,6 +1247,10 @@ describe("account access", () => {
     expect(readPolicy).toHaveBeenCalledWith(credential, account.id, tenantPolicy.id);
     expect(screen.getByText("paas.application.read")).toBeTruthy();
     expect(screen.getByText(/不代表当前身份或任何主体的有效权限/)).toBeTruthy();
+    const provenance = screen.getByRole("region", { name: "发布编译溯源" });
+    expect(within(provenance).getByText("旧版")).toBeTruthy();
+    expect(within(provenance).getByText(/不会用当前目录推断或改写历史结果/)).toBeTruthy();
+    expect(within(provenance).queryByRole("table")).toBeNull();
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.queryByRole("button", { name: "保存" })).toBeNull();
 
@@ -1270,7 +1274,12 @@ describe("account access", () => {
     expect(within(table).getByText("paas.application.*")).toBeTruthy();
     expect(within(table).getByText("发布时冻结的 Action")).toBeTruthy();
     expect(within(table).getByText("paas.application.read")).toBeTruthy();
-    expect(screen.getByText("paas @ 2")).toBeTruthy();
+    const provenance = screen.getByRole("region", { name: "发布编译溯源" });
+    expect(within(provenance).getByText("编译契约 v1")).toBeTruthy();
+    const profiles = within(provenance).getByRole("table", { name: "冻结的产品声明快照" });
+    expect(within(profiles).getByText("paas")).toBeTruthy();
+    expect(within(profiles).getByText("2")).toBeTruthy();
+    expect(within(profiles).getByText(`sha256:${"b".repeat(64)}`)).toBeTruthy();
   });
 
   it("loads customer versions only when selected and inspects a non-default version inline", async () => {

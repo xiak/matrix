@@ -238,6 +238,11 @@
   .policyMetadataTable[data-mobile-layout="stack"] tbody td:first-child { min-width: 0; }
 }
 .policyStatementTable { min-width: 820px; }
+.policyCompilation { display: grid; min-width: 0; gap: var(--xiak-spacing-default); padding: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); background: var(--xiak-color-bg-panel-hover); }
+.policyCompilationTable { min-width: 680px; background: var(--xiak-color-bg-panel); }
+.policyCompilationTable th:first-child { width: 22%; }
+.policyCompilationTable th:nth-child(2) { width: 16%; }
+.policyCompilationTable code { white-space: normal; overflow-wrap: anywhere; }
 .policyVersionTable code { white-space: normal; overflow-wrap: anywhere; }
 .policyVersionRecovery, .policyVersionReview, .policyAttachmentReview { display: grid; min-width: 0; gap: var(--xiak-spacing-default); padding: var(--xiak-spacing-comfortable); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); background: var(--xiak-color-bg-panel); }
 .policyAttachmentReview .facts dd small { display: block; margin-top: var(--xiak-spacing-narrow); color: var(--xiak-color-text-muted); }
@@ -329,5 +334,6 @@
   .catalogFacts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .catalogResponsibilityFlow { grid-template-columns: 1fr; }
   .catalogResponsibilityArrow { justify-self: center; transform: rotate(90deg); }
+  .policyCompilationTable { min-width: 0; }
   .policyStatementTable { min-width: 0; }
 }

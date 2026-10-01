@@ -120,15 +120,35 @@ function PolicyStatementTable({ version }: { version: AccountPolicyVersion }) {
   </section>;
 }
 
+function PolicyCompilationProvenance({ version }: { version: AccountPolicyVersion }) {
+  const t = useTranslations("AccountPolicyDirectory");
+  const compilation = version.compilation;
+  return <section className={styles.policyCompilation} aria-label={t("compilationProvenanceTitle")}>
+    <div className={styles.catalogDetailHeading}>
+      <h3 className={styles.stepTitle}>{t("compilationProvenanceTitle")}</h3>
+      {compilation ? <Badge>{t("compilationContractVersion", { version: compilation.compilationVersion })}</Badge> : <Badge>{t("legacyCompilation")}</Badge>}
+    </div>
+    <p className={styles.note}>{t(compilation ? "compilationProvenanceHint" : "legacyCompilationHint")}</p>
+    {compilation ? <Table aria-label={t("compilationProfilesTable")} mobileLayout="stack" className={styles.policyCompilationTable}>
+      <thead><tr><th scope="col">{t("product")}</th><th scope="col">{t("revision")}</th><th scope="col">{t("profileDigest")}</th></tr></thead>
+      <tbody>{compilation.profiles.map((profile) => <tr key={`${profile.product}:${profile.revision}:${profile.contentDigest}`}>
+        <td data-label={t("product")}><code>{profile.product}</code></td>
+        <td data-label={t("revision")}><code>{profile.revision}</code></td>
+        <td data-label={t("profileDigest")}><code>{profile.contentDigest}</code></td>
+      </tr>)}</tbody>
+    </Table> : null}
+  </section>;
+}
+
 function PolicyVersionDocument({ version, title }: { version: AccountPolicyVersion; title: string }) {
   const t = useTranslations("AccountPolicyDirectory");
   return <section className={styles.catalogNotice} aria-label={title}>
     <div className={styles.catalogDetailHeading}><h2>{title}</h2><Badge>{t("contractVersion", { version: version.contractVersion })}</Badge></div>
     <p className={styles.note}>{t("documentNotice")}</p>
     <dl className={styles.catalogFacts}>
-      <div><dt>{t("digest")}</dt><dd><code>{version.contentDigest}</code></dd></div>
-      <div><dt>{t("frozenProfiles")}</dt><dd>{version.compilation ? version.compilation.profiles.map((item) => `${item.product} @ ${item.revision}`).join(" · ") : t("legacyVersion")}</dd></div>
+      <div className={styles.catalogDigest}><dt>{t("digest")}</dt><dd><code>{version.contentDigest}</code></dd></div>
     </dl>
+    <PolicyCompilationProvenance version={version} />
     <PolicyStatementTable version={version} />
     <details className={styles.policyRawDocument}><summary>{t("rawDocument")}</summary><pre tabIndex={0}>{JSON.stringify(version.document, null, 2)}</pre></details>
   </section>;
