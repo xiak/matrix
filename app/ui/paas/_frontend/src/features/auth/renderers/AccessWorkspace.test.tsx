@@ -1073,7 +1073,7 @@ describe("CAM-style access workspace", () => {
     expect(directory.getAttribute("data-mobile-layout")).toBe("stack");
     expect(within(directory).queryByRole("columnheader", { name: "操作" })).toBeNull();
     expect(within(directory).getByRole("button", { name: "PipelineDeploymentRole" }).closest("td")?.getAttribute("data-label")).toBe("名称");
-    expect(within(directory).getByText("云服务").closest("td")?.getAttribute("data-label")).toBe("信任主体类型");
+    expect(within(directory).getByText("云服务").closest("td")?.getAttribute("data-label")).toBe("信任入口");
   });
   it("previews service authorization as an inline consent review without creating a role or grant", async () => {
     const { user, repository, extension } = await open("roles");
@@ -1169,6 +1169,26 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: "下一步" }));
     expect(screen.getByText("managedservice.service-installation.read")).toBeTruthy();
     expect(screen.queryByText("managedservice:*")).toBeNull();
+  });
+  it("summarizes trust, grants, boundary and new-session limits in the role directory", async () => {
+    await open("roles", { seed: async (extension) => {
+      extension.transact((source) => ({ workspace: { ...source, roles: source.roles.map((role) => role.id === "role-log-reviewer" ? {
+        ...role,
+        boundaryPolicyId: "policy-delivery-boundary"
+      } : role) } }));
+    } });
+    const table = await screen.findByRole("table", { name: "角色" });
+    expect(within(table).queryByRole("columnheader", { name: "操作" })).toBeNull();
+    for (const heading of ["名称", "信任入口", "授权与边界", "新会话", "创建时间"]) {
+      expect(within(table).getByRole("columnheader", { name: heading })).toBeTruthy();
+    }
+    const row = within(table).getByRole("button", { name: "ProductionLogReviewRole" }).closest("tr")!;
+    expect(within(row).getByText("云账号")).toBeTruthy();
+    expect(within(row).getByText("org-xiak")).toBeTruthy();
+    expect(within(row).getByText("1 项策略")).toBeTruthy();
+    expect(within(row).getByText("权限边界 · 已配置")).toBeTruthy();
+    expect(within(row).getByText("最长 30 分钟")).toBeTruthy();
+    expect(within(row).getByText("控制台访问 · 已启用")).toBeTruthy();
   });
   it("separates role trust admission, grants and boundary without claiming effective access", async () => {
     await open("roles", { entityId: "role-log-reviewer", seed: async (extension) => {

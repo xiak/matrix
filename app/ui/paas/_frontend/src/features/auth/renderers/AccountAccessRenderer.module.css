@@ -309,6 +309,11 @@
 .userLink { padding: 0; border: 0; background: transparent; color: var(--xiak-color-accent-text); font: inherit; font-weight: var(--xiak-font-weight-semibold); text-align: left; cursor: pointer; }
 .userLink:hover { text-decoration: underline; }
 .userLink:focus-visible { outline: 2px solid var(--xiak-color-border-focus); outline-offset: 4px; border-radius: var(--xiak-radius-small); }
+@media (min-width: 561px) {
+  .roleDirectoryTrust { min-width: 10rem; }
+  .roleDirectorySummary { min-width: 9rem; }
+  .roleDirectorySession { min-width: 11rem; }
+}
 .userSummary > div { overflow-wrap: anywhere; }
 
 @container account-access (max-width: 860px) { .overviewGrid { grid-template-columns: minmax(0, 1fr); } }
