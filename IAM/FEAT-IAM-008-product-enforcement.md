@@ -1,6 +1,6 @@
 # FEAT-IAM-008：业务接入、服务角色与 ABAC
 
-- 状态：实施中；版本化产品 Profile、PaaS/managedservice 的真实 PEP、请求与决定绑定及当前资源/Operation/outbox 租户隔离已有固定后端实现。服务受托已有账号同意关系、当前Account只读观察、managedservice真实资源绑定/解绑及服务会话发行/回执/当前PDP；累计固定`a464299b`已补严格服务来源的管理员目录/读取/代撤销并通过本地真实PG18、累计Role管理、独立多进程及14项独立CI。实例目录批量过滤已固定为`a7f2e83b`，可信创建请求标签及Audit目录修复累计固定为`49aaf216`并通过14项独立CI；既有Application资源标签读取和写入已累计固定到`e9ea19e6`并通过本地真实PG18、独立进程及唯一滚动前驱门禁。AccessKey产品消费已累计到本地固定`b6d15c89a`，覆盖五条不可变资源图精确创建路由及带真实标签的Application精确读取，并通过本地真库、独立进程、滚动前驱和全仓检查；后继尚未推送及取得独立CI，其他签名动作、LIVE UI和发布组合仍未完成，整体未验收。
+- 状态：实施中；版本化产品 Profile、PaaS/managedservice 的真实 PEP、请求与决定绑定及当前资源/Operation/outbox 租户隔离已有固定后端实现。服务受托已有账号同意关系、当前Account只读观察、managedservice真实资源绑定/解绑及服务会话发行/回执/当前PDP；累计固定`a464299b`已补严格服务来源的管理员目录/读取/代撤销并通过本地真实PG18、累计Role管理、独立多进程及14项独立CI。实例目录批量过滤已固定为`a7f2e83b`，可信创建请求标签及Audit目录修复累计固定为`49aaf216`并通过14项独立CI；既有Application资源标签读取和写入已累计固定到`e9ea19e6`并通过本地真实PG18、独立进程及唯一滚动前驱门禁。AccessKey产品消费已累计固定到`b6d15c89a`，覆盖五条不可变资源图精确创建路由及带真实标签的Application精确读取，并通过本地真库、独立进程、滚动前驱和全仓检查；最新独立CI仍在运行，其他签名动作、LIVE UI和发布组合仍未完成，整体未验收。
 - 依赖：001、005、006。
 - Owner：IAM Profile/Role，PaaS/managedservice/Audit 各自的真实资源与 PEP。
 
@@ -213,7 +213,7 @@ PaaS Profile revision 8为`paas.configuration.create`、`paas.configuration-revi
 
 这些Action没有资源标签预读，允许在完整HTTP签名通过结构检查后先调用IAM、再由原严格业务decoder和Account事务检查body。合法MAC但业务JSON或父资源引用非法时，nonce可以已消费但不得产生业务效果；结构级签名/route错误仍不产生IAM决定。ConfigurationRevision必须引用同Account Configuration，ApplicationRevision必须引用同Account Application，Deployment必须引用同Account Application及其Revision并遵守现有图不变量。collection决定、最终resource ID和payload真实性继续分别由IAM及PaaS事务/outbox证明，不扩张为IAM证明业务body。
 
-固定`63ab867d30113b70a71e6ce6ddc5f16020380d36`已在独占PG18完成PaaS存储race（6.283秒），并以独立双IAM、Audit、PaaS和双dispatcher进程完成两个Account同名同ID完整资源图、每步USER+key Operation/Audit归因、跨Account父引用404且无部分业务状态、nonce重放及原LOGIN_SESSION/ROLE/标签/服务会话/租户链回归（测试239.85秒、包243.347秒）。IAM58→59唯一滚动前驱以测试132.58秒通过，最终全仓race、vet、模块校验、生成稳定和Linux amd64构建通过；[独立CI 36847285739](https://github.com/xiak/matrix/actions/runs/36847285739)仍在运行，缺失父节点、另一key复用幂等键、末端outbox故障的细分覆盖由既有业务门禁提供但尚未在AccessKey专用路径逐项复跑，签名安装组合也未完成，因此仍不标LIVE。
+固定`63ab867d30113b70a71e6ce6ddc5f16020380d36`已在独占PG18完成PaaS存储race（6.283秒），并以独立双IAM、Audit、PaaS和双dispatcher进程完成两个Account同名同ID完整资源图、每步USER+key Operation/Audit归因、跨Account父引用404且无部分业务状态、nonce重放及原LOGIN_SESSION/ROLE/标签/服务会话/租户链回归（测试239.85秒、包243.347秒）。IAM58→59唯一滚动前驱以测试132.58秒通过，最终全仓race、vet、模块校验、生成稳定和Linux amd64构建通过；[独立CI 36847285739](https://github.com/xiak/matrix/actions/runs/36847285739)未在后继推送前完成，不登记为独立CI成功。缺失父节点、另一key复用幂等键、末端outbox故障的细分覆盖由既有业务门禁提供但尚未在AccessKey专用路径逐项复跑，签名安装组合也未完成，因此仍不标LIVE。
 
 ## 当前纵向切片：AccessKey读取带标签Application
 
@@ -221,7 +221,7 @@ PaaS Profile下一revision只为`paas.application.read`的USER增加`ACCESS_KEY`
 
 内部解析结果必须绑定同一SignedRequest digest、当前PaaS Profile、Account、USER和key，只供本次预读；最终`authorize:access-key`仍是唯一权限决定及nonce消费点。PaaS在最终决定前不向调用方返回资源存在性、标签或Account，在决定后以决定中的同一Account重读并核对快照。合法MAC经解析后若IAM最终不可用或回包不确定，返回503且调用方不能假定nonce状态；PaaS不得自动改用登录bearer、缓存解析结果或重新签发Action。真实门禁必须用两个Account相同Application ID、不同environment和相反Policy结果证明标签来自凭据推导的Account，并证明预读/授权/重读任一漂移都失败关闭。
 
-本地固定`b6d15c89a`将PaaS Profile推进到revision 9，仅为`paas.application.read`的USER增加`ACCESS_KEY`；Configuration读取、列表、Operation、Audit和标签修改仍保持原载体集合。`GET /v1/applications/{id}`只接受无query、无body的精确签名，内部解析回包须逐项匹配Profile、Account、USER、key和请求摘要，业务只从决定Account进入RLS只读事务。聚焦API/IAM/PaaS测试、真实PG18 AccessKey race 95.796秒、独立双IAM/Audit/PaaS及双dispatcher 216.715秒、IAM58→59前驱107.044秒，以及最终全仓race/p2、vet、模块校验、生成稳定和Linux amd64构建均通过。两个Account的同IDApplication分别带`production`/`staging`标签，真实Allow与显式Deny保存精确声明标签，未声明`team`不进入IAM证据；解析两次无状态、最终nonce只消费一次，原资源图和租户Audit链保持。独立CI及签名安装尚未完成，UI在收到固定推送对象前不得标记LIVE。
+固定`b6d15c89a`将PaaS Profile推进到revision 9，仅为`paas.application.read`的USER增加`ACCESS_KEY`；Configuration读取、列表、Operation、Audit和标签修改仍保持原载体集合。`GET /v1/applications/{id}`只接受无query、无body的精确签名，内部解析回包须逐项匹配Profile、Account、USER、key和请求摘要，业务只从决定Account进入RLS只读事务。聚焦API/IAM/PaaS测试、真实PG18 AccessKey race 95.796秒、独立双IAM/Audit/PaaS及双dispatcher 216.715秒、IAM58→59前驱107.044秒，以及最终全仓race/p2、vet、模块校验、生成稳定和Linux amd64构建均通过。两个Account的同IDApplication分别带`production`/`staging`标签，真实Allow与显式Deny保存精确声明标签，未声明`team`不进入IAM证据；解析两次无状态、最终nonce只消费一次，原资源图和租户Audit链保持。[独立CI 36853816880](https://github.com/xiak/matrix/actions/runs/36853816880)仍在运行，签名安装尚未完成，UI不得标记LIVE。
 
 ## 验收
 
