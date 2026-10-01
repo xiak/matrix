@@ -6,8 +6,8 @@
 - Updated: 2026-10-02
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `90a5f0184`
-- Pushed documentation milestone: `58aaac0f5`
+- Pushed source/embed milestone: `68f059c45`
+- Pushed documentation milestone: `e4ef49767`
 
 ## Authoritative route
 
@@ -29,26 +29,23 @@ compaction or handoff, then validate it against Git and the linked FEAT.
 ## Latest pushed milestone
 
 The independent DEV MOCK remains available at `http://127.0.0.1:4317`, and
-login verification remains disabled for UX review. The account security report
-now opens a stable content-area confirmation and seals one synchronous,
-all-or-nothing immutable MOCK result; the older credential inventory remains a
-separate surface. It fixes current-Account scope, exact create/read/download
-permissions, retention and volume limits, and distinguishes `UNKNOWN`,
-`NOT_OBSERVED_IN_RETAINED_IAM_STATE` and `NOT_INCLUDED`. It adds no report
-directory, pending job, polling, risk score, automatic remediation, generated
-file, LIVE repository, HTTP decoder or Action. The download affordance remains
-stable and disabled until a backend runtime is both pushed and explicitly
-consumable.
+login verification remains disabled for UX review. The Role directory now
+groups the first-pass administration facts into trust admission, grants and
+boundary, new-session limits and creation time. It has no operation column and
+does not turn those configuration facts into effective access, assumability or
+runtime-authorization claims. Role update/status/delete, trust, attachment and
+permission-boundary LIVE writes remain absent until IAM publishes their fixed
+contracts.
 
-Source and synchronized embed are pushed at `90a5f0184`; shared-console and
-IAM-client FEAT evidence is pushed through `58aaac0f5`. The complete frontend
-gate passed 58 files/954 cases plus three normalization cases,
+Source and synchronized embed are pushed at `68f059c45`; shared-console and
+IAM-client FEAT evidence is pushed through `e4ef49767`. The complete frontend
+gate passed 58 files/955 cases plus three normalization cases,
 typecheck/lint/architecture/228-pair style checks, 42-route export, 233-file
-embed equality and repository Go test/vet. A fresh browser session completed
-login, report review and generation without warning/error. Desktop and
-`390 x 844` checks had no horizontal overflow; compact document/body/client and
-scroll widths were all 390px. IAM-009 S4a remains uncommitted pure-contract WIP
-without HTTP/SQL runtime, so the report stays MOCK-only.
+embed equality and repository Go test/vet. A fresh browser session verified
+desktop and `390 x 844` Role directories without warning/error or horizontal
+overflow; compact viewport/document/body widths were all 390px. The prior
+immutable AccountSecurityReport preview remains MOCK-only until IAM publishes
+and explicitly marks a consumable runtime.
 
 Earlier federation replacement, Deployment lifecycle, AccessKey carrier,
 same-User permission-source handoff, Application tag recovery, service
