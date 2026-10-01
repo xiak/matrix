@@ -2851,6 +2851,34 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByText("尚未创建访问密钥")).toBeTruthy();
     expect(repository.execute).not.toHaveBeenCalled();
   });
+  it("loads the programmatic credential boundary only on demand and does not infer product support", async () => {
+    const listAuthorizationProfiles = vi.fn().mockResolvedValue({ accountId: "org-xiak", items: [{ profile: {
+      product: "paas", revision: 6, callingService: "PAAS", actions: [{ action: "paas.application.read", resourceKind: "APPLICATION", scope: "TENANT", subjectTypes: ["USER"], userAuthenticationMethods: ["LOGIN_SESSION"], resourceShapes: [{ mode: "INSTANCE", prefixAllowed: false }] }]
+    }, contentDigest: `sha256:${"a".repeat(64)}` }] });
+    const { user } = await open("keys", { repository: { listAuthorizationProfiles } });
+    await user.click(await screen.findByRole("button", { name: "管理 lin 的访问密钥" }));
+    expect(listAuthorizationProfiles).not.toHaveBeenCalled();
+    const summary = screen.getByText("编程访问边界").closest("summary")!;
+    await user.click(summary);
+    expect(await screen.findByText(/没有声明任何 USER \+ ACCESS_KEY 产品 Action/)).toBeTruthy();
+    expect(listAuthorizationProfiles).toHaveBeenCalledTimes(1);
+    expect(screen.getByText(/浏览器不会保存 Secret、生成签名或发送测试业务请求/)).toBeTruthy();
+  });
+  it("lists exact access-key carrier declarations without presenting them as a user grant", async () => {
+    const listAuthorizationProfiles = vi.fn().mockResolvedValue({ accountId: "org-xiak", items: [{ profile: {
+      product: "paas", revision: 7, callingService: "PAAS", actions: [
+        { action: "paas.application.create", resourceKind: "APPLICATION", scope: "TENANT", subjectTypes: ["USER"], userAuthenticationMethods: ["LOGIN_SESSION", "ACCESS_KEY"], resourceShapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_CREATE" }] },
+        { action: "paas.application.read", resourceKind: "APPLICATION", scope: "TENANT", subjectTypes: ["USER"], userAuthenticationMethods: ["LOGIN_SESSION"], resourceShapes: [{ mode: "INSTANCE", prefixAllowed: false }] }
+      ]
+    }, contentDigest: `sha256:${"b".repeat(64)}` }] });
+    const { user } = await open("keys", { repository: { listAuthorizationProfiles } });
+    await user.click(await screen.findByRole("button", { name: "管理 lin 的访问密钥" }));
+    await user.click(screen.getByText("编程访问边界").closest("summary")!);
+    expect(await screen.findByText("paas.application.create")).toBeTruthy();
+    expect(screen.getByText("权限声明修订 7")).toBeTruthy();
+    expect(screen.queryByText("paas.application.read")).toBeNull();
+    expect(screen.getByText(/只表示产品声明接受这种凭据载体，不表示当前用户已获授权/)).toBeTruthy();
+  });
   it("locks an uncertain access-key creation to its original request and never reveals the lost secret", async () => {
     const { user, extension } = await open("keys");
     await user.click(await screen.findByRole("button", { name: "管理 chen 的访问密钥" }));

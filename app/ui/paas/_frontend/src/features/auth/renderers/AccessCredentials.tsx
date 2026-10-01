@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type SyntheticEvent } from "react";
 import { useTranslations } from "next-intl";
 import { KeyRound, RotateCw } from "lucide-react";
-import { Alert, Badge, Button, Card, Checkbox, ContentPage, FormField, Select, Table, Typography } from "@ui/xiak";
+import { Alert, Badge, Button, Card, Checkbox, ContentPage, FormField, Select, Table, TablePagination, Typography } from "@ui/xiak";
 import { requestToken } from "@/infrastructure/http/jsonRequest";
 import { useAccountAccess } from "../application/AccountAccessProvider";
+import { admittedAuthorizationSubjects, type AuthorizationProfileDirectory } from "../domain/accounts";
 import type { AccessKey, AccessWorkspace } from "../domain/accessWorkspace";
 import type { AccountAccessScene, AccountUserScene } from "../scenes/accountAccessScene";
 import { AccountIdentifier } from "./AccountOverview";
@@ -145,6 +146,70 @@ function RotationGuide() {
   </Card>;
 }
 
+function ProgrammaticAccessGuide({ owner }: { owner: AccountUserScene }) {
+  const t = useTranslations("IamWorkspace");
+  const access = useAccountAccess();
+  const [loading, setLoading] = useState(false);
+  const [directory, setDirectory] = useState<AuthorizationProfileDirectory | null>(null);
+  const [status, setStatus] = useState<"idle" | "ready" | "forbidden" | "routeUnavailable" | "unavailable" | "expired">("idle");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const accepted = useMemo(() => directory?.items.flatMap((entry) => entry.profile.actions
+    .filter((action) => admittedAuthorizationSubjects(action).includes("USER") && action.userAuthenticationMethods?.includes("ACCESS_KEY"))
+    .map((action) => ({ product: entry.profile.product, revision: entry.profile.revision, action: action.action }))) ?? [], [directory]);
+  const pages = Math.max(1, Math.ceil(accepted.length / pageSize));
+  const currentPage = Math.min(page, pages);
+  const visible = accepted.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+
+  const load = async () => {
+    if (!access.authorizationProfiles || loading) {
+      if (!access.authorizationProfiles) setStatus("routeUnavailable");
+      return;
+    }
+    setLoading(true);
+    const result = await access.authorizationProfiles.load();
+    if (result.status === "ready") {
+      setDirectory(result.directory);
+      setStatus("ready");
+    } else {
+      setDirectory(null);
+      setStatus(result.status);
+    }
+    setLoading(false);
+  };
+  const onToggle = (event: SyntheticEvent<HTMLDetailsElement>) => {
+    if (event.currentTarget.open && status === "idle") void load();
+  };
+
+  return <details className={styles.programmaticGuide} onToggle={onToggle}>
+    <summary>
+      <span className={styles.programmaticHeading}><KeyRound aria-hidden="true" /><span><strong>{t("keyProgrammaticTitle")}</strong><small>{t("keyProgrammaticHint", { name: owner.loginName })}</small></span></span>
+      <span className={styles.programmaticSummary}>{t("keyProgrammaticInspect")}</span>
+    </summary>
+    <div className={styles.programmaticBody} aria-busy={loading || undefined}>
+      <Alert status="info">{t("keyProgrammaticIdentity", { name: owner.loginName })}</Alert>
+      {loading ? <p className={styles.note}>{t("keyProgrammaticLoading")}</p> : null}
+      {status === "ready" && accepted.length === 0 ? <Alert status="warning">{t("keyProgrammaticNone")}</Alert> : null}
+      {status === "ready" && accepted.length > 0 ? <>
+        <Alert status="warning">{t("keyProgrammaticNotGrant")}</Alert>
+        <Table aria-label={t("keyProgrammaticTitle")} mobileLayout="stack" className={styles.programmaticTable}>
+          <thead><tr><th scope="col">{t("keyProgrammaticProduct")}</th><th scope="col">Action</th></tr></thead>
+          <tbody>{visible.map((entry) => <tr key={`${entry.product}:${entry.revision}:${entry.action}`}>
+            <td data-label={t("keyProgrammaticProduct")}><strong>{entry.product}</strong><small>{t("keyProgrammaticRevision", { revision: entry.revision })}</small></td>
+            <td data-label="Action"><code>{entry.action}</code></td>
+          </tr>)}</tbody>
+        </Table>
+        <Table.Footer note={t("keyProgrammaticCount", { count: accepted.length })}><TablePagination page={currentPage} pages={pages} pageSize={pageSize}
+          onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
+          labels={{ summary: t("page", { page: currentPage, pages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} /></Table.Footer>
+      </> : null}
+      {status !== "idle" && status !== "ready" && !loading ? <Alert status="warning">{t(`keyProgrammaticStatus.${status}`)}</Alert> : null}
+      {status !== "idle" && status !== "ready" && status !== "expired" && !loading ? <div className={styles.actions}><Button onClick={() => void load()} size="small" variant="secondary">{t("keyProgrammaticRetry")}</Button></div> : null}
+      <p className={styles.note}>{t("keyProgrammaticSecretBoundary")}</p>
+    </div>
+  </details>;
+}
+
 export function AccessCredentials({ workspace, scene, embedded = false }: { workspace: AccessWorkspace; scene: AccountAccessScene; embedded?: boolean }) {
   const t = useTranslations("IamWorkspace");
   const collection = useTranslations("Collection");
@@ -197,6 +262,7 @@ export function AccessCredentials({ workspace, scene, embedded = false }: { work
       <dl className={styles.keyFacts}><div><dt>{t("keyId")}</dt><dd><AccountIdentifier label={t("keyId")} value={selected.id} /></dd></div><div><dt>{t("owner")}</dt><dd><strong>{owner.name}</strong><span>{owner.loginName} · {owner.id}</span></dd></div><div><dt>{t("state")}</dt><dd><Badge status={selected.status === "ENABLED" ? "success" : "neutral"}>{t(selected.status === "ENABLED" ? "enabled" : "disabled")}</Badge></dd></div><div><dt>{t("created")}</dt><dd><WorkspaceTime value={selected.createdAt} /></dd></div><div><dt>{t("keyRevision")}</dt><dd>v{selected.resourceVersion}</dd></div></dl>
       <Alert status="info">{t("keyNoUsageEvidence")}</Alert>
     </Card.Body></Card>
+    <ProgrammaticAccessGuide owner={owner} />
     <RotationGuide />
   </WorkspaceDetail>;
 
@@ -208,6 +274,7 @@ export function AccessCredentials({ workspace, scene, embedded = false }: { work
         <Card.Header className={styles.directoryHeader}><div><Typography.Title as="h2" level={3}>{t("keyDirectory")}</Typography.Title><Typography.Text tone="muted">{t("keyDirectoryHint", { name: owner.loginName })}</Typography.Text></div><Badge status={ownerKeys.length >= 2 ? "warning" : "neutral"}>{t("keyQuota", { count: ownerKeys.length })}</Badge></Card.Header>
         <Card.Body className={styles.tableBody}>{ownerKeys.length ? <Table aria-label={t("keys")} mobileLayout="stack"><thead><tr><th scope="col">{t("keyId")}</th><th scope="col">{t("state")}</th><th scope="col">{t("created")}</th><th scope="col">{t("keyRevision")}</th></tr></thead><tbody>{ownerKeys.map((key) => <tr key={key.id}><td data-label={t("keyId")}><button className={styles.keyLink} onClick={() => setSelectedId(key.id)}>{key.id}</button></td><td data-label={t("state")}><Badge status={key.status === "ENABLED" ? "success" : "neutral"}>{t(key.status === "ENABLED" ? "enabled" : "disabled")}</Badge></td><td data-label={t("created")}><WorkspaceTime value={key.createdAt} /></td><td data-label={t("keyRevision")}>v{key.resourceVersion}</td></tr>)}</tbody></Table> : <div className={styles.emptyKeys}><KeyRound aria-hidden="true" /><strong>{t("keyEmpty")}</strong><span>{t("keyEmptyHint")}</span></div>}</Card.Body>
       </Card>
+      <ProgrammaticAccessGuide owner={owner} />
       <RotationGuide />
     </>}
   </div>;
