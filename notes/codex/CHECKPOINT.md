@@ -6,8 +6,8 @@
 - Updated: 2026-10-02
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `05fe4a74c`
-- Pushed documentation milestone: `be1e3c8f0`
+- Pushed source/embed milestone: `90a5f0184`
+- Pushed documentation milestone: `58aaac0f5`
 
 ## Authoritative route
 
@@ -29,30 +29,26 @@ compaction or handoff, then validate it against Git and the linked FEAT.
 ## Latest pushed milestone
 
 The independent DEV MOCK remains available at `http://127.0.0.1:4317`, and
-login verification remains disabled for UX review. AccessKey settings now
-separate an Account source-network baseline from one key's additional
-restriction, show both layers together, and expose a non-secret historical
-authorization observation without turning it into a current permit or
-safe-delete signal. Account editing reuses the existing settings version,
-personal-factor step-up and reauthentication boundary; key editing remains a
-separate versioned content-area flow. Strict CIDR normalization is owned by one
-pure domain module. Key creation now freezes the exact User version, requestId
-and canonical key-layer networks in one intent instead of creating an
-unrestricted key and patching it later. Unknown-result recovery retains that
-scope and never reissues the Secret. No LIVE repository, HTTP decoder or
-Action was added.
+login verification remains disabled for UX review. The account security report
+now opens a stable content-area confirmation and seals one synchronous,
+all-or-nothing immutable MOCK result; the older credential inventory remains a
+separate surface. It fixes current-Account scope, exact create/read/download
+permissions, retention and volume limits, and distinguishes `UNKNOWN`,
+`NOT_OBSERVED_IN_RETAINED_IAM_STATE` and `NOT_INCLUDED`. It adds no report
+directory, pending job, polling, risk score, automatic remediation, generated
+file, LIVE repository, HTTP decoder or Action. The download affordance remains
+stable and disabled until a backend runtime is both pushed and explicitly
+consumable.
 
-Source and synchronized embed are pushed at `05fe4a74c`; shared-console and
-IAM-client FEAT evidence is pushed through `be1e3c8f0`. The complete frontend
+Source and synchronized embed are pushed at `90a5f0184`; shared-console and
+IAM-client FEAT evidence is pushed through `58aaac0f5`. The complete frontend
 gate passed 58 files/954 cases plus three normalization cases,
 typecheck/lint/architecture/228-pair style checks, 42-route export, 233-file
-embed equality and repository Go test/vet. Desktop and `390 x 844` DEV checks
-confirmed the two-layer hierarchy, atomic creation receipt and responsive
-single-column form with no horizontal overflow. A fresh browser tab had no
-warning/error log. IAM's successor candidate is
-`4e79ef783410bbb596232763a9be80412b5e0846`; it leaves the frontend contract
-unchanged, but its complete independent CI and explicit consumable confirmation
-remain open.
+embed equality and repository Go test/vet. A fresh browser session completed
+login, report review and generation without warning/error. Desktop and
+`390 x 844` checks had no horizontal overflow; compact document/body/client and
+scroll widths were all 390px. IAM-009 S4a remains uncommitted pure-contract WIP
+without HTTP/SQL runtime, so the report stays MOCK-only.
 
 Earlier federation replacement, Deployment lifecycle, AccessKey carrier,
 same-User permission-source handoff, Application tag recovery, service
@@ -80,6 +76,10 @@ unchanged. Verification `36897183328` has passed go, node-process and
 authority-storage, while the remaining authority matrix is still running and
 no explicit consumable confirmation has arrived. Keep `05fe4a74c`
 browser-memory-only; add no parallel LIVE model or inferred wire.
+IAM-009 S4a currently defines only an uncommitted pure contract for immutable
+account security reports. Keep `90a5f0184` as information architecture only;
+do not mount create/read/content adapters or enable CSV until IAM supplies a
+fixed pushed commit, runtime evidence and explicit consumable confirmation.
 External assertions remain configuration-only: do not reintroduce a persistent
 federated-account/external-subject object, HTTP adapter, successful assumption
 path, RoleSession issuance or authorization claim until IAM publishes and
