@@ -6,8 +6,8 @@
 - Updated: 2026-10-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `7269ce6a`
-- Pushed documentation milestone: `3a361fc9`
+- Pushed source/embed milestone: `ce444fad`
+- Pushed documentation milestone: `d4475c09`
 
 ## Authoritative route
 
@@ -26,20 +26,21 @@ compaction or handoff, then validate it against Git and the linked FEAT.
 ## Latest pushed milestone
 
 The independent DEV MOCK remains available at `http://127.0.0.1:4317`, and
-login verification remains disabled for UX review. Policy permission uses and
-permission-boundary uses now keep separate semantics while sharing searchable,
-locally paged table controls and the common footer. Filtering is deferred,
-stale identity links are disabled during transitions, and derived relationship
-snapshots are memoized. The page explicitly describes a complete MOCK snapshot
-and does not imply a LIVE server total or cursor contract.
+login verification remains disabled for UX review. Group member and direct
+policy tabs now share the searchable, locally paged table grammar and common
+footer. Complete snapshots show exact totals; a cursor-backed member prefix
+shows only loaded records, preserves the continuation across refresh and never
+turns an empty loaded page into an empty-Group claim. Filtering is deferred and
+temporarily blocks stale relationship links.
 
-Source and synchronized 233-file embed are pushed at `7269ce6a`; FEAT evidence
-is pushed at `3a361fc9`. A 13-owner fixture proves first/second-page behavior,
-search counts and exact Role navigation. The milestone passed 57 frontend
-files / 915 tests, three normalization cases, type/lint/architecture checks,
-228 theme contrast pairs, a 42-route static export, embed equality and
-repository Go test/vet. Desktop DEV verified search and empty-result recovery
-with no browser warning/error.
+Source and synchronized 233-file embed are pushed at `ce444fad`; FEAT evidence
+is pushed at `d4475c09`. Fixtures prove an 11-member first page plus a two-item
+continuation, local search/page behavior and a complete 12-policy directory.
+The milestone passed 57 frontend files / 917 tests, three normalization cases,
+type/lint/architecture checks, 228 theme contrast pairs, a 42-route static
+export, embed equality and repository Go test/vet. Desktop DEV verified both
+relationship tabs; compact stacked-table behavior is covered by the shared
+behavior case.
 
 The previously pushed AccessKey owner directory, policy-compilation provenance,
 service-authorization, policy-coverage, Audit, cross-service loading/navigation
