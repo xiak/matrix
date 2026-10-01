@@ -4055,6 +4055,38 @@ describe("CAM-style access workspace", () => {
     expect((screen.getByRole("button", { name: "下载 CSV v1" }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.queryByRole("dialog")).toBeNull();
   });
+  it("keeps a maximum-size account security report paged instead of mounting every evidence row", async () => {
+    const extension = createPreviewAccessWorkspace("org-xiak", () => users.map((entry) => entry.user.id), identity.account.rootIdentity.principalId);
+    const workspace = await extension.read("preview");
+    const atCapacityWorkspace = {
+      ...workspace,
+      keys: Array.from({ length: accountSecurityReportLimits.accessKeys }, (_, index) => ({
+        ...workspace.keys[0]!,
+        id: `AKID-CAPACITY-${String(index).padStart(4, "0")}`
+      }))
+    };
+    const atCapacityUsers = Array.from({ length: accountSecurityReportLimits.users - 1 }, (_, index) => ({
+      ...users[0]!,
+      user: {
+        ...users[0]!.user,
+        id: `principal-capacity-${String(index).padStart(4, "0")}`,
+        loginName: `capacity-${index}`,
+        displayName: `Capacity ${index}`
+      }
+    }));
+    const scene = buildAccountAccessScene(identity, { items: atCapacityUsers, nextAfter: null }, null, { accountId: "org-xiak", scope: "TENANT", installationId: null, items: [] }, { accountId: "org-xiak", scope: "INSTALLATION", installationId: "preview", items: [] });
+    const user = userEvent.setup();
+    render(<LocaleProvider><AccessReportPreview kind="security" workspace={atCapacityWorkspace} scene={scene} onBack={vi.fn()} /></LocaleProvider>);
+
+    await user.click(screen.getByRole("button", { name: "生成报告" }));
+    await user.click(screen.getByRole("tab", { name: "用户证据 (1000)" }));
+    expect(within(screen.getByRole("table", { name: "用户证据" })).getAllByRole("row")).toHaveLength(11);
+    expect(screen.getByText("第 1 / 100 页")).toBeTruthy();
+
+    await user.click(screen.getByRole("tab", { name: "访问密钥证据 (2000)" }));
+    expect(within(screen.getByRole("table", { name: "访问密钥证据" })).getAllByRole("row")).toHaveLength(11);
+    expect(screen.getByText("第 1 / 200 页")).toBeTruthy();
+  });
   it("blocks an oversized account security report before submission with an actionable reason", async () => {
     const extension = createPreviewAccessWorkspace("org-xiak", () => users.map((entry) => entry.user.id), identity.account.rootIdentity.principalId);
     const workspace = await extension.read("preview");
