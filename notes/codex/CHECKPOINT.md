@@ -6,8 +6,8 @@
 - Updated: 2026-10-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `2ea35d477`
-- Pushed documentation milestone: `01efd9cc6`
+- Pushed source/embed milestone: `8dc17ca77`
+- Pushed documentation milestone: `9150ecf4c`
 
 ## Authoritative route
 
@@ -26,47 +26,43 @@ compaction or handoff, then validate it against Git and the linked FEAT.
 ## Latest pushed milestone
 
 The independent DEV MOCK remains available at `http://127.0.0.1:4317`, and
-login verification remains disabled for UX review. Application Hosting owns a
-same-path, content-area resource detail and a one-key-at-a-time tag workflow.
-Fixed resource identity stays visible; only product-owned mutable data changes.
-Review presents the exact resource, IAM Action, strong `If-Match` ETag,
-old-to-new value and permission-impact warning. The default success path stays
-clean; a collapsed MOCK-only response rehearsal covers no-change and
-idempotency-conflict 409s, stale-version 412, denied 403, unavailable IAM 503
-and an interrupted response with unknown outcome. A 412 reloads the current
-tag value and ETag and requires a new confirmation. Only 503 and unknown
-outcome preserve and safely replay the same request identity; version refresh
-creates a new request fingerprint. A simulated success replaces the local
-snapshot and displays only the terminal Operation fields safe for users; it
-does not expose idempotency fingerprints, request digests or an invented Audit
-event ID. Policy authoring cannot mutate resource tags, and unknown resource
-IDs still fail closed.
+login verification remains disabled for UX review. The User-scoped AccessKey
+workspace now separates credential lifecycle, product credential-carrier
+admission and effective authorization. Its programmatic-access region stays
+collapsed by default and reads the current authorization Profile directory only
+when opened. It lists only exact Actions that explicitly admit both `USER` and
+`ACCESS_KEY`; omitted authentication methods never become broad support. The
+shared Table/Footer paginates future results. Product acceptance is labelled as
+metadata, not a grant: every request must still revalidate the key, User,
+current policies, target resource, conditions and explicit denies. The browser
+does not retain the Secret, sign a request or issue a synthetic product call.
+Unavailable or unauthorized catalog reads fail closed.
 
-Source and synchronized embed are pushed at `2ea35d477`; FEAT evidence is
-pushed at `01efd9cc6`. The 57-file/927-case frontend suite, three normalization
-cases, typecheck/lint/architecture/228-pair style gates, 42-route export,
-233-file embed equality and UI host Go test/vet passed. Desktop and `430 x 900`
-DEV verified view → edit → review → stale-version refresh → newly confirmed
-terminal result at ETag 9, with no Dialog or overflow; viewport, document and
-body width stayed 430px. A fresh validation tab emitted no warning or error.
-Historical HMR errors remain only in the original long-lived tab's retained log
-buffer.
+Source and synchronized embed are pushed at `8dc17ca77`; FEAT evidence is
+pushed at `9150ecf4c`. The focused 176-case IAM workspace file and complete
+57-file/929-case frontend suite passed with three normalization cases,
+typecheck/lint/architecture/228-pair style gates, 42-route export, 233-file
+embed equality and UI-host Go test/vet. Desktop and `390 x 844` DEV verified
+collapsed and expanded states with no Dialog or horizontal overflow; viewport,
+document and body width stayed 390px. A fresh validation tab emitted no warning
+or error.
 
-The previously pushed AccessKey owner directory, policy-compilation provenance,
-service-authorization, policy-coverage, Audit, cross-service loading/navigation
-and other console milestones remain owned and indexed by FEAT-007; load only
-the relevant row when resuming that work.
+The previously pushed Application tag recovery, AccessKey owner directory,
+policy-compilation provenance, service-authorization, policy-coverage, Audit,
+cross-service loading/navigation and other console milestones remain owned and
+indexed by FEAT-007; load only the relevant row when resuming that work.
 
 ## Continuation boundary
 
 Keep the inspectable MOCK available and consume IAM changes only from fixed,
-pushed commits. The UI now proves single-key set/delete, strong `If-Match`,
-idempotency replay, Operation presentation and the contract-specific recovery
-rules above. The IAM engineer is still advancing the accepted real product
-slice, so revalidate the newest fixed backend commit and its independent CI
-before adding a strict LIVE adapter; do not assume the earlier
-`e9ea19e65` candidate remains the final integration target. The client must not
-invent a 422 branch or Audit ID. Arbitrary caller attributes and raw
-decision/debug surfaces remain unavailable. Continue without reintroducing
-whole-page loading, hidden broad Context subscriptions, fabricated totals,
-duplicate components or login verification before UX acceptance.
+pushed commits. The current preview directory intentionally exposes no
+AccessKey product Action. The IAM engineer is testing a PaaS Profile revision-7
+candidate whose first programmatic path is Application creation, but its
+predecessor/readiness gate is still being repaired and no final fixed SHA has
+been supplied. Revalidate its exact Action, credential carriers, public failure
+codes and independent CI before updating the preview declaration or adding a
+strict LIVE/product adapter. Accepting a credential carrier must never become
+an effective-access claim, and the browser must not test or retain the Secret.
+Continue without reintroducing whole-page loading, hidden broad Context
+subscriptions, fabricated totals, duplicate components or login verification
+before UX acceptance.
