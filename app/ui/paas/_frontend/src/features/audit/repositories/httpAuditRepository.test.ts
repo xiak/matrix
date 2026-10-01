@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AUDIT_API_VERSION } from "../domain/audit";
+import { AUDIT_API_VERSION, parseAuditChainVerification, parseAuditRecordPage } from "../domain/audit";
 import { httpAuditRepository } from "./httpAuditRepository";
 
 const hash = (character: string) => `sha256:${character.repeat(64)}`;
@@ -77,6 +77,40 @@ describe("httpAuditRepository", () => {
     await expect(httpAuditRepository.query("session-secret", { pageSize: 10 })).rejects.toThrow("INVALID_AUDIT_RECORD_ORDER");
   });
 
+  it("decodes role-session lineage and rejects unknown nested identity fields", () => {
+    const rolePage = recordPage();
+    rolePage.records[0]!.event.actor = {
+      type: "ROLE",
+      id: "role-deployer",
+      roleSession: { sessionId: "session-deploy", sourceUserId: "principal-developer" }
+    } as never;
+    expect(parseAuditRecordPage(rolePage, "TENANT").records[0]!.event.actor).toEqual({
+      type: "ROLE",
+      id: "role-deployer",
+      roleSession: { sessionId: "session-deploy", sourceUserId: "principal-developer" }
+    });
+
+    const unknownLineage = structuredClone(rolePage);
+    (unknownLineage.records[0]!.event.actor as unknown as Record<string, unknown>).displayName = "must not be trusted";
+    expect(() => parseAuditRecordPage(unknownLineage, "TENANT")).toThrow("INVALID_AUDIT_ACTOR");
+  });
+
+  it("requires exactly one authority and keeps tenant and platform responses distinct", () => {
+    const both = structuredClone(recordPage()) as unknown as Record<string, unknown>;
+    both.installationId = "installation-test";
+    expect(() => parseAuditRecordPage(both)).toThrow("INVALID_AUDIT_AUTHORITY");
+
+    const platform = structuredClone(recordPage()) as unknown as Record<string, unknown>;
+    delete platform.tenantId;
+    platform.installationId = "installation-test";
+    const platformRecord = ((platform.records as Array<Record<string, unknown>>)[0]!);
+    const platformEvent = platformRecord.event as Record<string, unknown>;
+    delete platformEvent.tenantId;
+    platformEvent.installationId = "installation-test";
+    expect(parseAuditRecordPage(platform, "INSTALLATION")).toMatchObject({ authorityKind: "INSTALLATION", installationId: "installation-test" });
+    expect(() => parseAuditRecordPage(platform, "TENANT")).toThrow("INVALID_AUDIT_AUTHORITY");
+  });
+
   it("validates bounded chain-verification evidence", async () => {
     const verification = {
       apiVersion: AUDIT_API_VERSION,
@@ -99,5 +133,21 @@ describe("httpAuditRepository", () => {
     const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(path).toBe("/api/audit/v1/integrity:verify");
     expect(JSON.parse(String(init.body))).toEqual({ fromSequence: 1, maximumRecords: 42 });
+  });
+
+  it("rejects chain verification without exactly one authority", () => {
+    const verification = {
+      apiVersion: AUDIT_API_VERSION,
+      kind: "ChainVerification",
+      state: "VERIFIED",
+      fromSequence: 1,
+      toSequence: 1,
+      recordCount: 1,
+      firstPreviousHash: hash("0"),
+      lastRecordHash: hash("4"),
+      complete: true,
+      verifiedAt: "2026-08-25T03:06:07.000Z"
+    };
+    expect(() => parseAuditChainVerification(verification)).toThrow("INVALID_AUDIT_AUTHORITY");
   });
 });

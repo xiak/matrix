@@ -2553,6 +2553,13 @@
       "actorType": "Actor type",
       "actorId": "Actor ID",
       "actorHint": "Leave blank to include every actor",
+      "accessKeyId": "AccessKey ID (optional)",
+      "accessKeyHint": "Use only when tracing a user's key-based call",
+      "roleSessionId": "Role-session ID",
+      "roleSessionHint": "A ROLE filter requires complete session lineage",
+      "roleSourceType": "Role source type",
+      "roleSourceId": "Role source ID",
+      "roleSourceHint": "The user or service account that started the role session",
       "pageSize": "Rows per page",
       "allActions": "All actions",
       "invalid": "Check the time range, actor ID and pagination values."
@@ -2565,7 +2572,7 @@
       "table": "Audit records",
       "empty": "No matching audit records",
       "emptyHint": "Adjust the structured filters and try again. An empty result is not an authorization decision.",
-      "footer": "Current tenant: {tenant} · cursors are service-signed and bound to the active filters",
+      "footer": "{authority}: {id} · cursors are service-signed and bound to the active filters",
       "page": "Page {page}"
     },
     "columns": {
@@ -2577,8 +2584,13 @@
     },
     "actorTypes": {
       "USER": "User",
+      "ROLE": "Role session",
       "SERVICE_ACCOUNT": "Service account",
       "SYSTEM": "System"
+    },
+    "authority": {
+      "TENANT": "Current tenant",
+      "INSTALLATION": "Platform installation"
     },
     "results": {
       "ACCEPTED": "Accepted",
@@ -2590,6 +2602,7 @@
       "title": "Audit records could not be read",
       "expired": "The IAM session has expired. Sign in again.",
       "forbidden": "This identity lacks audit.record.read or audit.integrity.verify.",
+      "conflict": "The audit-chain state changed. Refresh before verifying again.",
       "invalid": "The audit service returned data outside its contract. The UI refused to render it.",
       "unavailable": "The audit service is unavailable. MOCK data has not replaced the live result."
     },
@@ -2597,6 +2610,9 @@
       "title": "Audit record #{sequence}",
       "context": "Activity context",
       "source": "Action / source",
+      "authority": "Authority",
+      "roleLineage": "Role session {session} · source {source}",
+      "accessKeyLineage": "User key {accessKey}",
       "retention": "Retention",
       "indefinite": "Retained indefinitely",
       "ingested": "Ingested: {time}",
@@ -2630,7 +2646,7 @@
       "verifiedAt": "Verified: {time}",
       "range": "Verified range",
       "recordCount": "{count} consecutive records",
-      "tenant": "Current tenant",
+      "authority": "Verification authority",
       "firstHash": "Range-start previous hash",
       "lastHash": "Range-end record hash",
       "continue": "Continue at sequence {sequence}"

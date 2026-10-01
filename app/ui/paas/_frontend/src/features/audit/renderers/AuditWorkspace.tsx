@@ -25,7 +25,9 @@ import {
   AUDIT_MAX_VERIFY_RECORDS,
   auditActions,
   auditActorTypes,
+  type AuditActor,
   type AuditActorType,
+  type AuditAuthority,
   type AuditChainVerification,
   type AuditQueryRequest,
   type AuditRecord,
@@ -36,17 +38,44 @@ import { httpAuditRepository } from "../repositories/httpAuditRepository";
 import { previewAuditRepository } from "../repositories/previewAuditRepository";
 import styles from "./AuditWorkspace.module.css";
 
-type LoadError = "expired" | "forbidden" | "invalid" | "unavailable";
-type DraftFilters = { from: string; to: string; action: string; actorType: AuditActorType; actorId: string; pageSize: number };
+type LoadError = "expired" | "forbidden" | "conflict" | "invalid" | "unavailable";
+type DraftFilters = {
+  from: string;
+  to: string;
+  action: string;
+  actorType: AuditActorType;
+  actorId: string;
+  accessKeyId: string;
+  roleSessionId: string;
+  roleSourceType: "USER" | "SERVICE_ACCOUNT";
+  roleSourceId: string;
+  pageSize: number;
+};
 
-const emptyFilters: DraftFilters = { from: "", to: "", action: "", actorType: "USER", actorId: "", pageSize: 10 };
+const emptyFilters: DraftFilters = { from: "", to: "", action: "", actorType: "USER", actorId: "", accessKeyId: "", roleSessionId: "", roleSourceType: "USER", roleSourceId: "", pageSize: 10 };
 const actorIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 
 function loadError(error: unknown): LoadError {
   if (error instanceof HttpProblem && error.status === 401) return "expired";
   if (error instanceof HttpProblem && error.status === 403) return "forbidden";
+  if (error instanceof HttpProblem && error.status === 409) return "conflict";
+  if (error instanceof HttpProblem && (error.status === 400 || error.status === 422)) return "invalid";
   if (error instanceof Error && error.message.startsWith("INVALID_")) return "invalid";
   return "unavailable";
+}
+
+function actorFrom(filters: DraftFilters): AuditActor | undefined {
+  if (!filters.actorId) return undefined;
+  if (filters.actorType === "ROLE") {
+    const source = filters.roleSourceType === "USER" ? { sourceUserId: filters.roleSourceId } : { sourceServicePrincipalId: filters.roleSourceId };
+    return { type: "ROLE", id: filters.actorId, roleSession: { sessionId: filters.roleSessionId, ...source } };
+  }
+  if (filters.actorType === "USER") return { type: "USER", id: filters.actorId, accessKeyId: filters.accessKeyId || undefined };
+  return { type: filters.actorType, id: filters.actorId };
+}
+
+function authorityId(authority: AuditAuthority): string {
+  return authority.authorityKind === "TENANT" ? authority.tenantId : authority.installationId;
 }
 
 function requestFrom(filters: DraftFilters): AuditQueryRequest {
@@ -55,7 +84,7 @@ function requestFrom(filters: DraftFilters): AuditQueryRequest {
     from: filters.from ? new Date(filters.from).toISOString() : undefined,
     to: filters.to ? new Date(filters.to).toISOString() : undefined,
     action: filters.action ? filters.action as AuditQueryRequest["action"] : undefined,
-    actor: filters.actorId ? { type: filters.actorType, id: filters.actorId } : undefined
+    actor: actorFrom(filters)
   };
 }
 
@@ -74,9 +103,10 @@ function RecordDetail({ record, onBack }: { record: AuditRecord; onBack(): void 
         <section aria-labelledby="audit-event-context">
           <h3 id="audit-event-context" className={styles.sectionTitle}>{t("detail.context")}</h3>
           <dl className={styles.facts}>
-            <div><dt>{t("columns.actor")}</dt><dd><strong>{event.actor.id}</strong><small>{t(`actorTypes.${event.actor.type}`)}</small></dd></div>
+            <div><dt>{t("columns.actor")}</dt><dd><strong>{event.actor.id}</strong><small>{event.actor.type === "ROLE" ? t("detail.roleLineage", { session: event.actor.roleSession.sessionId, source: event.actor.roleSession.sourceUserId ?? event.actor.roleSession.sourceServicePrincipalId }) : event.actor.type === "USER" && event.actor.accessKeyId ? t("detail.accessKeyLineage", { accessKey: event.actor.accessKeyId }) : t(`actorTypes.${event.actor.type}`)}</small></dd></div>
             <div><dt>{t("columns.target")}</dt><dd><strong>{event.target.id}</strong><small>{event.target.kind}</small></dd></div>
             <div><dt>{t("detail.source")}</dt><dd><strong>{event.action}</strong><small>{record.source}</small></dd></div>
+            <div><dt>{t("detail.authority")}</dt><dd><strong>{t(`authority.${event.authorityKind}`)}</strong><small>{authorityId(event)}</small></dd></div>
             <div><dt>{t("detail.retention")}</dt><dd><strong>{t("detail.indefinite")}</strong><small>{t("detail.ingested", { time: format.dateTime(new Date(record.ingestedAt), { dateStyle: "medium", timeStyle: "long" }) })}</small></dd></div>
           </dl>
         </section>
@@ -153,7 +183,7 @@ function IntegrityWorkspace({ repository, credential, onBack }: { repository: Au
           <div className={styles.verificationHeading}><Badge status="success">{t("verification.verified")}</Badge><div><strong>{t(result.complete ? "verification.complete" : "verification.partial")}</strong><span>{t("verification.verifiedAt", { time: format.dateTime(new Date(result.verifiedAt), { dateStyle: "medium", timeStyle: "long" }) })}</span></div></div>
           <dl className={styles.facts}>
             <div><dt>{t("verification.range")}</dt><dd><strong>{result.fromSequence}–{result.toSequence}</strong><small>{t("verification.recordCount", { count: result.recordCount })}</small></dd></div>
-            <div><dt>{t("verification.tenant")}</dt><dd><code>{result.tenantId}</code></dd></div>
+            <div><dt>{t("verification.authority")}</dt><dd><strong>{t(`authority.${result.authorityKind}`)}</strong><small><code>{authorityId(result)}</code></small></dd></div>
             <div><dt>{t("verification.firstHash")}</dt><dd><code>{result.firstPreviousHash}</code></dd></div>
             <div><dt>{t("verification.lastHash")}</dt><dd><code>{result.lastRecordHash}</code></dd></div>
           </dl>
@@ -221,7 +251,9 @@ export function AuditWorkspace({ preview = false }: { preview?: boolean }) {
   const apply = useCallback(() => {
     if ((draft.from && Number.isNaN(Date.parse(draft.from))) || (draft.to && Number.isNaN(Date.parse(draft.to))) ||
       (draft.from && draft.to && Date.parse(draft.from) > Date.parse(draft.to)) ||
-      (draft.actorId && !actorIdPattern.test(draft.actorId))) {
+      (draft.actorId && !actorIdPattern.test(draft.actorId)) ||
+      (draft.actorType === "USER" && draft.accessKeyId && (!draft.actorId || !actorIdPattern.test(draft.accessKeyId))) ||
+      (draft.actorType === "ROLE" && ((!draft.actorId && (draft.roleSessionId || draft.roleSourceId)) || (draft.actorId && (!actorIdPattern.test(draft.roleSessionId) || !actorIdPattern.test(draft.roleSourceId)))))) {
       setValidation(t("filters.invalid"));
       return;
     }
@@ -243,6 +275,7 @@ export function AuditWorkspace({ preview = false }: { preview?: boolean }) {
 
   const actionOptions = useMemo(() => [{ value: "", label: t("filters.allActions") }, ...auditActions.map((action) => ({ value: action, label: action }))], [t]);
   const actorTypeOptions = useMemo(() => auditActorTypes.map((type) => ({ value: type, label: t(`actorTypes.${type}`) })), [t]);
+  const roleSourceOptions = useMemo(() => (["USER", "SERVICE_ACCOUNT"] as const).map((type) => ({ value: type, label: t(`actorTypes.${type}`) })), [t]);
 
   if (selected) return <RecordDetail record={selected} onBack={() => {
     restoreSequence.current = opener.current;
@@ -263,6 +296,12 @@ export function AuditWorkspace({ preview = false }: { preview?: boolean }) {
           <FormField label={t("filters.action")}><Select aria-label={t("filters.action")} options={actionOptions} value={draft.action} onValueChange={(action) => setDraft((current) => ({ ...current, action }))} /></FormField>
           <FormField label={t("filters.actorType")}><Select aria-label={t("filters.actorType")} options={actorTypeOptions} value={draft.actorType} onValueChange={(actorType) => setDraft((current) => ({ ...current, actorType: actorType as AuditActorType }))} /></FormField>
           <FormField id="audit-actor-id" label={t("filters.actorId")} hint={t("filters.actorHint")}><Input id="audit-actor-id" maxLength={128} value={draft.actorId} onChange={(event) => setDraft((current) => ({ ...current, actorId: event.target.value }))} /></FormField>
+          {draft.actorType === "USER" ? <FormField id="audit-access-key-id" label={t("filters.accessKeyId")} hint={t("filters.accessKeyHint")}><Input id="audit-access-key-id" maxLength={128} value={draft.accessKeyId} onChange={(event) => setDraft((current) => ({ ...current, accessKeyId: event.target.value }))} /></FormField> : null}
+          {draft.actorType === "ROLE" ? <>
+            <FormField id="audit-role-session-id" label={t("filters.roleSessionId")} hint={t("filters.roleSessionHint")}><Input id="audit-role-session-id" maxLength={128} value={draft.roleSessionId} onChange={(event) => setDraft((current) => ({ ...current, roleSessionId: event.target.value }))} /></FormField>
+            <FormField label={t("filters.roleSourceType")}><Select aria-label={t("filters.roleSourceType")} options={roleSourceOptions} value={draft.roleSourceType} onValueChange={(roleSourceType) => setDraft((current) => ({ ...current, roleSourceType: roleSourceType as DraftFilters["roleSourceType"] }))} /></FormField>
+            <FormField id="audit-role-source-id" label={t("filters.roleSourceId")} hint={t("filters.roleSourceHint")}><Input id="audit-role-source-id" maxLength={128} value={draft.roleSourceId} onChange={(event) => setDraft((current) => ({ ...current, roleSourceId: event.target.value }))} /></FormField>
+          </> : null}
           <FormField label={t("filters.pageSize")}><Select aria-label={t("filters.pageSize")} options={[10, 25, 50, 100, AUDIT_MAX_PAGE_SIZE].map((size) => ({ value: String(size), label: String(size) }))} value={String(draft.pageSize)} onValueChange={(size) => setDraft((current) => ({ ...current, pageSize: Number(size) }))} /></FormField>
           <div className={styles.filterActions}><Button disabled={loading} type="submit">{t("actions.query")}</Button><Button disabled={loading} type="button" variant="secondary" onClick={reset}>{t("actions.reset")}</Button><Button aria-label={t("actions.refresh")} disabled={loading} iconOnly size="small" type="button" variant="ghost" onClick={() => setRefreshRevision((value) => value + 1)}><RefreshCcw aria-hidden="true" /></Button></div>
         </form>
@@ -281,7 +320,7 @@ export function AuditWorkspace({ preview = false }: { preview?: boolean }) {
               <td data-label={t("columns.result")}><Badge status={record.event.result === "DENIED" ? "danger" : record.event.result === "ACCEPTED" ? "info" : "success"}>{t(`results.${record.event.result}`)}</Badge></td>
             </tr>)}</tbody>
           </Table> : <EmptyState title={t("directory.empty")} description={t("directory.emptyHint")} action={<Button variant="secondary" onClick={reset}>{t("actions.reset")}</Button>} />}
-          <Table.Footer note={t("directory.footer", { tenant: page.tenantId })}><TablePagination mode="cursor" disabled={loading} summary={t("directory.page", { page: pageIndex + 1 })}
+          <Table.Footer note={t("directory.footer", { authority: t(`authority.${page.authorityKind}`), id: authorityId(page) })}><TablePagination mode="cursor" disabled={loading} summary={t("directory.page", { page: pageIndex + 1 })}
             previous={{ label: t("actions.previous"), disabled: pageIndex === 0, onClick: () => setPageIndex((value) => Math.max(0, value - 1)) }}
             next={{ label: t("actions.next"), disabled: !page.nextCursor, onClick: () => { if (!page.nextCursor) return; setCursors((current) => [...current.slice(0, pageIndex + 1), page.nextCursor]); setPageIndex((value) => value + 1); } }} /></Table.Footer>
         </div> : null}

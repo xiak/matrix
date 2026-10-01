@@ -229,6 +229,10 @@ Audit admits only authenticated service identities and a closed versioned
 event union for IAM and PaaS facts. Every event has source, event ID, tenant,
 actor, IAM decision correlation where applicable, fixed action, typed target,
 result, request/content digest, safe correlation IDs, and UTC occurrence time.
+Authority is an exact union: tenant facts carry one `tenantId`, platform facts
+carry one `installationId`, and neither form may contain both. A `ROLE` actor
+also carries its role-session ID and exactly one source user or service
+principal; only a `USER` actor may carry optional access-key lineage.
 There is no arbitrary attributes map, request body, configuration value,
 secret, credential, native provider payload, stack trace, or absolute path.
 
@@ -269,6 +273,13 @@ an opaque tenant-bound cursor, and optional bounded time/action/actor filters.
 Responses expose the sanitized event, sequence, hashes, ingestion time, and
 retention policy only. Reading or verifying Audit writes a local sanitized
 access record without recursively calling the ingestion API.
+
+Platform query and verification use the separate `/v1/platform` endpoints and
+platform Audit actions. Their installation authority comes only from the
+current IAM decision; they do not turn the tenant console into an authority
+selector. Actor filters are identity filters rather than free-form text: a
+role filter must submit the complete role-session lineage accepted by the
+Audit contract.
 
 ### Fixed installation verification
 
@@ -393,15 +404,19 @@ the producer contract verifies registered target organizations through IAM.
 The control-plane console now exposes Audit as an independent product rather
 than an IAM submenu. Its tenant-scoped record directory uses only the contract's
 bounded time, action, actor, page-size, and opaque-cursor inputs; it has no
-tenant selector or unsupported full-text search. Record evidence and explicit
-bounded chain verification remain in the content region, preserve the shared
-shell while data loads, and use strict response parsing. LIVE mode calls only
-the accepted bearer-protected query and verification endpoints and never
-substitutes preview data; the retained MOCK adapter is visibly identified and
-rejects cursor or sequence ranges outside its fixture chain. Desktop and
-390-pixel responsive browser checks passed, as did the full frontend type,
-lint, architecture, theme-contrast, behavior, production-export, and Go embed
-gates.
+tenant selector or unsupported full-text search. The LIVE tenant adapter calls
+only the accepted bearer-protected tenant endpoints and rejects an installation
+response. Its closed decoder accepts exactly one response authority, validates
+all published actor lineages and target kinds, and rejects unknown nested
+identity fields. The query form asks for the additional role-session source or
+optional user access key only when that actor type requires it. Record evidence
+and explicit bounded chain verification remain in the content region and
+preserve the shared shell while data loads. LIVE mode never substitutes preview
+data; the retained MOCK adapter is visibly identified, includes role-session
+and access-key examples, and rejects cursor or sequence ranges outside its
+fixture chain. Desktop and 390-pixel responsive browser checks passed, as did
+the full frontend type, lint, architecture, theme-contrast, behavior,
+production-export, and Go embed gates.
 
 These results do not replace Gate C. The account extension has not yet run the
 signed, network-disabled install/upgrade/rollback/backup/recovery journey or

@@ -2553,6 +2553,13 @@
       "actorType": "操作者类型",
       "actorId": "操作者 ID",
       "actorHint": "留空表示不按操作者筛选",
+      "accessKeyId": "AccessKey ID（可选）",
+      "accessKeyHint": "仅在追踪用户密钥调用时填写",
+      "roleSessionId": "角色会话 ID",
+      "roleSessionHint": "ROLE 筛选必须提供完整会话来源",
+      "roleSourceType": "角色来源类型",
+      "roleSourceId": "角色来源 ID",
+      "roleSourceHint": "发起角色会话的用户或服务账号 ID",
       "pageSize": "每页条数",
       "allActions": "全部 Action",
       "invalid": "请检查时间范围、操作者 ID 和分页参数。"
@@ -2565,7 +2572,7 @@
       "table": "审计记录",
       "empty": "没有匹配的审计记录",
       "emptyHint": "调整结构化筛选条件后重试；空结果不代表当前身份没有权限。",
-      "footer": "当前租户：{tenant} · 游标由服务端签名且绑定当前筛选条件",
+      "footer": "{authority}：{id} · 游标由服务端签名且绑定当前筛选条件",
       "page": "第 {page} 页"
     },
     "columns": {
@@ -2577,8 +2584,13 @@
     },
     "actorTypes": {
       "USER": "用户",
+      "ROLE": "角色会话",
       "SERVICE_ACCOUNT": "服务账号",
       "SYSTEM": "系统"
+    },
+    "authority": {
+      "TENANT": "当前租户",
+      "INSTALLATION": "平台安装实例"
     },
     "results": {
       "ACCEPTED": "已接受",
@@ -2590,6 +2602,7 @@
       "title": "无法读取审计记录",
       "expired": "IAM 会话已失效，请重新登录。",
       "forbidden": "当前身份没有 audit.record.read 或 audit.integrity.verify 权限。",
+      "conflict": "审计链状态已变化，请刷新后重新校验。",
       "invalid": "审计服务返回了不符合契约的数据，页面已拒绝展示。",
       "unavailable": "审计服务暂时不可用；页面没有用 MOCK 数据替代实时结果。"
     },
@@ -2597,6 +2610,9 @@
       "title": "审计记录 #{sequence}",
       "context": "操作上下文",
       "source": "Action / 来源",
+      "authority": "权限域",
+      "roleLineage": "角色会话 {session} · 来源 {source}",
+      "accessKeyLineage": "用户密钥 {accessKey}",
       "retention": "保留策略",
       "indefinite": "无限期保留",
       "ingested": "写入时间：{time}",
@@ -2630,7 +2646,7 @@
       "verifiedAt": "校验时间：{time}",
       "range": "已校验区间",
       "recordCount": "{count} 条连续记录",
-      "tenant": "当前租户",
+      "authority": "校验权限域",
       "firstHash": "区间起点前序哈希",
       "lastHash": "区间末端记录哈希",
       "continue": "从序列 {sequence} 继续"

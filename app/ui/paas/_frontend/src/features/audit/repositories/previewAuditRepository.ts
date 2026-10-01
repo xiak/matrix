@@ -1,9 +1,10 @@
 import {
   AUDIT_API_VERSION,
   type AuditAction,
-  type AuditActorType,
+  type AuditActor,
   type AuditQueryRequest,
   type AuditRecord,
+  type AuditTargetKind,
   type AuditVerifyRequest
 } from "../domain/audit";
 import type { AuditRepository } from "./auditRepository";
@@ -15,26 +16,25 @@ const cursorSignature = "A".repeat(43);
 type Fixture = {
   action: AuditAction;
   source: AuditRecord["source"];
-  target: string;
+  target: AuditTargetKind;
   result: AuditRecord["event"]["result"];
-  actorType?: AuditActorType;
-  actor?: string;
+  actor?: AuditActor;
   operation?: boolean;
 };
 
 const fixtures: readonly Fixture[] = [
-  { action: "audit.records.read", source: "AUDIT", target: "AUDIT_RECORDS", result: "SUCCEEDED" },
-  { action: "iam.authorization.decided", source: "IAM", target: "AUTHORIZATION_DECISION", result: "ALLOWED", actor: "principal-admin" },
-  { action: "paas.deployment.created", source: "PAAS", target: "DEPLOYMENT", result: "ACCEPTED", actor: "principal-developer", operation: true },
-  { action: "iam.role-binding.put", source: "IAM", target: "ROLE_BINDING", result: "SUCCEEDED", actor: "principal-admin" },
-  { action: "paas.application.created", source: "PAAS", target: "APPLICATION", result: "SUCCEEDED", actor: "principal-developer", operation: true },
-  { action: "iam.session.issued", source: "IAM", target: "SESSION", result: "SUCCEEDED", actor: "principal-auditor" },
-  { action: "managedservice.service-installation.ready", source: "PAAS", target: "SERVICE_INSTALLATION", result: "SUCCEEDED", actorType: "SYSTEM", actor: "service-managedservice" },
-  { action: "audit.integrity.verified", source: "AUDIT", target: "AUDIT_CHAIN", result: "SUCCEEDED", actor: "principal-auditor" },
-  { action: "iam.authorization.decided", source: "IAM", target: "AUTHORIZATION_DECISION", result: "DENIED", actor: "principal-developer" },
-  { action: "paas.deployment.updated", source: "PAAS", target: "DEPLOYMENT", result: "ACCEPTED", actor: "principal-developer", operation: true },
-  { action: "iam.principal.created", source: "IAM", target: "PRINCIPAL", result: "SUCCEEDED", actor: "principal-admin" },
-  { action: "iam.account-alias.set", source: "IAM", target: "ORGANIZATION", result: "SUCCEEDED", actor: "principal-admin" }
+  { action: "audit.records.read", source: "AUDIT", target: "AUDIT_RECORDS", result: "SUCCEEDED", actor: { type: "USER", id: "principal-auditor", accessKeyId: "key-audit-preview" } },
+  { action: "iam.authorization.decided", source: "IAM", target: "AUTHORIZATION_DECISION", result: "ALLOWED", actor: { type: "USER", id: "principal-admin" } },
+  { action: "paas.deployment.created", source: "PAAS", target: "DEPLOYMENT", result: "ACCEPTED", actor: { type: "ROLE", id: "role-deployer", roleSession: { sessionId: "role-session-preview", sourceUserId: "principal-developer" } }, operation: true },
+  { action: "iam.role-binding.put", source: "IAM", target: "ROLE_BINDING", result: "SUCCEEDED", actor: { type: "USER", id: "principal-admin" } },
+  { action: "paas.application.created", source: "PAAS", target: "APPLICATION", result: "SUCCEEDED", actor: { type: "USER", id: "principal-developer" }, operation: true },
+  { action: "iam.session.issued", source: "IAM", target: "SESSION", result: "SUCCEEDED", actor: { type: "USER", id: "principal-auditor" } },
+  { action: "managedservice.service-installation.ready", source: "PAAS", target: "SERVICE_INSTALLATION", result: "SUCCEEDED", actor: { type: "SYSTEM", id: "service-managedservice" } },
+  { action: "audit.integrity.verified", source: "AUDIT", target: "AUDIT_CHAIN", result: "SUCCEEDED", actor: { type: "USER", id: "principal-auditor" } },
+  { action: "iam.authorization.decided", source: "IAM", target: "AUTHORIZATION_DECISION", result: "DENIED", actor: { type: "USER", id: "principal-developer" } },
+  { action: "paas.deployment.updated", source: "PAAS", target: "DEPLOYMENT", result: "ACCEPTED", actor: { type: "USER", id: "principal-developer" }, operation: true },
+  { action: "iam.principal.created", source: "IAM", target: "PRINCIPAL", result: "SUCCEEDED", actor: { type: "USER", id: "principal-admin" } },
+  { action: "iam.account-alias.set", source: "IAM", target: "ORGANIZATION", result: "SUCCEEDED", actor: { type: "USER", id: "principal-admin" } }
 ];
 
 const records: AuditRecord[] = fixtures.map((fixture, index) => {
@@ -51,8 +51,9 @@ const records: AuditRecord[] = fixtures.map((fixture, index) => {
       apiVersion: AUDIT_API_VERSION,
       kind: "AuditEvent",
       eventId,
+      authorityKind: "TENANT",
       tenantId,
-      actor: { type: fixture.actorType ?? "USER", id: fixture.actor ?? "principal-preview-admin" },
+      actor: fixture.actor ?? { type: "USER", id: "principal-preview-admin" },
       iamDecisionId: fixture.action === "iam.session.issued" ? undefined : decisionId,
       action: fixture.action,
       target: { kind: fixture.target, id: fixture.action === "iam.authorization.decided" ? decisionId : `${fixture.target.toLowerCase()}-${sequence}` },
@@ -96,6 +97,7 @@ export const previewAuditRepository: AuditRepository = {
     return {
       apiVersion: AUDIT_API_VERSION,
       kind: "AuditRecordPage",
+      authorityKind: "TENANT",
       tenantId,
       records: page,
       nextCursor: nextOffset < filtered.length ? cursorFor(nextOffset) : undefined
@@ -110,6 +112,7 @@ export const previewAuditRepository: AuditRepository = {
     return {
       apiVersion: AUDIT_API_VERSION,
       kind: "ChainVerification",
+      authorityKind: "TENANT",
       tenantId,
       state: "VERIFIED",
       fromSequence: request.fromSequence,
