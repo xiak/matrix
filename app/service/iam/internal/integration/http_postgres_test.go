@@ -13347,7 +13347,12 @@ func provePolicyAttachmentSessions(t *testing.T, ctx context.Context, handler ht
 	defer call(t, "/v1/groups/"+string(group.ID)+":delete", root,
 		iamv1.DeleteGroupRequest{ResourceVersion: group.ResourceVersion, RequestID: "attachment-session-group-cleanup"}, http.StatusOK, nil)
 	for _, targetKind := range []string{"user", "group", "platform"} {
-		for _, mutation := range []string{"logout", "change-default", "change-true", "change-false", "change-current", "reset", "forced", "disable", "revoke-authority"} {
+		// The own-session concurrency owner proves that an explicit
+		// revokeOtherSessions=true is equivalent to the default. This matrix
+		// keeps the default revocation, explicit preservation and current-session
+		// cases without repeating the same attachment outcome under another JSON
+		// spelling.
+		for _, mutation := range []string{"logout", "change-default", "change-false", "change-current", "reset", "forced", "disable", "revoke-authority"} {
 			if targetKind == "platform" && (mutation == "reset" || mutation == "forced" || mutation == "disable") {
 				continue // Platform credential protection is a separate, retained gate.
 			}
@@ -13427,7 +13432,7 @@ func provePolicyAttachmentSessions(t *testing.T, ctx context.Context, handler ht
 					// revoke/regrant assertion consume a second Session. Do not
 					// repeat an unused password login for every matrix cell.
 					var otherBearer string
-					if mutation == "change-default" || mutation == "change-true" || mutation == "change-false" ||
+					if mutation == "change-default" || mutation == "change-false" ||
 						(targetKind == "platform" && mutation == "revoke-authority") {
 						otherBearer = localRecoveryLogin(t, handler, actorName, currentPassword, false)
 					}
@@ -13496,12 +13501,10 @@ func provePolicyAttachmentSessions(t *testing.T, ctx context.Context, handler ht
 					switch mutation {
 					case "logout":
 						call(t, "/v1/auth/logout", bearer, map[string]any{"requestId": mutationID}, http.StatusOK, nil)
-					case "change-default", "change-true", "change-false", "change-current":
+					case "change-default", "change-false", "change-current":
 						nextPassword := "Attachment-Changed-Password-62!-" + caseID
 						change := map[string]any{"currentPassword": currentPassword, "newPassword": nextPassword, "requestId": mutationID}
-						if mutation == "change-true" {
-							change["revokeOtherSessions"] = true
-						} else if mutation == "change-false" {
+						if mutation == "change-false" {
 							change["revokeOtherSessions"] = false
 							want = http.StatusOK
 						}
