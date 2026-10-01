@@ -12,6 +12,7 @@ import type { AccountAccessScene, AccountUserScene } from "../scenes/accountAcce
 import { AccountIdentifier } from "./AccountOverview";
 import { AccessKeyOwnerDirectory } from "./AccessKeyOwnerDirectory";
 import { WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
+import { AccessKeyNetworkDetail, AccessKeyNetworkEditor, AccessKeyUsagePreview } from "./AccessKeyNetworkPreview";
 import styles from "./AccessCredentials.module.css";
 
 type KeyFlow =
@@ -331,12 +332,14 @@ export function AccessCredentials({ workspace, scene, embedded = false, onInspec
   onInspectPermissions?(ownerId: string): void;
 }) {
   const t = useTranslations("IamWorkspace");
+  const network = useTranslations("AccessKeyNetworkPreview");
   const collection = useTranslations("Collection");
   const access = useAccountAccess();
   const initialOwner = embedded && scene.users.length === 1 ? scene.users[0]!.id : null;
   const [ownerId, setOwnerId] = useState<string | null>(initialOwner);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [flow, setFlow] = useState<KeyFlow | null>(null);
+  const [editingNetwork, setEditingNetwork] = useState(false);
   const pending = workspace.pendingKeyCreation;
   const owner = scene.users.find((user) => user.id === (pending?.ownerId ?? ownerId)) ?? null;
   const ownerKeys = owner ? workspace.keys.filter((key) => key.ownerId === owner.id) : [];
@@ -352,9 +355,9 @@ export function AccessCredentials({ workspace, scene, embedded = false, onInspec
     if (!flow || flow.kind !== "status") setSelectedId(null);
     setFlow(null);
   };
-  const returnToDirectory = () => { setFlow(null); setSelectedId(null); };
-  const openOwner = (id: string) => { if (pending) return; setOwnerId(id); setSelectedId(null); setFlow(null); };
-  const openKey = (id: string) => { setFlow(null); setSelectedId(id); };
+  const returnToDirectory = () => { setFlow(null); setSelectedId(null); setEditingNetwork(false); };
+  const openOwner = (id: string) => { if (pending) return; setOwnerId(id); setSelectedId(null); setFlow(null); setEditingNetwork(false); };
+  const openKey = (id: string) => { setFlow(null); setSelectedId(id); setEditingNetwork(false); };
   const startCreate = () => {
     if (!owner || pending || owner.state !== "active") return;
     access.clearWorkspaceError();
@@ -373,14 +376,19 @@ export function AccessCredentials({ workspace, scene, embedded = false, onInspec
   const ownerDisabledReason = owner.state === "passwordChangeRequired" ? t("keyOwnerPasswordChangeRequired") : owner.state === "disabled" ? t("keyOwnerDisabled") : undefined;
   const commands = !activeFlow && !selected ? <ContentPage.Commands label={collection("pageActions")} primary={{ id: "create-key", label: t("createKey"), disabled: createDisabled, disabledReason: pending ? t("keyIntentLocked") : ownerDisabledReason ?? (ownerKeys.length >= 2 ? t("keyQuotaReached") : undefined), onSelect: startCreate }} /> : undefined;
 
+  if (selected && editingNetwork && !activeFlow) return <WorkspaceDetail embedded={embedded} title={selected.id} onBack={() => setEditingNetwork(false)}>
+    <AccessKeyNetworkEditor keyValue={selected} onClose={() => setEditingNetwork(false)} />
+  </WorkspaceDetail>;
+
   if (selected && !activeFlow) return <WorkspaceDetail embedded={embedded} title={selected.id} onBack={() => setSelectedId(null)} actions={{
     primary: { id: "status", label: t(selected.status === "ENABLED" ? "disable" : "enable"), variant: "secondary", disabled: selected.status === "DISABLED" && owner.state !== "active", disabledReason: selected.status === "DISABLED" ? ownerDisabledReason : undefined, onSelect: () => setFlow({ kind: "status", keyId: selected.id, status: selected.status === "ENABLED" ? "DISABLED" : "ENABLED", requestId: requestToken("ui-access-key-status-") }) },
-    secondary: [{ id: "delete", label: t("delete"), danger: true, disabled: selected.status === "ENABLED", disabledReason: selected.status === "ENABLED" ? t("errors.disableFirst") : undefined, onSelect: () => setFlow({ kind: "delete", keyId: selected.id, requestId: requestToken("ui-access-key-delete-") }) }]
+    secondary: [{ id: "network", label: network("configureKey"), onSelect: () => setEditingNetwork(true) }, { id: "delete", label: t("delete"), danger: true, disabled: selected.status === "ENABLED", disabledReason: selected.status === "ENABLED" ? t("errors.disableFirst") : undefined, onSelect: () => setFlow({ kind: "delete", keyId: selected.id, requestId: requestToken("ui-access-key-delete-") }) }]
   }}>
     <Card><Card.Body className={styles.detailBody}>
       <dl className={styles.keyFacts}><div><dt>{t("keyId")}</dt><dd><AccountIdentifier label={t("keyId")} value={selected.id} /></dd></div><div><dt>{t("owner")}</dt><dd><strong>{owner.name}</strong><span>{owner.loginName} · {owner.id}</span></dd></div><div><dt>{t("state")}</dt><dd><Badge status={selected.status === "ENABLED" ? "success" : "neutral"}>{t(selected.status === "ENABLED" ? "enabled" : "disabled")}</Badge></dd></div><div><dt>{t("created")}</dt><dd><WorkspaceTime value={selected.createdAt} /></dd></div><div><dt>{t("keyRevision")}</dt><dd>v{selected.resourceVersion}</dd></div></dl>
-      <Alert status="info">{t("keyNoUsageEvidence")}</Alert>
     </Card.Body></Card>
+    <AccessKeyNetworkDetail account={workspace.settings.accessKeyNetwork} keyValue={selected} />
+    <AccessKeyUsagePreview usage={selected.usage} />
     <ProgrammaticAccessGuide client={access.authorizationProfiles} owner={owner} onInspectPermissions={onInspectPermissions} />
     <RotationGuide />
   </WorkspaceDetail>;

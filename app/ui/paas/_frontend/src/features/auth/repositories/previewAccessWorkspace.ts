@@ -74,9 +74,13 @@ export function initialAccessWorkspace(accountId: string): AccessWorkspace {
     ],
     providers: [{ id: "idp-example", name: "EnterpriseSSO", protocol: "SAML", issuer: "https://identity.example.invalid/saml", audience: "matrix-cloud", metadata: '<EntityDescriptor entityID="https://identity.example.invalid/saml"></EntityDescriptor>', enabled: true, createdAt: at }],
     roleSsoMappings: [{ id: "role-sso-rule-audit", name: "AuditAssertionRule", assertionSubject: "audit@example.invalid", providerId: "idp-example", roleId: "role-audit", enabled: true, createdAt: at }],
-    keys: [{ id: "MOCK-pipeline-key", ownerId: "principal-lin", status: "ENABLED", resourceVersion: 2, createdAt: at }],
+    keys: [{
+      id: "MOCK-pipeline-key", ownerId: "principal-lin", status: "ENABLED", resourceVersion: 2, createdAt: at,
+      networkRestrictions: { allowedSourceCidrs: ["203.0.113.64/26"] },
+      usage: { observedAt: "2026-09-09T08:15:00Z", lastAuthorization: { evaluatedAt: "2026-09-09T08:14:58Z", allowed: false, action: "audit.record.read", product: "audit", sourceIp: "198.51.100.42" } }
+    }],
     userPolicies: { "principal-lin": ["policy-prod-logs"], "principal-qiao": ["policy-tag-logs", "policy-production-guard", "policy-assume-reviewer"] },
-    settings: { loginProtection: false, accountRuleVersion: 1, userSsoEnabled: false, userSsoConfiguration: null },
+    settings: { loginProtection: false, accountRuleVersion: 1, userSsoEnabled: false, userSsoConfiguration: null, accessKeyNetwork: { allowedSourceCidrs: ["2001:db8:1200::/48", "203.0.113.0/24"] } },
     personalMfa: { factorState: "never-bound", reauthenticationRequired: false, recoveryState: "idle" },
     personalNotificationAddress: null,
     events: [{ id: "event-sign-in", action: "sign-in", target: "preview-admin", at: "2026-09-09T01:10:00Z" }]

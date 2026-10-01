@@ -2,6 +2,7 @@ import { parsePolicyDocument, type PolicyDocument } from "./policyDocument";
 import { AccessWorkspaceError } from "./accessWorkspaceError";
 import { validateRoleTrust, type RoleSessionCaller } from "./roleTrust";
 import { evaluateRoleAssumption, type AccessTestRequest } from "./policyEvaluation";
+import { accessKeyNetworkRestrictionsEqual, accessKeyNetworkRestrictionsValid, type AccessKeyNetworkRestrictions, type AccessKeyUsageObservation } from "./accessKeyNetwork";
 
 // Preview-only configuration. The diagnostic evaluator never replaces live IAM.
 export type AccessPolicy = {
@@ -32,6 +33,8 @@ export type AccessKey = {
   status: "ENABLED" | "DISABLED";
   resourceVersion: number;
   createdAt: string;
+  networkRestrictions: AccessKeyNetworkRestrictions;
+  usage: AccessKeyUsageObservation;
 };
 export type AccessKeyOwnerState = "active" | "passwordChangeRequired" | "disabled";
 export type PendingAccessKeyCreation =
@@ -77,6 +80,7 @@ export function userSsoConfigurationIssue(config: UserSsoConfiguration | null): 
 }
 export type AccessSettings = {
   loginProtection: boolean; accountRuleVersion: number; userSsoEnabled: boolean; userSsoConfiguration: UserSsoConfiguration | null;
+  accessKeyNetwork: AccessKeyNetworkRestrictions;
 };
 export type PersonalMfaPreviewState = {
   factorState: "never-bound" | "bound" | "removed";
@@ -147,6 +151,7 @@ export type AccessWorkspaceCommand =
   | { kind: "create-key"; ownerId: string; ownerState: AccessKeyOwnerState; userResourceVersion: number; requestId: string; responseMode: "success" | "response-lost" }
   | { kind: "inspect-key-creation"; ownerId: string; requestId: string; resultMode: "found" | "not-found" | "unavailable" }
   | { kind: "set-key-status"; id: string; ownerState: AccessKeyOwnerState; status: AccessKey["status"]; resourceVersion: number; requestId: string }
+  | { kind: "save-key-network-preview"; id: string; resourceVersion: number; networkRestrictions: AccessKeyNetworkRestrictions }
   | { kind: "delete-key"; id: string; resourceVersion: number; requestId: string }
   | { kind: "confirm-personal-mfa" }
   | { kind: "verify-personal-notification-address"; address: string }
@@ -167,6 +172,7 @@ export type AccessWorkspaceCommand =
   | { kind: "delete-enterprise"; id: string }
   | { kind: "import-enterprise-members"; id: string; memberIds: string[] }
   | { kind: "save-account-rule"; requestId: string; expectedRuleVersion: number; expectedLoginProtection: boolean; loginProtection: boolean; responseMode: "success" | "response-lost" }
+  | { kind: "save-account-key-network-preview"; expectedRuleVersion: number; accessKeyNetwork: AccessKeyNetworkRestrictions }
   /** Preview client journal only; this is not a future IAM mutation contract. */
   | { kind: "remember-account-rule-change-unknown"; requestId: string; expectedRuleVersion: number; expectedLoginProtection: boolean; loginProtection: boolean }
   | { kind: "inspect-account-rule-change"; requestId: string; resultMode: "found-applied" | "found-rejected" | "not-found" | "unavailable" }
@@ -461,7 +467,7 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
       exists(state.roleSsoMappings, id); state.roleSsoMappings = state.roleSsoMappings.filter((entry) => entry.id !== id); break;
     case "create-key":
       if (state.pendingKeyCreation || command.ownerState !== "active" || !context.userIds.includes(command.ownerId) || !Number.isInteger(command.userResourceVersion) || command.userResourceVersion < 1 || !command.requestId.trim() || state.keys.filter((key) => key.ownerId === command.ownerId).length >= 2) invalid();
-      state.keys.push({ id: "MOCK-" + id, ownerId: command.ownerId, status: "ENABLED", resourceVersion: 1, createdAt });
+      state.keys.push({ id: "MOCK-" + id, ownerId: command.ownerId, status: "ENABLED", resourceVersion: 1, createdAt, networkRestrictions: { allowedSourceCidrs: [] }, usage: { observedAt: createdAt } });
       if (command.responseMode === "response-lost") state.pendingKeyCreation = { ownerId: command.ownerId, requestId: command.requestId, status: "UNKNOWN" };
       target = "MOCK-" + id; break;
     case "inspect-key-creation": {
@@ -479,6 +485,13 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
       const key = exists(state.keys, id);
       if (!Number.isInteger(command.resourceVersion) || command.resourceVersion !== key.resourceVersion || !command.requestId.trim() || (command.status === "ENABLED" && command.ownerState !== "active")) invalid();
       key.status = command.status;
+      key.resourceVersion += 1;
+      break;
+    }
+    case "save-key-network-preview": {
+      const key = exists(state.keys, id);
+      if (!Number.isInteger(command.resourceVersion) || command.resourceVersion !== key.resourceVersion || !accessKeyNetworkRestrictionsValid(command.networkRestrictions) || accessKeyNetworkRestrictionsEqual(command.networkRestrictions, key.networkRestrictions)) invalid();
+      key.networkRestrictions = structuredClone(command.networkRestrictions);
       key.resourceVersion += 1;
       break;
     }
@@ -591,6 +604,12 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
         state.settings = { ...state.settings, loginProtection: command.loginProtection, accountRuleVersion: command.expectedRuleVersion + 1 };
         state.personalMfa = { ...state.personalMfa, reauthenticationRequired: true };
       }
+      target = source.accountId; break;
+    }
+    case "save-account-key-network-preview": {
+      if (state.personalMfa.factorState !== "bound" || state.personalMfa.reauthenticationRequired || state.personalMfa.recoveryState !== "idle" || state.personalMfa.pendingReplacement || state.pendingAccountRuleChange || !Number.isSafeInteger(command.expectedRuleVersion) || command.expectedRuleVersion !== state.settings.accountRuleVersion || !accessKeyNetworkRestrictionsValid(command.accessKeyNetwork) || accessKeyNetworkRestrictionsEqual(command.accessKeyNetwork, state.settings.accessKeyNetwork)) invalid();
+      state.settings = { ...state.settings, accessKeyNetwork: structuredClone(command.accessKeyNetwork), accountRuleVersion: command.expectedRuleVersion + 1 };
+      state.personalMfa = { ...state.personalMfa, reauthenticationRequired: true };
       target = source.accountId; break;
     }
     case "remember-account-rule-change-unknown": {

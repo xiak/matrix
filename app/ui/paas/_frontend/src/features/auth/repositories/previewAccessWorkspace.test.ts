@@ -633,6 +633,25 @@ describe("access workspace preview invariants", () => {
     expect(() => applyAccessWorkspaceCommand(state, { kind: "set-key-status", id: "MOCK-pipeline-key", ownerState: "passwordChangeRequired", status: "ENABLED", resourceVersion: 3, requestId: "enable-existing" }, context)).toThrow("invalid");
     expect(applyAccessWorkspaceCommand(state, { kind: "delete-key", id: "MOCK-pipeline-key", resourceVersion: 3, requestId: "delete-existing" }, context).keys).toEqual([]);
   });
+  it("replaces account and key source networks only with canonical, versioned preview commands", () => {
+    let state = initialAccessWorkspace("org-xiak");
+    const key = state.keys[0]!;
+    expect(() => applyAccessWorkspaceCommand(state, { kind: "save-key-network-preview", id: key.id, resourceVersion: key.resourceVersion, networkRestrictions: key.networkRestrictions }, context)).toThrow("invalid");
+    expect(() => applyAccessWorkspaceCommand(state, { kind: "save-key-network-preview", id: key.id, resourceVersion: key.resourceVersion, networkRestrictions: { allowedSourceCidrs: ["203.0.113.4/24"] } }, context)).toThrow("invalid");
+    state = applyAccessWorkspaceCommand(state, { kind: "save-key-network-preview", id: key.id, resourceVersion: key.resourceVersion, networkRestrictions: { allowedSourceCidrs: ["198.51.100.0/24"] } }, context);
+    expect(state.keys[0]).toMatchObject({ resourceVersion: key.resourceVersion + 1, networkRestrictions: { allowedSourceCidrs: ["198.51.100.0/24"] } });
+    expect(() => applyAccessWorkspaceCommand(state, { kind: "save-key-network-preview", id: key.id, resourceVersion: key.resourceVersion, networkRestrictions: { allowedSourceCidrs: [] } }, context)).toThrow("invalid");
+
+    const unbound = initialAccessWorkspace("org-xiak");
+    const replacement = { allowedSourceCidrs: ["198.51.100.0/24"] };
+    expect(() => applyAccessWorkspaceCommand(unbound, { kind: "save-account-key-network-preview", expectedRuleVersion: 1, accessKeyNetwork: replacement }, context)).toThrow("invalid");
+    const awaitingLogin = applyAccessWorkspaceCommand(unbound, { kind: "confirm-personal-mfa" }, context);
+    const ready = applyAccessWorkspaceCommand(awaitingLogin, { kind: "complete-personal-mfa-reauthentication" }, context);
+    const updated = applyAccessWorkspaceCommand(ready, { kind: "save-account-key-network-preview", expectedRuleVersion: ready.settings.accountRuleVersion, accessKeyNetwork: replacement }, context);
+    expect(updated.settings).toMatchObject({ accountRuleVersion: ready.settings.accountRuleVersion + 1, accessKeyNetwork: replacement });
+    expect(updated.personalMfa.reauthenticationRequired).toBe(true);
+    expect(() => applyAccessWorkspaceCommand(updated, { kind: "save-account-key-network-preview", expectedRuleVersion: updated.settings.accountRuleVersion, accessKeyNetwork: replacement }, context)).toThrow("invalid");
+  });
   it("persists one unknown creation intent across users until the original key is inspected and retired", () => {
     let state = applyAccessWorkspaceCommand(initialAccessWorkspace("org-xiak"), { kind: "create-key", ownerId: "principal-chen", ownerState: "active", userResourceVersion: 2, requestId: "lost-response", responseMode: "response-lost" }, context);
     expect(state.pendingKeyCreation).toEqual({ ownerId: "principal-chen", requestId: "lost-response", status: "UNKNOWN" });

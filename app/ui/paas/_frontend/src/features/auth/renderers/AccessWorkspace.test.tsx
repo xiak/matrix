@@ -951,7 +951,10 @@ describe("CAM-style access workspace", () => {
     expect(within(keyDirectory).getByText("已禁用")).toBeTruthy();
     expect(screen.queryByText("最近使用")).toBeNull();
     await user.click(within(keyDirectory).getByRole("button", { name: "MOCK-pipeline-key" }));
-    expect(screen.getByText(/没有可靠的最后使用时间或访问日志/)).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "最近授权观测" })).toBeTruthy();
+    expect(screen.getByText("audit.record.read")).toBeTruthy();
+    expect(screen.getByText("198.51.100.42")).toBeTruthy();
+    expect(screen.getByText(/最近一次允许不代表当前仍允许/)).toBeTruthy();
   });
   it("filters mock user associations by direct and group sources and opens the same management detail", async () => {
     const { user } = await open("users");
@@ -2886,6 +2889,29 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByText("尚未创建访问密钥")).toBeTruthy();
     expect(repository.execute).not.toHaveBeenCalled();
   });
+  it("edits one key network layer inline and keeps the account layer independently visible", async () => {
+    const { user, extension } = await open("keys");
+    await user.click(await screen.findByRole("button", { name: "管理 lin 的访问密钥" }));
+    await user.click(within(await screen.findByRole("table", { name: "访问密钥" })).getByRole("button", { name: "MOCK-pipeline-key" }));
+    expect(screen.getByRole("heading", { name: "来源网络限制" })).toBeTruthy();
+    expect(screen.getByText("账号层")).toBeTruthy();
+    expect(screen.getByText("密钥层")).toBeTruthy();
+    expect(screen.getByText("203.0.113.0/24")).toBeTruthy();
+    expect(screen.getByText("203.0.113.64/26")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "配置来源网络" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("heading", { name: "编辑密钥级来源" })).toBe(document.activeElement);
+    const input = screen.getByRole("textbox", { name: "允许的来源 CIDR" });
+    await user.clear(input);
+    await user.type(input, "198.51.100.0/24");
+    await user.click(screen.getByRole("button", { name: "审阅变更" }));
+    expect(screen.getByRole("heading", { name: "审阅密钥级来源变更" })).toBe(document.activeElement);
+    await user.click(screen.getByRole("button", { name: "应用到 MOCK" }));
+    await waitFor(() => expect(screen.getByRole("heading", { name: "来源网络限制" })).toBeTruthy());
+    const key = (await extension.read("preview")).keys.find((entry) => entry.id === "MOCK-pipeline-key")!;
+    expect(key.networkRestrictions).toEqual({ allowedSourceCidrs: ["198.51.100.0/24"] });
+    expect(key.resourceVersion).toBe(3);
+  });
   it("loads the programmatic credential boundary only on demand and does not infer product support", async () => {
     const listAuthorizationProfiles = vi.fn().mockResolvedValue({ accountId: "org-xiak", items: [{ profile: {
       product: "paas", revision: 6, callingService: "PAAS", actions: [{ action: "paas.application.read", resourceKind: "APPLICATION", scope: "TENANT", subjectTypes: ["USER"], userAuthenticationMethods: ["LOGIN_SESSION"], resourceShapes: [{ mode: "INSTANCE", prefixAllowed: false }] }]
@@ -3013,7 +3039,7 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: "按原 requestId 查询" }));
     expect(screen.getByText("不可恢复 · 不可重显")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "查看并处置这把密钥" }));
-    expect(screen.getByText(/没有可靠的最后使用时间或访问日志/)).toBeTruthy();
+    expect(screen.getByText(/没有已验证的最近授权事实/)).toBeTruthy();
     expect((await extension.read("preview")).keys.filter((key) => key.ownerId === "principal-chen")).toHaveLength(1);
     await user.click(screen.getByRole("button", { name: "禁用" }));
     await user.click(screen.getByRole("button", { name: "禁用" }));
@@ -3042,6 +3068,30 @@ describe("CAM-style access workspace", () => {
 
     await openSecuritySection(user, "会话安全");
     expect(screen.getByRole("heading", { name: "会话空闲策略" })).toBeTruthy();
+  });
+  it("reviews and applies an account AccessKey network replacement inline after step-up", async () => {
+    const { user, extension } = await open("settings", { seed: seedBoundAccountRuleOperator });
+    await openSecuritySection(user, "账号策略");
+    expect(screen.getByRole("heading", { name: "访问密钥来源网络" })).toBeTruthy();
+    expect(screen.getByText("2001:db8:1200::/48")).toBeTruthy();
+    expect(screen.getByText("203.0.113.0/24")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "编辑账号级来源" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("heading", { name: "编辑账号级 AccessKey 来源" })).toBe(document.activeElement);
+    const input = screen.getByRole("textbox", { name: "允许的来源 CIDR" });
+    await user.clear(input);
+    await user.type(input, "198.51.100.0/24");
+    await user.click(screen.getByRole("button", { name: "审阅变更" }));
+    expect(screen.getByRole("heading", { name: "审阅账号级来源变更" })).toBe(document.activeElement);
+    await user.click(screen.getByRole("button", { name: "验证并应用到 MOCK" }));
+    expect(screen.getByRole("heading", { name: "验证身份后更新账号安全规则" })).toBe(document.activeElement);
+    await user.type(screen.getByLabelText("当前密码"), "demo-password");
+    await user.type(screen.getByLabelText("6 位动态验证码"), "624810");
+    await user.click(screen.getByRole("button", { name: "验证并继续" }));
+    await waitFor(async () => expect((await extension.read("preview")).settings.accessKeyNetwork).toEqual({ allowedSourceCidrs: ["198.51.100.0/24"] }));
+    const workspace = await extension.read("preview");
+    expect(workspace.settings.accountRuleVersion).toBe(2);
+    expect(workspace.personalMfa.reauthenticationRequired).toBe(true);
   });
   it("previews account password rule editing and effective requirements without an IAM write", async () => {
     const { user, extension } = await open("settings");

@@ -9,6 +9,7 @@ import { AccountSecuritySettingsPreview } from "./AccountSecuritySettingsPreview
 import { PasswordRulesPreview } from "./PasswordRulesPreview";
 import { SessionIdleSettingsPreview } from "./SessionIdleSettingsPreview";
 import { PasskeyConceptPreview } from "./PasskeyConceptPreview";
+import { AccountAccessKeyNetworkPreview } from "./AccessKeyNetworkPreview";
 import styles from "./AccountAccessRenderer.module.css";
 import securityStyles from "./MfaPreviewExperience.module.css";
 
@@ -44,7 +45,7 @@ export function AccessSecuritySettings({ workspace }: { workspace: AccessWorkspa
         {mounted.personal ? <><MfaSecurityPreview workspace={workspace} /><PasskeyConceptPreview /></> : null}
       </Tabs.Content>
       <Tabs.Content className={securityStyles.securityTabContent} forceMount={mounted.account || undefined} value="account">
-        {mounted.account ? <><AccountSecuritySettingsPreview workspace={workspace} /><PasswordRulesPreview accountId={workspace.accountId} /></> : null}
+        {mounted.account ? <><AccountSecuritySettingsPreview workspace={workspace} /><AccountAccessKeyNetworkPreview workspace={workspace} /><PasswordRulesPreview accountId={workspace.accountId} /></> : null}
       </Tabs.Content>
       <Tabs.Content className={securityStyles.securityTabContent} forceMount={mounted.session || undefined} value="session">
         {mounted.session ? <SessionIdleSettingsPreview /> : null}
