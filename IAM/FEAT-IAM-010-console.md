@@ -259,6 +259,7 @@ Role 管理 list/read/create、管理员 RoleSession list/read/revoke，以及�
 ### 非破坏性元数据编辑的开发验收证据
 
 - 2026-10-02 已推送 [`67ed0429a`](https://github.com/xiak/matrix/commit/67ed0429a)：隔离 MOCK 的 User 显示名、Group 名称/描述和自定义 Policy 描述编辑统一复用内容区表单，不再打开 Dialog。进入编辑后稳定标题和返回路径保留，详情操作暂时收起；取消或完成后，桌面回到原直接操作，小屏回到公共“页面操作”按钮。输入、提交错误和重试继续留在同一表单；删除确认及高风险批量操作仍使用聚焦的确认 Dialog，不因本片扩大为普通内容编辑。
+- 2026-10-02 已推送 [`0a317163a`](https://github.com/xiak/matrix/commit/0a317163a)：同一内容区契约扩展到 LIVE Group 名称/描述编辑，但不改变现有 `requestId`、`resourceVersion`、冲突恢复或提交后的权威重读语义；删除继续使用确认 Dialog。隔离 MOCK 的四种自定义 Policy 创建方式也从导航型 Dialog 改为内容区入口，返回后恢复创建操作焦点，选择方法后直接投影到既有统一草稿工作区。该策略入口没有新增 LIVE 创建端点，也不把产品功能、项目权限或标签示例解释成已发布的 IAM 能力。
 - 本片只统一共享承载面、焦点和响应式行为，不新增 LIVE User、Group 或 Policy 写入端点，也不把隔离仓库结果解释成 IAM 权威状态。Role update/status/delete、trust、attachment 与权限边界写入继续保持关闭，直到各自固定公共契约和真实进程门禁完成。
 - 完整共享门禁与浏览器尺寸证据由 [FEAT-007 current development evidence](../docs/features/FEAT-007-control-plane-console.md#current-shared-navigation-development-evidence) 唯一拥有；这里仅固定 IAM 的操作边界与未开放能力。
 
