@@ -6,8 +6,8 @@
 - Updated: 2026-10-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `60b60619`
-- Pushed documentation milestone: `8aeed58b`
+- Pushed source/embed milestone: `f4430afa`
+- Pushed documentation milestone: `ec558f65`
 
 ## Authoritative route
 
@@ -88,6 +88,17 @@ product-PEP browser evidence remain closed. Source/embed `60b60619` passed the
 full 55-file/899-test frontend, export/embed and focused Go UI host gates; its
 contract and limitations are owned by FEAT-IAM-010 at `8aeed58b`.
 
+The retained four-method MOCK policy author now presents a reusable tag trust
+boundary during editing and final review. It separates product-supplied
+resource-tag facts, policy resource-tag conditions, not-yet-connected request
+tag mutations and management-only identity/policy tags. Missing or unknown
+trusted facts never imply a match, and resource-tag mutation is described as a
+separately authorized and audited action. No request-tag field, evaluator or
+LIVE wire was invented. Source/embed `f4430afa` passed the full 55-file/899-test
+frontend, export/embed and focused Go UI host gates; desktop and `390 × 844`
+DEV inspection had no overflow and a fresh tab had no warning/error. The
+contract and limits are owned by FEAT-IAM-010 at `ec558f65`.
+
 The earlier navigation stress gate remains unchanged: 200 alternating suspended
 IAM Group and Role destinations preserve the latest click and clear pending
 state after stale work completes.
@@ -106,7 +117,8 @@ authorization page.
 Keep permission analysis as the explicitly isolated, non-evaluating worksheet.
 Do not reintroduce a risk score, effective-permission result, Deny reason tree,
 remediation action or future API. Trusted-tag authorization remains outside the
-current executable UI. Treat IAM batch authorization only as a product-side
+current executable LIVE UI; the MOCK author must stay non-evaluating until the
+IAM contract is fixed and independently verified. Treat IAM batch authorization only as a product-side
 server filtering candidate until its exact pushed source, fields and calling
 boundary are fixed; never reinterpret it as customer bulk authorization.
 
