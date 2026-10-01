@@ -7,7 +7,7 @@
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
 - Pushed source/embed milestone: `402ce0b62`
-- Pushed documentation milestone: `2c9e8d080`
+- Pushed documentation milestone: `4dd6e441a`
 
 ## Authoritative route
 
@@ -36,8 +36,9 @@ local policy documents, sources and boundaries while keeping every runtime
 authorization stage explicitly `NOT_EVALUATED`; the old component, route,
 static-server query path and embedded export were removed together.
 
-Source and synchronized embed are pushed at `402ce0b62`; FEAT evidence is
-pushed at `2c9e8d080`. The complete frontend gate passed 57 files/938 cases
+Source and synchronized embed are pushed at `402ce0b62`; shared-console and
+IAM-client FEAT evidence is pushed through `4dd6e441a`. The complete frontend
+gate passed 57 files/938 cases
 plus three normalization cases, typecheck/lint/architecture/228-pair style
 checks, 42-route export, 233-file embed equality and repository Go test/vet.
 Desktop and `390 x 844` DEV checks found no Dialog or horizontal overflow; a
