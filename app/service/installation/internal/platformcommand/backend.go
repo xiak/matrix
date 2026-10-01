@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	installationv1 "github.com/xiak/matrix/api/adapter/installation/v1"
 	"github.com/xiak/matrix/app/service/installation/internal/cli"
 	"github.com/xiak/matrix/app/service/installation/internal/journal"
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
@@ -49,23 +50,42 @@ type InstallPlan struct {
 	Bundle         release.VerifiedBundle
 	Trust          release.TrustRoot
 	TrustBytes     []byte
+	SecurityMail   SecurityMailInput
+}
+
+// SecurityMailInput is the canonical private operator input admitted by the
+// local-machine boundary. Only its digest enters the lifecycle journal; SMTP
+// credentials remain in memory until staging writes the installation-scoped
+// purpose file.
+type SecurityMailInput struct {
+	Digest        string
+	Configuration installationv1.SecurityMailConfiguration
+}
+
+func (value *SecurityMailInput) Clear() {
+	if value == nil {
+		return
+	}
+	value.Configuration.Clear()
+	*value = SecurityMailInput{}
 }
 
 // InstalledPlan is the sealed identity of the currently committed release.
 // Local-machine effects must reauthenticate installation-owned files against
 // these values before trusting provider state.
 type InstalledPlan struct {
-	Root             string
-	InstallationID   string
-	CorrelationID    string
-	Listener         string
-	Port             uint16
-	ReleaseID        string
-	ReleaseDigest    string
-	PreviousID       string
-	PreviousDigest   string
-	TrustKeyID       string
-	TrustFingerprint string
+	Root               string
+	InstallationID     string
+	CorrelationID      string
+	Listener           string
+	Port               uint16
+	ReleaseID          string
+	ReleaseDigest      string
+	PreviousID         string
+	PreviousDigest     string
+	SecurityMailDigest string
+	TrustKeyID         string
+	TrustFingerprint   string
 }
 
 type BackupPlan struct {
@@ -124,6 +144,7 @@ type RecoveryPlan struct {
 // without a known result, it returns ErrEffectOutcomeUnknown and observes
 // ownership on replay.
 type Effects interface {
+	ReadSecurityMailConfiguration(context.Context, string) (SecurityMailInput, error)
 	ApplyInstallPhase(context.Context, InstallPlan, lifecycle.Phase) error
 	RollbackInstall(context.Context, InstallPlan) error
 	ApplyUpgradePhase(context.Context, UpgradePlan, lifecycle.Phase) error
@@ -159,6 +180,13 @@ func (backend *Backend) Run(ctx context.Context, request cli.Request) (cli.Resul
 	}
 	if err := ctx.Err(); err != nil {
 		return cli.Result{}, fault(cli.FaultInterrupted, "COMMAND_INTERRUPTED")
+	}
+	if request.SecurityMailConfiguration != "" && request.Action != lifecycle.ActionInstall && request.Action != lifecycle.ActionUpgrade {
+		return cli.Result{}, fault(cli.FaultInvalidArgument, "SECURITY_MAIL_CONFIGURATION_UNSUPPORTED")
+	}
+	if (request.Action == lifecycle.ActionInstall || request.Action == lifecycle.ActionUpgrade) &&
+		strings.TrimSpace(request.SecurityMailConfiguration) == "" {
+		return cli.Result{}, fault(cli.FaultInvalidArgument, "SECURITY_MAIL_CONFIGURATION_REQUIRED")
 	}
 	switch request.Action {
 	case lifecycle.ActionInstall:
@@ -385,8 +413,9 @@ func installedPlan(root string, state lifecycle.Journal) InstalledPlan {
 		Listener: defaultListener, Port: defaultPort,
 		ReleaseID: state.CurrentReleaseID, ReleaseDigest: state.CurrentReleaseDigest,
 		PreviousID: state.PreviousRelease, PreviousDigest: state.PreviousReleaseDigest,
-		TrustKeyID:       state.ReleaseTrust.KeyID,
-		TrustFingerprint: state.ReleaseTrust.Fingerprint,
+		SecurityMailDigest: state.SecurityMailDigest,
+		TrustKeyID:         state.ReleaseTrust.KeyID,
+		TrustFingerprint:   state.ReleaseTrust.Fingerprint,
 	}
 }
 
@@ -395,8 +424,9 @@ func previousInstalledPlan(root string, state lifecycle.Journal) InstalledPlan {
 		Root: root, InstallationID: state.InstallationID,
 		Listener: defaultListener, Port: defaultPort,
 		ReleaseID: state.PreviousRelease, ReleaseDigest: state.PreviousReleaseDigest,
-		TrustKeyID:       state.ReleaseTrust.KeyID,
-		TrustFingerprint: state.ReleaseTrust.Fingerprint,
+		SecurityMailDigest: state.SecurityMailDigest,
+		TrustKeyID:         state.ReleaseTrust.KeyID,
+		TrustFingerprint:   state.ReleaseTrust.Fingerprint,
 	}
 }
 
@@ -439,6 +469,11 @@ func (backend *Backend) install(
 		verified.Manifest.Release.PreviousVersion != "" {
 		return cli.Result{}, fault(cli.FaultPrecondition, "INSTALL_RELEASE_HAS_PREDECESSOR")
 	}
+	securityMail, err := backend.effects.ReadSecurityMailConfiguration(ctx, request.SecurityMailConfiguration)
+	if err != nil {
+		return cli.Result{}, fault(cli.FaultVerification, "SECURITY_MAIL_CONFIGURATION_INVALID")
+	}
+	defer securityMail.Clear()
 
 	session, err := journal.Acquire(ctx, request.Root)
 	if err != nil {
@@ -481,6 +516,9 @@ func (backend *Backend) install(
 		if state.CurrentReleaseDigest != verified.ManifestSHA256 {
 			return cli.Result{}, fault(cli.FaultConflict, "RELEASE_CONTENT_CONFLICT")
 		}
+		if state.SecurityMailDigest != securityMail.Digest {
+			return cli.Result{}, fault(cli.FaultConflict, "SECURITY_MAIL_CONFIGURATION_CONFLICT")
+		}
 		correlationID := ""
 		if state.Last != nil {
 			correlationID = state.Last.Command.ID
@@ -503,11 +541,12 @@ func (backend *Backend) install(
 	}
 
 	command := lifecycle.Command{
-		ID:              commandID,
-		Action:          lifecycle.ActionInstall,
-		InputDigest:     verified.ManifestSHA256,
-		TargetReleaseID: verified.Manifest.Release.ID,
-		RequestedAt:     canonicalNow(backend.now()),
+		ID:                 commandID,
+		Action:             lifecycle.ActionInstall,
+		InputDigest:        verified.ManifestSHA256,
+		TargetReleaseID:    verified.Manifest.Release.ID,
+		SecurityMailDigest: securityMail.Digest,
+		RequestedAt:        canonicalNow(backend.now()),
 	}
 	started, err := lifecycle.Start(state, command)
 	if err != nil {
@@ -529,7 +568,10 @@ func (backend *Backend) install(
 		CorrelationID: commandID,
 		Listener:      defaultListener, Port: defaultPort, Bundle: verified,
 		Trust: trust, TrustBytes: append([]byte(nil), trustBytes...),
+		SecurityMail: securityMail,
 	}
+	securityMail = SecurityMailInput{}
+	defer plan.SecurityMail.Clear()
 	defer clear(plan.TrustBytes)
 	if started.Replay == lifecycle.ReplayCompleted {
 		return completedResult(started.Journal, started.Execution, false)
@@ -588,8 +630,16 @@ func (backend *Backend) upgrade(
 	if err != nil {
 		return cli.Result{}, fault(cli.FaultVerification, "RELEASE_BUNDLE_INVALID")
 	}
+	securityMail, err := backend.effects.ReadSecurityMailConfiguration(ctx, request.SecurityMailConfiguration)
+	if err != nil {
+		return cli.Result{}, fault(cli.FaultVerification, "SECURITY_MAIL_CONFIGURATION_INVALID")
+	}
+	defer securityMail.Clear()
 	if targetBundle.Manifest.TopologyDigest != topology.ContractDigest() {
 		return cli.Result{}, fault(cli.FaultVerification, "TOPOLOGY_CONTRACT_UNSUPPORTED")
+	}
+	if state.SecurityMailDigest != securityMail.Digest {
+		return cli.Result{}, fault(cli.FaultConflict, "SECURITY_MAIL_CONFIGURATION_CONFLICT")
 	}
 	if state.Active == nil && targetBundle.Manifest.Release.ID == state.CurrentReleaseID {
 		if targetBundle.ManifestSHA256 != state.CurrentReleaseDigest {
@@ -634,10 +684,11 @@ func (backend *Backend) upgrade(
 	}
 	started, err := lifecycle.Start(state, lifecycle.Command{
 		ID: commandID, Action: lifecycle.ActionUpgrade,
-		InputDigest:     targetBundle.ManifestSHA256,
-		TargetReleaseID: targetBundle.Manifest.Release.ID,
-		BackupID:        backupID,
-		RequestedAt:     canonicalNow(backend.now()),
+		InputDigest:        targetBundle.ManifestSHA256,
+		TargetReleaseID:    targetBundle.Manifest.Release.ID,
+		SecurityMailDigest: securityMail.Digest,
+		BackupID:           backupID,
+		RequestedAt:        canonicalNow(backend.now()),
 	})
 	if err != nil {
 		return cli.Result{}, lifecycleFault(err)
@@ -655,7 +706,10 @@ func (backend *Backend) upgrade(
 		CorrelationID: commandID,
 		Listener:      defaultListener, Port: defaultPort, Bundle: targetBundle,
 		Trust: trust, TrustBytes: append([]byte(nil), trustBytes...),
+		SecurityMail: securityMail,
 	}
+	securityMail = SecurityMailInput{}
+	defer targetPlan.SecurityMail.Clear()
 	defer clear(targetPlan.TrustBytes)
 	sourcePlan := installedPlan(session.Root(), started.Journal)
 	sourcePlan.CorrelationID = commandID

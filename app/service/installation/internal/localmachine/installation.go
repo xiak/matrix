@@ -5,6 +5,8 @@ import (
 	"errors"
 	"path/filepath"
 
+	installationv1 "github.com/xiak/matrix/api/adapter/installation/v1"
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
 	"github.com/xiak/matrix/app/service/installation/internal/platformcommand"
 	"github.com/xiak/matrix/app/service/installation/release"
@@ -43,6 +45,40 @@ func authenticateInstalledPlan(
 		clear(trustBytes)
 		return platformcommand.InstallPlan{}, errors.New(
 			"installed release differs from the sealed current pointer",
+		)
+	}
+	_, err = readEmailVerificationKeyring(installed.Root, installed.InstallationID)
+	if err != nil {
+		clear(trustBytes)
+		return platformcommand.InstallPlan{}, errors.New(
+			"installed email-verification custody is unavailable",
+		)
+	}
+	channel, err := readSecurityMailSMTPChannel(installed.Root, installed.InstallationID)
+	if err != nil {
+		clear(trustBytes)
+		return platformcommand.InstallPlan{}, errors.New(
+			"installed security-mail custody is unavailable",
+		)
+	}
+	configuration := installationv1.SecurityMailConfiguration{
+		APIVersion:   installationv1.SecurityMailConfigurationAPIVersion,
+		Kind:         installationv1.SecurityMailConfigurationKind,
+		Host:         channel.Host,
+		Port:         channel.Port,
+		TLSMode:      channel.TLSMode,
+		Username:     channel.Username,
+		Password:     channel.Password,
+		From:         channel.From,
+		TrustedCAPEM: channel.TrustedCAPEM,
+	}
+	digest, digestErr := installationv1.SecurityMailConfigurationDigest(configuration)
+	channel = iamv1.SecurityMailSMTPChannel{}
+	configuration.Clear()
+	if digestErr != nil || digest != installed.SecurityMailDigest {
+		clear(trustBytes)
+		return platformcommand.InstallPlan{}, errors.New(
+			"installed security-mail custody differs from the sealed journal",
 		)
 	}
 	return platformcommand.InstallPlan{

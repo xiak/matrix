@@ -277,6 +277,9 @@ func lifecycleCommand(action Action, target string, digestByte byte, offset int)
 	if action == ActionUpgrade {
 		command.BackupID = "backup-" + strings.Repeat(string("fedcba9876543210"[offset%16]), 32)
 	}
+	if action == ActionInstall || action == ActionUpgrade {
+		command.SecurityMailDigest = digest('a')
+	}
 	return command
 }
 

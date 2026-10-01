@@ -23,6 +23,7 @@ import (
 	"time"
 
 	apphostingv1 "github.com/xiak/matrix/api/adapter/apphosting/v1"
+	installationv1 "github.com/xiak/matrix/api/adapter/installation/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
@@ -72,6 +73,34 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 	if err != nil || totpKeyring.Scope.InstallationID != plan.InstallationID ||
 		totpKeyring.Scope.BootstrapDigest != bootstrapDigest {
 		t.Fatalf("staged TOTP wrapping scope = %#v / %v", totpKeyring.Scope, err)
+	}
+	emailKeyringBytes := readTestFile(t, plan.Root, layout.IAMEmailVerificationKeyring)
+	emailKeyring, err := iamv1.DecodeEmailVerificationKeyring(bytes.NewReader(emailKeyringBytes))
+	clear(emailKeyringBytes)
+	if err != nil || emailKeyring.Scope.InstallationID != plan.InstallationID ||
+		emailKeyring.Scope.BootstrapDigest != bootstrapDigest ||
+		emailKeyring.Purpose != iamv1.EmailVerificationWrappingPurpose {
+		t.Fatalf("staged email-verification wrapping scope = %#v / %v", emailKeyring.Scope, err)
+	}
+	channelBytes := readTestFile(t, plan.Root, layout.IAMSecurityMailSMTPChannel)
+	channel, err := iamv1.DecodeSecurityMailSMTPChannel(bytes.NewReader(channelBytes))
+	clear(channelBytes)
+	if err != nil || channel.Scope != emailKeyring.Scope ||
+		channel.Purpose != iamv1.SecurityMailSubmissionPurpose ||
+		channel.Host != plan.SecurityMail.Configuration.Host ||
+		channel.From != plan.SecurityMail.Configuration.From {
+		t.Fatalf("staged security-mail channel = %#v / %v", channel, err)
+	}
+	for _, relative := range []string{
+		layout.IAMEmailVerificationKeyring,
+		layout.IAMSecurityMailSMTPChannel,
+		layout.IAMNotificationWorker,
+	} {
+		content, err := readManagedFile(plan.Root, filepath.FromSlash(relative), 1024*1024)
+		clear(content)
+		if err != nil {
+			t.Fatalf("security-mail material %s is not protected: %v", relative, err)
+		}
 	}
 
 	serviceCredentials := make(map[iamv1.ServicePurpose][]byte, len(bootstrap.Services))
@@ -249,6 +278,88 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		); !errors.Is(err, platformcommand.ErrEffectConflict) {
 			t.Fatalf("unsafe APISIX runtime replay error=%v", err)
 		}
+	}
+}
+
+func TestStageSecurityMailRejectsConfigurationScopeAndStoredChannelSubstitution(t *testing.T) {
+	plan := newInstallPlan(t)
+	if err := stageInstallation(plan, rand.Reader); err != nil {
+		t.Fatalf("stage security-mail fixture: %v", err)
+	}
+	before := snapshotManagedCredentials(t, plan.Root)
+
+	replacement := testSecurityMailInput(t)
+	replacement.Configuration.Host = "smtp-replacement.matrix.test"
+	digest, err := installationv1.SecurityMailConfigurationDigest(replacement.Configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement.Digest = digest
+	replaced := plan
+	replaced.SecurityMail = replacement
+	if err := stageInstallation(replaced, failingEntropy{}); !errors.Is(err, platformcommand.ErrEffectVerification) {
+		t.Fatalf("security-mail replacement error = %v", err)
+	}
+	if after := snapshotManagedCredentials(t, plan.Root); !equalSnapshots(before, after) {
+		t.Fatal("rejected security-mail replacement changed installation credentials")
+	}
+
+	wrongScope := plan
+	wrongScope.InstallationID = "mxi-22222222222222222222222222222222"
+	if err := stageInstallation(wrongScope, failingEntropy{}); !errors.Is(err, platformcommand.ErrEffectVerification) {
+		t.Fatalf("cross-installation security-mail replay error = %v", err)
+	}
+	if after := snapshotManagedCredentials(t, plan.Root); !equalSnapshots(before, after) {
+		t.Fatal("rejected installation scope changed installation credentials")
+	}
+
+	channelPath, err := managedPath(plan.Root, filepath.FromSlash(layout.IAMSecurityMailSMTPChannel))
+	if err != nil {
+		t.Fatal(err)
+	}
+	channelBytes := readTestFile(t, plan.Root, layout.IAMSecurityMailSMTPChannel)
+	channel, err := iamv1.DecodeSecurityMailSMTPChannel(bytes.NewReader(channelBytes))
+	clear(channelBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	channel.Host = "smtp-drift.matrix.test"
+	replacementBytes, err := iamv1.EncodeSecurityMailSMTPChannel(channel)
+	channel = iamv1.SecurityMailSMTPChannel{}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(channelPath, replacementBytes, 0o600); err != nil {
+		clear(replacementBytes)
+		t.Fatal(err)
+	}
+	clear(replacementBytes)
+	if _, err := authenticateInstalledPlan(installedPlanFrom(plan)); err == nil {
+		t.Fatal("stored SMTP channel drift authenticated against the sealed journal")
+	}
+}
+
+func TestStageSecurityMailRejectsOrphanedChannel(t *testing.T) {
+	plan := newInstallPlan(t)
+	if err := stageInstallation(plan, rand.Reader); err != nil {
+		t.Fatalf("stage security-mail fixture: %v", err)
+	}
+
+	keyPath, err := managedPath(plan.Root, filepath.FromSlash(layout.IAMEmailVerificationKeyring))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(keyPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := authenticateInstalledPlan(installedPlanFrom(plan)); err == nil {
+		t.Fatal("installed plan authenticated without its email-verification keyring")
+	}
+	if err := stageInstallation(plan, failingEntropy{}); !errors.Is(err, platformcommand.ErrEffectVerification) {
+		t.Fatalf("orphaned SMTP channel error = %v", err)
+	}
+	if actual := readTestFile(t, plan.Root, layout.IAMSecurityMailSMTPChannel); actual == nil {
+		t.Fatal("orphaned SMTP channel was not retained for explicit repair")
 	}
 }
 
@@ -1461,7 +1572,27 @@ func newInstallPlan(t *testing.T, profiles ...release.DatabaseProfile) platformc
 		CorrelationID: "cmd-11111111111111111111111111111111",
 		Listener:      "0.0.0.0", Port: 8080, Bundle: bundle,
 		Trust: fixture.Trust, TrustBytes: trustBytes,
+		SecurityMail: testSecurityMailInput(t),
 	}
+}
+
+func testSecurityMailInput(t *testing.T) platformcommand.SecurityMailInput {
+	t.Helper()
+	password, err := iamv1.NewSecret("smtp-private-password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuration := installationv1.SecurityMailConfiguration{
+		APIVersion: installationv1.SecurityMailConfigurationAPIVersion,
+		Kind:       installationv1.SecurityMailConfigurationKind,
+		Host:       "smtp.matrix.test", Port: 587, TLSMode: iamv1.SecurityMailSTARTTLS,
+		Username: "matrix-sender", Password: password, From: "security@matrix.test",
+	}
+	digest, err := installationv1.SecurityMailConfigurationDigest(configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return platformcommand.SecurityMailInput{Digest: digest, Configuration: configuration}
 }
 
 func newUpgradePlan(t *testing.T, profiles ...release.DatabaseProfile) platformcommand.UpgradePlan {
@@ -1490,6 +1621,7 @@ func newUpgradePlan(t *testing.T, profiles ...release.DatabaseProfile) platformc
 		CorrelationID: "cmd-11111111111111111111111111111111",
 		Listener:      "0.0.0.0", Port: 8080, Bundle: bundles[0],
 		Trust: fixtures[0].Trust, TrustBytes: trustBytes,
+		SecurityMail: testSecurityMailInput(t),
 	}
 	if err := stageInstallation(source, rand.Reader); err != nil {
 		t.Fatalf("stage upgrade source: %v", err)
@@ -1537,10 +1669,11 @@ func installedPlanFrom(plan platformcommand.InstallPlan) platformcommand.Install
 		Root: plan.Root, InstallationID: plan.InstallationID,
 		CorrelationID: plan.CorrelationID,
 		Listener:      plan.Listener, Port: plan.Port,
-		ReleaseID:        plan.Bundle.Manifest.Release.ID,
-		ReleaseDigest:    plan.Bundle.ManifestSHA256,
-		TrustKeyID:       plan.Trust.KeyID,
-		TrustFingerprint: plan.Trust.PublicKeyFingerprint,
+		ReleaseID:          plan.Bundle.Manifest.Release.ID,
+		ReleaseDigest:      plan.Bundle.ManifestSHA256,
+		SecurityMailDigest: plan.SecurityMail.Digest,
+		TrustKeyID:         plan.Trust.KeyID,
+		TrustFingerprint:   plan.Trust.PublicKeyFingerprint,
 	}
 }
 
@@ -1559,7 +1692,9 @@ func snapshotManagedCredentials(t *testing.T, root string) map[string]string {
 		layout.ReleaseTrust, layout.IAMBootstrap, layout.AuditIAMCredential,
 		layout.IAMAuditCredential, layout.PaaSIAMCredential, layout.PaaSAuditCredential,
 		layout.InstallationVerifierCredential, layout.AuditCursorKey,
-		layout.IAMAccessKeyWrappingKeyring, layout.IAMTOTPKeyring, layout.IAMCursorKey,
+		layout.IAMAccessKeyWrappingKeyring, layout.IAMTOTPKeyring,
+		layout.IAMEmailVerificationKeyring, layout.IAMSecurityMailSMTPChannel,
+		layout.IAMCursorKey,
 		layout.BackupSealKey,
 		layout.InitialAdministratorPassword,
 		layout.PostgresPassword, layout.PostgresMigration, layout.IAMAPI,

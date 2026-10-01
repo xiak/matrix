@@ -185,12 +185,12 @@ values, database rows, native errors, arbitrary logs, and absolute paths.
 
 ## Incremental acceptance
 
-### Current IAM security-report release candidate
+### Signed IAM security-report precursor
 
-`CurrentDatabaseProfile` is frozen for this candidate as IAM schema 61, Audit
-schema 31, PaaS schema 3, and `contractRevision=6`. Revision 6 identifies the
+The fixed security-report candidate used IAM schema 61, Audit schema 31, PaaS
+schema 3, and `contractRevision=6`. Revision 6 identifies the
 exact AccountSecurityReport API, storage, Audit action and installed consumer
-shape now present on the isolated IAM branch; it is not a caller option or an
+shape at that fixed source; it is not a caller option or an
 ordering claim over another branch's profile. A bundle with any different
 authority tuple or revision remains incompatible and must be rejected before
 journal advancement, service changes, backup creation or another provider
@@ -222,6 +222,38 @@ The earlier IAM 60 to 61 retained-data SQL gate proves only the rolling
 development predecessor and does not authorize a signed `4/3/1` revision 4
 installation to upgrade to this profile. No cross-profile upgrade, rollback or
 backup recovery is admitted.
+
+### Current IAM security-mail topology candidate
+
+The current source profile is IAM schema 61, Audit schema 31, PaaS schema 3,
+and `contractRevision=7`. Revision 7 owns the signed runtime topology and
+credential ABI that add the purpose-only IAM notification dispatcher, its
+independent database login, the installation-bound email-verification keyring
+and SMTP channel, and a separate non-internal `mail-egress` network. Only the
+notification dispatcher joins that network or receives the SMTP channel;
+IAM API receives the email-verification keyring but not the channel, and no
+Audit, PaaS, UI, verifier or ordinary worker receives either capability.
+
+Install and upgrade take one operator-private canonical security-mail file.
+The lifecycle journal stores only its digest. Installation derives the stored
+channel scope from the sealed installation ID and canonical IAM bootstrap
+digest, creates the keyring once, writes the keyring, channel and notification
+database DSN as protected files, and rejects a changed digest, installation
+scope or bootstrap scope. Equal replay preserves the exact stored bytes.
+The signed IAM image remains a `scratch` runtime; its fixed multi-stage recipe
+copies only the system CA bundle from the pinned Alpine base so a channel may
+validate public roots without adding a shell or package manager to the runtime.
+An explicitly configured private CA remains bound inside the protected channel.
+
+Revision 6 is not an upgrade, rollback or recovery predecessor for revision 7.
+The existing complete-profile admission rejects both directions before journal
+advancement or lifecycle effects, and a revision-6 topology digest is not a
+revision-7 release. Focused contract, lifecycle, journal, local-machine,
+topology and release-build tests currently pass, including configuration
+substitution and cross-installation attacks. Independent CI, a signed fresh
+revision-7 A/B lifecycle, real PostgreSQL least-privilege process identities,
+notification readiness and real SMTP receipt are still required before this
+combination can be accepted.
 
 ### Historical multi-tenant authority-profile evidence
 

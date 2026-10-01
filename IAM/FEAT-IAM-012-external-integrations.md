@@ -1,6 +1,6 @@
 # FEAT-IAM-012：外部身份、通知与组织治理
 
-- 状态：最小安全邮件通知S1已获用户授权；S1a封闭模板/SMTP传输及S1b私有配置/验证码材料已有固定提交独立CI。S1b首条邮箱验证、持久投递/重试及受限worker已固定推送`07aa50627318708ed4d3ac9ce481b1e5829669d6`，通过下述本地真实门禁；2026-09-20由GitHub API核实[Verification35504960145](https://github.com/xiak/matrix/actions/runs/35504960145)精确SHA，go、node-process、authority-storage、authority-runtime、authority-process五项全部completed/success。安装配置、后继MFA认证载体/安全事件接入、已有地址替换及真实UI未验收；其余外部身份、完整通知/订阅、短信与组织治理保持Deferred。
+- 状态：最小安全邮件通知S1已获用户授权；S1a封闭模板/SMTP传输及S1b私有配置/验证码材料已有固定提交独立CI。S1b首条邮箱验证、持久投递/重试及受限worker已固定推送`07aa50627318708ed4d3ac9ce481b1e5829669d6`，通过下述本地真实门禁；2026-09-20由GitHub API核实[Verification35504960145](https://github.com/xiak/matrix/actions/runs/35504960145)精确SHA，go、node-process、authority-storage、authority-runtime、authority-process五项全部completed/success。当前installation候选已接入私有通道输入、安装归属材料、受限通知进程、独立邮件出口及签名镜像构建，使用`61/31/3+r7`；聚焦门禁已通过，但独立CI、签名A/B、真实安装PostgreSQL身份与SMTP实收尚未验收。后继MFA认证载体/安全事件、已有地址替换及真实UI也未完成；其余外部身份、完整通知/订阅、短信与组织治理保持Deferred。
 - Owner：IAM负责S1的地址验证、目的限定通知意图/投递和重试；installation负责受保护SMTP及必要私有材料配置，UX/UI负责本人交互。其他外部来源与计费保持各自业务边界。
 - S1a不等于完整S1或其他外部能力已实现；缺少前置时不提供假入口或伪成功。
 
@@ -111,7 +111,7 @@ SMTP目标、发件地址与认证材料只来自受保护部署配置的后续�
 | `EmailVerificationKeyring` | `purpose=IAM_EMAIL_VERIFICATION_WRAPPING`、同封存scope、修订/activeKeyId及受限有序key集合；每key格式1、独立32字节随机材料及非秘密承诺。只供IAM与邮件投递进程保护原验证意图；不是TOTP/AccessKey/离线恢复材料或通用消息加密服务 |
 | `matrix-iam-notification-dispatcher` | 独立受限数据库登录`matrix_iam_notification_worker_login`及role`matrix_iam_notification_worker`；只领取/完成已提交通知，单实例最多2个在途。不是用户或服务principal，不获取通用PDP/原Audit worker权限 |
 
-IAM运行片的编辑边界已对齐：IAM拥有其API/Audit、原迁移library/`matrix-iam-migrate`、通知worker及对应真实测试；专用迁移FILE冻结为`MATRIX_MIGRATION_IAM_NOTIFICATION_DSN_FILE`，共享migrationprocess只增加第六个受保护IAM角色文件直接要求的精确形状/测试，不能变成任意FILE或权限入口。installation继续独占layout、localmachine、topology、release/releasebuild、FEAT-005及签名离线门禁，只在后继固定生产提交及精确CI之后集成文件挂载和发布profile。不得把当前准备版profile改标为通知可用。
+IAM运行片的编辑边界已对齐：IAM拥有其API/Audit、原迁移library/`matrix-iam-migrate`、通知worker及对应真实测试；专用迁移FILE冻结为`MATRIX_MIGRATION_IAM_NOTIFICATION_DSN_FILE`，共享migrationprocess只增加第六个受保护IAM角色文件直接要求的精确形状/测试，不能变成任意FILE或权限入口。installation继续独占layout、localmachine、topology、release/releasebuild、FEAT-005及签名离线门禁。当前集成候选消费固定`7d002ea2ff7afafc961974123fb4e16f23945a23`的相关边界并冻结`61/31/3+r7`，不导入其PaaS6、host/node、profile或验收状态；只有本分支完成自身签名运行门禁后才能把该profile描述为通知可用。
 
 验证码按独立AES-256-GCM/HKDF用途密封；上下文绑定封存安装/bootstrap、Account、USER、原验证ID、确切接收地址、联系修订、密码代际、原签发/到期及keyId/格式。通知私有持久行只存秘密的认证密文，不存明文或可离线遍历的短码无密钥摘要；生命周期比较时仍重验当前权威，能够解密不等于可以确认。普通JSON、原Audit outbox、Audit、错误和support不输出原码、密文或keyring。重试使用原已保存密文和同一意图，不生成新码、不延长有效期。受控恢复须终止备份中的未完成验证及未发送验证邮件；具备历史密钥不自动赋予恢复后重发资格。
 
@@ -137,7 +137,7 @@ EmailVerificationKeyring最多8192字节、1至8个按keyId严格递增的格式
 
 独立`matrix-iam-notification-dispatcher`只持有专用数据库角色。实际数据库领取结果固定18列，worker只可执行read-keyset、claim和complete三个目的函数，无表DML、用户认证、Audit worker或恢复能力。API仅可调用对应本人事务，不可领取邮件；readiness核对实际函数形状、角色分离、授权、强制RLS和历史约束。每次领取前核对受保护keyring与当前封存注册集合，事务提交后才进行SMTP；实例两条有界循环、两条数据库连接，结果不确定保留原租约，不能内存重发。
 
-IAM API与通知worker分别读取`MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE`；只有worker读取`MATRIX_IAM_SECURITY_MAIL_SMTP_CHANNEL_FILE`、`MATRIX_IAM_NOTIFICATION_DATABASE_DSN_FILE`，并使用非秘密`MATRIX_IAM_NOTIFICATION_WORKER_ID`及`MATRIX_IAM_NOTIFICATION_LISTEN_ADDRESS`。安装通道、完整profile、受控恢复隔离及文件挂载仍归installation；这些消费者通过本地进程测试不等于已形成签名安装包。
+IAM API与通知worker分别读取`MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE`；只有worker读取`MATRIX_IAM_SECURITY_MAIL_SMTP_CHANNEL_FILE`、`MATRIX_IAM_NOTIFICATION_DATABASE_DSN_FILE`，并使用非秘密`MATRIX_IAM_NOTIFICATION_WORKER_ID`及`MATRIX_IAM_NOTIFICATION_LISTEN_ADDRESS`。当前installation候选从操作员私有规范文件生成安装/bootstrap绑定的keyring和channel，独立生成通知角色DSN，只给worker挂载channel并让它单独加入`mail-egress`；普通journal只保存输入摘要。等值重放不再生材料，变体、跨安装和孤立channel失败关闭。IAM签名镜像只从固定Alpine基底复制系统CA bundle到`scratch`运行层，不带shell或包管理器。以上聚焦门禁通过仍不等于已形成验收通过的签名安装包。
 
 本地门禁使用本任务独立PG18、真实Postfix及唯一数据库/容器/网络标识，Go限2/-p2，重型门禁串行race/-p1。实际已通过：
 
@@ -157,7 +157,7 @@ IAM API与通知worker分别读取`MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE`�
 
 上述本轮三个成功使用的专属PG fixture及一次创建失败留下的空网络均已核对精确ID、owner/task、网络成员和终态后清理；每个task标签的容器/网络/卷为零。PG没有遗留客户端，tmpfs合成数据随容器删除，未触碰共享引擎、安装卷或其他任务资源。
 
-本片仍需安装/UI消费者验收；后继MFA/账号配置交错与业务安全事件接入、运维聚合告警和受控恢复后的联系/在途意图隔离仍按上述需求逐片证明。当前只有稳定投递结果/错误类别和持久尝试记录，不把它们描述为已交付聚合告警。现有邮件证据不开放MFA，也不声称已有地址替换、ENROLLMENT/STEP_UP、旧备份重新开放或完整S1验收。
+本片仍需签名installation运行与UI消费者验收；后继MFA/账号配置交错与业务安全事件接入、运维聚合告警和受控恢复后的联系/在途意图隔离仍按上述需求逐片证明。当前只有稳定投递结果/错误类别、持久尝试记录及未验收的安装候选，不把它们描述为已交付聚合告警。现有邮件证据不开放MFA，也不声称已有地址替换、ENROLLMENT/STEP_UP、旧备份重新开放或完整S1验收。
 
 009在线治理消费五个封闭通知：`RECOVERY_STARTED`、`AUTHENTICATOR_RECOVERED`、`RECOVERY_CODES_REGENERATED`、`SECURITY_SETTINGS_CHANGED`、`AUTHENTICATOR_REPLACED`。原安全事务绑定原已验证地址/联系修订与各自不可变IAM事实，worker只投递该历史通知，不重做原USER今天的认证。没有扩大18列claim、私有FILE、角色权限、收件人输入或模板协议；这些通知不持有验证码密文，也不能发放认证或恢复能力。dispatcher与模板必须同时识别准确kind，未知类型及夹带验证秘密仍失败关闭，不能以数据库入队或模板单测代替真正经过worker的投递。各自真实Maildir、worker停止/重启、停用USER后的历史投递及秘密排除证据由[009](./FEAT-IAM-009-security-governance.md)拥有，不继承为安装通道或完整S1验收。
 

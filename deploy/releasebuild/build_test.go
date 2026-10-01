@@ -46,6 +46,8 @@ func (fake *fakeEffects) InspectImage(_ context.Context, reference string) (Imag
 			id = testDigest("wrong-apisix")
 		}
 		return ImageMetadata{ID: id, OS: "linux", Architecture: "amd64"}, nil
+	case AlpineBaseReference:
+		return ImageMetadata{ID: AlpineBaseImageID, OS: "linux", Architecture: "amd64"}, nil
 	case DockerBaseReference:
 		return ImageMetadata{ID: DockerBaseImageID, OS: "linux", Architecture: "amd64"}, nil
 	case PostgresReference:
@@ -137,6 +139,18 @@ func TestAssembleProducesAuthenticatedCompleteRelease(t *testing.T) {
 		if strings.Contains(dockerfile, "RUN ") || strings.Contains(dockerfile, "http://") ||
 			strings.Contains(dockerfile, "https://") || !strings.Contains(dockerfile, "COPY --chmod=0555") {
 			t.Fatalf("image %s escaped the fixed offline recipe", component)
+		}
+	}
+	iamDockerfile := effects.dockerfiles["iam"]
+	for _, required := range []string{
+		"FROM " + AlpineBaseReference + " AS matrix-system-roots",
+		"FROM scratch",
+		"COPY --from=matrix-system-roots /etc/ssl/cert.pem /etc/ssl/cert.pem",
+		"COPY --from=matrix-system-roots /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt",
+		"COPY --chmod=0555 matrix-iam-notification-dispatcher /matrix/bin/matrix-iam-notification-dispatcher",
+	} {
+		if !strings.Contains(iamDockerfile, required) {
+			t.Fatalf("IAM image recipe lacks %q", required)
 		}
 	}
 	for _, image := range verified.Manifest.Images {

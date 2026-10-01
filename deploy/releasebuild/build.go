@@ -256,6 +256,7 @@ func buildImages(
 func verifyBaseImages(ctx context.Context, effects Effects) error {
 	for _, required := range []struct{ reference, id string }{
 		{APISIXBaseReference, APISIXBaseImageID},
+		{AlpineBaseReference, AlpineBaseImageID},
 		{DockerBaseReference, DockerBaseImageID},
 		{PostgresReference, PostgresImageID},
 	} {
