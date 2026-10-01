@@ -305,7 +305,7 @@ USER recorder真库聚焦9.556秒及完整策略回归119.373秒通过：contrac
 
 目录使用独立的每Role会话水位，发行/三类实际撤销在原事务内推进，失败或精确重放不推进。原cursor owner绑定当前actor/session/credential与授权来源代际、Role、水位和完整过滤，不能跨用途/账号/Role/过滤使用；不把目录水位当PDP许可，也不借Role安全generation使有效业务会话被目录操作误撤。写路径先按Account→稳定排序的actor/source USER非键更新锁→当前actor credential/session→来源授权保护→RoleSession终态锁；真实PDP在锁保护下形成，末端再次核对当前bearer/期限。只认证actor，source USER锁只用于与自撤、退出及凭据变化排序。只读路径不取发行配额锁，不在目录水位之后反向锁Role/User。
 
-当前开发schema为IAM56/Audit30/PaaS2，以真实函数/表/ACL/readiness检查为准；发布profile/revision仍未据此自动改变。record8/evidence5/claim7、ServiceIdentity/lookup_service及旧canonical不变。服务来源显示只从已封存的发行证据投影，不能由请求或可变产品元数据补齐。三路径竞争、失效来源可撤、过期冲突、同意图重放、末尾outbox失败、分页过滤攻击与历史投递须在既有真库/进程owner证明后交固定接口给UI。
+当前开发schema为IAM57/Audit30/PaaS2，以真实函数/表/ACL/readiness检查为准；IAM57的request-tag决定契约由008拥有，不改变本FEAT的record8/evidence5/claim7、ServiceIdentity/lookup_service及旧canonical。发布profile/revision仍未据此自动改变。服务来源显示只从已封存的发行证据投影，不能由请求或可变产品元数据补齐。三路径竞争、失效来源可撤、过期冲突、同意图重放、末尾outbox失败、分页过滤攻击与历史投递须在既有真库/进程owner证明后交固定接口给UI。
 
 ### R3管理会话本地证据
 

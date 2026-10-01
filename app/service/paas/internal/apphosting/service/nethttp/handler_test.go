@@ -7,10 +7,12 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/applicationlifecycle"
@@ -79,7 +81,7 @@ func TestHandlerUsesOnlyVerifierCredentialForFixedInstallationProbe(t *testing.T
 		verifier.command.Request.InstallationID != "mxi-0123456789abcdef0123456789abcdef" {
 		t.Fatalf("installation verification command=%#v", verifier.command)
 	}
-	if authorizer.request != (port.AuthorizationRequest{}) {
+	if !reflect.DeepEqual(authorizer.request, port.AuthorizationRequest{}) {
 		t.Fatalf("fixed verifier route used generic user Authorizer: %#v", authorizer.request)
 	}
 
@@ -154,6 +156,42 @@ func TestHandlerRejectsClientIdentityFields(t *testing.T) {
 	}
 	if workflow.createApplicationCalls != 0 {
 		t.Fatal("identity-bearing client document reached the workflow")
+	}
+}
+
+func TestHandlerBindsOnlyDeclaredApplicationLabelsBeforeIAM(t *testing.T) {
+	authorizer := &fakeAuthorizer{}
+	workflow := &fakeWorkflow{}
+	handler := mustHandler(t, authorizer, workflow)
+	body := paasv1.CreateApplicationRequest{ID: "application-tags", Name: "application-tags", Labels: map[string]string{
+		"environment": "production", "team": "payments", "1-metadata": "retained",
+	}}
+	request := jsonRequest(t, http.MethodPost, "/v1/applications", body)
+	request.Header.Set("Authorization", "Bearer opaque-credential")
+	request.Header.Set("Idempotency-Key", "create-application-tags")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated || workflow.createApplicationCalls != 1 {
+		t.Fatalf("status=%d calls=%d body=%s", response.Code, workflow.createApplicationCalls, response.Body.String())
+	}
+	if !reflect.DeepEqual(authorizer.request.RequestLabels, body.Labels) {
+		t.Fatalf("PEP did not bind the complete validated product label set: %#v", authorizer.request.RequestLabels)
+	}
+	expected := []iamv1.AuthorizationTag{{Key: "environment", Value: "production"}}
+	if !reflect.DeepEqual(workflow.createApplicationCommand.Authorization.RequestTags, expected) ||
+		!reflect.DeepEqual(workflow.createApplicationCommand.Request.Labels, body.Labels) {
+		t.Fatalf("declared authorization tags or product labels changed: %#v", workflow.createApplicationCommand)
+	}
+
+	invalid := jsonRequest(t, http.MethodPost, "/v1/applications", paasv1.CreateApplicationRequest{
+		ID: "application-invalid-tags", Name: "application-invalid-tags", Labels: map[string]string{"environment": " production"},
+	})
+	invalid.Header.Set("Authorization", "Bearer opaque-credential")
+	invalid.Header.Set("Idempotency-Key", "create-application-invalid-tags")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, invalid)
+	if response.Code != http.StatusBadRequest || workflow.createApplicationCalls != 1 {
+		t.Fatalf("invalid label reached IAM/workflow: status=%d calls=%d", response.Code, workflow.createApplicationCalls)
 	}
 }
 
@@ -336,7 +374,7 @@ func TestHandlerFailsClosedWithoutCanonicalSocketPeer(t *testing.T) {
 			request.Header.Set("Authorization", "Bearer opaque-credential")
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, request)
-			if response.Code != http.StatusServiceUnavailable || authorizer.request != (port.AuthorizationRequest{}) || workflow.getApplicationCalls != 0 {
+			if response.Code != http.StatusServiceUnavailable || !reflect.DeepEqual(authorizer.request, port.AuthorizationRequest{}) || workflow.getApplicationCalls != 0 {
 				t.Fatalf("invalid socket authority remote=%q status=%d request=%#v calls=%d", remote, response.Code, authorizer.request, workflow.getApplicationCalls)
 			}
 		})
@@ -360,23 +398,29 @@ func (authorizer *fakeAuthorizer) Authorize(
 	if authorizer.result != nil {
 		return *authorizer.result, nil
 	}
+	iamRequest, err := port.NewIAMAuthorizationRequest(request)
+	if err != nil {
+		return port.Authorization{}, err
+	}
 	return port.Authorization{
 		TenantID:   "tenant-authorized",
 		Subject:    paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "user-authorized"},
 		DecisionID: "decision-authorized", RequestID: request.RequestID,
-		AuditID: "audit-authorized",
+		RequestTags: iamRequest.RequestTags,
+		AuditID:     "audit-authorized",
 	}, nil
 }
 
 type fakeWorkflow struct {
-	createApplicationCalls int
-	submitCalls            int
-	submitCommand          applicationlifecycle.SubmitCommand
-	rollbackCalls          int
-	rollbackCommand        applicationlifecycle.RollbackCommand
-	getApplicationCalls    int
-	readAuthorization      port.Authorization
-	readID                 paasv1.ResourceID
+	createApplicationCalls   int
+	createApplicationCommand applicationlifecycle.CreateApplicationCommand
+	submitCalls              int
+	submitCommand            applicationlifecycle.SubmitCommand
+	rollbackCalls            int
+	rollbackCommand          applicationlifecycle.RollbackCommand
+	getApplicationCalls      int
+	readAuthorization        port.Authorization
+	readID                   paasv1.ResourceID
 }
 
 type fakeInstallationVerifier struct {
@@ -400,6 +444,7 @@ func (workflow *fakeWorkflow) CreateApplication(
 	command applicationlifecycle.CreateApplicationCommand,
 ) (paasv1.Application, paasv1.Operation, bool, error) {
 	workflow.createApplicationCalls++
+	workflow.createApplicationCommand = command
 	resource := paasv1.Application{Metadata: testMetadata(command.Request.ID, command.Request.Name)}
 	return resource, testOperation("Application", resource.Metadata.ID, paasv1.OperationCreateApplication, paasv1.OperationSucceeded), false, nil
 }

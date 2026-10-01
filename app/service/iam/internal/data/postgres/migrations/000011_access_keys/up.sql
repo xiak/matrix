@@ -422,7 +422,7 @@ BEGIN
       JOIN iam.access_key_wrapping_registry r ON r.installation_id=k.installation_id AND r.wrapping_key_id=k.wrapping_key_id
       JOIN iam.bootstrap_receipts b ON b.installation_id=r.installation_id AND b.organization_id=proof.service_tenant_id
       JOIN iam.authorization_profiles p ON p.product=d.profile_product AND p.revision=d.profile_revision AND p.content_digest=d.profile_content_digest
-      WHERE d.tenant_id=tenant AND d.id=decision AND d.contract_version IN (4,5) AND d.subject_type='USER'
+      WHERE d.tenant_id=tenant AND d.id=decision AND d.contract_version IN (4,5,6) AND d.subject_type='USER'
         AND d.principal_id=proof.user_id AND d.access_key_id=proof.access_key_id AND d.role_evidence IS NULL
         AND k.resource_version>=proof.key_resource_version AND k.created_at<=d.decided_at
         AND r.installation_id=proof.installation_id AND r.wrapping_key_id=proof.wrapping_key_id AND r.material_commitment=proof.material_commitment

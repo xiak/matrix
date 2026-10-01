@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 )
 
@@ -19,10 +20,11 @@ func TestCreateApplicationCommitsTerminalOperationAndSanitizedAudit(t *testing.T
 		Authorization: lifecycleAuthorization(),
 		Request: paasv1.CreateApplicationRequest{
 			ID: "application-new", Name: "application-new",
-			Labels: map[string]string{"team": "platform"},
+			Labels: map[string]string{"environment": "production", "team": "platform"},
 		},
 		IdempotencyKey: "create-application-new",
 	}
+	command.Authorization.RequestTags = []iamv1.AuthorizationTag{{Key: "environment", Value: "production"}}
 	resource, operation, replayed, err := usecase.CreateApplication(context.Background(), command)
 	if err != nil {
 		t.Fatalf("create Application: %v", err)
@@ -68,6 +70,15 @@ func TestCreateApplicationCommitsTerminalOperationAndSanitizedAudit(t *testing.T
 	changed.Request.Name = "changed-name"
 	if _, _, _, err := usecase.CreateApplication(context.Background(), changed); !errors.Is(err, ErrIdempotencyConflict) {
 		t.Fatalf("changed replay error = %v, want idempotency conflict", err)
+	}
+
+	changed = command
+	changed.Request.Labels = map[string]string{"environment": "staging", "team": "platform"}
+	if _, _, _, err := usecase.CreateApplication(context.Background(), changed); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("changed authorization label error = %v, want invalid argument", err)
+	}
+	if transaction.resourceSubmission != nil {
+		t.Fatal("changed authorization label reached the transaction")
 	}
 }
 

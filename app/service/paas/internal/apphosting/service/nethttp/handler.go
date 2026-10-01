@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"mime"
 	"net"
 	"net/http"
@@ -210,11 +211,21 @@ func (value *handler) ServeHTTP(response http.ResponseWriter, request *http.Requ
 }
 
 func (value *handler) createApplication(response http.ResponseWriter, request *http.Request) {
-	requestID, authorization, ok := value.authorizeCreationCollection(response, request, port.AuthorizeApplicationCreate, port.ResourceApplication)
+	requestID, ok := value.beginRequest(response)
 	if !ok {
 		return
 	}
 	body, ok := decodeJSON[paasv1.CreateApplicationRequest](value, response, request, requestID)
+	if !ok {
+		return
+	}
+	if err := paasv1.ValidateLabels(body.Labels); err != nil {
+		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument, "Invalid argument", "application labels are invalid", false)
+		return
+	}
+	authorization, ok := value.authorizeRequestWithLabels(response, request, requestID,
+		port.AuthorizeApplicationCreate, port.ResourceApplication, "collection",
+		iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate, body.Labels)
 	if !ok {
 		return
 	}
@@ -495,6 +506,20 @@ func (value *handler) authorizeRequest(
 	mode iamv1.AuthorizationResourceMode,
 	usage iamv1.AuthorizationCollectionUsage,
 ) (port.Authorization, bool) {
+	return value.authorizeRequestWithLabels(response, request, requestID, action, kind, id, mode, usage, nil)
+}
+
+func (value *handler) authorizeRequestWithLabels(
+	response http.ResponseWriter,
+	request *http.Request,
+	requestID string,
+	action iamv1.Action,
+	kind string,
+	id paasv1.ResourceID,
+	mode iamv1.AuthorizationResourceMode,
+	usage iamv1.AuthorizationCollectionUsage,
+	labels map[string]string,
+) (port.Authorization, bool) {
 	sourceIP, err := authorizationSourceIP(request.RemoteAddr)
 	if err != nil {
 		writeProblem(response, requestID, http.StatusServiceUnavailable, paasv1.ErrorIdentityUnavailable, "Identity unavailable", "request network authority could not be established", true)
@@ -505,8 +530,9 @@ func (value *handler) authorizeRequest(
 		Action:       action,
 		Resource:     paasv1.ResourceRef{Kind: kind, ID: id},
 		ResourceMode: mode, CollectionUsage: usage,
-		SourceIP:  sourceIP,
-		RequestID: requestID,
+		SourceIP:      sourceIP,
+		RequestLabels: maps.Clone(labels),
+		RequestID:     requestID,
 	}
 	if err := port.ValidateAuthorizationRequest(authorizationRequest); err != nil {
 		writeProblem(response, requestID, http.StatusUnauthorized, paasv1.ErrorUnauthenticated, "Unauthenticated", "a valid IAM credential is required", false)

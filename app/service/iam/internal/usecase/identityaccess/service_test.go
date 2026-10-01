@@ -1977,7 +1977,7 @@ func TestWorkloadRoleBindingRequiresProductAdmissionPassRoleAndDelegatedCurrentA
 	if revocation == nil || revocation.AccountID != bootstrap.Organization.ID || revocation.BindingID != mutation.Binding.ID ||
 		revocation.ActorPrincipalID != bootstrap.Administrator.ID || revocation.ActorSessionID != login.Session.ID ||
 		revocation.ServiceLookupDigest == "" || revocation.ServicePurpose != iamv1.ServicePaaS ||
-		revocation.Request != revokeRequest || revocation.WorkloadDecisionID == "" ||
+		!reflect.DeepEqual(revocation.Request, revokeRequest) || revocation.WorkloadDecisionID == "" ||
 		revocation.BindingRevokeDecisionID == "" || revocation.RolePassDecisionID == "" ||
 		revocation.AuditEvent.Action != auditv1.ActionIAMWorkloadRoleBindingRevoked ||
 		revocation.AuditEvent.IAMDecisionID != auditv1.DecisionID(revocation.BindingRevokeDecisionID) {
@@ -2378,6 +2378,11 @@ func TestAuditProofClosedHistoricalMappings(t *testing.T) {
 			if got, err := auditContentDigest(identity, event, current); err != nil || got != expected {
 				t.Fatalf("frozen v2 proof borrowed current head or changed fact: %v", err)
 			}
+			current.DecisionContractVersion = 6
+			if got, err := auditContentDigest(identity, event, current); err != nil || got != expected {
+				t.Fatalf("frozen v6 proof rejected: %v", err)
+			}
+			current.DecisionContractVersion = 2
 			if _, supported := iamv1.LookupActionConditionDefinition(decision.Action, iamv1.ConditionRequestSourceIP); supported {
 				withNetwork := current
 				networkDecision := *current.Decision
@@ -2460,7 +2465,7 @@ func TestAuditProofClosedHistoricalMappings(t *testing.T) {
 			}
 			for name, mutate := range map[string]func(*AuditEvidence){
 				"version absent":      func(e *AuditEvidence) { e.DecisionContractVersion = 0 },
-				"version unknown":     func(e *AuditEvidence) { e.DecisionContractVersion = 6 },
+				"version unknown":     func(e *AuditEvidence) { e.DecisionContractVersion = 7 },
 				"downgrade to legacy": func(e *AuditEvidence) { e.DecisionContractVersion = 1 },
 				"archive absent":      func(e *AuditEvidence) { e.DecisionProfile = nil },
 				"profile absent":      func(e *AuditEvidence) { e.Decision.Profile = nil },
@@ -2902,7 +2907,7 @@ func TestIAMCoreUsecasesBindCredentialsAndRecordClosedAuthorization(t *testing.T
 		mutation := repository.transaction.authorizations[beforeBatch+index]
 		if !item.Allowed || item.DecidedAt != batchDecision.DecidedAt || item.TenantID != batchDecision.TenantID ||
 			item.Subject == nil || *item.Subject != batchDecision.Subject || item.RequestID != batch.Requests[index].RequestID ||
-			mutation.Request != batch.Requests[index] || mutation.AuditEvent.RequestID != batch.Requests[index].RequestID ||
+			!reflect.DeepEqual(mutation.Request, batch.Requests[index]) || mutation.AuditEvent.RequestID != batch.Requests[index].RequestID ||
 			mutation.AuditEvent.CorrelationID != batchDecision.CorrelationID {
 			t.Fatalf("batch item %d was not bound to one snapshot and immutable fact: item=%#v mutation=%#v", index, item, mutation)
 		}

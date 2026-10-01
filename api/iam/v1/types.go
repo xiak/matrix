@@ -966,6 +966,14 @@ type AuthorizationNetworkContext struct {
 	SourceIP string `json:"sourceIp"`
 }
 
+// AuthorizationTag is a product-owned, Profile-declared authorization fact.
+// It is not a Principal/Role tag and cannot be supplied as a generic caller
+// attribute. Collections are canonical, strictly key-sorted and duplicate-free.
+type AuthorizationTag struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
 // AuthorizationRequest contains no tenant or subject field. IAM derives both
 // from the subject credential and authenticates the calling service
 // independently at the HTTP boundary.
@@ -976,6 +984,7 @@ type AuthorizationRequest struct {
 	ResourceMode    AuthorizationResourceMode     `json:"resourceMode"`
 	CollectionUsage AuthorizationCollectionUsage  `json:"collectionUsage,omitempty"`
 	NetworkContext  *AuthorizationNetworkContext  `json:"networkContext,omitempty"`
+	RequestTags     []AuthorizationTag            `json:"requestTags,omitempty"`
 	RequestID       string                        `json:"requestId"`
 	CorrelationID   string                        `json:"correlationId"`
 }
@@ -1001,6 +1010,7 @@ type AuthorizationDecision struct {
 	ResourceMode    AuthorizationResourceMode      `json:"resourceMode,omitempty"`
 	CollectionUsage AuthorizationCollectionUsage   `json:"collectionUsage,omitempty"`
 	NetworkContext  *AuthorizationNetworkContext   `json:"networkContext,omitempty"`
+	RequestTags     []AuthorizationTag             `json:"requestTags,omitempty"`
 	CorrelationID   string                         `json:"correlationId,omitempty"`
 }
 

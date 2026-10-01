@@ -31,6 +31,9 @@ func (usecase *Usecase) CreateApplication(
 	command CreateApplicationCommand,
 ) (paasv1.Application, paasv1.Operation, bool, error) {
 	request := command.Request
+	if port.ValidateAuthorizationTagsForAction(command.Authorization, port.AuthorizeApplicationCreate, request.Labels) != nil {
+		return paasv1.Application{}, paasv1.Operation{}, false, ErrInvalidArgument
+	}
 	return executeResourceCreation(ctx, usecase, resourceCreation[paasv1.Application]{
 		authorization: command.Authorization, id: request.ID,
 		idempotencyKey: command.IdempotencyKey, targetKind: "Application",

@@ -949,7 +949,8 @@ func validatePolicyConditions(statement PolicyStatement, pointer string, capabil
 	var start, end time.Time
 	for index, condition := range statement.Conditions {
 		location := pointer + "/conditions/" + strconv.Itoa(index)
-		if condition.Key != ConditionIAMCurrentTime && condition.Key != ConditionIAMAccountID && condition.Key != ConditionIAMPrincipalID && condition.Key != ConditionRequestSourceIP {
+		definition, known := lookupConditionDefinition(condition.Key)
+		if !known {
 			return invalidPolicyAt(PolicyUnsupported, location+"/key")
 		}
 		for _, action := range statement.Actions {
@@ -979,6 +980,26 @@ func validatePolicyConditions(statement PolicyStatement, pointer string, capabil
 			for valueIndex, value := range condition.Values {
 				valuePointer := location + "/values/" + strconv.Itoa(valueIndex)
 				if ValidateID("condition.value", value) != nil {
+					return invalidPolicyAt(PolicyInvalidValue, valuePointer)
+				}
+				if values[value] {
+					return invalidPolicyAt(PolicyDuplicate, valuePointer)
+				}
+				values[value] = true
+			}
+			continue
+		}
+		if definition.Source == ConditionCallingServiceRequestTag {
+			if condition.Operator != PolicyStringEquals && condition.Operator != PolicyStringNotEquals {
+				return invalidPolicyAt(PolicyUnsupported, location+"/operator")
+			}
+			if len(condition.Values) < 1 || len(condition.Values) > MaxStringConditionValues {
+				return invalidPolicyAt(PolicyLimitExceeded, location+"/values")
+			}
+			values := make(map[string]bool, len(condition.Values))
+			for valueIndex, value := range condition.Values {
+				valuePointer := location + "/values/" + strconv.Itoa(valueIndex)
+				if validateAuthorizationTagValue(value) != nil {
 					return invalidPolicyAt(PolicyInvalidValue, valuePointer)
 				}
 				if values[value] {

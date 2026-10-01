@@ -3,6 +3,7 @@ package authority
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 	"time"
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
@@ -647,6 +648,7 @@ func authorizationDecision(tenantID iamv1.AccountID, installationID string, subj
 		network := *request.NetworkContext
 		decision.NetworkContext = &network
 	}
+	decision.RequestTags = slices.Clone(request.RequestTags)
 	if allowed {
 		decision.Reason = iamv1.DecisionAllowed
 		if iamv1.IsPlatformAction(request.Action) {

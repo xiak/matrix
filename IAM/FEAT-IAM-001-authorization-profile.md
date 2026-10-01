@@ -254,6 +254,8 @@ IAM私有assert_allowed_decision由6参替换为8参，追加显式resource_mode
 
 CAT-05、策略替换及最终组合仍分别按 owning FEAT 实施。
 
+当前 PaaS Profile revision 4 只在`paas.application.create`声明精确`request.tag/environment`条件，类型为`STRING`、来源为`CALLING_SERVICE_REQUEST_TAG`；revision 1–3继续作为不可变历史解释，其他Action和标签名不因该动态命名空间自动获得能力。可信来源、请求/决定绑定、产品PEP及验收由[008](./FEAT-IAM-008-product-enforcement.md#下一纵向切片可信创建请求标签)拥有。
+
 2026-09-15 完整平台目录增量的本分支证据：
 
 - `TestPaaSProfileDeclaresCompletePlatformProduct` 验证12项闭合资源/形状/结果、PAAS调用来源、平台范围及无prefix/条件能力，精确引用不能以数值更高的revision替代。现有唯一求值器的全Action/系统策略矩阵和API schema验证覆盖新增动作；enrollment负向proof拒绝read/revoke/regenerate原决定、错kind/集合ID及drain/activate/remove目标事实。API/IAM/Audit/architecture race已通过。

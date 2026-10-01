@@ -1976,7 +1976,7 @@ func assertAuthenticationRecoveryDecisionArchive(t *testing.T, ctx context.Conte
 	const forgedDecision = `INSERT INTO iam.authorization_decisions SELECT candidate.* FROM
 	 (SELECT to_jsonb(d)||jsonb_build_object('id','decision-restore-forged','action_name','iam.unknown.read',
 	   'document',d.document||jsonb_build_object('id','decision-restore-forged','action','iam.unknown.read')) AS document
-	  FROM iam.authorization_decisions d WHERE d.contract_version IN (4,5) ORDER BY d.contract_version DESC,d.tenant_id,d.id LIMIT 1) original
+	  FROM iam.authorization_decisions d WHERE d.contract_version IN (4,5,6) ORDER BY d.contract_version DESC,d.tenant_id,d.id LIMIT 1) original
 	 CROSS JOIN LATERAL jsonb_populate_record(NULL::iam.authorization_decisions,original.document) candidate`
 	tx, err := restored.Begin(ctx)
 	if err != nil {

@@ -18,7 +18,7 @@ import (
 	"github.com/xiak/matrix/app/service/iam/internal/usecase/identityaccess"
 )
 
-const authorizationDecisionContractVersion = 5
+const authorizationDecisionContractVersion = 6
 
 type transaction struct {
 	tx               pgx.Tx
@@ -655,7 +655,7 @@ func (value *transaction) ReadAuditEvidence(
 			if iamv1.ValidateLegacyAuthorizationDecision(decoded) != nil {
 				return identityaccess.AuditEvidence{}, false, identityaccess.ErrUnavailable
 			}
-		case 2, 3, 4, 5:
+		case 2, 3, 4, 5, 6:
 			if decoded.Subject != nil && ((*decisionContract == 2 && decoded.Subject.Type == iamv1.SubjectRole) ||
 				(*decisionContract < 4 && decoded.Subject.AccessKeyID != "")) {
 				return identityaccess.AuditEvidence{}, false, identityaccess.ErrUnavailable

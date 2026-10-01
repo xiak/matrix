@@ -730,6 +730,7 @@ func structContracts() map[string]reflect.Type {
 		"RevokeSessionRequest":                          openapi31.StructType[iamv1.RevokeSessionRequest](),
 		"Revocation":                                    openapi31.StructType[iamv1.Revocation](),
 		"AuthorizationNetworkContext":                   openapi31.StructType[iamv1.AuthorizationNetworkContext](),
+		"AuthorizationTag":                              openapi31.StructType[iamv1.AuthorizationTag](),
 		"AuthorizationRequest":                          openapi31.StructType[iamv1.AuthorizationRequest](),
 		"AuthorizationDecision":                         openapi31.StructType[iamv1.AuthorizationDecision](),
 		"AuthorizationBatchRequest":                     openapi31.StructType[iamv1.AuthorizationBatchRequest](),
@@ -1060,6 +1061,20 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 			base = object{"anyOf": []any{object{"type": "null"}, base}}
 		}
 	}
+	if owner == "AuthorizationTag" {
+		switch jsonName {
+		case "key":
+			base = object{
+				"type": "string", "pattern": `^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`,
+				"minLength": 1, "maxLength": 63,
+			}
+		case "value":
+			base = object{"type": "string", "maxLength": 128}
+		}
+	}
+	if (owner == "AuthorizationRequest" || owner == "AuthorizationDecision") && jsonName == "requestTags" {
+		base["minItems"], base["maxItems"], base["uniqueItems"] = 1, iamv1.MaxAuthorizationTags, true
+	}
 	if owner == "AuthorizationBatchRequest" && jsonName == "requests" || owner == "AuthorizationBatchDecision" && jsonName == "decisions" {
 		base["minItems"], base["maxItems"] = 1, iamv1.MaxAuthorizationBatchItems
 	}
@@ -1168,6 +1183,21 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 }
 
 func applySemanticOverlays(schemas object) {
+	// Condition keys have a closed set of IAM-owned facts plus one dynamic,
+	// normalized namespace. An exact key is still usable only when the owning
+	// product Profile declares it for the selected Action.
+	schemas["ConditionKey"] = object{
+		"oneOf": []any{
+			object{"type": "string", "enum": []string{
+				string(iamv1.ConditionIAMCurrentTime), string(iamv1.ConditionIAMAccountID),
+				string(iamv1.ConditionIAMPrincipalID), string(iamv1.ConditionRequestSourceIP),
+			}},
+			object{
+				"type": "string", "pattern": `^request\.tag/[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`,
+				"minLength": 13, "maxLength": 75,
+			},
+		},
+	}
 	schemas["ServiceRoleWorkloadSpec"].(object)["description"] = "Release-owned mapping from one workload kind to its exact product bind and unbind Actions. Consumers must not infer these Actions from product, Role or resource names."
 	schemas["ServiceRoleTemplateSpec"].(object)["description"] = "Release-owned immutable service-role authority. Product, service purpose, fixed policy version and workload Action mappings are not Account-selected authorization inputs."
 	schemas["ServiceRoleTemplateSpec"].(object)["properties"].(object)["workloads"].(object)["minItems"] = 1
@@ -1861,6 +1891,14 @@ func applyPolicyLanguageOverlays(schemas object) {
 				"type": "string", "format": "matrix-cidr", "minLength": 3, "maxLength": 49,
 				"description": "Canonical, already-masked IPv4 or IPv6 prefix; the service rejects DNS names, ranges, zones and IPv4-mapped IPv6.",
 			}},
+		}},
+		object{"properties": object{
+			"key": object{
+				"type": "string", "pattern": `^request\.tag/[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`,
+				"minLength": 13, "maxLength": 75,
+			},
+			"operator": object{"enum": []string{string(iamv1.PolicyStringEquals), string(iamv1.PolicyStringNotEquals)}},
+			"values":   object{"items": object{"type": "string", "maxLength": 128}},
 		}},
 	}
 	for field, maximum := range map[string]int{"actions": iamv1.MaxStatementActions, "resources": iamv1.MaxStatementResources} {

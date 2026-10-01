@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
@@ -51,6 +52,7 @@ type AuthorizationRequest struct {
 	ResourceMode    iamv1.AuthorizationResourceMode
 	CollectionUsage iamv1.AuthorizationCollectionUsage
 	SourceIP        string
+	RequestLabels   map[string]string
 	RequestID       string
 }
 
@@ -61,6 +63,7 @@ type Authorization struct {
 	Subject     paasv1.SubjectRef
 	DecisionID  string
 	RequestID   string
+	RequestTags []iamv1.AuthorizationTag
 	AuditID     string
 	TraceParent string
 }
@@ -91,6 +94,12 @@ func NewIAMAuthorizationRequest(value AuthorizationRequest) (iamv1.Authorization
 	if !isAppHostingAction(value.Action) {
 		return iamv1.AuthorizationRequest{}, errors.New("authorization action is outside apphosting")
 	}
+	if value.RequestLabels != nil && value.Action != AuthorizeApplicationCreate {
+		return iamv1.AuthorizationRequest{}, errors.New("authorization labels are outside application creation")
+	}
+	if err := paasv1.ValidateLabels(value.RequestLabels); err != nil {
+		return iamv1.AuthorizationRequest{}, errors.New("authorization labels are invalid")
+	}
 	resource, err := iamResourceReference(value.Resource)
 	if err != nil {
 		return iamv1.AuthorizationRequest{}, err
@@ -105,6 +114,10 @@ func NewIAMAuthorizationRequest(value AuthorizationRequest) (iamv1.Authorization
 	request, err = iamv1.BindAuthorizationSourceIP(request, value.SourceIP)
 	if err != nil {
 		return iamv1.AuthorizationRequest{}, errors.New("authorization network context is invalid")
+	}
+	request, err = iamv1.BindAuthorizationRequestTags(request, value.RequestLabels)
+	if err != nil {
+		return iamv1.AuthorizationRequest{}, errors.New("authorization request tags are invalid")
 	}
 	return request, nil
 }
@@ -152,7 +165,21 @@ func ValidateAuthorizationForRequest(
 	if value.RequestID != request.RequestID {
 		problems = append(problems, errors.New("IAM authorization request correlation mismatch"))
 	}
+	iamRequest, err := NewIAMAuthorizationRequest(request)
+	if err != nil || !slices.Equal(value.RequestTags, iamRequest.RequestTags) {
+		problems = append(problems, errors.New("IAM authorization request tags mismatch"))
+	}
 	return errors.Join(problems...)
+}
+
+// ValidateAuthorizationTagsForAction re-binds a product command immediately
+// before the use case mutates state. A handler decision cannot be paired with
+// changed labels by an in-process caller.
+func ValidateAuthorizationTagsForAction(value Authorization, action iamv1.Action, labels map[string]string) error {
+	if err := paasv1.ValidateLabels(labels); err != nil || iamv1.CheckAuthorizationTagsForAction(value.RequestTags, action, labels) != nil {
+		return errors.New("IAM authorization request tags mismatch")
+	}
+	return nil
 }
 
 func ValidateAuthorization(value Authorization) error {
@@ -170,6 +197,17 @@ func ValidateAuthorization(value Authorization) error {
 		problems = append(problems,
 			paasv1.ValidateSafeExternalText("authorization.traceparent", value.TraceParent, 55, false),
 		)
+	}
+	if value.RequestTags != nil && (len(value.RequestTags) < 1 || len(value.RequestTags) > iamv1.MaxAuthorizationTags) {
+		problems = append(problems, errors.New("authorization request tags are invalid"))
+	}
+	previous := ""
+	for _, tag := range value.RequestTags {
+		if iamv1.ValidateAuthorizationTag(tag) != nil || tag.Key <= previous {
+			problems = append(problems, errors.New("authorization request tags are invalid"))
+			break
+		}
+		previous = tag.Key
 	}
 	return errors.Join(problems...)
 }

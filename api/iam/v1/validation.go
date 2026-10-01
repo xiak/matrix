@@ -922,10 +922,18 @@ func ValidateAuthorizationRequest(value AuthorizationRequest) error {
 	problems = append(problems,
 		validateResourceForAction(value.Action, value.Resource),
 		validateAuthorizationNetworkContextForAction(value.Action, value.NetworkContext, nil),
+		validateAuthorizationRequestTagsForAction(value.Action, value.RequestTags, nil),
 		ValidateID("requestId", value.RequestID),
 		ValidateID("correlationId", value.CorrelationID),
 	)
 	return errors.Join(problems...)
+}
+
+func ValidateAuthorizationTag(value AuthorizationTag) error {
+	if !authorizationTagKey(value.Key) || validateAuthorizationTagValue(value.Value) != nil {
+		return errors.New("authorization tag is invalid")
+	}
+	return nil
 }
 
 // ValidateAuthorizationDecision is the current response contract. Historical
@@ -950,6 +958,9 @@ func ValidateAuthorizationDecision(value AuthorizationDecision) error {
 	if err := validateAuthorizationNetworkContextForAction(value.Action, value.NetworkContext, nil); err != nil {
 		return err
 	}
+	if err := validateAuthorizationRequestTagsForAction(value.Action, value.RequestTags, nil); err != nil {
+		return err
+	}
 	return validateAuthorizationDecision(value, definition)
 }
 
@@ -968,6 +979,9 @@ func ValidateAuthorizationDecisionForProfile(value AuthorizationDecision, profil
 			if err := validateAuthorizationNetworkContextForAction(value.Action, value.NetworkContext, &profile); err != nil {
 				return err
 			}
+			if err := validateAuthorizationRequestTagsForAction(value.Action, value.RequestTags, &profile); err != nil {
+				return err
+			}
 			return validateAuthorizationDecision(value, authorizationProfileActionDefinition(profile, action))
 		}
 	}
@@ -978,11 +992,57 @@ func ValidateAuthorizationDecisionForProfile(value AuthorizationDecision, profil
 // database metadata says contract1. This function alone is not legacy admission.
 func ValidateLegacyAuthorizationDecision(value AuthorizationDecision) error {
 	definition, known := lookupRecordedActionDefinition(value.Action)
-	if !known || value.Resource.Kind != definition.ResourceKind || value.Profile != nil || value.ResourceMode != "" || value.CollectionUsage != "" || value.NetworkContext != nil || value.CorrelationID != "" ||
+	if !known || value.Resource.Kind != definition.ResourceKind || value.Profile != nil || value.ResourceMode != "" || value.CollectionUsage != "" || value.NetworkContext != nil || value.RequestTags != nil || value.CorrelationID != "" ||
 		value.Subject != nil && value.Subject.AccessKeyID != "" {
 		return errors.New("legacy decision contains an invalid or current binding")
 	}
 	return validateAuthorizationDecision(value, definition)
+}
+
+func validateAuthorizationRequestTagsForAction(action Action, tags []AuthorizationTag, profile *AuthorizationProfile) error {
+	if tags != nil && (len(tags) < 1 || len(tags) > MaxAuthorizationTags) {
+		return errors.New("authorization request tags are invalid")
+	}
+	var declaration *AuthorizationProfileAction
+	if profile == nil {
+		definition, known := LookupActionDefinition(action)
+		if !known {
+			return errors.New("authorization tag action is not declared")
+		}
+		source, known := sourceProfileCommitments[definition.Product]
+		if !known {
+			return errors.New("authorization tag profile is not declared")
+		}
+		profile = &source.profile
+	}
+	for index := range profile.Actions {
+		if profile.Actions[index].Action == action {
+			declaration = &profile.Actions[index]
+			break
+		}
+	}
+	if declaration == nil {
+		return errors.New("authorization tag action is not declared")
+	}
+	allowed := make(map[string]bool)
+	for _, condition := range declaration.Conditions {
+		if condition.Source != ConditionCallingServiceRequestTag {
+			continue
+		}
+		name, valid := requestTagName(condition.Key)
+		if !valid || condition.ValueType != ConditionString {
+			return errors.New("authorization tag declaration is invalid")
+		}
+		allowed[name] = true
+	}
+	previous := ""
+	for _, tag := range tags {
+		if !allowed[tag.Key] || tag.Key <= previous || ValidateAuthorizationTag(tag) != nil {
+			return errors.New("authorization request tags are invalid")
+		}
+		previous = tag.Key
+	}
+	return nil
 }
 
 // ParseAuthorizationSourceIP accepts the one canonical address form shared by

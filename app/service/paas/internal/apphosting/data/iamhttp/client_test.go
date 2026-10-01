@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 	"time"
 
@@ -33,6 +34,7 @@ func TestClientMapsAllowedIAMDecisionWithoutTrustingCallerAuthority(t *testing.T
 			body.Action != iamv1.ActionPaaSApplicationCreate ||
 			body.Resource != (iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "collection"}) ||
 			body.NetworkContext == nil || body.NetworkContext.SourceIP != "192.0.2.10" ||
+			!reflect.DeepEqual(body.RequestTags, []iamv1.AuthorizationTag{{Key: "environment", Value: "production"}}) ||
 			body.RequestID != "request-paas-authorize" || body.CorrelationID != body.RequestID {
 			t.Fatalf("IAM authorization request=%#v", body)
 		}
@@ -43,7 +45,7 @@ func TestClientMapsAllowedIAMDecisionWithoutTrustingCallerAuthority(t *testing.T
 			TenantID: "organization-a",
 			Subject:  &iamv1.Subject{Type: iamv1.SubjectUser, ID: "principal-developer"},
 			Action:   body.Action, Resource: body.Resource, RequestID: body.RequestID,
-			Profile: &body.Profile, ResourceMode: body.ResourceMode, CollectionUsage: body.CollectionUsage, NetworkContext: body.NetworkContext, CorrelationID: body.CorrelationID,
+			Profile: &body.Profile, ResourceMode: body.ResourceMode, CollectionUsage: body.CollectionUsage, NetworkContext: body.NetworkContext, RequestTags: body.RequestTags, CorrelationID: body.CorrelationID,
 			DecidedAt: time.Date(2026, 8, 26, 1, 2, 3, 456_000, time.UTC),
 		})
 	}))
@@ -57,7 +59,8 @@ func TestClientMapsAllowedIAMDecisionWithoutTrustingCallerAuthority(t *testing.T
 	if authorization.TenantID != "organization-a" ||
 		authorization.Subject != (paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "principal-developer"}) ||
 		authorization.DecisionID != "decision-paas-authorize" ||
-		authorization.RequestID != "request-paas-authorize" {
+		authorization.RequestID != "request-paas-authorize" ||
+		!reflect.DeepEqual(authorization.RequestTags, []iamv1.AuthorizationTag{{Key: "environment", Value: "production"}}) {
 		t.Fatalf("PaaS authorization=%#v", authorization)
 	}
 	stopRequest, err := toIAMRequest(port.AuthorizationRequest{
@@ -87,7 +90,7 @@ func TestClientFailsClosedForDenialStatusAndInvalidResponse(t *testing.T) {
 					APIVersion: iamv1.APIVersion, Kind: "AuthorizationDecision",
 					ID: "decision-denied", Reason: iamv1.DecisionDenied,
 					Action: request.Action, Resource: request.Resource, RequestID: request.RequestID,
-					Profile: &request.Profile, ResourceMode: request.ResourceMode, CollectionUsage: request.CollectionUsage, NetworkContext: request.NetworkContext, CorrelationID: request.CorrelationID,
+					Profile: &request.Profile, ResourceMode: request.ResourceMode, CollectionUsage: request.CollectionUsage, NetworkContext: request.NetworkContext, RequestTags: request.RequestTags, CorrelationID: request.CorrelationID,
 					DecidedAt: time.Date(2026, 8, 26, 1, 2, 3, 0, time.UTC),
 				})
 			},
@@ -111,7 +114,7 @@ func TestClientFailsClosedForDenialStatusAndInvalidResponse(t *testing.T) {
 					TenantID: "organization-a",
 					Subject:  &iamv1.Subject{Type: iamv1.SubjectUser, ID: "principal-developer"},
 					Action:   request.Action, Resource: request.Resource, RequestID: request.RequestID,
-					Profile: &request.Profile, ResourceMode: request.ResourceMode, CollectionUsage: request.CollectionUsage, NetworkContext: request.NetworkContext, CorrelationID: request.CorrelationID,
+					Profile: &request.Profile, ResourceMode: request.ResourceMode, CollectionUsage: request.CollectionUsage, NetworkContext: request.NetworkContext, RequestTags: request.RequestTags, CorrelationID: request.CorrelationID,
 					DecidedAt: time.Date(2026, 8, 26, 1, 2, 3, 0, time.UTC),
 				})
 			},
@@ -193,6 +196,9 @@ func TestClientRejectsEveryMismatchedDecisionBindingForAllowAndDeny(t *testing.T
 			"network": func(d *iamv1.AuthorizationDecision) {
 				d.NetworkContext = &iamv1.AuthorizationNetworkContext{SourceIP: "192.0.2.11"}
 			},
+			"request tag": func(d *iamv1.AuthorizationDecision) {
+				d.RequestTags[0].Value = "staging"
+			},
 		} {
 			t.Run(fmt.Sprintf("allowed=%v/%s", allowed, name), func(t *testing.T) {
 				calls := 0
@@ -206,7 +212,7 @@ func TestClientRejectsEveryMismatchedDecisionBindingForAllowAndDeny(t *testing.T
 					}
 					decision := iamv1.AuthorizationDecision{APIVersion: iamv1.APIVersion, Kind: "AuthorizationDecision", ID: "decision-bound",
 						Allowed: allowed, Reason: iamv1.DecisionDenied, Action: request.Action, Resource: request.Resource,
-						Profile: &request.Profile, ResourceMode: request.ResourceMode, CollectionUsage: request.CollectionUsage, NetworkContext: request.NetworkContext,
+						Profile: &request.Profile, ResourceMode: request.ResourceMode, CollectionUsage: request.CollectionUsage, NetworkContext: request.NetworkContext, RequestTags: request.RequestTags,
 						RequestID: request.RequestID, CorrelationID: request.CorrelationID, DecidedAt: time.Date(2026, 9, 15, 1, 2, 3, 0, time.UTC)}
 					if allowed {
 						decision.Reason, decision.TenantID = iamv1.DecisionAllowed, "organization-a"
@@ -221,7 +227,7 @@ func TestClientRejectsEveryMismatchedDecisionBindingForAllowAndDeny(t *testing.T
 				}))
 				defer server.Close()
 				result, err := newTestClient(t, server.URL).Authorize(context.Background(), testAuthorizationRequest())
-				if calls != 1 || !errors.Is(err, port.ErrAuthorizationUnavailable) || result != (port.Authorization{}) {
+				if calls != 1 || !errors.Is(err, port.ErrAuthorizationUnavailable) || !reflect.DeepEqual(result, port.Authorization{}) {
 					t.Fatalf("mismatched decision consumed: calls=%d result=%+v err=%v", calls, result, err)
 				}
 			})
@@ -312,7 +318,9 @@ func testAuthorizationRequest() port.AuthorizationRequest {
 		Action:       port.AuthorizeApplicationCreate,
 		Resource:     paasv1.ResourceRef{Kind: "Application", ID: "collection"},
 		ResourceMode: iamv1.AuthorizationResourceCollection, CollectionUsage: iamv1.AuthorizationCollectionCreate,
-		SourceIP:  "192.0.2.10",
+		SourceIP: "192.0.2.10", RequestLabels: map[string]string{
+			"environment": "production", "team": "payments",
+		},
 		RequestID: "request-paas-authorize",
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"strings"
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
@@ -196,10 +197,11 @@ func authorizationFromDecision(
 		return port.Authorization{}, port.ErrAuthorizationUnavailable
 	}
 	authorization := port.Authorization{
-		TenantID:   paasv1.TenantID(decision.TenantID),
-		Subject:    paasv1.SubjectRef{Type: subjectType, ID: string(decision.Subject.ID)},
-		DecisionID: string(decision.ID),
-		RequestID:  decision.RequestID,
+		TenantID:    paasv1.TenantID(decision.TenantID),
+		Subject:     paasv1.SubjectRef{Type: subjectType, ID: string(decision.Subject.ID)},
+		DecisionID:  string(decision.ID),
+		RequestID:   decision.RequestID,
+		RequestTags: slices.Clone(decision.RequestTags),
 	}
 	if decision.Subject.RoleSession != nil {
 		authorization.Subject.RoleSession = &paasv1.RoleSessionReference{SessionID: string(decision.Subject.RoleSession.SessionID), SourceUserID: string(decision.Subject.RoleSession.SourceUserID)}

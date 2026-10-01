@@ -1,6 +1,7 @@
 package port
 
 import (
+	"reflect"
 	"testing"
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
@@ -51,6 +52,41 @@ func TestAppHostingAuthorizationUsesRegisteredPaaSProfile(t *testing.T) {
 				t.Fatalf("request did not bind the current PaaS profile: %#v", iamRequest)
 			}
 		})
+	}
+}
+
+func TestApplicationCreateAuthorizationBindsOnlyProfileDeclaredLabels(t *testing.T) {
+	request := AuthorizationRequest{
+		Credential: "Bearer subject", Action: AuthorizeApplicationCreate,
+		Resource:     paasv1.ResourceRef{Kind: ResourceApplication, ID: "collection"},
+		ResourceMode: iamv1.AuthorizationResourceCollection, CollectionUsage: iamv1.AuthorizationCollectionCreate,
+		SourceIP: "192.0.2.23", RequestID: "request-tags",
+		RequestLabels: map[string]string{"environment": "production", "team": "payments", "1-metadata": "retained"},
+	}
+	iamRequest, err := NewIAMAuthorizationRequest(request)
+	expected := []iamv1.AuthorizationTag{{Key: "environment", Value: "production"}}
+	if err != nil || !reflect.DeepEqual(iamRequest.RequestTags, expected) {
+		t.Fatalf("trusted labels were not bound by the PaaS Profile: request=%#v err=%v", iamRequest, err)
+	}
+	authorization := Authorization{
+		TenantID: "tenant-a", Subject: paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "user-a"},
+		DecisionID: "decision-tags", RequestID: request.RequestID, RequestTags: expected,
+	}
+	if ValidateAuthorizationForRequest(authorization, request) != nil ||
+		ValidateAuthorizationTagsForAction(authorization, AuthorizeApplicationCreate, request.RequestLabels) != nil {
+		t.Fatal("exact PEP/IAM/use-case label binding was rejected")
+	}
+	changed := request
+	changed.RequestLabels = map[string]string{"environment": "staging", "team": "payments"}
+	if ValidateAuthorizationForRequest(authorization, changed) == nil ||
+		ValidateAuthorizationTagsForAction(authorization, AuthorizeApplicationCreate, changed.RequestLabels) == nil {
+		t.Fatal("an authorization decision was reused with changed labels")
+	}
+	read := request
+	read.Action, read.ResourceMode, read.CollectionUsage = AuthorizeApplicationRead, iamv1.AuthorizationResourceInstance, ""
+	read.Resource.ID = "application-one"
+	if ValidateAuthorizationRequest(read) == nil {
+		t.Fatal("request labels leaked into an undeclared product action")
 	}
 }
 

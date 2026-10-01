@@ -10,6 +10,8 @@ import (
 	"io"
 	"slices"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/xiak/matrix/api/contractjson"
 )
@@ -85,7 +87,8 @@ const (
 	AuthorizationCollectionList       AuthorizationCollectionUsage = "COLLECTION_LIST"
 	AuthorizationCollectionCreate     AuthorizationCollectionUsage = "COLLECTION_CREATE"
 	MaxAuthorizationProfileActions                                 = 128
-	MaxAuthorizationProfileConditions                              = 4
+	MaxAuthorizationProfileConditions                              = 8
+	MaxAuthorizationTags                                           = MaxAuthorizationProfileConditions
 	MaxAuthorizationProfileBytes      int64                        = 64 * 1024
 )
 
@@ -648,6 +651,130 @@ func NewAuthorizationRequest(action Action, resource ResourceReference, mode Aut
 	return request, nil
 }
 
+// NewRequestTagConditionKey creates the only dynamic condition namespace
+// currently supported by the contract. A product Profile must still declare
+// the returned exact key before a Policy or request may use it.
+func NewRequestTagConditionKey(tag string) (ConditionKey, error) {
+	if !authorizationTagKey(tag) {
+		return "", ErrInvalidAuthorizationProfile
+	}
+	return ConditionKey(ConditionRequestTagPrefix + tag), nil
+}
+
+func requestTagName(key ConditionKey) (string, bool) {
+	value := string(key)
+	if !strings.HasPrefix(value, ConditionRequestTagPrefix) {
+		return "", false
+	}
+	tag := strings.TrimPrefix(value, ConditionRequestTagPrefix)
+	return tag, authorizationTagKey(tag)
+}
+
+// ParseRequestTagConditionKey exposes only the normalized tag name. It does
+// not prove that an action Profile declares the condition.
+func ParseRequestTagConditionKey(key ConditionKey) (string, bool) {
+	return requestTagName(key)
+}
+
+func authorizationTagKey(value string) bool {
+	if len(value) < 1 || len(value) > 63 ||
+		(value[0] < 'a' || value[0] > 'z') && (value[0] < '0' || value[0] > '9') ||
+		value[len(value)-1] == '-' {
+		return false
+	}
+	for _, character := range []byte(value) {
+		if (character < 'a' || character > 'z') && (character < '0' || character > '9') && character != '-' {
+			return false
+		}
+	}
+	return true
+}
+
+// BindAuthorizationRequestTags extracts every request-tag condition declared
+// by the current action from the product's complete validated label set. The
+// caller cannot select which declared keys are included, and undeclared labels
+// never become Policy inputs.
+func BindAuthorizationRequestTags(request AuthorizationRequest, labels map[string]string) (AuthorizationRequest, error) {
+	if request.RequestTags != nil || ValidateAuthorizationRequest(request) != nil || len(labels) > 64 {
+		return AuthorizationRequest{}, ErrInvalidAuthorizationProfile
+	}
+	profile, known := LookupAuthorizationProfile(request.Profile.Product)
+	if !known || CheckAuthorizationProfileReference(profile, request.Profile) != nil {
+		return AuthorizationRequest{}, ErrInvalidAuthorizationProfile
+	}
+	tags, err := authorizationTagsForAction(profile, request.Action, labels)
+	if err != nil {
+		return AuthorizationRequest{}, err
+	}
+	request.RequestTags = tags
+	if ValidateAuthorizationRequest(request) != nil {
+		return AuthorizationRequest{}, ErrInvalidAuthorizationProfile
+	}
+	return request, nil
+}
+
+// CheckAuthorizationTagsForAction lets a product use case re-bind the final
+// command labels before mutation. It prevents a trusted handler decision from
+// being reused with a different body inside the same process boundary.
+func CheckAuthorizationTagsForAction(tags []AuthorizationTag, action Action, labels map[string]string) error {
+	definition, known := LookupActionDefinition(action)
+	if !known {
+		return ErrInvalidAuthorizationProfile
+	}
+	profile, known := LookupAuthorizationProfile(definition.Product)
+	if !known {
+		return ErrInvalidAuthorizationProfile
+	}
+	expected, err := authorizationTagsForAction(profile, action, labels)
+	if err != nil || !slices.Equal(tags, expected) {
+		return ErrInvalidAuthorizationProfile
+	}
+	return nil
+}
+
+func authorizationTagsForAction(profile AuthorizationProfile, action Action, labels map[string]string) ([]AuthorizationTag, error) {
+	if len(labels) > 64 {
+		return nil, ErrInvalidAuthorizationProfile
+	}
+	for _, declaration := range profile.Actions {
+		if declaration.Action != action {
+			continue
+		}
+		var tags []AuthorizationTag
+		for _, condition := range declaration.Conditions {
+			if condition.Source != ConditionCallingServiceRequestTag {
+				continue
+			}
+			key, valid := requestTagName(condition.Key)
+			value, present := labels[key]
+			if !valid {
+				return nil, ErrInvalidAuthorizationProfile
+			}
+			if present {
+				if validateAuthorizationTagValue(value) != nil {
+					return nil, ErrInvalidAuthorizationProfile
+				}
+				tags = append(tags, AuthorizationTag{Key: key, Value: value})
+			}
+		}
+		slices.SortFunc(tags, func(left, right AuthorizationTag) int { return cmp.Compare(left.Key, right.Key) })
+		return tags, nil
+	}
+	return nil, ErrInvalidAuthorizationProfile
+}
+
+func validateAuthorizationTagValue(value string) error {
+	if len([]byte(value)) > 128 || !utf8.ValidString(value) || strings.TrimSpace(value) != value {
+		return ErrInvalidAuthorizationProfile
+	}
+	for _, character := range value {
+		if unicode.IsControl(character) {
+			return ErrInvalidAuthorizationProfile
+		}
+	}
+	return nil
+}
+
 // BindAuthorizationSourceIP is the sole public constructor for a product PEP's
 // network context. It refuses replacement and only succeeds when the current
 // source-owned action declaration explicitly accepts the condition source.
@@ -669,6 +796,7 @@ func CheckAuthorizationDecisionForRequest(decision AuthorizationDecision, reques
 		*decision.Profile != request.Profile || decision.Action != request.Action || decision.Resource != request.Resource ||
 		decision.ResourceMode != request.ResourceMode || decision.CollectionUsage != request.CollectionUsage ||
 		!authorizationNetworkContextsEqual(decision.NetworkContext, request.NetworkContext) ||
+		!slices.Equal(decision.RequestTags, request.RequestTags) ||
 		decision.RequestID != request.RequestID || decision.CorrelationID != request.CorrelationID {
 		return ErrInvalidAuthorizationProfile
 	}

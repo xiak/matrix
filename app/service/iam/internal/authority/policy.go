@@ -530,6 +530,35 @@ func policyConditionsMatch(conditions []iamv1.PolicyCondition, action iamv1.Acti
 			}
 			continue
 		}
+		if definition.Source == iamv1.ConditionCallingServiceRequestTag {
+			if definition.ValueType != iamv1.ConditionString || len(condition.Values) < 1 ||
+				len(condition.Values) > iamv1.MaxStringConditionValues {
+				return false, ErrInvalidPolicyState
+			}
+			name, valid := iamv1.ParseRequestTagConditionKey(condition.Key)
+			if !valid {
+				return false, ErrInvalidPolicyState
+			}
+			actual, present := "", false
+			for _, tag := range request.RequestTags {
+				if tag.Key == name {
+					actual, present = tag.Value, true
+					break
+				}
+			}
+			equals := present && slices.Contains(condition.Values, actual)
+			switch condition.Operator {
+			case iamv1.PolicyStringEquals:
+				matched = matched && equals
+			case iamv1.PolicyStringNotEquals:
+				// Absence never satisfies a negative tag condition; otherwise
+				// omitting a mandatory create label would become a grant.
+				matched = matched && present && !equals
+			default:
+				return false, ErrInvalidPolicyState
+			}
+			continue
+		}
 		if definition.Source != iamv1.ConditionIAMTransactionTime || definition.ValueType != iamv1.ConditionTime || len(condition.Values) != 1 {
 			return false, ErrInvalidPolicyState
 		}

@@ -25,16 +25,18 @@ type ConditionValueType string
 type ConditionSource string
 
 const (
-	ConditionIAMCurrentTime        ConditionKey       = "iam.current-time"
-	ConditionIAMAccountID          ConditionKey       = "iam.account-id"
-	ConditionIAMPrincipalID        ConditionKey       = "iam.principal-id"
-	ConditionRequestSourceIP       ConditionKey       = "request.source-ip"
-	ConditionTime                  ConditionValueType = "TIME"
-	ConditionString                ConditionValueType = "STRING"
-	ConditionIP                    ConditionValueType = "IP"
-	ConditionIAMTransactionTime    ConditionSource    = "IAM_TRANSACTION_TIME"
-	ConditionIAMIdentity           ConditionSource    = "IAM_AUTHENTICATED_IDENTITY"
-	ConditionCallingServiceNetwork ConditionSource    = "CALLING_SERVICE_NETWORK"
+	ConditionIAMCurrentTime           ConditionKey       = "iam.current-time"
+	ConditionIAMAccountID             ConditionKey       = "iam.account-id"
+	ConditionIAMPrincipalID           ConditionKey       = "iam.principal-id"
+	ConditionRequestSourceIP          ConditionKey       = "request.source-ip"
+	ConditionRequestTagPrefix                            = "request.tag/"
+	ConditionTime                     ConditionValueType = "TIME"
+	ConditionString                   ConditionValueType = "STRING"
+	ConditionIP                       ConditionValueType = "IP"
+	ConditionIAMTransactionTime       ConditionSource    = "IAM_TRANSACTION_TIME"
+	ConditionIAMIdentity              ConditionSource    = "IAM_AUTHENTICATED_IDENTITY"
+	ConditionCallingServiceNetwork    ConditionSource    = "CALLING_SERVICE_NETWORK"
+	ConditionCallingServiceRequestTag ConditionSource    = "CALLING_SERVICE_REQUEST_TAG"
 )
 
 // This is a source declaration, not caller-supplied context or a complete
@@ -73,6 +75,9 @@ func lookupConditionDefinition(key ConditionKey) (ConditionKeyDefinition, bool) 
 	case ConditionRequestSourceIP:
 		return ConditionKeyDefinition{key, ConditionIP, ConditionCallingServiceNetwork}, true
 	default:
+		if _, ok := requestTagName(key); ok {
+			return ConditionKeyDefinition{key, ConditionString, ConditionCallingServiceRequestTag}, true
+		}
 		return ConditionKeyDefinition{}, false
 	}
 }
@@ -442,7 +447,7 @@ func AllServicePurposes() []ServicePurpose {
 // editable source. Product revision changes must accompany changed declarations.
 var authorizationProfiles = [...]AuthorizationProfile{
 	iamServiceRoleProfile(),
-	paasProfileRevisionThree,
+	paasProfileRevisionFour,
 	managedServiceProfileRevisionFour,
 	roleBusinessProfile(auditProfileRevisionOne),
 	declaredProductProfile(ProductInstallation, ServiceInstallationVerifier, 1,
@@ -496,7 +501,7 @@ var iamProfileRevisionOne = declaredProductProfile(ProductIAM, ServiceIAM, 1,
 )
 
 func HistoricalAuthorizationProfiles() []AuthorizationProfile {
-	return []AuthorizationProfile{cloneAuthorizationProfile(iamProfileRevisionOne), iamRoleManagementProfile(), iamRoleSessionProfile(), iamRoleSessionManagementProfile(), iamAccessKeyManagementProfile(), iamSecuritySettingsReadProfile(), iamSecuritySettingsProfile(), cloneAuthorizationProfile(paasProfileRevisionOne), cloneAuthorizationProfile(paasProfileRevisionTwo), cloneAuthorizationProfile(managedServiceProfileRevisionOne), cloneAuthorizationProfile(managedServiceProfileRevisionTwo), cloneAuthorizationProfile(managedServiceProfileRevisionThree), cloneAuthorizationProfile(auditProfileRevisionOne)}
+	return []AuthorizationProfile{cloneAuthorizationProfile(iamProfileRevisionOne), iamRoleManagementProfile(), iamRoleSessionProfile(), iamRoleSessionManagementProfile(), iamAccessKeyManagementProfile(), iamSecuritySettingsReadProfile(), iamSecuritySettingsProfile(), cloneAuthorizationProfile(paasProfileRevisionOne), cloneAuthorizationProfile(paasProfileRevisionTwo), cloneAuthorizationProfile(paasProfileRevisionThree), cloneAuthorizationProfile(managedServiceProfileRevisionOne), cloneAuthorizationProfile(managedServiceProfileRevisionTwo), cloneAuthorizationProfile(managedServiceProfileRevisionThree), cloneAuthorizationProfile(auditProfileRevisionOne)}
 }
 
 // Revision one remains archived because compiled policy content and decisions
@@ -547,6 +552,7 @@ var paasProfileRevisionOne = declaredProductProfile(ProductPaaS, ServicePaaS, 1,
 
 var paasProfileRevisionTwo = roleBusinessProfile(paasProfileRevisionOne)
 var paasProfileRevisionThree = networkConditionProfile(paasProfileRevisionTwo)
+var paasProfileRevisionFour = applicationRequestTagProfile(paasProfileRevisionThree)
 
 var auditProfileRevisionOne = declaredProductProfile(ProductAudit, ServiceAudit, 1,
 	declaredProfileAction(ActionAuditRecordRead, ResourceAuditRecord, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
@@ -621,6 +627,31 @@ func networkConditionProfile(previous AuthorizationProfile) AuthorizationProfile
 			AuthorizationProfileCondition{Key: definition.Key, ValueType: definition.ValueType, Source: definition.Source})
 	}
 	return profile
+}
+
+// applicationRequestTagProfile declares one real authorization label owned by
+// the PaaS application-create PEP. Other labels remain product metadata and
+// cannot be referenced by Policy merely because their names exist in storage.
+func applicationRequestTagProfile(previous AuthorizationProfile) AuthorizationProfile {
+	profile := cloneAuthorizationProfile(previous)
+	profile.Revision++
+	key, err := NewRequestTagConditionKey("environment")
+	if err != nil {
+		panic("invalid release-owned application request tag")
+	}
+	definition, known := lookupConditionDefinition(key)
+	if !known {
+		panic("invalid release-owned application request tag declaration")
+	}
+	for index := range profile.Actions {
+		if profile.Actions[index].Action != ActionPaaSApplicationCreate {
+			continue
+		}
+		profile.Actions[index].Conditions = append(profile.Actions[index].Conditions,
+			AuthorizationProfileCondition{Key: definition.Key, ValueType: definition.ValueType, Source: definition.Source})
+		return profile
+	}
+	panic("PaaS application create declaration is missing")
 }
 
 func iamRoleManagementProfile() AuthorizationProfile {

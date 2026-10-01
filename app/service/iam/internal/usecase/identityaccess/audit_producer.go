@@ -84,7 +84,7 @@ func auditContentDigest(identity iamv1.ServiceIdentity, event auditv1.Event, evi
 		return digest, nil
 	}
 	expectedAction, expectedID, mode, usage := auditDecisionTarget(event, decision.Action, evidence.DecisionContractVersion)
-	if (decision.Subject.Type != iamv1.SubjectUser && !((evidence.DecisionContractVersion == 3 || evidence.DecisionContractVersion == 4 || evidence.DecisionContractVersion == 5) && decision.Subject.Type == iamv1.SubjectRole)) || decision.Action != expectedAction ||
+	if (decision.Subject.Type != iamv1.SubjectUser && !((evidence.DecisionContractVersion == 3 || evidence.DecisionContractVersion == 4 || evidence.DecisionContractVersion == 5 || evidence.DecisionContractVersion == 6) && decision.Subject.Type == iamv1.SubjectRole)) || decision.Action != expectedAction ||
 		decision.Resource.ID != expectedID || !historicalProducerMatches(evidence, identity.Purpose) {
 		return "", ErrForbidden
 	}
@@ -99,7 +99,7 @@ func auditContentDigest(identity iamv1.ServiceIdentity, event auditv1.Event, evi
 // the original action; its calling service and resource kind come from the
 // protected original contract, never from the producer request.
 func historicalProducerMatches(evidence AuditEvidence, purpose iamv1.ServicePurpose) bool {
-	if (evidence.DecisionContractVersion == 2 || evidence.DecisionContractVersion == 3 || evidence.DecisionContractVersion == 4 || evidence.DecisionContractVersion == 5) && evidence.DecisionProfile != nil {
+	if (evidence.DecisionContractVersion == 2 || evidence.DecisionContractVersion == 3 || evidence.DecisionContractVersion == 4 || evidence.DecisionContractVersion == 5 || evidence.DecisionContractVersion == 6) && evidence.DecisionProfile != nil {
 		return evidence.DecisionProfile.CallingService == purpose
 	}
 	if evidence.DecisionContractVersion == 1 {
@@ -130,7 +130,7 @@ func validHistoricalDecision(evidence AuditEvidence) bool {
 	case 4:
 		return evidence.Decision.NetworkContext == nil && evidence.DecisionProfile != nil &&
 			iamv1.ValidateAuthorizationDecisionForProfile(*evidence.Decision, *evidence.DecisionProfile) == nil
-	case 5:
+	case 5, 6:
 		return evidence.DecisionProfile != nil && iamv1.ValidateAuthorizationDecisionForProfile(*evidence.Decision, *evidence.DecisionProfile) == nil
 	default:
 		return false

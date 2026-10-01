@@ -1431,6 +1431,69 @@ func TestSourceIPConditionsUseThePEPBoundNetworkContext(t *testing.T) {
 	}
 }
 
+func TestRequestTagConditionsUseOnlyPEPBoundDeclaredValues(t *testing.T) {
+	context := policyContextForTest(authorityTestTime())
+	resource := iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "collection"}
+	baseRequest := policyEvaluationRequestForTest(t, iamv1.ActionPaaSApplicationCreate, resource)
+	key, err := iamv1.NewRequestTagConditionKey("environment")
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := policyVersionForTest(t, "policy-create-environment", iamv1.PolicyAllow,
+		baseRequest.Action, iamv1.PolicyResourceAnyInAuthority, "")
+	policy.Document.Statements[0].Conditions = []iamv1.PolicyCondition{{
+		Key: key, Operator: iamv1.PolicyStringEquals, Values: []string{"production", "regulated"},
+	}}
+	compilePolicyVersionForTest(t, &policy)
+
+	for _, test := range []struct {
+		name    string
+		labels  map[string]string
+		allowed bool
+	}{
+		{"first equals value", map[string]string{"environment": "production", "team": "payments"}, true},
+		{"second equals value", map[string]string{"environment": "regulated"}, true},
+		{"different value", map[string]string{"environment": "staging"}, false},
+		{"missing declared value", map[string]string{"team": "payments"}, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request, err := iamv1.BindAuthorizationRequestTags(baseRequest, test.labels)
+			if err != nil {
+				t.Fatal(err)
+			}
+			decision, err := evaluatePolicies(context, []iamv1.PolicyVersion{policy}, request)
+			if err != nil || decision.Allowed != test.allowed || decision.ExplicitDeny ||
+				(len(decision.MatchedVersions) == 1) != test.allowed {
+				t.Fatalf("labels=%v allowed=%t decision=%+v err=%v", test.labels, test.allowed, decision, err)
+			}
+		})
+	}
+
+	policy.Document.Statements[0].Conditions[0].Operator = iamv1.PolicyStringNotEquals
+	policy.Document.Statements[0].Conditions[0].Values = []string{"production"}
+	compilePolicyVersionForTest(t, &policy)
+	for _, test := range []struct {
+		name    string
+		labels  map[string]string
+		allowed bool
+	}{
+		{"different present value", map[string]string{"environment": "staging"}, true},
+		{"excluded value", map[string]string{"environment": "production"}, false},
+		{"missing does not grant", nil, false},
+	} {
+		t.Run("not-equals "+test.name, func(t *testing.T) {
+			request, err := iamv1.BindAuthorizationRequestTags(baseRequest, test.labels)
+			if err != nil {
+				t.Fatal(err)
+			}
+			decision, err := evaluatePolicies(context, []iamv1.PolicyVersion{policy}, request)
+			if err != nil || decision.Allowed != test.allowed {
+				t.Fatalf("labels=%v allowed=%t decision=%+v err=%v", test.labels, test.allowed, decision, err)
+			}
+		})
+	}
+}
+
 func TestSourceIPConditionMissingOrCorruptAuthorityFailsClosed(t *testing.T) {
 	context := policyContextForTest(authorityTestTime())
 	resource := iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "network-application"}

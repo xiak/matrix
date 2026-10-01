@@ -108,7 +108,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	const databasePrefix = "matrix_iam_upgrade_predecessor_"
 	const source = "42035189eb823e388509f54525889c1a18c6b79d"
 	const sourceSchema uint64 = 45
-	const currentSchema uint64 = 56
+	const currentSchema uint64 = 57
 	// Actual predecessor admission accepted these 14-byte passwords. The new
 	// executable must replay the sealed bootstrap and verify existing secrets
 	// without admitting them for a new password write.
@@ -444,7 +444,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		}
 	}
 	var shape bool
-	if err := admin.QueryRow(ctx, `SELECT schema_version=56 AND iam.password_history_contract_ready() AND iam.account_security_settings_contract_ready() AND iam.login_session_contract_ready() AND iam.password_attempt_contract_ready()
+	if err := admin.QueryRow(ctx, `SELECT schema_version=57 AND iam.password_history_contract_ready() AND iam.account_security_settings_contract_ready() AND iam.login_session_contract_ready() AND iam.password_attempt_contract_ready()
 	 AND iam.authentication_recovery_contract_ready()
 	 AND to_regprocedure('iam.close_authentication_recovery(jsonb,text,jsonb)') IS NULL
 	 AND NOT EXISTS(SELECT 1 FROM iam.user_credentials c WHERE c.password_history<>'[]'::jsonb
@@ -891,7 +891,7 @@ func provePredecessorAuthenticationRecovery(t *testing.T, ctx context.Context, r
 		}
 		var unchanged bool
 		if err := database.QueryRow(ctx, `SELECT
-			 (SELECT schema_version=56 AND ready FROM iam.readiness())
+			 (SELECT schema_version=57 AND ready FROM iam.readiness())
 		 AND NOT EXISTS(SELECT 1 FROM iam.authenticator_removals)
 		 AND NOT EXISTS(SELECT 1 FROM iam.sessions WHERE last_activity_at IS NOT NULL OR idle_timeout_seconds IS NOT NULL)
 		 AND NOT EXISTS(SELECT 1 FROM iam.user_credentials c WHERE c.password_history<>'[]'::jsonb
@@ -2289,7 +2289,7 @@ func proveFrozenFamilyProfileAdvance(t *testing.T, ctx context.Context, admin *p
 	if err != nil {
 		t.Fatal(err)
 	}
-	const declaration = "\tpaasProfileRevisionThree,"
+	const declaration = "\tpaasProfileRevisionFour,"
 	if strings.Count(string(source), declaration) != 1 {
 		t.Fatal("future source declaration anchor is not unique")
 	}
@@ -2297,7 +2297,7 @@ func proveFrozenFamilyProfileAdvance(t *testing.T, ctx context.Context, admin *p
 	// condition in the future build. Even a resource-nonmatching old Deny must
 	// then fail closed, rather than disappear behind another Allow.
 	replacement := fmt.Sprintf(`func() AuthorizationProfile {
-		profile := paasProfileRevisionThree
+		profile := paasProfileRevisionFour
 		profile.Revision = %d
 		var added AuthorizationProfileAction
 		for index, action := range profile.Actions {
@@ -2775,7 +2775,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	// Exercise the exact source services together without weakening install
 	// admission: the workflow separately proves the published installer rejects
 	// this unmatched database shape before effects.
-	sourceProfile := installationrelease.AuthoritySchemas{IAM: 56, Audit: 30, PaaS: 2}
+	sourceProfile := installationrelease.AuthoritySchemas{IAM: 57, Audit: 30, PaaS: 2}
 	publishedProfile := installationrelease.CurrentDatabaseProfile()
 	if publishedProfile.Authorities == sourceProfile {
 		t.Fatal("unreleased authority source shape was published without a final profile gate")
@@ -3053,15 +3053,24 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		assertPlatformAuthorization(t, replicaEndpoint, developerLogin.Credential, string(developer.ID), "request-replica-platform-revoked", false),
 	)
 	assertPlatformAuditAccess(t, auditEndpoint, developerLogin.Credential, http.StatusForbidden)
-	developerOperation := createPaaSApplication(
+	developerOperation := createPaaSApplicationWithLabels(
 		t,
 		paasEndpoint,
 		developerLogin.Credential,
 		"application-process",
 		"process-application",
 		"create-application-process",
+		map[string]string{"environment": "production", "team": "platform"},
 		http.StatusCreated,
 	)
+	var tagDecisionBound bool
+	if err := admin.QueryRow(ctx, `SELECT contract_version=6
+		AND document->'requestTags'='[{"key":"environment","value":"production"}]'::jsonb
+		FROM iam.authorization_decisions
+		WHERE tenant_id='organization-process' AND principal_id=$1
+		AND action_name='paas.application.create' ORDER BY decided_at DESC LIMIT 1`, developer.ID).Scan(&tagDecisionBound); err != nil || !tagDecisionBound {
+		t.Fatal("independent PaaS and IAM processes did not bind the declared request tag", err)
+	}
 	createPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-nonprefix", "nonprefix-application", "create-application-nonprefix", http.StatusCreated)
 	if developerOperation.Scope != (paasv1.ResourceScope{
 		Kind: paasv1.AuthorityTenant, TenantID: "organization-process",
@@ -3080,6 +3089,33 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		"application-process",
 		string(developer.ID),
 	)
+	tagKey, err := iamv1.NewRequestTagConditionKey("environment")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tagPolicyResponse := performJSON(t, http.MethodPost, iamEndpoint+"/v1/policies", adminLogin.Credential,
+		iamv1.CreatePolicyRequest{DisplayName: "Block restricted application creation", RequestID: "request-process-tag-policy",
+			Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+				Statements: []iamv1.PolicyStatement{{SID: "deny-restricted", Effect: iamv1.PolicyDeny,
+					Actions: []iamv1.Action{iamv1.ActionPaaSApplicationCreate}, Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceAnyInAuthority}},
+					Conditions: []iamv1.PolicyCondition{{Key: tagKey, Operator: iamv1.PolicyStringEquals, Values: []string{"restricted"}}}}}}})
+	var tagPolicy iamv1.PolicyDetail
+	if tagPolicyResponse.Status != http.StatusCreated || json.Unmarshal(tagPolicyResponse.Body, &tagPolicy) != nil || iamv1.ValidatePolicyDetail(tagPolicy) != nil {
+		t.Fatalf("request-tag policy publication status=%d", tagPolicyResponse.Status)
+	}
+	tagAttachment := createIAMPolicyAttachment(t, replicaEndpoint, adminLogin.Credential, developer.ID, tagPolicy.Policy.ID, "request-process-tag-attach")
+	createPaaSApplicationWithLabels(t, paasEndpoint, developerLogin.Credential, "application-restricted", "restricted-application", "create-application-restricted",
+		map[string]string{"environment": "restricted"}, http.StatusForbidden)
+	getPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-restricted", http.StatusNotFound)
+	var deniedTagDecisionBound bool
+	if err := admin.QueryRow(ctx, `SELECT contract_version=6 AND NOT allowed
+		AND document->'requestTags'='[{"key":"environment","value":"restricted"}]'::jsonb
+		FROM iam.authorization_decisions
+		WHERE tenant_id='organization-process' AND principal_id=$1
+		AND action_name='paas.application.create' ORDER BY decided_at DESC LIMIT 1`, developer.ID).Scan(&deniedTagDecisionBound); err != nil || !deniedTagDecisionBound {
+		t.Fatal("request-tag Deny lost its exact trusted fact", err)
+	}
+	revokeIAMPolicyAttachment(t, iamEndpoint, adminLogin.Credential, tagAttachment.ID, tagAttachment.ResourceVersion, "request-process-tag-revoke")
 	revokeIAMPolicyAttachment(t, iamEndpoint, adminLogin.Credential, developerBinding.ID, 1, "request-revoke-developer-binding")
 	// The policy editor's real read path returns whole registered declarations,
 	// not a second embedded catalog or a reusable permission. Compile only from
@@ -3337,7 +3373,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	if err := admin.QueryRow(ctx, `SELECT contract_version,document#>>'{networkContext,sourceIp}',
 		document::text LIKE '%203.0.113.%' FROM iam.authorization_decisions
 		WHERE tenant_id='organization-process' AND request_id=$1`, requestID).Scan(&contractVersion, &storedSourceIP, &leakedForwarded); err != nil ||
-		requestID == "" || contractVersion != 5 || storedSourceIP != peer.String() || leakedForwarded {
+		requestID == "" || contractVersion != 6 || storedSourceIP != peer.String() || leakedForwarded {
 		t.Fatalf("product decision did not bind the exact socket peer request=%q contract=%d source=%q forwarded=%t err=%v",
 			requestID, contractVersion, storedSourceIP, leakedForwarded, err)
 	}
@@ -3359,7 +3395,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	if err := admin.QueryRow(ctx, `SELECT contract_version,document#>>'{networkContext,sourceIp}',allowed
 		FROM iam.authorization_decisions WHERE tenant_id='organization-process' AND request_id=$1`,
 		alternateRead.Header.Get("X-Request-ID")).Scan(&contractVersion, &storedSourceIP, &alternateAllowed); err != nil ||
-		contractVersion != 5 || storedSourceIP != "127.0.0.2" || alternateAllowed {
+		contractVersion != 6 || storedSourceIP != "127.0.0.2" || alternateAllowed {
 		t.Fatalf("denied process decision lost its actual network peer contract=%d source=%q allowed=%t err=%v",
 			contractVersion, storedSourceIP, alternateAllowed, err)
 	}
@@ -10043,6 +10079,19 @@ func createPaaSApplication(
 	idempotencyKey string,
 	status int,
 ) paasv1.Operation {
+	return createPaaSApplicationWithLabels(t, endpoint, bearer, id, name, idempotencyKey, nil, status)
+}
+
+func createPaaSApplicationWithLabels(
+	t *testing.T,
+	endpoint string,
+	bearer string,
+	id paasv1.ResourceID,
+	name string,
+	idempotencyKey string,
+	labels map[string]string,
+	status int,
+) paasv1.Operation {
 	t.Helper()
 	response := performJSONWithIdempotency(
 		t,
@@ -10050,7 +10099,7 @@ func createPaaSApplication(
 		endpoint+"/v1/applications",
 		bearer,
 		idempotencyKey,
-		paasv1.CreateApplicationRequest{ID: id, Name: name},
+		paasv1.CreateApplicationRequest{ID: id, Name: name, Labels: labels},
 	)
 	if response.Status != status {
 		t.Fatalf("create PaaS application %s status=%d want=%d", id, response.Status, status)
