@@ -6,8 +6,8 @@
 - Updated: 2026-10-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `1566e22c4`
-- Pushed documentation milestone: `47b5915aa`
+- Pushed source/embed milestone: `ef81bb30c`
+- Pushed documentation milestone: `2efd6d363`
 
 ## Authoritative route
 
@@ -29,29 +29,26 @@ compaction or handoff, then validate it against Git and the linked FEAT.
 ## Latest pushed milestone
 
 The independent DEV MOCK remains available at `http://127.0.0.1:4317`, and
-login verification remains disabled for UX review. Application Hosting now
-has an inspectable Deployment lifecycle preview that keeps Application
-identity separate from desired Deployment state, immutable generations and
-asynchronous Operations. Update, stop and rollback use stable title actions
-and content-area review instead of Dialogs. Stop changes only `desiredState`;
-rollback admits only earlier accepted `RUNNING` generations. Reviews expose
-the strong ETag, IAM Action and caller request identity without Secret data.
-The preview distinguishes initial `202 / ACCEPTED` from equal-replay `200`
-with the original terminal Operation, re-reads Deployment after completion,
-requires re-review after `412`, and never offers blind retry for `403` or the
-closed `409` outcomes.
+login verification remains disabled for UX review. The Audit directory now
+uses the exact Action as the single semantic record entry. Source, occurrence
+time and sequence share one secondary event line, removing the low-value
+standalone time column. Actor context exposes only public non-secret AccessKey
+attribution or complete Role-session lineage. Record detail makes producer
+source the primary source fact instead of repeating Action as both label and
+value. The fixed tenant boundary, collapsed structured query, signed opaque
+cursor, integrity verification and no-LIVE-fallback behavior are unchanged.
 
-Source and synchronized embed are pushed at `1566e22c4`; FEAT evidence is
-pushed at `47b5915aa`. The focused renderer/scene run passed 76 cases and the
-complete frontend gate passed 57 files/937 cases plus three normalization
-cases, typecheck/lint/architecture/228-pair style checks, 42-route export,
-233-file embed equality and repository Go test/vet. Desktop and `390 x 844`
-DEV checks found no Dialog, horizontal overflow or browser warning/error.
+Source and synchronized embed are pushed at `ef81bb30c`; FEAT evidence is
+pushed at `2efd6d363`. The focused renderer passed four cases and the complete
+frontend gate passed 57 files/937 cases plus three normalization cases,
+typecheck/lint/architecture/228-pair style checks, 42-route export, 233-file
+embed equality and repository Go test/vet. Desktop and `390 x 844` DEV checks
+found no Dialog, horizontal overflow or browser warning/error.
 
-Earlier AccessKey carrier, same-User permission-source handoff, Application tag
-recovery, service authorization, policy compilation/provenance and shared
-navigation/loading milestones remain owned and indexed by FEAT-007; load only
-the relevant evidence row when resuming them.
+Earlier Deployment lifecycle, AccessKey carrier, same-User permission-source
+handoff, Application tag recovery, service authorization, policy
+compilation/provenance and shared navigation/loading milestones remain owned
+and indexed by FEAT-007; load only the relevant evidence row when resuming them.
 
 ## Continuation boundary
 
@@ -74,7 +71,10 @@ only appear as isolated MOCK meanwhile. Revision 12 is pushed at implementation
 `sha256:ec6ef98cd9b4939cbbdd05632c8fbd28ff8ce79d98466ce98103c3fae30699b6`;
 its independent CI `36870473445` is pending, so its Application-label
 AccessKey work is not a LIVE console dependency. Do not label programmatic
-product access LIVE or add a browser signature/test-request flow.
+product access LIVE or add a browser signature/test-request flow. IAM is
+currently validating a later tenant Audit query/integrity AccessKey carrier;
+consume it only after the engineer returns fixed exact Actions, Profile
+revision/digest, public request boundary and independent gate status.
 Continue without reintroducing whole-page loading, hidden broad Context
 subscriptions, fabricated totals, duplicate components or login verification
 before UX acceptance.
