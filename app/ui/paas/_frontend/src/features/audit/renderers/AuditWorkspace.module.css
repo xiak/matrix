@@ -13,14 +13,15 @@
 .filterActions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--xiak-spacing-tight); }
 .collection { min-width: 0; border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); overflow: hidden; }
 .collectionStatus { display: flex; min-height: var(--xiak-control-height); flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-tight); padding: var(--xiak-spacing-tight) var(--xiak-spacing-default); border-bottom: var(--xiak-border-subtle); color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
-.auditTable { min-width: 900px; table-layout: fixed; }
-.auditTable th:first-child { width: 190px; }
-.auditTable th:last-child { width: 110px; }
+.auditTable { min-width: 820px; table-layout: fixed; }
+.auditTable th:first-child { width: 310px; }
+.auditTable th:last-child { width: 100px; }
 .auditTable td { min-width: 0; vertical-align: top; overflow-wrap: anywhere; }
 .auditTable td > small, .auditTable td > strong { display: block; }
 .auditTable td > small { margin-top: var(--xiak-spacing-narrow); color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
 .auditTable code { white-space: normal; overflow-wrap: anywhere; }
-.recordLink { border: 0; padding: 0; background: transparent; color: var(--xiak-color-accent-text); cursor: pointer; font: inherit; text-align: start; }
+.recordLink { display: block; max-width: 100%; border: 0; padding: 0; background: transparent; color: var(--xiak-color-accent-text); cursor: pointer; font: inherit; text-align: start; }
+.recordLink code { color: inherit; white-space: normal; word-break: normal; overflow-wrap: break-word; }
 .recordLink:hover { text-decoration: underline; }
 .recordLink:focus-visible { outline: 2px solid var(--xiak-color-border-focus); outline-offset: 2px; }
 .sectionTitle { margin: 0 0 var(--xiak-spacing-default); color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-subtitle); }

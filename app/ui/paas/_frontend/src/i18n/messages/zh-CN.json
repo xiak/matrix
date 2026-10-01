@@ -2721,8 +2721,7 @@
       "page": "第 {page} 页"
     },
     "columns": {
-      "time": "发生时间",
-      "action": "Action / 来源",
+      "action": "事件",
       "actor": "操作者",
       "target": "目标资源",
       "result": "结果"
@@ -2754,7 +2753,7 @@
     "detail": {
       "title": "审计记录 #{sequence}",
       "context": "操作上下文",
-      "source": "Action / 来源",
+      "source": "事件来源",
       "authority": "权限域",
       "roleLineage": "角色会话 {session} · 来源 {source}",
       "accessKeyLineage": "用户密钥 {accessKey}",

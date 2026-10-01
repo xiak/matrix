@@ -2721,8 +2721,7 @@
       "page": "Page {page}"
     },
     "columns": {
-      "time": "Occurred",
-      "action": "Action / source",
+      "action": "Event",
       "actor": "Actor",
       "target": "Target",
       "result": "Result"
@@ -2754,7 +2753,7 @@
     "detail": {
       "title": "Audit record #{sequence}",
       "context": "Activity context",
-      "source": "Action / source",
+      "source": "Event source",
       "authority": "Authority",
       "roleLineage": "Role session {session} · source {source}",
       "accessKeyLineage": "User key {accessKey}",

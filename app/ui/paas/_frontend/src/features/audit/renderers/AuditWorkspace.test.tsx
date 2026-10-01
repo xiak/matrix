@@ -18,6 +18,9 @@ describe("AuditWorkspace", () => {
     expect(screen.getByText("租户边界来自当前 IAM 会话")).toBeTruthy();
     const table = await screen.findByRole("table", { name: "审计记录" });
     expect(within(table).getAllByRole("row")).toHaveLength(11);
+    expect(within(table).getAllByRole("columnheader").map((cell) => cell.textContent)).toEqual(["事件", "操作者", "目标资源", "结果"]);
+    expect(within(table).getByRole("button", { name: "audit.records.read" })).toBeTruthy();
+    expect(within(table).getByText("用户密钥 key-audit-preview")).toBeTruthy();
     expect(screen.queryByRole("searchbox")).toBeNull();
     expect(screen.queryByLabelText("开始时间")).toBeNull();
     expect(screen.getByRole("button", { name: "查询条件" }).getAttribute("aria-expanded")).toBe("false");
@@ -32,14 +35,17 @@ describe("AuditWorkspace", () => {
     const user = userEvent.setup();
     render(<LocaleProvider><AuditWorkspace preview /></LocaleProvider>);
     const table = await screen.findByRole("table", { name: "审计记录" });
-    const opener = within(table).getAllByRole("button")[0]!;
+    const opener = within(table).getByRole("button", { name: "audit.records.read" });
 
     await user.click(opener);
     expect(screen.getByRole("heading", { level: 1, name: /审计记录 #114/ })).toBeTruthy();
     expect(screen.getByText("哈希链证据")).toBeTruthy();
+    const source = screen.getByText("事件来源").closest("div")!;
+    expect(within(source).getByText("AUDIT")).toBeTruthy();
+    expect(within(source).getByText("audit.records.read")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "返回审计记录" }));
     expect(await screen.findByRole("table", { name: "审计记录" })).toBeTruthy();
-    expect(document.activeElement).toBe(within(screen.getByRole("table", { name: "审计记录" })).getAllByRole("button")[0]);
+    expect(document.activeElement).toBe(within(screen.getByRole("table", { name: "审计记录" })).getByRole("button", { name: "audit.records.read" }));
 
     await user.click(screen.getByRole("button", { name: "校验完整性" }));
     expect(screen.getByRole("heading", { level: 1, name: "审计链完整性校验" })).toBeTruthy();

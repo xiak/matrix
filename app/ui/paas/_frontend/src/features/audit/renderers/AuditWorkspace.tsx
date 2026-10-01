@@ -110,7 +110,7 @@ function RecordDetail({ record, onBack }: { record: AuditRecord; onBack(): void 
           <dl className={styles.facts}>
             <div><dt>{t("columns.actor")}</dt><dd><strong>{event.actor.id}</strong><small>{event.actor.type === "ROLE" ? t("detail.roleLineage", { session: event.actor.roleSession.sessionId, source: event.actor.roleSession.sourceUserId ?? event.actor.roleSession.sourceServicePrincipalId }) : event.actor.type === "USER" && event.actor.accessKeyId ? t("detail.accessKeyLineage", { accessKey: event.actor.accessKeyId }) : t(`actorTypes.${event.actor.type}`)}</small></dd></div>
             <div><dt>{t("columns.target")}</dt><dd><strong>{event.target.id}</strong><small>{event.target.kind}</small></dd></div>
-            <div><dt>{t("detail.source")}</dt><dd><strong>{event.action}</strong><small>{record.source}</small></dd></div>
+            <div><dt>{t("detail.source")}</dt><dd><strong>{record.source}</strong><small><code>{event.action}</code></small></dd></div>
             <div><dt>{t("detail.authority")}</dt><dd><strong>{t(`authority.${event.authorityKind}`)}</strong><small>{authorityId(event)}</small></dd></div>
             <div><dt>{t("detail.retention")}</dt><dd><strong>{t("detail.indefinite")}</strong><small>{t("detail.ingested", { time: format.dateTime(new Date(record.ingestedAt), { dateStyle: "medium", timeStyle: "long" }) })}</small></dd></div>
           </dl>
@@ -331,11 +331,10 @@ export function AuditWorkspace({ preview = false }: { preview?: boolean }) {
         {!error && page ? <div className={styles.collection} aria-busy={loading || undefined}>
           <div className={styles.collectionStatus}><span role="status">{status}</span>{loading ? <span>{t("directory.refreshing")}</span> : null}</div>
           {page.records.length ? <Table aria-label={t("directory.table")} className={styles.auditTable} mobileLayout="stack">
-            <thead><tr><th scope="col">{t("columns.time")}</th><th scope="col">{t("columns.action")}</th><th scope="col">{t("columns.actor")}</th><th scope="col">{t("columns.target")}</th><th scope="col">{t("columns.result")}</th></tr></thead>
+            <thead><tr><th scope="col">{t("columns.action")}</th><th scope="col">{t("columns.actor")}</th><th scope="col">{t("columns.target")}</th><th scope="col">{t("columns.result")}</th></tr></thead>
             <tbody>{page.records.map((record) => <tr key={record.sequence}>
-              <td data-label={t("columns.time")}><button className={styles.recordLink} ref={(node) => { if (node) rowButtons.current.set(record.sequence, node); else rowButtons.current.delete(record.sequence); }} onClick={() => { opener.current = record.sequence; setSelected(record); }}>{format.dateTime(new Date(record.event.occurredAt), { dateStyle: "medium", timeStyle: "short" })}</button><small>#{record.sequence}</small></td>
-              <td data-label={t("columns.action")}><code>{record.event.action}</code><small>{record.source}</small></td>
-              <td data-label={t("columns.actor")}><strong>{record.event.actor.id}</strong><small>{t(`actorTypes.${record.event.actor.type}`)}</small></td>
+              <td data-label={t("columns.action")}><button className={styles.recordLink} ref={(node) => { if (node) rowButtons.current.set(record.sequence, node); else rowButtons.current.delete(record.sequence); }} onClick={() => { opener.current = record.sequence; setSelected(record); }}><code>{record.event.action}</code></button><small>{record.source} · {format.dateTime(new Date(record.event.occurredAt), { dateStyle: "medium", timeStyle: "short" })} · #{record.sequence}</small></td>
+              <td data-label={t("columns.actor")}><strong>{record.event.actor.id}</strong><small>{record.event.actor.type === "ROLE" ? t("detail.roleLineage", { session: record.event.actor.roleSession.sessionId, source: record.event.actor.roleSession.sourceUserId ?? record.event.actor.roleSession.sourceServicePrincipalId }) : record.event.actor.type === "USER" && record.event.actor.accessKeyId ? t("detail.accessKeyLineage", { accessKey: record.event.actor.accessKeyId }) : t(`actorTypes.${record.event.actor.type}`)}</small></td>
               <td data-label={t("columns.target")}><strong>{record.event.target.id}</strong><small>{record.event.target.kind}</small></td>
               <td data-label={t("columns.result")}><Badge status={record.event.result === "DENIED" ? "danger" : record.event.result === "ACCEPTED" ? "info" : "success"}>{t(`results.${record.event.result}`)}</Badge></td>
             </tr>)}</tbody>
