@@ -6,8 +6,8 @@
 - Updated: 2026-10-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `2072b3639`
-- Pushed documentation milestone: `56cbd54f9`
+- Pushed source/embed milestone: `1566e22c4`
+- Pushed documentation milestone: `47b5915aa`
 
 ## Authoritative route
 
@@ -29,22 +29,24 @@ compaction or handoff, then validate it against Git and the linked FEAT.
 ## Latest pushed milestone
 
 The independent DEV MOCK remains available at `http://127.0.0.1:4317`, and
-login verification remains disabled for UX review. MOCK/LIVE Role session and
-policy-version directories no longer spend separate columns on one
-row-specific overflow command. Session actions stay beside observed lifecycle;
-version actions stay beside the non-default version identifier. Capability
-gating, inline confirmation/review, unknown-result identity and focus return
-remain unchanged. One shared row-action cell owns both layouts.
+login verification remains disabled for UX review. Application Hosting now
+has an inspectable Deployment lifecycle preview that keeps Application
+identity separate from desired Deployment state, immutable generations and
+asynchronous Operations. Update, stop and rollback use stable title actions
+and content-area review instead of Dialogs. Stop changes only `desiredState`;
+rollback admits only earlier accepted `RUNNING` generations. Reviews expose
+the strong ETag, IAM Action and caller request identity without Secret data.
+The preview distinguishes initial `202 / ACCEPTED` from equal-replay `200`
+with the original terminal Operation, re-reads Deployment after completion,
+requires re-review after `412`, and never offers blind retry for `403` or the
+closed `409` outcomes.
 
-Source and synchronized embed are pushed at `2072b3639`; FEAT evidence is
-pushed at `56cbd54f9`. The final focused run passed 284 cases and the complete
-frontend gate passed 57 files/933 cases plus three normalization cases,
-typecheck/lint/architecture/228-pair style checks, 42-route export, 233-file
-embed equality and repository Go test/vet. At `390 x 844`, policy versions
-showed only Version/Created facts with the menu beside the non-default version;
-document and body matched the viewport with no Dialog, overflow or browser
-warning/error. The empty Role-session administrator snapshot remained an
-honest data state rather than a fabricated row.
+Source and synchronized embed are pushed at `1566e22c4`; FEAT evidence is
+pushed at `47b5915aa`. The focused renderer/scene run passed 76 cases and the
+complete frontend gate passed 57 files/937 cases plus three normalization
+cases, typecheck/lint/architecture/228-pair style checks, 42-route export,
+233-file embed equality and repository Go test/vet. Desktop and `390 x 844`
+DEV checks found no Dialog, horizontal overflow or browser warning/error.
 
 Earlier AccessKey carrier, same-User permission-source handoff, Application tag
 recovery, service authorization, policy compilation/provenance and shared
@@ -65,8 +67,14 @@ fixed at implementation `05336ad368996a500c0769fe62767204bd9333d0`, evidence
 its independent CI `36864073811` is still pending. Do not add revision 10 or 11
 Actions to the accepted carrier set until the applicable independent run is a
 successful terminal result. Revision 11 Deployment update/stop/rollback may
-only appear as isolated MOCK meanwhile. Do not label programmatic product
-access LIVE or add a browser signature/test-request flow.
+only appear as isolated MOCK meanwhile. Revision 12 is pushed at implementation
+`4433b7ac00fec3ae7e2fdae35fad4bbdc4cf9238`, attack-gate evidence
+`c83c38d7b91aa17003c2d217fd509eaba37d98d5`, FEAT/remote head
+`76048c52db248da2619d9d3e662394551e6f1ab1` and digest
+`sha256:ec6ef98cd9b4939cbbdd05632c8fbd28ff8ce79d98466ce98103c3fae30699b6`;
+its independent CI `36870473445` is pending, so its Application-label
+AccessKey work is not a LIVE console dependency. Do not label programmatic
+product access LIVE or add a browser signature/test-request flow.
 Continue without reintroducing whole-page loading, hidden broad Context
 subscriptions, fabricated totals, duplicate components or login verification
 before UX acceptance.
