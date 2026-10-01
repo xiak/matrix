@@ -6,8 +6,8 @@
 - Updated: 2026-10-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `e79cb85d1`
-- Pushed documentation milestone: `7979b50ce`
+- Pushed source/embed milestone: `16948ac91`
+- Pushed documentation milestone: `41286d2c3`
 
 ## Authoritative route
 
@@ -47,6 +47,12 @@ and exactly five carrier Actions: `paas.application.create`,
 MOCK copies only that immutable-resource graph and never infers support from an
 HTTP method, namespace or collection shape.
 
+Once this exact carrier set is non-empty, the workspace offers one same-User
+next task without claiming authorization: MOCK opens policy-source inspection
+with the exact User ID and LIVE opens that User's detail. The copy keeps this a
+policy/group configuration review; request-time Action, resource, condition and
+explicit-deny evaluation remain outside the browser.
+
 The isolated MOCK also groups the six public outcomes into one collapsed table
 instead of repeating them for each Action: `202 Operation`,
 `400 INVALID_ARGUMENT`, `401 UNAUTHENTICATED`, `403 PERMISSION_DENIED`,
@@ -57,13 +63,14 @@ confirmation plus a new nonce after uncertain `503` instead of automatic
 intent replay. LIVE receives only the lazy read-only catalog and never renders
 this outcome fixture or signs/sends a product request.
 
-Source and synchronized embed are pushed at `e79cb85d1`; FEAT evidence is
-pushed at `7979b50ce`. The complete 57-file/931-case frontend suite and three
+Source and synchronized embed are pushed at `16948ac91`; FEAT evidence is
+pushed at `41286d2c3`. The complete 57-file/931-case frontend suite and three
 normalization cases passed with typecheck/lint/architecture/228-pair style
 gates, 42-route export, 233-file embed equality and full repository Go
 test/vet. Desktop and `390 x 844` DEV verified the exact five-Action result,
-collapsed filters and outcome disclosure, document/body equal to the 390px
-viewport, no Dialog or overflow and a clean browser warning/error log.
+same-User `principal-lin` handoff, collapsed filters and outcome disclosure,
+document/body equal to the 390px viewport, no Dialog or overflow and a clean
+browser warning/error log.
 
 The previously pushed Application tag recovery, AccessKey owner directory,
 policy-compilation provenance, service-authorization, policy-coverage, Audit,
