@@ -6,9 +6,9 @@
 - Updated: 2026-10-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `d42b3b06`
+- Pushed source/embed milestone: `3ffca742`
 - Pushed strict-contract test follow-up: `160b6be4`
-- Pushed documentation milestone: `be087fae`
+- Pushed documentation milestone: `c82c20b3`
 
 ## Authoritative route
 
@@ -35,8 +35,8 @@ missing-tag, per-resource recheck and collection-boundary behavior. The browser
 authors only policy syntax; it never submits or overrides trusted resource
 facts and does not present resource-tag mutation as policy authoring.
 
-Source and synchronized 233-file embed are pushed at `d42b3b06`; FEAT evidence
-is pushed at `be087fae`. The isolated four-method resource-tag preview now scopes
+Resource-tag wording source/embed are pushed at `d42b3b06`. The isolated
+four-method resource-tag preview now scopes
 its request-tag omission to that preview and directs catalog-driven behavior to
 the selected Product Profile, avoiding a false platform-wide limitation. Strict
 negative coverage at `160b6be4` rejects unknown
@@ -51,6 +51,15 @@ The wording-alignment follow-up additionally passed the 174-case access workspac
 suite, frontend typecheck/lint, the 42-route export, 233-file embed equality and
 the UI embed host Go test/vet. A fresh `430 x 900` check kept viewport, document
 and body width at 430px, rendered the scoped state and used no Dialog.
+
+The latest source and synchronized embed are pushed at `3ffca742`; FEAT evidence
+is pushed at `c82c20b3`. The Profile-driven Action selector now gives a visible
+compatible/incompatible count and a specific reason on every disabled row,
+without widening the exact statement or IAM wire. Compatibility derivation is
+memoized across local search, selected-only filtering and pagination. Its
+99-case LIVE account renderer, type/lint/architecture/style, 42-route export,
+233-file embed and UI host Go gates passed. Desktop and `430 x 900` DEV showed
+the count and row reason with no Dialog or document overflow.
 
 The previously pushed AccessKey owner directory, policy-compilation provenance,
 service-authorization, policy-coverage, Audit, cross-service loading/navigation
