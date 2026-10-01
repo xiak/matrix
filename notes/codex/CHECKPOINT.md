@@ -6,8 +6,8 @@
 - Updated: 2026-10-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `91e969c5`
-- Pushed documentation milestone: `91e969c5`
+- Pushed source/embed milestone: `55004453`
+- Pushed documentation milestone: `55004453`
 
 ## Authoritative route
 
@@ -88,16 +88,20 @@ product-PEP browser evidence remain closed. Source/embed `60b60619` passed the
 full 55-file/899-test frontend, export/embed and focused Go UI host gates; its
 contract and limitations are owned by FEAT-IAM-010 at `8aeed58b`.
 
-The retained four-method MOCK policy author now presents a reusable tag trust
-boundary during editing and final review. It separates product-supplied
-resource-tag facts, policy resource-tag conditions, not-yet-connected request
-tag mutations and management-only identity/policy tags. Missing or unknown
-trusted facts never imply a match, and resource-tag mutation is described as a
-separately authorized and audited action. No request-tag field, evaluator or
-LIVE wire was invented. Source/embed `f4430afa` passed the full 55-file/899-test
-frontend, export/embed and focused Go UI host gates; desktop and `390 × 844`
-DEV inspection had no overflow and a fresh tab had no warning/error. The
-contract and limits are owned by FEAT-IAM-010 at `ec558f65`.
+The shared LIVE/isolated-MOCK visual policy author now derives condition choices
+from the selected Actions' exact Profile capability intersection. Fixed IAM
+source `710c1557f48611179715671cac76ff4dfe447c1b` adds trusted
+`request.source-ip` to the PaaS revision-4 Profile and adds
+`request.tag/environment` only to `paas.application.create`. Strict parsing,
+authoring and review enforce the fixed operators, CIDR/tag value bounds and
+missing-tag semantics without accepting arbitrary request tags or sending an
+internal AuthorizationRequest. Resource-tag ABAC and tag mutation remain
+disabled because their contract is not frozen. Source/embed/docs `55004453`
+passed 57 frontend files / 913 tests, static normalization,
+type/lint/architecture, 228 theme contrast pairs, 40-page export, 233-file
+embed equality and Go web test/vet. A `390 × 844` DEV flow authored and reviewed
+`environment = production` without horizontal overflow. FEAT-007 owns the UX
+evidence and FEAT-IAM-010 owns the backend semantics and exclusions.
 
 Audit is now an independent console product rather than an IAM submenu. The
 record directory exposes only the accepted bounded time, Action, actor,
@@ -134,11 +138,13 @@ authorization page.
 
 Keep permission analysis as the explicitly isolated, non-evaluating worksheet.
 Do not reintroduce a risk score, effective-permission result, Deny reason tree,
-remediation action or future API. Trusted-tag authorization remains outside the
-current executable LIVE UI; the MOCK author must stay non-evaluating until the
-IAM contract is fixed and independently verified. Treat IAM batch authorization only as a product-side
-server filtering candidate until its exact pushed source, fields and calling
-boundary are fixed; never reinterpret it as customer bulk authorization.
+remediation action or future API. Request-context authoring may consume only
+exact Profile capabilities from the fixed IAM source; do not add resource-tag
+fields, arbitrary `resource.tag/*`, tag mutations or permission names until IAM
+publishes their fixed contract. Treat IAM batch authorization only as a
+product-side server filtering candidate until its exact pushed source, fields
+and calling boundary are fixed; never reinterpret it as customer bulk
+authorization.
 
 Continue the console-wide UX audit from the next uncovered customer workflow,
 preserving fixed page structure, localized data loading, compact responsive
