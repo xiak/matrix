@@ -1353,6 +1353,8 @@ describe("IAM HTTP account boundary", () => {
       { ...body, version: { ...version, document: { ...document, statements: [{ ...document.statements[0], resources: [{ kind: "OTHER", match: "ANY_IN_AUTHORITY" }] }] } } },
       { ...body, version: { ...version, document: { ...document, statements: [{ ...document.statements[0], conditions: [{ key: "request.source-ip", operator: "IP_ADDRESS", values: ["192.0.2.42/24"] }] }] } } },
       { ...body, version: { ...version, document: { ...document, statements: [{ ...document.statements[0], conditions: [{ key: "request.tag/environment", operator: "STRING_EQUALS", values: [" production"] }] }] } } },
+      { ...body, version: { ...version, document: { ...document, statements: [{ ...document.statements[0], conditions: [{ key: "resource.tag/environment", operator: "STRING_EQUALS", values: [" production"] }] }] } } },
+      { ...body, version: { ...version, document: { ...document, statements: [{ ...document.statements[0], conditions: [{ key: "resource.tag/team", operator: "STRING_EQUALS", values: ["platform"] }] }] } } },
       { ...body, version: { ...version, extra: true } }
     ]) {
       reply(invalid);
@@ -1585,6 +1587,15 @@ describe("IAM HTTP account boundary", () => {
       { key: "request.tag/environment", valueType: "STRING", source: "CALLING_SERVICE_REQUEST_TAG" },
       { key: "resource.tag/environment", valueType: "STRING", source: "CALLING_SERVICE_RESOURCE_TAG" }
     ]);
+    for (const condition of [
+      { key: "resource.tag/environment", valueType: "STRING", source: "CALLING_SERVICE_REQUEST_TAG" },
+      { key: "resource.tag/environment", valueType: "IP", source: "CALLING_SERVICE_RESOURCE_TAG" },
+      { key: "resource.tag/team", valueType: "STRING", source: "CALLING_SERVICE_RESOURCE_TAG" }
+    ]) {
+      reply({ apiVersion, kind: "AuthorizationProfileList", accountId: account.id, items: [{ ...entry,
+        profile: { ...entry.profile, actions: [{ ...entry.profile.actions[0]!, conditions: [condition] }] } }] });
+      await expect(httpAccountRepository.listAuthorizationProfiles("bearer")).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
   });
 
   it("reads the platform service-role template directory without an account selector or request body", async () => {

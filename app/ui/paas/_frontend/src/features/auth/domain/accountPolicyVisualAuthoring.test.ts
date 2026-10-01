@@ -104,6 +104,8 @@ describe("lossless catalog-backed policy visual authoring", () => {
     expect(visualDraftHasIncompleteFields(resourceResult.document)).toBe(false);
     expect(visualDraftHasIncompleteFields({ ...resourceResult.document, statements: [{ ...resourceResult.document.statements[0]!,
       conditions: [{ key: "resource.tag/environment", operator: "STRING_EQUALS", values: [" production"] }] }] })).toBe(true);
+    expect(visualDraftFromJSON(JSON.stringify({ ...resourceTagged, statements: [{ ...statement,
+      conditions: [{ key: "resource.tag/team", operator: "STRING_EQUALS", values: ["platform"] }] }] }), capabilityCatalog).status).toBe("catalogMismatch");
   });
   it("permits an empty visual starting point only in a new-policy editor, never at review", () => {
     const empty = JSON.stringify({ languageVersion: "1", scope: "TENANT", statements: [] });
