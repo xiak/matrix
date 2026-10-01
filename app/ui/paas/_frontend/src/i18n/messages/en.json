@@ -3278,6 +3278,31 @@
       "applyBoundary": "This updates only the MOCK snapshot in the current browser session. LIVE sends the current strong ETag as If-Match and retries the same intent safely. If the resource version changed, it reloads the resource and asks you to confirm instead of overwriting another change.",
       "back": "Back to edit",
       "apply": "Simulate apply",
+      "tryOtherOutcomes": "Try other service outcomes",
+      "scenarioLabel": "Next simulated response",
+      "scenarioHint": "This changes only the next MOCK submission to verify recovery behavior for the real contract. It never calls the backend.",
+      "scenarios": {
+        "success": "Success",
+        "noChange": "409 · No change required",
+        "idempotencyConflict": "409 · Request intent conflict",
+        "versionConflict": "412 · Resource version changed",
+        "denied": "403 · Permission denied",
+        "unavailable": "503 · IAM unavailable",
+        "responseLost": "Response interrupted · outcome unknown"
+      },
+      "outcomes": {
+        "noChange": "CONFLICT · The current value already satisfies the request, so there is no change to perform. No new operation was created; go back to edit or cancel.",
+        "idempotencyConflict": "IDEMPOTENCY_CONFLICT · The original request identity is already bound to another intent, so this change was not applied. Go back to edit and review any later submission as a new change intent.",
+        "versionConflict": "RESOURCE_VERSION_CONFLICT · The resource changed after review. The latest tags and ETag have been reloaded; inspect the new current value before confirming against the new version.",
+        "denied": "FORBIDDEN · The current identity is no longer allowed to make this change, so nothing was applied. Do not repeat the submission; review access or contact an administrator.",
+        "unavailable": "IDENTITY_PROVIDER_UNAVAILABLE · IAM could not complete authorization and this result was not submitted. Retrying the same change intent is safe and will not create a duplicate operation.",
+        "responseLost": "The response was interrupted before the terminal result arrived, so the outcome is unknown. Do not create a new change; safely retry the same intent to obtain the original operation result."
+      },
+      "retry": {
+        "versionConflict": "Submit against new version",
+        "unavailable": "Retry same change",
+        "responseLost": "Safely retry same intent"
+      },
       "outcome": {
         "title": "Latest simulated operation",
         "operationId": "Operation ID",

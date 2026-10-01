@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
 import { ArrowRight, Tags } from "lucide-react";
 import { Alert, Badge, Button, Card, EmptyState, FormField, Input, RadioGroup, Select, Steps, Table, Typography, useUnsavedChanges } from "@ui/xiak";
 import { useTranslations } from "next-intl";
@@ -12,6 +12,8 @@ import styles from "./ApplicationTagManagement.module.css";
 type MutationKind = "set" | "delete";
 type WorkflowStep = "edit" | "review";
 type DraftError = "key" | "value" | "unchanged" | "missing" | "limit" | "sensitive" | null;
+type PreviewOutcome = "success" | "noChange" | "idempotencyConflict" | "versionConflict" | "denied" | "unavailable" | "responseLost";
+type FailedAttempt = Exclude<PreviewOutcome, "success">;
 type MockCompletedOperation = {
   id: string;
   action: "paas.application-label.set" | "paas.application-label.delete";
@@ -60,12 +62,15 @@ export function ApplicationTagManagement({ resource, initialSnapshot }: {
   const t = useTranslations("CloudExperience");
   const w = useTranslations("CloudExperience.applicationTagManagement");
   const format = useConsoleFormat();
+  const scenarioId = useId();
   const [snapshot, setSnapshot] = useState(initialSnapshot);
   const [step, setStep] = useState<WorkflowStep | null>(null);
   const [kind, setKind] = useState<MutationKind>("set");
   const [key, setKey] = useState("");
   const [value, setValue] = useState("");
   const [error, setError] = useState<DraftError>(null);
+  const [scenario, setScenario] = useState<PreviewOutcome>("success");
+  const [attempt, setAttempt] = useState<FailedAttempt | null>(null);
   const [lastChange, setLastChange] = useState<{ kind: MutationKind; key: string; value?: string; etag: string; operation: MockCompletedOperation } | null>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const manageRef = useRef<HTMLButtonElement>(null);
@@ -74,8 +79,10 @@ export function ApplicationTagManagement({ resource, initialSnapshot }: {
   const valueRef = useRef<HTMLInputElement>(null);
   const deleteRef = useRef<HTMLButtonElement>(null);
   const restoreManageFocus = useRef(false);
+  const requestIdRef = useRef("");
   const tags = snapshot?.tags ?? [];
   const current = tags.find((tag) => tag.key === key);
+  const retryableAttempt = attempt === "versionConflict" || attempt === "unavailable" || attempt === "responseLost";
   const dirty = step !== null && (kind !== "set" || key !== "" || value !== "");
   const steps = useMemo(() => ([
     { id: "edit", label: w("steps.edit") },
@@ -96,16 +103,22 @@ export function ApplicationTagManagement({ resource, initialSnapshot }: {
   }, [step]);
 
   function clearDraft() {
+    requestIdRef.current = "";
     setStep(null);
     setKind("set");
     setKey("");
     setValue("");
     setError(null);
+    setScenario("success");
+    setAttempt(null);
     restoreManageFocus.current = true;
   }
 
   function start() {
+    requestIdRef.current = "";
     setLastChange(null);
+    setScenario("success");
+    setAttempt(null);
     setStep("edit");
   }
 
@@ -114,10 +127,13 @@ export function ApplicationTagManagement({ resource, initialSnapshot }: {
   }
 
   function changeKind(next: MutationKind) {
+    requestIdRef.current = "";
     setKind(next);
     setKey("");
     setValue("");
     setError(null);
+    setScenario("success");
+    setAttempt(null);
   }
 
   function validate() {
@@ -138,12 +154,40 @@ export function ApplicationTagManagement({ resource, initialSnapshot }: {
       requestAnimationFrame(() => (nextError === "value" || nextError === "sensitive" || nextError === "unchanged" ? valueRef.current : kind === "delete" ? deleteRef.current : keyRef.current)?.focus());
       return;
     }
+    requestIdRef.current = `mock-application-tag-${crypto.randomUUID()}`;
+    setAttempt(null);
     setStep("review");
+  }
+
+  function simulateConcurrentSnapshot(source: ExperienceApplicationTagSnapshot) {
+    const externalValue = "external-preview";
+    return {
+      ...source,
+      etag: nextMockEtag(source.etag),
+      tags: current
+        ? source.tags.map((tag) => tag.key === key ? { ...tag, value: externalValue } : tag)
+        : [...source.tags, { key, value: externalValue }]
+    };
   }
 
   function apply(event: FormEvent) {
     event.preventDefault();
     if (!snapshot || validate()) return;
+    if (scenario !== "success") {
+      setAttempt(scenario);
+      if (scenario === "versionConflict") {
+        setSnapshot(simulateConcurrentSnapshot(snapshot));
+        // The changed ETag creates a new request fingerprint. Reusing the old
+        // key would correctly produce IDEMPOTENCY_CONFLICT in the real API.
+        requestIdRef.current = "";
+      }
+      if (scenario === "versionConflict" || scenario === "unavailable" || scenario === "responseLost") setScenario("success");
+      requestAnimationFrame(() => headingRef.current?.focus({ preventScroll: true }));
+      return;
+    }
+    // 503/transport uncertainty keeps the original key. A 412 path reaches
+    // here only after a fresh user confirmation and therefore gets a new key.
+    if (!requestIdRef.current) requestIdRef.current = `mock-application-tag-${crypto.randomUUID()}`;
     const completedAt = new Date().toISOString();
     const nextEtag = nextMockEtag(snapshot.etag);
     const nextTags = kind === "delete"
@@ -249,10 +293,17 @@ export function ApplicationTagManagement({ resource, initialSnapshot }: {
             <div><dt>{t("iamCondition")}</dt><dd>{iamCondition(key) ? <code>{iamCondition(key)}</code> : t("notExposedToIam")}</dd></div>
           </dl>
           <div className={styles.reviewAlerts}>
+            {attempt ? <Alert status={attempt === "noChange" ? "info" : attempt === "idempotencyConflict" || attempt === "denied" ? "danger" : "warning"}>{w(`outcomes.${attempt}`)}</Alert> : null}
             {permissionSensitive ? <Alert status="warning">{w("authorizationWarning")}</Alert> : null}
             <Alert status="info">{w("applyBoundary")}</Alert>
           </div>
-          <div className={styles.actions}><Button ref={cancelRef} type="button" variant="ghost" onClick={cancel}>{w("cancel")}</Button><Button type="button" variant="secondary" onClick={() => { setError(null); setStep("edit"); }}>{w("back")}</Button><Button type="submit">{w("apply")}</Button></div>
+          <details className={styles.scenarioDetails}>
+            <summary>{w("tryOtherOutcomes")}{scenario !== "success" ? ` · ${w(`scenarios.${scenario}`)}` : ""}</summary>
+            <FormField id={scenarioId} label={w("scenarioLabel")} hint={w("scenarioHint")}>
+              <Select id={scenarioId} value={scenario} options={(["success", "noChange", "idempotencyConflict", "versionConflict", "denied", "unavailable", "responseLost"] as const).map((outcome) => ({ value: outcome, label: w(`scenarios.${outcome}`) }))} onValueChange={(outcome) => { setScenario(outcome as PreviewOutcome); setAttempt(null); }} />
+            </FormField>
+          </details>
+          <div className={styles.actions}><Button ref={cancelRef} type="button" variant="ghost" onClick={cancel}>{w("cancel")}</Button><Button type="button" variant="secondary" onClick={() => { requestIdRef.current = ""; setError(null); setAttempt(null); setStep("edit"); }}>{w("back")}</Button>{!attempt || retryableAttempt ? <Button type="submit">{attempt ? w(`retry.${attempt}`) : w("apply")}</Button> : null}</div>
         </form>}
       </div>}
     </Card.Body>

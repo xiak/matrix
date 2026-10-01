@@ -3278,6 +3278,31 @@
       "applyBoundary": "本次仅更新当前浏览器会话中的 MOCK 快照。LIVE 会把当前强 ETag 作为 If-Match 提交，并安全重试同一意图；若资源版本已变化，将先重新读取资源再让你确认，不会覆盖他人的修改。",
       "back": "返回修改",
       "apply": "模拟应用",
+      "tryOtherOutcomes": "体验其他服务响应",
+      "scenarioLabel": "下一次模拟响应",
+      "scenarioHint": "仅改变下一次 MOCK 提交，用于验收真实契约下的恢复体验；不会调用后端。",
+      "scenarios": {
+        "success": "成功",
+        "noChange": "409 · 无需变更",
+        "idempotencyConflict": "409 · 请求意图冲突",
+        "versionConflict": "412 · 资源版本已变化",
+        "denied": "403 · 权限被拒绝",
+        "unavailable": "503 · IAM 暂时不可用",
+        "responseLost": "响应中断 · 结果未知"
+      },
+      "outcomes": {
+        "noChange": "CONFLICT · 当前值已经符合请求，本次没有可执行的变更。没有创建新的操作；请返回修改或取消。",
+        "idempotencyConflict": "IDEMPOTENCY_CONFLICT · 原请求标识已经绑定到另一项意图，本次没有应用。请返回修改，并把后续提交作为新的变更意图重新审阅。",
+        "versionConflict": "RESOURCE_VERSION_CONFLICT · 资源在审阅后发生了变化。系统已重新读取最新标签和 ETag；请检查新的当前值，再基于新版本重新确认。",
+        "denied": "FORBIDDEN · 当前身份不再获准执行这项变更，本次没有应用。不要重复提交；请检查授权或联系管理员。",
+        "unavailable": "IDENTITY_PROVIDER_UNAVAILABLE · IAM 暂时无法完成授权判定，本次结果未提交。可以安全重试同一变更意图，系统不会创建重复操作。",
+        "responseLost": "响应在终态返回前中断，当前结果未知。不要创建新的变更；请安全重试同一意图，以取得原操作的终态结果。"
+      },
+      "retry": {
+        "versionConflict": "基于新版本重新提交",
+        "unavailable": "重试同一变更",
+        "responseLost": "安全重试同一意图"
+      },
       "outcome": {
         "title": "最近一次模拟操作",
         "operationId": "操作标识",

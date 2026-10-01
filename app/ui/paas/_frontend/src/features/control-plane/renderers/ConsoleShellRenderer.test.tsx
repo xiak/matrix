@@ -1020,6 +1020,70 @@ describe("ConsoleShellRenderer", () => {
     expect(within(screen.getByRole("region", { name: "最近一次模拟操作" })).getByText("paas.application-label.delete")).toBeTruthy();
   });
 
+  it("reloads a changed application tag snapshot before allowing a version-conflict retry", async () => {
+    navigation.query = "resource=app-checkout-api";
+    const { user } = await renderConsole({ section: "applications", experience: previewExperienceSnapshot });
+
+    await user.click(screen.getByRole("button", { name: "管理标签" }));
+    await user.type(screen.getByLabelText("标签键", { exact: true }), "environment");
+    await user.type(screen.getByLabelText("标签值", { exact: true }), "staging");
+    await user.click(screen.getByRole("button", { name: "审阅变更" }));
+    await user.click(screen.getByText("体验其他服务响应"));
+    await user.click(screen.getByRole("combobox", { name: "下一次模拟响应" }));
+    await user.click(screen.getByRole("option", { name: "412 · 资源版本已变化" }));
+    await user.click(screen.getByRole("button", { name: "模拟应用" }));
+
+    expect(screen.getByText(/系统已重新读取最新标签和 ETag/)).toBeTruthy();
+    expect(screen.getByText("external-preview")).toBeTruthy();
+    expect(screen.getByText('If-Match: "app-checkout-api:tags:8"')).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "最近一次模拟操作" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "基于新版本重新提交" }));
+
+    const outcome = screen.getByRole("region", { name: "最近一次模拟操作" });
+    expect(within(outcome).getByText('"app-checkout-api:tags:9"')).toBeTruthy();
+    expect(within(screen.getByRole("table", { name: "应用资源标签" })).getByText("staging")).toBeTruthy();
+  });
+
+  it("safely replays the same application tag intent after an interrupted response", async () => {
+    navigation.query = "resource=app-checkout-api";
+    const { user } = await renderConsole({ section: "applications", experience: previewExperienceSnapshot });
+
+    await user.click(screen.getByRole("button", { name: "管理标签" }));
+    await user.type(screen.getByLabelText("标签键", { exact: true }), "environment");
+    await user.type(screen.getByLabelText("标签值", { exact: true }), "staging");
+    await user.click(screen.getByRole("button", { name: "审阅变更" }));
+    await user.click(screen.getByText("体验其他服务响应"));
+    await user.click(screen.getByRole("combobox", { name: "下一次模拟响应" }));
+    await user.click(screen.getByRole("option", { name: "响应中断 · 结果未知" }));
+    await user.click(screen.getByRole("button", { name: "模拟应用" }));
+
+    expect(screen.getByText(/不要创建新的变更/)).toBeTruthy();
+    expect(screen.getByText('If-Match: "app-checkout-api:tags:7"')).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "最近一次模拟操作" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "安全重试同一意图" }));
+
+    expect(screen.getByRole("region", { name: "最近一次模拟操作" })).toBeTruthy();
+    expect(screen.getAllByText('"app-checkout-api:tags:8"')).toHaveLength(2);
+  });
+
+  it("does not offer a blind retry for rejected application tag outcomes", async () => {
+    navigation.query = "resource=app-checkout-api";
+    const { user } = await renderConsole({ section: "applications", experience: previewExperienceSnapshot });
+
+    await user.click(screen.getByRole("button", { name: "管理标签" }));
+    await user.type(screen.getByLabelText("标签键", { exact: true }), "environment");
+    await user.type(screen.getByLabelText("标签值", { exact: true }), "staging");
+    await user.click(screen.getByRole("button", { name: "审阅变更" }));
+    await user.click(screen.getByText("体验其他服务响应"));
+    await user.click(screen.getByRole("combobox", { name: "下一次模拟响应" }));
+    await user.click(screen.getByRole("option", { name: "409 · 请求意图冲突" }));
+    await user.click(screen.getByRole("button", { name: "模拟应用" }));
+
+    expect(screen.getByText(/原请求标识已经绑定到另一项意图/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /重试|重新提交/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "返回修改" })).toBeTruthy();
+  });
+
   it("does not invent an application resource for an unknown query identifier", async () => {
     navigation.query = "resource=missing";
     await renderConsole({ section: "applications", experience: previewExperienceSnapshot });
