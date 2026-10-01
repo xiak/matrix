@@ -6,8 +6,8 @@
 - Updated: 2026-10-02
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `8e6a66718`
-- Pushed documentation milestone: `c605869ae`
+- Pushed source/embed milestone: `6857313d7`
+- Pushed documentation milestone: `3978f8d94`
 
 ## Authoritative route
 
@@ -29,22 +29,22 @@ compaction or handoff, then validate it against Git and the linked FEAT.
 ## Latest pushed milestone
 
 The independent DEV MOCK remains available at `http://127.0.0.1:4317`, and
-login verification remains disabled for UX review. The immutable Account
-security report now mirrors the fixed evidence shape instead of an aggregate
-draft: Root participates in User limits, the exact covered and excluded
-sources are visible, and separate User and AccessKey tables expose retained
-observations without Secret material. The UI still does not create a file,
-digest or LIVE request; CSV remains visibly unavailable.
+login verification remains disabled for UX review. Cross-service navigation
+now keeps the destination title and a route-specific content boundary mounted
+immediately; Overview, Catalog, Quotas, Regions, delivery environments, Log
+search and IAM no longer fall back to a generic page-wide skeleton. Only the
+provider-owned rows/cards paint after 200ms, and shimmer uses a paint-contained
+transform instead of `background-position`.
 
-Source and synchronized embed are pushed at `8e6a66718`; shared-console and
-IAM-client FEAT evidence is pushed through `c605869ae`. The complete frontend
-gate passed 58 files/959 cases plus three normalization cases,
-typecheck/lint/architecture/228-pair style checks, 42-route export, 233-file
-embed equality and repository Go test/vet. A fresh `390 x 844` browser session
-verified summary, User evidence and AccessKey evidence with zero Dialog, no
-horizontal overflow and empty warning/error logs. Prior content-area account
-workflows remain owned by FEAT-007. The report remains MOCK-only until IAM
-explicitly marks a fixed runtime consumable.
+Source and synchronized embed are pushed at `6857313d7`; shared-console
+evidence is pushed through `3978f8d94`. The complete frontend gate passed 58
+files/967 cases plus three normalization cases, typecheck/lint/architecture/
+228-pair style checks, 42-route export, 233-file embed equality and repository
+Go test/vet. A fresh `390 x 844` browser path through Catalog, IAM, Logs and Log
+search showed immediate destination content, no horizontal overflow and empty
+warning/error logs. The prior Account security report and content-area IAM
+workflows remain owned by FEAT-007 and FEAT-IAM-010; no new LIVE IAM wire was
+added.
 
 Earlier federation replacement, Deployment lifecycle, AccessKey carrier,
 same-User permission-source handoff, Application tag recovery, service
