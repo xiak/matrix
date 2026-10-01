@@ -69,11 +69,11 @@ export function initialAccessWorkspace(accountId: string): AccessWorkspace {
     ],
     roles: [
       { id: "role-pipeline", name: "PipelineDeploymentRole", description: "Workload identity for application delivery", principalType: "service", principal: "devops.matrix.internal", trustedUserIds: [], tags: [], policyIds: ["policy-delivery"], sessionMinutes: 60, consoleAccess: false, createdAt: at },
-      { id: "role-audit", name: "FederatedAuditRole", description: "Read-only role for enterprise SSO", principalType: "provider", principal: "idp-example", trustedUserIds: [], tags: [], policyIds: ["policy-audit"], sessionMinutes: 60, consoleAccess: true, createdAt: at },
+      { id: "role-audit", name: "ExternalAuditRole", description: "Read-only role for enterprise SSO", principalType: "provider", principal: "idp-example", trustedUserIds: [], tags: [], policyIds: ["policy-audit"], sessionMinutes: 60, consoleAccess: true, createdAt: at },
       { id: "role-log-reviewer", name: "ProductionLogReviewRole", description: "Qiao can review production logs in a role session without inheriting personal deployment grants", principalType: "account", principal: accountId, trustedUserIds: ["principal-qiao"], tags: [], policyIds: ["policy-tag-logs"], sessionMinutes: 30, consoleAccess: true, createdAt: at }
     ],
     providers: [{ id: "idp-example", name: "EnterpriseSSO", protocol: "SAML", issuer: "https://identity.example.invalid/saml", audience: "matrix-cloud", metadata: '<EntityDescriptor entityID="https://identity.example.invalid/saml"></EntityDescriptor>', enabled: true, createdAt: at }],
-    federations: [{ id: "federation-audit", name: "ExternalAuditor", subject: "audit@example.invalid", providerId: "idp-example", roleId: "role-audit", enabled: true, createdAt: at }],
+    roleSsoMappings: [{ id: "role-sso-rule-audit", name: "AuditAssertionRule", assertionSubject: "audit@example.invalid", providerId: "idp-example", roleId: "role-audit", enabled: true, createdAt: at }],
     keys: [{ id: "MOCK-pipeline-key", ownerId: "principal-lin", status: "ENABLED", resourceVersion: 2, createdAt: at }],
     userPolicies: { "principal-lin": ["policy-prod-logs"], "principal-qiao": ["policy-tag-logs", "policy-production-guard", "policy-assume-reviewer"] },
     settings: { loginProtection: false, accountRuleVersion: 1, userSsoEnabled: false, userSsoConfiguration: null },

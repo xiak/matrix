@@ -36,14 +36,14 @@ export type UnusedAccessFindingPreview = {
 
 export type AccessAnalysisCoverageState = "mockObserved" | "unobserved" | "unsupported";
 export type AccessAnalysisCoverage = {
-  id: "identityFederation" | "serviceWorkload" | "resourcePolicies" | "crossAccountDelegation" | "activityWindow";
+  id: "roleSsoMapping" | "serviceWorkload" | "resourcePolicies" | "crossAccountDelegation" | "activityWindow";
   state: AccessAnalysisCoverageState;
 };
 export type AccessAnalysisTrustEntry = {
   id: string;
   accountId: string;
   name: string;
-  kind: "federatedIdentity" | "serviceWorkload";
+  kind: "roleSsoMapping" | "serviceWorkload";
   principal: string;
   roleId: string;
   roleName: string;
@@ -110,8 +110,8 @@ export function buildUnusedAccessFindingPreview(workspace: AccessWorkspace, scen
   return findings;
 }
 
-// This preview inventories tenant configuration only. A configured federation
-// mapping or service role is not proof that a principal can currently assume
+// This preview inventories tenant configuration only. A configured assertion
+// mapping preview or service role is not proof that a principal can currently assume
 // the role, reach a resource, or has ever used the path.
 export function buildAccessAnalysisPreview(workspace: AccessWorkspace, scene: AccountAccessScene): {
   accountId: string;
@@ -120,26 +120,26 @@ export function buildAccessAnalysisPreview(workspace: AccessWorkspace, scene: Ac
   unusedFindings: UnusedAccessFindingPreview[];
 } {
   assertReportAccount(workspace, scene);
-  const federatedEntries: AccessAnalysisTrustEntry[] = workspace.federations.map((federation) => {
-    const provider = workspace.providers.find((candidate) => candidate.id === federation.providerId);
-    const role = workspace.roles.find((candidate) => candidate.id === federation.roleId);
-    const configuration = !federation.enabled
+  const mappingEntries: AccessAnalysisTrustEntry[] = workspace.roleSsoMappings.map((mapping) => {
+    const provider = workspace.providers.find((candidate) => candidate.id === mapping.providerId);
+    const role = workspace.roles.find((candidate) => candidate.id === mapping.roleId);
+    const configuration = !mapping.enabled
       ? "disabled"
-      : !provider?.enabled || !role || role.principalType !== "provider" || role.principal !== federation.providerId
+      : !provider?.enabled || !role || role.principalType !== "provider" || role.principal !== mapping.providerId
         ? "incomplete"
         : "configured";
     return {
-      id: `federation:${federation.id}`,
+      id: `role-sso-mapping:${mapping.id}`,
       accountId: workspace.accountId,
-      name: federation.name,
-      kind: "federatedIdentity",
-      principal: federation.subject,
-      roleId: federation.roleId,
-      roleName: role?.name ?? federation.roleId,
-      sourceId: federation.providerId,
-      sourceName: provider?.name ?? federation.providerId,
+      name: mapping.name,
+      kind: "roleSsoMapping",
+      principal: mapping.assertionSubject,
+      roleId: mapping.roleId,
+      roleName: role?.name ?? mapping.roleId,
+      sourceId: mapping.providerId,
+      sourceName: provider?.name ?? mapping.providerId,
       configuration,
-      createdAt: federation.createdAt,
+      createdAt: mapping.createdAt,
       target: { view: "providers" }
     };
   });
@@ -162,13 +162,13 @@ export function buildAccessAnalysisPreview(workspace: AccessWorkspace, scene: Ac
   return {
     accountId: workspace.accountId,
     coverage: [
-      { id: "identityFederation", state: "mockObserved" },
+      { id: "roleSsoMapping", state: "mockObserved" },
       { id: "serviceWorkload", state: "mockObserved" },
       { id: "resourcePolicies", state: "unsupported" },
       { id: "crossAccountDelegation", state: "unsupported" },
       { id: "activityWindow", state: "unobserved" }
     ],
-    trustEntries: [...federatedEntries, ...serviceEntries],
+    trustEntries: [...mappingEntries, ...serviceEntries],
     unusedFindings: buildUnusedAccessFindingPreview(workspace, scene)
   };
 }

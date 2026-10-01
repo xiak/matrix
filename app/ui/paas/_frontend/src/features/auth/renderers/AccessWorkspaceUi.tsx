@@ -82,7 +82,7 @@ export function WorkspaceRelationshipDirectory<T extends { id: string; name: str
   </>;
 }
 
-export function WorkspaceCollection<T extends { id: string; name: string }>({ title, description, items, columns, row, create, secondaryActions = [], keywords, filter, embedded = false, status, loadMore, footerNote, workflow, loading, unavailable, createActionRef, createFocusRef }: {
+export function WorkspaceCollection<T extends { id: string; name: string }>({ title, description, items, columns, row, create, secondaryActions = [], keywords, filter, embedded = false, status, loadMore, footerNote, intro, workflow, loading, unavailable, createActionRef, createFocusRef }: {
   title: string; description: string; items: T[]; columns: string[];
   row(item: T): ReactNode; create?: { label: string; disabled?: boolean; reason?: string; onClick(): void }; embedded?: boolean;
   secondaryActions?: readonly PageCommand[];
@@ -91,6 +91,7 @@ export function WorkspaceCollection<T extends { id: string; name: string }>({ ti
   status?: string;
   loadMore?: { label: string; disabled?: boolean; busy?: boolean; onClick(): void };
   footerNote?: ReactNode;
+  intro?: ReactNode;
   workflow?: ReactNode;
   loading?: { label: string; rows?: number };
   unavailable?: { title: string; description?: string; action?: ReactNode };
@@ -117,6 +118,7 @@ export function WorkspaceCollection<T extends { id: string; name: string }>({ ti
   const primary = create ? { id: "create", label: create.label, icon: <Plus aria-hidden="true" />, disabled: create.disabled, disabledReason: create.disabled ? create.reason : undefined, onSelect: create.onClick } satisfies PageCommand : undefined;
   return <Card aria-description={description}>
     {!embedded ? <ContentPage.Heading title={title} scrollKey={`collection:${title}`} actions={!workflow && (primary || secondaryActions.length) ? <ContentPage.Commands label={collection("pageActions")} primaryRef={createActionRef} focusRef={createFocusRef} primary={primary} secondary={secondaryActions} /> : undefined} /> : null}
+    {!workflow && intro ? intro : null}
     {workflow ?? <>
     <TableToolbar labels={toolbarLabels} search={{ label: t("search"), value: query, onChange: (value) => { setQuery(value); setPage(1); } }}
       actions={embedded ? action : null}

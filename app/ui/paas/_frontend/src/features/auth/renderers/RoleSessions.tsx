@@ -57,7 +57,7 @@ export function RoleSessions({ role, workspace, scene }: { role: AccessRole; wor
     previousIntent.current = intent;
   }, [intent]);
 
-  const callerLabel = (session: AccessRoleSession) => session.caller.type === "user" ? scene.users.find((user) => user.id === session.caller.id)?.loginName ?? session.caller.id : session.caller.type === "federation" ? workspace.federations.find((entry) => entry.id === session.caller.id)?.name ?? session.caller.id : session.caller.id;
+  const callerLabel = (session: AccessRoleSession) => session.caller.type === "user" ? scene.users.find((user) => user.id === session.caller.id)?.loginName ?? session.caller.id : session.caller.id;
   const normalizedSessionId = sessionId.trim();
   const sessions = allSessions.filter((session) => {
     const status = roleSessionStatus(workspace, session, userIds, now);

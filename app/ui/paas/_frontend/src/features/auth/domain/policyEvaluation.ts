@@ -109,7 +109,9 @@ export function evaluateRoleAssumption(workspace: AccessWorkspace, userIds: read
   let trusted = false;
   if (role.principalType === "account") trusted = caller.type === "user" && role.principal === workspace.accountId && userIds.includes(caller.id) && role.trustedUserIds.includes(caller.id);
   if (role.principalType === "service") trusted = caller.type === "service" && caller.id === role.principal && roleServicePrincipals.some((id) => id === caller.id);
-  if (role.principalType === "provider") trusted = caller.type === "federation" && workspace.providers.some((entry) => entry.id === role.principal && entry.enabled) && workspace.federations.some((entry) => entry.id === caller.id && entry.enabled && entry.roleId === role.id && entry.providerId === role.principal);
+  // External assertions are configuration-only in the isolated preview. No
+  // published IdP/session contract exists, so this evaluator must not turn a
+  // local mapping sample into a successful role assumption.
   if (!trusted || !utcTimeValid(request.at)) return { allowed: false, reason: "trustDenied" };
   if (caller.type !== "user") return { allowed: true, reason: "allowed" };
   const resource: PolicyResource = { service: "iam", tenant: workspace.accountId, region: "global", type: "role", id: role.id };

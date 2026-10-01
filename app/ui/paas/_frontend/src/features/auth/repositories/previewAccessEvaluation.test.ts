@@ -241,16 +241,12 @@ describe("role trust, boundaries and temporary session diagnostics", () => {
     workspace = applyAccessWorkspaceCommand(workspace, { kind: "delete-role", id: roleContext.id }, roleContext);
     expect(evaluateRoleSessionAccess(workspace, userIds, "session-logs", request, request.at!).error).toBe("unavailableSession");
   });
-  it("only recognizes registered workloads and enabled mapped provider identities", () => {
+  it("only recognizes registered workloads and never treats a mapping preview as a role session", () => {
     const workspace = initialAccessWorkspace("org-xiak");
     expect(evaluateRoleAssumption(workspace, userIds, { ...assumption, roleId: "role-pipeline", caller: { type: "service", id: "devops.matrix.internal" } }).allowed).toBe(true);
     expect(evaluateRoleAssumption(workspace, userIds, { ...assumption, roleId: "role-pipeline", caller: { type: "service", id: "forged.matrix.internal" } }).allowed).toBe(false);
-    const federated = { ...assumption, roleId: "role-audit", caller: { type: "federation" as const, id: "federation-audit" } };
-    expect(evaluateRoleAssumption(workspace, userIds, federated).allowed).toBe(true);
-    workspace.providers[0]!.enabled = false;
-    expect(evaluateRoleAssumption(workspace, userIds, federated).allowed).toBe(false);
-    workspace.providers[0]!.enabled = true; workspace.federations[0]!.enabled = false;
-    expect(evaluateRoleAssumption(workspace, userIds, federated).allowed).toBe(false);
+    expect(workspace.roleSsoMappings[0]).toMatchObject({ providerId: "idp-example", roleId: "role-audit", enabled: true });
+    expect(workspace.roleSessions).toHaveLength(0);
   });
   it("validates operation limits without replacing policies not included in a delta", () => {
     let workspace = roleWorkspace();

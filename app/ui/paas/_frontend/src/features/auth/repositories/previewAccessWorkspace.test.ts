@@ -599,11 +599,11 @@ describe("access workspace preview invariants", () => {
     state = applyAccessWorkspaceCommand(state, { kind: "associate-policy", id: "policy-prod-logs", userIds: [], groupIds: [], roleIds: [] }, context);
     expect(applyAccessWorkspaceCommand(state, { kind: "delete-policy", id: "policy-prod-logs" }, context).policies.some((policy) => policy.id === "policy-prod-logs")).toBe(false);
   });
-  it("keeps role trust aligned with federation and protects referenced providers", () => {
+  it("keeps role trust aligned with role SSO mapping previews and protects referenced providers", () => {
     const state = initialAccessWorkspace("org-xiak");
     expect(() => applyAccessWorkspaceCommand(state, { kind: "delete-provider", id: "idp-example" }, context)).toThrow("referenced");
     expect(() => applyAccessWorkspaceCommand(state, { kind: "delete-role", id: "role-audit" }, context)).toThrow("referenced");
-    expect(() => applyAccessWorkspaceCommand(state, { kind: "save-federation", name: "Wrong Trust", subject: "external", providerId: "idp-example", roleId: "role-pipeline", enabled: true }, context)).toThrow("invalid");
+    expect(() => applyAccessWorkspaceCommand(state, { kind: "save-role-sso-mapping-preview", name: "Wrong Trust", assertionSubject: "external", providerId: "idp-example", roleId: "role-pipeline", enabled: true }, context)).toThrow("invalid");
     const role = state.roles.find((entry) => entry.id === "role-pipeline")!;
     expect(() => applyAccessWorkspaceCommand(state, { kind: "update-role-settings", id: role.id, sessionMinutes: 60, consoleAccess: true }, context)).toThrow("invalid");
   });
@@ -872,7 +872,7 @@ describe("access workspace preview invariants", () => {
     expect(updated.settings.userSsoEnabled).toBe(true);
     expect(updated.settings.userSsoConfiguration?.protocol).toBe("SAML");
     expect(updated.providers).toEqual(state.providers);
-    const withoutRoleProvider = applyAccessWorkspaceCommand({ ...updated, roles: [], federations: [] }, { kind: "delete-provider", id: "idp-example" }, context);
+    const withoutRoleProvider = applyAccessWorkspaceCommand({ ...updated, roles: [], roleSsoMappings: [] }, { kind: "delete-provider", id: "idp-example" }, context);
     expect(withoutRoleProvider.providers).toHaveLength(0);
     expect(withoutRoleProvider.settings.userSsoEnabled).toBe(true);
     expect(() => applyAccessWorkspaceCommand(state, { kind: "save-sso-settings", userSsoEnabled: true, userSsoConfiguration: { protocol: "OIDC", issuer: "http://example.invalid", clientId: "client", authorizationEndpoint: "https://example.invalid/authorize", mappingClaim: "name", jwks: '{"keys":[{}]}' } }, context)).toThrow("invalid");

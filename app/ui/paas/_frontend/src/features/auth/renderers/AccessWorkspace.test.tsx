@@ -1186,17 +1186,17 @@ describe("CAM-style access workspace", () => {
     expect(within(denyRow).getByText("含显式拒绝").getAttribute("data-status")).toBe("danger");
     expect(within(policies).getByText("仅允许声明")).toBeTruthy();
   });
-  it("keeps identity-provider and federation mutations in their detail pages", async () => {
+  it("keeps identity-provider and assertion-mapping-preview mutations in their detail pages", async () => {
     const { user } = await open("providers");
     const providers = await screen.findByRole("table", { name: "角色 SSO" });
     expect(within(providers).queryByRole("columnheader", { name: "操作" })).toBeNull();
     expect(within(providers).queryByRole("button", { name: "编辑" })).toBeNull();
     expect(within(providers).queryByRole("button", { name: "删除" })).toBeNull();
-    await user.click(screen.getByRole("tab", { name: "联合身份映射" }));
-    const federations = screen.getByRole("table", { name: "联合身份映射" });
-    expect(within(federations).queryByRole("columnheader", { name: "操作" })).toBeNull();
-    expect(within(federations).queryByRole("button", { name: "编辑" })).toBeNull();
-    expect(within(federations).queryByRole("button", { name: "删除" })).toBeNull();
+    await user.click(screen.getByRole("tab", { name: "断言映射预览" }));
+    const mappings = screen.getByRole("table", { name: "断言映射预览" });
+    expect(within(mappings).queryByRole("columnheader", { name: "操作" })).toBeNull();
+    expect(within(mappings).queryByRole("button", { name: "编辑" })).toBeNull();
+    expect(within(mappings).queryByRole("button", { name: "删除" })).toBeNull();
   });
   it("creates a role in the content area with explicit trust, no preselected grants and a preserved localized draft", async () => {
     const { user, repository, extension } = await open("roles");
@@ -2826,31 +2826,32 @@ describe("CAM-style access workspace", () => {
     expect((within(editor).getByLabelText("签名公钥 JWKS JSON") as HTMLTextAreaElement).value).toContain('"kid":"oidc"');
     expect(screen.queryByRole("dialog")).toBeNull();
   });
-  it("creates and edits a federated identity in the content area without opening a modal", async () => {
+  it("creates and edits an assertion mapping preview in the content area without opening a modal", async () => {
     const { user, repository, extension } = await open("providers");
-    await user.click(screen.getByRole("tab", { name: "联合身份映射" }));
-    await user.click(screen.getByRole("button", { name: "新建联合身份映射" }));
+    await user.click(screen.getByRole("tab", { name: "断言映射预览" }));
+    await user.click(screen.getByRole("button", { name: "新建映射规则预览" }));
     expect(screen.queryByRole("dialog")).toBeNull();
-    const editor = screen.getByRole("group", { name: "新建联合身份映射" });
-    expect(within(editor).getByRole("heading", { name: "新建联合身份映射" })).toBe(document.activeElement);
-    await user.type(within(editor).getByLabelText("名称", { exact: true }), "PreviewFederation");
-    await user.type(within(editor).getByLabelText("外部账号标识"), "preview@example.invalid");
+    const editor = screen.getByRole("group", { name: "新建映射规则预览" });
+    expect(within(editor).getByRole("heading", { name: "新建映射规则预览" })).toBe(document.activeElement);
+    expect(within(editor).getByText(/不是 IAM 账号或已发布后端资源/)).toBeTruthy();
+    await user.type(within(editor).getByLabelText("名称", { exact: true }), "PreviewAssertionRule");
+    await user.type(within(editor).getByLabelText("断言主体值"), "preview@example.invalid");
     await select(user, "身份提供商", "EnterpriseSSO");
-    await select(user, "映射角色", "FederatedAuditRole");
+    await select(user, "目标角色", "ExternalAuditRole");
     await user.click(within(editor).getByRole("button", { name: "保存" }));
-    await waitFor(() => expect(screen.queryByRole("group", { name: "新建联合身份映射" })).toBeNull());
-    expect(document.activeElement).toBe(screen.getByRole("button", { name: "新建联合身份映射" }));
-    const created = (await extension.read("preview")).federations.find((entry) => entry.name === "PreviewFederation")!;
+    await waitFor(() => expect(screen.queryByRole("group", { name: "新建映射规则预览" })).toBeNull());
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "新建映射规则预览" }));
+    const created = (await extension.read("preview")).roleSsoMappings.find((entry) => entry.name === "PreviewAssertionRule")!;
     expect(created.providerId).toBe("idp-example");
     expect(created.roleId).toBe("role-audit");
-    await user.click(screen.getByRole("button", { name: "PreviewFederation" }));
+    await user.click(screen.getByRole("button", { name: "PreviewAssertionRule" }));
     await user.click(screen.getByRole("button", { name: "编辑" }));
     expect(screen.queryByRole("dialog")).toBeNull();
-    const edit = screen.getByRole("group", { name: "编辑 · PreviewFederation" });
+    const edit = screen.getByRole("group", { name: "编辑 · PreviewAssertionRule" });
     await user.click(within(edit).getByRole("checkbox", { name: "启用" }));
     await user.click(within(edit).getByRole("button", { name: "保存" }));
-    await waitFor(() => expect(screen.queryByRole("group", { name: "编辑 · PreviewFederation" })).toBeNull());
-    expect((await extension.read("preview")).federations.find((entry) => entry.id === created.id)?.enabled).toBe(false);
+    await waitFor(() => expect(screen.queryByRole("group", { name: "编辑 · PreviewAssertionRule" })).toBeNull());
+    expect((await extension.read("preview")).roleSsoMappings.find((entry) => entry.id === created.id)?.enabled).toBe(false);
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "编辑" }));
     expect(repository.execute).not.toHaveBeenCalled();
   });
@@ -3407,7 +3408,7 @@ describe("CAM-style access workspace", () => {
   });
   it("retains user SSO inputs on failure and saves only its owned settings on retry", async () => {
     const { user, repository, extension } = await open("user-sso", { seed: async (preview) => {
-      preview.transact((source) => ({ workspace: { ...source, providers: [], federations: [], roles: source.roles.filter((role) => role.principalType !== "provider") } }));
+      preview.transact((source) => ({ workspace: { ...source, providers: [], roleSsoMappings: [], roles: source.roles.filter((role) => role.principalType !== "provider") } }));
     } });
     const before = await extension.read("preview");
     expect(screen.getByText("尚未配置。无需先创建角色 SSO 身份提供商。")).toBeTruthy();
@@ -3689,7 +3690,7 @@ describe("CAM-style access workspace", () => {
     expect(state.settings.userSsoConfiguration).toEqual({ protocol: "OIDC", issuer: "https://login.example.invalid/oidc", clientId: "matrix-user-sso", authorizationEndpoint: "https://login.example.invalid/authorize", mappingClaim: "preferred_username", jwks: '{"keys":[{"kty":"RSA"}]}' });
     expect(state.providers).toEqual(before.providers);
     expect(state.roles).toEqual(before.roles);
-    expect(state.federations).toEqual(before.federations);
+    expect(state.roleSsoMappings).toEqual(before.roleSsoMappings);
     await user.click(screen.getByRole("button", { name: "编辑" }));
     await user.click(screen.getByRole("checkbox", { name: "启用用户 SSO（模拟）" }));
     await user.click(screen.getByRole("button", { name: "审阅配置" }));
@@ -3826,14 +3827,14 @@ describe("CAM-style access workspace", () => {
     const scene = buildAccountAccessScene(identity, { items: users, nextAfter: null }, null, { accountId: "org-xiak", scope: "TENANT", installationId: null, items: [] }, { accountId: "org-xiak", scope: "INSTALLATION", installationId: "preview", items: [] });
     const analysis = buildAccessAnalysisPreview(workspace, scene);
     expect(analysis.coverage).toEqual([
-      { id: "identityFederation", state: "mockObserved" },
+      { id: "roleSsoMapping", state: "mockObserved" },
       { id: "serviceWorkload", state: "mockObserved" },
       { id: "resourcePolicies", state: "unsupported" },
       { id: "crossAccountDelegation", state: "unsupported" },
       { id: "activityWindow", state: "unobserved" }
     ]);
     expect(analysis.trustEntries.map(({ kind, name, configuration, target }) => ({ kind, name, configuration, target }))).toEqual([
-      { kind: "federatedIdentity", name: "ExternalAuditor", configuration: "configured", target: { view: "providers" } },
+      { kind: "roleSsoMapping", name: "AuditAssertionRule", configuration: "configured", target: { view: "providers" } },
       { kind: "serviceWorkload", name: "PipelineDeploymentRole", configuration: "configured", target: { view: "roles", id: "role-pipeline" } }
     ]);
     expect(analysis.unusedFindings.map(({ accountId, findingType, status }) => ({ accountId, findingType, status }))).toEqual([
@@ -3852,8 +3853,8 @@ describe("CAM-style access workspace", () => {
     const entryTable = screen.getByRole("table", { name: "已配置入口" });
     expect(entryTable.getAttribute("data-mobile-layout")).toBe("stack");
     expect(within(entryTable).getAllByText("devops.matrix.internal").length).toBe(2);
-    await user.click(within(entryTable).getByRole("button", { name: "ExternalAuditor" }));
-    expect(screen.getByRole("heading", { name: "审阅入口 · ExternalAuditor" })).toBeTruthy();
+    await user.click(within(entryTable).getByRole("button", { name: "AuditAssertionRule" }));
+    expect(screen.getByRole("heading", { name: "审阅入口 · AuditAssertionRule" })).toBeTruthy();
     expect(screen.getByText(/不能从配置入口直接推断有效权限或外部暴露/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "查看对应配置" }));
     expect(onNavigate).toHaveBeenCalledWith("providers", undefined);

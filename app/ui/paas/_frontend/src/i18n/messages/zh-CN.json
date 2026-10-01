@@ -3600,7 +3600,7 @@
     "trustHints": {
       "account": "仅支持明确选择当前体验租户的用户。信任只是承担准入；在真实 IAM 中，用户还需单独获得该角色的 iam.role.assume 授权。不支持跨账号或通配身份。",
       "service": "选择已注册的模拟工作负载。这里不校验真实工作负载，也不创建服务关联角色。",
-      "provider": "选择已启用的模拟身份提供商。创建体验会话还需要已启用且指向该角色的联合身份映射，不校验真实 SAML/OIDC 断言。"
+      "provider": "选择已启用的模拟身份提供商，仅预览它与角色之间的信任配置。角色 SSO 承担流程尚未接入；本地断言映射预览不接收或校验真实 SAML/OIDC 断言，也不创建会话。"
     },
     "tenant": "当前租户：{id}",
     "trustedUsers": "可信用户",
@@ -3669,7 +3669,7 @@
     "trustDocument": "同账号 USER 信任文档预览",
     "syntheticTrust": "仅 MOCK 的信任对象预览",
     "requiredAction": "上方是文档形状预览，不会写入真实 IAM。真实调用用户还需被单独授权以下操作与目标角色 ID：",
-    "deleteImpact": "删除角色后，其体验会话将无法继续通过资源诊断。用户和策略保留；如有关联的联合身份，需要先移除引用。",
+    "deleteImpact": "删除角色后，其体验会话将无法继续通过资源诊断。用户和策略保留；如有关联的断言映射预览，需要先移除引用。",
     "backToSessions": "返回会话目录",
     "sessionDirectoryHint": "这里是角色会话的管理员 MOCK 目录，只支持精确来源用户、会话 ID 与生命周期筛选以及单条撤销。状态仅表示 IAM 观测到的未撤销、到期或已撤销，不证明当前仍有业务权限；承担角色请使用账号菜单中的“角色访问”。",
     "exactSessionSearch": "输入完整会话 ID",
@@ -3831,17 +3831,17 @@
     "policyLanguagePreview": "IAM 策略声明预览",
     "createRole": "新建角色",
     "createProvider": "新建身份提供商",
-    "createFederation": "新建联合身份映射",
+    "createRoleSsoMappingPreview": "新建映射规则预览",
     "backToProviderDirectory": "返回身份提供商目录",
     "backToProviderDetails": "返回身份提供商详情",
-    "backToFederationDirectory": "返回联合身份目录",
-    "backToFederationDetails": "返回联合身份详情",
+    "backToRoleSsoMappingDirectory": "返回断言映射预览",
+    "backToRoleSsoMappingDetails": "返回映射规则预览详情",
     "createKey": "新建访问密钥",
     "groupHint": "按团队管理成员与权限。成员继承用户组关联的模拟策略。",
     "policyHint": "使用预设策略或自定义最小权限规则，再关联到用户、用户组或角色。",
     "roleHint": "为账号、云服务或外部身份授予临时角色，不分发长期凭证。",
     "providerHint": "管理基于 SAML 2.0 或 OIDC 的外部身份提供商，通过角色完成单点登录。",
-    "federationHint": "查看外部身份到云端角色的映射。此演示不会向外部身份系统发送邀请或同步数据。",
+    "roleSsoMappingHint": "预览外部断言主体经身份提供商信任映射到目标角色的配置关系。此目录不是账号目录，也不证明登录、会话签发或有效授权。",
     "keyHint": "推荐为专用子用户创建访问密钥。每个用户最多保留 2 把；轮换时先迁移工作负载，再禁用并删除旧密钥。",
     "search": "搜索名称、ID 或关键字",
     "clear": "清空搜索",
@@ -3968,8 +3968,11 @@
     "providerOidcJwks": "签名公钥 JWKS JSON",
     "providerOidcJwksHint": "需包含非空 keys 数组。本页不发现 Issuer、不获取远端密钥，也不验证 Token。",
     "providerPreviewBoundary": "MOCK · 仅保存当前浏览器会话并校验本地配置形状；不连接外部 IdP，不进行断言或 Token 交换，也不签发登录会话。",
-    "subject": "外部账号标识",
-    "targetRole": "映射角色",
+    "roleSsoMappings": "断言映射预览",
+    "roleSsoAssertionSubject": "断言主体值",
+    "roleSsoAssertionSubjectHint": "仅用于当前浏览器中的精确匹配样例；不接收或验证真实 SAML 断言、OIDC Token，也不创建长期账号。",
+    "roleSsoTargetRole": "目标角色",
+    "roleSsoMappingPreviewBoundary": "MOCK · 这是身份提供商、断言主体与角色信任关系的本地设计样例，不是 IAM 账号或已发布后端资源；不进行目录同步、真实登录、会话签发或有效权限判定。",
     "ssoHint": "用户 SSO 将企业身份映射到已有 IAM 用户，与角色 SSO 配置独立。本页仅为 MOCK，不改变真实登录。",
     "ssoFlow": "企业 IdP → 已有 IAM 用户 → 该用户的权限",
     "ssoEnable": "启用用户 SSO（模拟）",
@@ -4247,7 +4250,7 @@
       "open": "访问分析",
       "title": "访问分析",
       "sections": "访问分析范围",
-      "previewBoundary": "MOCK · 本页只清点当前租户预览模型中的联合身份与服务角色配置，并用合成窗口预演未使用访问体验。配置存在不代表权限已生效、资源可达或入口曾被使用；本页不会自动撤权。",
+      "previewBoundary": "MOCK · 本页只清点当前租户预览模型中的角色 SSO 映射预览与服务角色配置，并用合成窗口预演未使用访问体验。配置存在不代表权限已生效、资源可达或入口曾被使用；本页不会自动撤权。",
       "mockConfiguration": "MOCK 配置快照",
       "account": "目标账号",
       "tabs": {
@@ -4263,7 +4266,7 @@
           "unsupported": "当前不支持"
         },
         "coverage": {
-          "identityFederation": { "title": "联合身份配置", "hint": "清点 IdP、身份映射与 provider 信任角色的本地配置关系，不验证真实签发或登录。" },
+          "roleSsoMapping": { "title": "角色 SSO 映射预览", "hint": "仅清点 IdP、断言主体样例与 provider 信任角色的本地设计关系，不验证真实断言、会话签发或登录。" },
           "serviceWorkload": { "title": "服务工作负载角色", "hint": "清点 service principal 角色，不验证工作负载身份、承担会话或资源调用。" },
           "resourcePolicies": { "title": "资源策略与 ACL", "hint": "当前租户预览未建模资源侧策略和 ACL，不能据此判断外部可达性。" },
           "crossAccountDelegation": { "title": "跨账号委托", "hint": "当前角色契约不支持跨账号委托，不能把未显示解释为不存在。" },
@@ -4286,7 +4289,7 @@
         "noEffectiveAccessConclusion": "不能从配置入口直接推断有效权限或外部暴露，也不能在这里自动禁用身份、删除角色或撤销策略。",
         "reviewTarget": "查看对应配置",
         "kinds": {
-          "federatedIdentity": "联合身份入口",
+          "roleSsoMapping": "断言映射预览",
           "serviceWorkload": "服务工作负载入口"
         },
         "states": {
@@ -4295,7 +4298,7 @@
           "disabled": "已停用"
         },
         "recommendations": {
-          "federatedIdentity": "核对身份提供商状态、外部 subject 映射、目标角色信任与权限边界，再到真实登录和审计来源验证使用情况。",
+          "roleSsoMapping": "通过权威登录与审计来源核对 IdP、角色信任和断言映射规则；本地预览不能证明真实登录、会话或有效权限。",
           "serviceWorkload": "核对服务主体所有者、工作负载绑定、角色信任、策略与权限边界，再通过服务端会话和业务审计验证调用。"
         }
       },
@@ -4476,8 +4479,8 @@
       "delete-role": "删除角色",
       "save-provider": "保存身份提供商",
       "delete-provider": "删除身份提供商",
-      "save-federation": "保存联合账号",
-      "delete-federation": "删除联合账号",
+      "save-role-sso-mapping-preview": "保存断言映射预览",
+      "delete-role-sso-mapping-preview": "删除断言映射预览",
       "create-key": "创建密钥",
       "inspect-key-creation": "查询密钥创建结果",
       "set-key-status": "变更密钥状态",
@@ -4511,7 +4514,6 @@
       "revoke-role-session": "撤销体验会话"
     },
     "wecom": "企业微信",
-    "federatedIdentities": "联合身份映射",
     "enterpriseName": "企业名称",
     "corporationId": "企业 ID",
     "visibleMembers": "成员可见范围",

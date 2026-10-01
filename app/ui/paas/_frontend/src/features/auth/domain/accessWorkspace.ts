@@ -24,7 +24,8 @@ export type IdentityProvider = {
   id: string; name: string; protocol: "SAML" | "OIDC"; issuer: string; audience: string;
   metadata: string; enabled: boolean; createdAt: string;
 };
-export type FederatedAccount = { id: string; name: string; subject: string; providerId: string; roleId: string; enabled: boolean; createdAt: string };
+/** Browser-memory design sample only; this is not an IAM account or published backend resource. */
+export type RoleSsoMappingPreview = { id: string; name: string; assertionSubject: string; providerId: string; roleId: string; enabled: boolean; createdAt: string };
 export type AccessKey = {
   id: string;
   ownerId: string;
@@ -102,7 +103,7 @@ export type PreviewUserProfile = {
 export function previewUserPrincipalId(loginName: string): string { return `principal-${loginName}`; }
 export type AccessWorkspace = {
   mode: "preview"; accountId: string; groups: AccessGroup[]; policies: AccessPolicy[];
-  roles: AccessRole[]; providers: IdentityProvider[]; federations: FederatedAccount[]; keys: AccessKey[];
+  roles: AccessRole[]; providers: IdentityProvider[]; roleSsoMappings: RoleSsoMappingPreview[]; keys: AccessKey[];
   userPolicies: Record<string, string[]>; settings: AccessSettings; events: AccessEvent[];
   personalMfa: PersonalMfaPreviewState;
   personalNotificationAddress: string | null;
@@ -141,8 +142,8 @@ export type AccessWorkspaceCommand =
   | { kind: "delete-role"; id: string }
   | { kind: "save-provider"; id?: string; name: string; protocol: IdentityProvider["protocol"]; issuer: string; audience: string; metadata: string; enabled: boolean }
   | { kind: "delete-provider"; id: string }
-  | { kind: "save-federation"; id?: string; name: string; subject: string; providerId: string; roleId: string; enabled: boolean }
-  | { kind: "delete-federation"; id: string }
+  | { kind: "save-role-sso-mapping-preview"; id?: string; name: string; assertionSubject: string; providerId: string; roleId: string; enabled: boolean }
+  | { kind: "delete-role-sso-mapping-preview"; id: string }
   | { kind: "create-key"; ownerId: string; ownerState: AccessKeyOwnerState; userResourceVersion: number; requestId: string; responseMode: "success" | "response-lost" }
   | { kind: "inspect-key-creation"; ownerId: string; requestId: string; resultMode: "found" | "not-found" | "unavailable" }
   | { kind: "set-key-status"; id: string; ownerState: AccessKeyOwnerState; status: AccessKey["status"]; resourceVersion: number; requestId: string }
@@ -389,7 +390,7 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
     case "update-role-trust": {
       const role = exists(state.roles, id);
       validateRoleTrust(state, { ...role, ...command }, context.userIds);
-      if (state.federations.some((entry) => entry.roleId === id && entry.providerId !== command.principal)) throw new AccessWorkspaceError("referenced");
+      if (state.roleSsoMappings.some((entry) => entry.roleId === id && entry.providerId !== command.principal)) throw new AccessWorkspaceError("referenced");
       role.principal = command.principal; role.trustedUserIds = [...new Set(command.trustedUserIds)]; break;
     }
     case "update-role-settings": {
@@ -428,7 +429,7 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
     }
     case "delete-role":
       exists(state.roles, id);
-      if (state.federations.some((entry) => entry.roleId === id)) throw new AccessWorkspaceError("referenced");
+      if (state.roleSsoMappings.some((entry) => entry.roleId === id)) throw new AccessWorkspaceError("referenced");
       state.roles = state.roles.filter((entry) => entry.id !== id); break;
     case "save-provider": {
       validateName(state.providers, command.name, command.id);
@@ -443,21 +444,21 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
     }
     case "delete-provider":
       exists(state.providers, id);
-      if (state.roles.some((entry) => entry.principalType === "provider" && entry.principal === id) || state.federations.some((entry) => entry.providerId === id)) throw new AccessWorkspaceError("referenced");
+      if (state.roles.some((entry) => entry.principalType === "provider" && entry.principal === id) || state.roleSsoMappings.some((entry) => entry.providerId === id)) throw new AccessWorkspaceError("referenced");
       state.providers = state.providers.filter((entry) => entry.id !== id);
       break;
-    case "save-federation": {
-      validateName(state.federations, command.name, command.id);
-      if (!command.subject.trim()) invalid();
+    case "save-role-sso-mapping-preview": {
+      validateName(state.roleSsoMappings, command.name, command.id);
+      if (!command.assertionSubject.trim()) invalid();
       exists(state.providers, command.providerId);
       const role = exists(state.roles, command.roleId);
       if (role.principalType !== "provider" || role.principal !== command.providerId) invalid();
-      const previous = state.federations.find((entry) => entry.id === id);
-      state.federations = put(state.federations, { ...command, id, name: command.name.trim(), createdAt: previous?.createdAt ?? createdAt });
+      const previous = state.roleSsoMappings.find((entry) => entry.id === id);
+      state.roleSsoMappings = put(state.roleSsoMappings, { ...command, id, name: command.name.trim(), createdAt: previous?.createdAt ?? createdAt });
       target = command.name; break;
     }
-    case "delete-federation":
-      exists(state.federations, id); state.federations = state.federations.filter((entry) => entry.id !== id); break;
+    case "delete-role-sso-mapping-preview":
+      exists(state.roleSsoMappings, id); state.roleSsoMappings = state.roleSsoMappings.filter((entry) => entry.id !== id); break;
     case "create-key":
       if (state.pendingKeyCreation || command.ownerState !== "active" || !context.userIds.includes(command.ownerId) || !Number.isInteger(command.userResourceVersion) || command.userResourceVersion < 1 || !command.requestId.trim() || state.keys.filter((key) => key.ownerId === command.ownerId).length >= 2) invalid();
       state.keys.push({ id: "MOCK-" + id, ownerId: command.ownerId, status: "ENABLED", resourceVersion: 1, createdAt });
