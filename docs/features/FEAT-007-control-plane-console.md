@@ -1840,8 +1840,11 @@ and is not inherited as a new backend acceptance result.
   remain unavailable. The shared catalog-driven author supports only exact
   Profile-declared trusted request and resource conditions; the revision-5
   resource-tag example remains isolated MOCK until its backend gates are green,
-  and tag mutation is not part of policy authoring. No Tencent authorization was
-  created or changed.
+  and tag mutation is not part of policy authoring. The separate four-method
+  resource-tag preview now scopes its request-tag omission to that isolated
+  MOCK and directs catalog-driven behavior to the selected product Profile,
+  rather than implying a platform-wide limitation. No Tencent authorization
+  was created or changed.
   Header/shell and appearance regression cases pass, including
   immediate directory content without a dimming stage and retained compact-panel
   dismissal, shared-trigger Enter/Space activation, expanded/panel semantics and
