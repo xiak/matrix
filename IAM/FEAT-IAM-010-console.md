@@ -450,6 +450,7 @@ IAM 工程师随后固定并推送来源 `cb62ed2f6c307f5a50aa27480f89c8c58cf081
 - 公共目录组件允许在同一内容边界切换列表与工作流；公共响应式命令焦点句柄在桌面返回主操作、小屏返回可见的“页面操作”入口，避免聚焦被 CSS 隐藏的桌面按钮。进入工作流聚焦标题，失败保留输入，返回、取消和完成恢复稳定触发器。
 - `AccessWorkspace` 130 条行为用例、完整前端 42 个测试文件 646 条用例及三条静态归一化用例通过。类型、lint、架构、228 组主题对比、40 页生产导出、222 个嵌入文件等价、`go test -p 2 ./...` 与 `go vet -p 2 ./...` 通过。
 - 真实 DEV 在 `539 × 866` 验证两类新建工作流；身份提供商与联合身份映射均在内容区呈现，Dialog 数为零，document/body 均满足 `clientWidth == scrollWidth == 539`。返回目录后小屏焦点位于可见的“页面操作”按钮，最终控制台 warning/error 为空。该证据只接受显式 MOCK UX，不声明真实 SSO 目录、写入、密钥轮换或外部协议联调已接入。
+- 2026-10-01 的协议语义修正固定在已推送的 [`ae91fd572`](https://github.com/xiak/matrix/commit/ae91fd572)。角色 SSO 提供商不再用一组含混的 URL、客户端 ID/Audience 和“元数据/签名公钥”标签同时解释 SAML 与 OIDC；SAML 明确呈现 IdP URL、服务提供商 Audience 和 EntityDescriptor XML，OIDC 明确呈现 Issuer URL、客户端 ID 与 JWKS JSON。协议切换为两类配置保留相互隔离的本地草稿，不会把 SAML XML、Audience 或 URL 静默重解释为 OIDC 配置，反向亦然。编辑与详情均固定显示同一 MOCK 边界：只保存当前浏览器会话并做本地形状检查，不连接外部 IdP、不解析证书或获取远端密钥、不验证签名/Token、不交换断言或 Token，也不签发登录会话。IAM Owner 已确认 FEAT-IAM-012 仍无固定可消费契约，因此这一修正没有添加 HTTP、后端字段承诺或 LIVE 可用声明。定向 178 条 IAM 工作区用例及完整 57 文件/941 条前端用例、三条静态归一化、类型/lint/架构/228 组主题对比、42 路由导出、233 文件嵌入等价和全仓 Go test/vet 均通过；桌面与 `390 × 844` DEV 验证两类协议字段、零 Dialog、零横向溢出及空 warning/error 日志。
 
 ### 用户 SSO 隔离体验的开发验收证据
 
