@@ -6,8 +6,8 @@
 - Updated: 2026-10-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `16948ac91`
-- Pushed documentation milestone: `41286d2c3`
+- Pushed source/embed milestone: `7d3a0918e`
+- Pushed documentation milestone: `83add6fa6`
 
 ## Authoritative route
 
@@ -48,10 +48,12 @@ MOCK copies only that immutable-resource graph and never infers support from an
 HTTP method, namespace or collection shape.
 
 Once this exact carrier set is non-empty, the workspace offers one same-User
-next task without claiming authorization: MOCK opens policy-source inspection
-with the exact User ID and LIVE opens that User's detail. The copy keeps this a
-policy/group configuration review; request-time Action, resource, condition and
-explicit-deny evaluation remain outside the browser.
+next task without claiming authorization. MOCK and LIVE both open the exact
+User detail; MOCK deep-links to the permission-source tab so direct policies,
+group inheritance, explicit Deny and the permission boundary are inspected
+together instead of preselecting an unrelated generic Action. The copy keeps
+this a configuration-source review; request-time Action, resource, condition
+and explicit-deny evaluation remain outside the browser.
 
 The isolated MOCK also groups the six public outcomes into one collapsed table
 instead of repeating them for each Action: `202 Operation`,
@@ -63,14 +65,16 @@ confirmation plus a new nonce after uncertain `503` instead of automatic
 intent replay. LIVE receives only the lazy read-only catalog and never renders
 this outcome fixture or signs/sends a product request.
 
-Source and synchronized embed are pushed at `16948ac91`; FEAT evidence is
-pushed at `41286d2c3`. The complete 57-file/931-case frontend suite and three
+Source and synchronized embed are pushed at `7d3a0918e`; FEAT evidence is
+pushed at `83add6fa6`. The complete 57-file/931-case frontend suite and three
 normalization cases passed with typecheck/lint/architecture/228-pair style
 gates, 42-route export, 233-file embed equality and full repository Go
 test/vet. Desktop and `390 x 844` DEV verified the exact five-Action result,
-same-User `principal-lin` handoff, collapsed filters and outcome disclosure,
-document/body equal to the 390px viewport, no Dialog or overflow and a clean
-browser warning/error log.
+same-User `principal-lin` handoff to
+`/console/access/users/?id=principal-lin&tab=policies`, selected
+permission-source tab, collapsed filters and outcome disclosure, document/body
+equal to the 390px viewport, no Dialog or overflow and a clean browser
+warning/error log.
 
 The previously pushed Application tag recovery, AccessKey owner directory,
 policy-compilation provenance, service-authorization, policy-coverage, Audit,
