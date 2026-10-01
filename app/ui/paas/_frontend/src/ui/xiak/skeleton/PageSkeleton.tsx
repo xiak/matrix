@@ -22,6 +22,17 @@ function LoadingFeedback({ label, labelVisible = true, children }: { label: stri
   </div>;
 }
 
+function CardPlaceholders({ cards }: { cards: number }) {
+  return <div aria-hidden="true" className={styles.cards}>
+    {Array.from({ length: cards }, (_, index) => <div className={styles.metric} key={index}>
+      <Skeleton className={styles.avatar} />
+      <Skeleton className={styles.title} />
+      <Skeleton className={styles.line} />
+      <Skeleton className={styles.caption} />
+    </div>)}
+  </div>;
+}
+
 export function TableSkeleton({ label, labelVisible = true, rows = 4, header = true }: { label?: string; labelVisible?: boolean; rows?: number; header?: boolean }) {
   const panel = <div className={styles.panel}>
     {header ? <div className={styles.panelHeader}><Skeleton className={styles.title} /><Skeleton className={styles.action} /></div> : null}
@@ -36,6 +47,12 @@ export function TableSkeleton({ label, labelVisible = true, rows = 4, header = t
   </LoadingFeedback>;
 }
 
+export function CardGridSkeleton({ label, labelVisible = true, cards = 3 }: { label: string; labelVisible?: boolean; cards?: number }) {
+  return <LoadingFeedback key={`cards:${label}`} label={label} labelVisible={labelVisible}>
+    <CardPlaceholders cards={cards} />
+  </LoadingFeedback>;
+}
+
 // Layout-aware placeholders share the real controls' geometry and theme.
 // The label is the only announced content; placeholder rows are not fake data.
 export function PageSkeleton({ label, labelVisible = true, layout = "table" }: { label: string; labelVisible?: boolean; layout?: PageSkeletonLayout }) {
@@ -44,7 +61,7 @@ export function PageSkeleton({ label, labelVisible = true, layout = "table" }: {
       {layout === "dashboard" ? <div className={styles.metrics}>{Array.from({ length: 4 }, (_, index) => <div className={styles.metric} key={index}><Skeleton className={styles.caption} /><Skeleton className={styles.value} /><Skeleton className={styles.line} /></div>)}</div> : null}
       {layout === "table" || layout === "list" || layout === "access" ? <div className={styles.toolbar}><Skeleton className={styles.search} /><Skeleton className={styles.action} /></div> : null}
       {layout === "access" ? <div className={styles.account}><Skeleton className={styles.avatar} /><Skeleton className={styles.title} /><Skeleton className={styles.title} /></div> : null}
-      {layout === "cards" ? <div className={styles.cards}>{Array.from({ length: 3 }, (_, index) => <div className={styles.metric} key={index}><Skeleton className={styles.avatar} /><Skeleton className={styles.title} /><Skeleton className={styles.line} /><Skeleton className={styles.caption} /></div>)}</div>
+      {layout === "cards" ? <CardPlaceholders cards={3} />
         : <div className={styles.panels} data-split={layout === "dashboard" ? "true" : undefined}><TableSkeleton />{layout === "dashboard" ? <TableSkeleton rows={3} /> : null}</div>}
     </div>
   </LoadingFeedback>;

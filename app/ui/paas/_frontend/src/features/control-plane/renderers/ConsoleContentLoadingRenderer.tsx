@@ -1,12 +1,12 @@
 "use client";
 
 import { useTranslations } from "next-intl";
-import { Card, PageSkeleton, TableSkeleton, Typography } from "@ui/xiak";
+import { Card, CardGridSkeleton, TableSkeleton, Typography } from "@ui/xiak";
 import type { ControlPlaneRouteSelection } from "../domain/selection";
 import styles from "./ConsoleContentLoadingRenderer.module.css";
 
 function DataPanel({ description, label, title }: { description?: string; label: string; title: string }) {
-  return <Card>
+  return <Card aria-label={title}>
     <Card.Header>
       <div>
         <Typography.Title as="h2" level={3}>{title}</Typography.Title>
@@ -15,6 +15,14 @@ function DataPanel({ description, label, title }: { description?: string; label:
     </Card.Header>
     <TableSkeleton header={false} label={label} labelVisible={false} rows={5} />
   </Card>;
+}
+
+function CardCollection({ label, title }: { label: string; title: string }) {
+  return <section aria-label={title}><CardGridSkeleton cards={3} label={label} labelVisible={false} /></section>;
+}
+
+function TableRegion({ label, title }: { label: string; title: string }) {
+  return <Card aria-label={title}><TableSkeleton header={false} label={label} labelVisible={false} rows={5} /></Card>;
 }
 
 // Route identity and stable page chrome render synchronously. Only the region
@@ -39,7 +47,7 @@ export function ConsoleContentLoadingRenderer({ label, selection }: { label: str
     return <DataPanel label={label} title={navigation("items.messages.label")} />;
   }
   if (section === "devops") {
-    if (view === "environments") return <PageSkeleton label={label} labelVisible={false} layout="cards" />;
+    if (view === "environments") return <CardCollection label={label} title={cloud("deliveryEnvironments")} />;
     return <DataPanel description={cloud("pipelinesHint")} label={label} title={cloud("recentPipelines")} />;
   }
   if (section === "observability") {
@@ -51,7 +59,7 @@ export function ConsoleContentLoadingRenderer({ label, selection }: { label: str
       const collection = view === "collection";
       return <DataPanel description={logs(collection ? "collectionHint" : "topicsHint")} label={label} title={logs(collection ? "collectionTitle" : "topicsTitle")} />;
     }
-    if (view === "search") return <PageSkeleton label={label} labelVisible={false} layout="table" />;
+    if (view === "search") return <TableRegion label={label} title={navigation("items.search.label")} />;
     return <div className={styles.stack}>
       <section className={styles.identity}>
         <div>
@@ -65,7 +73,9 @@ export function ConsoleContentLoadingRenderer({ label, selection }: { label: str
   }
   if (section === "audit") return <DataPanel description={navigation("items.audit.hint")} label={label} title={navigation("items.audit.label")} />;
   if (section === "catalog" || section === "quotas" || section === "regions") {
-    return <PageSkeleton label={label} labelVisible={false} layout="cards" />;
+    return <CardCollection label={label} title={navigation(`items.${section}.label`)} />;
   }
-  return <PageSkeleton label={label} labelVisible={false} layout={section === "overview" ? "dashboard" : "table"} />;
+  if (section === "overview") return <DataPanel description={managed("recentHint")} label={label} title={managed("recentInstances")} />;
+  const item = section === "access" && !view ? "access" : view ?? section;
+  return <TableRegion label={label} title={navigation(`items.${item}.label`)} />;
 }

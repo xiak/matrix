@@ -15,10 +15,11 @@ import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { useConsoleUiStore } from "../application/consoleUiStore";
 import type { ControlPlaneSnapshot } from "../domain/resources";
 import type { ExperienceSnapshot } from "../domain/experience";
-import { consoleRouteHref, type ConsoleSection, type ServiceView } from "../domain/selection";
+import { consoleRouteHref, type ControlPlaneRouteSelection, type ConsoleSection, type ServiceView } from "../domain/selection";
 import type { ControlPlaneRepository } from "../repositories/controlPlaneRepository";
 import { previewExperienceSnapshot } from "../repositories/previewExperienceSnapshot";
 import { ConsoleShellRenderer } from "./ConsoleShellRenderer";
+import { ConsoleContentLoadingRenderer } from "./ConsoleContentLoadingRenderer";
 import { parseControlPlanePathname } from "../routes/parseControlPlaneRoute";
 
 const navigation = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn(), query: "" }));
@@ -250,6 +251,28 @@ afterEach(() => {
 });
 
 describe("ConsoleShellRenderer", () => {
+  it.each([
+    { selection: { section: "overview" }, role: "article", name: "最近服务实例" },
+    { selection: { section: "catalog" }, role: "region", name: "产品规格" },
+    { selection: { section: "quotas" }, role: "region", name: "服务配额" },
+    { selection: { section: "regions" }, role: "region", name: "区域与节点" },
+    { selection: { section: "devops", view: "environments" }, role: "region", name: "交付环境" },
+    { selection: { section: "logs", view: "search" }, role: "article", name: "检索分析" },
+    { selection: { section: "access", view: "policies" }, role: "article", name: "策略" }
+  ] as const)("keeps the $name destination region stable while only its data placeholder is delayed", ({ selection, role, name }) => {
+    vi.useFakeTimers();
+    render(<LocaleProvider><ConsoleContentLoadingRenderer label={`正在打开${name}…`} selection={selection as ControlPlaneRouteSelection} /></LocaleProvider>);
+
+    const region = screen.getByRole(role, { name });
+    const status = within(region).getByRole("status");
+    expect(status.textContent).toBe(`正在打开${name}…`);
+    expect(status.querySelector("[aria-hidden]")).toBeNull();
+    act(() => vi.advanceTimersByTime(199));
+    expect(status.querySelector("[aria-hidden]")).toBeNull();
+    act(() => vi.advanceTimersByTime(1));
+    expect(status.querySelector("[aria-hidden]")).not.toBeNull();
+  });
+
   it.each([
     { section: "applications", table: "统一资源列表" },
     { section: "installations", table: "服务实例列表" },

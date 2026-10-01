@@ -19,7 +19,6 @@ import {
   Alert,
   Table,
   TableSkeleton,
-  PageSkeleton,
   EmptyState,
   Badge,
   Button,
@@ -43,6 +42,7 @@ import { ServiceAuthorizationChain } from "@/features/auth/renderers/ServiceAuth
 import { ServiceAuthorizationConsentReview, ServiceAuthorizationUnbindReview } from "@/features/auth/renderers/ServiceAuthorizationPreview";
 import { AuditWorkspace } from "@/features/audit/renderers/AuditWorkspace";
 import { useControlPlane } from "../application/ControlPlaneProvider";
+import { ConsoleContentLoadingRenderer } from "./ConsoleContentLoadingRenderer";
 import type {
   ManagedServiceAuthorizationIntent,
   ManagedServiceAuthorizationLoad
@@ -521,7 +521,7 @@ export function ConsoleContentRenderer({
   const t = useTranslations("AccountAccess");
   if (scene.kind === "logs") return <LogServiceRenderer regionId={scope?.regionId} scene={scene} />;
   if (scene.kind === "audit") return <AuditWorkspace preview={preview} />;
-  if (scene.kind === "access") return <Suspense fallback={<PageSkeleton layout="access" label={t("loading")} />}><AccessContent pendingHref={pendingHref} view={scene.view} /></Suspense>;
+  if (scene.kind === "access") return <Suspense fallback={<ConsoleContentLoadingRenderer label={t("loading")} selection={{ section: "access", view: scene.view === "overview" ? undefined : scene.view }} />}><AccessContent pendingHref={pendingHref} view={scene.view} /></Suspense>;
   if (scene.kind === "messages") return <MessageCenterRenderer scene={scene} />;
   if (
     scene.kind === "cloud-overview" ||

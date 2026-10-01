@@ -1,6 +1,6 @@
 import { act, cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { LOADING_FEEDBACK_DELAY_MS, PageSkeleton, TableSkeleton, type PageSkeletonLayout } from "./PageSkeleton";
+import { CardGridSkeleton, LOADING_FEEDBACK_DELAY_MS, PageSkeleton, TableSkeleton, type PageSkeletonLayout } from "./PageSkeleton";
 
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
@@ -21,7 +21,7 @@ describe("PageSkeleton", () => {
     expect(screen.queryByRole("row")).toBeNull();
   });
 
-  it.each([PageSkeleton, TableSkeleton])("acknowledges immediately, but mounts placeholder DOM only for sustained regional waits", (Feedback) => {
+  it.each([PageSkeleton, TableSkeleton, CardGridSkeleton])("acknowledges immediately, but mounts placeholder DOM only for sustained regional waits", (Feedback) => {
     vi.useFakeTimers();
     render(<Feedback label="Loading resources…" />);
     const status = screen.getByRole("status");

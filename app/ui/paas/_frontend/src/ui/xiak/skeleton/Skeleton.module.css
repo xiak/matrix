@@ -1,26 +1,38 @@
 @layer xiak {
 .skeleton {
+  position: relative;
+  overflow: hidden;
   min-height: var(--xiak-control-height);
   border-radius: var(--xiak-radius-control);
+  background: var(--xiak-color-bg-skeleton);
+  contain: paint;
+}
+
+.skeleton::after {
+  position: absolute;
+  inset: 0;
+  content: "";
   background: linear-gradient(
     90deg,
-    var(--xiak-color-bg-skeleton),
+    transparent,
     var(--xiak-color-bg-skeleton-active),
-    var(--xiak-color-bg-skeleton)
+    transparent
   );
-  background-size: 220% 100%;
+  transform: translate3d(-100%, 0, 0);
   animation: shimmer var(--xiak-motion-skeleton) linear infinite;
+  will-change: transform;
 }
 
 @keyframes shimmer {
   to {
-    background-position: -220% 0;
+    transform: translate3d(100%, 0, 0);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .skeleton {
+  .skeleton::after {
     animation: none;
+    transform: none;
   }
 }
 }
