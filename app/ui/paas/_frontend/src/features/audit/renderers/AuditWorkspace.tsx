@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useFormatter, useTranslations } from "next-intl";
-import { RefreshCcw, ShieldCheck } from "lucide-react";
+import { ListFilter, RefreshCcw, ShieldCheck } from "lucide-react";
 import { useEffectiveCredential } from "@/features/auth/application/RoleSessionProvider";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import {
@@ -86,6 +86,11 @@ function requestFrom(filters: DraftFilters): AuditQueryRequest {
     action: filters.action ? filters.action as AuditQueryRequest["action"] : undefined,
     actor: actorFrom(filters)
   };
+}
+
+function appliedFilterCount(request: AuditQueryRequest): number {
+  return Number(Boolean(request.from)) + Number(Boolean(request.to)) + Number(Boolean(request.action)) +
+    Number(Boolean(request.actor)) + Number(request.pageSize !== emptyFilters.pageSize);
 }
 
 function RecordDetail({ record, onBack }: { record: AuditRecord; onBack(): void }) {
@@ -212,7 +217,10 @@ export function AuditWorkspace({ preview = false }: { preview?: boolean }) {
   const [refreshRevision, setRefreshRevision] = useState(0);
   const [selected, setSelected] = useState<AuditRecord | null>(null);
   const [verifying, setVerifying] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const opener = useRef<number | null>(null);
+  const filterTrigger = useRef<HTMLButtonElement>(null);
+  const restoreFilterFocus = useRef(false);
   const restoreSequence = useRef<number | null>(null);
   const rowButtons = useRef(new Map<number, HTMLButtonElement>());
   const loadRevision = useRef(0);
@@ -247,6 +255,11 @@ export function AuditWorkspace({ preview = false }: { preview?: boolean }) {
     rowButtons.current.get(restoreSequence.current)?.focus({ preventScroll: true });
     restoreSequence.current = null;
   }, [selected]);
+  useLayoutEffect(() => {
+    if (filtersOpen || !restoreFilterFocus.current) return;
+    restoreFilterFocus.current = false;
+    filterTrigger.current?.focus({ preventScroll: true });
+  }, [filtersOpen]);
 
   const apply = useCallback(() => {
     if ((draft.from && Number.isNaN(Date.parse(draft.from))) || (draft.to && Number.isNaN(Date.parse(draft.to))) ||
@@ -258,24 +271,27 @@ export function AuditWorkspace({ preview = false }: { preview?: boolean }) {
       return;
     }
     setValidation(null);
-    setPage(null);
     setCursors([undefined]);
     setPageIndex(0);
     setRequest(requestFrom(draft));
+    restoreFilterFocus.current = true;
+    setFiltersOpen(false);
   }, [draft, t]);
 
   const reset = useCallback(() => {
     setDraft(emptyFilters);
     setValidation(null);
-    setPage(null);
     setCursors([undefined]);
     setPageIndex(0);
     setRequest(requestFrom(emptyFilters));
+    restoreFilterFocus.current = true;
+    setFiltersOpen(false);
   }, []);
 
   const actionOptions = useMemo(() => [{ value: "", label: t("filters.allActions") }, ...auditActions.map((action) => ({ value: action, label: action }))], [t]);
   const actorTypeOptions = useMemo(() => auditActorTypes.map((type) => ({ value: type, label: t(`actorTypes.${type}`) })), [t]);
   const roleSourceOptions = useMemo(() => (["USER", "SERVICE_ACCOUNT"] as const).map((type) => ({ value: type, label: t(`actorTypes.${type}`) })), [t]);
+  const filterCount = appliedFilterCount(request);
 
   if (selected) return <RecordDetail record={selected} onBack={() => {
     restoreSequence.current = opener.current;
@@ -290,7 +306,11 @@ export function AuditWorkspace({ preview = false }: { preview?: boolean }) {
       <Card.Header className={styles.directoryHeader}><div><Typography.Title as="h2" level={3}>{t("directory.heading")}</Typography.Title><Typography.Text tone="muted">{t("description")}</Typography.Text></div><Badge>{preview ? t("preview") : t("live")}</Badge></Card.Header>
       <Card.Body className={styles.stack}>
         <div className={styles.boundary}><ShieldCheck aria-hidden="true" /><p><strong>{t("boundary.title")}</strong><span>{t("boundary.description")}</span></p></div>
-        <form className={styles.filters} onSubmit={(event) => { event.preventDefault(); apply(); }}>
+        <div className={styles.queryBar}>
+          <Button aria-expanded={filtersOpen} aria-controls="audit-query-filters" ref={filterTrigger} type="button" variant="secondary" onClick={() => setFiltersOpen((value) => !value)}><ListFilter aria-hidden="true" />{t("filters.toggle")}{filterCount ? <Badge status="info">{t("filters.activeCount", { count: filterCount })}</Badge> : null}</Button>
+          <Button aria-label={t("actions.refresh")} disabled={loading} iconOnly size="small" type="button" variant="ghost" onClick={() => setRefreshRevision((value) => value + 1)}><RefreshCcw aria-hidden="true" /></Button>
+        </div>
+        {filtersOpen ? <form id="audit-query-filters" className={styles.filters} onSubmit={(event) => { event.preventDefault(); apply(); }}>
           <FormField id="audit-from" label={t("filters.from")}><Input id="audit-from" type="datetime-local" value={draft.from} onChange={(event) => setDraft((current) => ({ ...current, from: event.target.value }))} /></FormField>
           <FormField id="audit-to" label={t("filters.to")}><Input id="audit-to" type="datetime-local" value={draft.to} onChange={(event) => setDraft((current) => ({ ...current, to: event.target.value }))} /></FormField>
           <FormField label={t("filters.action")}><Select aria-label={t("filters.action")} options={actionOptions} value={draft.action} onValueChange={(action) => setDraft((current) => ({ ...current, action }))} /></FormField>
@@ -303,8 +323,8 @@ export function AuditWorkspace({ preview = false }: { preview?: boolean }) {
             <FormField id="audit-role-source-id" label={t("filters.roleSourceId")} hint={t("filters.roleSourceHint")}><Input id="audit-role-source-id" maxLength={128} value={draft.roleSourceId} onChange={(event) => setDraft((current) => ({ ...current, roleSourceId: event.target.value }))} /></FormField>
           </> : null}
           <FormField label={t("filters.pageSize")}><Select aria-label={t("filters.pageSize")} options={[10, 25, 50, 100, AUDIT_MAX_PAGE_SIZE].map((size) => ({ value: String(size), label: String(size) }))} value={String(draft.pageSize)} onValueChange={(size) => setDraft((current) => ({ ...current, pageSize: Number(size) }))} /></FormField>
-          <div className={styles.filterActions}><Button disabled={loading} type="submit">{t("actions.query")}</Button><Button disabled={loading} type="button" variant="secondary" onClick={reset}>{t("actions.reset")}</Button><Button aria-label={t("actions.refresh")} disabled={loading} iconOnly size="small" type="button" variant="ghost" onClick={() => setRefreshRevision((value) => value + 1)}><RefreshCcw aria-hidden="true" /></Button></div>
-        </form>
+          <div className={styles.filterActions}><Button disabled={loading} type="submit">{t("actions.query")}</Button><Button disabled={loading} type="button" variant="secondary" onClick={reset}>{t("actions.reset")}</Button></div>
+        </form> : null}
         {validation ? <Alert status="danger" role="alert">{validation}</Alert> : null}
         {error ? <EmptyState title={t("errors.title")} description={t(`errors.${error}`)} action={error !== "expired" ? <Button variant="secondary" onClick={() => setRefreshRevision((value) => value + 1)}>{t("actions.retry")}</Button> : undefined} /> : null}
         {!error && !page ? <TableSkeleton label={t("directory.loading")} labelVisible={false} rows={6} header={false} /> : null}

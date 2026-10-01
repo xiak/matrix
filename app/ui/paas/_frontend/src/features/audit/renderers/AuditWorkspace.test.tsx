@@ -19,6 +19,8 @@ describe("AuditWorkspace", () => {
     const table = await screen.findByRole("table", { name: "审计记录" });
     expect(within(table).getAllByRole("row")).toHaveLength(11);
     expect(screen.queryByRole("searchbox")).toBeNull();
+    expect(screen.queryByLabelText("开始时间")).toBeNull();
+    expect(screen.getByRole("button", { name: "查询条件" }).getAttribute("aria-expanded")).toBe("false");
     expect(screen.getByText(/当前租户：org-xiak/)).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "下一页" }));
@@ -67,6 +69,7 @@ describe("AuditWorkspace", () => {
     render(<LocaleProvider><AuditWorkspace preview /></LocaleProvider>);
     await screen.findByRole("table", { name: "审计记录" });
 
+    await user.click(screen.getByRole("button", { name: "查询条件" }));
     await user.click(screen.getByRole("combobox", { name: "操作者类型" }));
     await user.click(screen.getByRole("option", { name: "角色会话" }));
     expect(screen.getByLabelText("角色会话 ID")).toBeTruthy();
@@ -81,5 +84,9 @@ describe("AuditWorkspace", () => {
     await user.click(screen.getByRole("button", { name: "查询" }));
     await waitFor(() => expect(screen.getByText("第 1 页 · 1 条记录")).toBeTruthy());
     expect(screen.getByText("role-deployer")).toBeTruthy();
+    expect(screen.queryByLabelText("角色会话 ID")).toBeNull();
+    const filterTrigger = screen.getByRole("button", { name: /查询条件.*已应用 1 项/ });
+    expect(filterTrigger.getAttribute("aria-expanded")).toBe("false");
+    expect(document.activeElement).toBe(filterTrigger);
   });
 });

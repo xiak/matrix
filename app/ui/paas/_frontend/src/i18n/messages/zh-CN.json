@@ -2587,6 +2587,8 @@
       "next": "下一页"
     },
     "filters": {
+      "toggle": "查询条件",
+      "activeCount": "已应用 {count} 项",
       "from": "开始时间",
       "to": "结束时间",
       "action": "Action",

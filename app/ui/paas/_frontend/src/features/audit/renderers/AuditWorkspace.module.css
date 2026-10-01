@@ -7,6 +7,8 @@
 .boundary > svg { width: 18px; height: 18px; margin-top: 2px; }
 .boundary p { display: grid; gap: var(--xiak-spacing-micro); margin: 0; line-height: var(--xiak-line-height-body); }
 .boundary span { font-size: var(--xiak-font-size-small); }
+.queryBar { display: flex; min-height: var(--xiak-control-height); align-items: center; justify-content: space-between; gap: var(--xiak-spacing-default); }
+.queryBar > :first-child { min-width: 0; }
 .filters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--xiak-spacing-default); align-items: end; }
 .filterActions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--xiak-spacing-tight); }
 .collection { min-width: 0; border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); overflow: hidden; }

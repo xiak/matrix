@@ -2587,6 +2587,8 @@
       "next": "Next page"
     },
     "filters": {
+      "toggle": "Query filters",
+      "activeCount": "{count} applied",
       "from": "Start time",
       "to": "End time",
       "action": "Action",
