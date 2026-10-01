@@ -1809,6 +1809,27 @@ The 99-case LIVE account-access renderer file, typecheck/lint, architecture and
 test/vet passed. Desktop and `430 × 900` DEV showed the count and row reason
 without a Dialog; viewport, document and body width remained 430px.
 
+Application hosting now owns a query-addressable resource-detail surface rather
+than sending its resource row back to the same undifferentiated directory. The
+same-path transition retains the shared console frame and immediately renders
+known resource identity, state, project, region and product facts; it does not
+open a Dialog or replace fixed content with a page-wide skeleton. The isolated
+preview adds a product-owned read-only tag snapshot, its ETag and an explicit
+mapping for the one `resource.tag/environment` condition declared by the current
+MOCK Profile. Other resource tags are visibly not exposed by that Profile, and
+the copy states that policy authoring never mutates persisted resource tags.
+Unknown query identifiers fail locally without inventing a resource. No tag
+set/delete command, IAM Action, optimistic-concurrency response, Audit proof or
+LIVE adapter is inferred while the owning product/IAM contract is still being
+fixed. Source and synchronized embed are pushed at `db01dd6da`. The complete
+57-file/922-case frontend suite, three export-normalization cases,
+typecheck/lint, architecture and 228-pair style gates, 42-route static export,
+233-file embed equality and UI-host Go test/vet passed. Desktop and `430 × 900`
+DEV verified directory → detail plus browser back/forward, with no Dialog,
+warning/error or horizontal overflow; viewport, document and body width stayed
+430px. This is application-side MOCK UX evidence, not resource-tag mutation or
+backend authorization acceptance.
+
 Same-path detail-query tests retain encoded IDs, draft-leave protection and
 replace semantics without a Next page-tree navigation. Real static deep links
 and browser back/forward observations belong to the
