@@ -175,6 +175,7 @@ describe("AccountLiveRoles", () => {
     expect(api.listSessions).not.toHaveBeenCalled();
     await user.click(screen.getByRole("tab", { name: "角色会话" }));
     expect(await screen.findByText(liveSession.id)).toBeTruthy();
+    expect(within(screen.getByRole("table", { name: "角色会话" })).queryByRole("columnheader", { name: "操作" })).toBeNull();
     await user.click(screen.getByRole("button", { name: `会话 ${liveSession.id} 的操作` }));
     await user.click(screen.getByRole("menuitem", { name: "撤销会话" }));
     expect(screen.queryByRole("dialog")).toBeNull();

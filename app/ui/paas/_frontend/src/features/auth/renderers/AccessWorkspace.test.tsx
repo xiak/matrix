@@ -1503,6 +1503,7 @@ describe("CAM-style access workspace", () => {
     await select(user, "来源用户", "qiao · principal-qiao");
     await user.type(screen.getByRole("searchbox", { name: "输入完整会话 ID" }), activeSessionId);
     const table = screen.getByRole("table", { name: "临时会话" });
+    expect(within(table).queryByRole("columnheader", { name: "操作" })).toBeNull();
     expect(table.textContent).toContain(activeSessionId);
     expect(table.textContent).not.toContain(revokedSessionId);
     const trigger = within(table).getByRole("button", { name: `会话 ${activeSessionId} 的操作` });

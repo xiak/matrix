@@ -53,6 +53,18 @@
   align-items: flex-start;
 }
 
+.sessionState {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--xiak-spacing-tight);
+  min-width: 0;
+}
+
+.sessionState > span:last-child {
+  flex: none;
+}
+
 .headerCopy {
   min-width: 0;
   flex: 1 1 auto;
