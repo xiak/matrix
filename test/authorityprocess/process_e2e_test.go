@@ -110,7 +110,7 @@ func TestRuntimeDSNBindsLeastPrivilegeLogin(t *testing.T) {
 func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	const variable = "MATRIX_IAM_PREDECESSOR_POSTGRES_TEST_DSN"
 	const databasePrefix = "matrix_iam_upgrade_predecessor_"
-	const source = "35e15da224e68bf0aa39d311254e123734b832f1"
+	const source = "05336ad368996a500c0769fe62767204bd9333d0"
 	const sourceSchema uint64 = 59
 	const currentSchema uint64 = 59
 	// Use credentials accepted by the immediate predecessor. This rolling
@@ -1753,7 +1753,7 @@ func proveFrozenFamilyProfileAdvance(t *testing.T, ctx context.Context, admin *p
 	// condition in the future build. Even a resource-nonmatching old Deny must
 	// then fail closed, rather than disappear behind another Allow.
 	replacement, err := parser.ParseExpr(fmt.Sprintf(`func() AuthorizationProfile {
-		profile := paasProfileRevisionEleven
+		profile := paasProfileRevisionTwelve
 		profile.Revision = %d
 		var added AuthorizationProfileAction
 		for index, action := range profile.Actions {
@@ -1784,7 +1784,7 @@ func proveFrozenFamilyProfileAdvance(t *testing.T, ctx context.Context, admin *p
 		}
 		for index, element := range catalog.Elts {
 			current, ok := element.(*ast.Ident)
-			if ok && current.Name == "paasProfileRevisionEleven" {
+			if ok && current.Name == "paasProfileRevisionTwelve" {
 				catalog.Elts[index] = replacement
 				replaced++
 			}
@@ -5875,7 +5875,7 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 	call(endpoint, http.MethodGet, "/v1/account/security-settings", string(secret), nil, http.StatusUnauthorized, nil)
 	call(endpoint, http.MethodGet, "/v1/users/"+string(a.target.ID)+"/password-resets/key-cannot-query?resourceVersion=1", string(secret), nil, http.StatusUnauthorized, nil)
 	clear(secret)
-	signHTTP := func(account *accountFixture, requestHTTP iamv1.AccessKeyHTTPRequest) iamv1.AccessKeySignedRequest {
+	signHTTPFor := func(account *accountFixture, audience iamv1.ProductID, requestHTTP iamv1.AccessKeyHTTPRequest) iamv1.AccessKeySignedRequest {
 		t.Helper()
 		var now time.Time
 		if err := database.QueryRow(ctx, "SELECT clock_timestamp()").Scan(&now); err != nil {
@@ -5886,7 +5886,7 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 			t.Fatal("generate process signature nonce")
 		}
 		signed := iamv1.AccessKeySignedRequest{Parameters: iamv1.AccessKeySignatureParameters{
-			AccessKeyID: account.key.Key.ID, InstallationID: "installation-process", Audience: iamv1.ProductPaaS, SignedAt: now.Unix(),
+			AccessKeyID: account.key.Key.ID, InstallationID: "installation-process", Audience: audience, SignedAt: now.Unix(),
 			Nonce: processSecret(t, base64.RawURLEncoding.EncodeToString(nonce))},
 			HTTP: requestHTTP}
 		canonical, err := iamv1.AccessKeySigningBytes(signed.Parameters, signed.HTTP)
@@ -5908,19 +5908,22 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		sensitive = append(sensitive, base64.RawURLEncoding.EncodeToString(nonce), signature)
 		return signed
 	}
-	// Exercise the actual internal RPC in both IAM executables. Application
-	// label mutation intentionally remains an AccessKey Deny; positive product reads
+	signHTTP := func(account *accountFixture, requestHTTP iamv1.AccessKeyHTTPRequest) iamv1.AccessKeySignedRequest {
+		return signHTTPFor(account, iamv1.ProductPaaS, requestHTTP)
+	}
+	// Exercise the actual internal RPC in both IAM executables. Managed-service
+	// installation reads intentionally remain an AccessKey Deny; positive product reads
 	// must go through their exact PaaS routes below.
 	sign := func(account *accountFixture, requestID string) iamv1.AccessKeyAuthorizationRequest {
 		t.Helper()
-		request, err := iamv1.NewAuthorizationRequest(iamv1.ActionPaaSApplicationLabelSet,
-			iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "program-signed-application"}, iamv1.AuthorizationResourceInstance, "", requestID, requestID)
+		request, err := iamv1.NewAuthorizationRequest(iamv1.ActionManagedServiceInstallationRead,
+			iamv1.ResourceReference{Kind: iamv1.ResourceServiceInstallation, ID: "program-signed-installation"}, iamv1.AuthorizationResourceInstance, "", requestID, requestID)
 		if err != nil {
 			t.Fatal(err)
 		}
 		bodyHash := sha256.Sum256(nil)
-		signed := signHTTP(account, iamv1.AccessKeyHTTPRequest{Method: http.MethodPut, Scheme: "https", Authority: "program-process.invalid:443",
-			EscapedPath: "/api/paas/v1/applications/program-signed-application/labels/environment", BodyDigest: "sha256:" + hex.EncodeToString(bodyHash[:])})
+		signed := signHTTPFor(account, iamv1.ProductManagedService, iamv1.AccessKeyHTTPRequest{Method: http.MethodGet, Scheme: "https", Authority: "program-process.invalid:443",
+			EscapedPath: "/api/managedservice/v1/service-installations/program-signed-installation", BodyDigest: "sha256:" + hex.EncodeToString(bodyHash[:])})
 		return iamv1.AccessKeyAuthorizationRequest{Authorization: request, SignedRequest: signed}
 	}
 	encode := func(request iamv1.AccessKeyAuthorizationRequest) []byte {
@@ -5977,8 +5980,8 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		return response
 	}
 	type signedProductRequest struct {
-		method, body, route, externalPath, idempotencyKey, ifMatch string
-		signed                                                     iamv1.AccessKeySignedRequest
+		method, body, route, externalPath, contentType, idempotencyKey, ifMatch string
+		signed                                                                  iamv1.AccessKeySignedRequest
 	}
 	prepareProduct := func(account *accountFixture, route, idempotencyKey string, payload any) signedProductRequest {
 		t.Helper()
@@ -5989,7 +5992,8 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		digest := sha256.Sum256(body)
 		externalPath := "/api/paas" + route
 		return signedProductRequest{
-			method: http.MethodPost, body: string(body), route: route, externalPath: externalPath, idempotencyKey: idempotencyKey,
+			method: http.MethodPost, body: string(body), route: route, externalPath: externalPath,
+			contentType: "application/json", idempotencyKey: idempotencyKey,
 			signed: signHTTP(account, iamv1.AccessKeyHTTPRequest{
 				Method: http.MethodPost, Scheme: "https", Authority: "api.matrix.test:443",
 				EscapedPath: externalPath, ContentType: "application/json", IdempotencyKey: idempotencyKey,
@@ -6019,10 +6023,24 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		externalPath := "/api/paas" + route
 		return signedProductRequest{
 			method: method, body: string(body), route: route, externalPath: externalPath,
-			idempotencyKey: idempotencyKey, ifMatch: ifMatch,
+			contentType: "application/json", idempotencyKey: idempotencyKey, ifMatch: ifMatch,
 			signed: signHTTP(account, iamv1.AccessKeyHTTPRequest{
 				Method: method, Scheme: "https", Authority: "api.matrix.test:443",
 				EscapedPath: externalPath, ContentType: "application/json", IdempotencyKey: idempotencyKey, IfMatch: ifMatch,
+				BodyDigest: "sha256:" + hex.EncodeToString(digest[:]),
+			}),
+		}
+	}
+	prepareProductEmptyMutation := func(account *accountFixture, method, route, idempotencyKey, ifMatch string) signedProductRequest {
+		t.Helper()
+		digest := sha256.Sum256(nil)
+		externalPath := "/api/paas" + route
+		return signedProductRequest{
+			method: method, route: route, externalPath: externalPath,
+			idempotencyKey: idempotencyKey, ifMatch: ifMatch,
+			signed: signHTTP(account, iamv1.AccessKeyHTTPRequest{
+				Method: method, Scheme: "https", Authority: "api.matrix.test:443",
+				EscapedPath: externalPath, IdempotencyKey: idempotencyKey, IfMatch: ifMatch,
 				BodyDigest: "sha256:" + hex.EncodeToString(digest[:]),
 			}),
 		}
@@ -6041,7 +6059,9 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		}
 		request.Header.Set("Authorization", string(plain))
 		if value.method != http.MethodGet {
-			request.Header.Set("Content-Type", "application/json")
+			if value.contentType != "" {
+				request.Header.Set("Content-Type", value.contentType)
+			}
 			request.Header.Set("Idempotency-Key", value.idempotencyKey)
 			if value.ifMatch != "" {
 				request.Header.Set("If-Match", value.ifMatch)
@@ -6167,6 +6187,30 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		}
 		decisions[account.key.Key.ID][decisionID] = true
 	}
+	recordProductLabelDecision := func(account *accountFixture, response processResponse, action iamv1.Action, id paasv1.ResourceID, current, requested string) {
+		t.Helper()
+		requestID := response.Header.Get("X-Request-ID")
+		if requestID == "" {
+			t.Fatal("signed Application label mutation omitted request identity")
+		}
+		var decisionID iamv1.DecisionID
+		var exact bool
+		if err := database.QueryRow(ctx, `SELECT id,allowed AND contract_version=7 AND principal_id=$2 AND access_key_id=$3
+			AND action_name=$4 AND target_kind=$5 AND target_id=$6
+			AND document->'resourceTags'=jsonb_build_array(
+			  jsonb_build_object('key','environment','value',$7::text))
+			AND document->'requestTags'=jsonb_build_array(
+			  jsonb_build_object('key','environment','value',$8::text))
+			FROM iam.authorization_decisions WHERE tenant_id=$1 AND request_id=$9`,
+			account.target.AccountID, account.target.ID, account.key.Key.ID, action,
+			iamv1.ResourceApplication, id, current, requested, requestID).Scan(&decisionID, &exact); err != nil || !exact {
+			t.Fatal("signed Application label mutation lost Account/key/tag binding", err)
+		}
+		if decisions[account.key.Key.ID] == nil {
+			decisions[account.key.Key.ID] = map[iamv1.DecisionID]bool{}
+		}
+		decisions[account.key.Key.ID][decisionID] = true
+	}
 	// This gate owns the IAM/PEP boundary, not execution reconciliation. Move
 	// the already accepted Deployment to a semantically valid observed state
 	// between commands so each real HTTP mutation can exercise the original
@@ -6211,6 +6255,7 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		account := &accounts[index]
 		prefix := fmt.Sprintf("program-signature-%d", index)
 		createIAMPolicyAttachment(t, endpoint, account.owner, account.target.ID, iamv1.SystemPolicyPaaSDeveloper, prefix+"-grant")
+		createIAMPolicyAttachment(t, endpoint, account.owner, account.target.ID, iamv1.SystemPolicyManagedServiceInstallationReader, prefix+"-managedservice-grant")
 		environment := "production"
 		if index == 1 {
 			environment = "staging"
@@ -6259,6 +6304,56 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 			decisions[account.key.Key.ID] = map[iamv1.DecisionID]bool{}
 		}
 		decisions[account.key.Key.ID][readDecision] = true
+		readStoredApplication := func() paasv1.Application {
+			t.Helper()
+			var document []byte
+			if err := database.QueryRow(ctx, `SELECT document FROM paas.applications WHERE tenant_id=$1 AND id=$2`,
+				account.target.AccountID, application.ID).Scan(&document); err != nil {
+				t.Fatal("read signed Application label state", err)
+			}
+			var stored paasv1.Application
+			if iamv1.DecodeRequest(bytes.NewReader(document), &stored) != nil || paasv1.ValidateApplication(stored) != nil ||
+				stored.Metadata.Scope.TenantID != paasv1.TenantID(account.target.AccountID) || stored.Metadata.ID != application.ID {
+				t.Fatal("signed Application label state crossed Account ownership")
+			}
+			return stored
+		}
+		temporaryEnvironment := "preview"
+		labelRoute := "/v1/applications/" + string(application.ID) + "/labels/environment"
+		setLabelRequest := prepareProductMutation(account, http.MethodPut, labelRoute, prefix+"-label-set",
+			fmt.Sprintf(`"%d"`, readApplication.Metadata.ResourceVersion), paasv1.SetApplicationLabelRequest{Value: temporaryEnvironment})
+		setLabelResponse := invokeProduct(setLabelRequest, http.StatusOK)
+		setLabelOperation := decodeProductOperation(account, setLabelResponse, paasv1.OperationSetApplicationLabel, application.ID)
+		recordProductLabelDecision(account, setLabelResponse, iamv1.ActionPaaSApplicationLabelSet, application.ID, environment, temporaryEnvironment)
+		invokeProduct(setLabelRequest, http.StatusConflict)
+		setETag := setLabelResponse.Header.Get("ETag")
+		if setETag == "" || readStoredApplication().Metadata.Labels["environment"] != temporaryEnvironment {
+			t.Fatal("signed Application label set did not commit the exact Account-owned value")
+		}
+
+		deleteLabelRequest := prepareProductEmptyMutation(account, http.MethodDelete, labelRoute, prefix+"-label-delete", setETag)
+		deleteLabelResponse := invokeProduct(deleteLabelRequest, http.StatusOK)
+		deleteLabelOperation := decodeProductOperation(account, deleteLabelResponse, paasv1.OperationDeleteApplicationLabel, application.ID)
+		recordProductLabelDecision(account, deleteLabelResponse, iamv1.ActionPaaSApplicationLabelDelete, application.ID, temporaryEnvironment, temporaryEnvironment)
+		invokeProduct(deleteLabelRequest, http.StatusConflict)
+		deleteETag := deleteLabelResponse.Header.Get("ETag")
+		if _, present := readStoredApplication().Metadata.Labels["environment"]; deleteETag == "" || present {
+			t.Fatal("signed Application label delete did not remove the exact Account-owned value")
+		}
+		waitAllPaaSOutboxDelivered(t, ctx, database)
+		assertProductAudit(account, setLabelOperation, auditv1.ActionPaaSApplicationLabelUpdated)
+		assertProductAudit(account, deleteLabelOperation, auditv1.ActionPaaSApplicationLabelDeleted)
+
+		// Restore the original fixture through the ordinary login-session path so the
+		// later tag-deny gate retains its independent production/staging matrix.
+		restoreLabel := performJSONWithHeaders(t, http.MethodPut, paasEndpoint+labelRoute, account.targetBearer,
+			prefix+"-label-restore", paasv1.SetApplicationLabelRequest{Value: environment}, map[string]string{"If-Match": deleteETag})
+		var restoreOperation paasv1.Operation
+		if restoreLabel.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(restoreLabel.Body), &restoreOperation) != nil ||
+			paasv1.ValidateOperation(restoreOperation) != nil || restoreOperation.Action != paasv1.OperationSetApplicationLabel ||
+			readStoredApplication().Metadata.Labels["environment"] != environment {
+			t.Fatalf("restore login-session Application label status=%d body=%s", restoreLabel.Status, restoreLabel.Body)
+		}
 
 		configuration := paasv1.CreateConfigurationRequest{
 			ID: "program-key-configuration", Name: "program-key-configuration", ApplicationID: application.ID,

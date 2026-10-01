@@ -1271,15 +1271,16 @@ func TestAccessKeySigningSchemasMatchExplicitTransportAndSanitizedResults(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	unsupportedRequest, err := NewAuthorizationRequest(ActionPaaSApplicationLabelSet,
-		ResourceReference{Kind: ResourceApplication, ID: "application-one"},
+	unsupportedRequest, err := NewAuthorizationRequest(ActionPaaSExecutionTargetDrain,
+		ResourceReference{Kind: ResourceExecutionTarget, ID: "execution-target-one"},
 		AuthorizationResourceInstance, "", "request-unsupported-key", "correlation-unsupported-key")
 	if err != nil {
 		t.Fatal(err)
 	}
 	unsupportedKeyResult := result
 	unsupportedKeyResult.Decision.Allowed, unsupportedKeyResult.Decision.Reason = true, DecisionAllowed
-	unsupportedKeyResult.Decision.TenantID = "account-one"
+	unsupportedKeyResult.Decision.TenantID = ""
+	unsupportedKeyResult.Decision.InstallationID = "installation-one"
 	unsupportedKeyResult.Decision.Subject = &Subject{Type: SubjectUser, ID: "user-one", AccessKeyID: "key-one"}
 	unsupportedKeyResult.Decision.Action = unsupportedRequest.Action
 	unsupportedKeyResult.Decision.Resource = unsupportedRequest.Resource

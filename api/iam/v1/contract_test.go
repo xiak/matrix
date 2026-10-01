@@ -1729,7 +1729,7 @@ func TestAccessKeySubjectLineageRequiresItsOwnDeclaredCarrier(t *testing.T) {
 			}
 		}
 	}
-	request, err := NewAuthorizationRequest(ActionPaaSApplicationLabelSet, ResourceReference{Kind: ResourceApplication, ID: "application-one"}, AuthorizationResourceInstance, "", "request-key", "correlation-key")
+	request, err := NewAuthorizationRequest(ActionManagedServiceInstallationRead, ResourceReference{Kind: ResourceServiceInstallation, ID: "service-installation-one"}, AuthorizationResourceInstance, "", "request-key", "correlation-key")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1737,7 +1737,7 @@ func TestAccessKeySubjectLineageRequiresItsOwnDeclaredCarrier(t *testing.T) {
 		Action: request.Action, Resource: request.Resource, RequestID: request.RequestID, CorrelationID: request.CorrelationID,
 		Profile: &request.Profile, ResourceMode: request.ResourceMode, DecidedAt: time.Date(2026, 9, 17, 0, 0, 0, 0, time.UTC),
 		TenantID: "account-one", Subject: &Subject{Type: SubjectUser, ID: "user-one", AccessKeyID: "key-one"}}
-	profile, _ := LookupAuthorizationProfile(ProductPaaS)
+	profile, _ := LookupAuthorizationProfile(ProductManagedService)
 	if ValidateAuthorizationDecision(decision) == nil || ValidateAuthorizationDecisionForProfile(decision, profile) == nil {
 		t.Fatal("USER capability alone admitted a key-attributed decision")
 	}
@@ -3187,7 +3187,7 @@ func TestRoleBusinessProfilesRequireExplicitCurrentCapabilities(t *testing.T) {
 		current, found := LookupAuthorizationProfile(product)
 		expectedRevision := uint64(2)
 		if product == ProductPaaS {
-			expectedRevision = 11
+			expectedRevision = 12
 		}
 		if !found || current.Revision != expectedRevision {
 			t.Fatal("missing explicit new product revision")
@@ -4010,7 +4010,7 @@ func TestHistoricalDecisionProfileDoesNotBorrowCurrentHead(t *testing.T) {
 
 func TestPaaSProfileDeclaresCompletePlatformProduct(t *testing.T) {
 	profile, found := LookupAuthorizationProfile(ProductPaaS)
-	if !found || profile.Revision != 11 {
+	if !found || profile.Revision != 12 {
 		t.Fatal("missing current PaaS role, tag, and AccessKey-capable declaration")
 	}
 	expected := map[Action]struct {
@@ -4084,6 +4084,8 @@ func TestPaaSProfileDeclaresCompletePlatformProduct(t *testing.T) {
 		ActionPaaSDeploymentUpdate:            {AuthorizationResourceShape{Mode: AuthorizationResourceInstance}, ""},
 		ActionPaaSDeploymentStop:              {AuthorizationResourceShape{Mode: AuthorizationResourceInstance}, ""},
 		ActionPaaSDeploymentRollback:          {AuthorizationResourceShape{Mode: AuthorizationResourceInstance}, ""},
+		ActionPaaSApplicationLabelSet:         {AuthorizationResourceShape{Mode: AuthorizationResourceInstance}, ""},
+		ActionPaaSApplicationLabelDelete:      {AuthorizationResourceShape{Mode: AuthorizationResourceInstance}, ""},
 	}
 	for _, action := range profile.Actions {
 		expected, keyAction := keyActions[action.Action]
@@ -4550,6 +4552,7 @@ func TestAuthorizationProfileUserAuthenticationIsExplicitAndCommitted(t *testing
 				ActionPaaSApplicationCreate, ActionPaaSConfigurationCreate,
 				ActionPaaSConfigurationRevisionCreate, ActionPaaSApplicationRevisionCreate,
 				ActionPaaSDeploymentCreate, ActionPaaSApplicationRead,
+				ActionPaaSApplicationLabelSet, ActionPaaSApplicationLabelDelete,
 				ActionPaaSConfigurationRead, ActionPaaSConfigurationRevisionRead,
 				ActionPaaSApplicationRevisionRead, ActionPaaSDeploymentRead,
 				ActionPaaSOperationRead, ActionPaaSDeploymentUpdate,

@@ -420,6 +420,8 @@ func TestAccessKeyRouteAdmissionIsAnExactClosedMap(t *testing.T) {
 		{http.MethodGet, "/v1/operations/operation-a", []iamv1.Action{port.AuthorizeOperationRead}},
 		{http.MethodPut, "/v1/deployments/deployment-a", []iamv1.Action{port.AuthorizeDeploymentUpdate, port.AuthorizeDeploymentStop}},
 		{http.MethodPost, "/v1/deployments/deployment-a/rollback", []iamv1.Action{port.AuthorizeDeploymentRollback}},
+		{http.MethodPut, "/v1/applications/application-a/labels/environment", []iamv1.Action{port.AuthorizeApplicationLabelSet}},
+		{http.MethodDelete, "/v1/applications/application-a/labels/environment", []iamv1.Action{port.AuthorizeApplicationLabelDelete}},
 	} {
 		actions, admitted := accessKeyActionsForRoute(test.method, test.path)
 		if !admitted || !reflect.DeepEqual(actions, test.actions) {
@@ -442,6 +444,9 @@ func TestAccessKeyRouteAdmissionIsAnExactClosedMap(t *testing.T) {
 		{http.MethodPut, "/v1/deployments/deployment-a/extra"},
 		{http.MethodPost, "/v1/deployments/deployment-a/rollback/extra"},
 		{http.MethodDelete, "/v1/deployments/deployment-a"},
+		{http.MethodPut, "/v1/applications/application-a/labels/team"},
+		{http.MethodDelete, "/v1/applications/application-a/labels/team"},
+		{http.MethodPut, "/v1/applications/application-a/labels/environment/extra"},
 	} {
 		if actions, admitted := accessKeyActionsForRoute(test.method, test.path); admitted || actions != nil {
 			t.Fatalf("undeclared route %s %s mapped to %v", test.method, test.path, actions)
@@ -585,6 +590,67 @@ func TestHandlerMutatesApplicationLabelsWithCurrentAndRequestedEvidence(t *testi
 		!reflect.DeepEqual(authorizer.request.RequestLabels, map[string]string{"environment": "staging"}) ||
 		!reflect.DeepEqual(workflow.deleteApplicationLabel.Authorization.RequestTags, []iamv1.AuthorizationTag{{Key: "environment", Value: "staging"}}) {
 		t.Fatalf("delete label status=%d request=%#v command=%#v body=%s", response.Code, authorizer.request, workflow.deleteApplicationLabel, response.Body.String())
+	}
+}
+
+func TestHandlerMutatesApplicationLabelsThroughExactAccessKeyBoundary(t *testing.T) {
+	for _, test := range []struct {
+		name, method, value string
+		action              iamv1.Action
+		requestTags         []iamv1.AuthorizationTag
+	}{
+		{name: "set", method: http.MethodPut, value: "staging", action: port.AuthorizeApplicationLabelSet,
+			requestTags: []iamv1.AuthorizationTag{{Key: "environment", Value: "staging"}}},
+		{name: "delete", method: http.MethodDelete, action: port.AuthorizeApplicationLabelDelete,
+			requestTags: []iamv1.AuthorizationTag{{Key: "environment", Value: "production"}}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			authorizer := &fakeAuthorizer{}
+			workflow := &fakeWorkflow{inspectSnapshot: &applicationlifecycle.ApplicationAuthorizationSnapshot{
+				ID: "application-label-key", ResourceVersion: 7,
+				Labels: map[string]string{"environment": "production", "team": "platform"},
+			}}
+			handler := mustAccessKeyHandler(t, authorizer, workflow)
+			internalPath := "/v1/applications/application-label-key/labels/environment"
+			var request *http.Request
+			if test.method == http.MethodPut {
+				request = jsonRequest(t, test.method, internalPath, paasv1.SetApplicationLabelRequest{Value: test.value})
+			} else {
+				request = httptest.NewRequest(test.method, internalPath, nil)
+			}
+			request.Header.Set("Idempotency-Key", test.name+"-application-label-key")
+			request.Header.Set("If-Match", `"7"`)
+			externalPath := "/api/paas" + internalPath
+			setAccessKeyEdgeHeaders(t, request, externalPath)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusOK || authorizer.keyResolveCalls != 1 || authorizer.resolveCalls != 0 ||
+				authorizer.accessKeyCalls != 1 || authorizer.authorizeCalls != 0 {
+				t.Fatalf("signed label %s status=%d keyResolve=%d bearerResolve=%d key=%d bearer=%d body=%s",
+					test.name, response.Code, authorizer.keyResolveCalls, authorizer.resolveCalls,
+					authorizer.accessKeyCalls, authorizer.authorizeCalls, response.Body.String())
+			}
+			expectedResourceTags := []iamv1.AuthorizationTag{{Key: "environment", Value: "production"}}
+			if authorizer.accessKeyRequest.Action != test.action ||
+				authorizer.accessKeyRequest.Resource != (paasv1.ResourceRef{Kind: port.ResourceApplication, ID: "application-label-key"}) ||
+				!reflect.DeepEqual(authorizer.accessKeyRequest.ResourceLabels, workflow.inspectSnapshot.Labels) ||
+				authorizer.accessKeyRequest.SignedRequest.HTTP.Method != test.method ||
+				authorizer.accessKeyRequest.SignedRequest.HTTP.EscapedPath != externalPath ||
+				authorizer.accessKeyRequest.SignedRequest.HTTP.IfMatch != `"7"` {
+				t.Fatalf("signed label %s mapped to %#v", test.name, authorizer.accessKeyRequest)
+			}
+			var authorization port.Authorization
+			if test.method == http.MethodPut {
+				authorization = workflow.setApplicationLabel.Authorization
+			} else {
+				authorization = workflow.deleteApplicationLabel.Authorization
+			}
+			if !authorization.Subject.Equal(paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "user-authorized", AccessKeyID: "key-one"}) ||
+				!reflect.DeepEqual(authorization.ResourceTags, expectedResourceTags) ||
+				!reflect.DeepEqual(authorization.RequestTags, test.requestTags) {
+				t.Fatalf("signed label %s lost key/tag evidence: %#v", test.name, authorization)
+			}
+		})
 	}
 }
 

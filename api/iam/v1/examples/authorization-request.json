@@ -8,8 +8,8 @@
   "correlationId": "correlation-authorize",
   "profile": {
     "product": "paas",
-    "revision": 11,
-    "contentDigest": "sha256:ba8b808cc72c4ff1eb34d9eb933b5cde4ee95dde0f1a5c361058c2dab6937b48"
+    "revision": 12,
+    "contentDigest": "sha256:ec6ef98cd9b4939cbbdd05632c8fbd28ff8ce79d98466ce98103c3fae30699b6"
   },
   "resourceMode": "COLLECTION",
   "collectionUsage": "COLLECTION_CREATE",

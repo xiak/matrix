@@ -208,14 +208,38 @@ func TestAccessKeyAdmissionIsLimitedToDeclaredGraphAndInstanceActions(t *testing
 			t.Fatal("declared Deployment mutation rejected", candidate.action)
 		}
 	}
+	for _, candidate := range []struct {
+		action      iamv1.Action
+		method      string
+		contentType string
+		bodyDigest  string
+	}{
+		{AuthorizeApplicationLabelSet, "PUT", "application/json", "sha256:" + strings.Repeat("c", 64)},
+		{AuthorizeApplicationLabelDelete, "DELETE", "", "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+	} {
+		mutation := read
+		mutation.Action = candidate.action
+		mutation.Resource = paasv1.ResourceRef{Kind: ResourceApplication, ID: "application-one"}
+		mutation.ResourceLabels = map[string]string{"environment": "production"}
+		mutation.RequestLabels = map[string]string{"environment": "staging"}
+		mutation.SignedRequest.HTTP.Method = candidate.method
+		mutation.SignedRequest.HTTP.EscapedPath = "/api/paas/v1/applications/application-one/labels/environment"
+		mutation.SignedRequest.HTTP.ContentType = candidate.contentType
+		mutation.SignedRequest.HTTP.IdempotencyKey = "mutate-application-label"
+		mutation.SignedRequest.HTTP.IfMatch = `"7"`
+		mutation.SignedRequest.HTTP.BodyDigest = candidate.bodyDigest
+		if ValidateAccessKeyAuthorizationRequest(mutation) != nil {
+			t.Fatal("declared Application label mutation rejected", candidate.action)
+		}
+	}
 	undeclared := read
-	undeclared.Action = AuthorizeApplicationLabelSet
-	undeclared.Resource = paasv1.ResourceRef{Kind: ResourceApplication, ID: "application-one"}
+	undeclared.Action = iamv1.ActionPaaSExecutionTargetDrain
+	undeclared.Resource = paasv1.ResourceRef{Kind: string(iamv1.ResourceExecutionTarget), ID: "execution-target-one"}
 	undeclared.ResourceLabels = nil
-	undeclared.SignedRequest.HTTP.Method = "PUT"
-	undeclared.SignedRequest.HTTP.EscapedPath = "/api/paas/v1/applications/application-one/labels/environment"
+	undeclared.SignedRequest.HTTP.Method = "POST"
+	undeclared.SignedRequest.HTTP.EscapedPath = "/api/paas/v1/execution-targets/execution-target-one:drain"
 	if ValidateAccessKeyAuthorizationRequest(undeclared) == nil {
-		t.Fatal("undeclared Application label update borrowed Deployment AccessKey admission")
+		t.Fatal("undeclared platform target mutation borrowed tenant AccessKey admission")
 	}
 }
 

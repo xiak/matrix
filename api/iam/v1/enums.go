@@ -454,7 +454,7 @@ func AllServicePurposes() []ServicePurpose {
 // editable source. Product revision changes must accompany changed declarations.
 var authorizationProfiles = [...]AuthorizationProfile{
 	iamServiceRoleProfile(),
-	paasProfileRevisionEleven,
+	paasProfileRevisionTwelve,
 	managedServiceProfileRevisionFour,
 	roleBusinessProfile(auditProfileRevisionOne),
 	declaredProductProfile(ProductInstallation, ServiceInstallationVerifier, 1,
@@ -508,7 +508,7 @@ var iamProfileRevisionOne = declaredProductProfile(ProductIAM, ServiceIAM, 1,
 )
 
 func HistoricalAuthorizationProfiles() []AuthorizationProfile {
-	return []AuthorizationProfile{cloneAuthorizationProfile(iamProfileRevisionOne), iamRoleManagementProfile(), iamRoleSessionProfile(), iamRoleSessionManagementProfile(), iamAccessKeyManagementProfile(), iamSecuritySettingsReadProfile(), iamSecuritySettingsProfile(), cloneAuthorizationProfile(paasProfileRevisionOne), cloneAuthorizationProfile(paasProfileRevisionTwo), cloneAuthorizationProfile(paasProfileRevisionThree), cloneAuthorizationProfile(paasProfileRevisionFour), cloneAuthorizationProfile(paasProfileRevisionFive), cloneAuthorizationProfile(paasProfileRevisionSix), cloneAuthorizationProfile(paasProfileRevisionSeven), cloneAuthorizationProfile(paasProfileRevisionEight), cloneAuthorizationProfile(paasProfileRevisionNine), cloneAuthorizationProfile(paasProfileRevisionTen), cloneAuthorizationProfile(managedServiceProfileRevisionOne), cloneAuthorizationProfile(managedServiceProfileRevisionTwo), cloneAuthorizationProfile(managedServiceProfileRevisionThree), cloneAuthorizationProfile(auditProfileRevisionOne)}
+	return []AuthorizationProfile{cloneAuthorizationProfile(iamProfileRevisionOne), iamRoleManagementProfile(), iamRoleSessionProfile(), iamRoleSessionManagementProfile(), iamAccessKeyManagementProfile(), iamSecuritySettingsReadProfile(), iamSecuritySettingsProfile(), cloneAuthorizationProfile(paasProfileRevisionOne), cloneAuthorizationProfile(paasProfileRevisionTwo), cloneAuthorizationProfile(paasProfileRevisionThree), cloneAuthorizationProfile(paasProfileRevisionFour), cloneAuthorizationProfile(paasProfileRevisionFive), cloneAuthorizationProfile(paasProfileRevisionSix), cloneAuthorizationProfile(paasProfileRevisionSeven), cloneAuthorizationProfile(paasProfileRevisionEight), cloneAuthorizationProfile(paasProfileRevisionNine), cloneAuthorizationProfile(paasProfileRevisionTen), cloneAuthorizationProfile(paasProfileRevisionEleven), cloneAuthorizationProfile(managedServiceProfileRevisionOne), cloneAuthorizationProfile(managedServiceProfileRevisionTwo), cloneAuthorizationProfile(managedServiceProfileRevisionThree), cloneAuthorizationProfile(auditProfileRevisionOne)}
 }
 
 // Revision one remains archived because compiled policy content and decisions
@@ -567,6 +567,7 @@ var paasProfileRevisionEight = applicationGraphCreateAccessKeyProfile(paasProfil
 var paasProfileRevisionNine = applicationReadAccessKeyProfile(paasProfileRevisionEight)
 var paasProfileRevisionTen = paasInstanceReadAccessKeyProfile(paasProfileRevisionNine)
 var paasProfileRevisionEleven = paasDeploymentMutationAccessKeyProfile(paasProfileRevisionTen)
+var paasProfileRevisionTwelve = applicationLabelAccessKeyProfile(paasProfileRevisionEleven)
 
 func applicationCreateAccessKeyProfile(previous AuthorizationProfile) AuthorizationProfile {
 	profile := cloneAuthorizationProfile(previous)
@@ -665,6 +666,28 @@ func paasDeploymentMutationAccessKeyProfile(previous AuthorizationProfile) Autho
 	}
 	if len(pending) != 0 {
 		panic("PaaS Deployment mutation declaration is missing")
+	}
+	return profile
+}
+
+func applicationLabelAccessKeyProfile(previous AuthorizationProfile) AuthorizationProfile {
+	profile := cloneAuthorizationProfile(previous)
+	profile.Revision++
+	pending := map[Action]struct{}{
+		ActionPaaSApplicationLabelSet:    {},
+		ActionPaaSApplicationLabelDelete: {},
+	}
+	for index := range profile.Actions {
+		if _, expected := pending[profile.Actions[index].Action]; !expected {
+			continue
+		}
+		profile.Actions[index].UserAuthenticationMethods = []UserAuthenticationMethod{
+			UserAuthenticationAccessKey, UserAuthenticationLoginSession,
+		}
+		delete(pending, profile.Actions[index].Action)
+	}
+	if len(pending) != 0 {
+		panic("PaaS Application label mutation declaration is missing")
 	}
 	return profile
 }

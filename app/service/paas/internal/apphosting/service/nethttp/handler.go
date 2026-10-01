@@ -274,10 +274,29 @@ func accessKeyActionsForRoute(method, path string) ([]iamv1.Action, bool) {
 		return nil, false
 	}
 	if method == http.MethodPut {
+		const applicationPrefix = "/v1/applications/"
+		applicationPath := strings.TrimPrefix(path, applicationPrefix)
+		parts := strings.Split(applicationPath, "/")
+		if applicationPath != path && len(parts) == 3 && parts[1] == "labels" &&
+			paasv1.ValidateID("applicationId", parts[0]) == nil &&
+			port.ValidateApplicationLabelKeyForAction(port.AuthorizeApplicationLabelSet, parts[2]) == nil {
+			return []iamv1.Action{port.AuthorizeApplicationLabelSet}, true
+		}
 		const deploymentPrefix = "/v1/deployments/"
 		id := strings.TrimPrefix(path, deploymentPrefix)
 		if id != path && !strings.Contains(id, "/") && paasv1.ValidateID("deploymentId", id) == nil {
 			return []iamv1.Action{port.AuthorizeDeploymentUpdate, port.AuthorizeDeploymentStop}, true
+		}
+		return nil, false
+	}
+	if method == http.MethodDelete {
+		const applicationPrefix = "/v1/applications/"
+		applicationPath := strings.TrimPrefix(path, applicationPrefix)
+		parts := strings.Split(applicationPath, "/")
+		if applicationPath != path && len(parts) == 3 && parts[1] == "labels" &&
+			paasv1.ValidateID("applicationId", parts[0]) == nil &&
+			port.ValidateApplicationLabelKeyForAction(port.AuthorizeApplicationLabelDelete, parts[2]) == nil {
+			return []iamv1.Action{port.AuthorizeApplicationLabelDelete}, true
 		}
 		return nil, false
 	}
@@ -454,18 +473,8 @@ func (value *handler) mutateApplicationLabel(
 		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument, "Invalid argument", "application label key is not declared by the current PaaS Profile", false)
 		return
 	}
-	subjectRequest := port.SubjectResolutionRequest{Credential: request.Header.Get("Authorization")}
-	if port.ValidateSubjectResolutionRequest(subjectRequest) != nil {
-		writeAuthorizationError(response, requestID, port.ErrUnauthenticated)
-		return
-	}
-	subject, err := value.authorizer.ResolveSubject(request.Context(), subjectRequest)
-	if err != nil {
-		writeAuthorizationError(response, requestID, err)
-		return
-	}
-	if port.ValidateAuthorizationSubjectContext(subject) != nil {
-		writeAuthorizationError(response, requestID, port.ErrAuthorizationUnavailable)
+	subject, ok := value.resolveRequestSubject(response, request, requestID, action)
+	if !ok {
 		return
 	}
 	snapshot, inspectErr := value.workflow.InspectApplicationAuthorization(request.Context(), subject, applicationID)
@@ -499,6 +508,7 @@ func (value *handler) mutateApplicationLabel(
 		return
 	}
 	var result applicationlifecycle.ApplicationLabelResult
+	var err error
 	if targetValue == nil {
 		result, err = value.workflow.DeleteApplicationLabel(request.Context(), applicationlifecycle.DeleteApplicationLabelCommand{
 			Authorization: authorization, ApplicationID: applicationID, LabelKey: labelKey,
@@ -655,29 +665,8 @@ func (value *handler) getApplication(response http.ResponseWriter, request *http
 	if !ok {
 		return
 	}
-	var subject port.AuthorizationSubjectContext
-	var err error
-	if signedContext, present := request.Context().Value(accessKeyContextKey{}).(accessKeyRequestContext); present {
-		accessKeyAuthorizer, ok := value.authorizer.(port.AccessKeyAuthorizer)
-		if !ok || !slices.Contains(signedContext.Actions, port.AuthorizeApplicationRead) {
-			writeAuthorizationError(response, requestID, port.ErrAuthorizationUnavailable)
-			return
-		}
-		subject, err = accessKeyAuthorizer.ResolveAccessKeySubject(request.Context(), signedContext.SignedRequest)
-	} else {
-		subjectRequest := port.SubjectResolutionRequest{Credential: request.Header.Get("Authorization")}
-		if port.ValidateSubjectResolutionRequest(subjectRequest) != nil {
-			writeAuthorizationError(response, requestID, port.ErrUnauthenticated)
-			return
-		}
-		subject, err = value.authorizer.ResolveSubject(request.Context(), subjectRequest)
-	}
-	if err != nil {
-		writeAuthorizationError(response, requestID, err)
-		return
-	}
-	if port.ValidateAuthorizationSubjectContext(subject) != nil {
-		writeAuthorizationError(response, requestID, port.ErrAuthorizationUnavailable)
+	subject, ok := value.resolveRequestSubject(response, request, requestID, port.AuthorizeApplicationRead)
+	if !ok {
 		return
 	}
 	snapshot, inspectErr := value.workflow.InspectApplicationAuthorization(request.Context(), subject, id)
@@ -708,6 +697,40 @@ func (value *handler) getApplication(response http.ResponseWriter, request *http
 		return
 	}
 	writeResource(response, requestID, resource, resourceVersionETag(resource.Metadata.ResourceVersion), err)
+}
+
+func (value *handler) resolveRequestSubject(
+	response http.ResponseWriter,
+	request *http.Request,
+	requestID string,
+	expectedAction iamv1.Action,
+) (port.AuthorizationSubjectContext, bool) {
+	var subject port.AuthorizationSubjectContext
+	var err error
+	if signedContext, present := request.Context().Value(accessKeyContextKey{}).(accessKeyRequestContext); present {
+		accessKeyAuthorizer, ok := value.authorizer.(port.AccessKeyAuthorizer)
+		if !ok || !slices.Contains(signedContext.Actions, expectedAction) {
+			writeAuthorizationError(response, requestID, port.ErrAuthorizationUnavailable)
+			return port.AuthorizationSubjectContext{}, false
+		}
+		subject, err = accessKeyAuthorizer.ResolveAccessKeySubject(request.Context(), signedContext.SignedRequest)
+	} else {
+		subjectRequest := port.SubjectResolutionRequest{Credential: request.Header.Get("Authorization")}
+		if port.ValidateSubjectResolutionRequest(subjectRequest) != nil {
+			writeAuthorizationError(response, requestID, port.ErrUnauthenticated)
+			return port.AuthorizationSubjectContext{}, false
+		}
+		subject, err = value.authorizer.ResolveSubject(request.Context(), subjectRequest)
+	}
+	if err != nil {
+		writeAuthorizationError(response, requestID, err)
+		return port.AuthorizationSubjectContext{}, false
+	}
+	if port.ValidateAuthorizationSubjectContext(subject) != nil {
+		writeAuthorizationError(response, requestID, port.ErrAuthorizationUnavailable)
+		return port.AuthorizationSubjectContext{}, false
+	}
+	return subject, true
 }
 
 func (value *handler) getConfiguration(response http.ResponseWriter, request *http.Request) {
