@@ -6,8 +6,8 @@
 - Updated: 2026-10-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `f11ac6582`
-- Pushed documentation milestone: `c936fb709`
+- Pushed source/embed milestone: `61b626c35`
+- Pushed documentation milestone: `2860081aa`
 
 ## Authoritative route
 
@@ -37,19 +37,25 @@ shared Table/Footer paginates future results. Product acceptance is labelled as
 metadata, not a grant: every request must still revalidate the key, User,
 current policies, target resource, conditions and explicit denies. The browser
 does not retain the Secret, sign a request or issue a synthetic product call.
+The isolated MOCK alone adds a second default-collapsed disclosure for the
+fixed `paas.application.create` public outcomes: `202 Operation`,
+`400 INVALID_ARGUMENT`, `401 UNAUTHENTICATED`, `403 PERMISSION_DENIED`,
+`409 CONFLICT` and `503 IDENTITY_UNAVAILABLE`. It records only verified nonce
+semantics (`400` not consumed; `403` and `409` consumed) and makes no inference
+for `401` or `503`. LIVE never renders this unreleased fixture.
 
 Fixed IAM source `40adf6d828180050992a8a6c139f05a83afc753f` advances the PaaS
 Profile to revision 7 and admits AccessKey for exactly
 `paas.application.create`. The isolated preview now carries that exact
 `ROLE + USER` and `ACCESS_KEY + LOGIN_SESSION` declaration; every other sampled
 PaaS Action remains login-session-only. Source and synchronized embed are
-pushed at `f11ac6582`; FEAT evidence is pushed at `c936fb709`. Focused 257-case
-coverage and the complete 57-file/931-case frontend suite passed with three
-normalization cases, typecheck/lint/architecture/228-pair style gates, 42-route
-export, 233-file embed equality and UI-host Go test/vet. Desktop and
-`390 x 844` DEV verified the single revision-7 Action, labelled stacked rows,
-no Dialog or horizontal overflow and viewport/document/body width all 390px;
-the browser emitted no warning or error.
+pushed at `61b626c35`; FEAT evidence is pushed at `2860081aa`. Focused
+preview/LIVE behavior and the complete 57-file/931-case frontend suite passed
+with three normalization cases, typecheck/lint/architecture/228-pair style gates, 42-route
+export, 233-file embed equality and full repository Go test/vet. Desktop and
+`390 x 844` DEV verified the single revision-7 Action, collapsed disclosure,
+labelled stacked outcome rows, no Dialog or horizontal overflow and a clean
+post-reload browser log.
 
 The previously pushed Application tag recovery, AccessKey owner directory,
 policy-compilation provenance, service-authorization, policy-coverage, Audit,
@@ -63,10 +69,10 @@ pushed commits. IAM fixed source `40adf6d8` has passed local PostgreSQL,
 independent-process, race/vet and Linux-build gates, but independent
 Verification `36842829292` and the APISIX/northbound signed installation remain
 unfinished; do not label the programmatic product path LIVE or add a browser
-signature/test-request flow. The IAM engineer has started a revision-8 resource
-graph successor for four additional collection-create Actions, but it is still
-an unfixed working tree. Do not infer AccessKey support from a collection shape:
-consume only each fixed Action's explicit credential-carrier set. Accepting a
+signature/test-request flow. The IAM engineer's revision-8 resource-graph
+successor has passed its five-process gate and is still completing predecessor
+verification, but remains unfixed and unpushed. Do not infer AccessKey support
+from a collection shape: consume only each fixed Action's explicit credential-carrier set. Accepting a
 credential carrier must never become an effective-access claim. Continue
 without reintroducing whole-page loading, hidden broad Context subscriptions,
 fabricated totals, duplicate components or login verification before UX
