@@ -117,7 +117,7 @@ export function WorkspaceCollection<T extends { id: string; name: string }>({ ti
   const action = create ? <Button ref={createActionRef} disabled={create.disabled} title={create.reason} onClick={create.onClick} size="small"><Plus aria-hidden="true" />{create.label}</Button> : null;
   const primary = create ? { id: "create", label: create.label, icon: <Plus aria-hidden="true" />, disabled: create.disabled, disabledReason: create.disabled ? create.reason : undefined, onSelect: create.onClick } satisfies PageCommand : undefined;
   return <Card aria-description={description}>
-    {!embedded ? <ContentPage.Heading title={title} scrollKey={`collection:${title}`} actions={!workflow && (primary || secondaryActions.length) ? <ContentPage.Commands label={collection("pageActions")} primaryRef={createActionRef} focusRef={createFocusRef} primary={primary} secondary={secondaryActions} /> : undefined} /> : null}
+    {!embedded ? <ContentPage.Heading title={title} scrollKey={`collection:${title}`} actions={!workflow && (primary || secondaryActions.length) ? <ContentPage.Commands label={collection("pageActions")} moreLabel={collection("moreActions")} primaryRef={createActionRef} focusRef={createFocusRef} primary={primary} secondary={secondaryActions} /> : undefined} /> : null}
     {!workflow && intro ? intro : null}
     {workflow ?? <>
     <TableToolbar labels={toolbarLabels} search={{ label: t("search"), value: query, onChange: (value) => { setQuery(value); setPage(1); } }}
@@ -148,7 +148,7 @@ export function WorkspaceDetail({ title, onBack, backLabel, actions, children, e
 }) {
   const t = useTranslations("IamWorkspace");
   const c = useTranslations("Collection");
-  const commands = actions ? <ContentPage.Commands label={c("pageActions")} primaryRef={primaryActionRef} focusRef={actionFocusRef} {...actions} /> : undefined;
+  const commands = actions ? <ContentPage.Commands label={c("pageActions")} moreLabel={c("moreActions")} primaryRef={primaryActionRef} focusRef={actionFocusRef} {...actions} /> : undefined;
   const resolvedBackLabel = backLabel ?? t("back");
   return <div className={styles.detailWorkspace}>{embedded ? <div className={styles.sectionHeading}><Button variant="ghost" onClick={onBack}>{resolvedBackLabel}</Button><h2 className={styles.detailTitle}>{title}</h2>{commands}</div> : <ContentPage.Heading title={title} scrollKey={`detail:${title}`} back={{ label: resolvedBackLabel, onClick: onBack }} actions={commands} focus={focus} />}{children}</div>;
 }

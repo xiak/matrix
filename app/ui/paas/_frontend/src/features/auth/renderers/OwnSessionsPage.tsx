@@ -68,7 +68,7 @@ export function OwnSessionsPage() {
   const busy = sessions.loading || Boolean(sessions.revokingId) || sessions.revokingOthers;
   const unresolved = Boolean(sessions.uncertainTargetId) || sessions.uncertainOthers;
   const hasOtherSessions = Boolean(page && (page.nextCursor || page.items.some((item) => item.id !== page.currentSessionId)));
-  const actions = <ContentPage.Commands label={collection("pageActions")} secondary={[{
+  const actions = <ContentPage.Commands label={collection("pageActions")} moreLabel={collection("moreActions")} secondary={[{
     id: "revoke-others",
     label: t("endOthers"),
     icon: <LogOut aria-hidden="true" />,

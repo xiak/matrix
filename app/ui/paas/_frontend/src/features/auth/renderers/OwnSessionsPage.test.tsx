@@ -1,4 +1,5 @@
 import { act, cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 import { LocaleProvider } from "@/i18n/LocaleProvider";
 import { SessionProvider, useSession } from "../application/SessionProvider";
@@ -45,9 +46,11 @@ describe("OwnSessionsPage", () => {
 
   it("keeps the bulk action stable and confirms it inline before preserving the current session", async () => {
     const screen = render(<LocaleProvider><SessionProvider repository={previewIamRepository}><Harness /></SessionProvider></LocaleProvider>);
+    const user = userEvent.setup();
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "进入体验" })));
     await waitFor(() => expect(screen.getByText("session-ux-preview-003")).toBeTruthy());
-    fireEvent.click(screen.getByRole("button", { name: "结束其他会话" }));
+    await user.click(screen.getByRole("button", { name: "更多操作" }));
+    await user.click(screen.getByRole("menuitem", { name: "结束其他会话" }));
     expect(screen.getByText("保留当前会话，结束其余登录会话？")).toBeTruthy();
     expect(screen.getByText(/包括后续分页中的会话/)).toBeTruthy();
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "确认结束其他会话" })));

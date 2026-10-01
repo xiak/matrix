@@ -54,7 +54,7 @@ describe("ContentPage context heading", () => {
     const user = userEvent.setup(), invoke = vi.fn(), rendered = vi.fn();
     function Detail() {
       const [draft, setDraft] = useState("");
-      return <><ContentPage.Heading title="Policy" actions={<ContentPage.Commands label="Page actions"
+      return <><ContentPage.Heading title="Policy" actions={<ContentPage.Commands label="Page actions" moreLabel="More actions"
         primary={{ id: "save", label: "Save policy", onSelect: () => invoke(draft) }}
         secondary={[{ id: "delete", label: "Delete policy", danger: true, disabledReason: "In use", onSelect: invoke }]} />} />
         <input aria-label="Description" value={draft} onChange={(event) => setDraft(event.target.value)} /></>;
@@ -64,14 +64,17 @@ describe("ContentPage context heading", () => {
     await user.type(screen.getByRole("textbox"), "Latest description");
     expect(rendered).toHaveBeenCalledTimes(commits);
     await user.click(screen.getByRole("button", { name: "Save policy" }));
-    await user.click(screen.getByRole("button", { name: "Page actions" }));
-    const menu = within(screen.getByRole("menu", { name: "Page actions" }));
+    expect(screen.queryByRole("button", { name: "Delete policy" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    const menu = within(screen.getByRole("menu", { name: "More actions" }));
     const unavailable = menu.getByRole("menuitem", { name: "Delete policy" });
     expect(unavailable.getAttribute("aria-disabled")).toBe("true");
     expect(document.getElementById(unavailable.getAttribute("aria-describedby")!)?.textContent).toBe("In use");
     await user.click(unavailable);
     expect(invoke).toHaveBeenCalledTimes(1);
-    await user.click(menu.getByRole("menuitem", { name: "Save policy" }));
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    await user.click(within(screen.getByRole("menu", { name: "Page actions" })).getByRole("menuitem", { name: "Save policy" }));
     expect(invoke.mock.calls).toEqual([["Latest description"], ["Latest description"]]);
   });
 
@@ -79,7 +82,7 @@ describe("ContentPage context heading", () => {
     const user = userEvent.setup();
     function Harness() {
       const commands = useRef<PageCommandsHandle>(null);
-      return <><ContentPage.Commands label="Page actions" focusRef={commands}
+      return <><ContentPage.Commands label="Page actions" moreLabel="More actions" focusRef={commands}
         primary={{ id: "create", label: "Create role", onSelect() {} }}
         secondary={[{ id: "service-authorization", label: "Service authorization", onSelect() {} }]} />
         <button onClick={() => commands.current?.focus("service-authorization")}>Restore workflow trigger</button>
@@ -87,9 +90,27 @@ describe("ContentPage context heading", () => {
     }
     render(<Harness />);
     await user.click(screen.getByRole("button", { name: "Restore workflow trigger" }));
-    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Service authorization" }));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "More actions" }));
     await user.click(screen.getByRole("button", { name: "Restore default trigger" }));
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Create role" }));
+  });
+
+  it("keeps one standalone secondary command direct and groups multiple peers in one desktop menu", async () => {
+    const user = userEvent.setup(), refresh = vi.fn(), revoke = vi.fn();
+    const view = render(<ContentPage.Commands label="Page actions" moreLabel="More actions"
+      secondary={[{ id: "refresh", label: "Refresh sessions", onSelect: refresh }]} />);
+    await user.click(screen.getByRole("button", { name: "Refresh sessions" }));
+    expect(refresh).toHaveBeenCalledOnce();
+
+    view.rerender(<ContentPage.Commands label="Page actions" moreLabel="More actions" secondary={[
+      { id: "refresh", label: "Refresh sessions", onSelect: refresh },
+      { id: "revoke", label: "End other sessions", danger: true, onSelect: revoke },
+    ]} />);
+    expect(screen.queryByRole("button", { name: "Refresh sessions" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "End other sessions" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "More actions" }));
+    await user.click(screen.getByRole("menuitem", { name: "End other sessions" }));
+    expect(revoke).toHaveBeenCalledOnce();
   });
 
   it("keeps creation available with no selection, then exposes eligible batch commands and clear through the same compact trigger", async () => {

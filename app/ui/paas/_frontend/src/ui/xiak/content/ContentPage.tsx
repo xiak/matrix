@@ -89,21 +89,33 @@ function Heading({ title, back, actions, focus = false, scrollKey }: PageHeading
 
 // Both presentations use one command list. CSS switches the composition before
 // first paint; resizing never subscribes the shell or remounts the feature.
-function Commands({ label, primary, secondary = [], selection, primaryRef, focusRef }: {
-  label: string; primary?: PageCommand; secondary?: readonly PageCommand[];
+function Commands({ label, moreLabel = label, primary, secondary = [], selection, primaryRef, focusRef }: {
+  label: string; moreLabel?: string; primary?: PageCommand; secondary?: readonly PageCommand[];
   selection?: PageSelection; primaryRef?: RefObject<HTMLButtonElement | null>; focusRef?: Ref<PageCommandsHandle>;
 }) {
   const desktopAction = useRef<HTMLButtonElement>(null);
   const desktopActions = useRef(new Map<string, HTMLButtonElement>());
+  const desktopOverflowAction = useRef<HTMLButtonElement>(null);
+  const desktopOverflowActions = useRef(new Set<string>());
   const desktopCommands = useRef<HTMLDivElement>(null);
   const compactAction = useRef<HTMLButtonElement>(null);
   useImperativeHandle(focusRef, () => ({ focus(actionId?: string) {
     const compact = desktopCommands.current && getComputedStyle(desktopCommands.current).display === "none";
     const requested = actionId ? desktopActions.current.get(actionId) : undefined;
-    (compact ? compactAction.current : requested ?? desktopAction.current)?.focus({ preventScroll: true });
+    const overflow = actionId && desktopOverflowActions.current.has(actionId) ? desktopOverflowAction.current : undefined;
+    (compact ? compactAction.current : requested ?? overflow ?? desktopAction.current ?? desktopOverflowAction.current)?.focus({ preventScroll: true });
   } }), []);
   const items = primary ? [primary, ...secondary] : secondary;
-  const firstAvailable = items.find((item) => !item.disabled && !item.disabledReason);
+  // A page header has one stable, high-frequency command. Additional commands
+  // share one overflow entry so state changes never push the primary command.
+  const directItems = primary ? [primary] : secondary.length === 1 ? [...secondary] : [];
+  const desktopOverflowItems = useMemo(() => primary ? secondary : secondary.length > 1 ? secondary : [], [primary, secondary]);
+  const firstAvailable = directItems.find((item) => !item.disabled && !item.disabledReason);
+  const hasAvailableDirect = Boolean(firstAvailable);
+  useLayoutEffect(() => {
+    desktopOverflowActions.current = new Set(desktopOverflowItems.filter((item) => !item.disabled && !item.disabledReason).map((item) => item.id));
+    if (!hasAvailableDirect) desktopAction.current = null;
+  }, [desktopOverflowItems, hasAvailableDirect]);
   const compactItems: ActionMenuItem[] = [...items, ...(selection?.actions.map((action, index) => ({
     ...action, separatorBefore: index === 0, disabled: selection.disabled || action.disabled,
     disabledReason: action.disabledReason ?? (selection.disabled ? selection.hint : undefined),
@@ -112,12 +124,13 @@ function Commands({ label, primary, secondary = [], selection, primaryRef, focus
   return <div className={styles.commandBar}>
     <div className={styles.expandedCommands} ref={desktopCommands}>
       {selection ? <TableActions {...selection} /> : null}
-      {items.map((action) => <Button key={action.id} ref={(element) => {
+      {directItems.map((action) => <Button key={action.id} ref={(element) => {
         if (element && !action.disabled && !action.disabledReason) desktopActions.current.set(action.id, element);
         else desktopActions.current.delete(action.id);
         if (action.id === firstAvailable?.id) desktopAction.current = element;
         if (action === primary && primaryRef) primaryRef.current = element;
       }} size={selection || action.icon ? "small" : "default"} variant={action.variant ?? (action.danger ? "ghost" : action === primary ? "primary" : "secondary")} data-danger={action.danger || undefined} disabled={action.disabled || Boolean(action.disabledReason)} aria-controls={action.controls} aria-expanded={action.expanded} title={action.disabledReason} onClick={action.onSelect}>{action.icon}{action.label}</Button>)}
+      {desktopOverflowItems.length ? <ActionMenu className={styles.desktopOverflowCommand} label={moreLabel} actions={desktopOverflowItems} triggerRef={desktopOverflowAction} fallbackFocusRef={compactAction} iconOnly /> : null}
     </div>
     <ActionMenu className={styles.overflowCommand} label={label} actions={compactItems} summary={selection?.selectionLabel} triggerRef={compactAction} fallbackFocusRef={desktopAction} iconOnly />
   </div>;

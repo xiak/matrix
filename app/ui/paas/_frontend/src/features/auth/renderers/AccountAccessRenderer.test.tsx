@@ -292,6 +292,11 @@ async function openAccess(repository = accounts(), iamRepository = iam(), initia
   return { user, view, repository };
 }
 
+async function invokeMoreAction(user: ReturnType<typeof userEvent.setup>, label: string) {
+  await user.click(await screen.findByRole("button", { name: "更多操作" }));
+  await user.click(within(await screen.findByRole("menu", { name: "更多操作" })).getByRole("menuitem", { name: label }));
+}
+
 afterEach(() => { cleanup(); vi.clearAllMocks(); localStorage.clear(); sessionStorage.clear(); });
 
 describe("qualified login", () => {
@@ -2072,7 +2077,7 @@ describe("account access", () => {
     await screen.findByRole("table", { name: "角色" });
     expect(listServiceLinkedRoles).not.toHaveBeenCalled();
     expect(listServiceRoleTemplates).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "服务授权" }));
+    await invokeMoreAction(user, "服务授权");
     expect(await screen.findByRole("table", { name: "当前账号服务授权关系" })).toBeTruthy();
     expect(listServiceLinkedRoles).toHaveBeenCalledWith(expect.any(String), account.id, undefined);
     expect(listServiceRoleTemplates).not.toHaveBeenCalled();
@@ -2116,7 +2121,7 @@ describe("account access", () => {
 
     await screen.findByRole("table", { name: "角色" });
     expect(listServiceRoleTemplates).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: "服务授权" }));
+    await invokeMoreAction(user, "服务授权");
     await user.click(screen.getByRole("tab", { name: "平台模板" }));
     expect(await screen.findByRole("table", { name: "服务授权模板目录" })).toBeTruthy();
     expect(listServiceRoleTemplates).toHaveBeenCalledTimes(1);

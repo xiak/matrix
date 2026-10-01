@@ -28,6 +28,7 @@
 .headerActions:empty, .headerActions[hidden] { display: none; }
 .commandBar, .expandedCommands { display: flex; min-width: 0; align-items: center; gap: var(--xiak-spacing-tight); }
 .expandedCommands > button { flex: none; }
+.desktopOverflowCommand { flex: none; }
 .expandedCommands > [data-danger="true"]:not(:disabled) { color: var(--xiak-color-danger-text); }
 .commandBar > .overflowCommand { display: none; }
 .identity { display: flex; flex: 1; align-items: center; gap: var(--xiak-spacing-tight); min-width: 0; }

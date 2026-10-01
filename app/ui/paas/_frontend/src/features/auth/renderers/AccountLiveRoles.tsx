@@ -151,6 +151,7 @@ export function AccountLiveRoles({ client, serviceRoleTemplates, serviceLinkedRo
   const t = useTranslations("RoleWorkspace");
   const w = useTranslations("IamWorkspace");
   const a = useTranslations("AccountAccess");
+  const collection = useTranslations("Collection");
   const toolbarLabels = useTableToolbarLabels();
   const [roles, setRoles] = useState<RoleListing[]>([]);
   const [nextAfter, setNextAfter] = useState<string | null>(null);
@@ -204,7 +205,7 @@ export function AccountLiveRoles({ client, serviceRoleTemplates, serviceLinkedRo
   if (entityId) return <RoleDetail client={client} roleId={entityId} onOpen={onOpen} revokeIntent={revokeIntent} onRevokeIntentChange={onRevokeIntentChange} />;
 
   return <Card aria-description={t("liveDirectoryHint")}>
-    <ContentPage.Heading title={w("roles")} scrollKey="live-role-directory" actions={<ContentPage.Commands label={w("roles")}
+    <ContentPage.Heading title={w("roles")} scrollKey="live-role-directory" actions={<ContentPage.Commands label={collection("pageActions")} moreLabel={collection("moreActions")}
       primary={{ id: "create", label: w("createRole"), icon: <Plus aria-hidden="true" />, disabled: !client.canCreate, disabledReason: client.createRestrictionReason ?? undefined, onSelect: onCreate }}
       secondary={serviceLinkedRoles || serviceRoleTemplates ? [{ id: "service-authorization", label: t("serviceAuthorization"), variant: "secondary", onSelect: () => setServiceAuthorizationOpen(true) }] : []} />} />
     <div className={styles.policyDirectoryIntro}><p>{t("liveDirectoryHint")}</p></div>

@@ -49,6 +49,11 @@ const liveSessionItem = {
   lifecycle: "UNREVOKED" as const,
   revokeCapability: { action: "iam.role-session.revoke" as const, resource: { kind: "ROLE_SESSION" as const, id: liveSession.id }, available: true, restrictionReason: null }
 };
+
+async function openServiceAuthorization(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByRole("button", { name: "更多操作" }));
+  await user.click(within(await screen.findByRole("menu", { name: "更多操作" })).getByRole("menuitem", { name: "服务授权" }));
+}
 const serviceSession = {
   id: "rs1.service-read", accountId: role.accountId, roleId: role.id, sourceServicePrincipalId: "service-paas-runtime", status: "ACTIVE" as const,
   issuedAt: timestamp, expiresAt: "2026-09-21T08:15:00Z", revokedAt: null
@@ -106,7 +111,7 @@ describe("AccountLiveRoles", () => {
     render(<LocaleProvider><RolesHarness api={client()} serviceRoleTemplates={serviceRoleTemplates} /></LocaleProvider>);
 
     await screen.findByRole("button", { name: role.name });
-    await user.click(screen.getByRole("button", { name: "服务授权" }));
+    await openServiceAuthorization(user);
     expect(await screen.findByRole("heading", { name: "服务授权" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "平台模板", selected: true })).toBeTruthy();
     expect(await screen.findByText("暂无已发布模板")).toBeTruthy();
@@ -148,7 +153,7 @@ describe("AccountLiveRoles", () => {
     const serviceRoleTemplates: ServiceRoleTemplateClient = { sessionRevision: 1, load: vi.fn().mockResolvedValue({ status: "ready", directory: { items: [template] } }) };
     render(<LocaleProvider><RolesHarness api={client()} serviceRoleTemplates={serviceRoleTemplates} /></LocaleProvider>);
 
-    await user.click(screen.getByRole("button", { name: "服务授权" }));
+    await openServiceAuthorization(user);
     await user.click(await screen.findByRole("button", { name: template.id }));
 
     const chain = screen.getByRole("heading", { name: "服务授权链" }).closest("section")!;

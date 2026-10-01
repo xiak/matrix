@@ -145,6 +145,24 @@ async function select(user: ReturnType<typeof userEvent.setup>, label: string, o
   await user.click(screen.getByRole("combobox", { name: label }));
   await user.click(screen.getByRole("option", { name: option }));
 }
+
+async function openPageActionMenu(user: ReturnType<typeof userEvent.setup>) {
+  const trigger = (await screen.findAllByRole("button", { name: "更多操作" }))
+    .find((button) => !(button as HTMLButtonElement).disabled);
+  expect(trigger).toBeDefined();
+  await user.click(trigger!);
+  return screen.findByRole("menu", { name: "更多操作" });
+}
+
+async function invokePageAction(user: ReturnType<typeof userEvent.setup>, label: string) {
+  const direct = screen.queryByRole("button", { name: label });
+  if (direct) {
+    await user.click(direct);
+    return;
+  }
+  const menu = await openPageActionMenu(user);
+  await user.click(within(menu).getByRole("menuitem", { name: label }));
+}
 async function openSecuritySection(user: ReturnType<typeof userEvent.setup>, name: "本人安全" | "账号策略" | "会话安全") {
   await user.click(await screen.findByRole("tab", { name }));
 }
@@ -1093,8 +1111,7 @@ describe("CAM-style access workspace", () => {
   it("previews service authorization as an inline consent review without creating a role or grant", async () => {
     const { user, repository, extension } = await open("roles");
     const before = await extension.read("preview");
-    const trigger = await screen.findByRole("button", { name: "服务授权" });
-    await user.click(trigger);
+    await invokePageAction(user, "服务授权");
 
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByRole("heading", { level: 1, name: "服务授权" })).toBe(document.activeElement);
@@ -1150,7 +1167,7 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: "返回服务授权" }));
     expect(screen.getByRole("button", { name: "托管服务安装访问" })).toBe(document.activeElement);
     await user.click(screen.getByRole("button", { name: "返回角色列表" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "服务授权" })).toBe(document.activeElement));
+    await waitFor(() => expect(screen.getByRole("button", { name: "更多操作" })).toBe(document.activeElement));
   });
   it("keeps the illustrative service template independent of tenant policy revisions", async () => {
     const { user } = await open("roles", { seed: async (extension) => {
@@ -1161,7 +1178,7 @@ describe("CAM-style access workspace", () => {
         versions: [...policy.versions, { id: 2, document: { version: "1" as const, statement: [{ effect: "allow" as const, action: ["iam:*"], resource: ["*"] }] }, createdAt: "2026-09-10T09:00:00Z" }]
       }) } }));
     } });
-    await user.click(await screen.findByRole("button", { name: "服务授权" }));
+    await invokePageAction(user, "服务授权");
     await user.click(screen.getByRole("tab", { name: "平台模板" }));
     await user.click(screen.getByRole("button", { name: "托管服务安装访问" }));
     expect(screen.queryByRole("button", { name: /打开策略详情/ })).toBeNull();
@@ -1176,7 +1193,7 @@ describe("CAM-style access workspace", () => {
     const { user } = await open("roles", { seed: async (extension) => {
       extension.transact((source) => ({ workspace: { ...source, policies: source.policies.filter((policy) => policy.id !== "policy-delivery") } }));
     } });
-    await user.click(await screen.findByRole("button", { name: "服务授权" }));
+    await invokePageAction(user, "服务授权");
     await user.click(screen.getByRole("tab", { name: "平台模板" }));
     expect(within(screen.getByRole("table", { name: "服务授权模板" })).getByText("PreviewManagedServiceInstallationRead")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "托管服务安装访问" }));
@@ -1499,7 +1516,7 @@ describe("CAM-style access workspace", () => {
   it("retains role deletion confirmation on failure, supports cancellation and retries only the named role", async () => {
     const { user, repository, extension } = await open("roles", { entityId: "role-pipeline" });
     const before = await extension.read("preview");
-    await user.click(await screen.findByRole("button", { name: "删除" }));
+    await invokePageAction(user, "删除");
     let dialog = screen.getByRole("dialog"), panel = within(dialog);
     await user.type(panel.getByLabelText("输入名称以确认"), "wrong-name");
     await user.click(panel.getByRole("button", { name: "确认删除" }));
@@ -1511,7 +1528,7 @@ describe("CAM-style access workspace", () => {
     expect((panel.getByLabelText("输入名称以确认") as HTMLInputElement).value).toBe("PipelineDeploymentRole");
     expect(await extension.read("preview")).toEqual(before);
     await user.click(panel.getByRole("button", { name: "取消" }));
-    await user.click(screen.getByRole("button", { name: "删除" }));
+    await invokePageAction(user, "删除");
     dialog = screen.getByRole("dialog"); panel = within(dialog);
     await user.type(panel.getByLabelText("输入名称以确认"), "PipelineDeploymentRole");
     await user.click(panel.getByRole("button", { name: "确认删除" }));
@@ -1846,7 +1863,10 @@ describe("CAM-style access workspace", () => {
     expect(within(directory).getAllByText("1 项直接关联")).toHaveLength(2);
     await user.click(within(directory).getByRole("button", { name: "DeliveryTeam" }));
     expect(screen.getByRole("button", { name: "编辑" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "删除" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "删除" })).toBeNull();
+    const actions = await openPageActionMenu(user);
+    expect(within(actions).getByRole("menuitem", { name: "删除" })).toBeTruthy();
+    await user.keyboard("{Escape}");
     const members = screen.getByRole("table", { name: "成员" });
     expect(within(members).queryByText("操作")).toBeNull();
     expect(within(members).queryByRole("button", { name: /从用户组移除/ })).toBeNull();
@@ -2358,7 +2378,7 @@ describe("CAM-style access workspace", () => {
   it("shows dependency errors inside a destructive confirmation", async () => {
     const { user } = await open("providers");
     await user.click(await screen.findByRole("button", { name: "EnterpriseSSO" }));
-    await user.click(await screen.findByRole("button", { name: "删除" }));
+    await invokePageAction(user, "删除");
     await user.type(screen.getByLabelText("输入名称以确认"), "EnterpriseSSO");
     await user.click(screen.getByRole("button", { name: "确认删除" }));
     await waitFor(() => expect(within(screen.getByRole("dialog")).getByRole("alert").textContent).toContain("仍被引用"));
@@ -2682,7 +2702,7 @@ describe("CAM-style access workspace", () => {
       });
     } });
     await user.click(await screen.findByRole("button", { name: "ProductionLogReader" }));
-    await user.click(screen.getByRole("button", { name: "编辑" }));
+    await invokePageAction(user, "编辑");
     await user.click(screen.getByRole("checkbox", { name: "logs:read" }));
     await user.click(screen.getByRole("checkbox", { name: "logs:search" }));
     await user.click(screen.getByRole("button", { name: "下一步" }));
@@ -2746,7 +2766,7 @@ describe("CAM-style access workspace", () => {
     await user.click(await screen.findByRole("button", { name: "ProductionLogReader" }));
     const before = await extension.read("preview");
     const source = before.policies.find((policy) => policy.id === "policy-prod-logs")!;
-    await user.click(screen.getByRole("button", { name: "复制为自定义策略" }));
+    await invokePageAction(user, "复制为自定义策略");
     await user.click(screen.getByRole("button", { name: "下一步" }));
     const name = screen.getByLabelText("名称", { exact: true }) as HTMLInputElement;
     expect(name.readOnly).toBe(false);
@@ -2766,7 +2786,7 @@ describe("CAM-style access workspace", () => {
   it("inspects history without activating it and reviews both documents before rollback", async () => {
     const { user, repository, extension } = await open("policies");
     await user.click(await screen.findByRole("button", { name: "ProductionLogReader" }));
-    await user.click(screen.getByRole("button", { name: "编辑" }));
+    await invokePageAction(user, "编辑");
     await user.click(screen.getByRole("tab", { name: "JSON 编辑" }));
     const editor = screen.getByLabelText("策略内容", { selector: "textarea" });
     const text = '{"version":"1","statement":[{"effect":"allow","action":["logs:search"],"resource":["matrix:logs:org-xiak:*:topic/production/*"]},{"effect":"deny","action":["logs:delete"],"resource":["*"]}]}';
@@ -2881,7 +2901,7 @@ describe("CAM-style access workspace", () => {
     await waitFor(() => expect(screen.queryByRole("group", { name: "编辑 · PreviewIdp" })).toBeNull());
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "编辑" }));
     expect((await extension.read("preview")).providers.find((provider) => provider.id === created.id)?.enabled).toBe(false);
-    await user.click(screen.getByRole("button", { name: "删除" }));
+    await invokePageAction(user, "删除");
     await user.type(screen.getByLabelText("输入名称以确认"), "PreviewIdp");
     await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "确认删除" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
@@ -2953,7 +2973,9 @@ describe("CAM-style access workspace", () => {
     expect(within(directory).queryByRole("button", { name: "禁用" })).toBeNull();
     expect(within(directory).queryByRole("button", { name: "删除" })).toBeNull();
     await user.click(within(directory).getByRole("button", { name: "MOCK-pipeline-key" }));
-    expect((screen.getByRole("button", { name: "删除" }) as HTMLButtonElement).disabled).toBe(true);
+    const actions = await openPageActionMenu(user);
+    expect(within(actions).getByRole("menuitem", { name: "删除" }).getAttribute("aria-disabled")).toBe("true");
+    await user.keyboard("{Escape}");
     await user.click(screen.getByRole("button", { name: "禁用" }));
     expect(screen.queryByRole("dialog")).toBeNull();
     await user.click(screen.getByRole("button", { name: "取消" }));
@@ -2966,7 +2988,7 @@ describe("CAM-style access workspace", () => {
     expect(await extension.read("preview")).toEqual(before);
     await user.click(screen.getByRole("button", { name: "禁用" }));
     await waitFor(() => expect(screen.queryByRole("heading", { name: "禁用 MOCK-pipeline-key" })).toBeNull());
-    await user.click(screen.getByRole("button", { name: "删除" }));
+    await invokePageAction(user, "删除");
     expect(screen.queryByRole("dialog")).toBeNull();
     await user.click(screen.getByRole("checkbox"));
     await user.click(screen.getByRole("button", { name: "确认删除" }));
@@ -2984,7 +3006,7 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByText("密钥层")).toBeTruthy();
     expect(screen.getByText("203.0.113.0/24")).toBeTruthy();
     expect(screen.getByText("203.0.113.64/26")).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "配置来源网络" }));
+    await invokePageAction(user, "配置来源网络");
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByRole("heading", { name: "编辑密钥级来源" })).toBe(document.activeElement);
     const input = screen.getByRole("textbox", { name: "允许的来源 CIDR" });
@@ -3132,7 +3154,7 @@ describe("CAM-style access workspace", () => {
     expect((await extension.read("preview")).keys.filter((key) => key.ownerId === "principal-chen")).toHaveLength(1);
     await user.click(screen.getByRole("button", { name: "禁用" }));
     await user.click(screen.getByRole("button", { name: "禁用" }));
-    await user.click(screen.getByRole("button", { name: "删除" }));
+    await invokePageAction(user, "删除");
     await user.click(screen.getByRole("checkbox"));
     await user.click(screen.getByRole("button", { name: "确认删除" }));
     await waitFor(() => expect(screen.queryByRole("heading", { name: /删除 MOCK-/ })).toBeNull());
@@ -4045,7 +4067,9 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByText("拒绝新建")).toBeTruthy();
     expect(screen.getByText(/不会自动覆盖或删除最旧报告/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: /删除.*报告|覆盖.*报告/ })).toBeNull();
-    expect((screen.getByRole("button", { name: "下载 CSV v1" }) as HTMLButtonElement).disabled).toBe(true);
+    let reportActions = await openPageActionMenu(user);
+    expect(within(reportActions).getByRole("menuitem", { name: "下载 CSV v1" }).getAttribute("aria-disabled")).toBe("true");
+    await user.keyboard("{Escape}");
     await user.click(screen.getByRole("button", { name: "生成报告" }));
     expect(screen.getByRole("heading", { name: "账号安全报告" })).toBeTruthy();
     expect(screen.getByText("不可变报告已封存")).toBeTruthy();
@@ -4063,7 +4087,9 @@ describe("CAM-style access workspace", () => {
     expect(within(keyEvidence).getByText(workspace.keys[0]!.id)).toBeTruthy();
     expect(within(keyEvidence).queryByText(/secret/i)).toBeNull();
     expect((screen.getByRole("button", { name: "生成报告" }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole("button", { name: "下载 CSV v1" }) as HTMLButtonElement).disabled).toBe(true);
+    reportActions = await openPageActionMenu(user);
+    expect(within(reportActions).getByRole("menuitem", { name: "下载 CSV v1" }).getAttribute("aria-disabled")).toBe("true");
+    await user.keyboard("{Escape}");
     expect(screen.queryByRole("dialog")).toBeNull();
   });
   it("keeps a maximum-size account security report paged instead of mounting every evidence row", async () => {
