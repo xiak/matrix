@@ -1,7 +1,8 @@
 "use client";
-import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { ActionMenu, Alert, Badge, Button, EmptyState, FormField, Table, Tabs, TextArea } from "@ui/xiak";
+import { ActionMenu, Alert, Badge, Button, EmptyState, FormField, Table, TablePagination, TableToolbar, Tabs, TextArea } from "@ui/xiak";
+import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import { policyUsageCounts, policyVersionLimit, type AccessPolicy, type AccessWorkspace } from "../domain/accessWorkspace";
 import type { AccountAccessView } from "../domain/accounts";
@@ -117,24 +118,46 @@ type PolicyUseSubject = { id: string; name: string; view: "users" | "groups" | "
 
 function PolicyUseSection({ title, hint, empty, subjects, onOpen }: { title: string; hint: string; empty: string; subjects: PolicyUseSubject[]; onOpen(view: AccountAccessView, id?: string): void }) {
   const t = useTranslations("IamWorkspace");
+  const toolbarLabels = useTableToolbarLabels();
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const deferredQuery = useDeferredValue(query);
+  const filtering = deferredQuery !== query;
+  const filtered = useMemo(() => {
+    const words = deferredQuery.normalize("NFKC").trim().toLowerCase().split(/\s+/).filter(Boolean);
+    return subjects.filter((subject) => words.every((word) => [subject.name, subject.id, subject.view, t(subject.view === "users" ? "subusers" : subject.view)].join(" ").normalize("NFKC").toLowerCase().includes(word)));
+  }, [deferredQuery, subjects, t]);
+  const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const currentPage = Math.min(page, pages);
+  const visible = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const clearSearch = () => { setQuery(""); setPage(1); };
   return <section className={styles.stack}>
     <h3>{title} ({subjects.length})</h3>
     <p className={styles.note}>{hint}</p>
-    {subjects.length ? <Table aria-label={title} mobileLayout="stack"><thead><tr><th scope="col">{t("name")}</th><th scope="col">{t("type")}</th></tr></thead><tbody>{subjects.map((subject) => <tr key={subject.view + subject.id}><td data-label={t("name")}><button className={styles.userLink} onClick={() => onOpen(subject.view, subject.id)}>{subject.name}</button></td><td data-label={t("type")}>{t(subject.view === "users" ? "subusers" : subject.view)}</td></tr>)}</tbody></Table> : <p className={styles.note}>{empty}</p>}
+    {subjects.length ? <>
+      <TableToolbar labels={toolbarLabels} search={{ label: t("usageSearch"), placeholder: t("usageSearchPlaceholder"), value: query, onChange: (value) => { setQuery(value); setPage(1); } }}
+        status={t("usageResults", { shown: filtered.length, total: subjects.length })} />
+      {visible.length ? <Table aria-label={title} aria-busy={filtering || undefined} mobileLayout="stack"><thead><tr><th scope="col">{t("name")}</th><th scope="col">{t("type")}</th></tr></thead><tbody>{visible.map((subject) => <tr key={subject.view + subject.id}><td data-label={t("name")}><button className={styles.userLink} disabled={filtering} onClick={() => onOpen(subject.view, subject.id)}>{subject.name}</button></td><td data-label={t("type")}>{t(subject.view === "users" ? "subusers" : subject.view)}</td></tr>)}</tbody></Table>
+        : <EmptyState title={t("noResults")} description={t("noResultsHint")} action={<Button onClick={clearSearch} variant="secondary">{toolbarLabels.resetQuery}</Button>} />}
+      <Table.Footer note={t("usagePageHint")}><TablePagination page={currentPage} pages={pages} pageSize={pageSize} disabled={filtering}
+        onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
+        labels={{ summary: t("page", { page: currentPage, pages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} /></Table.Footer>
+    </> : <p className={styles.note}>{empty}</p>}
   </section>;
 }
 
 function PolicyUses({ policyId, workspace, scene, onOpen }: { policyId: string; workspace: AccessWorkspace; scene: AccountAccessScene; onOpen(view: AccountAccessView, id?: string): void }) {
   const t = useTranslations("IamWorkspace"), role = useTranslations("RoleWorkspace");
-  const permissionSubjects: PolicyUseSubject[] = [
+  const permissionSubjects = useMemo<PolicyUseSubject[]>(() => [
     ...scene.users.filter((user) => workspace.userPolicies[user.id]?.includes(policyId)).map((user) => ({ id: user.id, name: user.loginName, view: "users" as const })),
     ...workspace.groups.filter((group) => group.policyIds.includes(policyId)).map((group) => ({ id: group.id, name: group.name, view: "groups" as const })),
     ...workspace.roles.filter((entry) => entry.policyIds.includes(policyId)).map((entry) => ({ id: entry.id, name: entry.name, view: "roles" as const }))
-  ];
-  const boundarySubjects: PolicyUseSubject[] = [
+  ], [policyId, scene.users, workspace.groups, workspace.roles, workspace.userPolicies]);
+  const boundarySubjects = useMemo<PolicyUseSubject[]>(() => [
     ...Object.entries(workspace.userBoundaries).filter(([, id]) => id === policyId).map(([id]) => ({ id, name: scene.users.find((user) => user.id === id)?.loginName ?? id, view: "users" as const })),
     ...workspace.roles.filter((entry) => entry.boundaryPolicyId === policyId).map((entry) => ({ id: entry.id, name: entry.name, view: "roles" as const }))
-  ];
+  ], [policyId, scene.users, workspace.roles, workspace.userBoundaries]);
   return <div className={styles.stack}>
     <PolicyUseSection title={t("permissionUses")} hint={t("permissionUsesHint")} empty={t("noPermissionUses")} subjects={permissionSubjects} onOpen={onOpen} />
     <PolicyUseSection title={role("boundaryUses")} hint={role("boundaryHint")} empty={t("noBoundaryUses")} subjects={boundarySubjects} onOpen={onOpen} />

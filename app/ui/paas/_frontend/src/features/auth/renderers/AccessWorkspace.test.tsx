@@ -1509,6 +1509,39 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByLabelText("Entity destination").textContent).toBe("principal-lin");
     expect((await extension.read("preview-only")).userPolicies["principal-lin"]).toEqual(["policy-prod-logs"]);
   });
+  it("searches and paginates a large policy association snapshot before opening an exact owner", async () => {
+    const { user } = await open("policies", { entityId: "policy-prod-logs", seed: async (extension) => {
+      for (let index = 1; index <= 12; index += 1) await extension.execute("preview", {
+        kind: "create-role",
+        name: `UsageRole${String(index).padStart(2, "0")}`,
+        description: "Policy usage pagination fixture",
+        principalType: "account",
+        principal: "org-xiak",
+        trustedUserIds: ["principal-lin"],
+        policyIds: ["policy-prod-logs"],
+        tags: [],
+        sessionMinutes: 60,
+        consoleAccess: false
+      });
+    } });
+    await user.click(await screen.findByRole("tab", { name: /策略用法/ }));
+    const section = screen.getByRole("heading", { name: "作为权限策略使用 (13)" }).closest("section")!;
+    const table = within(section).getByRole("table", { name: "作为权限策略使用" });
+    expect(within(table).getAllByRole("row")).toHaveLength(11);
+    expect(within(section).getByText("显示 13 / 共 13 个关联对象")).toBeTruthy();
+    expect(within(section).getByText("第 1 / 2 页")).toBeTruthy();
+
+    const search = within(section).getByRole("searchbox", { name: "搜索策略关联对象" });
+    await user.type(search, "UsageRole12");
+    await waitFor(() => expect(within(table).getAllByRole("row")).toHaveLength(2));
+    expect(within(section).getByText("显示 1 / 共 13 个关联对象")).toBeTruthy();
+    await user.clear(search);
+    await waitFor(() => expect(within(section).getByText("第 1 / 2 页")).toBeTruthy());
+    await user.click(within(section).getByRole("button", { name: "下一页" }));
+    expect(within(table).getByRole("button", { name: "UsageRole12" })).toBeTruthy();
+    await user.click(within(table).getByRole("button", { name: "UsageRole12" }));
+    expect(await screen.findByRole("heading", { name: "UsageRole12" })).toBeTruthy();
+  });
   it("surfaces user grant provenance and default-version denies without claiming effective access", async () => {
     const { user } = await open("users", { entityId: "principal-qiao", users: reviewUsers });
     await user.click(await screen.findByRole("tab", { name: "权限策略" }));
