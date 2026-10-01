@@ -31,6 +31,32 @@ func TestLocalImageBuildEffectIsNetworkAndPullClosed(t *testing.T) {
 	}
 }
 
+func TestLocalImageInspectionAdmitsOnlyFixedBasesAndBuildTags(t *testing.T) {
+	called := 0
+	effects := &LocalEffects{run: func(_ context.Context, command localCommand) ([]byte, error) {
+		called++
+		if command.program != "docker" || len(command.args) != 3 ||
+			command.args[0] != "image" || command.args[1] != "inspect" {
+			t.Fatalf("unexpected image inspection command: %#v", command)
+		}
+		return []byte(`[{"Id":"` + APISIXBaseImageID + `","Os":"linux","Architecture":"amd64"}]`), nil
+	}}
+	for _, reference := range []string{
+		APISIXBaseReference, AlpineBaseReference, DockerBaseReference, PostgresReference,
+		"matrix-release-build/iam:0123456789abcdef01234567",
+	} {
+		if _, err := effects.InspectImage(context.Background(), reference); err != nil {
+			t.Fatalf("fixed image reference %q rejected: %v", reference, err)
+		}
+	}
+	if _, err := effects.InspectImage(context.Background(), "caller.example/arbitrary:latest"); err == nil {
+		t.Fatal("caller-selected image reference was admitted")
+	}
+	if called != 5 {
+		t.Fatalf("provider inspection calls = %d, want 5", called)
+	}
+}
+
 func TestLocalGoBuildRejectsUnownedPackage(t *testing.T) {
 	called := false
 	effects := &LocalEffects{run: func(context.Context, localCommand) ([]byte, error) {
