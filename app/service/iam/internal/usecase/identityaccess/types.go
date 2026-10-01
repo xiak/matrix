@@ -225,10 +225,15 @@ type AccessKeyRead struct {
 }
 
 type AccessKeyDirectory struct {
-	UserResourceVersion uint64                `json:"userResourceVersion"`
-	UserStatus          iamv1.PrincipalStatus `json:"userStatus"`
-	MustChangePassword  bool                  `json:"mustChangePassword"`
-	Keys                []iamv1.AccessKey     `json:"keys"`
+	UserResourceVersion uint64                    `json:"userResourceVersion"`
+	UserStatus          iamv1.PrincipalStatus     `json:"userStatus"`
+	MustChangePassword  bool                      `json:"mustChangePassword"`
+	Entries             []AccessKeyDirectoryEntry `json:"entries"`
+}
+
+type AccessKeyDirectoryEntry struct {
+	Key   iamv1.AccessKey             `json:"key"`
+	Usage iamv1.AccessKeyUsageSummary `json:"usage"`
 }
 
 type AccessKeyReservation struct {
@@ -237,6 +242,7 @@ type AccessKeyReservation struct {
 	InstallationID      string
 	WrappingKeyID       string
 	MaterialCommitment  string
+	NetworkRestrictions iamv1.AccessKeyNetworkRestrictions
 	RequestID           string
 	RequestDigest       string
 }
@@ -256,7 +262,10 @@ type AccessKeyChange struct {
 	AccessKeyRead
 	ExpectedVersion uint64
 	Status          iamv1.AccessKeyStatus // Empty only for irreversible deletion.
-	AuditEvent      auditv1.Event
+	// Non-nil only for an exact network-restriction replacement. Status must
+	// then be empty; deletion has both fields empty.
+	NetworkRestrictions *iamv1.AccessKeyNetworkRestrictions
+	AuditEvent          auditv1.Event
 }
 
 type AccessKeyMutationResult struct {
@@ -806,17 +815,18 @@ type AuthorizationMutation struct {
 // Only the successful MAC path constructs this private, once-only evidence.
 // SQL resolves the service's full immutable identity from ServiceLookupDigest.
 type AccessKeyAuthorizationEvidence struct {
-	AccessKeyID         iamv1.AccessKeyID `json:"accessKeyId"`
-	ResourceVersion     uint64            `json:"resourceVersion"`
-	FormatVersion       uint8             `json:"formatVersion"`
-	WrappingKeyID       string            `json:"wrappingKeyId"`
-	MaterialCommitment  string            `json:"materialCommitment"`
-	InstallationID      string            `json:"installationId"`
-	ServiceLookupDigest string            `json:"serviceLookupDigest"`
-	Audience            iamv1.ProductID   `json:"audience"`
-	SignedRequestDigest string            `json:"signedRequestDigest"`
-	NonceDigest         string            `json:"nonceDigest"`
-	SignedAt            int64             `json:"signedAt"`
+	AccessKeyID                    iamv1.AccessKeyID `json:"accessKeyId"`
+	ResourceVersion                uint64            `json:"resourceVersion"`
+	AccountSecuritySettingsVersion uint64            `json:"accountSecuritySettingsVersion"`
+	FormatVersion                  uint8             `json:"formatVersion"`
+	WrappingKeyID                  string            `json:"wrappingKeyId"`
+	MaterialCommitment             string            `json:"materialCommitment"`
+	InstallationID                 string            `json:"installationId"`
+	ServiceLookupDigest            string            `json:"serviceLookupDigest"`
+	Audience                       iamv1.ProductID   `json:"audience"`
+	SignedRequestDigest            string            `json:"signedRequestDigest"`
+	NonceDigest                    string            `json:"nonceDigest"`
+	SignedAt                       int64             `json:"signedAt"`
 }
 
 func (AccessKeyAuthorizationEvidence) String() string { return "[REDACTED]" }

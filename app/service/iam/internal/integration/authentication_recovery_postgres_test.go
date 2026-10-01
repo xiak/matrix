@@ -2290,6 +2290,7 @@ func prepareAuthenticationRecoveryIdentity(t *testing.T, ctx context.Context, se
 		}
 		created, err := service.CreateAccessKey(ctx, keyLogin.Credential, keyUser.ID, iamv1.CreateAccessKeyRequest{
 			UserResourceVersion: directory.UserResourceVersion,
+			NetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}},
 			RequestID:           "auth-recovery-key-create",
 		})
 		if err != nil || created.Outcome != "APPLIED" || !created.Secret.Present() {
@@ -2598,7 +2599,9 @@ func authenticationRecoveryConcurrentMFALogin(t *testing.T, ctx context.Context,
 			t.Fatal("restored group/boundary permissions did not allow the original business resource", err)
 		}
 		if result, err := peer.CreateAccessKey(ctx, login.Credential, iamv1.PrincipalID(subject.UserID), iamv1.CreateAccessKeyRequest{
-			UserResourceVersion: directory.UserResourceVersion, RequestID: fmt.Sprintf("reopened-business-boundary-denied-%d", index),
+			UserResourceVersion: directory.UserResourceVersion,
+			NetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}},
+			RequestID:           fmt.Sprintf("reopened-business-boundary-denied-%d", index),
 		}); !errors.Is(err, identityaccess.ErrForbidden) || result.Secret.Present() || result.Outcome != "" {
 			t.Fatal("restored narrower boundary did not constrain the group's create permission", err)
 		}

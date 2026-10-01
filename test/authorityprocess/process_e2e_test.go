@@ -112,7 +112,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	const databasePrefix = "matrix_iam_upgrade_predecessor_"
 	const source = "0c688302b9dea1050653eded2b9442a6b1322155"
 	const sourceSchema uint64 = 59
-	const currentSchema uint64 = 59
+	const currentSchema uint64 = 60
 	// Use credentials accepted by the immediate predecessor. This rolling
 	// pre-v1 gate proves only the current schema and its one fixed predecessor;
 	// superseded password-policy compatibility belongs to neither side.
@@ -1194,27 +1194,132 @@ func prepareRetainedSecuritySettingsProcesses(t *testing.T, ctx context.Context,
 	}
 	passwordRules := iamv1.AccountPasswordSettings{ExpiryMode: iamv1.PasswordExpiryChange, MinimumLength: 15, HistoryCount: 1}
 	sessionRules := iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30}
-	startProof := func(actor *settingsActor, bearer, request string, version uint64, required bool) iamv1.StepUp {
+	networkRules := iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}}
+	type legacyStepUp struct {
+		APIVersion             string                `json:"apiVersion"`
+		Kind                   string                `json:"kind"`
+		ID                     string                `json:"id"`
+		RequestID              string                `json:"requestId"`
+		Operation              iamv1.StepUpOperation `json:"operation"`
+		ExpectedFactorRevision uint64                `json:"expectedFactorRevision"`
+		SecuritySettings       struct {
+			ExpectedResourceVersion uint64                         `json:"expectedResourceVersion"`
+			MFA                     iamv1.AccountMFASettings       `json:"mfa"`
+			Password                *iamv1.AccountPasswordSettings `json:"password"`
+			Session                 *iamv1.AccountSessionSettings  `json:"session"`
+		} `json:"securitySettings"`
+		State      string     `json:"state"`
+		CreatedAt  time.Time  `json:"createdAt"`
+		ExpiresAt  time.Time  `json:"expiresAt"`
+		ProvedAt   *time.Time `json:"provedAt,omitempty"`
+		ConsumedAt *time.Time `json:"consumedAt,omitempty"`
+	}
+	decodeLegacyProof := func(response processResponse, request, state string, version uint64, required bool) legacyStepUp {
+		t.Helper()
+		var proof legacyStepUp
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &proof) != nil ||
+			proof.APIVersion != iamv1.APIVersion || proof.Kind != "StepUp" || proof.ID == "" || proof.RequestID != request ||
+			proof.Operation != iamv1.StepUpUpdateSecuritySettings || proof.ExpectedFactorRevision != 2 || proof.State != state ||
+			proof.SecuritySettings.ExpectedResourceVersion != version || proof.SecuritySettings.MFA.RequiredForUsers != required ||
+			proof.SecuritySettings.Password == nil || *proof.SecuritySettings.Password != passwordRules ||
+			proof.SecuritySettings.Session == nil || *proof.SecuritySettings.Session != sessionRules ||
+			proof.CreatedAt.IsZero() || proof.ExpiresAt.Sub(proof.CreatedAt) != 2*time.Minute ||
+			bytes.Contains(response.Body, []byte(`"accessKeyNetwork"`)) {
+			t.Fatalf("invalid predecessor settings proof: status=%d body=%s", response.Status, response.Body)
+		}
+		return proof
+	}
+	startLegacyProof := func(actor *settingsActor, bearer, request string, version uint64, required bool) legacyStepUp {
+		t.Helper()
+		body := iamv1.StartStepUpRequest{RequestID: request,
+			Operation: iamv1.StepUpUpdateSecuritySettings, ExpectedFactorRevision: 2,
+			SecuritySettings: &iamv1.SecuritySettingsUpdateIntent{ExpectedResourceVersion: version,
+				MFA: iamv1.AccountMFASettings{RequiredForUsers: required}, Password: &passwordRules, Session: &sessionRules}}
+		proof := decodeLegacyProof(performJSON(t, http.MethodPost, endpoint+"/v1/auth/step-up", bearer, body), request, "PENDING", version, required)
+		return decodeLegacyProof(performJSON(t, http.MethodPost, endpoint+"/v1/auth/step-up/"+proof.ID+":verify", bearer,
+			map[string]string{"requestId": request + "-proof", "password": actor.password, "code": nextCode(actor)}), request, "PROVED", version, required)
+	}
+	applyLegacy := func(bearer string, proof legacyStepUp, version uint64, required bool) iamv1.AccountSecuritySettingsChange {
+		t.Helper()
+		response := performJSON(t, http.MethodPut, endpoint+path, bearer, map[string]any{
+			"requestId": proof.RequestID, "stepUpId": proof.ID, "expectedResourceVersion": version,
+			"mfa": iamv1.AccountMFASettings{RequiredForUsers: required}, "password": passwordRules, "session": sessionRules,
+		})
+		var envelope struct {
+			Outcome string          `json:"outcome"`
+			Change  json.RawMessage `json:"change"`
+		}
+		var change iamv1.AccountSecuritySettingsChange
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &envelope) != nil || envelope.Outcome != "APPLIED" ||
+			json.Unmarshal(envelope.Change, &change) != nil || change.RequestID != proof.RequestID || change.Settings.AccessKeyNetwork != nil {
+			t.Fatalf("invalid predecessor settings completion: status=%d body=%s", response.Status, response.Body)
+		}
+		return change
+	}
+
+	firstBearer := login(ownerActor, "retained-settings-first-login")
+	firstProof := startLegacyProof(ownerActor, firstBearer, "retained-settings-first-change", 1, true)
+	first := applyLegacy(firstBearer, firstProof, 1, true)
+	if first.Settings.ResourceVersion != 2 || !first.Settings.MFA.RequiredForUsers ||
+		first.Settings.Password == nil || *first.Settings.Password != passwordRules ||
+		first.Settings.Session == nil || *first.Settings.Session != sessionRules || !first.CallerSessionEnded {
+		t.Fatal("predecessor did not commit its complete security settings")
+	}
+	call(http.MethodGet, "/v1/auth/me", firstBearer, nil, http.StatusUnauthorized, nil)
+	pendingBearer := login(memberActor, "retained-settings-pending-login")
+	otherBearer := login(memberActor, "retained-settings-other-login")
+	pendingProof := startLegacyProof(memberActor, pendingBearer, "retained-settings-pending-change", 2, false)
+
+	type settingsInvariant struct {
+		Version        uint64
+		Required       bool
+		Password       string
+		Session        string
+		UpdatedAt      time.Time
+		Changes        uint64
+		Proofs         uint64
+		ConsumedProofs uint64
+		Facts          uint64
+		Notifications  uint64
+	}
+	settingsState := func() settingsInvariant {
+		t.Helper()
+		var state settingsInvariant
+		if err := admin.QueryRow(ctx, `SELECT a.security_settings_version,a.mfa_required_for_users,a.password_settings::text,
+			a.session_settings::text,a.security_settings_updated_at,
+			(SELECT count(*) FROM iam.account_security_settings_changes c WHERE c.tenant_id=a.id),
+			(SELECT count(*) FROM iam.step_ups p WHERE p.tenant_id=a.id AND p.operation='SECURITY_SETTINGS_UPDATE'),
+			(SELECT count(*) FROM iam.step_ups p WHERE p.tenant_id=a.id AND p.operation='SECURITY_SETTINGS_UPDATE' AND p.state='CONSUMED'),
+			(SELECT count(*) FROM iam.audit_outbox o WHERE o.tenant_id=a.id AND o.event_document->>'action'='iam.security-settings.updated'),
+			(SELECT count(*) FROM iam.security_notifications n WHERE n.tenant_id=a.id AND n.kind='SECURITY_SETTINGS_CHANGED')
+			FROM iam.accounts a WHERE a.id=$1`, tenant).Scan(&state.Version, &state.Required, &state.Password, &state.Session,
+			&state.UpdatedAt, &state.Changes, &state.Proofs, &state.ConsumedProofs, &state.Facts, &state.Notifications); err != nil {
+			t.Fatal("read retained settings state", err)
+		}
+		return state
+	}
+	original := settingsState()
+	startCurrentProof := func(actor *settingsActor, bearer, request string, version uint64, required bool) iamv1.StepUp {
 		t.Helper()
 		var proof iamv1.StepUp
 		call(http.MethodPost, "/v1/auth/step-up", bearer, iamv1.StartStepUpRequest{RequestID: request,
 			Operation: iamv1.StepUpUpdateSecuritySettings, ExpectedFactorRevision: 2,
 			SecuritySettings: &iamv1.SecuritySettingsUpdateIntent{ExpectedResourceVersion: version,
-				MFA: iamv1.AccountMFASettings{RequiredForUsers: required}, Password: &passwordRules, Session: &sessionRules}},
+				MFA: iamv1.AccountMFASettings{RequiredForUsers: required}, Password: &passwordRules, Session: &sessionRules, AccessKeyNetwork: &networkRules}},
 			http.StatusOK, &proof)
 		call(http.MethodPost, "/v1/auth/step-up/"+proof.ID+":verify", bearer,
 			map[string]string{"requestId": request + "-proof", "password": actor.password, "code": nextCode(actor)}, http.StatusOK, &proof)
 		if proof.State != "PROVED" {
-			t.Fatal("predecessor settings proof was not completed")
+			t.Fatal("current settings proof was not completed")
 		}
 		return proof
 	}
-	apply := func(bearer string, proof iamv1.StepUp, version uint64, required bool, want int) iamv1.UpdateAccountSecuritySettingsResponse {
+	applyCurrent := func(bearer, requestID, proofID string, version uint64, required bool, want int) iamv1.UpdateAccountSecuritySettingsResponse {
 		t.Helper()
 		var result iamv1.UpdateAccountSecuritySettingsResponse
-		call(http.MethodPut, path, bearer, iamv1.UpdateAccountSecuritySettingsRequest{RequestID: proof.RequestID, StepUpID: proof.ID,
+		call(http.MethodPut, path, bearer, iamv1.UpdateAccountSecuritySettingsRequest{RequestID: requestID, StepUpID: proofID,
 			ExpectedResourceVersion: version, MFA: iamv1.AccountMFASettings{RequiredForUsers: required},
-			Password: passwordRules, Session: sessionRules}, want, func() any {
+			Password: passwordRules, Session: sessionRules, AccessKeyNetwork: networkRules}, want, func() any {
 			if want == http.StatusOK {
 				return &result
 			}
@@ -1222,94 +1327,63 @@ func prepareRetainedSecuritySettingsProcesses(t *testing.T, ctx context.Context,
 		}())
 		return result
 	}
-
-	firstBearer := login(ownerActor, "retained-settings-first-login")
-	firstProof := startProof(ownerActor, firstBearer, "retained-settings-first-change", 1, true)
-	first := apply(firstBearer, firstProof, 1, true, http.StatusOK)
-	if first.Outcome != "APPLIED" || first.Change.Settings.ResourceVersion != 2 || !first.Change.Settings.MFA.RequiredForUsers ||
-		first.Change.Settings.Password == nil || *first.Change.Settings.Password != passwordRules ||
-		first.Change.Settings.Session == nil || *first.Change.Settings.Session != sessionRules || !first.Change.CallerSessionEnded {
-		t.Fatal("predecessor did not commit its complete security settings")
-	}
-	call(http.MethodGet, "/v1/auth/me", firstBearer, nil, http.StatusUnauthorized, nil)
-	pendingBearer := login(memberActor, "retained-settings-pending-login")
-	otherBearer := login(memberActor, "retained-settings-other-login")
-	pendingProof := startProof(memberActor, pendingBearer, "retained-settings-pending-change", 2, false)
-
-	settingsState := func() []byte {
-		t.Helper()
-		var state []byte
-		if err := admin.QueryRow(ctx, `SELECT jsonb_build_object(
-			'account',(SELECT jsonb_build_array(id,security_settings_version,mfa_required_for_users,password_settings,session_settings,security_settings_updated_at)
-			 FROM iam.accounts WHERE id=$1),
-			'changes',(SELECT jsonb_agg(to_jsonb(c) ORDER BY expected_version) FROM iam.account_security_settings_changes c WHERE tenant_id=$1),
-			'proofs',(SELECT jsonb_agg(to_jsonb(p) ORDER BY request_id) FROM iam.step_ups p WHERE tenant_id=$1 AND operation='SECURITY_SETTINGS_UPDATE'),
-			'facts',(SELECT jsonb_agg(event_document ORDER BY event_id) FROM iam.audit_outbox
-			 WHERE tenant_id=$1 AND event_document->>'action'='iam.security-settings.updated'),
-			'notices',(SELECT jsonb_agg(to_jsonb(n) ORDER BY id) FROM iam.security_notifications n
-			 WHERE tenant_id=$1 AND kind='SECURITY_SETTINGS_CHANGED'))`, tenant).Scan(&state); err != nil {
-			t.Fatal("read retained settings state", err)
-		}
-		return state
-	}
-	original := settingsState()
-	t.Cleanup(func() { clear(original) })
 	return func() func() {
 		t.Helper()
 		observed := settingsState()
-		if !bytes.Equal(original, observed) {
-			clear(observed)
+		if original != observed {
 			t.Fatal("upgrade changed predecessor security settings history")
 		}
-		clear(observed)
 		call(http.MethodGet, "/v1/auth/me", pendingBearer, nil, http.StatusOK, nil)
 		call(http.MethodGet, "/v1/auth/me", otherBearer, nil, http.StatusOK, nil)
 		ownerReader := login(ownerActor, "retained-settings-owner-reader")
 		var retainedFirst iamv1.AccountSecuritySettingsChange
 		call(http.MethodGet, path+"/changes/"+firstProof.RequestID, ownerReader, nil, http.StatusOK, &retainedFirst)
-		if !reflect.DeepEqual(retainedFirst, first.Change) {
+		if !reflect.DeepEqual(retainedFirst, first) {
 			t.Fatal("upgrade changed predecessor security settings completion")
 		}
-		var retainedProof iamv1.StepUp
-		call(http.MethodGet, "/v1/auth/step-up/by-request/"+pendingProof.RequestID, pendingBearer, nil, http.StatusOK, &retainedProof)
-		if !reflect.DeepEqual(retainedProof, pendingProof) {
-			t.Fatal("upgrade changed predecessor Session-bound step-up")
-		}
-		apply(otherBearer, pendingProof, 2, false, http.StatusUnauthorized)
+		// The predecessor proof did not bind the newly authoritative network
+		// segment. It remains immutable evidence but cannot be observed as a
+		// current permit or consumed after the schema advance.
+		call(http.MethodGet, "/v1/auth/step-up/by-request/"+pendingProof.RequestID, pendingBearer, nil, http.StatusNotFound, nil)
+		applyCurrent(otherBearer, pendingProof.RequestID, pendingProof.ID, 2, false, http.StatusUnauthorized)
 		afterWrongSession := settingsState()
-		if !bytes.Equal(original, afterWrongSession) {
-			clear(afterWrongSession)
+		if original != afterWrongSession {
 			t.Fatal("another Session consumed or changed the predecessor step-up")
 		}
-		clear(afterWrongSession)
-		second := apply(pendingBearer, pendingProof, 2, false, http.StatusOK)
+		applyCurrent(pendingBearer, pendingProof.RequestID, pendingProof.ID, 2, false, http.StatusUnauthorized)
+		if afterRejected := settingsState(); original != afterRejected {
+			t.Fatal("unbound predecessor proof changed current security settings")
+		}
+		currentProof := startCurrentProof(memberActor, pendingBearer, "retained-settings-current-change", 2, false)
+		second := applyCurrent(pendingBearer, currentProof.RequestID, currentProof.ID, 2, false, http.StatusOK)
 		if second.Outcome != "APPLIED" || second.Change.Settings.ResourceVersion != 3 || second.Change.Settings.MFA.RequiredForUsers ||
 			second.Change.Settings.Password == nil || *second.Change.Settings.Password != passwordRules ||
-			second.Change.Settings.Session == nil || *second.Change.Settings.Session != sessionRules || !second.Change.CallerSessionEnded {
-			t.Fatal("current authority did not consume the exact predecessor settings proof")
+			second.Change.Settings.Session == nil || *second.Change.Settings.Session != sessionRules ||
+			second.Change.Settings.AccessKeyNetwork == nil || !reflect.DeepEqual(*second.Change.Settings.AccessKeyNetwork, networkRules) ||
+			!second.Change.CallerSessionEnded {
+			t.Fatal("current authority did not require and consume a complete current settings proof")
 		}
 		finalState := settingsState()
-		t.Cleanup(func() { clear(finalState) })
 		return func() {
 			t.Helper()
 			afterRestart := settingsState()
-			if !bytes.Equal(finalState, afterRestart) {
-				clear(afterRestart)
+			if finalState != afterRestart {
 				t.Fatal("restart or equal migration changed retained settings completions")
 			}
-			clear(afterRestart)
 			for _, bearer := range []string{pendingBearer, otherBearer, ownerReader} {
 				call(http.MethodGet, "/v1/auth/me", bearer, nil, http.StatusUnauthorized, nil)
 			}
 			var exact bool
 			if err := admin.QueryRow(ctx, `SELECT security_settings_version=3 AND NOT mfa_required_for_users
 				 AND password_settings=iam.default_password_settings() AND session_settings=iam.default_session_settings()
+				 AND access_key_network_restrictions=iam.default_access_key_network_restrictions()
 				 AND (SELECT count(*)=2 FROM iam.account_security_settings_changes WHERE tenant_id=$1)
+				 AND (SELECT count(*)=3 FROM iam.step_ups WHERE tenant_id=$1 AND operation='SECURITY_SETTINGS_UPDATE')
 				 AND (SELECT count(*)=2 FROM iam.step_ups WHERE tenant_id=$1 AND operation='SECURITY_SETTINGS_UPDATE' AND state='CONSUMED')
 				 FROM iam.accounts WHERE id=$1`, tenant).Scan(&exact); err != nil || !exact {
 				t.Fatal("restart lost or duplicated predecessor settings lineage", err)
 			}
-			t.Log("actual IAM58 complete security settings and Session-bound StepUp survived IAM59 migration; another Session was rejected, the original proof completed once, and restart preserved both immutable completions")
+			t.Log("actual IAM59 completed settings survived IAM60 migration; its unbound pending proof failed closed, a new complete current proof applied once, and restart preserved both immutable completions")
 		}
 	}
 }
@@ -2296,7 +2370,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	// Exercise the exact source services together without weakening install
 	// admission: the workflow separately proves the published installer rejects
 	// this unmatched database shape before effects.
-	sourceProfile := installationrelease.AuthoritySchemas{IAM: 59, Audit: 31, PaaS: 3}
+	sourceProfile := installationrelease.AuthoritySchemas{IAM: 60, Audit: 31, PaaS: 3}
 	publishedProfile := installationrelease.CurrentDatabaseProfile()
 	if publishedProfile.Authorities == sourceProfile {
 		t.Fatal("unreleased authority source shape was published without a final profile gate")
@@ -4096,14 +4170,14 @@ func configureIAMCapacityHistory(t *testing.T, ctx context.Context, database *pg
 	var proof iamv1.StepUp
 	call(http.MethodPost, "/v1/auth/step-up", caller, iamv1.StartStepUpRequest{RequestID: "history-capacity-settings", Operation: iamv1.StepUpUpdateSecuritySettings, ExpectedFactorRevision: 2,
 		SecuritySettings: &iamv1.SecuritySettingsUpdateIntent{ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{}, Password: &rules,
-			Session: &iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30}}}, &proof, http.StatusOK)
+			Session: &iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30}, AccessKeyNetwork: &iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}}}}, &proof, http.StatusOK)
 	code, _ = processTOTPCode(t, ctx, database, seed, previous, false)
 	secrets = append(secrets, code)
 	call(http.MethodPost, "/v1/auth/step-up/"+proof.ID+":verify", caller,
 		map[string]string{"requestId": "history-capacity-proof", "password": password, "code": code}, &proof, http.StatusOK)
 	response := performJSON(t, http.MethodPut, replica+"/v1/account/security-settings", caller, iamv1.UpdateAccountSecuritySettingsRequest{
 		RequestID: "history-capacity-settings", StepUpID: proof.ID, ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{}, Password: rules,
-		Session: iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30}})
+		Session: iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30}, AccessKeyNetwork: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}}})
 	var applied iamv1.UpdateAccountSecuritySettingsResponse
 	if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &applied) != nil || applied.Outcome != "APPLIED" ||
 		applied.Change.Settings.Password == nil || *applied.Change.Settings.Password != rules || applied.Change.Settings.Session == nil ||
@@ -5885,7 +5959,8 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		if iamv1.ValidateAccessKeyList(directory) != nil || len(directory.Items) != 0 || !directory.Capabilities[0].Available {
 			t.Fatal("program key directory differs")
 		}
-		account.intent = iamv1.CreateAccessKeyRequest{UserResourceVersion: directory.UserResourceVersion, RequestID: prefix + "-create"}
+		account.intent = iamv1.CreateAccessKeyRequest{UserResourceVersion: directory.UserResourceVersion,
+			NetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}}, RequestID: prefix + "-create"}
 		call(endpoint, http.MethodPost, account.path, account.manager, account.intent, http.StatusCreated, &account.key)
 		if iamv1.ValidateCreateAccessKeyResponse(account.key) != nil || account.key.Key.UserID != target.ID {
 			t.Fatal("program key creation differs")
@@ -5895,7 +5970,7 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		clear(secret)
 		var replay iamv1.CreateAccessKeyResponse
 		call(replica, http.MethodPost, account.path, account.manager, account.intent, http.StatusOK, &replay)
-		if replay.Secret.Present() || replay.Key != account.key.Key || replay.Outcome != "EQUAL_REPLAY" {
+		if replay.Secret.Present() || !reflect.DeepEqual(replay.Key, account.key.Key) || replay.Outcome != "EQUAL_REPLAY" {
 			t.Fatal("replica repeated one-time secret")
 		}
 	}
@@ -7010,7 +7085,7 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 	}
 	var replay iamv1.CreateAccessKeyResponse
 	call(endpoint, http.MethodPost, a.path, a.manager, a.intent, http.StatusOK, &replay)
-	if replay.Secret.Present() || replay.Key != a.key.Key || replay.Outcome != "EQUAL_REPLAY" {
+	if replay.Secret.Present() || !reflect.DeepEqual(replay.Key, a.key.Key) || replay.Outcome != "EQUAL_REPLAY" {
 		t.Fatal("restart repeated one-time program secret")
 	}
 	return sensitive
@@ -8306,11 +8381,13 @@ func proveSecuritySettingsMutationProcesses(t *testing.T, ctx context.Context, a
 	var proof iamv1.StepUp
 	call(endpoint, http.MethodPost, "/v1/auth/step-up", caller, iamv1.StartStepUpRequest{RequestID: command, Operation: iamv1.StepUpUpdateSecuritySettings, ExpectedFactorRevision: 2,
 		SecuritySettings: &iamv1.SecuritySettingsUpdateIntent{Password: &iamv1.AccountPasswordSettings{ExpiryMode: iamv1.PasswordExpiryChange, MinimumLength: 15, HistoryCount: 1},
-			Session: &iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30}, ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}}}, http.StatusOK, &proof)
+			Session: &iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30}, AccessKeyNetwork: &iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}},
+			ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}}}, http.StatusOK, &proof)
 	call(replica, http.MethodPost, "/v1/auth/step-up/"+proof.ID+":verify", caller,
 		map[string]string{"requestId": "process-settings-proof", "password": password, "code": nextCode()}, http.StatusOK, &proof)
 	intent := iamv1.UpdateAccountSecuritySettingsRequest{Password: iamv1.AccountPasswordSettings{ExpiryMode: iamv1.PasswordExpiryChange, MinimumLength: 15, HistoryCount: 1},
-		Session: iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30}, RequestID: command, StepUpID: proof.ID, ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}}
+		Session: iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30}, AccessKeyNetwork: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}},
+		RequestID: command, StepUpID: proof.ID, ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}}
 	var fact auditv1.Event
 	withDispatcherStopped(func() {
 		lost := loseIAMCompletion(t, ctx, http.MethodPut, endpoint, path, caller, intent)

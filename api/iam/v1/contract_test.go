@@ -324,7 +324,8 @@ func securitySettingsContractSamples() []struct {
 	mfa := `{"requiredForUsers":false}`
 	password := `{"minimumLength":15,"requireLowercase":false,"requireUppercase":false,"requireDigit":false,"requireSymbol":false,"historyCount":1,"maxAgeDays":0,"expiryMode":"CHANGE_PASSWORD"}`
 	session := `{"idleTimeoutMinutes":30}`
-	settings := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccountSecuritySettings","accountId":"account-a","resourceVersion":2,"mfa":` + mfa + `,"password":` + password + `,"session":` + session + `,"updatedAt":"2026-09-24T12:00:00Z"}`
+	network := `{"allowedSourceCidrs":[]}`
+	settings := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccountSecuritySettings","accountId":"account-a","resourceVersion":2,"mfa":` + mfa + `,"password":` + password + `,"session":` + session + `,"accessKeyNetwork":` + network + `,"updatedAt":"2026-09-24T12:00:00Z"}`
 	change := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccountSecuritySettingsChange","requestId":"change-a","expectedResourceVersion":1,"settings":` + settings + `,"callerSessionEnded":true}`
 	return []struct {
 		kind, wire string
@@ -332,8 +333,8 @@ func securitySettingsContractSamples() []struct {
 	}{
 		{"AccountMFASettings", mfa, func() any { return new(AccountMFASettings) }},
 		{"AccountSecuritySettings", settings, func() any { return new(AccountSecuritySettings) }},
-		{"SecuritySettingsUpdateIntent", `{"expectedResourceVersion":1,"mfa":` + mfa + `,"password":` + password + `,"session":` + session + `}`, func() any { return new(SecuritySettingsUpdateIntent) }},
-		{"UpdateAccountSecuritySettingsRequest", `{"requestId":"change-a","stepUpId":"proof-a","expectedResourceVersion":1,"mfa":` + mfa + `,"password":` + password + `,"session":` + session + `}`, func() any { return new(UpdateAccountSecuritySettingsRequest) }},
+		{"SecuritySettingsUpdateIntent", `{"expectedResourceVersion":1,"mfa":` + mfa + `,"password":` + password + `,"session":` + session + `,"accessKeyNetwork":` + network + `}`, func() any { return new(SecuritySettingsUpdateIntent) }},
+		{"UpdateAccountSecuritySettingsRequest", `{"requestId":"change-a","stepUpId":"proof-a","expectedResourceVersion":1,"mfa":` + mfa + `,"password":` + password + `,"session":` + session + `,"accessKeyNetwork":` + network + `}`, func() any { return new(UpdateAccountSecuritySettingsRequest) }},
 		{"AccountSecuritySettingsChange", change, func() any { return new(AccountSecuritySettingsChange) }},
 		{"UpdateAccountSecuritySettingsResponse", `{"outcome":"APPLIED","change":` + change + `}`, func() any { return new(UpdateAccountSecuritySettingsResponse) }},
 	}
@@ -404,6 +405,16 @@ func TestAccountSecuritySettingsRejectAmbiguityWithoutChangingPriorValue(t *test
 					strings.Replace(sample.wire, `"idleTimeoutMinutes":30`, `"idleTimeoutMinutes":61`, 1),
 				)
 			}
+			if strings.Contains(sample.wire, `"accessKeyNetwork":`) {
+				if sample.kind != "AccountSecuritySettingsChange" {
+					malformed = append(malformed, strings.Replace(sample.wire, `,"accessKeyNetwork":{"allowedSourceCidrs":[]}`, "", 1))
+				}
+				malformed = append(malformed,
+					strings.Replace(sample.wire, `"accessKeyNetwork":{"allowedSourceCidrs":[]}`, `"accessKeyNetwork":null`, 1),
+					strings.Replace(sample.wire, `"allowedSourceCidrs":[]`, `"allowedSourceCidrs":["192.0.2.1/24"]`, 1),
+					strings.Replace(sample.wire, `"allowedSourceCidrs":[]`, `"allowedSourceCidrs":["2001:db8::/32","192.0.2.0/24"]`, 1),
+				)
+			}
 			if strings.Contains(sample.wire, `"expectedResourceVersion"`) {
 				for _, version := range []string{"0", "-1", "1.5", `"1"`, "null", "9007199254740991", "18446744073709551616"} {
 					malformed = append(malformed, strings.Replace(sample.wire, `"expectedResourceVersion":1`, `"expectedResourceVersion":`+version, 1))
@@ -456,7 +467,7 @@ func TestAccountSecuritySettingsRejectAmbiguityWithoutChangingPriorValue(t *test
 }
 
 func TestSettingsStepUpBindsExactIntentWithoutExpandingOtherOperations(t *testing.T) {
-	intent := `{"expectedResourceVersion":1,"mfa":{"requiredForUsers":false},"password":{"minimumLength":15,"requireLowercase":false,"requireUppercase":false,"requireDigit":false,"requireSymbol":false,"historyCount":1,"maxAgeDays":0,"expiryMode":"CHANGE_PASSWORD"},"session":{"idleTimeoutMinutes":30}}`
+	intent := `{"expectedResourceVersion":1,"mfa":{"requiredForUsers":false},"password":{"minimumLength":15,"requireLowercase":false,"requireUppercase":false,"requireDigit":false,"requireSymbol":false,"historyCount":1,"maxAgeDays":0,"expiryMode":"CHANGE_PASSWORD"},"session":{"idleTimeoutMinutes":30},"accessKeyNetwork":{"allowedSourceCidrs":[]}}`
 	start := `{"requestId":"settings-a","operation":"SECURITY_SETTINGS_UPDATE","expectedFactorRevision":2,"securitySettings":` + intent + `}`
 	for _, wire := range []string{start, strings.Replace(start, "false", "true", 1)} {
 		var value StartStepUpRequest
@@ -2280,7 +2291,7 @@ func TestAccessKeyManagementUsesAnExplicitNewUserOnlyProfile(t *testing.T) {
 func TestAccessKeyCreationSecretIsNotAReplayOrDeletionResult(t *testing.T) {
 	now := time.Date(2026, 9, 17, 0, 0, 0, 0, time.UTC)
 	key := AccessKey{APIVersion: APIVersion, Kind: "AccessKey", ID: "key-a", AccountID: "account-a", UserID: "user-a",
-		Status: AccessKeyEnabled, ResourceVersion: 1, CreatedAt: now, UpdatedAt: now}
+		Status: AccessKeyEnabled, NetworkRestrictions: AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}}, ResourceVersion: 1, CreatedAt: now, UpdatedAt: now}
 	secret, err := NewSecret("mak1.AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8")
 	if err != nil {
 		t.Fatal(err)
@@ -3480,7 +3491,7 @@ func TestInstanceListBatchTransportDoesNotGrowFrozenPolicyAuthority(t *testing.T
 
 func TestServiceRoleConsentActionsAreExplicitCurrentUserCapabilities(t *testing.T) {
 	profile, found := LookupAuthorizationProfile(ProductIAM)
-	if !found || profile.Revision != 8 {
+	if !found || profile.Revision != 9 {
 		t.Fatal("missing explicit IAM service-role revision")
 	}
 	_, digest, err := CanonicalizeAuthorizationProfile(profile)
@@ -4583,6 +4594,7 @@ func TestAuthorizationProfileUserAuthenticationIsExplicitAndCommitted(t *testing
 		for _, declared := range source.Actions {
 			loginSessionRequired := source.Product == ProductIAM && slices.Contains([]Action{
 				ActionIAMSecuritySettingsRead, ActionIAMSecuritySettingsUpdate,
+				ActionIAMAccessKeySetNetworkRestrictions,
 				ActionIAMServiceRoleTemplateList, ActionIAMServiceLinkedRoleList,
 				ActionIAMServiceLinkedRoleRead, ActionIAMServiceLinkedRoleCreate,
 				ActionIAMRolePass, ActionIAMWorkloadRoleBindingRevoke,
@@ -8423,6 +8435,32 @@ func TestRoleSessionSecretIsOnceOnly(t *testing.T) {
 		if ValidateRoleSession(invalid) == nil {
 			t.Fatal("accepted malformed role session")
 		}
+	}
+}
+
+func TestAccessKeyNetworkRestrictionsAllowCanonicalSource(t *testing.T) {
+	tests := []struct {
+		name         string
+		restrictions AccessKeyNetworkRestrictions
+		source       string
+		allowed      bool
+		valid        bool
+	}{
+		{name: "explicit-unrestricted", restrictions: AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}}, source: "203.0.113.10", allowed: true, valid: true},
+		{name: "ipv4-allowed", restrictions: AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{"198.51.100.0/24"}}, source: "198.51.100.10", allowed: true, valid: true},
+		{name: "ipv4-denied", restrictions: AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{"198.51.100.0/24"}}, source: "203.0.113.10", allowed: false, valid: true},
+		{name: "ipv6-allowed", restrictions: AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{"2001:db8::/32"}}, source: "2001:db8::10", allowed: true, valid: true},
+		{name: "address-family-denied", restrictions: AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{"2001:db8::/32"}}, source: "198.51.100.10", allowed: false, valid: true},
+		{name: "noncanonical-source", restrictions: AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}}, source: "198.051.100.10", valid: false},
+		{name: "invalid-restrictions", restrictions: AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{"198.51.100.1/24"}}, source: "198.51.100.10", valid: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			allowed, err := AccessKeyNetworkRestrictionsAllowSource(test.restrictions, test.source)
+			if (err == nil) != test.valid || allowed != test.allowed {
+				t.Fatalf("allowed=%v err=%v", allowed, err)
+			}
+		})
 	}
 }
 

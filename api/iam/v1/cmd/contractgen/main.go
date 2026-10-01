@@ -265,6 +265,9 @@ func buildPaths() object {
 		"/v1/users/{userId}/access-keys/{accessKeyId}:set-status": object{
 			"post": mutationOperation("setAccessKeyStatus", "Explicitly disable or enable one key at its exact version", "SetAccessKeyStatusRequest", "SetAccessKeyStatusResponse", "200", nil, []any{openapi31.PathIDParameter("userId"), openapi31.PathIDParameter("accessKeyId")}),
 		},
+		"/v1/users/{userId}/access-keys/{accessKeyId}/network-restrictions": object{
+			"put": mutationOperation("setAccessKeyNetworkRestrictions", "Replace one key's explicit source CIDR allow list at its exact version", "SetAccessKeyNetworkRestrictionsRequest", "SetAccessKeyNetworkRestrictionsResponse", "200", nil, []any{openapi31.PathIDParameter("userId"), openapi31.PathIDParameter("accessKeyId")}),
+		},
 		"/v1/users/{userId}/access-keys/{accessKeyId}:delete": object{
 			"post": mutationOperation("deleteAccessKey", "Irreversibly delete a disabled key without exporting material", "DeleteAccessKeyRequest", "DeleteAccessKeyResponse", "200", nil, []any{openapi31.PathIDParameter("userId"), openapi31.PathIDParameter("accessKeyId")}),
 		},
@@ -618,6 +621,7 @@ func structContracts() map[string]reflect.Type {
 		"StartChallengeTOTPEnrollmentRequest":           openapi31.StructType[iamv1.StartChallengeTOTPEnrollmentRequest](),
 		"AccountMFASettings":                            openapi31.StructType[iamv1.AccountMFASettings](),
 		"AccountSessionSettings":                        openapi31.StructType[iamv1.AccountSessionSettings](),
+		"AccessKeyNetworkRestrictions":                  openapi31.StructType[iamv1.AccessKeyNetworkRestrictions](),
 		"AccountSecuritySettings":                       openapi31.StructType[iamv1.AccountSecuritySettings](),
 		"AccountPasswordSettings":                       openapi31.StructType[iamv1.AccountPasswordSettings](),
 		"PasswordRequirements":                          openapi31.StructType[iamv1.PasswordRequirements](),
@@ -660,12 +664,16 @@ func structContracts() map[string]reflect.Type {
 		"ConfirmNotificationContactVerificationRequest": openapi31.StructType[iamv1.ConfirmNotificationContactVerificationRequest](),
 		"CreateUserRequest":                             openapi31.StructType[iamv1.CreateUserRequest](),
 		"AccessKey":                                     openapi31.StructType[iamv1.AccessKey](),
+		"AccessKeyAuthorizationObservation":             openapi31.StructType[iamv1.AccessKeyAuthorizationObservation](),
+		"AccessKeyUsageSummary":                         openapi31.StructType[iamv1.AccessKeyUsageSummary](),
 		"AccessKeyAccess":                               openapi31.StructType[iamv1.AccessKeyAccess](),
 		"AccessKeyList":                                 openapi31.StructType[iamv1.AccessKeyList](),
 		"CreateAccessKeyRequest":                        openapi31.StructType[iamv1.CreateAccessKeyRequest](),
 		"CreateAccessKeyResponse":                       openapi31.StructType[iamv1.CreateAccessKeyResponse](),
 		"SetAccessKeyStatusRequest":                     openapi31.StructType[iamv1.SetAccessKeyStatusRequest](),
 		"SetAccessKeyStatusResponse":                    openapi31.StructType[iamv1.SetAccessKeyStatusResponse](),
+		"SetAccessKeyNetworkRestrictionsRequest":        openapi31.StructType[iamv1.SetAccessKeyNetworkRestrictionsRequest](),
+		"SetAccessKeyNetworkRestrictionsResponse":       openapi31.StructType[iamv1.SetAccessKeyNetworkRestrictionsResponse](),
 		"DeleteAccessKeyRequest":                        openapi31.StructType[iamv1.DeleteAccessKeyRequest](),
 		"AccessKeyDeletion":                             openapi31.StructType[iamv1.AccessKeyDeletion](),
 		"DeleteAccessKeyResponse":                       openapi31.StructType[iamv1.DeleteAccessKeyResponse](),
@@ -795,6 +803,11 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 		return object{"type": "integer", "minimum": 5, "maximum": 60,
 			"description": "Whole minutes sealed into newly issued login Sessions; never extends their absolute expiration."}
 	}
+	if owner == "AccessKeyNetworkRestrictions" && jsonName == "allowedSourceCidrs" {
+		return object{"type": "array", "maxItems": iamv1.MaxAccessKeySourceCIDRs, "uniqueItems": true,
+			"items":       object{"type": "string", "minLength": 3, "maxLength": 43},
+			"description": "Explicit sorted canonical IPv4/IPv6 CIDRs. Empty means unrestricted at this layer; authoritative validation rejects noncanonical, mapped, duplicate or unsorted values."}
+	}
 	if jsonName == "expectedResourceVersion" && (owner == "SecuritySettingsUpdateIntent" || owner == "UpdateAccountSecuritySettingsRequest" || owner == "AccountSecuritySettingsChange") {
 		return object{"type": "integer", "minimum": 1, "maximum": uint64(9007199254740990)}
 	}
@@ -911,7 +924,7 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 	if owner == "AccessKeyAuthorization" && jsonName == "signedRequestDigest" {
 		base = object{"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
 	}
-	if owner == "CreateAccessKeyResponse" || owner == "SetAccessKeyStatusResponse" || owner == "DeleteAccessKeyResponse" {
+	if owner == "CreateAccessKeyResponse" || owner == "SetAccessKeyStatusResponse" || owner == "SetAccessKeyNetworkRestrictionsResponse" || owner == "DeleteAccessKeyResponse" {
 		if jsonName == "outcome" {
 			base = object{"type": "string", "enum": []string{"APPLIED", "EQUAL_REPLAY"}}
 		}
@@ -923,7 +936,7 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 		}
 	}
 	if (owner == "AccessKeyList" || owner == "AccessKeyAccess") && jsonName == "capabilities" {
-		base["minItems"], base["maxItems"] = 3, 3
+		base["minItems"], base["maxItems"] = 4, 4
 		base["uniqueItems"] = true
 		if owner == "AccessKeyList" {
 			base["minItems"], base["maxItems"] = 1, 1
@@ -933,7 +946,7 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 			}}}}
 		} else {
 			var actions []any
-			for _, action := range []iamv1.Action{iamv1.ActionIAMAccessKeyRead, iamv1.ActionIAMAccessKeySetStatus, iamv1.ActionIAMAccessKeyDelete} {
+			for _, action := range []iamv1.Action{iamv1.ActionIAMAccessKeyRead, iamv1.ActionIAMAccessKeySetStatus, iamv1.ActionIAMAccessKeySetNetworkRestrictions, iamv1.ActionIAMAccessKeyDelete} {
 				actions = append(actions, object{"contains": object{"properties": object{
 					"action":   object{"const": string(action)},
 					"resource": object{"properties": object{"kind": object{"const": string(iamv1.ResourceAccessKey)}}},
@@ -1270,13 +1283,14 @@ func applySemanticOverlays(schemas object) {
 	}
 	for _, name := range []string{"AccountSecuritySettings", "SecuritySettingsUpdateIntent"} {
 		schema := schemas[name].(object)
-		schema["required"] = append(slices.Clone(schema["required"].([]string)), "password", "session")
+		schema["required"] = append(slices.Clone(schema["required"].([]string)), "password", "session", "accessKeyNetwork")
 	}
 	schemas["AccountMFASettings"].(object)["description"] = "Explicit ordinary USER MFA requirement, not factor state, Session authentication facts or an exception for protected identities. Missing or null is invalid, never an inferred false."
 	schemas["AccountSessionSettings"].(object)["description"] = "Explicit inactivity limit sealed into newly issued login Sessions. It neither extends the absolute deadline nor proves presence."
-	schemas["AccountSecuritySettings"].(object)["description"] = "Non-secret current-account configuration returned only under a current instance-scoped read decision. Neither factor state nor Session authentication facts."
+	schemas["AccessKeyNetworkRestrictions"].(object)["description"] = "One explicit AccessKey source-network enforcement layer. Entries are ORed inside the layer; Account and key layers are ANDed. This is not a Policy, VPC selector or trusted source header."
+	schemas["AccountSecuritySettings"].(object)["description"] = "Non-secret current-account MFA, password, login-session and AccessKey-network configuration returned only under a current instance-scoped read decision. Neither factor state nor Session authentication facts."
 	schemas["SecuritySettingsUpdateIntent"].(object)["description"] = "Exact non-secret settings value and expected version for a Session-held SECURITY_SETTINGS_UPDATE proof. Not a selector or permit; cannot be attached to other operations."
-	schemas["UpdateAccountSecuritySettingsRequest"].(object)["description"] = "Replace the complete MFA, password and login-session configuration at one expected version using a proof held by the actual current Session and current instance permission. No identity selector, arbitrary patch or caller-controlled Session retention."
+	schemas["UpdateAccountSecuritySettingsRequest"].(object)["description"] = "Replace the complete MFA, password, login-session and Account AccessKey-network configuration at one expected version using a proof held by the actual current Session and current instance permission. No identity selector, arbitrary patch or caller-controlled Session retention."
 	schemas["AccountSecuritySettingsChange"].(object)["description"] = "Immutable historical completion. Runtime validation additionally requires settings.resourceVersion == expectedResourceVersion + 1. settings.updatedAt is the original completion time, not observation time; requestId is not lookup authority."
 	schemas["AccountSecuritySettingsChange"].(object)["properties"].(object)["callerSessionEnded"] = object{"const": true, "description": "Every settings change invalidates its original calling Session, including weakening the requirement. Never an instruction to end a later reader's current Session."}
 	historicalSettings["description"] = "Original settings at completion. A missing password segment or exact six-field pre-expiry segment records original history; never current configuration, inferred defaults or a new write."

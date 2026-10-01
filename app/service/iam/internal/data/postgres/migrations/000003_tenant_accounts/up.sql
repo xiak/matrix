@@ -178,6 +178,33 @@ RETURNS jsonb LANGUAGE sql IMMUTABLE SET search_path=pg_catalog,pg_temp AS $func
     SELECT '{"idleTimeoutMinutes":30}'::jsonb
 $function$;
 
+CREATE OR REPLACE FUNCTION iam.valid_access_key_network_restrictions(document jsonb)
+RETURNS boolean LANGUAGE plpgsql IMMUTABLE SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE entry jsonb; encoded text; previous text:=''; count_entries integer:=0;
+BEGIN
+    IF document IS NULL OR jsonb_typeof(document)<>'object'
+       OR NOT document ?& ARRAY['allowedSourceCidrs']
+       OR document-ARRAY['allowedSourceCidrs']<>'{}'::jsonb
+       OR jsonb_typeof(document->'allowedSourceCidrs')<>'array'
+       OR jsonb_array_length(document->'allowedSourceCidrs')>16 THEN RETURN false; END IF;
+    FOR entry IN SELECT value FROM jsonb_array_elements(document->'allowedSourceCidrs') value LOOP
+        count_entries:=count_entries+1;
+        IF jsonb_typeof(entry)<>'string' THEN RETURN false; END IF;
+        encoded:=entry#>>'{}';
+        IF NOT pg_input_is_valid(encoded,'cidr') OR encoded<>(encoded::cidr)::text
+           OR (encoded::cidr)::inet <<= '::ffff:0.0.0.0/96'::inet
+           OR encoded COLLATE "C"<=previous COLLATE "C" THEN RETURN false; END IF;
+        previous:=encoded;
+    END LOOP;
+    RETURN count_entries=jsonb_array_length(document->'allowedSourceCidrs');
+EXCEPTION WHEN OTHERS THEN RETURN false;
+END $function$;
+
+CREATE OR REPLACE FUNCTION iam.default_access_key_network_restrictions()
+RETURNS jsonb LANGUAGE sql IMMUTABLE SET search_path=pg_catalog,pg_temp AS $function$
+    SELECT '{"allowedSourceCidrs":[]}'::jsonb
+$function$;
+
 -- Compare retained lineage with initialized current values without returning
 -- a projected value that a proof or mutation could accidentally consume.
 CREATE OR REPLACE FUNCTION iam.password_settings_history_matches(left_value jsonb,right_value jsonb)
@@ -189,7 +216,8 @@ RETURNS boolean LANGUAGE sql IMMUTABLE SET search_path=pg_catalog,pg_temp AS $fu
 $function$;
 REVOKE ALL ON FUNCTION iam.valid_password_settings(jsonb),iam.valid_password_settings_history(jsonb),
     iam.password_settings_history_matches(jsonb,jsonb),iam.default_password_settings(),
-    iam.valid_session_settings(jsonb),iam.default_session_settings()
+    iam.valid_session_settings(jsonb),iam.default_session_settings(),
+    iam.valid_access_key_network_restrictions(jsonb),iam.default_access_key_network_restrictions()
     FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_notification_worker,matrix_iam_credential_recovery,matrix_iam_authentication_recovery,matrix_iam_backup_custody;
 
 -- Only initialize today's settings. Do not increment the continuous revision,
@@ -220,6 +248,18 @@ BEGIN
     END IF;
 END $account_session_settings$;
 ALTER TABLE iam.accounts ALTER COLUMN session_settings SET DEFAULT '{"idleTimeoutMinutes":30}'::jsonb;
+
+DO $account_access_key_network_settings$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid='iam.accounts'::regclass
+        AND attname='access_key_network_restrictions' AND NOT attisdropped) THEN
+        ALTER TABLE iam.accounts ADD COLUMN access_key_network_restrictions jsonb NOT NULL
+            DEFAULT '{"allowedSourceCidrs":[]}'::jsonb;
+    ELSIF EXISTS(SELECT 1 FROM iam.accounts WHERE NOT iam.valid_access_key_network_restrictions(access_key_network_restrictions)) THEN
+        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='IAM access key network authority is invalid';
+    END IF;
+END $account_access_key_network_settings$;
+ALTER TABLE iam.accounts ALTER COLUMN access_key_network_restrictions SET DEFAULT '{"allowedSourceCidrs":[]}'::jsonb;
 
 -- Initialization is restricted to the one pre-expiry transition. Replay
 -- cannot repair a partial/missing authority value after this ABI exists.
@@ -318,8 +358,10 @@ ALTER TABLE iam.accounts ADD CONSTRAINT account_security_settings_values CHECK(
     AND security_settings_updated_at>=created_at
     AND iam.valid_password_settings(password_settings)
     AND iam.valid_session_settings(session_settings)
+    AND iam.valid_access_key_network_restrictions(access_key_network_restrictions)
     AND (security_settings_version<>1 OR (NOT mfa_required_for_users AND security_settings_updated_at=created_at
-        AND password_settings=iam.default_password_settings() AND session_settings=iam.default_session_settings())));
+        AND password_settings=iam.default_password_settings() AND session_settings=iam.default_session_settings()
+        AND access_key_network_restrictions=iam.default_access_key_network_restrictions())));
 
 -- This immutable completion is the settings lineage, not a general receipt.
 -- Its StepUp foreign key is added by the existing MFA migration after that
@@ -376,19 +418,39 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='IAM session settings history is incomplete';
     END IF;
 END $settings_session_history$;
+DO $settings_access_key_network_history$
+DECLARE columns_present integer;
+BEGIN
+    SELECT count(*) INTO columns_present FROM pg_attribute WHERE attrelid='iam.account_security_settings_changes'::regclass
+        AND attname IN ('previous_access_key_network_restrictions','access_key_network_restrictions') AND NOT attisdropped;
+    IF columns_present=0 THEN
+        ALTER TABLE iam.account_security_settings_changes ADD COLUMN previous_access_key_network_restrictions jsonb;
+        ALTER TABLE iam.account_security_settings_changes ADD COLUMN access_key_network_restrictions jsonb;
+    ELSIF columns_present<>2 THEN
+        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='IAM access key network settings history is incomplete';
+    END IF;
+END $settings_access_key_network_history$;
 ALTER TABLE iam.account_security_settings_changes DROP CONSTRAINT IF EXISTS account_security_settings_changes_check;
 ALTER TABLE iam.account_security_settings_changes DROP CONSTRAINT IF EXISTS account_security_settings_changes_password;
 ALTER TABLE iam.account_security_settings_changes DROP CONSTRAINT IF EXISTS account_security_settings_changes_values;
 ALTER TABLE iam.account_security_settings_changes ADD CONSTRAINT account_security_settings_changes_values CHECK(
     (previous_password_settings IS NULL AND password_settings IS NULL AND previous_session_settings IS NULL AND session_settings IS NULL
+        AND previous_access_key_network_restrictions IS NULL AND access_key_network_restrictions IS NULL
         AND previous_required_for_users<>required_for_users)
     OR (previous_password_settings IS NOT NULL AND password_settings IS NOT NULL
         AND iam.valid_password_settings_history(previous_password_settings) AND iam.valid_password_settings_history(password_settings)
         AND ((previous_session_settings IS NULL AND session_settings IS NULL
+                AND previous_access_key_network_restrictions IS NULL AND access_key_network_restrictions IS NULL
                 AND (previous_required_for_users<>required_for_users OR previous_password_settings<>password_settings))
             OR (iam.valid_session_settings(previous_session_settings) AND iam.valid_session_settings(session_settings)
-                AND (previous_required_for_users<>required_for_users OR previous_password_settings<>password_settings
-                    OR previous_session_settings<>session_settings)))));
+                AND ((previous_access_key_network_restrictions IS NULL AND access_key_network_restrictions IS NULL
+                      AND (previous_required_for_users<>required_for_users OR previous_password_settings<>password_settings
+                           OR previous_session_settings<>session_settings))
+                  OR (iam.valid_access_key_network_restrictions(previous_access_key_network_restrictions)
+                      AND iam.valid_access_key_network_restrictions(access_key_network_restrictions)
+                      AND (previous_required_for_users<>required_for_users OR previous_password_settings<>password_settings
+                           OR previous_session_settings<>session_settings
+                           OR previous_access_key_network_restrictions<>access_key_network_restrictions)))))));
 ALTER TABLE iam.account_security_settings_changes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE iam.account_security_settings_changes FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS tenant_isolation ON iam.account_security_settings_changes;
@@ -415,21 +477,24 @@ BEGIN
     IF TG_OP='INSERT' THEN
         IF NEW.security_settings_version IS DISTINCT FROM 1 OR NEW.mfa_required_for_users IS DISTINCT FROM false
            OR NEW.security_settings_updated_at IS NOT NULL OR NEW.password_settings IS DISTINCT FROM iam.default_password_settings()
-           OR NEW.session_settings IS DISTINCT FROM iam.default_session_settings() THEN
+           OR NEW.session_settings IS DISTINCT FROM iam.default_session_settings()
+           OR NEW.access_key_network_restrictions IS DISTINCT FROM iam.default_access_key_network_restrictions() THEN
             RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='IAM initial security settings are invalid';
         END IF;
         NEW.security_settings_updated_at:=NEW.created_at;
-    ELSIF ROW(NEW.security_settings_version,NEW.mfa_required_for_users,NEW.security_settings_updated_at,NEW.password_settings,NEW.session_settings)
-        IS DISTINCT FROM ROW(OLD.security_settings_version,OLD.mfa_required_for_users,OLD.security_settings_updated_at,OLD.password_settings,OLD.session_settings) THEN
+    ELSIF ROW(NEW.security_settings_version,NEW.mfa_required_for_users,NEW.security_settings_updated_at,NEW.password_settings,NEW.session_settings,NEW.access_key_network_restrictions)
+        IS DISTINCT FROM ROW(OLD.security_settings_version,OLD.mfa_required_for_users,OLD.security_settings_updated_at,OLD.password_settings,OLD.session_settings,OLD.access_key_network_restrictions) THEN
         IF NEW.security_settings_version<>OLD.security_settings_version+1
             OR (NEW.mfa_required_for_users=OLD.mfa_required_for_users AND NEW.password_settings=OLD.password_settings
-                AND NEW.session_settings=OLD.session_settings)
+                AND NEW.session_settings=OLD.session_settings AND NEW.access_key_network_restrictions=OLD.access_key_network_restrictions)
             OR NEW.security_settings_updated_at IS DISTINCT FROM transaction_timestamp()
             OR NOT EXISTS(SELECT 1 FROM iam.account_security_settings_changes c WHERE c.tenant_id=NEW.id
                 AND c.expected_version=OLD.security_settings_version AND c.previous_required_for_users=OLD.mfa_required_for_users
                 AND c.required_for_users=NEW.mfa_required_for_users AND c.created_at=NEW.security_settings_updated_at
                 AND c.previous_password_settings=OLD.password_settings AND c.password_settings=NEW.password_settings
-                AND c.previous_session_settings=OLD.session_settings AND c.session_settings=NEW.session_settings) THEN
+                AND c.previous_session_settings=OLD.session_settings AND c.session_settings=NEW.session_settings
+                AND c.previous_access_key_network_restrictions=OLD.access_key_network_restrictions
+                AND c.access_key_network_restrictions=NEW.access_key_network_restrictions) THEN
             RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='IAM security settings mutation has no completion';
         END IF;
     END IF;
@@ -450,7 +515,8 @@ BEGIN
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='IAM account is unavailable'; END IF;
     IF stored.security_settings_version IS NULL OR stored.security_settings_version NOT BETWEEN 1 AND 9007199254740991
        OR NOT isfinite(stored.security_settings_updated_at) OR NOT iam.valid_password_settings(stored.password_settings)
-       OR NOT iam.valid_session_settings(stored.session_settings) THEN
+       OR NOT iam.valid_session_settings(stored.session_settings)
+       OR NOT iam.valid_access_key_network_restrictions(stored.access_key_network_restrictions) THEN
         RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='IAM security settings authority is invalid';
     END IF;
     RETURN jsonb_build_object('apiVersion','iam.matrix.xiak.com/v1','kind','AccountSecuritySettings',
@@ -458,6 +524,7 @@ BEGIN
         'mfa',jsonb_build_object('requiredForUsers',stored.mfa_required_for_users),
         'password',stored.password_settings,
         'session',stored.session_settings,
+        'accessKeyNetwork',stored.access_key_network_restrictions,
         'updatedAt',to_char(stored.security_settings_updated_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'));
 END $function$;
 
@@ -469,7 +536,9 @@ RETURNS jsonb LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $functio
             'accountId',c.tenant_id,'resourceVersion',c.expected_version+1,'mfa',jsonb_build_object('requiredForUsers',c.required_for_users),
             'updatedAt',to_char(c.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'))
             || CASE WHEN c.password_settings IS NULL THEN '{}'::jsonb ELSE jsonb_build_object('password',c.password_settings) END
-            || CASE WHEN c.session_settings IS NULL THEN '{}'::jsonb ELSE jsonb_build_object('session',c.session_settings) END)
+            || CASE WHEN c.session_settings IS NULL THEN '{}'::jsonb ELSE jsonb_build_object('session',c.session_settings) END
+            || CASE WHEN c.access_key_network_restrictions IS NULL THEN '{}'::jsonb
+                    ELSE jsonb_build_object('accessKeyNetwork',c.access_key_network_restrictions) END)
     FROM iam.account_security_settings_changes c WHERE c.tenant_id=tenant AND c.user_id=actor AND c.request_id=command_id
 $function$;
 
@@ -481,9 +550,9 @@ BEGIN
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='settings completion is missing'; END IF;
     SELECT * INTO proof FROM iam.step_ups p WHERE p.tenant_id=tenant AND p.id=receipt.step_up_id;
     IF NOT FOUND OR (proof.user_id,proof.request_id,proof.source_session_id,proof.operation,proof.state,proof.consumed_at,
-        proof.expected_settings_version,proof.required_for_users,proof.password_settings,proof.session_settings) IS DISTINCT FROM
+        proof.expected_settings_version,proof.required_for_users,proof.password_settings,proof.session_settings,proof.access_key_network_restrictions) IS DISTINCT FROM
         (actor,command_id,receipt.source_session_id,'SECURITY_SETTINGS_UPDATE'::text,'CONSUMED'::text,receipt.created_at,
-         receipt.expected_version,receipt.required_for_users,receipt.password_settings,receipt.session_settings)
+         receipt.expected_version,receipt.required_for_users,receipt.password_settings,receipt.session_settings,receipt.access_key_network_restrictions)
         OR NOT EXISTS(SELECT 1 FROM iam.sessions s WHERE s.tenant_id=tenant AND s.id=receipt.source_session_id
             AND s.principal_id=actor AND s.credential_version=proof.credential_generation
             AND s.authentication_method='PASSWORD_TOTP' AND s.mfa_revision=proof.mfa_revision
@@ -496,7 +565,9 @@ BEGIN
             ((current_account.mfa_required_for_users,current_account.security_settings_updated_at)
                 IS DISTINCT FROM (receipt.required_for_users,receipt.created_at)
              OR NOT iam.password_settings_history_matches(current_account.password_settings,receipt.password_settings)
-             OR (receipt.session_settings IS NOT NULL AND current_account.session_settings<>receipt.session_settings)))
+             OR (receipt.session_settings IS NOT NULL AND current_account.session_settings<>receipt.session_settings)
+             OR (receipt.access_key_network_restrictions IS NOT NULL
+                 AND current_account.access_key_network_restrictions<>receipt.access_key_network_restrictions)))
         OR (receipt.expected_version=1 AND receipt.previous_required_for_users)
         OR (receipt.expected_version>1 AND NOT EXISTS(SELECT 1 FROM iam.account_security_settings_changes previous
             WHERE previous.tenant_id=tenant AND previous.expected_version=receipt.expected_version-1
@@ -504,11 +575,16 @@ BEGIN
                 AND (receipt.password_settings IS NULL OR iam.password_settings_history_matches(receipt.previous_password_settings,previous.password_settings))
                 AND (receipt.session_settings IS NULL
                     OR COALESCE(receipt.previous_session_settings,iam.default_session_settings())
-                        =COALESCE(previous.session_settings,iam.default_session_settings()))))
+                        =COALESCE(previous.session_settings,iam.default_session_settings()))
+                AND (receipt.access_key_network_restrictions IS NULL
+                    OR COALESCE(receipt.previous_access_key_network_restrictions,iam.default_access_key_network_restrictions())
+                        =COALESCE(previous.access_key_network_restrictions,iam.default_access_key_network_restrictions()))))
         OR (receipt.expected_version=1 AND receipt.password_settings IS NOT NULL
             AND NOT iam.password_settings_history_matches(receipt.previous_password_settings,iam.default_password_settings()))
         OR (receipt.expected_version=1 AND receipt.session_settings IS NOT NULL
-            AND receipt.previous_session_settings<>iam.default_session_settings()) THEN
+            AND receipt.previous_session_settings<>iam.default_session_settings())
+        OR (receipt.expected_version=1 AND receipt.access_key_network_restrictions IS NOT NULL
+            AND receipt.previous_access_key_network_restrictions<>iam.default_access_key_network_restrictions()) THEN
         RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='settings lineage differs';
     END IF;
     IF NOT EXISTS(SELECT 1 FROM iam.authorization_decisions d WHERE d.tenant_id=tenant AND d.id=receipt.decision_id
@@ -593,8 +669,10 @@ END $function$;
 
 DROP FUNCTION IF EXISTS iam.update_account_security_settings(text,text,text,text,text,text,bigint,boolean,jsonb);
 DROP FUNCTION IF EXISTS iam.update_account_security_settings(text,text,text,text,text,text,bigint,boolean,jsonb,jsonb);
+DROP FUNCTION IF EXISTS iam.update_account_security_settings(text,text,text,text,text,text,bigint,boolean,jsonb,jsonb,jsonb);
 CREATE OR REPLACE FUNCTION iam.update_account_security_settings(tenant text,actor text,caller text,decision text,
-    command_id text,proof_id text,expected_version bigint,required_for_users boolean,password_settings jsonb,session_settings jsonb,event jsonb)
+    command_id text,proof_id text,expected_version bigint,required_for_users boolean,password_settings jsonb,session_settings jsonb,
+    access_key_network_restrictions jsonb,event jsonb)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE previous iam.account_security_settings_changes%ROWTYPE; stored iam.accounts%ROWTYPE; proof record; contact record; installation text;
 BEGIN
@@ -602,13 +680,16 @@ BEGIN
     PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.security-settings.update','ACCOUNT',tenant,'INSTANCE',NULL);
     IF command_id IS NULL OR command_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         OR expected_version IS NULL OR expected_version NOT BETWEEN 1 AND 9007199254740990 OR required_for_users IS NULL
-        OR NOT iam.valid_password_settings(password_settings) OR NOT iam.valid_session_settings(session_settings) THEN
+        OR NOT iam.valid_password_settings(password_settings) OR NOT iam.valid_session_settings(session_settings)
+        OR NOT iam.valid_access_key_network_restrictions(access_key_network_restrictions) THEN
         RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='settings command is invalid';
     END IF;
     SELECT * INTO previous FROM iam.account_security_settings_changes c WHERE c.tenant_id=tenant AND c.user_id=actor AND c.request_id=command_id;
     IF FOUND THEN
-        IF (previous.step_up_id,previous.expected_version,previous.required_for_users,previous.password_settings,previous.session_settings,previous.request_digest)
-            IS DISTINCT FROM (proof_id,expected_version,required_for_users,password_settings,session_settings,event->>'requestDigest') THEN
+        IF (previous.step_up_id,previous.expected_version,previous.required_for_users,previous.password_settings,previous.session_settings,
+            previous.access_key_network_restrictions,previous.request_digest)
+            IS DISTINCT FROM (proof_id,expected_version,required_for_users,password_settings,session_settings,
+                access_key_network_restrictions,event->>'requestDigest') THEN
             RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='settings command differs';
         END IF;
         PERFORM iam.assert_security_settings_change(tenant,actor,command_id);
@@ -616,13 +697,15 @@ BEGIN
     END IF;
     SELECT * INTO stored FROM iam.accounts a WHERE a.id=tenant;
     IF stored.security_settings_version<>expected_version OR (stored.mfa_required_for_users=required_for_users
-        AND stored.password_settings=password_settings AND stored.session_settings=session_settings) THEN
+        AND stored.password_settings=password_settings AND stored.session_settings=session_settings
+        AND stored.access_key_network_restrictions=access_key_network_restrictions) THEN
         RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='settings version or value differs';
     END IF;
     proof:=iam.lock_step_up(tenant,actor,caller,proof_id);
     IF proof.operation<>'SECURITY_SETTINGS_UPDATE' OR proof.state<>'PROVED' OR proof.request_id IS DISTINCT FROM command_id
         OR proof.expected_settings_version IS DISTINCT FROM expected_version OR proof.required_for_users IS DISTINCT FROM required_for_users
         OR proof.password_settings IS DISTINCT FROM password_settings OR proof.session_settings IS DISTINCT FROM session_settings
+        OR proof.access_key_network_restrictions IS DISTINCT FROM access_key_network_restrictions
         OR event->>'requestId' IS DISTINCT FROM command_id THEN
         RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='settings command proof differs';
     END IF;
@@ -635,13 +718,14 @@ BEGIN
     IF proof.expires_at<=clock_timestamp() THEN RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='settings proof expired'; END IF;
     INSERT INTO iam.account_security_settings_changes(tenant_id,user_id,request_id,step_up_id,source_session_id,expected_version,
         previous_required_for_users,required_for_users,previous_password_settings,password_settings,previous_session_settings,session_settings,
-        event_id,decision_id,request_digest,created_at)
+        previous_access_key_network_restrictions,access_key_network_restrictions,event_id,decision_id,request_digest,created_at)
         VALUES(tenant,actor,command_id,proof_id,caller,expected_version,stored.mfa_required_for_users,required_for_users,stored.password_settings,password_settings,
-            stored.session_settings,session_settings,
+            stored.session_settings,session_settings,stored.access_key_network_restrictions,access_key_network_restrictions,
             event->>'eventId',decision,event->>'requestDigest',transaction_timestamp());
     UPDATE iam.step_ups p SET state='CONSUMED',consumed_at=transaction_timestamp() WHERE p.tenant_id=tenant AND p.id=proof_id;
     UPDATE iam.accounts a SET security_settings_version=expected_version+1,mfa_required_for_users=required_for_users,
         password_settings=update_account_security_settings.password_settings,session_settings=update_account_security_settings.session_settings,
+        access_key_network_restrictions=update_account_security_settings.access_key_network_restrictions,
         security_settings_updated_at=transaction_timestamp() WHERE a.id=tenant;
     -- One fixed notice per original fact. Receipt replay returns above and
     -- never chooses a new recipient or creates another notification.
@@ -663,10 +747,10 @@ BEGIN
 END $function$;
 REVOKE ALL ON FUNCTION iam.security_settings_change_snapshot(text,text,text),iam.assert_security_settings_change(text,text,text),iam.verify_security_settings_change()
     FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_notification_worker,matrix_iam_credential_recovery,matrix_iam_authentication_recovery,matrix_iam_backup_custody;
-REVOKE ALL ON FUNCTION iam.lock_account_security_settings(text,text,text),iam.update_account_security_settings(text,text,text,text,text,text,bigint,boolean,jsonb,jsonb,jsonb),
+REVOKE ALL ON FUNCTION iam.lock_account_security_settings(text,text,text),iam.update_account_security_settings(text,text,text,text,text,text,bigint,boolean,jsonb,jsonb,jsonb,jsonb),
     iam.read_security_settings_change(text,text,text,text)
     FROM PUBLIC,matrix_iam_worker,matrix_iam_notification_worker,matrix_iam_credential_recovery,matrix_iam_authentication_recovery,matrix_iam_backup_custody;
-GRANT EXECUTE ON FUNCTION iam.lock_account_security_settings(text,text,text),iam.update_account_security_settings(text,text,text,text,text,text,bigint,boolean,jsonb,jsonb,jsonb),
+GRANT EXECUTE ON FUNCTION iam.lock_account_security_settings(text,text,text),iam.update_account_security_settings(text,text,text,text,text,text,bigint,boolean,jsonb,jsonb,jsonb,jsonb),
     iam.read_security_settings_change(text,text,text,text) TO matrix_iam_api;
 
 CREATE OR REPLACE FUNCTION iam.read_user_creation_password_settings(tenant text,actor text,decision text)
@@ -691,25 +775,35 @@ RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $funct
         WHERE a.attrelid='iam.accounts'::regclass AND a.attname='session_settings' AND NOT a.attisdropped
           AND a.atttypid='jsonb'::regtype AND a.atttypmod=-1 AND a.attnotnull
           AND pg_get_expr(d.adbin,d.adrelid)=quote_literal(iam.default_session_settings()::text)||'::jsonb')
-      AND (SELECT count(*)=4 FROM pg_attribute a WHERE a.attrelid='iam.account_security_settings_changes'::regclass
-        AND a.attname IN ('previous_password_settings','password_settings','previous_session_settings','session_settings') AND NOT a.attisdropped
+      AND EXISTS(SELECT 1 FROM pg_attribute a JOIN pg_attrdef d ON d.adrelid=a.attrelid AND d.adnum=a.attnum
+        WHERE a.attrelid='iam.accounts'::regclass AND a.attname='access_key_network_restrictions' AND NOT a.attisdropped
+          AND a.atttypid='jsonb'::regtype AND a.atttypmod=-1 AND a.attnotnull
+          AND pg_get_expr(d.adbin,d.adrelid)=quote_literal(iam.default_access_key_network_restrictions()::text)||'::jsonb')
+      AND (SELECT count(*)=6 FROM pg_attribute a WHERE a.attrelid='iam.account_security_settings_changes'::regclass
+        AND a.attname IN ('previous_password_settings','password_settings','previous_session_settings','session_settings',
+            'previous_access_key_network_restrictions','access_key_network_restrictions') AND NOT a.attisdropped
         AND a.atttypid='jsonb'::regtype AND a.atttypmod=-1 AND NOT a.attnotnull AND NOT a.atthasdef)
       AND EXISTS(SELECT 1 FROM pg_attribute a WHERE a.attrelid=to_regclass('iam.step_ups') AND a.attname='password_settings'
         AND NOT a.attisdropped AND a.atttypid='jsonb'::regtype AND a.atttypmod=-1 AND NOT a.attnotnull AND NOT a.atthasdef)
       AND EXISTS(SELECT 1 FROM pg_attribute a WHERE a.attrelid=to_regclass('iam.step_ups') AND a.attname='session_settings'
         AND NOT a.attisdropped AND a.atttypid='jsonb'::regtype AND a.atttypmod=-1 AND NOT a.attnotnull AND NOT a.atthasdef)
+      AND EXISTS(SELECT 1 FROM pg_attribute a WHERE a.attrelid=to_regclass('iam.step_ups') AND a.attname='access_key_network_restrictions'
+        AND NOT a.attisdropped AND a.atttypid='jsonb'::regtype AND a.atttypmod=-1 AND NOT a.attnotnull AND NOT a.atthasdef)
       AND EXISTS(SELECT 1 FROM pg_constraint c WHERE c.conrelid='iam.account_security_settings_changes'::regclass
         AND c.conname='account_security_settings_changes_values' AND c.contype='c' AND c.convalidated AND c.conenforced)
       AND to_regprocedure('iam.update_account_security_settings(text,text,text,text,text,text,bigint,boolean,jsonb)') IS NULL
       AND to_regprocedure('iam.update_account_security_settings(text,text,text,text,text,text,bigint,boolean,jsonb,jsonb)') IS NULL
+      AND to_regprocedure('iam.update_account_security_settings(text,text,text,text,text,text,bigint,boolean,jsonb,jsonb,jsonb)') IS NULL
       AND to_regprocedure('iam.create_user(text,text,text,text,text,text,text,jsonb)') IS NULL
-      AND (SELECT count(*)=10 FROM pg_proc p JOIN (VALUES
+      AND (SELECT count(*)=12 FROM pg_proc p JOIN (VALUES
         ('iam.valid_password_settings(jsonb)','boolean'::regtype,'document','i'),
         ('iam.valid_password_settings_history(jsonb)','boolean'::regtype,'document','i'),
         ('iam.password_settings_history_matches(jsonb,jsonb)','boolean'::regtype,'left_value,right_value','i'),
         ('iam.default_password_settings()','jsonb'::regtype,'','i'),
         ('iam.valid_session_settings(jsonb)','boolean'::regtype,'document','i'),
         ('iam.default_session_settings()','jsonb'::regtype,'','i'),
+        ('iam.valid_access_key_network_restrictions(jsonb)','boolean'::regtype,'document','i'),
+        ('iam.default_access_key_network_restrictions()','jsonb'::regtype,'','i'),
         ('iam.password_expiry_state(text,text,timestamptz)','jsonb'::regtype,'tenant,subject_id,observed_at','s'),
         ('iam.user_password_settings(text,text)','jsonb'::regtype,'tenant,subject_id','s'),
         ('iam.user_password_requirements(text,text)','jsonb'::regtype,'tenant,subject_id','s'),
@@ -792,7 +886,7 @@ BEGIN
         OR NOT EXISTS(SELECT 1 FROM pg_policy p WHERE p.polrelid=relation_oid AND p.polname='tenant_isolation'
             AND p.polcmd='*' AND p.polpermissive AND p.polroles=ARRAY[0::oid]) THEN RETURN false; END IF;
     IF NOT iam.account_password_settings_ready()
-        OR (SELECT count(*) FROM pg_attribute a WHERE a.attrelid=relation_oid AND a.attnum>0 AND NOT a.attisdropped)<>16 THEN RETURN false; END IF;
+        OR (SELECT count(*) FROM pg_attribute a WHERE a.attrelid=relation_oid AND a.attnum>0 AND NOT a.attisdropped)<>18 THEN RETURN false; END IF;
     FOR expected IN SELECT * FROM (VALUES
         ('tenant_id','text',-1),('user_id','text',-1),('request_id','text',-1),('step_up_id','text',-1),('source_session_id','text',-1),
         ('expected_version','bigint',-1),('previous_required_for_users','boolean',-1),('required_for_users','boolean',-1),
@@ -832,7 +926,7 @@ BEGIN
     END LOOP;
     FOR expected IN SELECT * FROM (VALUES
         ('iam.lock_account_security_settings(text,text,text)',true,'void','v','tenant,actor,caller'),
-        ('iam.update_account_security_settings(text,text,text,text,text,text,bigint,boolean,jsonb,jsonb,jsonb)',true,'jsonb','v','tenant,actor,caller,decision,command_id,proof_id,expected_version,required_for_users,password_settings,session_settings,event'),
+        ('iam.update_account_security_settings(text,text,text,text,text,text,bigint,boolean,jsonb,jsonb,jsonb,jsonb)',true,'jsonb','v','tenant,actor,caller,decision,command_id,proof_id,expected_version,required_for_users,password_settings,session_settings,access_key_network_restrictions,event'),
         ('iam.read_security_settings_change(text,text,text,text)',true,'jsonb','v','tenant,actor,decision,command_id'),
         ('iam.security_settings_change_snapshot(text,text,text)',false,'jsonb','s','tenant,actor,command_id'),
         ('iam.assert_security_settings_change(text,text,text)',false,'void','v','tenant,actor,command_id'),
@@ -863,9 +957,10 @@ RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $funct
         JOIN (VALUES ('security_settings_version','bigint'::regtype::oid,-1),
                      ('mfa_required_for_users','boolean'::regtype::oid,-1),
                      ('security_settings_updated_at','timestamptz'::regtype::oid,6),
-                     ('session_settings','jsonb'::regtype::oid,-1)) e(name,kind,precision)
+                     ('session_settings','jsonb'::regtype::oid,-1),
+                     ('access_key_network_restrictions','jsonb'::regtype::oid,-1)) e(name,kind,precision)
           ON a.attname=e.name AND a.atttypid=e.kind AND a.atttypmod=e.precision
-        WHERE a.attrelid='iam.accounts'::regclass AND a.attnotnull AND NOT a.attisdropped)=4
+        WHERE a.attrelid='iam.accounts'::regclass AND a.attnotnull AND NOT a.attisdropped)=5
     AND EXISTS(SELECT 1 FROM pg_catalog.pg_constraint c WHERE c.conrelid='iam.accounts'::regclass
         AND c.conname='account_security_settings_values' AND c.contype='c' AND c.convalidated)
     AND EXISTS(SELECT 1 FROM pg_catalog.pg_trigger t WHERE t.tgrelid='iam.accounts'::regclass

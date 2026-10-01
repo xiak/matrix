@@ -282,6 +282,13 @@ type AccountSessionSettings struct {
 	IdleTimeoutMinutes int `json:"idleTimeoutMinutes"`
 }
 
+// AccessKeyNetworkRestrictions is an explicit allow list for one enforcement
+// layer. An empty, non-nil list means this layer is unrestricted. Account and
+// individual AccessKey layers are evaluated independently and both must pass.
+type AccessKeyNetworkRestrictions struct {
+	AllowedSourceCIDRs []string `json:"allowedSourceCidrs"`
+}
+
 type AccountSecuritySettings struct {
 	APIVersion      string             `json:"apiVersion"`
 	Kind            string             `json:"kind"`
@@ -293,8 +300,11 @@ type AccountSecuritySettings struct {
 	Password *AccountPasswordSettings `json:"password,omitempty"`
 	// Missing only in immutable completions from before idle-session settings.
 	// Current settings must always contain the complete explicit value.
-	Session   *AccountSessionSettings `json:"session,omitempty"`
-	UpdatedAt time.Time               `json:"updatedAt"`
+	Session *AccountSessionSettings `json:"session,omitempty"`
+	// Missing only in immutable completions from before AccessKey network
+	// governance. It never governs login Sessions or RoleSessions.
+	AccessKeyNetwork *AccessKeyNetworkRestrictions `json:"accessKeyNetwork,omitempty"`
+	UpdatedAt        time.Time                     `json:"updatedAt"`
 }
 
 // SecuritySettingsUpdateIntent is the exact nonsecret target of a settings
@@ -306,15 +316,18 @@ type SecuritySettingsUpdateIntent struct {
 	Password *AccountPasswordSettings `json:"password,omitempty"`
 	// Only a retained CONSUMED proof may lack the original session segment.
 	Session *AccountSessionSettings `json:"session,omitempty"`
+	// Only a retained CONSUMED proof from before network governance may lack it.
+	AccessKeyNetwork *AccessKeyNetworkRestrictions `json:"accessKeyNetwork,omitempty"`
 }
 
 type UpdateAccountSecuritySettingsRequest struct {
-	RequestID               string                  `json:"requestId"`
-	StepUpID                string                  `json:"stepUpId"`
-	ExpectedResourceVersion uint64                  `json:"expectedResourceVersion"`
-	MFA                     AccountMFASettings      `json:"mfa"`
-	Password                AccountPasswordSettings `json:"password"`
-	Session                 AccountSessionSettings  `json:"session"`
+	RequestID               string                       `json:"requestId"`
+	StepUpID                string                       `json:"stepUpId"`
+	ExpectedResourceVersion uint64                       `json:"expectedResourceVersion"`
+	MFA                     AccountMFASettings           `json:"mfa"`
+	Password                AccountPasswordSettings      `json:"password"`
+	Session                 AccountSessionSettings       `json:"session"`
+	AccessKeyNetwork        AccessKeyNetworkRestrictions `json:"accessKeyNetwork"`
 }
 
 // This is an immutable historical completion. CallerSessionEnded describes
@@ -630,20 +643,37 @@ type User struct {
 // AccessKey is non-secret program-credential metadata. ENABLED is not a
 // permission or proof that the current account/user permits authentication.
 type AccessKey struct {
-	APIVersion      string          `json:"apiVersion"`
-	Kind            string          `json:"kind"`
-	ID              AccessKeyID     `json:"id"`
-	AccountID       AccountID       `json:"accountId"`
-	UserID          PrincipalID     `json:"userId"`
-	Status          AccessKeyStatus `json:"status"`
-	ResourceVersion uint64          `json:"resourceVersion"`
-	CreatedAt       time.Time       `json:"createdAt"`
-	UpdatedAt       time.Time       `json:"updatedAt"`
+	APIVersion          string                       `json:"apiVersion"`
+	Kind                string                       `json:"kind"`
+	ID                  AccessKeyID                  `json:"id"`
+	AccountID           AccountID                    `json:"accountId"`
+	UserID              PrincipalID                  `json:"userId"`
+	Status              AccessKeyStatus              `json:"status"`
+	NetworkRestrictions AccessKeyNetworkRestrictions `json:"networkRestrictions"`
+	ResourceVersion     uint64                       `json:"resourceVersion"`
+	CreatedAt           time.Time                    `json:"createdAt"`
+	UpdatedAt           time.Time                    `json:"updatedAt"`
+}
+
+// AccessKeyAuthorizationObservation is the latest valid-MAC authorization
+// evaluated by IAM. It is historical evidence, never a current permit.
+type AccessKeyAuthorizationObservation struct {
+	EvaluatedAt time.Time `json:"evaluatedAt"`
+	Allowed     bool      `json:"allowed"`
+	Product     ProductID `json:"product"`
+	Action      Action    `json:"action"`
+	SourceIP    string    `json:"sourceIp"`
+}
+
+type AccessKeyUsageSummary struct {
+	ObservedAt        time.Time                          `json:"observedAt"`
+	LastAuthorization *AccessKeyAuthorizationObservation `json:"lastAuthorization,omitempty"`
 }
 
 type AccessKeyAccess struct {
-	Key          AccessKey          `json:"key"`
-	Capabilities []ActionCapability `json:"capabilities"`
+	Key          AccessKey             `json:"key"`
+	Usage        AccessKeyUsageSummary `json:"usage"`
+	Capabilities []ActionCapability    `json:"capabilities"`
 }
 
 // This complete, bounded user directory has no cursor. Its user revision
@@ -659,14 +689,21 @@ type AccessKeyList struct {
 }
 
 type CreateAccessKeyRequest struct {
-	UserResourceVersion uint64 `json:"userResourceVersion"`
-	RequestID           string `json:"requestId"`
+	UserResourceVersion uint64                       `json:"userResourceVersion"`
+	NetworkRestrictions AccessKeyNetworkRestrictions `json:"networkRestrictions"`
+	RequestID           string                       `json:"requestId"`
 }
 
 type SetAccessKeyStatusRequest struct {
 	AccessKeyResourceVersion uint64          `json:"accessKeyResourceVersion"`
 	Status                   AccessKeyStatus `json:"status"`
 	RequestID                string          `json:"requestId"`
+}
+
+type SetAccessKeyNetworkRestrictionsRequest struct {
+	AccessKeyResourceVersion uint64                       `json:"accessKeyResourceVersion"`
+	NetworkRestrictions      AccessKeyNetworkRestrictions `json:"networkRestrictions"`
+	RequestID                string                       `json:"requestId"`
 }
 
 type DeleteAccessKeyRequest struct {
@@ -683,6 +720,11 @@ type CreateAccessKeyResponse struct {
 }
 
 type SetAccessKeyStatusResponse struct {
+	Outcome string    `json:"outcome"`
+	Key     AccessKey `json:"key"`
+}
+
+type SetAccessKeyNetworkRestrictionsResponse struct {
 	Outcome string    `json:"outcome"`
 	Key     AccessKey `json:"key"`
 }

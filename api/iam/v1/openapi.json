@@ -49,6 +49,9 @@
           "kind": {
             "const": "AccessKey"
           },
+          "networkRestrictions": {
+            "$ref": "#/components/schemas/AccessKeyNetworkRestrictions"
+          },
           "resourceVersion": {
             "maximum": 9007199254740991,
             "minimum": 1,
@@ -70,6 +73,7 @@
           "createdAt",
           "id",
           "kind",
+          "networkRestrictions",
           "resourceVersion",
           "status",
           "updatedAt",
@@ -122,6 +126,24 @@
                 "contains": {
                   "properties": {
                     "action": {
+                      "const": "iam.access-key.set-network-restrictions"
+                    },
+                    "resource": {
+                      "properties": {
+                        "kind": {
+                          "const": "ACCESS_KEY"
+                        }
+                      }
+                    }
+                  }
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "action": {
                       "const": "iam.access-key.delete"
                     },
                     "resource": {
@@ -140,18 +162,22 @@
             "items": {
               "$ref": "#/components/schemas/ActionCapability"
             },
-            "maxItems": 3,
-            "minItems": 3,
+            "maxItems": 4,
+            "minItems": 4,
             "type": "array",
             "uniqueItems": true
           },
           "key": {
             "$ref": "#/components/schemas/AccessKey"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/AccessKeyUsageSummary"
           }
         },
         "required": [
           "capabilities",
-          "key"
+          "key",
+          "usage"
         ],
         "type": "object"
       },
@@ -211,6 +237,34 @@
           "decision",
           "kind",
           "signedRequestDigest"
+        ],
+        "type": "object"
+      },
+      "AccessKeyAuthorizationObservation": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/Action"
+          },
+          "allowed": {
+            "type": "boolean"
+          },
+          "evaluatedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "product": {
+            "$ref": "#/components/schemas/ProductID"
+          },
+          "sourceIp": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "allowed",
+          "evaluatedAt",
+          "product",
+          "sourceIp"
         ],
         "type": "object"
       },
@@ -447,6 +501,27 @@
         ],
         "type": "object"
       },
+      "AccessKeyNetworkRestrictions": {
+        "additionalProperties": false,
+        "description": "One explicit AccessKey source-network enforcement layer. Entries are ORed inside the layer; Account and key layers are ANDed. This is not a Policy, VPC selector or trusted source header.",
+        "properties": {
+          "allowedSourceCidrs": {
+            "description": "Explicit sorted canonical IPv4/IPv6 CIDRs. Empty means unrestricted at this layer; authoritative validation rejects noncanonical, mapped, duplicate or unsorted values.",
+            "items": {
+              "maxLength": 43,
+              "minLength": 3,
+              "type": "string"
+            },
+            "maxItems": 16,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "allowedSourceCidrs"
+        ],
+        "type": "object"
+      },
       "AccessKeySignedRequest": {
         "additionalProperties": false,
         "properties": {
@@ -527,6 +602,21 @@
           "signedRequestDigest",
           "subject",
           "tenantId"
+        ],
+        "type": "object"
+      },
+      "AccessKeyUsageSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "lastAuthorization": {
+            "$ref": "#/components/schemas/AccessKeyAuthorizationObservation"
+          },
+          "observedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "observedAt"
         ],
         "type": "object"
       },
@@ -711,8 +801,11 @@
       },
       "AccountSecuritySettings": {
         "additionalProperties": false,
-        "description": "Non-secret current-account configuration returned only under a current instance-scoped read decision. Neither factor state nor Session authentication facts.",
+        "description": "Non-secret current-account MFA, password, login-session and AccessKey-network configuration returned only under a current instance-scoped read decision. Neither factor state nor Session authentication facts.",
         "properties": {
+          "accessKeyNetwork": {
+            "$ref": "#/components/schemas/AccessKeyNetworkRestrictions"
+          },
           "accountId": {
             "$ref": "#/components/schemas/ID"
           },
@@ -748,7 +841,8 @@
           "resourceVersion",
           "updatedAt",
           "password",
-          "session"
+          "session",
+          "accessKeyNetwork"
         ],
         "type": "object"
       },
@@ -778,6 +872,9 @@
             "additionalProperties": false,
             "description": "Original settings at completion. A missing password segment or exact six-field pre-expiry segment records original history; never current configuration, inferred defaults or a new write.",
             "properties": {
+              "accessKeyNetwork": {
+                "$ref": "#/components/schemas/AccessKeyNetworkRestrictions"
+              },
               "accountId": {
                 "$ref": "#/components/schemas/ID"
               },
@@ -959,6 +1056,7 @@
           "iam.service-linked-role.create",
           "iam.role.pass",
           "iam.workload-role-binding.revoke",
+          "iam.access-key.set-network-restrictions",
           "paas.execution-pool.create",
           "paas.execution-pool.read",
           "paas.execution-target.register",
@@ -1842,9 +1940,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -1919,9 +2017,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -1975,9 +2073,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -2031,9 +2129,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -2087,9 +2185,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -2143,9 +2241,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -2199,9 +2297,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -2255,9 +2353,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -2311,9 +2409,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -2367,9 +2465,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -2423,9 +2521,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -2479,9 +2577,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -2535,9 +2633,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -2591,9 +2689,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -2647,9 +2745,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -2703,9 +2801,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -2759,9 +2857,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -2815,9 +2913,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -2871,9 +2969,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -2927,9 +3025,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -2983,9 +3081,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -3039,9 +3137,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -3095,9 +3193,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -3151,9 +3249,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -3207,9 +3305,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -3263,9 +3361,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -3319,9 +3417,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -3375,9 +3473,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -3431,9 +3529,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -3487,9 +3585,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -3543,9 +3641,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -3599,9 +3697,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -3655,9 +3753,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -3711,9 +3809,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -3767,9 +3865,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -3823,9 +3921,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -3879,9 +3977,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -3935,9 +4033,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -3991,9 +4089,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -4047,9 +4145,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -4103,9 +4201,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -4159,9 +4257,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -4215,9 +4313,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -4271,9 +4369,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -4327,9 +4425,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -4383,9 +4481,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -4439,9 +4537,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -4495,9 +4593,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -4551,9 +4649,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -4607,9 +4705,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -4663,9 +4761,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -4719,9 +4817,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -4775,9 +4873,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -4831,9 +4929,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -4887,9 +4985,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -4943,9 +5041,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -4999,9 +5097,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -5055,9 +5153,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -5111,9 +5209,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -5167,9 +5265,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -5223,9 +5321,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -5279,9 +5377,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -5335,9 +5433,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -5391,9 +5489,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -5447,9 +5545,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -5503,9 +5601,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -5559,9 +5657,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -5615,9 +5713,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -5625,6 +5723,62 @@
                   "properties": {
                     "kind": {
                       "const": "WORKLOAD_ROLE_BINDING"
+                    }
+                  }
+                },
+                "resourceTags": false,
+                "subject": {
+                  "properties": {
+                    "accessKeyId": false,
+                    "type": {
+                      "enum": [
+                        "USER"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.access-key.set-network-restrictions"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "networkContext": false,
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
+                    "product": "iam",
+                    "revision": 9
+                  }
+                },
+                "requestTags": false,
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ACCESS_KEY"
                     }
                   }
                 },
@@ -8894,9 +9048,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -8961,9 +9115,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -9007,9 +9161,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -9053,9 +9207,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -9099,9 +9253,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -9145,9 +9299,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -9191,9 +9345,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -9237,9 +9391,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -9283,9 +9437,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -9329,9 +9483,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -9375,9 +9529,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -9421,9 +9575,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -9467,9 +9621,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -9513,9 +9667,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -9559,9 +9713,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -9605,9 +9759,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -9651,9 +9805,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -9697,9 +9851,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -9743,9 +9897,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -9789,9 +9943,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -9835,9 +9989,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -9881,9 +10035,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -9927,9 +10081,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -9973,9 +10127,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -10019,9 +10173,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -10065,9 +10219,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -10111,9 +10265,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -10157,9 +10311,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -10203,9 +10357,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -10249,9 +10403,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -10295,9 +10449,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -10341,9 +10495,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -10387,9 +10541,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -10433,9 +10587,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -10479,9 +10633,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -10525,9 +10679,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -10571,9 +10725,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -10617,9 +10771,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -10663,9 +10817,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -10709,9 +10863,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -10755,9 +10909,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -10801,9 +10955,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -10847,9 +11001,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -10893,9 +11047,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -10939,9 +11093,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -10985,9 +11139,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -11031,9 +11185,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -11077,9 +11231,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -11123,9 +11277,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -11169,9 +11323,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -11215,9 +11369,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -11261,9 +11415,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -11307,9 +11461,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -11353,9 +11507,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -11399,9 +11553,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -11445,9 +11599,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -11491,9 +11645,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -11537,9 +11691,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -11583,9 +11737,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -11629,9 +11783,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -11675,9 +11829,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -11721,9 +11875,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -11767,9 +11921,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -11813,9 +11967,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -11859,9 +12013,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -11905,9 +12059,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -11951,9 +12105,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -11997,9 +12151,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:489e631baeb837cc74313c6241953cb28c160c7ae639873ea1fb4c18088cd959",
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
                     "product": "iam",
-                    "revision": 8
+                    "revision": 9
                   }
                 },
                 "requestTags": false,
@@ -12007,6 +12161,52 @@
                   "properties": {
                     "kind": {
                       "const": "WORKLOAD_ROLE_BINDING"
+                    }
+                  }
+                },
+                "resourceTags": false
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.access-key.set-network-restrictions"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "oneOf": [
+                {
+                  "properties": {
+                    "collectionUsage": false,
+                    "resourceMode": {
+                      "const": "INSTANCE"
+                    }
+                  },
+                  "required": [
+                    "resourceMode"
+                  ]
+                }
+              ],
+              "properties": {
+                "networkContext": false,
+                "profile": {
+                  "const": {
+                    "contentDigest": "sha256:497c76d08d9ef0ce11ef44fa41d849754fad97c12782223de7f1f2e533820dbc",
+                    "product": "iam",
+                    "revision": 9
+                  }
+                },
+                "requestTags": false,
+                "resource": {
+                  "properties": {
+                    "kind": {
+                      "const": "ACCESS_KEY"
                     }
                   }
                 },
@@ -14898,6 +15098,9 @@
       "CreateAccessKeyRequest": {
         "additionalProperties": false,
         "properties": {
+          "networkRestrictions": {
+            "$ref": "#/components/schemas/AccessKeyNetworkRestrictions"
+          },
           "requestId": {
             "$ref": "#/components/schemas/ID"
           },
@@ -14908,6 +15111,7 @@
           }
         },
         "required": [
+          "networkRestrictions",
           "requestId",
           "userResourceVersion"
         ],
@@ -17278,6 +17482,7 @@
                             "iam.access-key.delete",
                             "iam.access-key.list",
                             "iam.access-key.read",
+                            "iam.access-key.set-network-restrictions",
                             "iam.access-key.set-status",
                             "iam.account.alias-set",
                             "iam.group-membership.*",
@@ -17837,6 +18042,7 @@
                       "iam.access-key.delete",
                       "iam.access-key.list",
                       "iam.access-key.read",
+                      "iam.access-key.set-network-restrictions",
                       "iam.access-key.set-status",
                       "iam.account.alias-set",
                       "iam.group-membership.*",
@@ -17985,6 +18191,7 @@
                       "iam.access-key.delete",
                       "iam.access-key.list",
                       "iam.access-key.read",
+                      "iam.access-key.set-network-restrictions",
                       "iam.access-key.set-status",
                       "iam.account.alias-set",
                       "iam.group-membership.*",
@@ -18133,6 +18340,7 @@
                       "iam.access-key.delete",
                       "iam.access-key.list",
                       "iam.access-key.read",
+                      "iam.access-key.set-network-restrictions",
                       "iam.access-key.set-status",
                       "iam.account.alias-set",
                       "iam.group-membership.*",
@@ -20687,6 +20895,7 @@
                         "iam.access-key.*",
                         "iam.access-key.delete",
                         "iam.access-key.read",
+                        "iam.access-key.set-network-restrictions",
                         "iam.access-key.set-status"
                       ]
                     }
@@ -20717,6 +20926,7 @@
                       "iam.access-key.*",
                       "iam.access-key.delete",
                       "iam.access-key.read",
+                      "iam.access-key.set-network-restrictions",
                       "iam.access-key.set-status"
                     ]
                   }
@@ -21048,6 +21258,33 @@
                       "iam.workload-role-binding.*",
                       "iam.workload-role-binding.revoke"
                     ]
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "actions": {
+                  "contains": {
+                    "enum": [
+                      "iam.access-key.set-network-restrictions",
+                      "iam.access-key.*"
+                    ]
+                  }
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "resources": {
+                  "contains": {
+                    "properties": {
+                      "kind": {
+                        "const": "ACCESS_KEY"
+                      }
+                    }
                   }
                 }
               }
@@ -23146,6 +23383,7 @@
                 "iam.service-linked-role.create",
                 "iam.role.pass",
                 "iam.workload-role-binding.revoke",
+                "iam.access-key.set-network-restrictions",
                 "paas.execution-pool.create",
                 "paas.execution-pool.read",
                 "paas.execution-target.register",
@@ -25571,6 +25809,9 @@
         "additionalProperties": false,
         "description": "Exact non-secret settings value and expected version for a Session-held SECURITY_SETTINGS_UPDATE proof. Not a selector or permit; cannot be attached to other operations.",
         "properties": {
+          "accessKeyNetwork": {
+            "$ref": "#/components/schemas/AccessKeyNetworkRestrictions"
+          },
           "expectedResourceVersion": {
             "maximum": 9007199254740990,
             "minimum": 1,
@@ -25590,7 +25831,8 @@
           "expectedResourceVersion",
           "mfa",
           "password",
-          "session"
+          "session",
+          "accessKeyNetwork"
         ],
         "type": "object"
       },
@@ -26141,6 +26383,53 @@
           "EXPIRED"
         ],
         "type": "string"
+      },
+      "SetAccessKeyNetworkRestrictionsRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "accessKeyResourceVersion": {
+            "maximum": 9007199254740990,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "networkRestrictions": {
+            "$ref": "#/components/schemas/AccessKeyNetworkRestrictions"
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "accessKeyResourceVersion",
+          "networkRestrictions",
+          "requestId"
+        ],
+        "type": "object"
+      },
+      "SetAccessKeyNetworkRestrictionsResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "$ref": "#/components/schemas/AccessKey",
+            "properties": {
+              "resourceVersion": {
+                "minimum": 2
+              }
+            }
+          },
+          "outcome": {
+            "enum": [
+              "APPLIED",
+              "EQUAL_REPLAY"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "outcome"
+        ],
+        "type": "object"
       },
       "SetAccessKeyStatusRequest": {
         "additionalProperties": false,
@@ -26858,6 +27147,9 @@
           "securitySettings": {
             "additionalProperties": false,
             "properties": {
+              "accessKeyNetwork": {
+                "$ref": "#/components/schemas/AccessKeyNetworkRestrictions"
+              },
               "expectedResourceVersion": {
                 "maximum": 9007199254740990,
                 "minimum": 1,
@@ -27198,8 +27490,11 @@
       },
       "UpdateAccountSecuritySettingsRequest": {
         "additionalProperties": false,
-        "description": "Replace the complete MFA, password and login-session configuration at one expected version using a proof held by the actual current Session and current instance permission. No identity selector, arbitrary patch or caller-controlled Session retention.",
+        "description": "Replace the complete MFA, password, login-session and Account AccessKey-network configuration at one expected version using a proof held by the actual current Session and current instance permission. No identity selector, arbitrary patch or caller-controlled Session retention.",
         "properties": {
+          "accessKeyNetwork": {
+            "$ref": "#/components/schemas/AccessKeyNetworkRestrictions"
+          },
           "expectedResourceVersion": {
             "maximum": 9007199254740990,
             "minimum": 1,
@@ -27222,6 +27517,7 @@
           }
         },
         "required": [
+          "accessKeyNetwork",
           "expectedResourceVersion",
           "mfa",
           "password",
@@ -34350,6 +34646,85 @@
           }
         },
         "summary": "Read nonsecret user key metadata and current operation hints"
+      }
+    },
+    "/v1/users/{userId}/access-keys/{accessKeyId}/network-restrictions": {
+      "put": {
+        "operationId": "setAccessKeyNetworkRestrictions",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "userId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "accessKeyId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetAccessKeyNetworkRestrictionsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetAccessKeyNetworkRestrictionsResponse"
+                }
+              }
+            },
+            "description": "Command completed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Replace one key's explicit source CIDR allow list at its exact version"
       }
     },
     "/v1/users/{userId}/access-keys/{accessKeyId}:delete": {

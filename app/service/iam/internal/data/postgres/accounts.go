@@ -92,10 +92,14 @@ func (value *transaction) UpdateAccountSecuritySettings(ctx context.Context, mut
 	if err != nil {
 		return iamv1.UpdateAccountSecuritySettingsResponse{}, identityaccess.ErrUnavailable
 	}
+	accessKeyNetwork, err := json.Marshal(r.AccessKeyNetwork)
+	if err != nil {
+		return iamv1.UpdateAccountSecuritySettingsResponse{}, identityaccess.ErrUnavailable
+	}
 	var encoded []byte
-	err = value.tx.QueryRow(ctx, "SELECT iam.update_account_security_settings($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11::jsonb)",
+	err = value.tx.QueryRow(ctx, "SELECT iam.update_account_security_settings($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb,$11::jsonb,$12::jsonb)",
 		s.AccountID, s.PrincipalID, s.ID, mutation.DecisionID, r.RequestID, r.StepUpID, r.ExpectedResourceVersion,
-		r.MFA.RequiredForUsers, passwordSettings, sessionSettings, event).Scan(&encoded)
+		r.MFA.RequiredForUsers, passwordSettings, sessionSettings, accessKeyNetwork, event).Scan(&encoded)
 	if err != nil {
 		return iamv1.UpdateAccountSecuritySettingsResponse{}, mapStepUpError("update IAM security settings", err)
 	}

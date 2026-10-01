@@ -586,16 +586,25 @@ func (value *AccountSecuritySettings) UnmarshalJSON(source []byte) error {
 	return nil
 }
 
+func decodeAccessKeyNetworkRestrictions(source []byte) (AccessKeyNetworkRestrictions, error) {
+	var result AccessKeyNetworkRestrictions
+	if contractjson.DecodeObjectBytes(source, MaxRequestBytes, &result) != nil || ValidateAccessKeyNetworkRestrictions(result) != nil {
+		return AccessKeyNetworkRestrictions{}, contractjson.ErrInvalidDocument
+	}
+	return result, nil
+}
+
 func decodeAccountSecuritySettings(source []byte, historical bool) (AccountSecuritySettings, error) {
 	var decoded struct {
-		APIVersion      string              `json:"apiVersion"`
-		Kind            string              `json:"kind"`
-		AccountID       AccountID           `json:"accountId"`
-		ResourceVersion uint64              `json:"resourceVersion"`
-		MFA             *AccountMFASettings `json:"mfa"`
-		Password        json.RawMessage     `json:"password"`
-		Session         json.RawMessage     `json:"session"`
-		UpdatedAt       time.Time           `json:"updatedAt"`
+		APIVersion       string              `json:"apiVersion"`
+		Kind             string              `json:"kind"`
+		AccountID        AccountID           `json:"accountId"`
+		ResourceVersion  uint64              `json:"resourceVersion"`
+		MFA              *AccountMFASettings `json:"mfa"`
+		Password         json.RawMessage     `json:"password"`
+		Session          json.RawMessage     `json:"session"`
+		AccessKeyNetwork json.RawMessage     `json:"accessKeyNetwork"`
+		UpdatedAt        time.Time           `json:"updatedAt"`
 	}
 	if contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil || decoded.MFA == nil {
 		return AccountSecuritySettings{}, contractjson.ErrInvalidDocument
@@ -615,6 +624,13 @@ func decodeAccountSecuritySettings(source []byte, historical bool) (AccountSecur
 			return AccountSecuritySettings{}, contractjson.ErrInvalidDocument
 		}
 		result.Session = &session
+	}
+	if decoded.AccessKeyNetwork != nil {
+		network, err := decodeAccessKeyNetworkRestrictions(decoded.AccessKeyNetwork)
+		if err != nil {
+			return AccountSecuritySettings{}, err
+		}
+		result.AccessKeyNetwork = &network
 	}
 	if validateAccountSecuritySettings(result, historical) != nil {
 		return AccountSecuritySettings{}, contractjson.ErrInvalidDocument
@@ -640,6 +656,7 @@ func decodeSecuritySettingsIntent(source []byte, historical bool) (SecuritySetti
 		MFA                     *AccountMFASettings `json:"mfa"`
 		Password                json.RawMessage     `json:"password"`
 		Session                 json.RawMessage     `json:"session"`
+		AccessKeyNetwork        json.RawMessage     `json:"accessKeyNetwork"`
 	}
 	if contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil || decoded.MFA == nil {
 		return SecuritySettingsUpdateIntent{}, contractjson.ErrInvalidDocument
@@ -658,6 +675,13 @@ func decodeSecuritySettingsIntent(source []byte, historical bool) (SecuritySetti
 			return SecuritySettingsUpdateIntent{}, contractjson.ErrInvalidDocument
 		}
 		result.Session = &session
+	}
+	if decoded.AccessKeyNetwork != nil {
+		network, err := decodeAccessKeyNetworkRestrictions(decoded.AccessKeyNetwork)
+		if err != nil {
+			return SecuritySettingsUpdateIntent{}, err
+		}
+		result.AccessKeyNetwork = &network
 	}
 	if validateSecuritySettingsUpdateIntent(result, historical) != nil {
 		return SecuritySettingsUpdateIntent{}, contractjson.ErrInvalidDocument

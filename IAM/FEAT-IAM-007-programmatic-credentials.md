@@ -1,6 +1,6 @@
 # FEAT-IAM-007：访问密钥与程序访问
 
-- 状态：实施中；K1管理及K2内部验签、原子拒绝/防重放与历史证据的累计后端固定`644fff09446fc8ffb003cc53cf2fb55d4f58828a`已通过本地真实PG18、固定前驱保留数据、独立进程、最终全仓检查及五项独立CI。实际产品消费已累计到`efe12e824b6534e7b6912c6ed9900c7f0c53e3e9`：PaaS已覆盖已列明的创建、实例读取、Deployment控制和Application声明标签，Audit覆盖精确租户记录查询、完整性验证及可信外部source IP；本地全仓、双Account五进程和唯一前驱保留数据门禁通过，独立CI仍待当前固定片推送后完成。签名安装组合、Account/key网络限制、使用摘要、生产入口托管/备份、UI及最终发布仍未完成，整体未验收。
+- 状态：实施中；K1管理及K2内部验签、原子拒绝/防重放与历史证据的累计后端固定`644fff09446fc8ffb003cc53cf2fb55d4f58828a`已通过本地真实PG18、固定前驱保留数据、独立进程、最终全仓检查及五项独立CI。实际产品消费已累计到`efe12e824b6534e7b6912c6ed9900c7f0c53e3e9`：PaaS已覆盖已列明的创建、实例读取、Deployment控制和Application声明标签，Audit覆盖精确租户记录查询、完整性验证及可信外部source IP。Account/key网络限制和不可变使用摘要的当前工作树候选已通过真实PG18、IAM59→60滚动前驱及双IAM/Audit/PaaS独立进程门禁，尚待固定提交与独立CI；签名APISIX安装、生产入口托管/备份、UI及最终发布仍未完成，整体未验收。
 - 依赖：003、005；临时凭据与 006 协作。
 - Owner：IAM credential；各产品 HTTP 签名消费归其 PEP。
 
@@ -302,7 +302,7 @@ PaaS继续使用既有Profile revision 12，但签名路径不再错误使用内
 
 固定实现`efe12e824b6534e7b6912c6ed9900c7f0c53e3e9`及唯一前驱门禁`adeb2a710`在2026-10-01通过API、边缘边界、PaaS/Audit HTTP与usecase、IAM authority和architecture聚焦测试。独占PostgreSQL 18.6（2 CPU、2 GiB、PIDs512）上的双Account五进程race门禁289.124秒通过：两个来源各自允许，相同合法签名上下文替换成`198.51.100.250`后由真实`NOT_IP_ADDRESS` Policy形成403/Deny，决定文档精确保存错误来源且不产生成功Audit访问事实；正常PaaS资源图、Operation/outbox、Audit游标与链继续隔离。固定`0c688302b9dea1050653eded2b9442a6b1322155`的真实IAM executable产生r3和既有数据，当前r4双迁移、等值bootstrap、重启与保留门禁134.561秒通过。全仓普通/race、vet、模块校验、两次生成字节一致及Linux amd64/CGO关闭构建通过；独立CI与真实APISIX覆盖仍待完成，不能据此标记网络限制或签名安装LIVE。
 
-### 下一纵向切片：Account/AccessKey 网络限制与使用观测
+### 当前纵向切片：Account/AccessKey 网络限制与使用观测
 
 本片不建立供应商VPC、代理链或另一套Policy。公开值`AccessKeyNetworkRestrictions`准确只有显式非空数组字段`allowedSourceCidrs`；数组可以为空，表示该层不限制，最多16个严格规范、无zone、非IPv4-mapped的IPv4/IPv6 CIDR，必须按规范文本升序且不重复。Account限制与单Key限制采用AND组合，各层列表内部为OR：两个列表都为空才是全来源，任一非空层不匹配即拒绝。`0.0.0.0/0`或`::/0`只分别覆盖一种地址族，不能被实现偷偷等价成空列表。
 
@@ -315,6 +315,12 @@ Account值归现有`AccountSecuritySettings.accessKeyNetwork`，不是授权Poli
 使用观测复用不可变`access_key_authorization_evidence`和原决定，不在`access_keys`上按请求更新`last_used_at`制造热行。迁移为既有证据从对应决定的服务端时间保留一次`evaluated_at`并建立按Account/key/时间读取的受限索引；新证据与决定同事务追加。授权证据还绑定当时Account security-settings版本和Key resourceVersion，使SQL完成守卫可独立拒绝伪造Allow；历史验证使用当时不可变完成链，不用今天的CIDR回写旧决定。摘要只经原AccessKey read/list权限返回，不开放全局使用目录、任意时间范围扫描或失败凭据枚举。
 
 最低门禁必须覆盖：规范IPv4/IPv6及空层组合；错误排序、重复、mapped/zone/非规范CIDR；Account-only、Key-only、双层交集和跨地址族；合法MAC错误来源的Deny/nonce消费/无业务副作用；坏MAC与未知key无摘要；限制更新与签名、禁用、删除、Account设置更新的双向并发；两Account同CIDR/key ID攻击；使用摘要Allow→Deny顺序、观测时间、重启及直接前驱保留数据。真实APISIX必须另证caller同名头和forwarding头被清除并由网关覆盖；进程门禁不能替代安装验收。
+
+2026-10-02当前工作树候选在本任务独占PostgreSQL 18.4（1 CPU、768MiB、PIDs256、随机loopback端口）和GOMAXPROCS2下完成首轮真实门禁。`TestIAMAccessKeyPostgres`的完整原矩阵加网络限制/使用摘要以race-p1通过109.241秒：Account和Key限制更新后下一请求立即生效，合法MAC的错误来源形成Deny并永久消费nonce，Allow→Deny摘要只从原不可变决定读取；原跨账号、锁序、配额、密文、删除/停用和producer proof回归保留。`TestIAMSecuritySettingsPostgres`以race-p1通过110.457秒：完整Account网络值进入StepUp、版本和完成事实，改变网络意图、错误版本及并发更新均无部分效果。
+
+固定前驱`0c688302b9dea1050653eded2b9442a6b1322155`的真实IAM59二进制产生保留数据，当前IAM60双迁移、等值bootstrap、重启门禁以race-p1通过127.50秒（package 130.949秒）。已完成的旧设置事实保持原字节；未绑定新网络字段的旧PROVED StepUp只保留为不可变历史，在当前读取为not-found且不能消费，必须由当前完整StepUp重新认证后才可修改设置。该门禁同时保留密码/Session、MFA绑定/替换/恢复、原receipt/canonical/proof与冻结Profile，不把开发滚动前驱实验称为跨发布profile兼容。
+
+另一空白数据库上的`TestIndependentIAMAuditAndPaaSProcesses`以race-p1通过252.76秒（package 256.255秒）：两个真实IAM副本、Audit、PaaS及dispatcher覆盖双Account资源/Operation/outbox、程序签名body/path/If-Match/幂等键篡改、可信来源与重放、设置回包丢失/重启、MFA恢复及停用USER历史投递。聚焦API/authority/usecase/HTTP/PostgreSQL race、architecture和vet以及全仓普通`go test -p 2 ./...`、`go vet ./...`通过；OpenAPI二次生成字节稳定。上述仍是未提交候选，不替代精确SHA独立CI、签名APISIX、安装备份或真实浏览器验收。
 
 ## 验收
 

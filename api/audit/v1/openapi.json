@@ -58,6 +58,7 @@
           "iam.access-key.created",
           "iam.access-key.enabled",
           "iam.access-key.disabled",
+          "iam.access-key.network-restrictions-updated",
           "iam.access-key.deleted",
           "iam.policy.created",
           "iam.policy-version.created",
@@ -1292,6 +1293,32 @@
                   "properties": {
                     "action": {
                       "const": "iam.access-key.disabled"
+                    }
+                  },
+                  "required": [
+                    "action"
+                  ]
+                }
+              },
+              "required": [
+                "event"
+              ]
+            },
+            "then": {
+              "properties": {
+                "source": {
+                  "const": "IAM"
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "event": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.access-key.network-restrictions-updated"
                     }
                   },
                   "required": [
@@ -4944,6 +4971,52 @@
               "properties": {
                 "action": {
                   "const": "iam.access-key.disabled"
+                }
+              },
+              "required": [
+                "action"
+              ]
+            },
+            "then": {
+              "properties": {
+                "actor": {
+                  "properties": {
+                    "accessKeyId": false,
+                    "type": {
+                      "const": "USER"
+                    }
+                  }
+                },
+                "installationId": false,
+                "operationId": false,
+                "result": {
+                  "enum": [
+                    "SUCCEEDED"
+                  ]
+                },
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "ACCESS_KEY"
+                    },
+                    "tenantId": false
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                }
+              },
+              "required": [
+                "tenantId",
+                "iamDecisionId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "iam.access-key.network-restrictions-updated"
                 }
               },
               "required": [

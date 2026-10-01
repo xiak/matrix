@@ -114,7 +114,7 @@ func TestAccessKeyFactsRequireRealTenantUserDecisions(t *testing.T) {
 		Actor: ActorReference{Type: ActorUser, ID: "manager-a"}, IAMDecisionID: "decision-key", Target: TargetReference{Kind: TargetAccessKey, ID: "key-a"},
 		Result: ResultSucceeded, RequestID: "request-key", CorrelationID: "request-key", RequestDigest: "sha256:" + strings.Repeat("1", 64),
 		OccurredAt: time.Date(2026, 9, 17, 0, 0, 0, 0, time.UTC)}
-	for _, action := range []Action{ActionIAMAccessKeyCreated, ActionIAMAccessKeyEnabled, ActionIAMAccessKeyDisabled, ActionIAMAccessKeyDeleted} {
+	for _, action := range []Action{ActionIAMAccessKeyCreated, ActionIAMAccessKeyEnabled, ActionIAMAccessKeyDisabled, ActionIAMAccessKeyNetworkRestrictionsUpdated, ActionIAMAccessKeyDeleted} {
 		event.Action = action
 		if _, _, err := CanonicalizeEvent(SourceIAM, event); err != nil {
 			t.Fatal("valid AccessKey fact rejected", err)

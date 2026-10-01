@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS iam.access_keys (
     installation_id text COLLATE "C" NOT NULL,
     wrapping_key_id text COLLATE "C" NOT NULL,
     status text NOT NULL CHECK(status IN ('ENABLED','DISABLED')),
+    network_restrictions jsonb NOT NULL DEFAULT '{"allowedSourceCidrs":[]}'::jsonb,
     resource_version bigint NOT NULL CHECK(resource_version BETWEEN 1 AND 9007199254740991),
     created_at timestamptz(6) NOT NULL,
     updated_at timestamptz(6) NOT NULL,
@@ -44,6 +45,11 @@ CREATE TABLE IF NOT EXISTS iam.access_keys (
       AND (deleted_at IS NULL OR (deleted_at=updated_at AND resource_version>=2
           AND format_version IS NULL AND nonce IS NULL AND ciphertext IS NULL)))
 );
+ALTER TABLE iam.access_keys ADD COLUMN IF NOT EXISTS network_restrictions jsonb NOT NULL
+    DEFAULT '{"allowedSourceCidrs":[]}'::jsonb;
+ALTER TABLE iam.access_keys DROP CONSTRAINT IF EXISTS access_keys_network_restrictions;
+ALTER TABLE iam.access_keys ADD CONSTRAINT access_keys_network_restrictions
+    CHECK(iam.valid_access_key_network_restrictions(network_restrictions));
 CREATE INDEX IF NOT EXISTS access_keys_live_user_idx ON iam.access_keys(tenant_id,user_id,id) WHERE deleted_at IS NULL;
 
 -- This owner-only locator crosses RLS only to find the physical owner. It is
@@ -97,6 +103,8 @@ CREATE TABLE IF NOT EXISTS iam.access_key_authorization_evidence (
     signed_request_digest text NOT NULL,
     nonce_digest text NOT NULL,
     signed_at bigint NOT NULL,
+    account_security_settings_version bigint,
+    evaluated_at timestamptz(6),
     PRIMARY KEY(tenant_id,decision_id),
     UNIQUE(access_key_id,nonce_digest),
     FOREIGN KEY(tenant_id,decision_id) REFERENCES iam.authorization_decisions(tenant_id,id),
@@ -111,6 +119,31 @@ CREATE TABLE IF NOT EXISTS iam.access_key_authorization_evidence (
       AND material_commitment ~ '^sha256:[0-9a-f]{64}$'
       AND signed_request_digest ~ '^sha256:[0-9a-f]{64}$' AND nonce_digest ~ '^sha256:[0-9a-f]{64}$')
 );
+ALTER TABLE iam.access_key_authorization_evidence ADD COLUMN IF NOT EXISTS account_security_settings_version bigint;
+ALTER TABLE iam.access_key_authorization_evidence ADD COLUMN IF NOT EXISTS evaluated_at timestamptz(6);
+ALTER TABLE iam.access_key_authorization_evidence NO FORCE ROW LEVEL SECURITY;
+UPDATE iam.access_key_authorization_evidence evidence
+SET evaluated_at=decision.decided_at,
+    account_security_settings_version=COALESCE((SELECT max(change.expected_version+1)
+        FROM iam.account_security_settings_changes change
+        WHERE change.tenant_id=evidence.tenant_id AND change.created_at<=decision.decided_at),1)
+FROM iam.authorization_decisions decision
+WHERE decision.tenant_id=evidence.tenant_id AND decision.id=evidence.decision_id
+  AND (evidence.evaluated_at IS NULL OR evidence.account_security_settings_version IS NULL);
+ALTER TABLE iam.access_key_authorization_evidence FORCE ROW LEVEL SECURITY;
+DO $access_key_evidence_network_cutover$ BEGIN
+    IF EXISTS(SELECT 1 FROM iam.access_key_authorization_evidence
+        WHERE evaluated_at IS NULL OR account_security_settings_version IS NULL) THEN
+        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='access key network evidence cutover is incomplete';
+    END IF;
+END $access_key_evidence_network_cutover$;
+ALTER TABLE iam.access_key_authorization_evidence ALTER COLUMN account_security_settings_version SET NOT NULL;
+ALTER TABLE iam.access_key_authorization_evidence ALTER COLUMN evaluated_at SET NOT NULL;
+ALTER TABLE iam.access_key_authorization_evidence DROP CONSTRAINT IF EXISTS access_key_authorization_network_values;
+ALTER TABLE iam.access_key_authorization_evidence ADD CONSTRAINT access_key_authorization_network_values CHECK(
+    account_security_settings_version BETWEEN 1 AND 9007199254740991 AND isfinite(evaluated_at));
+CREATE INDEX IF NOT EXISTS access_key_authorization_usage_idx
+    ON iam.access_key_authorization_evidence(tenant_id,access_key_id,evaluated_at DESC,decision_id DESC);
 
 -- The result is a nonsecret completion snapshot, not today's key state. An
 -- intent cannot be reused with another target, command or input commitment.
@@ -120,14 +153,14 @@ DECLARE expected text[]; field text; version bigint;
 BEGIN
     expected:=CASE WHEN action_name='iam.access-key.delete'
       THEN ARRAY['accountId','apiVersion','deletedAt','id','kind','resourceVersion','userId']
-      ELSE ARRAY['accountId','apiVersion','createdAt','id','kind','resourceVersion','status','updatedAt','userId'] END;
+      ELSE ARRAY['accountId','apiVersion','createdAt','id','kind','networkRestrictions','resourceVersion','status','updatedAt','userId'] END;
     IF value IS NULL OR jsonb_typeof(value)<>'object'
        OR (SELECT array_agg(key ORDER BY key) FROM jsonb_object_keys(value) key) IS DISTINCT FROM expected
        OR value->>'apiVersion' IS DISTINCT FROM 'iam.matrix.xiak.com/v1'
        OR jsonb_typeof(value->'resourceVersion') IS DISTINCT FROM 'number'
        OR (value->>'resourceVersion') !~ '^[1-9][0-9]{0,15}$' THEN RETURN false; END IF;
     FOREACH field IN ARRAY expected LOOP
-        IF field<>'resourceVersion' AND jsonb_typeof(value->field) IS DISTINCT FROM 'string' THEN RETURN false; END IF;
+        IF field NOT IN ('resourceVersion','networkRestrictions') AND jsonb_typeof(value->field) IS DISTINCT FROM 'string' THEN RETURN false; END IF;
     END LOOP;
     FOREACH field IN ARRAY ARRAY['accountId','id','userId'] LOOP
         IF (value->>field) COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN RETURN false; END IF;
@@ -138,19 +171,20 @@ BEGIN
         IF value->>'kind'<>'AccessKeyDeletion' OR version<2 OR NOT pg_input_is_valid(value->>'deletedAt','timestamp with time zone') THEN RETURN false; END IF;
         RETURN isfinite((value->>'deletedAt')::timestamptz);
     END IF;
-    IF action_name NOT IN ('iam.access-key.create','iam.access-key.set-status') OR value->>'kind'<>'AccessKey'
+    IF action_name NOT IN ('iam.access-key.create','iam.access-key.set-status','iam.access-key.set-network-restrictions') OR value->>'kind'<>'AccessKey'
        OR value->>'status' NOT IN ('ENABLED','DISABLED') OR NOT pg_input_is_valid(value->>'createdAt','timestamp with time zone')
-       OR NOT pg_input_is_valid(value->>'updatedAt','timestamp with time zone') THEN RETURN false; END IF;
+       OR NOT pg_input_is_valid(value->>'updatedAt','timestamp with time zone')
+       OR NOT iam.valid_access_key_network_restrictions(value->'networkRestrictions') THEN RETURN false; END IF;
     RETURN isfinite((value->>'updatedAt')::timestamptz) AND isfinite((value->>'createdAt')::timestamptz)
       AND (value->>'updatedAt')::timestamptz>=(value->>'createdAt')::timestamptz
       AND ((action_name='iam.access-key.create' AND version=1 AND value->>'status'='ENABLED' AND value->>'createdAt'=value->>'updatedAt')
-        OR (action_name='iam.access-key.set-status' AND version>=2));
+        OR (action_name IN ('iam.access-key.set-status','iam.access-key.set-network-restrictions') AND version>=2));
 END $function$;
 CREATE TABLE IF NOT EXISTS iam.access_key_intents (
     tenant_id text COLLATE "C" NOT NULL,
     actor_id text COLLATE "C" NOT NULL,
     request_id text COLLATE "C" NOT NULL,
-    action_name text NOT NULL CHECK(action_name IN ('iam.access-key.create','iam.access-key.set-status','iam.access-key.delete')),
+    action_name text NOT NULL CHECK(action_name IN ('iam.access-key.create','iam.access-key.set-status','iam.access-key.set-network-restrictions','iam.access-key.delete')),
     user_id text COLLATE "C" NOT NULL,
     key_id text COLLATE "C" NOT NULL,
     request_digest text NOT NULL CHECK(request_digest ~ '^sha256:[0-9a-f]{64}$'),
@@ -169,6 +203,9 @@ CREATE TABLE IF NOT EXISTS iam.access_key_intents (
       AND result->>'accountId' IS NOT DISTINCT FROM tenant_id AND result->>'userId' IS NOT DISTINCT FROM user_id
       AND result->>'id' IS NOT DISTINCT FROM key_id)
 );
+ALTER TABLE iam.access_key_intents DROP CONSTRAINT IF EXISTS access_key_intents_action_name_check;
+ALTER TABLE iam.access_key_intents ADD CONSTRAINT access_key_intents_action_name_check
+    CHECK(action_name IN ('iam.access-key.create','iam.access-key.set-status','iam.access-key.set-network-restrictions','iam.access-key.delete'));
 CREATE UNIQUE INDEX IF NOT EXISTS access_key_creation_intent_uq ON iam.access_key_intents(tenant_id,key_id) WHERE action_name='iam.access-key.create';
 
 CREATE OR REPLACE FUNCTION iam.guard_access_key_change()
@@ -181,16 +218,17 @@ BEGIN
     -- Only the reserved, uncommitted row may receive material, exactly once.
     IF OLD.format_version IS NULL AND OLD.resource_version=1 AND NEW.format_version=1
        AND NEW.resource_version=OLD.resource_version AND NEW.status=OLD.status AND NEW.updated_at=OLD.updated_at
-       AND NEW.deleted_at IS NULL THEN RETURN NEW; END IF;
+       AND NEW.network_restrictions=OLD.network_restrictions AND NEW.deleted_at IS NULL THEN RETURN NEW; END IF;
     IF OLD.format_version IS NULL OR NEW.resource_version<>OLD.resource_version+1
        OR NEW.updated_at<>transaction_timestamp() THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='access key transition is invalid'; END IF;
     IF NEW.deleted_at IS NOT NULL THEN
-        IF NEW.deleted_at<>NEW.updated_at OR NEW.status<>OLD.status OR NEW.format_version IS NOT NULL
+        IF NEW.deleted_at<>NEW.updated_at OR NEW.status<>OLD.status OR NEW.network_restrictions<>OLD.network_restrictions OR NEW.format_version IS NOT NULL
            OR NEW.nonce IS NOT NULL OR NEW.ciphertext IS NOT NULL THEN
             RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='access key deletion is invalid'; END IF;
-    ELSIF NEW.status=OLD.status OR ROW(NEW.format_version,NEW.nonce,NEW.ciphertext)
-          IS DISTINCT FROM ROW(OLD.format_version,OLD.nonce,OLD.ciphertext) THEN
+    ELSIF ((NEW.status=OLD.status)=(NEW.network_restrictions=OLD.network_restrictions))
+          OR ROW(NEW.format_version,NEW.nonce,NEW.ciphertext)
+             IS DISTINCT FROM ROW(OLD.format_version,OLD.nonce,OLD.ciphertext) THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='access key material cannot be replaced';
     END IF;
     RETURN NEW;
@@ -245,6 +283,7 @@ CREATE OR REPLACE FUNCTION iam.access_key_snapshot(tenant text,key_id text)
 RETURNS jsonb LANGUAGE sql SET search_path=pg_catalog,pg_temp AS $function$
     SELECT jsonb_build_object('apiVersion','iam.matrix.xiak.com/v1','kind','AccessKey','id',k.id,
       'accountId',k.tenant_id,'userId',k.user_id,'status',k.status,'resourceVersion',k.resource_version,
+      'networkRestrictions',k.network_restrictions,
       'createdAt',k.created_at,'updatedAt',k.updated_at)
       FROM iam.access_keys k WHERE k.tenant_id=tenant AND k.id=key_id AND k.deleted_at IS NULL AND k.format_version IS NOT NULL
 $function$;
@@ -337,6 +376,8 @@ BEGIN
     IF material_commitment IS NULL THEN RAISE EXCEPTION USING ERRCODE='55000', MESSAGE='signed credential custody is incomplete'; END IF;
     RETURN jsonb_build_object('account',iam.account_snapshot(locator.tenant_id),'user',iam.user_snapshot(locator.tenant_id,locator.user_id),
       'key',iam.access_key_snapshot(locator.tenant_id,locator.key_id),'installationId',stored.installation_id,
+      'accountSecuritySettingsVersion',(SELECT a.security_settings_version FROM iam.accounts a WHERE a.id=locator.tenant_id),
+      'accountNetworkRestrictions',(SELECT a.access_key_network_restrictions FROM iam.accounts a WHERE a.id=locator.tenant_id),
       'policies',iam.current_policy_snapshot(locator.tenant_id,locator.user_id),'boundary',iam.current_user_boundary(locator.tenant_id,locator.user_id),
       'hasUnrevokedPlatformAttachment',EXISTS(SELECT 1 FROM iam.policy_attachments a WHERE a.tenant_id=locator.tenant_id
         AND a.target_kind='USER' AND a.target_id=locator.user_id AND a.authority_scope='INSTALLATION' AND a.revoked_at IS NULL),
@@ -347,14 +388,28 @@ END $function$;
 -- Only record_authorization calls this private guard. SQL does not verify a
 -- MAC: it verifies the complete locked ownership supplied by the trusted IAM
 -- verifier, and never grants that authority to a client or another DB role.
+CREATE OR REPLACE FUNCTION iam.access_key_source_allowed(restrictions jsonb,source_ip text)
+RETURNS boolean LANGUAGE plpgsql IMMUTABLE SET search_path=pg_catalog,pg_temp AS $function$
+BEGIN
+    IF NOT iam.valid_access_key_network_restrictions(restrictions)
+       OR NOT pg_input_is_valid(source_ip,'inet') OR source_ip<>host(source_ip::inet)
+       OR source_ip::inet IN ('0.0.0.0'::inet,'::'::inet)
+       OR source_ip::inet << '224.0.0.0/4'::inet OR source_ip::inet << 'ff00::/8'::inet
+       OR source_ip::inet <<= '::ffff:0.0.0.0/96'::inet THEN RETURN false; END IF;
+    RETURN jsonb_array_length(restrictions->'allowedSourceCidrs')=0 OR EXISTS(
+        SELECT 1 FROM jsonb_array_elements_text(restrictions->'allowedSourceCidrs') entry
+        WHERE source_ip::inet <<= entry::cidr);
+EXCEPTION WHEN OTHERS THEN RETURN false;
+END $function$;
+
 CREATE OR REPLACE FUNCTION iam.assert_current_access_key_authorization(tenant text,actor text,decision jsonb,evidence jsonb)
 RETURNS void LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE field text; snapshot jsonb;
 BEGIN
     IF evidence IS NULL OR jsonb_typeof(evidence)<>'object'
        OR (SELECT array_agg(key ORDER BY key) FROM jsonb_object_keys(evidence) key) IS DISTINCT FROM
-         ARRAY['accessKeyId','audience','formatVersion','installationId','materialCommitment','nonceDigest','resourceVersion',
-           'serviceLookupDigest','signedAt','signedRequestDigest','wrappingKeyId'] THEN
+         ARRAY['accessKeyId','accountSecuritySettingsVersion','audience','formatVersion','installationId','materialCommitment',
+           'nonceDigest','resourceVersion','serviceLookupDigest','signedAt','signedRequestDigest','wrappingKeyId'] THEN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='signed authorization evidence is invalid'; END IF;
     FOREACH field IN ARRAY ARRAY['accessKeyId','installationId','wrappingKeyId'] LOOP
         IF jsonb_typeof(evidence->field)<>'string' OR (evidence->>field) COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
@@ -368,6 +423,9 @@ BEGIN
        OR evidence->'audience' IS DISTINCT FROM decision#>'{profile,product}'
        OR jsonb_typeof(evidence->'resourceVersion')<>'number' OR (evidence->>'resourceVersion') !~ '^[1-9][0-9]{0,15}$'
        OR (evidence->>'resourceVersion')::bigint>9007199254740991 OR evidence->'formatVersion'<>'1'::jsonb
+       OR jsonb_typeof(evidence->'accountSecuritySettingsVersion')<>'number'
+       OR (evidence->>'accountSecuritySettingsVersion') !~ '^[1-9][0-9]{0,15}$'
+       OR (evidence->>'accountSecuritySettingsVersion')::bigint>9007199254740991
        OR jsonb_typeof(evidence->'signedAt')<>'number' OR (evidence->>'signedAt') !~ '^[1-9][0-9]{0,11}$'
        OR (evidence->>'signedAt')::bigint>253402300799 THEN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='signed authorization binding is invalid'; END IF;
@@ -376,7 +434,8 @@ BEGIN
        OR snapshot#>'{key,resourceVersion}' IS DISTINCT FROM evidence->'resourceVersion'
        OR snapshot#>'{material,formatVersion}' IS DISTINCT FROM evidence->'formatVersion'
        OR snapshot#>'{material,wrappingKeyId}' IS DISTINCT FROM evidence->'wrappingKeyId'
-       OR snapshot#>'{material,materialCommitment}' IS DISTINCT FROM evidence->'materialCommitment' THEN
+       OR snapshot#>'{material,materialCommitment}' IS DISTINCT FROM evidence->'materialCommitment'
+       OR snapshot->'accountSecuritySettingsVersion' IS DISTINCT FROM evidence->'accountSecuritySettingsVersion' THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='signed authorization credential is unavailable'; END IF;
     IF decision->'allowed'='true'::jsonb AND (
        snapshot#>>'{account,status}'<>'ACTIVE' OR snapshot#>>'{user,status}'<>'ACTIVE'
@@ -384,6 +443,9 @@ BEGIN
        OR snapshot#>>'{account,rootIdentity,principalId}'=actor OR snapshot->'hasUnrevokedPlatformAttachment'<>'false'::jsonb
        OR to_timestamp((evidence->>'signedAt')::bigint)<transaction_timestamp()-interval '300 seconds'
        OR to_timestamp((evidence->>'signedAt')::bigint)>transaction_timestamp()+interval '30 seconds'
+       OR decision#>>'{networkContext,sourceIp}' IS NULL
+       OR NOT iam.access_key_source_allowed(snapshot->'accountNetworkRestrictions',decision#>>'{networkContext,sourceIp}')
+       OR NOT iam.access_key_source_allowed(snapshot#>'{key,networkRestrictions}',decision#>>'{networkContext,sourceIp}')
        OR NOT iam.authorization_decision_profile_matches(decision)) THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='signed authorization is restricted'; END IF;
 END $function$;
@@ -399,11 +461,14 @@ BEGIN
     PERFORM set_config('matrix.iam_tenant_id',tenant,true);
     INSERT INTO iam.access_key_authorization_evidence(tenant_id,decision_id,user_id,access_key_id,key_resource_version,
       format_version,wrapping_key_id,material_commitment,installation_id,service_tenant_id,service_principal_id,service_purpose,
-      service_lookup_digest,service_verification_digest,service_created_at,audience,signed_request_digest,nonce_digest,signed_at)
+      service_lookup_digest,service_verification_digest,service_created_at,audience,signed_request_digest,nonce_digest,signed_at,
+      account_security_settings_version,evaluated_at)
     VALUES(tenant,decision,actor,evidence->>'accessKeyId',(evidence->>'resourceVersion')::bigint,(evidence->>'formatVersion')::integer,
       evidence->>'wrappingKeyId',evidence->>'materialCommitment',evidence->>'installationId',credential.tenant_id,credential.principal_id,
       credential.purpose,credential.lookup_digest,credential.verification_digest,credential.created_at,
-      evidence->>'audience',evidence->>'signedRequestDigest',evidence->>'nonceDigest',(evidence->>'signedAt')::bigint);
+      evidence->>'audience',evidence->>'signedRequestDigest',evidence->>'nonceDigest',(evidence->>'signedAt')::bigint,
+      (evidence->>'accountSecuritySettingsVersion')::bigint,
+      (SELECT d.decided_at FROM iam.authorization_decisions d WHERE d.tenant_id=tenant AND d.id=decision));
 END $function$;
 
 -- Historical ownership is permanent, not current key material, permissions,
@@ -424,7 +489,10 @@ BEGIN
       JOIN iam.authorization_profiles p ON p.product=d.profile_product AND p.revision=d.profile_revision AND p.content_digest=d.profile_content_digest
       WHERE d.tenant_id=tenant AND d.id=decision AND d.contract_version IN (4,5,6,7) AND d.subject_type='USER'
         AND d.principal_id=proof.user_id AND d.access_key_id=proof.access_key_id AND d.role_evidence IS NULL
-        AND k.resource_version>=proof.key_resource_version AND k.created_at<=d.decided_at
+        AND k.resource_version>=proof.key_resource_version AND k.created_at<=d.decided_at AND proof.evaluated_at=d.decided_at
+        AND proof.account_security_settings_version=COALESCE((SELECT max(change.expected_version+1)
+            FROM iam.account_security_settings_changes change
+            WHERE change.tenant_id=tenant AND change.created_at<=d.decided_at),1)
         AND r.installation_id=proof.installation_id AND r.wrapping_key_id=proof.wrapping_key_id AND r.material_commitment=proof.material_commitment
         AND proof.audience=d.profile_product AND p.canonical_document::jsonb->>'callingService'=proof.service_purpose
         AND EXISTS(SELECT 1 FROM iam.audit_outbox o WHERE o.tenant_id=tenant
@@ -553,6 +621,25 @@ BEGIN
     RETURN jsonb_build_object('installationId',receipt.installation_id,'bootstrapDigest',receipt.content_digest,'keys',keys);
 END $function$;
 
+CREATE OR REPLACE FUNCTION iam.access_key_directory_entry(tenant text,key_id text)
+RETURNS jsonb LANGUAGE plpgsql STABLE SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE observed timestamptz(6):=transaction_timestamp(); latest record; usage jsonb;
+BEGIN
+    SELECT e.evaluated_at,d.allowed,d.profile_product,d.action_name,
+      d.document#>>'{networkContext,sourceIp}' AS source_ip INTO latest
+    FROM iam.access_key_authorization_evidence e
+    JOIN iam.authorization_decisions d ON d.tenant_id=e.tenant_id AND d.id=e.decision_id
+    WHERE e.tenant_id=tenant AND e.access_key_id=key_id AND d.document#>>'{networkContext,sourceIp}' IS NOT NULL
+    ORDER BY e.evaluated_at DESC,e.decision_id DESC LIMIT 1;
+    usage:=jsonb_build_object('observedAt',to_char(observed AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'));
+    IF FOUND THEN
+        usage:=usage||jsonb_build_object('lastAuthorization',jsonb_build_object(
+            'evaluatedAt',to_char(latest.evaluated_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
+            'allowed',latest.allowed,'product',latest.profile_product,'action',latest.action_name,'sourceIp',latest.source_ip));
+    END IF;
+    RETURN jsonb_build_object('key',iam.access_key_snapshot(tenant,key_id),'usage',usage);
+END $function$;
+
 CREATE OR REPLACE FUNCTION iam.list_access_keys(tenant text,actor text,actor_session text,target_user text,decision text)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE target iam.principals%ROWTYPE; items jsonb;
@@ -560,11 +647,11 @@ BEGIN
     PERFORM iam.assert_access_key_actor(tenant,actor,actor_session,target_user);
     PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.access-key.list','USER',target_user,'INSTANCE',NULL);
     target:=iam.assert_access_key_target(tenant,target_user,false);
-    SELECT COALESCE(jsonb_agg(iam.access_key_snapshot(tenant,k.id) ORDER BY k.id),'[]') INTO items
+    SELECT COALESCE(jsonb_agg(iam.access_key_directory_entry(tenant,k.id) ORDER BY k.id),'[]') INTO items
       FROM (SELECT id FROM iam.access_keys WHERE tenant_id=tenant AND user_id=target_user AND deleted_at IS NULL ORDER BY id LIMIT 3) k;
     IF jsonb_array_length(items)>2 OR EXISTS(SELECT 1 FROM jsonb_array_elements(items) value WHERE value='null'::jsonb) THEN
         RAISE EXCEPTION USING ERRCODE='55000', MESSAGE='access key directory is incompatible'; END IF;
-    RETURN jsonb_build_object('userResourceVersion',target.resource_version,'userStatus',target.status,'mustChangePassword',target.must_change_password,'keys',items);
+    RETURN jsonb_build_object('userResourceVersion',target.resource_version,'userStatus',target.status,'mustChangePassword',target.must_change_password,'entries',items);
 END $function$;
 
 CREATE OR REPLACE FUNCTION iam.read_access_key(tenant text,actor text,actor_session text,target_user text,key_id text,decision text)
@@ -576,13 +663,15 @@ BEGIN
     target:=iam.assert_access_key_target(tenant,target_user,false);
     IF NOT EXISTS(SELECT 1 FROM iam.access_keys k WHERE k.tenant_id=tenant AND k.id=key_id AND k.user_id=target_user AND k.deleted_at IS NULL) THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='access key is unavailable'; END IF;
-    result:=iam.access_key_snapshot(tenant,key_id);
+    result:=iam.access_key_directory_entry(tenant,key_id);
     IF result IS NULL THEN RAISE EXCEPTION USING ERRCODE='55000', MESSAGE='access key is incomplete'; END IF;
-    RETURN jsonb_build_object('userResourceVersion',target.resource_version,'userStatus',target.status,'mustChangePassword',target.must_change_password,'keys',jsonb_build_array(result));
+    RETURN jsonb_build_object('userResourceVersion',target.resource_version,'userStatus',target.status,'mustChangePassword',target.must_change_password,'entries',jsonb_build_array(result));
 END $function$;
 
+DROP FUNCTION IF EXISTS iam.reserve_access_key(text,text,text,text,text,text,bigint,text,text,text,text,text);
 CREATE OR REPLACE FUNCTION iam.reserve_access_key(tenant text,actor text,actor_session text,target_user text,decision text,
-    key_id text,expected_user_version bigint,installation text,wrapping_id text,commitment text,request_id text,request_digest text)
+    key_id text,expected_user_version bigint,installation text,wrapping_id text,commitment text,request_id text,request_digest text,
+    network_restrictions jsonb)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE target iam.principals%ROWTYPE; previous jsonb; inserted integer;
 BEGIN
@@ -598,6 +687,7 @@ BEGIN
     IF COALESCE(key_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR COALESCE(wrapping_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR COALESCE(commitment,'') COLLATE "C" !~ '^sha256:[0-9a-f]{64}$'
+       OR NOT iam.valid_access_key_network_restrictions(network_restrictions)
        OR NOT EXISTS(SELECT 1 FROM iam.bootstrap_receipts r WHERE r.singleton AND r.installation_id=installation) THEN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='access key material reference is invalid'; END IF;
     INSERT INTO iam.access_key_wrapping_registry(installation_id,wrapping_key_id,material_commitment,created_at)
@@ -606,8 +696,10 @@ BEGIN
         AND r.wrapping_key_id=wrapping_id AND r.material_commitment=commitment)
        OR (SELECT count(*) FROM iam.access_key_wrapping_registry)<>1 THEN
         RAISE EXCEPTION USING ERRCODE='55000', MESSAGE='access key custody conflicts'; END IF;
-    INSERT INTO iam.access_keys(id,tenant_id,user_id,created_by,creation_request_id,creation_request_digest,installation_id,wrapping_key_id,status,resource_version,created_at,updated_at)
-      VALUES(key_id,tenant,target_user,actor,request_id,request_digest,installation,wrapping_id,'ENABLED',1,transaction_timestamp(),transaction_timestamp()) ON CONFLICT DO NOTHING;
+    INSERT INTO iam.access_keys(id,tenant_id,user_id,created_by,creation_request_id,creation_request_digest,installation_id,wrapping_key_id,status,
+      network_restrictions,resource_version,created_at,updated_at)
+      VALUES(key_id,tenant,target_user,actor,request_id,request_digest,installation,wrapping_id,'ENABLED',network_restrictions,1,
+        transaction_timestamp(),transaction_timestamp()) ON CONFLICT DO NOTHING;
     GET DIAGNOSTICS inserted=ROW_COUNT;
     IF inserted=0 THEN RETURN jsonb_build_object('outcome','ID_COLLISION'); END IF;
     RETURN jsonb_build_object('outcome','RESERVED');
@@ -643,14 +735,20 @@ BEGIN
     RETURN jsonb_build_object('outcome','APPLIED','key',result);
 END $function$;
 
+DROP FUNCTION IF EXISTS iam.change_access_key(text,text,text,text,text,text,bigint,text,jsonb);
 CREATE OR REPLACE FUNCTION iam.change_access_key(tenant text,actor text,actor_session text,target_user text,decision text,
-    key_id text,expected_version bigint,new_status text,event jsonb)
+    key_id text,expected_version bigint,new_status text,new_network_restrictions jsonb,event jsonb)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE stored iam.access_keys%ROWTYPE; action_name text; event_action text; result jsonb; previous jsonb;
 BEGIN
-    action_name:=CASE WHEN new_status IS NULL THEN 'iam.access-key.delete' ELSE 'iam.access-key.set-status' END;
-    event_action:=CASE WHEN new_status IS NULL THEN 'iam.access-key.deleted' WHEN new_status='ENABLED' THEN 'iam.access-key.enabled' ELSE 'iam.access-key.disabled' END;
-    IF expected_version IS NULL OR expected_version NOT BETWEEN 1 AND 9007199254740990 OR (new_status IS NOT NULL AND new_status NOT IN ('ENABLED','DISABLED')) THEN
+    action_name:=CASE WHEN new_status IS NOT NULL THEN 'iam.access-key.set-status'
+        WHEN new_network_restrictions IS NOT NULL THEN 'iam.access-key.set-network-restrictions' ELSE 'iam.access-key.delete' END;
+    event_action:=CASE WHEN new_status='ENABLED' THEN 'iam.access-key.enabled' WHEN new_status='DISABLED' THEN 'iam.access-key.disabled'
+        WHEN new_network_restrictions IS NOT NULL THEN 'iam.access-key.network-restrictions-updated' ELSE 'iam.access-key.deleted' END;
+    IF expected_version IS NULL OR expected_version NOT BETWEEN 1 AND 9007199254740990
+       OR (new_status IS NOT NULL AND new_network_restrictions IS NOT NULL)
+       OR (new_status IS NOT NULL AND new_status NOT IN ('ENABLED','DISABLED'))
+       OR (new_network_restrictions IS NOT NULL AND NOT iam.valid_access_key_network_restrictions(new_network_restrictions)) THEN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='access key mutation is invalid'; END IF;
     PERFORM iam.assert_access_key_actor(tenant,actor,actor_session,target_user);
     PERFORM iam.assert_allowed_decision(tenant,actor,decision,action_name,'ACCESS_KEY',key_id,'INSTANCE',NULL);
@@ -663,21 +761,27 @@ BEGIN
     SELECT * INTO stored FROM iam.access_keys k WHERE k.tenant_id=tenant AND k.id=key_id AND k.user_id=target_user FOR UPDATE;
     IF NOT FOUND OR stored.deleted_at IS NOT NULL OR stored.format_version IS NULL THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='access key is unavailable'; END IF;
-    IF stored.resource_version<>expected_version OR stored.status=new_status OR (new_status IS NULL AND stored.status<>'DISABLED') THEN
+    IF stored.resource_version<>expected_version OR (new_status IS NOT NULL AND stored.status=new_status)
+       OR (new_network_restrictions IS NOT NULL AND stored.network_restrictions=new_network_restrictions)
+       OR (new_status IS NULL AND new_network_restrictions IS NULL AND stored.status<>'DISABLED') THEN
         RAISE EXCEPTION USING ERRCODE='P0002', MESSAGE='access key version or state changed'; END IF;
-    IF new_status IS NULL THEN
+    IF new_status IS NULL AND new_network_restrictions IS NULL THEN
         UPDATE iam.access_keys k SET resource_version=k.resource_version+1,updated_at=transaction_timestamp(),deleted_at=transaction_timestamp(),
           format_version=NULL,nonce=NULL,ciphertext=NULL WHERE k.tenant_id=tenant AND k.id=key_id;
         result:=iam.access_key_deletion_snapshot(tenant,key_id);
-    ELSE
+    ELSIF new_status IS NOT NULL THEN
         UPDATE iam.access_keys k SET resource_version=k.resource_version+1,updated_at=transaction_timestamp(),status=new_status WHERE k.tenant_id=tenant AND k.id=key_id;
+        result:=iam.access_key_snapshot(tenant,key_id);
+    ELSE
+        UPDATE iam.access_keys k SET resource_version=k.resource_version+1,updated_at=transaction_timestamp(),
+          network_restrictions=new_network_restrictions WHERE k.tenant_id=tenant AND k.id=key_id;
         result:=iam.access_key_snapshot(tenant,key_id);
     END IF;
     INSERT INTO iam.audit_outbox(tenant_id,event_id,event_document,next_attempt_at,created_at,updated_at)
       VALUES(tenant,event->>'eventId',event,transaction_timestamp(),transaction_timestamp(),transaction_timestamp());
     INSERT INTO iam.access_key_intents(tenant_id,actor_id,request_id,action_name,user_id,key_id,request_digest,result,decision_id,event_id,completed_at)
       VALUES(tenant,actor,event->>'requestId',action_name,target_user,key_id,event->>'requestDigest',result,decision,event->>'eventId',transaction_timestamp());
-    RETURN jsonb_build_object('outcome','APPLIED',CASE WHEN new_status IS NULL THEN 'deletion' ELSE 'key' END,result);
+    RETURN jsonb_build_object('outcome','APPLIED',CASE WHEN action_name='iam.access-key.delete' THEN 'deletion' ELSE 'key' END,result);
 END $function$;
 
 -- Only the existing, already-locked USER deletion transaction invokes this
@@ -706,22 +810,23 @@ REVOKE ALL ON iam.access_keys,iam.access_key_intents,iam.access_key_wrapping_reg
 REVOKE ALL ON TABLE iam.access_key_index FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
 REVOKE ALL ON TABLE iam.access_key_authorization_evidence FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
 REVOKE ALL ON FUNCTION iam.assert_current_access_key_authorization(text,text,jsonb,jsonb),iam.record_access_key_evidence(text,text,text,jsonb),
-    iam.access_key_authorization_evidence_matches(text,text),iam.assert_access_key_authorization_complete()
+    iam.access_key_authorization_evidence_matches(text,text),iam.assert_access_key_authorization_complete(),
+    iam.access_key_source_allowed(jsonb,text)
     FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
 REVOKE ALL ON FUNCTION iam.register_access_key_identity(),iam.guard_access_key_change(),iam.assert_access_key_completed(),iam.access_key_result_valid(text,jsonb),
-    iam.access_key_snapshot(text,text),iam.access_key_deletion_snapshot(text,text),
+    iam.access_key_snapshot(text,text),iam.access_key_deletion_snapshot(text,text),iam.access_key_directory_entry(text,text),
     iam.assert_access_key_actor(text,text,text,text),iam.assert_access_key_target(text,text,boolean),
     iam.access_key_intent_result(text,text,text,text,text,text,text),iam.delete_user_access_keys(text,text,text,text,jsonb)
     FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
 REVOKE ALL ON FUNCTION iam.lookup_access_key(text,text,text,text),iam.read_access_key_custody(),iam.list_access_keys(text,text,text,text,text),
-    iam.read_access_key(text,text,text,text,text,text),iam.reserve_access_key(text,text,text,text,text,text,bigint,text,text,text,text,text),
+    iam.read_access_key(text,text,text,text,text,text),iam.reserve_access_key(text,text,text,text,text,text,bigint,text,text,text,text,text,jsonb),
     iam.complete_access_key(text,text,text,text,text,text,integer,bytea,bytea,jsonb),
-    iam.change_access_key(text,text,text,text,text,text,bigint,text,jsonb)
+    iam.change_access_key(text,text,text,text,text,text,bigint,text,jsonb,jsonb)
     FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery;
 GRANT EXECUTE ON FUNCTION iam.lookup_access_key(text,text,text,text),iam.read_access_key_custody(),iam.list_access_keys(text,text,text,text,text),
-    iam.read_access_key(text,text,text,text,text,text),iam.reserve_access_key(text,text,text,text,text,text,bigint,text,text,text,text,text),
+    iam.read_access_key(text,text,text,text,text,text),iam.reserve_access_key(text,text,text,text,text,text,bigint,text,text,text,text,text,jsonb),
     iam.complete_access_key(text,text,text,text,text,text,integer,bytea,bytea,jsonb),
-    iam.change_access_key(text,text,text,text,text,text,bigint,text,jsonb) TO matrix_iam_api;
+    iam.change_access_key(text,text,text,text,text,text,bigint,text,jsonb,jsonb) TO matrix_iam_api;
 
 CREATE OR REPLACE FUNCTION iam.access_key_contract_ready()
 RETURNS boolean LANGUAGE plpgsql STABLE SET search_path=pg_catalog,pg_temp AS $function$
@@ -787,7 +892,9 @@ BEGIN
     END LOOP;
     FOR required IN SELECT * FROM (VALUES
       ('access_keys','access_keys_material_shape'),('access_keys','access_keys_lifecycle'),
+      ('access_keys','access_keys_network_restrictions'),
       ('access_key_authorization_evidence','access_key_authorization_values'),
+      ('access_key_authorization_evidence','access_key_authorization_network_values'),
       ('access_keys','access_keys_status_check'),('access_keys','access_keys_resource_version_check'),
       ('access_keys','access_keys_id_check'),('access_keys','access_keys_creation_request_id_check'),('access_keys','access_keys_creation_request_digest_check'),
       ('access_key_intents','access_key_intent_snapshot'),('access_key_intents','access_key_intents_action_name_check'),
@@ -800,13 +907,14 @@ BEGIN
     END LOOP;
     FOR required IN SELECT * FROM (VALUES
       ('access_keys','access_keys_live_user_idx',ARRAY['tenant_id','user_id','id'],false,'(deleted_at IS NULL)'),
+      ('access_key_authorization_evidence','access_key_authorization_usage_idx',ARRAY['tenant_id','access_key_id','evaluated_at','decision_id'],false,NULL),
       ('access_key_intents','access_key_creation_intent_uq',ARRAY['tenant_id','key_id'],true,'(action_name = ''iam.access-key.create''::text)')
     ) expected(table_name,index_name,columns,unique_index,predicate) LOOP
         IF NOT EXISTS(SELECT 1 FROM pg_index i WHERE i.indrelid=to_regclass('iam.'||required.table_name)
           AND i.indexrelid=to_regclass('iam.'||required.index_name) AND i.indisunique=required.unique_index
           AND i.indisvalid AND i.indisready AND i.indimmediate AND i.indexprs IS NULL
           AND i.indnkeyatts=cardinality(required.columns) AND i.indnatts=i.indnkeyatts
-          AND pg_get_expr(i.indpred,i.indrelid)=required.predicate
+          AND pg_get_expr(i.indpred,i.indrelid) IS NOT DISTINCT FROM required.predicate
           AND ARRAY(SELECT a.attname::text FROM unnest(i.indkey) WITH ORDINALITY k(number,position)
             JOIN pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=k.number ORDER BY k.position)=required.columns) THEN RETURN false; END IF;
     END LOOP;
@@ -827,11 +935,14 @@ BEGIN
       ('access_key_authorization_evidence','service_created_at','timestamptz'::regtype,true),('access_key_authorization_evidence','audience','text'::regtype,true),
       ('access_key_authorization_evidence','signed_request_digest','text'::regtype,true),('access_key_authorization_evidence','nonce_digest','text'::regtype,true),
       ('access_key_authorization_evidence','signed_at','bigint'::regtype,true),
+      ('access_key_authorization_evidence','account_security_settings_version','bigint'::regtype,true),
+      ('access_key_authorization_evidence','evaluated_at','timestamptz'::regtype,true),
       ('access_key_index','key_id','text'::regtype,true),('access_key_index','tenant_id','text'::regtype,true),('access_key_index','user_id','text'::regtype,true),
       ('access_keys','id','text'::regtype,true),('access_keys','tenant_id','text'::regtype,true),
       ('access_keys','user_id','text'::regtype,true),('access_keys','installation_id','text'::regtype,true),
       ('access_keys','created_by','text'::regtype,true),('access_keys','creation_request_id','text'::regtype,true),('access_keys','creation_request_digest','text'::regtype,true),
       ('access_keys','wrapping_key_id','text'::regtype,true),('access_keys','status','text'::regtype,true),
+      ('access_keys','network_restrictions','jsonb'::regtype,true),
       ('access_keys','resource_version','bigint'::regtype,true),('access_keys','created_at','timestamptz'::regtype,true),
       ('access_keys','updated_at','timestamptz'::regtype,true),('access_keys','deleted_at','timestamptz'::regtype,false),
       ('access_keys','format_version','integer'::regtype,false),('access_keys','nonce','bytea'::regtype,false),('access_keys','ciphertext','bytea'::regtype,false),
@@ -895,17 +1006,19 @@ BEGIN
       ('iam.read_access_key_custody()','jsonb'::regtype,true,ARRAY[]::text[],true),
       ('iam.list_access_keys(text,text,text,text,text)','jsonb'::regtype,true,ARRAY['tenant','actor','actor_session','target_user','decision'],true),
       ('iam.read_access_key(text,text,text,text,text,text)','jsonb'::regtype,true,ARRAY['tenant','actor','actor_session','target_user','key_id','decision'],true),
-      ('iam.reserve_access_key(text,text,text,text,text,text,bigint,text,text,text,text,text)','jsonb'::regtype,true,
-        ARRAY['tenant','actor','actor_session','target_user','decision','key_id','expected_user_version','installation','wrapping_id','commitment','request_id','request_digest'],true),
+      ('iam.reserve_access_key(text,text,text,text,text,text,bigint,text,text,text,text,text,jsonb)','jsonb'::regtype,true,
+        ARRAY['tenant','actor','actor_session','target_user','decision','key_id','expected_user_version','installation','wrapping_id','commitment','request_id','request_digest','network_restrictions'],true),
       ('iam.complete_access_key(text,text,text,text,text,text,integer,bytea,bytea,jsonb)','jsonb'::regtype,true,
         ARRAY['tenant','actor','actor_session','target_user','decision','key_id','material_format','material_nonce','material_ciphertext','event'],true),
-      ('iam.change_access_key(text,text,text,text,text,text,bigint,text,jsonb)','jsonb'::regtype,true,
-        ARRAY['tenant','actor','actor_session','target_user','decision','key_id','expected_version','new_status','event'],true),
+      ('iam.change_access_key(text,text,text,text,text,text,bigint,text,jsonb,jsonb)','jsonb'::regtype,true,
+        ARRAY['tenant','actor','actor_session','target_user','decision','key_id','expected_version','new_status','new_network_restrictions','event'],true),
       ('iam.guard_access_key_change()','trigger'::regtype,false,ARRAY[]::text[],false),
       ('iam.assert_access_key_completed()','trigger'::regtype,true,ARRAY[]::text[],false),
       ('iam.access_key_result_valid(text,jsonb)','boolean'::regtype,false,ARRAY['action_name','value'],false),
       ('iam.access_key_snapshot(text,text)','jsonb'::regtype,false,ARRAY['tenant','key_id'],false),
       ('iam.access_key_deletion_snapshot(text,text)','jsonb'::regtype,false,ARRAY['tenant','key_id'],false),
+      ('iam.access_key_directory_entry(text,text)','jsonb'::regtype,false,ARRAY['tenant','key_id'],false),
+      ('iam.access_key_source_allowed(jsonb,text)','boolean'::regtype,false,ARRAY['restrictions','source_ip'],false),
       ('iam.assert_access_key_actor(text,text,text,text)','void'::regtype,false,ARRAY['tenant','actor','actor_session','target_user'],false),
       ('iam.assert_access_key_target(text,text,boolean)','iam.principals'::regtype,false,ARRAY['tenant','target_user','activating'],false),
       ('iam.access_key_intent_result(text,text,text,text,text,text,text)','jsonb'::regtype,false,
@@ -917,7 +1030,9 @@ BEGIN
         IF (SELECT count(*) FROM pg_proc p WHERE p.pronamespace=entrypoint.pronamespace AND p.proname=entrypoint.proname)<>1
           OR entrypoint.proowner<>'matrix_iam_owner'::regrole OR entrypoint.prosecdef<>required.defining
           OR entrypoint.prokind<>'f' OR entrypoint.proparallel<>'u'
-          OR entrypoint.provolatile::text<>(CASE WHEN required.signature='iam.access_key_result_valid(text,jsonb)' THEN 'i' ELSE 'v' END)
+          OR entrypoint.provolatile::text<>(CASE
+              WHEN required.signature IN ('iam.access_key_result_valid(text,jsonb)','iam.access_key_source_allowed(jsonb,text)') THEN 'i'
+              WHEN required.signature='iam.access_key_directory_entry(text,text)' THEN 's' ELSE 'v' END)
           OR entrypoint.proretset OR entrypoint.prorettype<>required.result_type
           OR entrypoint.pronargdefaults<>0 OR entrypoint.provariadic<>0 OR entrypoint.proisstrict OR entrypoint.proleakproof
           OR entrypoint.proallargtypes IS NOT NULL OR entrypoint.proargmodes IS NOT NULL

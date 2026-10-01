@@ -80,13 +80,15 @@ type SubjectContext struct {
 // It has no login Session. The use case separately verifies the exact MAC and
 // persists nonce consumption with the evaluation before returning any result.
 type AccessKeyContext struct {
-	Organization   iamv1.Organization
-	Principal      iamv1.Principal
-	RootUserID     iamv1.PrincipalID
-	Key            iamv1.AccessKey
-	Policies       []AttachedPolicy
-	Boundary       *ResolvedUserBoundary
-	InstallationID string
+	Organization                   iamv1.Organization
+	Principal                      iamv1.Principal
+	RootUserID                     iamv1.PrincipalID
+	Key                            iamv1.AccessKey
+	AccountSecuritySettingsVersion uint64
+	AccountNetworkRestrictions     iamv1.AccessKeyNetworkRestrictions
+	Policies                       []AttachedPolicy
+	Boundary                       *ResolvedUserBoundary
+	InstallationID                 string
 	// Read directly under the USER/source-authority locks. Current policy
 	// snapshots omit RETIRED policies and cannot prove this attachment absent.
 	HasUnrevokedPlatformAttachment bool
@@ -414,7 +416,7 @@ func Decide(
 func DecideAccessKey(value AccessKeyContext, callingService iamv1.ServicePurpose, request iamv1.AuthorizationRequest,
 	decisionID iamv1.DecisionID, databaseTime time.Time, signedAt int64,
 ) (AuthorizationEvaluation, error) {
-	eligible, err := accessKeyEligibility(value, databaseTime, signedAt)
+	eligible, err := accessKeyEligibility(value, request.NetworkContext, databaseTime, signedAt)
 	if err != nil {
 		return AuthorizationEvaluation{}, err
 	}
@@ -426,22 +428,45 @@ func DecideAccessKey(value AccessKeyContext, callingService iamv1.ServicePurpose
 // Eligibility is distinct from MAC authentication and policy permission. A
 // known restriction yields a recorded Deny only after the use case verifies
 // the signature; corrupt authority is not a normal denial.
-func accessKeyEligibility(value AccessKeyContext, databaseTime time.Time, signedAt int64) (bool, error) {
+func accessKeyEligibility(value AccessKeyContext, network *iamv1.AuthorizationNetworkContext, databaseTime time.Time, signedAt int64) (bool, error) {
 	if err := validateAccessKeyLookupContext(value, databaseTime); err != nil {
 		return false, err
+	}
+	accountSourceAllowed, keySourceAllowed := len(value.AccountNetworkRestrictions.AllowedSourceCIDRs) == 0, len(value.Key.NetworkRestrictions.AllowedSourceCIDRs) == 0
+	if network != nil {
+		var err error
+		accountSourceAllowed, err = accessKeySourceAllowed(value.AccountNetworkRestrictions, network.SourceIP)
+		if err != nil {
+			return false, err
+		}
+		keySourceAllowed, err = accessKeySourceAllowed(value.Key.NetworkRestrictions, network.SourceIP)
+		if err != nil {
+			return false, err
+		}
 	}
 	if signedAt <= 0 || signedAt > 253402300799 {
 		return false, ErrInvalidAuthorizationRequest
 	}
 	restricted := value.Organization.Status != iamv1.AccountActive || value.Principal.Status != iamv1.PrincipalActive ||
 		value.Principal.MustChangePassword || value.RootUserID == value.Principal.ID || value.Key.Status != iamv1.AccessKeyEnabled ||
-		value.HasUnrevokedPlatformAttachment || ValidateAccessKeySignatureTime(signedAt, databaseTime) != nil
+		value.HasUnrevokedPlatformAttachment || !accountSourceAllowed || !keySourceAllowed || ValidateAccessKeySignatureTime(signedAt, databaseTime) != nil
 	for _, row := range value.Policies {
 		if row.Attachment.Scope == iamv1.AuthorityScopeInstallation && row.Attachment.RevokedAt == nil && !value.HasUnrevokedPlatformAttachment {
 			return false, ErrAuthorityUnavailable
 		}
 	}
 	return !restricted, nil
+}
+
+func accessKeySourceAllowed(restrictions iamv1.AccessKeyNetworkRestrictions, source string) (bool, error) {
+	if iamv1.ValidateAccessKeyNetworkRestrictions(restrictions) != nil {
+		return false, ErrAuthorityUnavailable
+	}
+	allowed, err := iamv1.AccessKeyNetworkRestrictionsAllowSource(restrictions, source)
+	if err != nil {
+		return false, ErrInvalidAuthorizationRequest
+	}
+	return allowed, nil
 }
 
 // ValidateAccessKeyLookupContext permits a product to open only the Account
@@ -459,6 +484,8 @@ func validateAccessKeyLookupContext(value AccessKeyContext, databaseTime time.Ti
 	if validateAuthorityTime(databaseTime) != nil || iamv1.ValidateOrganization(value.Organization) != nil ||
 		iamv1.ValidatePrincipal(value.Principal) != nil || value.Principal.Type != iamv1.PrincipalUser ||
 		iamv1.ValidateAccessKey(value.Key) != nil || iamv1.ValidateID("rootUserId", string(value.RootUserID)) != nil ||
+		value.AccountSecuritySettingsVersion == 0 || value.AccountSecuritySettingsVersion > 9007199254740991 ||
+		iamv1.ValidateAccessKeyNetworkRestrictions(value.AccountNetworkRestrictions) != nil ||
 		iamv1.ValidateID("installationId", value.InstallationID) != nil ||
 		value.Principal.AccountID != value.Organization.ID || value.Key.AccountID != value.Organization.ID ||
 		value.Key.UserID != value.Principal.ID || value.Principal.CreatedAt.Before(value.Organization.CreatedAt) ||

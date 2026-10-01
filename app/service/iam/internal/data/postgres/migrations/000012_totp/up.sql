@@ -181,7 +181,7 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='TOTP backup custody context is forbidden';
     END IF;
     IF NOT iam.totp_custody_contract_ready() OR NOT iam.totp_backup_custody_contract_ready()
-        OR NOT EXISTS(SELECT 1 FROM iam.readiness() WHERE ready AND schema_version=59) THEN
+        OR NOT EXISTS(SELECT 1 FROM iam.readiness() WHERE ready AND schema_version=60) THEN
         RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='TOTP backup custody shape is unavailable';
     END IF;
     registration:=iam.totp_keyset_snapshot();
@@ -837,14 +837,24 @@ BEGIN
         ALTER TABLE iam.step_ups ADD COLUMN session_settings jsonb;
     END IF;
 END $step_up_session_settings$;
+DO $step_up_access_key_network_settings$
+BEGIN
+    IF NOT EXISTS(SELECT 1 FROM pg_attribute WHERE attrelid='iam.step_ups'::regclass
+        AND attname='access_key_network_restrictions' AND NOT attisdropped) THEN
+        ALTER TABLE iam.step_ups ADD COLUMN access_key_network_restrictions jsonb;
+    END IF;
+END $step_up_access_key_network_settings$;
 ALTER TABLE iam.step_ups DROP CONSTRAINT IF EXISTS step_ups_operation_check;
 ALTER TABLE iam.step_ups ADD CONSTRAINT step_ups_operation_check CHECK(
-    (operation='RECOVERY_CODES_REGENERATE' AND expected_settings_version IS NULL AND required_for_users IS NULL AND password_settings IS NULL AND session_settings IS NULL)
-    OR (operation IN ('TOTP_REPLACE','TOTP_REMOVE') AND mfa_revision<=9007199254740990 AND expected_settings_version IS NULL AND required_for_users IS NULL AND password_settings IS NULL AND session_settings IS NULL)
+    (operation='RECOVERY_CODES_REGENERATE' AND expected_settings_version IS NULL AND required_for_users IS NULL AND password_settings IS NULL
+        AND session_settings IS NULL AND access_key_network_restrictions IS NULL)
+    OR (operation IN ('TOTP_REPLACE','TOTP_REMOVE') AND mfa_revision<=9007199254740990 AND expected_settings_version IS NULL
+        AND required_for_users IS NULL AND password_settings IS NULL AND session_settings IS NULL AND access_key_network_restrictions IS NULL)
     OR (operation='SECURITY_SETTINGS_UPDATE' AND expected_settings_version IS NOT NULL
         AND expected_settings_version BETWEEN 1 AND 9007199254740990 AND required_for_users IS NOT NULL
         AND (password_settings IS NULL OR iam.valid_password_settings_history(password_settings))
-        AND (session_settings IS NULL OR iam.valid_session_settings(session_settings))));
+        AND (session_settings IS NULL OR iam.valid_session_settings(session_settings))
+        AND (access_key_network_restrictions IS NULL OR iam.valid_access_key_network_restrictions(access_key_network_restrictions))));
 ALTER TABLE iam.totp_authenticators DROP CONSTRAINT IF EXISTS totp_replacement_step_up;
 ALTER TABLE iam.totp_authenticators ADD CONSTRAINT totp_replacement_step_up
     FOREIGN KEY(tenant_id,replacement_step_up_id) REFERENCES iam.step_ups(tenant_id,id);
@@ -1453,7 +1463,7 @@ RETURNS jsonb LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $functio
         'securitySettings',CASE WHEN p.operation='SECURITY_SETTINGS_UPDATE' THEN
             jsonb_build_object('expectedResourceVersion',p.expected_settings_version,
                 'mfa',jsonb_build_object('requiredForUsers',p.required_for_users),'password',p.password_settings,
-                'session',p.session_settings) ELSE NULL END,
+                'session',p.session_settings,'accessKeyNetwork',p.access_key_network_restrictions) ELSE NULL END,
         'state',CASE WHEN p.state<>'CONSUMED' AND p.expires_at<=clock_timestamp() THEN 'EXPIRED' ELSE p.state END,
         'createdAt',to_char(p.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
         'expiresAt',to_char(p.expires_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
@@ -1461,7 +1471,8 @@ RETURNS jsonb LANGUAGE sql STABLE SET search_path=pg_catalog,pg_temp AS $functio
         'consumedAt',to_char(p.consumed_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')))
     FROM iam.step_ups p WHERE p.tenant_id=tenant AND p.id=proof_id
         AND (p.operation<>'SECURITY_SETTINGS_UPDATE' OR p.state='CONSUMED'
-            OR (iam.valid_password_settings(p.password_settings) AND iam.valid_session_settings(p.session_settings)))
+            OR (iam.valid_password_settings(p.password_settings) AND iam.valid_session_settings(p.session_settings)
+                AND iam.valid_access_key_network_restrictions(p.access_key_network_restrictions)))
 $function$;
 
 -- This qualification is checked under the same Account/USER lock as grants,
@@ -1498,6 +1509,7 @@ BEGIN
         OR proof.principal_version IS DISTINCT FROM (SELECT p.resource_version FROM iam.principals p WHERE p.tenant_id=tenant AND p.id=subject_id)
         OR (proof.operation='SECURITY_SETTINGS_UPDATE' AND (NOT iam.valid_password_settings(proof.password_settings)
             OR NOT iam.valid_session_settings(proof.session_settings)
+            OR NOT iam.valid_access_key_network_restrictions(proof.access_key_network_restrictions)
             OR proof.expected_settings_version IS DISTINCT FROM (SELECT a.security_settings_version FROM iam.accounts a WHERE a.id=tenant)))
         OR proof.state='CONSUMED' OR proof.expires_at<=clock_timestamp() THEN
         RAISE EXCEPTION USING ERRCODE='42501',MESSAGE='operation proof is unavailable';
@@ -1509,20 +1521,25 @@ END $function$;
 DROP FUNCTION IF EXISTS iam.start_step_up(text,text,text,text,text,text,bigint);
 DROP FUNCTION IF EXISTS iam.start_step_up(text,text,text,text,text,text,bigint,bigint,boolean);
 DROP FUNCTION IF EXISTS iam.start_step_up(text,text,text,text,text,text,bigint,bigint,boolean,jsonb);
+DROP FUNCTION IF EXISTS iam.start_step_up(text,text,text,text,text,text,bigint,bigint,boolean,jsonb,jsonb);
 CREATE OR REPLACE FUNCTION iam.start_step_up(tenant text,subject_id text,caller_id text,proof_id text,
-    command_id text,submitted_operation text,expected_revision bigint,expected_settings_version bigint,required_for_users boolean,password_settings jsonb,session_settings jsonb)
+    command_id text,submitted_operation text,expected_revision bigint,expected_settings_version bigint,required_for_users boolean,
+    password_settings jsonb,session_settings jsonb,access_key_network_restrictions jsonb)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
 DECLARE batch iam.mfa_recovery_batches%ROWTYPE; previous iam.step_ups%ROWTYPE; generation bigint; effective_now timestamptz(6);
 BEGIN
     IF COALESCE(proof_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         OR COALESCE(command_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         OR submitted_operation IS NULL OR NOT (
-            (submitted_operation='RECOVERY_CODES_REGENERATE' AND expected_settings_version IS NULL AND required_for_users IS NULL AND password_settings IS NULL AND session_settings IS NULL)
+            (submitted_operation='RECOVERY_CODES_REGENERATE' AND expected_settings_version IS NULL AND required_for_users IS NULL
+                AND password_settings IS NULL AND session_settings IS NULL AND access_key_network_restrictions IS NULL)
             OR (submitted_operation IN ('TOTP_REPLACE','TOTP_REMOVE') AND expected_revision<=9007199254740990
-                AND expected_settings_version IS NULL AND required_for_users IS NULL AND password_settings IS NULL AND session_settings IS NULL)
+                AND expected_settings_version IS NULL AND required_for_users IS NULL AND password_settings IS NULL
+                AND session_settings IS NULL AND access_key_network_restrictions IS NULL)
             OR (submitted_operation='SECURITY_SETTINGS_UPDATE' AND expected_settings_version IS NOT NULL
                 AND expected_settings_version BETWEEN 1 AND 9007199254740990 AND required_for_users IS NOT NULL
-                AND iam.valid_password_settings(password_settings) AND iam.valid_session_settings(session_settings)))
+                AND iam.valid_password_settings(password_settings) AND iam.valid_session_settings(session_settings)
+                AND iam.valid_access_key_network_restrictions(access_key_network_restrictions)))
         OR expected_revision IS NULL OR expected_revision NOT BETWEEN 2 AND 9007199254740991 THEN
         RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='operation proof request is invalid';
     END IF;
@@ -1535,8 +1552,10 @@ BEGIN
     IF submitted_operation='TOTP_REMOVE' THEN PERFORM iam.assert_totp_removal_qualification(tenant,subject_id); END IF;
     SELECT * INTO previous FROM iam.step_ups p WHERE p.tenant_id=tenant AND p.user_id=subject_id AND p.request_id=command_id;
     IF FOUND THEN
-        IF (previous.source_session_id,previous.operation,previous.mfa_revision,previous.expected_settings_version,previous.required_for_users,previous.password_settings,previous.session_settings)
-            IS DISTINCT FROM (caller_id,submitted_operation,expected_revision,expected_settings_version,required_for_users,password_settings,session_settings) THEN
+        IF (previous.source_session_id,previous.operation,previous.mfa_revision,previous.expected_settings_version,previous.required_for_users,
+            previous.password_settings,previous.session_settings,previous.access_key_network_restrictions)
+            IS DISTINCT FROM (caller_id,submitted_operation,expected_revision,expected_settings_version,required_for_users,
+                password_settings,session_settings,access_key_network_restrictions) THEN
             RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='operation intent differs';
         END IF;
         RETURN iam.step_up_snapshot(tenant,previous.id);
@@ -1544,7 +1563,8 @@ BEGIN
     IF batch.mfa_revision<>expected_revision THEN RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='factor revision differs'; END IF;
     IF submitted_operation='SECURITY_SETTINGS_UPDATE' AND NOT EXISTS(SELECT 1 FROM iam.accounts a WHERE a.id=tenant
         AND a.security_settings_version=expected_settings_version AND (a.mfa_required_for_users<>required_for_users
-            OR a.password_settings<>start_step_up.password_settings OR a.session_settings<>start_step_up.session_settings)) THEN
+            OR a.password_settings<>start_step_up.password_settings OR a.session_settings<>start_step_up.session_settings
+            OR a.access_key_network_restrictions<>start_step_up.access_key_network_restrictions)) THEN
         RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='settings intent differs';
     END IF;
     effective_now:=clock_timestamp();
@@ -1553,11 +1573,13 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='operation proof limit reached';
     END IF;
     INSERT INTO iam.step_ups(tenant_id,user_id,id,request_id,operation,source_session_id,credential_generation,mfa_revision,
-        factor_id,batch_id,account_version,principal_version,state,created_at,expires_at,expected_settings_version,required_for_users,password_settings,session_settings)
+        factor_id,batch_id,account_version,principal_version,state,created_at,expires_at,expected_settings_version,required_for_users,
+        password_settings,session_settings,access_key_network_restrictions)
         VALUES(tenant,subject_id,proof_id,command_id,submitted_operation,caller_id,generation,batch.mfa_revision,batch.factor_id,batch.id,
             (SELECT a.resource_version FROM iam.accounts a WHERE a.id=tenant),
             (SELECT p.resource_version FROM iam.principals p WHERE p.tenant_id=tenant AND p.id=subject_id),
-            'PENDING',effective_now,effective_now+interval '120 seconds',expected_settings_version,required_for_users,password_settings,session_settings);
+            'PENDING',effective_now,effective_now+interval '120 seconds',expected_settings_version,required_for_users,password_settings,
+            session_settings,access_key_network_restrictions);
     RETURN iam.step_up_snapshot(tenant,proof_id);
 END $function$;
 
@@ -1626,13 +1648,15 @@ GRANT EXECUTE ON FUNCTION iam.start_totp_replacement(text,text,text,text,text,bi
 
 CREATE OR REPLACE FUNCTION iam.read_step_up_by_request(tenant text,subject_id text,caller_id text,command_id text)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
-DECLARE proof_id text;
+DECLARE proof_id text; snapshot jsonb;
 BEGIN
     PERFORM iam.lock_mfa_session(tenant,subject_id,caller_id);
     SELECT p.id INTO proof_id FROM iam.step_ups p WHERE p.tenant_id=tenant AND p.user_id=subject_id
         AND p.source_session_id=caller_id AND p.request_id=command_id;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='P0002',MESSAGE='operation proof was not found'; END IF;
-    RETURN iam.step_up_snapshot(tenant,proof_id);
+    snapshot:=iam.step_up_snapshot(tenant,proof_id);
+    IF snapshot IS NULL THEN RAISE EXCEPTION USING ERRCODE='P0002',MESSAGE='operation proof was not found'; END IF;
+    RETURN snapshot;
 END $function$;
 
 CREATE OR REPLACE FUNCTION iam.lock_recovery_login(tenant text,subject_id text,challenge_id text)
@@ -3500,13 +3524,13 @@ GRANT EXECUTE ON FUNCTION iam.read_recovery_attempt(text,text,text,text,bigint),
 -- contract. Custody alone cannot prove challenge isolation, one-time effects,
 -- or the meaning and immutability of a Session's authentication facts.
 REVOKE ALL ON FUNCTION iam.step_up_snapshot(text,text),iam.lock_step_up(text,text,text,text),
-    iam.start_step_up(text,text,text,text,text,text,bigint,bigint,boolean,jsonb,jsonb),iam.read_step_up_by_request(text,text,text,text),
+    iam.start_step_up(text,text,text,text,text,text,bigint,bigint,boolean,jsonb,jsonb,jsonb),iam.read_step_up_by_request(text,text,text,text),
     iam.read_step_up_for_verification(text,text,text,text),iam.prove_step_up(text,text,text,text,text,text,text,bigint,text,bigint,bigint),
     iam.recovery_code_regeneration_snapshot(text,text),iam.read_recovery_code_regeneration(text,text,text,text),
     iam.regenerate_recovery_codes(text,text,text,text,text,bigint,text,text,jsonb,text,jsonb),
     iam.guard_step_up_transition(),iam.assert_recovery_regeneration(text,text),iam.verify_recovery_regeneration()
     FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_credential_recovery,matrix_iam_backup_custody,matrix_iam_notification_worker;
-GRANT EXECUTE ON FUNCTION iam.start_step_up(text,text,text,text,text,text,bigint,bigint,boolean,jsonb,jsonb),iam.read_step_up_by_request(text,text,text,text),
+GRANT EXECUTE ON FUNCTION iam.start_step_up(text,text,text,text,text,text,bigint,bigint,boolean,jsonb,jsonb,jsonb),iam.read_step_up_by_request(text,text,text,text),
     iam.read_step_up_for_verification(text,text,text,text),iam.prove_step_up(text,text,text,text,text,text,text,bigint,text,bigint,bigint),
     iam.read_recovery_code_regeneration(text,text,text,text),iam.regenerate_recovery_codes(text,text,text,text,text,bigint,text,text,jsonb,text,jsonb)
     TO matrix_iam_api;
@@ -3532,9 +3556,9 @@ BEGIN
             'text,text,text,text,bigint,text,timestamptz,timestamptz,text,text,text,text,text','revoked_at,revocation_recovery_id,regeneration_id,revocation_regeneration_id,revocation_replacement_factor_id,revocation_removal_id','tenant_id,user_id,id,factor_id,event_id,revocation_recovery_id,regeneration_id,revocation_regeneration_id,revocation_replacement_factor_id,revocation_removal_id',true),
         ('authenticator_removals','tenant_id,user_id,id,request_id,step_up_id,factor_id,batch_id,previous_revision,revision,event_id,request_digest,notification_id,created_at',
             'text,text,text,text,text,text,text,bigint,bigint,text,text,text,timestamptz','','tenant_id,user_id,id,request_id,step_up_id,factor_id,batch_id,event_id,notification_id',true),
-        ('step_ups','tenant_id,user_id,id,request_id,operation,source_session_id,credential_generation,mfa_revision,factor_id,batch_id,account_version,principal_version,state,created_at,expires_at,proved_at,consumed_at,verification_request_id,verification_digest,password_attempt_id,password_attempt_sequence,totp_attempt_id,totp_attempt_sequence,verified_step,expected_settings_version,required_for_users,password_settings,session_settings',
-            'text,text,text,text,text,text,bigint,bigint,text,text,bigint,bigint,text,timestamptz,timestamptz,timestamptz,timestamptz,text,text,text,bigint,text,bigint,bigint,bigint,boolean,jsonb,jsonb',
-            'proved_at,consumed_at,verification_request_id,verification_digest,password_attempt_id,password_attempt_sequence,totp_attempt_id,totp_attempt_sequence,verified_step,expected_settings_version,required_for_users,password_settings,session_settings',
+        ('step_ups','tenant_id,user_id,id,request_id,operation,source_session_id,credential_generation,mfa_revision,factor_id,batch_id,account_version,principal_version,state,created_at,expires_at,proved_at,consumed_at,verification_request_id,verification_digest,password_attempt_id,password_attempt_sequence,totp_attempt_id,totp_attempt_sequence,verified_step,expected_settings_version,required_for_users,password_settings,session_settings,access_key_network_restrictions',
+            'text,text,text,text,text,text,bigint,bigint,text,text,bigint,bigint,text,timestamptz,timestamptz,timestamptz,timestamptz,text,text,text,bigint,text,bigint,bigint,bigint,boolean,jsonb,jsonb,jsonb',
+            'proved_at,consumed_at,verification_request_id,verification_digest,password_attempt_id,password_attempt_sequence,totp_attempt_id,totp_attempt_sequence,verified_step,expected_settings_version,required_for_users,password_settings,session_settings,access_key_network_restrictions',
             'tenant_id,user_id,id,request_id,source_session_id,factor_id,batch_id,verification_request_id,password_attempt_id,totp_attempt_id',true),
         ('recovery_code_regenerations','tenant_id,user_id,id,request_id,step_up_id,old_batch_id,new_batch_id,event_id,request_digest,notification_id,created_at',
             'text,text,text,text,text,text,text,text,text,text,timestamptz','','tenant_id,user_id,id,request_id,step_up_id,old_batch_id,new_batch_id,event_id,notification_id',true),
@@ -3780,7 +3804,7 @@ BEGIN
         ('iam.verify_authenticator_removal()',false,'trigger','v',''),
         ('iam.read_authenticator_removal(text,text,text,text)',true,'jsonb','v','tenant,subject_id,caller_id,command_id'),
         ('iam.remove_totp_authenticator(text,text,text,text,text,bigint,text,text,jsonb)',true,'jsonb','v','tenant,subject_id,caller_id,proof_id,command_id,expected_revision,removal_id,notification_id,audit_event'),
-        ('iam.start_step_up(text,text,text,text,text,text,bigint,bigint,boolean,jsonb,jsonb)',true,'jsonb','v','tenant,subject_id,caller_id,proof_id,command_id,submitted_operation,expected_revision,expected_settings_version,required_for_users,password_settings,session_settings'),
+        ('iam.start_step_up(text,text,text,text,text,text,bigint,bigint,boolean,jsonb,jsonb,jsonb)',true,'jsonb','v','tenant,subject_id,caller_id,proof_id,command_id,submitted_operation,expected_revision,expected_settings_version,required_for_users,password_settings,session_settings,access_key_network_restrictions'),
         ('iam.read_step_up_by_request(text,text,text,text)',true,'jsonb','v','tenant,subject_id,caller_id,command_id'),
         ('iam.read_step_up_for_verification(text,text,text,text)',true,'jsonb','v','tenant,subject_id,caller_id,proof_id'),
         ('iam.prove_step_up(text,text,text,text,text,text,text,bigint,text,bigint,bigint)',true,'jsonb','v','tenant,subject_id,caller_id,proof_id,verification_request_id,verification_digest,password_attempt_id,password_attempt_sequence,totp_attempt_id,totp_attempt_sequence,verified_step'),

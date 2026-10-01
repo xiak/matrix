@@ -67,6 +67,7 @@ const (
 	ActionIAMAccessKeyCreated                       Action = "iam.access-key.created"
 	ActionIAMAccessKeyEnabled                       Action = "iam.access-key.enabled"
 	ActionIAMAccessKeyDisabled                      Action = "iam.access-key.disabled"
+	ActionIAMAccessKeyNetworkRestrictionsUpdated    Action = "iam.access-key.network-restrictions-updated"
 	ActionIAMAccessKeyDeleted                       Action = "iam.access-key.deleted"
 	ActionIAMGroupCreated                           Action = "iam.group.created"
 	ActionIAMPolicyCreated                          Action = "iam.policy.created"
@@ -265,6 +266,7 @@ var allActions = []Action{
 	ActionIAMAccessKeyCreated,
 	ActionIAMAccessKeyEnabled,
 	ActionIAMAccessKeyDisabled,
+	ActionIAMAccessKeyNetworkRestrictionsUpdated,
 	ActionIAMAccessKeyDeleted,
 	ActionIAMPolicyCreated,
 	ActionIAMPolicyVersionCreated,
@@ -382,26 +384,27 @@ var actionContracts = map[Action]ActionContract{
 	ActionIAMGroupCreated: {
 		Source: SourceIAM, Target: TargetGroup, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
 	},
-	ActionIAMRoleCreated:                   {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
-	ActionIAMRoleUpdated:                   {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
-	ActionIAMRoleDisabled:                  {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
-	ActionIAMRoleEnabled:                   {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
-	ActionIAMRoleTrustSet:                  {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
-	ActionIAMRoleDeleted:                   {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
-	ActionIAMRolePermissionBoundarySet:     {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
-	ActionIAMRolePermissionBoundaryRemoved: {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
-	ActionIAMRoleSessionIssued:             {Source: SourceIAM, Target: TargetRoleSession, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
-	ActionIAMRoleSessionRevoked:            {Source: SourceIAM, Target: TargetRoleSession, Results: []Result{ResultSucceeded}, UserActorRequired: true},
-	ActionIAMRoleSessionAdminRevoked:       {Source: SourceIAM, Target: TargetRoleSession, Results: []Result{ResultSucceeded}, UserActorRequired: true, IAMDecisionRequired: true},
-	ActionIAMRoleSessionExited:             {Source: SourceIAM, Target: TargetRoleSession, Results: []Result{ResultSucceeded}, RoleActorPermitted: true, RoleActorRequired: true},
-	ActionIAMServiceRoleSessionIssued:      {Source: SourceIAM, Target: TargetRoleSession, Results: []Result{ResultSucceeded}, ServiceActorRequired: true},
-	ActionIAMServiceLinkedRoleCreated:      {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
-	ActionIAMWorkloadRoleBindingCreated:    {Source: SourceIAM, Target: TargetWorkloadRoleBinding, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
-	ActionIAMWorkloadRoleBindingRevoked:    {Source: SourceIAM, Target: TargetWorkloadRoleBinding, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
-	ActionIAMAccessKeyCreated:              {Source: SourceIAM, Target: TargetAccessKey, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
-	ActionIAMAccessKeyEnabled:              {Source: SourceIAM, Target: TargetAccessKey, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
-	ActionIAMAccessKeyDisabled:             {Source: SourceIAM, Target: TargetAccessKey, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
-	ActionIAMAccessKeyDeleted:              {Source: SourceIAM, Target: TargetAccessKey, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMRoleCreated:                         {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMRoleUpdated:                         {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMRoleDisabled:                        {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMRoleEnabled:                         {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMRoleTrustSet:                        {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMRoleDeleted:                         {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMRolePermissionBoundarySet:           {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMRolePermissionBoundaryRemoved:       {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMRoleSessionIssued:                   {Source: SourceIAM, Target: TargetRoleSession, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMRoleSessionRevoked:                  {Source: SourceIAM, Target: TargetRoleSession, Results: []Result{ResultSucceeded}, UserActorRequired: true},
+	ActionIAMRoleSessionAdminRevoked:             {Source: SourceIAM, Target: TargetRoleSession, Results: []Result{ResultSucceeded}, UserActorRequired: true, IAMDecisionRequired: true},
+	ActionIAMRoleSessionExited:                   {Source: SourceIAM, Target: TargetRoleSession, Results: []Result{ResultSucceeded}, RoleActorPermitted: true, RoleActorRequired: true},
+	ActionIAMServiceRoleSessionIssued:            {Source: SourceIAM, Target: TargetRoleSession, Results: []Result{ResultSucceeded}, ServiceActorRequired: true},
+	ActionIAMServiceLinkedRoleCreated:            {Source: SourceIAM, Target: TargetRole, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMWorkloadRoleBindingCreated:          {Source: SourceIAM, Target: TargetWorkloadRoleBinding, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMWorkloadRoleBindingRevoked:          {Source: SourceIAM, Target: TargetWorkloadRoleBinding, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMAccessKeyCreated:                    {Source: SourceIAM, Target: TargetAccessKey, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMAccessKeyEnabled:                    {Source: SourceIAM, Target: TargetAccessKey, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMAccessKeyDisabled:                   {Source: SourceIAM, Target: TargetAccessKey, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMAccessKeyNetworkRestrictionsUpdated: {Source: SourceIAM, Target: TargetAccessKey, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMAccessKeyDeleted:                    {Source: SourceIAM, Target: TargetAccessKey, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
 	ActionIAMPolicyCreated: {
 		Source: SourceIAM, Target: TargetPolicy, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
 	},

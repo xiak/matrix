@@ -370,12 +370,15 @@ func TestPasswordSettingsHistoryCannotBecomeCurrentAuthority(t *testing.T) {
 	api := loadIAMOpenAPI(t)
 	password := `{"minimumLength":15,"requireLowercase":false,"requireUppercase":false,"requireDigit":false,"requireSymbol":false,"historyCount":1,"maxAgeDays":0,"expiryMode":"CHANGE_PASSWORD"}`
 	session := `{"idleTimeoutMinutes":30}`
+	network := `{"allowedSourceCidrs":[]}`
 	oldSettings := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccountSecuritySettings","accountId":"account-a","resourceVersion":2,"mfa":{"requiredForUsers":true},"updatedAt":"2026-09-24T12:00:00Z"}`
 	oldIntent := `{"expectedResourceVersion":1,"mfa":{"requiredForUsers":true}}`
 	passwordSettings := strings.Replace(oldSettings, `,"updatedAt":`, `,"password":`+password+`,"updatedAt":`, 1)
 	passwordIntent := strings.TrimSuffix(oldIntent, "}") + `,"password":` + password + `}`
-	currentSettings := strings.Replace(passwordSettings, `,"updatedAt":`, `,"session":`+session+`,"updatedAt":`, 1)
-	currentIntent := strings.TrimSuffix(passwordIntent, "}") + `,"session":` + session + `}`
+	sessionSettings := strings.Replace(passwordSettings, `,"updatedAt":`, `,"session":`+session+`,"updatedAt":`, 1)
+	sessionIntent := strings.TrimSuffix(passwordIntent, "}") + `,"session":` + session + `}`
+	currentSettings := strings.Replace(sessionSettings, `,"updatedAt":`, `,"accessKeyNetwork":`+network+`,"updatedAt":`, 1)
+	currentIntent := strings.TrimSuffix(sessionIntent, "}") + `,"accessKeyNetwork":` + network + `}`
 	oldChange := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccountSecuritySettingsChange","requestId":"change-a","expectedResourceVersion":1,"settings":` + oldSettings + `,"callerSessionEnded":true}`
 	passwordChange := strings.Replace(oldChange, oldSettings, passwordSettings, 1)
 	currentChange := strings.Replace(oldChange, oldSettings, currentSettings, 1)
@@ -398,14 +401,17 @@ func TestPasswordSettingsHistoryCannotBecomeCurrentAuthority(t *testing.T) {
 	}{
 		{"AccountSecuritySettings", oldSettings, false},
 		{"AccountSecuritySettings", passwordSettings, false},
+		{"AccountSecuritySettings", sessionSettings, false},
 		{"AccountSecuritySettings", currentSettings, true},
 		{"AccountSecuritySettings", preExpirySettings, false},
 		{"SecuritySettingsUpdateIntent", oldIntent, false},
 		{"SecuritySettingsUpdateIntent", passwordIntent, false},
+		{"SecuritySettingsUpdateIntent", sessionIntent, false},
 		{"SecuritySettingsUpdateIntent", currentIntent, true},
 		{"SecuritySettingsUpdateIntent", preExpiryIntent, false},
 		{"AccountSecuritySettingsChange", oldChange, true},
 		{"AccountSecuritySettingsChange", passwordChange, true},
+		{"AccountSecuritySettingsChange", strings.Replace(oldChange, oldSettings, sessionSettings, 1), true},
 		{"AccountSecuritySettingsChange", currentChange, true},
 		{"AccountSecuritySettingsChange", preExpiryChange, true},
 		{"AccountSecuritySettingsChange", strings.Replace(currentChange, `,"maxAgeDays":0`, "", 1), false},
@@ -419,6 +425,7 @@ func TestPasswordSettingsHistoryCannotBecomeCurrentAuthority(t *testing.T) {
 		{"UpdateAccountSecuritySettingsResponse", `{"outcome":"EQUAL_REPLAY","change":` + oldChange + `}`, true},
 		{"UpdateAccountSecuritySettingsResponse", `{"outcome":"APPLIED","change":` + passwordChange + `}`, false},
 		{"UpdateAccountSecuritySettingsResponse", `{"outcome":"EQUAL_REPLAY","change":` + passwordChange + `}`, true},
+		{"UpdateAccountSecuritySettingsResponse", `{"outcome":"APPLIED","change":` + strings.Replace(oldChange, oldSettings, sessionSettings, 1) + `}`, false},
 		{"UpdateAccountSecuritySettingsResponse", `{"outcome":"APPLIED","change":` + currentChange + `}`, true},
 		{"UpdateAccountSecuritySettingsResponse", `{"outcome":"APPLIED","change":` + preExpiryChange + `}`, false},
 		{"UpdateAccountSecuritySettingsResponse", `{"outcome":"EQUAL_REPLAY","change":` + preExpiryChange + `}`, true},
@@ -480,7 +487,7 @@ func TestStepUpSchemasKeepOperationProofSeparateFromLoginAndSecretReplay(t *test
 	api := loadIAMOpenAPI(t)
 	step := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"StepUp","id":"proof-a","requestId":"regenerate-a","operation":"RECOVERY_CODES_REGENERATE","expectedFactorRevision":2,"state":"PENDING","createdAt":"2026-09-21T12:00:00Z","expiresAt":"2026-09-21T12:02:00Z"}`
 	start := `{"requestId":"regenerate-a","operation":"RECOVERY_CODES_REGENERATE","expectedFactorRevision":2}`
-	settingsIntent := `{"expectedResourceVersion":1,"mfa":{"requiredForUsers":true},"password":{"minimumLength":15,"requireLowercase":false,"requireUppercase":false,"requireDigit":false,"requireSymbol":false,"historyCount":1,"maxAgeDays":0,"expiryMode":"CHANGE_PASSWORD"},"session":{"idleTimeoutMinutes":30}}`
+	settingsIntent := `{"expectedResourceVersion":1,"mfa":{"requiredForUsers":true},"password":{"minimumLength":15,"requireLowercase":false,"requireUppercase":false,"requireDigit":false,"requireSymbol":false,"historyCount":1,"maxAgeDays":0,"expiryMode":"CHANGE_PASSWORD"},"session":{"idleTimeoutMinutes":30},"accessKeyNetwork":{"allowedSourceCidrs":[]}}`
 	settingsStep := strings.TrimSuffix(strings.Replace(step, "RECOVERY_CODES_REGENERATE", "SECURITY_SETTINGS_UPDATE", 1), "}") + `,"securitySettings":` + settingsIntent + `}`
 	settingsStart := strings.TrimSuffix(strings.Replace(start, "RECOVERY_CODES_REGENERATE", "SECURITY_SETTINGS_UPDATE", 1), "}") + `,"securitySettings":` + settingsIntent + `}`
 	removeStep := strings.Replace(step, "RECOVERY_CODES_REGENERATE", "TOTP_REMOVE", 1)
@@ -1381,14 +1388,15 @@ func TestAccessKeySigningSchemasMatchExplicitTransportAndSanitizedResults(t *tes
 
 func TestAccessKeyManagementSchemasAgreeWithBoundedNonSecretContracts(t *testing.T) {
 	api := loadIAMOpenAPI(t)
-	key := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccessKey","id":"key-a","accountId":"account-a","userId":"user-a","status":"ENABLED","resourceVersion":1,"createdAt":"2026-09-17T00:00:00Z","updatedAt":"2026-09-17T00:00:00Z"}`
-	create := `{"userResourceVersion":1,"requestId":"key-create"}`
+	key := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccessKey","id":"key-a","accountId":"account-a","userId":"user-a","status":"ENABLED","networkRestrictions":{"allowedSourceCidrs":[]},"resourceVersion":1,"createdAt":"2026-09-17T00:00:00Z","updatedAt":"2026-09-17T00:00:00Z"}`
+	create := `{"userResourceVersion":1,"networkRestrictions":{"allowedSourceCidrs":[]},"requestId":"key-create"}`
 	status := `{"accessKeyResourceVersion":1,"status":"DISABLED","requestId":"key-disable"}`
 	remove := `{"accessKeyResourceVersion":2,"requestId":"key-delete"}`
 	applied := `{"outcome":"APPLIED","key":` + key + `,"secret":"mak1.AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8"}`
 	replayed := `{"outcome":"EQUAL_REPLAY","key":` + key + `}`
-	capabilities := `[{"action":"iam.access-key.read","resource":{"kind":"ACCESS_KEY","id":"key-a"},"available":true},{"action":"iam.access-key.set-status","resource":{"kind":"ACCESS_KEY","id":"key-a"},"available":true},{"action":"iam.access-key.delete","resource":{"kind":"ACCESS_KEY","id":"key-a"},"available":false,"restrictionReason":"TARGET_MUST_BE_DISABLED"}]`
-	access := `{"key":` + key + `,"capabilities":` + capabilities + `}`
+	capabilities := `[{"action":"iam.access-key.read","resource":{"kind":"ACCESS_KEY","id":"key-a"},"available":true},{"action":"iam.access-key.set-status","resource":{"kind":"ACCESS_KEY","id":"key-a"},"available":true},{"action":"iam.access-key.set-network-restrictions","resource":{"kind":"ACCESS_KEY","id":"key-a"},"available":true},{"action":"iam.access-key.delete","resource":{"kind":"ACCESS_KEY","id":"key-a"},"available":false,"restrictionReason":"TARGET_MUST_BE_DISABLED"}]`
+	usage := `{"observedAt":"2026-09-17T00:01:00Z"}`
+	access := `{"key":` + key + `,"usage":` + usage + `,"capabilities":` + capabilities + `}`
 	list := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccessKeyList","accountId":"account-a","userId":"user-a","userResourceVersion":1,"capabilities":[{"action":"iam.access-key.create","resource":{"kind":"USER","id":"user-a"},"available":true}],"items":[]}`
 	twoKeys := strings.Replace(list, `"items":[]`, `"items":[`+access+`,`+strings.ReplaceAll(access, "key-a", "key-b")+`]`, 1)
 	validators := map[string]func(string) bool{

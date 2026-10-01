@@ -1129,7 +1129,8 @@ func TestStartStepUpRejectsChangedSettingsIntent(t *testing.T) {
 			}
 			passwordSettings := authority.DefaultPasswordSettings()
 			sessionSettings := iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30}
-			intent := iamv1.SecuritySettingsUpdateIntent{ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}, Password: &passwordSettings, Session: &sessionSettings}
+			networkSettings := iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}}
+			intent := iamv1.SecuritySettingsUpdateIntent{ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}, Password: &passwordSettings, Session: &sessionSettings, AccessKeyNetwork: &networkSettings}
 			request := iamv1.StartStepUpRequest{RequestID: "settings-original", Operation: iamv1.StepUpUpdateSecuritySettings, ExpectedFactorRevision: 2, SecuritySettings: &intent}
 			returnedIntent := intent
 			returnedPassword := passwordSettings
@@ -1651,7 +1652,7 @@ func TestAccountSecuritySettingsCannotBypassCurrentSessionAndExplicitAuthority(t
 	}
 	update := iamv1.UpdateAccountSecuritySettingsRequest{RequestID: "settings-denied-write", StepUpID: "not-a-permit",
 		ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}, Password: authority.DefaultPasswordSettings(),
-		Session: iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30}}
+		Session: iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30}, AccessKeyNetwork: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}}}
 	if _, err := service.UpdateAccountSecuritySettings(t.Context(), login.Credential, update); !errors.Is(err, ErrForbidden) {
 		t.Fatal("settings proof ID substituted for current write permission", err)
 	}

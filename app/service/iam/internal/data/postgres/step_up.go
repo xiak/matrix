@@ -16,7 +16,7 @@ func (value *transaction) StartStepUp(ctx context.Context, mutation identityacce
 	s, r := mutation.Session, mutation.Request
 	var expectedSettingsVersion *uint64
 	var requiredForUsers *bool
-	var passwordSettings, sessionSettings []byte
+	var passwordSettings, sessionSettings, accessKeyNetwork []byte
 	if r.SecuritySettings != nil {
 		if iamv1.ValidateSecuritySettingsUpdateIntent(*r.SecuritySettings) != nil {
 			return iamv1.StepUp{}, identityaccess.ErrInvalidArgument
@@ -32,10 +32,14 @@ func (value *transaction) StartStepUp(ctx context.Context, mutation identityacce
 		if err != nil {
 			return iamv1.StepUp{}, identityaccess.ErrUnavailable
 		}
+		accessKeyNetwork, err = json.Marshal(r.SecuritySettings.AccessKeyNetwork)
+		if err != nil {
+			return iamv1.StepUp{}, identityaccess.ErrUnavailable
+		}
 	}
 	var encoded []byte
-	err := value.tx.QueryRow(ctx, "SELECT iam.start_step_up($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb)", s.AccountID, s.PrincipalID, s.ID,
-		mutation.ID, r.RequestID, r.Operation, r.ExpectedFactorRevision, expectedSettingsVersion, requiredForUsers, passwordSettings, sessionSettings).Scan(&encoded)
+	err := value.tx.QueryRow(ctx, "SELECT iam.start_step_up($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11::jsonb,$12::jsonb)", s.AccountID, s.PrincipalID, s.ID,
+		mutation.ID, r.RequestID, r.Operation, r.ExpectedFactorRevision, expectedSettingsVersion, requiredForUsers, passwordSettings, sessionSettings, accessKeyNetwork).Scan(&encoded)
 	if err != nil {
 		return iamv1.StepUp{}, mapStepUpError("start operation proof", err)
 	}

@@ -1062,18 +1062,19 @@ func TestAccessKeyContextHasNoLoginSessionAndRejectsInconsistentAuthority(t *tes
 		user := authoritySubject(now, iamv1.SystemPolicyManagedServiceInstallationReader)
 		return AccessKeyContext{Organization: user.Organization, Principal: user.Principal,
 			RootUserID: "principal-root", InstallationID: user.InstallationID, Policies: user.Policies, Boundary: user.Boundary,
+			AccountSecuritySettingsVersion: 1, AccountNetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}},
 			Key: iamv1.AccessKey{APIVersion: iamv1.APIVersion, Kind: "AccessKey", ID: "access-key-context", AccountID: user.Organization.ID,
-				UserID: user.Principal.ID, Status: iamv1.AccessKeyEnabled, ResourceVersion: 1, CreatedAt: now.Add(-time.Minute), UpdatedAt: now.Add(-time.Minute)}}
+				UserID: user.Principal.ID, Status: iamv1.AccessKeyEnabled, NetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}}, ResourceVersion: 1, CreatedAt: now.Add(-time.Minute), UpdatedAt: now.Add(-time.Minute)}}
 	}
 	request := policyEvaluationRequestForTest(t, iamv1.ActionManagedServiceInstallationRead, iamv1.ResourceReference{Kind: iamv1.ResourceServiceInstallation, ID: "service-installation-key"})
-	if eligible, err := accessKeyEligibility(fixture(), now, now.Unix()); err != nil || !eligible {
+	if eligible, err := accessKeyEligibility(fixture(), request.NetworkContext, now, now.Unix()); err != nil || !eligible {
 		t.Fatal("coherent ordinary key metadata is not eligible for later MAC/PDP checks", err)
 	}
 	// Platform protection is independent of the effective policy directory.
 	// A RETIRED policy disappears from that projection, not attachment history.
 	protected := fixture()
 	protected.HasUnrevokedPlatformAttachment = true
-	if eligible, err := accessKeyEligibility(protected, now, now.Unix()); err != nil || eligible {
+	if eligible, err := accessKeyEligibility(protected, request.NetworkContext, now, now.Unix()); err != nil || eligible {
 		t.Fatal("filtered platform policy erased the unrevoked-attachment protection", err)
 	}
 	// Managed-service installation reads remain LOGIN_SESSION only. Even a coherent key
@@ -1147,6 +1148,69 @@ func TestAccessKeyContextHasNoLoginSessionAndRejectsInconsistentAuthority(t *tes
 		if result, err := DecideAccessKey(fixture(), iamv1.ServicePaaS, request, "decision-key-invalid", now, signedAt); !errors.Is(err, ErrInvalidAuthorizationRequest) || result.ID != "" {
 			t.Fatal("malformed timestamp became a completed decision")
 		}
+	}
+}
+
+func TestAccessKeyNetworkRestrictionsRequireBothAccountAndKeyLayers(t *testing.T) {
+	now := authorityTestTime()
+	user := authoritySubject(now, iamv1.SystemPolicyPaaSViewer)
+	fixture := func() AccessKeyContext {
+		return AccessKeyContext{Organization: user.Organization, Principal: user.Principal,
+			RootUserID: "principal-root", InstallationID: user.InstallationID, Policies: user.Policies, Boundary: user.Boundary,
+			AccountSecuritySettingsVersion: 7, AccountNetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}},
+			Key: iamv1.AccessKey{APIVersion: iamv1.APIVersion, Kind: "AccessKey", ID: "access-key-network", AccountID: user.Organization.ID,
+				UserID: user.Principal.ID, Status: iamv1.AccessKeyEnabled, NetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}},
+				ResourceVersion: 3, CreatedAt: now.Add(-time.Minute), UpdatedAt: now.Add(-time.Minute)}}
+	}
+	network := &iamv1.AuthorizationNetworkContext{SourceIP: "192.0.2.25"}
+	for name, mutate := range map[string]func(*AccessKeyContext){
+		"both unrestricted": func(*AccessKeyContext) {},
+		"both match": func(value *AccessKeyContext) {
+			value.AccountNetworkRestrictions.AllowedSourceCIDRs = []string{"192.0.2.0/24"}
+			value.Key.NetworkRestrictions.AllowedSourceCIDRs = []string{"192.0.2.16/28"}
+		},
+		"ipv6 both match": func(value *AccessKeyContext) {
+			network = &iamv1.AuthorizationNetworkContext{SourceIP: "2001:db8:1::25"}
+			value.AccountNetworkRestrictions.AllowedSourceCIDRs = []string{"2001:db8::/32"}
+			value.Key.NetworkRestrictions.AllowedSourceCIDRs = []string{"2001:db8:1::/48"}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := fixture()
+			original := network
+			defer func() { network = original }()
+			mutate(&value)
+			if eligible, err := accessKeyEligibility(value, network, now, now.Unix()); err != nil || !eligible {
+				t.Fatalf("matching network was rejected: eligible=%v err=%v", eligible, err)
+			}
+		})
+	}
+	for name, mutate := range map[string]func(*AccessKeyContext){
+		"account mismatch": func(value *AccessKeyContext) {
+			value.AccountNetworkRestrictions.AllowedSourceCIDRs = []string{"198.51.100.0/24"}
+		},
+		"key mismatch": func(value *AccessKeyContext) {
+			value.Key.NetworkRestrictions.AllowedSourceCIDRs = []string{"198.51.100.0/24"}
+		},
+		"missing trusted source": func(value *AccessKeyContext) {
+			network = nil
+			value.Key.NetworkRestrictions.AllowedSourceCIDRs = []string{"192.0.2.0/24"}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := fixture()
+			original := network
+			defer func() { network = original }()
+			mutate(&value)
+			if eligible, err := accessKeyEligibility(value, network, now, now.Unix()); err != nil || eligible {
+				t.Fatalf("network intersection did not fail closed: eligible=%v err=%v", eligible, err)
+			}
+		})
+	}
+	corrupt := fixture()
+	corrupt.AccountNetworkRestrictions.AllowedSourceCIDRs = []string{"192.0.2.1/24"}
+	if eligible, err := accessKeyEligibility(corrupt, network, now, now.Unix()); !errors.Is(err, ErrAuthorityUnavailable) || eligible {
+		t.Fatalf("corrupt stored network authority was treated as a normal deny: eligible=%v err=%v", eligible, err)
 	}
 }
 

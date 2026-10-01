@@ -4667,7 +4667,8 @@ func proveIAMSecuritySettingsRaces(t *testing.T, ctx context.Context, database *
 					initialProof, err := first.StartStepUp(ctx, session.Credential, iamv1.StartStepUpRequest{RequestID: "race-initialize-settings",
 						Operation: iamv1.StepUpUpdateSecuritySettings, ExpectedFactorRevision: 2,
 						SecuritySettings: &iamv1.SecuritySettingsUpdateIntent{Password: &iamv1.AccountPasswordSettings{ExpiryMode: iamv1.PasswordExpiryChange, MinimumLength: 15, HistoryCount: 1},
-							Session: &iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30}, ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}}})
+							Session: &iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30}, AccessKeyNetwork: &iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}},
+							ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}}})
 					if err != nil {
 						t.Fatal(err)
 					}
@@ -4676,7 +4677,8 @@ func proveIAMSecuritySettingsRaces(t *testing.T, ctx context.Context, database *
 						t.Fatal(err)
 					}
 					if _, err := first.UpdateAccountSecuritySettings(ctx, session.Credential, iamv1.UpdateAccountSecuritySettingsRequest{Password: iamv1.AccountPasswordSettings{ExpiryMode: iamv1.PasswordExpiryChange, MinimumLength: 15, HistoryCount: 1},
-						Session: iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30}, RequestID: "race-initialize-settings", StepUpID: initialProof.ID,
+						Session: iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30}, AccessKeyNetwork: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}},
+						RequestID: "race-initialize-settings", StepUpID: initialProof.ID,
 						ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}}); err != nil {
 						t.Fatal("establish actual stronger requirement", err)
 					}
@@ -4704,7 +4706,8 @@ func proveIAMSecuritySettingsRaces(t *testing.T, ctx context.Context, database *
 				proof, err := first.StartStepUp(ctx, session.Credential, iamv1.StartStepUpRequest{RequestID: "race-settings",
 					Operation: iamv1.StepUpUpdateSecuritySettings, ExpectedFactorRevision: 2,
 					SecuritySettings: &iamv1.SecuritySettingsUpdateIntent{Password: &passwordRules, Session: &iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30},
-						ExpectedResourceVersion: uint64(expectedSettings), MFA: iamv1.AccountMFASettings{RequiredForUsers: required}}})
+						AccessKeyNetwork: &iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}}, ExpectedResourceVersion: uint64(expectedSettings),
+						MFA: iamv1.AccountMFASettings{RequiredForUsers: required}}})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -4721,7 +4724,8 @@ func proveIAMSecuritySettingsRaces(t *testing.T, ctx context.Context, database *
 				}
 				settings := command{http.MethodPut, "/v1/account/security-settings", "race-settings", auditv1.ActionIAMSecuritySettingsUpdated, session.Credential,
 					mustIAMJSON(t, iamv1.UpdateAccountSecuritySettingsRequest{Password: passwordRules, Session: iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30},
-						RequestID: "race-settings", StepUpID: proof.ID, ExpectedResourceVersion: uint64(expectedSettings), MFA: iamv1.AccountMFASettings{RequiredForUsers: required}})}
+						AccessKeyNetwork: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}}, RequestID: "race-settings", StepUpID: proof.ID,
+						ExpectedResourceVersion: uint64(expectedSettings), MFA: iamv1.AccountMFASettings{RequiredForUsers: required}})}
 				other := command{method: http.MethodPost, request: "race-mutation", bearer: session.Credential}
 				var verification iamv1.LoginResponse
 				var replacement iamv1.StartTOTPEnrollmentResponse
@@ -6391,7 +6395,7 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 			{"settings_notice_completion", "DROP TRIGGER verify_security_settings_change ON iam.security_notifications"},
 			{"settings_history_completion", "DROP TRIGGER verify_security_settings_change ON iam.account_security_settings_changes"},
 			{"settings_private_history", "GRANT EXECUTE ON FUNCTION iam.assert_security_settings_change(text,text,text) TO matrix_iam_api"},
-			{"settings_worker_mutation", "GRANT EXECUTE ON FUNCTION iam.update_account_security_settings(text,text,text,text,text,text,bigint,boolean,jsonb,jsonb,jsonb) TO matrix_iam_worker"},
+			{"settings_worker_mutation", "GRANT EXECUTE ON FUNCTION iam.update_account_security_settings(text,text,text,text,text,text,bigint,boolean,jsonb,jsonb,jsonb,jsonb) TO matrix_iam_worker"},
 			{"password_settings_nullable", "ALTER TABLE iam.accounts ALTER COLUMN password_settings DROP NOT NULL"},
 			{"password_settings_default", "ALTER TABLE iam.accounts ALTER COLUMN password_settings SET DEFAULT '{}'::jsonb"},
 			{"password_settings_history_default", "ALTER TABLE iam.account_security_settings_changes ALTER COLUMN password_settings SET DEFAULT '{}'::jsonb"},
@@ -6652,7 +6656,8 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 					request.Operation = iamv1.StepUpUpdateSecuritySettings
 					request.SecuritySettings = &iamv1.SecuritySettingsUpdateIntent{Password: &iamv1.AccountPasswordSettings{ExpiryMode: iamv1.PasswordExpiryChange, MinimumLength: 24,
 						RequireLowercase: true, RequireUppercase: true, RequireDigit: true, RequireSymbol: true, HistoryCount: 24, MaxAgeDays: 1},
-						Session: &iamv1.AccountSessionSettings{IdleTimeoutMinutes: sessionIdleMinutes}, ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}}
+						Session: &iamv1.AccountSessionSettings{IdleTimeoutMinutes: sessionIdleMinutes}, AccessKeyNetwork: &iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{"198.51.100.0/24"}},
+						ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}}
 				}
 				startBytes, err := json.Marshal(request)
 				if err != nil {
@@ -6679,9 +6684,10 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 				callMFA(secondHandler, http.MethodPost, "/v1/auth/step-up", currentSession.Credential, wrongBytes, http.StatusConflict, nil)
 				if recoveryCase == "regenerate-settings-intent" {
 					for _, altered := range []iamv1.SecuritySettingsUpdateIntent{
-						{ExpectedResourceVersion: 2, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}, Password: request.SecuritySettings.Password, Session: request.SecuritySettings.Session},
-						{ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: false}, Password: request.SecuritySettings.Password, Session: request.SecuritySettings.Session},
-						{ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}, Password: request.SecuritySettings.Password, Session: &iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30}},
+						{ExpectedResourceVersion: 2, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}, Password: request.SecuritySettings.Password, Session: request.SecuritySettings.Session, AccessKeyNetwork: request.SecuritySettings.AccessKeyNetwork},
+						{ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: false}, Password: request.SecuritySettings.Password, Session: request.SecuritySettings.Session, AccessKeyNetwork: request.SecuritySettings.AccessKeyNetwork},
+						{ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}, Password: request.SecuritySettings.Password, Session: &iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30}, AccessKeyNetwork: request.SecuritySettings.AccessKeyNetwork},
+						{ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}, Password: request.SecuritySettings.Password, Session: request.SecuritySettings.Session, AccessKeyNetwork: &iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{"203.0.113.0/24"}}},
 					} {
 						wrong := request
 						wrong.SecuritySettings = &altered
@@ -7427,7 +7433,8 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 						settingsProof, err := service.StartStepUp(ctx, operatorLogin.Credential, iamv1.StartStepUpRequest{
 							RequestID: "remove-require-mfa", Operation: iamv1.StepUpUpdateSecuritySettings, ExpectedFactorRevision: 2,
 							SecuritySettings: &iamv1.SecuritySettingsUpdateIntent{Password: &iamv1.AccountPasswordSettings{ExpiryMode: iamv1.PasswordExpiryChange, MinimumLength: 15, HistoryCount: 1},
-								Session: &iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30}, ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}}})
+								Session: &iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30}, AccessKeyNetwork: &iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}},
+								ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}}})
 						if err != nil {
 							t.Fatal("prepare real MFA requirement", err)
 						}
@@ -7438,7 +7445,8 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 							t.Fatal("prove real MFA requirement", err)
 						}
 						if _, err := service.UpdateAccountSecuritySettings(ctx, operatorLogin.Credential, iamv1.UpdateAccountSecuritySettingsRequest{Password: iamv1.AccountPasswordSettings{ExpiryMode: iamv1.PasswordExpiryChange, MinimumLength: 15, HistoryCount: 1},
-							Session: iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30}, RequestID: settingsProof.RequestID, StepUpID: settingsProof.ID,
+							Session: iamv1.AccountSessionSettings{IdleTimeoutMinutes: 30}, AccessKeyNetwork: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}},
+							RequestID: settingsProof.RequestID, StepUpID: settingsProof.ID,
 							ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}}); err != nil {
 							t.Fatal("commit real MFA requirement", err)
 						}
@@ -8658,7 +8666,8 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 						t.Fatal("self requirements need management permission or change authentication state")
 					}
 					update := iamv1.UpdateAccountSecuritySettingsRequest{Password: *request.SecuritySettings.Password, Session: *request.SecuritySettings.Session,
-						RequestID: request.RequestID, StepUpID: proof.ID, ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}}
+						AccessKeyNetwork: *request.SecuritySettings.AccessKeyNetwork, RequestID: request.RequestID, StepUpID: proof.ID,
+						ExpectedResourceVersion: 1, MFA: iamv1.AccountMFASettings{RequiredForUsers: true}}
 					updateBytes := mustIAMJSON(t, update)
 					// A real operation-bound proof is not an authorization grant.
 					callMFA(firstHandler, http.MethodPut, settingsPath, currentSession.Credential, updateBytes, http.StatusForbidden, nil)
@@ -8826,7 +8835,8 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 					callMFA(firstHandler, http.MethodPut, settingsPath, currentSession.Credential, updateBytes, http.StatusOK, &applied)
 					if applied.Outcome != "APPLIED" || applied.Change.Settings.ResourceVersion != 2 || !applied.Change.Settings.MFA.RequiredForUsers || !applied.Change.CallerSessionEnded ||
 						applied.Change.Settings.Password == nil || *applied.Change.Settings.Password != update.Password ||
-						applied.Change.Settings.Session == nil || *applied.Change.Settings.Session != update.Session {
+						applied.Change.Settings.Session == nil || *applied.Change.Settings.Session != update.Session ||
+						applied.Change.Settings.AccessKeyNetwork == nil || !reflect.DeepEqual(*applied.Change.Settings.AccessKeyNetwork, update.AccessKeyNetwork) {
 						t.Fatal("settings mutation did not close original qualification")
 					}
 					for _, credential := range []iamv1.Secret{currentSession.Credential, completed.Credential, weakSession.Credential} {
@@ -9033,7 +9043,7 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 					callMFA(secondHandler, http.MethodPut, settingsPath, qualified.Credential, mustIAMJSON(t, variant), http.StatusConflict, nil)
 					lowerIntent := iamv1.StartStepUpRequest{RequestID: "settings-loosen", Operation: iamv1.StepUpUpdateSecuritySettings, ExpectedFactorRevision: 2,
 						SecuritySettings: &iamv1.SecuritySettingsUpdateIntent{Password: request.SecuritySettings.Password, Session: request.SecuritySettings.Session,
-							ExpectedResourceVersion: 2, MFA: iamv1.AccountMFASettings{RequiredForUsers: false}}}
+							AccessKeyNetwork: request.SecuritySettings.AccessKeyNetwork, ExpectedResourceVersion: 2, MFA: iamv1.AccountMFASettings{RequiredForUsers: false}}}
 					var lowerProof iamv1.StepUp
 					callMFA(firstHandler, http.MethodPost, "/v1/auth/step-up", qualified.Credential, mustIAMJSON(t, lowerIntent), http.StatusOK, &lowerProof)
 					body, err = iamv1.EncodeVerifyStepUpRequest(iamv1.VerifyStepUpRequest{RequestID: "settings-loosen-proof", Password: current, Code: freshTOTP()})
@@ -9064,7 +9074,8 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 						{firstHandler, qualified.Credential, lowerProof}, {secondHandler, firstSession.Credential, otherProof},
 					} {
 						encoded := mustIAMJSON(t, iamv1.UpdateAccountSecuritySettingsRequest{Password: *entry.proof.SecuritySettings.Password,
-							Session: *entry.proof.SecuritySettings.Session, RequestID: entry.proof.RequestID, StepUpID: entry.proof.ID,
+							Session: *entry.proof.SecuritySettings.Session, AccessKeyNetwork: *entry.proof.SecuritySettings.AccessKeyNetwork,
+							RequestID: entry.proof.RequestID, StepUpID: entry.proof.ID,
 							ExpectedResourceVersion: 2, MFA: lowerIntent.SecuritySettings.MFA})
 						go func() {
 							<-start
@@ -9096,7 +9107,8 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 						t.Fatal("competing settings did not have exactly one winner")
 					}
 					if lowered.Outcome != "APPLIED" || lowered.Change.Settings.ResourceVersion != 3 || lowered.Change.Settings.MFA.RequiredForUsers || !lowered.Change.CallerSessionEnded ||
-						lowered.Change.Settings.Session == nil || *lowered.Change.Settings.Session != update.Session {
+						lowered.Change.Settings.Session == nil || *lowered.Change.Settings.Session != update.Session ||
+						lowered.Change.Settings.AccessKeyNetwork == nil || !reflect.DeepEqual(*lowered.Change.Settings.AccessKeyNetwork, update.AccessKeyNetwork) {
 						t.Fatal("loosening reused old qualification")
 					}
 					for _, credential := range []iamv1.Secret{qualified.Credential, currentSession.Credential, completed.Credential, weakSession.Credential, firstSession.Credential} {
@@ -9124,7 +9136,8 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 					applyIAMSchema(t, ctx, admin)
 					applyIAMSchema(t, ctx, admin)
 					if err := admin.QueryRow(ctx, `SELECT
-						(SELECT security_settings_version=3 AND NOT mfa_required_for_users AND session_settings=$7::jsonb FROM iam.accounts WHERE id=$1)
+						(SELECT security_settings_version=3 AND NOT mfa_required_for_users AND session_settings=$7::jsonb
+							AND access_key_network_restrictions=$9::jsonb FROM iam.accounts WHERE id=$1)
 						AND (SELECT count(*)=2 FROM iam.account_security_settings_changes WHERE tenant_id=$1)
 						AND (SELECT count(*)=3 AND count(*) FILTER(WHERE state='CONSUMED')=2 AND count(*) FILTER(WHERE state='PROVED' AND consumed_at IS NULL)=1
 							FROM iam.step_ups WHERE tenant_id=$1 AND operation='SECURITY_SETTINGS_UPDATE' AND id IN ($3,$4,$5))
@@ -9137,7 +9150,8 @@ func testIAMTOTPEnrollmentPostgres(t *testing.T, mode string) {
 								AND n.contact_revision=1 AND n.email=v.email AND v.state='VERIFIED')
 						AND (SELECT security_settings_version=3 AND authentication_method='PASSWORD' AND idle_timeout_seconds=$8
 							AND last_activity_at=issued_at FROM iam.sessions WHERE tenant_id=$1 AND id=$2)`, member.AccountID, weakNew.Session.ID,
-						proof.ID, lowerProof.ID, otherProof.ID, realMail, string(mustIAMJSON(t, update.Session)), sessionIdleMinutes*60).Scan(&intact); err != nil || !intact {
+						proof.ID, lowerProof.ID, otherProof.ID, realMail, string(mustIAMJSON(t, update.Session)), sessionIdleMinutes*60,
+						string(mustIAMJSON(t, update.AccessKeyNetwork))).Scan(&intact); err != nil || !intact {
 						t.Fatal("settings replay changed qualification, immutable completion or facts", err)
 					}
 					if mode == "session-idle-natural" {
@@ -17035,7 +17049,8 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 	call(handler, http.MethodPost, "/v1/policies", root, iamv1.CreatePolicyRequest{DisplayName: "AccessKey manager", RequestID: "key-manager-policy",
 		Document: iamv1.PolicyDocument{LanguageVersion: "1", Scope: iamv1.AuthorityScopeTenant, Statements: []iamv1.PolicyStatement{
 			rule("directory", []iamv1.Action{iamv1.ActionIAMAccessKeyList, iamv1.ActionIAMAccessKeyCreate}, iamv1.ResourceUser),
-			rule("keys", []iamv1.Action{iamv1.ActionIAMAccessKeyRead, iamv1.ActionIAMAccessKeySetStatus, iamv1.ActionIAMAccessKeyDelete}, iamv1.ResourceAccessKey)}}}, http.StatusCreated, &policy)
+			rule("keys", []iamv1.Action{iamv1.ActionIAMAccessKeyRead, iamv1.ActionIAMAccessKeySetStatus,
+				iamv1.ActionIAMAccessKeySetNetworkRestrictions, iamv1.ActionIAMAccessKeyDelete}, iamv1.ResourceAccessKey)}}}, http.StatusCreated, &policy)
 	var attachment iamv1.PolicyAttachment
 	call(handler, http.MethodPost, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{
 		Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(manager.ID)}, PolicyID: policy.Policy.ID,
@@ -17046,7 +17061,8 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 		t.Fatal("empty key directory or explicit create authority differs")
 	}
 	call(handler, http.MethodGet, "/v1/users/"+string(document.Administrator.ID)+"/access-keys", managerBearer, nil, http.StatusForbidden, nil)
-	create := iamv1.CreateAccessKeyRequest{UserResourceVersion: directory.UserResourceVersion, RequestID: "key-first"}
+	create := iamv1.CreateAccessKeyRequest{UserResourceVersion: directory.UserResourceVersion,
+		NetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}}, RequestID: "key-first"}
 	if _, err := database.Exec(ctx, `CREATE SEQUENCE public.matrix_key_retry;
 	 GRANT USAGE ON SEQUENCE public.matrix_key_retry TO matrix_iam_owner;
 	 CREATE FUNCTION public.matrix_key_retry_once() RETURNS trigger LANGUAGE plpgsql AS $body$
@@ -17125,7 +17141,7 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 		return credential
 	}
 	resolvedKey := lookupSigningKey(first.Key.ID, document.InstallationID, "paas", true)
-	if resolvedKey.Subject.Key != first.Key || resolvedKey.Subject.Principal.ID != user.ID || resolvedKey.Subject.Organization.ID != user.AccountID ||
+	if !reflect.DeepEqual(resolvedKey.Subject.Key, first.Key) || resolvedKey.Subject.Principal.ID != user.ID || resolvedKey.Subject.Organization.ID != user.AccountID ||
 		resolvedKey.Subject.RootUserID != document.Administrator.ID || resolvedKey.Subject.HasUnrevokedPlatformAttachment {
 		t.Fatal("credential locator did not retain exact physical user/key ownership")
 	}
@@ -17288,6 +17304,7 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 			var decisionBytes, policyBytes, boundaryBytes, evidenceBytes []byte
 			if err := database.QueryRow(ctx, `SELECT d.document,d.policy_evidence,d.boundary_evidence,
 			 jsonb_build_object('accessKeyId',e.access_key_id,'resourceVersion',e.key_resource_version,'formatVersion',e.format_version,
+			 'accountSecuritySettingsVersion',e.account_security_settings_version,
 			 'wrappingKeyId',e.wrapping_key_id,'materialCommitment',e.material_commitment,'installationId',e.installation_id,
 			 'serviceLookupDigest',e.service_lookup_digest,'audience',e.audience,'signedRequestDigest',e.signed_request_digest,
 			 'nonceDigest',e.nonce_digest,'signedAt',e.signed_at)
@@ -17298,7 +17315,7 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 			for _, sample := range []struct{ name, code string }{
 				{"valid-control", ""}, {"old-contract", "22023"}, {"sql-null", "22023"}, {"role-and-key", "22023"},
 				{"extra-field", "22023"}, {"wrong-format", "22023"}, {"wrong-audience", "22023"},
-				{"wrong-version", "42501"}, {"wrong-key", "42501"}, {"wrong-installation", "42501"},
+				{"wrong-version", "42501"}, {"wrong-settings-version", "42501"}, {"wrong-key", "42501"}, {"wrong-installation", "42501"},
 				{"wrong-wrapping", "42501"}, {"wrong-commitment", "42501"}, {"wrong-service", "42501"},
 				{"wrong-actor", "42501"}, {"wrong-tenant", "42501"}, {"actor-without-key", "22023"}, {"actor-other-key", "22023"},
 			} {
@@ -17338,6 +17355,8 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 						evidence["audience"] = "audit"
 					case "wrong-version":
 						evidence["resourceVersion"] = 2
+					case "wrong-settings-version":
+						evidence["accountSecuritySettingsVersion"] = 2
 					case "wrong-key":
 						evidence["accessKeyId"] = "not-a-real-key"
 					case "wrong-installation":
@@ -17438,6 +17457,66 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 				t.Fatalf("unauthenticated %s wrote evidence or status=%d", attack, response.Code)
 			}
 		}
+		t.Run("key-network-restriction-and-usage", func(t *testing.T) {
+			target, _ := newUser("key-network-user")
+			var productPolicy iamv1.PolicyDetail
+			call(handler, http.MethodPost, "/v1/policies", root, iamv1.CreatePolicyRequest{DisplayName: "Network key application reader",
+				RequestID: "key-network-product-policy", Document: iamv1.PolicyDocument{LanguageVersion: "1", Scope: iamv1.AuthorityScopeTenant,
+					Statements: []iamv1.PolicyStatement{rule("application-read", []iamv1.Action{iamv1.ActionPaaSApplicationRead}, iamv1.ResourceApplication)}}},
+				http.StatusCreated, &productPolicy)
+			call(handler, http.MethodPost, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{
+				Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(target.ID)}, PolicyID: productPolicy.Policy.ID,
+				PolicyResourceVersion: productPolicy.Policy.ResourceVersion, RequestID: "key-network-product-grant"}, http.StatusOK, nil)
+			keyPath := "/v1/users/" + string(target.ID) + "/access-keys"
+			var created iamv1.CreateAccessKeyResponse
+			call(handler, http.MethodPost, keyPath, managerBearer, iamv1.CreateAccessKeyRequest{UserResourceVersion: target.ResourceVersion,
+				NetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{"198.51.100.0/24"}}, RequestID: "key-network-create"},
+				http.StatusCreated, &created)
+			authorize := func(endpoint http.Handler, requestID, sourceIP string, allowed bool) (iamv1.AccessKeyAuthorizationRequest, iamv1.AccessKeyAuthorization) {
+				t.Helper()
+				request := sign(created, requestID, 0)
+				request.Authorization.NetworkContext = &iamv1.AuthorizationNetworkContext{SourceIP: sourceIP}
+				encoded := encode(request)
+				defer clear(encoded)
+				response := performIAMRequest(endpoint, http.MethodPost, "/v1/authorize:access-key", paasCredential, encoded)
+				if response.Code != http.StatusOK {
+					t.Fatalf("network-bound signed request status=%d", response.Code)
+				}
+				var result iamv1.AccessKeyAuthorization
+				if iamv1.DecodeRequest(bytes.NewReader(response.Body.Bytes()), &result) != nil ||
+					iamv1.CheckAccessKeyAuthorizationForRequest(result, request) != nil || result.Decision.Allowed != allowed {
+					t.Fatalf("network-bound signed decision allowed=%t want=%t", result.Decision.Allowed, allowed)
+				}
+				return request, result
+			}
+			authorize(handler, "key-network-first-allow", "198.51.100.10", true)
+			deniedRequest, _ := authorize(second, "key-network-first-deny", "203.0.113.10", false)
+			deniedWire := encode(deniedRequest)
+			if response := performIAMRequest(handler, http.MethodPost, "/v1/authorize:access-key", paasCredential, deniedWire); response.Code != http.StatusConflict {
+				clear(deniedWire)
+				t.Fatalf("network Deny did not consume its nonce: %d", response.Code)
+			}
+			clear(deniedWire)
+			var changed iamv1.SetAccessKeyNetworkRestrictionsResponse
+			call(handler, http.MethodPut, keyPath+"/"+string(created.Key.ID)+"/network-restrictions", managerBearer,
+				iamv1.SetAccessKeyNetworkRestrictionsRequest{AccessKeyResourceVersion: created.Key.ResourceVersion,
+					NetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{"203.0.113.0/24"}}, RequestID: "key-network-move"},
+				http.StatusOK, &changed)
+			if changed.Key.ResourceVersion != 2 || !slices.Equal(changed.Key.NetworkRestrictions.AllowedSourceCIDRs, []string{"203.0.113.0/24"}) {
+				t.Fatal("network restriction mutation did not publish the exact new key generation")
+			}
+			authorize(second, "key-network-old-source-deny", "198.51.100.10", false)
+			_, final := authorize(handler, "key-network-new-source-allow", "203.0.113.10", true)
+			var listed iamv1.AccessKeyList
+			call(second, http.MethodGet, keyPath, managerBearer, nil, http.StatusOK, &listed)
+			if len(listed.Items) != 1 || listed.Items[0].Usage.LastAuthorization == nil ||
+				listed.Items[0].Usage.LastAuthorization.Allowed != true || listed.Items[0].Usage.LastAuthorization.SourceIP != "203.0.113.10" ||
+				listed.Items[0].Usage.LastAuthorization.Action != iamv1.ActionPaaSApplicationRead ||
+				listed.Items[0].Usage.LastAuthorization.EvaluatedAt != final.Decision.DecidedAt ||
+				listed.Items[0].Usage.ObservedAt.Before(listed.Items[0].Usage.LastAuthorization.EvaluatedAt) {
+				t.Fatal("AccessKey usage summary did not reflect the latest immutable authorization evidence")
+			}
+		})
 		request := sign(first, "key-signed-concurrent", 0)
 		encoded := encode(request)
 		defer clear(encoded)
@@ -17487,7 +17566,8 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 				target, _ := newUser(prefix)
 				keyPath := "/v1/users/" + string(target.ID) + "/access-keys"
 				var created iamv1.CreateAccessKeyResponse
-				call(handler, http.MethodPost, keyPath, managerBearer, iamv1.CreateAccessKeyRequest{UserResourceVersion: target.ResourceVersion, RequestID: prefix + "-create"}, http.StatusCreated, &created)
+				call(handler, http.MethodPost, keyPath, managerBearer, iamv1.CreateAccessKeyRequest{UserResourceVersion: target.ResourceVersion,
+					NetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}}, RequestID: prefix + "-create"}, http.StatusCreated, &created)
 				keyPath += "/" + string(created.Key.ID)
 				switch restriction {
 				case "key-disabled":
@@ -17545,7 +17625,8 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 				target, _ := newUser(prefix)
 				keyPath := "/v1/users/" + string(target.ID) + "/access-keys"
 				var created iamv1.CreateAccessKeyResponse
-				call(handler, http.MethodPost, keyPath, managerBearer, iamv1.CreateAccessKeyRequest{UserResourceVersion: target.ResourceVersion, RequestID: prefix + "-create"}, http.StatusCreated, &created)
+				call(handler, http.MethodPost, keyPath, managerBearer, iamv1.CreateAccessKeyRequest{UserResourceVersion: target.ResourceVersion,
+					NetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}}, RequestID: prefix + "-create"}, http.StatusCreated, &created)
 				keyPath += "/" + string(created.Key.ID)
 				mutationPath, mutationBearer := "/v1/policy-attachments", root
 				var command any = iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(target.ID)},
@@ -17700,10 +17781,10 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 		var created iamv1.CreateAccessKeyResponse
 		otherPath := "/v1/users/" + string(target.ID) + "/access-keys"
 		call(handler, http.MethodPost, otherPath, otherRoot, iamv1.CreateAccessKeyRequest{UserResourceVersion: target.ResourceVersion,
-			RequestID: "signing-other-key"}, http.StatusCreated, &created)
+			NetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}}, RequestID: "signing-other-key"}, http.StatusCreated, &created)
 		otherKey := lookupSigningKey(created.Key.ID, document.InstallationID, "paas", true)
 		if otherKey.Subject.Principal.LoginName != user.LoginName || otherKey.Subject.Principal.ID == user.ID || otherKey.Subject.Organization.ID != account.ID ||
-			otherKey.Subject.RootUserID != account.RootIdentity.PrincipalID || otherKey.Subject.Key != created.Key {
+			otherKey.Subject.RootUserID != account.RootIdentity.PrincipalID || !reflect.DeepEqual(otherKey.Subject.Key, created.Key) {
 			t.Fatal("installed service home account replaced the key's real account")
 		}
 		call(handler, http.MethodPost, "/v1/accounts/"+string(account.ID)+":set-status", root,
@@ -17752,7 +17833,7 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 	}
 	var replay iamv1.CreateAccessKeyResponse
 	response := call(second, http.MethodPost, path, managerBearer, create, http.StatusOK, &replay)
-	if replay.Outcome != "EQUAL_REPLAY" || replay.Secret.Present() || replay.Key != first.Key || bytes.Contains(response.Body.Bytes(), secretBytes) {
+	if replay.Outcome != "EQUAL_REPLAY" || replay.Secret.Present() || !reflect.DeepEqual(replay.Key, first.Key) || bytes.Contains(response.Body.Bytes(), secretBytes) {
 		t.Fatal("create replay reissued secret or changed original metadata")
 	}
 	variant := create
@@ -17815,7 +17896,7 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 	call(handler, http.MethodPost, firstPath+":delete", managerBearer, deleteRequest, http.StatusOK, &deleted)
 	create.RequestID = "key-first"
 	call(second, http.MethodPost, path, managerBearer, create, http.StatusOK, &replay)
-	if replay.Secret.Present() || replay.Key != first.Key {
+	if replay.Secret.Present() || !reflect.DeepEqual(replay.Key, first.Key) {
 		t.Fatal("post-delete replay resurrected or changed original key")
 	}
 	create.RequestID = "key-after-delete"
@@ -17959,7 +18040,8 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 				await, release := holdIAMRequest(t, ctx, database, prefix+"-create", keyFirst, auditv1.ActionIAMAccessKeyCreated)
 				keyFinished, mutationFinished := make(chan *httptest.ResponseRecorder, 1), make(chan *httptest.ResponseRecorder, 1)
 				keyPath := "/v1/users/" + string(target.ID) + "/access-keys"
-				keyBody := mustIAMJSON(t, iamv1.CreateAccessKeyRequest{UserResourceVersion: target.ResourceVersion, RequestID: prefix + "-create"})
+				keyBody := mustIAMJSON(t, iamv1.CreateAccessKeyRequest{UserResourceVersion: target.ResourceVersion,
+					NetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}}, RequestID: prefix + "-create"})
 				mutationBody := mustIAMJSON(t, mutation)
 				go func() { keyFinished <- performIAMRequest(second, http.MethodPost, keyPath, bearer, keyBody) }()
 				keyPID := await()
@@ -18107,7 +18189,8 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 			}
 		})
 		finished := make(chan int, 1)
-		command := mustIAMJSON(t, iamv1.CreateAccessKeyRequest{UserResourceVersion: target.ResourceVersion, RequestID: "key-platform-race"})
+		command := mustIAMJSON(t, iamv1.CreateAccessKeyRequest{UserResourceVersion: target.ResourceVersion,
+			NetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}}, RequestID: "key-platform-race"})
 		go func() { finished <- performIAMRequest(second, http.MethodPost, racePath, managerBearer, command).Code }()
 		wait, stop := context.WithTimeout(ctx, 5*time.Second)
 		defer stop()
@@ -18161,7 +18244,8 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 			wantStatus, fact := http.StatusOK, ""
 			switch action {
 			case "create":
-				command = iamv1.CreateAccessKeyRequest{UserResourceVersion: target.ResourceVersion, RequestID: requestID}
+				command = iamv1.CreateAccessKeyRequest{UserResourceVersion: target.ResourceVersion,
+					NetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}}, RequestID: requestID}
 				wantStatus, fact = http.StatusCreated, "iam.access-key.created"
 			case "disable":
 				url += "/" + string(key.ID) + ":set-status"
@@ -18219,7 +18303,8 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 					t.Fatal("lost create response reissued material or a new intent")
 				}
 				key = replay.Key
-				call(second, http.MethodPost, url, managerBearer, iamv1.CreateAccessKeyRequest{UserResourceVersion: target.ResourceVersion + 1, RequestID: requestID}, http.StatusConflict, nil)
+				call(second, http.MethodPost, url, managerBearer, iamv1.CreateAccessKeyRequest{UserResourceVersion: target.ResourceVersion + 1,
+					NetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}}, RequestID: requestID}, http.StatusConflict, nil)
 			case "disable":
 				var replay iamv1.SetAccessKeyStatusResponse
 				replayResponse = call(second, http.MethodPost, url, managerBearer, command, http.StatusOK, &replay)
@@ -18285,7 +18370,8 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 		path := "/v1/users/" + string(target.ID) + "/access-keys"
 		var created iamv1.CreateAccessKeyResponse
 		call(endpoint, http.MethodPost, path, managerBearer,
-			iamv1.CreateAccessKeyRequest{UserResourceVersion: target.ResourceVersion, RequestID: "key-collision-create"}, http.StatusCreated, &created)
+			iamv1.CreateAccessKeyRequest{UserResourceVersion: target.ResourceVersion,
+				NetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}}, RequestID: "key-collision-create"}, http.StatusCreated, &created)
 		trace.mu.Lock()
 		oneCompletion := !trace.invalid && len(trace.attempts) == 1 && trace.attempts[0].KeyID == created.Key.ID
 		trace.mu.Unlock()
@@ -18294,7 +18380,8 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 		}
 		exhaust.Store(true)
 		call(endpoint, http.MethodPost, path, managerBearer,
-			iamv1.CreateAccessKeyRequest{UserResourceVersion: target.ResourceVersion, RequestID: "key-collision-exhausted"}, http.StatusServiceUnavailable, nil)
+			iamv1.CreateAccessKeyRequest{UserResourceVersion: target.ResourceVersion,
+				NetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}}, RequestID: "key-collision-exhausted"}, http.StatusServiceUnavailable, nil)
 		var pending int
 		if err := database.QueryRow(ctx, `SELECT (SELECT count(*) FROM iam.access_key_intents WHERE request_id='key-collision-exhausted')+
 		 (SELECT count(*) FROM iam.access_keys WHERE creation_request_id='key-collision-exhausted')+
@@ -18514,8 +18601,8 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 		`ALTER TABLE iam.access_key_wrapping_registry DROP CONSTRAINT access_key_wrapping_registry_installation_id_fkey`,
 		`DROP INDEX iam.access_key_creation_intent_uq`,
 		`DROP INDEX iam.access_keys_live_user_idx`,
-		`ALTER FUNCTION iam.reserve_access_key(text,text,text,text,text,text,bigint,text,text,text,text,text) SECURITY INVOKER`,
-		`ALTER FUNCTION iam.change_access_key(text,text,text,text,text,text,bigint,text,jsonb) STABLE`,
+		`ALTER FUNCTION iam.reserve_access_key(text,text,text,text,text,text,bigint,text,text,text,text,text,jsonb) SECURITY INVOKER`,
+		`ALTER FUNCTION iam.change_access_key(text,text,text,text,text,text,bigint,text,jsonb,jsonb) STABLE`,
 		`GRANT EXECUTE ON FUNCTION iam.read_access_key_custody() TO matrix_iam_worker`,
 	} {
 		tx, err := database.Begin(ctx)

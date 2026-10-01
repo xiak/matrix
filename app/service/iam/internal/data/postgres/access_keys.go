@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"reflect"
 
 	"github.com/xiak/matrix/api/contractjson"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
@@ -25,13 +26,15 @@ func (value *transaction) LookupAccessKey(ctx context.Context, serviceDigest str
 		return identityaccess.AccessKeyCredential{}, false, nil
 	}
 	var stored struct {
-		Account                        iamv1.Account   `json:"account"`
-		User                           iamv1.User      `json:"user"`
-		Key                            iamv1.AccessKey `json:"key"`
-		InstallationID                 string          `json:"installationId"`
-		Policies                       json.RawMessage `json:"policies"`
-		Boundary                       json.RawMessage `json:"boundary"`
-		HasUnrevokedPlatformAttachment *bool           `json:"hasUnrevokedPlatformAttachment"`
+		Account                        iamv1.Account                      `json:"account"`
+		User                           iamv1.User                         `json:"user"`
+		Key                            iamv1.AccessKey                    `json:"key"`
+		AccountSecuritySettingsVersion uint64                             `json:"accountSecuritySettingsVersion"`
+		AccountNetworkRestrictions     iamv1.AccessKeyNetworkRestrictions `json:"accountNetworkRestrictions"`
+		InstallationID                 string                             `json:"installationId"`
+		Policies                       json.RawMessage                    `json:"policies"`
+		Boundary                       json.RawMessage                    `json:"boundary"`
+		HasUnrevokedPlatformAttachment *bool                              `json:"hasUnrevokedPlatformAttachment"`
 		Material                       struct {
 			FormatVersion      uint8  `json:"formatVersion"`
 			WrappingKeyID      string `json:"wrappingKeyId"`
@@ -49,6 +52,8 @@ func (value *transaction) LookupAccessKey(ctx context.Context, serviceDigest str
 	if iamv1.ValidateAccount(stored.Account) != nil || iamv1.ValidateUser(stored.User) != nil || iamv1.ValidateAccessKey(stored.Key) != nil ||
 		stored.InstallationID != installation || stored.Key.ID != key || stored.Key.AccountID != stored.Account.ID ||
 		stored.User.AccountID != stored.Account.ID || stored.Key.UserID != stored.User.ID || stored.HasUnrevokedPlatformAttachment == nil ||
+		stored.AccountSecuritySettingsVersion == 0 || stored.AccountSecuritySettingsVersion > 9007199254740991 ||
+		iamv1.ValidateAccessKeyNetworkRestrictions(stored.AccountNetworkRestrictions) != nil ||
 		stored.Material.FormatVersion != 1 || iamv1.ValidateID("wrappingKeyId", stored.Material.WrappingKeyID) != nil ||
 		iamv1.ValidateDigest("materialCommitment", stored.Material.MaterialCommitment) != nil || len(stored.Material.Nonce) != 24 || len(stored.Material.Ciphertext) != 96 {
 		return identityaccess.AccessKeyCredential{}, false, identityaccess.ErrUnavailable
@@ -56,6 +61,7 @@ func (value *transaction) LookupAccessKey(ctx context.Context, serviceDigest str
 	result := identityaccess.AccessKeyCredential{MaterialCommitment: stored.Material.MaterialCommitment,
 		Material: authority.SealedAccessKeySecret{FormatVersion: stored.Material.FormatVersion, WrappingKeyID: stored.Material.WrappingKeyID},
 		Subject: authority.AccessKeyContext{InstallationID: installation, RootUserID: stored.Account.RootIdentity.PrincipalID,
+			AccountSecuritySettingsVersion: stored.AccountSecuritySettingsVersion, AccountNetworkRestrictions: stored.AccountNetworkRestrictions,
 			Key: stored.Key, HasUnrevokedPlatformAttachment: *stored.HasUnrevokedPlatformAttachment,
 			Organization: iamv1.Organization{APIVersion: iamv1.APIVersion, Kind: "Organization", ID: stored.Account.ID,
 				DisplayName: stored.Account.DisplayName, Status: stored.Account.Status, ResourceVersion: stored.Account.ResourceVersion,
@@ -120,15 +126,16 @@ func (value *transaction) ReadAccessKeys(ctx context.Context, read identityacces
 	defer clear(encoded)
 	var result identityaccess.AccessKeyDirectory
 	if contractjson.DecodeObjectBytes(encoded, 4096, &result) != nil || result.UserResourceVersion == 0 || result.UserResourceVersion > 9007199254740991 ||
-		(result.UserStatus != iamv1.PrincipalActive && result.UserStatus != iamv1.PrincipalDisabled) || result.Keys == nil || len(result.Keys) > iamv1.MaxUserAccessKeys ||
-		(read.KeyID != "" && len(result.Keys) != 1) {
+		(result.UserStatus != iamv1.PrincipalActive && result.UserStatus != iamv1.PrincipalDisabled) || result.Entries == nil || len(result.Entries) > iamv1.MaxUserAccessKeys ||
+		(read.KeyID != "" && len(result.Entries) != 1) {
 		return identityaccess.AccessKeyDirectory{}, identityaccess.ErrUnavailable
 	}
-	for index := range result.Keys {
-		key := &result.Keys[index]
+	for index := range result.Entries {
+		key := &result.Entries[index].Key
 		normalizeAccessKey(key)
 		if iamv1.ValidateAccessKey(*key) != nil || key.AccountID != read.AccountID || key.UserID != read.UserID ||
-			(read.KeyID != "" && key.ID != read.KeyID) || (index > 0 && result.Keys[index-1].ID >= key.ID) {
+			iamv1.ValidateAccessKeyUsageSummary(result.Entries[index].Usage) != nil ||
+			(read.KeyID != "" && key.ID != read.KeyID) || (index > 0 && result.Entries[index-1].Key.ID >= key.ID) {
 			return identityaccess.AccessKeyDirectory{}, identityaccess.ErrUnavailable
 		}
 	}
@@ -137,9 +144,13 @@ func (value *transaction) ReadAccessKeys(ctx context.Context, read identityacces
 
 func (value *transaction) ReserveAccessKey(ctx context.Context, mutation identityaccess.AccessKeyReservation) (identityaccess.AccessKeyReservationResult, error) {
 	var encoded []byte
-	if err := value.tx.QueryRow(ctx, "SELECT iam.reserve_access_key($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)",
+	network, err := json.Marshal(mutation.NetworkRestrictions)
+	if err != nil {
+		return identityaccess.AccessKeyReservationResult{}, identityaccess.ErrUnavailable
+	}
+	if err := value.tx.QueryRow(ctx, "SELECT iam.reserve_access_key($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb)",
 		mutation.AccountID, mutation.ActorID, mutation.ActorSessionID, mutation.UserID, mutation.DecisionID, mutation.KeyID,
-		mutation.ExpectedUserVersion, mutation.InstallationID, mutation.WrappingKeyID, mutation.MaterialCommitment, mutation.RequestID, mutation.RequestDigest).Scan(&encoded); err != nil {
+		mutation.ExpectedUserVersion, mutation.InstallationID, mutation.WrappingKeyID, mutation.MaterialCommitment, mutation.RequestID, mutation.RequestDigest, network).Scan(&encoded); err != nil {
 		return identityaccess.AccessKeyReservationResult{}, mapAuthorizationDatabaseError("reserve IAM access key", err)
 	}
 	defer clear(encoded)
@@ -199,17 +210,27 @@ func (value *transaction) ChangeAccessKey(ctx context.Context, mutation identity
 	if mutation.Status != "" {
 		status = string(mutation.Status)
 	}
+	var network any
+	if mutation.NetworkRestrictions != nil {
+		encodedNetwork, marshalErr := json.Marshal(*mutation.NetworkRestrictions)
+		if marshalErr != nil {
+			return identityaccess.AccessKeyMutationResult{}, identityaccess.ErrUnavailable
+		}
+		network = encodedNetwork
+	}
 	var encoded []byte
-	if err := value.tx.QueryRow(ctx, "SELECT iam.change_access_key($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb)",
+	if err := value.tx.QueryRow(ctx, "SELECT iam.change_access_key($1,$2,$3,$4,$5,$6,$7,$8,$9::jsonb,$10::jsonb)",
 		mutation.AccountID, mutation.ActorID, mutation.ActorSessionID, mutation.UserID, mutation.DecisionID, mutation.KeyID,
-		mutation.ExpectedVersion, status, event).Scan(&encoded); err != nil {
+		mutation.ExpectedVersion, status, network, event).Scan(&encoded); err != nil {
 		return identityaccess.AccessKeyMutationResult{}, mapAuthorizationDatabaseError("change IAM access key", err)
 	}
-	result, err := decodeAccessKeyMutation(encoded, mutation.AccessKeyRead, mutation.Status == "")
+	result, err := decodeAccessKeyMutation(encoded, mutation.AccessKeyRead, mutation.Status == "" && mutation.NetworkRestrictions == nil)
 	if err != nil {
 		return identityaccess.AccessKeyMutationResult{}, err
 	}
-	if (result.Key != nil && (result.Key.ResourceVersion != mutation.ExpectedVersion+1 || result.Key.Status != mutation.Status)) ||
+	if (result.Key != nil && (result.Key.ResourceVersion != mutation.ExpectedVersion+1 ||
+		(mutation.NetworkRestrictions == nil && result.Key.Status != mutation.Status) ||
+		(mutation.NetworkRestrictions != nil && !reflect.DeepEqual(result.Key.NetworkRestrictions, *mutation.NetworkRestrictions)))) ||
 		(result.Deletion != nil && result.Deletion.ResourceVersion != mutation.ExpectedVersion+1) {
 		return identityaccess.AccessKeyMutationResult{}, identityaccess.ErrUnavailable
 	}

@@ -114,7 +114,8 @@ func (service *Authority) AuthorizeAccessKey(ctx context.Context, serviceCredent
 			return ErrUnavailable
 		}
 		evidence := &AccessKeyAuthorizationEvidence{AccessKeyID: credential.Subject.Key.ID, ResourceVersion: credential.Subject.Key.ResourceVersion,
-			FormatVersion: credential.Material.FormatVersion, WrappingKeyID: credential.Material.WrappingKeyID, MaterialCommitment: credential.MaterialCommitment,
+			AccountSecuritySettingsVersion: credential.Subject.AccountSecuritySettingsVersion,
+			FormatVersion:                  credential.Material.FormatVersion, WrappingKeyID: credential.Material.WrappingKeyID, MaterialCommitment: credential.MaterialCommitment,
 			InstallationID: credential.Subject.InstallationID, ServiceLookupDigest: caller.LookupDigest, Audience: parameters.Audience,
 			SignedRequestDigest: verified.signedDigest, NonceDigest: nonceDigest, SignedAt: parameters.SignedAt}
 		decision, err := service.decideAndRecord(ctx, tx, request.Authorization, requestDigest, now,

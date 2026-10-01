@@ -665,6 +665,48 @@ func ValidateAccountSessionSettings(value AccountSessionSettings) error {
 	return nil
 }
 
+func ValidateAccessKeyNetworkRestrictions(value AccessKeyNetworkRestrictions) error {
+	if value.AllowedSourceCIDRs == nil || len(value.AllowedSourceCIDRs) > MaxAccessKeySourceCIDRs {
+		return errors.New("access key network restrictions are invalid")
+	}
+	previous := ""
+	for _, encoded := range value.AllowedSourceCIDRs {
+		prefix, err := netip.ParsePrefix(encoded)
+		if err != nil || prefix.Addr().Is4In6() || prefix.Masked().String() != encoded || encoded <= previous {
+			return errors.New("access key source CIDR is invalid")
+		}
+		previous = encoded
+	}
+	return nil
+}
+
+// AccessKeyNetworkRestrictionsAllowSource evaluates the canonical source
+// address against the validated AccessKey network contract. An empty list is
+// explicitly unrestricted; callers must still authenticate and authorize the
+// signed request before using this result.
+func AccessKeyNetworkRestrictionsAllowSource(value AccessKeyNetworkRestrictions, source string) (bool, error) {
+	if err := ValidateAccessKeyNetworkRestrictions(value); err != nil {
+		return false, err
+	}
+	address, err := ParseAuthorizationSourceIP(source)
+	if err != nil {
+		return false, err
+	}
+	if len(value.AllowedSourceCIDRs) == 0 {
+		return true, nil
+	}
+	for _, encoded := range value.AllowedSourceCIDRs {
+		prefix, err := netip.ParsePrefix(encoded)
+		if err != nil {
+			return false, err
+		}
+		if prefix.Contains(address) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func validateAccountSecuritySettings(value AccountSecuritySettings, historical bool) error {
 	if value.APIVersion != APIVersion || value.Kind != "AccountSecuritySettings" {
 		return errors.New("account security settings type metadata is invalid")
@@ -681,6 +723,13 @@ func validateAccountSecuritySettings(value AccountSecuritySettings, historical b
 			return errors.New("current session settings are missing")
 		}
 	} else if err := ValidateAccountSessionSettings(*value.Session); err != nil {
+		return err
+	}
+	if value.AccessKeyNetwork == nil {
+		if !historical {
+			return errors.New("current access key network settings are missing")
+		}
+	} else if err := ValidateAccessKeyNetworkRestrictions(*value.AccessKeyNetwork); err != nil {
 		return err
 	}
 	return errors.Join(ValidateID("accountId", string(value.AccountID)), validatePositiveVersion(value.ResourceVersion), validateTime("updatedAt", value.UpdatedAt))
@@ -710,18 +759,25 @@ func validateSecuritySettingsUpdateIntent(value SecuritySettingsUpdateIntent, hi
 	} else if err := ValidateAccountSessionSettings(*value.Session); err != nil {
 		return err
 	}
+	if value.AccessKeyNetwork == nil {
+		if !historical {
+			return errors.New("access key network settings intent is missing")
+		}
+	} else if err := ValidateAccessKeyNetworkRestrictions(*value.AccessKeyNetwork); err != nil {
+		return err
+	}
 	return nil
 }
 
 func ValidateUpdateAccountSecuritySettingsRequest(value UpdateAccountSecuritySettingsRequest) error {
 	return errors.Join(ValidateID("requestId", value.RequestID), ValidateID("stepUpId", value.StepUpID),
-		ValidateSecuritySettingsUpdateIntent(SecuritySettingsUpdateIntent{ExpectedResourceVersion: value.ExpectedResourceVersion, MFA: value.MFA, Password: &value.Password, Session: &value.Session}))
+		ValidateSecuritySettingsUpdateIntent(SecuritySettingsUpdateIntent{ExpectedResourceVersion: value.ExpectedResourceVersion, MFA: value.MFA, Password: &value.Password, Session: &value.Session, AccessKeyNetwork: &value.AccessKeyNetwork}))
 }
 
 func ValidateAccountSecuritySettingsChange(value AccountSecuritySettingsChange) error {
 	if value.APIVersion != APIVersion || value.Kind != "AccountSecuritySettingsChange" ||
 		validateAccountSecuritySettings(value.Settings, true) != nil ||
-		validateSecuritySettingsUpdateIntent(SecuritySettingsUpdateIntent{ExpectedResourceVersion: value.ExpectedResourceVersion, MFA: value.Settings.MFA, Password: value.Settings.Password, Session: value.Settings.Session}, true) != nil ||
+		validateSecuritySettingsUpdateIntent(SecuritySettingsUpdateIntent{ExpectedResourceVersion: value.ExpectedResourceVersion, MFA: value.Settings.MFA, Password: value.Settings.Password, Session: value.Settings.Session, AccessKeyNetwork: value.Settings.AccessKeyNetwork}, true) != nil ||
 		value.Settings.ResourceVersion != value.ExpectedResourceVersion+1 ||
 		!value.CallerSessionEnded {
 		return errors.New("account security settings change is invalid")
@@ -1524,15 +1580,36 @@ func ValidateAccessKey(value AccessKey) error {
 		return errors.New("access key metadata is invalid")
 	}
 	return errors.Join(ValidateID("accessKey.id", string(value.ID)), ValidateID("accessKey.accountId", string(value.AccountID)),
-		ValidateID("accessKey.userId", string(value.UserID)), validatePositiveVersion(value.ResourceVersion), validateChronology(value.CreatedAt, value.UpdatedAt))
+		ValidateID("accessKey.userId", string(value.UserID)), ValidateAccessKeyNetworkRestrictions(value.NetworkRestrictions),
+		validatePositiveVersion(value.ResourceVersion), validateChronology(value.CreatedAt, value.UpdatedAt))
+}
+
+func ValidateAccessKeyUsageSummary(value AccessKeyUsageSummary) error {
+	if err := validateTime("observedAt", value.ObservedAt); err != nil {
+		return err
+	}
+	if value.LastAuthorization == nil {
+		return nil
+	}
+	last := value.LastAuthorization
+	definition, known := LookupActionDefinition(last.Action)
+	_, sourceError := ParseAuthorizationSourceIP(last.SourceIP)
+	if validateTime("evaluatedAt", last.EvaluatedAt) != nil || last.EvaluatedAt.After(value.ObservedAt) ||
+		!known || definition.Product != last.Product || sourceError != nil {
+		return errors.New("access key usage summary is invalid")
+	}
+	return nil
 }
 
 func ValidateAccessKeyAccess(value AccessKeyAccess) error {
 	if err := ValidateAccessKey(value.Key); err != nil {
 		return err
 	}
-	expected := make(map[string]struct{}, 3)
-	for _, action := range []Action{ActionIAMAccessKeyRead, ActionIAMAccessKeySetStatus, ActionIAMAccessKeyDelete} {
+	if ValidateAccessKeyNetworkRestrictions(value.Key.NetworkRestrictions) != nil || ValidateAccessKeyUsageSummary(value.Usage) != nil {
+		return errors.New("access key access view is invalid")
+	}
+	expected := make(map[string]struct{}, 4)
+	for _, action := range []Action{ActionIAMAccessKeyRead, ActionIAMAccessKeySetStatus, ActionIAMAccessKeySetNetworkRestrictions, ActionIAMAccessKeyDelete} {
 		expected[capabilityKey(action, ResourceReference{Kind: ResourceAccessKey, ID: string(value.Key.ID)})] = struct{}{}
 	}
 	return validateCapabilities(value.Capabilities, expected)
@@ -1560,7 +1637,7 @@ func ValidateAccessKeyList(value AccessKeyList) error {
 }
 
 func ValidateCreateAccessKeyRequest(value CreateAccessKeyRequest) error {
-	return errors.Join(validatePositiveVersion(value.UserResourceVersion), ValidateID("requestId", value.RequestID))
+	return errors.Join(validatePositiveVersion(value.UserResourceVersion), ValidateAccessKeyNetworkRestrictions(value.NetworkRestrictions), ValidateID("requestId", value.RequestID))
 }
 
 func ValidateSetAccessKeyStatusRequest(value SetAccessKeyStatusRequest) error {
@@ -1575,6 +1652,11 @@ func ValidateDeleteAccessKeyRequest(value DeleteAccessKeyRequest) error {
 		return errors.New("access key resource version cannot advance")
 	}
 	return errors.Join(validatePositiveVersion(value.AccessKeyResourceVersion), ValidateID("requestId", value.RequestID))
+}
+
+func ValidateSetAccessKeyNetworkRestrictionsRequest(value SetAccessKeyNetworkRestrictionsRequest) error {
+	return errors.Join(ValidateDeleteAccessKeyRequest(DeleteAccessKeyRequest{AccessKeyResourceVersion: value.AccessKeyResourceVersion, RequestID: value.RequestID}),
+		ValidateAccessKeyNetworkRestrictions(value.NetworkRestrictions))
 }
 
 func ValidateCreateAccessKeyResponse(value CreateAccessKeyResponse) error {
@@ -1595,6 +1677,10 @@ func ValidateSetAccessKeyStatusResponse(value SetAccessKeyStatusResponse) error 
 		return errors.New("access key change result has no mutation")
 	}
 	return ValidateAccessKey(value.Key)
+}
+
+func ValidateSetAccessKeyNetworkRestrictionsResponse(value SetAccessKeyNetworkRestrictionsResponse) error {
+	return ValidateSetAccessKeyStatusResponse(SetAccessKeyStatusResponse{Outcome: value.Outcome, Key: value.Key})
 }
 
 func ValidateAccessKeyDeletion(value AccessKeyDeletion) error {

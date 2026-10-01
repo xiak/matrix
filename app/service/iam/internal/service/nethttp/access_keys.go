@@ -9,7 +9,7 @@ import (
 )
 
 func (value *handler) accessKeys(response http.ResponseWriter, request *http.Request, parts []string) {
-	if len(parts) < 2 || len(parts) > 3 || iamv1.ValidateID("userId", parts[0]) != nil {
+	if len(parts) < 2 || len(parts) > 4 || iamv1.ValidateID("userId", parts[0]) != nil {
 		value.notFound(response, request)
 		return
 	}
@@ -21,6 +21,33 @@ func (value *handler) accessKeys(response http.ResponseWriter, request *http.Req
 		return
 	}
 	user := iamv1.PrincipalID(parts[0])
+	if len(parts) == 4 {
+		if parts[3] != "network-restrictions" || iamv1.ValidateID("accessKeyId", parts[2]) != nil {
+			value.notFound(response, request)
+			return
+		}
+		if !value.requireMethod(response, request, http.MethodPut) {
+			return
+		}
+		body, decoded := decodeJSON[iamv1.SetAccessKeyNetworkRestrictionsRequest](value, response, request)
+		if !decoded {
+			return
+		}
+		if iamv1.ValidateSetAccessKeyNetworkRestrictionsRequest(body) != nil {
+			value.writeError(response, request, identityaccess.ErrInvalidArgument)
+			return
+		}
+		result, err := value.workflow.SetAccessKeyNetworkRestrictions(request.Context(), credential, user, iamv1.AccessKeyID(parts[2]), body)
+		if err == nil && iamv1.ValidateSetAccessKeyNetworkRestrictionsResponse(result) != nil {
+			err = identityaccess.ErrUnavailable
+		}
+		if err != nil {
+			value.writeError(response, request, err)
+			return
+		}
+		writeJSON(response, http.StatusOK, result)
+		return
+	}
 	if len(parts) == 2 {
 		switch request.Method {
 		case http.MethodGet:

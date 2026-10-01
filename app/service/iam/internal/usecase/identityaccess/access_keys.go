@@ -80,7 +80,7 @@ func accessKeyRead(subject SessionCredential, decision iamv1.AuthorizationDecisi
 
 func accessKeyCapabilities(subject SessionCredential, directory AccessKeyDirectory, key iamv1.AccessKey, now time.Time) ([]iamv1.ActionCapability, error) {
 	var result []iamv1.ActionCapability
-	for _, action := range []iamv1.Action{iamv1.ActionIAMAccessKeyRead, iamv1.ActionIAMAccessKeySetStatus, iamv1.ActionIAMAccessKeyDelete} {
+	for _, action := range []iamv1.Action{iamv1.ActionIAMAccessKeyRead, iamv1.ActionIAMAccessKeySetStatus, iamv1.ActionIAMAccessKeySetNetworkRestrictions, iamv1.ActionIAMAccessKeyDelete} {
 		value, err := projectCapability(subject, action, iamv1.ResourceReference{Kind: iamv1.ResourceAccessKey, ID: string(key.ID)}, iamv1.AuthorizationResourceInstance, "", now)
 		if err != nil {
 			return nil, err
@@ -128,17 +128,17 @@ func (service *Authority) ListAccessKeys(ctx context.Context, credential iamv1.S
 			if directory.MustChangePassword {
 				restrictCapability(&create, iamv1.CapabilityTargetCredentialChangeRequired)
 			}
-			if len(directory.Keys) >= iamv1.MaxUserAccessKeys {
+			if len(directory.Entries) >= iamv1.MaxUserAccessKeys {
 				restrictCapability(&create, iamv1.CapabilityAccessKeyLimitReached)
 			}
 			result := iamv1.AccessKeyList{APIVersion: iamv1.APIVersion, Kind: "AccessKeyList", AccountID: subject.Subject.Organization.ID,
 				UserID: user, UserResourceVersion: directory.UserResourceVersion, Capabilities: []iamv1.ActionCapability{create}, Items: []iamv1.AccessKeyAccess{}}
-			for _, key := range directory.Keys {
-				capabilities, err := accessKeyCapabilities(subject, directory, key, now)
+			for _, entry := range directory.Entries {
+				capabilities, err := accessKeyCapabilities(subject, directory, entry.Key, now)
 				if err != nil {
 					return iamv1.AccessKeyList{}, err
 				}
-				result.Items = append(result.Items, iamv1.AccessKeyAccess{Key: key, Capabilities: capabilities})
+				result.Items = append(result.Items, iamv1.AccessKeyAccess{Key: entry.Key, Usage: entry.Usage, Capabilities: capabilities})
 			}
 			if iamv1.ValidateAccessKeyList(result) != nil {
 				return iamv1.AccessKeyList{}, ErrUnavailable
@@ -161,14 +161,14 @@ func (service *Authority) GetAccessKey(ctx context.Context, credential iamv1.Sec
 			if err != nil {
 				return iamv1.AccessKeyAccess{}, err
 			}
-			if len(directory.Keys) != 1 {
+			if len(directory.Entries) != 1 {
 				return iamv1.AccessKeyAccess{}, ErrUnavailable
 			}
-			capabilities, err := accessKeyCapabilities(subject, directory, directory.Keys[0], now)
+			capabilities, err := accessKeyCapabilities(subject, directory, directory.Entries[0].Key, now)
 			if err != nil {
 				return iamv1.AccessKeyAccess{}, err
 			}
-			return iamv1.AccessKeyAccess{Key: directory.Keys[0], Capabilities: capabilities}, nil
+			return iamv1.AccessKeyAccess{Key: directory.Entries[0].Key, Usage: directory.Entries[0].Usage, Capabilities: capabilities}, nil
 		})
 }
 
@@ -204,7 +204,7 @@ func (service *Authority) CreateAccessKey(ctx context.Context, credential iamv1.
 				read := accessKeyRead(subject, decision, user, iamv1.AccessKeyID(keyID))
 				reserved, err := tx.ReserveAccessKey(ctx, AccessKeyReservation{AccessKeyRead: read, ExpectedUserVersion: request.UserResourceVersion,
 					InstallationID: service.accessKeys.scope.InstallationID, WrappingKeyID: service.accessKeys.id, MaterialCommitment: service.accessKeys.commitment,
-					RequestID: request.RequestID, RequestDigest: digest})
+					NetworkRestrictions: request.NetworkRestrictions, RequestID: request.RequestID, RequestDigest: digest})
 				if err != nil {
 					return iamv1.CreateAccessKeyResponse{}, err
 				}
@@ -257,12 +257,14 @@ func (service *Authority) CreateAccessKey(ctx context.Context, credential iamv1.
 }
 
 func (service *Authority) changeAccessKey(ctx context.Context, credential iamv1.Secret, user iamv1.PrincipalID, key iamv1.AccessKeyID,
-	version uint64, status iamv1.AccessKeyStatus, requestID string) (AccessKeyMutationResult, error) {
+	version uint64, status iamv1.AccessKeyStatus, network *iamv1.AccessKeyNetworkRestrictions, requestID string) (AccessKeyMutationResult, error) {
 	action, fact := iamv1.ActionIAMAccessKeySetStatus, auditv1.ActionIAMAccessKeyDisabled
 	if status == iamv1.AccessKeyEnabled {
 		fact = auditv1.ActionIAMAccessKeyEnabled
 	}
-	if status == "" {
+	if network != nil {
+		action, fact = iamv1.ActionIAMAccessKeySetNetworkRestrictions, auditv1.ActionIAMAccessKeyNetworkRestrictionsUpdated
+	} else if status == "" {
 		action, fact = iamv1.ActionIAMAccessKeyDelete, auditv1.ActionIAMAccessKeyDeleted
 	}
 	digest, err := digestSanitized(string(action), struct {
@@ -270,8 +272,9 @@ func (service *Authority) changeAccessKey(ctx context.Context, credential iamv1.
 		KeyID           iamv1.AccessKeyID
 		ResourceVersion uint64
 		Status          iamv1.AccessKeyStatus
+		Network         *iamv1.AccessKeyNetworkRestrictions
 		RequestID       string
-	}{user, key, version, status, requestID})
+	}{user, key, version, status, network, requestID})
 	if err != nil {
 		return AccessKeyMutationResult{}, err
 	}
@@ -286,7 +289,7 @@ func (service *Authority) changeAccessKey(ctx context.Context, credential iamv1.
 				return AccessKeyMutationResult{}, err
 			}
 			return tx.ChangeAccessKey(ctx, AccessKeyChange{AccessKeyRead: accessKeyRead(subject, decision, user, key),
-				ExpectedVersion: version, Status: status, AuditEvent: event})
+				ExpectedVersion: version, Status: status, NetworkRestrictions: network, AuditEvent: event})
 		})
 }
 
@@ -294,18 +297,33 @@ func (service *Authority) SetAccessKeyStatus(ctx context.Context, credential iam
 	if iamv1.ValidateID("userId", string(user)) != nil || iamv1.ValidateID("accessKeyId", string(key)) != nil || iamv1.ValidateSetAccessKeyStatusRequest(request) != nil {
 		return iamv1.SetAccessKeyStatusResponse{}, ErrInvalidArgument
 	}
-	result, err := service.changeAccessKey(ctx, credential, user, key, request.AccessKeyResourceVersion, request.Status, request.RequestID)
+	result, err := service.changeAccessKey(ctx, credential, user, key, request.AccessKeyResourceVersion, request.Status, nil, request.RequestID)
 	if err != nil {
 		return iamv1.SetAccessKeyStatusResponse{}, err
 	}
 	return iamv1.SetAccessKeyStatusResponse{Outcome: result.Outcome, Key: *result.Key}, nil
 }
 
+func (service *Authority) SetAccessKeyNetworkRestrictions(ctx context.Context, credential iamv1.Secret, user iamv1.PrincipalID, key iamv1.AccessKeyID, request iamv1.SetAccessKeyNetworkRestrictionsRequest) (iamv1.SetAccessKeyNetworkRestrictionsResponse, error) {
+	if iamv1.ValidateID("userId", string(user)) != nil || iamv1.ValidateID("accessKeyId", string(key)) != nil || iamv1.ValidateSetAccessKeyNetworkRestrictionsRequest(request) != nil {
+		return iamv1.SetAccessKeyNetworkRestrictionsResponse{}, ErrInvalidArgument
+	}
+	result, err := service.changeAccessKey(ctx, credential, user, key, request.AccessKeyResourceVersion, "", &request.NetworkRestrictions, request.RequestID)
+	if err != nil {
+		return iamv1.SetAccessKeyNetworkRestrictionsResponse{}, err
+	}
+	response := iamv1.SetAccessKeyNetworkRestrictionsResponse{Outcome: result.Outcome, Key: *result.Key}
+	if iamv1.ValidateSetAccessKeyNetworkRestrictionsResponse(response) != nil {
+		return iamv1.SetAccessKeyNetworkRestrictionsResponse{}, ErrUnavailable
+	}
+	return response, nil
+}
+
 func (service *Authority) DeleteAccessKey(ctx context.Context, credential iamv1.Secret, user iamv1.PrincipalID, key iamv1.AccessKeyID, request iamv1.DeleteAccessKeyRequest) (iamv1.DeleteAccessKeyResponse, error) {
 	if iamv1.ValidateID("userId", string(user)) != nil || iamv1.ValidateID("accessKeyId", string(key)) != nil || iamv1.ValidateDeleteAccessKeyRequest(request) != nil {
 		return iamv1.DeleteAccessKeyResponse{}, ErrInvalidArgument
 	}
-	result, err := service.changeAccessKey(ctx, credential, user, key, request.AccessKeyResourceVersion, "", request.RequestID)
+	result, err := service.changeAccessKey(ctx, credential, user, key, request.AccessKeyResourceVersion, "", nil, request.RequestID)
 	if err != nil {
 		return iamv1.DeleteAccessKeyResponse{}, err
 	}

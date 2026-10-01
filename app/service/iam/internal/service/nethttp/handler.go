@@ -24,6 +24,7 @@ type Workflow interface {
 	GetAccessKey(context.Context, iamv1.Secret, iamv1.PrincipalID, iamv1.AccessKeyID, string) (iamv1.AccessKeyAccess, error)
 	CreateAccessKey(context.Context, iamv1.Secret, iamv1.PrincipalID, iamv1.CreateAccessKeyRequest) (iamv1.CreateAccessKeyResponse, error)
 	SetAccessKeyStatus(context.Context, iamv1.Secret, iamv1.PrincipalID, iamv1.AccessKeyID, iamv1.SetAccessKeyStatusRequest) (iamv1.SetAccessKeyStatusResponse, error)
+	SetAccessKeyNetworkRestrictions(context.Context, iamv1.Secret, iamv1.PrincipalID, iamv1.AccessKeyID, iamv1.SetAccessKeyNetworkRestrictionsRequest) (iamv1.SetAccessKeyNetworkRestrictionsResponse, error)
 	DeleteAccessKey(context.Context, iamv1.Secret, iamv1.PrincipalID, iamv1.AccessKeyID, iamv1.DeleteAccessKeyRequest) (iamv1.DeleteAccessKeyResponse, error)
 	CurrentIdentity(context.Context, iamv1.Secret) (iamv1.CurrentIdentity, error)
 	AccountSecuritySettings(context.Context, iamv1.Secret, string) (iamv1.AccountSecuritySettings, error)
