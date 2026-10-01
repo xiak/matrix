@@ -43,10 +43,62 @@
 .workflow,
 .workflow form,
 .formStack,
-.reviewAlerts {
+.reviewAlerts,
+.outcome {
   display: grid;
   min-width: 0;
   gap: var(--xiak-spacing-comfortable);
+}
+
+.outcome {
+  border: var(--xiak-border-subtle);
+  border-radius: var(--xiak-radius-control);
+  padding: var(--xiak-spacing-comfortable);
+  background: var(--xiak-color-bg-panel-hover);
+}
+
+.outcomeHeading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--xiak-spacing-default);
+}
+
+.outcomeHeading h4 {
+  margin: 0;
+  color: var(--xiak-color-text-strong);
+  font-size: var(--xiak-font-size-subtitle);
+}
+
+.outcomeFacts {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--xiak-spacing-default);
+  margin: 0;
+}
+
+.outcomeFacts > div {
+  display: grid;
+  min-width: 0;
+  gap: var(--xiak-spacing-narrow);
+}
+
+.outcomeFacts dt {
+  color: var(--xiak-color-text-subtle);
+  font-size: var(--xiak-font-size-small);
+}
+
+.outcomeFacts dd {
+  min-width: 0;
+  margin: 0;
+  color: var(--xiak-color-text-strong);
+  overflow-wrap: anywhere;
+}
+
+.outcomeFacts code {
+  font-family: var(--xiak-font-mono);
+  font-size: var(--xiak-font-size-small);
+  overflow-wrap: anywhere;
 }
 
 .version {
@@ -185,7 +237,8 @@
   }
 
   .fieldGrid,
-  .reviewFacts {
+  .reviewFacts,
+  .outcomeFacts {
     grid-template-columns: minmax(0, 1fr);
   }
 

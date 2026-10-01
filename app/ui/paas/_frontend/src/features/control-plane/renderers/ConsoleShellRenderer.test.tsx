@@ -973,13 +973,20 @@ describe("ConsoleShellRenderer", () => {
     expect(screen.getByText("production")).toBeTruthy();
     expect(screen.getByText("staging")).toBeTruthy();
     expect(screen.getByText('"app-checkout-api:tags:7"')).toBeTruthy();
+    expect(screen.getByText("paas.application-label.set")).toBeTruthy();
+    expect(screen.getByText('If-Match: "app-checkout-api:tags:7"')).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "模拟应用" }));
     const tags = screen.getByRole("table", { name: "应用资源标签" });
     expect(within(tags).getByText("staging")).toBeTruthy();
     expect(within(tags).queryByText("production")).toBeNull();
-    expect(screen.getByText('"app-checkout-api:tags:8"')).toBeTruthy();
+    expect(screen.getAllByText('"app-checkout-api:tags:8"')).toHaveLength(2);
     expect(screen.getByText(/真实资源未改变/)).toBeTruthy();
+    const outcome = screen.getByRole("region", { name: "最近一次模拟操作" });
+    expect(within(outcome).getByText("operation-preview-app-checkout-api-tags-8")).toBeTruthy();
+    expect(within(outcome).getByText("paas.application-label.set")).toBeTruthy();
+    expect(within(outcome).getByText("principal-admin")).toBeTruthy();
+    expect(within(outcome).getByText(/返回的 ETag 替换旧版本/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "管理标签" })).toBe(document.activeElement);
   });
 
@@ -1009,7 +1016,8 @@ describe("ConsoleShellRenderer", () => {
     expect(within(tags).queryByText("team")).toBeNull();
     expect(within(tags).queryByText("commerce")).toBeNull();
     expect(within(tags).getByText("environment")).toBeTruthy();
-    expect(screen.getByText('"app-checkout-api:tags:8"')).toBeTruthy();
+    expect(screen.getAllByText('"app-checkout-api:tags:8"')).toHaveLength(2);
+    expect(within(screen.getByRole("region", { name: "最近一次模拟操作" })).getByText("paas.application-label.delete")).toBeTruthy();
   });
 
   it("does not invent an application resource for an unknown query identifier", async () => {

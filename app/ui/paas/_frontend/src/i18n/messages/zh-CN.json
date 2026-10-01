@@ -3269,13 +3269,27 @@
       "mockOnly": "仅 MOCK 会话",
       "resource": "目标资源",
       "operation": "变更操作",
+      "action": "IAM Action",
+      "concurrency": "并发前提",
       "change": "值变更",
       "notSet": "未设置",
       "deleted": "删除",
       "authorizationWarning": "此标签已被 IAM Profile 声明为可信资源条件。变更或删除后，后续请求会使用新标签重新判定权限，可能立即改变谁能访问此资源。",
-      "applyBoundary": "本次仅更新当前浏览器会话中的 MOCK 快照并生成新的模拟 ETag；不会调用后端、修改真实资源或写入审计。LIVE 接入将使用当前 ETag 做并发校验。",
+      "applyBoundary": "本次仅更新当前浏览器会话中的 MOCK 快照。LIVE 会把当前强 ETag 作为 If-Match 提交，并安全重试同一意图；若资源版本已变化，将先重新读取资源再让你确认，不会覆盖他人的修改。",
       "back": "返回修改",
       "apply": "模拟应用",
+      "outcome": {
+        "title": "最近一次模拟操作",
+        "operationId": "操作标识",
+        "action": "Action",
+        "target": "目标",
+        "requestedBy": "发起身份",
+        "completedAt": "完成时间",
+        "states": {
+          "SUCCEEDED": "已完成"
+        },
+        "reloaded": "操作完成后已重新读取应用资源，并用返回的 ETag 替换旧版本。幂等指纹、请求摘要和审计事件标识不会作为业务信息展示。"
+      },
       "errors": {
         "key": "请输入符合规则的标签键。",
         "value": "请输入 1–128 字节、无首尾空格和控制字符的标签值。",
@@ -3285,8 +3299,8 @@
         "sensitive": "标签值看起来包含原始凭据或敏感材料，请移除后再试。"
       },
       "success": {
-        "set": "已在当前 MOCK 会话中把 {key} 设置为 {value}，真实资源未改变。",
-        "delete": "已在当前 MOCK 会话中删除 {key}，真实资源未改变。"
+        "set": "模拟操作已完成：{key} 已设置为 {value}，资源快照已重新读取；真实资源未改变。",
+        "delete": "模拟操作已完成：{key} 已删除，资源快照已重新读取；真实资源未改变。"
       },
       "leave": {
         "title": "放弃标签变更？",

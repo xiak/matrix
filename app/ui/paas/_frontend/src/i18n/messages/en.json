@@ -3269,13 +3269,27 @@
       "mockOnly": "MOCK session only",
       "resource": "Target resource",
       "operation": "Operation",
+      "action": "IAM action",
+      "concurrency": "Concurrency precondition",
       "change": "Value change",
       "notSet": "Not set",
       "deleted": "Deleted",
       "authorizationWarning": "The IAM Profile declares this tag as a trusted resource condition. Changing or deleting it makes later requests re-evaluate access with the new tag and may immediately change who can access this resource.",
-      "applyBoundary": "This updates only the MOCK snapshot in the current browser session and generates a new simulated ETag. It does not call the backend, change a real resource, or write an audit record. LIVE integration will use the current ETag for concurrency checks.",
+      "applyBoundary": "This updates only the MOCK snapshot in the current browser session. LIVE sends the current strong ETag as If-Match and retries the same intent safely. If the resource version changed, it reloads the resource and asks you to confirm instead of overwriting another change.",
       "back": "Back to edit",
       "apply": "Simulate apply",
+      "outcome": {
+        "title": "Latest simulated operation",
+        "operationId": "Operation ID",
+        "action": "Action",
+        "target": "Target",
+        "requestedBy": "Requested by",
+        "completedAt": "Completed",
+        "states": {
+          "SUCCEEDED": "Completed"
+        },
+        "reloaded": "The application resource was reloaded after completion and its returned ETag replaced the previous version. Idempotency fingerprints, request digests, and audit event IDs are not presented as business information."
+      },
       "errors": {
         "key": "Enter a tag key that matches the stated rules.",
         "value": "Enter a 1–128 byte value with no surrounding whitespace or control characters.",
@@ -3285,8 +3299,8 @@
         "sensitive": "The tag value appears to contain raw credentials or sensitive material. Remove it and try again."
       },
       "success": {
-        "set": "Set {key} to {value} in the current MOCK session. The real resource was not changed.",
-        "delete": "Deleted {key} in the current MOCK session. The real resource was not changed."
+        "set": "The simulated operation completed: {key} was set to {value} and the resource snapshot was reloaded. The real resource was not changed.",
+        "delete": "The simulated operation completed: {key} was deleted and the resource snapshot was reloaded. The real resource was not changed."
       },
       "leave": {
         "title": "Discard tag change?",

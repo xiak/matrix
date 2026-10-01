@@ -6,11 +6,22 @@ import { Alert, Badge, Button, Card, EmptyState, FormField, Input, RadioGroup, S
 import { useTranslations } from "next-intl";
 import type { ExperienceApplicationTagSnapshot } from "../domain/experience";
 import type { UnifiedResourceScene } from "../scenes/consoleScene";
+import { useConsoleFormat } from "./useConsoleFormat";
 import styles from "./ApplicationTagManagement.module.css";
 
 type MutationKind = "set" | "delete";
 type WorkflowStep = "edit" | "review";
 type DraftError = "key" | "value" | "unchanged" | "missing" | "limit" | "sensitive" | null;
+type MockCompletedOperation = {
+  id: string;
+  action: "paas.application-label.set" | "paas.application-label.delete";
+  state: "SUCCEEDED";
+  target: string;
+  requestedBy: "principal-admin";
+  createdAt: string;
+  updatedAt: string;
+  terminalAt: string;
+};
 
 const labelKeyPattern = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const rawSensitiveMarkers = [
@@ -48,13 +59,14 @@ export function ApplicationTagManagement({ resource, initialSnapshot }: {
 }) {
   const t = useTranslations("CloudExperience");
   const w = useTranslations("CloudExperience.applicationTagManagement");
+  const format = useConsoleFormat();
   const [snapshot, setSnapshot] = useState(initialSnapshot);
   const [step, setStep] = useState<WorkflowStep | null>(null);
   const [kind, setKind] = useState<MutationKind>("set");
   const [key, setKey] = useState("");
   const [value, setValue] = useState("");
   const [error, setError] = useState<DraftError>(null);
-  const [lastChange, setLastChange] = useState<{ kind: MutationKind; key: string; value?: string } | null>(null);
+  const [lastChange, setLastChange] = useState<{ kind: MutationKind; key: string; value?: string; etag: string; operation: MockCompletedOperation } | null>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const manageRef = useRef<HTMLButtonElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
@@ -132,13 +144,30 @@ export function ApplicationTagManagement({ resource, initialSnapshot }: {
   function apply(event: FormEvent) {
     event.preventDefault();
     if (!snapshot || validate()) return;
+    const completedAt = new Date().toISOString();
+    const nextEtag = nextMockEtag(snapshot.etag);
     const nextTags = kind === "delete"
       ? snapshot.tags.filter((tag) => tag.key !== key)
       : current
         ? snapshot.tags.map((tag) => tag.key === key ? { key, value } : tag)
         : [...snapshot.tags, { key, value }];
-    setSnapshot({ ...snapshot, etag: nextMockEtag(snapshot.etag), tags: nextTags });
-    setLastChange({ kind, key, ...(kind === "set" ? { value } : {}) });
+    setSnapshot({ ...snapshot, etag: nextEtag, tags: nextTags });
+    setLastChange({
+      kind,
+      key,
+      ...(kind === "set" ? { value } : {}),
+      etag: nextEtag,
+      operation: {
+        id: `operation-preview-${resource.id}-tags-${nextEtag.match(/:tags:(\d+)/)?.[1] ?? "next"}`,
+        action: kind === "delete" ? "paas.application-label.delete" : "paas.application-label.set",
+        state: "SUCCEEDED",
+        target: resource.id,
+        requestedBy: "principal-admin",
+        createdAt: completedAt,
+        updatedAt: completedAt,
+        terminalAt: completedAt
+      }
+    });
     clearDraft();
   }
 
@@ -159,7 +188,21 @@ export function ApplicationTagManagement({ resource, initialSnapshot }: {
       </div>
     </Card.Header>
     <Card.Body className={styles.body}>
-      {lastChange ? <Alert status="success">{lastChange.kind === "delete" ? w("success.delete", { key: lastChange.key }) : w("success.set", { key: lastChange.key, value: lastChange.value ?? "" })}</Alert> : null}
+      {lastChange ? <>
+        <Alert status="success">{lastChange.kind === "delete" ? w("success.delete", { key: lastChange.key }) : w("success.set", { key: lastChange.key, value: lastChange.value ?? "" })}</Alert>
+        <section className={styles.outcome} aria-labelledby="application-tag-operation-title">
+          <div className={styles.outcomeHeading}><h4 id="application-tag-operation-title">{w("outcome.title")}</h4><Badge status="success">{w(`outcome.states.${lastChange.operation.state}`)}</Badge></div>
+          <dl className={styles.outcomeFacts}>
+            <div><dt>{w("outcome.operationId")}</dt><dd><code>{lastChange.operation.id}</code></dd></div>
+            <div><dt>{w("outcome.action")}</dt><dd><code>{lastChange.operation.action}</code></dd></div>
+            <div><dt>{w("outcome.target")}</dt><dd><code>{lastChange.operation.target}</code></dd></div>
+            <div><dt>{w("outcome.requestedBy")}</dt><dd><code>{lastChange.operation.requestedBy}</code></dd></div>
+            <div><dt>{w("outcome.completedAt")}</dt><dd>{format.timestamp(lastChange.operation.terminalAt)}</dd></div>
+            <div><dt>{t("tagVersion")}</dt><dd><code>{lastChange.etag}</code></dd></div>
+          </dl>
+          <Typography.Text tone="muted">{w("outcome.reloaded")}</Typography.Text>
+        </section>
+      </> : null}
       {step === null ? <>
         {tags.length ? <Table aria-label={t("resourceTagsTable")} mobileLayout="stack">
           <thead><tr><th scope="col">{t("tagKey")}</th><th scope="col">{t("tagValue")}</th><th scope="col">{t("iamCondition")}</th></tr></thead>
@@ -199,6 +242,8 @@ export function ApplicationTagManagement({ resource, initialSnapshot }: {
             <div><dt>{w("resource")}</dt><dd>{resource.name}<code>{resource.id}</code></dd></div>
             <div><dt>{t("tagVersion")}</dt><dd><code>{snapshot?.etag}</code></dd></div>
             <div><dt>{w("operation")}</dt><dd>{w(`kinds.${kind}`)}</dd></div>
+            <div><dt>{w("action")}</dt><dd><code>{kind === "delete" ? "paas.application-label.delete" : "paas.application-label.set"}</code></dd></div>
+            <div><dt>{w("concurrency")}</dt><dd><code>{`If-Match: ${snapshot?.etag}`}</code></dd></div>
             <div><dt>{w("change")}</dt><dd><span>{current?.value ?? w("notSet")}</span><ArrowRight aria-hidden="true" /><strong>{kind === "delete" ? w("deleted") : value}</strong></dd></div>
             <div><dt>{w("keyLabel")}</dt><dd><code>{key}</code></dd></div>
             <div><dt>{t("iamCondition")}</dt><dd>{iamCondition(key) ? <code>{iamCondition(key)}</code> : t("notExposedToIam")}</dd></div>
