@@ -6,8 +6,8 @@
 - Updated: 2026-10-02
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `68f059c45`
-- Pushed documentation milestone: `e4ef49767`
+- Pushed source/embed milestone: `67ed0429a`
+- Pushed documentation milestone: `7228e29f4`
 
 ## Authoritative route
 
@@ -29,23 +29,24 @@ compaction or handoff, then validate it against Git and the linked FEAT.
 ## Latest pushed milestone
 
 The independent DEV MOCK remains available at `http://127.0.0.1:4317`, and
-login verification remains disabled for UX review. The Role directory now
-groups the first-pass administration facts into trust admission, grants and
-boundary, new-session limits and creation time. It has no operation column and
-does not turn those configuration facts into effective access, assumability or
-runtime-authorization claims. Role update/status/delete, trust, attachment and
-permission-boundary LIVE writes remain absent until IAM publishes their fixed
-contracts.
+login verification remains disabled for UX review. Isolated-MOCK User display
+name, Group name/description and custom-Policy description editing now share
+one content-area form instead of opening separate dialogs. Stable titles and
+back paths remain mounted, competing page actions are hidden during the
+workflow, and closing returns focus to the originating desktop action or the
+compact shared page-action trigger. Destructive deletes and high-risk batch
+confirmations remain focused dialogs. This adds no LIVE write wire.
 
-Source and synchronized embed are pushed at `68f059c45`; shared-console and
-IAM-client FEAT evidence is pushed through `e4ef49767`. The complete frontend
-gate passed 58 files/955 cases plus three normalization cases,
+Source and synchronized embed are pushed at `67ed0429a`; shared-console and
+IAM-client FEAT evidence is pushed through `7228e29f4`. The complete frontend
+gate passed 58 files/956 cases plus three normalization cases,
 typecheck/lint/architecture/228-pair style checks, 42-route export, 233-file
-embed equality and repository Go test/vet. A fresh browser session verified
-desktop and `390 x 844` Role directories without warning/error or horizontal
-overflow; compact viewport/document/body widths were all 390px. The prior
-immutable AccountSecurityReport preview remains MOCK-only until IAM publishes
-and explicitly marks a consumable runtime.
+embed equality and repository Go test/vet. A fresh `390 x 844` browser session
+verified all three workflows with zero Dialog, no warning/error and no
+horizontal overflow; viewport/document/body widths were all 390px. The prior
+Role-directory hierarchy remains fixed at `68f059c45` and is indexed in
+FEAT-007. The immutable AccountSecurityReport preview remains MOCK-only until
+IAM publishes and explicitly marks a consumable runtime.
 
 Earlier federation replacement, Deployment lifecycle, AccessKey carrier,
 same-User permission-source handoff, Application tag recovery, service
@@ -73,10 +74,11 @@ unchanged. Verification `36897183328` has passed go, node-process and
 authority-storage, while the remaining authority matrix is still running and
 no explicit consumable confirmation has arrived. Keep `05fe4a74c`
 browser-memory-only; add no parallel LIVE model or inferred wire.
-IAM-009 S4a currently defines only an uncommitted pure contract for immutable
-account security reports. Keep `90a5f0184` as information architecture only;
-do not mount create/read/content adapters or enable CSV until IAM supplies a
-fixed pushed commit, runtime evidence and explicit consumable confirmation.
+IAM-009 S4a has completed a first real-PG18 vertical gate in the IAM engineer's
+worktree, but it remains uncommitted, unfixed and explicitly non-consumable.
+Keep `90a5f0184` as information architecture only; do not mount
+create/read/content adapters or enable CSV until IAM supplies a fixed pushed
+commit, runtime evidence and explicit consumable confirmation.
 External assertions remain configuration-only: do not reintroduce a persistent
 federated-account/external-subject object, HTTP adapter, successful assumption
 path, RoleSession issuance or authorization claim until IAM publishes and
