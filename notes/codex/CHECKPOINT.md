@@ -6,8 +6,8 @@
 - Updated: 2026-10-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `55004453`
-- Pushed documentation milestone: `55004453`
+- Pushed source/embed milestone: `9f6dd42c`
+- Pushed documentation milestone: `9f6dd42c`
 
 ## Authoritative route
 
@@ -95,13 +95,16 @@ source `710c1557f48611179715671cac76ff4dfe447c1b` adds trusted
 `request.tag/environment` only to `paas.application.create`. Strict parsing,
 authoring and review enforce the fixed operators, CIDR/tag value bounds and
 missing-tag semantics without accepting arbitrary request tags or sending an
-internal AuthorizationRequest. Resource-tag ABAC and tag mutation remain
-disabled because their contract is not frozen. Source/embed/docs `55004453`
+internal AuthorizationRequest. One compact trusted-context region distinguishes
+the calling service's trusted network boundary from product-derived request
+tags; browser input and forwarded headers prove neither fact. Resource-tag ABAC
+and tag mutation remain disabled because their contract is not frozen.
+Source/embed/docs `9f6dd42c`
 passed 57 frontend files / 913 tests, static normalization,
 type/lint/architecture, 228 theme contrast pairs, 40-page export, 233-file
-embed equality and Go web test/vet. A `390 × 844` DEV flow authored and reviewed
-`environment = production` without horizontal overflow. FEAT-007 owns the UX
-evidence and FEAT-IAM-010 owns the backend semantics and exclusions.
+embed equality and Go web test/vet. A `390 × 844` DEV flow displayed both
+trusted producers without horizontal overflow. FEAT-007 owns the UX evidence
+and FEAT-IAM-010 owns the backend semantics and exclusions.
 
 Audit is now an independent console product rather than an IAM submenu. The
 record directory exposes only the accepted bounded time, Action, actor,
