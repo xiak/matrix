@@ -3,7 +3,7 @@
 - Status: Accepted foundation; IAM security-report release integration is in progress
 - Target release: Private Application PaaS v0.1
 - Target design date: 2026-08-25
-- Release contract: accepted foundation `v1`; current isolated-IAM candidate is manifest `v2` with the exact `61/31/3` revision 6 profile and remains unaccepted until its signed A/B lifecycle gate passes
+- Release contract: accepted foundation `v1`; current isolated-IAM candidate is manifest `v2` with the exact `61/31/3` revision 6 profile, has passed its signed A/B lifecycle gate, and remains unaccepted until the exact source passes independent CI
 
 ## Outcome
 
@@ -196,16 +196,27 @@ authority tuple or revision remains incompatible and must be rejected before
 journal advancement, service changes, backup creation or another provider
 effect.
 
-The existing `phase1e2e` owner now requires Release A to generate, read and
+The existing `phase1e2e` owner requires Release A to generate, read and
 download one unexpired AccountSecurityReport and to observe both its created
 and download-started Audit facts before the protected backup. An exact receipt
 replay, immutable JSON document and byte-identical CSV must survive the
 same-profile Release B upgrade and data-preserving rollback. A second report
 created on B must also survive rollback, while selected-backup recovery must
 restore the first report and its receipt/Audit history and remove the
-post-backup report. This is candidate test coverage, not accepted evidence,
-until two signed bundles from one clean fixed source pass the isolated Linux
-runtime gate and the exact source passes independent CI.
+post-backup report.
+
+The fixed source `67a2a19cf42f76cff7c24abddc830dd7bc093039` produced signed
+Release A `matrix-v0.1.0-iam-report.5-67a2a19cf42f` and its immediate Release B
+`matrix-v0.1.0-iam-report.6-67a2a19cf42f`, both with the exact `61/31/3`
+revision 6 profile. The isolated, network-none Linux runtime passed install,
+status/verify, the IAM user path through APISIX, tenant primary/member
+revocation, two application generations, Audit query/chain integrity,
+protected backup, failed-candidate automatic rollback, B upgrade, explicit
+platform rollback, selected-backup recovery, support redaction and the
+required task-owned engine restart. The post-restart status/verify and complete
+offline lifecycle gate passed in 89.43 seconds. This is accepted local signed
+runtime evidence; the candidate remains unaccepted as a release combination
+until the exact source's independent Verification run completes successfully.
 
 The earlier IAM 60 to 61 retained-data SQL gate proves only the rolling
 development predecessor and does not authorize a signed `4/3/1` revision 4
