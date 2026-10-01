@@ -3236,7 +3236,70 @@
     "noResourceTags": "No resource tags",
     "noResourceTagsHint": "Application Hosting did not return a tag snapshot for this resource.",
     "resourceNotFound": "Application resource not found",
-    "resourceNotFoundHint": "This resource is not in the current application directory. It may have been deleted or be outside the current scope."
+    "resourceNotFoundHint": "This resource is not in the current application directory. It may have been deleted or be outside the current scope.",
+    "applicationTagManagement": {
+      "manage": "Manage tags",
+      "snapshotUnavailable": "The tag snapshot is unavailable, so changes cannot be made safely",
+      "workflowLabel": "Manage application resource tags",
+      "steps": {
+        "edit": "Configure one change",
+        "review": "Review and simulate"
+      },
+      "editTitle": "Manage resource tags",
+      "editHint": "Application Hosting owns this resource metadata. Submit one tag key at a time so authorization, auditing, and retries remain independent.",
+      "oneKeyOnly": "1 tag key per change",
+      "kindLabel": "Change type",
+      "kinds": {
+        "set": "Set or update a tag",
+        "delete": "Delete a tag"
+      },
+      "keyLabel": "Tag key",
+      "keyHint": "1–63 lowercase letters, digits, or hyphens; the first and last character must be alphanumeric.",
+      "valueLabel": "Tag value",
+      "valueHint": "1–128 bytes, case-sensitive, with no surrounding whitespace or control characters.",
+      "currentValue": "Current value: {value}",
+      "deleteLabel": "Tag to delete",
+      "deleteHint": "Only the selected tag key is deleted; other tags are unchanged.",
+      "deletePlaceholder": "Select an existing tag",
+      "sensitiveHint": "Tags are searchable plain-text metadata. Never put passwords, tokens, keys, personal data, or other sensitive information in tags.",
+      "cancel": "Cancel",
+      "review": "Review change",
+      "reviewTitle": "Review tag change",
+      "reviewHint": "Confirm the resource, tag version, and before-and-after state for one tag key.",
+      "mockOnly": "MOCK session only",
+      "resource": "Target resource",
+      "operation": "Operation",
+      "change": "Value change",
+      "notSet": "Not set",
+      "deleted": "Deleted",
+      "authorizationWarning": "The IAM Profile declares this tag as a trusted resource condition. Changing or deleting it makes later requests re-evaluate access with the new tag and may immediately change who can access this resource.",
+      "applyBoundary": "This updates only the MOCK snapshot in the current browser session and generates a new simulated ETag. It does not call the backend, change a real resource, or write an audit record. LIVE integration will use the current ETag for concurrency checks.",
+      "back": "Back to edit",
+      "apply": "Simulate apply",
+      "errors": {
+        "key": "Enter a tag key that matches the stated rules.",
+        "value": "Enter a 1–128 byte value with no surrounding whitespace or control characters.",
+        "unchanged": "The new value matches the current value, so there is nothing to submit.",
+        "missing": "Select a tag that currently exists.",
+        "limit": "This resource has reached the 64-tag limit.",
+        "sensitive": "The tag value appears to contain raw credentials or sensitive material. Remove it and try again."
+      },
+      "success": {
+        "set": "Set {key} to {value} in the current MOCK session. The real resource was not changed.",
+        "delete": "Deleted {key} in the current MOCK session. The real resource was not changed."
+      },
+      "leave": {
+        "title": "Discard tag change?",
+        "description": "This one-tag draft has not been simulated. Its input will not be retained if discarded.",
+        "stay": "Keep editing",
+        "discard": "Discard change",
+        "close": "Close confirmation",
+        "busyTitle": "Tag change in progress",
+        "busyDescription": "Wait for the current tag change to finish before leaving.",
+        "failure": "The tag draft could not be left. Try again.",
+        "retry": "Retry leaving"
+      }
+    }
   },
   "GroupWorkspace": {
     "back": "Back to groups",

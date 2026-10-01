@@ -14,7 +14,6 @@ import {
   CloudCog,
   Database,
   Server,
-  Tags
 } from "lucide-react";
 import { Alert, Table, TableToolbar, EmptyState, Badge, Button, Card, Progress, ContentLayout, Typography } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
@@ -29,6 +28,7 @@ import { useConsoleUiStore } from "../application/consoleUiStore";
 import styles from "./ExperienceContentRenderer.module.css";
 import { ConsoleMetrics } from "./ConsoleMetrics";
 import { useConsoleFormat } from "./useConsoleFormat";
+import { ApplicationTagManagement } from "./ApplicationTagManagement";
 
 export type ResourceScope = {
   regionId: string;
@@ -257,26 +257,7 @@ function ApplicationResourceDetail({ resource, tagSnapshot }: {
         </dl>
       </Card.Body>
     </Card>
-    <Card>
-      <Card.Header>
-        <div className={styles.tagHeading}>
-          <div><span className={styles.tagIcon}><Tags aria-hidden="true" /></span><div><Typography.Title as="h3" level={3}>{t("resourceTags")}</Typography.Title><Typography.Text tone="muted">{t("resourceTagsHint")}</Typography.Text></div></div>
-          <Badge status="neutral">{t("mockSnapshot")}</Badge>
-        </div>
-      </Card.Header>
-      <Card.Body className={styles.tagBody}>
-        {tagSnapshot?.tags.length ? <Table aria-label={t("resourceTagsTable")} mobileLayout="stack">
-          <thead><tr><th scope="col">{t("tagKey")}</th><th scope="col">{t("tagValue")}</th><th scope="col">{t("iamCondition")}</th></tr></thead>
-          <tbody>{tagSnapshot.tags.map((tag) => <tr key={tag.key}>
-            <td><code>{tag.key}</code></td>
-            <td data-label={t("tagValue")}>{tag.value}</td>
-            <td data-label={t("iamCondition")}>{tag.key === "environment" ? <code>resource.tag/{tag.key}</code> : <span className={styles.notExposed}>{t("notExposedToIam")}</span>}</td>
-          </tr>)}</tbody>
-        </Table> : <EmptyState title={t("noResourceTags")} description={t("noResourceTagsHint")} />}
-        {tagSnapshot ? <div className={styles.tagVersion}><span>{t("tagVersion")}</span><code>{tagSnapshot.etag}</code></div> : null}
-        <Alert status="info">{t("resourceTagBoundary")}</Alert>
-      </Card.Body>
-    </Card>
+    <ApplicationTagManagement key={`${resource.id}:${tagSnapshot?.etag ?? "unavailable"}`} resource={resource} initialSnapshot={tagSnapshot} />
   </section>;
 }
 

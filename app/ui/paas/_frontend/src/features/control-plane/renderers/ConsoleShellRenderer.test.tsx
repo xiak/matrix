@@ -950,6 +950,66 @@ describe("ConsoleShellRenderer", () => {
     expect(within(tags).getAllByText("未由 Profile 声明")).toHaveLength(2);
     expect(screen.getByText('"app-checkout-api:tags:7"')).toBeTruthy();
     expect(screen.getByText(/策略编辑器不会修改资源标签/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "管理标签" })).toBeTruthy();
+  });
+
+  it("reviews one permission-sensitive application tag change before applying it to the MOCK snapshot", async () => {
+    navigation.query = "resource=app-checkout-api";
+    const { user } = await renderConsole({ section: "applications", experience: previewExperienceSnapshot });
+
+    await user.click(screen.getByRole("button", { name: "管理标签" }));
+    expect(screen.getByRole("heading", { name: "管理资源标签" })).toBe(document.activeElement);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByText("1 个标签键 / 次")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "添加标签" })).toBeNull();
+
+    await user.type(screen.getByLabelText("标签键", { exact: true }), "environment");
+    await user.type(screen.getByLabelText("标签值", { exact: true }), "staging");
+    await user.click(screen.getByRole("button", { name: "审阅变更" }));
+
+    expect(screen.getByRole("heading", { name: "审阅标签变更" })).toBe(document.activeElement);
+    expect(screen.getByText(/后续请求会使用新标签重新判定权限/)).toBeTruthy();
+    expect(screen.getByText(/当前浏览器会话中的 MOCK 快照/)).toBeTruthy();
+    expect(screen.getByText("production")).toBeTruthy();
+    expect(screen.getByText("staging")).toBeTruthy();
+    expect(screen.getByText('"app-checkout-api:tags:7"')).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "模拟应用" }));
+    const tags = screen.getByRole("table", { name: "应用资源标签" });
+    expect(within(tags).getByText("staging")).toBeTruthy();
+    expect(within(tags).queryByText("production")).toBeNull();
+    expect(screen.getByText('"app-checkout-api:tags:8"')).toBeTruthy();
+    expect(screen.getByText(/真实资源未改变/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "管理标签" })).toBe(document.activeElement);
+  });
+
+  it("deletes exactly one application tag and rejects invalid tag keys without advancing", async () => {
+    navigation.query = "resource=app-checkout-api";
+    const { user } = await renderConsole({ section: "applications", experience: previewExperienceSnapshot });
+
+    await user.click(screen.getByRole("button", { name: "管理标签" }));
+    const key = screen.getByLabelText("标签键", { exact: true });
+    await user.type(key, "Environment");
+    await user.type(screen.getByLabelText("标签值", { exact: true }), "staging");
+    await user.click(screen.getByRole("button", { name: "审阅变更" }));
+    expect(screen.getByText("请输入符合规则的标签键。")).toBeTruthy();
+    await waitFor(() => expect(key).toBe(document.activeElement));
+    expect(screen.queryByRole("heading", { name: "审阅标签变更" })).toBeNull();
+
+    await user.click(screen.getByRole("radio", { name: "删除标签" }));
+    await user.click(screen.getByRole("combobox", { name: "选择要删除的标签" }));
+    await user.click(screen.getByRole("option", { name: "team = commerce" }));
+    await user.click(screen.getByRole("button", { name: "审阅变更" }));
+    expect(screen.getByRole("heading", { name: "审阅标签变更" })).toBeTruthy();
+    expect(screen.getByText("commerce")).toBeTruthy();
+    expect(screen.getByText("删除", { selector: "strong" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "模拟应用" }));
+
+    const tags = screen.getByRole("table", { name: "应用资源标签" });
+    expect(within(tags).queryByText("team")).toBeNull();
+    expect(within(tags).queryByText("commerce")).toBeNull();
+    expect(within(tags).getByText("environment")).toBeTruthy();
+    expect(screen.getByText('"app-checkout-api:tags:8"')).toBeTruthy();
   });
 
   it("does not invent an application resource for an unknown query identifier", async () => {

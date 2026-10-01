@@ -379,7 +379,6 @@
 }
 
 .backLink svg,
-.tagIcon svg,
 .resourceIdentityIcon svg {
   width: 18px;
   height: 18px;
@@ -392,8 +391,7 @@
   gap: var(--xiak-spacing-default);
 }
 
-.resourceIdentityIcon,
-.tagIcon {
+.resourceIdentityIcon {
   display: grid;
   width: 36px;
   height: 36px;
@@ -410,8 +408,7 @@
   gap: var(--xiak-spacing-narrow);
 }
 
-.resourceIdentity > div > span,
-.tagVersion > span {
+.resourceIdentity > div > span {
   color: var(--xiak-color-text-subtle);
   font-size: var(--xiak-font-size-caption);
 }
@@ -429,9 +426,7 @@
   outline: none;
 }
 
-.resourceIdentity code,
-.tagVersion code,
-.tagBody td code {
+.resourceIdentity code {
   color: var(--xiak-color-text-muted);
   font-family: var(--xiak-font-mono);
   font-size: var(--xiak-font-size-small);
@@ -462,40 +457,6 @@
   color: var(--xiak-color-text-strong);
   font-weight: var(--xiak-font-weight-semibold);
   overflow-wrap: anywhere;
-}
-
-.tagHeading,
-.tagHeading > div {
-  display: flex;
-  min-width: 0;
-  align-items: flex-start;
-  gap: var(--xiak-spacing-default);
-}
-
-.tagHeading {
-  justify-content: space-between;
-}
-
-.tagHeading > div > div {
-  display: grid;
-  min-width: 0;
-  gap: var(--xiak-spacing-narrow);
-}
-
-.tagBody {
-  display: grid;
-  gap: var(--xiak-spacing-comfortable);
-}
-
-.tagVersion {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--xiak-spacing-tight);
-}
-
-.notExposed {
-  color: var(--xiak-color-text-subtle);
 }
 
 .headerHint {

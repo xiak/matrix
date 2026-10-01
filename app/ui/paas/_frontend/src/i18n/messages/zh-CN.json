@@ -3236,7 +3236,70 @@
     "noResourceTags": "暂无资源标签",
     "noResourceTagsHint": "应用托管尚未返回此资源的标签快照。",
     "resourceNotFound": "未找到应用资源",
-    "resourceNotFoundHint": "该资源不在当前应用目录中，可能已删除或不属于当前范围。"
+    "resourceNotFoundHint": "该资源不在当前应用目录中，可能已删除或不属于当前范围。",
+    "applicationTagManagement": {
+      "manage": "管理标签",
+      "snapshotUnavailable": "标签快照不可用，无法安全变更",
+      "workflowLabel": "管理应用资源标签",
+      "steps": {
+        "edit": "配置单个变更",
+        "review": "审阅并模拟应用"
+      },
+      "editTitle": "管理资源标签",
+      "editHint": "应用托管拥有这些资源元数据；每次只提交一个标签键，以便独立授权、审计和重试。",
+      "oneKeyOnly": "1 个标签键 / 次",
+      "kindLabel": "变更类型",
+      "kinds": {
+        "set": "设置或更新标签",
+        "delete": "删除标签"
+      },
+      "keyLabel": "标签键",
+      "keyHint": "1–63 个小写字母、数字或连字符，首尾必须是字母或数字。",
+      "valueLabel": "标签值",
+      "valueHint": "1–128 字节；区分大小写，不允许首尾空格或控制字符。",
+      "currentValue": "当前值：{value}",
+      "deleteLabel": "选择要删除的标签",
+      "deleteHint": "本次只删除所选标签键，不影响其他标签。",
+      "deletePlaceholder": "请选择一个现有标签",
+      "sensitiveHint": "标签是可检索的纯文本元数据。不要写入密码、令牌、密钥、个人信息或其他敏感内容。",
+      "cancel": "取消",
+      "review": "审阅变更",
+      "reviewTitle": "审阅标签变更",
+      "reviewHint": "确认资源、标签版本以及一个标签键的前后状态。",
+      "mockOnly": "仅 MOCK 会话",
+      "resource": "目标资源",
+      "operation": "变更操作",
+      "change": "值变更",
+      "notSet": "未设置",
+      "deleted": "删除",
+      "authorizationWarning": "此标签已被 IAM Profile 声明为可信资源条件。变更或删除后，后续请求会使用新标签重新判定权限，可能立即改变谁能访问此资源。",
+      "applyBoundary": "本次仅更新当前浏览器会话中的 MOCK 快照并生成新的模拟 ETag；不会调用后端、修改真实资源或写入审计。LIVE 接入将使用当前 ETag 做并发校验。",
+      "back": "返回修改",
+      "apply": "模拟应用",
+      "errors": {
+        "key": "请输入符合规则的标签键。",
+        "value": "请输入 1–128 字节、无首尾空格和控制字符的标签值。",
+        "unchanged": "新值与当前值相同，无需提交。",
+        "missing": "请选择一个当前存在的标签。",
+        "limit": "该资源已达到 64 个标签上限。",
+        "sensitive": "标签值看起来包含原始凭据或敏感材料，请移除后再试。"
+      },
+      "success": {
+        "set": "已在当前 MOCK 会话中把 {key} 设置为 {value}，真实资源未改变。",
+        "delete": "已在当前 MOCK 会话中删除 {key}，真实资源未改变。"
+      },
+      "leave": {
+        "title": "放弃标签变更？",
+        "description": "当前单标签草稿尚未模拟应用。放弃后不会保留输入内容。",
+        "stay": "继续编辑",
+        "discard": "放弃变更",
+        "close": "关闭确认",
+        "busyTitle": "标签变更正在处理",
+        "busyDescription": "请等待当前标签变更完成后再离开。",
+        "failure": "未能离开当前标签草稿，请重试。",
+        "retry": "重试离开"
+      }
+    }
   },
   "GroupWorkspace": {
     "back": "返回用户组列表",
