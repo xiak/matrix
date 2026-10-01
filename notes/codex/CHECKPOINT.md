@@ -6,8 +6,8 @@
 - Updated: 2026-10-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `8df216b8d`
-- Pushed documentation milestone: `84d1fdb85`
+- Pushed source/embed milestone: `2072b3639`
+- Pushed documentation milestone: `56cbd54f9`
 
 ## Authoritative route
 
@@ -29,19 +29,22 @@ compaction or handoff, then validate it against Git and the linked FEAT.
 ## Latest pushed milestone
 
 The independent DEV MOCK remains available at `http://127.0.0.1:4317`, and
-login verification remains disabled for UX review. MOCK and LIVE Role session
-directories no longer spend a separate column on their one row-specific
-command. The exact session overflow menu is grouped with the observed
-lifecycle while capability gating, inline confirmation, unknown-result request
-identity and focus restoration remain unchanged.
+login verification remains disabled for UX review. MOCK/LIVE Role session and
+policy-version directories no longer spend separate columns on one
+row-specific overflow command. Session actions stay beside observed lifecycle;
+version actions stay beside the non-default version identifier. Capability
+gating, inline confirmation/review, unknown-result identity and focus return
+remain unchanged. One shared row-action cell owns both layouts.
 
-Source and synchronized embed are pushed at `8df216b8d`; FEAT evidence is
-pushed at `84d1fdb85`. The focused MOCK/LIVE run passed 185 cases and the
-complete frontend gate passed 57 files/933 cases plus three normalization
-cases, typecheck/lint/architecture/228-pair style checks, 42-route export,
-233-file embed equality and repository Go test/vet. A `390 x 844` DEV check
-kept document and body at the viewport with no Dialog, overflow or browser
-warning/error; the empty administrator snapshot remained an honest data state.
+Source and synchronized embed are pushed at `2072b3639`; FEAT evidence is
+pushed at `56cbd54f9`. The final focused run passed 284 cases and the complete
+frontend gate passed 57 files/933 cases plus three normalization cases,
+typecheck/lint/architecture/228-pair style checks, 42-route export, 233-file
+embed equality and repository Go test/vet. At `390 x 844`, policy versions
+showed only Version/Created facts with the menu beside the non-default version;
+document and body matched the viewport with no Dialog, overflow or browser
+warning/error. The empty Role-session administrator snapshot remained an
+honest data state rather than a fabricated row.
 
 Earlier AccessKey carrier, same-User permission-source handoff, Application tag
 recovery, service authorization, policy compilation/provenance and shared
