@@ -123,6 +123,8 @@ DEV 体验把空闲策略作为独立于 MFA、角色承担时长与应用后台
 
 角色 SSO 的 IdP/Role 信任与用户 SSO 的 Account 登录配置是两条不同旅程。腾讯云公开说明角色 SSO 使用身份提供商与 Role，用户 SSO 则把企业身份映射到已有子用户；启用后会改变子用户的控制台登录路径。其 [角色 IdP](https://cloud.tencent.com/document/product/598/30290)、[用户 SAML](https://cloud.tencent.com/document/product/598/61674) 和 [用户 OIDC](https://cloud.tencent.com/document/product/598/93431) 配置分属不同页面。我们不复用角色提供商 ID 作为用户 SSO 前置条件，也不因为用户 SSO 配置推断 Role 信任或资源授权。
 
+角色 SSO 当前只保留身份提供商配置与 `RoleSsoMappingPreview` 的隔离浏览器内存样例。映射样例描述 provider、断言主体值与目标 Role 的设计关系，但不是 Account、User、外部主体目录记录或已发布后端资源；它不能同步目录、接受或验证真实断言、证明登录、创建 RoleSession 或参与有效权限判定。没有固定 IAM 来源前，页面不建立 HTTP、持久对象或成功承担路径；后端给出固定、已推送且明确可消费的 IdP/Role trust 契约后，再原位替换该预览，而不是保留兼容别名或并行模型。
+
 DEV 隔离仓库的用户 SSO 设置因此拥有独立的 SAML 元数据/NameID 或 OIDC issuer、client ID、授权地址、映射字段和 JWKS 草稿。页面先展示当前状态，再编辑、审阅目标 Account、开关前后状态、协议与映射；启用审阅明确警示普通 IAM 用户的密码登录可能被关闭，要求先验证 IdP、映射和应急访问。停用审阅则明确不删除 Role SSO 或现有策略。格式检查仅支持本地演示，不获取外部 IdP、不验证断言、签名或真实登录；保存只改变当前 MOCK 会话，不创建 User、Role、附件或会话。实际 LOGIN 行为、控制台登录禁用时机及固定 LIVE northbound 契约均仍归 IAM 工程师设计与验收，不能从此预览推定。
 
 编辑页在进入审阅前复用隔离仓库的同一格式检查：SAML 元数据必须具备演示所需的 EntityDescriptor 形状；OIDC 地址须为 HTTPS，JWKS 须为含非空 keys 的 JSON。格式失败留在编辑区、标记准确字段并将焦点送回该字段，不让操作者先审阅一个明确无法保存的草稿。检查仅证明输入形状，绝不宣称元数据、端点、公钥、外部主体或映射已被可信验证。
@@ -440,17 +442,18 @@ IAM 工程师随后固定并推送来源 `cb62ed2f6c307f5a50aa27480f89c8c58cf081
 - Role 工作区 129 条行为用例完整通过，覆盖元数据在途提交、失败重试、策略审阅、权限边界与会话设置；完整前端 42 个测试文件、645 条用例及三条静态归一化用例通过。类型、lint、架构、228 组主题对比、40 页生产导出、222 个嵌入文件等价、`go test -p 2 ./...` 与 `go vet -p 2 ./...` 通过。
 - 真实 DEV 在 `539 × 866` 验证角色信息、策略关联和权限边界页内工作流；document/body 均满足 `clientWidth == scrollWidth == 539`，Dialog 数为零，焦点位于当前工作流标题，控制台 warning/error 为空。该结果仍只接受显式 MOCK 变更体验，不把它解释为 LIVE Role/trust/policy mutation 已接入。
 
-### 身份提供商与联合身份映射 MOCK 的开发验收证据
+### 身份提供商与角色 SSO 断言映射预览 MOCK 的开发验收证据
 
 2026-09-21，前端实现与同步嵌入资源固定在已推送的
 [`fb08f614`](https://github.com/xiak/matrix/commit/fb08f614)。
 
-- 身份提供商及联合身份映射的新建、编辑从 Dialog 迁入各自目录或详情的内容区；固定页面标题、页签和卡片外壳继续存在，只替换业务工作流正文。删除仍使用独立危险确认，不把不可恢复操作伪装成普通编辑。
-- UI 将外部主体、身份提供商与角色之间的关系称为“联合身份映射”，不再误称为创建“联合账号”；外部目录同步、邀请、SAML/OIDC 发现与真实断言校验仍明确不在该 MOCK 片内。身份提供商元数据只做本地格式校验，不连接外部地址。
+- 身份提供商及其后继断言映射预览的新建、编辑从 Dialog 迁入各自目录或详情的内容区；固定页面标题、页签和卡片外壳继续存在，只替换业务工作流正文。删除仍使用独立危险确认，不把不可恢复操作伪装成普通编辑。
+- 早期“联合身份映射”原型已由 2026-10-02 的替换片原位删除，不能再解释成长期联合账号、外部主体记录或后端对象；当前只保留明确的角色 SSO 断言映射预览。外部目录同步、邀请、SAML/OIDC 发现与真实断言校验仍不在该 MOCK 片内，身份提供商元数据只做本地格式校验且不连接外部地址。
 - 公共目录组件允许在同一内容边界切换列表与工作流；公共响应式命令焦点句柄在桌面返回主操作、小屏返回可见的“页面操作”入口，避免聚焦被 CSS 隐藏的桌面按钮。进入工作流聚焦标题，失败保留输入，返回、取消和完成恢复稳定触发器。
 - `AccessWorkspace` 130 条行为用例、完整前端 42 个测试文件 646 条用例及三条静态归一化用例通过。类型、lint、架构、228 组主题对比、40 页生产导出、222 个嵌入文件等价、`go test -p 2 ./...` 与 `go vet -p 2 ./...` 通过。
-- 真实 DEV 在 `539 × 866` 验证两类新建工作流；身份提供商与联合身份映射均在内容区呈现，Dialog 数为零，document/body 均满足 `clientWidth == scrollWidth == 539`。返回目录后小屏焦点位于可见的“页面操作”按钮，最终控制台 warning/error 为空。该证据只接受显式 MOCK UX，不声明真实 SSO 目录、写入、密钥轮换或外部协议联调已接入。
+- 真实 DEV 在 `539 × 866` 验证两类新建工作流；身份提供商与映射预览均在内容区呈现，Dialog 数为零，document/body 均满足 `clientWidth == scrollWidth == 539`。返回目录后小屏焦点位于可见的“页面操作”按钮，最终控制台 warning/error 为空。该证据只接受显式 MOCK UX，不声明真实 SSO 目录、写入、密钥轮换或外部协议联调已接入。
 - 2026-10-01 的协议语义修正固定在已推送的 [`ae91fd572`](https://github.com/xiak/matrix/commit/ae91fd572)。角色 SSO 提供商不再用一组含混的 URL、客户端 ID/Audience 和“元数据/签名公钥”标签同时解释 SAML 与 OIDC；SAML 明确呈现 IdP URL、服务提供商 Audience 和 EntityDescriptor XML，OIDC 明确呈现 Issuer URL、客户端 ID 与 JWKS JSON。协议切换为两类配置保留相互隔离的本地草稿，不会把 SAML XML、Audience 或 URL 静默重解释为 OIDC 配置，反向亦然。编辑与详情均固定显示同一 MOCK 边界：只保存当前浏览器会话并做本地形状检查，不连接外部 IdP、不解析证书或获取远端密钥、不验证签名/Token、不交换断言或 Token，也不签发登录会话。IAM Owner 已确认 FEAT-IAM-012 仍无固定可消费契约，因此这一修正没有添加 HTTP、后端字段承诺或 LIVE 可用声明。定向 178 条 IAM 工作区用例及完整 57 文件/941 条前端用例、三条静态归一化、类型/lint/架构/228 组主题对比、42 路由导出、233 文件嵌入等价和全仓 Go test/vet 均通过；桌面与 `390 × 844` DEV 验证两类协议字段、零 Dialog、零横向溢出及空 warning/error 日志。
+- 2026-10-02 的 replacement-first 修正固定在已推送的 [`ccd7918fc`](https://github.com/xiak/matrix/commit/ccd7918fc)。领域、命令、隔离仓库、角色会话投影、访问分析和双语页面共同删除 `FederatedAccount`、`workspace.federations` 及 `save/delete-federation`，替换为明确 browser-memory 的 `RoleSsoMappingPreview`；样例只保存名称、断言主体值、provider、目标 Role、状态与创建时间。角色承担求值不再接受外部映射调用方，映射预览不能生成体验 RoleSession 或形成允许结论。身份提供商与映射目录在列表、详情和编辑层均显示同一 MOCK 边界；小屏主操作仍由公共页面菜单承载，编辑继续替换内容区而非打开 Dialog。IAM Owner 确认该命名与 FEAT-IAM-012 当前目标不冲突，同时再次确认尚无固定 external IdP/Role trust wire。定向 311 条 IAM 用例、完整 57 文件/941 条前端用例、三条静态归一化、类型/lint/架构/228 组主题对比、42 路由导出、233 文件嵌入等价与全仓 Go test/vet 通过；桌面及 `390 × 844` DEV 均无横向溢出或 Dialog，手机页面操作菜单可达，控制台 warning/error 为空。
 
 ### 用户 SSO 隔离体验的开发验收证据
 
