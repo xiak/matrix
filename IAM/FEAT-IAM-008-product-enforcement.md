@@ -1,6 +1,6 @@
 # FEAT-IAM-008：业务接入、服务角色与 ABAC
 
-- 状态：实施中；版本化产品 Profile、PaaS/managedservice 的真实 PEP、请求与决定绑定及当前资源/Operation/outbox 租户隔离已有固定后端实现。服务受托已有账号同意关系、当前Account只读观察、managedservice真实资源绑定/解绑及服务会话发行/回执/当前PDP；累计固定`a464299b`已补严格服务来源的管理员目录/读取/代撤销并通过本地真实PG18、累计Role管理、独立多进程及14项独立CI。实例目录批量过滤已固定为`a7f2e83b`，可信创建请求标签及Audit目录修复累计固定为`49aaf216`并通过14项独立CI；既有Application资源标签读取已有本地候选和真实PG18/进程证据。标签写入、其他资源接入、UI和发布组合仍未完成，整体未验收。
+- 状态：实施中；版本化产品 Profile、PaaS/managedservice 的真实 PEP、请求与决定绑定及当前资源/Operation/outbox 租户隔离已有固定后端实现。服务受托已有账号同意关系、当前Account只读观察、managedservice真实资源绑定/解绑及服务会话发行/回执/当前PDP；累计固定`a464299b`已补严格服务来源的管理员目录/读取/代撤销并通过本地真实PG18、累计Role管理、独立多进程及14项独立CI。实例目录批量过滤已固定为`a7f2e83b`，可信创建请求标签及Audit目录修复累计固定为`49aaf216`并通过14项独立CI；既有Application资源标签读取和写入已累计固定到`e9ea19e6`并通过本地真实PG18、独立进程及唯一滚动前驱门禁，最新独立CI尚未登记。其他资源接入、LIVE UI和发布组合仍未完成，整体未验收。
 - 依赖：001、005、006。
 - Owner：IAM Profile/Role，PaaS/managedservice/Audit 各自的真实资源与 PEP。
 
@@ -42,7 +42,7 @@ ServiceRoleTemplate 定义注册服务主体、用途、允许权限和生命周
 | IAM-PEP-03 | 首个无游标目录已固定，发布未完成 | 固定`a7f2e83b`使managedservice先以`COLLECTION_LIST`完成目录准入，再从受信本地catalog取得真实候选，按ID排序后通过一次1–50项批量PDP逐实例过滤。两个账号同名/同 ID/key、伪造 tenant/cursor/after、错序/遗漏/替换决定、跨账号实例、撤权后下一请求及ROLE全拒绝已有行为或真实进程门禁；租户资源cursor和其他产品目录仍未接入，独立CI与发布组合未完成。 |
 | IAM-PEP-04 | 当前应用托管与 managedservice 路径已实现 | Application、Configuration、Revision、QuotaEntitlement、ServiceInstallation 的创建由封闭集合请求开始，最终资源、Operation 和 outbox 由同一业务事务建立；IAM 原决定只证明集合准入，不证明 caller 填写的最终 ID 或 payload。真实双账号门禁核对配额、Operation、幂等、拒绝无部分效果及 Audit 关联。 |
 | IAM-SVC-01/02 | 最小产品运行闭环及管理员管理已在本地候选实现，发布未完成 | ServiceIdentity自身仍不获得目标Account权限；只有不可变模板、精确系统策略上限、当前Account同意和真实workload binding同时有效时，IAM才发行目标Account的60秒RoleSession。managedservice用该临时身份经唯一PDP读取实际`ServiceInstallation`后立即自退出；服务home Account与目标Account分开保存，SERVICE与USER来源严格互斥。当前AccountAdministrator能以独立权限查询和终止服务会话，只有服务Role绑定管理权限的USER、服务凭据及ROLE自身均不能获得管理能力。当前候选已通过真实PG18纵向、累计Role管理及209.46秒独立进程组合，后者实际覆盖双副本list/read/revoke、解绑后历史观察、等值重放、跨Account拒绝与唯一Audit事实；仍缺固定提交、独立CI和最终发布组合。 |
-| IAM-TAG-01/02 | 创建请求标签已固定，既有Application读取已有本地候选 | PaaS Application创建从真实body构造`request.tag/environment`；读取从PaaS数据库预读的同一Application构造`resource.tag/environment`，决定和SQL证据分别精确绑定。Role/User标签仍只是元数据；标签修改授权、其他资源标签及并发更新尚未实现。 |
+| IAM-TAG-01/02 | Application创建、读取及标签写入已有固定实现，发布未完成 | PaaS Application创建从真实body构造`request.tag/environment`；读取及写入从PaaS数据库预读同一Application构造`resource.tag/environment`，设置/删除再绑定准确`request.tag/environment`。决定、资源版本、SQL效果、Operation及Audit证据精确关联，标签写入的并发CAS与跨Account隔离已有真实门禁。Role/User标签仍只是元数据；其他资源标签、LIVE UI和签名发布组合尚未实现。 |
 
 `app/service/paas/internal/managedservice/port/security.go` 原 action→resource switch 是该产品适配器的封闭边界，不是通用求值器按产品名称分叉，但它重复了 release-owned Profile。本轮候选已删除这份重复映射：port 直接使用 IAM Action/ResourceKind 类型，通过 `NewAuthorizationRequest` 和 managedservice 当前 Profile 的完整引用/calling service 核对形状；IAM HTTP adapter不再执行第二次字符串翻译。七种合法集合/实例形状及其他产品、错资源、错集合用途/ID攻击的聚焦测试通过；全仓默认 race/vet、architecture、模块校验和 Linux amd64 构建通过，并由累计`a464299b`的独立CI覆盖。后继产品适配器同样应消费自己编译进发布物且已由 IAM Profile 摘要认证的声明，通用 IAM 求值器仍只解释统一 Profile/Policy 语义。
 
@@ -177,7 +177,7 @@ PaaS 用解析出的 Account 开启受RLS保护且数据库报告`transaction_re
 
 独占PostgreSQL 18上的完整IAM策略存储以`-race -p 1`用时237.069秒通过；PaaS存储门禁以5.840秒证明预读事务只读及Account RLS。独立双IAM/Audit/PaaS进程最终以`-race -p 1`用时245.500秒通过：两个Account持有同ID但分别为`production`/`staging`的Application，伪造另一Account header/query不能换标签或资源；同服务来源Role到达真实PDP并得到预期403而不是adapter 503；IAM决策落库事务中的确定性资源标签/resourceVersion变化使PaaS返回503且不泄露旧快照。IAM57真实前驱升级以`-race -p 1`用时131.412秒通过；实际旧二进制除账号、MFA、会话、设置和恢复事实外，还生成PaaS r4、contract6及`requestTags`决定，双迁移、等值bootstrap、当前重启后原Profile/Decision字节与Audit producer proof不变，不增加更早开发schema矩阵。聚焦及全仓race、架构、vet、模块校验、两次API生成摘要一致和Linux amd64构建通过。固定提交与独立CI尚未完成，因此本片仍是候选，UI继续不得开放资源标签写操作。
 
-## 下一纵向切片：Application 标签设置与删除
+## 已固定纵向切片：Application 标签设置与删除
 
 本片只开放已有Application的`environment`标签设置与删除，不建立中央标签数据库、批量标签任务、标签继承或其他资源的标签写入。标签继续由PaaS资源事务拥有，IAM只声明动作、可信条件来源并返回决定；后继增加标签键或资源种类必须由相应产品Profile声明，不能在通用求值器、IAM存储或控制台按产品名硬编码。
 
@@ -191,9 +191,9 @@ PaaS Profile下一修订增加`paas.application-label.set`和`paas.application-l
 
 最低门禁覆盖两个Account同Application ID、USER与两种ROLE来源、当前production→目标staging、同值设置、删除、缺失键、显式Deny、撤权/停用后的下一请求、伪造当前/目标标签、未声明键、错误ETag、同key变体重放、并发设置/删除、授权后锁前漂移、Audit outbox故障和提交结果不确定。真实PG18必须证明RLS、行锁/CAS、资源与完成记录原子性、受限登录和重启；独立IAM/Audit/PaaS进程必须证明下一次资源读取立即按新标签重评、跨Account不串、旧permit不缓存。该门禁固定通过前，UI继续只读展示标签，不开放修改入口。
 
-当前本地候选把PaaS Profile推进到revision 6，保留授权决定contract 7并把开发数据库形状推进到IAM59/Audit31/PaaS3；发布profile仍不匹配且继续在安装副作用前关闭。PaaS API角色没有取得表级UPDATE权限：目的限定的`load_application_for_update`只在当前事务Account内锁定真实Application，`update_application_label`再次核对expected resourceVersion、不可变字段以及恰好一个标签键的设置/删除差异，再原子写入新文档、终态Operation和Audit outbox。受限worker不能调用两个入口，直接额外修改第二个标签的攻击由数据库以`22023`拒绝。
+当前固定实现把PaaS Profile推进到revision 6，保留授权决定contract 7并把开发数据库形状推进到IAM59/Audit31/PaaS3；发布profile仍不匹配且继续在安装副作用前关闭。PaaS API角色没有取得表级UPDATE权限：目的限定的`load_application_for_update`只在当前事务Account内锁定真实Application，`update_application_label`再次核对expected resourceVersion、不可变字段以及恰好一个标签键的设置/删除差异，再原子写入新文档、终态Operation和Audit outbox。受限worker不能调用两个入口，直接额外修改第二个标签的攻击由数据库以`22023`拒绝。
 
-本任务独占PostgreSQL 18中，PaaS迁移双次应用/verify及真实事务门禁以4.534秒通过同ID双Account、等值/变体重放、并发设置与删除只有一个成功、RLS、数据库第二标签攻击和故障注入整单回滚；Audit31完整catalog以11.939秒逐项接受新事实并验证USER、ROLE和AccessKey actor边界。独立IAM59/Audit31/PaaS3、双IAM和双dispatcher进程以223.721秒通过真实策略发布、`PUT`/`DELETE`、当前/目标标签决定证据、更新后下一次读取立即403、一次性Operation/Audit事实及链验证。唯一滚动前驱已替换为固定`e3c137ba0ed80d8d90f893192d343d89d2d917f5`的IAM58；实际旧binary产生requestTags、resourceTags、Profile/Decision、账号、MFA、会话和恢复事实后，IAM59双迁移、等值bootstrap和重启门禁以137.786秒通过，历史字节、proof和撤销状态未复活或改写，不再保留IAM57测试窗口。全仓默认测试、vet、模块校验、Linux amd64构建、聚焦race和两次API生成稳定均通过。实现尚未固定提交或取得本提交独立CI，因此UI仍只能使用MOCK验证交互，不能标记LIVE。
+本任务独占PostgreSQL 18中，PaaS迁移双次应用/verify及真实事务门禁以4.534秒通过同ID双Account、等值/变体重放、并发设置与删除只有一个成功、RLS、数据库第二标签攻击和故障注入整单回滚；Audit31完整catalog以11.939秒逐项接受新事实并验证USER、ROLE和AccessKey actor边界。独立IAM59/Audit31/PaaS3、双IAM和双dispatcher进程以223.721秒通过真实策略发布、`PUT`/`DELETE`、当前/目标标签决定证据、更新后下一次读取立即403、一次性Operation/Audit事实及链验证。唯一滚动前驱已替换为固定`e3c137ba0ed80d8d90f893192d343d89d2d917f5`的IAM58；实际旧binary产生requestTags、resourceTags、Profile/Decision、账号、MFA、会话和恢复事实后，IAM59双迁移、等值bootstrap和重启门禁以137.786秒通过，历史字节、proof和撤销状态未复活或改写，不再保留IAM57测试窗口。全仓默认测试、vet、模块校验、Linux amd64构建、聚焦race和两次API生成稳定均通过。实现固定推送为`e9ea19e65a4cc67a42edca05112221d195c18284`；最新独立CI尚未登记，因此UI仍只能使用MOCK验证交互，不能标记LIVE。
 
 ## 验收
 

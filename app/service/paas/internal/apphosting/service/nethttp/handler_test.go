@@ -262,6 +262,24 @@ func TestHandlerRejectsUndeclaredApplicationLabelBeforeIAM(t *testing.T) {
 	}
 }
 
+func TestWorkflowNoDesiredChangeProblemIsResourceNeutral(t *testing.T) {
+	response := httptest.NewRecorder()
+	writeWorkflowError(response, "request-no-change", applicationlifecycle.ErrNoDesiredChange)
+
+	var problem paasv1.Problem
+	if err := json.NewDecoder(response.Body).Decode(&problem); err != nil {
+		t.Fatalf("decode problem: %v", err)
+	}
+	if response.Code != http.StatusConflict || problem.Code != paasv1.ErrorConflict ||
+		problem.Title != "No desired change" || problem.Detail != "the requested desired state is unchanged" ||
+		problem.Retryable {
+		t.Fatalf("no-change problem = status %d, %#v", response.Code, problem)
+	}
+	if strings.Contains(strings.ToLower(problem.Detail), "deployment") {
+		t.Fatalf("resource-neutral workflow error leaked Deployment terminology: %#v", problem)
+	}
+}
+
 func TestHandlerFailsClosedOnIAMDenialAndUnavailableError(t *testing.T) {
 	tests := []struct {
 		name       string

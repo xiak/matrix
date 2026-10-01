@@ -16,7 +16,7 @@ var (
 	ErrAlreadyExists           = errors.New("application lifecycle resource already exists")
 	ErrResourceVersionConflict = errors.New("Deployment resource version conflict")
 	ErrIdempotencyConflict     = errors.New("application lifecycle idempotency conflict")
-	ErrNoDesiredChange         = errors.New("Deployment desired content is unchanged")
+	ErrNoDesiredChange         = errors.New("requested desired state is unchanged")
 	ErrOperationInProgress     = errors.New("Deployment has an operation in progress")
 	ErrRetryableTransaction    = errors.New("application lifecycle transaction must be retried")
 )

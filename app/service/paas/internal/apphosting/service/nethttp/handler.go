@@ -915,7 +915,7 @@ func writeWorkflowError(response http.ResponseWriter, requestID string, err erro
 	case errors.Is(err, applicationlifecycle.ErrResourceVersionConflict):
 		writeProblem(response, requestID, http.StatusPreconditionFailed, paasv1.ErrorResourceVersionConflict, "Resource version conflict", "If-Match does not identify the current resource version", false)
 	case errors.Is(err, applicationlifecycle.ErrNoDesiredChange):
-		writeProblem(response, requestID, http.StatusConflict, paasv1.ErrorConflict, "No desired change", "Deployment desired content is unchanged", false)
+		writeProblem(response, requestID, http.StatusConflict, paasv1.ErrorConflict, "No desired change", "the requested desired state is unchanged", false)
 	case errors.Is(err, applicationlifecycle.ErrOperationInProgress):
 		writeProblem(response, requestID, http.StatusConflict, paasv1.ErrorConflict, "Operation in progress", "Deployment already has an active Operation", true)
 	case errors.Is(err, context.DeadlineExceeded):
