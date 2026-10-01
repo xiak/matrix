@@ -1316,11 +1316,14 @@ or other shared controls.
 
 `ContentPage.Commands` owns responsive commands for every page-context bar:
 IAM lists/details and platform-status, quota and installation workspaces. One
-command definition drives direct desktop buttons and a trailing ellipsis menu
-when the available content frame is at most `960px` wide (also below a `760px`
-viewport for standalone headings). Single commands use that same compact entry;
-pages without commands show no empty menu. Titles keep their typography and
-truncate within their own slot; commands never wrap into another title band.
+command definition keeps at most one high-frequency primary command direct on
+desktop and groups its secondary peers under one trailing More menu. A page
+without a primary command keeps one secondary command direct, but groups two or
+more secondary commands under More. At most `960px` of available content width
+(also below a `760px` viewport for standalone headings), every command moves
+into one Page actions menu. Pages without commands show no empty menu. Titles
+keep their typography and truncate within their own slot; commands never wrap
+into another title band.
 On desktop, selection-dependent count, clear and batch commands grow toward
 the title, with Create anchored at the trailing edge. Compact menus contain
 Create and the same eligible batch commands plus Clear selection; selected
@@ -2001,12 +2004,20 @@ and is not inherited as a new backend acceptance result.
   feedback without new warning/error logs. Shared control tests cover required
   semantics, classification/status distinction, controlled paging and dialog
   focus return; existing large-candidate and batch/permission gates remain.
-  All 501 frontend tests and three static-export normalization tests pass,
+  All 970 frontend tests and three static-export normalization tests pass,
   alongside TypeScript, lint, architecture and 228 theme contrast checks.
-  All 213 generated production files from 38 static routes match the Go-embedded export, and Go UI
+  All 233 generated production files from 42 static routes match the Go-embedded export, and Go UI
   tests and vet pass. Tables, forms, dialogs, choices,
   feedback, tabs and metrics use the public controls and shared composition
   described above; source-provided data is not mistranslated as interface copy.
+  Policy-detail command composition is additionally browser-checked on desktop
+  and at 390 x 844: Associate users / groups / roles remains the single direct
+  desktop command; Edit, Copy as custom policy and Delete share one More menu;
+  and the compact Page actions menu contains the same four commands without a
+  second action row or title shift. The same public composition is exercised by
+  account live roles, own sessions and every IAM workspace collection/detail;
+  permission callbacks, disabled reasons and destructive classification remain
+  feature-owned. Source and synchronized embedded UI are fixed at `6ce077f73`.
   Extended IAM tests cover group membership, inherited permissions, policy
   editing/version/association invariants, provider-role dependencies,
   enterprise visibility and ungranted member import, one-time MOCK secrets,
