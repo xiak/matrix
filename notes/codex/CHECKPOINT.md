@@ -7,7 +7,7 @@
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
 - Pushed source/embed milestone: `05fe4a74c`
-- Pushed documentation milestone: `02b449055`
+- Pushed documentation milestone: `be1e3c8f0`
 
 ## Authoritative route
 
@@ -43,15 +43,16 @@ scope and never reissues the Secret. No LIVE repository, HTTP decoder or
 Action was added.
 
 Source and synchronized embed are pushed at `05fe4a74c`; shared-console and
-IAM-client FEAT evidence is pushed through `02b449055`. The complete frontend
+IAM-client FEAT evidence is pushed through `be1e3c8f0`. The complete frontend
 gate passed 58 files/954 cases plus three normalization cases,
 typecheck/lint/architecture/228-pair style checks, 42-route export, 233-file
 embed equality and repository Go test/vet. Desktop and `390 x 844` DEV checks
 confirmed the two-layer hierarchy, atomic creation receipt and responsive
 single-column form with no horizontal overflow. A fresh browser tab had no
-warning/error log. IAM fixed candidate
-`472596b1edf5fc0fa3f908294bae0624d581dc4f`, but its independent CI and explicit
-consumable confirmation remain open.
+warning/error log. IAM's successor candidate is
+`4e79ef783410bbb596232763a9be80412b5e0846`; it leaves the frontend contract
+unchanged, but its complete independent CI and explicit consumable confirmation
+remain open.
 
 Earlier federation replacement, Deployment lifecycle, AccessKey carrier,
 same-User permission-source handoff, Application tag recovery, service
@@ -73,11 +74,12 @@ fixed or pushed and therefore remain absent from the UI; the browser must not co
 or submit a client IP for this decision. Product
 Profile publication, service-related roles and permission boundaries already
 have backend-owned contracts and must not receive parallel frontend models.
-The IAM AccessKey network/usage candidate is fixed at
-`472596b1edf5fc0fa3f908294bae0624d581dc4f` and includes atomic create-time
-network restrictions, but an `authority-storage` CI failure was still under
-investigation and no explicit consumable confirmation has arrived. Keep
-`05fe4a74c` browser-memory-only; add no parallel LIVE model or inferred wire.
+The IAM AccessKey network/usage successor candidate is fixed at
+`4e79ef783410bbb596232763a9be80412b5e0846` and leaves the frontend contract
+unchanged. Verification `36897183328` has passed go, node-process and
+authority-storage, while the remaining authority matrix is still running and
+no explicit consumable confirmation has arrived. Keep `05fe4a74c`
+browser-memory-only; add no parallel LIVE model or inferred wire.
 External assertions remain configuration-only: do not reintroduce a persistent
 federated-account/external-subject object, HTTP adapter, successful assumption
 path, RoleSession issuance or authorization claim until IAM publishes and
