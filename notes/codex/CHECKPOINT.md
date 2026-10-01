@@ -6,8 +6,8 @@
 - Updated: 2026-10-02
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `8e3361a84`
-- Pushed documentation milestone: `de7fb4217`
+- Pushed source/embed milestone: `fcd31da82`
+- Pushed documentation milestone: `dfe4aac9e`
 
 ## Authoritative route
 
@@ -29,22 +29,20 @@ compaction or handoff, then validate it against Git and the linked FEAT.
 ## Latest pushed milestone
 
 The inspectable DEV MOCK remains available at `http://127.0.0.1:4317`, and
-login verification remains disabled for UX review. Existing enterprise
-connection, visibility editing and member import now use the shared content-area
-workflow instead of large Dialogs. Entry focuses the workflow heading; cancel
-or completion restores the exact directory, detail or import trigger. Only the
-destructive disconnect keeps a short confirmation Dialog.
+login verification remains disabled for UX review. The read-only permission
+catalog now shows the public-cloud ownership flow in its correct order: product
+engineering defines capabilities and enforces the PEP; IAM validates and
+publishes immutable trusted declarations; tenant administrators only consume
+the released directory when authoring and assigning policies. The internal
+onboarding preview remains MOCK-only and final publication stays disabled.
 
-This remains browser-memory UX only: it scans no QR code, installs no app,
-connects no external directory, sends no invitation, grants no permission and
-does not imply SSO. LIVE still exposes no entry, repository, HTTP contract or
-successful receipt. Source and synchronized embed are pushed at `8e3361a84`;
-documentation is pushed at `de7fb4217`. The focused enterprise case and
-complete frontend gate passed 58 files/969 cases plus three normalization
-cases, typecheck, lint, architecture, 228-pair style checks, 42-route export,
-233-file embed equality and repository Go test/vet. Desktop and `390 × 844`
-DEV confirmed the same content-area semantics, no workflow Dialog, heading
-focus and cancel focus restoration.
+Source and synchronized embed are pushed at `fcd31da82`. The complete frontend
+gate passed 58 files/969 cases plus three normalization cases, typecheck, lint,
+architecture, 228-pair style checks, 42-route export, 233-file embed equality
+and repository Go test/vet. Desktop and `390 × 844` DEV confirmed horizontal
+and directed vertical presentations respectively, with no Dialog, horizontal
+overflow or browser warning/error. Earlier enterprise content workflows remain
+owned by FEAT-IAM-010 and FEAT-007.
 
 Earlier Account security report, federation replacement, Deployment lifecycle,
 AccessKey carrier, Application tag recovery, service authorization, policy
@@ -62,11 +60,13 @@ host, password, CA or dispatcher controls to the tenant console.
 
 The IAM engineer has been asked for the next backend-not-yet-implemented areas
 that are safe to prototype, with actor/owner, planned contract, allowed MOCK
-states and forbidden inferences. Until that answer is fixed, new UX may explain
-responsibilities and content flow only; it must not add a parallel domain model,
-decision-shaped authorization result, LIVE adapter, publish action or fabricated
-success. External assertions remain configuration-only, and the Account security
-report remains information architecture rather than a mounted LIVE client.
+states and forbidden inferences. The engineer is still completing the signed
+A/B installation and real PostgreSQL/SMTP release gate. Until an answer is
+fixed, new UX may explain responsibilities and content flow only; it must not
+add a parallel domain model, decision-shaped authorization result, LIVE
+adapter, publish action or fabricated success. External assertions remain
+configuration-only, and the Account security report remains information
+architecture rather than a mounted LIVE client.
 
 Continue without reintroducing whole-page loading, hidden broad Context
 subscriptions, fabricated totals, duplicate components or login verification
