@@ -437,6 +437,11 @@ IAM 工程师随后固定并推送来源 `cb62ed2f6c307f5a50aa27480f89c8c58cf081
 
 ### Role、trust 与会话 MOCK 的开发验收证据
 
+2026-10-02，角色目录的信息层级固定在已推送的
+[`68f059c45`](https://github.com/xiak/matrix/commit/68f059c45)。目录不再要求管理员逐个进入详情才理解 Role 的主要约束：同一行按“信任入口／授权与边界／新会话”分组，分别呈现主体类型与精确 principal、关联策略数量与权限边界配置状态、最长会话时长与控制台入口状态，并保留创建时间。目录没有增加操作列，也没有把配置事实描述成有效权限、可承担结论或运行时授权结果；Role update/status/delete、trust、policy attachment 与 permission boundary 的 LIVE 写入仍等待各自固定契约。
+
+定向 Role 行为用例及完整前端 58 文件／955 条用例、三条静态归一化、类型、lint、架构、228 组主题对比、42 路由生产导出、233 文件嵌入等价与全仓 Go test/vet 通过。全新 DEV 会话在桌面及 `390 × 844` 下验证目录；小屏使用既有堆叠表格契约，viewport/document/body 均为 390px，无横向溢出，控制台 warning/error 为空。该证据接受隔离 MOCK 的只读信息架构，不新增 LIVE repository、HTTP 解码器或 Action。
+
 2026-09-24，当前前端实现固定在已推送的
 [`c5ec1f945cdcd7af61941aafed8da4d7e68f839c`](https://github.com/xiak/matrix/commit/c5ec1f945cdcd7af61941aafed8da4d7e68f839c)。
 
