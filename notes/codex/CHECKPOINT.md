@@ -6,9 +6,9 @@
 - Updated: 2026-10-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `ccdb94c9`
+- Pushed source/embed milestone: `d42b3b06`
 - Pushed strict-contract test follow-up: `160b6be4`
-- Pushed documentation milestone: `27bf4def`
+- Pushed documentation milestone: `726ae0e7`
 
 ## Authoritative route
 
@@ -35,14 +35,21 @@ missing-tag, per-resource recheck and collection-boundary behavior. The browser
 authors only policy syntax; it never submits or overrides trusted resource
 facts and does not present resource-tag mutation as policy authoring.
 
-Source and synchronized 233-file embed are pushed at `ccdb94c9`; FEAT evidence
-is pushed at `27bf4def`. Strict negative coverage at `160b6be4` rejects unknown
+Source and synchronized 233-file embed are pushed at `d42b3b06`; FEAT evidence
+is pushed at `726ae0e7`. The isolated four-method resource-tag preview now scopes
+its request-tag omission to that preview and directs catalog-driven behavior to
+the selected Product Profile, avoiding a false platform-wide limitation. Strict
+negative coverage at `160b6be4` rejects unknown
 resource-tag keys, wrong trusted sources, wrong value types and invalid tag
 values without changing production behavior. The milestone passed 57 frontend files / 920 tests,
 three normalization cases, type/lint/architecture checks, 228 theme contrast
 pairs, a 42-route static export, embed equality and repository Go test/vet.
 Desktop and `430 x 900` DEV verified the exact Action, resource-tag condition
 and review flow without a Dialog or page overflow.
+
+The wording-alignment follow-up additionally passed the 174-case access workspace
+suite, frontend typecheck/lint, the 42-route export, 233-file embed equality and
+the UI embed host Go test/vet.
 
 The previously pushed AccessKey owner directory, policy-compilation provenance,
 service-authorization, policy-coverage, Audit, cross-service loading/navigation
