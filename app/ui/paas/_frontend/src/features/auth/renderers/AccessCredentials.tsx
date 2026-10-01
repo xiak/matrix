@@ -23,6 +23,7 @@ type KeyFlow =
   | { kind: "delete"; keyId: string; requestId: string };
 
 const previewProgrammaticBoundaries = [{
+  kind: "create",
   actions: [
     "paas.application.create",
     "paas.configuration.create",
@@ -31,13 +32,28 @@ const previewProgrammaticBoundaries = [{
     "paas.deployment.create"
   ],
   product: "paas",
-  profileRevision: 8,
-  fixedSource: "63ab867d",
+  profileRevision: 9,
+  fixedSource: "b6d15c89",
   outcomes: [
     { http: 202, code: "Operation", meaning: "accepted", nonce: "consumed" },
     { http: 400, code: "INVALID_ARGUMENT", meaning: "invalidArgument", nonce: "notConsumed" },
     { http: 401, code: "UNAUTHENTICATED", meaning: "unauthenticated", nonce: "unknown" },
     { http: 403, code: "PERMISSION_DENIED", meaning: "permissionDenied", nonce: "consumed" },
+    { http: 409, code: "CONFLICT", meaning: "conflict", nonce: "consumed" },
+    { http: 503, code: "IDENTITY_UNAVAILABLE", meaning: "identityUnavailable", nonce: "unknown" }
+  ]
+}, {
+  kind: "read",
+  actions: ["paas.application.read"],
+  product: "paas",
+  profileRevision: 9,
+  fixedSource: "b6d15c89",
+  outcomes: [
+    { http: 200, code: "Application", meaning: "resourceReturned", nonce: "consumed" },
+    { http: 400, code: "INVALID_ARGUMENT", meaning: "readInvalidArgument", nonce: "notConsumed" },
+    { http: 401, code: "UNAUTHENTICATED", meaning: "unauthenticated", nonce: "unknown" },
+    { http: 403, code: "PERMISSION_DENIED", meaning: "permissionDenied", nonce: "consumed" },
+    { http: 404, code: "NOT_FOUND", meaning: "notFound", nonce: "consumed" },
     { http: 409, code: "CONFLICT", meaning: "conflict", nonce: "consumed" },
     { http: 503, code: "IDENTITY_UNAVAILABLE", meaning: "identityUnavailable", nonce: "unknown" }
   ]
@@ -178,8 +194,8 @@ function ProgrammaticRequestBoundaryPreview({ actions }: { actions: readonly str
     <summary><span><strong>{t("keyRequestPreviewTitle")}</strong><small>{t("keyRequestPreviewHint")}</small></span><Badge status="warning">MOCK</Badge></summary>
     <div className={styles.requestPreviewBody}>
       <Alert status="warning">{t("keyRequestPreviewNotLive")}</Alert>
-      {boundaries.map((entry) => <section className={styles.requestBoundary} key={`${entry.product}:${entry.profileRevision}`}>
-        <header><div><strong>{t("keyRequestPreviewScope", { count: entry.actions.length })}</strong><small>{t("keyRequestPreviewSource", { source: entry.fixedSource })}</small></div><Badge status="neutral">{entry.product} · r{entry.profileRevision}</Badge></header>
+      {boundaries.map((entry) => <section className={styles.requestBoundary} key={`${entry.product}:${entry.profileRevision}:${entry.kind}`}>
+        <header><div><strong>{t(`keyRequestPreviewKinds.${entry.kind}.scope`, { count: entry.actions.length })}</strong><small>{t("keyRequestPreviewSource", { source: entry.fixedSource })}</small></div><Badge status="neutral">{entry.product} · r{entry.profileRevision}</Badge></header>
         <div className={styles.requestActions}>{entry.actions.map((action) => <code key={action}>{action}</code>)}</div>
         <Table aria-label={t("keyRequestPreviewTable")} className={styles.requestOutcomeTable} mobileLayout="stack">
           <thead><tr><th scope="col">HTTP</th><th scope="col">{t("keyRequestPreviewCode")}</th><th scope="col">{t("keyRequestPreviewMeaning")}</th><th scope="col">Nonce</th></tr></thead>
@@ -190,7 +206,7 @@ function ProgrammaticRequestBoundaryPreview({ actions }: { actions: readonly str
             <td data-label="Nonce">{t(`keyRequestPreviewNonce.${outcome.nonce}`)}</td>
           </tr>)}</tbody>
         </Table>
-        <p className={styles.note}>{t("keyRequestPreviewSuccessBoundary")}</p>
+        <p className={styles.note}>{t(`keyRequestPreviewKinds.${entry.kind}.successBoundary`)}</p>
       </section>)}
     </div>
   </details>;

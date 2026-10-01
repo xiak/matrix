@@ -2868,7 +2868,7 @@ describe("CAM-style access workspace", () => {
   });
   it("lists exact access-key carrier declarations without presenting them as a user grant", async () => {
     const listAuthorizationProfiles = vi.fn().mockResolvedValue({ accountId: "org-xiak", items: [{ profile: {
-      product: "paas", revision: 8, callingService: "PAAS", actions: [
+      product: "paas", revision: 9, callingService: "PAAS", actions: [
         ...[
           ["paas.application.create", "APPLICATION"],
           ["paas.configuration.create", "CONFIGURATION"],
@@ -2878,7 +2878,8 @@ describe("CAM-style access workspace", () => {
         ].map(([action, resourceKind]): AuthorizationProfileAction => ({ action: action!, resourceKind: resourceKind!, resultResourceKind: resourceKind!,
           scope: "TENANT", subjectTypes: ["USER"], userAuthenticationMethods: ["LOGIN_SESSION", "ACCESS_KEY"],
           resourceShapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_CREATE" }] })),
-        { action: "paas.application.read", resourceKind: "APPLICATION", scope: "TENANT", subjectTypes: ["USER"], userAuthenticationMethods: ["LOGIN_SESSION"], resourceShapes: [{ mode: "INSTANCE", prefixAllowed: false }] }
+        { action: "paas.application.read", resourceKind: "APPLICATION", scope: "TENANT", subjectTypes: ["ROLE", "USER"], userAuthenticationMethods: ["LOGIN_SESSION", "ACCESS_KEY"],
+          resourceShapes: [{ mode: "INSTANCE", prefixAllowed: true }], conditions: [{ key: "resource.tag/environment", valueType: "STRING", source: "CALLING_SERVICE_RESOURCE_TAG" }] }
       ]
     }, contentDigest: `sha256:${"b".repeat(64)}` }] });
     const { user } = await open("keys", { repository: { listAuthorizationProfiles } });
@@ -2890,22 +2891,25 @@ describe("CAM-style access workspace", () => {
     expect(boundary.getByText("paas.configuration-revision.create")).toBeTruthy();
     expect(boundary.getByText("paas.application-revision.create")).toBeTruthy();
     expect(boundary.getByText("paas.deployment.create")).toBeTruthy();
-    expect(boundary.getAllByText("权限声明修订 8")).toHaveLength(5);
-    expect(screen.queryByText("paas.application.read")).toBeNull();
+    expect(boundary.getByText("paas.application.read")).toBeTruthy();
+    expect(boundary.getAllByText("权限声明修订 9")).toHaveLength(6);
     expect(screen.getByText(/只表示产品声明接受这种凭据载体，不表示当前用户已获授权/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "核对该用户的权限来源" })).toBeTruthy();
     expect(screen.getByText(/下一步只检查策略与用户组等配置来源/)).toBeTruthy();
-    const requestBoundary = screen.getByText("签名创建请求的结果边界").closest("details")!;
+    const requestBoundary = screen.getByText("签名产品请求的结果边界").closest("details")!;
     expect(requestBoundary.open).toBe(false);
-    await user.click(screen.getByText("签名创建请求的结果边界").closest("summary")!);
+    await user.click(screen.getByText("签名产品请求的结果边界").closest("summary")!);
     expect(screen.getByText("5 个精确签名创建 Action")).toBeTruthy();
-    expect(screen.getByText("UNAUTHENTICATED")).toBeTruthy();
-    expect(screen.getByText("PERMISSION_DENIED")).toBeTruthy();
-    expect(screen.getByText("CONFLICT")).toBeTruthy();
-    expect(screen.getByText("IDENTITY_UNAVAILABLE")).toBeTruthy();
-    expect(screen.getByText("INVALID_ARGUMENT")).toBeTruthy();
+    expect(screen.getByText("1 个精确签名读取 Action")).toBeTruthy();
+    expect(screen.getByText("Application", { selector: "code" })).toBeTruthy();
+    expect(screen.getByText("NOT_FOUND")).toBeTruthy();
+    expect(screen.getAllByText("UNAUTHENTICATED")).toHaveLength(2);
+    expect(screen.getAllByText("PERMISSION_DENIED")).toHaveLength(2);
+    expect(screen.getAllByText("CONFLICT")).toHaveLength(2);
+    expect(screen.getAllByText("IDENTITY_UNAVAILABLE")).toHaveLength(2);
+    expect(screen.getAllByText("INVALID_ARGUMENT")).toHaveLength(2);
     expect(screen.getByText("Operation")).toBeTruthy();
-    expect(screen.getByText(/63ab867d/)).toBeTruthy();
+    expect(screen.getAllByText(/b6d15c89/)).toHaveLength(2);
     expect(screen.queryByRole("dialog")).toBeNull();
     await user.click(screen.getByRole("button", { name: "核对该用户的权限来源" }));
     expect(screen.getByLabelText("Entity destination").textContent).toBe("principal-lin");

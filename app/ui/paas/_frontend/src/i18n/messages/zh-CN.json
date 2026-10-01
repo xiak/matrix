@@ -1483,7 +1483,7 @@
     "immutableUserFieldsHint": "用户 ID、登录名和所属账号创建后不可修改。资料更新只修改显示名称。",
     "accessMethodsAndCredentials": "访问方式与凭据",
     "liveCredentialContractHint": "当前正式 IAM 契约尚未提供控制台访问、编程访问或凭据清单；这里不根据用户状态推断访问方式。",
-    "liveCredentialManagedHint": "控制台登录与编程访问的启用状态尚无独立契约，不能从用户状态或密钥推断。此处按用户读取访问密钥；可见与可操作范围由 IAM 判定，产品 API 尚未接入密钥验签。",
+    "liveCredentialManagedHint": "控制台登录与编程访问的启用状态尚无独立契约，不能从用户状态或密钥推断。此处按用户读取访问密钥；可见与可操作范围由 IAM 判定。产品是否接受密钥签名只以当前权限能力目录为准。",
     "manageAccessKeys": "查看/管理访问密钥",
     "hideAccessKeys": "收起访问密钥",
     "deleteUser": "删除用户",
@@ -3925,20 +3925,31 @@
     "keyProgrammaticInspectPermissionsHint": "下一步只检查策略与用户组等配置来源；真实请求仍须重新判定 Action、资源、条件和显式拒绝。",
     "keyProgrammaticRetry": "重新读取声明",
     "keyProgrammaticSecretBoundary": "浏览器不会保存 Secret、生成签名或发送测试业务请求。请在受保护的工作负载凭据存储中使用 Secret。",
-    "keyRequestPreviewTitle": "签名创建请求的结果边界",
-    "keyRequestPreviewHint": "查看已固定资源图的共同结果语义",
+    "keyRequestPreviewTitle": "签名产品请求的结果边界",
+    "keyRequestPreviewHint": "按操作类型查看已固定契约的公开结果语义",
     "keyRequestPreviewNotLive": "这是隔离 MOCK 对固定后端契约的信息预览。独立 CI、APISIX 边缘覆盖和签名安装尚未完成；本页不会发送请求，也不能证明当前环境已经开放程序访问。",
     "keyRequestPreviewSource": "固定后端来源 {source} · 当前发布未验收",
-    "keyRequestPreviewScope": "{count} 个精确签名创建 Action",
-    "keyRequestPreviewTable": "签名创建请求的公开结果",
+    "keyRequestPreviewTable": "签名产品请求的公开结果",
     "keyRequestPreviewCode": "公开结果",
     "keyRequestPreviewMeaning": "调用方含义",
-    "keyRequestPreviewSuccessBoundary": "成功只表示对应资源创建请求已被接受并返回现有 Operation；Operation 记录 USER 与 Access key ID，不返回 Secret，也不把结果扩展为目录外 Action 的许可。",
+    "keyRequestPreviewKinds": {
+      "create": {
+        "scope": "{count} 个精确签名创建 Action",
+        "successBoundary": "成功只表示对应资源创建请求已被接受并返回现有 Operation；Operation 记录 USER 与 Access key ID，不返回 Secret，也不把结果扩展为目录外 Action 的许可。"
+      },
+      "read": {
+        "scope": "{count} 个精确签名读取 Action",
+        "successBoundary": "精确 GET 请求不携带查询参数或正文；成功只返回同一账号中已授权的真实 Application。environment 标签由产品数据库读取并在返回前再次核对；不展示内部身份解析、签名、Nonce、摘要或账号选择器。"
+      }
+    },
     "keyRequestPreviewOutcomes": {
       "accepted": "请求已接受，返回现有异步 Operation。",
       "invalidArgument": "业务 JSON 无效；在 IAM 前拒绝，修正正文后必须重新签名。",
+      "resourceReturned": "返回已授权的真实 Application；资源和声明标签已在同一账号内重新核对。",
+      "readInvalidArgument": "读取请求携带正文；在 IAM 前拒绝且不消费 Nonce。",
       "unauthenticated": "签名结构、Access key、时间窗或 MAC 未被接受；不泄漏具体失败原因，也不能假定原签名可重试。",
       "permissionDenied": "签名有效，但当前策略拒绝本次准确请求。",
+      "notFound": "完成同账号授权后才确认目标 Application 不存在；不会提前泄露资源存在性。",
       "conflict": "签名 Nonce 已被消费；原签名不得再次使用。",
       "identityUnavailable": "IAM 或决定回包不可用／不可信；结果不确定，不自动重发同一意图，重新确认后使用新 Nonce。"
     },

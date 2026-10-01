@@ -67,11 +67,11 @@ describe("isolated authorization catalog preview", () => {
     ]);
     expect(paas?.actions.some((action) => action.action.includes(":"))).toBe(false);
   });
-  it("pins revision 8 to the exact AccessKey-capable PaaS immutable-resource graph", async () => {
+  it("pins revision 9 to the exact AccessKey-capable PaaS graph and tagged Application read", async () => {
     const directory = await previewAccountRepository.listAuthorizationProfiles(previewCredential);
     const entry = directory.items.find((item) => item.profile.product === "paas");
-    expect(entry?.profile.revision).toBe(8);
-    expect(entry?.contentDigest).toBe("sha256:553bb69f2eed79887305f7884188769894f786459391ca8df71fe95e07f71812");
+    expect(entry?.profile.revision).toBe(9);
+    expect(entry?.contentDigest).toBe("sha256:14aa8bee8819bde9b1a5434774b26308866ea1a17d9ccfd3cc3ccf252cb297c6");
     expect(entry?.profile.actions.filter((action) => action.userAuthenticationMethods?.includes("ACCESS_KEY")).map((action) => ({
       action: action.action,
       resourceKind: action.resourceKind,
@@ -81,21 +81,34 @@ describe("isolated authorization catalog preview", () => {
       userAuthenticationMethods: action.userAuthenticationMethods,
       resourceShapes: action.resourceShapes
     }))).toEqual([
-      ["paas.application.create", "APPLICATION"],
-      ["paas.configuration.create", "CONFIGURATION"],
-      ["paas.configuration-revision.create", "CONFIGURATION_REVISION"],
-      ["paas.application-revision.create", "APPLICATION_REVISION"],
-      ["paas.deployment.create", "DEPLOYMENT"]
-    ].map(([action, resourceKind]) => ({
-      action,
-      resourceKind,
-      resultResourceKind: resourceKind,
-      scope: "TENANT",
-      subjectTypes: ["ROLE", "USER"],
-      userAuthenticationMethods: ["ACCESS_KEY", "LOGIN_SESSION"],
-      resourceShapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_CREATE" }]
-    })));
-    expect(entry?.profile.actions.filter((action) => action.userAuthenticationMethods?.includes("ACCESS_KEY"))).toHaveLength(5);
+      ...[
+        ["paas.application.create", "APPLICATION"],
+        ["paas.configuration.create", "CONFIGURATION"],
+        ["paas.configuration-revision.create", "CONFIGURATION_REVISION"],
+        ["paas.application-revision.create", "APPLICATION_REVISION"],
+        ["paas.deployment.create", "DEPLOYMENT"]
+      ].map(([action, resourceKind]) => ({
+        action,
+        resourceKind,
+        resultResourceKind: resourceKind,
+        scope: "TENANT",
+        subjectTypes: ["ROLE", "USER"],
+        userAuthenticationMethods: ["ACCESS_KEY", "LOGIN_SESSION"],
+        resourceShapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_CREATE" }]
+      })),
+      {
+        action: "paas.application.read",
+        resourceKind: "APPLICATION",
+        resultResourceKind: undefined,
+        scope: "TENANT",
+        subjectTypes: ["ROLE", "USER"],
+        userAuthenticationMethods: ["ACCESS_KEY", "LOGIN_SESSION"],
+        resourceShapes: [{ mode: "INSTANCE", prefixAllowed: true }]
+      }
+    ]);
+    const read = entry?.profile.actions.find((action) => action.action === "paas.application.read");
+    expect(read?.conditions).toContainEqual({ key: "resource.tag/environment", valueType: "STRING", source: "CALLING_SERVICE_RESOURCE_TAG" });
+    expect(entry?.profile.actions.filter((action) => action.userAuthenticationMethods?.includes("ACCESS_KEY"))).toHaveLength(6);
   });
 });
 

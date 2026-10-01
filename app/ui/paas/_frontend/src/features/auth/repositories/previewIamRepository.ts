@@ -89,7 +89,7 @@ const previewAuthorizationProfiles: AuthorizationProfileEntry[] = [
   },
   {
     profile: {
-      product: "paas", revision: 8, callingService: "PAAS", actions: [
+      product: "paas", revision: 9, callingService: "PAAS", actions: [
         { action: "paas.application.create", resourceKind: "APPLICATION", scope: "TENANT", subjectTypes: ["ROLE", "USER"],
           userAuthenticationMethods: ["ACCESS_KEY", "LOGIN_SESSION"],
           resourceShapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_CREATE" }],
@@ -137,6 +137,7 @@ const previewAuthorizationProfiles: AuthorizationProfileEntry[] = [
             { key: "request.source-ip", valueType: "IP", source: "CALLING_SERVICE_NETWORK" }
           ], resultResourceKind: "DEPLOYMENT" },
         { action: "paas.application.read", resourceKind: "APPLICATION", scope: "TENANT", subjectTypes: ["ROLE", "USER"],
+          userAuthenticationMethods: ["ACCESS_KEY", "LOGIN_SESSION"],
           resourceShapes: [{ mode: "INSTANCE", prefixAllowed: true }],
           conditions: [
             { key: "iam.account-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" },
@@ -165,7 +166,7 @@ const previewAuthorizationProfiles: AuthorizationProfileEntry[] = [
           resourceShapes: [{ mode: "INSTANCE", prefixAllowed: false }], resultResourceKind: "EXECUTION_TARGET" }
       ]
     },
-    contentDigest: "sha256:553bb69f2eed79887305f7884188769894f786459391ca8df71fe95e07f71812"
+    contentDigest: "sha256:14aa8bee8819bde9b1a5434774b26308866ea1a17d9ccfd3cc3ccf252cb297c6"
   }
 ];
 

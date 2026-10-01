@@ -1483,7 +1483,7 @@
     "immutableUserFieldsHint": "The user ID, sign-in name and owning account cannot be changed. Profile updates change only the display name.",
     "accessMethodsAndCredentials": "Access methods and credentials",
     "liveCredentialContractHint": "The live IAM contract does not yet provide console access, programmatic access or credential inventory. This view does not infer access methods from user status.",
-    "liveCredentialManagedHint": "Console and programmatic access enablement have no separate contract yet and cannot be inferred from user status or keys. Keys are requested per user here; IAM decides which are visible and manageable. Product APIs do not accept key signatures yet.",
+    "liveCredentialManagedHint": "Console and programmatic access enablement have no separate contract yet and cannot be inferred from user status or keys. Keys are requested per user here; IAM decides which are visible and manageable. Only the current authorization capability catalog states whether a product accepts key signatures.",
     "manageAccessKeys": "View/manage access keys",
     "hideAccessKeys": "Hide access keys",
     "deleteUser": "Delete user",
@@ -3925,20 +3925,31 @@
     "keyProgrammaticInspectPermissionsHint": "The next view checks policy and group configuration only. A real request must still reevaluate the Action, resource, conditions and explicit denies.",
     "keyProgrammaticRetry": "Reload declarations",
     "keyProgrammaticSecretBoundary": "The browser does not retain the Secret, create signatures or send test business requests. Use the Secret only from protected workload credential storage.",
-    "keyRequestPreviewTitle": "Signed create-request outcome boundary",
-    "keyRequestPreviewHint": "Inspect the shared outcome semantics of the fixed resource graph",
+    "keyRequestPreviewTitle": "Signed product-request outcome boundary",
+    "keyRequestPreviewHint": "Inspect the fixed contract's public outcome semantics by operation type",
     "keyRequestPreviewNotLive": "This isolated MOCK explains a fixed backend contract. Independent CI, APISIX edge coverage and the signed installation are unfinished. This page sends no request and cannot prove that programmatic access is available in the current environment.",
     "keyRequestPreviewSource": "Fixed backend source {source} · release not accepted",
-    "keyRequestPreviewScope": "{count} exact signed create Actions",
-    "keyRequestPreviewTable": "Public signed create-request outcomes",
+    "keyRequestPreviewTable": "Public signed product-request outcomes",
     "keyRequestPreviewCode": "Public result",
     "keyRequestPreviewMeaning": "Caller meaning",
-    "keyRequestPreviewSuccessBoundary": "Success only means that the corresponding resource create request was accepted and returned the existing Operation. The Operation records the USER and Access key ID, returns no Secret and grants no Action outside the catalog entry.",
+    "keyRequestPreviewKinds": {
+      "create": {
+        "scope": "{count} exact signed create Actions",
+        "successBoundary": "Success only means that the corresponding resource create request was accepted and returned the existing Operation. The Operation records the USER and Access key ID, returns no Secret and grants no Action outside the catalog entry."
+      },
+      "read": {
+        "scope": "{count} exact signed read Action",
+        "successBoundary": "The exact GET carries no query or body; success returns only the authorized Application in the same account. The product database supplies the environment tag and rechecks it before returning; internal subject resolution, signatures, nonces, digests and account selectors stay hidden."
+      }
+    },
     "keyRequestPreviewOutcomes": {
       "accepted": "The request is accepted and returns the existing asynchronous Operation.",
       "invalidArgument": "The business JSON is invalid and is rejected before IAM; correct the body and sign a new request.",
+      "resourceReturned": "Returns the authorized Application after rechecking the resource and declared tags in the same account.",
+      "readInvalidArgument": "The read carries a body and is rejected before IAM without consuming the nonce.",
       "unauthenticated": "The signature shape, Access key, time window or MAC was not accepted without revealing which check failed; the original signature must not be assumed reusable.",
       "permissionDenied": "The signature is valid, but current policy denies this exact request.",
+      "notFound": "Only after same-account authorization does the product confirm that the Application is absent, avoiding an existence leak.",
       "conflict": "The signed-request nonce was already consumed; the original signature cannot be reused.",
       "identityUnavailable": "IAM or its decision response is unavailable or untrusted. The outcome is uncertain: do not automatically replay the same intent; confirm state and use a new nonce."
     },
