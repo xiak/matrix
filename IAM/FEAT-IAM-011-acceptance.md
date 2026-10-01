@@ -190,7 +190,7 @@ CI实际记录Go1.26.5、GOMAXPROCS2、CPU quota/period=200000/100000、memory.m
 
 ## 固定消费者的集成检查
 
-最终可发布组合尚未冻结，须在功能收敛后按首版基线规则与安装 owner 重新核对实际 schema、函数契约和二进制。开发阶段的联调版本不能提前作为最终发布 profile，也不能把不同分支的 PaaS 版本混为一谈。以下既有消费者必须在切换候选中通过真实数据检查；中间源码、同 schema 数字或静态编译不能替代：
+当前签名发布候选已与安装 owner 冻结为IAM61/Audit31/PaaS1+`contractRevision=5`，但尚未通过真实签名A/B生命周期和精确源码独立CI，因此仍不是已验收的最终发布组合。该候选只允许相同完整profile的升级、数据保留回滚和选定备份恢复；旧4/3/1+r4及其他分支PaaS组合必须在副作用前拒绝，IAM60→61 SQL数据保留不能冒充跨profile发布兼容。以下既有消费者必须在候选中通过真实数据检查；中间源码、同 schema 数字或静态编译不能替代：
 
 - `lookup_service` 五列与 `ServiceIdentity` 安装/purpose 语义；`claim_audit_event` 七列及物理 owner 的租约/完成身份。
 - `CanonicalizeEvent`、旧 tenant/installation bytes/hash/cursor/链与严格 event-bound producer proof。

@@ -26,6 +26,13 @@ type releasePair struct {
 	b release.VerifiedBundle
 }
 
+type securityReportSnapshot struct {
+	requestID string
+	metadata  iamv1.AccountSecurityReportMetadata
+	document  iamv1.AccountSecurityReport
+	csv       []byte
+}
+
 // This private test fixture crosses the outer engine restart, not a product
 // API. It is stored outside the installation backup and never enters a bundle.
 type iamRetention struct {

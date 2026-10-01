@@ -213,6 +213,97 @@ func (client *edgeClient) mutateIAM(ctx context.Context, path string, bearer []b
 	return nil
 }
 
+func (client *edgeClient) createSecurityReport(
+	ctx context.Context,
+	bearer []byte,
+	requestID string,
+	wantStatus int,
+	wantOutcome string,
+) (iamv1.CreateAccountSecurityReportResponse, error) {
+	response, err := client.json(
+		ctx, http.MethodPost, "/api/iam/v1/account/security-reports", bearer,
+		iamv1.CreateAccountSecurityReportRequest{
+			FormatVersion: iamv1.SecurityReportFormatVersion,
+			RequestID:     requestID,
+		}, nil, wantStatus,
+	)
+	if err != nil {
+		return iamv1.CreateAccountSecurityReportResponse{}, err
+	}
+	defer clear(response.body)
+	var result iamv1.CreateAccountSecurityReportResponse
+	if decodeOne(response.body, &result) != nil || iamv1.ValidateCreateAccountSecurityReportResponse(result) != nil ||
+		result.Outcome != wantOutcome {
+		return iamv1.CreateAccountSecurityReportResponse{}, errors.New("IAM security report creation response failed")
+	}
+	return result, nil
+}
+
+func (client *edgeClient) readSecurityReport(
+	ctx context.Context,
+	bearer []byte,
+	reportID iamv1.SecurityReportID,
+) (iamv1.AccountSecurityReport, error) {
+	response, err := client.json(
+		ctx, http.MethodGet, "/api/iam/v1/account/security-reports/"+string(reportID), bearer,
+		nil, nil, http.StatusOK,
+	)
+	if err != nil {
+		return iamv1.AccountSecurityReport{}, err
+	}
+	defer clear(response.body)
+	var result iamv1.AccountSecurityReport
+	if decodeOne(response.body, &result) != nil || iamv1.ValidateAccountSecurityReport(result) != nil || result.Metadata.ID != reportID {
+		return iamv1.AccountSecurityReport{}, errors.New("IAM security report response failed")
+	}
+	return result, nil
+}
+
+func (client *edgeClient) securityReportMissing(
+	ctx context.Context,
+	bearer []byte,
+	reportID iamv1.SecurityReportID,
+) error {
+	response, err := client.json(
+		ctx, http.MethodGet, "/api/iam/v1/account/security-reports/"+string(reportID), bearer,
+		nil, nil, http.StatusNotFound,
+	)
+	clear(response.body)
+	return err
+}
+
+func (client *edgeClient) downloadSecurityReport(
+	ctx context.Context,
+	bearer []byte,
+	metadata iamv1.AccountSecurityReportMetadata,
+) ([]byte, error) {
+	request, err := http.NewRequestWithContext(
+		ctx, http.MethodGet,
+		client.endpoint+"/api/iam/v1/account/security-reports/"+string(metadata.ID)+"/content",
+		nil,
+	)
+	if err != nil {
+		return nil, errors.New("construct IAM security report download failed")
+	}
+	request.Header.Set("Authorization", "Bearer "+string(bearer))
+	response, err := client.http.Do(request)
+	if err != nil {
+		return nil, errors.New("IAM security report download failed")
+	}
+	defer response.Body.Close()
+	content, readErr := io.ReadAll(io.LimitReader(response.Body, iamv1.MaxSecurityReportCSVBytes+1))
+	mediaType, _, mediaErr := mime.ParseMediaType(response.Header.Get("Content-Type"))
+	wantDisposition := `attachment; filename="matrix-iam-security-report-` + string(metadata.ID) + `.csv"`
+	if readErr != nil || len(content) > iamv1.MaxSecurityReportCSVBytes || response.StatusCode != http.StatusOK ||
+		mediaErr != nil || mediaType != "text/csv" || response.Header.Get("Content-Disposition") != wantDisposition ||
+		response.Header.Get("Content-Encoding") != "" || containsAny(content, client.forbidden) ||
+		iamv1.ValidateAccountSecurityReportCSV(metadata, content) != nil {
+		clear(content)
+		return nil, errors.New("IAM security report download response failed")
+	}
+	return content, nil
+}
+
 func (client *edgeClient) logout(ctx context.Context, bearer []byte) error {
 	response, err := client.json(
 		ctx, http.MethodPost, "/api/iam/v1/auth/logout", bearer,

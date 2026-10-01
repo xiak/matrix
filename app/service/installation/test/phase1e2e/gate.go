@@ -155,6 +155,11 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	}
 	emit("application-generation-two")
 
+	baselineReport, err := value.createSecurityReportSnapshot(ctx, bearer, "phase1-security-report-before-backup")
+	if err != nil {
+		return err
+	}
+
 	wantInitialAudit := map[auditv1.Action]string{
 		auditv1.ActionIAMBootstrapApplied:              "",
 		auditv1.ActionIAMSessionIssued:                 "",
@@ -166,6 +171,8 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		auditv1.ActionPaaSApplicationRevisionCreated:   string(applicationRevisionID),
 		auditv1.ActionPaaSDeploymentCreated:            string(deploymentID),
 		auditv1.ActionPaaSDeploymentUpdated:            string(deploymentID),
+		auditv1.ActionIAMSecurityReportCreated:         string(baselineReport.metadata.ID),
+		auditv1.ActionIAMSecurityReportDownloadStarted: string(baselineReport.metadata.ID),
 	}
 	recordsBeforeBackup, err := value.edge.waitAuditActions(ctx, bearer, wantInitialAudit)
 	if err != nil || !scanAuditForConfigurationValues(recordsBeforeBackup, settingOne, settingTwo) {
@@ -238,6 +245,13 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return err
 	}
 	emit("release-b-upgrade-preservation")
+	if err := value.assertSecurityReportSnapshot(ctx, bearer, baselineReport, true); err != nil {
+		return err
+	}
+	postUpgradeReport, err := value.createSecurityReportSnapshot(ctx, bearer, "phase1-security-report-after-upgrade")
+	if err != nil {
+		return err
+	}
 	if err := value.assertTenantRetention(ctx); err != nil {
 		return err
 	}
@@ -264,6 +278,12 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return err
 	}
 	emit("explicit-platform-rollback")
+	if err := value.assertSecurityReportSnapshot(ctx, bearer, baselineReport, true); err != nil {
+		return err
+	}
+	if err := value.assertSecurityReportSnapshot(ctx, bearer, postUpgradeReport, true); err != nil {
+		return err
+	}
 	if err := value.assertTenantRetention(ctx); err != nil {
 		return err
 	}
@@ -298,6 +318,12 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return err
 	}
 	emit("backup-recovery")
+	if err := value.assertSecurityReportSnapshot(ctx, bearer, baselineReport, true); err != nil {
+		return err
+	}
+	if err := value.edge.securityReportMissing(ctx, bearer, postUpgradeReport.metadata.ID); err != nil {
+		return fail("security-report-recovery-boundary")
+	}
 	if err := value.assertTenantRetention(ctx); err != nil {
 		return err
 	}
@@ -359,6 +385,65 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	emit("bounded-support-zero-leakage")
 	emit("restart-required")
 	return nil
+}
+
+func (value *gate) createSecurityReportSnapshot(
+	ctx context.Context,
+	bearer []byte,
+	requestID string,
+) (securityReportSnapshot, error) {
+	created, err := value.edge.createSecurityReport(ctx, bearer, requestID, http.StatusCreated, "APPLIED")
+	if err != nil {
+		return securityReportSnapshot{}, fail("security-report-create")
+	}
+	document, err := value.edge.readSecurityReport(ctx, bearer, created.Metadata.ID)
+	if err != nil || document.Metadata != created.Metadata {
+		return securityReportSnapshot{}, fail("security-report-read")
+	}
+	csv, err := value.edge.downloadSecurityReport(ctx, bearer, created.Metadata)
+	if err != nil {
+		return securityReportSnapshot{}, fail("security-report-download")
+	}
+	return securityReportSnapshot{
+		requestID: requestID,
+		metadata:  created.Metadata,
+		document:  document,
+		csv:       csv,
+	}, nil
+}
+
+func (value *gate) assertSecurityReportSnapshot(
+	ctx context.Context,
+	bearer []byte,
+	want securityReportSnapshot,
+	wantReplay bool,
+) error {
+	if wantReplay {
+		replay, err := value.edge.createSecurityReport(ctx, bearer, want.requestID, http.StatusOK, "EQUAL_REPLAY")
+		if err != nil || replay.Metadata != want.metadata {
+			return fail("security-report-receipt-retention")
+		}
+	}
+	document, err := value.edge.readSecurityReport(ctx, bearer, want.metadata.ID)
+	if err != nil || !equalJSON(document, want.document) {
+		return fail("security-report-document-retention")
+	}
+	csv, err := value.edge.downloadSecurityReport(ctx, bearer, want.metadata)
+	if err != nil || !bytes.Equal(csv, want.csv) {
+		clear(csv)
+		return fail("security-report-csv-retention")
+	}
+	clear(csv)
+	return nil
+}
+
+func equalJSON(left, right any) bool {
+	leftJSON, leftErr := json.Marshal(left)
+	rightJSON, rightErr := json.Marshal(right)
+	equal := leftErr == nil && rightErr == nil && bytes.Equal(leftJSON, rightJSON)
+	clear(leftJSON)
+	clear(rightJSON)
+	return equal
 }
 
 func (value *gate) afterRestart(ctx context.Context) error {

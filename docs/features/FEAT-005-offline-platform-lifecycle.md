@@ -1,9 +1,9 @@
 # FEAT-005: Offline platform distribution and lifecycle
 
-- Status: Accepted
+- Status: Accepted foundation; IAM security-report release integration is in progress
 - Target release: Private Application PaaS v0.1
 - Target design date: 2026-08-25
-- Release contract: accepted foundation `v1`; manifest `v2` with the exact `3/2/1` revision 3 profile accepted on the isolated IAM branch
+- Release contract: accepted foundation `v1`; current isolated-IAM candidate is manifest `v2` with the exact `61/31/1` revision 5 profile and remains unaccepted until its signed A/B lifecycle gate passes
 
 ## Outcome
 
@@ -185,9 +185,36 @@ values, database rows, native errors, arbitrary logs, and absolute paths.
 
 ## Incremental acceptance
 
-### Multi-tenant authority-profile extension
+### Current IAM security-report release candidate
 
-The isolated IAM branch replaces the single migration number for new releases
+`CurrentDatabaseProfile` is frozen for this candidate as IAM schema 61, Audit
+schema 31, PaaS schema 1, and `contractRevision=5`. Revision 5 identifies the
+exact AccountSecurityReport API, storage, Audit action and installed consumer
+shape now present on the isolated IAM branch; it is not a caller option or an
+ordering claim over another branch's profile. A bundle with any different
+authority tuple or revision remains incompatible and must be rejected before
+journal advancement, service changes, backup creation or another provider
+effect.
+
+The existing `phase1e2e` owner now requires Release A to generate, read and
+download one unexpired AccountSecurityReport and to observe both its created
+and download-started Audit facts before the protected backup. An exact receipt
+replay, immutable JSON document and byte-identical CSV must survive the
+same-profile Release B upgrade and data-preserving rollback. A second report
+created on B must also survive rollback, while selected-backup recovery must
+restore the first report and its receipt/Audit history and remove the
+post-backup report. This is candidate test coverage, not accepted evidence,
+until two signed bundles from one clean fixed source pass the isolated Linux
+runtime gate and the exact source passes independent CI.
+
+The earlier IAM 60 to 61 retained-data SQL gate proves only the rolling
+development predecessor and does not authorize a signed `4/3/1` revision 4
+installation to upgrade to this profile. No cross-profile upgrade, rollback or
+backup recovery is admitted.
+
+### Historical multi-tenant authority-profile evidence
+
+The earlier isolated IAM branch replaced the single migration number for new releases
 with the signed manifest v2 database profile. Its code-owned composition is
 IAM schema 3, Audit schema 2, PaaS schema 1, and `contractRevision=3`. This
 revision adds credential-generation-bound sessions and the current-session

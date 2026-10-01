@@ -14,6 +14,17 @@ import (
 	"time"
 )
 
+func TestCurrentDatabaseProfile(t *testing.T) {
+	want := DatabaseProfile{
+		Compatibility:    "identical-authority-profile",
+		Authorities:      AuthoritySchemas{IAM: 61, Audit: 31, PaaS: 1},
+		ContractRevision: 5,
+	}
+	if got := CurrentDatabaseProfile(); got != want {
+		t.Fatalf("current database profile = %#v, want %#v", got, want)
+	}
+}
+
 func TestReadTrustRootFileUsesExactCanonicalRegularFile(t *testing.T) {
 	publicKey, _, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
