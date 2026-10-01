@@ -1,4 +1,4 @@
-import type { ExperienceResource, ExperienceOperation, ExperiencePipeline, ExperienceServiceHealth } from "../domain/experience";
+import type { ExperienceApplicationTagSnapshot, ExperienceResource, ExperienceOperation, ExperiencePipeline, ExperienceServiceHealth } from "../domain/experience";
 import type { Region, ServiceInstallation } from "../domain/resources";
 import type { ConsoleSection, ServiceView } from "../domain/selection";
 
@@ -173,7 +173,8 @@ export type ConsoleContentScene =
       alerts: AlertScene[];
     }
   | { kind: "messages"; messages: ConsoleMessageScene[]; preview: boolean }
-  | { kind: "resources"; resources: UnifiedResourceScene[] }
+  | { kind: "resources"; directory: "all"; resources: UnifiedResourceScene[] }
+  | { kind: "resources"; directory: "applications"; resources: UnifiedResourceScene[]; tagSnapshots: ExperienceApplicationTagSnapshot[] }
   | { kind: "operations"; operations: OperationScene[] }
   | { kind: "devops"; view?: ServiceView; metrics: MetricScene[]; pipelines: PipelineScene[] }
   | { kind: "observability"; view?: ServiceView; metrics: MetricScene[]; services: ServiceHealthScene[]; alerts: AlertScene[] }

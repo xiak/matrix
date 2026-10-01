@@ -935,6 +935,30 @@ describe("ConsoleShellRenderer", () => {
     expect(within(navigation).getByRole("link", { name: /^Applications/ }).getAttribute("href")).toMatch(/^\/console\/applications\/?$/);
   });
 
+  it("renders an application resource and its product-owned tag snapshot in the content area", async () => {
+    navigation.query = "resource=app-checkout-api";
+    await renderConsole({ section: "applications", experience: previewExperienceSnapshot });
+
+    expect(screen.getByRole("heading", { level: 1, name: "应用服务" })).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 2, name: "结算 API" })).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("link", { name: "返回应用" }).getAttribute("href")).toBe("/console/applications/");
+    const tags = screen.getByRole("table", { name: "应用资源标签" });
+    expect(within(tags).getByText("environment")).toBeTruthy();
+    expect(within(tags).getByText("production")).toBeTruthy();
+    expect(within(tags).getByText("resource.tag/environment")).toBeTruthy();
+    expect(within(tags).getAllByText("未由 Profile 声明")).toHaveLength(2);
+    expect(screen.getByText('"app-checkout-api:tags:7"')).toBeTruthy();
+    expect(screen.getByText(/策略编辑器不会修改资源标签/)).toBeTruthy();
+  });
+
+  it("does not invent an application resource for an unknown query identifier", async () => {
+    navigation.query = "resource=missing";
+    await renderConsole({ section: "applications", experience: previewExperienceSnapshot });
+    expect(screen.getByText("未找到应用资源")).toBeTruthy();
+    expect(screen.queryByRole("table", { name: "应用资源标签" })).toBeNull();
+  });
+
   it("retains entity search parameters through sign-in without accepting a query redirect", async () => {
     navigation.query = "id=resource%2Fexample&returnTo=https%3A%2F%2Foutside.invalid";
     const { loginDestination } = await renderConsole({ section: "resources", experience: previewExperienceSnapshot });

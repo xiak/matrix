@@ -3222,7 +3222,21 @@
       "SUCCEEDED": "The task completed. Use its operation ID and actor for audit tracking.",
       "FAILED": "The task failed. Check the target resource state before submitting again from its product."
     },
-    "globalRegion": "Global"
+    "globalRegion": "Global",
+    "backToApplications": "Back to applications",
+    "resourceTags": "Resource tags",
+    "resourceTagsHint": "Resource metadata persisted by Application Hosting. IAM consumes only trusted tag conditions declared by the product Profile.",
+    "resourceTagsTable": "Application resource tags",
+    "tagKey": "Tag key",
+    "tagValue": "Tag value",
+    "iamCondition": "IAM condition",
+    "notExposedToIam": "Not declared by Profile",
+    "tagVersion": "Tag ETag",
+    "resourceTagBoundary": "The current MOCK Profile declares only resource.tag/environment. The policy editor never changes resource tags; Application Hosting reads persisted tags and IAM re-evaluates authorization for each real request.",
+    "noResourceTags": "No resource tags",
+    "noResourceTagsHint": "Application Hosting did not return a tag snapshot for this resource.",
+    "resourceNotFound": "Application resource not found",
+    "resourceNotFoundHint": "This resource is not in the current application directory. It may have been deleted or be outside the current scope."
   },
   "GroupWorkspace": {
     "back": "Back to groups",

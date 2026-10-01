@@ -39,7 +39,7 @@ export const previewExperienceSnapshot: ExperienceSnapshot = {
       regionName: "上海私有云 A 区",
       state: "RUNNING",
       updatedAt: "2026-09-08T09:10:00Z",
-      href: "/console/applications/"
+      href: "/console/applications/?resource=app-checkout-api"
     },
     {
       id: "pipeline-storefront",
@@ -96,6 +96,17 @@ export const previewExperienceSnapshot: ExperienceSnapshot = {
       state: "RUNNING",
       updatedAt: "2026-09-08T08:57:00Z",
       href: "/console/installations/"
+    }
+  ],
+  applicationTagSnapshots: [
+    {
+      resourceId: "app-checkout-api",
+      etag: "\"app-checkout-api:tags:7\"",
+      tags: [
+        { key: "environment", value: "production" },
+        { key: "team", value: "commerce" },
+        { key: "data-classification", value: "internal" }
+      ]
     }
   ],
   operations: [

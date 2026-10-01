@@ -287,8 +287,8 @@ function legacyContent(section: ConsoleSection, snapshot: ControlPlaneSnapshot):
   if (section === "regions") return { kind: "regions", regions: regionScenes(snapshot) };
   if (section === "messages") return { kind: "messages", messages: [], preview: false };
   if (section === "logs") return { kind: "logs", data: null };
-  if (section === "resources") return { kind: "resources", resources: [] };
-  if (section === "applications") return { kind: "resources", resources: [] };
+  if (section === "resources") return { kind: "resources", directory: "all", resources: [] };
+  if (section === "applications") return { kind: "resources", directory: "applications", resources: [], tagSnapshots: [] };
   if (section === "operations") return { kind: "operations", operations: [] };
   if (section === "devops") return { kind: "devops", metrics: [], pipelines: [] };
   if (section === "observability") return { kind: "observability", metrics: [], services: [], alerts: [] };
@@ -338,8 +338,13 @@ function experienceContent(section: ConsoleSection, snapshot: ControlPlaneSnapsh
   }
   if (section === "messages") return { kind: "messages", messages: messageScenes(experience), preview: true };
   if (section === "logs") return { kind: "logs", data: experience.logs };
-  if (section === "resources") return { kind: "resources", resources };
-  if (section === "applications") return { kind: "resources", resources: resourceScenes({ ...experience, resources: experience.resources.filter((resource) => resource.kind === "APPLICATION") }) };
+  if (section === "resources") return { kind: "resources", directory: "all", resources };
+  if (section === "applications") return {
+    kind: "resources",
+    directory: "applications",
+    resources: resourceScenes({ ...experience, resources: experience.resources.filter((resource) => resource.kind === "APPLICATION") }),
+    tagSnapshots: experience.applicationTagSnapshots
+  };
   if (section === "operations") return { kind: "operations", operations };
   if (section === "devops") {
     const successful = experience.pipelines.filter((item) => item.state === "SUCCEEDED").length;

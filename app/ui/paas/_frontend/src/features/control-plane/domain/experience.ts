@@ -17,6 +17,12 @@ export type ExperienceResource = {
   href: string;
 };
 
+export type ExperienceApplicationTagSnapshot = {
+  resourceId: string;
+  etag: string;
+  tags: Array<{ key: string; value: string }>;
+};
+
 export type ExperienceOperation = {
   id: string;
   action: string;
@@ -67,6 +73,7 @@ export type ExperienceSnapshot = {
   projects: Array<{ id: string; name: string }>;
   regions: Array<{ id: string; name: string }>;
   resources: ExperienceResource[];
+  applicationTagSnapshots: ExperienceApplicationTagSnapshot[];
   operations: ExperienceOperation[];
   pipelines: ExperiencePipeline[];
   serviceHealth: ExperienceServiceHealth[];

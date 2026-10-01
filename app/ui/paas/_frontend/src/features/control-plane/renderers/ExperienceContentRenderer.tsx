@@ -1,16 +1,20 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { ConsoleLink as Link } from "../routes/ConsoleNavigation";
 import { useFormatter, useTranslations } from "next-intl";
+import { useSearchParams } from "next/navigation";
 import {
   AlertTriangle,
+  ArrowLeft,
   ArrowRight,
+  Boxes,
   CheckCircle2,
   ChevronDown,
   CloudCog,
   Database,
-  Server
+  Server,
+  Tags
 } from "lucide-react";
 import { Alert, Table, TableToolbar, EmptyState, Badge, Button, Card, Progress, ContentLayout, Typography } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
@@ -204,7 +208,7 @@ function CloudOverview({ scene, scope }: {
   );
 }
 
-function Resources({ scene, scope }: {
+function ResourceDirectory({ scene, scope }: {
   scene: Extract<ConsoleContentScene, { kind: "resources" }>;
   scope?: ResourceScope;
 }) {
@@ -223,6 +227,70 @@ function Resources({ scene, scope }: {
       <ResourceTable resources={resources} scope={scope} />
     </Card>
   );
+}
+
+function ApplicationResourceDetail({ resource, tagSnapshot }: {
+  resource: UnifiedResourceScene;
+  tagSnapshot: Extract<ConsoleContentScene, { kind: "resources"; directory: "applications" }>["tagSnapshots"][number] | undefined;
+}) {
+  const t = useTranslations("CloudExperience");
+  const resourceKinds = useTranslations("GlobalSearch.resourceKinds");
+  const format = useConsoleFormat();
+  const heading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => { heading.current?.focus({ preventScroll: true }); }, [resource.id]);
+  return <section aria-labelledby="application-resource-detail-title" className={styles.resourceDetail}>
+    <Link className={styles.backLink} href="/console/applications/"><ArrowLeft aria-hidden="true" />{t("backToApplications")}</Link>
+    <Card>
+      <Card.Header>
+        <div className={styles.resourceIdentity}>
+          <span className={styles.resourceIdentityIcon}><Boxes aria-hidden="true" /></span>
+          <div><span>{resourceKinds(resource.kind)}</span><h2 id="application-resource-detail-title" ref={heading} tabIndex={-1}>{resource.name}</h2><code>{resource.id}</code></div>
+          <Badge status={resource.status}>{t(`resourceStates.${resource.state}`)}</Badge>
+        </div>
+      </Card.Header>
+      <Card.Body>
+        <dl className={styles.resourceFacts}>
+          <div><dt>{t("project")}</dt><dd>{resource.projectName}</dd></div>
+          <div><dt>{t("region")}</dt><dd>{resource.regionName}</dd></div>
+          <div><dt>{t("owningProduct")}</dt><dd>{resource.productName}</dd></div>
+          <div><dt>{t("updated")}</dt><dd>{format.timestamp(resource.updatedAt)}</dd></div>
+        </dl>
+      </Card.Body>
+    </Card>
+    <Card>
+      <Card.Header>
+        <div className={styles.tagHeading}>
+          <div><span className={styles.tagIcon}><Tags aria-hidden="true" /></span><div><Typography.Title as="h3" level={3}>{t("resourceTags")}</Typography.Title><Typography.Text tone="muted">{t("resourceTagsHint")}</Typography.Text></div></div>
+          <Badge status="neutral">{t("mockSnapshot")}</Badge>
+        </div>
+      </Card.Header>
+      <Card.Body className={styles.tagBody}>
+        {tagSnapshot?.tags.length ? <Table aria-label={t("resourceTagsTable")} mobileLayout="stack">
+          <thead><tr><th scope="col">{t("tagKey")}</th><th scope="col">{t("tagValue")}</th><th scope="col">{t("iamCondition")}</th></tr></thead>
+          <tbody>{tagSnapshot.tags.map((tag) => <tr key={tag.key}>
+            <td><code>{tag.key}</code></td>
+            <td data-label={t("tagValue")}>{tag.value}</td>
+            <td data-label={t("iamCondition")}>{tag.key === "environment" ? <code>resource.tag/{tag.key}</code> : <span className={styles.notExposed}>{t("notExposedToIam")}</span>}</td>
+          </tr>)}</tbody>
+        </Table> : <EmptyState title={t("noResourceTags")} description={t("noResourceTagsHint")} />}
+        {tagSnapshot ? <div className={styles.tagVersion}><span>{t("tagVersion")}</span><code>{tagSnapshot.etag}</code></div> : null}
+        <Alert status="info">{t("resourceTagBoundary")}</Alert>
+      </Card.Body>
+    </Card>
+  </section>;
+}
+
+function Resources({ scene, scope }: {
+  scene: Extract<ConsoleContentScene, { kind: "resources" }>;
+  scope?: ResourceScope;
+}) {
+  const t = useTranslations("CloudExperience");
+  const params = useSearchParams();
+  const selectedId = scene.directory === "applications" ? params.get("resource") : null;
+  if (!selectedId || scene.directory !== "applications") return <ResourceDirectory scene={scene} scope={scope} />;
+  const selected = scene.resources.find((resource) => resource.id === selectedId);
+  if (selected) return <ApplicationResourceDetail resource={selected} tagSnapshot={scene.tagSnapshots.find((snapshot) => snapshot.resourceId === selected.id)} />;
+  return <Card><Card.Body><EmptyState title={t("resourceNotFound")} description={t("resourceNotFoundHint")} action={<Button asChild variant="secondary"><Link href="/console/applications/">{t("backToApplications")}</Link></Button>} /></Card.Body></Card>;
 }
 
 function Operations({ scene }: { scene: Extract<ConsoleContentScene, { kind: "operations" }> }) {
@@ -337,7 +405,7 @@ export function ExperienceContentRenderer({ scene, scope }: {
   scope?: ResourceScope;
 }) {
   if (scene.kind === "cloud-overview") return <CloudOverview scene={scene} scope={scope} />;
-  if (scene.kind === "resources") return <Resources scene={scene} scope={scope} />;
+  if (scene.kind === "resources") return <Suspense fallback={<ResourceDirectory scene={scene} scope={scope} />}><Resources scene={scene} scope={scope} /></Suspense>;
   if (scene.kind === "operations") return <Operations scene={scene} />;
   if (scene.kind === "devops") return <DevOps scene={scene} />;
   return <Observability scene={scene} />;

@@ -3222,7 +3222,21 @@
       "SUCCEEDED": "任务已完成；操作标识和发起人可用于后续审计追踪。",
       "FAILED": "任务执行失败；请先核对目标资源状态，再从所属产品重新提交。"
     },
-    "globalRegion": "全局"
+    "globalRegion": "全局",
+    "backToApplications": "返回应用",
+    "resourceTags": "资源标签",
+    "resourceTagsHint": "由应用托管保存的资源元数据；IAM 只消费产品 Profile 明确声明的可信标签条件。",
+    "resourceTagsTable": "应用资源标签",
+    "tagKey": "标签键",
+    "tagValue": "标签值",
+    "iamCondition": "IAM 条件",
+    "notExposedToIam": "未由 Profile 声明",
+    "tagVersion": "标签版本 ETag",
+    "resourceTagBoundary": "当前 MOCK Profile 仅声明 resource.tag/environment。策略编辑器不会修改资源标签；真实请求仍由应用托管读取持久化标签，并由 IAM 重新校验授权。",
+    "noResourceTags": "暂无资源标签",
+    "noResourceTagsHint": "应用托管尚未返回此资源的标签快照。",
+    "resourceNotFound": "未找到应用资源",
+    "resourceNotFoundHint": "该资源不在当前应用目录中，可能已删除或不属于当前范围。"
   },
   "GroupWorkspace": {
     "back": "返回用户组列表",
