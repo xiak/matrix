@@ -94,19 +94,23 @@ snapshot used for that edit. Edit and review now show the selected Actions'
 product/Profile revision while making clear that this is not an authorization
 result: the browser submits no Profile, digest, compilation or resolved Action
 set, and only the server-returned `PolicyVersion.compilation` is authoritative
-after publication. Each selected Action now has one default-collapsed,
-content-area declaration inspector in edit and review. It reuses the catalog
-table for scope, resource/target shape, subject/credential admission and
-trusted condition sources, mounts only the current ten-row page on demand, and
-explicitly remains neither a user grant nor a compilation result. Fixed IAM
+after publication. Each selected Action has one default-collapsed, content-area
+declaration inspector in edit and review. It reuses the catalog table for scope,
+resource/target shape, subject/credential admission and trusted condition
+sources, mounts only the current ten-row page on demand, and explicitly remains
+neither a user grant nor a compilation result. Published version detail now
+shows the exact returned compilation contract and each frozen product, revision
+and content digest in a read-only responsive table; author syntax and returned
+frozen Actions remain distinct. A version without compilation provenance is
+labeled legacy and is never reconstructed from the current catalog. Fixed IAM
 source `710c1557f48611179715671cac76ff4dfe447c1b` owns trusted request context;
 cumulative source `49aaf21657ef71cb83b1b9b51d835f3600f6ce9d` confirms the
 catalog/publication boundary. Resource-tag ABAC and tag mutation remain disabled
-because their contract is not frozen. Source/embed `d141f6e2` and FEAT evidence
-`68fdaa25` passed 57 frontend files / 913 tests, three normalization cases,
+because their contract is not frozen. Source/embed `9af46c12` and FEAT evidence
+`917d4403` passed 57 frontend files / 913 tests, three normalization cases,
 type/lint/architecture, 228 theme contrast pairs, 42-route export, 233-file
-embed equality and repository Go test/vet. Desktop edit/review and `390 × 844`
-review had no Dialog or horizontal layout failure. FEAT-007 owns the UX evidence
+embed equality and repository Go test/vet. Focused coverage locks both the exact
+v2 profile digest and the non-inferred legacy state. FEAT-007 owns the UX evidence
 and FEAT-IAM-010 owns the backend semantics and exclusions.
 
 Audit is now an independent console product rather than an IAM submenu. The
