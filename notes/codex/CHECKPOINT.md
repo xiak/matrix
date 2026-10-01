@@ -6,8 +6,8 @@
 - Updated: 2026-10-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `88bcf2d7`
-- Pushed documentation milestone: `0b29cedc`
+- Pushed source/embed milestone: `ccdb94c9`
+- Pushed documentation milestone: `27bf4def`
 
 ## Authoritative route
 
@@ -26,21 +26,20 @@ compaction or handoff, then validate it against Git and the linked FEAT.
 ## Latest pushed milestone
 
 The independent DEV MOCK remains available at `http://127.0.0.1:4317`, and
-login verification remains disabled for UX review. One feature-owned
-relationship directory now serves Group members/policies, User
-policies/groups and MOCK Role policies. It owns deferred search, ten-row local
-pagination, responsive labelled rows, empty recovery and footer grammar while
-callers retain their domain columns and commands. Complete snapshots show exact
-totals; the cursor-backed Group member prefix alone exposes loaded-only scope
-and its opaque continuation.
+login verification remains disabled for UX review. The catalog-driven visual
+policy author now distinguishes trusted request facts from target-resource
+facts. Its PaaS revision-5 preview exposes `resource.tag/environment` only on
+`paas.application.read`, requires an exact instance resource, and explains
+missing-tag, per-resource recheck and collection-boundary behavior. The browser
+authors only policy syntax; it never submits or overrides trusted resource
+facts and does not present resource-tag mutation as policy authoring.
 
-Source and synchronized 233-file embed are pushed at `88bcf2d7`; FEAT evidence
-is pushed at `0b29cedc`. Fixtures prove 12-item User policy, User group and Role
-policy snapshots plus the existing 11+2 Group continuation. The milestone
-passed 57 frontend files / 919 tests, three normalization cases,
-type/lint/architecture checks, 228 theme contrast pairs, a 42-route static
-export, embed equality and repository Go test/vet. Desktop DEV verified the
-User and Role relationship tabs; compact layout remains behavior-covered.
+Source and synchronized 233-file embed are pushed at `ccdb94c9`; FEAT evidence
+is pushed at `27bf4def`. The milestone passed 57 frontend files / 920 tests,
+three normalization cases, type/lint/architecture checks, 228 theme contrast
+pairs, a 42-route static export, embed equality and repository Go test/vet.
+Desktop and `430 x 900` DEV verified the exact Action, resource-tag condition
+and review flow without a Dialog or page overflow.
 
 The previously pushed AccessKey owner directory, policy-compilation provenance,
 service-authorization, policy-coverage, Audit, cross-service loading/navigation
@@ -50,8 +49,10 @@ the relevant row when resuming that work.
 ## Continuation boundary
 
 Keep the inspectable MOCK available and consume IAM changes only from fixed,
-pushed commits. Resource-tag LIVE editing stays disabled until IAM publishes
-and independently verifies its contract. Continue from the next uncovered
-customer workflow without reintroducing whole-page loading, hidden broad
-Context subscriptions, fabricated totals, duplicate components or login
-verification before UX acceptance.
+pushed commits. The revision-5 resource-tag example remains isolated MOCK until
+IAM's storage/authority gates are green; LIVE exposes only declarations returned
+by the strict Profile endpoint. Resource-tag update/delete/CAS, arbitrary caller
+attributes and raw decision/debug surfaces remain unavailable. Continue from
+the next uncovered customer workflow without reintroducing whole-page loading,
+hidden broad Context subscriptions, fabricated totals, duplicate components or
+login verification before UX acceptance.
