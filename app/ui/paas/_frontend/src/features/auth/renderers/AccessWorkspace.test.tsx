@@ -923,7 +923,13 @@ describe("CAM-style access workspace", () => {
     expect(screen.queryByText("已完成")).toBeNull();
     await user.click(screen.getByRole("button", { name: "查看长期访问密钥" }));
     expect(await screen.findByRole("table", { name: "选择要管理的用户" })).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "管理 lin 的访问密钥" }));
+    expect(screen.getByRole("button", { name: "管理 chen 的访问密钥" })).toBeTruthy();
+    const userSearch = screen.getByRole("searchbox", { name: "搜索已加载用户" });
+    await user.type(userSearch, "lin");
+    expect(await screen.findByRole("button", { name: "管理 lin 的访问密钥" })).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole("button", { name: "管理 chen 的访问密钥" })).toBeNull());
+    await user.clear(userSearch);
+    await user.click(await screen.findByRole("button", { name: "管理 lin 的访问密钥" }));
     const keyDirectory = await screen.findByRole("table", { name: "访问密钥" });
     expect(within(keyDirectory).getByText("已禁用")).toBeTruthy();
     expect(screen.queryByText("最近使用")).toBeNull();

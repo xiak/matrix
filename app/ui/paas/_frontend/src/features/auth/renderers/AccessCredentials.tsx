@@ -2,13 +2,14 @@
 
 import { useEffect, useId, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { KeyRound, RotateCw, UserRound } from "lucide-react";
+import { KeyRound, RotateCw } from "lucide-react";
 import { Alert, Badge, Button, Card, Checkbox, ContentPage, FormField, Select, Table, Typography } from "@ui/xiak";
 import { requestToken } from "@/infrastructure/http/jsonRequest";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import type { AccessKey, AccessWorkspace } from "../domain/accessWorkspace";
 import type { AccountAccessScene, AccountUserScene } from "../scenes/accountAccessScene";
 import { AccountIdentifier } from "./AccountOverview";
+import { AccessKeyOwnerDirectory } from "./AccessKeyOwnerDirectory";
 import { WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
 import styles from "./AccessCredentials.module.css";
 
@@ -180,10 +181,7 @@ export function AccessCredentials({ workspace, scene, embedded = false }: { work
   if (!owner) return <section className={styles.root}>
     <ContentPage.Heading title={t("keys")} scrollKey="access-key-user-directory" />
     <Alert status="info"><KeyRound aria-hidden="true" />{t("keyBoundary")}</Alert>
-    <Card>
-      <Card.Header className={styles.directoryHeader}><div><Typography.Title as="h2" level={3}>{t("keyUserDirectory")}</Typography.Title><Typography.Text tone="muted">{t("keyUserDirectoryHint")}</Typography.Text></div><Badge status="neutral">{t("userCount", { count: scene.users.length })}</Badge></Card.Header>
-      <Card.Body className={styles.tableBody}>{scene.users.length ? <Table aria-label={t("keyUserDirectory")} mobileLayout="stack"><thead><tr><th scope="col">{t("owner")}</th><th scope="col">{t("state")}</th><th scope="col">{t("keyLoadingModel")}</th></tr></thead><tbody>{scene.users.map((user) => <tr key={user.id}><td data-label={t("owner")}><span className={styles.identity}><UserRound aria-hidden="true" /><span><strong>{user.name}</strong><small>{user.loginName} · {user.id}</small></span></span></td><td data-label={t("state")}><Badge status={user.enabled ? "success" : "neutral"}>{t(user.enabled ? "enabled" : "disabled")}</Badge></td><td data-label={t("keyLoadingModel")}><Button aria-label={t("keyManageNamed", { name: user.loginName })} onClick={() => openOwner(user.id)} size="small" variant="secondary">{t("keyManage")}</Button></td></tr>)}</tbody></Table> : <p className={styles.note}>{t("keyPrimary")}</p>}</Card.Body>
-    </Card>
+    <AccessKeyOwnerDirectory scene={scene} busy={access.busy} loading={access.loading} onOpen={openOwner} onReadPage={access.usersPage} />
     <RotationGuide />
   </section>;
 

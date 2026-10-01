@@ -740,6 +740,32 @@ describe("account access", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it("keeps access-key owner search page-scoped and follows the user cursor without inventing a total", async () => {
+    const otherUser = { ...childUser, id: "child-b", loginName: "operator", displayName: "Operator B" };
+    const other: UserAccess = { user: otherUser, policyAttachments: [], capabilities: userCapabilities(otherUser) };
+    const listUsers = vi.fn(async (_credential: string, after?: string) => after === "users-page-2"
+      ? { items: [other], nextAfter: null }
+      : { items: [child], nextAfter: "users-page-2" });
+    const repository = accounts({ listUsers, accessKeys: {
+      list: vi.fn(), read: vi.fn(), create: vi.fn(), setStatus: vi.fn(), delete: vi.fn()
+    } });
+    const { user } = await openAccess(repository, iam(), "keys");
+    expect(await screen.findByText("已加载 1 位用户")).toBeTruthy();
+    expect(screen.getByText(/搜索只覆盖本页/)).toBeTruthy();
+    const search = screen.getByRole("searchbox", { name: "搜索已加载用户" });
+    await user.type(search, "missing");
+    expect(screen.getByText("没有匹配的用户")).toBeTruthy();
+    expect(screen.getByText(/搜索仅覆盖当前已加载的用户页/)).toBeTruthy();
+    await user.clear(search);
+    await user.click(screen.getByRole("button", { name: "下一页" }));
+    expect(await screen.findByRole("button", { name: "管理 operator 的访问密钥" })).toBeTruthy();
+    expect(screen.getByText("第 2 页")).toBeTruthy();
+    expect(listUsers).toHaveBeenLastCalledWith(credential, "users-page-2");
+    await user.click(screen.getByRole("button", { name: "首页" }));
+    expect(await screen.findByRole("button", { name: "管理 developer 的访问密钥" })).toBeTruthy();
+    expect(listUsers).toHaveBeenLastCalledWith(credential, undefined);
+  });
+
   it("retains one live key creation across view unmount and login, blocks another owner, and unlocks only after recovered-key retirement", async () => {
     const key = { id: "mak1.lost-secret", accountId: account.id, userId: childUser.id, status: "DISABLED" as const,
       resourceVersion: 2, createdAt: timestamp, updatedAt: timestamp };
