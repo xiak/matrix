@@ -6,8 +6,8 @@
 - Updated: 2026-10-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `61b626c35`
-- Pushed documentation milestone: `2860081aa`
+- Pushed source/embed milestone: `e79cb85d1`
+- Pushed documentation milestone: `7979b50ce`
 
 ## Authoritative route
 
@@ -26,36 +26,44 @@ compaction or handoff, then validate it against Git and the linked FEAT.
 ## Latest pushed milestone
 
 The independent DEV MOCK remains available at `http://127.0.0.1:4317`, and
-login verification remains disabled for UX review. The User-scoped AccessKey
-workspace separates credential lifecycle, product credential-carrier admission
-and effective authorization. LIVE and MOCK share one default-collapsed
-programmatic-access guide that reads the existing authorization Profile client
-only when opened; a real catalog failure remains local and never falls back to
-preview data. It lists only exact Actions that explicitly admit both `USER` and
-`ACCESS_KEY`; omitted authentication methods never become broad support. The
-shared Table/Footer paginates future results. Product acceptance is labelled as
-metadata, not a grant: every request must still revalidate the key, User,
-current policies, target resource, conditions and explicit denies. The browser
-does not retain the Secret, sign a request or issue a synthetic product call.
-The isolated MOCK alone adds a second default-collapsed disclosure for the
-fixed `paas.application.create` public outcomes: `202 Operation`,
-`400 INVALID_ARGUMENT`, `401 UNAUTHENTICATED`, `403 PERMISSION_DENIED`,
-`409 CONFLICT` and `503 IDENTITY_UNAVAILABLE`. It records only verified nonce
-semantics (`400` not consumed; `403` and `409` consumed) and makes no inference
-for `401` or `503`. LIVE never renders this unreleased fixture.
+login verification remains disabled for UX review. The capability directory
+keeps one persistent search and discloses authority-scope, admitted-subject and
+USER-credential filters only on request; active conditions remain visible as
+removable chips. One domain projection owns the sealed legacy credential
+ceiling for catalog search, declaration rows and AccessKey carrier inspection:
+omitted methods mean login-session-only and non-USER Actions have no USER
+credential.
 
-Fixed IAM source `40adf6d828180050992a8a6c139f05a83afc753f` advances the PaaS
-Profile to revision 7 and admits AccessKey for exactly
-`paas.application.create`. The isolated preview now carries that exact
-`ROLE + USER` and `ACCESS_KEY + LOGIN_SESSION` declaration; every other sampled
-PaaS Action remains login-session-only. Source and synchronized embed are
-pushed at `61b626c35`; FEAT evidence is pushed at `2860081aa`. Focused
-preview/LIVE behavior and the complete 57-file/931-case frontend suite passed
-with three normalization cases, typecheck/lint/architecture/228-pair style gates, 42-route
-export, 233-file embed equality and full repository Go test/vet. Desktop and
-`390 x 844` DEV verified the single revision-7 Action, collapsed disclosure,
-labelled stacked outcome rows, no Dialog or horizontal overflow and a clean
-post-reload browser log.
+The User-scoped AccessKey workspace separates credential lifecycle,
+credential-carrier admission and effective authorization. Its lazy,
+default-collapsed region lists only exact Actions that explicitly admit both
+`USER` and `ACCESS_KEY`; catalog failure stays local and never falls back to a
+fixture. Fixed IAM source `63ab867d30113b70a71e6ce6ddc5f16020380d36`
+and evidence owner `1e4c2d515` define PaaS revision 8, digest
+`sha256:553bb69f2eed79887305f7884188769894f786459391ca8df71fe95e07f71812`,
+and exactly five carrier Actions: `paas.application.create`,
+`paas.configuration.create`, `paas.configuration-revision.create`,
+`paas.application-revision.create` and `paas.deployment.create`. The isolated
+MOCK copies only that immutable-resource graph and never infers support from an
+HTTP method, namespace or collection shape.
+
+The isolated MOCK also groups the six public outcomes into one collapsed table
+instead of repeating them for each Action: `202 Operation`,
+`400 INVALID_ARGUMENT`, `401 UNAUTHENTICATED`, `403 PERMISSION_DENIED`,
+`409 CONFLICT` and `503 IDENTITY_UNAVAILABLE`. It records `400` as not consumed
+and `403`/`409` as consumed, makes no nonce inference for `401` or `503`, does
+not assume the original `401` signature is reusable, and requires state
+confirmation plus a new nonce after uncertain `503` instead of automatic
+intent replay. LIVE receives only the lazy read-only catalog and never renders
+this outcome fixture or signs/sends a product request.
+
+Source and synchronized embed are pushed at `e79cb85d1`; FEAT evidence is
+pushed at `7979b50ce`. The complete 57-file/931-case frontend suite and three
+normalization cases passed with typecheck/lint/architecture/228-pair style
+gates, 42-route export, 233-file embed equality and full repository Go
+test/vet. Desktop and `390 x 844` DEV verified the exact five-Action result,
+collapsed filters and outcome disclosure, document/body equal to the 390px
+viewport, no Dialog or overflow and a clean browser warning/error log.
 
 The previously pushed Application tag recovery, AccessKey owner directory,
 policy-compilation provenance, service-authorization, policy-coverage, Audit,
@@ -65,15 +73,10 @@ indexed by FEAT-007; load only the relevant row when resuming that work.
 ## Continuation boundary
 
 Keep the inspectable MOCK available and consume IAM changes only from fixed,
-pushed commits. IAM fixed source `40adf6d8` has passed local PostgreSQL,
-independent-process, race/vet and Linux-build gates, but independent
-Verification `36842829292` and the APISIX/northbound signed installation remain
-unfinished; do not label the programmatic product path LIVE or add a browser
-signature/test-request flow. The IAM engineer's revision-8 resource-graph
-successor has passed its five-process gate and is still completing predecessor
-verification, but remains unfixed and unpushed. Do not infer AccessKey support
-from a collection shape: consume only each fixed Action's explicit credential-carrier set. Accepting a
-credential carrier must never become an effective-access claim. Continue
-without reintroducing whole-page loading, hidden broad Context subscriptions,
-fabricated totals, duplicate components or login verification before UX
-acceptance.
+pushed commits. Independent CI `36847285739`, APISIX edge coverage and signed
+installation acceptance remain unfinished; do not label the programmatic
+product path LIVE or add a browser signature/test-request flow. Consume only
+each fixed Action's explicit credential-carrier set. Accepting a carrier must
+never become an effective-access claim. Continue without reintroducing
+whole-page loading, hidden broad Context subscriptions, fabricated totals,
+duplicate components or login verification before UX acceptance.
