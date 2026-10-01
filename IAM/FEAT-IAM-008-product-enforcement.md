@@ -205,7 +205,7 @@ PaaS通过独立AccessKey authorizer调用IAM `POST /v1/authorize:access-key`；
 
 公开错误边界为：结构非法、未知key或错误MAC返回`401 UNAUTHENTICATED`且不泄漏key状态；有效MAC但当前策略拒绝返回`403 PERMISSION_DENIED`并消费nonce；已消费nonce返回`409 CONFLICT`且不进入业务；IAM不可用、回包不可信或绑定不完整返回`503 IDENTITY_UNAVAILABLE`。固定route上的非法业务JSON在IAM前返回400且不消费nonce，调用方修正body后须重新签名。PaaS不缓存Allow；key/User/Account/附件/策略变化在下一受保护请求由IAM当前状态判定。
 
-固定`40adf6d828180050992a8a6c139f05a83afc753f`在独占PostgreSQL 18的PaaS存储race门禁以5.841秒通过新增USER+AccessKey约束、跨Account同ID和既有载体回归。独立双IAM、Audit、PaaS和双dispatcher进程以测试222.57秒、包226.037秒通过两个Account各自key签名创建同名同IDApplication、准确Operation归因、nonce重放409、PaaS outbox投递、租户Audit查询及链验证；普通bearer路径和既有标签/Role/服务会话回归仍在同一门禁执行，末端全库敏感信息扫描也通过。IAM58→59真实前驱门禁以109.25秒通过，最终全仓race、vet、模块校验、生成稳定和Linux amd64构建通过；[独立CI 36842829292](https://github.com/xiak/matrix/actions/runs/36842829292)仍在运行，真实APISIX覆盖和签名安装包也未完成，因此控制台只能按契约准备交互而不能标记LIVE。
+固定`40adf6d828180050992a8a6c139f05a83afc753f`在独占PostgreSQL 18的PaaS存储race门禁以5.841秒通过新增USER+AccessKey约束、跨Account同ID和既有载体回归。独立双IAM、Audit、PaaS和双dispatcher进程以测试222.57秒、包226.037秒通过两个Account各自key签名创建同名同IDApplication、准确Operation归因、nonce重放409、PaaS outbox投递、租户Audit查询及链验证；普通bearer路径和既有标签/Role/服务会话回归仍在同一门禁执行，末端全库敏感信息扫描也通过。IAM58→59真实前驱门禁以109.25秒通过，最终全仓race、vet、模块校验、生成稳定和Linux amd64构建通过；[独立CI 36842829292](https://github.com/xiak/matrix/actions/runs/36842829292)因后继push并发取消，不登记为独立CI通过，累计实现由后继`63ab867d3`重新验证；真实APISIX覆盖和签名安装包仍未完成，因此控制台只能按契约准备交互而不能标记LIVE。
 
 ## 已固定纵向切片：AccessKey创建PaaS不可变资源图
 
