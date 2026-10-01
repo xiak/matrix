@@ -3118,7 +3118,7 @@ func TestRoleBusinessProfilesRequireExplicitCurrentCapabilities(t *testing.T) {
 		current, found := LookupAuthorizationProfile(product)
 		expectedRevision := uint64(2)
 		if product == ProductPaaS {
-			expectedRevision = 7
+			expectedRevision = 8
 		}
 		if !found || current.Revision != expectedRevision {
 			t.Fatal("missing explicit new product revision")
@@ -3941,7 +3941,7 @@ func TestHistoricalDecisionProfileDoesNotBorrowCurrentHead(t *testing.T) {
 
 func TestPaaSProfileDeclaresCompletePlatformProduct(t *testing.T) {
 	profile, found := LookupAuthorizationProfile(ProductPaaS)
-	if !found || profile.Revision != 7 {
+	if !found || profile.Revision != 8 {
 		t.Fatal("missing current PaaS role, tag, and AccessKey-capable declaration")
 	}
 	expected := map[Action]struct {
@@ -3991,6 +3991,38 @@ func TestPaaSProfileDeclaresCompletePlatformProduct(t *testing.T) {
 	}
 	if len(expected) != 0 {
 		t.Fatalf("platform product is missing declarations: %v", expected)
+	}
+	_, profileDigest, err := CanonicalizeAuthorizationProfile(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := AuthorizationProfileReference{Product: profile.Product, Revision: profile.Revision, ContentDigest: profileDigest}
+	keyCreates := map[Action]struct{}{
+		ActionPaaSApplicationCreate:           {},
+		ActionPaaSConfigurationCreate:         {},
+		ActionPaaSConfigurationRevisionCreate: {},
+		ActionPaaSApplicationRevisionCreate:   {},
+		ActionPaaSDeploymentCreate:            {},
+	}
+	for _, action := range profile.Actions {
+		_, keyCreate := keyCreates[action.Action]
+		for _, method := range []UserAuthenticationMethod{UserAuthenticationAccessKey, UserAuthenticationLoginSession} {
+			allowed := CheckAuthorizationProfileUserAuthentication(profile, reference, action.Action, method) == nil
+			if allowed != (method == UserAuthenticationLoginSession || keyCreate) {
+				t.Fatal("PaaS action acquired the wrong USER credential carriers", action.Action, method)
+			}
+		}
+		if !keyCreate {
+			continue
+		}
+		if action.Scope != AuthorityScopeTenant || action.ResultResourceKind != action.ResourceKind || len(action.ResourceShapes) != 1 ||
+			action.ResourceShapes[0] != (AuthorizationResourceShape{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}) {
+			t.Fatal("AccessKey collection create escaped its original resource shape", action.Action)
+		}
+		delete(keyCreates, action.Action)
+	}
+	if len(keyCreates) != 0 {
+		t.Fatal("PaaS product is missing AccessKey create declarations", keyCreates)
 	}
 	_, digest, err := CanonicalizeAuthorizationProfile(profile)
 	if err != nil || CheckAuthorizationProfileReference(profile, AuthorizationProfileReference{Product: ProductPaaS, Revision: profile.Revision + 1, ContentDigest: digest}) == nil {
@@ -4431,11 +4463,15 @@ func TestAuthorizationProfileUserAuthenticationIsExplicitAndCommitted(t *testing
 				if !slices.Equal(declared.UserAuthenticationMethods, []UserAuthenticationMethod{UserAuthenticationLoginSession}) {
 					t.Fatal("current-session action widened its authentication carrier", declared.Action)
 				}
-			} else if source.Product == ProductPaaS && declared.Action == ActionPaaSApplicationCreate {
+			} else if source.Product == ProductPaaS && slices.Contains([]Action{
+				ActionPaaSApplicationCreate, ActionPaaSConfigurationCreate,
+				ActionPaaSConfigurationRevisionCreate, ActionPaaSApplicationRevisionCreate,
+				ActionPaaSDeploymentCreate,
+			}, declared.Action) {
 				if !slices.Equal(declared.UserAuthenticationMethods, []UserAuthenticationMethod{
 					UserAuthenticationAccessKey, UserAuthenticationLoginSession,
 				}) {
-					t.Fatal("application creation has the wrong authentication carriers")
+					t.Fatal("PaaS immutable resource creation has the wrong authentication carriers", declared.Action)
 				}
 			} else if declared.UserAuthenticationMethods != nil {
 				t.Fatal("unrelated product admission changed")

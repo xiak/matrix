@@ -1753,7 +1753,7 @@ func proveFrozenFamilyProfileAdvance(t *testing.T, ctx context.Context, admin *p
 	// condition in the future build. Even a resource-nonmatching old Deny must
 	// then fail closed, rather than disappear behind another Allow.
 	replacement, err := parser.ParseExpr(fmt.Sprintf(`func() AuthorizationProfile {
-		profile := paasProfileRevisionSeven
+		profile := paasProfileRevisionEight
 		profile.Revision = %d
 		var added AuthorizationProfileAction
 		for index, action := range profile.Actions {
@@ -1784,7 +1784,7 @@ func proveFrozenFamilyProfileAdvance(t *testing.T, ctx context.Context, admin *p
 		}
 		for index, element := range catalog.Elts {
 			current, ok := element.(*ast.Ident)
-			if ok && current.Name == "paasProfileRevisionSeven" {
+			if ok && current.Name == "paasProfileRevisionEight" {
 				catalog.Elts[index] = replacement
 				replaced++
 			}
@@ -5976,6 +5976,88 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		}
 		return response
 	}
+	type signedProductRequest struct {
+		body, route, externalPath, idempotencyKey string
+		signed                                    iamv1.AccessKeySignedRequest
+	}
+	prepareProduct := func(account *accountFixture, route, idempotencyKey string, payload any) signedProductRequest {
+		t.Helper()
+		body, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal("encode signed PaaS request", err)
+		}
+		digest := sha256.Sum256(body)
+		externalPath := "/api/paas" + route
+		return signedProductRequest{
+			body: string(body), route: route, externalPath: externalPath, idempotencyKey: idempotencyKey,
+			signed: signHTTP(account, iamv1.AccessKeyHTTPRequest{
+				Method: http.MethodPost, Scheme: "https", Authority: "api.matrix.test:443",
+				EscapedPath: externalPath, ContentType: "application/json", IdempotencyKey: idempotencyKey,
+				BodyDigest: "sha256:" + hex.EncodeToString(digest[:]),
+			}),
+		}
+	}
+	invokeProduct := func(value signedProductRequest, status int) processResponse {
+		t.Helper()
+		header, err := iamv1.EncodeAccessKeyAuthorization(value.signed.Parameters, value.signed.Signature)
+		if err != nil {
+			t.Fatal(err)
+		}
+		plain := header.CopyBytes()
+		defer clear(plain)
+		request, err := http.NewRequestWithContext(ctx, http.MethodPost, paasEndpoint+value.route, strings.NewReader(value.body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Authorization", string(plain))
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Idempotency-Key", value.idempotencyKey)
+		request.Header.Set("X-Matrix-External-Origin", "https://api.matrix.test:443")
+		request.Header.Set("X-Matrix-External-Request-Target", value.externalPath)
+		response, err := processHTTPClient().Do(request)
+		if err != nil {
+			t.Fatal("invoke signed PaaS request", err)
+		}
+		defer response.Body.Close()
+		body, err := io.ReadAll(io.LimitReader(response.Body, iamv1.MaxRequestBytes+1))
+		if err != nil || response.StatusCode != status {
+			t.Fatalf("signed PaaS %s status=%d want=%d body=%s err=%v", value.route, response.StatusCode, status, body, err)
+		}
+		return processResponse{Status: response.StatusCode, Body: body, Header: response.Header.Clone()}
+	}
+	decodeProductOperation := func(account *accountFixture, response processResponse, action paasv1.OperationAction, target paasv1.ResourceID) paasv1.Operation {
+		t.Helper()
+		var operation paasv1.Operation
+		if iamv1.DecodeRequest(bytes.NewReader(response.Body), &operation) != nil || paasv1.ValidateOperation(operation) != nil ||
+			operation.Action != action || operation.Scope.TenantID != paasv1.TenantID(account.target.AccountID) || operation.Target.ID != target ||
+			operation.RequestedBy.Type != paasv1.SubjectUser || operation.RequestedBy.ID != string(account.target.ID) ||
+			operation.RequestedBy.AccessKeyID != string(account.key.Key.ID) {
+			t.Fatalf("signed PaaS Operation lost action/Account/USER/key attribution: %#v", operation)
+		}
+		return operation
+	}
+	assertProductAudit := func(account *accountFixture, operation paasv1.Operation, action auditv1.Action) {
+		t.Helper()
+		actor := auditv1.ActorReference{Type: auditv1.ActorUser, ID: auditv1.ActorID(account.target.ID), AccessKeyID: string(account.key.Key.ID)}
+		page := queryAudit(t, auditEndpoint, account.owner, auditv1.QueryRecordsRequest{PageSize: 100, Action: action, Actor: &actor}, http.StatusOK)
+		matches := 0
+		for _, record := range page.Records {
+			if record.Event.Target.ID != string(operation.Target.ID) {
+				continue
+			}
+			matches++
+			if record.Event.Actor != actor || record.Event.OperationID != auditv1.OperationID(operation.ID) || record.Event.IAMDecisionID == "" {
+				t.Fatalf("signed PaaS Audit lost exact USER/key/Operation attribution: %#v", record)
+			}
+			if decisions[account.key.Key.ID] == nil {
+				decisions[account.key.Key.ID] = map[iamv1.DecisionID]bool{}
+			}
+			decisions[account.key.Key.ID][iamv1.DecisionID(record.Event.IAMDecisionID)] = true
+		}
+		if matches != 1 {
+			t.Fatalf("signed PaaS Audit matches=%d for action=%s target=%s", matches, action, operation.Target.ID)
+		}
+	}
 	var restartReplay iamv1.AccessKeyAuthorizationRequest
 	for index := range accounts {
 		account := &accounts[index]
@@ -5983,67 +6065,66 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		createIAMPolicyAttachment(t, endpoint, account.owner, account.target.ID, iamv1.SystemPolicyPaaSDeveloper, prefix+"-grant")
 		application := paasv1.CreateApplicationRequest{ID: "program-key-application", Name: "program-key-application",
 			Labels: map[string]string{"environment": "production", "team": "programmatic"}}
-		applicationBody, err := json.Marshal(application)
-		if err != nil {
-			t.Fatal(err)
+		applicationRequest := prepareProduct(account, "/v1/applications", prefix+"-application-create", application)
+		operations := []paasv1.Operation{decodeProductOperation(account, invokeProduct(applicationRequest, http.StatusCreated), paasv1.OperationCreateApplication, application.ID)}
+		invokeProduct(applicationRequest, http.StatusConflict)
+
+		configuration := paasv1.CreateConfigurationRequest{
+			ID: "program-key-configuration", Name: "program-key-configuration", ApplicationID: application.ID,
 		}
-		applicationDigest := sha256.Sum256(applicationBody)
-		idempotencyKey := prefix + "-application-create"
-		signedApplication := signHTTP(account, iamv1.AccessKeyHTTPRequest{
-			Method: http.MethodPost, Scheme: "https", Authority: "api.matrix.test:443",
-			EscapedPath: "/api/paas/v1/applications", ContentType: "application/json", IdempotencyKey: idempotencyKey,
-			BodyDigest: "sha256:" + hex.EncodeToString(applicationDigest[:]),
-		})
-		invokeProduct := func(status int) processResponse {
-			t.Helper()
-			header, err := iamv1.EncodeAccessKeyAuthorization(signedApplication.Parameters, signedApplication.Signature)
-			if err != nil {
-				t.Fatal(err)
-			}
-			plain := header.CopyBytes()
-			defer clear(plain)
-			request, err := http.NewRequestWithContext(ctx, http.MethodPost, paasEndpoint+"/v1/applications", bytes.NewReader(applicationBody))
-			if err != nil {
-				t.Fatal(err)
-			}
-			request.Header.Set("Authorization", string(plain))
-			request.Header.Set("Content-Type", "application/json")
-			request.Header.Set("Idempotency-Key", idempotencyKey)
-			request.Header.Set("X-Matrix-External-Origin", "https://api.matrix.test:443")
-			request.Header.Set("X-Matrix-External-Request-Target", "/api/paas/v1/applications")
-			response, err := processHTTPClient().Do(request)
-			if err != nil {
-				t.Fatal("invoke signed PaaS request", err)
-			}
-			defer response.Body.Close()
-			body, err := io.ReadAll(io.LimitReader(response.Body, iamv1.MaxRequestBytes+1))
-			if err != nil || response.StatusCode != status {
-				t.Fatalf("signed PaaS create status=%d want=%d body=%s err=%v", response.StatusCode, status, body, err)
-			}
-			return processResponse{Status: response.StatusCode, Body: body}
+		operations = append(operations, decodeProductOperation(account,
+			invokeProduct(prepareProduct(account, "/v1/configurations", prefix+"-configuration-create", configuration), http.StatusCreated),
+			paasv1.OperationCreateConfiguration, configuration.ID))
+		values := map[string]string{"PROGRAM_ACCOUNT": string(account.target.AccountID)}
+		configurationRevision := paasv1.CreateConfigurationRevisionRequest{
+			ID: "program-key-configuration-revision", Name: "program-key-configuration-revision",
+			Spec: paasv1.ConfigurationRevisionSpec{
+				ConfigurationID: configuration.ID, Values: values, ContentDigest: paasv1.ConfigurationValuesDigest(values),
+			},
 		}
-		created := invokeProduct(http.StatusCreated)
-		var operation paasv1.Operation
-		if iamv1.DecodeRequest(bytes.NewReader(created.Body), &operation) != nil || paasv1.ValidateOperation(operation) != nil ||
-			operation.Scope.TenantID != paasv1.TenantID(account.target.AccountID) || operation.Target.ID != application.ID ||
-			operation.RequestedBy.Type != paasv1.SubjectUser || operation.RequestedBy.ID != string(account.target.ID) ||
-			operation.RequestedBy.AccessKeyID != string(account.key.Key.ID) {
-			t.Fatalf("signed PaaS Operation lost Account/USER/key attribution: %#v", operation)
+		operations = append(operations, decodeProductOperation(account,
+			invokeProduct(prepareProduct(account, "/v1/configuration-revisions", prefix+"-configuration-revision-create", configurationRevision), http.StatusCreated),
+			paasv1.OperationCreateConfigurationRevision, configurationRevision.ID))
+		artifactDigest := sha256.Sum256([]byte(prefix + "-application-artifact"))
+		revisionDigest := sha256.Sum256([]byte(prefix + "-application-revision"))
+		applicationRevision := paasv1.CreateApplicationRevisionRequest{
+			ID: "program-key-application-revision", Name: "program-key-application-revision",
+			Spec: paasv1.ApplicationRevisionSpec{
+				ApplicationID: application.ID, Revision: "v1", ContentDigest: "sha256:" + hex.EncodeToString(revisionDigest[:]),
+				Components: []paasv1.ApplicationRevisionComponent{{
+					Name: "web", Artifact: paasv1.ArtifactRef{
+						Kind: paasv1.ArtifactOCIImage, Locator: "registry.invalid/matrix/program-web",
+						Digest: "sha256:" + hex.EncodeToString(artifactDigest[:]),
+					},
+					Resources: paasv1.ResourceRequirements{CPUMillis: 100, MemoryBytes: 1024 * 1024},
+					Inputs:    []paasv1.ComponentInput{{Name: "settings", Kind: paasv1.InputConfiguration, Injection: paasv1.InjectionEnvironment, Required: true}},
+				}},
+			},
 		}
-		invokeProduct(http.StatusConflict)
+		operations = append(operations, decodeProductOperation(account,
+			invokeProduct(prepareProduct(account, "/v1/application-revisions", prefix+"-application-revision-create", applicationRevision), http.StatusCreated),
+			paasv1.OperationCreateApplicationRevision, applicationRevision.ID))
+		deployment := paasv1.CreateDeploymentRequest{
+			ID: "program-key-deployment", Name: "program-key-deployment",
+			Spec: paasv1.DeploymentSpec{
+				ApplicationRevisionID: applicationRevision.ID, PlacementPolicyID: "placement-policy-local", DesiredState: paasv1.DeploymentDesiredRunning,
+				Components: []paasv1.DeploymentComponent{{
+					Name: "web", Replicas: 1,
+					Bindings: []paasv1.ComponentBinding{{Name: "settings", ConfigurationRevisionID: configurationRevision.ID}},
+				}},
+			},
+		}
+		operations = append(operations, decodeProductOperation(account,
+			invokeProduct(prepareProduct(account, "/v1/deployments", prefix+"-deployment-create", deployment), http.StatusAccepted),
+			paasv1.OperationDeploy, deployment.ID))
 		waitAllPaaSOutboxDelivered(t, ctx, database)
-		actor := auditv1.ActorReference{Type: auditv1.ActorUser, ID: auditv1.ActorID(account.target.ID), AccessKeyID: string(account.key.Key.ID)}
-		page := queryAudit(t, auditEndpoint, account.owner, auditv1.QueryRecordsRequest{
-			PageSize: 10, Action: auditv1.ActionPaaSApplicationCreated, Actor: &actor,
-		}, http.StatusOK)
-		if len(page.Records) != 1 || page.Records[0].Event.Actor != actor ||
-			page.Records[0].Event.Target.ID != string(application.ID) || page.Records[0].Event.OperationID != auditv1.OperationID(operation.ID) {
-			t.Fatalf("signed PaaS Audit lost exact USER/key/Operation attribution: %#v", page.Records)
+		for operationIndex, action := range []auditv1.Action{
+			auditv1.ActionPaaSApplicationCreated, auditv1.ActionPaaSConfigurationCreated,
+			auditv1.ActionPaaSConfigurationRevisionCreated, auditv1.ActionPaaSApplicationRevisionCreated,
+			auditv1.ActionPaaSDeploymentCreated,
+		} {
+			assertProductAudit(account, operations[operationIndex], action)
 		}
-		if decisions[account.key.Key.ID] == nil {
-			decisions[account.key.Key.ID] = map[iamv1.DecisionID]bool{}
-		}
-		decisions[account.key.Key.ID][iamv1.DecisionID(page.Records[0].Event.IAMDecisionID)] = true
 		request := sign(account, prefix+"-deny")
 		loginRequest := request.Authorization
 		loginRequest.RequestID, loginRequest.CorrelationID = prefix+"-login", prefix+"-login"
@@ -6074,6 +6155,37 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 			restartReplay = request
 		}
 	}
+	foreignApplication := paasv1.CreateApplicationRequest{ID: "program-key-customer-only", Name: "program-key-customer-only"}
+	foreignOperation := decodeProductOperation(b,
+		invokeProduct(prepareProduct(b, "/v1/applications", "program-customer-only-create", foreignApplication), http.StatusCreated),
+		paasv1.OperationCreateApplication, foreignApplication.ID)
+	foreignConfiguration := paasv1.CreateConfigurationRequest{
+		ID: "program-key-foreign-configuration", Name: "program-key-foreign-configuration", ApplicationID: foreignApplication.ID,
+	}
+	attackResponse := invokeProduct(prepareProduct(a, "/v1/configurations", "program-foreign-parent-create", foreignConfiguration), http.StatusNotFound)
+	var partial int
+	if err := database.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM paas.configurations WHERE tenant_id=$1 AND id=$2) +
+		(SELECT count(*) FROM paas.operations WHERE tenant_id=$1 AND target_id=$2) +
+		(SELECT count(*) FROM paas.audit_outbox WHERE tenant_id=$1 AND document#>>'{target,id}'=$2)`,
+		a.target.AccountID, foreignConfiguration.ID).Scan(&partial); err != nil || partial != 0 {
+		t.Fatalf("cross-Account AccessKey parent attack left partial state=%d err=%v", partial, err)
+	}
+	var attackDecision iamv1.DecisionID
+	attackRequestID := attackResponse.Header.Get("X-Request-ID")
+	if attackRequestID == "" {
+		t.Fatal("cross-Account parent rejection omitted its request identity")
+	}
+	if err := database.QueryRow(ctx, `SELECT id FROM iam.authorization_decisions
+		WHERE tenant_id=$1 AND access_key_id=$2 AND allowed
+		  AND action_name=$3 AND target_kind=$4 AND target_id='collection' AND request_id=$5`,
+		a.target.AccountID, a.key.Key.ID, iamv1.ActionPaaSConfigurationCreate,
+		iamv1.ResourceConfiguration, attackRequestID).Scan(&attackDecision); err != nil {
+		t.Fatal("cross-Account parent rejection lost its exact IAM decision", err)
+	}
+	decisions[a.key.Key.ID][attackDecision] = true
+	waitAllPaaSOutboxDelivered(t, ctx, database)
+	assertProductAudit(b, foreignOperation, auditv1.ActionPaaSApplicationCreated)
 	// A common nonce competes across two actual executables and runtime logins.
 	concurrent := sign(b, "program-signed-race")
 	raceBody := encode(concurrent)
@@ -11039,122 +11151,100 @@ func seedProcessExecutionProfile(
 		t.Fatalf("begin PaaS execution-profile fixture: %v", err)
 	}
 	defer func() { _ = transaction.Rollback(context.Background()) }()
-	var tenantSetting string
 	var observedAt time.Time
-	if err := transaction.QueryRow(
-		ctx,
-		"SELECT set_config('matrix.tenant_id', $1, true), transaction_timestamp()",
-		"organization-process",
-	).Scan(&tenantSetting, &observedAt); err != nil || tenantSetting != "organization-process" {
-		t.Fatalf("bind PaaS execution-profile tenant: setting=%q err=%v", tenantSetting, err)
+	if err := transaction.QueryRow(ctx, "SELECT transaction_timestamp()").Scan(&observedAt); err != nil {
+		t.Fatalf("read PaaS execution-profile timestamp: %v", err)
 	}
 	observedAt = observedAt.UTC().Truncate(time.Microsecond)
 	platformScope := paasv1.ResourceScope{Kind: paasv1.AuthorityPlatform}
-	tenantScope := paasv1.ResourceScope{
-		Kind: paasv1.AuthorityTenant, TenantID: "organization-process",
-	}
-	pool := paasv1.ExecutionPool{
-		APIVersion: paasv1.APIVersion,
-		Kind:       "ExecutionPool",
-		Metadata: paasv1.ResourceMetadata{
-			ID: "execution-pool-local", Name: "local", Scope: platformScope,
-			Labels:          map[string]string{"matrix-profile": "local-compose"},
-			ResourceVersion: 1, CreatedAt: observedAt, UpdatedAt: observedAt,
-		},
-		Spec: paasv1.ExecutionPoolSpec{
-			ExecutionTargetSelector: paasv1.LabelSelector{MatchLabels: map[string]string{
-				"matrix-profile": "local-compose",
-			}},
-			AllowedIsolationGuarantees: []paasv1.IsolationGuarantee{paasv1.IsolationWorkload},
-		},
-		Status: paasv1.ExecutionPoolStatus{
-			Phase: paasv1.ExecutionPoolReady, ExecutionTargetCount: 1,
-			ReadyExecutionTargetCount: 1, ObservedAt: observedAt,
-		},
-	}
 	capacity := paasv1.Capacity{
 		CPUMillis: 8000, MemoryBytes: 16 * 1024 * 1024 * 1024,
 		StorageBytes: 100 * 1024 * 1024 * 1024, WorkloadSlots: 8,
 	}
-	target := paasv1.ExecutionTarget{
-		APIVersion: paasv1.APIVersion,
-		Kind:       "ExecutionTarget",
-		Metadata: paasv1.ResourceMetadata{
-			ID: "execution-target-local", Name: "local", Scope: platformScope,
-			Labels: map[string]string{
-				"matrix-profile":             "local-compose",
-				"matrix-machine-fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-			},
-			ResourceVersion: 1, CreatedAt: observedAt, UpdatedAt: observedAt,
-		},
-		Spec: paasv1.ExecutionTargetSpec{
-			ExecutionPoolID: "execution-pool-local",
-			InfrastructureAdapter: paasv1.AdapterRef{
-				Kind: paasv1.AdapterInfrastructure, Name: "localmachine", ContractVersion: "v1",
-			},
-			DeploymentExecutor: paasv1.AdapterRef{
-				Kind: paasv1.AdapterDeploymentExecutor, Name: "compose", ContractVersion: "v1",
-			},
-			DesiredState: paasv1.ExecutionTargetActive,
-		},
-		Status: paasv1.ExecutionTargetStatus{
-			Health:   paasv1.ExecutionTargetHealthReady,
-			Capacity: capacity, Allocatable: capacity,
-			SupportedIsolationGuarantees: []paasv1.IsolationGuarantee{paasv1.IsolationWorkload},
-			ObservedAt:                   observedAt,
-		},
-	}
-	policy := paasv1.PlacementPolicy{
-		APIVersion: paasv1.APIVersion,
-		Kind:       "PlacementPolicy",
-		Metadata: paasv1.ResourceMetadata{
-			ID: "placement-policy-local", Name: "default-local", Scope: tenantScope,
-			Labels: map[string]string{
-				"matrix-profile": "local-compose", "purpose": "default",
-			},
-			ResourceVersion: 1, CreatedAt: observedAt, UpdatedAt: observedAt,
-		},
-		Spec: paasv1.PlacementPolicySpec{
-			RequiredIsolationGuarantee: paasv1.IsolationWorkload,
-			EligibleExecutionPoolIDs:   []paasv1.ResourceID{"execution-pool-local"},
-			ExecutionTargetSelector: paasv1.LabelSelector{MatchLabels: map[string]string{
-				"matrix-profile": "local-compose",
-			}},
-			Strategy: paasv1.PlacementFirstFit,
-		},
-	}
-	for name, validation := range map[string]error{
-		"pool":   paasv1.ValidateExecutionPool(pool),
-		"target": paasv1.ValidateExecutionTarget(target),
-		"policy": paasv1.ValidatePlacementPolicy(policy),
-	} {
-		if validation != nil {
-			t.Fatalf("validate PaaS %s execution-profile fixture: %v", name, validation)
+	for index, tenantID := range []paasv1.TenantID{"organization-process", "organization-process-customer"} {
+		var tenantSetting string
+		if err := transaction.QueryRow(ctx, "SELECT set_config('matrix.tenant_id', $1, true)", tenantID).Scan(&tenantSetting); err != nil || tenantSetting != string(tenantID) {
+			t.Fatalf("bind PaaS execution-profile tenant %s: setting=%q err=%v", tenantID, tenantSetting, err)
 		}
-	}
-	poolDocument, err := json.Marshal(pool)
-	if err != nil {
-		t.Fatalf("encode PaaS pool fixture: %v", err)
-	}
-	targetDocument, err := json.Marshal(target)
-	if err != nil {
-		t.Fatalf("encode PaaS target fixture: %v", err)
-	}
-	policyDocument, err := json.Marshal(policy)
-	if err != nil {
-		t.Fatalf("encode PaaS policy fixture: %v", err)
-	}
-	var reconciled bool
-	if err := transaction.QueryRow(
-		ctx,
-		`SELECT paas.reconcile_local_execution_profile(
-		     0, $1::jsonb, 0, $2::jsonb, 0, $3::jsonb
-		 )`,
-		poolDocument,
-		targetDocument,
-		policyDocument,
-	).Scan(&reconciled); err != nil || !reconciled {
-		t.Fatalf("reconcile PaaS execution-profile fixture: reconciled=%t err=%v", reconciled, err)
+		resourceVersion := uint64(index + 1)
+		pool := paasv1.ExecutionPool{
+			APIVersion: paasv1.APIVersion, Kind: "ExecutionPool",
+			Metadata: paasv1.ResourceMetadata{
+				ID: "execution-pool-local", Name: "local", Scope: platformScope,
+				Labels: map[string]string{"matrix-profile": "local-compose"}, ResourceVersion: resourceVersion,
+				CreatedAt: observedAt, UpdatedAt: observedAt,
+			},
+			Spec: paasv1.ExecutionPoolSpec{
+				ExecutionTargetSelector:    paasv1.LabelSelector{MatchLabels: map[string]string{"matrix-profile": "local-compose"}},
+				AllowedIsolationGuarantees: []paasv1.IsolationGuarantee{paasv1.IsolationWorkload},
+			},
+			Status: paasv1.ExecutionPoolStatus{
+				Phase: paasv1.ExecutionPoolReady, ExecutionTargetCount: 1,
+				ReadyExecutionTargetCount: 1, ObservedAt: observedAt,
+			},
+		}
+		target := paasv1.ExecutionTarget{
+			APIVersion: paasv1.APIVersion, Kind: "ExecutionTarget",
+			Metadata: paasv1.ResourceMetadata{
+				ID: "execution-target-local", Name: "local", Scope: platformScope,
+				Labels: map[string]string{
+					"matrix-profile":             "local-compose",
+					"matrix-machine-fingerprint": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				},
+				ResourceVersion: resourceVersion, CreatedAt: observedAt, UpdatedAt: observedAt,
+			},
+			Spec: paasv1.ExecutionTargetSpec{
+				ExecutionPoolID:       "execution-pool-local",
+				InfrastructureAdapter: paasv1.AdapterRef{Kind: paasv1.AdapterInfrastructure, Name: "localmachine", ContractVersion: "v1"},
+				DeploymentExecutor:    paasv1.AdapterRef{Kind: paasv1.AdapterDeploymentExecutor, Name: "compose", ContractVersion: "v1"},
+				DesiredState:          paasv1.ExecutionTargetActive,
+			},
+			Status: paasv1.ExecutionTargetStatus{
+				Health: paasv1.ExecutionTargetHealthReady, Capacity: capacity, Allocatable: capacity,
+				SupportedIsolationGuarantees: []paasv1.IsolationGuarantee{paasv1.IsolationWorkload}, ObservedAt: observedAt,
+			},
+		}
+		policy := paasv1.PlacementPolicy{
+			APIVersion: paasv1.APIVersion, Kind: "PlacementPolicy",
+			Metadata: paasv1.ResourceMetadata{
+				ID: "placement-policy-local", Name: "default-local",
+				Scope:           paasv1.ResourceScope{Kind: paasv1.AuthorityTenant, TenantID: tenantID},
+				Labels:          map[string]string{"matrix-profile": "local-compose", "purpose": "default"},
+				ResourceVersion: 1, CreatedAt: observedAt, UpdatedAt: observedAt,
+			},
+			Spec: paasv1.PlacementPolicySpec{
+				RequiredIsolationGuarantee: paasv1.IsolationWorkload,
+				EligibleExecutionPoolIDs:   []paasv1.ResourceID{"execution-pool-local"},
+				ExecutionTargetSelector:    paasv1.LabelSelector{MatchLabels: map[string]string{"matrix-profile": "local-compose"}},
+				Strategy:                   paasv1.PlacementFirstFit,
+			},
+		}
+		for name, validation := range map[string]error{
+			"pool": paasv1.ValidateExecutionPool(pool), "target": paasv1.ValidateExecutionTarget(target), "policy": paasv1.ValidatePlacementPolicy(policy),
+		} {
+			if validation != nil {
+				t.Fatalf("validate PaaS %s execution-profile fixture for %s: %v", name, tenantID, validation)
+			}
+		}
+		poolDocument, err := json.Marshal(pool)
+		if err != nil {
+			t.Fatalf("encode PaaS pool fixture: %v", err)
+		}
+		targetDocument, err := json.Marshal(target)
+		if err != nil {
+			t.Fatalf("encode PaaS target fixture: %v", err)
+		}
+		policyDocument, err := json.Marshal(policy)
+		if err != nil {
+			t.Fatalf("encode PaaS policy fixture: %v", err)
+		}
+		var reconciled bool
+		if err := transaction.QueryRow(ctx,
+			`SELECT paas.reconcile_local_execution_profile($1, $2::jsonb, $1, $3::jsonb, 0, $4::jsonb)`,
+			index, poolDocument, targetDocument, policyDocument,
+		).Scan(&reconciled); err != nil || !reconciled {
+			t.Fatalf("reconcile PaaS execution-profile fixture for %s: reconciled=%t err=%v", tenantID, reconciled, err)
+		}
 	}
 	if err := transaction.Commit(ctx); err != nil {
 		t.Fatalf("commit PaaS execution-profile fixture: %v", err)

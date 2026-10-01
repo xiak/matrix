@@ -92,7 +92,7 @@ func TestApplicationCreateAuthorizationBindsOnlyProfileDeclaredLabels(t *testing
 	}
 }
 
-func TestAccessKeyAdmissionIsLimitedToDeclaredCreateAndExactCredential(t *testing.T) {
+func TestAccessKeyAdmissionIsLimitedToDeclaredCollectionCreatesAndExactCredential(t *testing.T) {
 	nonce, err := iamv1.NewSecret("AAAAAAAAAAAAAAAAAAAAAA")
 	if err != nil {
 		t.Fatal(err)
@@ -130,6 +130,25 @@ func TestAccessKeyAdmissionIsLimitedToDeclaredCreateAndExactCredential(t *testin
 	changed.Subject.AccessKeyID = "key-two"
 	if ValidateAccessKeyAuthorizationForRequest(changed, request) == nil {
 		t.Fatal("another AccessKey was accepted as the signed credential")
+	}
+	for _, candidate := range []struct {
+		action       iamv1.Action
+		resourceKind string
+		path         string
+	}{
+		{AuthorizeConfigurationCreate, ResourceConfiguration, "/api/paas/v1/configurations"},
+		{AuthorizeConfigurationRevisionCreate, ResourceConfigurationRevision, "/api/paas/v1/configuration-revisions"},
+		{AuthorizeApplicationRevisionCreate, ResourceApplicationRevision, "/api/paas/v1/application-revisions"},
+		{AuthorizeDeploymentCreate, ResourceDeployment, "/api/paas/v1/deployments"},
+	} {
+		creation := request
+		creation.Action = candidate.action
+		creation.Resource = paasv1.ResourceRef{Kind: candidate.resourceKind, ID: "collection"}
+		creation.RequestLabels = nil
+		creation.SignedRequest.HTTP.EscapedPath = candidate.path
+		if ValidateAccessKeyAuthorizationRequest(creation) != nil {
+			t.Fatal("declared immutable resource graph creation rejected", candidate.action)
+		}
 	}
 	read := request
 	read.Action, read.ResourceMode, read.CollectionUsage = AuthorizeApplicationRead, iamv1.AuthorizationResourceInstance, ""

@@ -237,6 +237,73 @@ func TestHandlerCreatesApplicationThroughExactAccessKeyBoundary(t *testing.T) {
 	}
 }
 
+func TestHandlerMapsSignedImmutableResourceGraphRoutesToExactActions(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("a", 64)
+	tests := []struct {
+		name, internalPath, externalPath string
+		body                             any
+		action                           iamv1.Action
+		resourceKind                     string
+		status                           int
+		calls                            func(*fakeWorkflow) int
+	}{
+		{
+			name: "configuration", internalPath: "/v1/configurations", externalPath: "/api/paas/v1/configurations",
+			body:   paasv1.CreateConfigurationRequest{ID: "configuration-key", Name: "configuration-key", ApplicationID: "application-key"},
+			action: port.AuthorizeConfigurationCreate, resourceKind: port.ResourceConfiguration, status: http.StatusCreated,
+			calls: func(workflow *fakeWorkflow) int { return workflow.createConfigurationCalls },
+		},
+		{
+			name: "configuration revision", internalPath: "/v1/configuration-revisions", externalPath: "/api/paas/v1/configuration-revisions",
+			body: paasv1.CreateConfigurationRevisionRequest{ID: "configuration-revision-key", Name: "configuration-revision-key",
+				Spec: paasv1.ConfigurationRevisionSpec{ConfigurationID: "configuration-key", Values: map[string]string{"PORT": "8080"}, ContentDigest: digest}},
+			action: port.AuthorizeConfigurationRevisionCreate, resourceKind: port.ResourceConfigurationRevision, status: http.StatusCreated,
+			calls: func(workflow *fakeWorkflow) int { return workflow.createConfigurationRevisionCalls },
+		},
+		{
+			name: "application revision", internalPath: "/v1/application-revisions", externalPath: "/api/paas/v1/application-revisions",
+			body: paasv1.CreateApplicationRevisionRequest{ID: "application-revision-key", Name: "application-revision-key",
+				Spec: paasv1.ApplicationRevisionSpec{ApplicationID: "application-key", Revision: "v1", ContentDigest: digest}},
+			action: port.AuthorizeApplicationRevisionCreate, resourceKind: port.ResourceApplicationRevision, status: http.StatusCreated,
+			calls: func(workflow *fakeWorkflow) int { return workflow.createApplicationRevisionCalls },
+		},
+		{
+			name: "deployment", internalPath: "/v1/deployments", externalPath: "/api/paas/v1/deployments",
+			body: paasv1.CreateDeploymentRequest{ID: "deployment-key", Name: "deployment-key", Spec: paasv1.DeploymentSpec{
+				ApplicationRevisionID: "application-revision-key", PlacementPolicyID: "placement-key",
+				DesiredState: paasv1.DeploymentDesiredRunning, Components: []paasv1.DeploymentComponent{{Name: "api", Replicas: 1}}}},
+			action: port.AuthorizeDeploymentCreate, resourceKind: port.ResourceDeployment, status: http.StatusAccepted,
+			calls: func(workflow *fakeWorkflow) int { return workflow.submitCalls },
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			authorizer := &fakeAuthorizer{}
+			workflow := &fakeWorkflow{}
+			handler := mustAccessKeyHandler(t, authorizer, workflow)
+			request := jsonRequest(t, http.MethodPost, test.internalPath, test.body)
+			request.Header.Set("Idempotency-Key", "create-"+strings.ReplaceAll(test.name, " ", "-"))
+			setAccessKeyEdgeHeaders(t, request, test.externalPath)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != test.status || authorizer.accessKeyCalls != 1 || authorizer.authorizeCalls != 0 || test.calls(workflow) != 1 {
+				t.Fatalf("signed route status=%d key=%d bearer=%d workflow=%d body=%s",
+					response.Code, authorizer.accessKeyCalls, authorizer.authorizeCalls, test.calls(workflow), response.Body.String())
+			}
+			if authorizer.accessKeyRequest.Action != test.action ||
+				authorizer.accessKeyRequest.Resource != (paasv1.ResourceRef{Kind: test.resourceKind, ID: "collection"}) ||
+				authorizer.accessKeyRequest.SignedRequest.HTTP.EscapedPath != test.externalPath {
+				t.Fatalf("signed route mapped to %#v", authorizer.accessKeyRequest)
+			}
+			var operation paasv1.Operation
+			if json.NewDecoder(response.Body).Decode(&operation) != nil ||
+				!operation.RequestedBy.Equal(paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "user-authorized", AccessKeyID: "key-one"}) {
+				t.Fatalf("signed route Operation attribution=%#v", operation.RequestedBy)
+			}
+		})
+	}
+}
+
 func TestHandlerKeepsAccessKeyAdmissionClosedAndMapsNonceReplay(t *testing.T) {
 	t.Run("route outside closed mapping", func(t *testing.T) {
 		authorizer := &fakeAuthorizer{}
@@ -780,25 +847,31 @@ func (authorizer *fakeAuthorizer) AuthorizeAccessKey(
 }
 
 type fakeWorkflow struct {
-	createApplicationCalls      int
-	createApplicationCommand    applicationlifecycle.CreateApplicationCommand
-	setApplicationLabelCalls    int
-	setApplicationLabel         applicationlifecycle.SetApplicationLabelCommand
-	deleteApplicationLabelCalls int
-	deleteApplicationLabel      applicationlifecycle.DeleteApplicationLabelCommand
-	submitCalls                 int
-	submitCommand               applicationlifecycle.SubmitCommand
-	rollbackCalls               int
-	rollbackCommand             applicationlifecycle.RollbackCommand
-	getApplicationCalls         int
-	inspectApplicationCalls     int
-	readAuthorization           port.Authorization
-	readID                      paasv1.ResourceID
-	inspectSubject              port.AuthorizationSubjectContext
-	inspectSnapshot             *applicationlifecycle.ApplicationAuthorizationSnapshot
-	inspectErr                  error
-	getApplicationResult        *paasv1.Application
-	getApplicationErr           error
+	createApplicationCalls             int
+	createApplicationCommand           applicationlifecycle.CreateApplicationCommand
+	createConfigurationCalls           int
+	createConfigurationCommand         applicationlifecycle.CreateConfigurationCommand
+	createConfigurationRevisionCalls   int
+	createConfigurationRevisionCommand applicationlifecycle.CreateConfigurationRevisionCommand
+	createApplicationRevisionCalls     int
+	createApplicationRevisionCommand   applicationlifecycle.CreateApplicationRevisionCommand
+	setApplicationLabelCalls           int
+	setApplicationLabel                applicationlifecycle.SetApplicationLabelCommand
+	deleteApplicationLabelCalls        int
+	deleteApplicationLabel             applicationlifecycle.DeleteApplicationLabelCommand
+	submitCalls                        int
+	submitCommand                      applicationlifecycle.SubmitCommand
+	rollbackCalls                      int
+	rollbackCommand                    applicationlifecycle.RollbackCommand
+	getApplicationCalls                int
+	inspectApplicationCalls            int
+	readAuthorization                  port.Authorization
+	readID                             paasv1.ResourceID
+	inspectSubject                     port.AuthorizationSubjectContext
+	inspectSnapshot                    *applicationlifecycle.ApplicationAuthorizationSnapshot
+	inspectErr                         error
+	getApplicationResult               *paasv1.Application
+	getApplicationErr                  error
 }
 
 type fakeInstallationVerifier struct {
@@ -854,24 +927,39 @@ func (workflow *fakeWorkflow) DeleteApplicationLabel(
 }
 
 func (workflow *fakeWorkflow) CreateConfiguration(
-	context.Context,
-	applicationlifecycle.CreateConfigurationCommand,
+	_ context.Context,
+	command applicationlifecycle.CreateConfigurationCommand,
 ) (paasv1.Configuration, paasv1.Operation, bool, error) {
-	return paasv1.Configuration{}, paasv1.Operation{}, false, errors.New("unexpected CreateConfiguration")
+	workflow.createConfigurationCalls++
+	workflow.createConfigurationCommand = command
+	resource := paasv1.Configuration{Metadata: testMetadata(command.Request.ID, command.Request.Name), ApplicationID: command.Request.ApplicationID}
+	operation := testOperation("Configuration", resource.Metadata.ID, paasv1.OperationCreateConfiguration, paasv1.OperationSucceeded)
+	operation.RequestedBy = command.Authorization.Subject
+	return resource, operation, false, nil
 }
 
 func (workflow *fakeWorkflow) CreateConfigurationRevision(
-	context.Context,
-	applicationlifecycle.CreateConfigurationRevisionCommand,
+	_ context.Context,
+	command applicationlifecycle.CreateConfigurationRevisionCommand,
 ) (paasv1.ConfigurationRevision, paasv1.Operation, bool, error) {
-	return paasv1.ConfigurationRevision{}, paasv1.Operation{}, false, errors.New("unexpected CreateConfigurationRevision")
+	workflow.createConfigurationRevisionCalls++
+	workflow.createConfigurationRevisionCommand = command
+	resource := paasv1.ConfigurationRevision{Metadata: testMetadata(command.Request.ID, command.Request.Name), Spec: command.Request.Spec}
+	operation := testOperation("ConfigurationRevision", resource.Metadata.ID, paasv1.OperationCreateConfigurationRevision, paasv1.OperationSucceeded)
+	operation.RequestedBy = command.Authorization.Subject
+	return resource, operation, false, nil
 }
 
 func (workflow *fakeWorkflow) CreateApplicationRevision(
-	context.Context,
-	applicationlifecycle.CreateApplicationRevisionCommand,
+	_ context.Context,
+	command applicationlifecycle.CreateApplicationRevisionCommand,
 ) (paasv1.ApplicationRevision, paasv1.Operation, bool, error) {
-	return paasv1.ApplicationRevision{}, paasv1.Operation{}, false, errors.New("unexpected CreateApplicationRevision")
+	workflow.createApplicationRevisionCalls++
+	workflow.createApplicationRevisionCommand = command
+	resource := paasv1.ApplicationRevision{Metadata: testMetadata(command.Request.ID, command.Request.Name), Spec: command.Request.Spec}
+	operation := testOperation("ApplicationRevision", resource.Metadata.ID, paasv1.OperationCreateApplicationRevision, paasv1.OperationSucceeded)
+	operation.RequestedBy = command.Authorization.Subject
+	return resource, operation, false, nil
 }
 
 func (workflow *fakeWorkflow) Submit(
@@ -883,10 +971,9 @@ func (workflow *fakeWorkflow) Submit(
 	deployment := paasv1.Deployment{
 		Metadata: testMetadata(command.DeploymentID, "deployment-a"), Generation: 1,
 	}
-	return applicationlifecycle.Result{
-		Deployment: deployment,
-		Operation:  testOperation("Deployment", command.DeploymentID, paasv1.OperationDeploy, paasv1.OperationAccepted),
-	}, nil
+	operation := testOperation("Deployment", command.DeploymentID, paasv1.OperationDeploy, paasv1.OperationAccepted)
+	operation.RequestedBy = command.Authorization.Subject
+	return applicationlifecycle.Result{Deployment: deployment, Operation: operation}, nil
 }
 
 func (workflow *fakeWorkflow) Rollback(

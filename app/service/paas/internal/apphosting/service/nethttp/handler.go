@@ -237,9 +237,38 @@ func (value *handler) ServeHTTP(response http.ResponseWriter, request *http.Requ
 
 type accessKeyContextKey struct{}
 
+type accessKeyRequestContext struct {
+	SignedRequest iamv1.AccessKeySignedRequest
+	Action        iamv1.Action
+}
+
+func accessKeyActionForRoute(method, path string) (iamv1.Action, bool) {
+	if method != http.MethodPost {
+		return "", false
+	}
+	switch path {
+	case "/v1/applications":
+		return port.AuthorizeApplicationCreate, true
+	case "/v1/configurations":
+		return port.AuthorizeConfigurationCreate, true
+	case "/v1/configuration-revisions":
+		return port.AuthorizeConfigurationRevisionCreate, true
+	case "/v1/application-revisions":
+		return port.AuthorizeApplicationRevisionCreate, true
+	case "/v1/deployments":
+		return port.AuthorizeDeploymentCreate, true
+	default:
+		return "", false
+	}
+}
+
 func (value *handler) prepareAccessKeyRequest(response http.ResponseWriter, request *http.Request) bool {
-	if value.accessKeyBoundary == nil || request.Method != http.MethodPost ||
-		request.URL == nil || request.URL.Path != "/v1/applications" || request.URL.RawQuery != "" {
+	var expectedAction iamv1.Action
+	var accepted bool
+	if request.URL != nil {
+		expectedAction, accepted = accessKeyActionForRoute(request.Method, request.URL.Path)
+	}
+	if value.accessKeyBoundary == nil || !accepted || request.URL.RawQuery != "" {
 		requestID, ok := value.beginRequest(response)
 		if !ok {
 			return false
@@ -272,7 +301,8 @@ func (value *handler) prepareAccessKeyRequest(response http.ResponseWriter, requ
 		return false
 	}
 	request.Body = io.NopCloser(bytes.NewReader(bytes.Clone(body)))
-	*request = *request.WithContext(context.WithValue(request.Context(), accessKeyContextKey{}, signed))
+	accessKeyContext := accessKeyRequestContext{SignedRequest: signed, Action: expectedAction}
+	*request = *request.WithContext(context.WithValue(request.Context(), accessKeyContextKey{}, accessKeyContext))
 	clear(body)
 	return true
 }
@@ -774,7 +804,11 @@ func (value *handler) authorizeRequestWithLabels(
 		ResourceLabels: maps.Clone(resourceLabels),
 		RequestID:      requestID,
 	}
-	if signed, present := request.Context().Value(accessKeyContextKey{}).(iamv1.AccessKeySignedRequest); present {
+	if signedContext, present := request.Context().Value(accessKeyContextKey{}).(accessKeyRequestContext); present {
+		if signedContext.Action != action {
+			writeAuthorizationError(response, requestID, port.ErrUnauthenticated)
+			return port.Authorization{}, false
+		}
 		accessKeyAuthorizer, ok := value.authorizer.(port.AccessKeyAuthorizer)
 		if !ok {
 			writeAuthorizationError(response, requestID, port.ErrAuthorizationUnavailable)
@@ -784,7 +818,7 @@ func (value *handler) authorizeRequestWithLabels(
 			Action: action, Resource: authorizationRequest.Resource,
 			ResourceMode: mode, CollectionUsage: usage, SourceIP: sourceIP,
 			RequestLabels: maps.Clone(requestLabels), ResourceLabels: maps.Clone(resourceLabels),
-			RequestID: requestID, SignedRequest: signed,
+			RequestID: requestID, SignedRequest: signedContext.SignedRequest,
 		}
 		if port.ValidateAccessKeyAuthorizationRequest(accessKeyRequest) != nil {
 			writeAuthorizationError(response, requestID, port.ErrUnauthenticated)
