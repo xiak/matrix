@@ -130,6 +130,7 @@ function StatementFields({ statement, group, onChange }: {
   const prefixAllowed = selected.every((action) => action.resourceShapes.some((shape) => shape.mode === "INSTANCE" && shape.prefixAllowed));
   const availableConditions = (selected[0]?.conditions ?? []).filter((definition) => selected.every((action) =>
     (action.conditions ?? []).some((condition) => condition.key === definition.key && condition.valueType === definition.valueType && condition.source === definition.source)));
+  const trustedNetwork = availableConditions.some((condition) => condition.source === "CALLING_SERVICE_NETWORK");
   const trustedRequestTags = availableConditions.filter((condition) => condition.source === "CALLING_SERVICE_REQUEST_TAG");
   const nextCondition = availableConditions.flatMap((definition) => operatorsFor(definition)
     .map((operator) => ({ key: definition.key, operator }))).find((candidate) => !(statement.conditions ?? []).some((condition) => condition.key === candidate.key && condition.operator === candidate.operator));
@@ -179,10 +180,12 @@ function StatementFields({ statement, group, onChange }: {
     </section>
     <section className={styles.groupSection} aria-label={t("conditions")}>
       <div className={styles.sectionHeading}><div><h4>{t("conditions")}</h4><p>{t("conditionsHint")}</p></div></div>
-      {trustedRequestTags.length ? <div className={styles.conditionCapability}>
-        <strong>{t("trustedRequestTagTitle")}</strong>
-        <p>{t("trustedRequestTagCapability", { keys: trustedRequestTags.map((condition) => condition.key.replace("request.tag/", "")).join(" · ") })}</p>
-        <p>{t("trustedRequestTagSemantics")}</p>
+      {trustedNetwork || trustedRequestTags.length ? <div className={styles.conditionCapability}>
+        <strong>{t("trustedRequestContextTitle")}</strong>
+        {trustedNetwork ? <p>{t("trustedNetworkCapability")}</p> : null}
+        {trustedRequestTags.length ? <p>{t("trustedRequestTagCapability", { keys: trustedRequestTags.map((condition) => condition.key.replace("request.tag/", "")).join(" · ") })}</p> : null}
+        <p>{t("trustedConditionCombination")}</p>
+        {trustedRequestTags.length ? <p>{t("trustedRequestTagMissing")}</p> : null}
       </div> : null}
       {(statement.conditions ?? []).map((condition, index) => <div className={styles.row} key={index}>
         <FormField id={id + "-condition-key-" + index} label={t("conditionKey", { number: index + 1 })}>

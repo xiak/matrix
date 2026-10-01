@@ -1509,7 +1509,10 @@ describe("account access", () => {
       profile: { product: "paas", revision: 4, callingService: "PAAS", actions: [{
         action: "paas.application.create", resourceKind: "APPLICATION", scope: "TENANT",
         resourceShapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_CREATE" }],
-        conditions: [{ key: "request.tag/environment", valueType: "STRING", source: "CALLING_SERVICE_REQUEST_TAG" }],
+        conditions: [
+          { key: "request.source-ip", valueType: "IP", source: "CALLING_SERVICE_NETWORK" },
+          { key: "request.tag/environment", valueType: "STRING", source: "CALLING_SERVICE_REQUEST_TAG" }
+        ],
         resultResourceKind: "APPLICATION"
       }] }, contentDigest: `sha256:${"a".repeat(64)}`
     }] };
@@ -1519,10 +1522,14 @@ describe("account access", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "策略名称" }), { target: { value: "Production application creator" } });
     await user.click(screen.getByRole("tab", { name: "可视化编辑" }));
     await user.click(await screen.findByRole("radio", { name: /paas.application.create/ }));
-    expect(screen.getByText("产品可信请求标签")).toBeTruthy();
+    expect(screen.getByText("可信请求上下文")).toBeTruthy();
+    expect(screen.getByText(/来源 IP 由调用服务的受信网络边界提供/)).toBeTruthy();
+    expect(screen.getByText(/浏览器输入和转发请求头不能证明真实来源/)).toBeTruthy();
     expect(screen.getByText(/浏览器不会直接向 IAM 提交授权上下文/)).toBeTruthy();
-    expect(screen.getByText(/请求缺少该标签时/)).toBeTruthy();
+    expect(screen.getByText(/请求缺少标签时/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "添加条件" }));
+    await user.click(screen.getByRole("combobox", { name: "条件 1" }));
+    await user.click(screen.getByRole("option", { name: "可信请求标签 · environment" }));
     expect(screen.getByRole("combobox", { name: "条件 1" }).textContent).toContain("可信请求标签 · environment");
     await user.type(screen.getByRole("textbox", { name: "条件值" }), "production");
     await user.click(screen.getByRole("button", { name: "审阅策略" }));
