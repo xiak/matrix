@@ -2,11 +2,14 @@ package phase1e2e
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"testing"
 	"time"
 
@@ -67,10 +70,16 @@ func TestOptionsRequirePrivateSecurityMailOnlyForEffectfulLifecycle(t *testing.T
 	}
 	securityMail := filepath.Join(root, "security-mail.json")
 	t.Setenv("MATRIX_PHASE1_SECURITY_MAIL_CONFIGURATION", securityMail)
+	t.Setenv("MATRIX_PHASE1_EDGE", "http://127.0.0.1:49123")
 	config, err := optionsFromEnvironment()
-	if err != nil || config.securityMail != securityMail {
+	if err != nil || config.securityMail != securityMail || config.edge != "http://127.0.0.1:49123" {
 		t.Fatalf("effectful lifecycle options = %#v / %v", config, err)
 	}
+	t.Setenv("MATRIX_PHASE1_EDGE", "http://example.test:49123")
+	if _, err := optionsFromEnvironment(); err == nil {
+		t.Fatal("non-loopback lifecycle endpoint admitted")
+	}
+	t.Setenv("MATRIX_PHASE1_EDGE", "http://127.0.0.1:49123")
 
 	t.Setenv("MATRIX_PHASE1_E2E_PHASE", "after-restart")
 	t.Setenv("MATRIX_PHASE1_RELEASE_B", "")
@@ -114,13 +123,27 @@ func optionsFromEnvironment() (options, error) {
 	if phase != "run" && phase != "after-restart" {
 		return options{}, fail("command-input")
 	}
+	edge := os.Getenv("MATRIX_PHASE1_EDGE")
+	if edge == "" {
+		edge = defaultEdgeEndpoint
+	}
+	endpoint, err := url.Parse(edge)
+	if err != nil || endpoint.Scheme != "http" || endpoint.User != nil || endpoint.Path != "" ||
+		endpoint.RawQuery != "" || endpoint.Fragment != "" {
+		return options{}, fail("command-input")
+	}
+	host, port, err := net.SplitHostPort(endpoint.Host)
+	portNumber, portErr := strconv.ParseUint(port, 10, 16)
+	if err != nil || host != "127.0.0.1" || portErr != nil || portNumber == 0 {
+		return options{}, fail("command-input")
+	}
 	config := options{
 		root:         os.Getenv("MATRIX_PHASE1_ROOT"),
 		releaseA:     os.Getenv("MATRIX_PHASE1_RELEASE_A"),
 		releaseB:     os.Getenv("MATRIX_PHASE1_RELEASE_B"),
 		trustKey:     os.Getenv("MATRIX_PHASE1_TRUST_KEY"),
 		securityMail: os.Getenv("MATRIX_PHASE1_SECURITY_MAIL_CONFIGURATION"),
-		edge:         defaultEdgeEndpoint,
+		edge:         edge,
 		afterStart:   phase == "after-restart",
 	}
 	for _, path := range []string{config.root, config.releaseA, config.trustKey} {
