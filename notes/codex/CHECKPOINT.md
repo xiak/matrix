@@ -6,8 +6,8 @@
 - Updated: 2026-10-02
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `67ed0429a`
-- Pushed documentation milestone: `7228e29f4`
+- Pushed source/embed milestone: `0a317163a`
+- Pushed documentation milestone: `8c96599f5`
 
 ## Authoritative route
 
@@ -29,21 +29,23 @@ compaction or handoff, then validate it against Git and the linked FEAT.
 ## Latest pushed milestone
 
 The independent DEV MOCK remains available at `http://127.0.0.1:4317`, and
-login verification remains disabled for UX review. Isolated-MOCK User display
-name, Group name/description and custom-Policy description editing now share
-one content-area form instead of opening separate dialogs. Stable titles and
-back paths remain mounted, competing page actions are hidden during the
-workflow, and closing returns focus to the originating desktop action or the
-compact shared page-action trigger. Destructive deletes and high-risk batch
-confirmations remain focused dialogs. This adds no LIVE write wire.
+login verification remains disabled for UX review. LIVE Group metadata editing
+now shares the same content-area form as the isolated-MOCK metadata workflows
+without changing its fixed request/revision/conflict/readback contract. The
+four MOCK custom-Policy creation methods are also a content-area entry rather
+than a modal; returning restores the desktop create command or compact shared
+page-action trigger, and selecting a method projects directly into the existing
+unified draft workspace. Destructive deletes and high-risk confirmations remain
+focused dialogs. No new LIVE Policy or Group wire was added.
 
-Source and synchronized embed are pushed at `67ed0429a`; shared-console and
-IAM-client FEAT evidence is pushed through `7228e29f4`. The complete frontend
-gate passed 58 files/956 cases plus three normalization cases,
+Source and synchronized embed are pushed at `0a317163a`; shared-console and
+IAM-client FEAT evidence is pushed through `8c96599f5`. The complete frontend
+gate passed 58 files/957 cases plus three normalization cases,
 typecheck/lint/architecture/228-pair style checks, 42-route export, 233-file
 embed equality and repository Go test/vet. A fresh `390 x 844` browser session
-verified all three workflows with zero Dialog, no warning/error and no
-horizontal overflow; viewport/document/body widths were all 390px. The prior
+verified the four-method chooser with zero Dialog, compact-trigger focus
+restoration and immediate JSON-workspace projection; viewport/document/body
+widths were all 390px and warning/error logs were empty. The prior
 Role-directory hierarchy remains fixed at `68f059c45` and is indexed in
 FEAT-007. The immutable AccountSecurityReport preview remains MOCK-only until
 IAM publishes and explicitly marks a consumable runtime.
