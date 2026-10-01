@@ -70,8 +70,8 @@ function buildConfigurationWorksheet(workspace: AccessWorkspace, scene: AccountA
   return { rows, boundaryId: configuration.boundaryId };
 }
 
-export function PolicyCoveragePreview({ workspace, scene, entityId, onOpen }: { workspace: AccessWorkspace; scene: AccountAccessScene; entityId?: string; onOpen(view: AccountAccessView, id?: string): void }) {
-  const t = useTranslations("PolicyCoveragePreview");
+export function PolicyConfigurationReview({ workspace, scene, entityId, onOpen }: { workspace: AccessWorkspace; scene: AccountAccessScene; entityId?: string; onOpen(view: AccountAccessView, id?: string): void }) {
+  const t = useTranslations("PolicyConfigurationReview");
   const r = useTranslations("PolicyRules");
   const w = useTranslations("IamWorkspace");
   const id = useId();

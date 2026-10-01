@@ -948,9 +948,9 @@
         "label": "Login sessions",
         "hint": "Own sessions and secure sign-out"
       },
-      "policy-coverage": {
-        "label": "Policy coverage preview",
-        "hint": "Local configuration checks for users and role sessions"
+      "policy-configuration": {
+        "label": "Policy configuration review",
+        "hint": "Subject, policy-source and permission-boundary inventory"
       }
     }
   },
@@ -3809,7 +3809,7 @@
     "groupPolicyGrants": "Group policies",
     "directPolicyCount": "{count} direct",
     "groupPolicyCount": "{count} from groups",
-    "policyCoveragePreview": "View policy coverage",
+    "policyConfigurationReview": "Review policy configuration",
     "previewNote": "Access preview · Groups, policies, roles, SSO and keys are MOCK, session-only and grant no real permissions.",
     "notConnected": "This capability is not connected",
     "notConnectedHint": "This operation is not available for live accounts. Use MOCK preview from the sign-in page to explore the complete workflow.",
@@ -5031,7 +5031,7 @@
       "cancel": "The enrollment could not be cancelled. Keep this page open and retry."
     }
   },
-  "PolicyCoveragePreview": {
+  "PolicyConfigurationReview": {
     "example": "Inspect a local configuration scenario",
     "chooseExample": "Choose a scenario (optional)",
     "exampleHint": "Fills local fixture fields only. Policies and memberships do not change, and no authorization conclusion is produced.",

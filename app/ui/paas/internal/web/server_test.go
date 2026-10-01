@@ -112,7 +112,7 @@ func TestHandlerServesBoundedClientWorkspaceQueriesWithoutSelectingContent(t *te
 		"/console/access/groups/?id=group%2Fexample",
 		"/console/access/policies/?id=policy-reviewer",
 		"/console/access/roles/?id=role-reviewer",
-		"/console/access/policy-coverage/?id=principal-member",
+		"/console/access/policy-configuration/?id=principal-member",
 		"/console/access/create-policy/?method=visual",
 		"/console/access/create-policy/?method=json",
 		"/console/access/create-policy/?method=tags",

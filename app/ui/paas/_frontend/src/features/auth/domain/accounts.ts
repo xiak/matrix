@@ -62,7 +62,7 @@ export type ActionCapability = {
   restrictionReason: CapabilityRestriction | null;
 };
 
-export const accountAccessViews = ["users", "create-user", "groups", "create-group", "policies", "create-policy", "policy-language", "policy-coverage", "roles", "create-role", "role-access", "providers", "user-sso", "federations", "keys", "sessions", "settings", "tenants"] as const;
+export const accountAccessViews = ["users", "create-user", "groups", "create-group", "policies", "create-policy", "policy-language", "policy-configuration", "roles", "create-role", "role-access", "providers", "user-sso", "federations", "keys", "sessions", "settings", "tenants"] as const;
 export type AccountAccessView = "overview" | typeof accountAccessViews[number];
 
 export type RootIdentity = {

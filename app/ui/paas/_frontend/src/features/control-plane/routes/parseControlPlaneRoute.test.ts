@@ -9,6 +9,10 @@ describe("parseControlPlaneRoute", () => {
   it.each(accountAccessViews)("deep links to the access workspace %s", (view) => {
     expect(parseControlPlanePathname(`/console/access/${view}/`)).toEqual({ section: "access", view });
   });
+
+  it("does not retain the superseded policy coverage route", () => {
+    expect(parseControlPlanePathname("/console/access/policy-coverage/")).toEqual({ section: "access" });
+  });
   it.each([
     ["/console/logs/search/", { section: "logs", view: "search" }],
     ["/console/logs/topics/", { section: "logs", view: "topics" }],

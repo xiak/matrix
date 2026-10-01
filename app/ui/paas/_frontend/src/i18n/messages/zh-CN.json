@@ -948,9 +948,9 @@
         "label": "登录会话",
         "hint": "本人会话与安全退出"
       },
-      "policy-coverage": {
-        "label": "策略覆盖预览",
-        "hint": "用户与角色会话的本地配置检查"
+      "policy-configuration": {
+        "label": "策略配置检查",
+        "hint": "主体、策略来源与权限边界清单"
       }
     }
   },
@@ -3809,7 +3809,7 @@
     "groupPolicyGrants": "用户组策略",
     "directPolicyCount": "直接 {count} 项",
     "groupPolicyCount": "用户组 {count} 项",
-    "policyCoveragePreview": "查看策略覆盖",
+    "policyConfigurationReview": "检查策略配置",
     "previewNote": "访问管理体验 · 用户组、策略、角色、SSO 与密钥为 MOCK，仅在当前浏览器会话中生效，不授予真实权限。",
     "notConnected": "此能力尚未接入后端",
     "notConnectedHint": "真实账号暂不提供此操作。请从登录页进入 MOCK 体验查看完整流程。",
@@ -5045,7 +5045,7 @@
       "cancel": "无法取消当前绑定流程。请保留当前页面并重试。"
     }
   },
-  "PolicyCoveragePreview": {
+  "PolicyConfigurationReview": {
     "example": "查看本地配置场景",
     "chooseExample": "选择场景（可选）",
     "exampleHint": "仅预填本地 fixture，不修改策略或成员关系，也不会产生授权结论。",
