@@ -333,7 +333,7 @@
 .catalogResponsibilityHeading h3, .catalogResponsibilityHeading p, .catalogResponsibilityOwner p { margin: 0; }
 .catalogResponsibilityHeading h3 { color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-body); font-weight: var(--xiak-font-weight-semibold); }
 .catalogResponsibilityHeading p, .catalogResponsibilityOwner p { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: 1.6; }
-.catalogResponsibilityFlow { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: stretch; gap: var(--xiak-spacing-default); }
+.catalogResponsibilityFlow { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr); align-items: stretch; gap: var(--xiak-spacing-default); }
 .catalogResponsibilityOwner { display: flex; min-width: 0; flex-direction: column; align-items: flex-start; gap: var(--xiak-spacing-tight); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-small); padding: var(--xiak-spacing-default); background: var(--xiak-color-bg-panel); }
 .catalogResponsibilityOwner strong { color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-body); }
 .catalogResponsibilityOwner button { margin-top: auto; }

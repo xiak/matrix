@@ -2090,17 +2090,22 @@
     "back": "Back to permission catalog",
     "previewPublishing": "View internal onboarding (MOCK)",
     "responsibility": {
-      "title": "Catalog consumption and product onboarding are separate responsibilities",
-      "hint": "Tenants read released capabilities when authoring policies; product declarations, validation, and registration stay in a controlled internal workflow.",
-      "tenant": {
-        "badge": "Tenant view",
-        "title": "Tenant administrator · consume the catalog",
-        "hint": "Inspect actions, resources, and conditions to author and assign policies. Tenants cannot register products, replace revisions, or publish capabilities."
+      "title": "Product onboarding and tenant authorization have three separate owners",
+      "hint": "Product teams declare and enforce capabilities, IAM validates and publishes them, and tenant administrators only consume the released catalog.",
+      "product": {
+        "badge": "Product engineering",
+        "title": "Define capabilities and enforce them at the PEP",
+        "hint": "Declare Actions, resources, conditions, and credential admission, then enforce the same contract across real APIs, list paths, and bulk operations."
       },
-      "internal": {
-        "badge": "Internal workflow",
-        "title": "Product engineering + IAM platform · trusted onboarding",
-        "hint": "The product team declares and enforces authorization while IAM validates namespaces, contracts, and release boundaries. This entry only previews the collaboration UX."
+      "iam": {
+        "badge": "IAM platform",
+        "title": "Validate the contract and publish it as trusted",
+        "hint": "Validate namespaces, immutable revisions, content digests, and enforcement evidence while governing the trusted catalog boundary."
+      },
+      "tenant": {
+        "badge": "Tenant administrator",
+        "title": "Consume the catalog and assign access",
+        "hint": "Inspect actions, resources, and conditions to author and assign policies. Tenants cannot register products, replace revisions, or publish capabilities."
       }
     },
     "notConnected": "Permission catalog is not connected",

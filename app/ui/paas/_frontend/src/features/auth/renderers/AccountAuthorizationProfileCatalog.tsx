@@ -151,16 +151,22 @@ function AuthorizationProfileCatalog({ client }: { client: AuthorizationProfileC
       </div>
       <div className={styles.catalogResponsibilityFlow}>
         <div className={styles.catalogResponsibilityOwner}>
-          <Badge status="info">{t("responsibility.tenant.badge")}</Badge>
-          <strong>{t("responsibility.tenant.title")}</strong>
-          <p>{t("responsibility.tenant.hint")}</p>
+          <Badge status="info">{t("responsibility.product.badge")}</Badge>
+          <strong>{t("responsibility.product.title")}</strong>
+          <p>{t("responsibility.product.hint")}</p>
         </div>
         <ArrowRight aria-hidden="true" className={styles.catalogResponsibilityArrow} />
         <div className={styles.catalogResponsibilityOwner}>
-          <Badge status="warning">{t("responsibility.internal.badge")}</Badge>
-          <strong>{t("responsibility.internal.title")}</strong>
-          <p>{t("responsibility.internal.hint")}</p>
+          <Badge status="warning">{t("responsibility.iam.badge")}</Badge>
+          <strong>{t("responsibility.iam.title")}</strong>
+          <p>{t("responsibility.iam.hint")}</p>
           <Button ref={publishingTrigger} variant="secondary" size="small" onClick={() => setPublishingPreview(true)}>{t("previewPublishing")}</Button>
+        </div>
+        <ArrowRight aria-hidden="true" className={styles.catalogResponsibilityArrow} />
+        <div className={styles.catalogResponsibilityOwner}>
+          <Badge status="success">{t("responsibility.tenant.badge")}</Badge>
+          <strong>{t("responsibility.tenant.title")}</strong>
+          <p>{t("responsibility.tenant.hint")}</p>
         </div>
       </div>
     </section> : null}

@@ -617,9 +617,10 @@ describe("policy creation entry and directory contract", () => {
     await screen.findByRole("table", { name: "策略" });
     await user.click(screen.getByRole("tab", { name: "权限能力目录" }));
     await user.click(await screen.findByRole("button", { name: "paas" }));
-    expect(screen.getByRole("heading", { level: 3, name: "目录消费与产品接入是两个责任域" })).toBeTruthy();
-    expect(screen.getByText("租户管理员 · 消费目录")).toBeTruthy();
-    expect(screen.getByText("产品研发 + IAM 平台 · 受信接入")).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 3, name: "产品接入与租户授权是三段独立职责" })).toBeTruthy();
+    expect(screen.getByText("定义能力并落实 PEP")).toBeTruthy();
+    expect(screen.getByText("校验契约并受信发布")).toBeTruthy();
+    expect(screen.getByText("消费目录并分配权限")).toBeTruthy();
     const trigger = screen.getByRole("button", { name: "查看内部接入流程（MOCK）" });
     await user.click(trigger);
 
