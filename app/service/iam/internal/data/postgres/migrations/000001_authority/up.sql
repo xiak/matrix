@@ -1738,7 +1738,7 @@ BEGIN
             'iam.role.created','iam.role.updated','iam.role.disabled','iam.role.enabled','iam.role.trust-set','iam.role.deleted',
             'iam.role.permission-boundary.set','iam.role.permission-boundary.removed',
             'iam.role-session.issued','iam.role-session.admin-revoked',
-            'iam.access-key.created','iam.access-key.enabled','iam.access-key.disabled','iam.access-key.deleted',
+            'iam.access-key.created','iam.access-key.enabled','iam.access-key.disabled','iam.access-key.network-restrictions-updated','iam.access-key.deleted',
             'iam.group-membership.created','iam.group-membership.removed',
             'iam.user.status-set', 'iam.user.password-reset',
             'iam.policy-attachment.created', 'iam.policy-attachment.revoked',

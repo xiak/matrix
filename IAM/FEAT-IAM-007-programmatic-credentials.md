@@ -320,7 +320,9 @@ Account值归现有`AccountSecuritySettings.accessKeyNetwork`，不是授权Poli
 
 固定前驱`0c688302b9dea1050653eded2b9442a6b1322155`的真实IAM59二进制产生保留数据，当前IAM60双迁移、等值bootstrap、重启门禁以race-p1通过127.50秒（package 130.949秒）。已完成的旧设置事实保持原字节；未绑定新网络字段的旧PROVED StepUp只保留为不可变历史，在当前读取为not-found且不能消费，必须由当前完整StepUp重新认证后才可修改设置。该门禁同时保留密码/Session、MFA绑定/替换/恢复、原receipt/canonical/proof与冻结Profile，不把开发滚动前驱实验称为跨发布profile兼容。
 
-另一空白数据库上的`TestIndependentIAMAuditAndPaaSProcesses`以race-p1通过252.76秒（package 256.255秒）：两个真实IAM副本、Audit、PaaS及dispatcher覆盖双Account资源/Operation/outbox、程序签名body/path/If-Match/幂等键篡改、可信来源与重放、设置回包丢失/重启、MFA恢复及停用USER历史投递。聚焦API/authority/usecase/HTTP/PostgreSQL race、architecture和vet以及全仓普通`go test -p 2 ./...`、`go vet ./...`通过；OpenAPI二次生成字节稳定。上述仍是未提交候选，不替代精确SHA独立CI、签名APISIX、安装备份或真实浏览器验收。
+另一空白数据库上的`TestIndependentIAMAuditAndPaaSProcesses`以race-p1通过252.76秒（package 256.255秒）：两个真实IAM副本、Audit、PaaS及dispatcher覆盖双Account资源/Operation/outbox、程序签名body/path/If-Match/幂等键篡改、可信来源与重放、设置回包丢失/重启、MFA恢复及停用USER历史投递。聚焦API/authority/usecase/HTTP/PostgreSQL race、architecture和vet以及全仓普通`go test -p 2 ./...`、`go vet ./...`通过；OpenAPI二次生成字节稳定。上述本地证据先对应首次固定候选，不替代精确SHA独立CI、签名APISIX、安装备份或真实浏览器验收。
+
+首次固定`472596b1e`的[Verification 36895737155](https://github.com/xiak/matrix/actions/runs/36895737155)不能标为通过：`authority-storage`在通用Audit catalog真库门禁拒绝新事实，精确错误为`closed sanitized Audit event is invalid`。本任务在新的限额PG18空库按相同命令复现，确认公开Go contract已有新action/ACCESS_KEY target，而Audit SQL封闭action、query过滤及IAM outbox decision-required列表遗漏该值；修复只补同一action的四处封闭映射，不放宽actor、target、result或decision。修复后新的Audit存储/HTTP真库门禁10.713秒/4.163秒及完整AccessKey真库race-p1 99.07秒（package 102.743秒）通过，全仓普通测试/vet也通过；后继固定SHA和独立CI仍须另验，原失败不回填。
 
 ## 验收
 
