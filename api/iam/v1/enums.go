@@ -454,7 +454,7 @@ func AllServicePurposes() []ServicePurpose {
 // editable source. Product revision changes must accompany changed declarations.
 var authorizationProfiles = [...]AuthorizationProfile{
 	iamServiceRoleProfile(),
-	paasProfileRevisionNine,
+	paasProfileRevisionTen,
 	managedServiceProfileRevisionFour,
 	roleBusinessProfile(auditProfileRevisionOne),
 	declaredProductProfile(ProductInstallation, ServiceInstallationVerifier, 1,
@@ -565,6 +565,7 @@ var paasProfileRevisionSix = applicationLabelMutationProfile(paasProfileRevision
 var paasProfileRevisionSeven = applicationCreateAccessKeyProfile(paasProfileRevisionSix)
 var paasProfileRevisionEight = applicationGraphCreateAccessKeyProfile(paasProfileRevisionSeven)
 var paasProfileRevisionNine = applicationReadAccessKeyProfile(paasProfileRevisionEight)
+var paasProfileRevisionTen = paasInstanceReadAccessKeyProfile(paasProfileRevisionNine)
 
 func applicationCreateAccessKeyProfile(previous AuthorizationProfile) AuthorizationProfile {
 	profile := cloneAuthorizationProfile(previous)
@@ -617,6 +618,31 @@ func applicationReadAccessKeyProfile(previous AuthorizationProfile) Authorizatio
 		return profile
 	}
 	panic("PaaS Application read declaration is missing")
+}
+
+func paasInstanceReadAccessKeyProfile(previous AuthorizationProfile) AuthorizationProfile {
+	profile := cloneAuthorizationProfile(previous)
+	profile.Revision++
+	pending := map[Action]struct{}{
+		ActionPaaSConfigurationRead:         {},
+		ActionPaaSConfigurationRevisionRead: {},
+		ActionPaaSApplicationRevisionRead:   {},
+		ActionPaaSDeploymentRead:            {},
+		ActionPaaSOperationRead:             {},
+	}
+	for index := range profile.Actions {
+		if _, expected := pending[profile.Actions[index].Action]; !expected {
+			continue
+		}
+		profile.Actions[index].UserAuthenticationMethods = []UserAuthenticationMethod{
+			UserAuthenticationAccessKey, UserAuthenticationLoginSession,
+		}
+		delete(pending, profile.Actions[index].Action)
+	}
+	if len(pending) != 0 {
+		panic("PaaS instance read declaration is missing")
+	}
+	return profile
 }
 
 var auditProfileRevisionOne = declaredProductProfile(ProductAudit, ServiceAudit, 1,

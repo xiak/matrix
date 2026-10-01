@@ -1271,8 +1271,8 @@ func TestAccessKeySigningSchemasMatchExplicitTransportAndSanitizedResults(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	unsupportedRequest, err := NewAuthorizationRequest(ActionPaaSConfigurationRead,
-		ResourceReference{Kind: ResourceConfiguration, ID: "configuration-one"},
+	unsupportedRequest, err := NewAuthorizationRequest(ActionPaaSDeploymentUpdate,
+		ResourceReference{Kind: ResourceDeployment, ID: "deployment-one"},
 		AuthorizationResourceInstance, "", "request-unsupported-key", "correlation-unsupported-key")
 	if err != nil {
 		t.Fatal(err)

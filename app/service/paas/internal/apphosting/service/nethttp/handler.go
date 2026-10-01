@@ -244,10 +244,31 @@ type accessKeyRequestContext struct {
 
 func accessKeyActionForRoute(method, path string) (iamv1.Action, bool) {
 	if method == http.MethodGet {
-		const applicationPrefix = "/v1/applications/"
-		id := strings.TrimPrefix(path, applicationPrefix)
-		if id != path && !strings.Contains(id, "/") && paasv1.ValidateID("applicationId", id) == nil {
-			return port.AuthorizeApplicationRead, true
+		for _, route := range []struct {
+			prefix string
+			idName string
+			action iamv1.Action
+		}{
+			{"/v1/applications/", "applicationId", port.AuthorizeApplicationRead},
+			{"/v1/configurations/", "configurationId", port.AuthorizeConfigurationRead},
+			{"/v1/configuration-revisions/", "configurationRevisionId", port.AuthorizeConfigurationRevisionRead},
+			{"/v1/application-revisions/", "applicationRevisionId", port.AuthorizeApplicationRevisionRead},
+			{"/v1/deployments/", "deploymentId", port.AuthorizeDeploymentRead},
+			{"/v1/operations/", "operationId", port.AuthorizeOperationRead},
+		} {
+			id := strings.TrimPrefix(path, route.prefix)
+			if id != path && !strings.Contains(id, "/") && paasv1.ValidateID(route.idName, id) == nil {
+				return route.action, true
+			}
+		}
+		const deploymentPrefix = "/v1/deployments/"
+		parts := strings.Split(strings.TrimPrefix(path, deploymentPrefix), "/")
+		if len(parts) == 3 && parts[1] == "generations" &&
+			paasv1.ValidateID("deploymentId", parts[0]) == nil {
+			generation, err := strconv.ParseUint(parts[2], 10, 64)
+			if err == nil && generation > 0 && generation <= 9007199254740991 {
+				return port.AuthorizeDeploymentRead, true
+			}
 		}
 		return "", false
 	}

@@ -309,7 +309,7 @@ func TestHandlerKeepsAccessKeyAdmissionClosedAndMapsNonceReplay(t *testing.T) {
 		authorizer := &fakeAuthorizer{}
 		workflow := &fakeWorkflow{}
 		handler := mustAccessKeyHandler(t, authorizer, workflow)
-		request := httptest.NewRequest(http.MethodGet, "/v1/configurations/configuration-a", nil)
+		request := httptest.NewRequest(http.MethodGet, "/v1/applications", nil)
 		setAccessKeyEdgeHeaders(t, request, "/api/paas/v1/configurations/configuration-a")
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, request)
@@ -336,6 +336,45 @@ func TestHandlerKeepsAccessKeyAdmissionClosedAndMapsNonceReplay(t *testing.T) {
 				response.Code, authorizer.accessKeyCalls, workflow.createApplicationCalls, response.Body.String())
 		}
 	})
+}
+
+func TestAccessKeyRouteAdmissionIsAnExactClosedMap(t *testing.T) {
+	for _, test := range []struct {
+		method string
+		path   string
+		action iamv1.Action
+	}{
+		{http.MethodGet, "/v1/applications/application-a", port.AuthorizeApplicationRead},
+		{http.MethodGet, "/v1/configurations/configuration-a", port.AuthorizeConfigurationRead},
+		{http.MethodGet, "/v1/configuration-revisions/configuration-revision-a", port.AuthorizeConfigurationRevisionRead},
+		{http.MethodGet, "/v1/application-revisions/application-revision-a", port.AuthorizeApplicationRevisionRead},
+		{http.MethodGet, "/v1/deployments/deployment-a", port.AuthorizeDeploymentRead},
+		{http.MethodGet, "/v1/deployments/deployment-a/generations/1", port.AuthorizeDeploymentRead},
+		{http.MethodGet, "/v1/deployments/deployment-a/generations/9007199254740991", port.AuthorizeDeploymentRead},
+		{http.MethodGet, "/v1/operations/operation-a", port.AuthorizeOperationRead},
+	} {
+		action, admitted := accessKeyActionForRoute(test.method, test.path)
+		if !admitted || action != test.action {
+			t.Fatalf("declared route %s %s mapped to %s admitted=%v", test.method, test.path, action, admitted)
+		}
+	}
+	for _, test := range []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/v1/applications"},
+		{http.MethodGet, "/v1/configurations/configuration-a/extra"},
+		{http.MethodGet, "/v1/deployments/deployment-a/generations/0"},
+		{http.MethodGet, "/v1/deployments/deployment-a/generations/9007199254740992"},
+		{http.MethodGet, "/v1/deployments/deployment-a/generations/not-a-number"},
+		{http.MethodGet, "/v1/deployments/deployment-a/generations/1/extra"},
+		{http.MethodGet, "/v1/platform-operations/operation-a"},
+		{http.MethodPost, "/v1/operations/operation-a"},
+	} {
+		if action, admitted := accessKeyActionForRoute(test.method, test.path); admitted || action != "" {
+			t.Fatalf("undeclared route %s %s mapped to %s", test.method, test.path, action)
+		}
+	}
 }
 
 func TestHandlerReadsExactApplicationThroughAccessKeySubjectResolution(t *testing.T) {

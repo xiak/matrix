@@ -92,7 +92,7 @@ func TestApplicationCreateAuthorizationBindsOnlyProfileDeclaredLabels(t *testing
 	}
 }
 
-func TestAccessKeyAdmissionIsLimitedToDeclaredGraphCreatesAndApplicationRead(t *testing.T) {
+func TestAccessKeyAdmissionIsLimitedToDeclaredGraphAndInstanceActions(t *testing.T) {
 	nonce, err := iamv1.NewSecret("AAAAAAAAAAAAAAAAAAAAAA")
 	if err != nil {
 		t.Fatal(err)
@@ -163,13 +163,35 @@ func TestAccessKeyAdmissionIsLimitedToDeclaredGraphCreatesAndApplicationRead(t *
 	if ValidateAccessKeyAuthorizationRequest(read) != nil {
 		t.Fatal("declared tagged Application read rejected")
 	}
-	wrongRead := read
-	wrongRead.Action = AuthorizeConfigurationRead
-	wrongRead.Resource = paasv1.ResourceRef{Kind: ResourceConfiguration, ID: "configuration-one"}
-	wrongRead.ResourceLabels = nil
-	wrongRead.SignedRequest.HTTP.EscapedPath = "/api/paas/v1/configurations/configuration-one"
-	if ValidateAccessKeyAuthorizationRequest(wrongRead) == nil {
-		t.Fatal("undeclared Configuration read borrowed Application AccessKey admission")
+	for _, candidate := range []struct {
+		action       iamv1.Action
+		resourceKind string
+		resourceID   paasv1.ResourceID
+		path         string
+	}{
+		{AuthorizeConfigurationRead, ResourceConfiguration, "configuration-one", "/api/paas/v1/configurations/configuration-one"},
+		{AuthorizeConfigurationRevisionRead, ResourceConfigurationRevision, "configuration-revision-one", "/api/paas/v1/configuration-revisions/configuration-revision-one"},
+		{AuthorizeApplicationRevisionRead, ResourceApplicationRevision, "application-revision-one", "/api/paas/v1/application-revisions/application-revision-one"},
+		{AuthorizeDeploymentRead, ResourceDeployment, "deployment-one", "/api/paas/v1/deployments/deployment-one"},
+		{AuthorizeOperationRead, ResourceOperation, "operation-one", "/api/paas/v1/operations/operation-one"},
+	} {
+		instanceRead := read
+		instanceRead.Action = candidate.action
+		instanceRead.Resource = paasv1.ResourceRef{Kind: candidate.resourceKind, ID: candidate.resourceID}
+		instanceRead.ResourceLabels = nil
+		instanceRead.SignedRequest.HTTP.EscapedPath = candidate.path
+		if ValidateAccessKeyAuthorizationRequest(instanceRead) != nil {
+			t.Fatal("declared instance read rejected", candidate.action)
+		}
+	}
+	undeclared := read
+	undeclared.Action = AuthorizeDeploymentUpdate
+	undeclared.Resource = paasv1.ResourceRef{Kind: ResourceDeployment, ID: "deployment-one"}
+	undeclared.ResourceLabels = nil
+	undeclared.SignedRequest.HTTP.Method = "PUT"
+	undeclared.SignedRequest.HTTP.EscapedPath = "/api/paas/v1/deployments/deployment-one"
+	if ValidateAccessKeyAuthorizationRequest(undeclared) == nil {
+		t.Fatal("undeclared Deployment update borrowed instance-read AccessKey admission")
 	}
 }
 

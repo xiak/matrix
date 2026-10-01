@@ -1729,7 +1729,7 @@ func TestAccessKeySubjectLineageRequiresItsOwnDeclaredCarrier(t *testing.T) {
 			}
 		}
 	}
-	request, err := NewAuthorizationRequest(ActionPaaSConfigurationRead, ResourceReference{Kind: ResourceConfiguration, ID: "configuration-one"}, AuthorizationResourceInstance, "", "request-key", "correlation-key")
+	request, err := NewAuthorizationRequest(ActionPaaSDeploymentUpdate, ResourceReference{Kind: ResourceDeployment, ID: "deployment-one"}, AuthorizationResourceInstance, "", "request-key", "correlation-key")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3187,7 +3187,7 @@ func TestRoleBusinessProfilesRequireExplicitCurrentCapabilities(t *testing.T) {
 		current, found := LookupAuthorizationProfile(product)
 		expectedRevision := uint64(2)
 		if product == ProductPaaS {
-			expectedRevision = 9
+			expectedRevision = 10
 		}
 		if !found || current.Revision != expectedRevision {
 			t.Fatal("missing explicit new product revision")
@@ -4010,7 +4010,7 @@ func TestHistoricalDecisionProfileDoesNotBorrowCurrentHead(t *testing.T) {
 
 func TestPaaSProfileDeclaresCompletePlatformProduct(t *testing.T) {
 	profile, found := LookupAuthorizationProfile(ProductPaaS)
-	if !found || profile.Revision != 9 {
+	if !found || profile.Revision != 10 {
 		t.Fatal("missing current PaaS role, tag, and AccessKey-capable declaration")
 	}
 	expected := map[Action]struct {
@@ -4066,16 +4066,24 @@ func TestPaaSProfileDeclaresCompletePlatformProduct(t *testing.T) {
 		t.Fatal(err)
 	}
 	reference := AuthorizationProfileReference{Product: profile.Product, Revision: profile.Revision, ContentDigest: profileDigest}
-	keyActions := map[Action]bool{
-		ActionPaaSApplicationCreate:           true,
-		ActionPaaSConfigurationCreate:         true,
-		ActionPaaSConfigurationRevisionCreate: true,
-		ActionPaaSApplicationRevisionCreate:   true,
-		ActionPaaSDeploymentCreate:            true,
-		ActionPaaSApplicationRead:             false,
+	keyActions := map[Action]struct {
+		shape  AuthorizationResourceShape
+		result ResourceKind
+	}{
+		ActionPaaSApplicationCreate:           {AuthorizationResourceShape{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}, ResourceApplication},
+		ActionPaaSConfigurationCreate:         {AuthorizationResourceShape{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}, ResourceConfiguration},
+		ActionPaaSConfigurationRevisionCreate: {AuthorizationResourceShape{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}, ResourceConfigurationRevision},
+		ActionPaaSApplicationRevisionCreate:   {AuthorizationResourceShape{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}, ResourceApplicationRevision},
+		ActionPaaSDeploymentCreate:            {AuthorizationResourceShape{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}, ResourceDeployment},
+		ActionPaaSApplicationRead:             {AuthorizationResourceShape{Mode: AuthorizationResourceInstance, PrefixAllowed: true}, ""},
+		ActionPaaSConfigurationRead:           {AuthorizationResourceShape{Mode: AuthorizationResourceInstance}, ""},
+		ActionPaaSConfigurationRevisionRead:   {AuthorizationResourceShape{Mode: AuthorizationResourceInstance}, ""},
+		ActionPaaSApplicationRevisionRead:     {AuthorizationResourceShape{Mode: AuthorizationResourceInstance}, ""},
+		ActionPaaSDeploymentRead:              {AuthorizationResourceShape{Mode: AuthorizationResourceInstance}, ""},
+		ActionPaaSOperationRead:               {AuthorizationResourceShape{Mode: AuthorizationResourceInstance}, ""},
 	}
 	for _, action := range profile.Actions {
-		keyCreate, keyAction := keyActions[action.Action]
+		expected, keyAction := keyActions[action.Action]
 		for _, method := range []UserAuthenticationMethod{UserAuthenticationAccessKey, UserAuthenticationLoginSession} {
 			allowed := CheckAuthorizationProfileUserAuthentication(profile, reference, action.Action, method) == nil
 			if allowed != (method == UserAuthenticationLoginSession || keyAction) {
@@ -4088,12 +4096,8 @@ func TestPaaSProfileDeclaresCompletePlatformProduct(t *testing.T) {
 		if action.Scope != AuthorityScopeTenant || len(action.ResourceShapes) != 1 {
 			t.Fatal("AccessKey action escaped its tenant resource shape", action.Action)
 		}
-		if keyCreate && (action.ResultResourceKind != action.ResourceKind ||
-			action.ResourceShapes[0] != (AuthorizationResourceShape{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate})) {
-			t.Fatal("AccessKey collection create escaped its original resource shape", action.Action)
-		}
-		if !keyCreate && (action.ResultResourceKind != "" || action.ResourceShapes[0] != (AuthorizationResourceShape{Mode: AuthorizationResourceInstance, PrefixAllowed: true})) {
-			t.Fatal("AccessKey instance read escaped its original resource shape", action.Action)
+		if action.ResultResourceKind != expected.result || action.ResourceShapes[0] != expected.shape {
+			t.Fatal("AccessKey action escaped its original resource shape", action.Action)
 		}
 		delete(keyActions, action.Action)
 	}
@@ -4543,6 +4547,9 @@ func TestAuthorizationProfileUserAuthenticationIsExplicitAndCommitted(t *testing
 				ActionPaaSApplicationCreate, ActionPaaSConfigurationCreate,
 				ActionPaaSConfigurationRevisionCreate, ActionPaaSApplicationRevisionCreate,
 				ActionPaaSDeploymentCreate, ActionPaaSApplicationRead,
+				ActionPaaSConfigurationRead, ActionPaaSConfigurationRevisionRead,
+				ActionPaaSApplicationRevisionRead, ActionPaaSDeploymentRead,
+				ActionPaaSOperationRead,
 			}, declared.Action) {
 				if !slices.Equal(declared.UserAuthenticationMethods, []UserAuthenticationMethod{
 					UserAuthenticationAccessKey, UserAuthenticationLoginSession,

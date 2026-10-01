@@ -13,8 +13,8 @@
   "decidedAt": "2026-08-25T02:08:09.000000Z",
   "profile": {
     "product": "paas",
-    "revision": 9,
-    "contentDigest": "sha256:14aa8bee8819bde9b1a5434774b26308866ea1a17d9ccfd3cc3ccf252cb297c6"
+    "revision": 10,
+    "contentDigest": "sha256:759bd751d03fc8ddceb69f6a5e827328401dcbd47d73a1e568a0b76c5a517256"
   },
   "resourceMode": "COLLECTION",
   "collectionUsage": "COLLECTION_CREATE",

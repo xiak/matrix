@@ -110,8 +110,8 @@ func TestRuntimeDSNBindsLeastPrivilegeLogin(t *testing.T) {
 func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	const variable = "MATRIX_IAM_PREDECESSOR_POSTGRES_TEST_DSN"
 	const databasePrefix = "matrix_iam_upgrade_predecessor_"
-	const source = "e3c137ba0ed80d8d90f893192d343d89d2d917f5"
-	const sourceSchema uint64 = 58
+	const source = "b6d15c89af64587d0c5eff64f9b07b1da09b43f5"
+	const sourceSchema uint64 = 59
 	const currentSchema uint64 = 59
 	// Use credentials accepted by the immediate predecessor. This rolling
 	// pre-v1 gate proves only the current schema and its one fixed predecessor;
@@ -1753,7 +1753,7 @@ func proveFrozenFamilyProfileAdvance(t *testing.T, ctx context.Context, admin *p
 	// condition in the future build. Even a resource-nonmatching old Deny must
 	// then fail closed, rather than disappear behind another Allow.
 	replacement, err := parser.ParseExpr(fmt.Sprintf(`func() AuthorizationProfile {
-		profile := paasProfileRevisionNine
+		profile := paasProfileRevisionTen
 		profile.Revision = %d
 		var added AuthorizationProfileAction
 		for index, action := range profile.Actions {
@@ -1784,7 +1784,7 @@ func proveFrozenFamilyProfileAdvance(t *testing.T, ctx context.Context, admin *p
 		}
 		for index, element := range catalog.Elts {
 			current, ok := element.(*ast.Ident)
-			if ok && current.Name == "paasProfileRevisionNine" {
+			if ok && current.Name == "paasProfileRevisionTen" {
 				catalog.Elts[index] = replacement
 				replaced++
 			}
@@ -5908,19 +5908,19 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		sensitive = append(sensitive, base64.RawURLEncoding.EncodeToString(nonce), signature)
 		return signed
 	}
-	// Exercise the actual internal RPC in both IAM executables. Configuration
-	// read intentionally remains an AccessKey Deny; the positive Application
-	// read path must go through PaaS pre-read and final authorization below.
+	// Exercise the actual internal RPC in both IAM executables. Deployment
+	// update intentionally remains an AccessKey Deny; positive product reads
+	// must go through their exact PaaS routes below.
 	sign := func(account *accountFixture, requestID string) iamv1.AccessKeyAuthorizationRequest {
 		t.Helper()
-		request, err := iamv1.NewAuthorizationRequest(iamv1.ActionPaaSConfigurationRead,
-			iamv1.ResourceReference{Kind: iamv1.ResourceConfiguration, ID: "program-signed-configuration"}, iamv1.AuthorizationResourceInstance, "", requestID, requestID)
+		request, err := iamv1.NewAuthorizationRequest(iamv1.ActionPaaSDeploymentUpdate,
+			iamv1.ResourceReference{Kind: iamv1.ResourceDeployment, ID: "program-signed-deployment"}, iamv1.AuthorizationResourceInstance, "", requestID, requestID)
 		if err != nil {
 			t.Fatal(err)
 		}
 		bodyHash := sha256.Sum256(nil)
-		signed := signHTTP(account, iamv1.AccessKeyHTTPRequest{Method: http.MethodGet, Scheme: "https", Authority: "program-process.invalid:443",
-			EscapedPath: "/api/paas/v1/configurations/program-signed-configuration", BodyDigest: "sha256:" + hex.EncodeToString(bodyHash[:])})
+		signed := signHTTP(account, iamv1.AccessKeyHTTPRequest{Method: http.MethodPut, Scheme: "https", Authority: "program-process.invalid:443",
+			EscapedPath: "/api/paas/v1/deployments/program-signed-deployment", BodyDigest: "sha256:" + hex.EncodeToString(bodyHash[:])})
 		return iamv1.AccessKeyAuthorizationRequest{Authorization: request, SignedRequest: signed}
 	}
 	encode := func(request iamv1.AccessKeyAuthorizationRequest) []byte {
@@ -6106,6 +6106,26 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 			t.Fatalf("signed PaaS Audit matches=%d for action=%s target=%s", matches, action, operation.Target.ID)
 		}
 	}
+	recordProductReadDecision := func(account *accountFixture, response processResponse, action iamv1.Action, kind iamv1.ResourceKind, id paasv1.ResourceID) {
+		t.Helper()
+		requestID := response.Header.Get("X-Request-ID")
+		if requestID == "" {
+			t.Fatal("signed instance read omitted request identity")
+		}
+		var decisionID iamv1.DecisionID
+		var exact bool
+		if err := database.QueryRow(ctx, `SELECT id,allowed AND contract_version=7 AND principal_id=$2 AND access_key_id=$3
+			AND action_name=$4 AND target_kind=$5 AND target_id=$6
+			AND NOT (document ? 'requestTags') AND NOT (document ? 'resourceTags')
+			FROM iam.authorization_decisions WHERE tenant_id=$1 AND request_id=$7`,
+			account.target.AccountID, account.target.ID, account.key.Key.ID, action, kind, id, requestID).Scan(&decisionID, &exact); err != nil || !exact {
+			t.Fatal("signed instance read decision lost exact Account/key/resource binding", err)
+		}
+		if decisions[account.key.Key.ID] == nil {
+			decisions[account.key.Key.ID] = map[iamv1.DecisionID]bool{}
+		}
+		decisions[account.key.Key.ID][decisionID] = true
+	}
 	var restartReplay iamv1.AccessKeyAuthorizationRequest
 	for index := range accounts {
 		account := &accounts[index]
@@ -6208,6 +6228,61 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		operations = append(operations, decodeProductOperation(account,
 			invokeProduct(prepareProduct(account, "/v1/deployments", prefix+"-deployment-create", deployment), http.StatusAccepted),
 			paasv1.OperationDeploy, deployment.ID))
+		configurationRead := invokeProduct(prepareProductRead(account, "/v1/configurations/"+string(configuration.ID)), http.StatusOK)
+		var readConfiguration paasv1.Configuration
+		if iamv1.DecodeRequest(bytes.NewReader(configurationRead.Body), &readConfiguration) != nil ||
+			paasv1.ValidateConfiguration(readConfiguration) != nil || readConfiguration.Metadata.Scope.TenantID != paasv1.TenantID(account.target.AccountID) ||
+			readConfiguration.Metadata.ID != configuration.ID || readConfiguration.ApplicationID != application.ID {
+			t.Fatal("signed Configuration read crossed Account or changed its parent")
+		}
+		recordProductReadDecision(account, configurationRead, iamv1.ActionPaaSConfigurationRead, iamv1.ResourceConfiguration, configuration.ID)
+		configurationRevisionRead := invokeProduct(prepareProductRead(account, "/v1/configuration-revisions/"+string(configurationRevision.ID)), http.StatusOK)
+		var readConfigurationRevision paasv1.ConfigurationRevision
+		if iamv1.DecodeRequest(bytes.NewReader(configurationRevisionRead.Body), &readConfigurationRevision) != nil ||
+			paasv1.ValidateConfigurationRevision(readConfigurationRevision) != nil ||
+			readConfigurationRevision.Metadata.Scope.TenantID != paasv1.TenantID(account.target.AccountID) ||
+			readConfigurationRevision.Metadata.ID != configurationRevision.ID ||
+			!reflect.DeepEqual(readConfigurationRevision.Spec, configurationRevision.Spec) {
+			t.Fatal("signed ConfigurationRevision read crossed Account or changed content")
+		}
+		recordProductReadDecision(account, configurationRevisionRead, iamv1.ActionPaaSConfigurationRevisionRead, iamv1.ResourceConfigurationRevision, configurationRevision.ID)
+		applicationRevisionRead := invokeProduct(prepareProductRead(account, "/v1/application-revisions/"+string(applicationRevision.ID)), http.StatusOK)
+		var readApplicationRevision paasv1.ApplicationRevision
+		if iamv1.DecodeRequest(bytes.NewReader(applicationRevisionRead.Body), &readApplicationRevision) != nil ||
+			paasv1.ValidateApplicationRevision(readApplicationRevision) != nil ||
+			readApplicationRevision.Metadata.Scope.TenantID != paasv1.TenantID(account.target.AccountID) ||
+			readApplicationRevision.Metadata.ID != applicationRevision.ID ||
+			!reflect.DeepEqual(readApplicationRevision.Spec, applicationRevision.Spec) {
+			t.Fatal("signed ApplicationRevision read crossed Account or changed content")
+		}
+		recordProductReadDecision(account, applicationRevisionRead, iamv1.ActionPaaSApplicationRevisionRead, iamv1.ResourceApplicationRevision, applicationRevision.ID)
+		deploymentRead := invokeProduct(prepareProductRead(account, "/v1/deployments/"+string(deployment.ID)), http.StatusOK)
+		var readDeployment paasv1.Deployment
+		if iamv1.DecodeRequest(bytes.NewReader(deploymentRead.Body), &readDeployment) != nil ||
+			paasv1.ValidateDeployment(readDeployment) != nil || readDeployment.Metadata.Scope.TenantID != paasv1.TenantID(account.target.AccountID) ||
+			readDeployment.Metadata.ID != deployment.ID || !reflect.DeepEqual(readDeployment.Spec, deployment.Spec) {
+			t.Fatal("signed Deployment read crossed Account or changed desired state")
+		}
+		recordProductReadDecision(account, deploymentRead, iamv1.ActionPaaSDeploymentRead, iamv1.ResourceDeployment, deployment.ID)
+		generationRead := invokeProduct(prepareProductRead(account, fmt.Sprintf("/v1/deployments/%s/generations/%d", deployment.ID, readDeployment.Generation)), http.StatusOK)
+		var readGeneration paasv1.DeploymentGeneration
+		if iamv1.DecodeRequest(bytes.NewReader(generationRead.Body), &readGeneration) != nil ||
+			paasv1.ValidateDeploymentGeneration(readGeneration) != nil || readGeneration.Scope.TenantID != paasv1.TenantID(account.target.AccountID) ||
+			readGeneration.DeploymentID != deployment.ID || readGeneration.Generation != readDeployment.Generation ||
+			!reflect.DeepEqual(readGeneration.Spec, deployment.Spec) {
+			t.Fatal("signed Deployment generation read crossed Account or changed the immutable snapshot")
+		}
+		recordProductReadDecision(account, generationRead, iamv1.ActionPaaSDeploymentRead, iamv1.ResourceDeployment, deployment.ID)
+		operationReadRequest := prepareProductRead(account, "/v1/operations/"+string(operations[0].ID))
+		operationRead := invokeProduct(operationReadRequest, http.StatusOK)
+		var readOperation paasv1.Operation
+		if iamv1.DecodeRequest(bytes.NewReader(operationRead.Body), &readOperation) != nil || paasv1.ValidateOperation(readOperation) != nil ||
+			readOperation.Scope.TenantID != paasv1.TenantID(account.target.AccountID) || readOperation.ID != operations[0].ID ||
+			readOperation.RequestedBy.AccessKeyID != string(account.key.Key.ID) {
+			t.Fatal("signed Operation read crossed Account or lost original key attribution")
+		}
+		recordProductReadDecision(account, operationRead, iamv1.ActionPaaSOperationRead, iamv1.ResourceOperation, paasv1.ResourceID(operations[0].ID))
+		invokeProduct(operationReadRequest, http.StatusConflict)
 		waitAllPaaSOutboxDelivered(t, ctx, database)
 		for operationIndex, action := range []auditv1.Action{
 			auditv1.ActionPaaSApplicationCreated, auditv1.ActionPaaSConfigurationCreated,
