@@ -77,6 +77,48 @@ func TestUserPasswordResetCompletionSchemaAndStrictCodec(t *testing.T) {
 	}
 }
 
+func TestSecurityReportSchemasMatchClosedRuntimeContract(t *testing.T) {
+	document := loadIAMOpenAPI(t)
+	reportSchema := compileIAMOpenAPISchema(t, document, "AccountSecurityReport")
+	requestSchema := compileIAMOpenAPISchema(t, document, "CreateAccountSecurityReportRequest")
+	checkReport := func(value AccountSecurityReport, valid bool) {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		instance, err := jsonschema.UnmarshalJSON(bytes.NewReader(encoded))
+		if err != nil || (ValidateAccountSecurityReport(value) == nil) != valid || (reportSchema.Validate(instance) == nil) != valid {
+			t.Fatalf("security report schema/runtime disagree: valid=%t runtime=%v schema=%v", valid, ValidateAccountSecurityReport(value), reportSchema.Validate(instance))
+		}
+	}
+	checkReport(accountSecurityReportFixture(), true)
+	for _, mutate := range []func(*AccountSecurityReport){
+		func(value *AccountSecurityReport) { value.Coverage[0].State = SecurityReportCoverageNotIncluded },
+		func(value *AccountSecurityReport) {
+			value.Users[0].MFA.EnrollmentState, value.Users[0].MFA.FactorRevision = "UNKNOWN", 1
+		},
+		func(value *AccountSecurityReport) { value.Users[0].LastPasswordLogin.State = SecurityReportUnknown },
+	} {
+		value := accountSecurityReportFixture()
+		mutate(&value)
+		checkReport(value, false)
+	}
+	for _, sample := range []struct {
+		value CreateAccountSecurityReportRequest
+		valid bool
+	}{
+		{value: CreateAccountSecurityReportRequest{FormatVersion: SecurityReportFormatVersion, RequestID: "report-request"}, valid: true},
+		{value: CreateAccountSecurityReportRequest{FormatVersion: 2, RequestID: "report-request"}},
+		{value: CreateAccountSecurityReportRequest{FormatVersion: SecurityReportFormatVersion, RequestID: "bad selector?"}},
+	} {
+		encoded, _ := json.Marshal(sample.value)
+		instance, err := jsonschema.UnmarshalJSON(bytes.NewReader(encoded))
+		if err != nil || (ValidateCreateAccountSecurityReportRequest(sample.value) == nil) != sample.valid || (requestSchema.Validate(instance) == nil) != sample.valid {
+			t.Fatal("security report request schema/runtime disagree")
+		}
+	}
+}
+
 func TestPasswordRequirementsSchemasAndCodecExposeOnlyEffectiveRules(t *testing.T) {
 	api := loadIAMOpenAPI(t)
 	schema := compileIAMOpenAPISchema(t, api, "PasswordRequirements")

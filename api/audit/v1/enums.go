@@ -69,6 +69,8 @@ const (
 	ActionIAMAccessKeyDisabled                      Action = "iam.access-key.disabled"
 	ActionIAMAccessKeyNetworkRestrictionsUpdated    Action = "iam.access-key.network-restrictions-updated"
 	ActionIAMAccessKeyDeleted                       Action = "iam.access-key.deleted"
+	ActionIAMSecurityReportCreated                  Action = "iam.security-report.created"
+	ActionIAMSecurityReportDownloadStarted          Action = "iam.security-report.download-started"
 	ActionIAMGroupCreated                           Action = "iam.group.created"
 	ActionIAMPolicyCreated                          Action = "iam.policy.created"
 	ActionIAMPolicyVersionCreated                   Action = "iam.policy-version.created"
@@ -141,6 +143,7 @@ const (
 	TargetRole                  TargetKind = "ROLE"
 	TargetRoleSession           TargetKind = "ROLE_SESSION"
 	TargetAccessKey             TargetKind = "ACCESS_KEY"
+	TargetSecurityReport        TargetKind = "SECURITY_REPORT"
 	TargetPolicy                TargetKind = "POLICY"
 	TargetGroupMembership       TargetKind = "GROUP_MEMBERSHIP"
 	TargetOrganization          TargetKind = "ORGANIZATION"
@@ -268,6 +271,8 @@ var allActions = []Action{
 	ActionIAMAccessKeyDisabled,
 	ActionIAMAccessKeyNetworkRestrictionsUpdated,
 	ActionIAMAccessKeyDeleted,
+	ActionIAMSecurityReportCreated,
+	ActionIAMSecurityReportDownloadStarted,
 	ActionIAMPolicyCreated,
 	ActionIAMPolicyVersionCreated,
 	ActionIAMPolicyVersionDeleted,
@@ -405,6 +410,8 @@ var actionContracts = map[Action]ActionContract{
 	ActionIAMAccessKeyDisabled:                   {Source: SourceIAM, Target: TargetAccessKey, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
 	ActionIAMAccessKeyNetworkRestrictionsUpdated: {Source: SourceIAM, Target: TargetAccessKey, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
 	ActionIAMAccessKeyDeleted:                    {Source: SourceIAM, Target: TargetAccessKey, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMSecurityReportCreated:               {Source: SourceIAM, Target: TargetSecurityReport, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
+	ActionIAMSecurityReportDownloadStarted:       {Source: SourceIAM, Target: TargetSecurityReport, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
 	ActionIAMPolicyCreated: {
 		Source: SourceIAM, Target: TargetPolicy, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
 	},

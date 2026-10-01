@@ -3491,7 +3491,7 @@ func TestInstanceListBatchTransportDoesNotGrowFrozenPolicyAuthority(t *testing.T
 
 func TestServiceRoleConsentActionsAreExplicitCurrentUserCapabilities(t *testing.T) {
 	profile, found := LookupAuthorizationProfile(ProductIAM)
-	if !found || profile.Revision != 9 {
+	if !found {
 		t.Fatal("missing explicit IAM service-role revision")
 	}
 	_, digest, err := CanonicalizeAuthorizationProfile(profile)
@@ -4595,6 +4595,7 @@ func TestAuthorizationProfileUserAuthenticationIsExplicitAndCommitted(t *testing
 			loginSessionRequired := source.Product == ProductIAM && slices.Contains([]Action{
 				ActionIAMSecuritySettingsRead, ActionIAMSecuritySettingsUpdate,
 				ActionIAMAccessKeySetNetworkRestrictions,
+				ActionIAMSecurityReportCreate, ActionIAMSecurityReportRead, ActionIAMSecurityReportDownload,
 				ActionIAMServiceRoleTemplateList, ActionIAMServiceLinkedRoleList,
 				ActionIAMServiceLinkedRoleRead, ActionIAMServiceLinkedRoleCreate,
 				ActionIAMRolePass, ActionIAMWorkloadRoleBindingRevoke,
@@ -8461,6 +8462,105 @@ func TestAccessKeyNetworkRestrictionsAllowCanonicalSource(t *testing.T) {
 				t.Fatalf("allowed=%v err=%v", allowed, err)
 			}
 		})
+	}
+}
+
+func accountSecurityReportFixture() AccountSecurityReport {
+	observed := time.Date(2026, 10, 2, 1, 2, 3, 0, time.UTC)
+	login := observed.Add(-time.Hour)
+	metadata := AccountSecurityReportMetadata{APIVersion: APIVersion, Kind: "AccountSecurityReportMetadata", ID: "report-one",
+		AccountID: "account-one", FormatVersion: SecurityReportFormatVersion, ObservedAt: observed, ExpiresAt: observed.Add(SecurityReportRetention),
+		DocumentDigest: "sha256:" + strings.Repeat("1", 64), CSVContentDigest: "sha256:" + strings.Repeat("2", 64),
+		UserCount: 2, AccessKeyCount: 1, RowCount: 4, CSVBytes: 512}
+	report := AccountSecurityReport{Metadata: metadata, AccountSecuritySettingsVersion: 4, Coverage: SecurityReportCoverageContract(),
+		Users: []SecurityReportUser{
+			{ID: "root-one", LoginName: "root.one", DisplayName: "Root One", Status: PrincipalActive, Root: true, ResourceVersion: 5,
+				CreatedAt: observed.Add(-48 * time.Hour), MFA: SecurityReportMFAState{EnrollmentState: "BOUND", FactorRevision: 3},
+				LastPasswordLogin: SecurityReportTimeObservation{State: SecurityReportObserved, ObservedAt: &login}},
+			{ID: "user-one", LoginName: "user.one", DisplayName: "=not exported to CSV", Status: PrincipalDisabled, ResourceVersion: 2,
+				CreatedAt: observed.Add(-24 * time.Hour), MFA: SecurityReportMFAState{EnrollmentState: "UNKNOWN"},
+				LastPasswordLogin: SecurityReportTimeObservation{State: SecurityReportNotObservedInRetainedIAMState}},
+		},
+		AccessKeys: []SecurityReportAccessKey{{ID: "key-one", UserID: "user-one", Status: AccessKeyDisabled,
+			NetworkRestrictions: AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{"198.51.100.0/24"}}, ResourceVersion: 3,
+			CreatedAt: observed.Add(-12 * time.Hour), LastAuthorization: &AccessKeyAuthorizationObservation{EvaluatedAt: observed.Add(-time.Minute),
+				Allowed: false, Product: ProductPaaS, Action: ActionPaaSApplicationRead, SourceIP: "203.0.113.8"}}}}
+	_, report.Metadata.DocumentDigest, _ = CanonicalizeAccountSecurityReportDocument(report)
+	csvDocument, csvDigest, _ := EncodeAccountSecurityReportCSV(report)
+	report.Metadata.CSVContentDigest, report.Metadata.CSVBytes = csvDigest, uint32(len(csvDocument))
+	return report
+}
+
+func TestAccountSecurityReportContractIsBoundedAndExplicit(t *testing.T) {
+	report := accountSecurityReportFixture()
+	if ValidateAccountSecurityReport(report) != nil || ValidateCreateAccountSecurityReportRequest(CreateAccountSecurityReportRequest{
+		FormatVersion: SecurityReportFormatVersion, RequestID: "report-request-one"}) != nil ||
+		ValidateCreateAccountSecurityReportResponse(CreateAccountSecurityReportResponse{Outcome: "APPLIED", Metadata: report.Metadata}) != nil {
+		t.Fatal("valid account security report contract was rejected")
+	}
+	csvDocument, csvDigest, err := EncodeAccountSecurityReportCSV(report)
+	if err != nil || csvDigest != report.Metadata.CSVContentDigest || bytes.Contains(csvDocument, []byte("=not exported")) ||
+		bytes.Count(csvDocument, []byte("\n")) != int(report.Metadata.RowCount)+1 {
+		t.Fatal("CSV v1 is not the exact bounded non-free-text report representation")
+	}
+	coverage := SecurityReportCoverageContract()
+	coverage[0].State = SecurityReportCoverageNotIncluded
+	if ValidateSecurityReportCoverage(coverage) == nil || SecurityReportCoverageContract()[0].State != SecurityReportCoverageComplete {
+		t.Fatal("coverage contract was mutable or accepted a missing IAM source")
+	}
+	for name, mutate := range map[string]func(*AccountSecurityReport){
+		"no root":                   func(v *AccountSecurityReport) { v.Users[0].Root = false },
+		"two roots":                 func(v *AccountSecurityReport) { v.Users[1].Root = true },
+		"cross user key":            func(v *AccountSecurityReport) { v.AccessKeys[0].UserID = "other-user" },
+		"unordered users":           func(v *AccountSecurityReport) { v.Users[0], v.Users[1] = v.Users[1], v.Users[0] },
+		"invented unknown revision": func(v *AccountSecurityReport) { v.Users[1].MFA.FactorRevision = 1 },
+		"login after snapshot": func(v *AccountSecurityReport) {
+			value := v.Metadata.ObservedAt.Add(time.Second)
+			v.Users[0].LastPasswordLogin.ObservedAt = &value
+		},
+		"key observation before creation": func(v *AccountSecurityReport) {
+			v.AccessKeys[0].LastAuthorization.EvaluatedAt = v.AccessKeys[0].CreatedAt.Add(-time.Second)
+		},
+		"incorrect retention": func(v *AccountSecurityReport) { v.Metadata.ExpiresAt = v.Metadata.ExpiresAt.Add(time.Second) },
+		"truncated count":     func(v *AccountSecurityReport) { v.Metadata.UserCount-- },
+		"empty CSV":           func(v *AccountSecurityReport) { v.Metadata.CSVBytes = 0 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			value := accountSecurityReportFixture()
+			mutate(&value)
+			if ValidateAccountSecurityReport(value) == nil {
+				t.Fatal("invalid security report was accepted")
+			}
+		})
+	}
+	if ValidateCreateAccountSecurityReportRequest(CreateAccountSecurityReportRequest{FormatVersion: 2, RequestID: "report-request-one"}) == nil ||
+		ValidateCreateAccountSecurityReportResponse(CreateAccountSecurityReportResponse{Outcome: "PENDING", Metadata: report.Metadata}) == nil {
+		t.Fatal("open-ended report format or async state was accepted")
+	}
+}
+
+func TestSecurityReportActionsAreCurrentLoginSessionCapabilities(t *testing.T) {
+	profile, found := LookupAuthorizationProfile(ProductIAM)
+	if !found || profile.Revision != 10 {
+		t.Fatal("security report profile revision is not current")
+	}
+	wants := map[Action]struct {
+		resource ResourceKind
+		result   ResourceKind
+	}{
+		ActionIAMSecurityReportCreate:   {resource: ResourceAccount, result: ResourceSecurityReport},
+		ActionIAMSecurityReportRead:     {resource: ResourceSecurityReport},
+		ActionIAMSecurityReportDownload: {resource: ResourceSecurityReport},
+	}
+	for action, want := range wants {
+		definition, known := LookupActionDefinition(action)
+		index := slices.IndexFunc(profile.Actions, func(candidate AuthorizationProfileAction) bool { return candidate.Action == action })
+		if !known || definition.ResourceKind != want.resource || definition.AuthorityScope != AuthorityScopeTenant ||
+			definition.CallingService != ServiceIAM || index < 0 || profile.Actions[index].ResultResourceKind != want.result ||
+			!slices.Equal(profile.Actions[index].SubjectTypes, []SubjectType{SubjectUser}) ||
+			!slices.Equal(profile.Actions[index].UserAuthenticationMethods, []UserAuthenticationMethod{UserAuthenticationLoginSession}) {
+			t.Fatal("security report action widened its authority boundary", action)
+		}
 	}
 }
 

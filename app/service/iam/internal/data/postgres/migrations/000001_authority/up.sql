@@ -1739,6 +1739,7 @@ BEGIN
             'iam.role.permission-boundary.set','iam.role.permission-boundary.removed',
             'iam.role-session.issued','iam.role-session.admin-revoked',
             'iam.access-key.created','iam.access-key.enabled','iam.access-key.disabled','iam.access-key.network-restrictions-updated','iam.access-key.deleted',
+            'iam.security-report.created','iam.security-report.download-started',
             'iam.group-membership.created','iam.group-membership.removed',
             'iam.user.status-set', 'iam.user.password-reset',
             'iam.policy-attachment.created', 'iam.policy-attachment.revoked',

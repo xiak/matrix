@@ -1624,6 +1624,95 @@ func TestRoleSelfExitUsesOnlyExactCredentialPossession(t *testing.T) {
 	}
 }
 
+func TestAccountSecurityReportUsesCurrentAuthorityAndImmutableSnapshot(t *testing.T) {
+	tx := newCoreTransaction()
+	sequence := 0
+	service, err := newCoreAuthority(&coreRepository{transaction: tx}, Config{NewID: func(prefix string) (string, error) {
+		if prefix == "security-report" {
+			return "security-report-report", nil
+		}
+		sequence++
+		return fmt.Sprintf("%s-report-%d", prefix, sequence), nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootstrap := coreBootstrap(t)
+	if _, err := service.Bootstrap(t.Context(), bootstrap); err != nil {
+		t.Fatal(err)
+	}
+	login, err := service.Login(t.Context(), iamv1.LoginRequest{LoginName: "admin", Password: bootstrap.Administrator.Password, RequestID: "report-login"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentPassword := coreSecret(t, "Report-Changed-Password-57!")
+	if _, err := service.ChangePassword(t.Context(), login.Credential, iamv1.ChangePasswordRequest{CurrentPassword: bootstrap.Administrator.Password,
+		NewPassword: currentPassword, RequestID: "report-password"}); err != nil {
+		t.Fatal(err)
+	}
+	tx.securityReportSnapshot = SecurityReportSnapshot{ObservedAt: tx.now, AccountSecuritySettingsVersion: 1,
+		Users: []iamv1.SecurityReportUser{{ID: bootstrap.Administrator.ID, LoginName: bootstrap.Administrator.LoginName,
+			DisplayName: bootstrap.Administrator.DisplayName, Status: iamv1.PrincipalActive, Root: true, ResourceVersion: 1,
+			CreatedAt: tx.now, MFA: iamv1.SecurityReportMFAState{EnrollmentState: "NEVER_BOUND", FactorRevision: 1},
+			LastPasswordLogin: iamv1.SecurityReportTimeObservation{State: iamv1.SecurityReportNotObservedInRetainedIAMState}}},
+		AccessKeys: []iamv1.SecurityReportAccessKey{}}
+	request := iamv1.CreateAccountSecurityReportRequest{RequestID: "report-create", FormatVersion: 1}
+	created, err := service.CreateAccountSecurityReport(t.Context(), login.Credential, request)
+	if err != nil || created.Outcome != "APPLIED" || created.Metadata.ID != "security-report-report" || len(tx.securityReportCreations) != 1 {
+		t.Fatal("create security report", created, err)
+	}
+	creation := tx.securityReportCreations[0]
+	if creation.Session.ID == "" || creation.AccountID != bootstrap.Organization.ID ||
+		auditv1.ValidateEventForSource(auditv1.SourceIAM, creation.AuditEvent) != nil ||
+		creation.AuditEvent.Action != auditv1.ActionIAMSecurityReportCreated || creation.AuditEvent.Target.Kind != auditv1.TargetSecurityReport ||
+		creation.AuditEvent.Target.ID != string(created.Metadata.ID) || creation.AuditEvent.IAMDecisionID == "" {
+		t.Fatal("security report creation lost its session, decision or audit fact")
+	}
+	last := tx.authorizations[len(tx.authorizations)-1]
+	if !last.Decision.Allowed || last.Decision.Action != iamv1.ActionIAMSecurityReportCreate ||
+		last.Decision.Resource != (iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: string(bootstrap.Organization.ID)}) {
+		t.Fatal("security report create used the wrong authority")
+	}
+	replayed, err := service.CreateAccountSecurityReport(t.Context(), login.Credential, request)
+	if err != nil || replayed.Outcome != "EQUAL_REPLAY" || replayed.Metadata != created.Metadata || len(tx.securityReportCreations) != 1 {
+		t.Fatal("security report exact replay changed the frozen result", replayed, err)
+	}
+	read, err := service.AccountSecurityReport(t.Context(), login.Credential, created.Metadata.ID, "report-read")
+	if err != nil || read.Metadata != created.Metadata || len(read.Users) != 1 {
+		t.Fatal("read security report", err)
+	}
+	downloaded, err := service.DownloadAccountSecurityReport(t.Context(), login.Credential, created.Metadata.ID, "report-download")
+	if err != nil || iamv1.ValidateAccountSecurityReportCSV(created.Metadata, downloaded) != nil || len(tx.securityReportDownloads) != 1 {
+		t.Fatal("download security report", err)
+	}
+	download := tx.securityReportDownloads[0]
+	if auditv1.ValidateEventForSource(auditv1.SourceIAM, download.AuditEvent) != nil ||
+		download.AuditEvent.Action != auditv1.ActionIAMSecurityReportDownloadStarted || download.AuditEvent.IAMDecisionID == "" {
+		t.Fatal("security report download lost its precise fact")
+	}
+	if _, err := service.AccountSecurityReport(t.Context(), coreServiceCredential(t, bootstrap, iamv1.ServicePaaS), created.Metadata.ID, "report-service"); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatal("service credential reached USER security reports", err)
+	}
+	if _, err := service.Logout(t.Context(), login.Credential, iamv1.LogoutRequest{RequestID: "report-logout"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.AccountSecurityReport(t.Context(), login.Credential, created.Metadata.ID, "report-old-session"); !errors.Is(err, ErrUnauthenticated) {
+		t.Fatal("revoked session retained security report access", err)
+	}
+	tx.now = created.Metadata.ExpiresAt.Add(-30 * time.Minute)
+	futureLogin, err := service.Login(t.Context(), iamv1.LoginRequest{LoginName: "admin", Password: currentPassword, RequestID: "report-expiry-login"})
+	if err != nil {
+		t.Fatal("create a still-valid Session immediately before report expiry", err)
+	}
+	tx.now = created.Metadata.ExpiresAt
+	if _, err := service.AccountSecurityReport(t.Context(), futureLogin.Credential, created.Metadata.ID, "report-expired-read"); !errors.Is(err, ErrUnavailable) {
+		t.Fatal("expired security report remained readable", err)
+	}
+	if _, err := service.DownloadAccountSecurityReport(t.Context(), futureLogin.Credential, created.Metadata.ID, "report-expired-download"); !errors.Is(err, ErrUnavailable) {
+		t.Fatal("expired security report remained downloadable", err)
+	}
+}
+
 func TestAccountSecuritySettingsCannotBypassCurrentSessionAndExplicitAuthority(t *testing.T) {
 	tx := newCoreTransaction()
 	service, err := newCoreAuthority(&coreRepository{transaction: tx}, Config{})
@@ -3217,37 +3306,46 @@ func TestRecoveryCodeMatchUsesCompleteOriginalBatchAndScope(t *testing.T) {
 
 type coreTransaction struct {
 	Transaction
-	passwordRequirements             iamv1.PasswordRequirements
-	passwordRequirementsError        error
-	passwordRequirementsReads        int
-	passwordRequirementsSession      iamv1.Session
-	passwordRequirementsChallenge    AuthenticationChallengeCredential
-	loginChallenge                   iamv1.AuthenticationChallenge
-	enrollmentInspection             EnrollmentChallengeInspection
-	loginAuthenticationState         *LoginAuthenticationState
-	passwordResetRequirement         *PasswordResetRequirement
-	passwordResetReason              iamv1.PasswordResetReason
-	enrollmentReads                  int
-	challengeCredential              AuthenticationChallengeCredential
-	challengeLookupDigest            string
-	now                              time.Time
-	status                           iamv1.BootstrapStatus
-	contentDigest                    string
-	organization                     iamv1.Organization
-	principal                        iamv1.Principal
-	services                         map[string]ServiceCredential
-	sessions                         map[string]SessionCredential
-	roleSessions                     map[string]RoleSessionCredential
-	roleExitCredentials              map[string]RoleSessionExitCredential
-	roleExitEvents                   []auditv1.Event
-	authorizations                   []AuthorizationMutation
-	passwords                        map[iamv1.PrincipalID]authority.PasswordHash
-	passwordHistories                map[iamv1.PrincipalID][]authority.PasswordHash
-	passwordAttempts                 map[iamv1.PrincipalID]PasswordAttempt
-	attemptSequence                  uint64
-	rejectedAttempts                 []string
-	users                            map[iamv1.PrincipalID]iamv1.Principal
-	attachments                      map[iamv1.PolicyAttachmentID]iamv1.PolicyAttachment
+	passwordRequirements          iamv1.PasswordRequirements
+	passwordRequirementsError     error
+	passwordRequirementsReads     int
+	passwordRequirementsSession   iamv1.Session
+	passwordRequirementsChallenge AuthenticationChallengeCredential
+	loginChallenge                iamv1.AuthenticationChallenge
+	enrollmentInspection          EnrollmentChallengeInspection
+	loginAuthenticationState      *LoginAuthenticationState
+	passwordResetRequirement      *PasswordResetRequirement
+	passwordResetReason           iamv1.PasswordResetReason
+	enrollmentReads               int
+	challengeCredential           AuthenticationChallengeCredential
+	challengeLookupDigest         string
+	now                           time.Time
+	status                        iamv1.BootstrapStatus
+	contentDigest                 string
+	organization                  iamv1.Organization
+	principal                     iamv1.Principal
+	services                      map[string]ServiceCredential
+	sessions                      map[string]SessionCredential
+	roleSessions                  map[string]RoleSessionCredential
+	roleExitCredentials           map[string]RoleSessionExitCredential
+	roleExitEvents                []auditv1.Event
+	authorizations                []AuthorizationMutation
+	passwords                     map[iamv1.PrincipalID]authority.PasswordHash
+	passwordHistories             map[iamv1.PrincipalID][]authority.PasswordHash
+	passwordAttempts              map[iamv1.PrincipalID]PasswordAttempt
+	attemptSequence               uint64
+	rejectedAttempts              []string
+	users                         map[iamv1.PrincipalID]iamv1.Principal
+	attachments                   map[iamv1.PolicyAttachmentID]iamv1.PolicyAttachment
+	securityReportSnapshot        SecurityReportSnapshot
+	securityReports               map[iamv1.SecurityReportID]iamv1.AccountSecurityReport
+	securityReportCSVs            map[iamv1.SecurityReportID][]byte
+	securityReportRequests        map[string]struct {
+		Digest   string
+		Metadata iamv1.AccountSecurityReportMetadata
+	}
+	securityReportCreations          []SecurityReportCreation
+	securityReportDownloads          []SecurityReportDownload
 	attachmentSession                iamv1.SessionID
 	revocationSession                iamv1.SessionID
 	sessionRevocation                *SessionRevocationMutation
@@ -3542,6 +3640,60 @@ func (transaction *coreTransaction) UpdateAccountSecuritySettings(context.Contex
 	return iamv1.UpdateAccountSecuritySettingsResponse{}, ErrUnavailable
 }
 
+func (transaction *coreTransaction) ReadSecurityReportSnapshot(_ context.Context, read AccountRead) (SecurityReportSnapshot, error) {
+	if read.AccountID != transaction.organization.ID || read.ActorPrincipalID != transaction.principal.ID ||
+		read.ActorSessionID == "" || read.DecisionID == "" {
+		return SecurityReportSnapshot{}, ErrForbidden
+	}
+	return transaction.securityReportSnapshot, nil
+}
+
+func (transaction *coreTransaction) ReadSecurityReportByRequest(_ context.Context, read AccountRead, requestID, digest string) (iamv1.AccountSecurityReportMetadata, bool, error) {
+	if read.AccountID != transaction.organization.ID || read.ActorPrincipalID != transaction.principal.ID ||
+		read.ActorSessionID == "" || read.DecisionID == "" {
+		return iamv1.AccountSecurityReportMetadata{}, false, ErrForbidden
+	}
+	completed, found := transaction.securityReportRequests[requestID]
+	if !found {
+		return iamv1.AccountSecurityReportMetadata{}, false, nil
+	}
+	if completed.Digest != digest {
+		return iamv1.AccountSecurityReportMetadata{}, false, ErrConflict
+	}
+	return completed.Metadata, true, nil
+}
+
+func (transaction *coreTransaction) CreateSecurityReport(_ context.Context, mutation SecurityReportCreation) (iamv1.CreateAccountSecurityReportResponse, error) {
+	transaction.securityReportCreations = append(transaction.securityReportCreations, mutation)
+	transaction.securityReports[mutation.Report.Metadata.ID] = mutation.Report
+	transaction.securityReportCSVs[mutation.Report.Metadata.ID] = append([]byte(nil), mutation.CSV...)
+	transaction.securityReportRequests[mutation.RequestID] = struct {
+		Digest   string
+		Metadata iamv1.AccountSecurityReportMetadata
+	}{mutation.RequestDigest, mutation.Report.Metadata}
+	return iamv1.CreateAccountSecurityReportResponse{Outcome: "APPLIED", Metadata: mutation.Report.Metadata}, nil
+}
+
+func (transaction *coreTransaction) ReadSecurityReport(_ context.Context, read AccountRead, id iamv1.SecurityReportID) (iamv1.AccountSecurityReport, error) {
+	if read.ActorSessionID == "" || read.DecisionID == "" {
+		return iamv1.AccountSecurityReport{}, ErrForbidden
+	}
+	report, found := transaction.securityReports[id]
+	if !found {
+		return iamv1.AccountSecurityReport{}, ErrSecurityReportNotFound
+	}
+	return report, nil
+}
+
+func (transaction *coreTransaction) DownloadSecurityReport(_ context.Context, mutation SecurityReportDownload) (SecurityReportDownloadResult, error) {
+	transaction.securityReportDownloads = append(transaction.securityReportDownloads, mutation)
+	report, found := transaction.securityReports[mutation.ReportID]
+	if !found {
+		return SecurityReportDownloadResult{}, ErrSecurityReportNotFound
+	}
+	return SecurityReportDownloadResult{Metadata: report.Metadata, CSV: append([]byte(nil), transaction.securityReportCSVs[mutation.ReportID]...)}, nil
+}
+
 func (tx *coreTransaction) CreateLoginChallenge(context.Context, LoginChallengeCreation) (iamv1.AuthenticationChallenge, error) {
 	return tx.loginChallenge, nil
 }
@@ -3791,12 +3943,18 @@ func (transaction *coreTransaction) RecoverLocalCredentials(_ context.Context, m
 
 func newCoreTransaction() *coreTransaction {
 	return &coreTransaction{
-		now:                        time.Date(2026, 8, 26, 8, 9, 10, 123000, time.UTC),
-		services:                   make(map[string]ServiceCredential),
-		sessions:                   make(map[string]SessionCredential),
-		passwords:                  make(map[iamv1.PrincipalID]authority.PasswordHash),
-		users:                      make(map[iamv1.PrincipalID]iamv1.Principal),
-		attachments:                make(map[iamv1.PolicyAttachmentID]iamv1.PolicyAttachment),
+		now:                time.Date(2026, 8, 26, 8, 9, 10, 123000, time.UTC),
+		services:           make(map[string]ServiceCredential),
+		sessions:           make(map[string]SessionCredential),
+		passwords:          make(map[iamv1.PrincipalID]authority.PasswordHash),
+		users:              make(map[iamv1.PrincipalID]iamv1.Principal),
+		attachments:        make(map[iamv1.PolicyAttachmentID]iamv1.PolicyAttachment),
+		securityReports:    make(map[iamv1.SecurityReportID]iamv1.AccountSecurityReport),
+		securityReportCSVs: make(map[iamv1.SecurityReportID][]byte),
+		securityReportRequests: make(map[string]struct {
+			Digest   string
+			Metadata iamv1.AccountSecurityReportMetadata
+		}),
 		serviceRoleSessionReceipts: make(map[string]ServiceRoleSessionReceipt),
 	}
 }

@@ -258,6 +258,9 @@ const (
 	ActionIAMAccessKeySetStatus              Action = "iam.access-key.set-status"
 	ActionIAMAccessKeySetNetworkRestrictions Action = "iam.access-key.set-network-restrictions"
 	ActionIAMAccessKeyDelete                 Action = "iam.access-key.delete"
+	ActionIAMSecurityReportCreate            Action = "iam.security-report.create"
+	ActionIAMSecurityReportRead              Action = "iam.security-report.read"
+	ActionIAMSecurityReportDownload          Action = "iam.security-report.download"
 	ActionIAMPolicyAttachmentCreate          Action = "iam.policy-attachment.create"
 	ActionIAMPolicyAttachmentRevoke          Action = "iam.policy-attachment.revoke"
 	ActionIAMPlatformPolicyAttachmentCreate  Action = "iam.platform-policy-attachment.create"
@@ -343,6 +346,7 @@ const (
 	ResourcePolicyAttachment      ResourceKind = "POLICY_ATTACHMENT"
 	ResourcePolicy                ResourceKind = "POLICY"
 	ResourceSession               ResourceKind = "SESSION"
+	ResourceSecurityReport        ResourceKind = "SECURITY_REPORT"
 	ResourceApplication           ResourceKind = "APPLICATION"
 	ResourceConfiguration         ResourceKind = "CONFIGURATION"
 	ResourceConfigurationRevision ResourceKind = "CONFIGURATION_REVISION"
@@ -455,7 +459,7 @@ func AllServicePurposes() []ServicePurpose {
 // ActionDefinition and contract enum order are derived projections, not a second
 // editable source. Product revision changes must accompany changed declarations.
 var authorizationProfiles = [...]AuthorizationProfile{
-	iamAccessKeyNetworkProfile(),
+	iamSecurityReportProfile(),
 	paasProfileRevisionTwelve,
 	managedServiceProfileRevisionFour,
 	auditProfileRevisionFour,
@@ -985,6 +989,21 @@ func iamAccessKeyNetworkProfile() AuthorizationProfile {
 	update.SubjectTypes = []SubjectType{SubjectUser}
 	update.UserAuthenticationMethods = []UserAuthenticationMethod{UserAuthenticationLoginSession}
 	profile.Actions = append(profile.Actions, update)
+	return profile
+}
+
+func iamSecurityReportProfile() AuthorizationProfile {
+	profile := iamAccessKeyNetworkProfile()
+	profile.Revision = 10
+	for _, declaration := range []AuthorizationProfileAction{
+		declaredProfileAction(ActionIAMSecurityReportCreate, ResourceAccount, AuthorityScopeTenant, ResourceSecurityReport, []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+		declaredProfileAction(ActionIAMSecurityReportRead, ResourceSecurityReport, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+		declaredProfileAction(ActionIAMSecurityReportDownload, ResourceSecurityReport, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	} {
+		declaration.SubjectTypes = []SubjectType{SubjectUser}
+		declaration.UserAuthenticationMethods = []UserAuthenticationMethod{UserAuthenticationLoginSession}
+		profile.Actions = append(profile.Actions, declaration)
+	}
 	return profile
 }
 

@@ -70,6 +70,15 @@ func buildDocument() object {
 
 func buildPaths() object {
 	return object{
+		"/v1/account/security-reports": object{
+			"post": mutationOperation("createAccountSecurityReport", "Generate one immutable current-account IAM security report without cross-product inference", "CreateAccountSecurityReportRequest", "CreateAccountSecurityReportResponse", "201", nil, nil),
+		},
+		"/v1/account/security-reports/{reportId}": object{
+			"get": readOperation("getAccountSecurityReport", "Read one immutable nonsecret current-account IAM security report under current permission", "AccountSecurityReport", nil, []any{openapi31.PathIDParameter("reportId")}),
+		},
+		"/v1/account/security-reports/{reportId}/content": object{
+			"get": securityReportContentOperation([]any{openapi31.PathIDParameter("reportId")}),
+		},
 		"/v1/account/security-settings": object{
 			"get": readOperation("readAccountSecuritySettings", "Read authenticated Account security settings using the current instance permission", "AccountSecuritySettings", nil, nil),
 			"put": mutationOperation("updateAccountSecuritySettings", "Consume the exact settings StepUp and current permission; atomically update configuration, completion and Audit; all existing Sessions must reauthenticate", "UpdateAccountSecuritySettingsRequest", "UpdateAccountSecuritySettingsResponse", "200", nil, nil),
@@ -352,6 +361,24 @@ func buildPaths() object {
 	}
 }
 
+func securityReportContentOperation(parameters []any) object {
+	responses := openapi31.ProblemResponses("400", "401", "403", "404", "500", "503")
+	responses["200"] = object{
+		"description": "The exact immutable CSV v1 representation of the authorized report. Starting the response does not prove client receipt.",
+		"headers": object{
+			"Cache-Control":       object{"schema": object{"type": "string", "const": "no-store"}},
+			"Content-Disposition": object{"schema": object{"type": "string", "pattern": `^attachment; filename="matrix-iam-security-report-[A-Za-z0-9._:-]{1,128}\\.csv"$`}},
+		},
+		"content": object{"text/csv": object{"schema": object{"type": "string", "maxLength": iamv1.MaxSecurityReportCSVBytes}}},
+	}
+	return object{
+		"operationId": "downloadAccountSecurityReport",
+		"summary":     "Download one authorized immutable report as bounded CSV v1; no public URL or identity selector",
+		"parameters":  parameters,
+		"responses":   responses,
+	}
+}
+
 func accountPageParameters() []any {
 	return []any{object{"name": "after", "in": "query", "required": false, "schema": pageCursorSchema(), "description": "Opaque signed continuation bound to the current account, session, query and authority revision. Pass nextAfter unchanged; raw resource IDs are not accepted."}}
 }
@@ -378,7 +405,7 @@ func mutationOperation(
 			"content":     object{"application/problem+json": object{"schema": openapi31.Ref("Problem")}},
 		}
 	}
-	if operationID == "createAccessKey" {
+	if operationID == "createAccessKey" || operationID == "createAccountSecurityReport" {
 		responses["200"] = openapi31.JSONResponse("Original nonsecret completion; no secret is reissued.", responseSchema)
 	}
 	if operationID == "confirmNotificationContact" || operationID == "confirmChallengeNotificationContact" {
@@ -439,6 +466,9 @@ func readOperation(
 	if operationID == "getRoleSessionByRequest" {
 		responses["404"] = object{"$ref": "#/components/responses/ProblemResponse", "description": "No committed issuance found for this source user and request. This does not authorize a new intent."}
 	}
+	if operationID == "getAccountSecurityReport" {
+		responses["404"] = object{"$ref": "#/components/responses/ProblemResponse", "description": "No current-account report content is available for this reference; expired content is never revived by the read."}
+	}
 	switch operationID {
 	case "getAuthenticatorState", "getTOTPEnrollment", "getTOTPEnrollmentByRequest", "cancelTOTPEnrollment", "getStepUpByRequest", "getRecoveryCodeRegenerationByRequest", "getAuthenticatorRemovalByRequest", "passwordRequirements", "getUserPasswordResetCompletion":
 		responses["400"] = object{"$ref": "#/components/responses/ProblemResponse", "description": "Invalid path, query or unexpected body; no identity selector is accepted."}
@@ -487,7 +517,7 @@ func scalarSchemas() object {
 	}
 	for _, name := range []string{
 		"AccountID", "PrincipalID", "GroupID", "GroupMembershipID", "RoleBindingID", "RoleID", "RoleTrustVersionID", "RoleSessionID", "SessionID", "DecisionID",
-		"PolicyID", "PolicyVersionID", "PolicyAttachmentID", "AccessKeyID",
+		"PolicyID", "PolicyVersionID", "PolicyAttachmentID", "AccessKeyID", "SecurityReportID",
 	} {
 		result[name] = object{"allOf": []any{openapi31.Ref("ID")}}
 	}
@@ -497,38 +527,40 @@ func scalarSchemas() object {
 
 func enumSchemas() map[string][]string {
 	return map[string][]string{
-		"PasswordExpiryMode":           {string(iamv1.PasswordExpiryChange), string(iamv1.PasswordExpiryAdminReset)},
-		"RoleStatus":                   {string(iamv1.RoleActive), string(iamv1.RoleDisabled)},
-		"AccessKeyStatus":              {string(iamv1.AccessKeyEnabled), string(iamv1.AccessKeyDisabled)},
-		"RoleManagement":               {string(iamv1.RoleCustomerManaged), string(iamv1.RoleServiceLinked)},
-		"ServiceRoleTemplateStatus":    {string(iamv1.ServiceRoleTemplateActive), string(iamv1.ServiceRoleTemplateRetired)},
-		"WorkloadRoleBindingStatus":    {string(iamv1.WorkloadRoleBindingActive), string(iamv1.WorkloadRoleBindingRevoked)},
-		"AccountStatus":                {string(iamv1.AccountActive), string(iamv1.AccountDisabled)},
-		"PrincipalType":                {string(iamv1.PrincipalUser), string(iamv1.PrincipalServiceAccount)},
-		"SubjectType":                  {string(iamv1.SubjectUser), string(iamv1.SubjectServiceAccount), string(iamv1.SubjectRole)},
-		"UserAuthenticationMethod":     {string(iamv1.UserAuthenticationLoginSession), string(iamv1.UserAuthenticationAccessKey)},
-		"PrincipalStatus":              {string(iamv1.PrincipalActive), string(iamv1.PrincipalDisabled)},
-		"SessionStatus":                {string(iamv1.SessionActive), string(iamv1.SessionRevoked), string(iamv1.SessionExpired)},
-		"RoleSessionLifecycle":         {string(iamv1.RoleSessionUnrevoked), string(iamv1.RoleSessionExpired), string(iamv1.RoleSessionRevoked)},
-		"AuthorityScope":               {string(iamv1.AuthorityScopeTenant), string(iamv1.AuthorityScopeInstallation), string(iamv1.AuthorityScopeInstallationProbe)},
-		"AuthorizationResourceMode":    {string(iamv1.AuthorizationResourceInstance), string(iamv1.AuthorizationResourceCollection)},
-		"AuthorizationCollectionUsage": {string(iamv1.AuthorizationCollectionList), string(iamv1.AuthorizationCollectionCreate)},
-		"IdentityKind":                 {string(iamv1.IdentityRoot), string(iamv1.IdentityUser)},
-		"CapabilityRestriction":        openapi31.StringValues(iamv1.AllCapabilityRestrictions()),
-		"PolicyAttachmentTargetKind":   {string(iamv1.PolicyTargetUser), string(iamv1.PolicyTargetService), string(iamv1.PolicyTargetGroup), string(iamv1.PolicyTargetRole)},
-		"PolicyGrantSourceKind":        {string(iamv1.PolicyGrantDirect), string(iamv1.PolicyGrantGroup)},
-		"PolicyManagement":             {string(iamv1.PolicySystemManaged), string(iamv1.PolicyCustomerManaged)},
-		"PolicyStatus":                 {string(iamv1.PolicyActive), string(iamv1.PolicyRetired)},
-		"PolicyEffect":                 {string(iamv1.PolicyAllow), string(iamv1.PolicyDeny)},
-		"ConditionKey":                 {string(iamv1.ConditionIAMCurrentTime), string(iamv1.ConditionIAMAccountID), string(iamv1.ConditionIAMPrincipalID), string(iamv1.ConditionRequestSourceIP)},
-		"PolicyConditionOperator":      {string(iamv1.PolicyDateGreaterThanEquals), string(iamv1.PolicyDateLessThan), string(iamv1.PolicyStringEquals), string(iamv1.PolicyStringNotEquals), string(iamv1.PolicyIPAddress), string(iamv1.PolicyNotIPAddress)},
-		"PolicyResourceMatch":          {string(iamv1.PolicyResourceExact), string(iamv1.PolicyResourceAnyInAuthority), string(iamv1.PolicyResourcePrefixInAuthority)},
-		"Action":                       openapi31.StringValues(iamv1.AllActions()),
+		"PasswordExpiryMode":             {string(iamv1.PasswordExpiryChange), string(iamv1.PasswordExpiryAdminReset)},
+		"RoleStatus":                     {string(iamv1.RoleActive), string(iamv1.RoleDisabled)},
+		"AccessKeyStatus":                {string(iamv1.AccessKeyEnabled), string(iamv1.AccessKeyDisabled)},
+		"SecurityReportObservationState": {string(iamv1.SecurityReportObserved), string(iamv1.SecurityReportNotObservedInRetainedIAMState), string(iamv1.SecurityReportUnknown)},
+		"SecurityReportCoverageState":    {string(iamv1.SecurityReportCoverageComplete), string(iamv1.SecurityReportCoverageNotIncluded)},
+		"RoleManagement":                 {string(iamv1.RoleCustomerManaged), string(iamv1.RoleServiceLinked)},
+		"ServiceRoleTemplateStatus":      {string(iamv1.ServiceRoleTemplateActive), string(iamv1.ServiceRoleTemplateRetired)},
+		"WorkloadRoleBindingStatus":      {string(iamv1.WorkloadRoleBindingActive), string(iamv1.WorkloadRoleBindingRevoked)},
+		"AccountStatus":                  {string(iamv1.AccountActive), string(iamv1.AccountDisabled)},
+		"PrincipalType":                  {string(iamv1.PrincipalUser), string(iamv1.PrincipalServiceAccount)},
+		"SubjectType":                    {string(iamv1.SubjectUser), string(iamv1.SubjectServiceAccount), string(iamv1.SubjectRole)},
+		"UserAuthenticationMethod":       {string(iamv1.UserAuthenticationLoginSession), string(iamv1.UserAuthenticationAccessKey)},
+		"PrincipalStatus":                {string(iamv1.PrincipalActive), string(iamv1.PrincipalDisabled)},
+		"SessionStatus":                  {string(iamv1.SessionActive), string(iamv1.SessionRevoked), string(iamv1.SessionExpired)},
+		"RoleSessionLifecycle":           {string(iamv1.RoleSessionUnrevoked), string(iamv1.RoleSessionExpired), string(iamv1.RoleSessionRevoked)},
+		"AuthorityScope":                 {string(iamv1.AuthorityScopeTenant), string(iamv1.AuthorityScopeInstallation), string(iamv1.AuthorityScopeInstallationProbe)},
+		"AuthorizationResourceMode":      {string(iamv1.AuthorizationResourceInstance), string(iamv1.AuthorizationResourceCollection)},
+		"AuthorizationCollectionUsage":   {string(iamv1.AuthorizationCollectionList), string(iamv1.AuthorizationCollectionCreate)},
+		"IdentityKind":                   {string(iamv1.IdentityRoot), string(iamv1.IdentityUser)},
+		"CapabilityRestriction":          openapi31.StringValues(iamv1.AllCapabilityRestrictions()),
+		"PolicyAttachmentTargetKind":     {string(iamv1.PolicyTargetUser), string(iamv1.PolicyTargetService), string(iamv1.PolicyTargetGroup), string(iamv1.PolicyTargetRole)},
+		"PolicyGrantSourceKind":          {string(iamv1.PolicyGrantDirect), string(iamv1.PolicyGrantGroup)},
+		"PolicyManagement":               {string(iamv1.PolicySystemManaged), string(iamv1.PolicyCustomerManaged)},
+		"PolicyStatus":                   {string(iamv1.PolicyActive), string(iamv1.PolicyRetired)},
+		"PolicyEffect":                   {string(iamv1.PolicyAllow), string(iamv1.PolicyDeny)},
+		"ConditionKey":                   {string(iamv1.ConditionIAMCurrentTime), string(iamv1.ConditionIAMAccountID), string(iamv1.ConditionIAMPrincipalID), string(iamv1.ConditionRequestSourceIP)},
+		"PolicyConditionOperator":        {string(iamv1.PolicyDateGreaterThanEquals), string(iamv1.PolicyDateLessThan), string(iamv1.PolicyStringEquals), string(iamv1.PolicyStringNotEquals), string(iamv1.PolicyIPAddress), string(iamv1.PolicyNotIPAddress)},
+		"PolicyResourceMatch":            {string(iamv1.PolicyResourceExact), string(iamv1.PolicyResourceAnyInAuthority), string(iamv1.PolicyResourcePrefixInAuthority)},
+		"Action":                         openapi31.StringValues(iamv1.AllActions()),
 		"ResourceKind": {
 			string(iamv1.ResourceAccount), string(iamv1.ResourceUser), string(iamv1.ResourceAccessKey),
 			string(iamv1.ResourcePolicy), string(iamv1.ResourceRole), string(iamv1.ResourceRoleSession),
 			string(iamv1.ResourceOrganization), string(iamv1.ResourcePrincipal), string(iamv1.ResourceGroup), string(iamv1.ResourceGroupMembership), string(iamv1.ResourceRoleBinding), string(iamv1.ResourceWorkloadRoleBinding), string(iamv1.ResourcePolicyAttachment),
-			string(iamv1.ResourceSession), string(iamv1.ResourceApplication), string(iamv1.ResourceConfiguration),
+			string(iamv1.ResourceSession), string(iamv1.ResourceSecurityReport), string(iamv1.ResourceApplication), string(iamv1.ResourceConfiguration),
 			string(iamv1.ResourceConfigurationRevision), string(iamv1.ResourceApplicationRevision),
 			string(iamv1.ResourceDeployment), string(iamv1.ResourceOperation),
 			string(iamv1.ResourceServiceOffering), string(iamv1.ResourceRegion),
@@ -677,6 +709,15 @@ func structContracts() map[string]reflect.Type {
 		"DeleteAccessKeyRequest":                        openapi31.StructType[iamv1.DeleteAccessKeyRequest](),
 		"AccessKeyDeletion":                             openapi31.StructType[iamv1.AccessKeyDeletion](),
 		"DeleteAccessKeyResponse":                       openapi31.StructType[iamv1.DeleteAccessKeyResponse](),
+		"SecurityReportCoverage":                        openapi31.StructType[iamv1.SecurityReportCoverage](),
+		"SecurityReportTimeObservation":                 openapi31.StructType[iamv1.SecurityReportTimeObservation](),
+		"SecurityReportMFAState":                        openapi31.StructType[iamv1.SecurityReportMFAState](),
+		"SecurityReportUser":                            openapi31.StructType[iamv1.SecurityReportUser](),
+		"SecurityReportAccessKey":                       openapi31.StructType[iamv1.SecurityReportAccessKey](),
+		"AccountSecurityReportMetadata":                 openapi31.StructType[iamv1.AccountSecurityReportMetadata](),
+		"AccountSecurityReport":                         openapi31.StructType[iamv1.AccountSecurityReport](),
+		"CreateAccountSecurityReportRequest":            openapi31.StructType[iamv1.CreateAccountSecurityReportRequest](),
+		"CreateAccountSecurityReportResponse":           openapi31.StructType[iamv1.CreateAccountSecurityReportResponse](),
 		"RootIdentity":                                  openapi31.StructType[iamv1.RootIdentity](),
 		"Account":                                       openapi31.StructType[iamv1.Account](),
 		"User":                                          openapi31.StructType[iamv1.User](),
@@ -808,6 +849,34 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 			"items":       object{"type": "string", "minLength": 3, "maxLength": 43},
 			"description": "Explicit sorted canonical IPv4/IPv6 CIDRs. Empty means unrestricted at this layer; authoritative validation rejects noncanonical, mapped, duplicate or unsorted values."}
 	}
+	if owner == "SecurityReportMFAState" && jsonName == "factorRevision" {
+		return object{"type": "integer", "minimum": 0, "maximum": uint64(9007199254740991)}
+	}
+	if (owner == "AccountSecurityReportMetadata" || owner == "CreateAccountSecurityReportRequest") && jsonName == "formatVersion" {
+		return object{"type": "integer", "const": iamv1.SecurityReportFormatVersion}
+	}
+	if owner == "AccountSecurityReportMetadata" {
+		switch jsonName {
+		case "userCount":
+			return object{"type": "integer", "minimum": 1, "maximum": iamv1.MaxSecurityReportUsers}
+		case "accessKeyCount":
+			return object{"type": "integer", "minimum": 0, "maximum": iamv1.MaxSecurityReportAccessKeys}
+		case "rowCount":
+			return object{"type": "integer", "minimum": 2, "maximum": iamv1.MaxSecurityReportRows}
+		case "csvBytes":
+			return object{"type": "integer", "minimum": 1, "maximum": iamv1.MaxSecurityReportCSVBytes}
+		}
+	}
+	if owner == "AccountSecurityReport" {
+		switch jsonName {
+		case "coverage":
+			base["minItems"], base["maxItems"] = 9, 9
+		case "users":
+			base["minItems"], base["maxItems"] = 1, iamv1.MaxSecurityReportUsers
+		case "accessKeys":
+			base["maxItems"] = iamv1.MaxSecurityReportAccessKeys
+		}
+	}
 	if jsonName == "expectedResourceVersion" && (owner == "SecuritySettingsUpdateIntent" || owner == "UpdateAccountSecuritySettingsRequest" || owner == "AccountSecuritySettingsChange") {
 		return object{"type": "integer", "minimum": 1, "maximum": uint64(9007199254740990)}
 	}
@@ -934,6 +1003,9 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 				base["properties"] = object{"resourceVersion": object{"const": 1}, "status": object{"const": string(iamv1.AccessKeyEnabled)}}
 			}
 		}
+	}
+	if owner == "CreateAccountSecurityReportResponse" && jsonName == "outcome" {
+		return object{"type": "string", "enum": []string{"APPLIED", "EQUAL_REPLAY"}}
 	}
 	if (owner == "AccessKeyList" || owner == "AccessKeyAccess") && jsonName == "capabilities" {
 		base["minItems"], base["maxItems"] = 4, 4
@@ -1207,6 +1279,26 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 }
 
 func applySemanticOverlays(schemas object) {
+	schemas["SecurityReportTimeObservation"].(object)["oneOf"] = []any{
+		object{"required": []string{"observedAt"}, "properties": object{"state": object{"const": string(iamv1.SecurityReportObserved)}}},
+		object{"properties": object{"state": object{"enum": []string{string(iamv1.SecurityReportNotObservedInRetainedIAMState), string(iamv1.SecurityReportUnknown)}}, "observedAt": false}},
+	}
+	schemas["SecurityReportMFAState"].(object)["oneOf"] = []any{
+		object{"required": []string{"factorRevision"}, "properties": object{"enrollmentState": object{"const": "NEVER_BOUND"}, "factorRevision": object{"const": 1}}},
+		object{"required": []string{"factorRevision"}, "properties": object{"enrollmentState": object{"enum": []string{"BOUND", "RECOVERY_REQUIRED", "REMOVED"}}, "factorRevision": object{"minimum": 1}}},
+		object{"properties": object{"enrollmentState": object{"const": "UNKNOWN"}, "factorRevision": false}},
+	}
+	coverage := make([]any, 0, 9)
+	for _, item := range iamv1.SecurityReportCoverageContract() {
+		coverage = append(coverage, object{"properties": object{"source": object{"const": item.Source}, "state": object{"const": string(item.State)}}})
+	}
+	schemas["AccountSecurityReport"].(object)["properties"].(object)["coverage"] = object{
+		"type": "array", "minItems": len(coverage), "maxItems": len(coverage), "prefixItems": coverage, "items": false,
+	}
+	schemas["AccountSecurityReportMetadata"].(object)["description"] = "Immutable current-account IAM report identity, exact seven-day retention, bounded counts and digests. It is not a live authorization or cross-product waterline."
+	schemas["AccountSecurityReport"].(object)["description"] = "One immutable IAM-only snapshot. UNKNOWN and NOT_INCLUDED are security outcomes, not empty success or permission to disable resources."
+	schemas["CreateAccountSecurityReportRequest"].(object)["description"] = "One current-account report intent. No Account, User, product, time range, data source or storage selector is accepted."
+	schemas["CreateAccountSecurityReportResponse"].(object)["description"] = "APPLIED or exact EQUAL_REPLAY metadata for the same immutable report; neither outcome is a fresh observation or download permit."
 	// Condition keys have a closed set of IAM-owned facts plus two disjoint,
 	// normalized namespaces. An exact key is still usable only when the owning
 	// product Profile declares it for the selected Action.

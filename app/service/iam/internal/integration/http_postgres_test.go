@@ -16958,6 +16958,284 @@ func provePolicyScopeCredentialProtection(t *testing.T, ctx context.Context, han
 	}
 }
 
+func TestIAMSecurityReportPostgres(t *testing.T) {
+	dsn := os.Getenv("MATRIX_IAM_SECURITY_REPORT_POSTGRES_TEST_DSN")
+	if dsn == "" {
+		t.Skip("set MATRIX_IAM_SECURITY_REPORT_POSTGRES_TEST_DSN to an own clean PostgreSQL 18 database")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	config, err := pgx.ParseConfig(dsn)
+	if err != nil || !strings.HasPrefix(config.Database, "matrix_iam_security_report_") {
+		t.Fatal("security report gate requires its own database")
+	}
+	config.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+	database, err := pgx.ConnectConfig(ctx, config)
+	if err != nil {
+		t.Fatal("connect security report gate database")
+	}
+	defer database.Close(context.Background())
+	assertIAMPostgres18(t, ctx, database)
+	assertCleanIAMSchema(t, ctx, database)
+	applyIAMSchema(t, ctx, database)
+	createIAMHTTPRole(t, ctx, database)
+	document := iamHTTPBootstrap(t)
+	workflow := localRecoveryWorkflow(t, ctx, dsn, iamHTTPTestRole, &iamTransactionFailureTrace{}, iamHTTPAccessKeyWrapping(t, document))
+	if _, err := bootstrapIAMWithTOTP(t, ctx, workflow, document); err != nil {
+		t.Fatal("bootstrap security report gate", err)
+	}
+	endpoint, err := iamhttp.NewHandler(workflow, iamhttp.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		endpoint.ServeHTTP(response, request.WithContext(ctx))
+	})
+	call := func(method, path, bearer string, body any, status int, result any) *httptest.ResponseRecorder {
+		t.Helper()
+		var encoded []byte
+		if body != nil {
+			encoded = mustIAMJSON(t, body)
+		}
+		response := performIAMRequest(handler, method, path, bearer, encoded)
+		if response.Code != status {
+			t.Fatalf("security report %s %s status=%d want=%d body=%s", method, path, response.Code, status, response.Body.String())
+		}
+		if response.Header().Get("Cache-Control") != "no-store" {
+			t.Fatal("security report response is cacheable")
+		}
+		if result != nil && iamv1.DecodeRequest(bytes.NewReader(response.Body.Bytes()), result) != nil {
+			t.Fatal("decode security report response")
+		}
+		return response
+	}
+
+	root := localRecoveryLogin(t, handler, "admin", adminPassword, true)
+	root = localRecoveryChangePassword(t, handler, root, adminPassword, changedAdminPassword)
+	var manager iamv1.User
+	call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": "security-report-manager", "displayName": "Security report manager",
+		"initialPassword": initialDeveloperPassword, "requestId": "security-report-manager-create"}, http.StatusCreated, &manager)
+	managerBearer := localRecoveryLogin(t, handler, manager.LoginName+"@"+string(manager.AccountID), initialDeveloperPassword, true)
+	managerBearer = localRecoveryChangePassword(t, handler, managerBearer, initialDeveloperPassword, changedDeveloperPassword)
+
+	allow := func(sid string, actions []iamv1.Action, kind iamv1.ResourceKind) iamv1.PolicyStatement {
+		return iamv1.PolicyStatement{SID: sid, Effect: iamv1.PolicyAllow, Actions: actions,
+			Resources: []iamv1.PolicyResourceSelector{{Kind: kind, Match: iamv1.PolicyResourceAnyInAuthority}}}
+	}
+	var policy iamv1.PolicyDetail
+	call(http.MethodPost, "/v1/policies", root, iamv1.CreatePolicyRequest{DisplayName: "Account security report manager",
+		RequestID: "security-report-policy-create", Document: iamv1.PolicyDocument{LanguageVersion: "1", Scope: iamv1.AuthorityScopeTenant,
+			Statements: []iamv1.PolicyStatement{
+				allow("keys", []iamv1.Action{iamv1.ActionIAMAccessKeyList, iamv1.ActionIAMAccessKeyCreate}, iamv1.ResourceUser),
+				allow("key-status", []iamv1.Action{iamv1.ActionIAMAccessKeySetStatus}, iamv1.ResourceAccessKey),
+				allow("create", []iamv1.Action{iamv1.ActionIAMSecurityReportCreate}, iamv1.ResourceAccount),
+				allow("read", []iamv1.Action{iamv1.ActionIAMSecurityReportRead, iamv1.ActionIAMSecurityReportDownload}, iamv1.ResourceSecurityReport),
+			}}}, http.StatusCreated, &policy)
+	var grant iamv1.PolicyAttachment
+	call(http.MethodPost, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{
+		Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(manager.ID)}, PolicyID: policy.Policy.ID,
+		PolicyResourceVersion: policy.Policy.ResourceVersion, RequestID: "security-report-manager-grant"}, http.StatusOK, &grant)
+	keyPath := "/v1/users/" + string(manager.ID) + "/access-keys"
+	var keyDirectory iamv1.AccessKeyList
+	call(http.MethodGet, keyPath, managerBearer, nil, http.StatusOK, &keyDirectory)
+	var createdKey iamv1.CreateAccessKeyResponse
+	call(http.MethodPost, keyPath, managerBearer, iamv1.CreateAccessKeyRequest{UserResourceVersion: keyDirectory.UserResourceVersion,
+		NetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{"192.0.2.0/24"}}, RequestID: "security-report-key-create"},
+		http.StatusCreated, &createdKey)
+	keySecret := createdKey.Secret.CopyBytes()
+	defer clear(keySecret)
+
+	create := iamv1.CreateAccountSecurityReportRequest{FormatVersion: iamv1.SecurityReportFormatVersion, RequestID: "security-report-create"}
+	var applied iamv1.CreateAccountSecurityReportResponse
+	call(http.MethodPost, "/v1/account/security-reports", managerBearer, create, http.StatusCreated, &applied)
+	if applied.Outcome != "APPLIED" || iamv1.ValidateCreateAccountSecurityReportResponse(applied) != nil ||
+		applied.Metadata.AccountID != document.Organization.ID || applied.Metadata.UserCount != 2 || applied.Metadata.AccessKeyCount != 1 {
+		t.Fatal("security report creation metadata differs from its authority snapshot")
+	}
+	var replay iamv1.CreateAccountSecurityReportResponse
+	call(http.MethodPost, "/v1/account/security-reports", managerBearer, create, http.StatusOK, &replay)
+	if replay.Outcome != "EQUAL_REPLAY" || replay.Metadata != applied.Metadata {
+		t.Fatal("security report exact replay changed its snapshot")
+	}
+	reportPath := "/v1/account/security-reports/" + string(applied.Metadata.ID)
+	var report iamv1.AccountSecurityReport
+	call(http.MethodGet, reportPath, managerBearer, nil, http.StatusOK, &report)
+	if iamv1.ValidateAccountSecurityReport(report) != nil || len(report.AccessKeys) != 1 || report.AccessKeys[0].ID != createdKey.Key.ID ||
+		report.AccessKeys[0].NetworkRestrictions.AllowedSourceCIDRs[0] != "192.0.2.0/24" {
+		t.Fatal("security report did not preserve the bounded IAM snapshot")
+	}
+	reportJSON := mustIAMJSON(t, report)
+	if bytes.Contains(reportJSON, []byte(`"secret"`)) || (len(keySecret) > 0 && bytes.Contains(reportJSON, keySecret)) {
+		t.Fatal("security report exposed AccessKey secret material")
+	}
+	download := call(http.MethodGet, reportPath+"/content", managerBearer, nil, http.StatusOK, nil)
+	if download.Header().Get("Content-Type") != "text/csv; charset=utf-8" ||
+		download.Header().Get("Content-Disposition") != `attachment; filename="matrix-iam-security-report-`+string(applied.Metadata.ID)+`.csv"` ||
+		iamv1.ValidateAccountSecurityReportCSV(applied.Metadata, download.Body.Bytes()) != nil ||
+		(len(keySecret) > 0 && bytes.Contains(download.Body.Bytes(), keySecret)) {
+		t.Fatal("security report download contract differs or exposes secret material")
+	}
+	var currentManager iamv1.UserAccess
+	call(http.MethodGet, "/v1/users/"+string(manager.ID), root, nil, http.StatusOK, &currentManager)
+	var renamedManager iamv1.User
+	call(http.MethodPost, "/v1/users/"+string(manager.ID)+":update", root, iamv1.UpdateUserRequest{
+		DisplayName: "Renamed security report manager", ResourceVersion: currentManager.User.ResourceVersion,
+		RequestID: "security-report-manager-rename",
+	}, http.StatusOK, &renamedManager)
+	call(http.MethodPost, keyPath+"/"+string(createdKey.Key.ID)+":set-status", managerBearer,
+		iamv1.SetAccessKeyStatusRequest{AccessKeyResourceVersion: createdKey.Key.ResourceVersion, Status: iamv1.AccessKeyDisabled,
+			RequestID: "security-report-key-disable"}, http.StatusOK, nil)
+	time.Sleep(time.Millisecond)
+	managerBearer = localRecoveryLogin(t, handler, manager.LoginName+"@"+string(manager.AccountID), changedDeveloperPassword, false)
+	var changed iamv1.CreateAccountSecurityReportResponse
+	call(http.MethodPost, "/v1/account/security-reports", managerBearer,
+		iamv1.CreateAccountSecurityReportRequest{FormatVersion: iamv1.SecurityReportFormatVersion, RequestID: "security-report-after-change"},
+		http.StatusCreated, &changed)
+	var originalAfterChange, changedReport iamv1.AccountSecurityReport
+	call(http.MethodGet, reportPath, managerBearer, nil, http.StatusOK, &originalAfterChange)
+	call(http.MethodGet, "/v1/account/security-reports/"+string(changed.Metadata.ID), managerBearer, nil, http.StatusOK, &changedReport)
+	userEntry := func(value iamv1.AccountSecurityReport) iamv1.SecurityReportUser {
+		t.Helper()
+		for _, user := range value.Users {
+			if user.ID == manager.ID {
+				return user
+			}
+		}
+		t.Fatal("security report omitted the manager User")
+		return iamv1.SecurityReportUser{}
+	}
+	keyStatus := func(value iamv1.AccountSecurityReport) iamv1.AccessKeyStatus {
+		t.Helper()
+		for _, key := range value.AccessKeys {
+			if key.ID == createdKey.Key.ID {
+				return key.Status
+			}
+		}
+		t.Fatal("security report omitted the manager AccessKey")
+		return ""
+	}
+	originalManager, changedManager := userEntry(originalAfterChange), userEntry(changedReport)
+	if originalManager.DisplayName != "Security report manager" || keyStatus(originalAfterChange) != iamv1.AccessKeyEnabled ||
+		changedManager.DisplayName != renamedManager.DisplayName || keyStatus(changedReport) != iamv1.AccessKeyDisabled ||
+		originalManager.LastPasswordLogin.State != iamv1.SecurityReportObserved || originalManager.LastPasswordLogin.ObservedAt == nil ||
+		changedManager.LastPasswordLogin.State != iamv1.SecurityReportObserved || changedManager.LastPasswordLogin.ObservedAt == nil ||
+		!changedManager.LastPasswordLogin.ObservedAt.After(*originalManager.LastPasswordLogin.ObservedAt) {
+		t.Fatal("security report snapshots changed retroactively or missed committed User/AccessKey/Session changes")
+	}
+	for index := 2; index < iamv1.MaxActiveSecurityReports; index++ {
+		var additional iamv1.CreateAccountSecurityReportResponse
+		call(http.MethodPost, "/v1/account/security-reports", managerBearer,
+			iamv1.CreateAccountSecurityReportRequest{FormatVersion: iamv1.SecurityReportFormatVersion,
+				RequestID: fmt.Sprintf("security-report-capacity-%02d", index)}, http.StatusCreated, &additional)
+		if additional.Outcome != "APPLIED" || additional.Metadata.AccountID != document.Organization.ID || additional.Metadata.ID == applied.Metadata.ID {
+			t.Fatal("security report quota fixture differs")
+		}
+	}
+	call(http.MethodPost, "/v1/account/security-reports", managerBearer,
+		iamv1.CreateAccountSecurityReportRequest{FormatVersion: iamv1.SecurityReportFormatVersion, RequestID: "security-report-capacity-rejected"},
+		http.StatusConflict, nil)
+
+	var otherAccount iamv1.Account
+	call(http.MethodPost, "/v1/accounts", root, map[string]any{"id": "security-report-other-account", "displayName": "Security report other",
+		"rootLoginName": "security-report-other-root", "rootDisplayName": "Other account root", "initialPassword": initialDeveloperPassword,
+		"requestId": "security-report-other-create"}, http.StatusCreated, &otherAccount)
+	otherRoot := localRecoveryLogin(t, handler, "security-report-other-root", initialDeveloperPassword, true)
+	otherRoot = localRecoveryChangePassword(t, handler, otherRoot, initialDeveloperPassword, changedDeveloperPassword)
+	var otherReport iamv1.CreateAccountSecurityReportResponse
+	call(http.MethodPost, "/v1/account/security-reports", otherRoot,
+		iamv1.CreateAccountSecurityReportRequest{FormatVersion: iamv1.SecurityReportFormatVersion, RequestID: "security-report-other-generate"},
+		http.StatusCreated, &otherReport)
+	if otherReport.Metadata.AccountID != "security-report-other-account" || otherReport.Metadata.ID == applied.Metadata.ID {
+		t.Fatal("independent account security report identity differs")
+	}
+	call(http.MethodGet, reportPath, otherRoot, nil, http.StatusNotFound, nil)
+	call(http.MethodGet, "/v1/account/security-reports/"+string(otherReport.Metadata.ID), root, nil, http.StatusNotFound, nil)
+	var disabledAccount iamv1.Account
+	call(http.MethodPost, "/v1/accounts/"+string(otherAccount.ID)+":set-status", root,
+		iamv1.SetAccountStatusRequest{Status: iamv1.AccountDisabled, ResourceVersion: otherAccount.ResourceVersion, RequestID: "security-report-other-disable"},
+		http.StatusOK, &disabledAccount)
+	call(http.MethodGet, "/v1/account/security-reports/"+string(otherReport.Metadata.ID), otherRoot, nil, http.StatusUnauthorized, nil)
+	call(http.MethodPost, "/v1/accounts/"+string(otherAccount.ID)+":set-status", root,
+		iamv1.SetAccountStatusRequest{Status: iamv1.AccountActive, ResourceVersion: disabledAccount.ResourceVersion, RequestID: "security-report-other-enable"},
+		http.StatusOK, nil)
+	otherRoot = localRecoveryLogin(t, handler, "security-report-other-root", changedDeveloperPassword, false)
+	call(http.MethodGet, "/v1/account/security-reports/"+string(otherReport.Metadata.ID), otherRoot, nil, http.StatusOK, &report)
+
+	var managerAccess iamv1.UserAccess
+	call(http.MethodGet, "/v1/users/"+string(manager.ID), root, nil, http.StatusOK, &managerAccess)
+	var disabledManager iamv1.User
+	call(http.MethodPost, "/v1/users/"+string(manager.ID)+":set-status", root,
+		iamv1.SetUserStatusRequest{Status: iamv1.PrincipalDisabled, ResourceVersion: managerAccess.User.ResourceVersion, RequestID: "security-report-manager-disable"},
+		http.StatusOK, &disabledManager)
+	call(http.MethodGet, reportPath, managerBearer, nil, http.StatusUnauthorized, nil)
+	call(http.MethodPost, "/v1/users/"+string(manager.ID)+":set-status", root,
+		iamv1.SetUserStatusRequest{Status: iamv1.PrincipalActive, ResourceVersion: disabledManager.ResourceVersion, RequestID: "security-report-manager-enable"},
+		http.StatusOK, nil)
+	managerBearer = localRecoveryLogin(t, handler, manager.LoginName+"@"+string(manager.AccountID), changedDeveloperPassword, false)
+	call(http.MethodGet, reportPath, managerBearer, nil, http.StatusOK, &report)
+
+	call(http.MethodPost, "/v1/policy-attachments/"+string(grant.ID)+":revoke", root,
+		iamv1.RevokePolicyAttachmentRequest{ResourceVersion: grant.ResourceVersion, RequestID: "security-report-manager-revoke"}, http.StatusOK, nil)
+	call(http.MethodGet, reportPath, managerBearer, nil, http.StatusForbidden, nil)
+	managerBearer = localRecoveryLogin(t, handler, manager.LoginName+"@"+string(manager.AccountID), changedDeveloperPassword, false)
+	call(http.MethodGet, reportPath, managerBearer, nil, http.StatusForbidden, nil)
+	call(http.MethodGet, reportPath+"/content", managerBearer, nil, http.StatusForbidden, nil)
+	call(http.MethodPost, "/v1/account/security-reports", managerBearer,
+		iamv1.CreateAccountSecurityReportRequest{FormatVersion: iamv1.SecurityReportFormatVersion, RequestID: "security-report-after-revoke"},
+		http.StatusForbidden, nil)
+	call(http.MethodGet, reportPath, root, nil, http.StatusOK, &report)
+
+	var receipts, contents, downloads, createdFacts, downloadFacts int
+	if err := database.QueryRow(ctx, `SELECT
+	  (SELECT count(*) FROM iam.security_report_receipts WHERE tenant_id=$1),
+	  (SELECT count(*) FROM iam.security_report_contents WHERE tenant_id=$1),
+	  (SELECT count(*) FROM iam.security_report_downloads WHERE tenant_id=$1),
+	  (SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.security-report.created'),
+	  (SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.security-report.download-started')`,
+		document.Organization.ID).Scan(&receipts, &contents, &downloads, &createdFacts, &downloadFacts); err != nil {
+		t.Fatal("read security report durable state", err)
+	}
+	if receipts != iamv1.MaxActiveSecurityReports || contents != iamv1.MaxActiveSecurityReports || downloads != 1 ||
+		createdFacts != iamv1.MaxActiveSecurityReports || downloadFacts != 1 {
+		t.Fatalf("security report durable state differs: receipts=%d contents=%d downloads=%d created=%d download=%d",
+			receipts, contents, downloads, createdFacts, downloadFacts)
+	}
+	restrictedConfig := config.Copy()
+	restrictedConfig.User, restrictedConfig.Password = iamHTTPTestRole, iamHTTPTestPassword
+	restricted, err := pgx.ConnectConfig(ctx, restrictedConfig)
+	if err != nil {
+		t.Fatal("connect restricted IAM report database role", err)
+	}
+	defer restricted.Close(context.Background())
+	if err := restricted.QueryRow(ctx, "SELECT count(*) FROM iam.security_report_contents").Scan(&contents); err == nil {
+		t.Fatal("restricted IAM runtime role can read security report storage directly")
+	}
+	assertOwnerMutationRejected := func(name, statement string, arguments ...any) {
+		t.Helper()
+		tx, err := database.Begin(ctx)
+		if err != nil {
+			t.Fatal("begin security report attack", err)
+		}
+		defer tx.Rollback(context.Background())
+		if _, err := tx.Exec(ctx, "SET LOCAL ROLE matrix_iam_owner"); err != nil {
+			t.Fatal("prepare security report owner attack", err)
+		}
+		if _, err := tx.Exec(ctx, "SELECT set_config('matrix.iam_tenant_id',$1,true)", document.Organization.ID); err != nil {
+			t.Fatal("prepare security report attack", err)
+		}
+		_, err = tx.Exec(ctx, statement, arguments...)
+		var failure *pgconn.PgError
+		if !errors.As(err, &failure) || failure.Code != "42501" {
+			t.Fatalf("security report %s mutation was not rejected by immutable storage: %v", name, err)
+		}
+	}
+	assertOwnerMutationRejected("content update", "UPDATE iam.security_report_contents SET expires_at=expires_at+interval '1 second' WHERE tenant_id=$1 AND report_id=$2",
+		document.Organization.ID, applied.Metadata.ID)
+	assertOwnerMutationRejected("receipt delete", "DELETE FROM iam.security_report_receipts WHERE tenant_id=$1 AND report_id=$2",
+		document.Organization.ID, applied.Metadata.ID)
+	assertOwnerMutationRejected("download truncate", "TRUNCATE iam.security_report_downloads")
+}
+
 // These growing matrices have their own clean fixtures and the same two-minute
 // bound as the existing management session flow. They must not consume the
 // unrelated attachment matrix or account HTTP gate's remaining deadline.

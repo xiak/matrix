@@ -110,9 +110,9 @@ func TestRuntimeDSNBindsLeastPrivilegeLogin(t *testing.T) {
 func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	const variable = "MATRIX_IAM_PREDECESSOR_POSTGRES_TEST_DSN"
 	const databasePrefix = "matrix_iam_upgrade_predecessor_"
-	const source = "0c688302b9dea1050653eded2b9442a6b1322155"
-	const sourceSchema uint64 = 59
-	const currentSchema uint64 = 60
+	const source = "4e79ef783410bbb596232763a9be80412b5e0846"
+	const sourceSchema uint64 = 60
+	const currentSchema uint64 = 61
 	// Use credentials accepted by the immediate predecessor. This rolling
 	// pre-v1 gate proves only the current schema and its one fixed predecessor;
 	// superseded password-policy compatibility belongs to neither side.
@@ -252,7 +252,6 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	changePasswordIAM(t, endpoint, a.Credential, initialReaderPassword, changedReaderPassword, "own-upgrade-password")
 	b := loginIAM(t, endpoint, realm, changedReaderPassword, "own-upgrade-second")
 	ended := loginIAM(t, endpoint, realm, changedReaderPassword, "own-upgrade-ended")
-	unknown := loginIAM(t, endpoint, realm, changedReaderPassword, "own-upgrade-unknown")
 	revokeIAMSession(t, endpoint, primary.Credential, ended.Session.ID, "own-upgrade-old-revocation")
 	selfEnded := loginIAM(t, endpoint, realm, changedReaderPassword, "own-upgrade-old-self-target")
 	oldIntent := iamv1.RevokeSessionRequest{RequestID: "own-upgrade-old-self"}
@@ -263,6 +262,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		iamv1.ValidateRevokeOwnSessionResponse(oldCompleted) != nil || oldCompleted.Outcome != "APPLIED" {
 		t.Fatal("actual predecessor did not commit an individual self reduction")
 	}
+	unknown := loginIAM(t, endpoint, realm, changedReaderPassword, "own-upgrade-unknown")
 	// Missing lineage is a negative storage fixture, not proof that a newer
 	// executable issued a historical NULL-generation session.
 	if _, err := admin.Exec(ctx, "UPDATE iam.sessions SET credential_version=NULL WHERE tenant_id=$1 AND id=$2", member.AccountID, unknown.Session.ID); err != nil {
@@ -336,10 +336,10 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	}
 	originalMail := mailState()
 	defer clear(originalMail)
-	// The exact predecessor must produce the contract this migration replaces:
-	// PaaS profile r5, decision contract7 and trusted request/resource tags. Building
-	// the fixture through the old executable proves historical bytes and proof
-	// interpretation, rather than manufacturing a row with the current code.
+	// The exact predecessor produces retained contract7 decisions and trusted
+	// request/resource tags. Building the fixture through that executable proves
+	// historical bytes and proof interpretation rather than manufacturing a row
+	// with the current code.
 	var oldPaaSProfileRevision uint64
 	var oldPaaSProfileDocument, oldPaaSProfileDigest string
 	if err := admin.QueryRow(ctx, `SELECT p.revision,p.canonical_document,p.content_digest
@@ -358,13 +358,21 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	if err := admin.QueryRow(ctx, `SELECT p.revision,p.canonical_document,p.content_digest
 		FROM iam.authorization_profiles p JOIN iam.authorization_profile_heads h
 		ON (h.product,h.revision)=(p.product,p.revision) WHERE h.product='audit'`).Scan(
-		&oldAuditProfileRevision, &oldAuditProfileDocument, &oldAuditProfileDigest); err != nil ||
-		oldAuditProfileRevision != 3 || oldAuditProfileDigest != "sha256:83a1c4665b2363af22d882202f318f1ebb7ed16d33244723d18183ee3a404186" {
+		&oldAuditProfileRevision, &oldAuditProfileDocument, &oldAuditProfileDigest); err != nil {
 		t.Fatal("predecessor Audit profile archive is invalid", err)
 	}
+	var oldAuditProfile iamv1.AuthorizationProfile
+	if json.Unmarshal([]byte(oldAuditProfileDocument), &oldAuditProfile) != nil {
+		t.Fatal("predecessor Audit profile archive is invalid")
+	}
+	oldAuditCanonical, oldAuditDigest, oldAuditErr := iamv1.CanonicalizeAuthorizationProfile(oldAuditProfile)
+	if oldAuditErr != nil || iamv1.ValidateAuthorizationProfile(oldAuditProfile) != nil || oldAuditProfile.Revision != oldAuditProfileRevision ||
+		oldAuditCanonical != oldAuditProfileDocument || oldAuditDigest != oldAuditProfileDigest {
+		t.Fatal("predecessor Audit profile archive is invalid")
+	}
 	expectedAuditProfile, found := iamv1.LookupAuthorizationProfile(iamv1.ProductAudit)
-	if !found || expectedAuditProfile.Revision != 4 {
-		t.Fatal("current source has no Audit trusted-source profile")
+	if !found || expectedAuditProfile.Revision != oldAuditProfileRevision {
+		t.Fatal("IAM-only migration unexpectedly changed the Audit profile")
 	}
 	expectedAuditProfileDocument, expectedAuditProfileDigest, err := iamv1.CanonicalizeAuthorizationProfile(expectedAuditProfile)
 	if err != nil {
@@ -603,6 +611,60 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	if !bytes.Equal(originalState, identityState()) {
 		t.Fatal("migration or equal bootstrap changed original identity/credential state")
 	}
+	deniedReport := performJSON(t, http.MethodPost, endpoint+"/v1/account/security-reports", primary.Credential,
+		iamv1.CreateAccountSecurityReportRequest{FormatVersion: iamv1.SecurityReportFormatVersion, RequestID: "retained-security-report-without-grant"})
+	if deniedReport.Status != http.StatusForbidden {
+		t.Fatalf("migration silently granted a predecessor root the new report capability: status=%d", deniedReport.Status)
+	}
+	statement := func(sid string, actions []iamv1.Action, kind iamv1.ResourceKind) iamv1.PolicyStatement {
+		return iamv1.PolicyStatement{SID: sid, Effect: iamv1.PolicyAllow, Actions: actions,
+			Resources: []iamv1.PolicyResourceSelector{{Kind: kind, Match: iamv1.PolicyResourceAnyInAuthority}}}
+	}
+	policyResponse := performJSON(t, http.MethodPost, endpoint+"/v1/policies", primary.Credential, iamv1.CreatePolicyRequest{
+		DisplayName: "Retained security report authority", RequestID: "retained-security-report-policy",
+		Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+			Statements: []iamv1.PolicyStatement{
+				statement("create", []iamv1.Action{iamv1.ActionIAMSecurityReportCreate}, iamv1.ResourceAccount),
+				statement("read", []iamv1.Action{iamv1.ActionIAMSecurityReportRead, iamv1.ActionIAMSecurityReportDownload}, iamv1.ResourceSecurityReport),
+			}},
+	})
+	var reportPolicy iamv1.PolicyDetail
+	if policyResponse.Status != http.StatusCreated || iamv1.DecodeRequest(bytes.NewReader(policyResponse.Body), &reportPolicy) != nil ||
+		iamv1.ValidatePolicyDetail(reportPolicy) != nil {
+		t.Fatalf("create explicit retained report policy status=%d", policyResponse.Status)
+	}
+	createIAMPolicyAttachment(t, endpoint, primary.Credential, primary.Session.PrincipalID, reportPolicy.Policy.ID, "retained-security-report-grant")
+	createRetainedReport := func(requestID string) iamv1.AccountSecurityReport {
+		t.Helper()
+		response := performJSON(t, http.MethodPost, endpoint+"/v1/account/security-reports", primary.Credential,
+			iamv1.CreateAccountSecurityReportRequest{FormatVersion: iamv1.SecurityReportFormatVersion, RequestID: requestID})
+		var created iamv1.CreateAccountSecurityReportResponse
+		if response.Status != http.StatusCreated || iamv1.DecodeRequest(bytes.NewReader(response.Body), &created) != nil ||
+			iamv1.ValidateCreateAccountSecurityReportResponse(created) != nil || created.Outcome != "APPLIED" {
+			t.Fatalf("create retained security report status=%d", response.Status)
+		}
+		response = performJSON(t, http.MethodGet, endpoint+"/v1/account/security-reports/"+string(created.Metadata.ID), primary.Credential, nil)
+		var report iamv1.AccountSecurityReport
+		if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &report) != nil ||
+			iamv1.ValidateAccountSecurityReport(report) != nil || report.Metadata != created.Metadata {
+			t.Fatalf("read retained security report status=%d", response.Status)
+		}
+		return report
+	}
+	reportUser := func(report iamv1.AccountSecurityReport, id iamv1.PrincipalID) iamv1.SecurityReportUser {
+		t.Helper()
+		for _, user := range report.Users {
+			if user.ID == id {
+				return user
+			}
+		}
+		t.Fatal("retained security report omitted its predecessor User")
+		return iamv1.SecurityReportUser{}
+	}
+	unknownLineageReport := createRetainedReport("retained-security-report-unknown")
+	if reportUser(unknownLineageReport, member.ID).LastPasswordLogin.State != iamv1.SecurityReportUnknown {
+		t.Fatal("current report invented a trusted password login from the predecessor NULL credential lineage")
+	}
 	oldCallerSessionID := a.Session.ID
 	for _, session := range []loginResult{primary, a, b} {
 		if response := performJSON(t, http.MethodGet, endpoint+"/v1/auth/me", session.Credential, nil); response.Status != http.StatusOK {
@@ -708,6 +770,19 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	}
 	newCaller := loginIAM(t, endpoint, realm, changedReaderPassword, "own-upgrade-new-caller")
 	sensitive = append(sensitive, newCaller.Credential)
+	knownLineageReport := createRetainedReport("retained-security-report-known")
+	knownLogin := reportUser(knownLineageReport, member.ID).LastPasswordLogin
+	if knownLogin.State != iamv1.SecurityReportObserved || knownLogin.ObservedAt == nil || !knownLogin.ObservedAt.Equal(newCaller.Session.IssuedAt) {
+		t.Fatal("current report did not replace an older unknown candidate with the newer proven password login")
+	}
+	retainedUnknownResponse := performJSON(t, http.MethodGet,
+		endpoint+"/v1/account/security-reports/"+string(unknownLineageReport.Metadata.ID), primary.Credential, nil)
+	var retainedUnknown iamv1.AccountSecurityReport
+	if retainedUnknownResponse.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(retainedUnknownResponse.Body), &retainedUnknown) != nil ||
+		iamv1.ValidateAccountSecurityReport(retainedUnknown) != nil ||
+		reportUser(retainedUnknown, member.ID).LastPasswordLogin.State != iamv1.SecurityReportUnknown {
+		t.Fatal("later proven activity rewrote the original immutable UNKNOWN report")
+	}
 	oldResponse = performJSON(t, http.MethodPost, oldPath, newCaller.Credential, oldIntent)
 	if oldResponse.Status != http.StatusConflict {
 		t.Fatal("a new Session adopted another caller's original completion")
@@ -1203,10 +1278,11 @@ func prepareRetainedSecuritySettingsProcesses(t *testing.T, ctx context.Context,
 		Operation              iamv1.StepUpOperation `json:"operation"`
 		ExpectedFactorRevision uint64                `json:"expectedFactorRevision"`
 		SecuritySettings       struct {
-			ExpectedResourceVersion uint64                         `json:"expectedResourceVersion"`
-			MFA                     iamv1.AccountMFASettings       `json:"mfa"`
-			Password                *iamv1.AccountPasswordSettings `json:"password"`
-			Session                 *iamv1.AccountSessionSettings  `json:"session"`
+			ExpectedResourceVersion uint64                              `json:"expectedResourceVersion"`
+			MFA                     iamv1.AccountMFASettings            `json:"mfa"`
+			Password                *iamv1.AccountPasswordSettings      `json:"password"`
+			Session                 *iamv1.AccountSessionSettings       `json:"session"`
+			AccessKeyNetwork        *iamv1.AccessKeyNetworkRestrictions `json:"accessKeyNetwork"`
 		} `json:"securitySettings"`
 		State      string     `json:"state"`
 		CreatedAt  time.Time  `json:"createdAt"`
@@ -1223,8 +1299,9 @@ func prepareRetainedSecuritySettingsProcesses(t *testing.T, ctx context.Context,
 			proof.SecuritySettings.ExpectedResourceVersion != version || proof.SecuritySettings.MFA.RequiredForUsers != required ||
 			proof.SecuritySettings.Password == nil || *proof.SecuritySettings.Password != passwordRules ||
 			proof.SecuritySettings.Session == nil || *proof.SecuritySettings.Session != sessionRules ||
+			proof.SecuritySettings.AccessKeyNetwork == nil || !reflect.DeepEqual(*proof.SecuritySettings.AccessKeyNetwork, networkRules) ||
 			proof.CreatedAt.IsZero() || proof.ExpiresAt.Sub(proof.CreatedAt) != 2*time.Minute ||
-			bytes.Contains(response.Body, []byte(`"accessKeyNetwork"`)) {
+			!bytes.Contains(response.Body, []byte(`"accessKeyNetwork"`)) {
 			t.Fatalf("invalid predecessor settings proof: status=%d body=%s", response.Status, response.Body)
 		}
 		return proof
@@ -1234,7 +1311,8 @@ func prepareRetainedSecuritySettingsProcesses(t *testing.T, ctx context.Context,
 		body := iamv1.StartStepUpRequest{RequestID: request,
 			Operation: iamv1.StepUpUpdateSecuritySettings, ExpectedFactorRevision: 2,
 			SecuritySettings: &iamv1.SecuritySettingsUpdateIntent{ExpectedResourceVersion: version,
-				MFA: iamv1.AccountMFASettings{RequiredForUsers: required}, Password: &passwordRules, Session: &sessionRules}}
+				MFA: iamv1.AccountMFASettings{RequiredForUsers: required}, Password: &passwordRules, Session: &sessionRules,
+				AccessKeyNetwork: &networkRules}}
 		proof := decodeLegacyProof(performJSON(t, http.MethodPost, endpoint+"/v1/auth/step-up", bearer, body), request, "PENDING", version, required)
 		return decodeLegacyProof(performJSON(t, http.MethodPost, endpoint+"/v1/auth/step-up/"+proof.ID+":verify", bearer,
 			map[string]string{"requestId": request + "-proof", "password": actor.password, "code": nextCode(actor)}), request, "PROVED", version, required)
@@ -1244,6 +1322,7 @@ func prepareRetainedSecuritySettingsProcesses(t *testing.T, ctx context.Context,
 		response := performJSON(t, http.MethodPut, endpoint+path, bearer, map[string]any{
 			"requestId": proof.RequestID, "stepUpId": proof.ID, "expectedResourceVersion": version,
 			"mfa": iamv1.AccountMFASettings{RequiredForUsers: required}, "password": passwordRules, "session": sessionRules,
+			"accessKeyNetwork": networkRules,
 		})
 		var envelope struct {
 			Outcome string          `json:"outcome"`
@@ -1251,7 +1330,8 @@ func prepareRetainedSecuritySettingsProcesses(t *testing.T, ctx context.Context,
 		}
 		var change iamv1.AccountSecuritySettingsChange
 		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &envelope) != nil || envelope.Outcome != "APPLIED" ||
-			json.Unmarshal(envelope.Change, &change) != nil || change.RequestID != proof.RequestID || change.Settings.AccessKeyNetwork != nil {
+			json.Unmarshal(envelope.Change, &change) != nil || change.RequestID != proof.RequestID ||
+			change.Settings.AccessKeyNetwork == nil || !reflect.DeepEqual(*change.Settings.AccessKeyNetwork, networkRules) {
 			t.Fatalf("invalid predecessor settings completion: status=%d body=%s", response.Status, response.Body)
 		}
 		return change
@@ -1262,7 +1342,8 @@ func prepareRetainedSecuritySettingsProcesses(t *testing.T, ctx context.Context,
 	first := applyLegacy(firstBearer, firstProof, 1, true)
 	if first.Settings.ResourceVersion != 2 || !first.Settings.MFA.RequiredForUsers ||
 		first.Settings.Password == nil || *first.Settings.Password != passwordRules ||
-		first.Settings.Session == nil || *first.Settings.Session != sessionRules || !first.CallerSessionEnded {
+		first.Settings.Session == nil || *first.Settings.Session != sessionRules || first.Settings.AccessKeyNetwork == nil ||
+		!reflect.DeepEqual(*first.Settings.AccessKeyNetwork, networkRules) || !first.CallerSessionEnded {
 		t.Fatal("predecessor did not commit its complete security settings")
 	}
 	call(http.MethodGet, "/v1/auth/me", firstBearer, nil, http.StatusUnauthorized, nil)
@@ -1275,6 +1356,7 @@ func prepareRetainedSecuritySettingsProcesses(t *testing.T, ctx context.Context,
 		Required       bool
 		Password       string
 		Session        string
+		Network        string
 		UpdatedAt      time.Time
 		Changes        uint64
 		Proofs         uint64
@@ -1286,34 +1368,19 @@ func prepareRetainedSecuritySettingsProcesses(t *testing.T, ctx context.Context,
 		t.Helper()
 		var state settingsInvariant
 		if err := admin.QueryRow(ctx, `SELECT a.security_settings_version,a.mfa_required_for_users,a.password_settings::text,
-			a.session_settings::text,a.security_settings_updated_at,
+			a.session_settings::text,a.access_key_network_restrictions::text,a.security_settings_updated_at,
 			(SELECT count(*) FROM iam.account_security_settings_changes c WHERE c.tenant_id=a.id),
 			(SELECT count(*) FROM iam.step_ups p WHERE p.tenant_id=a.id AND p.operation='SECURITY_SETTINGS_UPDATE'),
 			(SELECT count(*) FROM iam.step_ups p WHERE p.tenant_id=a.id AND p.operation='SECURITY_SETTINGS_UPDATE' AND p.state='CONSUMED'),
 			(SELECT count(*) FROM iam.audit_outbox o WHERE o.tenant_id=a.id AND o.event_document->>'action'='iam.security-settings.updated'),
 			(SELECT count(*) FROM iam.security_notifications n WHERE n.tenant_id=a.id AND n.kind='SECURITY_SETTINGS_CHANGED')
-			FROM iam.accounts a WHERE a.id=$1`, tenant).Scan(&state.Version, &state.Required, &state.Password, &state.Session,
+			FROM iam.accounts a WHERE a.id=$1`, tenant).Scan(&state.Version, &state.Required, &state.Password, &state.Session, &state.Network,
 			&state.UpdatedAt, &state.Changes, &state.Proofs, &state.ConsumedProofs, &state.Facts, &state.Notifications); err != nil {
 			t.Fatal("read retained settings state", err)
 		}
 		return state
 	}
 	original := settingsState()
-	startCurrentProof := func(actor *settingsActor, bearer, request string, version uint64, required bool) iamv1.StepUp {
-		t.Helper()
-		var proof iamv1.StepUp
-		call(http.MethodPost, "/v1/auth/step-up", bearer, iamv1.StartStepUpRequest{RequestID: request,
-			Operation: iamv1.StepUpUpdateSecuritySettings, ExpectedFactorRevision: 2,
-			SecuritySettings: &iamv1.SecuritySettingsUpdateIntent{ExpectedResourceVersion: version,
-				MFA: iamv1.AccountMFASettings{RequiredForUsers: required}, Password: &passwordRules, Session: &sessionRules, AccessKeyNetwork: &networkRules}},
-			http.StatusOK, &proof)
-		call(http.MethodPost, "/v1/auth/step-up/"+proof.ID+":verify", bearer,
-			map[string]string{"requestId": request + "-proof", "password": actor.password, "code": nextCode(actor)}, http.StatusOK, &proof)
-		if proof.State != "PROVED" {
-			t.Fatal("current settings proof was not completed")
-		}
-		return proof
-	}
 	applyCurrent := func(bearer, requestID, proofID string, version uint64, required bool, want int) iamv1.UpdateAccountSecuritySettingsResponse {
 		t.Helper()
 		var result iamv1.UpdateAccountSecuritySettingsResponse
@@ -1341,21 +1408,19 @@ func prepareRetainedSecuritySettingsProcesses(t *testing.T, ctx context.Context,
 		if !reflect.DeepEqual(retainedFirst, first) {
 			t.Fatal("upgrade changed predecessor security settings completion")
 		}
-		// The predecessor proof did not bind the newly authoritative network
-		// segment. It remains immutable evidence but cannot be observed as a
-		// current permit or consumed after the schema advance.
-		call(http.MethodGet, "/v1/auth/step-up/by-request/"+pendingProof.RequestID, pendingBearer, nil, http.StatusNotFound, nil)
+		var retainedPending iamv1.StepUp
+		call(http.MethodGet, "/v1/auth/step-up/by-request/"+pendingProof.RequestID, pendingBearer, nil, http.StatusOK, &retainedPending)
+		if retainedPending.ID != pendingProof.ID || retainedPending.State != "PROVED" || retainedPending.SecuritySettings == nil ||
+			retainedPending.SecuritySettings.AccessKeyNetwork == nil ||
+			!reflect.DeepEqual(*retainedPending.SecuritySettings.AccessKeyNetwork, networkRules) {
+			t.Fatal("upgrade changed the complete predecessor settings proof")
+		}
 		applyCurrent(otherBearer, pendingProof.RequestID, pendingProof.ID, 2, false, http.StatusUnauthorized)
 		afterWrongSession := settingsState()
 		if original != afterWrongSession {
 			t.Fatal("another Session consumed or changed the predecessor step-up")
 		}
-		applyCurrent(pendingBearer, pendingProof.RequestID, pendingProof.ID, 2, false, http.StatusUnauthorized)
-		if afterRejected := settingsState(); original != afterRejected {
-			t.Fatal("unbound predecessor proof changed current security settings")
-		}
-		currentProof := startCurrentProof(memberActor, pendingBearer, "retained-settings-current-change", 2, false)
-		second := applyCurrent(pendingBearer, currentProof.RequestID, currentProof.ID, 2, false, http.StatusOK)
+		second := applyCurrent(pendingBearer, pendingProof.RequestID, pendingProof.ID, 2, false, http.StatusOK)
 		if second.Outcome != "APPLIED" || second.Change.Settings.ResourceVersion != 3 || second.Change.Settings.MFA.RequiredForUsers ||
 			second.Change.Settings.Password == nil || *second.Change.Settings.Password != passwordRules ||
 			second.Change.Settings.Session == nil || *second.Change.Settings.Session != sessionRules ||
@@ -1378,12 +1443,12 @@ func prepareRetainedSecuritySettingsProcesses(t *testing.T, ctx context.Context,
 				 AND password_settings=iam.default_password_settings() AND session_settings=iam.default_session_settings()
 				 AND access_key_network_restrictions=iam.default_access_key_network_restrictions()
 				 AND (SELECT count(*)=2 FROM iam.account_security_settings_changes WHERE tenant_id=$1)
-				 AND (SELECT count(*)=3 FROM iam.step_ups WHERE tenant_id=$1 AND operation='SECURITY_SETTINGS_UPDATE')
+				 AND (SELECT count(*)=2 FROM iam.step_ups WHERE tenant_id=$1 AND operation='SECURITY_SETTINGS_UPDATE')
 				 AND (SELECT count(*)=2 FROM iam.step_ups WHERE tenant_id=$1 AND operation='SECURITY_SETTINGS_UPDATE' AND state='CONSUMED')
 				 FROM iam.accounts WHERE id=$1`, tenant).Scan(&exact); err != nil || !exact {
 				t.Fatal("restart lost or duplicated predecessor settings lineage", err)
 			}
-			t.Log("actual IAM59 completed settings survived IAM60 migration; its unbound pending proof failed closed, a new complete current proof applied once, and restart preserved both immutable completions")
+			t.Log("actual IAM60 complete settings intent survived IAM61 migration; another Session was rejected, the original Session applied once, and restart preserved both immutable completions")
 		}
 	}
 }
@@ -2370,7 +2435,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	// Exercise the exact source services together without weakening install
 	// admission: the workflow separately proves the published installer rejects
 	// this unmatched database shape before effects.
-	sourceProfile := installationrelease.AuthoritySchemas{IAM: 60, Audit: 31, PaaS: 3}
+	sourceProfile := installationrelease.AuthoritySchemas{IAM: 61, Audit: 31, PaaS: 3}
 	publishedProfile := installationrelease.CurrentDatabaseProfile()
 	if publishedProfile.Authorities == sourceProfile {
 		t.Fatal("unreleased authority source shape was published without a final profile gate")
@@ -7091,6 +7156,82 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 	return sensitive
 }
 
+func proveSecurityReportProcesses(t *testing.T, ctx context.Context, admin *pgx.Conn, endpoint, replicaEndpoint, auditEndpoint, home, customer string, restartIAM func()) {
+	t.Helper()
+	type fixture struct {
+		owner   string
+		account iamv1.AccountID
+		result  iamv1.CreateAccountSecurityReportResponse
+	}
+	fixtures := []fixture{{owner: home, account: "organization-process"}, {owner: customer, account: "organization-process-customer"}}
+	request := iamv1.CreateAccountSecurityReportRequest{FormatVersion: iamv1.SecurityReportFormatVersion, RequestID: "process-security-report"}
+	for index := range fixtures {
+		item := &fixtures[index]
+		created := performJSON(t, http.MethodPost, endpoint+"/v1/account/security-reports", item.owner, request)
+		if created.Status != http.StatusCreated || created.Header.Get("Cache-Control") != "no-store" ||
+			iamv1.DecodeRequest(bytes.NewReader(created.Body), &item.result) != nil || iamv1.ValidateCreateAccountSecurityReportResponse(item.result) != nil ||
+			item.result.Outcome != "APPLIED" || item.result.Metadata.AccountID != item.account {
+			t.Fatalf("create process security report account=%s status=%d", item.account, created.Status)
+		}
+		var replay iamv1.CreateAccountSecurityReportResponse
+		repeated := performJSON(t, http.MethodPost, replicaEndpoint+"/v1/account/security-reports", item.owner, request)
+		if repeated.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(repeated.Body), &replay) != nil ||
+			replay.Outcome != "EQUAL_REPLAY" || replay.Metadata != item.result.Metadata {
+			t.Fatal("replica changed the completed security report snapshot")
+		}
+		var report iamv1.AccountSecurityReport
+		read := performJSON(t, http.MethodGet, replicaEndpoint+"/v1/account/security-reports/"+string(item.result.Metadata.ID), item.owner, nil)
+		if read.Status != http.StatusOK || read.Header.Get("Cache-Control") != "no-store" ||
+			iamv1.DecodeRequest(bytes.NewReader(read.Body), &report) != nil || iamv1.ValidateAccountSecurityReport(report) != nil ||
+			report.Metadata != item.result.Metadata || report.Metadata.AccountID != item.account {
+			t.Fatalf("read process security report account=%s status=%d", item.account, read.Status)
+		}
+	}
+	if fixtures[0].result.Metadata.ID == fixtures[1].result.Metadata.ID {
+		t.Fatal("independent Accounts received the same security report identity")
+	}
+	for _, attack := range []struct {
+		caller, target string
+	}{{home, string(fixtures[1].result.Metadata.ID)}, {customer, string(fixtures[0].result.Metadata.ID)}} {
+		response := performJSON(t, http.MethodGet, endpoint+"/v1/account/security-reports/"+attack.target, attack.caller, nil)
+		if response.Status != http.StatusNotFound || bytes.Contains(response.Body, []byte(attack.target)) {
+			t.Fatalf("cross-Account security report attack status=%d", response.Status)
+		}
+	}
+	download := performJSON(t, http.MethodGet, endpoint+"/v1/account/security-reports/"+string(fixtures[0].result.Metadata.ID)+"/content", home, nil)
+	if download.Status != http.StatusOK || download.Header.Get("Cache-Control") != "no-store" ||
+		download.Header.Get("Content-Type") != "text/csv; charset=utf-8" ||
+		iamv1.ValidateAccountSecurityReportCSV(fixtures[0].result.Metadata, download.Body) != nil {
+		t.Fatalf("download process security report status=%d", download.Status)
+	}
+	restartIAM()
+	for _, item := range fixtures {
+		var report iamv1.AccountSecurityReport
+		response := performJSON(t, http.MethodGet, endpoint+"/v1/account/security-reports/"+string(item.result.Metadata.ID), item.owner, nil)
+		if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &report) != nil ||
+			iamv1.ValidateAccountSecurityReport(report) != nil || report.Metadata != item.result.Metadata {
+			t.Fatalf("IAM restart lost security report account=%s status=%d", item.account, response.Status)
+		}
+	}
+	waitAllIAMOutboxDelivered(t, ctx, admin)
+	for _, item := range fixtures {
+		page := queryAudit(t, auditEndpoint, item.owner, auditv1.QueryRecordsRequest{PageSize: 10, Action: auditv1.ActionIAMSecurityReportCreated}, http.StatusOK)
+		if page.TenantID != auditv1.TenantID(item.account) || len(page.Records) != 1 ||
+			page.Records[0].Event.Target.Kind != auditv1.TargetSecurityReport || page.Records[0].Event.Target.ID != string(item.result.Metadata.ID) {
+			t.Fatal("security report creation fact escaped its Account chain")
+		}
+		chain := verifyAudit(t, auditEndpoint, item.owner)
+		if chain.TenantID != auditv1.TenantID(item.account) || chain.State != auditv1.VerificationVerified || !chain.Complete {
+			t.Fatal("security report fact broke the Account Audit chain")
+		}
+	}
+	downloads := queryAudit(t, auditEndpoint, home,
+		auditv1.QueryRecordsRequest{PageSize: 10, Action: auditv1.ActionIAMSecurityReportDownloadStarted}, http.StatusOK)
+	if len(downloads.Records) != 1 || downloads.Records[0].Event.Target.ID != string(fixtures[0].result.Metadata.ID) {
+		t.Fatal("security report download fact was not delivered exactly once")
+	}
+}
+
 func proveTenantAccountProcesses(
 	t *testing.T,
 	ctx context.Context,
@@ -7188,6 +7329,7 @@ func proveTenantAccountProcesses(
 	sensitive = append(sensitive, roleOperator.Credential)
 	sensitive = append(sensitive, proveRoleManagementProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, paasEndpoint, bearer, primary.Credential, roleOperator.Credential, withAuditOutage, restartIAM)...)
 	sensitive = append(sensitive, proveAccessKeyProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, paasEndpoint, bearer, primary.Credential, withAuditOutage, restartIAM)...)
+	proveSecurityReportProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, bearer, primary.Credential, restartIAM)
 	sensitive = append(sensitive, proveOwnSessionProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, paasEndpoint, bearer, primary.Credential, withAuditOutage, restartIAM)...)
 	sensitive = append(sensitive, proveOtherSessionProcesses(t, ctx, admin, endpoint, replicaEndpoint, auditEndpoint, paasEndpoint, primary.Credential, withAuditOutage, restartIAM)...)
 	readAccount := func(id string) iamv1.Account {

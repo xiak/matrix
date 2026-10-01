@@ -636,6 +636,7 @@ func SystemPolicyVersion(id iamv1.PolicyID) (iamv1.PolicyVersion, error) {
 			iamv1.ActionIAMRolePermissionBoundarySet, iamv1.ActionIAMRolePermissionBoundaryRemove, iamv1.ActionIAMRoleAssume,
 			iamv1.ActionIAMRoleSessionList, iamv1.ActionIAMRoleSessionRead, iamv1.ActionIAMRoleSessionRevoke,
 			iamv1.ActionIAMSessionRevoke,
+			iamv1.ActionIAMSecurityReportCreate, iamv1.ActionIAMSecurityReportRead, iamv1.ActionIAMSecurityReportDownload,
 			iamv1.ActionPaaSApplicationCreate, iamv1.ActionPaaSApplicationRead,
 			iamv1.ActionPaaSApplicationLabelSet, iamv1.ActionPaaSApplicationLabelDelete,
 			iamv1.ActionPaaSConfigurationCreate, iamv1.ActionPaaSConfigurationRead,

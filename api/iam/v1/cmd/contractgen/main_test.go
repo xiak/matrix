@@ -103,6 +103,38 @@ func TestSecuritySettingsPublishesExactMutationAndOwnCompletion(t *testing.T) {
 	}
 }
 
+func TestSecurityReportPublishesOnlyCurrentAccountCreateReadAndCSV(t *testing.T) {
+	paths := buildPaths()
+	collection := paths["/v1/account/security-reports"].(object)
+	if len(collection) != 1 || collection["post"] == nil {
+		t.Fatal("security reports expose a directory or another collection method")
+	}
+	post := collection["post"].(object)
+	if post["operationId"] != "createAccountSecurityReport" || post["parameters"] != nil {
+		t.Fatal("security report creation exposes an authority selector")
+	}
+	request := post["requestBody"].(object)["content"].(object)["application/json"].(object)["schema"].(object)
+	if request["$ref"] != "#/components/schemas/CreateAccountSecurityReportRequest" {
+		t.Fatal("security report creation uses another request")
+	}
+	read := paths["/v1/account/security-reports/{reportId}"].(object)
+	download := paths["/v1/account/security-reports/{reportId}/content"].(object)
+	for name, route := range map[string]object{"read": read, "download": download} {
+		if len(route) != 1 || route["get"] == nil {
+			t.Fatal(name, " security report route exposes another method")
+		}
+		parameters := route["get"].(object)["parameters"].([]any)
+		if len(parameters) != 1 || parameters[0].(object)["name"] != "reportId" || parameters[0].(object)["in"] != "path" {
+			t.Fatal(name, " security report route accepts another selector")
+		}
+	}
+	csvResponse := download["get"].(object)["responses"].(object)["200"].(object)
+	if csvResponse["content"].(object)["text/csv"] == nil || csvResponse["headers"].(object)["Cache-Control"] == nil ||
+		csvResponse["headers"].(object)["Content-Disposition"] == nil {
+		t.Fatal("security report download is not a protected bounded CSV response")
+	}
+}
+
 func TestInitialEnrollmentDocumentsItsOwnCredentialCarrier(t *testing.T) {
 	paths := buildDocument()["paths"].(object)
 	for _, sample := range []struct{ path, operation, request, response string }{

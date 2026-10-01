@@ -1,6 +1,6 @@
 # FEAT-IAM-009：登录保护与安全治理
 
-- 状态：S1本人会话管理、S3a共享密码尝试、S2分项及S3b密码规则/历史与管理员重置完成查询已有固定实现和真实证据。S3c后端累计固定`b9483f82`的[Verification36532338140](https://github.com/xiak/matrix/actions/runs/36532338140)已核对精确SHA、completed/success，13项全部通过；实际一天观察的固定`87e1c143`及[Verification36545493632](https://github.com/xiak/matrix/actions/runs/36545493632)也已核对精确SHA、completed/success，13项全部通过，但它只证明截止前准备和现有回归，截止后门禁尚未发生。Session idle源码候选已完成API/SQL、双副本、真实最低五分钟、固定前驱和五进程本地门禁，独立CI、LIVE UI及发布组合未完成。S4、资格变化的旧备份恢复及009完整发布仍未完成。旧失败不回填，修复与证据见所属段落及011；以下设计不等于发布可用性，签名安装及通知/恢复组合由对应owner另验。
+- 状态：S1本人会话管理、S3a共享密码尝试、S2分项及S3b密码规则/历史与管理员重置完成查询已有固定实现和真实证据。S3c后端累计固定`b9483f82`的[Verification36532338140](https://github.com/xiak/matrix/actions/runs/36532338140)已核对精确SHA、completed/success，13项全部通过；实际一天观察的固定`87e1c143`及[Verification36545493632](https://github.com/xiak/matrix/actions/runs/36545493632)也已核对精确SHA、completed/success，13项全部通过，但它只证明截止前准备和现有回归，截止后门禁尚未发生。Session idle源码候选已完成API/SQL、双副本、真实最低五分钟、固定前驱和五进程本地门禁，独立CI、LIVE UI及发布组合未完成。S4a账号安全报告后端候选已完成公开契约、同事务快照、受限持久化、HTTP、真实PG18纵向门禁、唯一固定前驱和独立多进程本地门禁；固定提交、独立CI、真库到期清理、设置竞争、安装、实际表格及LIVE UI仍未完成。S4其余诊断/治理、资格变化的旧备份恢复及009完整发布仍未完成。旧失败不回填，修复与证据见所属段落及011；以下设计不等于发布可用性，签名安装及通知/恢复组合由对应owner另验。
 - 依赖：003、005、007。
 - Owner：IAM 身份/凭据/会话治理，Audit evidence。
 
@@ -1350,7 +1350,23 @@ Account的`security-settings`增加明确的`session.idleTimeoutMinutes`，默�
 
 ### S4：安全报告、权限诊断与闲置治理
 
-本节细化IAM-SEC-05/06，不新增运行入口。最小路径是：有当前权限的账号安全人员查看本账号User/Key状态、真实使用证据和明确缺口，生成/下载同一份有界报告，选择目标后以当前权限显式处置；另一账号、已撤权用户和平台运营身份不能借reportId、cursor或下载地址读到内容。自动闲置处置是后继执行切片，不因能下载报表而取得后台全租户修改权，完整009仍需实现其已启用治理规则并实跑。
+本节细化IAM-SEC-05/06；下述S4a冻结首个运行入口，其余诊断与自动治理仍只有设计。最小路径是：有当前权限的账号安全人员查看本账号User/Key状态、真实使用证据和明确缺口，生成/下载同一份有界报告，选择目标后以当前权限显式处置；另一账号、已撤权用户和平台运营身份不能借reportId、cursor或下载地址读到内容。自动闲置处置是后继执行切片，不因能下载报表而取得后台全租户修改权，完整009仍需实现其已启用治理规则并实跑。
+
+#### S4a执行片：IAM账号安全报告
+
+首个可验收切片只生成`AccountSecurityReport`，不创建第二套账号、主体、活动或授权模型。报告范围只能是当前有效LOGIN_SESSION推导出的Account；请求没有accountId、tenantId、userId、产品、时间水位或数据源selector。平台操作员、ServiceIdentity、RoleSession和AccessKey不因其身份名称或安装归属取得入口。RootIdentity与普通USER一样必须拥有当前精确权限，不能由受保护身份性质隐式放行。
+
+封闭Action为`iam.security-report.create`、`iam.security-report.read`和`iam.security-report.download`。create作用于当前ACCOUNT实例并产生SECURITY_REPORT；read/download只作用于报告实例。第一片HTTP固定为`POST /v1/account/security-reports`、`GET /v1/account/security-reports/{reportId}`和`GET /v1/account/security-reports/{reportId}/content`。沿现有IAM请求约定，create body只含requestId和固定`formatVersion=1`，API版本由媒体类型/路由契约确定；GET只接受路径中的规范reportId，不接受身份、范围、格式或下载地址selector。create同步完成或整体失败，不暴露PENDING任务、轮询token或可替换的存储URL；准确重放返回原报告元数据，不能以相同requestId重新观察今天的状态。
+
+版本1只封存同一数据库只读一致快照内IAM可以独立证明的内容：Account ID和安全设置版本；每个USER的ID、类型、状态、resourceVersion、是否原root、MFA资格状态、最后一次已提交密码登录Session发行时间；每把AccessKey的ID、所属USER、状态、resourceVersion、创建时间、网络限制和最新不可变授权观测。AccessKey观测沿007的真实Allow/Deny证据，不能把Allow写成业务成功。Session发行不存在时表示`NOT_OBSERVED_IN_RETAINED_IAM_STATE`，不能写“从未登录”；缺少旧谱系、未知MFA资格或不能证明的活动使用显式`UNKNOWN`及原因，不能默认安全或自动建议停用。Role承担、RoleSession业务活动、PaaS结果、Audit统计、通知送达和外部风险均准确标记`NOT_INCLUDED`，本片禁止跨库扫描或伪造联合水位。
+
+报告正文是生成时不可变的规范结构及由同一结构生成的CSV v1；保存正文摘要、observedAt、覆盖声明、USER/Key/总行数、字节数和expiresAt。数据库一致快照是生成事务的内部正确性边界，不暴露无持久语义的PostgreSQL snapshot ID。CSV每行一种稳定资源类型，不把Key写死为列组；v1只导出受契约字符集限制的资源ID、loginName、枚举、规范CIDR、版本和时间，不导出自由displayName、标签或描述，从输入域消除公式前缀而不是猜测各表格程序的转义。单一导出编码器仍须验证分隔符、引号、换行和公式攻击，在实际支持的表格程序门禁通过前content入口失败关闭。JSON读取可包含displayName，但它不进入CSV。响应使用`Cache-Control: no-store`及受保护连接，不生成公开URL。
+
+第一片硬预算为每个报告最多1000个USER、2000把AccessKey、3001个数据行（含ACCOUNT）及4MiB规范CSV；任一上限超出就整体拒绝，不截断、不抽样、不形成成功事实。报告保留7天；每Account最多20个未过期报告。到期报告不能读取或下载，清理仅删除正文投影并保留最小不可变完成关系，不能因此删除原身份、决定、outbox或Audit事实。容量、保留和正文托管必须在真实PostgreSQL与安装备份边界验证，不能落到本机临时目录。
+
+生成在同一事务重验当前LOGIN_SESSION、Account/USER/凭据代际、账号状态、精确create权限和全部预算，封存正文、摘要、完成关系、`iam.security-report.created`租户事实及outbox后才成功。read/download每次重新验证当前身份、Account和相应Action；reportId存在、原创建者仍有效或创建时曾有权限都不能代替当前授权。download受理以`iam.security-report.download-started`记录调用身份和报告目标，不记录正文，也只证明服务端开始发送；权限撤销后新请求立即拒绝，已发送字节不声称可收回。两个事实均要求真实USER actor、SECURITY_REPORT target和原精确Decision，不能用SYSTEM、泛化账号动作或空Decision代替。
+
+S4a不提供报告目录、共享链接、自动规则、后台停用、详细历史Deny解释或跨产品联合报告；这些仍由后继S4切片完成。首片最低真实门禁覆盖两Account同reportId攻击、创建/读取/下载逐项撤权、账号及USER停用、请求重放/变体/回包丢失、容量与正文末端失败、到期/清理/重启、旧数据UNKNOWN语义、秘密扫描、CSV攻击，以及报告生成与User/Key/Session/设置变化的双向事务次序。报告永远不是后续写操作的permit；处置继续调用现有生命周期入口并重新核对当前版本和权限。
 
 固定`644fff09`已有CurrentIdentity的直接/组PolicySources、PermissionBoundary、非权威ActionCapability，以及不可变决定与outbox；公开DecisionReason仅ALLOWED/DENIED。AccessKey元数据只有身份、状态、resourceVersion及创建/修改时间，没有lastUsed；没有安全报告、详细拒绝诊断或闲置调度实现。不能把已有目录、元数据更新时间或Audit链完整等同于这些功能完成。
 
@@ -1381,7 +1397,7 @@ Account的`security-settings`增加明确的`session.idleTimeoutMinutes`，默�
 
 秘密、hash、digest校验材料、MFA种子、恢复码、raw签名、会话bearer及私有PDP证据均不进入报告；仅列必须的公共资源引用和有权限的状态。制品不进入公开目录、静态CDN或免鉴权分享URL，下载响应no-store并经受保护连接；保留/到期清理仅删除报告投影，不清理原Audit/决定/资源。内部持久制品的访问、备份保护和容量由实际存储/安装owner一并验证，不以测试目录文件作为生产托管。
 
-报告生成/下载受理事实记录实际身份、范围和reportId，不记录正文；HTTP发送完成也不证明用户已保存文件。流式传输开始后撤权的中断边界与其他长请求一样明确，不声称已传出的字节可收回。当前尚无这些新的Audit action，不借泛化SYSTEM或现有业务action冒充报告事实。
+报告生成/下载受理事实记录实际身份、范围和reportId，不记录正文；HTTP发送完成也不证明用户已保存文件。流式传输开始后撤权的中断边界与其他长请求一样明确，不声称已传出的字节可收回。候选已增加封闭的`iam.security-report.created`与`iam.security-report.download-started`租户事实，并由真实USER、原请求和精确Decision的延迟完整性约束绑定；本地独立Audit/进程回归已通过，固定源码的独立CI仍未完成，任何环境都不能借泛化SYSTEM或现有业务action替代。
 
 #### 权限来源和拒绝诊断
 
@@ -1407,7 +1423,9 @@ Account的`security-settings`增加明确的`session.idleTimeoutMinutes`，默�
 - CSV恶意显示名、分隔符/双引号/换行/全角公式字符、受支持程序打开/再次保存打开、秘密扫描及下载审计；无外部分享或免鉴权静态文件旁路。UI和实际电子表格验收交所属owner，不以纯文本快照代替。
 - 新活动与停用、修改规则、停用执行者/账号及两个执行副本的双向竞争；旧发现不能覆盖新状态，未知回包/重启/恢复不重做已完成意图。所有资源、既有任务和历史Audit归属保持。
 
-报告字段/预算/保留、各来源查询与水位、精确Action/Audit事实及后台委托资格仍待各owner冻结，均未实现/未验收。继续使用原IAM/Audit与authorityprocess门禁；制品只是可重建投影，不能新增平行权限权威或第二套审计链。
+S4a候选已冻结上述字段、三项Action、两项Audit事实、7天/20份及1000 USER/2000 Key/3001行/4MiB预算，源码形状为IAM61/Audit31；公开OpenAPI与运行校验使用同一类型，当前发布profile仍保持旧已接受组合，不因源码数字变化自动获得升级许可。新增`000017_security_reports`只保存不可变请求回执、可到期删除的正文投影和不可变下载事实，强制RLS且普通API/worker/恢复角色无表权限；生成、精确重放、读取和下载均从当前LOGIN_SESSION推导Account并重新作出准确授权决定。
+
+本地候选证据（2026-10-02）：`TestIAMSecurityReportPostgres`在独立PostgreSQL 18.4数据库通过10.221秒，覆盖显式普通USER授权、真实AccessKey与秘密扫描、创建/读取/CSV下载、精确重放、20份上限及第21份409、双Account reportId攻击、Account/User停复用不复活旧会话、撤权即时拒绝、原制品保留、事实唯一性、受限登录直读拒绝和owner更新/删除/截断拒绝；同一真库门禁还证明先生成的报告在User改名、AccessKey停用及新密码Session签发后保持原值，后生成的报告只反映已提交新值。真库运行先发现并修复两个PL/pgSQL歧义引用，旧失败不回填。用例门禁通过精确到期点前30分钟真实登录取得仍有效Session，证明到期点读取和下载均失败关闭。新增内置Action后的`TestIAMPolicyAuthorityStoragePostgres`在另一独立数据库通过165.347秒；API/Audit/authority/HTTP/identityaccess聚焦包和`test/architecture`通过。唯一滚动前驱已替换为固定`4e79ef783410bbb596232763a9be80412b5e0846`的实际IAM60程序；最终`TestIAMRetainedPredecessorProcessUpgrade`以当前IAM61迁移/程序在第三个独立PG18数据库通过84.735秒，保留真实Session/MFA/邮件/恢复/设置/策略/决定/事实并完成双迁移和重启，删除原IAM59→60缺字段兼容断言，不扩增历史矩阵；旧root不会因迁移自动取得新增Action，显式策略授权后，最新NULL凭据谱系报告为`UNKNOWN`，后继真实密码Session只使新报告成为`OBSERVED`，原报告保持不变。`TestIndependentIAMAuditAndPaaSProcesses`最终在另一独立PG18数据库通过200.224秒：两个Account以相同requestId跨IAM副本生成/等值重放/读取，跨Account reportId拒绝，CSV下载、Audit入链及IAM重启保留均成立。仍未完成真库7天到期清理、security-settings变化与报告生成的受控双向竞争、独立CI、安装备份/恢复、实际电子表格打开再保存、LIVE UI；这些门禁通过前S4a不标记已验收。S4后继的详细拒绝诊断和自动闲置处置仍只有设计，继续使用原IAM/Audit与authorityprocess门禁；报告只是可重建投影，不能成为平行权限权威或第二套审计链。
 
 ## 验收
 

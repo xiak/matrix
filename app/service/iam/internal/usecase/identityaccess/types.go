@@ -125,6 +125,11 @@ type Transaction interface {
 	RevokePolicyAttachment(context.Context, PolicyAttachmentRevocationMutation) (iamv1.Revocation, bool, error)
 	ReadAccount(context.Context, iamv1.AccountID, iamv1.PrincipalID) (iamv1.Account, error)
 	ReadAccountSecuritySettings(context.Context, AccountRead) (iamv1.AccountSecuritySettings, error)
+	ReadSecurityReportSnapshot(context.Context, AccountRead) (SecurityReportSnapshot, error)
+	ReadSecurityReportByRequest(context.Context, AccountRead, string, string) (iamv1.AccountSecurityReportMetadata, bool, error)
+	CreateSecurityReport(context.Context, SecurityReportCreation) (iamv1.CreateAccountSecurityReportResponse, error)
+	ReadSecurityReport(context.Context, AccountRead, iamv1.SecurityReportID) (iamv1.AccountSecurityReport, error)
+	DownloadSecurityReport(context.Context, SecurityReportDownload) (SecurityReportDownloadResult, error)
 	LockAccountSecuritySettings(context.Context, iamv1.Session) error
 	UpdateAccountSecuritySettings(context.Context, SecuritySettingsMutation) (iamv1.UpdateAccountSecuritySettingsResponse, error)
 	ReadSecuritySettingsChange(context.Context, AccountRead, string) (iamv1.AccountSecuritySettingsChange, error)
@@ -201,8 +206,39 @@ type Transaction interface {
 type AccountRead struct {
 	AccountID        iamv1.AccountID
 	ActorPrincipalID iamv1.PrincipalID
+	ActorSessionID   iamv1.SessionID
 	DecisionID       iamv1.DecisionID
 	After            string
+}
+
+type SecurityReportSnapshot struct {
+	ObservedAt                     time.Time                       `json:"observedAt"`
+	AccountSecuritySettingsVersion uint64                          `json:"accountSecuritySettingsVersion"`
+	Users                          []iamv1.SecurityReportUser      `json:"users"`
+	AccessKeys                     []iamv1.SecurityReportAccessKey `json:"accessKeys"`
+}
+
+type SecurityReportCreation struct {
+	AccountRead
+	Session       iamv1.Session
+	RequestID     string
+	RequestDigest string
+	Report        iamv1.AccountSecurityReport
+	CSV           []byte
+	AuditEvent    auditv1.Event
+}
+
+type SecurityReportDownload struct {
+	AccountRead
+	Session    iamv1.Session
+	ReportID   iamv1.SecurityReportID
+	RequestID  string
+	AuditEvent auditv1.Event
+}
+
+type SecurityReportDownloadResult struct {
+	Metadata iamv1.AccountSecurityReportMetadata
+	CSV      []byte
 }
 
 // Private, nonsecret custody evidence; never a caller-selected installation.

@@ -2045,6 +2045,114 @@ func TestIAMHTTPUserDetailUpdateAndDeleteAreBoundToTheRoute(t *testing.T) {
 	}
 }
 
+func TestIAMHTTPSecurityReportRoutesAreCredentialBoundAndNoStore(t *testing.T) {
+	report, csvDocument := httpSecurityReportFixture(t)
+	workflow := newHTTPWorkflow(t)
+	workflow.securityReport = report
+	workflow.securityReportCSV = csvDocument
+	workflow.securityReportOutcome = "APPLIED"
+	handler := newTestHandler(t, workflow)
+
+	create := httptest.NewRequest(http.MethodPost, "/v1/account/security-reports", strings.NewReader(`{"requestId":"report-request","formatVersion":1}`))
+	create.Header.Set("Authorization", "Bearer current")
+	create.Header.Set("Content-Type", "application/json")
+	created := httptest.NewRecorder()
+	handler.ServeHTTP(created, create)
+	if created.Code != http.StatusCreated || workflow.securityReportCreateCalls != 1 ||
+		workflow.securityReportRequest.RequestID != "report-request" || workflow.securityReportRequest.FormatVersion != 1 ||
+		string(workflow.securityReportCredential.CopyBytes()) != "current" {
+		t.Fatalf("security report create status=%d calls=%d request=%#v", created.Code, workflow.securityReportCreateCalls, workflow.securityReportRequest)
+	}
+	var response iamv1.CreateAccountSecurityReportResponse
+	if json.Unmarshal(created.Body.Bytes(), &response) != nil || response.Outcome != "APPLIED" || response.Metadata != report.Metadata {
+		t.Fatalf("security report create response=%s", created.Body.String())
+	}
+
+	for _, endpoint := range []struct {
+		path     string
+		content  bool
+		expected string
+	}{
+		{path: "/v1/account/security-reports/report-one"},
+		{path: "/v1/account/security-reports/report-one/content", content: true, expected: string(csvDocument)},
+	} {
+		request := httptest.NewRequest(http.MethodGet, endpoint.path, nil)
+		request.Header.Set("Authorization", "Bearer current")
+		result := httptest.NewRecorder()
+		handler.ServeHTTP(result, request)
+		if result.Code != http.StatusOK || result.Header().Get("Cache-Control") != "no-store" {
+			t.Fatalf("security report read path=%s status=%d headers=%#v", endpoint.path, result.Code, result.Header())
+		}
+		if endpoint.content {
+			if result.Body.String() != endpoint.expected || result.Header().Get("Content-Type") != "text/csv; charset=utf-8" ||
+				result.Header().Get("Content-Disposition") != `attachment; filename="matrix-iam-security-report-report-one.csv"` {
+				t.Fatalf("security report content headers=%#v body=%q", result.Header(), result.Body.String())
+			}
+		} else {
+			var actual iamv1.AccountSecurityReport
+			if json.Unmarshal(result.Body.Bytes(), &actual) != nil || !reflect.DeepEqual(actual, report) {
+				t.Fatalf("security report body=%s", result.Body.String())
+			}
+		}
+	}
+	if workflow.securityReportReadCalls != 1 || workflow.securityReportDownloadCalls != 1 || workflow.securityReportID != "report-one" {
+		t.Fatalf("security report calls read=%d download=%d id=%q", workflow.securityReportReadCalls, workflow.securityReportDownloadCalls, workflow.securityReportID)
+	}
+
+	for _, sample := range []struct{ method, path, body string }{
+		{http.MethodPost, "/v1/account/security-reports?accountId=other", `{"requestId":"report-request","formatVersion":1}`},
+		{http.MethodPost, "/v1/account/security-reports", `{"requestId":"report-request","formatVersion":1,"accountId":"other"}`},
+		{http.MethodGet, "/v1/account/security-reports/report-one?accountId=other", ""},
+		{http.MethodGet, "/v1/account/security-reports/report-one/content/nested", ""},
+		{http.MethodPut, "/v1/account/security-reports/report-one", ""},
+	} {
+		request := httptest.NewRequest(sample.method, sample.path, strings.NewReader(sample.body))
+		request.Header.Set("Authorization", "Bearer current")
+		result := httptest.NewRecorder()
+		handler.ServeHTTP(result, request)
+		if result.Code < 400 || workflow.securityReportCreateCalls != 1 || workflow.securityReportReadCalls != 1 || workflow.securityReportDownloadCalls != 1 {
+			t.Fatalf("invalid security report route method=%s path=%s status=%d", sample.method, sample.path, result.Code)
+		}
+	}
+
+	workflow.securityReportErr = identityaccess.ErrSecurityReportNotFound
+	notFound := httptest.NewRequest(http.MethodGet, "/v1/account/security-reports/report-missing", nil)
+	notFound.Header.Set("Authorization", "Bearer current")
+	notFoundResult := httptest.NewRecorder()
+	handler.ServeHTTP(notFoundResult, notFound)
+	if notFoundResult.Code != http.StatusNotFound || !strings.Contains(notFoundResult.Body.String(), "iam.security-report.not-found") {
+		t.Fatalf("missing security report status=%d body=%s", notFoundResult.Code, notFoundResult.Body.String())
+	}
+}
+
+func httpSecurityReportFixture(t testing.TB) (iamv1.AccountSecurityReport, []byte) {
+	t.Helper()
+	observed := time.Date(2026, 10, 2, 8, 9, 10, 0, time.UTC)
+	report := iamv1.AccountSecurityReport{
+		Metadata: iamv1.AccountSecurityReportMetadata{APIVersion: iamv1.APIVersion, Kind: "AccountSecurityReportMetadata",
+			ID: "report-one", AccountID: "account-one", FormatVersion: 1, ObservedAt: observed, ExpiresAt: observed.Add(iamv1.SecurityReportRetention),
+			DocumentDigest: "sha256:" + strings.Repeat("0", 64), CSVContentDigest: "sha256:" + strings.Repeat("0", 64), UserCount: 1, RowCount: 2, CSVBytes: 1},
+		AccountSecuritySettingsVersion: 1, Coverage: iamv1.SecurityReportCoverageContract(),
+		Users: []iamv1.SecurityReportUser{{ID: "user-root", LoginName: "root", DisplayName: "Root", Status: iamv1.PrincipalActive,
+			Root: true, ResourceVersion: 1, CreatedAt: observed.Add(-time.Hour), MFA: iamv1.SecurityReportMFAState{EnrollmentState: "NEVER_BOUND", FactorRevision: 1},
+			LastPasswordLogin: iamv1.SecurityReportTimeObservation{State: iamv1.SecurityReportNotObservedInRetainedIAMState}}},
+		AccessKeys: []iamv1.SecurityReportAccessKey{},
+	}
+	_, documentDigest, err := iamv1.CanonicalizeAccountSecurityReportDocument(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csvDocument, csvDigest, err := iamv1.EncodeAccountSecurityReportCSV(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	report.Metadata.DocumentDigest, report.Metadata.CSVContentDigest, report.Metadata.CSVBytes = documentDigest, csvDigest, uint32(len(csvDocument))
+	if iamv1.ValidateAccountSecurityReport(report) != nil {
+		t.Fatal("invalid HTTP security report fixture")
+	}
+	return report, csvDocument
+}
+
 type httpWorkflow struct {
 	resetCompletion            iamv1.UserPasswordResetCompletion
 	resetCompletionCalls       int
@@ -2110,6 +2218,16 @@ type httpWorkflow struct {
 	settingsRequest                  iamv1.UpdateAccountSecuritySettingsRequest
 	settingsChange                   iamv1.AccountSecuritySettingsChange
 	settingsCommand                  string
+	securityReport                   iamv1.AccountSecurityReport
+	securityReportCSV                []byte
+	securityReportOutcome            string
+	securityReportErr                error
+	securityReportCreateCalls        int
+	securityReportReadCalls          int
+	securityReportDownloadCalls      int
+	securityReportCredential         iamv1.Secret
+	securityReportRequest            iamv1.CreateAccountSecurityReportRequest
+	securityReportID                 iamv1.SecurityReportID
 	workloadBindingCalls             int
 	workloadServiceCredential        iamv1.Secret
 	workloadSubjectCredential        iamv1.Secret
@@ -2133,6 +2251,24 @@ type httpWorkflow struct {
 	serviceRoleSessionResult         iamv1.AssumeRoleResponse
 	serviceRoleSessionFound          bool
 	serviceRoleSessionErr            error
+}
+
+func (value *httpWorkflow) CreateAccountSecurityReport(_ context.Context, credential iamv1.Secret, request iamv1.CreateAccountSecurityReportRequest) (iamv1.CreateAccountSecurityReportResponse, error) {
+	value.securityReportCreateCalls++
+	value.securityReportCredential, value.securityReportRequest = credential, request
+	return iamv1.CreateAccountSecurityReportResponse{Outcome: value.securityReportOutcome, Metadata: value.securityReport.Metadata}, value.securityReportErr
+}
+
+func (value *httpWorkflow) AccountSecurityReport(_ context.Context, credential iamv1.Secret, id iamv1.SecurityReportID, _ string) (iamv1.AccountSecurityReport, error) {
+	value.securityReportReadCalls++
+	value.securityReportCredential, value.securityReportID = credential, id
+	return value.securityReport, value.securityReportErr
+}
+
+func (value *httpWorkflow) DownloadAccountSecurityReport(_ context.Context, credential iamv1.Secret, id iamv1.SecurityReportID, _ string) ([]byte, error) {
+	value.securityReportDownloadCalls++
+	value.securityReportCredential, value.securityReportID = credential, id
+	return append([]byte(nil), value.securityReportCSV...), value.securityReportErr
 }
 
 func (value *httpWorkflow) UserPasswordResetCompletion(_ context.Context, credential iamv1.Secret, user iamv1.PrincipalID, command string, version uint64, _ string) (iamv1.UserPasswordResetCompletion, error) {

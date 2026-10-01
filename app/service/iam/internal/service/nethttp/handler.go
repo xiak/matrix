@@ -30,6 +30,9 @@ type Workflow interface {
 	AccountSecuritySettings(context.Context, iamv1.Secret, string) (iamv1.AccountSecuritySettings, error)
 	UpdateAccountSecuritySettings(context.Context, iamv1.Secret, iamv1.UpdateAccountSecuritySettingsRequest) (iamv1.UpdateAccountSecuritySettingsResponse, error)
 	SecuritySettingsChange(context.Context, iamv1.Secret, string, string) (iamv1.AccountSecuritySettingsChange, error)
+	CreateAccountSecurityReport(context.Context, iamv1.Secret, iamv1.CreateAccountSecurityReportRequest) (iamv1.CreateAccountSecurityReportResponse, error)
+	AccountSecurityReport(context.Context, iamv1.Secret, iamv1.SecurityReportID, string) (iamv1.AccountSecurityReport, error)
+	DownloadAccountSecurityReport(context.Context, iamv1.Secret, iamv1.SecurityReportID, string) ([]byte, error)
 	ListUsers(context.Context, iamv1.Secret, string, string) (iamv1.UserList, error)
 	GetUser(context.Context, iamv1.Secret, iamv1.PrincipalID, string) (iamv1.UserAccess, error)
 	GetUserPermissionBoundary(context.Context, iamv1.Secret, iamv1.PrincipalID, string) (iamv1.UserPermissionBoundary, error)
@@ -219,6 +222,8 @@ func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 	routes.HandleFunc("/v1/accounts", value.accounts)
 	routes.HandleFunc("/v1/accounts/", value.account)
 	routes.HandleFunc("/v1/account:alias", value.setAccountAlias)
+	routes.HandleFunc("/v1/account/security-reports", value.securityReports)
+	routes.HandleFunc("/v1/account/security-reports/", value.securityReport)
 	routes.HandleFunc("/v1/account/security-settings", value.accountSecuritySettings)
 	routes.HandleFunc("/v1/account/security-settings/changes/", value.securitySettingsChange)
 	routes.HandleFunc("/v1/auth/logout", value.logout)
@@ -1308,6 +1313,72 @@ func directoryPage(response http.ResponseWriter, request *http.Request, validate
 	return values[0], true
 }
 
+func (value *handler) securityReports(response http.ResponseWriter, request *http.Request) {
+	if !value.requireMethod(response, request, http.MethodPost) || !rejectQuery(response, request) {
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	body, ok := decodeJSON[iamv1.CreateAccountSecurityReportRequest](value, response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.CreateAccountSecurityReport(request.Context(), credential, body)
+	if err == nil {
+		err = iamv1.ValidateCreateAccountSecurityReportResponse(result)
+	}
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	status := http.StatusCreated
+	if result.Outcome == "EQUAL_REPLAY" {
+		status = http.StatusOK
+	}
+	writeJSON(response, status, result)
+}
+
+func (value *handler) securityReport(response http.ResponseWriter, request *http.Request) {
+	download := strings.HasSuffix(request.URL.Path, "/content")
+	suffix := ""
+	if download {
+		suffix = "/content"
+	}
+	id, ok := commandPathID(response, request, "/v1/account/security-reports/", suffix, "reportId")
+	if !ok || !value.requireMethod(response, request, http.MethodGet) || !rejectQueryAndBody(response, request) {
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	if download {
+		result, err := value.workflow.DownloadAccountSecurityReport(request.Context(), credential, iamv1.SecurityReportID(id), requestID(request))
+		if err != nil {
+			value.writeError(response, request, err)
+			return
+		}
+		response.Header().Set("Cache-Control", "no-store")
+		response.Header().Set("Content-Disposition", `attachment; filename="matrix-iam-security-report-`+id+`.csv"`)
+		response.Header().Set("Content-Type", "text/csv; charset=utf-8")
+		response.WriteHeader(http.StatusOK)
+		_, _ = response.Write(result)
+		return
+	}
+	result, err := value.workflow.AccountSecurityReport(request.Context(), credential, iamv1.SecurityReportID(id), requestID(request))
+	if err == nil {
+		err = iamv1.ValidateAccountSecurityReport(result)
+	}
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	response.Header().Set("Cache-Control", "no-store")
+	writeJSON(response, http.StatusOK, result)
+}
+
 func (value *handler) accountSecuritySettings(response http.ResponseWriter, request *http.Request) {
 	if request.Method != http.MethodGet && request.Method != http.MethodPut {
 		response.Header().Set("Allow", "GET, PUT")
@@ -1829,6 +1900,8 @@ func (value *handler) writeError(response http.ResponseWriter, request *http.Req
 		writeProblem(response, requestID, http.StatusNotFound, "iam.authenticator-removal.not-found", "Authenticator removal not found")
 	case errors.Is(err, identityaccess.ErrSecuritySettingsChangeNotFound):
 		writeProblem(response, requestID, http.StatusNotFound, "iam.security-settings-change.not-found", "Security settings change not found")
+	case errors.Is(err, identityaccess.ErrSecurityReportNotFound):
+		writeProblem(response, requestID, http.StatusNotFound, "iam.security-report.not-found", "Security report not found")
 	case errors.Is(err, identityaccess.ErrUserPasswordResetCompletionNotFound):
 		writeProblem(response, requestID, http.StatusNotFound, "iam.user-password-reset-completion.not-found", "User password reset completion not found")
 	case errors.Is(err, identityaccess.ErrVerificationRejected):

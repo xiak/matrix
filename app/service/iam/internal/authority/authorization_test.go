@@ -2600,10 +2600,21 @@ func TestLegacySystemInterpretationDoesNotAdmitUnprovedCustomerVersions(t *testi
 		legacyDocument.Statements[index].Actions = slices.DeleteFunc(slices.Clone(legacyDocument.Statements[index].Actions), func(action iamv1.Action) bool {
 			return !legacyActions[action]
 		})
+		legacyResourceKinds := make(map[iamv1.ResourceKind]bool)
+		for _, action := range legacyDocument.Statements[index].Actions {
+			definition, known := iamv1.LookupActionDefinition(action)
+			if !known {
+				t.Fatal("fixed legacy action is no longer registered", action)
+			}
+			legacyResourceKinds[definition.ResourceKind] = true
+		}
 		legacyDocument.Statements[index].Resources = slices.DeleteFunc(slices.Clone(legacyDocument.Statements[index].Resources), func(resource iamv1.PolicyResourceSelector) bool {
-			return resource.Kind == iamv1.ResourceRole || resource.Kind == iamv1.ResourceRoleSession
+			return !legacyResourceKinds[resource.Kind]
 		})
 	}
+	legacyDocument.Statements = slices.DeleteFunc(legacyDocument.Statements, func(statement iamv1.PolicyStatement) bool {
+		return len(statement.Actions) == 0 || len(statement.Resources) == 0
+	})
 	_, digest, err := iamv1.CanonicalizePolicyDocument(legacyDocument)
 	if err != nil {
 		t.Fatal(err)
