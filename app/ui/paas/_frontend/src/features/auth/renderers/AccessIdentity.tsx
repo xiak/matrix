@@ -1,7 +1,7 @@
 "use client";
 import { useId, useLayoutEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Badge, Checkbox, FormField, Input, Select, TextArea } from "@ui/xiak";
+import { Alert, Badge, Checkbox, FormField, Input, Select, TextArea } from "@ui/xiak";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import type { AccessWorkspace, FederatedAccount, IdentityProvider } from "../domain/accessWorkspace";
 import { WorkspaceCollection, WorkspaceDelete, WorkspaceDetail, WorkspaceInlineForm, WorkspaceTime } from "./AccessWorkspaceUi";
@@ -13,16 +13,23 @@ function ProviderEditor({ provider, onClose }: { provider?: IdentityProvider; on
   const id = useId();
   const [name, setName] = useState(provider?.name ?? "");
   const [protocol, setProtocol] = useState<IdentityProvider["protocol"]>(provider?.protocol ?? "SAML");
-  const [issuer, setIssuer] = useState(provider?.issuer ?? "");
-  const [audience, setAudience] = useState(provider?.audience ?? "");
-  const [metadata, setMetadata] = useState(provider?.metadata ?? "");
+  const [drafts, setDrafts] = useState<Record<IdentityProvider["protocol"], Pick<IdentityProvider, "issuer" | "audience" | "metadata">>>(() => ({
+    SAML: provider?.protocol === "SAML" ? { issuer: provider.issuer, audience: provider.audience, metadata: provider.metadata } : { issuer: "", audience: "", metadata: "" },
+    OIDC: provider?.protocol === "OIDC" ? { issuer: provider.issuer, audience: provider.audience, metadata: provider.metadata } : { issuer: "", audience: "", metadata: "" }
+  }));
   const [enabled, setEnabled] = useState(provider?.enabled ?? true);
-  return <WorkspaceInlineForm title={provider ? t("edit") + " · " + provider.name : t("createProvider")} backLabel={t(provider ? "backToProviderDetails" : "backToProviderDirectory")} onClose={onClose} onSubmit={async () => Boolean(await access.executeWorkspace({ kind: "save-provider", id: provider?.id, name, protocol, issuer, audience, metadata, enabled }))}>
+  const draft = drafts[protocol];
+  const updateDraft = (field: keyof typeof draft, value: string) => setDrafts((current) => ({ ...current, [protocol]: { ...current[protocol], [field]: value } }));
+  const issuerLabel = t(protocol === "SAML" ? "providerSamlIssuer" : "providerOidcIssuer");
+  const audienceLabel = t(protocol === "SAML" ? "providerSamlAudience" : "providerOidcClientId");
+  const metadataLabel = t(protocol === "SAML" ? "providerSamlMetadata" : "providerOidcJwks");
+  return <WorkspaceInlineForm title={provider ? t("edit") + " · " + provider.name : t("createProvider")} backLabel={t(provider ? "backToProviderDetails" : "backToProviderDirectory")} onClose={onClose} onSubmit={async () => Boolean(await access.executeWorkspace({ kind: "save-provider", id: provider?.id, name, protocol, ...draft, enabled }))}>
+    <Alert status="info">{t("providerPreviewBoundary")}</Alert>
     <FormField id={id + "-name"} label={t("name")}><Input id={id + "-name"} required maxLength={64} value={name} onChange={(event) => setName(event.target.value)} /></FormField>
     <FormField id={id + "-protocol"} label={t("protocol")}><Select id={id + "-protocol"} value={protocol} options={["SAML", "OIDC"].map((value) => ({ value, label: value }))} onValueChange={(value) => setProtocol(value as IdentityProvider["protocol"])} /></FormField>
-    <FormField id={id + "-issuer"} label={t("issuer")}><Input id={id + "-issuer"} type="url" required placeholder="https://identity.example.invalid" value={issuer} onChange={(event) => setIssuer(event.target.value)} /></FormField>
-    <FormField id={id + "-audience"} label={t("audience")}><Input id={id + "-audience"} required maxLength={256} value={audience} onChange={(event) => setAudience(event.target.value)} /></FormField>
-    <FormField id={id + "-metadata"} label={t("metadata")} hint={t("metadataHint")}><TextArea className={styles.codeEditor} id={id + "-metadata"} aria-describedby={id + "-metadata-hint"} required spellCheck={false} rows={6} maxLength={65536} value={metadata} onChange={(event) => setMetadata(event.target.value)} /></FormField>
+    <FormField id={id + "-issuer"} label={issuerLabel}><Input id={id + "-issuer"} type="url" required placeholder="https://identity.example.invalid" value={draft.issuer} onChange={(event) => updateDraft("issuer", event.target.value)} /></FormField>
+    <FormField id={id + "-audience"} label={audienceLabel}><Input id={id + "-audience"} required maxLength={256} value={draft.audience} onChange={(event) => updateDraft("audience", event.target.value)} /></FormField>
+    <FormField id={id + "-metadata"} label={metadataLabel} hint={t(protocol === "SAML" ? "providerSamlMetadataHint" : "providerOidcJwksHint")}><TextArea className={styles.codeEditor} id={id + "-metadata"} aria-describedby={id + "-metadata-hint"} required spellCheck={false} rows={6} maxLength={65536} value={draft.metadata} onChange={(event) => updateDraft("metadata", event.target.value)} /></FormField>
     <Checkbox checked={enabled} onChange={(event) => setEnabled(event.target.checked)}>{t("enable")}</Checkbox>
   </WorkspaceInlineForm>;
 }
@@ -45,8 +52,9 @@ export function AccessProviders({ workspace }: { workspace: AccessWorkspace }) {
   return <>
     {selected ? <WorkspaceDetail title={selected.name} onBack={() => setSelectedId(null)} actionFocusRef={editTrigger} actions={editing ? undefined : { primary: { id: "edit", label: t("edit"), variant: "secondary", onSelect: () => setEditing(selected) }, secondary: [{ id: "delete", label: t("delete"), danger: true, onSelect: () => setDeleting(selected) }] }}>
       {editing && editing !== "new" ? <ProviderEditor provider={editing} onClose={() => setEditing(null)} /> : <>
-        <dl className={styles.facts}><div><dt>{t("protocol")}</dt><dd>{selected.protocol}</dd></div><div><dt>{t("state")}</dt><dd><Badge status={selected.enabled ? "success" : "neutral"}>{t(selected.enabled ? "enabled" : "disabled")}</Badge></dd></div><div><dt>{t("issuer")}</dt><dd>{selected.issuer}</dd></div><div><dt>{t("audience")}</dt><dd>{selected.audience}</dd></div><div><dt>{t("roles")}</dt><dd>{workspace.roles.filter((role) => role.principalType === "provider" && role.principal === selected.id).map((role) => role.name).join(" · ") || t("none")}</dd></div><div><dt>{t("created")}</dt><dd><WorkspaceTime value={selected.createdAt} /></dd></div></dl>
-        <h3 className={styles.stepTitle}>{t("metadata")}</h3><pre className={styles.code} role="region" aria-label={t("metadata")} tabIndex={0}>{selected.metadata}</pre><p className={styles.note}>{t("metadataHint")}</p>
+        <Alert status="info">{t("providerPreviewBoundary")}</Alert>
+        <dl className={styles.facts}><div><dt>{t("protocol")}</dt><dd>{selected.protocol}</dd></div><div><dt>{t("state")}</dt><dd><Badge status={selected.enabled ? "success" : "neutral"}>{t(selected.enabled ? "enabled" : "disabled")}</Badge></dd></div><div><dt>{t(selected.protocol === "SAML" ? "providerSamlIssuer" : "providerOidcIssuer")}</dt><dd>{selected.issuer}</dd></div><div><dt>{t(selected.protocol === "SAML" ? "providerSamlAudience" : "providerOidcClientId")}</dt><dd>{selected.audience}</dd></div><div><dt>{t("roles")}</dt><dd>{workspace.roles.filter((role) => role.principalType === "provider" && role.principal === selected.id).map((role) => role.name).join(" · ") || t("none")}</dd></div><div><dt>{t("created")}</dt><dd><WorkspaceTime value={selected.createdAt} /></dd></div></dl>
+        <h3 className={styles.stepTitle}>{t(selected.protocol === "SAML" ? "providerSamlMetadata" : "providerOidcJwks")}</h3><pre className={styles.code} role="region" aria-label={t(selected.protocol === "SAML" ? "providerSamlMetadata" : "providerOidcJwks")} tabIndex={0}>{selected.metadata}</pre><p className={styles.note}>{t(selected.protocol === "SAML" ? "providerSamlMetadataHint" : "providerOidcJwksHint")}</p>
       </>}
     </WorkspaceDetail> : <WorkspaceCollection title={t("providers")} description={t("providerHint")} items={workspace.providers} keywords={(provider) => provider.issuer} createFocusRef={createTrigger} create={{ label: t("createProvider"), onClick: () => setEditing("new") }} workflow={editing === "new" ? <ProviderEditor onClose={() => setEditing(null)} /> : undefined} filter={{ label: t("protocol"), options: ["SAML", "OIDC"].map((value) => ({ value, label: value })), matches: (provider, value) => provider.protocol === value }} columns={[t("name"), t("protocol"), t("state"), t("created")]} row={(provider) => <><td><button className={styles.userLink} onClick={() => setSelectedId(provider.id)}>{provider.name}</button><small>{provider.issuer}</small></td><td>{provider.protocol}</td><td><Badge status={provider.enabled ? "success" : "neutral"}>{t(provider.enabled ? "enabled" : "disabled")}</Badge></td><td><WorkspaceTime value={provider.createdAt} /></td></>} />}
     {deleting ? <WorkspaceDelete name={deleting.name} onClose={() => setDeleting(null)} onConfirm={() => access.executeWorkspace({ kind: "delete-provider", id: deleting.id })} /> : null}
