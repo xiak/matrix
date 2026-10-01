@@ -197,14 +197,16 @@ export type AuthorizationConditionKey =
   | "iam.current-time"
   | "iam.principal-id"
   | "request.source-ip"
-  | "request.tag/environment";
+  | "request.tag/environment"
+  | "resource.tag/environment";
 export type AuthorizationSubjectType = "USER" | "SERVICE_ACCOUNT" | "ROLE";
 export type AuthorizationUserAuthenticationMethod = "LOGIN_SESSION" | "ACCESS_KEY";
 
 export type AuthorizationProfileCondition = {
   key: AuthorizationConditionKey;
   valueType: "STRING" | "TIME" | "IP";
-  source: "IAM_AUTHENTICATED_IDENTITY" | "IAM_TRANSACTION_TIME" | "CALLING_SERVICE_NETWORK" | "CALLING_SERVICE_REQUEST_TAG";
+  source: "IAM_AUTHENTICATED_IDENTITY" | "IAM_TRANSACTION_TIME" | "CALLING_SERVICE_NETWORK" |
+    "CALLING_SERVICE_REQUEST_TAG" | "CALLING_SERVICE_RESOURCE_TAG";
 };
 
 export type AuthorizationResourceShape = {

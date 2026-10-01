@@ -88,7 +88,7 @@ const previewAuthorizationProfiles: AuthorizationProfileEntry[] = [
   },
   {
     profile: {
-      product: "paas", revision: 4, callingService: "PAAS", actions: [
+      product: "paas", revision: 5, callingService: "PAAS", actions: [
         { action: "paas.application.create", resourceKind: "APPLICATION", scope: "TENANT",
           resourceShapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_CREATE" }],
           conditions: [
@@ -104,7 +104,8 @@ const previewAuthorizationProfiles: AuthorizationProfileEntry[] = [
             { key: "iam.account-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" },
             { key: "iam.current-time", valueType: "TIME", source: "IAM_TRANSACTION_TIME" },
             { key: "iam.principal-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" },
-            { key: "request.source-ip", valueType: "IP", source: "CALLING_SERVICE_NETWORK" }
+            { key: "request.source-ip", valueType: "IP", source: "CALLING_SERVICE_NETWORK" },
+            { key: "resource.tag/environment", valueType: "STRING", source: "CALLING_SERVICE_RESOURCE_TAG" }
           ] },
         { action: "paas.deployment.read", resourceKind: "DEPLOYMENT", scope: "TENANT",
           resourceShapes: [{ mode: "INSTANCE", prefixAllowed: false }],

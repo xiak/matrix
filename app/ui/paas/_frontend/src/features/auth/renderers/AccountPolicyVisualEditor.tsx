@@ -16,7 +16,8 @@ const conditionLabelKey = {
   "iam.principal-id": "principalId",
   "iam.current-time": "currentTime",
   "request.source-ip": "sourceIp",
-  "request.tag/environment": "environmentRequestTag"
+  "request.tag/environment": "environmentRequestTag",
+  "resource.tag/environment": "environmentResourceTag"
 } as const;
 const stringOperators = ["STRING_EQUALS", "STRING_NOT_EQUALS"] as const;
 const timeOperators = ["DATE_GREATER_THAN_EQUALS", "DATE_LESS_THAN"] as const;
@@ -182,6 +183,7 @@ function StatementFields({ statement, group, onChange }: {
     (action.conditions ?? []).some((condition) => condition.key === definition.key && condition.valueType === definition.valueType && condition.source === definition.source)));
   const trustedNetwork = availableConditions.some((condition) => condition.source === "CALLING_SERVICE_NETWORK");
   const trustedRequestTags = availableConditions.filter((condition) => condition.source === "CALLING_SERVICE_REQUEST_TAG");
+  const trustedResourceTags = availableConditions.filter((condition) => condition.source === "CALLING_SERVICE_RESOURCE_TAG");
   const nextCondition = availableConditions.flatMap((definition) => operatorsFor(definition)
     .map((operator) => ({ key: definition.key, operator }))).find((candidate) => !(statement.conditions ?? []).some((condition) => condition.key === candidate.key && condition.operator === candidate.operator));
   const updateResource = (index: number, next: Resource) => onChange({ ...statement, resources: statement.resources.map((resource, at) => at === index ? next : resource) });
@@ -231,12 +233,14 @@ function StatementFields({ statement, group, onChange }: {
     </section>
     <section className={styles.groupSection} aria-label={t("conditions")}>
       <div className={styles.sectionHeading}><div><h4>{t("conditions")}</h4><p>{t("conditionsHint")}</p></div></div>
-      {trustedNetwork || trustedRequestTags.length ? <div className={styles.conditionCapability}>
+      {trustedNetwork || trustedRequestTags.length || trustedResourceTags.length ? <div className={styles.conditionCapability}>
         <strong>{t("trustedRequestContextTitle")}</strong>
         {trustedNetwork ? <p>{t("trustedNetworkCapability")}</p> : null}
         {trustedRequestTags.length ? <p>{t("trustedRequestTagCapability", { keys: trustedRequestTags.map((condition) => condition.key.replace("request.tag/", "")).join(" · ") })}</p> : null}
+        {trustedResourceTags.length ? <p>{t("trustedResourceTagCapability", { keys: trustedResourceTags.map((condition) => condition.key.replace("resource.tag/", "")).join(" · ") })}</p> : null}
         <p>{t("trustedConditionCombination")}</p>
         {trustedRequestTags.length ? <p>{t("trustedRequestTagMissing")}</p> : null}
+        {trustedResourceTags.length ? <p>{t("trustedResourceTagMissing")}</p> : null}
       </div> : null}
       {(statement.conditions ?? []).map((condition, index) => <div className={styles.row} key={index}>
         <FormField id={id + "-condition-key-" + index} label={t("conditionKey", { number: index + 1 })}>
@@ -256,7 +260,8 @@ function StatementFields({ statement, group, onChange }: {
             onValueChange={(value) => updateCondition(index, { ...condition, operator: value })} />
         </FormField>
         <FormField id={id + "-condition-values-" + index} label={t("values")} hint={t(condition.key === "iam.current-time" ? "timeHint" :
-          condition.key === "request.source-ip" ? "ipHint" : condition.key.startsWith("request.tag/") ? "requestTagValuesHint" : "valuesHint")}>
+          condition.key === "request.source-ip" ? "ipHint" : condition.key.startsWith("request.tag/") ? "requestTagValuesHint" :
+            condition.key.startsWith("resource.tag/") ? "resourceTagValuesHint" : "valuesHint")}>
           <TextArea id={id + "-condition-values-" + index} rows={2} maxLength={2048} value={condition.values.join("\n")}
             onChange={(event) => updateCondition(index, { ...condition, values: event.target.value.split(/\r?\n/) })} />
         </FormField>

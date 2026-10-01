@@ -1599,6 +1599,42 @@ describe("account access", () => {
     expect(createPolicy).not.toHaveBeenCalled();
   });
 
+  it("explains and reviews a Profile-declared trusted resource-tag condition without accepting browser resource facts", async () => {
+    const catalog: AuthorizationProfileDirectory = { accountId: account.id, items: [{
+      profile: { product: "paas", revision: 5, callingService: "PAAS", actions: [{
+        action: "paas.application.read", resourceKind: "APPLICATION", scope: "TENANT",
+        resourceShapes: [{ mode: "INSTANCE", prefixAllowed: true }],
+        conditions: [
+          { key: "request.source-ip", valueType: "IP", source: "CALLING_SERVICE_NETWORK" },
+          { key: "resource.tag/environment", valueType: "STRING", source: "CALLING_SERVICE_RESOURCE_TAG" }
+        ]
+      }] }, contentDigest: `sha256:${"b".repeat(64)}`
+    }] };
+    const createPolicy = vi.fn();
+    const { user } = await openAccess(accounts({ createPolicy, listAuthorizationProfiles: vi.fn().mockResolvedValue(catalog) }), iam(), "policies");
+    await user.click(screen.getByRole("button", { name: "新建自定义策略" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "策略名称" }), { target: { value: "Production application reader" } });
+    await user.click(screen.getByRole("tab", { name: "可视化编辑" }));
+    await user.click(await screen.findByRole("radio", { name: /paas.application.read/ }));
+    expect(within(screen.getByRole("region", { name: "当前声明依赖的产品目录" }))
+      .getByText("paas @ r5", { selector: "code" })).toBeTruthy();
+    expect(screen.getByText(/产品服务读取目标资源的持久化标签/)).toBeTruthy();
+    expect(screen.getByText(/浏览器不会提交或覆盖这些事实/)).toBeTruthy();
+    expect(screen.getByText(/不能把列表权限推导成所有实例均可访问/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "添加条件" }));
+    await user.click(screen.getByRole("combobox", { name: "条件 1" }));
+    await user.click(screen.getByRole("option", { name: "可信资源标签 · environment" }));
+    expect(screen.getByRole("combobox", { name: "条件 1" }).textContent).toContain("可信资源标签 · environment");
+    expect(screen.getByText(/这里定义匹配条件，不修改资源标签/)).toBeTruthy();
+    await user.type(screen.getByRole("textbox", { name: "条件值" }), "production");
+    await user.type(screen.getByRole("textbox", { name: "资源 ID 或前缀" }), "app-prod");
+    await user.click(screen.getByRole("button", { name: "审阅策略" }));
+    const summary = screen.getByRole("region", { name: "声明摘要" });
+    expect(within(summary).getByText("可信资源标签 · environment", { exact: false })).toBeTruthy();
+    expect(within(summary).getByText("production", { selector: "code" })).toBeTruthy();
+    expect(createPolicy).not.toHaveBeenCalled();
+  });
+
   it("keeps an unknown policy creation frozen across navigation and retries byte-equivalently", async () => {
     const createPolicy = vi.fn().mockRejectedValueOnce(new HttpProblem(503, "IAM_UNAVAILABLE"))
       .mockRejectedValueOnce(new HttpProblem(409, "IAM_CONFLICT"));

@@ -1328,7 +1328,8 @@ describe("IAM HTTP account boundary", () => {
       resources: [{ kind: "APPLICATION", match: "ANY_IN_AUTHORITY" }],
       conditions: [
         { key: "request.source-ip", operator: "IP_ADDRESS", values: ["192.0.2.0/24"] },
-        { key: "request.tag/environment", operator: "STRING_EQUALS", values: ["production", "预发布"] }
+        { key: "request.tag/environment", operator: "STRING_EQUALS", values: ["production", "预发布"] },
+        { key: "resource.tag/environment", operator: "STRING_NOT_EQUALS", values: ["retired"] }
       ]
     }] };
     const version = { policyId: customerPolicy.id, versionId: customerPolicy.defaultVersionId, document,
@@ -1567,20 +1568,22 @@ describe("IAM HTTP account boundary", () => {
     } })) });
   });
 
-  it("accepts only the fixed network and trusted request-tag Profile declarations", async () => {
+  it("accepts only the fixed network, trusted request-tag, and trusted resource-tag Profile declarations", async () => {
     const entry = profileEntry("paas");
-    entry.profile.revision = 4;
+    entry.profile.revision = 5;
     entry.profile.actions[0]!.conditions = [
       ...entry.profile.actions[0]!.conditions,
       { key: "request.source-ip", valueType: "IP", source: "CALLING_SERVICE_NETWORK" },
-      { key: "request.tag/environment", valueType: "STRING", source: "CALLING_SERVICE_REQUEST_TAG" }
+      { key: "request.tag/environment", valueType: "STRING", source: "CALLING_SERVICE_REQUEST_TAG" },
+      { key: "resource.tag/environment", valueType: "STRING", source: "CALLING_SERVICE_RESOURCE_TAG" }
     ];
     reply({ apiVersion, kind: "AuthorizationProfileList", accountId: account.id, items: [entry] });
     const result = await httpAccountRepository.listAuthorizationProfiles("bearer");
-    expect(result.items[0]!.profile.revision).toBe(4);
-    expect(result.items[0]!.profile.actions[0]!.conditions?.slice(-2)).toEqual([
+    expect(result.items[0]!.profile.revision).toBe(5);
+    expect(result.items[0]!.profile.actions[0]!.conditions?.slice(-3)).toEqual([
       { key: "request.source-ip", valueType: "IP", source: "CALLING_SERVICE_NETWORK" },
-      { key: "request.tag/environment", valueType: "STRING", source: "CALLING_SERVICE_REQUEST_TAG" }
+      { key: "request.tag/environment", valueType: "STRING", source: "CALLING_SERVICE_REQUEST_TAG" },
+      { key: "resource.tag/environment", valueType: "STRING", source: "CALLING_SERVICE_RESOURCE_TAG" }
     ]);
   });
 

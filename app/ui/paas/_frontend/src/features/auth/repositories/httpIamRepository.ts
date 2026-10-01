@@ -1356,6 +1356,9 @@ function parseAuthorizationCondition(value: unknown): AuthorizationProfileCondit
   if (wire.key === "request.tag/environment" && wire.valueType === "STRING" && wire.source === "CALLING_SERVICE_REQUEST_TAG") {
     return { key: wire.key, valueType: wire.valueType, source: wire.source };
   }
+  if (wire.key === "resource.tag/environment" && wire.valueType === "STRING" && wire.source === "CALLING_SERVICE_RESOURCE_TAG") {
+    return { key: wire.key, valueType: wire.valueType, source: wire.source };
+  }
   throw new Error("INVALID_IAM_RESPONSE");
 }
 
@@ -1682,7 +1685,7 @@ const policyResourceKinds = new Set([
   "DEPLOYMENT", "SERVICE_OFFERING", "REGION", "QUOTA_ENTITLEMENT", "SERVICE_INSTALLATION", "AUDIT_RECORD", "AUDIT_CHAIN"
 ]);
 
-function policyRequestTagValue(value: unknown): string {
+function policyTagValue(value: unknown): string {
   const text = accountText(value);
   if (new TextEncoder().encode(text).length > 128 || text.trim() !== text || /\p{Cc}/u.test(text)) {
     throw new Error("INVALID_IAM_RESPONSE");
@@ -1725,7 +1728,7 @@ function parsePolicyDocument(value: unknown): AccountPolicyDocument {
       const key = accountText(condition.key);
       const operator = accountText(condition.operator);
       if ((key !== "iam.account-id" && key !== "iam.principal-id" && key !== "iam.current-time" &&
-          key !== "request.source-ip" && key !== "request.tag/environment") ||
+          key !== "request.source-ip" && key !== "request.tag/environment" && key !== "resource.tag/environment") ||
           (key === "iam.current-time"
             ? operator !== "DATE_GREATER_THAN_EQUALS" && operator !== "DATE_LESS_THAN"
             : key === "request.source-ip"
@@ -1738,7 +1741,7 @@ function parsePolicyDocument(value: unknown): AccountPolicyDocument {
           if (!sourceCidrValid(range)) throw new Error("INVALID_IAM_RESPONSE");
           return range;
         }
-        return key === "request.tag/environment" ? policyRequestTagValue(entry) : accountIdentifier(entry);
+        return key === "request.tag/environment" || key === "resource.tag/environment" ? policyTagValue(entry) : accountIdentifier(entry);
       });
       if (new Set(values).size !== values.length) throw new Error("INVALID_IAM_RESPONSE");
       return { key, operator, values };

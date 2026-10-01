@@ -43,9 +43,10 @@ export type VisualDraftResult =
   | { status: "jsonInvalid" | "shapeInvalid" | "catalogMismatch" };
 
 const policyId = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
-const supportedConditionKeys = new Set(["iam.account-id", "iam.principal-id", "iam.current-time", "request.source-ip", "request.tag/environment"]);
+const supportedConditionKeys = new Set(["iam.account-id", "iam.principal-id", "iam.current-time", "request.source-ip",
+  "request.tag/environment", "resource.tag/environment"]);
 
-function requestTagValueValid(value: string): boolean {
+function tagValueValid(value: string): boolean {
   const bytes = new TextEncoder().encode(value).length;
   return bytes >= 1 && bytes <= 128 && value.trim() === value && !/\p{Cc}/u.test(value);
 }
@@ -83,8 +84,8 @@ export function visualDraftHasIncompleteFields(document: AccountPolicyDocument):
       } else if (condition.key === "request.source-ip") {
         if (condition.values.length < 1 || condition.values.length > 16 || condition.values.some((value) => !sourceCidrValid(value)) ||
             new Set(condition.values).size !== condition.values.length) return true;
-      } else if (condition.key === "request.tag/environment") {
-        if (condition.values.length < 1 || condition.values.length > 16 || condition.values.some((value) => !requestTagValueValid(value)) ||
+      } else if (condition.key === "request.tag/environment" || condition.key === "resource.tag/environment") {
+        if (condition.values.length < 1 || condition.values.length > 16 || condition.values.some((value) => !tagValueValid(value)) ||
             new Set(condition.values).size !== condition.values.length) return true;
       } else if (condition.values.length < 1 || condition.values.length > 16 ||
         condition.values.some((value) => !policyId.test(value)) || new Set(condition.values).size !== condition.values.length) return true;
