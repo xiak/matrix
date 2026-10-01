@@ -1,6 +1,6 @@
 # FEAT-IAM-007：访问密钥与程序访问
 
-- 状态：实施中；K1管理及K2内部验签、原子拒绝/防重放与历史证据的累计后端固定`644fff09446fc8ffb003cc53cf2fb55d4f58828a`已通过本地真实PG18、固定前驱保留数据、独立进程、最终全仓检查及五项独立CI。实际产品消费已累计到本地固定`35e15da22`：在`b6d15c89a`的五条不可变图创建和带标签Application读取之外，新增其余六条PaaS实例读取，并通过本地真实PG18、独立IAM/Audit/PaaS进程、唯一前驱及全仓检查；`b6d15c89a`的独立CI仍在运行，后继尚未推送及取得独立CI，签名安装组合也未验收。其他PaaS动作、生产入口托管/备份、UI及最终发布仍未完成，整体未验收。
+- 状态：实施中；K1管理及K2内部验签、原子拒绝/防重放与历史证据的累计后端固定`644fff09446fc8ffb003cc53cf2fb55d4f58828a`已通过本地真实PG18、固定前驱保留数据、独立进程、最终全仓检查及五项独立CI。实际产品消费已累计固定到`35e15da22`：在`b6d15c89a`的五条不可变图创建和带标签Application读取之外，新增其余六条PaaS实例读取，并通过本地真实PG18、独立IAM/Audit/PaaS进程、唯一前驱及全仓检查；最新独立CI仍在运行，签名安装组合也未验收。其他PaaS动作、生产入口托管/备份、UI及最终发布仍未完成，整体未验收。
 - 依赖：003、005；临时凭据与 006 协作。
 - Owner：IAM credential；各产品 HTTP 签名消费归其 PEP。
 
@@ -255,7 +255,7 @@ PaaS取得Allow后仍在新的Account只读事务重读Application，并核对ID
 
 固定`b6d15c89a`已实现上述契约。专属PostgreSQL 18上的`TestIAMAccessKeyPostgres`以95.796秒通过；解析同一签名两次不产生决定/evidence/outbox或消费nonce，随后最终授权只允许一次，坏MAC、未知key、错误installation或错误服务均无状态，停用key/User、forced-change及平台绑定则只在最终授权形成Deny并消费nonce。独立双IAM、Audit、PaaS及双dispatcher进程以216.715秒通过两个Account同Application ID、`production`/`staging`相反策略、同签名预读无副作用、最终Allow/Deny、重放冲突、精确`environment`证据及未声明`team`不入IAM证据；跨route、selector及原资源图、Operation、Audit链回归保持。
 
-固定`e3c137ba0ed80d8d90f893192d343d89d2d917f5`的IAM58真实前驱产生保留数据后，当前IAM59双迁移、等值bootstrap及重启门禁以107.044秒通过。最终全仓race/p2、vet、模块校验、两次OpenAPI生成字节一致及Linux amd64构建通过；本片没有新增数据库迁移或改写历史Profile/Decision/Audit字节。[独立CI 36853816880](https://github.com/xiak/matrix/actions/runs/36853816880)仍在运行；签名安装、其余实例动作及UI仍未验收，不得由本地证据扩张宣称。
+固定`e3c137ba0ed80d8d90f893192d343d89d2d917f5`的IAM58真实前驱产生保留数据后，当前IAM59双迁移、等值bootstrap及重启门禁以107.044秒通过。最终全仓race/p2、vet、模块校验、两次OpenAPI生成字节一致及Linux amd64构建通过；本片没有新增数据库迁移或改写历史Profile/Decision/Audit字节。[独立CI 36853816880](https://github.com/xiak/matrix/actions/runs/36853816880)在后继推送前完成6项成功但未取得整体终态，不登记为独立CI通过；累计实现由下述后继重新验证。签名安装、其余实例动作及UI仍未验收，不得由本地证据扩张宣称。
 
 ### 当前纵向切片：其余PaaS无属性实例读取
 
@@ -265,7 +265,7 @@ Configuration、ConfigurationRevision、ApplicationRevision、Deployment和租�
 
 本地固定`35e15da22`把PaaS Profile推进到revision 10，canonical digest为`sha256:759bd751d03fc8ddceb69f6a5e827328401dcbd47d73a1e568a0b76c5a517256`；IAM开发schema仍为59。专属PostgreSQL 18的AccessKey race以95.578秒通过，独立双IAM、Audit、PaaS及双dispatcher进程在全新数据库以203.770秒通过两个Account同ID资源图、六条精确读取、Operation同签名重放冲突、USER/key决定及完整Audit链。首个进程库只暴露旧fixture仍把Configuration read当成预期Deny，迁到仍未开放的Deployment update后全新数据库通过；没有放宽生产授权。
 
-唯一前驱替换为固定`b6d15c89af64587d0c5eff64f9b07b1da09b43f5`的Profile revision 9/schema59真实程序。第一次前代门禁在全部恢复与数据检查后只因未来Profile overlay仍寻找revision 9变量而失败；将该测试owner推进到revision 10后，全新数据库以164.012秒通过等值迁移/bootstrap、重启、账号/MFA/会话/恢复、历史字节及未来Profile防伪。最终全仓race/p2、vet、模块校验、OpenAPI二次生成字节一致及Linux amd64构建通过；本片未新增迁移。后继尚未推送及取得独立CI，不把这些本地证据写成发布验收。
+唯一前驱替换为固定`b6d15c89af64587d0c5eff64f9b07b1da09b43f5`的Profile revision 9/schema59真实程序。第一次前代门禁在全部恢复与数据检查后只因未来Profile overlay仍寻找revision 9变量而失败；将该测试owner推进到revision 10后，全新数据库以164.012秒通过等值迁移/bootstrap、重启、账号/MFA/会话/恢复、历史字节及未来Profile防伪。最终全仓race/p2、vet、模块校验、OpenAPI二次生成字节一致及Linux amd64构建通过；本片未新增迁移。[独立CI 36858924218](https://github.com/xiak/matrix/actions/runs/36858924218)仍在运行，不把这些本地证据写成发布验收。
 
 ## 验收
 

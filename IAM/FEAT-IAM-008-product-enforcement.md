@@ -1,6 +1,6 @@
 # FEAT-IAM-008：业务接入、服务角色与 ABAC
 
-- 状态：实施中；版本化产品 Profile、PaaS/managedservice 的真实 PEP、请求与决定绑定及当前资源/Operation/outbox 租户隔离已有固定后端实现。服务受托已有账号同意关系、当前Account只读观察、managedservice真实资源绑定/解绑及服务会话发行/回执/当前PDP；累计固定`a464299b`已补严格服务来源的管理员目录/读取/代撤销并通过本地真实PG18、累计Role管理、独立多进程及14项独立CI。实例目录批量过滤已固定为`a7f2e83b`，可信创建请求标签及Audit目录修复累计固定为`49aaf216`并通过14项独立CI；既有Application资源标签读取和写入已累计固定到`e9ea19e6`并通过本地真实PG18、独立进程及唯一滚动前驱门禁。AccessKey产品消费已累计到本地固定`35e15da22`，覆盖五条不可变资源图创建、带真实标签的Application读取及其余六条实例读取，并通过本地真库、独立进程、唯一前驱和全仓检查；`b6d15c89a`的独立CI仍在运行，后继尚未推送，其他签名动作、LIVE UI和发布组合仍未完成，整体未验收。
+- 状态：实施中；版本化产品 Profile、PaaS/managedservice 的真实 PEP、请求与决定绑定及当前资源/Operation/outbox 租户隔离已有固定后端实现。服务受托已有账号同意关系、当前Account只读观察、managedservice真实资源绑定/解绑及服务会话发行/回执/当前PDP；累计固定`a464299b`已补严格服务来源的管理员目录/读取/代撤销并通过本地真实PG18、累计Role管理、独立多进程及14项独立CI。实例目录批量过滤已固定为`a7f2e83b`，可信创建请求标签及Audit目录修复累计固定为`49aaf216`并通过14项独立CI；既有Application资源标签读取和写入已累计固定到`e9ea19e6`并通过本地真实PG18、独立进程及唯一滚动前驱门禁。AccessKey产品消费已累计固定到`35e15da22`，覆盖五条不可变资源图创建、带真实标签的Application读取及其余六条实例读取，并通过本地真库、独立进程、唯一前驱和全仓检查；最新独立CI仍在运行，其他签名动作、LIVE UI和发布组合仍未完成，整体未验收。
 - 依赖：001、005、006。
 - Owner：IAM Profile/Role，PaaS/managedservice/Audit 各自的真实资源与 PEP。
 
@@ -221,7 +221,7 @@ PaaS Profile下一revision只为`paas.application.read`的USER增加`ACCESS_KEY`
 
 内部解析结果必须绑定同一SignedRequest digest、当前PaaS Profile、Account、USER和key，只供本次预读；最终`authorize:access-key`仍是唯一权限决定及nonce消费点。PaaS在最终决定前不向调用方返回资源存在性、标签或Account，在决定后以决定中的同一Account重读并核对快照。合法MAC经解析后若IAM最终不可用或回包不确定，返回503且调用方不能假定nonce状态；PaaS不得自动改用登录bearer、缓存解析结果或重新签发Action。真实门禁必须用两个Account相同Application ID、不同environment和相反Policy结果证明标签来自凭据推导的Account，并证明预读/授权/重读任一漂移都失败关闭。
 
-固定`b6d15c89a`将PaaS Profile推进到revision 9，仅为`paas.application.read`的USER增加`ACCESS_KEY`；Configuration读取、列表、Operation、Audit和标签修改仍保持原载体集合。`GET /v1/applications/{id}`只接受无query、无body的精确签名，内部解析回包须逐项匹配Profile、Account、USER、key和请求摘要，业务只从决定Account进入RLS只读事务。聚焦API/IAM/PaaS测试、真实PG18 AccessKey race 95.796秒、独立双IAM/Audit/PaaS及双dispatcher 216.715秒、IAM58→59前驱107.044秒，以及最终全仓race/p2、vet、模块校验、生成稳定和Linux amd64构建均通过。两个Account的同IDApplication分别带`production`/`staging`标签，真实Allow与显式Deny保存精确声明标签，未声明`team`不进入IAM证据；解析两次无状态、最终nonce只消费一次，原资源图和租户Audit链保持。[独立CI 36853816880](https://github.com/xiak/matrix/actions/runs/36853816880)仍在运行，签名安装尚未完成，UI不得标记LIVE。
+固定`b6d15c89a`将PaaS Profile推进到revision 9，仅为`paas.application.read`的USER增加`ACCESS_KEY`；Configuration读取、列表、Operation、Audit和标签修改仍保持原载体集合。`GET /v1/applications/{id}`只接受无query、无body的精确签名，内部解析回包须逐项匹配Profile、Account、USER、key和请求摘要，业务只从决定Account进入RLS只读事务。聚焦API/IAM/PaaS测试、真实PG18 AccessKey race 95.796秒、独立双IAM/Audit/PaaS及双dispatcher 216.715秒、IAM58→59前驱107.044秒，以及最终全仓race/p2、vet、模块校验、生成稳定和Linux amd64构建均通过。两个Account的同IDApplication分别带`production`/`staging`标签，真实Allow与显式Deny保存精确声明标签，未声明`team`不进入IAM证据；解析两次无状态、最终nonce只消费一次，原资源图和租户Audit链保持。[独立CI 36853816880](https://github.com/xiak/matrix/actions/runs/36853816880)在后继推送前完成6项成功但未取得整体终态，不登记为独立CI通过；签名安装尚未完成，UI不得标记LIVE。
 
 ## 当前纵向切片：AccessKey读取其余无属性实例
 
@@ -229,7 +229,7 @@ PaaS Profile下一revision只为`paas.application.read`的USER增加`ACCESS_KEY`
 
 列表、Deployment写入、Application标签写、平台Operation及Audit继续保持原载体集合。最低真实门禁逐route覆盖两个Account同ID资源、query/body/多段路径、route与Action替换、另一key重放、Allow/Deny、当前撤权和IAM失联，并核对Operation/Revision父引用不会改变授权资源或扩大权限；原Application读取的标签预读与重读仍单独执行，不能为统一代码而删去。
 
-本地固定`35e15da22`将Profile推进到revision 10/digest `sha256:759bd751d03fc8ddceb69f6a5e827328401dcbd47d73a1e568a0b76c5a517256`，并以闭合route表把六条GET逐项映射到五个原read Action；Deployment generation完整路径绑定generation，但授权资源仍是Deployment。真实双Account进程门禁203.770秒逐项读取所属Configuration、两类Revision、Deployment、generation和Operation，核对真实父引用、期望状态、不可变generation、原Operation的USER/key归因以及决定/Audit链；同一个Operation签名重放409。AccessKey真库95.578秒、唯一revision 9前代164.012秒及最终全仓race/vet/生成/Linux构建通过。首次进程/前代运行只分别暴露过期Deny fixture和未来overlay变量名，均在全新数据库修正后通过，生产边界没有放宽。本片没有数据库迁移；未推送及取得独立CI，安装和UI仍不得据此标LIVE。
+固定`35e15da22`将Profile推进到revision 10/digest `sha256:759bd751d03fc8ddceb69f6a5e827328401dcbd47d73a1e568a0b76c5a517256`，并以闭合route表把六条GET逐项映射到五个原read Action；Deployment generation完整路径绑定generation，但授权资源仍是Deployment。真实双Account进程门禁203.770秒逐项读取所属Configuration、两类Revision、Deployment、generation和Operation，核对真实父引用、期望状态、不可变generation、原Operation的USER/key归因以及决定/Audit链；同一个Operation签名重放409。AccessKey真库95.578秒、唯一revision 9前代164.012秒及最终全仓race/vet/生成/Linux构建通过。首次进程/前代运行只分别暴露过期Deny fixture和未来overlay变量名，均在全新数据库修正后通过，生产边界没有放宽。本片没有数据库迁移；[独立CI 36858924218](https://github.com/xiak/matrix/actions/runs/36858924218)仍在运行，安装和UI仍不得据此标LIVE。
 
 ## 验收
 
