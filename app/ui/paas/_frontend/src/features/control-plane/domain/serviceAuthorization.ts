@@ -60,6 +60,27 @@ export type ManagedServiceRoleUnbindingReceipt = {
   revokedAt: string;
 };
 
+export type ManagedServiceAuthorizationMutationError =
+  | "expired"
+  | "forbidden"
+  | "notFound"
+  | "conflict"
+  | "invalid"
+  | "unknown";
+
+export type ManagedServiceAuthorizationIntent = {
+  accountId: string;
+  installationId: string;
+  kind: "bind" | "unbind";
+  template: ServiceRoleTemplate;
+  relation: ServiceLinkedRoleRelation | null;
+  binding: WorkloadRoleBinding | null;
+  requestId: string;
+  phase: "review" | "submitting" | "failed";
+  error: ManagedServiceAuthorizationMutationError | null;
+  open: boolean;
+};
+
 export function isManagedServiceInstallationReader(template: ServiceRoleTemplate): boolean {
   const workload = template.spec.workloads.find((item) => item.resourceKind === managedServiceInstallationReader.workloadKind);
   return template.id === managedServiceInstallationReader.id &&

@@ -5,6 +5,11 @@ import { LocaleProvider } from "@/i18n/LocaleProvider";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SessionProvider } from "@/features/auth/application/SessionProvider";
 import type { AccountRepository, IamRepository } from "@/features/auth/repositories/iamRepository";
+import type {
+  ServiceLinkedRoleRelation,
+  ServiceRoleTemplate,
+  WorkloadRoleBinding
+} from "@/features/auth/domain/serviceAuthorization";
 import { previewAccountRepository, previewIamRepository } from "@/features/auth/repositories/previewIamRepository";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { useConsoleUiStore } from "../application/consoleUiStore";
@@ -84,12 +89,81 @@ const snapshot: ControlPlaneSnapshot = {
   installations: []
 };
 
+const liveServiceRoleTemplate: ServiceRoleTemplate = {
+  id: "managedservice.installation-reader",
+  version: 1,
+  contentDigest: `sha256:${"c".repeat(64)}`,
+  status: "ACTIVE",
+  spec: {
+    product: "managedservice",
+    servicePurpose: "PAAS",
+    roleName: "ManagedServiceInstallationReader",
+    roleDescription: "Read one installation.",
+    maxSessionDurationSeconds: 900,
+    policyVersion: {
+      policyId: "system.managedservice-installation-reader",
+      versionId: "version-v1",
+      contentDigest: `sha256:${"b".repeat(64)}`
+    },
+    workloads: [{
+      resourceKind: "SERVICE_INSTALLATION",
+      bindAction: "managedservice.service-installation.service-role.bind",
+      unbindAction: "managedservice.service-installation.service-role.unbind"
+    }]
+  }
+};
+
+const liveServiceRoleRelation: ServiceLinkedRoleRelation = {
+  role: {
+    id: "role-managedservice-reader",
+    accountId: "organization-test",
+    name: "ManagedServiceInstallationReader",
+    description: "Read one installation.",
+    tags: [],
+    management: "SERVICE_LINKED",
+    status: "ACTIVE",
+    maxSessionDurationSeconds: 900,
+    resourceVersion: 1,
+    currentTrustVersionId: "trust-v1",
+    createdAt: "2026-08-26T12:00:00Z",
+    updatedAt: "2026-08-26T12:00:00Z"
+  },
+  template: {
+    id: liveServiceRoleTemplate.id,
+    version: liveServiceRoleTemplate.version,
+    contentDigest: liveServiceRoleTemplate.contentDigest
+  },
+  servicePrincipal: {
+    installationId: "installation-paas",
+    principalId: "service-paas",
+    purpose: "PAAS"
+  },
+  permissionCeiling: liveServiceRoleTemplate.spec.policyVersion
+};
+
+function liveServiceRoleBinding(installationId: string): WorkloadRoleBinding {
+  return {
+    id: `binding-${installationId}`,
+    accountId: "organization-test",
+    roleId: liveServiceRoleRelation.role.id,
+    template: liveServiceRoleRelation.template,
+    workload: { kind: "SERVICE_INSTALLATION", id: installationId },
+    status: "ACTIVE",
+    resourceVersion: 1,
+    createdAt: "2026-08-26T12:00:00Z",
+    updatedAt: "2026-08-26T12:00:00Z",
+    revokedAt: null
+  };
+}
+
 async function renderConsole({
   section = "overview",
   experience,
   openWorkspace = false,
   load = vi.fn().mockResolvedValue(snapshot),
   inspectServiceAuthorization,
+  bindServiceRole,
+  unbindServiceRole,
   logout = vi.fn().mockResolvedValue(undefined),
   accountRepository,
   iamRepository,
@@ -102,6 +176,8 @@ async function renderConsole({
   openWorkspace?: boolean;
   load?: ControlPlaneRepository["load"];
   inspectServiceAuthorization?: ControlPlaneRepository["inspectServiceAuthorization"];
+  bindServiceRole?: ControlPlaneRepository["bindServiceRole"];
+  unbindServiceRole?: ControlPlaneRepository["unbindServiceRole"];
   logout?: IamRepository["logout"];
   accountRepository?: AccountRepository;
   iamRepository?: IamRepository;
@@ -112,7 +188,9 @@ async function renderConsole({
     getInstallation: vi.fn(),
     activateQuota: vi.fn(),
     createInstallation: vi.fn(),
-    inspectServiceAuthorization
+    inspectServiceAuthorization,
+    bindServiceRole,
+    unbindServiceRole
   };
   const iam: IamRepository = iamRepository ?? {
     async login() {
@@ -429,7 +507,7 @@ describe("ConsoleShellRenderer", () => {
 
     expect(await screen.findByText("待授权")).toBeTruthy();
     expect(screen.getAllByText("待显式授权")).toHaveLength(2);
-    expect((screen.getByRole("button", { name: "授权服务（等待发布）" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "审阅并授权服务" }) as HTMLButtonElement).disabled).toBe(false);
     expect(inspectServiceAuthorization).toHaveBeenCalledWith("renderer-test-memory-only-session", "organization-test", "pg-test");
     expect(screen.queryByRole("dialog")).toBeNull();
   });
@@ -473,6 +551,151 @@ describe("ConsoleShellRenderer", () => {
     expect(await screen.findByText("账号关系有效")).toBeTruthy();
     expect(screen.getAllByText("实例未绑定").length).toBeGreaterThan(0);
     expect(screen.queryByText("当前实例已绑定")).toBeNull();
+  });
+
+  it("reviews and binds one live service installation through the product endpoint", async () => {
+    const installationId = "pg-live-bind";
+    const binding = liveServiceRoleBinding(installationId);
+    const inspectServiceAuthorization = vi.fn()
+      .mockResolvedValueOnce({ template: liveServiceRoleTemplate, relation: null, binding: null })
+      .mockResolvedValue({ template: liveServiceRoleTemplate, relation: liveServiceRoleRelation, binding });
+    const bindServiceRole = vi.fn().mockResolvedValue({
+      kind: "ServiceRoleBindingReceipt",
+      serviceInstallationId: installationId,
+      bindingId: binding.id,
+      roleId: binding.roleId,
+      template: binding.template,
+      status: "ACTIVE",
+      resourceVersion: 1,
+      createdAt: binding.createdAt
+    });
+    const { user } = await renderConsole({
+      section: "installations",
+      load: vi.fn().mockResolvedValue({ ...snapshot, installations: [{
+        id: installationId, name: "订单主库", offeringId: "postgresql-18", engineVersion: "18",
+        quotaEntitlementId: "quota-primary", regionId: "local-primary", phase: "READY" as const,
+        endpoint: "pg-live-bind.service.local:5432", credentialReference: null,
+        operation: { id: "operation-live-bind", phase: "READY" as const, safeFailureCode: null, observedAt: "2026-08-26T12:00:00Z" },
+        createdAt: "2026-08-26T12:00:00Z"
+      }] }),
+      inspectServiceAuthorization,
+      bindServiceRole
+    });
+
+    await user.click(await screen.findByRole("button", { name: "订单主库" }));
+    await user.click(await screen.findByRole("button", { name: "审阅并授权服务" }));
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("heading", { name: "确认服务访问授权" })).toBeTruthy();
+    expect(screen.getByText(`${liveServiceRoleTemplate.id}@v1`)).toBeTruthy();
+    expect(screen.getByText(installationId)).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "确认授权" }));
+    await waitFor(() => expect(bindServiceRole).toHaveBeenCalledTimes(1));
+    const firstCall = bindServiceRole.mock.calls[0];
+    expect(firstCall).toBeDefined();
+    const [credential, actualInstallationId, command] = firstCall!;
+    expect(credential).toBe("renderer-test-memory-only-session");
+    expect(actualInstallationId).toBe(installationId);
+    expect(command.template).toEqual(liveServiceRoleRelation.template);
+    expect(command.requestId).toMatch(/^ui-service-role-bind-/);
+    expect(await screen.findByText("当前实例已绑定")).toBeTruthy();
+    expect(inspectServiceAuthorization).toHaveBeenCalledTimes(2);
+  });
+
+  it("preserves and retries an unknown live authorization result with the same idempotency key", async () => {
+    const installationId = "pg-live-unknown";
+    const bindServiceRole = vi.fn()
+      .mockRejectedValueOnce(new Error("connection ended before a response was observed"))
+      .mockResolvedValue({
+        kind: "ServiceRoleBindingReceipt",
+        serviceInstallationId: installationId,
+        bindingId: `binding-${installationId}`,
+        roleId: liveServiceRoleRelation.role.id,
+        template: liveServiceRoleRelation.template,
+        status: "ACTIVE",
+        resourceVersion: 1,
+        createdAt: "2026-08-26T12:00:00Z"
+      });
+    const { user } = await renderConsole({
+      section: "installations",
+      load: vi.fn().mockResolvedValue({ ...snapshot, installations: [{
+        id: installationId, name: "结果待确认库", offeringId: "postgresql-18", engineVersion: "18",
+        quotaEntitlementId: "quota-primary", regionId: "local-primary", phase: "READY" as const,
+        endpoint: "pg-live-unknown.service.local:5432", credentialReference: null,
+        operation: { id: "operation-live-unknown", phase: "READY" as const, safeFailureCode: null, observedAt: "2026-08-26T12:00:00Z" },
+        createdAt: "2026-08-26T12:00:00Z"
+      }] }),
+      inspectServiceAuthorization: vi.fn().mockResolvedValue({ template: liveServiceRoleTemplate, relation: null, binding: null }),
+      bindServiceRole
+    });
+
+    await user.click(await screen.findByRole("button", { name: "结果待确认库" }));
+    await user.click(await screen.findByRole("button", { name: "审阅并授权服务" }));
+    await user.click(screen.getByRole("button", { name: "确认授权" }));
+
+    expect(await screen.findByText(/服务端结果尚未确认/)).toBeTruthy();
+    const firstCommand = bindServiceRole.mock.calls[0]![2];
+    await user.click(screen.getByRole("button", { name: "返回实例并保留原请求" }));
+    expect(await screen.findByRole("button", { name: "继续处理未确认请求" })).toBeTruthy();
+    expect(screen.getByText(new RegExp(firstCommand.requestId))).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "继续处理未确认请求" }));
+    await user.click(screen.getByRole("button", { name: "使用同一请求原样重试" }));
+    await waitFor(() => expect(bindServiceRole).toHaveBeenCalledTimes(2));
+    expect(bindServiceRole.mock.calls[1]![2]).toEqual(firstCommand);
+  });
+
+  it("reviews and revokes only the selected live service binding", async () => {
+    const installationId = "pg-live-unbind";
+    const binding = liveServiceRoleBinding(installationId);
+    const inspectServiceAuthorization = vi.fn()
+      .mockResolvedValueOnce({ template: liveServiceRoleTemplate, relation: liveServiceRoleRelation, binding })
+      .mockResolvedValue({ template: liveServiceRoleTemplate, relation: liveServiceRoleRelation, binding: null });
+    const unbindServiceRole = vi.fn().mockResolvedValue({
+      kind: "ServiceRoleUnbindingReceipt",
+      serviceInstallationId: installationId,
+      bindingId: binding.id,
+      roleId: binding.roleId,
+      template: binding.template,
+      status: "REVOKED",
+      resourceVersion: 2,
+      createdAt: binding.createdAt,
+      revokedAt: "2026-08-26T13:00:00Z"
+    });
+    const { user } = await renderConsole({
+      section: "installations",
+      load: vi.fn().mockResolvedValue({ ...snapshot, installations: [{
+        id: installationId, name: "待解绑库", offeringId: "postgresql-18", engineVersion: "18",
+        quotaEntitlementId: "quota-primary", regionId: "local-primary", phase: "READY" as const,
+        endpoint: "pg-live-unbind.service.local:5432", credentialReference: null,
+        operation: { id: "operation-live-unbind", phase: "READY" as const, safeFailureCode: null, observedAt: "2026-08-26T12:00:00Z" },
+        createdAt: "2026-08-26T12:00:00Z"
+      }] }),
+      inspectServiceAuthorization,
+      unbindServiceRole
+    });
+
+    await user.click(await screen.findByRole("button", { name: "待解绑库" }));
+    await user.click(await screen.findByRole("button", { name: "审阅解除实例授权" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("heading", { name: "确认解除实例授权" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "确认解除授权" }));
+
+    await waitFor(() => expect(unbindServiceRole).toHaveBeenCalledTimes(1));
+    const firstCall = unbindServiceRole.mock.calls[0];
+    expect(firstCall).toBeDefined();
+    const [credential, actualInstallationId, command] = firstCall!;
+    expect(credential).toBe("renderer-test-memory-only-session");
+    expect(actualInstallationId).toBe(installationId);
+    expect(command).toEqual({
+      bindingId: binding.id,
+      resourceVersion: 1,
+      expectedTemplate: liveServiceRoleRelation.template,
+      requestId: expect.stringMatching(/^ui-service-role-unbind-/)
+    });
+    expect((await screen.findAllByText("实例未绑定")).length).toBeGreaterThan(0);
+    expect(screen.getByText("账号关系有效")).toBeTruthy();
   });
 
   it.each([

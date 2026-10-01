@@ -11,7 +11,7 @@ import {
   type ReactNode
 } from "react";
 import { useEffectiveCredential } from "@/features/auth/application/RoleSessionProvider";
-import { HttpProblem } from "@/infrastructure/http/jsonRequest";
+import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
 import type { ExperienceSnapshot } from "../domain/experience";
 import type {
   ActivateQuotaCommand,
@@ -19,7 +19,12 @@ import type {
   CreateInstallationCommand
 } from "../domain/resources";
 import type { ControlPlaneRouteSelection } from "../domain/selection";
-import type { ManagedServiceAuthorizationLoad } from "../domain/serviceAuthorization";
+import type {
+  ManagedServiceAuthorizationIntent,
+  ManagedServiceAuthorizationLoad,
+  ManagedServiceAuthorizationMutationError,
+  ManagedServiceAuthorizationObservation
+} from "../domain/serviceAuthorization";
 import type {
   ControlPlaneRepository,
   ControlPlaneResourceKind,
@@ -44,6 +49,11 @@ type ControlPlaneContextValue = {
   activateQuota(command: ActivateQuotaCommand): Promise<boolean>;
   createInstallation(command: CreateInstallationCommand): Promise<boolean>;
   inspectServiceAuthorization(accountId: string, installationId: string): Promise<ManagedServiceAuthorizationLoad>;
+  serviceAuthorizationIntent: ManagedServiceAuthorizationIntent | null;
+  beginServiceAuthorization(accountId: string, installationId: string, observation: ManagedServiceAuthorizationObservation, kind: "bind" | "unbind"): void;
+  submitServiceAuthorization(): Promise<boolean>;
+  closeServiceAuthorizationIntent(): void;
+  reopenServiceAuthorizationIntent(): void;
 };
 
 const ControlPlaneContext = createContext<ControlPlaneContextValue | null>(null);
@@ -100,6 +110,16 @@ function loadMessage(error: unknown): ControlPlaneError {
   return "unavailable";
 }
 
+function serviceAuthorizationMutationError(error: unknown): ManagedServiceAuthorizationMutationError {
+  if (!(error instanceof HttpProblem)) return "unknown";
+  if (error.status === 401) return "expired";
+  if (error.status === 403) return "forbidden";
+  if (error.status === 404) return "notFound";
+  if (error.status === 409) return "conflict";
+  if ([400, 413, 415, 422].includes(error.status)) return "invalid";
+  return "unknown";
+}
+
 export function ControlPlaneProvider({
   children,
   experience,
@@ -117,7 +137,9 @@ export function ControlPlaneProvider({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<ControlPlaneError | null>(null);
   const [mutation, setMutation] = useState<MutationKind>(null);
+  const [serviceAuthorizationIntent, setServiceAuthorizationIntent] = useState<ManagedServiceAuthorizationIntent | null>(null);
   const cacheRef = useRef<ControlPlaneCache | null>(null);
+  const serviceAuthorizationIntentRef = useRef<ManagedServiceAuthorizationIntent | null>(null);
   const inFlight = useRef(new Map<ControlPlaneResourceKind, { owner: string; promise: Promise<void> }>());
   const prepareRevision = useRef(0);
 
@@ -234,6 +256,8 @@ export function ControlPlaneProvider({
     setCache(null);
     setError(null);
     setLoading(false);
+    serviceAuthorizationIntentRef.current = null;
+    setServiceAuthorizationIntent(null);
   }, [credential]);
 
   useEffect(() => {
@@ -359,6 +383,95 @@ export function ControlPlaneProvider({
     }
   }, [credential, repository]);
 
+  const commitServiceAuthorizationIntent = useCallback((intent: ManagedServiceAuthorizationIntent | null) => {
+    serviceAuthorizationIntentRef.current = intent;
+    setServiceAuthorizationIntent(intent);
+  }, []);
+
+  const beginServiceAuthorization = useCallback((
+    accountId: string,
+    installationId: string,
+    observation: ManagedServiceAuthorizationObservation,
+    kind: "bind" | "unbind"
+  ) => {
+    const current = serviceAuthorizationIntentRef.current;
+    if (current) {
+      if (current.installationId === installationId) commitServiceAuthorizationIntent({ ...current, open: true });
+      return;
+    }
+    if (kind === "unbind" && !observation.binding) return;
+    commitServiceAuthorizationIntent({
+      accountId,
+      installationId,
+      kind,
+      template: observation.template,
+      relation: observation.relation,
+      binding: observation.binding,
+      requestId: requestToken(`ui-service-role-${kind}-`),
+      phase: "review",
+      error: null,
+      open: true
+    });
+  }, [commitServiceAuthorizationIntent]);
+
+  const submitServiceAuthorization = useCallback(async () => {
+    const intent = serviceAuthorizationIntentRef.current;
+    if (!credential || !intent || intent.phase === "submitting") return false;
+    commitServiceAuthorizationIntent({ ...intent, phase: "submitting", error: null, open: true });
+    try {
+      if (intent.kind === "bind") {
+        if (!repository.bindServiceRole) throw new Error("SERVICE_ROLE_BIND_UNAVAILABLE");
+        await repository.bindServiceRole(credential, intent.installationId, {
+          template: {
+            id: intent.template.id,
+            version: intent.template.version,
+            contentDigest: intent.template.contentDigest
+          },
+          requestId: intent.requestId
+        });
+      } else {
+        if (!repository.unbindServiceRole || !intent.binding) throw new Error("SERVICE_ROLE_UNBIND_UNAVAILABLE");
+        await repository.unbindServiceRole(credential, intent.installationId, {
+          bindingId: intent.binding.id,
+          resourceVersion: intent.binding.resourceVersion,
+          expectedTemplate: {
+            id: intent.template.id,
+            version: intent.template.version,
+            contentDigest: intent.template.contentDigest
+          },
+          requestId: intent.requestId
+        });
+      }
+      if (serviceAuthorizationIntentRef.current?.requestId === intent.requestId) commitServiceAuthorizationIntent(null);
+      return true;
+    } catch (mutationError) {
+      if (serviceAuthorizationIntentRef.current?.requestId === intent.requestId) {
+        commitServiceAuthorizationIntent({
+          ...intent,
+          phase: "failed",
+          error: serviceAuthorizationMutationError(mutationError),
+          open: true
+        });
+      }
+      return false;
+    }
+  }, [commitServiceAuthorizationIntent, credential, repository]);
+
+  const closeServiceAuthorizationIntent = useCallback(() => {
+    const intent = serviceAuthorizationIntentRef.current;
+    if (!intent) return;
+    if (intent.phase === "failed" && intent.error === "unknown") {
+      commitServiceAuthorizationIntent({ ...intent, open: false });
+      return;
+    }
+    commitServiceAuthorizationIntent(null);
+  }, [commitServiceAuthorizationIntent]);
+
+  const reopenServiceAuthorizationIntent = useCallback(() => {
+    const intent = serviceAuthorizationIntentRef.current;
+    if (intent) commitServiceAuthorizationIntent({ ...intent, open: true });
+  }, [commitServiceAuthorizationIntent]);
+
   const projectScene = useCallback((target: ControlPlaneRouteSelection): ConsoleScene | null => {
     if (target.section === "access") return buildAccessConsoleScene(experience, target.view);
     const resources = resourcesFor(target, Boolean(experience));
@@ -385,8 +498,13 @@ export function ControlPlaneProvider({
     reload,
     activateQuota,
     createInstallation,
-    inspectServiceAuthorization
-  }), [activateQuota, createInstallation, error, experience, inspectServiceAuthorization, isAccess, loading, mutation, prepare, projectScene, reload, scene, selection]);
+    inspectServiceAuthorization,
+    serviceAuthorizationIntent,
+    beginServiceAuthorization,
+    submitServiceAuthorization,
+    closeServiceAuthorizationIntent,
+    reopenServiceAuthorizationIntent
+  }), [activateQuota, beginServiceAuthorization, closeServiceAuthorizationIntent, createInstallation, error, experience, inspectServiceAuthorization, isAccess, loading, mutation, prepare, projectScene, reload, reopenServiceAuthorizationIntent, scene, selection, serviceAuthorizationIntent, submitServiceAuthorization]);
 
   return (
     <ControlPlaneContext.Provider value={value}>

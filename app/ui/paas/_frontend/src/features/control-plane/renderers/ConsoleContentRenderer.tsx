@@ -41,7 +41,10 @@ import { MessageCenterRenderer } from "./MessageCenterRenderer";
 import { ServiceAuthorizationChain } from "@/features/auth/renderers/ServiceAuthorizationChain";
 import { ServiceAuthorizationConsentReview, ServiceAuthorizationUnbindReview } from "@/features/auth/renderers/ServiceAuthorizationPreview";
 import { useControlPlane } from "../application/ControlPlaneProvider";
-import type { ManagedServiceAuthorizationLoad } from "../domain/serviceAuthorization";
+import type {
+  ManagedServiceAuthorizationIntent,
+  ManagedServiceAuthorizationLoad
+} from "../domain/serviceAuthorization";
 
 function InstallationRows({ items, onOpen, triggerRefs }: {
   items: InstallationScene[];
@@ -207,12 +210,19 @@ function QuotaContent({ scene }: { scene: Extract<ConsoleContentScene, { kind: "
   );
 }
 
-function LiveServiceAuthorizationCard({ accountId, installationId }: {
+function LiveServiceAuthorizationCard({ accountId, installationId, authorizationTrigger, unbindTrigger }: {
   accountId: string;
   installationId: string;
+  authorizationTrigger: MutableRefObject<HTMLButtonElement | null>;
+  unbindTrigger: MutableRefObject<HTMLButtonElement | null>;
 }) {
   const t = useTranslations("ManagedService");
-  const { inspectServiceAuthorization } = useControlPlane();
+  const {
+    beginServiceAuthorization,
+    inspectServiceAuthorization,
+    reopenServiceAuthorizationIntent,
+    serviceAuthorizationIntent
+  } = useControlPlane();
   const [result, setResult] = useState<ManagedServiceAuthorizationLoad | { status: "loading" }>({ status: "loading" });
   const revision = useRef(0);
 
@@ -236,6 +246,8 @@ function LiveServiceAuthorizationCard({ accountId, installationId }: {
   const accountAuthorized = observation?.relation?.role.status === "ACTIVE";
   const instanceBound = observation?.binding?.status === "ACTIVE";
   const authorized = Boolean(accountAuthorized && instanceBound);
+  const currentIntent = serviceAuthorizationIntent?.installationId === installationId ? serviceAuthorizationIntent : null;
+  const blockedByAnotherIntent = Boolean(serviceAuthorizationIntent && !currentIntent);
   const stateLabel = result.status === "loading" ? t("authorizationChecking")
     : result.status === "ready" ? t(authorized ? "authorizationActive" : "authorizationPending")
       : t("authorizationUnavailableState");
@@ -264,12 +276,62 @@ function LiveServiceAuthorizationCard({ accountId, installationId }: {
           <div><dt>{t("authorizationPermissionCeiling")}</dt><dd><Typography.Code>{observation.template.spec.policyVersion.policyId}</Typography.Code><small><Typography.Code>{observation.template.spec.policyVersion.versionId}</Typography.Code></small></dd></div>
           <div><dt>{t("authorizationBinding")}</dt><dd>{observation.binding ? <Typography.Code>{observation.binding.id}</Typography.Code> : t("resourceNotBound")}<small>{observation.relation ? <Typography.Code>{observation.relation.role.id}</Typography.Code> : t("accountAuthorizationPending")}</small></dd></div>
         </dl>
-        <Alert status={authorized ? "info" : "warning"}>{t(authorized ? "authorizationObservedBoundary" : "authorizationReleaseBoundary")}</Alert>
+        <Alert status={authorized ? "info" : "warning"}>{t(authorized ? "authorizationObservedBoundary" : "authorizationWriteBoundary")}</Alert>
+        {currentIntent && !currentIntent.open ? <Alert status="warning">{t("authorizationUnknownPreserved", { id: currentIntent.requestId })}</Alert> : null}
+        {blockedByAnotherIntent ? <Alert status="warning">{t("authorizationAnotherIntent", { id: serviceAuthorizationIntent!.installationId })}</Alert> : null}
         <div className={styles.authorizationActions}>
-          <Button disabled title={t("authorizationReleaseBoundary")}>{t(authorized ? "authorizationAlreadyActive" : "authorizePendingRelease")}</Button>
+          {currentIntent && !currentIntent.open ? <Button ref={currentIntent.kind === "unbind" ? unbindTrigger : authorizationTrigger} onClick={reopenServiceAuthorizationIntent}>{t("resumeAuthorization")}</Button>
+            : <Button
+              ref={authorized ? unbindTrigger : authorizationTrigger}
+              disabled={blockedByAnotherIntent}
+              onClick={() => beginServiceAuthorization(accountId, installationId, observation, authorized ? "unbind" : "bind")}
+              variant={authorized ? "danger" : "primary"}
+            >{t(authorized ? "reviewLiveUnbind" : accountAuthorized ? "reviewLiveBinding" : "reviewLiveAuthorization")}</Button>}
           <Link className={styles.textLink} href="/console/access/roles/">{t("openIamObservation")} <ArrowRight aria-hidden="true" /></Link>
         </div>
       </> : null}
+    </Card.Body>
+  </Card>;
+}
+
+function LiveServiceAuthorizationReview({ intent, onClose }: {
+  intent: ManagedServiceAuthorizationIntent;
+  onClose(): void;
+}) {
+  const t = useTranslations("ManagedService");
+  const { submitServiceAuthorization } = useControlPlane();
+  const submitting = intent.phase === "submitting";
+  const retryable = intent.phase === "review" || intent.error === "unknown";
+  const isBind = intent.kind === "bind";
+  const relationActive = intent.relation?.role.status === "ACTIVE";
+
+  return <Card className={styles.authorizationCard}>
+    <Card.Header className={styles.authorizationHeading}>
+      <span><ShieldCheck aria-hidden="true" /></span>
+      <div><Typography.Eyebrow>{t("authorizationLiveWriteEyebrow")}</Typography.Eyebrow><Typography.Title as="h3" level={3}>{t(isBind ? "confirmLiveAuthorization" : "confirmLiveUnbind")}</Typography.Title><Typography.Text tone="muted">{t(isBind ? "confirmLiveAuthorizationHint" : "confirmLiveUnbindHint")}</Typography.Text></div>
+      <Badge status={isBind ? "info" : "warning"}>{t(isBind ? "bindingAction" : "unbindingAction")}</Badge>
+    </Card.Header>
+    <Card.Body className={styles.authorizationBody} aria-busy={submitting}>
+      <ServiceAuthorizationChain
+        template={{ label: t("publishedTemplate", { version: intent.template.version }), tone: "success" }}
+        account={{ label: relationActive ? t("accountAuthorized") : t("accountCreatedOnConfirmation"), tone: relationActive ? "success" : "neutral" }}
+        binding={{ label: isBind ? t("bindingCreatedOnConfirmation") : t("instanceBound"), tone: isBind ? "neutral" : "success" }}
+        runtime={{ label: t("runtimeNotObserved") }}
+      />
+      <dl className={styles.authorizationFacts}>
+        <div><dt>{t("instanceId")}</dt><dd><Typography.Code>{intent.installationId}</Typography.Code><small>{t("exactWorkloadBoundary")}</small></dd></div>
+        <div><dt>{t("authorizationTemplate")}</dt><dd><Typography.Code>{intent.template.id}@v{intent.template.version}</Typography.Code><small><Typography.Code>{intent.template.contentDigest}</Typography.Code></small></dd></div>
+        <div><dt>{t("authorizationPermissionCeiling")}</dt><dd><Typography.Code>{intent.template.spec.policyVersion.policyId}</Typography.Code><small><Typography.Code>{intent.template.spec.policyVersion.versionId}</Typography.Code></small></dd></div>
+        <div><dt>{t("authorizationAccount")}</dt><dd><Typography.Code>{intent.accountId}</Typography.Code><small>{t("accountDerivedBoundary")}</small></dd></div>
+        <div><dt>{t("authorizationBinding")}</dt><dd>{intent.binding ? <Typography.Code>{intent.binding.id}</Typography.Code> : t("bindingNotCreated")}<small>{isBind ? t("bindAffectsExactResource") : t("unbindKeepsAccountRelation")}</small></dd></div>
+        <div><dt>{t("authorizationRequest")}</dt><dd><Typography.Code>{intent.requestId}</Typography.Code><small>{t("idempotencyBoundary")}</small></dd></div>
+      </dl>
+      <Alert status={isBind ? "info" : "warning"}>{t(isBind ? "liveBindBoundary" : "liveUnbindBoundary")}</Alert>
+      {intent.error ? <Alert status={intent.error === "unknown" ? "warning" : "danger"}>{t(`authorizationMutationErrors.${intent.error}`)}</Alert> : null}
+      <div className={styles.authorizationActions}>
+        {retryable ? <Button disabled={submitting} variant={isBind ? "primary" : "danger"} onClick={() => void submitServiceAuthorization()}>{t(submitting ? "authorizationSubmitting" : intent.error === "unknown" ? "retrySameAuthorization" : isBind ? "confirmAuthorization" : "confirmUnbind")}</Button> : null}
+        <Button disabled={submitting} variant="secondary" onClick={onClose}>{t(intent.error === "unknown" ? "returnPreservingAuthorization" : "cancelAuthorization")}</Button>
+      </div>
     </Card.Body>
   </Card>;
 }
@@ -280,6 +342,7 @@ function InstallationContent({ scene, preview, accountId }: {
   accountId?: string;
 }) {
   const t = useTranslations("ManagedService");
+  const { closeServiceAuthorizationIntent, serviceAuthorizationIntent } = useControlPlane();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [review, setReview] = useState<"authorize" | "unbind" | null>(null);
   const [stage, setStage] = useState(0);
@@ -305,10 +368,16 @@ function InstallationContent({ scene, preview, accountId }: {
   }, [review, selected]);
 
   if (selected) {
+    const liveIntent = !preview && serviceAuthorizationIntent?.installationId === selected.id && serviceAuthorizationIntent.open ? serviceAuthorizationIntent : null;
     const previewBound = previewBoundIds.has(selected.id);
     const previewUnbound = previewUnboundIds.has(selected.id);
     const previewBindingId = `preview.workload-role-binding.${selected.id}`;
     const closeDetail = () => {
+      if (liveIntent) {
+        closeServiceAuthorizationIntent();
+        window.setTimeout(() => (liveIntent.kind === "unbind" ? unbindTrigger.current : authorizationTrigger.current)?.focus({ preventScroll: true }), 0);
+        return;
+      }
       if (review) {
         const previousReview = review;
         setReview(null);
@@ -321,11 +390,11 @@ function InstallationContent({ scene, preview, accountId }: {
     return <section className={styles.installationDetail} aria-labelledby="managed-service-installation-detail-title">
       <div className={styles.detailHeading}>
         <Button variant="ghost" size="small" onClick={closeDetail}><ArrowLeft aria-hidden="true" />{t(review ? "backToInstance" : "backToInstances")}</Button>
-        <div><Typography.Eyebrow>{t(review ? "authorizationEyebrow" : "instanceEyebrow")}</Typography.Eyebrow><h2 className={styles.detailTitle} id="managed-service-installation-detail-title" ref={heading} tabIndex={-1}>{review === "authorize" ? t("authorizationTitle", { name: selected.name }) : review === "unbind" ? t("unbindTitle", { name: selected.name }) : selected.name}</h2></div>
-        <Badge status={review ? "warning" : selected.status}>{review ? "MOCK" : t(`installationPhases.${selected.phase}`)}</Badge>
+        <div><Typography.Eyebrow>{t(review ? "authorizationEyebrow" : liveIntent ? "authorizationLiveWriteEyebrow" : "instanceEyebrow")}</Typography.Eyebrow><h2 className={styles.detailTitle} id="managed-service-installation-detail-title" ref={heading} tabIndex={-1}>{review === "authorize" ? t("authorizationTitle", { name: selected.name }) : review === "unbind" ? t("unbindTitle", { name: selected.name }) : liveIntent ? t(liveIntent.kind === "bind" ? "authorizationTitle" : "unbindTitle", { name: selected.name }) : selected.name}</h2></div>
+        <Badge status={review ? "warning" : liveIntent ? "info" : selected.status}>{review ? "MOCK" : liveIntent ? "LIVE" : t(`installationPhases.${selected.phase}`)}</Badge>
       </div>
 
-      {review === "authorize" && accountId ? <>
+      {liveIntent ? <LiveServiceAuthorizationReview intent={liveIntent} onClose={closeDetail} /> : review === "authorize" && accountId ? <>
         <Alert status="warning">{t("authorizationPreviewBoundary")}</Alert>
         <ServiceAuthorizationConsentReview accountId={accountId} targetResourceId={selected.id} stage={stage} onStageChange={setStage} onClose={closeDetail} onPreviewAuthorize={preview ? () => {
           setPreviewAccountAuthorized(true);
@@ -365,7 +434,7 @@ function InstallationContent({ scene, preview, accountId }: {
               {previewBound ? <Button ref={unbindTrigger} variant="danger" onClick={() => setReview("unbind")}>{t("reviewUnbind")}</Button> : null}
             </div>
           </Card.Body>
-        </Card> : accountId ? <LiveServiceAuthorizationCard accountId={accountId} installationId={selected.id} /> : null}
+        </Card> : accountId ? <LiveServiceAuthorizationCard accountId={accountId} installationId={selected.id} authorizationTrigger={authorizationTrigger} unbindTrigger={unbindTrigger} /> : null}
       </>}
     </section>;
   }
