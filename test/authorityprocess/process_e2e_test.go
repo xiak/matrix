@@ -110,7 +110,7 @@ func TestRuntimeDSNBindsLeastPrivilegeLogin(t *testing.T) {
 func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	const variable = "MATRIX_IAM_PREDECESSOR_POSTGRES_TEST_DSN"
 	const databasePrefix = "matrix_iam_upgrade_predecessor_"
-	const source = "05336ad368996a500c0769fe62767204bd9333d0"
+	const source = "76048c52db248da2619d9d3e662394551e6f1ab1"
 	const sourceSchema uint64 = 59
 	const currentSchema uint64 = 59
 	// Use credentials accepted by the immediate predecessor. This rolling
@@ -353,6 +353,23 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		iamv1.ValidateAuthorizationProfile(oldPaaSProfile) != nil || oldPaaSProfile.Revision != oldPaaSProfileRevision {
 		t.Fatal("predecessor PaaS profile archive is invalid")
 	}
+	var oldAuditProfileRevision uint64
+	var oldAuditProfileDocument, oldAuditProfileDigest string
+	if err := admin.QueryRow(ctx, `SELECT p.revision,p.canonical_document,p.content_digest
+		FROM iam.authorization_profiles p JOIN iam.authorization_profile_heads h
+		ON (h.product,h.revision)=(p.product,p.revision) WHERE h.product='audit'`).Scan(
+		&oldAuditProfileRevision, &oldAuditProfileDocument, &oldAuditProfileDigest); err != nil ||
+		oldAuditProfileRevision != 2 || oldAuditProfileDigest != "sha256:d59fe726e2aaa4857b395da04ef79906305e56137974dfea5c96a26b32fdfa55" {
+		t.Fatal("predecessor Audit profile archive is invalid", err)
+	}
+	expectedAuditProfile, found := iamv1.LookupAuthorizationProfile(iamv1.ProductAudit)
+	if !found || expectedAuditProfile.Revision != 3 {
+		t.Fatal("current source has no Audit AccessKey profile")
+	}
+	expectedAuditProfileDocument, expectedAuditProfileDigest, err := iamv1.CanonicalizeAuthorizationProfile(expectedAuditProfile)
+	if err != nil {
+		t.Fatal("canonicalize current Audit product declaration", err)
+	}
 	retainedTagGrant := createIAMPolicyAttachment(t, endpoint, primary.Credential, member.ID,
 		iamv1.SystemPolicyPaaSDeveloper, "retained-request-tag-developer")
 	if retainedTagGrant.Target.ID != string(member.ID) {
@@ -539,6 +556,23 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		t.Fatal("retained database did not satisfy current IAM readiness and fail-closed defaults", err)
 	}
 	current := start(currentBinary, currentSchema)
+	var retainedAuditProfileDocument, retainedAuditProfileDigest string
+	var currentAuditProfileRevision uint64
+	var currentAuditProfileDocument, currentAuditProfileDigest string
+	if err := admin.QueryRow(ctx, `SELECT canonical_document,content_digest FROM iam.authorization_profiles
+		WHERE product='audit' AND revision=$1`, oldAuditProfileRevision).Scan(
+		&retainedAuditProfileDocument, &retainedAuditProfileDigest); err != nil ||
+		retainedAuditProfileDocument != oldAuditProfileDocument || retainedAuditProfileDigest != oldAuditProfileDigest {
+		t.Fatal("migration rewrote the predecessor Audit profile archive", err)
+	}
+	if err := admin.QueryRow(ctx, `SELECT p.revision,p.canonical_document,p.content_digest
+		FROM iam.authorization_profiles p JOIN iam.authorization_profile_heads h
+		ON (h.product,h.revision)=(p.product,p.revision) WHERE h.product='audit'`).Scan(
+		&currentAuditProfileRevision, &currentAuditProfileDocument, &currentAuditProfileDigest); err != nil ||
+		currentAuditProfileRevision != expectedAuditProfile.Revision ||
+		currentAuditProfileDocument != expectedAuditProfileDocument || currentAuditProfileDigest != expectedAuditProfileDigest {
+		t.Fatal("migration did not install the exact current Audit profile", err)
+	}
 	var migratedTagDecisionDocument []byte
 	var migratedTagContract uint64
 	var migratedResourceTagDecisionDocument []byte
