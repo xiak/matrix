@@ -6,9 +6,8 @@
 - Updated: 2026-10-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `3ffca742`
-- Pushed strict-contract test follow-up: `160b6be4`
-- Pushed documentation milestone: `c82c20b3`
+- Pushed source/embed milestone: `db01dd6da`
+- Pushed documentation milestone: `32875b00a`
 
 ## Authoritative route
 
@@ -27,39 +26,22 @@ compaction or handoff, then validate it against Git and the linked FEAT.
 ## Latest pushed milestone
 
 The independent DEV MOCK remains available at `http://127.0.0.1:4317`, and
-login verification remains disabled for UX review. The catalog-driven visual
-policy author now distinguishes trusted request facts from target-resource
-facts. Its PaaS revision-5 preview exposes `resource.tag/environment` only on
-`paas.application.read`, requires an exact instance resource, and explains
-missing-tag, per-resource recheck and collection-boundary behavior. The browser
-authors only policy syntax; it never submits or overrides trusted resource
-facts and does not present resource-tag mutation as policy authoring.
+login verification remains disabled for UX review. Application Hosting now has
+a same-path, content-area resource detail reached from its resource directory.
+Known identity, state, project, region and product facts remain stable while the
+query changes; the journey does not open a Dialog or replace the page with a
+whole-content skeleton. The explicit preview shows the product-owned resource
+tag snapshot, ETag and the current MOCK Profile's one declared
+`resource.tag/environment` condition. Other tags remain visibly outside the
+Profile, and policy authoring remains unable to mutate resource tags. Unknown
+resource IDs fail locally without fabricating a detail.
 
-Resource-tag wording source/embed are pushed at `d42b3b06`. The isolated
-four-method resource-tag preview now scopes
-its request-tag omission to that preview and directs catalog-driven behavior to
-the selected Product Profile, avoiding a false platform-wide limitation. Strict
-negative coverage at `160b6be4` rejects unknown
-resource-tag keys, wrong trusted sources, wrong value types and invalid tag
-values without changing production behavior. The milestone passed 57 frontend files / 920 tests,
-three normalization cases, type/lint/architecture checks, 228 theme contrast
-pairs, a 42-route static export, embed equality and repository Go test/vet.
-Desktop and `430 x 900` DEV verified the exact Action, resource-tag condition
-and review flow without a Dialog or page overflow.
-
-The wording-alignment follow-up additionally passed the 174-case access workspace
-suite, frontend typecheck/lint, the 42-route export, 233-file embed equality and
-the UI embed host Go test/vet. A fresh `430 x 900` check kept viewport, document
-and body width at 430px, rendered the scoped state and used no Dialog.
-
-The latest source and synchronized embed are pushed at `3ffca742`; FEAT evidence
-is pushed at `c82c20b3`. The Profile-driven Action selector now gives a visible
-compatible/incompatible count and a specific reason on every disabled row,
-without widening the exact statement or IAM wire. Compatibility derivation is
-memoized across local search, selected-only filtering and pagination. Its
-99-case LIVE account renderer, type/lint/architecture/style, 42-route export,
-233-file embed and UI host Go gates passed. Desktop and `430 x 900` DEV showed
-the count and row reason with no Dialog or document overflow.
+Source and synchronized embed are pushed at `db01dd6da`; FEAT evidence is
+pushed at `32875b00a`. The 57-file/922-case frontend suite, three normalization
+cases, typecheck/lint/architecture/228-pair style gates, 42-route export,
+233-file embed equality and UI host Go test/vet passed. Desktop and `430 x 900`
+DEV verified directory → detail plus browser back/forward with no Dialog,
+warning/error or overflow; viewport, document and body width stayed 430px.
 
 The previously pushed AccessKey owner directory, policy-compilation provenance,
 service-authorization, policy-coverage, Audit, cross-service loading/navigation
