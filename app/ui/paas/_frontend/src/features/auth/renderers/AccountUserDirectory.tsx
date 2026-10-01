@@ -9,7 +9,7 @@ import { useAccountAccess } from "../application/AccountAccessProvider";
 import type { AccountAccessView } from "../domain/accounts";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
-import { AccountLiveUserWorkspace, AccountPrimaryWorkspace, AccountUserAccessMethods, AccountUserWorkspace } from "./AccountUserWorkspace";
+import { AccountLiveUserWorkspace, AccountPrimaryWorkspace, AccountUserAccessMethods, AccountUserWorkspace, type AccountUserDetailTab } from "./AccountUserWorkspace";
 import { UserBatchDialog, type DirectoryUser } from "./UserBatchDialog";
 import { userBatchActions, userBatchDisabledReason, userBatchLimit, type UserBatchAction } from "../domain/userBatch";
 import styles from "./AccountAccessRenderer.module.css";
@@ -60,7 +60,7 @@ function AccountOwnerSummary({ scene, onOpen }: { scene: AccountAccessScene; onO
   </section>;
 }
 
-export function AccountUserDirectory({ scene, entityId, onCreate, onOpen }: { scene: AccountAccessScene; entityId?: string; onCreate(): void; onOpen(view: AccountAccessView, id?: string): void }) {
+export function AccountUserDirectory({ scene, entityId, initialDetailTab, onCreate, onOpen }: { scene: AccountAccessScene; entityId?: string; initialDetailTab?: AccountUserDetailTab; onCreate(): void; onOpen(view: AccountAccessView, id?: string): void }) {
   const t = useTranslations("AccountAccess");
   const w = useTranslations("IamWorkspace");
   const batch = useTranslations("UserBatch");
@@ -120,7 +120,7 @@ export function AccountUserDirectory({ scene, entityId, onCreate, onOpen }: { sc
   const batchContext = { canListUsers: scene.canListUsers, supported: access.supportsUserBatch, rootId: scene.accountOwner.id, actorId: scene.currentUserId, targets: checkedUsers.map((user) => ({ id: user.id, enabled: user.enabled, canSetStatus: user.canSetStatus, canAttachPolicy: user.canAttachTenantPolicy, protected: user.protected })) };
   if (entityId === scene.accountOwner.id) return <AccountPrimaryWorkspace scene={scene} onBack={() => onOpen("users")} onOpen={onOpen} />;
   if (entityId && !detail) return <EmptyState title={w("entityUnavailable")} description={w("entityUnavailableHint")} action={<Button variant="secondary" onClick={() => onOpen("users")}>{w("back")}</Button>} />;
-  if (detail && access.workspace) return <AccountUserWorkspace user={detail} workspace={access.workspace} scene={scene} onBack={() => onOpen("users")} onOpen={onOpen} />;
+  if (detail && access.workspace) return <AccountUserWorkspace user={detail} workspace={access.workspace} scene={scene} initialTab={initialDetailTab} onBack={() => onOpen("users")} onOpen={onOpen} />;
   if (detail) return detail.canRead ? <AccountLiveUserWorkspace key={`${detail.id}:${detail.resourceVersion}`} summary={detail} onBack={() => onOpen("users")} /> : <EmptyState title={t("accessDenied")} description={t("accessDeniedHint")} action={<Button variant="secondary" onClick={() => onOpen("users")}>{w("back")}</Button>} />;
   return <div className={styles.userDirectory}>
     <Card>

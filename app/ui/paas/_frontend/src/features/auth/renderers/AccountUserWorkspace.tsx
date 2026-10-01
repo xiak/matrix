@@ -14,6 +14,8 @@ import { LivePermissionBoundary, PermissionBoundary } from "./PermissionBoundary
 import { UserAssociationWorkflow } from "./UserAssociationWorkflow";
 import styles from "./AccountAccessRenderer.module.css";
 
+export type AccountUserDetailTab = "identity" | "access" | "policies" | "groups" | "security" | "keys";
+
 export function AccountUserAccessMethods({ user, workspace }: { user: AccountUserScene; workspace: AccessWorkspace | null }) {
   const t = useTranslations("UserWizard");
   const a = useTranslations("AccountAccess");
@@ -102,7 +104,7 @@ function UserEditor({ user, onClose }: { user: AccountUserScene; onClose(): void
   return <WorkspaceDialog title={t("edit") + " · " + user.loginName} onClose={onClose} onSubmit={async () => Boolean(await access.executeWorkspace({ kind: "update-user", principalId: user.id, displayName: name }))}><FormField id={id} label={t("name")}><Input id={id} required maxLength={128} value={name} onChange={(event) => setName(event.target.value)} /></FormField></WorkspaceDialog>;
 }
 
-export function AccountUserWorkspace({ user, scene, workspace, onBack, onOpen }: { user: AccountUserScene; scene: AccountAccessScene; workspace: AccessWorkspace; onBack(): void; onOpen(view: AccountAccessView, id?: string): void }) {
+export function AccountUserWorkspace({ user, scene, workspace, initialTab = "identity", onBack, onOpen }: { user: AccountUserScene; scene: AccountAccessScene; workspace: AccessWorkspace; initialTab?: AccountUserDetailTab; onBack(): void; onOpen(view: AccountAccessView, id?: string): void }) {
   const t = useTranslations("IamWorkspace");
   const a = useTranslations("AccountAccess");
   const wizard = useTranslations("UserWizard");
@@ -123,7 +125,7 @@ export function AccountUserWorkspace({ user, scene, workspace, onBack, onOpen }:
   if (association) return <UserAssociationWorkflow user={user} workspace={workspace} kind={association} onBack={() => setAssociation(null)} />;
   return <><WorkspaceDetail title={user.loginName} onBack={onBack} actions={{ primary: { id: "edit", label: t("edit"), variant: "secondary", onSelect: () => setDialog("edit") }, secondary: [{ id: "delete", label: t("delete"), danger: true, disabled: user.protected, disabledReason: user.protected ? a("protectedHint") : undefined, onSelect: () => setDialog("delete") }] }}>
     <div className={styles.userSummary}><div><strong>{user.name}</strong><span className={styles.note}>{user.qualifiedName}</span></div><div className={styles.roleTags}><Badge>{a("child")}</Badge><Badge status={user.enabled ? "success" : "neutral"}>{a(`states.${user.state}`)}</Badge></div></div>
-    <Tabs.Root defaultValue="identity"><Tabs.List aria-label={user.loginName}><Tabs.Trigger value="identity">{a("identityInfo")}</Tabs.Trigger><Tabs.Trigger value="access">{a("accessMethods")}</Tabs.Trigger><Tabs.Trigger value="policies">{t("permissions")}</Tabs.Trigger><Tabs.Trigger value="groups">{t("userGroups")}</Tabs.Trigger><Tabs.Trigger value="security">{t("securitySettings")}</Tabs.Trigger><Tabs.Trigger value="keys">{t("keys")}</Tabs.Trigger></Tabs.List>
+    <Tabs.Root defaultValue={initialTab}><Tabs.List aria-label={user.loginName}><Tabs.Trigger value="identity">{a("identityInfo")}</Tabs.Trigger><Tabs.Trigger value="access">{a("accessMethods")}</Tabs.Trigger><Tabs.Trigger value="policies">{t("permissions")}</Tabs.Trigger><Tabs.Trigger value="groups">{t("userGroups")}</Tabs.Trigger><Tabs.Trigger value="security">{t("securitySettings")}</Tabs.Trigger><Tabs.Trigger value="keys">{t("keys")}</Tabs.Trigger></Tabs.List>
       <Tabs.Content className={styles.stack} value="identity"><dl className={styles.facts}>
         <div><dt>{a("userType")}</dt><dd>{a("child")}</dd></div><div><dt>{a("ownership")}</dt><dd>{scene.accountName}</dd></div><div><dt>{a("tenantId")}</dt><dd>{scene.accountId}</dd></div><div><dt>{a("userId")}</dt><dd>{user.id}</dd></div><div><dt>{a("currentLoginName")}</dt><dd>{user.loginName}</dd></div><div><dt>{a("qualifiedLogin")}</dt><dd>{user.qualifiedName}</dd></div>
         {profile ? <div><dt>{wizard("steps.tags")}</dt><dd>{profile.tags.map((tag) => <Badge key={tag.key}>{tag.key} : {tag.value || "—"}</Badge>)}{!profile.tags.length ? wizard("none") : null}</dd></div> : null}

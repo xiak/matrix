@@ -2,6 +2,7 @@ import { Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState, ty
 import { useSearchParams } from "next/navigation";
 import { ConsoleLink as Link, useConsoleNavigation } from "../routes/ConsoleNavigation";
 import { AccountAccessRenderer } from "@/features/auth/renderers/AccountAccessRenderer";
+import type { AccountUserDetailTab } from "@/features/auth/renderers/AccountUserWorkspace";
 import {
   ArrowRight,
   ArrowLeft,
@@ -493,10 +494,13 @@ function AccessContent({ pendingHref, view }: { pendingHref?: string | null; vie
   const params = pendingHref ? new URL(pendingHref, "https://matrix.invalid").searchParams : currentParams;
   const entityId = params.get("id") ?? undefined;
   const policyMethod = view === "create-policy" ? params.get("method") ?? undefined : undefined;
-  return <AccountAccessRenderer key={view + ":" + (entityId ?? "") + ":" + (policyMethod ?? "")} view={view} entityId={entityId} policyMethod={policyMethod} onNavigate={(next, id, method) => {
+  const requestedUserTab = view === "users" ? params.get("tab") : null;
+  const userTab = requestedUserTab && ["identity", "access", "policies", "groups", "security", "keys"].includes(requestedUserTab) ? requestedUserTab as AccountUserDetailTab : undefined;
+  return <AccountAccessRenderer key={view + ":" + (entityId ?? "") + ":" + (policyMethod ?? "") + ":" + (userTab ?? "")} view={view} entityId={entityId} policyMethod={policyMethod} userTab={userTab} onNavigate={(next, id, method, nextUserTab) => {
     const query = new URLSearchParams();
     if (id) query.set("id", id);
     if (next === "create-policy" && method) query.set("method", method);
+    if (next === "users" && id && nextUserTab) query.set("tab", nextUserTab);
     navigate((next === "overview" ? "/console/access/" : `/console/access/${next}/`) + (query.size ? "?" + query.toString() : ""));
   }} />;
 }

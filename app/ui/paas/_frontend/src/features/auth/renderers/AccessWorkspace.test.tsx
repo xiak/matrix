@@ -13,6 +13,7 @@ import { createPreviewAccessWorkspace } from "../repositories/previewAccessWorks
 import { PolicyDocumentViewer } from "./PolicyDocumentViewer";
 import type { PolicyDocument } from "../domain/policyDocument";
 import { AccountAccessRenderer } from "./AccountAccessRenderer";
+import type { AccountUserDetailTab } from "./AccountUserWorkspace";
 import { GroupDetail, GroupDirectory } from "./GroupAccessWorkspace";
 import { AccessAnalysisPreview, AccessReportPreview, AccessReports } from "./AccessReports";
 import { buildAccessActivityObservations, buildAccessAnalysisPreview, buildAccessReport, buildAccessSecuritySnapshot } from "../scenes/accessReport";
@@ -87,8 +88,9 @@ function Harness({ repository, initialView, initialEntityId }: { repository: Acc
   const [view, setView] = useState(initialView);
   const [entityId, setEntityId] = useState(initialEntityId);
   const [policyMethod, setPolicyMethod] = useState<string>();
+  const [userTab, setUserTab] = useState<AccountUserDetailTab>();
   if (!session.current) return <button onClick={() => void session.login("admin", "preview")}>Enter</button>;
-  return <AccountAccessProvider repository={repository}><button onClick={() => locale.setLocale(locale.locale === "en" ? "zh-CN" : "en")}>Language</button><AccountRefresh /><ReauthenticationGuardProbe /><nav>{accountAccessViews.map((target) => <button data-testid={"go-" + target} key={target} onClick={() => requestLeave(() => { setView(target); setEntityId(undefined); setPolicyMethod(undefined); })}>{target}</button>)}</nav><output aria-label="Entity destination">{entityId ?? "directory"}</output><AccountAccessRenderer key={view + ":" + (entityId ?? "") + ":" + (policyMethod ?? "")} view={view} entityId={entityId} policyMethod={policyMethod} onNavigate={(next, id, method) => requestLeave(() => { setView(next); setEntityId(id); setPolicyMethod(method); })} /></AccountAccessProvider>;
+  return <AccountAccessProvider repository={repository}><button onClick={() => locale.setLocale(locale.locale === "en" ? "zh-CN" : "en")}>Language</button><AccountRefresh /><ReauthenticationGuardProbe /><nav>{accountAccessViews.map((target) => <button data-testid={"go-" + target} key={target} onClick={() => requestLeave(() => { setView(target); setEntityId(undefined); setPolicyMethod(undefined); setUserTab(undefined); })}>{target}</button>)}</nav><output aria-label="Entity destination">{entityId ?? "directory"}</output><AccountAccessRenderer key={view + ":" + (entityId ?? "") + ":" + (policyMethod ?? "") + ":" + (userTab ?? "")} view={view} entityId={entityId} policyMethod={policyMethod} userTab={userTab} onNavigate={(next, id, method, nextUserTab) => requestLeave(() => { setView(next); setEntityId(id); setPolicyMethod(method); setUserTab(nextUserTab); })} /></AccountAccessProvider>;
 }
 async function open(initialView: AccountAccessView, options?: { live?: boolean; reader?: boolean; entityId?: string; users?: UserAccess[]; repository?: Partial<AccountRepository>; seed?(extension: ReturnType<typeof createPreviewAccessWorkspace>): Promise<void> }) {
   const directoryUsers = options?.users ?? users;
@@ -2907,6 +2909,8 @@ describe("CAM-style access workspace", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     await user.click(screen.getByRole("button", { name: "核对该用户的权限来源" }));
     expect(screen.getByLabelText("Entity destination").textContent).toBe("principal-lin");
+    expect(screen.getByRole("tab", { name: "权限策略" }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByText(/直接策略与用户组继承分别展示/)).toBeTruthy();
   });
   it("locks an uncertain access-key creation to its original request and never reveals the lost secret", async () => {
     const { user, extension } = await open("keys");
