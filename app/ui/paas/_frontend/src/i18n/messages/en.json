@@ -4263,7 +4263,7 @@
     "wildcardAction": "An action wildcard can include actions registered in the future. Consider an explicit action list.",
     "duplicateStatement": "This duplicates an earlier statement. Consider merging them to simplify review.",
     "tagMethod": "Resource tags",
-    "tagMethodHint": "Every statement requires resource-tag conditions and operations that support them. All tags must match. Unsupported operations never receive unrestricted access automatically. Request tags are not supported by the current model.",
+    "tagMethodHint": "Every statement requires resource-tag conditions and operations that support them. All tags must match. Unsupported operations never receive unrestricted access automatically. This isolated four-method MOCK does not author request tags; the catalog-driven editor exposes only request or resource conditions declared by a product Profile.",
     "reviewAssociations": "Review association changes",
     "selectAssociations": "Select associated identities",
     "review": "Next: review",
@@ -4366,7 +4366,7 @@
       "stages": {
         "resourceFacts": { "title": "Resource-tag facts", "state": "Product supplied", "hint": "The owning product persists tags and supplies them to authorization. Only operations declaring tag-condition support may use them." },
         "policyConditions": { "title": "Policy conditions", "state": "Authored here", "hint": "Every resource tag in a statement must match. Selecting a condition never broadens operations that do not support tags." },
-        "requestTagChanges": { "title": "Request tag changes", "state": "Not connected", "hint": "Creating, changing or deleting resource tags needs separate controls for allowed keys and values. This editor does not generate those conditions yet." },
+        "requestTagChanges": { "title": "Request tag changes", "state": "Not connected here", "hint": "Creating, changing or deleting resource tags needs separate controls for allowed keys and values. This isolated four-method MOCK does not generate those conditions; the catalog-driven editor consumes only trusted request tags declared by a product Profile." },
         "metadataTags": { "title": "Identity and policy tags", "state": "Management only", "hint": "Management tags on policies, users, groups and roles only organize and search objects; they are not current authorization facts." }
       },
       "failClosed": "A missing resource tag, unknown key or absent trusted context does not match and must never be ignored to continue with an Allow decision.",
