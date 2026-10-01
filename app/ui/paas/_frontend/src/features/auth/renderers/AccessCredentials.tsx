@@ -7,19 +7,20 @@ import { Alert, Badge, Button, Card, Checkbox, ContentPage, FormField, Select, T
 import { requestToken } from "@/infrastructure/http/jsonRequest";
 import { useAccountAccess, type AuthorizationProfileClient } from "../application/AccountAccessProvider";
 import { admittedAuthorizationUserAuthenticationMethods, type AuthorizationProfileDirectory } from "../domain/accounts";
+import { accessKeyNetworkDraftValue, parseAccessKeyNetworkDraft, type AccessKeyNetworkDraftIssue, type AccessKeyNetworkRestrictions } from "../domain/accessKeyNetwork";
 import type { AccessKey, AccessWorkspace } from "../domain/accessWorkspace";
 import type { AccountAccessScene, AccountUserScene } from "../scenes/accountAccessScene";
 import { AccountIdentifier } from "./AccountOverview";
 import { AccessKeyOwnerDirectory } from "./AccessKeyOwnerDirectory";
 import { WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
-import { AccessKeyNetworkDetail, AccessKeyNetworkEditor, AccessKeyUsagePreview } from "./AccessKeyNetworkPreview";
+import { AccessKeyNetworkDetail, AccessKeyNetworkDraftField, AccessKeyNetworkEditor, AccessKeyNetworkLayers, AccessKeyNetworkRestrictionValues, AccessKeyUsagePreview } from "./AccessKeyNetworkPreview";
 import styles from "./AccessCredentials.module.css";
 
 type KeyFlow =
-  | { kind: "create"; ownerId: string; requestId: string; scenario: "success" | "response-lost" }
-  | { kind: "issued"; ownerId: string; requestId: string; key: { id: string; secret: string } }
-  | { kind: "uncertain"; ownerId: string; requestId: string }
-  | { kind: "recovered"; ownerId: string; requestId: string; keyId: string }
+  | { kind: "create"; ownerId: string; requestId: string; scenario: "success" | "response-lost"; networkRestrictions: AccessKeyNetworkRestrictions }
+  | { kind: "issued"; ownerId: string; requestId: string; key: { id: string; secret: string }; networkRestrictions: AccessKeyNetworkRestrictions }
+  | { kind: "uncertain"; ownerId: string; requestId: string; userResourceVersion: number; networkRestrictions: AccessKeyNetworkRestrictions }
+  | { kind: "recovered"; ownerId: string; requestId: string; keyId: string; userResourceVersion: number; networkRestrictions: AccessKeyNetworkRestrictions }
   | { kind: "status"; keyId: string; requestId: string; status: AccessKey["status"] }
   | { kind: "delete"; keyId: string; requestId: string };
 
@@ -88,22 +89,27 @@ const previewProgrammaticBoundaries = [{
   ]
 }] as const;
 
-function InlineFlow({ flow, owner, keyValue, onChange, onClose, onOpenKey }: {
+function InlineFlow({ flow, owner, accountNetwork, keyValue, onChange, onClose, onOpenKey }: {
   flow: KeyFlow;
   owner: AccountUserScene;
+  accountNetwork: AccessKeyNetworkRestrictions;
   keyValue: AccessKey | null;
   onChange(flow: KeyFlow): void;
   onClose(): void;
   onOpenKey(id: string): void;
 }) {
   const t = useTranslations("IamWorkspace");
+  const network = useTranslations("AccessKeyNetworkPreview");
   const access = useAccountAccess();
   const scenarioId = useId();
   const inspectionId = useId();
+  const networkId = useId();
   const heading = useRef<HTMLHeadingElement>(null);
   const [acknowledged, setAcknowledged] = useState(false);
   const [deleteConfirmed, setDeleteConfirmed] = useState(false);
   const [inspectionMode, setInspectionMode] = useState<"found" | "not-found" | "unavailable">("found");
+  const [networkDraft, setNetworkDraft] = useState(() => accessKeyNetworkDraftValue("networkRestrictions" in flow ? flow.networkRestrictions : { allowedSourceCidrs: [] }));
+  const [networkIssue, setNetworkIssue] = useState<AccessKeyNetworkDraftIssue | null>(null);
   useEffect(() => { heading.current?.focus({ preventScroll: true }); }, [flow.kind]);
 
   const title = flow.kind === "create" ? t("keyCreateReview")
@@ -115,17 +121,25 @@ function InlineFlow({ flow, owner, keyValue, onChange, onClose, onOpenKey }: {
 
   const create = async () => {
     if (flow.kind !== "create") return;
+    const parsed = parseAccessKeyNetworkDraft(networkDraft);
+    if (!parsed.ok) {
+      setNetworkIssue(parsed.issue);
+      document.getElementById(networkId)?.focus();
+      return;
+    }
+    setNetworkIssue(null);
     const result = await access.executeWorkspace({
       kind: "create-key",
       ownerId: owner.id,
       ownerState: owner.state,
       userResourceVersion: owner.resourceVersion,
+      networkRestrictions: parsed.restrictions,
       requestId: flow.requestId,
       responseMode: flow.scenario
     });
     if (!result) return;
     if (flow.scenario === "response-lost") { onClose(); return; }
-    if (result.issuedKey) onChange({ kind: "issued", ownerId: owner.id, requestId: flow.requestId, key: result.issuedKey });
+    if (result.issuedKey) onChange({ kind: "issued", ownerId: owner.id, requestId: flow.requestId, key: result.issuedKey, networkRestrictions: parsed.restrictions });
   };
 
   const applyStatus = async () => {
@@ -148,6 +162,14 @@ function InlineFlow({ flow, owner, keyValue, onChange, onClose, onOpenKey }: {
           <div><dt>{t("keyUserRevision")}</dt><dd>v{owner.resourceVersion}</dd></div>
           <div><dt>requestId</dt><dd><code>{flow.requestId}</code></dd></div>
         </dl>
+        <section aria-labelledby={`${networkId}-title`} className={styles.createNetwork}>
+          <div className={styles.createNetworkHeading}><h3 id={`${networkId}-title`}>{t("keyCreateNetworkTitle")}</h3><p>{t("keyCreateNetworkHint")}</p></div>
+          <div className={styles.createNetworkGrid}>
+            <section><h4>{network("accountLayer")}</h4><AccessKeyNetworkRestrictionValues value={accountNetwork} /></section>
+            <AccessKeyNetworkDraftField id={networkId} issue={networkIssue} value={networkDraft} onChange={(value) => { setNetworkDraft(value); setNetworkIssue(null); }} />
+          </div>
+          <Alert status="info">{network("andBoundary")}</Alert>
+        </section>
         <Alert status="warning">{t("keyCreateWarning")}</Alert>
         <FormField id={scenarioId} label={t("keyScenario")} hint={t("keyScenarioHint")}>
           <Select id={scenarioId} disabled={access.busy} value={flow.scenario} options={[
@@ -162,13 +184,15 @@ function InlineFlow({ flow, owner, keyValue, onChange, onClose, onOpenKey }: {
       {flow.kind === "issued" ? <>
         <Alert status="warning">{t("keyWarning")}</Alert>
         <div className={styles.secretGrid}><div><span>{t("keyId")}</span><AccountIdentifier label={t("keyId")} value={flow.key.id} /></div><div><span>{t("keySecret")}</span><AccountIdentifier label={t("keySecret")} value={flow.key.secret} /></div></div>
+        <section className={styles.networkReceipt} aria-label={t("keyCreateNetworkResult")}><h3>{t("keyCreateNetworkResult")}</h3><AccessKeyNetworkLayers account={accountNetwork} keyValue={flow.networkRestrictions} /></section>
         <Checkbox checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)}>{t("keyAcknowledge")}</Checkbox>
         <div className={styles.actions}><Button disabled={!acknowledged} onClick={onClose}>{t("done")}</Button></div>
       </> : null}
 
       {flow.kind === "uncertain" ? <>
         <Alert status="warning">{t("keyCreateUncertain", { id: flow.requestId })}</Alert>
-        <dl className={styles.reviewFacts}><div><dt>requestId</dt><dd><code>{flow.requestId}</code></dd></div><div><dt>{t("keyIntentState")}</dt><dd><Badge status="warning">UNKNOWN</Badge></dd></div></dl>
+        <dl className={styles.reviewFacts}><div><dt>requestId</dt><dd><code>{flow.requestId}</code></dd></div><div><dt>{t("keyUserRevision")}</dt><dd>v{flow.userResourceVersion}</dd></div><div><dt>{t("keyIntentState")}</dt><dd><Badge status="warning">UNKNOWN</Badge></dd></div></dl>
+        <section className={styles.networkReceipt} aria-label={t("keyCreateNetworkFrozen")}><h3>{t("keyCreateNetworkFrozen")}</h3><AccessKeyNetworkLayers account={accountNetwork} keyValue={flow.networkRestrictions} /></section>
         <p className={styles.note}>{t("keyIntentLocked")}</p>
         <FormField id={inspectionId} label={t("keyInspectionScenario")} hint={t("keyInspectionScenarioHint")}>
           <Select id={inspectionId} disabled={access.busy} value={inspectionMode} options={[
@@ -182,7 +206,8 @@ function InlineFlow({ flow, owner, keyValue, onChange, onClose, onOpenKey }: {
 
       {flow.kind === "recovered" ? <>
         <Alert status="warning">{t("keyRecovered", { id: flow.keyId })}</Alert>
-        <dl className={styles.reviewFacts}><div><dt>{t("keyId")}</dt><dd><code>{flow.keyId}</code></dd></div><div><dt>{t("keySecret")}</dt><dd>{t("keySecretUnavailable")}</dd></div><div><dt>requestId</dt><dd><code>{flow.requestId}</code></dd></div></dl>
+        <dl className={styles.reviewFacts}><div><dt>{t("keyId")}</dt><dd><code>{flow.keyId}</code></dd></div><div><dt>{t("keySecret")}</dt><dd>{t("keySecretUnavailable")}</dd></div><div><dt>{t("keyUserRevision")}</dt><dd>v{flow.userResourceVersion}</dd></div><div><dt>requestId</dt><dd><code>{flow.requestId}</code></dd></div></dl>
+        <section className={styles.networkReceipt} aria-label={t("keyCreateNetworkResult")}><h3>{t("keyCreateNetworkResult")}</h3><AccessKeyNetworkLayers account={accountNetwork} keyValue={flow.networkRestrictions} /></section>
         <p className={styles.note}>{t("keyRecoveredNext")}</p>
         <div className={styles.actions}><Button onClick={() => onOpenKey(flow.keyId)}>{t("keyInspectAndReplace")}</Button></div>
       </> : null}
@@ -345,8 +370,8 @@ export function AccessCredentials({ workspace, scene, embedded = false, onInspec
   const ownerKeys = owner ? workspace.keys.filter((key) => key.ownerId === owner.id) : [];
   const selected = ownerKeys.find((key) => key.id === selectedId) ?? null;
   const pendingFlow: KeyFlow | null = !selected && pending ? pending.status === "UNKNOWN"
-    ? { kind: "uncertain", ownerId: pending.ownerId, requestId: pending.requestId }
-    : { kind: "recovered", ownerId: pending.ownerId, requestId: pending.requestId, keyId: pending.keyId }
+    ? { kind: "uncertain", ownerId: pending.ownerId, requestId: pending.requestId, userResourceVersion: pending.userResourceVersion, networkRestrictions: pending.networkRestrictions }
+    : { kind: "recovered", ownerId: pending.ownerId, requestId: pending.requestId, keyId: pending.keyId, userResourceVersion: pending.userResourceVersion, networkRestrictions: pending.networkRestrictions }
     : null;
   const activeFlow = flow ?? pendingFlow;
   const flowKey = activeFlow && (activeFlow.kind === "status" || activeFlow.kind === "delete") ? ownerKeys.find((key) => key.id === activeFlow.keyId) ?? null : null;
@@ -362,7 +387,7 @@ export function AccessCredentials({ workspace, scene, embedded = false, onInspec
     if (!owner || pending || owner.state !== "active") return;
     access.clearWorkspaceError();
     setSelectedId(null);
-    setFlow({ kind: "create", ownerId: owner.id, requestId: requestToken("ui-access-key-create-"), scenario: "success" });
+    setFlow({ kind: "create", ownerId: owner.id, requestId: requestToken("ui-access-key-create-"), scenario: "success", networkRestrictions: { allowedSourceCidrs: [] } });
   };
 
   if (!owner) return <section className={styles.root}>
@@ -396,7 +421,7 @@ export function AccessCredentials({ workspace, scene, embedded = false, onInspec
   const body = <div className={styles.ownerBody}>
     <Alert status="info">{t("keyProductBoundary")}</Alert>
     {ownerDisabledReason && !activeFlow ? <Alert status="warning">{ownerDisabledReason}</Alert> : null}
-    {activeFlow ? <InlineFlow flow={activeFlow} owner={owner} keyValue={flowKey} onChange={setFlow} onClose={closeFlow} onOpenKey={openKey} /> : <>
+    {activeFlow ? <InlineFlow flow={activeFlow} owner={owner} accountNetwork={workspace.settings.accessKeyNetwork} keyValue={flowKey} onChange={setFlow} onClose={closeFlow} onOpenKey={openKey} /> : <>
       <Card>
         <Card.Header className={styles.directoryHeader}><div><Typography.Title as="h2" level={3}>{t("keyDirectory")}</Typography.Title><Typography.Text tone="muted">{t("keyDirectoryHint", { name: owner.loginName })}</Typography.Text></div><Badge status={ownerKeys.length >= 2 ? "warning" : "neutral"}>{t("keyQuota", { count: ownerKeys.length })}</Badge></Card.Header>
         <Card.Body className={styles.tableBody}>{ownerKeys.length ? <Table aria-label={t("keys")} mobileLayout="stack"><thead><tr><th scope="col">{t("keyId")}</th><th scope="col">{t("state")}</th><th scope="col">{t("created")}</th><th scope="col">{t("keyRevision")}</th></tr></thead><tbody>{ownerKeys.map((key) => <tr key={key.id}><td data-label={t("keyId")}><button className={styles.keyLink} onClick={() => setSelectedId(key.id)}>{key.id}</button></td><td data-label={t("state")}><Badge status={key.status === "ENABLED" ? "success" : "neutral"}>{t(key.status === "ENABLED" ? "enabled" : "disabled")}</Badge></td><td data-label={t("created")}><WorkspaceTime value={key.createdAt} /></td><td data-label={t("keyRevision")}>v{key.resourceVersion}</td></tr>)}</tbody></Table> : <div className={styles.emptyKeys}><KeyRound aria-hidden="true" /><strong>{t("keyEmpty")}</strong><span>{t("keyEmptyHint")}</span></div>}</Card.Body>

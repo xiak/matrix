@@ -1,4 +1,5 @@
 import { applyAccessWorkspaceCommand, type AccessWorkspace } from "../domain/accessWorkspace";
+import { accessKeyNetworkRestrictionsEqual, type AccessKeyNetworkRestrictions } from "../domain/accessKeyNetwork";
 import { AccessWorkspaceError } from "../domain/accessWorkspaceError";
 import { type PolicyDocument } from "../domain/policyDocument";
 import { formatPolicyResource } from "../domain/policyLanguage";
@@ -91,7 +92,7 @@ export function createPreviewAccessWorkspace(accountId: string, userIds: () => s
   let state = initialAccessWorkspace(accountId);
   let replacementCredential: string | null = null;
   let activeRecoveryCodes = [...initialRecoveryCodes];
-  const keyCreationResults = new Map<string, string>();
+  const keyCreationResults = new Map<string, { keyId: string; userResourceVersion: number; networkRestrictions: AccessKeyNetworkRestrictions }>();
   const keyCreationRequest = (ownerId: string, requestId: string) => `${ownerId}\u0000${requestId}`;
   return {
     transact(transition) { const result = transition(structuredClone(state)); if (result.workspace.accountId !== accountId || result.workspace.mode !== "preview") throw new Error("INVALID_PREVIEW_WORKSPACE"); state = structuredClone(result.workspace); return result; },
@@ -101,11 +102,17 @@ export function createPreviewAccessWorkspace(accountId: string, userIds: () => s
     async read() { return structuredClone(state); },
     async execute(credential, command) {
       const creationRequest = command.kind === "create-key" ? keyCreationRequest(command.ownerId, command.requestId) : null;
-      if (creationRequest && keyCreationResults.has(creationRequest)) return { workspace: structuredClone(state) };
+      if (creationRequest && command.kind === "create-key") {
+        const existing = keyCreationResults.get(creationRequest);
+        if (existing) {
+          if (existing.userResourceVersion !== command.userResourceVersion || !accessKeyNetworkRestrictionsEqual(existing.networkRestrictions, command.networkRestrictions)) throw new AccessWorkspaceError("invalid");
+          return { workspace: structuredClone(state) };
+        }
+      }
       if (command.kind === "inspect-key-creation" && command.resultMode === "not-found") throw new AccessWorkspaceError("keyResultNotFound");
       if (command.kind === "inspect-key-creation" && command.resultMode === "unavailable") throw new AccessWorkspaceError("keyResultUnavailable");
       const id = crypto.randomUUID();
-      const resolvedKeyId = command.kind === "inspect-key-creation" ? keyCreationResults.get(keyCreationRequest(command.ownerId, command.requestId)) : undefined;
+      const resolvedKeyId = command.kind === "inspect-key-creation" ? keyCreationResults.get(keyCreationRequest(command.ownerId, command.requestId))?.keyId : undefined;
       if (command.kind === "inspect-key-creation" && !resolvedKeyId) throw new AccessWorkspaceError("keyResultNotFound");
       state = applyAccessWorkspaceCommand(state, command, { id, at: new Date().toISOString(), userIds: userIds(), primaryPrincipalId, resolvedKeyId, sameReplacementSession: Boolean(replacementCredential && credential === replacementCredential) });
       if (command.kind === "begin-personal-mfa-replacement") replacementCredential = credential;
@@ -114,7 +121,7 @@ export function createPreviewAccessWorkspace(accountId: string, userIds: () => s
         const batch = crypto.randomUUID().slice(0, 8).toUpperCase();
         activeRecoveryCodes = Array.from({ length: 10 }, (_, index) => `MTRX-NEW-${batch}-${String(index + 1).padStart(2, "0")}`);
       }
-      if (creationRequest) keyCreationResults.set(creationRequest, "MOCK-" + id);
+      if (creationRequest && command.kind === "create-key") keyCreationResults.set(creationRequest, { keyId: "MOCK-" + id, userResourceVersion: command.userResourceVersion, networkRestrictions: structuredClone(command.networkRestrictions) });
       return {
         workspace: structuredClone(state),
         ...(["confirm-personal-mfa", "confirm-personal-mfa-replacement", "regenerate-personal-recovery-codes"].includes(command.kind) ? { recoveryCodes: [...activeRecoveryCodes] } : {}),

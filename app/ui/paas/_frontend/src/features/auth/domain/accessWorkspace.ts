@@ -38,8 +38,8 @@ export type AccessKey = {
 };
 export type AccessKeyOwnerState = "active" | "passwordChangeRequired" | "disabled";
 export type PendingAccessKeyCreation =
-  | { ownerId: string; requestId: string; status: "UNKNOWN" }
-  | { ownerId: string; requestId: string; keyId: string; status: "COMMITTED_SECRET_LOST" };
+  | { ownerId: string; userResourceVersion: number; networkRestrictions: AccessKeyNetworkRestrictions; requestId: string; status: "UNKNOWN" }
+  | { ownerId: string; userResourceVersion: number; networkRestrictions: AccessKeyNetworkRestrictions; requestId: string; keyId: string; status: "COMMITTED_SECRET_LOST" };
 /** Preview recovery state only; it does not define a future IAM wire contract. */
 export type PendingAccountRuleChange = {
   requestId: string;
@@ -148,7 +148,7 @@ export type AccessWorkspaceCommand =
   | { kind: "delete-provider"; id: string }
   | { kind: "save-role-sso-mapping-preview"; id?: string; name: string; assertionSubject: string; providerId: string; roleId: string; enabled: boolean }
   | { kind: "delete-role-sso-mapping-preview"; id: string }
-  | { kind: "create-key"; ownerId: string; ownerState: AccessKeyOwnerState; userResourceVersion: number; requestId: string; responseMode: "success" | "response-lost" }
+  | { kind: "create-key"; ownerId: string; ownerState: AccessKeyOwnerState; userResourceVersion: number; networkRestrictions: AccessKeyNetworkRestrictions; requestId: string; responseMode: "success" | "response-lost" }
   | { kind: "inspect-key-creation"; ownerId: string; requestId: string; resultMode: "found" | "not-found" | "unavailable" }
   | { kind: "set-key-status"; id: string; ownerState: AccessKeyOwnerState; status: AccessKey["status"]; resourceVersion: number; requestId: string }
   | { kind: "save-key-network-preview"; id: string; resourceVersion: number; networkRestrictions: AccessKeyNetworkRestrictions }
@@ -466,19 +466,19 @@ export function applyAccessWorkspaceCommand(source: AccessWorkspace, command: Ac
     case "delete-role-sso-mapping-preview":
       exists(state.roleSsoMappings, id); state.roleSsoMappings = state.roleSsoMappings.filter((entry) => entry.id !== id); break;
     case "create-key":
-      if (state.pendingKeyCreation || command.ownerState !== "active" || !context.userIds.includes(command.ownerId) || !Number.isInteger(command.userResourceVersion) || command.userResourceVersion < 1 || !command.requestId.trim() || state.keys.filter((key) => key.ownerId === command.ownerId).length >= 2) invalid();
-      state.keys.push({ id: "MOCK-" + id, ownerId: command.ownerId, status: "ENABLED", resourceVersion: 1, createdAt, networkRestrictions: { allowedSourceCidrs: [] }, usage: { observedAt: createdAt } });
-      if (command.responseMode === "response-lost") state.pendingKeyCreation = { ownerId: command.ownerId, requestId: command.requestId, status: "UNKNOWN" };
+      if (state.pendingKeyCreation || command.ownerState !== "active" || !context.userIds.includes(command.ownerId) || !Number.isInteger(command.userResourceVersion) || command.userResourceVersion < 1 || !accessKeyNetworkRestrictionsValid(command.networkRestrictions) || !command.requestId.trim() || state.keys.filter((key) => key.ownerId === command.ownerId).length >= 2) invalid();
+      state.keys.push({ id: "MOCK-" + id, ownerId: command.ownerId, status: "ENABLED", resourceVersion: 1, createdAt, networkRestrictions: structuredClone(command.networkRestrictions), usage: { observedAt: createdAt } });
+      if (command.responseMode === "response-lost") state.pendingKeyCreation = { ownerId: command.ownerId, userResourceVersion: command.userResourceVersion, networkRestrictions: structuredClone(command.networkRestrictions), requestId: command.requestId, status: "UNKNOWN" };
       target = "MOCK-" + id; break;
     case "inspect-key-creation": {
       const pending = state.pendingKeyCreation;
       const resolvedKeyId = context.resolvedKeyId;
       if (command.resultMode !== "found" || !resolvedKeyId) throw new AccessWorkspaceError("invalid");
-      if (!pending || pending.status !== "UNKNOWN" ||
-        pending.ownerId !== command.ownerId || pending.requestId !== command.requestId) invalid();
+      if (!pending) throw new AccessWorkspaceError("invalid");
+      if (pending.status !== "UNKNOWN" || pending.ownerId !== command.ownerId || pending.requestId !== command.requestId) invalid();
       const recoveredKey = exists(state.keys, resolvedKeyId);
       if (recoveredKey.ownerId !== command.ownerId) invalid();
-      state.pendingKeyCreation = { ownerId: command.ownerId, requestId: command.requestId, keyId: recoveredKey.id, status: "COMMITTED_SECRET_LOST" };
+      state.pendingKeyCreation = { ...pending, keyId: recoveredKey.id, status: "COMMITTED_SECRET_LOST" };
       target = recoveredKey.id; break;
     }
     case "set-key-status": {

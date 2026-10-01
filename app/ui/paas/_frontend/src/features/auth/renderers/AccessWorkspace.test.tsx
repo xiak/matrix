@@ -2744,8 +2744,13 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: "新建访问密钥" }));
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(await screen.findByRole("heading", { name: "核对并创建访问密钥" })).toBe(document.activeElement);
+    expect(screen.getByText(/同一个原子创建请求中提交/)).toBeTruthy();
+    const network = screen.getByRole("textbox", { name: "允许的来源 CIDR" });
+    await user.type(network, "198.51.100.0/24");
     await user.click(screen.getByRole("button", { name: "新建访问密钥" }));
     expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("region", { name: "创建时采用的来源范围" })).toBeTruthy();
+    expect((await extension.read("preview")).keys.find((key) => key.ownerId === "principal-chen")?.networkRestrictions).toEqual({ allowedSourceCidrs: ["198.51.100.0/24"] });
     const secret = (await screen.findByText(/^MOCK_NOT_A_CREDENTIAL_/)).textContent!;
     expect(JSON.stringify(await extension.read("preview"))).not.toContain(secret);
     await user.click(screen.getByRole("checkbox"));
@@ -3017,10 +3022,13 @@ describe("CAM-style access workspace", () => {
     const { user, extension } = await open("keys");
     await user.click(await screen.findByRole("button", { name: "管理 chen 的访问密钥" }));
     await user.click(screen.getByRole("button", { name: "新建访问密钥" }));
+    await user.type(screen.getByRole("textbox", { name: "允许的来源 CIDR" }), "198.51.100.0/24");
     await select(user, "MOCK 返回场景", "提交已生效，但响应丢失");
     await user.click(screen.getByRole("button", { name: "新建访问密钥" }));
     expect(await screen.findByText("UNKNOWN")).toBeTruthy();
+    expect(screen.getByRole("region", { name: "原创建请求冻结的来源范围" })).toBeTruthy();
     expect(screen.queryByText(/^MOCK_NOT_A_CREDENTIAL_/)).toBeNull();
+    expect((await extension.read("preview")).pendingKeyCreation).toMatchObject({ networkRestrictions: { allowedSourceCidrs: ["198.51.100.0/24"] } });
     expect((await extension.read("preview")).pendingKeyCreation).not.toHaveProperty("keyId");
     expect(screen.queryByRole("button", { name: "新建访问密钥" })).toBeNull();
     await user.click(screen.getByTestId("go-users"));

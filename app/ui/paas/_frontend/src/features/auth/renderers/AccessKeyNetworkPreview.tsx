@@ -11,12 +11,12 @@ import { WorkspaceTime } from "./AccessWorkspaceUi";
 import { SecurityStepUpPreview } from "./SecurityStepUpPreview";
 import styles from "./AccessCredentials.module.css";
 
-function RestrictionValues({ value }: { value: AccessKeyNetworkRestrictions }) {
+export function AccessKeyNetworkRestrictionValues({ value }: { value: AccessKeyNetworkRestrictions }) {
   const t = useTranslations("AccessKeyNetworkPreview");
   return value.allowedSourceCidrs.length ? <ul className={styles.networkValues}>{value.allowedSourceCidrs.map((cidr) => <li key={cidr}><code>{cidr}</code></li>)}</ul> : <span className={styles.note}>{t("unrestrictedLayer")}</span>;
 }
 
-function DraftField({ id, value, issue, onChange }: { id: string; value: string; issue: AccessKeyNetworkDraftIssue | null; onChange(value: string): void }) {
+export function AccessKeyNetworkDraftField({ id, value, issue, onChange }: { id: string; value: string; issue: AccessKeyNetworkDraftIssue | null; onChange(value: string): void }) {
   const t = useTranslations("AccessKeyNetworkPreview");
   return <FormField id={id} label={t("allowedCidrs")} hint={t("cidrHint")} error={issue ? t(`issues.${issue}`) : undefined}>
     <TextArea aria-describedby={`${id}-hint${issue ? ` ${id}-error` : ""}`} id={id} invalid={Boolean(issue)} rows={6} spellCheck={false} value={value} onChange={(event) => onChange(event.target.value)} />
@@ -73,19 +73,19 @@ export function AccountAccessKeyNetworkPreview({ workspace }: { workspace: Acces
     {saved ? <Alert status="success">{t("accountSaved")}</Alert> : null}
     {stage === "verify" ? <SecurityStepUpPreview action="securitySettings" onCancel={() => setStage("review")} onVerified={save} /> : null}
     {stage === "summary" ? <Card><Card.Header><div className={styles.cardHeading}><ShieldCheck aria-hidden="true" /><div><Typography.Title as="h3" level={3}>{t("accountControl")}</Typography.Title><Typography.Text tone="muted">{t("accountControlHint")}</Typography.Text></div></div></Card.Header><Card.Body className={styles.networkBody}>
-      <RestrictionValues value={workspace.settings.accessKeyNetwork} />
+      <AccessKeyNetworkRestrictionValues value={workspace.settings.accessKeyNetwork} />
       <dl className={styles.networkFacts}><div><dt>{t("settingsVersion")}</dt><dd>v{workspace.settings.accountRuleVersion}</dd></div><div><dt>{t("appliesTo")}</dt><dd>{t("accountKeys")}</dd></div></dl>
       <Alert>{t("accountMockBoundary")}</Alert>
       {!factorReady ? <Alert status="warning">{t("factorRequired")}</Alert> : workspace.personalMfa.reauthenticationRequired ? <Alert status="warning">{t("reauthenticationRequired")}</Alert> : null}
       <div className={styles.actions}><Button disabled={!canChange || access.busy} onClick={start} variant="secondary">{t("editAccount")}</Button></div>
     </Card.Body></Card> : null}
     {stage === "edit" ? <Card><Card.Header><div><h3 className={styles.focusHeading} ref={heading} tabIndex={-1}>{t("editAccountTitle")}</h3><Typography.Text tone="muted">{t("fullReplacement")}</Typography.Text></div><Badge status="warning">MOCK</Badge></Card.Header><Card.Body><form className={styles.networkBody} onSubmit={(event) => { event.preventDefault(); review(); }}>
-      <DraftField id={id} issue={issue} value={draft} onChange={(value) => { setDraft(value); setIssue(null); }} />
+      <AccessKeyNetworkDraftField id={id} issue={issue} value={draft} onChange={(value) => { setDraft(value); setIssue(null); }} />
       <Alert>{t("emptyLayerMeaning")}</Alert>
       <div className={styles.actions}><Button disabled={access.busy} type="submit">{t("review")}</Button><Button disabled={access.busy} onClick={() => setStage("summary")} type="button" variant="ghost">{t("cancel")}</Button></div>
     </form></Card.Body></Card> : null}
     {stage === "review" && next ? <Card><Card.Header><div><h3 className={styles.focusHeading} ref={heading} tabIndex={-1}>{t("reviewAccountTitle")}</h3><Typography.Text tone="muted">{t("reviewAccountHint")}</Typography.Text></div><Badge status="warning">MOCK</Badge></Card.Header><Card.Body className={styles.networkBody}>
-      <div className={styles.networkComparison}><section><h4>{t("current")}</h4><RestrictionValues value={workspace.settings.accessKeyNetwork} /></section><section><h4>{t("afterChange")}</h4><RestrictionValues value={next} /></section></div>
+      <div className={styles.networkComparison}><section><h4>{t("current")}</h4><AccessKeyNetworkRestrictionValues value={workspace.settings.accessKeyNetwork} /></section><section><h4>{t("afterChange")}</h4><AccessKeyNetworkRestrictionValues value={next} /></section></div>
       {!changed ? <Alert status="info">{t("noChange")}</Alert> : null}
       <Alert status="warning">{t("accountReviewBoundary")}</Alert>
       <div className={styles.actions}><Button disabled={access.busy || !changed} onClick={() => setStage("verify")}>{t("verifyAndApply")}</Button><Button disabled={access.busy} onClick={() => setStage("edit")} variant="secondary">{t("backToEdit")}</Button></div>
@@ -93,10 +93,15 @@ export function AccountAccessKeyNetworkPreview({ workspace }: { workspace: Acces
   </section>;
 }
 
+export function AccessKeyNetworkLayers({ account, keyValue }: { account: AccessKeyNetworkRestrictions; keyValue: AccessKeyNetworkRestrictions }) {
+  const t = useTranslations("AccessKeyNetworkPreview");
+  return <div className={styles.networkLayers}><section><h3>{t("accountLayer")}</h3><AccessKeyNetworkRestrictionValues value={account} /></section><section><h3>{t("keyLayer")}</h3><AccessKeyNetworkRestrictionValues value={keyValue} /></section></div>;
+}
+
 export function AccessKeyNetworkDetail({ account, keyValue }: { account: AccessKeyNetworkRestrictions; keyValue: AccessKey }) {
   const t = useTranslations("AccessKeyNetworkPreview");
   return <Card><Card.Header><div className={styles.cardHeading}><Network aria-hidden="true" /><div><Typography.Title as="h2" level={3}>{t("keyTitle")}</Typography.Title><Typography.Text tone="muted">{t("keyHint")}</Typography.Text></div></div><Badge status="warning">MOCK</Badge></Card.Header><Card.Body className={styles.networkBody}>
-    <div className={styles.networkLayers}><section><h3>{t("accountLayer")}</h3><RestrictionValues value={account} /></section><section><h3>{t("keyLayer")}</h3><RestrictionValues value={keyValue.networkRestrictions} /></section></div>
+    <AccessKeyNetworkLayers account={account} keyValue={keyValue.networkRestrictions} />
     <Alert status="info">{t("andBoundary")}</Alert>
     <p className={styles.note}>{t("familyBoundary")}</p>
   </Card.Body></Card>;
@@ -141,7 +146,7 @@ export function AccessKeyNetworkEditor({ keyValue, onClose }: { keyValue: Access
   }
 
   return <Card><Card.Header><div><h2 className={styles.focusHeading} ref={heading} tabIndex={-1}>{t(stage === "edit" ? "editKeyTitle" : "reviewKeyTitle")}</h2><Typography.Text tone="muted">{t("keyEditorHint")}</Typography.Text></div><Badge status="warning">MOCK</Badge></Card.Header><Card.Body className={styles.networkBody}>
-    {stage === "edit" ? <form className={styles.networkBody} onSubmit={(event) => { event.preventDefault(); review(); }}><DraftField id={id} issue={issue} value={draft} onChange={(value) => { setDraft(value); setIssue(null); }} /><Alert>{t("emptyLayerMeaning")}</Alert><div className={styles.actions}><Button disabled={access.busy} type="submit">{t("review")}</Button><Button disabled={access.busy} onClick={onClose} type="button" variant="ghost">{t("cancel")}</Button></div></form> : null}
-    {stage === "review" && next ? <><dl className={styles.networkFacts}><div><dt>{t("keyId")}</dt><dd><code>{keyValue.id}</code></dd></div><div><dt>{t("keyVersion")}</dt><dd>v{keyValue.resourceVersion}</dd></div></dl><div className={styles.networkComparison}><section><h3>{t("current")}</h3><RestrictionValues value={keyValue.networkRestrictions} /></section><section><h3>{t("afterChange")}</h3><RestrictionValues value={next} /></section></div>{!changed ? <Alert status="info">{t("noChange")}</Alert> : null}<Alert status="warning">{t("keyReviewBoundary")}</Alert><div className={styles.actions}><Button disabled={access.busy || !changed} onClick={() => void save()}>{t("applyMock")}</Button><Button disabled={access.busy} onClick={() => setStage("edit")} variant="secondary">{t("backToEdit")}</Button></div></> : null}
+    {stage === "edit" ? <form className={styles.networkBody} onSubmit={(event) => { event.preventDefault(); review(); }}><AccessKeyNetworkDraftField id={id} issue={issue} value={draft} onChange={(value) => { setDraft(value); setIssue(null); }} /><Alert>{t("emptyLayerMeaning")}</Alert><div className={styles.actions}><Button disabled={access.busy} type="submit">{t("review")}</Button><Button disabled={access.busy} onClick={onClose} type="button" variant="ghost">{t("cancel")}</Button></div></form> : null}
+    {stage === "review" && next ? <><dl className={styles.networkFacts}><div><dt>{t("keyId")}</dt><dd><code>{keyValue.id}</code></dd></div><div><dt>{t("keyVersion")}</dt><dd>v{keyValue.resourceVersion}</dd></div></dl><div className={styles.networkComparison}><section><h3>{t("current")}</h3><AccessKeyNetworkRestrictionValues value={keyValue.networkRestrictions} /></section><section><h3>{t("afterChange")}</h3><AccessKeyNetworkRestrictionValues value={next} /></section></div>{!changed ? <Alert status="info">{t("noChange")}</Alert> : null}<Alert status="warning">{t("keyReviewBoundary")}</Alert><div className={styles.actions}><Button disabled={access.busy || !changed} onClick={() => void save()}>{t("applyMock")}</Button><Button disabled={access.busy} onClick={() => setStage("edit")} variant="secondary">{t("backToEdit")}</Button></div></> : null}
   </Card.Body></Card>;
 }
