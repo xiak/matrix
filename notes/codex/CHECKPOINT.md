@@ -6,8 +6,8 @@
 - Updated: 2026-10-02
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `fcd31da82`
-- Pushed documentation milestone: `dfe4aac9e`
+- Pushed source/embed milestone: `6ce077f73`
+- Pushed documentation milestone: `457451eea`
 
 ## Authoritative route
 
@@ -29,20 +29,21 @@ compaction or handoff, then validate it against Git and the linked FEAT.
 ## Latest pushed milestone
 
 The inspectable DEV MOCK remains available at `http://127.0.0.1:4317`, and
-login verification remains disabled for UX review. The read-only permission
-catalog now shows the public-cloud ownership flow in its correct order: product
-engineering defines capabilities and enforces the PEP; IAM validates and
-publishes immutable trusted declarations; tenant administrators only consume
-the released directory when authoring and assigning policies. The internal
-onboarding preview remains MOCK-only and final publication stays disabled.
+login verification remains disabled for UX review. Shared page commands now
+keep one high-frequency action direct on desktop and group secondary peers under
+one More menu. Pages without a primary keep a lone secondary action direct; all
+commands move into one Page actions menu on compact layouts. The composition is
+used by IAM collections/details, account live roles and own sessions without
+changing feature-owned capabilities, disabled reasons or callbacks.
 
-Source and synchronized embed are pushed at `fcd31da82`. The complete frontend
-gate passed 58 files/969 cases plus three normalization cases, typecheck, lint,
+Source and synchronized embed are pushed at `6ce077f73`; FEAT evidence is pushed
+at `457451eea`. The complete frontend gate passed 58 files/970 cases plus three
+normalization cases, typecheck, lint,
 architecture, 228-pair style checks, 42-route export, 233-file embed equality
-and repository Go test/vet. Desktop and `390 × 844` DEV confirmed horizontal
-and directed vertical presentations respectively, with no Dialog, horizontal
-overflow or browser warning/error. Earlier enterprise content workflows remain
-owned by FEAT-IAM-010 and FEAT-007.
+and repository Go test/vet. Desktop and `390 × 844` DEV confirmed policy detail
+keeps Associate users / groups / roles direct while Edit, Copy and Delete share
+More, and compact mode exposes the same four commands from Page actions. Earlier
+enterprise content workflows remain owned by FEAT-IAM-010 and FEAT-007.
 
 Earlier Account security report, federation replacement, Deployment lifecycle,
 AccessKey carrier, Application tag recovery, service authorization, policy
