@@ -33,7 +33,7 @@ func TestHandlerServesNextControlPlane(t *testing.T) {
 
 func TestHandlerServesNestedRouteAndHashedAsset(t *testing.T) {
 	handler := NewHandler()
-	for _, path := range []string{"/console/messages/", "/console/applications/", "/console/logs/", "/console/logs/search/", "/console/logs/topics/", "/console/logs/collection/", "/console/devops/pipelines/", "/console/devops/environments/", "/console/observability/health/", "/console/observability/alerts/", "/console/access/users/", "/console/access/create-user/", "/console/access/groups/", "/console/access/policies/", "/console/access/roles/", "/console/access/providers/", "/console/access/user-sso/", "/console/access/federations/", "/console/access/keys/", "/console/access/settings/", "/console/access/tenants/"} {
+	for _, path := range []string{"/console/messages/", "/console/applications/", "/console/logs/", "/console/logs/search/", "/console/logs/topics/", "/console/logs/collection/", "/console/devops/pipelines/", "/console/devops/environments/", "/console/observability/health/", "/console/observability/alerts/", "/console/audit/", "/console/access/users/", "/console/access/create-user/", "/console/access/groups/", "/console/access/policies/", "/console/access/roles/", "/console/access/providers/", "/console/access/user-sso/", "/console/access/federations/", "/console/access/keys/", "/console/access/settings/", "/console/access/tenants/"} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
 		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "Matrix Control Plane") {

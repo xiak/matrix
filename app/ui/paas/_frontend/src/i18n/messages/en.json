@@ -86,11 +86,16 @@
         "description": "Service health, metrics and alerts",
         "keywords": "monitor metrics apm observability obs alert alarm 监控 指标 可观测 健康 告警"
       },
-      "iam": {
-        "name": "Identity & access (IAM)",
-        "description": "Users, roles, permissions and account settings",
-        "keywords": "iam ram identity access user role security 用户 账号 角色 权限 安全"
-      },
+    "iam": {
+      "name": "Identity & access (IAM)",
+      "description": "Users, roles, permissions and account settings",
+      "keywords": "iam ram identity access user role security 用户 账号 角色 权限 安全"
+    },
+    "audit": {
+      "name": "Audit Service",
+      "description": "Tenant activity records and hash-chain verification",
+      "keywords": "audit trail event integrity compliance 审计 事件 操作记录 完整性 合规"
+    },
       "devops": {
         "name": "DevOps",
         "description": "Pipelines, delivery and environments",
@@ -109,7 +114,8 @@
       "logData": "Log data services",
       "delivery": "Continuous delivery",
       "monitoring": "Monitoring & observability",
-      "identity": "Identity & access"
+    "identity": "Identity & access",
+    "governance": "Security audit & governance"
     }
   },
   "RegionScope": {
@@ -870,10 +876,14 @@
         "label": "Log topics",
         "hint": "Indexes and retention"
       },
-      "collection": {
-        "label": "Collection settings",
-        "hint": "Sources and agent status"
-      },
+    "collection": {
+      "label": "Collection settings",
+      "hint": "Sources and agent status"
+    },
+    "audit": {
+      "label": "Audit records",
+      "hint": "Tenant activity facts and integrity evidence"
+    },
       "access": {
         "label": "Overview",
         "hint": "Identity and access summary"
@@ -2517,6 +2527,115 @@
     "binding": { "title": "Resource binding", "hint": "Each business resource still requires an exact binding; account consent does not authorize every resource." },
     "runtime": { "title": "Runtime use", "hint": "Short-lived session issuance, product-side re-authorization, and business execution must be observed separately; complete configuration does not prove request success." }
   },
+  "AuditService": {
+    "title": "Audit records",
+    "description": "Query immutable activity facts for the signed-in tenant and explicitly verify the audit hash chain.",
+    "preview": "MOCK preview",
+    "live": "Live service",
+    "boundary": {
+      "title": "The tenant boundary comes from the current IAM session",
+      "description": "This page accepts no tenant selector and shows only sanitized records scoped by the service to the current credential."
+    },
+    "actions": {
+      "verify": "Verify integrity",
+      "back": "Back to audit records",
+      "query": "Query",
+      "reset": "Reset",
+      "refresh": "Refresh current results",
+      "retry": "Retry",
+      "previous": "Previous page",
+      "next": "Next page"
+    },
+    "filters": {
+      "from": "Start time",
+      "to": "End time",
+      "action": "Action",
+      "actorType": "Actor type",
+      "actorId": "Actor ID",
+      "actorHint": "Leave blank to include every actor",
+      "pageSize": "Rows per page",
+      "allActions": "All actions",
+      "invalid": "Check the time range, actor ID and pagination values."
+    },
+    "directory": {
+      "heading": "Tenant audit trail",
+      "pageStatus": "Page {page} · {count} records",
+      "loading": "Reading audit records",
+      "refreshing": "Updating current results…",
+      "table": "Audit records",
+      "empty": "No matching audit records",
+      "emptyHint": "Adjust the structured filters and try again. An empty result is not an authorization decision.",
+      "footer": "Current tenant: {tenant} · cursors are service-signed and bound to the active filters",
+      "page": "Page {page}"
+    },
+    "columns": {
+      "time": "Occurred",
+      "action": "Action / source",
+      "actor": "Actor",
+      "target": "Target",
+      "result": "Result"
+    },
+    "actorTypes": {
+      "USER": "User",
+      "SERVICE_ACCOUNT": "Service account",
+      "SYSTEM": "System"
+    },
+    "results": {
+      "ACCEPTED": "Accepted",
+      "SUCCEEDED": "Succeeded",
+      "ALLOWED": "Allowed",
+      "DENIED": "Denied"
+    },
+    "errors": {
+      "title": "Audit records could not be read",
+      "expired": "The IAM session has expired. Sign in again.",
+      "forbidden": "This identity lacks audit.record.read or audit.integrity.verify.",
+      "invalid": "The audit service returned data outside its contract. The UI refused to render it.",
+      "unavailable": "The audit service is unavailable. MOCK data has not replaced the live result."
+    },
+    "detail": {
+      "title": "Audit record #{sequence}",
+      "context": "Activity context",
+      "source": "Action / source",
+      "retention": "Retention",
+      "indefinite": "Retained indefinitely",
+      "ingested": "Ingested: {time}",
+      "requestEvidence": "Request and authorization evidence",
+      "eventId": "Event ID",
+      "requestId": "Request ID",
+      "correlationId": "Correlation ID",
+      "operationId": "Operation ID",
+      "decisionId": "IAM decision ID",
+      "requestDigest": "Request digest",
+      "chainEvidence": "Hash-chain evidence",
+      "sequence": "Sequence",
+      "previousHash": "Previous hash",
+      "contentDigest": "Content digest",
+      "recordHash": "Record hash"
+    },
+    "verification": {
+      "title": "Audit-chain integrity verification",
+      "heading": "Verify a bounded sequence range",
+      "description": "The service verifies consecutive records from a starting sequence. The result proves only the returned range.",
+      "auditNotice": "Integrity verification is an explicit read and creates a new sanitized audit-access record.",
+      "fromSequence": "Starting sequence",
+      "fromSequenceHint": "Must be an integer greater than zero",
+      "maximumRecords": "Maximum records",
+      "maximumRecordsHint": "Up to {maximum} records per request",
+      "verify": "Start verification",
+      "verifying": "Verifying…",
+      "verified": "Verified",
+      "complete": "Verified through the current chain tail",
+      "partial": "A bounded range was verified",
+      "verifiedAt": "Verified: {time}",
+      "range": "Verified range",
+      "recordCount": "{count} consecutive records",
+      "tenant": "Current tenant",
+      "firstHash": "Range-start previous hash",
+      "lastHash": "Range-end record hash",
+      "continue": "Continue at sequence {sequence}"
+    }
+  },
   "Console": {
     "brandHome": "Matrix Cloud console home",
     "globalNavigation": "Global navigation",
@@ -2613,10 +2732,14 @@
         "title": "Observability",
         "description": "Connect service health, key metrics and current alerts in one workspace."
       },
-      "logs": {
-        "title": "Log overview",
-        "description": "Collect, search and manage log data."
-      },
+    "logs": {
+      "title": "Log overview",
+      "description": "Collect, search and manage log data."
+    },
+    "audit": {
+      "title": "Audit records",
+      "description": "Query immutable activity facts for the current tenant and verify the audit chain."
+    },
       "access": {
         "title": "Access management",
         "description": "Manage the current tenant's subusers, roles and primary-account alias."

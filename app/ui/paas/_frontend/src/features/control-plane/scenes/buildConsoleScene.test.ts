@@ -107,7 +107,7 @@ describe("buildConsoleScene", () => {
   });
   it("projects real resources into the complete console shell", () => {
     const scene = buildConsoleScene("overview", snapshot);
-    expect(scene.rail.map((item) => item.id)).toEqual(["overview", "managed-database", "access"]);
+    expect(scene.rail.map((item) => item.id)).toEqual(["overview", "managed-database", "audit", "access"]);
     expect(scene.navigation.map((item) => item.id)).toEqual([
       "catalog",
       "quotas",

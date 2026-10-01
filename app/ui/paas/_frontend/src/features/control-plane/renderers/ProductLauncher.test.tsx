@@ -38,7 +38,7 @@ describe("ProductLauncher", () => {
     expect(trigger.getAttribute("aria-haspopup")).toBe("dialog");
     expect(trigger.getAttribute("aria-controls")).toBe("global-product-launcher");
     expect(screen.getByRole("dialog", { name: "云产品入口" })).toBeTruthy();
-    expect(screen.getByRole("status").textContent).toBe("7 项服务");
+    expect(screen.getByRole("status").textContent).toBe("8 项服务");
     expect(document.activeElement).toBe(search);
     expect(screen.getByRole("heading", { name: /数据库/, level: 3 })).toBeTruthy();
     expect(screen.getByRole("link", { name: /云数据库 PostgreSQL/ }).getAttribute("href")).toBe("/console/installations/");
@@ -111,7 +111,7 @@ describe("ProductLauncher", () => {
     expect(screen.getByRole("heading", { name: "未找到匹配的服务" })).toBeTruthy();
     expect(navigation.navigate).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "浏览全部服务" }));
-    expect(screen.getByRole("status").textContent).toBe("7 项服务");
+    expect(screen.getByRole("status").textContent).toBe("8 项服务");
     expect(document.activeElement).toBe(search);
   });
 
@@ -164,7 +164,7 @@ describe("ProductLauncher", () => {
     await user.click(categories.getByRole("button", { name: /^全部服务/ }));
     await user.keyboard("{End}");
     expect(document.activeElement).toBe(categories.getByRole("button", { name: /^安全与管理/ }));
-    expect(screen.getByRole("status").textContent).toBe("1 项服务");
+    expect(screen.getByRole("status").textContent).toBe("2 项服务");
     screen.getByRole("button", { name: "收藏 访问管理 IAM" }).focus();
     await user.tab();
     expect(screen.getByRole("dialog").getAttribute("aria-modal")).toBe("true");

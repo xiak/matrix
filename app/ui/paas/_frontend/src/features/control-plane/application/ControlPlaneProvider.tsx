@@ -31,7 +31,7 @@ import type {
   ControlPlaneResourceSnapshot
 } from "../repositories/controlPlaneRepository";
 import { httpControlPlaneRepository } from "../repositories/httpControlPlaneRepository";
-import { buildAccessConsoleScene, buildConsoleScene } from "../scenes/buildConsoleScene";
+import { buildAccessConsoleScene, buildAuditConsoleScene, buildConsoleScene } from "../scenes/buildConsoleScene";
 import type { ConsoleScene } from "../scenes/consoleScene";
 
 type ControlPlaneError = "expired" | "forbidden" | "unavailable";
@@ -75,7 +75,7 @@ function resourcesFor(
   selection: ControlPlaneRouteSelection,
   hasExperience: boolean
 ): readonly ControlPlaneResourceKind[] {
-  if (selection.section === "access") return [];
+  if (selection.section === "access" || selection.section === "audit") return [];
   if (selection.section === "catalog") return ["offerings"];
   if (selection.section === "quotas") return ["offerings", "entitlements"];
   if (selection.section === "installations") return ["offerings", "regions", "entitlements", "installations"];
@@ -474,6 +474,7 @@ export function ControlPlaneProvider({
 
   const projectScene = useCallback((target: ControlPlaneRouteSelection): ConsoleScene | null => {
     if (target.section === "access") return buildAccessConsoleScene(experience, target.view);
+    if (target.section === "audit") return buildAuditConsoleScene(experience);
     const resources = resourcesFor(target, Boolean(experience));
     const targetCache = ownedCache;
     if (!resources.every((resource) => targetCache?.loaded.has(resource))) return null;

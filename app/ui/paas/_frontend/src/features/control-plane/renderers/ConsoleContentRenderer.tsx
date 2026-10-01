@@ -40,6 +40,7 @@ import { LogServiceRenderer } from "./LogServiceRenderer";
 import { MessageCenterRenderer } from "./MessageCenterRenderer";
 import { ServiceAuthorizationChain } from "@/features/auth/renderers/ServiceAuthorizationChain";
 import { ServiceAuthorizationConsentReview, ServiceAuthorizationUnbindReview } from "@/features/auth/renderers/ServiceAuthorizationPreview";
+import { AuditWorkspace } from "@/features/audit/renderers/AuditWorkspace";
 import { useControlPlane } from "../application/ControlPlaneProvider";
 import type {
   ManagedServiceAuthorizationIntent,
@@ -515,6 +516,7 @@ export function ConsoleContentRenderer({
 }) {
   const t = useTranslations("AccountAccess");
   if (scene.kind === "logs") return <LogServiceRenderer regionId={scope?.regionId} scene={scene} />;
+  if (scene.kind === "audit") return <AuditWorkspace preview={preview} />;
   if (scene.kind === "access") return <Suspense fallback={<PageSkeleton layout="access" label={t("loading")} />}><AccessContent pendingHref={pendingHref} view={scene.view} /></Suspense>;
   if (scene.kind === "messages") return <MessageCenterRenderer scene={scene} />;
   if (

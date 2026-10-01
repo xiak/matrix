@@ -63,6 +63,7 @@ export function ConsoleContentLoadingRenderer({ label, selection }: { label: str
       <DataPanel description={logs("recentHint")} label={label} title={logs("recent")} />
     </div>;
   }
+  if (section === "audit") return <DataPanel description={navigation("items.audit.hint")} label={label} title={navigation("items.audit.label")} />;
   if (section === "catalog" || section === "quotas" || section === "regions") {
     return <PageSkeleton label={label} labelVisible={false} layout="cards" />;
   }

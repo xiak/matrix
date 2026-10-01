@@ -37,6 +37,7 @@ import {
   PackagePlus,
   PanelRightClose,
   RefreshCcw,
+  ScrollText,
   ServerCog,
   Settings2,
   ShieldCheck,
@@ -86,10 +87,11 @@ const railIcons = {
   database: Database,
   devops: GitBranch,
   observability: ChartNoAxesCombined,
+  audit: ScrollText,
   access: ShieldCheck
 } satisfies Record<RailIconKind, typeof Database>;
 
-const favoriteIcons = { regions: MapPin, applications: Boxes, postgresql: Database, devops: GitBranch, monitoring: ChartNoAxesCombined, logs: FileText, iam: ShieldCheck } satisfies Record<ServiceId, typeof Database>;
+const favoriteIcons = { regions: MapPin, applications: Boxes, postgresql: Database, devops: GitBranch, monitoring: ChartNoAxesCombined, logs: FileText, audit: ScrollText, iam: ShieldCheck } satisfies Record<ServiceId, typeof Database>;
 
 const navigationIcons = {
   policy: FileText,
@@ -109,6 +111,7 @@ const navigationIcons = {
   region: MapPin,
   pipeline: Workflow,
   observability: ChartNoAxesCombined,
+  audit: ScrollText,
   access: ShieldCheck
 } satisfies Record<NavigationIconKind, typeof Database>;
 
@@ -432,7 +435,7 @@ function ConsoleShell({ experience }: { experience?: ExperienceSnapshot }) {
                   return <Link aria-current={selected ? "page" : undefined} aria-label={service.label} className={styles.railItem} data-selected={selected ? "true" : undefined} href={service.href} key={service.id} onAccepted={() => { closeSidebarAndRestoreFocus(); useConsoleUiStore.getState().visitService(service.id); }} title={service.label}><span className={styles.railIndicator} /><Icon aria-hidden="true" /><span className={styles.railTooltip}>{service.label}</span></Link>;
                 }) : frame.rail.slice(1).map((item) => {
                   const Icon = railIcons[item.icon];
-                  const label = directory(`services.${item.id === "access" ? "iam" : "postgresql"}.name`);
+                  const label = directory(`services.${item.id === "access" ? "iam" : item.id === "audit" ? "audit" : "postgresql"}.name`);
                   return (
                     <Link aria-current={item.selected ? "page" : undefined} aria-label={label} className={styles.railItem} data-selected={item.selected ? "true" : undefined} href={item.href} key={item.id} onAccepted={closeSidebarAndRestoreFocus}>
                       <span className={styles.railIndicator} /><Icon aria-hidden="true" /><span className={styles.railTooltip}>{label}</span>

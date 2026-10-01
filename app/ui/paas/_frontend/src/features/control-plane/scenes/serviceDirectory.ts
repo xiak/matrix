@@ -13,6 +13,7 @@ export const serviceDirectory = [
   { id: "logs", category: "storage", group: "logData", icon: "observability", href: "/console/logs/", sections: ["logs"] },
   { id: "devops", category: "delivery", group: "delivery", icon: "devops", href: "/console/devops/", sections: ["devops"] },
   { id: "monitoring", category: "delivery", group: "monitoring", icon: "observability", href: "/console/observability/", sections: ["observability"] },
+  { id: "audit", category: "management", group: "governance", icon: "security", href: "/console/audit/", sections: ["audit"] },
   { id: "iam", category: "management", group: "identity", icon: "security", href: "/console/access/", sections: ["access"] }
 ] as const satisfies ReadonlyArray<{ id: string; category: ServiceCategory; group: string; icon: ExperienceIconKind; href: string; sections: readonly ConsoleSection[] }>;
 
@@ -50,6 +51,7 @@ export const serviceNavigation = {
     { id: "topics", section: "logs", view: "topics", icon: "resources" },
     { id: "collection", section: "logs", view: "collection", icon: "operations" }
   ],
+  audit: [{ id: "audit", section: "audit", icon: "audit" }],
   iam: [
     { id: "access", section: "access", icon: "overview" },
     { id: "users", section: "access", view: "users", icon: "users", group: "identity" },

@@ -390,6 +390,19 @@ bootstrap owner cannot read the resource or its audit, and the second tenant's
 chain verifies. User and verifier credentials cannot become audit producers;
 the producer contract verifies registered target organizations through IAM.
 
+The control-plane console now exposes Audit as an independent product rather
+than an IAM submenu. Its tenant-scoped record directory uses only the contract's
+bounded time, action, actor, page-size, and opaque-cursor inputs; it has no
+tenant selector or unsupported full-text search. Record evidence and explicit
+bounded chain verification remain in the content region, preserve the shared
+shell while data loads, and use strict response parsing. LIVE mode calls only
+the accepted bearer-protected query and verification endpoints and never
+substitutes preview data; the retained MOCK adapter is visibly identified and
+rejects cursor or sequence ranges outside its fixture chain. Desktop and
+390-pixel responsive browser checks passed, as did the full frontend type,
+lint, architecture, theme-contrast, behavior, production-export, and Go embed
+gates.
+
 These results do not replace Gate C. The account extension has not yet run the
 signed, network-disabled install/upgrade/rollback/backup/recovery journey or
 been applied to the user's existing installation. The prior accepted

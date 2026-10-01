@@ -13,6 +13,7 @@ export type ConsoleSection =
   | "devops"
   | "observability"
   | "logs"
+  | "audit"
   | "access";
 
 export type ControlPlaneRouteSelection = {

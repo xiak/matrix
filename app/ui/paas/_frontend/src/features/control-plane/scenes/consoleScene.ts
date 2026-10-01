@@ -2,7 +2,7 @@ import type { ExperienceResource, ExperienceOperation, ExperiencePipeline, Exper
 import type { Region, ServiceInstallation } from "../domain/resources";
 import type { ConsoleSection, ServiceView } from "../domain/selection";
 
-export type RailIconKind = "overview" | "database" | "devops" | "observability" | "access";
+export type RailIconKind = "overview" | "database" | "devops" | "observability" | "audit" | "access";
 export type NavigationIconKind =
   | "policy"
   | "sso"
@@ -21,6 +21,7 @@ export type NavigationIconKind =
   | "region"
   | "pipeline"
   | "observability"
+  | "audit"
   | "access";
 export type ExperienceIconKind = "foundation" | "paas" | "devops" | "observability" | "security";
 export type SceneStatus = "neutral" | "info" | "success" | "warning" | "danger";
@@ -181,6 +182,7 @@ export type ConsoleContentScene =
   | { kind: "installations"; installations: InstallationScene[] }
   | { kind: "regions"; regions: RegionScene[] }
   | { kind: "logs"; view?: ServiceView; data: import("../domain/experience").ExperienceLogs | null }
+  | { kind: "audit" }
   | { kind: "access"; view: import("@/features/auth/domain/accounts").AccountAccessView };
 
 export type ConsoleWorkspaceScene =

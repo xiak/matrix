@@ -11,6 +11,7 @@ const known = new Set([
   "regions",
   "devops",
   "observability",
+  "audit",
   "access",
   "logs"
 ]);

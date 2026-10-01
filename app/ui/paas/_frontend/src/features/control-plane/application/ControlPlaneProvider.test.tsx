@@ -162,6 +162,7 @@ describe("ControlPlaneProvider", () => {
       "logs",
       "devops",
       "observability",
+      "audit",
       "access"
     ]);
     expect(repository.load).toHaveBeenCalledTimes(1);
@@ -192,6 +193,7 @@ describe("ControlPlaneProvider", () => {
       "logs",
       "devops",
       "observability",
+      "audit",
       "access"
     ]);
 
@@ -207,6 +209,7 @@ describe("ControlPlaneProvider", () => {
       "logs",
       "devops",
       "observability",
+      "audit",
       "access"
     ]);
     expect(repository.load).toHaveBeenCalledTimes(1);
@@ -223,7 +226,7 @@ describe("ControlPlaneProvider", () => {
       await Promise.resolve();
     });
     expect(JSON.parse(screen.getByTestId("projections").textContent ?? "[]")).toEqual([
-      "regions", "resources", "installations", "logs", "devops", "observability", "access"
+      "regions", "resources", "installations", "logs", "devops", "observability", "audit", "access"
     ]);
     expect(repository.load).toHaveBeenLastCalledWith("memory-only-session", ["entitlements", "installations"]);
     expect(repository.load).toHaveBeenCalledTimes(3);

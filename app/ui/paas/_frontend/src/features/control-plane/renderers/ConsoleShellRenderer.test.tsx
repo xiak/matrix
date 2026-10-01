@@ -978,7 +978,7 @@ describe("ConsoleShellRenderer", () => {
     fireEvent.click(trigger);
 
     const directory = screen.getByRole("dialog", { name: "云产品入口" });
-    expect(within(directory).getByRole("status").textContent).toBe("7 项服务");
+    expect(within(directory).getByRole("status").textContent).toBe("8 项服务");
     expect(screen.queryByRole("button", { name: "关闭全局浮层", hidden: true })).toBeNull();
     expect(workspace.closest("[inert]")).not.toBeNull();
     expect(screen.getByRole("button", { name: /打开账号菜单/ }).closest("[inert]")).not.toBeNull();

@@ -165,7 +165,7 @@ function navigation(
   experience?: ExperienceSnapshot,
   view?: ServiceView
 ): ConsoleNavigationItemScene[] {
-  if (!experience && section !== "access") {
+  if (!experience && section !== "access" && section !== "audit") {
     return [
       { id: "catalog", messageKey: "catalog", href: "/console/catalog/", icon: "catalog", selected: section === "catalog" },
       { id: "quotas", messageKey: "quotas", href: "/console/quotas/", icon: "quota", selected: section === "quotas" },
@@ -196,7 +196,8 @@ function productRail(section: ConsoleSection, experience?: ExperienceSnapshot): 
   if (!experience) {
     return [
       { id: "overview", href: "/console/", icon: "overview", selected: section === "overview" },
-      { id: "managed-database", href: "/console/catalog/", icon: "database", selected: section !== "overview" && section !== "access" },
+      { id: "managed-database", href: "/console/catalog/", icon: "database", selected: section !== "overview" && section !== "audit" && section !== "access" },
+      { id: "audit", href: "/console/audit/", icon: "audit", selected: section === "audit" },
       { id: "access", href: "/console/access/", icon: "access", selected: section === "access" }
     ];
   }
@@ -216,6 +217,7 @@ function productContext(section: ConsoleSection, experience?: ExperienceSnapshot
   if (isPaaSSection(section)) return { productId: "postgresql", productIcon: "database" };
   if (section === "devops") return { productId: "devops", productIcon: "devops" };
   if (section === "observability") return { productId: "monitoring", productIcon: "observability" };
+  if (section === "audit") return { productId: "audit", productIcon: "audit" };
   return { productId: "iam", productIcon: "access" };
 }
 
@@ -262,6 +264,16 @@ export function buildAccessConsoleScene(experience?: ExperienceSnapshot, view?: 
   return {
     ...buildConsoleFrame({ section: "access", view }, experience),
     content: { kind: "access", view: (accountAccessViews as readonly string[]).includes(view ?? "") ? view as AccountAccessView : "overview" },
+    workspace: null
+  };
+}
+
+// Audit owns an independent bounded context and loads only its local record
+// region. It does not participate in the managed-service resource snapshot.
+export function buildAuditConsoleScene(experience?: ExperienceSnapshot): ConsoleScene {
+  return {
+    ...buildConsoleFrame({ section: "audit" }, experience),
+    content: { kind: "audit" },
     workspace: null
   };
 }
@@ -367,6 +379,7 @@ export function buildConsoleScene(
   view?: ServiceView
 ): ConsoleScene {
   if (section === "access") return buildAccessConsoleScene(experience, view);
+  if (section === "audit") return buildAuditConsoleScene(experience);
   const installations = installationScenes(snapshot);
   const activeOperations = snapshot.installations.filter(
     (item) => item.phase === "PENDING" || item.phase === "PROVISIONING"
