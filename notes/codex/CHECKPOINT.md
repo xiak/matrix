@@ -6,13 +6,16 @@
 - Updated: 2026-10-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `7d3a0918e`
-- Pushed documentation milestone: `83add6fa6`
+- Pushed source/embed milestone: `28c4202e2`
+- Pushed documentation milestone: `9d60a9669`
 
 ## Authoritative route
 
 - IAM client requirements, status and boundary evidence:
   [`FEAT-IAM-010`](../../IAM/FEAT-IAM-010-console.md).
+- AccessKey protocol and product-enforcement evidence:
+  [`FEAT-IAM-007`](../../IAM/FEAT-IAM-007-programmatic-credentials.md) and
+  [`FEAT-IAM-008`](../../IAM/FEAT-IAM-008-product-enforcement.md).
 - Shared UX requirements, status and verification evidence:
   [`FEAT-007`](../../docs/features/FEAT-007-control-plane-console.md).
 - Fixed-source adoption decisions:
@@ -38,14 +41,16 @@ The User-scoped AccessKey workspace separates credential lifecycle,
 credential-carrier admission and effective authorization. Its lazy,
 default-collapsed region lists only exact Actions that explicitly admit both
 `USER` and `ACCESS_KEY`; catalog failure stays local and never falls back to a
-fixture. Fixed IAM source `63ab867d30113b70a71e6ce6ddc5f16020380d36`
-and evidence owner `1e4c2d515` define PaaS revision 8, digest
-`sha256:553bb69f2eed79887305f7884188769894f786459391ca8df71fe95e07f71812`,
-and exactly five carrier Actions: `paas.application.create`,
+fixture. Fixed IAM implementation `b6d15c89a` and status owner `018f34ec5`
+define PaaS revision 9, digest
+`sha256:14aa8bee8819bde9b1a5434774b26308866ea1a17d9ccfd3cc3ccf252cb297c6`,
+and exactly six carrier Actions: `paas.application.create`,
 `paas.configuration.create`, `paas.configuration-revision.create`,
-`paas.application-revision.create` and `paas.deployment.create`. The isolated
-MOCK copies only that immutable-resource graph and never infers support from an
-HTTP method, namespace or collection shape.
+`paas.application-revision.create`, `paas.deployment.create` and
+`paas.application.read`. The read remains an Application instance operation
+with the product-owned `resource.tag/environment` condition. The isolated MOCK
+never infers sibling reads, lists or label writes from method, namespace or
+resource shape.
 
 Once this exact carrier set is non-empty, the workspace offers one same-User
 next task without claiming authorization. MOCK and LIVE both open the exact
@@ -55,26 +60,25 @@ together instead of preselecting an unrelated generic Action. The copy keeps
 this a configuration-source review; request-time Action, resource, condition
 and explicit-deny evaluation remain outside the browser.
 
-The isolated MOCK also groups the six public outcomes into one collapsed table
-instead of repeating them for each Action: `202 Operation`,
-`400 INVALID_ARGUMENT`, `401 UNAUTHENTICATED`, `403 PERMISSION_DENIED`,
-`409 CONFLICT` and `503 IDENTITY_UNAVAILABLE`. It records `400` as not consumed
-and `403`/`409` as consumed, makes no nonce inference for `401` or `503`, does
-not assume the original `401` signature is reusable, and requires state
-confirmation plus a new nonce after uncertain `503` instead of automatic
-intent replay. LIVE receives only the lazy read-only catalog and never renders
-this outcome fixture or signs/sends a product request.
+The isolated MOCK groups public outcomes into create and read sections instead
+of repeating them for each Action. Create retains `202 Operation`; exact
+Application GET adds `200 Application` and post-authorization `404 NOT_FOUND`.
+Both retain the fixed `400`, `401`, `403`, `409` and `503` boundaries with only
+verified nonce semantics. Internal subject resolution, signature material,
+nonce, digest and Account selectors remain hidden. LIVE receives only the lazy
+read-only catalog and never renders this outcome fixture or signs/sends a
+product request.
 
-Source and synchronized embed are pushed at `7d3a0918e`; FEAT evidence is
-pushed at `83add6fa6`. The complete 57-file/931-case frontend suite and three
+Source and synchronized embed are pushed at `28c4202e2`; FEAT evidence is
+pushed at `9d60a9669`. The complete 57-file/931-case frontend suite and three
 normalization cases passed with typecheck/lint/architecture/228-pair style
 gates, 42-route export, 233-file embed equality and full repository Go
-test/vet. Desktop and `390 x 844` DEV verified the exact five-Action result,
+test/vet. Desktop and `390 x 844` DEV verified the exact six-Action result,
 same-User `principal-lin` handoff to
 `/console/access/users/?id=principal-lin&tab=policies`, selected
-permission-source tab, collapsed filters and outcome disclosure, document/body
-equal to the 390px viewport, no Dialog or overflow and a clean browser
-warning/error log.
+permission-source tab, distinct create/read outcome groups, document/body equal
+to the 390px viewport, no Dialog or overflow and a clean browser warning/error
+log.
 
 The previously pushed Application tag recovery, AccessKey owner directory,
 policy-compilation provenance, service-authorization, policy-coverage, Audit,
@@ -84,7 +88,7 @@ indexed by FEAT-007; load only the relevant row when resuming that work.
 ## Continuation boundary
 
 Keep the inspectable MOCK available and consume IAM changes only from fixed,
-pushed commits. Independent CI `36847285739`, APISIX edge coverage and signed
+pushed commits. Independent CI `36853816880`, APISIX edge coverage and signed
 installation acceptance remain unfinished; do not label the programmatic
 product path LIVE or add a browser signature/test-request flow. Consume only
 each fixed Action's explicit credential-carrier set. Accepting a carrier must
