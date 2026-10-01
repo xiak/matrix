@@ -672,7 +672,7 @@ IAM 工程师随后固定并推送来源 `cb62ed2f6c307f5a50aa27480f89c8c58cf081
 ### 安全报告证据覆盖 MOCK 的开发验收证据
 
 2026-10-02，账号安全报告的信息架构、隔离 MOCK 计算与同步嵌入资源更新并固定在已推送的
-[`8e6a66718`](https://github.com/xiak/matrix/commit/8e6a66718)。它替换浏览器打开页面时动态拼装“安全报告”的旧草稿，但不替换独立的用户凭证清单。IAM-009 S4a 后端已经把 JSON/CSV 报告运行时推送为候选 `57cb28d7984175a1c8b58f4855f8c2e5f4188a49`；独立 CI、签名安装/备份恢复组合及显式可消费确认仍在收口，因此本片不建立 LIVE 适配，也不继承后端验收或把预览结果称为真实报告。
+[`8e6a66718`](https://github.com/xiak/matrix/commit/8e6a66718)。它替换浏览器打开页面时动态拼装“安全报告”的旧草稿，但不替换独立的用户凭证清单。IAM-009 S4a 后端最新固定候选为 `e012e446055c26136396efc5da28557b6cbb796f`；相对初始运行时候选 `57cb28d7984175a1c8b58f4855f8c2e5f4188a49`，账号安全报告的 API、HTTP 与 use-case 契约没有变化，新增的是设置并发顺序、七天清理及签名发布门禁。其独立 Verification `36919226231` 仍在排队，签名安装/备份恢复组合及显式可消费确认尚未完成，因此本片不建立 LIVE 适配，也不继承后端验收或把预览结果称为真实报告。
 
 - 入口先立即打开稳定内容区，再由用户确认生成；固定标题、范围、权限、限制和失败语义直接渲染，只有生成结果区随本地状态变化。生成是同步、全有或全无的单次操作；没有 Dialog、报告目录、分页、`PENDING`、任务轮询、共享链接或自动修复。
 - 请求语义只展示 `requestId` 与固定 `formatVersion=1`，范围恒为当前 Account，不接受账号、用户、产品、时间或来源选择器。创建、读取、下载分别要求当前 Account 上的 `iam.security-report.create` 以及目标 `SECURITY_REPORT` 上的 `iam.security-report.read`、`iam.security-report.download`；Root 也不获得隐式豁免，平台运营身份、服务身份、RoleSession 与 AccessKey 不能代替当前有效 USER LOGIN_SESSION。
