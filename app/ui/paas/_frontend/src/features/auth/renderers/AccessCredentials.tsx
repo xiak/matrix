@@ -57,6 +57,34 @@ const previewProgrammaticBoundaries = [{
     { http: 409, code: "CONFLICT", meaning: "conflict", nonce: "consumed" },
     { http: 503, code: "IDENTITY_UNAVAILABLE", meaning: "identityUnavailable", nonce: "unknown" }
   ]
+}, {
+  kind: "auditQuery",
+  actions: ["audit.record.read"],
+  product: "audit",
+  profileRevision: 3,
+  fixedSource: "620960989",
+  outcomes: [
+    { http: 200, code: "AuditRecordPage", meaning: "auditRecordsReturned", nonce: "unknown" },
+    { http: 401, code: "audit.authentication.failed", meaning: "auditUnauthenticated", nonce: "unknown" },
+    { http: 403, code: "audit.authorization.denied", meaning: "auditPermissionDenied", nonce: "unknown" },
+    { http: 409, code: "audit.state.conflict", meaning: "auditConflict", nonce: "unknown" },
+    { http: 422, code: "audit.argument.invalid", meaning: "auditArgumentInvalid", nonce: "unknown" },
+    { http: 503, code: "audit.unavailable", meaning: "auditUnavailable", nonce: "unknown" }
+  ]
+}, {
+  kind: "auditIntegrity",
+  actions: ["audit.integrity.verify"],
+  product: "audit",
+  profileRevision: 3,
+  fixedSource: "620960989",
+  outcomes: [
+    { http: 200, code: "ChainVerification", meaning: "auditChainVerified", nonce: "unknown" },
+    { http: 401, code: "audit.authentication.failed", meaning: "auditUnauthenticated", nonce: "unknown" },
+    { http: 403, code: "audit.authorization.denied", meaning: "auditPermissionDenied", nonce: "unknown" },
+    { http: 409, code: "audit.state.conflict", meaning: "auditConflict", nonce: "unknown" },
+    { http: 422, code: "audit.argument.invalid", meaning: "auditArgumentInvalid", nonce: "unknown" },
+    { http: 503, code: "audit.unavailable", meaning: "auditUnavailable", nonce: "unknown" }
+  ]
 }] as const;
 
 function InlineFlow({ flow, owner, keyValue, onChange, onClose, onOpenKey }: {

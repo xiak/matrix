@@ -4054,6 +4054,14 @@
       "read": {
         "scope": "{count} exact signed read Action",
         "successBoundary": "The exact GET carries no query or body; success returns only the authorized Application in the same account. The product database supplies the environment tag and rechecks it before returning; internal subject resolution, signatures, nonces, digests and account selectors stay hidden."
+      },
+      "auditQuery": {
+        "scope": "{count} audit-record query Action",
+        "successBoundary": "Success returns only an AuditRecordPage in the current tenant. Pagination uses an opaque server-issued cursor and the request has no tenant or account selector. A completed query grants no other audit or business-resource permission."
+      },
+      "auditIntegrity": {
+        "scope": "{count} audit-chain verification Action",
+        "successBoundary": "Success returns only the ChainVerification for the requested sequence range. It verifies audit-chain state; it is neither evidence of a user grant nor a substitute for authorization on a business operation."
       }
     },
     "keyRequestPreviewOutcomes": {
@@ -4065,7 +4073,14 @@
       "permissionDenied": "The signature is valid, but current policy denies this exact request.",
       "notFound": "Only after same-account authorization does the product confirm that the Application is absent, avoiding an existence leak.",
       "conflict": "The signed-request nonce was already consumed; the original signature cannot be reused.",
-      "identityUnavailable": "IAM or its decision response is unavailable or untrusted. The outcome is uncertain: do not automatically replay the same intent; confirm state and use a new nonce."
+      "identityUnavailable": "IAM or its decision response is unavailable or untrusted. The outcome is uncertain: do not automatically replay the same intent; confirm state and use a new nonce.",
+      "auditRecordsReturned": "Returns one page of audit records in the current tenant plus an opaque pagination cursor.",
+      "auditChainVerified": "Returns the audit-chain verification result for the requested sequence range.",
+      "auditUnauthenticated": "Authentication failed without exposing whether the Access key, signature or session check failed.",
+      "auditPermissionDenied": "The identity is known but cannot perform this audit Action; the response does not infer or reveal account existence from the request body.",
+      "auditConflict": "The request conflicts with audit state. This can represent nonce replay or a chain conflict, and the caller cannot refine the cause from this public result.",
+      "auditArgumentInvalid": "The request arguments are invalid; a cross-tenant cursor is rejected with the same public result.",
+      "auditUnavailable": "The audit query or verification is unavailable and must not be interpreted as an empty result or a verified chain."
     },
     "keyRequestPreviewNonce": {
       "consumed": "Consumed",

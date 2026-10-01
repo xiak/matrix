@@ -2920,6 +2920,36 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByRole("tab", { name: "权限策略" }).getAttribute("aria-selected")).toBe("true");
     expect(screen.getByText(/直接策略与用户组继承分别展示/)).toBeTruthy();
   });
+  it("explains the fixed Audit r3 public outcomes without signing or sending a browser request", async () => {
+    const listAuthorizationProfiles = vi.fn().mockResolvedValue({ accountId: "org-xiak", items: [{ profile: {
+      product: "audit", revision: 3, callingService: "AUDIT", actions: [
+        { action: "audit.record.read", resourceKind: "AUDIT_RECORD", scope: "TENANT", subjectTypes: ["USER", "ROLE"], userAuthenticationMethods: ["ACCESS_KEY", "LOGIN_SESSION"],
+          resourceShapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "LIST" }] },
+        { action: "audit.integrity.verify", resourceKind: "AUDIT_CHAIN", scope: "TENANT", subjectTypes: ["USER", "ROLE"], userAuthenticationMethods: ["ACCESS_KEY", "LOGIN_SESSION"],
+          resourceShapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "LIST" }] }
+      ]
+    }, contentDigest: "sha256:83a1c4665b2363af22d882202f318f1ebb7ed16d33244723d18183ee3a404186" }] });
+    const { user } = await open("keys", { repository: { listAuthorizationProfiles } });
+    await user.click(await screen.findByRole("button", { name: "管理 lin 的访问密钥" }));
+    await user.click(screen.getByText("编程访问边界").closest("summary")!);
+    expect(await screen.findAllByText("audit.record.read")).toHaveLength(2);
+    expect(screen.getAllByText("audit.integrity.verify")).toHaveLength(2);
+    await user.click(screen.getByText("签名产品请求的结果边界").closest("summary")!);
+    expect(screen.getByText("1 个审计记录查询 Action")).toBeTruthy();
+    expect(screen.getByText("1 个审计链完整性校验 Action")).toBeTruthy();
+    expect(screen.getByText("AuditRecordPage", { selector: "code" })).toBeTruthy();
+    expect(screen.getByText("ChainVerification", { selector: "code" })).toBeTruthy();
+    expect(screen.getAllByText("audit.authentication.failed")).toHaveLength(2);
+    expect(screen.getAllByText("audit.authorization.denied")).toHaveLength(2);
+    expect(screen.getAllByText("audit.state.conflict")).toHaveLength(2);
+    expect(screen.getAllByText("audit.argument.invalid")).toHaveLength(2);
+    expect(screen.getAllByText("audit.unavailable")).toHaveLength(2);
+    expect(screen.getAllByText(/620960989/)).toHaveLength(2);
+    expect(screen.getAllByText("不作推断")).toHaveLength(12);
+    expect(screen.getByText(/本页不会发送请求/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /签名|发送|测试请求/ })).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
   it("locks an uncertain access-key creation to its original request and never reveals the lost secret", async () => {
     const { user, extension } = await open("keys");
     await user.click(await screen.findByRole("button", { name: "管理 chen 的访问密钥" }));

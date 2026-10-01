@@ -4054,6 +4054,14 @@
       "read": {
         "scope": "{count} 个精确签名读取 Action",
         "successBoundary": "精确 GET 请求不携带查询参数或正文；成功只返回同一账号中已授权的真实 Application。environment 标签由产品数据库读取并在返回前再次核对；不展示内部身份解析、签名、Nonce、摘要或账号选择器。"
+      },
+      "auditQuery": {
+        "scope": "{count} 个审计记录查询 Action",
+        "successBoundary": "成功只返回当前租户范围内的 AuditRecordPage；翻页使用服务端签发的不透明 cursor，请求不提供租户或账号选择器。结果表示查询已完成，不表示调用者获得了其他审计或业务资源权限。"
+      },
+      "auditIntegrity": {
+        "scope": "{count} 个审计链完整性校验 Action",
+        "successBoundary": "成功只返回请求序列范围的 ChainVerification；它验证审计链状态，不是用户授权证明，也不替代业务操作自身的权限判定。"
       }
     },
     "keyRequestPreviewOutcomes": {
@@ -4065,7 +4073,14 @@
       "permissionDenied": "签名有效，但当前策略拒绝本次准确请求。",
       "notFound": "完成同账号授权后才确认目标 Application 不存在；不会提前泄露资源存在性。",
       "conflict": "签名 Nonce 已被消费；原签名不得再次使用。",
-      "identityUnavailable": "IAM 或决定回包不可用／不可信；结果不确定，不自动重发同一意图，重新确认后使用新 Nonce。"
+      "identityUnavailable": "IAM 或决定回包不可用／不可信；结果不确定，不自动重发同一意图，重新确认后使用新 Nonce。",
+      "auditRecordsReturned": "返回当前租户范围内的一页审计记录和不透明翻页 cursor。",
+      "auditChainVerified": "返回指定序列范围的审计链校验结果。",
+      "auditUnauthenticated": "认证失败；公开结果不说明 Access key、签名或会话的具体失败环节。",
+      "auditPermissionDenied": "身份已识别，但无权执行该审计 Action；响应不根据请求正文推断或泄漏账号存在性。",
+      "auditConflict": "请求与当前审计状态冲突；可能是 Nonce 重放或审计链冲突，调用方不能从该结果继续细分原因。",
+      "auditArgumentInvalid": "请求参数无效；跨租户 cursor 也使用同一公开结果拒绝。",
+      "auditUnavailable": "审计查询或校验暂不可用；不能把失败当作空记录或校验通过。"
     },
     "keyRequestPreviewNonce": {
       "consumed": "已消费",

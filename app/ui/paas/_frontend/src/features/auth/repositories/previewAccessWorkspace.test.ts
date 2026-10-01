@@ -45,6 +45,38 @@ describe("preview adapter for the fixed group contract", () => {
 });
 
 describe("isolated authorization catalog preview", () => {
+  it("pins the isolated Audit r3 carrier declaration without adding conditions or browser signing", async () => {
+    const directory = await previewAccountRepository.listAuthorizationProfiles(previewCredential);
+    const entry = directory.items.find((item) => item.profile.product === "audit");
+    expect(entry).toEqual({
+      profile: {
+        product: "audit",
+        revision: 3,
+        callingService: "AUDIT",
+        actions: [
+          {
+            action: "audit.record.read",
+            resourceKind: "AUDIT_RECORD",
+            scope: "TENANT",
+            subjectTypes: ["USER", "ROLE"],
+            userAuthenticationMethods: ["ACCESS_KEY", "LOGIN_SESSION"],
+            resourceShapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_LIST" }]
+          },
+          {
+            action: "audit.integrity.verify",
+            resourceKind: "AUDIT_CHAIN",
+            scope: "TENANT",
+            subjectTypes: ["USER", "ROLE"],
+            userAuthenticationMethods: ["ACCESS_KEY", "LOGIN_SESSION"],
+            resourceShapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_LIST" }]
+          }
+        ]
+      },
+      contentDigest: "sha256:83a1c4665b2363af22d882202f318f1ebb7ed16d33244723d18183ee3a404186"
+    });
+    expect(entry?.profile.actions.every((action) => action.conditions === undefined)).toBe(true);
+  });
+
   it("uses the current managed-service installation Action namespace", async () => {
     const directory = await previewAccountRepository.listAuthorizationProfiles(previewCredential);
     const managedService = directory.items.find((entry) => entry.profile.product === "managedservice")?.profile;

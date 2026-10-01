@@ -42,6 +42,21 @@ const previewSessionObservedAt = "2026-09-18T12:00:00Z";
 // set is copied only from the fixed revision below; it is not a LIVE read.
 const previewAuthorizationProfiles: AuthorizationProfileEntry[] = [
   {
+    // Fixed IAM source 620960989, Audit Profile r3. It remains an isolated
+    // catalog fixture until the independent backend verification is terminal.
+    profile: {
+      product: "audit", revision: 3, callingService: "AUDIT", actions: [
+        { action: "audit.record.read", resourceKind: "AUDIT_RECORD", scope: "TENANT", subjectTypes: ["USER", "ROLE"],
+          userAuthenticationMethods: ["ACCESS_KEY", "LOGIN_SESSION"],
+          resourceShapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_LIST" }] },
+        { action: "audit.integrity.verify", resourceKind: "AUDIT_CHAIN", scope: "TENANT", subjectTypes: ["USER", "ROLE"],
+          userAuthenticationMethods: ["ACCESS_KEY", "LOGIN_SESSION"],
+          resourceShapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_LIST" }] }
+      ]
+    },
+    contentDigest: "sha256:83a1c4665b2363af22d882202f318f1ebb7ed16d33244723d18183ee3a404186"
+  },
+  {
     profile: {
       product: "iam", revision: 1, callingService: "IAM", actions: [
         { action: "iam.group.create", resourceKind: "ACCOUNT", scope: "TENANT", resourceShapes: [{ mode: "INSTANCE", prefixAllowed: false }],
