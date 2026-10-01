@@ -4387,6 +4387,8 @@ func proveIAMSecuritySettingsRaces(t *testing.T, ctx context.Context, database *
 		mutations = []string{"remove-tighten"}
 	} else if mode == "settings-loosening" {
 		mutations = []string{"verify-loosen"}
+	} else if mode == "settings-races" {
+		mutations = append(mutations, "security-report")
 	}
 	for _, mutation := range mutations {
 		verificationMutation := mutation == "verify" || mutation == "verify-loosen"
@@ -4410,10 +4412,14 @@ func proveIAMSecuritySettingsRaces(t *testing.T, ctx context.Context, database *
 				if _, err := first.ChangePassword(ctx, access.Credential, iamv1.ChangePasswordRequest{CurrentPassword: initial, NewPassword: current, RequestID: "race-initial-password"}); err != nil {
 					t.Fatal(err)
 				}
+				actions := []iamv1.Action{iamv1.ActionIAMSecuritySettingsRead, iamv1.ActionIAMSecuritySettingsUpdate}
+				if mutation == "security-report" {
+					actions = append(actions, iamv1.ActionIAMSecurityReportCreate)
+				}
 				policy, err := first.CreatePolicy(ctx, access.Credential, iamv1.CreatePolicyRequest{DisplayName: "Explicit settings permission", RequestID: "race-policy",
 					Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
 						Statements: []iamv1.PolicyStatement{{SID: "settings", Effect: "ALLOW",
-							Actions:   []iamv1.Action{iamv1.ActionIAMSecuritySettingsRead, iamv1.ActionIAMSecuritySettingsUpdate},
+							Actions:   actions,
 							Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceAccount, Match: iamv1.PolicyResourceExact, ID: string(account.ID)}}}}}})
 				if err != nil {
 					t.Fatal(err)
@@ -4814,6 +4820,12 @@ func proveIAMSecuritySettingsRaces(t *testing.T, ctx context.Context, database *
 					if err != nil {
 						t.Fatal(err)
 					}
+				case "security-report":
+					other.path, other.action = "/v1/account/security-reports", auditv1.ActionIAMSecurityReportCreated
+					other.body = mustIAMJSON(t, iamv1.CreateAccountSecurityReportRequest{
+						FormatVersion: iamv1.SecurityReportFormatVersion,
+						RequestID:     other.request,
+					})
 				}
 				defer clear(other.body)
 				leading, trailing := other, settings
@@ -4857,17 +4869,24 @@ func proveIAMSecuritySettingsRaces(t *testing.T, ctx context.Context, database *
 						t.Fatal("settings race did not finish")
 					}
 				}
+				reportMutation := mutation == "security-report"
+				wantLeading := http.StatusOK
+				if reportMutation && !settingsFirst {
+					wantLeading = http.StatusCreated
+				}
 				wantTrailing := http.StatusUnauthorized
-				if separateFactorUser && !settingsFirst {
+				if (separateFactorUser || reportMutation) && !settingsFirst {
 					wantTrailing = http.StatusOK
 				}
-				if results[0].Code != http.StatusOK || results[1].Code != wantTrailing {
+				if results[0].Code != wantLeading || results[1].Code != wantTrailing {
 					t.Fatalf("ordered settings race status: first=%d second=%d", results[0].Code, results[1].Code)
 				}
 				settingsCount, otherCount, wantGeneration, consumedCodes, wantRevision := 0, 1, 2, 0, 2
 				wantEnrollment, proofState := "BOUND", "PROVED"
 				if settingsFirst {
 					settingsCount, otherCount, proofState = 1, 0, "CONSUMED"
+				} else if reportMutation {
+					settingsCount, otherCount, proofState = 1, 1, "CONSUMED"
 				} else if mutation == "password" || mutation == "password-rules" {
 					wantGeneration++
 				} else if mutation == "recovery" {
@@ -4879,6 +4898,27 @@ func proveIAMSecuritySettingsRaces(t *testing.T, ctx context.Context, database *
 				if verificationMutation && !settingsFirst {
 					if iamv1.DecodeRequest(results[0].Body, &issued) != nil || issued.Outcome != iamv1.LoginAuthenticated || !issued.Credential.Present() {
 						t.Fatal("verification-first did not actually issue a Session")
+					}
+				}
+				if reportMutation {
+					var reports, contents int
+					var observedSettings int64
+					if err := database.QueryRow(ctx, `SELECT count(*),count(c.report_id),
+						COALESCE(max((c.report_document->>'accountSecuritySettingsVersion')::bigint),0)
+						FROM iam.security_report_receipts r LEFT JOIN iam.security_report_contents c
+						  ON c.tenant_id=r.tenant_id AND c.report_id=r.report_id
+						WHERE r.tenant_id=$1 AND r.actor_id=$2 AND r.request_id='race-mutation'`,
+						account.ID, session.Session.PrincipalID).Scan(&reports, &contents, &observedSettings); err != nil ||
+						reports != otherCount || contents != otherCount || (!settingsFirst && observedSettings != expectedSettings) {
+						t.Fatal("settings race stored a partial or mixed-version security report", err)
+					}
+					if !settingsFirst {
+						var created iamv1.CreateAccountSecurityReportResponse
+						if iamv1.DecodeRequest(results[0].Body, &created) != nil ||
+							iamv1.ValidateCreateAccountSecurityReportResponse(created) != nil ||
+							created.Outcome != "APPLIED" || created.Metadata.AccountID != account.ID {
+							t.Fatal("report-first race did not return its committed immutable report")
+						}
 					}
 				}
 				assertState := func() {
@@ -4989,7 +5029,7 @@ func proveIAMSecuritySettingsRaces(t *testing.T, ctx context.Context, database *
 				if result := invoke(1, http.MethodPut, settings.path, session.Credential, settings.body); result.Code != http.StatusUnauthorized {
 					t.Fatal("replay revived old Session or credential-bound proof", result.Code)
 				}
-				if settingsFirst || separateFactorUser {
+				if settingsFirst || separateFactorUser || reportMutation {
 					if result := invoke(1, other.method, other.path, other.bearer, other.body); result.Code != http.StatusUnauthorized {
 						t.Fatal("replay revived old mutation qualification", result.Code)
 					}
