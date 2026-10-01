@@ -1,6 +1,6 @@
 # FEAT-IAM-007：访问密钥与程序访问
 
-- 状态：实施中；K1管理及K2内部验签、原子拒绝/防重放与历史证据的累计后端固定`644fff09446fc8ffb003cc53cf2fb55d4f58828a`已通过本地真实PG18、固定前驱保留数据、独立进程、最终全仓检查及五项独立CI。实际产品消费已累计固定到`35e15da22`：在`b6d15c89a`的五条不可变图创建和带标签Application读取之外，新增其余六条PaaS实例读取，并通过本地真实PG18、独立IAM/Audit/PaaS进程、唯一前驱及全仓检查；最新独立CI仍在运行，签名安装组合也未验收。其他PaaS动作、生产入口托管/备份、UI及最终发布仍未完成，整体未验收。
+- 状态：实施中；K1管理及K2内部验签、原子拒绝/防重放与历史证据的累计后端固定`644fff09446fc8ffb003cc53cf2fb55d4f58828a`已通过本地真实PG18、固定前驱保留数据、独立进程、最终全仓检查及五项独立CI。实际产品消费已累计到`620960989`：PaaS已覆盖已列明的创建、实例读取、Deployment控制和Application声明标签，Audit新增精确租户记录查询与完整性验证；后者已通过聚焦race、架构和双Account五进程PG18门禁，最终全仓、固定前驱及独立CI仍待本片收口。签名安装组合、生产入口托管/备份、UI、K3及最终发布仍未完成，整体未验收。
 - 依赖：003、005；临时凭据与 006 协作。
 - Owner：IAM credential；各产品 HTTP 签名消费归其 PEP。
 
@@ -217,7 +217,7 @@ wrappingKeyId永久对应唯一KEK原材料，移除后也不得复用该ID。re
 
 ### 当前源码约束与替换边界
 
-IAM已保留原登录`SubjectContext`约束，并用独立`AccessKeyContext`进入同一权限求值，不构造Session。PaaS `port.AuthorizationRequest`仍只传Credential字符串，其`iamhttp.Client`仍只消费bearer；这个实际产品接入边界尚待所属owner替换，不能以IAM内部入口代替已接通业务。
+IAM保留原登录`SubjectContext`约束，并用独立`AccessKeyContext`进入同一权限求值，不构造Session。PaaS与Audit只在各自已冻结的精确路由重建边缘请求并调用同一`authorize:access-key`；原Bearer和RoleSession路径仍走既有入口。未声明动作、平台scope、产品前缀或任意新路由都不因产品已经接入AccessKey而自动开放。
 
 身份策略求值继续只有一个 owner；将 User/Account/策略/Boundary 的授权输入与已验证认证载体分离，登录 Session、AccessKey 和 RoleSession 各自证明当前有效性，不能构造假的 Session.ID/到期/密码 generation 满足旧接口。原登录/改密/角色承担/私有 actor-session 写入保护保持，不借新增 key 绕过它们，也不为每种凭据复制 PDP。
 
@@ -227,11 +227,10 @@ IAM已保留原登录`SubjectContext`约束，并用独立`AccessKeyContext`进�
 
 - 安装owner仍需实际文件生成/挂载、备份恢复配对和发布准入；文件/codec、单次封装及不可重绑定登记已有固定后端基线，不等于生产托管已验收。
 - 原子验签/拒绝、nonce与历史证据已通过累计回归、独立进程和精确CI，固定`644fff09`被当前PaaS消费者选择性采用。K1继续使用真实无key的USER登录管理决定，不因新增程序载体取得额外权限。
-- 当前消费者在PaaS Profile revision 8中只为`paas.application.create`、`paas.configuration.create`、`paas.configuration-revision.create`、`paas.application-revision.create`和`paas.deployment.create`声明`USER`可使用`ACCESS_KEY`和`LOGIN_SESSION`；其他动作保持原载体集合。PaaS只在五条精确POST路由重建外部请求并调用专用AccessKey authorizer，签名上下文同时保存预期Action并在实际handler再次核对；任何其他route或route/Action错配都在业务用例前拒绝，不以产品前缀泛化开放。
+- 当前PaaS Profile revision 12只为本文已固定的资源图创建、实例读取、Deployment控制和Application声明标签动作声明USER可使用`ACCESS_KEY`与`LOGIN_SESSION`；Audit Profile revision 3只为`audit.record.read`和`audit.integrity.verify`声明相同载体。各PEP只在精确method/route重建外部请求并调用专用AccessKey authorizer；其他route、平台动作或route/Action错配在用例前拒绝，不以产品前缀泛化开放。
 - PaaS从实际连接、配置的NorthboundOrigin和边缘覆盖的`X-Matrix-External-Origin`/`X-Matrix-External-Request-Target`取得签名字段；请求方不能提交AuthorizationRequest、Account、Subject或已规范摘要。决定必须回绑实际request digest、Action、资源集合、USER和key ID，PaaS的Operation、outbox、Audit actor与业务幂等身份继续保留同一key ID。相同USER的另一把key不能借用原业务幂等完成结果。
-- 固定`40adf6d828180050992a8a6c139f05a83afc753f`在独占PostgreSQL 18上通过PaaS真实存储race门禁（5.841秒），并以独立双IAM、Audit、PaaS和双dispatcher进程通过两Account签名创建、同ID隔离、nonce重放、Operation/outbox/Audit归因及链验证（测试222.57秒、包226.037秒）。同一源码的IAM58→59真实前驱门禁以109.25秒通过，最终全仓race、vet、模块校验、生成稳定和Linux amd64构建通过；[独立CI 36842829292](https://github.com/xiak/matrix/actions/runs/36842829292)因后继push并发取消，不登记为独立CI通过，累计实现由后继`63ab867d3`重新验证。
 - 安装/APISIX尚未生成和注入NorthboundOrigin或两个可信边缘头，因此签名安装包中的外部调用仍未开放。产品安装owner后续只能消费固定对象并用真实网关证明覆盖、原始编码及重复query保真；不能把进程门禁冒充签名安装验收。可信来源IP、Account/key网络限制、使用摘要及UI仍分别保留原验收，不以header转交或HMAC通过代替。
-- 已有Application读取需要先安全解析Account并预读资源标签，不能借用创建集合的无目标上下文；它及其他实例读写、Operation、Audit query/verify均在各自精确映射完成前继续拒绝AccessKey。后继扩展逐动作修改同一Profile和PEP，不建立平行消费者或宽泛兼容层。
+- Application读取和标签变更继续先安全解析Account并预读当前资源标签；其他实例动作与Audit租户集合动作只使用各自已声明的真实资源形状。PaaS列表、Audit平台查询/验链、Audit写入、安装验证及其余动作继续拒绝AccessKey。后继扩展逐动作修改同一Profile和PEP，不建立平行消费者或宽泛兼容层。
 
 后端组合、业务消费、生产托管及最终发布是不同验收边界；继续使用现有owner，不建立第二套服务、文档或测试框架，也不将剩余需求移出目标。
 
@@ -284,6 +283,16 @@ PEP继续使用唯一`authorize:access-key`、当前Account/User/key/Policy/Boun
 真实门禁覆盖两个Account同ID但标签不同、set/delete成功与原USER/key归因、另一key复用幂等键、body/path/key/If-Match替换、授权后标签或resourceVersion漂移、撤权/停用、nonce重放、重启及完整Audit链；LOGIN_SESSION原路径和此前所有AccessKey创建、读取、Deployment变更必须回归。本片不开放任意标签key、批量标签、Application列表或调用者提供Action。
 
 固定实现`4433b7ac00fec3ae7e2fdae35fad4bbdc4cf9238`和门禁收紧`c83c38d7b91aa17003c2d217fd509eaba37d98d5`将PaaS Profile推进到revision 12/digest `sha256:ec6ef98cd9b4939cbbdd05632c8fbd28ff8ce79d98466ce98103c3fae30699b6`，没有新增SQL。2026-10-01在本任务独立PostgreSQL 18.6（2CPU/2GiB/PIDs512）中，PaaS事务race 5.171秒、双Account五进程race 257.56秒、固定revision 11 executable保留数据升级112.17秒通过；真实签名set/delete保留当前资源标签、目标标签、USER/key、Operation/outbox和tenant Audit链，两个Account复用同一业务幂等键不串租户，body、path/key、If-Match和幂等键替换八条攻击均在效果前拒绝，登录会话恢复原标签后既有条件拒绝继续成立。全仓普通与race测试（`GOMAXPROCS=2`、`-p 2`）、vet、模块校验、OpenAPI生成稳定及Linux amd64/CGO关闭构建通过。独立CI仍待远端结果；本证据不开放任意标签、列表或可信边缘LIVE声明。
+
+### 当前纵向切片：AccessKey查询租户Audit与验证完整性
+
+本片只为`audit.record.read`和`audit.integrity.verify`向USER增加`ACCESS_KEY`，只接受`POST /v1/records:query`与`POST /v1/integrity:verify`。Audit Profile revision 3的canonical digest为`sha256:83a1c4665b2363af22d882202f318f1ebb7ed16d33244723d18183ee3a404186`；revision 2固定为`sha256:d59fe726e2aaa4857b395da04ef79906305e56137974dfea5c96a26b32fdfa55`并保留原字节。没有新增SQL、凭据对象、permit缓存或第二套canonical编码。
+
+PEP从已配置的installation、NorthboundOrigin和边缘覆盖的external target重建完整签名请求，正文摘要绑定页大小、时间/action/actor过滤、cursor及验链范围。IAM在每次请求核对当前Account/User/key/Policy/Boundary并原子消费nonce；Audit只用决定中的TenantID选择链，body、cursor、path或header都不能改变授权范围。成功查询和验链继续在所选租户链追加原有封闭access fact，actor准确保留USER与`accessKeyId`；ROLE来源仍保留原User或ServiceAccount谱系。失败游标、坏MAC、重放、已删除key或不确定IAM结果不产生成功access fact。
+
+平台记录/验链、事件写入和installation验证明确不接受AccessKey。`/v1/platform/*`即使携带合法租户key也在IAM前返回统一认证失败；不能由平台操作员角色、AuditReader名称或产品audience推导跨租户能力。跨Account游标攻击使用目标Account自己的合法MAC仍由cursor链身份拒绝，证明隔离不依赖“攻击者不会重新签名”。
+
+实现固定`620960989`在2026-10-01通过Audit契约/usecase/IAM-client/HTTP/integration及IAM authority/architecture聚焦测试和race；本任务独立PostgreSQL 18.6上的双IAM、Audit、PaaS及两个dispatcher真实进程门禁以199.714秒通过。该门禁覆盖两个Account、签名查询/验链、同租户cursor继续、跨Account cursor 422、body/path/platform替换401、nonce重放409、key删除后下一请求401，以及access fact与IAM决定的USER/key/tenant归因。固定前一源码`76048c52db248da2619d9d3e662394551e6f1ab1`的真实IAM executable产生r2及既有身份/凭据/决定数据，当前源码双迁移、等值bootstrap、重启和完整保留门禁以117.547秒通过；r2字节未改写，r3精确成为head。最终全仓、独立CI和签名APISIX安装仍待本片收口，因此此处不标记K2或FEAT完成。
 
 ## 验收
 

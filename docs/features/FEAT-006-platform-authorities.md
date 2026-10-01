@@ -564,17 +564,23 @@ purge path, and backup/recovery remains owned by installation.
 
 ### Query
 
-Audit query requires a user bearer credential and calls IAM for
-`audit.record.read` or `audit.integrity.verify`. The returned tenant is IAM
-authority; a tenant header, query filter, cursor, actor, or record body cannot
-change it. Queries use bounded page sizes, deterministic descending sequence,
-an opaque tenant-bound cursor, and optional bounded time/action/actor filters.
+Tenant Audit query accepts either a current user login credential or an
+AccessKey-signed request only where the Audit authorization profile explicitly
+declares that carrier, then calls IAM for `audit.record.read` or
+`audit.integrity.verify`. The returned tenant is IAM authority; a tenant
+header, query filter, cursor, actor, record body, or signed external target
+cannot change it. Queries use bounded page sizes, deterministic descending
+sequence, an opaque tenant-bound cursor, and optional bounded
+time/action/actor filters. The signed request binds the complete JSON body and
+preserves USER plus accessKeyId in the local access fact; a valid signature
+from another tenant still cannot use the original cursor.
 
 Platform records use `/v1/platform/records:query` and
 `/v1/platform/integrity:verify`, backed by the separate
 `audit.platform-record.read` / `audit.platform-integrity.verify` IAM actions.
 Their installation comes from the current IAM decision, not a query selector;
-platform access does not authorize a tenant chain. Tenant and installation
+platform access does not authorize a tenant chain, and AccessKey is not an
+accepted carrier for either platform route. Tenant and installation
 page/verification responses expose exactly their authorized scope.
 Responses expose the sanitized event, sequence, hashes, ingestion time, and
 retention policy only. Reading or verifying Audit writes a local sanitized
