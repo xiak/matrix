@@ -241,6 +241,14 @@ IAM Allow只证明当前程序主体能对精确Deployment执行该动作；PaaS
 
 固定`05336ad368996a500c0769fe62767204bd9333d0`将Profile推进到revision 11/digest `sha256:ba8b808cc72c4ff1eb34d9eb933b5cde4ee95dde0f1a5c361058c2dab6937b48`，没有新增SQL。2026-10-01独立PG18.6双Account五进程race门禁233.250秒真实执行update、stop、rollback及各自重放冲突，核对generation、源generation恢复、原USER/key、决定、Operation、outbox及tenant Audit链；AccessKey真库95.209秒和固定revision 10 executable保留数据门禁126.642秒通过。全仓race/p2、vet、模块校验、OpenAPI生成稳定及Linux amd64/CGO关闭构建通过。两次失败仅来自测试夹具的UTC规范化和pgx JSON参数类型，均在全新数据库修正后通过，生产实现未放宽。独立CI尚未终态；真实边缘、发布组合和UI仍由其owner另验。
 
+## 已固定纵向切片：AccessKey管理Application声明标签
+
+PaaS Profile下一revision只为`paas.application.label.set|delete`向USER增加`ACCESS_KEY`。闭合PEP只接收精确Application、Profile已声明的标签key、PUT值或DELETE当前值、If-Match及幂等键；AccessKey先解析为当前Account/User，再从决定Account读取真实当前标签，不能信任请求提供资源标签或Account。IAM Allow绑定当前资源标签和目标标签，PaaS Serializable事务在效果前重读Application并核对决定证据、resourceVersion与目标变化；任何漂移返回失败，不用旧快照写入。
+
+双Account同ID/不同标签的真实进程门禁必须证明set/delete只影响决定Account，另一key/Account、标签key/value/body/path/If-Match替换、nonce与业务幂等重放、撤权/停用、IAM失联和并发标签变化均关闭；成功Operation/outbox/Audit保留原USER/accessKeyId。现有LOGIN_SESSION、AccessKey资源图创建/读取及Deployment控制全部回归。本片不新增标签DSL、批量API或资源列表。
+
+固定实现`4433b7ac00fec3ae7e2fdae35fad4bbdc4cf9238`及门禁收紧`c83c38d7b91aa17003c2d217fd509eaba37d98d5`交付revision 12/digest `sha256:ec6ef98cd9b4939cbbdd05632c8fbd28ff8ce79d98466ce98103c3fae30699b6`，未新增数据库迁移。2026-10-01独立PG18.6 PaaS事务race 5.171秒、双Account五进程race 257.56秒及revision 11真实前驱升级112.17秒通过；同ID不同标签、跨Account复用同一业务幂等键、精确set/delete、资源/请求标签决定、USER/key Operation与Audit归因、body/path/key/If-Match/幂等键替换、nonce冲突和登录会话原路径均由真实HTTP/数据库证明。全仓普通/race、vet、模块校验、生成稳定及Linux amd64构建通过；独立CI尚未终态，可信边缘、签名发布组合和UI仍由其owner另验。
+
 ## 验收
 
 真实两个产品/两个 Account 的同名/同 ID/key、跨租户资源/cursor/配额/Operation、修改 tag 攻击、多个相关资源任一拒绝即无效果；服务跨租户请求必须有目标角色和用途；verifier probe 无业务写权。暂停之后的已提交事实可投递，新请求拒绝。独立 PG18/RLS/受限进程、真实部署和 UI 路径均通过才接受。

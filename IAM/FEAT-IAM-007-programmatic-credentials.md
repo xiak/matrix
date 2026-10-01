@@ -277,6 +277,14 @@ PEP继续使用唯一`authorize:access-key`、当前Account/User/key/Policy/Boun
 
 固定`05336ad368996a500c0769fe62767204bd9333d0`将PaaS Profile推进到revision 11/digest `sha256:ba8b808cc72c4ff1eb34d9eb933b5cde4ee95dde0f1a5c361058c2dab6937b48`，不新增数据库迁移。2026-10-01在本任务独立PostgreSQL 18.6（2CPU/2GiB/PIDs512）和Go2/768MiB下，双Account五进程race门禁233.250秒通过三条真实签名变更、幂等冲突、Operation/outbox和Audit链；AccessKey真库95.209秒、固定revision 10 executable保留数据迁移126.642秒通过。全仓race/p2、vet、模块校验、OpenAPI生成前后字节一致及Linux amd64/CGO关闭构建通过。首次两轮五进程只暴露测试夹具时间未显式UTC及`[]byte`被pgx编码为`bytea`，修正夹具后使用全新数据库通过，生产权限和事务边界未放宽。独立CI仍待远端结果；APISIX可信边缘、签名安装和UI不据本地证据标LIVE。
 
+### 已固定纵向切片：AccessKey管理Application声明标签
+
+本片只为既有`paas.application.label.set|delete`增加USER `ACCESS_KEY`，只接受精确`PUT|DELETE /v1/applications/{applicationId}/labels/{declaredKey}`。Application ID、声明标签key、PUT完整body、`If-Match`和`Idempotency-Key`进入SignedRequest；DELETE必须承诺空body且不能通过query补selector。PEP以当前有效key解析精确Account/User，再在同一Account只读事务读取现有Application标签与resourceVersion；IAM决定同时绑定当前资源标签及目标标签。PaaS写事务必须重读并核对决定中的当前标签、If-Match和请求标签，漂移、缺失标签、另一Account同ID、错误声明key、重放或IAM不确定一律失败关闭且无部分Operation/outbox。
+
+真实门禁覆盖两个Account同ID但标签不同、set/delete成功与原USER/key归因、另一key复用幂等键、body/path/key/If-Match替换、授权后标签或resourceVersion漂移、撤权/停用、nonce重放、重启及完整Audit链；LOGIN_SESSION原路径和此前所有AccessKey创建、读取、Deployment变更必须回归。本片不开放任意标签key、批量标签、Application列表或调用者提供Action。
+
+固定实现`4433b7ac00fec3ae7e2fdae35fad4bbdc4cf9238`和门禁收紧`c83c38d7b91aa17003c2d217fd509eaba37d98d5`将PaaS Profile推进到revision 12/digest `sha256:ec6ef98cd9b4939cbbdd05632c8fbd28ff8ce79d98466ce98103c3fae30699b6`，没有新增SQL。2026-10-01在本任务独立PostgreSQL 18.6（2CPU/2GiB/PIDs512）中，PaaS事务race 5.171秒、双Account五进程race 257.56秒、固定revision 11 executable保留数据升级112.17秒通过；真实签名set/delete保留当前资源标签、目标标签、USER/key、Operation/outbox和tenant Audit链，两个Account复用同一业务幂等键不串租户，body、path/key、If-Match和幂等键替换八条攻击均在效果前拒绝，登录会话恢复原标签后既有条件拒绝继续成立。全仓普通与race测试（`GOMAXPROCS=2`、`-p 2`）、vet、模块校验、OpenAPI生成稳定及Linux amd64/CGO关闭构建通过。独立CI仍待远端结果；本证据不开放任意标签、列表或可信边缘LIVE声明。
+
 ## 验收
 
 标准签名正负向量、body/path/query/header 替换、过期/未来时间/重放与错服务；并发 disable/rotate/request、双账号同名用户隔离；普通 JSON/错误/日志/审计无 key material；真实 PaaS 读写与 Audit 的程序身份可关联，重启仍拒绝旧 key。
