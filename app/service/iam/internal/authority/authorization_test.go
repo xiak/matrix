@@ -1065,7 +1065,7 @@ func TestAccessKeyContextHasNoLoginSessionAndRejectsInconsistentAuthority(t *tes
 			Key: iamv1.AccessKey{APIVersion: iamv1.APIVersion, Kind: "AccessKey", ID: "access-key-context", AccountID: user.Organization.ID,
 				UserID: user.Principal.ID, Status: iamv1.AccessKeyEnabled, ResourceVersion: 1, CreatedAt: now.Add(-time.Minute), UpdatedAt: now.Add(-time.Minute)}}
 	}
-	request := policyEvaluationRequestForTest(t, iamv1.ActionPaaSDeploymentUpdate, iamv1.ResourceReference{Kind: iamv1.ResourceDeployment, ID: "deployment-key"})
+	request := policyEvaluationRequestForTest(t, iamv1.ActionPaaSApplicationLabelSet, iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "application-key"})
 	if eligible, err := accessKeyEligibility(fixture(), now, now.Unix()); err != nil || !eligible {
 		t.Fatal("coherent ordinary key metadata is not eligible for later MAC/PDP checks", err)
 	}
@@ -1076,7 +1076,7 @@ func TestAccessKeyContextHasNoLoginSessionAndRejectsInconsistentAuthority(t *tes
 	if eligible, err := accessKeyEligibility(protected, now, now.Unix()); err != nil || eligible {
 		t.Fatal("filtered platform policy erased the unrevoked-attachment protection", err)
 	}
-	// Deployment update remains LOGIN_SESSION only. Even a coherent key
+	// Application label mutation remains LOGIN_SESSION only. Even a coherent key
 	// context with a matching USER grant must not widen that declaration.
 	for name, change := range map[string]func(*AccessKeyContext){
 		"current user":   func(*AccessKeyContext) {},
@@ -1152,7 +1152,7 @@ func TestAccessKeyContextHasNoLoginSessionAndRejectsInconsistentAuthority(t *tes
 
 func TestPolicyEvaluationDoesNotInferProgramAccessFromUserSupport(t *testing.T) {
 	now := authorityTestTime()
-	request := policyEvaluationRequestForTest(t, iamv1.ActionPaaSDeploymentUpdate, iamv1.ResourceReference{Kind: iamv1.ResourceDeployment, ID: "deployment-program"})
+	request := policyEvaluationRequestForTest(t, iamv1.ActionPaaSApplicationLabelSet, iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "application-program"})
 	user := authoritySubject(now, iamv1.SystemPolicyPaaSDeveloper)
 	subject := iamv1.Subject{Type: iamv1.SubjectUser, ID: string(user.Principal.ID)}
 	if result, _, err := EvaluateAttachedPolicies(now, user.Organization.ID, user.InstallationID, subject, user.Policies, request); err != nil || !result.Allowed {
@@ -1179,7 +1179,7 @@ func TestPolicyEvaluationDoesNotInferProgramAccessFromUserSupport(t *testing.T) 
 
 func TestPolicyEvaluationChecksSubjectCapabilityBeforeUnmatchedEffects(t *testing.T) {
 	now := authorityTestTime()
-	request := policyEvaluationRequestForTest(t, iamv1.ActionPaaSDeploymentUpdate, iamv1.ResourceReference{Kind: iamv1.ResourceDeployment, ID: "requested-deployment"})
+	request := policyEvaluationRequestForTest(t, iamv1.ActionPaaSApplicationLabelSet, iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "requested-application"})
 	allow := policyVersionForTest(t, "policy-current-allow", iamv1.PolicyAllow, request.Action, iamv1.PolicyResourceAnyInAuthority, "")
 	for _, effect := range []iamv1.PolicyEffect{iamv1.PolicyAllow, iamv1.PolicyDeny} {
 		for _, types := range [][]iamv1.SubjectType{{iamv1.SubjectRole}, {iamv1.SubjectUser, iamv1.SubjectRole}} {

@@ -110,7 +110,7 @@ func TestRuntimeDSNBindsLeastPrivilegeLogin(t *testing.T) {
 func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	const variable = "MATRIX_IAM_PREDECESSOR_POSTGRES_TEST_DSN"
 	const databasePrefix = "matrix_iam_upgrade_predecessor_"
-	const source = "b6d15c89af64587d0c5eff64f9b07b1da09b43f5"
+	const source = "35e15da224e68bf0aa39d311254e123734b832f1"
 	const sourceSchema uint64 = 59
 	const currentSchema uint64 = 59
 	// Use credentials accepted by the immediate predecessor. This rolling
@@ -1753,7 +1753,7 @@ func proveFrozenFamilyProfileAdvance(t *testing.T, ctx context.Context, admin *p
 	// condition in the future build. Even a resource-nonmatching old Deny must
 	// then fail closed, rather than disappear behind another Allow.
 	replacement, err := parser.ParseExpr(fmt.Sprintf(`func() AuthorizationProfile {
-		profile := paasProfileRevisionTen
+		profile := paasProfileRevisionEleven
 		profile.Revision = %d
 		var added AuthorizationProfileAction
 		for index, action := range profile.Actions {
@@ -1784,7 +1784,7 @@ func proveFrozenFamilyProfileAdvance(t *testing.T, ctx context.Context, admin *p
 		}
 		for index, element := range catalog.Elts {
 			current, ok := element.(*ast.Ident)
-			if ok && current.Name == "paasProfileRevisionTen" {
+			if ok && current.Name == "paasProfileRevisionEleven" {
 				catalog.Elts[index] = replacement
 				replaced++
 			}
@@ -5908,19 +5908,19 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		sensitive = append(sensitive, base64.RawURLEncoding.EncodeToString(nonce), signature)
 		return signed
 	}
-	// Exercise the actual internal RPC in both IAM executables. Deployment
-	// update intentionally remains an AccessKey Deny; positive product reads
+	// Exercise the actual internal RPC in both IAM executables. Application
+	// label mutation intentionally remains an AccessKey Deny; positive product reads
 	// must go through their exact PaaS routes below.
 	sign := func(account *accountFixture, requestID string) iamv1.AccessKeyAuthorizationRequest {
 		t.Helper()
-		request, err := iamv1.NewAuthorizationRequest(iamv1.ActionPaaSDeploymentUpdate,
-			iamv1.ResourceReference{Kind: iamv1.ResourceDeployment, ID: "program-signed-deployment"}, iamv1.AuthorizationResourceInstance, "", requestID, requestID)
+		request, err := iamv1.NewAuthorizationRequest(iamv1.ActionPaaSApplicationLabelSet,
+			iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "program-signed-application"}, iamv1.AuthorizationResourceInstance, "", requestID, requestID)
 		if err != nil {
 			t.Fatal(err)
 		}
 		bodyHash := sha256.Sum256(nil)
 		signed := signHTTP(account, iamv1.AccessKeyHTTPRequest{Method: http.MethodPut, Scheme: "https", Authority: "program-process.invalid:443",
-			EscapedPath: "/api/paas/v1/deployments/program-signed-deployment", BodyDigest: "sha256:" + hex.EncodeToString(bodyHash[:])})
+			EscapedPath: "/api/paas/v1/applications/program-signed-application/labels/environment", BodyDigest: "sha256:" + hex.EncodeToString(bodyHash[:])})
 		return iamv1.AccessKeyAuthorizationRequest{Authorization: request, SignedRequest: signed}
 	}
 	encode := func(request iamv1.AccessKeyAuthorizationRequest) []byte {
@@ -5977,8 +5977,8 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		return response
 	}
 	type signedProductRequest struct {
-		method, body, route, externalPath, idempotencyKey string
-		signed                                            iamv1.AccessKeySignedRequest
+		method, body, route, externalPath, idempotencyKey, ifMatch string
+		signed                                                     iamv1.AccessKeySignedRequest
 	}
 	prepareProduct := func(account *accountFixture, route, idempotencyKey string, payload any) signedProductRequest {
 		t.Helper()
@@ -6009,6 +6009,24 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 			}),
 		}
 	}
+	prepareProductMutation := func(account *accountFixture, method, route, idempotencyKey, ifMatch string, payload any) signedProductRequest {
+		t.Helper()
+		body, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal("encode signed PaaS mutation", err)
+		}
+		digest := sha256.Sum256(body)
+		externalPath := "/api/paas" + route
+		return signedProductRequest{
+			method: method, body: string(body), route: route, externalPath: externalPath,
+			idempotencyKey: idempotencyKey, ifMatch: ifMatch,
+			signed: signHTTP(account, iamv1.AccessKeyHTTPRequest{
+				Method: method, Scheme: "https", Authority: "api.matrix.test:443",
+				EscapedPath: externalPath, ContentType: "application/json", IdempotencyKey: idempotencyKey, IfMatch: ifMatch,
+				BodyDigest: "sha256:" + hex.EncodeToString(digest[:]),
+			}),
+		}
+	}
 	invokeProduct := func(value signedProductRequest, status int) processResponse {
 		t.Helper()
 		header, err := iamv1.EncodeAccessKeyAuthorization(value.signed.Parameters, value.signed.Signature)
@@ -6022,9 +6040,12 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 			t.Fatal(err)
 		}
 		request.Header.Set("Authorization", string(plain))
-		if value.method == http.MethodPost {
+		if value.method != http.MethodGet {
 			request.Header.Set("Content-Type", "application/json")
 			request.Header.Set("Idempotency-Key", value.idempotencyKey)
+			if value.ifMatch != "" {
+				request.Header.Set("If-Match", value.ifMatch)
+			}
 		}
 		request.Header.Set("X-Matrix-External-Origin", "https://api.matrix.test:443")
 		request.Header.Set("X-Matrix-External-Request-Target", value.externalPath)
@@ -6125,6 +6146,65 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 			decisions[account.key.Key.ID] = map[iamv1.DecisionID]bool{}
 		}
 		decisions[account.key.Key.ID][decisionID] = true
+	}
+	recordProductMutationDecision := func(account *accountFixture, response processResponse, action iamv1.Action, id paasv1.ResourceID) {
+		t.Helper()
+		requestID := response.Header.Get("X-Request-ID")
+		if requestID == "" {
+			t.Fatal("signed Deployment mutation omitted request identity")
+		}
+		var decisionID iamv1.DecisionID
+		var exact bool
+		if err := database.QueryRow(ctx, `SELECT id,allowed AND contract_version=7 AND principal_id=$2 AND access_key_id=$3
+			AND action_name=$4 AND target_kind=$5 AND target_id=$6
+			AND NOT (document ? 'requestTags') AND NOT (document ? 'resourceTags')
+			FROM iam.authorization_decisions WHERE tenant_id=$1 AND request_id=$7`,
+			account.target.AccountID, account.target.ID, account.key.Key.ID, action, iamv1.ResourceDeployment, id, requestID).Scan(&decisionID, &exact); err != nil || !exact {
+			t.Fatal("signed Deployment mutation decision lost exact Account/key/resource binding", err)
+		}
+		if decisions[account.key.Key.ID] == nil {
+			decisions[account.key.Key.ID] = map[iamv1.DecisionID]bool{}
+		}
+		decisions[account.key.Key.ID][decisionID] = true
+	}
+	// This gate owns the IAM/PEP boundary, not execution reconciliation. Move
+	// the already accepted Deployment to a semantically valid observed state
+	// between commands so each real HTTP mutation can exercise the original
+	// PaaS transaction without starting a host worker owned by another FEAT.
+	settleDeploymentFixture := func(account *accountFixture, id paasv1.ResourceID) paasv1.Deployment {
+		t.Helper()
+		var document []byte
+		if err := database.QueryRow(ctx, `SELECT document FROM paas.deployments WHERE tenant_id=$1 AND id=$2`, account.target.AccountID, id).Scan(&document); err != nil {
+			t.Fatal("read Deployment settlement fixture", err)
+		}
+		var deployment paasv1.Deployment
+		if iamv1.DecodeRequest(bytes.NewReader(document), &deployment) != nil {
+			t.Fatal("decode Deployment settlement fixture")
+		}
+		var observedAt time.Time
+		if err := database.QueryRow(ctx, `SELECT clock_timestamp()`).Scan(&observedAt); err != nil {
+			t.Fatal("read Deployment settlement time", err)
+		}
+		deployment.Status.ObservedAt = observedAt.UTC().Truncate(time.Microsecond)
+		deployment.Status.ObservedGeneration = deployment.Generation
+		deployment.Status.ObservedApplicationRevisionID = deployment.Spec.ApplicationRevisionID
+		deployment.Status.ReadyComponents = uint32(len(deployment.Spec.Components))
+		deployment.Status.Phase = paasv1.DeploymentReady
+		if deployment.Spec.DesiredState == paasv1.DeploymentDesiredStopped {
+			deployment.Status.Phase = paasv1.DeploymentStopped
+			deployment.Status.ReadyComponents = 0
+		}
+		if err := paasv1.ValidateDeployment(deployment); err != nil {
+			t.Fatal("settled Deployment fixture is invalid", err)
+		}
+		encoded, err := json.Marshal(deployment)
+		if err != nil {
+			t.Fatal("encode Deployment settlement fixture", err)
+		}
+		if tag, err := database.Exec(ctx, `UPDATE paas.deployments SET document=$3 WHERE tenant_id=$1 AND id=$2`, account.target.AccountID, id, string(encoded)); err != nil || tag.RowsAffected() != 1 {
+			t.Fatal("settle Deployment fixture", err)
+		}
+		return deployment
 	}
 	var restartReplay iamv1.AccessKeyAuthorizationRequest
 	for index := range accounts {
@@ -6283,11 +6363,54 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		}
 		recordProductReadDecision(account, operationRead, iamv1.ActionPaaSOperationRead, iamv1.ResourceOperation, paasv1.ResourceID(operations[0].ID))
 		invokeProduct(operationReadRequest, http.StatusConflict)
+
+		settled := settleDeploymentFixture(account, deployment.ID)
+		updatedSpec := settled.Spec
+		updatedSpec.Components = append([]paasv1.DeploymentComponent(nil), settled.Spec.Components...)
+		updatedSpec.Components[0].Replicas = 2
+		updateRequest := prepareProductMutation(account, http.MethodPut, "/v1/deployments/"+string(deployment.ID),
+			prefix+"-deployment-update", fmt.Sprintf(`"%d"`, settled.Metadata.ResourceVersion), updatedSpec)
+		updateResponse := invokeProduct(updateRequest, http.StatusAccepted)
+		operations = append(operations, decodeProductOperation(account, updateResponse, paasv1.OperationUpdate, deployment.ID))
+		recordProductMutationDecision(account, updateResponse, iamv1.ActionPaaSDeploymentUpdate, deployment.ID)
+		invokeProduct(updateRequest, http.StatusConflict)
+
+		settled = settleDeploymentFixture(account, deployment.ID)
+		if settled.Generation != 2 || settled.Spec.Components[0].Replicas != 2 {
+			t.Fatal("signed Deployment update did not commit the requested generation")
+		}
+		stopSpec := settled.Spec
+		stopSpec.Components = append([]paasv1.DeploymentComponent(nil), settled.Spec.Components...)
+		stopSpec.DesiredState = paasv1.DeploymentDesiredStopped
+		stopRequest := prepareProductMutation(account, http.MethodPut, "/v1/deployments/"+string(deployment.ID),
+			prefix+"-deployment-stop", fmt.Sprintf(`"%d"`, settled.Metadata.ResourceVersion), stopSpec)
+		stopResponse := invokeProduct(stopRequest, http.StatusAccepted)
+		operations = append(operations, decodeProductOperation(account, stopResponse, paasv1.OperationStop, deployment.ID))
+		recordProductMutationDecision(account, stopResponse, iamv1.ActionPaaSDeploymentStop, deployment.ID)
+		invokeProduct(stopRequest, http.StatusConflict)
+
+		settled = settleDeploymentFixture(account, deployment.ID)
+		if settled.Generation != 3 || settled.Status.Phase != paasv1.DeploymentStopped {
+			t.Fatal("signed Deployment stop did not commit the requested generation")
+		}
+		rollbackRequest := prepareProductMutation(account, http.MethodPost, "/v1/deployments/"+string(deployment.ID)+"/rollback",
+			prefix+"-deployment-rollback", fmt.Sprintf(`"%d"`, settled.Metadata.ResourceVersion),
+			paasv1.RollbackDeploymentRequest{SourceGeneration: 2})
+		rollbackResponse := invokeProduct(rollbackRequest, http.StatusAccepted)
+		operations = append(operations, decodeProductOperation(account, rollbackResponse, paasv1.OperationRollback, deployment.ID))
+		recordProductMutationDecision(account, rollbackResponse, iamv1.ActionPaaSDeploymentRollback, deployment.ID)
+		invokeProduct(rollbackRequest, http.StatusConflict)
+		settled = settleDeploymentFixture(account, deployment.ID)
+		if settled.Generation != 4 || settled.Spec.DesiredState != paasv1.DeploymentDesiredRunning || settled.Spec.Components[0].Replicas != 2 {
+			t.Fatal("signed Deployment rollback did not restore the exact source generation")
+		}
+
 		waitAllPaaSOutboxDelivered(t, ctx, database)
 		for operationIndex, action := range []auditv1.Action{
 			auditv1.ActionPaaSApplicationCreated, auditv1.ActionPaaSConfigurationCreated,
 			auditv1.ActionPaaSConfigurationRevisionCreated, auditv1.ActionPaaSApplicationRevisionCreated,
-			auditv1.ActionPaaSDeploymentCreated,
+			auditv1.ActionPaaSDeploymentCreated, auditv1.ActionPaaSDeploymentUpdated,
+			auditv1.ActionPaaSDeploymentStopped, auditv1.ActionPaaSDeploymentRolledBack,
 		} {
 			assertProductAudit(account, operations[operationIndex], action)
 		}

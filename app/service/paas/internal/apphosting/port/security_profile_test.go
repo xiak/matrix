@@ -2,6 +2,7 @@ package port
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
@@ -184,14 +185,37 @@ func TestAccessKeyAdmissionIsLimitedToDeclaredGraphAndInstanceActions(t *testing
 			t.Fatal("declared instance read rejected", candidate.action)
 		}
 	}
+	for _, candidate := range []struct {
+		action iamv1.Action
+		method string
+		path   string
+	}{
+		{AuthorizeDeploymentUpdate, "PUT", "/api/paas/v1/deployments/deployment-one"},
+		{AuthorizeDeploymentStop, "PUT", "/api/paas/v1/deployments/deployment-one"},
+		{AuthorizeDeploymentRollback, "POST", "/api/paas/v1/deployments/deployment-one/rollback"},
+	} {
+		mutation := read
+		mutation.Action = candidate.action
+		mutation.Resource = paasv1.ResourceRef{Kind: ResourceDeployment, ID: "deployment-one"}
+		mutation.ResourceLabels = nil
+		mutation.SignedRequest.HTTP.Method = candidate.method
+		mutation.SignedRequest.HTTP.EscapedPath = candidate.path
+		mutation.SignedRequest.HTTP.ContentType = "application/json"
+		mutation.SignedRequest.HTTP.IdempotencyKey = "mutate-deployment-one"
+		mutation.SignedRequest.HTTP.IfMatch = `"7"`
+		mutation.SignedRequest.HTTP.BodyDigest = "sha256:" + strings.Repeat("b", 64)
+		if ValidateAccessKeyAuthorizationRequest(mutation) != nil {
+			t.Fatal("declared Deployment mutation rejected", candidate.action)
+		}
+	}
 	undeclared := read
-	undeclared.Action = AuthorizeDeploymentUpdate
-	undeclared.Resource = paasv1.ResourceRef{Kind: ResourceDeployment, ID: "deployment-one"}
+	undeclared.Action = AuthorizeApplicationLabelSet
+	undeclared.Resource = paasv1.ResourceRef{Kind: ResourceApplication, ID: "application-one"}
 	undeclared.ResourceLabels = nil
 	undeclared.SignedRequest.HTTP.Method = "PUT"
-	undeclared.SignedRequest.HTTP.EscapedPath = "/api/paas/v1/deployments/deployment-one"
+	undeclared.SignedRequest.HTTP.EscapedPath = "/api/paas/v1/applications/application-one/labels/environment"
 	if ValidateAccessKeyAuthorizationRequest(undeclared) == nil {
-		t.Fatal("undeclared Deployment update borrowed instance-read AccessKey admission")
+		t.Fatal("undeclared Application label update borrowed Deployment AccessKey admission")
 	}
 }
 

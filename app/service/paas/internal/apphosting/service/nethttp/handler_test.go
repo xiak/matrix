@@ -304,6 +304,72 @@ func TestHandlerMapsSignedImmutableResourceGraphRoutesToExactActions(t *testing.
 	}
 }
 
+func TestHandlerControlsDeploymentThroughExactAccessKeyBoundary(t *testing.T) {
+	tests := []struct {
+		name, method, internalPath, externalPath string
+		body                                     any
+		action                                   iamv1.Action
+		workflowCalls                            func(*fakeWorkflow) int
+		commandAuthorization                     func(*fakeWorkflow) port.Authorization
+	}{
+		{
+			name: "update", method: http.MethodPut,
+			internalPath: "/v1/deployments/deployment-key", externalPath: "/api/paas/v1/deployments/deployment-key",
+			body: paasv1.DeploymentSpec{ApplicationRevisionID: "application-revision-key", PlacementPolicyID: "placement-key",
+				DesiredState: paasv1.DeploymentDesiredRunning, Components: []paasv1.DeploymentComponent{{Name: "api", Replicas: 2}}},
+			action:               port.AuthorizeDeploymentUpdate,
+			workflowCalls:        func(workflow *fakeWorkflow) int { return workflow.submitCalls },
+			commandAuthorization: func(workflow *fakeWorkflow) port.Authorization { return workflow.submitCommand.Authorization },
+		},
+		{
+			name: "stop", method: http.MethodPut,
+			internalPath: "/v1/deployments/deployment-key", externalPath: "/api/paas/v1/deployments/deployment-key",
+			body: paasv1.DeploymentSpec{ApplicationRevisionID: "application-revision-key", PlacementPolicyID: "placement-key",
+				DesiredState: paasv1.DeploymentDesiredStopped, Components: []paasv1.DeploymentComponent{{Name: "api", Replicas: 1}}},
+			action:               port.AuthorizeDeploymentStop,
+			workflowCalls:        func(workflow *fakeWorkflow) int { return workflow.submitCalls },
+			commandAuthorization: func(workflow *fakeWorkflow) port.Authorization { return workflow.submitCommand.Authorization },
+		},
+		{
+			name: "rollback", method: http.MethodPost,
+			internalPath: "/v1/deployments/deployment-key/rollback", externalPath: "/api/paas/v1/deployments/deployment-key/rollback",
+			body: paasv1.RollbackDeploymentRequest{SourceGeneration: 2}, action: port.AuthorizeDeploymentRollback,
+			workflowCalls:        func(workflow *fakeWorkflow) int { return workflow.rollbackCalls },
+			commandAuthorization: func(workflow *fakeWorkflow) port.Authorization { return workflow.rollbackCommand.Authorization },
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			authorizer := &fakeAuthorizer{}
+			workflow := &fakeWorkflow{}
+			handler := mustAccessKeyHandler(t, authorizer, workflow)
+			request := jsonRequest(t, test.method, test.internalPath, test.body)
+			request.Header.Set("Idempotency-Key", test.name+"-deployment-key")
+			request.Header.Set("If-Match", `"7"`)
+			setAccessKeyEdgeHeaders(t, request, test.externalPath)
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != http.StatusAccepted || authorizer.accessKeyCalls != 1 || authorizer.authorizeCalls != 0 || test.workflowCalls(workflow) != 1 {
+				t.Fatalf("signed mutation status=%d key=%d bearer=%d workflow=%d body=%s",
+					response.Code, authorizer.accessKeyCalls, authorizer.authorizeCalls, test.workflowCalls(workflow), response.Body.String())
+			}
+			if authorizer.accessKeyRequest.Action != test.action ||
+				authorizer.accessKeyRequest.Resource != (paasv1.ResourceRef{Kind: port.ResourceDeployment, ID: "deployment-key"}) ||
+				authorizer.accessKeyRequest.SignedRequest.HTTP.Method != test.method ||
+				authorizer.accessKeyRequest.SignedRequest.HTTP.EscapedPath != test.externalPath ||
+				authorizer.accessKeyRequest.SignedRequest.HTTP.IfMatch != `"7"` ||
+				authorizer.accessKeyRequest.SignedRequest.HTTP.IdempotencyKey != test.name+"-deployment-key" {
+				t.Fatalf("signed mutation mapped to %#v", authorizer.accessKeyRequest)
+			}
+			if !test.commandAuthorization(workflow).Subject.Equal(paasv1.SubjectRef{
+				Type: paasv1.SubjectUser, ID: "user-authorized", AccessKeyID: "key-one",
+			}) {
+				t.Fatalf("signed mutation lost AccessKey attribution: %#v", test.commandAuthorization(workflow))
+			}
+		})
+	}
+}
+
 func TestHandlerKeepsAccessKeyAdmissionClosedAndMapsNonceReplay(t *testing.T) {
 	t.Run("route outside closed mapping", func(t *testing.T) {
 		authorizer := &fakeAuthorizer{}
@@ -340,22 +406,24 @@ func TestHandlerKeepsAccessKeyAdmissionClosedAndMapsNonceReplay(t *testing.T) {
 
 func TestAccessKeyRouteAdmissionIsAnExactClosedMap(t *testing.T) {
 	for _, test := range []struct {
-		method string
-		path   string
-		action iamv1.Action
+		method  string
+		path    string
+		actions []iamv1.Action
 	}{
-		{http.MethodGet, "/v1/applications/application-a", port.AuthorizeApplicationRead},
-		{http.MethodGet, "/v1/configurations/configuration-a", port.AuthorizeConfigurationRead},
-		{http.MethodGet, "/v1/configuration-revisions/configuration-revision-a", port.AuthorizeConfigurationRevisionRead},
-		{http.MethodGet, "/v1/application-revisions/application-revision-a", port.AuthorizeApplicationRevisionRead},
-		{http.MethodGet, "/v1/deployments/deployment-a", port.AuthorizeDeploymentRead},
-		{http.MethodGet, "/v1/deployments/deployment-a/generations/1", port.AuthorizeDeploymentRead},
-		{http.MethodGet, "/v1/deployments/deployment-a/generations/9007199254740991", port.AuthorizeDeploymentRead},
-		{http.MethodGet, "/v1/operations/operation-a", port.AuthorizeOperationRead},
+		{http.MethodGet, "/v1/applications/application-a", []iamv1.Action{port.AuthorizeApplicationRead}},
+		{http.MethodGet, "/v1/configurations/configuration-a", []iamv1.Action{port.AuthorizeConfigurationRead}},
+		{http.MethodGet, "/v1/configuration-revisions/configuration-revision-a", []iamv1.Action{port.AuthorizeConfigurationRevisionRead}},
+		{http.MethodGet, "/v1/application-revisions/application-revision-a", []iamv1.Action{port.AuthorizeApplicationRevisionRead}},
+		{http.MethodGet, "/v1/deployments/deployment-a", []iamv1.Action{port.AuthorizeDeploymentRead}},
+		{http.MethodGet, "/v1/deployments/deployment-a/generations/1", []iamv1.Action{port.AuthorizeDeploymentRead}},
+		{http.MethodGet, "/v1/deployments/deployment-a/generations/9007199254740991", []iamv1.Action{port.AuthorizeDeploymentRead}},
+		{http.MethodGet, "/v1/operations/operation-a", []iamv1.Action{port.AuthorizeOperationRead}},
+		{http.MethodPut, "/v1/deployments/deployment-a", []iamv1.Action{port.AuthorizeDeploymentUpdate, port.AuthorizeDeploymentStop}},
+		{http.MethodPost, "/v1/deployments/deployment-a/rollback", []iamv1.Action{port.AuthorizeDeploymentRollback}},
 	} {
-		action, admitted := accessKeyActionForRoute(test.method, test.path)
-		if !admitted || action != test.action {
-			t.Fatalf("declared route %s %s mapped to %s admitted=%v", test.method, test.path, action, admitted)
+		actions, admitted := accessKeyActionsForRoute(test.method, test.path)
+		if !admitted || !reflect.DeepEqual(actions, test.actions) {
+			t.Fatalf("declared route %s %s mapped to %v admitted=%v", test.method, test.path, actions, admitted)
 		}
 	}
 	for _, test := range []struct {
@@ -370,9 +438,13 @@ func TestAccessKeyRouteAdmissionIsAnExactClosedMap(t *testing.T) {
 		{http.MethodGet, "/v1/deployments/deployment-a/generations/1/extra"},
 		{http.MethodGet, "/v1/platform-operations/operation-a"},
 		{http.MethodPost, "/v1/operations/operation-a"},
+		{http.MethodPut, "/v1/deployments"},
+		{http.MethodPut, "/v1/deployments/deployment-a/extra"},
+		{http.MethodPost, "/v1/deployments/deployment-a/rollback/extra"},
+		{http.MethodDelete, "/v1/deployments/deployment-a"},
 	} {
-		if action, admitted := accessKeyActionForRoute(test.method, test.path); admitted || action != "" {
-			t.Fatalf("undeclared route %s %s mapped to %s", test.method, test.path, action)
+		if actions, admitted := accessKeyActionsForRoute(test.method, test.path); admitted || actions != nil {
+			t.Fatalf("undeclared route %s %s mapped to %v", test.method, test.path, actions)
 		}
 	}
 }

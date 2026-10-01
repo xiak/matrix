@@ -1729,7 +1729,7 @@ func TestAccessKeySubjectLineageRequiresItsOwnDeclaredCarrier(t *testing.T) {
 			}
 		}
 	}
-	request, err := NewAuthorizationRequest(ActionPaaSDeploymentUpdate, ResourceReference{Kind: ResourceDeployment, ID: "deployment-one"}, AuthorizationResourceInstance, "", "request-key", "correlation-key")
+	request, err := NewAuthorizationRequest(ActionPaaSApplicationLabelSet, ResourceReference{Kind: ResourceApplication, ID: "application-one"}, AuthorizationResourceInstance, "", "request-key", "correlation-key")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3187,7 +3187,7 @@ func TestRoleBusinessProfilesRequireExplicitCurrentCapabilities(t *testing.T) {
 		current, found := LookupAuthorizationProfile(product)
 		expectedRevision := uint64(2)
 		if product == ProductPaaS {
-			expectedRevision = 10
+			expectedRevision = 11
 		}
 		if !found || current.Revision != expectedRevision {
 			t.Fatal("missing explicit new product revision")
@@ -4010,7 +4010,7 @@ func TestHistoricalDecisionProfileDoesNotBorrowCurrentHead(t *testing.T) {
 
 func TestPaaSProfileDeclaresCompletePlatformProduct(t *testing.T) {
 	profile, found := LookupAuthorizationProfile(ProductPaaS)
-	if !found || profile.Revision != 10 {
+	if !found || profile.Revision != 11 {
 		t.Fatal("missing current PaaS role, tag, and AccessKey-capable declaration")
 	}
 	expected := map[Action]struct {
@@ -4081,6 +4081,9 @@ func TestPaaSProfileDeclaresCompletePlatformProduct(t *testing.T) {
 		ActionPaaSApplicationRevisionRead:     {AuthorizationResourceShape{Mode: AuthorizationResourceInstance}, ""},
 		ActionPaaSDeploymentRead:              {AuthorizationResourceShape{Mode: AuthorizationResourceInstance}, ""},
 		ActionPaaSOperationRead:               {AuthorizationResourceShape{Mode: AuthorizationResourceInstance}, ""},
+		ActionPaaSDeploymentUpdate:            {AuthorizationResourceShape{Mode: AuthorizationResourceInstance}, ""},
+		ActionPaaSDeploymentStop:              {AuthorizationResourceShape{Mode: AuthorizationResourceInstance}, ""},
+		ActionPaaSDeploymentRollback:          {AuthorizationResourceShape{Mode: AuthorizationResourceInstance}, ""},
 	}
 	for _, action := range profile.Actions {
 		expected, keyAction := keyActions[action.Action]
@@ -4549,7 +4552,8 @@ func TestAuthorizationProfileUserAuthenticationIsExplicitAndCommitted(t *testing
 				ActionPaaSDeploymentCreate, ActionPaaSApplicationRead,
 				ActionPaaSConfigurationRead, ActionPaaSConfigurationRevisionRead,
 				ActionPaaSApplicationRevisionRead, ActionPaaSDeploymentRead,
-				ActionPaaSOperationRead,
+				ActionPaaSOperationRead, ActionPaaSDeploymentUpdate,
+				ActionPaaSDeploymentStop, ActionPaaSDeploymentRollback,
 			}, declared.Action) {
 				if !slices.Equal(declared.UserAuthenticationMethods, []UserAuthenticationMethod{
 					UserAuthenticationAccessKey, UserAuthenticationLoginSession,

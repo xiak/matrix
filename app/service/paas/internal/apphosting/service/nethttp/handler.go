@@ -15,6 +15,7 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -239,10 +240,10 @@ type accessKeyContextKey struct{}
 
 type accessKeyRequestContext struct {
 	SignedRequest iamv1.AccessKeySignedRequest
-	Action        iamv1.Action
+	Actions       []iamv1.Action
 }
 
-func accessKeyActionForRoute(method, path string) (iamv1.Action, bool) {
+func accessKeyActionsForRoute(method, path string) ([]iamv1.Action, bool) {
 	if method == http.MethodGet {
 		for _, route := range []struct {
 			prefix string
@@ -258,7 +259,7 @@ func accessKeyActionForRoute(method, path string) (iamv1.Action, bool) {
 		} {
 			id := strings.TrimPrefix(path, route.prefix)
 			if id != path && !strings.Contains(id, "/") && paasv1.ValidateID(route.idName, id) == nil {
-				return route.action, true
+				return []iamv1.Action{route.action}, true
 			}
 		}
 		const deploymentPrefix = "/v1/deployments/"
@@ -267,35 +268,52 @@ func accessKeyActionForRoute(method, path string) (iamv1.Action, bool) {
 			paasv1.ValidateID("deploymentId", parts[0]) == nil {
 			generation, err := strconv.ParseUint(parts[2], 10, 64)
 			if err == nil && generation > 0 && generation <= 9007199254740991 {
-				return port.AuthorizeDeploymentRead, true
+				return []iamv1.Action{port.AuthorizeDeploymentRead}, true
 			}
 		}
-		return "", false
+		return nil, false
+	}
+	if method == http.MethodPut {
+		const deploymentPrefix = "/v1/deployments/"
+		id := strings.TrimPrefix(path, deploymentPrefix)
+		if id != path && !strings.Contains(id, "/") && paasv1.ValidateID("deploymentId", id) == nil {
+			return []iamv1.Action{port.AuthorizeDeploymentUpdate, port.AuthorizeDeploymentStop}, true
+		}
+		return nil, false
 	}
 	if method != http.MethodPost {
-		return "", false
+		return nil, false
+	}
+	const deploymentPrefix = "/v1/deployments/"
+	const rollbackSuffix = "/rollback"
+	if strings.HasPrefix(path, deploymentPrefix) && strings.HasSuffix(path, rollbackSuffix) {
+		id := strings.TrimSuffix(strings.TrimPrefix(path, deploymentPrefix), rollbackSuffix)
+		if !strings.Contains(id, "/") && paasv1.ValidateID("deploymentId", id) == nil {
+			return []iamv1.Action{port.AuthorizeDeploymentRollback}, true
+		}
+		return nil, false
 	}
 	switch path {
 	case "/v1/applications":
-		return port.AuthorizeApplicationCreate, true
+		return []iamv1.Action{port.AuthorizeApplicationCreate}, true
 	case "/v1/configurations":
-		return port.AuthorizeConfigurationCreate, true
+		return []iamv1.Action{port.AuthorizeConfigurationCreate}, true
 	case "/v1/configuration-revisions":
-		return port.AuthorizeConfigurationRevisionCreate, true
+		return []iamv1.Action{port.AuthorizeConfigurationRevisionCreate}, true
 	case "/v1/application-revisions":
-		return port.AuthorizeApplicationRevisionCreate, true
+		return []iamv1.Action{port.AuthorizeApplicationRevisionCreate}, true
 	case "/v1/deployments":
-		return port.AuthorizeDeploymentCreate, true
+		return []iamv1.Action{port.AuthorizeDeploymentCreate}, true
 	default:
-		return "", false
+		return nil, false
 	}
 }
 
 func (value *handler) prepareAccessKeyRequest(response http.ResponseWriter, request *http.Request) bool {
-	var expectedAction iamv1.Action
+	var expectedActions []iamv1.Action
 	var accepted bool
 	if request.URL != nil {
-		expectedAction, accepted = accessKeyActionForRoute(request.Method, request.URL.Path)
+		expectedActions, accepted = accessKeyActionsForRoute(request.Method, request.URL.Path)
 	}
 	if value.accessKeyBoundary == nil || !accepted || request.URL.RawQuery != "" {
 		requestID, ok := value.beginRequest(response)
@@ -340,7 +358,7 @@ func (value *handler) prepareAccessKeyRequest(response http.ResponseWriter, requ
 		return false
 	}
 	request.Body = io.NopCloser(bytes.NewReader(bytes.Clone(body)))
-	accessKeyContext := accessKeyRequestContext{SignedRequest: signed, Action: expectedAction}
+	accessKeyContext := accessKeyRequestContext{SignedRequest: signed, Actions: expectedActions}
 	*request = *request.WithContext(context.WithValue(request.Context(), accessKeyContextKey{}, accessKeyContext))
 	clear(body)
 	return true
@@ -641,7 +659,7 @@ func (value *handler) getApplication(response http.ResponseWriter, request *http
 	var err error
 	if signedContext, present := request.Context().Value(accessKeyContextKey{}).(accessKeyRequestContext); present {
 		accessKeyAuthorizer, ok := value.authorizer.(port.AccessKeyAuthorizer)
-		if !ok || signedContext.Action != port.AuthorizeApplicationRead {
+		if !ok || !slices.Contains(signedContext.Actions, port.AuthorizeApplicationRead) {
 			writeAuthorizationError(response, requestID, port.ErrAuthorizationUnavailable)
 			return
 		}
@@ -855,7 +873,7 @@ func (value *handler) authorizeRequestWithLabels(
 		RequestID:      requestID,
 	}
 	if signedContext, present := request.Context().Value(accessKeyContextKey{}).(accessKeyRequestContext); present {
-		if signedContext.Action != action {
+		if !slices.Contains(signedContext.Actions, action) {
 			writeAuthorizationError(response, requestID, port.ErrUnauthenticated)
 			return port.Authorization{}, false
 		}
