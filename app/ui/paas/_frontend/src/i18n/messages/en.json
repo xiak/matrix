@@ -1918,6 +1918,7 @@
     "actionGroup": "{product} · {kind}",
     "selectedActions": "Selected {count} / {max} actions",
     "compatibleActionsHint": "Actions in one statement share resources and conditions",
+    "actionCompatibilitySummary": "{compatible} actions can share this statement's resources and conditions; {incompatible} require changing this statement or creating another.",
     "selectedActionDeclarationsTitle": "Product declarations for selected Actions ({count})",
     "selectedActionDeclarationsHint": "Expand for a read-only view of the current catalog declarations: scope, resource shapes, admitted subjects and credentials, and trusted conditions. This is neither the current user's authorization result nor a policy compilation result.",
     "showSelectedActionDeclarations": "View declaration details",
@@ -1928,6 +1929,12 @@
     "showAllActions": "Show all actions",
     "clearSearch": "Clear action search",
     "incompatibleAction": "This Action is incompatible with the statement's resource shape, prefix support, or conditions. Adjust the statement or add another.",
+    "incompatibleActions": {
+      "shape": "Its resource shape differs from the selected Actions. Create another statement.",
+      "prefix": "This statement uses a resource prefix that this Action does not support. Change the resource or create another statement.",
+      "collection": "This statement targets an exact resource instance. Create another statement for this collection Action.",
+      "condition": "This statement contains a condition that this Action does not support. Remove the condition or create another statement."
+    },
     "maxActions": "A statement supports at most 128 Actions.",
     "lastAction": "A statement must keep at least one Action.",
     "noActions": "No matching actions.",

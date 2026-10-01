@@ -1430,6 +1430,8 @@ describe("account access", () => {
     expect(fixture.createPolicyVersion).not.toHaveBeenCalled();
     await user.type(screen.getByRole("textbox", { name: "资源 ID 或前缀" }), "app-prod");
     expect(screen.getByRole("checkbox", { name: /paas.application.list/ })).toHaveProperty("disabled", true);
+    expect(screen.getByText("当前 1 个操作可共享本声明的资源与条件；1 个需调整当前声明或另建声明。")).toBeTruthy();
+    expect(screen.getByText("资源形状与当前所选操作不同；请另建声明。")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "仅看已选" }));
     expect(screen.queryByRole("checkbox", { name: /paas.application.list/ })).toBeNull();
     await user.click(screen.getByRole("button", { name: "显示全部操作" }));
@@ -1478,6 +1480,8 @@ describe("account access", () => {
     const read = await screen.findByRole("checkbox", { name: /paas.application.read/ });
     expect(read).toHaveProperty("disabled", true);
     expect(screen.getByRole("checkbox", { name: /paas.application.upsert/ })).toHaveProperty("disabled", true);
+    expect(screen.getByText("当前 2 个操作可共享本声明的资源与条件；1 个需调整当前声明或另建声明。")).toBeTruthy();
+    expect(screen.getByText("资源形状与当前所选操作不同；请另建声明。")).toBeTruthy();
     await user.click(screen.getByRole("checkbox", { name: /paas.application.inspect/ }));
     expect(read).toHaveProperty("disabled", false);
     expect(screen.getByText(/已选 2 \/ 128 个操作/)).toBeTruthy();

@@ -118,17 +118,22 @@ export function PolicyVisualReview({ document, directory, headingLevel = 3 }: {
   </section>;
 }
 
-function canUseAction(action: AuthorizationProfileAction, statement: Statement, selected: AuthorizationProfileAction[]): boolean {
-  if (selected.length && visualActionShapeKey(action) !== visualActionShapeKey(selected[0]!)) return false;
+type ActionIncompatibility = "shape" | "prefix" | "collection" | "condition";
+
+function actionIncompatibility(action: AuthorizationProfileAction, statement: Statement,
+  selected: AuthorizationProfileAction[]): ActionIncompatibility | null {
+  if (selected.length && visualActionShapeKey(action) !== visualActionShapeKey(selected[0]!)) return "shape";
   if (statement.resources.some((resource) => resource.match === "PREFIX_IN_AUTHORITY") &&
-      !action.resourceShapes.some((shape) => shape.mode === "INSTANCE" && shape.prefixAllowed)) return false;
+      !action.resourceShapes.some((shape) => shape.mode === "INSTANCE" && shape.prefixAllowed)) return "prefix";
   if (collectionOnly(action) &&
-      statement.resources.some((resource) => resource.match === "EXACT" && resource.id !== "collection")) return false;
-  return !(statement.conditions ?? []).some((condition) => !(action.conditions ?? []).some((item) => item.key === condition.key));
+      statement.resources.some((resource) => resource.match === "EXACT" && resource.id !== "collection")) return "collection";
+  if ((statement.conditions ?? []).some((condition) => !(action.conditions ?? []).some((item) => item.key === condition.key))) return "condition";
+  return null;
 }
 
 function ActionChoices({ group, selectedActions = emptySelectedActions, multiple = false, compatible, onSelect }: {
-  group: VisualActionGroup; selectedActions?: string[]; multiple?: boolean; compatible?: (action: AuthorizationProfileAction) => boolean;
+  group: VisualActionGroup; selectedActions?: string[]; multiple?: boolean;
+  compatible?: (action: AuthorizationProfileAction) => ActionIncompatibility | null;
   onSelect(action: AuthorizationProfileAction, selected: boolean): void;
 }) {
   const t = useTranslations("PolicyVisualAuthoring");
@@ -138,6 +143,10 @@ function ActionChoices({ group, selectedActions = emptySelectedActions, multiple
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const selectedSet = useMemo(() => new Set(selectedActions), [selectedActions]);
+  const compatibilityState = useMemo(() => {
+    const reasons = new Map(group.actions.map((action) => [action.action, compatible?.(action) ?? null] as const));
+    return { reasons, incompatible: [...reasons.values()].filter(Boolean).length };
+  }, [compatible, group.actions]);
   const normalizedQuery = query.normalize("NFKC").trim().toLowerCase();
   const filtered = useMemo(() => group.actions.filter((action) =>
     (!multiple || !selectedOnly || selectedSet.has(action.action)) &&
@@ -153,14 +162,20 @@ function ActionChoices({ group, selectedActions = emptySelectedActions, multiple
         {t(selectedOnly ? "showAllActions" : "showSelectedActions")}
       </Button> : null}
     </div>
+    {multiple && compatibilityState.incompatible ? <p className={styles.compatibilitySummary}>{t("actionCompatibilitySummary", {
+      compatible: group.actions.length - compatibilityState.incompatible, incompatible: compatibilityState.incompatible
+    })}</p> : null}
     <div className={styles.actionList}>{filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize).map((action) => {
-      const enabled = compatible?.(action) ?? true;
+      const incompatibility = compatibilityState.reasons.get(action.action) ?? null;
+      const enabled = incompatibility === null;
       const checked = selectedSet.has(action.action);
       const maxed = multiple && !checked && selectedActions.length >= maxStatementActions;
       const last = multiple && checked && selectedActions.length === 1;
       const target = action.resourceShapes.map((shape) => t(`targets.${shape.mode === "INSTANCE" ? "INSTANCE" : shape.collectionUsage ?? "COLLECTION"}`)).join(" · ");
-      const title = !enabled ? t("incompatibleAction") : maxed ? t("maxActions") : last ? t("lastAction") : undefined;
-      const label = <span className={styles.actionChoice}><code>{action.action}</code><small>{target}</small></span>;
+      const incompatibilityLabel = incompatibility ? t(`incompatibleActions.${incompatibility}`) : null;
+      const title = incompatibilityLabel ?? (maxed ? t("maxActions") : last ? t("lastAction") : undefined);
+      const label = <span className={styles.actionChoice}><code>{action.action}</code><small>{target}</small>
+        {incompatibilityLabel ? <small className={styles.actionIncompatibility}>{incompatibilityLabel}</small> : null}</span>;
       return multiple ? <Checkbox key={action.action} checked={checked} disabled={!enabled || maxed || last} title={title}
         onChange={(event) => onSelect(action, event.target.checked)}>{label}</Checkbox> :
         <Radio key={action.action} name={id + "-action"} checked={checked} disabled={!enabled} title={title}
@@ -201,7 +216,7 @@ function StatementFields({ statement, group, onChange }: {
     <section className={styles.groupSection} aria-label={t("actions")}>
       <div className={styles.sectionHeading}><div><h4>{t("actions")}</h4><p>{t("actionGroup", { product: group.product, kind: group.resourceKind })}</p></div></div>
       <p className={styles.selectedAction}>{t("selectedActions", { count: selected.length, max: maxStatementActions })} · {t("compatibleActionsHint")}</p>
-      <ActionChoices group={group} selectedActions={statement.actions} multiple compatible={(action) => canUseAction(action, statement, selected)}
+      <ActionChoices group={group} selectedActions={statement.actions} multiple compatible={(action) => actionIncompatibility(action, statement, selected)}
         onSelect={(action, checked) => {
           if (checked && selected.length >= maxStatementActions || !checked && selected.length <= 1) return;
           const next = new Set(statement.actions);

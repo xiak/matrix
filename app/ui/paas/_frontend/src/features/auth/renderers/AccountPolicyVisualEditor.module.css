@@ -30,11 +30,13 @@
 .conditionCapability p { margin: 0; color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: 1.55; }
 .actionFilters { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: var(--xiak-spacing-default); }
 .actionFilters > :first-child { flex: 1 1 240px; min-width: 0; }
+.compatibilitySummary { margin: 0; color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: 1.55; overflow-wrap: anywhere; }
 .actionList { display: grid; min-width: 0; gap: var(--xiak-spacing-narrow); }
 .actionList label { min-width: 0; border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-small); padding: var(--xiak-spacing-tight) var(--xiak-spacing-default); }
 .actionList code { min-width: 0; overflow-wrap: anywhere; font-family: var(--xiak-font-mono); font-size: var(--xiak-font-size-small); }
 .actionChoice { display: grid; min-width: 0; gap: 2px; }
 .actionChoice small { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-caption); }
+.actionChoice .actionIncompatibility { color: var(--xiak-color-status-warning); line-height: 1.45; }
 .actionDeclaration { display: grid; min-width: 0; gap: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-small); padding: var(--xiak-spacing-default); background: var(--xiak-color-bg-panel); }
 .actionDeclarationHeading { display: flex; min-width: 0; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: var(--xiak-spacing-default); }
 .actionDeclarationHeading > div { flex: 1 1 360px; min-width: 0; }
