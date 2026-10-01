@@ -110,7 +110,7 @@ func TestRuntimeDSNBindsLeastPrivilegeLogin(t *testing.T) {
 func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	const variable = "MATRIX_IAM_PREDECESSOR_POSTGRES_TEST_DSN"
 	const databasePrefix = "matrix_iam_upgrade_predecessor_"
-	const source = "76048c52db248da2619d9d3e662394551e6f1ab1"
+	const source = "0c688302b9dea1050653eded2b9442a6b1322155"
 	const sourceSchema uint64 = 59
 	const currentSchema uint64 = 59
 	// Use credentials accepted by the immediate predecessor. This rolling
@@ -359,7 +359,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		FROM iam.authorization_profiles p JOIN iam.authorization_profile_heads h
 		ON (h.product,h.revision)=(p.product,p.revision) WHERE h.product='audit'`).Scan(
 		&oldAuditProfileRevision, &oldAuditProfileDocument, &oldAuditProfileDigest); err != nil ||
-		oldAuditProfileRevision != 2 || oldAuditProfileDigest != "sha256:d59fe726e2aaa4857b395da04ef79906305e56137974dfea5c96a26b32fdfa55" {
+		oldAuditProfileRevision != 3 || oldAuditProfileDigest != "sha256:83a1c4665b2363af22d882202f318f1ebb7ed16d33244723d18183ee3a404186" {
 		t.Fatal("predecessor Audit profile archive is invalid", err)
 	}
 	expectedAuditProfile, found := iamv1.LookupAuthorizationProfile(iamv1.ProductAudit)
