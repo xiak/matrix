@@ -302,6 +302,20 @@ PaaS继续使用既有Profile revision 12，但签名路径不再错误使用内
 
 固定实现`efe12e824b6534e7b6912c6ed9900c7f0c53e3e9`及唯一前驱门禁`adeb2a710`在2026-10-01通过API、边缘边界、PaaS/Audit HTTP与usecase、IAM authority和architecture聚焦测试。独占PostgreSQL 18.6（2 CPU、2 GiB、PIDs512）上的双Account五进程race门禁289.124秒通过：两个来源各自允许，相同合法签名上下文替换成`198.51.100.250`后由真实`NOT_IP_ADDRESS` Policy形成403/Deny，决定文档精确保存错误来源且不产生成功Audit访问事实；正常PaaS资源图、Operation/outbox、Audit游标与链继续隔离。固定`0c688302b9dea1050653eded2b9442a6b1322155`的真实IAM executable产生r3和既有数据，当前r4双迁移、等值bootstrap、重启与保留门禁134.561秒通过。全仓普通/race、vet、模块校验、两次生成字节一致及Linux amd64/CGO关闭构建通过；独立CI与真实APISIX覆盖仍待完成，不能据此标记网络限制或签名安装LIVE。
 
+### 下一纵向切片：Account/AccessKey 网络限制与使用观测
+
+本片不建立供应商VPC、代理链或另一套Policy。公开值`AccessKeyNetworkRestrictions`准确只有显式非空数组字段`allowedSourceCidrs`；数组可以为空，表示该层不限制，最多16个严格规范、无zone、非IPv4-mapped的IPv4/IPv6 CIDR，必须按规范文本升序且不重复。Account限制与单Key限制采用AND组合，各层列表内部为OR：两个列表都为空才是全来源，任一非空层不匹配即拒绝。`0.0.0.0/0`或`::/0`只分别覆盖一种地址族，不能被实现偷偷等价成空列表。
+
+Account值归现有`AccountSecuritySettings.accessKeyNetwork`，不是授权Policy或新的Account包装。当前设置、更新意图和StepUp必须携带完整显式值；旧不可变完成缺字段只在历史验证器中解释为当时不限制，不能让当前更新省略字段。它沿用`iam.security-settings.read/update`、完整替换、当前版本、重新认证及原Session终止契约；更新不会启用Account、恢复User/key或改变任何Policy。单Key值归`AccessKey.networkRestrictions`，创建请求必须显式给出；后继精确入口`PUT /v1/users/{userId}/access-keys/{accessKeyId}/network-restrictions`接受`{accessKeyResourceVersion,requestId,networkRestrictions}`并使用独立`iam.access-key.set-network-restrictions`，不得借`set-status`、本人身份或目录读取放行。变更返回同一非秘密Key投影并推进resourceVersion；原意图等值重放返回原完成，另一意图的等值值仍是冲突而非伪造成功事实。
+
+限制只约束AccessKey载体，不改变LOGIN_SESSION、ROLE或ServiceIdentity。IAM在成功MAC、当前服务与完整请求核对后，用边缘认证的`networkContext.sourceIp`同时检查Account和Key；来源不匹配是已知凭据限制，形成真实Deny并永久消费nonce，不回滚成可重试认证错误。缺失/非法边缘来源、坏MAC、未知或已删除key仍统一认证失败，不产生使用记录或泄露是哪一层不匹配。Account设置更新、Key限制更新和签名授权沿现有Account→principal→Policy→AccessKey锁序串行；提交后的下一次受保护请求必须使用新值，不能用事务外预查或缓存permit保留旧限制。
+
+`AccessKeyAccess`增加非秘密`usage`，准确包含服务端`observedAt`及可选`lastAuthorization`；后者只来自已通过MAC并原子写入的AccessKey授权证据，包含服务端`evaluatedAt`、`allowed`、冻结Action、Product和当时可信`sourceIp`。从未完成签名授权时省略`lastAuthorization`，不能用创建/列表时间冒充使用。坏MAC和未知key不写摘要，合法签名形成的Allow或Deny都可成为最后一次观测；UI不得把观测时间当实时水位或把最后一次Allow当当前许可。
+
+使用观测复用不可变`access_key_authorization_evidence`和原决定，不在`access_keys`上按请求更新`last_used_at`制造热行。迁移为既有证据从对应决定的服务端时间保留一次`evaluated_at`并建立按Account/key/时间读取的受限索引；新证据与决定同事务追加。授权证据还绑定当时Account security-settings版本和Key resourceVersion，使SQL完成守卫可独立拒绝伪造Allow；历史验证使用当时不可变完成链，不用今天的CIDR回写旧决定。摘要只经原AccessKey read/list权限返回，不开放全局使用目录、任意时间范围扫描或失败凭据枚举。
+
+最低门禁必须覆盖：规范IPv4/IPv6及空层组合；错误排序、重复、mapped/zone/非规范CIDR；Account-only、Key-only、双层交集和跨地址族；合法MAC错误来源的Deny/nonce消费/无业务副作用；坏MAC与未知key无摘要；限制更新与签名、禁用、删除、Account设置更新的双向并发；两Account同CIDR/key ID攻击；使用摘要Allow→Deny顺序、观测时间、重启及直接前驱保留数据。真实APISIX必须另证caller同名头和forwarding头被清除并由网关覆盖；进程门禁不能替代安装验收。
+
 ## 验收
 
 标准签名正负向量、body/path/query/header 替换、过期/未来时间/重放与错服务；并发 disable/rotate/request、双账号同名用户隔离；普通 JSON/错误/日志/审计无 key material；真实 PaaS 读写与 Audit 的程序身份可关联，重启仍拒绝旧 key。
