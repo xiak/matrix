@@ -1,6 +1,6 @@
 # FEAT-IAM-007：访问密钥与程序访问
 
-- 状态：实施中；K1管理及K2内部验签、原子拒绝/防重放与历史证据的累计后端固定`644fff09446fc8ffb003cc53cf2fb55d4f58828a`已通过本地真实PG18、固定前驱保留数据、独立进程、最终全仓检查及五项独立CI。首个实际产品消费者已固定为`40adf6d828180050992a8a6c139f05a83afc753f`，将AccessKey接入PaaS Application创建并通过本地真实PG18、独立IAM/Audit/PaaS进程、滚动前驱及全仓检查；其独立CI仍在运行，签名安装组合尚未验收。其他PaaS动作、生产入口托管/备份、UI及最终发布仍未完成，整体未验收。
+- 状态：实施中；K1管理及K2内部验签、原子拒绝/防重放与历史证据的累计后端固定`644fff09446fc8ffb003cc53cf2fb55d4f58828a`已通过本地真实PG18、固定前驱保留数据、独立进程、最终全仓检查及五项独立CI。实际产品消费已累计固定为`63ab867d30113b70a71e6ce6ddc5f16020380d36`，将AccessKey接入PaaS Application→Configuration→双Revision→Deployment不可变资源图创建，并通过本地真实PG18、独立IAM/Audit/PaaS进程、滚动前驱及全仓检查；独立CI仍在运行，签名安装组合尚未验收。其他PaaS动作、生产入口托管/备份、UI及最终发布仍未完成，整体未验收。
 - 依赖：003、005；临时凭据与 006 协作。
 - Owner：IAM credential；各产品 HTTP 签名消费归其 PEP。
 
@@ -227,13 +227,23 @@ IAM已保留原登录`SubjectContext`约束，并用独立`AccessKeyContext`进�
 
 - 安装owner仍需实际文件生成/挂载、备份恢复配对和发布准入；文件/codec、单次封装及不可重绑定登记已有固定后端基线，不等于生产托管已验收。
 - 原子验签/拒绝、nonce与历史证据已通过累计回归、独立进程和精确CI，固定`644fff09`被当前PaaS消费者选择性采用。K1继续使用真实无key的USER登录管理决定，不因新增程序载体取得额外权限。
-- 当前消费者只为PaaS Profile revision 7中的`paas.application.create`声明`USER`可使用`ACCESS_KEY`和`LOGIN_SESSION`；其他动作保持原载体集合。PaaS只在精确`POST /v1/applications`路由重建外部请求并调用专用AccessKey authorizer，任何其他签名路由在调用IAM或业务用例前拒绝，不以产品前缀泛化开放。
+- 当前消费者在PaaS Profile revision 8中只为`paas.application.create`、`paas.configuration.create`、`paas.configuration-revision.create`、`paas.application-revision.create`和`paas.deployment.create`声明`USER`可使用`ACCESS_KEY`和`LOGIN_SESSION`；其他动作保持原载体集合。PaaS只在五条精确POST路由重建外部请求并调用专用AccessKey authorizer，签名上下文同时保存预期Action并在实际handler再次核对；任何其他route或route/Action错配都在业务用例前拒绝，不以产品前缀泛化开放。
 - PaaS从实际连接、配置的NorthboundOrigin和边缘覆盖的`X-Matrix-External-Origin`/`X-Matrix-External-Request-Target`取得签名字段；请求方不能提交AuthorizationRequest、Account、Subject或已规范摘要。决定必须回绑实际request digest、Action、资源集合、USER和key ID，PaaS的Operation、outbox、Audit actor与业务幂等身份继续保留同一key ID。相同USER的另一把key不能借用原业务幂等完成结果。
 - 固定`40adf6d828180050992a8a6c139f05a83afc753f`在独占PostgreSQL 18上通过PaaS真实存储race门禁（5.841秒），并以独立双IAM、Audit、PaaS和双dispatcher进程通过两Account签名创建、同ID隔离、nonce重放、Operation/outbox/Audit归因及链验证（测试222.57秒、包226.037秒）。同一源码的IAM58→59真实前驱门禁以109.25秒通过，最终全仓race、vet、模块校验、生成稳定和Linux amd64构建通过；[独立CI 36842829292](https://github.com/xiak/matrix/actions/runs/36842829292)尚未完成，不能登记为独立CI或发布验收通过。
 - 安装/APISIX尚未生成和注入NorthboundOrigin或两个可信边缘头，因此签名安装包中的外部调用仍未开放。产品安装owner后续只能消费固定对象并用真实网关证明覆盖、原始编码及重复query保真；不能把进程门禁冒充签名安装验收。可信来源IP、Account/key网络限制、使用摘要及UI仍分别保留原验收，不以header转交或HMAC通过代替。
-- 已有Application读取需要先安全解析Account并预读资源标签，不能借用创建集合的无目标上下文；它及Configuration、Revision、Deployment、Operation、Audit query/verify均在各自精确映射完成前继续拒绝AccessKey。后继扩展逐动作修改同一Profile和PEP，不建立平行消费者或宽泛兼容层。
+- 已有Application读取需要先安全解析Account并预读资源标签，不能借用创建集合的无目标上下文；它及其他实例读写、Operation、Audit query/verify均在各自精确映射完成前继续拒绝AccessKey。后继扩展逐动作修改同一Profile和PEP，不建立平行消费者或宽泛兼容层。
 
 后端组合、业务消费、生产托管及最终发布是不同验收边界；继续使用现有owner，不建立第二套服务、文档或测试框架，也不将剩余需求移出目标。
+
+### 已固定纵向切片：PaaS不可变资源图创建
+
+在Application创建的精确入口固定后，本片只增加四个不需要资源预读的collection-create：`POST /v1/configurations`、`POST /v1/configuration-revisions`、`POST /v1/application-revisions`和`POST /v1/deployments`。每个route映射到自己的冻结Action与createdResourceKind；没有把所有POST、所有collection或整个PaaS前缀解释为AccessKey可用。现有Application创建保持原声明，PaaS Profile revision 8逐项增加四个USER的`[ACCESS_KEY, LOGIN_SESSION]`载体集合，ROLE和其他动作的解释不改变。
+
+签名覆盖完整body，因此父Configuration/Application/Revision ID、镜像、值、部署期望状态及最终资源ID都不能在IAM决定后替换。IAM的collection决定只证明当前主体可发起该类创建，不证明body引用的父资源存在或属于Account；PaaS必须在决定推导的同一Account事务内验证全部引用、配额和唯一性，再将最终资源、Operation、完成记录及outbox原子提交。跨Account同ID父资源、缺失父资源或资源图不一致只能得到业务拒绝且无部分资源/Operation/outbox；合法MAC的nonce已经由IAM消费，调用方修正意图必须使用新nonce，业务幂等键只对原完整命令有效。
+
+HTTP边界保存route预期Action并在实际handler调用authorizer时核对，防止路由新增或重构后把签名上下文借给另一动作。五个已开放创建route共用同一外部请求重建器、独立AccessKey authorizer和既有业务用例，不复制签名codec/PDP或创建第二套写入事务。最低真实门禁以两个Account各自key建立同名同ID的完整Application→Configuration→双Revision→Deployment图，核对每步Operation/actor/key、PaaS outbox、Audit target/链及同key新nonce业务重放；另一Account父ID、另key复用幂等键、nonce重放、route/action替换和IAM失联均失败关闭。
+
+固定`63ab867d30113b70a71e6ce6ddc5f16020380d36`在独占PostgreSQL 18中通过PaaS真实存储race门禁（6.283秒）。独立双IAM、Audit、PaaS和双dispatcher进程以测试239.85秒、包243.347秒通过上述双Account资源图、同ID隔离、跨Account父Application引用404且无Configuration/Operation/outbox部分效果、五类Operation及Audit USER/key归因和完整链；IAM collection决定保持target=`collection`，没有冒充已经证明最终body或父资源。唯一滚动前驱IAM58→59以测试132.58秒、包136.119秒通过，生成稳定、最终全仓race、vet、模块校验和Linux amd64构建通过。[独立CI 36847285739](https://github.com/xiak/matrix/actions/runs/36847285739)尚未完成，不能登记为独立CI或签名安装验收通过。
 
 ## 验收
 
