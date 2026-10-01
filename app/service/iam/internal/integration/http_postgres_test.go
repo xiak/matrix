@@ -17274,6 +17274,70 @@ func TestIAMSecurityReportPostgres(t *testing.T) {
 	assertOwnerMutationRejected("receipt delete", "DELETE FROM iam.security_report_receipts WHERE tenant_id=$1 AND report_id=$2",
 		document.Organization.ID, applied.Metadata.ID)
 	assertOwnerMutationRejected("download truncate", "TRUNCATE iam.security_report_downloads")
+
+	// This optional real-runtime branch is used only with an isolated
+	// PostgreSQL process whose wall clock is controlled outside Matrix (for
+	// example libfaketime's timestamp file). Production code still reads
+	// clock_timestamp() and exposes no caller-selectable time or retention.
+	if clockFile := os.Getenv("MATRIX_IAM_SECURITY_REPORT_CLOCK_FILE"); clockFile != "" {
+		var before time.Time
+		if err := database.QueryRow(ctx, "SELECT clock_timestamp()").Scan(&before); err != nil {
+			t.Fatal("read report database clock", err)
+		}
+		target := before.UTC().Add(iamv1.SecurityReportRetention + 10*time.Second).Truncate(time.Second)
+		if err := os.WriteFile(clockFile, []byte("@"+target.Format("2006-01-02 15:04:05")+"\n"), 0o600); err != nil {
+			t.Fatal("advance isolated report database clock", err)
+		}
+		deadline := time.NewTimer(10 * time.Second)
+		defer deadline.Stop()
+		ticker := time.NewTicker(25 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			var current time.Time
+			if err := database.QueryRow(ctx, "SELECT clock_timestamp()").Scan(&current); err != nil {
+				t.Fatal("observe advanced report database clock", err)
+			}
+			if !current.Before(target) {
+				break
+			}
+			select {
+			case <-ticker.C:
+			case <-deadline.C:
+				t.Fatal("isolated report database clock did not advance")
+			case <-ctx.Done():
+				t.Fatal("report retention gate exceeded its fixture deadline")
+			}
+		}
+
+		currentRoot := localRecoveryLogin(t, handler, "admin", changedAdminPassword, false)
+		var afterRetention iamv1.CreateAccountSecurityReportResponse
+		call(http.MethodPost, "/v1/account/security-reports", currentRoot,
+			iamv1.CreateAccountSecurityReportRequest{FormatVersion: iamv1.SecurityReportFormatVersion, RequestID: "security-report-after-retention"},
+			http.StatusCreated, &afterRetention)
+		if !afterRetention.Metadata.ObservedAt.Before(afterRetention.Metadata.ExpiresAt) ||
+			afterRetention.Metadata.ExpiresAt.Sub(afterRetention.Metadata.ObservedAt) != iamv1.SecurityReportRetention {
+			t.Fatal("post-retention report changed the fixed seven-day contract")
+		}
+		call(http.MethodGet, reportPath, currentRoot, nil, http.StatusNotFound, nil)
+		call(http.MethodGet, "/v1/account/security-reports/"+string(afterRetention.Metadata.ID), currentRoot, nil, http.StatusOK, &report)
+
+		var otherReceipts, otherContents int
+		if err := database.QueryRow(ctx, `SELECT
+		  (SELECT count(*) FROM iam.security_report_receipts WHERE tenant_id=$1),
+		  (SELECT count(*) FROM iam.security_report_contents WHERE tenant_id=$1),
+		  (SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.security-report.created'),
+		  (SELECT count(*) FROM iam.security_report_downloads WHERE tenant_id=$1),
+		  (SELECT count(*) FROM iam.security_report_receipts WHERE tenant_id=$2),
+		  (SELECT count(*) FROM iam.security_report_contents WHERE tenant_id=$2)`,
+			document.Organization.ID, otherAccount.ID).Scan(&receipts, &contents, &createdFacts, &downloads, &otherReceipts, &otherContents); err != nil {
+			t.Fatal("read post-retention report state", err)
+		}
+		if receipts != iamv1.MaxActiveSecurityReports+1 || contents != 1 || createdFacts != iamv1.MaxActiveSecurityReports+1 || downloads != 1 ||
+			otherReceipts != 1 || otherContents != 1 {
+			t.Fatalf("report retention cleanup lost history or crossed Account boundary: receipts=%d contents=%d created=%d downloads=%d otherReceipts=%d otherContents=%d",
+				receipts, contents, createdFacts, downloads, otherReceipts, otherContents)
+		}
+	}
 }
 
 // These growing matrices have their own clean fixtures and the same two-minute
