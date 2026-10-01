@@ -8,7 +8,7 @@
 - Branch: `feat/cloud-console-ux`
 - Pushed source/embed milestone: `d42b3b06`
 - Pushed strict-contract test follow-up: `160b6be4`
-- Pushed documentation milestone: `726ae0e7`
+- Pushed documentation milestone: `be087fae`
 
 ## Authoritative route
 
@@ -36,7 +36,7 @@ authors only policy syntax; it never submits or overrides trusted resource
 facts and does not present resource-tag mutation as policy authoring.
 
 Source and synchronized 233-file embed are pushed at `d42b3b06`; FEAT evidence
-is pushed at `726ae0e7`. The isolated four-method resource-tag preview now scopes
+is pushed at `be087fae`. The isolated four-method resource-tag preview now scopes
 its request-tag omission to that preview and directs catalog-driven behavior to
 the selected Product Profile, avoiding a false platform-wide limitation. Strict
 negative coverage at `160b6be4` rejects unknown
@@ -49,7 +49,8 @@ and review flow without a Dialog or page overflow.
 
 The wording-alignment follow-up additionally passed the 174-case access workspace
 suite, frontend typecheck/lint, the 42-route export, 233-file embed equality and
-the UI embed host Go test/vet.
+the UI embed host Go test/vet. A fresh `430 x 900` check kept viewport, document
+and body width at 430px, rendered the scoped state and used no Dialog.
 
 The previously pushed AccessKey owner directory, policy-compilation provenance,
 service-authorization, policy-coverage, Audit, cross-service loading/navigation
