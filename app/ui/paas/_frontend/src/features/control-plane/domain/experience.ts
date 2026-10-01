@@ -23,6 +23,33 @@ export type ExperienceApplicationTagSnapshot = {
   tags: Array<{ key: string; value: string }>;
 };
 
+export type ExperienceApplicationDeploymentSnapshot = {
+  resourceId: string;
+  deployment: {
+    id: string;
+    name: string;
+    resourceVersion: number;
+    generation: number;
+    desiredState: "RUNNING" | "STOPPED";
+    phase: "PENDING" | "PLACING" | "APPLYING" | "READY" | "DEGRADED" | "FAILED" | "STOPPING" | "STOPPED";
+    observedGeneration: number;
+    applicationRevisionId: string;
+    observedApplicationRevisionId: string;
+    placementPolicyId: string;
+    placementDecisionId?: string;
+    currentOperationId?: string;
+    components: Array<{ name: string; replicas: number; readyReplicas: number }>;
+  };
+  revisions: Array<{ id: string; label: string }>;
+  acceptedGenerations: Array<{
+    generation: number;
+    applicationRevisionId: string;
+    desiredState: "RUNNING" | "STOPPED";
+    componentReplicas: number;
+    createdAt: string;
+  }>;
+};
+
 export type ExperienceOperationActor = {
   type: "USER" | "ROLE" | "SERVICE_ACCOUNT" | "AGENT" | "SYSTEM_USER";
   id: string;
@@ -85,6 +112,7 @@ export type ExperienceSnapshot = {
   regions: Array<{ id: string; name: string }>;
   resources: ExperienceResource[];
   applicationTagSnapshots: ExperienceApplicationTagSnapshot[];
+  applicationDeploymentSnapshots: ExperienceApplicationDeploymentSnapshot[];
   operations: ExperienceOperation[];
   pipelines: ExperiencePipeline[];
   serviceHealth: ExperienceServiceHealth[];

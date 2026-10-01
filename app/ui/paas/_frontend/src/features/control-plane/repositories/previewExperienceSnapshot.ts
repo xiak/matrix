@@ -109,6 +109,35 @@ export const previewExperienceSnapshot: ExperienceSnapshot = {
       ]
     }
   ],
+  applicationDeploymentSnapshots: [
+    {
+      resourceId: "app-checkout-api",
+      deployment: {
+        id: "deployment-checkout-production",
+        name: "checkout-production",
+        resourceVersion: 17,
+        generation: 6,
+        desiredState: "RUNNING",
+        phase: "READY",
+        observedGeneration: 6,
+        applicationRevisionId: "revision-checkout-v2-8-0",
+        observedApplicationRevisionId: "revision-checkout-v2-8-0",
+        placementPolicyId: "placement-production-ha",
+        placementDecisionId: "placement-decision-checkout-a",
+        components: [{ name: "api", replicas: 2, readyReplicas: 2 }]
+      },
+      revisions: [
+        { id: "revision-checkout-v2-9-0", label: "v2.9.0 · 待发布" },
+        { id: "revision-checkout-v2-8-0", label: "v2.8.0 · 当前" },
+        { id: "revision-checkout-v2-7-3", label: "v2.7.3" }
+      ],
+      acceptedGenerations: [
+        { generation: 6, applicationRevisionId: "revision-checkout-v2-8-0", desiredState: "RUNNING", componentReplicas: 2, createdAt: "2026-09-08T09:10:00Z" },
+        { generation: 5, applicationRevisionId: "revision-checkout-v2-7-3", desiredState: "RUNNING", componentReplicas: 2, createdAt: "2026-09-07T16:42:00Z" },
+        { generation: 4, applicationRevisionId: "revision-checkout-v2-7-1", desiredState: "STOPPED", componentReplicas: 0, createdAt: "2026-09-07T13:18:00Z" }
+      ]
+    }
+  ],
   operations: [
     { id: "op-1042", action: "发布应用", target: "结算 API · v2.8.0", productName: "应用托管", actor: { type: "USER", id: "principal-lin", accessKeyId: "MOCK-pipeline-key" }, state: "RUNNING", progress: 68, startedAt: "2026-09-08T09:12:00Z" },
     { id: "op-1041", action: "运行流水线", target: "storefront-release #286", productName: "研发效能", actor: { type: "ROLE", id: "role-release-operator", roleSession: { sessionId: "role-session-release-286", sourceUserId: "principal-chen" } }, state: "SUCCEEDED", progress: 100, startedAt: "2026-09-08T09:03:00Z", finishedAt: "2026-09-08T09:09:18Z" },

@@ -29,6 +29,7 @@ import styles from "./ExperienceContentRenderer.module.css";
 import { ConsoleMetrics } from "./ConsoleMetrics";
 import { useConsoleFormat } from "./useConsoleFormat";
 import { ApplicationTagManagement } from "./ApplicationTagManagement";
+import { ApplicationDeploymentManagement } from "./ApplicationDeploymentManagement";
 
 export type ResourceScope = {
   regionId: string;
@@ -247,9 +248,10 @@ function ResourceDirectory({ scene, scope }: {
   );
 }
 
-function ApplicationResourceDetail({ resource, tagSnapshot }: {
+function ApplicationResourceDetail({ resource, tagSnapshot, deploymentSnapshot }: {
   resource: UnifiedResourceScene;
   tagSnapshot: Extract<ConsoleContentScene, { kind: "resources"; directory: "applications" }>["tagSnapshots"][number] | undefined;
+  deploymentSnapshot: Extract<ConsoleContentScene, { kind: "resources"; directory: "applications" }>["deploymentSnapshots"][number] | undefined;
 }) {
   const t = useTranslations("CloudExperience");
   const resourceKinds = useTranslations("GlobalSearch.resourceKinds");
@@ -275,6 +277,7 @@ function ApplicationResourceDetail({ resource, tagSnapshot }: {
         </dl>
       </Card.Body>
     </Card>
+    <ApplicationDeploymentManagement key={`${resource.id}:${deploymentSnapshot?.deployment.resourceVersion ?? "unavailable"}`} resource={resource} initialSnapshot={deploymentSnapshot} />
     <ApplicationTagManagement key={`${resource.id}:${tagSnapshot?.etag ?? "unavailable"}`} resource={resource} initialSnapshot={tagSnapshot} />
   </section>;
 }
@@ -288,7 +291,7 @@ function Resources({ scene, scope }: {
   const selectedId = scene.directory === "applications" ? params.get("resource") : null;
   if (!selectedId || scene.directory !== "applications") return <ResourceDirectory scene={scene} scope={scope} />;
   const selected = scene.resources.find((resource) => resource.id === selectedId);
-  if (selected) return <ApplicationResourceDetail resource={selected} tagSnapshot={scene.tagSnapshots.find((snapshot) => snapshot.resourceId === selected.id)} />;
+  if (selected) return <ApplicationResourceDetail resource={selected} tagSnapshot={scene.tagSnapshots.find((snapshot) => snapshot.resourceId === selected.id)} deploymentSnapshot={scene.deploymentSnapshots.find((snapshot) => snapshot.resourceId === selected.id)} />;
   return <Card><Card.Body><EmptyState title={t("resourceNotFound")} description={t("resourceNotFoundHint")} action={<Button asChild variant="secondary"><Link href="/console/applications/">{t("backToApplications")}</Link></Button>} /></Card.Body></Card>;
 }
 

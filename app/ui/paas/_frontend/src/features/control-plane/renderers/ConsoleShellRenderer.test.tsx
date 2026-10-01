@@ -951,6 +951,123 @@ describe("ConsoleShellRenderer", () => {
     expect(screen.getByText('"app-checkout-api:tags:7"')).toBeTruthy();
     expect(screen.getByText(/策略编辑器不会修改资源标签/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "管理标签" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "部署与版本" })).toBeTruthy();
+    expect(screen.getByRole("table", { name: "部署组件状态" })).toBeTruthy();
+    expect(screen.getAllByText("revision-checkout-v2-8-0")).toHaveLength(2);
+    expect(screen.getByText('"17"')).toBeTruthy();
+    expect(screen.getByRole("button", { name: "更新部署" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "更多部署操作" })).toBeTruthy();
+  });
+
+  it("reviews a deployment update and returns an accepted Operation instead of claiming completion", async () => {
+    navigation.query = "resource=app-checkout-api";
+    const { user } = await renderConsole({ section: "applications", experience: previewExperienceSnapshot });
+
+    await user.click(screen.getByRole("button", { name: "更新部署" }));
+    expect(screen.getByRole("heading", { name: "更新部署" })).toBe(document.activeElement);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(screen.getByRole("combobox", { name: "期望副本" }));
+    await user.click(screen.getByRole("option", { name: "3" }));
+    await user.click(screen.getByRole("button", { name: "审阅变更" }));
+
+    expect(screen.getByRole("heading", { name: "审阅部署更新" })).toBe(document.activeElement);
+    expect(screen.getByText("paas.deployment.update")).toBeTruthy();
+    expect(screen.getByText("PUT /v1/deployments/deployment-checkout-production")).toBeTruthy();
+    expect(screen.getByText('If-Match: "17"')).toBeTruthy();
+    expect(screen.getByText(/revision-checkout-v2-9-0 · 3 个副本/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "模拟提交" }));
+
+    const outcome = screen.getByRole("region", { name: "最近一次模拟操作" });
+    expect(within(outcome).getByText("operation-preview-deployment-checkout-production-7")).toBeTruthy();
+    expect(within(outcome).getByText("UPDATE")).toBeTruthy();
+    expect(within(outcome).getByText("202")).toBeTruthy();
+    expect(within(outcome).getByText(/principal-lin · AccessKey MOCK-pipeline-key/)).toBeTruthy();
+    expect(screen.getByText(/只表示期望状态与 Operation 已持久化/)).toBeTruthy();
+    expect(screen.getByText(/部署尚未完成/)).toBeTruthy();
+  });
+
+  it("models stop and rollback as distinct reviewed product requests", async () => {
+    navigation.query = "resource=app-checkout-api";
+    const { user } = await renderConsole({ section: "applications", experience: previewExperienceSnapshot });
+
+    await user.click(screen.getByRole("button", { name: "更多部署操作" }));
+    await user.click(screen.getByRole("menuitem", { name: "停止应用" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("heading", { name: "审阅停止应用" })).toBe(document.activeElement);
+    expect(screen.getByText("paas.deployment.stop")).toBeTruthy();
+    expect(screen.getByText("PUT /v1/deployments/deployment-checkout-production")).toBeTruthy();
+    expect(screen.getByText(/其他期望字段保持不变/)).toBeTruthy();
+    await user.click(screen.getByText("体验其他服务响应"));
+    await user.click(screen.getByRole("combobox", { name: "下一次模拟响应" }));
+    await user.click(screen.getByRole("option", { name: "412 · 资源版本已变化" }));
+    await user.click(screen.getByRole("button", { name: "模拟提交" }));
+    expect(screen.getByRole("heading", { name: "停止应用" })).toBe(document.activeElement);
+    expect(screen.queryByRole("combobox", { name: "已接受 generation" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "审阅变更" }));
+    expect(screen.getByText('If-Match: "18"')).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "取消" }));
+
+    const more = screen.getByRole("button", { name: "更多部署操作" });
+    await waitFor(() => expect(more).toBe(document.activeElement));
+    await user.click(more);
+    await user.click(screen.getByRole("menuitem", { name: "回滚版本" }));
+    expect(screen.getByRole("heading", { name: "选择回滚来源" })).toBe(document.activeElement);
+    expect(screen.queryByRole("option", { name: /generation 4/ })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "审阅变更" }));
+    expect(screen.getByText("paas.deployment.rollback")).toBeTruthy();
+    expect(screen.getByText("POST /v1/deployments/deployment-checkout-production/rollback")).toBeTruthy();
+    expect(screen.getByText(/generation 5 · revision-checkout-v2-7-3/)).toBeTruthy();
+  });
+
+  it("reloads a changed Deployment before review and preserves one request identity after an interrupted response", async () => {
+    navigation.query = "resource=app-checkout-api";
+    const { user } = await renderConsole({ section: "applications", experience: previewExperienceSnapshot });
+
+    await user.click(screen.getByRole("button", { name: "更新部署" }));
+    await user.click(screen.getByRole("combobox", { name: "期望副本" }));
+    await user.click(screen.getByRole("option", { name: "3" }));
+    await user.click(screen.getByRole("button", { name: "审阅变更" }));
+    await user.click(screen.getByText("体验其他服务响应"));
+    await user.click(screen.getByRole("combobox", { name: "下一次模拟响应" }));
+    await user.click(screen.getByRole("option", { name: "412 · 资源版本已变化" }));
+    await user.click(screen.getByRole("button", { name: "模拟提交" }));
+
+    expect(screen.getByRole("heading", { name: "更新部署" })).toBe(document.activeElement);
+    expect(screen.getByText(/最新 ETag 为 "18"/)).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "最近一次模拟操作" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "审阅变更" }));
+    expect(screen.getByText('If-Match: "18"')).toBeTruthy();
+    const firstRequestId = screen.getAllByText(/^mock-deployment-/)[0]?.textContent;
+    expect(firstRequestId).toBeTruthy();
+
+    await user.click(screen.getByText("体验其他服务响应"));
+    await user.click(screen.getByRole("combobox", { name: "下一次模拟响应" }));
+    await user.click(screen.getByRole("option", { name: "响应中断 · 结果未知" }));
+    await user.click(screen.getByRole("button", { name: "模拟提交" }));
+    expect(screen.getByText(/不要创建新意图/)).toBeTruthy();
+    expect(screen.getAllByText(firstRequestId!)).toHaveLength(1);
+    await user.click(screen.getByRole("button", { name: "安全重试同一意图" }));
+    const recovered = screen.getByRole("region", { name: "最近一次模拟操作" });
+    expect(within(recovered).getByText(firstRequestId!)).toBeTruthy();
+    expect(within(recovered).getByText("200")).toBeTruthy();
+    expect(within(recovered).getByText("已完成")).toBeTruthy();
+    expect(screen.getByText(/不是新的提交/)).toBeTruthy();
+  });
+
+  it("does not offer a blind deployment retry for an idempotency mismatch or an active operation", async () => {
+    navigation.query = "resource=app-checkout-api";
+    const { user } = await renderConsole({ section: "applications", experience: previewExperienceSnapshot });
+    await user.click(screen.getByRole("button", { name: "更新部署" }));
+    await user.click(screen.getByRole("combobox", { name: "期望副本" }));
+    await user.click(screen.getByRole("option", { name: "3" }));
+    await user.click(screen.getByRole("button", { name: "审阅变更" }));
+    await user.click(screen.getByText("体验其他服务响应"));
+    await user.click(screen.getByRole("combobox", { name: "下一次模拟响应" }));
+    await user.click(screen.getByRole("option", { name: "409 · 请求意图冲突" }));
+    await user.click(screen.getByRole("button", { name: "模拟提交" }));
+    expect(screen.getByText(/不要重试/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /重试同一意图/ })).toBeNull();
+    expect(screen.getByRole("button", { name: "返回修改" })).toBeTruthy();
   });
 
   it("reviews one permission-sensitive application tag change before applying it to the MOCK snapshot", async () => {

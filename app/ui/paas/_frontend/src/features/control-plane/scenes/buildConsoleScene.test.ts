@@ -103,11 +103,12 @@ describe("buildConsoleScene", () => {
       expect(scene.content.resources[0]?.kind).toBe("APPLICATION");
       if (scene.content.directory === "applications") {
         expect(scene.content.tagSnapshots).toEqual(previewExperienceSnapshot.applicationTagSnapshots);
+        expect(scene.content.deploymentSnapshots).toEqual(previewExperienceSnapshot.applicationDeploymentSnapshots);
       }
     }
     expect(scene.navigation.find((item) => item.id === "applications")?.selected).toBe(true);
     const live = buildConsoleScene("applications", snapshot);
-    expect(live.content).toEqual({ kind: "resources", directory: "applications", resources: [], tagSnapshots: [] });
+    expect(live.content).toEqual({ kind: "resources", directory: "applications", resources: [], tagSnapshots: [], deploymentSnapshots: [] });
   });
   it("projects real resources into the complete console shell", () => {
     const scene = buildConsoleScene("overview", snapshot);
