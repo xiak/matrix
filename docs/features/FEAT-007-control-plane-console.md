@@ -1795,6 +1795,20 @@ account-rule and session-expiry previews.
 | Password-age and expiry-response preview | The isolated Account settings card keeps four distinct age-evidence scenarios and now previews both restricted change and administrator reset handling. `AGE_UNKNOWN` is never presented as confirmed expiry; the `ADMIN_RESET_REQUIRED` path offers contact/re-login guidance only, with no password form, identity recovery, resend or automatic session. Neither path reads live settings or issues a challenge, credential, reset request or session. At `390px`, the administrator-reset path rendered without document/body overflow and the expected guidance was visible. The 45-file/806-case frontend run, three normalization cases, type/lint/architecture/228-pair theme gates, 41-page export, 228-file embed match and Go UI test/vet passed. Source/embed are pushed at `0e537ec5`; this is MOCK UX evidence only, not acceptance of the unfinished IAM-009 S3c wire/runtime. Exact boundaries remain in [FEAT-IAM-010](../../IAM/FEAT-IAM-010-console.md#密码年龄与受限改密的隔离-ux-预览). |
 | Draft-leave browser behavior | A temporary, unsubmitted JSON draft remained intact after Continue editing. Discard and leave then immediately displayed the Regions frame; the old editor and loading feedback were absent after the actual route commit. No policy or association was created or changed. |
 
+The Profile-driven Action selector now keeps its existing fail-closed statement
+compatibility boundary visible instead of communicating it only through disabled
+controls. It reports how many Actions can share the current resources and
+conditions, and each incompatible row names whether resource shape, prefix
+support, exact-instance targeting or an existing condition requires changing
+the statement or creating another. These reasons are derived only from the
+already-read Profile and are memoized across search, selected-only filtering
+and pagination; no Action family, product resource, IAM wire or authorization
+result is invented. Source and synchronized embed are pushed at `3ffca742`.
+The 99-case LIVE account-access renderer file, typecheck/lint, architecture and
+228-pair style gates, 42-route export, 233-file embed equality and UI-host Go
+test/vet passed. Desktop and `430 × 900` DEV showed the count and row reason
+without a Dialog; viewport, document and body width remained 430px.
+
 Same-path detail-query tests retain encoded IDs, draft-leave protection and
 replace semantics without a Next page-tree navigation. Real static deep links
 and browser back/forward observations belong to the
