@@ -345,6 +345,7 @@ function LiveGroupWorkspace({ client, entityId, summary, scene, onOpen }: {
       directPolicyCount: access.policyAttachments.length,
       membersAvailability: membersPhase,
       membersError: membersError ?? undefined,
+      membersDirectoryComplete: nextAfter === null,
       members: memberships.map((entry) => {
         const user = userById.get(entry.membership.userId);
         return {
@@ -367,7 +368,7 @@ function LiveGroupWorkspace({ client, entityId, summary, scene, onOpen }: {
         };
       })
     };
-  }, [access, membersError, memberships, membersPhase, policyById, t, userById]);
+  }, [access, membersError, memberships, membersPhase, nextAfter, policyById, t, userById]);
 
   useLayoutEffect(() => {
     const closed = previousChange.current;

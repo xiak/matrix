@@ -1794,7 +1794,7 @@ describe("CAM-style access workspace", () => {
   it("keeps already loaded group members visible during refresh but not after a failed authoritative read", () => {
     const detail = {
       id: "group-refetch", name: "RefetchTeam", description: "", createdAt: "2026-09-11T08:00:00Z", directPolicyCount: 0,
-      members: [{ id: "membership-lin", userId: "principal-lin", name: "lin", identityType: "child" as const }], policies: []
+      members: [{ id: "membership-lin", userId: "principal-lin", name: "lin", identityType: "child" as const }], policies: [], membersDirectoryComplete: false
     };
     const renderDetail = (availability: "refreshing" | "error") => <LocaleProvider><GroupDetail
       group={{ ...detail, membersAvailability: availability }} controls={{}} onBack={vi.fn()} onOpenMember={vi.fn()} onOpenPolicy={vi.fn()}
@@ -1802,9 +1802,64 @@ describe("CAM-style access workspace", () => {
     const { rerender } = render(renderDetail("refreshing"));
     expect(screen.getByText("正在更新成员关系；更新完成前暂不可修改。")).toBeTruthy();
     expect(within(screen.getByRole("table", { name: "成员" })).getByRole("button", { name: "lin" })).toBeTruthy();
+    expect(screen.getByText(/搜索和分页仅作用于当前已载入记录/)).toBeTruthy();
     rerender(renderDetail("error"));
     expect(screen.queryByRole("table", { name: "成员" })).toBeNull();
     expect(screen.getByText("成员关系暂时无法载入")).toBeTruthy();
+  });
+  it("searches and paginates loaded group members without turning an opaque cursor into a total", async () => {
+    const liveGroup: GroupAccess = {
+      group: { id: "group-paged-members", accountId: account.id, name: "PagedMembers", description: "Cursor-backed memberships", resourceVersion: 1, createdAt: "2026-09-11T08:00:00Z", updatedAt: "2026-09-11T08:00:00Z" },
+      policyAttachments: [],
+      capabilities: [capability("iam.group.read", "GROUP", "group-paged-members"), capability("iam.group-membership.list", "GROUP", "group-paged-members")]
+    };
+    const membership = (index: number): GroupMembershipAccess => ({
+      membership: { id: `membership-${index}`, accountId: account.id, groupId: liveGroup.group.id, userId: `principal-paged-${String(index).padStart(2, "0")}`, createdBy: rootUser.id, resourceVersion: 1, createdAt: "2026-09-11T08:00:00Z", updatedAt: "2026-09-11T08:00:00Z" },
+      capabilities: []
+    });
+    const listGroupMemberships = vi.fn()
+      .mockResolvedValueOnce({ accountId: account.id, groupId: liveGroup.group.id, items: Array.from({ length: 11 }, (_, index) => membership(index + 1)), nextAfter: "cursor-page-2" })
+      .mockResolvedValueOnce({ accountId: account.id, groupId: liveGroup.group.id, items: [membership(12), membership(13)], nextAfter: null });
+    const { user } = await open("groups", { live: true, entityId: liveGroup.group.id, repository: {
+      getGroup: vi.fn().mockResolvedValue(liveGroup),
+      listGroupMemberships
+    } });
+    const table = await screen.findByRole("table", { name: "成员" });
+    expect(table.getAttribute("data-mobile-layout")).toBe("stack");
+    expect(within(table).getAllByRole("row")).toHaveLength(11);
+    expect(screen.getByText("显示 11 / 已载入 11 条")).toBeTruthy();
+    expect(screen.getByText(/搜索和分页仅作用于当前已载入记录/)).toBeTruthy();
+
+    const search = screen.getByRole("searchbox", { name: "搜索用户组成员" });
+    await user.type(search, "principal-paged-11");
+    await waitFor(() => expect(within(table).getAllByRole("row")).toHaveLength(2));
+    expect(screen.getByText("显示 1 / 已载入 11 条")).toBeTruthy();
+    await user.clear(search);
+    await user.click(screen.getByRole("button", { name: "下一页" }));
+    expect(within(table).getByRole("button", { name: "principal-paged-11" })).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "载入更多成员" }));
+    await waitFor(() => expect(screen.getByText("显示 13 / 已载入 13 条")).toBeTruthy());
+    expect(screen.queryByRole("button", { name: "载入更多成员" })).toBeNull();
+    expect(screen.getByText(/完整关系快照/)).toBeTruthy();
+    expect(listGroupMemberships).toHaveBeenCalledTimes(2);
+  });
+  it("paginates complete direct-policy relationships and preserves exact policy navigation", async () => {
+    const onOpenPolicy = vi.fn();
+    const user = userEvent.setup({ delay: null });
+    render(<LocaleProvider><GroupDetail group={{
+      id: "group-many-policies", name: "ManyPolicies", description: "", createdAt: "2026-09-11T08:00:00Z", directPolicyCount: 12,
+      members: [], memberCount: 0, policies: Array.from({ length: 12 }, (_, index) => ({ id: `attachment-${index + 1}`, policyId: `policy-${index + 1}`, name: `Policy${String(index + 1).padStart(2, "0")}`, kind: "custom" as const, version: 1 }))
+    }} controls={{}} onBack={vi.fn()} onOpenMember={vi.fn()} onOpenPolicy={onOpenPolicy} /></LocaleProvider>);
+    await user.click(screen.getByRole("tab", { name: "直接关联策略 (12)" }));
+    const table = screen.getByRole("table", { name: "权限策略" });
+    expect(table.getAttribute("data-mobile-layout")).toBe("stack");
+    expect(within(table).getAllByRole("row")).toHaveLength(11);
+    expect(screen.getByText("显示 12 / 共 12 条")).toBeTruthy();
+    await user.type(screen.getByRole("searchbox", { name: "搜索直接关联策略" }), "Policy12");
+    await waitFor(() => expect(within(table).getAllByRole("row")).toHaveLength(2));
+    await user.click(within(table).getByRole("button", { name: "Policy12" }));
+    expect(onOpenPolicy).toHaveBeenCalledWith("policy-12");
   });
   it("reveals the live group object before its membership relationship page finishes", async () => {
     const liveGroup: GroupAccess = {
