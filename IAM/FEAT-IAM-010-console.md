@@ -672,7 +672,7 @@ IAM 工程师随后固定并推送来源 `cb62ed2f6c307f5a50aa27480f89c8c58cf081
 ### 安全报告证据覆盖 MOCK 的开发验收证据
 
 2026-10-02，账号安全报告的信息架构、隔离 MOCK 计算与同步嵌入资源更新并固定在已推送的
-[`8e6a66718`](https://github.com/xiak/matrix/commit/8e6a66718)。它替换浏览器打开页面时动态拼装“安全报告”的旧草稿，但不替换独立的用户凭证清单。IAM-009 S4a 后端最新固定候选为 `e012e446055c26136396efc5da28557b6cbb796f`；相对初始运行时候选 `57cb28d7984175a1c8b58f4855f8c2e5f4188a49`，账号安全报告的 API、HTTP 与 use-case 契约没有变化，新增的是设置并发顺序、七天清理及签名发布门禁。其独立 Verification `36919226231` 仍在排队，签名安装/备份恢复组合及显式可消费确认尚未完成，因此本片不建立 LIVE 适配，也不继承后端验收或把预览结果称为真实报告。
+[`3193acde5`](https://github.com/xiak/matrix/commit/3193acde5)。它替换浏览器打开页面时动态拼装“安全报告”的旧草稿，但不替换独立的用户凭证清单。IAM-009 S4a 后端当前固定源码为 `67a2a19cf42f76cff7c24abddc830dd7bc093039`；相对初始实现 `57cb28d7984175a1c8b58f4855f8c2e5f4188a49`，账号安全报告的 API、HTTP 与 use-case 契约没有变化，后继补齐设置并发顺序、七天清理及 `61/31/3+r6` 签名 A/B 安装、升级、保数据回滚、选定备份恢复和任务引擎重启门禁，证据由 IAM 的 `2830952dc` 记录。精确源码 Verification `36925315891` 因后续提交到来而取消，不能当作成功；当前后继 `983e33e63701db95895804d7e0bed9bbad72211d` 的 Verification `36929260286` 仍在队列，IAM 工程师尚未给出显式可消费确认。因此本片不建立 LIVE 适配，也不继承后端验收或把预览结果称为真实报告。
 
 - 入口先立即打开稳定内容区，再由用户确认生成；固定标题、范围、权限、限制和失败语义直接渲染，只有生成结果区随本地状态变化。生成是同步、全有或全无的单次操作；没有 Dialog、报告目录、`PENDING`、任务轮询、共享链接或自动修复。
 - 请求语义只展示 `requestId` 与固定 `formatVersion=1`，范围恒为当前 Account，不接受账号、用户、产品、时间或来源选择器。创建、读取、下载分别要求当前 Account 上的 `iam.security-report.create` 以及目标 `SECURITY_REPORT` 上的 `iam.security-report.read`、`iam.security-report.download`；Root 也不获得隐式豁免，平台运营身份、服务身份、RoleSession 与 AccessKey 不能代替当前有效 USER LOGIN_SESSION。
