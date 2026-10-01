@@ -267,6 +267,16 @@ Configuration、ConfigurationRevision、ApplicationRevision、Deployment和租�
 
 唯一前驱替换为固定`b6d15c89af64587d0c5eff64f9b07b1da09b43f5`的Profile revision 9/schema59真实程序。第一次前代门禁在全部恢复与数据检查后只因未来Profile overlay仍寻找revision 9变量而失败；将该测试owner推进到revision 10后，全新数据库以164.012秒通过等值迁移/bootstrap、重启、账号/MFA/会话/恢复、历史字节及未来Profile防伪。最终全仓race/p2、vet、模块校验、OpenAPI二次生成字节一致及Linux amd64构建通过；本片未新增迁移。[独立CI 36858924218](https://github.com/xiak/matrix/actions/runs/36858924218)仍在运行，不把这些本地证据写成发布验收。
 
+### 已固定纵向切片：AccessKey控制Deployment
+
+本片只为现有`paas.deployment.update`、`paas.deployment.stop`和`paas.deployment.rollback`三个实例动作向USER增加`ACCESS_KEY`，并只开放`PUT /v1/deployments/{deploymentId}`与`POST /v1/deployments/{deploymentId}/rollback`。`PUT`的真实动作由已签名并经严格解码的`DeploymentSpec.desiredState`决定：`STOPPED`只能映射stop，其余合法变更只能映射update；调用者不能另传Action。rollback始终映射rollback。完整method/path/body、`If-Match`、`Idempotency-Key`及签名语义头均进入原SignedRequest承诺，不能把一次Allow借给另一Deployment、版本、目标状态或generation。
+
+PEP继续使用唯一`authorize:access-key`、当前Account/User/key/Policy/Boundary判断和nonce消费；Allow进入原Deployment事务，资源版本、generation、Operation、幂等完成和outbox仍由PaaS原子提交。业务拒绝或并发版本冲突不回滚已经提交的IAM决定/nonce，也不产生部分Deployment/Operation/outbox；调用方必须用新nonce重新签名。成功Operation及Audit保留同一USER和accessKeyId，另一把key不能复用原业务幂等完成。列表、Application标签写、平台Operation、Audit和其他PUT/POST继续在PEP前拒绝。
+
+最低门禁覆盖两个Account同ID Deployment、update/stop/rollback三条成功路径、USER/key归因、generation与父引用保持、nonce重放、另一key复用幂等键、错误If-Match、跨route/Action/body替换、撤权/停用、IAM失联及并发写入。普通LOGIN_SESSION/ROLE流程与既有创建、读取、标签、服务会话和Audit链必须继续通过；真实网关与签名安装仍是独立发布边界。
+
+固定`05336ad368996a500c0769fe62767204bd9333d0`将PaaS Profile推进到revision 11/digest `sha256:ba8b808cc72c4ff1eb34d9eb933b5cde4ee95dde0f1a5c361058c2dab6937b48`，不新增数据库迁移。2026-10-01在本任务独立PostgreSQL 18.6（2CPU/2GiB/PIDs512）和Go2/768MiB下，双Account五进程race门禁233.250秒通过三条真实签名变更、幂等冲突、Operation/outbox和Audit链；AccessKey真库95.209秒、固定revision 10 executable保留数据迁移126.642秒通过。全仓race/p2、vet、模块校验、OpenAPI生成前后字节一致及Linux amd64/CGO关闭构建通过。首次两轮五进程只暴露测试夹具时间未显式UTC及`[]byte`被pgx编码为`bytea`，修正夹具后使用全新数据库通过，生产权限和事务边界未放宽。独立CI仍待远端结果；APISIX可信边缘、签名安装和UI不据本地证据标LIVE。
+
 ## 验收
 
 标准签名正负向量、body/path/query/header 替换、过期/未来时间/重放与错服务；并发 disable/rotate/request、双账号同名用户隔离；普通 JSON/错误/日志/审计无 key material；真实 PaaS 读写与 Audit 的程序身份可关联，重启仍拒绝旧 key。

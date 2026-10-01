@@ -231,6 +231,16 @@ PaaS Profile下一revision只为`paas.application.read`的USER增加`ACCESS_KEY`
 
 固定`35e15da22`将Profile推进到revision 10/digest `sha256:759bd751d03fc8ddceb69f6a5e827328401dcbd47d73a1e568a0b76c5a517256`，并以闭合route表把六条GET逐项映射到五个原read Action；Deployment generation完整路径绑定generation，但授权资源仍是Deployment。真实双Account进程门禁203.770秒逐项读取所属Configuration、两类Revision、Deployment、generation和Operation，核对真实父引用、期望状态、不可变generation、原Operation的USER/key归因以及决定/Audit链；同一个Operation签名重放409。AccessKey真库95.578秒、唯一revision 9前代164.012秒及最终全仓race/vet/生成/Linux构建通过。首次进程/前代运行只分别暴露过期Deny fixture和未来overlay变量名，均在全新数据库修正后通过，生产边界没有放宽。本片没有数据库迁移；[独立CI 36858924218](https://github.com/xiak/matrix/actions/runs/36858924218)仍在运行，安装和UI仍不得据此标LIVE。
 
+## 已固定纵向切片：AccessKey控制Deployment
+
+PaaS Profile下一revision只为`paas.deployment.update`、`paas.deployment.stop`和`paas.deployment.rollback`的USER增加`ACCESS_KEY`。PEP只接受精确`PUT /v1/deployments/{deploymentId}`和`POST /v1/deployments/{deploymentId}/rollback`；PUT在严格解码签名body后由`desiredState`选择update或stop，rollback保持固定动作。路径Deployment ID、完整body、`If-Match`和`Idempotency-Key`均由签名承诺，调用者不能提交Account、Subject、Action、resourceVersion或目标generation的旁路selector。
+
+IAM Allow只证明当前程序主体能对精确Deployment执行该动作；PaaS仍在决定Account的Serializable事务中锁定真实Deployment，核对If-Match、当前Operation和业务图，再原子提交资源版本/generation、Operation、完成记录和outbox。合法签名的nonce与决定不能因后继PaaS冲突而回滚；PaaS失败不得留下部分业务效果。返回Operation及最终Audit actor必须保留USER与accessKeyId，业务幂等身份继续区分不同key。所有列表、标签写、平台动作、Audit及未登记路由保持关闭。
+
+真实验收以两个Account的同ID Deployment证明三种变更只能作用于决定Account，覆盖另一key/Account、body/If-Match/route替换、nonce及幂等重放、并发版本冲突、撤权/停用、IAM未知结果、重启和完整Audit链；现有LOGIN_SESSION/ROLE、创建、读取和服务会话路径必须回归。该后端证据不替代APISIX可信边缘或签名安装组合。
+
+固定`05336ad368996a500c0769fe62767204bd9333d0`将Profile推进到revision 11/digest `sha256:ba8b808cc72c4ff1eb34d9eb933b5cde4ee95dde0f1a5c361058c2dab6937b48`，没有新增SQL。2026-10-01独立PG18.6双Account五进程race门禁233.250秒真实执行update、stop、rollback及各自重放冲突，核对generation、源generation恢复、原USER/key、决定、Operation、outbox及tenant Audit链；AccessKey真库95.209秒和固定revision 10 executable保留数据门禁126.642秒通过。全仓race/p2、vet、模块校验、OpenAPI生成稳定及Linux amd64/CGO关闭构建通过。两次失败仅来自测试夹具的UTC规范化和pgx JSON参数类型，均在全新数据库修正后通过，生产实现未放宽。独立CI尚未终态；真实边缘、发布组合和UI仍由其owner另验。
+
 ## 验收
 
 真实两个产品/两个 Account 的同名/同 ID/key、跨租户资源/cursor/配额/Operation、修改 tag 攻击、多个相关资源任一拒绝即无效果；服务跨租户请求必须有目标角色和用途；verifier probe 无业务写权。暂停之后的已提交事实可投递，新请求拒绝。独立 PG18/RLS/受限进程、真实部署和 UI 路径均通过才接受。
