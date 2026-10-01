@@ -15,6 +15,7 @@ import { PolicyDocumentViewer } from "./PolicyDocumentViewer";
 import { PolicyTargetSelector } from "./PolicyTargetSelector";
 import { PolicyDocumentChanges } from "./PolicyDocumentChanges";
 import { PolicyAffectedIdentities, PolicyAssociationChanges } from "./PolicyAssociationReview";
+import { PolicyTagAuthorizationBoundary } from "./PolicyTagAuthorizationBoundary";
 import { useAccessDraft } from "./useAccessDraft";
 import styles from "./PolicyAuthoringWizard.module.css";
 
@@ -118,6 +119,7 @@ export function PolicyAuthoringWizard({ policy, copy = false, method = "visual",
         </div> : null}
         {step === 2 && validation.document ? <div className={styles.stack}>
           <Alert status={selected.length ? "warning" : "info"}>{selected.length ? t("grantImpact", { count: selected.length }) : t("noTargetsHint")}</Alert>
+          {editorMode === "tags" ? <PolicyTagAuthorizationBoundary /> : null}
           <div className={styles.row}><h3>{t("steps.details")}</h3><Button variant="ghost" size="small" onClick={() => changeStep(1)}>{w("edit")}</Button></div>
           <dl className={styles.facts}><div><dt>{w("name")}</dt><dd>{name.trim()}</dd></div><div><dt>{w("description")}</dt><dd>{description || "—"}</dd></div><div><dt>{t("metadataTags")}</dt><dd>{tags.length ? tags.map((tag) => <Badge key={tag.key}>{tag.key} : {tag.value || "—"}</Badge>) : "—"}</dd></div><div><dt>{w("associations")}</dt><dd>{selected.length ? selected.map((target) => <Badge key={target.type + target.id}>{t(`targets.${target.type}`)} · {target.name}</Badge>) : t("noTargets")}</dd></div></dl>
           <section className={styles.section}><div className={styles.row}><h3>{w("document")}</h3><Button variant="ghost" size="small" onClick={() => changeStep(0)}>{w("editPolicyContent")}</Button></div><PolicyDocumentViewer document={validation.document} /></section>

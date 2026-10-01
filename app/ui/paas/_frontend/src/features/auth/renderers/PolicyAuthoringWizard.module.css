@@ -43,6 +43,16 @@
 .coverageStage > div { display: grid; min-width: 0; gap: var(--xiak-spacing-narrow); }
 .coverageStageHeading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-narrow); }
 .coverageStageHeading strong { color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-small); }
+.tagBoundary { display: grid; min-width: 0; gap: var(--xiak-spacing-default); padding: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); background: var(--xiak-color-bg-panel-hover); }
+.tagBoundaryHeading { display: grid; min-width: 0; gap: var(--xiak-spacing-narrow); }
+.tagBoundaryHeading h3, .tagBoundaryHeading p, .tagBoundaryStage p, .tagBoundaryFailClosed { margin: 0; }
+.tagBoundaryHeading h3 { color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-body); }
+.tagBoundaryHeading p, .tagBoundaryStage p, .tagBoundaryFailClosed { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: var(--xiak-line-height-body); }
+.tagBoundaryStages { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--xiak-spacing-default); margin: 0; padding: 0; list-style: none; }
+.tagBoundaryStage { display: grid; grid-template-columns: auto minmax(0, 1fr); align-content: start; gap: var(--xiak-spacing-tight); min-width: 0; padding: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-small); background: var(--xiak-color-bg-panel); }
+.tagBoundaryStage > div { display: grid; min-width: 0; gap: var(--xiak-spacing-narrow); }
+.tagBoundaryStageHeading { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-narrow); }
+.tagBoundaryStageHeading strong { color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-small); }
 .conditionCapabilities { display: grid; min-width: 0; gap: var(--xiak-spacing-default); padding: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); background: var(--xiak-color-bg-panel-hover); }
 .conditionCapabilityHeading { display: grid; gap: var(--xiak-spacing-micro); }
 .conditionCapabilityHeading h4, .conditionCapabilityHeading p, .conditionCapabilities > p { margin: 0; }
@@ -63,11 +73,11 @@
 .facts dt { color: var(--xiak-color-text-muted); }
 .facts dd { margin: 0; display: flex; flex-wrap: wrap; gap: var(--xiak-spacing-tight); overflow-wrap: anywhere; }
 @container policy-authoring (max-width: 900px) {
-  .coverageStages { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .coverageStages, .tagBoundaryStages { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @container policy-authoring (max-width: 620px) {
   .fields, .template, .facts > div { grid-template-columns: minmax(0, 1fr); }
-  .coverageStages { grid-template-columns: minmax(0, 1fr); }
+  .coverageStages, .tagBoundaryStages { grid-template-columns: minmax(0, 1fr); }
   .conditionCapabilities ul { grid-template-columns: minmax(0, 1fr); }
   .statement { padding: var(--xiak-spacing-default); }
   .actionToolbar { grid-template-columns: minmax(0, 1fr); }

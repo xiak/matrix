@@ -677,6 +677,11 @@ describe("policy creation entry and directory contract", () => {
     } else {
       await logActions(user, ["logs:search"]);
       if (method === "tags") {
+        expect(screen.getByRole("heading", { name: "标签授权的信任边界" })).toBeTruthy();
+        expect(screen.getByText("资源标签事实")).toBeTruthy();
+        expect(screen.getByText("请求标签变更")).toBeTruthy();
+        expect(screen.getByText("身份与策略标签")).toBeTruthy();
+        expect(screen.getByText(/修改资源标签可能改变之后的访问结果/)).toBeTruthy();
         expect(screen.queryByRole("checkbox", { name: "logs:list" })).toBeNull();
         expect(screen.getByRole("heading", { name: "生效条件（资源标签必填）" })).toBeTruthy();
         await user.click(screen.getByRole("button", { name: "下一步" }));
@@ -694,6 +699,7 @@ describe("policy creation entry and directory contract", () => {
     expect(screen.getByRole("tab", { name: tab }).getAttribute("aria-selected")).toBe("true");
     await user.click(screen.getByRole("button", { name: "下一步" }));
     await user.click(screen.getByRole("button", { name: "下一步" }));
+    if (method === "tags") expect(screen.getByRole("heading", { name: "标签授权的信任边界" })).toBeTruthy();
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "创建策略" }));
     await screen.findByRole("heading", { name: "策略已保存" });

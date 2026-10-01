@@ -9,6 +9,7 @@ import { analyzePolicyDocument, type PolicyDocument } from "../domain/policyDocu
 import { actionPatternValid, parsePolicyResource, utcTimeValid } from "../domain/policyLanguage";
 import { PolicyStatementEditor, statementService, type StatementDraft } from "./PolicyStatementEditor";
 import { PolicyDiagnostics } from "./PolicyDiagnostics";
+import { PolicyTagAuthorizationBoundary } from "./PolicyTagAuthorizationBoundary";
 import { policyCreationMethod, type PolicyCreationMethod } from "./PolicyCreationMethods";
 import { canEditPolicyFeatures, PolicyFeatureEditor } from "./PolicyFeatureEditor";
 import styles from "./PolicyAuthoringWizard.module.css";
@@ -127,7 +128,7 @@ export function PolicyDocumentEditor({ text, onChange, policies, accountId, reso
       changeMode(policyCreationMethod(next));
     }}><Tabs.List aria-label={w("document")} className={styles.editorModeTabs}><Tabs.Trigger value="visual" disabled={mode === "json" && !editorDraft}>{w("visual")}</Tabs.Trigger><Tabs.Trigger value="json">{w("json")}</Tabs.Trigger><Tabs.Trigger value="tags" disabled={mode === "json" && !editorDraft}>{p("tagMethod")}</Tabs.Trigger><Tabs.Trigger value="features" disabled={!featuresAvailable}>{t("featureMethod")}</Tabs.Trigger></Tabs.List>
       <Tabs.Content value={mode === "tags" ? "tags" : "visual"}><div className={styles.stack}>
-        {mode === "tags" ? <Alert>{p("tagMethodHint")}</Alert> : null}
+        {mode === "tags" ? <PolicyTagAuthorizationBoundary /> : null}
         {statements.map((statement, index) => <PolicyStatementRow accountId={accountId} resources={resources} tagMode={mode === "tags"} key={statement.id} statement={statement} index={index} total={statements.length} onChangeStatement={changeStatement} onRemoveStatement={removeStatement} onMoveStatement={moveStatement} />)}
         <div><Button variant="secondary" disabled={statements.length >= 50} onClick={() => update([...statements, { id: nextId.current++, effect: "allow", service: "", actions: "", resources: "*" }])}><Plus aria-hidden="true" />{t("addStatement")}</Button></div>
       </div></Tabs.Content>

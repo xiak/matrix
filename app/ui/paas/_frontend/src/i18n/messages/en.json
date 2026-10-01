@@ -4167,6 +4167,18 @@
     "moveDown": "Move statement {number} down",
     "metadataTags": "Policy tags",
     "tagsHint": "Tags organize policies. They are not resource-tag conditions and do not change access.",
+    "tagBoundary": {
+      "title": "Trust boundary for tag-based access",
+      "hint": "This page authors resource-tag conditions but does not evaluate real requests. Authorization facts must come from a trusted product path, never from the browser or identity metadata.",
+      "stages": {
+        "resourceFacts": { "title": "Resource-tag facts", "state": "Product supplied", "hint": "The owning product persists tags and supplies them to authorization. Only operations declaring tag-condition support may use them." },
+        "policyConditions": { "title": "Policy conditions", "state": "Authored here", "hint": "Every resource tag in a statement must match. Selecting a condition never broadens operations that do not support tags." },
+        "requestTagChanges": { "title": "Request tag changes", "state": "Not connected", "hint": "Creating, changing or deleting resource tags needs separate controls for allowed keys and values. This editor does not generate those conditions yet." },
+        "metadataTags": { "title": "Identity and policy tags", "state": "Management only", "hint": "Management tags on policies, users, groups and roles only organize and search objects; they are not current authorization facts." }
+      },
+      "failClosed": "A missing resource tag, unknown key or absent trusted context does not match and must never be ignored to continue with an Allow decision.",
+      "mutationWarning": "Changing a resource tag can change later access. Treat it as a separately authorized and audited permission-sensitive action; this page does not simulate tag changes."
+    },
     "nameHint": "Up to 64 characters. The name cannot change after creation.",
     "invalidName": "Enter a policy name of 1–64 characters, without control characters or angle brackets.",
     "optionalTargets": "Associations (optional)",
