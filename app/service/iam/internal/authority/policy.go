@@ -637,6 +637,7 @@ func SystemPolicyVersion(id iamv1.PolicyID) (iamv1.PolicyVersion, error) {
 			iamv1.ActionIAMRoleSessionList, iamv1.ActionIAMRoleSessionRead, iamv1.ActionIAMRoleSessionRevoke,
 			iamv1.ActionIAMSessionRevoke,
 			iamv1.ActionPaaSApplicationCreate, iamv1.ActionPaaSApplicationRead,
+			iamv1.ActionPaaSApplicationLabelSet, iamv1.ActionPaaSApplicationLabelDelete,
 			iamv1.ActionPaaSConfigurationCreate, iamv1.ActionPaaSConfigurationRead,
 			iamv1.ActionPaaSConfigurationRevisionCreate, iamv1.ActionPaaSConfigurationRevisionRead,
 			iamv1.ActionPaaSApplicationRevisionCreate, iamv1.ActionPaaSApplicationRevisionRead,
@@ -665,6 +666,7 @@ func SystemPolicyVersion(id iamv1.PolicyID) (iamv1.PolicyVersion, error) {
 	case iamv1.SystemPolicyPaaSDeveloper:
 		actions = []iamv1.Action{
 			iamv1.ActionPaaSApplicationCreate, iamv1.ActionPaaSApplicationRead,
+			iamv1.ActionPaaSApplicationLabelSet, iamv1.ActionPaaSApplicationLabelDelete,
 			iamv1.ActionPaaSConfigurationCreate, iamv1.ActionPaaSConfigurationRead,
 			iamv1.ActionPaaSConfigurationRevisionCreate, iamv1.ActionPaaSConfigurationRevisionRead,
 			iamv1.ActionPaaSApplicationRevisionCreate, iamv1.ActionPaaSApplicationRevisionRead,

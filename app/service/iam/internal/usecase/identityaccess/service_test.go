@@ -2319,6 +2319,8 @@ func TestAuditProofClosedHistoricalMappings(t *testing.T) {
 		resource string
 	}{
 		{auditv1.ActionPaaSApplicationCreated, iamv1.ActionPaaSApplicationCreate, "collection"},
+		{auditv1.ActionPaaSApplicationLabelUpdated, iamv1.ActionPaaSApplicationLabelSet, "resource-proof"},
+		{auditv1.ActionPaaSApplicationLabelDeleted, iamv1.ActionPaaSApplicationLabelDelete, "resource-proof"},
 		{auditv1.ActionPaaSConfigurationCreated, iamv1.ActionPaaSConfigurationCreate, "collection"},
 		{auditv1.ActionPaaSConfigurationRevisionCreated, iamv1.ActionPaaSConfigurationRevisionCreate, "collection"},
 		{auditv1.ActionPaaSApplicationRevisionCreated, iamv1.ActionPaaSApplicationRevisionCreate, "collection"},

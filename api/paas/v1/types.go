@@ -285,6 +285,13 @@ type CreateApplicationRequest struct {
 	Labels map[string]string `json:"labels,omitempty"`
 }
 
+// SetApplicationLabelRequest contains only the target value. The label key,
+// Account, current value and resource version come from the route, current
+// identity, product store and If-Match boundary respectively.
+type SetApplicationLabelRequest struct {
+	Value string `json:"value"`
+}
+
 type Configuration struct {
 	APIVersion    string           `json:"apiVersion"`
 	Kind          string           `json:"kind"`

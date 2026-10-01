@@ -145,6 +145,10 @@ func auditDecisionTarget(event auditv1.Event, decisionAction iamv1.Action, contr
 	switch event.Action {
 	case auditv1.ActionPaaSApplicationCreated:
 		return iamv1.ActionPaaSApplicationCreate, "collection", iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate
+	case auditv1.ActionPaaSApplicationLabelUpdated:
+		return iamv1.ActionPaaSApplicationLabelSet, event.Target.ID, iamv1.AuthorizationResourceInstance, ""
+	case auditv1.ActionPaaSApplicationLabelDeleted:
+		return iamv1.ActionPaaSApplicationLabelDelete, event.Target.ID, iamv1.AuthorizationResourceInstance, ""
 	case auditv1.ActionPaaSConfigurationCreated:
 		return iamv1.ActionPaaSConfigurationCreate, "collection", iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate
 	case auditv1.ActionPaaSConfigurationRevisionCreated:

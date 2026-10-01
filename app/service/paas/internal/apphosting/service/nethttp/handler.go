@@ -31,6 +31,8 @@ type Workflow interface {
 		context.Context,
 		applicationlifecycle.CreateApplicationCommand,
 	) (paasv1.Application, paasv1.Operation, bool, error)
+	SetApplicationLabel(context.Context, applicationlifecycle.SetApplicationLabelCommand) (applicationlifecycle.ApplicationLabelResult, error)
+	DeleteApplicationLabel(context.Context, applicationlifecycle.DeleteApplicationLabelCommand) (applicationlifecycle.ApplicationLabelResult, error)
 	CreateConfiguration(
 		context.Context,
 		applicationlifecycle.CreateConfigurationCommand,
@@ -105,6 +107,8 @@ func NewHandler(
 	routes.HandleFunc("GET /ready", value.ready)
 	routes.HandleFunc("POST /v1/applications", value.createApplication)
 	routes.HandleFunc("GET /v1/applications/{applicationId}", value.getApplication)
+	routes.HandleFunc("PUT /v1/applications/{applicationId}/labels/{labelKey}", value.setApplicationLabel)
+	routes.HandleFunc("DELETE /v1/applications/{applicationId}/labels/{labelKey}", value.deleteApplicationLabel)
 	routes.HandleFunc("POST /v1/configurations", value.createConfiguration)
 	routes.HandleFunc("GET /v1/configurations/{configurationId}", value.getConfiguration)
 	routes.HandleFunc("POST /v1/configuration-revisions", value.createConfigurationRevision)
@@ -235,6 +239,133 @@ func (value *handler) createApplication(response http.ResponseWriter, request *h
 	})
 	value.writeCreation(response, requestID, replayed, resource.Metadata.ResourceVersion,
 		"/v1/applications/"+string(resource.Metadata.ID), operation, err)
+}
+
+func (value *handler) setApplicationLabel(response http.ResponseWriter, request *http.Request) {
+	applicationID, ok := pathResourceID(response, request, "applicationId")
+	if !ok {
+		return
+	}
+	requestID, ok := value.beginRequest(response)
+	if !ok {
+		return
+	}
+	if request.URL.RawQuery != "" {
+		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument, "Invalid argument", "application label mutation does not accept query parameters", false)
+		return
+	}
+	body, ok := decodeJSON[paasv1.SetApplicationLabelRequest](value, response, request, requestID)
+	if !ok {
+		return
+	}
+	if err := paasv1.ValidateSetApplicationLabelRequest(body); err != nil {
+		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument, "Invalid argument", "application label value is invalid", false)
+		return
+	}
+	expected, ok := parseIfMatch(response, request, requestID)
+	if !ok {
+		return
+	}
+	value.mutateApplicationLabel(response, request, requestID, applicationID,
+		port.AuthorizeApplicationLabelSet, &body.Value, expected)
+}
+
+func (value *handler) deleteApplicationLabel(response http.ResponseWriter, request *http.Request) {
+	applicationID, ok := pathResourceID(response, request, "applicationId")
+	if !ok {
+		return
+	}
+	requestID, ok := value.beginRequest(response)
+	if !ok {
+		return
+	}
+	if request.URL.RawQuery != "" || request.ContentLength > 0 || len(request.TransferEncoding) > 0 {
+		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument, "Invalid argument", "application label deletion does not accept query parameters or a request body", false)
+		return
+	}
+	expected, ok := parseIfMatch(response, request, requestID)
+	if !ok {
+		return
+	}
+	value.mutateApplicationLabel(response, request, requestID, applicationID,
+		port.AuthorizeApplicationLabelDelete, nil, expected)
+}
+
+func (value *handler) mutateApplicationLabel(
+	response http.ResponseWriter,
+	request *http.Request,
+	requestID string,
+	applicationID paasv1.ResourceID,
+	action iamv1.Action,
+	targetValue *string,
+	expectedResourceVersion uint64,
+) {
+	labelKey := request.PathValue("labelKey")
+	if port.ValidateApplicationLabelKeyForAction(action, labelKey) != nil {
+		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument, "Invalid argument", "application label key is not declared by the current PaaS Profile", false)
+		return
+	}
+	subjectRequest := port.SubjectResolutionRequest{Credential: request.Header.Get("Authorization")}
+	if port.ValidateSubjectResolutionRequest(subjectRequest) != nil {
+		writeAuthorizationError(response, requestID, port.ErrUnauthenticated)
+		return
+	}
+	subject, err := value.authorizer.ResolveSubject(request.Context(), subjectRequest)
+	if err != nil {
+		writeAuthorizationError(response, requestID, err)
+		return
+	}
+	if port.ValidateAuthorizationSubjectContext(subject) != nil {
+		writeAuthorizationError(response, requestID, port.ErrAuthorizationUnavailable)
+		return
+	}
+	snapshot, inspectErr := value.workflow.InspectApplicationAuthorization(request.Context(), subject, applicationID)
+	found := inspectErr == nil
+	if inspectErr != nil && !errors.Is(inspectErr, applicationlifecycle.ErrNotFound) {
+		writeWorkflowError(response, requestID, inspectErr)
+		return
+	}
+	var currentLabels map[string]string
+	if found {
+		currentLabels = snapshot.Labels
+	}
+	var requestedLabels map[string]string
+	if targetValue != nil {
+		requestedLabels = map[string]string{labelKey: *targetValue}
+	} else if currentValue, present := currentLabels[labelKey]; present {
+		requestedLabels = map[string]string{labelKey: currentValue}
+	}
+	authorization, ok := value.authorizeRequestWithLabels(response, request, requestID,
+		action, port.ResourceApplication, applicationID, iamv1.AuthorizationResourceInstance, "",
+		requestedLabels, currentLabels)
+	if !ok {
+		return
+	}
+	if port.ValidateAuthorizationForSubjectContext(authorization, subject) != nil {
+		writeAuthorizationError(response, requestID, port.ErrAuthorizationUnavailable)
+		return
+	}
+	if !found {
+		writeWorkflowError(response, requestID, applicationlifecycle.ErrNotFound)
+		return
+	}
+	var result applicationlifecycle.ApplicationLabelResult
+	if targetValue == nil {
+		result, err = value.workflow.DeleteApplicationLabel(request.Context(), applicationlifecycle.DeleteApplicationLabelCommand{
+			Authorization: authorization, ApplicationID: applicationID, LabelKey: labelKey,
+			ExpectedResourceVersion: expectedResourceVersion, IdempotencyKey: request.Header.Get("Idempotency-Key"),
+		})
+	} else {
+		result, err = value.workflow.SetApplicationLabel(request.Context(), applicationlifecycle.SetApplicationLabelCommand{
+			Authorization: authorization, ApplicationID: applicationID, LabelKey: labelKey, Value: *targetValue,
+			ExpectedResourceVersion: expectedResourceVersion, IdempotencyKey: request.Header.Get("Idempotency-Key"),
+		})
+	}
+	if err != nil {
+		writeWorkflowError(response, requestID, err)
+		return
+	}
+	writeOperation(response, http.StatusOK, "/v1/applications/"+string(applicationID), result.ResourceVersion, result.Operation)
 }
 
 func (value *handler) createConfiguration(response http.ResponseWriter, request *http.Request) {

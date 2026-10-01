@@ -26,6 +26,8 @@ const (
 
 const (
 	ApplicationCreated           = "paas.application.created"
+	ApplicationLabelUpdated      = "paas.application-label.updated"
+	ApplicationLabelDeleted      = "paas.application-label.deleted"
 	ConfigurationCreated         = "paas.configuration.created"
 	ConfigurationRevisionCreated = "paas.configuration-revision.created"
 	ApplicationRevisionCreated   = "paas.application-revision.created"

@@ -398,6 +398,7 @@ type fakeLifecycleTransaction struct {
 	loadedOperation            paasv1.Operation
 	loadedOperationFound       bool
 	resourceSubmission         *ResourceSubmission
+	applicationLabelSubmission *ApplicationLabelSubmission
 }
 
 func (transaction *fakeLifecycleTransaction) TransactionTime(context.Context) (time.Time, error) {
@@ -432,6 +433,13 @@ func (transaction *fakeLifecycleTransaction) LoadApplication(
 		return paasv1.Application{}, false, nil
 	}
 	return transaction.application, transaction.applicationFound, nil
+}
+
+func (transaction *fakeLifecycleTransaction) LoadApplicationForUpdate(
+	ctx context.Context,
+	id paasv1.ResourceID,
+) (paasv1.Application, bool, error) {
+	return transaction.LoadApplication(ctx, id)
 }
 
 func (transaction *fakeLifecycleTransaction) LoadConfiguration(
@@ -515,6 +523,16 @@ func (transaction *fakeLifecycleTransaction) CreateApplication(
 ) error {
 	transaction.application, transaction.applicationFound = value, true
 	transaction.resourceSubmission = &submission
+	return nil
+}
+
+func (transaction *fakeLifecycleTransaction) UpdateApplicationLabel(
+	_ context.Context,
+	submission ApplicationLabelSubmission,
+) error {
+	transaction.application = submission.Application
+	transaction.applicationFound = true
+	transaction.applicationLabelSubmission = &submission
 	return nil
 }
 

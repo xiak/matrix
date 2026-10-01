@@ -195,6 +195,73 @@ func TestHandlerBindsOnlyDeclaredApplicationLabelsBeforeIAM(t *testing.T) {
 	}
 }
 
+func TestHandlerMutatesApplicationLabelsWithCurrentAndRequestedEvidence(t *testing.T) {
+	authorizer := &fakeAuthorizer{}
+	workflow := &fakeWorkflow{inspectSnapshot: &applicationlifecycle.ApplicationAuthorizationSnapshot{
+		ID: "application-labels", ResourceVersion: 7,
+		Labels: map[string]string{"environment": "production", "team": "platform"},
+	}}
+	handler := mustHandler(t, authorizer, workflow)
+
+	set := jsonRequest(t, http.MethodPut, "/v1/applications/application-labels/labels/environment",
+		paasv1.SetApplicationLabelRequest{Value: "staging"})
+	set.Header.Set("Authorization", "Bearer opaque-credential")
+	set.Header.Set("Idempotency-Key", "set-application-environment")
+	set.Header.Set("If-Match", `"7"`)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, set)
+	if response.Code != http.StatusOK || workflow.setApplicationLabelCalls != 1 ||
+		workflow.setApplicationLabel.ApplicationID != "application-labels" ||
+		workflow.setApplicationLabel.LabelKey != "environment" || workflow.setApplicationLabel.Value != "staging" ||
+		workflow.setApplicationLabel.ExpectedResourceVersion != 7 ||
+		workflow.setApplicationLabel.IdempotencyKey != "set-application-environment" {
+		t.Fatalf("set label status=%d command=%#v body=%s", response.Code, workflow.setApplicationLabel, response.Body.String())
+	}
+	if authorizer.request.Action != port.AuthorizeApplicationLabelSet ||
+		!reflect.DeepEqual(authorizer.request.ResourceLabels, workflow.inspectSnapshot.Labels) ||
+		!reflect.DeepEqual(authorizer.request.RequestLabels, map[string]string{"environment": "staging"}) ||
+		!reflect.DeepEqual(workflow.setApplicationLabel.Authorization.ResourceTags, []iamv1.AuthorizationTag{{Key: "environment", Value: "production"}}) ||
+		!reflect.DeepEqual(workflow.setApplicationLabel.Authorization.RequestTags, []iamv1.AuthorizationTag{{Key: "environment", Value: "staging"}}) {
+		t.Fatalf("set label authorization request=%#v command=%#v", authorizer.request, workflow.setApplicationLabel)
+	}
+	if response.Header().Get("ETag") != `"8"` || response.Header().Get("Location") != "/v1/applications/application-labels" {
+		t.Fatalf("set label response headers=%#v", response.Header())
+	}
+
+	workflow.inspectSnapshot.ResourceVersion = 8
+	workflow.inspectSnapshot.Labels["environment"] = "staging"
+	deleteRequest := httptest.NewRequest(http.MethodDelete, "/v1/applications/application-labels/labels/environment", nil)
+	deleteRequest.Header.Set("Authorization", "Bearer opaque-credential")
+	deleteRequest.Header.Set("Idempotency-Key", "delete-application-environment")
+	deleteRequest.Header.Set("If-Match", `"8"`)
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, deleteRequest)
+	if response.Code != http.StatusOK || workflow.deleteApplicationLabelCalls != 1 ||
+		workflow.deleteApplicationLabel.ExpectedResourceVersion != 8 ||
+		authorizer.request.Action != port.AuthorizeApplicationLabelDelete ||
+		!reflect.DeepEqual(authorizer.request.RequestLabels, map[string]string{"environment": "staging"}) ||
+		!reflect.DeepEqual(workflow.deleteApplicationLabel.Authorization.RequestTags, []iamv1.AuthorizationTag{{Key: "environment", Value: "staging"}}) {
+		t.Fatalf("delete label status=%d request=%#v command=%#v body=%s", response.Code, authorizer.request, workflow.deleteApplicationLabel, response.Body.String())
+	}
+}
+
+func TestHandlerRejectsUndeclaredApplicationLabelBeforeIAM(t *testing.T) {
+	authorizer := &fakeAuthorizer{}
+	workflow := &fakeWorkflow{}
+	handler := mustHandler(t, authorizer, workflow)
+	request := jsonRequest(t, http.MethodPut, "/v1/applications/application-labels/labels/team",
+		paasv1.SetApplicationLabelRequest{Value: "platform"})
+	request.Header.Set("Authorization", "Bearer opaque-credential")
+	request.Header.Set("Idempotency-Key", "set-undeclared-label")
+	request.Header.Set("If-Match", `"1"`)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest || workflow.inspectApplicationCalls != 0 ||
+		workflow.setApplicationLabelCalls != 0 || authorizer.request.Action != "" {
+		t.Fatalf("undeclared label reached authority: status=%d request=%#v workflow=%#v", response.Code, authorizer.request, workflow)
+	}
+}
+
 func TestHandlerFailsClosedOnIAMDenialAndUnavailableError(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -587,21 +654,25 @@ func (authorizer *fakeAuthorizer) Authorize(
 }
 
 type fakeWorkflow struct {
-	createApplicationCalls   int
-	createApplicationCommand applicationlifecycle.CreateApplicationCommand
-	submitCalls              int
-	submitCommand            applicationlifecycle.SubmitCommand
-	rollbackCalls            int
-	rollbackCommand          applicationlifecycle.RollbackCommand
-	getApplicationCalls      int
-	inspectApplicationCalls  int
-	readAuthorization        port.Authorization
-	readID                   paasv1.ResourceID
-	inspectSubject           port.AuthorizationSubjectContext
-	inspectSnapshot          *applicationlifecycle.ApplicationAuthorizationSnapshot
-	inspectErr               error
-	getApplicationResult     *paasv1.Application
-	getApplicationErr        error
+	createApplicationCalls      int
+	createApplicationCommand    applicationlifecycle.CreateApplicationCommand
+	setApplicationLabelCalls    int
+	setApplicationLabel         applicationlifecycle.SetApplicationLabelCommand
+	deleteApplicationLabelCalls int
+	deleteApplicationLabel      applicationlifecycle.DeleteApplicationLabelCommand
+	submitCalls                 int
+	submitCommand               applicationlifecycle.SubmitCommand
+	rollbackCalls               int
+	rollbackCommand             applicationlifecycle.RollbackCommand
+	getApplicationCalls         int
+	inspectApplicationCalls     int
+	readAuthorization           port.Authorization
+	readID                      paasv1.ResourceID
+	inspectSubject              port.AuthorizationSubjectContext
+	inspectSnapshot             *applicationlifecycle.ApplicationAuthorizationSnapshot
+	inspectErr                  error
+	getApplicationResult        *paasv1.Application
+	getApplicationErr           error
 }
 
 type fakeInstallationVerifier struct {
@@ -628,6 +699,30 @@ func (workflow *fakeWorkflow) CreateApplication(
 	workflow.createApplicationCommand = command
 	resource := paasv1.Application{Metadata: testMetadata(command.Request.ID, command.Request.Name)}
 	return resource, testOperation("Application", resource.Metadata.ID, paasv1.OperationCreateApplication, paasv1.OperationSucceeded), false, nil
+}
+
+func (workflow *fakeWorkflow) SetApplicationLabel(
+	_ context.Context,
+	command applicationlifecycle.SetApplicationLabelCommand,
+) (applicationlifecycle.ApplicationLabelResult, error) {
+	workflow.setApplicationLabelCalls++
+	workflow.setApplicationLabel = command
+	return applicationlifecycle.ApplicationLabelResult{
+		Operation:       testOperation("Application", command.ApplicationID, paasv1.OperationSetApplicationLabel, paasv1.OperationSucceeded),
+		ResourceVersion: command.ExpectedResourceVersion + 1,
+	}, nil
+}
+
+func (workflow *fakeWorkflow) DeleteApplicationLabel(
+	_ context.Context,
+	command applicationlifecycle.DeleteApplicationLabelCommand,
+) (applicationlifecycle.ApplicationLabelResult, error) {
+	workflow.deleteApplicationLabelCalls++
+	workflow.deleteApplicationLabel = command
+	return applicationlifecycle.ApplicationLabelResult{
+		Operation:       testOperation("Application", command.ApplicationID, paasv1.OperationDeleteApplicationLabel, paasv1.OperationSucceeded),
+		ResourceVersion: command.ExpectedResourceVersion + 1,
+	}, nil
 }
 
 func (workflow *fakeWorkflow) CreateConfiguration(

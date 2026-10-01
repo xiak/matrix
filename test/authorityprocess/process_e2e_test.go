@@ -110,9 +110,9 @@ func TestRuntimeDSNBindsLeastPrivilegeLogin(t *testing.T) {
 func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	const variable = "MATRIX_IAM_PREDECESSOR_POSTGRES_TEST_DSN"
 	const databasePrefix = "matrix_iam_upgrade_predecessor_"
-	const source = "49aaf21657ef71cb83b1b9b51d835f3600f6ce9d"
-	const sourceSchema uint64 = 57
-	const currentSchema uint64 = 58
+	const source = "e3c137ba0ed80d8d90f893192d343d89d2d917f5"
+	const sourceSchema uint64 = 58
+	const currentSchema uint64 = 59
 	// Use credentials accepted by the immediate predecessor. This rolling
 	// pre-v1 gate proves only the current schema and its one fixed predecessor;
 	// superseded password-policy compatibility belongs to neither side.
@@ -337,7 +337,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	originalMail := mailState()
 	defer clear(originalMail)
 	// The exact predecessor must produce the contract this migration replaces:
-	// PaaS profile r4, decision contract6 and one trusted request tag. Building
+	// PaaS profile r5, decision contract7 and trusted request/resource tags. Building
 	// the fixture through the old executable proves historical bytes and proof
 	// interpretation, rather than manufacturing a row with the current code.
 	var oldPaaSProfileRevision uint64
@@ -380,8 +380,33 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	var retainedTagDecisionDocument []byte
 	var retainedTagContract uint64
 	if err := admin.QueryRow(ctx, `SELECT contract_version,document FROM iam.authorization_decisions WHERE id=$1`,
-		retainedTagDecision.ID).Scan(&retainedTagContract, &retainedTagDecisionDocument); err != nil || retainedTagContract != 6 {
-		t.Fatal("predecessor request-tag decision did not use contract6", err)
+		retainedTagDecision.ID).Scan(&retainedTagContract, &retainedTagDecisionDocument); err != nil || retainedTagContract != 7 {
+		t.Fatal("predecessor request-tag decision did not use contract7", err)
+	}
+	retainedResourceTagRequest := iamv1.AuthorizationRequest{
+		Action:   iamv1.ActionPaaSApplicationRead,
+		Resource: iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "retained-resource-tag-application"},
+		Profile: iamv1.AuthorizationProfileReference{Product: iamv1.ProductPaaS,
+			Revision: oldPaaSProfileRevision, ContentDigest: oldPaaSProfileDigest},
+		ResourceMode: iamv1.AuthorizationResourceInstance,
+		ResourceTags: []iamv1.AuthorizationTag{{Key: "environment", Value: "production"}},
+		RequestID:    "retained-resource-tag-decision", CorrelationID: "retained-resource-tag-decision",
+	}
+	retainedResourceTagResponse := performJSONWithHeaders(t, http.MethodPost, endpoint+"/v1/authorize",
+		paasServiceCredential, "", retainedResourceTagRequest, map[string]string{"Matrix-Subject-Credential": b.Credential})
+	var retainedResourceTagDecision iamv1.AuthorizationDecision
+	if retainedResourceTagResponse.Status != http.StatusOK || json.Unmarshal(retainedResourceTagResponse.Body, &retainedResourceTagDecision) != nil ||
+		iamv1.ValidateAuthorizationDecisionForProfile(retainedResourceTagDecision, oldPaaSProfile) != nil ||
+		!retainedResourceTagDecision.Allowed || retainedResourceTagDecision.Subject == nil ||
+		retainedResourceTagDecision.Subject.ID != string(member.ID) {
+		t.Fatalf("actual predecessor did not issue its resource-tag decision: status=%d body=%s",
+			retainedResourceTagResponse.Status, retainedResourceTagResponse.Body)
+	}
+	var retainedResourceTagDecisionDocument []byte
+	var retainedResourceTagContract uint64
+	if err := admin.QueryRow(ctx, `SELECT contract_version,document FROM iam.authorization_decisions WHERE id=$1`,
+		retainedResourceTagDecision.ID).Scan(&retainedResourceTagContract, &retainedResourceTagDecisionDocument); err != nil || retainedResourceTagContract != 7 {
+		t.Fatal("predecessor resource-tag decision did not use contract7", err)
 	}
 	retainedTagFact := auditv1.Event{APIVersion: auditv1.APIVersion, Kind: "AuditEvent",
 		EventID: "retained-request-tag-event", TenantID: auditv1.TenantID(retainedTagDecision.TenantID),
@@ -394,7 +419,7 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	retainedTagProof := performJSON(t, http.MethodPost, endpoint+"/v1/audit-producer:resolve",
 		paasServiceCredential, iamv1.ResolveAuditProducerRequest{Event: retainedTagFact})
 	if retainedTagProof.Status != http.StatusOK {
-		t.Fatalf("predecessor could not prove its contract6 request-tag fact: status=%d body=%s",
+		t.Fatalf("predecessor could not prove its contract7 request-tag fact: status=%d body=%s",
 			retainedTagProof.Status, retainedTagProof.Body)
 	}
 	var originalIAMProfileRevision uint64
@@ -488,8 +513,10 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	}
 	if err := admin.QueryRow(ctx, `SELECT (SELECT is_called FROM public.iam_predecessor_fault_seen)
 	 AND (SELECT schema_version=$1 AND ready FROM iam.readiness())
-	 AND to_regprocedure('iam.authorization_tags_valid(jsonb)') IS NULL
-	 AND iam.authentication_recovery_contract_ready()`, sourceSchema).Scan(&untouched); err != nil || !untouched ||
+	 AND EXISTS(SELECT 1 FROM iam.authorization_profile_heads h JOIN iam.authorization_profiles p
+	   ON (p.product,p.revision)=(h.product,h.revision)
+	   WHERE h.product='paas' AND h.revision=$2 AND p.content_digest=$3)
+	 AND iam.authentication_recovery_contract_ready()`, sourceSchema, oldPaaSProfileRevision, oldPaaSProfileDigest).Scan(&untouched); err != nil || !untouched ||
 		!bytes.Equal(originalState, identityState()) || !bytes.Equal(originalMail, mailState()) {
 		t.Fatal("failed cutover partially changed retained authority")
 	}
@@ -514,11 +541,18 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 	current := start(currentBinary, currentSchema)
 	var migratedTagDecisionDocument []byte
 	var migratedTagContract uint64
+	var migratedResourceTagDecisionDocument []byte
+	var migratedResourceTagContract uint64
 	var migratedPaaSProfileDocument, migratedPaaSProfileDigest string
 	if err := admin.QueryRow(ctx, `SELECT contract_version,document FROM iam.authorization_decisions WHERE id=$1`,
 		retainedTagDecision.ID).Scan(&migratedTagContract, &migratedTagDecisionDocument); err != nil ||
-		migratedTagContract != 6 || !bytes.Equal(migratedTagDecisionDocument, retainedTagDecisionDocument) {
-		t.Fatal("migration rewrote the predecessor contract6 request-tag decision", err)
+		migratedTagContract != 7 || !bytes.Equal(migratedTagDecisionDocument, retainedTagDecisionDocument) {
+		t.Fatal("migration rewrote the predecessor contract7 request-tag decision", err)
+	}
+	if err := admin.QueryRow(ctx, `SELECT contract_version,document FROM iam.authorization_decisions WHERE id=$1`,
+		retainedResourceTagDecision.ID).Scan(&migratedResourceTagContract, &migratedResourceTagDecisionDocument); err != nil ||
+		migratedResourceTagContract != 7 || !bytes.Equal(migratedResourceTagDecisionDocument, retainedResourceTagDecisionDocument) {
+		t.Fatal("migration rewrote the predecessor contract7 resource-tag decision", err)
 	}
 	if err := admin.QueryRow(ctx, `SELECT canonical_document,content_digest FROM iam.authorization_profiles
 		WHERE product='paas' AND revision=$1`, oldPaaSProfileRevision).Scan(
@@ -1241,7 +1275,7 @@ func prepareRetainedSecuritySettingsProcesses(t *testing.T, ctx context.Context,
 				 FROM iam.accounts WHERE id=$1`, tenant).Scan(&exact); err != nil || !exact {
 				t.Fatal("restart lost or duplicated predecessor settings lineage", err)
 			}
-			t.Log("actual IAM57 complete security settings and Session-bound StepUp survived IAM58 migration; another Session was rejected, the original proof completed once, and restart preserved both immutable completions")
+			t.Log("actual IAM58 complete security settings and Session-bound StepUp survived IAM59 migration; another Session was rejected, the original proof completed once, and restart preserved both immutable completions")
 		}
 	}
 }
@@ -1719,7 +1753,7 @@ func proveFrozenFamilyProfileAdvance(t *testing.T, ctx context.Context, admin *p
 	// condition in the future build. Even a resource-nonmatching old Deny must
 	// then fail closed, rather than disappear behind another Allow.
 	replacement, err := parser.ParseExpr(fmt.Sprintf(`func() AuthorizationProfile {
-		profile := paasProfileRevisionFive
+		profile := paasProfileRevisionSix
 		profile.Revision = %d
 		var added AuthorizationProfileAction
 		for index, action := range profile.Actions {
@@ -1750,7 +1784,7 @@ func proveFrozenFamilyProfileAdvance(t *testing.T, ctx context.Context, admin *p
 		}
 		for index, element := range catalog.Elts {
 			current, ok := element.(*ast.Ident)
-			if ok && current.Name == "paasProfileRevisionFive" {
+			if ok && current.Name == "paasProfileRevisionSix" {
 				catalog.Elts[index] = replacement
 				replaced++
 			}
@@ -2225,7 +2259,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	// Exercise the exact source services together without weakening install
 	// admission: the workflow separately proves the published installer rejects
 	// this unmatched database shape before effects.
-	sourceProfile := installationrelease.AuthoritySchemas{IAM: 58, Audit: 30, PaaS: 2}
+	sourceProfile := installationrelease.AuthoritySchemas{IAM: 59, Audit: 31, PaaS: 3}
 	publishedProfile := installationrelease.CurrentDatabaseProfile()
 	if publishedProfile.Authorities == sourceProfile {
 		t.Fatal("unreleased authority source shape was published without a final profile gate")
@@ -2524,6 +2558,8 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	createPaaSApplication(t, paasEndpoint, developerLogin.Credential, "application-nonprefix", "nonprefix-application", "create-application-nonprefix", http.StatusCreated)
 	createPaaSApplicationWithLabels(t, paasEndpoint, developerLogin.Credential, "application-staging", "staging-application", "create-application-staging",
 		map[string]string{"environment": "staging", "team": "platform"}, http.StatusCreated)
+	createPaaSApplicationWithLabels(t, paasEndpoint, developerLogin.Credential, "application-label-mutation", "label-mutation-application", "create-application-label-mutation",
+		map[string]string{"environment": "production", "team": "platform"}, http.StatusCreated)
 	if developerOperation.Scope != (paasv1.ResourceScope{
 		Kind: paasv1.AuthorityTenant, TenantID: "organization-process",
 	}) || developerOperation.RequestedBy != (paasv1.SubjectRef{
@@ -2585,6 +2621,26 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	}
 	resourceTagAttachment := createIAMPolicyAttachment(t, iamEndpoint, adminLogin.Credential, developer.ID,
 		resourceTagPolicy.Policy.ID, "request-process-resource-tag-attach")
+	labelMutationPolicyResponse := performJSON(t, http.MethodPost, replicaEndpoint+"/v1/policies", adminLogin.Credential,
+		iamv1.CreatePolicyRequest{DisplayName: "Move and remove application environment", RequestID: "request-process-label-mutation-policy",
+			Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+				Statements: []iamv1.PolicyStatement{
+					{SID: "move-production-to-staging", Effect: iamv1.PolicyAllow,
+						Actions: []iamv1.Action{iamv1.ActionPaaSApplicationLabelSet}, Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceAnyInAuthority}},
+						Conditions: []iamv1.PolicyCondition{{Key: resourceTagKey, Operator: iamv1.PolicyStringEquals, Values: []string{"production"}}, {Key: tagKey, Operator: iamv1.PolicyStringEquals, Values: []string{"staging"}}}},
+					{SID: "remove-staging", Effect: iamv1.PolicyAllow,
+						Actions: []iamv1.Action{iamv1.ActionPaaSApplicationLabelDelete}, Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceAnyInAuthority}},
+						Conditions: []iamv1.PolicyCondition{{Key: resourceTagKey, Operator: iamv1.PolicyStringEquals, Values: []string{"staging"}}, {Key: tagKey, Operator: iamv1.PolicyStringEquals, Values: []string{"staging"}}}},
+					{SID: "detect-staging-replay-variant", Effect: iamv1.PolicyAllow,
+						Actions: []iamv1.Action{iamv1.ActionPaaSApplicationLabelSet}, Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceAnyInAuthority}},
+						Conditions: []iamv1.PolicyCondition{{Key: resourceTagKey, Operator: iamv1.PolicyStringEquals, Values: []string{"staging"}}, {Key: tagKey, Operator: iamv1.PolicyStringEquals, Values: []string{"staging"}}}},
+				}}})
+	var labelMutationPolicy iamv1.PolicyDetail
+	if labelMutationPolicyResponse.Status != http.StatusCreated || json.Unmarshal(labelMutationPolicyResponse.Body, &labelMutationPolicy) != nil || iamv1.ValidatePolicyDetail(labelMutationPolicy) != nil {
+		t.Fatalf("label-mutation policy publication status=%d body=%s", labelMutationPolicyResponse.Status, labelMutationPolicyResponse.Body)
+	}
+	labelMutationAttachment := createIAMPolicyAttachment(t, replicaEndpoint, adminLogin.Credential, developer.ID,
+		labelMutationPolicy.Policy.ID, "request-process-label-mutation-attach")
 	readTaggedApplication := func(id string, want int, headers map[string]string) string {
 		t.Helper()
 		response := performJSONWithHeaders(t, http.MethodGet, paasEndpoint+"/v1/applications/"+id,
@@ -2598,6 +2654,58 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		}
 		return requestID
 	}
+	setLabel := performJSONWithHeaders(t, http.MethodPut,
+		paasEndpoint+"/v1/applications/application-label-mutation/labels/environment", developerLogin.Credential,
+		"set-process-application-environment", paasv1.SetApplicationLabelRequest{Value: "staging"}, map[string]string{"If-Match": `"1"`})
+	var setLabelOperation paasv1.Operation
+	if setLabel.Status != http.StatusOK || json.Unmarshal(setLabel.Body, &setLabelOperation) != nil ||
+		paasv1.ValidateOperation(setLabelOperation) != nil || setLabelOperation.Action != paasv1.OperationSetApplicationLabel ||
+		setLabel.Header.Get("ETag") != `"2"` || setLabel.Header.Get("Location") != "/v1/applications/application-label-mutation" {
+		t.Fatalf("set application label status=%d headers=%v body=%s", setLabel.Status, setLabel.Header, setLabel.Body)
+	}
+	setLabelReplay := performJSONWithHeaders(t, http.MethodPut,
+		paasEndpoint+"/v1/applications/application-label-mutation/labels/environment", developerLogin.Credential,
+		"set-process-application-environment", paasv1.SetApplicationLabelRequest{Value: "staging"}, map[string]string{"If-Match": `"1"`})
+	var replayedLabelOperation paasv1.Operation
+	if setLabelReplay.Status != http.StatusOK || json.Unmarshal(setLabelReplay.Body, &replayedLabelOperation) != nil ||
+		replayedLabelOperation.ID != setLabelOperation.ID || setLabelReplay.Header.Get("ETag") != `"2"` {
+		t.Fatalf("replay application label status=%d headers=%v body=%s", setLabelReplay.Status, setLabelReplay.Header, setLabelReplay.Body)
+	}
+	changedLabelReplay := performJSONWithHeaders(t, http.MethodPut,
+		paasEndpoint+"/v1/applications/application-label-mutation/labels/environment", developerLogin.Credential,
+		"set-process-application-environment", paasv1.SetApplicationLabelRequest{Value: "staging"}, map[string]string{"If-Match": `"2"`})
+	if changedLabelReplay.Status != http.StatusConflict {
+		t.Fatalf("changed application label replay status=%d body=%s", changedLabelReplay.Status, changedLabelReplay.Body)
+	}
+	readTaggedApplication("application-label-mutation", http.StatusForbidden, nil)
+	deleteLabel := performJSONWithHeaders(t, http.MethodDelete,
+		paasEndpoint+"/v1/applications/application-label-mutation/labels/environment", developerLogin.Credential,
+		"delete-process-application-environment", nil, map[string]string{"If-Match": `"2"`})
+	var deleteLabelOperation paasv1.Operation
+	if deleteLabel.Status != http.StatusOK || json.Unmarshal(deleteLabel.Body, &deleteLabelOperation) != nil ||
+		paasv1.ValidateOperation(deleteLabelOperation) != nil || deleteLabelOperation.Action != paasv1.OperationDeleteApplicationLabel ||
+		deleteLabel.Header.Get("ETag") != `"3"` {
+		t.Fatalf("delete application label status=%d headers=%v body=%s", deleteLabel.Status, deleteLabel.Header, deleteLabel.Body)
+	}
+	readTaggedApplication("application-label-mutation", http.StatusForbidden, nil)
+	waitAllIAMOutboxDelivered(t, ctx, admin)
+	waitAllPaaSOutboxDelivered(t, ctx, admin)
+	assertPaaSAuditFact(t, ctx, admin, auditv1.ActionPaaSApplicationLabelUpdated, "application-label-mutation", string(developer.ID))
+	assertPaaSAuditFact(t, ctx, admin, auditv1.ActionPaaSApplicationLabelDeleted, "application-label-mutation", string(developer.ID))
+	var labelDecisionsBound bool
+	if err := admin.QueryRow(ctx, `SELECT
+		EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id='organization-process' AND principal_id=$1
+		 AND action_name='paas.application-label.set' AND allowed
+		 AND document->'resourceTags'='[{"key":"environment","value":"production"}]'::jsonb
+		 AND document->'requestTags'='[{"key":"environment","value":"staging"}]'::jsonb)
+		AND EXISTS(SELECT 1 FROM iam.authorization_decisions WHERE tenant_id='organization-process' AND principal_id=$1
+		 AND action_name='paas.application-label.delete' AND allowed
+		 AND document->'resourceTags'='[{"key":"environment","value":"staging"}]'::jsonb
+		 AND document->'requestTags'='[{"key":"environment","value":"staging"}]'::jsonb)`, developer.ID).Scan(&labelDecisionsBound); err != nil || !labelDecisionsBound {
+		t.Fatal("independent PaaS and IAM processes did not bind current and requested label facts", err)
+	}
+	revokeIAMPolicyAttachment(t, iamEndpoint, adminLogin.Credential, labelMutationAttachment.ID,
+		labelMutationAttachment.ResourceVersion, "request-process-label-mutation-revoke")
 	productionRead := readTaggedApplication("application-process", http.StatusOK, nil)
 	stagingRead := readTaggedApplication("application-staging", http.StatusForbidden,
 		map[string]string{"Matrix-Resource-Tag-Environment": "production"})

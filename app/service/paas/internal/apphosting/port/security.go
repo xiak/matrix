@@ -20,6 +20,8 @@ var (
 const (
 	AuthorizeApplicationCreate           = iamv1.ActionPaaSApplicationCreate
 	AuthorizeApplicationRead             = iamv1.ActionPaaSApplicationRead
+	AuthorizeApplicationLabelSet         = iamv1.ActionPaaSApplicationLabelSet
+	AuthorizeApplicationLabelDelete      = iamv1.ActionPaaSApplicationLabelDelete
 	AuthorizeConfigurationCreate         = iamv1.ActionPaaSConfigurationCreate
 	AuthorizeConfigurationRead           = iamv1.ActionPaaSConfigurationRead
 	AuthorizeConfigurationRevisionCreate = iamv1.ActionPaaSConfigurationRevisionCreate
@@ -113,10 +115,12 @@ func NewIAMAuthorizationRequest(value AuthorizationRequest) (iamv1.Authorization
 	if !isAppHostingAction(value.Action) {
 		return iamv1.AuthorizationRequest{}, errors.New("authorization action is outside apphosting")
 	}
-	if value.RequestLabels != nil && value.Action != AuthorizeApplicationCreate {
+	if value.RequestLabels != nil && value.Action != AuthorizeApplicationCreate &&
+		value.Action != AuthorizeApplicationLabelSet && value.Action != AuthorizeApplicationLabelDelete {
 		return iamv1.AuthorizationRequest{}, errors.New("authorization labels are outside application creation")
 	}
-	if value.ResourceLabels != nil && value.Action != AuthorizeApplicationRead {
+	if value.ResourceLabels != nil && value.Action != AuthorizeApplicationRead &&
+		value.Action != AuthorizeApplicationLabelSet && value.Action != AuthorizeApplicationLabelDelete {
 		return iamv1.AuthorizationRequest{}, errors.New("authorization resource labels are outside application read")
 	}
 	if err := paasv1.ValidateLabels(value.RequestLabels); err != nil {
@@ -158,6 +162,7 @@ func NewIAMAuthorizationRequest(value AuthorizationRequest) (iamv1.Authorization
 func isAppHostingAction(value iamv1.Action) bool {
 	switch value {
 	case AuthorizeApplicationCreate, AuthorizeApplicationRead,
+		AuthorizeApplicationLabelSet, AuthorizeApplicationLabelDelete,
 		AuthorizeConfigurationCreate, AuthorizeConfigurationRead,
 		AuthorizeConfigurationRevisionCreate, AuthorizeConfigurationRevisionRead,
 		AuthorizeApplicationRevisionCreate, AuthorizeApplicationRevisionRead,
@@ -215,6 +220,23 @@ func ValidateAuthorizationTagsForAction(value Authorization, action iamv1.Action
 func ValidateAuthorizationResourceTagsForAction(value Authorization, action iamv1.Action, labels map[string]string) error {
 	if err := paasv1.ValidateLabels(labels); err != nil || iamv1.CheckAuthorizationResourceTagsForAction(value.ResourceTags, action, labels) != nil {
 		return errors.New("IAM authorization resource tags mismatch")
+	}
+	return nil
+}
+
+func ValidateApplicationLabelKeyForAction(action iamv1.Action, key string) error {
+	if action != AuthorizeApplicationLabelSet && action != AuthorizeApplicationLabelDelete {
+		return errors.New("action is not an application label mutation")
+	}
+	requestKey, requestErr := iamv1.NewRequestTagConditionKey(key)
+	resourceKey, resourceErr := iamv1.NewResourceTagConditionKey(key)
+	requestDefinition, requestDeclared := iamv1.LookupActionConditionDefinition(action, requestKey)
+	resourceDefinition, resourceDeclared := iamv1.LookupActionConditionDefinition(action, resourceKey)
+	if requestErr != nil || resourceErr != nil || !requestDeclared || !resourceDeclared ||
+		requestDefinition.Source != iamv1.ConditionCallingServiceRequestTag ||
+		resourceDefinition.Source != iamv1.ConditionCallingServiceResourceTag ||
+		requestDefinition.ValueType != iamv1.ConditionString || resourceDefinition.ValueType != iamv1.ConditionString {
+		return errors.New("application label key is not declared by the PaaS Profile")
 	}
 	return nil
 }

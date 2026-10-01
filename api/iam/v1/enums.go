@@ -276,6 +276,8 @@ const (
 
 	ActionPaaSApplicationCreate           Action = "paas.application.create"
 	ActionPaaSApplicationRead             Action = "paas.application.read"
+	ActionPaaSApplicationLabelSet         Action = "paas.application-label.set"
+	ActionPaaSApplicationLabelDelete      Action = "paas.application-label.delete"
 	ActionPaaSConfigurationCreate         Action = "paas.configuration.create"
 	ActionPaaSConfigurationRead           Action = "paas.configuration.read"
 	ActionPaaSConfigurationRevisionCreate Action = "paas.configuration-revision.create"
@@ -452,7 +454,7 @@ func AllServicePurposes() []ServicePurpose {
 // editable source. Product revision changes must accompany changed declarations.
 var authorizationProfiles = [...]AuthorizationProfile{
 	iamServiceRoleProfile(),
-	paasProfileRevisionFive,
+	paasProfileRevisionSix,
 	managedServiceProfileRevisionFour,
 	roleBusinessProfile(auditProfileRevisionOne),
 	declaredProductProfile(ProductInstallation, ServiceInstallationVerifier, 1,
@@ -506,7 +508,7 @@ var iamProfileRevisionOne = declaredProductProfile(ProductIAM, ServiceIAM, 1,
 )
 
 func HistoricalAuthorizationProfiles() []AuthorizationProfile {
-	return []AuthorizationProfile{cloneAuthorizationProfile(iamProfileRevisionOne), iamRoleManagementProfile(), iamRoleSessionProfile(), iamRoleSessionManagementProfile(), iamAccessKeyManagementProfile(), iamSecuritySettingsReadProfile(), iamSecuritySettingsProfile(), cloneAuthorizationProfile(paasProfileRevisionOne), cloneAuthorizationProfile(paasProfileRevisionTwo), cloneAuthorizationProfile(paasProfileRevisionThree), cloneAuthorizationProfile(paasProfileRevisionFour), cloneAuthorizationProfile(managedServiceProfileRevisionOne), cloneAuthorizationProfile(managedServiceProfileRevisionTwo), cloneAuthorizationProfile(managedServiceProfileRevisionThree), cloneAuthorizationProfile(auditProfileRevisionOne)}
+	return []AuthorizationProfile{cloneAuthorizationProfile(iamProfileRevisionOne), iamRoleManagementProfile(), iamRoleSessionProfile(), iamRoleSessionManagementProfile(), iamAccessKeyManagementProfile(), iamSecuritySettingsReadProfile(), iamSecuritySettingsProfile(), cloneAuthorizationProfile(paasProfileRevisionOne), cloneAuthorizationProfile(paasProfileRevisionTwo), cloneAuthorizationProfile(paasProfileRevisionThree), cloneAuthorizationProfile(paasProfileRevisionFour), cloneAuthorizationProfile(paasProfileRevisionFive), cloneAuthorizationProfile(managedServiceProfileRevisionOne), cloneAuthorizationProfile(managedServiceProfileRevisionTwo), cloneAuthorizationProfile(managedServiceProfileRevisionThree), cloneAuthorizationProfile(auditProfileRevisionOne)}
 }
 
 // Revision one remains archived because compiled policy content and decisions
@@ -559,6 +561,7 @@ var paasProfileRevisionTwo = roleBusinessProfile(paasProfileRevisionOne)
 var paasProfileRevisionThree = networkConditionProfile(paasProfileRevisionTwo)
 var paasProfileRevisionFour = applicationRequestTagProfile(paasProfileRevisionThree)
 var paasProfileRevisionFive = applicationResourceTagProfile(paasProfileRevisionFour)
+var paasProfileRevisionSix = applicationLabelMutationProfile(paasProfileRevisionFive)
 
 var auditProfileRevisionOne = declaredProductProfile(ProductAudit, ServiceAudit, 1,
 	declaredProfileAction(ActionAuditRecordRead, ResourceAuditRecord, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}),
@@ -683,6 +686,40 @@ func applicationResourceTagProfile(previous AuthorizationProfile) AuthorizationP
 		return profile
 	}
 	panic("PaaS application read declaration is missing")
+}
+
+// applicationLabelMutationProfile declares two write operations over the
+// product-owned Application. Both operations bind the current resource label
+// and the exact requested label pair; the PEP, not IAM or the caller, derives
+// the pair being removed for delete.
+func applicationLabelMutationProfile(previous AuthorizationProfile) AuthorizationProfile {
+	profile := cloneAuthorizationProfile(previous)
+	profile.Revision++
+	requestKey, err := NewRequestTagConditionKey("environment")
+	if err != nil {
+		panic("invalid release-owned application label request tag")
+	}
+	resourceKey, err := NewResourceTagConditionKey("environment")
+	if err != nil {
+		panic("invalid release-owned application label resource tag")
+	}
+	requestDefinition, requestKnown := lookupConditionDefinition(requestKey)
+	resourceDefinition, resourceKnown := lookupConditionDefinition(resourceKey)
+	networkDefinition, networkKnown := lookupConditionDefinition(ConditionRequestSourceIP)
+	if !requestKnown || !resourceKnown || !networkKnown {
+		panic("invalid release-owned application label conditions")
+	}
+	for _, action := range []Action{ActionPaaSApplicationLabelSet, ActionPaaSApplicationLabelDelete} {
+		declaration := declaredProfileAction(action, ResourceApplication, AuthorityScopeTenant, "",
+			[]AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}})
+		declaration.SubjectTypes = []SubjectType{SubjectRole, SubjectUser}
+		declaration.Conditions = append(declaration.Conditions,
+			AuthorizationProfileCondition{Key: networkDefinition.Key, ValueType: networkDefinition.ValueType, Source: networkDefinition.Source},
+			AuthorizationProfileCondition{Key: resourceDefinition.Key, ValueType: resourceDefinition.ValueType, Source: resourceDefinition.Source},
+			AuthorizationProfileCondition{Key: requestDefinition.Key, ValueType: requestDefinition.ValueType, Source: requestDefinition.Source})
+		profile.Actions = append(profile.Actions, declaration)
+	}
+	return profile
 }
 
 func iamRoleManagementProfile() AuthorizationProfile {

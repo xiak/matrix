@@ -57,6 +57,7 @@ func TestRoleActorLineageIsStrictAndFactBound(t *testing.T) {
 		t.Fatal("another session became the same actor")
 	}
 	permitted := map[Action]bool{ActionIAMAuthorizationDecided: true, ActionIAMRoleSessionExited: true, ActionPaaSApplicationCreated: true, ActionPaaSConfigurationCreated: true,
+		ActionPaaSApplicationLabelUpdated: true, ActionPaaSApplicationLabelDeleted: true,
 		ActionPaaSConfigurationRevisionCreated: true, ActionPaaSApplicationRevisionCreated: true, ActionPaaSDeploymentCreated: true,
 		ActionPaaSDeploymentUpdated: true, ActionPaaSDeploymentStopped: true, ActionPaaSDeploymentRolledBack: true, ActionAuditRecordsRead: true, ActionAuditIntegrityVerified: true}
 	eventSchema := compileAuditOpenAPISchema(t, loadAuditOpenAPI(t), "Event")
@@ -149,6 +150,7 @@ func TestAccessKeyActorIsStrictAndOnlyAdmittedByClosedFacts(t *testing.T) {
 		}
 	}
 	permitted := map[Action]bool{ActionIAMAuthorizationDecided: true, ActionPaaSApplicationCreated: true, ActionPaaSConfigurationCreated: true,
+		ActionPaaSApplicationLabelUpdated: true, ActionPaaSApplicationLabelDeleted: true,
 		ActionPaaSConfigurationRevisionCreated: true, ActionPaaSApplicationRevisionCreated: true, ActionPaaSDeploymentCreated: true,
 		ActionPaaSDeploymentUpdated: true, ActionPaaSDeploymentStopped: true, ActionPaaSDeploymentRolledBack: true, ActionAuditRecordsRead: true, ActionAuditIntegrityVerified: true}
 	eventSchema := compileAuditOpenAPISchema(t, document, "Event")

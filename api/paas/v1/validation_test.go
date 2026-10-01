@@ -7,6 +7,19 @@ import (
 	"time"
 )
 
+func TestValidateSetApplicationLabelRequest(t *testing.T) {
+	for _, value := range []string{"production", "staging-blue"} {
+		if err := ValidateSetApplicationLabelRequest(SetApplicationLabelRequest{Value: value}); err != nil {
+			t.Fatalf("valid application label value %q rejected: %v", value, err)
+		}
+	}
+	for _, value := range []string{"", " staging", "staging ", "line\nbreak"} {
+		if err := ValidateSetApplicationLabelRequest(SetApplicationLabelRequest{Value: value}); err == nil {
+			t.Fatalf("invalid application label value %q accepted", value)
+		}
+	}
+}
+
 func TestUsageValuesCannotHideMissingSamplesOrRenewExpiredMeasurements(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	value := ExecutionTargetUsage{

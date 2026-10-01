@@ -352,6 +352,8 @@ CREATE TABLE IF NOT EXISTS paas.operations (
             'CREATE_CONFIGURATION',
             'CREATE_CONFIGURATION_REVISION',
             'CREATE_APPLICATION_REVISION',
+            'SET_APPLICATION_LABEL',
+            'DELETE_APPLICATION_LABEL',
             'DEPLOY',
             'UPDATE',
             'STOP',
@@ -521,6 +523,8 @@ ALTER TABLE paas.operations
             'CREATE_CONFIGURATION',
             'CREATE_CONFIGURATION_REVISION',
             'CREATE_APPLICATION_REVISION',
+            'SET_APPLICATION_LABEL',
+            'DELETE_APPLICATION_LABEL',
             'DEPLOY',
             'UPDATE',
             'STOP',
@@ -1098,6 +1102,8 @@ BEGIN
             THEN 'paas.configuration-revision.created'
         WHEN 'CREATE_APPLICATION_REVISION'
             THEN 'paas.application-revision.created'
+        WHEN 'SET_APPLICATION_LABEL' THEN 'paas.application-label.updated'
+        WHEN 'DELETE_APPLICATION_LABEL' THEN 'paas.application-label.deleted'
         WHEN 'DEPLOY' THEN 'paas.deployment.created'
         WHEN 'UPDATE' THEN 'paas.deployment.updated'
         WHEN 'STOP' THEN 'paas.deployment.stopped'
@@ -1109,7 +1115,9 @@ BEGIN
             'CREATE_APPLICATION',
             'CREATE_CONFIGURATION',
             'CREATE_CONFIGURATION_REVISION',
-            'CREATE_APPLICATION_REVISION'
+            'CREATE_APPLICATION_REVISION',
+            'SET_APPLICATION_LABEL',
+            'DELETE_APPLICATION_LABEL'
         ) THEN 'SUCCEEDED'
         ELSE 'ACCEPTED'
     END;
@@ -1327,6 +1335,217 @@ $function$;
 REVOKE ALL ON FUNCTION paas.create_apphosting_resource(jsonb, jsonb, jsonb)
     FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION paas.create_apphosting_resource(jsonb, jsonb, jsonb)
+    TO matrix_paas_api;
+
+CREATE OR REPLACE FUNCTION paas.load_application_for_update(requested_id text)
+RETURNS TABLE (resource_version bigint, document jsonb)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_tenant_id text;
+BEGIN
+    effective_tenant_id := paas.current_tenant_id();
+    IF effective_tenant_id IS NULL THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '42501',
+            MESSAGE = 'valid transaction-local tenant context is required';
+    END IF;
+    IF requested_id IS NULL
+       OR requested_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'Application id is invalid';
+    END IF;
+    RETURN QUERY
+    SELECT application.resource_version, application.document
+      FROM paas.applications AS application
+     WHERE application.tenant_id = effective_tenant_id
+       AND application.id = requested_id
+     FOR UPDATE;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.load_application_for_update(text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paas.load_application_for_update(text)
+    TO matrix_paas_api;
+
+CREATE OR REPLACE FUNCTION paas.update_application_label(
+    submitted_resource jsonb,
+    submitted_operation jsonb,
+    submitted_audit_event jsonb,
+    expected_resource_version bigint
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_tenant_id text;
+    effective_now timestamptz(6);
+    resource_id text;
+    operation_id text;
+    operation_action text;
+    current_resource_version bigint;
+    current_document jsonb;
+    current_labels jsonb;
+    submitted_labels jsonb;
+    changed_label_key text;
+    changed_label_count bigint;
+BEGIN
+    effective_tenant_id := paas.current_tenant_id();
+    effective_now := transaction_timestamp();
+    IF effective_tenant_id IS NULL THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '42501',
+            MESSAGE = 'valid transaction-local tenant context is required';
+    END IF;
+    IF jsonb_typeof(submitted_resource) <> 'object'
+       OR jsonb_typeof(submitted_operation) <> 'object'
+       OR jsonb_typeof(submitted_audit_event) <> 'object'
+       OR expected_resource_version IS NULL
+       OR expected_resource_version NOT BETWEEN 1 AND 9007199254740990 THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'Application label submission is invalid';
+    END IF;
+
+    resource_id := submitted_resource#>>'{metadata,id}';
+    operation_id := submitted_operation->>'id';
+    operation_action := submitted_operation->>'action';
+    IF submitted_resource->>'apiVersion' <> 'paas.matrix.xiak.com/v1'
+       OR submitted_resource->>'kind' <> 'Application'
+       OR COALESCE(resource_id, '') COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR submitted_resource#>>'{metadata,scope,kind}' <> 'TENANT'
+       OR submitted_resource#>>'{metadata,scope,tenantId}' <> effective_tenant_id
+       OR (CASE
+            WHEN submitted_resource#>>'{metadata,resourceVersion}' ~ '^[1-9][0-9]*$'
+            THEN (submitted_resource#>>'{metadata,resourceVersion}')::numeric
+                    <> expected_resource_version + 1
+            ELSE true
+          END)
+       OR COALESCE(operation_id, '') COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR submitted_operation->>'apiVersion' <> 'paas.matrix.xiak.com/v1'
+       OR submitted_operation->>'kind' <> 'Operation'
+       OR submitted_operation#>>'{scope,kind}' <> 'TENANT'
+       OR submitted_operation#>>'{scope,tenantId}' <> effective_tenant_id
+       OR operation_action NOT IN ('SET_APPLICATION_LABEL', 'DELETE_APPLICATION_LABEL')
+       OR submitted_operation#>>'{target,kind}' <> 'Application'
+       OR submitted_operation#>>'{target,id}' <> resource_id
+       OR submitted_operation->>'idempotencyFingerprint' COLLATE "C"
+            !~ '^sha256:[0-9a-f]{64}$'
+       OR submitted_operation->>'requestDigest' COLLATE "C"
+            !~ '^sha256:[0-9a-f]{64}$'
+       OR submitted_operation->>'state' <> 'SUCCEEDED'
+       OR submitted_operation->>'attempt' <> '1'
+       OR submitted_operation->'error' IS NOT NULL
+       OR (submitted_operation->>'createdAt')::timestamptz <> effective_now
+       OR (submitted_operation->>'updatedAt')::timestamptz <> effective_now
+       OR (submitted_operation->>'terminalAt')::timestamptz <> effective_now
+       OR (submitted_resource#>>'{metadata,updatedAt}')::timestamptz <> effective_now THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'Application label submission identity or state is invalid';
+    END IF;
+
+    SELECT application.resource_version, application.document
+      INTO current_resource_version, current_document
+      FROM paas.applications AS application
+     WHERE application.tenant_id = effective_tenant_id
+       AND application.id = resource_id
+     FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '23503',
+            MESSAGE = 'Application does not exist';
+    END IF;
+    IF current_resource_version <> expected_resource_version THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'MX409',
+            MESSAGE = 'Application resource version changed';
+    END IF;
+    IF submitted_resource - 'metadata' IS DISTINCT FROM current_document - 'metadata'
+       OR (submitted_resource->'metadata') - ARRAY['labels', 'resourceVersion', 'updatedAt']
+            IS DISTINCT FROM
+          (current_document->'metadata') - ARRAY['labels', 'resourceVersion', 'updatedAt']
+       OR (submitted_resource#>>'{metadata,createdAt}')::timestamptz
+            <> (current_document#>>'{metadata,createdAt}')::timestamptz THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'Application label update changed immutable state';
+    END IF;
+
+    current_labels := COALESCE(current_document#>'{metadata,labels}', '{}'::jsonb);
+    submitted_labels := COALESCE(submitted_resource#>'{metadata,labels}', '{}'::jsonb);
+    IF jsonb_typeof(current_labels) <> 'object'
+       OR jsonb_typeof(submitted_labels) <> 'object' THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'Application labels must be objects';
+    END IF;
+    SELECT count(*), min(candidate.key)
+      INTO changed_label_count, changed_label_key
+      FROM jsonb_object_keys(current_labels || submitted_labels) AS candidate(key)
+     WHERE current_labels->candidate.key
+            IS DISTINCT FROM submitted_labels->candidate.key;
+    IF changed_label_count <> 1
+       OR changed_label_key IS NULL
+       OR (operation_action = 'SET_APPLICATION_LABEL'
+            AND NOT (submitted_labels ? changed_label_key))
+       OR (operation_action = 'DELETE_APPLICATION_LABEL'
+            AND ((submitted_labels ? changed_label_key)
+                 OR NOT (current_labels ? changed_label_key))) THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'Application label mutation must change exactly one matching key';
+    END IF;
+
+    INSERT INTO paas.operations (
+        tenant_id, id, action, target_kind, target_id,
+        idempotency_fingerprint, request_digest, state, attempt,
+        next_attempt_at, fencing_token, created_at, updated_at,
+        terminal_at, document
+    ) VALUES (
+        effective_tenant_id,
+        operation_id,
+        operation_action,
+        'Application',
+        resource_id,
+        submitted_operation->>'idempotencyFingerprint',
+        submitted_operation->>'requestDigest',
+        'SUCCEEDED',
+        1,
+        effective_now,
+        0,
+        effective_now,
+        effective_now,
+        effective_now,
+        submitted_operation
+    );
+
+    UPDATE paas.applications AS application
+       SET resource_version = expected_resource_version + 1,
+           document = submitted_resource
+     WHERE application.tenant_id = effective_tenant_id
+       AND application.id = resource_id
+       AND application.resource_version = expected_resource_version;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'MX409',
+            MESSAGE = 'Application resource version changed';
+    END IF;
+
+    PERFORM paas.append_audit_outbox(submitted_operation, submitted_audit_event);
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.update_application_label(jsonb, jsonb, jsonb, bigint)
+    FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paas.update_application_label(jsonb, jsonb, jsonb, bigint)
     TO matrix_paas_api;
 
 DROP FUNCTION IF EXISTS paas.submit_deployment(jsonb, jsonb, jsonb, bigint);
@@ -1780,6 +1999,10 @@ AS $function$
         to_regclass('paas.applications') IS NOT NULL
         AND to_regclass('paas.operations') IS NOT NULL
         AND to_regclass('paas.audit_outbox') IS NOT NULL
+        AND to_regprocedure(
+            'paas.update_application_label(jsonb,jsonb,jsonb,bigint)'
+        ) IS NOT NULL
+        AND to_regprocedure('paas.load_application_for_update(text)') IS NOT NULL
         AND paas.role_subject_contract_ready()
         AND NOT EXISTS (
             SELECT 1
@@ -1787,7 +2010,7 @@ AS $function$
              WHERE outbox.status = 'DEAD_LETTER'
                 OR outbox.attempts >= 100
         ),
-        2::bigint,
+        3::bigint,
         transaction_timestamp()
 $function$;
 
@@ -1810,7 +2033,7 @@ AS $function$
         AND to_regprocedure(
             'paas.advance_operation(text,text,bigint,text,jsonb,timestamptz,boolean)'
         ) IS NOT NULL,
-        2::bigint,
+        3::bigint,
         transaction_timestamp()
 $function$;
 

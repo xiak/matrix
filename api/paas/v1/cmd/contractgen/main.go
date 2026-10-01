@@ -134,6 +134,22 @@ func buildPaths() schema {
 			"get": readOperation(resource.readID, "Get "+resource.kind, resource.parameter, resource.kind),
 		}
 	}
+	setLabel := mutationOperationWithPath(
+		"setApplicationLabel", "Set Application label", "applicationId", "SetApplicationLabelRequest", true, "200",
+	)
+	setLabel["parameters"] = slices.Insert(setLabel["parameters"].([]any), 1, any(pathNameParameter("labelKey")))
+	deleteLabel := schema{
+		"operationId": "deleteApplicationLabel",
+		"summary":     "Delete Application label",
+		"parameters": []any{
+			pathIDParameter("applicationId"), pathNameParameter("labelKey"),
+			componentRef("#/components/parameters/IdempotencyKey"), componentRef("#/components/parameters/IfMatch"),
+		},
+		"responses": mutationResponses("200"),
+	}
+	paths["/v1/applications/{applicationId}/labels/{labelKey}"] = schema{
+		"put": setLabel, "delete": deleteLabel,
+	}
 
 	paths["/v1/deployments"] = schema{
 		"post": mutationOperation("createDeployment", "Create Deployment", "CreateDeploymentRequest", false, "202"),
@@ -325,6 +341,13 @@ func pathIDParameter(name string) schema {
 	}
 }
 
+func pathNameParameter(name string) schema {
+	return schema{
+		"name": name, "in": "path", "required": true,
+		"schema": ref("Name"),
+	}
+}
+
 func componentRef(path string) schema {
 	return schema{"$ref": path}
 }
@@ -396,7 +419,7 @@ func structContracts() map[string]reflect.Type {
 		paasv1.FilesystemUsage{}, paasv1.FilesystemUsageValue{},
 		paasv1.PlacementPolicySpec{}, paasv1.PlacementPolicy{}, paasv1.PlacementDecision{},
 		paasv1.ArtifactRef{}, paasv1.ResourceRequirements{}, paasv1.ApplicationEndpoint{}, paasv1.ComponentInput{},
-		paasv1.SecretVersionReference{}, paasv1.ComponentBinding{}, paasv1.Application{}, paasv1.CreateApplicationRequest{}, paasv1.Configuration{},
+		paasv1.SecretVersionReference{}, paasv1.ComponentBinding{}, paasv1.Application{}, paasv1.CreateApplicationRequest{}, paasv1.SetApplicationLabelRequest{}, paasv1.Configuration{},
 		paasv1.CreateConfigurationRequest{}, paasv1.ConfigurationRevisionSpec{}, paasv1.ConfigurationRevision{},
 		paasv1.CreateConfigurationRevisionRequest{}, paasv1.ApplicationRevisionComponent{}, paasv1.ApplicationRevisionSpec{},
 		paasv1.ApplicationRevision{}, paasv1.CreateApplicationRevisionRequest{}, paasv1.DeploymentComponent{}, paasv1.DeploymentSpec{},

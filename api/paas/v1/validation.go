@@ -414,6 +414,10 @@ func ValidateApplication(value Application) error {
 	return errors.Join(problems...)
 }
 
+func ValidateSetApplicationLabelRequest(value SetApplicationLabelRequest) error {
+	return ValidateSafeExternalText("value", value.Value, 128, true)
+}
+
 func ValidateConfiguration(value Configuration) error {
 	var problems []error
 	if value.APIVersion != APIVersion || value.Kind != "Configuration" {
@@ -1019,6 +1023,8 @@ func ValidateOperation(value Operation) error {
 		}
 	case OperationCreatePlacement,
 		OperationCreateApplication,
+		OperationSetApplicationLabel,
+		OperationDeleteApplicationLabel,
 		OperationCreateConfiguration,
 		OperationCreateConfigurationRevision,
 		OperationCreateApplicationRevision,

@@ -109,6 +109,8 @@ const (
 	ActionIAMAuthorizationDecided                    Action = "iam.authorization.decided"
 
 	ActionPaaSApplicationCreated                  Action = "paas.application.created"
+	ActionPaaSApplicationLabelUpdated             Action = "paas.application-label.updated"
+	ActionPaaSApplicationLabelDeleted             Action = "paas.application-label.deleted"
 	ActionPaaSConfigurationCreated                Action = "paas.configuration.created"
 	ActionPaaSConfigurationRevisionCreated        Action = "paas.configuration-revision.created"
 	ActionPaaSApplicationRevisionCreated          Action = "paas.application-revision.created"
@@ -300,6 +302,8 @@ var allActions = []Action{
 	ActionIAMPlatformPolicyAttachmentRevoked,
 	ActionIAMAuthorizationDecided,
 	ActionPaaSApplicationCreated,
+	ActionPaaSApplicationLabelUpdated,
+	ActionPaaSApplicationLabelDeleted,
 	ActionPaaSConfigurationCreated,
 	ActionPaaSConfigurationRevisionCreated,
 	ActionPaaSApplicationRevisionCreated,
@@ -510,6 +514,16 @@ var actionContracts = map[Action]ActionContract{
 		Source: SourceIAM, Target: TargetPolicyAttachment, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, PlatformOnly: true,
 	},
 	ActionPaaSApplicationCreated: {
+		Source: SourcePaaS, Target: TargetApplication, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true, OperationRequired: true,
+		RoleActorPermitted: true, AccessKeyActorPermitted: true,
+	},
+	ActionPaaSApplicationLabelUpdated: {
+		Source: SourcePaaS, Target: TargetApplication, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true, OperationRequired: true,
+		RoleActorPermitted: true, AccessKeyActorPermitted: true,
+	},
+	ActionPaaSApplicationLabelDeleted: {
 		Source: SourcePaaS, Target: TargetApplication, Results: []Result{ResultSucceeded},
 		IAMDecisionRequired: true, OperationRequired: true,
 		RoleActorPermitted: true, AccessKeyActorPermitted: true,

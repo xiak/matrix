@@ -44,6 +44,23 @@ type CreateApplicationCommand struct {
 	IdempotencyKey string
 }
 
+type SetApplicationLabelCommand struct {
+	Authorization           port.Authorization
+	ApplicationID           paasv1.ResourceID
+	LabelKey                string
+	Value                   string
+	ExpectedResourceVersion uint64
+	IdempotencyKey          string
+}
+
+type DeleteApplicationLabelCommand struct {
+	Authorization           port.Authorization
+	ApplicationID           paasv1.ResourceID
+	LabelKey                string
+	ExpectedResourceVersion uint64
+	IdempotencyKey          string
+}
+
 type CreateConfigurationCommand struct {
 	Authorization  port.Authorization
 	Request        paasv1.CreateConfigurationRequest
@@ -82,6 +99,19 @@ type ResourceSubmission struct {
 	AuditEvent audit.Event
 }
 
+type ApplicationLabelSubmission struct {
+	Application             paasv1.Application
+	Operation               paasv1.Operation
+	AuditEvent              audit.Event
+	ExpectedResourceVersion uint64
+}
+
+type ApplicationLabelResult struct {
+	Operation       paasv1.Operation
+	ResourceVersion uint64
+	Replayed        bool
+}
+
 // ApplicationAuthorizationSnapshot contains only the persisted facts needed
 // to authorize one read. It is never returned to a caller as the resource.
 type ApplicationAuthorizationSnapshot struct {
@@ -101,6 +131,7 @@ type Transaction interface {
 		paasv1.ResourceID,
 	) (paasv1.Deployment, bool, error)
 	LoadApplication(context.Context, paasv1.ResourceID) (paasv1.Application, bool, error)
+	LoadApplicationForUpdate(context.Context, paasv1.ResourceID) (paasv1.Application, bool, error)
 	LoadConfiguration(context.Context, paasv1.ResourceID) (paasv1.Configuration, bool, error)
 	LoadConfigurationRevision(
 		context.Context,
@@ -130,6 +161,7 @@ type Transaction interface {
 	) (paasv1.DeploymentGeneration, error)
 	LoadOperation(context.Context, paasv1.OperationID) (paasv1.Operation, bool, error)
 	CreateApplication(context.Context, paasv1.Application, ResourceSubmission) error
+	UpdateApplicationLabel(context.Context, ApplicationLabelSubmission) error
 	CreateConfiguration(context.Context, paasv1.Configuration, ResourceSubmission) error
 	CreateConfigurationRevision(
 		context.Context,

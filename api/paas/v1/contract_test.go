@@ -85,12 +85,13 @@ func TestOpenAPINorthboundSurfaceUsesMatrixIAM(t *testing.T) {
 	}
 
 	want := map[string][]string{
-		"/ready":                               {"get"},
-		"/v1/applications":                     {"post"},
-		"/v1/applications/{applicationId}":     {"get"},
-		"/v1/configurations":                   {"post"},
-		"/v1/configurations/{configurationId}": {"get"},
-		"/v1/configuration-revisions":          {"post"},
+		"/ready":                           {"get"},
+		"/v1/applications":                 {"post"},
+		"/v1/applications/{applicationId}": {"get"},
+		"/v1/applications/{applicationId}/labels/{labelKey}": {"put", "delete"},
+		"/v1/configurations":                                      {"post"},
+		"/v1/configurations/{configurationId}":                    {"get"},
+		"/v1/configuration-revisions":                             {"post"},
 		"/v1/configuration-revisions/{configurationRevisionId}":   {"get"},
 		"/v1/application-revisions":                               {"post"},
 		"/v1/application-revisions/{applicationRevisionId}":       {"get"},

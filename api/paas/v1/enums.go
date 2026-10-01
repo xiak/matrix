@@ -120,6 +120,8 @@ const (
 	OperationRegisterExecutionTarget     OperationAction = "REGISTER_EXECUTION_TARGET"
 	OperationCreatePlacement             OperationAction = "CREATE_PLACEMENT"
 	OperationCreateApplication           OperationAction = "CREATE_APPLICATION"
+	OperationSetApplicationLabel         OperationAction = "SET_APPLICATION_LABEL"
+	OperationDeleteApplicationLabel      OperationAction = "DELETE_APPLICATION_LABEL"
 	OperationCreateConfiguration         OperationAction = "CREATE_CONFIGURATION"
 	OperationCreateConfigurationRevision OperationAction = "CREATE_CONFIGURATION_REVISION"
 	OperationCreateApplicationRevision   OperationAction = "CREATE_APPLICATION_REVISION"
@@ -135,6 +137,8 @@ func OperationActions() []OperationAction {
 		OperationRegisterExecutionTarget,
 		OperationCreatePlacement,
 		OperationCreateApplication,
+		OperationSetApplicationLabel,
+		OperationDeleteApplicationLabel,
 		OperationCreateConfiguration,
 		OperationCreateConfigurationRevision,
 		OperationCreateApplicationRevision,

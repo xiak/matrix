@@ -17,14 +17,36 @@ func (transaction *applicationTransaction) LoadApplication(
 	ctx context.Context,
 	id paasv1.ResourceID,
 ) (paasv1.Application, bool, error) {
+	return transaction.loadApplication(ctx, id, false)
+}
+
+func (transaction *applicationTransaction) LoadApplicationForUpdate(
+	ctx context.Context,
+	id paasv1.ResourceID,
+) (paasv1.Application, bool, error) {
+	return transaction.loadApplication(ctx, id, true)
+}
+
+func (transaction *applicationTransaction) loadApplication(
+	ctx context.Context,
+	id paasv1.ResourceID,
+	forUpdate bool,
+) (paasv1.Application, bool, error) {
 	var resourceVersion uint64
 	var document []byte
+	query := `SELECT resource_version, document
+		   FROM paas.applications
+		  WHERE tenant_id = $1 AND id = $2`
+	arguments := []any{string(transaction.tenantID), string(id)}
+	if forUpdate {
+		query = `SELECT resource_version, document
+		           FROM paas.load_application_for_update($1)`
+		arguments = []any{string(id)}
+	}
 	err := transaction.tx.QueryRow(
 		ctx,
-		`SELECT resource_version, document
-		   FROM paas.applications
-		  WHERE tenant_id = $1 AND id = $2`,
-		string(transaction.tenantID), string(id),
+		query,
+		arguments...,
 	).Scan(&resourceVersion, &document)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return paasv1.Application{}, false, nil
@@ -158,6 +180,57 @@ func (transaction *applicationTransaction) CreateApplication(
 	submission applicationlifecycle.ResourceSubmission,
 ) error {
 	return transaction.createResource(ctx, "Application", value.Metadata.ID, value, submission)
+}
+
+func (transaction *applicationTransaction) UpdateApplicationLabel(
+	ctx context.Context,
+	submission applicationlifecycle.ApplicationLabelSubmission,
+) error {
+	if err := validateApplicationLabelSubmission(transaction.tenantID, submission); err != nil {
+		return err
+	}
+	resourceDocument, err := json.Marshal(submission.Application)
+	if err != nil {
+		return fmt.Errorf("encode Application document: %w", err)
+	}
+	operationDocument, err := json.Marshal(submission.Operation)
+	if err != nil {
+		return fmt.Errorf("encode Operation document: %w", err)
+	}
+	auditDocument, err := json.Marshal(submission.AuditEvent)
+	if err != nil {
+		return fmt.Errorf("encode Audit event: %w", err)
+	}
+	if _, err := transaction.tx.Exec(ctx,
+		`SELECT paas.update_application_label($1::jsonb, $2::jsonb, $3::jsonb, $4::bigint)`,
+		resourceDocument, operationDocument, auditDocument, submission.ExpectedResourceVersion); err != nil {
+		return fmt.Errorf("update Application label with Operation and Audit event: %w", err)
+	}
+	return nil
+}
+
+func validateApplicationLabelSubmission(
+	tenantID paasv1.TenantID,
+	submission applicationlifecycle.ApplicationLabelSubmission,
+) error {
+	application := submission.Application
+	operation := submission.Operation
+	auditEvent := submission.AuditEvent
+	var problems []error
+	problems = append(problems, paasv1.ValidateApplication(application), paasv1.ValidateOperation(operation), audit.ValidateEvent(auditEvent))
+	if application.Metadata.Scope.TenantID != tenantID || operation.Scope.TenantID != tenantID ||
+		operation.Target != (paasv1.ResourceRef{Kind: "Application", ID: application.Metadata.ID}) ||
+		(operation.Action != paasv1.OperationSetApplicationLabel && operation.Action != paasv1.OperationDeleteApplicationLabel) ||
+		auditEvent.TenantID != tenantID || auditEvent.Target != operation.Target ||
+		auditEvent.OperationID != operation.ID || !auditEvent.Actor.Equal(operation.RequestedBy) ||
+		auditEvent.RequestDigest != operation.RequestDigest || !auditEvent.OccurredAt.Equal(operation.CreatedAt) {
+		problems = append(problems, errors.New("Application label submission identities do not match"))
+	}
+	if submission.ExpectedResourceVersion == 0 || submission.ExpectedResourceVersion > 9007199254740991 ||
+		application.Metadata.ResourceVersion != submission.ExpectedResourceVersion+1 {
+		problems = append(problems, errors.New("Application label submission resource version is invalid"))
+	}
+	return errors.Join(problems...)
 }
 
 func (transaction *applicationTransaction) CreateConfiguration(

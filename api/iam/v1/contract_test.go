@@ -3118,7 +3118,7 @@ func TestRoleBusinessProfilesRequireExplicitCurrentCapabilities(t *testing.T) {
 		current, found := LookupAuthorizationProfile(product)
 		expectedRevision := uint64(2)
 		if product == ProductPaaS {
-			expectedRevision = 5
+			expectedRevision = 6
 		}
 		if !found || current.Revision != expectedRevision {
 			t.Fatal("missing explicit new product revision")
@@ -3139,6 +3139,14 @@ func TestRoleBusinessProfilesRequireExplicitCurrentCapabilities(t *testing.T) {
 				t.Fatal("product network capability is not explicit", action.Action)
 			}
 			old := AuthorizationProfileReference{Product: product, Revision: 1, ContentDigest: original}
+			if slices.IndexFunc(archives[index].Actions, func(value AuthorizationProfileAction) bool {
+				return value.Action == action.Action
+			}) < 0 {
+				if product != ProductPaaS || (action.Action != ActionPaaSApplicationLabelSet && action.Action != ActionPaaSApplicationLabelDelete) {
+					t.Fatal("current product added an unexpected action", action.Action)
+				}
+				continue
+			}
 			if CheckAuthorizationProfileSubject(archives[index], old, action.Action, SubjectRole) == nil ||
 				CheckAuthorizationProfileSubject(archives[index], old, action.Action, SubjectUser) != nil {
 				t.Fatal("old declaration gained ROLE or lost USER semantics")
@@ -3933,7 +3941,7 @@ func TestHistoricalDecisionProfileDoesNotBorrowCurrentHead(t *testing.T) {
 
 func TestPaaSProfileDeclaresCompletePlatformProduct(t *testing.T) {
 	profile, found := LookupAuthorizationProfile(ProductPaaS)
-	if !found || profile.Revision != 5 {
+	if !found || profile.Revision != 6 {
 		t.Fatal("missing current PaaS role and request/resource-tag capable declaration")
 	}
 	expected := map[Action]struct {
@@ -4089,6 +4097,8 @@ func TestProductProfilesDeclareParentInstanceAndCollectionResults(t *testing.T) 
 		{ActionIAMAccountRead, ResourceAccount, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}, {Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}},
 		{ActionPaaSApplicationCreate, ResourceApplication, ResourceApplication, []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}}},
 		{ActionPaaSApplicationRead, ResourceApplication, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance, PrefixAllowed: true}}},
+		{ActionPaaSApplicationLabelSet, ResourceApplication, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}},
+		{ActionPaaSApplicationLabelDelete, ResourceApplication, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}},
 		{ActionPaaSExecutionPoolCreate, ResourceExecutionPool, ResourceExecutionPool, []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}},
 		{ActionPaaSExecutionTargetRegister, ResourceExecutionTarget, ResourceExecutionTarget, []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}},
 		{ActionPaaSExecutionPoolRead, ResourceExecutionPool, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}, {Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionList}}},
@@ -5282,6 +5292,12 @@ func TestAuthorizationRequestTagsAreProfileDeclaredCanonicalAndResponseBound(t *
 	if _, declared := LookupActionConditionDefinition(ActionPaaSApplicationRead, key); declared {
 		t.Fatal("request tag leaked into an undeclared action")
 	}
+	for _, action := range []Action{ActionPaaSApplicationLabelSet, ActionPaaSApplicationLabelDelete} {
+		definition, declared := LookupActionConditionDefinition(action, key)
+		if !declared || definition.ValueType != ConditionString || definition.Source != ConditionCallingServiceRequestTag {
+			t.Fatal("application label mutation does not declare its exact trusted request tag", action)
+		}
+	}
 
 	request, err := NewAuthorizationRequest(ActionPaaSApplicationCreate,
 		ResourceReference{Kind: ResourceApplication, ID: "collection"},
@@ -5366,6 +5382,12 @@ func TestAuthorizationResourceTagsAreProfileDeclaredCanonicalAndResponseBound(t 
 	}
 	if _, declared := LookupActionConditionDefinition(ActionPaaSApplicationCreate, key); declared {
 		t.Fatal("resource tag leaked into application creation")
+	}
+	for _, action := range []Action{ActionPaaSApplicationLabelSet, ActionPaaSApplicationLabelDelete} {
+		definition, declared := LookupActionConditionDefinition(action, key)
+		if !declared || definition.ValueType != ConditionString || definition.Source != ConditionCallingServiceResourceTag {
+			t.Fatal("application label mutation does not declare its exact trusted resource tag", action)
+		}
 	}
 
 	request, err := NewAuthorizationRequest(ActionPaaSApplicationRead,

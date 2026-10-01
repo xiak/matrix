@@ -403,6 +403,8 @@ BEGIN
         ('iam.platform-policy-attachment.revoked', 'IAM', 'POLICY_ATTACHMENT', 'SUCCEEDED', true, true, false),
         ('iam.authorization.decided', 'IAM', 'AUTHORIZATION_DECISION', NULL, true, true, false),
         ('paas.application.created', 'PAAS', 'APPLICATION', 'SUCCEEDED', true, true, true),
+        ('paas.application-label.updated', 'PAAS', 'APPLICATION', 'SUCCEEDED', true, true, true),
+        ('paas.application-label.deleted', 'PAAS', 'APPLICATION', 'SUCCEEDED', true, true, true),
         ('paas.configuration.created', 'PAAS', 'CONFIGURATION', 'SUCCEEDED', true, true, true),
         ('paas.configuration-revision.created', 'PAAS', 'CONFIGURATION_REVISION', 'SUCCEEDED', true, true, true),
         ('paas.application-revision.created', 'PAAS', 'APPLICATION_REVISION', 'SUCCEEDED', true, true, true),
@@ -459,7 +461,7 @@ BEGIN
        ]) <> '{}'::jsonb
        OR NOT audit.actor_reference_valid(submitted_event->'actor')
        OR (submitted_event#>>'{actor,type}'='ROLE' AND (
-            action_name NOT IN ('iam.authorization.decided','iam.role-session.exited','paas.application.created','paas.configuration.created',
+            action_name NOT IN ('iam.authorization.decided','iam.role-session.exited','paas.application.created','paas.application-label.updated','paas.application-label.deleted','paas.configuration.created',
               'paas.configuration-revision.created','paas.application-revision.created','paas.deployment.created','paas.deployment.updated',
               'paas.deployment.stopped','paas.deployment.rolled-back','audit.records.read','audit.integrity.verified')))
        OR ((submitted_event->'target') - ARRAY['kind', 'id', 'tenantId']) <> '{}'::jsonb
@@ -516,7 +518,7 @@ BEGIN
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR submitted_event#>>'{actor,type}' NOT IN ('USER', 'SERVICE_ACCOUNT', 'SYSTEM', 'ROLE')
        OR (submitted_event->'actor' ? 'accessKeyId' AND (action_name NOT IN (
-            'iam.authorization.decided','paas.application.created','paas.configuration.created','paas.configuration-revision.created',
+            'iam.authorization.decided','paas.application.created','paas.application-label.updated','paas.application-label.deleted','paas.configuration.created','paas.configuration-revision.created',
             'paas.application-revision.created','paas.deployment.created','paas.deployment.updated','paas.deployment.stopped',
             'paas.deployment.rolled-back','audit.records.read','audit.integrity.verified') OR submitted_event ? 'installationId'))
        OR (action_name='iam.role-session.exited' AND (
@@ -613,7 +615,7 @@ AS $function$
         AND to_regclass('audit.records') IS NOT NULL
         AND to_regclass('audit.event_registry') IS NOT NULL
         AND audit.role_actor_contract_ready(),
-        30::bigint,
+        31::bigint,
         transaction_timestamp()
 $function$;
 
@@ -941,6 +943,7 @@ BEGIN
             'iam.principal.status-set', 'iam.password.reset',
             'iam.role-binding.revoked', 'iam.authorization.decided',
             'paas.application.created', 'paas.configuration.created',
+            'paas.application-label.updated', 'paas.application-label.deleted',
             'paas.configuration-revision.created',
             'paas.application-revision.created', 'paas.deployment.created',
             'paas.deployment.updated', 'paas.deployment.stopped',

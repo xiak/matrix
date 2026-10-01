@@ -223,6 +223,14 @@ BEGIN
                 'submitted_resource jsonb, submitted_operation jsonb, submitted_audit_event jsonb'
             ),
             (
+                'update_application_label',
+                'submitted_resource jsonb, submitted_operation jsonb, submitted_audit_event jsonb, expected_resource_version bigint'
+            ),
+            (
+                'load_application_for_update',
+                'requested_id text'
+            ),
+            (
                 'submit_deployment',
                 'submitted_deployment jsonb, submitted_generation jsonb, submitted_operation jsonb, submitted_audit_event jsonb, expected_resource_version bigint'
             ),
@@ -547,6 +555,16 @@ BEGIN
        )
        OR NOT has_function_privilege(
             'matrix_paas_api',
+            'paas.update_application_label(jsonb, jsonb, jsonb, bigint)',
+            'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_paas_api',
+            'paas.load_application_for_update(text)',
+            'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_paas_api',
             'paas.submit_deployment(jsonb, jsonb, jsonb, jsonb, bigint)',
             'EXECUTE'
        )
@@ -628,6 +646,16 @@ BEGIN
        OR has_function_privilege(
             'matrix_paas_worker',
             'paas.create_apphosting_resource(jsonb, jsonb, jsonb)',
+            'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_paas_worker',
+            'paas.update_application_label(jsonb, jsonb, jsonb, bigint)',
+            'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_paas_worker',
+            'paas.load_application_for_update(text)',
             'EXECUTE'
        )
        OR has_function_privilege(

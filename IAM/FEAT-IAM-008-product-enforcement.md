@@ -177,6 +177,24 @@ PaaS 用解析出的 Account 开启受RLS保护且数据库报告`transaction_re
 
 独占PostgreSQL 18上的完整IAM策略存储以`-race -p 1`用时237.069秒通过；PaaS存储门禁以5.840秒证明预读事务只读及Account RLS。独立双IAM/Audit/PaaS进程最终以`-race -p 1`用时245.500秒通过：两个Account持有同ID但分别为`production`/`staging`的Application，伪造另一Account header/query不能换标签或资源；同服务来源Role到达真实PDP并得到预期403而不是adapter 503；IAM决策落库事务中的确定性资源标签/resourceVersion变化使PaaS返回503且不泄露旧快照。IAM57真实前驱升级以`-race -p 1`用时131.412秒通过；实际旧二进制除账号、MFA、会话、设置和恢复事实外，还生成PaaS r4、contract6及`requestTags`决定，双迁移、等值bootstrap、当前重启后原Profile/Decision字节与Audit producer proof不变，不增加更早开发schema矩阵。聚焦及全仓race、架构、vet、模块校验、两次API生成摘要一致和Linux amd64构建通过。固定提交与独立CI尚未完成，因此本片仍是候选，UI继续不得开放资源标签写操作。
 
+## 下一纵向切片：Application 标签设置与删除
+
+本片只开放已有Application的`environment`标签设置与删除，不建立中央标签数据库、批量标签任务、标签继承或其他资源的标签写入。标签继续由PaaS资源事务拥有，IAM只声明动作、可信条件来源并返回决定；后继增加标签键或资源种类必须由相应产品Profile声明，不能在通用求值器、IAM存储或控制台按产品名硬编码。
+
+北向API使用两个显式动作而不是一个含隐式删除语义的通用PATCH：`PUT /v1/applications/{applicationId}/labels/{labelKey}`只接受精确`{"value":"..."}`，`DELETE`同一路径不接受body。首片`labelKey`只允许当前PaaS Profile声明的`environment`；两者都必须携带`If-Match`强ETag和`Idempotency-Key`，Account仍只由当前有效身份推导。成功返回终态`Operation`，`Location`指向Application，`Operation-Location`指向该Operation，响应`ETag`为提交后的资源版本；客户端随后按常规读取接口取得最新Application。设置为现值返回冲突且不产生Operation/Audit，新的删除请求遇到不存在的键返回未找到；已完成命令的等值重放返回原Operation及同一派生资源版本，变体重放返回幂等冲突。query/header/body中的Account、Subject、Profile、Action、当前标签或额外目标标签selector全部拒绝。
+
+PaaS Profile下一修订增加`paas.application-label.set`和`paas.application-label.delete`两个独立实例动作，资源均为真实`APPLICATION`。两者同时绑定授权前数据库快照中的`resource.tag/environment`与请求意图：设置时`request.tag/environment`是新值；删除时它是即将解绑的当前键值对，而不是由caller补造的占位值。这样Policy可在同一Statement中同时限制“允许修改哪类当前资源”和“允许写入或解绑哪个标签值”。缺失当前标签不产生虚构的resource/request tag；删除缺失键不能借无标签决定变成成功。USER与服务来源/用户来源ROLE只有在各自当前凭据、血缘和Policy都有效时可执行，ServiceIdentity、平台身份或subject-resolution响应本身均不取得写权。
+
+处理流程先以当前身份解析Account并只读取得Application快照，再按精确动作、Application ID、当前标签与目标请求标签调用唯一PDP。Allow之后，PaaS在Account作用域的Serializable事务中锁定该Application，依次核对`If-Match`、快照ID/resourceVersion、全部Profile声明的当前标签、决定中的resourceTags和requestTags以及命令指纹；任一漂移返回冲突或重新取得新决定，绝不能拿旧Allow修改新状态。资源版本递增、标签变化、幂等完成记录、产品Audit outbox事实必须在同一事务提交；Audit追加失败或提交结果不确定时不得出现只有标签已变而完成证据缺失的可观察状态。
+
+命令身份至少绑定Account、真实Subject（ROLE包含完整RoleSession血缘）、动作、Application ID、标签键、目标值或删除意图、expected resourceVersion和Idempotency-Key。相同命令等值重放返回首次结果；同一key改变任一字段必须冲突。设置与删除分别产生封闭的`paas.application-label.updated`和`paas.application-label.deleted`租户事实，Target固定为真实Application；事实关联原IAM decision、request/correlation和PaaS outbox，不增加任意attributes，也不把标签值写进错误或凭据日志。首片只有一个可授权标签键，因此事实动作已能无歧义表达变化对象；扩展多个键前必须先在既有Audit契约owner中给出类型化、兼容旧canonical的表达，不能用自由属性绕过。
+
+最低门禁覆盖两个Account同Application ID、USER与两种ROLE来源、当前production→目标staging、同值设置、删除、缺失键、显式Deny、撤权/停用后的下一请求、伪造当前/目标标签、未声明键、错误ETag、同key变体重放、并发设置/删除、授权后锁前漂移、Audit outbox故障和提交结果不确定。真实PG18必须证明RLS、行锁/CAS、资源与完成记录原子性、受限登录和重启；独立IAM/Audit/PaaS进程必须证明下一次资源读取立即按新标签重评、跨Account不串、旧permit不缓存。该门禁固定通过前，UI继续只读展示标签，不开放修改入口。
+
+当前本地候选把PaaS Profile推进到revision 6，保留授权决定contract 7并把开发数据库形状推进到IAM59/Audit31/PaaS3；发布profile仍不匹配且继续在安装副作用前关闭。PaaS API角色没有取得表级UPDATE权限：目的限定的`load_application_for_update`只在当前事务Account内锁定真实Application，`update_application_label`再次核对expected resourceVersion、不可变字段以及恰好一个标签键的设置/删除差异，再原子写入新文档、终态Operation和Audit outbox。受限worker不能调用两个入口，直接额外修改第二个标签的攻击由数据库以`22023`拒绝。
+
+本任务独占PostgreSQL 18中，PaaS迁移双次应用/verify及真实事务门禁以4.534秒通过同ID双Account、等值/变体重放、并发设置与删除只有一个成功、RLS、数据库第二标签攻击和故障注入整单回滚；Audit31完整catalog以11.939秒逐项接受新事实并验证USER、ROLE和AccessKey actor边界。独立IAM59/Audit31/PaaS3、双IAM和双dispatcher进程以223.721秒通过真实策略发布、`PUT`/`DELETE`、当前/目标标签决定证据、更新后下一次读取立即403、一次性Operation/Audit事实及链验证。唯一滚动前驱已替换为固定`e3c137ba0ed80d8d90f893192d343d89d2d917f5`的IAM58；实际旧binary产生requestTags、resourceTags、Profile/Decision、账号、MFA、会话和恢复事实后，IAM59双迁移、等值bootstrap和重启门禁以137.786秒通过，历史字节、proof和撤销状态未复活或改写，不再保留IAM57测试窗口。全仓默认测试、vet、模块校验、Linux amd64构建、聚焦race和两次API生成稳定均通过。实现尚未固定提交或取得本提交独立CI，因此UI仍只能使用MOCK验证交互，不能标记LIVE。
+
 ## 验收
 
 真实两个产品/两个 Account 的同名/同 ID/key、跨租户资源/cursor/配额/Operation、修改 tag 攻击、多个相关资源任一拒绝即无效果；服务跨租户请求必须有目标角色和用途；verifier probe 无业务写权。暂停之后的已提交事实可投递，新请求拒绝。独立 PG18/RLS/受限进程、真实部署和 UI 路径均通过才接受。

@@ -20,6 +20,8 @@ func TestAppHostingAuthorizationUsesRegisteredPaaSProfile(t *testing.T) {
 	}{
 		{"application create", AuthorizeApplicationCreate, ResourceApplication, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate, "collection"},
 		{"application read", AuthorizeApplicationRead, ResourceApplication, iamv1.AuthorizationResourceInstance, "", "application-one"},
+		{"application label set", AuthorizeApplicationLabelSet, ResourceApplication, iamv1.AuthorizationResourceInstance, "", "application-one"},
+		{"application label delete", AuthorizeApplicationLabelDelete, ResourceApplication, iamv1.AuthorizationResourceInstance, "", "application-one"},
 		{"configuration create", AuthorizeConfigurationCreate, ResourceConfiguration, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate, "collection"},
 		{"configuration read", AuthorizeConfigurationRead, ResourceConfiguration, iamv1.AuthorizationResourceInstance, "", "configuration-one"},
 		{"configuration revision create", AuthorizeConfigurationRevisionCreate, ResourceConfigurationRevision, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate, "collection"},
@@ -122,6 +124,40 @@ func TestApplicationReadAuthorizationBindsOnlyProfileDeclaredResourceLabels(t *t
 	create.Resource.ID = "collection"
 	if ValidateAuthorizationRequest(create) == nil {
 		t.Fatal("resource labels leaked into an undeclared product action")
+	}
+}
+
+func TestApplicationLabelMutationAuthorizationBindsCurrentAndRequestedLabels(t *testing.T) {
+	for _, action := range []iamv1.Action{AuthorizeApplicationLabelSet, AuthorizeApplicationLabelDelete} {
+		request := AuthorizationRequest{
+			Credential: "Bearer subject", Action: action,
+			Resource:     paasv1.ResourceRef{Kind: ResourceApplication, ID: "application-one"},
+			ResourceMode: iamv1.AuthorizationResourceInstance,
+			SourceIP:     "192.0.2.23", RequestID: "request-label-mutation",
+			ResourceLabels: map[string]string{"environment": "production", "team": "payments"},
+			RequestLabels:  map[string]string{"environment": "staging", "team": "payments"},
+		}
+		iamRequest, err := NewIAMAuthorizationRequest(request)
+		current := []iamv1.AuthorizationTag{{Key: "environment", Value: "production"}}
+		target := []iamv1.AuthorizationTag{{Key: "environment", Value: "staging"}}
+		if err != nil || !reflect.DeepEqual(iamRequest.ResourceTags, current) ||
+			!reflect.DeepEqual(iamRequest.RequestTags, target) {
+			t.Fatalf("label mutation did not bind current and requested labels: action=%s request=%#v err=%v", action, iamRequest, err)
+		}
+		authorization := Authorization{TenantID: "tenant-a", Subject: paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "user-a"},
+			DecisionID: "decision-label-mutation", RequestID: request.RequestID,
+			ResourceTags: current, RequestTags: target}
+		if ValidateAuthorizationForRequest(authorization, request) != nil ||
+			ValidateAuthorizationResourceTagsForAction(authorization, action, request.ResourceLabels) != nil ||
+			ValidateAuthorizationTagsForAction(authorization, action, request.RequestLabels) != nil {
+			t.Fatal("exact current and requested label evidence was rejected", action)
+		}
+		changed := request
+		changed.RequestLabels = map[string]string{"environment": "restricted"}
+		if ValidateAuthorizationForRequest(authorization, changed) == nil ||
+			ValidateAuthorizationTagsForAction(authorization, action, changed.RequestLabels) == nil {
+			t.Fatal("label mutation reused a decision for another target", action)
+		}
 	}
 }
 

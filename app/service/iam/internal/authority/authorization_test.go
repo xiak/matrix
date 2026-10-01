@@ -2517,18 +2517,24 @@ func TestLegacySystemInterpretationDoesNotAdmitUnprovedCustomerVersions(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	// The supported predecessor's exact content is interpreted against its
-	// archived IAM revision, not reconstructed from newly added Role actions.
+	// The supported predecessor's exact content is interpreted against every
+	// product's archived revision-one declaration. Reconstructing it by only
+	// removing newly registered IAM actions would silently retain later PaaS
+	// capabilities in the fixed legacy SYSTEM seed.
 	legacyDocument := current.Document
 	legacyDocument.Statements = slices.Clone(current.Document.Statements)
-	oldIAM := iamv1.HistoricalAuthorizationProfiles()[0]
-	oldActions := make(map[iamv1.Action]bool, len(oldIAM.Actions))
-	for _, action := range oldIAM.Actions {
-		oldActions[action.Action] = true
+	legacyActions := make(map[iamv1.Action]bool)
+	for _, profile := range iamv1.HistoricalAuthorizationProfiles() {
+		if profile.Revision != 1 {
+			continue
+		}
+		for _, action := range profile.Actions {
+			legacyActions[action.Action] = true
+		}
 	}
 	for index := range legacyDocument.Statements {
 		legacyDocument.Statements[index].Actions = slices.DeleteFunc(slices.Clone(legacyDocument.Statements[index].Actions), func(action iamv1.Action) bool {
-			return strings.HasPrefix(string(action), "iam.") && !oldActions[action]
+			return !legacyActions[action]
 		})
 		legacyDocument.Statements[index].Resources = slices.DeleteFunc(slices.Clone(legacyDocument.Statements[index].Resources), func(resource iamv1.PolicyResourceSelector) bool {
 			return resource.Kind == iamv1.ResourceRole || resource.Kind == iamv1.ResourceRoleSession

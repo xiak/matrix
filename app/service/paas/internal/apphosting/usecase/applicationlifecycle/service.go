@@ -439,6 +439,10 @@ func auditEventForOperation(
 	switch operation.Action {
 	case paasv1.OperationCreateApplication:
 		action, result = audit.ApplicationCreated, audit.Succeeded
+	case paasv1.OperationSetApplicationLabel:
+		action, result = audit.ApplicationLabelUpdated, audit.Succeeded
+	case paasv1.OperationDeleteApplicationLabel:
+		action, result = audit.ApplicationLabelDeleted, audit.Succeeded
 	case paasv1.OperationCreateConfiguration:
 		action, result = audit.ConfigurationCreated, audit.Succeeded
 	case paasv1.OperationCreateConfigurationRevision:

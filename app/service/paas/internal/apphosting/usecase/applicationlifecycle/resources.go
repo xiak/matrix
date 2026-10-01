@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"time"
 
+	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/domain"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
@@ -53,6 +54,205 @@ func (usecase *Usecase) CreateApplication(
 			return transaction.CreateApplication(ctx, value, submission)
 		},
 	})
+}
+
+func (usecase *Usecase) SetApplicationLabel(
+	ctx context.Context,
+	command SetApplicationLabelCommand,
+) (ApplicationLabelResult, error) {
+	value := command.Value
+	return usecase.mutateApplicationLabel(ctx, applicationLabelMutation{
+		authorization: command.Authorization, applicationID: command.ApplicationID,
+		labelKey: command.LabelKey, value: &value,
+		expectedResourceVersion: command.ExpectedResourceVersion,
+		idempotencyKey:          command.IdempotencyKey,
+		authorizationAction:     port.AuthorizeApplicationLabelSet,
+		operationAction:         paasv1.OperationSetApplicationLabel,
+	})
+}
+
+func (usecase *Usecase) DeleteApplicationLabel(
+	ctx context.Context,
+	command DeleteApplicationLabelCommand,
+) (ApplicationLabelResult, error) {
+	return usecase.mutateApplicationLabel(ctx, applicationLabelMutation{
+		authorization: command.Authorization, applicationID: command.ApplicationID,
+		labelKey: command.LabelKey, expectedResourceVersion: command.ExpectedResourceVersion,
+		idempotencyKey:      command.IdempotencyKey,
+		authorizationAction: port.AuthorizeApplicationLabelDelete,
+		operationAction:     paasv1.OperationDeleteApplicationLabel,
+	})
+}
+
+type applicationLabelMutation struct {
+	authorization           port.Authorization
+	applicationID           paasv1.ResourceID
+	labelKey                string
+	value                   *string
+	expectedResourceVersion uint64
+	idempotencyKey          string
+	authorizationAction     iamv1.Action
+	operationAction         paasv1.OperationAction
+}
+
+func (usecase *Usecase) mutateApplicationLabel(
+	ctx context.Context,
+	command applicationLabelMutation,
+) (ApplicationLabelResult, error) {
+	if usecase == nil || usecase.repository == nil {
+		return ApplicationLabelResult{}, errors.New("application lifecycle use case is nil")
+	}
+	if ctx == nil {
+		return ApplicationLabelResult{}, errors.New("application lifecycle context is nil")
+	}
+	if err := validateApplicationLabelMutation(command); err != nil {
+		return ApplicationLabelResult{}, fmt.Errorf("%w: %v", ErrInvalidArgument, err)
+	}
+	identity := resourceCreation[paasv1.Application]{
+		authorization: command.authorization, id: command.applicationID,
+		idempotencyKey: command.idempotencyKey, targetKind: "Application", action: command.operationAction,
+	}
+	fingerprint, err := resourceCreationFingerprint(identity)
+	if err != nil {
+		return ApplicationLabelResult{}, err
+	}
+	requestDigest, err := applicationLabelMutationDigest(command)
+	if err != nil {
+		return ApplicationLabelResult{}, err
+	}
+
+	var operation paasv1.Operation
+	var replayed bool
+	var transactionErr error
+	for attempt := 0; attempt < usecase.config.MaxTransactionAttempts; attempt++ {
+		operation, replayed = paasv1.Operation{}, false
+		transactionErr = usecase.repository.WithinTransaction(ctx, command.authorization.TenantID,
+			func(transactionContext context.Context, transaction Transaction) error {
+				stored, found, err := transaction.FindOperationByFingerprint(transactionContext, fingerprint)
+				if err != nil {
+					return err
+				}
+				if found {
+					if stored.RequestDigest != requestDigest || stored.Action != command.operationAction ||
+						stored.Target != (paasv1.ResourceRef{Kind: "Application", ID: command.applicationID}) {
+						return ErrIdempotencyConflict
+					}
+					operation, replayed = stored, true
+					return nil
+				}
+				application, found, err := transaction.LoadApplicationForUpdate(transactionContext, command.applicationID)
+				if err != nil {
+					return err
+				}
+				if !found {
+					return ErrNotFound
+				}
+				if application.Metadata.ResourceVersion != command.expectedResourceVersion {
+					return ErrResourceVersionConflict
+				}
+				if port.ValidateAuthorizationResourceTagsForAction(command.authorization, command.authorizationAction, application.Metadata.Labels) != nil {
+					return ErrResourceVersionConflict
+				}
+				currentValue, present := application.Metadata.Labels[command.labelKey]
+				requested := make(map[string]string, 1)
+				if command.value == nil {
+					if !present {
+						return ErrNotFound
+					}
+					requested[command.labelKey] = currentValue
+				} else {
+					requested[command.labelKey] = *command.value
+					if present && currentValue == *command.value {
+						return ErrNoDesiredChange
+					}
+				}
+				if port.ValidateAuthorizationTagsForAction(command.authorization, command.authorizationAction, requested) != nil {
+					return ErrResourceVersionConflict
+				}
+				now, err := transaction.TransactionTime(transactionContext)
+				if err != nil {
+					return err
+				}
+				application.Metadata.Labels = cloneStringMap(application.Metadata.Labels)
+				if application.Metadata.Labels == nil {
+					application.Metadata.Labels = make(map[string]string)
+				}
+				if command.value == nil {
+					delete(application.Metadata.Labels, command.labelKey)
+				} else {
+					application.Metadata.Labels[command.labelKey] = *command.value
+				}
+				if len(application.Metadata.Labels) == 0 {
+					application.Metadata.Labels = nil
+				}
+				application.Metadata.ResourceVersion++
+				application.Metadata.UpdatedAt = now
+				if err := paasv1.ValidateApplication(application); err != nil {
+					return fmt.Errorf("invalid Application label mutation: %w", err)
+				}
+				terminalAt := now
+				operation = paasv1.Operation{APIVersion: paasv1.APIVersion, Kind: "Operation",
+					ID:     operationIDFromFingerprint(fingerprint),
+					Scope:  paasv1.ResourceScope{Kind: paasv1.AuthorityTenant, TenantID: command.authorization.TenantID},
+					Action: command.operationAction, Target: paasv1.ResourceRef{Kind: "Application", ID: command.applicationID},
+					RequestedBy: command.authorization.Subject, IdempotencyFingerprint: fingerprint,
+					RequestDigest: requestDigest, State: paasv1.OperationSucceeded, Attempt: 1,
+					CreatedAt: now, UpdatedAt: now, TerminalAt: &terminalAt}
+				if err := paasv1.ValidateOperation(operation); err != nil {
+					return fmt.Errorf("invalid Application label Operation: %w", err)
+				}
+				auditEvent, err := auditEventForOperation(command.authorization, operation, now)
+				if err != nil {
+					return err
+				}
+				return transaction.UpdateApplicationLabel(transactionContext, ApplicationLabelSubmission{
+					Application: application, Operation: operation, AuditEvent: auditEvent,
+					ExpectedResourceVersion: command.expectedResourceVersion,
+				})
+			})
+		if transactionErr == nil {
+			return ApplicationLabelResult{Operation: operation, ResourceVersion: command.expectedResourceVersion + 1, Replayed: replayed}, nil
+		}
+		if !errors.Is(transactionErr, ErrRetryableTransaction) {
+			return ApplicationLabelResult{}, transactionErr
+		}
+		if err := ctx.Err(); err != nil {
+			return ApplicationLabelResult{}, err
+		}
+	}
+	return ApplicationLabelResult{}, fmt.Errorf("application label transaction attempts exhausted: %w", transactionErr)
+}
+
+func validateApplicationLabelMutation(command applicationLabelMutation) error {
+	var valueErr error
+	if command.value != nil {
+		valueErr = paasv1.ValidateSetApplicationLabelRequest(paasv1.SetApplicationLabelRequest{Value: *command.value})
+	}
+	if command.expectedResourceVersion == 0 || command.expectedResourceVersion > maxResourceVersion {
+		valueErr = errors.Join(valueErr, errors.New("application label mutation requires a valid expected resource version"))
+	}
+	return errors.Join(
+		port.ValidateAuthorization(command.authorization),
+		port.ValidateApplicationLabelKeyForAction(command.authorizationAction, command.labelKey),
+		paasv1.ValidateID("applicationId", string(command.applicationID)),
+		paasv1.ValidateSafeExternalText("Idempotency-Key", command.idempotencyKey, 128, true),
+		valueErr,
+	)
+}
+
+func applicationLabelMutationDigest(command applicationLabelMutation) (string, error) {
+	encoded, err := json.Marshal(struct {
+		Kind                    string            `json:"kind"`
+		ApplicationID           paasv1.ResourceID `json:"applicationId"`
+		LabelKey                string            `json:"labelKey"`
+		Value                   *string           `json:"value,omitempty"`
+		ExpectedResourceVersion uint64            `json:"expectedResourceVersion"`
+	}{Kind: string(command.operationAction), ApplicationID: command.applicationID, LabelKey: command.labelKey,
+		Value: command.value, ExpectedResourceVersion: command.expectedResourceVersion})
+	if err != nil {
+		return "", fmt.Errorf("encode Application label mutation: %w", err)
+	}
+	return domain.DigestPayload(encoded), nil
 }
 
 func (usecase *Usecase) CreateConfiguration(
