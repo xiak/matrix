@@ -1504,6 +1504,34 @@ describe("account access", () => {
     expect(await screen.findByText("customer.new")).toBeTruthy();
   });
 
+  it("explains and reviews a Profile-declared trusted request-tag condition without exposing arbitrary keys", async () => {
+    const catalog: AuthorizationProfileDirectory = { accountId: account.id, items: [{
+      profile: { product: "paas", revision: 4, callingService: "PAAS", actions: [{
+        action: "paas.application.create", resourceKind: "APPLICATION", scope: "TENANT",
+        resourceShapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_CREATE" }],
+        conditions: [{ key: "request.tag/environment", valueType: "STRING", source: "CALLING_SERVICE_REQUEST_TAG" }],
+        resultResourceKind: "APPLICATION"
+      }] }, contentDigest: `sha256:${"a".repeat(64)}`
+    }] };
+    const createPolicy = vi.fn();
+    const { user } = await openAccess(accounts({ createPolicy, listAuthorizationProfiles: vi.fn().mockResolvedValue(catalog) }), iam(), "policies");
+    await user.click(screen.getByRole("button", { name: "新建自定义策略" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "策略名称" }), { target: { value: "Production application creator" } });
+    await user.click(screen.getByRole("tab", { name: "可视化编辑" }));
+    await user.click(await screen.findByRole("radio", { name: /paas.application.create/ }));
+    expect(screen.getByText("产品可信请求标签")).toBeTruthy();
+    expect(screen.getByText(/浏览器不会直接向 IAM 提交授权上下文/)).toBeTruthy();
+    expect(screen.getByText(/请求缺少该标签时/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "添加条件" }));
+    expect(screen.getByRole("combobox", { name: "条件 1" }).textContent).toContain("可信请求标签 · environment");
+    await user.type(screen.getByRole("textbox", { name: "条件值" }), "production");
+    await user.click(screen.getByRole("button", { name: "审阅策略" }));
+    const summary = screen.getByRole("region", { name: "声明摘要" });
+    expect(within(summary).getByText("可信请求标签 · environment", { exact: false })).toBeTruthy();
+    expect(within(summary).getByText("production", { selector: "code" })).toBeTruthy();
+    expect(createPolicy).not.toHaveBeenCalled();
+  });
+
   it("keeps an unknown policy creation frozen across navigation and retries byte-equivalently", async () => {
     const createPolicy = vi.fn().mockRejectedValueOnce(new HttpProblem(503, "IAM_UNAVAILABLE"))
       .mockRejectedValueOnce(new HttpProblem(409, "IAM_CONFLICT"));

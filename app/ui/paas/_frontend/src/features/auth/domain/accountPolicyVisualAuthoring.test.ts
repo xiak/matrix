@@ -62,6 +62,37 @@ describe("lossless catalog-backed policy visual authoring", () => {
     expect(visualDraftHasIncompleteFields({ ...supported.document, statements: [{ ...statement, resources: [{ kind: "APPLICATION", match: "EXACT", id: "" }] }] })).toBe(true);
     expect(visualDraftHasIncompleteFields({ ...supported.document, statements: [{ ...statement, conditions: [{ key: "iam.account-id", operator: "STRING_EQUALS", values: [""] }] }] })).toBe(true);
   });
+  it("authors only Profile-declared network and trusted request-tag conditions", () => {
+    const capabilityCatalog = structuredClone(catalog);
+    capabilityCatalog.items[0]!.profile.revision = 4;
+    capabilityCatalog.items[0]!.profile.actions.push({
+      action: "paas.application.create", resourceKind: "APPLICATION", scope: "TENANT",
+      resourceShapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_CREATE" }],
+      conditions: [
+        { key: "request.source-ip", valueType: "IP", source: "CALLING_SERVICE_NETWORK" },
+        { key: "request.tag/environment", valueType: "STRING", source: "CALLING_SERVICE_REQUEST_TAG" }
+      ], resultResourceKind: "APPLICATION"
+    });
+    const tagged = { languageVersion: "1", scope: "TENANT", statements: [{ sid: "create-production", effect: "ALLOW",
+      actions: ["paas.application.create"], resources: [{ kind: "APPLICATION", match: "EXACT", id: "collection" }],
+      conditions: [
+        { key: "request.source-ip", operator: "IP_ADDRESS", values: ["192.0.2.0/24"] },
+        { key: "request.tag/environment", operator: "STRING_EQUALS", values: ["production", "预发布"] }
+      ] }] };
+    const result = visualDraftFromJSON(JSON.stringify(tagged), capabilityCatalog);
+    expect(result).toEqual({ status: "ready", document: tagged });
+    if (result.status !== "ready") return;
+    expect(visualDraftHasIncompleteFields(result.document)).toBe(false);
+    const statement = result.document.statements[0]!;
+    expect(visualDraftHasIncompleteFields({ ...result.document, statements: [{ ...statement,
+      conditions: [{ key: "request.tag/environment", operator: "STRING_EQUALS", values: [" production"] }] }] })).toBe(true);
+    expect(visualDraftHasIncompleteFields({ ...result.document, statements: [{ ...statement,
+      conditions: [{ key: "request.tag/environment", operator: "STRING_EQUALS", values: ["x".repeat(129)] }] }] })).toBe(true);
+    expect(visualDraftHasIncompleteFields({ ...result.document, statements: [{ ...statement,
+      conditions: [{ key: "request.source-ip", operator: "IP_ADDRESS", values: ["192.0.2.42/24"] }] }] })).toBe(true);
+    expect(visualDraftFromJSON(JSON.stringify({ ...tagged, statements: [{ ...statement,
+      conditions: [{ key: "request.tag/team", operator: "STRING_EQUALS", values: ["platform"] }] }] }), capabilityCatalog).status).toBe("catalogMismatch");
+  });
   it("permits an empty visual starting point only in a new-policy editor, never at review", () => {
     const empty = JSON.stringify({ languageVersion: "1", scope: "TENANT", statements: [] });
     expect(visualDraftFromJSON(empty, catalog).status).toBe("shapeInvalid");

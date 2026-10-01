@@ -192,14 +192,19 @@ export type AccountPolicyVersionDirectory = { policy: AccountPolicy; items: Acco
 export type AuthorizationAuthorityScope = "TENANT" | "INSTALLATION" | "INSTALLATION_PROBE";
 export type AuthorizationResourceMode = "INSTANCE" | "COLLECTION";
 export type AuthorizationCollectionUsage = "COLLECTION_LIST" | "COLLECTION_CREATE";
-export type AuthorizationConditionKey = "iam.account-id" | "iam.current-time" | "iam.principal-id";
+export type AuthorizationConditionKey =
+  | "iam.account-id"
+  | "iam.current-time"
+  | "iam.principal-id"
+  | "request.source-ip"
+  | "request.tag/environment";
 export type AuthorizationSubjectType = "USER" | "SERVICE_ACCOUNT" | "ROLE";
 export type AuthorizationUserAuthenticationMethod = "LOGIN_SESSION" | "ACCESS_KEY";
 
 export type AuthorizationProfileCondition = {
   key: AuthorizationConditionKey;
-  valueType: "STRING" | "TIME";
-  source: "IAM_AUTHENTICATED_IDENTITY" | "IAM_TRANSACTION_TIME";
+  valueType: "STRING" | "TIME" | "IP";
+  source: "IAM_AUTHENTICATED_IDENTITY" | "IAM_TRANSACTION_TIME" | "CALLING_SERVICE_NETWORK" | "CALLING_SERVICE_REQUEST_TAG";
 };
 
 export type AuthorizationResourceShape = {

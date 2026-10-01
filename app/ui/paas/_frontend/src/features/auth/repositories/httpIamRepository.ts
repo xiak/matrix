@@ -68,6 +68,7 @@ import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDi
 import type { AuthenticatorState, EnrollmentChallengeState, NotificationContact, NotificationContactVerification, NotificationDeliveryObservation, RecoveryCodeRegeneration, RecoveryCodeRegenerationResponse, SecurityStepUp, TOTPEnrollment, TOTPEnrollmentConfirmation, TOTPEnrollmentStart } from "../domain/personalSecurity";
 import type { ChangePasswordCommand, AccountRepository, IamRepository, LoginCommand } from "./iamRepository";
 import type { AssumeRoleCommand, AssumeRoleResult, AssumableRole, AssumableRoleDirectory, CurrentRoleIdentity, LiveRoleSession, Role, RoleAccess, RoleCapability, RoleCapabilityAction, RoleDirectory, RoleListing, RolePolicyAttachment, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionLifecycle, RoleSessionListing, RoleSessionRevocation, RoleSessionSource, RoleTrustDocument, RoleTrustVersion, UserRoleSession } from "../domain/roles";
+import { sourceCidrValid } from "../domain/policyLanguage";
 
 function accountRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("INVALID_IAM_RESPONSE");
@@ -1349,6 +1350,12 @@ function parseAuthorizationCondition(value: unknown): AuthorizationProfileCondit
       wire.valueType === "STRING" && wire.source === "IAM_AUTHENTICATED_IDENTITY") {
     return { key: wire.key, valueType: wire.valueType, source: wire.source };
   }
+  if (wire.key === "request.source-ip" && wire.valueType === "IP" && wire.source === "CALLING_SERVICE_NETWORK") {
+    return { key: wire.key, valueType: wire.valueType, source: wire.source };
+  }
+  if (wire.key === "request.tag/environment" && wire.valueType === "STRING" && wire.source === "CALLING_SERVICE_REQUEST_TAG") {
+    return { key: wire.key, valueType: wire.valueType, source: wire.source };
+  }
   throw new Error("INVALID_IAM_RESPONSE");
 }
 
@@ -1399,7 +1406,7 @@ function parseAuthorizationAction(value: unknown, product: string): Authorizatio
   if (new Set(shapeKeys).size !== shapeKeys.length) throw new Error("INVALID_IAM_RESPONSE");
 
   const conditionValues = wire.conditions === undefined || wire.conditions === null ? [] : wire.conditions;
-  if (!Array.isArray(conditionValues) || conditionValues.length > 3 || (scope !== "TENANT" && conditionValues.length)) {
+  if (!Array.isArray(conditionValues) || conditionValues.length > 8 || (scope !== "TENANT" && conditionValues.length)) {
     throw new Error("INVALID_IAM_RESPONSE");
   }
   const conditions = conditionValues.map(parseAuthorizationCondition);
@@ -1675,6 +1682,14 @@ const policyResourceKinds = new Set([
   "DEPLOYMENT", "SERVICE_OFFERING", "REGION", "QUOTA_ENTITLEMENT", "SERVICE_INSTALLATION", "AUDIT_RECORD", "AUDIT_CHAIN"
 ]);
 
+function policyRequestTagValue(value: unknown): string {
+  const text = accountText(value);
+  if (new TextEncoder().encode(text).length > 128 || text.trim() !== text || /\p{Cc}/u.test(text)) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  return text;
+}
+
 function parsePolicyDocument(value: unknown): AccountPolicyDocument {
   const wire = accountRecord(value);
   exactKeys(wire, ["languageVersion", "scope", "statements"]);
@@ -1709,12 +1724,22 @@ function parsePolicyDocument(value: unknown): AccountPolicyDocument {
       exactKeys(condition, ["key", "operator", "values"]);
       const key = accountText(condition.key);
       const operator = accountText(condition.operator);
-      if ((key !== "iam.account-id" && key !== "iam.principal-id" && key !== "iam.current-time") ||
+      if ((key !== "iam.account-id" && key !== "iam.principal-id" && key !== "iam.current-time" &&
+          key !== "request.source-ip" && key !== "request.tag/environment") ||
           (key === "iam.current-time"
             ? operator !== "DATE_GREATER_THAN_EQUALS" && operator !== "DATE_LESS_THAN"
-            : operator !== "STRING_EQUALS" && operator !== "STRING_NOT_EQUALS")) throw new Error("INVALID_IAM_RESPONSE");
-      const values = policyArray(condition.values, key === "iam.current-time" ? 1 : 16).map((entry) =>
-        key === "iam.current-time" ? accountTimestamp(entry) : accountIdentifier(entry));
+            : key === "request.source-ip"
+              ? operator !== "IP_ADDRESS" && operator !== "NOT_IP_ADDRESS"
+              : operator !== "STRING_EQUALS" && operator !== "STRING_NOT_EQUALS")) throw new Error("INVALID_IAM_RESPONSE");
+      const values = policyArray(condition.values, key === "iam.current-time" ? 1 : 16).map((entry) => {
+        if (key === "iam.current-time") return accountTimestamp(entry);
+        if (key === "request.source-ip") {
+          const range = accountText(entry);
+          if (!sourceCidrValid(range)) throw new Error("INVALID_IAM_RESPONSE");
+          return range;
+        }
+        return key === "request.tag/environment" ? policyRequestTagValue(entry) : accountIdentifier(entry);
+      });
       if (new Set(values).size !== values.length) throw new Error("INVALID_IAM_RESPONSE");
       return { key, operator, values };
     });

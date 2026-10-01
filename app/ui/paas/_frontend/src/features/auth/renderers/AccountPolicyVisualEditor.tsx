@@ -3,23 +3,35 @@
 import { useId, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Alert, Button, Checkbox, FormField, Input, Radio, SearchInput, Select, TablePagination, TextArea } from "@ui/xiak";
-import type { AccountPolicyDocument, AuthorizationProfileAction, AuthorizationProfileDirectory } from "../domain/accounts";
+import type { AccountPolicyDocument, AuthorizationProfileAction, AuthorizationProfileCondition, AuthorizationProfileDirectory } from "../domain/accounts";
 import { visualActionGroups, visualActionShapeKey, type VisualActionGroup } from "../domain/accountPolicyVisualAuthoring";
 import styles from "./AccountPolicyVisualEditor.module.css";
 
 type Statement = AccountPolicyDocument["statements"][number];
 type Resource = Statement["resources"][number];
 type Condition = NonNullable<Statement["conditions"]>[number];
-const conditionKeys = ["iam.account-id", "iam.principal-id", "iam.current-time"] as const;
-const conditionLabelKey = { "iam.account-id": "accountId", "iam.principal-id": "principalId", "iam.current-time": "currentTime" } as const;
+const conditionLabelKey = {
+  "iam.account-id": "accountId",
+  "iam.principal-id": "principalId",
+  "iam.current-time": "currentTime",
+  "request.source-ip": "sourceIp",
+  "request.tag/environment": "environmentRequestTag"
+} as const;
 const stringOperators = ["STRING_EQUALS", "STRING_NOT_EQUALS"] as const;
 const timeOperators = ["DATE_GREATER_THAN_EQUALS", "DATE_LESS_THAN"] as const;
+const ipOperators = ["IP_ADDRESS", "NOT_IP_ADDRESS"] as const;
 const maxStatementActions = 128;
 const emptySelectedActions: string[] = [];
 const collectionOnly = (action: AuthorizationProfileAction) => visualActionShapeKey(action) === "COLLECTION";
-const reviewConditionLabelKey = { "iam.account-id": "keys.accountId", "iam.principal-id": "keys.principalId", "iam.current-time": "keys.currentTime" } as const;
 const operatorLabelKey = { STRING_EQUALS: "operators.STRING_EQUALS", STRING_NOT_EQUALS: "operators.STRING_NOT_EQUALS",
-  DATE_GREATER_THAN_EQUALS: "operators.DATE_GREATER_THAN_EQUALS", DATE_LESS_THAN: "operators.DATE_LESS_THAN" } as const;
+  DATE_GREATER_THAN_EQUALS: "operators.DATE_GREATER_THAN_EQUALS", DATE_LESS_THAN: "operators.DATE_LESS_THAN",
+  IP_ADDRESS: "operators.IP_ADDRESS", NOT_IP_ADDRESS: "operators.NOT_IP_ADDRESS" } as const;
+
+function operatorsFor(condition: AuthorizationProfileCondition) {
+  if (condition.valueType === "TIME") return timeOperators;
+  if (condition.valueType === "IP") return ipOperators;
+  return stringOperators;
+}
 
 export function PolicyVisualReview({ document, headingLevel = 3 }: { document: AccountPolicyDocument; headingLevel?: 3 | 4 }) {
   const t = useTranslations("PolicyVisualAuthoring");
@@ -46,7 +58,7 @@ export function PolicyVisualReview({ document, headingLevel = 3 }: { document: A
         {t(`matches.${resource.match}`)} · <code>{resource.kind}</code>{resource.id ? <> · <code>{resource.id}</code></> : null}
       </li>)}</ul></dd></div>
       <div><dt>{t("conditions")}</dt><dd>{statement.conditions?.length ? <ul>{statement.conditions.map((condition, at) => <li key={at}>
-        {Object.hasOwn(reviewConditionLabelKey, condition.key) ? t(reviewConditionLabelKey[condition.key as keyof typeof reviewConditionLabelKey]) : <code>{condition.key}</code>}
+        {Object.hasOwn(conditionLabelKey, condition.key) ? t(`keys.${conditionLabelKey[condition.key as keyof typeof conditionLabelKey]}`) : <code>{condition.key}</code>}
         {" · "}{Object.hasOwn(operatorLabelKey, condition.operator) ? t(operatorLabelKey[condition.operator as keyof typeof operatorLabelKey]) : <code>{condition.operator}</code>}
         {" · "}<code>{condition.values.join(", ")}</code>
       </li>)}</ul> : t("reviewNoConditions")}</dd></div>
@@ -116,9 +128,11 @@ function StatementFields({ statement, group, onChange }: {
   const selected = group.actions.filter((action) => statement.actions.includes(action.action));
   const allCollectionOnly = selected.length > 0 && selected.every(collectionOnly);
   const prefixAllowed = selected.every((action) => action.resourceShapes.some((shape) => shape.mode === "INSTANCE" && shape.prefixAllowed));
-  const availableConditions = conditionKeys.filter((key) => selected.every((action) => (action.conditions ?? []).some((condition) => condition.key === key)));
-  const nextCondition = availableConditions.flatMap((key) => (key === "iam.current-time" ? timeOperators : stringOperators)
-    .map((operator) => ({ key, operator }))).find((candidate) => !(statement.conditions ?? []).some((condition) => condition.key === candidate.key && condition.operator === candidate.operator));
+  const availableConditions = (selected[0]?.conditions ?? []).filter((definition) => selected.every((action) =>
+    (action.conditions ?? []).some((condition) => condition.key === definition.key && condition.valueType === definition.valueType && condition.source === definition.source)));
+  const trustedRequestTags = availableConditions.filter((condition) => condition.source === "CALLING_SERVICE_REQUEST_TAG");
+  const nextCondition = availableConditions.flatMap((definition) => operatorsFor(definition)
+    .map((operator) => ({ key: definition.key, operator }))).find((candidate) => !(statement.conditions ?? []).some((condition) => condition.key === candidate.key && condition.operator === candidate.operator));
   const updateResource = (index: number, next: Resource) => onChange({ ...statement, resources: statement.resources.map((resource, at) => at === index ? next : resource) });
   const updateCondition = (index: number, next: Condition) => onChange({ ...statement, conditions: statement.conditions?.map((condition, at) => at === index ? next : condition) });
   return <div className={styles.statementFields}>
@@ -165,22 +179,30 @@ function StatementFields({ statement, group, onChange }: {
     </section>
     <section className={styles.groupSection} aria-label={t("conditions")}>
       <div className={styles.sectionHeading}><div><h4>{t("conditions")}</h4><p>{t("conditionsHint")}</p></div></div>
+      {trustedRequestTags.length ? <div className={styles.conditionCapability}>
+        <strong>{t("trustedRequestTagTitle")}</strong>
+        <p>{t("trustedRequestTagCapability", { keys: trustedRequestTags.map((condition) => condition.key.replace("request.tag/", "")).join(" · ") })}</p>
+        <p>{t("trustedRequestTagSemantics")}</p>
+      </div> : null}
       {(statement.conditions ?? []).map((condition, index) => <div className={styles.row} key={index}>
         <FormField id={id + "-condition-key-" + index} label={t("conditionKey", { number: index + 1 })}>
-          <Select id={id + "-condition-key-" + index} value={condition.key} options={availableConditions.map((key) => ({ value: key, label: t(`keys.${conditionLabelKey[key]}`),
-            disabled: (key === "iam.current-time" ? timeOperators : stringOperators).every((operator) =>
-              (statement.conditions ?? []).some((other, at) => at !== index && other.key === key && other.operator === operator)) }))}
-            onValueChange={(value) => { const operator = (value === "iam.current-time" ? timeOperators : stringOperators).find((candidate) =>
-              !(statement.conditions ?? []).some((other, at) => at !== index && other.key === value && other.operator === candidate));
+          <Select id={id + "-condition-key-" + index} value={condition.key} options={availableConditions.map((definition) => ({ value: definition.key, label: t(`keys.${conditionLabelKey[definition.key]}`),
+            disabled: operatorsFor(definition).every((operator) =>
+              (statement.conditions ?? []).some((other, at) => at !== index && other.key === definition.key && other.operator === operator)) }))}
+            onValueChange={(value) => { const definition = availableConditions.find((candidate) => candidate.key === value);
+              const operator = definition && operatorsFor(definition).find((candidate) =>
+                !(statement.conditions ?? []).some((other, at) => at !== index && other.key === value && other.operator === candidate));
               if (operator) updateCondition(index, { key: value, operator, values: [""] }); }} />
         </FormField>
         <FormField id={id + "-condition-operator-" + index} label={t("operator")}>
           <Select id={id + "-condition-operator-" + index} value={condition.operator}
-            options={(condition.key === "iam.current-time" ? timeOperators : stringOperators).map((operator) => ({ value: operator, label: t(`operators.${operator}`),
+            options={(availableConditions.find((definition) => definition.key === condition.key) ?
+              operatorsFor(availableConditions.find((definition) => definition.key === condition.key)!) : stringOperators).map((operator) => ({ value: operator, label: t(`operators.${operator}`),
               disabled: (statement.conditions ?? []).some((other, at) => at !== index && other.key === condition.key && other.operator === operator) }))}
             onValueChange={(value) => updateCondition(index, { ...condition, operator: value })} />
         </FormField>
-        <FormField id={id + "-condition-values-" + index} label={t("values")} hint={t(condition.key === "iam.current-time" ? "timeHint" : "valuesHint")}>
+        <FormField id={id + "-condition-values-" + index} label={t("values")} hint={t(condition.key === "iam.current-time" ? "timeHint" :
+          condition.key === "request.source-ip" ? "ipHint" : condition.key.startsWith("request.tag/") ? "requestTagValuesHint" : "valuesHint")}>
           <TextArea id={id + "-condition-values-" + index} rows={2} maxLength={2048} value={condition.values.join("\n")}
             onChange={(event) => updateCondition(index, { ...condition, values: event.target.value.split(/\r?\n/) })} />
         </FormField>

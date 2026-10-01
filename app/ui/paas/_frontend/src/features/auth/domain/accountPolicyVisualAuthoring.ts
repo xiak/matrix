@@ -1,4 +1,5 @@
 import type { AccountPolicyDocument, AuthorizationProfileAction, AuthorizationProfileDirectory } from "./accounts";
+import { sourceCidrValid } from "./policyLanguage";
 
 export type VisualActionGroup = {
   product: string;
@@ -42,6 +43,18 @@ export type VisualDraftResult =
   | { status: "jsonInvalid" | "shapeInvalid" | "catalogMismatch" };
 
 const policyId = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+const supportedConditionKeys = new Set(["iam.account-id", "iam.principal-id", "iam.current-time", "request.source-ip", "request.tag/environment"]);
+
+function requestTagValueValid(value: string): boolean {
+  const bytes = new TextEncoder().encode(value).length;
+  return bytes >= 1 && bytes <= 128 && value.trim() === value && !/\p{Cc}/u.test(value);
+}
+
+function conditionOperators(key: string): readonly string[] {
+  if (key === "iam.current-time") return ["DATE_GREATER_THAN_EQUALS", "DATE_LESS_THAN"];
+  if (key === "request.source-ip") return ["IP_ADDRESS", "NOT_IP_ADDRESS"];
+  return ["STRING_EQUALS", "STRING_NOT_EQUALS"];
+}
 
 // This is only a quick authoring check for fields the form can create. IAM's
 // publication validator remains authoritative for the complete policy grammar.
@@ -63,9 +76,16 @@ export function visualDraftHasIncompleteFields(document: AccountPolicyDocument):
       const identity = `${condition.key}\0${condition.operator}`;
       if (conditions.has(identity)) return true;
       conditions.add(identity);
+      if (!supportedConditionKeys.has(condition.key) || !conditionOperators(condition.key).includes(condition.operator)) return true;
       if (condition.key === "iam.current-time") {
         if (condition.values.length !== 1 || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.[0-9]{0,5}[1-9])?Z$/.test(condition.values[0] ?? "") ||
             Number.isNaN(Date.parse(condition.values[0]!))) return true;
+      } else if (condition.key === "request.source-ip") {
+        if (condition.values.length < 1 || condition.values.length > 16 || condition.values.some((value) => !sourceCidrValid(value)) ||
+            new Set(condition.values).size !== condition.values.length) return true;
+      } else if (condition.key === "request.tag/environment") {
+        if (condition.values.length < 1 || condition.values.length > 16 || condition.values.some((value) => !requestTagValueValid(value)) ||
+            new Set(condition.values).size !== condition.values.length) return true;
       } else if (condition.values.length < 1 || condition.values.length > 16 ||
         condition.values.some((value) => !policyId.test(value)) || new Set(condition.values).size !== condition.values.length) return true;
     }
@@ -108,11 +128,9 @@ export function visualDraftFromJSON(text: string, directory: AuthorizationProfil
     if (statement.conditions !== undefined && (!Array.isArray(statement.conditions) || !statement.conditions.length || statement.conditions.length > 16 ||
         statement.conditions.some((condition: unknown) => !record(condition) ||
           !keysAre(condition, ["key", "operator", "values"]) ||
-          !["iam.account-id", "iam.principal-id", "iam.current-time"].includes(String(condition.key)) ||
+          !supportedConditionKeys.has(String(condition.key)) ||
           !Array.isArray(condition.values) || !condition.values.length || !condition.values.every((value) => typeof value === "string" && Boolean(value.trim())) ||
-          !(condition.key === "iam.current-time"
-            ? ["DATE_GREATER_THAN_EQUALS", "DATE_LESS_THAN"].includes(String(condition.operator))
-            : ["STRING_EQUALS", "STRING_NOT_EQUALS"].includes(String(condition.operator))) ||
+          !conditionOperators(String(condition.key)).includes(String(condition.operator)) ||
           selected.some((action) => !(action.conditions ?? []).some((supported) => supported.key === condition.key))))) {
       return { status: "catalogMismatch" };
     }

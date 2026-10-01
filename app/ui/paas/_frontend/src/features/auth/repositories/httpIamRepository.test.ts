@@ -1325,7 +1325,11 @@ describe("IAM HTTP account boundary", () => {
   it("reads only the exact tenant policy's current default document without an account selector", async () => {
     const document = { languageVersion: "1", scope: "TENANT", statements: [{
       sid: "read-applications", effect: "ALLOW", actions: ["paas.application.read"],
-      resources: [{ kind: "APPLICATION", match: "ANY_IN_AUTHORITY" }]
+      resources: [{ kind: "APPLICATION", match: "ANY_IN_AUTHORITY" }],
+      conditions: [
+        { key: "request.source-ip", operator: "IP_ADDRESS", values: ["192.0.2.0/24"] },
+        { key: "request.tag/environment", operator: "STRING_EQUALS", values: ["production", "预发布"] }
+      ]
     }] };
     const version = { policyId: customerPolicy.id, versionId: customerPolicy.defaultVersionId, document,
       contentDigest: `sha256:${"a".repeat(64)}`, contractVersion: 1 };
@@ -1336,6 +1340,7 @@ describe("IAM HTTP account boundary", () => {
     expect(firstRequest(fetcher)[1]).toMatchObject({ cache: "no-store", headers: { Authorization: "Bearer bearer" } });
     expect(firstRequest(fetcher)[1].body).toBeUndefined();
     expect(detail.version.document.statements[0]?.actions).toEqual(["paas.application.read"]);
+    expect(detail.version.document.statements[0]?.conditions).toEqual(document.statements[0]!.conditions);
 
     for (const invalid of [
       { ...body, policy: { ...customerPolicy, accountId: "another-account" } },
@@ -1345,6 +1350,8 @@ describe("IAM HTTP account boundary", () => {
       { ...body, version: { ...version, document: { ...document, statements: [{ ...document.statements[0], actions: ["paas.application.*"] }] } } },
       { ...body, version: { ...version, contractVersion: 2 } },
       { ...body, version: { ...version, document: { ...document, statements: [{ ...document.statements[0], resources: [{ kind: "OTHER", match: "ANY_IN_AUTHORITY" }] }] } } },
+      { ...body, version: { ...version, document: { ...document, statements: [{ ...document.statements[0], conditions: [{ key: "request.source-ip", operator: "IP_ADDRESS", values: ["192.0.2.42/24"] }] }] } } },
+      { ...body, version: { ...version, document: { ...document, statements: [{ ...document.statements[0], conditions: [{ key: "request.tag/environment", operator: "STRING_EQUALS", values: [" production"] }] }] } } },
       { ...body, version: { ...version, extra: true } }
     ]) {
       reply(invalid);
@@ -1558,6 +1565,23 @@ describe("IAM HTTP account boundary", () => {
     ].map((entry) => ({ contentDigest: entry.contentDigest, profile: {
       product: entry.profile.product, revision: entry.profile.revision, callingService: entry.profile.callingService, actions: entry.profile.actions
     } })) });
+  });
+
+  it("accepts only the fixed network and trusted request-tag Profile declarations", async () => {
+    const entry = profileEntry("paas");
+    entry.profile.revision = 4;
+    entry.profile.actions[0]!.conditions = [
+      ...entry.profile.actions[0]!.conditions,
+      { key: "request.source-ip", valueType: "IP", source: "CALLING_SERVICE_NETWORK" },
+      { key: "request.tag/environment", valueType: "STRING", source: "CALLING_SERVICE_REQUEST_TAG" }
+    ];
+    reply({ apiVersion, kind: "AuthorizationProfileList", accountId: account.id, items: [entry] });
+    const result = await httpAccountRepository.listAuthorizationProfiles("bearer");
+    expect(result.items[0]!.profile.revision).toBe(4);
+    expect(result.items[0]!.profile.actions[0]!.conditions?.slice(-2)).toEqual([
+      { key: "request.source-ip", valueType: "IP", source: "CALLING_SERVICE_NETWORK" },
+      { key: "request.tag/environment", valueType: "STRING", source: "CALLING_SERVICE_REQUEST_TAG" }
+    ]);
   });
 
   it("reads the platform service-role template directory without an account selector or request body", async () => {
