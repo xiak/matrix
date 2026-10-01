@@ -6,8 +6,8 @@
 - Updated: 2026-10-01
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed milestone: `f4430afa`
-- Pushed documentation milestone: `ec558f65`
+- Pushed source/embed milestone: `b18f0318`
+- Pushed documentation milestone: `b18f0318`
 
 ## Authoritative route
 
@@ -98,6 +98,19 @@ LIVE wire was invented. Source/embed `f4430afa` passed the full 55-file/899-test
 frontend, export/embed and focused Go UI host gates; desktop and `390 × 844`
 DEV inspection had no overflow and a fresh tab had no warning/error. The
 contract and limits are owned by FEAT-IAM-010 at `ec558f65`.
+
+Audit is now an independent console product rather than an IAM submenu. The
+record directory exposes only the accepted bounded time, Action, actor,
+page-size and opaque-cursor inputs; tenant identity always comes from the
+credential boundary. Record evidence and bounded integrity verification use
+content-region views, the fixed shell renders immediately, and loading stays
+local to data surfaces. LIVE uses strict closed response parsing and never
+falls back to MOCK; the retained preview adapter is visibly marked and rejects
+invalid cursors and ranges beyond its chain tail. Source, documentation and
+233 embedded export files are pushed at `b18f0318`; the full 57-file/906-test
+frontend gate, type/lint/architecture checks, 228 contrast pairs, 42-page
+production export, Go web test/vet, desktop and `390 × 844` browser checks all
+passed. FEAT-006 owns the durable contract and evidence.
 
 The earlier navigation stress gate remains unchanged: 200 alternating suspended
 IAM Group and Role destinations preserve the latest click and clear pending
