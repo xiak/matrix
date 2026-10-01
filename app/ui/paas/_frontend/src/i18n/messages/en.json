@@ -4046,6 +4046,8 @@
     "keyRequestPreviewTable": "Public signed product-request outcomes",
     "keyRequestPreviewCode": "Public result",
     "keyRequestPreviewMeaning": "Caller meaning",
+    "keyRequestPreviewOperation": "Operation type",
+    "keyRequestPreviewOperationHint": "Inspect one operation's public outcomes at a time. Switching sends no request.",
     "keyRequestPreviewKinds": {
       "create": {
         "scope": "{count} exact signed create Actions",

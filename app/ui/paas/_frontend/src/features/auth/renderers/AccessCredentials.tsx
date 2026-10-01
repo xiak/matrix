@@ -213,16 +213,28 @@ export function RotationGuide() {
 
 function ProgrammaticRequestBoundaryPreview({ actions }: { actions: readonly string[] }) {
   const t = useTranslations("IamWorkspace");
+  const operationId = useId();
+  const [selectedBoundary, setSelectedBoundary] = useState("");
   const boundaries = previewProgrammaticBoundaries.map((entry) => ({
     ...entry,
-    actions: entry.actions.filter((action) => actions.includes(action))
+    actions: entry.actions.filter((action) => actions.includes(action)),
+    key: `${entry.product}:${entry.profileRevision}:${entry.kind}`
   })).filter((entry) => entry.actions.length > 0);
   if (!boundaries.length) return null;
+  const entry = boundaries.find((candidate) => candidate.key === selectedBoundary) ?? boundaries[0]!;
   return <details className={styles.requestPreview}>
     <summary><span><strong>{t("keyRequestPreviewTitle")}</strong><small>{t("keyRequestPreviewHint")}</small></span><Badge status="warning">MOCK</Badge></summary>
     <div className={styles.requestPreviewBody}>
       <Alert status="warning">{t("keyRequestPreviewNotLive")}</Alert>
-      {boundaries.map((entry) => <section className={styles.requestBoundary} key={`${entry.product}:${entry.profileRevision}:${entry.kind}`}>
+      <div className={styles.requestBoundaryPicker}>
+        <FormField id={operationId} label={t("keyRequestPreviewOperation")} hint={t("keyRequestPreviewOperationHint")}>
+          <Select id={operationId} value={entry.key} options={boundaries.map((candidate) => ({
+            value: candidate.key,
+            label: t(`keyRequestPreviewKinds.${candidate.kind}.scope`, { count: candidate.actions.length })
+          }))} onValueChange={setSelectedBoundary} />
+        </FormField>
+      </div>
+      <section className={styles.requestBoundary} key={entry.key}>
         <header><div><strong>{t(`keyRequestPreviewKinds.${entry.kind}.scope`, { count: entry.actions.length })}</strong><small>{t("keyRequestPreviewSource", { source: entry.fixedSource })}</small></div><Badge status="neutral">{entry.product} · r{entry.profileRevision}</Badge></header>
         <div className={styles.requestActions}>{entry.actions.map((action) => <code key={action}>{action}</code>)}</div>
         <Table aria-label={t("keyRequestPreviewTable")} className={styles.requestOutcomeTable} mobileLayout="stack">
@@ -235,7 +247,7 @@ function ProgrammaticRequestBoundaryPreview({ actions }: { actions: readonly str
           </tr>)}</tbody>
         </Table>
         <p className={styles.note}>{t(`keyRequestPreviewKinds.${entry.kind}.successBoundary`)}</p>
-      </section>)}
+      </section>
     </div>
   </details>;
 }

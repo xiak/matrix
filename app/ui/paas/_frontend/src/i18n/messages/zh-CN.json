@@ -4046,6 +4046,8 @@
     "keyRequestPreviewTable": "签名产品请求的公开结果",
     "keyRequestPreviewCode": "公开结果",
     "keyRequestPreviewMeaning": "调用方含义",
+    "keyRequestPreviewOperation": "操作类型",
+    "keyRequestPreviewOperationHint": "一次查看一种操作的公开结果，切换不会发送请求。",
     "keyRequestPreviewKinds": {
       "create": {
         "scope": "{count} 个精确签名创建 Action",
