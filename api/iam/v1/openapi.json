@@ -8011,12 +8011,11 @@
                 }
               ],
               "properties": {
-                "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:83a1c4665b2363af22d882202f318f1ebb7ed16d33244723d18183ee3a404186",
+                    "contentDigest": "sha256:b79c5d540609731bbb65acb704bdd73e98cf35fb53332ec015d5252f303be0bd",
                     "product": "audit",
-                    "revision": 3
+                    "revision": 4
                   }
                 },
                 "requestTags": false,
@@ -8077,12 +8076,11 @@
                 }
               ],
               "properties": {
-                "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:83a1c4665b2363af22d882202f318f1ebb7ed16d33244723d18183ee3a404186",
+                    "contentDigest": "sha256:b79c5d540609731bbb65acb704bdd73e98cf35fb53332ec015d5252f303be0bd",
                     "product": "audit",
-                    "revision": 3
+                    "revision": 4
                   }
                 },
                 "requestTags": false,
@@ -8146,9 +8144,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:83a1c4665b2363af22d882202f318f1ebb7ed16d33244723d18183ee3a404186",
+                    "contentDigest": "sha256:b79c5d540609731bbb65acb704bdd73e98cf35fb53332ec015d5252f303be0bd",
                     "product": "audit",
-                    "revision": 3
+                    "revision": 4
                   }
                 },
                 "requestTags": false,
@@ -8212,9 +8210,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:83a1c4665b2363af22d882202f318f1ebb7ed16d33244723d18183ee3a404186",
+                    "contentDigest": "sha256:b79c5d540609731bbb65acb704bdd73e98cf35fb53332ec015d5252f303be0bd",
                     "product": "audit",
-                    "revision": 3
+                    "revision": 4
                   }
                 },
                 "requestTags": false,
@@ -14024,12 +14022,11 @@
                 }
               ],
               "properties": {
-                "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:83a1c4665b2363af22d882202f318f1ebb7ed16d33244723d18183ee3a404186",
+                    "contentDigest": "sha256:b79c5d540609731bbb65acb704bdd73e98cf35fb53332ec015d5252f303be0bd",
                     "product": "audit",
-                    "revision": 3
+                    "revision": 4
                   }
                 },
                 "requestTags": false,
@@ -14080,12 +14077,11 @@
                 }
               ],
               "properties": {
-                "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:83a1c4665b2363af22d882202f318f1ebb7ed16d33244723d18183ee3a404186",
+                    "contentDigest": "sha256:b79c5d540609731bbb65acb704bdd73e98cf35fb53332ec015d5252f303be0bd",
                     "product": "audit",
-                    "revision": 3
+                    "revision": 4
                   }
                 },
                 "requestTags": false,
@@ -14139,9 +14135,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:83a1c4665b2363af22d882202f318f1ebb7ed16d33244723d18183ee3a404186",
+                    "contentDigest": "sha256:b79c5d540609731bbb65acb704bdd73e98cf35fb53332ec015d5252f303be0bd",
                     "product": "audit",
-                    "revision": 3
+                    "revision": 4
                   }
                 },
                 "requestTags": false,
@@ -14195,9 +14191,9 @@
                 "networkContext": false,
                 "profile": {
                   "const": {
-                    "contentDigest": "sha256:83a1c4665b2363af22d882202f318f1ebb7ed16d33244723d18183ee3a404186",
+                    "contentDigest": "sha256:b79c5d540609731bbb65acb704bdd73e98cf35fb53332ec015d5252f303be0bd",
                     "product": "audit",
-                    "revision": 3
+                    "revision": 4
                   }
                 },
                 "requestTags": false,
@@ -18276,6 +18272,10 @@
                 "actions": {
                   "items": {
                     "enum": [
+                      "audit.integrity.*",
+                      "audit.integrity.verify",
+                      "audit.record.*",
+                      "audit.record.read",
                       "paas.application-label.*",
                       "paas.application-label.delete",
                       "paas.application-label.set",

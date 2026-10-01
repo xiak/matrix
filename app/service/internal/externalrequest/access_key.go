@@ -18,6 +18,7 @@ import (
 const (
 	HeaderExternalOrigin        = "X-Matrix-External-Origin"
 	HeaderExternalRequestTarget = "X-Matrix-External-Request-Target"
+	HeaderExternalSourceIP      = "X-Matrix-External-Source-IP"
 )
 
 var (
@@ -34,6 +35,14 @@ type Boundary struct {
 	externalPrefix string
 	audience       iamv1.ProductID
 	installationID string
+}
+
+// AccessKeyRequest contains the client-signed HTTP request plus one
+// independently edge-attested network fact. SourceIP is not caller input and
+// is evaluated by IAM policy; it is not retroactively part of the HMAC.
+type AccessKeyRequest struct {
+	SignedRequest iamv1.AccessKeySignedRequest
+	SourceIP      string
 }
 
 func NewBoundary(origin, externalPrefix, installationID string, audience iamv1.ProductID) (*Boundary, error) {
@@ -92,18 +101,23 @@ func IsAccessKeyAuthorization(request *http.Request) bool {
 	return false
 }
 
-// SignedRequest reconstructs the canonical input from edge-owned facts and
+// AccessKeyRequest reconstructs the canonical input from edge-owned facts and
 // the actual request/body handled by the product. The caller must enforce its
 // route/action mapping separately and must reuse body for business decoding.
-func (boundary *Boundary) SignedRequest(request *http.Request, body []byte) (iamv1.AccessKeySignedRequest, error) {
-	invalid := func() (iamv1.AccessKeySignedRequest, error) {
-		return iamv1.AccessKeySignedRequest{}, ErrInvalidRequest
+func (boundary *Boundary) AccessKeyRequest(request *http.Request, body []byte) (AccessKeyRequest, error) {
+	invalid := func() (AccessKeyRequest, error) {
+		return AccessKeyRequest{}, ErrInvalidRequest
 	}
 	if boundary == nil || request == nil || request.URL == nil || request.Host == "" ||
 		len(request.Header.Values("Authorization")) != 1 ||
 		len(request.Header.Values(HeaderExternalOrigin)) != 1 ||
 		len(request.Header.Values(HeaderExternalRequestTarget)) != 1 ||
+		len(request.Header.Values(HeaderExternalSourceIP)) != 1 ||
 		request.Header.Get(HeaderExternalOrigin) != boundary.origin || hasForbiddenSemantics(request) {
+		return invalid()
+	}
+	source, err := iamv1.ParseAuthorizationSourceIP(request.Header.Get(HeaderExternalSourceIP))
+	if err != nil {
 		return invalid()
 	}
 	parameters, signature, err := iamv1.ParseAccessKeyAuthorization(request.Header.Get("Authorization"))
@@ -132,7 +146,7 @@ func (boundary *Boundary) SignedRequest(request *http.Request, body []byte) (iam
 	if iamv1.ValidateAccessKeySignedRequest(signed) != nil {
 		return invalid()
 	}
-	return signed, nil
+	return AccessKeyRequest{SignedRequest: signed, SourceIP: source.String()}, nil
 }
 
 func (boundary *Boundary) mapTarget(target string, request *http.Request) (string, string, error) {
@@ -183,6 +197,7 @@ func hasForbiddenSemantics(request *http.Request) bool {
 	}
 	for _, name := range []string{
 		"Cookie", "Matrix-Subject-Credential", "Content-Encoding", "X-HTTP-Method-Override", "Trailer",
+		"Forwarded", "X-Forwarded-For", "X-Real-IP",
 		"Range", "Content-Range", "If-None-Match", "If-Modified-Since", "If-Unmodified-Since", "Prefer", "Digest", "Want-Digest",
 	} {
 		if len(request.Header.Values(name)) != 0 {

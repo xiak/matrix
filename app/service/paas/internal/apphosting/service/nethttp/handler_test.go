@@ -224,7 +224,7 @@ func TestHandlerCreatesApplicationThroughExactAccessKeyBoundary(t *testing.T) {
 	}
 	if authorizer.accessKeyRequest.Action != port.AuthorizeApplicationCreate ||
 		authorizer.accessKeyRequest.Resource != (paasv1.ResourceRef{Kind: "Application", ID: "collection"}) ||
-		authorizer.accessKeyRequest.SourceIP != "192.0.2.1" ||
+		authorizer.accessKeyRequest.SourceIP != "192.0.2.10" ||
 		!reflect.DeepEqual(authorizer.accessKeyRequest.RequestLabels, body.Labels) ||
 		!reflect.DeepEqual(workflow.createApplicationCommand.Request, body) ||
 		workflow.createApplicationCommand.Authorization.Subject.AccessKeyID != "key-one" {
@@ -1415,6 +1415,7 @@ func setAccessKeyEdgeHeaders(t *testing.T, request *http.Request, externalTarget
 	clear(plain)
 	request.Header.Set(externalrequest.HeaderExternalOrigin, "https://api.example.test:443")
 	request.Header.Set(externalrequest.HeaderExternalRequestTarget, externalTarget)
+	request.Header.Set(externalrequest.HeaderExternalSourceIP, "192.0.2.10")
 }
 
 func testMetadata(id paasv1.ResourceID, name string) paasv1.ResourceMetadata {

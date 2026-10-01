@@ -363,8 +363,8 @@ func TestIAMRetainedPredecessorProcessUpgrade(t *testing.T) {
 		t.Fatal("predecessor Audit profile archive is invalid", err)
 	}
 	expectedAuditProfile, found := iamv1.LookupAuthorizationProfile(iamv1.ProductAudit)
-	if !found || expectedAuditProfile.Revision != 3 {
-		t.Fatal("current source has no Audit AccessKey profile")
+	if !found || expectedAuditProfile.Revision != 4 {
+		t.Fatal("current source has no Audit trusted-source profile")
 	}
 	expectedAuditProfileDocument, expectedAuditProfileDigest, err := iamv1.CanonicalizeAuthorizationProfile(expectedAuditProfile)
 	if err != nil {
@@ -5843,12 +5843,13 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 	}
 	type accountFixture struct {
 		owner, manager, targetBearer, path string
+		sourceIP                           string
 		target                             iamv1.User
 		grant                              iamv1.PolicyAttachment
 		key                                iamv1.CreateAccessKeyResponse
 		intent                             iamv1.CreateAccessKeyRequest
 	}
-	accounts := []accountFixture{{owner: home}, {owner: customer}}
+	accounts := []accountFixture{{owner: home, sourceIP: "192.0.2.10"}, {owner: customer, sourceIP: "192.0.2.11"}}
 	sensitive := []string{}
 	for index := range accounts {
 		account := &accounts[index]
@@ -6016,8 +6017,8 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		return response
 	}
 	type signedProductRequest struct {
-		method, body, route, externalPath, contentType, idempotencyKey, ifMatch string
-		signed                                                                  iamv1.AccessKeySignedRequest
+		method, body, route, externalPath, contentType, idempotencyKey, ifMatch, sourceIP string
+		signed                                                                            iamv1.AccessKeySignedRequest
 	}
 	prepareProduct := func(account *accountFixture, route, idempotencyKey string, payload any) signedProductRequest {
 		t.Helper()
@@ -6029,7 +6030,7 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		externalPath := "/api/paas" + route
 		return signedProductRequest{
 			method: http.MethodPost, body: string(body), route: route, externalPath: externalPath,
-			contentType: "application/json", idempotencyKey: idempotencyKey,
+			contentType: "application/json", idempotencyKey: idempotencyKey, sourceIP: account.sourceIP,
 			signed: signHTTP(account, iamv1.AccessKeyHTTPRequest{
 				Method: http.MethodPost, Scheme: "https", Authority: "api.matrix.test:443",
 				EscapedPath: externalPath, ContentType: "application/json", IdempotencyKey: idempotencyKey,
@@ -6042,7 +6043,7 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		digest := sha256.Sum256(nil)
 		externalPath := "/api/paas" + route
 		return signedProductRequest{
-			method: http.MethodGet, route: route, externalPath: externalPath,
+			method: http.MethodGet, route: route, externalPath: externalPath, sourceIP: account.sourceIP,
 			signed: signHTTP(account, iamv1.AccessKeyHTTPRequest{
 				Method: http.MethodGet, Scheme: "https", Authority: "api.matrix.test:443",
 				EscapedPath: externalPath, BodyDigest: "sha256:" + hex.EncodeToString(digest[:]),
@@ -6059,7 +6060,7 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		externalPath := "/api/paas" + route
 		return signedProductRequest{
 			method: method, body: string(body), route: route, externalPath: externalPath,
-			contentType: "application/json", idempotencyKey: idempotencyKey, ifMatch: ifMatch,
+			contentType: "application/json", idempotencyKey: idempotencyKey, ifMatch: ifMatch, sourceIP: account.sourceIP,
 			signed: signHTTP(account, iamv1.AccessKeyHTTPRequest{
 				Method: method, Scheme: "https", Authority: "api.matrix.test:443",
 				EscapedPath: externalPath, ContentType: "application/json", IdempotencyKey: idempotencyKey, IfMatch: ifMatch,
@@ -6073,7 +6074,7 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		externalPath := "/api/paas" + route
 		return signedProductRequest{
 			method: method, route: route, externalPath: externalPath,
-			idempotencyKey: idempotencyKey, ifMatch: ifMatch,
+			idempotencyKey: idempotencyKey, ifMatch: ifMatch, sourceIP: account.sourceIP,
 			signed: signHTTP(account, iamv1.AccessKeyHTTPRequest{
 				Method: method, Scheme: "https", Authority: "api.matrix.test:443",
 				EscapedPath: externalPath, IdempotencyKey: idempotencyKey, IfMatch: ifMatch,
@@ -6105,6 +6106,7 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		}
 		request.Header.Set("X-Matrix-External-Origin", "https://api.matrix.test:443")
 		request.Header.Set("X-Matrix-External-Request-Target", value.externalPath)
+		request.Header.Set("X-Matrix-External-Source-IP", value.sourceIP)
 		response, err := processHTTPClient().Do(request)
 		if err != nil {
 			t.Fatal("invoke signed PaaS request", err)
@@ -6126,7 +6128,7 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		externalPath := "/api/audit" + route
 		return signedProductRequest{
 			method: http.MethodPost, body: string(body), route: route, externalPath: externalPath,
-			contentType: "application/json",
+			contentType: "application/json", sourceIP: account.sourceIP,
 			signed: signHTTPFor(account, iamv1.ProductAudit, iamv1.AccessKeyHTTPRequest{
 				Method: http.MethodPost, Scheme: "https", Authority: "api.matrix.test:443",
 				EscapedPath: externalPath, ContentType: "application/json",
@@ -6150,6 +6152,7 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		request.Header.Set("Content-Type", value.contentType)
 		request.Header.Set("X-Matrix-External-Origin", "https://api.matrix.test:443")
 		request.Header.Set("X-Matrix-External-Request-Target", value.externalPath)
+		request.Header.Set("X-Matrix-External-Source-IP", value.sourceIP)
 		response, err := processHTTPClient().Do(request)
 		if err != nil {
 			t.Fatal("invoke signed Audit request", err)
@@ -6161,7 +6164,7 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		}
 		return processResponse{Status: response.StatusCode, Body: body, Header: response.Header.Clone()}
 	}
-	recordAuditDecision := func(account *accountFixture, response processResponse, action iamv1.Action, kind iamv1.ResourceKind) {
+	recordAuditDecision := func(account *accountFixture, response processResponse, action iamv1.Action, kind iamv1.ResourceKind, sourceIP string, allowed bool) {
 		t.Helper()
 		requestID := response.Header.Get("Matrix-Request-ID")
 		if requestID == "" {
@@ -6169,11 +6172,12 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		}
 		var decisionID iamv1.DecisionID
 		var exact bool
-		if err := database.QueryRow(ctx, `SELECT id,allowed AND contract_version=7 AND principal_id=$2 AND access_key_id=$3
+		if err := database.QueryRow(ctx, `SELECT id,allowed=$7 AND contract_version=7 AND principal_id=$2 AND access_key_id=$3
 			AND action_name=$4 AND target_kind=$5 AND target_id='collection'
 			AND NOT (document ? 'requestTags') AND NOT (document ? 'resourceTags')
+			AND document#>>'{networkContext,sourceIp}'=$8
 			FROM iam.authorization_decisions WHERE tenant_id=$1 AND request_id=$6`,
-			account.target.AccountID, account.target.ID, account.key.Key.ID, action, kind, requestID).Scan(&decisionID, &exact); err != nil || !exact {
+			account.target.AccountID, account.target.ID, account.key.Key.ID, action, kind, requestID, allowed, sourceIP).Scan(&decisionID, &exact); err != nil || !exact {
 			t.Fatal("signed Audit decision lost exact Account/key/collection binding", err)
 		}
 		if decisions[account.key.Key.ID] == nil {
@@ -6259,8 +6263,9 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		if err := database.QueryRow(ctx, `SELECT id,allowed AND contract_version=7 AND principal_id=$2 AND access_key_id=$3
 			AND action_name=$4 AND target_kind=$5 AND target_id=$6
 			AND NOT (document ? 'requestTags') AND NOT (document ? 'resourceTags')
+			AND document#>>'{networkContext,sourceIp}'=$8
 			FROM iam.authorization_decisions WHERE tenant_id=$1 AND request_id=$7`,
-			account.target.AccountID, account.target.ID, account.key.Key.ID, action, kind, id, requestID).Scan(&decisionID, &exact); err != nil || !exact {
+			account.target.AccountID, account.target.ID, account.key.Key.ID, action, kind, id, requestID, account.sourceIP).Scan(&decisionID, &exact); err != nil || !exact {
 			t.Fatal("signed instance read decision lost exact Account/key/resource binding", err)
 		}
 		if decisions[account.key.Key.ID] == nil {
@@ -6279,8 +6284,9 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		if err := database.QueryRow(ctx, `SELECT id,allowed AND contract_version=7 AND principal_id=$2 AND access_key_id=$3
 			AND action_name=$4 AND target_kind=$5 AND target_id=$6
 			AND NOT (document ? 'requestTags') AND NOT (document ? 'resourceTags')
+			AND document#>>'{networkContext,sourceIp}'=$8
 			FROM iam.authorization_decisions WHERE tenant_id=$1 AND request_id=$7`,
-			account.target.AccountID, account.target.ID, account.key.Key.ID, action, iamv1.ResourceDeployment, id, requestID).Scan(&decisionID, &exact); err != nil || !exact {
+			account.target.AccountID, account.target.ID, account.key.Key.ID, action, iamv1.ResourceDeployment, id, requestID, account.sourceIP).Scan(&decisionID, &exact); err != nil || !exact {
 			t.Fatal("signed Deployment mutation decision lost exact Account/key/resource binding", err)
 		}
 		if decisions[account.key.Key.ID] == nil {
@@ -6302,9 +6308,10 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 			  jsonb_build_object('key','environment','value',$7::text))
 			AND document->'requestTags'=jsonb_build_array(
 			  jsonb_build_object('key','environment','value',$8::text))
+			AND document#>>'{networkContext,sourceIp}'=$10
 			FROM iam.authorization_decisions WHERE tenant_id=$1 AND request_id=$9`,
 			account.target.AccountID, account.target.ID, account.key.Key.ID, action,
-			iamv1.ResourceApplication, id, current, requested, requestID).Scan(&decisionID, &exact); err != nil || !exact {
+			iamv1.ResourceApplication, id, current, requested, requestID, account.sourceIP).Scan(&decisionID, &exact); err != nil || !exact {
 			t.Fatal("signed Application label mutation lost Account/key/tag binding", err)
 		}
 		if decisions[account.key.Key.ID] == nil {
@@ -6360,6 +6367,17 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		createIAMPolicyAttachment(t, endpoint, account.owner, account.target.ID, iamv1.SystemPolicyPaaSDeveloper, prefix+"-grant")
 		createIAMPolicyAttachment(t, endpoint, account.owner, account.target.ID, iamv1.SystemPolicyManagedServiceInstallationReader, prefix+"-managedservice-grant")
 		createIAMPolicyAttachment(t, endpoint, account.owner, account.target.ID, iamv1.SystemPolicyAuditReader, prefix+"-audit-grant")
+		var networkPolicy iamv1.PolicyDetail
+		call(endpoint, http.MethodPost, "/v1/policies", account.owner, iamv1.CreatePolicyRequest{
+			DisplayName: prefix + " audit source guard", RequestID: prefix + "-audit-source-policy",
+			Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+				Statements: []iamv1.PolicyStatement{{SID: "deny-other-audit-sources", Effect: iamv1.PolicyDeny,
+					Actions:   []iamv1.Action{iamv1.ActionAuditRecordRead},
+					Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceAuditRecord, Match: iamv1.PolicyResourceAnyInAuthority}},
+					Conditions: []iamv1.PolicyCondition{{Key: iamv1.ConditionRequestSourceIP, Operator: iamv1.PolicyNotIPAddress,
+						Values: []string{account.sourceIP + "/32"}}}}}},
+		}, http.StatusCreated, &networkPolicy)
+		createIAMPolicyAttachment(t, endpoint, account.owner, account.target.ID, networkPolicy.Policy.ID, prefix+"-audit-source-attach")
 		environment := "production"
 		if index == 1 {
 			environment = "staging"
@@ -6399,9 +6417,10 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 			AND action_name=$4 AND target_kind=$5 AND target_id=$6
 			AND document->'resourceTags'=jsonb_build_array(
 			  jsonb_build_object('key','environment','value',$7::text))
+			AND document#>>'{networkContext,sourceIp}'=$9
 			FROM iam.authorization_decisions WHERE tenant_id=$1 AND request_id=$8`,
 			account.target.AccountID, account.target.ID, account.key.Key.ID, iamv1.ActionPaaSApplicationRead,
-			iamv1.ResourceApplication, application.ID, environment, readRequestID).Scan(&readDecision, &exactRead); err != nil || !exactRead {
+			iamv1.ResourceApplication, application.ID, environment, readRequestID, account.sourceIP).Scan(&readDecision, &exactRead); err != nil || !exactRead {
 			t.Fatal("signed Application read decision lost exact Account-owned tags", err)
 		}
 		if decisions[account.key.Key.ID] == nil {
@@ -6648,8 +6667,12 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 			auditPages[index].NextCursor == "" {
 			t.Fatal("signed Audit query crossed Account ownership or returned an invalid page")
 		}
-		recordAuditDecision(account, auditQueryResponse, iamv1.ActionAuditRecordRead, iamv1.ResourceAuditRecord)
+		recordAuditDecision(account, auditQueryResponse, iamv1.ActionAuditRecordRead, iamv1.ResourceAuditRecord, account.sourceIP, true)
 		invokeAudit(auditQuery, http.StatusConflict)
+		wrongSourceAuditQuery := prepareAudit(account, "/v1/records:query", auditv1.QueryRecordsRequest{PageSize: 1})
+		wrongSourceAuditQuery.sourceIP = "198.51.100.250"
+		wrongSourceAuditResponse := invokeAudit(wrongSourceAuditQuery, http.StatusForbidden)
+		recordAuditDecision(account, wrongSourceAuditResponse, iamv1.ActionAuditRecordRead, iamv1.ResourceAuditRecord, wrongSourceAuditQuery.sourceIP, false)
 		tamperedAuditQuery := auditQuery
 		tamperedAuditQuery.body = `{"pageSize":2}`
 		invokeAudit(tamperedAuditQuery, http.StatusUnauthorized)
@@ -6668,7 +6691,7 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 			signedVerification.TenantID != auditv1.TenantID(account.target.AccountID) || !signedVerification.Complete {
 			t.Fatal("signed Audit verification crossed Account ownership or returned an invalid chain")
 		}
-		recordAuditDecision(account, auditVerifyResponse, iamv1.ActionAuditIntegrityVerify, iamv1.ResourceAuditChain)
+		recordAuditDecision(account, auditVerifyResponse, iamv1.ActionAuditIntegrityVerify, iamv1.ResourceAuditChain, account.sourceIP, true)
 		actor := auditv1.ActorReference{Type: auditv1.ActorUser, ID: auditv1.ActorID(account.target.ID), AccessKeyID: string(account.key.Key.ID)}
 		for _, action := range []auditv1.Action{auditv1.ActionAuditRecordsRead, auditv1.ActionAuditIntegrityVerified} {
 			page := queryAudit(t, auditEndpoint, account.owner, auditv1.QueryRecordsRequest{PageSize: 100, Action: action, Actor: &actor}, http.StatusOK)
@@ -6716,10 +6739,10 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		auditv1.ValidateRecordPage(continuedAuditPage) != nil || continuedAuditPage.TenantID != auditv1.TenantID(a.target.AccountID) {
 		t.Fatal("signed Audit cursor did not continue within its original Account")
 	}
-	recordAuditDecision(a, continuedAuditResponse, iamv1.ActionAuditRecordRead, iamv1.ResourceAuditRecord)
+	recordAuditDecision(a, continuedAuditResponse, iamv1.ActionAuditRecordRead, iamv1.ResourceAuditRecord, a.sourceIP, true)
 	crossAccountAuditQuery := prepareAudit(b, "/v1/records:query", auditv1.QueryRecordsRequest{PageSize: 1, Cursor: auditPages[0].NextCursor})
 	crossAccountAuditResponse := invokeAudit(crossAccountAuditQuery, http.StatusUnprocessableEntity)
-	recordAuditDecision(b, crossAccountAuditResponse, iamv1.ActionAuditRecordRead, iamv1.ResourceAuditRecord)
+	recordAuditDecision(b, crossAccountAuditResponse, iamv1.ActionAuditRecordRead, iamv1.ResourceAuditRecord, b.sourceIP, true)
 	resourceTagKey, err := iamv1.NewResourceTagConditionKey("environment")
 	if err != nil {
 		t.Fatal(err)
@@ -6755,9 +6778,10 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 	if err := database.QueryRow(ctx, `SELECT id,NOT allowed AND contract_version=7 AND principal_id=$2 AND access_key_id=$3
 		AND action_name=$4 AND target_kind=$5 AND target_id=$6
 		AND document->'resourceTags'='[{"key":"environment","value":"staging"}]'::jsonb
+		AND document#>>'{networkContext,sourceIp}'=$8
 		FROM iam.authorization_decisions WHERE tenant_id=$1 AND request_id=$7`,
 		b.target.AccountID, b.target.ID, b.key.Key.ID, iamv1.ActionPaaSApplicationRead,
-		iamv1.ResourceApplication, "program-key-application", deniedReadRequestID).Scan(&deniedReadDecision, &exactDeniedRead); err != nil || !exactDeniedRead {
+		iamv1.ResourceApplication, "program-key-application", deniedReadRequestID, b.sourceIP).Scan(&deniedReadDecision, &exactDeniedRead); err != nil || !exactDeniedRead {
 		t.Fatal("signed staging Deny lost current Account-owned tags", err)
 	}
 	decisions[b.key.Key.ID][deniedReadDecision] = true
@@ -6786,9 +6810,10 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 	}
 	if err := database.QueryRow(ctx, `SELECT id FROM iam.authorization_decisions
 		WHERE tenant_id=$1 AND access_key_id=$2 AND allowed
-		  AND action_name=$3 AND target_kind=$4 AND target_id='collection' AND request_id=$5`,
+		  AND action_name=$3 AND target_kind=$4 AND target_id='collection' AND request_id=$5
+		  AND document#>>'{networkContext,sourceIp}'=$6`,
 		a.target.AccountID, a.key.Key.ID, iamv1.ActionPaaSConfigurationCreate,
-		iamv1.ResourceConfiguration, attackRequestID).Scan(&attackDecision); err != nil {
+		iamv1.ResourceConfiguration, attackRequestID, a.sourceIP).Scan(&attackDecision); err != nil {
 		t.Fatal("cross-Account parent rejection lost its exact IAM decision", err)
 	}
 	decisions[a.key.Key.ID][attackDecision] = true

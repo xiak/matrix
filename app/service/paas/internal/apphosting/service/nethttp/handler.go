@@ -240,6 +240,7 @@ type accessKeyContextKey struct{}
 
 type accessKeyRequestContext struct {
 	SignedRequest iamv1.AccessKeySignedRequest
+	SourceIP      string
 	Actions       []iamv1.Action
 }
 
@@ -365,7 +366,7 @@ func (value *handler) prepareAccessKeyRequest(response http.ResponseWriter, requ
 			"Invalid argument", "signed resource reads accept no request body", false)
 		return false
 	}
-	signed, err := value.accessKeyBoundary.SignedRequest(request, body)
+	external, err := value.accessKeyBoundary.AccessKeyRequest(request, body)
 	if err != nil {
 		clear(body)
 		requestID, ok := value.beginRequest(response)
@@ -377,7 +378,11 @@ func (value *handler) prepareAccessKeyRequest(response http.ResponseWriter, requ
 		return false
 	}
 	request.Body = io.NopCloser(bytes.NewReader(bytes.Clone(body)))
-	accessKeyContext := accessKeyRequestContext{SignedRequest: signed, Actions: expectedActions}
+	accessKeyContext := accessKeyRequestContext{
+		SignedRequest: external.SignedRequest,
+		SourceIP:      external.SourceIP,
+		Actions:       expectedActions,
+	}
 	*request = *request.WithContext(context.WithValue(request.Context(), accessKeyContextKey{}, accessKeyContext))
 	clear(body)
 	return true
@@ -880,10 +885,17 @@ func (value *handler) authorizeRequestWithLabels(
 	requestLabels map[string]string,
 	resourceLabels map[string]string,
 ) (port.Authorization, bool) {
-	sourceIP, err := authorizationSourceIP(request.RemoteAddr)
-	if err != nil {
-		writeProblem(response, requestID, http.StatusServiceUnavailable, paasv1.ErrorIdentityUnavailable, "Identity unavailable", "request network authority could not be established", true)
-		return port.Authorization{}, false
+	signedContext, signed := request.Context().Value(accessKeyContextKey{}).(accessKeyRequestContext)
+	var sourceIP string
+	var err error
+	if signed {
+		sourceIP = signedContext.SourceIP
+	} else {
+		sourceIP, err = authorizationSourceIP(request.RemoteAddr)
+		if err != nil {
+			writeProblem(response, requestID, http.StatusServiceUnavailable, paasv1.ErrorIdentityUnavailable, "Identity unavailable", "request network authority could not be established", true)
+			return port.Authorization{}, false
+		}
 	}
 	authorizationRequest := port.AuthorizationRequest{
 		Credential:   request.Header.Get("Authorization"),
@@ -895,7 +907,7 @@ func (value *handler) authorizeRequestWithLabels(
 		ResourceLabels: maps.Clone(resourceLabels),
 		RequestID:      requestID,
 	}
-	if signedContext, present := request.Context().Value(accessKeyContextKey{}).(accessKeyRequestContext); present {
+	if signed {
 		if !slices.Contains(signedContext.Actions, action) {
 			writeAuthorizationError(response, requestID, port.ErrUnauthenticated)
 			return port.Authorization{}, false

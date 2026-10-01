@@ -30,7 +30,7 @@ type Workflow interface {
 		string,
 		auditv1.QueryRecordsRequest,
 	) (auditv1.RecordPage, error)
-	QueryRecordsAccessKey(context.Context, iamv1.AccessKeySignedRequest, string, auditv1.QueryRecordsRequest) (auditv1.RecordPage, error)
+	QueryRecordsAccessKey(context.Context, iamv1.AccessKeySignedRequest, string, string, auditv1.QueryRecordsRequest) (auditv1.RecordPage, error)
 	QueryPlatformRecords(context.Context, iamv1.Secret, string, auditv1.QueryRecordsRequest) (auditv1.RecordPage, error)
 	VerifyChain(
 		context.Context,
@@ -38,7 +38,7 @@ type Workflow interface {
 		string,
 		auditv1.VerifyChainRequest,
 	) (auditv1.ChainVerification, error)
-	VerifyChainAccessKey(context.Context, iamv1.AccessKeySignedRequest, string, auditv1.VerifyChainRequest) (auditv1.ChainVerification, error)
+	VerifyChainAccessKey(context.Context, iamv1.AccessKeySignedRequest, string, string, auditv1.VerifyChainRequest) (auditv1.ChainVerification, error)
 	VerifyPlatformChain(context.Context, iamv1.Secret, string, auditv1.VerifyChainRequest) (auditv1.ChainVerification, error)
 	VerifyInstallation(
 		context.Context,
@@ -169,14 +169,14 @@ func (value *handler) prepareAccessKeyRequest(response http.ResponseWriter, requ
 		writeProblem(response, requestID(request), http.StatusBadRequest, "audit.json.invalid", "Audit JSON invalid")
 		return false
 	}
-	signed, err := value.accessKeyBoundary.SignedRequest(request, body)
+	external, err := value.accessKeyBoundary.AccessKeyRequest(request, body)
 	if err != nil {
 		clear(body)
 		writeAuthenticationProblem(response, request)
 		return false
 	}
 	request.Body = io.NopCloser(bytes.NewReader(bytes.Clone(body)))
-	*request = *request.WithContext(context.WithValue(request.Context(), accessKeyContextKey{}, signed))
+	*request = *request.WithContext(context.WithValue(request.Context(), accessKeyContextKey{}, external))
 	clear(body)
 	return true
 }
@@ -234,8 +234,8 @@ func (value *handler) queryRecords(response http.ResponseWriter, request *http.R
 	}
 	var page auditv1.RecordPage
 	var err error
-	if signed, present := request.Context().Value(accessKeyContextKey{}).(iamv1.AccessKeySignedRequest); present {
-		page, err = value.workflow.QueryRecordsAccessKey(request.Context(), signed, requestID(request), body)
+	if external, present := request.Context().Value(accessKeyContextKey{}).(externalrequest.AccessKeyRequest); present {
+		page, err = value.workflow.QueryRecordsAccessKey(request.Context(), external.SignedRequest, external.SourceIP, requestID(request), body)
 	} else {
 		credential, credentialOK := bearerCredential(response, request)
 		if !credentialOK {
@@ -264,8 +264,8 @@ func (value *handler) verifyChain(response http.ResponseWriter, request *http.Re
 	}
 	var verification auditv1.ChainVerification
 	var err error
-	if signed, present := request.Context().Value(accessKeyContextKey{}).(iamv1.AccessKeySignedRequest); present {
-		verification, err = value.workflow.VerifyChainAccessKey(request.Context(), signed, requestID(request), body)
+	if external, present := request.Context().Value(accessKeyContextKey{}).(externalrequest.AccessKeyRequest); present {
+		verification, err = value.workflow.VerifyChainAccessKey(request.Context(), external.SignedRequest, external.SourceIP, requestID(request), body)
 	} else {
 		credential, credentialOK := bearerCredential(response, request)
 		if !credentialOK {

@@ -19,11 +19,16 @@ func TestBoundaryReconstructsExactExternalRequest(t *testing.T) {
 	request := signedTestRequest(t, http.MethodPost, "/v1/applications", body)
 	request.Header.Set(HeaderExternalOrigin, "https://api.example.test:443")
 	request.Header.Set(HeaderExternalRequestTarget, "/api/paas/v1/applications")
+	request.Header.Set(HeaderExternalSourceIP, "2001:db8::1")
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Idempotency-Key", "create-one")
-	signed, err := boundary.SignedRequest(request, body)
+	external, err := boundary.AccessKeyRequest(request, body)
 	if err != nil {
 		t.Fatal(err)
+	}
+	signed := external.SignedRequest
+	if external.SourceIP != "2001:db8::1" {
+		t.Fatalf("source IP = %q", external.SourceIP)
 	}
 	if signed.Parameters.Audience != iamv1.ProductPaaS || signed.Parameters.InstallationID != "installation-one" ||
 		signed.HTTP.Method != http.MethodPost || signed.HTTP.Scheme != "https" || signed.HTTP.Authority != "api.example.test:443" ||
@@ -45,6 +50,10 @@ func TestBoundaryRejectsAmbiguousOrForgedEdgeFacts(t *testing.T) {
 	}{
 		{"origin", func(r *http.Request) { r.Header.Set(HeaderExternalOrigin, "https://other.test:443") }},
 		{"duplicate origin", func(r *http.Request) { r.Header.Add(HeaderExternalOrigin, "https://api.example.test:443") }},
+		{"missing source IP", func(r *http.Request) { r.Header.Del(HeaderExternalSourceIP) }},
+		{"duplicate source IP", func(r *http.Request) { r.Header.Add(HeaderExternalSourceIP, "192.0.2.10") }},
+		{"noncanonical source IP", func(r *http.Request) { r.Header.Set(HeaderExternalSourceIP, "::ffff:192.0.2.10") }},
+		{"invalid source IP", func(r *http.Request) { r.Header.Set(HeaderExternalSourceIP, "not-an-address") }},
 		{"target prefix", func(r *http.Request) { r.Header.Set(HeaderExternalRequestTarget, "/api/paas/v1/records:query") }},
 		{"target mapping", func(r *http.Request) { r.Header.Set(HeaderExternalRequestTarget, "/api/audit/v1/integrity:verify") }},
 		{"empty query", func(r *http.Request) { r.Header.Set(HeaderExternalRequestTarget, "/api/audit/v1/records:query?") }},
@@ -52,15 +61,19 @@ func TestBoundaryRejectsAmbiguousOrForgedEdgeFacts(t *testing.T) {
 		{"duplicate authorization", func(r *http.Request) { r.Header.Add("Authorization", r.Header.Get("Authorization")) }},
 		{"media parameters", func(r *http.Request) { r.Header.Set("Content-Type", "application/json; charset=utf-8") }},
 		{"unsigned method override", func(r *http.Request) { r.Header.Set("X-HTTP-Method-Override", "GET") }},
+		{"forwarded source", func(r *http.Request) { r.Header.Set("Forwarded", "for=192.0.2.11") }},
+		{"forwarded for", func(r *http.Request) { r.Header.Set("X-Forwarded-For", "192.0.2.11") }},
+		{"real IP", func(r *http.Request) { r.Header.Set("X-Real-IP", "192.0.2.11") }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			body := []byte(`{"pageSize":10}`)
 			request := signedTestRequest(t, http.MethodPost, "/v1/records:query", body)
 			request.Header.Set(HeaderExternalOrigin, "https://api.example.test:443")
 			request.Header.Set(HeaderExternalRequestTarget, "/api/audit/v1/records:query")
+			request.Header.Set(HeaderExternalSourceIP, "192.0.2.10")
 			request.Header.Set("Content-Type", "application/json")
 			test.mutate(request)
-			if _, err := boundary.SignedRequest(request, body); err == nil {
+			if _, err := boundary.AccessKeyRequest(request, body); err == nil {
 				t.Fatal("ambiguous edge request was accepted")
 			}
 		})

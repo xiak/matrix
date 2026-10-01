@@ -22,10 +22,11 @@ func (service *Service) QueryRecords(
 func (service *Service) QueryRecordsAccessKey(
 	ctx context.Context,
 	signedRequest iamv1.AccessKeySignedRequest,
+	sourceIP string,
 	requestID string,
 	request auditv1.QueryRecordsRequest,
 ) (auditv1.RecordPage, error) {
-	return service.queryRecords(ctx, requestAuthentication{signedRequest: &signedRequest}, requestID, request, false)
+	return service.queryRecords(ctx, requestAuthentication{signedRequest: &signedRequest, sourceIP: sourceIP}, requestID, request, false)
 }
 
 func (service *Service) QueryPlatformRecords(
@@ -153,10 +154,11 @@ func (service *Service) VerifyChain(
 func (service *Service) VerifyChainAccessKey(
 	ctx context.Context,
 	signedRequest iamv1.AccessKeySignedRequest,
+	sourceIP string,
 	requestID string,
 	request auditv1.VerifyChainRequest,
 ) (auditv1.ChainVerification, error) {
-	return service.verifyChain(ctx, requestAuthentication{signedRequest: &signedRequest}, requestID, request, false)
+	return service.verifyChain(ctx, requestAuthentication{signedRequest: &signedRequest, sourceIP: sourceIP}, requestID, request, false)
 }
 
 func (service *Service) VerifyPlatformChain(
@@ -300,6 +302,10 @@ func (service *Service) authorize(
 	}
 	var decision iamv1.AuthorizationDecision
 	if authentication.signedRequest != nil {
+		request, err = iamv1.BindAuthorizationSourceIP(request, authentication.sourceIP)
+		if err != nil {
+			return iamv1.AuthorizationDecision{}, ErrInvalidArgument
+		}
 		input := iamv1.AccessKeyAuthorizationRequest{Authorization: request, SignedRequest: *authentication.signedRequest}
 		if iamv1.ValidateAccessKeyAuthorizationRequest(input) != nil {
 			return iamv1.AuthorizationDecision{}, ErrInvalidArgument
@@ -334,6 +340,7 @@ func (service *Service) authorize(
 type requestAuthentication struct {
 	subjectCredential iamv1.Secret
 	signedRequest     *iamv1.AccessKeySignedRequest
+	sourceIP          string
 }
 
 // Audited reads also append to the selected chain. Acquire the same event ->

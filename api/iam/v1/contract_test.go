@@ -3173,11 +3173,11 @@ func TestRoleSessionAdministrationDoesNotReinterpretRegisteredProfiles(t *testin
 func TestRoleBusinessProfilesRequireExplicitCurrentCapabilities(t *testing.T) {
 	registeredDigests := map[ProductID]string{
 		ProductPaaS:  "sha256:f2409682d451b564cbd55b2b315543c2f4b333e3f027f3b4377b103ecc1e2876",
-		ProductAudit: "sha256:d59fe726e2aaa4857b395da04ef79906305e56137974dfea5c96a26b32fdfa55",
+		ProductAudit: "sha256:83a1c4665b2363af22d882202f318f1ebb7ed16d33244723d18183ee3a404186",
 	}
 	for product, archivedRevision := range map[ProductID]uint64{
 		ProductPaaS:  1,
-		ProductAudit: 2,
+		ProductAudit: 3,
 	} {
 		archives := HistoricalAuthorizationProfiles()
 		index := slices.IndexFunc(archives, func(profile AuthorizationProfile) bool {
@@ -3191,7 +3191,7 @@ func TestRoleBusinessProfilesRequireExplicitCurrentCapabilities(t *testing.T) {
 			t.Fatal("registered product bytes changed")
 		}
 		current, found := LookupAuthorizationProfile(product)
-		expectedRevision := uint64(3)
+		expectedRevision := uint64(4)
 		if product == ProductPaaS {
 			expectedRevision = 12
 		}
@@ -3210,7 +3210,7 @@ func TestRoleBusinessProfilesRequireExplicitCurrentCapabilities(t *testing.T) {
 				t.Fatal("product granted an undeclared subject capability", action.Action)
 			}
 			_, network := LookupActionConditionDefinition(action.Action, ConditionRequestSourceIP)
-			if network != (product == ProductPaaS && action.Scope == AuthorityScopeTenant) {
+			if network != ((product == ProductPaaS || product == ProductAudit) && action.Scope == AuthorityScopeTenant) {
 				t.Fatal("product network capability is not explicit", action.Action)
 			}
 			old := AuthorizationProfileReference{Product: product, Revision: archivedRevision, ContentDigest: original}
@@ -4124,8 +4124,27 @@ func TestPaaSProfileDeclaresCompletePlatformProduct(t *testing.T) {
 
 func TestAuditProfileDeclaresAuthorityWideReadAndVerification(t *testing.T) {
 	profile, found := LookupAuthorizationProfile(ProductAudit)
-	if !found || profile.Revision != 3 || profile.CallingService != ServiceAudit {
+	if !found || profile.Revision != 4 || profile.CallingService != ServiceAudit {
 		t.Fatal("invalid current Audit role-capable declaration")
+	}
+	_, digest, err := CanonicalizeAuthorizationProfile(profile)
+	if err != nil || digest != "sha256:b79c5d540609731bbb65acb704bdd73e98cf35fb53332ec015d5252f303be0bd" {
+		t.Fatal("Audit source-IP profile bytes changed", err, digest)
+	}
+	for revision, want := range map[uint64]string{
+		2: "sha256:d59fe726e2aaa4857b395da04ef79906305e56137974dfea5c96a26b32fdfa55",
+		3: "sha256:83a1c4665b2363af22d882202f318f1ebb7ed16d33244723d18183ee3a404186",
+	} {
+		index := slices.IndexFunc(HistoricalAuthorizationProfiles(), func(value AuthorizationProfile) bool {
+			return value.Product == ProductAudit && value.Revision == revision
+		})
+		if index < 0 {
+			t.Fatal("missing historical Audit profile", revision)
+		}
+		_, actual, archiveErr := CanonicalizeAuthorizationProfile(HistoricalAuthorizationProfiles()[index])
+		if archiveErr != nil || actual != want {
+			t.Fatal("historical Audit profile bytes changed", revision, archiveErr, actual)
+		}
 	}
 	expected := map[Action]struct {
 		kind  ResourceKind
@@ -4148,6 +4167,16 @@ func TestAuditProfileDeclaresAuthorityWideReadAndVerification(t *testing.T) {
 		}
 		if !slices.Equal(action.UserAuthenticationMethods, wantMethods) {
 			t.Fatal("Audit action has the wrong authentication carriers", action.Action)
+		}
+		if action.Scope == AuthorityScopeTenant {
+			condition := AuthorizationProfileCondition{Key: ConditionRequestSourceIP, ValueType: ConditionIP, Source: ConditionCallingServiceNetwork}
+			if !slices.Contains(action.Conditions, condition) {
+				t.Fatal("Audit tenant action is missing its trusted source IP condition", action.Action)
+			}
+		} else if slices.ContainsFunc(action.Conditions, func(condition AuthorizationProfileCondition) bool {
+			return condition.Key == ConditionRequestSourceIP
+		}) {
+			t.Fatal("Audit platform action acquired tenant network context", action.Action)
 		}
 		delete(expected, action.Action)
 	}

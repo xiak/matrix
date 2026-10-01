@@ -224,7 +224,10 @@ func TestAuditAccessKeyReadUsesCurrentPDPAndPreservesCredentialLineage(t *testin
 		t.Fatal(err)
 	}
 	signed := auditAccessKeySignedRequest(t, "/api/audit/v1/records:query")
-	page, err := service.QueryRecordsAccessKey(context.Background(), signed, "request-key-query", auditv1.QueryRecordsRequest{PageSize: 10})
+	if _, err := service.QueryRecordsAccessKey(context.Background(), signed, "", "request-key-no-source", auditv1.QueryRecordsRequest{PageSize: 10}); !errors.Is(err, ErrInvalidArgument) || iam.decisions != 0 || len(transaction.records) != 0 {
+		t.Fatalf("missing trusted source reached IAM or Audit state: decisions=%d records=%d err=%v", iam.decisions, len(transaction.records), err)
+	}
+	page, err := service.QueryRecordsAccessKey(context.Background(), signed, "192.0.2.10", "request-key-query", auditv1.QueryRecordsRequest{PageSize: 10})
 	if err != nil || page.TenantID != "organization-example" || len(page.Records) != 0 {
 		t.Fatalf("AccessKey Audit page=%#v err=%v", page, err)
 	}
@@ -546,7 +549,8 @@ func (client *auditIAM) Authorize(
 		Action:     request.Action,
 		Resource:   request.Resource,
 		RequestID:  request.RequestID,
-		Profile:    &request.Profile, ResourceMode: request.ResourceMode, CollectionUsage: request.CollectionUsage, CorrelationID: request.CorrelationID,
+		Profile:    &request.Profile, ResourceMode: request.ResourceMode, CollectionUsage: request.CollectionUsage,
+		NetworkContext: request.NetworkContext, CorrelationID: request.CorrelationID,
 		DecidedAt: client.now,
 	}
 	if iamv1.IsPlatformAction(request.Action) {

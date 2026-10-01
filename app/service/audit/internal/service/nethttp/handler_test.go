@@ -33,7 +33,7 @@ func TestAuditHTTPAcceptsAccessKeyOnlyForExactTenantQueryRoutes(t *testing.T) {
 	handler.ServeHTTP(queryResponse, query)
 	if queryResponse.Code != http.StatusOK || workflow.queryCalls != 1 || workflow.queryCredentialPresent ||
 		workflow.querySigned.Parameters.Audience != iamv1.ProductAudit ||
-		workflow.querySigned.HTTP.EscapedPath != "/api/audit/v1/records:query" {
+		workflow.querySigned.HTTP.EscapedPath != "/api/audit/v1/records:query" || workflow.querySourceIP != "192.0.2.10" {
 		t.Fatalf("signed Audit query status=%d calls=%d signed=%#v body=%s", queryResponse.Code, workflow.queryCalls, workflow.querySigned, queryResponse.Body.String())
 	}
 
@@ -42,7 +42,7 @@ func TestAuditHTTPAcceptsAccessKeyOnlyForExactTenantQueryRoutes(t *testing.T) {
 	verifyResponse := httptest.NewRecorder()
 	handler.ServeHTTP(verifyResponse, verify)
 	if verifyResponse.Code != http.StatusOK || workflow.verifyCalls != 1 || workflow.verifyCredentialPresent ||
-		workflow.verifySigned.HTTP.EscapedPath != "/api/audit/v1/integrity:verify" {
+		workflow.verifySigned.HTTP.EscapedPath != "/api/audit/v1/integrity:verify" || workflow.verifySourceIP != "192.0.2.10" {
 		t.Fatalf("signed Audit verification status=%d calls=%d signed=%#v body=%s", verifyResponse.Code, workflow.verifyCalls, workflow.verifySigned, verifyResponse.Body.String())
 	}
 
@@ -58,6 +58,14 @@ func TestAuditHTTPAcceptsAccessKeyOnlyForExactTenantQueryRoutes(t *testing.T) {
 	handler.ServeHTTP(wrongTargetResponse, wrongTarget)
 	if wrongTargetResponse.Code != http.StatusUnauthorized || workflow.queryCalls != 1 {
 		t.Fatalf("substituted signed route reached workflow: status=%d calls=%d", wrongTargetResponse.Code, workflow.queryCalls)
+	}
+
+	missingSource := accessKeyJSONRequest(t, http.MethodPost, "/v1/records:query", "/api/audit/v1/records:query", queryBody)
+	missingSource.Header.Del(externalrequest.HeaderExternalSourceIP)
+	missingSourceResponse := httptest.NewRecorder()
+	handler.ServeHTTP(missingSourceResponse, missingSource)
+	if missingSourceResponse.Code != http.StatusUnauthorized || workflow.queryCalls != 1 {
+		t.Fatalf("request without edge source reached workflow: status=%d calls=%d", missingSourceResponse.Code, workflow.queryCalls)
 	}
 
 	if _, err := NewHandler(workflow, Config{NorthboundOrigin: "https://api.example.test:443"}); err == nil {
@@ -333,6 +341,8 @@ type httpWorkflow struct {
 	verifyRequestID             string
 	querySigned                 iamv1.AccessKeySignedRequest
 	verifySigned                iamv1.AccessKeySignedRequest
+	querySourceIP               string
+	verifySourceIP              string
 	installationVerifyRequestID string
 }
 
@@ -441,11 +451,13 @@ func (workflow *httpWorkflow) QueryRecords(
 func (workflow *httpWorkflow) QueryRecordsAccessKey(
 	_ context.Context,
 	signed iamv1.AccessKeySignedRequest,
+	sourceIP string,
 	requestID string,
 	_ auditv1.QueryRecordsRequest,
 ) (auditv1.RecordPage, error) {
 	workflow.queryCalls++
 	workflow.querySigned = signed
+	workflow.querySourceIP = sourceIP
 	workflow.queryRequestID = requestID
 	if workflow.queryErr != nil {
 		return auditv1.RecordPage{}, workflow.queryErr
@@ -468,11 +480,13 @@ func (workflow *httpWorkflow) VerifyChain(
 func (workflow *httpWorkflow) VerifyChainAccessKey(
 	_ context.Context,
 	signed iamv1.AccessKeySignedRequest,
+	sourceIP string,
 	requestID string,
 	_ auditv1.VerifyChainRequest,
 ) (auditv1.ChainVerification, error) {
 	workflow.verifyCalls++
 	workflow.verifySigned = signed
+	workflow.verifySourceIP = sourceIP
 	workflow.verifyRequestID = requestID
 	return workflow.verification, nil
 }
@@ -531,5 +545,6 @@ func accessKeyJSONRequest(t *testing.T, method, target, externalTarget string, b
 	clear(plain)
 	request.Header.Set(externalrequest.HeaderExternalOrigin, "https://api.example.test:443")
 	request.Header.Set(externalrequest.HeaderExternalRequestTarget, externalTarget)
+	request.Header.Set(externalrequest.HeaderExternalSourceIP, "192.0.2.10")
 	return request
 }
