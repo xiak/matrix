@@ -17285,10 +17285,10 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 					decision.ID = iamv1.DecisionID("signed-recorder-" + sample.name)
 					fact := original
 					fact.EventID, fact.IAMDecisionID, fact.Target.ID, fact.OccurredAt = auditv1.EventID(decision.ID), auditv1.DecisionID(decision.ID), string(decision.ID), decision.DecidedAt
-					tenant, actor, contract, role := user.AccountID, user.ID, 6, "null"
+					tenant, actor, contract, role := user.AccountID, user.ID, 7, "null"
 					switch sample.name {
 					case "old-contract":
-						contract = 5
+						contract = 6
 					case "role-and-key":
 						role = `{}`
 					case "extra-field":
