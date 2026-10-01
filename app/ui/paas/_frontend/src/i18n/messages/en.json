@@ -4492,7 +4492,7 @@
       "failureTitle": "Fail-closed semantics",
       "failures": {
         "overLimit": { "title": "Resource or content limit exceeded", "status": "Rejected as a whole", "hint": "The server does not narrow scope, truncate data, or silently retry under another requestId." },
-        "retainedReportLimit": { "title": "20 unexpired reports already retained", "status": "New report rejected", "hint": "The service does not overwrite or delete the oldest report automatically. Wait for expiry and server-side cleanup before starting a new generation intent." },
+        "retainedReportLimit": { "title": "{reports} unexpired reports already retained", "status": "New report rejected", "hint": "The service does not overwrite or delete the oldest report automatically. Wait for expiry and server-side cleanup before starting a new generation intent." },
         "expired": { "title": "Report older than 7 days", "status": "Unreadable", "hint": "Neither detail nor CSV remains accessible; content cleanup does not create another completion fact." },
         "revoked": { "title": "Read or download permission revoked", "status": "Reauthorized", "hint": "An existing reportId cannot bypass iam.security-report.read or iam.security-report.download." }
       }

@@ -191,6 +191,9 @@ function AccountSecurityReportPreview({ workspace, scene, currentSession, onBack
   onBack(): void;
 }) {
   const t = useTranslations("IamWorkspace.securityReportPreview");
+  const failureTitle = (boundary: typeof accountSecurityReportFailureBoundaries[number]) => boundary === "retainedReportLimit"
+    ? t(`failures.${boundary}.title`, { reports: accountSecurityReportLimits.retainedReports })
+    : t(`failures.${boundary}.title`);
   const [requestId] = useState(() => `mock-${Date.now().toString(36)}`);
   const [report, setReport] = useState<AccountSecurityReportPreviewModel | null>(null);
   const plannedUsers = scene.users.length + 1;
@@ -275,7 +278,7 @@ function AccountSecurityReportPreview({ workspace, scene, currentSession, onBack
         <Card>
           <Card.Header><Typography.Title as="h2" level={3}>{t("failureTitle")}</Typography.Title></Card.Header>
           <Card.Body><dl className={styles.activityEvidence} aria-label={t("failureTitle")}>
-            {accountSecurityReportFailureBoundaries.map((boundary) => <div key={boundary}><dt>{t(`failures.${boundary}.title`)}</dt><dd><Badge status="neutral">{t(`failures.${boundary}.status`)}</Badge><span>{t(`failures.${boundary}.hint`)}</span></dd></div>)}
+            {accountSecurityReportFailureBoundaries.map((boundary) => <div key={boundary}><dt>{failureTitle(boundary)}</dt><dd><Badge status="neutral">{t(`failures.${boundary}.status`)}</Badge><span>{t(`failures.${boundary}.hint`)}</span></dd></div>)}
           </dl></Card.Body>
         </Card>
       </Tabs.Content>
@@ -316,7 +319,7 @@ function AccountSecurityReportPreview({ workspace, scene, currentSession, onBack
     <Card>
       <Card.Header><Typography.Title as="h2" level={3}>{t("failureTitle")}</Typography.Title></Card.Header>
       <Card.Body><dl className={styles.activityEvidence} aria-label={t("failureTitle")}>
-        {accountSecurityReportFailureBoundaries.map((boundary) => <div key={boundary}><dt>{t(`failures.${boundary}.title`)}</dt><dd><Badge status="neutral">{t(`failures.${boundary}.status`)}</Badge><span>{t(`failures.${boundary}.hint`)}</span></dd></div>)}
+        {accountSecurityReportFailureBoundaries.map((boundary) => <div key={boundary}><dt>{failureTitle(boundary)}</dt><dd><Badge status="neutral">{t(`failures.${boundary}.status`)}</Badge><span>{t(`failures.${boundary}.hint`)}</span></dd></div>)}
       </dl></Card.Body>
     </Card>
     </>}
