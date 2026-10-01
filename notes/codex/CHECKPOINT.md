@@ -8,7 +8,7 @@
 - Branch: `feat/cloud-console-ux`
 - Pushed source/embed milestone: `3193acde5`
 - Pushed capacity regression: `fccd0847f`
-- Pushed documentation milestone: `8803aa1ea`
+- Pushed documentation milestone: `4cc9d3bd6`
 
 ## Authoritative route
 
@@ -73,11 +73,14 @@ unchanged. Verification `36897183328` has passed go, node-process and
 authority-storage, while the remaining authority matrix is still running and
 no explicit consumable confirmation has arrived. Keep `05fe4a74c`
 browser-memory-only; add no parallel LIVE model or inferred wire.
-IAM-009 S4a has a pushed signed-release candidate at
-`e012e446055c26136396efc5da28557b6cbb796f`; it does not change the report
-API/HTTP/use-case shape fixed by `57cb28d7`. Verification `36919226231` remains
-queued, while signed-install/backup-restore composition and explicit consumable
-confirmation remain open. Keep `3193acde5` as information architecture only;
+IAM-009 S4a now has fixed source
+`67a2a19cf42f76cff7c24abddc830dd7bc093039`; it retains the report
+API/HTTP/use-case shape fixed by `57cb28d7` and has local signed `61/31/3+r6`
+installation, upgrade, rollback, selected-backup recovery and restart evidence
+recorded by IAM at `2830952dc`. Its exact Verification `36925315891` was
+cancelled by a superseding commit, and the current `983e33e63701db95895804d7e0bed9bbad72211d`
+Verification `36929260286` remains queued. Explicit consumable confirmation is
+still absent. Keep `3193acde5` as information architecture only;
 do not mount create/read/content adapters or enable CSV until IAM explicitly
 marks the fixed SHA consumable.
 External assertions remain configuration-only: do not reintroduce a persistent
