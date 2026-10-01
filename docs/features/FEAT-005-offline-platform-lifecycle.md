@@ -3,7 +3,7 @@
 - Status: Accepted foundation; IAM security-report release integration is in progress
 - Target release: Private Application PaaS v0.1
 - Target design date: 2026-08-25
-- Release contract: accepted foundation `v1`; current isolated-IAM candidate is manifest `v2` with the exact `61/31/1` revision 5 profile and remains unaccepted until its signed A/B lifecycle gate passes
+- Release contract: accepted foundation `v1`; current isolated-IAM candidate is manifest `v2` with the exact `61/31/3` revision 6 profile and remains unaccepted until its signed A/B lifecycle gate passes
 
 ## Outcome
 
@@ -188,7 +188,7 @@ values, database rows, native errors, arbitrary logs, and absolute paths.
 ### Current IAM security-report release candidate
 
 `CurrentDatabaseProfile` is frozen for this candidate as IAM schema 61, Audit
-schema 31, PaaS schema 1, and `contractRevision=5`. Revision 5 identifies the
+schema 31, PaaS schema 3, and `contractRevision=6`. Revision 6 identifies the
 exact AccountSecurityReport API, storage, Audit action and installed consumer
 shape now present on the isolated IAM branch; it is not a caller option or an
 ordering claim over another branch's profile. A bundle with any different
