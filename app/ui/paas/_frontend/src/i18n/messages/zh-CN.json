@@ -3917,6 +3917,27 @@
     "keyProgrammaticCount": "当前目录中共 {count} 个明确接受访问密钥的 Action",
     "keyProgrammaticRetry": "重新读取声明",
     "keyProgrammaticSecretBoundary": "浏览器不会保存 Secret、生成签名或发送测试业务请求。请在受保护的工作负载凭据存储中使用 Secret。",
+    "keyRequestPreviewTitle": "创建 Application 的请求结果",
+    "keyRequestPreviewHint": "查看已固定但尚未发布的签名请求结果边界",
+    "keyRequestPreviewNotLive": "这是隔离 MOCK 对固定后端契约的信息预览。独立 CI、APISIX 边缘覆盖和签名安装尚未完成；本页不会发送请求，也不能证明当前环境已经开放程序访问。",
+    "keyRequestPreviewSource": "固定后端来源 {source} · 当前发布未验收",
+    "keyRequestPreviewTable": "{action} 的公开请求结果",
+    "keyRequestPreviewCode": "公开结果",
+    "keyRequestPreviewMeaning": "调用方含义",
+    "keyRequestPreviewSuccessBoundary": "成功仍只表示 Application 创建请求已被接受并返回现有 Operation；Operation 记录 USER 与 Access key ID，不返回 Secret，也不把该结果扩展为其他 Action 的许可。",
+    "keyRequestPreviewOutcomes": {
+      "accepted": "请求已接受，返回现有异步 Operation。",
+      "invalidArgument": "业务 JSON 无效；在 IAM 前拒绝，修正正文后必须重新签名。",
+      "unauthenticated": "签名结构、Access key 或 MAC 不可信；不泄漏具体失败原因。",
+      "permissionDenied": "签名有效，但当前策略拒绝本次准确请求。",
+      "conflict": "签名 Nonce 已被消费；原签名不得再次使用。",
+      "identityUnavailable": "IAM 或决定回包不可用／不可信；不能当作已经授权。"
+    },
+    "keyRequestPreviewNonce": {
+      "consumed": "已消费",
+      "notConsumed": "未消费",
+      "unknown": "不作推断"
+    },
     "keyProgrammaticStatus": {
       "forbidden": "当前身份无权读取产品权限声明，因此不能推断哪些接口接受访问密钥。",
       "routeUnavailable": "当前 IAM 尚未提供权限能力目录，产品接入状态保持未知。",

@@ -3917,6 +3917,27 @@
     "keyProgrammaticCount": "{count} Actions in the current catalog explicitly accept access keys",
     "keyProgrammaticRetry": "Reload declarations",
     "keyProgrammaticSecretBoundary": "The browser does not retain the Secret, create signatures or send test business requests. Use the Secret only from protected workload credential storage.",
+    "keyRequestPreviewTitle": "Create Application request outcomes",
+    "keyRequestPreviewHint": "Inspect the fixed but unreleased signed-request outcome boundary",
+    "keyRequestPreviewNotLive": "This isolated MOCK explains a fixed backend contract. Independent CI, APISIX edge coverage and the signed installation are unfinished. This page sends no request and cannot prove that programmatic access is available in the current environment.",
+    "keyRequestPreviewSource": "Fixed backend source {source} · release not accepted",
+    "keyRequestPreviewTable": "Public request outcomes for {action}",
+    "keyRequestPreviewCode": "Public result",
+    "keyRequestPreviewMeaning": "Caller meaning",
+    "keyRequestPreviewSuccessBoundary": "Success only means that the Application create request was accepted and returned the existing Operation. The Operation records the USER and Access key ID, returns no Secret and grants no other Action.",
+    "keyRequestPreviewOutcomes": {
+      "accepted": "The request is accepted and returns the existing asynchronous Operation.",
+      "invalidArgument": "The business JSON is invalid and is rejected before IAM; correct the body and sign a new request.",
+      "unauthenticated": "The signature shape, Access key or MAC is untrusted without revealing which check failed.",
+      "permissionDenied": "The signature is valid, but current policy denies this exact request.",
+      "conflict": "The signed-request nonce was already consumed; the original signature cannot be reused.",
+      "identityUnavailable": "IAM or its decision response is unavailable or untrusted and cannot be treated as authorization."
+    },
+    "keyRequestPreviewNonce": {
+      "consumed": "Consumed",
+      "notConsumed": "Not consumed",
+      "unknown": "No inference"
+    },
     "keyProgrammaticStatus": {
       "forbidden": "Your current identity cannot read product authorization declarations, so credential acceptance cannot be inferred.",
       "routeUnavailable": "This IAM runtime does not expose the authorization capability catalog. Product integration remains unknown.",

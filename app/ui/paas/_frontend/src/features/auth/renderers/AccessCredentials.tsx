@@ -22,6 +22,21 @@ type KeyFlow =
   | { kind: "status"; keyId: string; requestId: string; status: AccessKey["status"] }
   | { kind: "delete"; keyId: string; requestId: string };
 
+const previewProgrammaticBoundaries = [{
+  action: "paas.application.create",
+  product: "paas",
+  profileRevision: 7,
+  fixedSource: "40adf6d8",
+  outcomes: [
+    { http: 202, code: "Operation", meaning: "accepted", nonce: "consumed" },
+    { http: 400, code: "INVALID_ARGUMENT", meaning: "invalidArgument", nonce: "notConsumed" },
+    { http: 401, code: "UNAUTHENTICATED", meaning: "unauthenticated", nonce: "unknown" },
+    { http: 403, code: "PERMISSION_DENIED", meaning: "permissionDenied", nonce: "consumed" },
+    { http: 409, code: "CONFLICT", meaning: "conflict", nonce: "consumed" },
+    { http: 503, code: "IDENTITY_UNAVAILABLE", meaning: "identityUnavailable", nonce: "unknown" }
+  ]
+}] as const;
+
 function InlineFlow({ flow, owner, keyValue, onChange, onClose, onOpenKey }: {
   flow: KeyFlow;
   owner: AccountUserScene;
@@ -146,6 +161,31 @@ export function RotationGuide() {
   </Card>;
 }
 
+function ProgrammaticRequestBoundaryPreview({ actions }: { actions: readonly string[] }) {
+  const t = useTranslations("IamWorkspace");
+  const boundaries = previewProgrammaticBoundaries.filter((entry) => actions.includes(entry.action));
+  if (!boundaries.length) return null;
+  return <details className={styles.requestPreview}>
+    <summary><span><strong>{t("keyRequestPreviewTitle")}</strong><small>{t("keyRequestPreviewHint")}</small></span><Badge status="warning">MOCK</Badge></summary>
+    <div className={styles.requestPreviewBody}>
+      <Alert status="warning">{t("keyRequestPreviewNotLive")}</Alert>
+      {boundaries.map((entry) => <section className={styles.requestBoundary} key={entry.action}>
+        <header><div><strong>{entry.action}</strong><small>{t("keyRequestPreviewSource", { source: entry.fixedSource })}</small></div><Badge status="neutral">{entry.product} · r{entry.profileRevision}</Badge></header>
+        <Table aria-label={t("keyRequestPreviewTable", { action: entry.action })} className={styles.requestOutcomeTable} mobileLayout="stack">
+          <thead><tr><th scope="col">HTTP</th><th scope="col">{t("keyRequestPreviewCode")}</th><th scope="col">{t("keyRequestPreviewMeaning")}</th><th scope="col">Nonce</th></tr></thead>
+          <tbody>{entry.outcomes.map((outcome) => <tr key={`${entry.action}:${outcome.http}`}>
+            <td data-label="HTTP"><code>{outcome.http}</code></td>
+            <td data-label={t("keyRequestPreviewCode")}><code>{outcome.code}</code></td>
+            <td data-label={t("keyRequestPreviewMeaning")}>{t(`keyRequestPreviewOutcomes.${outcome.meaning}`)}</td>
+            <td data-label="Nonce">{t(`keyRequestPreviewNonce.${outcome.nonce}`)}</td>
+          </tr>)}</tbody>
+        </Table>
+        <p className={styles.note}>{t("keyRequestPreviewSuccessBoundary")}</p>
+      </section>)}
+    </div>
+  </details>;
+}
+
 export function ProgrammaticAccessGuide({ owner, client }: { owner: AccountUserScene; client: AuthorizationProfileClient | null }) {
   const t = useTranslations("IamWorkspace");
   const [loading, setLoading] = useState(false);
@@ -201,6 +241,7 @@ export function ProgrammaticAccessGuide({ owner, client }: { owner: AccountUserS
         <Table.Footer note={t("keyProgrammaticCount", { count: accepted.length })}><TablePagination page={currentPage} pages={pages} pageSize={pageSize}
           onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
           labels={{ summary: t("page", { page: currentPage, pages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} /></Table.Footer>
+        {client?.preview ? <ProgrammaticRequestBoundaryPreview actions={accepted.map((entry) => entry.action)} /> : null}
       </> : null}
       {status !== "idle" && status !== "ready" && !loading ? <Alert status="warning">{t(`keyProgrammaticStatus.${status}`)}</Alert> : null}
       {status !== "idle" && status !== "ready" && status !== "expired" && !loading ? <div className={styles.actions}><Button onClick={() => void load()} size="small" variant="secondary">{t("keyProgrammaticRetry")}</Button></div> : null}

@@ -99,6 +99,7 @@ describe("LiveAccessCredentials", () => {
     await user.click(screen.getByText("编程访问边界"));
     expect(await screen.findByText("paas.application.create")).toBeTruthy();
     expect(screen.getByText("权限声明修订 7")).toBeTruthy();
+    expect(screen.queryByText("创建 Application 的请求结果")).toBeNull();
     expect(load).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("dialog")).toBeNull();
   });

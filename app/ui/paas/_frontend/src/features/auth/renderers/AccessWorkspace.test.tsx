@@ -2874,10 +2874,21 @@ describe("CAM-style access workspace", () => {
     const { user } = await open("keys", { repository: { listAuthorizationProfiles } });
     await user.click(await screen.findByRole("button", { name: "管理 lin 的访问密钥" }));
     await user.click(screen.getByText("编程访问边界").closest("summary")!);
-    expect(await screen.findByText("paas.application.create")).toBeTruthy();
+    expect(within(await screen.findByRole("table", { name: "编程访问边界" })).getByText("paas.application.create")).toBeTruthy();
     expect(screen.getByText("权限声明修订 7")).toBeTruthy();
     expect(screen.queryByText("paas.application.read")).toBeNull();
     expect(screen.getByText(/只表示产品声明接受这种凭据载体，不表示当前用户已获授权/)).toBeTruthy();
+    const requestBoundary = screen.getByText("创建 Application 的请求结果").closest("details")!;
+    expect(requestBoundary.open).toBe(false);
+    await user.click(screen.getByText("创建 Application 的请求结果").closest("summary")!);
+    expect(screen.getByText("UNAUTHENTICATED")).toBeTruthy();
+    expect(screen.getByText("PERMISSION_DENIED")).toBeTruthy();
+    expect(screen.getByText("CONFLICT")).toBeTruthy();
+    expect(screen.getByText("IDENTITY_UNAVAILABLE")).toBeTruthy();
+    expect(screen.getByText("INVALID_ARGUMENT")).toBeTruthy();
+    expect(screen.getByText("Operation")).toBeTruthy();
+    expect(screen.getByText(/40adf6d8/)).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
   it("locks an uncertain access-key creation to its original request and never reveals the lost secret", async () => {
     const { user, extension } = await open("keys");
