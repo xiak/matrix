@@ -3923,7 +3923,7 @@
       "unavailable": "暂时无法读取权限能力目录，不能用旧数据或猜测代替。",
       "expired": "当前登录会话已失效。重新登录后才能读取权限能力目录。"
     },
-    "keyLiveProductBoundary": "本页使用固定的访问密钥管理契约，但产品接口尚未开放访问密钥验签。这里可以管理凭据生命周期，不代表密钥已经能够调用任何云产品 API。",
+    "keyLiveProductBoundary": "本页按用户管理真实访问密钥生命周期。产品是否接受 ACCESS_KEY 由当前权限能力目录声明；目录可见和密钥启用都不表示该用户已经获得产品权限。",
     "keyLiveLoading": "正在读取该用户的访问密钥…",
     "keyLiveSaving": "正在提交…",
     "keyLiveRetry": "重新读取",

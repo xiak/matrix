@@ -67,6 +67,22 @@ describe("isolated authorization catalog preview", () => {
     ]);
     expect(paas?.actions.some((action) => action.action.includes(":"))).toBe(false);
   });
+  it("pins revision 7 to the single AccessKey-capable PaaS create Action", async () => {
+    const directory = await previewAccountRepository.listAuthorizationProfiles(previewCredential);
+    const paas = directory.items.find((entry) => entry.profile.product === "paas")?.profile;
+    expect(paas?.revision).toBe(7);
+    expect(paas?.actions.filter((action) => action.userAuthenticationMethods?.includes("ACCESS_KEY"))).toEqual([
+      expect.objectContaining({
+        action: "paas.application.create",
+        resourceKind: "APPLICATION",
+        resultResourceKind: "APPLICATION",
+        scope: "TENANT",
+        subjectTypes: ["ROLE", "USER"],
+        userAuthenticationMethods: ["ACCESS_KEY", "LOGIN_SESSION"],
+        resourceShapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_CREATE" }]
+      })
+    ]);
+  });
 });
 
 describe("atomic user directory batches", () => {

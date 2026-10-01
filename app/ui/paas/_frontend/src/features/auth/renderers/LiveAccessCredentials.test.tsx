@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "@/i18n/LocaleProvider";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
-import type { AccessKeyClient, AccessKeyCreateIntent } from "../application/AccountAccessProvider";
+import type { AccessKeyClient, AccessKeyCreateIntent, AuthorizationProfileClient } from "../application/AccountAccessProvider";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
 import { LiveAccessCredentials } from "./LiveAccessCredentials";
 
@@ -75,7 +75,31 @@ describe("LiveAccessCredentials", () => {
     expect(screen.getByRole("heading", { name: "alex · 访问密钥" })).toBeTruthy();
     expect(await screen.findByRole("button", { name: key.id })).toBeTruthy();
     expect(api.list).toHaveBeenCalledWith(owner.id);
-    expect(screen.getByText("本页使用固定的访问密钥管理契约", { exact: false })).toBeTruthy();
+    expect(screen.getByText("本页按用户管理真实访问密钥生命周期", { exact: false })).toBeTruthy();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("loads the shared product credential boundary only after the user asks for it", async () => {
+    const user = userEvent.setup();
+    const api = client();
+    const load = vi.fn().mockResolvedValue({ status: "ready", directory: {
+      accountId: scene.accountId,
+      items: [{ profile: { product: "paas", revision: 7, callingService: "PAAS", actions: [
+        { action: "paas.application.create", resourceKind: "APPLICATION", scope: "TENANT", subjectTypes: ["ROLE", "USER"],
+          userAuthenticationMethods: ["ACCESS_KEY", "LOGIN_SESSION"],
+          resourceShapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_CREATE" }] }
+      ] }, contentDigest: `sha256:${"a".repeat(64)}` }]
+    } });
+    const authorizationProfiles: AuthorizationProfileClient = { accountId: scene.accountId, preview: false, load };
+    render(<LocaleProvider><LiveAccessCredentials authorizationProfiles={authorizationProfiles} client={api} scene={scene} /></LocaleProvider>);
+
+    await user.click(screen.getByRole("button", { name: "管理 alex 的访问密钥" }));
+    await screen.findByRole("button", { name: key.id });
+    expect(load).not.toHaveBeenCalled();
+    await user.click(screen.getByText("编程访问边界"));
+    expect(await screen.findByText("paas.application.create")).toBeTruthy();
+    expect(screen.getByText("权限声明修订 7")).toBeTruthy();
+    expect(load).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 

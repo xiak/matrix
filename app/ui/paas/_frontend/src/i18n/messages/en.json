@@ -3923,7 +3923,7 @@
       "unavailable": "The authorization capability catalog is temporarily unavailable. Stale data or guesses are not substitutes.",
       "expired": "The current login session expired. Sign in again before reading authorization declarations."
     },
-    "keyLiveProductBoundary": "This page uses the fixed access-key management contract, but product APIs do not accept access-key signatures yet. Managing a credential lifecycle here does not mean that the key can call any cloud product API.",
+    "keyLiveProductBoundary": "This page manages the real access-key lifecycle per user. The current authorization capability catalog declares whether a product accepts ACCESS_KEY; catalog visibility and an enabled key do not grant that user product access.",
     "keyLiveLoading": "Loading this user's access keys…",
     "keyLiveSaving": "Submitting…",
     "keyLiveRetry": "Reload",

@@ -88,8 +88,9 @@ const previewAuthorizationProfiles: AuthorizationProfileEntry[] = [
   },
   {
     profile: {
-      product: "paas", revision: 5, callingService: "PAAS", actions: [
-        { action: "paas.application.create", resourceKind: "APPLICATION", scope: "TENANT",
+      product: "paas", revision: 7, callingService: "PAAS", actions: [
+        { action: "paas.application.create", resourceKind: "APPLICATION", scope: "TENANT", subjectTypes: ["ROLE", "USER"],
+          userAuthenticationMethods: ["ACCESS_KEY", "LOGIN_SESSION"],
           resourceShapes: [{ mode: "COLLECTION", prefixAllowed: false, collectionUsage: "COLLECTION_CREATE" }],
           conditions: [
             { key: "iam.account-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" },
@@ -98,7 +99,7 @@ const previewAuthorizationProfiles: AuthorizationProfileEntry[] = [
             { key: "request.source-ip", valueType: "IP", source: "CALLING_SERVICE_NETWORK" },
             { key: "request.tag/environment", valueType: "STRING", source: "CALLING_SERVICE_REQUEST_TAG" }
           ], resultResourceKind: "APPLICATION" },
-        { action: "paas.application.read", resourceKind: "APPLICATION", scope: "TENANT",
+        { action: "paas.application.read", resourceKind: "APPLICATION", scope: "TENANT", subjectTypes: ["ROLE", "USER"],
           resourceShapes: [{ mode: "INSTANCE", prefixAllowed: true }],
           conditions: [
             { key: "iam.account-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" },
@@ -107,7 +108,7 @@ const previewAuthorizationProfiles: AuthorizationProfileEntry[] = [
             { key: "request.source-ip", valueType: "IP", source: "CALLING_SERVICE_NETWORK" },
             { key: "resource.tag/environment", valueType: "STRING", source: "CALLING_SERVICE_RESOURCE_TAG" }
           ] },
-        { action: "paas.deployment.read", resourceKind: "DEPLOYMENT", scope: "TENANT",
+        { action: "paas.deployment.read", resourceKind: "DEPLOYMENT", scope: "TENANT", subjectTypes: ["ROLE", "USER"],
           resourceShapes: [{ mode: "INSTANCE", prefixAllowed: false }],
           conditions: [
             { key: "iam.account-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" },
@@ -115,7 +116,7 @@ const previewAuthorizationProfiles: AuthorizationProfileEntry[] = [
             { key: "iam.principal-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" },
             { key: "request.source-ip", valueType: "IP", source: "CALLING_SERVICE_NETWORK" }
           ] },
-        { action: "paas.operation.read", resourceKind: "OPERATION", scope: "TENANT",
+        { action: "paas.operation.read", resourceKind: "OPERATION", scope: "TENANT", subjectTypes: ["ROLE", "USER"],
           resourceShapes: [{ mode: "INSTANCE", prefixAllowed: false }],
           conditions: [
             { key: "iam.account-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" },
@@ -123,7 +124,7 @@ const previewAuthorizationProfiles: AuthorizationProfileEntry[] = [
             { key: "iam.principal-id", valueType: "STRING", source: "IAM_AUTHENTICATED_IDENTITY" },
             { key: "request.source-ip", valueType: "IP", source: "CALLING_SERVICE_NETWORK" }
           ] },
-        { action: "paas.execution-target.register", resourceKind: "EXECUTION_TARGET", scope: "INSTALLATION",
+        { action: "paas.execution-target.register", resourceKind: "EXECUTION_TARGET", scope: "INSTALLATION", subjectTypes: ["USER"],
           resourceShapes: [{ mode: "INSTANCE", prefixAllowed: false }], resultResourceKind: "EXECUTION_TARGET" }
       ]
     },

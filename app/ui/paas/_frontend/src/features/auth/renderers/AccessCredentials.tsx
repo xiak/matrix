@@ -5,7 +5,7 @@ import { useTranslations } from "next-intl";
 import { KeyRound, RotateCw } from "lucide-react";
 import { Alert, Badge, Button, Card, Checkbox, ContentPage, FormField, Select, Table, TablePagination, Typography } from "@ui/xiak";
 import { requestToken } from "@/infrastructure/http/jsonRequest";
-import { useAccountAccess } from "../application/AccountAccessProvider";
+import { useAccountAccess, type AuthorizationProfileClient } from "../application/AccountAccessProvider";
 import { admittedAuthorizationSubjects, type AuthorizationProfileDirectory } from "../domain/accounts";
 import type { AccessKey, AccessWorkspace } from "../domain/accessWorkspace";
 import type { AccountAccessScene, AccountUserScene } from "../scenes/accountAccessScene";
@@ -138,7 +138,7 @@ function InlineFlow({ flow, owner, keyValue, onChange, onClose, onOpenKey }: {
   </Card>;
 }
 
-function RotationGuide() {
+export function RotationGuide() {
   const t = useTranslations("IamWorkspace");
   return <Card>
     <Card.Header><div className={styles.cardHeading}><RotateCw aria-hidden="true" /><div><Typography.Title as="h2" level={3}>{t("keyRotationTitle")}</Typography.Title><Typography.Text tone="muted">{t("keyRotationHint")}</Typography.Text></div></div></Card.Header>
@@ -146,9 +146,8 @@ function RotationGuide() {
   </Card>;
 }
 
-function ProgrammaticAccessGuide({ owner }: { owner: AccountUserScene }) {
+export function ProgrammaticAccessGuide({ owner, client }: { owner: AccountUserScene; client: AuthorizationProfileClient | null }) {
   const t = useTranslations("IamWorkspace");
-  const access = useAccountAccess();
   const [loading, setLoading] = useState(false);
   const [directory, setDirectory] = useState<AuthorizationProfileDirectory | null>(null);
   const [status, setStatus] = useState<"idle" | "ready" | "forbidden" | "routeUnavailable" | "unavailable" | "expired">("idle");
@@ -162,12 +161,12 @@ function ProgrammaticAccessGuide({ owner }: { owner: AccountUserScene }) {
   const visible = accepted.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   const load = async () => {
-    if (!access.authorizationProfiles || loading) {
-      if (!access.authorizationProfiles) setStatus("routeUnavailable");
+    if (!client || loading) {
+      if (!client) setStatus("routeUnavailable");
       return;
     }
     setLoading(true);
-    const result = await access.authorizationProfiles.load();
+    const result = await client.load();
     if (result.status === "ready") {
       setDirectory(result.directory);
       setStatus("ready");
@@ -262,7 +261,7 @@ export function AccessCredentials({ workspace, scene, embedded = false }: { work
       <dl className={styles.keyFacts}><div><dt>{t("keyId")}</dt><dd><AccountIdentifier label={t("keyId")} value={selected.id} /></dd></div><div><dt>{t("owner")}</dt><dd><strong>{owner.name}</strong><span>{owner.loginName} · {owner.id}</span></dd></div><div><dt>{t("state")}</dt><dd><Badge status={selected.status === "ENABLED" ? "success" : "neutral"}>{t(selected.status === "ENABLED" ? "enabled" : "disabled")}</Badge></dd></div><div><dt>{t("created")}</dt><dd><WorkspaceTime value={selected.createdAt} /></dd></div><div><dt>{t("keyRevision")}</dt><dd>v{selected.resourceVersion}</dd></div></dl>
       <Alert status="info">{t("keyNoUsageEvidence")}</Alert>
     </Card.Body></Card>
-    <ProgrammaticAccessGuide owner={owner} />
+    <ProgrammaticAccessGuide client={access.authorizationProfiles} owner={owner} />
     <RotationGuide />
   </WorkspaceDetail>;
 
@@ -274,7 +273,7 @@ export function AccessCredentials({ workspace, scene, embedded = false }: { work
         <Card.Header className={styles.directoryHeader}><div><Typography.Title as="h2" level={3}>{t("keyDirectory")}</Typography.Title><Typography.Text tone="muted">{t("keyDirectoryHint", { name: owner.loginName })}</Typography.Text></div><Badge status={ownerKeys.length >= 2 ? "warning" : "neutral"}>{t("keyQuota", { count: ownerKeys.length })}</Badge></Card.Header>
         <Card.Body className={styles.tableBody}>{ownerKeys.length ? <Table aria-label={t("keys")} mobileLayout="stack"><thead><tr><th scope="col">{t("keyId")}</th><th scope="col">{t("state")}</th><th scope="col">{t("created")}</th><th scope="col">{t("keyRevision")}</th></tr></thead><tbody>{ownerKeys.map((key) => <tr key={key.id}><td data-label={t("keyId")}><button className={styles.keyLink} onClick={() => setSelectedId(key.id)}>{key.id}</button></td><td data-label={t("state")}><Badge status={key.status === "ENABLED" ? "success" : "neutral"}>{t(key.status === "ENABLED" ? "enabled" : "disabled")}</Badge></td><td data-label={t("created")}><WorkspaceTime value={key.createdAt} /></td><td data-label={t("keyRevision")}>v{key.resourceVersion}</td></tr>)}</tbody></Table> : <div className={styles.emptyKeys}><KeyRound aria-hidden="true" /><strong>{t("keyEmpty")}</strong><span>{t("keyEmptyHint")}</span></div>}</Card.Body>
       </Card>
-      <ProgrammaticAccessGuide owner={owner} />
+      <ProgrammaticAccessGuide client={access.authorizationProfiles} owner={owner} />
       <RotationGuide />
     </>}
   </div>;
