@@ -4433,6 +4433,11 @@
         }
       },
       "limitBoundary": "If any count limit or the 4 MiB content limit is exceeded, generation fails as a whole. It never truncates, samples, or leaves an incomplete report marked successful.",
+      "limitViolations": {
+        "USER_LIMIT": "The current scope contains more than 1,000 USER records, so a complete report cannot be generated. Reduce the account's user count first; the service never truncates or samples.",
+        "ACCESS_KEY_LIMIT": "The current scope contains more than 2,000 AccessKey records, so a complete report cannot be generated. Reduce the account's access-key count first; the service never truncates or samples.",
+        "ROW_LIMIT": "The report is expected to exceed 3,001 rows and cannot be sealed completely. Reduce the account's users or access keys first; the service never splits or creates an incomplete report."
+      },
       "commitmentBoundary": "MOCK does not fabricate document digests, CSV digests, or exact byte counts. Those integrity commitments must come from a LIVE server response.",
       "beforeGenerateTitle": "Pre-generation boundary",
       "beforeGenerateHint": "POST carries only requestId and fixed formatVersion=1. The route and media type define the API version; no account, user, time, product, or source selector is accepted.",

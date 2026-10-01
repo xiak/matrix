@@ -4447,6 +4447,11 @@
         }
       },
       "limitBoundary": "任一上限或 4 MiB 正文上限被超过时，整个生成请求失败；不会截断、抽样或留下“成功但不完整”的报告。",
+      "limitViolations": {
+        "USER_LIMIT": "当前范围包含的 USER 超过 1000 个，无法生成完整报告。请先减少当前账号中的用户数量；系统不会截断或抽样。",
+        "ACCESS_KEY_LIMIT": "当前范围包含的 AccessKey 超过 2000 个，无法生成完整报告。请先减少当前账号中的访问密钥数量；系统不会截断或抽样。",
+        "ROW_LIMIT": "当前报告预计超过 3001 行，无法完整封存。请先减少账号中的用户或访问密钥；系统不会拆分或生成不完整报告。"
+      },
       "commitmentBoundary": "MOCK 不伪造文档摘要、CSV 摘要或精确字节数；这些完整性承诺只能来自 LIVE 服务端响应。",
       "beforeGenerateTitle": "生成前边界",
       "beforeGenerateHint": "POST 只携带 requestId 和固定 formatVersion=1；API 版本由路由与媒体类型确定，不携带账号、用户、时间、产品或来源选择器。",

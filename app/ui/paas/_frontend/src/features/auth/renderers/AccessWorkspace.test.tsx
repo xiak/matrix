@@ -4055,4 +4055,18 @@ describe("CAM-style access workspace", () => {
     expect((screen.getByRole("button", { name: "下载 CSV v1" }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.queryByRole("dialog")).toBeNull();
   });
+  it("blocks an oversized account security report before submission with an actionable reason", async () => {
+    const extension = createPreviewAccessWorkspace("org-xiak", () => users.map((entry) => entry.user.id), identity.account.rootIdentity.principalId);
+    const workspace = await extension.read("preview");
+    const oversizedUsers = Array.from({ length: accountSecurityReportLimits.users }, (_, index) => ({
+      ...users[0]!,
+      user: { ...users[0]!.user, id: `principal-limit-${index}`, loginName: `limit-${index}`, displayName: `Limit ${index}` }
+    }));
+    const scene = buildAccountAccessScene(identity, { items: oversizedUsers, nextAfter: null }, null, { accountId: "org-xiak", scope: "TENANT", installationId: null, items: [] }, { accountId: "org-xiak", scope: "INSTALLATION", installationId: "preview", items: [] });
+    render(<LocaleProvider><AccessReportPreview kind="security" workspace={workspace} scene={scene} onBack={vi.fn()} /></LocaleProvider>);
+    const generate = screen.getByRole("button", { name: "生成报告" }) as HTMLButtonElement;
+    expect(generate.disabled).toBe(true);
+    expect(screen.getByText(/USER 超过 1000 个/)).toBeTruthy();
+    expect(screen.queryByText("不可变报告已封存")).toBeNull();
+  });
 });

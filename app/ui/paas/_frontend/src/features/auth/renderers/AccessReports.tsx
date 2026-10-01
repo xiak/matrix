@@ -8,7 +8,7 @@ import type { AccountAccessView } from "../domain/accounts";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
 import type { SessionSummary } from "../domain/session";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
-import { accountSecurityReportLimits, buildAccessActivityObservations, buildAccessAnalysisPreview, buildAccessSecuritySnapshot, buildCredentialReport, createAccountSecurityReportPreview, type AccessAnalysisTrustEntry, type AccessSecurityCheckState, type AccountSecurityReportPreview as AccountSecurityReportPreviewModel, type UnusedAccessFindingPreview } from "../scenes/accessReport";
+import { accountSecurityReportLimits, accountSecurityReportLimitViolation, buildAccessActivityObservations, buildAccessAnalysisPreview, buildAccessSecuritySnapshot, buildCredentialReport, createAccountSecurityReportPreview, type AccessAnalysisTrustEntry, type AccessSecurityCheckState, type AccountSecurityReportPreview as AccountSecurityReportPreviewModel, type UnusedAccessFindingPreview } from "../scenes/accessReport";
 import { WorkspaceCollection, WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
 import styles from "./AccountAccessRenderer.module.css";
 
@@ -203,6 +203,7 @@ function AccountSecurityReportPreview({ workspace, scene, currentSession, onBack
     { id: "accessKeys" as const, rows: report.totals.accessKeys }
   ] : plannedScopes;
   const totalRows = scopes.reduce((total, scope) => total + scope.rows, 0);
+  const limitViolation = accountSecurityReportLimitViolation(plannedUsers, workspace.keys.length);
   const generate = () => {
     const result = createAccountSecurityReportPreview(workspace, scene, new Date().toISOString(), requestId, currentSession);
     if (result.outcome === "COMPLETED") setReport(result.report);
@@ -211,7 +212,7 @@ function AccountSecurityReportPreview({ workspace, scene, currentSession, onBack
     primary: {
       id: "generate",
       label: t("generate"),
-      disabledReason: report ? t("alreadyGenerated") : undefined,
+      disabledReason: report ? t("alreadyGenerated") : limitViolation ? t(`limitViolations.${limitViolation}`) : undefined,
       onSelect: generate
     },
     secondary: [{ id: "download", label: t("download"), disabledReason: t("downloadUnavailable"), onSelect: () => undefined }]
@@ -303,7 +304,7 @@ function AccountSecurityReportPreview({ workspace, scene, currentSession, onBack
         <ul className={styles.securityChecks}>
           {scopes.map((scope) => <li key={scope.id}><div className={styles.securityCheckCopy}><div className={styles.securityCheckHeading}><strong>{t(`scopes.${scope.id}.title`)}</strong><Badge status="info">{t("rowCount", { count: scope.rows })}</Badge></div><p>{t(`scopes.${scope.id}.fields`)}</p><span className={styles.securityEvidenceState}>{t(`scopes.${scope.id}.csv`)}</span></div></li>)}
         </ul>
-        <Alert status="warning">{t("limitBoundary")}</Alert>
+        {limitViolation ? <Alert status="danger">{t(`limitViolations.${limitViolation}`)}</Alert> : <Alert status="warning">{t("limitBoundary")}</Alert>}
       </Card.Body>
     </Card>
     <Card>

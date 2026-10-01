@@ -369,9 +369,18 @@ export type AccountSecurityReportPreview = {
   totals: { users: number; accessKeys: number; rows: number };
 };
 
+export type AccountSecurityReportRejectionReason = "USER_LIMIT" | "ACCESS_KEY_LIMIT" | "ROW_LIMIT";
+
 export type AccountSecurityReportCreation =
   | { outcome: "COMPLETED"; report: AccountSecurityReportPreview }
-  | { outcome: "REJECTED"; reason: "USER_LIMIT" | "ACCESS_KEY_LIMIT" | "ROW_LIMIT" };
+  | { outcome: "REJECTED"; reason: AccountSecurityReportRejectionReason };
+
+export function accountSecurityReportLimitViolation(users: number, accessKeys: number): AccountSecurityReportRejectionReason | null {
+  if (users > accountSecurityReportLimits.users) return "USER_LIMIT";
+  if (accessKeys > accountSecurityReportLimits.accessKeys) return "ACCESS_KEY_LIMIT";
+  if (1 + users + accessKeys > accountSecurityReportLimits.rows) return "ROW_LIMIT";
+  return null;
+}
 
 // This preview owns information architecture only. The server candidate remains
 // authoritative for the immutable JSON/CSV documents, byte limit and permission
@@ -387,9 +396,8 @@ export function createAccountSecurityReportPreview(
   const users = scene.users.length + 1;
   const accessKeys = workspace.keys.length;
   const rows = 1 + users + accessKeys;
-  if (users > accountSecurityReportLimits.users) return { outcome: "REJECTED", reason: "USER_LIMIT" };
-  if (accessKeys > accountSecurityReportLimits.accessKeys) return { outcome: "REJECTED", reason: "ACCESS_KEY_LIMIT" };
-  if (rows > accountSecurityReportLimits.rows) return { outcome: "REJECTED", reason: "ROW_LIMIT" };
+  const limitViolation = accountSecurityReportLimitViolation(users, accessKeys);
+  if (limitViolation) return { outcome: "REJECTED", reason: limitViolation };
   const validCurrentSession = currentSession?.organizationId === workspace.accountId
     && currentSession.principalId === scene.currentUserId
     && currentSession.status === "ACTIVE"
